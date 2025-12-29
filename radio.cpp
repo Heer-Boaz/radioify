@@ -390,6 +390,9 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   lpf2.setLowpass(sampleRate, safeBw, 0.707f);
   postLpf1.setLowpass(sampleRate, safeBw, 0.707f);
   postLpf2.setLowpass(sampleRate, safeBw, 0.707f);
+  ifRipple1.setPeaking(sampleRate, 950.0f, 0.9f, 0.5f);
+  ifRipple2.setPeaking(sampleRate, 2300.0f, 1.1f, -0.6f);
+  ifTiltLp.setLowpass(sampleRate, 1700.0f, 0.707f);
   midBoost.setPeaking(sampleRate, 1500.0f, 1.0f, 4.0f);
   lowMidDip.setPeaking(sampleRate, 420.0f, 1.0f, -2.5f);
   presBoost.setPeaking(sampleRate, 3200.0f, 0.9f, 1.5f);
@@ -399,11 +402,20 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   comp.ratio = 5.0f;
   comp.setTimes(10.0f, 220.0f);
 
+  float sagAtkMs = 60.0f;
+  float sagRelMs = 900.0f;
+  sagAtk = std::exp(-1.0f / (sampleRate * (sagAtkMs / 1000.0f)));
+  sagRel = std::exp(-1.0f / (sampleRate * (sagRelMs / 1000.0f)));
+
   sat.drive = 1.40f;
   sat.mix = 0.50f;
 
   am.init(sampleRate, safeBw);
   speaker.init(sampleRate);
+  roomDelaySamples = std::max(1, static_cast<int>(sampleRate * 0.012f));
+  roomBuf.assign(static_cast<size_t>(roomDelaySamples + 1), 0.0f);
+  roomIndex = 0;
+  roomLp.setLowpass(sampleRate, roomLpHz, 0.707f);
 
   noiseHum.setFs(sampleRate, safeBw);
   noiseHum.noiseAmp = noiseWeight;
@@ -438,17 +450,24 @@ void Radio1938::reset() {
   heteroDriftPhase = 0.0f;
   detuneIndex = 0;
   std::fill(detuneBuf.begin(), detuneBuf.end(), 0.0f);
+  sagEnv = 0.0f;
+  roomIndex = 0;
+  std::fill(roomBuf.begin(), roomBuf.end(), 0.0f);
   hpf.reset();
   lpf1.reset();
   lpf2.reset();
   postLpf1.reset();
   postLpf2.reset();
+  ifRipple1.reset();
+  ifRipple2.reset();
+  ifTiltLp.reset();
   midBoost.reset();
   lowMidDip.reset();
   presBoost.reset();
   comp.reset();
   am.reset();
   speaker.reset();
+  roomLp.reset();
   noiseHum.reset();
 }
 
@@ -463,6 +482,10 @@ void Radio1938::process(float* samples, uint32_t frames) {
     float y = hpf.process(x);
     y = lpf1.process(y);
     y = lpf2.process(y);
+    y = ifRipple1.process(y);
+    y = ifRipple2.process(y);
+    float tilt = ifTiltLp.process(y);
+    y = (1.0f - ifTiltMix) * y + ifTiltMix * tilt;
     if (kEnableRadioArtifacts && !detuneBuf.empty()) {
       detunePhase += twoPi * (detuneRate / sampleRate);
       detunePhase2 += twoPi * (detuneRate2 / sampleRate);
@@ -491,6 +514,15 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = sat.process(y);
     y = postLpf1.process(y);
     y = postLpf2.process(y);
+    float level = std::fabs(y);
+    if (level > sagEnv) {
+      sagEnv = sagAtk * sagEnv + (1.0f - sagAtk) * level;
+    } else {
+      sagEnv = sagRel * sagEnv + (1.0f - sagRel) * level;
+    }
+    float sagT = clampf((sagEnv - sagStart) / (sagEnd - sagStart), 0.0f, 1.0f);
+    float sagGain = 1.0f - sagDepth * sagT;
+    y *= sagGain;
     if (kEnableRadioArtifacts) {
       float noiseScale = 1.0f;
       fadePhase += twoPi * (fadeRate / sampleRate);
@@ -520,12 +552,26 @@ void Radio1938::process(float* samples, uint32_t frames) {
         heteroPhase += twoPi * (heteroHz / sampleRate);
         if (heteroPhase > twoPi) heteroPhase -= twoPi;
         float hetero = std::sin(heteroPhase);
-        float amp = heteroDepth * heteroBaseScale * (0.6f + 0.4f * noiseScale);
+        float quietT = clampf(
+          (sagEnv - heteroGateStart) / std::max(1e-6f, heteroGateEnd - heteroGateStart),
+          0.0f,
+          1.0f
+        );
+        float quiet = 1.0f - quietT;
+        quiet *= quiet;
+        float amp = heteroDepth * heteroBaseScale * (0.6f + 0.4f * noiseScale) * quiet;
         y += hetero * amp;
       }
     }
     y += noiseHum.process(y);
     y = speaker.process(y); // Cannot revert these changes
+    if (roomMix > 0.0f && !roomBuf.empty()) {
+      float roomOut = roomBuf[static_cast<size_t>(roomIndex)];
+      roomBuf[static_cast<size_t>(roomIndex)] = y;
+      roomIndex = (roomIndex + 1) % static_cast<int>(roomBuf.size());
+      roomOut = roomLp.process(roomOut);
+      y += roomMix * roomOut;
+    }
     y = softClip(y, 0.985f);
 
     for (int c = 0; c < channels; ++c) {

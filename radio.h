@@ -174,16 +174,37 @@ struct Radio1938 {
   float detuneRate2 = 0.09f;
   float heteroBaseHz = 950.0f;
   float heteroDriftHz = 0.06f;
+  float heteroGateStart = 0.015f;
+  float heteroGateEnd = 0.05f;
   float fadeDepth = 0.10f;
   float noiseDepth = 0.35f;
   float detuneDepth = 0.80f;
-  float heteroDepth = 0.0016f;
+  float heteroDepth = 0.0007f;
   float detuneBaseDelay = 2.0f;
   std::vector<float> detuneBuf;
   int detuneIndex = 0;
   float noiseBase = 0.0f;
   float crackleBase = 0.0f;
   float heteroBaseScale = 0.0f;
+
+  float sagEnv = 0.0f;
+  float sagAtk = 0.0f;
+  float sagRel = 0.0f;
+  float sagStart = 0.06f;
+  float sagEnd = 0.22f;
+  float sagDepth = 0.07f;
+
+  float ifTiltMix = 0.16f;
+  float roomMix = 0.08f;
+  float roomLpHz = 1800.0f;
+  int roomIndex = 0;
+  int roomDelaySamples = 0;
+  std::vector<float> roomBuf;
+
+  Biquad ifRipple1;
+  Biquad ifRipple2;
+  Biquad ifTiltLp;
+  Biquad roomLp;
 
   Biquad hpf;
   Biquad lpf1;
