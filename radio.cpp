@@ -420,6 +420,9 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   }
   noiseBase = noiseHum.noiseAmp;
   crackleBase = noiseHum.crackleAmp;
+  heteroBaseScale = (noiseWeight > 0.0f)
+    ? std::clamp(noiseWeight / 0.015f, 0.15f, 1.0f)
+    : 0.0f;
 
   reset();
 }
@@ -431,6 +434,8 @@ void Radio1938::reset() {
   noisePhase2 = 0.0f;
   detunePhase = 0.0f;
   detunePhase2 = 0.0f;
+  heteroPhase = 0.0f;
+  heteroDriftPhase = 0.0f;
   detuneIndex = 0;
   std::fill(detuneBuf.begin(), detuneBuf.end(), 0.0f);
   hpf.reset();
@@ -487,6 +492,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = postLpf1.process(y);
     y = postLpf2.process(y);
     if (kEnableRadioArtifacts) {
+      float noiseScale = 1.0f;
       fadePhase += twoPi * (fadeRate / sampleRate);
       fadePhase2 += twoPi * (fadeRate2 / sampleRate);
       if (fadePhase > twoPi) fadePhase -= twoPi;
@@ -501,10 +507,22 @@ void Radio1938::process(float* samples, uint32_t frames) {
       if (noisePhase > twoPi) noisePhase -= twoPi;
       if (noisePhase2 > twoPi) noisePhase2 -= twoPi;
       float noiseLfo = 0.6f * std::sin(noisePhase) + 0.4f * std::sin(noisePhase2);
-      float noiseScale = 1.0f + noiseDepth * noiseLfo;
+      noiseScale = 1.0f + noiseDepth * noiseLfo;
       noiseScale = std::clamp(noiseScale, 0.4f, 1.6f);
       noiseHum.noiseAmp = noiseBase * noiseScale;
       noiseHum.crackleAmp = crackleBase * noiseScale;
+
+      if (heteroDepth > 0.0f && heteroBaseScale > 0.0f) {
+        heteroDriftPhase += twoPi * (heteroDriftHz / sampleRate);
+        if (heteroDriftPhase > twoPi) heteroDriftPhase -= twoPi;
+        float drift = 1.0f + 0.12f * std::sin(heteroDriftPhase);
+        float heteroHz = heteroBaseHz * drift;
+        heteroPhase += twoPi * (heteroHz / sampleRate);
+        if (heteroPhase > twoPi) heteroPhase -= twoPi;
+        float hetero = std::sin(heteroPhase);
+        float amp = heteroDepth * heteroBaseScale * (0.6f + 0.4f * noiseScale);
+        y += hetero * amp;
+      }
     }
     y += noiseHum.process(y);
     y = speaker.process(y); // Cannot revert these changes
