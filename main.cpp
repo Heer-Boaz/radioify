@@ -136,11 +136,12 @@ static std::string fitLine(const std::string& s, int width) {
 
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a";
+  return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" || ext == ".webm";
 }
 
 static bool isM4aExt(const std::filesystem::path& p) {
-  return toLower(p.extension().string()) == ".m4a";
+  std::string ext = toLower(p.extension().string());
+  return ext == ".m4a" || ext == ".webm";
 }
 
 static void validateInputFile(const std::filesystem::path& p) {
@@ -148,7 +149,7 @@ static void validateInputFile(const std::filesystem::path& p) {
   if (!std::filesystem::exists(p)) die("Input file not found: " + p.string());
   if (std::filesystem::is_directory(p)) die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
-    die("Unsupported input format '" + p.extension().string() + "'. Supported: .wav, .mp3, .flac, .m4a.");
+    die("Unsupported input format '" + p.extension().string() + "'. Supported: .wav, .mp3, .flac, .m4a, .webm.");
   }
 }
 
@@ -395,7 +396,7 @@ static void renderToFile(
       if (!m4a.readFrames(buffer.data(), chunkFrames, &framesRead)) {
         ma_encoder_uninit(&encoder);
         m4a.uninit();
-        die("Failed to decode m4a input.");
+        die("Failed to decode input.");
       }
       if (framesRead == 0) break;
     } else {
@@ -943,7 +944,7 @@ int main(int argc, char** argv) {
       }
       std::string filterLabel = state.useRadio1938.load() ? "1938 radio" : "classic";
       screen.writeText(0, 3, fitLine(std::string("  Filter: ") + filterLabel, width), kStyleDim);
-      screen.writeText(0, 4, fitLine("  Showing: folders + .wav/.mp3/.flac/.m4a", width), kStyleDim);
+      screen.writeText(0, 4, fitLine("  Showing: folders + .wav/.mp3/.flac/.m4a/.webm", width), kStyleDim);
 
       if (browser.entries.empty()) {
         screen.writeText(2, listTop, "(no supported files)", kStyleDim);

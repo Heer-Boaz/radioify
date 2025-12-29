@@ -31,7 +31,7 @@ bool ensureMediaFoundation(std::string* error) {
   if (SUCCEEDED(hr)) {
     g_comStarted = true;
   } else if (hr != RPC_E_CHANGED_MODE) {
-    setError(error, "Failed to initialize COM for m4a decoding.");
+    setError(error, "Failed to initialize COM for media decoding.");
     return false;
   }
 
@@ -41,7 +41,7 @@ bool ensureMediaFoundation(std::string* error) {
       CoUninitialize();
       g_comStarted = false;
     }
-    setError(error, "Failed to start Media Foundation for m4a decoding.");
+    setError(error, "Failed to start Media Foundation for media decoding.");
     return false;
   }
 
@@ -67,7 +67,7 @@ bool M4aDecoder::init(const std::filesystem::path& path, uint32_t channels, uint
   std::wstring wpath = path.wstring();
   HRESULT hr = MFCreateSourceReaderFromURL(wpath.c_str(), nullptr, &reader);
   if (FAILED(hr)) {
-    setError(error, "Failed to open m4a input for decoding.");
+    setError(error, "Failed to open input for decoding.");
     return false;
   }
 
@@ -75,7 +75,7 @@ bool M4aDecoder::init(const std::filesystem::path& path, uint32_t channels, uint
   hr = MFCreateMediaType(&type);
   if (FAILED(hr)) {
     safeRelease(reader);
-    setError(error, "Failed to configure m4a decoding.");
+    setError(error, "Failed to configure media decoding.");
     return false;
   }
 
@@ -94,7 +94,7 @@ bool M4aDecoder::init(const std::filesystem::path& path, uint32_t channels, uint
   safeRelease(type);
   if (FAILED(hr)) {
     safeRelease(reader);
-    setError(error, "Failed to configure m4a output format.");
+    setError(error, "Failed to configure output format.");
     return false;
   }
 
@@ -102,7 +102,7 @@ bool M4aDecoder::init(const std::filesystem::path& path, uint32_t channels, uint
   hr = reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, &actualType);
   if (FAILED(hr)) {
     safeRelease(reader);
-    setError(error, "Failed to query m4a output format.");
+    setError(error, "Failed to query output format.");
     return false;
   }
 
@@ -114,7 +114,7 @@ bool M4aDecoder::init(const std::filesystem::path& path, uint32_t channels, uint
 
   if (actualChannels != channels || actualRate != sampleRate) {
     safeRelease(reader);
-    setError(error, "Unsupported m4a output format.");
+    setError(error, "Unsupported output format.");
     return false;
   }
 
