@@ -14,9 +14,8 @@
 
 #include "consoleinput.h"
 #include "consolescreen.h"
+#include "m4adecoder.h"
 #include "radio.h"
-
-
 
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_ENABLE_WAV
@@ -137,7 +136,11 @@ static std::string fitLine(const std::string& s, int width) {
 
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac";
+  return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a";
+}
+
+static bool isM4aExt(const std::filesystem::path& p) {
+  return toLower(p.extension().string()) == ".m4a";
 }
 
 static void validateInputFile(const std::filesystem::path& p) {
@@ -145,7 +148,7 @@ static void validateInputFile(const std::filesystem::path& p) {
   if (!std::filesystem::exists(p)) die("Input file not found: " + p.string());
   if (std::filesystem::is_directory(p)) die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
-    die("Unsupported input format '" + p.extension().string() + "'. Supported: .wav, .mp3, .flac.");
+    die("Unsupported input format '" + p.extension().string() + "'. Supported: .wav, .mp3, .flac, .m4a.");
   }
 }
 
@@ -258,12 +261,14 @@ static GridLayout buildLayout(const BrowserState& state, int width, int rowsVisi
 
 struct AudioState {
   ma_decoder decoder{};
+  M4aDecoder m4a{};
   ma_device device{};
   RadioDSP dsp{};
   Radio1938 radio1938{};
   std::atomic<bool> paused{false};
   std::atomic<bool> finished{false};
   std::atomic<bool> useRadio1938{true};
+  std::atomic<bool> usingM4a{false};
   std::atomic<bool> seekRequested{false};
   std::atomic<int64_t> pendingSeekFrames{0};
   std::atomic<uint64_t> framesPlayed{0};
@@ -281,7 +286,14 @@ static void dataCallback(ma_device* device, void* output, const void*, ma_uint32
   if (state->seekRequested.exchange(false)) {
     int64_t target = state->pendingSeekFrames.load();
     if (target < 0) target = 0;
-    ma_decoder_seek_to_pcm_frame(&state->decoder, static_cast<ma_uint64>(target));
+    if (state->usingM4a.load()) {
+      if (!state->m4a.seekToFrame(static_cast<uint64_t>(target))) {
+        target = 0;
+        state->m4a.seekToFrame(0);
+      }
+    } else {
+      ma_decoder_seek_to_pcm_frame(&state->decoder, static_cast<ma_uint64>(target));
+    }
     state->framesPlayed.store(static_cast<uint64_t>(target));
     state->finished.store(false);
   }
@@ -291,19 +303,37 @@ static void dataCallback(ma_device* device, void* output, const void*, ma_uint32
     return;
   }
 
-  ma_uint64 framesRead = 0;
-  ma_result res = ma_decoder_read_pcm_frames(&state->decoder, out, frameCount, &framesRead);
-  if (res != MA_SUCCESS && res != MA_AT_END) {
-    state->finished.store(true);
-    return;
-  }
-  if (framesRead < frameCount) {
-    std::fill(out + framesRead * state->channels, out + frameCount * state->channels, 0.0f);
-  }
-  if (res == MA_AT_END || framesRead == 0) {
-    state->finished.store(true);
-    if (state->totalFrames > 0) {
-      state->framesPlayed.store(state->totalFrames);
+  uint64_t framesRead = 0;
+  if (state->usingM4a.load()) {
+    if (!state->m4a.readFrames(out, frameCount, &framesRead)) {
+      state->finished.store(true);
+      return;
+    }
+    if (framesRead < frameCount) {
+      std::fill(out + framesRead * state->channels, out + frameCount * state->channels, 0.0f);
+    }
+    if (framesRead == 0) {
+      state->finished.store(true);
+      if (state->totalFrames > 0) {
+        state->framesPlayed.store(state->totalFrames);
+      }
+    }
+  } else {
+    ma_uint64 framesReadMa = 0;
+    ma_result res = ma_decoder_read_pcm_frames(&state->decoder, out, frameCount, &framesReadMa);
+    if (res != MA_SUCCESS && res != MA_AT_END) {
+      state->finished.store(true);
+      return;
+    }
+    framesRead = framesReadMa;
+    if (framesRead < frameCount) {
+      std::fill(out + framesRead * state->channels, out + frameCount * state->channels, 0.0f);
+    }
+    if (res == MA_AT_END || framesRead == 0) {
+      state->finished.store(true);
+      if (state->totalFrames > 0) {
+        state->framesPlayed.store(state->totalFrames);
+      }
     }
   }
 
@@ -325,16 +355,29 @@ static void renderToFile(
 ) {
   const uint32_t sampleRate = 48000;
   const uint32_t channels = useRadio1938 ? 1 : (o.mono ? 1 : 2);
+  const bool useM4a = isM4aExt(o.input);
   ma_decoder decoder{};
-  ma_decoder_config decConfig = ma_decoder_config_init(ma_format_f32, channels, sampleRate);
-  if (ma_decoder_init_file(o.input.c_str(), &decConfig, &decoder) != MA_SUCCESS) {
-    die("Failed to open input for decoding.");
+  M4aDecoder m4a{};
+  if (useM4a) {
+    std::string error;
+    if (!m4a.init(o.input, channels, sampleRate, &error)) {
+      die(error.empty() ? "Failed to open input for decoding." : error);
+    }
+  } else {
+    ma_decoder_config decConfig = ma_decoder_config_init(ma_format_f32, channels, sampleRate);
+    if (ma_decoder_init_file(o.input.c_str(), &decConfig, &decoder) != MA_SUCCESS) {
+      die("Failed to open input for decoding.");
+    }
   }
 
   ma_encoder encoder{};
   ma_encoder_config encConfig = ma_encoder_config_init(ma_encoding_format_wav, ma_format_s16, channels, sampleRate);
   if (ma_encoder_init_file(o.output.c_str(), &encConfig, &encoder) != MA_SUCCESS) {
-    ma_decoder_uninit(&decoder);
+    if (useM4a) {
+      m4a.uninit();
+    } else {
+      ma_decoder_uninit(&decoder);
+    }
     die("Failed to open output for encoding.");
   }
 
@@ -347,9 +390,20 @@ static void renderToFile(
   std::vector<int16_t> out(buffer.size());
 
   while (true) {
-    ma_uint64 framesRead = 0;
-    ma_result res = ma_decoder_read_pcm_frames(&decoder, buffer.data(), chunkFrames, &framesRead);
-    if (framesRead == 0 || res == MA_AT_END) break;
+    uint64_t framesRead = 0;
+    if (useM4a) {
+      if (!m4a.readFrames(buffer.data(), chunkFrames, &framesRead)) {
+        ma_encoder_uninit(&encoder);
+        m4a.uninit();
+        die("Failed to decode m4a input.");
+      }
+      if (framesRead == 0) break;
+    } else {
+      ma_uint64 framesReadMa = 0;
+      ma_result res = ma_decoder_read_pcm_frames(&decoder, buffer.data(), chunkFrames, &framesReadMa);
+      framesRead = framesReadMa;
+      if (framesRead == 0 || res == MA_AT_END) break;
+    }
 
     if (!o.dry) {
       if (useRadio1938) {
@@ -359,17 +413,21 @@ static void renderToFile(
       }
     }
 
-    for (size_t i = 0; i < framesRead * channels; ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(framesRead * channels); ++i) {
       float v = std::clamp(buffer[i], -1.0f, 1.0f);
       out[i] = static_cast<int16_t>(std::lrint(v * 32767.0f));
     }
 
     ma_uint64 framesWritten = 0;
-    ma_encoder_write_pcm_frames(&encoder, out.data(), framesRead, &framesWritten);
+    ma_encoder_write_pcm_frames(&encoder, out.data(), static_cast<ma_uint64>(framesRead), &framesWritten);
   }
 
   ma_encoder_uninit(&encoder);
-  ma_decoder_uninit(&decoder);
+  if (useM4a) {
+    m4a.uninit();
+  } else {
+    ma_decoder_uninit(&decoder);
+  }
 }
 
 int main(int argc, char** argv) {
@@ -452,33 +510,61 @@ int main(int argc, char** argv) {
 
   auto loadFileAt = [&](const std::filesystem::path& file, uint64_t startFrame) -> bool {
     validateInputFile(file);
+    const bool useM4a = isM4aExt(file);
     if (deviceReady) {
       ma_device_stop(&state.device);
     }
     if (decoderReady) {
-      ma_decoder_uninit(&state.decoder);
+      if (state.usingM4a.load()) {
+        state.m4a.uninit();
+      } else {
+        ma_decoder_uninit(&state.decoder);
+      }
       decoderReady = false;
+      state.usingM4a.store(false);
     }
 
-    ma_decoder_config decConfig = ma_decoder_config_init(ma_format_f32, channels, sampleRate);
-    if (ma_decoder_init_file(file.string().c_str(), &decConfig, &state.decoder) != MA_SUCCESS) {
-      return false;
-    }
-    decoderReady = true;
-
-    ma_uint64 totalFrames = 0;
-    if (ma_decoder_get_length_in_pcm_frames(&state.decoder, &totalFrames) == MA_SUCCESS) {
-      state.totalFrames = totalFrames;
+    if (useM4a) {
+      std::string error;
+      if (!state.m4a.init(file, channels, sampleRate, &error)) {
+        return false;
+      }
+      decoderReady = true;
+      state.usingM4a.store(true);
+      uint64_t totalFrames = 0;
+      if (state.m4a.getTotalFrames(&totalFrames)) {
+        state.totalFrames = totalFrames;
+      } else {
+        state.totalFrames = 0;
+      }
     } else {
-      state.totalFrames = 0;
+      ma_decoder_config decConfig = ma_decoder_config_init(ma_format_f32, channels, sampleRate);
+      if (ma_decoder_init_file(file.string().c_str(), &decConfig, &state.decoder) != MA_SUCCESS) {
+        return false;
+      }
+      decoderReady = true;
+      state.usingM4a.store(false);
+
+      ma_uint64 totalFrames = 0;
+      if (ma_decoder_get_length_in_pcm_frames(&state.decoder, &totalFrames) == MA_SUCCESS) {
+        state.totalFrames = totalFrames;
+      } else {
+        state.totalFrames = 0;
+      }
     }
 
     if (state.totalFrames > 0 && startFrame > state.totalFrames) {
       startFrame = state.totalFrames;
     }
     if (startFrame > 0) {
-      if (ma_decoder_seek_to_pcm_frame(&state.decoder, static_cast<ma_uint64>(startFrame)) != MA_SUCCESS) {
-        startFrame = 0;
+      if (state.usingM4a.load()) {
+        if (!state.m4a.seekToFrame(startFrame)) {
+          startFrame = 0;
+        }
+      } else {
+        if (ma_decoder_seek_to_pcm_frame(&state.decoder, static_cast<ma_uint64>(startFrame)) != MA_SUCCESS) {
+          startFrame = 0;
+        }
       }
     }
 
@@ -496,13 +582,21 @@ int main(int argc, char** argv) {
 
     if (!deviceReady) {
       if (!initDevice()) {
-        ma_decoder_uninit(&state.decoder);
+        if (state.usingM4a.load()) {
+          state.m4a.uninit();
+        } else {
+          ma_decoder_uninit(&state.decoder);
+        }
         decoderReady = false;
         return false;
       }
     } else {
       if (ma_device_start(&state.device) != MA_SUCCESS) {
-        ma_decoder_uninit(&state.decoder);
+        if (state.usingM4a.load()) {
+          state.m4a.uninit();
+        } else {
+          ma_decoder_uninit(&state.decoder);
+        }
         decoderReady = false;
         return false;
       }
@@ -528,8 +622,13 @@ int main(int argc, char** argv) {
       deviceReady = false;
     }
     if (decoderReady) {
-      ma_decoder_uninit(&state.decoder);
+      if (state.usingM4a.load()) {
+        state.m4a.uninit();
+      } else {
+        ma_decoder_uninit(&state.decoder);
+      }
       decoderReady = false;
+      state.usingM4a.store(false);
     }
 
     channels = newChannels;
@@ -844,7 +943,7 @@ int main(int argc, char** argv) {
       }
       std::string filterLabel = state.useRadio1938.load() ? "1938 radio" : "classic";
       screen.writeText(0, 3, fitLine(std::string("  Filter: ") + filterLabel, width), kStyleDim);
-      screen.writeText(0, 4, fitLine("  Showing: folders + .wav/.mp3/.flac", width), kStyleDim);
+      screen.writeText(0, 4, fitLine("  Showing: folders + .wav/.mp3/.flac/.m4a", width), kStyleDim);
 
       if (browser.entries.empty()) {
         screen.writeText(2, listTop, "(no supported files)", kStyleDim);
@@ -952,7 +1051,11 @@ int main(int argc, char** argv) {
     ma_device_uninit(&state.device);
   }
   if (decoderReady) {
-    ma_decoder_uninit(&state.decoder);
+    if (state.usingM4a.load()) {
+      state.m4a.uninit();
+    } else {
+      ma_decoder_uninit(&state.decoder);
+    }
   }
   return 0;
 }

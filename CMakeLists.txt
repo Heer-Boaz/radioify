@@ -8,6 +8,7 @@ add_executable(radioify
   main.cpp
   consoleinput.cpp
   consolescreen.cpp
+  m4adecoder.cpp
   radio.cpp
 )
 
@@ -31,7 +32,7 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if (WIN32)
-  target_link_libraries(radioify PRIVATE winmm)
+  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32)
 endif()
 
 if (MSVC)
