@@ -315,34 +315,54 @@ static inline float softClip(float x, float t = 0.98f) {
 struct NoiseHum {
   std::mt19937 rng{0x1938u};
   std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
+  std::uniform_real_distribution<float> dist01{0.0f, 1.0f};
   Biquad hp;
   Biquad lp;
+  Biquad crackleHp;
+  Biquad crackleLp;
   float fs = 48000.0f;
   float noiseAmp = 0.015f;
+  float noiseHpHz = 500.0f;
+  float noiseLpHz = 5500.0f;
   float humAmp = 0.0015f;
   float humHz = 50.0f;
   float humPhase = 0.0f;
   float scEnv = 0.0f;
   float scAtk = 0.0f;
   float scRel = 0.0f;
+  float crackleRate = 0.9f;
+  float crackleAmp = 0.015f;
+  float crackleEnv = 0.0f;
+  float crackleDecay = 0.0f;
 
-  void setFs(float newFs) {
+  void setFs(float newFs, float noiseBwHz) {
     fs = newFs;
-    hp.setHighpass(fs, 500.0f, 0.707f);
-    lp.setLowpass(fs, 5500.0f, 0.707f);
+    noiseLpHz = (noiseBwHz > 0.0f) ? noiseBwHz : noiseLpHz;
+    float safeLp = std::clamp(noiseLpHz, noiseHpHz + 200.0f, fs * 0.45f);
+    hp.setHighpass(fs, noiseHpHz, 0.707f);
+    lp.setLowpass(fs, safeLp, 0.707f);
+    crackleHp.setHighpass(fs, noiseHpHz, 0.707f);
+    crackleLp.setLowpass(fs, safeLp, 0.707f);
     hp.reset();
     lp.reset();
+    crackleHp.reset();
+    crackleLp.reset();
     float atkMs = 10.0f;
     float relMs = 250.0f;
     scAtk = std::exp(-1.0f / (fs * (atkMs / 1000.0f)));
     scRel = std::exp(-1.0f / (fs * (relMs / 1000.0f)));
+    float crackleMs = 12.0f;
+    crackleDecay = std::exp(-1.0f / (fs * (crackleMs / 1000.0f)));
   }
 
   void reset() {
     humPhase = 0.0f;
     scEnv = 0.0f;
+    crackleEnv = 0.0f;
     hp.reset();
     lp.reset();
+    crackleHp.reset();
+    crackleLp.reset();
   }
 
   float process(float programSample) {
@@ -364,13 +384,26 @@ struct NoiseHum {
     n = lp.process(n);
     n *= noiseAmp * duckGain;
 
+    float c = 0.0f;
+    if (crackleRate > 0.0f && crackleAmp > 0.0f && fs > 0.0f) {
+      float chance = crackleRate / fs;
+      if (dist01(rng) < chance) {
+        crackleEnv = 1.0f;
+      }
+      float raw = dist(rng) * crackleEnv;
+      crackleEnv *= crackleDecay;
+      raw = crackleHp.process(raw);
+      raw = crackleLp.process(raw);
+      c = raw * crackleAmp * duckGain;
+    }
+
     constexpr float twoPi = 6.283185307f;
     humPhase += twoPi * (humHz / fs);
     if (humPhase > twoPi) humPhase -= twoPi;
     float h = std::sin(humPhase) + 0.35f * std::sin(2.0f * humPhase);
     h *= humAmp;
 
-    return n + h;
+    return n + c + h;
   }
 };
 
@@ -381,7 +414,10 @@ struct Radio1938 {
   float noiseWeight = 0.012f;
 
   Biquad hpf;
-  Biquad lpf;
+  Biquad lpf1;
+  Biquad lpf2;
+  Biquad postLpf1;
+  Biquad postLpf2;
   Biquad midBoost;
   Biquad lowMidDip;
   Biquad presBoost;
@@ -397,7 +433,10 @@ struct Radio1938 {
 
     float safeBw = std::clamp(bwHz, 4200.0f, 5600.0f);
     hpf.setHighpass(sampleRate, 140.0f, 0.707f);
-    lpf.setLowpass(sampleRate, safeBw, 0.707f);
+    lpf1.setLowpass(sampleRate, safeBw, 0.707f);
+    lpf2.setLowpass(sampleRate, safeBw, 0.707f);
+    postLpf1.setLowpass(sampleRate, safeBw, 0.707f);
+    postLpf2.setLowpass(sampleRate, safeBw, 0.707f);
     midBoost.setPeaking(sampleRate, 1500.0f, 1.0f, 4.0f);
     lowMidDip.setPeaking(sampleRate, 420.0f, 1.0f, -2.5f);
     presBoost.setPeaking(sampleRate, 3200.0f, 0.9f, 1.5f);
@@ -410,14 +449,18 @@ struct Radio1938 {
     sat.drive = 1.40f;
     sat.mix = 0.50f;
 
-    noiseHum.setFs(sampleRate);
+    noiseHum.setFs(sampleRate, safeBw);
     noiseHum.noiseAmp = noiseWeight;
     noiseHum.humHz = 50.0f;
     if (noiseWeight <= 0.0f) {
       noiseHum.humAmp = 0.0f;
+      noiseHum.crackleRate = 0.0f;
+      noiseHum.crackleAmp = 0.0f;
     } else {
       float scale = std::clamp(noiseWeight / 0.015f, 0.0f, 2.0f);
       noiseHum.humAmp = 0.0015f * scale;
+      noiseHum.crackleRate = 0.9f * scale;
+      noiseHum.crackleAmp = 0.015f * scale;
     }
 
     reset();
@@ -425,7 +468,10 @@ struct Radio1938 {
 
   void reset() {
     hpf.reset();
-    lpf.reset();
+    lpf1.reset();
+    lpf2.reset();
+    postLpf1.reset();
+    postLpf2.reset();
     midBoost.reset();
     lowMidDip.reset();
     presBoost.reset();
@@ -441,12 +487,15 @@ struct Radio1938 {
       float x = (channels > 1) ? 0.5f * (inL + inR) : inL;
 
       float y = hpf.process(x);
-      y = lpf.process(y);
+      y = lpf1.process(y);
+      y = lpf2.process(y);
       y = midBoost.process(y);
       y = lowMidDip.process(y);
       y = presBoost.process(y);
       y = comp.process(y);
       y = sat.process(y);
+      y = postLpf1.process(y);
+      y = postLpf2.process(y);
       y += noiseHum.process(y);
       y = softClip(y, 0.985f);
 
