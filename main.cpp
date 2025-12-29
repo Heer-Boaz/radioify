@@ -30,8 +30,8 @@ struct Options {
   std::string input;
   std::string output;
   int bwHz = 4800;
-  // double noise = 0.012; // tuned for a "modern recording through 1938 AM"
-  double noise = 0.006; // tuned for a "modern recording through 1938 AM"
+  double noise = 0.012; // tuned for a "modern recording through 1938 AM"
+  // double noise = 0.006; // tuned for a "modern recording through 1938 AM"
   bool mono = true;
   bool play = true;
   bool dry = false;
