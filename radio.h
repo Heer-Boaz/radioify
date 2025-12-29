@@ -187,6 +187,10 @@ struct Radio1938 {
   float crackleBase = 0.0f;
   float heteroBaseScale = 0.0f;
 
+  float tuneOffsetHz = 0.0f;
+  float tuneOffsetNorm = 0.0f;
+  float tuneTiltExtra = 0.22f;
+
   float amSampleRate = 11025.0f;
   float amStep = 0.0f;
   float amPhase = 0.0f;

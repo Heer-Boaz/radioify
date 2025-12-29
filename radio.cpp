@@ -390,9 +390,16 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   lpf2.setLowpass(sampleRate, safeBw, 0.707f);
   postLpf1.setLowpass(sampleRate, safeBw, 0.707f);
   postLpf2.setLowpass(sampleRate, safeBw, 0.707f);
-  ifRipple1.setPeaking(sampleRate, 950.0f, 0.9f, 0.5f);
-  ifRipple2.setPeaking(sampleRate, 2300.0f, 1.1f, -0.6f);
-  ifTiltLp.setLowpass(sampleRate, 1700.0f, 0.707f);
+  tuneOffsetNorm = (safeBw > 0.0f)
+    ? std::clamp(tuneOffsetHz / (safeBw * 0.5f), -1.0f, 1.0f)
+    : 0.0f;
+  float shift = 1.0f + tuneOffsetNorm * 0.18f;
+  float ripple1Hz = std::clamp(950.0f * shift, 500.0f, safeBw * 0.95f);
+  float ripple2Hz = std::clamp(2300.0f * shift, 800.0f, safeBw * 0.95f);
+  float tiltHz = std::clamp(1700.0f * (1.0f + tuneOffsetNorm * 0.15f), 900.0f, safeBw * 0.95f);
+  ifRipple1.setPeaking(sampleRate, ripple1Hz, 0.9f, 0.5f);
+  ifRipple2.setPeaking(sampleRate, ripple2Hz, 1.1f, -0.6f);
+  ifTiltLp.setLowpass(sampleRate, tiltHz, 0.707f);
   float amNyquist = std::min(amSampleRate * 0.5f, sampleRate * 0.45f);
   float amCut = std::clamp(amNyquist * 0.96f, 2500.0f, sampleRate * 0.45f);
   amRateLp1.setLowpass(sampleRate, amCut, 0.707f);
@@ -494,8 +501,22 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = lpf2.process(y);
     y = ifRipple1.process(y);
     y = ifRipple2.process(y);
-    float tilt = ifTiltLp.process(y);
-    y = (1.0f - ifTiltMix) * y + ifTiltMix * tilt;
+    float low = ifTiltLp.process(y);
+    float high = y - low;
+    float tiltMix = ifTiltMix;
+    if (tuneOffsetNorm != 0.0f) {
+      float extra = std::abs(tuneOffsetNorm) * tuneTiltExtra;
+      if (tuneOffsetNorm > 0.0f) {
+        float highGain = std::max(0.0f, 1.0f - tiltMix - extra);
+        y = low + high * highGain;
+      } else {
+        float lowGain = std::max(0.0f, 1.0f - extra);
+        float highGain = std::max(0.0f, 1.0f - tiltMix);
+        y = low * lowGain + high * highGain;
+      }
+    } else {
+      y = low + high * (1.0f - tiltMix);
+    }
     if (amStep > 0.0f && amStep < 1.0f) {
       y = amRateLp1.process(y);
       y = amRateLp2.process(y);
