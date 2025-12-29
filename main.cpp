@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cctype>
 #include <cstdio>
+#include <cwchar>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -57,6 +58,15 @@ static std::string parseInputPath(int argc, char** argv) {
   if (argc <= 1) return {};
   if (argc > 2) die("Provide a single file or folder path only.");
   return std::string(argv[1]);
+}
+
+static std::string toUtf8String(const std::filesystem::path& p) {
+#ifdef _WIN32
+  auto u8 = p.u8string();
+  return std::string(u8.begin(), u8.end());
+#else
+  return p.string();
+#endif
 }
 
 struct Biquad {
@@ -501,15 +511,46 @@ struct Style {
   Color bg;
 };
 
+static float clamp01(float v) {
+  if (v < 0.0f) return 0.0f;
+  if (v > 1.0f) return 1.0f;
+  return v;
+}
+
+static Color lerpColor(const Color& a, const Color& b, float t) {
+  t = clamp01(t);
+  Color out;
+  out.r = static_cast<uint8_t>(std::lround(a.r + (b.r - a.r) * t));
+  out.g = static_cast<uint8_t>(std::lround(a.g + (b.g - a.g) * t));
+  out.b = static_cast<uint8_t>(std::lround(a.b + (b.b - a.b) * t));
+  return out;
+}
+
 static bool sameColor(const Color& a, const Color& b) {
   return a.r == b.r && a.g == b.g && a.b == b.b;
 }
 
 struct Cell {
-  char ch = ' ';
+  wchar_t ch = L' ';
   Color fg{255, 255, 255};
   Color bg{0, 0, 0};
 };
+
+static std::wstring utf8ToWide(const std::string& text) {
+  if (text.empty()) return {};
+  int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), static_cast<int>(text.size()), nullptr, 0);
+  if (needed <= 0) {
+    std::wstring fallback;
+    fallback.reserve(text.size());
+    for (unsigned char c : text) {
+      fallback.push_back(static_cast<wchar_t>(c));
+    }
+    return fallback;
+  }
+  std::wstring out(needed, L'\0');
+  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), static_cast<int>(text.size()), out.data(), needed);
+  return out;
+}
 
 class ConsoleInput {
  public:
@@ -639,14 +680,20 @@ class ConsoleScreen {
     int pos = y * width_ + std::max(0, x);
     int start = std::max(0, x);
     int maxLen = width_ - start;
-    for (int i = 0; i < maxLen && i < static_cast<int>(text.size()); ++i) {
-      buffer_[pos + i].ch = text[static_cast<size_t>(i)];
+    std::wstring wide = utf8ToWide(text);
+    int limit = std::min(maxLen, static_cast<int>(wide.size()));
+    for (int i = 0; i < limit; ++i) {
+      wchar_t ch = wide[static_cast<size_t>(i)];
+      if (i == limit - 1 && ch >= 0xD800 && ch <= 0xDBFF) {
+        break;
+      }
+      buffer_[pos + i].ch = ch;
       buffer_[pos + i].fg = style.fg;
       buffer_[pos + i].bg = style.bg;
     }
   }
 
-  void writeRun(int x, int y, int len, char ch, const Style& style) {
+  void writeRun(int x, int y, int len, wchar_t ch, const Style& style) {
     if (y < 0 || y >= height_) return;
     if (x >= width_) return;
     int start = std::max(0, x);
@@ -659,7 +706,7 @@ class ConsoleScreen {
     }
   }
 
-  void writeChar(int x, int y, char ch, const Style& style) {
+  void writeChar(int x, int y, wchar_t ch, const Style& style) {
     if (y < 0 || y >= height_) return;
     if (x < 0 || x >= width_) return;
     int pos = y * width_ + x;
@@ -670,19 +717,19 @@ class ConsoleScreen {
 
   void draw() {
     if (out_ == INVALID_HANDLE_VALUE) return;
-    std::string out;
-    out.reserve(static_cast<size_t>(width_ * height_ * 4));
-    out.append("\x1b[H");
+    std::wstring out;
+    out.reserve(static_cast<size_t>(width_ * height_ * 2));
+    out.append(L"\x1b[H");
     Color curFg{};
     Color curBg{};
     bool hasColor = false;
 
     auto appendColor = [&](const Color& fg, const Color& bg) {
-      char buf[64];
-      std::snprintf(
+      wchar_t buf[64];
+      std::swprintf(
         buf,
-        sizeof(buf),
-        "\x1b[38;2;%u;%u;%um\x1b[48;2;%u;%u;%um",
+        static_cast<int>(sizeof(buf) / sizeof(*buf)),
+        L"\x1b[38;2;%u;%u;%um\x1b[48;2;%u;%u;%um",
         static_cast<unsigned>(fg.r),
         static_cast<unsigned>(fg.g),
         static_cast<unsigned>(fg.b),
@@ -702,17 +749,17 @@ class ConsoleScreen {
           curBg = cell.bg;
           hasColor = true;
         }
-        out.push_back(cell.ch ? cell.ch : ' ');
+        out.push_back(cell.ch ? cell.ch : L' ');
       }
       if (y < height_ - 1) {
-        out.append("\x1b[0m\r\n");
+        out.append(L"\x1b[0m\r\n");
         hasColor = false;
       }
     }
-    out.append("\x1b[0m");
+    out.append(L"\x1b[0m");
 
     DWORD written = 0;
-    WriteConsoleA(out_, out.c_str(), static_cast<DWORD>(out.size()), &written, nullptr);
+    WriteConsoleW(out_, out.c_str(), static_cast<DWORD>(out.size()), &written, nullptr);
   }
 
  private:
@@ -724,11 +771,41 @@ class ConsoleScreen {
   std::vector<Cell> buffer_;
 };
 
+static size_t utf8Next(const std::string& s, size_t i) {
+  if (i >= s.size()) return s.size();
+  unsigned char c = static_cast<unsigned char>(s[i]);
+  if ((c & 0x80) == 0x00) return i + 1;
+  if ((c & 0xE0) == 0xC0) return std::min(s.size(), i + 2);
+  if ((c & 0xF0) == 0xE0) return std::min(s.size(), i + 3);
+  if ((c & 0xF8) == 0xF0) return std::min(s.size(), i + 4);
+  return i + 1;
+}
+
+static int utf8CodepointCount(const std::string& s) {
+  int count = 0;
+  for (size_t i = 0; i < s.size();) {
+    i = utf8Next(s, i);
+    count++;
+  }
+  return count;
+}
+
+static std::string utf8Take(const std::string& s, int count) {
+  if (count <= 0) return "";
+  size_t i = 0;
+  int c = 0;
+  for (; i < s.size() && c < count; ++c) {
+    i = utf8Next(s, i);
+  }
+  return s.substr(0, i);
+}
+
 static std::string fitLine(const std::string& s, int width) {
   if (width <= 0) return "";
-  if (static_cast<int>(s.size()) <= width) return s;
-  if (width <= 1) return s.substr(0, static_cast<size_t>(width));
-  return s.substr(0, static_cast<size_t>(width - 1)) + "~";
+  int count = utf8CodepointCount(s);
+  if (count <= width) return s;
+  if (width <= 1) return utf8Take(s, width);
+  return utf8Take(s, width - 1) + "~";
 }
 
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
@@ -770,9 +847,9 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
       const auto& p = entry.path();
       if (entry.is_directory()) {
-        items.push_back(FileEntry{p.filename().string(), p, true});
+        items.push_back(FileEntry{toUtf8String(p.filename()), p, true});
       } else if (entry.is_regular_file() && isSupportedAudioExt(p)) {
-        items.push_back(FileEntry{p.filename().string(), p, false});
+        items.push_back(FileEntry{toUtf8String(p.filename()), p, false});
       }
     }
   } catch (...) {
@@ -821,9 +898,9 @@ struct GridLayout {
 
 static std::string fitName(const std::string& name, int colWidth) {
   int maxLen = colWidth - 2;
-  if (maxLen <= 1) return std::string(1, name.empty() ? ' ' : name[0]);
-  if (static_cast<int>(name.size()) <= maxLen) return name;
-  return name.substr(0, static_cast<size_t>(maxLen - 1)) + "~";
+  if (maxLen <= 1) return name.empty() ? " " : utf8Take(name, 1);
+  if (utf8CodepointCount(name) <= maxLen) return name;
+  return utf8Take(name, maxLen - 1) + "~";
 }
 
 static GridLayout buildLayout(const BrowserState& state, int width, int rowsVisible) {
@@ -834,7 +911,7 @@ static GridLayout buildLayout(const BrowserState& state, int width, int rowsVisi
     std::string name = e.name;
     if (e.isDir && name != "..") name += "/";
     layout.names.push_back(name);
-    maxName = std::max(maxName, static_cast<int>(name.size()));
+    maxName = std::max(maxName, utf8CodepointCount(name));
   }
 
   int safeRows = std::max(1, rowsVisible);
@@ -999,7 +1076,7 @@ int main(int argc, char** argv) {
         o.input.clear();
       } else {
         startDir = inputPath.parent_path();
-        initialName = inputPath.filename().string();
+        initialName = toUtf8String(inputPath.filename());
       }
     }
   }
@@ -1179,14 +1256,15 @@ int main(int argc, char** argv) {
 
   const Color kBgBase{12, 15, 20};
   const Style kStyleNormal{{215, 220, 226}, kBgBase};
-  const Style kStyleHeader{{226, 236, 247}, {19, 32, 51}};
-  const Style kStyleHeaderGlow{{160, 224, 255}, {19, 32, 51}};
-  const Style kStyleHeaderHot{{255, 255, 255}, {30, 45, 70}};
-  const Style kStyleAccent{{125, 211, 252}, kBgBase};
+  const Style kStyleHeader{{230, 238, 248}, {18, 28, 44}};
+  const Style kStyleHeaderGlow{{255, 213, 118}, {22, 34, 52}};
+  const Style kStyleHeaderHot{{255, 249, 214}, {38, 50, 72}};
+  const Style kStyleAccent{{255, 214, 120}, kBgBase};
   const Style kStyleDim{{138, 144, 153}, kBgBase};
   const Style kStyleDir{{110, 231, 183}, kBgBase};
   const Style kStyleHighlight{{15, 20, 28}, {230, 238, 248}};
-  const Style kStyleProgressFill{{110, 231, 183}, {110, 231, 183}};
+  const Color kProgressStart{110, 231, 183};
+  const Color kProgressEnd{255, 214, 110};
   const Style kStyleProgressEmpty{{32, 38, 46}, {32, 38, 46}};
   const Style kStyleProgressFrame{{160, 170, 182}, kBgBase};
 
@@ -1396,20 +1474,42 @@ int main(int argc, char** argv) {
       }
       int titleLen = static_cast<int>(title.size());
       int titleX = std::max(0, (width - titleLen) / 2);
-      screen.writeRun(0, 0, width, ' ', kStyleHeader);
       double seconds = std::chrono::duration<double>(now.time_since_epoch()).count();
-      double speed = 1.6;
-      double pulse = 0.5 * (std::sin(seconds * speed) + 1.0);
-      Style titleAttr = kStyleHeader;
-      if (pulse > 0.70) {
-        titleAttr = kStyleHeaderHot;
-      } else if (pulse > 0.40) {
-        titleAttr = kStyleHeaderGlow;
+      double speed = 1.3;
+      float pulse = static_cast<float>(0.5 * (std::sin(seconds * speed) + 1.0));
+      pulse = clamp01(pulse);
+      pulse = pulse * pulse * (3.0f - 2.0f * pulse);
+      float t = std::pow(pulse, 0.6f);
+      float flash = 0.0f;
+      if (t > 0.88f) {
+        flash = (t - 0.88f) / 0.12f;
+        flash = flash * flash;
       }
+      Color headerBg = lerpColor(kStyleHeader.bg, kStyleHeaderHot.bg, std::min(0.85f, t * 0.9f));
+      headerBg = lerpColor(headerBg, Color{52, 44, 26}, flash * 0.7f);
+      Style headerLineStyle{ kStyleHeader.fg, headerBg };
+      screen.writeRun(0, 0, width, L' ', headerLineStyle);
+
+      Color titleFg;
+      if (t < 0.35f) {
+        titleFg = lerpColor(kStyleHeader.fg, kStyleHeaderGlow.fg, t / 0.35f);
+      } else {
+        float hotT = (t - 0.35f) / 0.65f;
+        titleFg = lerpColor(kStyleHeaderGlow.fg, kStyleHeaderHot.fg, clamp01(hotT));
+      }
+      if (t > 0.85f) {
+        float whiteT = (t - 0.85f) / 0.15f;
+        titleFg = lerpColor(titleFg, Color{255, 255, 255}, clamp01(whiteT));
+      }
+      if (flash > 0.0f) {
+        titleFg = lerpColor(titleFg, Color{255, 236, 186}, clamp01(flash));
+      }
+      Style titleAttr{ titleFg, headerBg };
       for (int i = 0; i < titleLen; ++i) {
-        screen.writeChar(titleX + i, 0, title[static_cast<size_t>(i)], titleAttr);
+        wchar_t ch = static_cast<wchar_t>(static_cast<unsigned char>(title[static_cast<size_t>(i)]));
+        screen.writeChar(titleX + i, 0, ch, titleAttr);
       }
-      screen.writeText(0, 1, fitLine(std::string("  Folder: ") + browser.dir.string(), width), kStyleAccent);
+      screen.writeText(0, 1, fitLine(std::string("  Folder: ") + toUtf8String(browser.dir), width), kStyleAccent);
       if (o.play) {
         screen.writeText(0, 2, fitLine("  Mouse=select  Click=play/enter  Backspace=up  Click+drag bar=seek  Space=pause  Left/Right=seek  R=toggle  Q=quit", width), kStyleNormal);
       } else {
@@ -1432,10 +1532,11 @@ int main(int argc, char** argv) {
             const auto& entry = browser.entries[static_cast<size_t>(idx)];
             bool isSelected = (idx == browser.selected);
             std::string cell = fitName(layout.names[static_cast<size_t>(idx)], layout.colWidth);
-            if (static_cast<int>(cell.size()) < layout.colWidth) {
-              cell.append(static_cast<size_t>(layout.colWidth - static_cast<int>(cell.size())), ' ');
-            } else if (static_cast<int>(cell.size()) > layout.colWidth) {
-              cell.resize(static_cast<size_t>(layout.colWidth));
+            int cellWidth = utf8CodepointCount(cell);
+            if (cellWidth < layout.colWidth) {
+              cell.append(static_cast<size_t>(layout.colWidth - cellWidth), ' ');
+            } else if (cellWidth > layout.colWidth) {
+              cell = utf8Take(cell, layout.colWidth);
             }
             Style attr = isSelected ? kStyleHighlight : (entry.isDir ? kStyleDir : kStyleNormal);
             screen.writeText(c * layout.colWidth, y, cell, attr);
@@ -1448,21 +1549,35 @@ int main(int argc, char** argv) {
       if (line < height) {
         line++;
       }
-      std::string nowLabel = nowPlaying.empty() ? "(none)" : nowPlaying.filename().string();
-      screen.writeText(0, line++, fitLine(std::string("  Now: ") + nowLabel, width), kStyleAccent);
+      std::string nowLabel = nowPlaying.empty() ? "(none)" : toUtf8String(nowPlaying.filename());
+      screen.writeText(0, line++, fitLine(std::string(" ") + nowLabel, width), kStyleAccent);
 
       double currentSec = decoderReady ? static_cast<double>(state.framesPlayed.load()) / sampleRate : 0.0;
       double totalSec = (decoderReady && state.totalFrames > 0) ? static_cast<double>(state.totalFrames) / sampleRate : -1.0;
-      std::string status = decoderReady ? (state.finished.load() ? "ended" : (state.paused.load() ? "paused" : "playing")) : "idle";
+      std::string status;
+      if (decoderReady) {
+        if (state.finished.load()) {
+          status = "\xE2\x96\xA0"; // ended icon
+        } else if (state.paused.load()) {
+          status = "\xE2\x8F\xB8"; // paused icon
+        } else {
+          status = "\xE2\x96\xB6"; // playing icon
+        }
+      } else {
+        status = "\xE2\x97\x8B"; // idle icon
+      }
       std::string suffix = formatTime(currentSec) + " / " + formatTime(totalSec) + " " + status;
-      int barWidth = width - static_cast<int>(suffix.size()) - 3;
+      int suffixWidth = utf8CodepointCount(suffix);
+      int barWidth = width - suffixWidth - 3;
       if (barWidth < 10) {
         suffix = formatTime(currentSec) + "/" + formatTime(totalSec);
-        barWidth = width - static_cast<int>(suffix.size()) - 3;
+        suffixWidth = utf8CodepointCount(suffix);
+        barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 10) {
         suffix = formatTime(currentSec);
-        barWidth = width - static_cast<int>(suffix.size()) - 3;
+        suffixWidth = utf8CodepointCount(suffix);
+        barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 5) {
         suffix.clear();
@@ -1479,12 +1594,18 @@ int main(int argc, char** argv) {
       progressBarY = line;
       progressBarWidth = barWidth;
 
-      screen.writeText(0, line, "[", kStyleProgressFrame);
-      screen.writeRun(1, line, barWidth, ' ', kStyleProgressEmpty);
+      screen.writeText(0, line, "\xE2\x94\x82", kStyleProgressFrame);
+      screen.writeRun(1, line, barWidth, L'\x2591', kStyleProgressEmpty);
       if (filled > 0) {
-        screen.writeRun(1, line, std::min(filled, barWidth), ' ', kStyleProgressFill);
+        int fillCount = std::min(filled, barWidth);
+        for (int i = 0; i < fillCount; ++i) {
+          float t = (fillCount > 1) ? static_cast<float>(i) / static_cast<float>(fillCount - 1) : 0.0f;
+          Color c = lerpColor(kProgressStart, kProgressEnd, t);
+          Style s{c, c};
+          screen.writeChar(1 + i, line, L'\x2588', s);
+        }
       }
-      screen.writeText(1 + barWidth, line, "]", kStyleProgressFrame);
+      screen.writeText(1 + barWidth, line, "\xE2\x94\x82", kStyleProgressFrame);
       if (!suffix.empty()) {
         screen.writeText(2 + barWidth, line, " " + suffix, kStyleNormal);
       }
