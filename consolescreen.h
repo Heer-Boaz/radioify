@@ -10,6 +10,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,21 @@ struct Style {
   Color fg;
   Color bg;
 };
+
+struct Breadcrumb {
+  int startX = 0;
+  int endX = 0;
+  std::filesystem::path path;
+};
+
+struct BreadcrumbLine {
+  std::string text;
+  std::vector<Breadcrumb> crumbs;
+};
+
+BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width);
+int breadcrumbIndexAt(const BreadcrumbLine& line, int x, int y, int lineY);
+bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY, std::filesystem::path* outPath);
 
 class ConsoleScreen {
  public:

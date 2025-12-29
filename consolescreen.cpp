@@ -19,8 +19,193 @@ static std::wstring utf8ToWide(const std::string& text) {
   return out;
 }
 
+static std::string pathToUtf8(const std::filesystem::path& p) {
+#ifdef _WIN32
+  auto u8 = p.u8string();
+  return std::string(u8.begin(), u8.end());
+#else
+  return p.string();
+#endif
+}
+
+static size_t utf8Next(const std::string& s, size_t i) {
+  if (i >= s.size()) return s.size();
+  unsigned char c = static_cast<unsigned char>(s[i]);
+  if ((c & 0x80) == 0x00) return i + 1;
+  if ((c & 0xE0) == 0xC0) return std::min(s.size(), i + 2);
+  if ((c & 0xF0) == 0xE0) return std::min(s.size(), i + 3);
+  if ((c & 0xF8) == 0xF0) return std::min(s.size(), i + 4);
+  return i + 1;
+}
+
+static int utf8CodepointCount(const std::string& s) {
+  int count = 0;
+  for (size_t i = 0; i < s.size();) {
+    i = utf8Next(s, i);
+    count++;
+  }
+  return count;
+}
+
+static std::string utf8Take(const std::string& s, int count) {
+  if (count <= 0) return "";
+  size_t i = 0;
+  int c = 0;
+  for (; i < s.size() && c < count; ++c) {
+    i = utf8Next(s, i);
+  }
+  return s.substr(0, i);
+}
+
+static std::string fitLine(const std::string& s, int width) {
+  if (width <= 0) return "";
+  int count = utf8CodepointCount(s);
+  if (count <= width) return s;
+  if (width <= 1) return utf8Take(s, width);
+  return utf8Take(s, width - 1) + "~";
+}
+
 static bool sameColor(const Color& a, const Color& b) {
   return a.r == b.r && a.g == b.g && a.b == b.b;
+}
+
+BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) {
+  BreadcrumbLine line;
+  const std::string prefix = "  Path: ";
+  const int prefixLen = utf8CodepointCount(prefix);
+  if (width <= 0) return line;
+  if (prefixLen >= width) {
+    line.text = fitLine(prefix, width);
+    return line;
+  }
+
+  struct Item {
+    std::string label;
+    std::filesystem::path path;
+  };
+  std::vector<Item> items;
+  std::filesystem::path cur;
+  std::filesystem::path root = dir.root_path();
+#ifdef _WIN32
+  if (!root.empty()) {
+    std::string rootLabel = pathToUtf8(dir.root_name());
+    if (rootLabel.empty()) rootLabel = pathToUtf8(root);
+    if (!rootLabel.empty() && (rootLabel.back() == '\\' || rootLabel.back() == '/')) {
+      rootLabel.pop_back();
+    }
+    if (rootLabel.empty()) rootLabel = "\\";
+    cur = root;
+    items.push_back(Item{rootLabel, cur});
+  }
+#else
+  if (!root.empty()) {
+    cur = root;
+    items.push_back(Item{"/", cur});
+  }
+#endif
+  for (const auto& part : dir.relative_path()) {
+    cur /= part;
+    items.push_back(Item{pathToUtf8(part), cur});
+  }
+  if (items.empty()) {
+    items.push_back(Item{pathToUtf8(dir), dir});
+  }
+
+  const std::string sep = " > ";
+  const int sepLen = utf8CodepointCount(sep);
+  const std::string ellipsis = "... > ";
+  const int ellipsisLen = utf8CodepointCount(ellipsis);
+
+  const int avail = width - prefixLen;
+  std::vector<Item> visibleRev;
+  int used = 0;
+  int index = static_cast<int>(items.size()) - 1;
+  for (; index >= 0; --index) {
+    int labelLen = utf8CodepointCount(items[index].label);
+    int add = labelLen + (visibleRev.empty() ? 0 : sepLen);
+    if (used + add <= avail) {
+      visibleRev.push_back(items[index]);
+      used += add;
+    } else {
+      break;
+    }
+  }
+
+  bool skipped = index >= 0;
+  if (visibleRev.empty()) {
+    Item last = items.back();
+    last.label = fitLine(last.label, avail);
+    visibleRev.push_back(last);
+    used = utf8CodepointCount(last.label);
+    skipped = items.size() > 1;
+  }
+
+  int ellipsisUse = (skipped && used + ellipsisLen <= avail) ? ellipsisLen : 0;
+  std::vector<Item> visible(visibleRev.rbegin(), visibleRev.rend());
+
+  std::string text = prefix;
+  int x = prefixLen;
+  if (ellipsisUse) {
+    text += ellipsis;
+    x += ellipsisLen;
+  }
+  for (size_t i = 0; i < visible.size(); ++i) {
+    Item item = visible[i];
+    int remaining = width - x;
+    if (remaining <= 0) break;
+    int labelLen = utf8CodepointCount(item.label);
+    if (labelLen > remaining) {
+      item.label = fitLine(item.label, remaining);
+      labelLen = utf8CodepointCount(item.label);
+    }
+    Breadcrumb crumb;
+    crumb.startX = x;
+    crumb.endX = x + labelLen;
+    crumb.path = item.path;
+    line.crumbs.push_back(crumb);
+
+    text += item.label;
+    x += labelLen;
+    if (i + 1 < visible.size()) {
+      if (x + sepLen > width) break;
+      text += sep;
+      x += sepLen;
+    }
+  }
+  line.text = text;
+  if (line.text.empty()) {
+    std::string fallback = fitLine(pathToUtf8(dir), width - prefixLen);
+    line.text = prefix + fallback;
+  }
+  if (line.crumbs.empty()) {
+    int total = utf8CodepointCount(line.text);
+    if (total > prefixLen) {
+      Breadcrumb crumb;
+      crumb.startX = prefixLen;
+      crumb.endX = std::min(width, total);
+      crumb.path = dir;
+      line.crumbs.push_back(crumb);
+    }
+  }
+  return line;
+}
+
+bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY, std::filesystem::path* outPath) {
+  int index = breadcrumbIndexAt(line, x, y, lineY);
+  if (index < 0) return false;
+  if (outPath) *outPath = line.crumbs[static_cast<size_t>(index)].path;
+  return true;
+}
+
+int breadcrumbIndexAt(const BreadcrumbLine& line, int x, int y, int lineY) {
+  if (y != lineY) return -1;
+  for (size_t i = 0; i < line.crumbs.size(); ++i) {
+    const auto& crumb = line.crumbs[i];
+    if (x >= crumb.startX && x < crumb.endX) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
 }
 
 bool ConsoleScreen::init() {

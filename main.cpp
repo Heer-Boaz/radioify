@@ -126,130 +126,29 @@ static std::string utf8Take(const std::string& s, int count) {
   return s.substr(0, i);
 }
 
+static std::string utf8Slice(const std::string& s, int start, int count) {
+  if (count <= 0) return "";
+  if (start < 0) start = 0;
+  size_t i = 0;
+  int c = 0;
+  for (; i < s.size() && c < start; ++c) {
+    i = utf8Next(s, i);
+  }
+  size_t startByte = i;
+  int end = start + count;
+  for (; i < s.size() && c < end; ++c) {
+    i = utf8Next(s, i);
+  }
+  if (startByte >= s.size()) return "";
+  return s.substr(startByte, i - startByte);
+}
+
 static std::string fitLine(const std::string& s, int width) {
   if (width <= 0) return "";
   int count = utf8CodepointCount(s);
   if (count <= width) return s;
   if (width <= 1) return utf8Take(s, width);
   return utf8Take(s, width - 1) + "~";
-}
-
-struct Breadcrumb {
-  int startX = 0;
-  int endX = 0;
-  std::filesystem::path path;
-};
-
-struct BreadcrumbLine {
-  std::string text;
-  std::vector<Breadcrumb> crumbs;
-};
-
-static BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) {
-  BreadcrumbLine line;
-  const std::string prefix = "  Path: ";
-  const int prefixLen = utf8CodepointCount(prefix);
-  if (width <= 0) return line;
-  if (prefixLen >= width) {
-    line.text = fitLine(prefix, width);
-    return line;
-  }
-
-  struct Item {
-    std::string label;
-    std::filesystem::path path;
-  };
-  std::vector<Item> items;
-  std::filesystem::path cur;
-  std::filesystem::path root = dir.root_path();
-#ifdef _WIN32
-  if (!root.empty()) {
-    std::string rootLabel = toUtf8String(dir.root_name());
-    if (rootLabel.empty()) rootLabel = toUtf8String(root);
-    if (!rootLabel.empty() && (rootLabel.back() == '\\' || rootLabel.back() == '/')) {
-      rootLabel.pop_back();
-    }
-    if (rootLabel.empty()) rootLabel = "\\";
-    cur = root;
-    items.push_back(Item{rootLabel, cur});
-  }
-#else
-  if (!root.empty()) {
-    cur = root;
-    items.push_back(Item{"/", cur});
-  }
-#endif
-  for (const auto& part : dir.relative_path()) {
-    cur /= part;
-    items.push_back(Item{toUtf8String(part), cur});
-  }
-  if (items.empty()) {
-    items.push_back(Item{toUtf8String(dir), dir});
-  }
-
-  const std::string sep = " > ";
-  const int sepLen = utf8CodepointCount(sep);
-  const std::string ellipsis = "... > ";
-  const int ellipsisLen = utf8CodepointCount(ellipsis);
-
-  const int avail = width - prefixLen;
-  std::vector<Item> visibleRev;
-  int used = 0;
-  int index = static_cast<int>(items.size()) - 1;
-  for (; index >= 0; --index) {
-    int labelLen = utf8CodepointCount(items[index].label);
-    int add = labelLen + (visibleRev.empty() ? 0 : sepLen);
-    if (used + add <= avail) {
-      visibleRev.push_back(items[index]);
-      used += add;
-    } else {
-      break;
-    }
-  }
-
-  bool skipped = index >= 0;
-  if (visibleRev.empty()) {
-    Item last = items.back();
-    last.label = fitLine(last.label, avail);
-    visibleRev.push_back(last);
-    used = utf8CodepointCount(last.label);
-    skipped = items.size() > 1;
-  }
-
-  int ellipsisUse = (skipped && used + ellipsisLen <= avail) ? ellipsisLen : 0;
-  std::vector<Item> visible(visibleRev.rbegin(), visibleRev.rend());
-
-  std::string text = prefix;
-  int x = prefixLen;
-  if (ellipsisUse) {
-    text += ellipsis;
-    x += ellipsisLen;
-  }
-  for (size_t i = 0; i < visible.size(); ++i) {
-    Item item = visible[i];
-    int remaining = width - x;
-    if (remaining <= 0) break;
-    int labelLen = utf8CodepointCount(item.label);
-    if (labelLen > remaining) {
-      item.label = fitLine(item.label, remaining);
-      labelLen = utf8CodepointCount(item.label);
-    }
-    Breadcrumb crumb;
-    crumb.startX = x;
-    crumb.endX = x + labelLen;
-    crumb.path = item.path;
-    line.crumbs.push_back(crumb);
-
-    text += item.label;
-    x += labelLen;
-    if (i + 1 < visible.size()) {
-      if (x + sepLen > width) break;
-      text += sep;
-      x += sepLen;
-    }
-  }
-  line.text = text;
-  return line;
 }
 
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
@@ -284,33 +183,15 @@ struct BrowserState {
   int scrollRow = 0;
 };
 
-#ifdef _WIN32
-static std::vector<FileEntry> listDriveEntries() {
-  std::vector<FileEntry> drives;
-  DWORD mask = GetLogicalDrives();
-  if (mask == 0) return drives;
-  for (int i = 0; i < 26; ++i) {
-    if ((mask & (1u << i)) == 0) continue;
-    char letter = static_cast<char>('A' + i);
-    std::string name;
-    name.push_back(letter);
-    name.push_back(':');
-    std::string root;
-    root.push_back(letter);
-    root.append(":\\");
-    drives.push_back(FileEntry{name, std::filesystem::path(root), true});
-  }
-  return drives;
-}
-#endif
-
 static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
   std::vector<FileEntry> entries;
   std::vector<FileEntry> items;
 
 #ifdef _WIN32
-  for (const auto& drive : listDriveEntries()) {
-    entries.push_back(drive);
+  if (dir.empty() || dir == dir.root_path()) {
+    for (const auto& drive : listDriveEntries()) {
+      entries.push_back(FileEntry{drive.label, drive.path, true});
+    }
   }
 #endif
 
@@ -834,6 +715,7 @@ int main(int argc, char** argv) {
   const Style kStyleDim{{138, 144, 153}, kBgBase};
   const Style kStyleDir{{110, 231, 183}, kBgBase};
   const Style kStyleHighlight{{15, 20, 28}, {230, 238, 248}};
+  const Style kStyleBreadcrumbHover{{15, 20, 28}, {255, 214, 120}};
   const Color kProgressStart{110, 231, 183};
   const Color kProgressEnd{255, 214, 110};
   const Style kStyleProgressEmpty{{32, 38, 46}, {32, 38, 46}};
@@ -848,6 +730,7 @@ int main(int argc, char** argv) {
   int progressBarX = -1;
   int progressBarY = -1;
   int progressBarWidth = 0;
+  int breadcrumbHover = -1;
 
   while (running) {
     screen.updateSize();
@@ -855,6 +738,7 @@ int main(int argc, char** argv) {
     int height = std::max(10, screen.height());
     const int headerLines = 5;
     const int listTop = headerLines + 1;
+    const int breadcrumbY = listTop - 1;
     const int footerLines = 3;
     int listHeight = height - listTop - footerLines;
     if (listHeight < 1) listHeight = 1;
@@ -864,6 +748,11 @@ int main(int argc, char** argv) {
     } else {
       int maxScroll = layout.totalRows - layout.rowsVisible;
       browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
+    }
+
+    BreadcrumbLine breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
+    if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
+      breadcrumbHover = -1;
     }
 
     auto seekToRatio = [&](double ratio) {
@@ -880,6 +769,21 @@ int main(int argc, char** argv) {
       if (ev.type == InputEvent::Type::Resize) {
         dirty = true;
         screen.updateSize();
+        width = std::max(40, screen.width());
+        height = std::max(10, screen.height());
+        listHeight = height - listTop - footerLines;
+        if (listHeight < 1) listHeight = 1;
+        layout = buildLayout(browser, width, listHeight);
+        if (layout.totalRows <= layout.rowsVisible) {
+          browser.scrollRow = 0;
+        } else {
+          int maxScroll = layout.totalRows - layout.rowsVisible;
+          browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
+        }
+        breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
+        if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
+          breadcrumbHover = -1;
+        }
         continue;
       }
       if (ev.type == InputEvent::Type::Key) {
@@ -902,6 +806,7 @@ int main(int argc, char** argv) {
             browser.dir = browser.dir.parent_path();
             browser.selected = 0;
             refreshBrowser(browser, "");
+            breadcrumbHover = -1;
             dirty = true;
           }
           continue;
@@ -914,6 +819,7 @@ int main(int argc, char** argv) {
               browser.dir = pick.path;
               browser.selected = 0;
               refreshBrowser(browser, "");
+              breadcrumbHover = -1;
               dirty = true;
             } else if (o.play) {
               if (loadFile(pick.path)) {
@@ -956,10 +862,27 @@ int main(int argc, char** argv) {
       if (ev.type == InputEvent::Type::Mouse) {
         const MouseEvent& mouse = ev.mouse;
         bool leftPressed = (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+        int nextHover = breadcrumbIndexAt(breadcrumbLine, mouse.pos.X, mouse.pos.Y, breadcrumbY);
+        if (nextHover != breadcrumbHover) {
+          breadcrumbHover = nextHover;
+          dirty = true;
+        }
         if (mouse.eventFlags == MOUSE_WHEELED) {
           int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
           if (delta != 0) {
             browser.scrollRow -= delta / WHEEL_DELTA;
+            dirty = true;
+          }
+          continue;
+        }
+
+        if (leftPressed && mouse.eventFlags == 0 && breadcrumbHover >= 0) {
+          const auto& crumb = breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
+          if (browser.dir != crumb.path) {
+            browser.dir = crumb.path;
+            browser.selected = 0;
+            refreshBrowser(browser, "");
+            breadcrumbHover = -1;
             dirty = true;
           }
           continue;
@@ -1007,6 +930,7 @@ int main(int argc, char** argv) {
             browser.dir = pick.path;
             browser.selected = 0;
             refreshBrowser(browser, "");
+            breadcrumbHover = -1;
             dirty = true;
           } else if (o.play) {
             if (loadFile(pick.path)) {
@@ -1080,7 +1004,16 @@ int main(int argc, char** argv) {
         wchar_t ch = static_cast<wchar_t>(static_cast<unsigned char>(title[static_cast<size_t>(i)]));
         screen.writeChar(titleX + i, 0, ch, titleAttr);
       }
-      screen.writeText(0, 1, fitLine(std::string("  Folder: ") + toUtf8String(browser.dir), width), kStyleAccent);
+      breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
+      if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
+        breadcrumbHover = -1;
+      }
+      screen.writeText(0, breadcrumbY, breadcrumbLine.text, kStyleAccent);
+      if (breadcrumbHover >= 0) {
+        const auto& crumb = breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
+        std::string hoverText = utf8Slice(breadcrumbLine.text, crumb.startX, crumb.endX - crumb.startX);
+        screen.writeText(crumb.startX, breadcrumbY, hoverText, kStyleBreadcrumbHover);
+      }
       if (o.play) {
         screen.writeText(0, 2, fitLine("  Mouse=select  Click=play/enter  Backspace=up  Click+drag bar=seek  Space=pause  Left/Right=seek  R=toggle  Q=quit", width), kStyleNormal);
       } else {

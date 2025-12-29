@@ -9,6 +9,10 @@
 #endif
 #include <windows.h>
 
+#include <filesystem>
+#include <string>
+#include <vector>
+
 struct KeyEvent {
   WORD vk = 0;
   char ch = 0;
@@ -48,5 +52,12 @@ class ConsoleInput {
   DWORD originalMode_ = 0;
   bool active_ = false;
 };
+
+struct DriveEntry {
+  std::string label;
+  std::filesystem::path path;
+};
+
+std::vector<DriveEntry> listDriveEntries();
 
 #endif

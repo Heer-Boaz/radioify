@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+static constexpr bool kEnableRadioArtifacts = true;
+
 static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
 }
@@ -379,6 +381,8 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   sampleRate = sr;
   bwHz = bw;
   noiseWeight = noise;
+  detuneBuf.assign(64, 0.0f);
+  detuneIndex = 0;
 
   float safeBw = std::clamp(bwHz, 4200.0f, 5600.0f);
   hpf.setHighpass(sampleRate, 140.0f, 0.707f);
@@ -414,11 +418,21 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
     noiseHum.crackleRate = 0.9f * scale;
     noiseHum.crackleAmp = 0.015f * scale;
   }
+  noiseBase = noiseHum.noiseAmp;
+  crackleBase = noiseHum.crackleAmp;
 
   reset();
 }
 
 void Radio1938::reset() {
+  fadePhase = 0.0f;
+  fadePhase2 = 0.0f;
+  noisePhase = 0.0f;
+  noisePhase2 = 0.0f;
+  detunePhase = 0.0f;
+  detunePhase2 = 0.0f;
+  detuneIndex = 0;
+  std::fill(detuneBuf.begin(), detuneBuf.end(), 0.0f);
   hpf.reset();
   lpf1.reset();
   lpf2.reset();
@@ -435,6 +449,7 @@ void Radio1938::reset() {
 
 void Radio1938::process(float* samples, uint32_t frames) {
   if (!samples || frames == 0) return;
+  constexpr float twoPi = 6.283185307f;
   for (uint32_t f = 0; f < frames; ++f) {
     float inL = samples[f * channels];
     float inR = (channels > 1) ? samples[f * channels + 1] : inL;
@@ -443,6 +458,26 @@ void Radio1938::process(float* samples, uint32_t frames) {
     float y = hpf.process(x);
     y = lpf1.process(y);
     y = lpf2.process(y);
+    if (kEnableRadioArtifacts && !detuneBuf.empty()) {
+      detunePhase += twoPi * (detuneRate / sampleRate);
+      detunePhase2 += twoPi * (detuneRate2 / sampleRate);
+      if (detunePhase > twoPi) detunePhase -= twoPi;
+      if (detunePhase2 > twoPi) detunePhase2 -= twoPi;
+      float lfo = 0.6f * std::sin(detunePhase) + 0.4f * std::sin(detunePhase2);
+      float delay = detuneBaseDelay + detuneDepth * lfo;
+      float maxDelay = static_cast<float>(detuneBuf.size() - 2);
+      delay = std::clamp(delay, 0.25f, maxDelay);
+      float read = static_cast<float>(detuneIndex) - delay;
+      while (read < 0.0f) read += static_cast<float>(detuneBuf.size());
+      int i0 = static_cast<int>(read);
+      int i1 = (i0 + 1) % static_cast<int>(detuneBuf.size());
+      float frac = read - static_cast<float>(i0);
+      float delayed = detuneBuf[static_cast<size_t>(i0)] * (1.0f - frac) +
+        detuneBuf[static_cast<size_t>(i1)] * frac;
+      detuneBuf[static_cast<size_t>(detuneIndex)] = y;
+      detuneIndex = (detuneIndex + 1) % static_cast<int>(detuneBuf.size());
+      y = delayed;
+    }
     // y = am.process(y); // Cannot revert these changes
     y = midBoost.process(y);
     y = lowMidDip.process(y);
@@ -451,6 +486,26 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = sat.process(y);
     y = postLpf1.process(y);
     y = postLpf2.process(y);
+    if (kEnableRadioArtifacts) {
+      fadePhase += twoPi * (fadeRate / sampleRate);
+      fadePhase2 += twoPi * (fadeRate2 / sampleRate);
+      if (fadePhase > twoPi) fadePhase -= twoPi;
+      if (fadePhase2 > twoPi) fadePhase2 -= twoPi;
+      float fadeLfo = 0.6f * std::sin(fadePhase) + 0.4f * std::sin(fadePhase2);
+      float fade = 1.0f + fadeDepth * fadeLfo;
+      fade = std::clamp(fade, 0.65f, 1.35f);
+      y *= fade;
+
+      noisePhase += twoPi * (noiseRate / sampleRate);
+      noisePhase2 += twoPi * (noiseRate2 / sampleRate);
+      if (noisePhase > twoPi) noisePhase -= twoPi;
+      if (noisePhase2 > twoPi) noisePhase2 -= twoPi;
+      float noiseLfo = 0.6f * std::sin(noisePhase) + 0.4f * std::sin(noisePhase2);
+      float noiseScale = 1.0f + noiseDepth * noiseLfo;
+      noiseScale = std::clamp(noiseScale, 0.4f, 1.6f);
+      noiseHum.noiseAmp = noiseBase * noiseScale;
+      noiseHum.crackleAmp = crackleBase * noiseScale;
+    }
     y += noiseHum.process(y);
     y = speaker.process(y); // Cannot revert these changes
     y = softClip(y, 0.985f);
