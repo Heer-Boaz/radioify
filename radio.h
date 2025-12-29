@@ -141,10 +141,11 @@ struct AMDetector {
 
 struct SpeakerSim {
   Biquad boxRes;
+  Biquad boxRes2;
   Biquad coneDip;
-  float drive = 1.20f;
-  float mix = 0.55f;
-  float limit = 0.90f;
+  float drive = 1.18f;
+  float mix = 0.35f;
+  float limit = 0.93f;
 
   void init(float fs);
   void reset();

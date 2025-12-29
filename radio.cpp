@@ -354,17 +354,20 @@ float AMDetector::process(float x) {
 }
 
 void SpeakerSim::init(float fs) {
-  boxRes.setPeaking(fs, 180.0f, 0.90f, 3.0f);
-  coneDip.setPeaking(fs, 2800.0f, 1.10f, -2.2f);
+  boxRes.setPeaking(fs, 145.0f, 0.85f, 2.6f);
+  boxRes2.setPeaking(fs, 430.0f, 1.05f, 1.4f);
+  coneDip.setPeaking(fs, 2600.0f, 1.05f, -2.0f);
 }
 
 void SpeakerSim::reset() {
   boxRes.reset();
+  boxRes2.reset();
   coneDip.reset();
 }
 
 float SpeakerSim::process(float x) {
   float y = boxRes.process(x);
+  y = boxRes2.process(y);
   y = coneDip.process(y);
   float yd = std::tanh(drive * y) / std::tanh(drive);
   y = (1.0f - mix) * y + mix * yd;

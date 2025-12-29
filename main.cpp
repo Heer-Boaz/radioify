@@ -134,6 +134,124 @@ static std::string fitLine(const std::string& s, int width) {
   return utf8Take(s, width - 1) + "~";
 }
 
+struct Breadcrumb {
+  int startX = 0;
+  int endX = 0;
+  std::filesystem::path path;
+};
+
+struct BreadcrumbLine {
+  std::string text;
+  std::vector<Breadcrumb> crumbs;
+};
+
+static BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) {
+  BreadcrumbLine line;
+  const std::string prefix = "  Path: ";
+  const int prefixLen = utf8CodepointCount(prefix);
+  if (width <= 0) return line;
+  if (prefixLen >= width) {
+    line.text = fitLine(prefix, width);
+    return line;
+  }
+
+  struct Item {
+    std::string label;
+    std::filesystem::path path;
+  };
+  std::vector<Item> items;
+  std::filesystem::path cur;
+  std::filesystem::path root = dir.root_path();
+#ifdef _WIN32
+  if (!root.empty()) {
+    std::string rootLabel = toUtf8String(dir.root_name());
+    if (rootLabel.empty()) rootLabel = toUtf8String(root);
+    if (!rootLabel.empty() && (rootLabel.back() == '\\' || rootLabel.back() == '/')) {
+      rootLabel.pop_back();
+    }
+    if (rootLabel.empty()) rootLabel = "\\";
+    cur = root;
+    items.push_back(Item{rootLabel, cur});
+  }
+#else
+  if (!root.empty()) {
+    cur = root;
+    items.push_back(Item{"/", cur});
+  }
+#endif
+  for (const auto& part : dir.relative_path()) {
+    cur /= part;
+    items.push_back(Item{toUtf8String(part), cur});
+  }
+  if (items.empty()) {
+    items.push_back(Item{toUtf8String(dir), dir});
+  }
+
+  const std::string sep = " > ";
+  const int sepLen = utf8CodepointCount(sep);
+  const std::string ellipsis = "... > ";
+  const int ellipsisLen = utf8CodepointCount(ellipsis);
+
+  const int avail = width - prefixLen;
+  std::vector<Item> visibleRev;
+  int used = 0;
+  int index = static_cast<int>(items.size()) - 1;
+  for (; index >= 0; --index) {
+    int labelLen = utf8CodepointCount(items[index].label);
+    int add = labelLen + (visibleRev.empty() ? 0 : sepLen);
+    if (used + add <= avail) {
+      visibleRev.push_back(items[index]);
+      used += add;
+    } else {
+      break;
+    }
+  }
+
+  bool skipped = index >= 0;
+  if (visibleRev.empty()) {
+    Item last = items.back();
+    last.label = fitLine(last.label, avail);
+    visibleRev.push_back(last);
+    used = utf8CodepointCount(last.label);
+    skipped = items.size() > 1;
+  }
+
+  int ellipsisUse = (skipped && used + ellipsisLen <= avail) ? ellipsisLen : 0;
+  std::vector<Item> visible(visibleRev.rbegin(), visibleRev.rend());
+
+  std::string text = prefix;
+  int x = prefixLen;
+  if (ellipsisUse) {
+    text += ellipsis;
+    x += ellipsisLen;
+  }
+  for (size_t i = 0; i < visible.size(); ++i) {
+    Item item = visible[i];
+    int remaining = width - x;
+    if (remaining <= 0) break;
+    int labelLen = utf8CodepointCount(item.label);
+    if (labelLen > remaining) {
+      item.label = fitLine(item.label, remaining);
+      labelLen = utf8CodepointCount(item.label);
+    }
+    Breadcrumb crumb;
+    crumb.startX = x;
+    crumb.endX = x + labelLen;
+    crumb.path = item.path;
+    line.crumbs.push_back(crumb);
+
+    text += item.label;
+    x += labelLen;
+    if (i + 1 < visible.size()) {
+      if (x + sepLen > width) break;
+      text += sep;
+      x += sepLen;
+    }
+  }
+  line.text = text;
+  return line;
+}
+
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" || ext == ".webm";
@@ -166,9 +284,35 @@ struct BrowserState {
   int scrollRow = 0;
 };
 
+#ifdef _WIN32
+static std::vector<FileEntry> listDriveEntries() {
+  std::vector<FileEntry> drives;
+  DWORD mask = GetLogicalDrives();
+  if (mask == 0) return drives;
+  for (int i = 0; i < 26; ++i) {
+    if ((mask & (1u << i)) == 0) continue;
+    char letter = static_cast<char>('A' + i);
+    std::string name;
+    name.push_back(letter);
+    name.push_back(':');
+    std::string root;
+    root.push_back(letter);
+    root.append(":\\");
+    drives.push_back(FileEntry{name, std::filesystem::path(root), true});
+  }
+  return drives;
+}
+#endif
+
 static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
   std::vector<FileEntry> entries;
   std::vector<FileEntry> items;
+
+#ifdef _WIN32
+  for (const auto& drive : listDriveEntries()) {
+    entries.push_back(drive);
+  }
+#endif
 
   if (dir.has_parent_path() && dir != dir.root_path()) {
     entries.push_back(FileEntry{"..", dir.parent_path(), true});
