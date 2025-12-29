@@ -83,6 +83,10 @@ struct NoiseHum {
   Biquad lp;
   Biquad crackleHp;
   Biquad crackleLp;
+  Biquad lightningHp;
+  Biquad lightningLp;
+  Biquad motorHp;
+  Biquad motorLp;
   float fs = 48000.0f;
   float noiseAmp = 0.015f;
   float noiseHpHz = 500.0f;
@@ -97,6 +101,16 @@ struct NoiseHum {
   float crackleAmp = 0.015f;
   float crackleEnv = 0.0f;
   float crackleDecay = 0.0f;
+  float lightningRate = 0.03f;
+  float lightningAmp = 0.045f;
+  float lightningEnv = 0.0f;
+  float lightningDecay = 0.0f;
+  float motorRate = 0.20f;
+  float motorAmp = 0.010f;
+  float motorEnv = 0.0f;
+  float motorDecay = 0.0f;
+  float motorPhase = 0.0f;
+  float motorBuzzHz = 18.0f;
 
   void setFs(float newFs, float noiseBwHz);
   void reset();
@@ -185,6 +199,8 @@ struct Radio1938 {
   int detuneIndex = 0;
   float noiseBase = 0.0f;
   float crackleBase = 0.0f;
+  float lightningBase = 0.0f;
+  float motorBase = 0.0f;
   float heteroBaseScale = 0.0f;
 
   float tuneOffsetHz = 0.0f;
@@ -226,6 +242,12 @@ struct Radio1938 {
   std::vector<float> roomBuf;
   std::vector<int> roomTapSamples;
   std::vector<float> roomTapGains;
+  float roomTailMix = 0.05f;
+  float roomTailFeedback = 0.28f;
+  float roomTailMs = 45.0f;
+  float roomTailLpHz = 1600.0f;
+  int roomTailIndex = 0;
+  std::vector<float> roomTailBuf;
 
   Biquad ifRipple1;
   Biquad ifRipple2;
@@ -234,6 +256,7 @@ struct Radio1938 {
   Biquad amRateLp1;
   Biquad amRateLp2;
   Biquad roomLp;
+  Biquad roomTailLp;
 
   Biquad hpf;
   Biquad lpf1;

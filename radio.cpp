@@ -5,6 +5,7 @@
 
 static constexpr bool kEnableRadioArtifacts = true;
 static constexpr bool kEnableRoomEarlyReflections = true;
+static constexpr bool kEnableRoomTail = true;
 
 static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
@@ -204,26 +205,49 @@ void NoiseHum::setFs(float newFs, float noiseBwHz) {
   lp.setLowpass(fs, safeLp, 0.707f);
   crackleHp.setHighpass(fs, noiseHpHz, 0.707f);
   crackleLp.setLowpass(fs, safeLp, 0.707f);
+  float lightningHpHz = 200.0f;
+  float lightningLpHz = std::clamp(safeLp * 1.1f, lightningHpHz + 500.0f, fs * 0.45f);
+  lightningHp.setHighpass(fs, lightningHpHz, 0.707f);
+  lightningLp.setLowpass(fs, lightningLpHz, 0.707f);
+  float motorHpHz = 800.0f;
+  float motorLpHz = std::min(3600.0f, fs * 0.45f);
+  motorHp.setHighpass(fs, motorHpHz, 0.707f);
+  motorLp.setLowpass(fs, motorLpHz, 0.707f);
   hp.reset();
   lp.reset();
   crackleHp.reset();
   crackleLp.reset();
+  lightningHp.reset();
+  lightningLp.reset();
+  motorHp.reset();
+  motorLp.reset();
   float atkMs = 10.0f;
   float relMs = 250.0f;
   scAtk = std::exp(-1.0f / (fs * (atkMs / 1000.0f)));
   scRel = std::exp(-1.0f / (fs * (relMs / 1000.0f)));
   float crackleMs = 12.0f;
   crackleDecay = std::exp(-1.0f / (fs * (crackleMs / 1000.0f)));
+  float lightningMs = 180.0f;
+  lightningDecay = std::exp(-1.0f / (fs * (lightningMs / 1000.0f)));
+  float motorMs = 70.0f;
+  motorDecay = std::exp(-1.0f / (fs * (motorMs / 1000.0f)));
 }
 
 void NoiseHum::reset() {
   humPhase = 0.0f;
   scEnv = 0.0f;
   crackleEnv = 0.0f;
+  lightningEnv = 0.0f;
+  motorEnv = 0.0f;
+  motorPhase = 0.0f;
   hp.reset();
   lp.reset();
   crackleHp.reset();
   crackleLp.reset();
+  lightningHp.reset();
+  lightningLp.reset();
+  motorHp.reset();
+  motorLp.reset();
 }
 
 float NoiseHum::process(float programSample) {
@@ -259,12 +283,43 @@ float NoiseHum::process(float programSample) {
   }
 
   constexpr float twoPi = 6.283185307f;
+  float noiseScale = std::clamp(noiseAmp / 0.015f, 0.0f, 3.0f);
+
+  float l = 0.0f;
+  if (lightningRate > 0.0f && lightningAmp > 0.0f && fs > 0.0f) {
+    float chance = lightningRate / fs;
+    if (dist01(rng) < chance) {
+      lightningEnv = 1.0f;
+    }
+    float raw = dist(rng) * lightningEnv;
+    lightningEnv *= lightningDecay;
+    raw = lightningHp.process(raw);
+    raw = lightningLp.process(raw);
+    l = raw * lightningAmp * noiseScale * duckGain;
+  }
+
+  float m = 0.0f;
+  if (motorRate > 0.0f && motorAmp > 0.0f && fs > 0.0f) {
+    float chance = motorRate / fs;
+    if (dist01(rng) < chance) {
+      motorEnv = 1.0f;
+    }
+    motorEnv *= motorDecay;
+    motorPhase += twoPi * (motorBuzzHz / fs);
+    if (motorPhase > twoPi) motorPhase -= twoPi;
+    float buzz = 0.65f + 0.35f * std::sin(motorPhase);
+    float raw = dist(rng) * motorEnv * buzz;
+    raw = motorHp.process(raw);
+    raw = motorLp.process(raw);
+    m = raw * motorAmp * noiseScale * duckGain;
+  }
+
   humPhase += twoPi * (humHz / fs);
   if (humPhase > twoPi) humPhase -= twoPi;
   float h = std::sin(humPhase) + 0.35f * std::sin(2.0f * humPhase);
   h *= humAmp;
 
-  return n + c + h;
+  return n + c + l + m + h;
 }
 
 void AMDetector::init(float newFs, float newBw) {
@@ -446,6 +501,15 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   roomBuf.assign(static_cast<size_t>(roomDelaySamples + 2), 0.0f);
   roomIndex = 0;
   roomLp.setLowpass(sampleRate, roomLpHz, 0.707f);
+  if (kEnableRoomTail) {
+    int tailSamples = std::max(4, static_cast<int>(std::lround(roomTailMs * 0.001f * sampleRate)));
+    roomTailBuf.assign(static_cast<size_t>(tailSamples), 0.0f);
+    roomTailIndex = 0;
+    roomTailLp.setLowpass(sampleRate, roomTailLpHz, 0.707f);
+  } else {
+    roomTailBuf.clear();
+    roomTailIndex = 0;
+  }
 
   noiseHum.setFs(sampleRate, safeBw);
   noiseHum.noiseAmp = noiseWeight;
@@ -454,14 +518,25 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
     noiseHum.humAmp = 0.0f;
     noiseHum.crackleRate = 0.0f;
     noiseHum.crackleAmp = 0.0f;
+    noiseHum.lightningRate = 0.0f;
+    noiseHum.lightningAmp = 0.0f;
+    noiseHum.motorRate = 0.0f;
+    noiseHum.motorAmp = 0.0f;
   } else {
     float scale = std::clamp(noiseWeight / 0.015f, 0.0f, 2.0f);
     noiseHum.humAmp = 0.0015f * scale;
     noiseHum.crackleRate = 0.9f * scale;
     noiseHum.crackleAmp = 0.015f * scale;
+    noiseHum.lightningRate = 0.03f * scale;
+    noiseHum.lightningAmp = 0.045f * scale;
+    noiseHum.motorRate = 0.20f * scale;
+    noiseHum.motorAmp = 0.010f * scale;
+    noiseHum.motorBuzzHz = 18.0f;
   }
   noiseBase = noiseHum.noiseAmp;
   crackleBase = noiseHum.crackleAmp;
+  lightningBase = noiseHum.lightningAmp;
+  motorBase = noiseHum.motorAmp;
   heteroBaseScale = (noiseWeight > 0.0f)
     ? std::clamp(noiseWeight / 0.015f, 0.15f, 1.0f)
     : 0.0f;
@@ -491,6 +566,8 @@ void Radio1938::reset() {
   sagEnv = 0.0f;
   roomIndex = 0;
   std::fill(roomBuf.begin(), roomBuf.end(), 0.0f);
+  roomTailIndex = 0;
+  std::fill(roomTailBuf.begin(), roomTailBuf.end(), 0.0f);
   hpf.reset();
   lpf1.reset();
   lpf2.reset();
@@ -509,6 +586,7 @@ void Radio1938::reset() {
   am.reset();
   speaker.reset();
   roomLp.reset();
+  roomTailLp.reset();
   noiseHum.reset();
 }
 
@@ -648,6 +726,8 @@ void Radio1938::process(float* samples, uint32_t frames) {
       noiseScale = std::clamp(noiseScale, 0.4f, 1.6f);
       noiseHum.noiseAmp = noiseBase * noiseScale;
       noiseHum.crackleAmp = crackleBase * noiseScale;
+      noiseHum.lightningAmp = lightningBase * noiseScale;
+      noiseHum.motorAmp = motorBase * noiseScale;
 
       if (heteroDepth > 0.0f && heteroBaseScale > 0.0f) {
         heteroDriftPhase += twoPi * (heteroDriftHz / sampleRate);
@@ -673,6 +753,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
     if (!roomBuf.empty()) {
       float dry = y;
       float roomOut = 0.0f;
+      float tail = 0.0f;
       if (roomMix > 0.0f && kEnableRoomEarlyReflections && !roomTapSamples.empty()) {
         int size = static_cast<int>(roomBuf.size());
         int writeIndex = roomIndex;
@@ -691,6 +772,14 @@ void Radio1938::process(float* samples, uint32_t frames) {
       if (roomMix > 0.0f) {
         roomOut = roomLp.process(roomOut);
         y += roomMix * roomOut;
+      }
+      if (kEnableRoomTail && roomTailMix > 0.0f && !roomTailBuf.empty()) {
+        float tailSample = roomTailBuf[static_cast<size_t>(roomTailIndex)];
+        float tailLp = roomTailLp.process(tailSample);
+        roomTailBuf[static_cast<size_t>(roomTailIndex)] = dry + tailLp * roomTailFeedback;
+        roomTailIndex = (roomTailIndex + 1) % static_cast<int>(roomTailBuf.size());
+        tail = tailLp;
+        y += roomTailMix * tail;
       }
     }
     y = softClip(y, 0.985f);
