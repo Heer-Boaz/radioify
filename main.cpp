@@ -297,7 +297,7 @@ struct Saturator {
   float drive = 1.35f;
   float mix = 0.45f;
 
-  float process(float x) const {
+  float process(float x) {
     float yd = std::tanh(drive * x) / std::tanh(drive);
     return (1.0f - mix) * x + mix * yd;
   }
@@ -407,6 +407,153 @@ struct NoiseHum {
   }
 };
 
+struct AMDetector {
+  float fs = 48000.0f;
+  float bwHz = 4800.0f;
+  float carrierHz = 12000.0f;
+  float modIndex = 0.80f;
+  float carrierGain = 0.40f;
+  float diodeDrop = 0.02f;
+  float detGain = 3.20f;
+
+  Biquad ifHp1;
+  Biquad ifHp2;
+  Biquad ifLp1;
+  Biquad ifLp2;
+  Biquad detLp1;
+  Biquad detLp2;
+  Biquad detLp3;
+
+  float phase = 0.0f;
+  float agcEnv = 0.0f;
+  float agcGainDb = 0.0f;
+  float agcTargetDb = -14.0f;
+  float agcMaxGainDb = 22.0f;
+  float agcMinGainDb = -6.0f;
+  float agcAtk = 0.0f;
+  float agcRel = 0.0f;
+  float agcGainAtk = 0.0f;
+  float agcGainRel = 0.0f;
+
+  float dcEnv = 0.0f;
+  float dcCoeff = 0.0f;
+
+  void init(float newFs, float newBw) {
+    fs = newFs;
+    bwHz = newBw;
+    carrierHz = std::min(12000.0f, fs * 0.35f);
+    float halfBw = std::clamp(bwHz * 0.95f, 1500.0f, fs * 0.2f);
+    float ifLow = std::clamp(carrierHz - halfBw, 1000.0f, fs * 0.45f);
+    float ifHigh = std::clamp(carrierHz + halfBw, ifLow + 800.0f, fs * 0.48f);
+    ifHp1.setHighpass(fs, ifLow, 0.707f);
+    ifHp2.setHighpass(fs, ifLow, 0.707f);
+    ifLp1.setLowpass(fs, ifHigh, 0.707f);
+    ifLp2.setLowpass(fs, ifHigh, 0.707f);
+
+    float detLpHz = std::clamp(bwHz * 0.9f, 2000.0f, fs * 0.45f);
+    detLp1.setLowpass(fs, detLpHz, 0.707f);
+    detLp2.setLowpass(fs, detLpHz, 0.707f);
+    detLp3.setLowpass(fs, detLpHz, 0.707f);
+
+    float agcAtkMs = 6.0f;
+    float agcRelMs = 160.0f;
+    agcAtk = std::exp(-1.0f / (fs * (agcAtkMs / 1000.0f)));
+    agcRel = std::exp(-1.0f / (fs * (agcRelMs / 1000.0f)));
+    agcGainAtk = agcAtk;
+    agcGainRel = agcRel;
+
+    float dcMs = 450.0f;
+    dcCoeff = std::exp(-1.0f / (fs * (dcMs / 1000.0f)));
+
+    reset();
+  }
+
+  void reset() {
+    phase = 0.0f;
+    agcEnv = 0.0f;
+    agcGainDb = 0.0f;
+    dcEnv = 0.0f;
+    ifHp1.reset();
+    ifHp2.reset();
+    ifLp1.reset();
+    ifLp2.reset();
+    detLp1.reset();
+    detLp2.reset();
+    detLp3.reset();
+  }
+
+  float process(float x) {
+    float mod = std::clamp(x * modIndex, -0.98f, 0.98f);
+    constexpr float twoPi = 6.283185307f;
+    phase += twoPi * (carrierHz / fs);
+    if (phase > twoPi) phase -= twoPi;
+    float carrier = std::sin(phase);
+    float ifSample = (1.0f + mod) * carrier * carrierGain;
+
+    ifSample = ifHp1.process(ifSample);
+    ifSample = ifHp2.process(ifSample);
+    ifSample = ifLp1.process(ifSample);
+    ifSample = ifLp2.process(ifSample);
+
+    float level = std::fabs(ifSample);
+    if (level > agcEnv) {
+      agcEnv = agcAtk * agcEnv + (1.0f - agcAtk) * level;
+    } else {
+      agcEnv = agcRel * agcEnv + (1.0f - agcRel) * level;
+    }
+    float envDb = lin2db(agcEnv);
+    float targetGainDb = std::clamp(agcTargetDb - envDb, agcMinGainDb, agcMaxGainDb);
+    if (targetGainDb < agcGainDb) {
+      agcGainDb = agcGainAtk * agcGainDb + (1.0f - agcGainAtk) * targetGainDb;
+    } else {
+      agcGainDb = agcGainRel * agcGainDb + (1.0f - agcGainRel) * targetGainDb;
+    }
+    float ifAgc = ifSample * db2lin(agcGainDb);
+
+    float det = ifAgc * carrier;
+    float env = detLp1.process(det);
+    env = detLp2.process(env);
+    env = detLp3.process(env);
+    dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * env;
+    float out = (env - dcEnv) * detGain;
+    if (diodeDrop > 0.0f) {
+      float a = std::fabs(out);
+      if (a <= diodeDrop) {
+        out = 0.0f;
+      } else {
+        out = std::copysign(a - diodeDrop, out);
+      }
+    }
+    return out;
+  }
+};
+
+struct SpeakerSim {
+  Biquad boxRes;
+  Biquad coneDip;
+  float drive = 1.20f;
+  float mix = 0.55f;
+  float limit = 0.90f;
+
+  void init(float fs) {
+    boxRes.setPeaking(fs, 180.0f, 0.90f, 3.0f);
+    coneDip.setPeaking(fs, 2800.0f, 1.10f, -2.2f);
+  }
+
+  void reset() {
+    boxRes.reset();
+    coneDip.reset();
+  }
+
+  float process(float x) {
+    float y = boxRes.process(x);
+    y = coneDip.process(y);
+    float yd = std::tanh(drive * y) / std::tanh(drive);
+    y = (1.0f - mix) * y + mix * yd;
+    return softClip(y, limit);
+  }
+};
+
 struct Radio1938 {
   float sampleRate = 48000.0f;
   int channels = 1;
@@ -423,6 +570,8 @@ struct Radio1938 {
   Biquad presBoost;
   Compressor comp;
   Saturator sat;
+  AMDetector am;
+  SpeakerSim speaker;
   NoiseHum noiseHum;
 
   void init(int ch, float sr, float bw, float noise) {
@@ -448,6 +597,9 @@ struct Radio1938 {
 
     sat.drive = 1.40f;
     sat.mix = 0.50f;
+
+    am.init(sampleRate, safeBw);
+    speaker.init(sampleRate);
 
     noiseHum.setFs(sampleRate, safeBw);
     noiseHum.noiseAmp = noiseWeight;
@@ -476,6 +628,8 @@ struct Radio1938 {
     lowMidDip.reset();
     presBoost.reset();
     comp.reset();
+    am.reset();
+    speaker.reset();
     noiseHum.reset();
   }
 
@@ -489,6 +643,7 @@ struct Radio1938 {
       float y = hpf.process(x);
       y = lpf1.process(y);
       y = lpf2.process(y);
+      // y = am.process(y); // Cannot revert these changes
       y = midBoost.process(y);
       y = lowMidDip.process(y);
       y = presBoost.process(y);
@@ -497,6 +652,7 @@ struct Radio1938 {
       y = postLpf1.process(y);
       y = postLpf2.process(y);
       y += noiseHum.process(y);
+      y = speaker.process(y); // Cannot revert these changes
       y = softClip(y, 0.985f);
 
       for (int c = 0; c < channels; ++c) {
