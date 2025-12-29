@@ -490,6 +490,27 @@ struct InputEvent {
   COORD size{};
 };
 
+struct Color {
+  uint8_t r = 0;
+  uint8_t g = 0;
+  uint8_t b = 0;
+};
+
+struct Style {
+  Color fg;
+  Color bg;
+};
+
+static bool sameColor(const Color& a, const Color& b) {
+  return a.r == b.r && a.g == b.g && a.b == b.b;
+}
+
+struct Cell {
+  char ch = ' ';
+  Color fg{255, 255, 255};
+  Color bg{0, 0, 0};
+};
+
 class ConsoleInput {
  public:
   void init() {
@@ -563,6 +584,9 @@ class ConsoleScreen {
     out_ = GetStdHandle(STD_OUTPUT_HANDLE);
     if (out_ == INVALID_HANDLE_VALUE) return false;
     if (!GetConsoleMode(out_, &originalMode_)) return false;
+    DWORD mode = originalMode_;
+    mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT;
+    SetConsoleMode(out_, mode);
     CONSOLE_CURSOR_INFO cursor{};
     if (GetConsoleCursorInfo(out_, &cursor)) {
       originalCursor_ = cursor;
@@ -601,51 +625,94 @@ class ConsoleScreen {
   int width() const { return width_; }
   int height() const { return height_; }
 
-  void clear(WORD attr) {
-    CHAR_INFO cell{};
-    cell.Char.AsciiChar = ' ';
-    cell.Attributes = attr;
+  void clear(const Style& style) {
+    Cell cell{};
+    cell.ch = ' ';
+    cell.fg = style.fg;
+    cell.bg = style.bg;
     std::fill(buffer_.begin(), buffer_.end(), cell);
   }
 
-  void writeText(int x, int y, const std::string& text, WORD attr) {
+  void writeText(int x, int y, const std::string& text, const Style& style) {
     if (y < 0 || y >= height_) return;
     if (x >= width_) return;
     int pos = y * width_ + std::max(0, x);
     int start = std::max(0, x);
     int maxLen = width_ - start;
     for (int i = 0; i < maxLen && i < static_cast<int>(text.size()); ++i) {
-      buffer_[pos + i].Char.AsciiChar = text[static_cast<size_t>(i)];
-      buffer_[pos + i].Attributes = attr;
+      buffer_[pos + i].ch = text[static_cast<size_t>(i)];
+      buffer_[pos + i].fg = style.fg;
+      buffer_[pos + i].bg = style.bg;
     }
   }
 
-  void writeRun(int x, int y, int len, char ch, WORD attr) {
+  void writeRun(int x, int y, int len, char ch, const Style& style) {
     if (y < 0 || y >= height_) return;
     if (x >= width_) return;
     int start = std::max(0, x);
     int maxLen = std::min(len, width_ - start);
     int pos = y * width_ + start;
     for (int i = 0; i < maxLen; ++i) {
-      buffer_[pos + i].Char.AsciiChar = ch;
-      buffer_[pos + i].Attributes = attr;
+      buffer_[pos + i].ch = ch;
+      buffer_[pos + i].fg = style.fg;
+      buffer_[pos + i].bg = style.bg;
     }
   }
 
-  void writeChar(int x, int y, char ch, WORD attr) {
+  void writeChar(int x, int y, char ch, const Style& style) {
     if (y < 0 || y >= height_) return;
     if (x < 0 || x >= width_) return;
     int pos = y * width_ + x;
-    buffer_[pos].Char.AsciiChar = ch;
-    buffer_[pos].Attributes = attr;
+    buffer_[pos].ch = ch;
+    buffer_[pos].fg = style.fg;
+    buffer_[pos].bg = style.bg;
   }
 
   void draw() {
     if (out_ == INVALID_HANDLE_VALUE) return;
-    COORD bufferSize{static_cast<SHORT>(width_), static_cast<SHORT>(height_)};
-    COORD bufferCoord{0, 0};
-    SMALL_RECT rect{0, 0, static_cast<SHORT>(width_ - 1), static_cast<SHORT>(height_ - 1)};
-    WriteConsoleOutput(out_, buffer_.data(), bufferSize, bufferCoord, &rect);
+    std::string out;
+    out.reserve(static_cast<size_t>(width_ * height_ * 4));
+    out.append("\x1b[H");
+    Color curFg{};
+    Color curBg{};
+    bool hasColor = false;
+
+    auto appendColor = [&](const Color& fg, const Color& bg) {
+      char buf[64];
+      std::snprintf(
+        buf,
+        sizeof(buf),
+        "\x1b[38;2;%u;%u;%um\x1b[48;2;%u;%u;%um",
+        static_cast<unsigned>(fg.r),
+        static_cast<unsigned>(fg.g),
+        static_cast<unsigned>(fg.b),
+        static_cast<unsigned>(bg.r),
+        static_cast<unsigned>(bg.g),
+        static_cast<unsigned>(bg.b)
+      );
+      out.append(buf);
+    };
+
+    for (int y = 0; y < height_; ++y) {
+      for (int x = 0; x < width_; ++x) {
+        const Cell& cell = buffer_[y * width_ + x];
+        if (!hasColor || !sameColor(cell.fg, curFg) || !sameColor(cell.bg, curBg)) {
+          appendColor(cell.fg, cell.bg);
+          curFg = cell.fg;
+          curBg = cell.bg;
+          hasColor = true;
+        }
+        out.push_back(cell.ch ? cell.ch : ' ');
+      }
+      if (y < height_ - 1) {
+        out.append("\x1b[0m\r\n");
+        hasColor = false;
+      }
+    }
+    out.append("\x1b[0m");
+
+    DWORD written = 0;
+    WriteConsoleA(out_, out.c_str(), static_cast<DWORD>(out.size()), &written, nullptr);
   }
 
  private:
@@ -654,7 +721,7 @@ class ConsoleScreen {
   CONSOLE_CURSOR_INFO originalCursor_{};
   int width_ = 80;
   int height_ = 25;
-  std::vector<CHAR_INFO> buffer_;
+  std::vector<Cell> buffer_;
 };
 
 static std::string fitLine(const std::string& s, int width) {
@@ -1110,19 +1177,20 @@ int main(int argc, char** argv) {
     }
   }
 
-  const WORD kAttrNormal = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-  const WORD kAttrHeader = BACKGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-  const WORD kAttrHeaderGlow = BACKGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-  const WORD kAttrHeaderHot = BACKGROUND_BLUE | BACKGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-  const WORD kAttrAccent = FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-  const WORD kAttrDim = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-  const WORD kAttrDir = FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-  const WORD kAttrHighlight = BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE | BACKGROUND_INTENSITY;
-  const WORD kAttrProgressFill = BACKGROUND_GREEN | BACKGROUND_INTENSITY;
-  const WORD kAttrProgressEmpty = BACKGROUND_INTENSITY;
-  const WORD kAttrProgressFrame = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+  const Color kBgBase{12, 15, 20};
+  const Style kStyleNormal{{215, 220, 226}, kBgBase};
+  const Style kStyleHeader{{226, 236, 247}, {19, 32, 51}};
+  const Style kStyleHeaderGlow{{160, 224, 255}, {19, 32, 51}};
+  const Style kStyleHeaderHot{{255, 255, 255}, {30, 45, 70}};
+  const Style kStyleAccent{{125, 211, 252}, kBgBase};
+  const Style kStyleDim{{138, 144, 153}, kBgBase};
+  const Style kStyleDir{{110, 231, 183}, kBgBase};
+  const Style kStyleHighlight{{15, 20, 28}, {230, 238, 248}};
+  const Style kStyleProgressFill{{110, 231, 183}, {110, 231, 183}};
+  const Style kStyleProgressEmpty{{32, 38, 46}, {32, 38, 46}};
+  const Style kStyleProgressFrame{{160, 170, 182}, kBgBase};
 
-  screen.clear(kAttrNormal);
+  screen.clear(kStyleNormal);
   screen.draw();
 
   bool running = true;
@@ -1176,7 +1244,7 @@ int main(int argc, char** argv) {
         if (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q') {
           running = false;
           // Clear screen before exiting
-          screen.clear(kAttrNormal);
+          screen.clear(kStyleNormal);
           screen.draw();
           break;
         }
@@ -1319,7 +1387,7 @@ int main(int argc, char** argv) {
         browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
       }
 
-      screen.clear(kAttrNormal);
+      screen.clear(kStyleNormal);
 
       const std::string titleRaw = "Radioify";
       std::string title = titleRaw;
@@ -1328,31 +1396,31 @@ int main(int argc, char** argv) {
       }
       int titleLen = static_cast<int>(title.size());
       int titleX = std::max(0, (width - titleLen) / 2);
-      screen.writeRun(0, 0, width, ' ', kAttrHeader);
+      screen.writeRun(0, 0, width, ' ', kStyleHeader);
       double seconds = std::chrono::duration<double>(now.time_since_epoch()).count();
       double speed = 1.6;
       double pulse = 0.5 * (std::sin(seconds * speed) + 1.0);
-      WORD titleAttr = kAttrHeader;
+      Style titleAttr = kStyleHeader;
       if (pulse > 0.70) {
-        titleAttr = kAttrHeaderHot;
+        titleAttr = kStyleHeaderHot;
       } else if (pulse > 0.40) {
-        titleAttr = kAttrHeaderGlow;
+        titleAttr = kStyleHeaderGlow;
       }
       for (int i = 0; i < titleLen; ++i) {
         screen.writeChar(titleX + i, 0, title[static_cast<size_t>(i)], titleAttr);
       }
-      screen.writeText(0, 1, fitLine(std::string("  Folder: ") + browser.dir.string(), width), kAttrAccent);
+      screen.writeText(0, 1, fitLine(std::string("  Folder: ") + browser.dir.string(), width), kStyleAccent);
       if (o.play) {
-        screen.writeText(0, 2, fitLine("  Mouse=select  Click=play/enter  Backspace=up  Click+drag bar=seek  Space=pause  Left/Right=seek  R=toggle  Q=quit", width), kAttrNormal);
+        screen.writeText(0, 2, fitLine("  Mouse=select  Click=play/enter  Backspace=up  Click+drag bar=seek  Space=pause  Left/Right=seek  R=toggle  Q=quit", width), kStyleNormal);
       } else {
-        screen.writeText(0, 2, fitLine("  Mouse=select  Click=render/enter  Backspace=up  R=toggle  Q=quit", width), kAttrNormal);
+        screen.writeText(0, 2, fitLine("  Mouse=select  Click=render/enter  Backspace=up  R=toggle  Q=quit", width), kStyleNormal);
       }
       std::string filterLabel = state.useRadio1938.load() ? "1938 radio" : "classic";
-      screen.writeText(0, 3, fitLine(std::string("  Filter: ") + filterLabel, width), kAttrDim);
-      screen.writeText(0, 4, fitLine("  Showing: folders + .wav/.mp3/.flac", width), kAttrDim);
+      screen.writeText(0, 3, fitLine(std::string("  Filter: ") + filterLabel, width), kStyleDim);
+      screen.writeText(0, 4, fitLine("  Showing: folders + .wav/.mp3/.flac", width), kStyleDim);
 
       if (browser.entries.empty()) {
-        screen.writeText(2, listTop, "(no supported files)", kAttrDim);
+        screen.writeText(2, listTop, "(no supported files)", kStyleDim);
       } else {
         for (int r = 0; r < layout.rowsVisible; ++r) {
           int y = listTop + r;
@@ -1369,7 +1437,7 @@ int main(int argc, char** argv) {
             } else if (static_cast<int>(cell.size()) > layout.colWidth) {
               cell.resize(static_cast<size_t>(layout.colWidth));
             }
-            WORD attr = isSelected ? kAttrHighlight : (entry.isDir ? kAttrDir : kAttrNormal);
+            Style attr = isSelected ? kStyleHighlight : (entry.isDir ? kStyleDir : kStyleNormal);
             screen.writeText(c * layout.colWidth, y, cell, attr);
           }
         }
@@ -1381,7 +1449,7 @@ int main(int argc, char** argv) {
         line++;
       }
       std::string nowLabel = nowPlaying.empty() ? "(none)" : nowPlaying.filename().string();
-      screen.writeText(0, line++, fitLine(std::string("  Now: ") + nowLabel, width), kAttrAccent);
+      screen.writeText(0, line++, fitLine(std::string("  Now: ") + nowLabel, width), kStyleAccent);
 
       double currentSec = decoderReady ? static_cast<double>(state.framesPlayed.load()) / sampleRate : 0.0;
       double totalSec = (decoderReady && state.totalFrames > 0) ? static_cast<double>(state.totalFrames) / sampleRate : -1.0;
@@ -1411,14 +1479,14 @@ int main(int argc, char** argv) {
       progressBarY = line;
       progressBarWidth = barWidth;
 
-      screen.writeText(0, line, "[", kAttrProgressFrame);
-      screen.writeRun(1, line, barWidth, ' ', kAttrProgressEmpty);
+      screen.writeText(0, line, "[", kStyleProgressFrame);
+      screen.writeRun(1, line, barWidth, ' ', kStyleProgressEmpty);
       if (filled > 0) {
-        screen.writeRun(1, line, std::min(filled, barWidth), ' ', kAttrProgressFill);
+        screen.writeRun(1, line, std::min(filled, barWidth), ' ', kStyleProgressFill);
       }
-      screen.writeText(1 + barWidth, line, "]", kAttrProgressFrame);
+      screen.writeText(1 + barWidth, line, "]", kStyleProgressFrame);
       if (!suffix.empty()) {
-        screen.writeText(2 + barWidth, line, " " + suffix, kAttrNormal);
+        screen.writeText(2 + barWidth, line, " " + suffix, kStyleNormal);
       }
 
       screen.draw();
