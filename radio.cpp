@@ -403,9 +403,9 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   presBoost.setPeaking(sampleRate, 3200.0f, 0.9f, 1.5f);
 
   comp.setFs(sampleRate);
-  comp.thresholdDb = -26.0f;
-  comp.ratio = 5.0f;
-  comp.setTimes(10.0f, 220.0f);
+  comp.thresholdDb = -22.0f;
+  comp.ratio = 2.4f;
+  comp.setTimes(90.0f, 900.0f);
 
   float sagAtkMs = 60.0f;
   float sagRelMs = 900.0f;
