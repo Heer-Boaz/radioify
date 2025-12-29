@@ -1,0 +1,459 @@
+#include "radio.h"
+
+#include <algorithm>
+#include <cmath>
+
+static inline float clampf(float x, float a, float b) {
+  return std::min(std::max(x, a), b);
+}
+
+static inline float db2lin(float db) {
+  return std::pow(10.0f, db / 20.0f);
+}
+
+static inline float lin2db(float x) {
+  return 20.0f * std::log10(std::max(x, 1e-12f));
+}
+
+float Biquad::process(float x) {
+  float y = b0 * x + z1;
+  z1 = b1 * x - a1 * y + z2;
+  z2 = b2 * x - a2 * y;
+  return y;
+}
+
+void Biquad::reset() {
+  z1 = 0.0f;
+  z2 = 0.0f;
+}
+
+void Biquad::setLowpass(float sampleRate, float freq, float q) {
+  float w0 = 2.0f * 3.1415926535f * freq / sampleRate;
+  float cosw = std::cos(w0);
+  float sinw = std::sin(w0);
+  float alpha = sinw / (2.0f * q);
+  float a0 = 1.0f + alpha;
+  b0 = (1.0f - cosw) / 2.0f / a0;
+  b1 = (1.0f - cosw) / a0;
+  b2 = (1.0f - cosw) / 2.0f / a0;
+  a1 = -2.0f * cosw / a0;
+  a2 = (1.0f - alpha) / a0;
+}
+
+void Biquad::setHighpass(float sampleRate, float freq, float q) {
+  float w0 = 2.0f * 3.1415926535f * freq / sampleRate;
+  float cosw = std::cos(w0);
+  float sinw = std::sin(w0);
+  float alpha = sinw / (2.0f * q);
+  float a0 = 1.0f + alpha;
+  b0 = (1.0f + cosw) / 2.0f / a0;
+  b1 = -(1.0f + cosw) / a0;
+  b2 = (1.0f + cosw) / 2.0f / a0;
+  a1 = -2.0f * cosw / a0;
+  a2 = (1.0f - alpha) / a0;
+}
+
+void Biquad::setPeaking(float sampleRate, float freq, float q, float gainDb) {
+  float a = std::pow(10.0f, gainDb / 40.0f);
+  float w0 = 2.0f * 3.1415926535f * freq / sampleRate;
+  float cosw = std::cos(w0);
+  float sinw = std::sin(w0);
+  float alpha = sinw / (2.0f * q);
+  float a0 = 1.0f + alpha / a;
+  b0 = (1.0f + alpha * a) / a0;
+  b1 = -2.0f * cosw / a0;
+  b2 = (1.0f - alpha * a) / a0;
+  a1 = -2.0f * cosw / a0;
+  a2 = (1.0f - alpha / a) / a0;
+}
+
+void RadioDSP::init(int ch, float sr, float bw, float presence) {
+  channels = ch;
+  sampleRate = sr;
+  presenceDb = presence;
+  lpHz = bw;
+  hpHz = 120.0f;
+  env = 0.0f;
+
+  hp.assign(channels, {});
+  lp.assign(channels, {});
+  peq.assign(channels, {});
+  for (int i = 0; i < channels; ++i) {
+    hp[i].setHighpass(sampleRate, hpHz, 0.707f);
+    lp[i].setLowpass(sampleRate, lpHz, 0.707f);
+    peq[i].setPeaking(sampleRate, 900.0f, 1.0f, presenceDb);
+  }
+}
+
+float RadioDSP::computeGainDb(float envDb) {
+  if (envDb <= thresholdDb) return 0.0f;
+  float over = envDb - thresholdDb;
+  float compressed = over / ratio;
+  return (thresholdDb + compressed) - envDb;
+}
+
+void RadioDSP::process(float* samples, uint32_t frames) {
+  if (!samples || frames == 0) return;
+  float attackCoeff = std::exp(-1.0f / (attack * sampleRate));
+  float releaseCoeff = std::exp(-1.0f / (release * sampleRate));
+  float noiseAmp = 0.0015f * noiseWeight;
+
+  for (uint32_t f = 0; f < frames; ++f) {
+    float peak = 0.0f;
+    for (int c = 0; c < channels; ++c) {
+      float v = samples[f * channels + c];
+      peak = std::max(peak, std::fabs(v));
+    }
+
+    if (peak > env) {
+      env = attackCoeff * env + (1.0f - attackCoeff) * peak;
+    } else {
+      env = releaseCoeff * env + (1.0f - releaseCoeff) * peak;
+    }
+
+    float envDb = 20.0f * std::log10(std::max(env, 1e-6f));
+    float gainDb = computeGainDb(envDb);
+    float gain = std::pow(10.0f, gainDb / 20.0f);
+
+    for (int c = 0; c < channels; ++c) {
+      float v = samples[f * channels + c];
+      v = hp[c].process(v);
+      v = lp[c].process(v);
+      v = peq[c].process(v);
+
+      v *= gain;
+
+      if (noiseWeight > 0.0f) {
+        v += dist(rng) * noiseAmp;
+      }
+
+      if (v > limit) v = limit;
+      if (v < -limit) v = -limit;
+      samples[f * channels + c] = v;
+    }
+  }
+}
+
+void Compressor::setFs(float newFs) {
+  fs = newFs;
+  setTimes(attackMs, releaseMs);
+}
+
+void Compressor::setTimes(float aMs, float rMs) {
+  attackMs = aMs;
+  releaseMs = rMs;
+  atkCoeff = std::exp(-1.0f / (fs * (attackMs / 1000.0f)));
+  relCoeff = std::exp(-1.0f / (fs * (releaseMs / 1000.0f)));
+  gainAtkCoeff = std::exp(-1.0f / (fs * (attackMs / 1000.0f)));
+  gainRelCoeff = std::exp(-1.0f / (fs * (releaseMs / 1000.0f)));
+}
+
+void Compressor::reset() {
+  env = 0.0f;
+  gainDb = 0.0f;
+}
+
+float Compressor::process(float x) {
+  float a = std::fabs(x);
+  if (a > env) {
+    env = atkCoeff * env + (1.0f - atkCoeff) * a;
+  } else {
+    env = relCoeff * env + (1.0f - relCoeff) * a;
+  }
+
+  float levelDb = lin2db(env);
+  float targetGrDb = 0.0f;
+  if (levelDb > thresholdDb) {
+    float over = levelDb - thresholdDb;
+    float compressedOver = over / ratio;
+    float outDb = thresholdDb + compressedOver;
+    targetGrDb = outDb - levelDb;
+  }
+
+  if (targetGrDb < gainDb) {
+    gainDb = gainAtkCoeff * gainDb + (1.0f - gainAtkCoeff) * targetGrDb;
+  } else {
+    gainDb = gainRelCoeff * gainDb + (1.0f - gainRelCoeff) * targetGrDb;
+  }
+
+  return x * db2lin(gainDb);
+}
+
+float Saturator::process(float x) {
+  float yd = std::tanh(drive * x) / std::tanh(drive);
+  return (1.0f - mix) * x + mix * yd;
+}
+
+static inline float softClip(float x, float t = 0.98f) {
+  float ax = std::fabs(x);
+  if (ax <= t) return x;
+  float s = (x < 0.0f) ? -1.0f : 1.0f;
+  float u = (ax - t) / (1.0f - t);
+  float y = t + (1.0f - std::exp(-u)) * (1.0f - t);
+  return s * y;
+}
+
+void NoiseHum::setFs(float newFs, float noiseBwHz) {
+  fs = newFs;
+  noiseLpHz = (noiseBwHz > 0.0f) ? noiseBwHz : noiseLpHz;
+  float safeLp = std::clamp(noiseLpHz, noiseHpHz + 200.0f, fs * 0.45f);
+  hp.setHighpass(fs, noiseHpHz, 0.707f);
+  lp.setLowpass(fs, safeLp, 0.707f);
+  crackleHp.setHighpass(fs, noiseHpHz, 0.707f);
+  crackleLp.setLowpass(fs, safeLp, 0.707f);
+  hp.reset();
+  lp.reset();
+  crackleHp.reset();
+  crackleLp.reset();
+  float atkMs = 10.0f;
+  float relMs = 250.0f;
+  scAtk = std::exp(-1.0f / (fs * (atkMs / 1000.0f)));
+  scRel = std::exp(-1.0f / (fs * (relMs / 1000.0f)));
+  float crackleMs = 12.0f;
+  crackleDecay = std::exp(-1.0f / (fs * (crackleMs / 1000.0f)));
+}
+
+void NoiseHum::reset() {
+  humPhase = 0.0f;
+  scEnv = 0.0f;
+  crackleEnv = 0.0f;
+  hp.reset();
+  lp.reset();
+  crackleHp.reset();
+  crackleLp.reset();
+}
+
+float NoiseHum::process(float programSample) {
+  float a = std::fabs(programSample);
+  if (a > scEnv) {
+    scEnv = scAtk * scEnv + (1.0f - scAtk) * a;
+  } else {
+    scEnv = scRel * scEnv + (1.0f - scRel) * a;
+  }
+
+  float start = 0.01f;
+  float end = 0.05f;
+  float t = clampf((scEnv - start) / (end - start), 0.0f, 1.0f);
+  float duckDb = 2.0f;
+  float duckGain = db2lin(-duckDb * t);
+
+  float n = dist(rng);
+  n = hp.process(n);
+  n = lp.process(n);
+  n *= noiseAmp * duckGain;
+
+  float c = 0.0f;
+  if (crackleRate > 0.0f && crackleAmp > 0.0f && fs > 0.0f) {
+    float chance = crackleRate / fs;
+    if (dist01(rng) < chance) {
+      crackleEnv = 1.0f;
+    }
+    float raw = dist(rng) * crackleEnv;
+    crackleEnv *= crackleDecay;
+    raw = crackleHp.process(raw);
+    raw = crackleLp.process(raw);
+    c = raw * crackleAmp * duckGain;
+  }
+
+  constexpr float twoPi = 6.283185307f;
+  humPhase += twoPi * (humHz / fs);
+  if (humPhase > twoPi) humPhase -= twoPi;
+  float h = std::sin(humPhase) + 0.35f * std::sin(2.0f * humPhase);
+  h *= humAmp;
+
+  return n + c + h;
+}
+
+void AMDetector::init(float newFs, float newBw) {
+  fs = newFs;
+  bwHz = newBw;
+  carrierHz = std::min(12000.0f, fs * 0.35f);
+  float halfBw = std::clamp(bwHz * 0.95f, 1500.0f, fs * 0.2f);
+  float ifLow = std::clamp(carrierHz - halfBw, 1000.0f, fs * 0.45f);
+  float ifHigh = std::clamp(carrierHz + halfBw, ifLow + 800.0f, fs * 0.48f);
+  ifHp1.setHighpass(fs, ifLow, 0.707f);
+  ifHp2.setHighpass(fs, ifLow, 0.707f);
+  ifLp1.setLowpass(fs, ifHigh, 0.707f);
+  ifLp2.setLowpass(fs, ifHigh, 0.707f);
+
+  float detLpHz = std::clamp(bwHz * 0.9f, 2000.0f, fs * 0.45f);
+  detLp1.setLowpass(fs, detLpHz, 0.707f);
+  detLp2.setLowpass(fs, detLpHz, 0.707f);
+  detLp3.setLowpass(fs, detLpHz, 0.707f);
+
+  float agcAtkMs = 6.0f;
+  float agcRelMs = 160.0f;
+  agcAtk = std::exp(-1.0f / (fs * (agcAtkMs / 1000.0f)));
+  agcRel = std::exp(-1.0f / (fs * (agcRelMs / 1000.0f)));
+  agcGainAtk = agcAtk;
+  agcGainRel = agcRel;
+
+  float dcMs = 450.0f;
+  dcCoeff = std::exp(-1.0f / (fs * (dcMs / 1000.0f)));
+
+  reset();
+}
+
+void AMDetector::reset() {
+  phase = 0.0f;
+  agcEnv = 0.0f;
+  agcGainDb = 0.0f;
+  dcEnv = 0.0f;
+  ifHp1.reset();
+  ifHp2.reset();
+  ifLp1.reset();
+  ifLp2.reset();
+  detLp1.reset();
+  detLp2.reset();
+  detLp3.reset();
+}
+
+float AMDetector::process(float x) {
+  float mod = std::clamp(x * modIndex, -0.98f, 0.98f);
+  constexpr float twoPi = 6.283185307f;
+  phase += twoPi * (carrierHz / fs);
+  if (phase > twoPi) phase -= twoPi;
+  float carrier = std::sin(phase);
+  float ifSample = (1.0f + mod) * carrier * carrierGain;
+
+  ifSample = ifHp1.process(ifSample);
+  ifSample = ifHp2.process(ifSample);
+  ifSample = ifLp1.process(ifSample);
+  ifSample = ifLp2.process(ifSample);
+
+  float level = std::fabs(ifSample);
+  if (level > agcEnv) {
+    agcEnv = agcAtk * agcEnv + (1.0f - agcAtk) * level;
+  } else {
+    agcEnv = agcRel * agcEnv + (1.0f - agcRel) * level;
+  }
+  float envDb = lin2db(agcEnv);
+  float targetGainDb = std::clamp(agcTargetDb - envDb, agcMinGainDb, agcMaxGainDb);
+  if (targetGainDb < agcGainDb) {
+    agcGainDb = agcGainAtk * agcGainDb + (1.0f - agcGainAtk) * targetGainDb;
+  } else {
+    agcGainDb = agcGainRel * agcGainDb + (1.0f - agcGainRel) * targetGainDb;
+  }
+  float ifAgc = ifSample * db2lin(agcGainDb);
+
+  float det = ifAgc * carrier;
+  float env = detLp1.process(det);
+  env = detLp2.process(env);
+  env = detLp3.process(env);
+  dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * env;
+  float out = (env - dcEnv) * detGain;
+  if (diodeDrop > 0.0f) {
+    float a = std::fabs(out);
+    if (a <= diodeDrop) {
+      out = 0.0f;
+    } else {
+      out = std::copysign(a - diodeDrop, out);
+    }
+  }
+  return out;
+}
+
+void SpeakerSim::init(float fs) {
+  boxRes.setPeaking(fs, 180.0f, 0.90f, 3.0f);
+  coneDip.setPeaking(fs, 2800.0f, 1.10f, -2.2f);
+}
+
+void SpeakerSim::reset() {
+  boxRes.reset();
+  coneDip.reset();
+}
+
+float SpeakerSim::process(float x) {
+  float y = boxRes.process(x);
+  y = coneDip.process(y);
+  float yd = std::tanh(drive * y) / std::tanh(drive);
+  y = (1.0f - mix) * y + mix * yd;
+  return softClip(y, limit);
+}
+
+void Radio1938::init(int ch, float sr, float bw, float noise) {
+  channels = std::max(1, ch);
+  sampleRate = sr;
+  bwHz = bw;
+  noiseWeight = noise;
+
+  float safeBw = std::clamp(bwHz, 4200.0f, 5600.0f);
+  hpf.setHighpass(sampleRate, 140.0f, 0.707f);
+  lpf1.setLowpass(sampleRate, safeBw, 0.707f);
+  lpf2.setLowpass(sampleRate, safeBw, 0.707f);
+  postLpf1.setLowpass(sampleRate, safeBw, 0.707f);
+  postLpf2.setLowpass(sampleRate, safeBw, 0.707f);
+  midBoost.setPeaking(sampleRate, 1500.0f, 1.0f, 4.0f);
+  lowMidDip.setPeaking(sampleRate, 420.0f, 1.0f, -2.5f);
+  presBoost.setPeaking(sampleRate, 3200.0f, 0.9f, 1.5f);
+
+  comp.setFs(sampleRate);
+  comp.thresholdDb = -26.0f;
+  comp.ratio = 5.0f;
+  comp.setTimes(10.0f, 220.0f);
+
+  sat.drive = 1.40f;
+  sat.mix = 0.50f;
+
+  am.init(sampleRate, safeBw);
+  speaker.init(sampleRate);
+
+  noiseHum.setFs(sampleRate, safeBw);
+  noiseHum.noiseAmp = noiseWeight;
+  noiseHum.humHz = 50.0f;
+  if (noiseWeight <= 0.0f) {
+    noiseHum.humAmp = 0.0f;
+    noiseHum.crackleRate = 0.0f;
+    noiseHum.crackleAmp = 0.0f;
+  } else {
+    float scale = std::clamp(noiseWeight / 0.015f, 0.0f, 2.0f);
+    noiseHum.humAmp = 0.0015f * scale;
+    noiseHum.crackleRate = 0.9f * scale;
+    noiseHum.crackleAmp = 0.015f * scale;
+  }
+
+  reset();
+}
+
+void Radio1938::reset() {
+  hpf.reset();
+  lpf1.reset();
+  lpf2.reset();
+  postLpf1.reset();
+  postLpf2.reset();
+  midBoost.reset();
+  lowMidDip.reset();
+  presBoost.reset();
+  comp.reset();
+  am.reset();
+  speaker.reset();
+  noiseHum.reset();
+}
+
+void Radio1938::process(float* samples, uint32_t frames) {
+  if (!samples || frames == 0) return;
+  for (uint32_t f = 0; f < frames; ++f) {
+    float inL = samples[f * channels];
+    float inR = (channels > 1) ? samples[f * channels + 1] : inL;
+    float x = (channels > 1) ? 0.5f * (inL + inR) : inL;
+
+    float y = hpf.process(x);
+    y = lpf1.process(y);
+    y = lpf2.process(y);
+    // y = am.process(y); // Cannot revert these changes
+    y = midBoost.process(y);
+    y = lowMidDip.process(y);
+    y = presBoost.process(y);
+    y = comp.process(y);
+    y = sat.process(y);
+    y = postLpf1.process(y);
+    y = postLpf2.process(y);
+    y += noiseHum.process(y);
+    y = speaker.process(y); // Cannot revert these changes
+    y = softClip(y, 0.985f);
+
+    for (int c = 0; c < channels; ++c) {
+      samples[f * channels + c] = y;
+    }
+  }
+}
