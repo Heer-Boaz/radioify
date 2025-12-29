@@ -393,6 +393,11 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   ifRipple1.setPeaking(sampleRate, 950.0f, 0.9f, 0.5f);
   ifRipple2.setPeaking(sampleRate, 2300.0f, 1.1f, -0.6f);
   ifTiltLp.setLowpass(sampleRate, 1700.0f, 0.707f);
+  float amNyquist = std::min(amSampleRate * 0.5f, sampleRate * 0.45f);
+  float amCut = std::clamp(amNyquist * 0.96f, 2500.0f, sampleRate * 0.45f);
+  amRateLp1.setLowpass(sampleRate, amCut, 0.707f);
+  amRateLp2.setLowpass(sampleRate, amCut, 0.707f);
+  amStep = (amSampleRate > 0.0f) ? (amSampleRate / sampleRate) : 0.0f;
   midBoost.setPeaking(sampleRate, 1500.0f, 1.0f, 4.0f);
   lowMidDip.setPeaking(sampleRate, 420.0f, 1.0f, -2.5f);
   presBoost.setPeaking(sampleRate, 3200.0f, 0.9f, 1.5f);
@@ -448,6 +453,9 @@ void Radio1938::reset() {
   detunePhase2 = 0.0f;
   heteroPhase = 0.0f;
   heteroDriftPhase = 0.0f;
+  amPhase = 0.0f;
+  amPrev = 0.0f;
+  amHold = 0.0f;
   detuneIndex = 0;
   std::fill(detuneBuf.begin(), detuneBuf.end(), 0.0f);
   sagEnv = 0.0f;
@@ -461,6 +469,8 @@ void Radio1938::reset() {
   ifRipple1.reset();
   ifRipple2.reset();
   ifTiltLp.reset();
+  amRateLp1.reset();
+  amRateLp2.reset();
   midBoost.reset();
   lowMidDip.reset();
   presBoost.reset();
@@ -486,6 +496,19 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = ifRipple2.process(y);
     float tilt = ifTiltLp.process(y);
     y = (1.0f - ifTiltMix) * y + ifTiltMix * tilt;
+    if (amStep > 0.0f && amStep < 1.0f) {
+      y = amRateLp1.process(y);
+      y = amRateLp2.process(y);
+      float prevPhase = amPhase;
+      amPhase += amStep;
+      if (amPhase >= 1.0f) {
+        float t = (1.0f - prevPhase) / amStep;
+        amHold = amPrev + (y - amPrev) * t;
+        amPhase -= 1.0f;
+      }
+      amPrev = y;
+      y = amHold;
+    }
     if (kEnableRadioArtifacts && !detuneBuf.empty()) {
       detunePhase += twoPi * (detuneRate / sampleRate);
       detunePhase2 += twoPi * (detuneRate2 / sampleRate);

@@ -187,6 +187,12 @@ struct Radio1938 {
   float crackleBase = 0.0f;
   float heteroBaseScale = 0.0f;
 
+  float amSampleRate = 11025.0f;
+  float amStep = 0.0f;
+  float amPhase = 0.0f;
+  float amPrev = 0.0f;
+  float amHold = 0.0f;
+
   float sagEnv = 0.0f;
   float sagAtk = 0.0f;
   float sagRel = 0.0f;
@@ -204,6 +210,8 @@ struct Radio1938 {
   Biquad ifRipple1;
   Biquad ifRipple2;
   Biquad ifTiltLp;
+  Biquad amRateLp1;
+  Biquad amRateLp2;
   Biquad roomLp;
 
   Biquad hpf;
