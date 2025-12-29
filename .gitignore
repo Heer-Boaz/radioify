@@ -1,0 +1,82 @@
+# .gitignore voor Visual Studio C++ (CMake) project
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+ipch/
+*.aps
+*.ncb
+*.opendb
+*.opensdf
+
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+build/
+build-*/
+cmake-build-*/
+cmake-build*/
+
+# CMake files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+Makefile
+compile_commands.json
+install_manifest.txt
+CPackConfig.cmake
+CPackSourceConfig.cmake
+*_CPack_Packages/
+
+# Visual C++ intermediate and binary files
+*.obj
+*.o
+*.idb
+*.pdb
+*.ipdb
+*.ilk
+*.iobj
+*.ipch
+*.pch
+*.lib
+*.dll
+*.exe
+*.manifest
+*.exp
+
+# Other
+*.log
+*.vsconfig
+.vscode/
+*.userprefs
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Temp files
+*~
+*.swp
+*.swo
+
+# Package managers and caches
+packages/
+.vcpkg/
+.vcpkg_installed/
+
+# CPack artifacts
+*.tar.gz
+*.zip
+*.7z
+
+# Keep CMakeLists, source, headers, and project files tracked
+# (Adjust as needed for any generated sources you want to ignore)
