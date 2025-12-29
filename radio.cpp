@@ -4,6 +4,7 @@
 #include <cmath>
 
 static constexpr bool kEnableRadioArtifacts = true;
+static constexpr bool kEnableRoomEarlyReflections = true;
 
 static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
@@ -429,8 +430,20 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
 
   am.init(sampleRate, safeBw);
   speaker.init(sampleRate);
-  roomDelaySamples = std::max(1, static_cast<int>(sampleRate * 0.012f));
-  roomBuf.assign(static_cast<size_t>(roomDelaySamples + 1), 0.0f);
+  roomTapSamples.clear();
+  roomTapGains.clear();
+  const float tapMs[] = {6.0f, 10.5f, 16.0f, 23.0f, 31.0f};
+  const float tapGain[] = {0.32f, 0.26f, 0.20f, 0.15f, 0.11f};
+  int maxTap = 1;
+  for (size_t i = 0; i < sizeof(tapMs) / sizeof(tapMs[0]); ++i) {
+    int samples = std::max(1, static_cast<int>(std::lround(tapMs[i] * 0.001f * sampleRate)));
+    roomTapSamples.push_back(samples);
+    roomTapGains.push_back(tapGain[i]);
+    maxTap = std::max(maxTap, samples);
+  }
+  int baseRoom = std::max(1, static_cast<int>(std::lround(sampleRate * 0.012f)));
+  roomDelaySamples = std::max(baseRoom, maxTap);
+  roomBuf.assign(static_cast<size_t>(roomDelaySamples + 2), 0.0f);
   roomIndex = 0;
   roomLp.setLowpass(sampleRate, roomLpHz, 0.707f);
 
@@ -657,12 +670,28 @@ void Radio1938::process(float* samples, uint32_t frames) {
     }
     y += noiseHum.process(y);
     y = speaker.process(y); // Cannot revert these changes
-    if (roomMix > 0.0f && !roomBuf.empty()) {
-      float roomOut = roomBuf[static_cast<size_t>(roomIndex)];
-      roomBuf[static_cast<size_t>(roomIndex)] = y;
+    if (!roomBuf.empty()) {
+      float dry = y;
+      float roomOut = 0.0f;
+      if (roomMix > 0.0f && kEnableRoomEarlyReflections && !roomTapSamples.empty()) {
+        int size = static_cast<int>(roomBuf.size());
+        int writeIndex = roomIndex;
+        size_t tapCount = std::min(roomTapSamples.size(), roomTapGains.size());
+        for (size_t i = 0; i < tapCount; ++i) {
+          int tap = roomTapSamples[i];
+          int idx = writeIndex - tap;
+          while (idx < 0) idx += size;
+          roomOut += roomBuf[static_cast<size_t>(idx)] * roomTapGains[i];
+        }
+      } else if (roomMix > 0.0f) {
+        roomOut = roomBuf[static_cast<size_t>(roomIndex)];
+      }
+      roomBuf[static_cast<size_t>(roomIndex)] = dry;
       roomIndex = (roomIndex + 1) % static_cast<int>(roomBuf.size());
-      roomOut = roomLp.process(roomOut);
-      y += roomMix * roomOut;
+      if (roomMix > 0.0f) {
+        roomOut = roomLp.process(roomOut);
+        y += roomMix * roomOut;
+      }
     }
     y = softClip(y, 0.985f);
 

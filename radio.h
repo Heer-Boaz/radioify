@@ -224,6 +224,8 @@ struct Radio1938 {
   int roomIndex = 0;
   int roomDelaySamples = 0;
   std::vector<float> roomBuf;
+  std::vector<int> roomTapSamples;
+  std::vector<float> roomTapGains;
 
   Biquad ifRipple1;
   Biquad ifRipple2;
