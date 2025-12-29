@@ -191,6 +191,20 @@ struct Radio1938 {
   float tuneOffsetNorm = 0.0f;
   float tuneTiltExtra = 0.22f;
 
+  float mpPhase = 0.0f;
+  float mpPhase2 = 0.0f;
+  float mpDelayPhase = 0.0f;
+  float mpRate = 0.035f;
+  float mpRate2 = 0.027f;
+  float mpDelayRate = 0.041f;
+  float mpMix = 0.12f;
+  float mpDepth = 0.08f;
+  float mpDelayMs = 5.5f;
+  float mpDelayModMs = 1.5f;
+  float mpTiltMix = 0.35f;
+  std::vector<float> mpBuf;
+  int mpIndex = 0;
+
   float amSampleRate = 11025.0f;
   float amStep = 0.0f;
   float amPhase = 0.0f;
@@ -214,6 +228,7 @@ struct Radio1938 {
   Biquad ifRipple1;
   Biquad ifRipple2;
   Biquad ifTiltLp;
+  Biquad mpTiltLp;
   Biquad amRateLp1;
   Biquad amRateLp2;
   Biquad roomLp;

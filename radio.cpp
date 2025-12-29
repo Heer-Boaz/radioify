@@ -400,11 +400,16 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   ifRipple1.setPeaking(sampleRate, ripple1Hz, 0.9f, 0.5f);
   ifRipple2.setPeaking(sampleRate, ripple2Hz, 1.1f, -0.6f);
   ifTiltLp.setLowpass(sampleRate, tiltHz, 0.707f);
+  mpTiltLp.setLowpass(sampleRate, 1800.0f, 0.707f);
   float amNyquist = std::min(amSampleRate * 0.5f, sampleRate * 0.45f);
   float amCut = std::clamp(amNyquist * 0.96f, 2500.0f, sampleRate * 0.45f);
   amRateLp1.setLowpass(sampleRate, amCut, 0.707f);
   amRateLp2.setLowpass(sampleRate, amCut, 0.707f);
   amStep = (amSampleRate > 0.0f) ? (amSampleRate / sampleRate) : 0.0f;
+  float mpMaxDelay = std::max(0.0f, mpDelayMs + mpDelayModMs);
+  int mpSamples = std::max(8, static_cast<int>(std::ceil(mpMaxDelay * 0.001f * sampleRate)) + 4);
+  mpBuf.assign(static_cast<size_t>(mpSamples), 0.0f);
+  mpIndex = 0;
   midBoost.setPeaking(sampleRate, 1500.0f, 1.0f, 4.0f);
   lowMidDip.setPeaking(sampleRate, 420.0f, 1.0f, -2.5f);
   presBoost.setPeaking(sampleRate, 3200.0f, 0.9f, 1.5f);
@@ -463,6 +468,11 @@ void Radio1938::reset() {
   amPhase = 0.0f;
   amPrev = 0.0f;
   amHold = 0.0f;
+  mpPhase = 0.0f;
+  mpPhase2 = 0.0f;
+  mpDelayPhase = 0.0f;
+  mpIndex = 0;
+  std::fill(mpBuf.begin(), mpBuf.end(), 0.0f);
   detuneIndex = 0;
   std::fill(detuneBuf.begin(), detuneBuf.end(), 0.0f);
   sagEnv = 0.0f;
@@ -476,6 +486,7 @@ void Radio1938::reset() {
   ifRipple1.reset();
   ifRipple2.reset();
   ifTiltLp.reset();
+  mpTiltLp.reset();
   amRateLp1.reset();
   amRateLp2.reset();
   midBoost.reset();
@@ -516,6 +527,43 @@ void Radio1938::process(float* samples, uint32_t frames) {
       }
     } else {
       y = low + high * (1.0f - tiltMix);
+    }
+    if (kEnableRadioArtifacts && !mpBuf.empty() && mpMix > 0.0f) {
+      mpPhase += twoPi * (mpRate / sampleRate);
+      mpPhase2 += twoPi * (mpRate2 / sampleRate);
+      mpDelayPhase += twoPi * (mpDelayRate / sampleRate);
+      if (mpPhase > twoPi) mpPhase -= twoPi;
+      if (mpPhase2 > twoPi) mpPhase2 -= twoPi;
+      if (mpDelayPhase > twoPi) mpDelayPhase -= twoPi;
+
+      float mixLfo = std::sin(mpPhase);
+      float mix = mpMix * (1.0f + mpDepth * mixLfo);
+      mix = std::clamp(mix, 0.0f, 0.35f);
+
+      float delayMs = mpDelayMs + mpDelayModMs * std::sin(mpDelayPhase);
+      float maxDelay = static_cast<float>(mpBuf.size() - 2);
+      float delaySamples = std::clamp(delayMs * 0.001f * sampleRate, 1.0f, maxDelay);
+      float read = static_cast<float>(mpIndex) - delaySamples;
+      while (read < 0.0f) read += static_cast<float>(mpBuf.size());
+      int i0 = static_cast<int>(read);
+      int i1 = (i0 + 1) % static_cast<int>(mpBuf.size());
+      float frac = read - static_cast<float>(i0);
+      float delayed = mpBuf[static_cast<size_t>(i0)] * (1.0f - frac) +
+        mpBuf[static_cast<size_t>(i1)] * frac;
+
+      mpBuf[static_cast<size_t>(mpIndex)] = y;
+      mpIndex = (mpIndex + 1) % static_cast<int>(mpBuf.size());
+
+      float mpLow = mpTiltLp.process(delayed);
+      float mpHigh = delayed - mpLow;
+      delayed = mpLow + mpHigh * (1.0f - mpTiltMix);
+
+      float phaseMix = std::sin(mpPhase2);
+      float direct = y * (1.0f - 0.5f * mix);
+      y = direct + delayed * mix * phaseMix;
+    } else if (!mpBuf.empty()) {
+      mpBuf[static_cast<size_t>(mpIndex)] = y;
+      mpIndex = (mpIndex + 1) % static_cast<int>(mpBuf.size());
     }
     if (amStep > 0.0f && amStep < 1.0f) {
       y = amRateLp1.process(y);
