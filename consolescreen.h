@@ -70,8 +70,11 @@ class ConsoleScreen {
   int width_ = 80;
   int height_ = 25;
   bool fastOutput_ = false;
+  bool hasPrev_ = false;
+  bool altScreen_ = false;
   std::vector<CHAR_INFO> fastBuffer_;
   std::vector<Cell> buffer_;
+  std::vector<Cell> prevBuffer_;
   std::wstring drawBuffer_;
 };
 

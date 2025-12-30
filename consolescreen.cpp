@@ -149,6 +149,31 @@ inline void appendByte(std::wstring& out, unsigned value) {
   out.push_back(static_cast<wchar_t>(L'0' + value));
 }
 
+inline void appendNumber(std::wstring& out, int value) {
+  if (value <= 0) {
+    out.push_back(L'0');
+    return;
+  }
+  wchar_t buf[16];
+  const int bufSize = static_cast<int>(sizeof(buf) / sizeof(buf[0]));
+  int len = 0;
+  while (value > 0 && len < bufSize) {
+    buf[len++] = static_cast<wchar_t>(L'0' + (value % 10));
+    value /= 10;
+  }
+  for (int i = len - 1; i >= 0; --i) {
+    out.push_back(buf[i]);
+  }
+}
+
+inline void appendCursorPos(std::wstring& out, int x, int y) {
+  out.append(L"\x1b[");
+  appendNumber(out, y);
+  out.push_back(L';');
+  appendNumber(out, x);
+  out.push_back(L'H');
+}
+
 inline void appendColorSeq(std::wstring& out, const Color& c, bool fg) {
   if (fg) {
     out.append(L"\x1b[38;2;");
@@ -315,12 +340,25 @@ bool ConsoleScreen::init() {
     cursor.bVisible = FALSE;
     SetConsoleCursorInfo(out_, &cursor);
   }
+  std::wstring seq = L"\x1b[?1049h\x1b[H\x1b[?25l";
+  DWORD written = 0;
+  WriteConsoleW(out_, seq.c_str(), static_cast<DWORD>(seq.size()), &written,
+                nullptr);
+  altScreen_ = true;
+  hasPrev_ = false;
   updateSize();
   return true;
 }
 
 void ConsoleScreen::restore() {
   if (out_ != INVALID_HANDLE_VALUE) {
+    if (altScreen_) {
+      std::wstring seq = L"\x1b[0m\x1b[?25h\x1b[?1049l";
+      DWORD written = 0;
+      WriteConsoleW(out_, seq.c_str(), static_cast<DWORD>(seq.size()), &written,
+                    nullptr);
+      altScreen_ = false;
+    }
     SetConsoleMode(out_, originalMode_);
     if (originalCursor_.dwSize != 0) {
       SetConsoleCursorInfo(out_, &originalCursor_);
@@ -329,6 +367,8 @@ void ConsoleScreen::restore() {
 }
 
 void ConsoleScreen::updateSize() {
+  int oldW = width_;
+  int oldH = height_;
   CONSOLE_SCREEN_BUFFER_INFO info{};
   if (!GetConsoleScreenBufferInfo(out_, &info)) {
     width_ = 80;
@@ -339,8 +379,14 @@ void ConsoleScreen::updateSize() {
   }
   if (width_ < 1) width_ = 1;
   if (height_ < 1) height_ = 1;
-  if (static_cast<int>(buffer_.size()) != width_ * height_) {
-    buffer_.assign(static_cast<size_t>(width_ * height_), {});
+  size_t needed = static_cast<size_t>(width_ * height_);
+  bool dimsChanged = (width_ != oldW || height_ != oldH);
+  if (dimsChanged || buffer_.size() != needed) {
+    buffer_.assign(needed, {});
+  }
+  if (dimsChanged || prevBuffer_.size() != needed) {
+    prevBuffer_.assign(needed, {});
+    hasPrev_ = false;
   }
 }
 
@@ -396,7 +442,11 @@ void ConsoleScreen::writeChar(int x, int y, wchar_t ch, const Style& style) {
   buffer_[pos].bg = style.bg;
 }
 
-void ConsoleScreen::setFastOutput(bool enabled) { fastOutput_ = enabled; }
+void ConsoleScreen::setFastOutput(bool enabled) {
+  if (fastOutput_ == enabled) return;
+  fastOutput_ = enabled;
+  hasPrev_ = false;
+}
 
 bool ConsoleScreen::fastOutput() const { return fastOutput_; }
 
@@ -427,38 +477,104 @@ void ConsoleScreen::draw() {
     drawFast();
     return;
   }
+  size_t needed = static_cast<size_t>(width_ * height_);
+  if (prevBuffer_.size() != needed) {
+    prevBuffer_.assign(needed, {});
+    hasPrev_ = false;
+  }
+  bool fullRedraw = !hasPrev_;
   std::wstring& out = drawBuffer_;
   out.clear();
-  out.reserve(static_cast<size_t>(width_ * height_ * 2 + width_ * 12));
-  out.append(L"\x1b[H");
+  out.reserve(static_cast<size_t>(width_ * height_ * 2 + height_ * 32));
+
+  auto sameCell = [](const Cell& a, const Cell& b) {
+    return a.ch == b.ch && sameColor(a.fg, b.fg) && sameColor(a.bg, b.bg);
+  };
+
+  if (fullRedraw) {
+    out.append(L"\x1b[H");
+    Color curFg{};
+    Color curBg{};
+    bool hasColor = false;
+
+    for (int y = 0; y < height_; ++y) {
+      int rowStart = y * width_;
+      for (int x = 0; x < width_; ++x) {
+        const Cell& cell = buffer_[rowStart + x];
+        bool fgDiff = !hasColor || !sameColor(cell.fg, curFg);
+        bool bgDiff = !hasColor || !sameColor(cell.bg, curBg);
+        if (fgDiff) {
+          appendColorSeq(out, cell.fg, true);
+        }
+        if (bgDiff) {
+          appendColorSeq(out, cell.bg, false);
+        }
+        if (fgDiff || bgDiff) {
+          curFg = cell.fg;
+          curBg = cell.bg;
+          hasColor = true;
+        }
+        out.push_back(cell.ch ? cell.ch : L' ');
+      }
+      if (y < height_ - 1) {
+        out.append(L"\r\n");
+      }
+    }
+    out.append(L"\x1b[0m");
+    DWORD written = 0;
+    WriteConsoleW(out_, out.c_str(), static_cast<DWORD>(out.size()), &written,
+                  nullptr);
+    prevBuffer_ = buffer_;
+    hasPrev_ = true;
+    return;
+  }
+
+  bool wrote = false;
   Color curFg{};
   Color curBg{};
   bool hasColor = false;
-
   for (int y = 0; y < height_; ++y) {
-    for (int x = 0; x < width_; ++x) {
-      const Cell& cell = buffer_[y * width_ + x];
-      bool fgDiff = !hasColor || !sameColor(cell.fg, curFg);
-      bool bgDiff = !hasColor || !sameColor(cell.bg, curBg);
-      if (fgDiff) {
-        appendColorSeq(out, cell.fg, true);
+    size_t rowStart = static_cast<size_t>(y) * width_;
+    int x = 0;
+    while (x < width_) {
+      while (x < width_ &&
+             sameCell(buffer_[rowStart + x], prevBuffer_[rowStart + x])) {
+        ++x;
       }
-      if (bgDiff) {
-        appendColorSeq(out, cell.bg, false);
+      if (x >= width_) break;
+      int spanStart = x;
+      while (x < width_ &&
+             !sameCell(buffer_[rowStart + x], prevBuffer_[rowStart + x])) {
+        ++x;
       }
-      if (fgDiff || bgDiff) {
-        curFg = cell.fg;
-        curBg = cell.bg;
-        hasColor = true;
+      int spanEnd = x;
+      appendCursorPos(out, spanStart + 1, y + 1);
+
+      for (int i = spanStart; i < spanEnd; ++i) {
+        const Cell& cell = buffer_[rowStart + i];
+        bool fgDiff = !hasColor || !sameColor(cell.fg, curFg);
+        bool bgDiff = !hasColor || !sameColor(cell.bg, curBg);
+        if (fgDiff) {
+          appendColorSeq(out, cell.fg, true);
+        }
+        if (bgDiff) {
+          appendColorSeq(out, cell.bg, false);
+        }
+        if (fgDiff || bgDiff) {
+          curFg = cell.fg;
+          curBg = cell.bg;
+          hasColor = true;
+        }
+        out.push_back(cell.ch ? cell.ch : L' ');
+        prevBuffer_[rowStart + i] = cell;
       }
-      out.push_back(cell.ch ? cell.ch : L' ');
-    }
-    if (y < height_ - 1) {
-      out.append(L"\r\n");
+      wrote = true;
     }
   }
-  out.append(L"\x1b[0m");
-
-  DWORD written = 0;
-  WriteConsoleW(out_, out.c_str(), static_cast<DWORD>(out.size()), &written, nullptr);
+  if (wrote) {
+    out.append(L"\x1b[0m");
+    DWORD written = 0;
+    WriteConsoleW(out_, out.c_str(), static_cast<DWORD>(out.size()), &written,
+                  nullptr);
+  }
 }
