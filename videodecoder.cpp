@@ -72,16 +72,40 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
 
   if (!ensureMediaFoundation(error)) return false;
 
+  IMFAttributes* attributes = nullptr;
+  HRESULT hr = MFCreateAttributes(&attributes, 1);
+  if (SUCCEEDED(hr)) {
+    hr = attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+  }
+
   IMFSourceReader* reader = nullptr;
   std::wstring wpath = path.wstring();
-  HRESULT hr = MFCreateSourceReaderFromURL(wpath.c_str(), nullptr, &reader);
+  hr = MFCreateSourceReaderFromURL(wpath.c_str(), attributes, &reader);
+  safeRelease(attributes);
   if (FAILED(hr)) {
     setError(error, "Failed to open video file.");
     return false;
   }
 
-  reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE);
-  reader->SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM, TRUE);
+  hr = reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE);
+  if (SUCCEEDED(hr)) {
+    hr = reader->SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM, TRUE);
+  }
+  if (FAILED(hr)) {
+    safeRelease(reader);
+    setError(error, "No video stream found.");
+    return false;
+  }
+
+  IMFMediaType* nativeType = nullptr;
+  hr = reader->GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0,
+                                  &nativeType);
+  safeRelease(nativeType);
+  if (FAILED(hr)) {
+    safeRelease(reader);
+    setError(error, "No video stream found.");
+    return false;
+  }
 
   IMFMediaType* type = nullptr;
   hr = MFCreateMediaType(&type);
@@ -100,7 +124,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   safeRelease(type);
   if (FAILED(hr)) {
     safeRelease(reader);
-    setError(error, "No video stream found.");
+    setError(error, "Failed to configure video output.");
     return false;
   }
 
