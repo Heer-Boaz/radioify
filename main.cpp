@@ -459,9 +459,21 @@ static bool showAsciiVideo(
       screen.writeText(0, 0, fitLine(title, width), accentStyle);
       screen.writeText(0, 1, fitLine("Press any key to return", width),
                        dimStyle);
-      screen.writeText(0, 3, fitLine(message, width), dimStyle);
-      if (!detail.empty()) {
-        screen.writeText(0, 4, fitLine(detail, width), dimStyle);
+      std::string line = message;
+      std::string extra = detail;
+      if (!extra.empty() && extra == line) {
+        extra.clear();
+      }
+      if (line.empty() && !extra.empty()) {
+        line = extra;
+        extra.clear();
+      }
+      if (line.empty()) {
+        line = "Failed to open video.";
+      }
+      screen.writeText(0, 3, fitLine(line, width), dimStyle);
+      if (!extra.empty()) {
+        screen.writeText(0, 4, fitLine(extra, width), dimStyle);
       }
       screen.draw();
       while (input.poll(ev)) {
@@ -510,13 +522,13 @@ static bool showAsciiVideo(
   };
 
   if (!decoder.init(file, &error)) {
-    if (error == "No video stream found.") {
+    if (error.rfind("No video stream found", 0) == 0) {
       bool playAudio = showAudioFallbackPrompt(
           "No video stream found.",
           "This file can be played as audio only.");
       return playAudio ? false : true;
     }
-    return showError("Failed to open video.", error);
+    return showError(error, "");
   }
 
   bool audioOk = hooks.startAudio ? hooks.startAudio(file) : false;

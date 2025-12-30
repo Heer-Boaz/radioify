@@ -115,16 +115,20 @@ std::string hrToString(HRESULT hr) {
   return std::string(buf);
 }
 
-void updateColorInfo(VideoDecoder::Impl& impl, IMFMediaType* mediaType) {
+void updateColorInfo(IMFMediaType* mediaType, UINT32* yuvMatrix,
+                     bool* fullRange) {
+  if (!mediaType) return;
   UINT32 matrix = 0;
-  if (SUCCEEDED(mediaType->GetUINT32(MF_MT_YUV_MATRIX, &matrix))) {
-    impl.yuvMatrix = matrix;
+  if (yuvMatrix &&
+      SUCCEEDED(mediaType->GetUINT32(MF_MT_YUV_MATRIX, &matrix))) {
+    *yuvMatrix = matrix;
   }
   UINT32 range = 0;
-  if (SUCCEEDED(mediaType->GetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, &range))) {
-    impl.fullRange = (range == MFNominalRange_0_255);
-  } else {
-    impl.fullRange = true;
+  if (fullRange &&
+      SUCCEEDED(mediaType->GetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, &range))) {
+    *fullRange = (range == MFNominalRange_0_255);
+  } else if (fullRange) {
+    *fullRange = true;
   }
 }
 
@@ -176,23 +180,35 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   IMFAttributes* attributes = nullptr;
   HRESULT hr = MFCreateAttributes(&attributes, 3);
   if (SUCCEEDED(hr)) {
-    hr = attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
-  }
-  if (SUCCEEDED(hr)) {
-    hr = attributes->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
-                               TRUE);
-  }
-  if (SUCCEEDED(hr)) {
-    hr = attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
+    if (FAILED(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
+                                     TRUE)) ||
+        FAILED(attributes->SetUINT32(
+            MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE)) ||
+        FAILED(attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+                                     TRUE))) {
+      safeRelease(attributes);
+    }
+  } else {
+    attributes = nullptr;
   }
 
   IMFSourceReader* reader = nullptr;
   std::wstring wpath = path.wstring();
-  hr = MFCreateSourceReaderFromURL(wpath.c_str(), attributes, &reader);
+  HRESULT hrPrimary = MFCreateSourceReaderFromURL(wpath.c_str(), attributes,
+                                                  &reader);
   safeRelease(attributes);
-  if (FAILED(hr)) {
-    setError(error, "Failed to open video file.");
-    return false;
+  if (FAILED(hrPrimary)) {
+    IMFSourceReader* fallback = nullptr;
+    HRESULT hrFallback =
+        MFCreateSourceReaderFromURL(wpath.c_str(), nullptr, &fallback);
+    if (FAILED(hrFallback)) {
+      std::string detail = "Failed to open video source (hr=" +
+                           hrToString(hrPrimary) +
+                           ", fallback hr=" + hrToString(hrFallback) + ").";
+      setError(error, detail.c_str());
+      return false;
+    }
+    reader = fallback;
   }
 
   hr = reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE);
@@ -201,7 +217,9 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   }
   if (FAILED(hr)) {
     safeRelease(reader);
-    setError(error, "No video stream found.");
+    std::string detail =
+        "No video stream found (hr=" + hrToString(hr) + ").";
+    setError(error, detail.c_str());
     return false;
   }
 
@@ -211,7 +229,9 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   safeRelease(nativeType);
   if (FAILED(hr)) {
     safeRelease(reader);
-    setError(error, "No video stream found.");
+    std::string detail =
+        "No video stream found (hr=" + hrToString(hr) + ").";
+    setError(error, detail.c_str());
     return false;
   }
 
@@ -219,7 +239,9 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   hr = MFCreateMediaType(&type);
   if (FAILED(hr)) {
     safeRelease(reader);
-    setError(error, "Failed to configure video decoding.");
+    std::string detail =
+        "Failed to configure video decoding (hr=" + hrToString(hr) + ").";
+    setError(error, detail.c_str());
     return false;
   }
 
@@ -263,7 +285,9 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
                                    &actualType);
   if (FAILED(hr)) {
     safeRelease(reader);
-    setError(error, "Failed to query video format.");
+    std::string detail =
+        "Failed to query video format (hr=" + hrToString(hr) + ").";
+    setError(error, detail.c_str());
     return false;
   }
 
@@ -321,7 +345,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
     impl->stride = impl->width * 4;
   }
   impl->subtype = subtype;
-  updateColorInfo(*impl, actualType);
+  updateColorInfo(actualType, &impl->yuvMatrix, &impl->fullRange);
   safeRelease(actualType);
 
   PROPVARIANT duration{};
@@ -398,7 +422,7 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
           if (impl_->stride == 0) {
             impl_->stride = impl_->width * 4;
           }
-          updateColorInfo(*impl_, newType);
+          updateColorInfo(newType, &impl_->yuvMatrix, &impl_->fullRange);
         }
       }
       safeRelease(newType);
