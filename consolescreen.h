@@ -53,7 +53,7 @@ class ConsoleScreen {
   void writeChar(int x, int y, wchar_t ch, const Style& style);
   void setFastOutput(bool enabled);
   bool fastOutput() const;
- void draw();
+  void draw();
 
  private:
   void drawFast();
