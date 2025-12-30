@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -17,6 +18,7 @@
 #include "consolescreen.h"
 #include "m4adecoder.h"
 #include "radio.h"
+#include "videodecoder.h"
 
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_ENABLE_WAV
@@ -176,7 +178,8 @@ static std::vector<BufferCell> renderProgressBarCells(
     const Color& fillStart, const Color& fillEnd) {
   std::vector<BufferCell> cells;
   if (barLength <= 0) return cells;
-  cells.assign(static_cast<size_t>(barLength), BufferCell{L' ', emptyStyle});
+  cells.assign(static_cast<size_t>(barLength),
+               BufferCell{L'\x00B7', emptyStyle});
   ratio = std::clamp(ratio, 0.0, 1.0);
   if (ratio <= 0.0) return cells;
 
@@ -246,6 +249,11 @@ static std::vector<BufferCell> renderProgressBarCells(
 static bool isSupportedImageExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
+}
+
+static bool isVideoExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+  return ext == ".mp4" || ext == ".webm";
 }
 
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
@@ -409,6 +417,132 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
+}
+
+static bool showAsciiVideo(
+    const std::filesystem::path& file,
+    ConsoleInput& input,
+    ConsoleScreen& screen,
+    const Style& baseStyle,
+    const Style& accentStyle,
+    const Style& dimStyle,
+    const std::function<bool(const std::filesystem::path&)>& startAudio,
+    const std::function<void()>& stopAudio) {
+  VideoDecoder decoder;
+  std::string error;
+  auto showError = [&](const std::string& message,
+                       const std::string& detail) -> bool {
+    InputEvent ev{};
+    while (true) {
+      screen.updateSize();
+      int width = std::max(20, screen.width());
+      screen.clear(baseStyle);
+      std::string title = "Video: " + toUtf8String(file.filename());
+      screen.writeText(0, 0, fitLine(title, width), accentStyle);
+      screen.writeText(0, 1, fitLine("Press any key to return", width),
+                       dimStyle);
+      screen.writeText(0, 3, fitLine(message, width), dimStyle);
+      if (!detail.empty()) {
+        screen.writeText(0, 4, fitLine(detail, width), dimStyle);
+      }
+      screen.draw();
+      while (input.poll(ev)) {
+        if (ev.type == InputEvent::Type::Key) {
+          return true;
+        }
+        if (ev.type == InputEvent::Type::Resize) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  };
+
+  if (!decoder.init(file, &error)) {
+    if (error == "No video stream found.") {
+      return false;
+    }
+    return showError("Failed to open video.", error);
+  }
+
+  bool audioOk = startAudio ? startAudio(file) : false;
+  bool running = true;
+  AsciiArt art;
+  VideoFrame frame;
+  VideoFrame lastFrame;
+  bool hasLastFrame = false;
+
+  auto drawFrame = [&](const VideoFrame& videoFrame) {
+    screen.updateSize();
+    int width = std::max(20, screen.width());
+    int height = std::max(10, screen.height());
+    const int headerLines = 2;
+    const int footerLines = 1;
+    int artTop = headerLines;
+    int maxHeight = std::max(1, height - headerLines - footerLines);
+
+    renderAsciiArtFromRgba(videoFrame.rgba.data(), videoFrame.width,
+                           videoFrame.height, width, maxHeight, art);
+
+    screen.clear(baseStyle);
+    std::string title = "Video: " + toUtf8String(file.filename());
+    screen.writeText(0, 0, fitLine(title, width), accentStyle);
+    std::string subtitle =
+        audioOk ? "Press any key to return" : "Audio unavailable";
+    screen.writeText(0, 1, fitLine(subtitle, width), dimStyle);
+
+    int artWidth = std::min(art.width, width);
+    int artHeight = std::min(art.height, maxHeight);
+    int artX = std::max(0, (width - artWidth) / 2);
+
+    for (int y = 0; y < artHeight; ++y) {
+      for (int x = 0; x < artWidth; ++x) {
+        const auto& cell =
+            art.cells[static_cast<size_t>(y * art.width + x)];
+        Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
+        screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
+      }
+    }
+    screen.draw();
+  };
+
+  if (!decoder.readFrame(frame)) {
+    stopAudio();
+    return showError("No video frames found.", "");
+  }
+  int64_t firstTs = frame.timestamp100ns;
+  auto startTime = std::chrono::steady_clock::now();
+
+  while (running) {
+    double targetSec =
+        static_cast<double>(frame.timestamp100ns - firstTs) / 10000000.0;
+    while (running) {
+      InputEvent ev{};
+      while (input.poll(ev)) {
+        if (ev.type == InputEvent::Type::Resize && hasLastFrame) {
+          drawFrame(lastFrame);
+        } else if (ev.type == InputEvent::Type::Key) {
+          running = false;
+          break;
+        }
+      }
+      if (!running) break;
+      auto now = std::chrono::steady_clock::now();
+      double elapsed =
+          std::chrono::duration<double>(now - startTime).count();
+      if (elapsed >= targetSec) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (!running) break;
+
+    drawFrame(frame);
+    lastFrame = frame;
+    hasLastFrame = true;
+    if (!decoder.readFrame(frame)) break;
+  }
+
+  stopAudio();
+  return true;
 }
 
 static GridLayout buildLayout(const BrowserState& state, int width,
@@ -839,6 +973,30 @@ int main(int argc, char** argv) {
     return true;
   };
 
+  auto stopPlayback = [&]() {
+    if (deviceReady) {
+      ma_device_stop(&state.device);
+      ma_device_uninit(&state.device);
+      deviceReady = false;
+    }
+    if (decoderReady) {
+      if (state.usingM4a.load()) {
+        state.m4a.uninit();
+      } else {
+        ma_decoder_uninit(&state.decoder);
+      }
+      decoderReady = false;
+      state.usingM4a.store(false);
+    }
+    state.paused.store(false);
+    state.finished.store(false);
+    state.seekRequested.store(false);
+    state.pendingSeekFrames.store(0);
+    state.framesPlayed.store(0);
+    state.totalFrames = 0;
+    nowPlaying.clear();
+  };
+
   auto renderFile = [&](const std::filesystem::path& file) -> void {
     Options renderOpt = o;
     renderOpt.input = file.string();
@@ -872,6 +1030,8 @@ int main(int argc, char** argv) {
 
   std::filesystem::path pendingImage;
   bool hasPendingImage = false;
+  std::filesystem::path pendingVideo;
+  bool hasPendingVideo = false;
 
   auto seekToRatio = [&](double ratio) {
     if (!decoderReady || state.totalFrames == 0) return;
@@ -889,6 +1049,9 @@ int main(int argc, char** argv) {
       if (isSupportedImageExt(inputPath)) {
         pendingImage = inputPath;
         hasPendingImage = true;
+      } else if (isVideoExt(inputPath)) {
+        pendingVideo = inputPath;
+        hasPendingVideo = true;
       } else {
         loadFile(inputPath);
       }
@@ -936,6 +1099,16 @@ int main(int argc, char** argv) {
                  kStyleDim);
     dirty = true;
   }
+  if (hasPendingVideo) {
+    bool handled = showAsciiVideo(
+        pendingVideo, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
+        [&](const std::filesystem::path& file) { return loadFile(file); },
+        [&]() { stopPlayback(); });
+    if (!handled) {
+      loadFile(pendingVideo);
+    }
+    dirty = true;
+  }
 
   auto rebuildLayout = [&]() {
     screen.updateSize();
@@ -965,6 +1138,13 @@ int main(int argc, char** argv) {
     if (isSupportedImageExt(file)) {
       showAsciiArt(file, input, screen, kStyleNormal, kStyleAccent, kStyleDim);
       return true;
+    }
+    if (isVideoExt(file)) {
+      bool handled = showAsciiVideo(
+          file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
+          [&](const std::filesystem::path& media) { return loadFile(media); },
+          [&]() { stopPlayback(); });
+      if (handled) return true;
     }
     return loadFile(file);
   };

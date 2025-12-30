@@ -10,6 +10,7 @@ add_executable(radioify
   consoleinput.cpp
   consolescreen.cpp
   m4adecoder.cpp
+  videodecoder.cpp
   radio.cpp
 )
 

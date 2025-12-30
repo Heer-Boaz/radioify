@@ -28,4 +28,11 @@ bool renderAsciiArt(const std::filesystem::path& path,
                     AsciiArt& out,
                     std::string* error);
 
+bool renderAsciiArtFromRgba(const uint8_t* rgba,
+                            int width,
+                            int height,
+                            int maxWidth,
+                            int maxHeight,
+                            AsciiArt& out);
+
 #endif

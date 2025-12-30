@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 
@@ -450,6 +451,25 @@ bool renderAsciiArt(const std::filesystem::path& path, int maxWidth,
 
   int maxArtWidth = std::max(8, maxWidth);
   out = generateBrailleArt(rgba, imgW, imgH, maxArtWidth);
+  if (maxHeight > 0 && out.height > maxHeight) {
+    out.height = maxHeight;
+    out.cells.resize(static_cast<size_t>(out.width * out.height));
+  }
+  return true;
+}
+
+bool renderAsciiArtFromRgba(const uint8_t* rgba,
+                            int width,
+                            int height,
+                            int maxWidth,
+                            int maxHeight,
+                            AsciiArt& out) {
+  out = AsciiArt{};
+  if (!rgba || width <= 0 || height <= 0) return false;
+  std::vector<uint8_t> buffer(static_cast<size_t>(width * height * 4));
+  std::memcpy(buffer.data(), rgba, buffer.size());
+  int maxArtWidth = std::max(8, maxWidth);
+  out = generateBrailleArt(buffer, width, height, maxArtWidth);
   if (maxHeight > 0 && out.height > maxHeight) {
     out.height = maxHeight;
     out.cells.resize(static_cast<size_t>(out.width * out.height));

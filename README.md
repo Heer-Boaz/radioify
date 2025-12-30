@@ -40,4 +40,5 @@ dist/radioify.exe <file-or-folder>
 ## Supported files
 - Audio: .wav, .mp3, .flac
 - Audio (media containers): .m4a, .webm, .mp4 (audio stream only)
+- Video (ASCII preview): .mp4, .webm (audio + video)
 - Images (ASCII art preview): .jpg, .jpeg, .png, .bmp
