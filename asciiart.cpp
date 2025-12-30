@@ -6,8 +6,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
 #include <wincodec.h>
+#include <windows.h>
 
 #include <algorithm>
 #include <array>
@@ -24,8 +24,8 @@ const std::array<float, 256> kSrgbToLinear = []() {
   std::array<float, 256> table{};
   for (int i = 0; i < 256; ++i) {
     float s = static_cast<float>(i) / 255.0f;
-    table[i] = (s <= 0.04045f) ? (s / 12.92f)
-                               : std::pow((s + 0.055f) / 1.055f, 2.4f);
+    table[i] =
+        (s <= 0.04045f) ? (s / 12.92f) : std::pow((s + 0.055f) / 1.055f, 2.4f);
   }
   return table;
 }();
@@ -62,8 +62,8 @@ class ComScope {
 };
 
 uint32_t rgbToKey(uint8_t r, uint8_t g, uint8_t b) {
-  return (static_cast<uint32_t>(r) << 16) |
-         (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
+  return (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) |
+         static_cast<uint32_t>(b);
 }
 
 float clampFloat(float v, float lo, float hi) {
@@ -93,12 +93,10 @@ float sobelAt(const std::vector<float>& buf, int w, int h, int x, int y) {
   int ym1 = std::max(0, y - 1);
   int yp1 = std::min(h - 1, y + 1);
   int row = y * w;
-  float gx = buf[ym1 * w + xp1] + 2.0f * buf[row + xp1] +
-             buf[yp1 * w + xp1] - buf[ym1 * w + xm1] -
-             2.0f * buf[row + xm1] - buf[yp1 * w + xm1];
-  float gy = buf[yp1 * w + xm1] + 2.0f * buf[yp1 * w + x] +
-             buf[yp1 * w + xp1] - buf[ym1 * w + xm1] -
-             2.0f * buf[ym1 * w + x] - buf[ym1 * w + xp1];
+  float gx = buf[ym1 * w + xp1] + 2.0f * buf[row + xp1] + buf[yp1 * w + xp1] -
+             buf[ym1 * w + xm1] - 2.0f * buf[row + xm1] - buf[yp1 * w + xm1];
+  float gy = buf[yp1 * w + xm1] + 2.0f * buf[yp1 * w + x] + buf[yp1 * w + xp1] -
+             buf[ym1 * w + xm1] - 2.0f * buf[ym1 * w + x] - buf[ym1 * w + xp1];
   return std::hypot(gx, gy);
 }
 
@@ -118,8 +116,7 @@ bool loadImagePixels(const std::filesystem::path& path, int& outW, int& outH,
 
   IWICImagingFactory* factory = nullptr;
   HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
-                                CLSCTX_INPROC_SERVER,
-                                IID_PPV_ARGS(&factory));
+                                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
   if (FAILED(hr)) {
     setError(error, "Failed to create image decoder.");
     return false;
@@ -127,9 +124,9 @@ bool loadImagePixels(const std::filesystem::path& path, int& outW, int& outH,
 
   IWICBitmapDecoder* decoder = nullptr;
   std::wstring wpath = path.wstring();
-  hr = factory->CreateDecoderFromFilename(
-      wpath.c_str(), nullptr, GENERIC_READ,
-      WICDecodeMetadataCacheOnDemand, &decoder);
+  hr = factory->CreateDecoderFromFilename(wpath.c_str(), nullptr, GENERIC_READ,
+                                          WICDecodeMetadataCacheOnDemand,
+                                          &decoder);
   if (FAILED(hr)) {
     safeRelease(factory);
     setError(error, "Failed to open image.");
@@ -259,9 +256,8 @@ AsciiArt generateBrailleArt(const std::vector<uint8_t>& imgBuf, int imgW,
       uint8_t g = scaledBuf[static_cast<size_t>(i4 + 1)];
       uint8_t b = scaledBuf[static_cast<size_t>(i4 + 2)];
       linY[static_cast<size_t>(p)] =
-          255.0f *
-          (0.2126f * srgb2lin(r) + 0.7152f * srgb2lin(g) +
-           0.0722f * srgb2lin(b));
+          255.0f * (0.2126f * srgb2lin(r) + 0.7152f * srgb2lin(g) +
+                    0.0722f * srgb2lin(b));
     }
   }
 
@@ -287,8 +283,7 @@ AsciiArt generateBrailleArt(const std::vector<uint8_t>& imgBuf, int imgW,
   uint8_t bgR = static_cast<uint8_t>((bgKey >> 16) & 0xFF);
   uint8_t bgG = static_cast<uint8_t>((bgKey >> 8) & 0xFF);
   uint8_t bgB = static_cast<uint8_t>(bgKey & 0xFF);
-  float bgLum = 255.0f * (0.2126f * srgb2lin(bgR) +
-                          0.7152f * srgb2lin(bgG) +
+  float bgLum = 255.0f * (0.2126f * srgb2lin(bgR) + 0.7152f * srgb2lin(bgG) +
                           0.0722f * srgb2lin(bgB));
 
   std::vector<float> err;
@@ -365,8 +360,8 @@ AsciiArt generateBrailleArt(const std::vector<uint8_t>& imgBuf, int imgW,
 
           float deltaThr = delta;
           if (useEdge && !edges.empty()) {
-            deltaThr = std::max(
-                10.0f, delta - 0.2f * edges[static_cast<size_t>(p)]);
+            deltaThr =
+                std::max(10.0f, delta - 0.2f * edges[static_cast<size_t>(p)]);
           }
 
           float lumDiff = std::fabs(yLin - bgLum);
@@ -413,10 +408,9 @@ AsciiArt generateBrailleArt(const std::vector<uint8_t>& imgBuf, int imgW,
                       static_cast<uint8_t>(domKey & 0xFF)};
       if (cellBgCnt > 0) {
         cell.hasBg = true;
-        cell.bg = Color{
-            clampByte(static_cast<float>(cellBgR) / cellBgCnt),
-            clampByte(static_cast<float>(cellBgG) / cellBgCnt),
-            clampByte(static_cast<float>(cellBgB) / cellBgCnt)};
+        cell.bg = Color{clampByte(static_cast<float>(cellBgR) / cellBgCnt),
+                        clampByte(static_cast<float>(cellBgG) / cellBgCnt),
+                        clampByte(static_cast<float>(cellBgB) / cellBgCnt)};
       }
       art.cells[static_cast<size_t>(cy * outW + cx)] = cell;
     }
@@ -424,7 +418,7 @@ AsciiArt generateBrailleArt(const std::vector<uint8_t>& imgBuf, int imgW,
 
   return art;
 }
-} // namespace
+}  // namespace
 
 std::string defaultAsciiRamp() { return "@%#*+=-:. "; }
 
@@ -458,12 +452,8 @@ bool renderAsciiArt(const std::filesystem::path& path, int maxWidth,
   return true;
 }
 
-bool renderAsciiArtFromRgba(const uint8_t* rgba,
-                            int width,
-                            int height,
-                            int maxWidth,
-                            int maxHeight,
-                            AsciiArt& out) {
+bool renderAsciiArtFromRgba(const uint8_t* rgba, int width, int height,
+                            int maxWidth, int maxHeight, AsciiArt& out) {
   out = AsciiArt{};
   if (!rgba || width <= 0 || height <= 0) return false;
   std::vector<uint8_t> buffer(static_cast<size_t>(width * height * 4));
