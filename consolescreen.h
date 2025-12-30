@@ -57,6 +57,8 @@ class ConsoleScreen {
 
  private:
   void drawFast();
+  bool writeOutput(const std::wstring& text);
+  void reportWriteError(const wchar_t* context);
 
   struct Cell {
     wchar_t ch = L' ';
@@ -67,15 +69,21 @@ class ConsoleScreen {
   HANDLE out_ = INVALID_HANDLE_VALUE;
   DWORD originalMode_ = 0;
   CONSOLE_CURSOR_INFO originalCursor_{};
+  UINT originalOutputCp_ = 0;
   int width_ = 80;
   int height_ = 25;
   bool fastOutput_ = false;
   bool hasPrev_ = false;
   bool altScreen_ = false;
+  bool useUtf8Output_ = true;
+  bool outputFailed_ = false;
+  bool outputErrorReported_ = false;
+  DWORD outputError_ = 0;
   std::vector<CHAR_INFO> fastBuffer_;
   std::vector<Cell> buffer_;
   std::vector<Cell> prevBuffer_;
   std::wstring drawBuffer_;
+  std::string drawUtf8Buffer_;
 };
 
 #endif

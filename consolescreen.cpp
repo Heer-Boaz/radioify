@@ -21,6 +21,24 @@ static std::wstring utf8ToWide(const std::string& text) {
   return out;
 }
 
+static bool wideToUtf8(const std::wstring& text, std::string& out) {
+  if (text.empty()) {
+    out.clear();
+    return true;
+  }
+  int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
+                                   static_cast<int>(text.size()), nullptr, 0,
+                                   nullptr, nullptr);
+  if (needed <= 0) return false;
+  out.resize(static_cast<size_t>(needed));
+  int written = WideCharToMultiByte(
+      CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
+      static_cast<int>(text.size()), out.data(), needed, nullptr, nullptr);
+  if (written <= 0) return false;
+  if (written != needed) out.resize(static_cast<size_t>(written));
+  return true;
+}
+
 static std::string pathToUtf8(const std::filesystem::path& p) {
 #ifdef _WIN32
   auto u8 = p.u8string();
@@ -331,6 +349,7 @@ bool ConsoleScreen::init() {
   out_ = GetStdHandle(STD_OUTPUT_HANDLE);
   if (out_ == INVALID_HANDLE_VALUE) return false;
   if (!GetConsoleMode(out_, &originalMode_)) return false;
+  originalOutputCp_ = GetConsoleOutputCP();
   DWORD mode = originalMode_;
   mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT;
   SetConsoleMode(out_, mode);
@@ -340,10 +359,14 @@ bool ConsoleScreen::init() {
     cursor.bVisible = FALSE;
     SetConsoleCursorInfo(out_, &cursor);
   }
+  if (useUtf8Output_) {
+    SetConsoleOutputCP(CP_UTF8);
+  }
   std::wstring seq = L"\x1b[?1049h\x1b[H\x1b[?25l";
-  DWORD written = 0;
-  WriteConsoleW(out_, seq.c_str(), static_cast<DWORD>(seq.size()), &written,
-                nullptr);
+  if (!writeOutput(seq)) {
+    reportWriteError(L"init");
+    return false;
+  }
   altScreen_ = true;
   hasPrev_ = false;
   updateSize();
@@ -354,10 +377,13 @@ void ConsoleScreen::restore() {
   if (out_ != INVALID_HANDLE_VALUE) {
     if (altScreen_) {
       std::wstring seq = L"\x1b[0m\x1b[?25h\x1b[?1049l";
-      DWORD written = 0;
-      WriteConsoleW(out_, seq.c_str(), static_cast<DWORD>(seq.size()), &written,
-                    nullptr);
+      if (!writeOutput(seq)) {
+        reportWriteError(L"restore");
+      }
       altScreen_ = false;
+    }
+    if (useUtf8Output_ && originalOutputCp_ != 0) {
+      SetConsoleOutputCP(originalOutputCp_);
     }
     SetConsoleMode(out_, originalMode_);
     if (originalCursor_.dwSize != 0) {
@@ -387,6 +413,10 @@ void ConsoleScreen::updateSize() {
   if (dimsChanged || prevBuffer_.size() != needed) {
     prevBuffer_.assign(needed, {});
     hasPrev_ = false;
+  }
+  if (dimsChanged) {
+    outputFailed_ = false;
+    outputErrorReported_ = false;
   }
 }
 
@@ -446,12 +476,74 @@ void ConsoleScreen::setFastOutput(bool enabled) {
   if (fastOutput_ == enabled) return;
   fastOutput_ = enabled;
   hasPrev_ = false;
+  outputFailed_ = false;
+  outputErrorReported_ = false;
 }
 
 bool ConsoleScreen::fastOutput() const { return fastOutput_; }
 
+bool ConsoleScreen::writeOutput(const std::wstring& text) {
+  if (out_ == INVALID_HANDLE_VALUE) return false;
+  if (text.empty()) return true;
+  if (outputFailed_) return false;
+  if (useUtf8Output_) {
+    if (!wideToUtf8(text, drawUtf8Buffer_)) {
+      outputError_ = GetLastError();
+      outputFailed_ = true;
+      return false;
+    }
+    DWORD written = 0;
+    if (!WriteFile(out_, drawUtf8Buffer_.data(),
+                   static_cast<DWORD>(drawUtf8Buffer_.size()), &written,
+                   nullptr)) {
+      outputError_ = GetLastError();
+      outputFailed_ = true;
+      return false;
+    }
+    if (written != drawUtf8Buffer_.size()) {
+      outputError_ = ERROR_WRITE_FAULT;
+      outputFailed_ = true;
+      return false;
+    }
+    return true;
+  }
+  DWORD written = 0;
+  if (!WriteConsoleW(out_, text.c_str(), static_cast<DWORD>(text.size()),
+                     &written, nullptr)) {
+    outputError_ = GetLastError();
+    outputFailed_ = true;
+    return false;
+  }
+  if (written != text.size()) {
+    outputError_ = ERROR_WRITE_FAULT;
+    outputFailed_ = true;
+    return false;
+  }
+  return true;
+}
+
+void ConsoleScreen::reportWriteError(const wchar_t* context) {
+  if (!outputFailed_ || outputErrorReported_ || out_ == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  outputErrorReported_ = true;
+  std::wstring msg;
+  msg.append(L"\x1b[0m\r\n[console] output failed in ");
+  msg.append(context ? context : L"draw");
+  msg.append(L" (err=");
+  appendNumber(msg, static_cast<int>(outputError_));
+  msg.append(L")\r\n");
+  DWORD written = 0;
+  WriteConsoleW(out_, msg.c_str(), static_cast<DWORD>(msg.size()), &written,
+                nullptr);
+}
+
 void ConsoleScreen::drawFast() {
   if (out_ == INVALID_HANDLE_VALUE) return;
+  if (outputFailed_) {
+    reportWriteError(L"drawFast");
+    return;
+  }
   size_t needed = static_cast<size_t>(width_ * height_);
   if (fastBuffer_.size() != needed) {
     fastBuffer_.resize(needed);
@@ -475,6 +567,10 @@ void ConsoleScreen::draw() {
   if (out_ == INVALID_HANDLE_VALUE) return;
   if (fastOutput_) {
     drawFast();
+    return;
+  }
+  if (outputFailed_) {
+    reportWriteError(L"draw");
     return;
   }
   size_t needed = static_cast<size_t>(width_ * height_);
@@ -521,9 +617,10 @@ void ConsoleScreen::draw() {
       }
     }
     out.append(L"\x1b[0m");
-    DWORD written = 0;
-    WriteConsoleW(out_, out.c_str(), static_cast<DWORD>(out.size()), &written,
-                  nullptr);
+    if (!writeOutput(out)) {
+      reportWriteError(L"draw");
+      return;
+    }
     prevBuffer_ = buffer_;
     hasPrev_ = true;
     return;
@@ -573,8 +670,9 @@ void ConsoleScreen::draw() {
   }
   if (wrote) {
     out.append(L"\x1b[0m");
-    DWORD written = 0;
-    WriteConsoleW(out_, out.c_str(), static_cast<DWORD>(out.size()), &written,
-                  nullptr);
+    if (!writeOutput(out)) {
+      reportWriteError(L"draw");
+      return;
+    }
   }
 }

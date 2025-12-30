@@ -368,8 +368,150 @@ void VideoDecoder::uninit() {
   impl_ = nullptr;
 }
 
-bool VideoDecoder::readFrame(VideoFrame& out) {
+bool VideoDecoder::setTargetSize(int targetWidth, int targetHeight,
+                                 std::string* error) {
+  if (!impl_ || !impl_->reader) {
+    setError(error, "Video decoder is not initialized.");
+    return false;
+  }
+  if (targetWidth <= 0 || targetHeight <= 0) {
+    setError(error, "Invalid target size for video decoding.");
+    return false;
+  }
+  if (impl_->width == targetWidth && impl_->height == targetHeight) {
+    return true;
+  }
+
+  IMFMediaType* currentType = nullptr;
+  HRESULT hr = impl_->reader->GetCurrentMediaType(
+      MF_SOURCE_READER_FIRST_VIDEO_STREAM, &currentType);
+  if (FAILED(hr) || !currentType) {
+    setError(error, ("Failed to query current video format (hr=" +
+                     hrToString(hr) + ").")
+                        .c_str());
+    safeRelease(currentType);
+    return false;
+  }
+
+  GUID subtype = impl_->subtype;
+  currentType->GetGUID(MF_MT_SUBTYPE, &subtype);
+  safeRelease(currentType);
+
+  IMFMediaType* targetType = nullptr;
+  hr = MFCreateMediaType(&targetType);
+  if (FAILED(hr)) {
+    setError(error, ("Failed to prepare scaled video format (hr=" +
+                     hrToString(hr) + ").")
+                        .c_str());
+    safeRelease(targetType);
+    return false;
+  }
+  hr = targetType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+  if (SUCCEEDED(hr)) hr = targetType->SetGUID(MF_MT_SUBTYPE, subtype);
+  if (SUCCEEDED(hr)) {
+    hr = MFSetAttributeSize(targetType, MF_MT_FRAME_SIZE,
+                            static_cast<UINT32>(targetWidth),
+                            static_cast<UINT32>(targetHeight));
+  }
+  if (FAILED(hr)) {
+    setError(error, ("Failed to configure target video size (hr=" +
+                     hrToString(hr) + ").")
+                        .c_str());
+    safeRelease(targetType);
+    return false;
+  }
+
+  hr = impl_->reader->SetCurrentMediaType(
+      MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, targetType);
+  safeRelease(targetType);
+  if (FAILED(hr)) {
+    setError(error, ("Failed to apply target video size (hr=" +
+                     hrToString(hr) + ").")
+                        .c_str());
+    return false;
+  }
+
+  IMFMediaType* actualType = nullptr;
+  hr = impl_->reader->GetCurrentMediaType(
+      MF_SOURCE_READER_FIRST_VIDEO_STREAM, &actualType);
+  if (FAILED(hr) || !actualType) {
+    setError(error, ("Failed to read scaled video format (hr=" +
+                     hrToString(hr) + ").")
+                        .c_str());
+    safeRelease(actualType);
+    return false;
+  }
+
+  GUID actualSubtype = GUID_NULL;
+  if (FAILED(actualType->GetGUID(MF_MT_SUBTYPE, &actualSubtype))) {
+    safeRelease(actualType);
+    setError(error, "Failed to read scaled video pixel format.");
+    return false;
+  }
+  PixelFormat format = pixelFormatFromSubtype(actualSubtype);
+  if (format == PixelFormat::Unknown) {
+    std::string detail =
+        "Unsupported scaled video pixel format: " +
+        pixelFormatName(actualSubtype);
+    safeRelease(actualType);
+    setError(error, detail.c_str());
+    return false;
+  }
+
+  UINT32 width = 0;
+  UINT32 height = 0;
+  hr = MFGetAttributeSize(actualType, MF_MT_FRAME_SIZE, &width, &height);
+  if (FAILED(hr) || width == 0 || height == 0) {
+    safeRelease(actualType);
+    setError(error, "Scaled video output has invalid dimensions.");
+    return false;
+  }
+
+  LONG stride = 0;
+  UINT32 strideAttr = 0;
+  hr = actualType->GetUINT32(MF_MT_DEFAULT_STRIDE, &strideAttr);
+  if (SUCCEEDED(hr)) {
+    stride = static_cast<LONG>(strideAttr);
+  } else {
+    stride = 0;
+    if (format == PixelFormat::NV12) {
+      stride = static_cast<LONG>(width);
+    } else if (format == PixelFormat::P010) {
+      stride = static_cast<LONG>(width * 2);
+    } else {
+      MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1,
+                                     static_cast<DWORD>(width), &stride);
+    }
+  }
+
+  impl_->width = static_cast<int>(width);
+  impl_->height = static_cast<int>(height);
+  impl_->topDown = stride >= 0;
+  impl_->stride = std::abs(stride);
+  if (impl_->stride == 0) {
+    impl_->stride = impl_->width * 4;
+  }
+  impl_->subtype = actualSubtype;
+  updateColorInfo(actualType, &impl_->yuvMatrix, &impl_->fullRange);
+  safeRelease(actualType);
+  return true;
+}
+
+void VideoDecoder::flush() {
+  if (!impl_ || !impl_->reader) return;
+  impl_->reader->Flush(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
+  impl_->atEnd = false;
+}
+
+bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
+                             bool decodePixels) {
   if (!impl_ || impl_->atEnd) return false;
+
+  int streamTicks = 0;
+  int typeChanges = 0;
+  if (info) {
+    *info = VideoReadInfo{};
+  }
 
   while (true) {
     DWORD flags = 0;
@@ -384,6 +526,7 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
       return false;
     }
     if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0) {
+      ++typeChanges;
       IMFMediaType* newType = nullptr;
       if (SUCCEEDED(impl_->reader->GetCurrentMediaType(
               MF_SOURCE_READER_FIRST_VIDEO_STREAM, &newType)) &&
@@ -433,11 +576,39 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
       return false;
     }
     if ((flags & MF_SOURCE_READERF_STREAMTICK) != 0) {
+      ++streamTicks;
       safeRelease(sample);
       continue;
     }
     if (!sample) {
       continue;
+    }
+
+    const int width = impl_->width;
+    const int height = impl_->height;
+    if (width <= 0 || height <= 0) {
+      safeRelease(sample);
+      continue;
+    }
+
+    if (!decodePixels) {
+      out.width = width;
+      out.height = height;
+      out.timestamp100ns = static_cast<int64_t>(timestamp);
+      out.rgba.clear();
+      if (info) {
+        LONGLONG duration = 0;
+        if (FAILED(sample->GetSampleDuration(&duration))) {
+          duration = 0;
+        }
+        info->timestamp100ns = static_cast<int64_t>(timestamp);
+        info->duration100ns = static_cast<int64_t>(duration);
+        info->flags = static_cast<uint32_t>(flags);
+        info->streamTicks = streamTicks;
+        info->typeChanges = typeChanges;
+      }
+      safeRelease(sample);
+      return true;
     }
 
     IMFMediaBuffer* buffer = nullptr;
@@ -456,17 +627,6 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
     if (SUCCEEDED(hr) && data && curLen > 0) {
       locked = true;
     } else {
-      safeRelease(buffer);
-      safeRelease(sample);
-      continue;
-    }
-
-    const int width = impl_->width;
-    const int height = impl_->height;
-    if (width <= 0 || height <= 0) {
-      if (locked) {
-        buffer->Unlock();
-      }
       safeRelease(buffer);
       safeRelease(sample);
       continue;
@@ -628,6 +788,18 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
           }
         }
       }
+    }
+
+    if (info) {
+      LONGLONG duration = 0;
+      if (FAILED(sample->GetSampleDuration(&duration))) {
+        duration = 0;
+      }
+      info->timestamp100ns = static_cast<int64_t>(timestamp);
+      info->duration100ns = static_cast<int64_t>(duration);
+      info->flags = static_cast<uint32_t>(flags);
+      info->streamTicks = streamTicks;
+      info->typeChanges = typeChanges;
     }
 
     if (locked) {
