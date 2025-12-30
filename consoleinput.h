@@ -10,8 +10,11 @@
 #include <windows.h>
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
+
+struct BreadcrumbLine;
 
 struct KeyEvent {
   WORD vk = 0;
@@ -53,11 +56,62 @@ class ConsoleInput {
   bool active_ = false;
 };
 
+struct FileEntry {
+  std::string name;
+  std::filesystem::path path;
+  bool isDir = false;
+};
+
+struct BrowserState {
+  std::filesystem::path dir;
+  std::vector<FileEntry> entries;
+  int selected = 0;
+  int scrollRow = 0;
+};
+
+struct GridLayout {
+  int rowsVisible = 0;
+  int totalRows = 0;
+  int cols = 0;
+  int colWidth = 0;
+  std::vector<std::string> names;
+};
+
 struct DriveEntry {
   std::string label;
   std::filesystem::path path;
 };
 
 std::vector<DriveEntry> listDriveEntries();
+
+struct InputCallbacks {
+  std::function<void()> onQuit;
+  std::function<void()> onResize;
+  std::function<void()> onTogglePause;
+  std::function<void()> onToggleRadio;
+  std::function<void(int)> onSeekBy;
+  std::function<void(double)> onSeekToRatio;
+  std::function<bool(const std::filesystem::path&)> onPlayFile;
+  std::function<void(const std::filesystem::path&)> onRenderFile;
+  std::function<void(BrowserState&, const std::string&)> onRefreshBrowser;
+};
+
+void handleInputEvent(
+  const InputEvent& ev,
+  BrowserState& browser,
+  const GridLayout& layout,
+  const BreadcrumbLine& breadcrumbLine,
+  int breadcrumbY,
+  int listTop,
+  int progressBarX,
+  int progressBarY,
+  int progressBarWidth,
+  bool playMode,
+  bool decoderReady,
+  int& breadcrumbHover,
+  bool& dirty,
+  bool& running,
+  const InputCallbacks& callbacks
+);
 
 #endif

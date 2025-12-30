@@ -1,5 +1,9 @@
 #include "consoleinput.h"
 
+#include <algorithm>
+
+#include "consolescreen.h"
+
 void ConsoleInput::init() {
   handle_ = GetStdHandle(STD_INPUT_HANDLE);
   if (handle_ == INVALID_HANDLE_VALUE) return;
@@ -21,7 +25,8 @@ void ConsoleInput::restore() {
 bool ConsoleInput::poll(InputEvent& out) {
   if (!active_) return false;
   DWORD count = 0;
-  if (!GetNumberOfConsoleInputEvents(handle_, &count) || count == 0) return false;
+  if (!GetNumberOfConsoleInputEvents(handle_, &count) || count == 0)
+    return false;
   while (count > 0) {
     INPUT_RECORD rec{};
     DWORD read = 0;
@@ -77,4 +82,281 @@ std::vector<DriveEntry> listDriveEntries() {
   }
 #endif
   return drives;
+}
+
+namespace {
+void ensureSelectionVisible(BrowserState& state, const GridLayout& layout) {
+  if (state.entries.empty()) {
+    state.scrollRow = 0;
+    return;
+  }
+  if (layout.totalRows <= layout.rowsVisible) {
+    state.scrollRow = 0;
+    return;
+  }
+  int row = (layout.totalRows > 0) ? (state.selected % layout.totalRows) : 0;
+  int maxScroll = std::max(0, layout.totalRows - layout.rowsVisible);
+  if (row < state.scrollRow) {
+    state.scrollRow = row;
+  } else if (row >= state.scrollRow + layout.rowsVisible) {
+    state.scrollRow = row - layout.rowsVisible + 1;
+  }
+  state.scrollRow = std::clamp(state.scrollRow, 0, maxScroll);
+}
+
+void moveSelection(BrowserState& browser, const GridLayout& layout,
+                   int deltaCol, int deltaRow, bool& dirty) {
+  int count = static_cast<int>(browser.entries.size());
+  if (count == 0 || layout.totalRows <= 0) return;
+  int row = browser.selected % layout.totalRows;
+  int col = browser.selected / layout.totalRows;
+  int nextCol = col + deltaCol;
+  int nextRow = row + deltaRow;
+  if (nextCol < 0 || nextCol >= layout.cols) return;
+  if (nextRow < 0 || nextRow >= layout.totalRows) return;
+  int base = nextCol * layout.totalRows;
+  if (base >= count) return;
+  int idx = base + nextRow;
+  if (idx >= count) {
+    int lastInCol = std::min(count - 1, base + layout.totalRows - 1);
+    idx = lastInCol;
+  }
+  if (idx != browser.selected) {
+    browser.selected = idx;
+    ensureSelectionVisible(browser, layout);
+    dirty = true;
+  }
+}
+
+void pageSelection(BrowserState& browser, const GridLayout& layout,
+                   int direction, bool& dirty) {
+  int count = static_cast<int>(browser.entries.size());
+  if (count == 0 || layout.totalRows <= 0) return;
+  int row = browser.selected % layout.totalRows;
+  int col = browser.selected / layout.totalRows;
+  int step = std::max(1, layout.rowsVisible);
+  int nextRow = row + direction * step;
+  if (nextRow < 0) nextRow = 0;
+  if (nextRow >= layout.totalRows) nextRow = layout.totalRows - 1;
+  int base = col * layout.totalRows;
+  if (base >= count) return;
+  int idx = base + nextRow;
+  if (idx >= count) {
+    int lastInCol = std::min(count - 1, base + layout.totalRows - 1);
+    idx = lastInCol;
+  }
+  if (idx != browser.selected) {
+    browser.selected = idx;
+    ensureSelectionVisible(browser, layout);
+    dirty = true;
+  }
+}
+}  // namespace
+
+void handleInputEvent(const InputEvent& ev, BrowserState& browser,
+                      const GridLayout& layout,
+                      const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
+                      int listTop, int progressBarX, int progressBarY,
+                      int progressBarWidth, bool playMode, bool decoderReady,
+                      int& breadcrumbHover, bool& dirty, bool& running,
+                      const InputCallbacks& callbacks) {
+  if (ev.type == InputEvent::Type::Resize) {
+    dirty = true;
+    if (callbacks.onResize) callbacks.onResize();
+    return;
+  }
+
+  if (ev.type == InputEvent::Type::Key) {
+    const KeyEvent& key = ev.key;
+    const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+    bool ctrl = (key.control & ctrlMask) != 0;
+    if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
+      running = false;
+      if (callbacks.onQuit) callbacks.onQuit();
+      return;
+    }
+    if (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q') {
+      running = false;
+      if (callbacks.onQuit) callbacks.onQuit();
+      return;
+    }
+    if (key.vk == VK_BACK) {
+      if (browser.dir.has_parent_path()) {
+        browser.dir = browser.dir.parent_path();
+        browser.selected = 0;
+        if (callbacks.onRefreshBrowser) {
+          callbacks.onRefreshBrowser(browser, "");
+        }
+        breadcrumbHover = -1;
+        dirty = true;
+      }
+      return;
+    }
+    if (key.vk == VK_RETURN) {
+      int count = static_cast<int>(browser.entries.size());
+      if (count > 0) {
+        const auto& pick =
+            browser.entries[static_cast<size_t>(browser.selected)];
+        if (pick.isDir) {
+          browser.dir = pick.path;
+          browser.selected = 0;
+          if (callbacks.onRefreshBrowser) {
+            callbacks.onRefreshBrowser(browser, "");
+          }
+          breadcrumbHover = -1;
+          dirty = true;
+        } else if (playMode) {
+          if (callbacks.onPlayFile && callbacks.onPlayFile(pick.path)) {
+            dirty = true;
+          }
+        } else {
+          if (callbacks.onRenderFile) {
+            callbacks.onRenderFile(pick.path);
+          }
+          running = false;
+        }
+      }
+      return;
+    }
+    if (key.vk == VK_SPACE || key.ch == ' ') {
+      if (playMode && decoderReady) {
+        if (callbacks.onTogglePause) callbacks.onTogglePause();
+        dirty = true;
+      }
+      return;
+    }
+    if (key.vk == 'R' || key.ch == 'r' || key.ch == 'R') {
+      if (callbacks.onToggleRadio) callbacks.onToggleRadio();
+      dirty = true;
+      return;
+    }
+    if (key.vk == VK_LEFT) {
+      if (ctrl) {
+        if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
+        dirty = true;
+      } else {
+        moveSelection(browser, layout, -1, 0, dirty);
+      }
+      return;
+    }
+    if (key.vk == VK_RIGHT) {
+      if (ctrl) {
+        if (callbacks.onSeekBy) callbacks.onSeekBy(1);
+        dirty = true;
+      } else {
+        moveSelection(browser, layout, 1, 0, dirty);
+      }
+      return;
+    }
+    if (key.vk == VK_UP) {
+      moveSelection(browser, layout, 0, -1, dirty);
+      return;
+    }
+    if (key.vk == VK_DOWN) {
+      moveSelection(browser, layout, 0, 1, dirty);
+      return;
+    }
+    if (key.vk == VK_PRIOR) {
+      pageSelection(browser, layout, -1, dirty);
+      return;
+    }
+    if (key.vk == VK_NEXT) {
+      pageSelection(browser, layout, 1, dirty);
+      return;
+    }
+  }
+
+  if (ev.type == InputEvent::Type::Mouse) {
+    const MouseEvent& mouse = ev.mouse;
+    bool leftPressed = (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+    int nextHover = breadcrumbIndexAt(breadcrumbLine, mouse.pos.X, mouse.pos.Y,
+                                      breadcrumbY);
+    if (nextHover != breadcrumbHover) {
+      breadcrumbHover = nextHover;
+      dirty = true;
+    }
+    if (mouse.eventFlags == MOUSE_WHEELED) {
+      int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
+      if (delta != 0) {
+        browser.scrollRow -= delta / WHEEL_DELTA;
+        dirty = true;
+      }
+      return;
+    }
+
+    if (leftPressed && mouse.eventFlags == 0 && breadcrumbHover >= 0) {
+      const auto& crumb =
+          breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
+      if (browser.dir != crumb.path) {
+        browser.dir = crumb.path;
+        browser.selected = 0;
+        if (callbacks.onRefreshBrowser) {
+          callbacks.onRefreshBrowser(browser, "");
+        }
+        breadcrumbHover = -1;
+        dirty = true;
+      }
+      return;
+    }
+
+    if (leftPressed &&
+        (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
+      if (progressBarWidth > 0 && mouse.pos.Y == progressBarY &&
+          progressBarX >= 0) {
+        int rel = mouse.pos.X - progressBarX;
+        if (rel >= 0 && rel < progressBarWidth) {
+          double denom = static_cast<double>(std::max(1, progressBarWidth - 1));
+          double ratio = static_cast<double>(rel) / denom;
+          if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
+          dirty = true;
+          return;
+        }
+      }
+    }
+
+    int count = static_cast<int>(browser.entries.size());
+    if (count == 0) return;
+    int x = mouse.pos.X;
+    int y = mouse.pos.Y;
+    if (y < listTop || y >= listTop + layout.rowsVisible) return;
+    int row = (y - listTop) + browser.scrollRow;
+    int col = layout.colWidth > 0 ? x / layout.colWidth : 0;
+    if (col < 0 || col >= layout.cols) return;
+    int idx = col * layout.totalRows + row;
+    if (idx < 0 || idx >= count) return;
+
+    if (mouse.eventFlags == MOUSE_MOVED && !leftPressed) {
+      if (browser.selected != idx) {
+        browser.selected = idx;
+        dirty = true;
+      }
+      return;
+    }
+
+    if (mouse.eventFlags == 0 && leftPressed) {
+      if (browser.selected != idx) {
+        browser.selected = idx;
+        dirty = true;
+      }
+      const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
+      if (pick.isDir) {
+        browser.dir = pick.path;
+        browser.selected = 0;
+        if (callbacks.onRefreshBrowser) {
+          callbacks.onRefreshBrowser(browser, "");
+        }
+        breadcrumbHover = -1;
+        dirty = true;
+      } else if (playMode) {
+        if (callbacks.onPlayFile && callbacks.onPlayFile(pick.path)) {
+          dirty = true;
+        }
+      } else {
+        if (callbacks.onRenderFile) {
+          callbacks.onRenderFile(pick.path);
+        }
+        running = false;
+      }
+    }
+  }
 }

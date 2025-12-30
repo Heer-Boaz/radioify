@@ -207,6 +207,19 @@ struct Radio1938 {
   float tuneOffsetNorm = 0.0f;
   float tuneTiltExtra = 0.22f;
 
+  float adjPhase = 0.0f;
+  float adjBeatHz = 980.0f;
+  float adjModDepth = 0.18f;
+  float adjMix = 0.020f;
+  float adjDrive = 1.55f;
+  float adjSplatterMix = 0.22f;
+  float adjEnv = 0.0f;
+  float adjAtk = 0.0f;
+  float adjRel = 0.0f;
+  float adjTarget = 0.18f;
+  float adjMinGain = 0.25f;
+  float adjMaxGain = 4.0f;
+
   float mpPhase = 0.0f;
   float mpPhase2 = 0.0f;
   float mpDelayPhase = 0.0f;
@@ -252,6 +265,8 @@ struct Radio1938 {
   Biquad ifRipple1;
   Biquad ifRipple2;
   Biquad ifTiltLp;
+  Biquad adjHp;
+  Biquad adjLp;
   Biquad mpTiltLp;
   Biquad amRateLp1;
   Biquad amRateLp2;
