@@ -64,28 +64,21 @@ float clampFloat(float v, float lo, float hi) {
   return (v < lo) ? lo : (v > hi ? hi : v);
 }
 
-constexpr int kDeltaBase = 30;
-constexpr int kDeltaMin = 10;
-constexpr float kEdgeCoeff = 0.2f;
-constexpr float kLumEmaAlpha = 0.15f;
-constexpr float kLumBias = 0.0f;
-constexpr float kLumMin = 20.0f;
-constexpr float kLumMax = 235.0f;
-constexpr float kDotRatioDark = 0.55f;
-constexpr float kDotRatioBright = 0.90f;
-constexpr float kDotRatioMinMean = 48.0f;
-constexpr float kDotRatioMaxMean = 210.0f;
-constexpr uint8_t kColorHoldThreshold = 2;
+constexpr bool kInkUseBright = true;
+constexpr float kInkGamma = 0.7f;
+constexpr float kCoverageGain = 1.35f;
+constexpr float kCoverageBias = 0.08f;
+constexpr float kCoverageZeroCutoff = 0.10f;
+constexpr float kLumLowPercent = 0.005f;
+constexpr float kLumHighPercent = 0.995f;
 constexpr uint8_t kColorLift = 0;
-constexpr uint8_t kInkMinLuma = 90;
+constexpr uint8_t kInkMinLuma = 120;
+constexpr uint8_t kBgMinLuma = 24;
 constexpr int kInkMaxScale = 1024;
 constexpr int kColorAlpha = 64;
+constexpr int kBgAlpha = 32;
+constexpr int kTemporalResetDelta = 60;
 constexpr int kColorSaturation = 320;
-
-constexpr int kMaxSobel = 1020;
-constexpr int kMaxG2 = 2 * kMaxSobel * kMaxSobel;
-constexpr int kEdgeShift = 4;
-constexpr int kDeltaLutSize = (kMaxG2 >> kEdgeShift) + 1;
 
 const std::array<uint16_t, 256> kYFromR = []() {
   std::array<uint16_t, 256> t{};
@@ -117,16 +110,27 @@ const std::array<uint16_t, 256> kYFromB = []() {
   return t;
 }();
 
-const std::array<uint8_t, kDeltaLutSize> kDeltaThrFromG2 = []() {
-  std::array<uint8_t, kDeltaLutSize> lut{};
-  for (int i = 0; i < kDeltaLutSize; ++i) {
-    int g2 = (i << kEdgeShift);
-    float edge = std::sqrt(static_cast<float>(g2));
-    float thr = static_cast<float>(kDeltaBase) - kEdgeCoeff * edge;
-    if (thr < static_cast<float>(kDeltaMin)) thr = static_cast<float>(kDeltaMin);
-    if (thr > 255.0f) thr = 255.0f;
+const std::array<uint8_t, 256> kInkLevelFromLum = []() {
+  std::array<uint8_t, 256> lut{};
+  for (int i = 0; i < 256; ++i) {
+    float norm = static_cast<float>(i) / 255.0f;
+    float x = kInkUseBright ? norm : (1.0f - norm);
+    float coverage = std::pow(x, kInkGamma);
+    coverage = coverage * kCoverageGain + kCoverageBias;
+    if (coverage < kCoverageZeroCutoff) coverage = 0.0f;
+    coverage = std::clamp(coverage, 0.0f, 1.0f);
     lut[static_cast<size_t>(i)] =
-        static_cast<uint8_t>(std::lround(thr));
+        static_cast<uint8_t>(std::lround(coverage * 255.0f));
+  }
+  return lut;
+}();
+
+const std::array<uint8_t, 8> kDitherThresholdByBit = []() {
+  std::array<uint8_t, 8> lut{};
+  const uint8_t ranks[8] = {0, 6, 3, 4, 2, 7, 5, 1};
+  for (int i = 0; i < 8; ++i) {
+    lut[static_cast<size_t>(i)] =
+        static_cast<uint8_t>(ranks[i] * 32 + 16);
   }
   return lut;
 }();
@@ -156,8 +160,8 @@ struct BrailleFastScratch {
 
   std::vector<uint32_t> prevFg;
   std::vector<uint8_t> prevFgValid;
-  float thrLumEma = 0.0f;
-  bool thrLumInit = false;
+  std::vector<uint32_t> prevBg;
+  std::vector<uint8_t> prevBgValid;
 
   void ensure(int w, int h, int maxArtWidthIn, int maxHeightIn) {
     if (w <= 0 || h <= 0) return;
@@ -200,8 +204,8 @@ struct BrailleFastScratch {
     lumaPad.resize(static_cast<size_t>(padStride) * (scaledH + 2));
     prevFg.assign(static_cast<size_t>(outW) * outH, 0);
     prevFgValid.assign(static_cast<size_t>(outW) * outH, 0);
-    thrLumEma = 0.0f;
-    thrLumInit = false;
+    prevBg.assign(static_cast<size_t>(outW) * outH, 0);
+    prevBgValid.assign(static_cast<size_t>(outW) * outH, 0);
   }
 };
 
@@ -368,45 +372,36 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
                   static_cast<size_t>(scaledH) * padStride,
               static_cast<size_t>(padStride));
 
-  float thrLum = scratch.thrLumInit ? scratch.thrLumEma : kLumMin;
+  int lumLow = 0;
+  int lumHigh = 255;
   if (lumCount > 0) {
-    uint64_t sumLum = 0;
-    for (int i = 0; i < 256; ++i) {
-      sumLum += static_cast<uint64_t>(i) * lumHist[i];
-    }
-    float meanLum =
-        static_cast<float>(sumLum) / static_cast<float>(lumCount);
-    float t = 0.0f;
-    if (kDotRatioMaxMean > kDotRatioMinMean) {
-      t = (meanLum - kDotRatioMinMean) /
-          (kDotRatioMaxMean - kDotRatioMinMean);
-    }
-    t = std::clamp(t, 0.0f, 1.0f);
-    float dotRatio =
-        kDotRatioDark + (kDotRatioBright - kDotRatioDark) * t;
-    uint64_t target = static_cast<uint64_t>(
-        std::max(1.0, std::round(static_cast<double>(lumCount) * dotRatio)));
+    uint64_t lowTarget = static_cast<uint64_t>(
+        std::max(1.0, std::round(static_cast<double>(lumCount) *
+                                 kLumLowPercent)));
+    uint64_t highTarget = static_cast<uint64_t>(
+        std::max(1.0, std::round(static_cast<double>(lumCount) *
+                                 kLumHighPercent)));
     uint64_t accum = 0;
-    int thrFromHist = 255;
-    for (int i = 255; i >= 0; --i) {
+    for (int i = 0; i < 256; ++i) {
       accum += lumHist[i];
-      if (accum >= target) {
-        thrFromHist = i;
+      if (accum >= lowTarget) {
+        lumLow = i;
         break;
       }
     }
-    thrLum = std::clamp(static_cast<float>(thrFromHist) - kLumBias, kLumMin,
-                        kLumMax);
-    if (!scratch.thrLumInit) {
-      scratch.thrLumEma = thrLum;
-      scratch.thrLumInit = true;
-    } else {
-      scratch.thrLumEma += kLumEmaAlpha * (thrLum - scratch.thrLumEma);
-      thrLum = scratch.thrLumEma;
+    accum = 0;
+    for (int i = 0; i < 256; ++i) {
+      accum += lumHist[i];
+      if (accum >= highTarget) {
+        lumHigh = i;
+        break;
+      }
+    }
+    if (lumHigh <= lumLow) {
+      lumHigh = std::min(255, lumLow + 1);
     }
   }
-  int thrLumInt = static_cast<int>(
-      std::lround(std::clamp(scratch.thrLumEma, 0.0f, 255.0f)));
+  const int lumRange = std::max(1, lumHigh - lumLow);
 
   const int brailleMap[2][4] = {{0, 1, 2, 6}, {3, 4, 5, 7}};
 
@@ -415,11 +410,17 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
     for (int cx = 0; cx < outW; ++cx) {
       int baseX = cx * 2;
       int bitmask = 0;
-
-      int dotCount = 0;
-      int sumR = 0;
-      int sumG = 0;
-      int sumB = 0;
+      int sumAllR = 0;
+      int sumAllG = 0;
+      int sumAllB = 0;
+      int colorCount = 0;
+      uint8_t rVals[8];
+      uint8_t gVals[8];
+      uint8_t bVals[8];
+      uint8_t lumVals[8];
+      uint8_t bitIds[8];
+      uint8_t validVals[8];
+      int dotIndex = 0;
 
       for (int dy = 0; dy < 4; ++dy) {
         int y = baseY + dy;
@@ -435,45 +436,42 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
           uint8_t r = static_cast<uint8_t>(px & 0xFF);
           uint8_t g = static_cast<uint8_t>((px >> 8) & 0xFF);
           uint8_t b = static_cast<uint8_t>((px >> 16) & 0xFF);
+          uint8_t lum = lumRow[dx];
+          uint8_t a = 255;
           if constexpr (!AssumeOpaque) {
-            uint8_t a = static_cast<uint8_t>((px >> 24) & 0xFF);
+            a = static_cast<uint8_t>((px >> 24) & 0xFF);
+          }
+          rVals[dotIndex] = r;
+          gVals[dotIndex] = g;
+          bVals[dotIndex] = b;
+          lumVals[dotIndex] = lum;
+          bitIds[dotIndex] = static_cast<uint8_t>(brailleMap[dx][dy]);
+          validVals[dotIndex] = static_cast<uint8_t>(a != 0);
+
+          if constexpr (!AssumeOpaque) {
             if (a == 0) {
+              ++dotIndex;
               continue;
             }
           }
 
-          uint8_t lum = lumRow[dx];
+          sumAllR += r;
+          sumAllG += g;
+          sumAllB += b;
+          ++colorCount;
+          ++dotIndex;
+        }
+      }
 
-          const uint8_t* p = lumRow + dx;
-          int tl = p[-padStride - 1];
-          int tc = p[-padStride];
-          int tr = p[-padStride + 1];
-          int ml = p[-1];
-          int mr = p[1];
-          int bl = p[padStride - 1];
-          int bc = p[padStride];
-          int br = p[padStride + 1];
-
-          int gx = (tr + (mr << 1) + br) - (tl + (ml << 1) + bl);
-          int gy = (bl + (bc << 1) + br) - (tl + (tc << 1) + tr);
-          int g2 = gx * gx + gy * gy;
-
-          uint8_t deltaThr =
-              kDeltaThrFromG2[static_cast<size_t>(g2 >> kEdgeShift)];
-
-          int edgeBias = static_cast<int>(kDeltaBase) -
-                         static_cast<int>(deltaThr);
-          if (edgeBias < 0) edgeBias = 0;
-          int threshold = thrLumInt - edgeBias;
-          if (threshold < 0) threshold = 0;
-          if (threshold > 255) threshold = 255;
-          if (lum > static_cast<uint8_t>(threshold)) {
-            bitmask |= (1 << brailleMap[dx][dy]);
-            ++dotCount;
-            sumR += r;
-            sumG += g;
-            sumB += b;
-          }
+      for (int i = 0; i < 8; ++i) {
+        int dotNorm = (static_cast<int>(lumVals[i]) - lumLow) * 255 / lumRange;
+        if (dotNorm < 0) dotNorm = 0;
+        if (dotNorm > 255) dotNorm = 255;
+        uint8_t level = kInkLevelFromLum[static_cast<size_t>(dotNorm)];
+        uint8_t threshold =
+            kDitherThresholdByBit[static_cast<size_t>(bitIds[i])];
+        if (level > threshold) {
+          bitmask |= (1 << bitIds[i]);
         }
       }
 
@@ -481,10 +479,42 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
       uint8_t outR = 0;
       uint8_t outG = 0;
       uint8_t outB = 0;
-      if (dotCount > 0) {
-        uint8_t curR = static_cast<uint8_t>(sumR / dotCount);
-        uint8_t curG = static_cast<uint8_t>(sumG / dotCount);
-        uint8_t curB = static_cast<uint8_t>(sumB / dotCount);
+      uint8_t outBgR = 0;
+      uint8_t outBgG = 0;
+      uint8_t outBgB = 0;
+      bool hasBg = false;
+      int sumInkR = 0;
+      int sumInkG = 0;
+      int sumInkB = 0;
+      int inkCount = 0;
+      int sumBgR = 0;
+      int sumBgG = 0;
+      int sumBgB = 0;
+      int bgCount = 0;
+      for (int i = 0; i < 8; ++i) {
+        if (!validVals[i]) continue;
+        if (bitmask & (1 << bitIds[i])) {
+          sumInkR += rVals[i];
+          sumInkG += gVals[i];
+          sumInkB += bVals[i];
+          ++inkCount;
+        } else {
+          sumBgR += rVals[i];
+          sumBgG += gVals[i];
+          sumBgB += bVals[i];
+          ++bgCount;
+        }
+      }
+      if (colorCount > 0) {
+        uint8_t curR = static_cast<uint8_t>(
+            (inkCount > 0 ? sumInkR : sumAllR) /
+            (inkCount > 0 ? inkCount : colorCount));
+        uint8_t curG = static_cast<uint8_t>(
+            (inkCount > 0 ? sumInkG : sumAllG) /
+            (inkCount > 0 ? inkCount : colorCount));
+        uint8_t curB = static_cast<uint8_t>(
+            (inkCount > 0 ? sumInkB : sumAllB) /
+            (inkCount > 0 ? inkCount : colorCount));
         curR = static_cast<uint8_t>(std::max<int>(curR, kColorLift));
         curG = static_cast<uint8_t>(std::max<int>(curG, kColorLift));
         curB = static_cast<uint8_t>(std::max<int>(curB, kColorLift));
@@ -524,21 +554,23 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
             255));
 
         if (cellIndex < scratch.prevFg.size() &&
-            scratch.prevFgValid[cellIndex] &&
-            dotCount <= kColorHoldThreshold) {
-          uint32_t p = scratch.prevFg[cellIndex];
-          outR = static_cast<uint8_t>((p >> 16) & 0xFF);
-          outG = static_cast<uint8_t>((p >> 8) & 0xFF);
-          outB = static_cast<uint8_t>(p & 0xFF);
-        } else if (cellIndex < scratch.prevFg.size() &&
-                   scratch.prevFgValid[cellIndex]) {
+            scratch.prevFgValid[cellIndex]) {
           uint32_t p = scratch.prevFg[cellIndex];
           int pr = static_cast<int>((p >> 16) & 0xFF);
           int pg = static_cast<int>((p >> 8) & 0xFF);
           int pb = static_cast<int>(p & 0xFF);
-          pr = pr + (((int)curR - pr) * kColorAlpha >> 8);
-          pg = pg + (((int)curG - pg) * kColorAlpha >> 8);
-          pb = pb + (((int)curB - pb) * kColorAlpha >> 8);
+          int dsum = std::abs(static_cast<int>(curR) - pr) +
+                     std::abs(static_cast<int>(curG) - pg) +
+                     std::abs(static_cast<int>(curB) - pb);
+          if (dsum >= kTemporalResetDelta) {
+            pr = curR;
+            pg = curG;
+            pb = curB;
+          } else {
+            pr = pr + (((int)curR - pr) * kColorAlpha >> 8);
+            pg = pg + (((int)curG - pg) * kColorAlpha >> 8);
+            pb = pb + (((int)curB - pb) * kColorAlpha >> 8);
+          }
           outR = static_cast<uint8_t>(pr);
           outG = static_cast<uint8_t>(pg);
           outB = static_cast<uint8_t>(pb);
@@ -558,6 +590,71 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
             scratch.prevFgValid[cellIndex] = 1;
           }
         }
+
+        uint8_t bgR = static_cast<uint8_t>(
+            (bgCount > 0 ? sumBgR : sumAllR) /
+            (bgCount > 0 ? bgCount : colorCount));
+        uint8_t bgG = static_cast<uint8_t>(
+            (bgCount > 0 ? sumBgG : sumAllG) /
+            (bgCount > 0 ? bgCount : colorCount));
+        uint8_t bgB = static_cast<uint8_t>(
+            (bgCount > 0 ? sumBgB : sumAllB) /
+            (bgCount > 0 ? bgCount : colorCount));
+        int bgY = (static_cast<int>(bgR) * 54 +
+                   static_cast<int>(bgG) * 183 +
+                   static_cast<int>(bgB) * 19 + 128) >>
+                  8;
+        if (bgY < kBgMinLuma) {
+          if (bgY <= 0) {
+            bgR = kBgMinLuma;
+            bgG = kBgMinLuma;
+            bgB = kBgMinLuma;
+          } else {
+            int scale = (static_cast<int>(kBgMinLuma) * 256) / bgY;
+            bgR = static_cast<uint8_t>(
+                std::min(255, (static_cast<int>(bgR) * scale + 128) >> 8));
+            bgG = static_cast<uint8_t>(
+                std::min(255, (static_cast<int>(bgG) * scale + 128) >> 8));
+            bgB = static_cast<uint8_t>(
+                std::min(255, (static_cast<int>(bgB) * scale + 128) >> 8));
+          }
+        }
+        if (cellIndex < scratch.prevBg.size() &&
+            scratch.prevBgValid[cellIndex]) {
+          uint32_t p = scratch.prevBg[cellIndex];
+          int pr = static_cast<int>((p >> 16) & 0xFF);
+          int pg = static_cast<int>((p >> 8) & 0xFF);
+          int pb = static_cast<int>(p & 0xFF);
+          int dsum = std::abs(static_cast<int>(bgR) - pr) +
+                     std::abs(static_cast<int>(bgG) - pg) +
+                     std::abs(static_cast<int>(bgB) - pb);
+          if (dsum >= kTemporalResetDelta) {
+            pr = bgR;
+            pg = bgG;
+            pb = bgB;
+          } else {
+            pr = pr + (((int)bgR - pr) * kBgAlpha >> 8);
+            pg = pg + (((int)bgG - pg) * kBgAlpha >> 8);
+            pb = pb + (((int)bgB - pb) * kBgAlpha >> 8);
+          }
+          outBgR = static_cast<uint8_t>(pr);
+          outBgG = static_cast<uint8_t>(pg);
+          outBgB = static_cast<uint8_t>(pb);
+          scratch.prevBg[cellIndex] =
+              (static_cast<uint32_t>(pr) << 16) |
+              (static_cast<uint32_t>(pg) << 8) |
+              static_cast<uint32_t>(pb);
+        } else if (cellIndex < scratch.prevBg.size()) {
+          outBgR = bgR;
+          outBgG = bgG;
+          outBgB = bgB;
+          scratch.prevBg[cellIndex] =
+              (static_cast<uint32_t>(bgR) << 16) |
+              (static_cast<uint32_t>(bgG) << 8) |
+              static_cast<uint32_t>(bgB);
+          scratch.prevBgValid[cellIndex] = 1;
+        }
+        hasBg = true;
       } else if (cellIndex < scratch.prevFg.size() &&
                  scratch.prevFgValid[cellIndex]) {
         uint32_t p = scratch.prevFg[cellIndex];
@@ -565,10 +662,22 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
         outG = static_cast<uint8_t>((p >> 8) & 0xFF);
         outB = static_cast<uint8_t>(p & 0xFF);
       }
+      if (colorCount == 0) {
+        if (cellIndex < scratch.prevFgValid.size()) {
+          scratch.prevFgValid[cellIndex] = 0;
+        }
+        if (cellIndex < scratch.prevBgValid.size()) {
+          scratch.prevBgValid[cellIndex] = 0;
+        }
+      }
 
       AsciiArt::AsciiCell cell{};
       cell.ch = static_cast<wchar_t>(kBrailleBase + bitmask);
       cell.fg = Color{outR, outG, outB};
+      if (hasBg) {
+        cell.bg = Color{outBgR, outBgG, outBgB};
+        cell.hasBg = true;
+      }
 
       out.cells[cellIndex] = cell;
     }
