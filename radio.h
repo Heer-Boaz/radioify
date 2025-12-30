@@ -21,33 +21,6 @@ struct Biquad {
   void setPeaking(float sampleRate, float freq, float q, float gainDb);
 };
 
-struct RadioDSP {
-  float sampleRate = 48000.0f;
-  int channels = 1;
-  float noiseWeight = 0.015f;
-  float presenceDb = 2.5f;
-  float lpHz = 5000.0f;
-  float hpHz = 120.0f;
-
-  std::vector<Biquad> hp;
-  std::vector<Biquad> lp;
-  std::vector<Biquad> peq;
-
-  float env = 0.0f;
-  float attack = 0.03f;
-  float release = 0.40f;
-  float thresholdDb = -18.0f;
-  float ratio = 4.0f;
-  float limit = 0.98f;
-
-  std::mt19937 rng{0x2a4f5a1u};
-  std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
-
-  void init(int ch, float sr, float bw, float presence);
-  float computeGainDb(float envDb);
-  void process(float* samples, uint32_t frames);
-};
-
 struct Compressor {
   float fs = 48000.0f;
   float thresholdDb = -24.0f;

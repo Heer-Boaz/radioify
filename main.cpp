@@ -4,9 +4,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -70,6 +72,49 @@ static std::string toUtf8String(const std::filesystem::path& p) {
   return p.string();
 #endif
 }
+
+struct PerfLog {
+  std::ofstream file;
+  std::string buffer;
+  bool enabled = false;
+
+  bool open(const std::filesystem::path& path, std::string* error) {
+    file.open(path, std::ios::out | std::ios::app);
+    if (!file.is_open()) {
+      if (error) {
+        *error = "Failed to open timing log file: " + toUtf8String(path);
+      }
+      return false;
+    }
+    enabled = true;
+    return true;
+  }
+
+  void appendf(const char* fmt, ...) {
+    if (!enabled) return;
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    int written = std::vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (written <= 0) return;
+    if (written >= static_cast<int>(sizeof(buf))) {
+      written = static_cast<int>(sizeof(buf)) - 1;
+    }
+    buffer.append(buf, buf + written);
+    buffer.push_back('\n');
+    if (buffer.size() >= 8192) flush();
+  }
+
+  void flush() {
+    if (!enabled || buffer.empty()) return;
+    file << buffer;
+    file.flush();
+    buffer.clear();
+  }
+
+  ~PerfLog() { flush(); }
+};
 
 static std::string formatTime(double seconds) {
   if (!std::isfinite(seconds) || seconds < 0) return "--:--";
@@ -531,7 +576,17 @@ static bool showAsciiVideo(
     return showError(error, "");
   }
 
+  PerfLog perfLog;
+  std::string logError;
+  std::filesystem::path logPath =
+      std::filesystem::current_path() / "radioify_timing.log";
+  if (!perfLog.open(logPath, &logError)) {
+    return showError("Failed to open timing log file.", logError);
+  }
+  perfLog.appendf("video_start file=%s", toUtf8String(file.filename()).c_str());
+
   bool audioOk = hooks.startAudio ? hooks.startAudio(file) : false;
+  perfLog.appendf("audio_start ok=%d", audioOk ? 1 : 0);
   bool running = true;
   bool videoEnded = false;
   bool redraw = true;
@@ -551,6 +606,9 @@ static bool showAsciiVideo(
     if (hooks.stopAudio) hooks.stopAudio();
     return showError("No video frames found.", "");
   }
+  perfLog.appendf("first_frame ts100ns=%lld size=%dx%d",
+                  static_cast<long long>(frame.timestamp100ns), frame.width,
+                  frame.height);
 
   const double ticksToSeconds = 1.0 / 10000000.0;
   const double secondsToTicks = 10000000.0;
@@ -820,14 +878,20 @@ static bool showAsciiVideo(
 
     if (!videoEnded && !paused) {
       if (syncSec + leadSlack >= frameSec) {
+        double displayedSec = frameSec;
+        auto renderStart = std::chrono::steady_clock::now();
         renderScreen(true);
+        auto renderEnd = std::chrono::steady_clock::now();
         if (renderFailed) {
           running = false;
           break;
         }
         redraw = false;
         lastFrameSec = frameSec;
-        if (decoder.readFrame(nextFrame)) {
+        auto decodeStart = std::chrono::steady_clock::now();
+        bool decoded = decoder.readFrame(nextFrame);
+        int dropped = 0;
+        if (decoded) {
           frame = std::move(nextFrame);
           frameSec =
               static_cast<double>(frame.timestamp100ns - firstTs) *
@@ -841,8 +905,25 @@ static bool showAsciiVideo(
             frameSec =
                 static_cast<double>(frame.timestamp100ns - firstTs) *
                 ticksToSeconds;
+            ++dropped;
           }
+        }
+        auto decodeEnd = std::chrono::steady_clock::now();
+        double renderMs =
+            std::chrono::duration<double, std::milli>(renderEnd - renderStart)
+                .count();
+        double decodeMs =
+            std::chrono::duration<double, std::milli>(decodeEnd - decodeStart)
+                .count();
+        double lagSec = syncSec - displayedSec;
+        if (decoded) {
+          perfLog.appendf(
+              "frame t=%.3f sync=%.3f lag=%.3f render_ms=%.2f decode_ms=%.2f dropped=%d",
+              displayedSec, syncSec, lagSec, renderMs, decodeMs, dropped);
         } else {
+          perfLog.appendf(
+              "frame t=%.3f sync=%.3f lag=%.3f render_ms=%.2f decode_ms=%.2f dropped=0 eof=1",
+              displayedSec, syncSec, lagSec, renderMs, decodeMs);
           videoEnded = true;
         }
       }
@@ -908,7 +989,6 @@ struct AudioState {
   ma_decoder decoder{};
   M4aDecoder m4a{};
   ma_device device{};
-  RadioDSP dsp{};
   Radio1938 radio1938{};
   std::atomic<bool> paused{false};
   std::atomic<bool> finished{false};
@@ -993,8 +1073,7 @@ static void dataCallback(ma_device* device, void* output, const void*,
   state->framesPlayed.fetch_add(framesRead);
 }
 
-static void renderToFile(const Options& o, const RadioDSP& dspTemplate,
-                         const Radio1938& radio1938Template,
+static void renderToFile(const Options& o, const Radio1938& radio1938Template,
                          bool useRadio1938) {
   const uint32_t sampleRate = 48000;
   const uint32_t channels = useRadio1938 ? 1 : (o.mono ? 1 : 2);
@@ -1028,9 +1107,6 @@ static void renderToFile(const Options& o, const RadioDSP& dspTemplate,
     die("Failed to open output for encoding.");
   }
 
-  RadioDSP dsp = dspTemplate;
-  dsp.init(channels, static_cast<float>(sampleRate), static_cast<float>(o.bwHz),
-           dspTemplate.presenceDb);
   Radio1938 radio1938 = radio1938Template;
   radio1938.init(channels, static_cast<float>(sampleRate),
                  static_cast<float>(o.bwHz), static_cast<float>(o.noise));
@@ -1082,15 +1158,11 @@ int main(int argc, char** argv) {
   Options o;
   o.input = parseInputPath(argc, argv);
 
-  float presenceDb = 2.5f;
   float lpHz = static_cast<float>(o.bwHz);
   const uint32_t sampleRate = 48000;
   const uint32_t baseChannels = o.mono ? 1 : 2;
   uint32_t channels = baseChannels;
 
-  RadioDSP dspTemplate;
-  dspTemplate.noiseWeight = static_cast<float>(o.noise);
-  dspTemplate.init(channels, static_cast<float>(sampleRate), lpHz, presenceDb);
   Radio1938 radio1938Template;
   radio1938Template.init(channels, static_cast<float>(sampleRate), lpHz,
                          static_cast<float>(o.noise));
@@ -1129,7 +1201,6 @@ int main(int argc, char** argv) {
   state.channels = channels;
   state.sampleRate = sampleRate;
   state.dry = o.dry;
-  state.dsp = dspTemplate;
   state.radio1938 = radio1938Template;
   state.useRadio1938.store(true);
 
@@ -1230,8 +1301,6 @@ int main(int argc, char** argv) {
     state.paused.store(false);
 
     state.channels = channels;
-    state.dsp = dspTemplate;
-    state.dsp.init(channels, static_cast<float>(sampleRate), lpHz, presenceDb);
     state.radio1938 = radio1938Template;
     state.radio1938.init(channels, static_cast<float>(sampleRate), lpHz,
                          static_cast<float>(o.noise));
@@ -1289,11 +1358,8 @@ int main(int argc, char** argv) {
 
     channels = newChannels;
     state.channels = channels;
-    dspTemplate.init(channels, static_cast<float>(sampleRate), lpHz,
-                     presenceDb);
     radio1938Template.init(channels, static_cast<float>(sampleRate), lpHz,
                            static_cast<float>(o.noise));
-    state.dsp = dspTemplate;
     state.radio1938 = radio1938Template;
 
     if (hadTrack) {
@@ -1337,8 +1403,7 @@ int main(int argc, char** argv) {
     logLine(std::string("  Input:  ") + renderOpt.input);
     logLine(std::string("  Output: ") + renderOpt.output);
     logLine("Rendering output...");
-    renderToFile(renderOpt, dspTemplate, radio1938Template,
-                 state.useRadio1938.load());
+    renderToFile(renderOpt, radio1938Template, state.useRadio1938.load());
     logLine("Done.");
   };
 
