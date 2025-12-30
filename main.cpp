@@ -357,12 +357,8 @@ static void dataCallback(ma_device* device, void* output, const void*,
     }
   }
 
-  if (!state->dry && framesRead > 0) {
-    if (state->useRadio1938.load()) {
-      state->radio1938.process(out, static_cast<uint32_t>(framesRead));
-    } else {
-      state->dsp.process(out, static_cast<uint32_t>(framesRead));
-    }
+  if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
+    state->radio1938.process(out, static_cast<uint32_t>(framesRead));
   }
   state->framesPlayed.fetch_add(framesRead);
 }
@@ -429,12 +425,8 @@ static void renderToFile(const Options& o, const RadioDSP& dspTemplate,
       if (framesRead == 0 || res == MA_AT_END) break;
     }
 
-    if (!o.dry) {
-      if (useRadio1938) {
-        radio1938.process(buffer.data(), static_cast<uint32_t>(framesRead));
-      } else {
-        dsp.process(buffer.data(), static_cast<uint32_t>(framesRead));
-      }
+    if (!o.dry && useRadio1938) {
+      radio1938.process(buffer.data(), static_cast<uint32_t>(framesRead));
     }
 
     for (size_t i = 0; i < static_cast<size_t>(framesRead * channels); ++i) {
@@ -916,7 +908,7 @@ int main(int argc, char** argv) {
             kStyleNormal);
       }
       std::string filterLabel =
-          state.useRadio1938.load() ? "1938 radio" : "classic";
+          state.useRadio1938.load() ? "1938 radio" : "dry";
       screen.writeText(0, 3,
                        fitLine(std::string("  Filter: ") + filterLabel, width),
                        kStyleDim);
