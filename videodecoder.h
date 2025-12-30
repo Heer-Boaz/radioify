@@ -19,9 +19,11 @@ class VideoDecoder {
   bool init(const std::filesystem::path& path, std::string* error);
   void uninit();
   bool readFrame(VideoFrame& out);
+  bool seekToTimestamp100ns(int64_t timestamp100ns);
   bool atEnd() const;
   int width() const;
   int height() const;
+  int64_t duration100ns() const;
 
  private:
   struct Impl;

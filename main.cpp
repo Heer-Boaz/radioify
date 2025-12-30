@@ -11,6 +11,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "asciiart.h"
@@ -157,6 +158,18 @@ static std::string fitLine(const std::string& s, int width) {
 struct BufferCell {
   wchar_t ch = L' ';
   Style style{};
+};
+
+struct VideoPlaybackHooks {
+  std::function<bool(const std::filesystem::path&)> startAudio;
+  std::function<void()> stopAudio;
+  std::function<double()> getAudioTimeSec;
+  std::function<double()> getAudioTotalSec;
+  std::function<bool()> isAudioPaused;
+  std::function<bool()> isAudioFinished;
+  std::function<void()> togglePause;
+  std::function<void(int)> seekBy;
+  std::function<void()> toggleRadio;
 };
 
 static int quantizeCoverage(double value) {
@@ -426,8 +439,11 @@ static bool showAsciiVideo(
     const Style& baseStyle,
     const Style& accentStyle,
     const Style& dimStyle,
-    const std::function<bool(const std::filesystem::path&)>& startAudio,
-    const std::function<void()>& stopAudio) {
+    const Style& progressEmptyStyle,
+    const Style& progressFrameStyle,
+    const Color& progressStart,
+    const Color& progressEnd,
+    const VideoPlaybackHooks& hooks) {
   VideoDecoder decoder;
   std::string error;
   auto showError = [&](const std::string& message,
@@ -458,38 +474,115 @@ static bool showAsciiVideo(
     }
   };
 
+  auto showAudioFallbackPrompt = [&](const std::string& message,
+                                     const std::string& detail) -> bool {
+    InputEvent ev{};
+    while (true) {
+      screen.updateSize();
+      int width = std::max(20, screen.width());
+      screen.clear(baseStyle);
+      std::string title = "Video: " + toUtf8String(file.filename());
+      screen.writeText(0, 0, fitLine(title, width), accentStyle);
+      screen.writeText(0, 2, fitLine(message, width), dimStyle);
+      if (!detail.empty()) {
+        screen.writeText(0, 3, fitLine(detail, width), dimStyle);
+      }
+      screen.writeText(0, 5,
+                       fitLine("Enter: play audio only  Esc/Q: return", width),
+                       dimStyle);
+      screen.draw();
+      while (input.poll(ev)) {
+        if (ev.type == InputEvent::Type::Key) {
+          if (ev.key.vk == VK_RETURN) return true;
+          if (ev.key.vk == VK_ESCAPE || ev.key.vk == 'Q' || ev.key.ch == 'q' ||
+              ev.key.ch == 'Q') {
+            return false;
+          }
+        }
+        if (ev.type == InputEvent::Type::Resize) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  };
+
   if (!decoder.init(file, &error)) {
     if (error == "No video stream found.") {
-      return false;
+      bool playAudio = showAudioFallbackPrompt(
+          "No video stream found.",
+          "This file can be played as audio only.");
+      return playAudio ? false : true;
     }
     return showError("Failed to open video.", error);
   }
 
-  bool audioOk = startAudio ? startAudio(file) : false;
+  bool audioOk = hooks.startAudio ? hooks.startAudio(file) : false;
   bool running = true;
+  bool videoEnded = false;
+  bool redraw = true;
   AsciiArt art;
   VideoFrame frame;
-  VideoFrame lastFrame;
-  bool hasLastFrame = false;
+  VideoFrame nextFrame;
+  int cachedWidth = -1;
+  int cachedMaxHeight = -1;
 
-  auto drawFrame = [&](const VideoFrame& videoFrame) {
+  if (!decoder.readFrame(frame)) {
+    if (hooks.stopAudio) hooks.stopAudio();
+    return showError("No video frames found.", "");
+  }
+
+  const double ticksToSeconds = 1.0 / 10000000.0;
+  const double secondsToTicks = 10000000.0;
+  int64_t firstTs = frame.timestamp100ns;
+  double frameSec =
+      static_cast<double>(frame.timestamp100ns - firstTs) * ticksToSeconds;
+  double lastFrameSec = frameSec;
+  auto startTime = std::chrono::steady_clock::now();
+  auto lastUiUpdate = startTime;
+
+  auto totalDurationSec = [&]() -> double {
+    double total = decoder.duration100ns() > 0
+                       ? decoder.duration100ns() * ticksToSeconds
+                       : -1.0;
+    if (total <= 0.0 && audioOk && hooks.getAudioTotalSec) {
+      total = hooks.getAudioTotalSec();
+    }
+    return total;
+  };
+
+  auto currentTimeSec = [&]() -> double {
+    if (audioOk && hooks.getAudioTimeSec) {
+      return hooks.getAudioTimeSec();
+    }
+    return lastFrameSec;
+  };
+
+  auto renderScreen = [&](bool refreshArt) {
     screen.updateSize();
     int width = std::max(20, screen.width());
     int height = std::max(10, screen.height());
     const int headerLines = 2;
-    const int footerLines = 1;
+    const int footerLines = 2;
     int artTop = headerLines;
     int maxHeight = std::max(1, height - headerLines - footerLines);
 
-    renderAsciiArtFromRgba(videoFrame.rgba.data(), videoFrame.width,
-                           videoFrame.height, width, maxHeight, art);
+    bool sizeChanged =
+        (width != cachedWidth || maxHeight != cachedMaxHeight);
+    if (refreshArt || sizeChanged) {
+      renderAsciiArtFromRgba(frame.rgba.data(), frame.width, frame.height,
+                             width, maxHeight, art);
+      cachedWidth = width;
+      cachedMaxHeight = maxHeight;
+    }
 
     screen.clear(baseStyle);
     std::string title = "Video: " + toUtf8String(file.filename());
     screen.writeText(0, 0, fitLine(title, width), accentStyle);
-    std::string subtitle =
-        audioOk ? "Press any key to return" : "Audio unavailable";
-    screen.writeText(0, 1, fitLine(subtitle, width), dimStyle);
+    std::string subtitle = audioOk ? "" : "Audio unavailable";
+    if (!subtitle.empty()) {
+      screen.writeText(0, 1, fitLine(subtitle, width), dimStyle);
+    }
 
     int artWidth = std::min(art.width, width);
     int artHeight = std::min(art.height, maxHeight);
@@ -503,45 +596,177 @@ static bool showAsciiVideo(
         screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
       }
     }
+
+    int footerLine = artTop + maxHeight;
+    std::string nowLabel = " " + toUtf8String(file.filename());
+    screen.writeText(0, footerLine++, fitLine(nowLabel, width), accentStyle);
+
+    double currentSec = currentTimeSec();
+    double totalSec = totalDurationSec();
+    if (totalSec > 0.0) {
+      currentSec = std::clamp(currentSec, 0.0, totalSec);
+    }
+    std::string status;
+    if (audioOk && hooks.isAudioFinished && hooks.isAudioFinished()) {
+      status = "\xE2\x96\xA0";  // ended icon
+    } else if (audioOk && hooks.isAudioPaused && hooks.isAudioPaused()) {
+      status = "\xE2\x8F\xB8";  // paused icon
+    } else {
+      status = "\xE2\x96\xB6";  // playing icon
+    }
+    std::string suffix =
+        formatTime(currentSec) + " / " + formatTime(totalSec) + " " + status;
+    int suffixWidth = utf8CodepointCount(suffix);
+    int barWidth = width - suffixWidth - 3;
+    if (barWidth < 10) {
+      suffix = formatTime(currentSec) + "/" + formatTime(totalSec);
+      suffixWidth = utf8CodepointCount(suffix);
+      barWidth = width - suffixWidth - 3;
+    }
+    if (barWidth < 10) {
+      suffix = formatTime(currentSec);
+      suffixWidth = utf8CodepointCount(suffix);
+      barWidth = width - suffixWidth - 3;
+    }
+    if (barWidth < 5) {
+      suffix.clear();
+      barWidth = width - 2;
+    }
+    int maxBar = std::max(5, width - 2);
+    barWidth = std::clamp(barWidth, 5, maxBar);
+    double ratio = 0.0;
+    if (totalSec > 0.0 && std::isfinite(totalSec)) {
+      ratio = std::clamp(currentSec / totalSec, 0.0, 1.0);
+    }
+    screen.writeChar(0, footerLine, L'|', progressFrameStyle);
+    auto barCells = renderProgressBarCells(ratio, barWidth,
+                                           progressEmptyStyle, progressStart,
+                                           progressEnd);
+    for (int i = 0; i < barWidth; ++i) {
+      const auto& cell = barCells[static_cast<size_t>(i)];
+      screen.writeChar(1 + i, footerLine, cell.ch, cell.style);
+    }
+    screen.writeChar(1 + barWidth, footerLine, L'|', progressFrameStyle);
+    if (!suffix.empty()) {
+      screen.writeText(2 + barWidth, footerLine, " " + suffix, baseStyle);
+    }
+
     screen.draw();
   };
 
-  if (!decoder.readFrame(frame)) {
-    stopAudio();
-    return showError("No video frames found.", "");
-  }
-  int64_t firstTs = frame.timestamp100ns;
-  auto startTime = std::chrono::steady_clock::now();
+  renderScreen(true);
 
   while (running) {
-    double targetSec =
-        static_cast<double>(frame.timestamp100ns - firstTs) / 10000000.0;
-    while (running) {
-      InputEvent ev{};
-      while (input.poll(ev)) {
-        if (ev.type == InputEvent::Type::Resize && hasLastFrame) {
-          drawFrame(lastFrame);
-        } else if (ev.type == InputEvent::Type::Key) {
+    InputEvent ev{};
+    while (input.poll(ev)) {
+      if (ev.type == InputEvent::Type::Resize) {
+        redraw = true;
+        continue;
+      }
+      if (ev.type == InputEvent::Type::Key) {
+        const KeyEvent& key = ev.key;
+        const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+        bool ctrl = (key.control & ctrlMask) != 0;
+        if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
           running = false;
           break;
         }
+        if (key.vk == VK_ESCAPE || key.vk == 'Q' || key.ch == 'q' ||
+            key.ch == 'Q') {
+          running = false;
+          break;
+        }
+        if (key.vk == VK_SPACE || key.ch == ' ') {
+          if (hooks.togglePause) hooks.togglePause();
+          redraw = true;
+        } else if (key.vk == 'R' || key.ch == 'r' || key.ch == 'R') {
+          if (hooks.toggleRadio) hooks.toggleRadio();
+          redraw = true;
+        } else if (ctrl && (key.vk == VK_LEFT || key.vk == VK_RIGHT)) {
+          int dir = (key.vk == VK_LEFT) ? -1 : 1;
+          double currentSec = currentTimeSec();
+          double totalSec = totalDurationSec();
+          double targetSec = currentSec + dir * 5.0;
+          if (totalSec > 0.0) {
+            targetSec = std::clamp(targetSec, 0.0, totalSec);
+          } else if (targetSec < 0.0) {
+            targetSec = 0.0;
+          }
+          if (hooks.seekBy) hooks.seekBy(dir);
+          int64_t targetTs =
+              firstTs + static_cast<int64_t>(targetSec * secondsToTicks);
+          if (decoder.seekToTimestamp100ns(targetTs) &&
+              decoder.readFrame(frame)) {
+            frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
+                       ticksToSeconds;
+            lastFrameSec = frameSec;
+            videoEnded = false;
+            redraw = true;
+          }
+          if (!audioOk) {
+            startTime = std::chrono::steady_clock::now() -
+                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                            std::chrono::duration<double>(targetSec));
+          }
+        }
       }
-      if (!running) break;
-      auto now = std::chrono::steady_clock::now();
-      double elapsed =
-          std::chrono::duration<double>(now - startTime).count();
-      if (elapsed >= targetSec) break;
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     if (!running) break;
 
-    drawFrame(frame);
-    lastFrame = frame;
-    hasLastFrame = true;
-    if (!decoder.readFrame(frame)) break;
+    auto now = std::chrono::steady_clock::now();
+    if (now - lastUiUpdate >= std::chrono::milliseconds(150)) {
+      redraw = true;
+      lastUiUpdate = now;
+    }
+
+    bool paused = audioOk && hooks.isAudioPaused && hooks.isAudioPaused();
+    double syncSec = audioOk && hooks.getAudioTimeSec
+                         ? hooks.getAudioTimeSec()
+                         : std::chrono::duration<double>(now - startTime)
+                               .count();
+    const double leadSlack = 0.005;
+    const double catchupThreshold = 0.12;
+
+    if (!videoEnded && !paused) {
+      if (syncSec + leadSlack >= frameSec) {
+        renderScreen(true);
+        redraw = false;
+        lastFrameSec = frameSec;
+        if (decoder.readFrame(nextFrame)) {
+          frame = std::move(nextFrame);
+          frameSec =
+              static_cast<double>(frame.timestamp100ns - firstTs) *
+              ticksToSeconds;
+          while (syncSec - frameSec > catchupThreshold) {
+            if (!decoder.readFrame(nextFrame)) {
+              videoEnded = true;
+              break;
+            }
+            frame = std::move(nextFrame);
+            frameSec =
+                static_cast<double>(frame.timestamp100ns - firstTs) *
+                ticksToSeconds;
+          }
+        } else {
+          videoEnded = true;
+        }
+      }
+    }
+
+    if (redraw) {
+      renderScreen(false);
+      redraw = false;
+    }
+
+    bool audioFinished =
+        audioOk && hooks.isAudioFinished && hooks.isAudioFinished();
+    if (!audioOk && videoEnded) break;
+    if (audioOk && audioFinished) break;
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(4));
   }
 
-  stopAudio();
+  if (hooks.stopAudio) hooks.stopAudio();
   return true;
 }
 
@@ -1028,6 +1253,31 @@ int main(int argc, char** argv) {
     state.finished.store(false);
   };
 
+  VideoPlaybackHooks videoHooks;
+  videoHooks.startAudio = [&](const std::filesystem::path& file) {
+    return loadFile(file);
+  };
+  videoHooks.stopAudio = [&]() { stopPlayback(); };
+  videoHooks.getAudioTimeSec = [&]() {
+    return static_cast<double>(state.framesPlayed.load()) / sampleRate;
+  };
+  videoHooks.getAudioTotalSec = [&]() -> double {
+    if (state.totalFrames == 0) return -1.0;
+    return static_cast<double>(state.totalFrames) / sampleRate;
+  };
+  videoHooks.isAudioPaused = [&]() { return state.paused.load(); };
+  videoHooks.isAudioFinished = [&]() { return state.finished.load(); };
+  videoHooks.togglePause = [&]() {
+    state.paused.store(!state.paused.load());
+  };
+  videoHooks.seekBy = [&](int direction) { seekBy(direction); };
+  videoHooks.toggleRadio = [&]() {
+    bool next = !state.useRadio1938.load();
+    state.useRadio1938.store(next);
+    uint32_t desired = next ? 1u : baseChannels;
+    ensureChannels(desired);
+  };
+
   std::filesystem::path pendingImage;
   bool hasPendingImage = false;
   std::filesystem::path pendingVideo;
@@ -1102,8 +1352,8 @@ int main(int argc, char** argv) {
   if (hasPendingVideo) {
     bool handled = showAsciiVideo(
         pendingVideo, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-        [&](const std::filesystem::path& file) { return loadFile(file); },
-        [&]() { stopPlayback(); });
+        kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
+        kProgressEnd, videoHooks);
     if (!handled) {
       loadFile(pendingVideo);
     }
@@ -1142,8 +1392,8 @@ int main(int argc, char** argv) {
     if (isVideoExt(file)) {
       bool handled = showAsciiVideo(
           file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-          [&](const std::filesystem::path& media) { return loadFile(media); },
-          [&]() { stopPlayback(); });
+          kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
+          kProgressEnd, videoHooks);
       if (handled) return true;
     }
     return loadFile(file);

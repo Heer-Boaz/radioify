@@ -11,6 +11,7 @@
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+#include <propvarutil.h>
 
 #include <algorithm>
 #include <cstring>
@@ -63,6 +64,7 @@ struct VideoDecoder::Impl {
   int stride = 0;
   bool topDown = true;
   bool atEnd = false;
+  int64_t duration100ns = 0;
 };
 
 VideoDecoder::~VideoDecoder() { uninit(); }
@@ -169,6 +171,16 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   if (impl->stride == 0) {
     impl->stride = impl->width * 4;
   }
+
+  PROPVARIANT duration{};
+  PropVariantInit(&duration);
+  hr = reader->GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE,
+                                        MF_PD_DURATION, &duration);
+  if (SUCCEEDED(hr) && duration.vt == VT_UI8) {
+    impl->duration100ns = static_cast<int64_t>(duration.uhVal.QuadPart);
+  }
+  PropVariantClear(&duration);
+
   impl_ = impl;
   return true;
 }
@@ -195,10 +207,45 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
       safeRelease(sample);
       return false;
     }
+    if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0) {
+      IMFMediaType* newType = nullptr;
+      if (SUCCEEDED(impl_->reader->GetCurrentMediaType(
+              MF_SOURCE_READER_FIRST_VIDEO_STREAM, &newType)) &&
+          newType) {
+        UINT32 width = 0;
+        UINT32 height = 0;
+        HRESULT fmtHr =
+            MFGetAttributeSize(newType, MF_MT_FRAME_SIZE, &width, &height);
+        if (SUCCEEDED(fmtHr) && width > 0 && height > 0) {
+          LONG stride = 0;
+          UINT32 strideAttr = 0;
+          fmtHr = newType->GetUINT32(MF_MT_DEFAULT_STRIDE, &strideAttr);
+          if (SUCCEEDED(fmtHr)) {
+            stride = static_cast<LONG>(strideAttr);
+          } else {
+            stride = 0;
+            MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1,
+                                           static_cast<DWORD>(width), &stride);
+          }
+          impl_->width = static_cast<int>(width);
+          impl_->height = static_cast<int>(height);
+          impl_->topDown = stride >= 0;
+          impl_->stride = std::abs(stride);
+          if (impl_->stride == 0) {
+            impl_->stride = impl_->width * 4;
+          }
+        }
+      }
+      safeRelease(newType);
+    }
     if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
       impl_->atEnd = true;
       safeRelease(sample);
       return false;
+    }
+    if ((flags & MF_SOURCE_READERF_STREAMTICK) != 0) {
+      safeRelease(sample);
+      continue;
     }
     if (!sample) {
       continue;
@@ -215,9 +262,11 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
     BYTE* data = nullptr;
     DWORD maxLen = 0;
     DWORD curLen = 0;
+    bool locked = false;
     hr = buffer->Lock(&data, &maxLen, &curLen);
-    if (FAILED(hr) || !data || curLen == 0) {
-      buffer->Unlock();
+    if (SUCCEEDED(hr) && data && curLen > 0) {
+      locked = true;
+    } else {
       safeRelease(buffer);
       safeRelease(sample);
       continue;
@@ -228,9 +277,17 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
     out.width = width;
     out.height = height;
     out.timestamp100ns = static_cast<int64_t>(timestamp);
-    out.rgba.assign(static_cast<size_t>(width * height * 4), 0);
+    out.rgba.resize(static_cast<size_t>(width * height * 4));
 
-    for (int y = 0; y < height; ++y) {
+    const size_t minBytes = static_cast<size_t>(impl_->stride) *
+                            static_cast<size_t>(height);
+    int maxRows = height;
+    if (curLen > 0 && curLen < minBytes) {
+      maxRows = std::min(height,
+                         static_cast<int>(curLen / impl_->stride));
+    }
+
+    for (int y = 0; y < maxRows; ++y) {
       int srcY = impl_->topDown ? y : (height - 1 - y);
       const uint8_t* srcRow = data + srcY * impl_->stride;
       uint8_t* dstRow = out.rgba.data() + (y * width * 4);
@@ -245,15 +302,39 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
         dstRow[x * 4 + 3] = a;
       }
     }
+    for (int y = maxRows; y < height; ++y) {
+      uint8_t* dstRow = out.rgba.data() + (y * width * 4);
+      std::fill(dstRow, dstRow + width * 4, 0);
+    }
 
-    buffer->Unlock();
+    if (locked) {
+      buffer->Unlock();
+    }
     safeRelease(buffer);
     safeRelease(sample);
     return true;
   }
 }
 
+bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
+  if (!impl_ || !impl_->reader) return false;
+  if (timestamp100ns < 0) timestamp100ns = 0;
+  PROPVARIANT pos{};
+  PropVariantInit(&pos);
+  pos.vt = VT_I8;
+  pos.hVal.QuadPart = static_cast<LONGLONG>(timestamp100ns);
+  HRESULT hr = impl_->reader->SetCurrentPosition(GUID_NULL, pos);
+  PropVariantClear(&pos);
+  if (FAILED(hr)) return false;
+  impl_->atEnd = false;
+  return true;
+}
+
 bool VideoDecoder::atEnd() const { return impl_ ? impl_->atEnd : true; }
 
 int VideoDecoder::width() const { return impl_ ? impl_->width : 0; }
 int VideoDecoder::height() const { return impl_ ? impl_->height : 0; }
+
+int64_t VideoDecoder::duration100ns() const {
+  return impl_ ? impl_->duration100ns : 0;
+}
