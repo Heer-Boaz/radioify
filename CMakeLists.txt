@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(radioify
   main.cpp
+  asciiart.cpp
   consoleinput.cpp
   consolescreen.cpp
   m4adecoder.cpp
@@ -32,7 +33,7 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if (WIN32)
-  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32)
+  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs)
 endif()
 
 if (MSVC)

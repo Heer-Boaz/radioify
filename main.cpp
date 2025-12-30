@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include "asciiart.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "m4adecoder.h"
@@ -151,15 +152,115 @@ static std::string fitLine(const std::string& s, int width) {
   return utf8Take(s, width - 1) + "~";
 }
 
+struct BufferCell {
+  wchar_t ch = L' ';
+  Style style{};
+};
+
+static int quantizeCoverage(double value) {
+  int quantized = static_cast<int>(std::round(value * 8.0 + 1e-7));
+  return std::clamp(quantized, 0, 8);
+}
+
+static wchar_t glyphForCoverage(double coverage) {
+  static const wchar_t kLeftBlocks[] = {L'\x258F', L'\x258E', L'\x258D',
+                                        L'\x258C', L'\x258B', L'\x258A',
+                                        L'\x2589', L'\x2588'};
+  int idx = quantizeCoverage(coverage);
+  if (idx <= 0) return L'\0';
+  return kLeftBlocks[idx - 1];
+}
+
+static std::vector<BufferCell> renderProgressBarCells(
+    double ratio, int barLength, const Style& emptyStyle,
+    const Color& fillStart, const Color& fillEnd) {
+  std::vector<BufferCell> cells;
+  if (barLength <= 0) return cells;
+  cells.assign(static_cast<size_t>(barLength), BufferCell{L' ', emptyStyle});
+  ratio = std::clamp(ratio, 0.0, 1.0);
+  if (ratio <= 0.0) return cells;
+
+  constexpr double kSliverThreshold = 1.0 / 16.0;
+  const Color gapColor{0, 0, 0};
+  double cellSize = 1.0 / static_cast<double>(barLength);
+  double regionStart = 0.0;
+  double regionEnd = ratio;
+
+  for (int cell = 0; cell < barLength; ++cell) {
+    double cellStart = cell * cellSize;
+    double cellEnd = cellStart + cellSize;
+    double segStart = std::max(regionStart, cellStart);
+    double segEnd = std::min(regionEnd, cellEnd);
+    double overlap = segEnd - segStart;
+    if (overlap <= 0.0) continue;
+
+    double leftFrac = (segStart - cellStart) / cellSize;
+    double rightFrac = (segEnd - cellStart) / cellSize;
+    double coverage = rightFrac - leftFrac;
+    if (coverage <= 0.0) continue;
+
+    float t = (barLength > 1)
+                  ? static_cast<float>(cell) /
+                        static_cast<float>(barLength - 1)
+                  : 0.0f;
+    Color fillColor = lerpColor(fillStart, fillEnd, t);
+
+    if (coverage >= 1.0 - 1e-7) {
+      cells[static_cast<size_t>(cell)].ch = L'\x2588';
+      cells[static_cast<size_t>(cell)].style =
+          Style{fillColor, fillColor};
+      continue;
+    }
+
+    double leftGap = leftFrac;
+    double rightGap = 1.0 - rightFrac;
+    bool alignRight = leftGap > 0.0 && (rightGap <= 0.0 || rightGap < leftGap);
+
+    if (alignRight) {
+      if (leftGap < kSliverThreshold) {
+        cells[static_cast<size_t>(cell)].ch = L'\x2588';
+        cells[static_cast<size_t>(cell)].style =
+            Style{fillColor, fillColor};
+        continue;
+      }
+      wchar_t glyph = glyphForCoverage(leftGap);
+      if (glyph) {
+        cells[static_cast<size_t>(cell)].ch = glyph;
+        cells[static_cast<size_t>(cell)].style =
+            Style{gapColor, fillColor};
+      }
+    } else {
+      if (coverage < kSliverThreshold) continue;
+      wchar_t glyph = glyphForCoverage(coverage);
+      if (glyph) {
+        cells[static_cast<size_t>(cell)].ch = glyph;
+        cells[static_cast<size_t>(cell)].style =
+            Style{fillColor, emptyStyle.bg};
+      }
+    }
+  }
+
+  return cells;
+}
+
+static bool isSupportedImageExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+  return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
+}
+
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm";
+         ext == ".webm" || ext == ".mp4";
+}
+
+static bool isSupportedMediaExt(const std::filesystem::path& p) {
+  return isSupportedAudioExt(p) || isSupportedImageExt(p);
 }
 
 static bool isM4aExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".m4a" || ext == ".webm";
+  return ext == ".m4a" || ext == ".webm" || ext == ".mp4";
 }
 
 static void validateInputFile(const std::filesystem::path& p) {
@@ -169,7 +270,7 @@ static void validateInputFile(const std::filesystem::path& p) {
     die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
     die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: .wav, .mp3, .flac, .m4a, .webm.");
+        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4.");
   }
 }
 
@@ -194,7 +295,7 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
       const auto& p = entry.path();
       if (entry.is_directory()) {
         items.push_back(FileEntry{toUtf8String(p.filename()), p, true});
-      } else if (entry.is_regular_file() && isSupportedAudioExt(p)) {
+      } else if (entry.is_regular_file() && isSupportedMediaExt(p)) {
         items.push_back(FileEntry{toUtf8String(p.filename()), p, false});
       }
     }
@@ -242,6 +343,72 @@ static std::string fitName(const std::string& name, int colWidth) {
   if (maxLen <= 1) return name.empty() ? " " : utf8Take(name, 1);
   if (utf8CodepointCount(name) <= maxLen) return name;
   return utf8Take(name, maxLen - 1) + "~";
+}
+
+static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
+                         ConsoleScreen& screen, const Style& baseStyle,
+                         const Style& accentStyle, const Style& dimStyle) {
+  AsciiArt art;
+  std::string error;
+  bool ok = false;
+
+  auto renderFrame = [&]() {
+    screen.updateSize();
+    int width = std::max(20, screen.width());
+    int height = std::max(10, screen.height());
+    const int headerLines = 2;
+    const int footerLines = 1;
+    int artTop = headerLines;
+    int maxHeight = std::max(1, height - headerLines - footerLines);
+
+    error.clear();
+    ok = renderAsciiArt(file, width, maxHeight, art, &error);
+
+    screen.clear(baseStyle);
+    std::string title = "Preview: " + toUtf8String(file.filename());
+    screen.writeText(0, 0, fitLine(title, width), accentStyle);
+    screen.writeText(0, 1, fitLine("Press any key to return", width), dimStyle);
+
+    if (!ok) {
+      screen.writeText(0, artTop, fitLine("Failed to open image.", width),
+                       dimStyle);
+      if (!error.empty() && artTop + 1 < height) {
+        screen.writeText(0, artTop + 1, fitLine(error, width), dimStyle);
+      }
+      screen.draw();
+      return;
+    }
+
+    int artWidth = std::min(art.width, width);
+    int artHeight = std::min(art.height, maxHeight);
+    int artX = std::max(0, (width - artWidth) / 2);
+
+    for (int y = 0; y < artHeight; ++y) {
+      for (int x = 0; x < artWidth; ++x) {
+        const auto& cell =
+            art.cells[static_cast<size_t>(y * art.width + x)];
+        Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
+        screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
+      }
+    }
+    screen.draw();
+  };
+
+  renderFrame();
+
+  InputEvent ev{};
+  while (true) {
+    while (input.poll(ev)) {
+      if (ev.type == InputEvent::Type::Resize) {
+        renderFrame();
+        continue;
+      }
+      if (ev.type == InputEvent::Type::Key) {
+        return ok;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
 }
 
 static GridLayout buildLayout(const BrowserState& state, int width,
@@ -703,6 +870,9 @@ int main(int argc, char** argv) {
     state.finished.store(false);
   };
 
+  std::filesystem::path pendingImage;
+  bool hasPendingImage = false;
+
   auto seekToRatio = [&](double ratio) {
     if (!decoderReady || state.totalFrames == 0) return;
     ratio = std::clamp(ratio, 0.0, 1.0);
@@ -716,7 +886,12 @@ int main(int argc, char** argv) {
   if (!o.input.empty() && o.play && std::filesystem::exists(o.input)) {
     std::filesystem::path inputPath(o.input);
     if (!std::filesystem::is_directory(inputPath)) {
-      loadFile(inputPath);
+      if (isSupportedImageExt(inputPath)) {
+        pendingImage = inputPath;
+        hasPendingImage = true;
+      } else {
+        loadFile(inputPath);
+      }
     }
   }
 
@@ -756,6 +931,12 @@ int main(int argc, char** argv) {
   BreadcrumbLine breadcrumbLine;
   bool rendered = false;
 
+  if (hasPendingImage) {
+    showAsciiArt(pendingImage, input, screen, kStyleNormal, kStyleAccent,
+                 kStyleDim);
+    dirty = true;
+  }
+
   auto rebuildLayout = [&]() {
     screen.updateSize();
     width = std::max(40, screen.width());
@@ -781,6 +962,10 @@ int main(int argc, char** argv) {
     refreshBrowser(nextBrowser, initialName);
   };
   callbacks.onPlayFile = [&](const std::filesystem::path& file) {
+    if (isSupportedImageExt(file)) {
+      showAsciiArt(file, input, screen, kStyleNormal, kStyleAccent, kStyleDim);
+      return true;
+    }
     return loadFile(file);
   };
   callbacks.onRenderFile = [&](const std::filesystem::path& file) {
@@ -914,7 +1099,9 @@ int main(int argc, char** argv) {
                        kStyleDim);
       screen.writeText(
           0, 4,
-          fitLine("  Showing: folders + .wav/.mp3/.flac/.m4a/.webm", width),
+          fitLine(
+              "  Showing: folders + .wav/.mp3/.flac/.m4a/.webm/.mp4/.jpg/.jpeg/.png/.bmp",
+              width),
           kStyleDim);
 
       if (browser.entries.empty()) {
@@ -995,29 +1182,23 @@ int main(int argc, char** argv) {
       }
       int maxBar = std::max(5, width - 2);
       barWidth = std::clamp(barWidth, 5, maxBar);
-      int filled = 0;
+      double ratio = 0.0;
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
-        double ratio = std::clamp(currentSec / totalSec, 0.0, 1.0);
-        filled = static_cast<int>(std::round(ratio * barWidth));
+        ratio = std::clamp(currentSec / totalSec, 0.0, 1.0);
       }
       progressBarX = 1;
       progressBarY = line;
       progressBarWidth = barWidth;
 
-      screen.writeText(0, line, "\xE2\x94\x82", kStyleProgressFrame);
-      screen.writeRun(1, line, barWidth, L'\x2591', kStyleProgressEmpty);
-      if (filled > 0) {
-        int fillCount = std::min(filled, barWidth);
-        for (int i = 0; i < fillCount; ++i) {
-          float t = (fillCount > 1) ? static_cast<float>(i) /
-                                          static_cast<float>(fillCount - 1)
-                                    : 0.0f;
-          Color c = lerpColor(kProgressStart, kProgressEnd, t);
-          Style s{c, c};
-          screen.writeChar(1 + i, line, L'\x2588', s);
-        }
+      screen.writeChar(0, line, L'|', kStyleProgressFrame);
+      auto barCells = renderProgressBarCells(ratio, barWidth,
+                                             kStyleProgressEmpty,
+                                             kProgressStart, kProgressEnd);
+      for (int i = 0; i < barWidth; ++i) {
+        const auto& cell = barCells[static_cast<size_t>(i)];
+        screen.writeChar(1 + i, line, cell.ch, cell.style);
       }
-      screen.writeText(1 + barWidth, line, "\xE2\x94\x82", kStyleProgressFrame);
+      screen.writeChar(1 + barWidth, line, L'|', kStyleProgressFrame);
       if (!suffix.empty()) {
         screen.writeText(2 + barWidth, line, " " + suffix, kStyleNormal);
       }
