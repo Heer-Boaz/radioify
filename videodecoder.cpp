@@ -67,6 +67,9 @@ struct VideoDecoder::Impl {
   bool topDown = true;
   bool atEnd = false;
   int64_t duration100ns = 0;
+  int64_t lastTimestamp100ns = 0;
+  int64_t lastDuration100ns = 0;
+  int consecutiveErrors = 0;
   GUID subtype = GUID_NULL;
   UINT32 yuvMatrix = MFVideoTransferMatrix_BT709;
   bool fullRange = true;
@@ -512,6 +515,10 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
   if (info) {
     *info = VideoReadInfo{};
   }
+  uint32_t recoveries = 0;
+  uint32_t lastErrorHr = 0;
+  constexpr int kMaxRecoveries = 4;
+  constexpr int64_t kFallbackDuration100ns = 333667;
 
   while (true) {
     DWORD flags = 0;
@@ -521,7 +528,34 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
         MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, nullptr, &flags, &timestamp,
         &sample);
     if (FAILED(hr)) {
+      lastErrorHr = static_cast<uint32_t>(hr);
+      if (recoveries < static_cast<uint32_t>(kMaxRecoveries)) {
+        ++recoveries;
+        ++impl_->consecutiveErrors;
+        impl_->reader->Flush(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
+        int64_t lastTs = impl_->lastTimestamp100ns;
+        int64_t step = impl_->lastDuration100ns > 0
+                           ? impl_->lastDuration100ns
+                           : kFallbackDuration100ns;
+        if (lastTs > 0 && step <= 0) {
+          step = kFallbackDuration100ns;
+        }
+        if (lastTs > 0) {
+          PROPVARIANT pos{};
+          PropVariantInit(&pos);
+          pos.vt = VT_I8;
+          pos.hVal.QuadPart = static_cast<LONGLONG>(lastTs + step);
+          impl_->reader->SetCurrentPosition(GUID_NULL, pos);
+          PropVariantClear(&pos);
+        }
+        safeRelease(sample);
+        continue;
+      }
       impl_->atEnd = true;
+      if (info) {
+        info->errorHr = lastErrorHr;
+        info->recoveries = recoveries;
+      }
       safeRelease(sample);
       return false;
     }
@@ -572,6 +606,11 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     }
     if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
       impl_->atEnd = true;
+      impl_->consecutiveErrors = 0;
+      if (info) {
+        info->errorHr = lastErrorHr;
+        info->recoveries = recoveries;
+      }
       safeRelease(sample);
       return false;
     }
@@ -596,16 +635,23 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       out.height = height;
       out.timestamp100ns = static_cast<int64_t>(timestamp);
       out.rgba.clear();
+      LONGLONG duration = 0;
+      if (FAILED(sample->GetSampleDuration(&duration))) {
+        duration = 0;
+      }
+      impl_->lastTimestamp100ns = static_cast<int64_t>(timestamp);
+      if (duration > 0) {
+        impl_->lastDuration100ns = static_cast<int64_t>(duration);
+      }
+      impl_->consecutiveErrors = 0;
       if (info) {
-        LONGLONG duration = 0;
-        if (FAILED(sample->GetSampleDuration(&duration))) {
-          duration = 0;
-        }
         info->timestamp100ns = static_cast<int64_t>(timestamp);
         info->duration100ns = static_cast<int64_t>(duration);
         info->flags = static_cast<uint32_t>(flags);
         info->streamTicks = streamTicks;
         info->typeChanges = typeChanges;
+        info->errorHr = lastErrorHr;
+        info->recoveries = recoveries;
       }
       safeRelease(sample);
       return true;
@@ -790,16 +836,23 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       }
     }
 
+    LONGLONG duration = 0;
+    if (FAILED(sample->GetSampleDuration(&duration))) {
+      duration = 0;
+    }
+    impl_->lastTimestamp100ns = static_cast<int64_t>(timestamp);
+    if (duration > 0) {
+      impl_->lastDuration100ns = static_cast<int64_t>(duration);
+    }
+    impl_->consecutiveErrors = 0;
     if (info) {
-      LONGLONG duration = 0;
-      if (FAILED(sample->GetSampleDuration(&duration))) {
-        duration = 0;
-      }
       info->timestamp100ns = static_cast<int64_t>(timestamp);
       info->duration100ns = static_cast<int64_t>(duration);
       info->flags = static_cast<uint32_t>(flags);
       info->streamTicks = streamTicks;
       info->typeChanges = typeChanges;
+      info->errorHr = lastErrorHr;
+      info->recoveries = recoveries;
     }
 
     if (locked) {

@@ -19,6 +19,8 @@ struct VideoReadInfo {
   uint32_t flags = 0;
   int streamTicks = 0;
   int typeChanges = 0;
+  uint32_t errorHr = 0;
+  uint32_t recoveries = 0;
 };
 
 class VideoDecoder {

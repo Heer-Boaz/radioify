@@ -664,6 +664,8 @@ static bool showAsciiVideo(
   uint64_t lastReadCalls = 0;
   uint64_t lastQueueDrops = 0;
   uint64_t lastSkippedCalls = 0;
+  double audioSyncOffset = 0.0;
+  bool audioSyncInit = false;
 
   auto clearQueue = [&]() {
     std::lock_guard<std::mutex> lock(queueMutex);
@@ -805,10 +807,11 @@ static bool showAsciiVideo(
     if (hooks.stopAudio) hooks.stopAudio();
     return showError("No video frames found.", "");
   }
-  perfLog.appendf("first_frame ts100ns=%lld dur100ns=%lld flags=0x%X size=%dx%d",
-                  static_cast<long long>(frame.timestamp100ns),
-                  static_cast<long long>(firstInfo.duration100ns),
-                  firstInfo.flags, frame.width, frame.height);
+  perfLog.appendf(
+      "first_frame ts100ns=%lld dur100ns=%lld flags=0x%X rec=%u ehr=0x%08X size=%dx%d",
+      static_cast<long long>(frame.timestamp100ns),
+      static_cast<long long>(firstInfo.duration100ns), firstInfo.flags,
+      firstInfo.recoveries, firstInfo.errorHr, frame.width, frame.height);
   startDecodeThread();
 
   const double ticksToSeconds = 1.0 / 10000000.0;
@@ -817,6 +820,11 @@ static bool showAsciiVideo(
   double frameSec =
       static_cast<double>(frame.timestamp100ns - firstTs) * ticksToSeconds;
   double lastFrameSec = frameSec;
+  if (audioOk && hooks.getAudioTimeSec) {
+    double audioNow = hooks.getAudioTimeSec();
+    audioSyncOffset = audioNow - frameSec;
+    audioSyncInit = true;
+  }
   auto startTime = std::chrono::steady_clock::now();
   auto lastUiUpdate = startTime;
 
@@ -832,7 +840,12 @@ static bool showAsciiVideo(
 
   auto currentTimeSec = [&]() -> double {
     if (audioOk && hooks.getAudioTimeSec) {
-      return hooks.getAudioTimeSec();
+      double audioNow = hooks.getAudioTimeSec();
+      if (!audioSyncInit) {
+        audioSyncOffset = audioNow - lastFrameSec;
+        audioSyncInit = true;
+      }
+      return std::max(0.0, audioNow - audioSyncOffset);
     }
     return lastFrameSec;
   };
@@ -850,6 +863,20 @@ static bool showAsciiVideo(
         (width != cachedWidth || maxHeight != cachedMaxHeight ||
          frame.width != cachedFrameWidth || frame.height != cachedFrameHeight);
     if (refreshArt || sizeChanged) {
+      if (frame.width <= 0 || frame.height <= 0) {
+        renderFailed = true;
+        renderFailMessage = "Invalid video frame size.";
+        renderFailDetail = "";
+        return;
+      }
+      size_t expected = static_cast<size_t>(frame.width) *
+                        static_cast<size_t>(frame.height) * 4u;
+      if (frame.rgba.size() < expected) {
+        renderFailed = true;
+        renderFailMessage = "Invalid video frame buffer.";
+        renderFailDetail = "Frame pixel data is missing.";
+        return;
+      }
       bool artOk = false;
       try {
         artOk = renderAsciiArtFromRgba(frame.rgba.data(), frame.width,
@@ -1009,16 +1036,21 @@ static bool showAsciiVideo(
           stopDecodeThread();
           clearQueue();
           VideoReadInfo seekInfo{};
-          if (decoder.seekToTimestamp100ns(targetTs) &&
-              decoder.readFrame(frame, &seekInfo, true)) {
-            readCalls.fetch_add(1, std::memory_order_relaxed);
-            frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
-                       ticksToSeconds;
-            lastFrameSec = frameSec;
-            videoEnded = false;
-            redraw = true;
-          }
-          startDecodeThread();
+            if (decoder.seekToTimestamp100ns(targetTs) &&
+                decoder.readFrame(frame, &seekInfo, true)) {
+              readCalls.fetch_add(1, std::memory_order_relaxed);
+              frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
+                         ticksToSeconds;
+              lastFrameSec = frameSec;
+              videoEnded = false;
+              if (audioOk && hooks.getAudioTimeSec) {
+                double audioNow = hooks.getAudioTimeSec();
+                audioSyncOffset = audioNow - frameSec;
+                audioSyncInit = true;
+              }
+              redraw = true;
+            }
+            startDecodeThread();
           if (!audioOk) {
             startTime = std::chrono::steady_clock::now() -
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -1060,6 +1092,11 @@ static bool showAsciiVideo(
                       ticksToSeconds;
                   lastFrameSec = frameSec;
                   videoEnded = false;
+                  if (audioOk && hooks.getAudioTimeSec) {
+                    double audioNow = hooks.getAudioTimeSec();
+                    audioSyncOffset = audioNow - frameSec;
+                    audioSyncInit = true;
+                  }
                 }
                 startDecodeThread();
                 if (!audioOk) {
@@ -1087,10 +1124,17 @@ static bool showAsciiVideo(
     bool paused = audioOk && hooks.isAudioPaused && hooks.isAudioPaused();
     decodePaused.store(paused);
     queueCv.notify_all();
-    double syncSec = audioOk && hooks.getAudioTimeSec
-                         ? hooks.getAudioTimeSec()
-                         : std::chrono::duration<double>(now - startTime)
-                               .count();
+    double syncSec = 0.0;
+    if (audioOk && hooks.getAudioTimeSec) {
+      double audioNow = hooks.getAudioTimeSec();
+      if (!audioSyncInit) {
+        audioSyncOffset = audioNow - lastFrameSec;
+        audioSyncInit = true;
+      }
+      syncSec = std::max(0.0, audioNow - audioSyncOffset);
+    } else {
+      syncSec = std::chrono::duration<double>(now - startTime).count();
+    }
     const double leadSlack = 0.005;
 
     if (pendingResize) {
@@ -1113,6 +1157,11 @@ static bool showAsciiVideo(
           static_cast<double>(frame.timestamp100ns - firstTs) * ticksToSeconds;
       lastFrameSec = frameSec;
       videoEnded = false;
+      if (audioOk && hooks.getAudioTimeSec) {
+        double audioNow = hooks.getAudioTimeSec();
+        audioSyncOffset = audioNow - frameSec;
+        audioSyncInit = true;
+      }
       decodePaused.store(paused);
       startDecodeThread();
       pendingResize = false;
@@ -1193,13 +1242,14 @@ static bool showAsciiVideo(
       }
       if (haveAudioStats) {
         perfLog.appendf(
-            "frame t=%.3f sync=%.3f lag=%.3f disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d acb=%llu areq=%llu aread=%llu ashort=%llu asilence=%llu alast=%u/%u",
+            "frame t=%.3f sync=%.3f lag=%.3f disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u vhr=0x%08X acb=%llu areq=%llu aread=%llu ashort=%llu asilence=%llu alast=%u/%u",
             displayedSec, syncSec, lagSec,
             static_cast<long long>(displayedTs),
             static_cast<long long>(nextTs), renderMs, decodeMs, dropped,
             queueDropDelta, skippedDelta, readDelta, candidate.info.flags,
             static_cast<long long>(candidate.info.duration100ns),
             candidate.info.streamTicks, candidate.info.typeChanges,
+            candidate.info.recoveries, candidate.info.errorHr,
             static_cast<unsigned long long>(audioStats.callbacks),
             static_cast<unsigned long long>(audioStats.framesRequested),
             static_cast<unsigned long long>(audioStats.framesRead),
@@ -1208,13 +1258,14 @@ static bool showAsciiVideo(
             audioStats.lastCallbackFrames, audioStats.lastFramesRead);
       } else {
         perfLog.appendf(
-            "frame t=%.3f sync=%.3f lag=%.3f disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d",
+            "frame t=%.3f sync=%.3f lag=%.3f disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u vhr=0x%08X",
             displayedSec, syncSec, lagSec,
             static_cast<long long>(displayedTs),
             static_cast<long long>(nextTs), renderMs, decodeMs, dropped,
             queueDropDelta, skippedDelta, readDelta, candidate.info.flags,
             static_cast<long long>(candidate.info.duration100ns),
-            candidate.info.streamTicks, candidate.info.typeChanges);
+            candidate.info.streamTicks, candidate.info.typeChanges,
+            candidate.info.recoveries, candidate.info.errorHr);
       }
     }
 
