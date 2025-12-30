@@ -14,7 +14,9 @@
 #include <propvarutil.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <new>
 
 namespace {
 void setError(std::string* error, const char* message) {
@@ -65,9 +67,106 @@ struct VideoDecoder::Impl {
   bool topDown = true;
   bool atEnd = false;
   int64_t duration100ns = 0;
+  GUID subtype = GUID_NULL;
+  UINT32 yuvMatrix = MFVideoTransferMatrix_BT709;
+  bool fullRange = true;
 };
 
 VideoDecoder::~VideoDecoder() { uninit(); }
+
+namespace {
+enum class PixelFormat {
+  RGB32,
+  ARGB32,
+  NV12,
+  P010,
+  Unknown,
+};
+
+PixelFormat pixelFormatFromSubtype(const GUID& subtype) {
+  if (subtype == MFVideoFormat_RGB32) return PixelFormat::RGB32;
+  if (subtype == MFVideoFormat_ARGB32) return PixelFormat::ARGB32;
+  if (subtype == MFVideoFormat_NV12) return PixelFormat::NV12;
+  if (subtype == MFVideoFormat_P010) return PixelFormat::P010;
+  return PixelFormat::Unknown;
+}
+
+std::string guidToString(const GUID& guid) {
+  char buf[64];
+  std::snprintf(
+      buf, sizeof(buf), "{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+      static_cast<unsigned long>(guid.Data1), guid.Data2, guid.Data3,
+      guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3], guid.Data4[4],
+      guid.Data4[5], guid.Data4[6], guid.Data4[7]);
+  return std::string(buf);
+}
+
+std::string pixelFormatName(const GUID& subtype) {
+  if (subtype == MFVideoFormat_RGB32) return "RGB32";
+  if (subtype == MFVideoFormat_ARGB32) return "ARGB32";
+  if (subtype == MFVideoFormat_NV12) return "NV12";
+  if (subtype == MFVideoFormat_P010) return "P010";
+  return guidToString(subtype);
+}
+
+std::string hrToString(HRESULT hr) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "0x%08lX", static_cast<unsigned long>(hr));
+  return std::string(buf);
+}
+
+void updateColorInfo(VideoDecoder::Impl& impl, IMFMediaType* mediaType) {
+  UINT32 matrix = 0;
+  if (SUCCEEDED(mediaType->GetUINT32(MF_MT_YUV_MATRIX, &matrix))) {
+    impl.yuvMatrix = matrix;
+  }
+  UINT32 range = 0;
+  if (SUCCEEDED(mediaType->GetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, &range))) {
+    impl.fullRange = (range == MFNominalRange_0_255);
+  } else {
+    impl.fullRange = true;
+  }
+}
+
+inline uint8_t clampToByte(float v) {
+  if (v < 0.0f) return 0;
+  if (v > 255.0f) return 255;
+  return static_cast<uint8_t>(v + 0.5f);
+}
+
+void yuvToRgb(int y, int u, int v, bool fullRange, UINT32 matrix,
+              uint8_t& outR, uint8_t& outG, uint8_t& outB) {
+  float yf = 0.0f;
+  float uf = 0.0f;
+  float vf = 0.0f;
+  if (fullRange) {
+    yf = static_cast<float>(y) / 255.0f;
+    uf = (static_cast<float>(u) - 128.0f) / 255.0f;
+    vf = (static_cast<float>(v) - 128.0f) / 255.0f;
+  } else {
+    yf = (static_cast<float>(y) - 16.0f) / 219.0f;
+    uf = (static_cast<float>(u) - 128.0f) / 224.0f;
+    vf = (static_cast<float>(v) - 128.0f) / 224.0f;
+  }
+
+  float r = 0.0f;
+  float g = 0.0f;
+  float b = 0.0f;
+  if (matrix == MFVideoTransferMatrix_BT709) {
+    r = yf + 1.5748f * vf;
+    g = yf - 0.1873f * uf - 0.4681f * vf;
+    b = yf + 1.8556f * uf;
+  } else {
+    r = yf + 1.4020f * vf;
+    g = yf - 0.3441f * uf - 0.7141f * vf;
+    b = yf + 1.7720f * uf;
+  }
+
+  outR = clampToByte(r * 255.0f);
+  outG = clampToByte(g * 255.0f);
+  outB = clampToByte(b * 255.0f);
+}
+} // namespace
 
 bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   uninit();
@@ -75,9 +174,16 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   if (!ensureMediaFoundation(error)) return false;
 
   IMFAttributes* attributes = nullptr;
-  HRESULT hr = MFCreateAttributes(&attributes, 1);
+  HRESULT hr = MFCreateAttributes(&attributes, 3);
   if (SUCCEEDED(hr)) {
     hr = attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+  }
+  if (SUCCEEDED(hr)) {
+    hr = attributes->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
+                               TRUE);
+  }
+  if (SUCCEEDED(hr)) {
+    hr = attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
   }
 
   IMFSourceReader* reader = nullptr;
@@ -125,8 +231,30 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   }
   safeRelease(type);
   if (FAILED(hr)) {
+    hr = MFCreateMediaType(&type);
+    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
+    if (SUCCEEDED(hr)) {
+      hr = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+                                       nullptr, type);
+    }
+    safeRelease(type);
+  }
+  if (FAILED(hr)) {
+    hr = MFCreateMediaType(&type);
+    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_P010);
+    if (SUCCEEDED(hr)) {
+      hr = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+                                       nullptr, type);
+    }
+    safeRelease(type);
+  }
+  if (FAILED(hr)) {
     safeRelease(reader);
-    setError(error, "Failed to configure video output.");
+    setError(error,
+             ("Failed to configure video output (hr=" + hrToString(hr) + ")")
+                 .c_str());
     return false;
   }
 
@@ -136,6 +264,23 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   if (FAILED(hr)) {
     safeRelease(reader);
     setError(error, "Failed to query video format.");
+    return false;
+  }
+
+  GUID subtype = GUID_NULL;
+  if (FAILED(actualType->GetGUID(MF_MT_SUBTYPE, &subtype))) {
+    safeRelease(actualType);
+    safeRelease(reader);
+    setError(error, "Failed to read video pixel format.");
+    return false;
+  }
+  PixelFormat format = pixelFormatFromSubtype(subtype);
+  if (format == PixelFormat::Unknown) {
+    std::string detail =
+        "Unsupported video pixel format: " + pixelFormatName(subtype);
+    safeRelease(actualType);
+    safeRelease(reader);
+    setError(error, detail.c_str());
     return false;
   }
 
@@ -156,11 +301,15 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
     stride = static_cast<LONG>(strideAttr);
   } else {
     stride = 0;
-    MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1,
-                                   static_cast<DWORD>(width), &stride);
+    if (format == PixelFormat::NV12) {
+      stride = static_cast<LONG>(width);
+    } else if (format == PixelFormat::P010) {
+      stride = static_cast<LONG>(width * 2);
+    } else {
+      MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1,
+                                     static_cast<DWORD>(width), &stride);
+    }
   }
-
-  safeRelease(actualType);
 
   Impl* impl = new Impl();
   impl->reader = reader;
@@ -171,6 +320,9 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   if (impl->stride == 0) {
     impl->stride = impl->width * 4;
   }
+  impl->subtype = subtype;
+  updateColorInfo(*impl, actualType);
+  safeRelease(actualType);
 
   PROPVARIANT duration{};
   PropVariantInit(&duration);
@@ -217,6 +369,10 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
         HRESULT fmtHr =
             MFGetAttributeSize(newType, MF_MT_FRAME_SIZE, &width, &height);
         if (SUCCEEDED(fmtHr) && width > 0 && height > 0) {
+          GUID subtype = GUID_NULL;
+          if (SUCCEEDED(newType->GetGUID(MF_MT_SUBTYPE, &subtype))) {
+            impl_->subtype = subtype;
+          }
           LONG stride = 0;
           UINT32 strideAttr = 0;
           fmtHr = newType->GetUINT32(MF_MT_DEFAULT_STRIDE, &strideAttr);
@@ -224,8 +380,16 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
             stride = static_cast<LONG>(strideAttr);
           } else {
             stride = 0;
-            MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1,
-                                           static_cast<DWORD>(width), &stride);
+            PixelFormat format = pixelFormatFromSubtype(impl_->subtype);
+            if (format == PixelFormat::NV12) {
+              stride = static_cast<LONG>(width);
+            } else if (format == PixelFormat::P010) {
+              stride = static_cast<LONG>(width * 2);
+            } else {
+              MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1,
+                                             static_cast<DWORD>(width),
+                                             &stride);
+            }
           }
           impl_->width = static_cast<int>(width);
           impl_->height = static_cast<int>(height);
@@ -234,6 +398,7 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
           if (impl_->stride == 0) {
             impl_->stride = impl_->width * 4;
           }
+          updateColorInfo(*impl_, newType);
         }
       }
       safeRelease(newType);
@@ -274,37 +439,171 @@ bool VideoDecoder::readFrame(VideoFrame& out) {
 
     const int width = impl_->width;
     const int height = impl_->height;
+    if (width <= 0 || height <= 0) {
+      if (locked) {
+        buffer->Unlock();
+      }
+      safeRelease(buffer);
+      safeRelease(sample);
+      continue;
+    }
+
+    constexpr size_t kMaxPixels = 16384u * 16384u;
+    size_t pixelCount =
+        static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (pixelCount == 0 || pixelCount > kMaxPixels) {
+      if (locked) {
+        buffer->Unlock();
+      }
+      safeRelease(buffer);
+      safeRelease(sample);
+      continue;
+    }
+    size_t byteCount = pixelCount * 4u;
+    if (byteCount / 4u != pixelCount) {
+      if (locked) {
+        buffer->Unlock();
+      }
+      safeRelease(buffer);
+      safeRelease(sample);
+      continue;
+    }
+
+    PixelFormat format = pixelFormatFromSubtype(impl_->subtype);
+    if (format == PixelFormat::Unknown) {
+      if (locked) {
+        buffer->Unlock();
+      }
+      safeRelease(buffer);
+      safeRelease(sample);
+      continue;
+    }
+
     out.width = width;
     out.height = height;
     out.timestamp100ns = static_cast<int64_t>(timestamp);
-    out.rgba.resize(static_cast<size_t>(width * height * 4));
-
-    const size_t minBytes = static_cast<size_t>(impl_->stride) *
-                            static_cast<size_t>(height);
-    int maxRows = height;
-    if (curLen > 0 && curLen < minBytes) {
-      maxRows = std::min(height,
-                         static_cast<int>(curLen / impl_->stride));
-    }
-
-    for (int y = 0; y < maxRows; ++y) {
-      int srcY = impl_->topDown ? y : (height - 1 - y);
-      const uint8_t* srcRow = data + srcY * impl_->stride;
-      uint8_t* dstRow = out.rgba.data() + (y * width * 4);
-      for (int x = 0; x < width; ++x) {
-        const uint8_t b = srcRow[x * 4 + 0];
-        const uint8_t g = srcRow[x * 4 + 1];
-        const uint8_t r = srcRow[x * 4 + 2];
-        const uint8_t a = srcRow[x * 4 + 3];
-        dstRow[x * 4 + 0] = r;
-        dstRow[x * 4 + 1] = g;
-        dstRow[x * 4 + 2] = b;
-        dstRow[x * 4 + 3] = a;
+    try {
+      out.rgba.resize(byteCount);
+    } catch (const std::bad_alloc&) {
+      impl_->atEnd = true;
+      if (locked) {
+        buffer->Unlock();
       }
+      safeRelease(buffer);
+      safeRelease(sample);
+      return false;
     }
-    for (int y = maxRows; y < height; ++y) {
-      uint8_t* dstRow = out.rgba.data() + (y * width * 4);
-      std::fill(dstRow, dstRow + width * 4, 0);
+
+    if (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32) {
+      if (impl_->stride < width * 4 ||
+          curLen < static_cast<DWORD>(impl_->stride)) {
+        if (locked) {
+          buffer->Unlock();
+        }
+        safeRelease(buffer);
+        safeRelease(sample);
+        continue;
+      }
+      const size_t minBytes = static_cast<size_t>(impl_->stride) *
+                              static_cast<size_t>(height);
+      int maxRows = height;
+      if (curLen > 0 && curLen < minBytes) {
+        maxRows = std::min(height,
+                           static_cast<int>(curLen / impl_->stride));
+      }
+
+      for (int y = 0; y < maxRows; ++y) {
+        int srcY = impl_->topDown ? y : (height - 1 - y);
+        const uint8_t* srcRow = data + srcY * impl_->stride;
+        uint8_t* dstRow = out.rgba.data() + (y * width * 4);
+        for (int x = 0; x < width; ++x) {
+          const uint8_t b = srcRow[x * 4 + 0];
+          const uint8_t g = srcRow[x * 4 + 1];
+          const uint8_t r = srcRow[x * 4 + 2];
+          dstRow[x * 4 + 0] = r;
+          dstRow[x * 4 + 1] = g;
+          dstRow[x * 4 + 2] = b;
+          dstRow[x * 4 + 3] = 255;
+        }
+      }
+      for (int y = maxRows; y < height; ++y) {
+        uint8_t* dstRow = out.rgba.data() + (y * width * 4);
+        std::fill(dstRow, dstRow + width * 4, 0);
+      }
+    } else {
+      size_t minStride = (format == PixelFormat::P010)
+                             ? static_cast<size_t>(width) * 2u
+                             : static_cast<size_t>(width);
+      if (impl_->stride < static_cast<int>(minStride)) {
+        if (locked) {
+          buffer->Unlock();
+        }
+        safeRelease(buffer);
+        safeRelease(sample);
+        continue;
+      }
+      size_t required =
+          static_cast<size_t>(impl_->stride) *
+          static_cast<size_t>(height) * 3u / 2u;
+      if (curLen < required) {
+        if (locked) {
+          buffer->Unlock();
+        }
+        safeRelease(buffer);
+        safeRelease(sample);
+        continue;
+      }
+
+      const uint8_t* yPlane = data;
+      const uint8_t* uvPlane =
+          data + static_cast<size_t>(impl_->stride) *
+                     static_cast<size_t>(height);
+
+      for (int y = 0; y < height; ++y) {
+        int srcY = impl_->topDown ? y : (height - 1 - y);
+        int uvY = srcY / 2;
+        uint8_t* dstRow = out.rgba.data() + (y * width * 4);
+
+        if (format == PixelFormat::NV12) {
+          const uint8_t* yRow = yPlane + srcY * impl_->stride;
+          const uint8_t* uvRow = uvPlane + uvY * impl_->stride;
+          for (int x = 0; x < width; ++x) {
+            int yVal = yRow[x];
+            int uvIndex = (x / 2) * 2;
+            int uVal = uvRow[uvIndex + 0];
+            int vVal = uvRow[uvIndex + 1];
+            uint8_t r = 0, g = 0, b = 0;
+            yuvToRgb(yVal, uVal, vVal, impl_->fullRange, impl_->yuvMatrix, r,
+                     g, b);
+            dstRow[x * 4 + 0] = r;
+            dstRow[x * 4 + 1] = g;
+            dstRow[x * 4 + 2] = b;
+            dstRow[x * 4 + 3] = 255;
+          }
+        } else {
+          const uint16_t* yRow =
+              reinterpret_cast<const uint16_t*>(yPlane +
+                                                 srcY * impl_->stride);
+          const uint16_t* uvRow =
+              reinterpret_cast<const uint16_t*>(uvPlane +
+                                                 uvY * impl_->stride);
+          for (int x = 0; x < width; ++x) {
+            int uvIndex = (x / 2) * 2;
+            int y10 = static_cast<int>(yRow[x] >> 6);
+            int u10 = static_cast<int>(uvRow[uvIndex + 0] >> 6);
+            int v10 = static_cast<int>(uvRow[uvIndex + 1] >> 6);
+            int y8 = (y10 * 255 + 511) / 1023;
+            int u8 = (u10 * 255 + 511) / 1023;
+            int v8 = (v10 * 255 + 511) / 1023;
+            uint8_t r = 0, g = 0, b = 0;
+            yuvToRgb(y8, u8, v8, impl_->fullRange, impl_->yuvMatrix, r, g, b);
+            dstRow[x * 4 + 0] = r;
+            dstRow[x * 4 + 1] = g;
+            dstRow[x * 4 + 2] = b;
+            dstRow[x * 4 + 3] = 255;
+          }
+        }
+      }
     }
 
     if (locked) {

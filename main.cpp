@@ -10,6 +10,7 @@
 #include <functional>
 #include <iostream>
 #include <string>
+#include <new>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -169,6 +170,7 @@ struct VideoPlaybackHooks {
   std::function<bool()> isAudioFinished;
   std::function<void()> togglePause;
   std::function<void(int)> seekBy;
+  std::function<void(double)> seekToRatio;
   std::function<void()> toggleRadio;
 };
 
@@ -526,6 +528,12 @@ static bool showAsciiVideo(
   VideoFrame nextFrame;
   int cachedWidth = -1;
   int cachedMaxHeight = -1;
+  int progressBarX = -1;
+  int progressBarY = -1;
+  int progressBarWidth = 0;
+  bool renderFailed = false;
+  std::string renderFailMessage;
+  std::string renderFailDetail;
 
   if (!decoder.readFrame(frame)) {
     if (hooks.stopAudio) hooks.stopAudio();
@@ -570,8 +578,27 @@ static bool showAsciiVideo(
     bool sizeChanged =
         (width != cachedWidth || maxHeight != cachedMaxHeight);
     if (refreshArt || sizeChanged) {
-      renderAsciiArtFromRgba(frame.rgba.data(), frame.width, frame.height,
-                             width, maxHeight, art);
+      bool artOk = false;
+      try {
+        artOk = renderAsciiArtFromRgba(frame.rgba.data(), frame.width,
+                                       frame.height, width, maxHeight, art);
+      } catch (const std::bad_alloc&) {
+        renderFailed = true;
+        renderFailMessage = "Failed to render video frame.";
+        renderFailDetail = "Out of memory.";
+        return;
+      } catch (...) {
+        renderFailed = true;
+        renderFailMessage = "Failed to render video frame.";
+        renderFailDetail = "";
+        return;
+      }
+      if (!artOk) {
+        renderFailed = true;
+        renderFailMessage = "Failed to render video frame.";
+        renderFailDetail = "";
+        return;
+      }
       cachedWidth = width;
       cachedMaxHeight = maxHeight;
     }
@@ -638,6 +665,9 @@ static bool showAsciiVideo(
     if (totalSec > 0.0 && std::isfinite(totalSec)) {
       ratio = std::clamp(currentSec / totalSec, 0.0, 1.0);
     }
+    progressBarX = 1;
+    progressBarY = footerLine;
+    progressBarWidth = barWidth;
     screen.writeChar(0, footerLine, L'|', progressFrameStyle);
     auto barCells = renderProgressBarCells(ratio, barWidth,
                                            progressEmptyStyle, progressStart,
@@ -655,6 +685,10 @@ static bool showAsciiVideo(
   };
 
   renderScreen(true);
+  if (renderFailed) {
+    if (hooks.stopAudio) hooks.stopAudio();
+    return showError(renderFailMessage, renderFailDetail);
+  }
 
   while (running) {
     InputEvent ev{};
@@ -710,6 +744,50 @@ static bool showAsciiVideo(
           }
         }
       }
+      if (ev.type == InputEvent::Type::Mouse) {
+        const MouseEvent& mouse = ev.mouse;
+        bool leftPressed =
+            (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+        if (leftPressed &&
+            (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
+          if (progressBarWidth > 0 && mouse.pos.Y == progressBarY &&
+              progressBarX >= 0) {
+            int rel = mouse.pos.X - progressBarX;
+            if (rel >= 0 && rel < progressBarWidth) {
+              double denom =
+                  static_cast<double>(std::max(1, progressBarWidth - 1));
+              double ratio = static_cast<double>(rel) / denom;
+              ratio = std::clamp(ratio, 0.0, 1.0);
+              double totalSec = totalDurationSec();
+              if (totalSec > 0.0 && std::isfinite(totalSec)) {
+                if (audioOk && hooks.seekToRatio) {
+                  hooks.seekToRatio(ratio);
+                }
+                double targetSec = ratio * totalSec;
+                int64_t targetTs =
+                    firstTs +
+                    static_cast<int64_t>(targetSec * secondsToTicks);
+                if (decoder.seekToTimestamp100ns(targetTs) &&
+                    decoder.readFrame(frame)) {
+                  frameSec =
+                      static_cast<double>(frame.timestamp100ns - firstTs) *
+                      ticksToSeconds;
+                  lastFrameSec = frameSec;
+                  videoEnded = false;
+                }
+                if (!audioOk) {
+                  startTime = std::chrono::steady_clock::now() -
+                              std::chrono::duration_cast<
+                                  std::chrono::steady_clock::duration>(
+                                  std::chrono::duration<double>(targetSec));
+                }
+                redraw = true;
+              }
+              continue;
+            }
+          }
+        }
+      }
     }
     if (!running) break;
 
@@ -730,6 +808,10 @@ static bool showAsciiVideo(
     if (!videoEnded && !paused) {
       if (syncSec + leadSlack >= frameSec) {
         renderScreen(true);
+        if (renderFailed) {
+          running = false;
+          break;
+        }
         redraw = false;
         lastFrameSec = frameSec;
         if (decoder.readFrame(nextFrame)) {
@@ -755,6 +837,10 @@ static bool showAsciiVideo(
 
     if (redraw) {
       renderScreen(false);
+      if (renderFailed) {
+        running = false;
+        break;
+      }
       redraw = false;
     }
 
@@ -764,6 +850,11 @@ static bool showAsciiVideo(
     if (audioOk && audioFinished) break;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(4));
+  }
+
+  if (renderFailed) {
+    if (hooks.stopAudio) hooks.stopAudio();
+    return showError(renderFailMessage, renderFailDetail);
   }
 
   if (hooks.stopAudio) hooks.stopAudio();
@@ -1253,6 +1344,21 @@ int main(int argc, char** argv) {
     state.finished.store(false);
   };
 
+  std::filesystem::path pendingImage;
+  bool hasPendingImage = false;
+  std::filesystem::path pendingVideo;
+  bool hasPendingVideo = false;
+
+  auto seekToRatio = [&](double ratio) {
+    if (!decoderReady || state.totalFrames == 0) return;
+    ratio = std::clamp(ratio, 0.0, 1.0);
+    int64_t target =
+        static_cast<int64_t>(ratio * static_cast<double>(state.totalFrames));
+    state.pendingSeekFrames.store(target);
+    state.seekRequested.store(true);
+    state.finished.store(false);
+  };
+
   VideoPlaybackHooks videoHooks;
   videoHooks.startAudio = [&](const std::filesystem::path& file) {
     return loadFile(file);
@@ -1271,26 +1377,12 @@ int main(int argc, char** argv) {
     state.paused.store(!state.paused.load());
   };
   videoHooks.seekBy = [&](int direction) { seekBy(direction); };
+  videoHooks.seekToRatio = [&](double ratio) { seekToRatio(ratio); };
   videoHooks.toggleRadio = [&]() {
     bool next = !state.useRadio1938.load();
     state.useRadio1938.store(next);
     uint32_t desired = next ? 1u : baseChannels;
     ensureChannels(desired);
-  };
-
-  std::filesystem::path pendingImage;
-  bool hasPendingImage = false;
-  std::filesystem::path pendingVideo;
-  bool hasPendingVideo = false;
-
-  auto seekToRatio = [&](double ratio) {
-    if (!decoderReady || state.totalFrames == 0) return;
-    ratio = std::clamp(ratio, 0.0, 1.0);
-    int64_t target =
-        static_cast<int64_t>(ratio * static_cast<double>(state.totalFrames));
-    state.pendingSeekFrames.store(target);
-    state.seekRequested.store(true);
-    state.finished.store(false);
   };
 
   if (!o.input.empty() && o.play && std::filesystem::exists(o.input)) {
