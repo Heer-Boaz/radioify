@@ -33,6 +33,7 @@ bool renderAsciiArtFromRgba(const uint8_t* rgba,
                             int height,
                             int maxWidth,
                             int maxHeight,
-                            AsciiArt& out);
+                            AsciiArt& out,
+                            bool assumeOpaque = false);
 
 #endif

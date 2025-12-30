@@ -593,7 +593,8 @@ static bool showAsciiVideo(
       bool artOk = false;
       try {
         artOk = renderAsciiArtFromRgba(frame.rgba.data(), frame.width,
-                                       frame.height, width, maxHeight, art);
+                                       frame.height, width, maxHeight, art,
+                                       true);
       } catch (const std::bad_alloc&) {
         renderFailed = true;
         renderFailMessage = "Failed to render video frame.";

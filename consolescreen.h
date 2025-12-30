@@ -51,9 +51,13 @@ class ConsoleScreen {
   void writeText(int x, int y, const std::string& text, const Style& style);
   void writeRun(int x, int y, int len, wchar_t ch, const Style& style);
   void writeChar(int x, int y, wchar_t ch, const Style& style);
-  void draw();
+  void setFastOutput(bool enabled);
+  bool fastOutput() const;
+ void draw();
 
  private:
+  void drawFast();
+
   struct Cell {
     wchar_t ch = L' ';
     Color fg{255, 255, 255};
@@ -65,7 +69,10 @@ class ConsoleScreen {
   CONSOLE_CURSOR_INFO originalCursor_{};
   int width_ = 80;
   int height_ = 25;
+  bool fastOutput_ = false;
+  std::vector<CHAR_INFO> fastBuffer_;
   std::vector<Cell> buffer_;
+  std::wstring drawBuffer_;
 };
 
 #endif
