@@ -87,6 +87,8 @@ constexpr int kBgDelta = 8;
 constexpr int kBgDeltaMin = 2;
 constexpr int kEdgeDeltaScale = 80;
 constexpr int kDitherBias = 64;
+constexpr int kLumSmoothAlpha = 48;
+constexpr int kLumResetDelta = 32;
 
 const std::array<uint16_t, 256> kYFromR = []() {
   std::array<uint16_t, 256> t{};
@@ -188,6 +190,9 @@ struct BrailleFastScratch {
   std::vector<uint8_t> prevFgValid;
   std::vector<uint32_t> prevBg;
   std::vector<uint8_t> prevBgValid;
+  int prevLumLow = -1;
+  int prevLumHigh = -1;
+  int prevBgLum = -1;
 
   void ensure(int w, int h, int maxArtWidthIn, int maxHeightIn) {
     if (w <= 0 || h <= 0) return;
@@ -233,6 +238,9 @@ struct BrailleFastScratch {
     prevFgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevBg.assign(static_cast<size_t>(outW) * outH, 0);
     prevBgValid.assign(static_cast<size_t>(outW) * outH, 0);
+    prevLumLow = -1;
+    prevLumHigh = -1;
+    prevBgLum = -1;
   }
 };
 
@@ -454,8 +462,6 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
       lumHigh = std::min(255, lumLow + 1);
     }
   }
-  const int lumRange = std::max(1, lumHigh - lumLow);
-
   int bgLum = 255;
   if (lumCount > 0) {
     uint32_t maxCount = 0;
@@ -466,6 +472,30 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
       }
     }
   }
+
+  if (scratch.prevLumLow >= 0 && scratch.prevLumHigh >= 0 &&
+      scratch.prevBgLum >= 0) {
+    if (std::abs(lumLow - scratch.prevLumLow) < kLumResetDelta) {
+      lumLow = scratch.prevLumLow +
+               ((lumLow - scratch.prevLumLow) * kLumSmoothAlpha >> 8);
+    }
+    if (std::abs(lumHigh - scratch.prevLumHigh) < kLumResetDelta) {
+      lumHigh = scratch.prevLumHigh +
+                ((lumHigh - scratch.prevLumHigh) * kLumSmoothAlpha >> 8);
+    }
+    if (std::abs(bgLum - scratch.prevBgLum) < kLumResetDelta) {
+      bgLum = scratch.prevBgLum +
+              ((bgLum - scratch.prevBgLum) * kLumSmoothAlpha >> 8);
+    }
+  }
+  if (lumHigh <= lumLow) {
+    lumHigh = std::min(255, lumLow + 1);
+  }
+  scratch.prevLumLow = lumLow;
+  scratch.prevLumHigh = lumHigh;
+  scratch.prevBgLum = bgLum;
+
+  const int lumRange = std::max(1, lumHigh - lumLow);
 
   const int brailleMap[2][4] = {{0, 1, 2, 6}, {3, 4, 5, 7}};
 
