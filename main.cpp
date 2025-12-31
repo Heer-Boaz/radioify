@@ -392,7 +392,7 @@ static bool isSupportedAudioExt(const std::filesystem::path& p) {
 
 static bool isMiniaudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac";
+  return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".webm";
 }
 
 static bool isSupportedMediaExt(const std::filesystem::path& p) {
@@ -401,7 +401,7 @@ static bool isSupportedMediaExt(const std::filesystem::path& p) {
 
 static bool isM4aExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".m4a" || ext == ".webm" || ext == ".mp4";
+  return ext == ".m4a" || ext == ".mp4";
 }
 
 static void validateInputFile(const std::filesystem::path& p) {

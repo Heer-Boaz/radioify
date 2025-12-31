@@ -247,7 +247,7 @@ bool createHardwareReaderAttributes(IMFAttributes** attributes,
       FAILED(attrs->SetUINT32(
           MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, FALSE)) ||
       FAILED(attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-                              TRUE))) {
+                              FALSE))) {
     safeRelease(attrs);
     safeRelease(manager);
     safeRelease(context);
