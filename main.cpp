@@ -392,7 +392,7 @@ static bool isSupportedAudioExt(const std::filesystem::path& p) {
 
 static bool isMiniaudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".webm";
+  return ext == ".wav" || ext == ".mp3" || ext == ".flac";
 }
 
 static bool isSupportedMediaExt(const std::filesystem::path& p) {
@@ -696,7 +696,7 @@ static bool showAsciiVideo(
   std::condition_variable queueCv;
   std::deque<QueuedFrame> frameQueue;
   constexpr size_t kMaxQueue = 3;
-  constexpr bool kEnableSoftwareFallback = false;
+  constexpr bool kEnableSoftwareFallback = true;
   struct DecodeCommand {
     bool resize = false;
     int targetW = 0;
@@ -874,6 +874,7 @@ static bool showAsciiVideo(
       bool preferHardware = true;
       bool softwareFallbackAttempted = false;
       int64_t lastVideoTs = 0;
+      bool haveDecodedFrame = false;
       std::string error;
       if (!decoder.init(file, &error, preferHardware)) {
         {
@@ -911,8 +912,10 @@ static bool showAsciiVideo(
         if (!kEnableSoftwareFallback) {
           return FallbackResult::NotAttempted;
         }
-        if (info.noFrameTimeoutMs == 0 || softwareFallbackAttempted ||
-            !preferHardware) {
+        if (softwareFallbackAttempted || !preferHardware) {
+          return FallbackResult::NotAttempted;
+        }
+        if (info.noFrameTimeoutMs == 0 && haveDecodedFrame) {
           return FallbackResult::NotAttempted;
         }
         softwareFallbackAttempted = true;
@@ -1024,15 +1027,15 @@ static bool showAsciiVideo(
           while (decodeRunning.load()) {
             bool ok = decoder.readFrame(skipFrame, &skipInfo, false);
             if (!ok) {
-              if (!decoder.atEnd()) {
-                auto fallback = trySoftwareFallback(skipInfo);
-                if (fallback == FallbackResult::Applied) {
-                  continue;
-                }
-                if (fallback == FallbackResult::Failed) {
-                  decodeEnded.store(true);
-                  break;
-                }
+              auto fallback = trySoftwareFallback(skipInfo);
+              if (fallback == FallbackResult::Applied) {
+                continue;
+              }
+              if (fallback == FallbackResult::Failed) {
+                decodeEnded.store(true);
+                break;
+              }
+              if (!decoder.atEnd() || !haveDecodedFrame) {
                 if (skipInfo.noFrameTimeoutMs > 0) {
                   setNoFrameError(skipInfo);
                 } else {
@@ -1044,6 +1047,7 @@ static bool showAsciiVideo(
             }
             readCalls.fetch_add(1, std::memory_order_relaxed);
             ++skippedLocal;
+            haveDecodedFrame = true;
             lastVideoTs = skipFrame.timestamp100ns;
             if (skipFrame.timestamp100ns >= targetTs) {
               break;
@@ -1064,15 +1068,15 @@ static bool showAsciiVideo(
           bool ok = decoder.readFrame(decodedFrame, &info, enableAscii);
           auto decodeEnd = std::chrono::steady_clock::now();
           if (!ok) {
-            if (!decoder.atEnd()) {
-              auto fallback = trySoftwareFallback(info);
-              if (fallback == FallbackResult::Applied) {
-                continue;
-              }
-              if (fallback == FallbackResult::Failed) {
-                decodeEnded.store(true);
-                break;
-              }
+            auto fallback = trySoftwareFallback(info);
+            if (fallback == FallbackResult::Applied) {
+              continue;
+            }
+            if (fallback == FallbackResult::Failed) {
+              decodeEnded.store(true);
+              break;
+            }
+            if (!decoder.atEnd() || !haveDecodedFrame) {
               if (info.noFrameTimeoutMs > 0) {
                 setNoFrameError(info);
               } else {
@@ -1083,6 +1087,7 @@ static bool showAsciiVideo(
             break;
           }
           readCalls.fetch_add(1, std::memory_order_relaxed);
+          haveDecodedFrame = true;
           lastVideoTs = info.timestamp100ns;
 
           double decodeMs =
@@ -1120,15 +1125,15 @@ static bool showAsciiVideo(
         bool ok = decoder.readFrame(decodedFrame, &info, enableAscii);
         auto decodeEnd = std::chrono::steady_clock::now();
         if (!ok) {
-          if (!decoder.atEnd()) {
-            auto fallback = trySoftwareFallback(info);
-            if (fallback == FallbackResult::Applied) {
-              continue;
-            }
-            if (fallback == FallbackResult::Failed) {
-              decodeEnded.store(true);
-              break;
-            }
+          auto fallback = trySoftwareFallback(info);
+          if (fallback == FallbackResult::Applied) {
+            continue;
+          }
+          if (fallback == FallbackResult::Failed) {
+            decodeEnded.store(true);
+            break;
+          }
+          if (!decoder.atEnd() || !haveDecodedFrame) {
             if (info.noFrameTimeoutMs > 0) {
               setNoFrameError(info);
             } else {
@@ -1139,6 +1144,7 @@ static bool showAsciiVideo(
           break;
         }
         readCalls.fetch_add(1, std::memory_order_relaxed);
+        haveDecodedFrame = true;
         lastVideoTs = info.timestamp100ns;
 
         double decodeMs =

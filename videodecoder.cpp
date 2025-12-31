@@ -93,6 +93,7 @@ enum class PixelFormat {
   ARGB32,
   NV12,
   P010,
+  I420,
   Unknown,
 };
 
@@ -101,6 +102,7 @@ PixelFormat pixelFormatFromSubtype(const GUID& subtype) {
   if (subtype == MFVideoFormat_ARGB32) return PixelFormat::ARGB32;
   if (subtype == MFVideoFormat_NV12) return PixelFormat::NV12;
   if (subtype == MFVideoFormat_P010) return PixelFormat::P010;
+  if (subtype == MFVideoFormat_I420) return PixelFormat::I420;
   return PixelFormat::Unknown;
 }
 
@@ -141,7 +143,7 @@ void updateColorInfo(IMFMediaType* mediaType, UINT32* yuvMatrix,
       SUCCEEDED(mediaType->GetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, &range))) {
     *fullRange = (range == MFNominalRange_0_255);
   } else if (fullRange) {
-    *fullRange = true;
+    *fullRange = false;
   }
 }
 
@@ -660,7 +662,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
   constexpr int kMaxRecoveries = 4;
   constexpr int64_t kFallbackDuration100ns = 333667;
   const auto readStart = std::chrono::steady_clock::now();
-  constexpr auto kNoFrameTimeout = std::chrono::milliseconds(500);
+  constexpr auto kNoFrameTimeout = std::chrono::milliseconds(2000);
   auto checkNoFrameTimeout = [&](DWORD flagsValue) -> bool {
     auto elapsed = std::chrono::steady_clock::now() - readStart;
     if (elapsed < kNoFrameTimeout) {
