@@ -696,6 +696,7 @@ static bool showAsciiVideo(
   std::condition_variable queueCv;
   std::deque<QueuedFrame> frameQueue;
   constexpr size_t kMaxQueue = 3;
+  constexpr bool kEnableSoftwareFallback = false;
   struct DecodeCommand {
     bool resize = false;
     int targetW = 0;
@@ -870,8 +871,11 @@ static bool showAsciiVideo(
       HRESULT roHr = RoInitialize(RO_INIT_MULTITHREADED);
       bool roInit = SUCCEEDED(roHr);
       VideoDecoder decoder;
+      bool preferHardware = true;
+      bool softwareFallbackAttempted = false;
+      int64_t lastVideoTs = 0;
       std::string error;
-      if (!decoder.init(file, &error)) {
+      if (!decoder.init(file, &error, preferHardware)) {
         {
           std::lock_guard<std::mutex> lock(initMutex);
           initDone = true;
@@ -900,6 +904,58 @@ static bool showAsciiVideo(
         sourceDuration100ns = decoder.duration100ns();
       }
       initCv.notify_all();
+
+      enum class FallbackResult { NotAttempted, Applied, Failed };
+      auto trySoftwareFallback =
+          [&](const VideoReadInfo& info) -> FallbackResult {
+        if (!kEnableSoftwareFallback) {
+          return FallbackResult::NotAttempted;
+        }
+        if (info.noFrameTimeoutMs == 0 || softwareFallbackAttempted ||
+            !preferHardware) {
+          return FallbackResult::NotAttempted;
+        }
+        softwareFallbackAttempted = true;
+        preferHardware = false;
+        std::string fallbackError;
+        decoder.uninit();
+        if (!decoder.init(file, &fallbackError, preferHardware)) {
+          std::string detail =
+              "No video frames after " +
+              std::to_string(info.noFrameTimeoutMs) +
+              "ms; software fallback failed";
+          if (!fallbackError.empty()) {
+            detail += ": " + fallbackError;
+          }
+          setDecodeError(detail);
+          return FallbackResult::Failed;
+        }
+        if (requestedTargetW > 0 && requestedTargetH > 0) {
+          std::string sizeError;
+          if (!decoder.setTargetSize(requestedTargetW, requestedTargetH,
+                                     &sizeError)) {
+            if (sizeError.empty()) {
+              sizeError = "Failed to apply target video size.";
+            }
+            setScaleWarning(sizeError);
+          } else {
+            setScaleWarning("");
+          }
+        }
+        if (lastVideoTs > 0) {
+          decoder.seekToTimestamp100ns(lastVideoTs);
+        }
+        clearQueue();
+        perfLog.appendf("video_fallback software timeout_ms=%u",
+                        info.noFrameTimeoutMs);
+        return FallbackResult::Applied;
+      };
+      auto setNoFrameError = [&](const VideoReadInfo& info) {
+        std::string detail =
+            "No video frames after " + std::to_string(info.noFrameTimeoutMs) +
+            "ms; codec may be unsupported.";
+        setDecodeError(detail);
+      };
 
       uint64_t currentEpoch = 0;
       while (decodeRunning.load()) {
@@ -969,13 +1025,26 @@ static bool showAsciiVideo(
             bool ok = decoder.readFrame(skipFrame, &skipInfo, false);
             if (!ok) {
               if (!decoder.atEnd()) {
-                setDecodeError("Failed to decode video frame.");
+                auto fallback = trySoftwareFallback(skipInfo);
+                if (fallback == FallbackResult::Applied) {
+                  continue;
+                }
+                if (fallback == FallbackResult::Failed) {
+                  decodeEnded.store(true);
+                  break;
+                }
+                if (skipInfo.noFrameTimeoutMs > 0) {
+                  setNoFrameError(skipInfo);
+                } else {
+                  setDecodeError("Failed to decode video frame.");
+                }
               }
               decodeEnded.store(true);
               break;
             }
             readCalls.fetch_add(1, std::memory_order_relaxed);
             ++skippedLocal;
+            lastVideoTs = skipFrame.timestamp100ns;
             if (skipFrame.timestamp100ns >= targetTs) {
               break;
             }
@@ -996,12 +1065,25 @@ static bool showAsciiVideo(
           auto decodeEnd = std::chrono::steady_clock::now();
           if (!ok) {
             if (!decoder.atEnd()) {
-              setDecodeError("Failed to decode video frame.");
+              auto fallback = trySoftwareFallback(info);
+              if (fallback == FallbackResult::Applied) {
+                continue;
+              }
+              if (fallback == FallbackResult::Failed) {
+                decodeEnded.store(true);
+                break;
+              }
+              if (info.noFrameTimeoutMs > 0) {
+                setNoFrameError(info);
+              } else {
+                setDecodeError("Failed to decode video frame.");
+              }
             }
             decodeEnded.store(true);
             break;
           }
           readCalls.fetch_add(1, std::memory_order_relaxed);
+          lastVideoTs = info.timestamp100ns;
 
           double decodeMs =
               std::chrono::duration<double, std::milli>(decodeEnd -
@@ -1039,12 +1121,25 @@ static bool showAsciiVideo(
         auto decodeEnd = std::chrono::steady_clock::now();
         if (!ok) {
           if (!decoder.atEnd()) {
-            setDecodeError("Failed to decode video frame.");
+            auto fallback = trySoftwareFallback(info);
+            if (fallback == FallbackResult::Applied) {
+              continue;
+            }
+            if (fallback == FallbackResult::Failed) {
+              decodeEnded.store(true);
+              break;
+            }
+            if (info.noFrameTimeoutMs > 0) {
+              setNoFrameError(info);
+            } else {
+              setDecodeError("Failed to decode video frame.");
+            }
           }
           decodeEnded.store(true);
           break;
         }
         readCalls.fetch_add(1, std::memory_order_relaxed);
+        lastVideoTs = info.timestamp100ns;
 
         double decodeMs =
             std::chrono::duration<double, std::milli>(decodeEnd - decodeStart)

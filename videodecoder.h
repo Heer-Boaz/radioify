@@ -21,12 +21,14 @@ struct VideoReadInfo {
   int typeChanges = 0;
   uint32_t errorHr = 0;
   uint32_t recoveries = 0;
+  uint32_t noFrameTimeoutMs = 0;
 };
 
 class VideoDecoder {
  public:
   ~VideoDecoder();
-  bool init(const std::filesystem::path& path, std::string* error);
+  bool init(const std::filesystem::path& path, std::string* error,
+            bool preferHardware = true);
   void uninit();
   bool readFrame(VideoFrame& out, VideoReadInfo* info = nullptr,
                  bool decodePixels = true);

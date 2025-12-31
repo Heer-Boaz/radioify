@@ -16,6 +16,7 @@
 #include <propvarutil.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -283,7 +284,8 @@ bool createSoftwareReaderAttributes(IMFAttributes** attributes) {
 }
 } // namespace
 
-bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
+bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
+                        bool preferHardware) {
   uninit();
 
   if (!ensureMediaFoundation(error)) return false;
@@ -292,8 +294,11 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   IMFDXGIDeviceManager* dxgiManager = nullptr;
   ID3D11Device* d3dDevice = nullptr;
   ID3D11DeviceContext* d3dContext = nullptr;
-  bool hardwareEnabled = createHardwareReaderAttributes(
-      &attributes, &dxgiManager, &d3dDevice, &d3dContext);
+  bool hardwareEnabled = false;
+  if (preferHardware) {
+    hardwareEnabled = createHardwareReaderAttributes(
+        &attributes, &dxgiManager, &d3dDevice, &d3dContext);
+  }
   if (!hardwareEnabled) {
     createSoftwareReaderAttributes(&attributes);
   }
@@ -520,7 +525,6 @@ bool VideoDecoder::setTargetSize(int targetWidth, int targetHeight,
 
   GUID subtype = impl_->subtype;
   currentType->GetGUID(MF_MT_SUBTYPE, &subtype);
-  safeRelease(currentType);
 
   IMFMediaType* targetType = nullptr;
   hr = MFCreateMediaType(&targetType);
@@ -538,6 +542,23 @@ bool VideoDecoder::setTargetSize(int targetWidth, int targetHeight,
                             static_cast<UINT32>(targetWidth),
                             static_cast<UINT32>(targetHeight));
   }
+  if (SUCCEEDED(hr)) {
+    UINT32 interlace = 0;
+    if (SUCCEEDED(currentType->GetUINT32(MF_MT_INTERLACE_MODE, &interlace))) {
+      targetType->SetUINT32(MF_MT_INTERLACE_MODE, interlace);
+    }
+    UINT32 num = 0;
+    UINT32 den = 0;
+    if (SUCCEEDED(MFGetAttributeRatio(currentType, MF_MT_FRAME_RATE, &num,
+                                      &den))) {
+      MFSetAttributeRatio(targetType, MF_MT_FRAME_RATE, num, den);
+    }
+    if (SUCCEEDED(MFGetAttributeRatio(currentType, MF_MT_PIXEL_ASPECT_RATIO,
+                                      &num, &den))) {
+      MFSetAttributeRatio(targetType, MF_MT_PIXEL_ASPECT_RATIO, num, den);
+    }
+  }
+  safeRelease(currentType);
   if (FAILED(hr)) {
     setError(error, ("Failed to configure target video size (hr=" +
                      hrToString(hr) + ").")
@@ -638,6 +659,25 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
   uint32_t lastErrorHr = 0;
   constexpr int kMaxRecoveries = 4;
   constexpr int64_t kFallbackDuration100ns = 333667;
+  const auto readStart = std::chrono::steady_clock::now();
+  constexpr auto kNoFrameTimeout = std::chrono::milliseconds(500);
+  auto checkNoFrameTimeout = [&](DWORD flagsValue) -> bool {
+    auto elapsed = std::chrono::steady_clock::now() - readStart;
+    if (elapsed < kNoFrameTimeout) {
+      return false;
+    }
+    if (info) {
+      info->flags = static_cast<uint32_t>(flagsValue);
+      info->streamTicks = streamTicks;
+      info->typeChanges = typeChanges;
+      info->errorHr = lastErrorHr;
+      info->recoveries = recoveries;
+      info->noFrameTimeoutMs = static_cast<uint32_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(elapsed)
+              .count());
+    }
+    return true;
+  };
 
   while (true) {
     DWORD flags = 0;
@@ -734,9 +774,15 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     if ((flags & MF_SOURCE_READERF_STREAMTICK) != 0) {
       ++streamTicks;
       safeRelease(sample);
+      if (checkNoFrameTimeout(flags)) {
+        return false;
+      }
       continue;
     }
     if (!sample) {
+      if (checkNoFrameTimeout(flags)) {
+        return false;
+      }
       continue;
     }
 
@@ -1087,18 +1133,25 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     } else {
       int planeHeight = height;
       if (format == PixelFormat::NV12 || format == PixelFormat::P010) {
+        int derivedPlaneHeight = 0;
         if (dxgiPlaneHeight > 0) {
           planeHeight = static_cast<int>(dxgiPlaneHeight);
-        } else if (curLen > 0 && stride > 0) {
+        }
+        // Buffer length can reflect a tighter packed plane height.
+        if (curLen > 0 && stride > 0) {
           const size_t denom =
               static_cast<size_t>(stride) * static_cast<size_t>(3u);
           const size_t numer = static_cast<size_t>(curLen) * 2u;
           if (denom > 0) {
             size_t derived = numer / denom;
             if (derived >= static_cast<size_t>(height)) {
-              planeHeight = static_cast<int>(derived);
+              derivedPlaneHeight = static_cast<int>(derived);
             }
           }
+        }
+        if (derivedPlaneHeight > 0 &&
+            (planeHeight == height || derivedPlaneHeight < planeHeight)) {
+          planeHeight = derivedPlaneHeight;
         }
       }
       size_t required = static_cast<size_t>(stride) *
