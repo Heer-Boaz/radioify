@@ -11,6 +11,7 @@
 #include <d3d11_4.h>
 #include <mfapi.h>
 #include <mfidl.h>
+#include <mfobjects.h>
 #include <mfreadwrite.h>
 #include <propvarutil.h>
 
@@ -233,12 +234,14 @@ bool createHardwareReaderAttributes(IMFAttributes** attributes,
   }
 
   IMFAttributes* attrs = nullptr;
-  hr = MFCreateAttributes(&attrs, 4);
+  hr = MFCreateAttributes(&attrs, 5);
   if (FAILED(hr) ||
       FAILED(attrs->SetUnknown(MF_SOURCE_READER_D3D_MANAGER, manager)) ||
       FAILED(attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
                               TRUE)) ||
       FAILED(attrs->SetUINT32(MF_SOURCE_READER_DISABLE_DXVA, FALSE)) ||
+      FAILED(attrs->SetUINT32(
+          MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, FALSE)) ||
       FAILED(attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
                               FALSE))) {
     safeRelease(attrs);
@@ -375,16 +378,6 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
     hr = MFCreateMediaType(&type);
     if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_P010);
-    if (SUCCEEDED(hr)) {
-      hr = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,
-                                       nullptr, type);
-    }
-    safeRelease(type);
-  }
-  if (FAILED(hr)) {
-    hr = MFCreateMediaType(&type);
-    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
     if (SUCCEEDED(hr)) {
       hr = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,
                                        nullptr, type);
@@ -795,32 +788,58 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     BYTE* data = nullptr;
     DWORD maxLen = 0;
     DWORD curLen = 0;
+    LONG pitch = 0;
     bool locked = false;
-    hr = buffer->Lock(&data, &maxLen, &curLen);
-    if (SUCCEEDED(hr) && data && curLen > 0) {
-      locked = true;
-    } else {
-      safeRelease(buffer);
-      safeRelease(sample);
-      continue;
+    bool locked2d = false;
+    IMF2DBuffer2* buffer2d = nullptr;
+    hr = buffer->QueryInterface(__uuidof(IMF2DBuffer2),
+                                reinterpret_cast<void**>(&buffer2d));
+    if (SUCCEEDED(hr) && buffer2d) {
+      BYTE* scanline0 = nullptr;
+      BYTE* bufferStart = nullptr;
+      DWORD bufferLength = 0;
+      HRESULT hr2d = buffer2d->Lock2DSize(MF2DBuffer_LockFlags_Read, &scanline0,
+                                          &pitch, &bufferStart,
+                                          &bufferLength);
+      if (SUCCEEDED(hr2d) && scanline0 && bufferLength > 0) {
+        data = scanline0;
+        curLen = bufferLength;
+        locked2d = true;
+      } else {
+        safeRelease(buffer2d);
+      }
     }
+    if (!locked2d) {
+      hr = buffer->Lock(&data, &maxLen, &curLen);
+      if (SUCCEEDED(hr) && data && curLen > 0) {
+        locked = true;
+      } else {
+        safeRelease(buffer);
+        safeRelease(sample);
+        continue;
+      }
+    }
+    auto unlockBuffer = [&]() {
+      if (locked2d && buffer2d) {
+        buffer2d->Unlock2D();
+      } else if (locked) {
+        buffer->Unlock();
+      }
+      safeRelease(buffer2d);
+    };
 
     constexpr size_t kMaxPixels = 16384u * 16384u;
     size_t pixelCount =
         static_cast<size_t>(width) * static_cast<size_t>(height);
     if (pixelCount == 0 || pixelCount > kMaxPixels) {
-      if (locked) {
-        buffer->Unlock();
-      }
+      unlockBuffer();
       safeRelease(buffer);
       safeRelease(sample);
       continue;
     }
     size_t byteCount = pixelCount * 4u;
     if (byteCount / 4u != pixelCount) {
-      if (locked) {
-        buffer->Unlock();
-      }
+      unlockBuffer();
       safeRelease(buffer);
       safeRelease(sample);
       continue;
@@ -828,12 +847,17 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
 
     PixelFormat format = pixelFormatFromSubtype(impl_->subtype);
     if (format == PixelFormat::Unknown) {
-      if (locked) {
-        buffer->Unlock();
-      }
+      unlockBuffer();
       safeRelease(buffer);
       safeRelease(sample);
       continue;
+    }
+
+    int stride = impl_->stride;
+    bool topDown = impl_->topDown;
+    if (locked2d && pitch > 0) {
+      stride = static_cast<int>(pitch);
+      topDown = true;
     }
 
     out.width = width;
@@ -843,35 +867,29 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       out.rgba.resize(byteCount);
     } catch (const std::bad_alloc&) {
       impl_->atEnd = true;
-      if (locked) {
-        buffer->Unlock();
-      }
+      unlockBuffer();
       safeRelease(buffer);
       safeRelease(sample);
       return false;
     }
 
     if (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32) {
-      if (impl_->stride < width * 4 ||
-          curLen < static_cast<DWORD>(impl_->stride)) {
-        if (locked) {
-          buffer->Unlock();
-        }
+      if (stride < width * 4 || curLen < static_cast<DWORD>(stride)) {
+        unlockBuffer();
         safeRelease(buffer);
         safeRelease(sample);
         continue;
       }
-      const size_t minBytes = static_cast<size_t>(impl_->stride) *
+      const size_t minBytes = static_cast<size_t>(stride) *
                               static_cast<size_t>(height);
       int maxRows = height;
       if (curLen > 0 && curLen < minBytes) {
-        maxRows = std::min(height,
-                           static_cast<int>(curLen / impl_->stride));
+        maxRows = std::min(height, static_cast<int>(curLen / stride));
       }
 
       for (int y = 0; y < maxRows; ++y) {
-        int srcY = impl_->topDown ? y : (height - 1 - y);
-        const uint8_t* srcRow = data + srcY * impl_->stride;
+        int srcY = topDown ? y : (height - 1 - y);
+        const uint8_t* srcRow = data + srcY * stride;
         uint8_t* dstRow = out.rgba.data() + (y * width * 4);
         for (int x = 0; x < width; ++x) {
           const uint8_t b = srcRow[x * 4 + 0];
@@ -891,21 +909,16 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       size_t minStride = (format == PixelFormat::P010)
                              ? static_cast<size_t>(width) * 2u
                              : static_cast<size_t>(width);
-      if (impl_->stride < static_cast<int>(minStride)) {
-        if (locked) {
-          buffer->Unlock();
-        }
+      if (stride < static_cast<int>(minStride)) {
+        unlockBuffer();
         safeRelease(buffer);
         safeRelease(sample);
         continue;
       }
       size_t required =
-          static_cast<size_t>(impl_->stride) *
-          static_cast<size_t>(height) * 3u / 2u;
+          static_cast<size_t>(stride) * static_cast<size_t>(height) * 3u / 2u;
       if (curLen < required) {
-        if (locked) {
-          buffer->Unlock();
-        }
+        unlockBuffer();
         safeRelease(buffer);
         safeRelease(sample);
         continue;
@@ -913,17 +926,16 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
 
       const uint8_t* yPlane = data;
       const uint8_t* uvPlane =
-          data + static_cast<size_t>(impl_->stride) *
-                     static_cast<size_t>(height);
+          data + static_cast<size_t>(stride) * static_cast<size_t>(height);
 
       for (int y = 0; y < height; ++y) {
-        int srcY = impl_->topDown ? y : (height - 1 - y);
+        int srcY = topDown ? y : (height - 1 - y);
         int uvY = srcY / 2;
         uint8_t* dstRow = out.rgba.data() + (y * width * 4);
 
         if (format == PixelFormat::NV12) {
-          const uint8_t* yRow = yPlane + srcY * impl_->stride;
-          const uint8_t* uvRow = uvPlane + uvY * impl_->stride;
+          const uint8_t* yRow = yPlane + srcY * stride;
+          const uint8_t* uvRow = uvPlane + uvY * stride;
           for (int x = 0; x < width; ++x) {
             int yVal = yRow[x];
             int uvIndex = (x / 2) * 2;
@@ -939,11 +951,9 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
           }
         } else {
           const uint16_t* yRow =
-              reinterpret_cast<const uint16_t*>(yPlane +
-                                                 srcY * impl_->stride);
+              reinterpret_cast<const uint16_t*>(yPlane + srcY * stride);
           const uint16_t* uvRow =
-              reinterpret_cast<const uint16_t*>(uvPlane +
-                                                 uvY * impl_->stride);
+              reinterpret_cast<const uint16_t*>(uvPlane + uvY * stride);
           for (int x = 0; x < width; ++x) {
             int uvIndex = (x / 2) * 2;
             int y10 = static_cast<int>(yRow[x] >> 6);
@@ -982,9 +992,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       info->recoveries = recoveries;
     }
 
-    if (locked) {
-      buffer->Unlock();
-    }
+    unlockBuffer();
     safeRelease(buffer);
     safeRelease(sample);
     return true;
