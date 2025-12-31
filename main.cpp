@@ -1196,17 +1196,9 @@ static bool showAsciiVideo(
     return showError(initError, "");
   }
 
-  audioOk = hooks.startAudio ? hooks.startAudio(file) : false;
-  perfLog.appendf("audio_start ok=%d", audioOk ? 1 : 0);
-  if (audioOk && hooks.getAudioPerfStats) {
-    AudioPerfStats stats = hooks.getAudioPerfStats();
-    if (stats.periodFrames > 0 && stats.periods > 0) {
-      perfLog.appendf(
-          "audio_device period_frames=%u periods=%u buffer_frames=%u rate=%u channels=%u using_m4a=%d",
-          stats.periodFrames, stats.periods, stats.bufferFrames,
-          stats.sampleRate, stats.channels, stats.usingM4a ? 1 : 0);
-    }
-  }
+  // Audio will be started after the first video frame is available so
+  // audio/video can be synchronized more reliably. See below where
+  // `hooks.startAudio` is called after rendering the first frame.
 
   VideoReadInfo firstInfo{};
   const bool allowDecoderScale = enableAscii;
@@ -1462,9 +1454,21 @@ static bool showAsciiVideo(
   };
 
   renderScreen(true);
+  // Start audio only after the first frame has been decoded and rendered.
+  audioOk = hooks.startAudio ? hooks.startAudio(file) : false;
+  perfLog.appendf("audio_start ok=%d", audioOk ? 1 : 0);
+  if (audioOk && hooks.getAudioPerfStats) {
+    AudioPerfStats stats = hooks.getAudioPerfStats();
+    if (stats.periodFrames > 0 && stats.periods > 0) {
+      perfLog.appendf(
+          "audio_device period_frames=%u periods=%u buffer_frames=%u rate=%u channels=%u using_m4a=%d",
+          stats.periodFrames, stats.periods, stats.bufferFrames,
+          stats.sampleRate, stats.channels, stats.usingM4a ? 1 : 0);
+    }
+  }
   if (renderFailed) {
     stopDecodeThread();
-    if (hooks.stopAudio) hooks.stopAudio();
+    if (audioOk && hooks.stopAudio) hooks.stopAudio();
     return showError(renderFailMessage, renderFailDetail);
   }
 

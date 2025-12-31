@@ -241,7 +241,7 @@ bool createHardwareReaderAttributes(IMFAttributes** attributes,
   }
 
   IMFAttributes* attrs = nullptr;
-  hr = MFCreateAttributes(&attrs, 6);
+  hr = MFCreateAttributes(&attrs, 5);
   if (FAILED(hr) ||
       FAILED(attrs->SetUnknown(MF_SOURCE_READER_D3D_MANAGER, manager)) ||
       FAILED(attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
@@ -250,8 +250,7 @@ bool createHardwareReaderAttributes(IMFAttributes** attributes,
       FAILED(attrs->SetUINT32(
           MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, FALSE)) ||
       FAILED(attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-                              FALSE)) ||
-      FAILED(attrs->SetUINT32(MF_LOW_LATENCY, TRUE))) {
+                              FALSE))) {
     safeRelease(attrs);
     safeRelease(manager);
     safeRelease(context);
@@ -270,7 +269,7 @@ bool createSoftwareReaderAttributes(IMFAttributes** attributes) {
   if (!attributes) return false;
   *attributes = nullptr;
   IMFAttributes* attrs = nullptr;
-  HRESULT hr = MFCreateAttributes(&attrs, 4);
+  HRESULT hr = MFCreateAttributes(&attrs, 3);
   if (FAILED(hr)) {
     return false;
   }
@@ -278,8 +277,7 @@ bool createSoftwareReaderAttributes(IMFAttributes** attributes) {
                               TRUE)) ||
       FAILED(attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
                               FALSE)) ||
-      FAILED(attrs->SetUINT32(MF_SOURCE_READER_DISABLE_DXVA, TRUE)) ||
-      FAILED(attrs->SetUINT32(MF_LOW_LATENCY, TRUE))) {
+      FAILED(attrs->SetUINT32(MF_SOURCE_READER_DISABLE_DXVA, TRUE))) {
     safeRelease(attrs);
     return false;
   }
