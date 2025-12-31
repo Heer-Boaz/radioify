@@ -717,6 +717,11 @@ static bool showAsciiVideo(
   uint64_t lastQueueDrops = 0;
   uint64_t lastSkippedCalls = 0;
   double audioSyncOffset = 0.0;
+  
+  // Sync parameters - video tries to stay within this window of audio
+  constexpr double kSyncTolerance = 0.033;      // Acceptable sync tolerance (~1 frame at 30fps)
+  constexpr double kHardResyncThreshold = 0.5;  // Force hard resync above this (500ms)
+  double lastSyncDrift = 0.0;
   bool audioSyncInit = false;
 
   auto clearQueue = [&]() {
@@ -1043,11 +1048,8 @@ static bool showAsciiVideo(
   double frameSec =
       static_cast<double>(frame.timestamp100ns - firstTs) * ticksToSeconds;
   double lastFrameSec = frameSec;
-  if (audioOk && hooks.getAudioTimeSec) {
-    double audioNow = hooks.getAudioTimeSec();
-    audioSyncOffset = audioNow - frameSec;
-    audioSyncInit = true;
-  }
+  // Don't initialize sync offset yet - wait for first real frame display
+  // This ensures audio has had time to start properly
   auto startTime = std::chrono::steady_clock::now();
   auto lastUiUpdate = startTime;
 
@@ -1397,9 +1399,12 @@ static bool showAsciiVideo(
     double syncSec = 0.0;
     if (audioOk && hooks.getAudioTimeSec) {
       double audioNow = hooks.getAudioTimeSec();
-      if (!audioSyncInit) {
+      if (!audioSyncInit && audioNow > 0.0) {
+        // Initialize sync when audio has actually started playing
         audioSyncOffset = audioNow - lastFrameSec;
         audioSyncInit = true;
+        perfLog.appendf("sync_init audio=%.3f video=%.3f offset=%.3f", 
+                        audioNow, lastFrameSec, audioSyncOffset);
       }
       syncSec = std::max(0.0, audioNow - audioSyncOffset);
     } else {
@@ -1467,14 +1472,69 @@ static bool showAsciiVideo(
     bool queueEmpty = false;
 
     if (!videoEnded && !paused) {
+      // Use wallclock time as ground truth for how much time has passed
+      double wallclockElapsed = std::chrono::duration<double>(now - startTime).count();
+      
+      // Calculate TRUE drift: where video SHOULD be (wallclock) vs where it IS (lastFrameSec)
+      // This measures actual visual desync, not just audio-video offset
+      double trueDrift = wallclockElapsed - lastFrameSec;
+      
+      // Also track audio drift for reference
+      double audioDrift = 0.0;
+      if (audioOk && hooks.getAudioTimeSec) {
+        double audioNow = hooks.getAudioTimeSec();
+        audioDrift = audioNow - lastFrameSec;
+      }
+      
+      lastSyncDrift = trueDrift;
+      
+      // Hard resync if drift is too large (scene change, seek, etc)
+      if (trueDrift > kHardResyncThreshold) {
+        // Reset startTime to re-sync with current video position
+        auto offsetDuration = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(lastFrameSec));
+        startTime = now - offsetDuration;
+        if (audioOk && hooks.getAudioTimeSec) {
+          double audioNow = hooks.getAudioTimeSec();
+          audioSyncOffset = audioNow - lastFrameSec;
+        }
+        trueDrift = 0.0;
+        perfLog.appendf("sync_hard_reset wallclock=%.3f video=%.3f", wallclockElapsed, lastFrameSec);
+      }
+      
       double targetSec = syncSec + leadSlack;
+      
       {
         std::lock_guard<std::mutex> lock(queueMutex);
+        
+        // If we're significantly behind, skip frames aggressively
+        if (trueDrift > kSyncTolerance && !frameQueue.empty()) {
+          // Find the frame closest to current wallclock time
+          double targetTime = wallclockElapsed;
+          
+          while (frameQueue.size() > 1) {
+            double frontSec = static_cast<double>(
+                frameQueue.front().frame.timestamp100ns - firstTs) * ticksToSeconds;
+            double nextSec = static_cast<double>(
+                frameQueue[1].frame.timestamp100ns - firstTs) * ticksToSeconds;
+            
+            // If next frame is still behind target, skip current frame
+            if (nextSec <= targetTime) {
+              frameQueue.pop_front();
+              ++popped;
+            } else {
+              break;
+            }
+          }
+        }
+        
+        // Now take the front frame if it's ready
         while (!frameQueue.empty()) {
           double qSec =
               static_cast<double>(frameQueue.front().frame.timestamp100ns -
                                   firstTs) *
               ticksToSeconds;
+          
           if (qSec <= targetSec) {
             candidate = std::move(frameQueue.front());
             frameQueue.pop_front();
@@ -1517,6 +1577,7 @@ static bool showAsciiVideo(
               .count();
       double decodeMs = candidate.decodeMs;
       double lagSec = syncSec - displayedSec;
+      double syncDriftNow = lastSyncDrift;
       int dropped = popped > 0 ? (popped - 1) : 0;
       uint64_t curReadCalls = readCalls.load();
       uint64_t curSkipped = skippedCalls.load();
@@ -1535,8 +1596,8 @@ static bool showAsciiVideo(
       }
       if (haveAudioStats) {
         perfLog.appendf(
-            "frame t=%.3f sync=%.3f lag=%.3f disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u vhr=0x%08X acb=%llu areq=%llu aread=%llu ashort=%llu asilence=%llu alast=%u/%u",
-            displayedSec, syncSec, lagSec,
+            "frame t=%.3f sync=%.3f lag=%.3f drift=%.3f disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u vhr=0x%08X acb=%llu areq=%llu aread=%llu ashort=%llu asilence=%llu alast=%u/%u",
+            displayedSec, syncSec, lagSec, syncDriftNow,
             static_cast<long long>(displayedTs),
             static_cast<long long>(nextTs), renderMs, decodeMs, dropped,
             queueDropDelta, skippedDelta, readDelta, candidate.info.flags,
@@ -1551,8 +1612,8 @@ static bool showAsciiVideo(
             audioStats.lastCallbackFrames, audioStats.lastFramesRead);
       } else {
         perfLog.appendf(
-            "frame t=%.3f sync=%.3f lag=%.3f disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u vhr=0x%08X",
-            displayedSec, syncSec, lagSec,
+            "frame t=%.3f sync=%.3f lag=%.3f drift=%.3f disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u vhr=0x%08X",
+            displayedSec, syncSec, lagSec, syncDriftNow,
             static_cast<long long>(displayedTs),
             static_cast<long long>(nextTs), renderMs, decodeMs, dropped,
             queueDropDelta, skippedDelta, readDelta, candidate.info.flags,
