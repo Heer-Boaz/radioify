@@ -365,7 +365,10 @@ bool ConsoleScreen::init() {
   std::wstring seq = L"\x1b[?1049h\x1b[H\x1b[?25l";
   if (!writeOutput(seq)) {
     reportWriteError(L"init");
-    return false;
+    altScreen_ = false;
+    hasPrev_ = false;
+    updateSize();
+    return true;
   }
   altScreen_ = true;
   hasPrev_ = false;
@@ -545,6 +548,10 @@ void ConsoleScreen::drawFast() {
     return;
   }
   size_t needed = static_cast<size_t>(width_ * height_);
+  if (buffer_.size() < needed) {
+    updateSize();
+    if (buffer_.size() < needed) return;
+  }
   if (fastBuffer_.size() != needed) {
     fastBuffer_.resize(needed);
   }
@@ -574,6 +581,10 @@ void ConsoleScreen::draw() {
     return;
   }
   size_t needed = static_cast<size_t>(width_ * height_);
+  if (buffer_.size() < needed) {
+    updateSize();
+    if (buffer_.size() < needed) return;
+  }
   if (prevBuffer_.size() != needed) {
     prevBuffer_.assign(needed, {});
     hasPrev_ = false;

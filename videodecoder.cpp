@@ -184,11 +184,10 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   HRESULT hr = MFCreateAttributes(&attributes, 3);
   if (SUCCEEDED(hr)) {
     if (FAILED(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-                                     TRUE)) ||
-        FAILED(attributes->SetUINT32(
-            MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE)) ||
+                                     FALSE)) ||
         FAILED(attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-                                     TRUE))) {
+                                     FALSE)) ||
+        FAILED(attributes->SetUINT32(MF_SOURCE_READER_DISABLE_DXVA, TRUE))) {
       safeRelease(attributes);
     }
   } else {
@@ -249,7 +248,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   }
 
   hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-  if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+  if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
   if (SUCCEEDED(hr)) {
     hr = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,
                                      nullptr, type);
@@ -258,7 +257,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   if (FAILED(hr)) {
     hr = MFCreateMediaType(&type);
     if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
+    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_P010);
     if (SUCCEEDED(hr)) {
       hr = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,
                                        nullptr, type);
@@ -268,7 +267,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   if (FAILED(hr)) {
     hr = MFCreateMediaType(&type);
     if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_P010);
+    if (SUCCEEDED(hr)) hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
     if (SUCCEEDED(hr)) {
       hr = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,
                                        nullptr, type);
