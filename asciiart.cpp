@@ -28,6 +28,47 @@
 namespace {
 constexpr uint32_t kBrailleBase = 0x2800;
 
+// === SIMPLE DENSITY-BASED ASCII RAMP ===
+// Classic ASCII art approach: characters sorted by visual density
+// This is cached as a simple lookup table indexed by density level (0-15)
+constexpr std::array<wchar_t, 16> kDensityRamp = {
+  L' ',   // 0: empty
+  L'.',   // 1: very light
+  L':',   // 2
+  L'-',   // 3
+  L'=',   // 4
+  L'+',   // 5
+  L'*',   // 6
+  L'#',   // 7
+  L'%',   // 8
+  L'@',   // 9
+  L'@',   // 10
+  L'@',   // 11
+  L'@',   // 12
+  L'@',   // 13
+  L'@',   // 14
+  L'@',   // 15: full
+};
+
+// Pre-computed: for each dot count (0-8), what density character to use
+// This is a simple O(1) lookup, no computation needed at runtime
+constexpr std::array<wchar_t, 9> kDotCountToChar = {
+  L' ',   // 0 dots
+  L'.',   // 1 dot
+  L':',   // 2 dots
+  L'-',   // 3 dots
+  L'+',   // 4 dots
+  L'*',   // 5 dots
+  L'#',   // 6 dots
+  L'%',   // 7 dots
+  L'@',   // 8 dots
+};
+
+// Configuration: when to use ASCII vs braille
+// Braille is better for detail, ASCII is better for large uniform areas
+constexpr bool kUseHybridMode = false;          // Disable hybrid - braille is better
+constexpr int kMinContrastForBraille = 15;      // Use braille when cell has this much contrast
+
 const std::array<float, 256> kSrgbToLinear = []() {
   std::array<float, 256> table{};
   for (int i = 0; i < 256; ++i) {
@@ -961,7 +1002,24 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
       }
 
       AsciiArt::AsciiCell cell{};
-      cell.ch = static_cast<wchar_t>(kBrailleBase + bitmask);
+      
+      // === CHARACTER SELECTION ===
+      // Braille geeft de beste resultaten voor detail - gebruik het altijd
+      // De hybrid mode is optioneel voor gebieden zonder contrast
+      wchar_t finalChar = static_cast<wchar_t>(kBrailleBase + bitmask);
+      
+      if constexpr (kUseHybridMode) {
+        // Alleen voor zeer uniforme gebieden: gebruik density-based ASCII
+        if (cellLumRange < kMinContrastForBraille) {
+          // Tel dots voor density lookup (O(1) met popcount)
+          int dotCount = 0;
+          int b = bitmask;
+          while (b) { dotCount += (b & 1); b >>= 1; }
+          finalChar = kDotCountToChar[static_cast<size_t>(dotCount)];
+        }
+      }
+      
+      cell.ch = finalChar;
       cell.fg = Color{outR, outG, outB};
       if (hasBg) {
         cell.bg = Color{outBgR, outBgG, outBgB};
