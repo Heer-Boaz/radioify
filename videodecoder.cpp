@@ -66,6 +66,10 @@ struct VideoDecoder::Impl {
   IMFDXGIDeviceManager* dxgiManager = nullptr;
   ID3D11Device* d3dDevice = nullptr;
   ID3D11DeviceContext* d3dContext = nullptr;
+  ID3D11Texture2D* stagingTexture = nullptr;
+  UINT stagingWidth = 0;
+  UINT stagingHeight = 0;
+  DXGI_FORMAT stagingFormat = DXGI_FORMAT_UNKNOWN;
   int width = 0;
   int height = 0;
   int stride = 0;
@@ -243,7 +247,7 @@ bool createHardwareReaderAttributes(IMFAttributes** attributes,
       FAILED(attrs->SetUINT32(
           MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, FALSE)) ||
       FAILED(attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-                              FALSE))) {
+                              TRUE))) {
     safeRelease(attrs);
     safeRelease(manager);
     safeRelease(context);
@@ -442,11 +446,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
     stride = static_cast<LONG>(strideAttr);
   } else {
     stride = 0;
-    if (format == PixelFormat::NV12) {
-      stride = static_cast<LONG>(width);
-    } else if (format == PixelFormat::P010) {
-      stride = static_cast<LONG>(width * 2);
-    } else {
+    if (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32) {
       MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1,
                                      static_cast<DWORD>(width), &stride);
     }
@@ -461,7 +461,8 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   impl->height = static_cast<int>(height);
   impl->topDown = stride >= 0;
   impl->stride = std::abs(stride);
-  if (impl->stride == 0) {
+  if (impl->stride == 0 &&
+      (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32)) {
     impl->stride = impl->width * 4;
   }
   impl->subtype = subtype;
@@ -484,6 +485,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
 void VideoDecoder::uninit() {
   if (!impl_) return;
   safeRelease(impl_->reader);
+  safeRelease(impl_->stagingTexture);
   safeRelease(impl_->dxgiManager);
   safeRelease(impl_->d3dContext);
   safeRelease(impl_->d3dDevice);
@@ -597,11 +599,7 @@ bool VideoDecoder::setTargetSize(int targetWidth, int targetHeight,
     stride = static_cast<LONG>(strideAttr);
   } else {
     stride = 0;
-    if (format == PixelFormat::NV12) {
-      stride = static_cast<LONG>(width);
-    } else if (format == PixelFormat::P010) {
-      stride = static_cast<LONG>(width * 2);
-    } else {
+    if (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32) {
       MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1,
                                      static_cast<DWORD>(width), &stride);
     }
@@ -611,7 +609,8 @@ bool VideoDecoder::setTargetSize(int targetWidth, int targetHeight,
   impl_->height = static_cast<int>(height);
   impl_->topDown = stride >= 0;
   impl_->stride = std::abs(stride);
-  if (impl_->stride == 0) {
+  if (impl_->stride == 0 &&
+      (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32)) {
     impl_->stride = impl_->width * 4;
   }
   impl_->subtype = actualSubtype;
@@ -694,6 +693,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
           if (SUCCEEDED(newType->GetGUID(MF_MT_SUBTYPE, &subtype))) {
             impl_->subtype = subtype;
           }
+          PixelFormat format = pixelFormatFromSubtype(impl_->subtype);
           LONG stride = 0;
           UINT32 strideAttr = 0;
           fmtHr = newType->GetUINT32(MF_MT_DEFAULT_STRIDE, &strideAttr);
@@ -701,12 +701,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
             stride = static_cast<LONG>(strideAttr);
           } else {
             stride = 0;
-            PixelFormat format = pixelFormatFromSubtype(impl_->subtype);
-            if (format == PixelFormat::NV12) {
-              stride = static_cast<LONG>(width);
-            } else if (format == PixelFormat::P010) {
-              stride = static_cast<LONG>(width * 2);
-            } else {
+            if (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32) {
               MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1,
                                              static_cast<DWORD>(width),
                                              &stride);
@@ -716,7 +711,9 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
           impl_->height = static_cast<int>(height);
           impl_->topDown = stride >= 0;
           impl_->stride = std::abs(stride);
-          if (impl_->stride == 0) {
+          if (impl_->stride == 0 &&
+              (format == PixelFormat::RGB32 ||
+               format == PixelFormat::ARGB32)) {
             impl_->stride = impl_->width * 4;
           }
           updateColorInfo(newType, &impl_->yuvMatrix, &impl_->fullRange);
@@ -778,11 +775,75 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     }
 
     IMFMediaBuffer* buffer = nullptr;
-    hr = sample->ConvertToContiguousBuffer(&buffer);
+    DWORD bufferCount = 0;
+    hr = sample->GetBufferCount(&bufferCount);
+    if (SUCCEEDED(hr) && bufferCount == 1) {
+      hr = sample->GetBufferByIndex(0, &buffer);
+    } else {
+      hr = sample->ConvertToContiguousBuffer(&buffer);
+    }
     if (FAILED(hr) || !buffer) {
       safeRelease(buffer);
       safeRelease(sample);
       continue;
+    }
+
+    IMFDXGIBuffer* dxgiBuffer = nullptr;
+    ID3D11Texture2D* dxgiTexture = nullptr;
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    bool mappedDxgi = false;
+    UINT dxgiPlaneHeight = 0;
+    if (impl_->d3dDevice && impl_->d3dContext &&
+        SUCCEEDED(buffer->QueryInterface(__uuidof(IMFDXGIBuffer),
+                                         reinterpret_cast<void**>(
+                                             &dxgiBuffer))) &&
+        dxgiBuffer) {
+      HRESULT dxgiHr =
+          dxgiBuffer->GetResource(__uuidof(ID3D11Texture2D),
+                                  reinterpret_cast<void**>(&dxgiTexture));
+      if (SUCCEEDED(dxgiHr) && dxgiTexture) {
+        UINT subresource = 0;
+        dxgiBuffer->GetSubresourceIndex(&subresource);
+        D3D11_TEXTURE2D_DESC desc{};
+        dxgiTexture->GetDesc(&desc);
+        if (desc.Format == DXGI_FORMAT_NV12 ||
+            desc.Format == DXGI_FORMAT_P010) {
+          if (!impl_->stagingTexture || impl_->stagingFormat != desc.Format ||
+              impl_->stagingWidth != desc.Width ||
+              impl_->stagingHeight != desc.Height) {
+            safeRelease(impl_->stagingTexture);
+            D3D11_TEXTURE2D_DESC stagingDesc{};
+            stagingDesc.Width = desc.Width;
+            stagingDesc.Height = desc.Height;
+            stagingDesc.MipLevels = 1;
+            stagingDesc.ArraySize = 1;
+            stagingDesc.Format = desc.Format;
+            stagingDesc.SampleDesc.Count = 1;
+            stagingDesc.SampleDesc.Quality = 0;
+            stagingDesc.Usage = D3D11_USAGE_STAGING;
+            stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            stagingDesc.BindFlags = 0;
+            stagingDesc.MiscFlags = 0;
+            if (SUCCEEDED(impl_->d3dDevice->CreateTexture2D(
+                    &stagingDesc, nullptr, &impl_->stagingTexture))) {
+              impl_->stagingFormat = desc.Format;
+              impl_->stagingWidth = desc.Width;
+              impl_->stagingHeight = desc.Height;
+            }
+          }
+          if (impl_->stagingTexture) {
+            impl_->d3dContext->CopySubresourceRegion(
+                impl_->stagingTexture, 0, 0, 0, 0, dxgiTexture, subresource,
+                nullptr);
+            if (SUCCEEDED(impl_->d3dContext->Map(impl_->stagingTexture, 0,
+                                                 D3D11_MAP_READ, 0, &mapped)) &&
+                mapped.pData) {
+              mappedDxgi = true;
+              dxgiPlaneHeight = desc.Height;
+            }
+          }
+        }
+      }
     }
 
     BYTE* data = nullptr;
@@ -791,42 +852,87 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     LONG pitch = 0;
     bool locked = false;
     bool locked2d = false;
+    bool locked2dLegacy = false;
     IMF2DBuffer2* buffer2d = nullptr;
-    hr = buffer->QueryInterface(__uuidof(IMF2DBuffer2),
-                                reinterpret_cast<void**>(&buffer2d));
-    if (SUCCEEDED(hr) && buffer2d) {
-      BYTE* scanline0 = nullptr;
-      BYTE* bufferStart = nullptr;
-      DWORD bufferLength = 0;
-      HRESULT hr2d = buffer2d->Lock2DSize(MF2DBuffer_LockFlags_Read, &scanline0,
-                                          &pitch, &bufferStart,
-                                          &bufferLength);
-      if (SUCCEEDED(hr2d) && scanline0 && bufferLength > 0) {
-        data = scanline0;
-        curLen = bufferLength;
-        locked2d = true;
-      } else {
-        safeRelease(buffer2d);
+    IMF2DBuffer* buffer2dLegacy = nullptr;
+    if (mappedDxgi) {
+      data = static_cast<BYTE*>(mapped.pData);
+      pitch = static_cast<LONG>(mapped.RowPitch);
+    } else {
+      hr = buffer->QueryInterface(__uuidof(IMF2DBuffer2),
+                                  reinterpret_cast<void**>(&buffer2d));
+      if (SUCCEEDED(hr) && buffer2d) {
+        BYTE* scanline0 = nullptr;
+        BYTE* bufferStart = nullptr;
+        DWORD bufferLength = 0;
+        HRESULT hr2d =
+            buffer2d->Lock2DSize(MF2DBuffer_LockFlags_Read, &scanline0, &pitch,
+                                 &bufferStart, &bufferLength);
+        if (SUCCEEDED(hr2d) && scanline0 && bufferLength > 0) {
+          data = scanline0;
+          curLen = bufferLength;
+          locked2d = true;
+        } else {
+          safeRelease(buffer2d);
+        }
       }
-    }
-    if (!locked2d) {
-      hr = buffer->Lock(&data, &maxLen, &curLen);
-      if (SUCCEEDED(hr) && data && curLen > 0) {
-        locked = true;
-      } else {
-        safeRelease(buffer);
-        safeRelease(sample);
-        continue;
+      if (!locked2d) {
+        hr = buffer->QueryInterface(__uuidof(IMF2DBuffer),
+                                    reinterpret_cast<void**>(&buffer2dLegacy));
+        if (SUCCEEDED(hr) && buffer2dLegacy) {
+          BYTE* scanline0 = nullptr;
+          HRESULT hr2d = buffer2dLegacy->Lock2D(&scanline0, &pitch);
+          if (SUCCEEDED(hr2d) && scanline0) {
+            data = scanline0;
+            locked2dLegacy = true;
+            DWORD length = 0;
+            if (SUCCEEDED(buffer->GetCurrentLength(&length)) && length > 0) {
+              curLen = length;
+            } else if (SUCCEEDED(buffer->GetMaxLength(&length)) &&
+                       length > 0) {
+              curLen = length;
+            }
+          } else {
+            safeRelease(buffer2dLegacy);
+          }
+        }
+      }
+      if (!locked2d && !locked2dLegacy) {
+        hr = buffer->Lock(&data, &maxLen, &curLen);
+        if (SUCCEEDED(hr) && data && curLen > 0) {
+          locked = true;
+        } else {
+          safeRelease(dxgiTexture);
+          safeRelease(dxgiBuffer);
+          safeRelease(buffer);
+          safeRelease(sample);
+          continue;
+        }
       }
     }
     auto unlockBuffer = [&]() {
-      if (locked2d && buffer2d) {
+      if (mappedDxgi && impl_->d3dContext && impl_->stagingTexture) {
+        impl_->d3dContext->Unmap(impl_->stagingTexture, 0);
+      } else if (locked2d && buffer2d) {
         buffer2d->Unlock2D();
+      } else if (locked2dLegacy && buffer2dLegacy) {
+        buffer2dLegacy->Unlock2D();
       } else if (locked) {
         buffer->Unlock();
       }
       safeRelease(buffer2d);
+      safeRelease(buffer2dLegacy);
+      safeRelease(dxgiTexture);
+      safeRelease(dxgiBuffer);
     };
+    if (curLen == 0) {
+      DWORD length = 0;
+      if (SUCCEEDED(buffer->GetCurrentLength(&length)) && length > 0) {
+        curLen = length;
+      } else if (SUCCEEDED(buffer->GetMaxLength(&length)) && length > 0) {
+        curLen = length;
+      }
+    }
 
     constexpr size_t kMaxPixels = 16384u * 16384u;
     size_t pixelCount =
@@ -853,11 +959,84 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       continue;
     }
 
+    auto estimateStrideFromLength = [&](PixelFormat fmt) -> int {
+      if (curLen == 0 || width <= 0 || height <= 0) return 0;
+      const size_t len = static_cast<size_t>(curLen);
+      const size_t h = static_cast<size_t>(height);
+      if (fmt == PixelFormat::RGB32 || fmt == PixelFormat::ARGB32) {
+        return static_cast<int>(len / h);
+      }
+      if (fmt == PixelFormat::NV12 || fmt == PixelFormat::P010) {
+        const size_t denom = h * 3u;
+        if (denom == 0) return 0;
+        size_t pitchBytes = (len * 2u) / denom;
+        if (pitchBytes & 1u) {
+          ++pitchBytes;
+        }
+        return static_cast<int>(pitchBytes);
+      }
+      return 0;
+    };
+
     int stride = impl_->stride;
     bool topDown = impl_->topDown;
-    if (locked2d && pitch > 0) {
-      stride = static_cast<int>(pitch);
+    bool hasPitch = (locked2d || locked2dLegacy || mappedDxgi) && pitch != 0;
+    if (hasPitch) {
+      topDown = pitch >= 0;
+      stride = std::abs(static_cast<int>(pitch));
+    }
+    int estimatedStride = estimateStrideFromLength(format);
+    if (!hasPitch && estimatedStride > 0) {
+      if (stride <= 0) {
+        stride = estimatedStride;
+      } else if (estimatedStride > stride) {
+        stride = estimatedStride;
+      }
+    }
+
+    int minStride = 0;
+    if (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32) {
+      minStride = width * 4;
+    } else if (format == PixelFormat::P010) {
+      minStride = width * 2;
+    } else {
+      minStride = width;
+    }
+    if (stride < minStride && estimatedStride >= minStride) {
+      stride = estimatedStride;
+    }
+    if (stride < minStride) {
+      unlockBuffer();
+      safeRelease(buffer);
+      safeRelease(sample);
+      continue;
+    }
+    if (hasPitch && pitch < 0 && height > 1) {
+      data -= static_cast<size_t>(stride) *
+              static_cast<size_t>(height - 1);
       topDown = true;
+    }
+    if (curLen == 0 && stride > 0) {
+      size_t total = 0;
+      if (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32) {
+        total = static_cast<size_t>(stride) * static_cast<size_t>(height);
+      } else {
+        int heightForLen = height;
+        if (dxgiPlaneHeight > 0) {
+          heightForLen = static_cast<int>(dxgiPlaneHeight);
+        }
+        total = static_cast<size_t>(stride) *
+                static_cast<size_t>(heightForLen) *
+                3u / 2u;
+      }
+      if (total > 0 && total <= 0xFFFFFFFFu) {
+        curLen = static_cast<DWORD>(total);
+      }
+    }
+    if (stride > 0 &&
+        (impl_->stride != stride || impl_->topDown != topDown)) {
+      impl_->stride = stride;
+      impl_->topDown = topDown;
     }
 
     out.width = width;
@@ -906,17 +1085,24 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
         std::fill(dstRow, dstRow + width * 4, 0);
       }
     } else {
-      size_t minStride = (format == PixelFormat::P010)
-                             ? static_cast<size_t>(width) * 2u
-                             : static_cast<size_t>(width);
-      if (stride < static_cast<int>(minStride)) {
-        unlockBuffer();
-        safeRelease(buffer);
-        safeRelease(sample);
-        continue;
+      int planeHeight = height;
+      if (format == PixelFormat::NV12 || format == PixelFormat::P010) {
+        if (dxgiPlaneHeight > 0) {
+          planeHeight = static_cast<int>(dxgiPlaneHeight);
+        } else if (curLen > 0 && stride > 0) {
+          const size_t denom =
+              static_cast<size_t>(stride) * static_cast<size_t>(3u);
+          const size_t numer = static_cast<size_t>(curLen) * 2u;
+          if (denom > 0) {
+            size_t derived = numer / denom;
+            if (derived >= static_cast<size_t>(height)) {
+              planeHeight = static_cast<int>(derived);
+            }
+          }
+        }
       }
-      size_t required =
-          static_cast<size_t>(stride) * static_cast<size_t>(height) * 3u / 2u;
+      size_t required = static_cast<size_t>(stride) *
+                        static_cast<size_t>(planeHeight) * 3u / 2u;
       if (curLen < required) {
         unlockBuffer();
         safeRelease(buffer);
@@ -926,7 +1112,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
 
       const uint8_t* yPlane = data;
       const uint8_t* uvPlane =
-          data + static_cast<size_t>(stride) * static_cast<size_t>(height);
+          data + static_cast<size_t>(stride) * static_cast<size_t>(planeHeight);
 
       for (int y = 0; y < height; ++y) {
         int srcY = topDown ? y : (height - 1 - y);

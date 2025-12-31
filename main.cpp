@@ -682,6 +682,9 @@ static bool showAsciiVideo(
   bool renderFailed = false;
   std::string renderFailMessage;
   std::string renderFailDetail;
+  std::mutex scaleWarningMutex;
+  std::string scaleWarning;
+  std::atomic<bool> scaleWarningPending{false};
   int decoderTargetW = 0;
   int decoderTargetH = 0;
   int requestedTargetW = 0;
@@ -735,6 +738,19 @@ static bool showAsciiVideo(
     std::lock_guard<std::mutex> lock(decodeErrorMutex);
     decodeError = message;
     decodeFailed.store(true);
+  };
+
+  auto setScaleWarning = [&](const std::string& message) {
+    {
+      std::lock_guard<std::mutex> lock(scaleWarningMutex);
+      scaleWarning = message;
+    }
+    scaleWarningPending.store(true);
+  };
+
+  auto getScaleWarning = [&]() {
+    std::lock_guard<std::mutex> lock(scaleWarningMutex);
+    return scaleWarning;
   };
 
   auto getDecodeError = [&]() {
@@ -904,7 +920,12 @@ static bool showAsciiVideo(
             std::string sizeError;
             if (!decoder.setTargetSize(command.targetW, command.targetH,
                                        &sizeError)) {
-              // Keep decoding at the current size if scaling isn't supported.
+              if (sizeError.empty()) {
+                sizeError = "Failed to apply target video size.";
+              }
+              setScaleWarning(sizeError);
+            } else {
+              setScaleWarning("");
             }
           }
           if (command.seek) {
@@ -1170,7 +1191,15 @@ static bool showAsciiVideo(
     screen.updateSize();
     int width = std::max(20, screen.width());
     int height = std::max(10, screen.height());
-    const int headerLines = 2;
+    std::string subtitle;
+    if (!audioOk) {
+      subtitle = hooks.startAudio ? "Audio unavailable" : "Audio disabled";
+    }
+    std::string warning = getScaleWarning();
+    int headerLines = 2;
+    if (!subtitle.empty() && !warning.empty()) {
+      headerLines = 3;
+    }
     const int footerLines = 2;
     int artTop = headerLines;
     int maxHeight = std::max(1, height - headerLines - footerLines);
@@ -1237,12 +1266,14 @@ static bool showAsciiVideo(
     screen.clear(baseStyle);
     std::string title = "Video: " + toUtf8String(file.filename());
     screen.writeText(0, 0, fitLine(title, width), accentStyle);
-    std::string subtitle;
-    if (!audioOk) {
-      subtitle = hooks.startAudio ? "Audio unavailable" : "Audio disabled";
-    }
     if (!subtitle.empty()) {
       screen.writeText(0, 1, fitLine(subtitle, width), dimStyle);
+    }
+    if (!warning.empty()) {
+      int warningLine = subtitle.empty() ? 1 : 2;
+      std::string warningLineText = "Scale: " + warning;
+      screen.writeText(0, warningLine, fitLine(warningLineText, width),
+                       dimStyle);
     }
 
     if (enableAscii) {
@@ -1481,6 +1512,13 @@ static bool showAsciiVideo(
       }
     }
     if (!running) break;
+
+    if (scaleWarningPending.exchange(false)) {
+      std::string warning = getScaleWarning();
+      if (!warning.empty()) {
+        perfLog.appendf("video_scale_warning msg=%s", warning.c_str());
+      }
+    }
 
     auto now = std::chrono::steady_clock::now();
     if (now - lastUiUpdate >= std::chrono::milliseconds(150)) {
