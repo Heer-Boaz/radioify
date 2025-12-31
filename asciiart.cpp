@@ -9,6 +9,7 @@
 #include <wincodec.h>
 #include <windows.h>
 #include <mfapi.h>
+#include <mfobjects.h>
 
 #include <algorithm>
 #include <array>

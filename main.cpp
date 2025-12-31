@@ -878,12 +878,13 @@ static bool showAsciiVideo(
       HRESULT roHr = RoInitialize(RO_INIT_MULTITHREADED);
       bool roInit = SUCCEEDED(roHr);
       VideoDecoder decoder;
+      const bool allowRgbOutput = !enableAscii;
       bool preferHardware = true;
       bool softwareFallbackAttempted = false;
       int64_t lastVideoTs = 0;
       bool haveDecodedFrame = false;
       std::string error;
-      if (!decoder.init(file, &error, preferHardware)) {
+      if (!decoder.init(file, &error, preferHardware, allowRgbOutput)) {
         {
           std::lock_guard<std::mutex> lock(initMutex);
           initDone = true;
@@ -929,7 +930,8 @@ static bool showAsciiVideo(
         preferHardware = false;
         std::string fallbackError;
         decoder.uninit();
-        if (!decoder.init(file, &fallbackError, preferHardware)) {
+        if (!decoder.init(file, &fallbackError, preferHardware,
+                          allowRgbOutput)) {
           std::string detail =
               "No video frames after " +
               std::to_string(info.noFrameTimeoutMs) +

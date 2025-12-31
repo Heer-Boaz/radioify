@@ -42,7 +42,7 @@ class VideoDecoder {
  public:
   ~VideoDecoder();
   bool init(const std::filesystem::path& path, std::string* error,
-            bool preferHardware = true);
+            bool preferHardware = true, bool allowRgbOutput = true);
   void uninit();
   bool readFrame(VideoFrame& out, VideoReadInfo* info = nullptr,
                  bool decodePixels = true);

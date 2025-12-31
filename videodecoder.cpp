@@ -226,7 +226,8 @@ bool createHardwareReaderAttributes(IMFAttributes** attributes,
   return true;
 }
 
-bool createSoftwareReaderAttributes(IMFAttributes** attributes) {
+bool createSoftwareReaderAttributes(IMFAttributes** attributes,
+                                    bool enableVideoProcessing) {
   if (!attributes) return false;
   *attributes = nullptr;
   IMFAttributes* attrs = nullptr;
@@ -235,7 +236,7 @@ bool createSoftwareReaderAttributes(IMFAttributes** attributes) {
     return false;
   }
   if (FAILED(attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-                              TRUE)) ||
+                              enableVideoProcessing ? TRUE : FALSE)) ||
       FAILED(attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
                               FALSE)) ||
       FAILED(attrs->SetUINT32(MF_SOURCE_READER_DISABLE_DXVA, TRUE))) {
@@ -248,7 +249,7 @@ bool createSoftwareReaderAttributes(IMFAttributes** attributes) {
 } // namespace
 
 bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
-                        bool preferHardware) {
+                        bool preferHardware, bool allowRgbOutput) {
   uninit();
 
   if (!ensureMediaFoundation(error)) return false;
@@ -263,7 +264,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
         &attributes, &dxgiManager, &d3dDevice, &d3dContext);
   }
   if (!hardwareEnabled) {
-    createSoftwareReaderAttributes(&attributes);
+    createSoftwareReaderAttributes(&attributes, allowRgbOutput);
   }
   HRESULT hr = S_OK;
   auto releaseHardware = [&]() {
@@ -281,7 +282,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
     safeRelease(reader);
     releaseHardware();
     hardwareEnabled = false;
-    if (createSoftwareReaderAttributes(&attributes)) {
+    if (createSoftwareReaderAttributes(&attributes, allowRgbOutput)) {
       hrPrimary =
           MFCreateSourceReaderFromURL(wpath.c_str(), attributes, &reader);
     }
@@ -389,6 +390,16 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   if (format == PixelFormat::Unknown) {
     std::string detail =
         "Unsupported video pixel format: " + pixelFormatName(subtype);
+    safeRelease(actualType);
+    safeRelease(reader);
+    releaseHardware();
+    setError(error, detail.c_str());
+    return false;
+  }
+  if (!allowRgbOutput &&
+      (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32)) {
+    std::string detail =
+        "Video output is " + pixelFormatName(subtype) + "; YUV required.";
     safeRelease(actualType);
     safeRelease(reader);
     releaseHardware();
