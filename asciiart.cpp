@@ -69,15 +69,19 @@ constexpr std::array<wchar_t, 9> kDotCountToChar = {
 constexpr bool kUseHybridMode = false;          // Disable hybrid - braille is better
 constexpr int kMinContrastForBraille = 15;      // Use braille when cell has this much contrast
 
-const std::array<float, 256> kSrgbToLinear = []() {
-  std::array<float, 256> table{};
-  for (int i = 0; i < 256; ++i) {
-    float s = static_cast<float>(i) / 255.0f;
-    table[i] =
-        (s <= 0.04045f) ? (s / 12.92f) : std::pow((s + 0.055f) / 1.055f, 2.4f);
-  }
-  return table;
-}();
+// Direct YUV conversie zonder sRGB linearisering
+// Rec. 709 coefficients als integer fixed-point (<<16 voor precision)
+constexpr int kYCoeffR = (int)(0.2126f * 65536.0f + 0.5f);  // ~13933
+constexpr int kYCoeffG = (int)(0.7152f * 65536.0f + 0.5f);  // ~46871
+constexpr int kYCoeffB = (int)(0.0722f * 65536.0f + 0.5f);  // ~4732
+
+// Snelle YUV luminantie berekening
+FORCE_INLINE uint8_t rgbToY(uint8_t r, uint8_t g, uint8_t b) {
+  uint32_t y = (static_cast<uint32_t>(r) * kYCoeffR +
+                static_cast<uint32_t>(g) * kYCoeffG +
+                static_cast<uint32_t>(b) * kYCoeffB) >> 16;
+  return static_cast<uint8_t>(y > 255 ? 255 : y);
+}
 
 void setError(std::string* error, const char* message) {
   if (error) *error = message;
@@ -142,33 +146,7 @@ constexpr int kLumSmoothAlpha = 40;          // Snellere adaptatie
 constexpr int kLumResetDelta = 28;
 
 // Rec. 709 coefficients met hogere precisie (fixed-point 16.16)
-const std::array<uint32_t, 256> kYFromR = []() {
-  std::array<uint32_t, 256> t{};
-  for (int i = 0; i < 256; ++i) {
-    // Gebruik 16-bit fractie voor hogere precisie
-    float v = 65535.0f * (0.2126f * kSrgbToLinear[i]);
-    t[i] = static_cast<uint32_t>(std::clamp(static_cast<int>(std::lround(v)), 0, 65535));
-  }
-  return t;
-}();
-
-const std::array<uint32_t, 256> kYFromG = []() {
-  std::array<uint32_t, 256> t{};
-  for (int i = 0; i < 256; ++i) {
-    float v = 65535.0f * (0.7152f * kSrgbToLinear[i]);
-    t[i] = static_cast<uint32_t>(std::clamp(static_cast<int>(std::lround(v)), 0, 65535));
-  }
-  return t;
-}();
-
-const std::array<uint32_t, 256> kYFromB = []() {
-  std::array<uint32_t, 256> t{};
-  for (int i = 0; i < 256; ++i) {
-    float v = 65535.0f * (0.0722f * kSrgbToLinear[i]);
-    t[i] = static_cast<uint32_t>(std::clamp(static_cast<int>(std::lround(v)), 0, 65535));
-  }
-  return t;
-}();
+// Geen per-kanaal lookup tables meer - direct berekening is sneller!
 
 const std::array<uint8_t, 256> kInkLevelFromLum = []() {
   std::array<uint8_t, 256> lut{};
@@ -480,9 +458,9 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
           sumG += g;
           sumB += b;
           sumA += a;
-          // Luminantie per sample voor precisie
-          uint32_t lum32 = kYFromR[r] + kYFromG[g] + kYFromB[b];
-          sumLum += (lum32 + 128) >> 8;
+          // Directe YUV luminantie berekening (veel sneller zonder lookup tables)
+          uint8_t lum = rgbToY(r, g, b);
+          sumLum += lum;
           ++sampleCount;
         }
       }
