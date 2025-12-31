@@ -240,7 +240,7 @@ struct BrailleFastScratch {
   std::vector<int> yMapEnd;
   
   std::vector<uint32_t> scaledRGBA;
-  std::vector<uint16_t> lumaPad16;  // 16-bit voor hogere precisie
+  std::vector<uint8_t> lumaPad;  // Direct uint8_t - efficiënter
   std::vector<uint8_t> edgeMap;
   std::vector<uint8_t> localContrast;  // Per-pixel lokaal contrast
 
@@ -300,7 +300,7 @@ struct BrailleFastScratch {
     }
 
     scaledRGBA.resize(static_cast<size_t>(scaledW) * scaledH);
-    lumaPad16.resize(static_cast<size_t>(padStride) * (scaledH + 2));
+    lumaPad.resize(static_cast<size_t>(padStride) * (scaledH + 2));
     edgeMap.resize(static_cast<size_t>(scaledW) * scaledH);
     localContrast.resize(static_cast<size_t>(scaledW) * scaledH);
     prevFg.assign(static_cast<size_t>(outW) * outH, 0);
@@ -431,8 +431,8 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
     int syEnd = scratch.yMapEnd[y];
     uint32_t* dstRow =
         scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW;
-    uint16_t* padRow =
-        scratch.lumaPad16.data() + static_cast<size_t>(y + 1) * padStride;
+    uint8_t* padRow =
+        scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride;
 
     for (int x = 0; x < scaledW; ++x) {
       int sxStart = scratch.xMapStart[x];
@@ -473,8 +473,8 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
         uint8_t a = static_cast<uint8_t>(sumA / sampleCount);
         dstRow[x] = packRGBA(r, g, b, a);
         
-        uint16_t avgLum = static_cast<uint16_t>(sumLum / sampleCount);
-        if (avgLum > 255) avgLum = 255;
+        uint8_t avgLum = static_cast<uint8_t>(
+            std::min(255U, static_cast<uint32_t>(sumLum / sampleCount)));
         
         bool countLum = true;
         if constexpr (!AssumeOpaque) {
@@ -497,35 +497,35 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
     padRow[padStride - 1] = padRow[padStride - 2];
   }
 
-  std::memcpy(scratch.lumaPad16.data(),
-              scratch.lumaPad16.data() + padStride,
-              static_cast<size_t>(padStride) * sizeof(uint16_t));
-  std::memcpy(scratch.lumaPad16.data() +
+  std::memcpy(scratch.lumaPad.data(),
+              scratch.lumaPad.data() + padStride,
+              static_cast<size_t>(padStride));
+  std::memcpy(scratch.lumaPad.data() +
                   static_cast<size_t>(scaledH + 1) * padStride,
-              scratch.lumaPad16.data() +
+              scratch.lumaPad.data() +
                   static_cast<size_t>(scaledH) * padStride,
-              static_cast<size_t>(padStride) * sizeof(uint16_t));
+              static_cast<size_t>(padStride));
 
   if constexpr (kUseEdgeBoost) {
     for (int y = 0; y < scaledH; ++y) {
-      const uint16_t* RESTRICT row =
-          scratch.lumaPad16.data() + static_cast<size_t>(y + 1) * padStride + 1;
+      const uint8_t* RESTRICT row =
+          scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride + 1;
       uint8_t* RESTRICT edgeRow =
           scratch.edgeMap.data() + static_cast<size_t>(y) * scaledW;
       uint8_t* RESTRICT contrastRow =
           scratch.localContrast.data() + static_cast<size_t>(y) * scaledW;
       for (int x = 0; x < scaledW; ++x) {
-        const uint16_t* p = row + x;
-        // Sobel kernel met 16-bit precisie
-        int a00 = static_cast<int>(p[-padStride - 1]);
-        int a01 = static_cast<int>(p[-padStride]);
-        int a02 = static_cast<int>(p[-padStride + 1]);
-        int a10 = static_cast<int>(p[-1]);
-        int a11 = static_cast<int>(p[0]);
-        int a12 = static_cast<int>(p[1]);
-        int a20 = static_cast<int>(p[padStride - 1]);
-        int a21 = static_cast<int>(p[padStride]);
-        int a22 = static_cast<int>(p[padStride + 1]);
+        const uint8_t* p = row + x;
+        // Sobel kernel (uint8_t luma sufficient)
+        int a00 = p[-padStride - 1];
+        int a01 = p[-padStride];
+        int a02 = p[-padStride + 1];
+        int a10 = p[-1];
+        int a11 = p[0];
+        int a12 = p[1];
+        int a20 = p[padStride - 1];
+        int a21 = p[padStride];
+        int a22 = p[padStride + 1];
         
         // Sobel gradiënt
         int gx = (a02 + (a12 << 1) + a22) - (a00 + (a10 << 1) + a20);
@@ -630,7 +630,7 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
       uint8_t rVals[8];
       uint8_t gVals[8];
       uint8_t bVals[8];
-      uint16_t lumVals[8];  // 16-bit voor meer precisie
+      uint8_t lumVals[8];  // Direct uint8_t
       uint8_t edgeVals[8];
       uint8_t contrastVals[8];
       uint8_t bitIds[8];
@@ -647,8 +647,8 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
         const uint32_t* rgbRow =
             scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW +
             baseX;
-        const uint16_t* lumRow =
-            scratch.lumaPad16.data() + static_cast<size_t>(y + 1) * padStride +
+        const uint8_t* lumRow =
+            scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride +
             (baseX + 1);
         const uint8_t* edgeRow = scratch.edgeMap.data() +
                                  static_cast<size_t>(y) * scaledW + baseX;
@@ -660,7 +660,7 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
           uint8_t r = static_cast<uint8_t>(px & 0xFF);
           uint8_t g = static_cast<uint8_t>((px >> 8) & 0xFF);
           uint8_t b = static_cast<uint8_t>((px >> 16) & 0xFF);
-          uint16_t lum = lumRow[dx];
+          uint8_t lum = lumRow[dx];
           uint8_t a = 255;
           if constexpr (!AssumeOpaque) {
             a = static_cast<uint8_t>((px >> 24) & 0xFF);
@@ -668,7 +668,7 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
           rVals[dotIndex] = r;
           gVals[dotIndex] = g;
           bVals[dotIndex] = b;
-          lumVals[dotIndex] = lum;
+          lumVals[dotIndex] = lum;  // Direct uint8_t luma
           edgeVals[dotIndex] = edgeRow[dx];
           contrastVals[dotIndex] = contrastRow[dx];
           bitIds[dotIndex] = static_cast<uint8_t>(brailleMap[dx][dy]);
@@ -682,7 +682,7 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
           }
 
           // Lokale statistieken voor deze cel
-          int lumInt = static_cast<int>(lum);
+          int lumInt = lum;
           if (lumInt < cellLumMin) cellLumMin = lumInt;
           if (lumInt > cellLumMax) cellLumMax = lumInt;
           cellLumSum += lumInt;
@@ -710,9 +710,9 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
       for (int i = 0; i < 8; ++i) {
         if (!validVals[i]) continue;
         
-        int lum = static_cast<int>(lumVals[i]);
-        int edge = static_cast<int>(edgeVals[i]);
-        int contrast = static_cast<int>(contrastVals[i]);
+        int lum = lumVals[i];  // Already uint8_t, implicit conversion
+        int edge = edgeVals[i];
+        int contrast = contrastVals[i];
         
         // Score combineert luminantie verschil + edge boost + lokaal contrast
         int lumDiff = useLocalThreshold 
