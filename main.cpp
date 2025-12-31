@@ -687,6 +687,7 @@ static bool showAsciiVideo(
   int requestedTargetW = 0;
   int requestedTargetH = 0;
   bool pendingResize = false;
+  bool forceRefreshArt = false;
 
   std::mutex queueMutex;
   std::condition_variable queueCv;
@@ -1309,6 +1310,7 @@ static bool showAsciiVideo(
             audioSyncInit = true;
           }
           redraw = true;
+          forceRefreshArt = true;
           if (!audioOk) {
             startTime = std::chrono::steady_clock::now() -
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -1366,6 +1368,7 @@ static bool showAsciiVideo(
                   audioSyncOffset = audioNow - frameSec;
                   audioSyncInit = true;
                 }
+                forceRefreshArt = true;
                 if (!audioOk) {
                   startTime = std::chrono::steady_clock::now() -
                               std::chrono::duration_cast<
@@ -1435,6 +1438,7 @@ static bool showAsciiVideo(
             ticksToSeconds;
         lastFrameSec = frameSec;
         videoEnded = false;
+        forceRefreshArt = true;
         decoderTargetW = frame.width;
         decoderTargetH = frame.height;
         perfLog.appendf("video_scale target=%dx%d actual=%dx%d",
@@ -1506,6 +1510,7 @@ static bool showAsciiVideo(
         break;
       }
       redraw = false;
+      forceRefreshArt = false;
 
       double renderMs =
           std::chrono::duration<double, std::milli>(renderEnd - renderStart)
@@ -1558,12 +1563,13 @@ static bool showAsciiVideo(
     }
 
     if (redraw && !advanced) {
-      renderScreen(false);
+      renderScreen(forceRefreshArt);
       if (renderFailed) {
         running = false;
         break;
       }
       redraw = false;
+      forceRefreshArt = false;
     }
 
     bool audioFinished =

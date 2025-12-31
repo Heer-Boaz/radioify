@@ -14,7 +14,16 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <immintrin.h>
 #include <vector>
+
+#ifdef _MSC_VER
+#define FORCE_INLINE __forceinline
+#define RESTRICT __restrict
+#else
+#define FORCE_INLINE inline __attribute__((always_inline))
+#define RESTRICT __restrict__
+#endif
 
 namespace {
 constexpr uint32_t kBrailleBase = 0x2800;
@@ -60,62 +69,62 @@ class ComScope {
   HRESULT hr_{E_FAIL};
 };
 
-float clampFloat(float v, float lo, float hi) {
+FORCE_INLINE float clampFloat(float v, float lo, float hi) {
   return (v < lo) ? lo : (v > hi ? hi : v);
 }
 
+// Verbeterde rendering parameters voor betere precisie
 constexpr bool kInkUseBright = true;
-constexpr float kInkGamma = 0.55f;
-constexpr float kCoverageGain = 1.7f;
-constexpr float kCoverageBias = 0.16f;
-constexpr float kCoverageZeroCutoff = 0.015f;
-constexpr float kLumLowPercent = 0.015f;
-constexpr float kLumHighPercent = 0.985f;
+constexpr float kInkGamma = 0.50f;           // Iets lineairder voor betere detail
+constexpr float kCoverageGain = 1.85f;       // Verhoogd voor meer contrast
+constexpr float kCoverageBias = 0.12f;       // Verlaagd voor schonere achtergrond
+constexpr float kCoverageZeroCutoff = 0.02f; // Iets hoger voor minder ruis
+constexpr float kLumLowPercent = 0.01f;      // Preciezer dynamic range
+constexpr float kLumHighPercent = 0.99f;
 constexpr uint8_t kColorLift = 0;
-constexpr uint8_t kInkMinLuma = 120;
-constexpr uint8_t kBgMinLuma = 24;
-constexpr int kInkMaxScale = 1024;
-constexpr int kColorAlpha = 64;
-constexpr int kBgAlpha = 32;
-constexpr int kTemporalResetDelta = 60;
-constexpr int kColorSaturation = 320;
+constexpr uint8_t kInkMinLuma = 110;         // Iets verlaagd voor donkerdere tinten
+constexpr uint8_t kBgMinLuma = 20;
+constexpr int kInkMaxScale = 1280;           // Verhoogd voor meer bereik
+constexpr int kColorAlpha = 48;              // Snellere kleurrespons
+constexpr int kBgAlpha = 24;
+constexpr int kTemporalResetDelta = 48;      // Snellere scene change detectie
+constexpr int kColorSaturation = 340;        // Iets meer saturatie
 constexpr bool kUseEdgeBoost = true;
-constexpr uint8_t kEdgeMin = 5;
-constexpr uint8_t kEdgeBoost = 230;
+constexpr uint8_t kEdgeMin = 4;              // Lagere drempel voor fijnere edges
+constexpr uint8_t kEdgeBoost = 245;          // Sterker edge boost
 constexpr int kEdgeShift = 3;
-constexpr int kBgDelta = 8;
-constexpr int kBgDeltaMin = 2;
-constexpr int kEdgeDeltaScale = 80;
-constexpr int kDitherBias = 64;
-constexpr int kLumSmoothAlpha = 48;
-constexpr int kLumResetDelta = 32;
+constexpr int kBgDelta = 6;                  // Lagere threshold voor meer detail
+constexpr int kBgDeltaMin = 1;
+constexpr int kEdgeDeltaScale = 96;          // Meer edge-responsief
+constexpr int kDitherBias = 48;              // Verlaagd voor betere halftones
+constexpr int kLumSmoothAlpha = 40;          // Snellere adaptatie
+constexpr int kLumResetDelta = 28;
 
-const std::array<uint16_t, 256> kYFromR = []() {
-  std::array<uint16_t, 256> t{};
+// Rec. 709 coefficients met hogere precisie (fixed-point 16.16)
+const std::array<uint32_t, 256> kYFromR = []() {
+  std::array<uint32_t, 256> t{};
   for (int i = 0; i < 256; ++i) {
-    float v = 255.0f * (0.2126f * kSrgbToLinear[i]);
-    int r = static_cast<int>(std::lround(v));
-    t[i] = static_cast<uint16_t>(std::clamp(r, 0, 255));
+    // Gebruik 16-bit fractie voor hogere precisie
+    float v = 65535.0f * (0.2126f * kSrgbToLinear[i]);
+    t[i] = static_cast<uint32_t>(std::clamp(static_cast<int>(std::lround(v)), 0, 65535));
   }
   return t;
 }();
 
-const std::array<uint16_t, 256> kYFromG = []() {
-  std::array<uint16_t, 256> t{};
+const std::array<uint32_t, 256> kYFromG = []() {
+  std::array<uint32_t, 256> t{};
   for (int i = 0; i < 256; ++i) {
-    float v = 255.0f * (0.7152f * kSrgbToLinear[i]);
-    int r = static_cast<int>(std::lround(v));
-    t[i] = static_cast<uint16_t>(std::clamp(r, 0, 255));
+    float v = 65535.0f * (0.7152f * kSrgbToLinear[i]);
+    t[i] = static_cast<uint32_t>(std::clamp(static_cast<int>(std::lround(v)), 0, 65535));
   }
   return t;
 }();
 
-const std::array<uint16_t, 256> kYFromB = []() {
-  std::array<uint16_t, 256> t{};
+const std::array<uint32_t, 256> kYFromB = []() {
+  std::array<uint32_t, 256> t{};
   for (int i = 0; i < 256; ++i) {
-    float v = 255.0f * (0.0722f * kSrgbToLinear[i]);
-    int r = static_cast<int>(std::lround(v));
-    t[i] = static_cast<uint16_t>(std::clamp(r, 0, 255));
+    float v = 65535.0f * (0.0722f * kSrgbToLinear[i]);
+    t[i] = static_cast<uint32_t>(std::clamp(static_cast<int>(std::lround(v)), 0, 65535));
   }
   return t;
 }();
@@ -126,7 +135,11 @@ const std::array<uint8_t, 256> kInkLevelFromLum = []() {
     float norm = static_cast<float>(i) / 255.0f;
     float x = kInkUseBright ? norm : (1.0f - norm);
     float coverage = std::pow(x, kInkGamma);
-    coverage = coverage * kCoverageGain + kCoverageBias;
+    // Alleen bias toepassen als er daadwerkelijk een verschil is
+    // Dit zorgt ervoor dat 0 dots mogelijk is bij zeer lage luminantie verschillen
+    if (coverage > 0.001f) {
+      coverage = coverage * kCoverageGain + kCoverageBias;
+    }
     if (coverage < kCoverageZeroCutoff) coverage = 0.0f;
     coverage = std::clamp(coverage, 0.0f, 1.0f);
     lut[static_cast<size_t>(i)] =
@@ -135,12 +148,16 @@ const std::array<uint8_t, 256> kInkLevelFromLum = []() {
   return lut;
 }();
 
+// Verbeterde Bayer-achtige dithering matrix geoptimaliseerd voor 2x4 braille patroon
 const std::array<uint8_t, 8> kDitherThresholdByBit = []() {
   std::array<uint8_t, 8> lut{};
-  const uint8_t ranks[8] = {0, 6, 3, 4, 2, 7, 5, 1};
+  // Geoptimaliseerde volgorde voor 2x4 braille cel (betere gradiënt verdeling)
+  // Positie mapping: [0,1,2,6] = linker kolom, [3,4,5,7] = rechter kolom
+  const uint8_t ranks[8] = {0, 4, 2, 6, 1, 5, 3, 7};
   for (int i = 0; i < 8; ++i) {
+    // Fijnere thresholds voor betere halftone gradaties
     lut[static_cast<size_t>(i)] =
-        static_cast<uint8_t>(ranks[i] * 32 + 16);
+        static_cast<uint8_t>((ranks[i] * 255 + 4) / 8);
   }
   return lut;
 }();
@@ -162,11 +179,28 @@ const std::array<uint8_t, 256> kEdgeBoostFromMag = []() {
   return lut;
 }();
 
-inline uint32_t packRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+FORCE_INLINE uint32_t packRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
   return static_cast<uint32_t>(r) |
          (static_cast<uint32_t>(g) << 8) |
          (static_cast<uint32_t>(b) << 16) |
          (static_cast<uint32_t>(a) << 24);
+}
+
+// Snelle integer square root approximatie voor edge detection
+FORCE_INLINE int fastIntSqrt(int x) {
+  if (x <= 0) return 0;
+  int r = x;
+  int q = 1;
+  while (q <= r) q <<= 2;
+  while (q > 1) {
+    q >>= 2;
+    int t = r - q;
+    r >>= 1;
+    if (t >= 0) {
+      r += q;
+    }
+  }
+  return r;
 }
 
 struct BrailleFastScratch {
@@ -180,11 +214,16 @@ struct BrailleFastScratch {
   int scaledH = 0;
   int padStride = 0;
 
-  std::vector<int> xMap;
-  std::vector<int> yMap;
+  // Subpixel sample bounds voor elke scaled pixel
+  std::vector<int> xMapStart;
+  std::vector<int> xMapEnd;
+  std::vector<int> yMapStart;
+  std::vector<int> yMapEnd;
+  
   std::vector<uint32_t> scaledRGBA;
-  std::vector<uint8_t> lumaPad;
+  std::vector<uint16_t> lumaPad16;  // 16-bit voor hogere precisie
   std::vector<uint8_t> edgeMap;
+  std::vector<uint8_t> localContrast;  // Per-pixel lokaal contrast
 
   std::vector<uint32_t> prevFg;
   std::vector<uint8_t> prevFgValid;
@@ -222,18 +261,29 @@ struct BrailleFastScratch {
     scaledH = newScaledH;
     padStride = newPadStride;
 
-    xMap.resize(static_cast<size_t>(scaledW));
-    yMap.resize(static_cast<size_t>(scaledH));
+    // Subpixel sampling bounds - elk scaled pixel samplet meerdere source pixels
+    xMapStart.resize(static_cast<size_t>(scaledW));
+    xMapEnd.resize(static_cast<size_t>(scaledW));
+    yMapStart.resize(static_cast<size_t>(scaledH));
+    yMapEnd.resize(static_cast<size_t>(scaledH));
+    
     for (int x = 0; x < scaledW; ++x) {
-      xMap[x] = (x * w) / scaledW;
+      xMapStart[x] = (x * w) / scaledW;
+      xMapEnd[x] = ((x + 1) * w) / scaledW;
+      if (xMapEnd[x] <= xMapStart[x]) xMapEnd[x] = xMapStart[x] + 1;
+      if (xMapEnd[x] > w) xMapEnd[x] = w;
     }
     for (int y = 0; y < scaledH; ++y) {
-      yMap[y] = (y * h) / scaledH;
+      yMapStart[y] = (y * h) / scaledH;
+      yMapEnd[y] = ((y + 1) * h) / scaledH;
+      if (yMapEnd[y] <= yMapStart[y]) yMapEnd[y] = yMapStart[y] + 1;
+      if (yMapEnd[y] > h) yMapEnd[y] = h;
     }
 
     scaledRGBA.resize(static_cast<size_t>(scaledW) * scaledH);
-    lumaPad.resize(static_cast<size_t>(padStride) * (scaledH + 2));
+    lumaPad16.resize(static_cast<size_t>(padStride) * (scaledH + 2));
     edgeMap.resize(static_cast<size_t>(scaledW) * scaledH);
+    localContrast.resize(static_cast<size_t>(scaledW) * scaledH);
     prevFg.assign(static_cast<size_t>(outW) * outH, 0);
     prevFgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevBg.assign(static_cast<size_t>(outW) * outH, 0);
@@ -355,80 +405,123 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
 
   uint64_t lumCount = 0;
   uint32_t lumHist[256] = {};
+  
+  // Subpixel sampling: middel meerdere source pixels per scaled pixel
   for (int y = 0; y < scaledH; ++y) {
-    int sy = scratch.yMap[y];
-    const uint8_t* srcRow =
-        rgba + static_cast<size_t>(sy) * width * 4;
+    int syStart = scratch.yMapStart[y];
+    int syEnd = scratch.yMapEnd[y];
     uint32_t* dstRow =
         scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW;
-    uint8_t* padRow =
-        scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride;
+    uint16_t* padRow =
+        scratch.lumaPad16.data() + static_cast<size_t>(y + 1) * padStride;
 
     for (int x = 0; x < scaledW; ++x) {
-      int sx = scratch.xMap[x];
-      const uint8_t* sp = srcRow + sx * 4;
-
-      uint8_t r = sp[0];
-      uint8_t g = sp[1];
-      uint8_t b = sp[2];
-      uint8_t a = 255;
-      if constexpr (!AssumeOpaque) {
-        a = sp[3];
-      }
-
-      dstRow[x] = packRGBA(r, g, b, a);
-
-      uint16_t y16 =
-          static_cast<uint16_t>(kYFromR[r] + kYFromG[g] + kYFromB[b]);
-      if (y16 > 255) y16 = 255;
-      bool countLum = true;
-      if constexpr (!AssumeOpaque) {
-        if (a == 0) {
-          y16 = 255;
-          countLum = false;
+      int sxStart = scratch.xMapStart[x];
+      int sxEnd = scratch.xMapEnd[x];
+      
+      // Accumuleer alle source pixels in dit bereik
+      uint32_t sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+      uint32_t sumLum = 0;
+      int sampleCount = 0;
+      
+      for (int sy = syStart; sy < syEnd; ++sy) {
+        const uint8_t* srcRow = rgba + static_cast<size_t>(sy) * width * 4;
+        for (int sx = sxStart; sx < sxEnd; ++sx) {
+          const uint8_t* sp = srcRow + sx * 4;
+          uint8_t r = sp[0];
+          uint8_t g = sp[1];
+          uint8_t b = sp[2];
+          uint8_t a = 255;
+          if constexpr (!AssumeOpaque) {
+            a = sp[3];
+          }
+          sumR += r;
+          sumG += g;
+          sumB += b;
+          sumA += a;
+          // Luminantie per sample voor precisie
+          uint32_t lum32 = kYFromR[r] + kYFromG[g] + kYFromB[b];
+          sumLum += (lum32 + 128) >> 8;
+          ++sampleCount;
         }
       }
-      padRow[x + 1] = static_cast<uint8_t>(y16);
-      if (countLum) {
-        ++lumHist[y16];
-        ++lumCount;
+      
+      // Gemiddelde berekenen
+      if (sampleCount > 0) {
+        uint8_t r = static_cast<uint8_t>(sumR / sampleCount);
+        uint8_t g = static_cast<uint8_t>(sumG / sampleCount);
+        uint8_t b = static_cast<uint8_t>(sumB / sampleCount);
+        uint8_t a = static_cast<uint8_t>(sumA / sampleCount);
+        dstRow[x] = packRGBA(r, g, b, a);
+        
+        uint16_t avgLum = static_cast<uint16_t>(sumLum / sampleCount);
+        if (avgLum > 255) avgLum = 255;
+        
+        bool countLum = true;
+        if constexpr (!AssumeOpaque) {
+          if (a == 0) {
+            avgLum = 255;
+            countLum = false;
+          }
+        }
+        padRow[x + 1] = avgLum;
+        if (countLum) {
+          ++lumHist[avgLum];
+          ++lumCount;
+        }
+      } else {
+        dstRow[x] = packRGBA(0, 0, 0, 0);
+        padRow[x + 1] = 255;
       }
     }
     padRow[0] = padRow[1];
     padRow[padStride - 1] = padRow[padStride - 2];
   }
 
-  std::memcpy(scratch.lumaPad.data(),
-              scratch.lumaPad.data() + padStride,
-              static_cast<size_t>(padStride));
-  std::memcpy(scratch.lumaPad.data() +
+  std::memcpy(scratch.lumaPad16.data(),
+              scratch.lumaPad16.data() + padStride,
+              static_cast<size_t>(padStride) * sizeof(uint16_t));
+  std::memcpy(scratch.lumaPad16.data() +
                   static_cast<size_t>(scaledH + 1) * padStride,
-              scratch.lumaPad.data() +
+              scratch.lumaPad16.data() +
                   static_cast<size_t>(scaledH) * padStride,
-              static_cast<size_t>(padStride));
+              static_cast<size_t>(padStride) * sizeof(uint16_t));
 
   if constexpr (kUseEdgeBoost) {
     for (int y = 0; y < scaledH; ++y) {
-      const uint8_t* row =
-          scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride + 1;
-      uint8_t* edgeRow =
+      const uint16_t* RESTRICT row =
+          scratch.lumaPad16.data() + static_cast<size_t>(y + 1) * padStride + 1;
+      uint8_t* RESTRICT edgeRow =
           scratch.edgeMap.data() + static_cast<size_t>(y) * scaledW;
+      uint8_t* RESTRICT contrastRow =
+          scratch.localContrast.data() + static_cast<size_t>(y) * scaledW;
       for (int x = 0; x < scaledW; ++x) {
-        const uint8_t* p = row + x;
+        const uint16_t* p = row + x;
+        // Sobel kernel met 16-bit precisie
         int a00 = static_cast<int>(p[-padStride - 1]);
         int a01 = static_cast<int>(p[-padStride]);
         int a02 = static_cast<int>(p[-padStride + 1]);
         int a10 = static_cast<int>(p[-1]);
+        int a11 = static_cast<int>(p[0]);
         int a12 = static_cast<int>(p[1]);
         int a20 = static_cast<int>(p[padStride - 1]);
         int a21 = static_cast<int>(p[padStride]);
         int a22 = static_cast<int>(p[padStride + 1]);
+        
+        // Sobel gradiënt
         int gx = (a02 + (a12 << 1) + a22) - (a00 + (a10 << 1) + a20);
         int gy = (a20 + (a21 << 1) + a22) - (a00 + (a01 << 1) + a02);
-        int mag = std::abs(gx) + std::abs(gy);
-        int edge = mag >> kEdgeShift;
+        int magSq = gx * gx + gy * gy;
+        int mag = fastIntSqrt(magSq);
+        int edge = mag >> (kEdgeShift - 1);
         if (edge > 255) edge = 255;
         edgeRow[x] = static_cast<uint8_t>(edge);
+        
+        // Lokaal contrast: verschil tussen center en gemiddelde neighbours
+        int avgNeighbor = (a00 + a01 + a02 + a10 + a12 + a20 + a21 + a22) >> 3;
+        int localDiff = std::abs(a11 - avgNeighbor);
+        if (localDiff > 255) localDiff = 255;
+        contrastRow[x] = static_cast<uint8_t>(localDiff);
       }
     }
   }
@@ -501,6 +594,13 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
 
   for (int cy = 0; cy < outH; ++cy) {
     int baseY = cy * 4;
+    // Prefetch volgende rij data voor betere cache hits
+    if (cy + 1 < outH) {
+      int nextBaseY = (cy + 1) * 4;
+      _mm_prefetch(reinterpret_cast<const char*>(
+          scratch.scaledRGBA.data() + static_cast<size_t>(nextBaseY) * scaledW),
+          _MM_HINT_T0);
+    }
     for (int cx = 0; cx < outW; ++cx) {
       int baseX = cx * 2;
       int bitmask = 0;
@@ -511,29 +611,37 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
       uint8_t rVals[8];
       uint8_t gVals[8];
       uint8_t bVals[8];
-      uint8_t lumVals[8];
+      uint16_t lumVals[8];  // 16-bit voor meer precisie
       uint8_t edgeVals[8];
+      uint8_t contrastVals[8];
       uint8_t bitIds[8];
       uint8_t validVals[8];
       int dotIndex = 0;
+
+      // Verzamel lokale statistieken voor adaptive thresholding
+      int cellLumMin = 255, cellLumMax = 0;
+      int cellLumSum = 0;
+      int validCount = 0;
 
       for (int dy = 0; dy < 4; ++dy) {
         int y = baseY + dy;
         const uint32_t* rgbRow =
             scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW +
             baseX;
-        const uint8_t* lumRow =
-            scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride +
+        const uint16_t* lumRow =
+            scratch.lumaPad16.data() + static_cast<size_t>(y + 1) * padStride +
             (baseX + 1);
         const uint8_t* edgeRow = scratch.edgeMap.data() +
                                  static_cast<size_t>(y) * scaledW + baseX;
+        const uint8_t* contrastRow = scratch.localContrast.data() +
+                                     static_cast<size_t>(y) * scaledW + baseX;
 
         for (int dx = 0; dx < 2; ++dx) {
           uint32_t px = rgbRow[dx];
           uint8_t r = static_cast<uint8_t>(px & 0xFF);
           uint8_t g = static_cast<uint8_t>((px >> 8) & 0xFF);
           uint8_t b = static_cast<uint8_t>((px >> 16) & 0xFF);
-          uint8_t lum = lumRow[dx];
+          uint16_t lum = lumRow[dx];
           uint8_t a = 255;
           if constexpr (!AssumeOpaque) {
             a = static_cast<uint8_t>((px >> 24) & 0xFF);
@@ -543,6 +651,7 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
           bVals[dotIndex] = b;
           lumVals[dotIndex] = lum;
           edgeVals[dotIndex] = edgeRow[dx];
+          contrastVals[dotIndex] = contrastRow[dx];
           bitIds[dotIndex] = static_cast<uint8_t>(brailleMap[dx][dy]);
           validVals[dotIndex] = static_cast<uint8_t>(a != 0);
 
@@ -553,6 +662,13 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
             }
           }
 
+          // Lokale statistieken voor deze cel
+          int lumInt = static_cast<int>(lum);
+          if (lumInt < cellLumMin) cellLumMin = lumInt;
+          if (lumInt > cellLumMax) cellLumMax = lumInt;
+          cellLumSum += lumInt;
+          ++validCount;
+
           sumAllR += r;
           sumAllG += g;
           sumAllB += b;
@@ -561,28 +677,85 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
         }
       }
 
+      // Adaptive thresholding: gebruik lokaal contrast indien significant
+      int cellLumRange = cellLumMax - cellLumMin;
+      int cellLumMean = validCount > 0 ? cellLumSum / validCount : bgLum;
+      bool useLocalThreshold = cellLumRange > 20;  // Alleen bij voldoende lokaal contrast
+      int localMidpoint = useLocalThreshold ? ((cellLumMin + cellLumMax) >> 1) : bgLum;
+
+      // Sorteer dots op luminantie voor rank-based thresholding
+      struct DotInfo { int idx; int score; };
+      DotInfo dotRanks[8];
+      int numValidDots = 0;
+      
       for (int i = 0; i < 8; ++i) {
+        if (!validVals[i]) continue;
+        
+        int lum = static_cast<int>(lumVals[i]);
         int edge = static_cast<int>(edgeVals[i]);
-        int diffMin =
-            kBgDelta - ((edge * kEdgeDeltaScale) >> 8);
-        if (diffMin < kBgDeltaMin) diffMin = kBgDeltaMin;
-        int lumDiff =
-            std::abs(static_cast<int>(lumVals[i]) - bgLum);
-        if (lumDiff < diffMin) {
-          continue;
+        int contrast = static_cast<int>(contrastVals[i]);
+        
+        // Score combineert luminantie verschil + edge boost + lokaal contrast
+        int lumDiff = useLocalThreshold 
+            ? std::abs(lum - localMidpoint)
+            : std::abs(lum - bgLum);
+        
+        int score = lumDiff * 2 + edge + (contrast >> 1);
+        dotRanks[numValidDots++] = {i, score};
+      }
+
+      // Bepaal hoeveel dots we moeten aanzetten gebaseerd op gemiddelde coverage
+      int avgLumDiff = validCount > 0 
+          ? std::abs(cellLumMean - bgLum) * 255 / std::max(1, lumRange) 
+          : 0;
+      if (avgLumDiff > 255) avgLumDiff = 255;
+      int targetCoverage = kInkLevelFromLum[static_cast<size_t>(avgLumDiff)];
+      int targetDots = (numValidDots * targetCoverage + 127) / 255;
+      
+      // Extra dots voor hoog-contrast cellen
+      if (cellLumRange > 40 && targetDots < numValidDots) {
+        targetDots = std::min(targetDots + 1, numValidDots);
+      }
+
+      // Sorteer dots op score (hoogste eerst)
+      for (int i = 0; i < numValidDots - 1; ++i) {
+        for (int j = i + 1; j < numValidDots; ++j) {
+          if (dotRanks[j].score > dotRanks[i].score) {
+            DotInfo tmp = dotRanks[i];
+            dotRanks[i] = dotRanks[j];
+            dotRanks[j] = tmp;
+          }
         }
-        int dotNorm = lumDiff * 255 / lumRange;
-        if (dotNorm < 0) dotNorm = 0;
-        if (dotNorm > 255) dotNorm = 255;
-        uint8_t level = kInkLevelFromLum[static_cast<size_t>(dotNorm)];
-        int boosted = static_cast<int>(level) +
-                      kEdgeBoostFromMag[static_cast<size_t>(edgeVals[i])];
-        if (boosted > 255) boosted = 255;
-        int threshold = static_cast<int>(
-            kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
-        threshold -= kDitherBias;
-        if (threshold < 0) threshold = 0;
-        if (boosted > threshold) {
+      }
+
+      // Activeer de top N dots, met dither voor de grensgevallen
+      for (int rank = 0; rank < numValidDots; ++rank) {
+        int i = dotRanks[rank].idx;
+        int edge = static_cast<int>(edgeVals[i]);
+        
+        // Basis threshold gebaseerd op rank
+        bool shouldActivate = false;
+        if (rank < targetDots) {
+          // Zeker aan
+          shouldActivate = true;
+        } else if (rank == targetDots && targetCoverage > 0) {
+          // Grens-dot: gebruik dithering alleen als er coverage is
+          int ditherThresh = static_cast<int>(
+              kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
+          int fractionalCoverage = (numValidDots * targetCoverage) % 255;
+          shouldActivate = fractionalCoverage > ditherThresh;
+        }
+        
+        // Edge boost kan extra dots aanzetten, maar alleen bij significante edges
+        if (!shouldActivate && edge > kEdgeMin * 3) {
+          int edgeBonus = kEdgeBoostFromMag[static_cast<size_t>(edge)];
+          int ditherThresh = static_cast<int>(
+              kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]) - kDitherBias;
+          if (ditherThresh < 0) ditherThresh = 0;
+          shouldActivate = edgeBonus > ditherThresh;
+        }
+        
+        if (shouldActivate) {
           bitmask |= (1 << bitIds[i]);
         }
       }
@@ -651,18 +824,22 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
                 std::min(255, (static_cast<int>(curB) * scale + 128) >> 8));
           }
         }
+        // Verbeterde kleurverwerking met adaptive saturation
         int y = (static_cast<int>(curR) * 54 +
                  static_cast<int>(curG) * 183 +
                  static_cast<int>(curB) * 19 + 128) >>
                 8;
+        // Adaptive saturation: meer saturatie voor donkere kleuren
+        int adaptiveSat = kColorSaturation + ((255 - y) >> 2);
+        if (adaptiveSat > 400) adaptiveSat = 400;
         curR = static_cast<uint8_t>(std::clamp(
-            y + ((static_cast<int>(curR) - y) * kColorSaturation >> 8), 0,
+            y + ((static_cast<int>(curR) - y) * adaptiveSat >> 8), 0,
             255));
         curG = static_cast<uint8_t>(std::clamp(
-            y + ((static_cast<int>(curG) - y) * kColorSaturation >> 8), 0,
+            y + ((static_cast<int>(curG) - y) * adaptiveSat >> 8), 0,
             255));
         curB = static_cast<uint8_t>(std::clamp(
-            y + ((static_cast<int>(curB) - y) * kColorSaturation >> 8), 0,
+            y + ((static_cast<int>(curB) - y) * adaptiveSat >> 8), 0,
             255));
 
         if (cellIndex < scratch.prevFg.size() &&
