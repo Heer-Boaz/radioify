@@ -147,45 +147,6 @@ void updateColorInfo(IMFMediaType* mediaType, UINT32* yuvMatrix,
   }
 }
 
-inline uint8_t clampToByte(float v) {
-  if (v < 0.0f) return 0;
-  if (v > 255.0f) return 255;
-  return static_cast<uint8_t>(v + 0.5f);
-}
-
-void yuvToRgb(int y, int u, int v, bool fullRange, UINT32 matrix,
-              uint8_t& outR, uint8_t& outG, uint8_t& outB) {
-  float yf = 0.0f;
-  float uf = 0.0f;
-  float vf = 0.0f;
-  if (fullRange) {
-    yf = static_cast<float>(y) / 255.0f;
-    uf = (static_cast<float>(u) - 128.0f) / 255.0f;
-    vf = (static_cast<float>(v) - 128.0f) / 255.0f;
-  } else {
-    yf = (static_cast<float>(y) - 16.0f) / 219.0f;
-    uf = (static_cast<float>(u) - 128.0f) / 224.0f;
-    vf = (static_cast<float>(v) - 128.0f) / 224.0f;
-  }
-
-  float r = 0.0f;
-  float g = 0.0f;
-  float b = 0.0f;
-  if (matrix == MFVideoTransferMatrix_BT709) {
-    r = yf + 1.5748f * vf;
-    g = yf - 0.1873f * uf - 0.4681f * vf;
-    b = yf + 1.8556f * uf;
-  } else {
-    r = yf + 1.4020f * vf;
-    g = yf - 0.3441f * uf - 0.7141f * vf;
-    b = yf + 1.7720f * uf;
-  }
-
-  outR = clampToByte(r * 255.0f);
-  outG = clampToByte(g * 255.0f);
-  outB = clampToByte(b * 255.0f);
-}
-
 bool createHardwareReaderAttributes(IMFAttributes** attributes,
                                     IMFDXGIDeviceManager** dxgiManager,
                                     ID3D11Device** d3dDevice,
@@ -799,7 +760,13 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       out.width = width;
       out.height = height;
       out.timestamp100ns = static_cast<int64_t>(timestamp);
+      out.format = VideoPixelFormat::Unknown;
+      out.stride = 0;
+      out.planeHeight = 0;
+      out.fullRange = impl_->fullRange;
+      out.yuvMatrix = impl_->yuvMatrix;
       out.rgba.clear();
+      out.yuv.clear();
       LONGLONG duration = 0;
       if (FAILED(sample->GetSampleDuration(&duration))) {
         duration = 0;
@@ -1090,17 +1057,24 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     out.width = width;
     out.height = height;
     out.timestamp100ns = static_cast<int64_t>(timestamp);
-    try {
-      out.rgba.resize(byteCount);
-    } catch (const std::bad_alloc&) {
-      impl_->atEnd = true;
-      unlockBuffer();
-      safeRelease(buffer);
-      safeRelease(sample);
-      return false;
-    }
+    out.fullRange = impl_->fullRange;
+    out.yuvMatrix = impl_->yuvMatrix;
+    out.stride = 0;
+    out.planeHeight = 0;
 
     if (format == PixelFormat::RGB32 || format == PixelFormat::ARGB32) {
+      out.format = (format == PixelFormat::ARGB32) ? VideoPixelFormat::ARGB32
+                                                   : VideoPixelFormat::RGB32;
+      try {
+        out.rgba.resize(byteCount);
+      } catch (const std::bad_alloc&) {
+        impl_->atEnd = true;
+        unlockBuffer();
+        safeRelease(buffer);
+        safeRelease(sample);
+        return false;
+      }
+      out.yuv.clear();
       if (stride < width * 4 || curLen < static_cast<DWORD>(stride)) {
         unlockBuffer();
         safeRelease(buffer);
@@ -1132,29 +1106,27 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
         uint8_t* dstRow = out.rgba.data() + (y * width * 4);
         std::fill(dstRow, dstRow + width * 4, 0);
       }
-    } else {
+    } else if (format == PixelFormat::NV12 || format == PixelFormat::P010) {
       int planeHeight = height;
-      if (format == PixelFormat::NV12 || format == PixelFormat::P010) {
-        int derivedPlaneHeight = 0;
-        if (dxgiPlaneHeight > 0) {
-          planeHeight = static_cast<int>(dxgiPlaneHeight);
-        }
-        // Buffer length can reflect a tighter packed plane height.
-        if (curLen > 0 && stride > 0) {
-          const size_t denom =
-              static_cast<size_t>(stride) * static_cast<size_t>(3u);
-          const size_t numer = static_cast<size_t>(curLen) * 2u;
-          if (denom > 0) {
-            size_t derived = numer / denom;
-            if (derived >= static_cast<size_t>(height)) {
-              derivedPlaneHeight = static_cast<int>(derived);
-            }
+      int derivedPlaneHeight = 0;
+      if (dxgiPlaneHeight > 0) {
+        planeHeight = static_cast<int>(dxgiPlaneHeight);
+      }
+      // Buffer length can reflect a tighter packed plane height.
+      if (curLen > 0 && stride > 0) {
+        const size_t denom =
+            static_cast<size_t>(stride) * static_cast<size_t>(3u);
+        const size_t numer = static_cast<size_t>(curLen) * 2u;
+        if (denom > 0) {
+          size_t derived = numer / denom;
+          if (derived >= static_cast<size_t>(height)) {
+            derivedPlaneHeight = static_cast<int>(derived);
           }
         }
-        if (derivedPlaneHeight > 0 &&
-            (planeHeight == height || derivedPlaneHeight < planeHeight)) {
-          planeHeight = derivedPlaneHeight;
-        }
+      }
+      if (derivedPlaneHeight > 0 &&
+          (planeHeight == height || derivedPlaneHeight < planeHeight)) {
+        planeHeight = derivedPlaneHeight;
       }
       size_t required = static_cast<size_t>(stride) *
                         static_cast<size_t>(planeHeight) * 3u / 2u;
@@ -1165,53 +1137,27 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
         continue;
       }
 
-      const uint8_t* yPlane = data;
-      const uint8_t* uvPlane =
-          data + static_cast<size_t>(stride) * static_cast<size_t>(planeHeight);
-
-      for (int y = 0; y < height; ++y) {
-        int srcY = topDown ? y : (height - 1 - y);
-        int uvY = srcY / 2;
-        uint8_t* dstRow = out.rgba.data() + (y * width * 4);
-
-        if (format == PixelFormat::NV12) {
-          const uint8_t* yRow = yPlane + srcY * stride;
-          const uint8_t* uvRow = uvPlane + uvY * stride;
-          for (int x = 0; x < width; ++x) {
-            int yVal = yRow[x];
-            int uvIndex = (x / 2) * 2;
-            int uVal = uvRow[uvIndex + 0];
-            int vVal = uvRow[uvIndex + 1];
-            uint8_t r = 0, g = 0, b = 0;
-            yuvToRgb(yVal, uVal, vVal, impl_->fullRange, impl_->yuvMatrix, r,
-                     g, b);
-            dstRow[x * 4 + 0] = r;
-            dstRow[x * 4 + 1] = g;
-            dstRow[x * 4 + 2] = b;
-            dstRow[x * 4 + 3] = 255;
-          }
-        } else {
-          const uint16_t* yRow =
-              reinterpret_cast<const uint16_t*>(yPlane + srcY * stride);
-          const uint16_t* uvRow =
-              reinterpret_cast<const uint16_t*>(uvPlane + uvY * stride);
-          for (int x = 0; x < width; ++x) {
-            int uvIndex = (x / 2) * 2;
-            int y10 = static_cast<int>(yRow[x] >> 6);
-            int u10 = static_cast<int>(uvRow[uvIndex + 0] >> 6);
-            int v10 = static_cast<int>(uvRow[uvIndex + 1] >> 6);
-            int y8 = (y10 * 255 + 511) / 1023;
-            int u8 = (u10 * 255 + 511) / 1023;
-            int v8 = (v10 * 255 + 511) / 1023;
-            uint8_t r = 0, g = 0, b = 0;
-            yuvToRgb(y8, u8, v8, impl_->fullRange, impl_->yuvMatrix, r, g, b);
-            dstRow[x * 4 + 0] = r;
-            dstRow[x * 4 + 1] = g;
-            dstRow[x * 4 + 2] = b;
-            dstRow[x * 4 + 3] = 255;
-          }
-        }
+      out.format =
+          (format == PixelFormat::P010) ? VideoPixelFormat::P010
+                                        : VideoPixelFormat::NV12;
+      out.stride = stride;
+      out.planeHeight = planeHeight;
+      try {
+        out.yuv.resize(required);
+      } catch (const std::bad_alloc&) {
+        impl_->atEnd = true;
+        unlockBuffer();
+        safeRelease(buffer);
+        safeRelease(sample);
+        return false;
       }
+      std::memcpy(out.yuv.data(), data, required);
+      out.rgba.clear();
+    } else {
+      unlockBuffer();
+      safeRelease(buffer);
+      safeRelease(sample);
+      continue;
     }
 
     LONGLONG duration = 0;

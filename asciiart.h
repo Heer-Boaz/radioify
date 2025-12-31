@@ -1,6 +1,7 @@
 #ifndef ASCIIART_H
 #define ASCIIART_H
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -35,5 +36,22 @@ bool renderAsciiArtFromRgba(const uint8_t* rgba,
                             int maxHeight,
                             AsciiArt& out,
                             bool assumeOpaque = false);
+
+enum class YuvFormat {
+  NV12,
+  P010,
+};
+
+bool renderAsciiArtFromYuv(const uint8_t* data,
+                           int width,
+                           int height,
+                           int stride,
+                           int planeHeight,
+                           YuvFormat format,
+                           bool fullRange,
+                           uint32_t yuvMatrix,
+                           int maxWidth,
+                           int maxHeight,
+                           AsciiArt& out);
 
 #endif

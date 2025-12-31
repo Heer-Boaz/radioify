@@ -6,11 +6,25 @@
 #include <string>
 #include <vector>
 
+enum class VideoPixelFormat {
+  Unknown,
+  RGB32,
+  ARGB32,
+  NV12,
+  P010,
+};
+
 struct VideoFrame {
   int width = 0;
   int height = 0;
   int64_t timestamp100ns = 0;
+  VideoPixelFormat format = VideoPixelFormat::Unknown;
+  int stride = 0;
+  int planeHeight = 0;
+  bool fullRange = true;
+  uint32_t yuvMatrix = 0;
   std::vector<uint8_t> rgba;
+  std::vector<uint8_t> yuv;
 };
 
 struct VideoReadInfo {

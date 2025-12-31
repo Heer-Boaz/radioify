@@ -1315,19 +1315,53 @@ static bool showAsciiVideo(
           renderFailDetail = "";
           return;
         }
-        size_t expected = static_cast<size_t>(frame.width) *
-                          static_cast<size_t>(frame.height) * 4u;
-        if (frame.rgba.size() < expected) {
-          renderFailed = true;
-          renderFailMessage = "Invalid video frame buffer.";
-          renderFailDetail = "Frame pixel data is missing.";
-          return;
-        }
         bool artOk = false;
         try {
-          artOk = renderAsciiArtFromRgba(frame.rgba.data(), frame.width,
-                                         frame.height, width, maxHeight, art,
-                                         true);
+          if (frame.format == VideoPixelFormat::NV12 ||
+              frame.format == VideoPixelFormat::P010) {
+            if (frame.stride <= 0 || frame.planeHeight <= 0) {
+              renderFailed = true;
+              renderFailMessage = "Invalid video frame buffer.";
+              renderFailDetail = "Missing YUV plane metadata.";
+              return;
+            }
+            size_t strideBytes = static_cast<size_t>(frame.stride);
+            size_t planeHeight = static_cast<size_t>(frame.planeHeight);
+            size_t yBytes = strideBytes * planeHeight;
+            if (strideBytes == 0 || planeHeight == 0 ||
+                yBytes / strideBytes != planeHeight) {
+              renderFailed = true;
+              renderFailMessage = "Invalid video frame buffer.";
+              renderFailDetail = "Invalid YUV plane layout.";
+              return;
+            }
+            size_t required = yBytes + yBytes / 2;
+            if (required < yBytes || frame.yuv.size() < required) {
+              renderFailed = true;
+              renderFailMessage = "Invalid video frame buffer.";
+              renderFailDetail = "Frame pixel data is missing.";
+              return;
+            }
+            YuvFormat yuvFormat = (frame.format == VideoPixelFormat::P010)
+                                      ? YuvFormat::P010
+                                      : YuvFormat::NV12;
+            artOk = renderAsciiArtFromYuv(
+                frame.yuv.data(), frame.width, frame.height, frame.stride,
+                frame.planeHeight, yuvFormat, frame.fullRange, frame.yuvMatrix,
+                width, maxHeight, art);
+          } else {
+            size_t expected = static_cast<size_t>(frame.width) *
+                              static_cast<size_t>(frame.height) * 4u;
+            if (frame.rgba.size() < expected) {
+              renderFailed = true;
+              renderFailMessage = "Invalid video frame buffer.";
+              renderFailDetail = "Frame pixel data is missing.";
+              return;
+            }
+            artOk = renderAsciiArtFromRgba(frame.rgba.data(), frame.width,
+                                           frame.height, width, maxHeight, art,
+                                           true);
+          }
         } catch (const std::bad_alloc&) {
           renderFailed = true;
           renderFailMessage = "Failed to render video frame.";
@@ -2053,6 +2087,8 @@ struct AudioRingBuffer {
     return capacityFrames - bufferedFrames;
   }
 
+  size_t size() const { return bufferedFrames; }
+
   size_t read(float* out, size_t frames, uint32_t channels) {
     if (!out || capacityFrames == 0 || frames == 0) return 0;
     size_t toRead = std::min(frames, bufferedFrames);
@@ -2377,7 +2413,10 @@ int main(int argc, char** argv) {
   auto startM4aWorker = [&](const std::filesystem::path& file,
                             uint64_t startFrame, std::string* error) -> bool {
     stopM4aWorker();
-    const uint32_t rbFrames = sampleRate * 2;
+    const uint32_t rbFrames =
+        std::max<uint32_t>(sampleRate / 2, 8192);
+    const uint32_t targetFrames =
+        std::min<uint32_t>(rbFrames, std::max<uint32_t>(sampleRate / 4, 4096));
     {
       std::lock_guard<std::mutex> lock(state.m4aMutex);
       state.m4aBuffer.init(rbFrames, channels);
@@ -2391,7 +2430,7 @@ int main(int argc, char** argv) {
     const uint32_t workerChannels = channels;
     const uint32_t workerRate = sampleRate;
     state.m4aThread = std::thread([&, file, startFrame, workerChannels,
-                                   workerRate]() {
+                                   workerRate, targetFrames]() {
       HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
       bool comInit = SUCCEEDED(hr);
       M4aDecoder decoder;
@@ -2474,20 +2513,29 @@ int main(int argc, char** argv) {
         }
 
         size_t spaceFrames = 0;
+        size_t bufferedFrames = 0;
         {
           std::lock_guard<std::mutex> lock(state.m4aMutex);
           spaceFrames = state.m4aBuffer.space();
+          bufferedFrames = state.m4aBuffer.size();
         }
-        if (spaceFrames == 0) {
+        if (spaceFrames == 0 || bufferedFrames >= targetFrames) {
           std::unique_lock<std::mutex> lock(state.m4aMutex);
           state.m4aCv.wait_for(lock, std::chrono::milliseconds(5), [&]() {
-            return state.m4aBuffer.space() > 0 || state.m4aStop.load();
+            return (state.m4aBuffer.space() > 0 &&
+                    state.m4aBuffer.size() < targetFrames) ||
+                   state.m4aStop.load() || state.seekRequested.load();
           });
           continue;
         }
 
-        uint32_t framesToRead =
-            static_cast<uint32_t>(std::min<size_t>(spaceFrames, kChunkFrames));
+        size_t desiredFrames =
+            targetFrames > bufferedFrames ? (targetFrames - bufferedFrames) : 0;
+        size_t toRead = std::min<size_t>(spaceFrames, kChunkFrames);
+        if (desiredFrames > 0) {
+          toRead = std::min(toRead, desiredFrames);
+        }
+        uint32_t framesToRead = static_cast<uint32_t>(toRead);
         uint64_t framesRead = 0;
         if (!decoder.readFrames(buffer.data(), framesToRead, &framesRead)) {
           state.m4aAtEnd.store(true);

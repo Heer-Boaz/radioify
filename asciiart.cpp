@@ -8,6 +8,7 @@
 #endif
 #include <wincodec.h>
 #include <windows.h>
+#include <mfapi.h>
 
 #include <algorithm>
 #include <array>
@@ -203,6 +204,64 @@ FORCE_INLINE uint32_t packRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
          (static_cast<uint32_t>(g) << 8) |
          (static_cast<uint32_t>(b) << 16) |
          (static_cast<uint32_t>(a) << 24);
+}
+
+FORCE_INLINE uint8_t clampToByte(float v) {
+  if (v < 0.0f) return 0;
+  if (v > 255.0f) return 255;
+  return static_cast<uint8_t>(v + 0.5f);
+}
+
+FORCE_INLINE uint8_t normalizeLuma8(int y, bool fullRange) {
+  if (fullRange) {
+    if (y < 0) return 0;
+    if (y > 255) return 255;
+    return static_cast<uint8_t>(y);
+  }
+  int v = (y - 16) * 255 / 219;
+  if (v < 0) v = 0;
+  if (v > 255) v = 255;
+  return static_cast<uint8_t>(v);
+}
+
+FORCE_INLINE uint8_t to8bitFrom10(int v10) {
+  if (v10 < 0) v10 = 0;
+  if (v10 > 1023) v10 = 1023;
+  return static_cast<uint8_t>((v10 * 255 + 511) / 1023);
+}
+
+FORCE_INLINE void yuvToRgb(int y, int u, int v, bool fullRange,
+                           uint32_t matrix, uint8_t& outR, uint8_t& outG,
+                           uint8_t& outB) {
+  float yf = 0.0f;
+  float uf = 0.0f;
+  float vf = 0.0f;
+  if (fullRange) {
+    yf = static_cast<float>(y) / 255.0f;
+    uf = (static_cast<float>(u) - 128.0f) / 255.0f;
+    vf = (static_cast<float>(v) - 128.0f) / 255.0f;
+  } else {
+    yf = (static_cast<float>(y) - 16.0f) / 219.0f;
+    uf = (static_cast<float>(u) - 128.0f) / 224.0f;
+    vf = (static_cast<float>(v) - 128.0f) / 224.0f;
+  }
+
+  float r = 0.0f;
+  float g = 0.0f;
+  float b = 0.0f;
+  if (matrix == MFVideoTransferMatrix_BT709) {
+    r = yf + 1.5748f * vf;
+    g = yf - 0.1873f * uf - 0.4681f * vf;
+    b = yf + 1.8556f * uf;
+  } else {
+    r = yf + 1.4020f * vf;
+    g = yf - 0.3441f * uf - 0.7141f * vf;
+    b = yf + 1.7720f * uf;
+  }
+
+  outR = clampToByte(r * 255.0f);
+  outG = clampToByte(g * 255.0f);
+  outB = clampToByte(b * 255.0f);
 }
 
 // Snelle integer square root approximatie voor edge detection
@@ -402,16 +461,9 @@ bool loadImagePixels(const std::filesystem::path& path, int& outW, int& outH,
 }
 
 template <bool AssumeOpaque>
-bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
-                                    int maxWidth, int maxHeight, AsciiArt& out,
-                                    BrailleFastScratch& scratch) {
-  out = AsciiArt{};
-  if (!rgba || width <= 0 || height <= 0) return false;
-
-  int maxArtWidth = std::max(8, maxWidth);
-  scratch.ensure(width, height, maxArtWidth, maxHeight);
-  if (scratch.outW <= 0 || scratch.outH <= 0) return false;
-
+bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
+                               uint64_t lumCount,
+                               const uint32_t* lumHist) {
   const int outW = scratch.outW;
   const int outH = scratch.outH;
   const int scaledW = scratch.scaledW;
@@ -421,81 +473,6 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
   out.width = outW;
   out.height = outH;
   out.cells.resize(static_cast<size_t>(outW) * outH);
-
-  uint64_t lumCount = 0;
-  uint32_t lumHist[256] = {};
-  
-  // Subpixel sampling: middel meerdere source pixels per scaled pixel
-  for (int y = 0; y < scaledH; ++y) {
-    int syStart = scratch.yMapStart[y];
-    int syEnd = scratch.yMapEnd[y];
-    uint32_t* dstRow =
-        scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW;
-    uint8_t* padRow =
-        scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride;
-
-    for (int x = 0; x < scaledW; ++x) {
-      int sxStart = scratch.xMapStart[x];
-      int sxEnd = scratch.xMapEnd[x];
-      
-      // Accumuleer alle source pixels in dit bereik
-      uint32_t sumR = 0, sumG = 0, sumB = 0, sumA = 0;
-      uint32_t sumLum = 0;
-      int sampleCount = 0;
-      
-      for (int sy = syStart; sy < syEnd; ++sy) {
-        const uint8_t* srcRow = rgba + static_cast<size_t>(sy) * width * 4;
-        for (int sx = sxStart; sx < sxEnd; ++sx) {
-          const uint8_t* sp = srcRow + sx * 4;
-          uint8_t r = sp[0];
-          uint8_t g = sp[1];
-          uint8_t b = sp[2];
-          uint8_t a = 255;
-          if constexpr (!AssumeOpaque) {
-            a = sp[3];
-          }
-          sumR += r;
-          sumG += g;
-          sumB += b;
-          sumA += a;
-          // Directe YUV luminantie berekening (veel sneller zonder lookup tables)
-          uint8_t lum = rgbToY(r, g, b);
-          sumLum += lum;
-          ++sampleCount;
-        }
-      }
-      
-      // Gemiddelde berekenen
-      if (sampleCount > 0) {
-        uint8_t r = static_cast<uint8_t>(sumR / sampleCount);
-        uint8_t g = static_cast<uint8_t>(sumG / sampleCount);
-        uint8_t b = static_cast<uint8_t>(sumB / sampleCount);
-        uint8_t a = static_cast<uint8_t>(sumA / sampleCount);
-        dstRow[x] = packRGBA(r, g, b, a);
-        
-        uint8_t avgLum = static_cast<uint8_t>(
-            std::min(255U, static_cast<uint32_t>(sumLum / sampleCount)));
-        
-        bool countLum = true;
-        if constexpr (!AssumeOpaque) {
-          if (a == 0) {
-            avgLum = 255;
-            countLum = false;
-          }
-        }
-        padRow[x + 1] = avgLum;
-        if (countLum) {
-          ++lumHist[avgLum];
-          ++lumCount;
-        }
-      } else {
-        dstRow[x] = packRGBA(0, 0, 0, 0);
-        padRow[x + 1] = 255;
-      }
-    }
-    padRow[0] = padRow[1];
-    padRow[padStride - 1] = padRow[padStride - 2];
-  }
 
   std::memcpy(scratch.lumaPad.data(),
               scratch.lumaPad.data() + padStride,
@@ -527,7 +504,7 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
         int a21 = p[padStride];
         int a22 = p[padStride + 1];
         
-        // Sobel gradiënt
+        // Sobel gradi‰nt
         int gx = (a02 + (a12 << 1) + a22) - (a00 + (a10 << 1) + a20);
         int gy = (a20 + (a21 << 1) + a22) - (a00 + (a01 << 1) + a02);
         int magSq = gx * gx + gy * gy;
@@ -1011,6 +988,216 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
   return true;
 }
 
+template <bool AssumeOpaque>
+bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
+                                    int maxWidth, int maxHeight, AsciiArt& out,
+                                    BrailleFastScratch& scratch) {
+  out = AsciiArt{};
+  if (!rgba || width <= 0 || height <= 0) return false;
+
+  int maxArtWidth = std::max(8, maxWidth);
+  scratch.ensure(width, height, maxArtWidth, maxHeight);
+  if (scratch.outW <= 0 || scratch.outH <= 0) return false;
+
+  const int scaledW = scratch.scaledW;
+  const int scaledH = scratch.scaledH;
+  const int padStride = scratch.padStride;
+
+  uint64_t lumCount = 0;
+  uint32_t lumHist[256] = {};
+  
+  // Subpixel sampling: middel meerdere source pixels per scaled pixel
+  for (int y = 0; y < scaledH; ++y) {
+    int syStart = scratch.yMapStart[y];
+    int syEnd = scratch.yMapEnd[y];
+    uint32_t* dstRow =
+        scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW;
+    uint8_t* padRow =
+        scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride;
+
+    for (int x = 0; x < scaledW; ++x) {
+      int sxStart = scratch.xMapStart[x];
+      int sxEnd = scratch.xMapEnd[x];
+      
+      // Accumuleer alle source pixels in dit bereik
+      uint32_t sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+      uint32_t sumLum = 0;
+      int sampleCount = 0;
+      
+      for (int sy = syStart; sy < syEnd; ++sy) {
+        const uint8_t* srcRow = rgba + static_cast<size_t>(sy) * width * 4;
+        for (int sx = sxStart; sx < sxEnd; ++sx) {
+          const uint8_t* sp = srcRow + sx * 4;
+          uint8_t r = sp[0];
+          uint8_t g = sp[1];
+          uint8_t b = sp[2];
+          uint8_t a = 255;
+          if constexpr (!AssumeOpaque) {
+            a = sp[3];
+          }
+          sumR += r;
+          sumG += g;
+          sumB += b;
+          sumA += a;
+          // Directe YUV luminantie berekening (veel sneller zonder lookup tables)
+          uint8_t lum = rgbToY(r, g, b);
+          sumLum += lum;
+          ++sampleCount;
+        }
+      }
+      
+      // Gemiddelde berekenen
+      if (sampleCount > 0) {
+        uint8_t r = static_cast<uint8_t>(sumR / sampleCount);
+        uint8_t g = static_cast<uint8_t>(sumG / sampleCount);
+        uint8_t b = static_cast<uint8_t>(sumB / sampleCount);
+        uint8_t a = static_cast<uint8_t>(sumA / sampleCount);
+        dstRow[x] = packRGBA(r, g, b, a);
+        
+        uint8_t avgLum = static_cast<uint8_t>(
+            std::min(255U, static_cast<uint32_t>(sumLum / sampleCount)));
+        
+        bool countLum = true;
+        if constexpr (!AssumeOpaque) {
+          if (a == 0) {
+            avgLum = 255;
+            countLum = false;
+          }
+        }
+        padRow[x + 1] = avgLum;
+        if (countLum) {
+          ++lumHist[avgLum];
+          ++lumCount;
+        }
+      } else {
+        dstRow[x] = packRGBA(0, 0, 0, 0);
+        padRow[x + 1] = 255;
+      }
+    }
+    padRow[0] = padRow[1];
+    padRow[padStride - 1] = padRow[padStride - 2];
+  }
+
+  return renderAsciiArtFromScratch<AssumeOpaque>(out, scratch, lumCount,
+                                                 lumHist);
+}
+
+template <bool IsP010>
+bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
+                               int stride, int planeHeight, bool fullRange,
+                               uint32_t yuvMatrix, int maxWidth, int maxHeight,
+                               AsciiArt& out, BrailleFastScratch& scratch) {
+  out = AsciiArt{};
+  if (!data || width <= 0 || height <= 0 || stride <= 0) return false;
+
+  int maxArtWidth = std::max(8, maxWidth);
+  scratch.ensure(width, height, maxArtWidth, maxHeight);
+  if (scratch.outW <= 0 || scratch.outH <= 0) return false;
+
+  int effectivePlaneHeight = planeHeight > 0 ? planeHeight : height;
+  if (effectivePlaneHeight < height) return false;
+
+  const uint8_t* yPlane = data;
+  const uint8_t* uvPlane =
+      data + static_cast<size_t>(stride) *
+                 static_cast<size_t>(effectivePlaneHeight);
+
+  const int scaledW = scratch.scaledW;
+  const int scaledH = scratch.scaledH;
+  const int padStride = scratch.padStride;
+
+  uint64_t lumCount = 0;
+  uint32_t lumHist[256] = {};
+
+  for (int y = 0; y < scaledH; ++y) {
+    int syStart = scratch.yMapStart[y];
+    int syEnd = scratch.yMapEnd[y];
+    uint32_t* dstRow =
+        scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW;
+    uint8_t* padRow =
+        scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride;
+
+    for (int x = 0; x < scaledW; ++x) {
+      int sxStart = scratch.xMapStart[x];
+      int sxEnd = scratch.xMapEnd[x];
+      uint64_t sumY = 0;
+      uint64_t sumU = 0;
+      uint64_t sumV = 0;
+      uint32_t sampleCount = 0;
+
+      for (int sy = syStart; sy < syEnd; ++sy) {
+        if constexpr (IsP010) {
+          const uint16_t* yRow = reinterpret_cast<const uint16_t*>(
+              yPlane + static_cast<size_t>(sy) * stride);
+          const uint16_t* uvRow = reinterpret_cast<const uint16_t*>(
+              uvPlane + static_cast<size_t>(sy / 2) * stride);
+          for (int sx = sxStart; sx < sxEnd; ++sx) {
+            int uvIndex = (sx / 2) * 2;
+            int y10 = static_cast<int>(yRow[sx] >> 6);
+            int u10 = static_cast<int>(uvRow[uvIndex + 0] >> 6);
+            int v10 = static_cast<int>(uvRow[uvIndex + 1] >> 6);
+            sumY += static_cast<uint64_t>(y10);
+            sumU += static_cast<uint64_t>(u10);
+            sumV += static_cast<uint64_t>(v10);
+            ++sampleCount;
+          }
+        } else {
+          const uint8_t* yRow =
+              yPlane + static_cast<size_t>(sy) * stride;
+          const uint8_t* uvRow =
+              uvPlane + static_cast<size_t>(sy / 2) * stride;
+          for (int sx = sxStart; sx < sxEnd; ++sx) {
+            int uvIndex = (sx / 2) * 2;
+            int y8 = yRow[sx];
+            int u8 = uvRow[uvIndex + 0];
+            int v8 = uvRow[uvIndex + 1];
+            sumY += static_cast<uint64_t>(y8);
+            sumU += static_cast<uint64_t>(u8);
+            sumV += static_cast<uint64_t>(v8);
+            ++sampleCount;
+          }
+        }
+      }
+
+      if (sampleCount > 0) {
+        uint32_t half = sampleCount / 2;
+        int yAvg = static_cast<int>((sumY + half) / sampleCount);
+        int uAvg = static_cast<int>((sumU + half) / sampleCount);
+        int vAvg = static_cast<int>((sumV + half) / sampleCount);
+        uint8_t y8 = 0;
+        uint8_t u8 = 0;
+        uint8_t v8 = 0;
+        if constexpr (IsP010) {
+          y8 = to8bitFrom10(yAvg);
+          u8 = to8bitFrom10(uAvg);
+          v8 = to8bitFrom10(vAvg);
+        } else {
+          y8 = static_cast<uint8_t>(std::clamp(yAvg, 0, 255));
+          u8 = static_cast<uint8_t>(std::clamp(uAvg, 0, 255));
+          v8 = static_cast<uint8_t>(std::clamp(vAvg, 0, 255));
+        }
+
+        uint8_t lum = normalizeLuma8(y8, fullRange);
+        padRow[x + 1] = lum;
+        ++lumHist[lum];
+        ++lumCount;
+
+        uint8_t r = 0, g = 0, b = 0;
+        yuvToRgb(static_cast<int>(y8), static_cast<int>(u8),
+                 static_cast<int>(v8), fullRange, yuvMatrix, r, g, b);
+        dstRow[x] = packRGBA(r, g, b, 255);
+      } else {
+        dstRow[x] = packRGBA(0, 0, 0, 0);
+        padRow[x + 1] = 255;
+      }
+    }
+    padRow[0] = padRow[1];
+    padRow[padStride - 1] = padRow[padStride - 2];
+  }
+
+  return renderAsciiArtFromScratch<true>(out, scratch, lumCount, lumHist);
+}
+
 bool renderAsciiArtFromRgbaFast(const uint8_t* rgba, int width, int height,
                                 int maxWidth, int maxHeight, AsciiArt& out,
                                 bool assumeOpaque,
@@ -1064,4 +1251,19 @@ bool renderAsciiArtFromRgba(const uint8_t* rgba, int width, int height,
   static thread_local BrailleFastScratch scratch;
   return renderAsciiArtFromRgbaFast(rgba, width, height, maxWidth, maxHeight,
                                     out, assumeOpaque, scratch);
+}
+
+bool renderAsciiArtFromYuv(const uint8_t* data, int width, int height,
+                           int stride, int planeHeight, YuvFormat format,
+                           bool fullRange, uint32_t yuvMatrix, int maxWidth,
+                           int maxHeight, AsciiArt& out) {
+  static thread_local BrailleFastScratch scratch;
+  if (format == YuvFormat::P010) {
+    return renderAsciiArtFromYuvImpl<true>(data, width, height, stride,
+                                           planeHeight, fullRange, yuvMatrix,
+                                           maxWidth, maxHeight, out, scratch);
+  }
+  return renderAsciiArtFromYuvImpl<false>(data, width, height, stride,
+                                          planeHeight, fullRange, yuvMatrix,
+                                          maxWidth, maxHeight, out, scratch);
 }
