@@ -401,7 +401,7 @@ static bool isSupportedMediaExt(const std::filesystem::path& p) {
 
 static bool isM4aExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".m4a" || ext == ".mp4";
+  return ext == ".m4a" || ext == ".mp4" || ext == ".webm";
 }
 
 static void validateInputFile(const std::filesystem::path& p) {

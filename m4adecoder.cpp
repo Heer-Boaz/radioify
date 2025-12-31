@@ -63,9 +63,20 @@ bool M4aDecoder::init(const std::filesystem::path& path, uint32_t channels, uint
 
   if (!ensureMediaFoundation(error)) return false;
 
+  IMFAttributes* attributes = nullptr;
+  HRESULT hr = MFCreateAttributes(&attributes, 1);
+  if (SUCCEEDED(hr)) {
+    hr = attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
+  }
+  if (FAILED(hr)) {
+    setError(error, "Failed to create attributes for low latency.");
+    return false;
+  }
+
   IMFSourceReader* reader = nullptr;
   std::wstring wpath = path.wstring();
-  HRESULT hr = MFCreateSourceReaderFromURL(wpath.c_str(), nullptr, &reader);
+  hr = MFCreateSourceReaderFromURL(wpath.c_str(), attributes, &reader);
+  safeRelease(attributes);
   if (FAILED(hr)) {
     setError(error, "Failed to open input for decoding.");
     return false;
