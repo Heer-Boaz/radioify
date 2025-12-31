@@ -647,6 +647,13 @@ static bool showAsciiVideo(
   }
   perfLog.appendf("video_start file=%s", toUtf8String(file.filename()).c_str());
 
+  // Helper to append simple timing lines from worker threads where direct
+  // access to `perfLog` may not be available due to capture/scope issues.
+  auto appendTiming = [&](const std::string& s) {
+    std::ofstream f(logPath, std::ios::app);
+    if (f) f << s << "\n";
+  };
+
   std::mutex initMutex;
   std::condition_variable initCv;
   bool initDone = false;
@@ -2389,7 +2396,23 @@ int main(int argc, char** argv) {
       bool comInit = SUCCEEDED(hr);
       M4aDecoder decoder;
       std::string initError;
+      auto t_init_start = std::chrono::steady_clock::now();
       bool ok = decoder.init(file, workerChannels, workerRate, &initError);
+      auto t_init_end = std::chrono::steady_clock::now();
+      {
+        char buf[512];
+        std::snprintf(buf, sizeof(buf), "m4a_init_ms=%lld file=%s ok=%d err=%s",
+                      static_cast<long long>(
+                          std::chrono::duration_cast<std::chrono::milliseconds>(
+                              t_init_end - t_init_start)
+                              .count()),
+                      toUtf8String(file.filename()).c_str(), ok ? 1 : 0,
+                      initError.empty() ? "-" : initError.c_str());
+        {
+          std::ofstream f((std::filesystem::current_path() / "radioify_timing.log").string(), std::ios::app);
+          if (f) f << buf << "\n";
+        }
+      }
       uint64_t total = 0;
       uint64_t localStart = startFrame;
       if (ok) {
@@ -2423,6 +2446,7 @@ int main(int argc, char** argv) {
       constexpr uint32_t kChunkFrames = 2048;
       std::vector<float> buffer(
           static_cast<size_t>(kChunkFrames) * workerChannels);
+      bool m4a_first_buffer_logged = false;
 
       while (!state.m4aStop.load()) {
         if (state.seekRequested.load()) {
@@ -2473,6 +2497,23 @@ int main(int argc, char** argv) {
           state.m4aAtEnd.store(true);
           continue;
         }
+        if (!m4a_first_buffer_logged) {
+          m4a_first_buffer_logged = true;
+          auto t_buf = std::chrono::steady_clock::now();
+        {
+          char buf[512];
+          std::snprintf(buf, sizeof(buf),
+                        "m4a_first_buffer_ms=%lld frames=%llu file=%s",
+                        static_cast<long long>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                t_buf - t_init_start)
+                                .count()),
+                        static_cast<unsigned long long>(framesRead),
+                        toUtf8String(file.filename()).c_str());
+          std::ofstream f((std::filesystem::current_path() / "radioify_timing.log").string(), std::ios::app);
+          if (f) f << buf << "\n";
+        }
+        }
         {
           std::lock_guard<std::mutex> lock(state.m4aMutex);
           state.m4aBuffer.write(buffer.data(),
@@ -2514,6 +2555,13 @@ int main(int argc, char** argv) {
       return false;
     }
     deviceReady = true;
+    {
+      char buf[256];
+      std::snprintf(buf, sizeof(buf), "audio_device_started sampleRate=%u channels=%u",
+                    sampleRate, channels);
+      std::ofstream f((std::filesystem::current_path() / "radioify_timing.log").string(), std::ios::app);
+      if (f) f << buf << "\n";
+    }
     return true;
   };
 
