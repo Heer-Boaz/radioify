@@ -26,6 +26,13 @@ dist/radioify.exe
 dist/radioify.exe <file-or-folder>
 ```
 
+Optional flags:
+```sh
+dist/radioify.exe --no-ascii <file-or-folder>
+dist/radioify.exe --no-audio <file-or-folder>
+dist/radioify.exe --no-radio <file-or-folder>
+```
+
 ## Controls
 - Mouse: select; click to play/open
 - Enter: open folder / play file

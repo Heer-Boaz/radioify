@@ -34,7 +34,7 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if (WIN32)
-  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs)
+  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject)
 endif()
 
 if (MSVC)
