@@ -1087,7 +1087,7 @@ static bool showAsciiVideo(
   }
 
   VideoReadInfo firstInfo{};
-  const bool allowDecoderScale = false;
+  const bool allowDecoderScale = enableAscii;
   screen.updateSize();
   int initWidth = std::max(20, screen.width());
   int initHeight = std::max(10, screen.height());

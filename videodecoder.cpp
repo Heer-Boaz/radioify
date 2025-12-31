@@ -8,6 +8,7 @@
 #endif
 #include <windows.h>
 
+#include <d3d11_4.h>
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
@@ -61,6 +62,9 @@ bool ensureMediaFoundation(std::string* error) {
 
 struct VideoDecoder::Impl {
   IMFSourceReader* reader = nullptr;
+  IMFDXGIDeviceManager* dxgiManager = nullptr;
+  ID3D11Device* d3dDevice = nullptr;
+  ID3D11DeviceContext* d3dContext = nullptr;
   int width = 0;
   int height = 0;
   int stride = 0;
@@ -173,6 +177,103 @@ void yuvToRgb(int y, int u, int v, bool fullRange, UINT32 matrix,
   outG = clampToByte(g * 255.0f);
   outB = clampToByte(b * 255.0f);
 }
+
+bool createHardwareReaderAttributes(IMFAttributes** attributes,
+                                    IMFDXGIDeviceManager** dxgiManager,
+                                    ID3D11Device** d3dDevice,
+                                    ID3D11DeviceContext** d3dContext) {
+  if (!attributes || !dxgiManager || !d3dDevice || !d3dContext) {
+    return false;
+  }
+  *attributes = nullptr;
+  *dxgiManager = nullptr;
+  *d3dDevice = nullptr;
+  *d3dContext = nullptr;
+
+  UINT creationFlags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+  D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1,
+                                D3D_FEATURE_LEVEL_11_0,
+                                D3D_FEATURE_LEVEL_10_1,
+                                D3D_FEATURE_LEVEL_10_0};
+  ID3D11Device* device = nullptr;
+  ID3D11DeviceContext* context = nullptr;
+  HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+                                 creationFlags, levels, ARRAYSIZE(levels),
+                                 D3D11_SDK_VERSION, &device, nullptr,
+                                 &context);
+  if (hr == E_INVALIDARG) {
+    D3D_FEATURE_LEVEL fallbackLevels[] = {D3D_FEATURE_LEVEL_11_0,
+                                          D3D_FEATURE_LEVEL_10_1,
+                                          D3D_FEATURE_LEVEL_10_0};
+    hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+                           creationFlags, fallbackLevels,
+                           ARRAYSIZE(fallbackLevels), D3D11_SDK_VERSION,
+                           &device, nullptr, &context);
+  }
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  ID3D11Multithread* multithread = nullptr;
+  hr = context->QueryInterface(__uuidof(ID3D11Multithread),
+                               reinterpret_cast<void**>(&multithread));
+  if (SUCCEEDED(hr) && multithread) {
+    multithread->SetMultithreadProtected(TRUE);
+    multithread->Release();
+  }
+
+  IMFDXGIDeviceManager* manager = nullptr;
+  UINT resetToken = 0;
+  hr = MFCreateDXGIDeviceManager(&resetToken, &manager);
+  if (FAILED(hr) || FAILED(manager->ResetDevice(device, resetToken))) {
+    safeRelease(manager);
+    safeRelease(context);
+    safeRelease(device);
+    return false;
+  }
+
+  IMFAttributes* attrs = nullptr;
+  hr = MFCreateAttributes(&attrs, 4);
+  if (FAILED(hr) ||
+      FAILED(attrs->SetUnknown(MF_SOURCE_READER_D3D_MANAGER, manager)) ||
+      FAILED(attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+                              TRUE)) ||
+      FAILED(attrs->SetUINT32(MF_SOURCE_READER_DISABLE_DXVA, FALSE)) ||
+      FAILED(attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
+                              FALSE))) {
+    safeRelease(attrs);
+    safeRelease(manager);
+    safeRelease(context);
+    safeRelease(device);
+    return false;
+  }
+
+  *attributes = attrs;
+  *dxgiManager = manager;
+  *d3dDevice = device;
+  *d3dContext = context;
+  return true;
+}
+
+bool createSoftwareReaderAttributes(IMFAttributes** attributes) {
+  if (!attributes) return false;
+  *attributes = nullptr;
+  IMFAttributes* attrs = nullptr;
+  HRESULT hr = MFCreateAttributes(&attrs, 3);
+  if (FAILED(hr)) {
+    return false;
+  }
+  if (FAILED(attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
+                              TRUE)) ||
+      FAILED(attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+                              FALSE)) ||
+      FAILED(attrs->SetUINT32(MF_SOURCE_READER_DISABLE_DXVA, TRUE))) {
+    safeRelease(attrs);
+    return false;
+  }
+  *attributes = attrs;
+  return true;
+}
 } // namespace
 
 bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
@@ -181,29 +282,42 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   if (!ensureMediaFoundation(error)) return false;
 
   IMFAttributes* attributes = nullptr;
-  HRESULT hr = MFCreateAttributes(&attributes, 3);
-  if (SUCCEEDED(hr)) {
-    if (FAILED(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-                                     FALSE)) ||
-        FAILED(attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-                                     FALSE)) ||
-        FAILED(attributes->SetUINT32(MF_SOURCE_READER_DISABLE_DXVA, TRUE))) {
-      safeRelease(attributes);
-    }
-  } else {
-    attributes = nullptr;
+  IMFDXGIDeviceManager* dxgiManager = nullptr;
+  ID3D11Device* d3dDevice = nullptr;
+  ID3D11DeviceContext* d3dContext = nullptr;
+  bool hardwareEnabled = createHardwareReaderAttributes(
+      &attributes, &dxgiManager, &d3dDevice, &d3dContext);
+  if (!hardwareEnabled) {
+    createSoftwareReaderAttributes(&attributes);
   }
+  HRESULT hr = S_OK;
+  auto releaseHardware = [&]() {
+    safeRelease(dxgiManager);
+    safeRelease(d3dContext);
+    safeRelease(d3dDevice);
+  };
 
   IMFSourceReader* reader = nullptr;
   std::wstring wpath = path.wstring();
   HRESULT hrPrimary = MFCreateSourceReaderFromURL(wpath.c_str(), attributes,
                                                   &reader);
   safeRelease(attributes);
+  if (FAILED(hrPrimary) && hardwareEnabled) {
+    safeRelease(reader);
+    releaseHardware();
+    hardwareEnabled = false;
+    if (createSoftwareReaderAttributes(&attributes)) {
+      hrPrimary =
+          MFCreateSourceReaderFromURL(wpath.c_str(), attributes, &reader);
+    }
+    safeRelease(attributes);
+  }
   if (FAILED(hrPrimary)) {
     IMFSourceReader* fallback = nullptr;
     HRESULT hrFallback =
         MFCreateSourceReaderFromURL(wpath.c_str(), nullptr, &fallback);
     if (FAILED(hrFallback)) {
+      releaseHardware();
       std::string detail = "Failed to open video source (hr=" +
                            hrToString(hrPrimary) +
                            ", fallback hr=" + hrToString(hrFallback) + ").";
@@ -219,6 +333,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   }
   if (FAILED(hr)) {
     safeRelease(reader);
+    releaseHardware();
     std::string detail =
         "No video stream found (hr=" + hrToString(hr) + ").";
     setError(error, detail.c_str());
@@ -231,6 +346,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   safeRelease(nativeType);
   if (FAILED(hr)) {
     safeRelease(reader);
+    releaseHardware();
     std::string detail =
         "No video stream found (hr=" + hrToString(hr) + ").";
     setError(error, detail.c_str());
@@ -241,6 +357,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   hr = MFCreateMediaType(&type);
   if (FAILED(hr)) {
     safeRelease(reader);
+    releaseHardware();
     std::string detail =
         "Failed to configure video decoding (hr=" + hrToString(hr) + ").";
     setError(error, detail.c_str());
@@ -276,6 +393,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   }
   if (FAILED(hr)) {
     safeRelease(reader);
+    releaseHardware();
     setError(error,
              ("Failed to configure video output (hr=" + hrToString(hr) + ")")
                  .c_str());
@@ -287,6 +405,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
                                    &actualType);
   if (FAILED(hr)) {
     safeRelease(reader);
+    releaseHardware();
     std::string detail =
         "Failed to query video format (hr=" + hrToString(hr) + ").";
     setError(error, detail.c_str());
@@ -297,6 +416,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   if (FAILED(actualType->GetGUID(MF_MT_SUBTYPE, &subtype))) {
     safeRelease(actualType);
     safeRelease(reader);
+    releaseHardware();
     setError(error, "Failed to read video pixel format.");
     return false;
   }
@@ -306,6 +426,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
         "Unsupported video pixel format: " + pixelFormatName(subtype);
     safeRelease(actualType);
     safeRelease(reader);
+    releaseHardware();
     setError(error, detail.c_str());
     return false;
   }
@@ -316,6 +437,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
   if (FAILED(hr) || width == 0 || height == 0) {
     safeRelease(actualType);
     safeRelease(reader);
+    releaseHardware();
     setError(error, "Video has invalid dimensions.");
     return false;
   }
@@ -339,6 +461,9 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
 
   Impl* impl = new Impl();
   impl->reader = reader;
+  impl->dxgiManager = dxgiManager;
+  impl->d3dDevice = d3dDevice;
+  impl->d3dContext = d3dContext;
   impl->width = static_cast<int>(width);
   impl->height = static_cast<int>(height);
   impl->topDown = stride >= 0;
@@ -366,6 +491,9 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error) {
 void VideoDecoder::uninit() {
   if (!impl_) return;
   safeRelease(impl_->reader);
+  safeRelease(impl_->dxgiManager);
+  safeRelease(impl_->d3dContext);
+  safeRelease(impl_->d3dDevice);
   delete impl_;
   impl_ = nullptr;
 }
