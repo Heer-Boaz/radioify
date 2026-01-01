@@ -146,7 +146,7 @@ constexpr int kEdgeDeltaScale = 96;          // Meer edge-responsief
 constexpr int kDitherBias = 48;              // Verlaagd voor betere halftones
 constexpr bool kUseAABand = true;
 constexpr int kAAScoreBandMin = 12;
-constexpr int kAAScoreBandMax = 96;          // Soft AA band voor gladdere randen
+constexpr int kAAScoreBandMax = 144;          // Soft AA band voor gladdere randen
 constexpr int kLumSmoothAlpha = 40;          // Snellere adaptatie
 constexpr int kLumResetDelta = 28;
 
@@ -780,10 +780,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
         if (!shouldActivate && useAABand) {
           int scoreDelta = aaCutoffScore - dotRanks[rank].score;
           if (scoreDelta >= 0 && scoreDelta < aaBand) {
-            int coverage = ((aaBand - scoreDelta) * 255 + (aaBand / 2)) / aaBand;
+            int numer = (aaBand - scoreDelta) * 255 + (aaBand / 2);
             int ditherThresh = static_cast<int>(
                 kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
-            shouldActivate = coverage > ditherThresh;
+            shouldActivate = numer > ditherThresh * aaBand;
           }
         }
         
