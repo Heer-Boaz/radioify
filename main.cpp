@@ -1248,6 +1248,7 @@ static bool showAsciiVideo(
   const double secondsToTicks = 10000000.0;
   const double kLeadSlackSec = 0.005;
   int64_t firstTs = 0;
+  bool audioGateReleased = false;
   double frameSec =
       static_cast<double>(frame.timestamp100ns) * ticksToSeconds;
   double lastFrameSec = frameSec;
@@ -1304,10 +1305,13 @@ static bool showAsciiVideo(
       currentSec = std::clamp(currentSec, 0.0, totalSec);
     }
     bool allowFrame = true;
-    if (audioOk && hooks.getAudioTimeSec) {
+    if (!audioGateReleased && audioOk && hooks.getAudioTimeSec) {
       if (rawSec + kLeadSlackSec < frameSec) {
         allowFrame = false;
       }
+    }
+    if (allowFrame) {
+      audioGateReleased = true;
     }
 
     bool sizeChanged =
