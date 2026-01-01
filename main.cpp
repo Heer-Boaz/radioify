@@ -3,20 +3,20 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
-#include <cstdint>
+#include <condition_variable>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <condition_variable>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <mutex>
-#include <string>
 #include <new>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -29,6 +29,10 @@
 #endif
 #include <objbase.h>
 #include <roapi.h>
+
+extern "C" {
+#include <libavutil/log.h>
+}
 
 #include "asciiart.h"
 #include "consoleinput.h"
@@ -43,6 +47,13 @@
 #define MA_ENABLE_MP3
 #define MA_ENABLE_FLAC
 #include "miniaudio.h"
+
+#ifndef RADIOIFY_ENABLE_TIMING_LOG
+#define RADIOIFY_ENABLE_TIMING_LOG 0
+#endif
+#ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
+#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 0
+#endif
 
 struct Options {
   std::string input;
@@ -125,12 +136,54 @@ static std::string toUtf8String(const std::filesystem::path& p) {
 #endif
 }
 
+namespace {
+#if RADIOIFY_ENABLE_VIDEO_ERROR_LOG
+std::mutex gFfmpegLogMutex;
+std::filesystem::path gFfmpegLogPath;
+
+void ffmpegLogCallback(void* ptr, int level, const char* fmt, va_list vl) {
+  if (level > AV_LOG_ERROR) return;
+  char line[1024];
+  int printPrefix = 1;
+  av_log_format_line2(ptr, level, fmt, vl, line, sizeof(line), &printPrefix);
+  std::filesystem::path path;
+  {
+    std::lock_guard<std::mutex> lock(gFfmpegLogMutex);
+    path = gFfmpegLogPath;
+  }
+  if (path.empty()) return;
+  std::ofstream f(path, std::ios::app);
+  if (!f) return;
+  f << "ffmpeg_error " << line;
+  size_t len = std::strlen(line);
+  if (len == 0 || line[len - 1] != '\n') {
+    f << "\n";
+  }
+}
+#endif
+
+void configureFfmpegVideoLog(const std::filesystem::path& path) {
+#if RADIOIFY_ENABLE_VIDEO_ERROR_LOG
+  {
+    std::lock_guard<std::mutex> lock(gFfmpegLogMutex);
+    gFfmpegLogPath = path;
+  }
+  av_log_set_level(AV_LOG_ERROR);
+  av_log_set_callback(ffmpegLogCallback);
+#else
+  (void)path;
+  av_log_set_level(AV_LOG_QUIET);
+#endif
+}
+}  // namespace
+
 struct PerfLog {
   std::ofstream file;
   std::string buffer;
   bool enabled = false;
 
   bool open(const std::filesystem::path& path, std::string* error) {
+#if RADIOIFY_ENABLE_TIMING_LOG
     file.open(path, std::ios::out | std::ios::app);
     if (!file.is_open()) {
       if (error) {
@@ -140,6 +193,12 @@ struct PerfLog {
     }
     enabled = true;
     return true;
+#else
+    (void)path;
+    (void)error;
+    enabled = false;
+    return true;
+#endif
   }
 
   void appendf(const char* fmt, ...) {
@@ -303,9 +362,11 @@ static wchar_t glyphForCoverage(double coverage) {
   return kLeftBlocks[idx - 1];
 }
 
-static std::vector<BufferCell> renderProgressBarCells(
-    double ratio, int barLength, const Style& emptyStyle,
-    const Color& fillStart, const Color& fillEnd) {
+static std::vector<BufferCell> renderProgressBarCells(double ratio,
+                                                      int barLength,
+                                                      const Style& emptyStyle,
+                                                      const Color& fillStart,
+                                                      const Color& fillEnd) {
   std::vector<BufferCell> cells;
   if (barLength <= 0) return cells;
   cells.assign(static_cast<size_t>(barLength),
@@ -333,15 +394,13 @@ static std::vector<BufferCell> renderProgressBarCells(
     if (coverage <= 0.0) continue;
 
     float t = (barLength > 1)
-                  ? static_cast<float>(cell) /
-                        static_cast<float>(barLength - 1)
+                  ? static_cast<float>(cell) / static_cast<float>(barLength - 1)
                   : 0.0f;
     Color fillColor = lerpColor(fillStart, fillEnd, t);
 
     if (coverage >= 1.0 - 1e-7) {
       cells[static_cast<size_t>(cell)].ch = L'\x2588';
-      cells[static_cast<size_t>(cell)].style =
-          Style{fillColor, fillColor};
+      cells[static_cast<size_t>(cell)].style = Style{fillColor, fillColor};
       continue;
     }
 
@@ -352,15 +411,13 @@ static std::vector<BufferCell> renderProgressBarCells(
     if (alignRight) {
       if (leftGap < kSliverThreshold) {
         cells[static_cast<size_t>(cell)].ch = L'\x2588';
-        cells[static_cast<size_t>(cell)].style =
-            Style{fillColor, fillColor};
+        cells[static_cast<size_t>(cell)].style = Style{fillColor, fillColor};
         continue;
       }
       wchar_t glyph = glyphForCoverage(leftGap);
       if (glyph) {
         cells[static_cast<size_t>(cell)].ch = glyph;
-        cells[static_cast<size_t>(cell)].style =
-            Style{gapColor, fillColor};
+        cells[static_cast<size_t>(cell)].style = Style{gapColor, fillColor};
       }
     } else {
       if (coverage < kSliverThreshold) continue;
@@ -528,8 +585,7 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
 
     for (int y = 0; y < artHeight; ++y) {
       for (int x = 0; x < artWidth; ++x) {
-        const auto& cell =
-            art.cells[static_cast<size_t>(y * art.width + x)];
+        const auto& cell = art.cells[static_cast<size_t>(y * art.width + x)];
         Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
         screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
       }
@@ -554,19 +610,14 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
   }
 }
 
-static bool showAsciiVideo(
-    const std::filesystem::path& file,
-    ConsoleInput& input,
-    ConsoleScreen& screen,
-    const Style& baseStyle,
-    const Style& accentStyle,
-    const Style& dimStyle,
-    const Style& progressEmptyStyle,
-    const Style& progressFrameStyle,
-    const Color& progressStart,
-    const Color& progressEnd,
-    bool enableAscii,
-    const VideoPlaybackHooks& hooks) {
+static bool showAsciiVideo(const std::filesystem::path& file,
+                           ConsoleInput& input, ConsoleScreen& screen,
+                           const Style& baseStyle, const Style& accentStyle,
+                           const Style& dimStyle,
+                           const Style& progressEmptyStyle,
+                           const Style& progressFrameStyle,
+                           const Color& progressStart, const Color& progressEnd,
+                           bool enableAscii, const VideoPlaybackHooks& hooks) {
   auto showError = [&](const std::string& message,
                        const std::string& detail) -> bool {
     InputEvent ev{};
@@ -644,6 +695,7 @@ static bool showAsciiVideo(
   std::string logError;
   std::filesystem::path logPath =
       std::filesystem::current_path() / "radioify_timing.log";
+  configureFfmpegVideoLog(logPath);
   if (!perfLog.open(logPath, &logError)) {
     return showError("Failed to open timing log file.", logError);
   }
@@ -652,8 +704,45 @@ static bool showAsciiVideo(
   // Helper to append simple timing lines from worker threads where direct
   // access to `perfLog` may not be available due to capture/scope issues.
   auto appendTiming = [&](const std::string& s) {
+#if RADIOIFY_ENABLE_TIMING_LOG
     std::ofstream f(logPath, std::ios::app);
     if (f) f << s << "\n";
+#else
+    (void)s;
+#endif
+  };
+
+  auto appendVideoError = [&](const std::string& message,
+                              const std::string& detail) {
+#if RADIOIFY_ENABLE_VIDEO_ERROR_LOG
+    std::string line = message;
+    std::string extra = detail;
+    if (!extra.empty() && extra == line) {
+      extra.clear();
+    }
+    if (line.empty() && !extra.empty()) {
+      line = extra;
+      extra.clear();
+    }
+    if (line.empty()) {
+      line = "Video playback error.";
+    }
+    std::string payload = "video_error msg=" + line;
+    if (!extra.empty()) {
+      payload += " detail=" + extra;
+    }
+    std::ofstream f(logPath, std::ios::app);
+    if (f) f << payload << "\n";
+#else
+    (void)message;
+    (void)detail;
+#endif
+  };
+
+  auto reportVideoError = [&](const std::string& message,
+                              const std::string& detail) -> bool {
+    appendVideoError(message, detail);
+    return true;
   };
 
   std::mutex initMutex;
@@ -732,8 +821,10 @@ static bool showAsciiVideo(
   uint64_t lastQueueDrops = 0;
   uint64_t lastSkippedCalls = 0;
   // Sync parameters - video tries to stay within this window of audio
-  constexpr double kSyncTolerance = 0.033;      // Acceptable sync tolerance (~1 frame at 30fps)
-  constexpr double kHardResyncThreshold = 0.5;  // Force hard resync above this (500ms)
+  constexpr double kSyncTolerance =
+      0.033;  // Acceptable sync tolerance (~1 frame at 30fps)
+  constexpr double kHardResyncThreshold =
+      0.5;  // Force hard resync above this (500ms)
   double lastSyncDrift = 0.0;
 
   auto clearQueue = [&]() {
@@ -778,9 +869,8 @@ static bool showAsciiVideo(
   auto waitForFrame = [&](QueuedFrame& out, uint64_t minEpoch) -> bool {
     std::unique_lock<std::mutex> lock(queueMutex);
     while (true) {
-      queueCv.wait(lock, [&]() {
-        return !frameQueue.empty() || decodeEnded.load();
-      });
+      queueCv.wait(lock,
+                   [&]() { return !frameQueue.empty() || decodeEnded.load(); });
       while (!frameQueue.empty()) {
         QueuedFrame candidate = std::move(frameQueue.front());
         frameQueue.pop_front();
@@ -931,10 +1021,9 @@ static bool showAsciiVideo(
         decoder.uninit();
         if (!decoder.init(file, &fallbackError, preferHardware,
                           allowRgbOutput)) {
-          std::string detail =
-              "No video frames after " +
-              std::to_string(info.noFrameTimeoutMs) +
-              "ms; software fallback failed";
+          std::string detail = "No video frames after " +
+                               std::to_string(info.noFrameTimeoutMs) +
+                               "ms; software fallback failed";
           if (!fallbackError.empty()) {
             detail += ": " + fallbackError;
           }
@@ -962,9 +1051,9 @@ static bool showAsciiVideo(
         return FallbackResult::Applied;
       };
       auto setNoFrameError = [&](const VideoReadInfo& info) {
-        std::string detail =
-            "No video frames after " + std::to_string(info.noFrameTimeoutMs) +
-            "ms; codec may be unsupported.";
+        std::string detail = "No video frames after " +
+                             std::to_string(info.noFrameTimeoutMs) +
+                             "ms; codec may be unsupported.";
         setDecodeError(detail);
       };
 
@@ -1065,8 +1154,7 @@ static bool showAsciiVideo(
             skippedCalls.fetch_add(static_cast<uint64_t>(skippedLocal),
                                    std::memory_order_relaxed);
           }
-          if (!decodeRunning.load() || decodeEnded.load() ||
-              decoder.atEnd()) {
+          if (!decodeRunning.load() || decodeEnded.load() || decoder.atEnd()) {
             break;
           }
 
@@ -1099,8 +1187,7 @@ static bool showAsciiVideo(
           lastVideoTs = info.timestamp100ns;
 
           double decodeMs =
-              std::chrono::duration<double, std::milli>(decodeEnd -
-                                                        decodeStart)
+              std::chrono::duration<double, std::milli>(decodeEnd - decodeStart)
                   .count();
           {
             std::lock_guard<std::mutex> lock(queueMutex);
@@ -1164,8 +1251,8 @@ static bool showAsciiVideo(
             frameQueue.pop_front();
             queueDrops.fetch_add(1, std::memory_order_relaxed);
           }
-          frameQueue.push_back(
-              QueuedFrame{std::move(decodedFrame), info, decodeMs, currentEpoch});
+          frameQueue.push_back(QueuedFrame{std::move(decodedFrame), info,
+                                           decodeMs, currentEpoch});
         }
         queueCv.notify_one();
       }
@@ -1194,8 +1281,7 @@ static bool showAsciiVideo(
                          "Audio playback is disabled.");
       }
       bool playAudio = showAudioFallbackPrompt(
-          "No video stream found.",
-          "This file can be played as audio only.");
+          "No video stream found.", "This file can be played as audio only.");
       return playAudio ? false : true;
     }
     if (initError.empty()) {
@@ -1239,7 +1325,8 @@ static bool showAsciiVideo(
     requestedTargetH = decoderTargetH;
   }
   perfLog.appendf(
-      "first_frame ts100ns=%lld dur100ns=%lld flags=0x%X rec=%u ehr=0x%08X size=%dx%d",
+      "first_frame ts100ns=%lld dur100ns=%lld flags=0x%X rec=%u ehr=0x%08X "
+      "size=%dx%d",
       static_cast<long long>(frame.timestamp100ns),
       static_cast<long long>(firstInfo.duration100ns), firstInfo.flags,
       firstInfo.recoveries, firstInfo.errorHr, frame.width, frame.height);
@@ -1249,8 +1336,7 @@ static bool showAsciiVideo(
   const double kLeadSlackSec = 0.005;
   int64_t firstTs = 0;
   bool audioGateReleased = false;
-  double frameSec =
-      static_cast<double>(frame.timestamp100ns) * ticksToSeconds;
+  double frameSec = static_cast<double>(frame.timestamp100ns) * ticksToSeconds;
   double lastFrameSec = frameSec;
   double lastFrameDurationSec =
       firstInfo.duration100ns > 0
@@ -1264,9 +1350,8 @@ static bool showAsciiVideo(
   double lastSleepMs = 0.0;
 
   auto totalDurationSec = [&]() -> double {
-    double total = sourceDuration100ns > 0
-                       ? sourceDuration100ns * ticksToSeconds
-                       : -1.0;
+    double total =
+        sourceDuration100ns > 0 ? sourceDuration100ns * ticksToSeconds : -1.0;
     if (total <= 0.0 && audioOk && hooks.getAudioTotalSec) {
       total = hooks.getAudioTotalSec();
     }
@@ -1448,9 +1533,8 @@ static bool showAsciiVideo(
           allowFrame ? "ASCII rendering disabled" : "Waiting for video...";
       screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       if (maxHeight > 1) {
-        std::string sizeLine = "Video size: " +
-                               std::to_string(frame.width) + "x" +
-                               std::to_string(frame.height);
+        std::string sizeLine = "Video size: " + std::to_string(frame.width) +
+                               "x" + std::to_string(frame.height);
         screen.writeText(0, artTop + 1, fitLine(sizeLine, width), dimStyle);
       }
     }
@@ -1495,9 +1579,8 @@ static bool showAsciiVideo(
     progressBarY = footerLine;
     progressBarWidth = barWidth;
     screen.writeChar(0, footerLine, L'|', progressFrameStyle);
-    auto barCells = renderProgressBarCells(ratio, barWidth,
-                                           progressEmptyStyle, progressStart,
-                                           progressEnd);
+    auto barCells = renderProgressBarCells(ratio, barWidth, progressEmptyStyle,
+                                           progressStart, progressEnd);
     for (int i = 0; i < barWidth; ++i) {
       const auto& cell = barCells[static_cast<size_t>(i)];
       screen.writeChar(1 + i, footerLine, cell.ch, cell.style);
@@ -1516,7 +1599,8 @@ static bool showAsciiVideo(
     AudioPerfStats stats = hooks.getAudioPerfStats();
     if (stats.periodFrames > 0 && stats.periods > 0) {
       perfLog.appendf(
-          "audio_device period_frames=%u periods=%u buffer_frames=%u rate=%u channels=%u using_ffmpeg=%d",
+          "audio_device period_frames=%u periods=%u buffer_frames=%u rate=%u "
+          "channels=%u using_ffmpeg=%d",
           stats.periodFrames, stats.periods, stats.bufferFrames,
           stats.sampleRate, stats.channels, stats.usingFfmpeg ? 1 : 0);
     }
@@ -1525,7 +1609,7 @@ static bool showAsciiVideo(
   if (renderFailed) {
     stopDecodeThread();
     if (audioOk && hooks.stopAudio) hooks.stopAudio();
-    return showError(renderFailMessage, renderFailDetail);
+    return reportVideoError(renderFailMessage, renderFailDetail);
   }
 
   while (running) {
@@ -1582,7 +1666,7 @@ static bool showAsciiVideo(
             if (fail.empty()) {
               fail = "Failed to seek video.";
             }
-            return showError(fail, "");
+            return reportVideoError(fail, "");
           }
           frame = std::move(seekQueued.frame);
           frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
@@ -1592,9 +1676,10 @@ static bool showAsciiVideo(
           redraw = true;
           forceRefreshArt = true;
           if (!audioOk) {
-            startTime = std::chrono::steady_clock::now() -
-                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            std::chrono::duration<double>(targetSec));
+            startTime =
+                std::chrono::steady_clock::now() -
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>(targetSec));
           }
         }
       }
@@ -1619,8 +1704,7 @@ static bool showAsciiVideo(
                 }
                 double targetSec = ratio * totalSec;
                 int64_t targetTs =
-                    firstTs +
-                    static_cast<int64_t>(targetSec * secondsToTicks);
+                    firstTs + static_cast<int64_t>(targetSec * secondsToTicks);
                 uint64_t epoch = commandEpoch.fetch_add(1) + 1;
                 DecodeCommand cmd;
                 cmd.seek = true;
@@ -1635,12 +1719,11 @@ static bool showAsciiVideo(
                   if (fail.empty()) {
                     fail = "Failed to seek video.";
                   }
-                  return showError(fail, "");
+                  return reportVideoError(fail, "");
                 }
                 frame = std::move(seekQueued.frame);
-                frameSec =
-                    static_cast<double>(frame.timestamp100ns - firstTs) *
-                    ticksToSeconds;
+                frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
+                           ticksToSeconds;
                 lastFrameSec = frameSec;
                 videoEnded = false;
                 forceRefreshArt = true;
@@ -1713,12 +1796,11 @@ static bool showAsciiVideo(
           if (fail.empty()) {
             fail = "Failed to read video frame after resize.";
           }
-          return showError(fail, "");
+          return reportVideoError(fail, "");
         }
         frame = std::move(resizeQueued.frame);
-        frameSec =
-            static_cast<double>(frame.timestamp100ns - firstTs) *
-            ticksToSeconds;
+        frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
+                   ticksToSeconds;
         lastFrameSec = frameSec;
         videoEnded = false;
         forceRefreshArt = true;
@@ -1747,9 +1829,8 @@ static bool showAsciiVideo(
     if (!videoEnded && !paused && !waitingForAudioStart) {
       double wallclockElapsed =
           std::chrono::duration<double>(now - startTime).count();
-      double driftForSkip = haveAudioClock
-                                ? (syncSec - lastFrameSec)
-                                : (wallclockElapsed - lastFrameSec);
+      double driftForSkip = haveAudioClock ? (syncSec - lastFrameSec)
+                                           : (wallclockElapsed - lastFrameSec);
 
       if (haveAudioClock && driftForSkip > kHardResyncThreshold &&
           !commandPendingAtomic.load()) {
@@ -1795,7 +1876,7 @@ static bool showAsciiVideo(
           if (fail.empty()) {
             fail = "Failed to resync video.";
           }
-          return showError(fail, "");
+          return reportVideoError(fail, "");
         }
         candidate = std::move(resyncQueued);
         double resyncSec =
@@ -1803,8 +1884,8 @@ static bool showAsciiVideo(
             ticksToSeconds;
         lastSyncDrift = syncSec - resyncSec;
         advanced = true;
-        perfLog.appendf("sync_seek audio=%.3f video=%.3f target=%.3f",
-                        audioNow, resyncSec, syncSec);
+        perfLog.appendf("sync_seek audio=%.3f video=%.3f target=%.3f", audioNow,
+                        resyncSec, syncSec);
       } else {
         if (!haveAudioClock && driftForSkip > kHardResyncThreshold) {
           auto offsetDuration =
@@ -1829,11 +1910,13 @@ static bool showAsciiVideo(
             double targetTime = haveAudioClock ? syncSec : wallclockElapsed;
 
             while (frameQueue.size() > 1) {
-              double frontSec = static_cast<double>(
-                  frameQueue.front().frame.timestamp100ns - firstTs) *
+              double frontSec =
+                  static_cast<double>(frameQueue.front().frame.timestamp100ns -
+                                      firstTs) *
                   ticksToSeconds;
-              double nextSec = static_cast<double>(
-                  frameQueue[1].frame.timestamp100ns - firstTs) *
+              double nextSec =
+                  static_cast<double>(frameQueue[1].frame.timestamp100ns -
+                                      firstTs) *
                   ticksToSeconds;
 
               // If next frame is still behind target, skip current frame.
@@ -1868,30 +1951,29 @@ static bool showAsciiVideo(
               break;
             }
           }
-        if (!frameQueue.empty()) {
-          nextTs = frameQueue.front().info.timestamp100ns;
-        }
-        queueEmpty = frameQueue.empty();
+          if (!frameQueue.empty()) {
+            nextTs = frameQueue.front().info.timestamp100ns;
+          }
+          queueEmpty = frameQueue.empty();
 
-        if (queueEmpty && haveAudioClock &&
-            driftForSkip > kSyncTolerance && !commandPendingAtomic.load()) {
-          int64_t targetTs =
-              firstTs + static_cast<int64_t>(syncSec * secondsToTicks);
-          requestFastForward(targetTs);
+          if (queueEmpty && haveAudioClock && driftForSkip > kSyncTolerance &&
+              !commandPendingAtomic.load()) {
+            int64_t targetTs =
+                firstTs + static_cast<int64_t>(syncSec * secondsToTicks);
+            requestFastForward(targetTs);
+          }
         }
-      }
       }
       double prevFrameSec = lastFrameSec;
       if (advanced) {
         frame = std::move(candidate.frame);
-        frameSec =
-            static_cast<double>(frame.timestamp100ns - firstTs) * ticksToSeconds;
+        frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
+                   ticksToSeconds;
         lastFrameSec = frameSec;
         double durationSec = 0.0;
         if (candidate.info.duration100ns > 0) {
-          durationSec =
-              static_cast<double>(candidate.info.duration100ns) *
-              ticksToSeconds;
+          durationSec = static_cast<double>(candidate.info.duration100ns) *
+                        ticksToSeconds;
         } else if (frameSec > prevFrameSec) {
           durationSec = frameSec - prevFrameSec;
         }
@@ -1957,7 +2039,12 @@ static bool showAsciiVideo(
       }
       if (haveAudioStats) {
         perfLog.appendf(
-            "frame t=%.3f sync=%.3f lag=%.3f drift=%.3f wall=%.3f wall_dt_ms=%.2f sleep_ms=%.2f q=%zu disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u vhr=0x%08X acb=%llu areq=%llu aread=%llu ashort=%llu asilence=%llu alast=%u/%u",
+            "frame t=%.3f sync=%.3f lag=%.3f drift=%.3f wall=%.3f "
+            "wall_dt_ms=%.2f sleep_ms=%.2f q=%zu disp_ts=%lld next_ts=%lld "
+            "render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d "
+            "read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u "
+            "vhr=0x%08X acb=%llu areq=%llu aread=%llu ashort=%llu "
+            "asilence=%llu alast=%u/%u",
             displayedSec, syncSec, lagSec, syncDriftNow, wallNow, wallDtMs,
             lastSleepMs, queueSize, static_cast<long long>(displayedTs),
             static_cast<long long>(nextTs), renderMs, decodeMs, dropped,
@@ -1973,7 +2060,11 @@ static bool showAsciiVideo(
             audioStats.lastCallbackFrames, audioStats.lastFramesRead);
       } else {
         perfLog.appendf(
-            "frame t=%.3f sync=%.3f lag=%.3f drift=%.3f wall=%.3f wall_dt_ms=%.2f sleep_ms=%.2f q=%zu disp_ts=%lld next_ts=%lld render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u vhr=0x%08X",
+            "frame t=%.3f sync=%.3f lag=%.3f drift=%.3f wall=%.3f "
+            "wall_dt_ms=%.2f sleep_ms=%.2f q=%zu disp_ts=%lld next_ts=%lld "
+            "render_ms=%.2f decode_ms=%.2f dropped=%d qdrops=%d skipped=%d "
+            "read_calls=%d vflags=0x%X vdur=%lld vticks=%d vtype=%d vrec=%u "
+            "vhr=0x%08X",
             displayedSec, syncSec, lagSec, syncDriftNow, wallNow, wallDtMs,
             lastSleepMs, queueSize, static_cast<long long>(displayedTs),
             static_cast<long long>(nextTs), renderMs, decodeMs, dropped,
@@ -2009,7 +2100,7 @@ static bool showAsciiVideo(
 
   if (renderFailed) {
     if (hooks.stopAudio) hooks.stopAudio();
-    return showError(renderFailMessage, renderFailDetail);
+    return reportVideoError(renderFailMessage, renderFailDetail);
   }
 
   stopDecodeThread();
@@ -2118,9 +2209,8 @@ static uint64_t rescaleFrames(uint64_t frames, uint32_t inRate,
   if (frames == 0 || inRate == 0 || outRate == 0 || inRate == outRate) {
     return frames;
   }
-  double scaled =
-      static_cast<double>(frames) * static_cast<double>(outRate) /
-      static_cast<double>(inRate);
+  double scaled = static_cast<double>(frames) * static_cast<double>(outRate) /
+                  static_cast<double>(inRate);
   return static_cast<uint64_t>(std::llround(scaled));
 }
 
@@ -2199,13 +2289,12 @@ static void dataCallback(ma_device* device, void* output, const void*,
   uint64_t leadSilence = state->audioLeadSilenceFrames.load();
   float* outCursor = out;
   if (leadSilence > 0) {
-    silentLeadFrames =
-        std::min<uint64_t>(leadSilence, framesRemaining);
+    silentLeadFrames = std::min<uint64_t>(leadSilence, framesRemaining);
     if (silentLeadFrames > 0) {
-      std::fill(outCursor,
-                outCursor + silentLeadFrames * state->channels, 0.0f);
-      state->audioLeadSilenceFrames.fetch_sub(
-          silentLeadFrames, std::memory_order_relaxed);
+      std::fill(outCursor, outCursor + silentLeadFrames * state->channels,
+                0.0f);
+      state->audioLeadSilenceFrames.fetch_sub(silentLeadFrames,
+                                              std::memory_order_relaxed);
       framesRemaining -= static_cast<uint32_t>(silentLeadFrames);
       outCursor += silentLeadFrames * state->channels;
     }
@@ -2241,9 +2330,8 @@ static void dataCallback(ma_device* device, void* output, const void*,
       state->m4aCv.notify_one();
     } else {
       ma_uint64 framesReadMa = 0;
-      ma_result res =
-          ma_decoder_read_pcm_frames(&state->decoder, outCursor,
-                                     framesRemaining, &framesReadMa);
+      ma_result res = ma_decoder_read_pcm_frames(
+          &state->decoder, outCursor, framesRemaining, &framesReadMa);
       if (res != MA_SUCCESS && res != MA_AT_END) {
         state->finished.store(true);
         return;
@@ -2439,8 +2527,7 @@ int main(int argc, char** argv) {
   auto startM4aWorker = [&](const std::filesystem::path& file,
                             uint64_t startFrame, std::string* error) -> bool {
     stopM4aWorker();
-    const uint32_t rbFrames =
-        std::max<uint32_t>(sampleRate / 2, 8192);
+    const uint32_t rbFrames = std::max<uint32_t>(sampleRate / 2, 8192);
     const uint32_t targetFrames =
         std::min<uint32_t>(rbFrames, std::max<uint32_t>(sampleRate / 4, 4096));
     {
@@ -2462,6 +2549,7 @@ int main(int argc, char** argv) {
       auto t_init_start = std::chrono::steady_clock::now();
       bool ok = decoder.init(file, workerChannels, workerRate, &initError);
       auto t_init_end = std::chrono::steady_clock::now();
+#if RADIOIFY_ENABLE_TIMING_LOG
       {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
@@ -2473,10 +2561,14 @@ int main(int argc, char** argv) {
                       toUtf8String(file.filename()).c_str(), ok ? 1 : 0,
                       initError.empty() ? "-" : initError.c_str());
         {
-          std::ofstream f((std::filesystem::current_path() / "radioify_timing.log").string(), std::ios::app);
+          std::ofstream f(
+              (std::filesystem::current_path() / "radioify_timing.log")
+                  .string(),
+              std::ios::app);
           if (f) f << buf << "\n";
         }
       }
+#endif
       uint64_t total = 0;
       uint64_t paddingFrames = 0;
       uint64_t trailingFrames = 0;
@@ -2538,8 +2630,8 @@ int main(int argc, char** argv) {
       }
 
       constexpr uint32_t kChunkFrames = 2048;
-      std::vector<float> buffer(
-          static_cast<size_t>(kChunkFrames) * workerChannels);
+      std::vector<float> buffer(static_cast<size_t>(kChunkFrames) *
+                                workerChannels);
       bool m4a_first_buffer_logged = false;
 
       while (!state.m4aStop.load()) {
@@ -2608,25 +2700,30 @@ int main(int argc, char** argv) {
         }
         if (!m4a_first_buffer_logged) {
           m4a_first_buffer_logged = true;
+#if RADIOIFY_ENABLE_TIMING_LOG
           auto t_buf = std::chrono::steady_clock::now();
-        {
-          char buf[512];
-          std::snprintf(buf, sizeof(buf),
-                        "ffmpeg_audio_first_buffer_ms=%lld frames=%llu file=%s",
-                        static_cast<long long>(
-                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                t_buf - t_init_start)
-                                .count()),
-                        static_cast<unsigned long long>(framesRead),
-                        toUtf8String(file.filename()).c_str());
-          std::ofstream f((std::filesystem::current_path() / "radioify_timing.log").string(), std::ios::app);
-          if (f) f << buf << "\n";
-        }
+          {
+            char buf[512];
+            std::snprintf(
+                buf, sizeof(buf),
+                "ffmpeg_audio_first_buffer_ms=%lld frames=%llu file=%s",
+                static_cast<long long>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        t_buf - t_init_start)
+                        .count()),
+                static_cast<unsigned long long>(framesRead),
+                toUtf8String(file.filename()).c_str());
+            std::ofstream f(
+                (std::filesystem::current_path() / "radioify_timing.log")
+                    .string(),
+                std::ios::app);
+            if (f) f << buf << "\n";
+          }
+#endif
         }
         {
           std::lock_guard<std::mutex> lock(state.m4aMutex);
-          state.m4aBuffer.write(buffer.data(),
-                                static_cast<size_t>(framesRead),
+          state.m4aBuffer.write(buffer.data(), static_cast<size_t>(framesRead),
                                 workerChannels);
         }
       }
@@ -2663,13 +2760,18 @@ int main(int argc, char** argv) {
       return false;
     }
     deviceReady = true;
+#if RADIOIFY_ENABLE_TIMING_LOG
     {
       char buf[256];
-      std::snprintf(buf, sizeof(buf), "audio_device_started sampleRate=%u channels=%u",
+      std::snprintf(buf, sizeof(buf),
+                    "audio_device_started sampleRate=%u channels=%u",
                     sampleRate, channels);
-      std::ofstream f((std::filesystem::current_path() / "radioify_timing.log").string(), std::ios::app);
+      std::ofstream f(
+          (std::filesystem::current_path() / "radioify_timing.log").string(),
+          std::ios::app);
       if (f) f << buf << "\n";
     }
+#endif
     return true;
   };
 
@@ -2733,8 +2835,8 @@ int main(int argc, char** argv) {
         startFrame = total;
       }
       if (startFrame > 0) {
-        if (ma_decoder_seek_to_pcm_frame(
-                &state.decoder, static_cast<ma_uint64>(startFrame)) !=
+        if (ma_decoder_seek_to_pcm_frame(&state.decoder,
+                                         static_cast<ma_uint64>(startFrame)) !=
             MA_SUCCESS) {
           startFrame = 0;
         }
@@ -2916,14 +3018,14 @@ int main(int argc, char** argv) {
       if (!state.audioPrimed.load()) {
         return 0.0;
       }
-      int64_t frames =
-          static_cast<int64_t>(state.audioClockFrames.load());
+      int64_t frames = static_cast<int64_t>(state.audioClockFrames.load());
       uint64_t latencyFrames = 0;
       if (deviceReady &&
           ma_device_get_state(&state.device) != ma_device_state_uninitialized) {
         uint32_t internalRate = state.device.playback.internalSampleRate;
         uint64_t internalBuffer = 0;
-        uint32_t periodFrames = state.device.playback.internalPeriodSizeInFrames;
+        uint32_t periodFrames =
+            state.device.playback.internalPeriodSizeInFrames;
         uint32_t periods = state.device.playback.internalPeriods;
         if (periodFrames > 0 && periods > 0) {
           internalBuffer = static_cast<uint64_t>(periodFrames) *
@@ -2937,17 +3039,16 @@ int main(int argc, char** argv) {
         }
 #endif
         if (internalBuffer > 0) {
-          latencyFrames += rescaleFrames(internalBuffer, internalRate,
-                                         sampleRate);
+          latencyFrames +=
+              rescaleFrames(internalBuffer, internalRate, sampleRate);
         }
         latencyFrames +=
             static_cast<uint64_t>(state.device.playback.intermediaryBufferLen);
-        uint64_t converterLatency =
-            ma_data_converter_get_output_latency(
-                &state.device.playback.converter);
+        uint64_t converterLatency = ma_data_converter_get_output_latency(
+            &state.device.playback.converter);
         if (converterLatency > 0) {
-          latencyFrames += rescaleFrames(converterLatency, internalRate,
-                                         sampleRate);
+          latencyFrames +=
+              rescaleFrames(converterLatency, internalRate, sampleRate);
         }
       }
       frames -= static_cast<int64_t>(latencyFrames);
@@ -2966,16 +3067,12 @@ int main(int argc, char** argv) {
     videoHooks.isAudioFinished = [&]() { return state.finished.load(); };
     videoHooks.getAudioPerfStats = [&]() {
       AudioPerfStats stats{};
-      stats.callbacks =
-          state.callbackCount.load(std::memory_order_relaxed);
+      stats.callbacks = state.callbackCount.load(std::memory_order_relaxed);
       stats.framesRequested =
           state.framesRequested.load(std::memory_order_relaxed);
-      stats.framesRead =
-          state.framesReadTotal.load(std::memory_order_relaxed);
-      stats.shortReads =
-          state.shortReadCount.load(std::memory_order_relaxed);
-      stats.silentFrames =
-          state.silentFrames.load(std::memory_order_relaxed);
+      stats.framesRead = state.framesReadTotal.load(std::memory_order_relaxed);
+      stats.shortReads = state.shortReadCount.load(std::memory_order_relaxed);
+      stats.silentFrames = state.silentFrames.load(std::memory_order_relaxed);
       stats.lastCallbackFrames =
           state.lastCallbackFrames.load(std::memory_order_relaxed);
       stats.lastFramesRead =
@@ -3061,10 +3158,10 @@ int main(int argc, char** argv) {
     dirty = true;
   }
   if (hasPendingVideo) {
-    bool handled = showAsciiVideo(
-        pendingVideo, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-        kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
-        kProgressEnd, o.enableAscii, videoHooks);
+    bool handled =
+        showAsciiVideo(pendingVideo, input, screen, kStyleNormal, kStyleAccent,
+                       kStyleDim, kStyleProgressEmpty, kStyleProgressFrame,
+                       kProgressStart, kProgressEnd, o.enableAscii, videoHooks);
     if (!handled) {
       loadFile(pendingVideo);
     }
@@ -3242,9 +3339,9 @@ int main(int argc, char** argv) {
                        kStyleDim);
       screen.writeText(
           0, 4,
-          fitLine(
-              "  Showing: folders + .wav/.mp3/.flac/.m4a/.webm/.mp4/.jpg/.jpeg/.png/.bmp",
-              width),
+          fitLine("  Showing: folders + "
+                  ".wav/.mp3/.flac/.m4a/.webm/.mp4/.jpg/.jpeg/.png/.bmp",
+                  width),
           kStyleDim);
 
       if (browser.entries.empty()) {
@@ -3334,9 +3431,8 @@ int main(int argc, char** argv) {
       progressBarWidth = barWidth;
 
       screen.writeChar(0, line, L'|', kStyleProgressFrame);
-      auto barCells = renderProgressBarCells(ratio, barWidth,
-                                             kStyleProgressEmpty,
-                                             kProgressStart, kProgressEnd);
+      auto barCells = renderProgressBarCells(
+          ratio, barWidth, kStyleProgressEmpty, kProgressStart, kProgressEnd);
       for (int i = 0; i < barWidth; ++i) {
         const auto& cell = barCells[static_cast<size_t>(i)];
         screen.writeChar(1 + i, line, cell.ch, cell.style);

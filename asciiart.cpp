@@ -619,6 +619,8 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
       int cellLumMin = 255, cellLumMax = 0;
       int cellLumSum = 0;
       int validCount = 0;
+      int cellEdgeMax = 0;
+      int cellContrastMax = 0;
 
       for (int dy = 0; dy < 4; ++dy) {
         int y = baseY + dy;
@@ -660,6 +662,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
           }
 
           // Lokale statistieken voor deze cel
+          if (edgeVals[dotIndex] > cellEdgeMax) cellEdgeMax = edgeVals[dotIndex];
+          if (contrastVals[dotIndex] > cellContrastMax) {
+            cellContrastMax = contrastVals[dotIndex];
+          }
           int lumInt = lum;
           if (lumInt < cellLumMin) cellLumMin = lumInt;
           if (lumInt > cellLumMax) cellLumMax = lumInt;
@@ -709,9 +715,18 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
       int targetCoverage = kInkLevelFromLum[static_cast<size_t>(avgLumDiff)];
       int targetDots = (numValidDots * targetCoverage + 127) / 255;
       
-      // Extra dots voor hoog-contrast cellen
-      if (cellLumRange > 40 && targetDots < numValidDots) {
-        targetDots = std::min(targetDots + 1, numValidDots);
+      // Houd randen zichtbaar: forceer minimaal wat ink bij lokaal detail.
+      int detailScore =
+          std::max(cellLumRange, std::max(cellEdgeMax, cellContrastMax));
+      int minDots = 0;
+      if (detailScore >= kMinContrastForBraille) {
+        minDots = 1;
+        if (detailScore >= kMinContrastForBraille * 2) {
+          minDots = 2;
+        }
+      }
+      if (targetDots < minDots) {
+        targetDots = std::min(minDots, numValidDots);
       }
 
       // Sorteer dots op score (hoogste eerst)
