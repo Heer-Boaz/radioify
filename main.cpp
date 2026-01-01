@@ -901,7 +901,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     if (!audioOk) {
       headerLines += 1;
     }
-    const int footerLines = 2;
+    const int footerLines = 0;
     int maxHeight = std::max(1, height - headerLines - footerLines);
     int maxOutW = std::max(1, width - 8);
     int srcW = std::max(1, sourceWidth);
@@ -1380,6 +1380,18 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     return lastFrameSec;
   };
 
+  constexpr auto kProgressOverlayTimeout = std::chrono::milliseconds(2000);
+  auto overlayUntil = std::chrono::steady_clock::time_point::min();
+  auto triggerOverlay = [&]() {
+    overlayUntil = std::chrono::steady_clock::now() + kProgressOverlayTimeout;
+  };
+  auto overlayVisible = [&]() {
+    if (overlayUntil == std::chrono::steady_clock::time_point::min()) {
+      return false;
+    }
+    return std::chrono::steady_clock::now() <= overlayUntil;
+  };
+
   auto renderScreen = [&](bool refreshArt) {
     screen.updateSize();
     int width = std::max(20, screen.width());
@@ -1392,7 +1404,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     if (!subtitle.empty()) {
       headerLines += 1;
     }
-    const int footerLines = 2;
+    const int footerLines = 0;
     int artTop = headerLines;
     int maxHeight = std::max(1, height - headerLines - footerLines);
 
@@ -1544,55 +1556,64 @@ static bool showAsciiVideo(const std::filesystem::path& file,
       }
     }
 
-    int footerLine = artTop + maxHeight;
-    std::string nowLabel = " " + toUtf8String(file.filename());
-    screen.writeText(0, footerLine++, fitLine(nowLabel, width), accentStyle);
+    progressBarX = -1;
+    progressBarY = -1;
+    progressBarWidth = 0;
+    if (overlayVisible()) {
+      int barLine = height - 1;
+      int labelLine = barLine - 1;
+      if (labelLine >= artTop && labelLine >= 0) {
+        std::string nowLabel = " " + toUtf8String(file.filename());
+        screen.writeText(0, labelLine, fitLine(nowLabel, width), accentStyle);
+      }
 
-    std::string status;
-    if (audioOk && hooks.isAudioFinished && hooks.isAudioFinished()) {
-      status = "\xE2\x96\xA0";  // ended icon
-    } else if (audioOk && hooks.isAudioPaused && hooks.isAudioPaused()) {
-      status = "\xE2\x8F\xB8";  // paused icon
-    } else {
-      status = "\xE2\x96\xB6";  // playing icon
-    }
-    std::string suffix =
-        formatTime(currentSec) + " / " + formatTime(totalSec) + " " + status;
-    int suffixWidth = utf8CodepointCount(suffix);
-    int barWidth = width - suffixWidth - 3;
-    if (barWidth < 10) {
-      suffix = formatTime(currentSec) + "/" + formatTime(totalSec);
-      suffixWidth = utf8CodepointCount(suffix);
-      barWidth = width - suffixWidth - 3;
-    }
-    if (barWidth < 10) {
-      suffix = formatTime(currentSec);
-      suffixWidth = utf8CodepointCount(suffix);
-      barWidth = width - suffixWidth - 3;
-    }
-    if (barWidth < 5) {
-      suffix.clear();
-      barWidth = width - 2;
-    }
-    int maxBar = std::max(5, width - 2);
-    barWidth = std::clamp(barWidth, 5, maxBar);
-    double ratio = 0.0;
-    if (totalSec > 0.0 && std::isfinite(totalSec)) {
-      ratio = std::clamp(currentSec / totalSec, 0.0, 1.0);
-    }
-    progressBarX = 1;
-    progressBarY = footerLine;
-    progressBarWidth = barWidth;
-    screen.writeChar(0, footerLine, L'|', progressFrameStyle);
-    auto barCells = renderProgressBarCells(ratio, barWidth, progressEmptyStyle,
-                                           progressStart, progressEnd);
-    for (int i = 0; i < barWidth; ++i) {
-      const auto& cell = barCells[static_cast<size_t>(i)];
-      screen.writeChar(1 + i, footerLine, cell.ch, cell.style);
-    }
-    screen.writeChar(1 + barWidth, footerLine, L'|', progressFrameStyle);
-    if (!suffix.empty()) {
-      screen.writeText(2 + barWidth, footerLine, " " + suffix, baseStyle);
+      std::string status;
+      if (audioOk && hooks.isAudioFinished && hooks.isAudioFinished()) {
+        status = "\xE2\x96\xA0";  // ended icon
+      } else if (audioOk && hooks.isAudioPaused && hooks.isAudioPaused()) {
+        status = "\xE2\x8F\xB8";  // paused icon
+      } else {
+        status = "\xE2\x96\xB6";  // playing icon
+      }
+      std::string suffix =
+          formatTime(currentSec) + " / " + formatTime(totalSec) + " " + status;
+      int suffixWidth = utf8CodepointCount(suffix);
+      int barWidth = width - suffixWidth - 3;
+      if (barWidth < 10) {
+        suffix = formatTime(currentSec) + "/" + formatTime(totalSec);
+        suffixWidth = utf8CodepointCount(suffix);
+        barWidth = width - suffixWidth - 3;
+      }
+      if (barWidth < 10) {
+        suffix = formatTime(currentSec);
+        suffixWidth = utf8CodepointCount(suffix);
+        barWidth = width - suffixWidth - 3;
+      }
+      if (barWidth < 5) {
+        suffix.clear();
+        barWidth = width - 2;
+      }
+      int maxBar = std::max(5, width - 2);
+      barWidth = std::clamp(barWidth, 5, maxBar);
+      double ratio = 0.0;
+      if (totalSec > 0.0 && std::isfinite(totalSec)) {
+        ratio = std::clamp(currentSec / totalSec, 0.0, 1.0);
+      }
+      progressBarX = 1;
+      progressBarY = barLine;
+      progressBarWidth = barWidth;
+      screen.writeChar(0, barLine, L'|', progressFrameStyle);
+      auto barCells = renderProgressBarCells(ratio, barWidth,
+                                             progressEmptyStyle, progressStart,
+                                             progressEnd);
+      for (int i = 0; i < barWidth; ++i) {
+        const auto& cell = barCells[static_cast<size_t>(i)];
+        screen.writeChar(1 + i, barLine, cell.ch, cell.style);
+      }
+      screen.writeChar(1 + barWidth, barLine, L'|', progressFrameStyle);
+      if (!suffix.empty()) {
+        screen.writeText(2 + barWidth, barLine, " " + suffix, baseStyle);
+      }
     }
 
     screen.draw();
@@ -1645,6 +1666,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           if (hooks.toggleRadio) hooks.toggleRadio();
           redraw = true;
         } else if (ctrl && (key.vk == VK_LEFT || key.vk == VK_RIGHT)) {
+          triggerOverlay();
           int dir = (key.vk == VK_LEFT) ? -1 : 1;
           double currentSec = currentTimeSec();
           double totalSec = totalDurationSec();
@@ -1689,6 +1711,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         }
       }
       if (ev.type == InputEvent::Type::Mouse) {
+        triggerOverlay();
+        redraw = true;
         const MouseEvent& mouse = ev.mouse;
         bool leftPressed =
             (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
