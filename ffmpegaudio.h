@@ -16,6 +16,9 @@ class FfmpegAudioDecoder {
   bool readFrames(float* out, uint32_t frameCount, uint64_t* framesRead);
   bool seekToFrame(uint64_t frame);
   bool getTotalFrames(uint64_t* outFrames) const;
+  bool getStartOffsetFrames(int64_t* outFrames) const;
+  bool getPaddingFrames(uint64_t* outInitial,
+                        uint64_t* outTrailing) const;
 
  private:
   struct Impl;

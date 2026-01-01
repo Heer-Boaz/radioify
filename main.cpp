@@ -33,6 +33,7 @@
 #include "asciiart.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
+#include "ffmpegaudio.h"
 #include "m4adecoder.h"
 #include "radio.h"
 #include "videodecoder.h"
@@ -270,7 +271,7 @@ struct AudioPerfStats {
   uint32_t bufferFrames = 0;
   uint32_t sampleRate = 0;
   uint32_t channels = 0;
-  bool usingM4a = false;
+  bool usingFfmpeg = false;
 };
 
 struct VideoPlaybackHooks {
@@ -280,6 +281,7 @@ struct VideoPlaybackHooks {
   std::function<double()> getAudioTotalSec;
   std::function<bool()> isAudioPaused;
   std::function<bool()> isAudioFinished;
+  std::function<bool()> isAudioPrimed;
   std::function<AudioPerfStats()> getAudioPerfStats;
   std::function<void()> togglePause;
   std::function<void(int)> seekBy;
@@ -729,13 +731,10 @@ static bool showAsciiVideo(
   uint64_t lastReadCalls = 0;
   uint64_t lastQueueDrops = 0;
   uint64_t lastSkippedCalls = 0;
-  double audioSyncOffset = 0.0;
-  
   // Sync parameters - video tries to stay within this window of audio
   constexpr double kSyncTolerance = 0.033;      // Acceptable sync tolerance (~1 frame at 30fps)
   constexpr double kHardResyncThreshold = 0.5;  // Force hard resync above this (500ms)
   double lastSyncDrift = 0.0;
-  bool audioSyncInit = false;
 
   auto clearQueue = [&]() {
     std::lock_guard<std::mutex> lock(queueMutex);
@@ -1205,9 +1204,8 @@ static bool showAsciiVideo(
     return showError(initError, "");
   }
 
-  // Audio will be started after the first video frame is available so
-  // audio/video can be synchronized more reliably. See below where
-  // `hooks.startAudio` is called after rendering the first frame.
+  // Start audio once the first frame is decoded so we can wait for audio
+  // to prime before presenting video.
 
   VideoReadInfo firstInfo{};
   const bool allowDecoderScale = enableAscii;
@@ -1248,9 +1246,10 @@ static bool showAsciiVideo(
 
   const double ticksToSeconds = 1.0 / 10000000.0;
   const double secondsToTicks = 10000000.0;
-  int64_t firstTs = frame.timestamp100ns;
+  const double kLeadSlackSec = 0.005;
+  int64_t firstTs = 0;
   double frameSec =
-      static_cast<double>(frame.timestamp100ns - firstTs) * ticksToSeconds;
+      static_cast<double>(frame.timestamp100ns) * ticksToSeconds;
   double lastFrameSec = frameSec;
   double lastFrameDurationSec =
       firstInfo.duration100ns > 0
@@ -1276,15 +1275,7 @@ static bool showAsciiVideo(
   auto currentTimeSec = [&]() -> double {
     if (audioOk && hooks.getAudioTimeSec) {
       double audioNow = hooks.getAudioTimeSec();
-      if (!audioSyncInit) {
-        if (audioNow > 0.0) {
-          audioSyncOffset = 0.0;
-          audioSyncInit = true;
-        } else {
-          return lastFrameSec;
-        }
-      }
-      return std::max(0.0, audioNow - audioSyncOffset);
+      return std::max(0.0, audioNow);
     }
     return lastFrameSec;
   };
@@ -1306,11 +1297,24 @@ static bool showAsciiVideo(
     int artTop = headerLines;
     int maxHeight = std::max(1, height - headerLines - footerLines);
 
+    double currentSec = currentTimeSec();
+    double rawSec = currentSec;
+    double totalSec = totalDurationSec();
+    if (totalSec > 0.0) {
+      currentSec = std::clamp(currentSec, 0.0, totalSec);
+    }
+    bool allowFrame = true;
+    if (audioOk && hooks.getAudioTimeSec) {
+      if (rawSec + kLeadSlackSec < frameSec) {
+        allowFrame = false;
+      }
+    }
+
     bool sizeChanged =
         (width != cachedWidth || maxHeight != cachedMaxHeight ||
          frame.width != cachedFrameWidth || frame.height != cachedFrameHeight);
     if (enableAscii) {
-      if (refreshArt || sizeChanged) {
+      if (allowFrame && (refreshArt || sizeChanged)) {
         if (frame.width <= 0 || frame.height <= 0) {
           renderFailed = true;
           renderFailMessage = "Invalid video frame size.";
@@ -1385,6 +1389,11 @@ static bool showAsciiVideo(
         cachedMaxHeight = maxHeight;
         cachedFrameWidth = frame.width;
         cachedFrameHeight = frame.height;
+      } else if (!allowFrame) {
+        cachedWidth = -1;
+        cachedMaxHeight = -1;
+        cachedFrameWidth = -1;
+        cachedFrameHeight = -1;
       }
     } else {
       if (frame.width <= 0 || frame.height <= 0) {
@@ -1417,16 +1426,22 @@ static bool showAsciiVideo(
       int artHeight = std::min(art.height, maxHeight);
       int artX = std::max(0, (width - artWidth) / 2);
 
-      for (int y = 0; y < artHeight; ++y) {
-        for (int x = 0; x < artWidth; ++x) {
-          const auto& cell =
-              art.cells[static_cast<size_t>(y * art.width + x)];
-          Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
-          screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
+      if (allowFrame) {
+        for (int y = 0; y < artHeight; ++y) {
+          for (int x = 0; x < artWidth; ++x) {
+            const auto& cell =
+                art.cells[static_cast<size_t>(y * art.width + x)];
+            Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
+            screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
+          }
         }
+      } else {
+        std::string label = "Waiting for video timestamp...";
+        screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       }
     } else {
-      std::string label = "ASCII rendering disabled";
+      std::string label =
+          allowFrame ? "ASCII rendering disabled" : "Waiting for video...";
       screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       if (maxHeight > 1) {
         std::string sizeLine = "Video size: " +
@@ -1440,11 +1455,6 @@ static bool showAsciiVideo(
     std::string nowLabel = " " + toUtf8String(file.filename());
     screen.writeText(0, footerLine++, fitLine(nowLabel, width), accentStyle);
 
-    double currentSec = currentTimeSec();
-    double totalSec = totalDurationSec();
-    if (totalSec > 0.0) {
-      currentSec = std::clamp(currentSec, 0.0, totalSec);
-    }
     std::string status;
     if (audioOk && hooks.isAudioFinished && hooks.isAudioFinished()) {
       status = "\xE2\x96\xA0";  // ended icon
@@ -1496,19 +1506,18 @@ static bool showAsciiVideo(
     screen.draw();
   };
 
-  renderScreen(true);
-  // Start audio only after the first frame has been decoded and rendered.
   audioOk = hooks.startAudio ? hooks.startAudio(file) : false;
   perfLog.appendf("audio_start ok=%d", audioOk ? 1 : 0);
   if (audioOk && hooks.getAudioPerfStats) {
     AudioPerfStats stats = hooks.getAudioPerfStats();
     if (stats.periodFrames > 0 && stats.periods > 0) {
       perfLog.appendf(
-          "audio_device period_frames=%u periods=%u buffer_frames=%u rate=%u channels=%u using_m4a=%d",
+          "audio_device period_frames=%u periods=%u buffer_frames=%u rate=%u channels=%u using_ffmpeg=%d",
           stats.periodFrames, stats.periods, stats.bufferFrames,
-          stats.sampleRate, stats.channels, stats.usingM4a ? 1 : 0);
+          stats.sampleRate, stats.channels, stats.usingFfmpeg ? 1 : 0);
     }
   }
+  renderScreen(true);
   if (renderFailed) {
     stopDecodeThread();
     if (audioOk && hooks.stopAudio) hooks.stopAudio();
@@ -1576,13 +1585,6 @@ static bool showAsciiVideo(
                      ticksToSeconds;
           lastFrameSec = frameSec;
           videoEnded = false;
-          if (!audioSyncInit && audioOk && hooks.getAudioTimeSec) {
-            double audioNow = hooks.getAudioTimeSec();
-            if (audioNow > 0.0) {
-              audioSyncOffset = 0.0;
-              audioSyncInit = true;
-            }
-          }
           redraw = true;
           forceRefreshArt = true;
           if (!audioOk) {
@@ -1637,13 +1639,6 @@ static bool showAsciiVideo(
                     ticksToSeconds;
                 lastFrameSec = frameSec;
                 videoEnded = false;
-                if (!audioSyncInit && audioOk && hooks.getAudioTimeSec) {
-                  double audioNow = hooks.getAudioTimeSec();
-                  if (audioNow > 0.0) {
-                    audioSyncOffset = 0.0;
-                    audioSyncInit = true;
-                  }
-                }
                 forceRefreshArt = true;
                 if (!audioOk) {
                   startTime = std::chrono::steady_clock::now() -
@@ -1682,24 +1677,14 @@ static bool showAsciiVideo(
     bool haveAudioClock = audioOk && hooks.getAudioTimeSec;
     if (haveAudioClock) {
       audioNow = hooks.getAudioTimeSec();
-      if (!audioSyncInit && audioNow > 0.0) {
-        // Initialize sync when audio has actually started playing
-        audioSyncOffset = 0.0;
-        audioSyncInit = true;
-        perfLog.appendf("sync_init audio=%.3f video=%.3f offset=%.3f",
-                        audioNow, lastFrameSec, audioSyncOffset);
-      }
-      if (audioSyncInit) {
-        syncSec = std::max(0.0, audioNow - audioSyncOffset);
-      } else {
-        syncSec = 0.0;
-      }
+      syncSec = std::max(0.0, audioNow);
     } else {
       syncSec = std::chrono::duration<double>(now - startTime).count();
     }
-    const double leadSlack = 0.005;
+    const double leadSlack = kLeadSlackSec;
+    bool audioPrimed = hooks.isAudioPrimed ? hooks.isAudioPrimed() : true;
     bool waitingForAudioStart =
-        haveAudioClock && !audioSyncInit && audioNow <= 0.0;
+        haveAudioClock && !audioPrimed && audioNow <= 0.0;
 
     if (pendingResize) {
       bool resumeAfterResize = false;
@@ -1738,13 +1723,6 @@ static bool showAsciiVideo(
         perfLog.appendf("video_scale target=%dx%d actual=%dx%d",
                         requestedTargetW, requestedTargetH, decoderTargetW,
                         decoderTargetH);
-        if (!audioSyncInit && audioOk && hooks.getAudioTimeSec) {
-          double audioNow = hooks.getAudioTimeSec();
-          if (audioNow > 0.0) {
-            audioSyncOffset = 0.0;
-            audioSyncInit = true;
-          }
-        }
       }
       if (resumeAfterResize) {
         decodePaused.store(true);
@@ -2131,6 +2109,17 @@ struct AudioRingBuffer {
   }
 };
 
+static uint64_t rescaleFrames(uint64_t frames, uint32_t inRate,
+                              uint32_t outRate) {
+  if (frames == 0 || inRate == 0 || outRate == 0 || inRate == outRate) {
+    return frames;
+  }
+  double scaled =
+      static_cast<double>(frames) * static_cast<double>(outRate) /
+      static_cast<double>(inRate);
+  return static_cast<uint64_t>(std::llround(scaled));
+}
+
 struct AudioState {
   ma_decoder decoder{};
   ma_device device{};
@@ -2148,7 +2137,7 @@ struct AudioState {
   std::atomic<bool> paused{false};
   std::atomic<bool> finished{false};
   std::atomic<bool> useRadio1938{true};
-  std::atomic<bool> usingM4a{false};
+  std::atomic<bool> usingFfmpeg{false};
   std::atomic<bool> seekRequested{false};
   std::atomic<int64_t> pendingSeekFrames{0};
   std::atomic<uint64_t> framesPlayed{0};
@@ -2162,6 +2151,10 @@ struct AudioState {
   std::atomic<uint32_t> lastFramesRead{0};
   std::atomic<uint64_t> audioClockFrames{0};
   std::atomic<uint64_t> totalFrames{0};
+  std::atomic<uint64_t> audioPaddingFrames{0};
+  std::atomic<uint64_t> audioTrailingPaddingFrames{0};
+  std::atomic<uint64_t> audioLeadSilenceFrames{0};
+  std::atomic<bool> audioPrimed{false};
   uint32_t channels = 1;
   uint32_t sampleRate = 48000;
   bool dry = false;
@@ -2176,9 +2169,10 @@ static void dataCallback(ma_device* device, void* output, const void*,
   state->callbackCount.fetch_add(1, std::memory_order_relaxed);
   state->framesRequested.fetch_add(frameCount, std::memory_order_relaxed);
   state->lastCallbackFrames.store(frameCount, std::memory_order_relaxed);
+  state->audioPrimed.store(true, std::memory_order_relaxed);
 
-  bool usingM4a = state->usingM4a.load();
-  if (!usingM4a && state->seekRequested.exchange(false)) {
+  bool usingFfmpeg = state->usingFfmpeg.load();
+  if (!usingFfmpeg && state->seekRequested.exchange(false)) {
     int64_t target = state->pendingSeekFrames.load();
     if (target < 0) target = 0;
     ma_decoder_seek_to_pcm_frame(&state->decoder,
@@ -2196,68 +2190,92 @@ static void dataCallback(ma_device* device, void* output, const void*,
     return;
   }
 
+  uint32_t framesRemaining = frameCount;
+  uint64_t silentLeadFrames = 0;
+  uint64_t leadSilence = state->audioLeadSilenceFrames.load();
+  float* outCursor = out;
+  if (leadSilence > 0) {
+    silentLeadFrames =
+        std::min<uint64_t>(leadSilence, framesRemaining);
+    if (silentLeadFrames > 0) {
+      std::fill(outCursor,
+                outCursor + silentLeadFrames * state->channels, 0.0f);
+      state->audioLeadSilenceFrames.fetch_sub(
+          silentLeadFrames, std::memory_order_relaxed);
+      framesRemaining -= static_cast<uint32_t>(silentLeadFrames);
+      outCursor += silentLeadFrames * state->channels;
+    }
+  }
+
   uint64_t framesRead = 0;
-  if (usingM4a) {
-    if (state->seekRequested.load()) {
-      std::lock_guard<std::mutex> lock(state->m4aMutex);
-      state->m4aBuffer.reset();
-      state->m4aAtEnd.store(false);
-      state->finished.store(false);
-    }
-    size_t readFrames = 0;
-    {
-      std::lock_guard<std::mutex> lock(state->m4aMutex);
-      readFrames = state->m4aBuffer.read(out, frameCount, state->channels);
-    }
-    framesRead = readFrames;
-    if (readFrames < frameCount) {
-      std::fill(out + readFrames * state->channels,
-                out + frameCount * state->channels, 0.0f);
-    }
-    if (readFrames == 0 && state->m4aAtEnd.load()) {
-      state->finished.store(true);
-      uint64_t total = state->totalFrames.load();
-      if (total > 0) {
-        state->framesPlayed.store(total);
-        state->audioClockFrames.store(total);
+  if (framesRemaining > 0) {
+    if (usingFfmpeg) {
+      if (state->seekRequested.load()) {
+        std::lock_guard<std::mutex> lock(state->m4aMutex);
+        state->m4aBuffer.reset();
+        state->m4aAtEnd.store(false);
+        state->finished.store(false);
       }
-    }
-    state->m4aCv.notify_one();
-  } else {
-    ma_uint64 framesReadMa = 0;
-    ma_result res = ma_decoder_read_pcm_frames(&state->decoder, out, frameCount,
-                                               &framesReadMa);
-    if (res != MA_SUCCESS && res != MA_AT_END) {
-      state->finished.store(true);
-      return;
-    }
-    framesRead = framesReadMa;
-    if (framesRead < frameCount) {
-      std::fill(out + framesRead * state->channels,
-                out + frameCount * state->channels, 0.0f);
-    }
-    if (res == MA_AT_END || framesRead == 0) {
-      state->finished.store(true);
-      uint64_t total = state->totalFrames.load();
-      if (total > 0) {
-        state->framesPlayed.store(total);
-        state->audioClockFrames.store(total);
+      size_t readFrames = 0;
+      {
+        std::lock_guard<std::mutex> lock(state->m4aMutex);
+        readFrames =
+            state->m4aBuffer.read(outCursor, framesRemaining, state->channels);
+      }
+      framesRead = readFrames;
+      if (readFrames < framesRemaining) {
+        std::fill(outCursor + readFrames * state->channels,
+                  outCursor + framesRemaining * state->channels, 0.0f);
+      }
+      if (readFrames == 0 && state->m4aAtEnd.load()) {
+        state->finished.store(true);
+        uint64_t total = state->totalFrames.load();
+        if (total > 0) {
+          state->framesPlayed.store(total);
+        }
+      }
+      state->m4aCv.notify_one();
+    } else {
+      ma_uint64 framesReadMa = 0;
+      ma_result res =
+          ma_decoder_read_pcm_frames(&state->decoder, outCursor,
+                                     framesRemaining, &framesReadMa);
+      if (res != MA_SUCCESS && res != MA_AT_END) {
+        state->finished.store(true);
+        return;
+      }
+      framesRead = framesReadMa;
+      if (framesRead < framesRemaining) {
+        std::fill(outCursor + framesRead * state->channels,
+                  outCursor + framesRemaining * state->channels, 0.0f);
+      }
+      if (res == MA_AT_END || framesRead == 0) {
+        state->finished.store(true);
+        uint64_t total = state->totalFrames.load();
+        if (total > 0) {
+          state->framesPlayed.store(total);
+        }
       }
     }
   }
 
   state->audioClockFrames.fetch_add(frameCount, std::memory_order_relaxed);
   if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
-    state->radio1938.process(out, static_cast<uint32_t>(framesRead));
+    float* audioStart =
+        out + silentLeadFrames * static_cast<uint64_t>(state->channels);
+    state->radio1938.process(audioStart, static_cast<uint32_t>(framesRead));
   }
   state->framesPlayed.fetch_add(framesRead);
   state->framesReadTotal.fetch_add(framesRead, std::memory_order_relaxed);
   state->lastFramesRead.store(static_cast<uint32_t>(framesRead),
                               std::memory_order_relaxed);
-  if (framesRead < frameCount) {
+  uint64_t silentFrames = silentLeadFrames;
+  if (framesRead < framesRemaining) {
+    silentFrames += static_cast<uint64_t>(framesRemaining - framesRead);
     state->shortReadCount.fetch_add(1, std::memory_order_relaxed);
-    state->silentFrames.fetch_add(frameCount - framesRead,
-                                  std::memory_order_relaxed);
+  }
+  if (silentFrames > 0) {
+    state->silentFrames.fetch_add(silentFrames, std::memory_order_relaxed);
   }
 }
 
@@ -2435,16 +2453,15 @@ int main(int argc, char** argv) {
     const uint32_t workerRate = sampleRate;
     state.m4aThread = std::thread([&, file, startFrame, workerChannels,
                                    workerRate, targetFrames]() {
-      HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-      bool comInit = SUCCEEDED(hr);
-      M4aDecoder decoder;
+      FfmpegAudioDecoder decoder;
       std::string initError;
       auto t_init_start = std::chrono::steady_clock::now();
       bool ok = decoder.init(file, workerChannels, workerRate, &initError);
       auto t_init_end = std::chrono::steady_clock::now();
       {
         char buf[512];
-        std::snprintf(buf, sizeof(buf), "m4a_init_ms=%lld file=%s ok=%d err=%s",
+        std::snprintf(buf, sizeof(buf),
+                      "ffmpeg_audio_init_ms=%lld file=%s ok=%d err=%s",
                       static_cast<long long>(
                           std::chrono::duration_cast<std::chrono::milliseconds>(
                               t_init_end - t_init_start)
@@ -2457,14 +2474,42 @@ int main(int argc, char** argv) {
         }
       }
       uint64_t total = 0;
+      uint64_t paddingFrames = 0;
+      uint64_t trailingFrames = 0;
+      int64_t startOffsetFrames = 0;
+      uint64_t leadSilenceFrames = 0;
       uint64_t localStart = startFrame;
+      uint64_t rawTotalFrames = 0;
       if (ok) {
+        decoder.getPaddingFrames(&paddingFrames, &trailingFrames);
+        decoder.getStartOffsetFrames(&startOffsetFrames);
         decoder.getTotalFrames(&total);
+        if (startOffsetFrames > 0) {
+          leadSilenceFrames = static_cast<uint64_t>(startOffsetFrames);
+          startOffsetFrames = 0;
+        } else if (startOffsetFrames < 0) {
+          uint64_t extraSkip = static_cast<uint64_t>(-startOffsetFrames);
+          paddingFrames += extraSkip;
+          if (total > extraSkip) {
+            total -= extraSkip;
+          } else {
+            total = 0;
+          }
+          startOffsetFrames = 0;
+        }
         if (total > 0 && localStart > total) {
           localStart = total;
         }
-        if (localStart > 0) {
-          if (!decoder.seekToFrame(localStart)) {
+        if (total > 0) {
+          rawTotalFrames = total + paddingFrames + trailingFrames;
+        }
+        uint64_t rawStart = localStart + paddingFrames;
+        if (rawTotalFrames > 0 && rawStart > rawTotalFrames) {
+          rawStart = rawTotalFrames;
+        }
+        if (rawStart > 0) {
+          if (!decoder.seekToFrame(rawStart)) {
+            rawStart = 0;
             localStart = 0;
           }
         }
@@ -2476,13 +2521,15 @@ int main(int argc, char** argv) {
         state.m4aInitError = initError;
       }
       state.totalFrames.store(total);
+      state.audioPaddingFrames.store(paddingFrames);
+      state.audioTrailingPaddingFrames.store(trailingFrames);
+      state.audioLeadSilenceFrames.store(leadSilenceFrames);
       if (localStart > 0) {
         state.framesPlayed.store(localStart);
         state.audioClockFrames.store(localStart);
       }
       state.m4aCv.notify_all();
       if (!ok) {
-        if (comInit) CoUninitialize();
         return;
       }
 
@@ -2497,7 +2544,12 @@ int main(int argc, char** argv) {
           if (target < 0) target = 0;
           state.seekRequested.store(false);
           uint64_t targetFrames = static_cast<uint64_t>(target);
-          if (!decoder.seekToFrame(targetFrames)) {
+          uint64_t rawTarget = targetFrames + paddingFrames;
+          if (rawTotalFrames > 0 && rawTarget > rawTotalFrames) {
+            rawTarget = rawTotalFrames;
+          }
+          if (!decoder.seekToFrame(rawTarget)) {
+            rawTarget = 0;
             targetFrames = 0;
             decoder.seekToFrame(0);
           }
@@ -2505,6 +2557,7 @@ int main(int argc, char** argv) {
           state.audioClockFrames.store(targetFrames);
           state.finished.store(false);
           state.m4aAtEnd.store(false);
+          state.audioLeadSilenceFrames.store(0);
           {
             std::lock_guard<std::mutex> lock(state.m4aMutex);
             state.m4aBuffer.reset();
@@ -2555,7 +2608,7 @@ int main(int argc, char** argv) {
         {
           char buf[512];
           std::snprintf(buf, sizeof(buf),
-                        "m4a_first_buffer_ms=%lld frames=%llu file=%s",
+                        "ffmpeg_audio_first_buffer_ms=%lld frames=%llu file=%s",
                         static_cast<long long>(
                             std::chrono::duration_cast<std::chrono::milliseconds>(
                                 t_buf - t_init_start)
@@ -2573,7 +2626,6 @@ int main(int argc, char** argv) {
                                 workerChannels);
         }
       }
-      if (comInit) CoUninitialize();
     });
 
     {
@@ -2632,13 +2684,13 @@ int main(int argc, char** argv) {
       ma_device_stop(&state.device);
     }
     if (decoderReady) {
-      if (state.usingM4a.load()) {
+      if (state.usingFfmpeg.load()) {
         stopM4aWorker();
       } else {
         ma_decoder_uninit(&state.decoder);
       }
       decoderReady = false;
-      state.usingM4a.store(false);
+      state.usingFfmpeg.store(false);
     }
 
     if (useM4a) {
@@ -2648,7 +2700,7 @@ int main(int argc, char** argv) {
         return false;
       }
       decoderReady = true;
-      state.usingM4a.store(true);
+      state.usingFfmpeg.store(true);
     } else {
       if (!useMiniaudio) {
         return false;
@@ -2660,7 +2712,7 @@ int main(int argc, char** argv) {
         return false;
       }
       decoderReady = true;
-      state.usingM4a.store(false);
+      state.usingFfmpeg.store(false);
 
       ma_uint64 totalFrames = 0;
       if (ma_decoder_get_length_in_pcm_frames(&state.decoder, &totalFrames) ==
@@ -2695,10 +2747,14 @@ int main(int argc, char** argv) {
     state.pausedCallbacks.store(0);
     state.lastCallbackFrames.store(0);
     state.lastFramesRead.store(0);
+    state.audioPrimed.store(false);
     state.seekRequested.store(false);
     state.pendingSeekFrames.store(0);
     state.finished.store(false);
     state.paused.store(false);
+    state.audioPaddingFrames.store(0);
+    state.audioTrailingPaddingFrames.store(0);
+    state.audioLeadSilenceFrames.store(0);
 
     state.channels = channels;
     state.radio1938 = radio1938Template;
@@ -2707,7 +2763,7 @@ int main(int argc, char** argv) {
 
     if (!deviceReady) {
       if (!initDevice()) {
-        if (state.usingM4a.load()) {
+        if (state.usingFfmpeg.load()) {
           stopM4aWorker();
         } else {
           ma_decoder_uninit(&state.decoder);
@@ -2717,7 +2773,7 @@ int main(int argc, char** argv) {
       }
     } else {
       if (ma_device_start(&state.device) != MA_SUCCESS) {
-        if (state.usingM4a.load()) {
+        if (state.usingFfmpeg.load()) {
           stopM4aWorker();
         } else {
           ma_decoder_uninit(&state.decoder);
@@ -2747,13 +2803,13 @@ int main(int argc, char** argv) {
       deviceReady = false;
     }
     if (decoderReady) {
-      if (state.usingM4a.load()) {
+      if (state.usingFfmpeg.load()) {
         stopM4aWorker();
       } else {
         ma_decoder_uninit(&state.decoder);
       }
       decoderReady = false;
-      state.usingM4a.store(false);
+      state.usingFfmpeg.store(false);
     }
 
     channels = newChannels;
@@ -2775,13 +2831,13 @@ int main(int argc, char** argv) {
       deviceReady = false;
     }
     if (decoderReady) {
-      if (state.usingM4a.load()) {
+      if (state.usingFfmpeg.load()) {
         stopM4aWorker();
       } else {
         ma_decoder_uninit(&state.decoder);
       }
       decoderReady = false;
-      state.usingM4a.store(false);
+      state.usingFfmpeg.store(false);
     }
     state.paused.store(false);
     state.finished.store(false);
@@ -2790,6 +2846,10 @@ int main(int argc, char** argv) {
     state.framesPlayed.store(0);
     state.audioClockFrames.store(0);
     state.totalFrames.store(0);
+    state.audioPaddingFrames.store(0);
+    state.audioTrailingPaddingFrames.store(0);
+    state.audioLeadSilenceFrames.store(0);
+    state.audioPrimed.store(false);
     nowPlaying.clear();
   };
 
@@ -2821,6 +2881,7 @@ int main(int argc, char** argv) {
     state.pendingSeekFrames.store(target);
     state.seekRequested.store(true);
     state.finished.store(false);
+    state.audioPrimed.store(false);
     state.m4aCv.notify_all();
   };
 
@@ -2837,6 +2898,7 @@ int main(int argc, char** argv) {
     state.pendingSeekFrames.store(target);
     state.seekRequested.store(true);
     state.finished.store(false);
+    state.audioPrimed.store(false);
     state.m4aCv.notify_all();
   };
 
@@ -2847,20 +2909,45 @@ int main(int argc, char** argv) {
     };
     videoHooks.stopAudio = [&]() { stopPlayback(); };
     videoHooks.getAudioTimeSec = [&]() {
-      uint64_t frames = state.audioClockFrames.load();
+      if (!state.audioPrimed.load()) {
+        return 0.0;
+      }
+      int64_t frames =
+          static_cast<int64_t>(state.audioClockFrames.load());
       uint64_t latencyFrames = 0;
       if (deviceReady &&
           ma_device_get_state(&state.device) != ma_device_state_uninitialized) {
+        uint32_t internalRate = state.device.playback.internalSampleRate;
+        uint64_t internalBuffer = 0;
         uint32_t periodFrames = state.device.playback.internalPeriodSizeInFrames;
         uint32_t periods = state.device.playback.internalPeriods;
         if (periodFrames > 0 && periods > 0) {
-          latencyFrames = static_cast<uint64_t>(periodFrames) *
-                          static_cast<uint64_t>(periods);
+          internalBuffer = static_cast<uint64_t>(periodFrames) *
+                           static_cast<uint64_t>(periods);
+        }
+#ifdef MA_SUPPORT_WASAPI
+        if (state.device.wasapi.actualBufferSizeInFramesPlayback > 0) {
+          internalBuffer = std::max<uint64_t>(
+              internalBuffer,
+              state.device.wasapi.actualBufferSizeInFramesPlayback);
+        }
+#endif
+        if (internalBuffer > 0) {
+          latencyFrames += rescaleFrames(internalBuffer, internalRate,
+                                         sampleRate);
+        }
+        latencyFrames +=
+            static_cast<uint64_t>(state.device.playback.intermediaryBufferLen);
+        uint64_t converterLatency =
+            ma_data_converter_get_output_latency(
+                &state.device.playback.converter);
+        if (converterLatency > 0) {
+          latencyFrames += rescaleFrames(converterLatency, internalRate,
+                                         sampleRate);
         }
       }
-      if (frames > latencyFrames) {
-        frames -= latencyFrames;
-      } else {
+      frames -= static_cast<int64_t>(latencyFrames);
+      if (frames < 0) {
         frames = 0;
       }
       return static_cast<double>(frames) / sampleRate;
@@ -2870,6 +2957,7 @@ int main(int argc, char** argv) {
       if (total == 0) return -1.0;
       return static_cast<double>(total) / sampleRate;
     };
+    videoHooks.isAudioPrimed = [&]() { return state.audioPrimed.load(); };
     videoHooks.isAudioPaused = [&]() { return state.paused.load(); };
     videoHooks.isAudioFinished = [&]() { return state.finished.load(); };
     videoHooks.getAudioPerfStats = [&]() {
@@ -2890,7 +2978,7 @@ int main(int argc, char** argv) {
           state.lastFramesRead.load(std::memory_order_relaxed);
       stats.sampleRate = state.sampleRate;
       stats.channels = state.channels;
-      stats.usingM4a = state.usingM4a.load(std::memory_order_relaxed);
+      stats.usingFfmpeg = state.usingFfmpeg.load(std::memory_order_relaxed);
       if (deviceReady &&
           ma_device_get_state(&state.device) != ma_device_state_uninitialized) {
         stats.periodFrames = state.device.playback.internalPeriodSizeInFrames;
@@ -3272,7 +3360,7 @@ int main(int argc, char** argv) {
     ma_device_uninit(&state.device);
   }
   if (decoderReady) {
-    if (state.usingM4a.load()) {
+    if (state.usingFfmpeg.load()) {
       stopM4aWorker();
     } else {
       ma_decoder_uninit(&state.decoder);

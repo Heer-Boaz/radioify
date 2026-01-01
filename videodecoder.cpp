@@ -72,6 +72,8 @@ struct VideoDecoder::Impl {
   bool atEnd = false;
   bool eof = false;
   int64_t duration100ns = 0;
+  int64_t formatStartUs = 0;
+  int64_t streamStartUs = 0;
   uint32_t yuvMatrix = MFVideoTransferMatrix_BT709;
   bool fullRange = true;
 };
@@ -166,6 +168,13 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   impl->targetH = impl->height;
   impl->fullRange = mapFullRange(ctx->color_range);
   impl->yuvMatrix = mapColorMatrix(ctx->colorspace);
+  impl->formatStartUs =
+      (fmt->start_time != AV_NOPTS_VALUE) ? fmt->start_time : 0;
+  if (fmt->streams[streamIndex]->start_time != AV_NOPTS_VALUE) {
+    impl->streamStartUs =
+        av_rescale_q(fmt->streams[streamIndex]->start_time,
+                     impl->timeBase, AVRational{1, AV_TIME_BASE});
+  }
   if (fmt->duration > 0) {
     impl->duration100ns = fmt->duration * 10;
   }
@@ -218,13 +227,6 @@ void VideoDecoder::flush() {
   impl_->eof = false;
 }
 
-static int64_t ptsTo100ns(int64_t pts, AVRational tb) {
-  if (pts == AV_NOPTS_VALUE) return 0;
-  int64_t num = static_cast<int64_t>(tb.num) * 10000000LL;
-  if (tb.den == 0) return 0;
-  return (pts * num) / tb.den;
-}
-
 bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
                              bool decodePixels) {
   if (!impl_ || impl_->atEnd) return false;
@@ -238,7 +240,14 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     if (bestPts == AV_NOPTS_VALUE) {
       bestPts = src->pts;
     }
-    int64_t ts100ns = ptsTo100ns(bestPts, impl_->timeBase);
+    int64_t ts100ns = 0;
+    if (bestPts != AV_NOPTS_VALUE) {
+      int64_t absUs =
+          av_rescale_q(bestPts, impl_->timeBase, AVRational{1, AV_TIME_BASE});
+      int64_t relUs = absUs - impl_->formatStartUs;
+      if (relUs < 0) relUs = 0;
+      ts100ns = relUs * 10;
+    }
     out.width = impl_->targetW;
     out.height = impl_->targetH;
     out.timestamp100ns = ts100ns;
@@ -346,9 +355,11 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
 bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   if (!impl_ || !impl_->fmt) return false;
   if (impl_->streamIndex < 0) return false;
-  AVRational tb = impl_->timeBase;
-  AVRational srcTb{1, 10000000};
-  int64_t target = av_rescale_q(timestamp100ns, srcTb, tb);
+  int64_t targetUs = timestamp100ns / 10;
+  targetUs += impl_->formatStartUs;
+  if (targetUs < 0) targetUs = 0;
+  int64_t target =
+      av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
   int res = av_seek_frame(impl_->fmt, impl_->streamIndex, target,
                           AVSEEK_FLAG_BACKWARD);
   if (res < 0) return false;

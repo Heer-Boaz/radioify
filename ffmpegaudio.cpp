@@ -29,6 +29,23 @@ int64_t rescaleToFrames(int64_t value, AVRational src, uint32_t sampleRate) {
   AVRational dst{1, static_cast<int>(sampleRate)};
   return av_rescale_q(value, src, dst);
 }
+
+uint64_t rescaleFrames(uint64_t value, uint32_t inRate, uint32_t outRate) {
+  if (value == 0 || inRate == 0 || outRate == 0 || inRate == outRate) {
+    return value;
+  }
+  AVRational src{1, static_cast<int>(inRate)};
+  AVRational dst{1, static_cast<int>(outRate)};
+  return static_cast<uint64_t>(
+      av_rescale_q(static_cast<int64_t>(value), src, dst));
+}
+
+int64_t rescaleUsToFrames(int64_t value, uint32_t sampleRate) {
+  if (value == 0 || sampleRate == 0) return 0;
+  AVRational src{1, AV_TIME_BASE};
+  AVRational dst{1, static_cast<int>(sampleRate)};
+  return av_rescale_q(value, src, dst);
+}
 }  // namespace
 
 struct FfmpegAudioDecoder::Impl {
@@ -41,7 +58,14 @@ struct FfmpegAudioDecoder::Impl {
   AVRational timeBase{0, 1};
   uint32_t channels = 0;
   uint32_t sampleRate = 0;
+  uint32_t inSampleRate = 0;
   uint64_t totalFrames = 0;
+  uint64_t rawTotalFrames = 0;
+  uint64_t initialPaddingFrames = 0;
+  uint64_t trailingPaddingFrames = 0;
+  int64_t formatStartUs = 0;
+  int64_t streamStartUs = 0;
+  int64_t startOffsetFrames = 0;
   bool eof = false;
   bool atEnd = false;
   std::vector<float> cache;
@@ -114,12 +138,21 @@ bool FfmpegAudioDecoder::init(const std::filesystem::path& path,
     return false;
   }
 
+  AVCodecParameters* par = fmt->streams[streamIndex]->codecpar;
+  int64_t formatStartUs =
+      (fmt->start_time != AV_NOPTS_VALUE) ? fmt->start_time : 0;
+  int64_t streamStartUs = 0;
+  if (fmt->streams[streamIndex]->start_time != AV_NOPTS_VALUE) {
+    streamStartUs = av_rescale_q(fmt->streams[streamIndex]->start_time,
+                                 fmt->streams[streamIndex]->time_base,
+                                 AVRational{1, AV_TIME_BASE});
+  }
+
   SwrContext* swr = nullptr;
   AVChannelLayout inLayout{};
   int inChannels = ctx->ch_layout.nb_channels;
-  if (inChannels <= 0 && fmt->streams[streamIndex] &&
-      fmt->streams[streamIndex]->codecpar) {
-    inChannels = fmt->streams[streamIndex]->codecpar->ch_layout.nb_channels;
+  if (inChannels <= 0 && par) {
+    inChannels = par->ch_layout.nb_channels;
   }
   if (inChannels <= 0) {
     inChannels = 1;
@@ -177,15 +210,41 @@ bool FfmpegAudioDecoder::init(const std::filesystem::path& path,
   impl->timeBase = fmt->streams[streamIndex]->time_base;
   impl->channels = channels;
   impl->sampleRate = sampleRate;
+  impl->inSampleRate = ctx->sample_rate > 0
+                           ? static_cast<uint32_t>(ctx->sample_rate)
+                           : sampleRate;
+  impl->formatStartUs = formatStartUs;
+  impl->streamStartUs = streamStartUs;
+  impl->startOffsetFrames =
+      rescaleUsToFrames(streamStartUs - formatStartUs, sampleRate);
+  if (par) {
+    if (par->initial_padding > 0) {
+      impl->initialPaddingFrames = rescaleFrames(
+          static_cast<uint64_t>(par->initial_padding), impl->inSampleRate,
+          sampleRate);
+    }
+    if (par->trailing_padding > 0) {
+      impl->trailingPaddingFrames = rescaleFrames(
+          static_cast<uint64_t>(par->trailing_padding), impl->inSampleRate,
+          sampleRate);
+    }
+  }
   if (fmt->streams[streamIndex]->duration > 0) {
-    impl->totalFrames =
-        static_cast<uint64_t>(rescaleToFrames(
-            fmt->streams[streamIndex]->duration,
-            fmt->streams[streamIndex]->time_base, sampleRate));
+    impl->rawTotalFrames = static_cast<uint64_t>(
+        rescaleToFrames(fmt->streams[streamIndex]->duration,
+                        fmt->streams[streamIndex]->time_base, sampleRate));
   } else if (fmt->duration > 0) {
     AVRational tb{1, AV_TIME_BASE};
-    impl->totalFrames =
+    impl->rawTotalFrames =
         static_cast<uint64_t>(rescaleToFrames(fmt->duration, tb, sampleRate));
+  }
+  if (impl->rawTotalFrames > 0) {
+    uint64_t pad = impl->initialPaddingFrames + impl->trailingPaddingFrames;
+    if (impl->rawTotalFrames > pad) {
+      impl->totalFrames = impl->rawTotalFrames - pad;
+    } else {
+      impl->totalFrames = 0;
+    }
   }
   impl_ = impl;
   return true;
@@ -214,10 +273,31 @@ bool FfmpegAudioDecoder::getTotalFrames(uint64_t* outFrames) const {
   return *outFrames > 0;
 }
 
+bool FfmpegAudioDecoder::getStartOffsetFrames(int64_t* outFrames) const {
+  if (!outFrames) return false;
+  *outFrames = impl_ ? impl_->startOffsetFrames : 0;
+  return true;
+}
+
+bool FfmpegAudioDecoder::getPaddingFrames(uint64_t* outInitial,
+                                          uint64_t* outTrailing) const {
+  if (!outInitial && !outTrailing) return false;
+  if (outInitial) {
+    *outInitial = impl_ ? impl_->initialPaddingFrames : 0;
+  }
+  if (outTrailing) {
+    *outTrailing = impl_ ? impl_->trailingPaddingFrames : 0;
+  }
+  return true;
+}
+
 bool FfmpegAudioDecoder::seekToFrame(uint64_t frame) {
   if (!impl_ || !impl_->fmt || !impl_->codec) return false;
   if (impl_->streamIndex < 0) return false;
 
+  if (impl_->rawTotalFrames > 0 && frame > impl_->rawTotalFrames) {
+    frame = impl_->rawTotalFrames;
+  }
   AVRational src{1, static_cast<int>(impl_->sampleRate)};
   int64_t target = av_rescale_q(static_cast<int64_t>(frame), src,
                                 impl_->timeBase);
