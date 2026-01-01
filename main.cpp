@@ -739,6 +739,17 @@ static bool showAsciiVideo(const std::filesystem::path& file,
 #endif
   };
 
+  auto appendVideoWarning = [&](const std::string& message) {
+#if RADIOIFY_ENABLE_VIDEO_ERROR_LOG
+    std::string line = message.empty() ? "Video warning." : message;
+    std::string payload = "video_warning msg=" + line;
+    std::ofstream f(logPath, std::ios::app);
+    if (f) f << payload << "\n";
+#else
+    (void)message;
+#endif
+  };
+
   auto reportVideoError = [&](const std::string& message,
                               const std::string& detail) -> bool {
     appendVideoError(message, detail);
@@ -886,7 +897,10 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   };
 
   auto computeTargetSize = [&](int width, int height) {
-    const int headerLines = 2;
+    int headerLines = 0;
+    if (!audioOk) {
+      headerLines += 1;
+    }
     const int footerLines = 2;
     int maxHeight = std::max(1, height - headerLines - footerLines);
     int maxOutW = std::max(1, width - 8);
@@ -1374,10 +1388,9 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     if (!audioOk) {
       subtitle = hooks.startAudio ? "Audio unavailable" : "Audio disabled";
     }
-    std::string warning = getScaleWarning();
-    int headerLines = 2;
-    if (!subtitle.empty() && !warning.empty()) {
-      headerLines = 3;
+    int headerLines = 0;
+    if (!subtitle.empty()) {
+      headerLines += 1;
     }
     const int footerLines = 2;
     int artTop = headerLines;
@@ -1498,16 +1511,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     }
 
     screen.clear(baseStyle);
-    std::string title = "Video: " + toUtf8String(file.filename());
-    screen.writeText(0, 0, fitLine(title, width), accentStyle);
     if (!subtitle.empty()) {
-      screen.writeText(0, 1, fitLine(subtitle, width), dimStyle);
-    }
-    if (!warning.empty()) {
-      int warningLine = subtitle.empty() ? 1 : 2;
-      std::string warningLineText = "Scale: " + warning;
-      screen.writeText(0, warningLine, fitLine(warningLineText, width),
-                       dimStyle);
+      screen.writeText(0, 0, fitLine(subtitle, width), dimStyle);
     }
 
     if (enableAscii) {
@@ -1746,7 +1751,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     if (scaleWarningPending.exchange(false)) {
       std::string warning = getScaleWarning();
       if (!warning.empty()) {
-        perfLog.appendf("video_scale_warning msg=%s", warning.c_str());
+        appendVideoWarning(warning);
       }
     }
 

@@ -144,6 +144,9 @@ constexpr int kBgDelta = 6;                  // Lagere threshold voor meer detai
 constexpr int kBgDeltaMin = 1;
 constexpr int kEdgeDeltaScale = 96;          // Meer edge-responsief
 constexpr int kDitherBias = 48;              // Verlaagd voor betere halftones
+constexpr bool kUseAABand = true;
+constexpr int kAAScoreBandMin = 12;
+constexpr int kAAScoreBandMax = 96;          // Soft AA band voor gladdere randen
 constexpr int kLumSmoothAlpha = 40;          // Snellere adaptatie
 constexpr int kLumResetDelta = 28;
 
@@ -740,6 +743,22 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
         }
       }
 
+      int aaBand = 0;
+      int aaCutoffScore = 0;
+      bool useAABand = false;
+      if constexpr (kUseAABand) {
+        if (numValidDots > 0) {
+          int scoreRange =
+              dotRanks[0].score - dotRanks[numValidDots - 1].score;
+          aaBand = std::min(scoreRange, kAAScoreBandMax);
+          useAABand = detailScore >= kMinContrastForBraille &&
+                      aaBand >= kAAScoreBandMin;
+          aaCutoffScore = (targetDots > 0)
+                              ? dotRanks[targetDots - 1].score
+                              : dotRanks[0].score;
+        }
+      }
+
       // Activeer de top N dots, met dither voor de grensgevallen
       for (int rank = 0; rank < numValidDots; ++rank) {
         int i = dotRanks[rank].idx;
@@ -756,6 +775,16 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
           int fractionalCoverage = (numValidDots * targetCoverage) % 255;
           shouldActivate = fractionalCoverage > ditherThresh;
+        }
+
+        if (!shouldActivate && useAABand) {
+          int scoreDelta = aaCutoffScore - dotRanks[rank].score;
+          if (scoreDelta >= 0 && scoreDelta < aaBand) {
+            int coverage = ((aaBand - scoreDelta) * 255 + (aaBand / 2)) / aaBand;
+            int ditherThresh = static_cast<int>(
+                kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
+            shouldActivate = coverage > ditherThresh;
+          }
         }
         
         // Edge boost kan extra dots aanzetten, maar alleen bij significante edges
