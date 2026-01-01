@@ -1278,7 +1278,7 @@ static bool showAsciiVideo(
       double audioNow = hooks.getAudioTimeSec();
       if (!audioSyncInit) {
         if (audioNow > 0.0) {
-          audioSyncOffset = audioNow - lastFrameSec;
+          audioSyncOffset = 0.0;
           audioSyncInit = true;
         } else {
           return lastFrameSec;
@@ -1579,7 +1579,7 @@ static bool showAsciiVideo(
           if (!audioSyncInit && audioOk && hooks.getAudioTimeSec) {
             double audioNow = hooks.getAudioTimeSec();
             if (audioNow > 0.0) {
-              audioSyncOffset = audioNow - frameSec;
+              audioSyncOffset = 0.0;
               audioSyncInit = true;
             }
           }
@@ -1640,7 +1640,7 @@ static bool showAsciiVideo(
                 if (!audioSyncInit && audioOk && hooks.getAudioTimeSec) {
                   double audioNow = hooks.getAudioTimeSec();
                   if (audioNow > 0.0) {
-                    audioSyncOffset = audioNow - frameSec;
+                    audioSyncOffset = 0.0;
                     audioSyncInit = true;
                   }
                 }
@@ -1684,7 +1684,7 @@ static bool showAsciiVideo(
       audioNow = hooks.getAudioTimeSec();
       if (!audioSyncInit && audioNow > 0.0) {
         // Initialize sync when audio has actually started playing
-        audioSyncOffset = audioNow - lastFrameSec;
+        audioSyncOffset = 0.0;
         audioSyncInit = true;
         perfLog.appendf("sync_init audio=%.3f video=%.3f offset=%.3f",
                         audioNow, lastFrameSec, audioSyncOffset);
@@ -1692,12 +1692,14 @@ static bool showAsciiVideo(
       if (audioSyncInit) {
         syncSec = std::max(0.0, audioNow - audioSyncOffset);
       } else {
-        syncSec = lastFrameSec;
+        syncSec = 0.0;
       }
     } else {
       syncSec = std::chrono::duration<double>(now - startTime).count();
     }
     const double leadSlack = 0.005;
+    bool waitingForAudioStart =
+        haveAudioClock && !audioSyncInit && audioNow <= 0.0;
 
     if (pendingResize) {
       bool resumeAfterResize = false;
@@ -1739,7 +1741,7 @@ static bool showAsciiVideo(
         if (!audioSyncInit && audioOk && hooks.getAudioTimeSec) {
           double audioNow = hooks.getAudioTimeSec();
           if (audioNow > 0.0) {
-            audioSyncOffset = audioNow - frameSec;
+            audioSyncOffset = 0.0;
             audioSyncInit = true;
           }
         }
@@ -1760,7 +1762,7 @@ static bool showAsciiVideo(
     int64_t nextTs = 0;
     bool queueEmpty = false;
 
-    if (!videoEnded && !paused) {
+    if (!videoEnded && !paused && !waitingForAudioStart) {
       double wallclockElapsed =
           std::chrono::duration<double>(now - startTime).count();
       double driftForSkip = haveAudioClock
@@ -2845,7 +2847,23 @@ int main(int argc, char** argv) {
     };
     videoHooks.stopAudio = [&]() { stopPlayback(); };
     videoHooks.getAudioTimeSec = [&]() {
-      return static_cast<double>(state.audioClockFrames.load()) / sampleRate;
+      uint64_t frames = state.audioClockFrames.load();
+      uint64_t latencyFrames = 0;
+      if (deviceReady &&
+          ma_device_get_state(&state.device) != ma_device_state_uninitialized) {
+        uint32_t periodFrames = state.device.playback.internalPeriodSizeInFrames;
+        uint32_t periods = state.device.playback.internalPeriods;
+        if (periodFrames > 0 && periods > 0) {
+          latencyFrames = static_cast<uint64_t>(periodFrames) *
+                          static_cast<uint64_t>(periods);
+        }
+      }
+      if (frames > latencyFrames) {
+        frames -= latencyFrames;
+      } else {
+        frames = 0;
+      }
+      return static_cast<double>(frames) / sampleRate;
     };
     videoHooks.getAudioTotalSec = [&]() -> double {
       uint64_t total = state.totalFrames.load();
