@@ -806,6 +806,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   std::deque<QueuedFrame> frameQueue;
   constexpr size_t kMaxQueue = 3;
   constexpr bool kEnableSoftwareFallback = true;
+  const bool allowDecoderScale = enableAscii;
   struct DecodeCommand {
     bool resize = false;
     int targetW = 0;
@@ -896,30 +897,50 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     }
   };
 
-  auto computeTargetSize = [&](int width, int height) {
-    int headerLines = 0;
-    if (!audioOk) {
-      headerLines += 1;
-    }
+  auto computeTargetSizeForSource = [&](int width, int height, int srcW,
+                                        int srcH, bool showSubtitle) {
+    int headerLines = showSubtitle ? 1 : 0;
     const int footerLines = 0;
     int maxHeight = std::max(1, height - headerLines - footerLines);
     int maxOutW = std::max(1, width - 8);
-    int srcW = std::max(1, sourceWidth);
-    int srcH = std::max(1, sourceHeight);
-    int outW = std::max(1, std::min(maxOutW, srcW / 2));
+    int safeSrcW = std::max(1, srcW);
+    int safeSrcH = std::max(1, srcH);
+    int outW = std::max(1, std::min(maxOutW, safeSrcW / 2));
     int outH = static_cast<int>(
-        std::lround(outW * (static_cast<float>(srcH) / srcW) / 2.0f));
-    outH = std::max(1, std::min(outH, srcH / 4));
+        std::lround(outW * (static_cast<float>(safeSrcH) / safeSrcW) / 2.0f));
+    outH = std::max(1, std::min(outH, safeSrcH / 4));
     if (maxHeight > 0) outH = std::min(outH, maxHeight);
     int targetW = std::max(2, outW * 2);
     int targetH = std::max(4, outH * 4);
     if (targetW & 1) ++targetW;
     if (targetH & 1) ++targetH;
-    if (sourceWidth > 0) targetW = std::min(targetW, sourceWidth & ~1);
-    if (sourceHeight > 0) targetH = std::min(targetH, sourceHeight & ~1);
+    if (srcW > 0) targetW = std::min(targetW, srcW & ~1);
+    if (srcH > 0) targetH = std::min(targetH, srcH & ~1);
     targetW = std::max(2, targetW);
     targetH = std::max(4, targetH);
+
+    const int kMaxDecodeWidth = 1024;
+    const int kMaxDecodeHeight = 768;
+    if (targetW > kMaxDecodeWidth || targetH > kMaxDecodeHeight) {
+      double scaleW = static_cast<double>(kMaxDecodeWidth) / targetW;
+      double scaleH = static_cast<double>(kMaxDecodeHeight) / targetH;
+      double scale = std::min(scaleW, scaleH);
+      targetW = static_cast<int>(std::lround(targetW * scale));
+      targetH = static_cast<int>(std::lround(targetH * scale));
+      targetW = std::min(targetW, kMaxDecodeWidth);
+      targetH = std::min(targetH, kMaxDecodeHeight);
+      targetW &= ~1;
+      targetH &= ~1;
+      targetW = std::max(2, targetW);
+      targetH = std::max(4, targetH);
+    }
     return std::pair<int, int>(targetW, targetH);
+  };
+
+  auto computeTargetSize = [&](int width, int height) {
+    bool showSubtitle = !audioOk;
+    return computeTargetSizeForSource(width, height, sourceWidth, sourceHeight,
+                                      showSubtitle);
   };
 
   auto requestTargetSize = [&](int width, int height) -> uint64_t {
@@ -944,6 +965,10 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     fastForwardPending.store(true, std::memory_order_relaxed);
     queueCv.notify_all();
   };
+
+  screen.updateSize();
+  const int initScreenWidth = std::max(20, screen.width());
+  const int initScreenHeight = std::max(10, screen.height());
 
   auto stopDecodeThread = [&]() {
     decodeRunning.store(false);
@@ -983,16 +1008,18 @@ static bool showAsciiVideo(const std::filesystem::path& file,
       VideoDecoder decoder;
       const bool allowRgbOutput = !enableAscii;
       bool preferHardware = true;
-      bool softwareFallbackAttempted = false;
-      int64_t lastVideoTs = 0;
-      bool haveDecodedFrame = false;
-      std::string error;
-      if (!decoder.init(file, &error, preferHardware, allowRgbOutput)) {
-        {
-          std::lock_guard<std::mutex> lock(initMutex);
-          initDone = true;
-          initOk = false;
-          initError = error;
+        bool softwareFallbackAttempted = false;
+        int64_t lastVideoTs = 0;
+        bool haveDecodedFrame = false;
+        int currentTargetW = 0;
+        int currentTargetH = 0;
+        std::string error;
+        if (!decoder.init(file, &error, preferHardware, allowRgbOutput)) {
+          {
+            std::lock_guard<std::mutex> lock(initMutex);
+            initDone = true;
+            initOk = false;
+            initError = error;
         }
         initCv.notify_all();
         decodeEnded.store(true);
@@ -1003,13 +1030,29 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         }
         if (comInit) {
           CoUninitialize();
+          }
+          return;
         }
-        return;
-      }
-      {
-        std::lock_guard<std::mutex> lock(initMutex);
-        initDone = true;
-        initOk = true;
+        if (allowDecoderScale) {
+          auto [targetW, targetH] = computeTargetSizeForSource(
+              initScreenWidth, initScreenHeight, decoder.width(),
+              decoder.height(), false);
+          std::string sizeError;
+          if (!decoder.setTargetSize(targetW, targetH, &sizeError)) {
+            if (sizeError.empty()) {
+              sizeError = "Failed to apply target video size.";
+            }
+            setScaleWarning(sizeError);
+          } else {
+            setScaleWarning("");
+            currentTargetW = targetW;
+            currentTargetH = targetH;
+          }
+        }
+        {
+          std::lock_guard<std::mutex> lock(initMutex);
+          initDone = true;
+          initOk = true;
         initError.clear();
         sourceWidth = decoder.width();
         sourceHeight = decoder.height();
@@ -1044,9 +1087,9 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           setDecodeError(detail);
           return FallbackResult::Failed;
         }
-        if (requestedTargetW > 0 && requestedTargetH > 0) {
+        if (currentTargetW > 0 && currentTargetH > 0) {
           std::string sizeError;
-          if (!decoder.setTargetSize(requestedTargetW, requestedTargetH,
+          if (!decoder.setTargetSize(currentTargetW, currentTargetH,
                                      &sizeError)) {
             if (sizeError.empty()) {
               sizeError = "Failed to apply target video size.";
@@ -1086,18 +1129,20 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         }
         if (hasCommand) {
           decoder.flush();
-          if (command.resize) {
-            std::string sizeError;
-            if (!decoder.setTargetSize(command.targetW, command.targetH,
-                                       &sizeError)) {
-              if (sizeError.empty()) {
-                sizeError = "Failed to apply target video size.";
+            if (command.resize) {
+              std::string sizeError;
+              if (!decoder.setTargetSize(command.targetW, command.targetH,
+                                         &sizeError)) {
+                if (sizeError.empty()) {
+                  sizeError = "Failed to apply target video size.";
+                }
+                setScaleWarning(sizeError);
+              } else {
+                setScaleWarning("");
+                currentTargetW = command.targetW;
+                currentTargetH = command.targetH;
               }
-              setScaleWarning(sizeError);
-            } else {
-              setScaleWarning("");
             }
-          }
           if (command.seek) {
             if (!decoder.seekToTimestamp100ns(command.seekTs)) {
               setDecodeError("Failed to seek video.");
@@ -1308,14 +1353,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   // to prime before presenting video.
 
   VideoReadInfo firstInfo{};
-  const bool allowDecoderScale = enableAscii;
-  screen.updateSize();
-  int initWidth = std::max(20, screen.width());
-  int initHeight = std::max(10, screen.height());
-  uint64_t pendingScaleEpoch = 0;
-  if (allowDecoderScale) {
-    pendingScaleEpoch = requestTargetSize(initWidth, initHeight);
-  }
+    uint64_t pendingScaleEpoch = 0;
 
   QueuedFrame firstQueued{};
   if (!waitForFrame(firstQueued, pendingScaleEpoch)) {

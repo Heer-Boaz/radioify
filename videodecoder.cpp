@@ -12,6 +12,7 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/codec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/frame.h>
@@ -22,6 +23,7 @@ extern "C" {
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -53,6 +55,28 @@ uint32_t mapColorMatrix(AVColorSpace space) {
 
 bool mapFullRange(AVColorRange range) {
   return range == AVCOL_RANGE_JPEG;
+}
+
+constexpr int kMaxDecodeWidth = 1024;
+constexpr int kMaxDecodeHeight = 768;
+
+void clampTargetSize(int& width, int& height) {
+  width = std::max(2, width);
+  height = std::max(4, height);
+  if (width & 1) ++width;
+  if (height & 1) ++height;
+  if (width <= kMaxDecodeWidth && height <= kMaxDecodeHeight) return;
+  double scaleW = static_cast<double>(kMaxDecodeWidth) / width;
+  double scaleH = static_cast<double>(kMaxDecodeHeight) / height;
+  double scale = std::min(scaleW, scaleH);
+  width = static_cast<int>(std::lround(width * scale));
+  height = static_cast<int>(std::lround(height * scale));
+  width = std::min(width, kMaxDecodeWidth);
+  height = std::min(height, kMaxDecodeHeight);
+  width &= ~1;
+  height &= ~1;
+  width = std::max(2, width);
+  height = std::max(4, height);
 }
 }  // namespace
 
@@ -133,7 +157,10 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
     return false;
   }
 
-  ctx->thread_count = std::max(1, ctx->thread_count);
+  // Let FFmpeg choose an appropriate thread count unless explicitly set.
+  if (ctx->thread_count < 0) {
+    ctx->thread_count = 0;
+  }
   if (avcodec_open2(ctx, codec, nullptr) < 0) {
     avcodec_free_context(&ctx);
     avformat_close_input(&fmt);
@@ -166,6 +193,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   impl->height = ctx->height;
   impl->targetW = impl->width;
   impl->targetH = impl->height;
+  clampTargetSize(impl->targetW, impl->targetH);
   impl->fullRange = mapFullRange(ctx->color_range);
   impl->yuvMatrix = mapColorMatrix(ctx->colorspace);
   impl->formatStartUs =
@@ -211,6 +239,7 @@ bool VideoDecoder::setTargetSize(int targetWidth, int targetHeight,
     setError(error, "Invalid target size for video decoding.");
     return false;
   }
+  clampTargetSize(targetWidth, targetHeight);
   impl_->targetW = targetWidth;
   impl_->targetH = targetHeight;
   if (impl_->sws) {
