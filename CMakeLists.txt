@@ -9,6 +9,7 @@ add_executable(radioify
   asciiart.cpp
   consoleinput.cpp
   consolescreen.cpp
+  ffmpegaudio.cpp
   m4adecoder.cpp
   videodecoder.cpp
   radio.cpp
@@ -27,7 +28,7 @@ find_package(FFMPEG QUIET)
 if (NOT FFMPEG_FOUND)
   find_package(PkgConfig QUIET)
   if (PkgConfig_FOUND)
-    pkg_check_modules(FFMPEG QUIET libavformat libavcodec libavutil libswscale)
+    pkg_check_modules(FFMPEG QUIET libavformat libavcodec libavutil libswscale libswresample)
   endif()
 endif()
 
@@ -53,8 +54,12 @@ if (NOT FFMPEG_FOUND)
     HINTS ENV FFMPEG_DIR ENV FFMPEG_ROOT
     PATH_SUFFIXES lib
   )
+  find_library(SWRESAMPLE_LIBRARY NAMES swresample
+    HINTS ENV FFMPEG_DIR ENV FFMPEG_ROOT
+    PATH_SUFFIXES lib
+  )
   if (FFMPEG_INCLUDE_DIR AND AVFORMAT_LIBRARY AND AVCODEC_LIBRARY AND
-      AVUTIL_LIBRARY AND SWSCALE_LIBRARY)
+      AVUTIL_LIBRARY AND SWSCALE_LIBRARY AND SWRESAMPLE_LIBRARY)
     set(FFMPEG_FOUND TRUE)
     set(FFMPEG_INCLUDE_DIRS "${FFMPEG_INCLUDE_DIR}")
     set(FFMPEG_LIBRARIES
@@ -62,6 +67,7 @@ if (NOT FFMPEG_FOUND)
       "${AVCODEC_LIBRARY}"
       "${AVUTIL_LIBRARY}"
       "${SWSCALE_LIBRARY}"
+      "${SWRESAMPLE_LIBRARY}"
     )
   endif()
 endif()
