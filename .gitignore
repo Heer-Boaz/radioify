@@ -21,6 +21,7 @@ build/
 build-*/
 cmake-build-*/
 cmake-build*/
+vcpkg_installed*/
 
 # CMake files
 CMakeFiles/

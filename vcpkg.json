@@ -1,0 +1,8 @@
+{
+  "name": "radioify",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "ffmpeg"
+  ],
+  "builtin-baseline": "14bb451131ccf6be50a63a8d9dfe7980e46b5958"
+}
