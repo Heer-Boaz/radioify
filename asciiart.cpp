@@ -34,22 +34,22 @@ constexpr uint32_t kBrailleBase = 0x2800;
 // Classic ASCII art approach: characters sorted by visual density
 // This is cached as a simple lookup table indexed by density level (0-15)
 constexpr std::array<wchar_t, 16> kDensityRamp = {
-  L' ',   // 0: empty
-  L'.',   // 1: very light
-  L':',   // 2
-  L'-',   // 3
-  L'=',   // 4
-  L'+',   // 5
-  L'*',   // 6
-  L'#',   // 7
-  L'%',   // 8
-  L'@',   // 9
-  L'@',   // 10
+  L' ',   // 0 (lightest)
+  L'.',   // 1
+  L',',   // 2
+  L':',   // 3
+  L';',   // 4
+  L'-',   // 5
+  L'=',   // 6
+  L'+',   // 7
+  L'*',   // 8
+  L'#',   // 9
+  L'%',   // 10
   L'@',   // 11
-  L'@',   // 12
-  L'@',   // 13
-  L'@',   // 14
-  L'@',   // 15: full
+  L'░',   // 12
+  L'▓',   // 13
+  L'▒',   // 14
+  L'█'    // 15 (darkest)
 };
 
 // Pre-computed: for each dot count (0-8), what density character to use

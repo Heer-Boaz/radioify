@@ -50,6 +50,38 @@ function Resolve-VSDevCmd {
   return $null
 }
 
+function Copy-FfmpegRuntime {
+  param(
+    [string]$TripletDir,
+    [string]$Config,
+    [string]$DistDir
+  )
+
+  if (-not $TripletDir) { return }
+
+  $binDir = Join-Path $TripletDir "bin"
+  if ($Config -ieq "Debug") {
+    $debugBin = Join-Path $TripletDir "debug\\bin"
+    if (Test-Path $debugBin) {
+      $binDir = $debugBin
+    }
+  }
+
+  if (-not (Test-Path $binDir)) {
+    Write-Warning "FFmpeg runtime bin directory not found: $binDir"
+    return
+  }
+
+  if (-not (Test-Path $DistDir)) {
+    New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+  }
+
+  $dlls = Get-ChildItem -Path $binDir -Filter *.dll -File -ErrorAction SilentlyContinue
+  foreach ($dll in $dlls) {
+    Copy-Item -Force -Path $dll.FullName -Destination $DistDir
+  }
+}
+
 $cmake = Resolve-CMake
 if (-not $cmake) {
   Write-Error "CMake not found. Install 'C++ CMake tools for Windows' or add cmake.exe to PATH."
@@ -131,10 +163,13 @@ if ($vcpkgRoot) {
   $tripletCandidates = $tripletCandidates | Select-Object -Unique
 
   $foundFfmpeg = $false
+  $ffmpegTripletDir = $null
   foreach ($triplet in $tripletCandidates) {
-    $ffmpegHeader = Join-Path $installedRoot "$triplet\include\libavformat\avformat.h"
+    $candidateDir = Join-Path $installedRoot $triplet
+    $ffmpegHeader = Join-Path $candidateDir "include\libavformat\avformat.h"
     if (Test-Path $ffmpegHeader) {
       $foundFfmpeg = $true
+      $ffmpegTripletDir = $candidateDir
       break
     }
   }
@@ -145,6 +180,7 @@ if ($vcpkgRoot) {
       $ffmpegHeader = Join-Path $dir.FullName "include\libavformat\avformat.h"
       if (Test-Path $ffmpegHeader) {
         $foundFfmpeg = $true
+        $ffmpegTripletDir = $dir.FullName
         break
       }
     }
@@ -163,7 +199,11 @@ $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
 if ($cl) {
   & $cmake @cmakeArgs
   & $cmake @buildArgs
-  exit $LASTEXITCODE
+  $buildExit = $LASTEXITCODE
+  if ($buildExit -eq 0) {
+    Copy-FfmpegRuntime -TripletDir $ffmpegTripletDir -Config $Config -DistDir (Join-Path $root "dist")
+  }
+  exit $buildExit
 }
 
 $vsDevCmd = Resolve-VSDevCmd
@@ -196,3 +236,5 @@ if ($LASTEXITCODE -ne 0) {
   Write-Host "Build failed."
   exit $LASTEXITCODE
 }
+
+Copy-FfmpegRuntime -TripletDir $ffmpegTripletDir -Config $Config -DistDir (Join-Path $root "dist")
