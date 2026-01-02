@@ -52,6 +52,7 @@ class ConsoleScreen {
   void writeRun(int x, int y, int len, wchar_t ch, const Style& style);
   void writeChar(int x, int y, wchar_t ch, const Style& style);
   void setFastOutput(bool enabled);
+  void setAlwaysFullRedraw(bool enabled);
   bool fastOutput() const;
   void draw();
 
@@ -73,6 +74,7 @@ class ConsoleScreen {
   int width_ = 80;
   int height_ = 25;
   bool fastOutput_ = false;
+  bool alwaysFullRedraw_ = false;
   bool hasPrev_ = false;
   bool altScreen_ = false;
   bool useUtf8Output_ = true;

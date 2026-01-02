@@ -618,6 +618,18 @@ static bool showAsciiVideo(const std::filesystem::path& file,
                            const Style& progressFrameStyle,
                            const Color& progressStart, const Color& progressEnd,
                            bool enableAscii, const VideoPlaybackHooks& hooks) {
+  struct FullRedrawScope {
+    ConsoleScreen& screen;
+    bool active = false;
+    FullRedrawScope(ConsoleScreen& target, bool enable) : screen(target) {
+      active = enable;
+      if (active) screen.setAlwaysFullRedraw(true);
+    }
+    ~FullRedrawScope() {
+      if (active) screen.setAlwaysFullRedraw(false);
+    }
+  } fullRedrawScope(screen, enableAscii);
+
   auto showError = [&](const std::string& message,
                        const std::string& detail) -> bool {
     InputEvent ev{};

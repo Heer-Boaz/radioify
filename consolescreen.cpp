@@ -350,6 +350,7 @@ bool ConsoleScreen::init() {
   if (out_ == INVALID_HANDLE_VALUE) return false;
   if (!GetConsoleMode(out_, &originalMode_)) return false;
   originalOutputCp_ = GetConsoleOutputCP();
+  useUtf8Output_ = false;
   DWORD mode = originalMode_;
   mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT;
   SetConsoleMode(out_, mode);
@@ -483,6 +484,12 @@ void ConsoleScreen::setFastOutput(bool enabled) {
   outputErrorReported_ = false;
 }
 
+void ConsoleScreen::setAlwaysFullRedraw(bool enabled) {
+  if (alwaysFullRedraw_ == enabled) return;
+  alwaysFullRedraw_ = enabled;
+  hasPrev_ = false;
+}
+
 bool ConsoleScreen::fastOutput() const { return fastOutput_; }
 
 bool ConsoleScreen::writeOutput(const std::wstring& text) {
@@ -589,7 +596,7 @@ void ConsoleScreen::draw() {
     prevBuffer_.assign(needed, {});
     hasPrev_ = false;
   }
-  bool fullRedraw = !hasPrev_;
+  bool fullRedraw = !hasPrev_ || alwaysFullRedraw_;
   std::wstring& out = drawBuffer_;
   out.clear();
   out.reserve(static_cast<size_t>(width_ * height_ * 2 + height_ * 32));
