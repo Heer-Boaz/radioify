@@ -1493,6 +1493,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   double nextPresentSec = 0.0;
   bool presentInit = false;
   bool presentUseWall = false;
+  bool resetPresentClock = false;
   int64_t firstTs = 0;
   bool audioGateReleased = false;
   double frameSec =
@@ -1858,6 +1859,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           videoEnded = false;
           redraw = true;
           forceRefreshArt = true;
+          resetPresentClock = true;
           if (!audioOk) {
             startTime =
                 std::chrono::steady_clock::now() -
@@ -1913,6 +1915,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
                 lastFrameSec = frameSec;
                 videoEnded = false;
                 forceRefreshArt = true;
+                resetPresentClock = true;
                 if (!audioOk) {
                   startTime = std::chrono::steady_clock::now() -
                               std::chrono::duration_cast<
@@ -1962,10 +1965,11 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         haveAudioClock && !audioPrimed && audioNow <= 0.0;
     bool useWallClock = paused || waitingForAudioStart;
     double presentClockSec = useWallClock ? wallclockElapsed : syncSec;
-    if (!presentInit || useWallClock != presentUseWall) {
+    if (!presentInit || useWallClock != presentUseWall || resetPresentClock) {
       nextPresentSec = presentClockSec;
       presentInit = true;
       presentUseWall = useWallClock;
+      resetPresentClock = false;
     }
     bool presentDue = (presentClockSec + leadSlack) >= nextPresentSec;
 
