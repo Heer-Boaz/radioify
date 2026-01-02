@@ -35,6 +35,7 @@ extern "C" {
 }
 
 #include "asciiart.h"
+#include "asciiart_gpu.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "ffmpegaudio.h"
@@ -49,10 +50,10 @@ extern "C" {
 #include "miniaudio.h"
 
 #ifndef RADIOIFY_ENABLE_TIMING_LOG
-#define RADIOIFY_ENABLE_TIMING_LOG 0
+#define RADIOIFY_ENABLE_TIMING_LOG 1
 #endif
 #ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
-#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 0
+#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 1
 #endif
 
 struct Options {
@@ -786,6 +787,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   bool videoEnded = false;
   bool redraw = true;
   AsciiArt art;
+  GpuAsciiRenderer gpuRenderer;
+  bool gpuAvailable = true;
   VideoFrame* frame = nullptr;
   size_t currentFrameIndex = 0;
   bool haveFrame = false;
@@ -1042,7 +1045,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
       HRESULT roHr = RoInitialize(RO_INIT_MULTITHREADED);
       bool roInit = SUCCEEDED(roHr);
       VideoDecoder decoder;
-      const bool allowRgbOutput = !enableAscii;
+      const bool allowRgbOutput = true;
       bool preferHardware = true;
         bool softwareFallbackAttempted = false;
         int64_t lastVideoTs = 0;
@@ -1657,9 +1660,34 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               renderFailDetail = "Frame pixel data is missing.";
               return;
             }
-            artOk = renderAsciiArtFromRgba(frame->rgba.data(), frame->width,
-                                           frame->height, width, maxHeight, art,
-                                           true);
+
+            bool renderedWithGpu = false;
+            if (gpuAvailable) {
+              art.width = width;
+              art.height = maxHeight;
+              std::string gpuErr;
+              if (gpuRenderer.Render(frame->rgba.data(), frame->width,
+                                     frame->height, art, &gpuErr)) {
+                renderedWithGpu = true;
+                artOk = true;
+                static bool gpuLogged = false;
+                if (!gpuLogged) {
+                  appendTiming("video_renderer gpu_active=1");
+                  gpuLogged = true;
+                }
+              } else {
+                // If GPU fails, disable it for this session and fall back
+                gpuAvailable = false;
+                appendVideoWarning("GPU renderer failed, falling back to CPU: " +
+                                   gpuErr);
+              }
+            }
+
+            if (!renderedWithGpu) {
+              artOk = renderAsciiArtFromRgba(frame->rgba.data(), frame->width,
+                                             frame->height, width, maxHeight,
+                                             art, true);
+            }
           }
         } catch (const std::bad_alloc&) {
           renderFailed = true;
