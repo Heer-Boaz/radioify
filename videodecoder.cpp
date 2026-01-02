@@ -21,6 +21,9 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_d3d11va.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -78,11 +81,21 @@ void clampTargetSize(int& width, int& height) {
   width = std::max(2, width);
   height = std::max(4, height);
 }
+
+static enum AVPixelFormat get_hw_format(AVCodecContext* ctx,
+                                        const enum AVPixelFormat* pix_fmts) {
+  const enum AVPixelFormat* p;
+  for (p = pix_fmts; *p != -1; p++) {
+    if (*p == AV_PIX_FMT_D3D11) return *p;
+  }
+  return avcodec_default_get_format(ctx, pix_fmts);
+}
 }  // namespace
 
 struct VideoDecoder::Impl {
   AVFormatContext* fmt = nullptr;
   AVCodecContext* codec = nullptr;
+  AVBufferRef* hw_device_ctx = nullptr;
   AVFrame* frame = nullptr;
   AVFrame* scratch = nullptr;
   AVPacket* packet = nullptr;
@@ -170,9 +183,16 @@ struct VideoDecoder::Impl {
                     static_cast<size_t>(dstW));
       }
     } else {
+      // Use point sampling for high-res content (like 4K) to avoid excessive CPU usage.
+      // Bilinear scaling requires reading all source pixels, which is too slow for 4K on CPU.
+      int flags = SWS_FAST_BILINEAR;
+      if (static_cast<int64_t>(src->width) * src->height > 2560 * 1440) {
+        flags = SWS_POINT;
+      }
+
       sws = sws_getCachedContext(
           sws, src->width, src->height, srcFmt, dstW, dstH, AV_PIX_FMT_NV12,
-          SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+          flags, nullptr, nullptr, nullptr);
       if (!sws) {
         atEnd = true;
         return false;
@@ -192,7 +212,7 @@ struct VideoDecoder::Impl {
 VideoDecoder::~VideoDecoder() { uninit(); }
 
 bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
-                        bool, bool) {
+                        bool preferHardware, bool allowRgbOutput) {
   uninit();
 
   AVFormatContext* fmt = nullptr;
@@ -248,7 +268,18 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   if (ctx->thread_count < 0) {
     ctx->thread_count = 0;
   }
+
+  AVBufferRef* hw_device_ctx = nullptr;
+  if (preferHardware) {
+    if (av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_D3D11VA,
+                               nullptr, nullptr, 0) >= 0) {
+      ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+      ctx->get_format = get_hw_format;
+    }
+  }
+
   if (avcodec_open2(ctx, codec, nullptr) < 0) {
+    if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
     avcodec_free_context(&ctx);
     avformat_close_input(&fmt);
     setError(error, "Failed to open video decoder.");
@@ -259,6 +290,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   AVFrame* scratch = av_frame_alloc();
   AVPacket* packet = av_packet_alloc();
   if (!frame || !scratch || !packet) {
+    if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
     av_frame_free(&frame);
     av_frame_free(&scratch);
     av_packet_free(&packet);
@@ -271,6 +303,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   Impl* impl = new Impl();
   impl->fmt = fmt;
   impl->codec = ctx;
+  impl->hw_device_ctx = hw_device_ctx;
   impl->frame = frame;
   impl->scratch = scratch;
   impl->packet = packet;
@@ -302,6 +335,9 @@ void VideoDecoder::uninit() {
   if (impl_->sws) {
     sws_freeContext(impl_->sws);
     impl_->sws = nullptr;
+  }
+  if (impl_->hw_device_ctx) {
+    av_buffer_unref(&impl_->hw_device_ctx);
   }
   av_packet_free(&impl_->packet);
   av_frame_free(&impl_->frame);
@@ -354,7 +390,18 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
   while (true) {
     int recv = avcodec_receive_frame(impl_->codec, impl_->frame);
     if (recv == 0) {
-      return impl_->emitFrame(out, info, decodePixels, impl_->frame);
+      AVFrame* src = impl_->frame;
+      if (src->format == AV_PIX_FMT_D3D11) {
+        av_frame_unref(impl_->scratch);
+        if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
+          impl_->atEnd = true;
+          return false;
+        }
+        src = impl_->scratch;
+        src->pts = impl_->frame->pts;
+        src->best_effort_timestamp = impl_->frame->best_effort_timestamp;
+      }
+      return impl_->emitFrame(out, info, decodePixels, src);
     }
     if (recv == AVERROR_EOF) {
       impl_->atEnd = true;
