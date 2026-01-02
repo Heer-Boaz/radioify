@@ -1151,6 +1151,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
       };
 
       uint64_t currentEpoch = 0;
+      int64_t seekingTargetTs = -1;
       while (decodeRunning.load()) {
         DecodeCommand command;
         bool hasCommand = false;
@@ -1185,6 +1186,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               decodeEnded.store(true);
               break;
             }
+            seekingTargetTs = command.seekTs;
           }
           currentEpoch = command.epoch;
           clearQueue();
@@ -1358,7 +1360,29 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         VideoFrame& decodedFrame = framePool[poolIndex];
         VideoReadInfo info{};
         auto decodeStart = std::chrono::steady_clock::now();
-        bool ok = decoder.readFrame(decodedFrame, &info, enableAscii);
+
+        bool skipping = (seekingTargetTs >= 0);
+        bool decodePixels = enableAscii && !skipping;
+
+        bool ok = decoder.readFrame(decodedFrame, &info, decodePixels);
+
+        if (ok && skipping) {
+          if (info.timestamp100ns < seekingTargetTs) {
+            lastVideoTs = info.timestamp100ns;
+            {
+              std::lock_guard<std::mutex> lock(queueMutex);
+              freeFrames.push_back(poolIndex);
+            }
+            continue;
+          }
+          seekingTargetTs = -1;
+          if (enableAscii) {
+            if (!decoder.redecodeLastFrame(decodedFrame)) {
+              ok = false;
+            }
+          }
+        }
+
         auto decodeEnd = std::chrono::steady_clock::now();
         if (!ok) {
           auto fallback = trySoftwareFallback(info);

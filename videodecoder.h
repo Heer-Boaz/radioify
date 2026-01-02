@@ -46,6 +46,7 @@ class VideoDecoder {
   void uninit();
   bool readFrame(VideoFrame& out, VideoReadInfo* info = nullptr,
                  bool decodePixels = true);
+  bool redecodeLastFrame(VideoFrame& out);
   bool setTargetSize(int targetWidth, int targetHeight,
                      std::string* error = nullptr);
   void flush();

@@ -100,6 +100,93 @@ struct VideoDecoder::Impl {
   int64_t streamStartUs = 0;
   uint32_t yuvMatrix = MFVideoTransferMatrix_BT709;
   bool fullRange = true;
+
+  bool emitFrame(VideoFrame& out, VideoReadInfo* info, bool decodePixels,
+                 AVFrame* src) {
+    int64_t bestPts = src->best_effort_timestamp;
+    if (bestPts == AV_NOPTS_VALUE) {
+      bestPts = src->pts;
+    }
+    int64_t ts100ns = 0;
+    if (bestPts != AV_NOPTS_VALUE) {
+      int64_t absUs =
+          av_rescale_q(bestPts, timeBase, AVRational{1, AV_TIME_BASE});
+      int64_t relUs = absUs - formatStartUs;
+      if (relUs < 0) relUs = 0;
+      ts100ns = relUs * 10;
+    }
+    out.width = targetW;
+    out.height = targetH;
+    out.timestamp100ns = ts100ns;
+    out.fullRange = fullRange;
+    out.yuvMatrix = yuvMatrix;
+
+    if (!decodePixels) {
+      out.format = VideoPixelFormat::Unknown;
+      out.stride = 0;
+      out.planeHeight = 0;
+      out.rgba.clear();
+      out.yuv.clear();
+      if (info) {
+        info->timestamp100ns = ts100ns;
+      }
+      return true;
+    }
+
+    int dstW = targetW;
+    int dstH = targetH;
+    int stride = std::max(2, dstW);
+    if (stride & 1) ++stride;
+    int planeHeight = dstH;
+    size_t required = static_cast<size_t>(stride) *
+                      static_cast<size_t>(planeHeight) * 3u / 2u;
+    try {
+      out.yuv.resize(required);
+    } catch (const std::bad_alloc&) {
+      atEnd = true;
+      return false;
+    }
+    out.rgba.clear();
+    out.format = VideoPixelFormat::NV12;
+    out.stride = stride;
+    out.planeHeight = planeHeight;
+
+    uint8_t* yPlane = out.yuv.data();
+    uint8_t* uvPlane = yPlane + static_cast<size_t>(stride) *
+                                    static_cast<size_t>(planeHeight);
+    uint8_t* dstData[4] = {yPlane, uvPlane, nullptr, nullptr};
+    int dstLinesize[4] = {stride, stride, 0, 0};
+
+    AVPixelFormat srcFmt = static_cast<AVPixelFormat>(src->format);
+    if (srcFmt == AV_PIX_FMT_NV12 && src->width == dstW &&
+        src->height == dstH) {
+      for (int y = 0; y < dstH; ++y) {
+        std::memcpy(yPlane + y * stride, src->data[0] + y * src->linesize[0],
+                    static_cast<size_t>(dstW));
+      }
+      int uvH = dstH / 2;
+      for (int y = 0; y < uvH; ++y) {
+        std::memcpy(uvPlane + y * stride, src->data[1] + y * src->linesize[1],
+                    static_cast<size_t>(dstW));
+      }
+    } else {
+      sws = sws_getCachedContext(
+          sws, src->width, src->height, srcFmt, dstW, dstH, AV_PIX_FMT_NV12,
+          SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+      if (!sws) {
+        atEnd = true;
+        return false;
+      }
+      sws_scale(sws, src->data, src->linesize, 0, src->height, dstData,
+                dstLinesize);
+    }
+
+    if (info) {
+      info->timestamp100ns = ts100ns;
+      info->duration100ns = 0;
+    }
+    return true;
+  }
 };
 
 VideoDecoder::~VideoDecoder() { uninit(); }
@@ -264,96 +351,10 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     *info = VideoReadInfo{};
   }
 
-  auto emitFrame = [&](AVFrame* src) -> bool {
-    int64_t bestPts = src->best_effort_timestamp;
-    if (bestPts == AV_NOPTS_VALUE) {
-      bestPts = src->pts;
-    }
-    int64_t ts100ns = 0;
-    if (bestPts != AV_NOPTS_VALUE) {
-      int64_t absUs =
-          av_rescale_q(bestPts, impl_->timeBase, AVRational{1, AV_TIME_BASE});
-      int64_t relUs = absUs - impl_->formatStartUs;
-      if (relUs < 0) relUs = 0;
-      ts100ns = relUs * 10;
-    }
-    out.width = impl_->targetW;
-    out.height = impl_->targetH;
-    out.timestamp100ns = ts100ns;
-    out.fullRange = impl_->fullRange;
-    out.yuvMatrix = impl_->yuvMatrix;
-
-    if (!decodePixels) {
-      out.format = VideoPixelFormat::Unknown;
-      out.stride = 0;
-      out.planeHeight = 0;
-      out.rgba.clear();
-      out.yuv.clear();
-      if (info) {
-        info->timestamp100ns = ts100ns;
-      }
-      return true;
-    }
-
-    int dstW = impl_->targetW;
-    int dstH = impl_->targetH;
-    int stride = std::max(2, dstW);
-    if (stride & 1) ++stride;
-    int planeHeight = dstH;
-    size_t required = static_cast<size_t>(stride) *
-                      static_cast<size_t>(planeHeight) * 3u / 2u;
-    try {
-      out.yuv.resize(required);
-    } catch (const std::bad_alloc&) {
-      impl_->atEnd = true;
-      return false;
-    }
-    out.rgba.clear();
-    out.format = VideoPixelFormat::NV12;
-    out.stride = stride;
-    out.planeHeight = planeHeight;
-
-    uint8_t* yPlane = out.yuv.data();
-    uint8_t* uvPlane = yPlane + static_cast<size_t>(stride) *
-                                   static_cast<size_t>(planeHeight);
-    uint8_t* dstData[4] = {yPlane, uvPlane, nullptr, nullptr};
-    int dstLinesize[4] = {stride, stride, 0, 0};
-
-    AVPixelFormat srcFmt = static_cast<AVPixelFormat>(src->format);
-    if (srcFmt == AV_PIX_FMT_NV12 && src->width == dstW &&
-        src->height == dstH) {
-      for (int y = 0; y < dstH; ++y) {
-        std::memcpy(yPlane + y * stride, src->data[0] + y * src->linesize[0],
-                    static_cast<size_t>(dstW));
-      }
-      int uvH = dstH / 2;
-      for (int y = 0; y < uvH; ++y) {
-        std::memcpy(uvPlane + y * stride, src->data[1] + y * src->linesize[1],
-                    static_cast<size_t>(dstW));
-      }
-    } else {
-      impl_->sws = sws_getCachedContext(
-          impl_->sws, src->width, src->height, srcFmt, dstW, dstH,
-          AV_PIX_FMT_NV12, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-      if (!impl_->sws) {
-        impl_->atEnd = true;
-        return false;
-      }
-      sws_scale(impl_->sws, src->data, src->linesize, 0, src->height,
-                dstData, dstLinesize);
-    }
-
-    if (info) {
-      info->timestamp100ns = ts100ns;
-      info->duration100ns = 0;
-    }
-    return true;
-  };
-
   while (true) {
     int recv = avcodec_receive_frame(impl_->codec, impl_->frame);
     if (recv == 0) {
-      return emitFrame(impl_->frame);
+      return impl_->emitFrame(out, info, decodePixels, impl_->frame);
     }
     if (recv == AVERROR_EOF) {
       impl_->atEnd = true;
@@ -379,6 +380,11 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       av_packet_unref(impl_->packet);
     }
   }
+}
+
+bool VideoDecoder::redecodeLastFrame(VideoFrame& out) {
+  if (!impl_ || !impl_->frame) return false;
+  return impl_->emitFrame(out, nullptr, true, impl_->frame);
 }
 
 bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
