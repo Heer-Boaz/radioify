@@ -50,10 +50,10 @@ extern "C" {
 #include "miniaudio.h"
 
 #ifndef RADIOIFY_ENABLE_TIMING_LOG
-#define RADIOIFY_ENABLE_TIMING_LOG 0
+#define RADIOIFY_ENABLE_TIMING_LOG 1
 #endif
 #ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
-#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 0
+#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 1
 #endif
 
 struct Options {
@@ -1712,7 +1712,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
 
               if (gpuRenderer.RenderNV12(frame->yuv.data(), frame->width,
                                          frame->height, frame->stride,
-                                         frame->planeHeight, bgLum, lumRange, frame->fullRange, art, &gpuErr)) {
+                                         frame->planeHeight, bgLum, lumRange, frame->fullRange, 
+                                         frame->format == VideoPixelFormat::P010, art, &gpuErr)) {
                 renderedWithGpu = true;
                 artOk = true;
                 static bool gpuLogged = false;

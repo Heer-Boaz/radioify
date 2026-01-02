@@ -14,7 +14,7 @@ public:
     GpuAsciiRenderer();
     ~GpuAsciiRenderer();
 
-    bool Initialize(int maxWidth, int maxHeight);
+    bool Initialize(int maxWidth, int maxHeight, std::string* error = nullptr);
     
     // Render from RGBA buffer (CPU -> GPU -> CPU)
     bool Render(const uint8_t* rgba, int width, int height, AsciiArt& out, std::string* error);
@@ -23,13 +23,13 @@ public:
     // bgLum: Estimated background luminance (0-255)
     // lumRange: Estimated luminance range (0-255)
     bool RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
-                   int bgLum, int lumRange, bool fullRange, AsciiArt& out, std::string* error);
+                   int bgLum, int lumRange, bool fullRange, bool is10Bit, AsciiArt& out, std::string* error);
 
 private:
     bool CreateDevice();
-    bool CompileComputeShader();
+    bool CompileComputeShader(std::string* error);
     bool CreateBuffers(int width, int height, int outW, int outH);
-    bool CreateNV12Textures(int width, int height);
+    bool CreateNV12Textures(int width, int height, bool is10Bit);
 
     Microsoft::WRL::ComPtr<ID3D11Device> m_device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
@@ -46,6 +46,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_textureUV;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvUV;
     
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_linearSampler;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_pointSampler;
+
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_outputUAV;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputStagingBuffer;

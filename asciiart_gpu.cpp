@@ -20,7 +20,7 @@ cbuffer Constants : register(b0) {
     uint bgLum;
     uint lumRange;
     uint isFullRange;
-    uint32_t padding[3];
+    uint padding[3];
 };
 
 #ifdef NV12_INPUT
@@ -31,6 +31,7 @@ Texture2D<float4> InputTexture : register(t0);
 #endif
 
 SamplerState LinearSampler : register(s0);
+SamplerState PointSampler : register(s1);
 
 struct AsciiCell {
     uint ch;
@@ -93,17 +94,20 @@ float GetLuma(float3 c) {
     return dot(c, kLumaCoeff) * 255.0f;
 }
 
-float SampleLuma(float2 uv) {
+float SampleLumaRaw(float2 uv, SamplerState s) {
 #ifdef NV12_INPUT
-    float y = TextureY.SampleLevel(LinearSampler, uv, 0);
+    float y = TextureY.SampleLevel(s, uv, 0);
     if (!isFullRange) {
         y = (y - 16.0/255.0) * (255.0/219.0);
     }
     return y * 255.0f;
 #else
-    return GetLuma(InputTexture.SampleLevel(LinearSampler, uv, 0).rgb);
+    return GetLuma(InputTexture.SampleLevel(s, uv, 0).rgb);
 #endif
 }
+
+float SampleLuma(float2 uv) { return SampleLumaRaw(uv, LinearSampler); }
+float SampleLumaPoint(float2 uv) { return SampleLumaRaw(uv, PointSampler); }
 
 float GetInkLevelFromLum(float lum) {
     float norm = lum / 255.0f;
@@ -126,6 +130,7 @@ float GetEdgeBoostFromMag(float edge) {
 }
 
 float4 SampleInput(float2 uv) {
+    float4 color;
 #ifdef NV12_INPUT
     float y = TextureY.SampleLevel(LinearSampler, uv, 0);
     float2 uv_val = TextureUV.SampleLevel(LinearSampler, uv, 0);
@@ -142,13 +147,22 @@ float4 SampleInput(float2 uv) {
         v = (uv_val.y - 128.0/255.0) * (255.0/224.0);
     }
 
-    float r = y + 1.402 * v;
-    float g = y - 0.344136 * u - 0.714136 * v;
-    float b = y + 1.772 * u;
-    return float4(r, g, b, 1.0);
+    // Rec. 709 (HD)
+    float r = y + 1.5748 * v;
+    float g = y - 0.1873 * u - 0.4681 * v;
+    float b = y + 1.8556 * u;
+    color = float4(r, g, b, 1.0);
 #else
-    return InputTexture.SampleLevel(LinearSampler, uv, 0);
+    color = InputTexture.SampleLevel(LinearSampler, uv, 0);
 #endif
+
+    // Fix washed out colors (HDR->SDR tone mapping approx)
+    float3 rgb = color.rgb;
+    float luma = dot(rgb, kLumaCoeff);
+    rgb = lerp(luma.xxx, rgb, 1.3f); // Boost saturation
+    rgb = (rgb - 0.5f) * 1.1f + 0.5f; // Boost contrast
+
+    return float4(rgb, color.a);
 }
 
 struct DotInfo {
@@ -202,8 +216,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         float luma = GetLuma(color.rgb);
         
         // 3x3 Sobel Edge Detection (using center sample for performance/sharpness)
-        float texDx = 1.0f / (float)width;
-        float texDy = 1.0f / (float)height;
+        // Use dot stride to match CPU behavior (detect edges between dots, not pixels)
+        float texDx = dotW / (float)width;
+        float texDy = dotH / (float)height;
         
         float l00 = SampleLuma(float2(u - texDx, v - texDy));
         float l01 = SampleLuma(float2(u, v - texDy));
@@ -440,9 +455,34 @@ GpuAsciiRenderer::GpuAsciiRenderer() {}
 
 GpuAsciiRenderer::~GpuAsciiRenderer() {}
 
-bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight) {
-    if (!CreateDevice()) return false;
-    if (!CompileComputeShader()) return false;
+bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* error) {
+    if (!CreateDevice()) {
+        if (error) *error = "Failed to create D3D11 device";
+        return false;
+    }
+    if (!CompileComputeShader(error)) return false;
+
+    // Create Samplers
+    D3D11_SAMPLER_DESC sampDesc = {};
+    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sampDesc.MinLOD = 0;
+    sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+    
+    if (FAILED(m_device->CreateSamplerState(&sampDesc, &m_linearSampler))) {
+        if (error) *error = "Failed to create linear sampler";
+        return false;
+    }
+
+    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    if (FAILED(m_device->CreateSamplerState(&sampDesc, &m_pointSampler))) {
+        if (error) *error = "Failed to create point sampler";
+        return false;
+    }
+
     // Buffers will be created on first render or here if we knew exact size
     return true;
 }
@@ -462,7 +502,7 @@ bool GpuAsciiRenderer::CreateDevice() {
     return SUCCEEDED(hr);
 }
 
-bool GpuAsciiRenderer::CompileComputeShader() {
+bool GpuAsciiRenderer::CompileComputeShader(std::string* error) {
     Microsoft::WRL::ComPtr<ID3DBlob> blob;
     Microsoft::WRL::ComPtr<ID3DBlob> errorBlob;
 
@@ -476,13 +516,20 @@ bool GpuAsciiRenderer::CompileComputeShader() {
 
     if (FAILED(hr)) {
         if (errorBlob) {
-            std::cerr << "Shader Compile Error (RGBA): " << (char*)errorBlob->GetBufferPointer() << std::endl;
+            std::string msg = (char*)errorBlob->GetBufferPointer();
+            std::cerr << "Shader Compile Error (RGBA): " << msg << std::endl;
+            if (error) *error = "Shader Compile Error (RGBA): " + msg;
+        } else {
+            if (error) *error = "Shader Compile Error (RGBA): Unknown error";
         }
         return false;
     }
 
     hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_computeShader);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) {
+        if (error) *error = "Failed to create compute shader (RGBA)";
+        return false;
+    }
 
     // Compile NV12 Shader
     D3D_SHADER_MACRO defines[] = { "NV12_INPUT", "1", nullptr, nullptr };
@@ -498,25 +545,48 @@ bool GpuAsciiRenderer::CompileComputeShader() {
 
     if (FAILED(hr)) {
         if (errorBlob) {
-            std::cerr << "Shader Compile Error (NV12): " << (char*)errorBlob->GetBufferPointer() << std::endl;
+            std::string msg = (char*)errorBlob->GetBufferPointer();
+            std::cerr << "Shader Compile Error (NV12): " << msg << std::endl;
+            if (error) *error = "Shader Compile Error (NV12): " + msg;
+        } else {
+            if (error) *error = "Shader Compile Error (NV12): Unknown error";
         }
         return false;
     }
 
     hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_computeShaderNV12);
+    if (FAILED(hr)) {
+        if (error) *error = "Failed to create compute shader (NV12)";
+        return false;
+    }
     return SUCCEEDED(hr);
 }
 
-bool GpuAsciiRenderer::CreateNV12Textures(int width, int height) {
-    if (m_textureY && m_currentWidth == width && m_currentHeight == height) return true;
+bool GpuAsciiRenderer::CreateNV12Textures(int width, int height, bool is10Bit) {
+    // Check if we need to recreate textures (size or format change)
+    DXGI_FORMAT targetY = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+    DXGI_FORMAT targetUV = is10Bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
 
-    // Y Texture (R8_UNORM)
+    if (m_textureY) {
+        D3D11_TEXTURE2D_DESC desc;
+        m_textureY->GetDesc(&desc);
+        if (desc.Width == width && desc.Height == height && desc.Format == targetY) {
+            return true;
+        }
+        // Release old textures
+        m_textureY.Reset();
+        m_srvY.Reset();
+        m_textureUV.Reset();
+        m_srvUV.Reset();
+    }
+
+    // Y Texture
     D3D11_TEXTURE2D_DESC texDesc = {};
     texDesc.Width = width;
     texDesc.Height = height;
     texDesc.MipLevels = 1;
     texDesc.ArraySize = 1;
-    texDesc.Format = DXGI_FORMAT_R8_UNORM;
+    texDesc.Format = targetY;
     texDesc.SampleDesc.Count = 1;
     texDesc.Usage = D3D11_USAGE_DEFAULT;
     texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -524,10 +594,10 @@ bool GpuAsciiRenderer::CreateNV12Textures(int width, int height) {
     if (FAILED(m_device->CreateTexture2D(&texDesc, nullptr, &m_textureY))) return false;
     if (FAILED(m_device->CreateShaderResourceView(m_textureY.Get(), nullptr, &m_srvY))) return false;
 
-    // UV Texture (R8G8_UNORM)
+    // UV Texture
     texDesc.Width = width / 2;
     texDesc.Height = height / 2;
-    texDesc.Format = DXGI_FORMAT_R8G8_UNORM;
+    texDesc.Format = targetUV;
     
     if (FAILED(m_device->CreateTexture2D(&texDesc, nullptr, &m_textureUV))) return false;
     if (FAILED(m_device->CreateShaderResourceView(m_textureUV.Get(), nullptr, &m_srvUV))) return false;
@@ -536,10 +606,11 @@ bool GpuAsciiRenderer::CreateNV12Textures(int width, int height) {
 }
 
 bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
-                                int bgLum, int lumRange, bool fullRange, AsciiArt& out, std::string* error) {
+                                int bgLum, int lumRange, bool fullRange, bool is10Bit, AsciiArt& out, std::string* error) {
     if (!m_device) {
-        if (!Initialize(width, height)) {
-            if (error) *error = "Failed to initialize GPU renderer";
+        std::string initErr;
+        if (!Initialize(width, height, &initErr)) {
+            if (error) *error = "Failed to initialize GPU renderer: " + initErr;
             return false;
         }
     }
@@ -553,7 +624,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         return false;
     }
     
-    if (!CreateNV12Textures(width, height)) {
+    if (!CreateNV12Textures(width, height, is10Bit)) {
         if (error) *error = "Failed to create NV12 textures";
         return false;
     }
@@ -590,6 +661,9 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     ID3D11Buffer* cbs[] = { m_constantBuffer.Get() };
     m_context->CSSetConstantBuffers(0, 1, cbs);
+
+    ID3D11SamplerState* samplers[] = { m_linearSampler.Get(), m_pointSampler.Get() };
+    m_context->CSSetSamplers(0, 2, samplers);
 
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
@@ -704,8 +778,9 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
 
 bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiArt& out, std::string* error) {
     if (!m_device) {
-        if (!Initialize(width, height)) {
-            if (error) *error = "Failed to initialize GPU renderer";
+        std::string initErr;
+        if (!Initialize(width, height, &initErr)) {
+            if (error) *error = "Failed to initialize GPU renderer: " + initErr;
             return false;
         }
     }
@@ -804,6 +879,9 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     ID3D11Buffer* cbs[] = { m_constantBuffer.Get() };
     m_context->CSSetConstantBuffers(0, 1, cbs);
+
+    ID3D11SamplerState* samplers[] = { m_linearSampler.Get(), m_pointSampler.Get() };
+    m_context->CSSetSamplers(0, 2, samplers);
 
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
