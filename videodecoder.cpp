@@ -113,6 +113,7 @@ struct VideoDecoder::Impl {
   int64_t streamStartUs = 0;
   uint32_t yuvMatrix = MFVideoTransferMatrix_BT709;
   bool fullRange = true;
+  int consecutiveTransferErrors = 0;
 
   bool emitFrame(VideoFrame& out, VideoReadInfo* info, bool decodePixels,
                  AVFrame* src) {
@@ -275,7 +276,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
                                nullptr, nullptr, 0) >= 0) {
       ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
       ctx->get_format = get_hw_format;
-      ctx->extra_hw_frames = 16;
+      ctx->extra_hw_frames = 32;
     }
   }
 
@@ -400,9 +401,16 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
             av_frame_unref(impl_->scratch);
             if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
               // Transfer failed. Skip this frame and try next.
+              impl_->consecutiveTransferErrors++;
+              if (impl_->consecutiveTransferErrors > 10) {
+                // Too many failures, assume device lost or bad state.
+                // Return false without setting atEnd to trigger error/fallback.
+                return false;
+              }
               continue;
             }
           }
+          impl_->consecutiveTransferErrors = 0;
           src = impl_->scratch;
           src->pts = impl_->frame->pts;
           src->best_effort_timestamp = impl_->frame->best_effort_timestamp;
