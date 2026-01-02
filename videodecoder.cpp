@@ -275,6 +275,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
                                nullptr, nullptr, 0) >= 0) {
       ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
       ctx->get_format = get_hw_format;
+      ctx->extra_hw_frames = 16;
     }
   }
 
@@ -392,14 +393,20 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     if (recv == 0) {
       AVFrame* src = impl_->frame;
       if (src->format == AV_PIX_FMT_D3D11) {
-        av_frame_unref(impl_->scratch);
-        if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
-          impl_->atEnd = true;
-          return false;
+        if (decodePixels) {
+          av_frame_unref(impl_->scratch);
+          if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
+            // Try one more time with a fresh unref
+            av_frame_unref(impl_->scratch);
+            if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
+              // Transfer failed. Skip this frame and try next.
+              continue;
+            }
+          }
+          src = impl_->scratch;
+          src->pts = impl_->frame->pts;
+          src->best_effort_timestamp = impl_->frame->best_effort_timestamp;
         }
-        src = impl_->scratch;
-        src->pts = impl_->frame->pts;
-        src->best_effort_timestamp = impl_->frame->best_effort_timestamp;
       }
       return impl_->emitFrame(out, info, decodePixels, src);
     }
