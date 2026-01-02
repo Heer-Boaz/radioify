@@ -104,9 +104,11 @@ float GetInkLevelFromLum(float lum) {
     float x = norm; // kInkUseBright = true
     float coverage = pow(x, 0.50f); // kInkGamma
     if (coverage > 0.001f) {
-        coverage = coverage * 1.85f + 0.12f; // Gain + Bias
+        // Reduced bias (0.12 -> 0.06) to allow for 1-dot characters (smooth 0->1->2 transition)
+        coverage = coverage * 1.85f + 0.06f; 
     }
-    if (coverage < 0.02f) coverage = 0.0f; // ZeroCutoff
+    // Cutoff tuned to suppress noise but allow 1-dot characters (which start around 0.17)
+    if (coverage < 0.15f) coverage = 0.0f; 
     return saturate(coverage);
 }
 

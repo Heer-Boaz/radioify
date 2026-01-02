@@ -1704,6 +1704,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               }
               
               int lumRange = std::max(1, lumHigh - lumLow);
+              // Clamp lumRange to avoid amplifying noise in dark scenes
+              if (lumRange < 20) lumRange = 20;
 
               if (gpuRenderer.RenderNV12(frame->yuv.data(), frame->width,
                                          frame->height, frame->stride,
