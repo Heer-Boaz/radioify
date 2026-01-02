@@ -49,8 +49,8 @@ static const int kEdgeShift = 3;
 static const int kColorLift = 0;
 static const int kColorSaturation = 340;
 static const int kTemporalResetDelta = 48;
-static const int kColorAlpha = 48; 
-static const int kBgAlpha = 24;
+static const int kColorAlpha = 220; 
+static const int kBgAlpha = 180;
 static const int kInkMinLuma = 110;
 static const int kBgMinLuma = 20;
 static const int kInkMaxScale = 1280;
@@ -89,6 +89,14 @@ float3 UnpackColor(uint c) {
 
 float GetLuma(float3 c) {
     return dot(c, kLumaCoeff) * 255.0f;
+}
+
+float SampleLuma(float2 uv) {
+#ifdef NV12_INPUT
+    return TextureY.SampleLevel(LinearSampler, uv, 0) * 255.0f;
+#else
+    return GetLuma(InputTexture.SampleLevel(LinearSampler, uv, 0).rgb);
+#endif
 }
 
 float GetInkLevelFromLum(float lum) {
@@ -166,21 +174,28 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         float4 color = SampleInput(float2(u, v));
         float luma = GetLuma(color.rgb);
         
-        // Sobel (Approximate by sampling neighbors)
-        float u_l = u - dotW/width; float u_r = u + dotW/width;
-        float v_t = v - dotH/height; float v_b = v + dotH/height;
+        // 3x3 Sobel Edge Detection
+        float texDx = 1.0f / (float)width;
+        float texDy = 1.0f / (float)height;
         
-        float l_l = GetLuma(SampleInput(float2(u_l, v)).rgb);
-        float l_r = GetLuma(SampleInput(float2(u_r, v)).rgb);
-        float l_t = GetLuma(SampleInput(float2(u, v_t)).rgb);
-        float l_b = GetLuma(SampleInput(float2(u, v_b)).rgb);
+        float l00 = SampleLuma(float2(u - texDx, v - texDy));
+        float l01 = SampleLuma(float2(u, v - texDy));
+        float l02 = SampleLuma(float2(u + texDx, v - texDy));
         
-        float gx = l_r - l_l;
-        float gy = l_b - l_t;
-        float edge = sqrt(gx*gx + gy*gy);
+        float l10 = SampleLuma(float2(u - texDx, v));
+        // l11 is center (luma), but we sample neighbors for gradient
+        float l12 = SampleLuma(float2(u + texDx, v));
+        
+        float l20 = SampleLuma(float2(u - texDx, v + texDy));
+        float l21 = SampleLuma(float2(u, v + texDy));
+        float l22 = SampleLuma(float2(u + texDx, v + texDy));
+
+        float gx = (l02 + 2.0f*l12 + l22) - (l00 + 2.0f*l10 + l20);
+        float gy = (l20 + 2.0f*l21 + l22) - (l00 + 2.0f*l01 + l02);
+        float edge = sqrt(gx*gx + gy*gy) / 4.0f; // Normalize to approx 0-255 range
         
         // Local Contrast
-        float avgNeighbor = (l_l + l_r + l_t + l_b) * 0.25f;
+        float avgNeighbor = (l00 + l01 + l02 + l10 + l12 + l20 + l21 + l22) * 0.125f;
         float contrast = abs(luma - avgNeighbor);
 
         dots[i].idx = i;
@@ -315,7 +330,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         } else {
             float scale = ((float)kInkMinLuma * 256.0f) / curY;
             if (scale > (float)kInkMaxScale) scale = (float)kInkMaxScale;
-            curFg = min(1.0f, (curFg * scale + 128.0f) / 256.0f);
+            curFg = min(1.0f, (curFg * scale) / 256.0f);
         }
     }
 
@@ -332,7 +347,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             curBg = (float)kBgMinLuma / 255.0f;
         } else {
             float scale = ((float)kBgMinLuma * 256.0f) / bgY;
-            curBg = min(1.0f, (curBg * scale + 128.0f) / 256.0f);
+            curBg = min(1.0f, (curBg * scale) / 256.0f);
         }
     }
 
