@@ -170,11 +170,19 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         float u = (DTid.x * cellW + col * dotW + dotW * 0.5f) / width;
         float v = (DTid.y * cellH + row * dotH + dotH * 0.5f) / height;
 
-        // Sample Center
-        float4 color = SampleInput(float2(u, v));
-        float luma = SampleLuma(float2(u, v)); // Use consistent Y-based luma
+        // Supersampling (4x) for smoother dots and less shimmering
+        float offU = dotW / width * 0.25f;
+        float offV = dotH / height * 0.25f;
+
+        float4 c1 = SampleInput(float2(u - offU, v - offV));
+        float4 c2 = SampleInput(float2(u + offU, v - offV));
+        float4 c3 = SampleInput(float2(u - offU, v + offV));
+        float4 c4 = SampleInput(float2(u + offU, v + offV));
         
-        // 3x3 Sobel Edge Detection
+        float4 color = (c1 + c2 + c3 + c4) * 0.25f;
+        float luma = GetLuma(color.rgb);
+        
+        // 3x3 Sobel Edge Detection (using center sample for performance/sharpness)
         float texDx = 1.0f / (float)width;
         float texDy = 1.0f / (float)height;
         
@@ -356,9 +364,12 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float3 prevFg = UnpackColor(history.x);
     float3 prevBg = UnpackColor(history.y);
     
-    // Use Manhattan distance to match CPU implementation exactly
-    float diffFg = abs(curFg.r - prevFg.r) + abs(curFg.g - prevFg.g) + abs(curFg.b - prevFg.b);
-    float diffBg = abs(curBg.r - prevBg.r) + abs(curBg.g - prevBg.g) + abs(curBg.b - prevBg.b);
+    // Perceptual Weighted Distance (Better than Manhattan/Euclidean)
+    // Green changes are much more visible than Blue changes.
+    // Using Rec. 709 luma coefficients as weights for the difference.
+    float diffFg = dot(abs(curFg - prevFg), kLumaCoeff);
+    float diffBg = dot(abs(curBg - prevBg), kLumaCoeff);
+    
     float resetThresh = (float)kTemporalResetDelta / 255.0f;
 
     if (diffFg < resetThresh) {
