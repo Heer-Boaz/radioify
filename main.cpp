@@ -774,9 +774,11 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   bool videoEnded = false;
   bool redraw = true;
   AsciiArt art;
-  VideoFrame frame;
+  VideoFrame* frame = nullptr;
+  size_t currentFrameIndex = 0;
+  bool haveFrame = false;
   struct QueuedFrame {
-    VideoFrame frame;
+    size_t poolIndex = 0;
     VideoReadInfo info{};
     double decodeMs = 0.0;
     uint64_t epoch = 0;
@@ -804,7 +806,11 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   std::mutex queueMutex;
   std::condition_variable queueCv;
   std::deque<QueuedFrame> frameQueue;
-  constexpr size_t kMaxQueue = 3;
+  constexpr size_t kMaxQueuedFrames = 16;
+  constexpr size_t kInvalidPoolIndex = static_cast<size_t>(-1);
+  std::vector<VideoFrame> framePool;
+  std::deque<size_t> freeFrames;
+  std::atomic<size_t> maxQueue{3};
   constexpr bool kEnableSoftwareFallback = true;
   const bool allowDecoderScale = enableAscii;
   struct DecodeCommand {
@@ -832,16 +838,18 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   uint64_t lastReadCalls = 0;
   uint64_t lastQueueDrops = 0;
   uint64_t lastSkippedCalls = 0;
-  // Sync parameters - video tries to stay within this window of audio
-  constexpr double kSyncTolerance =
-      0.033;  // Acceptable sync tolerance (~1 frame at 30fps)
-  constexpr double kHardResyncThreshold =
-      0.5;  // Force hard resync above this (500ms)
   double lastSyncDrift = 0.0;
+  framePool.resize(kMaxQueuedFrames + 1);
+  for (size_t i = 0; i < framePool.size(); ++i) {
+    freeFrames.push_back(i);
+  }
 
   auto clearQueue = [&]() {
     std::lock_guard<std::mutex> lock(queueMutex);
-    frameQueue.clear();
+    while (!frameQueue.empty()) {
+      freeFrames.push_back(frameQueue.front().poolIndex);
+      frameQueue.pop_front();
+    }
   };
 
   auto setDecodeError = [&](const std::string& message) {
@@ -890,6 +898,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           out = std::move(candidate);
           return true;
         }
+        freeFrames.push_back(candidate.poolIndex);
+        queueCv.notify_all();
       }
       if (decodeEnded.load()) {
         return false;
@@ -964,6 +974,20 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     fastForwardTargetTs.store(targetTs, std::memory_order_relaxed);
     fastForwardPending.store(true, std::memory_order_relaxed);
     queueCv.notify_all();
+  };
+  auto setCurrentFrame = [&](size_t poolIndex) {
+    size_t releaseIndex = kInvalidPoolIndex;
+    if (haveFrame) {
+      releaseIndex = currentFrameIndex;
+    }
+    currentFrameIndex = poolIndex;
+    frame = &framePool[currentFrameIndex];
+    haveFrame = true;
+    if (releaseIndex != kInvalidPoolIndex) {
+      std::lock_guard<std::mutex> lock(queueMutex);
+      freeFrames.push_back(releaseIndex);
+      queueCv.notify_all();
+    }
   };
 
   screen.updateSize();
@@ -1170,8 +1194,12 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           {
             std::lock_guard<std::mutex> lock(queueMutex);
             droppedFrames = frameQueue.size();
-            frameQueue.clear();
+            while (!frameQueue.empty()) {
+              freeFrames.push_back(frameQueue.front().poolIndex);
+              frameQueue.pop_front();
+            }
           }
+          queueCv.notify_all();
           if (droppedFrames > 0) {
             skippedCalls.fetch_add(static_cast<uint64_t>(droppedFrames),
                                    std::memory_order_relaxed);
@@ -1217,7 +1245,26 @@ static bool showAsciiVideo(const std::filesystem::path& file,
             break;
           }
 
-          VideoFrame decodedFrame;
+          size_t poolIndex = kInvalidPoolIndex;
+          {
+            std::unique_lock<std::mutex> lock(queueMutex);
+            queueCv.wait(lock, [&]() {
+              return !decodeRunning.load() || commandPendingAtomic.load() ||
+                     !freeFrames.empty();
+            });
+            if (!decodeRunning.load() || commandPendingAtomic.load()) {
+              fastForwardPending.store(true);
+              continue;
+            }
+            if (freeFrames.empty()) {
+              fastForwardPending.store(true);
+              continue;
+            }
+            poolIndex = freeFrames.front();
+            freeFrames.pop_front();
+          }
+
+          VideoFrame& decodedFrame = framePool[poolIndex];
           VideoReadInfo info{};
           auto decodeStart = std::chrono::steady_clock::now();
           bool ok = decoder.readFrame(decodedFrame, &info, enableAscii);
@@ -1225,9 +1272,19 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           if (!ok) {
             auto fallback = trySoftwareFallback(info);
             if (fallback == FallbackResult::Applied) {
+              {
+                std::lock_guard<std::mutex> lock(queueMutex);
+                freeFrames.push_back(poolIndex);
+              }
+              queueCv.notify_all();
               continue;
             }
             if (fallback == FallbackResult::Failed) {
+              {
+                std::lock_guard<std::mutex> lock(queueMutex);
+                freeFrames.push_back(poolIndex);
+              }
+              queueCv.notify_all();
               decodeEnded.store(true);
               break;
             }
@@ -1238,6 +1295,11 @@ static bool showAsciiVideo(const std::filesystem::path& file,
                 setDecodeError("Failed to decode video frame.");
               }
             }
+            {
+              std::lock_guard<std::mutex> lock(queueMutex);
+              freeFrames.push_back(poolIndex);
+            }
+            queueCv.notify_all();
             decodeEnded.store(true);
             break;
           }
@@ -1250,30 +1312,38 @@ static bool showAsciiVideo(const std::filesystem::path& file,
                   .count();
           {
             std::lock_guard<std::mutex> lock(queueMutex);
-            if (frameQueue.size() >= kMaxQueue) {
+            size_t queueLimit = maxQueue.load(std::memory_order_relaxed);
+            if (frameQueue.size() >= queueLimit) {
+              freeFrames.push_back(frameQueue.front().poolIndex);
               frameQueue.pop_front();
               queueDrops.fetch_add(1, std::memory_order_relaxed);
             }
-            frameQueue.push_back(QueuedFrame{std::move(decodedFrame), info,
-                                             decodeMs, currentEpoch});
+            frameQueue.push_back(
+                QueuedFrame{poolIndex, info, decodeMs, currentEpoch});
           }
           queueCv.notify_one();
           continue;
         }
 
-        bool queueFull = false;
+        size_t poolIndex = kInvalidPoolIndex;
         {
-          std::lock_guard<std::mutex> lock(queueMutex);
-          if (frameQueue.size() >= kMaxQueue) {
-            queueFull = true;
+          std::unique_lock<std::mutex> lock(queueMutex);
+          size_t queueLimit = maxQueue.load(std::memory_order_relaxed);
+          if (frameQueue.size() >= queueLimit || freeFrames.empty()) {
+            queueCv.wait_for(lock, std::chrono::milliseconds(30), [&]() {
+              return !decodeRunning.load() || decodePaused.load() ||
+                     commandPendingAtomic.load() ||
+                     (frameQueue.size() <
+                          maxQueue.load(std::memory_order_relaxed) &&
+                      !freeFrames.empty());
+            });
+            continue;
           }
-        }
-        if (queueFull) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(2));
-          continue;
+          poolIndex = freeFrames.front();
+          freeFrames.pop_front();
         }
 
-        VideoFrame decodedFrame;
+        VideoFrame& decodedFrame = framePool[poolIndex];
         VideoReadInfo info{};
         auto decodeStart = std::chrono::steady_clock::now();
         bool ok = decoder.readFrame(decodedFrame, &info, enableAscii);
@@ -1281,9 +1351,19 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         if (!ok) {
           auto fallback = trySoftwareFallback(info);
           if (fallback == FallbackResult::Applied) {
+            {
+              std::lock_guard<std::mutex> lock(queueMutex);
+              freeFrames.push_back(poolIndex);
+            }
+            queueCv.notify_all();
             continue;
           }
           if (fallback == FallbackResult::Failed) {
+            {
+              std::lock_guard<std::mutex> lock(queueMutex);
+              freeFrames.push_back(poolIndex);
+            }
+            queueCv.notify_all();
             decodeEnded.store(true);
             break;
           }
@@ -1294,6 +1374,11 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               setDecodeError("Failed to decode video frame.");
             }
           }
+          {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            freeFrames.push_back(poolIndex);
+          }
+          queueCv.notify_all();
           decodeEnded.store(true);
           break;
         }
@@ -1306,12 +1391,14 @@ static bool showAsciiVideo(const std::filesystem::path& file,
                 .count();
         {
           std::lock_guard<std::mutex> lock(queueMutex);
-          if (frameQueue.size() >= kMaxQueue) {
+          size_t queueLimit = maxQueue.load(std::memory_order_relaxed);
+          if (frameQueue.size() >= queueLimit) {
+            freeFrames.push_back(frameQueue.front().poolIndex);
             frameQueue.pop_front();
             queueDrops.fetch_add(1, std::memory_order_relaxed);
           }
-          frameQueue.push_back(QueuedFrame{std::move(decodedFrame), info,
-                                           decodeMs, currentEpoch});
+          frameQueue.push_back(QueuedFrame{poolIndex, info, decodeMs,
+                                           currentEpoch});
         }
         queueCv.notify_one();
       }
@@ -1365,10 +1452,10 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     }
     return showError(fail, "");
   }
-  frame = std::move(firstQueued.frame);
+  setCurrentFrame(firstQueued.poolIndex);
   firstInfo = firstQueued.info;
-  decoderTargetW = frame.width;
-  decoderTargetH = frame.height;
+  decoderTargetW = frame->width;
+  decoderTargetH = frame->height;
   if (pendingScaleEpoch != 0) {
     perfLog.appendf("video_scale target=%dx%d actual=%dx%d", requestedTargetW,
                     requestedTargetH, decoderTargetW, decoderTargetH);
@@ -1379,21 +1466,39 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   perfLog.appendf(
       "first_frame ts100ns=%lld dur100ns=%lld flags=0x%X rec=%u ehr=0x%08X "
       "size=%dx%d",
-      static_cast<long long>(frame.timestamp100ns),
+      static_cast<long long>(frame->timestamp100ns),
       static_cast<long long>(firstInfo.duration100ns), firstInfo.flags,
-      firstInfo.recoveries, firstInfo.errorHr, frame.width, frame.height);
+      firstInfo.recoveries, firstInfo.errorHr, frame->width, frame->height);
 
   const double ticksToSeconds = 1.0 / 10000000.0;
   const double secondsToTicks = 10000000.0;
   const double kLeadSlackSec = 0.005;
+  const double kPresentFps = 30.0;
+  const double kPresentIntervalSec = 1.0 / kPresentFps;
+  const double syncTolerance = std::max(0.033, 0.75 * kPresentIntervalSec);
+  const double hardResyncThreshold =
+      std::max(0.5, 10.0 * kPresentIntervalSec);
+  double nextPresentSec = 0.0;
+  bool presentInit = false;
+  bool presentUseWall = false;
   int64_t firstTs = 0;
   bool audioGateReleased = false;
-  double frameSec = static_cast<double>(frame.timestamp100ns) * ticksToSeconds;
+  double frameSec =
+      static_cast<double>(frame->timestamp100ns) * ticksToSeconds;
   double lastFrameSec = frameSec;
   double lastFrameDurationSec =
       firstInfo.duration100ns > 0
           ? static_cast<double>(firstInfo.duration100ns) * ticksToSeconds
           : 0.0;
+  auto updateMaxQueue = [&](double frameDurSec) {
+    if (frameDurSec <= 0.0) return;
+    size_t needed =
+        static_cast<size_t>(std::ceil(kPresentIntervalSec / frameDurSec)) + 2;
+    if (needed < 3) needed = 3;
+    if (needed > kMaxQueuedFrames) needed = kMaxQueuedFrames;
+    maxQueue.store(needed, std::memory_order_relaxed);
+  };
+  updateMaxQueue(lastFrameDurationSec);
   // Don't initialize sync offset yet - wait for first real frame display
   // This ensures audio has had time to start properly
   auto startTime = std::chrono::steady_clock::now();
@@ -1464,10 +1569,10 @@ static bool showAsciiVideo(const std::filesystem::path& file,
 
     bool sizeChanged =
         (width != cachedWidth || maxHeight != cachedMaxHeight ||
-         frame.width != cachedFrameWidth || frame.height != cachedFrameHeight);
+         frame->width != cachedFrameWidth || frame->height != cachedFrameHeight);
     if (enableAscii) {
       if (allowFrame && (refreshArt || sizeChanged)) {
-        if (frame.width <= 0 || frame.height <= 0) {
+        if (frame->width <= 0 || frame->height <= 0) {
           renderFailed = true;
           renderFailMessage = "Invalid video frame size.";
           renderFailDetail = "";
@@ -1475,16 +1580,16 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         }
         bool artOk = false;
         try {
-          if (frame.format == VideoPixelFormat::NV12 ||
-              frame.format == VideoPixelFormat::P010) {
-            if (frame.stride <= 0 || frame.planeHeight <= 0) {
+          if (frame->format == VideoPixelFormat::NV12 ||
+              frame->format == VideoPixelFormat::P010) {
+            if (frame->stride <= 0 || frame->planeHeight <= 0) {
               renderFailed = true;
               renderFailMessage = "Invalid video frame buffer.";
               renderFailDetail = "Missing YUV plane metadata.";
               return;
             }
-            size_t strideBytes = static_cast<size_t>(frame.stride);
-            size_t planeHeight = static_cast<size_t>(frame.planeHeight);
+            size_t strideBytes = static_cast<size_t>(frame->stride);
+            size_t planeHeight = static_cast<size_t>(frame->planeHeight);
             size_t yBytes = strideBytes * planeHeight;
             if (strideBytes == 0 || planeHeight == 0 ||
                 yBytes / strideBytes != planeHeight) {
@@ -1494,30 +1599,30 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               return;
             }
             size_t required = yBytes + yBytes / 2;
-            if (required < yBytes || frame.yuv.size() < required) {
+            if (required < yBytes || frame->yuv.size() < required) {
               renderFailed = true;
               renderFailMessage = "Invalid video frame buffer.";
               renderFailDetail = "Frame pixel data is missing.";
               return;
             }
-            YuvFormat yuvFormat = (frame.format == VideoPixelFormat::P010)
+            YuvFormat yuvFormat = (frame->format == VideoPixelFormat::P010)
                                       ? YuvFormat::P010
                                       : YuvFormat::NV12;
             artOk = renderAsciiArtFromYuv(
-                frame.yuv.data(), frame.width, frame.height, frame.stride,
-                frame.planeHeight, yuvFormat, frame.fullRange, frame.yuvMatrix,
-                width, maxHeight, art);
+                frame->yuv.data(), frame->width, frame->height, frame->stride,
+                frame->planeHeight, yuvFormat, frame->fullRange,
+                frame->yuvMatrix, width, maxHeight, art);
           } else {
-            size_t expected = static_cast<size_t>(frame.width) *
-                              static_cast<size_t>(frame.height) * 4u;
-            if (frame.rgba.size() < expected) {
+            size_t expected = static_cast<size_t>(frame->width) *
+                              static_cast<size_t>(frame->height) * 4u;
+            if (frame->rgba.size() < expected) {
               renderFailed = true;
               renderFailMessage = "Invalid video frame buffer.";
               renderFailDetail = "Frame pixel data is missing.";
               return;
             }
-            artOk = renderAsciiArtFromRgba(frame.rgba.data(), frame.width,
-                                           frame.height, width, maxHeight, art,
+            artOk = renderAsciiArtFromRgba(frame->rgba.data(), frame->width,
+                                           frame->height, width, maxHeight, art,
                                            true);
           }
         } catch (const std::bad_alloc&) {
@@ -1539,8 +1644,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         }
         cachedWidth = width;
         cachedMaxHeight = maxHeight;
-        cachedFrameWidth = frame.width;
-        cachedFrameHeight = frame.height;
+        cachedFrameWidth = frame->width;
+        cachedFrameHeight = frame->height;
       } else if (!allowFrame) {
         cachedWidth = -1;
         cachedMaxHeight = -1;
@@ -1548,7 +1653,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         cachedFrameHeight = -1;
       }
     } else {
-      if (frame.width <= 0 || frame.height <= 0) {
+      if (frame->width <= 0 || frame->height <= 0) {
         renderFailed = true;
         renderFailMessage = "Invalid video frame size.";
         renderFailDetail = "";
@@ -1556,8 +1661,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
       }
       cachedWidth = width;
       cachedMaxHeight = maxHeight;
-      cachedFrameWidth = frame.width;
-      cachedFrameHeight = frame.height;
+      cachedFrameWidth = frame->width;
+      cachedFrameHeight = frame->height;
     }
 
     screen.clear(baseStyle);
@@ -1588,8 +1693,9 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           allowFrame ? "ASCII rendering disabled" : "Waiting for video...";
       screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       if (maxHeight > 1) {
-        std::string sizeLine = "Video size: " + std::to_string(frame.width) +
-                               "x" + std::to_string(frame.height);
+        std::string sizeLine =
+            "Video size: " + std::to_string(frame->width) + "x" +
+            std::to_string(frame->height);
         screen.writeText(0, artTop + 1, fitLine(sizeLine, width), dimStyle);
       }
     }
@@ -1733,8 +1839,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
             }
             return reportVideoError(fail, "");
           }
-          frame = std::move(seekQueued.frame);
-          frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
+          setCurrentFrame(seekQueued.poolIndex);
+          frameSec = static_cast<double>(frame->timestamp100ns - firstTs) *
                      ticksToSeconds;
           lastFrameSec = frameSec;
           videoEnded = false;
@@ -1788,9 +1894,10 @@ static bool showAsciiVideo(const std::filesystem::path& file,
                   }
                   return reportVideoError(fail, "");
                 }
-                frame = std::move(seekQueued.frame);
-                frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
-                           ticksToSeconds;
+                setCurrentFrame(seekQueued.poolIndex);
+                frameSec =
+                    static_cast<double>(frame->timestamp100ns - firstTs) *
+                    ticksToSeconds;
                 lastFrameSec = frameSec;
                 videoEnded = false;
                 forceRefreshArt = true;
@@ -1818,6 +1925,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     }
 
     auto now = std::chrono::steady_clock::now();
+    double wallclockElapsed =
+        std::chrono::duration<double>(now - startTime).count();
     if (now - lastUiUpdate >= std::chrono::milliseconds(150)) {
       redraw = true;
       lastUiUpdate = now;
@@ -1839,6 +1948,14 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     bool audioPrimed = hooks.isAudioPrimed ? hooks.isAudioPrimed() : true;
     bool waitingForAudioStart =
         haveAudioClock && !audioPrimed && audioNow <= 0.0;
+    bool useWallClock = paused || waitingForAudioStart;
+    double presentClockSec = useWallClock ? wallclockElapsed : syncSec;
+    if (!presentInit || useWallClock != presentUseWall) {
+      nextPresentSec = presentClockSec;
+      presentInit = true;
+      presentUseWall = useWallClock;
+    }
+    bool presentDue = (presentClockSec + leadSlack) >= nextPresentSec;
 
     if (pendingResize) {
       bool resumeAfterResize = false;
@@ -1865,14 +1982,14 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           }
           return reportVideoError(fail, "");
         }
-        frame = std::move(resizeQueued.frame);
-        frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
+        setCurrentFrame(resizeQueued.poolIndex);
+        frameSec = static_cast<double>(frame->timestamp100ns - firstTs) *
                    ticksToSeconds;
         lastFrameSec = frameSec;
         videoEnded = false;
         forceRefreshArt = true;
-        decoderTargetW = frame.width;
-        decoderTargetH = frame.height;
+        decoderTargetW = frame->width;
+        decoderTargetH = frame->height;
         perfLog.appendf("video_scale target=%dx%d actual=%dx%d",
                         requestedTargetW, requestedTargetH, decoderTargetW,
                         decoderTargetH);
@@ -1893,13 +2010,11 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     int64_t nextTs = 0;
     bool queueEmpty = false;
 
-    if (!videoEnded && !paused && !waitingForAudioStart) {
-      double wallclockElapsed =
-          std::chrono::duration<double>(now - startTime).count();
+    if (!videoEnded && !paused && !waitingForAudioStart && presentDue) {
       double driftForSkip = haveAudioClock ? (syncSec - lastFrameSec)
                                            : (wallclockElapsed - lastFrameSec);
 
-      if (haveAudioClock && driftForSkip > kHardResyncThreshold &&
+      if (haveAudioClock && driftForSkip > hardResyncThreshold &&
           !commandPendingAtomic.load()) {
         double targetSec = std::max(0.0, syncSec);
         int64_t targetTs =
@@ -1923,8 +2038,12 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         {
           std::lock_guard<std::mutex> lock(queueMutex);
           droppedFrames = frameQueue.size();
-          frameQueue.clear();
+          while (!frameQueue.empty()) {
+            freeFrames.push_back(frameQueue.front().poolIndex);
+            frameQueue.pop_front();
+          }
         }
+        queueCv.notify_all();
         if (droppedFrames > 0) {
           skippedCalls.fetch_add(static_cast<uint64_t>(droppedFrames),
                                  std::memory_order_relaxed);
@@ -1947,20 +2066,24 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         }
         candidate = std::move(resyncQueued);
         double resyncSec =
-            static_cast<double>(candidate.frame.timestamp100ns - firstTs) *
+            static_cast<double>(
+                framePool[candidate.poolIndex].timestamp100ns - firstTs) *
             ticksToSeconds;
         lastSyncDrift = syncSec - resyncSec;
         advanced = true;
         perfLog.appendf("sync_seek audio=%.3f video=%.3f target=%.3f", audioNow,
                         resyncSec, syncSec);
       } else {
-        if (!haveAudioClock && driftForSkip > kHardResyncThreshold) {
+        if (!haveAudioClock && driftForSkip > hardResyncThreshold) {
           auto offsetDuration =
               std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                   std::chrono::duration<double>(lastFrameSec));
           startTime = now - offsetDuration;
           syncSec = std::chrono::duration<double>(now - startTime).count();
           wallclockElapsed = syncSec;
+          if (!useWallClock) {
+            presentClockSec = syncSec;
+          }
           driftForSkip = 0.0;
           perfLog.appendf("sync_hard_reset wallclock=%.3f video=%.3f",
                           wallclockElapsed, lastFrameSec);
@@ -1968,26 +2091,30 @@ static bool showAsciiVideo(const std::filesystem::path& file,
 
         double targetSec = syncSec + leadSlack;
 
+        bool notifyQueue = false;
         {
           std::lock_guard<std::mutex> lock(queueMutex);
           size_t skippedFrames = 0;
 
           // If we're significantly behind, skip frames aggressively.
-          if (driftForSkip > kSyncTolerance && !frameQueue.empty()) {
+          if (driftForSkip > syncTolerance && !frameQueue.empty()) {
             double targetTime = haveAudioClock ? syncSec : wallclockElapsed;
 
             while (frameQueue.size() > 1) {
               double frontSec =
-                  static_cast<double>(frameQueue.front().frame.timestamp100ns -
-                                      firstTs) *
+                  static_cast<double>(
+                      framePool[frameQueue.front().poolIndex].timestamp100ns -
+                      firstTs) *
                   ticksToSeconds;
               double nextSec =
-                  static_cast<double>(frameQueue[1].frame.timestamp100ns -
-                                      firstTs) *
+                  static_cast<double>(
+                      framePool[frameQueue[1].poolIndex].timestamp100ns -
+                      firstTs) *
                   ticksToSeconds;
 
               // If next frame is still behind target, skip current frame.
               if (nextSec <= targetTime) {
+                freeFrames.push_back(frameQueue.front().poolIndex);
                 frameQueue.pop_front();
                 ++popped;
                 ++skippedFrames;
@@ -2005,8 +2132,9 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           // Now take the front frame if it's ready.
           while (!frameQueue.empty()) {
             double qSec =
-                static_cast<double>(frameQueue.front().frame.timestamp100ns -
-                                    firstTs) *
+                static_cast<double>(
+                    framePool[frameQueue.front().poolIndex].timestamp100ns -
+                    firstTs) *
                 ticksToSeconds;
 
             if (qSec <= targetSec) {
@@ -2022,19 +2150,23 @@ static bool showAsciiVideo(const std::filesystem::path& file,
             nextTs = frameQueue.front().info.timestamp100ns;
           }
           queueEmpty = frameQueue.empty();
+          notifyQueue = popped > 0;
 
-          if (queueEmpty && haveAudioClock && driftForSkip > kSyncTolerance &&
+          if (queueEmpty && haveAudioClock && driftForSkip > syncTolerance &&
               !commandPendingAtomic.load()) {
             int64_t targetTs =
                 firstTs + static_cast<int64_t>(syncSec * secondsToTicks);
             requestFastForward(targetTs);
           }
         }
+        if (notifyQueue) {
+          queueCv.notify_all();
+        }
       }
       double prevFrameSec = lastFrameSec;
       if (advanced) {
-        frame = std::move(candidate.frame);
-        frameSec = static_cast<double>(frame.timestamp100ns - firstTs) *
+        setCurrentFrame(candidate.poolIndex);
+        frameSec = static_cast<double>(frame->timestamp100ns - firstTs) *
                    ticksToSeconds;
         lastFrameSec = frameSec;
         double durationSec = 0.0;
@@ -2046,6 +2178,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         }
         if (durationSec > 0.0) {
           lastFrameDurationSec = durationSec;
+          updateMaxQueue(lastFrameDurationSec);
         }
         if (haveAudioClock) {
           lastSyncDrift = syncSec - lastFrameSec;
@@ -2056,10 +2189,16 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         videoEnded = true;
       }
     }
+    if (!videoEnded && decodeEnded.load()) {
+      std::lock_guard<std::mutex> lock(queueMutex);
+      if (frameQueue.empty()) {
+        videoEnded = true;
+      }
+    }
 
-    if (advanced) {
+    if (advanced && presentDue) {
       double displayedSec = frameSec;
-      int64_t displayedTs = frame.timestamp100ns;
+      int64_t displayedTs = frame->timestamp100ns;
       auto renderStart = std::chrono::steady_clock::now();
       renderScreen(true);
       auto renderEnd = std::chrono::steady_clock::now();
@@ -2140,9 +2279,13 @@ static bool showAsciiVideo(const std::filesystem::path& file,
             candidate.info.streamTicks, candidate.info.typeChanges,
             candidate.info.recoveries, candidate.info.errorHr);
       }
+      nextPresentSec += kPresentIntervalSec;
+      if (presentClockSec > nextPresentSec + kPresentIntervalSec) {
+        nextPresentSec = presentClockSec;
+      }
     }
 
-    if (redraw && !advanced) {
+    if (redraw && !advanced && presentDue) {
       renderScreen(forceRefreshArt);
       if (renderFailed) {
         running = false;
@@ -2150,6 +2293,10 @@ static bool showAsciiVideo(const std::filesystem::path& file,
       }
       redraw = false;
       forceRefreshArt = false;
+      nextPresentSec += kPresentIntervalSec;
+      if (presentClockSec > nextPresentSec + kPresentIntervalSec) {
+        nextPresentSec = presentClockSec;
+      }
     }
 
     bool audioFinished =
@@ -2157,8 +2304,15 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     if (!audioOk && videoEnded) break;
     if (audioOk && audioFinished) break;
 
+    int sleepMs = 4;
+    if (presentInit) {
+      double dt = nextPresentSec - presentClockSec;
+      if (dt > 0.0) {
+        sleepMs = static_cast<int>(std::clamp(dt * 1000.0, 1.0, 10.0));
+      }
+    }
     auto sleepStart = std::chrono::steady_clock::now();
-    std::this_thread::sleep_for(std::chrono::milliseconds(4));
+    std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
     auto sleepEnd = std::chrono::steady_clock::now();
     lastSleepMs =
         std::chrono::duration<double, std::milli>(sleepEnd - sleepStart)
