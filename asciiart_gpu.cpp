@@ -172,7 +172,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
         // Sample Center
         float4 color = SampleInput(float2(u, v));
-        float luma = GetLuma(color.rgb);
+        float luma = SampleLuma(float2(u, v)); // Use consistent Y-based luma
         
         // 3x3 Sobel Edge Detection
         float texDx = 1.0f / (float)width;
@@ -356,11 +356,15 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float3 prevFg = UnpackColor(history.x);
     float3 prevBg = UnpackColor(history.y);
     
-    // Simple blend if difference is small
-    if (length(curFg - prevFg) < (float)kTemporalResetDelta/255.0f) {
+    // Use Manhattan distance to match CPU implementation exactly
+    float diffFg = abs(curFg.r - prevFg.r) + abs(curFg.g - prevFg.g) + abs(curFg.b - prevFg.b);
+    float diffBg = abs(curBg.r - prevBg.r) + abs(curBg.g - prevBg.g) + abs(curBg.b - prevBg.b);
+    float resetThresh = (float)kTemporalResetDelta / 255.0f;
+
+    if (diffFg < resetThresh) {
         curFg = lerp(prevFg, curFg, (float)kColorAlpha/255.0f);
     }
-    if (length(curBg - prevBg) < (float)kTemporalResetDelta/255.0f) {
+    if (diffBg < resetThresh) {
         curBg = lerp(prevBg, curBg, (float)kBgAlpha/255.0f);
     }
 
