@@ -463,6 +463,7 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   avcodec_flush_buffers(impl_->codec);
   impl_->atEnd = false;
   impl_->eof = false;
+  impl_->consecutiveTransferErrors = 0;
   return true;
 }
 
