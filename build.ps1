@@ -120,7 +120,8 @@ if (-not $installedRoot) {
   $manifestInstalled = Join-Path $root "vcpkg_installed"
   if (Test-Path $manifestInstalled) {
     $installedRoot = $manifestInstalled
-  } elseif ($vcpkgRoot) {
+  }
+  elseif ($vcpkgRoot) {
     $installedRoot = Join-Path $vcpkgRoot "installed"
   }
 }
