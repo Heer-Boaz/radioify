@@ -6,8 +6,16 @@ Console media browser/player with a vintage radio filter toggle.
 - Windows 10+ (uses console APIs and Media Foundation)
 - CMake 3.16+
 - MSVC (Visual Studio Build Tools)
+- vcpkg (for `-InstallDeps`)
 
 ## Build
+Install deps (FFmpeg via vcpkg):
+```powershell
+./build.ps1 -InstallDeps
+```
+If `vcpkg` complains about an invalid Visual Studio instance, install the C++ build tools ("Desktop development with C++") and retry.
+
+Build:
 ```powershell
 ./build.ps1
 ```
