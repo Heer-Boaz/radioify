@@ -476,7 +476,23 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
 
 bool VideoDecoder::redecodeLastFrame(VideoFrame& out) {
   if (!impl_ || !impl_->frame) return false;
-  return impl_->emitFrame(out, nullptr, true, impl_->frame);
+
+  AVFrame* src = impl_->frame;
+  if (src->format == AV_PIX_FMT_D3D11) {
+    av_frame_unref(impl_->scratch);
+    if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
+      // Try one more time with a fresh unref
+      av_frame_unref(impl_->scratch);
+      if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
+        return false;
+      }
+    }
+    src = impl_->scratch;
+    src->pts = impl_->frame->pts;
+    src->best_effort_timestamp = impl_->frame->best_effort_timestamp;
+  }
+
+  return impl_->emitFrame(out, nullptr, true, src);
 }
 
 bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
@@ -491,11 +507,22 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   int64_t targetUs = timestamp100ns / 10;
   targetUs += impl_->formatStartUs;
   if (targetUs < 0) targetUs = 0;
-  int64_t target =
-      av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
-  int res = avformat_seek_file(impl_->fmt, impl_->streamIndex, INT64_MIN,
-                               target, INT64_MAX, AVSEEK_FLAG_BACKWARD);
+
+  // Try avformat_seek_file with stream_index = -1 (AV_TIME_BASE)
+  // This avoids potential issues with stream timebase conversion or specific demuxer quirks.
+  int res = avformat_seek_file(impl_->fmt, -1, INT64_MIN, targetUs, INT64_MAX,
+                               AVSEEK_FLAG_BACKWARD);
+
+  if (res < 0) {
+    // Fallback: try av_seek_frame with stream index (legacy method)
+    int64_t targetStream =
+        av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
+    res = av_seek_frame(impl_->fmt, impl_->streamIndex, targetStream,
+                        AVSEEK_FLAG_BACKWARD);
+  }
+
   if (res < 0) return false;
+
   avcodec_flush_buffers(impl_->codec);
   impl_->atEnd = false;
   impl_->eof = false;
