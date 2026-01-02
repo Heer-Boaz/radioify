@@ -1705,7 +1705,9 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               
               int lumRange = std::max(1, lumHigh - lumLow);
               // Clamp lumRange to avoid amplifying noise in dark scenes
-              if (lumRange < 20) lumRange = 20;
+              // If the dynamic range is very low (< 80), it's likely just noise.
+              // Don't stretch it to full contrast.
+              if (lumRange < 80) lumRange = 80;
 
               if (gpuRenderer.RenderNV12(frame->yuv.data(), frame->width,
                                          frame->height, frame->stride,

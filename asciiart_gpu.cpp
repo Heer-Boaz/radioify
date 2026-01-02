@@ -248,6 +248,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     // 5. Target Dots Calculation
     float avgLumDiff = abs(cellLumMean - (float)bgLum);
+    
+    // Subtract noise floor (3 levels) to ensure true blacks in dark scenes
+    avgLumDiff = max(0.0f, avgLumDiff - 3.0f);
+
     if (lumRange > 0) {
         avgLumDiff = avgLumDiff * 255.0f / (float)lumRange;
     }
