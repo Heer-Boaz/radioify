@@ -81,3 +81,5 @@ packages/
 
 # Keep CMakeLists, source, headers, and project files tracked
 # (Adjust as needed for any generated sources you want to ignore)
+
+**.webm
