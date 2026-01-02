@@ -1165,21 +1165,20 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           }
         }
         if (hasCommand) {
-          decoder.flush();
-            if (command.resize) {
-              std::string sizeError;
-              if (!decoder.setTargetSize(command.targetW, command.targetH,
-                                         &sizeError)) {
-                if (sizeError.empty()) {
-                  sizeError = "Failed to apply target video size.";
-                }
-                setScaleWarning(sizeError);
-              } else {
-                setScaleWarning("");
-                currentTargetW = command.targetW;
-                currentTargetH = command.targetH;
+          if (command.resize) {
+            std::string sizeError;
+            if (!decoder.setTargetSize(command.targetW, command.targetH,
+                                       &sizeError)) {
+              if (sizeError.empty()) {
+                sizeError = "Failed to apply target video size.";
               }
+              setScaleWarning(sizeError);
+            } else {
+              setScaleWarning("");
+              currentTargetW = command.targetW;
+              currentTargetH = command.targetH;
             }
+          }
           if (command.seek) {
             if (!decoder.seekToTimestamp100ns(command.seekTs)) {
               setDecodeError("Failed to seek video.");

@@ -114,6 +114,7 @@ struct VideoDecoder::Impl {
   uint32_t yuvMatrix = MFVideoTransferMatrix_BT709;
   bool fullRange = true;
   int consecutiveTransferErrors = 0;
+  bool hasPendingPacket = false;
 
   bool emitFrame(VideoFrame& out, VideoReadInfo* info, bool decodePixels,
                  AVFrame* src) {
@@ -341,7 +342,10 @@ void VideoDecoder::uninit() {
   if (impl_->hw_device_ctx) {
     av_buffer_unref(&impl_->hw_device_ctx);
   }
-  av_packet_free(&impl_->packet);
+  if (impl_->packet) {
+    av_packet_unref(impl_->packet);
+    av_packet_free(&impl_->packet);
+  }
   av_frame_free(&impl_->frame);
   av_frame_free(&impl_->scratch);
   if (impl_->codec) {
@@ -427,19 +431,45 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       return false;
     }
 
-    if (!impl_->eof) {
+    if (impl_->eof) {
+      impl_->atEnd = true;
+      return false;
+    }
+
+    if (!impl_->hasPendingPacket) {
       int read = av_read_frame(impl_->fmt, impl_->packet);
       if (read < 0) {
         impl_->eof = true;
         avcodec_send_packet(impl_->codec, nullptr);
         continue;
       }
+      impl_->hasPendingPacket = true;
+    }
+
+    if (impl_->hasPendingPacket) {
       if (impl_->packet->stream_index != impl_->streamIndex) {
         av_packet_unref(impl_->packet);
+        impl_->hasPendingPacket = false;
         continue;
       }
-      avcodec_send_packet(impl_->codec, impl_->packet);
+
+      int send = avcodec_send_packet(impl_->codec, impl_->packet);
+      if (send == AVERROR(EAGAIN)) {
+        // Decoder is full, but receive returned EAGAIN.
+        // This implies a deadlock or unexpected state.
+        // We cannot send, and we cannot receive.
+        // This is a fatal error for this decoder instance.
+        return false;
+      }
+
       av_packet_unref(impl_->packet);
+      impl_->hasPendingPacket = false;
+
+      if (send < 0 && send != AVERROR_EOF) {
+        // Error sending packet (e.g. invalid data).
+        // We dropped the packet and continue to next one.
+        continue;
+      }
     }
   }
 }
@@ -452,13 +482,19 @@ bool VideoDecoder::redecodeLastFrame(VideoFrame& out) {
 bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   if (!impl_ || !impl_->fmt) return false;
   if (impl_->streamIndex < 0) return false;
+
+  if (impl_->packet) {
+    av_packet_unref(impl_->packet);
+  }
+  impl_->hasPendingPacket = false;
+
   int64_t targetUs = timestamp100ns / 10;
   targetUs += impl_->formatStartUs;
   if (targetUs < 0) targetUs = 0;
   int64_t target =
       av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
-  int res = av_seek_frame(impl_->fmt, impl_->streamIndex, target,
-                          AVSEEK_FLAG_BACKWARD);
+  int res = avformat_seek_file(impl_->fmt, impl_->streamIndex, INT64_MIN,
+                               target, INT64_MAX, AVSEEK_FLAG_BACKWARD);
   if (res < 0) return false;
   avcodec_flush_buffers(impl_->codec);
   impl_->atEnd = false;
