@@ -6,10 +6,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <wincodec.h>
-#include <windows.h>
+#include <immintrin.h>
 #include <mfapi.h>
 #include <mfobjects.h>
+#include <wincodec.h>
+#include <windows.h>
 
 #include <algorithm>
 #include <array>
@@ -17,7 +18,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <immintrin.h>
 #include <thread>
 #include <vector>
 
@@ -36,42 +36,43 @@ constexpr uint32_t kBrailleBase = 0x2800;
 // Classic ASCII art approach: characters sorted by visual density
 // This is cached as a simple lookup table indexed by density level (0-15)
 constexpr std::array<wchar_t, 16> kDensityRamp = {
-  L' ',   // 0 (lightest)
-  L'.',   // 1
-  L',',   // 2
-  L':',   // 3
-  L';',   // 4
-  L'-',   // 5
-  L'=',   // 6
-  L'+',   // 7
-  L'*',   // 8
-  L'#',   // 9
-  L'%',   // 10
-  L'@',   // 11
-  L'░',   // 12
-  L'▓',   // 13
-  L'▒',   // 14
-  L'█'    // 15 (darkest)
+    L' ',  // 0 (lightest)
+    L'.',  // 1
+    L',',  // 2
+    L':',  // 3
+    L';',  // 4
+    L'-',  // 5
+    L'=',  // 6
+    L'+',  // 7
+    L'*',  // 8
+    L'#',  // 9
+    L'%',  // 10
+    L'@',  // 11
+    L'░',  // 12
+    L'▓',  // 13
+    L'▒',  // 14
+    L'█'   // 15 (darkest)
 };
 
 // Pre-computed: for each dot count (0-8), what density character to use
 // This is a simple O(1) lookup, no computation needed at runtime
 constexpr std::array<wchar_t, 9> kDotCountToChar = {
-  L' ',   // 0 dots
-  L'.',   // 1 dot
-  L':',   // 2 dots
-  L'-',   // 3 dots
-  L'+',   // 4 dots
-  L'*',   // 5 dots
-  L'#',   // 6 dots
-  L'%',   // 7 dots
-  L'@',   // 8 dots
+    L' ',  // 0 dots
+    L'.',  // 1 dot
+    L':',  // 2 dots
+    L'-',  // 3 dots
+    L'+',  // 4 dots
+    L'*',  // 5 dots
+    L'#',  // 6 dots
+    L'%',  // 7 dots
+    L'@',  // 8 dots
 };
 
 // Configuration: when to use ASCII vs braille
 // Braille is better for detail, ASCII is better for large uniform areas
-constexpr bool kUseHybridMode = false;          // Disable hybrid - braille is better
-constexpr int kMinContrastForBraille = 15;      // Use braille when cell has this much contrast
+constexpr bool kUseHybridMode = false;  // Disable hybrid - braille is better
+constexpr int kMinContrastForBraille =
+    15;  // Use braille when cell has this much contrast
 
 // Direct YUV conversie zonder sRGB linearisering
 // Rec. 709 coefficients als integer fixed-point (<<16 voor precision)
@@ -83,7 +84,8 @@ constexpr int kYCoeffB = (int)(0.0722f * 65536.0f + 0.5f);  // ~4732
 FORCE_INLINE uint8_t rgbToY(uint8_t r, uint8_t g, uint8_t b) {
   uint32_t y = (static_cast<uint32_t>(r) * kYCoeffR +
                 static_cast<uint32_t>(g) * kYCoeffG +
-                static_cast<uint32_t>(b) * kYCoeffB) >> 16;
+                static_cast<uint32_t>(b) * kYCoeffB) >>
+               16;
   return static_cast<uint8_t>(y > 255 ? 255 : y);
 }
 
@@ -169,32 +171,32 @@ void parallelFor(int totalRows, int minBatch, int workerCount, Fn&& fn) {
 
 // Verbeterde rendering parameters voor betere precisie
 constexpr bool kInkUseBright = true;
-constexpr float kInkGamma = 0.50f;           // Iets lineairder voor betere detail
-constexpr float kCoverageGain = 1.85f;       // Verhoogd voor meer contrast
-constexpr float kCoverageBias = 0.12f;       // Verlaagd voor schonere achtergrond
-constexpr float kCoverageZeroCutoff = 0.02f; // Iets hoger voor minder ruis
-constexpr float kLumLowPercent = 0.01f;      // Preciezer dynamic range
+constexpr float kInkGamma = 0.50f;      // Iets lineairder voor betere detail
+constexpr float kCoverageGain = 1.85f;  // Verhoogd voor meer contrast
+constexpr float kCoverageBias = 0.12f;  // Verlaagd voor schonere achtergrond
+constexpr float kCoverageZeroCutoff = 0.02f;  // Iets hoger voor minder ruis
+constexpr float kLumLowPercent = 0.01f;       // Preciezer dynamic range
 constexpr float kLumHighPercent = 0.99f;
 constexpr uint8_t kColorLift = 0;
-constexpr uint8_t kInkMinLuma = 110;         // Iets verlaagd voor donkerdere tinten
+constexpr uint8_t kInkMinLuma = 110;  // Iets verlaagd voor donkerdere tinten
 constexpr uint8_t kBgMinLuma = 20;
-constexpr int kInkMaxScale = 1280;           // Verhoogd voor meer bereik
-constexpr int kColorAlpha = 48;              // Snellere kleurrespons
+constexpr int kInkMaxScale = 1280;  // Verhoogd voor meer bereik
+constexpr int kColorAlpha = 48;     // Snellere kleurrespons
 constexpr int kBgAlpha = 24;
-constexpr int kTemporalResetDelta = 48;      // Snellere scene change detectie
-constexpr int kColorSaturation = 340;        // Iets meer saturatie
+constexpr int kTemporalResetDelta = 48;  // Snellere scene change detectie
+constexpr int kColorSaturation = 340;    // Iets meer saturatie
 constexpr bool kUseEdgeBoost = true;
-constexpr uint8_t kEdgeMin = 4;              // Lagere drempel voor fijnere edges
-constexpr uint8_t kEdgeBoost = 245;          // Sterker edge boost
+constexpr uint8_t kEdgeMin = 4;      // Lagere drempel voor fijnere edges
+constexpr uint8_t kEdgeBoost = 245;  // Sterker edge boost
 constexpr int kEdgeShift = 3;
-constexpr int kBgDelta = 6;                  // Lagere threshold voor meer detail
+constexpr int kBgDelta = 6;  // Lagere threshold voor meer detail
 constexpr int kBgDeltaMin = 1;
-constexpr int kEdgeDeltaScale = 96;          // Meer edge-responsief
-constexpr int kDitherBias = 48;              // Verlaagd voor betere halftones
+constexpr int kEdgeDeltaScale = 96;  // Meer edge-responsief
+constexpr int kDitherBias = 48;      // Verlaagd voor betere halftones
 constexpr bool kUseAABand = true;
 constexpr int kAAScoreBandMin = 12;
-constexpr int kAAScoreBandMax = 144;          // Soft AA band voor gladdere randen
-constexpr int kLumSmoothAlpha = 40;          // Snellere adaptatie
+constexpr int kAAScoreBandMax = 144;  // Soft AA band voor gladdere randen
+constexpr int kLumSmoothAlpha = 40;   // Snellere adaptatie
 constexpr int kLumResetDelta = 28;
 
 // Rec. 709 coefficients met hogere precisie (fixed-point 16.16)
@@ -207,7 +209,8 @@ const std::array<uint8_t, 256> kInkLevelFromLum = []() {
     float x = kInkUseBright ? norm : (1.0f - norm);
     float coverage = std::pow(x, kInkGamma);
     // Alleen bias toepassen als er daadwerkelijk een verschil is
-    // Dit zorgt ervoor dat 0 dots mogelijk is bij zeer lage luminantie verschillen
+    // Dit zorgt ervoor dat 0 dots mogelijk is bij zeer lage luminantie
+    // verschillen
     if (coverage > 0.001f) {
       coverage = coverage * kCoverageGain + kCoverageBias;
     }
@@ -219,7 +222,8 @@ const std::array<uint8_t, 256> kInkLevelFromLum = []() {
   return lut;
 }();
 
-// Verbeterde Bayer-achtige dithering matrix geoptimaliseerd voor 2x4 braille patroon
+// Verbeterde Bayer-achtige dithering matrix geoptimaliseerd voor 2x4 braille
+// patroon
 const std::array<uint8_t, 8> kDitherThresholdByBit = []() {
   std::array<uint8_t, 8> lut{};
   // Geoptimaliseerde volgorde voor 2x4 braille cel (betere gradiënt verdeling)
@@ -251,10 +255,8 @@ const std::array<uint8_t, 256> kEdgeBoostFromMag = []() {
 }();
 
 FORCE_INLINE uint32_t packRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-  return static_cast<uint32_t>(r) |
-         (static_cast<uint32_t>(g) << 8) |
-         (static_cast<uint32_t>(b) << 16) |
-         (static_cast<uint32_t>(a) << 24);
+  return static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
+         (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(a) << 24);
 }
 
 FORCE_INLINE uint8_t clampToByte(float v) {
@@ -281,9 +283,8 @@ FORCE_INLINE uint8_t to8bitFrom10(int v10) {
   return static_cast<uint8_t>((v10 * 255 + 511) / 1023);
 }
 
-FORCE_INLINE void yuvToRgb(int y, int u, int v, bool fullRange,
-                           uint32_t matrix, uint8_t& outR, uint8_t& outG,
-                           uint8_t& outB) {
+FORCE_INLINE void yuvToRgb(int y, int u, int v, bool fullRange, uint32_t matrix,
+                           uint8_t& outR, uint8_t& outG, uint8_t& outB) {
   float yf = 0.0f;
   float uf = 0.0f;
   float vf = 0.0f;
@@ -348,7 +349,7 @@ struct BrailleFastScratch {
   std::vector<int> xMapEnd;
   std::vector<int> yMapStart;
   std::vector<int> yMapEnd;
-  
+
   std::vector<uint32_t> scaledRGBA;
   std::vector<uint8_t> lumaPad;  // Direct uint8_t - efficiënter
   std::vector<uint8_t> edgeMap;
@@ -390,12 +391,13 @@ struct BrailleFastScratch {
     scaledH = newScaledH;
     padStride = newPadStride;
 
-    // Subpixel sampling bounds - elk scaled pixel samplet meerdere source pixels
+    // Subpixel sampling bounds - elk scaled pixel samplet meerdere source
+    // pixels
     xMapStart.resize(static_cast<size_t>(scaledW));
     xMapEnd.resize(static_cast<size_t>(scaledW));
     yMapStart.resize(static_cast<size_t>(scaledH));
     yMapEnd.resize(static_cast<size_t>(scaledH));
-    
+
     for (int x = 0; x < scaledW; ++x) {
       xMapStart[x] = (x * w) / scaledW;
       xMapEnd[x] = ((x + 1) * w) / scaledW;
@@ -513,8 +515,7 @@ bool loadImagePixels(const std::filesystem::path& path, int& outW, int& outH,
 
 template <bool AssumeOpaque>
 bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
-                               uint64_t lumCount,
-                               const uint32_t* lumHist) {
+                               uint64_t lumCount, const uint32_t* lumHist) {
   const int outW = scratch.outW;
   const int outH = scratch.outH;
   const int scaledW = scratch.scaledW;
@@ -525,67 +526,67 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   out.height = outH;
   out.cells.resize(static_cast<size_t>(outW) * outH);
 
-  std::memcpy(scratch.lumaPad.data(),
-              scratch.lumaPad.data() + padStride,
+  std::memcpy(scratch.lumaPad.data(), scratch.lumaPad.data() + padStride,
               static_cast<size_t>(padStride));
-  std::memcpy(scratch.lumaPad.data() +
-                  static_cast<size_t>(scaledH + 1) * padStride,
-              scratch.lumaPad.data() +
-                  static_cast<size_t>(scaledH) * padStride,
-              static_cast<size_t>(padStride));
+  std::memcpy(
+      scratch.lumaPad.data() + static_cast<size_t>(scaledH + 1) * padStride,
+      scratch.lumaPad.data() + static_cast<size_t>(scaledH) * padStride,
+      static_cast<size_t>(padStride));
 
   if constexpr (kUseEdgeBoost) {
     int workerCount = computeWorkerCount(scaledH, kParallelBatchRows);
-    parallelFor(scaledH, kParallelBatchRows, workerCount,
-                [&](int yStart, int yEnd, int) {
-                  for (int y = yStart; y < yEnd; ++y) {
-      const uint8_t* RESTRICT row =
-          scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride + 1;
-      uint8_t* RESTRICT edgeRow =
-          scratch.edgeMap.data() + static_cast<size_t>(y) * scaledW;
-      uint8_t* RESTRICT contrastRow =
-          scratch.localContrast.data() + static_cast<size_t>(y) * scaledW;
-      for (int x = 0; x < scaledW; ++x) {
-        const uint8_t* p = row + x;
-        // Sobel kernel (uint8_t luma sufficient)
-        int a00 = p[-padStride - 1];
-        int a01 = p[-padStride];
-        int a02 = p[-padStride + 1];
-        int a10 = p[-1];
-        int a11 = p[0];
-        int a12 = p[1];
-        int a20 = p[padStride - 1];
-        int a21 = p[padStride];
-        int a22 = p[padStride + 1];
-        
-        // Sobel gradi‰nt
-        int gx = (a02 + (a12 << 1) + a22) - (a00 + (a10 << 1) + a20);
-        int gy = (a20 + (a21 << 1) + a22) - (a00 + (a01 << 1) + a02);
-        int magSq = gx * gx + gy * gy;
-        int mag = fastIntSqrt(magSq);
-        int edge = mag >> (kEdgeShift - 1);
-        if (edge > 255) edge = 255;
-        edgeRow[x] = static_cast<uint8_t>(edge);
-        
-        // Lokaal contrast: verschil tussen center en gemiddelde neighbours
-        int avgNeighbor = (a00 + a01 + a02 + a10 + a12 + a20 + a21 + a22) >> 3;
-        int localDiff = std::abs(a11 - avgNeighbor);
-        if (localDiff > 255) localDiff = 255;
-        contrastRow[x] = static_cast<uint8_t>(localDiff);
-      }
-    }
-                });
+    parallelFor(
+        scaledH, kParallelBatchRows, workerCount,
+        [&](int yStart, int yEnd, int) {
+          for (int y = yStart; y < yEnd; ++y) {
+            const uint8_t* RESTRICT row =
+                scratch.lumaPad.data() +
+                static_cast<size_t>(y + 1) * padStride + 1;
+            uint8_t* RESTRICT edgeRow =
+                scratch.edgeMap.data() + static_cast<size_t>(y) * scaledW;
+            uint8_t* RESTRICT contrastRow =
+                scratch.localContrast.data() + static_cast<size_t>(y) * scaledW;
+            for (int x = 0; x < scaledW; ++x) {
+              const uint8_t* p = row + x;
+              // Sobel kernel (uint8_t luma sufficient)
+              int a00 = p[-padStride - 1];
+              int a01 = p[-padStride];
+              int a02 = p[-padStride + 1];
+              int a10 = p[-1];
+              int a11 = p[0];
+              int a12 = p[1];
+              int a20 = p[padStride - 1];
+              int a21 = p[padStride];
+              int a22 = p[padStride + 1];
+
+              // Sobel gradi‰nt
+              int gx = (a02 + (a12 << 1) + a22) - (a00 + (a10 << 1) + a20);
+              int gy = (a20 + (a21 << 1) + a22) - (a00 + (a01 << 1) + a02);
+              int magSq = gx * gx + gy * gy;
+              int mag = fastIntSqrt(magSq);
+              int edge = mag >> (kEdgeShift - 1);
+              if (edge > 255) edge = 255;
+              edgeRow[x] = static_cast<uint8_t>(edge);
+
+              // Lokaal contrast: verschil tussen center en gemiddelde
+              // neighbours
+              int avgNeighbor =
+                  (a00 + a01 + a02 + a10 + a12 + a20 + a21 + a22) >> 3;
+              int localDiff = std::abs(a11 - avgNeighbor);
+              if (localDiff > 255) localDiff = 255;
+              contrastRow[x] = static_cast<uint8_t>(localDiff);
+            }
+          }
+        });
   }
 
   int lumLow = 0;
   int lumHigh = 255;
   if (lumCount > 0) {
-    uint64_t lowTarget = static_cast<uint64_t>(
-        std::max(1.0, std::round(static_cast<double>(lumCount) *
-                                 kLumLowPercent)));
-    uint64_t highTarget = static_cast<uint64_t>(
-        std::max(1.0, std::round(static_cast<double>(lumCount) *
-                                 kLumHighPercent)));
+    uint64_t lowTarget = static_cast<uint64_t>(std::max(
+        1.0, std::round(static_cast<double>(lumCount) * kLumLowPercent)));
+    uint64_t highTarget = static_cast<uint64_t>(std::max(
+        1.0, std::round(static_cast<double>(lumCount) * kLumHighPercent)));
     uint64_t accum = 0;
     for (int i = 0; i < 256; ++i) {
       accum += lumHist[i];
@@ -644,446 +645,458 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   const int brailleMap[2][4] = {{0, 1, 2, 6}, {3, 4, 5, 7}};
 
   int workerCount = computeWorkerCount(outH, kParallelBatchRows);
-  parallelFor(outH, kParallelBatchRows, workerCount,
-              [&](int cyStart, int cyEnd, int) {
-                for (int cy = cyStart; cy < cyEnd; ++cy) {
-    int baseY = cy * 4;
-    // Prefetch volgende rij data voor betere cache hits
-    if (cy + 1 < outH) {
-      int nextBaseY = (cy + 1) * 4;
-      _mm_prefetch(reinterpret_cast<const char*>(
-          scratch.scaledRGBA.data() + static_cast<size_t>(nextBaseY) * scaledW),
-          _MM_HINT_T0);
-    }
-    for (int cx = 0; cx < outW; ++cx) {
-      int baseX = cx * 2;
-      int bitmask = 0;
-      int sumAllR = 0;
-      int sumAllG = 0;
-      int sumAllB = 0;
-      int colorCount = 0;
-      uint8_t rVals[8];
-      uint8_t gVals[8];
-      uint8_t bVals[8];
-      uint8_t lumVals[8];  // Direct uint8_t
-      uint8_t edgeVals[8];
-      uint8_t contrastVals[8];
-      uint8_t bitIds[8];
-      uint8_t validVals[8];
-      int dotIndex = 0;
-
-      // Verzamel lokale statistieken voor adaptive thresholding
-      int cellLumMin = 255, cellLumMax = 0;
-      int cellLumSum = 0;
-      int validCount = 0;
-      int cellEdgeMax = 0;
-      int cellContrastMax = 0;
-
-      for (int dy = 0; dy < 4; ++dy) {
-        int y = baseY + dy;
-        const uint32_t* rgbRow =
-            scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW +
-            baseX;
-        const uint8_t* lumRow =
-            scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride +
-            (baseX + 1);
-        const uint8_t* edgeRow = scratch.edgeMap.data() +
-                                 static_cast<size_t>(y) * scaledW + baseX;
-        const uint8_t* contrastRow = scratch.localContrast.data() +
-                                     static_cast<size_t>(y) * scaledW + baseX;
-
-        for (int dx = 0; dx < 2; ++dx) {
-          uint32_t px = rgbRow[dx];
-          uint8_t r = static_cast<uint8_t>(px & 0xFF);
-          uint8_t g = static_cast<uint8_t>((px >> 8) & 0xFF);
-          uint8_t b = static_cast<uint8_t>((px >> 16) & 0xFF);
-          uint8_t lum = lumRow[dx];
-          uint8_t a = 255;
-          if constexpr (!AssumeOpaque) {
-            a = static_cast<uint8_t>((px >> 24) & 0xFF);
+  parallelFor(
+      outH, kParallelBatchRows, workerCount, [&](int cyStart, int cyEnd, int) {
+        for (int cy = cyStart; cy < cyEnd; ++cy) {
+          int baseY = cy * 4;
+          // Prefetch volgende rij data voor betere cache hits
+          if (cy + 1 < outH) {
+            int nextBaseY = (cy + 1) * 4;
+            _mm_prefetch(reinterpret_cast<const char*>(
+                             scratch.scaledRGBA.data() +
+                             static_cast<size_t>(nextBaseY) * scaledW),
+                         _MM_HINT_T0);
           }
-          rVals[dotIndex] = r;
-          gVals[dotIndex] = g;
-          bVals[dotIndex] = b;
-          lumVals[dotIndex] = lum;  // Direct uint8_t luma
-          edgeVals[dotIndex] = edgeRow[dx];
-          contrastVals[dotIndex] = contrastRow[dx];
-          bitIds[dotIndex] = static_cast<uint8_t>(brailleMap[dx][dy]);
-          validVals[dotIndex] = static_cast<uint8_t>(a != 0);
+          for (int cx = 0; cx < outW; ++cx) {
+            int baseX = cx * 2;
+            int bitmask = 0;
+            int sumAllR = 0;
+            int sumAllG = 0;
+            int sumAllB = 0;
+            int colorCount = 0;
+            uint8_t rVals[8];
+            uint8_t gVals[8];
+            uint8_t bVals[8];
+            uint8_t lumVals[8];  // Direct uint8_t
+            uint8_t edgeVals[8];
+            uint8_t contrastVals[8];
+            uint8_t bitIds[8];
+            uint8_t validVals[8];
+            int dotIndex = 0;
 
-          if constexpr (!AssumeOpaque) {
-            if (a == 0) {
-              ++dotIndex;
-              continue;
+            // Verzamel lokale statistieken voor adaptive thresholding
+            int cellLumMin = 255, cellLumMax = 0;
+            int cellLumSum = 0;
+            int validCount = 0;
+            int cellEdgeMax = 0;
+            int cellContrastMax = 0;
+
+            for (int dy = 0; dy < 4; ++dy) {
+              int y = baseY + dy;
+              const uint32_t* rgbRow = scratch.scaledRGBA.data() +
+                                       static_cast<size_t>(y) * scaledW + baseX;
+              const uint8_t* lumRow = scratch.lumaPad.data() +
+                                      static_cast<size_t>(y + 1) * padStride +
+                                      (baseX + 1);
+              const uint8_t* edgeRow = scratch.edgeMap.data() +
+                                       static_cast<size_t>(y) * scaledW + baseX;
+              const uint8_t* contrastRow = scratch.localContrast.data() +
+                                           static_cast<size_t>(y) * scaledW +
+                                           baseX;
+
+              for (int dx = 0; dx < 2; ++dx) {
+                uint32_t px = rgbRow[dx];
+                uint8_t r = static_cast<uint8_t>(px & 0xFF);
+                uint8_t g = static_cast<uint8_t>((px >> 8) & 0xFF);
+                uint8_t b = static_cast<uint8_t>((px >> 16) & 0xFF);
+                uint8_t lum = lumRow[dx];
+                uint8_t a = 255;
+                if constexpr (!AssumeOpaque) {
+                  a = static_cast<uint8_t>((px >> 24) & 0xFF);
+                }
+                rVals[dotIndex] = r;
+                gVals[dotIndex] = g;
+                bVals[dotIndex] = b;
+                lumVals[dotIndex] = lum;  // Direct uint8_t luma
+                edgeVals[dotIndex] = edgeRow[dx];
+                contrastVals[dotIndex] = contrastRow[dx];
+                bitIds[dotIndex] = static_cast<uint8_t>(brailleMap[dx][dy]);
+                validVals[dotIndex] = static_cast<uint8_t>(a != 0);
+
+                if constexpr (!AssumeOpaque) {
+                  if (a == 0) {
+                    ++dotIndex;
+                    continue;
+                  }
+                }
+
+                // Lokale statistieken voor deze cel
+                if (edgeVals[dotIndex] > cellEdgeMax)
+                  cellEdgeMax = edgeVals[dotIndex];
+                if (contrastVals[dotIndex] > cellContrastMax) {
+                  cellContrastMax = contrastVals[dotIndex];
+                }
+                int lumInt = lum;
+                if (lumInt < cellLumMin) cellLumMin = lumInt;
+                if (lumInt > cellLumMax) cellLumMax = lumInt;
+                cellLumSum += lumInt;
+                ++validCount;
+
+                sumAllR += r;
+                sumAllG += g;
+                sumAllB += b;
+                ++colorCount;
+                ++dotIndex;
+              }
             }
-          }
 
-          // Lokale statistieken voor deze cel
-          if (edgeVals[dotIndex] > cellEdgeMax) cellEdgeMax = edgeVals[dotIndex];
-          if (contrastVals[dotIndex] > cellContrastMax) {
-            cellContrastMax = contrastVals[dotIndex];
-          }
-          int lumInt = lum;
-          if (lumInt < cellLumMin) cellLumMin = lumInt;
-          if (lumInt > cellLumMax) cellLumMax = lumInt;
-          cellLumSum += lumInt;
-          ++validCount;
+            // Adaptive thresholding: gebruik lokaal contrast indien significant
+            int cellLumRange = cellLumMax - cellLumMin;
+            int cellLumMean = validCount > 0 ? cellLumSum / validCount : bgLum;
+            bool useLocalThreshold =
+                cellLumRange > 20;  // Alleen bij voldoende lokaal contrast
+            int localMidpoint =
+                useLocalThreshold ? ((cellLumMin + cellLumMax) >> 1) : bgLum;
 
-          sumAllR += r;
-          sumAllG += g;
-          sumAllB += b;
-          ++colorCount;
-          ++dotIndex;
-        }
-      }
+            // Sorteer dots op luminantie voor rank-based thresholding
+            struct DotInfo {
+              int idx;
+              int score;
+            };
+            DotInfo dotRanks[8];
+            int numValidDots = 0;
 
-      // Adaptive thresholding: gebruik lokaal contrast indien significant
-      int cellLumRange = cellLumMax - cellLumMin;
-      int cellLumMean = validCount > 0 ? cellLumSum / validCount : bgLum;
-      bool useLocalThreshold = cellLumRange > 20;  // Alleen bij voldoende lokaal contrast
-      int localMidpoint = useLocalThreshold ? ((cellLumMin + cellLumMax) >> 1) : bgLum;
+            for (int i = 0; i < 8; ++i) {
+              if (!validVals[i]) continue;
 
-      // Sorteer dots op luminantie voor rank-based thresholding
-      struct DotInfo { int idx; int score; };
-      DotInfo dotRanks[8];
-      int numValidDots = 0;
-      
-      for (int i = 0; i < 8; ++i) {
-        if (!validVals[i]) continue;
-        
-        int lum = lumVals[i];  // Already uint8_t, implicit conversion
-        int edge = edgeVals[i];
-        int contrast = contrastVals[i];
-        
-        // Score combineert luminantie verschil + edge boost + lokaal contrast
-        int lumDiff = useLocalThreshold 
-            ? std::abs(lum - localMidpoint)
-            : std::abs(lum - bgLum);
-        
-        int score = lumDiff * 2 + edge + (contrast >> 1);
-        dotRanks[numValidDots++] = {i, score};
-      }
+              int lum = lumVals[i];  // Already uint8_t, implicit conversion
+              int edge = edgeVals[i];
+              int contrast = contrastVals[i];
 
-      // Bepaal hoeveel dots we moeten aanzetten gebaseerd op gemiddelde coverage
-      int avgLumDiff = validCount > 0 
-          ? std::abs(cellLumMean - bgLum) * 255 / std::max(1, lumRange) 
-          : 0;
-      if (avgLumDiff > 255) avgLumDiff = 255;
-      int targetCoverage = kInkLevelFromLum[static_cast<size_t>(avgLumDiff)];
-      int targetDots = (numValidDots * targetCoverage + 127) / 255;
-      
-      // Houd randen zichtbaar: forceer minimaal wat ink bij lokaal detail.
-      int detailScore =
-          std::max(cellLumRange, std::max(cellEdgeMax, cellContrastMax));
-      int minDots = 0;
-      if (detailScore >= kMinContrastForBraille) {
-        minDots = 1;
-        if (detailScore >= kMinContrastForBraille * 2) {
-          minDots = 2;
-        }
-      }
-      if (targetDots < minDots) {
-        targetDots = std::min(minDots, numValidDots);
-      }
+              // Score combineert luminantie verschil + edge boost + lokaal
+              // contrast
+              int lumDiff = useLocalThreshold ? std::abs(lum - localMidpoint)
+                                              : std::abs(lum - bgLum);
 
-      // Sorteer dots op score (hoogste eerst)
-      for (int i = 0; i < numValidDots - 1; ++i) {
-        for (int j = i + 1; j < numValidDots; ++j) {
-          if (dotRanks[j].score > dotRanks[i].score) {
-            DotInfo tmp = dotRanks[i];
-            dotRanks[i] = dotRanks[j];
-            dotRanks[j] = tmp;
-          }
-        }
-      }
+              int score = lumDiff * 2 + edge + (contrast >> 1);
+              dotRanks[numValidDots++] = {i, score};
+            }
 
-      int aaBand = 0;
-      int aaCutoffScore = 0;
-      bool useAABand = false;
-      if constexpr (kUseAABand) {
-        if (numValidDots > 0) {
-          int scoreRange =
-              dotRanks[0].score - dotRanks[numValidDots - 1].score;
-          aaBand = std::min(scoreRange, kAAScoreBandMax);
-          useAABand = detailScore >= kMinContrastForBraille &&
-                      aaBand >= kAAScoreBandMin;
-          aaCutoffScore = (targetDots > 0)
-                              ? dotRanks[targetDots - 1].score
-                              : dotRanks[0].score;
-        }
-      }
+            // Bepaal hoeveel dots we moeten aanzetten gebaseerd op gemiddelde
+            // coverage
+            int avgLumDiff = validCount > 0 ? std::abs(cellLumMean - bgLum) *
+                                                  255 / std::max(1, lumRange)
+                                            : 0;
+            if (avgLumDiff > 255) avgLumDiff = 255;
+            int targetCoverage =
+                kInkLevelFromLum[static_cast<size_t>(avgLumDiff)];
+            int targetDots = (numValidDots * targetCoverage + 127) / 255;
 
-      // Activeer de top N dots, met dither voor de grensgevallen
-      for (int rank = 0; rank < numValidDots; ++rank) {
-        int i = dotRanks[rank].idx;
-        int edge = static_cast<int>(edgeVals[i]);
-        
-        // Basis threshold gebaseerd op rank
-        bool shouldActivate = false;
-        if (rank < targetDots) {
-          // Zeker aan
-          shouldActivate = true;
-        } else if (rank == targetDots && targetCoverage > 0) {
-          // Grens-dot: gebruik dithering alleen als er coverage is
-          int ditherThresh = static_cast<int>(
-              kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
-          int fractionalCoverage = (numValidDots * targetCoverage) % 255;
-          shouldActivate = fractionalCoverage > ditherThresh;
-        }
+            // Houd randen zichtbaar: forceer minimaal wat ink bij lokaal
+            // detail.
+            int detailScore =
+                std::max(cellLumRange, std::max(cellEdgeMax, cellContrastMax));
+            int minDots = 0;
+            if (detailScore >= kMinContrastForBraille) {
+              minDots = 1;
+              if (detailScore >= kMinContrastForBraille * 2) {
+                minDots = 2;
+              }
+            }
+            if (targetDots < minDots) {
+              targetDots = std::min(minDots, numValidDots);
+            }
 
-        if (!shouldActivate && useAABand) {
-          int scoreDelta = aaCutoffScore - dotRanks[rank].score;
-          if (scoreDelta >= 0 && scoreDelta < aaBand) {
-            int numer = (aaBand - scoreDelta) * 255 + (aaBand / 2);
-            int ditherThresh = static_cast<int>(
-                kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
-            shouldActivate = numer > ditherThresh * aaBand;
-          }
-        }
-        
-        // Edge boost kan extra dots aanzetten, maar alleen bij significante edges
-        if (!shouldActivate && edge > kEdgeMin * 3) {
-          int edgeBonus = kEdgeBoostFromMag[static_cast<size_t>(edge)];
-          int ditherThresh = static_cast<int>(
-              kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]) - kDitherBias;
-          if (ditherThresh < 0) ditherThresh = 0;
-          shouldActivate = edgeBonus > ditherThresh;
-        }
-        
-        if (shouldActivate) {
-          bitmask |= (1 << bitIds[i]);
-        }
-      }
+            // Sorteer dots op score (hoogste eerst)
+            for (int i = 0; i < numValidDots - 1; ++i) {
+              for (int j = i + 1; j < numValidDots; ++j) {
+                if (dotRanks[j].score > dotRanks[i].score) {
+                  DotInfo tmp = dotRanks[i];
+                  dotRanks[i] = dotRanks[j];
+                  dotRanks[j] = tmp;
+                }
+              }
+            }
 
-      size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
-      uint8_t outR = 0;
-      uint8_t outG = 0;
-      uint8_t outB = 0;
-      uint8_t outBgR = 0;
-      uint8_t outBgG = 0;
-      uint8_t outBgB = 0;
-      bool hasBg = false;
-      int sumInkR = 0;
-      int sumInkG = 0;
-      int sumInkB = 0;
-      int inkCount = 0;
-      int sumBgR = 0;
-      int sumBgG = 0;
-      int sumBgB = 0;
-      int bgCount = 0;
-      for (int i = 0; i < 8; ++i) {
-        if (!validVals[i]) continue;
-        if (bitmask & (1 << bitIds[i])) {
-          sumInkR += rVals[i];
-          sumInkG += gVals[i];
-          sumInkB += bVals[i];
-          ++inkCount;
-        } else {
-          sumBgR += rVals[i];
-          sumBgG += gVals[i];
-          sumBgB += bVals[i];
-          ++bgCount;
-        }
-      }
-      if (colorCount > 0) {
-        uint8_t curR = static_cast<uint8_t>(
-            (inkCount > 0 ? sumInkR : sumAllR) /
-            (inkCount > 0 ? inkCount : colorCount));
-        uint8_t curG = static_cast<uint8_t>(
-            (inkCount > 0 ? sumInkG : sumAllG) /
-            (inkCount > 0 ? inkCount : colorCount));
-        uint8_t curB = static_cast<uint8_t>(
-            (inkCount > 0 ? sumInkB : sumAllB) /
-            (inkCount > 0 ? inkCount : colorCount));
-        curR = static_cast<uint8_t>(std::max<int>(curR, kColorLift));
-        curG = static_cast<uint8_t>(std::max<int>(curG, kColorLift));
-        curB = static_cast<uint8_t>(std::max<int>(curB, kColorLift));
-        int curY =
-            (static_cast<int>(curR) * 54 +
-             static_cast<int>(curG) * 183 +
-             static_cast<int>(curB) * 19 + 128) >>
-            8;
-        if (curY < kInkMinLuma) {
-          if (curY <= 0) {
-            curR = kInkMinLuma;
-            curG = kInkMinLuma;
-            curB = kInkMinLuma;
-          } else {
-            int scale = (static_cast<int>(kInkMinLuma) * 256) / curY;
-            if (scale > kInkMaxScale) scale = kInkMaxScale;
-            curR = static_cast<uint8_t>(
-                std::min(255, (static_cast<int>(curR) * scale + 128) >> 8));
-            curG = static_cast<uint8_t>(
-                std::min(255, (static_cast<int>(curG) * scale + 128) >> 8));
-            curB = static_cast<uint8_t>(
-                std::min(255, (static_cast<int>(curB) * scale + 128) >> 8));
-          }
-        }
-        // Verbeterde kleurverwerking met adaptive saturation
-        int y = (static_cast<int>(curR) * 54 +
-                 static_cast<int>(curG) * 183 +
-                 static_cast<int>(curB) * 19 + 128) >>
-                8;
-        // Adaptive saturation: meer saturatie voor donkere kleuren
-        int adaptiveSat = kColorSaturation + ((255 - y) >> 2);
-        if (adaptiveSat > 400) adaptiveSat = 400;
-        curR = static_cast<uint8_t>(std::clamp(
-            y + ((static_cast<int>(curR) - y) * adaptiveSat >> 8), 0,
-            255));
-        curG = static_cast<uint8_t>(std::clamp(
-            y + ((static_cast<int>(curG) - y) * adaptiveSat >> 8), 0,
-            255));
-        curB = static_cast<uint8_t>(std::clamp(
-            y + ((static_cast<int>(curB) - y) * adaptiveSat >> 8), 0,
-            255));
+            int aaBand = 0;
+            int aaCutoffScore = 0;
+            bool useAABand = false;
+            if constexpr (kUseAABand) {
+              if (numValidDots > 0) {
+                int scoreRange =
+                    dotRanks[0].score - dotRanks[numValidDots - 1].score;
+                aaBand = std::min(scoreRange, kAAScoreBandMax);
+                useAABand = detailScore >= kMinContrastForBraille &&
+                            aaBand >= kAAScoreBandMin;
+                aaCutoffScore = (targetDots > 0)
+                                    ? dotRanks[targetDots - 1].score
+                                    : dotRanks[0].score;
+              }
+            }
 
-        if (cellIndex < scratch.prevFg.size() &&
-            scratch.prevFgValid[cellIndex]) {
-          uint32_t p = scratch.prevFg[cellIndex];
-          int pr = static_cast<int>((p >> 16) & 0xFF);
-          int pg = static_cast<int>((p >> 8) & 0xFF);
-          int pb = static_cast<int>(p & 0xFF);
-          int dsum = std::abs(static_cast<int>(curR) - pr) +
-                     std::abs(static_cast<int>(curG) - pg) +
-                     std::abs(static_cast<int>(curB) - pb);
-          if (dsum >= kTemporalResetDelta) {
-            pr = curR;
-            pg = curG;
-            pb = curB;
-          } else {
-            pr = pr + (((int)curR - pr) * kColorAlpha >> 8);
-            pg = pg + (((int)curG - pg) * kColorAlpha >> 8);
-            pb = pb + (((int)curB - pb) * kColorAlpha >> 8);
-          }
-          outR = static_cast<uint8_t>(pr);
-          outG = static_cast<uint8_t>(pg);
-          outB = static_cast<uint8_t>(pb);
-          scratch.prevFg[cellIndex] =
-              (static_cast<uint32_t>(pr) << 16) |
-              (static_cast<uint32_t>(pg) << 8) |
-              static_cast<uint32_t>(pb);
-        } else {
-          outR = curR;
-          outG = curG;
-          outB = curB;
-          if (cellIndex < scratch.prevFg.size()) {
-            scratch.prevFg[cellIndex] =
-                (static_cast<uint32_t>(curR) << 16) |
-                (static_cast<uint32_t>(curG) << 8) |
-                static_cast<uint32_t>(curB);
-            scratch.prevFgValid[cellIndex] = 1;
-          }
-        }
+            // Activeer de top N dots, met dither voor de grensgevallen
+            for (int rank = 0; rank < numValidDots; ++rank) {
+              int i = dotRanks[rank].idx;
+              int edge = static_cast<int>(edgeVals[i]);
 
-        uint8_t bgR = static_cast<uint8_t>(
-            (bgCount > 0 ? sumBgR : sumAllR) /
-            (bgCount > 0 ? bgCount : colorCount));
-        uint8_t bgG = static_cast<uint8_t>(
-            (bgCount > 0 ? sumBgG : sumAllG) /
-            (bgCount > 0 ? bgCount : colorCount));
-        uint8_t bgB = static_cast<uint8_t>(
-            (bgCount > 0 ? sumBgB : sumAllB) /
-            (bgCount > 0 ? bgCount : colorCount));
-        int bgY = (static_cast<int>(bgR) * 54 +
-                   static_cast<int>(bgG) * 183 +
+              // Basis threshold gebaseerd op rank
+              bool shouldActivate = false;
+              if (rank < targetDots) {
+                // Zeker aan
+                shouldActivate = true;
+              } else if (rank == targetDots && targetCoverage > 0) {
+                // Grens-dot: gebruik dithering alleen als er coverage is
+                int ditherThresh = static_cast<int>(
+                    kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
+                int fractionalCoverage = (numValidDots * targetCoverage) % 255;
+                shouldActivate = fractionalCoverage > ditherThresh;
+              }
+
+              if (!shouldActivate && useAABand) {
+                int scoreDelta = aaCutoffScore - dotRanks[rank].score;
+                if (scoreDelta >= 0 && scoreDelta < aaBand) {
+                  int numer = (aaBand - scoreDelta) * 255 + (aaBand / 2);
+                  int ditherThresh = static_cast<int>(
+                      kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
+                  shouldActivate = numer > ditherThresh * aaBand;
+                }
+              }
+
+              // Edge boost kan extra dots aanzetten, maar alleen bij
+              // significante edges
+              if (!shouldActivate && edge > kEdgeMin * 3) {
+                int edgeBonus = kEdgeBoostFromMag[static_cast<size_t>(edge)];
+                int ditherThresh =
+                    static_cast<int>(
+                        kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]) -
+                    kDitherBias;
+                if (ditherThresh < 0) ditherThresh = 0;
+                shouldActivate = edgeBonus > ditherThresh;
+              }
+
+              if (shouldActivate) {
+                bitmask |= (1 << bitIds[i]);
+              }
+            }
+
+            size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
+            uint8_t outR = 0;
+            uint8_t outG = 0;
+            uint8_t outB = 0;
+            uint8_t outBgR = 0;
+            uint8_t outBgG = 0;
+            uint8_t outBgB = 0;
+            bool hasBg = false;
+            int sumInkR = 0;
+            int sumInkG = 0;
+            int sumInkB = 0;
+            int inkCount = 0;
+            int sumBgR = 0;
+            int sumBgG = 0;
+            int sumBgB = 0;
+            int bgCount = 0;
+            for (int i = 0; i < 8; ++i) {
+              if (!validVals[i]) continue;
+              if (bitmask & (1 << bitIds[i])) {
+                sumInkR += rVals[i];
+                sumInkG += gVals[i];
+                sumInkB += bVals[i];
+                ++inkCount;
+              } else {
+                sumBgR += rVals[i];
+                sumBgG += gVals[i];
+                sumBgB += bVals[i];
+                ++bgCount;
+              }
+            }
+            if (colorCount > 0) {
+              uint8_t curR =
+                  static_cast<uint8_t>((inkCount > 0 ? sumInkR : sumAllR) /
+                                       (inkCount > 0 ? inkCount : colorCount));
+              uint8_t curG =
+                  static_cast<uint8_t>((inkCount > 0 ? sumInkG : sumAllG) /
+                                       (inkCount > 0 ? inkCount : colorCount));
+              uint8_t curB =
+                  static_cast<uint8_t>((inkCount > 0 ? sumInkB : sumAllB) /
+                                       (inkCount > 0 ? inkCount : colorCount));
+              curR = static_cast<uint8_t>(std::max<int>(curR, kColorLift));
+              curG = static_cast<uint8_t>(std::max<int>(curG, kColorLift));
+              curB = static_cast<uint8_t>(std::max<int>(curB, kColorLift));
+              int curY =
+                  (static_cast<int>(curR) * 54 + static_cast<int>(curG) * 183 +
+                   static_cast<int>(curB) * 19 + 128) >>
+                  8;
+              if (curY < kInkMinLuma) {
+                if (curY <= 0) {
+                  curR = kInkMinLuma;
+                  curG = kInkMinLuma;
+                  curB = kInkMinLuma;
+                } else {
+                  int scale = (static_cast<int>(kInkMinLuma) * 256) / curY;
+                  if (scale > kInkMaxScale) scale = kInkMaxScale;
+                  curR = static_cast<uint8_t>(std::min(
+                      255, (static_cast<int>(curR) * scale + 128) >> 8));
+                  curG = static_cast<uint8_t>(std::min(
+                      255, (static_cast<int>(curG) * scale + 128) >> 8));
+                  curB = static_cast<uint8_t>(std::min(
+                      255, (static_cast<int>(curB) * scale + 128) >> 8));
+                }
+              }
+              // Verbeterde kleurverwerking met adaptive saturation
+              int y =
+                  (static_cast<int>(curR) * 54 + static_cast<int>(curG) * 183 +
+                   static_cast<int>(curB) * 19 + 128) >>
+                  8;
+              // Adaptive saturation: meer saturatie voor donkere kleuren
+              int adaptiveSat = kColorSaturation + ((255 - y) >> 2);
+              if (adaptiveSat > 400) adaptiveSat = 400;
+              curR = static_cast<uint8_t>(std::clamp(
+                  y + ((static_cast<int>(curR) - y) * adaptiveSat >> 8), 0,
+                  255));
+              curG = static_cast<uint8_t>(std::clamp(
+                  y + ((static_cast<int>(curG) - y) * adaptiveSat >> 8), 0,
+                  255));
+              curB = static_cast<uint8_t>(std::clamp(
+                  y + ((static_cast<int>(curB) - y) * adaptiveSat >> 8), 0,
+                  255));
+
+              if (cellIndex < scratch.prevFg.size() &&
+                  scratch.prevFgValid[cellIndex]) {
+                uint32_t p = scratch.prevFg[cellIndex];
+                int pr = static_cast<int>((p >> 16) & 0xFF);
+                int pg = static_cast<int>((p >> 8) & 0xFF);
+                int pb = static_cast<int>(p & 0xFF);
+                int dsum = std::abs(static_cast<int>(curR) - pr) +
+                           std::abs(static_cast<int>(curG) - pg) +
+                           std::abs(static_cast<int>(curB) - pb);
+                if (dsum >= kTemporalResetDelta) {
+                  pr = curR;
+                  pg = curG;
+                  pb = curB;
+                } else {
+                  pr = pr + (((int)curR - pr) * kColorAlpha >> 8);
+                  pg = pg + (((int)curG - pg) * kColorAlpha >> 8);
+                  pb = pb + (((int)curB - pb) * kColorAlpha >> 8);
+                }
+                outR = static_cast<uint8_t>(pr);
+                outG = static_cast<uint8_t>(pg);
+                outB = static_cast<uint8_t>(pb);
+                scratch.prevFg[cellIndex] = (static_cast<uint32_t>(pr) << 16) |
+                                            (static_cast<uint32_t>(pg) << 8) |
+                                            static_cast<uint32_t>(pb);
+              } else {
+                outR = curR;
+                outG = curG;
+                outB = curB;
+                if (cellIndex < scratch.prevFg.size()) {
+                  scratch.prevFg[cellIndex] =
+                      (static_cast<uint32_t>(curR) << 16) |
+                      (static_cast<uint32_t>(curG) << 8) |
+                      static_cast<uint32_t>(curB);
+                  scratch.prevFgValid[cellIndex] = 1;
+                }
+              }
+
+              uint8_t bgR =
+                  static_cast<uint8_t>((bgCount > 0 ? sumBgR : sumAllR) /
+                                       (bgCount > 0 ? bgCount : colorCount));
+              uint8_t bgG =
+                  static_cast<uint8_t>((bgCount > 0 ? sumBgG : sumAllG) /
+                                       (bgCount > 0 ? bgCount : colorCount));
+              uint8_t bgB =
+                  static_cast<uint8_t>((bgCount > 0 ? sumBgB : sumAllB) /
+                                       (bgCount > 0 ? bgCount : colorCount));
+              int bgY =
+                  (static_cast<int>(bgR) * 54 + static_cast<int>(bgG) * 183 +
                    static_cast<int>(bgB) * 19 + 128) >>
                   8;
-        if (bgY < kBgMinLuma) {
-          if (bgY <= 0) {
-            bgR = kBgMinLuma;
-            bgG = kBgMinLuma;
-            bgB = kBgMinLuma;
-          } else {
-            int scale = (static_cast<int>(kBgMinLuma) * 256) / bgY;
-            bgR = static_cast<uint8_t>(
-                std::min(255, (static_cast<int>(bgR) * scale + 128) >> 8));
-            bgG = static_cast<uint8_t>(
-                std::min(255, (static_cast<int>(bgG) * scale + 128) >> 8));
-            bgB = static_cast<uint8_t>(
-                std::min(255, (static_cast<int>(bgB) * scale + 128) >> 8));
+              if (bgY < kBgMinLuma) {
+                if (bgY <= 0) {
+                  bgR = kBgMinLuma;
+                  bgG = kBgMinLuma;
+                  bgB = kBgMinLuma;
+                } else {
+                  int scale = (static_cast<int>(kBgMinLuma) * 256) / bgY;
+                  bgR = static_cast<uint8_t>(std::min(
+                      255, (static_cast<int>(bgR) * scale + 128) >> 8));
+                  bgG = static_cast<uint8_t>(std::min(
+                      255, (static_cast<int>(bgG) * scale + 128) >> 8));
+                  bgB = static_cast<uint8_t>(std::min(
+                      255, (static_cast<int>(bgB) * scale + 128) >> 8));
+                }
+              }
+              if (cellIndex < scratch.prevBg.size() &&
+                  scratch.prevBgValid[cellIndex]) {
+                uint32_t p = scratch.prevBg[cellIndex];
+                int pr = static_cast<int>((p >> 16) & 0xFF);
+                int pg = static_cast<int>((p >> 8) & 0xFF);
+                int pb = static_cast<int>(p & 0xFF);
+                int dsum = std::abs(static_cast<int>(bgR) - pr) +
+                           std::abs(static_cast<int>(bgG) - pg) +
+                           std::abs(static_cast<int>(bgB) - pb);
+                if (dsum >= kTemporalResetDelta) {
+                  pr = bgR;
+                  pg = bgG;
+                  pb = bgB;
+                } else {
+                  pr = pr + (((int)bgR - pr) * kBgAlpha >> 8);
+                  pg = pg + (((int)bgG - pg) * kBgAlpha >> 8);
+                  pb = pb + (((int)bgB - pb) * kBgAlpha >> 8);
+                }
+                outBgR = static_cast<uint8_t>(pr);
+                outBgG = static_cast<uint8_t>(pg);
+                outBgB = static_cast<uint8_t>(pb);
+                scratch.prevBg[cellIndex] = (static_cast<uint32_t>(pr) << 16) |
+                                            (static_cast<uint32_t>(pg) << 8) |
+                                            static_cast<uint32_t>(pb);
+              } else if (cellIndex < scratch.prevBg.size()) {
+                outBgR = bgR;
+                outBgG = bgG;
+                outBgB = bgB;
+                scratch.prevBg[cellIndex] = (static_cast<uint32_t>(bgR) << 16) |
+                                            (static_cast<uint32_t>(bgG) << 8) |
+                                            static_cast<uint32_t>(bgB);
+                scratch.prevBgValid[cellIndex] = 1;
+              }
+              hasBg = true;
+            } else if (cellIndex < scratch.prevFg.size() &&
+                       scratch.prevFgValid[cellIndex]) {
+              uint32_t p = scratch.prevFg[cellIndex];
+              outR = static_cast<uint8_t>((p >> 16) & 0xFF);
+              outG = static_cast<uint8_t>((p >> 8) & 0xFF);
+              outB = static_cast<uint8_t>(p & 0xFF);
+            }
+            if (colorCount == 0) {
+              if (cellIndex < scratch.prevFgValid.size()) {
+                scratch.prevFgValid[cellIndex] = 0;
+              }
+              if (cellIndex < scratch.prevBgValid.size()) {
+                scratch.prevBgValid[cellIndex] = 0;
+              }
+            }
+
+            AsciiArt::AsciiCell cell{};
+
+            // === CHARACTER SELECTION ===
+            // Braille geeft de beste resultaten voor detail - gebruik het
+            // altijd De hybrid mode is optioneel voor gebieden zonder contrast
+            wchar_t finalChar = static_cast<wchar_t>(kBrailleBase + bitmask);
+
+            if constexpr (kUseHybridMode) {
+              // Alleen voor zeer uniforme gebieden: gebruik density-based ASCII
+              if (cellLumRange < kMinContrastForBraille) {
+                // Tel dots voor density lookup (O(1) met popcount)
+                int dotCount = 0;
+                int b = bitmask;
+                while (b) {
+                  dotCount += (b & 1);
+                  b >>= 1;
+                }
+                finalChar = kDotCountToChar[static_cast<size_t>(dotCount)];
+              }
+            }
+
+            cell.ch = finalChar;
+            cell.fg = Color{outR, outG, outB};
+            if (hasBg) {
+              cell.bg = Color{outBgR, outBgG, outBgB};
+              cell.hasBg = true;
+            }
+
+            out.cells[cellIndex] = cell;
           }
         }
-        if (cellIndex < scratch.prevBg.size() &&
-            scratch.prevBgValid[cellIndex]) {
-          uint32_t p = scratch.prevBg[cellIndex];
-          int pr = static_cast<int>((p >> 16) & 0xFF);
-          int pg = static_cast<int>((p >> 8) & 0xFF);
-          int pb = static_cast<int>(p & 0xFF);
-          int dsum = std::abs(static_cast<int>(bgR) - pr) +
-                     std::abs(static_cast<int>(bgG) - pg) +
-                     std::abs(static_cast<int>(bgB) - pb);
-          if (dsum >= kTemporalResetDelta) {
-            pr = bgR;
-            pg = bgG;
-            pb = bgB;
-          } else {
-            pr = pr + (((int)bgR - pr) * kBgAlpha >> 8);
-            pg = pg + (((int)bgG - pg) * kBgAlpha >> 8);
-            pb = pb + (((int)bgB - pb) * kBgAlpha >> 8);
-          }
-          outBgR = static_cast<uint8_t>(pr);
-          outBgG = static_cast<uint8_t>(pg);
-          outBgB = static_cast<uint8_t>(pb);
-          scratch.prevBg[cellIndex] =
-              (static_cast<uint32_t>(pr) << 16) |
-              (static_cast<uint32_t>(pg) << 8) |
-              static_cast<uint32_t>(pb);
-        } else if (cellIndex < scratch.prevBg.size()) {
-          outBgR = bgR;
-          outBgG = bgG;
-          outBgB = bgB;
-          scratch.prevBg[cellIndex] =
-              (static_cast<uint32_t>(bgR) << 16) |
-              (static_cast<uint32_t>(bgG) << 8) |
-              static_cast<uint32_t>(bgB);
-          scratch.prevBgValid[cellIndex] = 1;
-        }
-        hasBg = true;
-      } else if (cellIndex < scratch.prevFg.size() &&
-                 scratch.prevFgValid[cellIndex]) {
-        uint32_t p = scratch.prevFg[cellIndex];
-        outR = static_cast<uint8_t>((p >> 16) & 0xFF);
-        outG = static_cast<uint8_t>((p >> 8) & 0xFF);
-        outB = static_cast<uint8_t>(p & 0xFF);
-      }
-      if (colorCount == 0) {
-        if (cellIndex < scratch.prevFgValid.size()) {
-          scratch.prevFgValid[cellIndex] = 0;
-        }
-        if (cellIndex < scratch.prevBgValid.size()) {
-          scratch.prevBgValid[cellIndex] = 0;
-        }
-      }
-
-      AsciiArt::AsciiCell cell{};
-      
-      // === CHARACTER SELECTION ===
-      // Braille geeft de beste resultaten voor detail - gebruik het altijd
-      // De hybrid mode is optioneel voor gebieden zonder contrast
-      wchar_t finalChar = static_cast<wchar_t>(kBrailleBase + bitmask);
-      
-      if constexpr (kUseHybridMode) {
-        // Alleen voor zeer uniforme gebieden: gebruik density-based ASCII
-        if (cellLumRange < kMinContrastForBraille) {
-          // Tel dots voor density lookup (O(1) met popcount)
-          int dotCount = 0;
-          int b = bitmask;
-          while (b) { dotCount += (b & 1); b >>= 1; }
-          finalChar = kDotCountToChar[static_cast<size_t>(dotCount)];
-        }
-      }
-      
-      cell.ch = finalChar;
-      cell.fg = Color{outR, outG, outB};
-      if (hasBg) {
-        cell.bg = Color{outBgR, outBgG, outBgB};
-        cell.hasBg = true;
-      }
-
-      out.cells[cellIndex] = cell;
-    }
-  }
-              });
+      });
 
   return true;
 }
@@ -1150,8 +1163,8 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
                         sumG += g;
                         sumB += b;
                         sumA += a;
-                        // Directe YUV luminantie berekening (veel sneller zonder
-                        // lookup tables)
+                        // Directe YUV luminantie berekening (veel sneller
+                        // zonder lookup tables)
                         uint8_t lum = rgbToY(r, g, b);
                         sumLum += lum;
                         ++sampleCount;
@@ -1166,9 +1179,8 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
                       uint8_t a = static_cast<uint8_t>(sumA / sampleCount);
                       dstRow[x] = packRGBA(r, g, b, a);
 
-                      uint8_t avgLum = static_cast<uint8_t>(
-                          std::min(255U, static_cast<uint32_t>(
-                                             sumLum / sampleCount)));
+                      uint8_t avgLum = static_cast<uint8_t>(std::min(
+                          255U, static_cast<uint32_t>(sumLum / sampleCount)));
 
                       bool countLum = true;
                       if constexpr (!AssumeOpaque) {
@@ -1220,9 +1232,8 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
   if (effectivePlaneHeight < height) return false;
 
   const uint8_t* yPlane = data;
-  const uint8_t* uvPlane =
-      data + static_cast<size_t>(stride) *
-                 static_cast<size_t>(effectivePlaneHeight);
+  const uint8_t* uvPlane = data + static_cast<size_t>(stride) *
+                                      static_cast<size_t>(effectivePlaneHeight);
 
   const int scaledW = scratch.scaledW;
   const int scaledH = scratch.scaledH;
@@ -1237,100 +1248,97 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
     hist.fill(0);
   }
 
-  parallelFor(scaledH, kParallelBatchRows, workerCount,
-              [&](int yStart, int yEnd, int workerId) {
-                auto& hist = localHist[workerId];
-                uint64_t lumLocal = 0;
-                for (int y = yStart; y < yEnd; ++y) {
-                  int syStart = scratch.yMapStart[y];
-                  int syEnd = scratch.yMapEnd[y];
-                  uint32_t* dstRow = scratch.scaledRGBA.data() +
-                                     static_cast<size_t>(y) * scaledW;
-                  uint8_t* padRow = scratch.lumaPad.data() +
-                                    static_cast<size_t>(y + 1) * padStride;
+  parallelFor(
+      scaledH, kParallelBatchRows, workerCount,
+      [&](int yStart, int yEnd, int workerId) {
+        auto& hist = localHist[workerId];
+        uint64_t lumLocal = 0;
+        for (int y = yStart; y < yEnd; ++y) {
+          int syStart = scratch.yMapStart[y];
+          int syEnd = scratch.yMapEnd[y];
+          uint32_t* dstRow =
+              scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW;
+          uint8_t* padRow =
+              scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride;
 
-                  for (int x = 0; x < scaledW; ++x) {
-                    int sxStart = scratch.xMapStart[x];
-                    int sxEnd = scratch.xMapEnd[x];
-                    uint64_t sumY = 0;
-                    uint64_t sumU = 0;
-                    uint64_t sumV = 0;
-                    uint32_t sampleCount = 0;
+          for (int x = 0; x < scaledW; ++x) {
+            int sxStart = scratch.xMapStart[x];
+            int sxEnd = scratch.xMapEnd[x];
+            uint64_t sumY = 0;
+            uint64_t sumU = 0;
+            uint64_t sumV = 0;
+            uint32_t sampleCount = 0;
 
-                    for (int sy = syStart; sy < syEnd; ++sy) {
-                      if constexpr (IsP010) {
-                        const uint16_t* yRow =
-                            reinterpret_cast<const uint16_t*>(
-                                yPlane + static_cast<size_t>(sy) * stride);
-                        const uint16_t* uvRow =
-                            reinterpret_cast<const uint16_t*>(
-                                uvPlane + static_cast<size_t>(sy / 2) * stride);
-                        for (int sx = sxStart; sx < sxEnd; ++sx) {
-                          int uvIndex = (sx / 2) * 2;
-                          int y10 = static_cast<int>(yRow[sx] >> 6);
-                          int u10 = static_cast<int>(uvRow[uvIndex + 0] >> 6);
-                          int v10 = static_cast<int>(uvRow[uvIndex + 1] >> 6);
-                          sumY += static_cast<uint64_t>(y10);
-                          sumU += static_cast<uint64_t>(u10);
-                          sumV += static_cast<uint64_t>(v10);
-                          ++sampleCount;
-                        }
-                      } else {
-                        const uint8_t* yRow =
-                            yPlane + static_cast<size_t>(sy) * stride;
-                        const uint8_t* uvRow =
-                            uvPlane + static_cast<size_t>(sy / 2) * stride;
-                        for (int sx = sxStart; sx < sxEnd; ++sx) {
-                          int uvIndex = (sx / 2) * 2;
-                          int y8 = yRow[sx];
-                          int u8 = uvRow[uvIndex + 0];
-                          int v8 = uvRow[uvIndex + 1];
-                          sumY += static_cast<uint64_t>(y8);
-                          sumU += static_cast<uint64_t>(u8);
-                          sumV += static_cast<uint64_t>(v8);
-                          ++sampleCount;
-                        }
-                      }
-                    }
-
-                    if (sampleCount > 0) {
-                      uint32_t half = sampleCount / 2;
-                      int yAvg = static_cast<int>((sumY + half) / sampleCount);
-                      int uAvg = static_cast<int>((sumU + half) / sampleCount);
-                      int vAvg = static_cast<int>((sumV + half) / sampleCount);
-                      uint8_t y8 = 0;
-                      uint8_t u8 = 0;
-                      uint8_t v8 = 0;
-                      if constexpr (IsP010) {
-                        y8 = to8bitFrom10(yAvg);
-                        u8 = to8bitFrom10(uAvg);
-                        v8 = to8bitFrom10(vAvg);
-                      } else {
-                        y8 = static_cast<uint8_t>(std::clamp(yAvg, 0, 255));
-                        u8 = static_cast<uint8_t>(std::clamp(uAvg, 0, 255));
-                        v8 = static_cast<uint8_t>(std::clamp(vAvg, 0, 255));
-                      }
-
-                      uint8_t lum = normalizeLuma8(y8, fullRange);
-                      padRow[x + 1] = lum;
-                      ++hist[lum];
-                      ++lumLocal;
-
-                      uint8_t r = 0, g = 0, b = 0;
-                      yuvToRgb(static_cast<int>(y8), static_cast<int>(u8),
-                               static_cast<int>(v8), fullRange, yuvMatrix, r,
-                               g, b);
-                      dstRow[x] = packRGBA(r, g, b, 255);
-                    } else {
-                      dstRow[x] = packRGBA(0, 0, 0, 0);
-                      padRow[x + 1] = 255;
-                    }
-                  }
-                  padRow[0] = padRow[1];
-                  padRow[padStride - 1] = padRow[padStride - 2];
+            for (int sy = syStart; sy < syEnd; ++sy) {
+              if constexpr (IsP010) {
+                const uint16_t* yRow = reinterpret_cast<const uint16_t*>(
+                    yPlane + static_cast<size_t>(sy) * stride);
+                const uint16_t* uvRow = reinterpret_cast<const uint16_t*>(
+                    uvPlane + static_cast<size_t>(sy / 2) * stride);
+                for (int sx = sxStart; sx < sxEnd; ++sx) {
+                  int uvIndex = (sx / 2) * 2;
+                  int y10 = static_cast<int>(yRow[sx] >> 6);
+                  int u10 = static_cast<int>(uvRow[uvIndex + 0] >> 6);
+                  int v10 = static_cast<int>(uvRow[uvIndex + 1] >> 6);
+                  sumY += static_cast<uint64_t>(y10);
+                  sumU += static_cast<uint64_t>(u10);
+                  sumV += static_cast<uint64_t>(v10);
+                  ++sampleCount;
                 }
-                localLumCount[workerId] += lumLocal;
-              });
+              } else {
+                const uint8_t* yRow = yPlane + static_cast<size_t>(sy) * stride;
+                const uint8_t* uvRow =
+                    uvPlane + static_cast<size_t>(sy / 2) * stride;
+                for (int sx = sxStart; sx < sxEnd; ++sx) {
+                  int uvIndex = (sx / 2) * 2;
+                  int y8 = yRow[sx];
+                  int u8 = uvRow[uvIndex + 0];
+                  int v8 = uvRow[uvIndex + 1];
+                  sumY += static_cast<uint64_t>(y8);
+                  sumU += static_cast<uint64_t>(u8);
+                  sumV += static_cast<uint64_t>(v8);
+                  ++sampleCount;
+                }
+              }
+            }
+
+            if (sampleCount > 0) {
+              uint32_t half = sampleCount / 2;
+              int yAvg = static_cast<int>((sumY + half) / sampleCount);
+              int uAvg = static_cast<int>((sumU + half) / sampleCount);
+              int vAvg = static_cast<int>((sumV + half) / sampleCount);
+              uint8_t y8 = 0;
+              uint8_t u8 = 0;
+              uint8_t v8 = 0;
+              if constexpr (IsP010) {
+                y8 = to8bitFrom10(yAvg);
+                u8 = to8bitFrom10(uAvg);
+                v8 = to8bitFrom10(vAvg);
+              } else {
+                y8 = static_cast<uint8_t>(std::clamp(yAvg, 0, 255));
+                u8 = static_cast<uint8_t>(std::clamp(uAvg, 0, 255));
+                v8 = static_cast<uint8_t>(std::clamp(vAvg, 0, 255));
+              }
+
+              uint8_t lum = normalizeLuma8(y8, fullRange);
+              padRow[x + 1] = lum;
+              ++hist[lum];
+              ++lumLocal;
+
+              uint8_t r = 0, g = 0, b = 0;
+              yuvToRgb(static_cast<int>(y8), static_cast<int>(u8),
+                       static_cast<int>(v8), fullRange, yuvMatrix, r, g, b);
+              dstRow[x] = packRGBA(r, g, b, 255);
+            } else {
+              dstRow[x] = packRGBA(0, 0, 0, 0);
+              padRow[x + 1] = 255;
+            }
+          }
+          padRow[0] = padRow[1];
+          padRow[padStride - 1] = padRow[padStride - 2];
+        }
+        localLumCount[workerId] += lumLocal;
+      });
 
   for (int i = 0; i < workerCount; ++i) {
     lumCount += localLumCount[i];
