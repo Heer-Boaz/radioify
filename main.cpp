@@ -50,16 +50,17 @@ extern "C" {
 #include "miniaudio.h"
 
 #ifndef RADIOIFY_ENABLE_TIMING_LOG
-#define RADIOIFY_ENABLE_TIMING_LOG 1
+#define RADIOIFY_ENABLE_TIMING_LOG 0
 #endif
 #ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
-#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 1
+#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 0
 #endif
 
 struct Options {
   std::string input;
   std::string output;
-  int bwHz = 4800;
+  // int bwHz = 4800;
+  int bwHz = 5500;
   double noise = 0.012;  // tuned for a "modern recording through 1938 AM"
   // double noise = 0.006; // tuned for a "modern recording through 1938 AM"
   bool mono = true;
@@ -1711,7 +1712,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
 
               if (gpuRenderer.RenderNV12(frame->yuv.data(), frame->width,
                                          frame->height, frame->stride,
-                                         frame->planeHeight, bgLum, lumRange, art, &gpuErr)) {
+                                         frame->planeHeight, bgLum, lumRange, frame->fullRange, art, &gpuErr)) {
                 renderedWithGpu = true;
                 artOk = true;
                 static bool gpuLogged = false;

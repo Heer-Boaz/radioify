@@ -23,7 +23,7 @@ public:
     // bgLum: Estimated background luminance (0-255)
     // lumRange: Estimated luminance range (0-255)
     bool RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
-                   int bgLum, int lumRange, AsciiArt& out, std::string* error);
+                   int bgLum, int lumRange, bool fullRange, AsciiArt& out, std::string* error);
 
 private:
     bool CreateDevice();
@@ -65,6 +65,8 @@ private:
         uint32_t frameCount;
         uint32_t bgLum; // Background luminance estimate (0-255)
         uint32_t lumRange; // Luminance range (0-255)
+        uint32_t isFullRange;
+        uint32_t padding[3];
     };
 
     int m_currentWidth = 0;

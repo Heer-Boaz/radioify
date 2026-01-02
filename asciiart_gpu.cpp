@@ -19,6 +19,8 @@ cbuffer Constants : register(b0) {
     uint frameCount;
     uint bgLum;
     uint lumRange;
+    uint isFullRange;
+    uint32_t padding[3];
 };
 
 #ifdef NV12_INPUT
@@ -93,7 +95,11 @@ float GetLuma(float3 c) {
 
 float SampleLuma(float2 uv) {
 #ifdef NV12_INPUT
-    return TextureY.SampleLevel(LinearSampler, uv, 0) * 255.0f;
+    float y = TextureY.SampleLevel(LinearSampler, uv, 0);
+    if (!isFullRange) {
+        y = (y - 16.0/255.0) * (255.0/219.0);
+    }
+    return y * 255.0f;
 #else
     return GetLuma(InputTexture.SampleLevel(LinearSampler, uv, 0).rgb);
 #endif
@@ -123,8 +129,19 @@ float4 SampleInput(float2 uv) {
 #ifdef NV12_INPUT
     float y = TextureY.SampleLevel(LinearSampler, uv, 0);
     float2 uv_val = TextureUV.SampleLevel(LinearSampler, uv, 0);
-    float u = uv_val.x - 0.5;
-    float v = uv_val.y - 0.5;
+    
+    float u, v;
+    
+    if (isFullRange) {
+        u = uv_val.x - 0.5;
+        v = uv_val.y - 0.5;
+    } else {
+        // Limited Range Expansion (16-235 -> 0-255 for Y, 16-240 -> 0-255 for UV)
+        y = (y - 16.0/255.0) * (255.0/219.0);
+        u = (uv_val.x - 128.0/255.0) * (255.0/224.0);
+        v = (uv_val.y - 128.0/255.0) * (255.0/224.0);
+    }
+
     float r = y + 1.402 * v;
     float g = y - 0.344136 * u - 0.714136 * v;
     float b = y + 1.772 * u;
@@ -222,16 +239,23 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         sumAll += color.rgb;
     }
 
+    // Adjust bgLum and lumRange for Limited Range if needed
+    float effectiveBgLum = (float)bgLum;
+    float effectiveLumRange = (float)lumRange;
+    if (!isFullRange) {
+        effectiveBgLum = (effectiveBgLum - 16.0f) * (255.0f / 219.0f);
+        effectiveLumRange = effectiveLumRange * (255.0f / 219.0f);
+    }
 
     // 2. Adaptive Thresholding
     float cellLumRange = cellLumMax - cellLumMin;
     float cellLumMean = cellLumSum / 8.0f;
     bool useLocalThreshold = cellLumRange > 20.0f;
-    float localMidpoint = useLocalThreshold ? ((cellLumMin + cellLumMax) * 0.5f) : (float)bgLum;
+    float localMidpoint = useLocalThreshold ? ((cellLumMin + cellLumMax) * 0.5f) : effectiveBgLum;
 
     // 3. Scoring
     for (int i = 0; i < 8; ++i) {
-        float lumDiff = useLocalThreshold ? abs(dots[i].luma - localMidpoint) : abs(dots[i].luma - (float)bgLum);
+        float lumDiff = useLocalThreshold ? abs(dots[i].luma - localMidpoint) : abs(dots[i].luma - effectiveBgLum);
         dots[i].score = (int)(lumDiff * 2.0f + dots[i].edge + dots[i].contrast * 0.5f);
     }
 
@@ -247,13 +271,13 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     }
 
     // 5. Target Dots Calculation
-    float avgLumDiff = abs(cellLumMean - (float)bgLum);
+    float avgLumDiff = abs(cellLumMean - effectiveBgLum);
     
     // Subtract noise floor (3 levels) to ensure true blacks in dark scenes
     avgLumDiff = max(0.0f, avgLumDiff - 3.0f);
 
-    if (lumRange > 0) {
-        avgLumDiff = avgLumDiff * 255.0f / (float)lumRange;
+    if (effectiveLumRange > 0) {
+        avgLumDiff = avgLumDiff * 255.0f / effectiveLumRange;
     }
     float targetCoverage = GetInkLevelFromLum(avgLumDiff);
     int targetDots = (int)(8.0f * targetCoverage + 0.5f);
@@ -512,7 +536,7 @@ bool GpuAsciiRenderer::CreateNV12Textures(int width, int height) {
 }
 
 bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
-                                int bgLum, int lumRange, AsciiArt& out, std::string* error) {
+                                int bgLum, int lumRange, bool fullRange, AsciiArt& out, std::string* error) {
     if (!m_device) {
         if (!Initialize(width, height)) {
             if (error) *error = "Failed to initialize GPU renderer";
@@ -554,6 +578,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         cb->frameCount++;
         cb->bgLum = bgLum;
         cb->lumRange = lumRange;
+        cb->isFullRange = fullRange ? 1 : 0;
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
@@ -701,6 +726,60 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     // Generate Mips
     m_context->GenerateMips(m_inputSRV.Get());
 
+    // Calculate stats (bgLum, lumRange) from RGBA
+    // Sample a subset of pixels for performance
+    int sampleStep = 16; // Sample every 16th pixel
+    uint32_t histogram[256] = {0};
+    int totalSamples = 0;
+    
+    for (int y = 0; y < height; y += sampleStep) {
+        const uint8_t* row = rgba + y * width * 4;
+        for (int x = 0; x < width; x += sampleStep) {
+            const uint8_t* p = row + x * 4;
+            // Calculate luma: 0.2126 R + 0.7152 G + 0.0722 B
+            int luma = (p[0] * 54 + p[1] * 183 + p[2] * 18) >> 8; // Approx integer math
+            if (luma > 255) luma = 255;
+            histogram[luma]++;
+            totalSamples++;
+        }
+    }
+    
+    // Find range (5% - 95%)
+    int count = 0;
+    int low = 0;
+    int targetLow = totalSamples * 5 / 100;
+    for (int i = 0; i < 256; ++i) {
+        count += histogram[i];
+        if (count >= targetLow) {
+            low = i;
+            break;
+        }
+    }
+    
+    count = 0;
+    int high = 255;
+    int targetHigh = totalSamples * 95 / 100;
+    for (int i = 0; i < 256; ++i) {
+        count += histogram[i];
+        if (count >= targetHigh) {
+            high = i;
+            break;
+        }
+    }
+    
+    int lumRange = (std::max)(1, high - low);
+    if (lumRange < 80) lumRange = 80; // Clamp like in main.cpp
+    
+    // Find bgLum (mode)
+    int bgLum = 0;
+    uint32_t maxCount = 0;
+    for (int i = 0; i < 256; ++i) {
+        if (histogram[i] > maxCount) {
+            maxCount = histogram[i];
+            bgLum = i;
+        }
+    }
+
     // Update Constants
     D3D11_MAPPED_SUBRESOURCE mapped;
     if (SUCCEEDED(m_context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -711,7 +790,9 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         cb->outHeight = outH;
         cb->time = 0.0f;
         cb->frameCount++;
-        cb->bgLum = 0; // Default to dark background assumption
+        cb->bgLum = bgLum;
+        cb->lumRange = lumRange;
+        cb->isFullRange = 1; // RGBA is always full range
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
