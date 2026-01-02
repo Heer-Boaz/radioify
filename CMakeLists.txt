@@ -23,6 +23,77 @@ endforeach()
 
 target_include_directories(radioify PRIVATE third_party)
 
+# vcpkg's FFmpeg port ships a `FindFFMPEG.cmake` module under
+# `vcpkg_installed/<triplet>/share/ffmpeg/`. If the vcpkg toolchain file wasn't
+# provided to CMake (common when running CMake directly), `find_package(FFMPEG)`
+# won't see that module. Make manifest-mode builds work by adding the module path
+# when `VCPKG_INSTALLED_DIR` (or a local `vcpkg_installed/`) is present.
+if (WIN32)
+  set(_radioify_vcpkg_installed_dir "")
+  if (DEFINED VCPKG_INSTALLED_DIR)
+    set(_radioify_vcpkg_installed_dir "${VCPKG_INSTALLED_DIR}")
+  elseif (DEFINED ENV{VCPKG_INSTALLED_DIR})
+    set(_radioify_vcpkg_installed_dir "$ENV{VCPKG_INSTALLED_DIR}")
+  elseif (EXISTS "${CMAKE_SOURCE_DIR}/vcpkg_installed")
+    set(_radioify_vcpkg_installed_dir "${CMAKE_SOURCE_DIR}/vcpkg_installed")
+  endif()
+
+  if (_radioify_vcpkg_installed_dir)
+    set(_radioify_vcpkg_triplet "")
+    if (DEFINED VCPKG_TARGET_TRIPLET)
+      set(_radioify_vcpkg_triplet "${VCPKG_TARGET_TRIPLET}")
+    elseif (DEFINED ENV{VCPKG_TARGET_TRIPLET})
+      set(_radioify_vcpkg_triplet "$ENV{VCPKG_TARGET_TRIPLET}")
+    endif()
+
+    if (NOT _radioify_vcpkg_triplet)
+      set(_radioify_vcpkg_triplets "")
+      file(GLOB _radioify_vcpkg_triplet_dirs LIST_DIRECTORIES true "${_radioify_vcpkg_installed_dir}/*")
+      foreach (_dir IN LISTS _radioify_vcpkg_triplet_dirs)
+        if (IS_DIRECTORY "${_dir}")
+          get_filename_component(_name "${_dir}" NAME)
+          if (NOT _name STREQUAL "vcpkg")
+            list(APPEND _radioify_vcpkg_triplets "${_name}")
+          endif()
+        endif()
+      endforeach()
+
+      list(LENGTH _radioify_vcpkg_triplets _radioify_vcpkg_triplet_count)
+      if (_radioify_vcpkg_triplet_count EQUAL 1)
+        list(GET _radioify_vcpkg_triplets 0 _radioify_vcpkg_triplet)
+      endif()
+    endif()
+
+    if (NOT _radioify_vcpkg_triplet)
+      if (CMAKE_GENERATOR_PLATFORM STREQUAL "Win32")
+        set(_radioify_vcpkg_triplet "x86-windows")
+      elseif (CMAKE_GENERATOR_PLATFORM STREQUAL "x64")
+        set(_radioify_vcpkg_triplet "x64-windows")
+      elseif (CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64")
+        set(_radioify_vcpkg_triplet "arm64-windows")
+      elseif (CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(_radioify_vcpkg_triplet "x64-windows")
+      else()
+        set(_radioify_vcpkg_triplet "x86-windows")
+      endif()
+    endif()
+
+    set(_radioify_vcpkg_triplet_root "${_radioify_vcpkg_installed_dir}/${_radioify_vcpkg_triplet}")
+    if (EXISTS "${_radioify_vcpkg_triplet_root}")
+      if (NOT "${_radioify_vcpkg_triplet_root}" IN_LIST CMAKE_PREFIX_PATH)
+        list(PREPEND CMAKE_PREFIX_PATH "${_radioify_vcpkg_triplet_root}")
+      endif()
+
+      if (EXISTS "${_radioify_vcpkg_triplet_root}/share/ffmpeg/FindFFMPEG.cmake")
+        set(_radioify_ffmpeg_module_dir "${_radioify_vcpkg_triplet_root}/share/ffmpeg")
+        if (NOT "${_radioify_ffmpeg_module_dir}" IN_LIST CMAKE_MODULE_PATH)
+          list(PREPEND CMAKE_MODULE_PATH "${_radioify_ffmpeg_module_dir}")
+        endif()
+      endif()
+    endif()
+  endif()
+endif()
+
 find_package(FFMPEG QUIET)
 
 if (NOT FFMPEG_FOUND)

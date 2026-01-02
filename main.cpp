@@ -2521,6 +2521,7 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
 
 int main(int argc, char** argv) {
   Options o = parseArgs(argc, argv);
+  configureFfmpegVideoLog({});
 
   float lpHz = static_cast<float>(o.bwHz);
   const uint32_t sampleRate = 48000;
