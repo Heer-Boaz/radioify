@@ -13,10 +13,12 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <immintrin.h>
+#include <thread>
 #include <vector>
 
 #ifdef _MSC_VER
@@ -118,6 +120,51 @@ class ComScope {
 
 FORCE_INLINE float clampFloat(float v, float lo, float hi) {
   return (v < lo) ? lo : (v > hi ? hi : v);
+}
+
+constexpr int kParallelBatchRows = 8;
+
+int hardwareThreadCount() {
+  static int count = []() {
+    unsigned int hw = std::thread::hardware_concurrency();
+    return hw == 0 ? 1 : static_cast<int>(hw);
+  }();
+  return count;
+}
+
+int computeWorkerCount(int totalRows, int minBatch) {
+  if (totalRows <= 0) return 1;
+  if (totalRows < minBatch * 2) return 1;
+  int hw = hardwareThreadCount();
+  if (hw <= 1) return 1;
+  int maxWorkers = std::min(hw, totalRows / minBatch);
+  return std::max(1, maxWorkers);
+}
+
+template <typename Fn>
+void parallelFor(int totalRows, int minBatch, int workerCount, Fn&& fn) {
+  if (workerCount <= 1 || totalRows <= 0) {
+    if (totalRows > 0) fn(0, totalRows, 0);
+    return;
+  }
+  std::atomic<int> next{0};
+  auto worker = [&](int workerId) {
+    for (;;) {
+      int start = next.fetch_add(minBatch);
+      if (start >= totalRows) break;
+      int end = std::min(totalRows, start + minBatch);
+      fn(start, end, workerId);
+    }
+  };
+  std::vector<std::thread> threads;
+  threads.reserve(static_cast<size_t>(workerCount - 1));
+  for (int i = 1; i < workerCount; ++i) {
+    threads.emplace_back(worker, i);
+  }
+  worker(0);
+  for (auto& t : threads) {
+    t.join();
+  }
 }
 
 // Verbeterde rendering parameters voor betere precisie
@@ -488,7 +535,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               static_cast<size_t>(padStride));
 
   if constexpr (kUseEdgeBoost) {
-    for (int y = 0; y < scaledH; ++y) {
+    int workerCount = computeWorkerCount(scaledH, kParallelBatchRows);
+    parallelFor(scaledH, kParallelBatchRows, workerCount,
+                [&](int yStart, int yEnd, int) {
+                  for (int y = yStart; y < yEnd; ++y) {
       const uint8_t* RESTRICT row =
           scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride + 1;
       uint8_t* RESTRICT edgeRow =
@@ -524,6 +574,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
         contrastRow[x] = static_cast<uint8_t>(localDiff);
       }
     }
+                });
   }
 
   int lumLow = 0;
@@ -592,7 +643,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
 
   const int brailleMap[2][4] = {{0, 1, 2, 6}, {3, 4, 5, 7}};
 
-  for (int cy = 0; cy < outH; ++cy) {
+  int workerCount = computeWorkerCount(outH, kParallelBatchRows);
+  parallelFor(outH, kParallelBatchRows, workerCount,
+              [&](int cyStart, int cyEnd, int) {
+                for (int cy = cyStart; cy < cyEnd; ++cy) {
     int baseY = cy * 4;
     // Prefetch volgende rij data voor betere cache hits
     if (cy + 1 < outH) {
@@ -1029,6 +1083,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
       out.cells[cellIndex] = cell;
     }
   }
+              });
 
   return true;
 }
@@ -1050,77 +1105,99 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
 
   uint64_t lumCount = 0;
   uint32_t lumHist[256] = {};
-  
-  // Subpixel sampling: middel meerdere source pixels per scaled pixel
-  for (int y = 0; y < scaledH; ++y) {
-    int syStart = scratch.yMapStart[y];
-    int syEnd = scratch.yMapEnd[y];
-    uint32_t* dstRow =
-        scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW;
-    uint8_t* padRow =
-        scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride;
+  int workerCount = computeWorkerCount(scaledH, kParallelBatchRows);
+  std::vector<std::array<uint32_t, 256>> localHist(workerCount);
+  std::vector<uint64_t> localLumCount(workerCount, 0);
+  for (auto& hist : localHist) {
+    hist.fill(0);
+  }
 
-    for (int x = 0; x < scaledW; ++x) {
-      int sxStart = scratch.xMapStart[x];
-      int sxEnd = scratch.xMapEnd[x];
-      
-      // Accumuleer alle source pixels in dit bereik
-      uint32_t sumR = 0, sumG = 0, sumB = 0, sumA = 0;
-      uint32_t sumLum = 0;
-      int sampleCount = 0;
-      
-      for (int sy = syStart; sy < syEnd; ++sy) {
-        const uint8_t* srcRow = rgba + static_cast<size_t>(sy) * width * 4;
-        for (int sx = sxStart; sx < sxEnd; ++sx) {
-          const uint8_t* sp = srcRow + sx * 4;
-          uint8_t r = sp[0];
-          uint8_t g = sp[1];
-          uint8_t b = sp[2];
-          uint8_t a = 255;
-          if constexpr (!AssumeOpaque) {
-            a = sp[3];
-          }
-          sumR += r;
-          sumG += g;
-          sumB += b;
-          sumA += a;
-          // Directe YUV luminantie berekening (veel sneller zonder lookup tables)
-          uint8_t lum = rgbToY(r, g, b);
-          sumLum += lum;
-          ++sampleCount;
-        }
-      }
-      
-      // Gemiddelde berekenen
-      if (sampleCount > 0) {
-        uint8_t r = static_cast<uint8_t>(sumR / sampleCount);
-        uint8_t g = static_cast<uint8_t>(sumG / sampleCount);
-        uint8_t b = static_cast<uint8_t>(sumB / sampleCount);
-        uint8_t a = static_cast<uint8_t>(sumA / sampleCount);
-        dstRow[x] = packRGBA(r, g, b, a);
-        
-        uint8_t avgLum = static_cast<uint8_t>(
-            std::min(255U, static_cast<uint32_t>(sumLum / sampleCount)));
-        
-        bool countLum = true;
-        if constexpr (!AssumeOpaque) {
-          if (a == 0) {
-            avgLum = 255;
-            countLum = false;
-          }
-        }
-        padRow[x + 1] = avgLum;
-        if (countLum) {
-          ++lumHist[avgLum];
-          ++lumCount;
-        }
-      } else {
-        dstRow[x] = packRGBA(0, 0, 0, 0);
-        padRow[x + 1] = 255;
-      }
+  // Subpixel sampling: middel meerdere source pixels per scaled pixel
+  parallelFor(scaledH, kParallelBatchRows, workerCount,
+              [&](int yStart, int yEnd, int workerId) {
+                auto& hist = localHist[workerId];
+                uint64_t lumLocal = 0;
+                for (int y = yStart; y < yEnd; ++y) {
+                  int syStart = scratch.yMapStart[y];
+                  int syEnd = scratch.yMapEnd[y];
+                  uint32_t* dstRow = scratch.scaledRGBA.data() +
+                                     static_cast<size_t>(y) * scaledW;
+                  uint8_t* padRow = scratch.lumaPad.data() +
+                                    static_cast<size_t>(y + 1) * padStride;
+
+                  for (int x = 0; x < scaledW; ++x) {
+                    int sxStart = scratch.xMapStart[x];
+                    int sxEnd = scratch.xMapEnd[x];
+
+                    // Accumuleer alle source pixels in dit bereik
+                    uint32_t sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+                    uint32_t sumLum = 0;
+                    int sampleCount = 0;
+
+                    for (int sy = syStart; sy < syEnd; ++sy) {
+                      const uint8_t* srcRow =
+                          rgba + static_cast<size_t>(sy) * width * 4;
+                      for (int sx = sxStart; sx < sxEnd; ++sx) {
+                        const uint8_t* sp = srcRow + sx * 4;
+                        uint8_t r = sp[0];
+                        uint8_t g = sp[1];
+                        uint8_t b = sp[2];
+                        uint8_t a = 255;
+                        if constexpr (!AssumeOpaque) {
+                          a = sp[3];
+                        }
+                        sumR += r;
+                        sumG += g;
+                        sumB += b;
+                        sumA += a;
+                        // Directe YUV luminantie berekening (veel sneller zonder
+                        // lookup tables)
+                        uint8_t lum = rgbToY(r, g, b);
+                        sumLum += lum;
+                        ++sampleCount;
+                      }
+                    }
+
+                    // Gemiddelde berekenen
+                    if (sampleCount > 0) {
+                      uint8_t r = static_cast<uint8_t>(sumR / sampleCount);
+                      uint8_t g = static_cast<uint8_t>(sumG / sampleCount);
+                      uint8_t b = static_cast<uint8_t>(sumB / sampleCount);
+                      uint8_t a = static_cast<uint8_t>(sumA / sampleCount);
+                      dstRow[x] = packRGBA(r, g, b, a);
+
+                      uint8_t avgLum = static_cast<uint8_t>(
+                          std::min(255U, static_cast<uint32_t>(
+                                             sumLum / sampleCount)));
+
+                      bool countLum = true;
+                      if constexpr (!AssumeOpaque) {
+                        if (a == 0) {
+                          avgLum = 255;
+                          countLum = false;
+                        }
+                      }
+                      padRow[x + 1] = avgLum;
+                      if (countLum) {
+                        ++hist[avgLum];
+                        ++lumLocal;
+                      }
+                    } else {
+                      dstRow[x] = packRGBA(0, 0, 0, 0);
+                      padRow[x + 1] = 255;
+                    }
+                  }
+                  padRow[0] = padRow[1];
+                  padRow[padStride - 1] = padRow[padStride - 2];
+                }
+                localLumCount[workerId] += lumLocal;
+              });
+
+  for (int i = 0; i < workerCount; ++i) {
+    lumCount += localLumCount[i];
+    for (int j = 0; j < 256; ++j) {
+      lumHist[j] += localHist[i][static_cast<size_t>(j)];
     }
-    padRow[0] = padRow[1];
-    padRow[padStride - 1] = padRow[padStride - 2];
   }
 
   return renderAsciiArtFromScratch<AssumeOpaque>(out, scratch, lumCount,
@@ -1153,91 +1230,113 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
 
   uint64_t lumCount = 0;
   uint32_t lumHist[256] = {};
+  int workerCount = computeWorkerCount(scaledH, kParallelBatchRows);
+  std::vector<std::array<uint32_t, 256>> localHist(workerCount);
+  std::vector<uint64_t> localLumCount(workerCount, 0);
+  for (auto& hist : localHist) {
+    hist.fill(0);
+  }
 
-  for (int y = 0; y < scaledH; ++y) {
-    int syStart = scratch.yMapStart[y];
-    int syEnd = scratch.yMapEnd[y];
-    uint32_t* dstRow =
-        scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW;
-    uint8_t* padRow =
-        scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride;
+  parallelFor(scaledH, kParallelBatchRows, workerCount,
+              [&](int yStart, int yEnd, int workerId) {
+                auto& hist = localHist[workerId];
+                uint64_t lumLocal = 0;
+                for (int y = yStart; y < yEnd; ++y) {
+                  int syStart = scratch.yMapStart[y];
+                  int syEnd = scratch.yMapEnd[y];
+                  uint32_t* dstRow = scratch.scaledRGBA.data() +
+                                     static_cast<size_t>(y) * scaledW;
+                  uint8_t* padRow = scratch.lumaPad.data() +
+                                    static_cast<size_t>(y + 1) * padStride;
 
-    for (int x = 0; x < scaledW; ++x) {
-      int sxStart = scratch.xMapStart[x];
-      int sxEnd = scratch.xMapEnd[x];
-      uint64_t sumY = 0;
-      uint64_t sumU = 0;
-      uint64_t sumV = 0;
-      uint32_t sampleCount = 0;
+                  for (int x = 0; x < scaledW; ++x) {
+                    int sxStart = scratch.xMapStart[x];
+                    int sxEnd = scratch.xMapEnd[x];
+                    uint64_t sumY = 0;
+                    uint64_t sumU = 0;
+                    uint64_t sumV = 0;
+                    uint32_t sampleCount = 0;
 
-      for (int sy = syStart; sy < syEnd; ++sy) {
-        if constexpr (IsP010) {
-          const uint16_t* yRow = reinterpret_cast<const uint16_t*>(
-              yPlane + static_cast<size_t>(sy) * stride);
-          const uint16_t* uvRow = reinterpret_cast<const uint16_t*>(
-              uvPlane + static_cast<size_t>(sy / 2) * stride);
-          for (int sx = sxStart; sx < sxEnd; ++sx) {
-            int uvIndex = (sx / 2) * 2;
-            int y10 = static_cast<int>(yRow[sx] >> 6);
-            int u10 = static_cast<int>(uvRow[uvIndex + 0] >> 6);
-            int v10 = static_cast<int>(uvRow[uvIndex + 1] >> 6);
-            sumY += static_cast<uint64_t>(y10);
-            sumU += static_cast<uint64_t>(u10);
-            sumV += static_cast<uint64_t>(v10);
-            ++sampleCount;
-          }
-        } else {
-          const uint8_t* yRow =
-              yPlane + static_cast<size_t>(sy) * stride;
-          const uint8_t* uvRow =
-              uvPlane + static_cast<size_t>(sy / 2) * stride;
-          for (int sx = sxStart; sx < sxEnd; ++sx) {
-            int uvIndex = (sx / 2) * 2;
-            int y8 = yRow[sx];
-            int u8 = uvRow[uvIndex + 0];
-            int v8 = uvRow[uvIndex + 1];
-            sumY += static_cast<uint64_t>(y8);
-            sumU += static_cast<uint64_t>(u8);
-            sumV += static_cast<uint64_t>(v8);
-            ++sampleCount;
-          }
-        }
-      }
+                    for (int sy = syStart; sy < syEnd; ++sy) {
+                      if constexpr (IsP010) {
+                        const uint16_t* yRow =
+                            reinterpret_cast<const uint16_t*>(
+                                yPlane + static_cast<size_t>(sy) * stride);
+                        const uint16_t* uvRow =
+                            reinterpret_cast<const uint16_t*>(
+                                uvPlane + static_cast<size_t>(sy / 2) * stride);
+                        for (int sx = sxStart; sx < sxEnd; ++sx) {
+                          int uvIndex = (sx / 2) * 2;
+                          int y10 = static_cast<int>(yRow[sx] >> 6);
+                          int u10 = static_cast<int>(uvRow[uvIndex + 0] >> 6);
+                          int v10 = static_cast<int>(uvRow[uvIndex + 1] >> 6);
+                          sumY += static_cast<uint64_t>(y10);
+                          sumU += static_cast<uint64_t>(u10);
+                          sumV += static_cast<uint64_t>(v10);
+                          ++sampleCount;
+                        }
+                      } else {
+                        const uint8_t* yRow =
+                            yPlane + static_cast<size_t>(sy) * stride;
+                        const uint8_t* uvRow =
+                            uvPlane + static_cast<size_t>(sy / 2) * stride;
+                        for (int sx = sxStart; sx < sxEnd; ++sx) {
+                          int uvIndex = (sx / 2) * 2;
+                          int y8 = yRow[sx];
+                          int u8 = uvRow[uvIndex + 0];
+                          int v8 = uvRow[uvIndex + 1];
+                          sumY += static_cast<uint64_t>(y8);
+                          sumU += static_cast<uint64_t>(u8);
+                          sumV += static_cast<uint64_t>(v8);
+                          ++sampleCount;
+                        }
+                      }
+                    }
 
-      if (sampleCount > 0) {
-        uint32_t half = sampleCount / 2;
-        int yAvg = static_cast<int>((sumY + half) / sampleCount);
-        int uAvg = static_cast<int>((sumU + half) / sampleCount);
-        int vAvg = static_cast<int>((sumV + half) / sampleCount);
-        uint8_t y8 = 0;
-        uint8_t u8 = 0;
-        uint8_t v8 = 0;
-        if constexpr (IsP010) {
-          y8 = to8bitFrom10(yAvg);
-          u8 = to8bitFrom10(uAvg);
-          v8 = to8bitFrom10(vAvg);
-        } else {
-          y8 = static_cast<uint8_t>(std::clamp(yAvg, 0, 255));
-          u8 = static_cast<uint8_t>(std::clamp(uAvg, 0, 255));
-          v8 = static_cast<uint8_t>(std::clamp(vAvg, 0, 255));
-        }
+                    if (sampleCount > 0) {
+                      uint32_t half = sampleCount / 2;
+                      int yAvg = static_cast<int>((sumY + half) / sampleCount);
+                      int uAvg = static_cast<int>((sumU + half) / sampleCount);
+                      int vAvg = static_cast<int>((sumV + half) / sampleCount);
+                      uint8_t y8 = 0;
+                      uint8_t u8 = 0;
+                      uint8_t v8 = 0;
+                      if constexpr (IsP010) {
+                        y8 = to8bitFrom10(yAvg);
+                        u8 = to8bitFrom10(uAvg);
+                        v8 = to8bitFrom10(vAvg);
+                      } else {
+                        y8 = static_cast<uint8_t>(std::clamp(yAvg, 0, 255));
+                        u8 = static_cast<uint8_t>(std::clamp(uAvg, 0, 255));
+                        v8 = static_cast<uint8_t>(std::clamp(vAvg, 0, 255));
+                      }
 
-        uint8_t lum = normalizeLuma8(y8, fullRange);
-        padRow[x + 1] = lum;
-        ++lumHist[lum];
-        ++lumCount;
+                      uint8_t lum = normalizeLuma8(y8, fullRange);
+                      padRow[x + 1] = lum;
+                      ++hist[lum];
+                      ++lumLocal;
 
-        uint8_t r = 0, g = 0, b = 0;
-        yuvToRgb(static_cast<int>(y8), static_cast<int>(u8),
-                 static_cast<int>(v8), fullRange, yuvMatrix, r, g, b);
-        dstRow[x] = packRGBA(r, g, b, 255);
-      } else {
-        dstRow[x] = packRGBA(0, 0, 0, 0);
-        padRow[x + 1] = 255;
-      }
+                      uint8_t r = 0, g = 0, b = 0;
+                      yuvToRgb(static_cast<int>(y8), static_cast<int>(u8),
+                               static_cast<int>(v8), fullRange, yuvMatrix, r,
+                               g, b);
+                      dstRow[x] = packRGBA(r, g, b, 255);
+                    } else {
+                      dstRow[x] = packRGBA(0, 0, 0, 0);
+                      padRow[x + 1] = 255;
+                    }
+                  }
+                  padRow[0] = padRow[1];
+                  padRow[padStride - 1] = padRow[padStride - 2];
+                }
+                localLumCount[workerId] += lumLocal;
+              });
+
+  for (int i = 0; i < workerCount; ++i) {
+    lumCount += localLumCount[i];
+    for (int j = 0; j < 256; ++j) {
+      lumHist[j] += localHist[i][static_cast<size_t>(j)];
     }
-    padRow[0] = padRow[1];
-    padRow[padStride - 1] = padRow[padStride - 2];
   }
 
   return renderAsciiArtFromScratch<true>(out, scratch, lumCount, lumHist);

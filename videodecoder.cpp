@@ -334,7 +334,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     } else {
       impl_->sws = sws_getCachedContext(
           impl_->sws, src->width, src->height, srcFmt, dstW, dstH,
-          AV_PIX_FMT_NV12, SWS_BILINEAR, nullptr, nullptr, nullptr);
+          AV_PIX_FMT_NV12, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
       if (!impl_->sws) {
         impl_->atEnd = true;
         return false;
