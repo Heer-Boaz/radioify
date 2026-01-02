@@ -1045,7 +1045,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
       HRESULT roHr = RoInitialize(RO_INIT_MULTITHREADED);
       bool roInit = SUCCEEDED(roHr);
       VideoDecoder decoder;
-      const bool allowRgbOutput = true;
+      const bool allowRgbOutput = false;
       bool preferHardware = true;
         bool softwareFallbackAttempted = false;
         int64_t lastVideoTs = 0;
@@ -1644,13 +1644,93 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               renderFailDetail = "Frame pixel data is missing.";
               return;
             }
-            YuvFormat yuvFormat = (frame->format == VideoPixelFormat::P010)
-                                      ? YuvFormat::P010
-                                      : YuvFormat::NV12;
-            artOk = renderAsciiArtFromYuv(
-                frame->yuv.data(), frame->width, frame->height, frame->stride,
-                frame->planeHeight, yuvFormat, frame->fullRange,
-                frame->yuvMatrix, width, maxHeight, art);
+
+            bool renderedWithGpu = false;
+            if (gpuAvailable && frame->format == VideoPixelFormat::NV12) {
+              art.width = width;
+              art.height = maxHeight;
+              std::string gpuErr;
+              
+              // Estimate bgLum and lumRange from Y plane (CPU sampling)
+              // Sample every 100th pixel to be fast
+              int ySum = 0;
+              int yMin = 255;
+              int yMax = 0;
+              int sampleCount = 0;
+              const uint8_t* yPlane = frame->yuv.data();
+              int yHeight = frame->height;
+              int yWidth = frame->width;
+              int yStride = frame->stride;
+              
+              // Histogram for mode (bgLum)
+              int hist[256] = {0};
+              
+              for (int y = 0; y < yHeight; y += 10) {
+                  const uint8_t* row = yPlane + y * yStride;
+                  for (int x = 0; x < yWidth; x += 10) {
+                      uint8_t val = row[x];
+                      ySum += val;
+                      if (val < yMin) yMin = val;
+                      if (val > yMax) yMax = val;
+                      hist[val]++;
+                      sampleCount++;
+                  }
+              }
+              
+              int bgLum = 0;
+              int maxHist = 0;
+              for (int i = 0; i < 256; ++i) {
+                  if (hist[i] > maxHist) {
+                      maxHist = hist[i];
+                      bgLum = i;
+                  }
+              }
+              
+              // Percentile approximation
+              int lumLow = yMin;
+              int lumHigh = yMax;
+              int count = 0;
+              int targetLow = sampleCount / 100; // 1%
+              int targetHigh = sampleCount * 99 / 100; // 99%
+              
+              int accum = 0;
+              for (int i = 0; i < 256; ++i) {
+                  accum += hist[i];
+                  if (accum >= targetLow && lumLow == yMin) lumLow = i;
+                  if (accum >= targetHigh) {
+                      lumHigh = i;
+                      break;
+                  }
+              }
+              
+              int lumRange = std::max(1, lumHigh - lumLow);
+
+              if (gpuRenderer.RenderNV12(frame->yuv.data(), frame->width,
+                                         frame->height, frame->stride,
+                                         frame->planeHeight, bgLum, lumRange, art, &gpuErr)) {
+                renderedWithGpu = true;
+                artOk = true;
+                static bool gpuLogged = false;
+                if (!gpuLogged) {
+                  appendTiming("video_renderer gpu_active=1 format=nv12");
+                  gpuLogged = true;
+                }
+              } else {
+                gpuAvailable = false;
+                appendVideoWarning("GPU renderer failed (NV12), falling back to CPU: " +
+                                   gpuErr);
+              }
+            }
+
+            if (!renderedWithGpu) {
+              YuvFormat yuvFormat = (frame->format == VideoPixelFormat::P010)
+                                        ? YuvFormat::P010
+                                        : YuvFormat::NV12;
+              artOk = renderAsciiArtFromYuv(
+                  frame->yuv.data(), frame->width, frame->height, frame->stride,
+                  frame->planeHeight, yuvFormat, frame->fullRange,
+                  frame->yuvMatrix, width, maxHeight, art);
+            }
           } else {
             size_t expected = static_cast<size_t>(frame->width) *
                               static_cast<size_t>(frame->height) * 4u;

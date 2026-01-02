@@ -18,10 +18,16 @@ cbuffer Constants : register(b0) {
     float time;
     uint frameCount;
     uint bgLum;
-    uint padding;
+    uint lumRange;
 };
 
+#ifdef NV12_INPUT
+Texture2D<float> TextureY : register(t0);
+Texture2D<float2> TextureUV : register(t1);
+#else
 Texture2D<float4> InputTexture : register(t0);
+#endif
+
 SamplerState LinearSampler : register(s0);
 
 struct AsciiCell {
@@ -39,15 +45,33 @@ static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
 
 // Constants from CPU version
 static const int kMinContrastForBraille = 15;
-static const int kEdgeShift = 10;
-static const int kColorLift = 40;
-static const int kColorSaturation = 256;
-static const int kTemporalResetDelta = 40;
-static const int kColorAlpha = 128; // 0.5 in fixed point
-static const int kBgAlpha = 128;
+static const int kEdgeShift = 3;
+static const int kColorLift = 0;
+static const int kColorSaturation = 340;
+static const int kTemporalResetDelta = 48;
+static const int kColorAlpha = 48; 
+static const int kBgAlpha = 24;
+static const int kInkMinLuma = 110;
+static const int kBgMinLuma = 20;
+static const int kInkMaxScale = 1280;
+static const int kEdgeMin = 4;
+static const int kEdgeBoost = 245;
+static const int kDitherBias = 48;
+static const int kAAScoreBandMin = 12;
+static const int kAAScoreBandMax = 144;
 
-// Dithering thresholds (simplified)
-static const int kDitherThresholdByBit[8] = { 128, 64, 192, 32, 160, 96, 224, 16 };
+// Dithering thresholds (optimized for 2x4 braille)
+// Ranks: 0, 4, 2, 6, 1, 5, 3, 7
+static const int kDitherThresholdByBit[8] = { 
+    (0 * 255 + 4) / 8, // 0
+    (4 * 255 + 4) / 8, // 1
+    (2 * 255 + 4) / 8, // 2
+    (6 * 255 + 4) / 8, // 3
+    (1 * 255 + 4) / 8, // 4
+    (5 * 255 + 4) / 8, // 5
+    (3 * 255 + 4) / 8, // 6
+    (7 * 255 + 4) / 8  // 7
+};
 
 uint PackColor(float3 c) {
     uint r = (uint)(saturate(c.r) * 255.0f);
@@ -65,6 +89,39 @@ float3 UnpackColor(uint c) {
 
 float GetLuma(float3 c) {
     return dot(c, kLumaCoeff) * 255.0f;
+}
+
+float GetInkLevelFromLum(float lum) {
+    float norm = lum / 255.0f;
+    float x = norm; // kInkUseBright = true
+    float coverage = pow(x, 0.50f); // kInkGamma
+    if (coverage > 0.001f) {
+        coverage = coverage * 1.85f + 0.12f; // Gain + Bias
+    }
+    if (coverage < 0.02f) coverage = 0.0f; // ZeroCutoff
+    return saturate(coverage);
+}
+
+float GetEdgeBoostFromMag(float edge) {
+    float range = 255.0f - (float)kEdgeMin;
+    if (edge <= (float)kEdgeMin || range <= 0.0f) return 0.0f;
+    float boost = (edge - (float)kEdgeMin) * (float)kEdgeBoost / range;
+    return min(boost, (float)kEdgeBoost);
+}
+
+float4 SampleInput(float2 uv) {
+#ifdef NV12_INPUT
+    float y = TextureY.SampleLevel(LinearSampler, uv, 0);
+    float2 uv_val = TextureUV.SampleLevel(LinearSampler, uv, 0);
+    float u = uv_val.x - 0.5;
+    float v = uv_val.y - 0.5;
+    float r = y + 1.402 * v;
+    float g = y - 0.344136 * u - 0.714136 * v;
+    float b = y + 1.772 * u;
+    return float4(r, g, b, 1.0);
+#else
+    return InputTexture.SampleLevel(LinearSampler, uv, 0);
+#endif
 }
 
 struct DotInfo {
@@ -106,17 +163,17 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         float v = (DTid.y * cellH + row * dotH + dotH * 0.5f) / height;
 
         // Sample Center
-        float4 color = InputTexture.SampleLevel(LinearSampler, float2(u, v), 0);
+        float4 color = SampleInput(float2(u, v));
         float luma = GetLuma(color.rgb);
         
         // Sobel (Approximate by sampling neighbors)
         float u_l = u - dotW/width; float u_r = u + dotW/width;
         float v_t = v - dotH/height; float v_b = v + dotH/height;
         
-        float l_l = GetLuma(InputTexture.SampleLevel(LinearSampler, float2(u_l, v), 0).rgb);
-        float l_r = GetLuma(InputTexture.SampleLevel(LinearSampler, float2(u_r, v), 0).rgb);
-        float l_t = GetLuma(InputTexture.SampleLevel(LinearSampler, float2(u, v_t), 0).rgb);
-        float l_b = GetLuma(InputTexture.SampleLevel(LinearSampler, float2(u, v_b), 0).rgb);
+        float l_l = GetLuma(SampleInput(float2(u_l, v)).rgb);
+        float l_r = GetLuma(SampleInput(float2(u_r, v)).rgb);
+        float l_t = GetLuma(SampleInput(float2(u, v_t)).rgb);
+        float l_b = GetLuma(SampleInput(float2(u, v_b)).rgb);
         
         float gx = l_r - l_l;
         float gy = l_b - l_t;
@@ -139,6 +196,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         cellContrastMax = max(cellContrastMax, contrast);
         sumAll += color.rgb;
     }
+
 
     // 2. Adaptive Thresholding
     float cellLumRange = cellLumMax - cellLumMin;
@@ -165,8 +223,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     // 5. Target Dots Calculation
     float avgLumDiff = abs(cellLumMean - (float)bgLum);
-    // Simplified InkLevelFromLum mapping (linear approx)
-    float targetCoverage = saturate(avgLumDiff / 128.0f); 
+    if (lumRange > 0) {
+        avgLumDiff = avgLumDiff * 255.0f / (float)lumRange;
+    }
+    float targetCoverage = GetInkLevelFromLum(avgLumDiff);
     int targetDots = (int)(8.0f * targetCoverage + 0.5f);
 
     float detailScore = max(cellLumRange, max(cellEdgeMax, cellContrastMax));
@@ -186,6 +246,19 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // 0=(0,0), 1=(0,1), 2=(0,2), 3=(1,0), 4=(1,1), 5=(1,2), 6=(0,3), 7=(1,3)
     int bitMap[8] = {0, 1, 2, 6, 3, 4, 5, 7};
 
+    // AA Band Logic
+    int aaBand = 0;
+    int aaCutoffScore = 0;
+    bool useAABand = false;
+    if (targetDots > 0) {
+        int scoreRange = dots[0].score - dots[7].score;
+        aaBand = min(scoreRange, kAAScoreBandMax);
+        useAABand = (detailScore >= kMinContrastForBraille && aaBand >= kAAScoreBandMin);
+        aaCutoffScore = dots[targetDots - 1].score;
+    } else {
+        aaCutoffScore = dots[0].score;
+    }
+
     for (int rank = 0; rank < 8; ++rank) {
         int idx = dots[rank].idx;
         bool shouldActivate = false;
@@ -199,10 +272,21 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             shouldActivate = fractional > ditherThresh;
         }
         
+        if (!shouldActivate && useAABand) {
+            int scoreDelta = aaCutoffScore - dots[rank].score;
+            if (scoreDelta >= 0 && scoreDelta < aaBand) {
+                int numer = (aaBand - scoreDelta) * 255 + (aaBand / 2);
+                int ditherThresh = kDitherThresholdByBit[bitMap[idx]];
+                shouldActivate = numer > ditherThresh * aaBand;
+            }
+        }
+
         // Edge Boost
-        if (!shouldActivate && dots[rank].edge > 30.0f) { // kEdgeMin * 3 approx
-             // Simplified edge boost
-             shouldActivate = true;
+        if (!shouldActivate && dots[rank].edge > (float)kEdgeMin * 3.0f) {
+             float edgeBonus = GetEdgeBoostFromMag(dots[rank].edge);
+             int ditherThresh = kDitherThresholdByBit[bitMap[idx]] - kDitherBias;
+             if (ditherThresh < 0) ditherThresh = 0;
+             shouldActivate = edgeBonus > (float)ditherThresh;
         }
 
         if (shouldActivate) {
@@ -219,9 +303,39 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float3 curFg = (inkCount > 0) ? (sumInk / inkCount) : (sumAll / 8.0f);
     float3 curBg = (bgCount > 0) ? (sumBg / bgCount) : (sumAll / 8.0f);
 
-    // Color Lift & Saturation (Simplified)
+    // Color Lift
     curFg = max(curFg, (float)kColorLift / 255.0f);
-    
+    curBg = max(curBg, (float)kColorLift / 255.0f);
+
+    // Luma Correction (Ink)
+    float curY = GetLuma(curFg);
+    if (curY < (float)kInkMinLuma) {
+        if (curY <= 0.0f) {
+            curFg = (float)kInkMinLuma / 255.0f;
+        } else {
+            float scale = ((float)kInkMinLuma * 256.0f) / curY;
+            if (scale > (float)kInkMaxScale) scale = (float)kInkMaxScale;
+            curFg = min(1.0f, (curFg * scale + 128.0f) / 256.0f);
+        }
+    }
+
+    // Adaptive Saturation (Ink)
+    curY = GetLuma(curFg);
+    float adaptiveSat = (float)kColorSaturation + ((255.0f - curY) / 4.0f);
+    if (adaptiveSat > 400.0f) adaptiveSat = 400.0f;
+    curFg = saturate(curY/255.0f + (curFg - curY/255.0f) * (adaptiveSat / 256.0f));
+
+    // Luma Correction (Bg)
+    float bgY = GetLuma(curBg);
+    if (bgY < (float)kBgMinLuma) {
+        if (bgY <= 0.0f) {
+            curBg = (float)kBgMinLuma / 255.0f;
+        } else {
+            float scale = ((float)kBgMinLuma * 256.0f) / bgY;
+            curBg = min(1.0f, (curBg * scale + 128.0f) / 256.0f);
+        }
+    }
+
     // Temporal Stability
     uint2 history = HistoryBuffer[cellIndex];
     float3 prevFg = UnpackColor(history.x);
@@ -242,7 +356,13 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     cell.ch = kBrailleBase + bitmask;
     cell.fg = PackColor(curFg);
     cell.bg = PackColor(curBg);
-    cell.hasBg = (bgCount > 0);
+    
+    // Fix for black backgrounds on full cells:
+    bool hasBg = (bgCount > 0);
+    if (!hasBg && GetLuma(curBg) > 10.0f) {
+        hasBg = true;
+    }
+    cell.hasBg = hasBg;
 
     OutputBuffer[cellIndex] = cell;
 }
@@ -286,6 +406,7 @@ bool GpuAsciiRenderer::CompileComputeShader() {
     Microsoft::WRL::ComPtr<ID3DBlob> blob;
     Microsoft::WRL::ComPtr<ID3DBlob> errorBlob;
 
+    // Compile RGBA Shader
     HRESULT hr = D3DCompile(
         kComputeShaderSource, strlen(kComputeShaderSource),
         "EmbeddedShader", nullptr, nullptr,
@@ -295,13 +416,156 @@ bool GpuAsciiRenderer::CompileComputeShader() {
 
     if (FAILED(hr)) {
         if (errorBlob) {
-            std::cerr << "Shader Compile Error: " << (char*)errorBlob->GetBufferPointer() << std::endl;
+            std::cerr << "Shader Compile Error (RGBA): " << (char*)errorBlob->GetBufferPointer() << std::endl;
         }
         return false;
     }
 
     hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_computeShader);
+    if (FAILED(hr)) return false;
+
+    // Compile NV12 Shader
+    D3D_SHADER_MACRO defines[] = { "NV12_INPUT", "1", nullptr, nullptr };
+    blob.Reset();
+    errorBlob.Reset();
+
+    hr = D3DCompile(
+        kComputeShaderSource, strlen(kComputeShaderSource),
+        "EmbeddedShader", defines, nullptr,
+        "CSMain", "cs_5_0",
+        0, 0, &blob, &errorBlob
+    );
+
+    if (FAILED(hr)) {
+        if (errorBlob) {
+            std::cerr << "Shader Compile Error (NV12): " << (char*)errorBlob->GetBufferPointer() << std::endl;
+        }
+        return false;
+    }
+
+    hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_computeShaderNV12);
     return SUCCEEDED(hr);
+}
+
+bool GpuAsciiRenderer::CreateNV12Textures(int width, int height) {
+    if (m_textureY && m_currentWidth == width && m_currentHeight == height) return true;
+
+    // Y Texture (R8_UNORM)
+    D3D11_TEXTURE2D_DESC texDesc = {};
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.MipLevels = 1;
+    texDesc.ArraySize = 1;
+    texDesc.Format = DXGI_FORMAT_R8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Usage = D3D11_USAGE_DEFAULT;
+    texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    
+    if (FAILED(m_device->CreateTexture2D(&texDesc, nullptr, &m_textureY))) return false;
+    if (FAILED(m_device->CreateShaderResourceView(m_textureY.Get(), nullptr, &m_srvY))) return false;
+
+    // UV Texture (R8G8_UNORM)
+    texDesc.Width = width / 2;
+    texDesc.Height = height / 2;
+    texDesc.Format = DXGI_FORMAT_R8G8_UNORM;
+    
+    if (FAILED(m_device->CreateTexture2D(&texDesc, nullptr, &m_textureUV))) return false;
+    if (FAILED(m_device->CreateShaderResourceView(m_textureUV.Get(), nullptr, &m_srvUV))) return false;
+
+    return true;
+}
+
+bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
+                                int bgLum, int lumRange, AsciiArt& out, std::string* error) {
+    if (!m_device) {
+        if (!Initialize(width, height)) {
+            if (error) *error = "Failed to initialize GPU renderer";
+            return false;
+        }
+    }
+
+    int outW = out.width;
+    int outH = out.height;
+    if (outW <= 0 || outH <= 0) return false;
+
+    if (!CreateBuffers(width, height, outW, outH)) {
+        if (error) *error = "Failed to create GPU buffers";
+        return false;
+    }
+    
+    if (!CreateNV12Textures(width, height)) {
+        if (error) *error = "Failed to create NV12 textures";
+        return false;
+    }
+
+    // Upload Y
+    m_context->UpdateSubresource(m_textureY.Get(), 0, nullptr, yuv, stride, 0);
+    
+    // Upload UV
+    // UV plane starts after Y plane (stride * planeHeight)
+    const uint8_t* uvData = yuv + (stride * planeHeight);
+    m_context->UpdateSubresource(m_textureUV.Get(), 0, nullptr, uvData, stride, 0);
+
+    // Update Constants
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(m_context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        Constants* cb = (Constants*)mapped.pData;
+        cb->width = width;
+        cb->height = height;
+        cb->outWidth = outW;
+        cb->outHeight = outH;
+        cb->time = 0.0f;
+        cb->frameCount++;
+        cb->bgLum = bgLum;
+        cb->lumRange = lumRange;
+        m_context->Unmap(m_constantBuffer.Get(), 0);
+    }
+
+    // Dispatch
+    m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* srvs[] = { m_srvY.Get(), m_srvUV.Get() };
+    m_context->CSSetShaderResources(0, 2, srvs);
+    ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+    ID3D11Buffer* cbs[] = { m_constantBuffer.Get() };
+    m_context->CSSetConstantBuffers(0, 1, cbs);
+
+    UINT dispatchX = (outW + 7) / 8;
+    UINT dispatchY = (outH + 7) / 8;
+    m_context->Dispatch(dispatchX, dispatchY, 1);
+
+    // Unbind
+    ID3D11UnorderedAccessView* nullUAV[] = { nullptr, nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 2, nullUAV, nullptr);
+    ID3D11ShaderResourceView* nullSRV[] = { nullptr, nullptr };
+    m_context->CSSetShaderResources(0, 2, nullSRV);
+
+    // Readback (Same as Render)
+    m_context->CopyResource(m_outputStagingBuffer.Get(), m_outputBuffer.Get());
+    
+    if (SUCCEEDED(m_context->Map(m_outputStagingBuffer.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+        GpuAsciiCell* gpuCells = (GpuAsciiCell*)mapped.pData;
+        out.cells.resize(outW * outH);
+        
+        for (int i = 0; i < outW * outH; ++i) {
+            out.cells[i].ch = (wchar_t)gpuCells[i].ch;
+            
+            uint32_t fg = gpuCells[i].fg;
+            out.cells[i].fg.r = (fg) & 0xFF;
+            out.cells[i].fg.g = (fg >> 8) & 0xFF;
+            out.cells[i].fg.b = (fg >> 16) & 0xFF;
+
+            uint32_t bg = gpuCells[i].bg;
+            out.cells[i].bg.r = (bg) & 0xFF;
+            out.cells[i].bg.g = (bg >> 8) & 0xFF;
+            out.cells[i].bg.b = (bg >> 16) & 0xFF;
+
+            out.cells[i].hasBg = gpuCells[i].hasBg != 0;
+        }
+        m_context->Unmap(m_outputStagingBuffer.Get(), 0);
+    }
+
+    return true;
 }
 
 bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) {
