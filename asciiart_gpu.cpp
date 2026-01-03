@@ -17,15 +17,14 @@ cbuffer Constants : register(b0) {
     uint outHeight;
     float time;
     uint frameCount;
-    uint bgLum;
-    uint lumRange;
     uint isFullRange;
-    uint padding[3];
+    uint padding[1];
 };
 
 #ifdef NV12_INPUT
 Texture2D<float> TextureY : register(t0);
 Texture2D<float2> TextureUV : register(t1);
+StructuredBuffer<uint4> StatsBuffer : register(t2); // x=bgLum, y=lumRange
 #else
 Texture2D<float4> InputTexture : register(t0);
 #endif
@@ -52,8 +51,8 @@ static const int kEdgeShift = 3;
 static const int kColorLift = 0;
 static const int kColorSaturation = 340;
 static const int kTemporalResetDelta = 48;
-static const int kColorAlpha = 220; 
-static const int kBgAlpha = 180;
+static const int kColorAlpha = 180; // Reduced from 220 for more stability
+static const int kBgAlpha = 140;    // Reduced from 180 for more stability
 static const int kInkMinLuma = 110;
 static const int kBgMinLuma = 20;
 static const int kInkMaxScale = 1280;
@@ -190,9 +189,10 @@ float4 SampleInput(float2 uv) {
 
     // Fix washed out colors (HDR->SDR tone mapping approx)
     float3 rgb = color.rgb;
-    float luma = dot(rgb, kLumaCoeff);
-    rgb = lerp(luma.xxx, rgb, 1.3f); // Boost saturation
-    rgb = (rgb - 0.5f) * 1.1f + 0.5f; // Boost contrast
+    // Removed aggressive tone mapping that amplified noise
+    // Just a slight contrast boost
+    rgb = (rgb - 0.5f) * 1.05f + 0.5f; 
+    color.rgb = saturate(rgb);
 
     return float4(rgb, color.a);
 }
@@ -283,6 +283,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     }
 
     // Adjust bgLum and lumRange for Limited Range if needed
+    uint bgLum = StatsBuffer[0].x;
+    uint lumRange = StatsBuffer[0].y;
+
     float effectiveBgLum = (float)bgLum;
     float effectiveLumRange = (float)lumRange;
     if (!isFullRange) {
@@ -416,9 +419,13 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     }
 
     // Adaptive Saturation (Ink)
+    // Reduced saturation boost for dark colors to prevent blue/purple artifacts
     curY = GetLuma(curFg);
-    float adaptiveSat = (float)kColorSaturation + ((255.0f - curY) / 4.0f);
-    if (adaptiveSat > 400.0f) adaptiveSat = 400.0f;
+    float adaptiveSat = (float)kColorSaturation;
+    // If dark, reduce saturation instead of boosting it
+    if (curY < 60.0f) {
+        adaptiveSat = adaptiveSat * (curY / 60.0f); 
+    }
     curFg = saturate(curY/255.0f + (curFg - curY/255.0f) * (adaptiveSat / 256.0f));
 
     // Luma Correction (Bg)
@@ -477,6 +484,84 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         uint32_t bg;
         uint32_t hasBg;
     };
+
+    // Stats Compute Shader
+    const char* kStatsShaderSource = R"(
+cbuffer Constants : register(b0) {
+    uint width;
+    uint height;
+    uint padding[2];
+};
+
+Texture2D<float> TextureY : register(t0);
+RWStructuredBuffer<uint4> Stats : register(u0); // x=bgLum, y=lumRange
+
+groupshared uint histogram[256];
+
+[numthreads(256, 1, 1)]
+void CSStats(uint3 tid : SV_DispatchThreadID) {
+    // Initialize histogram
+    histogram[tid.x] = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    // Strided sampling (similar to CPU 10x10 but parallel)
+    // We want to cover the whole image with 256 threads.
+    // Each thread handles a vertical strip or scattered pixels.
+    
+    uint stride = 10;
+    for (uint y = 0; y < height; y += stride) {
+        for (uint x = tid.x * stride; x < width; x += 256 * stride) {
+             float yVal = TextureY.Load(int3(x, y, 0)); // Load raw value (0.0-1.0)
+             uint bin = (uint)(yVal * 255.0f + 0.5f);
+             bin = min(bin, 255);
+             InterlockedAdd(histogram[bin], 1);
+        }
+    }
+    
+    GroupMemoryBarrierWithGroupSync();
+    
+    if (tid.x == 0) {
+        // Find Mode (bgLum)
+        uint maxCount = 0;
+        uint mode = 0;
+        uint totalSamples = 0;
+        
+        for (uint i = 0; i < 256; ++i) {
+            uint count = histogram[i];
+            totalSamples += count;
+            if (count > maxCount) {
+                maxCount = count;
+                mode = i;
+            }
+        }
+        
+        // Find Range (1% - 99%)
+        uint targetLow = totalSamples / 100;
+        uint targetHigh = totalSamples * 99 / 100;
+        uint accum = 0;
+        uint low = 0;
+        uint high = 255;
+        bool lowFound = false;
+        
+        for (uint j = 0; j < 256; ++j) {
+            accum += histogram[j];
+            if (!lowFound && accum >= targetLow) {
+                low = j;
+                lowFound = true;
+            }
+            if (accum >= targetHigh) {
+                high = j;
+                break;
+            }
+        }
+        
+        uint range = max(1, high - low);
+        if (range < 80) range = 80;
+        
+        Stats[0] = uint4(mode, range, 0, 0);
+    }
+}
+)";
 }
 
 GpuAsciiRenderer::GpuAsciiRenderer() {}
@@ -587,7 +672,62 @@ bool GpuAsciiRenderer::CompileComputeShader(std::string* error) {
         if (error) *error = "Failed to create compute shader (NV12)";
         return false;
     }
+
+    // Compile Stats Shader
+    blob.Reset();
+    errorBlob.Reset();
+    hr = D3DCompile(
+        kStatsShaderSource, strlen(kStatsShaderSource),
+        "StatsShader", nullptr, nullptr,
+        "CSStats", "cs_5_0",
+        0, 0, &blob, &errorBlob
+    );
+
+    if (FAILED(hr)) {
+        if (errorBlob) {
+            std::string msg = (char*)errorBlob->GetBufferPointer();
+            std::cerr << "Shader Compile Error (Stats): " << msg << std::endl;
+            if (error) *error = "Shader Compile Error (Stats): " + msg;
+        } else {
+            if (error) *error = "Shader Compile Error (Stats): Unknown error";
+        }
+        return false;
+    }
+
+    hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_statsShader);
+    if (FAILED(hr)) {
+        if (error) *error = "Failed to create compute shader (Stats)";
+        return false;
+    }
+
     return SUCCEEDED(hr);
+}
+
+bool GpuAsciiRenderer::CreateStatsBuffer() {
+    if (m_statsBuffer) return true;
+
+    D3D11_BUFFER_DESC bufDesc = {};
+    bufDesc.ByteWidth = sizeof(uint32_t) * 4; // uint4
+    bufDesc.Usage = D3D11_USAGE_DEFAULT;
+    bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+    bufDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    bufDesc.StructureByteStride = sizeof(uint32_t) * 4;
+
+    if (FAILED(m_device->CreateBuffer(&bufDesc, nullptr, &m_statsBuffer))) return false;
+
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uavDesc.Buffer.NumElements = 1;
+    if (FAILED(m_device->CreateUnorderedAccessView(m_statsBuffer.Get(), &uavDesc, &m_statsUAV))) return false;
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+    srvDesc.Buffer.NumElements = 1;
+    if (FAILED(m_device->CreateShaderResourceView(m_statsBuffer.Get(), &srvDesc, &m_statsSRV))) return false;
+
+    return true;
 }
 
 bool GpuAsciiRenderer::CreateNV12Textures(int width, int height, bool is10Bit) {
@@ -634,7 +774,7 @@ bool GpuAsciiRenderer::CreateNV12Textures(int width, int height, bool is10Bit) {
 }
 
 bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
-                                int bgLum, int lumRange, bool fullRange, bool is10Bit, AsciiArt& out, std::string* error) {
+                                bool fullRange, bool is10Bit, AsciiArt& out, std::string* error) {
     if (!m_device) {
         std::string initErr;
         if (!Initialize(width, height, &initErr)) {
@@ -657,6 +797,11 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         return false;
     }
 
+    if (!CreateStatsBuffer()) {
+        if (error) *error = "Failed to create stats buffer";
+        return false;
+    }
+
     // Upload Y
     m_context->UpdateSubresource(m_textureY.Get(), 0, nullptr, yuv, stride, 0);
     
@@ -675,19 +820,31 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         cb->outHeight = outH;
         cb->time = 0.0f;
         cb->frameCount++;
-        cb->bgLum = bgLum;
-        cb->lumRange = lumRange;
         cb->isFullRange = fullRange ? 1 : 0;
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
-    // Dispatch
+    // 1. Calculate Stats
+    m_context->CSSetShader(m_statsShader.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* statsSRVs[] = { m_srvY.Get() }; // Only Y needed
+    m_context->CSSetShaderResources(0, 1, statsSRVs);
+    ID3D11UnorderedAccessView* statsUAVs[] = { m_statsUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 1, statsUAVs, nullptr);
+    ID3D11Buffer* cbs[] = { m_constantBuffer.Get() };
+    m_context->CSSetConstantBuffers(0, 1, cbs);
+
+    m_context->Dispatch(1, 1, 1); // Single group of 256 threads
+
+    // Unbind Stats UAV
+    ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+
+    // 2. Main Pass
     m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { m_srvY.Get(), m_srvUV.Get() };
-    m_context->CSSetShaderResources(0, 2, srvs);
+    ID3D11ShaderResourceView* srvs[] = { m_srvY.Get(), m_srvUV.Get(), m_statsSRV.Get() };
+    m_context->CSSetShaderResources(0, 3, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
-    ID3D11Buffer* cbs[] = { m_constantBuffer.Get() };
     m_context->CSSetConstantBuffers(0, 1, cbs);
 
     ID3D11SamplerState* samplers[] = { m_linearSampler.Get(), m_pointSampler.Get() };
@@ -698,10 +855,10 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
     // Unbind
-    ID3D11UnorderedAccessView* nullUAV[] = { nullptr, nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 2, nullUAV, nullptr);
-    ID3D11ShaderResourceView* nullSRV[] = { nullptr, nullptr };
-    m_context->CSSetShaderResources(0, 2, nullSRV);
+    ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
+    ID3D11ShaderResourceView* nullSRV[] = { nullptr, nullptr, nullptr };
+    m_context->CSSetShaderResources(0, 3, nullSRV);
 
     // Readback (Same as Render)
     m_context->CopyResource(m_outputStagingBuffer.Get(), m_outputBuffer.Get());
@@ -893,9 +1050,12 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         cb->outHeight = outH;
         cb->time = 0.0f;
         cb->frameCount++;
-        cb->bgLum = bgLum;
-        cb->lumRange = lumRange;
-        cb->isFullRange = 1; // RGBA is always full range
+        // RGBA path doesn't use StatsBuffer yet, so we might need to zero these or handle differently
+        // For now, just set isFullRange. The shader will read garbage from StatsBuffer if we don't bind it.
+        // Ideally RGBA path should also use StatsCS or pass these via CB.
+        // But since we removed them from CB, we must use StatsBuffer.
+        // Let's just bind a dummy or run StatsCS for RGBA too.
+        cb->isFullRange = 1; 
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 

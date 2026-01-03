@@ -1652,67 +1652,10 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               art.height = maxHeight;
               std::string gpuErr;
               
-              // Estimate bgLum and lumRange from Y plane (CPU sampling)
-              // Sample every 100th pixel to be fast
-              int ySum = 0;
-              int yMin = 255;
-              int yMax = 0;
-              int sampleCount = 0;
-              const uint8_t* yPlane = frame->yuv.data();
-              int yHeight = frame->height;
-              int yWidth = frame->width;
-              int yStride = frame->stride;
-              
-              // Histogram for mode (bgLum)
-              int hist[256] = {0};
-              
-              for (int y = 0; y < yHeight; y += 10) {
-                  const uint8_t* row = yPlane + y * yStride;
-                  for (int x = 0; x < yWidth; x += 10) {
-                      uint8_t val = row[x];
-                      ySum += val;
-                      if (val < yMin) yMin = val;
-                      if (val > yMax) yMax = val;
-                      hist[val]++;
-                      sampleCount++;
-                  }
-              }
-              
-              int bgLum = 0;
-              int maxHist = 0;
-              for (int i = 0; i < 256; ++i) {
-                  if (hist[i] > maxHist) {
-                      maxHist = hist[i];
-                      bgLum = i;
-                  }
-              }
-              
-              // Percentile approximation
-              int lumLow = yMin;
-              int lumHigh = yMax;
-              int count = 0;
-              int targetLow = sampleCount / 100; // 1%
-              int targetHigh = sampleCount * 99 / 100; // 99%
-              
-              int accum = 0;
-              for (int i = 0; i < 256; ++i) {
-                  accum += hist[i];
-                  if (accum >= targetLow && lumLow == yMin) lumLow = i;
-                  if (accum >= targetHigh) {
-                      lumHigh = i;
-                      break;
-                  }
-              }
-              
-              int lumRange = std::max(1, lumHigh - lumLow);
-              // Clamp lumRange to avoid amplifying noise in dark scenes
-              // If the dynamic range is very low (< 80), it's likely just noise.
-              // Don't stretch it to full contrast.
-              if (lumRange < 80) lumRange = 80;
-
+              // Stats calculation moved to GPU (StatsCS)
               if (gpuRenderer.RenderNV12(frame->yuv.data(), frame->width,
                                          frame->height, frame->stride,
-                                         frame->planeHeight, bgLum, lumRange, frame->fullRange, 
+                                         frame->planeHeight, frame->fullRange, 
                                          frame->format == VideoPixelFormat::P010, art, &gpuErr)) {
                 renderedWithGpu = true;
                 artOk = true;

@@ -20,21 +20,21 @@ public:
     bool Render(const uint8_t* rgba, int width, int height, AsciiArt& out, std::string* error);
 
     // Render from NV12 buffer (CPU -> GPU -> CPU)
-    // bgLum: Estimated background luminance (0-255)
-    // lumRange: Estimated luminance range (0-255)
     bool RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
-                   int bgLum, int lumRange, bool fullRange, bool is10Bit, AsciiArt& out, std::string* error);
+                   bool fullRange, bool is10Bit, AsciiArt& out, std::string* error);
 
 private:
     bool CreateDevice();
     bool CompileComputeShader(std::string* error);
     bool CreateBuffers(int width, int height, int outW, int outH);
     bool CreateNV12Textures(int width, int height, bool is10Bit);
+    bool CreateStatsBuffer();
 
     Microsoft::WRL::ComPtr<ID3D11Device> m_device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_computeShader;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_computeShaderNV12;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_statsShader;
 
     // Resources
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_inputTexture;
@@ -53,6 +53,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_outputUAV;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputStagingBuffer;
 
+    // Stats Buffer
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_statsBuffer;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_statsUAV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_statsSRV;
+
     // History for temporal stability
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_historyBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_historyUAV;
@@ -66,10 +71,8 @@ private:
         uint32_t outHeight;
         float time;
         uint32_t frameCount;
-        uint32_t bgLum; // Background luminance estimate (0-255)
-        uint32_t lumRange; // Luminance range (0-255)
         uint32_t isFullRange;
-        uint32_t padding[3];
+        uint32_t padding[1];
     };
 
     int m_currentWidth = 0;
