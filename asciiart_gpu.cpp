@@ -110,18 +110,24 @@ float SampleLuma(float2 uv) { return SampleLumaRaw(uv, LinearSampler); }
 float SampleLumaPoint(float2 uv) { return SampleLumaRaw(uv, PointSampler); }
 
 float SampleLumaArea(float2 centerUV, float2 dotSizePx) {
-    // Optimized 2x2 box filter (fixed cost, no loops)
-    // Taking 4 samples covers the area well enough for ASCII art purposes
-    // without the performance cost of a dynamic loop.
+    // Optimized 4x4 box filter (16 samples)
+    // Provides smoother results closer to CPU full-area integration
     float2 texSize = float2(width, height);
-    float2 offset = dotSizePx * 0.25f / texSize; 
+    float2 step = dotSizePx / 4.0f / texSize;
+    // Start at top-left of the dot area (center - half_size + half_step)
+    float2 start = centerUV - (dotSizePx * 0.5f / texSize) + (step * 0.5f);
+
+    float sum = 0;
     
-    float l1 = SampleLumaRaw(centerUV + float2(-offset.x, -offset.y), LinearSampler);
-    float l2 = SampleLumaRaw(centerUV + float2( offset.x, -offset.y), LinearSampler);
-    float l3 = SampleLumaRaw(centerUV + float2(-offset.x,  offset.y), LinearSampler);
-    float l4 = SampleLumaRaw(centerUV + float2( offset.x,  offset.y), LinearSampler);
-    
-    return (l1 + l2 + l3 + l4) * 0.25f;
+    [unroll]
+    for (int y = 0; y < 4; ++y) {
+        [unroll]
+        for (int x = 0; x < 4; ++x) {
+            // Use float2(x, y) to offset
+            sum += SampleLumaRaw(start + float2((float)x, (float)y) * step, LinearSampler);
+        }
+    }
+    return sum * 0.0625f; // Divide by 16
 }
 
 float GetInkLevelFromLum(float lum) {
