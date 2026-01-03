@@ -109,6 +109,21 @@ float SampleLumaRaw(float2 uv, SamplerState s) {
 float SampleLuma(float2 uv) { return SampleLumaRaw(uv, LinearSampler); }
 float SampleLumaPoint(float2 uv) { return SampleLumaRaw(uv, PointSampler); }
 
+float SampleLumaArea(float2 centerUV, float2 dotSizePx) {
+    // Optimized 2x2 box filter (fixed cost, no loops)
+    // Taking 4 samples covers the area well enough for ASCII art purposes
+    // without the performance cost of a dynamic loop.
+    float2 texSize = float2(width, height);
+    float2 offset = dotSizePx * 0.25f / texSize; 
+    
+    float l1 = SampleLumaRaw(centerUV + float2(-offset.x, -offset.y), LinearSampler);
+    float l2 = SampleLumaRaw(centerUV + float2( offset.x, -offset.y), LinearSampler);
+    float l3 = SampleLumaRaw(centerUV + float2(-offset.x,  offset.y), LinearSampler);
+    float l4 = SampleLumaRaw(centerUV + float2( offset.x,  offset.y), LinearSampler);
+    
+    return (l1 + l2 + l3 + l4) * 0.25f;
+}
+
 float GetInkLevelFromLum(float lum) {
     float norm = lum / 255.0f;
     float x = norm; // kInkUseBright = true
@@ -204,34 +219,30 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         float u = (DTid.x * cellW + col * dotW + dotW * 0.5f) / width;
         float v = (DTid.y * cellH + row * dotH + dotH * 0.5f) / height;
 
-        // Supersampling (4x) for smoother dots and less shimmering
-        float offU = dotW / width * 0.25f;
-        float offV = dotH / height * 0.25f;
-
-        float4 c1 = SampleInput(float2(u - offU, v - offV));
-        float4 c2 = SampleInput(float2(u + offU, v - offV));
-        float4 c3 = SampleInput(float2(u - offU, v + offV));
-        float4 c4 = SampleInput(float2(u + offU, v + offV));
+        // Area sampling for stable luma/color
+        float2 dotSize = float2(dotW, dotH);
+        float luma = SampleLumaArea(float2(u, v), dotSize);
         
-        float4 color = (c1 + c2 + c3 + c4) * 0.25f;
-        float luma = GetLuma(color.rgb);
+        // For color, we still use the center sample (or could implement SampleInputArea)
+        // Using center sample for color is usually fine as luma drives the structure
+        float4 color = SampleInput(float2(u, v)); 
         
-        // 3x3 Sobel Edge Detection (using center sample for performance/sharpness)
+        // 3x3 Sobel Edge Detection (using area samples for stability)
         // Use dot stride to match CPU behavior (detect edges between dots, not pixels)
         float texDx = dotW / (float)width;
         float texDy = dotH / (float)height;
         
-        float l00 = SampleLuma(float2(u - texDx, v - texDy));
-        float l01 = SampleLuma(float2(u, v - texDy));
-        float l02 = SampleLuma(float2(u + texDx, v - texDy));
+        float l00 = SampleLumaArea(float2(u - texDx, v - texDy), dotSize);
+        float l01 = SampleLumaArea(float2(u, v - texDy), dotSize);
+        float l02 = SampleLumaArea(float2(u + texDx, v - texDy), dotSize);
         
-        float l10 = SampleLuma(float2(u - texDx, v));
-        // l11 is center (luma), but we sample neighbors for gradient
-        float l12 = SampleLuma(float2(u + texDx, v));
+        float l10 = SampleLumaArea(float2(u - texDx, v), dotSize);
+        // l11 is center (luma)
+        float l12 = SampleLumaArea(float2(u + texDx, v), dotSize);
         
-        float l20 = SampleLuma(float2(u - texDx, v + texDy));
-        float l21 = SampleLuma(float2(u, v + texDy));
-        float l22 = SampleLuma(float2(u + texDx, v + texDy));
+        float l20 = SampleLumaArea(float2(u - texDx, v + texDy), dotSize);
+        float l21 = SampleLumaArea(float2(u, v + texDy), dotSize);
+        float l22 = SampleLumaArea(float2(u + texDx, v + texDy), dotSize);
 
         float gx = (l02 + 2.0f*l12 + l22) - (l00 + 2.0f*l10 + l20);
         float gy = (l20 + 2.0f*l21 + l22) - (l00 + 2.0f*l01 + l02);
