@@ -47,7 +47,7 @@ static const uint kBrailleBase = 0x2800;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
 
 // Constants from CPU version
-static const int kMinContrastForBraille = 15;
+static const int kMinContrastForBraille = 8; // Reduced from 15 to allow finer details
 static const int kEdgeShift = 3;
 static const int kColorLift = 0;
 static const int kColorSaturation = 340;
@@ -57,7 +57,7 @@ static const int kBgAlpha = 180;
 static const int kInkMinLuma = 110;
 static const int kBgMinLuma = 20;
 static const int kInkMaxScale = 1280;
-static const int kEdgeMin = 4;
+static const int kEdgeMin = 2; // Reduced from 4 to detect fainter edges
 static const int kEdgeBoost = 245;
 static const int kDitherBias = 48;
 static const int kAAScoreBandMin = 12;
@@ -112,13 +112,14 @@ float SampleLumaPoint(float2 uv) { return SampleLumaRaw(uv, PointSampler); }
 float GetInkLevelFromLum(float lum) {
     float norm = lum / 255.0f;
     float x = norm; // kInkUseBright = true
-    float coverage = pow(x, 0.50f); // kInkGamma
+    // Increased gamma (0.50 -> 0.65) to make the curve less aggressive (slower rise to 6 dots)
+    float coverage = pow(x, 0.65f); 
     if (coverage > 0.001f) {
-        // Reduced bias (0.12 -> 0.06) to allow for 1-dot characters (smooth 0->1->2 transition)
-        coverage = coverage * 1.85f + 0.06f; 
+        // Reduced gain (1.85 -> 1.40) and removed bias to prevent early saturation
+        coverage = coverage * 1.40f; 
     }
-    // Cutoff tuned to suppress noise but allow 1-dot characters (which start around 0.17)
-    if (coverage < 0.15f) coverage = 0.0f; 
+    // Lowered cutoff (0.15 -> 0.02) to allow 1-dot characters (faint details) to appear
+    if (coverage < 0.02f) coverage = 0.0f; 
     return saturate(coverage);
 }
 
