@@ -748,10 +748,16 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             int localMidpoint =
                 useLocalThreshold ? ((cellLumMin + cellLumMax) >> 1) : bgLum;
 
-            // 2. Adaptive Thresholding (Per-Sub-Pixel Logic like asciiart.ts)
-            // We abandon the "Target Dots" approach in favor of direct thresholding
-            // to preserve small details.
+            // 2. Adaptive Thresholding (Per-Sub-Pixel Logic)
+            // This section determines which Braille dots should be active based on the input image.
+            // We use a "Per-Sub-Pixel" approach inspired by the reference implementation (asciiart.ts).
+            // Instead of trying to match a predefined pattern ("Target Dots"), we evaluate each of the 8 sub-pixels
+            // independently to see if it differs significantly from the background. This preserves fine details
+            // like single-pixel stars or thin lines that might otherwise be lost in noise reduction.
 
+            // Base threshold (DELTA in ts)
+            // This is the minimum luma difference required for a pixel to be considered "foreground".
+            // A value of 30 (out of 255) provides a good balance between sensitivity and noise rejection.
             int baseThreshold = 30;
             
             for (int i = 0; i < 8; ++i) {
@@ -760,14 +766,20 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int lum = lumVals[i];
               int edge = edgeVals[i];
 
-              // Edge-aware threshold modulation
-              // TS: deltaThr = Math.max(10, DELTA - 0.2 * edges[p]);
-              // Our edge is 0-255 approx.
+              // Edge-aware threshold modulation:
+              // In areas with strong edges (high detail), we lower the threshold to capture more subtle features.
+              // In flat areas (low edge), we keep the threshold high to suppress noise.
+              // Formula: threshold = max(10, base - 0.2 * edge)
+              // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
               int threshold = std::max(10, baseThreshold - (edge * 51 / 255)); // 0.2 * 255 ~= 51
 
-              // Check against global background luminance
+              // Check against global background luminance:
+              // We compare the dot's luma against the global background luma (bgLum).
+              // This helps in separating the subject from the background.
               int lumDiff = std::abs(lum - bgLum);
               
+              // Decision: Is this sub-pixel a dot?
+              // If the luma difference exceeds the threshold, it's considered a foreground dot.
               bool isDot = (lumDiff >= threshold);
 
               if (isDot) {
@@ -837,19 +849,29 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                        (bgCount > 0 ? bgCount : colorCount));
 
               // Intelligent Contrast Management
-              // 1. Noise Suppression: Blend FG into BG for weak signals
-              // 2. Detail Enhancement: Boost contrast for strong signals
+              // This system dynamically adjusts contrast based on the "Signal Strength" of the cell.
+              // Goal:
+              // 1. Noise Suppression: If the signal is weak (noise), blend the foreground into the background
+              //    to make it look like a subtle texture rather than hard noise.
+              // 2. Detail Enhancement: If the signal is strong (real detail), boost the contrast to make it pop.
               
+              // Calculate Signal Strength:
+              // We look at both Edge magnitude and Luma difference.
+              // - Edge Signal: Ramps from 0 to 1 as edge strength goes from 4 to 16.
+              // - Luma Signal: Ramps from 0 to 1 as luma difference goes from 4 to 28.
               int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
               int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
               int signalStrength = std::max(edgeSig, lumSig);
 
-              // Dampening
+              // Dampening (Noise Hiding):
+              // If signalStrength is low, we interpolate curFg towards curBg.
+              // This effectively "fades out" noise into the background.
               curR = static_cast<uint8_t>(bgR + ((curR - bgR) * signalStrength >> 8));
               curG = static_cast<uint8_t>(bgG + ((curG - bgG) * signalStrength >> 8));
               curB = static_cast<uint8_t>(bgB + ((curB - bgB) * signalStrength >> 8));
 
-              // Boosting
+              // Boosting (Detail Pop):
+              // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.
               if (signalStrength > 204) { // > 0.8 * 255
                   int boost = (signalStrength - 204) * 5; // 0 -> 255
                   // Boost factor 1.0 -> 1.5 (approx)
@@ -863,10 +885,16 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   int dG = curG - cG;
                   int dB = curB - cB;
                   
+                  // Asymmetrical Boost Logic:
+                  // We want the foreground (dots) to stand out sharply, but we don't want the background
+                  // to be crushed to black.
+                  
                   // Apply boost to FG (scale delta by 1.5x at max)
                   int scaleFg = 256 + (boost >> 1); // 256 to 384
+                  
                   // Apply reduced boost to BG (scale delta by 1.1x at max)
-                  // This prevents the background from becoming pitch black
+                  // This prevents the "Black Background" issue where high-contrast areas would
+                  // push the background color below zero (black), losing context.
                   int scaleBg = 256 + (boost >> 3); // 256 to 288
                   
                   curR = static_cast<uint8_t>(std::clamp(cR + (dR * scaleFg >> 8), 0, 255));
@@ -903,7 +931,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   (static_cast<int>(curR) * 54 + static_cast<int>(curG) * 183 +
                    static_cast<int>(curB) * 19 + 128) >>
                   8;
-              // Adaptive saturation: meer saturatie voor donkere kleuren
+              // Adaptive Saturation (Ink)
+              // Adjust saturation based on brightness.
+              // Dark colors get reduced saturation to prevent blue/purple artifacts in shadows.
               int adaptiveSat = kColorSaturation + ((255 - y) >> 2);
               if (adaptiveSat > 400) adaptiveSat = 400;
               curR = static_cast<uint8_t>(std::clamp(
@@ -930,6 +960,8 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = curG;
                   pb = curB;
                 } else {
+                  // Temporal Stability (Ghosting Reduction)
+                  // We blend the current frame's color with the previous frame's color to reduce flickering.
                   // Increased alpha for faster updates (less ghosting)
                   // Old: kColorAlpha (180), New: 230
                   pr = pr + (((int)curR - pr) * 230 >> 8);
@@ -989,6 +1021,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = bgG;
                   pb = bgB;
                 } else {
+                  // Temporal Stability (Ghosting Reduction)
                   // Increased alpha for faster updates (less ghosting)
                   // Old: kBgAlpha (140), New: 230
                   pr = pr + (((int)bgR - pr) * 230 >> 8);

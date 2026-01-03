@@ -294,12 +294,18 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         effectiveLumRange = effectiveLumRange * (255.0f / 219.0f);
     }
 
-    // 2. Adaptive Thresholding (Per-Sub-Pixel Logic like asciiart.ts)
-    // We abandon the "Target Dots" approach in favor of direct thresholding
-    // to preserve small details.
+    // 2. Adaptive Thresholding (Per-Sub-Pixel Logic)
+    // This section determines which Braille dots should be active based on the input image.
+    // We use a "Per-Sub-Pixel" approach inspired by the reference implementation (asciiart.ts).
+    // Instead of trying to match a predefined pattern ("Target Dots"), we evaluate each of the 8 sub-pixels
+    // independently to see if it differs significantly from the background. This preserves fine details
+    // like single-pixel stars or thin lines that might otherwise be lost in noise reduction.
 
-    // Braille bit mapping
-    // 0=(0,0), 1=(0,1), 2=(0,2), 3=(1,0), 4=(1,1), 5=(1,2), 6=(0,3), 7=(1,3)
+    // Braille bit mapping:
+    // The standard Braille pattern is 2 columns x 4 rows.
+    // The bits are mapped as follows:
+    // Col 0: 0=(0,0), 1=(0,1), 2=(0,2), 6=(0,3)
+    // Col 1: 3=(1,0), 4=(1,1), 5=(1,2), 7=(1,3)
     int bitMap[8] = {0, 1, 2, 6, 3, 4, 5, 7};
 
     uint bitmask = 0;
@@ -309,32 +315,29 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     int bgCount = 0;
 
     // Base threshold (DELTA in ts)
+    // This is the minimum luma difference required for a pixel to be considered "foreground".
+    // A value of 30.0f (out of 255) provides a good balance between sensitivity and noise rejection.
     float baseThreshold = 30.0f; 
 
     for (int i = 0; i < 8; ++i) {
-        // Edge-aware threshold modulation
-        // TS: deltaThr = Math.max(10, DELTA - 0.2 * edges[p]);
-        // Our edge is 0-255 approx.
+        // Edge-aware threshold modulation:
+        // In areas with strong edges (high detail), we lower the threshold to capture more subtle features.
+        // In flat areas (low edge), we keep the threshold high to suppress noise.
+        // Formula: threshold = max(10, base - 0.2 * edge)
+        // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
         float threshold = max(10.0f, baseThreshold - dots[i].edge * 0.2f);
 
-        // Check against global background luminance
+        // Check against global background luminance:
+        // We compare the dot's luma against the global background luma (effectiveBgLum).
+        // This helps in separating the subject from the background.
         float lumDiff = abs(dots[i].luma - effectiveBgLum);
         
-        // Check if "near background" (TS: colorDistSq < BG_DIST)
-        // We use luma diff as a proxy for simplicity and speed here, 
-        // but could check color distance if needed.
-        // TS uses BG_DIST = 32^2 = 1024. Sqrt(1024) = 32.
-        // So if lumDiff < 32, it's "near bg".
-        // But wait, TS logic is: dotSet = !nearBg && lumDiff >= deltaThr
-        // If nearBg is true, dotSet is false.
-        // Effectively: if color distance is small, it's BG.
-        // If color distance is large AND luma diff is large, it's FG.
-        
+        // Decision: Is this sub-pixel a dot?
+        // If the luma difference exceeds the threshold, it's considered a foreground dot.
+        // Note: We use luma difference as a proxy for "color distance" for performance.
         bool isDot = (lumDiff >= threshold);
 
-        // Additional check: if it's just noise?
-        // We rely on the "Intelligent Contrast" later to hide noise.
-        
+        // Accumulate colors for Foreground (Ink) and Background calculation later.
         if (isDot) {
             bitmask |= (1 << bitMap[dots[i].idx]);
             sumInk += dots[i].color;
@@ -349,35 +352,52 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float avgLumDiff = abs(cellLumMean - effectiveBgLum);
 
     // 7. Color Processing
+    // Determine the initial Foreground (Ink) and Background colors based on the dots identified above.
+    // If no dots are set, the cell is effectively all background.
     float3 curFg = (inkCount > 0) ? (sumInk / inkCount) : (sumAll / 8.0f);
     float3 curBg = (bgCount > 0) ? (sumBg / bgCount) : (sumAll / 8.0f);
 
-    // Color Lift
+    // Color Lift: Ensure colors aren't completely black to maintain some visibility.
     curFg = max(curFg, (float)kColorLift / 255.0f);
     curBg = max(curBg, (float)kColorLift / 255.0f);
 
     // Intelligent Contrast Management
-    // 1. Noise Suppression: Blend FG into BG for weak signals
-    // 2. Detail Enhancement: Boost contrast for strong signals
+    // This system dynamically adjusts contrast based on the "Signal Strength" of the cell.
+    // Goal:
+    // 1. Noise Suppression: If the signal is weak (noise), blend the foreground into the background
+    //    to make it look like a subtle texture rather than hard noise.
+    // 2. Detail Enhancement: If the signal is strong (real detail), boost the contrast to make it pop.
     
-    float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f); // Ramp 4->16 (Fast transition for edges)
-    float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);   // Ramp 4->28 (Slower for luma)
+    // Calculate Signal Strength:
+    // We look at both Edge magnitude and Luma difference.
+    // - Edge Signal: Ramps from 0 to 1 as edge strength goes from 4 to 16.
+    // - Luma Signal: Ramps from 0 to 1 as luma difference goes from 4 to 28.
+    float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f); 
+    float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);   
     float signalStrength = max(edgeSig, lumSig);
 
-    // Dampening: If signal is weak, hide it (blend to BG)
+    // Dampening (Noise Hiding):
+    // If signalStrength is low, we interpolate curFg towards curBg.
+    // This effectively "fades out" noise into the background.
     curFg = lerp(curBg, curFg, signalStrength);
 
-    // Boosting: If signal is strong (especially edges), increase contrast
+    // Boosting (Detail Pop):
+    // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.
     if (signalStrength > 0.8f) {
-        float boost = (signalStrength - 0.8f) * 5.0f; // 0.0 -> 1.0
+        float boost = (signalStrength - 0.8f) * 5.0f; // Normalize 0.8->1.0 to 0.0->1.0
         float3 center = (curFg + curBg) * 0.5f;
         float3 delta = curFg - center;
         
-        // Boost FG significantly (up to 50%)
+        // Asymmetrical Boost Logic:
+        // We want the foreground (dots) to stand out sharply, but we don't want the background
+        // to be crushed to black.
+        
+        // Boost FG significantly (up to 50% extra contrast)
         curFg = center + delta * (1.0f + boost * 0.5f);
         
-        // Boost BG gently (up to 10%) to avoid crushing it to black
-        // We want to preserve the context while making the foreground pop
+        // Boost BG gently (only up to 10% extra contrast)
+        // This prevents the "Black Background" issue where high-contrast areas would
+        // push the background color below zero (black), losing context.
         curBg = center - delta * (1.0f + boost * 0.1f); 
         
         curFg = saturate(curFg);
@@ -385,6 +405,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     }
 
     // Luma Correction (Ink)
+    // Ensure the ink isn't too dark to be seen.
     float curY = GetLuma(curFg);
     if (curY < (float)kInkMinLuma) {
         if (curY <= 0.0f) {
@@ -397,16 +418,17 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     }
 
     // Adaptive Saturation (Ink)
-    // Reduced saturation boost for dark colors to prevent blue/purple artifacts
+    // Adjust saturation based on brightness.
+    // Dark colors get reduced saturation to prevent blue/purple artifacts in shadows.
     curY = GetLuma(curFg);
     float adaptiveSat = (float)kColorSaturation;
-    // If dark, reduce saturation instead of boosting it
     if (curY < 60.0f) {
         adaptiveSat = adaptiveSat * (curY / 60.0f); 
     }
     curFg = saturate(curY/255.0f + (curFg - curY/255.0f) * (adaptiveSat / 256.0f));
 
     // Luma Correction (Bg)
+    // Ensure background isn't too dark.
     float bgY = GetLuma(curBg);
     if (bgY < (float)kBgMinLuma) {
         if (bgY <= 0.0f) {
@@ -417,19 +439,23 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         }
     }
 
-    // Temporal Stability (Reduced ghosting)
+    // Temporal Stability (Ghosting Reduction)
+    // We blend the current frame's color with the previous frame's color to reduce flickering.
+    // However, too much blending causes "ghosting" (trails behind moving objects).
     uint2 history = HistoryBuffer[cellIndex];
     float3 prevFg = UnpackColor(history.x);
     float3 prevBg = UnpackColor(history.y);
     
-    // Perceptual Weighted Distance
+    // Calculate perceptual distance to decide if we should reset (cut) or blend.
     float diffFg = dot(abs(curFg - prevFg), kLumaCoeff);
     float diffBg = dot(abs(curBg - prevBg), kLumaCoeff);
     
     float resetThresh = (float)kTemporalResetDelta / 255.0f;
 
-    // Increased alpha for faster updates (less ghosting)
-    // Old: 180/255 (~0.7), New: 230/255 (~0.9)
+    // Alpha Blending:
+    // We use a high alpha (230/255 ~= 0.9) to favor the new frame.
+    // This significantly reduces ghosting compared to the old value (0.7).
+    // If the change is large (> resetThresh), we snap instantly (alpha=1.0 implicitly).
     if (diffFg < resetThresh) {
         curFg = lerp(prevFg, curFg, 230.0f/255.0f);
     }
@@ -437,7 +463,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         curBg = lerp(prevBg, curBg, 230.0f/255.0f);
     }
 
-    // Write back history
+    // Write back history for the next frame
     HistoryBuffer[cellIndex] = uint2(PackColor(curFg), PackColor(curBg));
 
     AsciiCell cell;
@@ -446,6 +472,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     cell.bg = PackColor(curBg);
     
     // Fix for black backgrounds on full cells:
+    // If a cell has no background dots (all FG or empty), but the calculated BG color is bright enough,
+    // we force the background flag to true so the renderer draws the background color.
     bool hasBg = (bgCount > 0);
     if (!hasBg && GetLuma(curBg) > 10.0f) {
         hasBg = true;
