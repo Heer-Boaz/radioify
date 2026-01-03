@@ -377,7 +377,11 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   detuneBuf.assign(64, 0.0f);
   detuneIndex = 0;
 
-  float safeBw = std::clamp(bwHz, 4200.0f, 5600.0f);
+  // 1938 AM Radio Bandwidth: Typically 4-5kHz max.
+  // Clamping to 3.8kHz - 4.8kHz for authentic lo-fi sound.
+  // float safeBw = std::clamp(bwHz, 3800.0f, 4800.0f);
+  // Wider bandwidth for high-fidelity studio sound (1938 "High Fidelity" AM)
+  float safeBw = std::clamp(bwHz, 4200.0f, 6000.0f);
   hpf.setHighpass(sampleRate, 140.0f, 0.707f);
   lpf1.setLowpass(sampleRate, safeBw, 0.707f);
   lpf2.setLowpass(sampleRate, safeBw, 0.707f);
