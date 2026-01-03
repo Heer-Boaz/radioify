@@ -50,10 +50,10 @@ extern "C" {
 #include "miniaudio.h"
 
 #ifndef RADIOIFY_ENABLE_TIMING_LOG
-#define RADIOIFY_ENABLE_TIMING_LOG 1
+#define RADIOIFY_ENABLE_TIMING_LOG 0
 #endif
 #ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
-#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 1
+#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 0
 #endif
 
 struct Options {

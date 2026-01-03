@@ -11,9 +11,7 @@ static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
 }
 
-static inline float db2lin(float db) {
-  return std::pow(10.0f, db / 20.0f);
-}
+static inline float db2lin(float db) { return std::pow(10.0f, db / 20.0f); }
 
 static inline float lin2db(float x) {
   return 20.0f * std::log10(std::max(x, 1e-12f));
@@ -139,7 +137,8 @@ void NoiseHum::setFs(float newFs, float noiseBwHz) {
   crackleHp.setHighpass(fs, noiseHpHz, 0.707f);
   crackleLp.setLowpass(fs, safeLp, 0.707f);
   float lightningHpHz = 200.0f;
-  float lightningLpHz = std::clamp(safeLp * 1.1f, lightningHpHz + 500.0f, fs * 0.45f);
+  float lightningLpHz =
+      std::clamp(safeLp * 1.1f, lightningHpHz + 500.0f, fs * 0.45f);
   lightningHp.setHighpass(fs, lightningHpHz, 0.707f);
   lightningLp.setLowpass(fs, lightningLpHz, 0.707f);
   float motorHpHz = 800.0f;
@@ -195,7 +194,8 @@ float NoiseHum::process(float programSample) {
   float maskStartDb = -46.0f;
   float maskEndDb = -20.0f;
   float maskMaxDb = 20.0f;
-  float maskT = clampf((levelDb - maskStartDb) / (maskEndDb - maskStartDb), 0.0f, 1.0f);
+  float maskT =
+      clampf((levelDb - maskStartDb) / (maskEndDb - maskStartDb), 0.0f, 1.0f);
   maskT *= maskT;
   float maskDb = maskMaxDb * maskT;
   float maskGain = db2lin(-maskDb);
@@ -322,7 +322,8 @@ float AMDetector::process(float x) {
     agcEnv = agcRel * agcEnv + (1.0f - agcRel) * level;
   }
   float envDb = lin2db(agcEnv);
-  float targetGainDb = std::clamp(agcTargetDb - envDb, agcMinGainDb, agcMaxGainDb);
+  float targetGainDb =
+      std::clamp(agcTargetDb - envDb, agcMinGainDb, agcMaxGainDb);
   if (targetGainDb < agcGainDb) {
     agcGainDb = agcGainAtk * agcGainDb + (1.0f - agcGainAtk) * targetGainDb;
   } else {
@@ -348,8 +349,8 @@ float AMDetector::process(float x) {
 }
 
 void SpeakerSim::init(float fs) {
-  boxRes.setPeaking(fs, 145.0f, 0.85f, 2.6f);
-  boxRes2.setPeaking(fs, 430.0f, 1.05f, 1.4f);
+  boxRes.setPeaking(fs, 145.0f, 0.70f, 1.0f);
+  boxRes2.setPeaking(fs, 430.0f, 0.70f, 0.5f);
   coneDip.setPeaking(fs, 2600.0f, 1.05f, -2.0f);
 }
 
@@ -383,12 +384,13 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   postLpf1.setLowpass(sampleRate, safeBw, 0.707f);
   postLpf2.setLowpass(sampleRate, safeBw, 0.707f);
   tuneOffsetNorm = (safeBw > 0.0f)
-    ? std::clamp(tuneOffsetHz / (safeBw * 0.5f), -1.0f, 1.0f)
-    : 0.0f;
+                       ? std::clamp(tuneOffsetHz / (safeBw * 0.5f), -1.0f, 1.0f)
+                       : 0.0f;
   float shift = 1.0f + tuneOffsetNorm * 0.18f;
   float ripple1Hz = std::clamp(950.0f * shift, 500.0f, safeBw * 0.95f);
   float ripple2Hz = std::clamp(2300.0f * shift, 800.0f, safeBw * 0.95f);
-  float tiltHz = std::clamp(1700.0f * (1.0f + tuneOffsetNorm * 0.15f), 900.0f, safeBw * 0.95f);
+  float tiltHz = std::clamp(1700.0f * (1.0f + tuneOffsetNorm * 0.15f), 900.0f,
+                            safeBw * 0.95f);
   ifRipple1.setPeaking(sampleRate, ripple1Hz, 0.9f, 0.5f);
   ifRipple2.setPeaking(sampleRate, ripple2Hz, 1.1f, -0.6f);
   ifTiltLp.setLowpass(sampleRate, tiltHz, 0.707f);
@@ -403,12 +405,14 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   amRateLp2.setLowpass(sampleRate, amCut, 0.707f);
   amStep = (amSampleRate > 0.0f) ? (amSampleRate / sampleRate) : 0.0f;
   float mpMaxDelay = std::max(0.0f, mpDelayMs + mpDelayModMs);
-  int mpSamples = std::max(8, static_cast<int>(std::ceil(mpMaxDelay * 0.001f * sampleRate)) + 4);
+  int mpSamples = std::max(
+      8, static_cast<int>(std::ceil(mpMaxDelay * 0.001f * sampleRate)) + 4);
   mpBuf.assign(static_cast<size_t>(mpSamples), 0.0f);
   mpIndex = 0;
-  midBoost.setPeaking(sampleRate, 1500.0f, 1.0f, 4.0f);
+  mpMix = 0.00f;
+  midBoost.setPeaking(sampleRate, 1500.0f, 1.0f, 0.0f);
   lowMidDip.setPeaking(sampleRate, 420.0f, 1.0f, -2.5f);
-  presBoost.setPeaking(sampleRate, 3200.0f, 0.9f, 1.5f);
+  presBoost.setPeaking(sampleRate, 3200.0f, 0.9f, -2.0f);
 
   comp.setFs(sampleRate);
   comp.thresholdDb = -22.0f;
@@ -425,29 +429,33 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   sagAtk = std::exp(-1.0f / (sampleRate * (sagAtkMs / 1000.0f)));
   sagRel = std::exp(-1.0f / (sampleRate * (sagRelMs / 1000.0f)));
 
-  sat.drive = 1.40f;
-  sat.mix = 0.50f;
+  sat.drive = 1.10f;
+  sat.mix = 0.30f;
 
   am.init(sampleRate, safeBw);
   speaker.init(sampleRate);
+  speaker.drive = 0.6f;
   roomTapSamples.clear();
   roomTapGains.clear();
   const float tapMs[] = {6.0f, 10.5f, 16.0f, 23.0f, 31.0f};
   const float tapGain[] = {0.32f, 0.26f, 0.20f, 0.15f, 0.11f};
   int maxTap = 1;
   for (size_t i = 0; i < sizeof(tapMs) / sizeof(tapMs[0]); ++i) {
-    int samples = std::max(1, static_cast<int>(std::lround(tapMs[i] * 0.001f * sampleRate)));
+    int samples = std::max(
+        1, static_cast<int>(std::lround(tapMs[i] * 0.001f * sampleRate)));
     roomTapSamples.push_back(samples);
     roomTapGains.push_back(tapGain[i]);
     maxTap = std::max(maxTap, samples);
   }
-  int baseRoom = std::max(1, static_cast<int>(std::lround(sampleRate * 0.012f)));
+  int baseRoom =
+      std::max(1, static_cast<int>(std::lround(sampleRate * 0.012f)));
   roomDelaySamples = std::max(baseRoom, maxTap);
   roomBuf.assign(static_cast<size_t>(roomDelaySamples + 2), 0.0f);
   roomIndex = 0;
   roomLp.setLowpass(sampleRate, roomLpHz, 0.707f);
   if (kEnableRoomTail) {
-    int tailSamples = std::max(4, static_cast<int>(std::lround(roomTailMs * 0.001f * sampleRate)));
+    int tailSamples = std::max(
+        4, static_cast<int>(std::lround(roomTailMs * 0.001f * sampleRate)));
     roomTailBuf.assign(static_cast<size_t>(tailSamples), 0.0f);
     roomTailIndex = 0;
     roomTailLp.setLowpass(sampleRate, roomTailLpHz, 0.707f);
@@ -483,8 +491,8 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   lightningBase = noiseHum.lightningAmp;
   motorBase = noiseHum.motorAmp;
   heteroBaseScale = (noiseWeight > 0.0f)
-    ? std::clamp(noiseWeight / 0.015f, 0.15f, 1.0f)
-    : 0.0f;
+                        ? std::clamp(noiseWeight / 0.015f, 0.15f, 1.0f)
+                        : 0.0f;
 
   reset();
 }
@@ -582,14 +590,15 @@ void Radio1938::process(float* samples, uint32_t frames) {
 
       float delayMs = mpDelayMs + mpDelayModMs * std::sin(mpDelayPhase);
       float maxDelay = static_cast<float>(mpBuf.size() - 2);
-      float delaySamples = std::clamp(delayMs * 0.001f * sampleRate, 1.0f, maxDelay);
+      float delaySamples =
+          std::clamp(delayMs * 0.001f * sampleRate, 1.0f, maxDelay);
       float read = static_cast<float>(mpIndex) - delaySamples;
       while (read < 0.0f) read += static_cast<float>(mpBuf.size());
       int i0 = static_cast<int>(read);
       int i1 = (i0 + 1) % static_cast<int>(mpBuf.size());
       float frac = read - static_cast<float>(i0);
       float delayed = mpBuf[static_cast<size_t>(i0)] * (1.0f - frac) +
-        mpBuf[static_cast<size_t>(i1)] * frac;
+                      mpBuf[static_cast<size_t>(i1)] * frac;
 
       mpBuf[static_cast<size_t>(mpIndex)] = y;
       mpIndex = (mpIndex + 1) % static_cast<int>(mpBuf.size());
@@ -605,6 +614,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
       mpBuf[static_cast<size_t>(mpIndex)] = y;
       mpIndex = (mpIndex + 1) % static_cast<int>(mpBuf.size());
     }
+    /* Downsampling removed to prevent metallic aliasing
     if (amStep > 0.0f && amStep < 1.0f) {
       y = amRateLp1.process(y);
       y = amRateLp2.process(y);
@@ -618,6 +628,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
       amPrev = y;
       y = amHold;
     }
+    */
     if (kEnableRadioArtifacts && !detuneBuf.empty()) {
       detunePhase += twoPi * (detuneRate / sampleRate);
       detunePhase2 += twoPi * (detuneRate2 / sampleRate);
@@ -633,7 +644,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
       int i1 = (i0 + 1) % static_cast<int>(detuneBuf.size());
       float frac = read - static_cast<float>(i0);
       float delayed = detuneBuf[static_cast<size_t>(i0)] * (1.0f - frac) +
-        detuneBuf[static_cast<size_t>(i1)] * frac;
+                      detuneBuf[static_cast<size_t>(i1)] * frac;
       detuneBuf[static_cast<size_t>(detuneIndex)] = y;
       detuneIndex = (detuneIndex + 1) % static_cast<int>(detuneBuf.size());
       y = delayed;
@@ -642,7 +653,8 @@ void Radio1938::process(float* samples, uint32_t frames) {
       float adjSource = y;
       adjPhase += twoPi * (adjBeatHz / sampleRate);
       if (adjPhase > twoPi) adjPhase -= twoPi;
-      float mod = 1.0f - 0.5f * adjModDepth + 0.5f * adjModDepth * std::sin(adjPhase);
+      float mod =
+          1.0f - 0.5f * adjModDepth + 0.5f * adjModDepth * std::sin(adjPhase);
       float adj = adjHp.process(adjSource);
       float splatter = std::tanh(adj * adjDrive) - adj;
       float adjOut = adj + adjSplatterMix * splatter;
@@ -667,7 +679,6 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = comp.process(y);
     y = sat.process(y);
     y = postLpf1.process(y);
-    y = postLpf2.process(y);
     float level = std::fabs(y);
     if (level > sagEnv) {
       sagEnv = sagAtk * sagEnv + (1.0f - sagAtk) * level;
@@ -692,7 +703,8 @@ void Radio1938::process(float* samples, uint32_t frames) {
       noisePhase2 += twoPi * (noiseRate2 / sampleRate);
       if (noisePhase > twoPi) noisePhase -= twoPi;
       if (noisePhase2 > twoPi) noisePhase2 -= twoPi;
-      float noiseLfo = 0.6f * std::sin(noisePhase) + 0.4f * std::sin(noisePhase2);
+      float noiseLfo =
+          0.6f * std::sin(noisePhase) + 0.4f * std::sin(noisePhase2);
       noiseScale = 1.0f + noiseDepth * noiseLfo;
       noiseScale = std::clamp(noiseScale, 0.4f, 1.6f);
       noiseHum.noiseAmp = noiseBase * noiseScale;
@@ -708,24 +720,26 @@ void Radio1938::process(float* samples, uint32_t frames) {
         heteroPhase += twoPi * (heteroHz / sampleRate);
         if (heteroPhase > twoPi) heteroPhase -= twoPi;
         float hetero = std::sin(heteroPhase);
-        float quietT = clampf(
-          (sagEnv - heteroGateStart) / std::max(1e-6f, heteroGateEnd - heteroGateStart),
-          0.0f,
-          1.0f
-        );
+        float quietT =
+            clampf((sagEnv - heteroGateStart) /
+                       std::max(1e-6f, heteroGateEnd - heteroGateStart),
+                   0.0f, 1.0f);
         float quiet = 1.0f - quietT;
         quiet *= quiet;
-        float amp = heteroDepth * heteroBaseScale * (0.6f + 0.4f * noiseScale) * quiet;
+        float amp =
+            heteroDepth * heteroBaseScale * (0.6f + 0.4f * noiseScale) * quiet;
         y += hetero * amp;
       }
     }
     y += noiseHum.process(y);
-    y = speaker.process(y); // Cannot revert these changes
+    y = speaker.process(y);  // Cannot revert these changes
+    y = postLpf2.process(y);
     if (!roomBuf.empty()) {
       float dry = y;
       float roomOut = 0.0f;
       float tail = 0.0f;
-      if (roomMix > 0.0f && kEnableRoomEarlyReflections && !roomTapSamples.empty()) {
+      if (roomMix > 0.0f && kEnableRoomEarlyReflections &&
+          !roomTapSamples.empty()) {
         int size = static_cast<int>(roomBuf.size());
         int writeIndex = roomIndex;
         size_t tapCount = std::min(roomTapSamples.size(), roomTapGains.size());
@@ -747,8 +761,10 @@ void Radio1938::process(float* samples, uint32_t frames) {
       if (kEnableRoomTail && roomTailMix > 0.0f && !roomTailBuf.empty()) {
         float tailSample = roomTailBuf[static_cast<size_t>(roomTailIndex)];
         float tailLp = roomTailLp.process(tailSample);
-        roomTailBuf[static_cast<size_t>(roomTailIndex)] = dry + tailLp * roomTailFeedback;
-        roomTailIndex = (roomTailIndex + 1) % static_cast<int>(roomTailBuf.size());
+        roomTailBuf[static_cast<size_t>(roomTailIndex)] =
+            dry + tailLp * roomTailFeedback;
+        roomTailIndex =
+            (roomTailIndex + 1) % static_cast<int>(roomTailBuf.size());
         tail = tailLp;
         y += roomTailMix * tail;
       }
