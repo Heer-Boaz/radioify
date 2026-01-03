@@ -110,24 +110,34 @@ float SampleLuma(float2 uv) { return SampleLumaRaw(uv, LinearSampler); }
 float SampleLumaPoint(float2 uv) { return SampleLumaRaw(uv, PointSampler); }
 
 float SampleLumaArea(float2 centerUV, float2 dotSizePx) {
-    // Optimized 4x4 box filter (16 samples)
-    // Provides smoother results closer to CPU full-area integration
+    // 4x4 adaptive Gaussian filter (16 samples)
+    // Reverted to 16 samples to fix TDR/Freeze, but added Gaussian weighting for precision
     float2 texSize = float2(width, height);
     float2 step = dotSizePx / 4.0f / texSize;
-    // Start at top-left of the dot area (center - half_size + half_step)
+    // Start at top-left of the dot area
     float2 start = centerUV - (dotSizePx * 0.5f / texSize) + (step * 0.5f);
 
     float sum = 0;
+    float weightSum = 0;
     
     [unroll]
-    for (int y = 0; y < 4; ++y) {
+    for (int dy = 0; dy < 4; ++dy) {
         [unroll]
-        for (int x = 0; x < 4; ++x) {
-            // Use float2(x, y) to offset
-            sum += SampleLumaRaw(start + float2((float)x, (float)y) * step, LinearSampler);
+        for (int dx = 0; dx < 4; ++dx) {
+            // Center of 4x4 grid is (1.5, 1.5)
+            float distX = abs((float)dx - 1.5f);
+            float distY = abs((float)dy - 1.5f);
+            // Max dist sq = 1.5^2 + 1.5^2 = 4.5
+            float normDist = (distX * distX + distY * distY) / 4.5f;
+            
+            // Weight: 1.0 at center, ~0.4 at corners
+            float weight = 1.0f - (normDist * 0.6f);
+            
+            sum += SampleLumaRaw(start + float2((float)dx, (float)dy) * step, LinearSampler) * weight;
+            weightSum += weight;
         }
     }
-    return sum * 0.0625f; // Divide by 16
+    return sum / weightSum;
 }
 
 float GetInkLevelFromLum(float lum) {
