@@ -53,10 +53,10 @@ static const int kColorSaturation = 340;
 static const int kTemporalResetDelta = 48;
 static const int kColorAlpha = 180; // Reduced from 220 for more stability
 static const int kBgAlpha = 140;    // Reduced from 180 for more stability
-static const int kInkMinLuma = 110;
-static const int kBgMinLuma = 20;
+static const int kInkMinLuma = 40;  // Reduced from 110 to allow dark details
+static const int kBgMinLuma = 10;   // Reduced from 20
 static const int kInkMaxScale = 1280;
-static const int kEdgeMin = 2; // Reduced from 4 to detect fainter edges
+static const int kEdgeMin = 4; // Reverted to 4 for sensitivity, noise handled by logic
 static const int kEdgeBoost = 245;
 static const int kDitherBias = 48;
 static const int kAAScoreBandMin = 12;
@@ -142,14 +142,14 @@ float SampleLumaArea(float2 centerUV, float2 dotSizePx) {
 float GetInkLevelFromLum(float lum) {
     float norm = lum / 255.0f;
     float x = norm; // kInkUseBright = true
-    // Increased gamma (0.50 -> 0.65) to make the curve less aggressive (slower rise to 6 dots)
+    // Gamma 0.65: Slightly steeper to delay onset of dots
     float coverage = pow(x, 0.65f); 
     if (coverage > 0.001f) {
-        // Reduced gain (1.85 -> 1.40) and removed bias to prevent early saturation
-        coverage = coverage * 1.40f; 
+        // Reduced gain (1.30) to prevent early saturation to 6-dots
+        coverage = coverage * 1.30f; 
     }
-    // Lowered cutoff (0.15 -> 0.02) to allow 1-dot characters (faint details) to appear
-    if (coverage < 0.02f) coverage = 0.0f; 
+    // Cutoff 0.03: Filter very faint noise
+    if (coverage < 0.03f) coverage = 0.0f; 
     return saturate(coverage);
 }
 
@@ -196,7 +196,8 @@ float4 SampleInput(float2 uv) {
 
     return float4(rgb, color.a);
 }
-
+)"
+R"(
 struct DotInfo {
     int idx;
     int score;
@@ -287,116 +288,65 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     uint lumRange = StatsBuffer[0].y;
 
     float effectiveBgLum = (float)bgLum;
-    float effectiveLumRange = (float)lumRange;
+    float effectiveLumRange = max((float)lumRange, 80.0f); // Clamp to prevent noise amplification
     if (!isFullRange) {
         effectiveBgLum = (effectiveBgLum - 16.0f) * (255.0f / 219.0f);
         effectiveLumRange = effectiveLumRange * (255.0f / 219.0f);
     }
 
-    // 2. Adaptive Thresholding
-    float cellLumRange = cellLumMax - cellLumMin;
-    float cellLumMean = cellLumSum / 8.0f;
-    bool useLocalThreshold = cellLumRange > 20.0f;
-    float localMidpoint = useLocalThreshold ? ((cellLumMin + cellLumMax) * 0.5f) : effectiveBgLum;
+    // 2. Adaptive Thresholding (Per-Sub-Pixel Logic like asciiart.ts)
+    // We abandon the "Target Dots" approach in favor of direct thresholding
+    // to preserve small details.
 
-    // 3. Scoring
-    for (int i = 0; i < 8; ++i) {
-        float lumDiff = useLocalThreshold ? abs(dots[i].luma - localMidpoint) : abs(dots[i].luma - effectiveBgLum);
-        dots[i].score = (int)(lumDiff * 2.0f + dots[i].edge + dots[i].contrast * 0.5f);
-    }
+    // Braille bit mapping
+    // 0=(0,0), 1=(0,1), 2=(0,2), 3=(1,0), 4=(1,1), 5=(1,2), 6=(0,3), 7=(1,3)
+    int bitMap[8] = {0, 1, 2, 6, 3, 4, 5, 7};
 
-    // 4. Sorting (Bubble Sort for 8 elements)
-    for (int i = 0; i < 7; ++i) {
-        for (int j = 0; j < 7 - i; ++j) {
-            if (dots[j].score < dots[j+1].score) {
-                DotInfo temp = dots[j];
-                dots[j] = dots[j+1];
-                dots[j+1] = temp;
-            }
-        }
-    }
-
-    // 5. Target Dots Calculation
-    float avgLumDiff = abs(cellLumMean - effectiveBgLum);
-    
-    // Subtract noise floor (3 levels) to ensure true blacks in dark scenes
-    avgLumDiff = max(0.0f, avgLumDiff - 3.0f);
-
-    if (effectiveLumRange > 0) {
-        avgLumDiff = avgLumDiff * 255.0f / effectiveLumRange;
-    }
-    float targetCoverage = GetInkLevelFromLum(avgLumDiff);
-    int targetDots = (int)(8.0f * targetCoverage + 0.5f);
-
-    float detailScore = max(cellLumRange, max(cellEdgeMax, cellContrastMax));
-    int minDots = 0;
-    if (detailScore >= kMinContrastForBraille) minDots = 1;
-    if (detailScore >= kMinContrastForBraille * 2) minDots = 2;
-    if (targetDots < minDots) targetDots = minDots;
-
-    // 6. Activation
     uint bitmask = 0;
     float3 sumInk = float3(0,0,0);
     float3 sumBg = float3(0,0,0);
     int inkCount = 0;
     int bgCount = 0;
 
-    // Braille bit mapping
-    // 0=(0,0), 1=(0,1), 2=(0,2), 3=(1,0), 4=(1,1), 5=(1,2), 6=(0,3), 7=(1,3)
-    int bitMap[8] = {0, 1, 2, 6, 3, 4, 5, 7};
+    // Base threshold (DELTA in ts)
+    float baseThreshold = 30.0f; 
 
-    // AA Band Logic
-    int aaBand = 0;
-    int aaCutoffScore = 0;
-    bool useAABand = false;
-    if (targetDots > 0) {
-        int scoreRange = dots[0].score - dots[7].score;
-        aaBand = min(scoreRange, kAAScoreBandMax);
-        useAABand = (detailScore >= kMinContrastForBraille && aaBand >= kAAScoreBandMin);
-        aaCutoffScore = dots[targetDots - 1].score;
-    } else {
-        aaCutoffScore = dots[0].score;
-    }
+    for (int i = 0; i < 8; ++i) {
+        // Edge-aware threshold modulation
+        // TS: deltaThr = Math.max(10, DELTA - 0.2 * edges[p]);
+        // Our edge is 0-255 approx.
+        float threshold = max(10.0f, baseThreshold - dots[i].edge * 0.2f);
 
-    for (int rank = 0; rank < 8; ++rank) {
-        int idx = dots[rank].idx;
-        bool shouldActivate = false;
+        // Check against global background luminance
+        float lumDiff = abs(dots[i].luma - effectiveBgLum);
         
-        if (rank < targetDots) {
-            shouldActivate = true;
-        } else if (rank == targetDots && targetCoverage > 0) {
-            // Dithering
-            int ditherThresh = kDitherThresholdByBit[bitMap[idx]];
-            int fractional = (int)((8.0f * targetCoverage * 255.0f)) % 255;
-            shouldActivate = fractional > ditherThresh;
-        }
+        // Check if "near background" (TS: colorDistSq < BG_DIST)
+        // We use luma diff as a proxy for simplicity and speed here, 
+        // but could check color distance if needed.
+        // TS uses BG_DIST = 32^2 = 1024. Sqrt(1024) = 32.
+        // So if lumDiff < 32, it's "near bg".
+        // But wait, TS logic is: dotSet = !nearBg && lumDiff >= deltaThr
+        // If nearBg is true, dotSet is false.
+        // Effectively: if color distance is small, it's BG.
+        // If color distance is large AND luma diff is large, it's FG.
         
-        if (!shouldActivate && useAABand) {
-            int scoreDelta = aaCutoffScore - dots[rank].score;
-            if (scoreDelta >= 0 && scoreDelta < aaBand) {
-                int numer = (aaBand - scoreDelta) * 255 + (aaBand / 2);
-                int ditherThresh = kDitherThresholdByBit[bitMap[idx]];
-                shouldActivate = numer > ditherThresh * aaBand;
-            }
-        }
+        bool isDot = (lumDiff >= threshold);
 
-        // Edge Boost
-        if (!shouldActivate && dots[rank].edge > (float)kEdgeMin * 3.0f) {
-             float edgeBonus = GetEdgeBoostFromMag(dots[rank].edge);
-             int ditherThresh = kDitherThresholdByBit[bitMap[idx]] - kDitherBias;
-             if (ditherThresh < 0) ditherThresh = 0;
-             shouldActivate = edgeBonus > (float)ditherThresh;
-        }
-
-        if (shouldActivate) {
-            bitmask |= (1 << bitMap[idx]);
-            sumInk += dots[rank].color;
+        // Additional check: if it's just noise?
+        // We rely on the "Intelligent Contrast" later to hide noise.
+        
+        if (isDot) {
+            bitmask |= (1 << bitMap[dots[i].idx]);
+            sumInk += dots[i].color;
             inkCount++;
         } else {
-            sumBg += dots[rank].color;
+            sumBg += dots[i].color;
             bgCount++;
         }
     }
+
+    // Calculate stats for contrast logic
+    float avgLumDiff = abs(cellLumMean - effectiveBgLum);
 
     // 7. Color Processing
     float3 curFg = (inkCount > 0) ? (sumInk / inkCount) : (sumAll / 8.0f);
@@ -405,6 +355,34 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Color Lift
     curFg = max(curFg, (float)kColorLift / 255.0f);
     curBg = max(curBg, (float)kColorLift / 255.0f);
+
+    // Intelligent Contrast Management
+    // 1. Noise Suppression: Blend FG into BG for weak signals
+    // 2. Detail Enhancement: Boost contrast for strong signals
+    
+    float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f); // Ramp 4->16 (Fast transition for edges)
+    float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);   // Ramp 4->28 (Slower for luma)
+    float signalStrength = max(edgeSig, lumSig);
+
+    // Dampening: If signal is weak, hide it (blend to BG)
+    curFg = lerp(curBg, curFg, signalStrength);
+
+    // Boosting: If signal is strong (especially edges), increase contrast
+    if (signalStrength > 0.8f) {
+        float boost = (signalStrength - 0.8f) * 5.0f; // 0.0 -> 1.0
+        float3 center = (curFg + curBg) * 0.5f;
+        float3 delta = curFg - center;
+        
+        // Boost FG significantly (up to 50%)
+        curFg = center + delta * (1.0f + boost * 0.5f);
+        
+        // Boost BG gently (up to 10%) to avoid crushing it to black
+        // We want to preserve the context while making the foreground pop
+        curBg = center - delta * (1.0f + boost * 0.1f); 
+        
+        curFg = saturate(curFg);
+        curBg = saturate(curBg);
+    }
 
     // Luma Correction (Ink)
     float curY = GetLuma(curFg);
@@ -439,24 +417,24 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         }
     }
 
-    // Temporal Stability
+    // Temporal Stability (Reduced ghosting)
     uint2 history = HistoryBuffer[cellIndex];
     float3 prevFg = UnpackColor(history.x);
     float3 prevBg = UnpackColor(history.y);
     
-    // Perceptual Weighted Distance (Better than Manhattan/Euclidean)
-    // Green changes are much more visible than Blue changes.
-    // Using Rec. 709 luma coefficients as weights for the difference.
+    // Perceptual Weighted Distance
     float diffFg = dot(abs(curFg - prevFg), kLumaCoeff);
     float diffBg = dot(abs(curBg - prevBg), kLumaCoeff);
     
     float resetThresh = (float)kTemporalResetDelta / 255.0f;
 
+    // Increased alpha for faster updates (less ghosting)
+    // Old: 180/255 (~0.7), New: 230/255 (~0.9)
     if (diffFg < resetThresh) {
-        curFg = lerp(prevFg, curFg, (float)kColorAlpha/255.0f);
+        curFg = lerp(prevFg, curFg, 230.0f/255.0f);
     }
     if (diffBg < resetThresh) {
-        curBg = lerp(prevBg, curBg, (float)kBgAlpha/255.0f);
+        curBg = lerp(prevBg, curBg, 230.0f/255.0f);
     }
 
     // Write back history

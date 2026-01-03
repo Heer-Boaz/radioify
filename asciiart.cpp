@@ -171,22 +171,22 @@ void parallelFor(int totalRows, int minBatch, int workerCount, Fn&& fn) {
 
 // Verbeterde rendering parameters voor betere precisie
 constexpr bool kInkUseBright = true;
-constexpr float kInkGamma = 0.50f;      // Iets lineairder voor betere detail
-constexpr float kCoverageGain = 1.85f;  // Verhoogd voor meer contrast
-constexpr float kCoverageBias = 0.12f;  // Verlaagd voor schonere achtergrond
-constexpr float kCoverageZeroCutoff = 0.02f;  // Iets hoger voor minder ruis
+constexpr float kInkGamma = 0.65f;      // Slightly steeper
+constexpr float kCoverageGain = 1.30f;  // Reduced to prevent early saturation
+constexpr float kCoverageBias = 0.0f;   // Removed bias
+constexpr float kCoverageZeroCutoff = 0.03f;  // Filter faint noise
 constexpr float kLumLowPercent = 0.01f;       // Preciezer dynamic range
 constexpr float kLumHighPercent = 0.99f;
 constexpr uint8_t kColorLift = 0;
-constexpr uint8_t kInkMinLuma = 110;  // Iets verlaagd voor donkerdere tinten
-constexpr uint8_t kBgMinLuma = 20;
+constexpr uint8_t kInkMinLuma = 40;   // Reduced to allow dark details
+constexpr uint8_t kBgMinLuma = 10;    // Reduced
 constexpr int kInkMaxScale = 1280;  // Verhoogd voor meer bereik
 constexpr int kColorAlpha = 48;     // Snellere kleurrespons
 constexpr int kBgAlpha = 24;
 constexpr int kTemporalResetDelta = 48;  // Snellere scene change detectie
 constexpr int kColorSaturation = 340;    // Iets meer saturatie
 constexpr bool kUseEdgeBoost = true;
-constexpr uint8_t kEdgeMin = 4;      // Lagere drempel voor fijnere edges
+constexpr uint8_t kEdgeMin = 4;      // Reverted to 4 for sensitivity
 constexpr uint8_t kEdgeBoost = 245;  // Sterker edge boost
 constexpr int kEdgeShift = 3;
 constexpr int kBgDelta = 6;  // Lagere threshold voor meer detail
@@ -640,7 +640,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   scratch.prevLumHigh = lumHigh;
   scratch.prevBgLum = bgLum;
 
-  const int lumRange = std::max(1, lumHigh - lumLow);
+  const int lumRange = std::max(80, lumHigh - lumLow);
 
   const int brailleMap[2][4] = {{0, 1, 2, 6}, {3, 4, 5, 7}};
 
@@ -748,126 +748,38 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             int localMidpoint =
                 useLocalThreshold ? ((cellLumMin + cellLumMax) >> 1) : bgLum;
 
-            // Sorteer dots op luminantie voor rank-based thresholding
-            struct DotInfo {
-              int idx;
-              int score;
-            };
-            DotInfo dotRanks[8];
-            int numValidDots = 0;
+            // 2. Adaptive Thresholding (Per-Sub-Pixel Logic like asciiart.ts)
+            // We abandon the "Target Dots" approach in favor of direct thresholding
+            // to preserve small details.
 
+            int baseThreshold = 30;
+            
             for (int i = 0; i < 8; ++i) {
               if (!validVals[i]) continue;
 
-              int lum = lumVals[i];  // Already uint8_t, implicit conversion
+              int lum = lumVals[i];
               int edge = edgeVals[i];
-              int contrast = contrastVals[i];
 
-              // Score combineert luminantie verschil + edge boost + lokaal
-              // contrast
-              int lumDiff = useLocalThreshold ? std::abs(lum - localMidpoint)
-                                              : std::abs(lum - bgLum);
+              // Edge-aware threshold modulation
+              // TS: deltaThr = Math.max(10, DELTA - 0.2 * edges[p]);
+              // Our edge is 0-255 approx.
+              int threshold = std::max(10, baseThreshold - (edge * 51 / 255)); // 0.2 * 255 ~= 51
 
-              int score = lumDiff * 2 + edge + (contrast >> 1);
-              dotRanks[numValidDots++] = {i, score};
-            }
+              // Check against global background luminance
+              int lumDiff = std::abs(lum - bgLum);
+              
+              bool isDot = (lumDiff >= threshold);
 
-            // Bepaal hoeveel dots we moeten aanzetten gebaseerd op gemiddelde
-            // coverage
-            int avgLumDiff = validCount > 0 ? std::abs(cellLumMean - bgLum) *
-                                                  255 / std::max(1, lumRange)
-                                            : 0;
-            if (avgLumDiff > 255) avgLumDiff = 255;
-            int targetCoverage =
-                kInkLevelFromLum[static_cast<size_t>(avgLumDiff)];
-            int targetDots = (numValidDots * targetCoverage + 127) / 255;
-
-            // Houd randen zichtbaar: forceer minimaal wat ink bij lokaal
-            // detail.
-            int detailScore =
-                std::max(cellLumRange, std::max(cellEdgeMax, cellContrastMax));
-            int minDots = 0;
-            if (detailScore >= kMinContrastForBraille) {
-              minDots = 1;
-              if (detailScore >= kMinContrastForBraille * 2) {
-                minDots = 2;
-              }
-            }
-            if (targetDots < minDots) {
-              targetDots = std::min(minDots, numValidDots);
-            }
-
-            // Sorteer dots op score (hoogste eerst)
-            for (int i = 0; i < numValidDots - 1; ++i) {
-              for (int j = i + 1; j < numValidDots; ++j) {
-                if (dotRanks[j].score > dotRanks[i].score) {
-                  DotInfo tmp = dotRanks[i];
-                  dotRanks[i] = dotRanks[j];
-                  dotRanks[j] = tmp;
-                }
-              }
-            }
-
-            int aaBand = 0;
-            int aaCutoffScore = 0;
-            bool useAABand = false;
-            if constexpr (kUseAABand) {
-              if (numValidDots > 0) {
-                int scoreRange =
-                    dotRanks[0].score - dotRanks[numValidDots - 1].score;
-                aaBand = std::min(scoreRange, kAAScoreBandMax);
-                useAABand = detailScore >= kMinContrastForBraille &&
-                            aaBand >= kAAScoreBandMin;
-                aaCutoffScore = (targetDots > 0)
-                                    ? dotRanks[targetDots - 1].score
-                                    : dotRanks[0].score;
-              }
-            }
-
-            // Activeer de top N dots, met dither voor de grensgevallen
-            for (int rank = 0; rank < numValidDots; ++rank) {
-              int i = dotRanks[rank].idx;
-              int edge = static_cast<int>(edgeVals[i]);
-
-              // Basis threshold gebaseerd op rank
-              bool shouldActivate = false;
-              if (rank < targetDots) {
-                // Zeker aan
-                shouldActivate = true;
-              } else if (rank == targetDots && targetCoverage > 0) {
-                // Grens-dot: gebruik dithering alleen als er coverage is
-                int ditherThresh = static_cast<int>(
-                    kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
-                int fractionalCoverage = (numValidDots * targetCoverage) % 255;
-                shouldActivate = fractionalCoverage > ditherThresh;
-              }
-
-              if (!shouldActivate && useAABand) {
-                int scoreDelta = aaCutoffScore - dotRanks[rank].score;
-                if (scoreDelta >= 0 && scoreDelta < aaBand) {
-                  int numer = (aaBand - scoreDelta) * 255 + (aaBand / 2);
-                  int ditherThresh = static_cast<int>(
-                      kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]);
-                  shouldActivate = numer > ditherThresh * aaBand;
-                }
-              }
-
-              // Edge boost kan extra dots aanzetten, maar alleen bij
-              // significante edges
-              if (!shouldActivate && edge > kEdgeMin * 3) {
-                int edgeBonus = kEdgeBoostFromMag[static_cast<size_t>(edge)];
-                int ditherThresh =
-                    static_cast<int>(
-                        kDitherThresholdByBit[static_cast<size_t>(bitIds[i])]) -
-                    kDitherBias;
-                if (ditherThresh < 0) ditherThresh = 0;
-                shouldActivate = edgeBonus > ditherThresh;
-              }
-
-              if (shouldActivate) {
+              if (isDot) {
                 bitmask |= (1 << bitIds[i]);
               }
             }
+
+            // Calculate stats for contrast logic
+            int rawDiff = std::abs(cellLumMean - bgLum);
+            int avgLumDiff = validCount > 0 ? rawDiff * 255 / std::max(1, lumRange)
+                                            : 0;
+            if (avgLumDiff > 255) avgLumDiff = 255;
 
             size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
             uint8_t outR = 0;
@@ -912,6 +824,60 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               curR = static_cast<uint8_t>(std::max<int>(curR, kColorLift));
               curG = static_cast<uint8_t>(std::max<int>(curG, kColorLift));
               curB = static_cast<uint8_t>(std::max<int>(curB, kColorLift));
+
+              // Calculate bg color first for blending
+              uint8_t bgR =
+                  static_cast<uint8_t>((bgCount > 0 ? sumBgR : sumAllR) /
+                                       (bgCount > 0 ? bgCount : colorCount));
+              uint8_t bgG =
+                  static_cast<uint8_t>((bgCount > 0 ? sumBgG : sumAllG) /
+                                       (bgCount > 0 ? bgCount : colorCount));
+              uint8_t bgB =
+                  static_cast<uint8_t>((bgCount > 0 ? sumBgB : sumAllB) /
+                                       (bgCount > 0 ? bgCount : colorCount));
+
+              // Intelligent Contrast Management
+              // 1. Noise Suppression: Blend FG into BG for weak signals
+              // 2. Detail Enhancement: Boost contrast for strong signals
+              
+              int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
+              int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
+              int signalStrength = std::max(edgeSig, lumSig);
+
+              // Dampening
+              curR = static_cast<uint8_t>(bgR + ((curR - bgR) * signalStrength >> 8));
+              curG = static_cast<uint8_t>(bgG + ((curG - bgG) * signalStrength >> 8));
+              curB = static_cast<uint8_t>(bgB + ((curB - bgB) * signalStrength >> 8));
+
+              // Boosting
+              if (signalStrength > 204) { // > 0.8 * 255
+                  int boost = (signalStrength - 204) * 5; // 0 -> 255
+                  // Boost factor 1.0 -> 1.5 (approx)
+                  // New = Center + (Old - Center) * (1 + boost/512)
+                  // Simplified: Expand difference
+                  int cR = (curR + bgR) >> 1;
+                  int cG = (curG + bgG) >> 1;
+                  int cB = (curB + bgB) >> 1;
+                  
+                  int dR = curR - cR;
+                  int dG = curG - cG;
+                  int dB = curB - cB;
+                  
+                  // Apply boost to FG (scale delta by 1.5x at max)
+                  int scaleFg = 256 + (boost >> 1); // 256 to 384
+                  // Apply reduced boost to BG (scale delta by 1.1x at max)
+                  // This prevents the background from becoming pitch black
+                  int scaleBg = 256 + (boost >> 3); // 256 to 288
+                  
+                  curR = static_cast<uint8_t>(std::clamp(cR + (dR * scaleFg >> 8), 0, 255));
+                  curG = static_cast<uint8_t>(std::clamp(cG + (dG * scaleFg >> 8), 0, 255));
+                  curB = static_cast<uint8_t>(std::clamp(cB + (dB * scaleFg >> 8), 0, 255));
+                  
+                  bgR = static_cast<uint8_t>(std::clamp(cR - (dR * scaleBg >> 8), 0, 255));
+                  bgG = static_cast<uint8_t>(std::clamp(cG - (dG * scaleBg >> 8), 0, 255));
+                  bgB = static_cast<uint8_t>(std::clamp(cB - (dB * scaleBg >> 8), 0, 255));
+              }
+
               int curY =
                   (static_cast<int>(curR) * 54 + static_cast<int>(curG) * 183 +
                    static_cast<int>(curB) * 19 + 128) >>
@@ -964,9 +930,11 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = curG;
                   pb = curB;
                 } else {
-                  pr = pr + (((int)curR - pr) * kColorAlpha >> 8);
-                  pg = pg + (((int)curG - pg) * kColorAlpha >> 8);
-                  pb = pb + (((int)curB - pb) * kColorAlpha >> 8);
+                  // Increased alpha for faster updates (less ghosting)
+                  // Old: kColorAlpha (180), New: 230
+                  pr = pr + (((int)curR - pr) * 230 >> 8);
+                  pg = pg + (((int)curG - pg) * 230 >> 8);
+                  pb = pb + (((int)curB - pb) * 230 >> 8);
                 }
                 outR = static_cast<uint8_t>(pr);
                 outG = static_cast<uint8_t>(pg);
@@ -987,15 +955,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 }
               }
 
-              uint8_t bgR =
-                  static_cast<uint8_t>((bgCount > 0 ? sumBgR : sumAllR) /
-                                       (bgCount > 0 ? bgCount : colorCount));
-              uint8_t bgG =
-                  static_cast<uint8_t>((bgCount > 0 ? sumBgG : sumAllG) /
-                                       (bgCount > 0 ? bgCount : colorCount));
-              uint8_t bgB =
-                  static_cast<uint8_t>((bgCount > 0 ? sumBgB : sumAllB) /
-                                       (bgCount > 0 ? bgCount : colorCount));
+              // bgR/G/B already calculated above for blending
               int bgY =
                   (static_cast<int>(bgR) * 54 + static_cast<int>(bgG) * 183 +
                    static_cast<int>(bgB) * 19 + 128) >>
@@ -1029,9 +989,11 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = bgG;
                   pb = bgB;
                 } else {
-                  pr = pr + (((int)bgR - pr) * kBgAlpha >> 8);
-                  pg = pg + (((int)bgG - pg) * kBgAlpha >> 8);
-                  pb = pb + (((int)bgB - pb) * kBgAlpha >> 8);
+                  // Increased alpha for faster updates (less ghosting)
+                  // Old: kBgAlpha (140), New: 230
+                  pr = pr + (((int)bgR - pr) * 230 >> 8);
+                  pg = pg + (((int)bgG - pg) * 230 >> 8);
+                  pb = pb + (((int)bgB - pb) * 230 >> 8);
                 }
                 outBgR = static_cast<uint8_t>(pr);
                 outBgG = static_cast<uint8_t>(pg);
