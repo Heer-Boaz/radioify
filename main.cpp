@@ -1194,7 +1194,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           currentEpoch = command.epoch;
           clearQueue();
         }
-        if (decodePaused.load()) {
+        if (decodePaused.load() && !hasCommand && seekingTargetTs < 0) {
           std::unique_lock<std::mutex> lock(queueMutex);
           queueCv.wait_for(lock, std::chrono::milliseconds(30), [&]() {
             return !decodeRunning.load() || !decodePaused.load() ||
@@ -1348,7 +1348,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           size_t queueLimit = maxQueue.load(std::memory_order_relaxed);
           if (frameQueue.size() >= queueLimit || freeFrames.empty()) {
             queueCv.wait_for(lock, std::chrono::milliseconds(30), [&]() {
-              return !decodeRunning.load() || decodePaused.load() ||
+              return !decodeRunning.load() ||
+                     (decodePaused.load() && seekingTargetTs < 0) ||
                      commandPendingAtomic.load() ||
                      (frameQueue.size() <
                           maxQueue.load(std::memory_order_relaxed) &&
@@ -2397,8 +2398,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
 
     bool audioFinished =
         audioOk && hooks.isAudioFinished && hooks.isAudioFinished();
-    if (!audioOk && videoEnded) break;
-    if (audioOk && audioFinished) break;
+    // if (!audioOk && videoEnded) break;
+    // if (audioOk && audioFinished) break;
 
     int sleepMs = 4;
     if (presentInit) {
