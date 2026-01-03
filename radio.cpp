@@ -410,9 +410,10 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   mpBuf.assign(static_cast<size_t>(mpSamples), 0.0f);
   mpIndex = 0;
   mpMix = 0.00f;
-  midBoost.setPeaking(sampleRate, 1500.0f, 1.0f, 0.0f);
-  lowMidDip.setPeaking(sampleRate, 420.0f, 1.0f, -2.5f);
-  presBoost.setPeaking(sampleRate, 3200.0f, 0.9f, -2.0f);
+  // 1938 Sound: Warm mid-centric, limited bandwidth, but not harsh.
+  midBoost.setPeaking(sampleRate, 1100.0f, 0.7f, 2.5f);
+  lowMidDip.setPeaking(sampleRate, 400.0f, 1.0f, -2.0f);
+  presBoost.setPeaking(sampleRate, 3500.0f, 0.8f, -1.5f);
 
   comp.setFs(sampleRate);
   comp.thresholdDb = -22.0f;
@@ -429,12 +430,13 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   sagAtk = std::exp(-1.0f / (sampleRate * (sagAtkMs / 1000.0f)));
   sagRel = std::exp(-1.0f / (sampleRate * (sagRelMs / 1000.0f)));
 
-  sat.drive = 1.10f;
-  sat.mix = 0.30f;
+  // Tube saturation (warmth)
+  sat.drive = 1.25f;
+  sat.mix = 0.40f;
 
   am.init(sampleRate, safeBw);
   speaker.init(sampleRate);
-  speaker.drive = 0.6f;
+  speaker.drive = 0.85f;
   roomTapSamples.clear();
   roomTapGains.clear();
   const float tapMs[] = {6.0f, 10.5f, 16.0f, 23.0f, 31.0f};
