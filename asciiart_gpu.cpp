@@ -27,6 +27,7 @@ Texture2D<float2> TextureUV : register(t1);
 StructuredBuffer<uint4> StatsBuffer : register(t2); // x=bgLum, y=lumRange
 #else
 Texture2D<float4> InputTexture : register(t0);
+StructuredBuffer<uint4> StatsBuffer : register(t1); // x=bgLum, y=lumRange
 #endif
 
 SamplerState LinearSampler : register(s0);
@@ -319,18 +320,18 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // A value of 30.0f (out of 255) provides a good balance between sensitivity and noise rejection.
     float baseThreshold = 30.0f; 
 
-    for (int i = 0; i < 8; ++i) {
+    for (int j = 0; j < 8; ++j) {
         // Edge-aware threshold modulation:
         // In areas with strong edges (high detail), we lower the threshold to capture more subtle features.
         // In flat areas (low edge), we keep the threshold high to suppress noise.
         // Formula: threshold = max(10, base - 0.2 * edge)
         // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
-        float threshold = max(10.0f, baseThreshold - dots[i].edge * 0.2f);
+        float threshold = max(10.0f, baseThreshold - dots[j].edge * 0.2f);
 
         // Check against global background luminance:
         // We compare the dot's luma against the global background luma (effectiveBgLum).
         // This helps in separating the subject from the background.
-        float lumDiff = abs(dots[i].luma - effectiveBgLum);
+        float lumDiff = abs(dots[j].luma - effectiveBgLum);
         
         // Decision: Is this sub-pixel a dot?
         // If the luma difference exceeds the threshold, it's considered a foreground dot.
@@ -339,16 +340,17 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
         // Accumulate colors for Foreground (Ink) and Background calculation later.
         if (isDot) {
-            bitmask |= (1 << bitMap[dots[i].idx]);
-            sumInk += dots[i].color;
+            bitmask |= (1 << bitMap[dots[j].idx]);
+            sumInk += dots[j].color;
             inkCount++;
         } else {
-            sumBg += dots[i].color;
+            sumBg += dots[j].color;
             bgCount++;
         }
     }
 
     // Calculate stats for contrast logic
+    float cellLumMean = cellLumSum / 8.0f;
     float avgLumDiff = abs(cellLumMean - effectiveBgLum);
 
     // 7. Color Processing
@@ -358,6 +360,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float3 curBg = (bgCount > 0) ? (sumBg / bgCount) : (sumAll / 8.0f);
 
     // Color Lift: Ensure colors aren't completely black to maintain some visibility.
+    // Currently set to 0 to allow true black (zwart-zwart).
+    // If you want to lift the shadows, increase kColorLift.
     curFg = max(curFg, (float)kColorLift / 255.0f);
     curBg = max(curBg, (float)kColorLift / 255.0f);
 
@@ -384,21 +388,27 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Boosting (Detail Pop):
     // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.
     if (signalStrength > 0.8f) {
-        float boost = (signalStrength - 0.8f) * 5.0f; // Normalize 0.8->1.0 to 0.0->1.0
+        // Normalize the range [0.8, 1.0] to [0.0, 1.0]
+        float boost = (signalStrength - 0.8f) * 5.0f; 
+        
+        // Calculate the midpoint (gray point) between FG and BG
         float3 center = (curFg + curBg) * 0.5f;
+        
+        // 'delta' is the vector from Center to Foreground.
+        // Conversely, the vector from Center to Background is -delta.
         float3 delta = curFg - center;
         
         // Asymmetrical Boost Logic:
-        // We want the foreground (dots) to stand out sharply, but we don't want the background
-        // to be crushed to black.
+        // We expand the distance from the center to increase contrast.
+        // Formula: NewPos = Center + DirectionVector * ExpansionFactor
         
-        // Boost FG significantly (up to 50% extra contrast)
-        curFg = center + delta * (1.0f + boost * 0.5f);
+        // 1.0f is the base scale (original position).
+        // We add 'boost * 0.5f' to push the Foreground 50% further out.
+        curFg = center + delta * (1.0f + boost * 1.5f);
         
-        // Boost BG gently (only up to 10% extra contrast)
-        // This prevents the "Black Background" issue where high-contrast areas would
-        // push the background color below zero (black), losing context.
-        curBg = center - delta * (1.0f + boost * 0.1f); 
+        // We subtract 'delta' (add -delta) to push the Background in the opposite direction.
+        // We only push it 10% further out (boost * 0.1f) to avoid crushing it to black.
+        // curBg = center - delta * (1.0f + boost * 0.1f); 
         
         curFg = saturate(curFg);
         curBg = saturate(curBg);
@@ -736,6 +746,34 @@ bool GpuAsciiRenderer::CreateStatsBuffer() {
     return true;
 }
 
+bool GpuAsciiRenderer::CreateRGBATextures(int width, int height) {
+    if (m_inputTexture) {
+        D3D11_TEXTURE2D_DESC desc;
+        m_inputTexture->GetDesc(&desc);
+        if (desc.Width == width && desc.Height == height) {
+            return true;
+        }
+        m_inputTexture.Reset();
+        m_inputSRV.Reset();
+    }
+
+    D3D11_TEXTURE2D_DESC texDesc = {};
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.MipLevels = 0; // Full chain
+    texDesc.ArraySize = 1;
+    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Usage = D3D11_USAGE_DEFAULT;
+    texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    texDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+
+    if (FAILED(m_device->CreateTexture2D(&texDesc, nullptr, &m_inputTexture))) return false;
+    if (FAILED(m_device->CreateShaderResourceView(m_inputTexture.Get(), nullptr, &m_inputSRV))) return false;
+
+    return true;
+}
+
 bool GpuAsciiRenderer::CreateNV12Textures(int width, int height, bool is10Bit) {
     // Check if we need to recreate textures (size or format change)
     DXGI_FORMAT targetY = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
@@ -900,21 +938,6 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
         return true;
     }
 
-    // Input Texture (with MipMaps)
-    D3D11_TEXTURE2D_DESC texDesc = {};
-    texDesc.Width = width;
-    texDesc.Height = height;
-    texDesc.MipLevels = 0; // Full chain
-    texDesc.ArraySize = 1;
-    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    texDesc.SampleDesc.Count = 1;
-    texDesc.Usage = D3D11_USAGE_DEFAULT; // Default for UpdateSubresource/GenerateMips
-    texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-    texDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
-
-    if (FAILED(m_device->CreateTexture2D(&texDesc, nullptr, &m_inputTexture))) return false;
-    if (FAILED(m_device->CreateShaderResourceView(m_inputTexture.Get(), nullptr, &m_inputSRV))) return false;
-
     // Output Buffer
     D3D11_BUFFER_DESC bufDesc = {};
     bufDesc.ByteWidth = sizeof(GpuAsciiCell) * outW * outH;
@@ -986,6 +1009,11 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         return false;
     }
 
+    if (!CreateRGBATextures(width, height)) {
+        if (error) *error = "Failed to create RGBA textures";
+        return false;
+    }
+
     // Upload Texture
     m_context->UpdateSubresource(m_inputTexture.Get(), 0, nullptr, rgba, width * 4, 0);
     
@@ -1046,6 +1074,15 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         }
     }
 
+    // Upload Stats to StatsBuffer
+    if (!CreateStatsBuffer()) {
+        if (error) *error = "Failed to create stats buffer";
+        return false;
+    }
+    
+    uint32_t statsData[4] = { (uint32_t)bgLum, (uint32_t)lumRange, 0, 0 };
+    m_context->UpdateSubresource(m_statsBuffer.Get(), 0, nullptr, statsData, 0, 0);
+
     // Update Constants
     D3D11_MAPPED_SUBRESOURCE mapped;
     if (SUCCEEDED(m_context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -1056,19 +1093,14 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         cb->outHeight = outH;
         cb->time = 0.0f;
         cb->frameCount++;
-        // RGBA path doesn't use StatsBuffer yet, so we might need to zero these or handle differently
-        // For now, just set isFullRange. The shader will read garbage from StatsBuffer if we don't bind it.
-        // Ideally RGBA path should also use StatsCS or pass these via CB.
-        // But since we removed them from CB, we must use StatsBuffer.
-        // Let's just bind a dummy or run StatsCS for RGBA too.
         cb->isFullRange = 1; 
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
     // Dispatch
     m_context->CSSetShader(m_computeShader.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { m_inputSRV.Get() };
-    m_context->CSSetShaderResources(0, 1, srvs);
+    ID3D11ShaderResourceView* srvs[] = { m_inputSRV.Get(), m_statsSRV.Get() };
+    m_context->CSSetShaderResources(0, 2, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     ID3D11Buffer* cbs[] = { m_constantBuffer.Get() };
@@ -1084,6 +1116,8 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     // Unbind UAVs
     ID3D11UnorderedAccessView* nullUAV[] = { nullptr, nullptr };
     m_context->CSSetUnorderedAccessViews(0, 2, nullUAV, nullptr);
+    ID3D11ShaderResourceView* nullSRV[] = { nullptr, nullptr };
+    m_context->CSSetShaderResources(0, 2, nullSRV);
 
     // Readback
     m_context->CopyResource(m_outputStagingBuffer.Get(), m_outputBuffer.Get());

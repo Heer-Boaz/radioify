@@ -847,6 +847,11 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               uint8_t bgB =
                   static_cast<uint8_t>((bgCount > 0 ? sumBgB : sumAllB) /
                                        (bgCount > 0 ? bgCount : colorCount));
+              
+              // Color Lift for Background as well
+              bgR = static_cast<uint8_t>(std::max<int>(bgR, kColorLift));
+              bgG = static_cast<uint8_t>(std::max<int>(bgG, kColorLift));
+              bgB = static_cast<uint8_t>(std::max<int>(bgB, kColorLift));
 
               // Intelligent Contrast Management
               // This system dynamically adjusts contrast based on the "Signal Strength" of the cell.

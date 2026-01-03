@@ -53,7 +53,7 @@ extern "C" {
 #define RADIOIFY_ENABLE_TIMING_LOG 0
 #endif
 #ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
-#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 0
+#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 1
 #endif
 
 struct Options {
@@ -827,7 +827,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   std::vector<VideoFrame> framePool;
   std::deque<size_t> freeFrames;
   std::atomic<size_t> maxQueue{3};
-  constexpr bool kEnableSoftwareFallback = true;
+  constexpr bool kEnableSoftwareFallback = false;
   const bool allowDecoderScale = enableAscii;
   struct DecodeCommand {
     bool resize = false;
@@ -1669,6 +1669,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
                 gpuAvailable = false;
                 appendVideoWarning("GPU renderer failed (NV12), falling back to CPU: " +
                                    gpuErr);
+                throw std::runtime_error("ASCII-renderer GPU failure" + gpuErr);
               }
             }
 
