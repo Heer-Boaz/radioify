@@ -83,6 +83,7 @@ const GateScope kGateFrameFirst{true, "frame", "first"};
 const GateScope kGateAudioStart{true, "audio", "start"};
 const GateScope kGatePresentFirst{false, "present", "first"};
 const GateScope kGateTimestampFirst{false, "timestamp", "first"};
+const GateScope kGateAudioPrimed{true, "audio", "primed"};
 const GateScope kGateAudioFinished{false, "audio_finished", "ended"};
 
 bool shouldBlockTimestamp(bool check, double rawSec, double leadSlack,
@@ -433,6 +434,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   GateToken prepFrameToken{};
   GateToken prepAudioToken{};
   GateToken prepPresentToken{};
+  GateToken primedToken{};
   GateToken timestampToken{};
   GateToken audioFinishedToken{};
   framePool.resize(kMaxQueuedFrames + 1);
@@ -1377,6 +1379,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       displaySec = std::clamp(pendingSeekHoldSec, 0.0, totalSec);
     }
     bool audioPrimed = audioOk ? audioIsPrimed() : true;
+    prepGate.ensure(primedToken, audioOk && !audioPrimed, kGateAudioPrimed);
+
     bool shouldCheckTimestamp =
         prepPresentToken.active && audioOk && !audioHoldActive;
     bool timestampBlocked =
@@ -1593,7 +1597,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       }
     }
 
-    if (allowFrame && audioHoldActive && audioOk && audioPrimed) {
+    if (allowFrame && audioHoldActive) {
       audioSetHold(false);
       audioHoldActive = false;
       audioSyncBiasSec = 0.0;
