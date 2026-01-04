@@ -1648,7 +1648,9 @@ static bool showAsciiVideo(const std::filesystem::path& file,
             }
 
             bool renderedWithGpu = false;
-            if (gpuAvailable && frame->format == VideoPixelFormat::NV12) {
+            if (gpuAvailable &&
+                (frame->format == VideoPixelFormat::NV12 ||
+                 frame->format == VideoPixelFormat::P010)) {
               art.width = width;
               art.height = maxHeight;
               std::string gpuErr;
@@ -1657,7 +1659,9 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               if (gpuRenderer.RenderNV12(frame->yuv.data(), frame->width,
                                          frame->height, frame->stride,
                                          frame->planeHeight, frame->fullRange, 
-                                         frame->format == VideoPixelFormat::P010, art, &gpuErr)) {
+                                         frame->yuvMatrix, frame->yuvTransfer,
+                                         frame->format == VideoPixelFormat::P010,
+                                         art, &gpuErr)) {
                 renderedWithGpu = true;
                 artOk = true;
                 static bool gpuLogged = false;
@@ -1680,7 +1684,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               artOk = renderAsciiArtFromYuv(
                   frame->yuv.data(), frame->width, frame->height, frame->stride,
                   frame->planeHeight, yuvFormat, frame->fullRange,
-                  frame->yuvMatrix, width, maxHeight, art);
+                  frame->yuvMatrix, frame->yuvTransfer, width, maxHeight, art);
             }
           } else {
             size_t expected = static_cast<size_t>(frame->width) *

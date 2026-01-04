@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "consolescreen.h"
+#include "videocolor.h"
 
 struct AsciiArt {
   int width = 0;
@@ -49,7 +50,8 @@ bool renderAsciiArtFromYuv(const uint8_t* data,
                            int planeHeight,
                            YuvFormat format,
                            bool fullRange,
-                           uint32_t yuvMatrix,
+                           YuvMatrix yuvMatrix,
+                           YuvTransfer yuvTransfer,
                            int maxWidth,
                            int maxHeight,
                            AsciiArt& out);

@@ -43,21 +43,35 @@ std::string ffmpegError(int err) {
   return std::string(buf);
 }
 
-uint32_t mapColorMatrix(AVColorSpace space) {
+YuvMatrix mapColorMatrix(AVColorSpace space) {
   switch (space) {
     case AVCOL_SPC_BT709:
-      return MFVideoTransferMatrix_BT709;
+      return YuvMatrix::Bt709;
+    case AVCOL_SPC_BT2020_NCL:
+    case AVCOL_SPC_BT2020_CL:
+      return YuvMatrix::Bt2020;
     case AVCOL_SPC_BT470BG:
     case AVCOL_SPC_SMPTE170M:
     case AVCOL_SPC_SMPTE240M:
-      return MFVideoTransferMatrix_BT601;
+      return YuvMatrix::Bt601;
     default:
-      return MFVideoTransferMatrix_BT709;
+      return YuvMatrix::Bt709;
   }
 }
 
 bool mapFullRange(AVColorRange range) {
   return range == AVCOL_RANGE_JPEG;
+}
+
+YuvTransfer mapColorTransfer(AVColorTransferCharacteristic transfer) {
+  switch (transfer) {
+    case AVCOL_TRC_SMPTE2084:
+      return YuvTransfer::Pq;
+    case AVCOL_TRC_ARIB_STD_B67:
+      return YuvTransfer::Hlg;
+    default:
+      return YuvTransfer::Sdr;
+  }
 }
 
 constexpr int kMaxDecodeWidth = 1024;
@@ -111,7 +125,8 @@ struct VideoDecoder::Impl {
   int64_t duration100ns = 0;
   int64_t formatStartUs = 0;
   int64_t streamStartUs = 0;
-  uint32_t yuvMatrix = MFVideoTransferMatrix_BT709;
+  YuvMatrix yuvMatrix = YuvMatrix::Bt709;
+  YuvTransfer yuvTransfer = YuvTransfer::Sdr;
   bool fullRange = true;
   int consecutiveTransferErrors = 0;
   bool hasPendingPacket = false;
@@ -135,6 +150,7 @@ struct VideoDecoder::Impl {
     out.timestamp100ns = ts100ns;
     out.fullRange = fullRange;
     out.yuvMatrix = yuvMatrix;
+    out.yuvTransfer = yuvTransfer;
 
     if (!decodePixels) {
       out.format = VideoPixelFormat::Unknown;
@@ -319,6 +335,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   clampTargetSize(impl->targetW, impl->targetH);
   impl->fullRange = mapFullRange(ctx->color_range);
   impl->yuvMatrix = mapColorMatrix(ctx->colorspace);
+  impl->yuvTransfer = mapColorTransfer(ctx->color_trc);
   impl->formatStartUs =
       (fmt->start_time != AV_NOPTS_VALUE) ? fmt->start_time : 0;
   if (fmt->streams[streamIndex]->start_time != AV_NOPTS_VALUE) {

@@ -18,7 +18,10 @@ cbuffer Constants : register(b0) {
     float time;
     uint frameCount;
     uint isFullRange;
-    uint padding[1];
+    uint bitDepth;
+    uint yuvMatrix;
+    uint yuvTransfer;
+    uint padding[2];
 };
 
 #ifdef NV12_INPUT
@@ -45,6 +48,12 @@ RWStructuredBuffer<uint2> HistoryBuffer : register(u1); // x=Fg, y=Bg (packed)
 
 static const uint kBrailleBase = 0x2800;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
+static const uint kMatrixBt709 = 0;
+static const uint kMatrixBt601 = 1;
+static const uint kMatrixBt2020 = 2;
+static const uint kTransferSdr = 0;
+static const uint kTransferPq = 1;
+static const uint kTransferHlg = 2;
 
 // Constants from CPU version
 static const int kMinContrastForBraille = 8; // Reduced from 15 to allow finer details
@@ -94,13 +103,92 @@ float GetLuma(float3 c) {
     return dot(c, kLumaCoeff) * 255.0f;
 }
 
+float GetMaxCode() {
+    return (float)((1u << bitDepth) - 1u);
+}
+
+float ExpandYNorm(float yNorm) {
+    float maxCode = GetMaxCode();
+    float yCode = yNorm * maxCode;
+    uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
+    float yMin = (isFullRange != 0) ? 0.0f : (float)(16u << shift);
+    float yMax = (isFullRange != 0) ? maxCode : (float)(235u << shift);
+    float denom = max(yMax - yMin, 1.0f);
+    return saturate((yCode - yMin) / denom);
+}
+
+float2 ExpandUV(float2 uvNorm) {
+    float maxCode = GetMaxCode();
+    float2 uvCode = uvNorm * maxCode;
+    uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
+    float cMin = (isFullRange != 0) ? 0.0f : (float)(16u << shift);
+    float cMax = (isFullRange != 0) ? maxCode : (float)(240u << shift);
+    float cMid = (float)(128u << shift);
+    float denom = max(cMax - cMin, 1.0f);
+    return (uvCode - cMid) / denom;
+}
+
+float PQEotf(float v) {
+    const float m1 = 2610.0f / 16384.0f;
+    const float m2 = 2523.0f / 32.0f;
+    const float c1 = 3424.0f / 4096.0f;
+    const float c2 = 2413.0f / 128.0f;
+    const float c3 = 2392.0f / 128.0f;
+    float vp = pow(max(v, 0.0f), 1.0f / m2);
+    float num = max(vp - c1, 0.0f);
+    float den = max(c2 - c3 * vp, 1e-6f);
+    return pow(num / den, 1.0f / m1);
+}
+
+float3 PQEotf(float3 v) {
+    return float3(PQEotf(v.x), PQEotf(v.y), PQEotf(v.z));
+}
+
+float HlgEotf(float v) {
+    const float a = 0.17883277f;
+    const float b = 1.0f - 4.0f * a;
+    const float c = 0.5f - a * log(4.0f * a);
+    v = saturate(v);
+    if (v <= 0.5f) {
+        return (v * v) / 3.0f;
+    }
+    return (exp((v - c) / a) + b) / 12.0f;
+}
+
+float3 HlgEotf(float3 v) {
+    return float3(HlgEotf(v.x), HlgEotf(v.y), HlgEotf(v.z));
+}
+
+float ToneMapFilmic(float x) {
+    const float A = 0.15f;
+    const float B = 0.50f;
+    const float C = 0.10f;
+    const float D = 0.20f;
+    const float E = 0.02f;
+    const float F = 0.30f;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+}
+
+float3 ToneMapFilmic(float3 x) {
+    return float3(ToneMapFilmic(x.x), ToneMapFilmic(x.y), ToneMapFilmic(x.z));
+}
+
+float LinearToSrgb(float v) {
+    v = max(v, 0.0f);
+    if (v <= 0.0031308f) {
+        return v * 12.92f;
+    }
+    return 1.055f * pow(v, 1.0f / 2.4f) - 0.055f;
+}
+
+float3 LinearToSrgb(float3 v) {
+    return float3(LinearToSrgb(v.x), LinearToSrgb(v.y), LinearToSrgb(v.z));
+}
+
 float SampleLumaRaw(float2 uv, SamplerState s) {
 #ifdef NV12_INPUT
-    float y = TextureY.SampleLevel(s, uv, 0);
-    if (!isFullRange) {
-        y = (y - 16.0/255.0) * (255.0/219.0);
-    }
-    return y * 255.0f;
+    float yNorm = TextureY.SampleLevel(s, uv, 0);
+    return ExpandYNorm(yNorm) * 255.0f;
 #else
     return GetLuma(InputTexture.SampleLevel(s, uv, 0).rgb);
 #endif
@@ -164,36 +252,50 @@ float GetEdgeBoostFromMag(float edge) {
 float4 SampleInput(float2 uv) {
     float4 color;
 #ifdef NV12_INPUT
-    float y = TextureY.SampleLevel(LinearSampler, uv, 0);
-    float2 uv_val = TextureUV.SampleLevel(LinearSampler, uv, 0);
-    
-    float u, v;
-    
-    if (isFullRange) {
-        u = uv_val.x - 0.5;
-        v = uv_val.y - 0.5;
-    } else {
-        // Limited Range Expansion (16-235 -> 0-255 for Y, 16-240 -> 0-255 for UV)
-        y = (y - 16.0/255.0) * (255.0/219.0);
-        u = (uv_val.x - 128.0/255.0) * (255.0/224.0);
-        v = (uv_val.y - 128.0/255.0) * (255.0/224.0);
-    }
+    float y = ExpandYNorm(TextureY.SampleLevel(LinearSampler, uv, 0));
+    float2 uv_val = ExpandUV(TextureUV.SampleLevel(LinearSampler, uv, 0));
 
-    // Rec. 709 (HD)
-    float r = y + 1.5748 * v;
-    float g = y - 0.1873 * u - 0.4681 * v;
-    float b = y + 1.8556 * u;
+    float r = 0.0f;
+    float g = 0.0f;
+    float b = 0.0f;
+    if (yuvMatrix == kMatrixBt2020) {
+        r = y + 1.4746 * uv_val.y;
+        g = y - 0.16455 * uv_val.x - 0.57135 * uv_val.y;
+        b = y + 1.8814 * uv_val.x;
+    } else if (yuvMatrix == kMatrixBt601) {
+        r = y + 1.4020 * uv_val.y;
+        g = y - 0.3441 * uv_val.x - 0.7141 * uv_val.y;
+        b = y + 1.7720 * uv_val.x;
+    } else {
+        r = y + 1.5748 * uv_val.y;
+        g = y - 0.1873 * uv_val.x - 0.4681 * uv_val.y;
+        b = y + 1.8556 * uv_val.x;
+    }
     color = float4(r, g, b, 1.0);
 #else
     color = InputTexture.SampleLevel(LinearSampler, uv, 0);
 #endif
 
-    // Fix washed out colors (HDR->SDR tone mapping approx)
     float3 rgb = color.rgb;
-    // Removed aggressive tone mapping that amplified noise
-    // Just a slight contrast boost
-    rgb = (rgb - 0.5f) * 1.05f + 0.5f; 
-    color.rgb = saturate(rgb);
+#ifdef NV12_INPUT
+    if (yuvTransfer != kTransferSdr) {
+        rgb = saturate(rgb);
+        if (yuvTransfer == kTransferPq) {
+            rgb = PQEotf(rgb);
+        } else {
+            rgb = HlgEotf(rgb);
+        }
+        rgb = ToneMapFilmic(rgb * (10000.0f / 200.0f));
+        rgb = saturate(rgb);
+        rgb = LinearToSrgb(rgb);
+        rgb = saturate(rgb);
+    } else
+#endif
+    {
+        // Slight contrast boost for SDR sources.
+        rgb = (rgb - 0.5f) * 1.05f + 0.5f;
+        rgb = saturate(rgb);
+    }
 
     return float4(rgb, color.a);
 }
@@ -292,9 +394,13 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     float effectiveBgLum = (float)bgLum;
     float effectiveLumRange = max((float)lumRange, 80.0f); // Clamp to prevent noise amplification
-    if (!isFullRange) {
-        effectiveBgLum = (effectiveBgLum - 16.0f) * (255.0f / 219.0f);
-        effectiveLumRange = effectiveLumRange * (255.0f / 219.0f);
+    if (isFullRange == 0) {
+        float bgNorm = effectiveBgLum / 255.0f;
+        effectiveBgLum = ExpandYNorm(bgNorm) * 255.0f;
+        uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
+        float yRange = (float)(219u << shift);
+        float scale = GetMaxCode() / max(yRange, 1.0f);
+        effectiveLumRange = effectiveLumRange * scale;
     }
     float cellRange = cellLumMax - cellLumMin;
     float alpha = saturate((90.0f - cellRange) / (90.0f - 40.0f));
@@ -518,6 +624,14 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 cbuffer Constants : register(b0) {
     uint width;
     uint height;
+    uint outWidth;
+    uint outHeight;
+    float time;
+    uint frameCount;
+    uint isFullRange;
+    uint bitDepth;
+    uint yuvMatrix;
+    uint yuvTransfer;
     uint padding[2];
 };
 
@@ -830,7 +944,8 @@ bool GpuAsciiRenderer::CreateNV12Textures(int width, int height, bool is10Bit) {
 }
 
 bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
-                                bool fullRange, bool is10Bit, AsciiArt& out, std::string* error) {
+                                bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
+                                bool is10Bit, AsciiArt& out, std::string* error) {
     if (!m_device) {
         std::string initErr;
         if (!Initialize(width, height, &initErr)) {
@@ -877,6 +992,9 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         cb->time = 0.0f;
         cb->frameCount++;
         cb->isFullRange = fullRange ? 1 : 0;
+        cb->bitDepth = is10Bit ? 10u : 8u;
+        cb->yuvMatrix = static_cast<uint32_t>(yuvMatrix);
+        cb->yuvTransfer = static_cast<uint32_t>(yuvTransfer);
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
@@ -1106,6 +1224,9 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         cb->time = 0.0f;
         cb->frameCount++;
         cb->isFullRange = 1; 
+        cb->bitDepth = 8;
+        cb->yuvMatrix = static_cast<uint32_t>(YuvMatrix::Bt709);
+        cb->yuvTransfer = static_cast<uint32_t>(YuvTransfer::Sdr);
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 

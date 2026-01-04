@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "videocolor.h"
+
 enum class VideoPixelFormat {
   Unknown,
   RGB32,
@@ -22,7 +24,8 @@ struct VideoFrame {
   int stride = 0;
   int planeHeight = 0;
   bool fullRange = true;
-  uint32_t yuvMatrix = 0;
+  YuvMatrix yuvMatrix = YuvMatrix::Bt709;
+  YuvTransfer yuvTransfer = YuvTransfer::Sdr;
   std::vector<uint8_t> rgba;
   std::vector<uint8_t> yuv;
 };

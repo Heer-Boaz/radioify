@@ -21,7 +21,8 @@ public:
 
     // Render from NV12 buffer (CPU -> GPU -> CPU)
     bool RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
-                   bool fullRange, bool is10Bit, AsciiArt& out, std::string* error);
+                   bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
+                   bool is10Bit, AsciiArt& out, std::string* error);
 
 private:
     bool CreateDevice();
@@ -73,7 +74,10 @@ private:
         float time;
         uint32_t frameCount;
         uint32_t isFullRange;
-        uint32_t padding[1];
+        uint32_t bitDepth;
+        uint32_t yuvMatrix;
+        uint32_t yuvTransfer;
+        uint32_t padding[2];
     };
 
     int m_currentWidth = 0;

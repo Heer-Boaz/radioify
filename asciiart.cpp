@@ -265,16 +265,33 @@ FORCE_INLINE uint8_t clampToByte(float v) {
   return static_cast<uint8_t>(v + 0.5f);
 }
 
-FORCE_INLINE uint8_t normalizeLuma8(int y, bool fullRange) {
-  if (fullRange) {
-    if (y < 0) return 0;
-    if (y > 255) return 255;
-    return static_cast<uint8_t>(y);
-  }
-  int v = (y - 16) * 255 / 219;
-  if (v < 0) v = 0;
-  if (v > 255) v = 255;
-  return static_cast<uint8_t>(v);
+FORCE_INLINE float expandYNorm(int y, bool fullRange, int bitDepth) {
+  int maxCode = (1 << bitDepth) - 1;
+  if (y < 0) y = 0;
+  if (y > maxCode) y = maxCode;
+  int shift = bitDepth > 8 ? (bitDepth - 8) : 0;
+  float yMin = fullRange ? 0.0f : static_cast<float>(16 << shift);
+  float yMax = fullRange ? static_cast<float>(maxCode)
+                         : static_cast<float>(235 << shift);
+  float denom = std::max(1.0f, yMax - yMin);
+  return clampFloat((static_cast<float>(y) - yMin) / denom, 0.0f, 1.0f);
+}
+
+FORCE_INLINE float expandChromaNorm(int c, bool fullRange, int bitDepth) {
+  int maxCode = (1 << bitDepth) - 1;
+  if (c < 0) c = 0;
+  if (c > maxCode) c = maxCode;
+  int shift = bitDepth > 8 ? (bitDepth - 8) : 0;
+  float cMin = fullRange ? 0.0f : static_cast<float>(16 << shift);
+  float cMax = fullRange ? static_cast<float>(maxCode)
+                         : static_cast<float>(240 << shift);
+  float cMid = static_cast<float>(128 << shift);
+  float denom = std::max(1.0f, cMax - cMin);
+  return (static_cast<float>(c) - cMid) / denom;
+}
+
+FORCE_INLINE uint8_t normalizeLuma8(int y, bool fullRange, int bitDepth) {
+  return clampToByte(expandYNorm(y, fullRange, bitDepth) * 255.0f);
 }
 
 FORCE_INLINE uint8_t to8bitFrom10(int v10) {
@@ -283,37 +300,98 @@ FORCE_INLINE uint8_t to8bitFrom10(int v10) {
   return static_cast<uint8_t>((v10 * 255 + 511) / 1023);
 }
 
-FORCE_INLINE void yuvToRgb(int y, int u, int v, bool fullRange, uint32_t matrix,
-                           uint8_t& outR, uint8_t& outG, uint8_t& outB) {
-  float yf = 0.0f;
-  float uf = 0.0f;
-  float vf = 0.0f;
-  if (fullRange) {
-    yf = static_cast<float>(y) / 255.0f;
-    uf = (static_cast<float>(u) - 128.0f) / 255.0f;
-    vf = (static_cast<float>(v) - 128.0f) / 255.0f;
-  } else {
-    yf = (static_cast<float>(y) - 16.0f) / 219.0f;
-    uf = (static_cast<float>(u) - 128.0f) / 224.0f;
-    vf = (static_cast<float>(v) - 128.0f) / 224.0f;
+FORCE_INLINE float pqEotf(float v) {
+  constexpr float m1 = 2610.0f / 16384.0f;
+  constexpr float m2 = 2523.0f / 32.0f;
+  constexpr float c1 = 3424.0f / 4096.0f;
+  constexpr float c2 = 2413.0f / 128.0f;
+  constexpr float c3 = 2392.0f / 128.0f;
+  float vp = std::pow(std::max(v, 0.0f), 1.0f / m2);
+  float num = std::max(vp - c1, 0.0f);
+  float den = std::max(c2 - c3 * vp, 1e-6f);
+  return std::pow(num / den, 1.0f / m1);
+}
+
+FORCE_INLINE float hlgEotf(float v) {
+  const float a = 0.17883277f;
+  const float b = 1.0f - 4.0f * a;
+  const float c = 0.5f - a * std::log(4.0f * a);
+  v = clampFloat(v, 0.0f, 1.0f);
+  if (v <= 0.5f) {
+    return (v * v) / 3.0f;
   }
+  return (std::exp((v - c) / a) + b) / 12.0f;
+}
+
+FORCE_INLINE float toneMapFilmic(float x) {
+  constexpr float A = 0.15f;
+  constexpr float B = 0.50f;
+  constexpr float C = 0.10f;
+  constexpr float D = 0.20f;
+  constexpr float E = 0.02f;
+  constexpr float F = 0.30f;
+  return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) -
+         E / F;
+}
+
+FORCE_INLINE float linearToSrgb(float x) {
+  x = std::max(x, 0.0f);
+  if (x <= 0.0031308f) return x * 12.92f;
+  return 1.055f * std::pow(x, 1.0f / 2.4f) - 0.055f;
+}
+
+FORCE_INLINE void yuvToRgb(int y, int u, int v, bool fullRange, int bitDepth,
+                           YuvMatrix matrix, YuvTransfer transfer,
+                           uint8_t& outR, uint8_t& outG, uint8_t& outB) {
+  float yf = expandYNorm(y, fullRange, bitDepth);
+  float uf = expandChromaNorm(u, fullRange, bitDepth);
+  float vf = expandChromaNorm(v, fullRange, bitDepth);
 
   float r = 0.0f;
   float g = 0.0f;
   float b = 0.0f;
-  if (matrix == MFVideoTransferMatrix_BT709) {
-    r = yf + 1.5748f * vf;
-    g = yf - 0.1873f * uf - 0.4681f * vf;
-    b = yf + 1.8556f * uf;
-  } else {
+  if (matrix == YuvMatrix::Bt2020) {
+    r = yf + 1.4746f * vf;
+    g = yf - 0.16455f * uf - 0.57135f * vf;
+    b = yf + 1.8814f * uf;
+  } else if (matrix == YuvMatrix::Bt601) {
     r = yf + 1.4020f * vf;
     g = yf - 0.3441f * uf - 0.7141f * vf;
     b = yf + 1.7720f * uf;
+  } else {
+    r = yf + 1.5748f * vf;
+    g = yf - 0.1873f * uf - 0.4681f * vf;
+    b = yf + 1.8556f * uf;
   }
 
-  outR = clampToByte(r * 255.0f);
-  outG = clampToByte(g * 255.0f);
-  outB = clampToByte(b * 255.0f);
+  if (transfer == YuvTransfer::Pq || transfer == YuvTransfer::Hlg) {
+    constexpr float kHdrScale = 10000.0f / 200.0f;
+    r = clampFloat(r, 0.0f, 1.0f);
+    g = clampFloat(g, 0.0f, 1.0f);
+    b = clampFloat(b, 0.0f, 1.0f);
+    if (transfer == YuvTransfer::Pq) {
+      r = pqEotf(r);
+      g = pqEotf(g);
+      b = pqEotf(b);
+    } else {
+      r = hlgEotf(r);
+      g = hlgEotf(g);
+      b = hlgEotf(b);
+    }
+    r = toneMapFilmic(r * kHdrScale);
+    g = toneMapFilmic(g * kHdrScale);
+    b = toneMapFilmic(b * kHdrScale);
+    r = clampFloat(r, 0.0f, 1.0f);
+    g = clampFloat(g, 0.0f, 1.0f);
+    b = clampFloat(b, 0.0f, 1.0f);
+    r = linearToSrgb(r);
+    g = linearToSrgb(g);
+    b = linearToSrgb(b);
+  }
+
+  outR = clampToByte(clampFloat(r, 0.0f, 1.0f) * 255.0f);
+  outG = clampToByte(clampFloat(g, 0.0f, 1.0f) * 255.0f);
+  outB = clampToByte(clampFloat(b, 0.0f, 1.0f) * 255.0f);
 }
 
 // Snelle integer square root approximatie voor edge detection
@@ -1235,10 +1313,13 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
 template <bool IsP010>
 bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
                                int stride, int planeHeight, bool fullRange,
-                               uint32_t yuvMatrix, int maxWidth, int maxHeight,
+                               YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
+                               int maxWidth, int maxHeight,
                                AsciiArt& out, BrailleFastScratch& scratch) {
   out = AsciiArt{};
   if (!data || width <= 0 || height <= 0 || stride <= 0) return false;
+
+  const int bitDepth = IsP010 ? 10 : 8;
 
   int maxArtWidth = std::max(8, maxWidth);
   scratch.ensure(width, height, maxArtWidth, maxHeight);
@@ -1323,27 +1404,15 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
               int yAvg = static_cast<int>((sumY + half) / sampleCount);
               int uAvg = static_cast<int>((sumU + half) / sampleCount);
               int vAvg = static_cast<int>((sumV + half) / sampleCount);
-              uint8_t y8 = 0;
-              uint8_t u8 = 0;
-              uint8_t v8 = 0;
-              if constexpr (IsP010) {
-                y8 = to8bitFrom10(yAvg);
-                u8 = to8bitFrom10(uAvg);
-                v8 = to8bitFrom10(vAvg);
-              } else {
-                y8 = static_cast<uint8_t>(std::clamp(yAvg, 0, 255));
-                u8 = static_cast<uint8_t>(std::clamp(uAvg, 0, 255));
-                v8 = static_cast<uint8_t>(std::clamp(vAvg, 0, 255));
-              }
 
-              uint8_t lum = normalizeLuma8(y8, fullRange);
+              uint8_t lum = normalizeLuma8(yAvg, fullRange, bitDepth);
               padRow[x + 1] = lum;
               ++hist[lum];
               ++lumLocal;
 
               uint8_t r = 0, g = 0, b = 0;
-              yuvToRgb(static_cast<int>(y8), static_cast<int>(u8),
-                       static_cast<int>(v8), fullRange, yuvMatrix, r, g, b);
+              yuvToRgb(yAvg, uAvg, vAvg, fullRange, bitDepth, yuvMatrix,
+                       yuvTransfer, r, g, b);
               dstRow[x] = packRGBA(r, g, b, 255);
             } else {
               dstRow[x] = packRGBA(0, 0, 0, 0);
@@ -1423,15 +1492,18 @@ bool renderAsciiArtFromRgba(const uint8_t* rgba, int width, int height,
 
 bool renderAsciiArtFromYuv(const uint8_t* data, int width, int height,
                            int stride, int planeHeight, YuvFormat format,
-                           bool fullRange, uint32_t yuvMatrix, int maxWidth,
+                           bool fullRange, YuvMatrix yuvMatrix,
+                           YuvTransfer yuvTransfer, int maxWidth,
                            int maxHeight, AsciiArt& out) {
   static thread_local BrailleFastScratch scratch;
   if (format == YuvFormat::P010) {
     return renderAsciiArtFromYuvImpl<true>(data, width, height, stride,
                                            planeHeight, fullRange, yuvMatrix,
-                                           maxWidth, maxHeight, out, scratch);
+                                           yuvTransfer, maxWidth, maxHeight,
+                                           out, scratch);
   }
   return renderAsciiArtFromYuvImpl<false>(data, width, height, stride,
                                           planeHeight, fullRange, yuvMatrix,
-                                          maxWidth, maxHeight, out, scratch);
+                                          yuvTransfer, maxWidth, maxHeight,
+                                          out, scratch);
 }
