@@ -79,6 +79,11 @@ struct PerfLog {
   bool enabled = false;
 };
 
+GpuAsciiRenderer& sharedGpuRenderer() {
+  static GpuAsciiRenderer renderer;
+  return renderer;
+}
+
 const GateScope kGateFrameFirst{true, "frame", "first"};
 const GateScope kGateAudioStart{true, "audio", "start"};
 const GateScope kGatePresentFirst{false, "present", "first"};
@@ -353,7 +358,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   bool videoEnded = false;
   bool redraw = true;
   AsciiArt art;
-  GpuAsciiRenderer gpuRenderer;
+  GpuAsciiRenderer& gpuRenderer = sharedGpuRenderer();
   bool gpuAvailable = true;
   VideoFrame* frame = nullptr;
   size_t currentFrameIndex = 0;

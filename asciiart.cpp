@@ -928,7 +928,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             // Base threshold (DELTA in ts)
             // This is the minimum luma difference required for a pixel to be considered "foreground".
             // A value of 30 (out of 255) provides a good balance between sensitivity and noise rejection.
-            int baseThreshold = 30;
+            int baseThreshold = 26;
             
             for (int i = 0; i < 8; ++i) {
               if (!validVals[i]) continue;
@@ -939,9 +939,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // Edge-aware threshold modulation:
               // In areas with strong edges (high detail), we lower the threshold to capture more subtle features.
               // In flat areas (low edge), we keep the threshold high to suppress noise.
-              // Formula: threshold = max(10, base - 0.2 * edge)
+              // Formula: threshold = max(10, base - 0.3 * edge)
               // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
-              int threshold = std::max(10, baseThreshold - (edge * 51 / 255)); // 0.2 * 255 ~= 51
+              int threshold = std::max(10, baseThreshold - (edge * 77 / 255)); // 0.3 * 255 ~= 77
 
               // Check against hybrid background luminance:
               // Mix global and local background based on local detail.
@@ -1038,10 +1038,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int signalStrength = std::max(edgeSig, lumSig);
               // Spatial stabilization: borrow strength from nearby detail.
               int neighborMax = signalStrength;
-              int ny0 = std::max(0, cy - 1);
-              int ny1 = std::min(outH - 1, cy + 1);
-              int nx0 = std::max(0, cx - 1);
-              int nx1 = std::min(outW - 1, cx + 1);
+              int ny0 = std::max(0, cy - 2);
+              int ny1 = std::min(outH - 1, cy + 2);
+              int nx0 = std::max(0, cx - 2);
+              int nx1 = std::min(outW - 1, cx + 2);
               for (int ny = ny0; ny <= ny1; ++ny) {
                 size_t row = static_cast<size_t>(ny) * outW;
                 for (int nx = nx0; nx <= nx1; ++nx) {

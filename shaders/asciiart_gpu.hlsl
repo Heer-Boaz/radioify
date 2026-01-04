@@ -525,16 +525,16 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     // Base threshold (DELTA in ts)
     // This is the minimum luma difference required for a pixel to be considered "foreground".
-    // A value of 30.0f (out of 255) provides a good balance between sensitivity and noise rejection.
-    float baseThreshold = 30.0f; 
+    // A value of 26.0f (out of 255) increases sensitivity without much extra noise.
+    float baseThreshold = 26.0f; 
 
     for (int j = 0; j < 8; ++j) {
         // Edge-aware threshold modulation:
         // In areas with strong edges (high detail), we lower the threshold to capture more subtle features.
         // In flat areas (low edge), we keep the threshold high to suppress noise.
-        // Formula: threshold = max(10, base - 0.2 * edge)
+        // Formula: threshold = max(10, base - 0.3 * edge)
         // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
-        float threshold = max(10.0f, baseThreshold - dots[j].edge * 0.2f);
+        float threshold = max(10.0f, baseThreshold - dots[j].edge * 0.3f);
 
         // Check against hybrid background luminance:
         // Mix global and local background based on local detail.
@@ -549,7 +549,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         float offThreshold = max(6.0f, threshold - hysteresis);
         bool isDot = wasOn ? (lumDiff >= offThreshold) : (lumDiff >= onThreshold);
 
-        // Accumulate colors for Foreground (Ink) and Background calculation later.
         if (isDot) {
             bitmask |= (1 << bit);
             sumInk += dots[j].color;
@@ -593,10 +592,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Spatial stabilization: borrow strength from nearby detail.
     uint signalStrengthU = (uint)(signalStrength * 255.0f + 0.5f);
     uint neighborMax = signalStrengthU;
-    int ny0 = max((int)DTid.y - 1, 0);
-    int ny1 = min((int)DTid.y + 1, (int)outHeight - 1);
-    int nx0 = max((int)DTid.x - 1, 0);
-    int nx1 = min((int)DTid.x + 1, (int)outWidth - 1);
+    int ny0 = max((int)DTid.y - 2, 0);
+    int ny1 = min((int)DTid.y + 2, (int)outHeight - 1);
+    int nx0 = max((int)DTid.x - 2, 0);
+    int nx1 = min((int)DTid.x + 2, (int)outWidth - 1);
     for (int ny = ny0; ny <= ny1; ++ny) {
         uint row = (uint)ny * outWidth;
         for (int nx = nx0; nx <= nx1; ++nx) {

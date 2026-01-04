@@ -24,6 +24,33 @@ std::string ffmpegError(int err) {
   return std::string(buf);
 }
 
+constexpr int64_t kProbeSize = 64 * 1024;
+constexpr int64_t kAnalyzeDurationFastUs = 500000;
+constexpr int64_t kAnalyzeDurationFallbackUs = 5000000;
+
+bool openInputWithProbe(const std::filesystem::path& path,
+                        int64_t analyzeDurationUs,
+                        AVFormatContext** outFmt,
+                        std::string* error) {
+  AVDictionary* options = nullptr;
+  av_dict_set_int(&options, "probesize", kProbeSize, 0);
+  av_dict_set_int(&options, "analyzeduration", analyzeDurationUs, 0);
+
+  int openErr =
+      avformat_open_input(outFmt, path.string().c_str(), nullptr, &options);
+  av_dict_free(&options);
+  if (openErr < 0) {
+    std::string msg = "Failed to open audio: " + ffmpegError(openErr);
+    setError(error, msg.c_str());
+    return false;
+  }
+
+  (*outFmt)->flags |= AVFMT_FLAG_NOBUFFER;
+  (*outFmt)->max_analyze_duration = analyzeDurationUs;
+  (*outFmt)->probesize = kProbeSize;
+  return true;
+}
+
 int64_t rescaleToFrames(int64_t value, AVRational src, uint32_t sampleRate) {
   if (value <= 0 || sampleRate == 0) return 0;
   AVRational dst{1, static_cast<int>(sampleRate)};
@@ -82,30 +109,24 @@ bool FfmpegAudioDecoder::init(const std::filesystem::path& path,
   uninit();
 
   AVFormatContext* fmt = nullptr;
-  AVDictionary* options = nullptr;
-  av_dict_set_int(&options, "probesize", 64 * 1024, 0);
-  av_dict_set_int(&options, "analyzeduration", 0, 0);
-
-  int openErr = avformat_open_input(&fmt, path.string().c_str(), nullptr,
-                                    &options);
-  av_dict_free(&options);
-  if (openErr < 0) {
-    std::string msg = "Failed to open audio: " + ffmpegError(openErr);
-    setError(error, msg.c_str());
+  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, error)) {
     return false;
   }
 
-  fmt->flags |= AVFMT_FLAG_NOBUFFER;
-  fmt->max_analyze_duration = 0;
-  fmt->probesize = 64 * 1024;
-
   int infoErr = avformat_find_stream_info(fmt, nullptr);
   if (infoErr < 0) {
-    std::string msg = "Failed to read audio stream info: " +
-                      ffmpegError(infoErr);
     avformat_close_input(&fmt);
-    setError(error, msg.c_str());
-    return false;
+    if (!openInputWithProbe(path, kAnalyzeDurationFallbackUs, &fmt, error)) {
+      return false;
+    }
+    infoErr = avformat_find_stream_info(fmt, nullptr);
+    if (infoErr < 0) {
+      std::string msg = "Failed to read audio stream info: " +
+                        ffmpegError(infoErr);
+      avformat_close_input(&fmt);
+      setError(error, msg.c_str());
+      return false;
+    }
   }
 
   const AVCodec* codec = nullptr;
