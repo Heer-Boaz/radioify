@@ -67,6 +67,7 @@ static const int kBgAlpha = 140;    // Reduced from 180 for more stability
 static const int kInkMinLuma = 40;  // Reduced from 110 to allow dark details
 static const int kBgMinLuma = 10;   // Reduced from 20
 static const int kInkMaxScale = 1280;
+static const float kSignalStrengthFloor = 0.2f;
 static const int kEdgeMin = 4; // Reverted to 4 for sensitivity, noise handled by logic
 static const int kEdgeBoost = 245;
 static const int kDitherBias = 48;
@@ -522,11 +523,13 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f); 
     float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);   
     float signalStrength = max(edgeSig, lumSig);
+    float blendStrength = kSignalStrengthFloor +
+                          (1.0f - kSignalStrengthFloor) * signalStrength;
 
     // Dampening (Noise Hiding):
     // If signalStrength is low, we interpolate curFg towards curBg.
     // This effectively "fades out" noise into the background.
-    curFg = lerp(curBg, curFg, signalStrength);
+    curFg = lerp(curBg, curFg, blendStrength);
 
     // Boosting (Detail Pop):
     // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.

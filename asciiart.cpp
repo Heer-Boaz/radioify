@@ -73,6 +73,7 @@ constexpr std::array<wchar_t, 9> kDotCountToChar = {
 constexpr bool kUseHybridMode = false;  // Disable hybrid - braille is better
 constexpr int kMinContrastForBraille =
     15;  // Use braille when cell has this much contrast
+constexpr int kSignalStrengthFloor = 51;  // Keep faint details visible
 
 // Direct YUV conversie zonder sRGB linearisering
 // Rec. 709 coefficients als integer fixed-point (<<16 voor precision)
@@ -975,13 +976,24 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
               int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
               int signalStrength = std::max(edgeSig, lumSig);
+              int blendStrength = kSignalStrengthFloor +
+                                  ((signalStrength *
+                                        (255 - kSignalStrengthFloor) +
+                                    127) /
+                                   255);
 
               // Dampening (Noise Hiding):
               // If signalStrength is low, we interpolate curFg towards curBg.
               // This effectively "fades out" noise into the background.
-              curR = static_cast<uint8_t>(bgR + ((curR - bgR) * signalStrength >> 8));
-              curG = static_cast<uint8_t>(bgG + ((curG - bgG) * signalStrength >> 8));
-              curB = static_cast<uint8_t>(bgB + ((curB - bgB) * signalStrength >> 8));
+              curR =
+                  static_cast<uint8_t>(bgR +
+                                       ((curR - bgR) * blendStrength >> 8));
+              curG =
+                  static_cast<uint8_t>(bgG +
+                                       ((curG - bgG) * blendStrength >> 8));
+              curB =
+                  static_cast<uint8_t>(bgB +
+                                       ((curB - bgB) * blendStrength >> 8));
 
               // Boosting (Detail Pop):
               // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.
