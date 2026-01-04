@@ -33,6 +33,10 @@ struct AsciiCell {
 
 RWStructuredBuffer<AsciiCell> OutputBuffer : register(u0);
 RWStructuredBuffer<uint2> HistoryBuffer : register(u1); // x=Fg, y=Bg (packed)
+RWStructuredBuffer<uint> MetaBuffer : register(u2); // [7:0]=signalStrength, [8]=useDither, [12:9]=dotCount
+
+StructuredBuffer<uint2> HistoryBufferRead : register(t3);
+StructuredBuffer<uint> MetaBufferRead : register(t4);
 
 static const uint kBrailleBase = 0x2800;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
@@ -55,6 +59,7 @@ static const int kInkMaxScale = 1280;
 static const float kSignalStrengthFloor = 0.2f;
 #define BG_CLAMP 1
 #define BG_CLAMP_DEBUG 0
+#define BG_CLAMP_DEBUG_VIS 0
 
 // Dithering thresholds (optimized for 2x4 braille)
 // Ranks: 0, 4, 2, 6, 1, 5, 3, 7
@@ -85,6 +90,19 @@ float3 UnpackColor(uint c) {
 
 float GetLuma(float3 c) {
     return dot(c, kLumaCoeff) * 255.0f;
+}
+
+float Median9(float v[9]) {
+    for (int i = 1; i < 9; ++i) {
+        float key = v[i];
+        int j = i - 1;
+        while (j >= 0 && v[j] > key) {
+            v[j + 1] = v[j];
+            --j;
+        }
+        v[j + 1] = key;
+    }
+    return v[4];
 }
 
 float GetMaxCode() {
@@ -568,6 +586,12 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     }
     curFg = saturate(curY/255.0f + (curFg - curY/255.0f) * (adaptiveSat / 256.0f));
 
+    // Temporal Stability (Ghosting Reduction)
+    // We blend the current frame's color with the previous frame's color to reduce flickering.
+    // However, too much blending causes "ghosting" (trails behind moving objects).
+    float3 prevFg = UnpackColor(history.x);
+    float3 prevBg = UnpackColor(history.y);
+
     // Luma Correction (Bg)
     // Ensure background isn't too dark.
     float bgY = GetLuma(curBg);
@@ -579,34 +603,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             curBg = min(1.0f, (curBg * scale) / 256.0f);
         }
     }
-
-    // Temporal Stability (Ghosting Reduction)
-    // We blend the current frame's color with the previous frame's color to reduce flickering.
-    // However, too much blending causes "ghosting" (trails behind moving objects).
-    float3 prevFg = UnpackColor(history.x);
-    float3 prevBg = UnpackColor(history.y);
-
-#if BG_CLAMP_DEBUG
-    bool bgClampApplied = false;
-#endif
-#if BG_CLAMP
-    if (yuvTransfer == kTransferSdr && !useDither && inkCount <= 2 &&
-        signalStrength < 0.25f) {
-        float curBgY = GetLuma(curBg);
-        float refBgY = cellBgLum;
-        float jump = abs(curBgY - refBgY);
-        if (jump > 8.0f) {
-            float t = saturate((jump - 8.0f) / 24.0f);
-            float k = lerp(0.85f, 0.60f, t);
-            float newBgY = refBgY + (curBgY - refBgY) * k;
-            float scale = newBgY / max(curBgY, 1e-3f);
-            curBg = saturate(curBg * scale);
-#if BG_CLAMP_DEBUG
-            bgClampApplied = true;
-#endif
-        }
-    }
-#endif
     
     // Calculate perceptual distance to decide if we should reset (cut) or blend.
     float diffFg = dot(abs(curFg - prevFg), kLumaCoeff);
@@ -639,6 +635,13 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         }
     }
 
+    uint meta = (uint)min(255.0f, signalStrength * 255.0f + 0.5f);
+    if (useDither) {
+        meta |= 0x100u;
+    }
+    meta |= (dotCount & 0xFu) << 9;
+    MetaBuffer[cellIndex] = meta;
+
     // Write back history for the next frame
     uint fg24 = PackColor(curFg) & 0x00FFFFFF;
     HistoryBuffer[cellIndex] = uint2(fg24 | (bitmask << 24), PackColor(curBg));
@@ -655,12 +658,118 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (hasBg == 0u && GetLuma(curBg) > 10.0f) {
         hasBg = 1u;
     }
-#if BG_CLAMP_DEBUG
-    if (bgClampApplied) {
-        hasBg |= 2u;
-    }
-#endif
     cell.hasBg = hasBg;
 
     OutputBuffer[cellIndex] = cell;
+}
+
+[numthreads(8, 8, 1)]
+void CSBgClamp(uint3 DTid : SV_DispatchThreadID) {
+    if (DTid.x >= outWidth || DTid.y >= outHeight) {
+        return;
+    }
+
+#if !BG_CLAMP
+    return;
+#endif
+
+    if (yuvTransfer != kTransferSdr) {
+        return;
+    }
+
+    uint cellIndex = DTid.y * outWidth + DTid.x;
+    uint meta = MetaBufferRead[cellIndex];
+    uint dotCount = (meta >> 9) & 0xFu;
+    bool useDither = (meta & 0x100u) != 0u;
+    float signalStrength = (float)(meta & 0xFFu) / 255.0f;
+
+    AsciiCell cell = OutputBuffer[cellIndex];
+    if ((cell.hasBg & 1u) == 0u) {
+        return;
+    }
+
+    float3 curBg = UnpackColor(cell.bg);
+    float curBgY = GetLuma(curBg);
+    if (curBgY <= 0.0f) {
+        return;
+    }
+
+    float curFgY = GetLuma(UnpackColor(cell.fg));
+    if (curBgY <= curFgY + 4.0f) {
+        return;
+    }
+
+    float bright = saturate((curBgY - 96.0f) / 64.0f);
+    uint dotLimit = 2u;
+    if (bright > 0.8f) {
+        dotLimit = 4u;
+    } else if (bright > 0.4f) {
+        dotLimit = 3u;
+    }
+    float maxSignal = 0.30f + 0.40f * bright;
+    if (dotCount > dotLimit || useDither || signalStrength >= maxSignal) {
+        return;
+    }
+
+    float neighborY[9];
+    int n = 0;
+    [unroll]
+    for (int oy = -1; oy <= 1; ++oy) {
+        int ny = (int)DTid.y + oy;
+        ny = min(max(ny, 0), (int)outHeight - 1);
+        [unroll]
+        for (int ox = -1; ox <= 1; ++ox) {
+            int nx = (int)DTid.x + ox;
+            nx = min(max(nx, 0), (int)outWidth - 1);
+            uint nIndex = (uint)(ny * (int)outWidth + nx);
+            float3 nBg = UnpackColor(HistoryBufferRead[nIndex].y);
+            neighborY[n++] = GetLuma(nBg);
+        }
+    }
+
+    float median = Median9(neighborY);
+    float delta = curBgY - median;
+    float jumpThreshold = 8.0f - 3.0f * bright;
+    if (abs(delta) <= jumpThreshold) {
+        return;
+    }
+
+    float maxDelta = 12.0f - 4.0f * bright;
+    float clampedDelta = clamp(delta, -maxDelta, maxDelta);
+    float newBgY = median + clampedDelta;
+    newBgY = max(newBgY, (float)kBgMinLuma);
+    float scale = newBgY / curBgY;
+    curBg = saturate(curBg * scale);
+    float lift = (float)kColorLift / 255.0f;
+    curBg = max(curBg, lift.xxx);
+
+#if BG_CLAMP_DEBUG_VIS
+    cell.fg = PackColor(float3(1.0f, 1.0f, 1.0f));
+    cell.bg = PackColor(float3(1.0f, 0.0f, 1.0f));
+    cell.hasBg |= 1u;
+#else
+    cell.bg = PackColor(curBg);
+#endif
+
+#if BG_CLAMP_DEBUG
+    cell.hasBg |= 2u;
+#endif
+
+    OutputBuffer[cellIndex] = cell;
+}
+
+[numthreads(8, 8, 1)]
+void CSSyncHistory(uint3 DTid : SV_DispatchThreadID) {
+    if (DTid.x >= outWidth || DTid.y >= outHeight) {
+        return;
+    }
+
+    uint cellIndex = DTid.y * outWidth + DTid.x;
+    AsciiCell cell = OutputBuffer[cellIndex];
+    uint bitmask = 0u;
+    if (cell.ch >= kBrailleBase && cell.ch <= (kBrailleBase + 0xFFu)) {
+        bitmask = cell.ch - kBrailleBase;
+    }
+    uint fg24 = cell.fg & 0x00FFFFFFu;
+    HistoryBuffer[cellIndex] = uint2(fg24 | (bitmask << 24), cell.bg);
 }

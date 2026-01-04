@@ -37,6 +37,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_computeShader;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_computeShaderNV12;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_statsShader;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_bgClampShader;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_syncHistoryShader;
 
     // Resources
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_inputTexture;
@@ -53,6 +55,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_outputUAV;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputStagingBuffer;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_metaBuffer;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_metaUAV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_metaSRV;
 
     // Stats Buffer
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_statsBuffer;
@@ -62,6 +67,7 @@ private:
     // History for temporal stability
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_historyBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_historyUAV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_historySRV;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
 
