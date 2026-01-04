@@ -8,10 +8,13 @@ add_executable(radioify
   main.cpp
   asciiart.cpp
   asciiart_gpu.cpp
+  audioplayback.cpp
   consoleinput.cpp
   consolescreen.cpp
   ffmpegaudio.cpp
   m4adecoder.cpp
+  ui_helpers.cpp
+  videoplayback.cpp
   videodecoder.cpp
   radio.cpp
 )
