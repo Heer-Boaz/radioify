@@ -962,6 +962,19 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                             : 0;
             if (avgLumDiff > 255) avgLumDiff = 255;
 
+            if (!useLocalThreshold) {
+              uint8_t coverage =
+                  kInkLevelFromLum[static_cast<size_t>(rawDiff)];
+              int ditherMask = 0;
+              for (int i = 0; i < 8; ++i) {
+                if (!validVals[i]) continue;
+                if (coverage > kDitherThresholdByBit[bitIds[i]]) {
+                  ditherMask |= (1 << bitIds[i]);
+                }
+              }
+              bitmask = ditherMask;
+            }
+
             size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
             uint8_t outR = 0;
             uint8_t outG = 0;

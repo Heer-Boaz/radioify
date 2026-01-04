@@ -340,8 +340,9 @@ void CSDetail(uint3 DTid : SV_DispatchThreadID) {
     float cellEdgeMax = 0.0f;
 
     for (int i = 0; i < 8; ++i) {
-        int col = i / 4;
-        int row = i % 4;
+        uint ui = (uint)i;
+        uint col = ui >> 2;
+        uint row = ui & 3u;
         
         float u = (DTid.x * cellW + col * dotW + dotW * 0.5f) / width;
         float v = (DTid.y * cellH + row * dotH + dotH * 0.5f) / height;
@@ -423,8 +424,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     // 1. Gather Data
     for (int i = 0; i < 8; ++i) {
-        int col = i / 4;
-        int row = i % 4;
+        uint ui = (uint)i;
+        uint col = ui >> 2;
+        uint row = ui & 3u;
         
         float u = (DTid.x * cellW + col * dotW + dotW * 0.5f) / width;
         float v = (DTid.y * cellH + row * dotH + dotH * 0.5f) / height;
@@ -562,6 +564,36 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Calculate stats for contrast logic
     float cellLumMean = cellLumSum / 8.0f;
     float avgLumDiff = abs(cellLumMean - effectiveBgLum);
+
+    bool useDither = (cellRange <= 20.0f);
+    if (useDither) {
+        float coverage = GetInkLevelFromLum(avgLumDiff);
+        float coverageU = coverage * 255.0f;
+        uint ditherMask = 0;
+        [unroll]
+        for (int k = 0; k < 8; ++k) {
+            uint bit = (uint)bitMap[dots[k].idx];
+            if (coverageU > (float)kDitherThresholdByBit[bit]) {
+                ditherMask |= (1u << bit);
+            }
+        }
+        bitmask = ditherMask;
+        sumInk = float3(0,0,0);
+        sumBg = float3(0,0,0);
+        inkCount = 0;
+        bgCount = 0;
+        [unroll]
+        for (int k2 = 0; k2 < 8; ++k2) {
+            uint bit = (uint)bitMap[dots[k2].idx];
+            if (bitmask & (1u << bit)) {
+                sumInk += dots[k2].color;
+                inkCount++;
+            } else {
+                sumBg += dots[k2].color;
+                bgCount++;
+            }
+        }
+    }
 
     // 7. Color Processing
     // Determine the initial Foreground (Ink) and Background colors based on the dots identified above.

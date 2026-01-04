@@ -13,12 +13,35 @@ Install deps (FFmpeg via vcpkg):
 ```powershell
 ./build.ps1 -InstallDeps
 ```
+Static deps (FFmpeg via vcpkg):
+```powershell
+./build.ps1 -InstallDeps -Static
+```
 If `vcpkg` complains about an invalid Visual Studio instance, install the C++ build tools ("Desktop development with C++") and retry.
 
 Build:
 ```powershell
 ./build.ps1
 ```
+
+Clean build:
+```powershell
+./build.ps1 -Clean
+```
+This removes `build` and `dist`.
+
+Rebuild (clean + build):
+```powershell
+./build.ps1 -Rebuild
+```
+
+Static build (no FFmpeg DLLs copied to `dist`):
+```powershell
+./build.ps1 -Static
+```
+By default this uses `x64-windows-static` and will override a non-static
+`VCPKG_TARGET_TRIPLET`. Set `VCPKG_TARGET_TRIPLET` to
+`arm64-windows-static` or `x86-windows-static` if needed.
 
 Or:
 ```sh

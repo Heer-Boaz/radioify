@@ -2,6 +2,8 @@ param(
   [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
   [string]$Config = "Release",
   [switch]$Clean,
+  [switch]$Rebuild,
+  [switch]$Static,
   [switch]$InstallDeps
 )
 
@@ -38,6 +40,46 @@ function Resolve-VcpkgExe {
   if ($cmd) { return $cmd.Source }
 
   return $null
+}
+
+function Resolve-TargetArch {
+  $arch = $env:VSCMD_ARG_TGT_ARCH
+  if (-not $arch) { $arch = $env:Platform }
+  if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
+  if (-not $arch) { return "x64" }
+
+  $archLower = $arch.ToLower()
+  if ($archLower -eq "win32") { return "x86" }
+  if ($archLower -eq "amd64") { return "x64" }
+  if ($archLower -eq "arm64") { return "arm64" }
+  if ($archLower -eq "x86") { return "x86" }
+  if ($archLower -eq "x64") { return "x64" }
+  return "x64"
+}
+
+function Resolve-StaticTriplet {
+  param([string]$Arch)
+  if (-not $Arch) { $Arch = Resolve-TargetArch }
+  return "$Arch-windows-static"
+}
+
+function Is-StaticTriplet {
+  param([string]$Triplet)
+  if (-not $Triplet) { return $false }
+  return $Triplet -match "-static"
+}
+
+function Convert-ToStaticTriplet {
+  param([string]$Triplet)
+  if (-not $Triplet) { return Resolve-StaticTriplet }
+  if (Is-StaticTriplet $Triplet) { return $Triplet }
+  if ($Triplet -match "^(.*)-windows-md$") {
+    return "$($matches[1])-windows-static-md"
+  }
+  if ($Triplet -match "^(.*)-windows$") {
+    return "$($matches[1])-windows-static"
+  }
+  return Resolve-StaticTriplet
 }
 
 function Copy-FfmpegRuntime {
@@ -82,13 +124,44 @@ Write-Host "Using CMake: $cmake"
 
 $root = $PSScriptRoot
 $buildDir = Join-Path $root "build"
+$distDir = Join-Path $root "dist"
+
+if ($Rebuild) {
+  $Clean = $true
+}
 
 if ($Clean -and (Test-Path $buildDir)) {
   Remove-Item -Recurse -Force $buildDir
 }
+if ($Clean -and (Test-Path $distDir)) {
+  Remove-Item -Recurse -Force $distDir
+}
+if ($Clean -and -not $Rebuild) {
+  Write-Host "Cleaned build directory: $buildDir"
+  Write-Host "Cleaned dist directory: $distDir"
+  exit 0
+}
 
 $vcpkgRoot = Resolve-VcpkgRoot
 $vcpkgExe = Resolve-VcpkgExe -VcpkgRoot $vcpkgRoot
+
+$tripletStaticRequested = $false
+if ($Static) {
+  $requestedTriplet = $env:VCPKG_TARGET_TRIPLET
+  $staticTriplet = Convert-ToStaticTriplet $requestedTriplet
+  if ($requestedTriplet -and ($staticTriplet -ne $requestedTriplet)) {
+    Write-Host "Static build: overriding VCPKG_TARGET_TRIPLET '$requestedTriplet' -> '$staticTriplet'"
+  }
+  $env:VCPKG_TARGET_TRIPLET = $staticTriplet
+  $requestedDefaultTriplet = $env:VCPKG_DEFAULT_TRIPLET
+  if (-not $requestedDefaultTriplet -or -not (Is-StaticTriplet $requestedDefaultTriplet)) {
+    if ($requestedDefaultTriplet -and ($requestedDefaultTriplet -ne $staticTriplet)) {
+      Write-Host "Static build: overriding VCPKG_DEFAULT_TRIPLET '$requestedDefaultTriplet' -> '$staticTriplet'"
+    }
+    $env:VCPKG_DEFAULT_TRIPLET = $staticTriplet
+  }
+  $tripletStaticRequested = $true
+}
 
 if ($InstallDeps) {
   if (-not $vcpkgExe) {
@@ -135,6 +208,9 @@ if ($vcpkgRoot) {
 }
 if ($installedRoot) {
   $cmakeArgs += "-DVCPKG_INSTALLED_DIR=$installedRoot"
+}
+if ($env:VCPKG_TARGET_TRIPLET) {
+  $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
 }
 
 $buildArgs = @("--build", $buildDir, "--config", $Config)
@@ -183,7 +259,10 @@ if ($LASTEXITCODE -ne 0) {
 & $cmake @buildArgs
 $buildExit = $LASTEXITCODE
 if ($buildExit -eq 0) {
-  Copy-FfmpegRuntime -TripletDir $ffmpegTripletDir -Config $Config -DistDir (Join-Path $root "dist")
+  $staticTriplet = $tripletStaticRequested -or (Is-StaticTriplet $env:VCPKG_TARGET_TRIPLET) -or (Is-StaticTriplet $env:VCPKG_DEFAULT_TRIPLET)
+  if (-not $Static -and -not $staticTriplet) {
+    Copy-FfmpegRuntime -TripletDir $ffmpegTripletDir -Config $Config -DistDir (Join-Path $root "dist")
+  }
 }
 
 exit $buildExit
