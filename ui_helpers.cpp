@@ -29,9 +29,9 @@ std::string formatTime(double seconds) {
   return buf;
 }
 
-static float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
+float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
 
-static Color lerpColor(const Color& a, const Color& b, float t) {
+Color lerpColor(const Color& a, const Color& b, float t) {
   float tt = clamp01(t);
   Color out;
   out.r = static_cast<uint8_t>(std::lround(a.r + (b.r - a.r) * tt));

@@ -19,11 +19,20 @@
 #include "ffmpegaudio.h"
 #include "radio.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_ENABLE_WAV
 #define MA_ENABLE_MP3
 #define MA_ENABLE_FLAC
 #include "miniaudio.h"
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 
 #ifndef RADIOIFY_ENABLE_TIMING_LOG
 #define RADIOIFY_ENABLE_TIMING_LOG 0
@@ -168,6 +177,7 @@ struct AudioState {
   std::atomic<bool> m4aStop{false};
   std::atomic<bool> m4aAtEnd{false};
   std::atomic<bool> paused{false};
+  std::atomic<bool> hold{false};
   std::atomic<bool> finished{false};
   std::atomic<bool> useRadio1938{true};
   std::atomic<bool> usingFfmpeg{false};
@@ -221,6 +231,13 @@ void dataCallback(ma_device* device, void* output, const void*,
   state->framesRequested.fetch_add(frameCount, std::memory_order_relaxed);
   state->lastCallbackFrames.store(frameCount, std::memory_order_relaxed);
   state->audioPrimed.store(true, std::memory_order_relaxed);
+
+  if (state->hold.load()) {
+    state->silentFrames.fetch_add(frameCount, std::memory_order_relaxed);
+    state->lastFramesRead.store(0, std::memory_order_relaxed);
+    std::fill(out, out + frameCount * state->channels, 0.0f);
+    return;
+  }
 
   bool usingFfmpeg = state->usingFfmpeg.load();
   if (!usingFfmpeg && state->seekRequested.exchange(false)) {
@@ -777,6 +794,8 @@ void stopPlayback() {
   gAudio.state.seekRequested.store(false);
   gAudio.state.pendingSeekFrames.store(0);
   gAudio.state.audioPrimed.store(false);
+  gAudio.state.paused.store(false);
+  gAudio.state.hold.store(false);
   gAudio.nowPlaying.clear();
 }
 }  // namespace
@@ -818,6 +837,17 @@ bool audioIsReady() { return gAudio.decoderReady; }
 bool audioStartFile(const std::filesystem::path& file) {
   if (!gAudio.enableAudio) return false;
   return loadFile(file);
+}
+
+bool audioStartFileAt(const std::filesystem::path& file, double startSec) {
+  if (!gAudio.enableAudio) return false;
+  if (!std::isfinite(startSec) || startSec <= 0.0) {
+    return loadFile(file);
+  }
+  double framesDouble = startSec * static_cast<double>(gAudio.sampleRate);
+  int64_t startFrame = static_cast<int64_t>(std::llround(framesDouble));
+  if (startFrame < 0) startFrame = 0;
+  return loadFileAt(file, static_cast<uint64_t>(startFrame));
 }
 
 void audioStop() { stopPlayback(); }
@@ -904,6 +934,11 @@ bool audioIsFinished() {
 
 bool audioIsRadioEnabled() { return gAudio.state.useRadio1938.load(); }
 
+bool audioIsHolding() {
+  if (!gAudio.enableAudio) return false;
+  return gAudio.state.hold.load();
+}
+
 AudioPerfStats audioGetPerfStats() {
   AudioPerfStats stats{};
   if (!gAudio.decoderReady || !gAudio.enableAudio) {
@@ -967,10 +1002,32 @@ void audioSeekToRatio(double ratio) {
   gAudio.state.m4aCv.notify_all();
 }
 
+void audioSeekToSec(double sec) {
+  if (!gAudio.decoderReady || !gAudio.enableAudio) return;
+  if (!std::isfinite(sec)) return;
+  int64_t target =
+      static_cast<int64_t>(std::llround(sec * gAudio.sampleRate));
+  if (target < 0) target = 0;
+  uint64_t total = gAudio.state.totalFrames.load();
+  if (total > 0 && static_cast<uint64_t>(target) > total) {
+    target = static_cast<int64_t>(total);
+  }
+  gAudio.state.pendingSeekFrames.store(target);
+  gAudio.state.seekRequested.store(true);
+  gAudio.state.finished.store(false);
+  gAudio.state.audioPrimed.store(false);
+  gAudio.state.m4aCv.notify_all();
+}
+
 void audioToggleRadio() {
   bool next = !gAudio.state.useRadio1938.load();
   gAudio.state.useRadio1938.store(next);
   if (!gAudio.enableAudio) return;
   uint32_t desired = next ? 1u : gAudio.baseChannels;
   ensureChannels(desired);
+}
+
+void audioSetHold(bool hold) {
+  if (!gAudio.enableAudio) return;
+  gAudio.state.hold.store(hold);
 }

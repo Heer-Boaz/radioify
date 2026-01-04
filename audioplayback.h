@@ -35,6 +35,7 @@ bool audioIsEnabled();
 bool audioIsReady();
 
 bool audioStartFile(const std::filesystem::path& file);
+bool audioStartFileAt(const std::filesystem::path& file, double startSec);
 void audioStop();
 
 std::filesystem::path audioGetNowPlaying();
@@ -46,10 +47,13 @@ bool audioIsPrimed();
 bool audioIsPaused();
 bool audioIsFinished();
 bool audioIsRadioEnabled();
+bool audioIsHolding();
 
 AudioPerfStats audioGetPerfStats();
 
 void audioTogglePause();
 void audioSeekBy(int direction);
 void audioSeekToRatio(double ratio);
+void audioSeekToSec(double sec);
 void audioToggleRadio();
+void audioSetHold(bool hold);
