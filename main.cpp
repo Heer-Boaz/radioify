@@ -784,6 +784,9 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   std::atomic<bool> decodeFailed{false};
 
   bool audioOk = false;
+  bool audioStarting = static_cast<bool>(hooks.startAudio);
+  double audioSyncBiasSec = 0.0;
+  bool audioSyncBiasValid = false;
   bool running = true;
   bool videoEnded = false;
   bool redraw = true;
@@ -821,6 +824,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
   uint64_t pendingSeekEpoch = 0;
   double pendingSeekTargetSec = 0.0;
   bool pendingSeekAdjustWallClock = false;
+  double pendingSeekHoldSec = 0.0;
+  auto pendingSeekHoldUntil = std::chrono::steady_clock::time_point::min();
   uint64_t pendingResizeEpoch = 0;
   bool pendingResizeRepause = false;
   auto resumeGraceUntil = std::chrono::steady_clock::time_point::min();
@@ -907,27 +912,6 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     }
     commandPendingAtomic.store(true);
     queueCv.notify_all();
-  };
-
-  auto waitForFrame = [&](QueuedFrame& out, uint64_t minEpoch) -> bool {
-    std::unique_lock<std::mutex> lock(queueMutex);
-    while (true) {
-      queueCv.wait(lock,
-                   [&]() { return !frameQueue.empty() || decodeEnded.load(); });
-      while (!frameQueue.empty()) {
-        QueuedFrame candidate = std::move(frameQueue.front());
-        frameQueue.pop_front();
-        if (candidate.epoch >= minEpoch) {
-          out = std::move(candidate);
-          return true;
-        }
-        freeFrames.push_back(candidate.poolIndex);
-        queueCv.notify_all();
-      }
-      if (decodeEnded.load()) {
-        return false;
-      }
-    }
   };
 
   auto tryPopFrame = [&](QueuedFrame& out, uint64_t minEpoch) -> bool {
@@ -1497,10 +1481,92 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     });
   };
 
+  constexpr auto kPrepRedrawInterval = std::chrono::milliseconds(120);
+  constexpr double kPrepPulseSeconds = 1.6;
+  auto renderPreparingScreen = [&](double progress) {
+    screen.updateSize();
+    int width = std::max(20, screen.width());
+    int height = std::max(10, screen.height());
+    screen.clear(baseStyle);
+    std::string title = "Video: " + toUtf8String(file.filename());
+    screen.writeText(0, 0, fitLine(title, width), accentStyle);
+    std::string message = "Preparing video playback...";
+    int msgLine = std::clamp(height / 2, 1, std::max(1, height - 2));
+    int msgWidth = utf8CodepointCount(message);
+    if (msgWidth >= width) {
+      screen.writeText(0, msgLine, fitLine(message, width), dimStyle);
+    } else {
+      int msgX = (width - msgWidth) / 2;
+      screen.writeText(msgX, msgLine, message, dimStyle);
+    }
+    int barWidth = std::min(32, width - 6);
+    int barLine = msgLine + 1;
+    if (barWidth >= 5 && barLine < height) {
+      int barX = std::max(0, (width - (barWidth + 2)) / 2);
+      screen.writeChar(barX, barLine, L'|', progressFrameStyle);
+      auto barCells = renderProgressBarCells(progress, barWidth,
+                                             progressEmptyStyle, progressStart,
+                                             progressEnd);
+      for (int i = 0; i < barWidth; ++i) {
+        const auto& cell = barCells[static_cast<size_t>(i)];
+        screen.writeChar(barX + 1 + i, barLine, cell.ch, cell.style);
+      }
+      screen.writeChar(barX + 1 + barWidth, barLine, L'|',
+                       progressFrameStyle);
+    }
+    screen.draw();
+  };
+
   startDecodeThread();
-  {
-    std::unique_lock<std::mutex> lock(initMutex);
-    initCv.wait(lock, [&]() { return initDone; });
+  auto initStart = std::chrono::steady_clock::now();
+  auto lastInitDraw = std::chrono::steady_clock::time_point::min();
+  while (running) {
+    {
+      std::unique_lock<std::mutex> lock(initMutex);
+      if (initDone) {
+        break;
+      }
+      initCv.wait_for(lock, std::chrono::milliseconds(30),
+                      [&]() { return initDone; });
+      if (initDone) {
+        break;
+      }
+    }
+    auto now = std::chrono::steady_clock::now();
+    if (now - lastInitDraw >= kPrepRedrawInterval) {
+      double elapsed = std::chrono::duration<double>(now - initStart).count();
+      double phase = std::fmod(elapsed, kPrepPulseSeconds);
+      double ratio = (phase <= (kPrepPulseSeconds * 0.5))
+                         ? (phase / (kPrepPulseSeconds * 0.5))
+                         : ((kPrepPulseSeconds - phase) /
+                            (kPrepPulseSeconds * 0.5));
+      renderPreparingScreen(ratio);
+      lastInitDraw = now;
+    }
+    InputEvent ev{};
+    while (input.poll(ev)) {
+      if (ev.type == InputEvent::Type::Key) {
+        const KeyEvent& key = ev.key;
+        const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+        bool ctrl = (key.control & ctrlMask) != 0;
+        if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
+          running = false;
+          break;
+        }
+        if (key.vk == VK_ESCAPE || key.vk == 'Q' || key.ch == 'q' ||
+            key.ch == 'Q') {
+          running = false;
+          break;
+        }
+      } else if (ev.type == InputEvent::Type::Resize) {
+        lastInitDraw = std::chrono::steady_clock::time_point::min();
+      }
+    }
+  }
+  if (!running) {
+    stopDecodeThread();
+    if (audioOk && hooks.stopAudio) hooks.stopAudio();
+    return true;
   }
   if (!initOk) {
     stopDecodeThread();
@@ -1519,14 +1585,78 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     return showError(initError, "");
   }
 
-  // Start audio once the first frame is decoded so we can wait for audio
-  // to prime before presenting video.
-
   VideoReadInfo firstInfo{};
   uint64_t pendingScaleEpoch = 0;
 
   QueuedFrame firstQueued{};
-  if (!waitForFrame(firstQueued, pendingScaleEpoch)) {
+  bool haveFirstQueued = false;
+  constexpr size_t kPrepMinBufferedFrames = 2;
+  constexpr auto kPrepMaxWait = std::chrono::milliseconds(600);
+  auto prepStart = std::chrono::steady_clock::now();
+  auto lastPrepDraw = std::chrono::steady_clock::time_point::min();
+  while (running) {
+    if (!haveFirstQueued && tryPopFrame(firstQueued, pendingScaleEpoch)) {
+      haveFirstQueued = true;
+    }
+    if (haveFirstQueued) {
+      size_t bufferedFrames = 0;
+      {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        bufferedFrames = frameQueue.size();
+      }
+      bufferedFrames += 1;
+      if (bufferedFrames >= kPrepMinBufferedFrames ||
+          std::chrono::steady_clock::now() - prepStart >= kPrepMaxWait) {
+        break;
+      }
+    }
+    if (decodeEnded.load()) {
+      break;
+    }
+    auto now = std::chrono::steady_clock::now();
+    if (now - lastPrepDraw >= kPrepRedrawInterval) {
+      double elapsed = std::chrono::duration<double>(now - prepStart).count();
+      double phase = std::fmod(elapsed, kPrepPulseSeconds);
+      double halfPulse = kPrepPulseSeconds * 0.5;
+      double ratio =
+          (phase <= halfPulse) ? (phase / halfPulse)
+                               : ((kPrepPulseSeconds - phase) / halfPulse);
+      renderPreparingScreen(ratio);
+      lastPrepDraw = now;
+    }
+    InputEvent ev{};
+    while (input.poll(ev)) {
+      if (ev.type == InputEvent::Type::Key) {
+        const KeyEvent& key = ev.key;
+        const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+        bool ctrl = (key.control & ctrlMask) != 0;
+        if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
+          running = false;
+          break;
+        }
+        if (key.vk == VK_ESCAPE || key.vk == 'Q' || key.ch == 'q' ||
+            key.ch == 'Q') {
+          running = false;
+          break;
+        }
+      } else if (ev.type == InputEvent::Type::Resize) {
+        lastPrepDraw = std::chrono::steady_clock::time_point::min();
+      }
+    }
+    if (!running) {
+      break;
+    }
+    std::unique_lock<std::mutex> lock(queueMutex);
+    queueCv.wait_for(lock, std::chrono::milliseconds(30), [&]() {
+      return !frameQueue.empty() || decodeEnded.load();
+    });
+  }
+  if (!running) {
+    stopDecodeThread();
+    if (audioOk && hooks.stopAudio) hooks.stopAudio();
+    return true;
+  }
+  if (!haveFirstQueued) {
     stopDecodeThread();
     if (audioOk && hooks.stopAudio) hooks.stopAudio();
     std::string fail = getDecodeError();
@@ -1601,8 +1731,10 @@ static bool showAsciiVideo(const std::filesystem::path& file,
 
   auto currentTimeSec = [&]() -> double {
     if (audioOk && hooks.getAudioTimeSec) {
-      double audioNow = hooks.getAudioTimeSec();
-      return std::max(0.0, audioNow);
+      double raw = hooks.getAudioTimeSec();
+      double adjusted =
+          raw - (audioSyncBiasValid ? audioSyncBiasSec : 0.0);
+      return std::max(0.0, adjusted);
     }
     return lastFrameSec;
   };
@@ -1624,7 +1756,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     int width = std::max(20, screen.width());
     int height = std::max(10, screen.height());
     std::string subtitle;
-    if (!audioOk) {
+    if (!audioOk && !audioStarting) {
       subtitle = hooks.startAudio ? "Audio unavailable" : "Audio disabled";
     }
     int headerLines = 0;
@@ -1637,11 +1769,27 @@ static bool showAsciiVideo(const std::filesystem::path& file,
 
     double currentSec = currentTimeSec();
     double rawSec = currentSec;
+    if (audioSyncBiasValid) {
+      rawSec = currentSec + audioSyncBiasSec;
+    }
     double totalSec = totalDurationSec();
     if (totalSec > 0.0) {
       currentSec = std::clamp(currentSec, 0.0, totalSec);
     }
-    bool allowFrame = true;
+    double displaySec = currentSec;
+    auto displayNow = std::chrono::steady_clock::now();
+    if (pendingSeekEpoch != 0 && totalSec > 0.0 && std::isfinite(totalSec)) {
+      displaySec = std::clamp(pendingSeekTargetSec, 0.0, totalSec);
+    } else if (pendingSeekHoldUntil !=
+                   std::chrono::steady_clock::time_point::min() &&
+               displayNow < pendingSeekHoldUntil && totalSec > 0.0 &&
+               std::isfinite(totalSec)) {
+      displaySec = std::clamp(pendingSeekHoldSec, 0.0, totalSec);
+    }
+    bool audioPrimed = hooks.isAudioPrimed ? hooks.isAudioPrimed() : true;
+    bool preparingPlayback =
+        audioStarting || (audioOk && hooks.isAudioPrimed && !audioPrimed);
+    bool allowFrame = !preparingPlayback;
     if (!audioGateReleased && audioOk && hooks.getAudioTimeSec) {
       if (rawSec + kLeadSlackSec < frameSec) {
         allowFrame = false;
@@ -1827,12 +1975,16 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           }
         }
       } else {
-        std::string label = "Waiting for video timestamp...";
+        std::string label = preparingPlayback
+                                ? "Preparing video playback..."
+                                : "Waiting for video timestamp...";
         screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       }
     } else {
-      std::string label =
-          allowFrame ? "ASCII rendering disabled" : "Waiting for video...";
+      std::string label = allowFrame
+                              ? "ASCII rendering disabled"
+                              : (preparingPlayback ? "Preparing video playback..."
+                                                   : "Waiting for video...");
       screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       if (maxHeight > 1) {
         std::string sizeLine =
@@ -1862,16 +2014,16 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         status = "\xE2\x96\xB6";  // playing icon
       }
       std::string suffix =
-          formatTime(currentSec) + " / " + formatTime(totalSec) + " " + status;
+          formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status;
       int suffixWidth = utf8CodepointCount(suffix);
       int barWidth = width - suffixWidth - 3;
       if (barWidth < 10) {
-        suffix = formatTime(currentSec) + "/" + formatTime(totalSec);
+        suffix = formatTime(displaySec) + "/" + formatTime(totalSec);
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 10) {
-        suffix = formatTime(currentSec);
+        suffix = formatTime(displaySec);
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
@@ -1883,7 +2035,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
       barWidth = std::clamp(barWidth, 5, maxBar);
       double ratio = 0.0;
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
-        ratio = std::clamp(currentSec / totalSec, 0.0, 1.0);
+        ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
       }
       progressBarX = 1;
       progressBarY = barLine;
@@ -1905,7 +2057,72 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     screen.draw();
   };
 
-  audioOk = hooks.startAudio ? hooks.startAudio(file) : false;
+  std::atomic<bool> audioStartDone{false};
+  std::atomic<bool> audioStartOk{false};
+  std::thread audioStartThread;
+  if (hooks.startAudio) {
+    audioStartThread = std::thread([&]() {
+      bool ok = hooks.startAudio(file);
+      audioStartOk.store(ok);
+      audioStartDone.store(true);
+    });
+  } else {
+    audioStartOk.store(false);
+    audioStartDone.store(true);
+  }
+
+  auto audioStartBegin = std::chrono::steady_clock::now();
+  auto lastAudioDraw = std::chrono::steady_clock::time_point::min();
+  while (running && !audioStartDone.load()) {
+    auto now = std::chrono::steady_clock::now();
+    if (now - lastAudioDraw >= kPrepRedrawInterval) {
+      double elapsed = std::chrono::duration<double>(now - audioStartBegin).count();
+      double phase = std::fmod(elapsed, kPrepPulseSeconds);
+      double halfPulse = kPrepPulseSeconds * 0.5;
+      double ratio =
+          (phase <= halfPulse) ? (phase / halfPulse)
+                               : ((kPrepPulseSeconds - phase) / halfPulse);
+      renderPreparingScreen(ratio);
+      lastAudioDraw = now;
+    }
+    InputEvent ev{};
+    while (input.poll(ev)) {
+      if (ev.type == InputEvent::Type::Key) {
+        const KeyEvent& key = ev.key;
+        const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+        bool ctrl = (key.control & ctrlMask) != 0;
+        if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
+          running = false;
+          break;
+        }
+        if (key.vk == VK_ESCAPE || key.vk == 'Q' || key.ch == 'q' ||
+            key.ch == 'Q') {
+          running = false;
+          break;
+        }
+      } else if (ev.type == InputEvent::Type::Resize) {
+        lastAudioDraw = std::chrono::steady_clock::time_point::min();
+      }
+    }
+    if (!running) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  if (audioStartThread.joinable()) {
+    audioStartThread.join();
+  }
+  if (!running) {
+    stopDecodeThread();
+    audioOk = audioStartOk.load();
+    if (audioOk && hooks.stopAudio) hooks.stopAudio();
+    return true;
+  }
+
+  audioOk = audioStartOk.load();
+  audioStarting = false;
+  audioSyncBiasSec = 0.0;
+  audioSyncBiasValid = false;
   perfLog.appendf("audio_start ok=%d", audioOk ? 1 : 0);
   if (audioOk && hooks.getAudioPerfStats) {
     AudioPerfStats stats = hooks.getAudioPerfStats();
@@ -1974,6 +2191,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           pendingSeekEpoch = epoch;
           pendingSeekTargetSec = targetSec;
           pendingSeekAdjustWallClock = !audioOk;
+          audioSyncBiasValid = false;
           videoEnded = false;
           redraw = true;
           forceRefreshArt = true;
@@ -2013,6 +2231,7 @@ static bool showAsciiVideo(const std::filesystem::path& file,
                 pendingSeekEpoch = epoch;
                 pendingSeekTargetSec = targetSec;
                 pendingSeekAdjustWallClock = !audioOk;
+                audioSyncBiasValid = false;
                 videoEnded = false;
                 forceRefreshArt = true;
                 resetPresentClock = true;
@@ -2055,15 +2274,21 @@ static bool showAsciiVideo(const std::filesystem::path& file,
     lastPaused = paused;
     double syncSec = 0.0;
     double audioNow = 0.0;
+    double audioNowRaw = 0.0;
     bool haveAudioClock = audioOk && hooks.getAudioTimeSec;
+    bool audioPrimed = hooks.isAudioPrimed ? hooks.isAudioPrimed() : true;
     if (haveAudioClock) {
-      audioNow = hooks.getAudioTimeSec();
+      audioNowRaw = hooks.getAudioTimeSec();
+      if (audioSyncBiasValid) {
+        audioNow = std::max(0.0, audioNowRaw - audioSyncBiasSec);
+      } else {
+        audioNow = audioNowRaw;
+      }
       syncSec = std::max(0.0, audioNow);
     } else {
       syncSec = std::chrono::duration<double>(now - startTime).count();
     }
     const double leadSlack = kLeadSlackSec;
-    bool audioPrimed = hooks.isAudioPrimed ? hooks.isAudioPrimed() : true;
     bool waitingForAudioStart =
         haveAudioClock && !audioPrimed && audioNow <= 0.0;
     bool useWallClock = paused || waitingForAudioStart;
@@ -2149,6 +2374,8 @@ static bool showAsciiVideo(const std::filesystem::path& file,
           pendingResizeRepause = false;
         }
         if (pendingSeekEpoch != 0 && pendingQueued.epoch >= pendingSeekEpoch) {
+          pendingSeekHoldSec = pendingSeekTargetSec;
+          pendingSeekHoldUntil = now + std::chrono::milliseconds(400);
           pendingSeekEpoch = 0;
         }
         resetPresentClock = true;
@@ -2210,25 +2437,17 @@ static bool showAsciiVideo(const std::filesystem::path& file,
               std::memory_order_relaxed);
         }
 
-        QueuedFrame resyncQueued{};
-        if (!waitForFrame(resyncQueued, epoch)) {
-          stopDecodeThread();
-          if (audioOk && hooks.stopAudio) hooks.stopAudio();
-          std::string fail = getDecodeError();
-          if (fail.empty()) {
-            fail = "Failed to resync video.";
-          }
-          return reportVideoError(fail, "");
-        }
-        candidate = std::move(resyncQueued);
-        double resyncSec =
-            static_cast<double>(
-                framePool[candidate.poolIndex].timestamp100ns - firstTs) *
-            ticksToSeconds;
-        lastSyncDrift = syncSec - resyncSec;
-        advanced = true;
-        perfLog.appendf("sync_seek audio=%.3f video=%.3f target=%.3f", audioNow,
-                        resyncSec, syncSec);
+        pendingSeekEpoch = epoch;
+        pendingSeekTargetSec = targetSec;
+        pendingSeekAdjustWallClock = false;
+        audioSyncBiasValid = false;
+        resumeGraceUntil = now + std::chrono::milliseconds(500);
+        resetPresentClock = true;
+        redraw = true;
+        forceRefreshArt = true;
+        perfLog.appendf("sync_seek_pending audio=%.3f target=%.3f", audioNow,
+                        syncSec);
+        continue;
       } else {
         if (!inResumeGrace && !haveAudioClock &&
             driftForSkip > hardResyncThreshold) {
@@ -2341,6 +2560,10 @@ static bool showAsciiVideo(const std::filesystem::path& file,
         }
         if (haveAudioClock) {
           lastSyncDrift = syncSec - lastFrameSec;
+          if (!audioSyncBiasValid && audioPrimed) {
+            audioSyncBiasSec = audioNowRaw - frameSec;
+            audioSyncBiasValid = std::isfinite(audioSyncBiasSec);
+          }
         } else {
           lastSyncDrift = wallclockElapsed - lastFrameSec;
         }
@@ -2462,8 +2685,6 @@ static bool showAsciiVideo(const std::filesystem::path& file,
 
     bool audioFinished =
         audioOk && hooks.isAudioFinished && hooks.isAudioFinished();
-    // if (!audioOk && videoEnded) break;
-    // if (audioOk && audioFinished) break;
 
     int sleepMs = 4;
     if (presentInit) {
