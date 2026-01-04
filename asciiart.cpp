@@ -975,7 +975,25 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               bitmask = ditherMask;
             }
 
+            int dotCount = 0;
+            int tempMask = bitmask;
+            while (tempMask) {
+              dotCount += (tempMask & 1);
+              tempMask >>= 1;
+            }
+
             size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
+            uint8_t prevBgR = 0;
+            uint8_t prevBgG = 0;
+            uint8_t prevBgB = 0;
+            bool prevBgValid = (cellIndex < scratch.prevBg.size() &&
+                                scratch.prevBgValid[cellIndex]);
+            if (prevBgValid) {
+              uint32_t p = scratch.prevBg[cellIndex];
+              prevBgR = static_cast<uint8_t>((p >> 16) & 0xFF);
+              prevBgG = static_cast<uint8_t>((p >> 8) & 0xFF);
+              prevBgB = static_cast<uint8_t>(p & 0xFF);
+            }
             uint8_t outR = 0;
             uint8_t outG = 0;
             uint8_t outB = 0;
@@ -1202,6 +1220,8 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 }
               }
 
+              int bgBlendAlpha = 230;
+
               // bgR/G/B already calculated above for blending
               int bgY =
                   (static_cast<int>(bgR) * 54 + static_cast<int>(bgG) * 183 +
@@ -1222,12 +1242,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                       255, (static_cast<int>(bgB) * scale + 128) >> 8));
                 }
               }
-              if (cellIndex < scratch.prevBg.size() &&
-                  scratch.prevBgValid[cellIndex]) {
-                uint32_t p = scratch.prevBg[cellIndex];
-                int pr = static_cast<int>((p >> 16) & 0xFF);
-                int pg = static_cast<int>((p >> 8) & 0xFF);
-                int pb = static_cast<int>(p & 0xFF);
+              if (prevBgValid) {
+                int pr = static_cast<int>(prevBgR);
+                int pg = static_cast<int>(prevBgG);
+                int pb = static_cast<int>(prevBgB);
                 int dsum = std::abs(static_cast<int>(bgR) - pr) +
                            std::abs(static_cast<int>(bgG) - pg) +
                            std::abs(static_cast<int>(bgB) - pb);
@@ -1239,9 +1257,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   // Temporal Stability (Ghosting Reduction)
                   // Increased alpha for faster updates (less ghosting)
                   // Old: kBgAlpha (140), New: 230
-                  pr = pr + (((int)bgR - pr) * 230 >> 8);
-                  pg = pg + (((int)bgG - pg) * 230 >> 8);
-                  pb = pb + (((int)bgB - pb) * 230 >> 8);
+                  pr = pr + (((int)bgR - pr) * bgBlendAlpha >> 8);
+                  pg = pg + (((int)bgG - pg) * bgBlendAlpha >> 8);
+                  pb = pb + (((int)bgB - pb) * bgBlendAlpha >> 8);
                 }
                 outBgR = static_cast<uint8_t>(pr);
                 outBgG = static_cast<uint8_t>(pg);
@@ -1257,6 +1275,37 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                             (static_cast<uint32_t>(bgG) << 8) |
                                             static_cast<uint32_t>(bgB);
                 scratch.prevBgValid[cellIndex] = 1;
+              }
+              if (dotCount == 8 && bgCount == 0) {
+                int fgY =
+                    (static_cast<int>(outR) * 54 +
+                     static_cast<int>(outG) * 183 +
+                     static_cast<int>(outB) * 19 + 128) >>
+                    8;
+                int bgY =
+                    (static_cast<int>(outBgR) * 54 +
+                     static_cast<int>(outBgG) * 183 +
+                     static_cast<int>(outBgB) * 19 + 128) >>
+                    8;
+                int dir = (cellLumMean < bgLum) ? 1 : -1;
+                int minDeltaY = 6;
+                int need = minDeltaY - dir * (bgY - fgY);
+                if (need > 0) {
+                  int shift = dir * need;
+                  outBgR = static_cast<uint8_t>(
+                      std::clamp(static_cast<int>(outBgR) + shift, 0, 255));
+                  outBgG = static_cast<uint8_t>(
+                      std::clamp(static_cast<int>(outBgG) + shift, 0, 255));
+                  outBgB = static_cast<uint8_t>(
+                      std::clamp(static_cast<int>(outBgB) + shift, 0, 255));
+                  if (cellIndex < scratch.prevBg.size()) {
+                    scratch.prevBg[cellIndex] =
+                        (static_cast<uint32_t>(outBgR) << 16) |
+                        (static_cast<uint32_t>(outBgG) << 8) |
+                        static_cast<uint32_t>(outBgB);
+                    scratch.prevBgValid[cellIndex] = 1;
+                  }
+                }
               }
               hasBg = true;
             } else if (cellIndex < scratch.prevFg.size() &&
@@ -1285,13 +1334,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             if constexpr (kUseHybridMode) {
               // Alleen voor zeer uniforme gebieden: gebruik density-based ASCII
               if (cellLumRange < kMinContrastForBraille) {
-                // Tel dots voor density lookup (O(1) met popcount)
-                int dotCount = 0;
-                int b = bitmask;
-                while (b) {
-                  dotCount += (b & 1);
-                  b >>= 1;
-                }
                 finalChar = kDotCountToChar[static_cast<size_t>(dotCount)];
               }
             }

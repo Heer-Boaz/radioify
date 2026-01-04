@@ -595,6 +595,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         }
     }
 
+    uint dotCount = countbits(bitmask);
+
     // 7. Color Processing
     // Determine the initial Foreground (Ink) and Background colors based on the dots identified above.
     // If no dots are set, the cell is effectively all background.
@@ -731,8 +733,22 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (diffFg < resetThresh) {
         curFg = lerp(prevFg, curFg, 230.0f/255.0f);
     }
+    float bgBlendAlpha = 230.0f/255.0f;
     if (diffBg < resetThresh) {
-        curBg = lerp(prevBg, curBg, 230.0f/255.0f);
+        curBg = lerp(prevBg, curBg, bgBlendAlpha);
+    }
+
+    bool fullMask = (dotCount == 8u);
+    if (fullMask && bgCount == 0) {
+        float dir = (cellLumMean < effectiveBgLum) ? 1.0f : -1.0f;
+        float minDeltaY = lerp(8.0f, 4.0f, signalStrength);
+        float fgY = GetLuma(curFg);
+        float bgY = GetLuma(curBg);
+        float need = minDeltaY - dir * (bgY - fgY);
+        if (need > 0.0f) {
+            float shift = dir * need / 255.0f;
+            curBg = saturate(curBg + shift);
+        }
     }
 
     // Write back history for the next frame
