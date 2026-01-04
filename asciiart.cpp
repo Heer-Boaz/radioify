@@ -1159,20 +1159,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                     (static_cast<int>(bgR) * 54 + static_cast<int>(bgG) * 183 +
                      static_cast<int>(bgB) * 19 + 128) >>
                     8;
-                int refBgY = bgLum;
-                if (prevBgValid) {
-                  refBgY =
-                      (static_cast<int>(prevBgR) * 54 +
-                       static_cast<int>(prevBgG) * 183 +
-                       static_cast<int>(prevBgB) * 19 + 128) >>
-                      8;
-                }
-                int jumpPrev =
-                    prevBgValid ? std::abs(curBgY - refBgY) : 0;
-                int jumpGlobal = std::abs(curBgY - bgLum);
-                int gate = std::max(jumpPrev, jumpGlobal);
-                if (gate > 8) {
-                  int t = std::min(gate - 8, 24);
+                int refBgY = cellBgLum;
+                int jump = std::abs(curBgY - refBgY);
+                if (jump > 8) {
+                  int t = std::min(jump - 8, 24);
                   int k = 218 + ((154 - 218) * t) / 24;  // 0.85 -> 0.60
                   int newY = refBgY + ((curBgY - refBgY) * k >> 8);
                   int denom = std::max(curBgY, 1);

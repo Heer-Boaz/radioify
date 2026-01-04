@@ -593,14 +593,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (yuvTransfer == kTransferSdr && !useDither && inkCount <= 2 &&
         signalStrength < 0.25f) {
         float curBgY = GetLuma(curBg);
-        bool prevBgValid = (history.y != 0);
-        float prevBgY = GetLuma(prevBg);
-        float refBgY = prevBgValid ? prevBgY : effectiveBgLum;
-        float jumpPrev = prevBgValid ? abs(curBgY - prevBgY) : 0.0f;
-        float jumpGlobal = abs(curBgY - effectiveBgLum);
-        float gate = max(jumpPrev, jumpGlobal);
-        if (gate > 8.0f) {
-            float t = saturate((gate - 8.0f) / 24.0f);
+        float refBgY = cellBgLum;
+        float jump = abs(curBgY - refBgY);
+        if (jump > 8.0f) {
+            float t = saturate((jump - 8.0f) / 24.0f);
             float k = lerp(0.85f, 0.60f, t);
             float newBgY = refBgY + (curBgY - refBgY) * k;
             float scale = newBgY / max(curBgY, 1e-3f);
