@@ -1592,6 +1592,16 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
           }
         }
+      } else if (pendingSeekEpoch != 0 && art.width > 0 && art.height > 0) {
+        // Keep showing the last frame while seeking
+        for (int y = 0; y < artHeight; ++y) {
+          for (int x = 0; x < artWidth; ++x) {
+            const auto& cell =
+                art.cells[static_cast<size_t>(y * art.width + x)];
+            Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
+            screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
+          }
+        }
       } else {
         std::string label = preparingPlayback
                                 ? "Preparing video playback..."
