@@ -22,47 +22,179 @@ add_executable(radioify
 
 set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders")
 set(RADIOIFY_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-set(RADIOIFY_EMBED_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake")
+set(RADIOIFY_EMBED_BINARY_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/EmbedBinary.cmake")
 
 set(RADIOIFY_COMPUTE_SHADER_HLSL "${RADIOIFY_SHADER_DIR}/asciiart_gpu.hlsl")
 set(RADIOIFY_STATS_SHADER_HLSL "${RADIOIFY_SHADER_DIR}/asciiart_stats.hlsl")
-set(RADIOIFY_COMPUTE_SHADER_HEADER "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_shader.h")
-set(RADIOIFY_STATS_SHADER_HEADER "${RADIOIFY_GENERATED_DIR}/asciiart_stats_shader.h")
+set(RADIOIFY_COMPUTE_SHADER_CSO_MAIN
+    "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_cs_main.cso")
+set(RADIOIFY_COMPUTE_SHADER_CSO_MAIN_NV12
+    "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_cs_main_nv12.cso")
+set(RADIOIFY_COMPUTE_SHADER_CSO_DETAIL
+    "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_cs_detail.cso")
+set(RADIOIFY_COMPUTE_SHADER_CSO_DETAIL_NV12
+    "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_cs_detail_nv12.cso")
+set(RADIOIFY_STATS_SHADER_CSO
+    "${RADIOIFY_GENERATED_DIR}/asciiart_stats_cs.cso")
 
-add_custom_command(
-  OUTPUT "${RADIOIFY_COMPUTE_SHADER_HEADER}"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${RADIOIFY_GENERATED_DIR}"
-  COMMAND ${CMAKE_COMMAND}
-          -DINPUT=${RADIOIFY_COMPUTE_SHADER_HLSL}
-          -DOUTPUT=${RADIOIFY_COMPUTE_SHADER_HEADER}
-          -DVAR=kComputeShaderSource
-          -P ${RADIOIFY_EMBED_SCRIPT}
-  DEPENDS "${RADIOIFY_COMPUTE_SHADER_HLSL}" "${RADIOIFY_EMBED_SCRIPT}"
-  VERBATIM
-)
+set(RADIOIFY_COMPUTE_SHADER_HEADER_MAIN
+    "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_cs_main.h")
+set(RADIOIFY_COMPUTE_SHADER_HEADER_MAIN_NV12
+    "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_cs_main_nv12.h")
+set(RADIOIFY_COMPUTE_SHADER_HEADER_DETAIL
+    "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_cs_detail.h")
+set(RADIOIFY_COMPUTE_SHADER_HEADER_DETAIL_NV12
+    "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_cs_detail_nv12.h")
+set(RADIOIFY_STATS_SHADER_HEADER
+    "${RADIOIFY_GENERATED_DIR}/asciiart_stats_cs.h")
 
-add_custom_command(
-  OUTPUT "${RADIOIFY_STATS_SHADER_HEADER}"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${RADIOIFY_GENERATED_DIR}"
-  COMMAND ${CMAKE_COMMAND}
-          -DINPUT=${RADIOIFY_STATS_SHADER_HLSL}
-          -DOUTPUT=${RADIOIFY_STATS_SHADER_HEADER}
-          -DVAR=kStatsShaderSource
-          -P ${RADIOIFY_EMBED_SCRIPT}
-  DEPENDS "${RADIOIFY_STATS_SHADER_HLSL}" "${RADIOIFY_EMBED_SCRIPT}"
-  VERBATIM
-)
+if (WIN32)
+  set(_radioify_fxc_hints "")
+  if (DEFINED ENV{WindowsSdkDir} AND DEFINED ENV{WindowsSDKVersion})
+    list(APPEND _radioify_fxc_hints
+      "$ENV{WindowsSdkDir}/bin/$ENV{WindowsSDKVersion}"
+      "$ENV{WindowsSdkDir}/bin/$ENV{WindowsSDKVersion}/x64"
+      "$ENV{WindowsSdkDir}/bin/$ENV{WindowsSDKVersion}/x86")
+  endif()
+  if (CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION)
+    list(APPEND _radioify_fxc_hints
+      "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}"
+      "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64"
+      "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x86")
+  endif()
 
-add_custom_target(radioify_shader_headers
-  DEPENDS "${RADIOIFY_COMPUTE_SHADER_HEADER}" "${RADIOIFY_STATS_SHADER_HEADER}"
-)
+  if (NOT RADIOIFY_FXC_EXE)
+    find_program(RADIOIFY_FXC_EXE NAMES fxc HINTS ${_radioify_fxc_hints})
+  endif()
+  if (NOT RADIOIFY_FXC_EXE)
+    message(FATAL_ERROR "fxc not found. Install the Windows SDK or set RADIOIFY_FXC_EXE.")
+  endif()
 
-add_dependencies(radioify radioify_shader_headers)
-target_include_directories(radioify PRIVATE "${RADIOIFY_GENERATED_DIR}")
-target_sources(radioify PRIVATE
-  "${RADIOIFY_COMPUTE_SHADER_HEADER}"
-  "${RADIOIFY_STATS_SHADER_HEADER}"
-)
+  set(_radioify_fxc_flags /nologo /T cs_5_0 /O3 /Qstrip_debug /Qstrip_reflect)
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_COMPUTE_SHADER_CSO_MAIN}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RADIOIFY_GENERATED_DIR}"
+    COMMAND "${RADIOIFY_FXC_EXE}" ${_radioify_fxc_flags} /E CSMain
+            /Fo "${RADIOIFY_COMPUTE_SHADER_CSO_MAIN}"
+            "${RADIOIFY_COMPUTE_SHADER_HLSL}"
+    DEPENDS "${RADIOIFY_COMPUTE_SHADER_HLSL}"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_COMPUTE_SHADER_CSO_MAIN_NV12}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RADIOIFY_GENERATED_DIR}"
+    COMMAND "${RADIOIFY_FXC_EXE}" ${_radioify_fxc_flags} /E CSMain
+            /D NV12_INPUT=1
+            /Fo "${RADIOIFY_COMPUTE_SHADER_CSO_MAIN_NV12}"
+            "${RADIOIFY_COMPUTE_SHADER_HLSL}"
+    DEPENDS "${RADIOIFY_COMPUTE_SHADER_HLSL}"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_COMPUTE_SHADER_CSO_DETAIL}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RADIOIFY_GENERATED_DIR}"
+    COMMAND "${RADIOIFY_FXC_EXE}" ${_radioify_fxc_flags} /E CSDetail
+            /Fo "${RADIOIFY_COMPUTE_SHADER_CSO_DETAIL}"
+            "${RADIOIFY_COMPUTE_SHADER_HLSL}"
+    DEPENDS "${RADIOIFY_COMPUTE_SHADER_HLSL}"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_COMPUTE_SHADER_CSO_DETAIL_NV12}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RADIOIFY_GENERATED_DIR}"
+    COMMAND "${RADIOIFY_FXC_EXE}" ${_radioify_fxc_flags} /E CSDetail
+            /D NV12_INPUT=1
+            /Fo "${RADIOIFY_COMPUTE_SHADER_CSO_DETAIL_NV12}"
+            "${RADIOIFY_COMPUTE_SHADER_HLSL}"
+    DEPENDS "${RADIOIFY_COMPUTE_SHADER_HLSL}"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_STATS_SHADER_CSO}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RADIOIFY_GENERATED_DIR}"
+    COMMAND "${RADIOIFY_FXC_EXE}" ${_radioify_fxc_flags} /E CSStats
+            /Fo "${RADIOIFY_STATS_SHADER_CSO}"
+            "${RADIOIFY_STATS_SHADER_HLSL}"
+    DEPENDS "${RADIOIFY_STATS_SHADER_HLSL}"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_COMPUTE_SHADER_HEADER_MAIN}"
+    COMMAND ${CMAKE_COMMAND}
+            -DINPUT=${RADIOIFY_COMPUTE_SHADER_CSO_MAIN}
+            -DOUTPUT=${RADIOIFY_COMPUTE_SHADER_HEADER_MAIN}
+            -DVAR=kComputeShaderCsMain
+            -P "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    DEPENDS "${RADIOIFY_COMPUTE_SHADER_CSO_MAIN}" "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_COMPUTE_SHADER_HEADER_MAIN_NV12}"
+    COMMAND ${CMAKE_COMMAND}
+            -DINPUT=${RADIOIFY_COMPUTE_SHADER_CSO_MAIN_NV12}
+            -DOUTPUT=${RADIOIFY_COMPUTE_SHADER_HEADER_MAIN_NV12}
+            -DVAR=kComputeShaderCsMainNv12
+            -P "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    DEPENDS "${RADIOIFY_COMPUTE_SHADER_CSO_MAIN_NV12}" "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_COMPUTE_SHADER_HEADER_DETAIL}"
+    COMMAND ${CMAKE_COMMAND}
+            -DINPUT=${RADIOIFY_COMPUTE_SHADER_CSO_DETAIL}
+            -DOUTPUT=${RADIOIFY_COMPUTE_SHADER_HEADER_DETAIL}
+            -DVAR=kComputeShaderCsDetail
+            -P "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    DEPENDS "${RADIOIFY_COMPUTE_SHADER_CSO_DETAIL}" "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_COMPUTE_SHADER_HEADER_DETAIL_NV12}"
+    COMMAND ${CMAKE_COMMAND}
+            -DINPUT=${RADIOIFY_COMPUTE_SHADER_CSO_DETAIL_NV12}
+            -DOUTPUT=${RADIOIFY_COMPUTE_SHADER_HEADER_DETAIL_NV12}
+            -DVAR=kComputeShaderCsDetailNv12
+            -P "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    DEPENDS "${RADIOIFY_COMPUTE_SHADER_CSO_DETAIL_NV12}" "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT "${RADIOIFY_STATS_SHADER_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+            -DINPUT=${RADIOIFY_STATS_SHADER_CSO}
+            -DOUTPUT=${RADIOIFY_STATS_SHADER_HEADER}
+            -DVAR=kStatsShaderCs
+            -P "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    DEPENDS "${RADIOIFY_STATS_SHADER_CSO}" "${RADIOIFY_EMBED_BINARY_SCRIPT}"
+    VERBATIM
+  )
+
+  set(RADIOIFY_SHADER_HEADERS
+    "${RADIOIFY_COMPUTE_SHADER_HEADER_MAIN}"
+    "${RADIOIFY_COMPUTE_SHADER_HEADER_MAIN_NV12}"
+    "${RADIOIFY_COMPUTE_SHADER_HEADER_DETAIL}"
+    "${RADIOIFY_COMPUTE_SHADER_HEADER_DETAIL_NV12}"
+    "${RADIOIFY_STATS_SHADER_HEADER}"
+  )
+
+  add_custom_target(radioify_shader_blobs
+    DEPENDS ${RADIOIFY_SHADER_HEADERS}
+  )
+
+  add_dependencies(radioify radioify_shader_blobs)
+  target_include_directories(radioify PRIVATE "${RADIOIFY_GENERATED_DIR}")
+  target_sources(radioify PRIVATE ${RADIOIFY_SHADER_HEADERS})
+endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
 foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
@@ -214,7 +346,7 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if (WIN32)
-  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler)
+  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi)
 endif()
 
 if (MSVC)

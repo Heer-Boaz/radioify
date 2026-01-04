@@ -1,16 +1,16 @@
 #include "asciiart_gpu.h"
 #include <d3d11.h>
-#include <d3dcompiler.h>
-#include <iostream>
 #include <vector>
 
 #pragma comment(lib, "d3d11.lib")
-#pragma comment(lib, "d3dcompiler.lib")
 
 namespace {
-    // Embedded HLSL shader source (generated from shaders/*.hlsl)
-    #include "asciiart_gpu_shader.h"
-    #include "asciiart_stats_shader.h"
+    // Precompiled shader bytecode (generated from shaders/*.hlsl)
+    #include "asciiart_gpu_cs_main.h"
+    #include "asciiart_gpu_cs_main_nv12.h"
+    #include "asciiart_gpu_cs_detail.h"
+    #include "asciiart_gpu_cs_detail_nv12.h"
+    #include "asciiart_stats_cs.h"
 
     struct GpuAsciiCell {
         uint32_t ch;
@@ -29,7 +29,7 @@ bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* erro
         if (error) *error = "Failed to create D3D11 device";
         return false;
     }
-    if (!CompileComputeShader(error)) return false;
+    if (!CreateComputeShaders(error)) return false;
 
     // Create Samplers
     D3D11_SAMPLER_DESC sampDesc = {};
@@ -71,147 +71,52 @@ bool GpuAsciiRenderer::CreateDevice() {
     return SUCCEEDED(hr);
 }
 
-bool GpuAsciiRenderer::CompileComputeShader(std::string* error) {
-    Microsoft::WRL::ComPtr<ID3DBlob> blob;
-    Microsoft::WRL::ComPtr<ID3DBlob> errorBlob;
+bool GpuAsciiRenderer::CreateComputeShaders(std::string* error) {
+    if (!m_device) {
+        if (error) *error = "D3D11 device is not initialized";
+        return false;
+    }
 
-    // Compile RGBA Shader
-    HRESULT hr = D3DCompile(
-        kComputeShaderSource, strlen(kComputeShaderSource),
-        "EmbeddedShader", nullptr, nullptr,
-        "CSMain", "cs_5_0",
-        0, 0, &blob, &errorBlob
-    );
-
-    if (FAILED(hr)) {
-        if (errorBlob) {
-            std::string msg = (char*)errorBlob->GetBufferPointer();
-            std::cerr << "Shader Compile Error (RGBA): " << msg << std::endl;
-            if (error) *error = "Shader Compile Error (RGBA): " + msg;
-        } else {
-            if (error) *error = "Shader Compile Error (RGBA): Unknown error";
+    auto createShader = [&](const unsigned char* data, unsigned int size,
+                            Microsoft::WRL::ComPtr<ID3D11ComputeShader>& out,
+                            const char* label) {
+        if (!data || size == 0) {
+            if (error) *error = std::string("Missing shader bytecode: ") + label;
+            return false;
         }
-        return false;
-    }
-
-    hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_computeShader);
-    if (FAILED(hr)) {
-        if (error) *error = "Failed to create compute shader (RGBA)";
-        return false;
-    }
-
-    // Compile NV12 Shader
-    D3D_SHADER_MACRO defines[] = { "NV12_INPUT", "1", nullptr, nullptr };
-    blob.Reset();
-    errorBlob.Reset();
-
-    hr = D3DCompile(
-        kComputeShaderSource, strlen(kComputeShaderSource),
-        "EmbeddedShader", defines, nullptr,
-        "CSMain", "cs_5_0",
-        0, 0, &blob, &errorBlob
-    );
-
-    if (FAILED(hr)) {
-        if (errorBlob) {
-            std::string msg = (char*)errorBlob->GetBufferPointer();
-            std::cerr << "Shader Compile Error (NV12): " << msg << std::endl;
-            if (error) *error = "Shader Compile Error (NV12): " + msg;
-        } else {
-            if (error) *error = "Shader Compile Error (NV12): Unknown error";
+        HRESULT hr = m_device->CreateComputeShader(
+            data, static_cast<SIZE_T>(size), nullptr, out.GetAddressOf());
+        if (FAILED(hr)) {
+            if (error) {
+                *error = std::string("Failed to create compute shader: ") + label;
+            }
+            return false;
         }
+        return true;
+    };
+
+    if (!createShader(kComputeShaderCsMain, kComputeShaderCsMain_Size,
+                      m_computeShader, "CSMain RGBA")) {
+        return false;
+    }
+    if (!createShader(kComputeShaderCsMainNv12, kComputeShaderCsMainNv12_Size,
+                      m_computeShaderNV12, "CSMain NV12")) {
+        return false;
+    }
+    if (!createShader(kComputeShaderCsDetail, kComputeShaderCsDetail_Size,
+                      m_detailShader, "CSDetail RGBA")) {
+        return false;
+    }
+    if (!createShader(kComputeShaderCsDetailNv12, kComputeShaderCsDetailNv12_Size,
+                      m_detailShaderNV12, "CSDetail NV12")) {
+        return false;
+    }
+    if (!createShader(kStatsShaderCs, kStatsShaderCs_Size, m_statsShader,
+                      "CSStats")) {
         return false;
     }
 
-    hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_computeShaderNV12);
-    if (FAILED(hr)) {
-        if (error) *error = "Failed to create compute shader (NV12)";
-        return false;
-    }
-
-    // Compile Detail Shader (RGBA)
-    blob.Reset();
-    errorBlob.Reset();
-    hr = D3DCompile(
-        kComputeShaderSource, strlen(kComputeShaderSource),
-        "EmbeddedShader", nullptr, nullptr,
-        "CSDetail", "cs_5_0",
-        0, 0, &blob, &errorBlob
-    );
-
-    if (FAILED(hr)) {
-        if (errorBlob) {
-            std::string msg = (char*)errorBlob->GetBufferPointer();
-            std::cerr << "Shader Compile Error (Detail RGBA): " << msg << std::endl;
-            if (error) *error = "Shader Compile Error (Detail RGBA): " + msg;
-        } else {
-            if (error) *error = "Shader Compile Error (Detail RGBA): Unknown error";
-        }
-        return false;
-    }
-
-    hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_detailShader);
-    if (FAILED(hr)) {
-        if (error) *error = "Failed to create detail shader (RGBA)";
-        return false;
-    }
-
-    // Compile Detail Shader (NV12)
-    blob.Reset();
-    errorBlob.Reset();
-
-    hr = D3DCompile(
-        kComputeShaderSource, strlen(kComputeShaderSource),
-        "EmbeddedShader", defines, nullptr,
-        "CSDetail", "cs_5_0",
-        0, 0, &blob, &errorBlob
-    );
-
-    if (FAILED(hr)) {
-        if (errorBlob) {
-            std::string msg = (char*)errorBlob->GetBufferPointer();
-            std::cerr << "Shader Compile Error (Detail NV12): " << msg << std::endl;
-            if (error) *error = "Shader Compile Error (Detail NV12): " + msg;
-        } else {
-            if (error) *error = "Shader Compile Error (Detail NV12): Unknown error";
-        }
-        return false;
-    }
-
-    hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_detailShaderNV12);
-    if (FAILED(hr)) {
-        if (error) *error = "Failed to create detail shader (NV12)";
-        return false;
-    }
-
-    // Compile Stats Shader
-    blob.Reset();
-    errorBlob.Reset();
-    hr = D3DCompile(
-        kStatsShaderSource, strlen(kStatsShaderSource),
-        "StatsShader", nullptr, nullptr,
-        "CSStats", "cs_5_0",
-        0, 0, &blob, &errorBlob
-    );
-
-    if (FAILED(hr)) {
-        if (errorBlob) {
-            std::string msg = (char*)errorBlob->GetBufferPointer();
-            std::cerr << "Shader Compile Error (Stats): " << msg << std::endl;
-            if (error) *error = "Shader Compile Error (Stats): " + msg;
-        } else {
-            if (error) *error = "Shader Compile Error (Stats): Unknown error";
-        }
-        return false;
-    }
-
-    hr = m_device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &m_statsShader);
-    if (FAILED(hr)) {
-        if (error) *error = "Failed to create compute shader (Stats)";
-        return false;
-    }
-
-    return SUCCEEDED(hr);
+    return true;
 }
 
 bool GpuAsciiRenderer::CreateStatsBuffer() {

@@ -1,0 +1,42 @@
+if (NOT DEFINED INPUT OR NOT DEFINED OUTPUT OR NOT DEFINED VAR)
+  message(FATAL_ERROR "INPUT, OUTPUT, and VAR must be set")
+endif()
+
+file(READ "${INPUT}" HEX_CONTENT HEX)
+string(LENGTH "${HEX_CONTENT}" HEX_LEN)
+if (HEX_LEN EQUAL 0)
+  message(FATAL_ERROR "Input file is empty: ${INPUT}")
+endif()
+
+math(EXPR NUM_BYTES "${HEX_LEN} / 2")
+if (NUM_BYTES LESS 1)
+  message(FATAL_ERROR "Input file is empty: ${INPUT}")
+endif()
+
+set(HEADER "// Generated from ${INPUT}. Do not edit.\n")
+string(APPEND HEADER "#pragma once\n\n")
+string(APPEND HEADER "static const unsigned char ${VAR}[] = {\n")
+
+set(line "")
+set(count 0)
+math(EXPR LAST_INDEX "${NUM_BYTES} - 1")
+foreach(i RANGE 0 ${LAST_INDEX})
+  math(EXPR idx "${i} * 2")
+  string(SUBSTRING "${HEX_CONTENT}" ${idx} 2 byte)
+  string(APPEND line "0x${byte},")
+  math(EXPR count "${count} + 1")
+  if (count EQUAL 12)
+    string(APPEND HEADER "  ${line}\n")
+    set(line "")
+    set(count 0)
+  endif()
+endforeach()
+
+if (NOT line STREQUAL "")
+  string(APPEND HEADER "  ${line}\n")
+endif()
+
+string(APPEND HEADER "};\n")
+string(APPEND HEADER "static const unsigned int ${VAR}_Size = sizeof(${VAR});\n")
+
+file(WRITE "${OUTPUT}" "${HEADER}")

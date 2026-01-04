@@ -26,7 +26,7 @@ public:
 
 private:
     bool CreateDevice();
-    bool CompileComputeShader(std::string* error);
+    bool CreateComputeShaders(std::string* error);
     bool CreateBuffers(int width, int height, int outW, int outH);
     bool CreateRGBATextures(int width, int height);
     bool CreateNV12Textures(int width, int height, bool is10Bit);
