@@ -545,6 +545,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                                       showSubtitle);
   };
 
+  auto computeAsciiOutputSize = [&](int maxWidth, int maxHeight, int srcW,
+                                    int srcH) {
+    int safeSrcW = std::max(1, srcW);
+    int safeSrcH = std::max(1, srcH);
+    int maxOutW = std::max(1, maxWidth - 8);
+    int outW = std::max(1, std::min(maxOutW, safeSrcW / 2));
+    int outH = static_cast<int>(
+        std::lround(outW * (static_cast<float>(safeSrcH) / safeSrcW) / 2.0f));
+    outH = std::max(1, std::min(outH, safeSrcH / 4));
+    if (maxHeight > 0) outH = std::min(outH, maxHeight);
+    return std::pair<int, int>(outW, outH);
+  };
+
   auto requestTargetSize = [&](int width, int height) -> uint64_t {
     auto [targetW, targetH] = computeTargetSize(width, height);
     if (targetW == requestedTargetW && targetH == requestedTargetH) {
@@ -1441,8 +1454,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             if (gpuAvailable &&
                 (frame->format == VideoPixelFormat::NV12 ||
                  frame->format == VideoPixelFormat::P010)) {
-              art.width = width;
-              art.height = maxHeight;
+              auto [outW, outH] =
+                  computeAsciiOutputSize(width, maxHeight, frame->width,
+                                         frame->height);
+              art.width = outW;
+              art.height = outH;
               std::string gpuErr;
               
               // Stats calculation moved to GPU (StatsCS)
@@ -1488,8 +1504,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
             bool renderedWithGpu = false;
             if (gpuAvailable) {
-              art.width = width;
-              art.height = maxHeight;
+              auto [outW, outH] =
+                  computeAsciiOutputSize(width, maxHeight, frame->width,
+                                         frame->height);
+              art.width = outW;
+              art.height = outH;
               std::string gpuErr;
               if (gpuRenderer.Render(frame->rgba.data(), frame->width,
                                      frame->height, art, &gpuErr)) {
