@@ -36,6 +36,7 @@ extern "C" {
 #include "asciiart.h"
 #include "asciiart_gpu.h"
 #include "audioplayback.h"
+#include "taskgate.h"
 #include "ui_helpers.h"
 #include "videodecoder.h"
 
@@ -77,6 +78,25 @@ struct PerfLog {
   std::string buffer;
   bool enabled = false;
 };
+
+const GateScope kGateFrameFirst{true, "frame", "first"};
+const GateScope kGateAudioStart{true, "audio", "start"};
+const GateScope kGatePresentFirst{false, "present", "first"};
+const GateScope kGateTimestampFirst{false, "timestamp", "first"};
+const GateScope kGateAudioFinished{false, "audio_finished", "ended"};
+
+bool shouldBlockTimestamp(bool check, double rawSec, double leadSlack,
+                          double frameSec) {
+  return check && (rawSec + leadSlack < frameSec);
+}
+
+bool canPresentFrame(const GateGroup& gate) {
+  return gate.ready() && gate.readyFor("timestamp");
+}
+
+bool waitingForTimestampLabel(const GateGroup& gate) {
+  return !gate.readyFor("timestamp");
+}
 
 bool perfLogOpen(PerfLog* log, const std::filesystem::path& path,
                  std::string* error) {
@@ -325,6 +345,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   bool audioOk = false;
   bool audioStarting = enableAudio;
+  bool audioHoldActive = enableAudio;
   double audioSyncBiasSec = 0.0;
   bool audioSyncBiasValid = false;
   bool running = true;
@@ -407,10 +428,18 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   uint64_t lastQueueDrops = 0;
   uint64_t lastSkippedCalls = 0;
   double lastSyncDrift = 0.0;
+  TaskGate prepGateOwner;
+  GateGroup prepGate = prepGateOwner.group("playback");
+  GateToken prepFrameToken{};
+  GateToken prepAudioToken{};
+  GateToken prepPresentToken{};
+  GateToken timestampToken{};
+  GateToken audioFinishedToken{};
   framePool.resize(kMaxQueuedFrames + 1);
   for (size_t i = 0; i < framePool.size(); ++i) {
     freeFrames.push_back(i);
   }
+  prepGate.bump();
 
   auto clearQueue = [&]() {
     std::lock_guard<std::mutex> lock(queueMutex);
@@ -1144,6 +1173,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (!haveFirstQueued && tryPopFrame(firstQueued, pendingScaleEpoch)) {
       haveFirstQueued = true;
     }
+    prepGate.ensure(prepFrameToken, !haveFirstQueued, kGateFrameFirst);
     if (haveFirstQueued) {
       size_t bufferedFrames = 0;
       {
@@ -1215,6 +1245,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return ok;
   }
   setCurrentFrame(firstQueued.poolIndex);
+  prepPresentToken = prepGate.begin(kGatePresentFirst);
   firstInfo = firstQueued.info;
   decoderTargetW = frame->width;
   decoderTargetH = frame->height;
@@ -1247,7 +1278,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   bool presentUseWall = false;
   bool resetPresentClock = false;
   int64_t firstTs = frame->timestamp100ns;
-  bool audioGateReleased = false;
   double frameSec =
       static_cast<double>(frame->timestamp100ns - firstTs) * ticksToSeconds;
   double lastFrameSec = frameSec;
@@ -1335,16 +1365,29 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       displaySec = std::clamp(pendingSeekHoldSec, 0.0, totalSec);
     }
     bool audioPrimed = audioOk ? audioIsPrimed() : true;
-    bool preparingPlayback = audioStarting || (audioOk && !audioPrimed);
-    bool allowFrame = !preparingPlayback;
-    if (!audioGateReleased && audioOk) {
-      if (rawSec + kLeadSlackSec < frameSec) {
-        allowFrame = false;
-      }
+    bool shouldCheckTimestamp =
+        prepPresentToken.active && audioOk && !audioHoldActive;
+    bool timestampBlocked =
+        shouldBlockTimestamp(shouldCheckTimestamp, rawSec, kLeadSlackSec,
+                             frameSec);
+    prepGate.ensure(timestampToken, shouldCheckTimestamp && timestampBlocked,
+                    kGateTimestampFirst);
+
+    prepGate.ensure(audioFinishedToken, audioOk && audioIsFinished(),
+                    kGateAudioFinished);
+
+    bool preparingPlayback = !prepGate.ready();
+    bool waitingForTimestamp = waitingForTimestampLabel(prepGate);
+    bool allowFrame = canPresentFrame(prepGate);
+    if (allowFrame && audioHoldActive && audioOk && audioPrimed) {
+      audioSetHold(false);
+      audioHoldActive = false;
+      audioSyncBiasSec = 0.0;
+      audioSyncBiasValid = false;
+      resetPresentClock = true;
+      redraw = true;
     }
-    if (allowFrame) {
-      audioGateReleased = true;
-    }
+    prepGate.ensure(prepPresentToken, !allowFrame, kGatePresentFirst);
 
     bool sizeChanged =
         (width != cachedWidth || maxHeight != cachedMaxHeight ||
@@ -1524,14 +1567,18 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       } else {
         std::string label = preparingPlayback
                                 ? "Preparing video playback..."
-                                : "Waiting for video timestamp...";
+                                : (waitingForTimestamp
+                                       ? "Waiting for video timestamp..."
+                                       : "Waiting for video...");
         screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       }
     } else {
       std::string label = allowFrame
                               ? "ASCII rendering disabled"
                               : (preparingPlayback ? "Preparing video playback..."
-                                                   : "Waiting for video...");
+                                                   : (waitingForTimestamp
+                                                          ? "Waiting for video timestamp..."
+                                                          : "Waiting for video..."));
       screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       if (maxHeight > 1) {
         std::string sizeLine =
@@ -1553,7 +1600,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       }
 
       std::string status;
-      if (audioOk && audioIsFinished()) {
+      bool audioFinished = audioOk && !prepGate.readyFor("audio_finished");
+      if (audioFinished) {
         status = "\xE2\x96\xA0";  // ended icon
       } else if (audioOk && audioIsPaused()) {
         status = "\xE2\x8F\xB8";  // paused icon
@@ -1608,6 +1656,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   std::atomic<bool> audioStartOk{false};
   std::thread audioStartThread;
   if (enableAudio) {
+    prepAudioToken = prepGate.begin(kGateAudioStart);
+    if (audioHoldActive) {
+      audioSetHold(true);
+    }
     audioStartThread = std::thread([&]() {
       bool ok = audioStartFile(file);
       audioStartOk.store(ok);
@@ -1628,6 +1680,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     audioStarting = false;
     audioSyncBiasSec = 0.0;
     audioSyncBiasValid = false;
+    if (prepAudioToken.active) {
+      prepGate.end(prepAudioToken);
+    }
+    if (!audioOk) {
+      audioSetHold(false);
+      audioHoldActive = false;
+    }
     perfLogAppendf(&perfLog, "audio_start ok=%d", audioOk ? 1 : 0);
     if (audioOk) {
       AudioPerfStats stats = audioGetPerfStats();
@@ -2099,6 +2158,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
 
     if (advanced && presentDue) {
+      if (audioHoldActive && audioOk && audioIsPrimed()) {
+        audioSetHold(false);
+        audioHoldActive = false;
+        audioSyncBiasSec = 0.0;
+        audioSyncBiasValid = false;
+        resetPresentClock = true;
+        redraw = true;
+      }
       double displayedSec = frameSec;
       int64_t displayedTs = frame->timestamp100ns;
       auto renderStart = std::chrono::steady_clock::now();

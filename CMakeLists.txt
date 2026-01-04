@@ -13,10 +13,55 @@ add_executable(radioify
   consolescreen.cpp
   ffmpegaudio.cpp
   m4adecoder.cpp
+  taskgate.cpp
   ui_helpers.cpp
   videoplayback.cpp
   videodecoder.cpp
   radio.cpp
+)
+
+set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders")
+set(RADIOIFY_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(RADIOIFY_EMBED_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake")
+
+set(RADIOIFY_COMPUTE_SHADER_HLSL "${RADIOIFY_SHADER_DIR}/asciiart_gpu.hlsl")
+set(RADIOIFY_STATS_SHADER_HLSL "${RADIOIFY_SHADER_DIR}/asciiart_stats.hlsl")
+set(RADIOIFY_COMPUTE_SHADER_HEADER "${RADIOIFY_GENERATED_DIR}/asciiart_gpu_shader.h")
+set(RADIOIFY_STATS_SHADER_HEADER "${RADIOIFY_GENERATED_DIR}/asciiart_stats_shader.h")
+
+add_custom_command(
+  OUTPUT "${RADIOIFY_COMPUTE_SHADER_HEADER}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${RADIOIFY_GENERATED_DIR}"
+  COMMAND ${CMAKE_COMMAND}
+          -DINPUT=${RADIOIFY_COMPUTE_SHADER_HLSL}
+          -DOUTPUT=${RADIOIFY_COMPUTE_SHADER_HEADER}
+          -DVAR=kComputeShaderSource
+          -P ${RADIOIFY_EMBED_SCRIPT}
+  DEPENDS "${RADIOIFY_COMPUTE_SHADER_HLSL}" "${RADIOIFY_EMBED_SCRIPT}"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT "${RADIOIFY_STATS_SHADER_HEADER}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${RADIOIFY_GENERATED_DIR}"
+  COMMAND ${CMAKE_COMMAND}
+          -DINPUT=${RADIOIFY_STATS_SHADER_HLSL}
+          -DOUTPUT=${RADIOIFY_STATS_SHADER_HEADER}
+          -DVAR=kStatsShaderSource
+          -P ${RADIOIFY_EMBED_SCRIPT}
+  DEPENDS "${RADIOIFY_STATS_SHADER_HLSL}" "${RADIOIFY_EMBED_SCRIPT}"
+  VERBATIM
+)
+
+add_custom_target(radioify_shader_headers
+  DEPENDS "${RADIOIFY_COMPUTE_SHADER_HEADER}" "${RADIOIFY_STATS_SHADER_HEADER}"
+)
+
+add_dependencies(radioify radioify_shader_headers)
+target_include_directories(radioify PRIVATE "${RADIOIFY_GENERATED_DIR}")
+target_sources(radioify PRIVATE
+  "${RADIOIFY_COMPUTE_SHADER_HEADER}"
+  "${RADIOIFY_STATS_SHADER_HEADER}"
 )
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")

@@ -74,6 +74,7 @@ constexpr bool kUseHybridMode = false;  // Disable hybrid - braille is better
 constexpr int kMinContrastForBraille =
     15;  // Use braille when cell has this much contrast
 constexpr int kSignalStrengthFloor = 51;  // Keep faint details visible
+constexpr int kNeighborSignalBlend = 96;  // Spatial blend from neighbors (0-255)
 
 // Direct YUV conversie zonder sRGB linearisering
 // Rec. 709 coefficients als integer fixed-point (<<16 voor precision)
@@ -452,6 +453,7 @@ struct BrailleFastScratch {
   std::vector<uint8_t> prevFgValid;
   std::vector<uint32_t> prevBg;
   std::vector<uint8_t> prevBgValid;
+  std::vector<uint8_t> cellSignal;
   int prevLumLow = -1;
   int prevLumHigh = -1;
   int prevBgLum = -1;
@@ -512,6 +514,7 @@ struct BrailleFastScratch {
     prevFgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevBg.assign(static_cast<size_t>(outW) * outH, 0);
     prevBgValid.assign(static_cast<size_t>(outW) * outH, 0);
+    cellSignal.resize(static_cast<size_t>(outW) * outH);
     prevLumLow = -1;
     prevLumHigh = -1;
     prevBgLum = -1;
@@ -734,6 +737,63 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   scratch.prevBgLum = bgLum;
 
   const int lumRange = std::max(80, lumHigh - lumLow);
+
+  int signalWorkerCount = computeWorkerCount(outH, kParallelBatchRows);
+  parallelFor(
+      outH, kParallelBatchRows, signalWorkerCount,
+      [&](int cyStart, int cyEnd, int) {
+        for (int cy = cyStart; cy < cyEnd; ++cy) {
+          int baseY = cy * 4;
+          for (int cx = 0; cx < outW; ++cx) {
+            int baseX = cx * 2;
+            int cellEdgeMax = 0;
+            int cellLumSum = 0;
+            int validCount = 0;
+            for (int dy = 0; dy < 4; ++dy) {
+              int y = baseY + dy;
+              const uint8_t* lumRow = scratch.lumaPad.data() +
+                                      static_cast<size_t>(y + 1) * padStride +
+                                      (baseX + 1);
+              const uint8_t* edgeRow = scratch.edgeMap.data() +
+                                       static_cast<size_t>(y) * scaledW +
+                                       baseX;
+              if constexpr (!AssumeOpaque) {
+                const uint32_t* rgbRow = scratch.scaledRGBA.data() +
+                                         static_cast<size_t>(y) * scaledW +
+                                         baseX;
+                for (int dx = 0; dx < 2; ++dx) {
+                  uint32_t px = rgbRow[dx];
+                  uint8_t a = static_cast<uint8_t>((px >> 24) & 0xFF);
+                  if (a == 0) continue;
+                  int edge = edgeRow[dx];
+                  if (edge > cellEdgeMax) cellEdgeMax = edge;
+                  cellLumSum += lumRow[dx];
+                  ++validCount;
+                }
+              } else {
+                for (int dx = 0; dx < 2; ++dx) {
+                  int edge = edgeRow[dx];
+                  if (edge > cellEdgeMax) cellEdgeMax = edge;
+                  cellLumSum += lumRow[dx];
+                  ++validCount;
+                }
+              }
+            }
+            int cellLumMean =
+                validCount > 0 ? cellLumSum / validCount : bgLum;
+            int rawDiff = std::abs(cellLumMean - bgLum);
+            int avgLumDiff = validCount > 0
+                                 ? rawDiff * 255 / std::max(1, lumRange)
+                                 : 0;
+            if (avgLumDiff > 255) avgLumDiff = 255;
+            int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
+            int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
+            int signalStrength = std::max(edgeSig, lumSig);
+            scratch.cellSignal[static_cast<size_t>(cy) * outW + cx] =
+                static_cast<uint8_t>(signalStrength);
+          }
+        }
+      });
 
   const int brailleMap[2][4] = {{0, 1, 2, 6}, {3, 4, 5, 7}};
 
@@ -976,11 +1036,28 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
               int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
               int signalStrength = std::max(edgeSig, lumSig);
-              int blendStrength = kSignalStrengthFloor +
-                                  ((signalStrength *
-                                        (255 - kSignalStrengthFloor) +
-                                    127) /
-                                   255);
+              // Spatial stabilization: borrow strength from nearby detail.
+              int neighborMax = signalStrength;
+              int ny0 = std::max(0, cy - 1);
+              int ny1 = std::min(outH - 1, cy + 1);
+              int nx0 = std::max(0, cx - 1);
+              int nx1 = std::min(outW - 1, cx + 1);
+              for (int ny = ny0; ny <= ny1; ++ny) {
+                size_t row = static_cast<size_t>(ny) * outW;
+                for (int nx = nx0; nx <= nx1; ++nx) {
+                  if (nx == cx && ny == cy) continue;
+                  int neighborSignal = scratch.cellSignal[row + nx];
+                  if (neighborSignal > neighborMax) neighborMax = neighborSignal;
+                }
+              }
+              int neighborBlend =
+                  (signalStrength * (255 - kNeighborSignalBlend) +
+                   neighborMax * kNeighborSignalBlend + 127) /
+                  255;
+              int spatialSignal = std::max(signalStrength, neighborBlend);
+              int blendStrength =
+                  kSignalStrengthFloor +
+                  ((spatialSignal * (255 - kSignalStrengthFloor) + 127) / 255);
 
               // Dampening (Noise Hiding):
               // If signalStrength is low, we interpolate curFg towards curBg.
