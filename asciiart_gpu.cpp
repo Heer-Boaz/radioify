@@ -284,6 +284,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         sumAll += color.rgb;
     }
 
+    float cellBgLum = (cellLumSum - cellLumMin - cellLumMax) * (1.0f / 6.0f);
+
     // Adjust bgLum and lumRange for Limited Range if needed
     uint bgLum = StatsBuffer[0].x;
     uint lumRange = StatsBuffer[0].y;
@@ -294,6 +296,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         effectiveBgLum = (effectiveBgLum - 16.0f) * (255.0f / 219.0f);
         effectiveLumRange = effectiveLumRange * (255.0f / 219.0f);
     }
+    float cellRange = cellLumMax - cellLumMin;
+    float alpha = saturate((90.0f - cellRange) / (90.0f - 40.0f));
+    float refLum = lerp(effectiveBgLum, cellBgLum, alpha);
+    float hysteresis = lerp(4.0f, 10.0f, alpha);
 
     // 2. Adaptive Thresholding (Per-Sub-Pixel Logic)
     // This section determines which Braille dots should be active based on the input image.
@@ -308,6 +314,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Col 0: 0=(0,0), 1=(0,1), 2=(0,2), 6=(0,3)
     // Col 1: 3=(1,0), 4=(1,1), 5=(1,2), 7=(1,3)
     int bitMap[8] = {0, 1, 2, 6, 3, 4, 5, 7};
+
+    uint2 history = HistoryBuffer[cellIndex];
+    uint prevMask = history.x >> 24;
 
     uint bitmask = 0;
     float3 sumInk = float3(0,0,0);
@@ -328,19 +337,22 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
         float threshold = max(10.0f, baseThreshold - dots[j].edge * 0.2f);
 
-        // Check against global background luminance:
-        // We compare the dot's luma against the global background luma (effectiveBgLum).
-        // This helps in separating the subject from the background.
-        float lumDiff = abs(dots[j].luma - effectiveBgLum);
+        // Check against hybrid background luminance:
+        // Mix global and local background based on local detail.
+        float lumDiff = abs(dots[j].luma - refLum);
         
         // Decision: Is this sub-pixel a dot?
         // If the luma difference exceeds the threshold, it's considered a foreground dot.
         // Note: We use luma difference as a proxy for "color distance" for performance.
-        bool isDot = (lumDiff >= threshold);
+        uint bit = (uint)bitMap[dots[j].idx];
+        bool wasOn = ((prevMask >> bit) & 1) != 0;
+        float onThreshold = threshold;
+        float offThreshold = max(6.0f, threshold - hysteresis);
+        bool isDot = wasOn ? (lumDiff >= offThreshold) : (lumDiff >= onThreshold);
 
         // Accumulate colors for Foreground (Ink) and Background calculation later.
         if (isDot) {
-            bitmask |= (1 << bitMap[dots[j].idx]);
+            bitmask |= (1 << bit);
             sumInk += dots[j].color;
             inkCount++;
         } else {
@@ -452,7 +464,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Temporal Stability (Ghosting Reduction)
     // We blend the current frame's color with the previous frame's color to reduce flickering.
     // However, too much blending causes "ghosting" (trails behind moving objects).
-    uint2 history = HistoryBuffer[cellIndex];
     float3 prevFg = UnpackColor(history.x);
     float3 prevBg = UnpackColor(history.y);
     
@@ -474,7 +485,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     }
 
     // Write back history for the next frame
-    HistoryBuffer[cellIndex] = uint2(PackColor(curFg), PackColor(curBg));
+    uint fg24 = PackColor(curFg) & 0x00FFFFFF;
+    HistoryBuffer[cellIndex] = uint2(fg24 | (bitmask << 24), PackColor(curBg));
 
     AsciiCell cell;
     cell.ch = kBrailleBase + bitmask;

@@ -743,6 +743,23 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             // Adaptive thresholding: gebruik lokaal contrast indien significant
             int cellLumRange = cellLumMax - cellLumMin;
             int cellLumMean = validCount > 0 ? cellLumSum / validCount : bgLum;
+            int cellBgLum = bgLum;
+            if (validCount >= 3) {
+              cellBgLum = (cellLumSum - cellLumMin - cellLumMax) /
+                          (validCount - 2);
+            } else if (validCount > 0) {
+              cellBgLum = cellLumSum / validCount;
+            }
+            int alpha = 0;
+            if (cellLumRange < 40) {
+              alpha = 255;
+            } else if (cellLumRange > 90) {
+              alpha = 0;
+            } else {
+              alpha = (90 - cellLumRange) * 255 / (90 - 40);
+            }
+            int refLum =
+                (bgLum * (255 - alpha) + cellBgLum * alpha + 127) / 255;
             bool useLocalThreshold =
                 cellLumRange > 20;  // Alleen bij voldoende lokaal contrast
             int localMidpoint =
@@ -773,10 +790,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
               int threshold = std::max(10, baseThreshold - (edge * 51 / 255)); // 0.2 * 255 ~= 51
 
-              // Check against global background luminance:
-              // We compare the dot's luma against the global background luma (bgLum).
-              // This helps in separating the subject from the background.
-              int lumDiff = std::abs(lum - bgLum);
+              // Check against hybrid background luminance:
+              // Mix global and local background based on local detail.
+              int lumDiff = std::abs(lum - refLum);
               
               // Decision: Is this sub-pixel a dot?
               // If the luma difference exceeds the threshold, it's considered a foreground dot.
