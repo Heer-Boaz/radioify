@@ -198,6 +198,8 @@ constexpr int kAAScoreBandMin = 12;
 constexpr int kAAScoreBandMax = 144;  // Soft AA band voor gladdere randen
 constexpr int kLumSmoothAlpha = 40;   // Snellere adaptatie
 constexpr int kLumResetDelta = 28;
+constexpr float kHdrReferenceNits = 100.0f;
+constexpr float kHdrScale = 10000.0f / kHdrReferenceNits;
 
 // Rec. 709 coefficients met hogere precisie (fixed-point 16.16)
 // Geen per-kanaal lookup tables meer - direct berekening is sneller!
@@ -290,10 +292,6 @@ FORCE_INLINE float expandChromaNorm(int c, bool fullRange, int bitDepth) {
   return (static_cast<float>(c) - cMid) / denom;
 }
 
-FORCE_INLINE uint8_t normalizeLuma8(int y, bool fullRange, int bitDepth) {
-  return clampToByte(expandYNorm(y, fullRange, bitDepth) * 255.0f);
-}
-
 FORCE_INLINE uint8_t to8bitFrom10(int v10) {
   if (v10 < 0) v10 = 0;
   if (v10 > 1023) v10 = 1023;
@@ -340,6 +338,23 @@ FORCE_INLINE float linearToSrgb(float x) {
   return 1.055f * std::pow(x, 1.0f / 2.4f) - 0.055f;
 }
 
+FORCE_INLINE uint8_t normalizeLuma8(int y, bool fullRange, int bitDepth,
+                                    YuvTransfer transfer) {
+  float v = expandYNorm(y, fullRange, bitDepth);
+  if (transfer == YuvTransfer::Pq) {
+    v = pqEotf(v);
+    v = toneMapFilmic(v * kHdrScale);
+    v = clampFloat(v, 0.0f, 1.0f);
+    v = linearToSrgb(v);
+  } else if (transfer == YuvTransfer::Hlg) {
+    v = hlgEotf(v);
+    v = toneMapFilmic(v * kHdrScale);
+    v = clampFloat(v, 0.0f, 1.0f);
+    v = linearToSrgb(v);
+  }
+  return clampToByte(clampFloat(v, 0.0f, 1.0f) * 255.0f);
+}
+
 FORCE_INLINE void yuvToRgb(int y, int u, int v, bool fullRange, int bitDepth,
                            YuvMatrix matrix, YuvTransfer transfer,
                            uint8_t& outR, uint8_t& outG, uint8_t& outB) {
@@ -365,7 +380,6 @@ FORCE_INLINE void yuvToRgb(int y, int u, int v, bool fullRange, int bitDepth,
   }
 
   if (transfer == YuvTransfer::Pq || transfer == YuvTransfer::Hlg) {
-    constexpr float kHdrScale = 10000.0f / 200.0f;
     r = clampFloat(r, 0.0f, 1.0f);
     g = clampFloat(g, 0.0f, 1.0f);
     b = clampFloat(b, 0.0f, 1.0f);
@@ -1405,7 +1419,8 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
               int uAvg = static_cast<int>((sumU + half) / sampleCount);
               int vAvg = static_cast<int>((sumV + half) / sampleCount);
 
-              uint8_t lum = normalizeLuma8(yAvg, fullRange, bitDepth);
+              uint8_t lum =
+                  normalizeLuma8(yAvg, fullRange, bitDepth, yuvTransfer);
               padRow[x + 1] = lum;
               ++hist[lum];
               ++lumLocal;

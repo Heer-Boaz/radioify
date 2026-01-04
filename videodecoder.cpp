@@ -36,6 +36,8 @@ void setError(std::string* error, const char* message) {
   if (error) *error = message;
 }
 
+constexpr int kNoFrameTimeoutMs = 100;
+
 std::string ffmpegError(int err) {
   char buf[256];
   buf[0] = '\0';
@@ -145,12 +147,40 @@ struct VideoDecoder::Impl {
       if (relUs < 0) relUs = 0;
       ts100ns = relUs * 10;
     }
+    AVColorSpace frameSpace = src->colorspace;
+    if (frameSpace == AVCOL_SPC_UNSPECIFIED ||
+        frameSpace == AVCOL_SPC_RESERVED) {
+      frameSpace = codec ? codec->colorspace : frameSpace;
+    }
+    AVColorPrimaries framePrimaries = src->color_primaries;
+    if (framePrimaries == AVCOL_PRI_UNSPECIFIED ||
+        framePrimaries == AVCOL_PRI_RESERVED) {
+      framePrimaries = codec ? codec->color_primaries : framePrimaries;
+    }
+    YuvMatrix frameMatrix = yuvMatrix;
+    if (frameSpace != AVCOL_SPC_UNSPECIFIED &&
+        frameSpace != AVCOL_SPC_RESERVED) {
+      frameMatrix = mapColorMatrix(frameSpace);
+    } else if (framePrimaries == AVCOL_PRI_BT2020) {
+      frameMatrix = YuvMatrix::Bt2020;
+    }
+    AVColorTransferCharacteristic frameTrc = src->color_trc;
+    if (frameTrc == AVCOL_TRC_UNSPECIFIED || frameTrc == AVCOL_TRC_RESERVED) {
+      frameTrc = codec ? codec->color_trc : frameTrc;
+    }
+    YuvTransfer frameTransfer = yuvTransfer;
+    if (frameTrc != AVCOL_TRC_UNSPECIFIED && frameTrc != AVCOL_TRC_RESERVED) {
+      frameTransfer = mapColorTransfer(frameTrc);
+    } else if (framePrimaries == AVCOL_PRI_BT2020 ||
+               frameMatrix == YuvMatrix::Bt2020) {
+      frameTransfer = YuvTransfer::Pq;
+    }
     out.width = targetW;
     out.height = targetH;
     out.timestamp100ns = ts100ns;
     out.fullRange = fullRange;
-    out.yuvMatrix = yuvMatrix;
-    out.yuvTransfer = yuvTransfer;
+    out.yuvMatrix = frameMatrix;
+    out.yuvTransfer = frameTransfer;
 
     if (!decodePixels) {
       out.format = VideoPixelFormat::Unknown;
@@ -282,6 +312,11 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
     return false;
   }
 
+  // Prefer recovering corrupted streams over stalling on missing references.
+  ctx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
+  ctx->flags2 |= AV_CODEC_FLAG2_SHOW_ALL;
+  ctx->err_recognition = AV_EF_IGNORE_ERR;
+
   // Let FFmpeg choose an appropriate thread count unless explicitly set.
   if (ctx->thread_count < 0) {
     ctx->thread_count = 0;
@@ -409,6 +444,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
   if (info) {
     *info = VideoReadInfo{};
   }
+  const auto start = std::chrono::steady_clock::now();
 
   while (true) {
     int recv = avcodec_receive_frame(impl_->codec, impl_->frame);
@@ -487,6 +523,16 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
         // We dropped the packet and continue to next one.
         continue;
       }
+    }
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+    if (elapsed.count() >= kNoFrameTimeoutMs) {
+      if (info) {
+        info->noFrameTimeoutMs =
+            static_cast<uint32_t>(std::min<int64_t>(elapsed.count(), UINT32_MAX));
+      }
+      return false;
     }
   }
 }

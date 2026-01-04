@@ -48,6 +48,7 @@ RWStructuredBuffer<uint2> HistoryBuffer : register(u1); // x=Fg, y=Bg (packed)
 
 static const uint kBrailleBase = 0x2800;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
+static const float kHdrScale = 10000.0f / 100.0f;
 static const uint kMatrixBt709 = 0;
 static const uint kMatrixBt601 = 1;
 static const uint kMatrixBt2020 = 2;
@@ -185,6 +186,30 @@ float3 LinearToSrgb(float3 v) {
     return float3(LinearToSrgb(v.x), LinearToSrgb(v.y), LinearToSrgb(v.z));
 }
 
+float ApplyHdrToSdr(float v) {
+    v = saturate(v);
+    if (yuvTransfer == kTransferPq) {
+        v = PQEotf(v);
+    } else {
+        v = HlgEotf(v);
+    }
+    v = ToneMapFilmic(v * kHdrScale);
+    v = saturate(v);
+    return LinearToSrgb(v);
+}
+
+float3 ApplyHdrToSdr(float3 v) {
+    v = saturate(v);
+    if (yuvTransfer == kTransferPq) {
+        v = PQEotf(v);
+    } else {
+        v = HlgEotf(v);
+    }
+    v = ToneMapFilmic(v * kHdrScale);
+    v = saturate(v);
+    return LinearToSrgb(v);
+}
+
 float SampleLumaRaw(float2 uv, SamplerState s) {
 #ifdef NV12_INPUT
     float yNorm = TextureY.SampleLevel(s, uv, 0);
@@ -225,7 +250,13 @@ float SampleLumaArea(float2 centerUV, float2 dotSizePx) {
             weightSum += weight;
         }
     }
-    return sum / weightSum;
+    float luma = sum / weightSum;
+#ifdef NV12_INPUT
+    if (yuvTransfer != kTransferSdr) {
+        luma = ApplyHdrToSdr(luma / 255.0f) * 255.0f;
+    }
+#endif
+    return luma;
 }
 
 float GetInkLevelFromLum(float lum) {
@@ -279,16 +310,7 @@ float4 SampleInput(float2 uv) {
     float3 rgb = color.rgb;
 #ifdef NV12_INPUT
     if (yuvTransfer != kTransferSdr) {
-        rgb = saturate(rgb);
-        if (yuvTransfer == kTransferPq) {
-            rgb = PQEotf(rgb);
-        } else {
-            rgb = HlgEotf(rgb);
-        }
-        rgb = ToneMapFilmic(rgb * (10000.0f / 200.0f));
-        rgb = saturate(rgb);
-        rgb = LinearToSrgb(rgb);
-        rgb = saturate(rgb);
+        rgb = ApplyHdrToSdr(rgb);
     } else
 #endif
     {
@@ -392,16 +414,19 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     uint bgLum = StatsBuffer[0].x;
     uint lumRange = StatsBuffer[0].y;
 
-    float effectiveBgLum = (float)bgLum;
     float effectiveLumRange = max((float)lumRange, 80.0f); // Clamp to prevent noise amplification
     if (isFullRange == 0) {
-        float bgNorm = effectiveBgLum / 255.0f;
-        effectiveBgLum = ExpandYNorm(bgNorm) * 255.0f;
         uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
         float yRange = (float)(219u << shift);
         float scale = GetMaxCode() / max(yRange, 1.0f);
         effectiveLumRange = effectiveLumRange * scale;
     }
+    float bgNorm = (float)bgLum / 255.0f;
+    float effectiveBgLum = ExpandYNorm(bgNorm);
+    if (yuvTransfer != kTransferSdr) {
+        effectiveBgLum = ApplyHdrToSdr(effectiveBgLum);
+    }
+    effectiveBgLum *= 255.0f;
     float cellRange = cellLumMax - cellLumMin;
     float alpha = saturate((90.0f - cellRange) / (90.0f - 40.0f));
     float refLum = lerp(effectiveBgLum, cellBgLum, alpha);
