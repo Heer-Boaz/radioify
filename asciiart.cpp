@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -31,6 +32,8 @@
 
 namespace {
 constexpr uint32_t kBrailleBase = 0x2800;
+#define BG_CLAMP 1
+#define BG_CLAMP_DEBUG 0
 
 // === SIMPLE DENSITY-BASED ASCII RAMP ===
 // Classic ASCII art approach: characters sorted by visual density
@@ -74,7 +77,6 @@ constexpr bool kUseHybridMode = false;  // Disable hybrid - braille is better
 constexpr int kMinContrastForBraille =
     15;  // Use braille when cell has this much contrast
 constexpr int kSignalStrengthFloor = 51;  // Keep faint details visible
-constexpr int kNeighborSignalBlend = 96;  // Spatial blend from neighbors (0-255)
 
 // Direct YUV conversie zonder sRGB linearisering
 // Rec. 709 coefficients als integer fixed-point (<<16 voor precision)
@@ -453,7 +455,6 @@ struct BrailleFastScratch {
   std::vector<uint8_t> prevFgValid;
   std::vector<uint32_t> prevBg;
   std::vector<uint8_t> prevBgValid;
-  std::vector<uint8_t> cellSignal;
   int prevLumLow = -1;
   int prevLumHigh = -1;
   int prevBgLum = -1;
@@ -514,7 +515,6 @@ struct BrailleFastScratch {
     prevFgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevBg.assign(static_cast<size_t>(outW) * outH, 0);
     prevBgValid.assign(static_cast<size_t>(outW) * outH, 0);
-    cellSignal.resize(static_cast<size_t>(outW) * outH);
     prevLumLow = -1;
     prevLumHigh = -1;
     prevBgLum = -1;
@@ -611,7 +611,8 @@ bool loadImagePixels(const std::filesystem::path& path, int& outW, int& outH,
 
 template <bool AssumeOpaque>
 bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
-                               uint64_t lumCount, const uint32_t* lumHist) {
+                               uint64_t lumCount, const uint32_t* lumHist,
+                               bool isSdr) {
   const int outW = scratch.outW;
   const int outH = scratch.outH;
   const int scaledW = scratch.scaledW;
@@ -621,6 +622,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   out.width = outW;
   out.height = outH;
   out.cells.resize(static_cast<size_t>(outW) * outH);
+#if BG_CLAMP_DEBUG
+  std::atomic<uint64_t> bgClampCount{0};
+  std::atomic<uint64_t> bgClampTotal{0};
+#endif
 
   std::memcpy(scratch.lumaPad.data(), scratch.lumaPad.data() + padStride,
               static_cast<size_t>(padStride));
@@ -737,63 +742,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   scratch.prevBgLum = bgLum;
 
   const int lumRange = std::max(80, lumHigh - lumLow);
-
-  int signalWorkerCount = computeWorkerCount(outH, kParallelBatchRows);
-  parallelFor(
-      outH, kParallelBatchRows, signalWorkerCount,
-      [&](int cyStart, int cyEnd, int) {
-        for (int cy = cyStart; cy < cyEnd; ++cy) {
-          int baseY = cy * 4;
-          for (int cx = 0; cx < outW; ++cx) {
-            int baseX = cx * 2;
-            int cellEdgeMax = 0;
-            int cellLumSum = 0;
-            int validCount = 0;
-            for (int dy = 0; dy < 4; ++dy) {
-              int y = baseY + dy;
-              const uint8_t* lumRow = scratch.lumaPad.data() +
-                                      static_cast<size_t>(y + 1) * padStride +
-                                      (baseX + 1);
-              const uint8_t* edgeRow = scratch.edgeMap.data() +
-                                       static_cast<size_t>(y) * scaledW +
-                                       baseX;
-              if constexpr (!AssumeOpaque) {
-                const uint32_t* rgbRow = scratch.scaledRGBA.data() +
-                                         static_cast<size_t>(y) * scaledW +
-                                         baseX;
-                for (int dx = 0; dx < 2; ++dx) {
-                  uint32_t px = rgbRow[dx];
-                  uint8_t a = static_cast<uint8_t>((px >> 24) & 0xFF);
-                  if (a == 0) continue;
-                  int edge = edgeRow[dx];
-                  if (edge > cellEdgeMax) cellEdgeMax = edge;
-                  cellLumSum += lumRow[dx];
-                  ++validCount;
-                }
-              } else {
-                for (int dx = 0; dx < 2; ++dx) {
-                  int edge = edgeRow[dx];
-                  if (edge > cellEdgeMax) cellEdgeMax = edge;
-                  cellLumSum += lumRow[dx];
-                  ++validCount;
-                }
-              }
-            }
-            int cellLumMean =
-                validCount > 0 ? cellLumSum / validCount : bgLum;
-            int rawDiff = std::abs(cellLumMean - bgLum);
-            int avgLumDiff = validCount > 0
-                                 ? rawDiff * 255 / std::max(1, lumRange)
-                                 : 0;
-            if (avgLumDiff > 255) avgLumDiff = 255;
-            int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
-            int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
-            int signalStrength = std::max(edgeSig, lumSig);
-            scratch.cellSignal[static_cast<size_t>(cy) * outW + cx] =
-                static_cast<uint8_t>(signalStrength);
-          }
-        }
-      });
 
   const int brailleMap[2][4] = {{0, 1, 2, 6}, {3, 4, 5, 7}};
 
@@ -917,6 +865,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 cellLumRange > 20;  // Alleen bij voldoende lokaal contrast
             int localMidpoint =
                 useLocalThreshold ? ((cellLumMin + cellLumMax) >> 1) : bgLum;
+            bool useDither = false;
 
             // 2. Adaptive Thresholding (Per-Sub-Pixel Logic)
             // This section determines which Braille dots should be active based on the input image.
@@ -963,6 +912,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             if (avgLumDiff > 255) avgLumDiff = 255;
 
             if (!useLocalThreshold) {
+              useDither = true;
               uint8_t coverage =
                   kInkLevelFromLum[static_cast<size_t>(rawDiff)];
               int ditherMask = 0;
@@ -1067,28 +1017,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
               int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
               int signalStrength = std::max(edgeSig, lumSig);
-              // Spatial stabilization: borrow strength from nearby detail.
-              int neighborMax = signalStrength;
-              int ny0 = std::max(0, cy - 2);
-              int ny1 = std::min(outH - 1, cy + 2);
-              int nx0 = std::max(0, cx - 2);
-              int nx1 = std::min(outW - 1, cx + 2);
-              for (int ny = ny0; ny <= ny1; ++ny) {
-                size_t row = static_cast<size_t>(ny) * outW;
-                for (int nx = nx0; nx <= nx1; ++nx) {
-                  if (nx == cx && ny == cy) continue;
-                  int neighborSignal = scratch.cellSignal[row + nx];
-                  if (neighborSignal > neighborMax) neighborMax = neighborSignal;
-                }
-              }
-              int neighborBlend =
-                  (signalStrength * (255 - kNeighborSignalBlend) +
-                   neighborMax * kNeighborSignalBlend + 127) /
-                  255;
-              int spatialSignal = std::max(signalStrength, neighborBlend);
               int blendStrength =
                   kSignalStrengthFloor +
-                  ((spatialSignal * (255 - kSignalStrengthFloor) + 127) / 255);
+                  ((signalStrength * (255 - kSignalStrengthFloor) + 127) / 255);
 
               // Dampening (Noise Hiding):
               // If signalStrength is low, we interpolate curFg towards curBg.
@@ -1242,6 +1173,42 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                       255, (static_cast<int>(bgB) * scale + 128) >> 8));
                 }
               }
+#if BG_CLAMP_DEBUG
+              bool bgClampApplied = false;
+#endif
+#if BG_CLAMP
+              if (isSdr && inkCount == 0 && !useDither &&
+                  signalStrength < 64) {
+                int refBgY = bgLum;
+                bgY =
+                    (static_cast<int>(bgR) * 54 + static_cast<int>(bgG) * 183 +
+                     static_cast<int>(bgB) * 19 + 128) >>
+                    8;
+                int maxDeltaY = 18;
+                int minY = refBgY - maxDeltaY;
+                int maxY = refBgY + maxDeltaY;
+                int clampedY = std::clamp(bgY, minY, maxY);
+                if (clampedY != bgY) {
+                  int denom = std::max(bgY, 1);
+                  int scale = (clampedY * 256 + (denom / 2)) / denom;
+                  bgR = static_cast<uint8_t>(std::min(
+                      255, (static_cast<int>(bgR) * scale + 128) >> 8));
+                  bgG = static_cast<uint8_t>(std::min(
+                      255, (static_cast<int>(bgG) * scale + 128) >> 8));
+                  bgB = static_cast<uint8_t>(std::min(
+                      255, (static_cast<int>(bgB) * scale + 128) >> 8));
+#if BG_CLAMP_DEBUG
+                  bgClampApplied = true;
+#endif
+                }
+              }
+#endif
+#if BG_CLAMP_DEBUG
+              bgClampTotal.fetch_add(1, std::memory_order_relaxed);
+              if (bgClampApplied) {
+                bgClampCount.fetch_add(1, std::memory_order_relaxed);
+              }
+#endif
               if (prevBgValid) {
                 int pr = static_cast<int>(prevBgR);
                 int pg = static_cast<int>(prevBgG);
@@ -1349,6 +1316,18 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
           }
         }
       });
+
+#if BG_CLAMP_DEBUG
+  uint64_t total = bgClampTotal.load(std::memory_order_relaxed);
+  uint64_t clamped = bgClampCount.load(std::memory_order_relaxed);
+  if (total > 0) {
+    double pct = (static_cast<double>(clamped) * 100.0) /
+                 static_cast<double>(total);
+    std::fprintf(stderr, "bg clamp: %.2f%% (%llu/%llu)\n", pct,
+                 static_cast<unsigned long long>(clamped),
+                 static_cast<unsigned long long>(total));
+  }
+#endif
 
   return true;
 }
@@ -1465,7 +1444,7 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
   }
 
   return renderAsciiArtFromScratch<AssumeOpaque>(out, scratch, lumCount,
-                                                 lumHist);
+                                                 lumHist, true);
 }
 
 template <bool IsP010>
@@ -1591,7 +1570,9 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
     }
   }
 
-  return renderAsciiArtFromScratch<true>(out, scratch, lumCount, lumHist);
+  bool isSdr = (yuvTransfer == YuvTransfer::Sdr);
+  return renderAsciiArtFromScratch<true>(out, scratch, lumCount, lumHist,
+                                         isSdr);
 }
 
 bool renderAsciiArtFromRgbaFast(const uint8_t* rgba, int width, int height,

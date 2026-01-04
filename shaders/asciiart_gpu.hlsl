@@ -23,7 +23,6 @@ StructuredBuffer<uint4> StatsBuffer : register(t1); // x=bgLum, y=lumRange
 #endif
 
 SamplerState LinearSampler : register(s0);
-SamplerState PointSampler : register(s1);
 
 struct AsciiCell {
     uint ch;
@@ -59,12 +58,9 @@ static const int kInkMinLuma = 40;  // Reduced from 110 to allow dark details
 static const int kBgMinLuma = 10;   // Reduced from 20
 static const int kInkMaxScale = 1280;
 static const float kSignalStrengthFloor = 0.2f;
-static const float kNeighborSignalBlend = 96.0f / 255.0f;
-static const int kEdgeMin = 4; // Reverted to 4 for sensitivity, noise handled by logic
-static const int kEdgeBoost = 245;
 static const int kDitherBias = 48;
-static const int kAAScoreBandMin = 12;
-static const int kAAScoreBandMax = 144;
+#define BG_CLAMP 1
+#define BG_CLAMP_DEBUG 0
 
 // Dithering thresholds (optimized for 2x4 braille)
 // Ranks: 0, 4, 2, 6, 1, 5, 3, 7
@@ -213,8 +209,6 @@ float SampleLumaRaw(float2 uv, SamplerState s) {
 }
 
 float SampleLuma(float2 uv) { return SampleLumaRaw(uv, LinearSampler); }
-float SampleLumaPoint(float2 uv) { return SampleLumaRaw(uv, PointSampler); }
-
 float SampleLumaArea(float2 centerUV, float2 dotSizePx) {
     // 4x4 adaptive Gaussian filter (16 samples)
     // Reverted to 16 samples to fix TDR/Freeze, but added Gaussian weighting for precision
@@ -264,13 +258,6 @@ float GetInkLevelFromLum(float lum) {
     // Cutoff 0.03: Filter very faint noise
     if (coverage < 0.03f) coverage = 0.0f; 
     return saturate(coverage);
-}
-
-float GetEdgeBoostFromMag(float edge) {
-    float range = 255.0f - (float)kEdgeMin;
-    if (edge <= (float)kEdgeMin || range <= 0.0f) return 0.0f;
-    float boost = (edge - (float)kEdgeMin) * (float)kEdgeBoost / range;
-    return min(boost, (float)kEdgeBoost);
 }
 
 float4 SampleInput(float2 uv) {
@@ -374,17 +361,7 @@ void CSDetail(uint3 DTid : SV_DispatchThreadID) {
 
     float cellLumMean = cellLumSum / 8.0f;
 
-    // Adjust bgLum and lumRange for Limited Range if needed
     uint bgLum = StatsBuffer[0].x;
-    uint lumRange = StatsBuffer[0].y;
-
-    float effectiveLumRange = max((float)lumRange, 80.0f);
-    if (isFullRange == 0) {
-        uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
-        float yRange = (float)(219u << shift);
-        float scale = GetMaxCode() / max(yRange, 1.0f);
-        effectiveLumRange = effectiveLumRange * scale;
-    }
     float bgNorm = (float)bgLum / 255.0f;
     float effectiveBgLum = ExpandYNorm(bgNorm);
     if (yuvTransfer != kTransferSdr) {
@@ -480,17 +457,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     float cellBgLum = (cellLumSum - cellLumMin - cellLumMax) * (1.0f / 6.0f);
 
-    // Adjust bgLum and lumRange for Limited Range if needed
     uint bgLum = StatsBuffer[0].x;
-    uint lumRange = StatsBuffer[0].y;
-
-    float effectiveLumRange = max((float)lumRange, 80.0f); // Clamp to prevent noise amplification
-    if (isFullRange == 0) {
-        uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
-        float yRange = (float)(219u << shift);
-        float scale = GetMaxCode() / max(yRange, 1.0f);
-        effectiveLumRange = effectiveLumRange * scale;
-    }
     float bgNorm = (float)bgLum / 255.0f;
     float effectiveBgLum = ExpandYNorm(bgNorm);
     if (yuvTransfer != kTransferSdr) {
@@ -623,27 +590,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f); 
     float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);   
     float signalStrength = max(edgeSig, lumSig);
-    // Spatial stabilization: borrow strength from nearby detail.
-    uint signalStrengthU = (uint)(signalStrength * 255.0f + 0.5f);
-    uint neighborMax = signalStrengthU;
-    int ny0 = max((int)DTid.y - 2, 0);
-    int ny1 = min((int)DTid.y + 2, (int)outHeight - 1);
-    int nx0 = max((int)DTid.x - 2, 0);
-    int nx1 = min((int)DTid.x + 2, (int)outWidth - 1);
-    for (int ny = ny0; ny <= ny1; ++ny) {
-        uint row = (uint)ny * outWidth;
-        for (int nx = nx0; nx <= nx1; ++nx) {
-            if (nx == (int)DTid.x && ny == (int)DTid.y) continue;
-            uint neighbor = SignalBuffer[row + (uint)nx];
-            neighborMax = max(neighborMax, neighbor);
-        }
-    }
-    float neighborBlend =
-        lerp((float)signalStrengthU, (float)neighborMax, kNeighborSignalBlend);
-    float spatialSignal = max((float)signalStrengthU, neighborBlend);
     float blendStrength = kSignalStrengthFloor +
-                          (1.0f - kSignalStrengthFloor) *
-                              (spatialSignal / 255.0f);
+                          (1.0f - kSignalStrengthFloor) * signalStrength;
 
     // Dampening (Noise Hiding):
     // If signalStrength is low, we interpolate curFg towards curBg.
@@ -719,6 +667,26 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // However, too much blending causes "ghosting" (trails behind moving objects).
     float3 prevFg = UnpackColor(history.x);
     float3 prevBg = UnpackColor(history.y);
+
+#if BG_CLAMP_DEBUG
+    bool bgClampApplied = false;
+#endif
+#if BG_CLAMP
+    if (yuvTransfer == kTransferSdr && inkCount == 0 && !useDither &&
+        signalStrength < 0.25f) {
+        float refBgY = effectiveBgLum;
+        float curBgY = GetLuma(curBg);
+        float maxDeltaY = 18.0f;
+        float newBgY = clamp(curBgY, refBgY - maxDeltaY, refBgY + maxDeltaY);
+        if (abs(newBgY - curBgY) > 0.5f) {
+            float scale = newBgY / max(curBgY, 1e-3f);
+            curBg = saturate(curBg * scale);
+#if BG_CLAMP_DEBUG
+            bgClampApplied = true;
+#endif
+        }
+    }
+#endif
     
     // Calculate perceptual distance to decide if we should reset (cut) or blend.
     float diffFg = dot(abs(curFg - prevFg), kLumaCoeff);
@@ -763,10 +731,15 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Fix for black backgrounds on full cells:
     // If a cell has no background dots (all FG or empty), but the calculated BG color is bright enough,
     // we force the background flag to true so the renderer draws the background color.
-    bool hasBg = (bgCount > 0);
-    if (!hasBg && GetLuma(curBg) > 10.0f) {
-        hasBg = true;
+    uint hasBg = (bgCount > 0) ? 1u : 0u;
+    if (hasBg == 0u && GetLuma(curBg) > 10.0f) {
+        hasBg = 1u;
     }
+#if BG_CLAMP_DEBUG
+    if (bgClampApplied) {
+        hasBg |= 2u;
+    }
+#endif
     cell.hasBg = hasBg;
 
     OutputBuffer[cellIndex] = cell;

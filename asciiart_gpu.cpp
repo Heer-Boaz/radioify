@@ -1,8 +1,11 @@
 #include "asciiart_gpu.h"
 #include <d3d11.h>
+#include <cstdio>
 #include <vector>
 
 #pragma comment(lib, "d3d11.lib")
+
+#define BG_CLAMP_DEBUG 0
 
 namespace {
     // Precompiled shader bytecode (generated from shaders/*.hlsl)
@@ -290,32 +293,14 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
 
-    // 2. Detail Pass (per-cell signal strength)
-    m_context->CSSetShader(m_detailShaderNV12.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* detailSrvs[] = { m_srvY.Get(), m_srvUV.Get(), m_statsSRV.Get(), nullptr };
-    m_context->CSSetShaderResources(0, 4, detailSrvs);
-    ID3D11UnorderedAccessView* detailUavs[] = { nullptr, nullptr, m_signalUAV.Get() };
-    m_context->CSSetUnorderedAccessViews(0, 3, detailUavs, nullptr);
-    m_context->CSSetConstantBuffers(0, 1, cbs);
-
-    ID3D11SamplerState* samplers[] = { m_linearSampler.Get(), m_pointSampler.Get() };
-    m_context->CSSetSamplers(0, 2, samplers);
-
-    m_context->Dispatch(dispatchX, dispatchY, 1);
-
-    // Unbind detail pass resources
-    ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr, nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV2, nullptr);
-    ID3D11ShaderResourceView* nullSRV2[] = { nullptr, nullptr, nullptr, nullptr };
-    m_context->CSSetShaderResources(0, 4, nullSRV2);
-
-    // 3. Main Pass
+    // 2. Main Pass
     m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
     ID3D11ShaderResourceView* srvs[] = { m_srvY.Get(), m_srvUV.Get(), m_statsSRV.Get(), m_signalSRV.Get() };
     m_context->CSSetShaderResources(0, 4, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
+    ID3D11SamplerState* samplers[] = { m_linearSampler.Get(), m_pointSampler.Get() };
     m_context->CSSetSamplers(0, 2, samplers);
 
     m_context->Dispatch(dispatchX, dispatchY, 1);
@@ -332,7 +317,9 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     if (SUCCEEDED(m_context->Map(m_outputStagingBuffer.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
         GpuAsciiCell* gpuCells = (GpuAsciiCell*)mapped.pData;
         out.cells.resize(outW * outH);
-        
+#if BG_CLAMP_DEBUG
+        uint64_t clampCount = 0;
+#endif
         for (int i = 0; i < outW * outH; ++i) {
             out.cells[i].ch = (wchar_t)gpuCells[i].ch;
             
@@ -346,8 +333,24 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
             out.cells[i].bg.g = (bg >> 8) & 0xFF;
             out.cells[i].bg.b = (bg >> 16) & 0xFF;
 
-            out.cells[i].hasBg = gpuCells[i].hasBg != 0;
+            uint32_t hasBgRaw = gpuCells[i].hasBg;
+#if BG_CLAMP_DEBUG
+            if ((hasBgRaw & 2u) != 0) {
+                ++clampCount;
+            }
+#endif
+            out.cells[i].hasBg = (hasBgRaw & 1u) != 0;
         }
+#if BG_CLAMP_DEBUG
+        uint64_t total = static_cast<uint64_t>(outW) * outH;
+        if (total > 0) {
+            double pct = (static_cast<double>(clampCount) * 100.0) /
+                         static_cast<double>(total);
+            std::fprintf(stderr, "bg clamp (gpu): %.2f%% (%llu/%llu)\n", pct,
+                         static_cast<unsigned long long>(clampCount),
+                         static_cast<unsigned long long>(total));
+        }
+#endif
         m_context->Unmap(m_outputStagingBuffer.Get(), 0);
     }
 
@@ -548,23 +551,6 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
 
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
-
-    // Detail Pass (per-cell signal strength)
-    m_context->CSSetShader(m_detailShader.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* detailSrvs[] = { m_inputSRV.Get(), m_statsSRV.Get(), nullptr, nullptr };
-    m_context->CSSetShaderResources(0, 4, detailSrvs);
-    ID3D11UnorderedAccessView* detailUavs[] = { nullptr, nullptr, m_signalUAV.Get() };
-    m_context->CSSetUnorderedAccessViews(0, 3, detailUavs, nullptr);
-    m_context->CSSetConstantBuffers(0, 1, cbs);
-    m_context->CSSetSamplers(0, 2, samplers);
-
-    m_context->Dispatch(dispatchX, dispatchY, 1);
-
-    // Unbind detail pass resources
-    ID3D11UnorderedAccessView* nullUAV[] = { nullptr, nullptr, nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV, nullptr);
-    ID3D11ShaderResourceView* nullSRV[] = { nullptr, nullptr, nullptr, nullptr };
-    m_context->CSSetShaderResources(0, 4, nullSRV);
 
     // Main Pass
     m_context->CSSetShader(m_computeShader.Get(), nullptr, 0);
