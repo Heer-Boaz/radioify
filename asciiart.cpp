@@ -185,8 +185,6 @@ constexpr uint8_t kColorLift = 0;
 constexpr uint8_t kInkMinLuma = 40;   // Reduced to allow dark details
 constexpr uint8_t kBgMinLuma = 10;    // Reduced
 constexpr int kInkMaxScale = 1280;  // Verhoogd voor meer bereik
-constexpr int kColorAlpha = 48;     // Snellere kleurrespons
-constexpr int kBgAlpha = 24;
 constexpr int kTemporalResetDelta = 48;  // Snellere scene change detectie
 constexpr int kColorSaturation = 340;    // Iets meer saturatie
 constexpr bool kUseEdgeBoost = true;
@@ -449,7 +447,6 @@ struct BrailleFastScratch {
   std::vector<uint32_t> scaledRGBA;
   std::vector<uint8_t> lumaPad;  // Direct uint8_t - efficiënter
   std::vector<uint8_t> edgeMap;
-  std::vector<uint8_t> localContrast;  // Per-pixel lokaal contrast
 
   std::vector<uint32_t> prevFg;
   std::vector<uint8_t> prevFgValid;
@@ -510,7 +507,6 @@ struct BrailleFastScratch {
     scaledRGBA.resize(static_cast<size_t>(scaledW) * scaledH);
     lumaPad.resize(static_cast<size_t>(padStride) * (scaledH + 2));
     edgeMap.resize(static_cast<size_t>(scaledW) * scaledH);
-    localContrast.resize(static_cast<size_t>(scaledW) * scaledH);
     prevFg.assign(static_cast<size_t>(outW) * outH, 0);
     prevFgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevBg.assign(static_cast<size_t>(outW) * outH, 0);
@@ -645,8 +641,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 static_cast<size_t>(y + 1) * padStride + 1;
             uint8_t* RESTRICT edgeRow =
                 scratch.edgeMap.data() + static_cast<size_t>(y) * scaledW;
-            uint8_t* RESTRICT contrastRow =
-                scratch.localContrast.data() + static_cast<size_t>(y) * scaledW;
             for (int x = 0; x < scaledW; ++x) {
               const uint8_t* p = row + x;
               // Sobel kernel (uint8_t luma sufficient)
@@ -668,14 +662,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int edge = mag >> (kEdgeShift - 1);
               if (edge > 255) edge = 255;
               edgeRow[x] = static_cast<uint8_t>(edge);
-
-              // Lokaal contrast: verschil tussen center en gemiddelde
-              // neighbours
-              int avgNeighbor =
-                  (a00 + a01 + a02 + a10 + a12 + a20 + a21 + a22) >> 3;
-              int localDiff = std::abs(a11 - avgNeighbor);
-              if (localDiff > 255) localDiff = 255;
-              contrastRow[x] = static_cast<uint8_t>(localDiff);
             }
           }
         });
@@ -770,7 +756,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t bVals[8];
             uint8_t lumVals[8];  // Direct uint8_t
             uint8_t edgeVals[8];
-            uint8_t contrastVals[8];
             uint8_t bitIds[8];
             uint8_t validVals[8];
             int dotIndex = 0;
@@ -780,7 +765,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             int cellLumSum = 0;
             int validCount = 0;
             int cellEdgeMax = 0;
-            int cellContrastMax = 0;
 
             for (int dy = 0; dy < 4; ++dy) {
               int y = baseY + dy;
@@ -791,9 +775,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                       (baseX + 1);
               const uint8_t* edgeRow = scratch.edgeMap.data() +
                                        static_cast<size_t>(y) * scaledW + baseX;
-              const uint8_t* contrastRow = scratch.localContrast.data() +
-                                           static_cast<size_t>(y) * scaledW +
-                                           baseX;
 
               for (int dx = 0; dx < 2; ++dx) {
                 uint32_t px = rgbRow[dx];
@@ -810,7 +791,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 bVals[dotIndex] = b;
                 lumVals[dotIndex] = lum;  // Direct uint8_t luma
                 edgeVals[dotIndex] = edgeRow[dx];
-                contrastVals[dotIndex] = contrastRow[dx];
                 bitIds[dotIndex] = static_cast<uint8_t>(brailleMap[dx][dy]);
                 validVals[dotIndex] = static_cast<uint8_t>(a != 0);
 
@@ -824,9 +804,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 // Lokale statistieken voor deze cel
                 if (edgeVals[dotIndex] > cellEdgeMax)
                   cellEdgeMax = edgeVals[dotIndex];
-                if (contrastVals[dotIndex] > cellContrastMax) {
-                  cellContrastMax = contrastVals[dotIndex];
-                }
                 int lumInt = lum;
                 if (lumInt < cellLumMin) cellLumMin = lumInt;
                 if (lumInt > cellLumMax) cellLumMax = lumInt;
@@ -1127,7 +1104,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   // Temporal Stability (Ghosting Reduction)
                   // We blend the current frame's color with the previous frame's color to reduce flickering.
                   // Increased alpha for faster updates (less ghosting)
-                  // Old: kColorAlpha (180), New: 230
                   pr = pr + (((int)curR - pr) * 230 >> 8);
                   pg = pg + (((int)curG - pg) * 230 >> 8);
                   pb = pb + (((int)curB - pb) * 230 >> 8);
@@ -1177,20 +1153,30 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               bool bgClampApplied = false;
 #endif
 #if BG_CLAMP
-              if (isSdr && inkCount == 0 && !useDither &&
+              if (isSdr && !useDither && inkCount <= 2 &&
                   signalStrength < 64) {
-                int refBgY = bgLum;
-                bgY =
+                int curBgY =
                     (static_cast<int>(bgR) * 54 + static_cast<int>(bgG) * 183 +
                      static_cast<int>(bgB) * 19 + 128) >>
                     8;
-                int maxDeltaY = 18;
-                int minY = refBgY - maxDeltaY;
-                int maxY = refBgY + maxDeltaY;
-                int clampedY = std::clamp(bgY, minY, maxY);
-                if (clampedY != bgY) {
-                  int denom = std::max(bgY, 1);
-                  int scale = (clampedY * 256 + (denom / 2)) / denom;
+                int refBgY = bgLum;
+                if (prevBgValid) {
+                  refBgY =
+                      (static_cast<int>(prevBgR) * 54 +
+                       static_cast<int>(prevBgG) * 183 +
+                       static_cast<int>(prevBgB) * 19 + 128) >>
+                      8;
+                }
+                int jumpPrev =
+                    prevBgValid ? std::abs(curBgY - refBgY) : 0;
+                int jumpGlobal = std::abs(curBgY - bgLum);
+                int gate = std::max(jumpPrev, jumpGlobal);
+                if (gate > 8) {
+                  int t = std::min(gate - 8, 24);
+                  int k = 218 + ((154 - 218) * t) / 24;  // 0.85 -> 0.60
+                  int newY = refBgY + ((curBgY - refBgY) * k >> 8);
+                  int denom = std::max(curBgY, 1);
+                  int scale = (newY * 256 + (denom / 2)) / denom;
                   bgR = static_cast<uint8_t>(std::min(
                       255, (static_cast<int>(bgR) * scale + 128) >> 8));
                   bgG = static_cast<uint8_t>(std::min(
@@ -1223,7 +1209,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 } else {
                   // Temporal Stability (Ghosting Reduction)
                   // Increased alpha for faster updates (less ghosting)
-                  // Old: kBgAlpha (140), New: 230
                   pr = pr + (((int)bgR - pr) * bgBlendAlpha >> 8);
                   pg = pg + (((int)bgG - pg) * bgBlendAlpha >> 8);
                   pb = pb + (((int)bgB - pb) * bgBlendAlpha >> 8);

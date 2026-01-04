@@ -11,8 +11,6 @@ namespace {
     // Precompiled shader bytecode (generated from shaders/*.hlsl)
     #include "asciiart_gpu_cs_main.h"
     #include "asciiart_gpu_cs_main_nv12.h"
-    #include "asciiart_gpu_cs_detail.h"
-    #include "asciiart_gpu_cs_detail_nv12.h"
     #include "asciiart_stats_cs.h"
 
     struct GpuAsciiCell {
@@ -46,12 +44,6 @@ bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* erro
     
     if (FAILED(m_device->CreateSamplerState(&sampDesc, &m_linearSampler))) {
         if (error) *error = "Failed to create linear sampler";
-        return false;
-    }
-
-    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
-    if (FAILED(m_device->CreateSamplerState(&sampDesc, &m_pointSampler))) {
-        if (error) *error = "Failed to create point sampler";
         return false;
     }
 
@@ -104,14 +96,6 @@ bool GpuAsciiRenderer::CreateComputeShaders(std::string* error) {
     }
     if (!createShader(kComputeShaderCsMainNv12, kComputeShaderCsMainNv12_Size,
                       m_computeShaderNV12, "CSMain NV12")) {
-        return false;
-    }
-    if (!createShader(kComputeShaderCsDetail, kComputeShaderCsDetail_Size,
-                      m_detailShader, "CSDetail RGBA")) {
-        return false;
-    }
-    if (!createShader(kComputeShaderCsDetailNv12, kComputeShaderCsDetailNv12_Size,
-                      m_detailShaderNV12, "CSDetail NV12")) {
         return false;
     }
     if (!createShader(kStatsShaderCs, kStatsShaderCs_Size, m_statsShader,
@@ -295,21 +279,21 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
 
     // 2. Main Pass
     m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { m_srvY.Get(), m_srvUV.Get(), m_statsSRV.Get(), m_signalSRV.Get() };
-    m_context->CSSetShaderResources(0, 4, srvs);
+    ID3D11ShaderResourceView* srvs[] = { m_srvY.Get(), m_srvUV.Get(), m_statsSRV.Get() };
+    m_context->CSSetShaderResources(0, 3, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
-    ID3D11SamplerState* samplers[] = { m_linearSampler.Get(), m_pointSampler.Get() };
-    m_context->CSSetSamplers(0, 2, samplers);
+    ID3D11SamplerState* samplers[] = { m_linearSampler.Get() };
+    m_context->CSSetSamplers(0, 1, samplers);
 
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
     // Unbind
     ID3D11UnorderedAccessView* nullUAV3[] = { nullptr, nullptr };
     m_context->CSSetUnorderedAccessViews(0, 2, nullUAV3, nullptr);
-    ID3D11ShaderResourceView* nullSRV3[] = { nullptr, nullptr, nullptr, nullptr };
-    m_context->CSSetShaderResources(0, 4, nullSRV3);
+    ID3D11ShaderResourceView* nullSRV3[] = { nullptr, nullptr, nullptr };
+    m_context->CSSetShaderResources(0, 3, nullSRV3);
 
     // Readback (Same as Render)
     m_context->CopyResource(m_outputStagingBuffer.Get(), m_outputBuffer.Get());
@@ -389,27 +373,6 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     // Clear history initially
     UINT clearVals[4] = {0,0,0,0};
     m_context->ClearUnorderedAccessViewUint(m_historyUAV.Get(), clearVals);
-
-    // Signal Buffer (per-cell strength for spatial smoothing)
-    bufDesc.ByteWidth = sizeof(uint32_t) * outW * outH;
-    bufDesc.Usage = D3D11_USAGE_DEFAULT;
-    bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-    bufDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-    bufDesc.CPUAccessFlags = 0;
-    bufDesc.StructureByteStride = sizeof(uint32_t);
-    if (FAILED(m_device->CreateBuffer(&bufDesc, nullptr, &m_signalBuffer))) return false;
-
-    D3D11_UNORDERED_ACCESS_VIEW_DESC sigUavDesc = {};
-    sigUavDesc.Format = DXGI_FORMAT_UNKNOWN;
-    sigUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-    sigUavDesc.Buffer.NumElements = outW * outH;
-    if (FAILED(m_device->CreateUnorderedAccessView(m_signalBuffer.Get(), &sigUavDesc, &m_signalUAV))) return false;
-
-    D3D11_SHADER_RESOURCE_VIEW_DESC sigSrvDesc = {};
-    sigSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
-    sigSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-    sigSrvDesc.Buffer.NumElements = outW * outH;
-    if (FAILED(m_device->CreateShaderResourceView(m_signalBuffer.Get(), &sigSrvDesc, &m_signalSRV))) return false;
 
     // Staging Buffer for Readback
     bufDesc.Usage = D3D11_USAGE_STAGING;
@@ -547,27 +510,27 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     }
 
     ID3D11Buffer* cbs[] = { m_constantBuffer.Get() };
-    ID3D11SamplerState* samplers[] = { m_linearSampler.Get(), m_pointSampler.Get() };
+    ID3D11SamplerState* samplers[] = { m_linearSampler.Get() };
 
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
 
     // Main Pass
     m_context->CSSetShader(m_computeShader.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { m_inputSRV.Get(), m_statsSRV.Get(), nullptr, m_signalSRV.Get() };
-    m_context->CSSetShaderResources(0, 4, srvs);
+    ID3D11ShaderResourceView* srvs[] = { m_inputSRV.Get(), m_statsSRV.Get(), nullptr };
+    m_context->CSSetShaderResources(0, 3, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
-    m_context->CSSetSamplers(0, 2, samplers);
+    m_context->CSSetSamplers(0, 1, samplers);
 
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
     // Unbind UAVs
     ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr };
     m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
-    ID3D11ShaderResourceView* nullSRV2[] = { nullptr, nullptr, nullptr, nullptr };
-    m_context->CSSetShaderResources(0, 4, nullSRV2);
+    ID3D11ShaderResourceView* nullSRV2[] = { nullptr, nullptr, nullptr };
+    m_context->CSSetShaderResources(0, 3, nullSRV2);
 
     // Readback
     m_context->CopyResource(m_outputStagingBuffer.Get(), m_outputBuffer.Get());

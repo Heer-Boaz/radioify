@@ -36,8 +36,6 @@ private:
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_computeShader;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_computeShaderNV12;
-    Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_detailShader;
-    Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_detailShaderNV12;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_statsShader;
 
     // Resources
@@ -51,7 +49,6 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvUV;
     
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_linearSampler;
-    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_pointSampler;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_outputUAV;
@@ -65,11 +62,6 @@ private:
     // History for temporal stability
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_historyBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_historyUAV;
-
-    // Per-cell signal strength for spatial stabilization
-    Microsoft::WRL::ComPtr<ID3D11Buffer> m_signalBuffer;
-    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_signalUAV;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_signalSRV;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
 

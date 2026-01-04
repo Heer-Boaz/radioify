@@ -33,8 +33,6 @@ struct AsciiCell {
 
 RWStructuredBuffer<AsciiCell> OutputBuffer : register(u0);
 RWStructuredBuffer<uint2> HistoryBuffer : register(u1); // x=Fg, y=Bg (packed)
-RWStructuredBuffer<uint> SignalBufferOut : register(u2);
-StructuredBuffer<uint> SignalBuffer : register(t3);
 
 static const uint kBrailleBase = 0x2800;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
@@ -47,18 +45,14 @@ static const uint kTransferPq = 1;
 static const uint kTransferHlg = 2;
 
 // Constants from CPU version
-static const int kMinContrastForBraille = 8; // Reduced from 15 to allow finer details
 static const int kEdgeShift = 3;
 static const int kColorLift = 0;
 static const int kColorSaturation = 340;
 static const int kTemporalResetDelta = 48;
-static const int kColorAlpha = 180; // Reduced from 220 for more stability
-static const int kBgAlpha = 140;    // Reduced from 180 for more stability
 static const int kInkMinLuma = 40;  // Reduced from 110 to allow dark details
 static const int kBgMinLuma = 10;   // Reduced from 20
 static const int kInkMaxScale = 1280;
 static const float kSignalStrengthFloor = 0.2f;
-static const int kDitherBias = 48;
 #define BG_CLAMP 1
 #define BG_CLAMP_DEBUG 0
 
@@ -304,79 +298,10 @@ float4 SampleInput(float2 uv) {
 
 struct DotInfo {
     int idx;
-    int score;
     float luma;
     float edge;
-    float contrast;
     float3 color;
 };
-
-[numthreads(8, 8, 1)]
-void CSDetail(uint3 DTid : SV_DispatchThreadID) {
-    if (DTid.x >= outWidth || DTid.y >= outHeight)
-        return;
-
-    uint cellIndex = DTid.y * outWidth + DTid.x;
-    
-    float cellW = (float)width / (float)outWidth;
-    float cellH = (float)height / (float)outHeight;
-    float dotW = cellW / 2.0f;
-    float dotH = cellH / 4.0f;
-
-    float cellLumSum = 0.0f;
-    float cellEdgeMax = 0.0f;
-
-    for (int i = 0; i < 8; ++i) {
-        uint ui = (uint)i;
-        uint col = ui >> 2;
-        uint row = ui & 3u;
-        
-        float u = (DTid.x * cellW + col * dotW + dotW * 0.5f) / width;
-        float v = (DTid.y * cellH + row * dotH + dotH * 0.5f) / height;
-
-        float2 dotSize = float2(dotW, dotH);
-        float luma = SampleLumaArea(float2(u, v), dotSize);
-        
-        float texDx = dotW / (float)width;
-        float texDy = dotH / (float)height;
-        
-        float l00 = SampleLumaArea(float2(u - texDx, v - texDy), dotSize);
-        float l01 = SampleLumaArea(float2(u, v - texDy), dotSize);
-        float l02 = SampleLumaArea(float2(u + texDx, v - texDy), dotSize);
-        
-        float l10 = SampleLumaArea(float2(u - texDx, v), dotSize);
-        float l12 = SampleLumaArea(float2(u + texDx, v), dotSize);
-        
-        float l20 = SampleLumaArea(float2(u - texDx, v + texDy), dotSize);
-        float l21 = SampleLumaArea(float2(u, v + texDy), dotSize);
-        float l22 = SampleLumaArea(float2(u + texDx, v + texDy), dotSize);
-
-        float gx = (l02 + 2.0f*l12 + l22) - (l00 + 2.0f*l10 + l20);
-        float gy = (l20 + 2.0f*l21 + l22) - (l00 + 2.0f*l01 + l02);
-        float edge = sqrt(gx*gx + gy*gy) / 4.0f;
-
-        cellLumSum += luma;
-        cellEdgeMax = max(cellEdgeMax, edge);
-    }
-
-    float cellLumMean = cellLumSum / 8.0f;
-
-    uint bgLum = StatsBuffer[0].x;
-    float bgNorm = (float)bgLum / 255.0f;
-    float effectiveBgLum = ExpandYNorm(bgNorm);
-    if (yuvTransfer != kTransferSdr) {
-        effectiveBgLum = ApplyHdrToSdr(effectiveBgLum);
-    }
-    effectiveBgLum *= 255.0f;
-
-    float avgLumDiff = abs(cellLumMean - effectiveBgLum);
-
-    float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f); 
-    float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);   
-    float signalStrength = max(edgeSig, lumSig);
-
-    SignalBufferOut[cellIndex] = (uint)(signalStrength * 255.0f + 0.5f);
-}
 
 [numthreads(8, 8, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID) {
@@ -395,7 +320,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float cellLumMax = 0.0f;
     float cellLumSum = 0.0f;
     float cellEdgeMax = 0.0f;
-    float cellContrastMax = 0.0f;
 
     float3 sumAll = float3(0,0,0);
 
@@ -437,21 +361,15 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         float gy = (l20 + 2.0f*l21 + l22) - (l00 + 2.0f*l01 + l02);
         float edge = sqrt(gx*gx + gy*gy) / 4.0f; // Normalize to approx 0-255 range
         
-        // Local Contrast
-        float avgNeighbor = (l00 + l01 + l02 + l10 + l12 + l20 + l21 + l22) * 0.125f;
-        float contrast = abs(luma - avgNeighbor);
-
         dots[i].idx = i;
         dots[i].luma = luma;
         dots[i].edge = edge;
-        dots[i].contrast = contrast;
         dots[i].color = color.rgb;
 
         cellLumMin = min(cellLumMin, luma);
         cellLumMax = max(cellLumMax, luma);
         cellLumSum += luma;
         cellEdgeMax = max(cellEdgeMax, edge);
-        cellContrastMax = max(cellContrastMax, contrast);
         sumAll += color.rgb;
     }
 
@@ -672,13 +590,19 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     bool bgClampApplied = false;
 #endif
 #if BG_CLAMP
-    if (yuvTransfer == kTransferSdr && inkCount == 0 && !useDither &&
+    if (yuvTransfer == kTransferSdr && !useDither && inkCount <= 2 &&
         signalStrength < 0.25f) {
-        float refBgY = effectiveBgLum;
         float curBgY = GetLuma(curBg);
-        float maxDeltaY = 18.0f;
-        float newBgY = clamp(curBgY, refBgY - maxDeltaY, refBgY + maxDeltaY);
-        if (abs(newBgY - curBgY) > 0.5f) {
+        bool prevBgValid = (history.y != 0);
+        float prevBgY = GetLuma(prevBg);
+        float refBgY = prevBgValid ? prevBgY : effectiveBgLum;
+        float jumpPrev = prevBgValid ? abs(curBgY - prevBgY) : 0.0f;
+        float jumpGlobal = abs(curBgY - effectiveBgLum);
+        float gate = max(jumpPrev, jumpGlobal);
+        if (gate > 8.0f) {
+            float t = saturate((gate - 8.0f) / 24.0f);
+            float k = lerp(0.85f, 0.60f, t);
+            float newBgY = refBgY + (curBgY - refBgY) * k;
             float scale = newBgY / max(curBgY, 1e-3f);
             curBg = saturate(curBg * scale);
 #if BG_CLAMP_DEBUG
