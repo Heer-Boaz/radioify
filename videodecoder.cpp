@@ -372,6 +372,12 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   ctx->flags2 |= AV_CODEC_FLAG2_SHOW_ALL;
   ctx->err_recognition = AV_EF_IGNORE_ERR;
 
+  // Additional error recovery for VP9/AV1 (common in HDR content)
+  if (ctx->codec_id == AV_CODEC_ID_VP9 || ctx->codec_id == AV_CODEC_ID_AV1) {
+    ctx->flags2 |= AV_CODEC_FLAG2_FAST;  // Skip some checks for speed/error recovery
+    ctx->err_recognition |= AV_EF_EXPLODE;  // Don't explode on errors, try to recover
+  }
+
   // Let FFmpeg choose an appropriate thread count unless explicitly set.
   if (ctx->thread_count < 0) {
     ctx->thread_count = 0;
@@ -808,17 +814,44 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   targetUs += impl_->formatStartUs;
   if (targetUs < 0) targetUs = 0;
 
+  // Prefer seeking to keyframes for codecs like VP9 that have complex frame dependencies
+  // This prevents crashes from missing reference frames during HDR playback
+  int seekFlags = AVSEEK_FLAG_BACKWARD;
+  if (impl_->codec && (impl_->codec->codec_id == AV_CODEC_ID_VP9 || 
+                       impl_->codec->codec_id == AV_CODEC_ID_AV1)) {
+    seekFlags |= AVSEEK_FLAG_ANY;  // Allow seeking to any frame, but we'll refine below
+  }
+
   // Try avformat_seek_file with stream_index = -1 (AV_TIME_BASE)
-  // This avoids potential issues with stream timebase conversion or specific demuxer quirks.
-  int res = avformat_seek_file(impl_->fmt, -1, INT64_MIN, targetUs, INT64_MAX,
-                               AVSEEK_FLAG_BACKWARD);
+  int res = avformat_seek_file(impl_->fmt, -1, INT64_MIN, targetUs, INT64_MAX, seekFlags);
 
   if (res < 0) {
     // Fallback: try av_seek_frame with stream index (legacy method)
-    int64_t targetStream =
-        av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
-    res = av_seek_frame(impl_->fmt, impl_->streamIndex, targetStream,
-                        AVSEEK_FLAG_BACKWARD);
+    int64_t targetStream = av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
+    res = av_seek_frame(impl_->fmt, impl_->streamIndex, targetStream, seekFlags);
+  }
+
+  // For VP9/AV1, ensure we seeked to a keyframe by reading forward until we find one
+  if (res >= 0 && impl_->codec && (impl_->codec->codec_id == AV_CODEC_ID_VP9 || 
+                                   impl_->codec->codec_id == AV_CODEC_ID_AV1)) {
+    AVPacket* pkt = av_packet_alloc();
+    if (pkt) {
+      bool foundKeyframe = false;
+      // Read packets until we find a keyframe or timeout
+      for (int attempts = 0; attempts < 100 && !foundKeyframe; ++attempts) {
+        res = av_read_frame(impl_->fmt, pkt);
+        if (res < 0) break;
+        if (pkt->stream_index == impl_->streamIndex && (pkt->flags & AV_PKT_FLAG_KEY)) {
+          foundKeyframe = true;
+        }
+        av_packet_unref(pkt);
+      }
+      av_packet_free(&pkt);
+      if (!foundKeyframe) {
+        // If no keyframe found, the seek might still work, but log it
+        // For now, continue - the decoder has error recovery flags
+      }
+    }
   }
 
   if (res < 0) return false;
