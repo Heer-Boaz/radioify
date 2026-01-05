@@ -41,7 +41,7 @@ extern "C" {
 #include "videodecoder.h"
 
 #ifndef RADIOIFY_ENABLE_TIMING_LOG
-#define RADIOIFY_ENABLE_TIMING_LOG 0
+#define RADIOIFY_ENABLE_TIMING_LOG 1
 #endif
 #ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
 #define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 1
@@ -1483,6 +1483,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                 artOk = true;
                 static bool hwTextureLogged = false;
                 if (!hwTextureLogged) {
+                  perfLogAppendf(&perfLog,
+                                 "video_renderer_input format=hwtexture in=%dx%d out=%dx%d",
+                                 frame->width, frame->height, outW, outH);
                   appendTiming("video_renderer gpu_active=1 format=hwtexture zero_copy=1");
                   hwTextureLogged = true;
                 }
@@ -1541,6 +1544,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                 artOk = true;
                 static bool gpuLogged = false;
                 if (!gpuLogged) {
+                  const char* inputFormat =
+                      (frame->format == VideoPixelFormat::P010) ? "p010" : "nv12";
+                  perfLogAppendf(&perfLog,
+                                 "video_renderer_input format=%s in=%dx%d out=%dx%d",
+                                 inputFormat, frame->width, frame->height, outW, outH);
                   appendTiming("video_renderer gpu_active=1 format=nv12");
                   gpuLogged = true;
                 }
