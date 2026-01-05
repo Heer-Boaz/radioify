@@ -12,7 +12,6 @@
 #include <filesystem>
 #include <functional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "consolescreen.h"
@@ -84,26 +83,6 @@ struct GridLayout {
   std::vector<std::string> names;
 };
 
-struct ThumbnailCell {
-  wchar_t ch = L' ';
-  Color fg{255, 255, 255};
-  Color bg{0, 0, 0};
-  bool hasBg = false;
-};
-
-struct Thumbnail {
-  bool ok = false;
-  int width = 0;
-  int height = 0;
-  std::vector<ThumbnailCell> cells;
-};
-
-struct ThumbnailCache {
-  int maxWidth = 0;
-  int maxHeight = 0;
-  std::unordered_map<std::string, Thumbnail> items;
-};
-
 struct DriveEntry {
   std::string label;
   std::filesystem::path path;
@@ -142,8 +121,6 @@ void handleInputEvent(
 );
 
 GridLayout buildLayout(const BrowserState& state, int width, int listHeight);
-void resetThumbnailCache(ThumbnailCache& cache);
-void syncThumbnailCache(ThumbnailCache& cache, const GridLayout& layout);
 void drawBrowserEntries(ConsoleScreen& screen,
                         const BrowserState& browser,
                         const GridLayout& layout,
@@ -154,7 +131,6 @@ void drawBrowserEntries(ConsoleScreen& screen,
                         const Style& dirStyle,
                         const Style& highlightStyle,
                         const Style& dimStyle,
-                        ThumbnailCache& cache,
                         bool (*isImage)(const std::filesystem::path&),
                         bool (*isVideo)(const std::filesystem::path&),
                         bool (*isAudio)(const std::filesystem::path&));

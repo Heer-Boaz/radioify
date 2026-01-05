@@ -398,7 +398,6 @@ int main(int argc, char** argv) {
   BrowserState browser;
   browser.dir = startDir;
   refreshBrowser(browser, initialName);
-  ThumbnailCache thumbCache;
 
   ConsoleInput input;
   input.init();
@@ -519,7 +518,6 @@ int main(int argc, char** argv) {
       int maxScroll = layout.totalRows - layout.rowsVisible;
       browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
     }
-    syncThumbnailCache(thumbCache, layout);
     breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
     if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
       breadcrumbHover = -1;
@@ -530,7 +528,6 @@ int main(int argc, char** argv) {
   callbacks.onRefreshBrowser = [&](BrowserState& nextBrowser,
                                    const std::string& initialName) {
     refreshBrowser(nextBrowser, initialName);
-    resetThumbnailCache(thumbCache);
   };
   callbacks.onPlayFile = [&](const std::filesystem::path& file) {
     if (isSupportedImageExt(file)) {
@@ -590,7 +587,6 @@ int main(int argc, char** argv) {
         int maxScroll = layout.totalRows - layout.rowsVisible;
         browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
       }
-      syncThumbnailCache(thumbCache, layout);
 
       screen.clear(kStyleNormal);
 
@@ -684,7 +680,7 @@ int main(int argc, char** argv) {
 
       drawBrowserEntries(screen, browser, layout, listTop, listHeight,
                          kStyleNormal, kStyleNormal, kStyleDir, kStyleHighlight,
-                         kStyleDim, thumbCache, isSupportedImageExt, isVideoExt,
+                         kStyleDim, isSupportedImageExt, isVideoExt,
                          isSupportedAudioExt);
 
       int footerStart = listTop + listHeight;

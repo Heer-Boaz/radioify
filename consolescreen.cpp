@@ -2,8 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <condition_variable>
 #include <cwchar>
+#include <deque>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 #include <utility>
 
 #include "asciiart.h"
@@ -211,6 +217,57 @@ inline void appendColorSeq(std::wstring& out, const Color& c, bool fg) {
   out.push_back(L'm');
 }
 
+struct ThumbnailCell {
+  wchar_t ch = L' ';
+  Color fg{255, 255, 255};
+  Color bg{0, 0, 0};
+  bool hasBg = false;
+};
+
+struct Thumbnail {
+  bool ok = false;
+  int width = 0;
+  int height = 0;
+  std::vector<ThumbnailCell> cells;
+};
+
+enum class ThumbState {
+  Pending,
+  Ready,
+  Failed,
+};
+
+struct ThumbEntry {
+  ThumbState state = ThumbState::Pending;
+  std::shared_ptr<Thumbnail> thumb;
+};
+
+struct ThumbJob {
+  std::string key;
+  std::filesystem::path path;
+  bool isImage = false;
+  bool isVideo = false;
+  int width = 0;
+  int height = 0;
+  uint64_t generation = 0;
+};
+
+struct ThumbCacheState {
+  int thumbW = 0;
+  int thumbH = 0;
+  uint64_t generation = 1;
+  std::unordered_map<std::string, ThumbEntry> entries;
+  std::deque<ThumbJob> queue;
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool workerStarted = false;
+};
+
+static ThumbCacheState& thumbCache() {
+  static ThumbCacheState cache;
+  return cache;
+}
+
 static std::string fitName(const std::string& name, int colWidth) {
   int maxLen = colWidth - 2;
   if (maxLen <= 1) return name.empty() ? " " : utf8Take(name, 1);
@@ -230,6 +287,7 @@ static void drawCenteredText(ConsoleScreen& screen, int x, int y, int width,
 }
 
 static void assignThumbnailFromAscii(const AsciiArt& art, Thumbnail& out) {
+  out.ok = true;
   out.width = art.width;
   out.height = art.height;
   out.cells.resize(art.cells.size());
@@ -311,6 +369,51 @@ static bool renderVideoThumbnail(const std::filesystem::path& file,
   return false;
 }
 
+static void thumbWorkerLoop() {
+  ThumbCacheState& cache = thumbCache();
+  for (;;) {
+    ThumbJob job;
+    {
+      std::unique_lock<std::mutex> lock(cache.mutex);
+      cache.cv.wait(lock, [&]() { return !cache.queue.empty(); });
+      job = std::move(cache.queue.front());
+      cache.queue.pop_front();
+    }
+
+    Thumbnail thumb;
+    bool ok = false;
+    std::string error;
+    if (job.isImage) {
+      ok = renderImageThumbnail(job.path, job.width, job.height, thumb, &error);
+    } else if (job.isVideo) {
+      ok = renderVideoThumbnail(job.path, job.width, job.height, thumb, &error);
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(cache.mutex);
+      if (job.generation != cache.generation) {
+        continue;
+      }
+      auto it = cache.entries.find(job.key);
+      if (it != cache.entries.end()) {
+        if (ok) {
+          it->second.state = ThumbState::Ready;
+          it->second.thumb = std::make_shared<Thumbnail>(std::move(thumb));
+        } else {
+          it->second.state = ThumbState::Failed;
+          it->second.thumb.reset();
+        }
+      }
+    }
+  }
+}
+
+static void startThumbWorkerLocked(ThumbCacheState& cache) {
+  if (cache.workerStarted) return;
+  cache.workerStarted = true;
+  std::thread(thumbWorkerLoop).detach();
+}
+
 GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   GridLayout layout;
   layout.names.reserve(state.entries.size());
@@ -324,8 +427,8 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
 
   constexpr int kThumbMinWidth = 10;
   constexpr int kThumbTargetWidth = 16;
-  constexpr int kThumbMinHeight = 3;
-  constexpr int kThumbMaxHeight = 8;
+  constexpr int kThumbMinHeight = 4;
+  constexpr int kThumbMaxHeight = 12;
   constexpr int kThumbLabelRows = 1;
 
   layout.showThumbs =
@@ -370,40 +473,29 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   return layout;
 }
 
-void resetThumbnailCache(ThumbnailCache& cache) {
-  cache.items.clear();
-  cache.maxWidth = 0;
-  cache.maxHeight = 0;
-}
-
-void syncThumbnailCache(ThumbnailCache& cache, const GridLayout& layout) {
-  if (!layout.showThumbs) {
-    if (!cache.items.empty()) {
-      cache.items.clear();
-    }
-    cache.maxWidth = 0;
-    cache.maxHeight = 0;
-    return;
-  }
-  if (cache.maxWidth != layout.thumbWidth ||
-      cache.maxHeight != layout.thumbHeight) {
-    cache.items.clear();
-    cache.maxWidth = layout.thumbWidth;
-    cache.maxHeight = layout.thumbHeight;
-  }
-}
-
 void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
                         const GridLayout& layout, int listTop, int listHeight,
                         const Style& baseStyle, const Style& normalStyle,
                         const Style& dirStyle, const Style& highlightStyle,
-                        const Style& dimStyle, ThumbnailCache& cache,
+                        const Style& dimStyle,
                         bool (*isImage)(const std::filesystem::path&),
                         bool (*isVideo)(const std::filesystem::path&),
                         bool (*isAudio)(const std::filesystem::path&)) {
+  ThumbCacheState& cache = thumbCache();
   if (browser.entries.empty()) {
     screen.writeText(2, listTop, "(no supported files)", dimStyle);
     return;
+  }
+
+  if (layout.showThumbs) {
+    std::lock_guard<std::mutex> lock(cache.mutex);
+    if (cache.thumbW != layout.thumbWidth || cache.thumbH != layout.thumbHeight) {
+      cache.thumbW = layout.thumbWidth;
+      cache.thumbH = layout.thumbHeight;
+      cache.generation++;
+      cache.entries.clear();
+      cache.queue.clear();
+    }
   }
 
   if (!layout.showThumbs) {
@@ -432,34 +524,52 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
     return;
   }
 
-  int thumbBudget = 2;
+  constexpr int kThumbJobsPerFrame = 4;
+  constexpr size_t kMaxThumbQueue = 64;
+  int enqueueBudget = kThumbJobsPerFrame;
+
+  struct ThumbLookup {
+    std::shared_ptr<Thumbnail> thumb;
+    bool pending = false;
+  };
+
   auto fetchThumb = [&](const FileEntry& entry, bool wantImage,
-                        bool wantVideo) -> const Thumbnail* {
-    if (!wantImage && !wantVideo) return nullptr;
+                        bool wantVideo) -> ThumbLookup {
+    ThumbLookup result;
+    if (!wantImage && !wantVideo) return result;
+    if (layout.thumbWidth <= 0 || layout.thumbHeight <= 0) return result;
     std::string key = pathToUtf8(entry.path);
-    auto it = cache.items.find(key);
-    if (it != cache.items.end()) {
-      return &it->second;
+    {
+      std::lock_guard<std::mutex> lock(cache.mutex);
+      auto it = cache.entries.find(key);
+      if (it != cache.entries.end()) {
+        if (it->second.state == ThumbState::Ready) {
+          result.thumb = it->second.thumb;
+        } else if (it->second.state == ThumbState::Pending) {
+          result.pending = true;
+        }
+        return result;
+      }
+      if (enqueueBudget <= 0) return result;
+      if (cache.queue.size() >= kMaxThumbQueue) return result;
+      ThumbEntry entryState;
+      entryState.state = ThumbState::Pending;
+      cache.entries.emplace(key, entryState);
+      ThumbJob job;
+      job.key = key;
+      job.path = entry.path;
+      job.isImage = wantImage;
+      job.isVideo = wantVideo;
+      job.width = layout.thumbWidth;
+      job.height = layout.thumbHeight;
+      job.generation = cache.generation;
+      cache.queue.push_back(std::move(job));
+      startThumbWorkerLocked(cache);
+      cache.cv.notify_one();
+      enqueueBudget--;
+      result.pending = true;
     }
-    if (thumbBudget <= 0) return nullptr;
-    Thumbnail thumb;
-    std::string error;
-    if (wantImage) {
-      thumb.ok = renderImageThumbnail(entry.path, layout.thumbWidth,
-                                      layout.thumbHeight, thumb, &error);
-    } else {
-      thumb.ok = renderVideoThumbnail(entry.path, layout.thumbWidth,
-                                      layout.thumbHeight, thumb, &error);
-    }
-    if (!thumb.ok) {
-      thumb.width = 0;
-      thumb.height = 0;
-      thumb.cells.clear();
-    }
-    auto insertResult =
-        cache.items.emplace(std::move(key), std::move(thumb));
-    --thumbBudget;
-    return &insertResult.first->second;
+    return result;
   };
 
   for (int r = 0; r < layout.rowsVisible; ++r) {
@@ -480,7 +590,8 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       bool vid = !entry.isDir && isVideo && isVideo(entry.path);
       bool aud = !entry.isDir && isAudio && isAudio(entry.path);
 
-      const Thumbnail* thumb = fetchThumb(entry, img, vid);
+      ThumbLookup lookup = fetchThumb(entry, img, vid);
+      const Thumbnail* thumb = lookup.thumb.get();
       if (thumb && thumb->ok && thumb->width > 0 && thumb->height > 0) {
         int artW = std::min(thumb->width, thumbW);
         int artH = std::min(thumb->height, thumbH);
@@ -507,7 +618,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         } else {
           placeholder = "[FILE]";
         }
-        if ((img || vid) && !thumb) {
+        if ((img || vid) && lookup.pending) {
           placeholder = "...";
         }
         placeholder = fitLine(placeholder, thumbW);
