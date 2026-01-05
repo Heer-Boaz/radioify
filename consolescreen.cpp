@@ -425,10 +425,10 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
     maxName = std::max(maxName, utf8CodepointCount(name));
   }
 
-  constexpr int kThumbMinWidth = 10;
-  constexpr int kThumbTargetWidth = 16;
-  constexpr int kThumbMinHeight = 4;
-  constexpr int kThumbMaxHeight = 12;
+  constexpr int kThumbMinWidth = 48;
+  constexpr int kThumbTargetWidth = 48;
+  constexpr int kThumbMinHeight = 24;
+  constexpr int kThumbMaxHeight = 24;
   constexpr int kThumbLabelRows = 1;
 
   layout.showThumbs =
