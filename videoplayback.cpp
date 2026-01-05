@@ -84,6 +84,29 @@ GpuAsciiRenderer& sharedGpuRenderer() {
   return renderer;
 }
 
+// Returns the shared D3D11 device for zero-copy video decoding
+// This ensures the same device is used by both decoder and renderer
+ID3D11Device* getSharedGpuDevice() {
+  static bool initialized = false;
+  static std::mutex initMutex;
+  
+  GpuAsciiRenderer& renderer = sharedGpuRenderer();
+  
+  // Lazy init the renderer to get the device
+  if (!initialized) {
+    std::lock_guard<std::mutex> lock(initMutex);
+    if (!initialized) {
+      std::string error;
+      // Initialize with reasonable defaults - will be resized on first render
+      if (renderer.Initialize(1920, 1080, &error)) {
+        initialized = true;
+      }
+    }
+  }
+  
+  return renderer.device();
+}
+
 const GateScope kGateFrameFirst{true, "frame", "first"};
 const GateScope kGateAudioStart{true, "audio", "start"};
 const GateScope kGatePresentFirst{false, "present", "first"};
@@ -642,13 +665,27 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       VideoDecoder decoder;
       const bool allowRgbOutput = false;
       bool preferHardware = true;
+      bool usingSharedDevice = false;
         bool softwareFallbackAttempted = false;
         int64_t lastVideoTs = 0;
         bool haveDecodedFrame = false;
         int currentTargetW = 0;
         int currentTargetH = 0;
         std::string error;
-        if (!decoder.init(file, &error, preferHardware, allowRgbOutput)) {
+        
+        // Try zero-copy GPU path first (shared device)
+        ID3D11Device* sharedDevice = getSharedGpuDevice();
+        if (sharedDevice && preferHardware) {
+          if (decoder.initWithDevice(file, sharedDevice, &error)) {
+            usingSharedDevice = true;
+          } else {
+            // Fall back to regular hardware decode
+            error.clear();
+          }
+        }
+        
+        // Regular init if shared device didn't work
+        if (!usingSharedDevice && !decoder.init(file, &error, preferHardware, allowRgbOutput)) {
           {
             std::lock_guard<std::mutex> lock(initMutex);
             initDone = true;
@@ -1429,7 +1466,34 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         }
         bool artOk = false;
         try {
-          if (frame->format == VideoPixelFormat::NV12 ||
+          // Zero-copy GPU texture path (HWTexture from shared device decoder)
+          if (frame->format == VideoPixelFormat::HWTexture && frame->hwTexture) {
+            if (gpuAvailable) {
+              auto [outW, outH] =
+                  computeAsciiOutputSize(width, maxHeight, frame->width,
+                                         frame->height);
+              art.width = outW;
+              art.height = outH;
+              std::string gpuErr;
+              
+              if (gpuRenderer.RenderNV12Texture(frame->hwTexture.Get(), frame->hwTextureArrayIndex,
+                                                 frame->width, frame->height,
+                                                 frame->fullRange, frame->yuvMatrix,
+                                                 frame->yuvTransfer, false, art, &gpuErr)) {
+                artOk = true;
+                static bool hwTextureLogged = false;
+                if (!hwTextureLogged) {
+                  appendTiming("video_renderer gpu_active=1 format=hwtexture zero_copy=1");
+                  hwTextureLogged = true;
+                }
+              } else {
+                gpuAvailable = false;
+                appendVideoWarning("GPU renderer failed (HWTexture), falling back to CPU: " +
+                                   gpuErr);
+                throw std::runtime_error("ASCII-renderer GPU failure" + gpuErr);
+              }
+            }
+          } else if (frame->format == VideoPixelFormat::NV12 ||
               frame->format == VideoPixelFormat::P010) {
             if (frame->stride <= 0 || frame->planeHeight <= 0) {
               renderFailed = true;

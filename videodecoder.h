@@ -5,8 +5,15 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#define NOMINMAX
+#include <d3d11.h>
+#include <wrl/client.h>
 
 #include "videocolor.h"
+
+// Forward declarations
+struct ID3D11Device;
+struct ID3D11DeviceContext;
 
 enum class VideoPixelFormat {
   Unknown,
@@ -14,6 +21,7 @@ enum class VideoPixelFormat {
   ARGB32,
   NV12,
   P010,
+  HWTexture,  // Direct GPU texture (zero-copy path)
 };
 
 struct VideoFrame {
@@ -28,6 +36,11 @@ struct VideoFrame {
   YuvTransfer yuvTransfer = YuvTransfer::Sdr;
   std::vector<uint8_t> rgba;
   std::vector<uint8_t> yuv;
+  
+  // Hardware texture for zero-copy GPU path
+  // Only valid when format == HWTexture
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> hwTexture;
+  int hwTextureArrayIndex = 0;  // Index into texture array (for D3D11VA pools)
 };
 
 struct VideoReadInfo {
@@ -46,6 +59,12 @@ class VideoDecoder {
   ~VideoDecoder();
   bool init(const std::filesystem::path& path, std::string* error,
             bool preferHardware = true, bool allowRgbOutput = true);
+  
+  // Initialize with an external D3D11 device (for device sharing / zero-copy)
+  bool initWithDevice(const std::filesystem::path& path, 
+                      ID3D11Device* device,
+                      std::string* error);
+  
   void uninit();
   bool readFrame(VideoFrame& out, VideoReadInfo* info = nullptr,
                  bool decodePixels = true);

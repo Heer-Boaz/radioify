@@ -16,6 +16,14 @@ public:
 
     bool Initialize(int maxWidth, int maxHeight, std::string* error = nullptr);
     
+    // Initialize with an existing D3D11 device (for device sharing with video decoder)
+    bool InitializeWithDevice(ID3D11Device* device, ID3D11DeviceContext* context,
+                              int maxWidth, int maxHeight, std::string* error = nullptr);
+    
+    // Get the D3D11 device (for sharing with video decoder)
+    ID3D11Device* device() const { return m_device.Get(); }
+    ID3D11DeviceContext* context() const { return m_context.Get(); }
+    
     // Render from RGBA buffer (CPU -> GPU -> CPU)
     bool Render(const uint8_t* rgba, int width, int height, AsciiArt& out, std::string* error);
 
@@ -23,14 +31,27 @@ public:
     bool RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
                    bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
                    bool is10Bit, AsciiArt& out, std::string* error);
+    
+    // Render directly from D3D11 NV12 texture (zero-copy GPU path)
+    // The texture must be on the same device as this renderer
+    bool RenderNV12Texture(ID3D11Texture2D* texture, int arrayIndex,
+                           int width, int height,
+                           bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
+                           bool is10Bit, AsciiArt& out, std::string* error);
 
 private:
     bool CreateDevice();
+    bool CreateDeviceWithFlags(UINT flags);
     bool CreateComputeShaders(std::string* error);
     bool CreateBuffers(int width, int height, int outW, int outH);
     bool CreateRGBATextures(int width, int height);
     bool CreateNV12Textures(int width, int height, bool is10Bit);
     bool CreateStatsBuffer();
+    
+    // Shared rendering logic (called after textures are set up)
+    bool RenderNV12Internal(int width, int height, bool fullRange, 
+                            YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
+                            bool is10Bit, AsciiArt& out, std::string* error);
 
     Microsoft::WRL::ComPtr<ID3D11Device> m_device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
@@ -49,6 +70,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvY;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_textureUV;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvUV;
+    
+    // Hardware texture copy (for zero-copy path when source lacks SHADER_RESOURCE binding)
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_hwCopyTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_hwCopySrvY;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_hwCopySrvUV;
     
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_linearSampler;
 

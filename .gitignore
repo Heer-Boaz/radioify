@@ -68,6 +68,8 @@ Desktop.ini
 *~
 *.swp
 *.swo
+**.dmp
+**.txt
 
 # Package managers and caches
 packages/

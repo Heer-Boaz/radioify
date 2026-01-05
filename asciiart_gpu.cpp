@@ -1,5 +1,6 @@
 #include "asciiart_gpu.h"
 #include <d3d11.h>
+#include <d3d10.h>
 #include <cstdio>
 #include <vector>
 
@@ -53,9 +54,44 @@ bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* erro
     return true;
 }
 
+bool GpuAsciiRenderer::InitializeWithDevice(ID3D11Device* device, ID3D11DeviceContext* context,
+                                            int maxWidth, int maxHeight, std::string* error) {
+    if (!device || !context) {
+        if (error) *error = "Invalid device or context";
+        return false;
+    }
+    
+    m_device = device;
+    m_context = context;
+    
+    if (!CreateComputeShaders(error)) return false;
+
+    // Create Samplers
+    D3D11_SAMPLER_DESC sampDesc = {};
+    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sampDesc.MinLOD = 0;
+    sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+    
+    if (FAILED(m_device->CreateSamplerState(&sampDesc, &m_linearSampler))) {
+        if (error) *error = "Failed to create linear sampler";
+        return false;
+    }
+
+    return true;
+}
+
 bool GpuAsciiRenderer::CreateDevice() {
+    // For device sharing with video decoder, we need D3D11_CREATE_DEVICE_VIDEO_SUPPORT
+    return CreateDeviceWithFlags(D3D11_CREATE_DEVICE_VIDEO_SUPPORT);
+}
+
+bool GpuAsciiRenderer::CreateDeviceWithFlags(UINT extraFlags) {
     D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
-    UINT creationFlags = 0;
+    UINT creationFlags = extraFlags;
 #ifdef _DEBUG
     creationFlags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
@@ -65,6 +101,25 @@ bool GpuAsciiRenderer::CreateDevice() {
         featureLevels, 1, D3D11_SDK_VERSION,
         &m_device, nullptr, &m_context
     );
+    
+    if (FAILED(hr) && (extraFlags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
+        // Fallback without video support flag
+        creationFlags &= ~D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+        hr = D3D11CreateDevice(
+            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, creationFlags,
+            featureLevels, 1, D3D11_SDK_VERSION,
+            &m_device, nullptr, &m_context
+        );
+    }
+    
+    if (SUCCEEDED(hr)) {
+        // Enable multithread protection for device sharing
+        Microsoft::WRL::ComPtr<ID3D10Multithread> multithread;
+        if (SUCCEEDED(m_device.As(&multithread))) {
+            multithread->SetMultithreadProtected(TRUE);
+        }
+    }
+    
     return SUCCEEDED(hr);
 }
 
@@ -621,6 +676,254 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
             out.cells[i].bg.b = (bg >> 16) & 0xFF;
 
             out.cells[i].hasBg = gpuCells[i].hasBg != 0;
+        }
+        m_context->Unmap(m_outputStagingBuffer.Get(), 0);
+    }
+
+    return true;
+}
+
+bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayIndex,
+                                         int width, int height,
+                                         bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
+                                         bool is10Bit, AsciiArt& out, std::string* error) {
+    if (!texture) {
+        if (error) *error = "Null texture provided";
+        return false;
+    }
+    
+    if (!m_device) {
+        if (error) *error = "GPU renderer not initialized";
+        return false;
+    }
+
+    int outW = out.width;
+    int outH = out.height;
+    if (outW <= 0 || outH <= 0) {
+        if (error) *error = "Invalid output dimensions";
+        return false;
+    }
+
+    // Check texture format
+    D3D11_TEXTURE2D_DESC srcDesc;
+    texture->GetDesc(&srcDesc);
+
+    // Check device compatibility
+    Microsoft::WRL::ComPtr<ID3D11Device> texDevice;
+    texture->GetDevice(texDevice.GetAddressOf());
+    if (texDevice.Get() != m_device.Get()) {
+        if (error) *error = "Texture is on a different D3D11 device";
+        return false;
+    }
+
+    // Check array index
+    if (arrayIndex < 0 || arrayIndex >= static_cast<int>(srcDesc.ArraySize)) {
+        if (error) *error = "Invalid texture array index: " + std::to_string(arrayIndex) + " (size: " + std::to_string(srcDesc.ArraySize) + ")";
+        return false;
+    }
+    
+    // FFmpeg D3D11VA typically outputs NV12 or P010 textures
+    bool isNV12 = (srcDesc.Format == DXGI_FORMAT_NV12);
+    bool isP010 = (srcDesc.Format == DXGI_FORMAT_P010);
+    
+    if (!isNV12 && !isP010) {
+        if (error) *error = "Unsupported texture format (expected NV12 or P010)";
+        return false;
+    }
+    
+    // Create buffers if needed
+    if (!CreateBuffers(width, height, outW, outH)) {
+        if (error) *error = "Failed to create GPU buffers";
+        return false;
+    }
+
+    if (!CreateStatsBuffer()) {
+        if (error) *error = "Failed to create stats buffer";
+        return false;
+    }
+
+    // FFmpeg D3D11VA textures are created with D3D11_BIND_DECODER, not D3D11_BIND_SHADER_RESOURCE.
+    // We need to copy to our own texture that has shader resource binding.
+    // This is still a fast GPU-to-GPU copy (~0.5ms for 4K vs ~20-30ms for CPU transfer).
+    
+    // Create/reuse our copy texture with SHADER_RESOURCE binding
+    bool needNewCopyTexture = false;
+    if (!m_hwCopyTexture) {
+        needNewCopyTexture = true;
+    } else {
+        D3D11_TEXTURE2D_DESC copyDesc;
+        m_hwCopyTexture->GetDesc(&copyDesc);
+        if (copyDesc.Width != srcDesc.Width || copyDesc.Height != srcDesc.Height || 
+            copyDesc.Format != srcDesc.Format) {
+            needNewCopyTexture = true;
+        }
+    }
+    
+    if (needNewCopyTexture) {
+        m_hwCopyTexture.Reset();
+        m_hwCopySrvY.Reset();
+        m_hwCopySrvUV.Reset();
+        
+        D3D11_TEXTURE2D_DESC copyDesc = {};
+        copyDesc.Width = srcDesc.Width;
+        copyDesc.Height = srcDesc.Height;
+        copyDesc.MipLevels = 1;
+        copyDesc.ArraySize = 1;
+        copyDesc.Format = srcDesc.Format;
+        copyDesc.SampleDesc.Count = 1;
+        copyDesc.Usage = D3D11_USAGE_DEFAULT;
+        copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        
+        HRESULT hr = m_device->CreateTexture2D(&copyDesc, nullptr, &m_hwCopyTexture);
+        if (FAILED(hr)) {
+            if (error) *error = "Failed to create GPU copy texture";
+            return false;
+        }
+        
+        // Create Y plane SRV
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
+        srvDescY.Format = isP010 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+        srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDescY.Texture2D.MostDetailedMip = 0;
+        srvDescY.Texture2D.MipLevels = 1;
+        
+        hr = m_device->CreateShaderResourceView(m_hwCopyTexture.Get(), &srvDescY, &m_hwCopySrvY);
+        if (FAILED(hr)) {
+            if (error) *error = "Failed to create Y plane SRV for copy texture";
+            return false;
+        }
+        
+        // Create UV plane SRV
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = {};
+        srvDescUV.Format = isP010 ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+        srvDescUV.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDescUV.Texture2D.MostDetailedMip = 0;
+        srvDescUV.Texture2D.MipLevels = 1;
+        
+        hr = m_device->CreateShaderResourceView(m_hwCopyTexture.Get(), &srvDescUV, &m_hwCopySrvUV);
+        if (FAILED(hr)) {
+            if (error) *error = "Failed to create UV plane SRV for copy texture";
+            return false;
+        }
+    }
+    
+    // GPU-to-GPU copy from FFmpeg's decoder texture to our shader-readable texture
+    if (srcDesc.ArraySize > 1) {
+        // Array texture: copy specific slice
+        m_context->CopySubresourceRegion(
+            m_hwCopyTexture.Get(), 0, 0, 0, 0,
+            texture, D3D11CalcSubresource(0, arrayIndex, 1),
+            nullptr);
+    } else {
+        // Single texture: direct copy
+        m_context->CopyResource(m_hwCopyTexture.Get(), texture);
+    }
+    
+    // Ensure copy is complete before shader reads from texture
+    // This is important for stability after seeks when texture pool state changes
+    m_context->Flush();
+
+    // Now render using our copy texture's SRVs
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvY = m_hwCopySrvY;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvUV = m_hwCopySrvUV;
+
+    // Update Constants
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(m_context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        Constants* cb = (Constants*)mapped.pData;
+        cb->width = width;
+        cb->height = height;
+        cb->outWidth = outW;
+        cb->outHeight = outH;
+        cb->time = 0.0f;
+        cb->frameCount++;
+        cb->isFullRange = fullRange ? 1 : 0;
+        cb->bitDepth = isP010 ? 10u : 8u;
+        cb->yuvMatrix = static_cast<uint32_t>(yuvMatrix);
+        cb->yuvTransfer = static_cast<uint32_t>(yuvTransfer);
+        m_context->Unmap(m_constantBuffer.Get(), 0);
+    }
+
+    // 1. Calculate Stats
+    m_context->CSSetShader(m_statsShader.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* statsSRVs[] = { srvY.Get() };
+    m_context->CSSetShaderResources(0, 1, statsSRVs);
+    ID3D11UnorderedAccessView* statsUAVs[] = { m_statsUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 1, statsUAVs, nullptr);
+    ID3D11Buffer* cbs[] = { m_constantBuffer.Get() };
+    m_context->CSSetConstantBuffers(0, 1, cbs);
+
+    m_context->Dispatch(1, 1, 1);
+
+    // Unbind Stats UAV
+    ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+
+    UINT dispatchX = (outW + 7) / 8;
+    UINT dispatchY = (outH + 7) / 8;
+
+    // 2. Main Pass
+    m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* srvs[] = { srvY.Get(), srvUV.Get(), m_statsSRV.Get() };
+    m_context->CSSetShaderResources(0, 3, srvs);
+    ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), m_metaUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+    m_context->CSSetConstantBuffers(0, 1, cbs);
+    ID3D11SamplerState* samplers[] = { m_linearSampler.Get() };
+    m_context->CSSetSamplers(0, 1, samplers);
+
+    m_context->Dispatch(dispatchX, dispatchY, 1);
+
+    // Unbind
+    ID3D11UnorderedAccessView* nullUAV3[] = { nullptr, nullptr, nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+    ID3D11ShaderResourceView* nullSRV5[] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+    m_context->CSSetShaderResources(0, 5, nullSRV5);
+
+    // 3. BG Clamp Pass
+    m_context->CSSetShader(m_bgClampShader.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* clampSrvs[] = { nullptr, nullptr, nullptr, m_historySRV.Get(), m_metaSRV.Get() };
+    m_context->CSSetShaderResources(0, 5, clampSrvs);
+    ID3D11UnorderedAccessView* clampUavs[] = { m_outputUAV.Get(), nullptr, nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 3, clampUavs, nullptr);
+    m_context->CSSetConstantBuffers(0, 1, cbs);
+    m_context->Dispatch(dispatchX, dispatchY, 1);
+
+    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+    m_context->CSSetShaderResources(0, 5, nullSRV5);
+
+    // 4. Sync History
+    m_context->CSSetShader(m_syncHistoryShader.Get(), nullptr, 0);
+    ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 3, syncUavs, nullptr);
+    m_context->CSSetConstantBuffers(0, 1, cbs);
+    m_context->Dispatch(dispatchX, dispatchY, 1);
+
+    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+    m_context->CSSetShaderResources(0, 5, nullSRV5);
+
+    // Readback
+    m_context->CopyResource(m_outputStagingBuffer.Get(), m_outputBuffer.Get());
+    
+    if (SUCCEEDED(m_context->Map(m_outputStagingBuffer.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+        GpuAsciiCell* gpuCells = (GpuAsciiCell*)mapped.pData;
+        out.cells.resize(outW * outH);
+        
+        for (int i = 0; i < outW * outH; ++i) {
+            out.cells[i].ch = (wchar_t)gpuCells[i].ch;
+            
+            uint32_t fg = gpuCells[i].fg;
+            out.cells[i].fg.r = (fg) & 0xFF;
+            out.cells[i].fg.g = (fg >> 8) & 0xFF;
+            out.cells[i].fg.b = (fg >> 16) & 0xFF;
+
+            uint32_t bg = gpuCells[i].bg;
+            out.cells[i].bg.r = (bg) & 0xFF;
+            out.cells[i].bg.g = (bg >> 8) & 0xFF;
+            out.cells[i].bg.b = (bg >> 16) & 0xFF;
+
+            uint32_t hasBgRaw = gpuCells[i].hasBg;
+            out.cells[i].hasBg = (hasBgRaw & 1u) != 0;
         }
         m_context->Unmap(m_outputStagingBuffer.Get(), 0);
     }

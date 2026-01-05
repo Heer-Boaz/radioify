@@ -7,6 +7,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <d3d11.h>
+#include <wrl/client.h>
 
 #include <mfapi.h>
 
@@ -158,9 +160,12 @@ struct VideoDecoder::Impl {
   bool fullRange = true;
   int consecutiveTransferErrors = 0;
   bool hasPendingPacket = false;
+  bool useSharedDevice = false;  // When true, keep frames on GPU without transfer
+  uint64_t seekEpoch = 0;  // Incremented on seek to invalidate stale frames
+  int framesAfterSeek = 0;  // Count frames since last seek for stabilization
 
   bool emitFrame(VideoFrame& out, VideoReadInfo* info, bool decodePixels,
-                 AVFrame* src) {
+                 AVFrame* src, bool keepOnGpu = false) {
     int64_t bestPts = src->best_effort_timestamp;
     if (bestPts == AV_NOPTS_VALUE) {
       bestPts = src->pts;
@@ -201,12 +206,19 @@ struct VideoDecoder::Impl {
                frameMatrix == YuvMatrix::Bt2020) {
       frameTransfer = YuvTransfer::Pq;
     }
-    out.width = targetW;
-    out.height = targetH;
+    
+    // For shared device mode, use native resolution (no CPU downscale)
+    int outWidth = useSharedDevice ? src->width : targetW;
+    int outHeight = useSharedDevice ? src->height : targetH;
+    
+    out.width = outWidth;
+    out.height = outHeight;
     out.timestamp100ns = ts100ns;
     out.fullRange = fullRange;
     out.yuvMatrix = frameMatrix;
     out.yuvTransfer = frameTransfer;
+    out.hwTexture.Reset();
+    out.hwTextureArrayIndex = 0;
 
     if (!decodePixels) {
       out.format = VideoPixelFormat::Unknown;
@@ -216,6 +228,27 @@ struct VideoDecoder::Impl {
       out.yuv.clear();
       if (info) {
         info->timestamp100ns = ts100ns;
+      }
+      return true;
+    }
+    
+    // Zero-copy GPU path: pass the texture directly without CPU transfer
+    if (keepOnGpu && src->format == AV_PIX_FMT_D3D11) {
+      // D3D11VA frames have texture in data[0] and array index in data[1]
+      auto* texture = reinterpret_cast<ID3D11Texture2D*>(src->data[0]);
+      intptr_t arrayIndex = reinterpret_cast<intptr_t>(src->data[1]);
+      
+      out.format = VideoPixelFormat::HWTexture;
+      out.hwTexture = texture; // ComPtr assignment calls AddRef
+      out.hwTextureArrayIndex = static_cast<int>(arrayIndex);
+      out.stride = 0;
+      out.planeHeight = 0;
+      out.yuv.clear();
+      out.rgba.clear();
+      
+      if (info) {
+        info->timestamp100ns = ts100ns;
+        info->duration100ns = 0;
       }
       return true;
     }
@@ -405,6 +438,163 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   return true;
 }
 
+bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
+                                  ID3D11Device* device,
+                                  std::string* error) {
+  uninit();
+
+  if (!device) {
+    setError(error, "Invalid D3D11 device.");
+    return false;
+  }
+
+  AVFormatContext* fmt = nullptr;
+  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, error)) {
+    return false;
+  }
+
+  int infoErr = avformat_find_stream_info(fmt, nullptr);
+  if (infoErr < 0) {
+    avformat_close_input(&fmt);
+    if (!openInputWithProbe(path, kAnalyzeDurationFallbackUs, &fmt, error)) {
+      return false;
+    }
+    infoErr = avformat_find_stream_info(fmt, nullptr);
+    if (infoErr < 0) {
+      std::string msg = "Failed to read stream info: " + ffmpegError(infoErr);
+      avformat_close_input(&fmt);
+      setError(error, msg.c_str());
+      return false;
+    }
+  }
+
+  const AVCodec* codec = nullptr;
+  int streamIndex =
+      av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+  if (streamIndex < 0 || !codec) {
+    avformat_close_input(&fmt);
+    setError(error, "No video stream found.");
+    return false;
+  }
+
+  AVCodecContext* ctx = avcodec_alloc_context3(codec);
+  if (!ctx) {
+    avformat_close_input(&fmt);
+    setError(error, "Failed to allocate video decoder.");
+    return false;
+  }
+  if (avcodec_parameters_to_context(ctx,
+                                    fmt->streams[streamIndex]->codecpar) < 0) {
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fmt);
+    setError(error, "Failed to configure video decoder.");
+    return false;
+  }
+
+  // Prefer recovering corrupted streams over stalling on missing references.
+  ctx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
+  ctx->flags2 |= AV_CODEC_FLAG2_SHOW_ALL;
+  ctx->err_recognition = AV_EF_IGNORE_ERR;
+
+  if (ctx->thread_count < 0) {
+    ctx->thread_count = 0;
+  }
+
+  // Create hw_device_ctx wrapping the external D3D11 device
+  AVBufferRef* hw_device_ctx = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
+  if (!hw_device_ctx) {
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fmt);
+    setError(error, "Failed to allocate hardware device context.");
+    return false;
+  }
+
+  AVHWDeviceContext* device_ctx = reinterpret_cast<AVHWDeviceContext*>(hw_device_ctx->data);
+  AVD3D11VADeviceContext* d3d11_device_ctx = reinterpret_cast<AVD3D11VADeviceContext*>(device_ctx->hwctx);
+  
+  // Use the external device (add reference)
+  device->AddRef();
+  d3d11_device_ctx->device = device;
+  
+  // Set device context (FFmpeg will use the immediate context)
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> immediateContext;
+  device->GetImmediateContext(&immediateContext);
+  immediateContext->AddRef();
+  d3d11_device_ctx->device_context = immediateContext.Get();
+  
+  // Let FFmpeg set up its own locking (it uses an internal mutex if unset)
+  d3d11_device_ctx->lock = nullptr;
+  d3d11_device_ctx->unlock = nullptr;
+  d3d11_device_ctx->lock_ctx = nullptr;
+
+  int initErr = av_hwdevice_ctx_init(hw_device_ctx);
+  if (initErr < 0) {
+    av_buffer_unref(&hw_device_ctx);
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fmt);
+    std::string msg = "Failed to init hw device context: " + ffmpegError(initErr);
+    setError(error, msg.c_str());
+    return false;
+  }
+
+  ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+  ctx->get_format = get_hw_format;
+  ctx->extra_hw_frames = 32;
+
+  if (avcodec_open2(ctx, codec, nullptr) < 0) {
+    av_buffer_unref(&hw_device_ctx);
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fmt);
+    setError(error, "Failed to open video decoder.");
+    return false;
+  }
+
+  AVFrame* frame = av_frame_alloc();
+  AVFrame* scratch = av_frame_alloc();
+  AVPacket* packet = av_packet_alloc();
+  if (!frame || !scratch || !packet) {
+    av_buffer_unref(&hw_device_ctx);
+    av_frame_free(&frame);
+    av_frame_free(&scratch);
+    av_packet_free(&packet);
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fmt);
+    setError(error, "Failed to allocate video buffers.");
+    return false;
+  }
+
+  Impl* impl = new Impl();
+  impl->fmt = fmt;
+  impl->codec = ctx;
+  impl->hw_device_ctx = hw_device_ctx;
+  impl->frame = frame;
+  impl->scratch = scratch;
+  impl->packet = packet;
+  impl->streamIndex = streamIndex;
+  impl->timeBase = fmt->streams[streamIndex]->time_base;
+  impl->width = ctx->width;
+  impl->height = ctx->height;
+  impl->targetW = impl->width;
+  impl->targetH = impl->height;
+  // Don't clamp for shared device mode - use native resolution
+  impl->fullRange = mapFullRange(ctx->color_range);
+  impl->yuvMatrix = mapColorMatrix(ctx->colorspace);
+  impl->yuvTransfer = mapColorTransfer(ctx->color_trc);
+  impl->formatStartUs =
+      (fmt->start_time != AV_NOPTS_VALUE) ? fmt->start_time : 0;
+  if (fmt->streams[streamIndex]->start_time != AV_NOPTS_VALUE) {
+    impl->streamStartUs =
+        av_rescale_q(fmt->streams[streamIndex]->start_time,
+                     impl->timeBase, AVRational{1, AV_TIME_BASE});
+  }
+  if (fmt->duration > 0) {
+    impl->duration100ns = fmt->duration * 10;
+  }
+  impl->useSharedDevice = true;  // Enable zero-copy GPU path
+  impl_ = impl;
+  return true;
+}
+
 void VideoDecoder::uninit() {
   if (!impl_) return;
   if (impl_->sws) {
@@ -470,8 +660,29 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     int recv = avcodec_receive_frame(impl_->codec, impl_->frame);
     if (recv == 0) {
       AVFrame* src = impl_->frame;
+      
+      // After seek, skip a few frames to let decoder stabilize (get keyframe + references)
+      // This prevents crashes from incomplete reference frames
+      if (impl_->useSharedDevice && impl_->framesAfterSeek < 3) {
+        impl_->framesAfterSeek++;
+        // Check if this is a keyframe - if so, we can use it immediately
+        bool isKeyframe = (src->flags & AV_FRAME_FLAG_KEY) || (src->pict_type == AV_PICTURE_TYPE_I);
+        if (!isKeyframe && impl_->framesAfterSeek < 3) {
+          // Skip non-keyframes right after seek
+          continue;
+        }
+      }
+      impl_->framesAfterSeek++;
+      
       if (src->format == AV_PIX_FMT_D3D11) {
         if (decodePixels) {
+          // Zero-copy path: keep frame on GPU when using shared device
+          if (impl_->useSharedDevice) {
+            // Pass the GPU frame directly without CPU transfer
+            return impl_->emitFrame(out, info, decodePixels, src, true);
+          }
+          
+          // Legacy path: transfer to CPU
           av_frame_unref(impl_->scratch);
           if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
             // Try one more time with a fresh unref
@@ -610,6 +821,8 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   impl_->atEnd = false;
   impl_->eof = false;
   impl_->consecutiveTransferErrors = 0;
+  impl_->seekEpoch++;
+  impl_->framesAfterSeek = 0;
   return true;
 }
 
