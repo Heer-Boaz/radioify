@@ -54,16 +54,34 @@ struct VideoReadInfo {
   uint32_t noFrameTimeoutMs = 0;
 };
 
+struct VideoStreamInfo {
+  int index = -1;
+  int width = 0;
+  int height = 0;
+  int64_t bitRate = 0;
+  bool isDefault = false;
+  bool isAttachedPic = false;
+  bool hasDecoder = false;
+  std::string codecName;
+};
+
+struct VideoStreamSelection {
+  std::vector<VideoStreamInfo> streams;
+  int selectedIndex = -1;
+};
+
 class VideoDecoder {
  public:
   ~VideoDecoder();
   bool init(const std::filesystem::path& path, std::string* error,
-            bool preferHardware = true, bool allowRgbOutput = true);
+            bool preferHardware = true, bool allowRgbOutput = true,
+            VideoStreamSelection* streamSelection = nullptr);
   
   // Initialize with an external D3D11 device (for device sharing / zero-copy)
   bool initWithDevice(const std::filesystem::path& path, 
                       ID3D11Device* device,
-                      std::string* error);
+                      std::string* error,
+                      VideoStreamSelection* streamSelection = nullptr);
   
   void uninit();
   bool readFrame(VideoFrame& out, VideoReadInfo* info = nullptr,

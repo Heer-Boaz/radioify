@@ -663,6 +663,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       HRESULT roHr = RoInitialize(RO_INIT_MULTITHREADED);
       bool roInit = SUCCEEDED(roHr);
       VideoDecoder decoder;
+      VideoStreamSelection streamSelection;
       const bool allowRgbOutput = false;
       bool preferHardware = true;
       bool usingSharedDevice = false;
@@ -672,20 +673,57 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         int currentTargetW = 0;
         int currentTargetH = 0;
         std::string error;
+
+        auto resetStreamSelection = [&]() {
+          streamSelection.streams.clear();
+          streamSelection.selectedIndex = -1;
+        };
+        auto logStreamSelection = [&](const VideoStreamSelection& selection) {
+          if (selection.streams.empty()) return;
+          const VideoStreamInfo* selected = nullptr;
+          for (const auto& stream : selection.streams) {
+            perfLogAppendf(
+                &perfLog,
+                "video_stream index=%d size=%dx%d codec=%s bitrate=%lld default=%d attached=%d decoder=%d",
+                stream.index, stream.width, stream.height,
+                stream.codecName.empty() ? "unknown" : stream.codecName.c_str(),
+                static_cast<long long>(stream.bitRate),
+                stream.isDefault ? 1 : 0, stream.isAttachedPic ? 1 : 0,
+                stream.hasDecoder ? 1 : 0);
+            if (stream.index == selection.selectedIndex) {
+              selected = &stream;
+            }
+          }
+          if (selection.selectedIndex >= 0 && selected) {
+            perfLogAppendf(
+                &perfLog,
+                "video_stream_selected index=%d size=%dx%d codec=%s bitrate=%lld default=%d",
+                selected->index, selected->width, selected->height,
+                selected->codecName.empty() ? "unknown"
+                                            : selected->codecName.c_str(),
+                static_cast<long long>(selected->bitRate),
+                selected->isDefault ? 1 : 0);
+          }
+        };
         
         // Try zero-copy GPU path first (shared device)
         ID3D11Device* sharedDevice = getSharedGpuDevice();
         if (sharedDevice && preferHardware) {
-          if (decoder.initWithDevice(file, sharedDevice, &error)) {
+          resetStreamSelection();
+          if (decoder.initWithDevice(file, sharedDevice, &error,
+                                     &streamSelection)) {
             usingSharedDevice = true;
           } else {
             // Fall back to regular hardware decode
             error.clear();
+            resetStreamSelection();
           }
         }
         
         // Regular init if shared device didn't work
-        if (!usingSharedDevice && !decoder.init(file, &error, preferHardware, allowRgbOutput)) {
+        if (!usingSharedDevice &&
+            !decoder.init(file, &error, preferHardware, allowRgbOutput,
+                          &streamSelection)) {
           {
             std::lock_guard<std::mutex> lock(initMutex);
             initDone = true;
@@ -729,6 +767,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         sourceHeight = decoder.height();
         sourceDuration100ns = decoder.duration100ns();
       }
+      logStreamSelection(streamSelection);
       initCv.notify_all();
 
       enum class FallbackResult { NotAttempted, Applied, Failed };

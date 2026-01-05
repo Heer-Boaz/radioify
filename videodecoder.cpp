@@ -126,6 +126,100 @@ void clampTargetSize(int& width, int& height) {
   height = std::max(4, height);
 }
 
+struct StreamSelectionResult {
+  int index = -1;
+  const AVCodec* codec = nullptr;
+};
+
+bool selectHighestResolutionStream(AVFormatContext* fmt,
+                                   StreamSelectionResult* out,
+                                   VideoStreamSelection* selection,
+                                   std::string* error) {
+  if (!fmt || !out) {
+    setError(error, "Invalid stream selection state.");
+    return false;
+  }
+  if (selection) {
+    selection->streams.clear();
+    selection->selectedIndex = -1;
+  }
+
+  int bestIndex = -1;
+  const AVCodec* bestCodec = nullptr;
+  int64_t bestPixels = -1;
+  int64_t bestBitRate = -1;
+  bool bestDefault = false;
+
+  for (unsigned int i = 0; i < fmt->nb_streams; ++i) {
+    AVStream* stream = fmt->streams[i];
+    if (!stream || !stream->codecpar) continue;
+    if (stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) continue;
+
+    VideoStreamInfo info;
+    info.index = static_cast<int>(i);
+    info.width = stream->codecpar->width;
+    info.height = stream->codecpar->height;
+    info.bitRate =
+        (stream->codecpar->bit_rate > 0) ? stream->codecpar->bit_rate : 0;
+    info.isDefault = (stream->disposition & AV_DISPOSITION_DEFAULT) != 0;
+    info.isAttachedPic =
+        (stream->disposition & AV_DISPOSITION_ATTACHED_PIC) != 0;
+    const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    info.hasDecoder = (codec != nullptr);
+    if (codec) {
+      info.codecName = avcodec_get_name(stream->codecpar->codec_id);
+    }
+    if (selection) {
+      selection->streams.push_back(info);
+    }
+
+    if (info.isAttachedPic || !info.hasDecoder) continue;
+
+    int64_t pixels =
+        static_cast<int64_t>(info.width) * static_cast<int64_t>(info.height);
+    if (pixels < 0) pixels = 0;
+    bool pick = false;
+    if (pixels > bestPixels) {
+      pick = true;
+    } else if (pixels == bestPixels) {
+      if (info.isDefault && !bestDefault) {
+        pick = true;
+      } else if (info.isDefault == bestDefault && info.bitRate > bestBitRate) {
+        pick = true;
+      } else if (info.isDefault == bestDefault &&
+                 info.bitRate == bestBitRate && bestIndex < 0) {
+        pick = true;
+      }
+    }
+    if (pick) {
+      bestIndex = info.index;
+      bestCodec = codec;
+      bestPixels = pixels;
+      bestBitRate = info.bitRate;
+      bestDefault = info.isDefault;
+    }
+  }
+
+  if (bestIndex < 0 || !bestCodec) {
+    const AVCodec* fallbackCodec = nullptr;
+    int fallbackIndex =
+        av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, &fallbackCodec, 0);
+    if (fallbackIndex < 0 || !fallbackCodec) {
+      setError(error, "No video stream found.");
+      return false;
+    }
+    bestIndex = fallbackIndex;
+    bestCodec = fallbackCodec;
+  }
+
+  out->index = bestIndex;
+  out->codec = bestCodec;
+  if (selection) {
+    selection->selectedIndex = bestIndex;
+  }
+  return true;
+}
+
 static enum AVPixelFormat get_hw_format(AVCodecContext* ctx,
                                         const enum AVPixelFormat* pix_fmts) {
   const enum AVPixelFormat* p;
@@ -321,7 +415,8 @@ struct VideoDecoder::Impl {
 VideoDecoder::~VideoDecoder() { uninit(); }
 
 bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
-                        bool preferHardware, bool allowRgbOutput) {
+                        bool preferHardware, bool allowRgbOutput,
+                        VideoStreamSelection* streamSelection) {
   uninit();
 
   AVFormatContext* fmt = nullptr;
@@ -344,9 +439,14 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
     }
   }
 
-  const AVCodec* codec = nullptr;
-  int streamIndex =
-      av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+  StreamSelectionResult selectionResult;
+  if (!selectHighestResolutionStream(fmt, &selectionResult, streamSelection,
+                                     error)) {
+    avformat_close_input(&fmt);
+    return false;
+  }
+  const AVCodec* codec = selectionResult.codec;
+  int streamIndex = selectionResult.index;
   if (streamIndex < 0 || !codec) {
     avformat_close_input(&fmt);
     setError(error, "No video stream found.");
@@ -448,7 +548,8 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
 
 bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
                                   ID3D11Device* device,
-                                  std::string* error) {
+                                  std::string* error,
+                                  VideoStreamSelection* streamSelection) {
   uninit();
 
   if (!device) {
@@ -476,9 +577,14 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
     }
   }
 
-  const AVCodec* codec = nullptr;
-  int streamIndex =
-      av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+  StreamSelectionResult selectionResult;
+  if (!selectHighestResolutionStream(fmt, &selectionResult, streamSelection,
+                                     error)) {
+    avformat_close_input(&fmt);
+    return false;
+  }
+  const AVCodec* codec = selectionResult.codec;
+  int streamIndex = selectionResult.index;
   if (streamIndex < 0 || !codec) {
     avformat_close_input(&fmt);
     setError(error, "No video stream found.");
