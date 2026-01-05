@@ -53,6 +53,7 @@ struct Options {
   bool verbose = false;
 };
 
+
 static void die(const std::string& message) {
   std::cerr << "ERROR: " << message << "\n";
   std::exit(1);
@@ -215,13 +216,6 @@ static void refreshBrowser(BrowserState& state,
   }
 }
 
-static std::string fitName(const std::string& name, int colWidth) {
-  int maxLen = colWidth - 2;
-  if (maxLen <= 1) return name.empty() ? " " : utf8Take(name, 1);
-  if (utf8CodepointCount(name) <= maxLen) return name;
-  return utf8Take(name, maxLen - 1) + "~";
-}
-
 static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
                          ConsoleScreen& screen, const Style& baseStyle,
                          const Style& accentStyle, const Style& dimStyle) {
@@ -285,36 +279,6 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-}
-
-static GridLayout buildLayout(const BrowserState& state, int width,
-                              int rowsVisible) {
-  GridLayout layout;
-  layout.names.reserve(state.entries.size());
-  int maxName = 0;
-  for (const auto& e : state.entries) {
-    std::string name = e.name;
-    if (e.isDir && name != "..") name += "/";
-    layout.names.push_back(name);
-    maxName = std::max(maxName, utf8CodepointCount(name));
-  }
-
-  int safeRows = std::max(1, rowsVisible);
-  int colWidth = std::min(width, std::max(8, maxName + 3));
-  int maxCols = std::max(1, width / colWidth);
-  int cols = std::max(
-      1,
-      std::min(maxCols, static_cast<int>((state.entries.size() + safeRows - 1) /
-                                         safeRows)));
-  int totalRows =
-      cols > 0 ? static_cast<int>((state.entries.size() + cols - 1) / cols) : 0;
-  int visibleRows = std::min(safeRows, totalRows);
-
-  layout.rowsVisible = visibleRows;
-  layout.totalRows = totalRows;
-  layout.cols = cols;
-  layout.colWidth = colWidth;
-  return layout;
 }
 
 static void renderToFile(const Options& o, const Radio1938& radio1938Template,
@@ -434,6 +398,7 @@ int main(int argc, char** argv) {
   BrowserState browser;
   browser.dir = startDir;
   refreshBrowser(browser, initialName);
+  ThumbnailCache thumbCache;
 
   ConsoleInput input;
   input.init();
@@ -554,6 +519,7 @@ int main(int argc, char** argv) {
       int maxScroll = layout.totalRows - layout.rowsVisible;
       browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
     }
+    syncThumbnailCache(thumbCache, layout);
     breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
     if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
       breadcrumbHover = -1;
@@ -564,6 +530,7 @@ int main(int argc, char** argv) {
   callbacks.onRefreshBrowser = [&](BrowserState& nextBrowser,
                                    const std::string& initialName) {
     refreshBrowser(nextBrowser, initialName);
+    resetThumbnailCache(thumbCache);
   };
   callbacks.onPlayFile = [&](const std::filesystem::path& file) {
     if (isSupportedImageExt(file)) {
@@ -623,6 +590,7 @@ int main(int argc, char** argv) {
         int maxScroll = layout.totalRows - layout.rowsVisible;
         browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
       }
+      syncThumbnailCache(thumbCache, layout);
 
       screen.clear(kStyleNormal);
 
@@ -714,33 +682,10 @@ int main(int argc, char** argv) {
                   width),
           kStyleDim);
 
-      if (browser.entries.empty()) {
-        screen.writeText(2, listTop, "(no supported files)", kStyleDim);
-      } else {
-        for (int r = 0; r < layout.rowsVisible; ++r) {
-          int y = listTop + r;
-          int logicalRow = r + browser.scrollRow;
-          if (logicalRow >= layout.totalRows) continue;
-          for (int c = 0; c < layout.cols; ++c) {
-            int idx = c * layout.totalRows + logicalRow;
-            if (idx >= static_cast<int>(browser.entries.size())) continue;
-            const auto& entry = browser.entries[static_cast<size_t>(idx)];
-            bool isSelected = (idx == browser.selected);
-            std::string cell = fitName(layout.names[static_cast<size_t>(idx)],
-                                       layout.colWidth);
-            int cellWidth = utf8CodepointCount(cell);
-            if (cellWidth < layout.colWidth) {
-              cell.append(static_cast<size_t>(layout.colWidth - cellWidth),
-                          ' ');
-            } else if (cellWidth > layout.colWidth) {
-              cell = utf8Take(cell, layout.colWidth);
-            }
-            Style attr = isSelected ? kStyleHighlight
-                                    : (entry.isDir ? kStyleDir : kStyleNormal);
-            screen.writeText(c * layout.colWidth, y, cell, attr);
-          }
-        }
-      }
+      drawBrowserEntries(screen, browser, layout, listTop, listHeight,
+                         kStyleNormal, kStyleNormal, kStyleDir, kStyleHighlight,
+                         kStyleDim, thumbCache, isSupportedImageExt, isVideoExt,
+                         isSupportedAudioExt);
 
       int footerStart = listTop + listHeight;
       int line = footerStart;

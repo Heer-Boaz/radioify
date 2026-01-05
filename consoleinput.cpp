@@ -318,8 +318,10 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     if (count == 0) return;
     int x = mouse.pos.X;
     int y = mouse.pos.Y;
-    if (y < listTop || y >= listTop + layout.rowsVisible) return;
-    int row = (y - listTop) + browser.scrollRow;
+    int cellHeight = std::max(1, layout.cellHeight);
+    int visibleHeight = layout.rowsVisible * cellHeight;
+    if (y < listTop || y >= listTop + visibleHeight) return;
+    int row = (y - listTop) / cellHeight + browser.scrollRow;
     int col = layout.colWidth > 0 ? x / layout.colWidth : 0;
     if (col < 0 || col >= layout.cols) return;
     int idx = col * layout.totalRows + row;

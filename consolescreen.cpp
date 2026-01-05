@@ -4,6 +4,11 @@
 #include <array>
 #include <cwchar>
 #include <limits>
+#include <utility>
+
+#include "asciiart.h"
+#include "consoleinput.h"
+#include "videodecoder.h"
 
 static std::wstring utf8ToWide(const std::string& text) {
   if (text.empty()) return {};
@@ -204,6 +209,328 @@ inline void appendColorSeq(std::wstring& out, const Color& c, bool fg) {
   out.push_back(L';');
   appendByte(out, c.b);
   out.push_back(L'm');
+}
+
+static std::string fitName(const std::string& name, int colWidth) {
+  int maxLen = colWidth - 2;
+  if (maxLen <= 1) return name.empty() ? " " : utf8Take(name, 1);
+  if (utf8CodepointCount(name) <= maxLen) return name;
+  return utf8Take(name, maxLen - 1) + "~";
+}
+
+static void drawCenteredText(ConsoleScreen& screen, int x, int y, int width,
+                             int height, const std::string& text,
+                             const Style& style) {
+  if (width <= 0 || height <= 0 || text.empty()) return;
+  int textWidth = utf8CodepointCount(text);
+  if (textWidth <= 0) return;
+  int cx = x + std::max(0, (width - textWidth) / 2);
+  int cy = y + height / 2;
+  screen.writeText(cx, cy, text, style);
+}
+
+static void assignThumbnailFromAscii(const AsciiArt& art, Thumbnail& out) {
+  out.width = art.width;
+  out.height = art.height;
+  out.cells.resize(art.cells.size());
+  for (size_t i = 0; i < art.cells.size(); ++i) {
+    const auto& cell = art.cells[i];
+    auto& dst = out.cells[i];
+    dst.ch = cell.ch;
+    dst.fg = cell.fg;
+    dst.bg = cell.bg;
+    dst.hasBg = cell.hasBg;
+  }
+}
+
+static bool renderImageThumbnail(const std::filesystem::path& file,
+                                 int maxWidth, int maxHeight, Thumbnail& out,
+                                 std::string* error) {
+  AsciiArt art;
+  if (!renderAsciiArt(file, maxWidth, maxHeight, art, error)) return false;
+  assignThumbnailFromAscii(art, out);
+  return true;
+}
+
+static void computeVideoThumbTarget(int thumbWidth, int thumbHeight, int& outW,
+                                    int& outH) {
+  outW = std::max(2, thumbWidth * 2);
+  outH = std::max(4, thumbHeight * 4);
+  if (outW & 1) ++outW;
+  if (outH & 1) ++outH;
+}
+
+static bool renderVideoThumbnail(const std::filesystem::path& file,
+                                 int maxWidth, int maxHeight, Thumbnail& out,
+                                 std::string* error) {
+  if (maxWidth <= 0 || maxHeight <= 0) return false;
+  VideoDecoder decoder;
+  std::string initError;
+  if (!decoder.init(file, &initError, true, false)) {
+    if (!decoder.init(file, &initError, false, false)) {
+      if (error && !initError.empty()) *error = initError;
+      return false;
+    }
+  }
+
+  int targetW = 0;
+  int targetH = 0;
+  computeVideoThumbTarget(maxWidth, maxHeight, targetW, targetH);
+  decoder.setTargetSize(targetW, targetH, nullptr);
+
+  VideoFrame frame;
+  VideoReadInfo info;
+  for (int i = 0; i < 20; ++i) {
+    if (!decoder.readFrame(frame, &info, true)) {
+      if (decoder.atEnd()) break;
+      continue;
+    }
+
+    AsciiArt art;
+    bool ok = false;
+    if ((frame.format == VideoPixelFormat::NV12 ||
+         frame.format == VideoPixelFormat::P010) &&
+        !frame.yuv.empty()) {
+      YuvFormat yuvFormat = (frame.format == VideoPixelFormat::P010)
+                                ? YuvFormat::P010
+                                : YuvFormat::NV12;
+      ok = renderAsciiArtFromYuv(
+          frame.yuv.data(), frame.width, frame.height, frame.stride,
+          frame.planeHeight, yuvFormat, frame.fullRange, frame.yuvMatrix,
+          frame.yuvTransfer, maxWidth, maxHeight, art);
+    } else if (!frame.rgba.empty()) {
+      ok = renderAsciiArtFromRgba(frame.rgba.data(), frame.width, frame.height,
+                                  maxWidth, maxHeight, art, true);
+    }
+    if (ok) {
+      assignThumbnailFromAscii(art, out);
+      return true;
+    }
+  }
+  if (error && !initError.empty()) *error = initError;
+  return false;
+}
+
+GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
+  GridLayout layout;
+  layout.names.reserve(state.entries.size());
+  int maxName = 0;
+  for (const auto& e : state.entries) {
+    std::string name = e.name;
+    if (e.isDir && name != "..") name += "/";
+    layout.names.push_back(name);
+    maxName = std::max(maxName, utf8CodepointCount(name));
+  }
+
+  constexpr int kThumbMinWidth = 10;
+  constexpr int kThumbTargetWidth = 16;
+  constexpr int kThumbMinHeight = 3;
+  constexpr int kThumbMaxHeight = 8;
+  constexpr int kThumbLabelRows = 1;
+
+  layout.showThumbs =
+      (listHeight >= kThumbMinHeight + kThumbLabelRows &&
+       width >= kThumbMinWidth + 2);
+  if (layout.showThumbs) {
+    layout.thumbHeight =
+        std::clamp(listHeight - kThumbLabelRows, kThumbMinHeight,
+                   kThumbMaxHeight);
+    layout.cellHeight = layout.thumbHeight + kThumbLabelRows;
+    int minColWidth = std::max(8, maxName + 2);
+    int maxThumbWidth = std::max(1, width - 2);
+    int targetThumbWidth = std::min(kThumbTargetWidth, maxThumbWidth);
+    if (targetThumbWidth < kThumbMinWidth &&
+        maxThumbWidth >= kThumbMinWidth) {
+      targetThumbWidth = kThumbMinWidth;
+    }
+    int desiredColWidth = std::max(minColWidth, targetThumbWidth + 2);
+    layout.colWidth = std::min(width, desiredColWidth);
+    layout.colWidth = std::max(layout.colWidth, 6);
+    layout.thumbWidth = std::max(1, layout.colWidth - 2);
+  } else {
+    layout.cellHeight = 1;
+    layout.thumbWidth = 0;
+    layout.thumbHeight = 0;
+    layout.colWidth = std::min(width, std::max(8, maxName + 3));
+  }
+
+  int safeRows = std::max(1, listHeight / std::max(1, layout.cellHeight));
+  int maxCols = std::max(1, width / std::max(1, layout.colWidth));
+  int cols = std::max(
+      1,
+      std::min(maxCols, static_cast<int>((state.entries.size() + safeRows - 1) /
+                                         safeRows)));
+  int totalRows =
+      cols > 0 ? static_cast<int>((state.entries.size() + cols - 1) / cols) : 0;
+  int visibleRows = std::min(safeRows, totalRows);
+
+  layout.rowsVisible = visibleRows;
+  layout.totalRows = totalRows;
+  layout.cols = cols;
+  return layout;
+}
+
+void resetThumbnailCache(ThumbnailCache& cache) {
+  cache.items.clear();
+  cache.maxWidth = 0;
+  cache.maxHeight = 0;
+}
+
+void syncThumbnailCache(ThumbnailCache& cache, const GridLayout& layout) {
+  if (!layout.showThumbs) {
+    if (!cache.items.empty()) {
+      cache.items.clear();
+    }
+    cache.maxWidth = 0;
+    cache.maxHeight = 0;
+    return;
+  }
+  if (cache.maxWidth != layout.thumbWidth ||
+      cache.maxHeight != layout.thumbHeight) {
+    cache.items.clear();
+    cache.maxWidth = layout.thumbWidth;
+    cache.maxHeight = layout.thumbHeight;
+  }
+}
+
+void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
+                        const GridLayout& layout, int listTop, int listHeight,
+                        const Style& baseStyle, const Style& normalStyle,
+                        const Style& dirStyle, const Style& highlightStyle,
+                        const Style& dimStyle, ThumbnailCache& cache,
+                        bool (*isImage)(const std::filesystem::path&),
+                        bool (*isVideo)(const std::filesystem::path&),
+                        bool (*isAudio)(const std::filesystem::path&)) {
+  if (browser.entries.empty()) {
+    screen.writeText(2, listTop, "(no supported files)", dimStyle);
+    return;
+  }
+
+  if (!layout.showThumbs) {
+    for (int r = 0; r < layout.rowsVisible; ++r) {
+      int y = listTop + r;
+      int logicalRow = r + browser.scrollRow;
+      if (logicalRow >= layout.totalRows) continue;
+      for (int c = 0; c < layout.cols; ++c) {
+        int idx = c * layout.totalRows + logicalRow;
+        if (idx >= static_cast<int>(browser.entries.size())) continue;
+        const auto& entry = browser.entries[static_cast<size_t>(idx)];
+        bool isSelected = (idx == browser.selected);
+        std::string cell = fitName(layout.names[static_cast<size_t>(idx)],
+                                   layout.colWidth);
+        int cellWidth = utf8CodepointCount(cell);
+        if (cellWidth < layout.colWidth) {
+          cell.append(static_cast<size_t>(layout.colWidth - cellWidth), ' ');
+        } else if (cellWidth > layout.colWidth) {
+          cell = utf8Take(cell, layout.colWidth);
+        }
+        Style attr =
+            isSelected ? highlightStyle : (entry.isDir ? dirStyle : normalStyle);
+        screen.writeText(c * layout.colWidth, y, cell, attr);
+      }
+    }
+    return;
+  }
+
+  int thumbBudget = 2;
+  auto fetchThumb = [&](const FileEntry& entry, bool wantImage,
+                        bool wantVideo) -> const Thumbnail* {
+    if (!wantImage && !wantVideo) return nullptr;
+    std::string key = pathToUtf8(entry.path);
+    auto it = cache.items.find(key);
+    if (it != cache.items.end()) {
+      return &it->second;
+    }
+    if (thumbBudget <= 0) return nullptr;
+    Thumbnail thumb;
+    std::string error;
+    if (wantImage) {
+      thumb.ok = renderImageThumbnail(entry.path, layout.thumbWidth,
+                                      layout.thumbHeight, thumb, &error);
+    } else {
+      thumb.ok = renderVideoThumbnail(entry.path, layout.thumbWidth,
+                                      layout.thumbHeight, thumb, &error);
+    }
+    if (!thumb.ok) {
+      thumb.width = 0;
+      thumb.height = 0;
+      thumb.cells.clear();
+    }
+    auto insertResult =
+        cache.items.emplace(std::move(key), std::move(thumb));
+    --thumbBudget;
+    return &insertResult.first->second;
+  };
+
+  for (int r = 0; r < layout.rowsVisible; ++r) {
+    int logicalRow = r + browser.scrollRow;
+    if (logicalRow >= layout.totalRows) continue;
+    int cellTop = listTop + r * layout.cellHeight;
+    for (int c = 0; c < layout.cols; ++c) {
+      int idx = c * layout.totalRows + logicalRow;
+      if (idx >= static_cast<int>(browser.entries.size())) continue;
+      const auto& entry = browser.entries[static_cast<size_t>(idx)];
+      bool isSelected = (idx == browser.selected);
+      int cellLeft = c * layout.colWidth;
+      int thumbX = cellLeft + 1;
+      int thumbY = cellTop;
+      int thumbW = std::max(1, layout.thumbWidth);
+      int thumbH = std::max(1, layout.thumbHeight);
+      bool img = !entry.isDir && isImage && isImage(entry.path);
+      bool vid = !entry.isDir && isVideo && isVideo(entry.path);
+      bool aud = !entry.isDir && isAudio && isAudio(entry.path);
+
+      const Thumbnail* thumb = fetchThumb(entry, img, vid);
+      if (thumb && thumb->ok && thumb->width > 0 && thumb->height > 0) {
+        int artW = std::min(thumb->width, thumbW);
+        int artH = std::min(thumb->height, thumbH);
+        int artX = thumbX + std::max(0, (thumbW - artW) / 2);
+        int artY = thumbY + std::max(0, (thumbH - artH) / 2);
+        for (int y = 0; y < artH; ++y) {
+          for (int x = 0; x < artW; ++x) {
+            const auto& cell =
+                thumb->cells[static_cast<size_t>(y * thumb->width + x)];
+            Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
+            screen.writeChar(artX + x, artY + y, cell.ch, cellStyle);
+          }
+        }
+      } else {
+        std::string placeholder;
+        if (entry.isDir) {
+          placeholder = "[DIR]";
+        } else if (img) {
+          placeholder = "[IMG]";
+        } else if (vid) {
+          placeholder = "[VID]";
+        } else if (aud) {
+          placeholder = "[AUD]";
+        } else {
+          placeholder = "[FILE]";
+        }
+        if ((img || vid) && !thumb) {
+          placeholder = "...";
+        }
+        placeholder = fitLine(placeholder, thumbW);
+        drawCenteredText(screen, thumbX, thumbY, thumbW, thumbH, placeholder,
+                         dimStyle);
+      }
+
+      int labelY = cellTop + layout.thumbHeight;
+      if (labelY < listTop + listHeight) {
+        std::string label =
+            fitName(layout.names[static_cast<size_t>(idx)], layout.colWidth);
+        int labelWidth = utf8CodepointCount(label);
+        int labelX =
+            cellLeft + std::max(0, (layout.colWidth - labelWidth) / 2);
+        Style labelStyle =
+            isSelected ? highlightStyle : (entry.isDir ? dirStyle : normalStyle);
+        if (isSelected) {
+          screen.writeRun(cellLeft, labelY, layout.colWidth, L' ', labelStyle);
+        }
+        screen.writeText(labelX, labelY, label, labelStyle);
+      }
+    }
+  }
 }
 
 BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) {
