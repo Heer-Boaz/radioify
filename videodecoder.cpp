@@ -163,6 +163,7 @@ struct VideoDecoder::Impl {
   bool useSharedDevice = false;  // When true, keep frames on GPU without transfer
   uint64_t seekEpoch = 0;  // Incremented on seek to invalidate stale frames
   int framesAfterSeek = 0;  // Count frames since last seek for stabilization
+  bool droppingNonKeyframes = false; // Drop frames until a keyframe is found
 
   bool emitFrame(VideoFrame& out, VideoReadInfo* info, bool decodePixels,
                  AVFrame* src, bool keepOnGpu = false) {
@@ -236,6 +237,7 @@ struct VideoDecoder::Impl {
     if (keepOnGpu && src->format == AV_PIX_FMT_D3D11) {
       // D3D11VA frames have texture in data[0] and array index in data[1]
       auto* texture = reinterpret_cast<ID3D11Texture2D*>(src->data[0]);
+      if (!texture) return false;
       intptr_t arrayIndex = reinterpret_cast<intptr_t>(src->data[1]);
       
       out.format = VideoPixelFormat::HWTexture;
@@ -661,18 +663,22 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     if (recv == 0) {
       AVFrame* src = impl_->frame;
       
-      // After seek, skip a few frames to let decoder stabilize (get keyframe + references)
-      // This prevents crashes from incomplete reference frames
-      if (impl_->useSharedDevice && impl_->framesAfterSeek < 3) {
-        impl_->framesAfterSeek++;
-        // Check if this is a keyframe - if so, we can use it immediately
+      // VLC-style robustness: After seek, drop everything until we hit a real keyframe.
+      // This hides the "searching" artifacts and ensures we start on a valid frame.
+      if (impl_->droppingNonKeyframes) {
         bool isKeyframe = (src->flags & AV_FRAME_FLAG_KEY) || (src->pict_type == AV_PICTURE_TYPE_I);
-        if (!isKeyframe && impl_->framesAfterSeek < 3) {
-          // Skip non-keyframes right after seek
-          continue;
+        if (!isKeyframe) {
+           impl_->framesAfterSeek++;
+           // Safety valve: if we don't find a keyframe after 60 frames (~2s), give up and show whatever.
+           if (impl_->framesAfterSeek < 60) {
+             av_frame_unref(src);
+             continue;
+           }
+           impl_->droppingNonKeyframes = false;
+        } else {
+           impl_->droppingNonKeyframes = false;
         }
       }
-      impl_->framesAfterSeek++;
       
       if (src->format == AV_PIX_FMT_D3D11) {
         if (decodePixels) {
@@ -823,6 +829,7 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   impl_->consecutiveTransferErrors = 0;
   impl_->seekEpoch++;
   impl_->framesAfterSeek = 0;
+  impl_->droppingNonKeyframes = true;
   return true;
 }
 
