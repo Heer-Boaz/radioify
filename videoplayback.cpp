@@ -44,7 +44,7 @@ extern "C" {
 #define RADIOIFY_ENABLE_TIMING_LOG 0
 #endif
 #ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
-#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 0
+#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 1
 #endif
 
 namespace {
@@ -437,6 +437,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     int targetH = 0;
     bool seek = false;
     int64_t seekTs = 0;
+    bool seekFast = false;
     uint64_t epoch = 0;
   };
   std::mutex commandMutex;
@@ -859,7 +860,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               decodeEnded.store(true);
               break;
             }
-            seekingTargetTs = command.seekTs;
+            seekingTargetTs = command.seekFast ? -1 : command.seekTs;
             decodeEnded.store(false);
           }
           currentEpoch = command.epoch;
@@ -1433,6 +1434,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
     return std::chrono::steady_clock::now() <= overlayUntil;
   };
+  constexpr double kFastSeekThresholdSec = 8.0;
 
   auto renderScreen = [&](bool refreshArt) {
     screen.updateSize();
@@ -1928,12 +1930,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           if (audioOk) {
             audioSeekToSec(audioStartOffsetSec + targetSec);
           }
+          bool seekFast =
+              std::fabs(targetSec - currentSec) >= kFastSeekThresholdSec;
           int64_t targetTs =
               firstTs + static_cast<int64_t>(targetSec * secondsToTicks);
           uint64_t epoch = commandEpoch.fetch_add(1) + 1;
           DecodeCommand cmd;
           cmd.seek = true;
           cmd.seekTs = targetTs;
+          cmd.seekFast = seekFast;
           cmd.epoch = epoch;
           issueCommand(cmd);
           pendingSeekEpoch = epoch;
@@ -1965,15 +1970,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               double totalSec = totalDurationSec();
               if (totalSec > 0.0 && std::isfinite(totalSec)) {
                 double targetSec = ratio * totalSec;
+                double currentSec = currentTimeSec();
                 if (audioOk) {
                   audioSeekToSec(audioStartOffsetSec + targetSec);
                 }
+                bool seekFast =
+                    std::fabs(targetSec - currentSec) >= kFastSeekThresholdSec;
                 int64_t targetTs =
                     firstTs + static_cast<int64_t>(targetSec * secondsToTicks);
                 uint64_t epoch = commandEpoch.fetch_add(1) + 1;
                 DecodeCommand cmd;
                 cmd.seek = true;
                 cmd.seekTs = targetTs;
+                cmd.seekFast = seekFast;
                 cmd.epoch = epoch;
                 issueCommand(cmd);
                 pendingSeekEpoch = epoch;

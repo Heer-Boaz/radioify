@@ -425,9 +425,9 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
     maxName = std::max(maxName, utf8CodepointCount(name));
   }
 
-  constexpr int kThumbMinWidth = 48;
-  constexpr int kThumbTargetWidth = 48;
-  constexpr int kThumbMinHeight = 24;
+  constexpr int kThumbMinWidth = 20;
+  constexpr int kThumbTargetWidth = 32;
+  constexpr int kThumbMinHeight = 8;
   constexpr int kThumbMaxHeight = 24;
   constexpr int kThumbLabelRows = 1;
 
@@ -504,7 +504,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       int logicalRow = r + browser.scrollRow;
       if (logicalRow >= layout.totalRows) continue;
       for (int c = 0; c < layout.cols; ++c) {
-        int idx = c * layout.totalRows + logicalRow;
+        int idx = logicalRow * layout.cols + c;
         if (idx >= static_cast<int>(browser.entries.size())) continue;
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         bool isSelected = (idx == browser.selected);
@@ -577,7 +577,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
     if (logicalRow >= layout.totalRows) continue;
     int cellTop = listTop + r * layout.cellHeight;
     for (int c = 0; c < layout.cols; ++c) {
-      int idx = c * layout.totalRows + logicalRow;
+      int idx = logicalRow * layout.cols + c;
       if (idx >= static_cast<int>(browser.entries.size())) continue;
       const auto& entry = browser.entries[static_cast<size_t>(idx)];
       bool isSelected = (idx == browser.selected);

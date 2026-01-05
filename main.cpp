@@ -22,6 +22,7 @@
 
 #include "asciiart.h"
 #include "audioplayback.h"
+#include "browsermeta.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "m4adecoder.h"
@@ -687,6 +688,12 @@ int main(int argc, char** argv) {
       int line = footerStart;
       if (line < height) {
         line++;
+      }
+      if (line < height) {
+        std::string meta = buildSelectionMeta(browser, isVideoExt);
+        if (!meta.empty()) {
+          screen.writeText(0, line++, fitLine(meta, width), kStyleDim);
+        }
       }
       std::filesystem::path nowPlaying = audioGetNowPlaying();
       std::string nowLabel =

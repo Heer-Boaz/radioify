@@ -70,6 +70,13 @@ struct VideoStreamSelection {
   int selectedIndex = -1;
 };
 
+struct VideoMetadata {
+  int width = 0;
+  int height = 0;
+  int64_t duration100ns = 0;
+  std::string codecName;
+};
+
 class VideoDecoder {
  public:
   ~VideoDecoder();
@@ -100,5 +107,9 @@ class VideoDecoder {
   struct Impl;
   Impl* impl_ = nullptr;
 };
+
+bool probeVideoMetadata(const std::filesystem::path& path,
+                        VideoMetadata* out,
+                        std::string* error);
 
 #endif

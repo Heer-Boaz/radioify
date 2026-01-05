@@ -924,12 +924,13 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
       impl_->codec &&
       (impl_->codec->codec_id == AV_CODEC_ID_VP9 ||
        impl_->codec->codec_id == AV_CODEC_ID_AV1);
+  const bool allowAnySeek = true;
 
-  // Prefer seeking to keyframes for codecs like VP9 that have complex frame dependencies
-  // This prevents crashes from missing reference frames during HDR playback
+  // Prefer seeking to keyframes for codecs like VP9 that have complex frame dependencies.
+  // Keyframe-only backward seek avoids long waits for the next keyframe on big jumps.
   int seekFlags = AVSEEK_FLAG_BACKWARD;
-  if (prefersKeyframes) {
-    seekFlags |= AVSEEK_FLAG_ANY;  // Allow seeking to any frame, but we'll refine below
+  if (allowAnySeek) {
+    seekFlags |= AVSEEK_FLAG_ANY;
   }
 
   // Try avformat_seek_file with stream_index = -1 (AV_TIME_BASE)
@@ -946,7 +947,7 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   if (seekRes < 0) return false;
 
   // For VP9/AV1, ensure we start decoding from a keyframe.
-  if (prefersKeyframes) {
+  if (allowAnySeek && prefersKeyframes) {
     AVPacket* pkt = av_packet_alloc();
     if (pkt) {
       bool foundKeyframe = false;
@@ -990,4 +991,69 @@ int VideoDecoder::width() const { return impl_ ? impl_->width : 0; }
 int VideoDecoder::height() const { return impl_ ? impl_->height : 0; }
 int64_t VideoDecoder::duration100ns() const {
   return impl_ ? impl_->duration100ns : 0;
+}
+
+bool probeVideoMetadata(const std::filesystem::path& path, VideoMetadata* out,
+                        std::string* error) {
+  if (!out) {
+    setError(error, "Invalid output for video metadata.");
+    return false;
+  }
+  *out = VideoMetadata{};
+
+  AVFormatContext* fmt = nullptr;
+  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, error)) {
+    return false;
+  }
+
+  int infoErr = avformat_find_stream_info(fmt, nullptr);
+  if (infoErr < 0) {
+    avformat_close_input(&fmt);
+    if (!openInputWithProbe(path, kAnalyzeDurationFallbackUs, &fmt, error)) {
+      return false;
+    }
+    infoErr = avformat_find_stream_info(fmt, nullptr);
+    if (infoErr < 0) {
+      std::string msg = "Failed to read stream info: " + ffmpegError(infoErr);
+      avformat_close_input(&fmt);
+      setError(error, msg.c_str());
+      return false;
+    }
+  }
+
+  const AVCodec* codec = nullptr;
+  int streamIndex =
+      av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+  if (streamIndex < 0) {
+    avformat_close_input(&fmt);
+    setError(error, "No video stream found.");
+    return false;
+  }
+
+  AVStream* stream = fmt->streams[streamIndex];
+  const AVCodecParameters* params = stream ? stream->codecpar : nullptr;
+  if (params) {
+    out->width = params->width;
+    out->height = params->height;
+  }
+
+  if (codec) {
+    out->codecName = codec->name ? codec->name : "";
+  } else if (params) {
+    const AVCodec* lookup = avcodec_find_decoder(params->codec_id);
+    if (lookup && lookup->name) out->codecName = lookup->name;
+  }
+
+  int64_t duration100ns = 0;
+  if (stream && stream->duration > 0) {
+    int64_t us =
+        av_rescale_q(stream->duration, stream->time_base, AVRational{1, 1000000});
+    duration100ns = us * 10;
+  } else if (fmt->duration > 0) {
+    duration100ns = fmt->duration * 10;
+  }
+  out->duration100ns = duration100ns;
+
+  avformat_close_input(&fmt);
+  return true;
 }
