@@ -920,47 +920,60 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   targetUs += impl_->formatStartUs;
   if (targetUs < 0) targetUs = 0;
 
+  const bool prefersKeyframes =
+      impl_->codec &&
+      (impl_->codec->codec_id == AV_CODEC_ID_VP9 ||
+       impl_->codec->codec_id == AV_CODEC_ID_AV1);
+
   // Prefer seeking to keyframes for codecs like VP9 that have complex frame dependencies
   // This prevents crashes from missing reference frames during HDR playback
   int seekFlags = AVSEEK_FLAG_BACKWARD;
-  if (impl_->codec && (impl_->codec->codec_id == AV_CODEC_ID_VP9 || 
-                       impl_->codec->codec_id == AV_CODEC_ID_AV1)) {
+  if (prefersKeyframes) {
     seekFlags |= AVSEEK_FLAG_ANY;  // Allow seeking to any frame, but we'll refine below
   }
 
   // Try avformat_seek_file with stream_index = -1 (AV_TIME_BASE)
-  int res = avformat_seek_file(impl_->fmt, -1, INT64_MIN, targetUs, INT64_MAX, seekFlags);
+  int seekRes =
+      avformat_seek_file(impl_->fmt, -1, INT64_MIN, targetUs, INT64_MAX, seekFlags);
 
-  if (res < 0) {
+  if (seekRes < 0) {
     // Fallback: try av_seek_frame with stream index (legacy method)
-    int64_t targetStream = av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
-    res = av_seek_frame(impl_->fmt, impl_->streamIndex, targetStream, seekFlags);
+    int64_t targetStream =
+        av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
+    seekRes = av_seek_frame(impl_->fmt, impl_->streamIndex, targetStream, seekFlags);
   }
 
-  // For VP9/AV1, ensure we seeked to a keyframe by reading forward until we find one
-  if (res >= 0 && impl_->codec && (impl_->codec->codec_id == AV_CODEC_ID_VP9 || 
-                                   impl_->codec->codec_id == AV_CODEC_ID_AV1)) {
+  if (seekRes < 0) return false;
+
+  // For VP9/AV1, ensure we start decoding from a keyframe.
+  if (prefersKeyframes) {
     AVPacket* pkt = av_packet_alloc();
     if (pkt) {
       bool foundKeyframe = false;
-      // Read packets until we find a keyframe or timeout
+      // Read packets until we find a keyframe or timeout.
       for (int attempts = 0; attempts < 100 && !foundKeyframe; ++attempts) {
-        res = av_read_frame(impl_->fmt, pkt);
-        if (res < 0) break;
-        if (pkt->stream_index == impl_->streamIndex && (pkt->flags & AV_PKT_FLAG_KEY)) {
+        int readRes = av_read_frame(impl_->fmt, pkt);
+        if (readRes < 0) break;
+        if (pkt->stream_index != impl_->streamIndex) {
+          av_packet_unref(pkt);
+          continue;
+        }
+        if (pkt->flags & AV_PKT_FLAG_KEY) {
+          // Stash the keyframe so decode starts on a valid reference.
+          av_packet_unref(impl_->packet);
+          av_packet_move_ref(impl_->packet, pkt);
+          impl_->hasPendingPacket = true;
           foundKeyframe = true;
+          break;
         }
         av_packet_unref(pkt);
       }
       av_packet_free(&pkt);
       if (!foundKeyframe) {
-        // If no keyframe found, the seek might still work, but log it
-        // For now, continue - the decoder has error recovery flags
+        // If no keyframe found, continue - the decoder has error recovery flags.
       }
     }
   }
-
-  if (res < 0) return false;
 
   avcodec_flush_buffers(impl_->codec);
   impl_->atEnd = false;
