@@ -656,14 +656,14 @@ int main(int argc, char** argv) {
             fitLine("  Mouse=select  Click=play/enter  Backspace=up  "
                     "Click+drag bar=seek  Space=pause  Arrows=move  "
                     "PgUp/PgDn=page  "
-                    "Ctrl+Left/Right=seek  R=toggle  T=thumbs  Q=quit",
+                    "Ctrl+Left/Right=seek  R=toggle  T=view  Q=quit",
                     width),
             kStyleNormal);
       } else {
         screen.writeText(
             0, 2,
             fitLine("  Mouse=select  Click=render/enter  Backspace=up  "
-                    "Arrows=move  PgUp/PgDn=page  R=toggle  T=thumbs  Q=quit",
+                    "Arrows=move  PgUp/PgDn=page  R=toggle  T=view  Q=quit",
                     width),
             kStyleNormal);
       }

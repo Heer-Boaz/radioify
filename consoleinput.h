@@ -69,7 +69,12 @@ struct BrowserState {
   std::vector<FileEntry> entries;
   int selected = 0;
   int scrollRow = 0;
-  bool thumbsEnabled = true;
+  enum class ViewMode {
+    Thumbnails,
+    ListPreview,
+    ListOnly,
+  };
+  ViewMode viewMode = ViewMode::Thumbnails;
 };
 
 struct GridLayout {

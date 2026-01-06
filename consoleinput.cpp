@@ -160,6 +160,18 @@ void pageSelection(BrowserState& browser, const GridLayout& layout,
   }
 }
 
+BrowserState::ViewMode nextViewMode(BrowserState::ViewMode mode) {
+  switch (mode) {
+    case BrowserState::ViewMode::Thumbnails:
+      return BrowserState::ViewMode::ListPreview;
+    case BrowserState::ViewMode::ListPreview:
+      return BrowserState::ViewMode::ListOnly;
+    case BrowserState::ViewMode::ListOnly:
+      return BrowserState::ViewMode::Thumbnails;
+  }
+  return BrowserState::ViewMode::Thumbnails;
+}
+
 void scrollFromBar(BrowserState& browser, const GridLayout& layout, int y,
                    int listTop, int listHeight, bool& dirty) {
   if (!layout.showScrollBar || layout.totalRows <= layout.rowsVisible) return;
@@ -268,7 +280,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
     if (key.vk == 'T' || key.ch == 't' || key.ch == 'T') {
-      browser.thumbsEnabled = !browser.thumbsEnabled;
+      browser.viewMode = nextViewMode(browser.viewMode);
       dirty = true;
       return;
     }

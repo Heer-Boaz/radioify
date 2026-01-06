@@ -467,7 +467,7 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   constexpr int kScrollBarWidth = 2;
 
   layout.showThumbs =
-      state.thumbsEnabled &&
+      state.viewMode == BrowserState::ViewMode::Thumbnails &&
       (listHeight >= kThumbMinHeight + kThumbLabelRows &&
        width >= kThumbMinWidth + 2);
   layout.listWidth = width;
@@ -493,7 +493,8 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
     layout.thumbWidth = std::max(1, layout.colWidth - 2);
   } else {
     int listWidth = width;
-    if (width >= kListMinWidth + kPreviewMinWidth + kPreviewGap &&
+    if (state.viewMode == BrowserState::ViewMode::ListPreview &&
+        width >= kListMinWidth + kPreviewMinWidth + kPreviewGap &&
         listHeight >= kPreviewMinHeight) {
       int baseListWidth = std::max(kListMinWidth, maxName + 3);
       int maxListWidth = width - kPreviewMinWidth - kPreviewGap;
