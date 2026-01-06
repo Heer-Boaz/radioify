@@ -347,7 +347,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     if (leftPressed &&
         (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
       if (layout.showScrollBar && layout.scrollBarX >= 0 &&
-          mouse.pos.X == layout.scrollBarX &&
+          layout.scrollBarWidth > 0 &&
+          mouse.pos.X >= layout.scrollBarX &&
+          mouse.pos.X < layout.scrollBarX + layout.scrollBarWidth &&
           mouse.pos.Y >= listTop && mouse.pos.Y < listTop + listHeight) {
         scrollFromBar(browser, layout, mouse.pos.Y, listTop, listHeight,
                       dirty);

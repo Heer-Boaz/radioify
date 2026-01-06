@@ -286,10 +286,11 @@ static void drawCenteredText(ConsoleScreen& screen, int x, int y, int width,
   screen.writeText(cx, cy, text, style);
 }
 
-static void drawScrollBar(ConsoleScreen& screen, int x, int top, int height,
-                          int scrollRow, int totalRows, int visibleRows,
-                          const Style& trackStyle, const Style& thumbStyle) {
-  if (x < 0 || height <= 0 || totalRows <= visibleRows) return;
+static void drawScrollBar(ConsoleScreen& screen, int x, int width, int top,
+                          int height, int scrollRow, int totalRows,
+                          int visibleRows, const Style& trackStyle,
+                          const Style& thumbStyle) {
+  if (x < 0 || width <= 0 || height <= 0 || totalRows <= visibleRows) return;
   int maxScroll = std::max(0, totalRows - visibleRows);
   if (maxScroll <= 0) return;
   int barHeight = height;
@@ -305,11 +306,13 @@ static void drawScrollBar(ConsoleScreen& screen, int x, int top, int height,
         (static_cast<int64_t>(scroll) * thumbTravel + maxScroll / 2) /
         maxScroll);
   }
-  for (int y = 0; y < barHeight; ++y) {
-    screen.writeChar(x, top + y, L'\u2591', trackStyle);
-  }
-  for (int y = 0; y < thumbHeight; ++y) {
-    screen.writeChar(x, thumbTop + y, L'\u2588', thumbStyle);
+  for (int col = 0; col < width; ++col) {
+    for (int y = 0; y < barHeight; ++y) {
+      screen.writeChar(x + col, top + y, L'\u2591', trackStyle);
+    }
+    for (int y = 0; y < thumbHeight; ++y) {
+      screen.writeChar(x + col, thumbTop + y, L'\u2588', thumbStyle);
+    }
   }
 }
 
@@ -461,6 +464,7 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   constexpr int kPreviewMinHeight = 8;
   constexpr int kPreviewGap = 2;
   constexpr int kListMinWidth = 20;
+  constexpr int kScrollBarWidth = 2;
 
   layout.showThumbs =
       state.thumbsEnabled &&
@@ -528,17 +532,22 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   layout.totalRows = totalRows;
   layout.cols = cols;
   layout.showScrollBar = (totalRows > visibleRows);
+  layout.scrollBarWidth = 0;
+  layout.scrollBarX = -1;
   if (layout.showScrollBar) {
+    int barWidth = std::min(kScrollBarWidth, std::max(1, width));
     int listUsedWidth = std::max(1, layout.colWidth) * cols;
+    layout.scrollBarWidth = barWidth;
     if (layout.showPreview) {
-      layout.scrollBarX = layout.previewX > 0 ? (layout.previewX - 1) : 0;
-    } else if (listUsedWidth < width) {
+      layout.scrollBarX = std::max(0, layout.previewX - barWidth);
+    } else if (listUsedWidth + barWidth <= width) {
       layout.scrollBarX = listUsedWidth;
     } else {
-      layout.scrollBarX = std::max(0, width - 1);
+      layout.scrollBarX = std::max(0, width - barWidth);
     }
-  } else {
-    layout.scrollBarX = -1;
+    if (layout.scrollBarX + barWidth > width) {
+      layout.scrollBarX = std::max(0, width - barWidth);
+    }
   }
   return layout;
 }
@@ -699,9 +708,9 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       }
     }
     if (layout.showScrollBar) {
-      drawScrollBar(screen, layout.scrollBarX, listTop, listHeight,
-                    browser.scrollRow, layout.totalRows, layout.rowsVisible,
-                    dimStyle, normalStyle);
+      drawScrollBar(screen, layout.scrollBarX, layout.scrollBarWidth, listTop,
+                    listHeight, browser.scrollRow, layout.totalRows,
+                    layout.rowsVisible, dimStyle, normalStyle);
     }
     return;
   }
@@ -777,9 +786,9 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
     }
   }
   if (layout.showScrollBar) {
-    drawScrollBar(screen, layout.scrollBarX, listTop, listHeight,
-                  browser.scrollRow, layout.totalRows, layout.rowsVisible,
-                  dimStyle, normalStyle);
+    drawScrollBar(screen, layout.scrollBarX, layout.scrollBarWidth, listTop,
+                  listHeight, browser.scrollRow, layout.totalRows,
+                  layout.rowsVisible, dimStyle, normalStyle);
   }
 }
 

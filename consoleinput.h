@@ -88,6 +88,7 @@ struct GridLayout {
   int previewHeight = 0;
   bool showScrollBar = false;
   int scrollBarX = -1;
+  int scrollBarWidth = 0;
   std::vector<std::string> names;
 };
 
