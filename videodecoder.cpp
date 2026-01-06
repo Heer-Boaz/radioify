@@ -492,7 +492,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
                                nullptr, nullptr, 0) >= 0) {
       ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
       ctx->get_format = get_hw_format;
-      ctx->extra_hw_frames = 64;
+      ctx->extra_hw_frames = 32;
     }
   }
 
@@ -664,11 +664,10 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
 
   ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
   ctx->get_format = get_hw_format;
-  // Increase extra frames to prevent starvation with deep buffering / high latency
-  ctx->extra_hw_frames = 64;
+  ctx->extra_hw_frames = 32;
 
   if (avcodec_open2(ctx, codec, nullptr) < 0) {
-    if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
+    av_buffer_unref(&hw_device_ctx);
     avcodec_free_context(&ctx);
     avformat_close_input(&fmt);
     setError(error, "Failed to open video decoder.");

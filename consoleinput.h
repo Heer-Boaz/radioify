@@ -81,6 +81,11 @@ struct GridLayout {
   int thumbWidth = 0;
   int thumbHeight = 0;
   bool showThumbs = false;
+  int listWidth = 0;
+  bool showPreview = false;
+  int previewX = 0;
+  int previewWidth = 0;
+  int previewHeight = 0;
   std::vector<std::string> names;
 };
 

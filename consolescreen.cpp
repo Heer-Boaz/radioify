@@ -430,11 +430,22 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   constexpr int kThumbMinHeight = 8;
   constexpr int kThumbMaxHeight = 24;
   constexpr int kThumbLabelRows = 1;
+  constexpr int kPreviewMinWidth = 24;
+  constexpr int kPreviewMaxWidth = 48;
+  constexpr int kPreviewMinHeight = 8;
+  constexpr int kPreviewMaxHeight = 24;
+  constexpr int kPreviewGap = 2;
+  constexpr int kListMinWidth = 20;
 
   layout.showThumbs =
       state.thumbsEnabled &&
       (listHeight >= kThumbMinHeight + kThumbLabelRows &&
        width >= kThumbMinWidth + 2);
+  layout.listWidth = width;
+  layout.showPreview = false;
+  layout.previewX = 0;
+  layout.previewWidth = 0;
+  layout.previewHeight = 0;
   if (layout.showThumbs) {
     layout.thumbHeight =
         std::clamp(listHeight - kThumbLabelRows, kThumbMinHeight,
@@ -452,14 +463,32 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
     layout.colWidth = std::max(layout.colWidth, 6);
     layout.thumbWidth = std::max(1, layout.colWidth - 2);
   } else {
+    int listWidth = width;
+    if (width >= kListMinWidth + kPreviewMinWidth + kPreviewGap &&
+        listHeight >= kPreviewMinHeight) {
+      int previewWidth =
+          std::clamp(width / 3, kPreviewMinWidth, kPreviewMaxWidth);
+      int listCandidate = width - previewWidth - kPreviewGap;
+      if (listCandidate >= kListMinWidth) {
+        layout.showPreview = true;
+        layout.previewWidth = previewWidth;
+        layout.previewHeight =
+            std::clamp(listHeight, kPreviewMinHeight, kPreviewMaxHeight);
+        layout.previewX = listCandidate + kPreviewGap;
+        listWidth = listCandidate;
+      }
+    }
+    layout.listWidth = std::max(1, listWidth);
     layout.cellHeight = 1;
     layout.thumbWidth = 0;
     layout.thumbHeight = 0;
-    layout.colWidth = std::min(width, std::max(8, maxName + 3));
+    layout.colWidth =
+        std::min(layout.listWidth, std::max(8, maxName + 3));
   }
 
   int safeRows = std::max(1, listHeight / std::max(1, layout.cellHeight));
-  int maxCols = std::max(1, width / std::max(1, layout.colWidth));
+  int maxCols =
+      std::max(1, layout.listWidth / std::max(1, layout.colWidth));
   int cols = std::max(
       1,
       std::min(maxCols, static_cast<int>((state.entries.size() + safeRows - 1) /
@@ -488,16 +517,74 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
     return;
   }
 
+  int desiredThumbW = 0;
+  int desiredThumbH = 0;
   if (layout.showThumbs) {
+    desiredThumbW = layout.thumbWidth;
+    desiredThumbH = layout.thumbHeight;
+  } else if (layout.showPreview) {
+    desiredThumbW = layout.previewWidth;
+    desiredThumbH = layout.previewHeight;
+  }
+  if (desiredThumbW > 0 && desiredThumbH > 0) {
     std::lock_guard<std::mutex> lock(cache.mutex);
-    if (cache.thumbW != layout.thumbWidth || cache.thumbH != layout.thumbHeight) {
-      cache.thumbW = layout.thumbWidth;
-      cache.thumbH = layout.thumbHeight;
+    if (cache.thumbW != desiredThumbW || cache.thumbH != desiredThumbH) {
+      cache.thumbW = desiredThumbW;
+      cache.thumbH = desiredThumbH;
       cache.generation++;
       cache.entries.clear();
       cache.queue.clear();
     }
   }
+
+  constexpr int kThumbJobsPerFrame = 4;
+  constexpr size_t kMaxThumbQueue = 64;
+  int enqueueBudget =
+      layout.showThumbs ? kThumbJobsPerFrame : (layout.showPreview ? 1 : 0);
+
+  struct ThumbLookup {
+    std::shared_ptr<Thumbnail> thumb;
+    bool pending = false;
+  };
+
+  auto fetchThumb = [&](const FileEntry& entry, int width, int height,
+                        bool wantImage, bool wantVideo) -> ThumbLookup {
+    ThumbLookup result;
+    if (!wantImage && !wantVideo) return result;
+    if (width <= 0 || height <= 0) return result;
+    std::string key = pathToUtf8(entry.path);
+    {
+      std::lock_guard<std::mutex> lock(cache.mutex);
+      auto it = cache.entries.find(key);
+      if (it != cache.entries.end()) {
+        if (it->second.state == ThumbState::Ready) {
+          result.thumb = it->second.thumb;
+        } else if (it->second.state == ThumbState::Pending) {
+          result.pending = true;
+        }
+        return result;
+      }
+      if (enqueueBudget <= 0) return result;
+      if (cache.queue.size() >= kMaxThumbQueue) return result;
+      ThumbEntry entryState;
+      entryState.state = ThumbState::Pending;
+      cache.entries.emplace(key, entryState);
+      ThumbJob job;
+      job.key = key;
+      job.path = entry.path;
+      job.isImage = wantImage;
+      job.isVideo = wantVideo;
+      job.width = width;
+      job.height = height;
+      job.generation = cache.generation;
+      cache.queue.push_back(std::move(job));
+      startThumbWorkerLocked(cache);
+      cache.cv.notify_one();
+      enqueueBudget--;
+      result.pending = true;
+    }
+    return result;
+  };
 
   if (!layout.showThumbs) {
     for (int r = 0; r < layout.rowsVisible; ++r) {
@@ -522,56 +609,57 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         screen.writeText(c * layout.colWidth, y, cell, attr);
       }
     }
+    if (layout.showPreview && !browser.entries.empty()) {
+      int idx = std::clamp(
+          browser.selected, 0,
+          static_cast<int>(browser.entries.size()) - 1);
+      const auto& entry = browser.entries[static_cast<size_t>(idx)];
+      bool img = !entry.isDir && isImage && isImage(entry.path);
+      bool vid = !entry.isDir && isVideo && isVideo(entry.path);
+      bool aud = !entry.isDir && isAudio && isAudio(entry.path);
+      int previewW = std::max(1, layout.previewWidth);
+      int previewH = std::max(1, layout.previewHeight);
+      int previewX = layout.previewX;
+      int previewY = listTop + std::max(0, (listHeight - previewH) / 2);
+
+      ThumbLookup lookup = fetchThumb(entry, previewW, previewH, img, vid);
+      const Thumbnail* thumb = lookup.thumb.get();
+      if (thumb && thumb->ok && thumb->width > 0 && thumb->height > 0) {
+        int artW = std::min(thumb->width, previewW);
+        int artH = std::min(thumb->height, previewH);
+        int artX = previewX + std::max(0, (previewW - artW) / 2);
+        int artY = previewY + std::max(0, (previewH - artH) / 2);
+        for (int y = 0; y < artH; ++y) {
+          for (int x = 0; x < artW; ++x) {
+            const auto& cell =
+                thumb->cells[static_cast<size_t>(y * thumb->width + x)];
+            Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
+            screen.writeChar(artX + x, artY + y, cell.ch, cellStyle);
+          }
+        }
+      } else {
+        std::string placeholder;
+        if (entry.isDir) {
+          placeholder = "[DIR]";
+        } else if (img) {
+          placeholder = "[IMG]";
+        } else if (vid) {
+          placeholder = "[VID]";
+        } else if (aud) {
+          placeholder = "[AUD]";
+        } else {
+          placeholder = "[FILE]";
+        }
+        if ((img || vid) && lookup.pending) {
+          placeholder = "...";
+        }
+        placeholder = fitLine(placeholder, previewW);
+        drawCenteredText(screen, previewX, previewY, previewW, previewH,
+                         placeholder, dimStyle);
+      }
+    }
     return;
   }
-
-  constexpr int kThumbJobsPerFrame = 4;
-  constexpr size_t kMaxThumbQueue = 64;
-  int enqueueBudget = kThumbJobsPerFrame;
-
-  struct ThumbLookup {
-    std::shared_ptr<Thumbnail> thumb;
-    bool pending = false;
-  };
-
-  auto fetchThumb = [&](const FileEntry& entry, bool wantImage,
-                        bool wantVideo) -> ThumbLookup {
-    ThumbLookup result;
-    if (!wantImage && !wantVideo) return result;
-    if (layout.thumbWidth <= 0 || layout.thumbHeight <= 0) return result;
-    std::string key = pathToUtf8(entry.path);
-    {
-      std::lock_guard<std::mutex> lock(cache.mutex);
-      auto it = cache.entries.find(key);
-      if (it != cache.entries.end()) {
-        if (it->second.state == ThumbState::Ready) {
-          result.thumb = it->second.thumb;
-        } else if (it->second.state == ThumbState::Pending) {
-          result.pending = true;
-        }
-        return result;
-      }
-      if (enqueueBudget <= 0) return result;
-      if (cache.queue.size() >= kMaxThumbQueue) return result;
-      ThumbEntry entryState;
-      entryState.state = ThumbState::Pending;
-      cache.entries.emplace(key, entryState);
-      ThumbJob job;
-      job.key = key;
-      job.path = entry.path;
-      job.isImage = wantImage;
-      job.isVideo = wantVideo;
-      job.width = layout.thumbWidth;
-      job.height = layout.thumbHeight;
-      job.generation = cache.generation;
-      cache.queue.push_back(std::move(job));
-      startThumbWorkerLocked(cache);
-      cache.cv.notify_one();
-      enqueueBudget--;
-      result.pending = true;
-    }
-    return result;
-  };
 
   for (int r = 0; r < layout.rowsVisible; ++r) {
     int logicalRow = r + browser.scrollRow;
@@ -591,7 +679,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       bool vid = !entry.isDir && isVideo && isVideo(entry.path);
       bool aud = !entry.isDir && isAudio && isAudio(entry.path);
 
-      ThumbLookup lookup = fetchThumb(entry, img, vid);
+      ThumbLookup lookup = fetchThumb(entry, thumbW, thumbH, img, vid);
       const Thumbnail* thumb = lookup.thumb.get();
       if (thumb && thumb->ok && thumb->width > 0 && thumb->height > 0) {
         int artW = std::min(thumb->width, thumbW);
