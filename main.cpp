@@ -31,12 +31,7 @@
 #include "ui_helpers.h"
 #include "videoplayback.h"
 
-#ifndef RADIOIFY_ENABLE_TIMING_LOG
-#define RADIOIFY_ENABLE_TIMING_LOG 0
-#endif
-#ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
-#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 1
-#endif
+#include "timing_log.h"
 
 struct Options {
   std::string input;

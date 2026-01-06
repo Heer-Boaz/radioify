@@ -34,9 +34,7 @@
 #undef max
 #endif
 
-#ifndef RADIOIFY_ENABLE_TIMING_LOG
-#define RADIOIFY_ENABLE_TIMING_LOG 0
-#endif
+#include "timing_log.h"
 
 namespace {
 std::string toLower(std::string s) {
@@ -402,10 +400,10 @@ bool startM4aWorker(const std::filesystem::path& file, uint64_t startFrame,
                     initError.empty() ? "-" : initError.c_str());
       {
         std::ofstream f((std::filesystem::current_path() /
-                         "radioify_timing.log")
+                         "radioify.log")
                             .string(),
                         std::ios::app);
-        if (f) f << buf << "\n";
+        if (f) f << radioifyLogTimestamp() << " " << buf << "\n";
       }
     }
 #endif
@@ -555,10 +553,10 @@ bool startM4aWorker(const std::filesystem::path& file, uint64_t startFrame,
               static_cast<unsigned long long>(framesRead),
               toUtf8String(file.filename()).c_str());
           std::ofstream f((std::filesystem::current_path() /
-                           "radioify_timing.log")
+                           "radioify.log")
                               .string(),
                           std::ios::app);
-          if (f) f << buf << "\n";
+          if (f) f << radioifyLogTimestamp() << " " << buf << "\n";
         }
 #endif
       }
@@ -607,10 +605,10 @@ bool initDevice() {
     std::snprintf(buf, sizeof(buf),
                   "audio_device_started sampleRate=%u channels=%u",
                   gAudio.sampleRate, gAudio.channels);
-    std::ofstream f((std::filesystem::current_path() / "radioify_timing.log")
+    std::ofstream f((std::filesystem::current_path() / "radioify.log")
                         .string(),
                     std::ios::app);
-    if (f) f << buf << "\n";
+    if (f) f << radioifyLogTimestamp() << " " << buf << "\n";
   }
 #endif
   return true;

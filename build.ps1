@@ -4,7 +4,10 @@ param(
   [switch]$Clean,
   [switch]$Rebuild,
   [switch]$Static,
-  [switch]$InstallDeps
+  [switch]$InstallDeps,
+  [switch]$TimingLog,
+  [switch]$VideoErrorLog,
+  [switch]$FfmpegErrorLog
 )
 
 $ErrorActionPreference = "Stop"
@@ -200,6 +203,9 @@ if (-not $installedRoot) {
 }
 
 $cmakeArgs = @("-S", $root, "-B", $buildDir, "-DCMAKE_BUILD_TYPE=$Config")
+$cmakeArgs += "-DRADIOIFY_ENABLE_TIMING_LOG=$([bool]$TimingLog)"
+$cmakeArgs += "-DRADIOIFY_ENABLE_VIDEO_ERROR_LOG=$([bool]$VideoErrorLog)"
+$cmakeArgs += "-DRADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$([bool]$FfmpegErrorLog)"
 if ($vcpkgRoot) {
   $toolchain = Join-Path $vcpkgRoot "scripts/buildsystems/vcpkg.cmake"
   if (Test-Path $toolchain) {

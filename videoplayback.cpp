@@ -40,15 +40,10 @@ extern "C" {
 #include "ui_helpers.h"
 #include "videodecoder.h"
 
-#ifndef RADIOIFY_ENABLE_TIMING_LOG
-#define RADIOIFY_ENABLE_TIMING_LOG 0
-#endif
-#ifndef RADIOIFY_ENABLE_VIDEO_ERROR_LOG
-#define RADIOIFY_ENABLE_VIDEO_ERROR_LOG 1
-#endif
+#include "timing_log.h"
 
 namespace {
-#if RADIOIFY_ENABLE_VIDEO_ERROR_LOG
+#if RADIOIFY_ENABLE_FFMPEG_ERROR_LOG
 std::mutex gFfmpegLogMutex;
 std::filesystem::path gFfmpegLogPath;
 
@@ -65,7 +60,7 @@ void ffmpegLogCallback(void* ptr, int level, const char* fmt, va_list vl) {
   if (path.empty()) return;
   std::ofstream f(path, std::ios::app);
   if (!f) return;
-  f << "ffmpeg_error " << line;
+  f << radioifyLogTimestamp() << " ffmpeg_error " << line;
   size_t len = std::strlen(line);
   if (len == 0 || line[len - 1] != '\n') {
     f << "\n";
@@ -174,6 +169,9 @@ void perfLogAppendf(PerfLog* log, const char* fmt, ...) {
   if (written >= static_cast<int>(sizeof(buf))) {
     written = static_cast<int>(sizeof(buf)) - 1;
   }
+  std::string ts = radioifyLogTimestamp();
+  log->buffer.append(ts);
+  log->buffer.push_back(' ');
   log->buffer.append(buf, buf + written);
   log->buffer.push_back('\n');
   if (log->buffer.size() >= 8192) perfLogFlush(log);
@@ -198,7 +196,7 @@ void finalizeVideoPlayback(ConsoleScreen& screen, bool fullRedrawEnabled,
 }  // namespace
 
 void configureFfmpegVideoLog(const std::filesystem::path& path) {
-#if RADIOIFY_ENABLE_VIDEO_ERROR_LOG
+#if RADIOIFY_ENABLE_FFMPEG_ERROR_LOG
   {
     std::lock_guard<std::mutex> lock(gFfmpegLogMutex);
     gFfmpegLogPath = path;
@@ -302,7 +300,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   PerfLog perfLog;
   std::string logError;
   std::filesystem::path logPath =
-      std::filesystem::current_path() / "radioify_timing.log";
+      std::filesystem::current_path() / "radioify.log";
   configureFfmpegVideoLog(logPath);
   if (!perfLogOpen(&perfLog, logPath, &logError)) {
     bool ok = showError("Failed to open timing log file.", logError);
@@ -317,7 +315,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   auto appendTiming = [&](const std::string& s) {
 #if RADIOIFY_ENABLE_TIMING_LOG
     std::ofstream f(logPath, std::ios::app);
-    if (f) f << s << "\n";
+    if (f) f << radioifyLogTimestamp() << " " << s << "\n";
 #else
     (void)s;
 #endif
@@ -343,7 +341,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       payload += " detail=" + extra;
     }
     std::ofstream f(logPath, std::ios::app);
-    if (f) f << payload << "\n";
+    if (f) f << radioifyLogTimestamp() << " " << payload << "\n";
 #else
     (void)message;
     (void)detail;
@@ -355,7 +353,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     std::string line = message.empty() ? "Video warning." : message;
     std::string payload = "video_warning msg=" + line;
     std::ofstream f(logPath, std::ios::app);
-    if (f) f << payload << "\n";
+    if (f) f << radioifyLogTimestamp() << " " << payload << "\n";
 #else
     (void)message;
 #endif
@@ -1544,7 +1542,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                   perfLogAppendf(&perfLog,
                                  "video_renderer_input format=hwtexture in=%dx%d out=%dx%d",
                                  frame->width, frame->height, outW, outH);
-                  appendTiming("video_renderer gpu_active=1 format=hwtexture zero_copy=1");
+                  std::string hwDetail = gpuRenderer.lastNv12TextureDetail();
+                  if (hwDetail.empty()) {
+                    hwDetail = std::string("path=") +
+                               gpuRenderer.lastNv12TexturePath();
+                  }
+                  appendTiming(std::string("video_renderer gpu_active=1 format=hwtexture ") +
+                               hwDetail);
                   hwTextureLogged = true;
                 }
               } else {
@@ -1607,7 +1611,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                   perfLogAppendf(&perfLog,
                                  "video_renderer_input format=%s in=%dx%d out=%dx%d",
                                  inputFormat, frame->width, frame->height, outW, outH);
-                  appendTiming("video_renderer gpu_active=1 format=nv12");
+                  appendTiming("video_renderer gpu_active=1 format=nv12 path=cpu_upload");
                   gpuLogged = true;
                 }
               } else {
@@ -1626,6 +1630,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                   frame->yuv.data(), frame->width, frame->height, frame->stride,
                   frame->planeHeight, yuvFormat, frame->fullRange,
                   frame->yuvMatrix, frame->yuvTransfer, width, maxHeight, art);
+              static bool cpuLogged = false;
+              if (!cpuLogged) {
+                appendTiming("video_renderer gpu_active=0 format=nv12 path=cpu_render");
+                cpuLogged = true;
+              }
             }
           } else {
             size_t expected = static_cast<size_t>(frame->width) *
@@ -1651,7 +1660,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                 artOk = true;
                 static bool gpuLogged = false;
                 if (!gpuLogged) {
-                  appendTiming("video_renderer gpu_active=1");
+                  appendTiming("video_renderer gpu_active=1 format=rgba path=cpu_upload");
                   gpuLogged = true;
                 }
               } else {
@@ -1666,6 +1675,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               artOk = renderAsciiArtFromRgba(frame->rgba.data(), frame->width,
                                              frame->height, width, maxHeight,
                                              art, true);
+              static bool cpuLogged = false;
+              if (!cpuLogged) {
+                appendTiming("video_renderer gpu_active=0 format=rgba path=cpu_render");
+                cpuLogged = true;
+              }
             }
           }
         } catch (const std::bad_alloc&) {
@@ -2506,4 +2520,3 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
   return true;
 }
-

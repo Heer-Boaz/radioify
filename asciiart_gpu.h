@@ -39,6 +39,11 @@ public:
                            bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
                            bool is10Bit, AsciiArt& out, std::string* error);
 
+    const char* lastNv12TexturePath() const { return m_lastNv12TexturePath; }
+    const std::string& lastNv12TextureDetail() const {
+        return m_lastNv12TextureDetail;
+    }
+
 private:
     bool CreateDevice();
     bool CreateDeviceWithFlags(UINT flags);
@@ -116,6 +121,8 @@ private:
     int m_currentHeight = 0;
     int m_currentOutW = 0;
     int m_currentOutH = 0;
+    const char* m_lastNv12TexturePath = "unknown";
+    std::string m_lastNv12TextureDetail;
 };
 
 #endif // ASCIIART_GPU_H

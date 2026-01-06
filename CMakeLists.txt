@@ -4,6 +4,10 @@ project(radioify LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(RADIOIFY_ENABLE_TIMING_LOG "Enable timing log output" OFF)
+option(RADIOIFY_ENABLE_VIDEO_ERROR_LOG "Enable video error log output" OFF)
+option(RADIOIFY_ENABLE_FFMPEG_ERROR_LOG "Enable ffmpeg error log output" OFF)
+
 add_executable(radioify
   main.cpp
   asciiart.cpp
@@ -19,6 +23,12 @@ add_executable(radioify
   videoplayback.cpp
   videodecoder.cpp
   radio.cpp
+)
+
+target_compile_definitions(radioify PRIVATE
+  RADIOIFY_ENABLE_TIMING_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_TIMING_LOG}>,1,0>
+  RADIOIFY_ENABLE_VIDEO_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_VIDEO_ERROR_LOG}>,1,0>
+  RADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_FFMPEG_ERROR_LOG}>,1,0>
 )
 
 set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders")

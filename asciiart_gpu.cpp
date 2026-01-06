@@ -668,6 +668,18 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     // Check texture format
     D3D11_TEXTURE2D_DESC srcDesc;
     texture->GetDesc(&srcDesc);
+    const char* fmtLabel = "unknown";
+    if (srcDesc.Format == DXGI_FORMAT_NV12) {
+        fmtLabel = "NV12";
+    } else if (srcDesc.Format == DXGI_FORMAT_P010) {
+        fmtLabel = "P010";
+    }
+    {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "path=gpu_copy fmt=%s bind=0x%X",
+                      fmtLabel, static_cast<unsigned int>(srcDesc.BindFlags));
+        m_lastNv12TextureDetail = buf;
+    }
 
     // Check device compatibility
     Microsoft::WRL::ComPtr<ID3D11Device> texDevice;
@@ -779,6 +791,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
         // Single texture: direct copy
         m_context->CopyResource(m_hwCopyTexture.Get(), texture);
     }
+    m_lastNv12TexturePath = "gpu_copy";
     
     // Ensure copy is complete before shader reads from texture
     // This is important for stability after seeks when texture pool state changes
