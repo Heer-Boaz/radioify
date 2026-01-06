@@ -57,7 +57,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_computeShader;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_computeShaderNV12;
-    Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_statsShader;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_statsShaderRgba;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_statsShaderNv12;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_bgClampShader;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_syncHistoryShader;
 
@@ -115,8 +116,6 @@ private:
     int m_currentHeight = 0;
     int m_currentOutW = 0;
     int m_currentOutH = 0;
-    int m_prevBgLum = -1;
-    int m_prevLumRange = -1;
 };
 
 #endif // ASCIIART_GPU_H

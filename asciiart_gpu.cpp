@@ -15,7 +15,8 @@ namespace {
     #include "asciiart_gpu_cs_main_nv12.h"
     #include "asciiart_gpu_cs_bg_clamp.h"
     #include "asciiart_gpu_cs_sync_history.h"
-    #include "asciiart_stats_cs.h"
+    #include "asciiart_stats_cs_rgba.h"
+    #include "asciiart_stats_cs_nv12.h"
 
     struct GpuAsciiCell {
         uint32_t ch;
@@ -24,8 +25,6 @@ namespace {
         uint32_t hasBg;
     };
 
-    constexpr int kLumSmoothAlpha = 40;
-    constexpr int kLumResetDelta = 28;
 }
 
 GpuAsciiRenderer::GpuAsciiRenderer() {}
@@ -167,8 +166,12 @@ bool GpuAsciiRenderer::CreateComputeShaders(std::string* error) {
                       m_syncHistoryShader, "CSSyncHistory")) {
         return false;
     }
-    if (!createShader(kStatsShaderCs, kStatsShaderCs_Size, m_statsShader,
-                      "CSStats")) {
+    if (!createShader(kStatsShaderCsRgba, kStatsShaderCsRgba_Size,
+                      m_statsShaderRgba, "CSStats RGBA")) {
+        return false;
+    }
+    if (!createShader(kStatsShaderCsNv12, kStatsShaderCsNv12_Size,
+                      m_statsShaderNv12, "CSStats NV12")) {
         return false;
     }
 
@@ -329,7 +332,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     }
 
     // 1. Calculate Stats
-    m_context->CSSetShader(m_statsShader.Get(), nullptr, 0);
+    m_context->CSSetShader(m_statsShaderNv12.Get(), nullptr, 0);
     ID3D11ShaderResourceView* statsSRVs[] = { m_srvY.Get() }; // Only Y needed
     m_context->CSSetShaderResources(0, 1, statsSRVs);
     ID3D11UnorderedAccessView* statsUAVs[] = { m_statsUAV.Get() };
@@ -501,8 +504,6 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     m_currentHeight = height;
     m_currentOutW = outW;
     m_currentOutH = outH;
-    m_prevBgLum = -1;
-    m_prevLumRange = -1;
     return true;
 }
 
@@ -536,81 +537,6 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     // Generate Mips
     m_context->GenerateMips(m_inputSRV.Get());
 
-    // Calculate stats (bgLum, lumRange) from RGBA
-    // Sample a subset of pixels for performance
-    int sampleStep = 16; // Sample every 16th pixel
-    uint32_t histogram[256] = {0};
-    int totalSamples = 0;
-    
-    for (int y = 0; y < height; y += sampleStep) {
-        const uint8_t* row = rgba + y * width * 4;
-        for (int x = 0; x < width; x += sampleStep) {
-            const uint8_t* p = row + x * 4;
-            // Calculate luma: 0.2126 R + 0.7152 G + 0.0722 B
-            int luma = (p[0] * 54 + p[1] * 183 + p[2] * 18) >> 8; // Approx integer math
-            if (luma > 255) luma = 255;
-            histogram[luma]++;
-            totalSamples++;
-        }
-    }
-    
-    // Find range (5% - 95%)
-    int count = 0;
-    int low = 0;
-    int targetLow = totalSamples * 5 / 100;
-    for (int i = 0; i < 256; ++i) {
-        count += histogram[i];
-        if (count >= targetLow) {
-            low = i;
-            break;
-        }
-    }
-    
-    count = 0;
-    int high = 255;
-    int targetHigh = totalSamples * 95 / 100;
-    for (int i = 0; i < 256; ++i) {
-        count += histogram[i];
-        if (count >= targetHigh) {
-            high = i;
-            break;
-        }
-    }
-    
-    int lumRange = (std::max)(1, high - low);
-    if (lumRange < 80) lumRange = 80; // Clamp like in main.cpp
-    
-    // Find bgLum (mode)
-    int bgLum = 0;
-    uint32_t maxCount = 0;
-    for (int i = 0; i < 256; ++i) {
-        if (histogram[i] > maxCount) {
-            maxCount = histogram[i];
-            bgLum = i;
-        }
-    }
-
-    if (m_prevBgLum >= 0 && m_prevLumRange >= 0) {
-        if (std::abs(bgLum - m_prevBgLum) < kLumResetDelta) {
-            bgLum = m_prevBgLum + ((bgLum - m_prevBgLum) * kLumSmoothAlpha >> 8);
-        }
-        if (std::abs(lumRange - m_prevLumRange) < kLumResetDelta) {
-            lumRange = m_prevLumRange +
-                       ((lumRange - m_prevLumRange) * kLumSmoothAlpha >> 8);
-        }
-    }
-    m_prevBgLum = bgLum;
-    m_prevLumRange = lumRange;
-
-    // Upload Stats to StatsBuffer
-    if (!CreateStatsBuffer()) {
-        if (error) *error = "Failed to create stats buffer";
-        return false;
-    }
-    
-    uint32_t statsData[4] = { (uint32_t)bgLum, (uint32_t)lumRange, 0, 0 };
-    m_context->UpdateSubresource(m_statsBuffer.Get(), 0, nullptr, statsData, 0, 0);
-
     // Update Constants
     D3D11_MAPPED_SUBRESOURCE mapped;
     if (SUCCEEDED(m_context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -633,6 +559,23 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
 
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
+
+    // Calculate Stats
+    if (!CreateStatsBuffer()) {
+        if (error) *error = "Failed to create stats buffer";
+        return false;
+    }
+    m_context->CSSetShader(m_statsShaderRgba.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* statsSRVs[] = { m_inputSRV.Get() };
+    m_context->CSSetShaderResources(0, 1, statsSRVs);
+    ID3D11UnorderedAccessView* statsUAVs[] = { m_statsUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 1, statsUAVs, nullptr);
+    m_context->CSSetConstantBuffers(0, 1, cbs);
+
+    m_context->Dispatch(1, 1, 1);
+
+    ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
 
     // Main Pass
     m_context->CSSetShader(m_computeShader.Get(), nullptr, 0);
@@ -863,7 +806,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     }
 
     // 1. Calculate Stats
-    m_context->CSSetShader(m_statsShader.Get(), nullptr, 0);
+    m_context->CSSetShader(m_statsShaderNv12.Get(), nullptr, 0);
     ID3D11ShaderResourceView* statsSRVs[] = { srvY.Get() };
     m_context->CSSetShaderResources(0, 1, statsSRVs);
     ID3D11UnorderedAccessView* statsUAVs[] = { m_statsUAV.Get() };
