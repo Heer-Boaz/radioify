@@ -431,9 +431,7 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   constexpr int kThumbMaxHeight = 24;
   constexpr int kThumbLabelRows = 1;
   constexpr int kPreviewMinWidth = 24;
-  constexpr int kPreviewMaxWidth = 48;
   constexpr int kPreviewMinHeight = 8;
-  constexpr int kPreviewMaxHeight = 24;
   constexpr int kPreviewGap = 2;
   constexpr int kListMinWidth = 20;
 
@@ -466,16 +464,18 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
     int listWidth = width;
     if (width >= kListMinWidth + kPreviewMinWidth + kPreviewGap &&
         listHeight >= kPreviewMinHeight) {
-      int previewWidth =
-          std::clamp(width / 3, kPreviewMinWidth, kPreviewMaxWidth);
-      int listCandidate = width - previewWidth - kPreviewGap;
-      if (listCandidate >= kListMinWidth) {
-        layout.showPreview = true;
-        layout.previewWidth = previewWidth;
-        layout.previewHeight =
-            std::clamp(listHeight, kPreviewMinHeight, kPreviewMaxHeight);
-        layout.previewX = listCandidate + kPreviewGap;
-        listWidth = listCandidate;
+      int baseListWidth = std::max(kListMinWidth, maxName + 3);
+      int maxListWidth = width - kPreviewMinWidth - kPreviewGap;
+      if (maxListWidth >= kListMinWidth) {
+        int listCandidate = std::min(baseListWidth, maxListWidth);
+        int previewWidth = width - listCandidate - kPreviewGap;
+        if (previewWidth >= kPreviewMinWidth) {
+          layout.showPreview = true;
+          layout.previewWidth = previewWidth;
+          layout.previewHeight = std::max(kPreviewMinHeight, listHeight);
+          layout.previewX = listCandidate + kPreviewGap;
+          listWidth = listCandidate;
+        }
       }
     }
     layout.listWidth = std::max(1, listWidth);
