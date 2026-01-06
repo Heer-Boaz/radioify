@@ -492,7 +492,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
                                nullptr, nullptr, 0) >= 0) {
       ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
       ctx->get_format = get_hw_format;
-      ctx->extra_hw_frames = 32;
+      ctx->extra_hw_frames = 64;
     }
   }
 
@@ -664,10 +664,11 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
 
   ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
   ctx->get_format = get_hw_format;
-  ctx->extra_hw_frames = 32;
+  // Increase extra frames to prevent starvation with deep buffering / high latency
+  ctx->extra_hw_frames = 64;
 
   if (avcodec_open2(ctx, codec, nullptr) < 0) {
-    av_buffer_unref(&hw_device_ctx);
+    if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
     avcodec_free_context(&ctx);
     avformat_close_input(&fmt);
     setError(error, "Failed to open video decoder.");
@@ -893,6 +894,11 @@ bool VideoDecoder::redecodeLastFrame(VideoFrame& out) {
 
   AVFrame* src = impl_->frame;
   if (src->format == AV_PIX_FMT_D3D11) {
+    // Zero-copy path: directly use the GPU frame if shared device is enabled
+    if (impl_->useSharedDevice) {
+        return impl_->emitFrame(out, nullptr, true, src, true);
+    }
+
     av_frame_unref(impl_->scratch);
     if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
       // Try one more time with a fresh unref

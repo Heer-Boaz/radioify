@@ -238,6 +238,11 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       dirty = true;
       return;
     }
+    if (key.vk == 'T' || key.ch == 't' || key.ch == 'T') {
+      browser.thumbsEnabled = !browser.thumbsEnabled;
+      dirty = true;
+      return;
+    }
     if (key.vk == VK_LEFT) {
       if (ctrl) {
         if (callbacks.onSeekBy) callbacks.onSeekBy(-1);

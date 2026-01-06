@@ -432,6 +432,7 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   constexpr int kThumbLabelRows = 1;
 
   layout.showThumbs =
+      state.thumbsEnabled &&
       (listHeight >= kThumbMinHeight + kThumbLabelRows &&
        width >= kThumbMinWidth + 2);
   if (layout.showThumbs) {

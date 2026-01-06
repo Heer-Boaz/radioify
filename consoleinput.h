@@ -69,6 +69,7 @@ struct BrowserState {
   std::vector<FileEntry> entries;
   int selected = 0;
   int scrollRow = 0;
+  bool thumbsEnabled = true;
 };
 
 struct GridLayout {

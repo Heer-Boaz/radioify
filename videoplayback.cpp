@@ -480,10 +480,17 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   }
   prepGate.bump();
 
+  auto recycleFrame = [&](size_t poolIndex) {
+    if (poolIndex < framePool.size()) {
+        framePool[poolIndex].hwTexture.Reset();
+        freeFrames.push_back(poolIndex);
+    }
+  };
+
   auto clearQueue = [&]() {
     std::lock_guard<std::mutex> lock(queueMutex);
     while (!frameQueue.empty()) {
-      freeFrames.push_back(frameQueue.front().poolIndex);
+      recycleFrame(frameQueue.front().poolIndex);
       frameQueue.pop_front();
     }
   };
@@ -531,7 +538,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         out = std::move(candidate);
         return true;
       }
-      freeFrames.push_back(candidate.poolIndex);
+      recycleFrame(candidate.poolIndex);
     }
     return false;
   };
@@ -617,6 +624,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     fastForwardPending.store(true, std::memory_order_relaxed);
     queueCv.notify_all();
   };
+
   auto setCurrentFrame = [&](size_t poolIndex) {
     size_t releaseIndex = kInvalidPoolIndex;
     if (haveFrame) {
@@ -627,7 +635,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     haveFrame = true;
     if (releaseIndex != kInvalidPoolIndex) {
       std::lock_guard<std::mutex> lock(queueMutex);
-      freeFrames.push_back(releaseIndex);
+      recycleFrame(releaseIndex);
       queueCv.notify_all();
     }
   };
@@ -866,11 +874,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           if (command.seek) {
             if (!decoder.seekToTimestamp100ns(command.seekTs)) {
               setDecodeError("Failed to seek video.");
+              // Don't break the loop, stay alive to respond to new commands
               decodeEnded.store(true);
-              break;
+            } else {
+              seekingTargetTs = command.seekFast ? -1 : command.seekTs;
+              decodeEnded.store(false);
             }
-            seekingTargetTs = command.seekFast ? -1 : command.seekTs;
-            decodeEnded.store(false);
           }
           currentEpoch = command.epoch;
           clearQueue();
@@ -897,7 +906,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             std::lock_guard<std::mutex> lock(queueMutex);
             droppedFrames = frameQueue.size();
             while (!frameQueue.empty()) {
-              freeFrames.push_back(frameQueue.front().poolIndex);
+              recycleFrame(frameQueue.front().poolIndex);
               frameQueue.pop_front();
             }
           }
@@ -985,7 +994,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             if (fallback == FallbackResult::Applied) {
               {
                 std::lock_guard<std::mutex> lock(queueMutex);
-                freeFrames.push_back(poolIndex);
+                recycleFrame(poolIndex);
               }
               queueCv.notify_all();
               continue;
@@ -993,7 +1002,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             if (fallback == FallbackResult::Failed) {
               {
                 std::lock_guard<std::mutex> lock(queueMutex);
-                freeFrames.push_back(poolIndex);
+                recycleFrame(poolIndex);
               }
               queueCv.notify_all();
               decodeEnded.store(true);
@@ -1009,7 +1018,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             }
             {
               std::lock_guard<std::mutex> lock(queueMutex);
-              freeFrames.push_back(poolIndex);
+              recycleFrame(poolIndex);
             }
             queueCv.notify_all();
             decodeEnded.store(true);
@@ -1029,7 +1038,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             std::lock_guard<std::mutex> lock(queueMutex);
             size_t queueLimit = maxQueue.load(std::memory_order_relaxed);
             if (frameQueue.size() >= queueLimit) {
-              freeFrames.push_back(frameQueue.front().poolIndex);
+              recycleFrame(frameQueue.front().poolIndex);
               frameQueue.pop_front();
               queueDrops.fetch_add(1, std::memory_order_relaxed);
             }
@@ -1073,7 +1082,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             lastVideoTs = info.timestamp100ns;
             {
               std::lock_guard<std::mutex> lock(queueMutex);
-              freeFrames.push_back(poolIndex);
+              recycleFrame(poolIndex);
             }
             continue;
           }
@@ -1091,7 +1100,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           if (fallback == FallbackResult::Applied) {
             {
               std::lock_guard<std::mutex> lock(queueMutex);
-              freeFrames.push_back(poolIndex);
+              recycleFrame(poolIndex);
             }
             queueCv.notify_all();
             continue;
@@ -1099,7 +1108,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           if (fallback == FallbackResult::Failed) {
             {
               std::lock_guard<std::mutex> lock(queueMutex);
-              freeFrames.push_back(poolIndex);
+              recycleFrame(poolIndex);
             }
             queueCv.notify_all();
             decodeEnded.store(true);
@@ -1115,7 +1124,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           }
           {
             std::lock_guard<std::mutex> lock(queueMutex);
-            freeFrames.push_back(poolIndex);
+            recycleFrame(poolIndex);
           }
           queueCv.notify_all();
           decodeEnded.store(true);
@@ -1135,7 +1144,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           std::lock_guard<std::mutex> lock(queueMutex);
           size_t queueLimit = maxQueue.load(std::memory_order_relaxed);
           if (frameQueue.size() >= queueLimit) {
-            freeFrames.push_back(frameQueue.front().poolIndex);
+            recycleFrame(frameQueue.front().poolIndex);
             frameQueue.pop_front();
             queueDrops.fetch_add(1, std::memory_order_relaxed);
           }
@@ -2197,7 +2206,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           std::lock_guard<std::mutex> lock(queueMutex);
           droppedFrames = frameQueue.size();
           while (!frameQueue.empty()) {
-            freeFrames.push_back(frameQueue.front().poolIndex);
+            recycleFrame(frameQueue.front().poolIndex);
             frameQueue.pop_front();
           }
         }
@@ -2266,7 +2275,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
               // If next frame is still behind target, skip current frame.
               if (nextSec <= targetTime) {
-                freeFrames.push_back(frameQueue.front().poolIndex);
+                recycleFrame(frameQueue.front().poolIndex);
                 frameQueue.pop_front();
                 ++popped;
                 ++skippedFrames;
