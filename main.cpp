@@ -50,7 +50,7 @@ struct Options {
   bool dry = false;
   bool enableAscii = true;
   bool enableAudio = true;
-  bool enableRadio = true;
+  bool enableRadio = false;
   bool verbose = false;
 };
 

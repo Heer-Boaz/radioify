@@ -21,7 +21,7 @@ struct AudioPerfStats {
 
 struct AudioPlaybackConfig {
   bool enableAudio = true;
-  bool enableRadio = true;
+  bool enableRadio = false;
   bool mono = true;
   bool dry = false;
   int bwHz = 5500;

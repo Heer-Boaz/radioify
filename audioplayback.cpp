@@ -210,7 +210,7 @@ struct AudioPlaybackState {
   bool decoderReady = false;
   bool enableAudio = false;
   bool dry = false;
-  bool enableRadio = true;
+  bool enableRadio = false;
   uint32_t sampleRate = 48000;
   uint32_t baseChannels = 1;
   uint32_t channels = 1;
