@@ -466,6 +466,7 @@ struct BrailleFastScratch {
   std::vector<uint8_t> prevFgValid;
   std::vector<uint32_t> prevBg;
   std::vector<uint8_t> prevBgValid;
+  std::vector<uint8_t> prevMask;
   std::vector<uint8_t> cellDotCount;
   std::vector<uint8_t> cellSignalStrength;
   std::vector<uint8_t> cellUseDither;
@@ -529,6 +530,7 @@ struct BrailleFastScratch {
     prevFgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevBg.assign(static_cast<size_t>(outW) * outH, 0);
     prevBgValid.assign(static_cast<size_t>(outW) * outH, 0);
+    prevMask.assign(static_cast<size_t>(outW) * outH, 0);
     cellDotCount.assign(static_cast<size_t>(outW) * outH, 0);
     cellSignalStrength.assign(static_cast<size_t>(outW) * outH, 0);
     cellUseDither.assign(static_cast<size_t>(outW) * outH, 0);
@@ -862,6 +864,14 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 useLocalThreshold ? ((cellLumMin + cellLumMax) >> 1) : bgLum;
             bool useDither = false;
 
+            size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
+            uint8_t prevMask = 0;
+            if (cellIndex < scratch.prevMask.size()) {
+              prevMask = scratch.prevMask[cellIndex];
+            }
+            int hysteresis =
+                (4 * (255 - alpha) + 10 * alpha + 127) / 255;
+
             // 2. Adaptive Thresholding (Per-Sub-Pixel Logic)
             // This section determines which Braille dots should be active based on the input image.
             // We use a "Per-Sub-Pixel" approach inspired by the reference implementation (asciiart.ts).
@@ -893,7 +903,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               
               // Decision: Is this sub-pixel a dot?
               // If the luma difference exceeds the threshold, it's considered a foreground dot.
-              bool isDot = (lumDiff >= threshold);
+              bool wasOn = ((prevMask >> bitIds[i]) & 1) != 0;
+              int offThreshold = std::max(6, threshold - hysteresis);
+              bool isDot = wasOn ? (lumDiff >= offThreshold)
+                                 : (lumDiff >= threshold);
 
               if (isDot) {
                 bitmask |= (1 << bitIds[i]);
@@ -926,7 +939,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               tempMask >>= 1;
             }
 
-            size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
+            if (cellIndex < scratch.prevMask.size()) {
+              scratch.prevMask[cellIndex] = static_cast<uint8_t>(bitmask);
+            }
+
             uint8_t prevBgR = 0;
             uint8_t prevBgG = 0;
             uint8_t prevBgB = 0;
@@ -1251,6 +1267,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               }
               if (cellIndex < scratch.prevBgValid.size()) {
                 scratch.prevBgValid[cellIndex] = 0;
+              }
+              if (cellIndex < scratch.prevMask.size()) {
+                scratch.prevMask[cellIndex] = 0;
               }
             }
 

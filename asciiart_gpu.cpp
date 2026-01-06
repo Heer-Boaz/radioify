@@ -2,6 +2,7 @@
 #include <d3d11.h>
 #include <d3d10.h>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #pragma comment(lib, "d3d11.lib")
@@ -22,6 +23,9 @@ namespace {
         uint32_t bg;
         uint32_t hasBg;
     };
+
+    constexpr int kLumSmoothAlpha = 40;
+    constexpr int kLumResetDelta = 28;
 }
 
 GpuAsciiRenderer::GpuAsciiRenderer() {}
@@ -497,6 +501,8 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     m_currentHeight = height;
     m_currentOutW = outW;
     m_currentOutH = outH;
+    m_prevBgLum = -1;
+    m_prevLumRange = -1;
     return true;
 }
 
@@ -583,6 +589,18 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
             bgLum = i;
         }
     }
+
+    if (m_prevBgLum >= 0 && m_prevLumRange >= 0) {
+        if (std::abs(bgLum - m_prevBgLum) < kLumResetDelta) {
+            bgLum = m_prevBgLum + ((bgLum - m_prevBgLum) * kLumSmoothAlpha >> 8);
+        }
+        if (std::abs(lumRange - m_prevLumRange) < kLumResetDelta) {
+            lumRange = m_prevLumRange +
+                       ((lumRange - m_prevLumRange) * kLumSmoothAlpha >> 8);
+        }
+    }
+    m_prevBgLum = bgLum;
+    m_prevLumRange = lumRange;
 
     // Upload Stats to StatsBuffer
     if (!CreateStatsBuffer()) {

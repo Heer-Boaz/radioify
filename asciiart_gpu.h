@@ -115,6 +115,8 @@ private:
     int m_currentHeight = 0;
     int m_currentOutW = 0;
     int m_currentOutH = 0;
+    int m_prevBgLum = -1;
+    int m_prevLumRange = -1;
 };
 
 #endif // ASCIIART_GPU_H

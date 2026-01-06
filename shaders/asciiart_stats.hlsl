@@ -18,6 +18,9 @@ RWStructuredBuffer<uint4> Stats : register(u0); // x=bgLum, y=lumRange
 
 groupshared uint histogram[256];
 
+static const uint kLumSmoothAlpha = 40u;
+static const uint kLumResetDelta = 28u;
+
 [numthreads(256, 1, 1)]
 void CSStats(uint3 tid : SV_DispatchThreadID) {
     // Initialize histogram
@@ -41,6 +44,7 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
     GroupMemoryBarrierWithGroupSync();
     
     if (tid.x == 0) {
+        uint4 prev = Stats[0];
         // Find Mode (bgLum)
         uint maxCount = 0;
         uint mode = 0;
@@ -77,7 +81,19 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
         
         uint range = max(1, high - low);
         if (range < 80) range = 80;
-        
+
+        if (frameCount > 0) {
+            int modeDelta = (int)mode - (int)prev.x;
+            if (abs(modeDelta) < (int)kLumResetDelta) {
+                mode = (uint)((int)prev.x + (modeDelta * (int)kLumSmoothAlpha >> 8));
+            }
+            int rangeDelta = (int)range - (int)prev.y;
+            if (abs(rangeDelta) < (int)kLumResetDelta) {
+                range = (uint)((int)prev.y + (rangeDelta * (int)kLumSmoothAlpha >> 8));
+                if (range < 80u) range = 80u;
+            }
+        }
+
         Stats[0] = uint4(mode, range, 0, 0);
     }
 }
