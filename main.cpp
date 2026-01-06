@@ -704,6 +704,13 @@ int main(int argc, char** argv) {
       bool audioReady = audioIsReady();
       double currentSec = audioReady ? audioGetTimeSec() : 0.0;
       double totalSec = audioReady ? audioGetTotalSec() : -1.0;
+      double displaySec = currentSec;
+      if (audioReady && audioIsSeeking()) {
+        double seekSec = audioGetSeekTargetSec();
+        if (seekSec >= 0.0) {
+          displaySec = seekSec;
+        }
+      }
       std::string status;
       if (audioReady) {
         if (audioIsFinished()) {
@@ -717,16 +724,16 @@ int main(int argc, char** argv) {
         status = "\xE2\x97\x8B";  // idle icon
       }
       std::string suffix =
-          formatTime(currentSec) + " / " + formatTime(totalSec) + " " + status;
+          formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status;
       int suffixWidth = utf8CodepointCount(suffix);
       int barWidth = width - suffixWidth - 3;
       if (barWidth < 10) {
-        suffix = formatTime(currentSec) + "/" + formatTime(totalSec);
+        suffix = formatTime(displaySec) + "/" + formatTime(totalSec);
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 10) {
-        suffix = formatTime(currentSec);
+        suffix = formatTime(displaySec);
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
@@ -738,7 +745,7 @@ int main(int argc, char** argv) {
       barWidth = std::clamp(barWidth, 5, maxBar);
       double ratio = 0.0;
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
-        ratio = std::clamp(currentSec / totalSec, 0.0, 1.0);
+        ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
       }
       progressBarX = 1;
       progressBarY = line;

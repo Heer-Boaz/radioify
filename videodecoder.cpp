@@ -33,6 +33,15 @@ extern "C" {
 #include <cstring>
 #include <new>
 
+// C-style callbacks for FFmpeg locking
+static void d3d11_lock(void* ctx) {
+    if (ctx) reinterpret_cast<std::mutex*>(ctx)->lock();
+}
+
+static void d3d11_unlock(void* ctx) {
+    if (ctx) reinterpret_cast<std::mutex*>(ctx)->unlock();
+}
+
 namespace {
 void setError(std::string* error, const char* message) {
   if (error) *error = message;
@@ -472,12 +481,6 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   ctx->flags2 |= AV_CODEC_FLAG2_SHOW_ALL;
   ctx->err_recognition = AV_EF_IGNORE_ERR;
 
-  // Additional error recovery for VP9/AV1 (common in HDR content)
-  if (ctx->codec_id == AV_CODEC_ID_VP9 || ctx->codec_id == AV_CODEC_ID_AV1) {
-    ctx->flags2 |= AV_CODEC_FLAG2_FAST;  // Skip some checks for speed/error recovery
-    ctx->err_recognition |= AV_EF_EXPLODE;  // Don't explode on errors, try to recover
-  }
-
   // Let FFmpeg choose an appropriate thread count unless explicitly set.
   if (ctx->thread_count < 0) {
     ctx->thread_count = 0;
@@ -549,7 +552,8 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
 bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
                                   ID3D11Device* device,
                                   std::string* error,
-                                  VideoStreamSelection* streamSelection) {
+                                  VideoStreamSelection* streamSelection,
+                                  std::mutex* contextMutex) {
   uninit();
 
   if (!device) {
@@ -636,10 +640,17 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
   immediateContext->AddRef();
   d3d11_device_ctx->device_context = immediateContext.Get();
   
-  // Let FFmpeg set up its own locking (it uses an internal mutex if unset)
-  d3d11_device_ctx->lock = nullptr;
-  d3d11_device_ctx->unlock = nullptr;
-  d3d11_device_ctx->lock_ctx = nullptr;
+    // Set locking callbacks if a mutex is provided
+  if (contextMutex) {
+    d3d11_device_ctx->lock = d3d11_lock;
+    d3d11_device_ctx->unlock = d3d11_unlock;
+    d3d11_device_ctx->lock_ctx = contextMutex;
+  } else {
+    d3d11_device_ctx->lock = nullptr;
+    d3d11_device_ctx->unlock = nullptr;
+    d3d11_device_ctx->lock_ctx = nullptr;
+  }
+
 
   int initErr = av_hwdevice_ctx_init(hw_device_ctx);
   if (initErr < 0) {
@@ -775,21 +786,12 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     if (recv == 0) {
       AVFrame* src = impl_->frame;
       
-      // VLC-style robustness: After seek, drop everything until we hit a real keyframe.
-      // This hides the "searching" artifacts and ensures we start on a valid frame.
-      if (impl_->droppingNonKeyframes) {
-        bool isKeyframe = (src->flags & AV_FRAME_FLAG_KEY) || (src->pict_type == AV_PICTURE_TYPE_I);
-        if (!isKeyframe) {
-           impl_->framesAfterSeek++;
-           // Safety valve: if we don't find a keyframe after 60 frames (~2s), give up and show whatever.
-           if (impl_->framesAfterSeek < 60) {
-             av_frame_unref(src);
-             continue;
-           }
-           impl_->droppingNonKeyframes = false;
-        } else {
-           impl_->droppingNonKeyframes = false;
-        }
+      // After seek, skip a small number of potentially corrupt frames.
+      // Don't rely on keyframe detection since HW decoders often don't set flags correctly.
+      if (impl_->framesAfterSeek < 3) {
+        impl_->framesAfterSeek++;
+        av_frame_unref(src);
+        continue;
       }
       
       if (src->format == AV_PIX_FMT_D3D11) {
@@ -920,69 +922,26 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   targetUs += impl_->formatStartUs;
   if (targetUs < 0) targetUs = 0;
 
-  const bool prefersKeyframes =
-      impl_->codec &&
-      (impl_->codec->codec_id == AV_CODEC_ID_VP9 ||
-       impl_->codec->codec_id == AV_CODEC_ID_AV1);
-  const bool allowAnySeek = true;
-
-  // Prefer seeking to keyframes for codecs like VP9 that have complex frame dependencies.
-  // Keyframe-only backward seek avoids long waits for the next keyframe on big jumps.
-  int seekFlags = AVSEEK_FLAG_BACKWARD;
-  if (allowAnySeek) {
-    seekFlags |= AVSEEK_FLAG_ANY;
-  }
-
-  // Try avformat_seek_file with stream_index = -1 (AV_TIME_BASE)
-  int seekRes =
-      avformat_seek_file(impl_->fmt, -1, INT64_MIN, targetUs, INT64_MAX, seekFlags);
+  // Use standard backward seek to find the nearest previous keyframe.
+  // This is generally reliable for standard file formats.
+  int seekRes = avformat_seek_file(impl_->fmt, -1, INT64_MIN, targetUs, INT64_MAX, AVSEEK_FLAG_BACKWARD);
 
   if (seekRes < 0) {
-    // Fallback: try av_seek_frame with stream index (legacy method)
-    int64_t targetStream =
-        av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
-    seekRes = av_seek_frame(impl_->fmt, impl_->streamIndex, targetStream, seekFlags);
+    // Fallback: try legacy seek
+    int64_t targetStream = av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
+    seekRes = av_seek_frame(impl_->fmt, impl_->streamIndex, targetStream, AVSEEK_FLAG_BACKWARD);
   }
 
   if (seekRes < 0) return false;
-
-  // For VP9/AV1, ensure we start decoding from a keyframe.
-  if (allowAnySeek && prefersKeyframes) {
-    AVPacket* pkt = av_packet_alloc();
-    if (pkt) {
-      bool foundKeyframe = false;
-      // Read packets until we find a keyframe or timeout.
-      for (int attempts = 0; attempts < 100 && !foundKeyframe; ++attempts) {
-        int readRes = av_read_frame(impl_->fmt, pkt);
-        if (readRes < 0) break;
-        if (pkt->stream_index != impl_->streamIndex) {
-          av_packet_unref(pkt);
-          continue;
-        }
-        if (pkt->flags & AV_PKT_FLAG_KEY) {
-          // Stash the keyframe so decode starts on a valid reference.
-          av_packet_unref(impl_->packet);
-          av_packet_move_ref(impl_->packet, pkt);
-          impl_->hasPendingPacket = true;
-          foundKeyframe = true;
-          break;
-        }
-        av_packet_unref(pkt);
-      }
-      av_packet_free(&pkt);
-      if (!foundKeyframe) {
-        // If no keyframe found, continue - the decoder has error recovery flags.
-      }
-    }
-  }
 
   avcodec_flush_buffers(impl_->codec);
   impl_->atEnd = false;
   impl_->eof = false;
   impl_->consecutiveTransferErrors = 0;
   impl_->seekEpoch++;
+  // Reset frame skipping logic - we trust the seek found a keyframe
   impl_->framesAfterSeek = 0;
-  impl_->droppingNonKeyframes = true;
+  impl_->droppingNonKeyframes = true; 
   return true;
 }
 

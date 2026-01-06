@@ -84,6 +84,14 @@ GpuAsciiRenderer& sharedGpuRenderer() {
   return renderer;
 }
 
+// Mutex to synchronize access to the shared D3D11 immediate context.
+// D3D11 immediate context is NOT thread-safe, and we use it from both
+// the rendering thread (main) and the decoding thread (via FFmpeg).
+std::mutex& getSharedGpuMutex() {
+    static std::mutex mtx;
+    return mtx;
+}
+
 // Returns the shared D3D11 device for zero-copy video decoding
 // This ensures the same device is used by both decoder and renderer
 ID3D11Device* getSharedGpuDevice() {
@@ -711,8 +719,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         ID3D11Device* sharedDevice = getSharedGpuDevice();
         if (sharedDevice && preferHardware) {
           resetStreamSelection();
+          // Pass the shared mutex to synchronize D3D11 context access
           if (decoder.initWithDevice(file, sharedDevice, &error,
-                                     &streamSelection)) {
+                                     &streamSelection, &getSharedGpuMutex())) {
             usingSharedDevice = true;
           } else {
             // Fall back to regular hardware decode
@@ -1517,10 +1526,17 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               art.height = outH;
               std::string gpuErr;
               
-              if (gpuRenderer.RenderNV12Texture(frame->hwTexture.Get(), frame->hwTextureArrayIndex,
+              bool renderRes = false;
+              {
+                   // Synchronize access to the shared D3D11 immediate context
+                   std::lock_guard<std::mutex> lock(getSharedGpuMutex());
+                   renderRes = gpuRenderer.RenderNV12Texture(frame->hwTexture.Get(), frame->hwTextureArrayIndex,
                                                  frame->width, frame->height,
                                                  frame->fullRange, frame->yuvMatrix,
-                                                 frame->yuvTransfer, false, art, &gpuErr)) {
+                                                 frame->yuvTransfer, false, art, &gpuErr);
+              }
+
+              if (renderRes) {
                 artOk = true;
                 static bool hwTextureLogged = false;
                 if (!hwTextureLogged) {

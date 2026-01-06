@@ -917,6 +917,27 @@ double audioGetTotalSec() {
   return static_cast<double>(total) / gAudio.sampleRate;
 }
 
+bool audioIsSeeking() {
+  if (!gAudio.decoderReady || !gAudio.enableAudio) {
+    return false;
+  }
+  return gAudio.state.seekRequested.load();
+}
+
+double audioGetSeekTargetSec() {
+  if (!gAudio.decoderReady || !gAudio.enableAudio) {
+    return -1.0;
+  }
+  uint64_t total = gAudio.state.totalFrames.load();
+  if (total == 0) return -1.0;
+  int64_t target = gAudio.state.pendingSeekFrames.load();
+  if (target < 0) target = 0;
+  if (static_cast<uint64_t>(target) > total) {
+    target = static_cast<int64_t>(total);
+  }
+  return static_cast<double>(target) / gAudio.sampleRate;
+}
+
 bool audioIsPrimed() {
   if (!gAudio.decoderReady || !gAudio.enableAudio) return false;
   return gAudio.state.audioPrimed.load();

@@ -42,6 +42,8 @@ std::filesystem::path audioGetNowPlaying();
 
 double audioGetTimeSec();
 double audioGetTotalSec();
+bool audioIsSeeking();
+double audioGetSeekTargetSec();
 
 bool audioIsPrimed();
 bool audioIsPaused();

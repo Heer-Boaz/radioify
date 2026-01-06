@@ -8,6 +8,7 @@
 #define NOMINMAX
 #include <d3d11.h>
 #include <wrl/client.h>
+#include <mutex>
 
 #include "videocolor.h"
 
@@ -85,10 +86,12 @@ class VideoDecoder {
             VideoStreamSelection* streamSelection = nullptr);
   
   // Initialize with an external D3D11 device (for device sharing / zero-copy)
+  // key: An optional mutex for synchronizing access to the device context
   bool initWithDevice(const std::filesystem::path& path, 
                       ID3D11Device* device,
                       std::string* error,
-                      VideoStreamSelection* streamSelection = nullptr);
+                      VideoStreamSelection* streamSelection = nullptr,
+                      std::mutex* contextMutex = nullptr);
   
   void uninit();
   bool readFrame(VideoFrame& out, VideoReadInfo* info = nullptr,
