@@ -564,9 +564,9 @@ int main(int argc, char** argv) {
     InputEvent ev{};
     while (input.poll(ev)) {
       handleInputEvent(ev, browser, layout, breadcrumbLine, breadcrumbY,
-                       listTop, progressBarX, progressBarY, progressBarWidth,
-                       o.play, audioIsReady(), breadcrumbHover, dirty, running,
-                       callbacks);
+                       listTop, listHeight, progressBarX, progressBarY,
+                       progressBarWidth, o.play, audioIsReady(),
+                       breadcrumbHover, dirty, running, callbacks);
       if (rendered) {
         audioShutdown();
         return 0;

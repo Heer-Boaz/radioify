@@ -86,6 +86,8 @@ struct GridLayout {
   int previewX = 0;
   int previewWidth = 0;
   int previewHeight = 0;
+  bool showScrollBar = false;
+  int scrollBarX = -1;
   std::vector<std::string> names;
 };
 
@@ -115,6 +117,7 @@ void handleInputEvent(
   const BreadcrumbLine& breadcrumbLine,
   int breadcrumbY,
   int listTop,
+  int listHeight,
   int progressBarX,
   int progressBarY,
   int progressBarWidth,

@@ -159,15 +159,44 @@ void pageSelection(BrowserState& browser, const GridLayout& layout,
     dirty = true;
   }
 }
+
+void scrollFromBar(BrowserState& browser, const GridLayout& layout, int y,
+                   int listTop, int listHeight, bool& dirty) {
+  if (!layout.showScrollBar || layout.totalRows <= layout.rowsVisible) return;
+  int maxScroll = layout.totalRows - layout.rowsVisible;
+  if (maxScroll <= 0) return;
+  int barHeight = std::max(1, listHeight);
+  int thumbHeight = std::max(
+      1, static_cast<int>((static_cast<int64_t>(layout.rowsVisible) *
+                               barHeight +
+                           layout.totalRows - 1) /
+                          layout.totalRows));
+  if (thumbHeight > barHeight) thumbHeight = barHeight;
+  int thumbTravel = barHeight - thumbHeight;
+  int rel = y - listTop;
+  rel = std::clamp(rel, 0, barHeight - 1);
+  int target = 0;
+  if (thumbTravel > 0) {
+    int thumbPos = std::clamp(rel - thumbHeight / 2, 0, thumbTravel);
+    target = static_cast<int>(
+        (static_cast<int64_t>(thumbPos) * maxScroll + thumbTravel / 2) /
+        thumbTravel);
+  }
+  target = std::clamp(target, 0, maxScroll);
+  if (target != browser.scrollRow) {
+    browser.scrollRow = target;
+    dirty = true;
+  }
+}
 }  // namespace
 
 void handleInputEvent(const InputEvent& ev, BrowserState& browser,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
-                      int listTop, int progressBarX, int progressBarY,
-                      int progressBarWidth, bool playMode, bool decoderReady,
-                      int& breadcrumbHover, bool& dirty, bool& running,
-                      const InputCallbacks& callbacks) {
+                      int listTop, int listHeight, int progressBarX,
+                      int progressBarY, int progressBarWidth, bool playMode,
+                      bool decoderReady, int& breadcrumbHover, bool& dirty,
+                      bool& running, const InputCallbacks& callbacks) {
   if (ev.type == InputEvent::Type::Resize) {
     dirty = true;
     if (callbacks.onResize) callbacks.onResize();
@@ -292,6 +321,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
       if (delta != 0) {
         browser.scrollRow -= delta / WHEEL_DELTA;
+        int maxScroll =
+            std::max(0, layout.totalRows - layout.rowsVisible);
+        browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
         dirty = true;
       }
       return;
@@ -314,6 +346,13 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
 
     if (leftPressed &&
         (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
+      if (layout.showScrollBar && layout.scrollBarX >= 0 &&
+          mouse.pos.X == layout.scrollBarX &&
+          mouse.pos.Y >= listTop && mouse.pos.Y < listTop + listHeight) {
+        scrollFromBar(browser, layout, mouse.pos.Y, listTop, listHeight,
+                      dirty);
+        return;
+      }
       if (progressBarWidth > 0 && mouse.pos.Y == progressBarY &&
           progressBarX >= 0) {
         int rel = mouse.pos.X - progressBarX;

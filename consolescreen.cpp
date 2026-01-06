@@ -286,6 +286,33 @@ static void drawCenteredText(ConsoleScreen& screen, int x, int y, int width,
   screen.writeText(cx, cy, text, style);
 }
 
+static void drawScrollBar(ConsoleScreen& screen, int x, int top, int height,
+                          int scrollRow, int totalRows, int visibleRows,
+                          const Style& trackStyle, const Style& thumbStyle) {
+  if (x < 0 || height <= 0 || totalRows <= visibleRows) return;
+  int maxScroll = std::max(0, totalRows - visibleRows);
+  if (maxScroll <= 0) return;
+  int barHeight = height;
+  int thumbHeight = std::max(1, static_cast<int>(
+      (static_cast<int64_t>(visibleRows) * barHeight + totalRows - 1) /
+      totalRows));
+  if (thumbHeight > barHeight) thumbHeight = barHeight;
+  int thumbTravel = barHeight - thumbHeight;
+  int scroll = std::clamp(scrollRow, 0, maxScroll);
+  int thumbTop = top;
+  if (thumbTravel > 0) {
+    thumbTop += static_cast<int>(
+        (static_cast<int64_t>(scroll) * thumbTravel + maxScroll / 2) /
+        maxScroll);
+  }
+  for (int y = 0; y < barHeight; ++y) {
+    screen.writeChar(x, top + y, L'\u2591', trackStyle);
+  }
+  for (int y = 0; y < thumbHeight; ++y) {
+    screen.writeChar(x, thumbTop + y, L'\u2588', thumbStyle);
+  }
+}
+
 static void assignThumbnailFromAscii(const AsciiArt& art, Thumbnail& out) {
   out.ok = true;
   out.width = art.width;
@@ -500,6 +527,19 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   layout.rowsVisible = visibleRows;
   layout.totalRows = totalRows;
   layout.cols = cols;
+  layout.showScrollBar = (totalRows > visibleRows);
+  if (layout.showScrollBar) {
+    int listUsedWidth = std::max(1, layout.colWidth) * cols;
+    if (layout.showPreview) {
+      layout.scrollBarX = layout.previewX > 0 ? (layout.previewX - 1) : 0;
+    } else if (listUsedWidth < width) {
+      layout.scrollBarX = listUsedWidth;
+    } else {
+      layout.scrollBarX = std::max(0, width - 1);
+    }
+  } else {
+    layout.scrollBarX = -1;
+  }
   return layout;
 }
 
@@ -658,6 +698,11 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
                          placeholder, dimStyle);
       }
     }
+    if (layout.showScrollBar) {
+      drawScrollBar(screen, layout.scrollBarX, listTop, listHeight,
+                    browser.scrollRow, layout.totalRows, layout.rowsVisible,
+                    dimStyle, normalStyle);
+    }
     return;
   }
 
@@ -730,6 +775,11 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         screen.writeText(labelX, labelY, label, labelStyle);
       }
     }
+  }
+  if (layout.showScrollBar) {
+    drawScrollBar(screen, layout.scrollBarX, listTop, listHeight,
+                  browser.scrollRow, layout.totalRows, layout.rowsVisible,
+                  dimStyle, normalStyle);
   }
 }
 
