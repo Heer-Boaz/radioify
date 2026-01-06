@@ -482,7 +482,7 @@ int main(int argc, char** argv) {
   const int headerLines = 5;
   const int listTop = headerLines + 1;
   const int breadcrumbY = listTop - 1;
-  const int footerLines = 3;
+  const int footerLines = 4;
   int width = 0;
   int height = 0;
   int listHeight = 0;
