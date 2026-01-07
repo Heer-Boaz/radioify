@@ -98,6 +98,10 @@ struct AMDetector {
   float carrierGain = 0.40f;
   float diodeDrop = 0.008f;
   float detGain = 3.20f;
+  float ifNoiseAmp = 0.0f;
+
+  std::mt19937 rng{0x1942u};
+  std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
 
   Biquad ifHp1;
   Biquad ifHp2;
@@ -174,6 +178,7 @@ struct Radio1938 {
   float crackleBase = 0.0f;
   float lightningBase = 0.0f;
   float motorBase = 0.0f;
+  float humBase = 0.0f;
   float heteroBaseScale = 0.0f;
 
   float tuneOffsetHz = 0.0f;

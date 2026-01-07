@@ -7,6 +7,8 @@ static constexpr bool kEnableRadioArtifacts = true;
 static constexpr bool kEnableRoomEarlyReflections = true;
 static constexpr bool kEnableRoomTail = true;
 static constexpr float kOversampleFactor = 2.0f;
+static constexpr float kIfNoiseMix = 0.70f;
+static constexpr float kPostNoiseMix = 0.30f;
 
 static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
@@ -296,6 +298,7 @@ void AMDetector::reset() {
   agcEnv = 0.0f;
   agcGainDb = 0.0f;
   dcEnv = 0.0f;
+  ifNoiseAmp = 0.0f;
   ifHp1.reset();
   ifHp2.reset();
   ifLp1.reset();
@@ -312,6 +315,9 @@ float AMDetector::process(float x) {
   if (phase > twoPi) phase -= twoPi;
   float carrier = std::sin(phase);
   float ifSample = (1.0f + mod) * carrier * carrierGain;
+  if (ifNoiseAmp > 0.0f) {
+    ifSample += dist(rng) * ifNoiseAmp;
+  }
 
   ifSample = ifHp1.process(ifSample);
   ifSample = ifHp2.process(ifSample);
@@ -508,6 +514,7 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   crackleBase = noiseHum.crackleAmp;
   lightningBase = noiseHum.lightningAmp;
   motorBase = noiseHum.motorAmp;
+  humBase = noiseHum.humAmp;
   heteroBaseScale = (noiseWeight > 0.0f)
                         ? std::clamp(noiseWeight / 0.015f, 0.15f, 1.0f)
                         : 0.0f;
@@ -583,6 +590,31 @@ void Radio1938::process(float* samples, uint32_t frames) {
     float inL = samples[f * channels];
     float inR = (channels > 1) ? samples[f * channels + 1] : inL;
     float x = (channels > 1) ? 0.5f * (inL + inR) : inL;
+
+    float fade = 1.0f;
+    float noiseScale = 1.0f;
+    if (kEnableRadioArtifacts) {
+      fadePhase += twoPi * (fadeRate / sampleRate);
+      fadePhase2 += twoPi * (fadeRate2 / sampleRate);
+      if (fadePhase > twoPi) fadePhase -= twoPi;
+      if (fadePhase2 > twoPi) fadePhase2 -= twoPi;
+      float fadeLfo = 0.6f * std::sin(fadePhase) + 0.4f * std::sin(fadePhase2);
+      fade = 1.0f + fadeDepth * fadeLfo;
+      fade = std::clamp(fade, 0.65f, 1.35f);
+
+      noisePhase += twoPi * (noiseRate / sampleRate);
+      noisePhase2 += twoPi * (noiseRate2 / sampleRate);
+      if (noisePhase > twoPi) noisePhase -= twoPi;
+      if (noisePhase2 > twoPi) noisePhase2 -= twoPi;
+      float noiseLfo =
+          0.6f * std::sin(noisePhase) + 0.4f * std::sin(noisePhase2);
+      noiseScale = 1.0f + noiseDepth * noiseLfo;
+      float fadeT =
+          clampf((1.0f - fade) / (1.0f - 0.65f), 0.0f, 1.0f);
+      float reception = 0.6f + 0.6f * offT + 0.4f * fadeT;
+      noiseScale *= reception;
+      noiseScale = std::clamp(noiseScale, 0.3f, 1.6f);
+    }
 
     float y = hpf.process(x);
     y = lpf1.process(y);
@@ -701,6 +733,8 @@ void Radio1938::process(float* samples, uint32_t frames) {
       float mix = std::clamp(adjMix * (offT * offT), 0.0f, 0.20f);
       y += mix * adjOut;
     }
+    am.ifNoiseAmp =
+        kEnableRadioArtifacts ? (noiseBase * noiseScale * kIfNoiseMix) : 0.0f;
     y = am.process(y);
     y = midBoost.process(y);
     y = lowMidDip.process(y);
@@ -719,32 +753,14 @@ void Radio1938::process(float* samples, uint32_t frames) {
     float sagGain = 1.0f - sagDepth * sagT;
     y *= sagGain;
     if (kEnableRadioArtifacts) {
-      float noiseScale = 1.0f;
-      fadePhase += twoPi * (fadeRate / sampleRate);
-      fadePhase2 += twoPi * (fadeRate2 / sampleRate);
-      if (fadePhase > twoPi) fadePhase -= twoPi;
-      if (fadePhase2 > twoPi) fadePhase2 -= twoPi;
-      float fadeLfo = 0.6f * std::sin(fadePhase) + 0.4f * std::sin(fadePhase2);
-      float fade = 1.0f + fadeDepth * fadeLfo;
-      fade = std::clamp(fade, 0.65f, 1.35f);
       y *= fade;
 
-      noisePhase += twoPi * (noiseRate / sampleRate);
-      noisePhase2 += twoPi * (noiseRate2 / sampleRate);
-      if (noisePhase > twoPi) noisePhase -= twoPi;
-      if (noisePhase2 > twoPi) noisePhase2 -= twoPi;
-      float noiseLfo =
-          0.6f * std::sin(noisePhase) + 0.4f * std::sin(noisePhase2);
-      noiseScale = 1.0f + noiseDepth * noiseLfo;
-      float fadeT =
-          clampf((1.0f - fade) / (1.0f - 0.65f), 0.0f, 1.0f);
-      float reception = 1.0f + 0.6f * offT + 0.4f * fadeT;
-      noiseScale *= reception;
-      noiseScale = std::clamp(noiseScale, 0.4f, 2.0f);
-      noiseHum.noiseAmp = noiseBase * noiseScale;
-      noiseHum.crackleAmp = crackleBase * noiseScale;
-      noiseHum.lightningAmp = lightningBase * noiseScale;
-      noiseHum.motorAmp = motorBase * noiseScale;
+      float postNoiseScale = noiseScale * kPostNoiseMix;
+      noiseHum.noiseAmp = noiseBase * postNoiseScale;
+      noiseHum.crackleAmp = crackleBase * postNoiseScale;
+      noiseHum.lightningAmp = lightningBase * postNoiseScale;
+      noiseHum.motorAmp = motorBase * postNoiseScale;
+      noiseHum.humAmp = humBase * postNoiseScale;
 
       if (heteroDepth > 0.0f && heteroBaseScale > 0.0f && offT > 0.0f) {
         heteroDriftPhase += twoPi * (heteroDriftHz / sampleRate);
