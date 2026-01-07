@@ -6,6 +6,7 @@
 static constexpr bool kEnableRadioArtifacts = true;
 static constexpr bool kEnableRoomEarlyReflections = true;
 static constexpr bool kEnableRoomTail = true;
+static constexpr float kOversampleFactor = 2.0f;
 
 static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
@@ -15,6 +16,23 @@ static inline float db2lin(float db) { return std::pow(10.0f, db / 20.0f); }
 
 static inline float lin2db(float x) {
   return 20.0f * std::log10(std::max(x, 1e-12f));
+}
+
+template <typename Nonlinear>
+static inline float processOversampled2x(float x,
+                                         float& prev,
+                                         Biquad& lp1,
+                                         Biquad& lp2,
+                                         Nonlinear&& nonlinear) {
+  float mid = 0.5f * (prev + x);
+  float y0 = nonlinear(mid);
+  float y1 = nonlinear(x);
+  y0 = lp1.process(y0);
+  y0 = lp2.process(y0);
+  y1 = lp1.process(y1);
+  y1 = lp2.process(y1);
+  prev = x;
+  return y1;
 }
 
 float Biquad::process(float x) {
@@ -183,27 +201,12 @@ void NoiseHum::reset() {
 }
 
 float NoiseHum::process(float programSample) {
-  float a = std::fabs(programSample);
-  if (a > scEnv) {
-    scEnv = scAtk * scEnv + (1.0f - scAtk) * a;
-  } else {
-    scEnv = scRel * scEnv + (1.0f - scRel) * a;
-  }
-
-  float levelDb = lin2db(scEnv);
-  float maskStartDb = -46.0f;
-  float maskEndDb = -20.0f;
-  float maskMaxDb = 20.0f;
-  float maskT =
-      clampf((levelDb - maskStartDb) / (maskEndDb - maskStartDb), 0.0f, 1.0f);
-  maskT *= maskT;
-  float maskDb = maskMaxDb * maskT;
-  float maskGain = db2lin(-maskDb);
+  (void)programSample;
 
   float n = dist(rng);
   n = hp.process(n);
   n = lp.process(n);
-  n *= noiseAmp * maskGain;
+  n *= noiseAmp;
 
   float c = 0.0f;
   if (crackleRate > 0.0f && crackleAmp > 0.0f && fs > 0.0f) {
@@ -215,7 +218,7 @@ float NoiseHum::process(float programSample) {
     crackleEnv *= crackleDecay;
     raw = crackleHp.process(raw);
     raw = crackleLp.process(raw);
-    c = raw * crackleAmp * maskGain;
+    c = raw * crackleAmp;
   }
 
   constexpr float twoPi = 6.283185307f;
@@ -231,7 +234,7 @@ float NoiseHum::process(float programSample) {
     lightningEnv *= lightningDecay;
     raw = lightningHp.process(raw);
     raw = lightningLp.process(raw);
-    l = raw * lightningAmp * noiseScale * maskGain;
+    l = raw * lightningAmp * noiseScale;
   }
 
   float m = 0.0f;
@@ -247,13 +250,13 @@ float NoiseHum::process(float programSample) {
     float raw = dist(rng) * motorEnv * buzz;
     raw = motorHp.process(raw);
     raw = motorLp.process(raw);
-    m = raw * motorAmp * noiseScale * maskGain;
+    m = raw * motorAmp * noiseScale;
   }
 
   humPhase += twoPi * (humHz / fs);
   if (humPhase > twoPi) humPhase -= twoPi;
   float h = std::sin(humPhase) + 0.35f * std::sin(2.0f * humPhase);
-  h *= humAmp * maskGain;
+  h *= humAmp;
 
   return n + c + l + m + h;
 }
@@ -261,7 +264,7 @@ float NoiseHum::process(float programSample) {
 void AMDetector::init(float newFs, float newBw) {
   fs = newFs;
   bwHz = newBw;
-  carrierHz = std::min(12000.0f, fs * 0.35f);
+  carrierHz = std::min(9000.0f, fs * 0.24f);
   float halfBw = std::clamp(bwHz * 0.95f, 1500.0f, fs * 0.2f);
   float ifLow = std::clamp(carrierHz - halfBw, 1000.0f, fs * 0.45f);
   float ifHigh = std::clamp(carrierHz + halfBw, ifLow + 800.0f, fs * 0.48f);
@@ -331,20 +334,15 @@ float AMDetector::process(float x) {
   }
   float ifAgc = ifSample * db2lin(agcGainDb);
 
-  float det = ifAgc * carrier;
+  float det = std::fabs(ifAgc);
+  if (diodeDrop > 0.0f) {
+    det = std::max(0.0f, det - diodeDrop);
+  }
   float env = detLp1.process(det);
   env = detLp2.process(env);
   env = detLp3.process(env);
   dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * env;
   float out = (env - dcEnv) * detGain;
-  if (diodeDrop > 0.0f) {
-    float a = std::fabs(out);
-    if (a <= diodeDrop) {
-      out = 0.0f;
-    } else {
-      out = std::copysign(a - diodeDrop, out);
-    }
-  }
   return out;
 }
 
@@ -382,24 +380,29 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   // float safeBw = std::clamp(bwHz, 3800.0f, 4800.0f);
   // Wider bandwidth for high-fidelity studio sound (1938 "High Fidelity" AM)
   float safeBw = std::clamp(bwHz, 4200.0f, 6000.0f);
-  hpf.setHighpass(sampleRate, 140.0f, 0.707f);
-  lpf1.setLowpass(sampleRate, safeBw, 0.707f);
-  lpf2.setLowpass(sampleRate, safeBw, 0.707f);
-  postLpf1.setLowpass(sampleRate, safeBw, 0.707f);
-  postLpf2.setLowpass(sampleRate, safeBw, 0.707f);
   tuneOffsetNorm = (safeBw > 0.0f)
                        ? std::clamp(tuneOffsetHz / (safeBw * 0.5f), -1.0f, 1.0f)
                        : 0.0f;
+  float detuneT = std::clamp(std::fabs(tuneOffsetNorm), 0.0f, 1.0f);
+  float tunedBw =
+      std::clamp(safeBw * (1.0f - 0.35f * detuneT), 2600.0f, safeBw);
+  hpf.setHighpass(sampleRate, 140.0f, 0.707f);
+  lpf1.setLowpass(sampleRate, tunedBw, 0.707f);
+  lpf2.setLowpass(sampleRate, tunedBw, 0.707f);
+  postLpf1.setLowpass(sampleRate, tunedBw, 0.707f);
+  postLpf2.setLowpass(sampleRate, tunedBw, 0.707f);
   float shift = 1.0f + tuneOffsetNorm * 0.18f;
-  float ripple1Hz = std::clamp(950.0f * shift, 500.0f, safeBw * 0.95f);
-  float ripple2Hz = std::clamp(2300.0f * shift, 800.0f, safeBw * 0.95f);
-  float tiltHz = std::clamp(1700.0f * (1.0f + tuneOffsetNorm * 0.15f), 900.0f,
-                            safeBw * 0.95f);
+  float ripple1Hz = std::clamp(950.0f * shift, 500.0f, tunedBw * 0.95f);
+  float ripple2Hz = std::clamp(2300.0f * shift, 800.0f, tunedBw * 0.95f);
+  float tiltScale = 1.0f - 0.2f * detuneT;
+  float tiltHz =
+      std::clamp(1700.0f * (1.0f + tuneOffsetNorm * 0.15f) * tiltScale,
+                 800.0f, tunedBw * 0.95f);
   ifRipple1.setPeaking(sampleRate, ripple1Hz, 0.9f, 0.5f);
   ifRipple2.setPeaking(sampleRate, ripple2Hz, 1.1f, -0.6f);
   ifTiltLp.setLowpass(sampleRate, tiltHz, 0.707f);
   float adjHpHz = 250.0f;
-  float adjLpHz = std::clamp(safeBw * 0.78f, 2200.0f, safeBw * 0.90f);
+  float adjLpHz = std::clamp(tunedBw * 0.78f, 2200.0f, tunedBw * 0.90f);
   adjHp.setHighpass(sampleRate, adjHpHz, 0.707f);
   adjLp.setLowpass(sampleRate, adjLpHz, 0.707f);
   mpTiltLp.setLowpass(sampleRate, 1800.0f, 0.707f);
@@ -438,8 +441,17 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   sat.drive = 1.25f;
   sat.mix = 0.40f;
 
-  am.init(sampleRate, safeBw);
-  speaker.init(sampleRate);
+  float osFs = sampleRate * kOversampleFactor;
+  float osCut = sampleRate * 0.45f;
+  satOsLp1.setLowpass(osFs, osCut, 0.707f);
+  satOsLp2.setLowpass(osFs, osCut, 0.707f);
+  speakerOsLp1.setLowpass(osFs, osCut, 0.707f);
+  speakerOsLp2.setLowpass(osFs, osCut, 0.707f);
+  clipOsLp1.setLowpass(osFs, osCut, 0.707f);
+  clipOsLp2.setLowpass(osFs, osCut, 0.707f);
+
+  am.init(sampleRate, tunedBw);
+  speaker.init(osFs);
   speaker.drive = 0.85f;
   roomTapSamples.clear();
   roomTapGains.clear();
@@ -470,7 +482,7 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
     roomTailIndex = 0;
   }
 
-  noiseHum.setFs(sampleRate, safeBw);
+  noiseHum.setFs(sampleRate, tunedBw);
   noiseHum.noiseAmp = noiseWeight;
   noiseHum.humHz = 50.0f;
   if (noiseWeight <= 0.0f) {
@@ -534,6 +546,15 @@ void Radio1938::reset() {
   lpf2.reset();
   postLpf1.reset();
   postLpf2.reset();
+  satOsPrev = 0.0f;
+  speakerOsPrev = 0.0f;
+  clipOsPrev = 0.0f;
+  satOsLp1.reset();
+  satOsLp2.reset();
+  speakerOsLp1.reset();
+  speakerOsLp2.reset();
+  clipOsLp1.reset();
+  clipOsLp2.reset();
   ifRipple1.reset();
   ifRipple2.reset();
   ifTiltLp.reset();
@@ -556,6 +577,8 @@ void Radio1938::reset() {
 void Radio1938::process(float* samples, uint32_t frames) {
   if (!samples || frames == 0) return;
   constexpr float twoPi = 6.283185307f;
+  const float offT = clampf(std::fabs(tuneOffsetNorm), 0.0f, 1.0f);
+  const float offHz = std::fabs(tuneOffsetHz);
   for (uint32_t f = 0; f < frames; ++f) {
     float inL = samples[f * channels];
     float inR = (channels > 1) ? samples[f * channels + 1] : inL;
@@ -635,7 +658,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
       y = amHold;
     }
     */
-    if (kEnableRadioArtifacts && !detuneBuf.empty()) {
+    if (kEnableRadioArtifacts && !detuneBuf.empty() && detuneDepth > 0.0f) {
       detunePhase += twoPi * (detuneRate / sampleRate);
       detunePhase2 += twoPi * (detuneRate2 / sampleRate);
       if (detunePhase > twoPi) detunePhase -= twoPi;
@@ -655,7 +678,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
       detuneIndex = (detuneIndex + 1) % static_cast<int>(detuneBuf.size());
       y = delayed;
     }
-    if (kEnableRadioArtifacts && adjMix > 0.0f) {
+    if (kEnableRadioArtifacts && adjMix > 0.0f && offT > 0.0f) {
       float adjSource = y;
       adjPhase += twoPi * (adjBeatHz / sampleRate);
       if (adjPhase > twoPi) adjPhase -= twoPi;
@@ -675,15 +698,16 @@ void Radio1938::process(float* samples, uint32_t frames) {
       float adjGain = (adjEnv > 1e-6f) ? (adjTarget / adjEnv) : adjMaxGain;
       adjGain = std::clamp(adjGain, adjMinGain, adjMaxGain);
       adjOut *= adjGain;
-      float mix = std::clamp(adjMix, 0.0f, 0.20f);
+      float mix = std::clamp(adjMix * (offT * offT), 0.0f, 0.20f);
       y += mix * adjOut;
     }
-    // y = am.process(y); // Cannot revert these changes
+    y = am.process(y);
     y = midBoost.process(y);
     y = lowMidDip.process(y);
     y = presBoost.process(y);
     y = comp.process(y);
-    y = sat.process(y);
+    y = processOversampled2x(y, satOsPrev, satOsLp1, satOsLp2,
+                             [&](float v) { return sat.process(v); });
     y = postLpf1.process(y);
     float level = std::fabs(y);
     if (level > sagEnv) {
@@ -712,17 +736,21 @@ void Radio1938::process(float* samples, uint32_t frames) {
       float noiseLfo =
           0.6f * std::sin(noisePhase) + 0.4f * std::sin(noisePhase2);
       noiseScale = 1.0f + noiseDepth * noiseLfo;
-      noiseScale = std::clamp(noiseScale, 0.4f, 1.6f);
+      float fadeT =
+          clampf((1.0f - fade) / (1.0f - 0.65f), 0.0f, 1.0f);
+      float reception = 1.0f + 0.6f * offT + 0.4f * fadeT;
+      noiseScale *= reception;
+      noiseScale = std::clamp(noiseScale, 0.4f, 2.0f);
       noiseHum.noiseAmp = noiseBase * noiseScale;
       noiseHum.crackleAmp = crackleBase * noiseScale;
       noiseHum.lightningAmp = lightningBase * noiseScale;
       noiseHum.motorAmp = motorBase * noiseScale;
 
-      if (heteroDepth > 0.0f && heteroBaseScale > 0.0f) {
+      if (heteroDepth > 0.0f && heteroBaseScale > 0.0f && offT > 0.0f) {
         heteroDriftPhase += twoPi * (heteroDriftHz / sampleRate);
         if (heteroDriftPhase > twoPi) heteroDriftPhase -= twoPi;
         float drift = 1.0f + 0.12f * std::sin(heteroDriftPhase);
-        float heteroHz = heteroBaseHz * drift;
+        float heteroHz = std::clamp(offHz, 80.0f, 2500.0f) * drift;
         heteroPhase += twoPi * (heteroHz / sampleRate);
         if (heteroPhase > twoPi) heteroPhase -= twoPi;
         float hetero = std::sin(heteroPhase);
@@ -734,11 +762,13 @@ void Radio1938::process(float* samples, uint32_t frames) {
         quiet *= quiet;
         float amp =
             heteroDepth * heteroBaseScale * (0.6f + 0.4f * noiseScale) * quiet;
+        amp *= offT * offT;
         y += hetero * amp;
       }
     }
     y += noiseHum.process(y);
-    y = speaker.process(y);  // Cannot revert these changes
+    y = processOversampled2x(y, speakerOsPrev, speakerOsLp1, speakerOsLp2,
+                             [&](float v) { return speaker.process(v); });
     y = postLpf2.process(y);
     if (!roomBuf.empty()) {
       float dry = y;
@@ -775,7 +805,8 @@ void Radio1938::process(float* samples, uint32_t frames) {
         y += roomTailMix * tail;
       }
     }
-    y = softClip(y, 0.985f);
+    y = processOversampled2x(y, clipOsPrev, clipOsLp1, clipOsLp2,
+                             [&](float v) { return softClip(v, 0.985f); });
 
     for (int c = 0; c < channels; ++c) {
       samples[f * channels + c] = y;

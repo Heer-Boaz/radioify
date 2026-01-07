@@ -96,7 +96,7 @@ struct AMDetector {
   float carrierHz = 12000.0f;
   float modIndex = 0.80f;
   float carrierGain = 0.40f;
-  float diodeDrop = 0.02f;
+  float diodeDrop = 0.008f;
   float detGain = 3.20f;
 
   Biquad ifHp1;
@@ -165,7 +165,7 @@ struct Radio1938 {
   float heteroGateEnd = 0.05f;
   float fadeDepth = 0.10f;
   float noiseDepth = 0.35f;
-  float detuneDepth = 0.80f;
+  float detuneDepth = 0.0f;
   float heteroDepth = 0.0007f;
   float detuneBaseDelay = 2.0f;
   std::vector<float> detuneBuf;
@@ -251,6 +251,15 @@ struct Radio1938 {
   Biquad lpf2;
   Biquad postLpf1;
   Biquad postLpf2;
+  Biquad satOsLp1;
+  Biquad satOsLp2;
+  Biquad speakerOsLp1;
+  Biquad speakerOsLp2;
+  Biquad clipOsLp1;
+  Biquad clipOsLp2;
+  float satOsPrev = 0.0f;
+  float speakerOsPrev = 0.0f;
+  float clipOsPrev = 0.0f;
   Biquad midBoost;
   Biquad lowMidDip;
   Biquad presBoost;
