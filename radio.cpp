@@ -29,6 +29,18 @@ static inline float lin2db(float x) {
   return 20.0f * std::log10(std::max(x, 1e-12f));
 }
 
+static inline float diodeColor(float x, float drop) {
+  float mag = std::fabs(x);
+  if (drop <= 0.0f) return x;
+  float sign = (x >= 0.0f) ? 1.0f : -1.0f;
+  if (mag <= drop) {
+    return sign * mag * 0.06f;
+  }
+  float shaped = mag - drop;
+  float curve = 1.0f + 0.35f * shaped;
+  return sign * shaped * curve;
+}
+
 void radioSetDebugTap(int tap) {
   tap = std::clamp(tap, 0, kDebugTapMax);
   gDebugTap.store(tap, std::memory_order_relaxed);
@@ -845,6 +857,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
         kEnableRadioArtifacts ? (noiseBase * noiseScale * kIfNoiseMix) : 0.0f;
     if (kEnableAMDetector) {
       y = am.process(y);
+      y = diodeColor(y, 0.004f);
     }
     y = midBoost.process(y);
     y = lowMidDip.process(y);
