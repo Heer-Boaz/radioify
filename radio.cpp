@@ -64,8 +64,8 @@ static inline float processOversampled2x(float x,
   return y1;
 }
 
-static float updateTuningFilters(Radio1938& radio, float tuneHz) {
-  float safeBw = std::clamp(radio.bwHz, 4200.0f, 6000.0f);
+static float updateTuningFilters(Radio1938& radio, float tuneHz, float bwHz) {
+  float safeBw = std::clamp(bwHz, 4200.0f, 6000.0f);
   float tuneNorm =
       (safeBw > 0.0f) ? clampf(tuneHz / (safeBw * 0.5f), -1.0f, 1.0f) : 0.0f;
   radio.tuneOffsetNorm = tuneNorm;
@@ -415,13 +415,16 @@ float AMDetector::process(float x) {
 
   float env = 0.0f;
   if (mode == Mode::Envelope) {
-    float det = std::fabs(ifAgc);
+    float p = ifAgc * ifAgc;
+    float e = detLp1.process(p);
+    e = detLp2.process(e);
+    e = detLp3.process(e);
+    env = std::sqrt(std::max(e, 0.0f));
+    constexpr float kRmsToPeak = 1.41421356f;
+    env *= kRmsToPeak;
     if (diodeDrop > 0.0f) {
-      det = std::max(0.0f, det - diodeDrop);
+      env = std::max(0.0f, env - diodeDrop);
     }
-    env = detLp1.process(det);
-    env = detLp2.process(env);
-    env = detLp3.process(env);
   } else {
     float carrierQ = std::cos(phase);
     float mixI = ifAgc * carrier;
@@ -469,7 +472,7 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   sampleRate = sr;
   bwHz = bw;
   noiseWeight = noise;
-  float tunedBwValue = updateTuningFilters(*this, tuneOffsetHz);
+  float tunedBwValue = updateTuningFilters(*this, tuneOffsetHz, bwHz);
   detuneBuf.assign(64, 0.0f);
   detuneIndex = 0;
 
@@ -518,7 +521,7 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
 
   float osFs = sampleRate * kOversampleFactor;
   float osCut = sampleRate * 0.45f;
-  // am.mode = AMDetector::Mode::Envelope;
+  am.mode = AMDetector::Mode::Envelope;
   satOsLp1.setLowpass(osFs, osCut, 0.707f);
   satOsLp2.setLowpass(osFs, osCut, 0.707f);
   speakerOsLp1.setLowpass(osFs, osCut, 0.707f);
@@ -662,7 +665,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
   constexpr float twoPi = 6.283185307f;
   constexpr float kTuneTau = 0.05f;
   float rate = std::max(1.0f, sampleRate);
-  float tick = 1.0f - std::exp(-1.0f / (rate * kTuneTau));
+  float tick = 1.0f - std::exp(-static_cast<float>(frames) / (rate * kTuneTau));
   tuneSmoothedHz += tick * (tuneOffsetHz - tuneSmoothedHz);
   bwSmoothedHz += tick * (bwHz - bwSmoothedHz);
   const float safeBw = std::clamp(bwSmoothedHz, 4200.0f, 6000.0f);
@@ -674,7 +677,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
   constexpr float kTuneUpdateEps = 0.25f;
   if (std::fabs(tuneSmoothedHz - tuneAppliedHz) > kTuneUpdateEps ||
       std::fabs(bwSmoothedHz - bwAppliedHz) > kTuneUpdateEps) {
-    float tunedBw = updateTuningFilters(*this, tuneSmoothedHz);
+    float tunedBw = updateTuningFilters(*this, tuneSmoothedHz, bwSmoothedHz);
     tuneAppliedHz = tuneSmoothedHz;
     bwAppliedHz = bwSmoothedHz;
     am.setBandwidth(tunedBw);
