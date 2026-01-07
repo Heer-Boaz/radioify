@@ -386,6 +386,7 @@ float AMDetector::process(float x) {
   q = detLp2Q.process(q);
   q = detLp3Q.process(q);
   float env = std::sqrt(i * i + q * q);
+  env *= 4.0f;  // Compensate for 0.5 gain from quadrature mixing.
   if (diodeDrop > 0.0f) {
     env = std::max(0.0f, env - diodeDrop);
   }
