@@ -196,6 +196,8 @@ struct Radio1938 {
   float tunedBw = 0.0f;
   float tuneAppliedHz = 0.0f;
   float bwAppliedHz = 0.0f;
+  float tuneSmoothedHz = 0.0f;
+  float bwSmoothedHz = 0.0f;
   float tuneTiltExtra = 0.22f;
 
   float adjPhase = 0.0f;
