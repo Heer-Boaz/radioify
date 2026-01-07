@@ -52,6 +52,10 @@ bool audioIsRadioEnabled();
 bool audioIsHolding();
 
 AudioPerfStats audioGetPerfStats();
+int audioGetDebugTap();
+int audioGetDebugTapMax();
+void audioCycleDebugTap();
+void audioSetDebugTap(int tap);
 
 void audioTogglePause();
 void audioSeekBy(int direction);

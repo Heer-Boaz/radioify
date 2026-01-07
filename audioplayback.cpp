@@ -986,6 +986,14 @@ AudioPerfStats audioGetPerfStats() {
   return stats;
 }
 
+int audioGetDebugTap() { return radioGetDebugTap(); }
+
+int audioGetDebugTapMax() { return radioGetDebugTapMax(); }
+
+void audioCycleDebugTap() { radioCycleDebugTap(); }
+
+void audioSetDebugTap(int tap) { radioSetDebugTap(tap); }
+
 void audioTogglePause() {
   if (!gAudio.decoderReady || !gAudio.enableAudio) return;
   gAudio.state.paused.store(!gAudio.state.paused.load());

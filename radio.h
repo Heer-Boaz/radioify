@@ -110,6 +110,9 @@ struct AMDetector {
   Biquad detLp1;
   Biquad detLp2;
   Biquad detLp3;
+  Biquad detLp1Q;
+  Biquad detLp2Q;
+  Biquad detLp3Q;
 
   float phase = 0.0f;
   float agcEnv = 0.0f;
@@ -278,5 +281,10 @@ struct Radio1938 {
   void reset();
   void process(float* samples, uint32_t frames);
 };
+
+void radioSetDebugTap(int tap);
+void radioCycleDebugTap();
+int radioGetDebugTap();
+int radioGetDebugTapMax();
 
 #endif
