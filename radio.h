@@ -100,6 +100,12 @@ struct AMDetector {
   float detGain = 3.20f;
   float ifNoiseAmp = 0.0f;
 
+  enum class Mode {
+    Envelope,
+    Iq,
+  };
+  Mode mode = Mode::Iq;
+
   std::mt19937 rng{0x1942u};
   std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
 
@@ -129,6 +135,7 @@ struct AMDetector {
   float dcCoeff = 0.0f;
 
   void init(float newFs, float newBw);
+  void setBandwidth(float newBw);
   void reset();
   float process(float x);
 };
@@ -186,6 +193,9 @@ struct Radio1938 {
 
   float tuneOffsetHz = 0.0f;
   float tuneOffsetNorm = 0.0f;
+  float tunedBw = 0.0f;
+  float tuneAppliedHz = 0.0f;
+  float bwAppliedHz = 0.0f;
   float tuneTiltExtra = 0.22f;
 
   float adjPhase = 0.0f;

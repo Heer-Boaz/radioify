@@ -64,6 +64,39 @@ static inline float processOversampled2x(float x,
   return y1;
 }
 
+static float updateTuningFilters(Radio1938& radio, float tuneHz) {
+  float safeBw = std::clamp(radio.bwHz, 4200.0f, 6000.0f);
+  float tuneNorm =
+      (safeBw > 0.0f) ? clampf(tuneHz / (safeBw * 0.5f), -1.0f, 1.0f) : 0.0f;
+  radio.tuneOffsetNorm = tuneNorm;
+  float detuneT = std::clamp(std::fabs(tuneNorm), 0.0f, 1.0f);
+  float tunedBw =
+      std::clamp(safeBw * (1.0f - 0.35f * detuneT), 2600.0f, safeBw);
+
+  radio.lpf1.setLowpass(radio.sampleRate, tunedBw, 0.707f);
+  radio.lpf2.setLowpass(radio.sampleRate, tunedBw, 0.707f);
+  radio.postLpf1.setLowpass(radio.sampleRate, tunedBw, 0.707f);
+  radio.postLpf2.setLowpass(radio.sampleRate, tunedBw, 0.707f);
+
+  float shift = 1.0f + tuneNorm * 0.18f;
+  float ripple1Hz = std::clamp(950.0f * shift, 500.0f, tunedBw * 0.95f);
+  float ripple2Hz = std::clamp(2300.0f * shift, 800.0f, tunedBw * 0.95f);
+  radio.ifRipple1.setPeaking(radio.sampleRate, ripple1Hz, 0.9f, 0.5f);
+  radio.ifRipple2.setPeaking(radio.sampleRate, ripple2Hz, 1.1f, -0.6f);
+
+  float tiltScale = 1.0f - 0.2f * detuneT;
+  float tiltHz =
+      std::clamp(1700.0f * (1.0f + tuneNorm * 0.15f) * tiltScale,
+                 800.0f, tunedBw * 0.95f);
+  radio.ifTiltLp.setLowpass(radio.sampleRate, tiltHz, 0.707f);
+
+  float adjLpHz = std::clamp(tunedBw * 0.78f, 2200.0f, tunedBw * 0.90f);
+  radio.adjLp.setLowpass(radio.sampleRate, adjLpHz, 0.707f);
+
+  radio.tunedBw = tunedBw;
+  return tunedBw;
+}
+
 float Biquad::process(float x) {
   float y = b0 * x + z1;
   z1 = b1 * x - a1 * y + z2;
@@ -295,8 +328,24 @@ float NoiseHum::process(float programSample) {
 
 void AMDetector::init(float newFs, float newBw) {
   fs = newFs;
-  bwHz = newBw;
   carrierHz = std::min(9000.0f, fs * 0.24f);
+  setBandwidth(newBw);
+
+  float agcAtkMs = 40.0f;
+  float agcRelMs = 800.0f;
+  agcAtk = std::exp(-1.0f / (fs * (agcAtkMs / 1000.0f)));
+  agcRel = std::exp(-1.0f / (fs * (agcRelMs / 1000.0f)));
+  agcGainAtk = agcAtk;
+  agcGainRel = agcRel;
+
+  float dcMs = 450.0f;
+  dcCoeff = std::exp(-1.0f / (fs * (dcMs / 1000.0f)));
+
+  reset();
+}
+
+void AMDetector::setBandwidth(float newBw) {
+  bwHz = newBw;
   float halfBw = std::clamp(bwHz * 0.95f, 1500.0f, fs * 0.2f);
   float ifLow = std::clamp(carrierHz - halfBw, 1000.0f, fs * 0.45f);
   float ifHigh = std::clamp(carrierHz + halfBw, ifLow + 800.0f, fs * 0.48f);
@@ -312,18 +361,6 @@ void AMDetector::init(float newFs, float newBw) {
   detLp1Q.setLowpass(fs, detLpHz, 0.707f);
   detLp2Q.setLowpass(fs, detLpHz, 0.707f);
   detLp3Q.setLowpass(fs, detLpHz, 0.707f);
-
-  float agcAtkMs = 6.0f;
-  float agcRelMs = 160.0f;
-  agcAtk = std::exp(-1.0f / (fs * (agcAtkMs / 1000.0f)));
-  agcRel = std::exp(-1.0f / (fs * (agcRelMs / 1000.0f)));
-  agcGainAtk = agcAtk;
-  agcGainRel = agcRel;
-
-  float dcMs = 450.0f;
-  dcCoeff = std::exp(-1.0f / (fs * (dcMs / 1000.0f)));
-
-  reset();
 }
 
 void AMDetector::reset() {
@@ -376,19 +413,30 @@ float AMDetector::process(float x) {
   }
   float ifAgc = ifSample * db2lin(agcGainDb);
 
-  float carrierQ = std::cos(phase);
-  float mixI = ifAgc * carrier;
-  float mixQ = ifAgc * carrierQ;
-  float i = detLp1.process(mixI);
-  i = detLp2.process(i);
-  i = detLp3.process(i);
-  float q = detLp1Q.process(mixQ);
-  q = detLp2Q.process(q);
-  q = detLp3Q.process(q);
-  float env = std::sqrt(i * i + q * q);
-  env *= 4.0f;  // Compensate for 0.5 gain from quadrature mixing.
-  if (diodeDrop > 0.0f) {
-    env = std::max(0.0f, env - diodeDrop);
+  float env = 0.0f;
+  if (mode == Mode::Envelope) {
+    float det = std::fabs(ifAgc);
+    if (diodeDrop > 0.0f) {
+      det = std::max(0.0f, det - diodeDrop);
+    }
+    env = detLp1.process(det);
+    env = detLp2.process(env);
+    env = detLp3.process(env);
+  } else {
+    float carrierQ = std::cos(phase);
+    float mixI = ifAgc * carrier;
+    float mixQ = ifAgc * carrierQ;
+    float i = detLp1.process(mixI);
+    i = detLp2.process(i);
+    i = detLp3.process(i);
+    float q = detLp1Q.process(mixQ);
+    q = detLp2Q.process(q);
+    q = detLp3Q.process(q);
+    env = std::sqrt(i * i + q * q);
+    env *= 4.0f;  // Make up I/Q level loss.
+    if (diodeDrop > 0.0f) {
+      env = std::max(0.0f, env - diodeDrop);
+    }
   }
   dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * env;
   float out = (env - dcEnv) * detGain;
@@ -428,32 +476,10 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   // Clamping to 3.8kHz - 4.8kHz for authentic lo-fi sound.
   // float safeBw = std::clamp(bwHz, 3800.0f, 4800.0f);
   // Wider bandwidth for high-fidelity studio sound (1938 "High Fidelity" AM)
-  float safeBw = std::clamp(bwHz, 4200.0f, 6000.0f);
-  tuneOffsetNorm = (safeBw > 0.0f)
-                       ? std::clamp(tuneOffsetHz / (safeBw * 0.5f), -1.0f, 1.0f)
-                       : 0.0f;
-  float detuneT = std::clamp(std::fabs(tuneOffsetNorm), 0.0f, 1.0f);
-  float tunedBw =
-      std::clamp(safeBw * (1.0f - 0.35f * detuneT), 2600.0f, safeBw);
   hpf.setHighpass(sampleRate, 140.0f, 0.707f);
-  lpf1.setLowpass(sampleRate, tunedBw, 0.707f);
-  lpf2.setLowpass(sampleRate, tunedBw, 0.707f);
-  postLpf1.setLowpass(sampleRate, tunedBw, 0.707f);
-  postLpf2.setLowpass(sampleRate, tunedBw, 0.707f);
-  float shift = 1.0f + tuneOffsetNorm * 0.18f;
-  float ripple1Hz = std::clamp(950.0f * shift, 500.0f, tunedBw * 0.95f);
-  float ripple2Hz = std::clamp(2300.0f * shift, 800.0f, tunedBw * 0.95f);
-  float tiltScale = 1.0f - 0.2f * detuneT;
-  float tiltHz =
-      std::clamp(1700.0f * (1.0f + tuneOffsetNorm * 0.15f) * tiltScale,
-                 800.0f, tunedBw * 0.95f);
-  ifRipple1.setPeaking(sampleRate, ripple1Hz, 0.9f, 0.5f);
-  ifRipple2.setPeaking(sampleRate, ripple2Hz, 1.1f, -0.6f);
-  ifTiltLp.setLowpass(sampleRate, tiltHz, 0.707f);
+  float tunedBw = updateTuningFilters(*this, tuneOffsetHz);
   float adjHpHz = 250.0f;
-  float adjLpHz = std::clamp(tunedBw * 0.78f, 2200.0f, tunedBw * 0.90f);
   adjHp.setHighpass(sampleRate, adjHpHz, 0.707f);
-  adjLp.setLowpass(sampleRate, adjLpHz, 0.707f);
   mpTiltLp.setLowpass(sampleRate, 1800.0f, 0.707f);
   float amNyquist = std::min(amSampleRate * 0.5f, sampleRate * 0.45f);
   float amCut = std::clamp(amNyquist * 0.96f, 2500.0f, sampleRate * 0.45f);
@@ -562,6 +588,9 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
                         ? std::clamp(noiseWeight / 0.015f, 0.15f, 1.0f)
                         : 0.0f;
 
+  tuneAppliedHz = tuneOffsetHz;
+  bwAppliedHz = bwHz;
+
   reset();
 }
 
@@ -633,6 +662,14 @@ void Radio1938::process(float* samples, uint32_t frames) {
       clampf(tuneOffsetHz / bwHalf, -1.0f, 1.0f);
   const float offT = std::fabs(tuneNorm);
   const float offHz = std::fabs(tuneOffsetHz);
+  constexpr float kTuneUpdateEps = 0.25f;
+  if (std::fabs(tuneOffsetHz - tuneAppliedHz) > kTuneUpdateEps ||
+      std::fabs(bwHz - bwAppliedHz) > kTuneUpdateEps) {
+    float tunedBw = updateTuningFilters(*this, tuneOffsetHz);
+    tuneAppliedHz = tuneOffsetHz;
+    bwAppliedHz = bwHz;
+    am.setBandwidth(tunedBw);
+  }
   const int debugTap = radioGetDebugTap();
   for (uint32_t f = 0; f < frames; ++f) {
     float inL = samples[f * channels];
