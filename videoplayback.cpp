@@ -1405,8 +1405,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   const double kPresentFps = 30.0;
   const double kPresentIntervalSec = 1.0 / kPresentFps;
   const double syncTolerance = std::max(0.033, 0.75 * kPresentIntervalSec);
+  // Give the decoder a wider margin before forcing a resync seek.
   const double hardResyncThreshold =
-      std::max(0.5, 10.0 * kPresentIntervalSec);
+      std::max(1.0, 20.0 * kPresentIntervalSec);
+  constexpr auto kResyncCooldown = std::chrono::milliseconds(1500);
+  auto resyncCooldownUntil = std::chrono::steady_clock::time_point::min();
   double nextPresentSec = 0.0;
   bool presentInit = false;
   bool presentUseWall = false;
@@ -2217,54 +2220,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                                            : (wallclockElapsed - lastFrameSec);
 
       if (!inResumeGrace && !decodeEnded.load() && haveAudioClock &&
-          driftForSkip > hardResyncThreshold && !commandPendingAtomic.load()) {
+          driftForSkip > hardResyncThreshold && !commandPendingAtomic.load() &&
+          now >= resyncCooldownUntil) {
         double targetSec = std::max(0.0, syncSec);
         int64_t targetTs =
             firstTs + static_cast<int64_t>(targetSec * secondsToTicks);
-        uint64_t skipEstimate = 0;
-        if (lastFrameDurationSec > 0.0) {
-          double deltaSec = targetSec - lastFrameSec;
-          if (deltaSec > 0.0) {
-            skipEstimate =
-                static_cast<uint64_t>(deltaSec / lastFrameDurationSec);
-          }
-        }
-        uint64_t epoch = commandEpoch.fetch_add(1) + 1;
-        DecodeCommand cmd;
-        cmd.seek = true;
-        cmd.seekTs = targetTs;
-        cmd.epoch = epoch;
-        issueCommand(cmd);
-
-        size_t droppedFrames = 0;
-        {
-          std::lock_guard<std::mutex> lock(queueMutex);
-          droppedFrames = frameQueue.size();
-          while (!frameQueue.empty()) {
-            freeFrames.push_back(frameQueue.front().poolIndex);
-            frameQueue.pop_front();
-          }
-        }
-        queueCv.notify_all();
-        if (droppedFrames > 0) {
-          skippedCalls.fetch_add(static_cast<uint64_t>(droppedFrames),
-                                 std::memory_order_relaxed);
-        }
-        if (skipEstimate > droppedFrames) {
-          skippedCalls.fetch_add(
-              static_cast<uint64_t>(skipEstimate - droppedFrames),
-              std::memory_order_relaxed);
-        }
-
-        pendingSeekEpoch = epoch;
-        pendingSeekTargetSec = targetSec;
-        pendingSeekAdjustWallClock = false;
+        requestFastForward(targetTs);
         audioSyncBiasValid = false;
         resumeGraceUntil = now + std::chrono::milliseconds(500);
+        resyncCooldownUntil = now + kResyncCooldown;
         resetPresentClock = true;
         redraw = true;
         forceRefreshArt = true;
-        perfLogAppendf(&perfLog, "sync_seek_pending audio=%.3f target=%.3f",
+        perfLogAppendf(&perfLog, "sync_fast_forward audio=%.3f target=%.3f",
                        audioNow, syncSec);
         continue;
       } else {
