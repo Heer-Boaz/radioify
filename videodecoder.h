@@ -91,7 +91,7 @@ class VideoDecoder {
                       ID3D11Device* device,
                       std::string* error,
                       VideoStreamSelection* streamSelection = nullptr,
-                      std::mutex* contextMutex = nullptr);
+                      std::recursive_mutex* contextMutex = nullptr);
   
   void uninit();
   bool readFrame(VideoFrame& out, VideoReadInfo* info = nullptr,

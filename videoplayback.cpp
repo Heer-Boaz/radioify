@@ -82,8 +82,8 @@ GpuAsciiRenderer& sharedGpuRenderer() {
 // Mutex to synchronize access to the shared D3D11 immediate context.
 // D3D11 immediate context is NOT thread-safe, and we use it from both
 // the rendering thread (main) and the decoding thread (via FFmpeg).
-std::mutex& getSharedGpuMutex() {
-    static std::mutex mtx;
+std::recursive_mutex& getSharedGpuMutex() {
+    static std::recursive_mutex mtx;
     return mtx;
 }
 
@@ -912,6 +912,16 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           while (decodeRunning.load()) {
             bool ok = decoder.readFrame(skipFrame, &skipInfo, false);
             if (!ok) {
+              if (skipInfo.noFrameTimeoutMs > 0) {
+                if (commandPendingAtomic.load() ||
+                    (decodePaused.load() && seekingTargetTs < 0)) {
+                  fastForwardPending.store(true);
+                  queueCv.notify_all();
+                  break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+              }
               auto fallback = trySoftwareFallback(skipInfo);
               if (fallback == FallbackResult::Applied) {
                 continue;
@@ -948,7 +958,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           }
           if (decodeEnded.load() || decoder.atEnd()) {
             if (!decoder.atEnd()) {
-              break;
+              continue;
             }
             decodeEnded.store(true);
             queueCv.notify_all();
@@ -980,6 +990,16 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           bool ok = decoder.readFrame(decodedFrame, &info, enableAscii);
           auto decodeEnd = std::chrono::steady_clock::now();
           if (!ok) {
+            if (info.noFrameTimeoutMs > 0) {
+              {
+                std::lock_guard<std::mutex> lock(queueMutex);
+                freeFrames.push_back(poolIndex);
+              }
+              queueCv.notify_all();
+              fastForwardPending.store(true);
+              std::this_thread::sleep_for(std::chrono::milliseconds(5));
+              continue;
+            }
             auto fallback = trySoftwareFallback(info);
             if (fallback == FallbackResult::Applied) {
               {
@@ -996,7 +1016,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               }
               queueCv.notify_all();
               decodeEnded.store(true);
-              break;
+              continue;
             }
             bool atEnd = decoder.atEnd() && haveDecodedFrame;
             if (!atEnd) {
@@ -1015,7 +1035,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             if (atEnd) {
               continue;
             }
-            break;
+            continue;
           }
           readCalls.fetch_add(1, std::memory_order_relaxed);
           haveDecodedFrame = true;
@@ -1086,6 +1106,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
         auto decodeEnd = std::chrono::steady_clock::now();
         if (!ok) {
+          if (info.noFrameTimeoutMs > 0) {
+            {
+              std::lock_guard<std::mutex> lock(queueMutex);
+              freeFrames.push_back(poolIndex);
+            }
+            queueCv.notify_all();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+          }
           auto fallback = trySoftwareFallback(info);
           if (fallback == FallbackResult::Applied) {
             {
@@ -1102,7 +1131,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             }
             queueCv.notify_all();
             decodeEnded.store(true);
-            break;
+            continue;
           }
           bool atEnd = decoder.atEnd() && haveDecodedFrame;
           if (!atEnd) {
@@ -1121,7 +1150,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           if (atEnd) {
             continue;
           }
-          break;
+          continue;
         }
         readCalls.fetch_add(1, std::memory_order_relaxed);
         haveDecodedFrame = true;
@@ -1528,7 +1557,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               bool renderRes = false;
               {
                    // Synchronize access to the shared D3D11 immediate context
-                   std::lock_guard<std::mutex> lock(getSharedGpuMutex());
+                   std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
                    renderRes = gpuRenderer.RenderNV12Texture(frame->hwTexture.Get(), frame->hwTextureArrayIndex,
                                                  frame->width, frame->height,
                                                  frame->fullRange, frame->yuvMatrix,

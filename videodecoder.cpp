@@ -35,11 +35,11 @@ extern "C" {
 
 // C-style callbacks for FFmpeg locking
 static void d3d11_lock(void* ctx) {
-    if (ctx) reinterpret_cast<std::mutex*>(ctx)->lock();
+    if (ctx) reinterpret_cast<std::recursive_mutex*>(ctx)->lock();
 }
 
 static void d3d11_unlock(void* ctx) {
-    if (ctx) reinterpret_cast<std::mutex*>(ctx)->unlock();
+    if (ctx) reinterpret_cast<std::recursive_mutex*>(ctx)->unlock();
 }
 
 namespace {
@@ -47,7 +47,10 @@ void setError(std::string* error, const char* message) {
   if (error) *error = message;
 }
 
-constexpr int kNoFrameTimeoutMs = 100;
+// Upper bound for a single readFrame() call. This is used to keep the decode
+// thread responsive to commands (seek/resize) without treating transient stalls
+// as fatal.
+constexpr int kNoFrameTimeoutMs = 1000;
 constexpr int64_t kProbeSize = 64 * 1024;
 constexpr int64_t kAnalyzeDurationFastUs = 500000;
 constexpr int64_t kAnalyzeDurationFallbackUs = 5000000;
@@ -244,6 +247,7 @@ struct VideoDecoder::Impl {
   AVCodecContext* codec = nullptr;
   AVBufferRef* hw_device_ctx = nullptr;
   AVFrame* frame = nullptr;
+  AVFrame* lastFrame = nullptr;
   AVFrame* scratch = nullptr;
   AVPacket* packet = nullptr;
   SwsContext* sws = nullptr;
@@ -505,11 +509,13 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   }
 
   AVFrame* frame = av_frame_alloc();
+  AVFrame* lastFrame = av_frame_alloc();
   AVFrame* scratch = av_frame_alloc();
   AVPacket* packet = av_packet_alloc();
-  if (!frame || !scratch || !packet) {
+  if (!frame || !lastFrame || !scratch || !packet) {
     if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
     av_frame_free(&frame);
+    av_frame_free(&lastFrame);
     av_frame_free(&scratch);
     av_packet_free(&packet);
     avcodec_free_context(&ctx);
@@ -523,6 +529,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   impl->codec = ctx;
   impl->hw_device_ctx = hw_device_ctx;
   impl->frame = frame;
+  impl->lastFrame = lastFrame;
   impl->scratch = scratch;
   impl->packet = packet;
   impl->streamIndex = streamIndex;
@@ -553,7 +560,7 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
                                   ID3D11Device* device,
                                   std::string* error,
                                   VideoStreamSelection* streamSelection,
-                                  std::mutex* contextMutex) {
+                                  std::recursive_mutex* contextMutex) {
   uninit();
 
   if (!device) {
@@ -675,11 +682,13 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
   }
 
   AVFrame* frame = av_frame_alloc();
+  AVFrame* lastFrame = av_frame_alloc();
   AVFrame* scratch = av_frame_alloc();
   AVPacket* packet = av_packet_alloc();
-  if (!frame || !scratch || !packet) {
+  if (!frame || !lastFrame || !scratch || !packet) {
     av_buffer_unref(&hw_device_ctx);
     av_frame_free(&frame);
+    av_frame_free(&lastFrame);
     av_frame_free(&scratch);
     av_packet_free(&packet);
     avcodec_free_context(&ctx);
@@ -693,6 +702,7 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
   impl->codec = ctx;
   impl->hw_device_ctx = hw_device_ctx;
   impl->frame = frame;
+  impl->lastFrame = lastFrame;
   impl->scratch = scratch;
   impl->packet = packet;
   impl->streamIndex = streamIndex;
@@ -734,6 +744,7 @@ void VideoDecoder::uninit() {
     av_packet_free(&impl_->packet);
   }
   av_frame_free(&impl_->frame);
+  av_frame_free(&impl_->lastFrame);
   av_frame_free(&impl_->scratch);
   if (impl_->codec) {
     avcodec_free_context(&impl_->codec);
@@ -768,8 +779,22 @@ bool VideoDecoder::setTargetSize(int targetWidth, int targetHeight,
 void VideoDecoder::flush() {
   if (!impl_ || !impl_->codec) return;
   avcodec_flush_buffers(impl_->codec);
+  if (impl_->packet) {
+    av_packet_unref(impl_->packet);
+  }
+  impl_->hasPendingPacket = false;
+  if (impl_->frame) {
+    av_frame_unref(impl_->frame);
+  }
+  if (impl_->lastFrame) {
+    av_frame_unref(impl_->lastFrame);
+  }
+  if (impl_->scratch) {
+    av_frame_unref(impl_->scratch);
+  }
   impl_->atEnd = false;
   impl_->eof = false;
+  impl_->consecutiveTransferErrors = 0;
 }
 
 bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
@@ -784,45 +809,51 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
   while (true) {
     int recv = avcodec_receive_frame(impl_->codec, impl_->frame);
     if (recv == 0) {
-      AVFrame* src = impl_->frame;
-      
       // After seek, skip a small number of potentially corrupt frames.
-      // Don't rely on keyframe detection since HW decoders often don't set flags correctly.
+      // Don't rely on keyframe detection since HW decoders often don't set flags
+      // correctly.
       if (impl_->framesAfterSeek < 3) {
         impl_->framesAfterSeek++;
-        av_frame_unref(src);
+        av_frame_unref(impl_->frame);
         continue;
       }
-      
-      if (src->format == AV_PIX_FMT_D3D11) {
-        if (decodePixels) {
-          // Zero-copy path: keep frame on GPU when using shared device
-          if (impl_->useSharedDevice) {
-            // Pass the GPU frame directly without CPU transfer
-            return impl_->emitFrame(out, info, decodePixels, src, true);
-          }
-          
-          // Legacy path: transfer to CPU
+
+      // Keep a reference to the last decoded frame so redecodeLastFrame() works
+      // even when readFrame() is called with decodePixels=false.
+      av_frame_unref(impl_->lastFrame);
+      if (av_frame_ref(impl_->lastFrame, impl_->frame) < 0) {
+        av_frame_unref(impl_->frame);
+        continue;
+      }
+      av_frame_unref(impl_->frame);
+
+      AVFrame* src = impl_->lastFrame;
+      if (src->format == AV_PIX_FMT_D3D11 && decodePixels) {
+        // Zero-copy path: keep frame on GPU when using shared device.
+        if (impl_->useSharedDevice) {
+          return impl_->emitFrame(out, info, decodePixels, src, true);
+        }
+
+        // Legacy path: transfer to CPU.
+        av_frame_unref(impl_->scratch);
+        if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
+          // Try one more time with a fresh unref.
           av_frame_unref(impl_->scratch);
           if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
-            // Try one more time with a fresh unref
-            av_frame_unref(impl_->scratch);
-            if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
-              // Transfer failed. Skip this frame and try next.
-              impl_->consecutiveTransferErrors++;
-              if (impl_->consecutiveTransferErrors > 10) {
-                // Too many failures, assume device lost or bad state.
-                // Return false without setting atEnd to trigger error/fallback.
-                return false;
-              }
-              continue;
+            // Transfer failed. Skip this frame and try next.
+            impl_->consecutiveTransferErrors++;
+            if (impl_->consecutiveTransferErrors > 10) {
+              // Too many failures, assume device lost or bad state.
+              // Return false without setting atEnd to trigger error/fallback.
+              return false;
             }
+            continue;
           }
-          impl_->consecutiveTransferErrors = 0;
-          src = impl_->scratch;
-          src->pts = impl_->frame->pts;
-          src->best_effort_timestamp = impl_->frame->best_effort_timestamp;
         }
+        impl_->consecutiveTransferErrors = 0;
+        impl_->scratch->pts = src->pts;
+        impl_->scratch->best_effort_timestamp = src->best_effort_timestamp;
+        src = impl_->scratch;
       }
       return impl_->emitFrame(out, info, decodePixels, src);
     }
@@ -858,21 +889,15 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       }
 
       int send = avcodec_send_packet(impl_->codec, impl_->packet);
-      if (send == AVERROR(EAGAIN)) {
-        // Decoder is full, but receive returned EAGAIN.
-        // This implies a deadlock or unexpected state.
-        // We cannot send, and we cannot receive.
-        // This is a fatal error for this decoder instance.
-        return false;
-      }
+      if (send != AVERROR(EAGAIN)) {
+        av_packet_unref(impl_->packet);
+        impl_->hasPendingPacket = false;
 
-      av_packet_unref(impl_->packet);
-      impl_->hasPendingPacket = false;
-
-      if (send < 0 && send != AVERROR_EOF) {
-        // Error sending packet (e.g. invalid data).
-        // We dropped the packet and continue to next one.
-        continue;
+        if (send < 0 && send != AVERROR_EOF) {
+          // Error sending packet (e.g. invalid data).
+          // We dropped the packet and continue to next one.
+          continue;
+        }
       }
     }
 
@@ -889,9 +914,9 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
 }
 
 bool VideoDecoder::redecodeLastFrame(VideoFrame& out) {
-  if (!impl_ || !impl_->frame) return false;
+  if (!impl_ || !impl_->lastFrame) return false;
 
-  AVFrame* src = impl_->frame;
+  AVFrame* src = impl_->lastFrame;
   if (src->format == AV_PIX_FMT_D3D11) {
     // Zero-copy path: directly use the GPU frame if shared device is enabled
     if (impl_->useSharedDevice) {
@@ -907,8 +932,8 @@ bool VideoDecoder::redecodeLastFrame(VideoFrame& out) {
       }
     }
     src = impl_->scratch;
-    src->pts = impl_->frame->pts;
-    src->best_effort_timestamp = impl_->frame->best_effort_timestamp;
+    src->pts = impl_->lastFrame->pts;
+    src->best_effort_timestamp = impl_->lastFrame->best_effort_timestamp;
   }
 
   return impl_->emitFrame(out, nullptr, true, src);
@@ -939,7 +964,17 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
 
   if (seekRes < 0) return false;
 
+  avformat_flush(impl_->fmt);
   avcodec_flush_buffers(impl_->codec);
+  if (impl_->frame) {
+    av_frame_unref(impl_->frame);
+  }
+  if (impl_->lastFrame) {
+    av_frame_unref(impl_->lastFrame);
+  }
+  if (impl_->scratch) {
+    av_frame_unref(impl_->scratch);
+  }
   impl_->atEnd = false;
   impl_->eof = false;
   impl_->consecutiveTransferErrors = 0;
