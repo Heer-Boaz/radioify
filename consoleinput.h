@@ -109,7 +109,6 @@ struct InputCallbacks {
   std::function<void()> onResize;
   std::function<void()> onTogglePause;
   std::function<void()> onToggleRadio;
-  std::function<void()> onCycleDebugTap;
   std::function<void(int)> onSeekBy;
   std::function<void(double)> onSeekToRatio;
   std::function<bool(const std::filesystem::path&)> onPlayFile;

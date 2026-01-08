@@ -549,9 +549,6 @@ int main(int argc, char** argv) {
   callbacks.onToggleRadio = [&]() {
     audioToggleRadio();
   };
-  callbacks.onCycleDebugTap = [&]() {
-    audioCycleDebugTap();
-  };
   callbacks.onSeekBy = [&](int direction) { audioSeekBy(direction); };
   callbacks.onSeekToRatio = [&](double ratio) { audioSeekToRatio(ratio); };
   callbacks.onResize = [&]() { rebuildLayout(); };
@@ -654,23 +651,19 @@ int main(int argc, char** argv) {
             fitLine("  Mouse=select  Click=play/enter  Backspace=up  "
                     "Click+drag bar=seek  Space=pause  Arrows=move  "
                     "PgUp/PgDn=page  "
-                    "Ctrl+Left/Right=seek  R=toggle  D=tap  T=view  Q=quit",
+                    "Ctrl+Left/Right=seek  R=toggle  T=view  Q=quit",
                     width),
             kStyleNormal);
       } else {
         screen.writeText(
             0, 2,
             fitLine("  Mouse=select  Click=render/enter  Backspace=up  "
-                    "Arrows=move  PgUp/PgDn=page  R=toggle  D=tap  T=view  Q=quit",
+                    "Arrows=move  PgUp/PgDn=page  R=toggle  T=view  Q=quit",
                     width),
             kStyleNormal);
       }
       std::string filterLabel =
           audioIsRadioEnabled() ? "1938 radio" : "dry";
-      int debugTap = audioGetDebugTap();
-      int debugTapMax = audioGetDebugTapMax();
-      filterLabel += "  tap " + std::to_string(debugTap) + "/" +
-                     std::to_string(debugTapMax);
       screen.writeText(0, 3,
                        fitLine(std::string("  Filter: ") + filterLabel, width),
                        kStyleDim);

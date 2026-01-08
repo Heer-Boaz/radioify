@@ -1,7 +1,6 @@
 #include "radio.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 
 static constexpr bool kEnableRadioArtifacts = true;
@@ -13,8 +12,6 @@ static constexpr bool kEnableHumTone = false;
 static constexpr bool kEnableAMDetector = true;
 static constexpr bool kEnableNoiseHum = true;
 static constexpr bool kBypassRadio1938 = false;
-static constexpr int kDebugTapMax = 5;
-static std::atomic<int> gDebugTap{0};
 static constexpr float kOversampleFactor = 2.0f;
 static constexpr float kIfNoiseMix = 0.70f;
 static constexpr float kPostNoiseMix = 0.30f;
@@ -40,24 +37,6 @@ static inline float diodeColor(float x, float drop) {
   float curve = 1.0f + 0.35f * shaped;
   return sign * shaped * curve;
 }
-
-void radioSetDebugTap(int tap) {
-  tap = std::clamp(tap, 0, kDebugTapMax);
-  gDebugTap.store(tap, std::memory_order_relaxed);
-}
-
-void radioCycleDebugTap() {
-  int current = gDebugTap.load(std::memory_order_relaxed);
-  int next = current + 1;
-  if (next > kDebugTapMax) next = 0;
-  gDebugTap.store(next, std::memory_order_relaxed);
-}
-
-int radioGetDebugTap() {
-  return gDebugTap.load(std::memory_order_relaxed);
-}
-
-int radioGetDebugTapMax() { return kDebugTapMax; }
 
 template <typename Nonlinear>
 static inline float processOversampled2x(float x,
@@ -695,7 +674,6 @@ void Radio1938::process(float* samples, uint32_t frames) {
     am.setBandwidth(tunedBw);
     noiseHum.setFs(sampleRate, tunedBw);
   }
-  const int debugTap = radioGetDebugTap();
   for (uint32_t f = 0; f < frames; ++f) {
     float inL = samples[f * channels];
     float inR = (channels > 1) ? samples[f * channels + 1] : inL;
@@ -849,10 +827,6 @@ void Radio1938::process(float* samples, uint32_t frames) {
       float mix = std::clamp(adjMix * (offT * offT), 0.0f, 0.20f);
       y += mix * adjOut;
     }
-    if (debugTap == 1) {
-      writeOut(y);
-      continue;
-    }
     am.ifNoiseAmp =
         kEnableRadioArtifacts ? (noiseBase * noiseScale * kIfNoiseMix) : 0.0f;
     if (kEnableAMDetector) {
@@ -875,10 +849,6 @@ void Radio1938::process(float* samples, uint32_t frames) {
     float sagT = clampf((sagEnv - sagStart) / (sagEnd - sagStart), 0.0f, 1.0f);
     float sagGain = 1.0f - sagDepth * sagT;
     y *= sagGain;
-    if (debugTap == 2) {
-      writeOut(y);
-      continue;
-    }
     if (kEnableRadioArtifacts) {
       y *= fade;
 
@@ -919,20 +889,12 @@ void Radio1938::process(float* samples, uint32_t frames) {
         }
       }
     }
-    if (debugTap == 3) {
-      writeOut(y);
-      continue;
-    }
     if (kEnableNoiseHum) {
       y += noiseHum.process(y);
     }
     y = processOversampled2x(y, speakerOsPrev, speakerOsLp1, speakerOsLp2,
                              [&](float v) { return speaker.process(v); });
     y = postLpf2.process(y);
-    if (debugTap == 4) {
-      writeOut(y);
-      continue;
-    }
     if (!roomBuf.empty()) {
       float dry = y;
       float roomOut = 0.0f;
@@ -967,10 +929,6 @@ void Radio1938::process(float* samples, uint32_t frames) {
         tail = tailLp;
         y += roomTailMix * tail;
       }
-    }
-    if (debugTap == 5) {
-      writeOut(y);
-      continue;
     }
     y = processOversampled2x(y, clipOsPrev, clipOsLp1, clipOsLp2,
                              [&](float v) { return softClip(v, 0.985f); });

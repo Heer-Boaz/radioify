@@ -279,11 +279,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       dirty = true;
       return;
     }
-    if (key.vk == 'D' || key.ch == 'd' || key.ch == 'D') {
-      if (callbacks.onCycleDebugTap) callbacks.onCycleDebugTap();
-      dirty = true;
-      return;
-    }
     if (key.vk == 'T' || key.ch == 't' || key.ch == 'T') {
       browser.viewMode = nextViewMode(browser.viewMode);
       dirty = true;

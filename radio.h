@@ -294,9 +294,4 @@ struct Radio1938 {
   void process(float* samples, uint32_t frames);
 };
 
-void radioSetDebugTap(int tap);
-void radioCycleDebugTap();
-int radioGetDebugTap();
-int radioGetDebugTapMax();
-
 #endif
