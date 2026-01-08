@@ -79,7 +79,6 @@ bool openInputWithProbe(const std::filesystem::path& path,
     return false;
   }
 
-  (*outFmt)->flags |= AVFMT_FLAG_NOBUFFER;
   (*outFmt)->max_analyze_duration = analyzeDurationUs;
   (*outFmt)->probesize = kProbeSize;
   return true;

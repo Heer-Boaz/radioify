@@ -1429,6 +1429,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     size_t needed =
         static_cast<size_t>(std::ceil(kPresentIntervalSec / frameDurSec)) + 2;
     if (needed < 3) needed = 3;
+    constexpr size_t kMinQueuedFrames = 6;
+    if (needed < kMinQueuedFrames) needed = kMinQueuedFrames;
     if (needed > kMaxQueuedFrames) needed = kMaxQueuedFrames;
     maxQueue.store(needed, std::memory_order_relaxed);
   };
@@ -1500,6 +1502,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           audioSyncBiasValid ? audioSyncBiasSec : audioStartOffsetSec;
       gateSec = std::max(0.0, rawSec - gateBias);
     }
+    bool audioSeeking = audioOk && audioIsSeeking();
+    double audioSeekTargetSec =
+        audioSeeking ? audioGetSeekTargetSec() : -1.0;
+    if (audioSeeking && audioSeekTargetSec >= 0.0) {
+      gateSec = std::max(gateSec, audioSeekTargetSec);
+    }
     double totalSec = totalDurationSec();
     if (totalSec > 0.0) {
       currentSec = std::clamp(currentSec, 0.0, totalSec);
@@ -1518,7 +1526,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     prepGate.ensure(primedToken, audioOk && !audioPrimed, kGateAudioPrimed);
 
     bool shouldCheckTimestamp =
-        prepPresentToken.active && audioOk && !audioHoldActive;
+        prepPresentToken.active && audioOk && !audioHoldActive && !audioSeeking;
     bool timestampBlocked =
         shouldBlockTimestamp(shouldCheckTimestamp, gateSec, kLeadSlackSec,
                              frameSec);
@@ -1803,7 +1811,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         std::string sizeLine =
             "Video size: " + std::to_string(frame->width) + "x" +
             std::to_string(frame->height);
-        screen.writeText(0, artTop + 1, fitLine(sizeLine, width), dimStyle);
+            screen.writeText(0, artTop + 1, fitLine(sizeLine, width), dimStyle);
       }
     }
 
@@ -2110,6 +2118,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     } else {
       syncSec = std::chrono::duration<double>(now - startTime).count();
     }
+    bool audioSeeking = haveAudioClock && audioIsSeeking();
+    double audioSeekTargetSec =
+        audioSeeking ? audioGetSeekTargetSec() : -1.0;
+    if (audioSeeking && audioSeekTargetSec >= 0.0) {
+      syncSec = std::max(syncSec, audioSeekTargetSec);
+    }
     const double leadSlack = kLeadSlackSec;
     bool waitingForAudioStart =
         haveAudioClock && !audioPrimed && audioNow <= 0.0;
@@ -2220,8 +2234,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                                            : (wallclockElapsed - lastFrameSec);
 
       if (!inResumeGrace && !decodeEnded.load() && haveAudioClock &&
-          driftForSkip > hardResyncThreshold && !commandPendingAtomic.load() &&
-          now >= resyncCooldownUntil) {
+          !audioSeeking && driftForSkip > hardResyncThreshold &&
+          !commandPendingAtomic.load() && now >= resyncCooldownUntil) {
         double targetSec = std::max(0.0, syncSec);
         int64_t targetTs =
             firstTs + static_cast<int64_t>(targetSec * secondsToTicks);
@@ -2317,8 +2331,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           notifyQueue = popped > 0;
 
           if (!inResumeGrace && queueEmpty && haveAudioClock &&
-              driftForSkip > syncTolerance && !commandPendingAtomic.load() &&
-              !decodeEnded.load()) {
+              !audioSeeking && driftForSkip > syncTolerance &&
+              !commandPendingAtomic.load() && !decodeEnded.load()) {
             int64_t targetTs =
                 firstTs + static_cast<int64_t>(syncSec * secondsToTicks);
             requestFastForward(targetTs);
