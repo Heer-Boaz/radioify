@@ -674,12 +674,6 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     } else if (srcDesc.Format == DXGI_FORMAT_P010) {
         fmtLabel = "P010";
     }
-    {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "path=gpu_copy fmt=%s bind=0x%X",
-                      fmtLabel, static_cast<unsigned int>(srcDesc.BindFlags));
-        m_lastNv12TextureDetail = buf;
-    }
 
     // Check device compatibility
     Microsoft::WRL::ComPtr<ID3D11Device> texDevice;
@@ -715,91 +709,135 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
         return false;
     }
 
-    // FFmpeg D3D11VA textures are created with D3D11_BIND_DECODER, not D3D11_BIND_SHADER_RESOURCE.
-    // We need to copy to our own texture that has shader resource binding.
-    // This is still a fast GPU-to-GPU copy (~0.5ms for 4K vs ~20-30ms for CPU transfer).
-    
-    // Create/reuse our copy texture with SHADER_RESOURCE binding
-    bool needNewCopyTexture = false;
-    if (!m_hwCopyTexture) {
-        needNewCopyTexture = true;
-    } else {
-        D3D11_TEXTURE2D_DESC copyDesc;
-        m_hwCopyTexture->GetDesc(&copyDesc);
-        if (copyDesc.Width != srcDesc.Width || copyDesc.Height != srcDesc.Height || 
-            copyDesc.Format != srcDesc.Format) {
-            needNewCopyTexture = true;
-        }
-    }
-    
-    if (needNewCopyTexture) {
-        m_hwCopyTexture.Reset();
-        m_hwCopySrvY.Reset();
-        m_hwCopySrvUV.Reset();
-        
-        D3D11_TEXTURE2D_DESC copyDesc = {};
-        copyDesc.Width = srcDesc.Width;
-        copyDesc.Height = srcDesc.Height;
-        copyDesc.MipLevels = 1;
-        copyDesc.ArraySize = 1;
-        copyDesc.Format = srcDesc.Format;
-        copyDesc.SampleDesc.Count = 1;
-        copyDesc.Usage = D3D11_USAGE_DEFAULT;
-        copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        
-        HRESULT hr = m_device->CreateTexture2D(&copyDesc, nullptr, &m_hwCopyTexture);
-        if (FAILED(hr)) {
-            if (error) *error = "Failed to create GPU copy texture";
-            return false;
-        }
-        
-        // Create Y plane SRV
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvY;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvUV;
+    bool usingZeroCopy = false;
+    const bool canUseSrv = (srcDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) != 0;
+
+    if (canUseSrv) {
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
         srvDescY.Format = isP010 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
-        srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srvDescY.Texture2D.MostDetailedMip = 0;
-        srvDescY.Texture2D.MipLevels = 1;
-        
-        hr = m_device->CreateShaderResourceView(m_hwCopyTexture.Get(), &srvDescY, &m_hwCopySrvY);
-        if (FAILED(hr)) {
-            if (error) *error = "Failed to create Y plane SRV for copy texture";
-            return false;
+        if (srcDesc.ArraySize > 1) {
+            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+            srvDescY.Texture2DArray.MostDetailedMip = 0;
+            srvDescY.Texture2DArray.MipLevels = 1;
+            srvDescY.Texture2DArray.FirstArraySlice = arrayIndex;
+            srvDescY.Texture2DArray.ArraySize = 1;
+        } else {
+            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDescY.Texture2D.MostDetailedMip = 0;
+            srvDescY.Texture2D.MipLevels = 1;
         }
-        
-        // Create UV plane SRV
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = {};
-        srvDescUV.Format = isP010 ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-        srvDescUV.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srvDescUV.Texture2D.MostDetailedMip = 0;
-        srvDescUV.Texture2D.MipLevels = 1;
-        
-        hr = m_device->CreateShaderResourceView(m_hwCopyTexture.Get(), &srvDescUV, &m_hwCopySrvUV);
-        if (FAILED(hr)) {
-            if (error) *error = "Failed to create UV plane SRV for copy texture";
-            return false;
-        }
-    }
-    
-    // GPU-to-GPU copy from FFmpeg's decoder texture to our shader-readable texture
-    if (srcDesc.ArraySize > 1) {
-        // Array texture: copy specific slice
-        m_context->CopySubresourceRegion(
-            m_hwCopyTexture.Get(), 0, 0, 0, 0,
-            texture, D3D11CalcSubresource(0, arrayIndex, 1),
-            nullptr);
-    } else {
-        // Single texture: direct copy
-        m_context->CopyResource(m_hwCopyTexture.Get(), texture);
-    }
-    m_lastNv12TexturePath = "gpu_copy";
-    
-    // Ensure copy is complete before shader reads from texture
-    // This is important for stability after seeks when texture pool state changes
-    m_context->Flush();
 
-    // Now render using our copy texture's SRVs
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvY = m_hwCopySrvY;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvUV = m_hwCopySrvUV;
+        HRESULT hr = m_device->CreateShaderResourceView(texture, &srvDescY, &srvY);
+        if (SUCCEEDED(hr)) {
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = {};
+            srvDescUV.Format = isP010 ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+            if (srcDesc.ArraySize > 1) {
+                srvDescUV.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+                srvDescUV.Texture2DArray.MostDetailedMip = 0;
+                srvDescUV.Texture2DArray.MipLevels = 1;
+                srvDescUV.Texture2DArray.FirstArraySlice = arrayIndex;
+                srvDescUV.Texture2DArray.ArraySize = 1;
+            } else {
+                srvDescUV.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                srvDescUV.Texture2D.MostDetailedMip = 0;
+                srvDescUV.Texture2D.MipLevels = 1;
+            }
+
+            hr = m_device->CreateShaderResourceView(texture, &srvDescUV, &srvUV);
+            if (SUCCEEDED(hr)) {
+                usingZeroCopy = true;
+                m_lastNv12TexturePath = "zero_copy";
+            } else {
+                srvY.Reset();
+            }
+        }
+    }
+
+    if (!usingZeroCopy) {
+        // FFmpeg D3D11VA textures often lack D3D11_BIND_SHADER_RESOURCE.
+        // Copy to our own texture with shader resource binding.
+        bool needNewCopyTexture = false;
+        if (!m_hwCopyTexture) {
+            needNewCopyTexture = true;
+        } else {
+            D3D11_TEXTURE2D_DESC copyDesc;
+            m_hwCopyTexture->GetDesc(&copyDesc);
+            if (copyDesc.Width != srcDesc.Width || copyDesc.Height != srcDesc.Height ||
+                copyDesc.Format != srcDesc.Format) {
+                needNewCopyTexture = true;
+            }
+        }
+
+        if (needNewCopyTexture) {
+            m_hwCopyTexture.Reset();
+            m_hwCopySrvY.Reset();
+            m_hwCopySrvUV.Reset();
+
+            D3D11_TEXTURE2D_DESC copyDesc = {};
+            copyDesc.Width = srcDesc.Width;
+            copyDesc.Height = srcDesc.Height;
+            copyDesc.MipLevels = 1;
+            copyDesc.ArraySize = 1;
+            copyDesc.Format = srcDesc.Format;
+            copyDesc.SampleDesc.Count = 1;
+            copyDesc.Usage = D3D11_USAGE_DEFAULT;
+            copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+            HRESULT hr = m_device->CreateTexture2D(&copyDesc, nullptr, &m_hwCopyTexture);
+            if (FAILED(hr)) {
+                if (error) *error = "Failed to create GPU copy texture";
+                return false;
+            }
+
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
+            srvDescY.Format = isP010 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDescY.Texture2D.MostDetailedMip = 0;
+            srvDescY.Texture2D.MipLevels = 1;
+
+            hr = m_device->CreateShaderResourceView(m_hwCopyTexture.Get(), &srvDescY, &m_hwCopySrvY);
+            if (FAILED(hr)) {
+                if (error) *error = "Failed to create Y plane SRV for copy texture";
+                return false;
+            }
+
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = {};
+            srvDescUV.Format = isP010 ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+            srvDescUV.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDescUV.Texture2D.MostDetailedMip = 0;
+            srvDescUV.Texture2D.MipLevels = 1;
+
+            hr = m_device->CreateShaderResourceView(m_hwCopyTexture.Get(), &srvDescUV, &m_hwCopySrvUV);
+            if (FAILED(hr)) {
+                if (error) *error = "Failed to create UV plane SRV for copy texture";
+                return false;
+            }
+        }
+
+        if (srcDesc.ArraySize > 1) {
+            m_context->CopySubresourceRegion(
+                m_hwCopyTexture.Get(), 0, 0, 0, 0,
+                texture, D3D11CalcSubresource(0, arrayIndex, 1),
+                nullptr);
+        } else {
+            m_context->CopyResource(m_hwCopyTexture.Get(), texture);
+        }
+
+        m_lastNv12TexturePath = "gpu_copy";
+        m_context->Flush();
+        srvY = m_hwCopySrvY;
+        srvUV = m_hwCopySrvUV;
+    }
+
+    {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "path=%s fmt=%s bind=0x%X",
+                      m_lastNv12TexturePath, fmtLabel,
+                      static_cast<unsigned int>(srcDesc.BindFlags));
+        m_lastNv12TextureDetail = buf;
+    }
 
     // Update Constants
     D3D11_MAPPED_SUBRESOURCE mapped;

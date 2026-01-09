@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 
@@ -37,6 +38,13 @@ bool audioIsReady();
 bool audioStartFile(const std::filesystem::path& file);
 bool audioStartFileAt(const std::filesystem::path& file, double startSec);
 void audioStop();
+bool audioStartStream(uint64_t totalFrames);
+void audioStopStream();
+size_t audioStreamBufferedFrames();
+size_t audioStreamCapacityFrames();
+size_t audioStreamWrite(const float* interleaved, size_t frames);
+void audioStreamSetEnd(bool atEnd);
+void audioStreamReset(uint64_t framePos);
 
 std::filesystem::path audioGetNowPlaying();
 
