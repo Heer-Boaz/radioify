@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <cctype>
 #include <cstring>
-#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -92,74 +91,76 @@ struct AudioRingBuffer {
   size_t bufferedFrames = 0;
 };
 
-struct AudioFrame {
-  std::vector<float> samples;
-  size_t frames = 0;
-  int64_t ptsUs = 0;
-  int64_t durationUs = 0;
-  int serial = 0;
-};
+struct AudioSampleRing {
+  std::vector<float> buf;
+  uint32_t channels = 0;
+  uint64_t capFrames = 0;
+  std::atomic<uint64_t> rpos{0};
+  std::atomic<uint64_t> wpos{0};
 
-struct AudioFrameQueue {
-  std::mutex mutex;
-  std::condition_variable cv;
-  std::deque<AudioFrame> frames;
-  size_t maxBufferedFrames = 0;
-  size_t bufferedFrames = 0;
-  bool aborted = false;
-
-  void init(size_t maxFrames) {
-    std::lock_guard<std::mutex> lock(mutex);
-    maxBufferedFrames = maxFrames;
-    bufferedFrames = 0;
-    aborted = false;
-    frames.clear();
+  void init(uint64_t capacityFrames, uint32_t ch) {
+    channels = ch;
+    capFrames = capacityFrames;
+    buf.assign(capFrames * channels, 0.0f);
+    rpos.store(0, std::memory_order_relaxed);
+    wpos.store(0, std::memory_order_relaxed);
   }
 
-  void abort() {
-    std::lock_guard<std::mutex> lock(mutex);
-    aborted = true;
-    cv.notify_all();
+  void reset() {
+    rpos.store(0, std::memory_order_release);
+    wpos.store(0, std::memory_order_release);
   }
 
-  void flush() {
-    std::lock_guard<std::mutex> lock(mutex);
-    frames.clear();
-    bufferedFrames = 0;
-    cv.notify_all();
+  uint64_t bufferedFrames() const {
+    uint64_t w = wpos.load(std::memory_order_acquire);
+    uint64_t r = rpos.load(std::memory_order_acquire);
+    return w - r;
   }
 
-  bool push(AudioFrame&& frame) {
-    if (frame.frames == 0) return false;
-    std::unique_lock<std::mutex> lock(mutex);
-    cv.wait(lock, [&]() {
-      return aborted || bufferedFrames + frame.frames <= maxBufferedFrames;
-    });
-    if (aborted) return false;
-    bufferedFrames += frame.frames;
-    frames.push_back(std::move(frame));
-    cv.notify_all();
-    return true;
+  uint64_t writableFrames() const {
+    return capFrames - bufferedFrames();
   }
 
-  bool pop(AudioFrame* out) {
-    if (!out) return false;
-    std::lock_guard<std::mutex> lock(mutex);
-    if (frames.empty()) return false;
-    *out = std::move(frames.front());
-    frames.pop_front();
-    if (out->frames <= bufferedFrames) {
-      bufferedFrames -= out->frames;
-    } else {
-      bufferedFrames = 0;
+  uint64_t writeSome(const float* in, uint64_t frames) {
+    uint64_t w = wpos.load(std::memory_order_relaxed);
+    uint64_t r = rpos.load(std::memory_order_acquire);
+    uint64_t avail = capFrames - (w - r);
+    if (avail == 0) return 0;
+    uint64_t n = (frames < avail) ? frames : avail;
+
+    uint64_t wi = w % capFrames;
+    uint64_t first = std::min<uint64_t>(n, capFrames - wi);
+
+    std::memcpy(buf.data() + wi * channels, in,
+                first * channels * sizeof(float));
+    if (n > first) {
+      std::memcpy(buf.data(), in + first * channels,
+                  (n - first) * channels * sizeof(float));
     }
-    cv.notify_all();
-    return true;
+
+    wpos.store(w + n, std::memory_order_release);
+    return n;
   }
 
-  size_t sizeFrames() {
-    std::lock_guard<std::mutex> lock(mutex);
-    return bufferedFrames;
+  uint64_t readSome(float* out, uint64_t frames) {
+    uint64_t r = rpos.load(std::memory_order_relaxed);
+    uint64_t w = wpos.load(std::memory_order_acquire);
+    uint64_t avail = w - r;
+    if (avail == 0) return 0;
+    uint64_t n = (frames < avail) ? frames : avail;
+
+    uint64_t ri = r % capFrames;
+    uint64_t first = std::min<uint64_t>(n, capFrames - ri);
+
+    std::memcpy(out, buf.data() + ri * channels,
+                first * channels * sizeof(float));
+    if (n > first) {
+      std::memcpy(out + first * channels, buf.data(),
+                  (n - first) * channels * sizeof(float));
+    }
+
+    rpos.store(r + n, std::memory_order_release);
+    return n;
   }
 };
 
@@ -276,19 +277,16 @@ struct AudioState {
   std::atomic<uint64_t> audioTrailingPaddingFrames{0};
   std::atomic<uint64_t> audioLeadSilenceFrames{0};
   std::atomic<bool> audioPrimed{false};
-  AudioFrameQueue streamQueue;
+  AudioSampleRing streamRb;
   std::atomic<bool> streamQueueEnabled{false};
-  std::atomic<int> streamTargetSerial{0};
+  std::atomic<int> streamSerial{0};
+  std::atomic<bool> streamBaseValid{false};
+  std::atomic<int64_t> streamBasePtsUs{0};
+  std::atomic<uint64_t> streamReadFrames{0};
   std::atomic<bool> streamClockReady{false};
   std::atomic<bool> streamStarved{false};
-  std::atomic<Clock*> streamClock{nullptr};
-  AudioFrame streamCurrent;
-  size_t streamOffsetFrames = 0;
-  bool streamHasCurrent = false;
-  int streamCurrentSerial = 0;
-  uint64_t streamPlayedFrames = 0;
-  int64_t streamBasePtsUs = 0;
-  bool streamBaseValid = false;
+  uint64_t deviceDelayFrames = 0;
+  Clock audioClock;
   uint32_t channels = 1;
   uint32_t sampleRate = 48000;
   bool dry = false;
@@ -328,74 +326,21 @@ void dataCallback(ma_device* device, void* output, const void*,
   if (useStreamQueue) {
     const uint32_t channels = state->channels;
     const bool paused = state->paused.load() || state->hold.load();
-    int targetSerial = state->streamTargetSerial.load(std::memory_order_relaxed);
-    if (state->streamCurrentSerial != targetSerial) {
-      state->streamCurrentSerial = targetSerial;
-      state->streamHasCurrent = false;
-      state->streamOffsetFrames = 0;
-      state->streamPlayedFrames = 0;
-      state->streamBasePtsUs = 0;
-      state->streamBaseValid = false;
-      state->streamClockReady.store(false, std::memory_order_relaxed);
-    }
     if (paused) {
       state->pausedCallbacks.fetch_add(1, std::memory_order_relaxed);
       state->silentFrames.fetch_add(frameCount, std::memory_order_relaxed);
       state->lastFramesRead.store(0, std::memory_order_relaxed);
       std::fill(out, out + frameCount * channels, 0.0f);
-      Clock* clock = state->streamClock.load(std::memory_order_relaxed);
-      if (clock) {
-        clock->set_paused(true, nowUs());
-      }
+      state->audioClock.set_paused(true, nowUs());
       state->streamStarved.store(false, std::memory_order_relaxed);
       return;
     }
 
-    uint32_t framesRemaining = frameCount;
-    float* outCursor = out;
-    uint64_t framesRead = 0;
-    bool starved = false;
-
-    while (framesRemaining > 0) {
-      if (!state->streamHasCurrent ||
-          state->streamOffsetFrames >= state->streamCurrent.frames) {
-        state->streamHasCurrent = false;
-        state->streamOffsetFrames = 0;
-        AudioFrame next;
-        if (!state->streamQueue.pop(&next)) {
-          starved = true;
-          std::fill(outCursor, outCursor + framesRemaining * channels, 0.0f);
-          framesRemaining = 0;
-          break;
-        }
-        if (next.serial != targetSerial) {
-          continue;
-        }
-        if (state->streamCurrentSerial != next.serial ||
-            !state->streamBaseValid) {
-          state->streamCurrentSerial = next.serial;
-          state->streamPlayedFrames = 0;
-          state->streamBasePtsUs = next.ptsUs;
-          state->streamBaseValid = true;
-          state->streamClockReady.store(false, std::memory_order_relaxed);
-        }
-        state->streamCurrent = std::move(next);
-        state->streamHasCurrent = true;
-        state->streamOffsetFrames = 0;
-      }
-
-      size_t available =
-          state->streamCurrent.frames - state->streamOffsetFrames;
-      size_t toCopy = std::min<size_t>(framesRemaining, available);
-      std::memcpy(outCursor,
-                  state->streamCurrent.samples.data() +
-                      state->streamOffsetFrames * channels,
-                  toCopy * channels * sizeof(float));
-      outCursor += toCopy * channels;
-      framesRemaining -= static_cast<uint32_t>(toCopy);
-      state->streamOffsetFrames += toCopy;
-      framesRead += toCopy;
-      state->streamPlayedFrames += toCopy;
+    uint64_t framesRead =
+        state->streamRb.readSome(out, static_cast<uint64_t>(frameCount));
+    if (framesRead < frameCount) {
+      std::fill(out + framesRead * channels,
+                out + frameCount * channels, 0.0f);
     }
 
     if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
@@ -413,22 +358,24 @@ void dataCallback(ma_device* device, void* output, const void*,
                                     std::memory_order_relaxed);
     }
 
-    Clock* clock = state->streamClock.load(std::memory_order_relaxed);
-    if (clock) {
-      int64_t now = nowUs();
-      if (framesRead > 0 && state->streamBaseValid) {
-        int64_t baseUs = state->streamBasePtsUs;
-        int64_t clockUs =
-            baseUs + static_cast<int64_t>(
-                         state->streamPlayedFrames * 1000000ULL /
-                         static_cast<uint64_t>(state->sampleRate));
-        clock->set(clockUs, now);
-        clock->set_paused(false, now);
-        state->streamClockReady.store(true, std::memory_order_relaxed);
-      } else if (starved) {
-        clock->set_paused(true, now);
-      }
+    uint64_t played =
+        state->streamReadFrames.fetch_add(framesRead,
+                                          std::memory_order_relaxed) +
+        framesRead;
+    if (framesRead > 0 && state->streamBaseValid.load()) {
+      uint64_t delay = state->deviceDelayFrames;
+      uint64_t effective = (played > delay) ? (played - delay) : 0;
+      int64_t baseUs = state->streamBasePtsUs.load(std::memory_order_relaxed);
+      int64_t clockUs =
+          baseUs + static_cast<int64_t>(
+                       effective * 1000000ULL /
+                       static_cast<uint64_t>(state->sampleRate));
+      state->audioClock.set(clockUs, nowUs(),
+                            state->streamSerial.load(std::memory_order_relaxed));
+      state->streamClockReady.store(true, std::memory_order_relaxed);
     }
+
+    bool starved = framesRead < frameCount;
     state->streamStarved.store(starved, std::memory_order_relaxed);
     if (starved && state->m4aAtEnd.load()) {
       state->finished.store(true);
@@ -1008,24 +955,15 @@ void stopPlayback() {
   gAudio.state.paused.store(false);
   gAudio.state.hold.store(false);
   gAudio.state.externalStream.store(false);
-  gAudio.state.streamQueue.abort();
-  gAudio.state.streamQueue.flush();
   gAudio.state.streamQueueEnabled.store(false);
-  gAudio.state.streamClock.store(nullptr);
-  gAudio.state.streamTargetSerial.store(0);
+  gAudio.state.streamSerial.store(0);
+  gAudio.state.streamBaseValid.store(false);
+  gAudio.state.streamBasePtsUs.store(0);
+  gAudio.state.streamReadFrames.store(0);
   gAudio.state.streamClockReady.store(false);
   gAudio.state.streamStarved.store(false);
-  gAudio.state.streamHasCurrent = false;
-  gAudio.state.streamOffsetFrames = 0;
-  gAudio.state.streamCurrent.samples.clear();
-  gAudio.state.streamCurrent.frames = 0;
-  gAudio.state.streamCurrent.durationUs = 0;
-  gAudio.state.streamCurrent.ptsUs = 0;
-  gAudio.state.streamCurrent.serial = 0;
-  gAudio.state.streamCurrentSerial = 0;
-  gAudio.state.streamPlayedFrames = 0;
-  gAudio.state.streamBasePtsUs = 0;
-  gAudio.state.streamBaseValid = false;
+  gAudio.state.streamRb.reset();
+  gAudio.state.audioClock.reset(0);
   gAudio.nowPlaying.clear();
 }
 }  // namespace
@@ -1107,23 +1045,15 @@ bool audioStartStream(uint64_t totalFrames) {
     gAudio.state.m4aInitOk = true;
     gAudio.state.m4aInitError.clear();
   }
-  gAudio.state.streamQueue.init(rbFrames);
+  gAudio.state.streamRb.init(rbFrames, gAudio.channels);
   gAudio.state.streamQueueEnabled.store(true);
-  gAudio.state.streamTargetSerial.store(0);
+  gAudio.state.streamSerial.store(0);
+  gAudio.state.streamBaseValid.store(false);
+  gAudio.state.streamBasePtsUs.store(0);
+  gAudio.state.streamReadFrames.store(0);
   gAudio.state.streamClockReady.store(false);
   gAudio.state.streamStarved.store(false);
-  gAudio.state.streamClock.store(nullptr);
-  gAudio.state.streamHasCurrent = false;
-  gAudio.state.streamOffsetFrames = 0;
-  gAudio.state.streamCurrent.samples.clear();
-  gAudio.state.streamCurrent.frames = 0;
-  gAudio.state.streamCurrent.durationUs = 0;
-  gAudio.state.streamCurrent.ptsUs = 0;
-  gAudio.state.streamCurrent.serial = 0;
-  gAudio.state.streamCurrentSerial = 0;
-  gAudio.state.streamPlayedFrames = 0;
-  gAudio.state.streamBasePtsUs = 0;
-  gAudio.state.streamBaseValid = false;
+  gAudio.state.audioClock.reset(0);
   gAudio.state.m4aThreadRunning.store(false);
   gAudio.state.m4aStop.store(false);
   gAudio.state.m4aAtEnd.store(false);
@@ -1177,6 +1107,10 @@ bool audioStartStream(uint64_t totalFrames) {
     }
   }
 
+  gAudio.state.deviceDelayFrames =
+      static_cast<uint64_t>(gAudio.state.device.playback.internalPeriodSizeInFrames) *
+      static_cast<uint64_t>(gAudio.state.device.playback.internalPeriods);
+
   gAudio.nowPlaying.clear();
   return true;
 }
@@ -1192,7 +1126,7 @@ size_t audioStreamBufferedFrames() {
   if (!gAudio.state.streamQueueEnabled.load()) {
     return 0;
   }
-  return gAudio.state.streamQueue.sizeFrames();
+  return static_cast<size_t>(gAudio.state.streamRb.bufferedFrames());
 }
 
 size_t audioStreamCapacityFrames() {
@@ -1202,11 +1136,11 @@ size_t audioStreamCapacityFrames() {
   if (!gAudio.state.streamQueueEnabled.load()) {
     return 0;
   }
-  return gAudio.state.streamQueue.maxBufferedFrames;
+  return static_cast<size_t>(gAudio.state.streamRb.capFrames);
 }
 
-bool audioStreamPushFrame(const float* interleaved, size_t frames,
-                          int64_t ptsUs, int64_t durationUs, int serial) {
+bool audioStreamWriteSamples(const float* interleaved, uint64_t frames,
+                             int64_t ptsUs, int serial) {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
     return false;
   }
@@ -1216,23 +1150,34 @@ bool audioStreamPushFrame(const float* interleaved, size_t frames,
   if (!interleaved || frames == 0) {
     return false;
   }
-  if (durationUs <= 0 && gAudio.sampleRate > 0) {
-    durationUs = static_cast<int64_t>(
-        (static_cast<uint64_t>(frames) * 1000000ULL) /
-        static_cast<uint64_t>(gAudio.sampleRate));
+  if (serial != gAudio.state.streamSerial.load(std::memory_order_relaxed)) {
+    return true;
   }
-  AudioFrame frame;
-  frame.frames = frames;
-  frame.ptsUs = ptsUs;
-  frame.durationUs = durationUs;
-  frame.serial = serial;
-  frame.samples.assign(interleaved,
-                       interleaved + frames * gAudio.channels);
-  bool ok = gAudio.state.streamQueue.push(std::move(frame));
-  if (ok) {
-    gAudio.state.m4aCv.notify_one();
+  if (!gAudio.state.streamBaseValid.load(std::memory_order_relaxed)) {
+    gAudio.state.streamBasePtsUs.store(ptsUs, std::memory_order_relaxed);
+    gAudio.state.streamBaseValid.store(true, std::memory_order_relaxed);
+    gAudio.state.streamReadFrames.store(0, std::memory_order_relaxed);
+    gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
   }
-  return ok;
+  uint64_t remaining = frames;
+  const float* cursor = interleaved;
+  while (remaining > 0) {
+    if (serial != gAudio.state.streamSerial.load(std::memory_order_relaxed)) {
+      return true;
+    }
+    if (!gAudio.state.externalStream.load() ||
+        !gAudio.state.streamQueueEnabled.load()) {
+      return false;
+    }
+    uint64_t written = gAudio.state.streamRb.writeSome(cursor, remaining);
+    if (written == 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
+    }
+    remaining -= written;
+    cursor += static_cast<size_t>(written) * gAudio.channels;
+  }
+  return true;
 }
 
 void audioStreamSetEnd(bool atEnd) {
@@ -1246,7 +1191,7 @@ void audioStreamReset(uint64_t framePos) {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
     return;
   }
-  gAudio.state.streamQueue.flush();
+  gAudio.state.streamRb.reset();
   gAudio.state.framesPlayed.store(framePos);
   gAudio.state.audioClockFrames.store(framePos);
   gAudio.state.finished.store(false);
@@ -1254,34 +1199,64 @@ void audioStreamReset(uint64_t framePos) {
   gAudio.state.seekRequested.store(false);
   gAudio.state.pendingSeekFrames.store(static_cast<int64_t>(framePos));
   gAudio.state.audioPrimed.store(false);
-  gAudio.state.streamClockReady.store(false);
+  gAudio.state.streamBaseValid.store(false, std::memory_order_relaxed);
+  gAudio.state.streamReadFrames.store(0, std::memory_order_relaxed);
+  gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
+  gAudio.state.audioClock.reset(
+      gAudio.state.streamSerial.load(std::memory_order_relaxed));
 }
 
-void audioStreamFlush(int serial) {
+void audioStreamFlushSerial(int serial) {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
     return;
   }
-  gAudio.state.streamTargetSerial.store(serial, std::memory_order_relaxed);
-  gAudio.state.streamQueue.flush();
+  gAudio.state.streamSerial.store(serial, std::memory_order_relaxed);
+  gAudio.state.streamRb.reset();
+  gAudio.state.streamBaseValid.store(false, std::memory_order_relaxed);
+  gAudio.state.streamBasePtsUs.store(0, std::memory_order_relaxed);
+  gAudio.state.streamReadFrames.store(0, std::memory_order_relaxed);
   gAudio.state.m4aAtEnd.store(false);
   gAudio.state.finished.store(false);
   gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
   gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
+  gAudio.state.audioClock.reset(serial);
 }
 
-void audioStreamSetClock(Clock* clock) {
-  gAudio.state.streamClock.store(clock, std::memory_order_relaxed);
-}
-
-bool audioStreamIsStarved() {
+int audioStreamSerial() {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
+    return 0;
+  }
+  if (!gAudio.state.streamQueueEnabled.load()) {
+    return 0;
+  }
+  return gAudio.state.streamSerial.load(std::memory_order_relaxed);
+}
+
+int64_t audioStreamClockUs(int64_t nowUs) {
+  if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
+    return 0;
+  }
+  if (!gAudio.state.streamQueueEnabled.load()) {
+    return 0;
+  }
+  return gAudio.state.audioClock.get(nowUs);
+}
+
+bool audioStreamStarved() {
+  if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
+    return false;
+  }
+  if (!gAudio.state.streamQueueEnabled.load()) {
     return false;
   }
   return gAudio.state.streamStarved.load(std::memory_order_relaxed);
 }
 
-bool audioStreamIsClockReady() {
+bool audioStreamClockReady() {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
+    return false;
+  }
+  if (!gAudio.state.streamQueueEnabled.load()) {
     return false;
   }
   return gAudio.state.streamClockReady.load(std::memory_order_relaxed);

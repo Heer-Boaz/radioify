@@ -1530,9 +1530,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   bool audioStarting = enableAudio;
   std::atomic<bool> audioStartDone{false};
   std::atomic<bool> audioStartOk{false};
-  Clock masterClock;
-  std::atomic<int> serialCounter{1};
+  Clock videoClock;
   std::atomic<int> currentSerial{1};
+  std::atomic<bool> seekReq{false};
+  std::atomic<int64_t> seekPosUs{0};
   bool running = true;
   bool videoEnded = false;
   bool redraw = true;
@@ -1570,7 +1571,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   int requestedTargetH = 0;
   bool pendingResize = false;
   bool forceRefreshArt = false;
-  std::atomic<int> pendingSeekSerial{0};
   double pendingSeekTargetSec = 0.0;
   bool userPaused = false;
   int64_t lastPresentedPtsUs = 0;
@@ -1590,9 +1590,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     bool resize = false;
     int targetW = 0;
     int targetH = 0;
-    bool seek = false;
-    int64_t seekTs = 0;
-    int serial = 0;
   };
   std::mutex commandMutex;
   DecodeCommand pendingCommand;
@@ -1774,7 +1771,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   auto stopPipeline = [&]() {
     pipelineRunning.store(false);
     commandPendingAtomic.store(false);
-    audioStreamSetClock(nullptr);
     videoPackets.abortQueue();
     audioPackets.abortQueue();
     queueCv.notify_all();
@@ -1816,10 +1812,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       decodeError.clear();
     }
     resizeEpoch.store(0);
-    serialCounter.store(1);
     currentSerial.store(1);
-    pendingSeekSerial.store(0);
+    seekReq.store(false);
+    seekPosUs.store(0);
     pendingSeekTargetSec = 0.0;
+    videoClock.reset(1);
     audioStartDone.store(false);
     audioStartOk.store(false);
     videoPackets.init(32 * 1024 * 1024);
@@ -2125,12 +2122,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                     demux.durationUs, AVRational{1, AV_TIME_BASE}, 48000));
           }
           if (audioStartStream(totalFrames)) {
-            audioStreamSetClock(&masterClock);
-            int serial = pendingSeekSerial.load();
-            if (serial == 0) {
-              serial = currentSerial.load();
-            }
-            audioStreamFlush(serial);
+            audioStreamFlushSerial(currentSerial.load());
             AudioPerfStats stats = audioGetPerfStats();
             uint32_t outRate = stats.sampleRate ? stats.sampleRate : 48000;
             uint32_t outChannels = stats.channels ? stats.channels : 2;
@@ -2170,7 +2162,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             audioDec.nextPtsUs = 0;
             audioDec.nextPtsValid = false;
             decoderSerial = pendingPacket.serial;
-            audioStreamFlush(static_cast<int>(decoderSerial));
+            audioStreamFlushSerial(static_cast<int>(decoderSerial));
             hasPendingPacket = false;
             inputEof = false;
             continue;
@@ -2269,10 +2261,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             audioDec.nextPtsUs = ptsUs + durationUs;
             audioDec.nextPtsValid = true;
             audioDec.writePosFrames += static_cast<int64_t>(converted);
-            if (!audioStreamPushFrame(audioDec.convertBuffer.data(),
-                                      static_cast<size_t>(converted), ptsUs,
-                                      durationUs,
-                                      static_cast<int>(decoderSerial))) {
+            if (!audioStreamWriteSamples(audioDec.convertBuffer.data(),
+                                         static_cast<uint64_t>(converted),
+                                         ptsUs,
+                                         static_cast<int>(decoderSerial))) {
               break;
             }
           }
@@ -2294,58 +2286,65 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             command = pendingCommand;
             commandPending = false;
             hasCommand = true;
-            commandPendingAtomic.store(false);
           }
         }
-        if (hasCommand) {
-          if (command.resize) {
-            resizeTargetW.store(command.targetW);
-            resizeTargetH.store(command.targetH);
-            uint64_t resizeToken = resizeEpoch.fetch_add(1) + 1;
+        bool handledSeek = false;
+        if (hasCommand && command.resize) {
+          resizeTargetW.store(command.targetW);
+          resizeTargetH.store(command.targetH);
+          uint64_t resizeToken = resizeEpoch.fetch_add(1) + 1;
+          clearQueue();
+          appendTimingFmt("demux_resize token=%llu target=%dx%d",
+                          static_cast<unsigned long long>(resizeToken),
+                          command.targetW, command.targetH);
+        }
+
+        if (seekReq.exchange(false)) {
+          int64_t targetUs = seekPosUs.load(std::memory_order_relaxed);
+          targetUs += demux.formatStartUs;
+          if (targetUs < 0) targetUs = 0;
+          int nextSerial = currentSerial.load() + 1;
+          appendTimingFmt("demux_seek serial=%d target_us=%lld", nextSerial,
+                          static_cast<long long>(targetUs));
+          int seekRes = avformat_seek_file(demux.fmt, -1, INT64_MIN, targetUs,
+                                           INT64_MAX, AVSEEK_FLAG_BACKWARD);
+          if (seekRes < 0 && demux.videoStreamIndex >= 0) {
+            int64_t targetStream =
+                av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE},
+                             demux.videoTimeBase);
+            seekRes = av_seek_frame(demux.fmt, demux.videoStreamIndex,
+                                    targetStream, AVSEEK_FLAG_BACKWARD);
+          }
+          appendTimingFmt("demux_seek_result serial=%d res=%d", nextSerial,
+                          seekRes);
+          if (seekRes < 0) {
+            setDecodeError("Failed to seek video.");
+          } else {
+            avformat_flush(demux.fmt);
+            serial = static_cast<uint64_t>(currentSerial.fetch_add(1) + 1);
+            currentSerial.store(static_cast<int>(serial));
+            demuxEnded.store(false);
+            demuxAtEof = false;
+            decodeEnded.store(false);
+            audioDecodeEnded.store(false);
+            videoPackets.flush(serial);
+            audioPackets.flush(serial);
+            audioStreamFlushSerial(static_cast<int>(serial));
+            videoClock.reset(static_cast<int>(serial));
             clearQueue();
-            appendTimingFmt("demux_resize token=%llu target=%dx%d",
-                            static_cast<unsigned long long>(resizeToken),
-                            command.targetW, command.targetH);
           }
-          if (command.seek) {
-            int64_t targetUs = command.seekTs / 10;
-            targetUs += demux.formatStartUs;
-            if (targetUs < 0) targetUs = 0;
-            appendTimingFmt(
-                "demux_seek serial=%d target_ts=%lld target_us=%lld",
-                command.serial,
-                static_cast<long long>(command.seekTs),
-                static_cast<long long>(targetUs));
-            int seekRes = avformat_seek_file(demux.fmt, -1, INT64_MIN,
-                                             targetUs, INT64_MAX,
-                                             AVSEEK_FLAG_BACKWARD);
-            if (seekRes < 0 && demux.videoStreamIndex >= 0) {
-              int64_t targetStream =
-                  av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE},
-                               demux.videoTimeBase);
-              seekRes = av_seek_frame(demux.fmt, demux.videoStreamIndex,
-                                      targetStream, AVSEEK_FLAG_BACKWARD);
-            }
-            appendTimingFmt("demux_seek_result serial=%d res=%d",
-                            command.serial,
-                            seekRes);
-            if (seekRes < 0) {
-              setDecodeError("Failed to seek video.");
-              pendingSeekSerial.store(0);
-              audioStreamFlush(currentSerial.load());
-            } else {
-              avformat_flush(demux.fmt);
-              serial = static_cast<uint64_t>(command.serial);
-              currentSerial.store(static_cast<int>(serial));
-              demuxEnded.store(false);
-              demuxAtEof = false;
-              decodeEnded.store(false);
-              videoPackets.flush(serial);
-              audioPackets.flush(serial);
-              audioStreamFlush(static_cast<int>(serial));
-              clearQueue();
-            }
-          }
+          handledSeek = true;
+        }
+
+        bool commandStillPending = false;
+        {
+          std::lock_guard<std::mutex> lock(commandMutex);
+          commandStillPending = commandPending;
+        }
+        if (!commandStillPending && !seekReq.load()) {
+          commandPendingAtomic.store(false);
+        }
+        if (hasCommand || handledSeek) {
           queueCv.notify_all();
         }
 
@@ -2643,7 +2642,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     lastPresentedDurationUs =
         (fallbackFrameDurationUs > 0) ? fallbackFrameDurationUs : 33333;
   }
-  masterClock.set(lastPresentedPtsUs, nowUs());
+  videoClock.set(lastPresentedPtsUs, nowUs(), currentSerial.load());
   auto updateMaxQueue = [&](int64_t frameDurUs) {
     if (frameDurUs <= 0) return;
     double frameDurSec = static_cast<double>(frameDurUs) / 1000000.0;
@@ -2657,6 +2656,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   };
   updateMaxQueue(lastPresentedDurationUs);
 
+  auto masterClockUs = [&]() -> int64_t {
+    int64_t now = nowUs();
+    if (audioOk && audioStreamClockReady() && !audioStreamStarved()) {
+      return audioStreamClockUs(now);
+    }
+    return videoClock.get(now);
+  };
+
   auto totalDurationSec = [&]() -> double {
     double total =
         sourceDuration100ns > 0 ? sourceDuration100ns * ticksToSeconds : -1.0;
@@ -2667,7 +2674,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   };
 
   auto currentTimeSec = [&]() -> double {
-    int64_t clockUs = masterClock.get(nowUs());
+    int64_t clockUs = masterClockUs();
     if (clockUs <= 0 && lastPresentedPtsUs > 0) {
       clockUs = lastPresentedPtsUs;
     }
@@ -2708,12 +2715,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       currentSec = std::clamp(currentSec, 0.0, totalSec);
     }
     double displaySec = currentSec;
-    if (pendingSeekSerial.load() != 0 && totalSec > 0.0 &&
-        std::isfinite(totalSec)) {
+    if (seekReq.load() && totalSec > 0.0 && std::isfinite(totalSec)) {
       displaySec = std::clamp(pendingSeekTargetSec, 0.0, totalSec);
     }
-    bool waitingForAudio = audioOk && !audioStreamIsClockReady();
-    bool audioStarved = audioOk && audioStreamIsStarved();
+    bool waitingForAudio = audioOk && !audioStreamClockReady();
+    bool audioStarved = audioOk && audioStreamStarved();
     bool waitingForVideo = false;
     {
       std::lock_guard<std::mutex> lock(queueMutex);
@@ -2721,7 +2727,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
     bool allowFrame = haveFrame;
     auto waitingLabel = [&]() -> std::string {
-      if (pendingSeekSerial.load() != 0) return "Seeking...";
+      if (seekReq.load()) return "Seeking...";
       if (waitingForAudio) return "Waiting for audio...";
       if (audioStarved || waitingForVideo) return "Buffering video...";
       return "Waiting for video...";
@@ -3047,18 +3053,58 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     screen.draw();
   };
 
+  int64_t frameTimerUs = nowUs();
+  int64_t lastPtsUs = 0;
+  int64_t lastDelayUs =
+      (fallbackFrameDurationUs > 0) ? fallbackFrameDurationUs : 33333;
+  const int64_t maxFrameDurationUs = 10000000;
+  int lastSerialPresented = currentSerial.load();
+
+  auto clampi64 = [&](int64_t v, int64_t lo, int64_t hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+  };
+  auto computeTargetDelayUs = [&](int64_t delayUs, int64_t videoPtsUs,
+                                  int64_t masterUs) {
+    const int64_t minThreshUs = 40000;
+    const int64_t maxThreshUs = 100000;
+    const int64_t noSyncUs = 10000000;
+
+    int64_t diff = videoPtsUs - masterUs;
+    int64_t syncThreshold = clampi64(delayUs, minThreshUs, maxThreshUs);
+    if (diff > -noSyncUs && diff < noSyncUs) {
+      if (diff <= -syncThreshold) {
+        delayUs = std::max<int64_t>(0, delayUs + diff);
+      } else if (diff >= syncThreshold) {
+        delayUs = delayUs + diff;
+      }
+    }
+    return delayUs;
+  };
+
   auto presentNextFrame = [&]() -> bool {
     if (audioStarting) {
       return false;
     }
-    if (audioOk && !audioStreamIsClockReady()) {
+    if (audioOk) {
+      if (audioIsPaused()) {
+        return false;
+      }
+    } else if (userPaused) {
       return false;
     }
-    int pendingSerial = pendingSeekSerial.load();
-    if (pendingSerial != 0 && currentSerial.load() != pendingSerial) {
+    if (audioOk && !audioStreamClockReady()) {
       return false;
     }
+
     uint64_t serial = static_cast<uint64_t>(currentSerial.load());
+    if (lastSerialPresented != static_cast<int>(serial)) {
+      lastSerialPresented = static_cast<int>(serial);
+      frameTimerUs = nowUs();
+      lastPtsUs = 0;
+      lastDelayUs =
+          (fallbackFrameDurationUs > 0) ? fallbackFrameDurationUs : 33333;
+    }
+
     while (true) {
       QueuedFrame front{};
       {
@@ -3079,38 +3125,39 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         continue;
       }
 
-      int64_t masterUs = masterClock.get(nowUs());
-      if (!audioOk && pendingSerial != 0) {
-        masterClock.set(front.ptsUs, nowUs());
-        masterUs = front.ptsUs;
+      int64_t delayUs = front.ptsUs - lastPtsUs;
+      if (delayUs <= 0 || delayUs > maxFrameDurationUs) {
+        delayUs = (front.durationUs > 0) ? front.durationUs : lastDelayUs;
       }
-      int64_t frameDurUs =
-          front.durationUs > 0 ? front.durationUs : lastPresentedDurationUs;
-      if (frameDurUs <= 0) {
-        frameDurUs = (fallbackFrameDurationUs > 0) ? fallbackFrameDurationUs
-                                                   : 33333;
+      if (delayUs <= 0) {
+        delayUs = (fallbackFrameDurationUs > 0) ? fallbackFrameDurationUs
+                                                : 33333;
       }
-      int64_t syncThresholdUs =
-          std::clamp<int64_t>(frameDurUs, 40000, 100000);
-      int64_t diff = front.ptsUs - masterUs;
+      lastDelayUs = delayUs;
 
-      if (diff < -syncThresholdUs) {
+      int64_t masterUs = masterClockUs();
+      int64_t targetDelayUs =
+          computeTargetDelayUs(delayUs, front.ptsUs, masterUs);
+      int64_t targetUs = frameTimerUs + targetDelayUs;
+      int64_t now = nowUs();
+
+      if (now < targetUs) {
+        int64_t sleepUs = std::min<int64_t>(targetUs - now, 10000);
+        if (sleepUs > 0) {
+          std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
+        }
+        return false;
+      }
+
+      if (now > targetUs + targetDelayUs) {
         std::lock_guard<std::mutex> lock(queueMutex);
-        if (!frameQueue.empty()) {
+        if (frameQueue.size() > 1) {
           freeFrames.push_back(frameQueue.front().poolIndex);
           frameQueue.pop_front();
           queueCv.notify_all();
+          lastPresentDropped = 1;
+          continue;
         }
-        lastPresentDropped = 1;
-        continue;
-      }
-      if (diff > syncThresholdUs) {
-        int64_t sleepUs = diff - syncThresholdUs / 2;
-        if (sleepUs > 0) {
-          int64_t capped = std::min<int64_t>(sleepUs, 5000);
-          std::this_thread::sleep_for(std::chrono::microseconds(capped));
-        }
-        return false;
       }
 
       QueuedFrame item{};
@@ -3124,14 +3171,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       setCurrentFrame(item.poolIndex);
       lastPresentedPtsUs = item.ptsUs;
       lastPresentedDurationUs =
-          item.durationUs > 0 ? item.durationUs : frameDurUs;
-      if (pendingSerial != 0 &&
-          item.serial == static_cast<uint64_t>(pendingSerial)) {
-        pendingSeekSerial.store(0);
-      }
-      if (!audioOk) {
-        masterClock.set(lastPresentedPtsUs, nowUs());
-      }
+          item.durationUs > 0 ? item.durationUs : delayUs;
+      videoClock.set(lastPresentedPtsUs, nowUs(), static_cast<int>(serial));
+      lastPtsUs = item.ptsUs;
+      frameTimerUs = std::max(targetUs, nowUs());
       lastPresentPopped = 1;
       lastPresentDropped = 0;
       return true;
@@ -3164,19 +3207,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   };
 
   auto issueSeekRequest = [&](double targetSec) {
-    int64_t targetTs =
-        firstTs + static_cast<int64_t>(targetSec * secondsToTicks);
-    int serial = serialCounter.fetch_add(1) + 1;
-    DecodeCommand cmd;
-    cmd.seek = true;
-    cmd.seekTs = targetTs;
-    cmd.serial = serial;
-    issueCommand(cmd);
-    audioStreamFlush(serial);
+    int64_t targetUs =
+        static_cast<int64_t>(std::llround(targetSec * 1000000.0));
+    seekPosUs.store(targetUs, std::memory_order_relaxed);
+    seekReq.store(true, std::memory_order_relaxed);
+    commandPendingAtomic.store(true);
+    queueCv.notify_all();
     perfLogAppendf(&perfLog,
-                   "seek_request serial=%d target_sec=%.3f target_ts=%lld",
-                   serial, targetSec, static_cast<long long>(targetTs));
-    pendingSeekSerial.store(serial);
+                   "seek_request target_sec=%.3f target_us=%lld",
+                   targetSec, static_cast<long long>(targetUs));
     pendingSeekTargetSec = targetSec;
     videoEnded = false;
     forceRefreshArt = true;
@@ -3226,7 +3265,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             userPaused = audioIsPaused();
           } else {
             userPaused = !userPaused;
-            masterClock.set_paused(userPaused, nowUs());
+            videoClock.set_paused(userPaused, nowUs());
           }
           redraw = true;
         } else if (key.vk == 'R' || key.ch == 'r' || key.ch == 'R') {
