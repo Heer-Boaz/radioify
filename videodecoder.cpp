@@ -20,6 +20,7 @@ extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
@@ -113,6 +114,54 @@ YuvTransfer mapColorTransfer(AVColorTransferCharacteristic transfer) {
     default:
       return YuvTransfer::Sdr;
   }
+}
+
+AVPixelFormat chooseD3d11SwFormat(const AVCodecContext* ctx) {
+  if (!ctx) return AV_PIX_FMT_NV12;
+  int bits = ctx->bits_per_raw_sample;
+  if (bits <= 0) {
+    bits = ctx->bits_per_coded_sample;
+  }
+  if (bits <= 0) {
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(ctx->pix_fmt);
+    if (desc) {
+      bits = desc->comp[0].depth;
+    }
+  }
+  return (bits > 8) ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+}
+
+bool configureD3d11Frames(AVCodecContext* ctx, AVBufferRef* hwDeviceCtx,
+                          bool shaderResource) {
+  if (!ctx || !hwDeviceCtx) return false;
+  AVBufferRef* framesRef = av_hwframe_ctx_alloc(hwDeviceCtx);
+  if (!framesRef) return false;
+
+  AVHWFramesContext* framesCtx =
+      reinterpret_cast<AVHWFramesContext*>(framesRef->data);
+  framesCtx->format = AV_PIX_FMT_D3D11;
+  framesCtx->sw_format = chooseD3d11SwFormat(ctx);
+  framesCtx->width = (ctx->coded_width > 0) ? ctx->coded_width : ctx->width;
+  framesCtx->height = (ctx->coded_height > 0) ? ctx->coded_height : ctx->height;
+  framesCtx->initial_pool_size =
+      (ctx->extra_hw_frames > 0) ? ctx->extra_hw_frames + 2 : 32;
+
+  AVD3D11VAFramesContext* framesHw =
+      reinterpret_cast<AVD3D11VAFramesContext*>(framesCtx->hwctx);
+  framesHw->BindFlags = D3D11_BIND_DECODER;
+  if (shaderResource) {
+    framesHw->BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+  }
+  framesHw->MiscFlags = 0;
+
+  if (av_hwframe_ctx_init(framesRef) < 0) {
+    av_buffer_unref(&framesRef);
+    return false;
+  }
+
+  ctx->hw_frames_ctx = av_buffer_ref(framesRef);
+  av_buffer_unref(&framesRef);
+  return true;
 }
 
 constexpr int kMaxDecodeWidth = 1024;
@@ -671,6 +720,7 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
   ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
   ctx->get_format = get_hw_format;
   ctx->extra_hw_frames = 32;
+  configureD3d11Frames(ctx, ctx->hw_device_ctx, true);
 
   if (avcodec_open2(ctx, codec, nullptr) < 0) {
     av_buffer_unref(&hw_device_ctx);
