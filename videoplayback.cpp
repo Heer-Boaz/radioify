@@ -40,6 +40,7 @@ extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/mem.h>
 #include <libavutil/channel_layout.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
@@ -85,6 +86,10 @@ void ffmpegLogCallback(void* ptr, int level, const char* fmt, va_list vl) {
 constexpr int64_t kProbeSize = 64 * 1024;
 constexpr int64_t kAnalyzeDurationFastUs = 500000;
 constexpr int64_t kAnalyzeDurationFallbackUs = 5000000;
+constexpr size_t kIoCacheSize = 32 * 1024 * 1024;
+constexpr size_t kIoCacheLowWater = 8 * 1024 * 1024;
+constexpr size_t kIoCacheHighWater = 24 * 1024 * 1024;
+constexpr int kIoAvioBufferSize = 64 * 1024;
 
 std::string ffmpegError(int err) {
   char buf[256];
@@ -449,8 +454,232 @@ struct PacketQueue {
   }
 };
 
+struct IoCache {
+  std::FILE* file = nullptr;
+  std::thread thread;
+  std::vector<uint8_t> buffer;
+  size_t capacity = 0;
+  size_t lowWater = 0;
+  size_t highWater = 0;
+  size_t readPos = 0;
+  size_t writePos = 0;
+  size_t size = 0;
+  int64_t fileSize = -1;
+  int64_t filePos = 0;
+  bool eof = false;
+  bool aborted = false;
+  bool seekPending = false;
+  int64_t seekOffset = 0;
+  int seekWhence = SEEK_SET;
+  bool seekDone = false;
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::atomic<bool>* running = nullptr;
+  std::atomic<bool>* commandPending = nullptr;
+
+  bool open(const std::filesystem::path& path, std::string* error) {
+    file = std::fopen(path.string().c_str(), "rb");
+    if (!file) {
+      if (error) *error = "Failed to open media file for caching.";
+      return false;
+    }
+    std::error_code ec;
+    fileSize = static_cast<int64_t>(std::filesystem::file_size(path, ec));
+    if (ec) {
+      fileSize = -1;
+    }
+    capacity = kIoCacheSize;
+    lowWater = kIoCacheLowWater;
+    highWater = kIoCacheHighWater;
+    buffer.resize(capacity);
+    return true;
+  }
+
+  void start() {
+    aborted = false;
+    eof = false;
+    seekPending = false;
+    seekDone = false;
+    readPos = 0;
+    writePos = 0;
+    size = 0;
+    filePos = 0;
+    thread = std::thread([this]() { threadMain(); });
+  }
+
+  void stop() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      aborted = true;
+      cv.notify_all();
+    }
+    if (thread.joinable()) {
+      thread.join();
+    }
+    if (file) {
+      std::fclose(file);
+      file = nullptr;
+    }
+    buffer.clear();
+    capacity = 0;
+    size = 0;
+  }
+
+  int read(uint8_t* dst, int dstSize) {
+    if (!dst || dstSize <= 0) return 0;
+    std::unique_lock<std::mutex> lock(mutex);
+    while (!aborted && size == 0 && !eof) {
+      if ((running && !running->load()) ||
+          (commandPending && commandPending->load())) {
+        return AVERROR_EXIT;
+      }
+      cv.wait_for(lock, std::chrono::milliseconds(10));
+    }
+    if (aborted) return AVERROR_EXIT;
+    if (size == 0 && eof) {
+      return 0;
+    }
+    if (commandPending && commandPending->load()) {
+      return AVERROR_EXIT;
+    }
+    size_t toCopy = std::min<size_t>(static_cast<size_t>(dstSize), size);
+    size_t first = std::min(toCopy, capacity - readPos);
+    std::memcpy(dst, buffer.data() + readPos, first);
+    if (toCopy > first) {
+      std::memcpy(dst + first, buffer.data(), toCopy - first);
+    }
+    readPos = (readPos + toCopy) % capacity;
+    size -= toCopy;
+    cv.notify_all();
+    return static_cast<int>(toCopy);
+  }
+
+  int64_t seek(int64_t offset, int whence) {
+    if (whence == AVSEEK_SIZE) {
+      return fileSize;
+    }
+    int whenceBase = whence & ~AVSEEK_FORCE;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      seekPending = true;
+      seekOffset = offset;
+      seekWhence = whenceBase;
+      seekDone = false;
+      eof = false;
+      cv.notify_all();
+    }
+    std::unique_lock<std::mutex> lock(mutex);
+    cv.wait(lock, [&]() { return aborted || seekDone; });
+    if (aborted) return AVERROR_EXIT;
+    return filePos;
+  }
+
+ private:
+  int64_t logicalPosLocked() const {
+    int64_t pos = filePos - static_cast<int64_t>(size);
+    return std::max<int64_t>(0, pos);
+  }
+
+  void performSeekLocked() {
+    int64_t base = 0;
+    if (seekWhence == SEEK_CUR) {
+      base = logicalPosLocked();
+    } else if (seekWhence == SEEK_END) {
+      base = (fileSize >= 0) ? fileSize : 0;
+    }
+    int64_t target = base + seekOffset;
+    if (fileSize >= 0) {
+      target = std::clamp<int64_t>(target, 0, fileSize);
+    } else if (target < 0) {
+      target = 0;
+    }
+    std::clearerr(file);
+#if defined(_WIN32)
+    if (_fseeki64(file, target, SEEK_SET) == 0) {
+#else
+    if (std::fseek(file, static_cast<long>(target), SEEK_SET) == 0) {
+#endif
+      filePos = target;
+      readPos = 0;
+      writePos = 0;
+      size = 0;
+      eof = false;
+    } else {
+      eof = true;
+    }
+    seekPending = false;
+    seekDone = true;
+    cv.notify_all();
+  }
+
+  void threadMain() {
+    bool filling = false;
+    while (true) {
+      std::unique_lock<std::mutex> lock(mutex);
+      cv.wait(lock, [&]() {
+        return aborted || seekPending || (!eof && (filling || size < lowWater));
+      });
+      if (aborted) break;
+      if (seekPending) {
+        performSeekLocked();
+        filling = false;
+        continue;
+      }
+      if (eof) {
+        continue;
+      }
+      if (!filling && size < lowWater) {
+        filling = true;
+      }
+      if (!filling) {
+        continue;
+      }
+      size_t freeSpace = capacity - size;
+      if (freeSpace == 0) {
+        filling = false;
+        continue;
+      }
+      size_t contiguous = std::min(freeSpace, capacity - writePos);
+      lock.unlock();
+      size_t readCount =
+          std::fread(buffer.data() + writePos, 1, contiguous, file);
+      lock.lock();
+      if (readCount == 0) {
+        if (std::feof(file)) {
+          eof = true;
+        } else if (std::ferror(file)) {
+          eof = true;
+        }
+        cv.notify_all();
+        continue;
+      }
+      writePos = (writePos + readCount) % capacity;
+      size += readCount;
+      filePos += static_cast<int64_t>(readCount);
+      if (size >= highWater) {
+        filling = false;
+      }
+      cv.notify_all();
+    }
+  }
+};
+
+int ioReadPacket(void* opaque, uint8_t* buf, int buf_size) {
+  auto* cache = reinterpret_cast<IoCache*>(opaque);
+  if (!cache) return AVERROR_EXIT;
+  return cache->read(buf, buf_size);
+}
+
+int64_t ioSeek(void* opaque, int64_t offset, int whence) {
+  auto* cache = reinterpret_cast<IoCache*>(opaque);
+  if (!cache) return AVERROR_EXIT;
+  return cache->seek(offset, whence);
+}
+
 struct DemuxContext {
   AVFormatContext* fmt = nullptr;
+  AVIOContext* avio = nullptr;
+  std::unique_ptr<IoCache> io;
   int videoStreamIndex = -1;
   int audioStreamIndex = -1;
   AVRational videoTimeBase{0, 1};
@@ -458,6 +687,19 @@ struct DemuxContext {
   int64_t formatStartUs = 0;
   int64_t durationUs = 0;
 };
+
+struct DemuxInterrupt {
+  std::atomic<bool>* running = nullptr;
+  std::atomic<bool>* commandPending = nullptr;
+};
+
+int demuxInterruptCallback(void* opaque) {
+  auto* interrupt = reinterpret_cast<DemuxInterrupt*>(opaque);
+  if (!interrupt) return 0;
+  if (interrupt->running && !interrupt->running->load()) return 1;
+  if (interrupt->commandPending && interrupt->commandPending->load()) return 1;
+  return 0;
+}
 
 struct VideoDecodeContext {
   AVCodecContext* codec = nullptr;
@@ -492,48 +734,133 @@ struct AudioDecodeContext {
 bool openInputWithProbe(const std::filesystem::path& path,
                         int64_t analyzeDurationUs,
                         AVFormatContext** outFmt,
+                        AVIOContext** outPb,
+                        IoCache* ioCache,
                         std::string* error) {
   AVDictionary* options = nullptr;
   av_dict_set_int(&options, "probesize", kProbeSize, 0);
   av_dict_set_int(&options, "analyzeduration", analyzeDurationUs, 0);
 
-  int openErr =
-      avformat_open_input(outFmt, path.string().c_str(), nullptr, &options);
+  if (outPb) {
+    *outPb = nullptr;
+  }
+
+  AVFormatContext* fmt = nullptr;
+  AVIOContext* avio = nullptr;
+  if (ioCache) {
+    if (!ioCache->open(path, error)) {
+      av_dict_free(&options);
+      return false;
+    }
+    ioCache->start();
+    fmt = avformat_alloc_context();
+    if (!fmt) {
+      ioCache->stop();
+      av_dict_free(&options);
+      if (error) *error = "Failed to allocate format context.";
+      return false;
+    }
+    unsigned char* buffer =
+        reinterpret_cast<unsigned char*>(av_malloc(kIoAvioBufferSize));
+    if (!buffer) {
+      avformat_free_context(fmt);
+      ioCache->stop();
+      av_dict_free(&options);
+      if (error) *error = "Failed to allocate IO buffer.";
+      return false;
+    }
+    avio = avio_alloc_context(buffer, kIoAvioBufferSize, 0, ioCache,
+                              &ioReadPacket, nullptr, &ioSeek);
+    if (!avio) {
+      av_free(buffer);
+      avformat_free_context(fmt);
+      ioCache->stop();
+      av_dict_free(&options);
+      if (error) *error = "Failed to allocate AVIO context.";
+      return false;
+    }
+    avio->seekable = AVIO_SEEKABLE_NORMAL;
+    fmt->pb = avio;
+    fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
+  }
+
+  int openErr = avformat_open_input(&fmt,
+                                    ioCache ? nullptr : path.string().c_str(),
+                                    nullptr, &options);
   av_dict_free(&options);
   if (openErr < 0) {
     std::string msg = "Failed to open media: " + ffmpegError(openErr);
     if (error) *error = msg;
+    if (avio) {
+      avio_context_free(&avio);
+    }
+    if (fmt) {
+      avformat_free_context(fmt);
+    }
+    if (ioCache) {
+      ioCache->stop();
+    }
     return false;
   }
-  (*outFmt)->max_analyze_duration = analyzeDurationUs;
-  (*outFmt)->probesize = kProbeSize;
+  if (outPb && avio) {
+    *outPb = avio;
+  }
+  if (outFmt) {
+    *outFmt = fmt;
+    (*outFmt)->max_analyze_duration = analyzeDurationUs;
+    (*outFmt)->probesize = kProbeSize;
+  }
   return true;
 }
 
-bool initDemuxer(const std::filesystem::path& path,
-                 DemuxContext* out,
-                 std::string* error) {
+bool initDemuxer(const std::filesystem::path& path, DemuxContext* out,
+                 std::string* error, DemuxInterrupt* interrupt) {
   if (!out) return false;
+  auto ioCache = std::make_unique<IoCache>();
+  if (interrupt) {
+    ioCache->running = interrupt->running;
+    ioCache->commandPending = interrupt->commandPending;
+  }
   AVFormatContext* fmt = nullptr;
-  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, error)) {
+  AVIOContext* avio = nullptr;
+  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, &avio,
+                          ioCache.get(), error)) {
     return false;
   }
+  fmt->flags |= AVFMT_FLAG_NOBUFFER;
   int infoErr = avformat_find_stream_info(fmt, nullptr);
   if (infoErr < 0) {
     avformat_close_input(&fmt);
-    if (!openInputWithProbe(path, kAnalyzeDurationFallbackUs, &fmt, error)) {
+    if (avio) {
+      avio_context_free(&avio);
+      avio = nullptr;
+    }
+    ioCache->stop();
+    if (!openInputWithProbe(path, kAnalyzeDurationFallbackUs, &fmt, &avio,
+                            ioCache.get(), error)) {
       return false;
     }
+    fmt->flags |= AVFMT_FLAG_NOBUFFER;
     infoErr = avformat_find_stream_info(fmt, nullptr);
     if (infoErr < 0) {
       std::string msg = "Failed to read stream info: " + ffmpegError(infoErr);
       avformat_close_input(&fmt);
+      if (avio) {
+        avio_context_free(&avio);
+      }
+      ioCache->stop();
       if (error) *error = msg;
       return false;
     }
   }
 
   out->fmt = fmt;
+  out->avio = avio;
+  out->io = std::move(ioCache);
+  if (interrupt) {
+    out->fmt->interrupt_callback.callback = demuxInterruptCallback;
+    out->fmt->interrupt_callback.opaque = interrupt;
+  }
   out->formatStartUs = (fmt->start_time != AV_NOPTS_VALUE) ? fmt->start_time : 0;
   out->durationUs = (fmt->duration > 0) ? fmt->duration : 0;
 
@@ -1207,7 +1534,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   std::mutex queueMutex;
   std::condition_variable queueCv;
   std::deque<QueuedFrame> frameQueue;
-  constexpr size_t kMaxQueuedFrames = 16;
+  constexpr size_t kMaxQueuedFrames = 32;
   constexpr size_t kInvalidPoolIndex = static_cast<size_t>(-1);
   std::vector<VideoFrame> framePool;
   std::deque<size_t> freeFrames;
@@ -1244,6 +1571,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   std::atomic<uint64_t> readCalls{0};
   std::atomic<uint64_t> skippedCalls{0};
   std::atomic<uint64_t> queueDrops{0};
+  DemuxInterrupt demuxInterrupt;
   std::thread demuxThread;
   std::thread videoThread;
   std::thread audioThread;
@@ -1467,6 +1795,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (demux.fmt) {
       avformat_close_input(&demux.fmt);
     }
+    if (demux.avio) {
+      avio_context_free(&demux.avio);
+    }
+    if (demux.io) {
+      demux.io->stop();
+      demux.io.reset();
+    }
     demux = DemuxContext{};
   };
 
@@ -1488,6 +1823,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     audioStartOk.store(false);
     videoPackets.init(32 * 1024 * 1024);
     audioPackets.init(8 * 1024 * 1024);
+    demuxInterrupt.running = &pipelineRunning;
+    demuxInterrupt.commandPending = &commandPendingAtomic;
 
     demuxThread = std::thread([&]() {
       HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -1522,7 +1859,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         }
       };
 
-      if (!initDemuxer(file, &demux, &error)) {
+      if (!initDemuxer(file, &demux, &error, &demuxInterrupt)) {
         if (demux.fmt) {
           avformat_close_input(&demux.fmt);
         }
@@ -1961,6 +2298,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         }
 
         int read = av_read_frame(demux.fmt, &pkt);
+        if (read == AVERROR_EXIT || read == AVERROR(EINTR)) {
+          if (!pipelineRunning.load()) {
+            break;
+          }
+          continue;
+        }
         if (read < 0) {
           demuxEnded.store(true);
           videoPackets.pushEof(serial);
@@ -2213,6 +2556,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   const double kLeadSlackSec = 0.005;
   const double kPresentFps = 30.0;
   const double kPresentIntervalSec = 1.0 / kPresentFps;
+  const double kVideoBufferLowSec = 0.25;
+  const double kVideoBufferHighSec = 0.75;
+  const double kAudioBufferLowSec = 0.2;
+  const double kAudioBufferHighSec = 0.6;
   const double syncTolerance = std::max(0.033, 0.75 * kPresentIntervalSec);
   // Give the decoder a wider margin before forcing a resync seek.
   const double hardResyncThreshold =
@@ -2235,7 +2582,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   auto updateMaxQueue = [&](double frameDurSec) {
     if (frameDurSec <= 0.0) return;
     size_t needed =
-        static_cast<size_t>(std::ceil(kPresentIntervalSec / frameDurSec)) + 2;
+        static_cast<size_t>(std::ceil(kVideoBufferHighSec / frameDurSec)) + 2;
     if (needed < 3) needed = 3;
     constexpr size_t kMinQueuedFrames = 6;
     if (needed < kMinQueuedFrames) needed = kMinQueuedFrames;
@@ -2332,7 +2679,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       displaySec = std::clamp(pendingSeekHoldSec, 0.0, totalSec);
     }
     bool audioPrimed = audioOk ? audioIsPrimed() : true;
-    prepGate.ensure(primedToken, audioOk && !audioPrimed, kGateAudioPrimed);
+    bool gateAudioPrimed =
+        audioOk && !audioPrimed && !audioHoldActive && !audioSeeking &&
+        !bufferingActive;
+    prepGate.ensure(primedToken, gateAudioPrimed, kGateAudioPrimed);
 
     bool shouldCheckTimestamp =
         prepPresentToken.active && audioOk && !audioHoldActive && !audioSeeking &&
@@ -2904,14 +3254,24 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       resetPresentClock = true;
     }
     lastPaused = paused;
+    bool audioPrimed = audioOk ? audioIsPrimed() : true;
     bool queueEmptyNow = false;
+    double videoBufferedSec = 0.0;
+    int64_t currentTs = frame ? frame->timestamp100ns : 0;
     {
       std::lock_guard<std::mutex> lock(queueMutex);
       queueEmptyNow = frameQueue.empty();
+      if (!frameQueue.empty()) {
+        int64_t newestTs =
+            framePool[frameQueue.back().poolIndex].timestamp100ns;
+        if (newestTs > currentTs) {
+          videoBufferedSec =
+              static_cast<double>(newestTs - currentTs) * ticksToSeconds;
+        }
+      }
     }
     size_t audioBufferedFrames = 0;
     double audioBufferedSec = 0.0;
-    bool audioLow = false;
     if (audioOk) {
       audioBufferedFrames = audioStreamBufferedFrames();
       AudioPerfStats stats = audioGetPerfStats();
@@ -2920,22 +3280,42 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         audioBufferedSec =
             static_cast<double>(audioBufferedFrames) / static_cast<double>(rate);
       }
-      audioLow = audioBufferedSec < 0.2;
     }
+    bool videoUnderflow = videoBufferedSec < kVideoBufferLowSec;
+    bool videoReady = videoBufferedSec >= kVideoBufferHighSec;
+    bool audioUnderflow = audioOk && audioBufferedSec < kAudioBufferLowSec;
+    bool audioReady = !audioOk || audioBufferedSec >= kAudioBufferHighSec;
+    bool seekingActive = (pendingSeekEpoch != 0);
     bool canBuffer =
-        !paused && !videoEnded && pendingSeekEpoch == 0 &&
-        pendingResizeEpoch == 0 && !decodeEnded.load();
-    bool bufferTrigger = queueEmptyNow || (audioOk && audioLow);
-    if (canBuffer && bufferTrigger) {
+        !paused && !videoEnded && pendingResizeEpoch == 0 &&
+        !decodeEnded.load();
+    if (seekingActive) {
+      bufferingActive = true;
       if (bufferingSince == std::chrono::steady_clock::time_point::min()) {
         bufferingSince = now;
       }
-    } else {
+    } else if (!canBuffer) {
+      bufferingActive = false;
       bufferingSince = std::chrono::steady_clock::time_point::min();
+    } else if (bufferingActive) {
+      if (videoReady && audioReady) {
+        bufferingActive = false;
+        bufferingSince = std::chrono::steady_clock::time_point::min();
+      }
+    } else {
+      bool bufferTrigger = queueEmptyNow || videoUnderflow || audioUnderflow;
+      if (bufferTrigger) {
+        if (bufferingSince ==
+            std::chrono::steady_clock::time_point::min()) {
+          bufferingSince = now;
+        }
+        if (now - bufferingSince >= kBufferingDelay) {
+          bufferingActive = true;
+        }
+      } else {
+        bufferingSince = std::chrono::steady_clock::time_point::min();
+      }
     }
-    bufferingActive = (bufferingSince !=
-                       std::chrono::steady_clock::time_point::min()) &&
-                      (now - bufferingSince) >= kBufferingDelay;
     if (audioOk && bufferingActive && !audioHoldActive) {
       audioSetHold(true);
       audioHoldActive = true;
@@ -2944,8 +3324,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     double syncSec = 0.0;
     double audioNow = 0.0;
     double audioNowRaw = 0.0;
-    bool haveAudioClock = audioOk;
-    bool audioPrimed = audioOk ? audioIsPrimed() : true;
+    bool audioSeeking = (pendingSeekEpoch != 0);
+    double audioSeekTargetSec =
+        audioSeeking ? pendingSeekTargetSec : -1.0;
+    bool audioClockActive =
+        audioOk && audioPrimed && !audioHoldActive && !bufferingActive &&
+        !audioSeeking;
+    bool haveAudioClock = audioClockActive;
     if (haveAudioClock) {
       audioNowRaw = audioGetTimeSec();
       if (audioSyncBiasValid) {
@@ -2957,16 +3342,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     } else {
       syncSec = std::chrono::duration<double>(now - startTime).count();
     }
-    bool audioSeeking = (pendingSeekEpoch != 0);
-    double audioSeekTargetSec =
-        audioSeeking ? pendingSeekTargetSec : -1.0;
     if (audioSeeking && audioSeekTargetSec >= 0.0) {
       syncSec = std::max(syncSec, audioSeekTargetSec);
     }
     const double leadSlack = kLeadSlackSec;
     bool waitingForAudioStart =
-        haveAudioClock && !audioPrimed && audioNow <= 0.0;
-    bool useWallClock = paused || waitingForAudioStart;
+        audioOk && !audioPrimed && audioNow <= 0.0;
+    bool useWallClock = paused || waitingForAudioStart || !audioClockActive;
     double presentClockSec = useWallClock ? wallclockElapsed : syncSec;
     if (!presentInit || useWallClock != presentUseWall || resetPresentClock) {
       nextPresentSec = presentClockSec;
@@ -3068,7 +3450,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     bool queueEmpty = false;
 
     if (!pendingApplied && !pendingWasActive && !videoEnded && !paused &&
-        !waitingForAudioStart && presentDue) {
+        !waitingForAudioStart && presentDue && !bufferingActive) {
       double driftForSkip = haveAudioClock ? (syncSec - lastFrameSec)
                                            : (wallclockElapsed - lastFrameSec);
 
