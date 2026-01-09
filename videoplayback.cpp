@@ -1202,6 +1202,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   bool bufferingActive = false;
   auto bufferingSince = std::chrono::steady_clock::time_point::min();
   bool lastPaused = false;
+  bool resetPresentClock = false;
 
   std::mutex queueMutex;
   std::condition_variable queueCv;
@@ -1401,10 +1402,29 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return epoch;
   };
 
-  auto requestFastForward = [&](int64_t targetTs) {
-    fastForwardTargetTs.store(targetTs, std::memory_order_relaxed);
-    fastForwardPending.store(true, std::memory_order_relaxed);
-    queueCv.notify_all();
+  auto requestFastForward = [&](int64_t targetTs, double targetSec) {
+    if (pendingSeekEpoch != 0 || pendingResizeEpoch != 0) {
+      return;
+    }
+    if (audioOk) {
+      audioSetHold(true);
+      audioHoldActive = true;
+    }
+    uint64_t epoch = commandEpoch.fetch_add(1) + 1;
+    DecodeCommand cmd;
+    cmd.seek = true;
+    cmd.seekTs = targetTs;
+    cmd.seekFast = true;
+    cmd.epoch = epoch;
+    issueCommand(cmd);
+    pendingSeekEpoch = epoch;
+    pendingSeekTargetSec = std::max(0.0, targetSec);
+    pendingSeekAdjustWallClock = !audioOk;
+    audioSyncBiasValid = false;
+    videoEnded = false;
+    resetPresentClock = true;
+    redraw = true;
+    forceRefreshArt = true;
   };
   auto setCurrentFrame = [&](size_t poolIndex) {
     size_t releaseIndex = kInvalidPoolIndex;
@@ -1582,6 +1602,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             currentEpoch = std::max(currentEpoch, newSeekEpoch);
             decodeEnded.store(false);
             inputEof = false;
+            if (hasPendingPacket) {
+              av_packet_unref(&pendingPacket.pkt);
+              hasPendingPacket = false;
+            }
+            avcodec_flush_buffers(videoDec.codec);
             clearQueue();
             fastForwardPending.store(false);
           }
@@ -1785,6 +1810,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             audioStreamReset(static_cast<uint64_t>(targetFrames));
             lastSeekEpoch = newSeekEpoch;
             inputEof = false;
+            if (hasPendingPacket) {
+              av_packet_unref(&pendingPacket.pkt);
+              hasPendingPacket = false;
+            }
+            avcodec_flush_buffers(audioDec.codec);
           }
 
           if (!hasPendingPacket) {
@@ -2192,7 +2222,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   double nextPresentSec = 0.0;
   bool presentInit = false;
   bool presentUseWall = false;
-  bool resetPresentClock = false;
   int64_t firstTs = frame->timestamp100ns;
   double audioStartOffsetSec =
       std::max(0.0, static_cast<double>(firstTs) * ticksToSeconds);
@@ -3051,14 +3080,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         double targetSec = std::max(0.0, syncSec);
         int64_t targetTs =
             firstTs + static_cast<int64_t>(targetSec * secondsToTicks);
-        requestFastForward(targetTs);
+        requestFastForward(targetTs, targetSec);
         audioSyncBiasValid = false;
         resumeGraceUntil = now + std::chrono::milliseconds(500);
         resyncCooldownUntil = now + kResyncCooldown;
         resetPresentClock = true;
         redraw = true;
         forceRefreshArt = true;
-        perfLogAppendf(&perfLog, "sync_fast_forward audio=%.3f target=%.3f",
+        perfLogAppendf(&perfLog, "sync_seek audio=%.3f target=%.3f",
                        audioNow, syncSec);
         continue;
       } else {
@@ -3149,7 +3178,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               !decodeEnded.load()) {
             int64_t targetTs =
                 firstTs + static_cast<int64_t>(syncSec * secondsToTicks);
-            requestFastForward(targetTs);
+            requestFastForward(targetTs, syncSec);
           }
         }
         if (notifyQueue) {
@@ -3192,7 +3221,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
 
     if (advanced && presentDue) {
-      if (audioHoldActive && audioOk && audioIsPrimed()) {
+      if (audioHoldActive && audioOk && audioIsPrimed() && !bufferingActive) {
         audioSetHold(false);
         audioHoldActive = false;
         audioSyncBiasSec = 0.0;
