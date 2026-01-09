@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <filesystem>
 
+struct Clock;
+
 struct AudioPerfStats {
   uint64_t callbacks = 0;
   uint64_t framesRequested = 0;
@@ -42,9 +44,14 @@ bool audioStartStream(uint64_t totalFrames);
 void audioStopStream();
 size_t audioStreamBufferedFrames();
 size_t audioStreamCapacityFrames();
-size_t audioStreamWrite(const float* interleaved, size_t frames);
+bool audioStreamPushFrame(const float* interleaved, size_t frames,
+                          int64_t ptsUs, int64_t durationUs, int serial);
 void audioStreamSetEnd(bool atEnd);
 void audioStreamReset(uint64_t framePos);
+void audioStreamFlush(int serial);
+void audioStreamSetClock(Clock* clock);
+bool audioStreamIsStarved();
+bool audioStreamIsClockReady();
 
 std::filesystem::path audioGetNowPlaying();
 
