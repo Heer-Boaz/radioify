@@ -210,9 +210,9 @@ int64_t clampi64(int64_t v, int64_t lo, int64_t hi) {
 
 int64_t computeTargetDelayUs(int64_t delayUs, int64_t videoPtsUs,
                              int64_t masterUs) {
-  const int64_t kSyncThresholdMin = 40000;
+  const int64_t kSyncThresholdMin = 10000;
   const int64_t kSyncThresholdMax = 100000;
-  const int64_t kNoSyncThreshold = 10000000;
+  const int64_t kNoSyncThreshold = 3000000;
 
   int64_t diff = videoPtsUs - masterUs;
   int64_t syncThreshold = clampi64(delayUs, kSyncThresholdMin, kSyncThresholdMax);
@@ -220,7 +220,11 @@ int64_t computeTargetDelayUs(int64_t delayUs, int64_t videoPtsUs,
     if (diff <= -syncThreshold) {
       delayUs = std::max<int64_t>(0, delayUs + diff);
     } else if (diff >= syncThreshold) {
-      delayUs = delayUs + diff;
+      if (delayUs > syncThreshold * 2) {
+        delayUs = delayUs + diff;
+      } else {
+        delayUs = 2 * delayUs;
+      }
     }
   }
   return delayUs;
@@ -516,8 +520,19 @@ struct IoCache {
       {
         std::lock_guard<std::mutex> lock(mutex);
         if (readCount == 0) {
-          eof = true;
-          filling = false;
+          bool atEof = std::feof(file) != 0;
+          if (!atEof && fileSize >= 0 && filePos >= fileSize) {
+            atEof = true;
+          }
+          if (atEof) {
+            eof = true;
+            filling = false;
+            cv.notify_all();
+            continue;
+          }
+          if (std::ferror(file)) {
+            std::clearerr(file);
+          }
           cv.notify_all();
           continue;
         }
@@ -1841,6 +1856,9 @@ struct Player::Impl {
         }
         continue;
       }
+      if (read == AVERROR(EAGAIN)) {
+        continue;
+      }
       if (read < 0) {
         if (!demuxAtEof) {
           demuxEnded.store(true);
@@ -2388,6 +2406,7 @@ struct Player::Impl {
       MasterClockSnapshot master = masterClockSnapshot(now);
       int64_t masterUs = master.us;
       int64_t diffUs = 0;
+      int64_t actualDurationUs = delayUs;
       if (masterUs != 0) {
         diffUs = front.ptsUs - masterUs;
         delayUs = computeTargetDelayUs(delayUs, front.ptsUs, masterUs);
@@ -2408,13 +2427,15 @@ struct Player::Impl {
         logVideo("sleep", &front, masterUs, master.source, diffUs, delayUs);
         continue;
       }
-      if (now > targetUs + delayUs) {
+      if (now > targetUs + actualDurationUs) {
         if (videoFrames.size() > 1) {
           logVideo("drop_late", &front, masterUs, master.source, diffUs,
                    delayUs);
           QueuedFrame drop{};
           if (videoFrames.pop(&drop)) {
             videoFrames.release(drop.poolIndex);
+            lastPtsUs = drop.ptsUs;
+            frameTimerUs = targetUs;
           }
           continue;
         }
