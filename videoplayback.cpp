@@ -738,9 +738,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         audioOk && !audioStreamClockReady() && !audioIsFinished();
     bool audioStarved = audioOk && audioStreamStarved();
     bool waitingForVideo = !player.hasVideoFrame();
+    bool isPaused = player.state() == PlayerState::Paused;
     bool allowFrame = haveFrame;
+
     auto waitingLabel = [&]() -> std::string {
       if (seekingOverlay) return "Seeking...";
+      if (isPaused) return "Paused";
+      if (player.state() == PlayerState::Opening) return "Opening...";
+      if (player.state() == PlayerState::Prefill) return "Prefilling...";
       if (waitingForAudio) return "Waiting for audio...";
       if (audioStarved || waitingForVideo) return "Buffering video...";
       return "Waiting for video...";

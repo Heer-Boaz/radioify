@@ -927,7 +927,7 @@ bool initVideoDecoder(const DemuxContext& demux, bool preferHardware,
   out->fullRange = mapFullRange(ctx->color_range);
   out->yuvMatrix = mapColorMatrix(ctx->colorspace);
   out->yuvTransfer = mapColorTransfer(ctx->color_trc);
-  out->formatStartUs = demux.videoStartUs;
+  out->formatStartUs = demux.formatStartUs;
   out->useSharedDevice = usingSharedDevice;
   return true;
 }
@@ -1002,7 +1002,7 @@ bool initAudioDecoder(const DemuxContext& demux, uint32_t outRate,
   out->frame = frame;
   out->swr = swr;
   out->timeBase = stream->time_base;
-  out->formatStartUs = demux.audioStartUs;
+  out->formatStartUs = demux.formatStartUs;
   out->outRate = outRate;
   out->outChannels = outChannels;
   if (stream->codecpar && stream->codecpar->initial_padding > 0) {
@@ -1292,6 +1292,7 @@ struct Player::Impl {
   std::atomic<int64_t> lastDelayUs{0};
   std::atomic<int64_t> audioBufferedStartPtsUs{0};
   std::atomic<int> audioBufferedStartSerial{0};
+  std::atomic<bool> audioBufferedStartValid{false};
 
   std::atomic<bool> clearFrameRequested{false};
   std::atomic<bool> hasFrame{false};
@@ -1389,7 +1390,8 @@ struct Player::Impl {
   bool audioClockFresh(int64_t nowUs) const {
     int64_t last = audioStreamClockLastUpdatedUs();
     if (last <= 0) return false;
-    return (nowUs - last) <= kAudioClockFreshUs;
+    // Increased threshold for slow starting audio devices or starvation recovery.
+    return (nowUs - last) <= 1000000;
   }
 
   struct MasterClockSnapshot {
@@ -1418,7 +1420,18 @@ struct Player::Impl {
 
   bool prefillReady(int64_t nowUs) const {
     (void)nowUs;
-    return videoFrames.size() >= kVideoPrefillFrames;
+    // We want enough decoded frames to ensure smooth start.
+    bool videoReady = videoFrames.size() >= kVideoPrefillFrames || decodeEnded.load();
+
+    // For audio, we check both encoded packets and decoded samples in the playback buffer.
+    size_t bufferedSamples = audioStreamBufferedFrames();
+    bool audioHasDecoded = (bufferedSamples >= 4800); // ~100ms at 48khz
+    bool videoFull = videoFrames.size() >= (maxQueue.load() > 0 ? maxQueue.load() - 1 : 1);
+    bool audioReady = !audioStartOk.load() || audioDecodeEnded.load() || 
+                      audioHasDecoded || audioPackets.size() >= kAudioPacketLowWater ||
+                      videoFull;
+
+    return videoReady && audioReady;
   }
 
   int64_t masterClockUs() const {
@@ -1477,6 +1490,7 @@ struct Player::Impl {
     clearFrameRequested.store(false, std::memory_order_relaxed);
     audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
     audioBufferedStartSerial.store(0, std::memory_order_relaxed);
+    audioBufferedStartValid.store(false, std::memory_order_relaxed);
     {
       std::lock_guard<std::mutex> lock(eventMutex);
       events.clear();
@@ -1539,6 +1553,9 @@ struct Player::Impl {
         audioPackets.flush(static_cast<uint64_t>(nextSerial));
         videoFrames.flush(static_cast<uint64_t>(nextSerial));
         audioStreamFlushSerial(nextSerial);
+        audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
+        audioBufferedStartSerial.store(0, std::memory_order_relaxed);
+        audioBufferedStartValid.store(false, std::memory_order_relaxed);
         setState(PlayerState::Seeking);
         appendTimingFmt("ctrl_seek_request serial=%d target_us=%lld",
                         nextSerial, static_cast<long long>(clampedTarget));
@@ -1585,12 +1602,16 @@ struct Player::Impl {
             uint32_t sampleRate = stats.sampleRate ? stats.sampleRate : 48000;
             int64_t targetPts =
                 lastPresentedPtsUs.load(std::memory_order_relaxed);
+            bool audioStartValid =
+                audioBufferedStartValid.load(std::memory_order_relaxed);
             int bufferedSerial =
                 audioBufferedStartSerial.load(std::memory_order_relaxed);
             int64_t bufferedPts =
                 audioBufferedStartPtsUs.load(std::memory_order_relaxed);
-            if (sampleRate > 0 && targetPts > 0 &&
-                bufferedSerial == ev.serial && bufferedPts > 0) {
+
+            if (sampleRate > 0 && targetPts != AV_NOPTS_VALUE &&
+                audioStartValid && bufferedSerial == ev.serial &&
+                bufferedPts != AV_NOPTS_VALUE) {
               int64_t deltaUs = targetPts - bufferedPts;
               uint64_t droppedFrames = 0;
               if (deltaUs > 0) {
@@ -1606,11 +1627,12 @@ struct Player::Impl {
                   static_cast<uint64_t>(sampleRate));
               int64_t basePts = bufferedPts + droppedUs;
               audioStreamSetBase(ev.serial, basePts);
-            } else if (targetPts > 0) {
+            } else if (targetPts != AV_NOPTS_VALUE) {
               audioStreamSetBase(ev.serial, targetPts);
             }
             audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
             audioBufferedStartSerial.store(0, std::memory_order_relaxed);
+            audioBufferedStartValid.store(false, std::memory_order_relaxed);
             setState(PlayerState::Playing);
           }
         }
@@ -2261,24 +2283,42 @@ struct Player::Impl {
         audioDec.nextPtsUs = ptsUs + durationUs;
         audioDec.nextPtsValid = true;
         audioDec.writePosFrames += static_cast<int64_t>(converted);
-        uint64_t writtenFrames = 0;
-        bool allowBlock = !audioIsHolding();
-        if (!audioStreamWriteSamples(audioDec.convertBuffer.data(),
-                                     static_cast<uint64_t>(converted), ptsUs,
+        
+        uint64_t totalWritten = 0;
+        while (running.load() && totalWritten < static_cast<uint64_t>(converted)) {
+          if (static_cast<int>(decoderSerial) != currentSerial.load(std::memory_order_relaxed)) {
+            break;
+          }
+          uint64_t written = 0;
+          PlayerState st = state.load(std::memory_order_relaxed);
+          // Always allow blocking to ensure we don't discard audio during prefill.
+          // The demuxer deadlock is now prevented by prefillReady returning true if video is full.
+          bool allowBlock = true;
+          
+          if (!audioStreamWriteSamples(audioDec.convertBuffer.data() + 
+                                       totalWritten * audioDec.outChannels,
+                                     static_cast<uint64_t>(converted) - totalWritten, 
+                                     ptsUs,
                                      static_cast<int>(decoderSerial),
-                                     allowBlock, &writtenFrames)) {
-          break;
-        }
-        if (writtenFrames > 0) {
+                                     allowBlock, &written)) {
+            break;
+          }
+          if (written == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+          }
+          totalWritten += written;
+          
           int bufferedSerial =
               audioBufferedStartSerial.load(std::memory_order_relaxed);
-          int64_t bufferedPts =
-              audioBufferedStartPtsUs.load(std::memory_order_relaxed);
-          if (bufferedSerial != static_cast<int>(decoderSerial) ||
-              bufferedPts == 0) {
+          bool firstForSerial =
+              (bufferedSerial != static_cast<int>(decoderSerial) ||
+               !audioBufferedStartValid.load(std::memory_order_relaxed));
+          if (firstForSerial && ptsUs != AV_NOPTS_VALUE) {
             audioBufferedStartSerial.store(static_cast<int>(decoderSerial),
                                            std::memory_order_relaxed);
             audioBufferedStartPtsUs.store(ptsUs, std::memory_order_relaxed);
+            audioBufferedStartValid.store(true, std::memory_order_relaxed);
           }
         }
       }
@@ -2289,7 +2329,7 @@ struct Player::Impl {
 
   void videoOutputMain() {
     int64_t frameTimerUs = nowUs();
-    int64_t lastPtsUs = 0;
+    int64_t lastPtsUs = -1;
     int64_t lastDelayUsValue =
         (fallbackFrameDurationUs.load() > 0) ? fallbackFrameDurationUs.load()
                                              : 33333;
@@ -2356,7 +2396,7 @@ struct Player::Impl {
       if (lastSerial != static_cast<int>(serial)) {
         lastSerial = static_cast<int>(serial);
         firstPresentedForSerial = false;
-        lastPtsUs = 0;
+        lastPtsUs = -1;
         lastDelayUsValue =
             (fallbackFrameDurationUs.load() > 0) ? fallbackFrameDurationUs.load()
                                                  : 33333;
@@ -2380,7 +2420,7 @@ struct Player::Impl {
         continue;
       }
 
-      if (front.ptsUs < lastPtsUs) {
+      if (lastPtsUs >= 0 && front.ptsUs < lastPtsUs) {
         logVideo("drop_backwards", &front, 0, PlayerClockSource::None, 0, 0);
         QueuedFrame drop{};
         if (videoFrames.pop(&drop)) {
@@ -2390,7 +2430,7 @@ struct Player::Impl {
       }
 
       int64_t delayUs = 0;
-      if (lastPtsUs == 0) {
+      if (lastPtsUs < 0) {
         delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
       } else {
         delayUs = front.ptsUs - lastPtsUs;
@@ -2407,9 +2447,20 @@ struct Player::Impl {
       int64_t masterUs = master.us;
       int64_t diffUs = 0;
       int64_t actualDurationUs = delayUs;
+
       if (masterUs != 0) {
         diffUs = front.ptsUs - masterUs;
         delayUs = computeTargetDelayUs(delayUs, front.ptsUs, masterUs);
+        
+        // If we are way behind the audio clock, skip this frame to catch up.
+        if (diffUs < -100000 && videoFrames.size() > 1) {
+          logVideo("skip_behind", &front, masterUs, master.source, diffUs, delayUs);
+          QueuedFrame drop{};
+          if (videoFrames.pop(&drop)) {
+            videoFrames.release(drop.poolIndex);
+          }
+          continue;
+        }
       }
       lastMasterUs.store(masterUs, std::memory_order_relaxed);
       lastMasterSource.store(static_cast<int>(master.source),
