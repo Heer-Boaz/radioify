@@ -1,0 +1,611 @@
+2026-01-10T17:01:36.860 state_change from=Idle to=Opening
+2026-01-10T17:01:36.998 ctrl_resize_request w=524 h=284
+2026-01-10T17:01:36.998 state_change from=Opening to=Prefill
+2026-01-10T17:01:37.035 audio_device_started sampleRate=48000 channels=1
+2026-01-10T17:01:37.041 demux_read_end err=-541478725
+2026-01-10T17:01:37.046 video_heartbeat_decoder q=0 has_pkt=0 eof=0
+2026-01-10T17:01:37.053 state_change from=Prefill to=Priming
+2026-01-10T17:01:37.053 state_change from=Priming to=Draining
+2026-01-10T17:01:37.068 video_heartbeat_output state=Draining q=3 master=0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:37.274 video_present state=Draining serial=1 pts_us=505000 dur_us=16683 master=188369 master_src=audio diff_us=316631 delay_us=200000 q=3 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:37.280 video_renderer gpu_active=1 format=hwtexture path=gpu_copy fmt=NV12 bind=0x200
+2026-01-10T17:01:37.463 video_present state=Draining serial=1 pts_us=521000 dur_us=16683 master=376385 master_src=audio diff_us=144615 delay_us=161024 q=5 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:38.005 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:38.047 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:38.078 video_heartbeat_output state=Draining q=16 master=992594 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:38.094 video_present state=Draining serial=1 pts_us=988000 dur_us=16683 master=1008113 master_src=audio diff_us=-20113 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:38.603 video_present state=Draining serial=1 pts_us=1489000 dur_us=16683 master=1516453 master_src=audio diff_us=-27453 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:39.009 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:39.056 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:39.088 video_heartbeat_output state=Draining q=16 master=2002192 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:39.104 video_present state=Draining serial=1 pts_us=1989000 dur_us=16683 master=2017658 master_src=audio diff_us=-28658 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:39.595 video_present state=Draining serial=1 pts_us=2490000 dur_us=16683 master=2508572 master_src=audio diff_us=-18572 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:40.017 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:40.064 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:40.095 video_heartbeat_output state=Draining q=16 master=3009394 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:40.095 video_present state=Draining serial=1 pts_us=2990000 dur_us=16683 master=3009394 master_src=audio diff_us=-19394 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:40.598 video_present state=Draining serial=1 pts_us=3491000 dur_us=16683 master=3512033 master_src=audio diff_us=-21033 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:41.020 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:41.068 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:41.099 video_heartbeat_output state=Draining q=16 master=4012941 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:41.099 video_present state=Draining serial=1 pts_us=3991000 dur_us=16683 master=4012941 master_src=audio diff_us=-21941 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:41.600 video_present state=Draining serial=1 pts_us=4492000 dur_us=16683 master=4513816 master_src=audio diff_us=-21816 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:42.023 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:42.070 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:42.101 video_heartbeat_output state=Draining q=16 master=5015263 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:42.101 video_present state=Draining serial=1 pts_us=4992000 dur_us=16683 master=5015263 master_src=audio diff_us=-23263 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:42.603 video_present state=Draining serial=1 pts_us=5493000 dur_us=16683 master=5516865 master_src=audio diff_us=-23865 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:43.028 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:43.074 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:43.105 video_heartbeat_output state=Draining q=16 master=6019943 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:43.106 video_present state=Draining serial=1 pts_us=5993000 dur_us=16683 master=6019943 master_src=audio diff_us=-26943 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:43.612 video_present state=Draining serial=1 pts_us=6494000 dur_us=16683 master=6525850 master_src=audio diff_us=-31850 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:44.034 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:44.085 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:44.101 video_present state=Draining serial=1 pts_us=6994000 dur_us=16683 master=7014512 master_src=audio diff_us=-20512 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:44.116 video_heartbeat_output state=Draining q=16 master=7030564 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:44.604 video_present state=Draining serial=1 pts_us=7495000 dur_us=16683 master=7518430 master_src=audio diff_us=-23430 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:45.040 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:45.092 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:45.108 video_present state=Draining serial=1 pts_us=7995000 dur_us=16683 master=8022494 master_src=audio diff_us=-27494 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:45.123 video_heartbeat_output state=Draining q=16 master=8037575 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:45.611 video_present state=Draining serial=1 pts_us=8496000 dur_us=16683 master=8524945 master_src=audio diff_us=-28945 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:46.044 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:46.101 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:46.101 video_present state=Draining serial=1 pts_us=8996000 dur_us=16683 master=9015430 master_src=audio diff_us=-19430 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:46.132 video_heartbeat_output state=Draining q=16 master=9046406 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:46.604 video_present state=Draining serial=1 pts_us=9497000 dur_us=16683 master=9518410 master_src=audio diff_us=-21410 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:47.044 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:47.107 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:47.107 video_present state=Draining serial=1 pts_us=9997000 dur_us=16683 master=10021329 master_src=audio diff_us=-24329 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:47.138 video_heartbeat_output state=Draining q=16 master=10052418 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:47.611 video_present state=Draining serial=1 pts_us=10498000 dur_us=16683 master=10524578 master_src=audio diff_us=-26578 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:48.050 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:48.114 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:48.115 video_present state=Draining serial=1 pts_us=10998000 dur_us=16683 master=11028709 master_src=audio diff_us=-30709 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:48.146 video_heartbeat_output state=Draining q=16 master=11060225 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:48.602 video_present state=Draining serial=1 pts_us=11499000 dur_us=16683 master=11516435 master_src=audio diff_us=-17435 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:49.054 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:49.104 video_present state=Draining serial=1 pts_us=11999000 dur_us=16683 master=12017812 master_src=audio diff_us=-18812 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:49.119 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:49.150 video_heartbeat_output state=Draining q=16 master=12065028 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:49.606 video_present state=Draining serial=1 pts_us=12500000 dur_us=16683 master=12520292 master_src=audio diff_us=-20292 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:50.058 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:50.109 video_present state=Draining serial=1 pts_us=13000000 dur_us=16683 master=13023369 master_src=audio diff_us=-23369 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:50.124 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:50.156 video_heartbeat_output state=Draining q=16 master=13070366 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:50.611 video_present state=Draining serial=1 pts_us=13501000 dur_us=16683 master=13525249 master_src=audio diff_us=-24249 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:51.061 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:51.113 video_present state=Draining serial=1 pts_us=14001000 dur_us=16683 master=14026736 master_src=audio diff_us=-25736 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:51.129 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:51.159 video_heartbeat_output state=Draining q=16 master=14073155 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:51.617 video_present state=Draining serial=1 pts_us=14502000 dur_us=16683 master=14531472 master_src=audio diff_us=-29472 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:52.061 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:52.106 video_present state=Draining serial=1 pts_us=15002000 dur_us=16683 master=15021006 master_src=audio diff_us=-19006 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:52.154 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:52.170 video_heartbeat_output state=Draining q=16 master=15084299 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:52.611 video_present state=Draining serial=1 pts_us=15503000 dur_us=16683 master=15524921 master_src=audio diff_us=-21921 delay_us=0 q=11 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:52.846 video_pts_discontinuity_sync state=Draining serial=1 pts_us=18372000 dur_us=16683 master=15760526 master_src=audio diff_us=2636000 delay_us=0 q=1 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:52.846 video_sync_lost_freerun state=Draining serial=1 pts_us=18372000 dur_us=16683 master=15760526 master_src=audio diff_us=2611474 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:01:53.067 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:53.175 video_heartbeat_output state=Draining q=0 master=18629598 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:54.069 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:54.183 video_heartbeat_output state=Draining q=0 master=19637601 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:54.890 video_stall_detected state=Draining q=0 master=0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:54.891 state_change from=Draining to=Priming
+2026-01-10T17:01:54.891 ctrl_seek_request serial=2 target_us=20343671 seek_target_us=19343671 (keyframe-adjusted)
+2026-01-10T17:01:54.891 state_change from=Priming to=Draining
+2026-01-10T17:01:54.905 demux_seek serial=2 target_us=19340671
+2026-01-10T17:01:54.921 demux_seek_result serial=2 res=0
+2026-01-10T17:01:54.921 ctrl_seek_applied serial=2 res=0
+2026-01-10T17:01:54.940 video_heartbeat_decoder q=0 has_pkt=0 eof=0
+2026-01-10T17:01:55.074 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:55.185 video_heartbeat_output state=Draining q=16 master=19216715 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:55.248 video_present state=Draining serial=2 pts_us=19257000 dur_us=16683 master=19279231 master_src=audio diff_us=-22231 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:55.753 video_present state=Draining serial=2 pts_us=19757000 dur_us=16683 master=19784053 master_src=audio diff_us=-27053 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:55.940 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:56.077 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:56.189 video_heartbeat_output state=Draining q=16 master=20221431 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:56.255 video_present state=Draining serial=2 pts_us=20258000 dur_us=16683 master=20285991 master_src=audio diff_us=-27991 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:56.755 video_present state=Draining serial=2 pts_us=20758000 dur_us=16683 master=20786963 master_src=audio diff_us=-28963 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:56.944 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:01:57.080 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:57.194 video_heartbeat_output state=Draining q=16 master=21225525 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:57.256 video_present state=Draining serial=2 pts_us=21259000 dur_us=16683 master=21288397 master_src=audio diff_us=-29397 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:57.758 video_present state=Draining serial=2 pts_us=21759000 dur_us=16683 master=21790097 master_src=audio diff_us=-31097 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:57.944 video_heartbeat_decoder q=15 has_pkt=0 eof=0
+2026-01-10T17:01:58.082 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:58.195 video_heartbeat_output state=Draining q=16 master=22226930 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:58.258 video_present state=Draining serial=2 pts_us=22260000 dur_us=16683 master=22289745 master_src=audio diff_us=-29745 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:58.756 video_present state=Draining serial=2 pts_us=22760000 dur_us=16683 master=22787438 master_src=audio diff_us=-27438 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:58.945 video_heartbeat_decoder q=15 has_pkt=0 eof=0
+2026-01-10T17:01:59.083 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:01:59.198 video_heartbeat_output state=Draining q=16 master=23230125 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:59.262 video_present state=Draining serial=2 pts_us=23261000 dur_us=16683 master=23293290 master_src=audio diff_us=-32290 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:59.760 video_present state=Draining serial=2 pts_us=23761000 dur_us=16683 master=23792566 master_src=audio diff_us=-31566 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:01:59.950 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:00.089 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:00.201 video_heartbeat_output state=Draining q=16 master=24232830 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:00.248 video_present state=Draining serial=2 pts_us=24262000 dur_us=16683 master=24279384 master_src=audio diff_us=-17384 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:00.752 video_present state=Draining serial=2 pts_us=24762000 dur_us=16683 master=24783907 master_src=audio diff_us=-21907 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:00.953 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:01.094 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:01.206 video_heartbeat_output state=Draining q=16 master=25238781 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:01.255 video_present state=Draining serial=2 pts_us=25263000 dur_us=16683 master=25286348 master_src=audio diff_us=-23348 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:01.758 video_present state=Draining serial=2 pts_us=25763000 dur_us=16683 master=25789902 master_src=audio diff_us=-26902 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:01.979 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:02.096 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:02.216 video_heartbeat_output state=Draining q=16 master=26248161 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:02.263 video_present state=Draining serial=2 pts_us=26264000 dur_us=16683 master=26295381 master_src=audio diff_us=-31381 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:02.752 video_present state=Draining serial=2 pts_us=26764000 dur_us=16683 master=26782678 master_src=audio diff_us=-18678 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:02.990 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:03.105 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:03.225 video_heartbeat_output state=Draining q=16 master=27257326 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:03.257 video_present state=Draining serial=2 pts_us=27265000 dur_us=16683 master=27288863 master_src=audio diff_us=-23863 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:03.761 video_present state=Draining serial=2 pts_us=27765000 dur_us=16683 master=27793164 master_src=audio diff_us=-28164 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:03.998 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:04.111 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:04.234 video_heartbeat_output state=Draining q=16 master=28266044 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:04.265 video_present state=Draining serial=2 pts_us=28266000 dur_us=16683 master=28297600 master_src=audio diff_us=-31600 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:04.755 video_present state=Draining serial=2 pts_us=28766000 dur_us=16683 master=28787456 master_src=audio diff_us=-21456 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:05.008 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:05.115 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:05.244 video_heartbeat_output state=Draining q=16 master=29275955 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:05.259 video_present state=Draining serial=2 pts_us=29267000 dur_us=16683 master=29291576 master_src=audio diff_us=-24576 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:05.763 video_present state=Draining serial=2 pts_us=29767000 dur_us=16683 master=29794245 master_src=audio diff_us=-27245 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:06.013 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:06.119 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:06.247 video_heartbeat_output state=Draining q=16 master=30279718 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:06.263 video_present state=Draining serial=2 pts_us=30268000 dur_us=16683 master=30295742 master_src=audio diff_us=-27742 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:06.769 video_present state=Draining serial=2 pts_us=30768000 dur_us=16683 master=30800805 master_src=audio diff_us=-32805 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:07.035 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:07.123 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:07.256 video_heartbeat_output state=Draining q=16 master=31287881 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:07.256 video_present state=Draining serial=2 pts_us=31269000 dur_us=16683 master=31287881 master_src=audio diff_us=-18881 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:07.758 video_present state=Draining serial=2 pts_us=31769000 dur_us=16683 master=31790186 master_src=audio diff_us=-21186 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:08.040 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:08.127 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:08.260 video_heartbeat_output state=Draining q=16 master=32291989 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:08.260 video_present state=Draining serial=2 pts_us=32270000 dur_us=16683 master=32291989 master_src=audio diff_us=-21989 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:08.764 video_present state=Draining serial=2 pts_us=32770000 dur_us=16683 master=32796571 master_src=audio diff_us=-26571 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:09.048 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:09.128 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:09.267 video_heartbeat_output state=Draining q=16 master=33299554 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:09.267 video_present state=Draining serial=2 pts_us=33271000 dur_us=16683 master=33299554 master_src=audio diff_us=-28554 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:09.758 video_present state=Draining serial=2 pts_us=33771000 dur_us=16683 master=33790773 master_src=audio diff_us=-19773 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:10.058 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:10.136 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:10.262 video_present state=Draining serial=2 pts_us=34272000 dur_us=16683 master=34294087 master_src=audio diff_us=-22087 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:10.277 video_heartbeat_output state=Draining q=16 master=34309096 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:10.763 video_present state=Draining serial=2 pts_us=34772000 dur_us=16683 master=34794877 master_src=audio diff_us=-22877 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:11.063 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:11.140 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:11.268 video_present state=Draining serial=2 pts_us=35273000 dur_us=16683 master=35299543 master_src=audio diff_us=-26543 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:11.283 video_heartbeat_output state=Draining q=16 master=35315034 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:11.772 video_present state=Draining serial=2 pts_us=35773000 dur_us=16683 master=35804310 master_src=audio diff_us=-31310 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:12.071 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:12.146 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:12.260 video_present state=Draining serial=2 pts_us=36274000 dur_us=16683 master=36292186 master_src=audio diff_us=-18186 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:12.292 video_heartbeat_output state=Draining q=16 master=36324202 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:12.763 video_present state=Draining serial=2 pts_us=36774000 dur_us=16683 master=36794680 master_src=audio diff_us=-20680 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:13.089 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:13.155 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:13.263 video_present state=Draining serial=2 pts_us=37275000 dur_us=16683 master=37295073 master_src=audio diff_us=-20073 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:13.293 video_heartbeat_output state=Draining q=16 master=37325764 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:13.767 video_present state=Draining serial=2 pts_us=37775000 dur_us=16683 master=37799321 master_src=audio diff_us=-24321 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:14.102 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:14.165 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:14.275 video_present state=Draining serial=2 pts_us=38276000 dur_us=16683 master=38307835 master_src=audio diff_us=-31835 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:14.306 video_heartbeat_output state=Draining q=16 master=38338389 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:14.763 video_present state=Draining serial=2 pts_us=38776000 dur_us=16683 master=38795287 master_src=audio diff_us=-19287 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:15.109 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:15.174 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:15.266 video_present state=Draining serial=2 pts_us=39277000 dur_us=16683 master=39298287 master_src=audio diff_us=-21287 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:15.313 video_heartbeat_output state=Draining q=16 master=39345570 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:15.766 video_present state=Draining serial=2 pts_us=39777000 dur_us=16683 master=39797891 master_src=audio diff_us=-20891 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:16.114 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:16.181 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:16.273 video_present state=Draining serial=2 pts_us=40278000 dur_us=16683 master=40305291 master_src=audio diff_us=-27291 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:16.320 video_heartbeat_output state=Draining q=16 master=40352306 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:16.776 video_present state=Draining serial=2 pts_us=40778000 dur_us=16683 master=40807705 master_src=audio diff_us=-29705 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:17.122 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:17.188 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:17.279 video_present state=Draining serial=2 pts_us=41279000 dur_us=16683 master=41311169 master_src=audio diff_us=-32169 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:17.326 video_heartbeat_output state=Draining q=16 master=41358879 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:17.767 video_present state=Draining serial=2 pts_us=41779000 dur_us=16683 master=41799150 master_src=audio diff_us=-20150 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:18.127 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:18.195 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:18.270 video_present state=Draining serial=2 pts_us=42280000 dur_us=16683 master=42302059 master_src=audio diff_us=-22059 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:18.332 video_heartbeat_output state=Draining q=16 master=42364239 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:18.770 video_present state=Draining serial=2 pts_us=42780000 dur_us=16683 master=42802092 master_src=audio diff_us=-22092 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:19.132 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:19.200 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:19.274 video_present state=Draining serial=2 pts_us=43281000 dur_us=16683 master=43306192 master_src=audio diff_us=-25192 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:19.337 video_heartbeat_output state=Draining q=16 master=43369775 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:19.777 video_present state=Draining serial=2 pts_us=43781000 dur_us=16683 master=43808739 master_src=audio diff_us=-27739 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:20.136 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:20.204 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:20.262 demux_read_end err=-541478725
+2026-01-10T17:02:20.278 video_present state=Draining serial=2 pts_us=44282000 dur_us=16683 master=44310254 master_src=audio diff_us=-28254 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:20.339 video_heartbeat_output state=Draining q=16 master=44371763 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:20.776 video_present state=Draining serial=2 pts_us=44782000 dur_us=16683 master=44808395 master_src=audio diff_us=-26395 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:21.136 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:21.213 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:21.276 video_present state=Draining serial=2 pts_us=45283000 dur_us=16683 master=45308101 master_src=audio diff_us=-25101 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:21.354 video_heartbeat_output state=Draining q=16 master=45386292 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:21.776 video_present state=Draining serial=2 pts_us=45783000 dur_us=16683 master=45807726 master_src=audio diff_us=-24726 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:22.138 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:22.214 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:22.278 video_present state=Draining serial=2 pts_us=46284000 dur_us=16683 master=46310949 master_src=audio diff_us=-26949 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:22.356 video_heartbeat_output state=Draining q=16 master=46388495 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:22.782 video_present state=Draining serial=2 pts_us=46784000 dur_us=16683 master=46814293 master_src=audio diff_us=-30293 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:23.145 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:23.224 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:23.270 video_present state=Draining serial=2 pts_us=47285000 dur_us=16683 master=47302410 master_src=audio diff_us=-17410 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:23.364 video_heartbeat_output state=Draining q=16 master=47396420 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:23.775 video_present state=Draining serial=2 pts_us=47785000 dur_us=16683 master=47807165 master_src=audio diff_us=-22165 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:24.156 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:24.224 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:24.282 video_present state=Draining serial=2 pts_us=48286000 dur_us=16683 master=48314266 master_src=audio diff_us=-28266 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:24.377 video_heartbeat_output state=Draining q=16 master=48409176 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:24.786 video_present state=Draining serial=2 pts_us=48786000 dur_us=16683 master=48817695 master_src=audio diff_us=-31695 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:25.164 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:25.230 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:25.275 video_present state=Draining serial=2 pts_us=49287000 dur_us=16683 master=49306865 master_src=audio diff_us=-19865 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:25.384 video_heartbeat_output state=Draining q=16 master=49416828 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:25.775 video_present state=Draining serial=2 pts_us=49787000 dur_us=16683 master=49808040 master_src=audio diff_us=-21040 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:26.166 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:26.234 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:26.278 video_present state=Draining serial=2 pts_us=50288000 dur_us=16683 master=50310330 master_src=audio diff_us=-22330 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:26.387 video_heartbeat_output state=Draining q=16 master=50419177 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:26.781 video_present state=Draining serial=2 pts_us=50788000 dur_us=16683 master=50813241 master_src=audio diff_us=-25241 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:27.173 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:27.235 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:27.283 video_present state=Draining serial=2 pts_us=51289000 dur_us=16683 master=51315058 master_src=audio diff_us=-26058 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:27.394 video_heartbeat_output state=Draining q=16 master=51426607 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:27.784 video_present state=Draining serial=2 pts_us=51789000 dur_us=16683 master=51815821 master_src=audio diff_us=-26821 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:28.175 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:28.239 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:28.286 video_present state=Draining serial=2 pts_us=52290000 dur_us=16683 master=52318456 master_src=audio diff_us=-28456 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:28.397 video_heartbeat_output state=Draining q=16 master=52430070 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:28.778 video_present state=Draining serial=2 pts_us=52790000 dur_us=16683 master=52809927 master_src=audio diff_us=-19927 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.186 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:29.241 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:29.282 video_present state=Draining serial=2 pts_us=53291000 dur_us=16683 master=53313878 master_src=audio diff_us=-22878 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.407 video_heartbeat_output state=Draining q=16 master=53439892 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.442 state_change from=Draining to=Priming
+2026-01-10T17:02:29.442 ctrl_seek_request serial=3 target_us=20111000 seek_target_us=19111000 (keyframe-adjusted)
+2026-01-10T17:02:29.442 state_change from=Priming to=Draining
+2026-01-10T17:02:29.454 demux_seek serial=3 target_us=19108000
+2026-01-10T17:02:29.469 demux_seek_result serial=3 res=0
+2026-01-10T17:02:29.469 ctrl_seek_applied serial=3 res=0
+2026-01-10T17:02:29.520 demux_seek serial=4 target_us=19344600
+2026-01-10T17:02:29.520 demux_seek_result serial=4 res=0
+2026-01-10T17:02:29.520 state_change from=Draining to=Priming
+2026-01-10T17:02:29.520 ctrl_seek_request serial=4 target_us=20347600 seek_target_us=19347600 (keyframe-adjusted)
+2026-01-10T17:02:29.520 ctrl_seek_applied serial=4 res=0
+2026-01-10T17:02:29.536 video_priming_present state=Priming serial=4 pts_us=19023000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.547 video_priming_present state=Priming serial=4 pts_us=19023000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=8 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.562 demux_read_end err=-541478725
+2026-01-10T17:02:29.562 state_change from=Priming to=Draining
+2026-01-10T17:02:29.585 state_change from=Draining to=Priming
+2026-01-10T17:02:29.585 ctrl_seek_request serial=5 target_us=20584200 seek_target_us=19584200 (keyframe-adjusted)
+2026-01-10T17:02:29.585 state_change from=Priming to=Draining
+2026-01-10T17:02:29.594 demux_seek serial=5 target_us=19581200
+2026-01-10T17:02:29.611 demux_seek_result serial=5 res=0
+2026-01-10T17:02:29.611 ctrl_seek_applied serial=5 res=0
+2026-01-10T17:02:29.753 demux_seek serial=6 target_us=19817800
+2026-01-10T17:02:29.753 video_drop_serial state=Draining serial=5 pts_us=19590000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=0 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:29.753 state_change from=Draining to=Priming
+2026-01-10T17:02:29.753 ctrl_seek_request serial=6 target_us=20820800 seek_target_us=19820800 (keyframe-adjusted)
+2026-01-10T17:02:29.753 demux_seek_result serial=6 res=0
+2026-01-10T17:02:29.753 ctrl_seek_applied serial=6 res=0
+2026-01-10T17:02:29.771 video_priming_present state=Priming serial=6 pts_us=19524000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.784 video_priming_present state=Priming serial=6 pts_us=19524000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=10 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.797 demux_read_end err=-541478725
+2026-01-10T17:02:29.800 video_drop_serial state=Priming serial=6 pts_us=19524000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=0 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.803 ctrl_seek_request serial=7 target_us=24369800 seek_target_us=23369800 (keyframe-adjusted)
+2026-01-10T17:02:29.803 state_change from=Priming to=Draining
+2026-01-10T17:02:29.815 demux_seek serial=7 target_us=23366800
+2026-01-10T17:02:29.832 demux_seek_result serial=7 res=0
+2026-01-10T17:02:29.832 ctrl_seek_applied serial=7 res=0
+2026-01-10T17:02:29.849 demux_seek serial=8 target_us=29755000
+2026-01-10T17:02:29.850 state_change from=Draining to=Priming
+2026-01-10T17:02:29.850 ctrl_seek_request serial=8 target_us=30758000 seek_target_us=29758000 (keyframe-adjusted)
+2026-01-10T17:02:29.864 demux_seek_result serial=8 res=0
+2026-01-10T17:02:29.864 ctrl_seek_applied serial=8 res=0
+2026-01-10T17:02:29.883 video_priming_present state=Priming serial=8 pts_us=29534000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.883 sync_priming_end serial=8 sync_pts_us=29534000 audio_oldest=-9223372036854775808 video_pts=29534000
+2026-01-10T17:02:29.884 state_change from=Priming to=Playing
+2026-01-10T17:02:29.911 demux_seek serial=9 target_us=35433400
+2026-01-10T17:02:29.911 demux_seek_result serial=9 res=0
+2026-01-10T17:02:29.911 state_change from=Playing to=Priming
+2026-01-10T17:02:29.911 ctrl_seek_request serial=9 target_us=36436400 seek_target_us=35436400 (keyframe-adjusted)
+2026-01-10T17:02:29.911 ctrl_seek_applied serial=9 res=0
+2026-01-10T17:02:29.930 video_priming_present state=Priming serial=9 pts_us=35039000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:29.930 sync_priming_end serial=9 sync_pts_us=35039000 audio_oldest=-9223372036854775808 video_pts=35039000
+2026-01-10T17:02:29.930 state_change from=Priming to=Playing
+2026-01-10T17:02:29.969 demux_seek serial=10 target_us=37326200
+2026-01-10T17:02:29.969 demux_seek_result serial=10 res=0
+2026-01-10T17:02:29.969 state_change from=Playing to=Priming
+2026-01-10T17:02:29.969 ctrl_seek_request serial=10 target_us=38329200 seek_target_us=37329200 (keyframe-adjusted)
+2026-01-10T17:02:29.969 ctrl_seek_applied serial=10 res=0
+2026-01-10T17:02:29.977 video_priming_present state=Priming serial=10 pts_us=37041000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:29.990 video_priming_present state=Priming serial=10 pts_us=37041000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=11 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.005 video_priming_present state=Priming serial=10 pts_us=37041000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.005 video_priming_present state=Priming serial=10 pts_us=37058000 dur_us=16683 master=37041004 master_src=video diff_us=0 delay_us=16809 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.005 sync_priming_end serial=10 sync_pts_us=37041000 audio_oldest=-9223372036854775808 video_pts=37041000
+2026-01-10T17:02:30.005 state_change from=Priming to=Playing
+2026-01-10T17:02:30.018 demux_seek serial=11 target_us=37799400
+2026-01-10T17:02:30.021 video_drop_serial state=Playing serial=10 pts_us=37058000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.021 demux_seek_result serial=11 res=0
+2026-01-10T17:02:30.022 state_change from=Playing to=Priming
+2026-01-10T17:02:30.022 ctrl_seek_request serial=11 target_us=38802400 seek_target_us=37802400 (keyframe-adjusted)
+2026-01-10T17:02:30.022 ctrl_seek_applied serial=11 res=0
+2026-01-10T17:02:30.040 video_priming_present state=Priming serial=11 pts_us=37542000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.052 video_priming_present state=Priming serial=11 pts_us=37542000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=11 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.068 video_priming_present state=Priming serial=11 pts_us=37542000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.068 video_priming_present state=Priming serial=11 pts_us=37558000 dur_us=16683 master=37542003 master_src=video diff_us=0 delay_us=16409 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.068 sync_priming_end serial=11 sync_pts_us=37542000 audio_oldest=-9223372036854775808 video_pts=37542000
+2026-01-10T17:02:30.068 state_change from=Priming to=Playing
+2026-01-10T17:02:30.193 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:30.243 video_heartbeat_ui redraw=0 seeker=1 paused=0
+2026-01-10T17:02:30.290 video_present state=Playing serial=11 pts_us=37675000 dur_us=16683 master=37693959 master_src=audio diff_us=-18959 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.374 demux_seek serial=12 target_us=37562800
+2026-01-10T17:02:30.378 state_change from=Playing to=Priming
+2026-01-10T17:02:30.378 ctrl_seek_request serial=12 target_us=38565800 seek_target_us=37565800 (keyframe-adjusted)
+2026-01-10T17:02:30.383 demux_seek_result serial=12 res=0
+2026-01-10T17:02:30.384 ctrl_seek_applied serial=12 res=0
+2026-01-10T17:02:30.402 video_priming_present state=Priming serial=12 pts_us=37542000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:30.402 sync_priming_end serial=12 sync_pts_us=37542000 audio_oldest=-9223372036854775808 video_pts=37542000
+2026-01-10T17:02:30.403 state_change from=Priming to=Playing
+2026-01-10T17:02:30.415 video_heartbeat_output state=Playing q=9 master=37507246 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.431 demux_seek serial=13 target_us=33540600
+2026-01-10T17:02:30.431 demux_seek_result serial=13 res=0
+2026-01-10T17:02:30.431 state_change from=Playing to=Priming
+2026-01-10T17:02:30.431 ctrl_seek_request serial=13 target_us=34543600 seek_target_us=33543600 (keyframe-adjusted)
+2026-01-10T17:02:30.431 ctrl_seek_applied serial=13 res=0
+2026-01-10T17:02:30.450 video_priming_present state=Priming serial=13 pts_us=33538000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:30.451 sync_priming_end serial=13 sync_pts_us=33538000 audio_oldest=-9223372036854775808 video_pts=33538000
+2026-01-10T17:02:30.451 state_change from=Priming to=Playing
+2026-01-10T17:02:30.489 demux_seek serial=14 target_us=25732800
+2026-01-10T17:02:30.489 demux_seek_result serial=14 res=0
+2026-01-10T17:02:30.489 state_change from=Playing to=Priming
+2026-01-10T17:02:30.489 ctrl_seek_request serial=14 target_us=26735800 seek_target_us=25735800 (keyframe-adjusted)
+2026-01-10T17:02:30.489 ctrl_seek_applied serial=14 res=0
+2026-01-10T17:02:30.496 video_priming_present state=Priming serial=14 pts_us=25530000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.509 video_priming_present state=Priming serial=14 pts_us=25530000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=10 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.525 video_priming_present state=Priming serial=14 pts_us=25530000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.526 video_priming_present state=Priming serial=14 pts_us=25546000 dur_us=16683 master=25530003 master_src=video diff_us=0 delay_us=16409 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.526 sync_priming_end serial=14 sync_pts_us=25530000 audio_oldest=-9223372036854775808 video_pts=25530000
+2026-01-10T17:02:30.526 state_change from=Priming to=Playing
+2026-01-10T17:02:30.537 demux_seek serial=15 target_us=22893600
+2026-01-10T17:02:30.540 video_drop_serial state=Playing serial=14 pts_us=25546000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.541 demux_seek_result serial=15 res=0
+2026-01-10T17:02:30.541 state_change from=Playing to=Priming
+2026-01-10T17:02:30.541 ctrl_seek_request serial=15 target_us=23896600 seek_target_us=22896600 (keyframe-adjusted)
+2026-01-10T17:02:30.541 ctrl_seek_applied serial=15 res=0
+2026-01-10T17:02:30.560 video_priming_present state=Priming serial=15 pts_us=22527000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.573 video_priming_present state=Priming serial=15 pts_us=22527000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=10 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.587 demux_seek serial=16 target_us=22420400
+2026-01-10T17:02:30.587 demux_seek_result serial=16 res=0
+2026-01-10T17:02:30.588 video_drop_serial state=Priming serial=15 pts_us=22527000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=0 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.592 ctrl_seek_request serial=16 target_us=23423400 seek_target_us=22423400 (keyframe-adjusted)
+2026-01-10T17:02:30.592 ctrl_seek_applied serial=16 res=0
+2026-01-10T17:02:30.604 video_priming_present state=Priming serial=16 pts_us=22026000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=8 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.620 video_priming_present state=Priming serial=16 pts_us=22026000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.620 video_priming_present state=Priming serial=16 pts_us=22043000 dur_us=16683 master=22026003 master_src=video diff_us=0 delay_us=16809 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:30.620 sync_priming_end serial=16 sync_pts_us=22026000 audio_oldest=-9223372036854775808 video_pts=22026000
+2026-01-10T17:02:30.620 state_change from=Priming to=Playing
+2026-01-10T17:02:30.640 demux_seek serial=17 target_us=21947200
+2026-01-10T17:02:30.644 state_change from=Playing to=Priming
+2026-01-10T17:02:30.645 ctrl_seek_request serial=17 target_us=22950200 seek_target_us=21950200 (keyframe-adjusted)
+2026-01-10T17:02:30.651 demux_seek_result serial=17 res=0
+2026-01-10T17:02:30.651 ctrl_seek_applied serial=17 res=0
+2026-01-10T17:02:30.669 video_priming_present state=Priming serial=17 pts_us=21526000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:30.669 sync_priming_end serial=17 sync_pts_us=21526000 audio_oldest=-9223372036854775808 video_pts=21526000
+2026-01-10T17:02:30.669 state_change from=Priming to=Playing
+2026-01-10T17:02:30.698 video_drop_serial state=Playing serial=17 pts_us=21542000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.700 state_change from=Playing to=Priming
+2026-01-10T17:02:30.700 ctrl_seek_request serial=18 target_us=22713600 seek_target_us=21713600 (keyframe-adjusted)
+2026-01-10T17:02:30.700 demux_seek serial=18 target_us=21710600
+2026-01-10T17:02:30.700 demux_seek_result serial=18 res=0
+2026-01-10T17:02:30.700 ctrl_seek_applied serial=18 res=0
+2026-01-10T17:02:30.717 video_priming_present state=Priming serial=18 pts_us=21526000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.730 video_priming_present state=Priming serial=18 pts_us=21526000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=10 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.745 video_priming_present state=Priming serial=18 pts_us=21526000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.745 video_priming_present state=Priming serial=18 pts_us=21542000 dur_us=16683 master=21526003 master_src=video diff_us=0 delay_us=16409 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.745 sync_priming_end serial=18 sync_pts_us=21526000 audio_oldest=-9223372036854775808 video_pts=21526000
+2026-01-10T17:02:30.745 state_change from=Priming to=Playing
+2026-01-10T17:02:30.757 demux_seek serial=19 target_us=21000800
+2026-01-10T17:02:30.761 video_drop_serial state=Playing serial=18 pts_us=21542000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.761 demux_seek_result serial=19 res=0
+2026-01-10T17:02:30.761 state_change from=Playing to=Priming
+2026-01-10T17:02:30.761 ctrl_seek_request serial=19 target_us=22003800 seek_target_us=21003800 (keyframe-adjusted)
+2026-01-10T17:02:30.761 ctrl_seek_applied serial=19 res=0
+2026-01-10T17:02:30.778 video_priming_present state=Priming serial=19 pts_us=20525000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.791 video_priming_present state=Priming serial=19 pts_us=20525000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=11 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.807 demux_seek serial=20 target_us=20527600
+2026-01-10T17:02:30.807 video_drop_serial state=Priming serial=19 pts_us=20525000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=0 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.811 ctrl_seek_request serial=20 target_us=21530600 seek_target_us=20530600 (keyframe-adjusted)
+2026-01-10T17:02:30.823 demux_seek_result serial=20 res=0
+2026-01-10T17:02:30.823 ctrl_seek_applied serial=20 res=0
+2026-01-10T17:02:30.841 video_priming_present state=Priming serial=20 pts_us=20525000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:30.841 sync_priming_end serial=20 sync_pts_us=20525000 audio_oldest=-9223372036854775808 video_pts=20525000
+2026-01-10T17:02:30.842 state_change from=Priming to=Playing
+2026-01-10T17:02:30.861 demux_seek serial=21 target_us=20054400
+2026-01-10T17:02:30.861 demux_seek_result serial=21 res=0
+2026-01-10T17:02:30.861 state_change from=Playing to=Priming
+2026-01-10T17:02:30.861 ctrl_seek_request serial=21 target_us=21057400 seek_target_us=20057400 (keyframe-adjusted)
+2026-01-10T17:02:30.862 ctrl_seek_applied serial=21 res=0
+2026-01-10T17:02:30.873 video_priming_present state=Priming serial=21 pts_us=20024000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.886 video_priming_present state=Priming serial=21 pts_us=20024000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=11 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:30.902 video_priming_present state=Priming serial=21 pts_us=20024000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.902 video_priming_present state=Priming serial=21 pts_us=20041000 dur_us=16683 master=20024004 master_src=video diff_us=0 delay_us=16809 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.902 sync_priming_end serial=21 sync_pts_us=20024000 audio_oldest=-9223372036854775808 video_pts=20024000
+2026-01-10T17:02:30.902 state_change from=Priming to=Playing
+2026-01-10T17:02:30.914 demux_seek serial=22 target_us=19581200
+2026-01-10T17:02:30.914 demux_seek_result serial=22 res=0
+2026-01-10T17:02:30.916 state_change from=Playing to=Priming
+2026-01-10T17:02:30.916 ctrl_seek_request serial=22 target_us=20584200 seek_target_us=19584200 (keyframe-adjusted)
+2026-01-10T17:02:30.916 ctrl_seek_applied serial=22 res=0
+2026-01-10T17:02:30.918 video_priming_present state=Priming serial=22 pts_us=19524000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:30.934 video_priming_present state=Priming serial=22 pts_us=19524000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=12 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.950 video_priming_present state=Priming serial=22 pts_us=19524000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.950 video_priming_present state=Priming serial=22 pts_us=19540000 dur_us=16683 master=19524003 master_src=video diff_us=0 delay_us=16409 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:30.950 sync_priming_end serial=22 sync_pts_us=19524000 audio_oldest=-9223372036854775808 video_pts=19524000
+2026-01-10T17:02:30.950 state_change from=Priming to=Playing
+2026-01-10T17:02:30.973 demux_seek serial=23 target_us=18634800
+2026-01-10T17:02:30.973 demux_seek_result serial=23 res=0
+2026-01-10T17:02:30.974 state_change from=Playing to=Priming
+2026-01-10T17:02:30.974 ctrl_seek_request serial=23 target_us=19637800 seek_target_us=18637800 (keyframe-adjusted)
+2026-01-10T17:02:30.974 ctrl_seek_applied serial=23 res=0
+2026-01-10T17:02:30.981 video_priming_present state=Priming serial=23 pts_us=18523000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=4 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:30.997 video_priming_present state=Priming serial=23 pts_us=18523000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.014 video_priming_present state=Priming serial=23 pts_us=18523000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.014 video_priming_present state=Priming serial=23 pts_us=18539000 dur_us=16683 master=18523003 master_src=video diff_us=0 delay_us=16409 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.014 sync_priming_end serial=23 sync_pts_us=18523000 audio_oldest=-9223372036854775808 video_pts=18523000
+2026-01-10T17:02:31.014 state_change from=Priming to=Playing
+2026-01-10T17:02:31.026 demux_seek serial=24 target_us=18398200
+2026-01-10T17:02:31.027 state_change from=Playing to=Priming
+2026-01-10T17:02:31.027 ctrl_seek_request serial=24 target_us=19401200 seek_target_us=18401200 (keyframe-adjusted)
+2026-01-10T17:02:31.029 demux_seek_result serial=24 res=0
+2026-01-10T17:02:31.029 ctrl_seek_applied serial=24 res=0
+2026-01-10T17:02:31.049 video_priming_present state=Priming serial=24 pts_us=18022000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:31.049 sync_priming_end serial=24 sync_pts_us=18022000 audio_oldest=-9223372036854775808 video_pts=18022000
+2026-01-10T17:02:31.049 state_change from=Priming to=Playing
+2026-01-10T17:02:31.080 demux_seek serial=25 target_us=18161600
+2026-01-10T17:02:31.081 demux_seek_result serial=25 res=0
+2026-01-10T17:02:31.083 state_change from=Playing to=Priming
+2026-01-10T17:02:31.083 ctrl_seek_request serial=25 target_us=19164600 seek_target_us=18164600 (keyframe-adjusted)
+2026-01-10T17:02:31.083 ctrl_seek_applied serial=25 res=0
+2026-01-10T17:02:31.095 video_priming_present state=Priming serial=25 pts_us=18022000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.107 video_priming_present state=Priming serial=25 pts_us=18022000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=10 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.123 video_priming_present state=Priming serial=25 pts_us=18022000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.123 video_priming_present state=Priming serial=25 pts_us=18039000 dur_us=16683 master=18022004 master_src=video diff_us=0 delay_us=16809 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.123 sync_priming_end serial=25 sync_pts_us=18022000 audio_oldest=-9223372036854775808 video_pts=18022000
+2026-01-10T17:02:31.123 state_change from=Priming to=Playing
+2026-01-10T17:02:31.135 demux_seek serial=26 target_us=17688400
+2026-01-10T17:02:31.136 state_change from=Playing to=Priming
+2026-01-10T17:02:31.136 ctrl_seek_request serial=26 target_us=18691400 seek_target_us=17691400 (keyframe-adjusted)
+2026-01-10T17:02:31.139 demux_seek_result serial=26 res=0
+2026-01-10T17:02:31.139 ctrl_seek_applied serial=26 res=0
+2026-01-10T17:02:31.160 video_priming_present state=Priming serial=26 pts_us=17522000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:31.160 sync_priming_end serial=26 sync_pts_us=17522000 audio_oldest=-9223372036854775808 video_pts=17522000
+2026-01-10T17:02:31.160 state_change from=Priming to=Playing
+2026-01-10T17:02:31.191 demux_seek serial=27 target_us=17451800
+2026-01-10T17:02:31.191 state_change from=Playing to=Priming
+2026-01-10T17:02:31.191 ctrl_seek_request serial=27 target_us=18454800 seek_target_us=17454800 (keyframe-adjusted)
+2026-01-10T17:02:31.191 demux_seek_result serial=27 res=0
+2026-01-10T17:02:31.191 ctrl_seek_applied serial=27 res=0
+2026-01-10T17:02:31.206 video_heartbeat_decoder q=0 has_pkt=0 eof=0
+2026-01-10T17:02:31.206 video_priming_present state=Priming serial=27 pts_us=17021000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.217 video_priming_present state=Priming serial=27 pts_us=17021000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=10 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.232 video_priming_present state=Priming serial=27 pts_us=17021000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.232 video_priming_present state=Priming serial=27 pts_us=17038000 dur_us=16683 master=17021003 master_src=video diff_us=0 delay_us=16809 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.233 sync_priming_end serial=27 sync_pts_us=17021000 audio_oldest=-9223372036854775808 video_pts=17021000
+2026-01-10T17:02:31.233 state_change from=Priming to=Playing
+2026-01-10T17:02:31.244 video_heartbeat_ui redraw=0 seeker=1 paused=0
+2026-01-10T17:02:31.245 demux_seek serial=28 target_us=17215200
+2026-01-10T17:02:31.245 state_change from=Playing to=Priming
+2026-01-10T17:02:31.245 ctrl_seek_request serial=28 target_us=18218200 seek_target_us=17218200 (keyframe-adjusted)
+2026-01-10T17:02:31.248 demux_seek_result serial=28 res=0
+2026-01-10T17:02:31.248 ctrl_seek_applied serial=28 res=0
+2026-01-10T17:02:31.268 video_priming_present state=Priming serial=28 pts_us=17021000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:31.268 sync_priming_end serial=28 sync_pts_us=17021000 audio_oldest=-9223372036854775808 video_pts=17021000
+2026-01-10T17:02:31.269 state_change from=Priming to=Playing
+2026-01-10T17:02:31.297 demux_seek serial=29 target_us=16978600
+2026-01-10T17:02:31.297 state_change from=Playing to=Priming
+2026-01-10T17:02:31.297 ctrl_seek_request serial=29 target_us=17981600 seek_target_us=16981600 (keyframe-adjusted)
+2026-01-10T17:02:31.297 demux_seek_result serial=29 res=0
+2026-01-10T17:02:31.297 ctrl_seek_applied serial=29 res=0
+2026-01-10T17:02:31.312 video_priming_present state=Priming serial=29 pts_us=16521000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.326 video_priming_present state=Priming serial=29 pts_us=16521000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=10 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.342 video_priming_present state=Priming serial=29 pts_us=16521000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.342 video_priming_present state=Priming serial=29 pts_us=16537000 dur_us=16683 master=16521002 master_src=video diff_us=0 delay_us=16409 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.342 sync_priming_end serial=29 sync_pts_us=16521000 audio_oldest=-9223372036854775808 video_pts=16521000
+2026-01-10T17:02:31.342 state_change from=Priming to=Playing
+2026-01-10T17:02:31.411 demux_seek serial=30 target_us=16742000
+2026-01-10T17:02:31.411 demux_seek_result serial=30 res=0
+2026-01-10T17:02:31.415 state_change from=Playing to=Priming
+2026-01-10T17:02:31.415 ctrl_seek_request serial=30 target_us=17745000 seek_target_us=16745000 (keyframe-adjusted)
+2026-01-10T17:02:31.415 ctrl_seek_applied serial=30 res=0
+2026-01-10T17:02:31.420 video_heartbeat_output state=Priming q=2 master=0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:31.420 video_priming_present state=Priming serial=30 pts_us=16521000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=2 dec_ms=0.0 audio_ready=0 audio_fresh=0 audio_starved=0
+2026-01-10T17:02:31.435 video_priming_present state=Priming serial=30 pts_us=16521000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=13 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.451 video_priming_present state=Priming serial=30 pts_us=16521000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.451 video_priming_present state=Priming serial=30 pts_us=16537000 dur_us=16683 master=16521002 master_src=video diff_us=0 delay_us=16409 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.451 sync_priming_end serial=30 sync_pts_us=16521000 audio_oldest=-9223372036854775808 video_pts=16521000
+2026-01-10T17:02:31.451 state_change from=Priming to=Playing
+2026-01-10T17:02:31.463 demux_seek serial=31 target_us=16505400
+2026-01-10T17:02:31.464 state_change from=Playing to=Priming
+2026-01-10T17:02:31.464 ctrl_seek_request serial=31 target_us=17508400 seek_target_us=16508400 (keyframe-adjusted)
+2026-01-10T17:02:31.467 demux_seek_result serial=31 res=0
+2026-01-10T17:02:31.467 ctrl_seek_applied serial=31 res=0
+2026-01-10T17:02:31.486 video_priming_present state=Priming serial=31 pts_us=16020000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.487 video_present state=Priming serial=31 pts_us=16020000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=0 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.487 sync_priming_end serial=31 sync_pts_us=16020000 audio_oldest=-9223372036854775808 video_pts=16020000
+2026-01-10T17:02:31.487 state_change from=Priming to=Playing
+2026-01-10T17:02:31.531 demux_seek serial=32 target_us=16268800
+2026-01-10T17:02:31.531 demux_seek_result serial=32 res=0
+2026-01-10T17:02:31.531 state_change from=Playing to=Priming
+2026-01-10T17:02:31.532 ctrl_seek_request serial=32 target_us=17271800 seek_target_us=16271800 (keyframe-adjusted)
+2026-01-10T17:02:31.532 ctrl_seek_applied serial=32 res=0
+2026-01-10T17:02:31.550 video_priming_present state=Priming serial=32 pts_us=16020000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=1 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.561 video_priming_present state=Priming serial=32 pts_us=16020000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=10 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.577 video_priming_present state=Priming serial=32 pts_us=16020000 dur_us=16683 master=0 master_src=none diff_us=0 delay_us=16683 q=16 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.577 video_priming_present state=Priming serial=32 pts_us=16037000 dur_us=16683 master=16020005 master_src=video diff_us=0 delay_us=16809 q=15 dec_ms=0.0 audio_ready=0 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:31.577 sync_priming_end serial=32 sync_pts_us=16020000 audio_oldest=-9223372036854775808 video_pts=16020000
+2026-01-10T17:02:31.577 state_change from=Priming to=Playing
+2026-01-10T17:02:32.143 video_present state=Playing serial=32 pts_us=16487000 dur_us=16683 master=16515948 master_src=audio diff_us=-28948 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:32.207 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:32.253 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:32.424 video_heartbeat_output state=Playing q=16 master=16796379 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:32.647 video_present state=Playing serial=32 pts_us=16988000 dur_us=16683 master=17020172 master_src=audio diff_us=-32172 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:33.135 video_present state=Playing serial=32 pts_us=17488000 dur_us=16683 master=17507074 master_src=audio diff_us=-19074 delay_us=0 q=15 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:33.214 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:33.260 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:33.434 video_heartbeat_output state=Playing q=16 master=17806388 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:33.638 video_present state=Playing serial=32 pts_us=17989000 dur_us=16683 master=18010178 master_src=audio diff_us=-21178 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:34.138 video_present state=Playing serial=32 pts_us=18489000 dur_us=16683 master=18510011 master_src=audio diff_us=-21011 delay_us=0 q=16 dec_ms=0.0 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:34.216 video_heartbeat_decoder q=16 has_pkt=0 eof=0
+2026-01-10T17:02:34.267 video_heartbeat_ui redraw=0 seeker=0 paused=0
+2026-01-10T17:02:34.437 video_heartbeat_output state=Playing q=16 master=18809915 audio_ready=1 audio_fresh=1 audio_starved=0
+2026-01-10T17:02:34.577 ctrl_close_request
+2026-01-10T17:02:34.577 state_change from=Playing to=Draining
+2026-01-10T17:02:34.577 state_change from=Draining to=Closing
+2026-01-10T17:02:34.583 state_change from=Closing to=Idle
+2026-01-10T17:01:36.851 video_start file=FINAL FANTASY VII REBIRTH_20240709235506.webm
+2026-01-10T17:01:37.035 audio_start ok=1
+2026-01-10T17:01:37.035 audio_device period_frames=480 periods=3 buffer_frames=1440 rate=48000 channels=1 using_ffmpeg=1
+2026-01-10T17:01:37.280 video_renderer_input format=hwtexture in=1920x1088 out=262x70
+2026-01-10T17:02:29.440 seek_request target_sec=20.111 target_us=20111000
+2026-01-10T17:02:29.517 seek_request target_sec=20.348 target_us=20347600
+2026-01-10T17:02:29.581 seek_request target_sec=20.584 target_us=20584200
+2026-01-10T17:02:29.749 seek_request target_sec=20.821 target_us=20820800
+2026-01-10T17:02:29.799 seek_request target_sec=24.370 target_us=24369800
+2026-01-10T17:02:29.849 seek_request target_sec=30.758 target_us=30758000
+2026-01-10T17:02:29.908 seek_request target_sec=36.436 target_us=36436400
+2026-01-10T17:02:29.966 seek_request target_sec=38.329 target_us=38329200
+2026-01-10T17:02:30.018 seek_request target_sec=38.802 target_us=38802400
+2026-01-10T17:02:30.374 seek_request target_sec=38.566 target_us=38565800
+2026-01-10T17:02:30.427 seek_request target_sec=34.544 target_us=34543600
+2026-01-10T17:02:30.486 seek_request target_sec=26.736 target_us=26735800
+2026-01-10T17:02:30.537 seek_request target_sec=23.897 target_us=23896600
+2026-01-10T17:02:30.587 seek_request target_sec=23.423 target_us=23423400
+2026-01-10T17:02:30.640 seek_request target_sec=22.950 target_us=22950200
+2026-01-10T17:02:30.697 seek_request target_sec=22.714 target_us=22713600
+2026-01-10T17:02:30.757 seek_request target_sec=22.004 target_us=22003800
+2026-01-10T17:02:30.807 seek_request target_sec=21.531 target_us=21530600
+2026-01-10T17:02:30.860 seek_request target_sec=21.057 target_us=21057400
+2026-01-10T17:02:30.914 seek_request target_sec=20.584 target_us=20584200
+2026-01-10T17:02:30.973 seek_request target_sec=19.638 target_us=19637800
+2026-01-10T17:02:31.026 seek_request target_sec=19.401 target_us=19401200
+2026-01-10T17:02:31.080 seek_request target_sec=19.165 target_us=19164600
+2026-01-10T17:02:31.135 seek_request target_sec=18.691 target_us=18691400
+2026-01-10T17:02:31.190 seek_request target_sec=18.455 target_us=18454800
+2026-01-10T17:02:31.244 seek_request target_sec=18.218 target_us=18218200
+2026-01-10T17:02:31.296 seek_request target_sec=17.982 target_us=17981600
+2026-01-10T17:02:31.411 seek_request target_sec=17.745 target_us=17745000
+2026-01-10T17:02:31.463 seek_request target_sec=17.508 target_us=17508400
+2026-01-10T17:02:31.531 seek_request target_sec=17.272 target_us=17271800

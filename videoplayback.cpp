@@ -283,6 +283,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   auto appendTiming = [&](const std::string& s) {
 #if RADIOIFY_ENABLE_TIMING_LOG
+    std::lock_guard<std::mutex> lock(timingLogMutex());
     std::ofstream f(logPath, std::ios::app);
     if (f) f << radioifyLogTimestamp() << " " << s << "\n";
 #else
@@ -301,6 +302,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (written >= static_cast<int>(sizeof(buf))) {
       written = static_cast<int>(sizeof(buf)) - 1;
     }
+    std::lock_guard<std::mutex> lock(timingLogMutex());
     std::ofstream f(logPath, std::ios::app);
     if (f) {
       f << radioifyLogTimestamp() << " " << std::string(buf, buf + written)
@@ -697,7 +699,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           static_cast<double>(dbg.audioClockUs) / 1000000.0);
       debugLine1 = buf1;
       debugLine2 = buf2;
-      maybeLogUiDbg(debugLine1, debugLine2);
+      // maybeLogUiDbg(debugLine1, debugLine2); // REMOVED spammy UI logs
     }
     int headerLines = 0;
     if (!debugLine1.empty()) {
@@ -775,6 +777,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               std::string gpuErr;
 
               bool renderRes = false;
+              auto t0 = std::chrono::steady_clock::now();
               {
                 std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
                 if (clearHistory) {
@@ -784,6 +787,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                     frame->hwTexture.Get(), frame->hwTextureArrayIndex,
                     frame->width, frame->height, frame->fullRange,
                     frame->yuvMatrix, frame->yuvTransfer, false, art, &gpuErr);
+              }
+              auto t1 = std::chrono::steady_clock::now();
+              auto durMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+              if (durMs > 50) {
+                appendTimingFmt("video_render_slow pts_us=%lld dur_ms=%lld",
+                                (long long)(frame->timestamp100ns / 10), (long long)durMs);
               }
 
               if (renderRes) {
@@ -1007,6 +1016,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   while (running) {
     finalizeAudioStart();
 
+    // UI HEARTBEAT
+    static auto lastUiHeartbeat = std::chrono::steady_clock::now();
+    auto nowUi = std::chrono::steady_clock::now();
+    if (nowUi - lastUiHeartbeat >= std::chrono::seconds(1)) {
+        appendTimingFmt("video_heartbeat_ui redraw=%d seeker=%d paused=%d", 
+                        redraw ? 1 : 0, localSeekRequested ? 1 : 0, userPaused ? 1 : 0);
+        lastUiHeartbeat = nowUi;
+    }
+
     InputEvent ev{};
     while (input.poll(ev)) {
       if (ev.type == InputEvent::Type::Resize) {
@@ -1140,8 +1158,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       running = false;
     }
 
-    if (redraw || overlayVisible()) {
+    if (redraw || overlayVisible() || config.debugOverlay) {
+      auto t0 = std::chrono::steady_clock::now();
       renderScreen(forceRefreshArt, presented);
+      auto t1 = std::chrono::steady_clock::now();
+      auto durMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+      if (durMs > 100) {
+        appendTimingFmt("video_ui_draw_slow dur_ms=%lld", (long long)durMs);
+      }
+      
       if (renderFailed) {
         running = false;
         break;
@@ -1150,7 +1175,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       forceRefreshArt = false;
     }
 
-    if (!redraw && !overlayVisible()) {
+    if (!redraw && !overlayVisible() && !config.debugOverlay) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }

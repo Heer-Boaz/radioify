@@ -608,6 +608,8 @@ struct DemuxContext {
 struct DemuxInterrupt {
   std::atomic<bool>* running = nullptr;
   std::atomic<bool>* commandPending = nullptr;
+  std::atomic<int>* currentSerial = nullptr;
+  int lastSerial = 0;
 };
 
 int demuxInterruptCallback(void* opaque) {
@@ -615,6 +617,7 @@ int demuxInterruptCallback(void* opaque) {
   if (!interrupt) return 0;
   if (interrupt->running && !interrupt->running->load()) return 1;
   if (interrupt->commandPending && interrupt->commandPending->load()) return 1;
+  if (interrupt->currentSerial && interrupt->currentSerial->load() != interrupt->lastSerial) return 1;
   return 0;
 }
 
@@ -1355,6 +1358,7 @@ struct Player::Impl {
   void appendTiming(const std::string& line) {
 #if RADIOIFY_ENABLE_TIMING_LOG
     if (logPath.empty()) return;
+    std::lock_guard<std::mutex> lock(timingLogMutex());
     std::ofstream f(logPath, std::ios::app);
     if (!f) return;
     f << radioifyLogTimestamp() << " " << line << "\n";
@@ -1375,6 +1379,7 @@ struct Player::Impl {
     if (written >= static_cast<int>(sizeof(buf))) {
       written = static_cast<int>(sizeof(buf)) - 1;
     }
+    std::lock_guard<std::mutex> lock(timingLogMutex());
     std::ofstream f(logPath, std::ios::app);
     if (!f) return;
     f << radioifyLogTimestamp() << " " << std::string(buf, buf + written)
@@ -1568,6 +1573,8 @@ struct Player::Impl {
     videoFrames.flush(static_cast<uint64_t>(currentSerial.load()));
     demuxInterrupt.running = &running;
     demuxInterrupt.commandPending = &commandPending;
+    demuxInterrupt.currentSerial = &currentSerial;
+    demuxInterrupt.lastSerial = currentSerial.load();
 
     demuxThread = std::thread([this]() { demuxMain(); });
   }
@@ -1868,6 +1875,17 @@ struct Player::Impl {
     
     while (running.load()) {
       bool handledSeek = false;
+      int nextSerialValue = currentSerial.load();
+      if (nextSerialValue != static_cast<int>(serial) && !seekPending.load()) {
+        serial = static_cast<uint64_t>(nextSerialValue);
+        demuxInterrupt.lastSerial = nextSerialValue;
+        // If serial changed externally (stall recovery), we should flush to be safe
+        videoPackets.flush(serial);
+        audioPackets.flush(serial);
+        videoFrames.flush(serial);
+        appendTimingFmt("demux_external_serial_sync serial=%d", nextSerialValue);
+      }
+
       if (seekPending.exchange(false)) {
         int64_t targetUs = seekTargetUs.load(std::memory_order_relaxed);
         targetUs += demux.formatStartUs;
@@ -1892,6 +1910,7 @@ struct Player::Impl {
           avformat_flush(demux.fmt);
         }
         serial = static_cast<uint64_t>(nextSerial);
+        demuxInterrupt.lastSerial = nextSerial;
         demuxEnded.store(false);
         demuxAtEof = false;
         decodeEnded.store(false);
@@ -2086,7 +2105,27 @@ struct Player::Impl {
       }
 
       while (running.load()) {
+        // Break out and flush if the master serial has changed (e.g., requested by output thread stall recovery)
+        int currentMasterSerial = currentSerial.load();
+        if (decoderSerial != 0 && decoderSerial != static_cast<uint64_t>(currentMasterSerial)) {
+          avcodec_flush_buffers(videoDec.codec);
+          hasPendingPacket = false;
+          decoderSerial = static_cast<uint64_t>(currentMasterSerial); // Sync to new serial
+          videoFrames.flush(decoderSerial);
+          break;
+        }
+
+        // HEARTBEAT DECODER
+        static int64_t lastDecTickUs = 0;
+        int64_t nowDec = nowUs();
+        if (nowDec - lastDecTickUs > 1000000) {
+          appendTimingFmt("video_heartbeat_decoder q=%zu has_pkt=%d eof=%d", 
+                          videoFrames.size(), hasPendingPacket ? 1 : 0, inputEof ? 1 : 0);
+          lastDecTickUs = nowDec;
+        }
+
         int recv = avcodec_receive_frame(videoDec.codec, videoDec.frame);
+
         if (recv == AVERROR(EAGAIN)) {
           break;
         }
@@ -2256,6 +2295,16 @@ struct Player::Impl {
       }
 
       while (running.load()) {
+        // Break out and flush if the master serial has changed
+        int currentMasterSerial = currentSerial.load();
+        if (decoderSerial != 0 && decoderSerial != static_cast<uint64_t>(currentMasterSerial)) {
+          avcodec_flush_buffers(audioDec.codec);
+          hasPendingPacket = false;
+          decoderSerial = static_cast<uint64_t>(currentMasterSerial);
+          audioStreamFlushSerial(static_cast<int>(decoderSerial));
+          break;
+        }
+
         int recv = avcodec_receive_frame(audioDec.codec, audioDec.frame);
         if (recv == AVERROR(EAGAIN)) {
           break;
@@ -2436,7 +2485,7 @@ struct Player::Impl {
     
     // Timeout/Stall detection: track when last frame was presented
     int64_t lastPresentedTimeUs = nowUs();
-    constexpr int64_t kFrameStallThresholdUs = 5000000;  // 5 seconds
+    constexpr int64_t kFrameStallThresholdUs = 2000000;  // 2 second recovery threshold
     
     // Dynamic frame duration: maintain moving average of recent durations
     std::vector<int64_t> recentDurations;
@@ -2449,20 +2498,31 @@ struct Player::Impl {
       int audioReady = audioStreamClockReady() ? 1 : 0;
       int audioFresh = audioClockFresh(nowUs()) ? 1 : 0;
       int audioStarved = audioStreamStarved() ? 1 : 0;
+
+      // Filter out high-frequency logs to keep log file clean
+      if (std::strcmp(tag, "present") == 0 || std::strcmp(tag, "queue_high") == 0 || std::strcmp(tag, "queue_low") == 0) {
+        // Heartbeat: Log every 30th event (approx 1s) regardless of sync
+        static int eventCounter = 0;
+        bool heartbeat = (++eventCounter % 30 == 0);
+        bool syncIssue = std::abs(diffUs) > 100000; // >100ms sync gap
+        if (!heartbeat && !syncIssue && std::strcmp(tag, "present") == 0) return;
+        if (!heartbeat && std::strcmp(tag, "present") != 0) return;
+      }
+      
       if (frame) {
         appendTimingFmt(
-            "video_%s state=%s serial=%d pts_us=%lld dur_us=%lld master=%lld master_src=%s diff_us=%lld delay_us=%lld q=%zu audio_ready=%d audio_fresh=%d audio_starved=%d",
+            "video_%s state=%s serial=%d pts_us=%lld dur_us=%lld master=%lld master_src=%s diff_us=%lld delay_us=%lld q=%zu dec_ms=%.1f audio_ready=%d audio_fresh=%d audio_starved=%d",
             tag, playerStateName(st), static_cast<int>(frame->serial),
             static_cast<long long>(frame->ptsUs),
             static_cast<long long>(frame->durationUs),
             static_cast<long long>(masterUs), clockSourceName(source),
             static_cast<long long>(diffUs),
-            static_cast<long long>(delayUs), q, audioReady, audioFresh,
-            audioStarved);
+            static_cast<long long>(delayUs), q, frame->decodeMs, audioReady,
+            audioFresh, audioStarved);
       } else {
         appendTimingFmt(
-            "video_%s state=%s q=%zu audio_ready=%d audio_fresh=%d audio_starved=%d",
-            tag, playerStateName(st), q, audioReady, audioFresh, audioStarved);
+            "video_%s state=%s q=%zu master=%lld audio_ready=%d audio_fresh=%d audio_starved=%d",
+            tag, playerStateName(st), q, static_cast<long long>(masterUs), audioReady, audioFresh, audioStarved);
       }
     };
 
@@ -2511,6 +2571,15 @@ struct Player::Impl {
       int64_t now = nowUs();
       MasterClockSnapshot master = masterClockSnapshot(now);
       int64_t masterUs = master.us;
+      int64_t delayUs = 0;
+      bool isDiscontinuity = false;
+
+      static int64_t lastHeartbeatUs = 0;
+      if (now - lastHeartbeatUs > 1000000) {
+        logVideo("heartbeat_output", nullptr, masterUs, master.source, 0, 0);
+        lastHeartbeatUs = now;
+      }
+
       lastMasterUs.store(masterUs, std::memory_order_relaxed);
       lastMasterSource.store(static_cast<int>(master.source),
                              std::memory_order_relaxed);
@@ -2525,18 +2594,27 @@ struct Player::Impl {
 
       QueuedFrame front{};
       if (!videoFrames.peek(&front)) {
-        logVideo("wait", nullptr, 0, PlayerClockSource::None, 0, 0);
+        // Don't log every wait - too verbose. Only log when stall is detected below.
         
-        // Timeout detection: if we've been waiting for frames for >5 seconds, force recovery
-        int64_t now = nowUs();
+        // Timeout detection: if we've been waiting for frames for too long, force recovery
         if (now - lastPresentedTimeUs > kFrameStallThresholdUs) {
           logVideo("stall_detected", nullptr, 0, PlayerClockSource::None, 0, 0);
-          // Force recovery: flush video queue and return to Priming
-          QueuedFrame drop{};
-          while (videoFrames.pop(&drop)) {
-            videoFrames.release(drop.poolIndex);
+          
+          // Use current audio time if available, or just jump 500ms ahead of last PTS
+          int64_t lpPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
+          int64_t seekTarget = lpPts + 500000; 
+          
+          if (audioStreamClockReady()) {
+            seekTarget = audioStreamClockUs(now);
           }
-          setState(PlayerState::Priming);
+          
+          // Request a real seek to jump over potentially missing stream segments/gaps
+          PlayerEvent ev{};
+          ev.type = PlayerEventType::SeekRequest;
+          ev.arg1 = seekTarget;
+          postEvent(ev);
+          
+          // Reset timer to give seek time to complete
           lastPresentedTimeUs = now;
         }
         
@@ -2566,17 +2644,34 @@ struct Player::Impl {
         continue;
       }
 
-      int64_t delayUs = 0;
-      
       // 1. TIMESTAMP DISCONTINUITY DETECTION
       // Detect keyframe jumps or timestamp resets (common in multi-segment files)
       if (lastPtsUs >= 0) {
         int64_t ptsDelta = front.ptsUs - lastPtsUs;
         // If PTS jumps more than 500ms, it's likely a discontinuity (keyframe, scene change, etc)
         if (ptsDelta > 500000) {
-          logVideo("pts_discontinuity", &front, 0, PlayerClockSource::None, ptsDelta, 0);
-          // Reset frame timer to avoid massive delay calculation
-          frameTimerUs = nowUs();
+          isDiscontinuity = true;
+          
+          // Re-sync the master timer if gap is massive to avoid stalls
+          static int64_t lastResetPts = -1;
+          if (front.ptsUs != lastResetPts && std::abs(ptsDelta) > 2000000) {
+            logVideo("pts_discontinuity_sync", &front, masterUs, master.source, ptsDelta, 0);
+            
+            // If the jump is huge (>5s), force a full pipeline flush by requesting a seek to the new position
+            if (std::abs(ptsDelta) > 5000000) {
+              logVideo("pts_discontinuity_flush_seek", &front, masterUs, master.source, ptsDelta, 0);
+              PlayerEvent ev{};
+              ev.type = PlayerEventType::SeekRequest;
+              ev.arg1 = front.ptsUs;
+              postEvent(ev);
+            }
+            
+            // Force audio clock to sync to this new video position if we're way off
+            audioStreamSynchronize(static_cast<int>(serial), front.ptsUs);
+            frameTimerUs = now;
+            lastResetPts = front.ptsUs;
+          }
+          
           // Use the frame's own duration
           delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
         } else if (ptsDelta > 0) {
@@ -2629,7 +2724,35 @@ struct Player::Impl {
       int64_t diffUs = 0;
       int64_t actualDurationUs = delayUs;
 
-      if (masterUs != 0) {
+      // Check if sync is lost (massive gap between video and master clock)
+      bool syncLost = (masterUs != 0 && std::abs(front.ptsUs - masterUs) > 2500000); // 2.5 second threshold for free-run recovery
+      
+      // If sync is lost for more than 5 seconds, force a seek to recover
+      static int64_t syncLostStartTimeUs = 0;
+      if (syncLost) {
+        if (syncLostStartTimeUs == 0) syncLostStartTimeUs = now;
+        if (now - syncLostStartTimeUs > 5000000) {
+          logVideo("sync_lost_recovery_seek", &front, masterUs, master.source, front.ptsUs - masterUs, delayUs);
+          PlayerEvent ev{};
+          ev.type = PlayerEventType::SeekRequest;
+          ev.arg1 = (audioStreamClockReady()) ? audioStreamClockUs(now) : front.ptsUs;
+          postEvent(ev);
+          syncLostStartTimeUs = 0;
+        }
+      } else {
+        syncLostStartTimeUs = 0;
+      }
+
+      // During Priming state or when sync is lost, don't try to sync to master clock - just present frames at natural rate
+      if (st == PlayerState::Priming || syncLost) {
+        if (syncLost) {
+          logVideo("sync_lost_freerun", &front, masterUs, master.source, front.ptsUs - masterUs, delayUs);
+        } else {
+          logVideo("priming_present", &front, masterUs, master.source, 0, delayUs);
+        }
+        delayUs = actualDurationUs;  // Use actual frame duration, no sync adjustments
+      }
+      else if (masterUs != 0) {
         diffUs = front.ptsUs - masterUs;
         
         // Sync modes with audio buffer awareness:
@@ -2657,22 +2780,27 @@ struct Player::Impl {
           // Buffer is getting low. Apply gradual clock discipline to slow video.
           // Reduce playback speed by 5% to let audio catch up.
           double currentSpeed = videoClock.speed_q16.load(std::memory_order_relaxed) / 65536.0;
-          double newSpeed = std::max(0.95, currentSpeed * 0.99);
-          videoClock.set_speed(newSpeed, now);
+          double speedMul = 0.99;
+          videoClock.set_speed((std::max)(0.95, currentSpeed * speedMul), now);
         } else if (audioBufferedUs > 200000) {
           // Buffer has recovered. Resume normal speed.
           double currentSpeed = videoClock.speed_q16.load(std::memory_order_relaxed) / 65536.0;
           if (currentSpeed < 1.0) {
-            videoClock.set_speed(std::min(1.0, currentSpeed * 1.01), now);
+            videoClock.set_speed((std::min)(1.0, currentSpeed * 1.01), now);
           }
         }
         
         // 2. Sync mode: if video is within ~100ms of audio, proceed normally
+        // BUT: skip sync correction for frames immediately after PTS discontinuity
+        // to avoid aggressive delayUs adjustments that cause rendering stalls
         if (diffUs >= -100000 && diffUs <= 100000) {
           // Normal playback: just add a small correction to delay
-          delayUs = computeTargetDelayUs(delayUs, front.ptsUs, masterUs);
+          // UNLESS this is right after a discontinuity (e.g., I-frame with large PTS jump)
+          if (!isDiscontinuity) {
+            delayUs = computeTargetDelayUs(delayUs, front.ptsUs, masterUs);
+          }
         }
-        // 3. Catch-up mode: video is way behind (>100ms). Drop frames.
+        // 3. Catch-up mode: video is way behind (<-100ms). Drop frames.
         else if (diffUs < -100000) {
           logVideo("skip_behind", &front, masterUs, master.source, diffUs, delayUs);
           QueuedFrame drop{};
@@ -2681,11 +2809,12 @@ struct Player::Impl {
           }
           continue;
         }
-        // 4. Audio-ahead mode: video is ahead (should be rare with prebuffering).
+        // 4. Audio-ahead mode: video is ahead
         else if (diffUs > 100000) {
           // Slow down video presentation to let audio catch up.
-          // Cap at 500ms to avoid excessive pauses.
-          delayUs = std::min<int64_t>(500000, delayUs + diffUs);
+          // Cap at 200ms to avoid excessive pauses.
+          // (Massive gaps >2s are handled by syncLost above).
+          delayUs = (std::min)(static_cast<int64_t>(200000), delayUs + diffUs);
         }
         
       }
@@ -2700,15 +2829,9 @@ struct Player::Impl {
         int64_t sleepUs = targetUs - now;
         if (sleepUs > 0) {
           // Limit sleep to 10ms to keep the UI/commands responsive.
-          int64_t actualSleep = std::min<int64_t>(sleepUs, 10000);
+          int64_t actualSleep = (std::min)(sleepUs, static_cast<int64_t>(10000));
           std::this_thread::sleep_for(std::chrono::microseconds(actualSleep));
-
-          // Only log if it's the first time or every ~250ms to avoid log spam.
-          static int64_t lastLogUs = 0;
-          if (now - lastLogUs > 250000) {
-            logVideo("sleep", &front, masterUs, master.source, diffUs, delayUs);
-            lastLogUs = now;
-          }
+          // Don't log every sleep - too verbose
         }
         continue;
       }
@@ -2723,6 +2846,8 @@ struct Player::Impl {
             videoFrames.release(drop.poolIndex);
             lastPtsUs = drop.ptsUs;
             frameTimerUs = targetUs;
+            // Update lastPresentedTimeUs to avoid false stall detection during fast-dropping
+            lastPresentedTimeUs = now;
           }
           std::this_thread::sleep_for(std::chrono::microseconds(100));
           continue;
@@ -2741,6 +2866,10 @@ struct Player::Impl {
         hasFrame.store(true, std::memory_order_relaxed);
       }
       frameCounter.fetch_add(1, std::memory_order_relaxed);
+      
+      // Ensure we yield to other threads (decoder, audio, etc.)
+      std::this_thread::yield();
+      
       lastPtsUs = item.ptsUs;
       lastDelayUsValue = delayUs;
       lastPresentedPtsUs.store(item.ptsUs, std::memory_order_relaxed);
@@ -2758,6 +2887,16 @@ struct Player::Impl {
         seekDisplayUs.store(0, std::memory_order_relaxed);
       }
       logVideo("present", &item, masterUs, master.source, diffUs, delayUs);
+      
+      // Monitor queue depth for resource bottlenecks
+      size_t qDepth = videoFrames.size();
+      if (qDepth <= 2) {
+        // Queue critically low - potential decode stall
+        logVideo("queue_low", &item, masterUs, master.source, diffUs, delayUs);
+      } else if (qDepth >= 30) {
+        // Queue critically high - potential render bottleneck
+        logVideo("queue_high", &item, masterUs, master.source, diffUs, delayUs);
+      }
       
       // Update frame presentation time for timeout detection
       lastPresentedTimeUs = nowUs();
@@ -2778,7 +2917,7 @@ struct Player::Impl {
         if (needed < 3) needed = 3;
         constexpr size_t kMinQueuedFrames = 6;
         if (needed < kMinQueuedFrames) needed = kMinQueuedFrames;
-        if (needed > 32) needed = 32;
+        if (needed > 16) needed = 16;
         maxQueue.store(needed, std::memory_order_relaxed);
       }
     }

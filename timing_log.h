@@ -5,6 +5,12 @@
 #include <ctime>
 #include <string>
 #include <cstdio>
+#include <mutex>
+
+inline std::mutex& timingLogMutex() {
+  static std::mutex m;
+  return m;
+}
 
 inline std::string radioifyLogTimestamp() {
   using namespace std::chrono;
