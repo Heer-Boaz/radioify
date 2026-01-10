@@ -53,7 +53,7 @@ CPackSourceConfig.cmake
 *.exp
 
 # Other
-*.log
+# *.log
 *.vsconfig
 .vscode/
 *.userprefs

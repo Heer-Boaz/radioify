@@ -1639,7 +1639,17 @@ struct Player::Impl {
                   (static_cast<uint64_t>(droppedFrames) *
                    static_cast<uint64_t>(sampleRate ? 1000000ULL : 0)) /
                   static_cast<uint64_t>(sampleRate));
+              
               int64_t basePts = bufferedPts + droppedUs;
+
+              // If we are still significantly behind targetPts (buffer underflow during sync),
+              // we must discard future audio packets until we catch up to the video.
+              // Otherwise the audio clock sends a time in the past, causing video freeze.
+              if (deltaUs > 0 && (basePts < targetPts - 200000)) { // 200ms tolerance
+                audioStreamDiscardUntil(targetPts);
+                basePts = targetPts;
+              }
+
               audioStreamSetBase(ev.serial, basePts);
             } else if (targetPts != AV_NOPTS_VALUE) {
               audioStreamSetBase(ev.serial, targetPts);
@@ -2351,7 +2361,8 @@ struct Player::Impl {
     PlayerState lastState = state.load();
     bool firstPresentedForSerial = false;
     constexpr double kVideoBufferHighSec = 0.75;
-    const int64_t kMaxFrameDurationUs = 10000000;
+    // Lower max frame duration to detect discontinuities/drops (e.g. 500ms)
+    const int64_t kMaxFrameDurationUs = 500000; 
     auto logVideo = [&](const char* tag, const QueuedFrame* frame,
                         int64_t masterUs, PlayerClockSource source,
                         int64_t diffUs, int64_t delayUs) {

@@ -295,6 +295,7 @@ struct AudioState {
   std::atomic<uint64_t> streamReadFrames{0};
   std::atomic<bool> streamClockReady{false};
   std::atomic<bool> streamStarved{false};
+  std::atomic<int64_t> streamDiscardPtsUs{0};
   uint64_t deviceDelayFrames = 0;
   Clock audioClock;
   uint32_t channels = 1;
@@ -1202,6 +1203,32 @@ bool audioStreamWriteSamples(const float* interleaved, uint64_t frames,
   if (serial != gAudio.state.streamSerial.load(std::memory_order_relaxed)) {
     return true;
   }
+  
+  // Discard logic for A/V sync catch-up
+  int64_t discardThreshold = gAudio.state.streamDiscardPtsUs.load(std::memory_order_relaxed);
+  if (discardThreshold > 0) {
+    // If this entire chunk is before the discard threshold, drop it entirely.
+    // Note: We don't have exact duration here easily without sample rate, 
+    // but checking start PTS is usually sufficient for large offsets.
+    if (ptsUs < discardThreshold) {
+      // If we are significantly behind (more than 100ms), exact boundary doesn't matter much.
+      // Just pretend we wrote it.
+      // But if we are close, we might want to check overlap.
+      // For now, simple logic: Drop if start < threshold.
+      // This implies we sync to the NEXT buffer that is >= threshold.
+      
+      // Update: Check if we passed the threshold within this buffer?
+      // Not worth the complexity given we drop frames by chunks usually.
+      if (frames > 0) {
+         if (writtenFrames) *writtenFrames = frames;
+         return true; 
+      }
+    } else {
+        // We reached the target. Reset discard.
+        gAudio.state.streamDiscardPtsUs.store(0, std::memory_order_relaxed);
+    }
+  }
+
   if (!gAudio.state.streamBaseValid.load(std::memory_order_relaxed) &&
       !gAudio.state.hold.load(std::memory_order_relaxed)) {
     gAudio.state.streamBasePtsUs.store(ptsUs, std::memory_order_relaxed);
@@ -1266,6 +1293,10 @@ void audioStreamSetBase(int serial, int64_t ptsUs) {
   gAudio.state.audioClock.reset(serial);
 }
 
+void audioStreamDiscardUntil(int64_t ptsUs) {
+  gAudio.state.streamDiscardPtsUs.store(ptsUs, std::memory_order_relaxed);
+}
+
 void audioStreamSetEnd(bool atEnd) {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
     return;
@@ -1301,6 +1332,7 @@ void audioStreamFlushSerial(int serial) {
   gAudio.state.streamBaseValid.store(false, std::memory_order_relaxed);
   gAudio.state.streamBasePtsUs.store(0, std::memory_order_relaxed);
   gAudio.state.streamReadFrames.store(0, std::memory_order_relaxed);
+  gAudio.state.streamDiscardPtsUs.store(0, std::memory_order_relaxed);
   gAudio.state.m4aAtEnd.store(false);
   gAudio.state.finished.store(false);
   gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
