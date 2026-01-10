@@ -6,9 +6,9 @@
 static constexpr bool kEnableRadioArtifacts = true;
 static constexpr bool kEnableRoomEarlyReflections = true;
 static constexpr bool kEnableRoomTail = true;
-static constexpr bool kEnableAdjacentWhine = false;
-static constexpr bool kEnableHeterodyneWhine = false;
-static constexpr bool kEnableHumTone = false;
+static constexpr bool kEnableAdjacentWhine = true;
+static constexpr bool kEnableHeterodyneWhine = true;
+static constexpr bool kEnableHumTone = true;
 static constexpr bool kEnableAMDetector = true;
 static constexpr bool kEnableNoiseHum = true;
 static constexpr bool kBypassRadio1938 = false;
