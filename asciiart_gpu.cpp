@@ -1,8 +1,10 @@
 #include "asciiart_gpu.h"
+#include "gpu_shared.h"
 #include <d3d11.h>
 #include <d3d10.h>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <vector>
 
 #pragma comment(lib, "d3d11.lib")
@@ -279,6 +281,7 @@ bool GpuAsciiRenderer::CreateNV12Textures(int width, int height, bool is10Bit) {
 bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
                                 bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
                                 bool is10Bit, AsciiArt& out, std::string* error) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_device) {
         std::string initErr;
         if (!Initialize(width, height, &initErr)) {
@@ -508,6 +511,7 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
 }
 
 bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiArt& out, std::string* error) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_device) {
         std::string initErr;
         if (!Initialize(width, height, &initErr)) {
@@ -648,6 +652,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
                                          int width, int height,
                                          bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
                                          bool is10Bit, AsciiArt& out, std::string* error) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!texture) {
         if (error) *error = "Null texture provided";
         return false;
