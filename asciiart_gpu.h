@@ -44,6 +44,8 @@ public:
         return m_lastNv12TextureDetail;
     }
 
+    void ClearHistory();
+
 private:
     bool CreateDevice();
     bool CreateDeviceWithFlags(UINT flags);

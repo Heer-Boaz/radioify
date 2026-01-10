@@ -33,6 +33,14 @@ GpuAsciiRenderer::GpuAsciiRenderer() {}
 
 GpuAsciiRenderer::~GpuAsciiRenderer() {}
 
+void GpuAsciiRenderer::ClearHistory() {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (m_context && m_historyUAV) {
+        UINT clearValues[4] = { 0, 0, 0, 0 };
+        m_context->ClearUnorderedAccessViewUint(m_historyUAV.Get(), clearValues);
+    }
+}
+
 bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* error) {
     if (!CreateDevice()) {
         if (error) *error = "Failed to create D3D11 device";

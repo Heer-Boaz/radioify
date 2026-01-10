@@ -664,7 +664,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
   };
 
-  auto renderScreen = [&](bool refreshArt) {
+  auto renderScreen = [&](bool clearHistory, bool frameChanged) {
     screen.updateSize();
     int width = std::max(20, screen.width());
     int height = std::max(10, screen.height());
@@ -755,7 +755,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                         frame->width != cachedFrameWidth ||
                         frame->height != cachedFrameHeight);
     if (enableAscii) {
-      if (allowFrame && (refreshArt || sizeChanged)) {
+      if (allowFrame && (frameChanged || clearHistory || sizeChanged)) {
         if (frame->width <= 0 || frame->height <= 0) {
           renderFailed = true;
           renderFailMessage = "Invalid video frame size.";
@@ -777,6 +777,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               bool renderRes = false;
               {
                 std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+                if (clearHistory) {
+                  gpuRenderer.ClearHistory();
+                }
                 renderRes = gpuRenderer.RenderNV12Texture(
                     frame->hwTexture.Get(), frame->hwTextureArrayIndex,
                     frame->width, frame->height, frame->fullRange,
@@ -992,7 +995,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     screen.draw();
   };
 
-  renderScreen(true);
+  renderScreen(true, true);
   if (renderFailed) {
     player.close();
     if (audioOk) audioStop();
@@ -1112,7 +1115,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       haveFrame = true;
       presented = true;
       redraw = true;
-      forceRefreshArt = true;
+      // Don't force refresh art on every frame, only when explicitly needed.
     }
     if (!player.hasVideoFrame()) {
       haveFrame = false;
@@ -1138,7 +1141,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
 
     if (redraw || overlayVisible()) {
-      renderScreen(presented || forceRefreshArt);
+      renderScreen(forceRefreshArt, presented);
       if (renderFailed) {
         running = false;
         break;

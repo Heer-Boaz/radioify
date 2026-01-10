@@ -212,21 +212,28 @@ int64_t computeTargetDelayUs(int64_t delayUs, int64_t videoPtsUs,
                              int64_t masterUs) {
   const int64_t kSyncThresholdMin = 10000;
   const int64_t kSyncThresholdMax = 100000;
-  const int64_t kNoSyncThreshold = 3000000;
 
   int64_t diff = videoPtsUs - masterUs;
-  int64_t syncThreshold = clampi64(delayUs, kSyncThresholdMin, kSyncThresholdMax);
-  if (diff > -kNoSyncThreshold && diff < kNoSyncThreshold) {
+  int64_t syncThreshold =
+      clampi64(delayUs, kSyncThresholdMin, kSyncThresholdMax);
+
+  // We only sync if the difference is within a sane range (10s).
+  // This avoids huge jumps during seek or serial transitions.
+  if (std::abs(diff) < 10000000) {
     if (diff <= -syncThreshold) {
+      // Video is behind: reduce delay.
       delayUs = std::max<int64_t>(0, delayUs + diff);
     } else if (diff >= syncThreshold) {
-      if (delayUs > syncThreshold * 2) {
-        delayUs = delayUs + diff;
+      // Video is ahead: increase delay.
+      // Cap sync wait to 500ms to allow recovery from clock issues.
+      if (diff > 500000) {
+        delayUs = 500000;
       } else {
-        delayUs = 2 * delayUs;
+        delayUs = delayUs + diff;
       }
     }
   }
+
   return delayUs;
 }
 
@@ -1401,17 +1408,24 @@ struct Player::Impl {
 
   MasterClockSnapshot masterClockSnapshot(int64_t nowUs) const {
     MasterClockSnapshot snap{};
+    int current = currentSerial.load(std::memory_order_relaxed);
+
     if (audioStartOk.load() && audioStreamClockReady() &&
         !audioStreamStarved() && !audioIsFinished() &&
         audioClockFresh(nowUs)) {
-      int64_t audioUs = audioStreamClockUs(nowUs);
-      if (audioUs > 0) {
-        snap.us = audioUs;
-        snap.source = PlayerClockSource::Audio;
-        return snap;
+
+      // Only use audio clock if the audio stream matches our current target serial.
+      if (audioStreamSerial() == current) {
+        int64_t audioUs = audioStreamClockUs(nowUs);
+        if (audioUs > 0) {
+          snap.us = audioUs;
+          snap.source = PlayerClockSource::Audio;
+          return snap;
+        }
       }
     }
-    if (videoClock.is_valid()) {
+    if (videoClock.is_valid() &&
+        videoClock.serial.load(std::memory_order_relaxed) == current) {
       snap.us = videoClock.get(nowUs);
       snap.source = PlayerClockSource::Video;
     }
@@ -2403,6 +2417,23 @@ struct Player::Impl {
         frameTimerUs = nowUs();
       }
 
+      // Always update master clock and diff, even if no frames are in the queue.
+      // This ensures the UI reflects current sync status during the "Draining" state.
+      int64_t now = nowUs();
+      MasterClockSnapshot master = masterClockSnapshot(now);
+      int64_t masterUs = master.us;
+      lastMasterUs.store(masterUs, std::memory_order_relaxed);
+      lastMasterSource.store(static_cast<int>(master.source),
+                             std::memory_order_relaxed);
+      
+      int64_t lpPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
+      int lpSerial = lastPresentedSerial.load(std::memory_order_relaxed);
+      if (masterUs > 0 && lpPts > 0 && lpSerial == static_cast<int>(serial)) {
+        lastDiffUs.store(lpPts - masterUs, std::memory_order_relaxed);
+      } else {
+        lastDiffUs.store(0, std::memory_order_relaxed);
+      }
+
       QueuedFrame front{};
       if (!videoFrames.peek(&front)) {
         logVideo("wait", nullptr, 0, PlayerClockSource::None, 0, 0);
@@ -2417,6 +2448,8 @@ struct Player::Impl {
         if (videoFrames.pop(&drop)) {
           videoFrames.release(drop.poolIndex);
         }
+        // Small sleep to avoid tight-looping while flushing old serials
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
         continue;
       }
 
@@ -2426,6 +2459,7 @@ struct Player::Impl {
         if (videoFrames.pop(&drop)) {
           videoFrames.release(drop.poolIndex);
         }
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
         continue;
       }
 
@@ -2442,9 +2476,6 @@ struct Player::Impl {
         delayUs = lastDelayUsValue;
       }
 
-      int64_t now = nowUs();
-      MasterClockSnapshot master = masterClockSnapshot(now);
-      int64_t masterUs = master.us;
       int64_t diffUs = 0;
       int64_t actualDurationUs = delayUs;
 
@@ -2471,14 +2502,23 @@ struct Player::Impl {
       int64_t targetUs = frameTimerUs + delayUs;
       if (now < targetUs) {
         int64_t sleepUs = targetUs - now;
-        if (sleepUs > 5000) sleepUs = 5000;
         if (sleepUs > 0) {
-          std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
+          // Limit sleep to 10ms to keep the UI/commands responsive.
+          int64_t actualSleep = std::min<int64_t>(sleepUs, 10000);
+          std::this_thread::sleep_for(std::chrono::microseconds(actualSleep));
+
+          // Only log if it's the first time or every ~250ms to avoid log spam.
+          static int64_t lastLogUs = 0;
+          if (now - lastLogUs > 250000) {
+            logVideo("sleep", &front, masterUs, master.source, diffUs, delayUs);
+            lastLogUs = now;
+          }
         }
-        logVideo("sleep", &front, masterUs, master.source, diffUs, delayUs);
         continue;
       }
-      if (now > targetUs + actualDurationUs) {
+      // Be more lenient with "late" frames to avoid stuttering. 
+      // Only drop if we are more than 100ms behind.
+      if (now > targetUs + 100000) {
         if (videoFrames.size() > 1) {
           logVideo("drop_late", &front, masterUs, master.source, diffUs,
                    delayUs);
@@ -2488,6 +2528,7 @@ struct Player::Impl {
             lastPtsUs = drop.ptsUs;
             frameTimerUs = targetUs;
           }
+          std::this_thread::sleep_for(std::chrono::microseconds(100));
           continue;
         }
       }
