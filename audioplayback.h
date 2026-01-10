@@ -45,12 +45,17 @@ size_t audioStreamCapacityFrames();
 bool audioStreamWriteSamples(const float* interleaved,
                              uint64_t frames,
                              int64_t ptsUs,
-                             int serial);
+                             int serial,
+                             bool allowBlock,
+                             uint64_t* writtenFrames);
+uint64_t audioStreamDropFrames(uint64_t frames);
+void audioStreamSetBase(int serial, int64_t ptsUs);
 void audioStreamSetEnd(bool atEnd);
 void audioStreamReset(uint64_t framePos);
 void audioStreamFlushSerial(int serial);
 int audioStreamSerial();
 int64_t audioStreamClockUs(int64_t nowUs);
+int64_t audioStreamClockLastUpdatedUs();
 bool audioStreamStarved();
 bool audioStreamClockReady();
 
