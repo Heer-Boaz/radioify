@@ -750,7 +750,7 @@ bool initDemuxer(const std::filesystem::path& path, DemuxContext* out,
                           ioCache.get(), error)) {
     return false;
   }
-  fmt->flags |= AVFMT_FLAG_NOBUFFER;
+  fmt->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_GENPTS | AVFMT_FLAG_DISCARD_CORRUPT;
   int infoErr = avformat_find_stream_info(fmt, nullptr);
   if (infoErr < 0) {
     avformat_close_input(&fmt);
@@ -763,7 +763,7 @@ bool initDemuxer(const std::filesystem::path& path, DemuxContext* out,
                             ioCache.get(), error)) {
       return false;
     }
-    fmt->flags |= AVFMT_FLAG_NOBUFFER;
+    fmt->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_GENPTS | AVFMT_FLAG_DISCARD_CORRUPT;
     infoErr = avformat_find_stream_info(fmt, nullptr);
     if (infoErr < 0) {
       std::string msg = "Failed to read stream info: " + ffmpegError(infoErr);
@@ -1867,6 +1867,8 @@ struct Player::Impl {
     AVPacket pkt;
     av_init_packet(&pkt);
     bool demuxAtEof = false;
+    int demuxRetryCount = 0;
+    int64_t lastAutoRecoverUs = -1;
     
     // Packet queue backpressure monitoring
     int64_t lastQueueWarnTimeUs = nowUs();
@@ -2598,24 +2600,32 @@ struct Player::Impl {
         
         // Timeout detection: if we've been waiting for frames for too long, force recovery
         if (now - lastPresentedTimeUs > kFrameStallThresholdUs) {
-          logVideo("stall_detected", nullptr, 0, PlayerClockSource::None, 0, 0);
-          
-          // Use current audio time if available, or just jump 500ms ahead of last PTS
+          int64_t dur = durationUs.load(std::memory_order_relaxed);
           int64_t lpPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
-          int64_t seekTarget = lpPts + 500000; 
           
-          if (audioStreamClockReady()) {
-            seekTarget = audioStreamClockUs(now);
+          // Only force a jump if we are not at the very end of the file
+          if (dur <= 0 || lpPts < dur - 1000000) {
+            logVideo("stall_detected", nullptr, 0, PlayerClockSource::None, 0, 0);
+            
+            // Use current audio time if available, or just jump 500ms ahead of last PTS
+            int64_t seekTarget = lpPts + 500000; 
+            
+            if (audioStreamClockReady()) {
+              seekTarget = audioStreamClockUs(now);
+            }
+            
+            // Request a real seek to jump over potentially missing stream segments/gaps
+            PlayerEvent ev{};
+            ev.type = PlayerEventType::SeekRequest;
+            ev.arg1 = seekTarget;
+            postEvent(ev);
+            
+            // Reset timer to give seek time to complete
+            lastPresentedTimeUs = now;
+          } else {
+            // We are likely at the real EOF, don't keep seeking
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
           }
-          
-          // Request a real seek to jump over potentially missing stream segments/gaps
-          PlayerEvent ev{};
-          ev.type = PlayerEventType::SeekRequest;
-          ev.arg1 = seekTarget;
-          postEvent(ev);
-          
-          // Reset timer to give seek time to complete
-          lastPresentedTimeUs = now;
         }
         
         videoFrames.waitForFrame(std::chrono::milliseconds(10), &running,
