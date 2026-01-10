@@ -375,6 +375,7 @@ struct VideoDecoder::Impl {
     out.yuvTransfer = frameTransfer;
     out.hwTexture.Reset();
     out.hwTextureArrayIndex = 0;
+    out.hwFrameRef.reset();
 
     if (!decodePixels) {
       out.format = VideoPixelFormat::Unknown;
@@ -394,10 +395,18 @@ struct VideoDecoder::Impl {
       auto* texture = reinterpret_cast<ID3D11Texture2D*>(src->data[0]);
       if (!texture) return false;
       intptr_t arrayIndex = reinterpret_cast<intptr_t>(src->data[1]);
-      
+      AVFrame* copy = av_frame_alloc();
+      if (!copy) return false;
+      if (av_frame_ref(copy, src) < 0) {
+        av_frame_free(&copy);
+        return false;
+      }
+
       out.format = VideoPixelFormat::HWTexture;
       out.hwTexture = texture; // ComPtr assignment calls AddRef
       out.hwTextureArrayIndex = static_cast<int>(arrayIndex);
+      out.hwFrameRef =
+          std::shared_ptr<AVFrame>(copy, [](AVFrame* f) { av_frame_free(&f); });
       out.stride = 0;
       out.planeHeight = 0;
       out.yuv.clear();

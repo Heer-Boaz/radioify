@@ -8,6 +8,7 @@
 struct VideoPlaybackConfig {
   bool enableAscii = true;
   bool enableAudio = true;
+  bool debugOverlay = false;
 };
 
 void configureFfmpegVideoLog(const std::filesystem::path& path);

@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 #define NOMINMAX
@@ -15,6 +16,7 @@
 // Forward declarations
 struct ID3D11Device;
 struct ID3D11DeviceContext;
+struct AVFrame;
 
 enum class VideoPixelFormat {
   Unknown,
@@ -42,6 +44,7 @@ struct VideoFrame {
   // Only valid when format == HWTexture
   Microsoft::WRL::ComPtr<ID3D11Texture2D> hwTexture;
   int hwTextureArrayIndex = 0;  // Index into texture array (for D3D11VA pools)
+  std::shared_ptr<AVFrame> hwFrameRef;
 };
 
 struct VideoReadInfo {

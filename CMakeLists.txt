@@ -17,7 +17,10 @@ add_executable(radioify
   consoleinput.cpp
   consolescreen.cpp
   ffmpegaudio.cpp
+  gpu_shared.cpp
   m4adecoder.cpp
+  player.cpp
+  queues.cpp
   taskgate.cpp
   ui_helpers.cpp
   videoplayback.cpp

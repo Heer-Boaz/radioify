@@ -413,6 +413,7 @@ int main(int argc, char** argv) {
   VideoPlaybackConfig videoConfig;
   videoConfig.enableAscii = o.enableAscii;
   videoConfig.enableAudio = o.enableAudio;
+  videoConfig.debugOverlay = true;
 
   std::filesystem::path pendingImage;
   bool hasPendingImage = false;
