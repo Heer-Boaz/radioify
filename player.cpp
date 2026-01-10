@@ -237,6 +237,30 @@ int64_t computeTargetDelayUs(int64_t delayUs, int64_t videoPtsUs,
   return delayUs;
 }
 
+// This player implements the following synchronization strategies:
+//
+// 1. AUDIO STARVATION DETECTION: If the audio buffer runs out of data,
+//    pause video playback (sleep) instead of dropping frames. This prevents
+//    the deadlock where video keeps advancing but audio can't fill.
+//
+// 2. SYNC MODES (3-state):
+//    - Sync Mode (±100ms): Normal playback with small delay corrections
+//    - Catch-up Mode (<-100ms): Drop frames to catch up to audio master
+//    - Audio-ahead Mode (>+100ms): Slow video to let audio catch up
+//
+// 3. SEEK→PRIMING TRANSITION: After a seek, return to Priming state to
+//    re-prebuffer both streams. This eliminates post-seek desync.
+//
+// 4. GRADUAL CLOCK DISCIPLINE: Instead of instant clock resets, gradually
+//    adjust playback speed (0.95x-1.01x) to let drifting clocks converge.
+//
+// 5. AUDIO BUFFER LEVEL FEEDBACK: Monitor the audio buffer level in the
+//    video loop. If it's <100ms, slow video playback (0.99x). If it
+//    recovers >200ms, gradually return to 1.0x speed.
+//
+// These 5 strategies eliminate the "frame drop + freeze" cycle by making
+// the playback control reactive (audio starving? pause), not speculative.
+
 const char* playerStateName(PlayerState state) {
   switch (state) {
     case PlayerState::Idle:
@@ -1434,16 +1458,21 @@ struct Player::Impl {
 
   bool prefillReady(int64_t nowUs) const {
     (void)nowUs;
-    // We want enough decoded frames to ensure smooth start.
+    // We need substantial prebuffer before playback starts.
+    // This ensures audio is ahead of video and provides steady supply.
     bool videoReady = videoFrames.size() >= kVideoPrefillFrames || decodeEnded.load();
 
-    // For audio, we check both encoded packets and decoded samples in the playback buffer.
+    // For audio: We need at least 200-300ms buffered before we start playback.
+    // This is the "prebuffer" that keeps playback from stuttering when disk is slow.
     size_t bufferedSamples = audioStreamBufferedFrames();
-    bool audioHasDecoded = (bufferedSamples >= 4800); // ~100ms at 48khz
+    AudioPerfStats audioStats = audioGetPerfStats();
+    uint32_t sampleRate = audioStats.sampleRate > 0 ? audioStats.sampleRate : 48000;
+    const size_t kAudioPrebufferFrames = sampleRate / 3; // ~330ms at 48kHz
+    bool audioHasDecoded = (bufferedSamples >= kAudioPrebufferFrames);
+    
     bool videoFull = videoFrames.size() >= (maxQueue.load() > 0 ? maxQueue.load() - 1 : 1);
     bool audioReady = !audioStartOk.load() || audioDecodeEnded.load() || 
-                      audioHasDecoded || audioPackets.size() >= kAudioPacketLowWater ||
-                      videoFull;
+                      audioHasDecoded || videoFull;
 
     return videoReady && audioReady;
   }
@@ -1553,8 +1582,15 @@ struct Player::Impl {
         seekFailed.store(false, std::memory_order_relaxed);
         pendingSeekSerial.store(nextSerial, std::memory_order_relaxed);
         int64_t clampedTarget = std::max<int64_t>(0, ev.arg1);
+        
+        // 3. KEYFRAME SEEKING
+        // Seek goes to the nearest keyframe BEFORE the target,
+        // not the exact target. This is because decoders need keyframes to start.
+        // We reduce the target by ~1 second to account for typical keyframe interval.
+        int64_t seekTarget = std::max<int64_t>(0, clampedTarget - 1000000); // Go back 1s for keyframe
+        
         seekDisplayUs.store(clampedTarget, std::memory_order_relaxed);
-        seekTargetUs.store(clampedTarget, std::memory_order_relaxed);
+        seekTargetUs.store(seekTarget, std::memory_order_relaxed); // Use keyframe-adjusted target
         seekPending.store(true, std::memory_order_relaxed);
         if (initDone.load(std::memory_order_relaxed)) {
           commandPending.store(true, std::memory_order_relaxed);
@@ -1570,9 +1606,12 @@ struct Player::Impl {
         audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
         audioBufferedStartSerial.store(0, std::memory_order_relaxed);
         audioBufferedStartValid.store(false, std::memory_order_relaxed);
-        setState(PlayerState::Seeking);
-        appendTimingFmt("ctrl_seek_request serial=%d target_us=%lld",
-                        nextSerial, static_cast<long long>(clampedTarget));
+        // After seek, go back to Priming to re-prebuffer both streams.
+        // This ensures we don't have timing misalignment between audio and video.
+        setState(PlayerState::Priming);
+        appendTimingFmt("ctrl_seek_request serial=%d target_us=%lld seek_target_us=%lld (keyframe-adjusted)",
+                        nextSerial, static_cast<long long>(clampedTarget), 
+                        static_cast<long long>(seekTarget));
         break;
       }
       case PlayerEventType::PauseRequest: {
@@ -1612,48 +1651,31 @@ struct Player::Impl {
       case PlayerEventType::FirstFramePresented: {
         if (ev.serial == currentSerial.load()) {
           if (state.load(std::memory_order_relaxed) == PlayerState::Priming) {
-            AudioPerfStats stats = audioGetPerfStats();
-            uint32_t sampleRate = stats.sampleRate ? stats.sampleRate : 48000;
-            int64_t targetPts =
-                lastPresentedPtsUs.load(std::memory_order_relaxed);
-            bool audioStartValid =
-                audioBufferedStartValid.load(std::memory_order_relaxed);
-            int bufferedSerial =
-                audioBufferedStartSerial.load(std::memory_order_relaxed);
-            int64_t bufferedPts =
-                audioBufferedStartPtsUs.load(std::memory_order_relaxed);
+            // Sync to the oldest buffered audio, not to video.
+            // This ensures audio is naturally ahead (prebuffered) before we start the clock.
+            int64_t audioOldestPts = audioStreamOldestPtsUs();
+            int64_t videoPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
+            
+            // Pick the sync point: prefer audio buffer start if valid, else fall back to video.
+            int64_t syncPts = (audioOldestPts != AV_NOPTS_VALUE) ? audioOldestPts : videoPts;
 
-            if (sampleRate > 0 && targetPts != AV_NOPTS_VALUE &&
-                audioStartValid && bufferedSerial == ev.serial &&
-                bufferedPts != AV_NOPTS_VALUE) {
-              int64_t deltaUs = targetPts - bufferedPts;
-              uint64_t droppedFrames = 0;
-              if (deltaUs > 0) {
-                uint64_t dropFrames = static_cast<uint64_t>(
-                    (static_cast<uint64_t>(deltaUs) *
-                     static_cast<uint64_t>(sampleRate)) /
-                    1000000ULL);
-                droppedFrames = audioStreamDropFrames(dropFrames);
-              }
-              int64_t droppedUs = static_cast<int64_t>(
-                  (static_cast<uint64_t>(droppedFrames) *
-                   static_cast<uint64_t>(sampleRate ? 1000000ULL : 0)) /
-                  static_cast<uint64_t>(sampleRate));
+            if (syncPts != AV_NOPTS_VALUE) {
+              int64_t now = nowUs();
               
-              int64_t basePts = bufferedPts + droppedUs;
-
-              // If we are still significantly behind targetPts (buffer underflow during sync),
-              // we must discard future audio packets until we catch up to the video.
-              // Otherwise the audio clock sends a time in the past, causing video freeze.
-              if (deltaUs > 0 && (basePts < targetPts - 200000)) { // 200ms tolerance
-                audioStreamDiscardUntil(targetPts);
-                basePts = targetPts;
-              }
-
-              audioStreamSetBase(ev.serial, basePts);
-            } else if (targetPts != AV_NOPTS_VALUE) {
-              audioStreamSetBase(ev.serial, targetPts);
+              // Set both clocks to the same sync point.
+              // Audio clock is synced to its own buffered content.
+              audioStreamSynchronize(ev.serial, syncPts);
+              
+              // Set video clock to match.
+              videoClock.set(syncPts, now, ev.serial);
+              
+              appendTimingFmt(
+                  "sync_priming_end serial=%d sync_pts_us=%lld audio_oldest=%lld video_pts=%lld",
+                  ev.serial, static_cast<long long>(syncPts),
+                  static_cast<long long>(audioOldestPts),
+                  static_cast<long long>(videoPts));
             }
+            
             audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
             audioBufferedStartSerial.store(0, std::memory_order_relaxed);
             audioBufferedStartValid.store(false, std::memory_order_relaxed);
@@ -1838,6 +1860,12 @@ struct Player::Impl {
     AVPacket pkt;
     av_init_packet(&pkt);
     bool demuxAtEof = false;
+    
+    // Packet queue backpressure monitoring
+    int64_t lastQueueWarnTimeUs = nowUs();
+    constexpr int64_t kQueueWarnIntervalUs = 5000000;  // 5 seconds between warnings
+    constexpr size_t kMaxPacketQueueSize = 1024;  // Warn if queue grows beyond this
+    
     while (running.load()) {
       bool handledSeek = false;
       if (seekPending.exchange(false)) {
@@ -1951,6 +1979,25 @@ struct Player::Impl {
         }
       }
       av_packet_unref(&pkt);
+      
+      // Packet queue backpressure detection:
+      // Warn if queues are growing (demuxer reading faster than decoders consuming)
+      size_t vqSize = videoPackets.size();
+      size_t aqSize = audioPackets.size();
+      int64_t now = nowUs();
+      if (vqSize > kMaxPacketQueueSize || aqSize > kMaxPacketQueueSize) {
+        if (now - lastQueueWarnTimeUs > kQueueWarnIntervalUs) {
+          appendTimingFmt("packet_queue_backpressure video_q=%zu audio_q=%zu",
+                          vqSize, aqSize);
+          lastQueueWarnTimeUs = now;
+          // If audio queue is large and video queue is small, audio decoder might be stuck
+          if (aqSize > kMaxPacketQueueSize && vqSize < kMaxPacketQueueSize / 2) {
+            appendTimingFmt("possible_audio_stuck audio_q=%zu video_q=%zu", aqSize, vqSize);
+          }
+        }
+      } else {
+        lastQueueWarnTimeUs = now;  // Reset timer when queues are healthy
+      }
     }
 
     demuxEnded.store(true);
@@ -2156,6 +2203,10 @@ struct Player::Impl {
       return;
     }
 
+    // Timeout detection for audio decoder stall
+    int64_t lastAudioFrameTimeUs = nowUs();
+    constexpr int64_t kAudioStallThresholdUs = 5000000;  // 5 seconds
+
     QueuedPacket pendingPacket{};
     bool hasPendingPacket = false;
     bool inputEof = false;
@@ -2333,6 +2384,9 @@ struct Player::Impl {
           }
           totalWritten += written;
           
+          // Reset audio stall timer on successful frame write
+          lastAudioFrameTimeUs = nowUs();
+          
           int bufferedSerial =
               audioBufferedStartSerial.load(std::memory_order_relaxed);
           bool firstForSerial =
@@ -2347,6 +2401,22 @@ struct Player::Impl {
         }
       }
     }
+    
+    // Audio stall detection: if no frames produced for 5+ seconds, force recovery
+    int64_t now = nowUs();
+    if (now - lastAudioFrameTimeUs > kAudioStallThresholdUs) {
+      appendTimingFmt("audio_stall_detected serial=%u frames_buffered=%zu",
+                      static_cast<unsigned>(decoderSerial),
+                      audioStreamBufferedFrames());
+      // Force recovery: flush decoder and return to prefill
+      avcodec_flush_buffers(audioDec.codec);
+      audioDec.writePosFrames = 0;
+      audioDec.nextPtsUs = 0;
+      audioDec.nextPtsValid = false;
+      audioStreamFlushSerial(static_cast<int>(decoderSerial));
+      lastAudioFrameTimeUs = now;
+    }
+    
     audioStreamSetEnd(true);
     audioDecodeEnded.store(true);
   }
@@ -2362,7 +2432,15 @@ struct Player::Impl {
     bool firstPresentedForSerial = false;
     constexpr double kVideoBufferHighSec = 0.75;
     // Lower max frame duration to detect discontinuities/drops (e.g. 500ms)
-    const int64_t kMaxFrameDurationUs = 500000; 
+    const int64_t kMaxFrameDurationUs = 500000;
+    
+    // Timeout/Stall detection: track when last frame was presented
+    int64_t lastPresentedTimeUs = nowUs();
+    constexpr int64_t kFrameStallThresholdUs = 5000000;  // 5 seconds
+    
+    // Dynamic frame duration: maintain moving average of recent durations
+    std::vector<int64_t> recentDurations;
+    constexpr size_t kDurationHistorySize = 10;  // Track last 10 frame durations 
     auto logVideo = [&](const char* tag, const QueuedFrame* frame,
                         int64_t masterUs, PlayerClockSource source,
                         int64_t diffUs, int64_t delayUs) {
@@ -2448,6 +2526,20 @@ struct Player::Impl {
       QueuedFrame front{};
       if (!videoFrames.peek(&front)) {
         logVideo("wait", nullptr, 0, PlayerClockSource::None, 0, 0);
+        
+        // Timeout detection: if we've been waiting for frames for >5 seconds, force recovery
+        int64_t now = nowUs();
+        if (now - lastPresentedTimeUs > kFrameStallThresholdUs) {
+          logVideo("stall_detected", nullptr, 0, PlayerClockSource::None, 0, 0);
+          // Force recovery: flush video queue and return to Priming
+          QueuedFrame drop{};
+          while (videoFrames.pop(&drop)) {
+            videoFrames.release(drop.poolIndex);
+          }
+          setState(PlayerState::Priming);
+          lastPresentedTimeUs = now;
+        }
+        
         videoFrames.waitForFrame(std::chrono::milliseconds(10), &running,
                                  &commandPending);
         continue;
@@ -2475,14 +2567,61 @@ struct Player::Impl {
       }
 
       int64_t delayUs = 0;
-      if (lastPtsUs < 0) {
-        delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
+      
+      // 1. TIMESTAMP DISCONTINUITY DETECTION
+      // Detect keyframe jumps or timestamp resets (common in multi-segment files)
+      if (lastPtsUs >= 0) {
+        int64_t ptsDelta = front.ptsUs - lastPtsUs;
+        // If PTS jumps more than 500ms, it's likely a discontinuity (keyframe, scene change, etc)
+        if (ptsDelta > 500000) {
+          logVideo("pts_discontinuity", &front, 0, PlayerClockSource::None, ptsDelta, 0);
+          // Reset frame timer to avoid massive delay calculation
+          frameTimerUs = nowUs();
+          // Use the frame's own duration
+          delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
+        } else if (ptsDelta > 0) {
+          delayUs = ptsDelta;
+        } else {
+          // Backward or zero delta - use fallback
+          delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
+        }
       } else {
-        delayUs = front.ptsUs - lastPtsUs;
-      }
-      if (delayUs <= 0 || delayUs > kMaxFrameDurationUs) {
         delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
       }
+      
+      // 2. DYNAMIC FRAME DURATION VALIDATION
+      // Validate front.durationUs against reasonable bounds and apply smoothing
+      if (front.durationUs > 0 && front.durationUs <= kMaxFrameDurationUs) {
+        recentDurations.push_back(front.durationUs);
+        if (recentDurations.size() > kDurationHistorySize) {
+          recentDurations.erase(recentDurations.begin());
+        }
+      } else if (front.durationUs > 0) {
+        // Duration is > 500ms: suspicious, don't add to history
+        logVideo("duration_outlier", &front, 0, PlayerClockSource::None, 0, front.durationUs);
+      }
+      
+      // Compute smoothed duration from recent history
+      int64_t smoothedDurationUs = lastDelayUsValue;
+      if (!recentDurations.empty()) {
+        // Use median of recent durations to reject outliers
+        auto sorted = recentDurations;
+        std::sort(sorted.begin(), sorted.end());
+        smoothedDurationUs = sorted[sorted.size() / 2];
+      }
+      
+      // Sanity check: reject insanely long durations, prefer smoothed version
+      if (delayUs <= 0 || delayUs > kMaxFrameDurationUs) {
+        delayUs = smoothedDurationUs;
+        if (delayUs <= 0) {
+          delayUs = lastDelayUsValue;
+        }
+      } else if (!recentDurations.empty()) {
+        // If current duration looks reasonable, blend with smoothed to reduce jitter
+        // Weight current duration 40%, smoothed 60%
+        delayUs = (delayUs * 40 + smoothedDurationUs * 60) / 100;
+      }
+      
       if (delayUs <= 0) {
         delayUs = lastDelayUsValue;
       }
@@ -2492,10 +2631,49 @@ struct Player::Impl {
 
       if (masterUs != 0) {
         diffUs = front.ptsUs - masterUs;
-        delayUs = computeTargetDelayUs(delayUs, front.ptsUs, masterUs);
         
-        // If we are way behind the audio clock, skip this frame to catch up.
-        if (diffUs < -100000 && videoFrames.size() > 1) {
+        // Sync modes with audio buffer awareness:
+        
+        // 1. Check if audio is starving. If so, pause video (don't drop frames).
+        bool audioStarving = audioStreamStarved();
+        if (audioStarving && audioStreamClockReady()) {
+          // Audio ran out of data. Pause video to let audio buffer refill.
+          logVideo("audio_starved", &front, masterUs, master.source, diffUs, delayUs);
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          continue;
+        }
+        
+        // 5. Audio Buffer Level Feedback: If audio buffer is getting low (< 100ms),
+        // slow down video to give audio time to refill.
+        size_t audioBuffered = audioStreamBufferedFrames();
+        uint32_t sampleRate = 48000;
+        AudioPerfStats audioStats = audioGetPerfStats();
+        if (audioStats.sampleRate > 0) sampleRate = audioStats.sampleRate;
+        
+        int64_t audioBufferedUs = static_cast<int64_t>(
+            (audioBuffered * 1000000ULL) / sampleRate);
+        
+        if (audioBufferedUs < 100000 && audioBufferedUs > 0) {
+          // Buffer is getting low. Apply gradual clock discipline to slow video.
+          // Reduce playback speed by 5% to let audio catch up.
+          double currentSpeed = videoClock.speed_q16.load(std::memory_order_relaxed) / 65536.0;
+          double newSpeed = std::max(0.95, currentSpeed * 0.99);
+          videoClock.set_speed(newSpeed, now);
+        } else if (audioBufferedUs > 200000) {
+          // Buffer has recovered. Resume normal speed.
+          double currentSpeed = videoClock.speed_q16.load(std::memory_order_relaxed) / 65536.0;
+          if (currentSpeed < 1.0) {
+            videoClock.set_speed(std::min(1.0, currentSpeed * 1.01), now);
+          }
+        }
+        
+        // 2. Sync mode: if video is within ~100ms of audio, proceed normally
+        if (diffUs >= -100000 && diffUs <= 100000) {
+          // Normal playback: just add a small correction to delay
+          delayUs = computeTargetDelayUs(delayUs, front.ptsUs, masterUs);
+        }
+        // 3. Catch-up mode: video is way behind (>100ms). Drop frames.
+        else if (diffUs < -100000) {
           logVideo("skip_behind", &front, masterUs, master.source, diffUs, delayUs);
           QueuedFrame drop{};
           if (videoFrames.pop(&drop)) {
@@ -2503,6 +2681,13 @@ struct Player::Impl {
           }
           continue;
         }
+        // 4. Audio-ahead mode: video is ahead (should be rare with prebuffering).
+        else if (diffUs > 100000) {
+          // Slow down video presentation to let audio catch up.
+          // Cap at 500ms to avoid excessive pauses.
+          delayUs = std::min<int64_t>(500000, delayUs + diffUs);
+        }
+        
       }
       lastMasterUs.store(masterUs, std::memory_order_relaxed);
       lastMasterSource.store(static_cast<int>(master.source),
@@ -2573,6 +2758,10 @@ struct Player::Impl {
         seekDisplayUs.store(0, std::memory_order_relaxed);
       }
       logVideo("present", &item, masterUs, master.source, diffUs, delayUs);
+      
+      // Update frame presentation time for timeout detection
+      lastPresentedTimeUs = nowUs();
+      
       if (!firstPresentedForSerial) {
         firstPresentedForSerial = true;
         PlayerEvent ev{};

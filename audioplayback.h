@@ -42,6 +42,7 @@ bool audioStartStream(uint64_t totalFrames);
 void audioStopStream();
 size_t audioStreamBufferedFrames();
 size_t audioStreamCapacityFrames();
+int64_t audioStreamOldestPtsUs();
 bool audioStreamWriteSamples(const float* interleaved,
                              uint64_t frames,
                              int64_t ptsUs,
@@ -50,6 +51,7 @@ bool audioStreamWriteSamples(const float* interleaved,
                              uint64_t* writtenFrames);
 uint64_t audioStreamDropFrames(uint64_t frames);
 void audioStreamDiscardUntil(int64_t ptsUs);
+void audioStreamSynchronize(int serial, int64_t targetPtsUs);
 void audioStreamSetBase(int serial, int64_t ptsUs);
 void audioStreamSetEnd(bool atEnd);
 void audioStreamReset(uint64_t framePos);
