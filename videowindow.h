@@ -9,6 +9,14 @@
 
 #include "videocolor.h"
 
+struct WindowUiState {
+    float progress = 0.0f;
+    float overlayAlpha = 0.0f;
+    bool isPaused = false;
+    std::string title;
+    std::string timeStr;
+};
+
 class VideoWindow {
 public:
     VideoWindow();
@@ -18,7 +26,8 @@ public:
     void Close();
 
     void Present(ID3D11Texture2D* texture, int arrayIndex, int width, int height,
-                 bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth);
+                 bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth,
+                 const WindowUiState& ui);
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
     void ShowWindow(bool show);
@@ -34,6 +43,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_renderTargetView;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_pixelShader;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_vertexShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_uiShader;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
 

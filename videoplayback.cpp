@@ -41,6 +41,10 @@ extern "C" {
 
 #include "timing_log.h"
 
+static VideoWindow g_videoWindow;
+static bool g_windowEnabledPersistent = false;
+static bool g_windowEnabledInitialized = false;
+
 namespace {
 #if RADIOIFY_ENABLE_FFMPEG_ERROR_LOG
 std::mutex gFfmpegLogMutex;
@@ -608,8 +612,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   AsciiArt art;
   GpuAsciiRenderer& gpuRenderer = sharedGpuRenderer();
-  VideoWindow videoWindow;
-  bool windowEnabled = config.enableWindow;
+  if (!g_windowEnabledInitialized) {
+    g_windowEnabledPersistent = config.enableWindow;
+    g_windowEnabledInitialized = true;
+  }
+  bool& windowEnabled = g_windowEnabledPersistent;
   bool gpuAvailable = true;
   VideoFrame frameBuffer;
   VideoFrame* frame = &frameBuffer;
@@ -793,7 +800,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     bool sizeChanged = (width != cachedWidth || maxHeight != cachedMaxHeight ||
                         frame->width != cachedFrameWidth ||
                         frame->height != cachedFrameHeight);
-    if (enableAscii) {
+
+    if (enableAscii || windowEnabled) {
       if (allowFrame && (frameChanged || clearHistory || sizeChanged)) {
         if (frame->width <= 0 || frame->height <= 0) {
           renderFailed = true;
@@ -829,19 +837,32 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               }
 
               if (windowEnabled) {
-                if (!videoWindow.IsOpen()) {
-                  videoWindow.Open(1280, 720, "Radioify Output");
+                if (!g_videoWindow.IsOpen()) {
+                  g_videoWindow.Open(1280, 720, "Radioify Output");
                 }
-                videoWindow.ShowWindow(true);
-                videoWindow.Present(frame->hwTexture.Get(), frame->hwTextureArrayIndex,
+                g_videoWindow.ShowWindow(true);
+
+                double ratio = 0.0;
+                if (totalSec > 0.0 && std::isfinite(totalSec)) {
+                  ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
+                }
+
+                WindowUiState ui;
+                ui.progress = (float)ratio;
+                ui.isPaused = isPaused;
+                ui.overlayAlpha = overlayVisible() ? 1.0f : 0.0f;
+                ui.title = toUtf8String(file.filename());
+                ui.timeStr = formatTime(displaySec) + " / " + formatTime(totalSec);
+
+                g_videoWindow.Present(frame->hwTexture.Get(), frame->hwTextureArrayIndex,
                                     frame->width, frame->height, frame->fullRange,
                                     frame->yuvMatrix, frame->yuvTransfer,
-                                    is10Bit ? 10 : 8);
+                                    is10Bit ? 10 : 8, ui);
                 renderRes = true; // Signal we processed the frame
                 artOk = true; 
               } else {
-                if (videoWindow.IsOpen()) {
-                  videoWindow.ShowWindow(false);
+                if (g_videoWindow.IsOpen()) {
+                  g_videoWindow.ShowWindow(false);
                 }
                 renderRes = gpuRenderer.RenderNV12Texture(
                     frame->hwTexture.Get(), frame->hwTextureArrayIndex,
@@ -1079,9 +1100,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   while (running) {
     finalizeAudioStart();
 
-    if (videoWindow.IsOpen()) {
-        videoWindow.PollEvents();
-        if (windowEnabled && !videoWindow.IsVisible()) {
+    if (g_videoWindow.IsOpen()) {
+        g_videoWindow.PollEvents();
+        if (windowEnabled && !g_videoWindow.IsVisible()) {
             windowEnabled = false;
         }
     }
