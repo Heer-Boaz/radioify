@@ -124,20 +124,26 @@ namespace {
             if (uiAlpha <= 0.01) discard;
             float2 uv = input.tex;
             float4 color = float4(0, 0, 0, 0);
+            bool hit = false;
 
             // Progress bar at bottom
-            if (uv.y > 0.95 && uv.y < 0.98 && uv.x > 0.05 && uv.x < 0.95) {
+            if (uv.y > 0.94 && uv.y < 0.98 && uv.x > 0.05 && uv.x < 0.95) {
                 float barX = (uv.x - 0.05) / 0.9;
-                if (barX < uiProgress) color = float4(1, 0.8, 0.2, 0.8);
-                else color = float4(0.3, 0.3, 0.3, 0.6);
+                if (barX < uiProgress) color = float4(1, 0.8, 0.2, 0.9);
+                else color = float4(0.2, 0.2, 0.2, 0.7);
+                hit = true;
             }
             // Pause icon
             if (uiPaused != 0) {
                 float2 c = float2(0.5, 0.5);
                 float2 d = abs(uv - c);
-                if (d.x < 0.02 && d.y < 0.05 && (abs(d.x) > 0.005)) color = float4(1, 1, 1, 0.8);
+                if (d.x < 0.02 && d.y < 0.05 && (d.x > 0.006)) {
+                    color = float4(1, 1, 1, 0.8);
+                    hit = true;
+                }
             }
 
+            if (!hit) discard;
             return color * uiAlpha;
         }
     )";
@@ -198,7 +204,8 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             int x = LOWORD(lParam);
             int y = HIWORD(lParam);
             
-            if (pThis->m_height > 0 && y > pThis->m_height * 0.90) {
+            // Focus on the bottom 15% for seeking, ignore the rest to prevent accidental pauses
+            if (pThis->m_height > 0 && y > pThis->m_height * 0.85) {
                 InputEvent ev;
                 ev.type = InputEvent::Type::Mouse;
                 ev.mouse.pos.X = (SHORT)x;
@@ -206,13 +213,6 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
                 ev.mouse.buttonState = FROM_LEFT_1ST_BUTTON_PRESSED;
                 ev.mouse.control = 0x80000000; // Custom flag for window-originated event
                 
-                std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
-                pThis->m_inputQueue.push_back(ev);
-            } else {
-                InputEvent ev;
-                ev.type = InputEvent::Type::Key;
-                ev.key.vk = VK_SPACE;
-                ev.key.ch = ' ';
                 std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
                 pThis->m_inputQueue.push_back(ev);
             }
