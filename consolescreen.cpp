@@ -642,8 +642,10 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       int logicalRow = r + browser.scrollRow;
       if (logicalRow >= layout.totalRows) continue;
       for (int c = 0; c < layout.cols; ++c) {
-        int idx = logicalRow * layout.cols + c;
-        if (idx >= static_cast<int>(browser.entries.size())) continue;
+        int idx = (browser.viewMode == BrowserState::ViewMode::ListOnly)
+                      ? (c * layout.totalRows + logicalRow)
+                      : (logicalRow * layout.cols + c);
+        if (idx < 0 || idx >= static_cast<int>(browser.entries.size())) continue;
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         bool isSelected = (idx == browser.selected);
         std::string cell = fitName(layout.names[static_cast<size_t>(idx)],

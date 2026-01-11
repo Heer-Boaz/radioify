@@ -56,6 +56,8 @@ struct SelectionMetaCacheEntry {
   std::string timeLabel;
   int width = 0;
   int height = 0;
+  int64_t bitRate = 0;
+  bool isHDR = false;
   std::string codec;
   std::string duration;
 };
@@ -104,6 +106,8 @@ std::string buildSelectionMeta(const BrowserState& browser,
     if (probeVideoMetadata(entry.path, &vmeta, &error)) {
       meta.width = vmeta.width;
       meta.height = vmeta.height;
+      meta.bitRate = vmeta.bitRate;
+      meta.isHDR = vmeta.isHDR;
       if (vmeta.duration100ns > 0) {
         double seconds = static_cast<double>(vmeta.duration100ns) / 10000000.0;
         meta.duration = formatTime(seconds);
@@ -118,6 +122,10 @@ std::string buildSelectionMeta(const BrowserState& browser,
   if (meta.width > 0 && meta.height > 0) {
     metaLine += "  " + std::to_string(meta.width) + "x" +
                 std::to_string(meta.height);
+    if (meta.isHDR) metaLine += " HDR";
+    if (meta.bitRate > 0) {
+      metaLine += "  " + formatBytes(static_cast<uintmax_t>(meta.bitRate / 8)) + "/s";
+    }
   }
   if (!meta.duration.empty()) metaLine += "  " + meta.duration;
   if (!meta.codec.empty()) metaLine += "  " + meta.codec;

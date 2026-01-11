@@ -392,4 +392,6 @@ endif()
 
 if (MSVC)
   target_compile_options(radioify PRIVATE /EHsc)
+  # Resolve LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs
+  target_link_options(radioify PRIVATE /NODEFAULTLIB:LIBCMT)
 endif()

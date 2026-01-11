@@ -74,7 +74,7 @@ struct BrowserState {
     ListPreview,
     ListOnly,
   };
-  ViewMode viewMode = ViewMode::Thumbnails;
+  ViewMode viewMode = ViewMode::ListOnly;
 };
 
 struct GridLayout {

@@ -79,6 +79,8 @@ struct VideoMetadata {
   int width = 0;
   int height = 0;
   int64_t duration100ns = 0;
+  int64_t bitRate = 0;
+  bool isHDR = false;
   std::string codecName;
 };
 

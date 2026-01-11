@@ -273,8 +273,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       while (input.poll(ev)) {
         if (ev.type == InputEvent::Type::Key) {
           const KeyEvent& key = ev.key;
-          if (key.vk == VK_RETURN || key.vk == VK_ESCAPE || key.vk == 'Q' ||
-              key.ch == 'q' || key.ch == 'Q') {
+          if (key.vk == VK_RETURN || key.vk == VK_ESCAPE) {
             return true;
           }
         }
@@ -293,8 +292,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (ev.type == InputEvent::Type::Key) {
           const KeyEvent& key = ev.key;
           if (key.vk == VK_RETURN) return true;
-          if (key.vk == VK_ESCAPE || key.vk == 'Q' || key.ch == 'q' ||
-              key.ch == 'Q') {
+          if (key.vk == VK_ESCAPE) {
             return false;
           }
         }
@@ -466,8 +464,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           running = false;
           break;
         }
-        if (key.vk == VK_ESCAPE || key.vk == 'Q' || key.ch == 'q' ||
-            key.ch == 'Q') {
+        if (key.vk == VK_ESCAPE) {
           running = false;
           break;
         }
@@ -1077,8 +1074,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           running = false;
           break;
         }
-        if (key.vk == VK_ESCAPE || key.vk == 'Q' || key.ch == 'q' ||
-            key.ch == 'Q') {
+        if (key.vk == VK_ESCAPE) {
           running = false;
           break;
         }

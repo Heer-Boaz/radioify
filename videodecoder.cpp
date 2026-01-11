@@ -1092,6 +1092,14 @@ bool probeVideoMetadata(const std::filesystem::path& path, VideoMetadata* out,
   if (params) {
     out->width = params->width;
     out->height = params->height;
+    out->bitRate = params->bit_rate;
+    if (out->bitRate <= 0) out->bitRate = fmt->bit_rate;
+
+    // Check for HDR indicators (PQ or HLG transfer functions)
+    if (params->color_trc == AVCOL_TRC_SMPTE2084 ||
+        params->color_trc == AVCOL_TRC_ARIB_STD_B67) {
+      out->isHDR = true;
+    }
   }
 
   if (codec) {
