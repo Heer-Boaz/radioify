@@ -423,12 +423,21 @@ void dataCallback(ma_device* device, void* output, const void*,
       }
     }
 
-    bool starved = framesRead < frameCount;
+    bool starved = (framesRead < frameCount);
     state->streamStarved.store(starved, std::memory_order_relaxed);
+    
+    // If we starved, check how long it's been since the last valid update.
+    // We allow a small "free-run" window (150ms) to bridge decoder hiccups 
+    // without freezing the video clock. This prevents micro-stutters.
     if (starved) {
-      state->audioClock.invalidate();
-      state->streamClockReady.store(false, std::memory_order_relaxed);
+      int64_t now = nowUs();
+      int64_t last = state->audioClock.last_updated_us.load(std::memory_order_relaxed);
+      if (now - last > 150000) { // 150ms threshold
+        state->audioClock.invalidate();
+        state->streamClockReady.store(false, std::memory_order_relaxed);
+      }
     }
+
     if (starved && state->m4aAtEnd.load()) {
       state->finished.store(true);
       uint64_t total = state->totalFrames.load();
@@ -1348,20 +1357,21 @@ uint64_t audioStreamDropFrames(uint64_t frames) {
 
 void audioStreamSynchronize(int serial, int64_t targetPtsUs) {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load() ||
-      !gAudio.state.streamQueueEnabled.load() ||
-      serial != gAudio.state.streamSerial.load(std::memory_order_relaxed)) {
+      !gAudio.state.streamQueueEnabled.load()) {
     return;
   }
 
   // We dwingen een harde synchronisatie.
-  // We verwijderen alle oude metadata en samples om een "clean slate" te hebben.
+  // Door de ringbuffer te resetten, zorgen we ervoor dat 'oude' audio direct
+  // wordt weggegooid en de klok onmiddellijk op de nieuwe tijd staat.
+  gAudio.state.streamRb.reset();
+  
   {
     std::lock_guard<std::mutex> lock(gAudio.state.streamMetadataMutex);
     gAudio.state.streamMetadata.clear();
-    // We voegen direct de nieuwe anker-pts toe voor de Samples die NU in de buffer staan
-    // of die als eerste geschreven gaan worden.
+    // We voegen de nieuwe anker-pts toe voor de EERSTE sample die nu geschreven gaat worden (wpos=0).
     gAudio.state.streamMetadata.push_back({
-        gAudio.state.streamRb.rpos.load(std::memory_order_relaxed),
+        0,
         targetPtsUs,
         serial
     });
@@ -1369,11 +1379,8 @@ void audioStreamSynchronize(int serial, int64_t targetPtsUs) {
 
   gAudio.state.streamDiscardPtsUs.store(targetPtsUs, std::memory_order_relaxed);
   gAudio.state.streamBasePtsUs.store(targetPtsUs, std::memory_order_relaxed);
-  gAudio.state.streamBaseValid.store(true, std::memory_order_relaxed);
-  gAudio.state.streamReadFrames.store(0, std::memory_order_relaxed);
-  gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
-  gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
   gAudio.state.audioClock.set(targetPtsUs, nowUs(), serial);
+  gAudio.state.streamClockReady.store(true, std::memory_order_relaxed);
 }
 
 void audioStreamSetBase(int serial, int64_t ptsUs) {

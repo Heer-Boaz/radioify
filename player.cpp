@@ -1889,7 +1889,7 @@ struct Player::Impl {
     // Packet queue backpressure monitoring
     int64_t lastQueueWarnTimeUs = nowUs();
     constexpr int64_t kQueueWarnIntervalUs = 5000000;  // 5 seconds between warnings
-    constexpr size_t kMaxPacketQueueSize = 1024;  // Warn if queue grows beyond this
+    constexpr size_t kMaxPacketQueueSize = 4096;  // Increased to avoid head-of-line blocking
     
     while (running.load()) {
       bool handledSeek = false;
@@ -2643,22 +2643,10 @@ struct Player::Impl {
           
           // Only force a jump if we are not at the very end of the file
           if (dur <= 0 || currentLpPts < dur - 1000000) {
-            logVideo("stall_detected", nullptr, 0, PlayerClockSource::None, 0, 0);
-            
-            // Use current audio time if available, or just jump 500ms ahead of last PTS
-            int64_t seekTarget = currentLpPts + 500000; 
-            
-            if (audioStreamClockReady()) {
-              seekTarget = audioStreamClockUs(now);
-            }
-            
-            // Request a real seek to jump over potentially missing stream segments/gaps
-            PlayerEvent ev{};
-            ev.type = PlayerEventType::SeekRequest;
-            ev.arg1 = seekTarget;
-            postEvent(ev);
-            
-            // Reset timer to give seek time to complete
+            logVideo("stall_detected_wait", nullptr, 0, PlayerClockSource::None, 0, 0);
+            // We used to force a seek here, but it's better to just wait and let the 
+            // buffers refill naturally to avoid "jumping" the user around.
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
             lastPresentedTimeUs = now;
           } else {
             // We are likely at the real EOF, don't keep seeking
@@ -2705,16 +2693,8 @@ struct Player::Impl {
           if (front.ptsUs != lastResetPts && std::abs(ptsDelta) > 2000000) {
             logVideo("pts_discontinuity_sync", &front, masterUs, master.source, ptsDelta, 0);
             
-            // If the jump is huge (>5s), force a full pipeline flush by requesting a seek to the new position
-            if (std::abs(ptsDelta) > 5000000) {
-              logVideo("pts_discontinuity_flush_seek", &front, masterUs, master.source, ptsDelta, 0);
-              PlayerEvent ev{};
-              ev.type = PlayerEventType::SeekRequest;
-              ev.arg1 = front.ptsUs;
-              postEvent(ev);
-            }
-            
-            // Force audio clock to sync to this new video position if we're way off
+            // Force audio clock to sync to this new video position if we're way off.
+            // Industry practice is to resync the clock, not force a seek which resets everything.
             audioStreamSynchronize(static_cast<int>(serial), front.ptsUs);
             frameTimerUs = now;
             lastResetPts = front.ptsUs;
@@ -2775,20 +2755,20 @@ struct Player::Impl {
       // Check if sync is lost (massive gap between video and master clock)
       bool syncLost = (masterUs != 0 && std::abs(front.ptsUs - masterUs) > 2500000); // 2.5 second threshold for free-run recovery
       
-      // If sync is lost for more than 5 seconds, force a seek to recover
-      static int64_t syncLostStartTimeUs = 0;
+      // We no longer force a seek here. Instead, we let the syncLost state trigger
+      // a freerun presentation (below) which keeps frames moving until they align again.
       if (syncLost) {
-        if (syncLostStartTimeUs == 0) syncLostStartTimeUs = now;
-        if (now - syncLostStartTimeUs > 5000000) {
-          logVideo("sync_lost_recovery_seek", &front, masterUs, master.source, front.ptsUs - masterUs, delayUs);
-          PlayerEvent ev{};
-          ev.type = PlayerEventType::SeekRequest;
-          ev.arg1 = (audioStreamClockReady()) ? audioStreamClockUs(now) : front.ptsUs;
-          postEvent(ev);
-          syncLostStartTimeUs = 0;
-        }
-      } else {
-        syncLostStartTimeUs = 0;
+        logVideo("sync_lost", &front, masterUs, master.source, front.ptsUs - masterUs, delayUs);
+      }
+
+      // MASTER CLOCK DISCIPLINE: If audio is our master clock, we MUST NOT present
+      // any frames (when not priming) until the audio hardware has actually started.
+      // This prevents the video from getting a head-start that would cause a "jump" later.
+      // We allow Priming to skip this check so it can actually finish and anchor the clock!
+      if (st != PlayerState::Priming && master.source == PlayerClockSource::Audio && !audioStreamClockReady()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          lastPresentedTimeUs = nowUs();
+          continue;
       }
 
       // During Priming state or when sync is lost, don't try to sync to master clock - just present frames at natural rate
@@ -2801,15 +2781,6 @@ struct Player::Impl {
         delayUs = actualDurationUs;  // Use actual frame duration, no sync adjustments
       }
       else if (master.source != PlayerClockSource::None) {
-        // 0. HARDWARE READINESS: If audio is master but the hardware hasn't started yet, 
-        // we must wait. Presenting now would start the video clock too early, 
-        // causing a sync-jump once audio finally kicks in.
-        if (master.source == PlayerClockSource::Audio && !audioStreamClockReady()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(5));
-          lastPresentedTimeUs = nowUs();
-          continue;
-        }
-
         diffUs = front.ptsUs - masterUs;
         
         // Sync modes with audio buffer awareness:
