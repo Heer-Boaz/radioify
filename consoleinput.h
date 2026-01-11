@@ -120,6 +120,7 @@ struct InputCallbacks {
   std::function<void()> onToggleRadio;
   std::function<void(int)> onSeekBy;
   std::function<void(double)> onSeekToRatio;
+  std::function<void(float)> onAdjustVolume;
   std::function<bool(const std::filesystem::path&)> onPlayFile;
   std::function<void(const std::filesystem::path&)> onRenderFile;
   std::function<void(BrowserState&, const std::string&)> onRefreshBrowser;

@@ -90,3 +90,5 @@ void audioSeekToRatio(double ratio);
 void audioSeekToSec(double sec);
 void audioToggleRadio();
 void audioSetHold(bool hold);
+void audioAdjustVolume(float delta);
+float audioGetVolume();

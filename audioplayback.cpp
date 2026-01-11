@@ -298,6 +298,7 @@ struct AudioState {
   std::atomic<uint64_t> audioTrailingPaddingFrames{0};
   std::atomic<uint64_t> audioLeadSilenceFrames{0};
   std::atomic<bool> audioPrimed{false};
+  std::atomic<float> volume{1.0f};
   AudioSampleRing streamRb;
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};
@@ -445,6 +446,23 @@ void dataCallback(ma_device* device, void* output, const void*,
         state->framesPlayed.store(total, std::memory_order_relaxed);
       }
     }
+
+    float vol = state->volume.load(std::memory_order_relaxed);
+    if (vol != 1.0f) {
+      for (ma_uint32 i = 0; i < frameCount * channels; ++i) {
+        float x = out[i] * vol;
+        if (vol > 1.0f) {
+          if (x > 0.9f) {
+            float r = x - 0.9f;
+            x = 0.9f + 0.1f * (r / (0.1f + r));
+          } else if (x < -0.9f) {
+            float r = -x - 0.9f;
+            x = -(0.9f + 0.1f * (r / (0.1f + r)));
+          }
+        }
+        out[i] = x;
+      }
+    }
     return;
   }
 
@@ -559,6 +577,23 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
   if (silentFrames > 0) {
     state->silentFrames.fetch_add(silentFrames, std::memory_order_relaxed);
+  }
+
+  float vol = state->volume.load(std::memory_order_relaxed);
+  if (vol != 1.0f) {
+    for (ma_uint32 i = 0; i < frameCount * state->channels; ++i) {
+      float x = out[i] * vol;
+      if (vol > 1.0f) {
+        if (x > 0.9f) {
+          float r = x - 0.9f;
+          x = 0.9f + 0.1f * (r / (0.1f + r));
+        } else if (x < -0.9f) {
+          float r = -x - 0.9f;
+          x = -(0.9f + 0.1f * (r / (0.1f + r)));
+        }
+      }
+      out[i] = x;
+    }
   }
 }
 
@@ -1735,4 +1770,14 @@ void audioToggleRadio() {
 void audioSetHold(bool hold) {
   if (!gAudio.enableAudio) return;
   gAudio.state.hold.store(hold);
+}
+
+void audioAdjustVolume(float delta) {
+  float current = gAudio.state.volume.load(std::memory_order_relaxed);
+  float next = std::clamp(current + delta, 0.0f, 4.0f);
+  gAudio.state.volume.store(next, std::memory_order_relaxed);
+}
+
+float audioGetVolume() {
+  return gAudio.state.volume.load(std::memory_order_relaxed);
 }

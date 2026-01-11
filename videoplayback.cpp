@@ -994,17 +994,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       } else {
         status = "\xE2\x96\xB6";  // playing icon
       }
+      int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
+      std::string volStr = " Vol: " + std::to_string(volPct) + "%";
       std::string suffix =
-          formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status;
+          formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status + volStr;
       int suffixWidth = utf8CodepointCount(suffix);
       int barWidth = width - suffixWidth - 3;
       if (barWidth < 10) {
-        suffix = formatTime(displaySec) + "/" + formatTime(totalSec);
+        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " + status + " V:" + std::to_string(volPct) + "%";
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 10) {
-        suffix = formatTime(displaySec);
+        suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) + "%";
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
@@ -1069,7 +1071,25 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       if (ev.type == InputEvent::Type::Key) {
         const KeyEvent& key = ev.key;
         const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+        const DWORD shiftMask = SHIFT_PRESSED;
         bool ctrl = (key.control & ctrlMask) != 0;
+        bool shift = (key.control & shiftMask) != 0;
+
+        if (shift && key.vk == VK_UP) {
+          float step = ctrl ? 0.10f : 0.01f;
+          audioAdjustVolume(step);
+          triggerOverlay();
+          redraw = true;
+          continue;
+        }
+        if (shift && key.vk == VK_DOWN) {
+          float step = ctrl ? 0.10f : 0.01f;
+          audioAdjustVolume(-step);
+          triggerOverlay();
+          redraw = true;
+          continue;
+        }
+
         if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
           running = false;
           break;

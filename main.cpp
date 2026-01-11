@@ -593,6 +593,7 @@ int main(int argc, char** argv) {
   };
   callbacks.onSeekBy = [&](int direction) { audioSeekBy(direction); };
   callbacks.onSeekToRatio = [&](double ratio) { audioSeekToRatio(ratio); };
+  callbacks.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
   callbacks.onResize = [&]() { rebuildLayout(); };
 
   while (running) {
@@ -693,7 +694,7 @@ int main(int argc, char** argv) {
             fitLine("  Mouse=select  Click=play/enter  Backspace=up  "
                     "Click+drag bar=seek  Space=pause  Arrows=move  "
                     "PgUp/PgDn=page  "
-                    "Ctrl+Left/Right=seek  R=toggle  T=view  Q=quit",
+                    "Ctrl+Left/Right=seek  Shift+Up/Dn=Vol (400%)  R=toggle  T=view  Q=quit",
                     width),
             kStyleNormal);
       } else {
@@ -760,17 +761,19 @@ int main(int argc, char** argv) {
       } else {
         status = "\xE2\x97\x8B";  // idle icon
       }
+      int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
+      std::string volStr = " Vol: " + std::to_string(volPct) + "%";
       std::string suffix =
-          formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status;
+          formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status + volStr;
       int suffixWidth = utf8CodepointCount(suffix);
       int barWidth = width - suffixWidth - 3;
       if (barWidth < 10) {
-        suffix = formatTime(displaySec) + "/" + formatTime(totalSec);
+        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " + status + " V:" + std::to_string(volPct) + "%";
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 10) {
-        suffix = formatTime(displaySec);
+        suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) + "%";
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }

@@ -251,7 +251,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
   if (ev.type == InputEvent::Type::Key) {
     const KeyEvent& key = ev.key;
     const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+    const DWORD shiftMask = SHIFT_PRESSED;
     bool ctrl = (key.control & ctrlMask) != 0;
+    bool shift = (key.control & shiftMask) != 0;
 
     if (browser.filterActive) {
       if (key.vk == VK_ESCAPE || key.vk == VK_RETURN) {
@@ -400,11 +402,23 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
     if (key.vk == VK_UP) {
-      moveSelection(browser, layout, 0, -1, dirty);
+      if (shift) {
+        float step = ctrl ? 0.10f : 0.01f;
+        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(step);
+        dirty = true;
+      } else {
+        moveSelection(browser, layout, 0, -1, dirty);
+      }
       return;
     }
     if (key.vk == VK_DOWN) {
-      moveSelection(browser, layout, 0, 1, dirty);
+      if (shift) {
+        float step = ctrl ? 0.10f : 0.01f;
+        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-step);
+        dirty = true;
+      } else {
+        moveSelection(browser, layout, 0, 1, dirty);
+      }
       return;
     }
     if (key.vk == VK_PRIOR) {
