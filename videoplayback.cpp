@@ -711,6 +711,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
     std::string debugLine1;
     std::string debugLine2;
+#if RADIOIFY_ENABLE_TIMING_LOG
     if (config.debugOverlay) {
       PlayerDebugInfo dbg = player.debugInfo();
       char buf1[256];
@@ -736,6 +737,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       debugLine2 = buf2;
       // maybeLogUiDbg(debugLine1, debugLine2); // REMOVED spammy UI logs
     }
+#endif
     int headerLines = 0;
     if (!debugLine1.empty()) {
       headerLines += 1;
@@ -1193,7 +1195,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       running = false;
     }
 
+#if RADIOIFY_ENABLE_TIMING_LOG
     if (redraw || overlayVisible() || config.debugOverlay) {
+#else
+    if (redraw || overlayVisible()) {
+#endif
       auto t0 = std::chrono::steady_clock::now();
       renderScreen(forceRefreshArt, presented);
       auto t1 = std::chrono::steady_clock::now();
@@ -1210,7 +1216,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       forceRefreshArt = false;
     }
 
+#if RADIOIFY_ENABLE_TIMING_LOG
     if (!redraw && !overlayVisible() && !config.debugOverlay) {
+#else
+    if (!redraw && !overlayVisible()) {
+#endif
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
