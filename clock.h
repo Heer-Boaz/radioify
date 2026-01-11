@@ -39,6 +39,14 @@ struct Clock {
   // Task 2: Implement Clock Smoothing (Drift Management)
   // Instead of jumping PTS, we adjust the clock base weightedly or adjust speed.
   inline void sync_to_pts(int64_t targetPtsUs, int64_t nowUs, int newSerial) {
+    if (paused.load(std::memory_order_relaxed)) {
+        // If we were paused, this is a distinct resume event.
+        // We must reset the drift anchor immediately because the previous drift
+        // is from before the pause (and thus effectively ancient history).
+        set(targetPtsUs, nowUs, newSerial);
+        return;
+    }
+
     if (serial.load(std::memory_order_relaxed) != newSerial || !valid.load(std::memory_order_relaxed)) {
         set(targetPtsUs, nowUs, newSerial);
         return;
