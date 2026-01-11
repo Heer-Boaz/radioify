@@ -1117,7 +1117,24 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
 
     InputEvent ev{};
-    while (input.poll(ev)) {
+    auto getNextEvent = [&]() {
+        if (input.poll(ev)) return true;
+        if (g_videoWindow.IsOpen() && g_videoWindow.PollInput(ev)) {
+            // If it's a window mouse event in the bottom area, translate it to a seek
+            if (ev.type == InputEvent::Type::Mouse && ev.mouse.buttonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
+                // In VideoWindow::WindowProc we ensure y > height * 0.9
+                // We'll treat this as a ratio seek directly if possible, or fake a progress bar event.
+                // Since handleInputEvent is complex, let's just handle it here.
+                double ratio = (double)ev.mouse.pos.X / 1280.0; // This is a bit hacky as we don't know window width here
+                // Wait, if I want it to be robust, I should pass the ratio in the event.
+                // But InputEvent doesn't have a ratio field.
+            }
+            return true;
+        }
+        return false;
+    };
+
+    while (getNextEvent()) {
       if (ev.type == InputEvent::Type::Resize) {
         pendingResize = true;
         redraw = true;
@@ -1161,6 +1178,21 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         const MouseEvent& mouse = ev.mouse;
         bool leftPressed =
             (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+        
+        if (leftPressed && (mouse.control & 0x80000000)) {
+            // Special window-originated click
+            double winW = g_videoWindow.GetWidth();
+            if (winW > 0) {
+                double ratio = (double)mouse.pos.X / winW;
+                ratio = std::clamp(ratio, 0.0, 1.0);
+                double totalSec = player.durationUs() / 1000000.0;
+                if (totalSec > 0.0 && std::isfinite(totalSec)) {
+                    queueSeekRequest(ratio * totalSec);
+                }
+            }
+            continue;
+        }
+
         if (leftPressed &&
             (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
           if (progressBarWidth > 0 && mouse.pos.Y == progressBarY &&

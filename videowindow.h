@@ -8,6 +8,9 @@
 #include <memory>
 
 #include "videocolor.h"
+#include "consoleinput.h"
+#include <vector>
+#include <mutex>
 
 struct WindowUiState {
     float progress = 0.0f;
@@ -30,8 +33,11 @@ public:
                  const WindowUiState& ui);
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
+    int GetWidth() const { return m_width; }
+    int GetHeight() const { return m_height; }
     void ShowWindow(bool show);
     void PollEvents();
+    bool PollInput(InputEvent& ev);
 
 private:
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -53,4 +59,7 @@ private:
     
     int m_width = 0;
     int m_height = 0;
+
+    std::vector<InputEvent> m_inputQueue;
+    std::mutex m_inputMutex;
 };

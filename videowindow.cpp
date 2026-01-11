@@ -172,6 +172,52 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             pThis->m_hWnd = nullptr;
             return 0;
         }
+
+        if (uMsg == WM_KEYDOWN) {
+            InputEvent ev;
+            ev.type = InputEvent::Type::Key;
+            ev.key.vk = (WORD)wParam;
+            
+            // Map VK to ASCII for common keys if possible
+            if (wParam >= 'A' && wParam <= 'Z') ev.key.ch = (char)wParam;
+            else if (wParam == VK_SPACE) ev.key.ch = ' ';
+            else if (wParam == VK_ESCAPE) ev.key.ch = 27;
+            else if (wParam == VK_OEM_4) ev.key.ch = '[';
+            else if (wParam == VK_OEM_6) ev.key.ch = ']';
+
+            if (GetKeyState(VK_CONTROL) & 0x8000) ev.key.control |= LEFT_CTRL_PRESSED;
+            if (GetKeyState(VK_SHIFT) & 0x8000) ev.key.control |= SHIFT_PRESSED;
+            if (GetKeyState(VK_MENU) & 0x8000) ev.key.control |= LEFT_ALT_PRESSED;
+
+            std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
+            pThis->m_inputQueue.push_back(ev);
+            return 0;
+        }
+
+        if (uMsg == WM_LBUTTONDOWN) {
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+            
+            if (pThis->m_height > 0 && y > pThis->m_height * 0.90) {
+                InputEvent ev;
+                ev.type = InputEvent::Type::Mouse;
+                ev.mouse.pos.X = (SHORT)x;
+                ev.mouse.pos.Y = (SHORT)y;
+                ev.mouse.buttonState = FROM_LEFT_1ST_BUTTON_PRESSED;
+                ev.mouse.control = 0x80000000; // Custom flag for window-originated event
+                
+                std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
+                pThis->m_inputQueue.push_back(ev);
+            } else {
+                InputEvent ev;
+                ev.type = InputEvent::Type::Key;
+                ev.key.vk = VK_SPACE;
+                ev.key.ch = ' ';
+                std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
+                pThis->m_inputQueue.push_back(ev);
+            }
+            return 0;
+        }
     }
     return DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
@@ -317,6 +363,14 @@ void VideoWindow::PollEvents() {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+}
+
+bool VideoWindow::PollInput(InputEvent& ev) {
+    std::lock_guard<std::mutex> lock(m_inputMutex);
+    if (m_inputQueue.empty()) return false;
+    ev = m_inputQueue.front();
+    m_inputQueue.erase(m_inputQueue.begin());
+    return true;
 }
 
 void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, int height,
