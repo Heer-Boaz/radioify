@@ -81,6 +81,7 @@ struct BrowserState {
   };
   ViewMode viewMode = ViewMode::ListOnly;
   SortMode sortMode = SortMode::Name;
+  bool sortDescending = false;
   std::string filter;
   bool filterActive = false;
 };

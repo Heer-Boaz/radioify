@@ -203,20 +203,31 @@ static void refreshBrowser(BrowserState& state,
 
     std::sort(start, state.entries.end(), [&](const FileEntry& a, const FileEntry& b) {
       if (a.isDir != b.isDir) return a.isDir > b.isDir;
+      bool aLessB = false;
       if (state.sortMode == BrowserState::SortMode::Date) {
         try {
-          return std::filesystem::last_write_time(a.path) >
-                 std::filesystem::last_write_time(b.path);
-        } catch (...) {}
+          aLessB = std::filesystem::last_write_time(a.path) <
+                   std::filesystem::last_write_time(b.path);
+        } catch (...) {
+          aLessB = toLower(a.name) < toLower(b.name);
+        }
       } else if (state.sortMode == BrowserState::SortMode::Size) {
         try {
           if (!a.isDir && !b.isDir) {
-            return std::filesystem::file_size(a.path) >
-                   std::filesystem::file_size(b.path);
+            aLessB = std::filesystem::file_size(a.path) <
+                     std::filesystem::file_size(b.path);
+          } else {
+            aLessB = toLower(a.name) < toLower(b.name);
           }
-        } catch (...) {}
+        } catch (...) {
+          aLessB = toLower(a.name) < toLower(b.name);
+        }
+      } else {
+        aLessB = toLower(a.name) < toLower(b.name);
       }
-      return toLower(a.name) < toLower(b.name);
+
+      if (state.sortDescending) return !aLessB;
+      return aLessB;
     });
   }
 

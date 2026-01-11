@@ -295,9 +295,21 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
     if (key.vk == 'S' || key.ch == 's' || key.ch == 'S') {
-      int next = static_cast<int>(browser.sortMode) + 1;
-      if (next > static_cast<int>(BrowserState::SortMode::Size)) next = 0;
-      browser.sortMode = static_cast<BrowserState::SortMode>(next);
+      const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
+      bool alt = (key.control & altMask) != 0;
+      if (alt) {
+        browser.sortDescending = !browser.sortDescending;
+      } else {
+        int next = static_cast<int>(browser.sortMode) + 1;
+        if (next > static_cast<int>(BrowserState::SortMode::Size)) next = 0;
+        browser.sortMode = static_cast<BrowserState::SortMode>(next);
+
+        // Set logical defaults for new mode
+        if (browser.sortMode == BrowserState::SortMode::Name)
+          browser.sortDescending = false;
+        else
+          browser.sortDescending = true;
+      }
       if (callbacks.onRefreshBrowser)
         callbacks.onRefreshBrowser(browser, "");
       dirty = true;

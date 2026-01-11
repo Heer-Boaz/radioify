@@ -121,7 +121,8 @@ std::string buildSelectionMeta(const BrowserState& browser,
   if (browser.sortMode == BrowserState::SortMode::Date) sortLabel = "Date";
   else if (browser.sortMode == BrowserState::SortMode::Size) sortLabel = "Size";
 
-  std::string metaLine = " [" + sortLabel + "]";
+  std::string dirArrow = browser.sortDescending ? " \xE2\x86\x93" : " \xE2\x86\x91"; // Down/Up arrows
+  std::string metaLine = " [" + sortLabel + dirArrow + "]";
   if (browser.filterActive || !browser.filter.empty()) {
     metaLine += " [Filter: " + browser.filter + (browser.filterActive ? "_" : "") + "]";
   }
