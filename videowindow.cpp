@@ -264,6 +264,9 @@ void VideoWindow::Close() {
     m_vertexShader.Reset();
     m_sampler.Reset();
     m_constantBuffer.Reset();
+    m_copyTexture.Reset();
+    m_copySrvY.Reset();
+    m_copySrvUV.Reset();
 }
 
 void VideoWindow::ShowWindow(bool show) {
@@ -320,9 +323,9 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
     texture->GetDesc(&srcDesc);
 
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvY, srvUV;
+    bool is10Bit = (srcDesc.Format == DXGI_FORMAT_P010);
 
     if (srcDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
-        bool is10Bit = (srcDesc.Format == DXGI_FORMAT_P010);
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
         srvDescY.Format = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
         if (srcDesc.ArraySize > 1) {
@@ -339,6 +342,50 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = srvDescY;
         srvDescUV.Format = is10Bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
         device->CreateShaderResourceView(texture, &srvDescUV, &srvUV);
+    } else {
+        // Must copy to an SRV-enabled texture
+        bool needNewCopy = !m_copyTexture;
+        if (m_copyTexture) {
+            D3D11_TEXTURE2D_DESC cDesc;
+            m_copyTexture->GetDesc(&cDesc);
+            if (cDesc.Width != srcDesc.Width || cDesc.Height != srcDesc.Height || cDesc.Format != srcDesc.Format) {
+                needNewCopy = true;
+            }
+        }
+
+        if (needNewCopy) {
+            m_copyTexture.Reset();
+            m_copySrvY.Reset();
+            m_copySrvUV.Reset();
+            D3D11_TEXTURE2D_DESC cDesc = {};
+            cDesc.Width = srcDesc.Width;
+            cDesc.Height = srcDesc.Height;
+            cDesc.MipLevels = 1;
+            cDesc.ArraySize = 1;
+            cDesc.Format = srcDesc.Format;
+            cDesc.SampleDesc.Count = 1;
+            cDesc.Usage = D3D11_USAGE_DEFAULT;
+            cDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            if (FAILED(device->CreateTexture2D(&cDesc, NULL, &m_copyTexture))) return;
+
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
+            srvDescY.Format = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDescY.Texture2D.MipLevels = 1;
+            device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescY, &m_copySrvY);
+
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = srvDescY;
+            srvDescUV.Format = is10Bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+            device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescUV, &m_copySrvUV);
+        }
+
+        if (srcDesc.ArraySize > 1) {
+            context->CopySubresourceRegion(m_copyTexture.Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, 1), NULL);
+        } else {
+            context->CopyResource(m_copyTexture.Get(), texture);
+        }
+        srvY = m_copySrvY;
+        srvUV = m_copySrvUV;
     }
 
     if (srvY && srvUV) {

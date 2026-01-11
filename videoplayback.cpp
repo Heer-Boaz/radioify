@@ -822,31 +822,34 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                 }
                 
                 bool is10Bit = false;
-                if (frame->hwTexture) {
-                    D3D11_TEXTURE2D_DESC desc;
-                    frame->hwTexture->GetDesc(&desc);
-                    is10Bit = (desc.Format == DXGI_FORMAT_P010);
-                }
+              if (frame->hwTexture) {
+                D3D11_TEXTURE2D_DESC desc;
+                frame->hwTexture->GetDesc(&desc);
+                is10Bit = (desc.Format == DXGI_FORMAT_P010);
+              }
 
+              if (windowEnabled) {
+                if (!videoWindow.IsOpen()) {
+                  videoWindow.Open(1280, 720, "Radioify Output");
+                }
+                videoWindow.ShowWindow(true);
+                videoWindow.Present(frame->hwTexture.Get(), frame->hwTextureArrayIndex,
+                                    frame->width, frame->height, frame->fullRange,
+                                    frame->yuvMatrix, frame->yuvTransfer,
+                                    is10Bit ? 10 : 8);
+                renderRes = true; // Signal we processed the frame
+                artOk = true; 
+              } else {
+                if (videoWindow.IsOpen()) {
+                  videoWindow.ShowWindow(false);
+                }
                 renderRes = gpuRenderer.RenderNV12Texture(
                     frame->hwTexture.Get(), frame->hwTextureArrayIndex,
                     frame->width, frame->height, frame->fullRange,
                     frame->yuvMatrix, frame->yuvTransfer, is10Bit, art, &gpuErr);
-                
-                if (windowEnabled) {
-                    if (!videoWindow.IsOpen()) {
-                        videoWindow.Open(1280, 720, "Radioify Output");
-                    }
-                    videoWindow.ShowWindow(true);
-                    videoWindow.Present(frame->hwTexture.Get(), frame->hwTextureArrayIndex, frame->width, frame->height,
-                                        frame->fullRange, frame->yuvMatrix, frame->yuvTransfer, is10Bit ? 10 : 8);
-                } else {
-                    if (videoWindow.IsOpen()) {
-                        videoWindow.ShowWindow(false);
-                    }
-                }
               }
-              auto t1 = std::chrono::steady_clock::now();
+            }
+            auto t1 = std::chrono::steady_clock::now();
               auto durMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
               if (durMs > 50) {
                 appendTimingFmt("video_render_slow pts_us=%lld dur_ms=%lld",
@@ -968,7 +971,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       screen.writeText(0, headerY++, fitLine(subtitle, width), dimStyle);
     }
 
-    if (enableAscii) {
+    if (enableAscii && !windowEnabled) {
       int artWidth = std::min(art.width, width);
       int artHeight = std::min(art.height, maxHeight);
       int artX = std::max(0, (width - artWidth) / 2);
@@ -986,8 +989,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         screen.writeText(0, artTop, fitLine(waitingLabel(), width), dimStyle);
       }
     } else {
-      std::string label = allowFrame ? "ASCII rendering disabled"
-                                     : waitingLabel();
+      std::string label = windowEnabled ? "Video window active (W to toggle back)" 
+                        : (allowFrame ? "ASCII rendering disabled" : waitingLabel());
       screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       if (allowFrame && maxHeight > 1) {
         std::string sizeLine =
