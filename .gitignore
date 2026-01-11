@@ -70,6 +70,7 @@ Desktop.ini
 *.swo
 **.dmp
 **.txt
+**.log
 
 # Package managers and caches
 packages/
