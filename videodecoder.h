@@ -56,6 +56,7 @@ struct VideoReadInfo {
   uint32_t errorHr = 0;
   uint32_t recoveries = 0;
   uint32_t noFrameTimeoutMs = 0;
+  int64_t ptsRepairOffset100ns = 0;  // Offset applied to fix broken timestamps (PTS stitching)
 };
 
 struct VideoStreamInfo {

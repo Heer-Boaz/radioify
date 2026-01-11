@@ -1774,7 +1774,9 @@ struct Player::Impl {
           st == PlayerState::Prefill || st == PlayerState::Priming) {
         if (ended) {
           setState(PlayerState::Ended);
-        } else if (demuxEnded.load()) {
+        } else if (demuxEnded.load() && st == PlayerState::Playing && videoFrames.empty()) {
+          // Only transition to Draining when we're actively Playing AND have run out of frames.
+          // This prevents premature Draining during Priming or Prefill.
           setState(PlayerState::Draining);
         }
       }
@@ -1996,13 +1998,9 @@ struct Player::Impl {
       }
 
       if (pkt.stream_index == demux.videoStreamIndex) {
-        PlayerState st = state.load(std::memory_order_relaxed);
-        bool allowBlock = (st == PlayerState::Playing ||
-                           st == PlayerState::Draining ||
-                           st == PlayerState::Paused);
-        if (audioPackets.size() < kAudioPacketLowWater) {
-          allowBlock = false;
-        }
+        // Always allow blocking to prevent packet drops (which cause gaps).
+        // Deadlock risk is handled by appropriate queue sizing and master clock.
+        bool allowBlock = true; 
         bool queued = false;
         if (!videoPackets.pushPacket(&pkt, serial, allowBlock, &commandPending,
                                      &queued)) {
@@ -2010,14 +2008,12 @@ struct Player::Impl {
           break;
         }
         if (!queued) {
+          // Should not happen with allowBlock=true unless aborted
           av_packet_unref(&pkt);
           continue;
         }
       } else if (pkt.stream_index == demux.audioStreamIndex) {
-        PlayerState st = state.load(std::memory_order_relaxed);
-        bool allowBlock = (st == PlayerState::Playing ||
-                           st == PlayerState::Draining ||
-                           st == PlayerState::Paused);
+        bool allowBlock = true;
         bool queued = false;
         if (!audioPackets.pushPacket(&pkt, serial, allowBlock, &commandPending,
                                      &queued)) {
@@ -2680,37 +2676,70 @@ struct Player::Impl {
         continue;
       }
 
-      // 1. TIMESTAMP DISCONTINUITY DETECTION
-      // Detect keyframe jumps or timestamp resets (common in multi-segment files)
-      if (lastPtsUs >= 0) {
-        int64_t ptsDelta = front.ptsUs - lastPtsUs;
-        // If PTS jumps more than 500ms, it's likely a discontinuity (keyframe, scene change, etc)
-        if (ptsDelta > 500000) {
-          isDiscontinuity = true;
-          
-          // Re-sync the master timer if gap is massive to avoid stalls
-          static int64_t lastResetPts = -1;
-          if (front.ptsUs != lastResetPts && std::abs(ptsDelta) > 2000000) {
-            logVideo("pts_discontinuity_sync", &front, masterUs, master.source, ptsDelta, 0);
-            
-            // Force audio clock to sync to this new video position if we're way off.
-            // Industry practice is to resync the clock, not force a seek which resets everything.
-            audioStreamSynchronize(static_cast<int>(serial), front.ptsUs);
-            frameTimerUs = now;
-            lastResetPts = front.ptsUs;
-          }
-          
-          // Use the frame's own duration
-          delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
-        } else if (ptsDelta > 0) {
-          delayUs = ptsDelta;
+      // 1. PTS TIMESTAMP REPAIR (STITCHING)
+      // Many files have broken/teleporting timestamps (raw PTS jumps wildly).
+      // Instead of treating this as a sync event, we REPAIR the timestamps to be monotonic.
+      // This matches what VLC/FFmpeg do: make a sanitized timeline by "stitching" gaps.
+      // 
+      // Algorithm:
+      // - Predict where we expect the next PTS based on previous frame
+      // - If raw PTS is too far from prediction, assume it's broken and stitch the gap
+      // - Output a "repaired" PTS that increases monotonically
+      
+      static int64_t lastSanitizedPtsUs = -1;
+      static int64_t ptsOffsetUs = 0;
+      static int lastSanitizedSerial = -1;
+      int64_t rawPtsUs = front.ptsUs;
+      int64_t sanitizedPtsUs = rawPtsUs;
+      int64_t ptsRepairErr = 0;
+      bool hadMassiveGlitch = false;
+      
+      // If serial changed, reset repair state
+      if (front.serial != lastSanitizedSerial) {
+        lastSanitizedPtsUs = -1;
+        ptsOffsetUs = 0;
+        lastSanitizedSerial = front.serial;
+      }
+      
+      const int64_t PTS_GLITCH_THRESHOLD = 1000000;  // 1.0s - if raw jump > 1s, assume broken
+      
+      if (lastSanitizedPtsUs >= 0) {
+        int64_t predictedPtsUs = lastSanitizedPtsUs + front.durationUs;
+        int64_t adjustedRawPts = rawPtsUs + ptsOffsetUs;
+        ptsRepairErr = adjustedRawPts - predictedPtsUs;
+        
+        // If error is huge (file has glitchy timestamps), stitch the gap
+        if (std::abs(ptsRepairErr) > PTS_GLITCH_THRESHOLD) {
+          // Don't trust this PTS; assume it's broken and use prediction instead
+          ptsOffsetUs -= ptsRepairErr;  // Adjust offset to hide the gap
+          sanitizedPtsUs = predictedPtsUs;
+          isDiscontinuity = true;  // Mark for logging, but don't trigger sync
+          hadMassiveGlitch = true;
+          logVideo("pts_repair_glitch", &front, predictedPtsUs, 
+                   PlayerClockSource::None, ptsRepairErr, front.durationUs);
         } else {
-          // Backward or zero delta - use fallback
-          delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
+          // Raw PTS looks reasonable; use it (with offset applied)
+          sanitizedPtsUs = adjustedRawPts;
         }
       } else {
-        delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
+        // First frame: initialize
+        sanitizedPtsUs = rawPtsUs;
+        lastSanitizedPtsUs = rawPtsUs;
       }
+      
+      lastSanitizedPtsUs = sanitizedPtsUs;
+      front.ptsUs = sanitizedPtsUs;  // Replace raw PTS with sanitized version
+      
+      // If we repaired a massive PTS glitch, soft-sync audio clock to new repaired PTS
+      // This prevents audio clock from becoming invalid and freezing video output
+      if (hadMassiveGlitch) {
+        audioStreamSyncClockOnly(static_cast<int>(serial), sanitizedPtsUs);
+      }
+      
+      // Compute frame delay from frame duration only
+      // NEVER from PTS-delta, because with broken timestamps that can be 23+ seconds!
+      // Frame duration is the reliable measure of how long to display this frame.
+      delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
       
       // 2. DYNAMIC FRAME DURATION VALIDATION
       // Validate front.durationUs against reasonable bounds and apply smoothing

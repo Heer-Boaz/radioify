@@ -1383,6 +1383,19 @@ void audioStreamSynchronize(int serial, int64_t targetPtsUs) {
   gAudio.state.streamClockReady.store(true, std::memory_order_relaxed);
 }
 
+void audioStreamSyncClockOnly(int serial, int64_t targetPtsUs) {
+  // Soft sync: only adjust the clock, don't reset ringbuffer or drop audio
+  // Used when video PTS is repaired to prevent audio clock from becoming invalid
+  if (!gAudio.decoderReady || !gAudio.state.externalStream.load() ||
+      !gAudio.state.streamQueueEnabled.load()) {
+    return;
+  }
+  
+  // Just resync the clock without touching the ringbuffer
+  // This keeps audio playing smoothly while video catches up
+  gAudio.state.audioClock.sync_to_pts(targetPtsUs, nowUs(), serial);
+}
+
 void audioStreamSetBase(int serial, int64_t ptsUs) {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
     return;

@@ -52,6 +52,7 @@ bool audioStreamWriteSamples(const float* interleaved,
 uint64_t audioStreamDropFrames(uint64_t frames);
 void audioStreamDiscardUntil(int64_t ptsUs);
 void audioStreamSynchronize(int serial, int64_t targetPtsUs);
+void audioStreamSyncClockOnly(int serial, int64_t targetPtsUs);
 void audioStreamSetBase(int serial, int64_t ptsUs);
 void audioStreamSetEnd(bool atEnd);
 void audioStreamReset(uint64_t framePos);
