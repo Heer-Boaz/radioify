@@ -1359,7 +1359,13 @@ struct Player::Impl {
 #if RADIOIFY_ENABLE_TIMING_LOG
     if (logPath.empty()) return;
     std::lock_guard<std::mutex> lock(timingLogMutex());
-    std::ofstream f(logPath, std::ios::app);
+    static std::ofstream f;
+    static std::filesystem::path currentPath;
+    if (currentPath != logPath) {
+      if (f.is_open()) f.close();
+      f.open(logPath, std::ios::app);
+      currentPath = logPath;
+    }
     if (!f) return;
     f << radioifyLogTimestamp() << " " << line << "\n";
 #else
@@ -1380,10 +1386,17 @@ struct Player::Impl {
       written = static_cast<int>(sizeof(buf)) - 1;
     }
     std::lock_guard<std::mutex> lock(timingLogMutex());
-    std::ofstream f(logPath, std::ios::app);
+    static std::ofstream f;
+    static std::filesystem::path currentPath;
+    if (currentPath != logPath) {
+      if (f.is_open()) f.close();
+      f.open(logPath, std::ios::app);
+      currentPath = logPath;
+    }
     if (!f) return;
     f << radioifyLogTimestamp() << " " << std::string(buf, buf + written)
       << "\n";
+    f.flush();
 #else
     (void)fmt;
 #endif
@@ -1598,6 +1611,8 @@ struct Player::Impl {
         
         seekDisplayUs.store(clampedTarget, std::memory_order_relaxed);
         seekTargetUs.store(seekTarget, std::memory_order_relaxed); // Use keyframe-adjusted target
+        lastPresentedPtsUs.store(clampedTarget, std::memory_order_relaxed); // Reset base for automated recovery
+        lastPresentedSerial.store(nextSerial, std::memory_order_relaxed);
         seekPending.store(true, std::memory_order_relaxed);
         if (initDone.load(std::memory_order_relaxed)) {
           commandPending.store(true, std::memory_order_relaxed);
@@ -1615,7 +1630,7 @@ struct Player::Impl {
         audioBufferedStartValid.store(false, std::memory_order_relaxed);
         // After seek, go back to Priming to re-prebuffer both streams.
         // This ensures we don't have timing misalignment between audio and video.
-        setState(PlayerState::Priming);
+        setState(PlayerState::Seeking);
         appendTimingFmt("ctrl_seek_request serial=%d target_us=%lld seek_target_us=%lld (keyframe-adjusted)",
                         nextSerial, static_cast<long long>(clampedTarget), 
                         static_cast<long long>(seekTarget));
@@ -1889,10 +1904,13 @@ struct Player::Impl {
       }
 
       if (seekPending.exchange(false)) {
+        int nextSerial = currentSerial.load();
+        demuxInterrupt.lastSerial = nextSerial;
+        commandPending.store(false);
+
         int64_t targetUs = seekTargetUs.load(std::memory_order_relaxed);
         targetUs += demux.formatStartUs;
         if (targetUs < 0) targetUs = 0;
-        int nextSerial = currentSerial.load();
         appendTimingFmt("demux_seek serial=%d target_us=%lld", nextSerial,
                         static_cast<long long>(targetUs));
         int seekRes = avformat_seek_file(demux.fmt, -1, INT64_MIN, targetUs,
@@ -1912,7 +1930,6 @@ struct Player::Impl {
           avformat_flush(demux.fmt);
         }
         serial = static_cast<uint64_t>(nextSerial);
-        demuxInterrupt.lastSerial = nextSerial;
         demuxEnded.store(false);
         demuxAtEof = false;
         decodeEnded.store(false);
@@ -1955,12 +1972,24 @@ struct Player::Impl {
         continue;
       }
       if (read < 0) {
-        if (!demuxAtEof) {
-          demuxEnded.store(true);
-          videoPackets.pushEof(serial);
-          audioPackets.pushEof(serial);
-          appendTimingFmt("demux_read_end err=%d", read);
-          demuxAtEof = true;
+        if (read == AVERROR_EOF) {
+          if (!demuxAtEof) {
+            demuxEnded.store(true);
+            videoPackets.pushEof(serial);
+            audioPackets.pushEof(serial);
+            appendTiming("demux_read_end_eof");
+            demuxAtEof = true;
+          }
+        } else {
+          // Non-EOF error (e.g. corruption, network timeout, bitstream error)
+          static int lastErr = 0;
+          if (read != lastErr) {
+            appendTimingFmt("demux_read_error err=%d", read);
+            lastErr = read;
+          }
+          // Just wait a bit and retry. If it's a real gap, the output thread stall logic will jump us over it.
+          // This prevents "demux_read_end" from stopping the demuxer on transient errors.
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         continue;
       }
@@ -2502,13 +2531,15 @@ struct Player::Impl {
       int audioStarved = audioStreamStarved() ? 1 : 0;
 
       // Filter out high-frequency logs to keep log file clean
-      if (std::strcmp(tag, "present") == 0 || std::strcmp(tag, "queue_high") == 0 || std::strcmp(tag, "queue_low") == 0) {
-        // Heartbeat: Log every 30th event (approx 1s) regardless of sync
+      if (std::strcmp(tag, "present") == 0 || std::strcmp(tag, "queue_high") == 0 || 
+          std::strcmp(tag, "queue_low") == 0 || std::strcmp(tag, "drop_serial") == 0 || 
+          std::strcmp(tag, "drop_backwards") == 0) {
+        // Heartbeat: Log every 30th event (approx 1s) regardless of sync/state
         static int eventCounter = 0;
         bool heartbeat = (++eventCounter % 30 == 0);
         bool syncIssue = std::abs(diffUs) > 100000; // >100ms sync gap
-        if (!heartbeat && !syncIssue && std::strcmp(tag, "present") == 0) return;
-        if (!heartbeat && std::strcmp(tag, "present") != 0) return;
+        if (!heartbeat && !syncIssue && (std::strcmp(tag, "present") == 0 || std::strcmp(tag, "drop_serial") == 0 || std::strcmp(tag, "drop_backwards") == 0)) return;
+        if (!heartbeat && std::strcmp(tag, "present") != 0 && std::strcmp(tag, "drop_serial") != 0 && std::strcmp(tag, "drop_backwards") != 0) return;
       }
       
       if (frame) {
@@ -2566,6 +2597,7 @@ struct Player::Impl {
             (fallbackFrameDurationUs.load() > 0) ? fallbackFrameDurationUs.load()
                                                  : 33333;
         frameTimerUs = nowUs();
+        lastPresentedTimeUs = frameTimerUs; // Reset stall timer on any serial change
       }
 
       // Always update master clock and diff, even if no frames are in the queue.
@@ -2599,16 +2631,19 @@ struct Player::Impl {
         // Don't log every wait - too verbose. Only log when stall is detected below.
         
         // Timeout detection: if we've been waiting for frames for too long, force recovery
-        if (now - lastPresentedTimeUs > kFrameStallThresholdUs) {
+        // Ignore during seeking or if a seek is already pending
+        if (now - lastPresentedTimeUs > kFrameStallThresholdUs && 
+            state.load() != PlayerState::Seeking && 
+            !seekPending.load()) {
           int64_t dur = durationUs.load(std::memory_order_relaxed);
-          int64_t lpPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
+          int64_t currentLpPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
           
           // Only force a jump if we are not at the very end of the file
-          if (dur <= 0 || lpPts < dur - 1000000) {
+          if (dur <= 0 || currentLpPts < dur - 1000000) {
             logVideo("stall_detected", nullptr, 0, PlayerClockSource::None, 0, 0);
             
             // Use current audio time if available, or just jump 500ms ahead of last PTS
-            int64_t seekTarget = lpPts + 500000; 
+            int64_t seekTarget = currentLpPts + 500000; 
             
             if (audioStreamClockReady()) {
               seekTarget = audioStreamClockUs(now);

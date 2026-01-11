@@ -50,18 +50,53 @@ void ffmpegLogCallback(void* ptr, int level, const char* fmt, va_list vl) {
   char line[1024];
   int printPrefix = 1;
   av_log_format_line2(ptr, level, fmt, vl, line, sizeof(line), &printPrefix);
-  std::filesystem::path path;
+  
+  std::lock_guard<std::mutex> lock(timingLogMutex());
+  static std::ofstream gFfmpegLogFile;
+  static std::filesystem::path gLastPath;
+
+  std::filesystem::path currentPath;
   {
-    std::lock_guard<std::mutex> lock(gFfmpegLogMutex);
-    path = gFfmpegLogPath;
+    std::lock_guard<std::mutex> lock2(gFfmpegLogMutex);
+    currentPath = gFfmpegLogPath;
   }
-  if (path.empty()) return;
-  std::ofstream f(path, std::ios::app);
-  if (!f) return;
-  f << radioifyLogTimestamp() << " ffmpeg_error " << line;
+  
+  if (currentPath.empty()) return;
+  if (currentPath != gLastPath) {
+    if (gFfmpegLogFile.is_open()) gFfmpegLogFile.close();
+    gFfmpegLogFile.open(currentPath, std::ios::app);
+    gLastPath = currentPath;
+  }
+  
+  if (!gFfmpegLogFile.is_open()) return;
+
+  // Simple deduplication to prevent flooding during seeking storms
+  static std::string lastLine;
+  static int repeatCount = 0;
+  static auto lastLogTime = std::chrono::steady_clock::now();
+  auto now = std::chrono::steady_clock::now();
+
+  std::string currentLine(line);
+  if (currentLine == lastLine && (now - lastLogTime < std::chrono::seconds(1))) {
+    repeatCount++;
+    if (repeatCount == 100) {
+       gFfmpegLogFile << radioifyLogTimestamp() << " ffmpeg_error ... multiple repeats suppressed ...\n";
+    }
+    return;
+  }
+
+  if (repeatCount > 0 && repeatCount != 100) {
+     gFfmpegLogFile << radioifyLogTimestamp() << " ffmpeg_error (repeated " << repeatCount << " times)\n";
+  }
+
+  lastLine = currentLine;
+  repeatCount = 0;
+  lastLogTime = now;
+
+  gFfmpegLogFile << radioifyLogTimestamp() << " ffmpeg_error " << line;
   size_t len = std::strlen(line);
   if (len == 0 || line[len - 1] != '\n') {
-    f << "\n";
+    gFfmpegLogFile << "\n";
   }
 }
 #endif
@@ -284,8 +319,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   auto appendTiming = [&](const std::string& s) {
 #if RADIOIFY_ENABLE_TIMING_LOG
     std::lock_guard<std::mutex> lock(timingLogMutex());
-    std::ofstream f(logPath, std::ios::app);
-    if (f) f << radioifyLogTimestamp() << " " << s << "\n";
+    if (perfLog.file.is_open()) {
+      perfLog.file << radioifyLogTimestamp() << " " << s << "\n";
+    }
 #else
     (void)s;
 #endif
@@ -303,10 +339,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       written = static_cast<int>(sizeof(buf)) - 1;
     }
     std::lock_guard<std::mutex> lock(timingLogMutex());
-    std::ofstream f(logPath, std::ios::app);
-    if (f) {
-      f << radioifyLogTimestamp() << " " << std::string(buf, buf + written)
-        << "\n";
+    if (perfLog.file.is_open()) {
+      perfLog.file << radioifyLogTimestamp() << " " << std::string(buf, buf + written)
+                   << "\n";
     }
 #else
     (void)fmt;
