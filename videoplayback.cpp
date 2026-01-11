@@ -1106,6 +1106,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             windowEnabled = false;
         }
     }
+    
+    if (!running) break;
 
     // UI HEARTBEAT
     static auto lastUiHeartbeat = std::chrono::steady_clock::now();
@@ -1135,6 +1137,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     };
 
     while (getNextEvent()) {
+      if (!running) break;
+      
       if (ev.type == InputEvent::Type::Resize) {
         pendingResize = true;
         redraw = true;
@@ -1164,6 +1168,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           triggerOverlay();
           redraw = true;
           continue;
+        }
+
+        if (ev.key.vk == VK_ESCAPE) {
+          running = false;
+          break; 
         }
 
         if (handlePlaybackInput(ev, running, cb)) {

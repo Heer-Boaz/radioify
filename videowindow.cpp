@@ -35,6 +35,7 @@ namespace {
             float uiProgress;
             float uiAlpha;
             uint uiPaused;
+            uint padding;
         };
 
         PS_INPUT VS(uint vid : SV_VertexID) {
@@ -126,19 +127,20 @@ namespace {
             float4 color = float4(0, 0, 0, 0);
             bool hit = false;
 
-            // Progress bar at bottom
+            // Progress bar at bottom (visual only)
             if (uv.y > 0.94 && uv.y < 0.98 && uv.x > 0.05 && uv.x < 0.95) {
                 float barX = (uv.x - 0.05) / 0.9;
-                if (barX < uiProgress) color = float4(1, 0.8, 0.2, 0.9);
-                else color = float4(0.2, 0.2, 0.2, 0.7);
+                if (barX < uiProgress) color = float4(1, 0.8, 0.2, 0.95);
+                else color = float4(0.2, 0.2, 0.2, 0.8);
                 hit = true;
             }
+
             // Pause icon
             if (uiPaused != 0) {
                 float2 c = float2(0.5, 0.5);
                 float2 d = abs(uv - c);
                 if (d.x < 0.02 && d.y < 0.05 && (d.x > 0.006)) {
-                    color = float4(1, 1, 1, 0.8);
+                    color = float4(1, 1, 1, 0.85);
                     hit = true;
                 }
             }
@@ -197,6 +199,30 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 
             std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
             pThis->m_inputQueue.push_back(ev);
+            return 0;
+        }
+
+        if (uMsg == WM_MOUSEMOVE) {
+            // We need to trigger the overlay when mouse moves in the window,
+            // but VideoWindow doesn't know about 'triggerOverlay'.
+            // So we send a generic mouse move event.
+            InputEvent ev;
+            ev.type = InputEvent::Type::Mouse;
+            ev.mouse.pos.X = LOWORD(lParam);
+            ev.mouse.pos.Y = HIWORD(lParam);
+            ev.mouse.buttonState = 0;
+            ev.mouse.eventFlags = MOUSE_MOVED;
+            
+            std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
+            // Don't flood the queue with move events, replace the last one if it was a move too
+            if (!pThis->m_inputQueue.empty() && 
+                pThis->m_inputQueue.back().type == InputEvent::Type::Mouse &&
+                pThis->m_inputQueue.back().mouse.eventFlags == MOUSE_MOVED) 
+            {
+                pThis->m_inputQueue.back() = ev;
+            } else {
+                pThis->m_inputQueue.push_back(ev);
+            }
             return 0;
         }
 
@@ -379,8 +405,11 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
 
     ID3D11Device* device = getSharedGpuDevice();
-    ID3D11DeviceContext* context;
+    if (!device) return;
+
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
+    if (!context || !m_constantBuffer) return;
     
     // Update constants
     {
@@ -396,6 +425,15 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
             sc->isPaused = ui.isPaused ? 1 : 0;
             context->Unmap(m_constantBuffer.Get(), 0);
         }
+    }
+
+    // Set Window Title with playback info forparity
+    if (!ui.title.empty()) {
+        std::string fullTitle = ui.title + " [" + ui.timeStr + "]";
+        if (ui.isPaused) fullTitle += " (Paused)";
+        
+        std::wstring wTitle = std::wstring(fullTitle.begin(), fullTitle.end());
+        SetWindowTextW(m_hWnd, wTitle.c_str());
     }
 
     // Set up rendering
@@ -495,5 +533,4 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
     }
 
     m_swapChain->Present(1, 0);
-    context->Release();
 }
