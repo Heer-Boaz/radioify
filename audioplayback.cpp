@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cmath>
 #include <condition_variable>
+#include <deque>
 #include <cstdint>
 #include <cctype>
 #include <cstring>
@@ -254,6 +255,12 @@ uint64_t rescaleFrames(uint64_t frames, uint32_t inRate, uint32_t outRate) {
   return static_cast<uint64_t>(std::llround(scaled));
 }
 
+struct AudioMetadata {
+  uint64_t wpos;      // The write position (wpos) when this packet was added
+  int64_t ptsUs;      // The PTS of the first sample in this packet
+  int serial;         // The serial of this packet
+};
+
 struct AudioState {
   ma_decoder decoder{};
   ma_device device{};
@@ -298,6 +305,12 @@ struct AudioState {
   std::atomic<int64_t> streamBasePtsUs{0};
   std::atomic<uint64_t> streamReadFrames{0};
   std::atomic<bool> streamClockReady{false};
+
+  std::deque<AudioMetadata> streamMetadata;
+  std::mutex streamMetadataMutex;
+  std::condition_variable streamUpdateCv;
+  std::atomic<uint64_t> streamUpdateCounter{0};
+
   std::atomic<bool> streamStarved{false};
   std::atomic<int64_t> streamDiscardPtsUs{0};
   uint64_t deviceDelayFrames = 0;
@@ -373,21 +386,41 @@ void dataCallback(ma_device* device, void* output, const void*,
                                     std::memory_order_relaxed);
     }
 
-    uint64_t played =
-        state->streamReadFrames.fetch_add(framesRead,
-                                          std::memory_order_relaxed) +
-        framesRead;
-    if (framesRead > 0 && state->streamBaseValid.load()) {
-      uint64_t delay = state->deviceDelayFrames;
-      uint64_t effective = (played > delay) ? (played - delay) : 0;
-      int64_t baseUs = state->streamBasePtsUs.load(std::memory_order_relaxed);
-      int64_t clockUs =
-          baseUs + static_cast<int64_t>(
-                       effective * 1000000ULL /
-                       static_cast<uint64_t>(state->sampleRate));
-      state->audioClock.set(clockUs, nowUs(),
-                            state->streamSerial.load(std::memory_order_relaxed));
-      state->streamClockReady.store(true, std::memory_order_relaxed);
+    if (framesRead > 0) {
+      uint64_t currentRpos = state->streamRb.rpos.load(std::memory_order_relaxed);
+      int64_t currentPts = AV_NOPTS_VALUE;
+      int currentSerial = state->streamSerial.load(std::memory_order_relaxed);
+
+      {
+        std::lock_guard<std::mutex> lock(state->streamMetadataMutex);
+        // Task 1: Find the most recent metadata entry that is AT or BEFORE our current read position.
+        // This ensures the clock is always tied to the exact chunk of audio being played.
+        while (state->streamMetadata.size() > 1 && 
+               state->streamMetadata[1].wpos <= currentRpos) {
+          state->streamMetadata.pop_front();
+        }
+        if (!state->streamMetadata.empty()) {
+          const auto& md = state->streamMetadata.front();
+          if (currentRpos >= md.wpos) {
+              uint64_t offset = currentRpos - md.wpos;
+              currentPts = md.ptsUs + static_cast<int64_t>(offset * 1000000ULL / state->sampleRate);
+              currentSerial = md.serial;
+          }
+        }
+      }
+
+      if (currentPts != AV_NOPTS_VALUE) {
+        // Compensate for hardware latency: the clock represents what is currently being heard.
+        uint64_t delay = state->deviceDelayFrames;
+        int64_t delayUs = static_cast<int64_t>(delay * 1000000ULL / state->sampleRate);
+        
+        state->audioClock.sync_to_pts(currentPts - delayUs, nowUs(), currentSerial);
+        state->streamClockReady.store(true, std::memory_order_relaxed);
+        
+        // Task 3: Signal that audio hardware has progressed (Hardware Callback Driving)
+        state->streamUpdateCounter.fetch_add(1, std::memory_order_release);
+        state->streamUpdateCv.notify_all();
+      }
     }
 
     bool starved = framesRead < frameCount;
@@ -1197,16 +1230,24 @@ int64_t audioStreamOldestPtsUs() {
   if (!gAudio.state.streamQueueEnabled.load()) {
     return AV_NOPTS_VALUE;
   }
-  // Return the PTS of the oldest sample currently in the ring buffer.
-  // This is streamBasePtsUs + the time of the samples already read.
-  if (!gAudio.state.streamBaseValid.load()) {
+
+  // Gebruik de metadata wachtrij om de ECHTE tijdstempel van de oudste sample in de buffer te vinden.
+  std::lock_guard<std::mutex> lock(gAudio.state.streamMetadataMutex);
+  if (gAudio.state.streamMetadata.empty()) {
     return AV_NOPTS_VALUE;
   }
-  int64_t basePts = gAudio.state.streamBasePtsUs.load(std::memory_order_relaxed);
-  uint64_t readFrames = gAudio.state.streamReadFrames.load(std::memory_order_relaxed);
-  int64_t readUs = static_cast<int64_t>(
-      (readFrames * 1000000ULL) / gAudio.state.sampleRate);
-  return basePts + readUs;
+
+  const auto& md = gAudio.state.streamMetadata.front();
+  uint64_t currentRpos = gAudio.state.streamRb.rpos.load(std::memory_order_relaxed);
+  
+  // Als we al samples hebben gelezen voorbij het startpunt van deze metadata
+  if (currentRpos >= md.wpos) {
+    uint64_t offset = currentRpos - md.wpos;
+    return md.ptsUs + static_cast<int64_t>(offset * 1000000ULL / gAudio.state.sampleRate);
+  } else {
+    // Dit zou niet mogen gebeuren, maar voor de zekerheid:
+    return md.ptsUs;
+  }
 }
 
 bool audioStreamWriteSamples(const float* interleaved, uint64_t frames,
@@ -1243,13 +1284,29 @@ bool audioStreamWriteSamples(const float* interleaved, uint64_t frames,
     gAudio.state.streamDiscardPtsUs.store(0, std::memory_order_relaxed);
   }
 
-  if (!gAudio.state.streamBaseValid.load(std::memory_order_relaxed) &&
-      !gAudio.state.hold.load(std::memory_order_relaxed)) {
+  if (!gAudio.state.streamBaseValid.load(std::memory_order_relaxed)) {
     gAudio.state.streamBasePtsUs.store(ptsUs, std::memory_order_relaxed);
     gAudio.state.streamBaseValid.store(true, std::memory_order_relaxed);
     gAudio.state.streamReadFrames.store(0, std::memory_order_relaxed);
     gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
   }
+
+  // Task 1: Store audio metadata in the ringbuffer.
+  // Associate the current PTS with the current write position.
+  if (ptsUs != AV_NOPTS_VALUE) {
+    std::lock_guard<std::mutex> lock(gAudio.state.streamMetadataMutex);
+    // Only add if it's a new timestamp or serial jump to keep the queue small
+    if (gAudio.state.streamMetadata.empty() || 
+        gAudio.state.streamMetadata.back().ptsUs != ptsUs ||
+        gAudio.state.streamMetadata.back().serial != serial) {
+      gAudio.state.streamMetadata.push_back({
+          gAudio.state.streamRb.wpos.load(std::memory_order_relaxed), 
+          ptsUs, 
+          serial
+      });
+    }
+  }
+
   uint64_t remaining = frames;
   const float* cursor = interleaved;
   uint64_t totalWritten = 0;
@@ -1296,60 +1353,27 @@ void audioStreamSynchronize(int serial, int64_t targetPtsUs) {
     return;
   }
 
-  // Ensure any previous discard request is cleared or updated.
-  gAudio.state.streamDiscardPtsUs.store(0, std::memory_order_relaxed);
-
-  // If we don't have a valid base yet, we can't calculate drops accurately from the buffer.
-  // However, player.cpp usually manages audioBufferedStartPtsUs.
-  // Ideally, streamBasePtsUs should match the first byte in the ring buffer.
-  
-  // Since we don't track the exact PTS of the *head* of the ring buffer inside AudioState
-  // (we only track streamBasePtsUs which is set by the writer when base is invalid),
-  // we rely on the caller effectively resetting the clock base to targetPtsUs.
-  // BUT we must drop the data that corresponds to the time *before* targetPtsUs.
-
-  // We assume the caller tried to calculate drops. But let's enforce sanity.
-  // If the audio buffer contains data starting at T_start, and we want T_target.
-  // We should effectively tell the clock: "You are starting at T_target".
-  // And we should discard any data in the buffer that corresponds to T < T_target.
-  
-  // Actually, the safest way ensuring strict sync is:
-  // 1. Tell the writer to discard anything < targetPtsUs (handled in writeSamples).
-  // 2. Set the clock base to targetPtsUs.
-  // 3. Reset read counter.
+  // We dwingen een harde synchronisatie.
+  // We verwijderen alle oude metadata en samples om een "clean slate" te hebben.
+  {
+    std::lock_guard<std::mutex> lock(gAudio.state.streamMetadataMutex);
+    gAudio.state.streamMetadata.clear();
+    // We voegen direct de nieuwe anker-pts toe voor de Samples die NU in de buffer staan
+    // of die als eerste geschreven gaan worden.
+    gAudio.state.streamMetadata.push_back({
+        gAudio.state.streamRb.rpos.load(std::memory_order_relaxed),
+        targetPtsUs,
+        serial
+    });
+  }
 
   gAudio.state.streamDiscardPtsUs.store(targetPtsUs, std::memory_order_relaxed);
-  
   gAudio.state.streamBasePtsUs.store(targetPtsUs, std::memory_order_relaxed);
   gAudio.state.streamBaseValid.store(true, std::memory_order_relaxed);
   gAudio.state.streamReadFrames.store(0, std::memory_order_relaxed);
   gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
   gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
-  gAudio.state.audioClock.reset(serial);
-  
-  // Also, if there is already data in the ring buffer that is "old", we should ideally drop it.
-  // But without knowing the sample rate here easily (it is in gAudio.state.sampleRate), 
-  // and the exact buffered amount's duration, it is hard to be precise.
-  // We'll rely on streamDiscardPtsUs to filter future writes,
-  // AND we rely on the fact that if we set the clock to T_target, 
-  // playing "old" samples will just sound like... "old" samples, but the clock will claim it is T_target+inc.
-  // This might effectively "hurry" the audio or skip it?
-  
-  // Better: If we set the base to Target, we are saying "The NEXT sample you read is at Target".
-  // So anything currently in the buffer MUST be assumed to be at Target?
-  // No, that causes "Audio from the past played as if it is present". Lip sync error.
-  
-  // So we MUST clear the buffer?
-  // gAudio.state.streamRb.reset(); // -> This would clear ALL data.
-  // If we clear all data, we might starve the audio device until decoder catches up.
-  // But that is better than desync.
-  
-  // Let's compromise. A "hard sync" voids the buffer if we think it's misaligned?
-  // The User complained about "all this if-then-else meuk".
-  // Let's do the Clean Sync:
-  // Force Clock = Target.
-  // Set Discard Threshold = Target.
-  // (We leave the buffer as is - if it had old data, it plays briefly. Correctness usually comes from pre-roll matching).
+  gAudio.state.audioClock.set(targetPtsUs, nowUs(), serial);
 }
 
 void audioStreamSetBase(int serial, int64_t ptsUs) {
@@ -1398,6 +1422,10 @@ void audioStreamReset(uint64_t framePos) {
   gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
   gAudio.state.audioClock.reset(
       gAudio.state.streamSerial.load(std::memory_order_relaxed));
+  {
+    std::lock_guard<std::mutex> lock(gAudio.state.streamMetadataMutex);
+    gAudio.state.streamMetadata.clear();
+  }
 }
 
 void audioStreamFlushSerial(int serial) {
@@ -1415,6 +1443,10 @@ void audioStreamFlushSerial(int serial) {
   gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
   gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
   gAudio.state.audioClock.reset(serial);
+  {
+    std::lock_guard<std::mutex> lock(gAudio.state.streamMetadataMutex);
+    gAudio.state.streamMetadata.clear();
+  }
 }
 
 int audioStreamSerial() {
@@ -1438,16 +1470,8 @@ int64_t audioStreamClockUs(int64_t nowUs) {
     return 0;
   }
   
-  // 2. DEVICE DELAY COMPENSATION
-  // Subtract the audio hardware playback latency from the reported time.
-  // This accounts for the fact that audio written to the device plays later.
-  // Without this, audio appears to lead the video by the device's latency (~20-100ms).
-  int64_t baseClockUs = gAudio.state.audioClock.get(nowUs);
-  int64_t deviceDelayUs = static_cast<int64_t>(
-      (gAudio.state.deviceDelayFrames * 1000000ULL) / 
-      (gAudio.state.sampleRate > 0 ? gAudio.state.sampleRate : 1));
-  
-  return baseClockUs - deviceDelayUs;
+  // The audioClock is now updated in dataCallback with hardware latency compensation included.
+  return gAudio.state.audioClock.get(nowUs);
 }
 
 int64_t audioStreamClockLastUpdatedUs() {
@@ -1478,6 +1502,18 @@ bool audioStreamClockReady() {
     return false;
   }
   return gAudio.state.audioClock.is_valid();
+}
+
+uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int timeoutMs) {
+  std::unique_lock<std::mutex> lock(gAudio.state.streamMetadataMutex);
+  gAudio.state.streamUpdateCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&]() {
+    return gAudio.state.streamUpdateCounter.load(std::memory_order_acquire) != lastCounter;
+  });
+  return gAudio.state.streamUpdateCounter.load(std::memory_order_acquire);
+}
+
+uint64_t audioStreamUpdateCounter() {
+  return gAudio.state.streamUpdateCounter.load(std::memory_order_acquire);
 }
 
 std::filesystem::path audioGetNowPlaying() { return gAudio.nowPlaying; }

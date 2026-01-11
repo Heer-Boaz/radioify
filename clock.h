@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cmath>
+#include <algorithm>
 
 struct Clock {
   std::atomic<int32_t> speed_q16{65536};
@@ -32,6 +34,35 @@ struct Clock {
     pts_drift_us.store(newPtsUs - scaledNow, std::memory_order_relaxed);
     paused.store(false, std::memory_order_relaxed);
     valid.store(true, std::memory_order_relaxed);
+  }
+
+  // Task 2: Implement Clock Smoothing (Drift Management)
+  // Instead of jumping PTS, we adjust the clock base weightedly or adjust speed.
+  inline void sync_to_pts(int64_t targetPtsUs, int64_t nowUs, int newSerial) {
+    if (serial.load(std::memory_order_relaxed) != newSerial || !valid.load(std::memory_order_relaxed)) {
+        set(targetPtsUs, nowUs, newSerial);
+        return;
+    }
+
+    int64_t currentPts = get(nowUs);
+    int64_t diff = targetPtsUs - currentPts;
+
+    // If drift is massive (> 1s), jump immediately to recover.
+    if (std::abs(diff) > 1000000) {
+        set(targetPtsUs, nowUs, newSerial);
+        return;
+    }
+    
+    // Average the drift to smooth out jitter from OS scheduling or callback timing.
+    // We use a weighted moving average for the drift offset.
+    const int32_t sp = speed_q16.load(std::memory_order_relaxed);
+    const int64_t scaledNow = (sp == 65536) ? nowUs : (nowUs * static_cast<int64_t>(sp)) / 65536;
+    int64_t newDrift = targetPtsUs - scaledNow;
+    
+    int64_t oldDrift = pts_drift_us.load(std::memory_order_relaxed);
+    // 0.9 old + 0.1 new
+    pts_drift_us.store((oldDrift * 9 + newDrift) / 10, std::memory_order_relaxed);
+    last_updated_us.store(nowUs, std::memory_order_relaxed);
   }
 
   inline void set_paused(bool p, int64_t nowUs) {

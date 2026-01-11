@@ -1452,18 +1452,16 @@ struct Player::Impl {
     MasterClockSnapshot snap{};
     int current = currentSerial.load(std::memory_order_relaxed);
 
-    bool useAudio = audioStartOk.load() && audioStreamClockReady() && !audioIsFinished();
-    if (useAudio) {
-      // If audio is the master, we MUST use it even if it's starved or slightly old.
-      // Falling back to Video clock during starvation causes video to run ahead, 
-      // leading to massive frame drops once audio recovers.
+    // If audio is active, it MUST be the master. 
+    // We don't wait for 'streamClockReady' here because we want to block video 
+    // from using its own clock if audio is intended to be the master.
+    if (audioStartOk.load() && !audioIsFinished()) {
       if (audioStreamSerial() == current) {
         int64_t audioUs = audioStreamClockUs(nowUs);
-        if (audioUs > 0) {
-          snap.us = audioUs;
-          snap.source = PlayerClockSource::Audio;
-          return snap;
-        }
+        // Even if audioUs is 0 (hardware not started), we report Audio as source.
+        snap.us = audioUs;
+        snap.source = PlayerClockSource::Audio;
+        return snap;
       }
     }
 
@@ -1487,11 +1485,11 @@ struct Player::Impl {
     AudioPerfStats audioStats = audioGetPerfStats();
     uint32_t sampleRate = audioStats.sampleRate > 0 ? audioStats.sampleRate : 48000;
     const size_t kAudioPrebufferFrames = sampleRate / 3; // ~330ms at 48kHz
-    bool audioHasDecoded = (bufferedSamples >= kAudioPrebufferFrames);
     
     // REQUIRE audio if audio stream is active. 
-    // Don't use the videoFull shortcut here as it causes immediate starvation/freeze cycles 
-    // when audio is slower than video.
+    // We also require streamBaseValid (via audioStreamOldestPtsUs) so we have a sync point.
+    bool audioHasDecoded = (bufferedSamples >= kAudioPrebufferFrames) && 
+                           (audioStreamOldestPtsUs() != AV_NOPTS_VALUE);
     bool audioReady = !audioStartOk.load() || audioDecodeEnded.load() || 
                       audioHasDecoded;
 
@@ -2802,7 +2800,16 @@ struct Player::Impl {
         }
         delayUs = actualDurationUs;  // Use actual frame duration, no sync adjustments
       }
-      else if (masterUs != 0) {
+      else if (master.source != PlayerClockSource::None) {
+        // 0. HARDWARE READINESS: If audio is master but the hardware hasn't started yet, 
+        // we must wait. Presenting now would start the video clock too early, 
+        // causing a sync-jump once audio finally kicks in.
+        if (master.source == PlayerClockSource::Audio && !audioStreamClockReady()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          lastPresentedTimeUs = nowUs();
+          continue;
+        }
+
         diffUs = front.ptsUs - masterUs;
         
         // Sync modes with audio buffer awareness:
@@ -2880,10 +2887,17 @@ struct Player::Impl {
       if (now < targetUs) {
         int64_t sleepUs = targetUs - now;
         if (sleepUs > 0) {
-          // Limit sleep to 10ms to keep the UI/commands responsive.
-          int64_t actualSleep = (std::min)(sleepUs, static_cast<int64_t>(10000));
-          std::this_thread::sleep_for(std::chrono::microseconds(actualSleep));
-          // Don't log every sleep - too verbose
+          // Task 3: Hardware Callback Driving. 
+          // Instead of a fixed sleep, we wait for audio progress if we are early for a frame.
+          // This ensures the video thread re-examines the timeline precisely when the sound card moves.
+          if (master.source == PlayerClockSource::Audio && sleepUs > 1000) {
+              uint64_t lastCounter = audioStreamUpdateCounter();
+              audioStreamWaitForUpdate(lastCounter, (int)(sleepUs / 1000));
+          } else {
+              // Limit sleep to 10ms to keep the UI/commands responsive.
+              int64_t actualSleep = (std::min)(sleepUs, static_cast<int64_t>(10000));
+              std::this_thread::sleep_for(std::chrono::microseconds(actualSleep));
+          }
         }
         continue;
       }

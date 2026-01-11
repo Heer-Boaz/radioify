@@ -62,6 +62,12 @@ int64_t audioStreamClockLastUpdatedUs();
 bool audioStreamStarved();
 bool audioStreamClockReady();
 
+// Task 3: Hardware Callback Driving
+// Block until the audio hardware callback has progressed or timeout.
+// Returns the new update counter value.
+uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int timeoutMs);
+uint64_t audioStreamUpdateCounter();
+
 std::filesystem::path audioGetNowPlaying();
 
 double audioGetTimeSec();
