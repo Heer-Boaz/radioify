@@ -117,7 +117,16 @@ std::string buildSelectionMeta(const BrowserState& browser,
     meta.videoAttempted = true;
   }
 
-  std::string metaLine = " Selected: " + name;
+  std::string sortLabel = "Name";
+  if (browser.sortMode == BrowserState::SortMode::Date) sortLabel = "Date";
+  else if (browser.sortMode == BrowserState::SortMode::Size) sortLabel = "Size";
+
+  std::string metaLine = " [" + sortLabel + "]";
+  if (browser.filterActive || !browser.filter.empty()) {
+    metaLine += " [Filter: " + browser.filter + (browser.filterActive ? "_" : "") + "]";
+  }
+
+  metaLine += " Selected: " + name;
   if (!meta.sizeLabel.empty()) metaLine += "  " + meta.sizeLabel;
   if (meta.width > 0 && meta.height > 0) {
     metaLine += "  " + std::to_string(meta.width) + "x" +

@@ -252,6 +252,32 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     const KeyEvent& key = ev.key;
     const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
     bool ctrl = (key.control & ctrlMask) != 0;
+
+    if (browser.filterActive) {
+      if (key.vk == VK_ESCAPE || key.vk == VK_RETURN) {
+        browser.filterActive = false;
+        dirty = true;
+        return;
+      }
+      if (key.vk == VK_BACK) {
+        if (!browser.filter.empty()) {
+          browser.filter.pop_back();
+          if (callbacks.onRefreshBrowser)
+            callbacks.onRefreshBrowser(browser, "");
+          dirty = true;
+        }
+        return;
+      }
+      if (key.ch >= 32) {
+        browser.filter += key.ch;
+        if (callbacks.onRefreshBrowser)
+            callbacks.onRefreshBrowser(browser, "");
+        dirty = true;
+        return;
+      }
+      return;
+    }
+
     if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
       running = false;
       if (callbacks.onQuit) callbacks.onQuit();
@@ -260,6 +286,21 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     if ((key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q') && ctrl) {
       running = false;
       if (callbacks.onQuit) callbacks.onQuit();
+      return;
+    }
+    if (key.vk == VK_DIVIDE || key.ch == '/') {
+      browser.filterActive = true;
+      browser.filter.clear();
+      dirty = true;
+      return;
+    }
+    if (key.vk == 'S' || key.ch == 's' || key.ch == 'S') {
+      int next = static_cast<int>(browser.sortMode) + 1;
+      if (next > static_cast<int>(BrowserState::SortMode::Size)) next = 0;
+      browser.sortMode = static_cast<BrowserState::SortMode>(next);
+      if (callbacks.onRefreshBrowser)
+        callbacks.onRefreshBrowser(browser, "");
+      dirty = true;
       return;
     }
     if (key.vk == VK_ESCAPE) {

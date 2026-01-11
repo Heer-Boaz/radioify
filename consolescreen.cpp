@@ -648,7 +648,15 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         if (idx < 0 || idx >= static_cast<int>(browser.entries.size())) continue;
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         bool isSelected = (idx == browser.selected);
-        std::string cell = fitName(layout.names[static_cast<size_t>(idx)],
+
+        std::string prefix;
+        if (!entry.isDir) {
+          if (isVideo && isVideo(entry.path)) prefix = "[V] ";
+          else if (isAudio && isAudio(entry.path)) prefix = "[A] ";
+          else if (isImage && isImage(entry.path)) prefix = "[I] ";
+        }
+
+        std::string cell = fitName(prefix + layout.names[static_cast<size_t>(idx)],
                                    layout.colWidth);
         int cellWidth = utf8CodepointCount(cell);
         if (cellWidth < layout.colWidth) {

@@ -177,12 +177,6 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
     return entries;
   }
 
-  std::sort(items.begin(), items.end(),
-            [](const FileEntry& a, const FileEntry& b) {
-              if (a.isDir != b.isDir) return a.isDir > b.isDir;
-              return toLower(a.name) < toLower(b.name);
-            });
-
   entries.insert(entries.end(), items.begin(), items.end());
   return entries;
 }
@@ -190,6 +184,42 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
 static void refreshBrowser(BrowserState& state,
                            const std::string& initialName) {
   state.entries = listEntries(state.dir);
+
+  if (!state.filter.empty()) {
+    std::string lowFilter = toLower(state.filter);
+    state.entries.erase(
+        std::remove_if(state.entries.begin(), state.entries.end(),
+                       [&](const FileEntry& e) {
+                         if (e.name == "..") return false;
+                         return toLower(e.name).find(lowFilter) ==
+                                std::string::npos;
+                       }),
+        state.entries.end());
+  }
+
+  if (!state.entries.empty()) {
+    auto start = state.entries.begin();
+    if (start->name == "..") ++start;
+
+    std::sort(start, state.entries.end(), [&](const FileEntry& a, const FileEntry& b) {
+      if (a.isDir != b.isDir) return a.isDir > b.isDir;
+      if (state.sortMode == BrowserState::SortMode::Date) {
+        try {
+          return std::filesystem::last_write_time(a.path) >
+                 std::filesystem::last_write_time(b.path);
+        } catch (...) {}
+      } else if (state.sortMode == BrowserState::SortMode::Size) {
+        try {
+          if (!a.isDir && !b.isDir) {
+            return std::filesystem::file_size(a.path) >
+                   std::filesystem::file_size(b.path);
+          }
+        } catch (...) {}
+      }
+      return toLower(a.name) < toLower(b.name);
+    });
+  }
+
   if (state.entries.empty()) {
     state.selected = 0;
     state.scrollRow = 0;

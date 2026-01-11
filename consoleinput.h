@@ -74,7 +74,15 @@ struct BrowserState {
     ListPreview,
     ListOnly,
   };
+  enum class SortMode {
+    Name,
+    Date,
+    Size,
+  };
   ViewMode viewMode = ViewMode::ListOnly;
+  SortMode sortMode = SortMode::Name;
+  std::string filter;
+  bool filterActive = false;
 };
 
 struct GridLayout {
