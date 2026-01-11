@@ -1452,11 +1452,11 @@ struct Player::Impl {
     MasterClockSnapshot snap{};
     int current = currentSerial.load(std::memory_order_relaxed);
 
-    if (audioStartOk.load() && audioStreamClockReady() &&
-        !audioStreamStarved() && !audioIsFinished() &&
-        audioClockFresh(nowUs)) {
-
-      // Only use audio clock if the audio stream matches our current target serial.
+    bool useAudio = audioStartOk.load() && audioStreamClockReady() && !audioIsFinished();
+    if (useAudio) {
+      // If audio is the master, we MUST use it even if it's starved or slightly old.
+      // Falling back to Video clock during starvation causes video to run ahead, 
+      // leading to massive frame drops once audio recovers.
       if (audioStreamSerial() == current) {
         int64_t audioUs = audioStreamClockUs(nowUs);
         if (audioUs > 0) {
@@ -1466,6 +1466,7 @@ struct Player::Impl {
         }
       }
     }
+
     if (videoClock.is_valid() &&
         videoClock.serial.load(std::memory_order_relaxed) == current) {
       snap.us = videoClock.get(nowUs);
@@ -1488,9 +1489,11 @@ struct Player::Impl {
     const size_t kAudioPrebufferFrames = sampleRate / 3; // ~330ms at 48kHz
     bool audioHasDecoded = (bufferedSamples >= kAudioPrebufferFrames);
     
-    bool videoFull = videoFrames.size() >= (maxQueue.load() > 0 ? maxQueue.load() - 1 : 1);
+    // REQUIRE audio if audio stream is active. 
+    // Don't use the videoFull shortcut here as it causes immediate starvation/freeze cycles 
+    // when audio is slower than video.
     bool audioReady = !audioStartOk.load() || audioDecodeEnded.load() || 
-                      audioHasDecoded || videoFull;
+                      audioHasDecoded;
 
     return videoReady && audioReady;
   }
@@ -2516,7 +2519,7 @@ struct Player::Impl {
     
     // Timeout/Stall detection: track when last frame was presented
     int64_t lastPresentedTimeUs = nowUs();
-    constexpr int64_t kFrameStallThresholdUs = 2000000;  // 2 second recovery threshold
+    constexpr int64_t kFrameStallThresholdUs = 4000000;  // Increased to 4s for robustness
     
     // Dynamic frame duration: maintain moving average of recent durations
     std::vector<int64_t> recentDurations;
@@ -2631,9 +2634,11 @@ struct Player::Impl {
         // Don't log every wait - too verbose. Only log when stall is detected below.
         
         // Timeout detection: if we've been waiting for frames for too long, force recovery
-        // Ignore during seeking or if a seek is already pending
+        // Ignore during seeking or if a seek is already pending. 
+        // Only run during active Playing/Draining states.
         if (now - lastPresentedTimeUs > kFrameStallThresholdUs && 
-            state.load() != PlayerState::Seeking && 
+            (st == PlayerState::Playing || st == PlayerState::Draining) &&
+            firstPresentedForSerial &&
             !seekPending.load()) {
           int64_t dur = durationUs.load(std::memory_order_relaxed);
           int64_t currentLpPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
@@ -2808,6 +2813,8 @@ struct Player::Impl {
           // Audio ran out of data. Pause video to let audio buffer refill.
           logVideo("audio_starved", &front, masterUs, master.source, diffUs, delayUs);
           std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          // Reset stall timer while we are intentionally waiting for audio!
+          lastPresentedTimeUs = nowUs();
           continue;
         }
         
