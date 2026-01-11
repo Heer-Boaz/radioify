@@ -46,6 +46,7 @@ struct Options {
   bool enableAscii = true;
   bool enableAudio = true;
   bool enableRadio = false;
+  bool enableWindow = false;
   bool verbose = false;
 };
 
@@ -73,6 +74,7 @@ static void showUsage(const char* exe) {
   logLine("  --no-ascii   Disable ASCII video rendering");
   logLine("  --no-audio   Disable audio playback");
   logLine("  --no-radio   Start with radio filter disabled");
+  logLine("  --window     Open a window for video playback");
   logLine("  -h, --help   Show this help");
 }
 
@@ -94,6 +96,10 @@ static Options parseArgs(int argc, char** argv) {
     }
     if (arg == "--no-radio") {
       o.enableRadio = false;
+      continue;
+    }
+    if (arg == "--window") {
+      o.enableWindow = true;
       continue;
     }
     if (!arg.empty() && arg[0] == '-') {
@@ -455,6 +461,7 @@ int main(int argc, char** argv) {
   videoConfig.enableAscii = o.enableAscii;
   videoConfig.enableAudio = o.enableAudio;
   videoConfig.debugOverlay = true;
+  videoConfig.enableWindow = o.enableWindow;
 
   std::filesystem::path pendingImage;
   bool hasPendingImage = false;

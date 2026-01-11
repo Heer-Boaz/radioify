@@ -37,6 +37,7 @@ extern "C" {
 #include "gpu_shared.h"
 #include "player.h"
 #include "ui_helpers.h"
+#include "videowindow.h"
 
 #include "timing_log.h"
 
@@ -607,6 +608,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   AsciiArt art;
   GpuAsciiRenderer& gpuRenderer = sharedGpuRenderer();
+  VideoWindow videoWindow;
+  bool windowEnabled = config.enableWindow;
   bool gpuAvailable = true;
   VideoFrame frameBuffer;
   VideoFrame* frame = &frameBuffer;
@@ -817,10 +820,31 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                 if (clearHistory) {
                   gpuRenderer.ClearHistory();
                 }
+                
+                bool is10Bit = false;
+                if (frame->hwTexture) {
+                    D3D11_TEXTURE2D_DESC desc;
+                    frame->hwTexture->GetDesc(&desc);
+                    is10Bit = (desc.Format == DXGI_FORMAT_P010);
+                }
+
                 renderRes = gpuRenderer.RenderNV12Texture(
                     frame->hwTexture.Get(), frame->hwTextureArrayIndex,
                     frame->width, frame->height, frame->fullRange,
-                    frame->yuvMatrix, frame->yuvTransfer, false, art, &gpuErr);
+                    frame->yuvMatrix, frame->yuvTransfer, is10Bit, art, &gpuErr);
+                
+                if (windowEnabled) {
+                    if (!videoWindow.IsOpen()) {
+                        videoWindow.Open(1280, 720, "Radioify Output");
+                    }
+                    videoWindow.ShowWindow(true);
+                    videoWindow.Present(frame->hwTexture.Get(), frame->hwTextureArrayIndex, frame->width, frame->height,
+                                        frame->fullRange, frame->yuvMatrix, frame->yuvTransfer, is10Bit ? 10 : 8);
+                } else {
+                    if (videoWindow.IsOpen()) {
+                        videoWindow.ShowWindow(false);
+                    }
+                }
               }
               auto t1 = std::chrono::steady_clock::now();
               auto durMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
@@ -1052,6 +1076,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   while (running) {
     finalizeAudioStart();
 
+    if (videoWindow.IsOpen()) {
+        videoWindow.PollEvents();
+        if (windowEnabled && !videoWindow.IsVisible()) {
+            windowEnabled = false;
+        }
+    }
+
     // UI HEARTBEAT
     static auto lastUiHeartbeat = std::chrono::steady_clock::now();
     auto nowUi = std::chrono::steady_clock::now();
@@ -1086,6 +1117,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           sendSeekRequest(currentSec + dir * 5.0);
         };
         cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
+
+        if (ev.key.vk == 'W') {
+          windowEnabled = !windowEnabled;
+          triggerOverlay();
+          redraw = true;
+          continue;
+        }
 
         if (handlePlaybackInput(ev, running, cb)) {
           triggerOverlay();

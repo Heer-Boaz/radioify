@@ -25,6 +25,7 @@ add_executable(radioify
   ui_helpers.cpp
   videoplayback.cpp
   videodecoder.cpp
+  videowindow.cpp
   radio.cpp
 )
 
@@ -387,7 +388,7 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if (WIN32)
-  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi)
+  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32)
 endif()
 
 if (MSVC)
