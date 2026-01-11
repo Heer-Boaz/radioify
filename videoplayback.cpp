@@ -995,18 +995,18 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         status = "\xE2\x96\xB6";  // playing icon
       }
       int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-      std::string volStr = " Vol: " + std::to_string(volPct) + "%";
+      std::string volStr = " Vol: " + std::to_string(volPct) + (volPct > 100 ? "% (BOOST)" : "%");
       std::string suffix =
           formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status + volStr;
       int suffixWidth = utf8CodepointCount(suffix);
       int barWidth = width - suffixWidth - 3;
       if (barWidth < 10) {
-        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " + status + " V:" + std::to_string(volPct) + "%";
+        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " + status + " V:" + std::to_string(volPct) + (volPct > 100 ? "%!" : "%");
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 10) {
-        suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) + "%";
+        suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) + (volPct > 100 ? "%!" : "%");
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
@@ -1069,36 +1069,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         continue;
       }
       if (ev.type == InputEvent::Type::Key) {
-        const KeyEvent& key = ev.key;
-        const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-        const DWORD shiftMask = SHIFT_PRESSED;
-        bool ctrl = (key.control & ctrlMask) != 0;
-        bool shift = (key.control & shiftMask) != 0;
-
-        if (shift && key.vk == VK_UP) {
-          float step = ctrl ? 0.10f : 0.01f;
-          audioAdjustVolume(step);
-          triggerOverlay();
-          redraw = true;
-          continue;
-        }
-        if (shift && key.vk == VK_DOWN) {
-          float step = ctrl ? 0.10f : 0.01f;
-          audioAdjustVolume(-step);
-          triggerOverlay();
-          redraw = true;
-          continue;
-        }
-
-        if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
-          running = false;
-          break;
-        }
-        if (key.vk == VK_ESCAPE) {
-          running = false;
-          break;
-        }
-        if (key.vk == VK_SPACE || key.ch == ' ') {
+        InputCallbacks cb;
+        cb.onQuit = [&]() { running = false; };
+        cb.onTogglePause = [&]() {
           if (audioOk) {
             audioTogglePause();
             userPaused = audioIsPaused();
@@ -1106,25 +1079,18 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             userPaused = !userPaused;
             player.setVideoPaused(userPaused);
           }
-          redraw = true;
-        } else if (key.vk == 'R' || key.ch == 'r' || key.ch == 'R') {
-          if (audioOk) audioToggleRadio();
-          redraw = true;
-        } else if (ctrl && (key.vk == VK_LEFT || key.vk == VK_RIGHT)) {
-          triggerOverlay();
-          int dir = (key.vk == VK_LEFT) ? -1 : 1;
+        };
+        cb.onToggleRadio = [&]() { if (audioOk) audioToggleRadio(); };
+        cb.onSeekBy = [&](int dir) {
           double currentSec = player.currentUs() / 1000000.0;
-          double totalSec = player.durationUs() / 1000000.0;
-          if (totalSec <= 0.0 && audioOk) {
-            totalSec = audioGetTotalSec();
-          }
-          double targetSec = currentSec + dir * 5.0;
-          if (totalSec > 0.0) {
-            targetSec = std::clamp(targetSec, 0.0, totalSec);
-          } else if (targetSec < 0.0) {
-            targetSec = 0.0;
-          }
-          sendSeekRequest(targetSec);
+          sendSeekRequest(currentSec + dir * 5.0);
+        };
+        cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
+
+        if (handlePlaybackInput(ev, running, cb)) {
+          triggerOverlay();
+          redraw = true;
+          continue;
         }
       }
       if (ev.type == InputEvent::Type::Mouse) {

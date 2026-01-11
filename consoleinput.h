@@ -126,6 +126,9 @@ struct InputCallbacks {
   std::function<void(BrowserState&, const std::string&)> onRefreshBrowser;
 };
 
+bool handlePlaybackInput(const InputEvent& ev, bool& running,
+                          const InputCallbacks& callbacks);
+
 void handleInputEvent(
   const InputEvent& ev,
   BrowserState& browser,

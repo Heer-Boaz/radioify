@@ -251,8 +251,10 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
   if (ev.type == InputEvent::Type::Key) {
     const KeyEvent& key = ev.key;
     const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+    const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
     const DWORD shiftMask = SHIFT_PRESSED;
     bool ctrl = (key.control & ctrlMask) != 0;
+    bool alt = (key.control & altMask) != 0;
     bool shift = (key.control & shiftMask) != 0;
 
     if (browser.filterActive) {
@@ -280,16 +282,13 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
 
-    if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
-      running = false;
-      if (callbacks.onQuit) callbacks.onQuit();
+    // Try common playback shortcuts first
+    if ((playMode || decoderReady) &&
+        handlePlaybackInput(ev, running, callbacks)) {
+      dirty = true;
       return;
     }
-    if ((key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q') && ctrl) {
-      running = false;
-      if (callbacks.onQuit) callbacks.onQuit();
-      return;
-    }
+
     if (key.vk == VK_DIVIDE || key.ch == '/') {
       browser.filterActive = true;
       browser.filter.clear();
@@ -366,59 +365,25 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       }
       return;
     }
-    if (key.vk == VK_SPACE || key.ch == ' ') {
-      if (playMode && decoderReady) {
-        if (callbacks.onTogglePause) callbacks.onTogglePause();
-        dirty = true;
-      }
-      return;
-    }
-    if (key.vk == 'R' || key.ch == 'r' || key.ch == 'R') {
-      if (callbacks.onToggleRadio) callbacks.onToggleRadio();
-      dirty = true;
-      return;
-    }
     if (key.vk == 'T' || key.ch == 't' || key.ch == 'T') {
       browser.viewMode = nextViewMode(browser.viewMode);
       dirty = true;
       return;
     }
     if (key.vk == VK_LEFT) {
-      if (ctrl) {
-        if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
-        dirty = true;
-      } else {
-        moveSelection(browser, layout, -1, 0, dirty);
-      }
+      moveSelection(browser, layout, -1, 0, dirty);
       return;
     }
     if (key.vk == VK_RIGHT) {
-      if (ctrl) {
-        if (callbacks.onSeekBy) callbacks.onSeekBy(1);
-        dirty = true;
-      } else {
-        moveSelection(browser, layout, 1, 0, dirty);
-      }
+      moveSelection(browser, layout, 1, 0, dirty);
       return;
     }
     if (key.vk == VK_UP) {
-      if (shift) {
-        float step = ctrl ? 0.10f : 0.01f;
-        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(step);
-        dirty = true;
-      } else {
-        moveSelection(browser, layout, 0, -1, dirty);
-      }
+      moveSelection(browser, layout, 0, -1, dirty);
       return;
     }
     if (key.vk == VK_DOWN) {
-      if (shift) {
-        float step = ctrl ? 0.10f : 0.01f;
-        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-step);
-        dirty = true;
-      } else {
-        moveSelection(browser, layout, 0, 1, dirty);
-      }
+      moveSelection(browser, layout, 0, 1, dirty);
       return;
     }
     if (key.vk == VK_PRIOR) {
@@ -539,4 +504,69 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       }
     }
   }
+}
+
+bool handlePlaybackInput(const InputEvent& ev, bool& running,
+                          const InputCallbacks& callbacks) {
+  if (ev.type == InputEvent::Type::Key) {
+    const KeyEvent& key = ev.key;
+    const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+    const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
+    const DWORD shiftMask = SHIFT_PRESSED;
+    bool ctrl = (key.control & ctrlMask) != 0;
+    bool alt = (key.control & altMask) != 0;
+    bool shift = (key.control & shiftMask) != 0;
+
+    // Exit shortcuts
+    if (ctrl && (key.vk == 'C' || key.ch == 'c' || key.vk == 'Q' || key.ch == 'q')) {
+      running = false;
+      if (callbacks.onQuit) callbacks.onQuit();
+      return true;
+    }
+    if (key.vk == VK_ESCAPE) {
+      running = false;
+      return true;
+    }
+
+    // Playback control
+    if (key.vk == VK_SPACE || key.ch == ' ') {
+      if (callbacks.onTogglePause) callbacks.onTogglePause();
+      return true;
+    }
+    if (key.vk == 'R' || key.ch == 'r' || key.ch == 'R') {
+      if (callbacks.onToggleRadio) callbacks.onToggleRadio();
+      return true;
+    }
+
+    // Seek
+    if (key.vk == VK_OEM_4 || key.ch == '[') {
+      if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
+      return true;
+    }
+    if (key.vk == VK_OEM_6 || key.ch == ']') {
+      if (callbacks.onSeekBy) callbacks.onSeekBy(1);
+      return true;
+    }
+    if (ctrl && (key.vk == VK_LEFT || key.vk == VK_RIGHT)) {
+      if (callbacks.onSeekBy) callbacks.onSeekBy((key.vk == VK_LEFT) ? -1 : 1);
+      return true;
+    }
+
+    // Volume
+    if (key.vk == VK_UP) {
+      if (shift || alt) {
+        float step = alt ? 0.10f : 0.01f;
+        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(step);
+        return true;
+      }
+    }
+    if (key.vk == VK_DOWN) {
+      if (shift || alt) {
+        float step = alt ? 0.10f : 0.01f;
+        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-step);
+        return true;
+      }
+    }
+  }
+  return false;
 }

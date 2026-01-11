@@ -700,8 +700,8 @@ int main(int argc, char** argv) {
       } else {
         screen.writeText(
             0, 2,
-            fitLine("  Mouse=select  Click=render/enter  Backspace=up  "
-                    "Arrows=move  PgUp/PgDn=page  R=toggle  T=view  Q=quit",
+            fitLine("  Enter=play  PgUp/Dn=page  Arrows=move  [/]=seek  "
+                    "Shift/Alt+Up/Dn=Vol  R=toggle  Q=quit",
                     width),
             kStyleNormal);
       }
@@ -762,18 +762,18 @@ int main(int argc, char** argv) {
         status = "\xE2\x97\x8B";  // idle icon
       }
       int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-      std::string volStr = " Vol: " + std::to_string(volPct) + "%";
+      std::string volStr = " Vol: " + std::to_string(volPct) + (volPct > 100 ? "% (BOOST)" : "%");
       std::string suffix =
           formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status + volStr;
       int suffixWidth = utf8CodepointCount(suffix);
       int barWidth = width - suffixWidth - 3;
       if (barWidth < 10) {
-        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " + status + " V:" + std::to_string(volPct) + "%";
+        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " + status + " V:" + std::to_string(volPct) + (volPct > 100 ? "%!" : "%");
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 10) {
-        suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) + "%";
+        suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) + (volPct > 100 ? "%!" : "%");
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
