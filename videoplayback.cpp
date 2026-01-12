@@ -41,10 +41,6 @@ extern "C" {
 
 #include "timing_log.h"
 
-static VideoWindow g_videoWindow;
-static bool g_windowEnabledPersistent = false;
-static bool g_windowEnabledInitialized = false;
-
 namespace {
 #if RADIOIFY_ENABLE_FFMPEG_ERROR_LOG
 std::mutex gFfmpegLogMutex;
@@ -612,11 +608,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   AsciiArt art;
   GpuAsciiRenderer& gpuRenderer = sharedGpuRenderer();
-  if (!g_windowEnabledInitialized) {
-    g_windowEnabledPersistent = config.enableWindow;
-    g_windowEnabledInitialized = true;
-  }
-  bool& windowEnabled = g_windowEnabledPersistent;
+  VideoWindow videoWindow;
+  bool windowEnabled = config.enableWindow;
   bool gpuAvailable = true;
   VideoFrame frameBuffer;
   VideoFrame* frame = &frameBuffer;
@@ -800,8 +793,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     bool sizeChanged = (width != cachedWidth || maxHeight != cachedMaxHeight ||
                         frame->width != cachedFrameWidth ||
                         frame->height != cachedFrameHeight);
-
-    if (enableAscii || windowEnabled) {
+    if (enableAscii) {
       if (allowFrame && (frameChanged || clearHistory || sizeChanged)) {
         if (frame->width <= 0 || frame->height <= 0) {
           renderFailed = true;
@@ -837,32 +829,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               }
 
               if (windowEnabled) {
-                if (!g_videoWindow.IsOpen()) {
-                  g_videoWindow.Open(1280, 720, "Radioify Output");
+                if (!videoWindow.IsOpen()) {
+                  videoWindow.Open(1280, 720, "Radioify Output");
                 }
-                g_videoWindow.ShowWindow(true);
-
-                double ratio = 0.0;
-                if (totalSec > 0.0 && std::isfinite(totalSec)) {
-                  ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
-                }
-
-                WindowUiState ui;
-                ui.progress = (float)ratio;
-                ui.isPaused = isPaused;
-                ui.overlayAlpha = overlayVisible() ? 1.0f : 0.0f;
-                ui.title = toUtf8String(file.filename());
-                ui.timeStr = formatTime(displaySec) + " / " + formatTime(totalSec);
-
-                g_videoWindow.Present(frame->hwTexture.Get(), frame->hwTextureArrayIndex,
+                videoWindow.ShowWindow(true);
+                videoWindow.Present(frame->hwTexture.Get(), frame->hwTextureArrayIndex,
                                     frame->width, frame->height, frame->fullRange,
                                     frame->yuvMatrix, frame->yuvTransfer,
-                                    is10Bit ? 10 : 8, ui);
+                                    is10Bit ? 10 : 8);
                 renderRes = true; // Signal we processed the frame
                 artOk = true; 
               } else {
-                if (g_videoWindow.IsOpen()) {
-                  g_videoWindow.ShowWindow(false);
+                if (videoWindow.IsOpen()) {
+                  videoWindow.ShowWindow(false);
                 }
                 renderRes = gpuRenderer.RenderNV12Texture(
                     frame->hwTexture.Get(), frame->hwTextureArrayIndex,
@@ -1100,14 +1079,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   while (running) {
     finalizeAudioStart();
 
-    if (g_videoWindow.IsOpen()) {
-        g_videoWindow.PollEvents();
-        if (windowEnabled && !g_videoWindow.IsVisible()) {
+    if (videoWindow.IsOpen()) {
+        videoWindow.PollEvents();
+        if (windowEnabled && !videoWindow.IsVisible()) {
             windowEnabled = false;
         }
     }
-    
-    if (!running) break;
 
     // UI HEARTBEAT
     static auto lastUiHeartbeat = std::chrono::steady_clock::now();
@@ -1119,26 +1096,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
 
     InputEvent ev{};
-    auto getNextEvent = [&]() {
-        if (input.poll(ev)) return true;
-        if (g_videoWindow.IsOpen() && g_videoWindow.PollInput(ev)) {
-            // If it's a window mouse event in the bottom area, translate it to a seek
-            if (ev.type == InputEvent::Type::Mouse && ev.mouse.buttonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
-                // In VideoWindow::WindowProc we ensure y > height * 0.9
-                // We'll treat this as a ratio seek directly if possible, or fake a progress bar event.
-                // Since handleInputEvent is complex, let's just handle it here.
-                double ratio = (double)ev.mouse.pos.X / 1280.0; // This is a bit hacky as we don't know window width here
-                // Wait, if I want it to be robust, I should pass the ratio in the event.
-                // But InputEvent doesn't have a ratio field.
-            }
-            return true;
-        }
-        return false;
-    };
-
-    while (getNextEvent()) {
-      if (!running) break;
-      
+    while (input.poll(ev)) {
       if (ev.type == InputEvent::Type::Resize) {
         pendingResize = true;
         redraw = true;
@@ -1170,11 +1128,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           continue;
         }
 
-        if (ev.key.vk == VK_ESCAPE) {
-          running = false;
-          break; 
-        }
-
         if (handlePlaybackInput(ev, running, cb)) {
           triggerOverlay();
           redraw = true;
@@ -1187,21 +1140,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         const MouseEvent& mouse = ev.mouse;
         bool leftPressed =
             (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
-        
-        if (leftPressed && (mouse.control & 0x80000000)) {
-            // Special window-originated click
-            double winW = g_videoWindow.GetWidth();
-            if (winW > 0) {
-                double ratio = (double)mouse.pos.X / winW;
-                ratio = std::clamp(ratio, 0.0, 1.0);
-                double totalSec = player.durationUs() / 1000000.0;
-                if (totalSec > 0.0 && std::isfinite(totalSec)) {
-                    queueSeekRequest(ratio * totalSec);
-                }
-            }
-            continue;
-        }
-
         if (leftPressed &&
             (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
           if (progressBarWidth > 0 && mouse.pos.Y == progressBarY &&

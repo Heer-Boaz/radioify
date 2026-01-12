@@ -8,17 +8,6 @@
 #include <memory>
 
 #include "videocolor.h"
-#include "consoleinput.h"
-#include <vector>
-#include <mutex>
-
-struct WindowUiState {
-    float progress = 0.0f;
-    float overlayAlpha = 0.0f;
-    bool isPaused = false;
-    std::string title;
-    std::string timeStr;
-};
 
 class VideoWindow {
 public:
@@ -29,15 +18,11 @@ public:
     void Close();
 
     void Present(ID3D11Texture2D* texture, int arrayIndex, int width, int height,
-                 bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth,
-                 const WindowUiState& ui);
+                 bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth);
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
-    int GetWidth() const { return m_width; }
-    int GetHeight() const { return m_height; }
     void ShowWindow(bool show);
     void PollEvents();
-    bool PollInput(InputEvent& ev);
 
 private:
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -49,7 +34,6 @@ private:
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_renderTargetView;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_pixelShader;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_vertexShader;
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_uiShader;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
 
@@ -59,7 +43,4 @@ private:
     
     int m_width = 0;
     int m_height = 0;
-
-    std::vector<InputEvent> m_inputQueue;
-    std::mutex m_inputMutex;
 };
