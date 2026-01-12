@@ -14,6 +14,10 @@ namespace {
         uint32_t yuvMatrix;
         uint32_t yuvTransfer;
         uint32_t bitDepth;
+        float progress;
+        float overlayAlpha;
+        uint32_t isPaused;
+        uint32_t padding;
     };
 
     const char* g_shaderSource = R"(
@@ -27,6 +31,9 @@ namespace {
             uint yuvMatrix;
             uint yuvTransfer;
             uint bitDepth;
+            float uiProgress;
+            float uiAlpha;
+            uint uiPaused;
         };
 
         PS_INPUT VS(uint vid : SV_VertexID) {
@@ -69,17 +76,33 @@ namespace {
             return pow(max(vp - c1, 0.0) / (c2 - c3 * vp), 1.0 / m1);
         }
 
+        float HlgEotf(float v) {
+            const float a = 0.17883277;
+            const float b = 1.0 - 4.0 * a;
+            const float c = 0.5 - a * log(4.0 * a);
+            if (v <= 0.5) return (v * v) / 3.0;
+            return (exp((v - c) / a) + b) / 12.0;
+        }
+
+        float ToneMapFilmic(float x) {
+            const float A = 0.15, B = 0.50, C = 0.10, D = 0.20, E = 0.02, F = 0.30;
+            return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+        }
+
+        float LinearToSrgb(float v) {
+            v = max(v, 0.0);
+            return (v <= 0.0031308) ? (v * 12.92) : (1.055 * pow(v, 1.0 / 2.4) - 0.055);
+        }
+
         float3 ApplyHdrToSdr(float3 v) {
-            // Very basic tone map
+            v = saturate(v);
             float3 linearRgb;
-            if (yuvTransfer == 1) { // PQ
-                linearRgb = float3(PQEotf(v.r), PQEotf(v.g), PQEotf(v.b));
-            } else {
-                linearRgb = v;
-            }
-            float luma = dot(linearRgb, float3(0.2126, 0.7152, 0.0722));
-            float exposure = 1.0 / (1.0 + luma * 0.1); // simple Reinhard
-            return linearRgb * exposure;
+            if (yuvTransfer == 1) linearRgb = float3(PQEotf(v.r), PQEotf(v.g), PQEotf(v.b));
+            else if (yuvTransfer == 2) linearRgb = float3(HlgEotf(v.r), HlgEotf(v.g), HlgEotf(v.b));
+            else return v;
+            
+            float3 mapped = float3(ToneMapFilmic(linearRgb.r * 100.0), ToneMapFilmic(linearRgb.g * 100.0), ToneMapFilmic(linearRgb.b * 100.0));
+            return float3(LinearToSrgb(mapped.r), LinearToSrgb(mapped.g), LinearToSrgb(mapped.b));
         }
 
         float4 PS(PS_INPUT input) : SV_Target {
@@ -87,26 +110,41 @@ namespace {
             float2 uv = ExpandUV(texUV.Sample(sam, input.tex).rg);
             
             float r, g, b;
-            if (yuvMatrix == 2) { // BT.2020
-                r = y + 1.4746 * uv.y;
-                g = y - 0.16455 * uv.x - 0.57135 * uv.y;
-                b = y + 1.8814 * uv.x;
-            } else if (yuvMatrix == 1) { // BT.601
-                r = y + 1.4020 * uv.y;
-                g = y - 0.3441 * uv.x - 0.7141 * uv.y;
-                b = y + 1.7720 * uv.x;
-            } else { // BT.709
-                r = y + 1.5748 * uv.y;
-                g = y - 0.1873 * uv.x - 0.4681 * uv.y;
-                b = y + 1.8556 * uv.x;
-            }
+            if (yuvMatrix == 2) { r = y + 1.4746 * uv.y; g = y - 0.16455 * uv.x - 0.57135 * uv.y; b = y + 1.8814 * uv.x; }
+            else if (yuvMatrix == 1) { r = y + 1.4020 * uv.y; g = y - 0.3441 * uv.x - 0.7141 * uv.y; b = y + 1.7720 * uv.x; }
+            else { r = y + 1.5748 * uv.y; g = y - 0.1873 * uv.x - 0.4681 * uv.y; b = y + 1.8556 * uv.x; }
             
             float3 rgb = float3(r, g, b);
-            if (yuvTransfer != 0) {
-                rgb = ApplyHdrToSdr(rgb);
-            }
-            
+            if (yuvTransfer != 0) rgb = ApplyHdrToSdr(rgb);
             return float4(saturate(rgb), 1.0);
+        }
+
+        float4 PS_UI(PS_INPUT input) : SV_Target {
+            if (uiAlpha <= 0.01) discard;
+            float2 uv = input.tex;
+            float4 color = float4(0, 0, 0, 0);
+            bool hit = false;
+
+            // Progress bar at bottom (only UI element from console)
+            if (uv.y > 0.95 && uv.y < 0.99 && uv.x > 0.02 && uv.x < 0.98) {
+                float barX = (uv.x - 0.02) / 0.96;
+                if (barX < uiProgress) color = float4(1, 0.8, 0.2, 0.9);
+                else color = float4(0.3, 0.3, 0.3, 0.7);
+                hit = true;
+            }
+
+            // Pause icon (center)
+            if (uiPaused != 0) {
+                float2 c = float2(0.5, 0.5);
+                float2 d = abs(uv - c);
+                if (d.y < 0.06 && ((d.x > 0.015 && d.x < 0.025) || (d.x > 0.035 && d.x < 0.045))) {
+                    color = float4(1, 1, 1, 0.9);
+                    hit = true;
+                }
+            }
+
+            if (!hit) discard;
+            return color * uiAlpha;
         }
     )";
 }
@@ -133,11 +171,53 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             return 0;
         }
         if (uMsg == WM_CLOSE) {
-            pThis->ShowWindow(false);
+            ::ShowWindow(pThis->m_hWnd, SW_HIDE);
             return 0;
         }
         if (uMsg == WM_DESTROY) {
             pThis->m_hWnd = nullptr;
+            return 0;
+        }
+
+        if (uMsg == WM_KEYDOWN) {
+            InputEvent ev;
+            ev.type = InputEvent::Type::Key;
+            ev.key.vk = (WORD)wParam;
+            
+            // Map VK to ASCII for common keys if possible
+            if (wParam >= 'A' && wParam <= 'Z') ev.key.ch = (char)wParam;
+            else if (wParam == VK_SPACE) ev.key.ch = ' ';
+            else if (wParam == VK_ESCAPE) ev.key.ch = 27;
+            else if (wParam == VK_OEM_4) ev.key.ch = '[';
+            else if (wParam == VK_OEM_6) ev.key.ch = ']';
+
+            if (GetKeyState(VK_CONTROL) & 0x8000) ev.key.control |= LEFT_CTRL_PRESSED;
+            if (GetKeyState(VK_SHIFT) & 0x8000) ev.key.control |= SHIFT_PRESSED;
+            if (GetKeyState(VK_MENU) & 0x8000) ev.key.control |= LEFT_ALT_PRESSED;
+
+            std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
+            pThis->m_inputQueue.push_back(ev);
+            return 0;
+        }
+
+        if (uMsg == WM_LBUTTONDOWN || uMsg == WM_MOUSEMOVE) {
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+            bool leftPressed = (wParam & MK_LBUTTON) != 0;
+            
+            // Mouse seeking in bottom area (like terminal)
+            if (leftPressed && pThis->m_height > 0 && y > pThis->m_height * 0.90) {
+                InputEvent ev;
+                ev.type = InputEvent::Type::Mouse;
+                ev.mouse.pos.X = (SHORT)x;
+                ev.mouse.pos.Y = (SHORT)y;
+                ev.mouse.buttonState = FROM_LEFT_1ST_BUTTON_PRESSED;
+                ev.mouse.eventFlags = (uMsg == WM_MOUSEMOVE) ? MOUSE_MOVED : 0;
+                ev.mouse.control = 0x80000000; // Custom flag for window-originated event
+                
+                std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
+                pThis->m_inputQueue.push_back(ev);
+            }
             return 0;
         }
     }
@@ -173,16 +253,20 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
 
     ID3D11Device* device = getSharedGpuDevice();
     
-    Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, errorBlob;
-    if (FAILED(D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "VS", "vs_4_0", 0, 0, &vsBlob, &errorBlob))) {
+    Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, uiBlob, errorBlob;
+    if (FAILED(D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "VS", "vs_5_0", 0, 0, &vsBlob, &errorBlob))) {
         return false;
     }
-    if (FAILED(D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "PS", "ps_4_0", 0, 0, &psBlob, &errorBlob))) {
+    if (FAILED(D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "PS", "ps_5_0", 0, 0, &psBlob, &errorBlob))) {
+        return false;
+    }
+    if (FAILED(D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "PS_UI", "ps_5_0", 0, 0, &uiBlob, &errorBlob))) {
         return false;
     }
 
     device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), NULL, &m_vertexShader);
     device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), NULL, &m_pixelShader);
+    device->CreatePixelShader(uiBlob->GetBufferPointer(), uiBlob->GetBufferSize(), NULL, &m_uiShader);
 
     D3D11_BUFFER_DESC cbDesc = {};
     cbDesc.ByteWidth = sizeof(ShaderConstants);
@@ -255,18 +339,28 @@ void VideoWindow::Resize(int width, int height) {
 
 void VideoWindow::Close() {
     if (m_hWnd) {
-        DestroyWindow(m_hWnd);
-        m_hWnd = nullptr;
+        ::ShowWindow(m_hWnd, SW_HIDE);
     }
+    
+    if (m_swapChain) {
+        m_swapChain->SetFullscreenState(FALSE, NULL);
+    }
+    
     m_swapChain.Reset();
     m_renderTargetView.Reset();
     m_pixelShader.Reset();
     m_vertexShader.Reset();
+    m_uiShader.Reset();
     m_sampler.Reset();
     m_constantBuffer.Reset();
     m_copyTexture.Reset();
     m_copySrvY.Reset();
     m_copySrvUV.Reset();
+
+    if (m_hWnd) {
+        DestroyWindow(m_hWnd);
+        m_hWnd = nullptr;
+    }
 }
 
 void VideoWindow::ShowWindow(bool show) {
@@ -283,13 +377,25 @@ void VideoWindow::PollEvents() {
     }
 }
 
+bool VideoWindow::PollInput(InputEvent& ev) {
+    std::lock_guard<std::mutex> lock(m_inputMutex);
+    if (m_inputQueue.empty()) return false;
+    ev = m_inputQueue.front();
+    m_inputQueue.erase(m_inputQueue.begin());
+    return true;
+}
+
 void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, int height,
-                           bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth) {
+                           bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth,
+                           const WindowUiState& ui) {
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
 
     ID3D11Device* device = getSharedGpuDevice();
-    ID3D11DeviceContext* context;
+    if (!device) return;
+
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
+    if (!context || !m_constantBuffer) return;
     
     // Update constants
     {
@@ -300,6 +406,9 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
             sc->yuvMatrix = (uint32_t)matrix;
             sc->yuvTransfer = (uint32_t)transfer;
             sc->bitDepth = (uint32_t)bitDepth;
+            sc->progress = ui.progress;
+            sc->overlayAlpha = ui.overlayAlpha;
+            sc->isPaused = ui.isPaused ? 1 : 0;
             context->Unmap(m_constantBuffer.Get(), 0);
         }
     }
@@ -392,8 +501,13 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
         ID3D11ShaderResourceView* srvs[] = { srvY.Get(), srvUV.Get() };
         context->PSSetShaderResources(0, 2, srvs);
         context->Draw(4, 0);
+
+        // Draw UI
+        if (ui.overlayAlpha > 0.01f) {
+            context->PSSetShader(m_uiShader.Get(), NULL, 0);
+            context->Draw(4, 0);
+        }
     }
 
     m_swapChain->Present(1, 0);
-    context->Release();
 }
