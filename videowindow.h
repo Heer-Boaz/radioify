@@ -36,6 +36,7 @@ public:
     void ShowWindow(bool show);
     void PollEvents();
     bool PollInput(InputEvent& ev);
+    void Cleanup();
 
 private:
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -54,6 +55,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_copyTexture;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_copySrvY;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_copySrvUV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_copySrvRGBA;
     
     int m_width = 0;
     int m_height = 0;

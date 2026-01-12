@@ -86,3 +86,7 @@ packages/
 # (Adjust as needed for any generated sources you want to ignore)
 
 **.webm
+
+# Useless files
+**.md
+!README.md

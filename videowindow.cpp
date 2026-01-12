@@ -2,6 +2,7 @@
 #include "gpu_shared.h"
 #include <iostream>
 #include <vector>
+#include <mutex>
 #include <d3dcompiler.h>
 
 #pragma comment(lib, "d3d11.lib")
@@ -17,8 +18,10 @@ namespace {
         float progress;
         float overlayAlpha;
         uint32_t isPaused;
-        uint32_t padding;
+        uint32_t hasRGBA;
     };
+
+    static_assert((sizeof(ShaderConstants) % 16) == 0, "ShaderConstants size must be 16-byte aligned");
 
     const char* g_shaderSource = R"(
         struct PS_INPUT {
@@ -34,6 +37,7 @@ namespace {
             float uiProgress;
             float uiAlpha;
             uint uiPaused;
+            uint uiHasRGBA;
         };
 
         PS_INPUT VS(uint vid : SV_VertexID) {
@@ -45,6 +49,7 @@ namespace {
 
         Texture2D texY : register(t0);
         Texture2D texUV : register(t1);
+        Texture2D texRGBA : register(t2);
         SamplerState sam : register(s0);
 
         float ExpandYNorm(float yNorm) {
@@ -106,6 +111,11 @@ namespace {
         }
 
         float4 PS(PS_INPUT input) : SV_Target {
+            if (uiHasRGBA != 0) {
+                float4 c = texRGBA.Sample(sam, input.tex);
+                return float4(saturate(c.rgb), 1.0);
+            }
+
             float y = ExpandYNorm(texY.Sample(sam, input.tex).r);
             float2 uv = ExpandUV(texUV.Sample(sam, input.tex).rg);
             
@@ -153,6 +163,46 @@ VideoWindow::VideoWindow() {}
 
 VideoWindow::~VideoWindow() {
     Close();
+}
+
+void VideoWindow::Cleanup() {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    ID3D11Device* device = getSharedGpuDevice();
+    if (!device) return;
+
+    ID3D11DeviceContext* context = nullptr;
+    device->GetImmediateContext(&context);
+    if (!context) return;
+
+    // Unbind shader resources / UAVs / RTVs and clear state to avoid driver pinning
+    ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+    context->PSSetShaderResources(0, 5, nullSRVs);
+    context->CSSetShaderResources(0, 5, nullSRVs);
+
+    ID3D11UnorderedAccessView* nullUAVs[3] = { nullptr, nullptr, nullptr };
+    context->CSSetUnorderedAccessViews(0, 3, nullUAVs, nullptr);
+
+    ID3D11RenderTargetView* nullRTV = nullptr;
+    context->OMSetRenderTargets(0, &nullRTV, nullptr);
+
+    context->VSSetShader(nullptr, nullptr, 0);
+    context->PSSetShader(nullptr, nullptr, 0);
+
+    // Force clear/flush to ensure driver releases any references
+    context->ClearState();
+    context->Flush();
+    context->Release();
+
+    // Reset COM objects we hold
+    m_renderTargetView.Reset();
+    m_pixelShader.Reset();
+    m_vertexShader.Reset();
+    m_uiShader.Reset();
+    m_sampler.Reset();
+    m_constantBuffer.Reset();
+    m_copySrvY.Reset();
+    m_copySrvUV.Reset();
+    m_copyTexture.Reset();
 }
 
 LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -225,6 +275,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 }
 
 bool VideoWindow::Open(int width, int height, const std::string& title) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     HINSTANCE hInstance = GetModuleHandle(NULL);
     const wchar_t* className = L"RadioifyVideoWindow";
 
@@ -252,28 +303,52 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
     if (!CreateSwapChain(width, height)) return false;
 
     ID3D11Device* device = getSharedGpuDevice();
-    
-    Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, uiBlob, errorBlob;
-    if (FAILED(D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "VS", "vs_5_0", 0, 0, &vsBlob, &errorBlob))) {
-        return false;
-    }
-    if (FAILED(D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "PS", "ps_5_0", 0, 0, &psBlob, &errorBlob))) {
-        return false;
-    }
-    if (FAILED(D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "PS_UI", "ps_5_0", 0, 0, &uiBlob, &errorBlob))) {
+    if (!device) {
+        std::fprintf(stderr, "VideoWindow: no device in Open()\n");
         return false;
     }
 
-    device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), NULL, &m_vertexShader);
-    device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), NULL, &m_pixelShader);
-    device->CreatePixelShader(uiBlob->GetBufferPointer(), uiBlob->GetBufferSize(), NULL, &m_uiShader);
+    // Ensure multithread protection if available (ascii renderer enables this)
+    {
+        Microsoft::WRL::ComPtr<ID3D10Multithread> mt;
+        if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&mt)))) {
+            mt->SetMultithreadProtected(TRUE);
+        }
+    }
+
+    Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, uiBlob, errorBlob;
+    HRESULT hr = D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "VS", "vs_5_0", 0, 0, &vsBlob, &errorBlob);
+    if (FAILED(hr)) {
+        if (errorBlob) {
+            std::fprintf(stderr, "VideoWindow: VS compile error: %s\n", (const char*)errorBlob->GetBufferPointer());
+        }
+        return false;
+    }
+    hr = D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "PS", "ps_5_0", 0, 0, &psBlob, &errorBlob);
+    if (FAILED(hr)) {
+        if (errorBlob) std::fprintf(stderr, "VideoWindow: PS compile error: %s\n", (const char*)errorBlob->GetBufferPointer());
+        return false;
+    }
+    hr = D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "PS_UI", "ps_5_0", 0, 0, &uiBlob, &errorBlob);
+    if (FAILED(hr)) {
+        if (errorBlob) std::fprintf(stderr, "VideoWindow: PS_UI compile error: %s\n", (const char*)errorBlob->GetBufferPointer());
+        return false;
+    }
+
+    hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), NULL, &m_vertexShader);
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateVertexShader failed (0x%08X)\n", static_cast<unsigned int>(hr)); return false; }
+    hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), NULL, &m_pixelShader);
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(PS) failed (0x%08X)\n", static_cast<unsigned int>(hr)); return false; }
+    hr = device->CreatePixelShader(uiBlob->GetBufferPointer(), uiBlob->GetBufferSize(), NULL, &m_uiShader);
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); return false; }
 
     D3D11_BUFFER_DESC cbDesc = {};
     cbDesc.ByteWidth = sizeof(ShaderConstants);
     cbDesc.Usage = D3D11_USAGE_DYNAMIC;
     cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    device->CreateBuffer(&cbDesc, NULL, &m_constantBuffer);
+    hr = device->CreateBuffer(&cbDesc, NULL, &m_constantBuffer);
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBuffer(constant) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Cleanup(); return false; }
 
     D3D11_SAMPLER_DESC sampDesc = {};
     sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -283,7 +358,8 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
     sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
     sampDesc.MinLOD = 0;
     sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
-    device->CreateSamplerState(&sampDesc, &m_sampler);
+    hr = device->CreateSamplerState(&sampDesc, &m_sampler);
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateSamplerState failed (0x%08X)\n", static_cast<unsigned int>(hr)); Cleanup(); return false; }
 
     ::ShowWindow(m_hWnd, SW_SHOW);
     m_width = width;
@@ -293,7 +369,16 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
 }
 
 bool VideoWindow::CreateSwapChain(int width, int height) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     ID3D11Device* device = getSharedGpuDevice();
+    if (!device) {
+        std::fprintf(stderr, "VideoWindow: no shared GPU device available\n");
+        return false;
+    }
+    if (width <= 0 || height <= 0) {
+        std::fprintf(stderr, "VideoWindow: invalid swapchain dimensions %d x %d\n", width, height);
+        return false;
+    }
     
     DXGI_SWAP_CHAIN_DESC scd = {};
     scd.BufferCount = 2;
@@ -311,9 +396,13 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
     dxgiDevice->GetAdapter(&dxgiAdapter);
     
     Microsoft::WRL::ComPtr<IDXGIFactory> dxgiFactory;
-    dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory));
+    if (FAILED(dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory))) || !dxgiFactory) {
+        std::fprintf(stderr, "VideoWindow: failed to get DXGI factory\n");
+        return false;
+    }
 
     if (FAILED(dxgiFactory->CreateSwapChain(device, &scd, &m_swapChain))) {
+        std::fprintf(stderr, "VideoWindow: CreateSwapChain failed\n");
         return false;
     }
 
@@ -322,40 +411,48 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
 }
 
 void VideoWindow::Resize(int width, int height) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_swapChain) return;
-
     m_renderTargetView.Reset();
-    m_swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+    HRESULT hr = m_swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+    if (FAILED(hr)) return;
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
-    m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
-    
+    hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+    if (FAILED(hr) || !backBuffer) return;
+
     ID3D11Device* device = getSharedGpuDevice();
-    device->CreateRenderTargetView(backBuffer.Get(), NULL, &m_renderTargetView);
-    
+    if (!device) return;
+    hr = device->CreateRenderTargetView(backBuffer.Get(), NULL, &m_renderTargetView);
+    if (FAILED(hr)) {
+        m_renderTargetView.Reset();
+        return;
+    }
+
     m_width = width;
     m_height = height;
 }
 
 void VideoWindow::Close() {
+    // Hide the window first to release focus/ownership of the monitor
     if (m_hWnd) {
         ::ShowWindow(m_hWnd, SW_HIDE);
     }
-    
+    // Perform centralized cleanup (unbind, ClearState, flush, reset local resources)
+    Cleanup();
+
+    // If swapchain is in full-screen exclusive, revert to windowed first
     if (m_swapChain) {
-        m_swapChain->SetFullscreenState(FALSE, NULL);
+        // Best-effort: leave fullscreen and present once so the driver releases surfaces
+        (void)m_swapChain->SetFullscreenState(FALSE, NULL);
+        IDXGISwapChain* raw = m_swapChain.Get();
+        if (raw) {
+            raw->Present(0, 0);
+        }
     }
-    
+
+    // Release swapchain last
     m_swapChain.Reset();
-    m_renderTargetView.Reset();
-    m_pixelShader.Reset();
-    m_vertexShader.Reset();
-    m_uiShader.Reset();
-    m_sampler.Reset();
-    m_constantBuffer.Reset();
-    m_copyTexture.Reset();
-    m_copySrvY.Reset();
-    m_copySrvUV.Reset();
 
     if (m_hWnd) {
         DestroyWindow(m_hWnd);
@@ -388,6 +485,7 @@ bool VideoWindow::PollInput(InputEvent& ev) {
 void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, int height,
                            bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth,
                            const WindowUiState& ui) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
 
     ID3D11Device* device = getSharedGpuDevice();
@@ -396,22 +494,9 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
     if (!context || !m_constantBuffer) return;
+    if (!m_renderTargetView) return;
     
-    // Update constants
-    {
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-            ShaderConstants* sc = (ShaderConstants*)mapped.pData;
-            sc->isFullRange = fullRange ? 1 : 0;
-            sc->yuvMatrix = (uint32_t)matrix;
-            sc->yuvTransfer = (uint32_t)transfer;
-            sc->bitDepth = (uint32_t)bitDepth;
-            sc->progress = ui.progress;
-            sc->overlayAlpha = ui.overlayAlpha;
-            sc->isPaused = ui.isPaused ? 1 : 0;
-            context->Unmap(m_constantBuffer.Get(), 0);
-        }
-    }
+    // Update of constant buffer moved below (after determining texture format such as RGBA)
 
     // Set up rendering
     float clearColor[4] = { 0, 0, 0, 1 };
@@ -428,13 +513,53 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
     context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
     context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
 
+    if (!texture) return;
     D3D11_TEXTURE2D_DESC srcDesc;
     texture->GetDesc(&srcDesc);
 
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvY, srvUV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvY, srvUV, srvRGBA;
     bool is10Bit = (srcDesc.Format == DXGI_FORMAT_P010);
+    bool isRGBA = (srcDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || srcDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM || srcDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
 
-    if (srcDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
+    // Update constants (now that we know if RGBA path is requested)
+    {
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+            ShaderConstants* sc = (ShaderConstants*)mapped.pData;
+            sc->isFullRange = fullRange ? 1 : 0;
+            sc->yuvMatrix = (uint32_t)matrix;
+            sc->yuvTransfer = (uint32_t)transfer;
+            sc->bitDepth = (uint32_t)bitDepth;
+            sc->progress = ui.progress;
+            sc->overlayAlpha = ui.overlayAlpha;
+            sc->isPaused = ui.isPaused ? 1 : 0;
+            sc->hasRGBA = isRGBA ? 1u : 0u;
+            context->Unmap(m_constantBuffer.Get(), 0);
+        }
+    }
+
+    if (isRGBA) {
+        if (srcDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format = srcDesc.Format;
+            if (srcDesc.ArraySize > 1) {
+                srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+                srvDesc.Texture2DArray.FirstArraySlice = arrayIndex;
+                srvDesc.Texture2DArray.ArraySize = 1;
+                srvDesc.Texture2DArray.MipLevels = 1;
+            } else {
+                srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                srvDesc.Texture2D.MipLevels = 1;
+            }
+            HRESULT hrRGBA = device->CreateShaderResourceView(texture, &srvDesc, &srvRGBA);
+            if (FAILED(hrRGBA) || !srvRGBA) {
+                std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(RGBA) failed (0x%08X), falling back to copy path\n", static_cast<unsigned int>(hrRGBA));
+                srvRGBA.Reset();
+            }
+        }
+    }
+
+    if (!isRGBA && (srcDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE)) {
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
         srvDescY.Format = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
         if (srcDesc.ArraySize > 1) {
@@ -446,11 +571,25 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
             srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             srvDescY.Texture2D.MipLevels = 1;
         }
-        device->CreateShaderResourceView(texture, &srvDescY, &srvY);
+        HRESULT hrY = device->CreateShaderResourceView(texture, &srvDescY, &srvY);
+        if (FAILED(hrY) || !srvY) {
+            // Fallback to copy path if SRV creation fails
+            std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(Y) failed (0x%08X), falling back to copy path\n", static_cast<unsigned int>(hrY));
+            srvY.Reset();
+        }
 
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = srvDescY;
         srvDescUV.Format = is10Bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-        device->CreateShaderResourceView(texture, &srvDescUV, &srvUV);
+        HRESULT hrUV = device->CreateShaderResourceView(texture, &srvDescUV, &srvUV);
+        if (FAILED(hrUV) || !srvUV) {
+            std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(UV) failed (0x%08X), falling back to copy path\n", static_cast<unsigned int>(hrUV));
+            srvUV.Reset();
+        }
+
+        if (!srvY || !srvUV) {
+            // Force path through copy texture below
+            srvY.Reset(); srvUV.Reset();
+        }
     } else {
         // Must copy to an SRV-enabled texture
         bool needNewCopy = !m_copyTexture;
@@ -463,6 +602,18 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
         }
 
         if (needNewCopy) {
+            // Validate dimensions to avoid enormous allocations / driver issues
+            const uint32_t MAX_COPY_DIM = 8192u; // conservative limit
+            if (srcDesc.Width == 0 || srcDesc.Height == 0 || srcDesc.Width > MAX_COPY_DIM || srcDesc.Height > MAX_COPY_DIM) {
+                std::fprintf(stderr, "VideoWindow: refusing to create copy texture with dimensions %u x %u\n", srcDesc.Width, srcDesc.Height);
+                return;
+            }
+
+            // Unbind any SRVs that might reference the old texture before resetting
+            ID3D11ShaderResourceView* nullSRVs[3] = { nullptr, nullptr, nullptr };
+            context->PSSetShaderResources(0, 3, nullSRVs);
+            context->Flush();
+
             m_copyTexture.Reset();
             m_copySrvY.Reset();
             m_copySrvUV.Reset();
@@ -475,17 +626,45 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
             cDesc.SampleDesc.Count = 1;
             cDesc.Usage = D3D11_USAGE_DEFAULT;
             cDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            if (FAILED(device->CreateTexture2D(&cDesc, NULL, &m_copyTexture))) return;
+            HRESULT hr = device->CreateTexture2D(&cDesc, NULL, &m_copyTexture);
+            if (FAILED(hr) || !m_copyTexture) {
+                std::fprintf(stderr, "VideoWindow: CreateTexture2D(copy) failed (0x%08X)\n", static_cast<unsigned int>(hr));
+                return;
+            }
 
-            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
-            srvDescY.Format = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
-            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srvDescY.Texture2D.MipLevels = 1;
-            device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescY, &m_copySrvY);
+            if (isRGBA) {
+                D3D11_SHADER_RESOURCE_VIEW_DESC srvDescRGBA = {};
+                srvDescRGBA.Format = srcDesc.Format;
+                srvDescRGBA.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                srvDescRGBA.Texture2D.MipLevels = 1;
+                hr = device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescRGBA, &m_copySrvRGBA);
+                if (FAILED(hr)) {
+                    std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(RGBA copy) failed (0x%08X)\n", static_cast<unsigned int>(hr));
+                    m_copyTexture.Reset();
+                    return;
+                }
+            } else {
+                D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
+                srvDescY.Format = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+                srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                srvDescY.Texture2D.MipLevels = 1;
+                hr = device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescY, &m_copySrvY);
+                if (FAILED(hr)) {
+                    std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(Y) failed (0x%08X)\n", static_cast<unsigned int>(hr));
+                    m_copyTexture.Reset();
+                    return;
+                }
 
-            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = srvDescY;
-            srvDescUV.Format = is10Bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-            device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescUV, &m_copySrvUV);
+                D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = srvDescY;
+                srvDescUV.Format = is10Bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+                hr = device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescUV, &m_copySrvUV);
+                if (FAILED(hr)) {
+                    std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(UV) failed (0x%08X)\n", static_cast<unsigned int>(hr));
+                    m_copySrvY.Reset();
+                    m_copyTexture.Reset();
+                    return;
+                }
+            }
         }
 
         if (srcDesc.ArraySize > 1) {
@@ -493,6 +672,8 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
         } else {
             context->CopyResource(m_copyTexture.Get(), texture);
         }
+        // Ensure copy completes before sampling; flush to the driver so subsequent Draw samples updated data
+        context->Flush();
         srvY = m_copySrvY;
         srvUV = m_copySrvUV;
     }
@@ -509,5 +690,28 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
         }
     }
 
-    m_swapChain->Present(1, 0);
+    HRESULT hr = m_swapChain->Present(1, 0);
+
+    // Unbind SRVs, samplers and constant buffers to avoid holding references across frames
+    ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
+    context->PSSetShaderResources(0, 2, nullSRVs);
+    context->CSSetShaderResources(0, 2, nullSRVs);
+    ID3D11SamplerState* nullSamplers[1] = { nullptr };
+    context->PSSetSamplers(0, 1, nullSamplers);
+    ID3D11Buffer* nullCB[1] = { nullptr };
+    context->PSSetConstantBuffers(0, 1, nullCB);
+
+    if (FAILED(hr)) {
+        std::fprintf(stderr, "VideoWindow: Present failed (0x%08X)\n", static_cast<unsigned int>(hr));
+        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
+            ID3D11Device* device = getSharedGpuDevice();
+            if (device) {
+                HRESULT reason = device->GetDeviceRemovedReason();
+                std::fprintf(stderr, "VideoWindow: device removed/reset reason=0x%08X\n", static_cast<unsigned int>(reason));
+            }
+            // Try to clean up GPU state and drop the swapchain to avoid hangs
+            Cleanup();
+            m_swapChain.Reset();
+        }
+    }
 }
