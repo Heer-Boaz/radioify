@@ -3,6 +3,9 @@
 #include <iostream>
 #include <vector>
 #include <mutex>
+#include <string>
+#include <cmath>
+#include <cstdio>
 #include <d3dcompiler.h>
 
 #pragma comment(lib, "d3d11.lib")
@@ -15,13 +18,155 @@ namespace {
         uint32_t yuvMatrix;
         uint32_t yuvTransfer;
         uint32_t bitDepth;
+
         float progress;
         float overlayAlpha;
         uint32_t isPaused;
         uint32_t hasRGBA;
+
+        uint32_t volPct;
+        uint32_t pad0;
+        float textTop;
+        float textHeight;
+
+        float textLeft;
+        float textWidth;
+        uint32_t pad1;
+        uint32_t pad2;
     };
 
     static_assert((sizeof(ShaderConstants) % 16) == 0, "ShaderConstants size must be 16-byte aligned");
+
+    static std::string formatTimeDouble(double s) {
+        if (!(s >= 0.0) || !std::isfinite(s)) return std::string("--:--");
+        int total = static_cast<int>(std::llround(s));
+        int h = total / 3600;
+        int m = (total % 3600) / 60;
+        int sec = total % 60;
+        char buf[64];
+        if (h > 0) std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, sec);
+        else std::snprintf(buf, sizeof(buf), "%02d:%02d", m, sec);
+        return std::string(buf);
+    }
+
+    // Glyph font for ASCII-style overlay (5x7) -----------------------------------------------------------------
+    typedef struct MenuGlyph { char c; uint8_t rows[7]; } MenuGlyph;
+
+    static const MenuGlyph kMenuGlyphs[] = {
+        {' ', {0x00,0x00,0x00,0x00,0x00,0x00,0x00}},
+        {'+', {0x00,0x04,0x04,0x1F,0x04,0x04,0x00}},
+        {'-', {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}},
+        {'.', {0x00,0x00,0x00,0x00,0x00,0x06,0x06}},
+        {'/', {0x01,0x02,0x04,0x08,0x10,0x00,0x00}},
+        {':', {0x00,0x04,0x04,0x00,0x04,0x04,0x00}},
+        {'?', {0x0E,0x11,0x01,0x02,0x04,0x00,0x04}},
+        {'0', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}},
+        {'1', {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}},
+        {'2', {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}},
+        {'3', {0x1E,0x01,0x01,0x0E,0x01,0x01,0x1E}},
+        {'4', {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}},
+        {'5', {0x1F,0x10,0x10,0x1E,0x01,0x01,0x1E}},
+        {'6', {0x0E,0x10,0x10,0x1E,0x11,0x11,0x0E}},
+        {'7', {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}},
+        {'8', {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}},
+        {'9', {0x0E,0x11,0x11,0x0F,0x01,0x01,0x0E}},
+        {'A', {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}},
+        {'B', {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}},
+        {'C', {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}},
+        {'D', {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E}},
+        {'E', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}},
+        {'F', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}},
+        {'G', {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}},
+        {'H', {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}},
+        {'I', {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}},
+        {'J', {0x07,0x02,0x02,0x02,0x12,0x12,0x0C}},
+        {'K', {0x11,0x12,0x14,0x18,0x14,0x12,0x11}},
+        {'L', {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}},
+        {'M', {0x11,0x1B,0x15,0x11,0x11,0x11,0x11}},
+        {'N', {0x11,0x19,0x15,0x13,0x11,0x11,0x11}},
+        {'O', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}},
+        {'P', {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}},
+        {'Q', {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}},
+        {'R', {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}},
+        {'S', {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}},
+        {'T', {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}},
+        {'U', {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}},
+        {'V', {0x11,0x11,0x11,0x11,0x0A,0x0A,0x04}},
+        {'W', {0x11,0x11,0x11,0x15,0x15,0x1B,0x11}},
+        {'X', {0x11,0x0A,0x04,0x04,0x04,0x0A,0x11}},
+        {'Y', {0x11,0x0A,0x04,0x04,0x04,0x04,0x04}},
+        {'Z', {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}},
+        {'(', {0x02,0x04,0x08,0x08,0x08,0x04,0x02}},
+        {')', {0x08,0x04,0x02,0x02,0x02,0x04,0x08}},
+        {'_', {0x00,0x00,0x00,0x00,0x00,0x00,0x1F}},
+    };
+
+    static const uint8_t* menu_glyph_rows(char c) {
+        static const uint8_t k_unknown[7] = {0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04};
+        for (size_t i = 0; i < sizeof(kMenuGlyphs) / sizeof(kMenuGlyphs[0]); ++i) {
+            if (kMenuGlyphs[i].c == c) {
+                return kMenuGlyphs[i].rows;
+            }
+        }
+        return k_unknown;
+    }
+
+    // Bitmap-font text rasterizer (5x7 glyphs) into BGRA pixels
+    static bool renderTextToBitmap(const std::string& utf8, int width, int height, std::vector<uint8_t>& outPixels) {
+        outPixels.clear();
+        if (width <= 0 || height <= 0) return false;
+        // Uppercase the input (font table is uppercase + digits/punct)
+        std::string text;
+        for (unsigned char ch : utf8) {
+            if (ch >= 'a' && ch <= 'z') text.push_back(static_cast<char>(ch - 'a' + 'A'));
+            else text.push_back(ch);
+        }
+        const int glyphW = 5;
+        const int glyphH = 7;
+        const int spacing = 1;
+        int charCount = static_cast<int>(text.size());
+        // Compute scale constrained by both available height and width so glyphs keep correct proportions
+        int maxScaleVert = std::max(1, height / glyphH);
+        int maxScaleHoriz = std::max(1, width / std::max(1, charCount * (glyphW + spacing)));
+        // cap scale based on window size so it can grow on fullscreen but not unbounded
+        int maxCap = std::max(3, height / 80);
+        int scale = std::min({maxScaleVert, maxScaleHoriz, maxCap});
+        if (scale < 1) scale = 1;
+        int textPxH = glyphH * scale;
+        // Create BGRA buffer, clear to transparent
+        outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4, 0);
+        int totalTextWidth = charCount * (glyphW + spacing) * scale;
+        int startX = std::max(0, (width - totalTextWidth) / 2);
+        int yOff = std::max(0, (height - textPxH) / 2);
+        for (int ci = 0; ci < charCount; ++ci) {
+            char c = text[ci];
+            const uint8_t* rows = menu_glyph_rows(c);
+            int baseX = startX + ci * (glyphW + spacing) * scale;
+            for (int gy = 0; gy < glyphH; ++gy) {
+                uint8_t row = rows[gy];
+                for (int gx = 0; gx < glyphW; ++gx) {
+                    bool set = ((row >> (glyphW - 1 - gx)) & 0x1) != 0;
+                    if (!set) continue;
+                    // scale pixel block
+                    for (int sy = 0; sy < scale; ++sy) {
+                        int py = yOff + gy * scale + sy;
+                        if (py < 0 || py >= height) continue;
+                        for (int sx = 0; sx < scale; ++sx) {
+                            int px = baseX + gx * scale + sx;
+                            if (px < 0 || px >= width) continue;
+                            size_t idx = (static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)) * 4;
+                            // white color, fully opaque (BGRA)
+                            outPixels[idx + 0] = 255;
+                            outPixels[idx + 1] = 255;
+                            outPixels[idx + 2] = 255;
+                            outPixels[idx + 3] = 255;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
 
     const char* g_shaderSource = R"(
         struct PS_INPUT {
@@ -38,6 +183,12 @@ namespace {
             float uiAlpha;
             uint uiPaused;
             uint uiHasRGBA;
+            uint uiVolPct;
+            uint uiPad0;
+            float uiTextTop;
+            float uiTextHeight;
+            float uiTextLeft;
+            float uiTextWidth;
         };
 
         PS_INPUT VS(uint vid : SV_VertexID) {
@@ -50,6 +201,7 @@ namespace {
         Texture2D texY : register(t0);
         Texture2D texUV : register(t1);
         Texture2D texRGBA : register(t2);
+        Texture2D texText : register(t3);
         SamplerState sam : register(s0);
 
         float ExpandYNorm(float yNorm) {
@@ -135,20 +287,37 @@ namespace {
             float4 color = float4(0, 0, 0, 0);
             bool hit = false;
 
-            // Progress bar at bottom (only UI element from console)
-            if (uv.y > 0.95 && uv.y < 0.99 && uv.x > 0.02 && uv.x < 0.98) {
+            // Progress bar at bottom (only UI element from console) - thinner
+            if (uv.y > 0.96 && uv.y < 0.985 && uv.x > 0.02 && uv.x < 0.98) {
                 float barX = (uv.x - 0.02) / 0.96;
                 if (barX < uiProgress) color = float4(1, 0.8, 0.2, 0.9);
                 else color = float4(0.3, 0.3, 0.3, 0.7);
                 hit = true;
             }
 
-            // Pause icon (center)
+            // Central pause icon (draw two small vertical bars)
             if (uiPaused != 0) {
                 float2 c = float2(0.5, 0.5);
                 float2 d = abs(uv - c);
-                if (d.y < 0.06 && ((d.x > 0.015 && d.x < 0.025) || (d.x > 0.035 && d.x < 0.045))) {
-                    color = float4(1, 1, 1, 0.9);
+                // Two vertical bars centered horizontally
+                if (d.y < 0.06) {
+                    // left bar
+                    if (uv.x > 0.48 && uv.x < 0.495) { color = float4(1,1,1,0.95); hit = true; }
+                    // right bar
+                    if (uv.x > 0.505 && uv.x < 0.52) { color = float4(1,1,1,0.95); hit = true; }
+                }
+            }
+
+
+
+            // Text overlay sampled from a CPU-generated texture (t3)
+            if (uiTextHeight > 0.0 && uv.y >= uiTextTop && uv.y <= (uiTextTop + uiTextHeight) && uv.x >= uiTextLeft && uv.x <= (uiTextLeft + uiTextWidth)) {
+                float localY = (uv.y - uiTextTop) / uiTextHeight;
+                float localX = (uv.x - uiTextLeft) / uiTextWidth;
+                float2 textUV = float2(localX, localY);
+                float4 t = texText.Sample(sam, textUV);
+                if (t.a > 0.01) {
+                    color = t;
                     hit = true;
                 }
             }
@@ -163,6 +332,167 @@ VideoWindow::VideoWindow() {}
 
 VideoWindow::~VideoWindow() {
     Close();
+}
+
+bool VideoWindow::MakeFullscreen() {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (!m_hWnd || !m_swapChain) return false;
+    // Save current style and rect
+    m_prevStyle = GetWindowLong(m_hWnd, GWL_STYLE);
+    GetWindowRect(m_hWnd, &m_prevRect);
+
+    // Feature toggle: when false we DO NOT attempt any fallback (exclusive fullscreen)
+    static constexpr bool kAllowFullscreenFallback = false; // TEMP: user requested no fallback
+
+    // Prefer borderless fullscreen (WS_POPUP) as the only allowed method when fallback is disabled
+    HMONITOR hm = MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi; mi.cbSize = sizeof(mi);
+
+    // Save extended style so we can restore it on exit
+    m_prevExStyle = GetWindowLong(m_hWnd, GWL_EXSTYLE);
+    std::fprintf(stderr, "VideoWindow: MakeFullscreen: prev style=0x%08X exstyle=0x%08X\n", static_cast<unsigned int>(m_prevStyle), static_cast<unsigned int>(m_prevExStyle));
+
+    if (GetMonitorInfo(hm, &mi)) {
+        UINT monW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
+        UINT monH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
+
+        // Diagnostic: print current swapchain desc before attempting ResizeBuffers
+        {
+            DXGI_SWAP_CHAIN_DESC desc = {};
+            HRESULT g = m_swapChain->GetDesc(&desc);
+            if (SUCCEEDED(g)) {
+                std::fprintf(stderr, "VideoWindow: swapchain desc: BufferCount=%u Width=%u Height=%u Format=%u SwapEffect=%u Flags=0x%08X\n",
+                             desc.BufferCount, desc.BufferDesc.Width, desc.BufferDesc.Height, static_cast<unsigned int>(desc.BufferDesc.Format), static_cast<unsigned int>(desc.SwapEffect), static_cast<unsigned int>(desc.Flags));
+            } else {
+                std::fprintf(stderr, "VideoWindow: GetDesc failed (0x%08X)\n", static_cast<unsigned int>(g));
+            }
+        }
+
+        // Prepare window for borderless fullscreen first: set style/exstyle/position so the window is ready
+        // Prevent WM_SIZE messages from racing and resetting our freshly-applied fullscreen size
+        m_ignoreWindowSizeEvents = true;
+        SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        LONG newEx = m_prevExStyle & ~(WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+        LONG prevExSet = SetWindowLong(m_hWnd, GWL_EXSTYLE, newEx);
+        std::fprintf(stderr, "VideoWindow: SetWindowLong(GWL_EXSTYLE): previous=0x%08X new=0x%08X\n", static_cast<unsigned int>(prevExSet), static_cast<unsigned int>(newEx));
+
+        SetWindowPos(m_hWnd, HWND_TOPMOST, mi.rcMonitor.left, mi.rcMonitor.top, monW, monH, SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+        ::ShowWindow(m_hWnd, SW_SHOW);
+        // Force a layout/update before resizing buffers
+        UpdateWindow(m_hWnd);
+
+        // Prepare to recreate the swapchain at monitor resolution.
+        // Unbind and clear context to release any references to the swapchain buffers.
+        {
+            ID3D11Device* dev = getSharedGpuDevice();
+            if (dev) {
+                ID3D11DeviceContext* ctx = nullptr;
+                dev->GetImmediateContext(&ctx);
+                if (ctx) {
+                    ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+                    ctx->PSSetShaderResources(0, 5, nullSRVs);
+                    ID3D11RenderTargetView* nullRTV = nullptr;
+                    ctx->OMSetRenderTargets(0, &nullRTV, nullptr);
+                    ctx->VSSetShader(nullptr, nullptr, 0);
+                    ctx->PSSetShader(nullptr, nullptr, 0);
+                    ctx->ClearState();
+                    ctx->Flush();
+                    ctx->Release();
+                    std::fprintf(stderr, "VideoWindow: Unbound RTVs/SRVs and cleared context prior to swapchain recreate\n");
+                }
+            }
+            if (m_renderTargetView) { m_renderTargetView.Reset(); std::fprintf(stderr, "VideoWindow: released m_renderTargetView before swapchain recreate\n"); }
+            if (m_swapChain) { m_swapChain.Reset(); std::fprintf(stderr, "VideoWindow: released old swapchain before recreate\n"); }
+        }
+
+        // Recreate the swapchain sized to the monitor (borderless windowed fullscreen)
+        // Indicate that Present must wait for the new RTV/backbuffer to be ready
+        m_waitingForRenderTarget = true;
+        if (!CreateSwapChain(static_cast<int>(monW), static_cast<int>(monH))) {
+            std::fprintf(stderr, "VideoWindow: CreateSwapChain(borderless) failed\n");
+            if (!kAllowFullscreenFallback) {
+                std::fprintf(stderr, "VideoWindow: fullscreen fallback disabled; aborting (create swapchain failed)\n");
+                m_ignoreWindowSizeEvents = false;
+                return false;
+            }
+        } else {
+            // Success: ensure focus and topmost ordering
+            SetForegroundWindow(m_hWnd);
+            SetActiveWindow(m_hWnd);
+            SetFocus(m_hWnd);
+            BringWindowToTop(m_hWnd);
+            // Defensive: explicitly call Resize to ensure internal size/state is updated
+            Resize(static_cast<int>(monW), static_cast<int>(monH));
+            std::fprintf(stderr, "VideoWindow: after CreateSwapChain Resize set m_width=%d m_height=%d\n", m_width, m_height);
+            DWORD err = GetLastError();
+            std::fprintf(stderr, "VideoWindow: entered borderless fullscreen %u x %u (GetLastError=0x%08X)\n", monW, monH, static_cast<unsigned int>(err));
+            m_isFullscreen = true;
+            // Allow WM_SIZE processing again now that we've updated internal state
+            m_ignoreWindowSizeEvents = false;
+            return true;
+        }
+    }
+
+    // If we reach here and fallback is disabled, do not try other methods
+    if (!kAllowFullscreenFallback) {
+        std::fprintf(stderr, "VideoWindow: borderless fullscreen could not be started and fallback is disabled\n");
+        m_ignoreWindowSizeEvents = false;
+        return false;
+    }
+
+    // Fallback (disabled by default): try exclusive fullscreen as last resort
+    HRESULT hr = m_swapChain->SetFullscreenState(TRUE, NULL);
+    if (SUCCEEDED(hr)) {
+        std::fprintf(stderr, "VideoWindow: SetFullscreenState(TRUE) succeeded (exclusive fullscreen)\n");
+        // Attempt to resize buffers to monitor resolution
+        if (GetMonitorInfo(hm, &mi)) {
+            UINT monW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
+            UINT monH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
+            HRESULT r3 = m_swapChain->ResizeBuffers(0, monW, monH, DXGI_FORMAT_UNKNOWN, 0);
+            if (SUCCEEDED(r3)) {
+                Resize(static_cast<int>(monW), static_cast<int>(monH));
+                m_isFullscreen = true;
+                std::fprintf(stderr, "VideoWindow: exclusive fullscreen buffers resized to %u x %u\n", monW, monH);
+                return true;
+            }
+            std::fprintf(stderr, "VideoWindow: ResizeBuffers(exclusive) failed (0x%08X)\n", static_cast<unsigned int>(r3));
+        }
+    } else {
+        std::fprintf(stderr, "VideoWindow: SetFullscreenState(TRUE) failed (0x%08X)\n", static_cast<unsigned int>(hr));
+    }
+
+    std::fprintf(stderr, "VideoWindow: all fullscreen methods failed\n");
+    return false;
+}
+
+bool VideoWindow::ExitFullscreen() {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (!m_hWnd || !m_swapChain) return false;
+    HRESULT hr = m_swapChain->SetFullscreenState(FALSE, NULL);
+    if (FAILED(hr)) {
+        std::fprintf(stderr, "VideoWindow: SetFullscreenState(FALSE) failed (0x%08X)\n", static_cast<unsigned int>(hr));
+        // even if DXGI failed, try to restore window style
+    }
+    // Restore style and position
+    SetWindowLong(m_hWnd, GWL_STYLE, m_prevStyle);
+    // Restore extended style as well
+    SetWindowLong(m_hWnd, GWL_EXSTYLE, m_prevExStyle);
+
+    // Remove topmost if we set it earlier and restore z-order
+    SetWindowPos(m_hWnd, HWND_NOTOPMOST, m_prevRect.left, m_prevRect.top, m_prevRect.right - m_prevRect.left, m_prevRect.bottom - m_prevRect.top, SWP_NOZORDER | SWP_FRAMECHANGED);
+
+    // Resize back to previous logical size
+    Resize(m_prevRect.right - m_prevRect.left, m_prevRect.bottom - m_prevRect.top);
+
+    // Restore keyboard focus so shortcuts keep working
+    ::ShowWindow(m_hWnd, SW_RESTORE);
+    SetForegroundWindow(m_hWnd);
+    SetActiveWindow(m_hWnd);
+    SetFocus(m_hWnd);
+
+    m_isFullscreen = false;
+    std::fprintf(stderr, "VideoWindow: exited fullscreen and restored window rect and styles\n");
+    return true;
 }
 
 void VideoWindow::Cleanup() {
@@ -214,6 +544,11 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
     } else {
         pThis = (VideoWindow*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
     }
+    // If we're in a fullscreen transition we may get WM_SIZE messages from the system
+    // that reflect the old client size; ignore WM_SIZE while m_ignoreWindowSizeEvents
+    if (pThis && uMsg == WM_SIZE && pThis->m_ignoreWindowSizeEvents) {
+        return 0;
+    }
 
     if (pThis) {
         if (uMsg == WM_SIZE) {
@@ -250,21 +585,37 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             return 0;
         }
 
-        if (uMsg == WM_LBUTTONDOWN || uMsg == WM_MOUSEMOVE) {
+        if (uMsg == WM_LBUTTONDOWN) {
             int x = LOWORD(lParam);
             int y = HIWORD(lParam);
-            bool leftPressed = (wParam & MK_LBUTTON) != 0;
-            
             // Mouse seeking in bottom area (like terminal)
-            if (leftPressed && pThis->m_height > 0 && y > pThis->m_height * 0.90) {
+            if (pThis->m_height > 0 && y > static_cast<int>(pThis->m_height * 0.90)) {
                 InputEvent ev;
                 ev.type = InputEvent::Type::Mouse;
                 ev.mouse.pos.X = (SHORT)x;
                 ev.mouse.pos.Y = (SHORT)y;
                 ev.mouse.buttonState = FROM_LEFT_1ST_BUTTON_PRESSED;
-                ev.mouse.eventFlags = (uMsg == WM_MOUSEMOVE) ? MOUSE_MOVED : 0;
+                ev.mouse.eventFlags = 0;
                 ev.mouse.control = 0x80000000; // Custom flag for window-originated event
-                
+                std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
+                pThis->m_inputQueue.push_back(ev);
+            }
+            return 0;
+        }
+
+        if (uMsg == WM_MOUSEMOVE) {
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+            bool leftPressed = (wParam & MK_LBUTTON) != 0;
+            // Enqueue hover/move events when mouse is over the bottom area so the UI overlay can be triggered
+            if (pThis->m_height > 0 && y > static_cast<int>(pThis->m_height * 0.90)) {
+                InputEvent ev;
+                ev.type = InputEvent::Type::Mouse;
+                ev.mouse.pos.X = (SHORT)x;
+                ev.mouse.pos.Y = (SHORT)y;
+                ev.mouse.buttonState = leftPressed ? FROM_LEFT_1ST_BUTTON_PRESSED : 0;
+                ev.mouse.eventFlags = MOUSE_MOVED;
+                ev.mouse.control = 0x80000000; // Custom flag for window-originated event
                 std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
                 pThis->m_inputQueue.push_back(ev);
             }
@@ -300,7 +651,16 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
 
     if (!m_hWnd) return false;
 
+    // Remember base window title so we can temporarily update it while overlay is visible
+    m_lastWindowTitle = title;
+    m_baseWindowTitle = title;
+
     if (!CreateSwapChain(width, height)) return false;
+
+    // Attempt to enter fullscreen immediately after creating swapchain
+    // This is best-effort (may fail on some systems) but improves UX for video playback
+    // Call MakeFullscreen only when Open is invoked for a video window; allow callers to override
+    MakeFullscreen();
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) {
@@ -431,6 +791,8 @@ void VideoWindow::Resize(int width, int height) {
 
     m_width = width;
     m_height = height;
+    // Mark that the render target is ready so Present can proceed
+    m_waitingForRenderTarget = false;
 }
 
 void VideoWindow::Close() {
@@ -441,14 +803,19 @@ void VideoWindow::Close() {
     // Perform centralized cleanup (unbind, ClearState, flush, reset local resources)
     Cleanup();
 
-    // If swapchain is in full-screen exclusive, revert to windowed first
+    // If swapchain is in full-screen exclusive, revert to windowed first and restore style
     if (m_swapChain) {
-        // Best-effort: leave fullscreen and present once so the driver releases surfaces
         (void)m_swapChain->SetFullscreenState(FALSE, NULL);
         IDXGISwapChain* raw = m_swapChain.Get();
         if (raw) {
             raw->Present(0, 0);
         }
+    }
+    // Restore windowed style if we changed it
+    if (m_hWnd && m_isFullscreen) {
+        SetWindowLong(m_hWnd, GWL_STYLE, m_prevStyle);
+        SetWindowPos(m_hWnd, NULL, m_prevRect.left, m_prevRect.top, m_prevRect.right - m_prevRect.left, m_prevRect.bottom - m_prevRect.top, SWP_NOZORDER | SWP_FRAMECHANGED);
+        m_isFullscreen = false;
     }
 
     // Release swapchain last
@@ -494,7 +861,13 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
     if (!context || !m_constantBuffer) return;
-    if (!m_renderTargetView) return;
+    if (!m_renderTargetView) {
+        if (m_waitingForRenderTarget) {
+            std::fprintf(stderr, "VideoWindow: Present skipped - waiting for render target/backbuffer to be ready\n");
+            return;
+        }
+        return;
+    }
     
     // Update of constant buffer moved below (after determining texture format such as RGBA)
 
@@ -503,7 +876,35 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
     context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
     context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
 
-    D3D11_VIEWPORT viewport = { 0, 0, (float)m_width, (float)m_height, 0, 1 };
+    // Compute viewport to preserve source aspect ratio (letterbox/pillarbox)
+    float srcAspect = (width > 0 && height > 0) ? (static_cast<float>(width) / static_cast<float>(height)) : 1.0f;
+    // Query swapchain buffer size to ensure we use the actual backbuffer dimensions
+    float dstW = static_cast<float>(m_width);
+    float dstH = static_cast<float>(m_height);
+    if (m_swapChain) {
+        DXGI_SWAP_CHAIN_DESC scd = {};
+        if (SUCCEEDED(m_swapChain->GetDesc(&scd))) {
+            dstW = static_cast<float>(scd.BufferDesc.Width);
+            dstH = static_cast<float>(scd.BufferDesc.Height);
+        }
+    }
+    std::fprintf(stderr, "VideoWindow: Present: m_width=%d m_height=%d srcWxH=%d x %d dstWxH=%0.1f x %0.1f\n", m_width, m_height, width, height, dstW, dstH);
+    float dstAspect = (dstH > 0.0f) ? (dstW / dstH) : 1.0f;
+    float viewW = dstW;
+    float viewH = dstH;
+    if (srcAspect > dstAspect) {
+        // source is wider -> full width, letterbox vertically
+        viewW = dstW;
+        viewH = dstW / srcAspect;
+    } else {
+        // source is taller -> full height, pillarbox horizontally
+        viewH = dstH;
+        viewW = dstH * srcAspect;
+    }
+    float viewX = std::floorf((dstW - viewW) * 0.5f);
+    float viewY = std::floorf((dstH - viewH) * 0.5f);
+    std::fprintf(stderr, "VideoWindow: Present viewport computed viewW=%0.1f viewH=%0.1f viewX=%0.1f viewY=%0.1f\n", viewW, viewH, viewX, viewY);
+    D3D11_VIEWPORT viewport = { viewX, viewY, viewW, viewH, 0.0f, 1.0f };
     context->RSSetViewports(1, &viewport);
 
     context->IASetInputLayout(NULL);
@@ -534,6 +935,10 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
             sc->overlayAlpha = ui.overlayAlpha;
             sc->isPaused = ui.isPaused ? 1 : 0;
             sc->hasRGBA = isRGBA ? 1u : 0u;
+            sc->volPct = static_cast<uint32_t>(std::clamp(ui.volPct, 0, 100));
+            // default text overlay position/height (normalized)
+            sc->textTop = 0.88f;
+            sc->textHeight = 0.06f;
             context->Unmap(m_constantBuffer.Get(), 0);
         }
     }
@@ -678,24 +1083,160 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
         srvUV = m_copySrvUV;
     }
 
-    if (srvY && srvUV) {
+    // Bind and draw image depending on which SRV path we have (RGBA or Y/UV)
+    if (srvRGBA) {
+        ID3D11ShaderResourceView* srvsRGBA[3] = { nullptr, nullptr, srvRGBA.Get() };
+        context->PSSetShaderResources(0, 3, srvsRGBA);
+        context->Draw(4, 0);
+    } else if (srvY && srvUV) {
         ID3D11ShaderResourceView* srvs[] = { srvY.Get(), srvUV.Get() };
         context->PSSetShaderResources(0, 2, srvs);
         context->Draw(4, 0);
+    }
 
-        // Draw UI
-        if (ui.overlayAlpha > 0.01f) {
-            context->PSSetShader(m_uiShader.Get(), NULL, 0);
-            context->Draw(4, 0);
+    // Draw UI overlay unconditionally (when visible) so console UI parity is preserved
+    if (ui.overlayAlpha > 0.01f) {
+        // Update or create a text texture containing filename and time info (size constrained)
+        bool textReady = false;
+        // Choose text pixel height larger but constrained so glyphs remain readable and scale on fullscreen
+        int textPxH = static_cast<int>(std::round(m_height * 0.06f));
+        int textPxMax = std::max(24, m_height / 30); // allow larger text on large displays
+        textPxH = std::clamp(textPxH, 14, textPxMax);
+        std::string textLine = ui.title + "  " + (ui.totalSec > 0.0 ? (formatTimeDouble(ui.displaySec) + " / " + formatTimeDouble(ui.totalSec)) : formatTimeDouble(ui.displaySec));
+        int charCount = static_cast<int>(textLine.size());
+        const int glyphW = 5, spacing = 1;
+        int estScale = std::max(1, textPxH / 7);
+        int totalTextWidth = charCount * (glyphW + spacing) * estScale;
+        int textPxW = std::min(m_width, totalTextWidth);
+        if (textPxW <= 0) textPxW = std::max(128, std::min(m_width, totalTextWidth));
+        if (!textLine.empty()) {
+            std::vector<uint8_t> bmp;
+            if (renderTextToBitmap(textLine, textPxW, textPxH, bmp)) {
+                // Create or update texture
+                if (!m_textTexture || m_textWidth != textPxW || m_textHeight != textPxH) {
+                    m_textTexture.Reset();
+                    m_textSrv.Reset();
+                    D3D11_TEXTURE2D_DESC td{};
+                    td.Width = textPxW;
+                    td.Height = textPxH;
+                    td.MipLevels = 1;
+                    td.ArraySize = 1;
+                    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                    td.SampleDesc.Count = 1;
+                    td.Usage = D3D11_USAGE_DEFAULT;
+                    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                    td.CPUAccessFlags = 0;
+                    HRESULT hr = device->CreateTexture2D(&td, NULL, &m_textTexture);
+                    if (FAILED(hr) || !m_textTexture) {
+                        std::fprintf(stderr, "VideoWindow: CreateTexture2D(text) failed (0x%08X)\n", static_cast<unsigned int>(hr));
+                    } else {
+                        D3D11_SHADER_RESOURCE_VIEW_DESC srvd{};
+                        srvd.Format = td.Format;
+                        srvd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                        srvd.Texture2D.MipLevels = 1;
+                        hr = device->CreateShaderResourceView(m_textTexture.Get(), &srvd, &m_textSrv);
+                        if (FAILED(hr) || !m_textSrv) {
+                            std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(text) failed (0x%08X)\n", static_cast<unsigned int>(hr));
+                            m_textTexture.Reset();
+                        } else {
+                            m_textWidth = textPxW;
+                            m_textHeight = textPxH;
+                        }
+                    }
+                }
+                if (m_textTexture) {
+                    // Update texture content
+                    D3D11_BOX box{0,0,0, (UINT)textPxW, (UINT)textPxH, 1};
+                    context->UpdateSubresource(m_textTexture.Get(), 0, &box, bmp.data(), textPxW * 4, 0);
+                    textReady = true;
+                }
+            }
+        }
+
+        // If text was prepared, set normalized text area in the constant buffer so shader samples it correctly
+        if (textReady && m_textSrv) {
+            // Position text just above the progress bar to avoid overlap; adapt to fullscreen sizes
+            float textHeightNorm = (m_height > 0) ? (static_cast<float>(textPxH) / static_cast<float>(m_height)) : 0.06f;
+            textHeightNorm = std::min(textHeightNorm, 0.12f);
+            // progress bar top is at 0.96; place text above it with a small gap
+            float textTopNorm = std::max(0.0f, 0.96f - textHeightNorm - 0.01f);
+            // compute left/width normalized based on actual totalTextWidth and centering
+            float textLeftNorm = 0.0f;
+            float textWidthNorm = 0.0f;
+            if (m_width > 0) {
+                int totalTextWidth = charCount * (5 + 1) * std::max(1, textPxH / 7); // glyphW=5, spacing=1
+                int startX = std::max(0, (m_width - totalTextWidth) / 2);
+                textLeftNorm = static_cast<float>(startX) / static_cast<float>(m_width);
+                textWidthNorm = static_cast<float>(totalTextWidth) / static_cast<float>(m_width);
+            }
+            D3D11_MAPPED_SUBRESOURCE map2;
+            if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map2))) {
+                ShaderConstants* sc3 = (ShaderConstants*)map2.pData;
+                // Re-write full constants to avoid clobbering important fields (WRITE_DISCARD resets the buffer)
+                sc3->isFullRange = fullRange ? 1 : 0;
+                sc3->yuvMatrix = (uint32_t)matrix;
+                sc3->yuvTransfer = (uint32_t)transfer;
+                sc3->bitDepth = (uint32_t)bitDepth;
+                sc3->progress = ui.progress;
+                sc3->overlayAlpha = ui.overlayAlpha;
+                sc3->isPaused = ui.isPaused ? 1 : 0;
+                sc3->hasRGBA = isRGBA ? 1u : 0u;
+                sc3->volPct = static_cast<uint32_t>(std::clamp(ui.volPct, 0, 100));
+                sc3->textTop = textTopNorm;
+                sc3->textHeight = textHeightNorm;
+                sc3->textLeft = textLeftNorm;
+                sc3->textWidth = textWidthNorm;
+                context->Unmap(m_constantBuffer.Get(), 0);
+            }
+
+            ID3D11ShaderResourceView* textSrvArr[1] = { m_textSrv.Get() };
+            context->PSSetShaderResources(3, 1, textSrvArr);
+        }
+
+        context->PSSetShader(m_uiShader.Get(), NULL, 0);
+        context->Draw(4, 0);
+        // restore main PS for cleanup/unbind steps below
+        context->PSSetShader(m_pixelShader.Get(), NULL, 0);
+    }
+
+    // Update window title with overlay info (file name, time, volume) when overlay visible.
+    if (m_hWnd) {
+        if (ui.overlayAlpha > 0.01f && !ui.title.empty()) {
+            auto formatTime = [](double s) -> std::string {
+                if (!(s >= 0.0) || !std::isfinite(s)) return "--:--";
+                int total = static_cast<int>(std::llround(s));
+                int h = total / 3600;
+                int m = (total % 3600) / 60;
+                int sec = total % 60;
+                char buf[64];
+                if (h > 0) std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, sec);
+                else std::snprintf(buf, sizeof(buf), "%02d:%02d", m, sec);
+                return std::string(buf);
+            };
+            std::string timeStr = formatTime(ui.displaySec);
+            std::string totalStr = (ui.totalSec > 0.0 && std::isfinite(ui.totalSec)) ? formatTime(ui.totalSec) : std::string("--:--");
+            std::string newTitle = m_baseWindowTitle + " - " + ui.title + " - " + timeStr + " / " + totalStr + " Vol:" + std::to_string(ui.volPct) + "%";
+            if (newTitle != m_lastWindowTitle) {
+                std::wstring wide(newTitle.begin(), newTitle.end());
+                SetWindowTextW(m_hWnd, wide.c_str());
+                m_lastWindowTitle = newTitle;
+            }
+        } else {
+            // Restore base title when overlay not visible
+            if (m_lastWindowTitle != m_baseWindowTitle) {
+                std::wstring wide(m_baseWindowTitle.begin(), m_baseWindowTitle.end());
+                SetWindowTextW(m_hWnd, wide.c_str());
+                m_lastWindowTitle = m_baseWindowTitle;
+            }
         }
     }
 
     HRESULT hr = m_swapChain->Present(1, 0);
 
     // Unbind SRVs, samplers and constant buffers to avoid holding references across frames
-    ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
-    context->PSSetShaderResources(0, 2, nullSRVs);
-    context->CSSetShaderResources(0, 2, nullSRVs);
+    ID3D11ShaderResourceView* nullSRVsAll[4] = { nullptr, nullptr, nullptr, nullptr };
+    context->PSSetShaderResources(0, 4, nullSRVsAll);
+    context->CSSetShaderResources(0, 4, nullSRVsAll);
     ID3D11SamplerState* nullSamplers[1] = { nullptr };
     context->PSSetSamplers(0, 1, nullSamplers);
     ID3D11Buffer* nullCB[1] = { nullptr };

@@ -16,6 +16,11 @@ struct WindowUiState {
     float progress = 0.0f;
     float overlayAlpha = 0.0f;
     bool isPaused = false;
+    // UI text/metadata to display when overlay is visible
+    std::string title; // filename or label
+    double displaySec = 0.0; // current time shown in overlay
+    double totalSec = -1.0; // total duration (or -1 if unknown)
+    int volPct = 0; // volume percent for display
 };
 
 class VideoWindow {
@@ -56,10 +61,31 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_copySrvY;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_copySrvUV;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_copySrvRGBA;
+
+    // Text overlay texture (CPU rasterized via GDI)
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_textTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_textSrv;
+    int m_textWidth = 0;
+    int m_textHeight = 0;
     
     int m_width = 0;
     int m_height = 0;
 
     std::vector<InputEvent> m_inputQueue;
     std::mutex m_inputMutex;
+    // Cache last window title to avoid repeated SetWindowText calls
+    std::string m_lastWindowTitle;
+    std::string m_baseWindowTitle;
+
+    // Fullscreen helpers
+    LONG m_prevStyle = 0;
+    LONG m_prevExStyle = 0; // saved extended style for restoring on exit
+    RECT m_prevRect{};
+    bool m_isFullscreen = false;
+    // Guard to ignore WM_SIZE events while we're transitioning to/from fullscreen
+    bool m_ignoreWindowSizeEvents = false;
+    // When true, Present should skip until the render-target view and sizes are ready
+    bool m_waitingForRenderTarget = false;
+    bool MakeFullscreen();
+    bool ExitFullscreen();
 };

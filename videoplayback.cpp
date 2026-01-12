@@ -607,6 +607,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   double queuedSeekTargetSec = -1.0;
   bool seekQueued = false;
   constexpr auto kSeekThrottleInterval = std::chrono::milliseconds(50);
+  bool ended = false;
   auto lastUiDbgLog = std::chrono::steady_clock::time_point::min();
   std::string lastUiDbgLine1;
   std::string lastUiDbgLine2;
@@ -679,10 +680,22 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     redraw = true;
   };
 
-  constexpr auto kProgressOverlayTimeout = std::chrono::milliseconds(2000);
+  constexpr auto kProgressOverlayTimeout = std::chrono::milliseconds(3500);
   auto overlayUntil = std::chrono::steady_clock::time_point::min();
   auto triggerOverlay = [&]() {
-    overlayUntil = std::chrono::steady_clock::now() + kProgressOverlayTimeout;
+    auto now = std::chrono::steady_clock::now();
+    // If paused/seeking/ended, extend the overlay timeout so user sees controls longer
+    bool extended = false;
+    if (userPaused) extended = true;
+    if (player.isSeeking()) extended = true;
+    // 'ended' may not be set yet at first calls; it's captured by reference and can be used
+    // if present later
+    // Use a longer duration for extended cases
+    if (extended) {
+      overlayUntil = now + std::chrono::milliseconds(5000);
+    } else {
+      overlayUntil = now + kProgressOverlayTimeout;
+    }
   };
   auto overlayVisible = [&]() {
     if (overlayUntil == std::chrono::steady_clock::time_point::min()) {
@@ -736,6 +749,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     ui.progress = static_cast<float>(ratio);
     ui.isPaused = player.state() == PlayerState::Paused;
     ui.overlayAlpha = overlayVisible() ? 1.0f : 0.0f;
+    // Provide textual UI info for the video window overlay/title
+    ui.title = toUtf8String(file.filename());
+    ui.displaySec = displaySec;
+    ui.totalSec = totalSec;
+    ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
 
     D3D11_TEXTURE2D_DESC desc{};
     frame->hwTexture->GetDesc(&desc);
@@ -1242,19 +1260,21 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
         
         if (leftPressed && (mouse.control & 0x80000000)) {
-            // Window-originated seek (supports drag)
-            double winW = g_videoWindow.GetWidth();
-            if (winW > 0 && !localSeekRequested) {
-                double ratio = (double)mouse.pos.X / winW;
-                ratio = std::clamp(ratio, 0.0, 1.0);
-                double totalSec = player.durationUs() / 1000000.0;
-                if (totalSec > 0.0 && std::isfinite(totalSec)) {
-                    sendSeekRequest(ratio * totalSec);
-                }
+          // Window-originated seek (supports drag) — queue the seek so we throttle rapid updates
+          double winW = g_videoWindow.GetWidth();
+          if (winW > 0) {
+            double ratio = (double)mouse.pos.X / winW;
+            ratio = std::clamp(ratio, 0.0, 1.0);
+            double totalSec = player.durationUs() / 1000000.0;
+            if (totalSec > 0.0 && std::isfinite(totalSec)) {
+              double target = ratio * totalSec;
+              // Queue instead of immediate send — throttled by seek queue logic
+              queueSeekRequest(target);
             }
-            triggerOverlay();
-            redraw = true;
-            continue;
+          }
+          triggerOverlay();
+          redraw = true;
+          continue;
         }
 
         if (leftPressed &&
@@ -1336,7 +1356,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     presentWindowFrame(presented);
 
     if (player.isEnded()) {
-      running = false;
+      // Mark ended but keep the loop running so user can seek back without causing
+      // the program to immediately exit. This matches ASCII renderer behavior.
+      ended = true;
+      userPaused = true;
+      triggerOverlay();
+      redraw = true;
+      // do not set running = false here; let user exit explicitly or seek
     }
 
 #if RADIOIFY_ENABLE_TIMING_LOG
