@@ -215,76 +215,7 @@ bool GpuAsciiRenderer::CreateStatsBuffer() {
     return true;
 }
 
-bool GpuAsciiRenderer::CreateRGBATextures(int width, int height) {
-    if (m_inputTexture) {
-        D3D11_TEXTURE2D_DESC desc;
-        m_inputTexture->GetDesc(&desc);
-        if (desc.Width == width && desc.Height == height) {
-            return true;
-        }
-        m_inputTexture.Reset();
-        m_inputSRV.Reset();
-    }
-
-    D3D11_TEXTURE2D_DESC texDesc = {};
-    texDesc.Width = width;
-    texDesc.Height = height;
-    texDesc.MipLevels = 0; // Full chain
-    texDesc.ArraySize = 1;
-    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    texDesc.SampleDesc.Count = 1;
-    texDesc.Usage = D3D11_USAGE_DEFAULT;
-    texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-    texDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
-
-    if (FAILED(m_device->CreateTexture2D(&texDesc, nullptr, &m_inputTexture))) return false;
-    if (FAILED(m_device->CreateShaderResourceView(m_inputTexture.Get(), nullptr, &m_inputSRV))) return false;
-
-    return true;
-}
-
-bool GpuAsciiRenderer::CreateNV12Textures(int width, int height, bool is10Bit) {
-    // Check if we need to recreate textures (size or format change)
-    DXGI_FORMAT targetY = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
-    DXGI_FORMAT targetUV = is10Bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-
-    if (m_textureY) {
-        D3D11_TEXTURE2D_DESC desc;
-        m_textureY->GetDesc(&desc);
-        if (desc.Width == width && desc.Height == height && desc.Format == targetY) {
-            return true;
-        }
-        // Release old textures
-        m_textureY.Reset();
-        m_srvY.Reset();
-        m_textureUV.Reset();
-        m_srvUV.Reset();
-    }
-
-    // Y Texture
-    D3D11_TEXTURE2D_DESC texDesc = {};
-    texDesc.Width = width;
-    texDesc.Height = height;
-    texDesc.MipLevels = 1;
-    texDesc.ArraySize = 1;
-    texDesc.Format = targetY;
-    texDesc.SampleDesc.Count = 1;
-    texDesc.Usage = D3D11_USAGE_DEFAULT;
-    texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    
-    if (FAILED(m_device->CreateTexture2D(&texDesc, nullptr, &m_textureY))) return false;
-    if (FAILED(m_device->CreateShaderResourceView(m_textureY.Get(), nullptr, &m_srvY))) return false;
-
-    // UV Texture
-    texDesc.Width = width / 2;
-    texDesc.Height = height / 2;
-    texDesc.Format = targetUV;
-    
-    if (FAILED(m_device->CreateTexture2D(&texDesc, nullptr, &m_textureUV))) return false;
-    if (FAILED(m_device->CreateShaderResourceView(m_textureUV.Get(), nullptr, &m_srvUV))) return false;
-
-    return true;
-}
+// Resources handled by m_frameCache
 
 bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
                                 bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
@@ -307,8 +238,9 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         return false;
     }
     
-    if (!CreateNV12Textures(width, height, is10Bit)) {
-        if (error) *error = "Failed to create NV12 textures";
+    if (!m_frameCache.UpdateNV12(m_device.Get(), m_context.Get(), yuv, stride, planeHeight, width, height, 
+                                 fullRange, yuvMatrix, yuvTransfer, is10Bit ? 10 : 8)) {
+        if (error) *error = "Failed to update NV12 cache";
         return false;
     }
 
@@ -317,13 +249,8 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         return false;
     }
 
-    // Upload Y
-    m_context->UpdateSubresource(m_textureY.Get(), 0, nullptr, yuv, stride, 0);
-    
-    // Upload UV
-    // UV plane starts after Y plane (stride * planeHeight)
-    const uint8_t* uvData = yuv + (stride * planeHeight);
-    m_context->UpdateSubresource(m_textureUV.Get(), 0, nullptr, uvData, stride, 0);
+    ID3D11ShaderResourceView* srvY = m_frameCache.GetSrvY();
+    ID3D11ShaderResourceView* srvUV = m_frameCache.GetSrvUV();
 
     // Update Constants
     D3D11_MAPPED_SUBRESOURCE mapped;
@@ -344,7 +271,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
 
     // 1. Calculate Stats
     m_context->CSSetShader(m_statsShaderNv12.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* statsSRVs[] = { m_srvY.Get() }; // Only Y needed
+    ID3D11ShaderResourceView* statsSRVs[] = { srvY }; // Only Y needed
     m_context->CSSetShaderResources(0, 1, statsSRVs);
     ID3D11UnorderedAccessView* statsUAVs[] = { m_statsUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 1, statsUAVs, nullptr);
@@ -362,7 +289,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
 
     // 2. Main Pass
     m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { m_srvY.Get(), m_srvUV.Get(), m_statsSRV.Get() };
+    ID3D11ShaderResourceView* srvs[] = { srvY, srvUV, m_statsSRV.Get() };
     m_context->CSSetShaderResources(0, 3, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), m_metaUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
@@ -538,16 +465,17 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         return false;
     }
 
-    if (!CreateRGBATextures(width, height)) {
-        if (error) *error = "Failed to create RGBA textures";
+    if (!m_frameCache.Update(m_device.Get(), m_context.Get(), rgba, width * 4, width, height)) {
+        if (error) *error = "Failed to update RGBA cache";
         return false;
     }
 
-    // Upload Texture
-    m_context->UpdateSubresource(m_inputTexture.Get(), 0, nullptr, rgba, width * 4, 0);
-    
-    // Generate Mips
-    m_context->GenerateMips(m_inputSRV.Get());
+    if (!CreateStatsBuffer()) {
+        if (error) *error = "Failed to create stats buffer";
+        return false;
+    }
+
+    ID3D11ShaderResourceView* inputSRV = m_frameCache.GetSrvRGBA();
 
     // Update Constants
     D3D11_MAPPED_SUBRESOURCE mapped;
@@ -573,12 +501,8 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     UINT dispatchY = (outH + 7) / 8;
 
     // Calculate Stats
-    if (!CreateStatsBuffer()) {
-        if (error) *error = "Failed to create stats buffer";
-        return false;
-    }
     m_context->CSSetShader(m_statsShaderRgba.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* statsSRVs[] = { m_inputSRV.Get() };
+    ID3D11ShaderResourceView* statsSRVs[] = { inputSRV };
     m_context->CSSetShaderResources(0, 1, statsSRVs);
     ID3D11UnorderedAccessView* statsUAVs[] = { m_statsUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 1, statsUAVs, nullptr);
@@ -591,7 +515,7 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
 
     // Main Pass
     m_context->CSSetShader(m_computeShader.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { m_inputSRV.Get(), m_statsSRV.Get(), nullptr };
+    ID3D11ShaderResourceView* srvs[] = { inputSRV, m_statsSRV.Get(), nullptr };
     m_context->CSSetShaderResources(0, 3, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), m_metaUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
@@ -697,20 +621,13 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     }
 
     // Check array index
-    if (arrayIndex < 0 || arrayIndex >= static_cast<int>(srcDesc.ArraySize)) {
-        if (error) *error = "Invalid texture array index: " + std::to_string(arrayIndex) + " (size: " + std::to_string(srcDesc.ArraySize) + ")";
+    // Use shared frame cache
+    if (!m_frameCache.Update(m_device.Get(), m_context.Get(), texture, arrayIndex, width, height,
+                              fullRange, yuvMatrix, yuvTransfer, is10Bit ? 10 : 8)) {
+        if (error) *error = "Failed to update frame cache";
         return false;
     }
-    
-    // FFmpeg D3D11VA typically outputs NV12 or P010 textures
-    bool isNV12 = (srcDesc.Format == DXGI_FORMAT_NV12);
-    bool isP010 = (srcDesc.Format == DXGI_FORMAT_P010);
-    
-    if (!isNV12 && !isP010) {
-        if (error) *error = "Unsupported texture format (expected NV12 or P010)";
-        return false;
-    }
-    
+
     // Create buffers if needed
     if (!CreateBuffers(width, height, outW, outH)) {
         if (error) *error = "Failed to create GPU buffers";
@@ -722,133 +639,16 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
         return false;
     }
 
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvY;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvUV;
-    bool usingZeroCopy = false;
-    const bool canUseSrv = (srcDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) != 0;
+    ID3D11ShaderResourceView* srvY = m_frameCache.GetSrvY();
+    ID3D11ShaderResourceView* srvUV = m_frameCache.GetSrvUV();
 
-    if (canUseSrv) {
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
-        srvDescY.Format = isP010 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
-        if (srcDesc.ArraySize > 1) {
-            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-            srvDescY.Texture2DArray.MostDetailedMip = 0;
-            srvDescY.Texture2DArray.MipLevels = 1;
-            srvDescY.Texture2DArray.FirstArraySlice = arrayIndex;
-            srvDescY.Texture2DArray.ArraySize = 1;
-        } else {
-            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srvDescY.Texture2D.MostDetailedMip = 0;
-            srvDescY.Texture2D.MipLevels = 1;
-        }
-
-        HRESULT hr = m_device->CreateShaderResourceView(texture, &srvDescY, &srvY);
-        if (SUCCEEDED(hr)) {
-            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = {};
-            srvDescUV.Format = isP010 ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-            if (srcDesc.ArraySize > 1) {
-                srvDescUV.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-                srvDescUV.Texture2DArray.MostDetailedMip = 0;
-                srvDescUV.Texture2DArray.MipLevels = 1;
-                srvDescUV.Texture2DArray.FirstArraySlice = arrayIndex;
-                srvDescUV.Texture2DArray.ArraySize = 1;
-            } else {
-                srvDescUV.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                srvDescUV.Texture2D.MostDetailedMip = 0;
-                srvDescUV.Texture2D.MipLevels = 1;
-            }
-
-            hr = m_device->CreateShaderResourceView(texture, &srvDescUV, &srvUV);
-            if (SUCCEEDED(hr)) {
-                usingZeroCopy = true;
-                m_lastNv12TexturePath = "zero_copy";
-            } else {
-                srvY.Reset();
-            }
-        }
-    }
-
-    if (!usingZeroCopy) {
-        // FFmpeg D3D11VA textures often lack D3D11_BIND_SHADER_RESOURCE.
-        // Copy to our own texture with shader resource binding.
-        bool needNewCopyTexture = false;
-        if (!m_hwCopyTexture) {
-            needNewCopyTexture = true;
-        } else {
-            D3D11_TEXTURE2D_DESC copyDesc;
-            m_hwCopyTexture->GetDesc(&copyDesc);
-            if (copyDesc.Width != srcDesc.Width || copyDesc.Height != srcDesc.Height ||
-                copyDesc.Format != srcDesc.Format) {
-                needNewCopyTexture = true;
-            }
-        }
-
-        if (needNewCopyTexture) {
-            m_hwCopyTexture.Reset();
-            m_hwCopySrvY.Reset();
-            m_hwCopySrvUV.Reset();
-
-            D3D11_TEXTURE2D_DESC copyDesc = {};
-            copyDesc.Width = srcDesc.Width;
-            copyDesc.Height = srcDesc.Height;
-            copyDesc.MipLevels = 1;
-            copyDesc.ArraySize = 1;
-            copyDesc.Format = srcDesc.Format;
-            copyDesc.SampleDesc.Count = 1;
-            copyDesc.Usage = D3D11_USAGE_DEFAULT;
-            copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-            HRESULT hr = m_device->CreateTexture2D(&copyDesc, nullptr, &m_hwCopyTexture);
-            if (FAILED(hr)) {
-                if (error) *error = "Failed to create GPU copy texture";
-                return false;
-            }
-
-            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
-            srvDescY.Format = isP010 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
-            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srvDescY.Texture2D.MostDetailedMip = 0;
-            srvDescY.Texture2D.MipLevels = 1;
-
-            hr = m_device->CreateShaderResourceView(m_hwCopyTexture.Get(), &srvDescY, &m_hwCopySrvY);
-            if (FAILED(hr)) {
-                if (error) *error = "Failed to create Y plane SRV for copy texture";
-                return false;
-            }
-
-            D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = {};
-            srvDescUV.Format = isP010 ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-            srvDescUV.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srvDescUV.Texture2D.MostDetailedMip = 0;
-            srvDescUV.Texture2D.MipLevels = 1;
-
-            hr = m_device->CreateShaderResourceView(m_hwCopyTexture.Get(), &srvDescUV, &m_hwCopySrvUV);
-            if (FAILED(hr)) {
-                if (error) *error = "Failed to create UV plane SRV for copy texture";
-                return false;
-            }
-        }
-
-        if (srcDesc.ArraySize > 1) {
-            m_context->CopySubresourceRegion(
-                m_hwCopyTexture.Get(), 0, 0, 0, 0,
-                texture, D3D11CalcSubresource(0, arrayIndex, 1),
-                nullptr);
-        } else {
-            m_context->CopyResource(m_hwCopyTexture.Get(), texture);
-        }
-
-        m_lastNv12TexturePath = "gpu_copy";
-        m_context->Flush();
-        srvY = m_hwCopySrvY;
-        srvUV = m_hwCopySrvUV;
-    }
-
+    m_lastNv12TexturePath = "gpu_cache";
     {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "path=%s fmt=%s bind=0x%X",
-                      m_lastNv12TexturePath, fmtLabel,
-                      static_cast<unsigned int>(srcDesc.BindFlags));
+        const char* fmtLabel = (srcDesc.Format == DXGI_FORMAT_NV12) ? "NV12" : 
+                               (srcDesc.Format == DXGI_FORMAT_P010) ? "P010" : "OTHER";
+        std::snprintf(buf, sizeof(buf), "path=gpu_cache fmt=%s bind=0x%X",
+                      fmtLabel, static_cast<unsigned int>(srcDesc.BindFlags));
         m_lastNv12TextureDetail = buf;
     }
 
@@ -863,7 +663,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
         cb->time = 0.0f;
         cb->frameCount++;
         cb->isFullRange = fullRange ? 1 : 0;
-        cb->bitDepth = isP010 ? 10u : 8u;
+        cb->bitDepth = is10Bit ? 10u : 8u;
         cb->yuvMatrix = static_cast<uint32_t>(yuvMatrix);
         cb->yuvTransfer = static_cast<uint32_t>(yuvTransfer);
         m_context->Unmap(m_constantBuffer.Get(), 0);
@@ -871,7 +671,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
 
     // 1. Calculate Stats
     m_context->CSSetShader(m_statsShaderNv12.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* statsSRVs[] = { srvY.Get() };
+    ID3D11ShaderResourceView* statsSRVs[] = { srvY };
     m_context->CSSetShaderResources(0, 1, statsSRVs);
     ID3D11UnorderedAccessView* statsUAVs[] = { m_statsUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 1, statsUAVs, nullptr);
@@ -889,7 +689,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
 
     // 2. Main Pass
     m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { srvY.Get(), srvUV.Get(), m_statsSRV.Get() };
+    ID3D11ShaderResourceView* srvs[] = { srvY, srvUV, m_statsSRV.Get() };
     m_context->CSSetShaderResources(0, 3, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), m_metaUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);

@@ -42,6 +42,8 @@ extern "C" {
 #include "timing_log.h"
 
 static VideoWindow g_videoWindow;
+// Centralized GPU frame cache shared between renderers
+static GpuVideoFrameCache g_frameCache;
 static bool g_windowEnabledPersistent = false;
 static bool g_windowEnabledInitialized = false;
 
@@ -706,10 +708,17 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   auto presentWindowFrame = [&](bool frameChanged) {
     if (!windowEnabled) return;
-    if (!haveFrame) return;
-    if (!frameChanged && !forceWindowPresent) return;
+    // Ensure we have a valid texture to present (from current or previous frame)
+    if (!frame->hwTexture) return;
+    
+    // Present if: 
+    // - frame changed (new frame)
+    // - overlay is visible (UI needs update)
+    // - we are seeking (show "Seeking..." and progress bar movement in window)
+    bool isSeeking = player.isSeeking() || localSeekRequested;
+    if (!frameChanged && !forceWindowPresent && !overlayVisible() && !isSeeking) return;
     forceWindowPresent = false;
-    if (frame->format != VideoPixelFormat::HWTexture || !frame->hwTexture) {
+    if (frame->format != VideoPixelFormat::HWTexture) {
       return;
     }
 
@@ -759,10 +768,20 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     frame->hwTexture->GetDesc(&desc);
     bool is10Bit = (desc.Format == DXGI_FORMAT_P010);
 
-    g_videoWindow.Present(
-        frame->hwTexture.Get(), frame->hwTextureArrayIndex, frame->width,
-        frame->height, frame->fullRange, frame->yuvMatrix, frame->yuvTransfer,
-        is10Bit ? 10 : 8, ui);
+    // Update central GPU frame cache under the shared GPU mutex to avoid races
+    ID3D11Device* device = getSharedGpuDevice();
+    if (device) {
+      Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+      device->GetImmediateContext(&context);
+      if (context) {
+        std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+        (void)g_frameCache.Update(device, context.Get(), frame->hwTexture.Get(), frame->hwTextureArrayIndex,
+                                  frame->width, frame->height, frame->fullRange, frame->yuvMatrix,
+                                  frame->yuvTransfer, is10Bit ? 10 : 8);
+      }
+    }
+
+    g_videoWindow.Present(g_frameCache, ui);
   };
 
   auto maybeLogUiDbg = [&](const std::string& line1, const std::string& line2) {
@@ -1260,16 +1279,34 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
         
         if (leftPressed && (mouse.control & 0x80000000)) {
-          // Window-originated seek (supports drag) — queue the seek so we throttle rapid updates
-          double winW = g_videoWindow.GetWidth();
-          if (winW > 0) {
-            double ratio = (double)mouse.pos.X / winW;
-            ratio = std::clamp(ratio, 0.0, 1.0);
-            double totalSec = player.durationUs() / 1000000.0;
-            if (totalSec > 0.0 && std::isfinite(totalSec)) {
-              double target = ratio * totalSec;
-              // Queue instead of immediate send — throttled by seek queue logic
-              queueSeekRequest(target);
+          // Window-originated seek
+          // The UI is drawn relative to the window dimensions (uv.y 0.96-0.985)
+          // not the video viewport.
+          float winW = static_cast<float>(g_videoWindow.GetWidth());
+          float winH = static_cast<float>(g_videoWindow.GetHeight());
+          
+          if (winW > 0.0f && winH > 0.0f) {
+            float mouseWinX = static_cast<float>(mouse.pos.X) / winW;
+            float mouseWinY = static_cast<float>(mouse.pos.Y) / winH;
+            
+            // Progress bar is at y: 0.96-0.985, x: 0.02-0.98 (normalized window coords)
+            const float barYTop = 0.95f; // slightly larger hit area
+            const float barYBot = 1.0f;
+            const float barXLeft = 0.02f;
+            const float barXRight = 0.98f;
+            
+            if (mouseWinX >= barXLeft && mouseWinX <= barXRight &&
+                mouseWinY >= barYTop && mouseWinY <= barYBot) {
+              double barWidth = static_cast<double>(barXRight - barXLeft);
+              double relX = static_cast<double>(mouseWinX - barXLeft);
+              double ratio = relX / barWidth;
+              ratio = std::clamp(ratio, 0.0, 1.0);
+              
+              double totalSec = player.durationUs() / 1000000.0;
+              if (totalSec > 0.0 && std::isfinite(totalSec)) {
+                double target = ratio * totalSec;
+                queueSeekRequest(target);
+              }
             }
           }
           triggerOverlay();
@@ -1332,7 +1369,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       if (!windowEnabled) {
         redraw = true;
       }
-      // Don't force refresh art on every frame, only when explicitly needed.
     }
     if (!player.hasVideoFrame()) {
       haveFrame = false;
@@ -1354,6 +1390,50 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
 
     presentWindowFrame(presented);
+    
+    // Render overlay update if visible AND no frame was just presented
+    // This prevents double-rendering of overlay (Present() doesn't render UI anymore)
+    if (windowEnabled && g_videoWindow.IsOpen() && overlayVisible() && !presented) {
+      // Prepare overlay UI state with current or pending seek target
+      int64_t clockUs = player.currentUs();
+      double currentSec = clockUs > 0 ? static_cast<double>(clockUs) / 1000000.0 : 0.0;
+      double totalSec = -1.0;
+      int64_t durUs = player.durationUs();
+      if (durUs > 0) {
+        totalSec = static_cast<double>(durUs) / 1000000.0;
+      } else if (audioOk) {
+        totalSec = audioGetTotalSec();
+      }
+      if (totalSec > 0.0) {
+        currentSec = std::clamp(currentSec, 0.0, totalSec);
+      }
+      
+      double displaySec = currentSec;
+      bool seekingOverlay = player.isSeeking() || localSeekRequested;
+      if (seekingOverlay && totalSec > 0.0 && std::isfinite(totalSec)) {
+        displaySec = std::clamp(pendingSeekTargetSec, 0.0, totalSec);
+      }
+      
+      double ratio = 0.0;
+      if (totalSec > 0.0 && std::isfinite(totalSec)) {
+        ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
+      }
+      
+      WindowUiState ui;
+      ui.progress = static_cast<float>(ratio);
+      ui.isPaused = player.state() == PlayerState::Paused;
+      ui.overlayAlpha = 1.0f;
+      ui.title = toUtf8String(file.filename());
+      ui.displaySec = displaySec;
+      ui.totalSec = totalSec;
+      ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
+      
+      // Render overlay only - updates progress bar and text without touching video frame
+      {
+        std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+        g_videoWindow.PresentOverlay(g_frameCache, ui);
+      }
+    }
 
     if (player.isEnded()) {
       // Mark ended but keep the loop running so user can seek back without causing

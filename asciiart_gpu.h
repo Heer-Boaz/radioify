@@ -6,8 +6,8 @@
 #include <string>
 #include <memory>
 #include <d3d11.h>
-#include <wrl/client.h>
-#include "asciiart.h" // For AsciiArt struct
+#include "videoprocessor.h"
+#include "asciiart.h"
 
 class GpuAsciiRenderer {
 public:
@@ -51,8 +51,6 @@ private:
     bool CreateDeviceWithFlags(UINT flags);
     bool CreateComputeShaders(std::string* error);
     bool CreateBuffers(int width, int height, int outW, int outH);
-    bool CreateRGBATextures(int width, int height);
-    bool CreateNV12Textures(int width, int height, bool is10Bit);
     bool CreateStatsBuffer();
     
     // Shared rendering logic (called after textures are set up)
@@ -69,21 +67,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_bgClampShader;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_syncHistoryShader;
 
-    // Resources
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_inputTexture;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_inputSRV;
-
-    // NV12 Resources
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_textureY;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvY;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_textureUV;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvUV;
-    
-    // Hardware texture copy (for zero-copy path when source lacks SHADER_RESOURCE binding)
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_hwCopyTexture;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_hwCopySrvY;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_hwCopySrvUV;
-    
+    GpuVideoFrameCache m_frameCache;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_linearSampler;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputBuffer;

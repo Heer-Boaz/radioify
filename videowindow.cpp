@@ -168,163 +168,203 @@ namespace {
         return true;
     }
 
+    // Video frame rendering shader (combined from videowindow_render.hlsl)
     const char* g_shaderSource = R"(
-        struct PS_INPUT {
-            float4 pos : SV_POSITION;
-            float2 tex : TEXCOORD;
-        };
+// Video frame rendering shader - handles YUV/RGBA to RGB conversion with color correction
+// Used for main video frame rendering with integrated overlay elements
 
-        cbuffer Constants : register(b0) {
-            uint isFullRange;
-            uint yuvMatrix;
-            uint yuvTransfer;
-            uint bitDepth;
-            float uiProgress;
-            float uiAlpha;
-            uint uiPaused;
-            uint uiHasRGBA;
-            uint uiVolPct;
-            uint uiPad0;
-            float uiTextTop;
-            float uiTextHeight;
-            float uiTextLeft;
-            float uiTextWidth;
-        };
+struct PS_INPUT {
+    float4 pos : SV_POSITION;
+    float2 tex : TEXCOORD;
+};
 
-        PS_INPUT VS(uint vid : SV_VertexID) {
-            PS_INPUT output;
-            output.tex = float2(vid & 1, vid >> 1);
-            output.pos = float4(output.tex * float2(2, -2) + float2(-1, 1), 0, 1);
-            return output;
+cbuffer Constants : register(b0) {
+    uint isFullRange;
+    uint yuvMatrix;
+    uint yuvTransfer;
+    uint bitDepth;
+    float uiProgress;
+    float uiAlpha;
+    uint uiPaused;
+    uint uiHasRGBA;
+    uint uiVolPct;
+    uint uiPad0;
+    float uiTextTop;
+    float uiTextHeight;
+    float uiTextLeft;
+    float uiTextWidth;
+};
+
+PS_INPUT VS(uint vid : SV_VertexID) {
+    PS_INPUT output;
+    output.tex = float2(vid & 1, vid >> 1);
+    output.pos = float4(output.tex * float2(2, -2) + float2(-1, 1), 0, 1);
+    return output;
+}
+
+Texture2D texY : register(t0);
+Texture2D texUV : register(t1);
+Texture2D texRGBA : register(t2);
+Texture2D texText : register(t3);
+SamplerState sam : register(s0);
+
+float ExpandYNorm(float yNorm) {
+    float maxCode = (float)((1u << bitDepth) - 1u);
+    float yCode = yNorm * maxCode;
+    uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
+    float yMin = (isFullRange != 0) ? 0.0f : (float)(16u << shift);
+    float yMax = (isFullRange != 0) ? maxCode : (float)(235u << shift);
+    return saturate((yCode - yMin) / max(yMax - yMin, 1.0f));
+}
+
+float2 ExpandUV(float2 uvNorm) {
+    float maxCode = (float)((1u << bitDepth) - 1u);
+    float2 uvCode = uvNorm * maxCode;
+    uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
+    float cMid = (float)(128u << shift);
+    float cMin = (isFullRange != 0) ? 0.0f : (float)(16u << shift);
+    float cMax = (isFullRange != 0) ? maxCode : (float)(240u << shift);
+    return (uvCode - cMid) / max(cMax - cMin, 1.0f);
+}
+
+float PQEotf(float v) {
+    float m1 = 2610.0 / 16384.0;
+    float m2 = 2523.0 / 32.0;
+    float c1 = 3424.0 / 4096.0;
+    float c2 = 2413.0 / 128.0;
+    float c3 = 2392.0 / 128.0;
+    float vp = pow(max(v, 0.0), 1.0 / m2);
+    return pow(max(vp - c1, 0.0) / (c2 - c3 * vp), 1.0 / m1);
+}
+
+float HlgEotf(float v) {
+    const float a = 0.17883277;
+    const float b = 1.0 - 4.0 * a;
+    const float c = 0.5 - a * log(4.0 * a);
+    if (v <= 0.5) return (v * v) / 3.0;
+    return (exp((v - c) / a) + b) / 12.0;
+}
+
+float ToneMapFilmic(float x) {
+    const float A = 0.15, B = 0.50, C = 0.10, D = 0.20, E = 0.02, F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+}
+
+float LinearToSrgb(float v) {
+    v = max(v, 0.0);
+    return (v <= 0.0031308) ? (v * 12.92) : (1.055 * pow(v, 1.0 / 2.4) - 0.055);
+}
+
+float3 ApplyHdrToSdr(float3 v) {
+    v = saturate(v);
+    float3 linearRgb;
+    if (yuvTransfer == 1) linearRgb = float3(PQEotf(v.r), PQEotf(v.g), PQEotf(v.b));
+    else if (yuvTransfer == 2) linearRgb = float3(HlgEotf(v.r), HlgEotf(v.g), HlgEotf(v.b));
+    else return v;
+    
+    float3 mapped = float3(ToneMapFilmic(linearRgb.r * 100.0), ToneMapFilmic(linearRgb.g * 100.0), ToneMapFilmic(linearRgb.b * 100.0));
+    return float3(LinearToSrgb(mapped.r), LinearToSrgb(mapped.g), LinearToSrgb(mapped.b));
+}
+
+float4 PS(PS_INPUT input) : SV_Target {
+    if (uiHasRGBA != 0) {
+        float4 c = texRGBA.Sample(sam, input.tex);
+        return float4(saturate(c.rgb), 1.0);
+    }
+
+    float y = ExpandYNorm(texY.Sample(sam, input.tex).r);
+    float2 uv = ExpandUV(texUV.Sample(sam, input.tex).rg);
+    
+    float r, g, b;
+    if (yuvMatrix == 2) { r = y + 1.4746 * uv.y; g = y - 0.16455 * uv.x - 0.57135 * uv.y; b = y + 1.8814 * uv.x; }
+    else if (yuvMatrix == 1) { r = y + 1.4020 * uv.y; g = y - 0.3441 * uv.x - 0.7141 * uv.y; b = y + 1.7720 * uv.x; }
+    else { r = y + 1.5748 * uv.y; g = y - 0.1873 * uv.x - 0.4681 * uv.y; b = y + 1.8556 * uv.x; }
+    
+    float3 rgb = float3(r, g, b);
+    if (yuvTransfer != 0) rgb = ApplyHdrToSdr(rgb);
+    return float4(saturate(rgb), 1.0);
+}
+    )";
+
+    // Overlay-only rendering shader (from videowindow_overlay.hlsl)
+    const char* g_overlayShaderSource = R"(
+// Overlay-only rendering shader - updates UI without rendering video frame
+// Used for progress bar and UI updates during seeking/pausing
+
+struct PS_INPUT {
+    float4 pos : SV_POSITION;
+    float2 tex : TEXCOORD;
+};
+
+cbuffer Constants : register(b0) {
+    uint isFullRange;
+    uint yuvMatrix;
+    uint yuvTransfer;
+    uint bitDepth;
+    float uiProgress;
+    float uiAlpha;
+    uint uiPaused;
+    uint uiHasRGBA;
+    uint uiVolPct;
+    uint uiPad0;
+    float uiTextTop;
+    float uiTextHeight;
+    float uiTextLeft;
+    float uiTextWidth;
+};
+
+PS_INPUT VS(uint vid : SV_VertexID) {
+    PS_INPUT output;
+    output.tex = float2(vid & 1, vid >> 1);
+    output.pos = float4(output.tex * float2(2, -2) + float2(-1, 1), 0, 1);
+    return output;
+}
+
+Texture2D texText : register(t3);
+SamplerState sam : register(s0);
+
+float4 PS_UI(PS_INPUT input) : SV_Target {
+    if (uiAlpha <= 0.01) discard;
+    float2 uv = input.tex;
+    float4 color = float4(0, 0, 0, 0);
+    bool hit = false;
+
+    // Progress bar at bottom (only UI element from console) - thinner
+    if (uv.y > 0.96 && uv.y < 0.985 && uv.x > 0.02 && uv.x < 0.98) {
+        float barX = (uv.x - 0.02) / 0.96;
+        if (barX < uiProgress) color = float4(1, 0.8, 0.2, 0.9);
+        else color = float4(0.3, 0.3, 0.3, 0.7);
+        hit = true;
+    }
+
+    // Central pause icon (draw two small vertical bars)
+    if (uiPaused != 0) {
+        float2 c = float2(0.5, 0.5);
+        float2 d = abs(uv - c);
+        // Two vertical bars centered horizontally
+        if (d.y < 0.06) {
+            // left bar
+            if (uv.x > 0.48 && uv.x < 0.495) { color = float4(1,1,1,0.95); hit = true; }
+            // right bar
+            if (uv.x > 0.505 && uv.x < 0.52) { color = float4(1,1,1,0.95); hit = true; }
         }
+    }
 
-        Texture2D texY : register(t0);
-        Texture2D texUV : register(t1);
-        Texture2D texRGBA : register(t2);
-        Texture2D texText : register(t3);
-        SamplerState sam : register(s0);
-
-        float ExpandYNorm(float yNorm) {
-            float maxCode = (float)((1u << bitDepth) - 1u);
-            float yCode = yNorm * maxCode;
-            uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
-            float yMin = (isFullRange != 0) ? 0.0f : (float)(16u << shift);
-            float yMax = (isFullRange != 0) ? maxCode : (float)(235u << shift);
-            return saturate((yCode - yMin) / max(yMax - yMin, 1.0f));
+    // Text overlay sampled from a CPU-generated texture (t3)
+    if (uiTextHeight > 0.0 && uv.y >= uiTextTop && uv.y <= (uiTextTop + uiTextHeight) && uv.x >= uiTextLeft && uv.x <= (uiTextLeft + uiTextWidth)) {
+        float localY = (uv.y - uiTextTop) / uiTextHeight;
+        float localX = (uv.x - uiTextLeft) / uiTextWidth;
+        float2 textUV = float2(localX, localY);
+        float4 t = texText.Sample(sam, textUV);
+        if (t.a > 0.01) {
+            color = t;
+            hit = true;
         }
+    }
 
-        float2 ExpandUV(float2 uvNorm) {
-            float maxCode = (float)((1u << bitDepth) - 1u);
-            float2 uvCode = uvNorm * maxCode;
-            uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
-            float cMid = (float)(128u << shift);
-            float cMin = (isFullRange != 0) ? 0.0f : (float)(16u << shift);
-            float cMax = (isFullRange != 0) ? maxCode : (float)(240u << shift);
-            return (uvCode - cMid) / max(cMax - cMin, 1.0f);
-        }
-
-        float PQEotf(float v) {
-            float m1 = 2610.0 / 16384.0;
-            float m2 = 2523.0 / 32.0;
-            float c1 = 3424.0 / 4096.0;
-            float c2 = 2413.0 / 128.0;
-            float c3 = 2392.0 / 128.0;
-            float vp = pow(max(v, 0.0), 1.0 / m2);
-            return pow(max(vp - c1, 0.0) / (c2 - c3 * vp), 1.0 / m1);
-        }
-
-        float HlgEotf(float v) {
-            const float a = 0.17883277;
-            const float b = 1.0 - 4.0 * a;
-            const float c = 0.5 - a * log(4.0 * a);
-            if (v <= 0.5) return (v * v) / 3.0;
-            return (exp((v - c) / a) + b) / 12.0;
-        }
-
-        float ToneMapFilmic(float x) {
-            const float A = 0.15, B = 0.50, C = 0.10, D = 0.20, E = 0.02, F = 0.30;
-            return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
-        }
-
-        float LinearToSrgb(float v) {
-            v = max(v, 0.0);
-            return (v <= 0.0031308) ? (v * 12.92) : (1.055 * pow(v, 1.0 / 2.4) - 0.055);
-        }
-
-        float3 ApplyHdrToSdr(float3 v) {
-            v = saturate(v);
-            float3 linearRgb;
-            if (yuvTransfer == 1) linearRgb = float3(PQEotf(v.r), PQEotf(v.g), PQEotf(v.b));
-            else if (yuvTransfer == 2) linearRgb = float3(HlgEotf(v.r), HlgEotf(v.g), HlgEotf(v.b));
-            else return v;
-            
-            float3 mapped = float3(ToneMapFilmic(linearRgb.r * 100.0), ToneMapFilmic(linearRgb.g * 100.0), ToneMapFilmic(linearRgb.b * 100.0));
-            return float3(LinearToSrgb(mapped.r), LinearToSrgb(mapped.g), LinearToSrgb(mapped.b));
-        }
-
-        float4 PS(PS_INPUT input) : SV_Target {
-            if (uiHasRGBA != 0) {
-                float4 c = texRGBA.Sample(sam, input.tex);
-                return float4(saturate(c.rgb), 1.0);
-            }
-
-            float y = ExpandYNorm(texY.Sample(sam, input.tex).r);
-            float2 uv = ExpandUV(texUV.Sample(sam, input.tex).rg);
-            
-            float r, g, b;
-            if (yuvMatrix == 2) { r = y + 1.4746 * uv.y; g = y - 0.16455 * uv.x - 0.57135 * uv.y; b = y + 1.8814 * uv.x; }
-            else if (yuvMatrix == 1) { r = y + 1.4020 * uv.y; g = y - 0.3441 * uv.x - 0.7141 * uv.y; b = y + 1.7720 * uv.x; }
-            else { r = y + 1.5748 * uv.y; g = y - 0.1873 * uv.x - 0.4681 * uv.y; b = y + 1.8556 * uv.x; }
-            
-            float3 rgb = float3(r, g, b);
-            if (yuvTransfer != 0) rgb = ApplyHdrToSdr(rgb);
-            return float4(saturate(rgb), 1.0);
-        }
-
-        float4 PS_UI(PS_INPUT input) : SV_Target {
-            if (uiAlpha <= 0.01) discard;
-            float2 uv = input.tex;
-            float4 color = float4(0, 0, 0, 0);
-            bool hit = false;
-
-            // Progress bar at bottom (only UI element from console) - thinner
-            if (uv.y > 0.96 && uv.y < 0.985 && uv.x > 0.02 && uv.x < 0.98) {
-                float barX = (uv.x - 0.02) / 0.96;
-                if (barX < uiProgress) color = float4(1, 0.8, 0.2, 0.9);
-                else color = float4(0.3, 0.3, 0.3, 0.7);
-                hit = true;
-            }
-
-            // Central pause icon (draw two small vertical bars)
-            if (uiPaused != 0) {
-                float2 c = float2(0.5, 0.5);
-                float2 d = abs(uv - c);
-                // Two vertical bars centered horizontally
-                if (d.y < 0.06) {
-                    // left bar
-                    if (uv.x > 0.48 && uv.x < 0.495) { color = float4(1,1,1,0.95); hit = true; }
-                    // right bar
-                    if (uv.x > 0.505 && uv.x < 0.52) { color = float4(1,1,1,0.95); hit = true; }
-                }
-            }
-
-
-
-            // Text overlay sampled from a CPU-generated texture (t3)
-            if (uiTextHeight > 0.0 && uv.y >= uiTextTop && uv.y <= (uiTextTop + uiTextHeight) && uv.x >= uiTextLeft && uv.x <= (uiTextLeft + uiTextWidth)) {
-                float localY = (uv.y - uiTextTop) / uiTextHeight;
-                float localX = (uv.x - uiTextLeft) / uiTextWidth;
-                float2 textUV = float2(localX, localY);
-                float4 t = texText.Sample(sam, textUV);
-                if (t.a > 0.01) {
-                    color = t;
-                    hit = true;
-                }
-            }
-
-            if (!hit) discard;
-            return color * uiAlpha;
-        }
+    if (!hit) discard;
+    return color * uiAlpha;
+}
     )";
 }
 
@@ -350,7 +390,7 @@ bool VideoWindow::MakeFullscreen() {
 
     // Save extended style so we can restore it on exit
     m_prevExStyle = GetWindowLong(m_hWnd, GWL_EXSTYLE);
-    std::fprintf(stderr, "VideoWindow: MakeFullscreen: prev style=0x%08X exstyle=0x%08X\n", static_cast<unsigned int>(m_prevStyle), static_cast<unsigned int>(m_prevExStyle));
+    // diagnostic: entering fullscreen (log removed)
 
     if (GetMonitorInfo(hm, &mi)) {
         UINT monW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
@@ -361,8 +401,7 @@ bool VideoWindow::MakeFullscreen() {
             DXGI_SWAP_CHAIN_DESC desc = {};
             HRESULT g = m_swapChain->GetDesc(&desc);
             if (SUCCEEDED(g)) {
-                std::fprintf(stderr, "VideoWindow: swapchain desc: BufferCount=%u Width=%u Height=%u Format=%u SwapEffect=%u Flags=0x%08X\n",
-                             desc.BufferCount, desc.BufferDesc.Width, desc.BufferDesc.Height, static_cast<unsigned int>(desc.BufferDesc.Format), static_cast<unsigned int>(desc.SwapEffect), static_cast<unsigned int>(desc.Flags));
+                // swapchain desc diagnostic removed
             } else {
                 std::fprintf(stderr, "VideoWindow: GetDesc failed (0x%08X)\n", static_cast<unsigned int>(g));
             }
@@ -374,7 +413,7 @@ bool VideoWindow::MakeFullscreen() {
         SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
         LONG newEx = m_prevExStyle & ~(WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
         LONG prevExSet = SetWindowLong(m_hWnd, GWL_EXSTYLE, newEx);
-        std::fprintf(stderr, "VideoWindow: SetWindowLong(GWL_EXSTYLE): previous=0x%08X new=0x%08X\n", static_cast<unsigned int>(prevExSet), static_cast<unsigned int>(newEx));
+    // SetWindowLong diagnostic removed
 
         SetWindowPos(m_hWnd, HWND_TOPMOST, mi.rcMonitor.left, mi.rcMonitor.top, monW, monH, SWP_SHOWWINDOW | SWP_FRAMECHANGED);
         ::ShowWindow(m_hWnd, SW_SHOW);
@@ -398,11 +437,11 @@ bool VideoWindow::MakeFullscreen() {
                     ctx->ClearState();
                     ctx->Flush();
                     ctx->Release();
-                    std::fprintf(stderr, "VideoWindow: Unbound RTVs/SRVs and cleared context prior to swapchain recreate\n");
+                    // Unbound RTVs/SRVs diagnostic removed
                 }
             }
-            if (m_renderTargetView) { m_renderTargetView.Reset(); std::fprintf(stderr, "VideoWindow: released m_renderTargetView before swapchain recreate\n"); }
-            if (m_swapChain) { m_swapChain.Reset(); std::fprintf(stderr, "VideoWindow: released old swapchain before recreate\n"); }
+            if (m_renderTargetView) { m_renderTargetView.Reset(); }
+            if (m_swapChain) { m_swapChain.Reset(); }
         }
 
         // Recreate the swapchain sized to the monitor (borderless windowed fullscreen)
@@ -423,9 +462,9 @@ bool VideoWindow::MakeFullscreen() {
             BringWindowToTop(m_hWnd);
             // Defensive: explicitly call Resize to ensure internal size/state is updated
             Resize(static_cast<int>(monW), static_cast<int>(monH));
-            std::fprintf(stderr, "VideoWindow: after CreateSwapChain Resize set m_width=%d m_height=%d\n", m_width, m_height);
+            // after CreateSwapChain diagnostic removed
             DWORD err = GetLastError();
-            std::fprintf(stderr, "VideoWindow: entered borderless fullscreen %u x %u (GetLastError=0x%08X)\n", monW, monH, static_cast<unsigned int>(err));
+            // entered borderless fullscreen (diagnostic removed)
             m_isFullscreen = true;
             // Allow WM_SIZE processing again now that we've updated internal state
             m_ignoreWindowSizeEvents = false;
@@ -443,7 +482,7 @@ bool VideoWindow::MakeFullscreen() {
     // Fallback (disabled by default): try exclusive fullscreen as last resort
     HRESULT hr = m_swapChain->SetFullscreenState(TRUE, NULL);
     if (SUCCEEDED(hr)) {
-        std::fprintf(stderr, "VideoWindow: SetFullscreenState(TRUE) succeeded (exclusive fullscreen)\n");
+        // exclusive fullscreen success message removed
         // Attempt to resize buffers to monitor resolution
         if (GetMonitorInfo(hm, &mi)) {
             UINT monW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
@@ -452,7 +491,7 @@ bool VideoWindow::MakeFullscreen() {
             if (SUCCEEDED(r3)) {
                 Resize(static_cast<int>(monW), static_cast<int>(monH));
                 m_isFullscreen = true;
-                std::fprintf(stderr, "VideoWindow: exclusive fullscreen buffers resized to %u x %u\n", monW, monH);
+                // exclusive fullscreen buffers resized message removed
                 return true;
             }
             std::fprintf(stderr, "VideoWindow: ResizeBuffers(exclusive) failed (0x%08X)\n", static_cast<unsigned int>(r3));
@@ -491,7 +530,7 @@ bool VideoWindow::ExitFullscreen() {
     SetFocus(m_hWnd);
 
     m_isFullscreen = false;
-    std::fprintf(stderr, "VideoWindow: exited fullscreen and restored window rect and styles\n");
+    // exited fullscreen message removed
     return true;
 }
 
@@ -530,9 +569,9 @@ void VideoWindow::Cleanup() {
     m_uiShader.Reset();
     m_sampler.Reset();
     m_constantBuffer.Reset();
-    m_copySrvY.Reset();
-    m_copySrvUV.Reset();
-    m_copyTexture.Reset();
+    // frame cache is now owned/managed externally
+    m_textTexture.Reset();
+    m_textSrv.Reset();
 }
 
 LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -655,7 +694,11 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
     m_lastWindowTitle = title;
     m_baseWindowTitle = title;
 
-    if (!CreateSwapChain(width, height)) return false;
+    if (!CreateSwapChain(width, height)) {
+        ::DestroyWindow(m_hWnd);
+        m_hWnd = nullptr;
+        return false;
+    }
 
     // Attempt to enter fullscreen immediately after creating swapchain
     // This is best-effort (may fail on some systems) but improves UX for video playback
@@ -665,6 +708,8 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) {
         std::fprintf(stderr, "VideoWindow: no device in Open()\n");
+        Close();
+        if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; }
         return false;
     }
 
@@ -689,18 +734,18 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
         if (errorBlob) std::fprintf(stderr, "VideoWindow: PS compile error: %s\n", (const char*)errorBlob->GetBufferPointer());
         return false;
     }
-    hr = D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "PS_UI", "ps_5_0", 0, 0, &uiBlob, &errorBlob);
+    hr = D3DCompile(g_overlayShaderSource, strlen(g_overlayShaderSource), NULL, NULL, NULL, "PS_UI", "ps_5_0", 0, 0, &uiBlob, &errorBlob);
     if (FAILED(hr)) {
         if (errorBlob) std::fprintf(stderr, "VideoWindow: PS_UI compile error: %s\n", (const char*)errorBlob->GetBufferPointer());
         return false;
     }
 
     hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), NULL, &m_vertexShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateVertexShader failed (0x%08X)\n", static_cast<unsigned int>(hr)); return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateVertexShader failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
     hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), NULL, &m_pixelShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(PS) failed (0x%08X)\n", static_cast<unsigned int>(hr)); return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(PS) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
     hr = device->CreatePixelShader(uiBlob->GetBufferPointer(), uiBlob->GetBufferSize(), NULL, &m_uiShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
 
     D3D11_BUFFER_DESC cbDesc = {};
     cbDesc.ByteWidth = sizeof(ShaderConstants);
@@ -708,7 +753,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
     cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     hr = device->CreateBuffer(&cbDesc, NULL, &m_constantBuffer);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBuffer(constant) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Cleanup(); return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBuffer(constant) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
 
     D3D11_SAMPLER_DESC sampDesc = {};
     sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -719,7 +764,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
     sampDesc.MinLOD = 0;
     sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
     hr = device->CreateSamplerState(&sampDesc, &m_sampler);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateSamplerState failed (0x%08X)\n", static_cast<unsigned int>(hr)); Cleanup(); return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateSamplerState failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
 
     ::ShowWindow(m_hWnd, SW_SHOW);
     m_width = width;
@@ -849,62 +894,43 @@ bool VideoWindow::PollInput(InputEvent& ev) {
     return true;
 }
 
-void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, int height,
-                           bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth,
-                           const WindowUiState& ui) {
+void VideoWindow::UpdateViewport(int width, int height) {
+    VideoViewport vp = calculateViewport(width, height, m_videoWidth, m_videoHeight);
+    m_viewportX = vp.x;
+    m_viewportY = vp.y;
+    m_viewportW = vp.w;
+    m_viewportH = vp.h;
+}
+
+void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
+    if (!frameCache.HasFrame()) return;
+
+    // Refresh window dimensions to avoid stale size during fullscreen transitions
+    RECT rect;
+    if (GetClientRect(m_hWnd, &rect)) {
+        m_width = rect.right - rect.left;
+        m_height = rect.bottom - rect.top;
+    }
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;
 
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
-    if (!context || !m_constantBuffer) return;
-    if (!m_renderTargetView) {
-        if (m_waitingForRenderTarget) {
-            std::fprintf(stderr, "VideoWindow: Present skipped - waiting for render target/backbuffer to be ready\n");
-            return;
-        }
-        return;
-    }
-    
-    // Update of constant buffer moved below (after determining texture format such as RGBA)
+    if (!context || !m_constantBuffer || !m_renderTargetView) return;
 
-    // Set up rendering
+    m_videoWidth = frameCache.GetWidth();
+    m_videoHeight = frameCache.GetHeight();
+
+    // Render
     float clearColor[4] = { 0, 0, 0, 1 };
     context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
     context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
 
-    // Compute viewport to preserve source aspect ratio (letterbox/pillarbox)
-    float srcAspect = (width > 0 && height > 0) ? (static_cast<float>(width) / static_cast<float>(height)) : 1.0f;
-    // Query swapchain buffer size to ensure we use the actual backbuffer dimensions
-    float dstW = static_cast<float>(m_width);
-    float dstH = static_cast<float>(m_height);
-    if (m_swapChain) {
-        DXGI_SWAP_CHAIN_DESC scd = {};
-        if (SUCCEEDED(m_swapChain->GetDesc(&scd))) {
-            dstW = static_cast<float>(scd.BufferDesc.Width);
-            dstH = static_cast<float>(scd.BufferDesc.Height);
-        }
-    }
-    std::fprintf(stderr, "VideoWindow: Present: m_width=%d m_height=%d srcWxH=%d x %d dstWxH=%0.1f x %0.1f\n", m_width, m_height, width, height, dstW, dstH);
-    float dstAspect = (dstH > 0.0f) ? (dstW / dstH) : 1.0f;
-    float viewW = dstW;
-    float viewH = dstH;
-    if (srcAspect > dstAspect) {
-        // source is wider -> full width, letterbox vertically
-        viewW = dstW;
-        viewH = dstW / srcAspect;
-    } else {
-        // source is taller -> full height, pillarbox horizontally
-        viewH = dstH;
-        viewW = dstH * srcAspect;
-    }
-    float viewX = std::floorf((dstW - viewW) * 0.5f);
-    float viewY = std::floorf((dstH - viewH) * 0.5f);
-    std::fprintf(stderr, "VideoWindow: Present viewport computed viewW=%0.1f viewH=%0.1f viewX=%0.1f viewY=%0.1f\n", viewW, viewH, viewX, viewY);
-    D3D11_VIEWPORT viewport = { viewX, viewY, viewW, viewH, 0.0f, 1.0f };
+    UpdateViewport(m_width, m_height);
+    D3D11_VIEWPORT viewport = { m_viewportX, m_viewportY, m_viewportW, m_viewportH, 0.0f, 1.0f };
     context->RSSetViewports(1, &viewport);
 
     context->IASetInputLayout(NULL);
@@ -914,345 +940,193 @@ void VideoWindow::Present(ID3D11Texture2D* texture, int arrayIndex, int width, i
     context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
     context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
 
-    if (!texture) return;
-    D3D11_TEXTURE2D_DESC srcDesc;
-    texture->GetDesc(&srcDesc);
-
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvY, srvUV, srvRGBA;
-    bool is10Bit = (srcDesc.Format == DXGI_FORMAT_P010);
-    bool isRGBA = (srcDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || srcDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM || srcDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
-
-    // Update constants (now that we know if RGBA path is requested)
     {
         D3D11_MAPPED_SUBRESOURCE mapped;
         if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-            ShaderConstants* sc = (ShaderConstants*)mapped.pData;
-            sc->isFullRange = fullRange ? 1 : 0;
-            sc->yuvMatrix = (uint32_t)matrix;
-            sc->yuvTransfer = (uint32_t)transfer;
-            sc->bitDepth = (uint32_t)bitDepth;
-            sc->progress = ui.progress;
-            sc->overlayAlpha = ui.overlayAlpha;
-            sc->isPaused = ui.isPaused ? 1 : 0;
-            sc->hasRGBA = isRGBA ? 1u : 0u;
-            sc->volPct = static_cast<uint32_t>(std::clamp(ui.volPct, 0, 100));
-            // default text overlay position/height (normalized)
-            sc->textTop = 0.88f;
-            sc->textHeight = 0.06f;
+            ShaderConstants sc{};
+            sc.isFullRange = frameCache.IsFullRange() ? 1 : 0;
+            sc.yuvMatrix = (uint32_t)frameCache.GetMatrix();
+            sc.yuvTransfer = (uint32_t)frameCache.GetTransfer();
+            sc.bitDepth = (uint32_t)frameCache.GetBitDepth();
+            sc.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
+            std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }
     }
 
-    if (isRGBA) {
-        if (srcDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
-            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-            srvDesc.Format = srcDesc.Format;
-            if (srcDesc.ArraySize > 1) {
-                srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-                srvDesc.Texture2DArray.FirstArraySlice = arrayIndex;
-                srvDesc.Texture2DArray.ArraySize = 1;
-                srvDesc.Texture2DArray.MipLevels = 1;
-            } else {
-                srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                srvDesc.Texture2D.MipLevels = 1;
-            }
-            HRESULT hrRGBA = device->CreateShaderResourceView(texture, &srvDesc, &srvRGBA);
-            if (FAILED(hrRGBA) || !srvRGBA) {
-                std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(RGBA) failed (0x%08X), falling back to copy path\n", static_cast<unsigned int>(hrRGBA));
-                srvRGBA.Reset();
-            }
-        }
-    }
-
-    if (!isRGBA && (srcDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE)) {
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
-        srvDescY.Format = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
-        if (srcDesc.ArraySize > 1) {
-            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-            srvDescY.Texture2DArray.FirstArraySlice = arrayIndex;
-            srvDescY.Texture2DArray.ArraySize = 1;
-            srvDescY.Texture2DArray.MipLevels = 1;
-        } else {
-            srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srvDescY.Texture2D.MipLevels = 1;
-        }
-        HRESULT hrY = device->CreateShaderResourceView(texture, &srvDescY, &srvY);
-        if (FAILED(hrY) || !srvY) {
-            // Fallback to copy path if SRV creation fails
-            std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(Y) failed (0x%08X), falling back to copy path\n", static_cast<unsigned int>(hrY));
-            srvY.Reset();
-        }
-
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = srvDescY;
-        srvDescUV.Format = is10Bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-        HRESULT hrUV = device->CreateShaderResourceView(texture, &srvDescUV, &srvUV);
-        if (FAILED(hrUV) || !srvUV) {
-            std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(UV) failed (0x%08X), falling back to copy path\n", static_cast<unsigned int>(hrUV));
-            srvUV.Reset();
-        }
-
-        if (!srvY || !srvUV) {
-            // Force path through copy texture below
-            srvY.Reset(); srvUV.Reset();
-        }
+    if (frameCache.IsRgba()) {
+        ID3D11ShaderResourceView* srvs[3] = { nullptr, nullptr, frameCache.GetSrvRGBA() };
+        context->PSSetShaderResources(0, 3, srvs);
     } else {
-        // Must copy to an SRV-enabled texture
-        bool needNewCopy = !m_copyTexture;
-        if (m_copyTexture) {
-            D3D11_TEXTURE2D_DESC cDesc;
-            m_copyTexture->GetDesc(&cDesc);
-            if (cDesc.Width != srcDesc.Width || cDesc.Height != srcDesc.Height || cDesc.Format != srcDesc.Format) {
-                needNewCopy = true;
-            }
-        }
-
-        if (needNewCopy) {
-            // Validate dimensions to avoid enormous allocations / driver issues
-            const uint32_t MAX_COPY_DIM = 8192u; // conservative limit
-            if (srcDesc.Width == 0 || srcDesc.Height == 0 || srcDesc.Width > MAX_COPY_DIM || srcDesc.Height > MAX_COPY_DIM) {
-                std::fprintf(stderr, "VideoWindow: refusing to create copy texture with dimensions %u x %u\n", srcDesc.Width, srcDesc.Height);
-                return;
-            }
-
-            // Unbind any SRVs that might reference the old texture before resetting
-            ID3D11ShaderResourceView* nullSRVs[3] = { nullptr, nullptr, nullptr };
-            context->PSSetShaderResources(0, 3, nullSRVs);
-            context->Flush();
-
-            m_copyTexture.Reset();
-            m_copySrvY.Reset();
-            m_copySrvUV.Reset();
-            D3D11_TEXTURE2D_DESC cDesc = {};
-            cDesc.Width = srcDesc.Width;
-            cDesc.Height = srcDesc.Height;
-            cDesc.MipLevels = 1;
-            cDesc.ArraySize = 1;
-            cDesc.Format = srcDesc.Format;
-            cDesc.SampleDesc.Count = 1;
-            cDesc.Usage = D3D11_USAGE_DEFAULT;
-            cDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            HRESULT hr = device->CreateTexture2D(&cDesc, NULL, &m_copyTexture);
-            if (FAILED(hr) || !m_copyTexture) {
-                std::fprintf(stderr, "VideoWindow: CreateTexture2D(copy) failed (0x%08X)\n", static_cast<unsigned int>(hr));
-                return;
-            }
-
-            if (isRGBA) {
-                D3D11_SHADER_RESOURCE_VIEW_DESC srvDescRGBA = {};
-                srvDescRGBA.Format = srcDesc.Format;
-                srvDescRGBA.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                srvDescRGBA.Texture2D.MipLevels = 1;
-                hr = device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescRGBA, &m_copySrvRGBA);
-                if (FAILED(hr)) {
-                    std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(RGBA copy) failed (0x%08X)\n", static_cast<unsigned int>(hr));
-                    m_copyTexture.Reset();
-                    return;
-                }
-            } else {
-                D3D11_SHADER_RESOURCE_VIEW_DESC srvDescY = {};
-                srvDescY.Format = is10Bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
-                srvDescY.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                srvDescY.Texture2D.MipLevels = 1;
-                hr = device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescY, &m_copySrvY);
-                if (FAILED(hr)) {
-                    std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(Y) failed (0x%08X)\n", static_cast<unsigned int>(hr));
-                    m_copyTexture.Reset();
-                    return;
-                }
-
-                D3D11_SHADER_RESOURCE_VIEW_DESC srvDescUV = srvDescY;
-                srvDescUV.Format = is10Bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-                hr = device->CreateShaderResourceView(m_copyTexture.Get(), &srvDescUV, &m_copySrvUV);
-                if (FAILED(hr)) {
-                    std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(UV) failed (0x%08X)\n", static_cast<unsigned int>(hr));
-                    m_copySrvY.Reset();
-                    m_copyTexture.Reset();
-                    return;
-                }
-            }
-        }
-
-        if (srcDesc.ArraySize > 1) {
-            context->CopySubresourceRegion(m_copyTexture.Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, 1), NULL);
-        } else {
-            context->CopyResource(m_copyTexture.Get(), texture);
-        }
-        // Ensure copy completes before sampling; flush to the driver so subsequent Draw samples updated data
-        context->Flush();
-        srvY = m_copySrvY;
-        srvUV = m_copySrvUV;
-    }
-
-    // Bind and draw image depending on which SRV path we have (RGBA or Y/UV)
-    if (srvRGBA) {
-        ID3D11ShaderResourceView* srvsRGBA[3] = { nullptr, nullptr, srvRGBA.Get() };
-        context->PSSetShaderResources(0, 3, srvsRGBA);
-        context->Draw(4, 0);
-    } else if (srvY && srvUV) {
-        ID3D11ShaderResourceView* srvs[] = { srvY.Get(), srvUV.Get() };
+        ID3D11ShaderResourceView* srvs[2] = { frameCache.GetSrvY(), frameCache.GetSrvUV() };
         context->PSSetShaderResources(0, 2, srvs);
-        context->Draw(4, 0);
     }
 
-    // Draw UI overlay unconditionally (when visible) so console UI parity is preserved
-    if (ui.overlayAlpha > 0.01f) {
-        // Update or create a text texture containing filename and time info (size constrained)
-        bool textReady = false;
-        // Choose text pixel height larger but constrained so glyphs remain readable and scale on fullscreen
-        int textPxH = static_cast<int>(std::round(m_height * 0.06f));
-        int textPxMax = std::max(24, m_height / 30); // allow larger text on large displays
-        textPxH = std::clamp(textPxH, 14, textPxMax);
+    context->Draw(4, 0);
+    DrawOverlay(ui);
+
+    m_swapChain->Present(1, 0);
+}
+
+void VideoWindow::DrawOverlay(const WindowUiState& ui) {
+    if (ui.overlayAlpha <= 0.01f) return;
+
+    ID3D11Device* device = getSharedGpuDevice();
+    if (!device) return;
+
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(&context);
+    if (!context || !m_constantBuffer) return;
+    
+    context->PSSetShader(m_uiShader.Get(), NULL, 0);
+    context->VSSetShader(m_vertexShader.Get(), NULL, 0);
+    context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
+    context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
+    
+    float textHeightNorm = 0.0f;
+    float textTopNorm = 0.0f;
+    float textLeftNorm = 0.0f;
+    float textWidthNorm = 0.0f;
+
+    // Optional: Render text to texture
+    if (!ui.title.empty()) {
+        int textPxH = std::clamp((int)std::round(m_height * 0.06f), 14, 48);
         std::string textLine = ui.title + "  " + (ui.totalSec > 0.0 ? (formatTimeDouble(ui.displaySec) + " / " + formatTimeDouble(ui.totalSec)) : formatTimeDouble(ui.displaySec));
-        int charCount = static_cast<int>(textLine.size());
-        const int glyphW = 5, spacing = 1;
+        
+        // Very rough estimate of width
         int estScale = std::max(1, textPxH / 7);
-        int totalTextWidth = charCount * (glyphW + spacing) * estScale;
+        int totalTextWidth = (int)textLine.size() * 6 * estScale; 
         int textPxW = std::min(m_width, totalTextWidth);
-        if (textPxW <= 0) textPxW = std::max(128, std::min(m_width, totalTextWidth));
-        if (!textLine.empty()) {
+
+        if (textPxW > 0 && textPxH > 0) {
+            if (!m_textTexture || m_textWidth != textPxW || m_textHeight != textPxH) {
+                m_textWidth = textPxW;
+                m_textHeight = textPxH;
+                m_textTexture.Reset();
+                m_textSrv.Reset();
+                
+                D3D11_TEXTURE2D_DESC texDesc = {};
+                texDesc.Width = textPxW;
+                texDesc.Height = textPxH;
+                texDesc.MipLevels = 1;
+                texDesc.ArraySize = 1;
+                texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                texDesc.SampleDesc.Count = 1;
+                texDesc.Usage = D3D11_USAGE_DEFAULT;
+                texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                
+                if (SUCCEEDED(device->CreateTexture2D(&texDesc, NULL, &m_textTexture))) {
+                    device->CreateShaderResourceView(m_textTexture.Get(), NULL, &m_textSrv);
+                }
+            }
+            
             std::vector<uint8_t> bmp;
-            if (renderTextToBitmap(textLine, textPxW, textPxH, bmp)) {
-                // Create or update texture
-                if (!m_textTexture || m_textWidth != textPxW || m_textHeight != textPxH) {
-                    m_textTexture.Reset();
-                    m_textSrv.Reset();
-                    D3D11_TEXTURE2D_DESC td{};
-                    td.Width = textPxW;
-                    td.Height = textPxH;
-                    td.MipLevels = 1;
-                    td.ArraySize = 1;
-                    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                    td.SampleDesc.Count = 1;
-                    td.Usage = D3D11_USAGE_DEFAULT;
-                    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-                    td.CPUAccessFlags = 0;
-                    HRESULT hr = device->CreateTexture2D(&td, NULL, &m_textTexture);
-                    if (FAILED(hr) || !m_textTexture) {
-                        std::fprintf(stderr, "VideoWindow: CreateTexture2D(text) failed (0x%08X)\n", static_cast<unsigned int>(hr));
-                    } else {
-                        D3D11_SHADER_RESOURCE_VIEW_DESC srvd{};
-                        srvd.Format = td.Format;
-                        srvd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                        srvd.Texture2D.MipLevels = 1;
-                        hr = device->CreateShaderResourceView(m_textTexture.Get(), &srvd, &m_textSrv);
-                        if (FAILED(hr) || !m_textSrv) {
-                            std::fprintf(stderr, "VideoWindow: CreateShaderResourceView(text) failed (0x%08X)\n", static_cast<unsigned int>(hr));
-                            m_textTexture.Reset();
-                        } else {
-                            m_textWidth = textPxW;
-                            m_textHeight = textPxH;
-                        }
-                    }
-                }
-                if (m_textTexture) {
-                    // Update texture content
-                    D3D11_BOX box{0,0,0, (UINT)textPxW, (UINT)textPxH, 1};
-                    context->UpdateSubresource(m_textTexture.Get(), 0, &box, bmp.data(), textPxW * 4, 0);
-                    textReady = true;
-                }
+            if (m_textTexture && renderTextToBitmap(textLine, textPxW, textPxH, bmp)) {
+                D3D11_BOX box{0, 0, 0, (UINT)textPxW, (UINT)textPxH, 1};
+                context->UpdateSubresource(m_textTexture.Get(), 0, &box, bmp.data(), textPxW * 4, 0);
             }
+
+            textHeightNorm = (float)textPxH / m_height;
+            textTopNorm = 0.95f - textHeightNorm;
+            textWidthNorm = (float)textPxW / m_width;
+            textLeftNorm = (1.0f - textWidthNorm) * 0.5f;
         }
+    }
 
-        // If text was prepared, set normalized text area in the constant buffer so shader samples it correctly
-        if (textReady && m_textSrv) {
-            // Position text just above the progress bar to avoid overlap; adapt to fullscreen sizes
-            float textHeightNorm = (m_height > 0) ? (static_cast<float>(textPxH) / static_cast<float>(m_height)) : 0.06f;
-            textHeightNorm = std::min(textHeightNorm, 0.12f);
-            // progress bar top is at 0.96; place text above it with a small gap
-            float textTopNorm = std::max(0.0f, 0.96f - textHeightNorm - 0.01f);
-            // compute left/width normalized based on actual totalTextWidth and centering
-            float textLeftNorm = 0.0f;
-            float textWidthNorm = 0.0f;
-            if (m_width > 0) {
-                int totalTextWidth = charCount * (5 + 1) * std::max(1, textPxH / 7); // glyphW=5, spacing=1
-                int startX = std::max(0, (m_width - totalTextWidth) / 2);
-                textLeftNorm = static_cast<float>(startX) / static_cast<float>(m_width);
-                textWidthNorm = static_cast<float>(totalTextWidth) / static_cast<float>(m_width);
-            }
-            D3D11_MAPPED_SUBRESOURCE map2;
-            if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map2))) {
-                ShaderConstants* sc3 = (ShaderConstants*)map2.pData;
-                // Re-write full constants to avoid clobbering important fields (WRITE_DISCARD resets the buffer)
-                sc3->isFullRange = fullRange ? 1 : 0;
-                sc3->yuvMatrix = (uint32_t)matrix;
-                sc3->yuvTransfer = (uint32_t)transfer;
-                sc3->bitDepth = (uint32_t)bitDepth;
-                sc3->progress = ui.progress;
-                sc3->overlayAlpha = ui.overlayAlpha;
-                sc3->isPaused = ui.isPaused ? 1 : 0;
-                sc3->hasRGBA = isRGBA ? 1u : 0u;
-                sc3->volPct = static_cast<uint32_t>(std::clamp(ui.volPct, 0, 100));
-                sc3->textTop = textTopNorm;
-                sc3->textHeight = textHeightNorm;
-                sc3->textLeft = textLeftNorm;
-                sc3->textWidth = textWidthNorm;
-                context->Unmap(m_constantBuffer.Get(), 0);
-            }
-
-            ID3D11ShaderResourceView* textSrvArr[1] = { m_textSrv.Get() };
-            context->PSSetShaderResources(3, 1, textSrvArr);
+    {
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+            ShaderConstants sc{};
+            sc.progress = ui.progress;
+            sc.overlayAlpha = ui.overlayAlpha;
+            sc.isPaused = ui.isPaused ? 1 : 0;
+            sc.volPct = (uint32_t)std::clamp(ui.volPct, 0, 100);
+            sc.textTop = textTopNorm;
+            sc.textHeight = textHeightNorm;
+            sc.textLeft = textLeftNorm;
+            sc.textWidth = textWidthNorm;
+            std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
+            context->Unmap(m_constantBuffer.Get(), 0);
         }
-
-        context->PSSetShader(m_uiShader.Get(), NULL, 0);
+    }
+    
+    context->Draw(4, 0);
+    
+    if (m_textSrv) {
+        context->PSSetShaderResources(3, 1, m_textSrv.GetAddressOf());
         context->Draw(4, 0);
-        // restore main PS for cleanup/unbind steps below
-        context->PSSetShader(m_pixelShader.Get(), NULL, 0);
     }
 
-    // Update window title with overlay info (file name, time, volume) when overlay visible.
-    if (m_hWnd) {
-        if (ui.overlayAlpha > 0.01f && !ui.title.empty()) {
-            auto formatTime = [](double s) -> std::string {
-                if (!(s >= 0.0) || !std::isfinite(s)) return "--:--";
-                int total = static_cast<int>(std::llround(s));
-                int h = total / 3600;
-                int m = (total % 3600) / 60;
-                int sec = total % 60;
-                char buf[64];
-                if (h > 0) std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, sec);
-                else std::snprintf(buf, sizeof(buf), "%02d:%02d", m, sec);
-                return std::string(buf);
-            };
-            std::string timeStr = formatTime(ui.displaySec);
-            std::string totalStr = (ui.totalSec > 0.0 && std::isfinite(ui.totalSec)) ? formatTime(ui.totalSec) : std::string("--:--");
-            std::string newTitle = m_baseWindowTitle + " - " + ui.title + " - " + timeStr + " / " + totalStr + " Vol:" + std::to_string(ui.volPct) + "%";
-            if (newTitle != m_lastWindowTitle) {
-                std::wstring wide(newTitle.begin(), newTitle.end());
-                SetWindowTextW(m_hWnd, wide.c_str());
-                m_lastWindowTitle = newTitle;
-            }
-        } else {
-            // Restore base title when overlay not visible
-            if (m_lastWindowTitle != m_baseWindowTitle) {
-                std::wstring wide(m_baseWindowTitle.begin(), m_baseWindowTitle.end());
-                SetWindowTextW(m_hWnd, wide.c_str());
-                m_lastWindowTitle = m_baseWindowTitle;
-            }
+    ID3D11ShaderResourceView* nullSRVs[4] = { nullptr };
+    context->PSSetShaderResources(0, 4, nullSRVs);
+}
+
+void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
+    if (!frameCache.HasFrame()) return;
+
+    // Refresh window dimensions to avoid stale size during fullscreen transitions
+    RECT rect;
+    if (GetClientRect(m_hWnd, &rect)) {
+        m_width = rect.right - rect.left;
+        m_height = rect.bottom - rect.top;
+    }
+
+    ID3D11Device* device = getSharedGpuDevice();
+    if (!device) return;
+
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(&context);
+    if (!context || !m_renderTargetView || !m_constantBuffer) return;
+
+    float clearColor[4] = { 0, 0, 0, 1 };
+    context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
+    context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
+
+    UpdateViewport(m_width, m_height);
+    D3D11_VIEWPORT viewport = { m_viewportX, m_viewportY, m_viewportW, m_viewportH, 0.0f, 1.0f };
+    context->RSSetViewports(1, &viewport);
+
+    context->IASetInputLayout(NULL);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    context->VSSetShader(m_vertexShader.Get(), NULL, 0);
+    context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
+
+    // Video path
+    context->PSSetShader(m_pixelShader.Get(), NULL, 0);
+    context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
+
+    {
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+            ShaderConstants sc{};
+            sc.isFullRange = frameCache.IsFullRange() ? 1 : 0;
+            sc.yuvMatrix = (uint32_t)frameCache.GetMatrix();
+            sc.yuvTransfer = (uint32_t)frameCache.GetTransfer();
+            sc.bitDepth = (uint32_t)frameCache.GetBitDepth();
+            sc.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
+            std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
+            context->Unmap(m_constantBuffer.Get(), 0);
         }
     }
 
-    HRESULT hr = m_swapChain->Present(1, 0);
-
-    // Unbind SRVs, samplers and constant buffers to avoid holding references across frames
-    ID3D11ShaderResourceView* nullSRVsAll[4] = { nullptr, nullptr, nullptr, nullptr };
-    context->PSSetShaderResources(0, 4, nullSRVsAll);
-    context->CSSetShaderResources(0, 4, nullSRVsAll);
-    ID3D11SamplerState* nullSamplers[1] = { nullptr };
-    context->PSSetSamplers(0, 1, nullSamplers);
-    ID3D11Buffer* nullCB[1] = { nullptr };
-    context->PSSetConstantBuffers(0, 1, nullCB);
-
-    if (FAILED(hr)) {
-        std::fprintf(stderr, "VideoWindow: Present failed (0x%08X)\n", static_cast<unsigned int>(hr));
-        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
-            ID3D11Device* device = getSharedGpuDevice();
-            if (device) {
-                HRESULT reason = device->GetDeviceRemovedReason();
-                std::fprintf(stderr, "VideoWindow: device removed/reset reason=0x%08X\n", static_cast<unsigned int>(reason));
-            }
-            // Try to clean up GPU state and drop the swapchain to avoid hangs
-            Cleanup();
-            m_swapChain.Reset();
-        }
+    if (frameCache.IsRgba()) {
+        ID3D11ShaderResourceView* srvs[3] = { nullptr, nullptr, frameCache.GetSrvRGBA() };
+        context->PSSetShaderResources(0, 3, srvs);
+    } else {
+        ID3D11ShaderResourceView* srvs[2] = { frameCache.GetSrvY(), frameCache.GetSrvUV() };
+        context->PSSetShaderResources(0, 2, srvs);
     }
+
+    context->Draw(4, 0);
+    DrawOverlay(ui);
+
+    m_swapChain->Present(1, 0);
+}
+
+void VideoWindow::PresentBackbuffer() {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
+    m_swapChain->Present(1, 0);
 }

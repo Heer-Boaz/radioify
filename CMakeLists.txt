@@ -26,6 +26,7 @@ add_executable(radioify
   videoplayback.cpp
   videodecoder.cpp
   videowindow.cpp
+  videoprocessor.cpp
   radio.cpp
 )
 

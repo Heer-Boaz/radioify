@@ -9,6 +9,7 @@
 
 #include "videocolor.h"
 #include "consoleinput.h"
+#include "videoprocessor.h"
 #include <vector>
 #include <mutex>
 
@@ -31,19 +32,30 @@ public:
     bool Open(int width, int height, const std::string& title);
     void Close();
 
-    void Present(ID3D11Texture2D* texture, int arrayIndex, int width, int height,
-                 bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth,
-                 const WindowUiState& ui);
+    void Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
+    // Render the UI overlay using the last cached video frame as background
+    void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
+    void PresentBackbuffer();
+    
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
+    // Get viewport geometry for mouse coordinate mapping (used for seeking in window mode)
+    void GetViewportGeometry(float& outViewX, float& outViewY, float& outViewW, float& outViewH) const {
+        outViewX = m_viewportX;
+        outViewY = m_viewportY;
+        outViewW = m_viewportW;
+        outViewH = m_viewportH;
+    }
     void ShowWindow(bool show);
     void PollEvents();
     bool PollInput(InputEvent& ev);
     void Cleanup();
 
 private:
+    void DrawOverlay(const WindowUiState& ui);
+    void UpdateViewport(int width, int height);
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     bool CreateSwapChain(int width, int height);
     void Resize(int width, int height);
@@ -57,10 +69,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
 
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_copyTexture;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_copySrvY;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_copySrvUV;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_copySrvRGBA;
+    // frame cache is owned and managed externally by videoplayback
 
     // Text overlay texture (CPU rasterized via GDI)
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_textTexture;
@@ -70,6 +79,14 @@ private:
     
     int m_width = 0;
     int m_height = 0;
+    int m_videoWidth = 1280;
+    int m_videoHeight = 720;
+    
+    // Viewport geometry (for mouse coordinate mapping)
+    float m_viewportX = 0.0f;
+    float m_viewportY = 0.0f;
+    float m_viewportW = 0.0f;
+    float m_viewportH = 0.0f;
 
     std::vector<InputEvent> m_inputQueue;
     std::mutex m_inputMutex;
