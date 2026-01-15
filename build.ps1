@@ -6,6 +6,7 @@ param(
   [switch]$Static,
   [switch]$InstallDeps,
   [switch]$TimingLog,
+  [switch]$StagingUpload,
   [switch]$VideoErrorLog,
   [switch]$FfmpegErrorLog
 )
@@ -204,6 +205,7 @@ if (-not $installedRoot) {
 
 $cmakeArgs = @("-S", $root, "-B", $buildDir, "-DCMAKE_BUILD_TYPE=$Config")
 $cmakeArgs += "-DRADIOIFY_ENABLE_TIMING_LOG=$([bool]$TimingLog)"
+$cmakeArgs += "-DRADIOIFY_ENABLE_STAGING_UPLOAD=$([bool]$StagingUpload)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_VIDEO_ERROR_LOG=$([bool]$VideoErrorLog)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$([bool]$FfmpegErrorLog)"
 if ($vcpkgRoot) {

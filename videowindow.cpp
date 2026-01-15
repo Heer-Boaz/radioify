@@ -1,4 +1,5 @@
 #include "videowindow.h"
+#include "timing_log.h"
 #include "gpu_shared.h"
 #include <iostream>
 #include <vector>
@@ -7,6 +8,19 @@
 #include <cmath>
 #include <cstdio>
 #include <d3dcompiler.h>
+
+#include <chrono>
+#include <thread>
+#include <sstream>
+
+static inline std::string now_ms() {
+    using namespace std::chrono;
+    auto t = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+    std::ostringstream ss; ss << t; return ss.str();
+}
+static inline std::string thread_id_str() {
+    std::ostringstream ss; ss << std::this_thread::get_id(); return ss.str();
+}
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -904,8 +918,15 @@ void VideoWindow::UpdateViewport(int width, int height) {
 
 void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
-    if (!frameCache.HasFrame()) return;
+    fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
+    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) {
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present early exit: window/swap not ready\n", now_ms().c_str(), thread_id_str().c_str());
+        return;
+    }
+    if (!frameCache.HasFrame()) {
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present early exit: no frame in cache\n", now_ms().c_str(), thread_id_str().c_str());
+        return;
+    }
 
     // Refresh window dimensions to avoid stale size during fullscreen transitions
     RECT rect;
@@ -923,6 +944,8 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 
     m_videoWidth = frameCache.GetWidth();
     m_videoHeight = frameCache.GetHeight();
+
+    fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present frame w=%d h=%d ui.displaySec=%.3f\n", now_ms().c_str(), thread_id_str().c_str(), m_videoWidth, m_videoHeight, ui.displaySec);
 
     // Render
     float clearColor[4] = { 0, 0, 0, 1 };
@@ -962,10 +985,51 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
         context->PSSetShaderResources(0, 2, srvs);
     }
 
+#if defined(RADIOIFY_ENABLE_GPU_TIMING)
+    {
+        Microsoft::WRL::ComPtr<ID3D11Query> qDisjoint, qStart, qEnd;
+        D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+        ID3D11Device* device = getSharedGpuDevice();
+        if (device) {
+            device->CreateQuery(&qd, qDisjoint.GetAddressOf());
+            qd.Query = D3D11_QUERY_TIMESTAMP;
+            device->CreateQuery(&qd, qStart.GetAddressOf());
+            device->CreateQuery(&qd, qEnd.GetAddressOf());
+
+            context->Begin(qDisjoint.Get());
+            context->End(qStart.Get());
+            context->Draw(4, 0);
+            DrawOverlay(ui);
+            context->End(qEnd.Get());
+            context->End(qDisjoint.Get());
+
+            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint;
+            while (context->GetData(qDisjoint.Get(), &disjoint, sizeof(disjoint), 0) == S_FALSE) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            UINT64 t1 = 0, t2 = 0;
+            context->GetData(qStart.Get(), &t1, sizeof(t1), 0);
+            context->GetData(qEnd.Get(), &t2, sizeof(t2), 0);
+            double gpu_ms = 0.0;
+            if (!disjoint.Disjoint) gpu_ms = (double)(t2 - t1) / (double)disjoint.Frequency * 1000.0;
+            fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present GPU draw+overlay time %.3f ms\n", now_ms().c_str(), thread_id_str().c_str(), gpu_ms);
+        } else {
+            context->Draw(4, 0);
+            DrawOverlay(ui);
+        }
+    }
+#else
     context->Draw(4, 0);
     DrawOverlay(ui);
+#endif
 
-    m_swapChain->Present(1, 0);
+    fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present about to Present()\n", now_ms().c_str(), thread_id_str().c_str());
+    HRESULT presHr = m_swapChain->Present(1, 0);
+    if (FAILED(presHr)) {
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present Present() FAILED 0x%08X\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
+    } else {
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present Present() OK\n", now_ms().c_str(), thread_id_str().c_str());
+    }
 }
 
 void VideoWindow::DrawOverlay(const WindowUiState& ui) {
@@ -1063,8 +1127,15 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
 
 void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
-    if (!frameCache.HasFrame()) return;
+    fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
+    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) {
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay early exit: window/swap not ready\n", now_ms().c_str(), thread_id_str().c_str());
+        return;
+    }
+    if (!frameCache.HasFrame()) {
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay early exit: no frame in cache\n", now_ms().c_str(), thread_id_str().c_str());
+        return;
+    }
 
     // Refresh window dimensions to avoid stale size during fullscreen transitions
     RECT rect;
@@ -1122,7 +1193,13 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
     context->Draw(4, 0);
     DrawOverlay(ui);
 
-    m_swapChain->Present(1, 0);
+    fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay about to Present()\n", now_ms().c_str(), thread_id_str().c_str());
+    HRESULT presHr = m_swapChain->Present(1, 0);
+    if (FAILED(presHr)) {
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay Present() FAILED 0x%08X\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
+    } else {
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay Present() OK\n", now_ms().c_str(), thread_id_str().c_str());
+    }
 }
 
 void VideoWindow::PresentBackbuffer() {

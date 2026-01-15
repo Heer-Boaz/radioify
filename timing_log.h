@@ -42,4 +42,13 @@ inline std::string radioifyLogTimestamp() {
 #define RADIOIFY_ENABLE_FFMPEG_ERROR_LOG 0
 #endif
 
+// Enable GPU timing when timing logs are enabled by default to keep flags grouped.
+#ifndef RADIOIFY_ENABLE_GPU_TIMING
+#if RADIOIFY_ENABLE_TIMING_LOG
+#define RADIOIFY_ENABLE_GPU_TIMING 1
+#else
+#define RADIOIFY_ENABLE_GPU_TIMING 0
+#endif
+#endif
+
 #endif

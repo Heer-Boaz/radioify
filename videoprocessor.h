@@ -58,6 +58,16 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvUV;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvRGBA;
 
+#if defined(RADIOIFY_ENABLE_STAGING_UPLOAD)
+    // Staging resources used by the upload path to avoid driver implicit syncs
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_stagingYuv; // same format as m_texYuv (NV12/P010), usage=STAGING
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_stagingRGBA;
+    bool EnsureStagingNV12(ID3D11Device* device, int width, int height, int bitDepth);
+    bool EnsureStagingRGBA(ID3D11Device* device, int width, int height);
+    bool UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* context, const uint8_t* yuv, int stride, int planeHeight, int width, int height);
+    bool UploadRGBAToDefaultViaStaging(ID3D11DeviceContext* context, const uint8_t* rgba, int stride, int width, int height);
+#endif
+
     int m_width = 0;
     int m_height = 0;
     bool m_fullRange = false;

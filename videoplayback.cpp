@@ -12,6 +12,7 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -46,6 +47,15 @@ static VideoWindow g_videoWindow;
 static GpuVideoFrameCache g_frameCache;
 static bool g_windowEnabledPersistent = false;
 static bool g_windowEnabledInitialized = false;
+
+static inline std::string now_ms() {
+  using namespace std::chrono;
+  auto t = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+  std::ostringstream ss; ss << t; return ss.str();
+}
+static inline std::string thread_id_str() {
+  std::ostringstream ss; ss << std::this_thread::get_id(); return ss.str();
+}
 
 namespace {
 #if RADIOIFY_ENABLE_FFMPEG_ERROR_LOG
@@ -774,13 +784,22 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
       device->GetImmediateContext(&context);
       if (context) {
+        fprintf(stderr, "[%s] [tid=%s] videoplayback: about to lock shared GPU mutex for Update (frame %dx%d)\n", now_ms().c_str(), thread_id_str().c_str(), frame->width, frame->height);
+        auto t0_lock = std::chrono::steady_clock::now();
         std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+        auto d_lock = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0_lock).count();
+        if (d_lock > 0) {
+          fprintf(stderr, "[%s] [tid=%s] videoplayback: waited %lld ms to acquire GPU mutex\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_lock);
+        }
+        fprintf(stderr, "[%s] [tid=%s] videoplayback: before g_frameCache.Update\n", now_ms().c_str(), thread_id_str().c_str());
         (void)g_frameCache.Update(device, context.Get(), frame->hwTexture.Get(), frame->hwTextureArrayIndex,
                                   frame->width, frame->height, frame->fullRange, frame->yuvMatrix,
                                   frame->yuvTransfer, is10Bit ? 10 : 8);
+        fprintf(stderr, "[%s] [tid=%s] videoplayback: after g_frameCache.Update\n", now_ms().c_str(), thread_id_str().c_str());
       }
     }
 
+    fprintf(stderr, "[%s] [tid=%s] videoplayback: about to call g_videoWindow.Present\n", now_ms().c_str(), thread_id_str().c_str());
     g_videoWindow.Present(g_frameCache, ui);
   };
 
