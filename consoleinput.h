@@ -118,6 +118,7 @@ struct InputCallbacks {
   std::function<void()> onResize;
   std::function<void()> onTogglePause;
   std::function<void()> onToggleRadio;
+  std::function<void()> onToggleVsync;
   std::function<void(int)> onSeekBy;
   std::function<void(double)> onSeekToRatio;
   std::function<void(float)> onAdjustVolume;

@@ -537,6 +537,10 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
       if (callbacks.onToggleRadio) callbacks.onToggleRadio();
       return true;
     }
+    if (key.vk == 'V' || key.ch == 'v' || key.ch == 'V') {
+      if (callbacks.onToggleVsync) callbacks.onToggleVsync();
+      return true;
+    }
 
     // Seek
     if (key.vk == VK_OEM_4 || key.ch == '[') {

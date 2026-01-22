@@ -85,13 +85,16 @@ float LinearToSrgb(float v) {
 
 float3 ApplyHdrToSdr(float3 v) {
     v = saturate(v);
-    float3 linearRgb;
-    if (yuvTransfer == 1) linearRgb = float3(PQEotf(v.r), PQEotf(v.g), PQEotf(v.b));
-    else if (yuvTransfer == 2) linearRgb = float3(HlgEotf(v.r), HlgEotf(v.g), HlgEotf(v.b));
-    else return v;
-    
-    float3 mapped = float3(ToneMapFilmic(linearRgb.r * 100.0), ToneMapFilmic(linearRgb.g * 100.0), ToneMapFilmic(linearRgb.b * 100.0));
-    return float3(LinearToSrgb(mapped.r), LinearToSrgb(mapped.g), LinearToSrgb(mapped.b));
+    if (yuvTransfer == 1) {
+        float3 linearRgb = float3(PQEotf(v.r), PQEotf(v.g), PQEotf(v.b));
+        float3 mapped = float3(ToneMapFilmic(linearRgb.r * 100.0), ToneMapFilmic(linearRgb.g * 100.0), ToneMapFilmic(linearRgb.b * 100.0));
+        v = float3(LinearToSrgb(mapped.r), LinearToSrgb(mapped.g), LinearToSrgb(mapped.b));
+    } else if (yuvTransfer == 2) {
+        float3 linearRgb = float3(HlgEotf(v.r), HlgEotf(v.g), HlgEotf(v.b));
+        float3 mapped = float3(ToneMapFilmic(linearRgb.r * 100.0), ToneMapFilmic(linearRgb.g * 100.0), ToneMapFilmic(linearRgb.b * 100.0));
+        v = float3(LinearToSrgb(mapped.r), LinearToSrgb(mapped.g), LinearToSrgb(mapped.b));
+    }
+    return v;
 }
 
 float4 PS(PS_INPUT input) : SV_Target {

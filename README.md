@@ -73,6 +73,7 @@ dist/radioify.exe --no-radio <file-or-folder>
 - Space: pause/resume
 - Ctrl+Left/Right: seek
 - R: toggle 1938 radio filter
+- V: toggle window vsync
 - Q or Ctrl+C: quit
 
 ## Supported files

@@ -7,11 +7,14 @@
 #include <string>
 #include <cmath>
 #include <cstdio>
-#include <d3dcompiler.h>
 
 #include <chrono>
 #include <thread>
 #include <sstream>
+
+#include "videowindow_vs.h"
+#include "videowindow_ps.h"
+#include "videowindow_ps_ui.h"
 
 static inline std::string now_ms() {
     using namespace std::chrono;
@@ -24,7 +27,6 @@ static inline std::string thread_id_str() {
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
-#pragma comment(lib, "d3dcompiler.lib")
 
 namespace {
     struct ShaderConstants {
@@ -182,6 +184,8 @@ namespace {
         return true;
     }
 
+    #if 0
+    // Runtime shader sources retained for reference; build uses precompiled blobs.
     // Video frame rendering shader (combined from videowindow_render.hlsl)
     const char* g_shaderSource = R"(
 // Video frame rendering shader - handles YUV/RGBA to RGB conversion with color correction
@@ -271,13 +275,16 @@ float LinearToSrgb(float v) {
 
 float3 ApplyHdrToSdr(float3 v) {
     v = saturate(v);
-    float3 linearRgb;
-    if (yuvTransfer == 1) linearRgb = float3(PQEotf(v.r), PQEotf(v.g), PQEotf(v.b));
-    else if (yuvTransfer == 2) linearRgb = float3(HlgEotf(v.r), HlgEotf(v.g), HlgEotf(v.b));
-    else return v;
-    
-    float3 mapped = float3(ToneMapFilmic(linearRgb.r * 100.0), ToneMapFilmic(linearRgb.g * 100.0), ToneMapFilmic(linearRgb.b * 100.0));
-    return float3(LinearToSrgb(mapped.r), LinearToSrgb(mapped.g), LinearToSrgb(mapped.b));
+    if (yuvTransfer == 1) {
+        float3 linearRgb = float3(PQEotf(v.r), PQEotf(v.g), PQEotf(v.b));
+        float3 mapped = float3(ToneMapFilmic(linearRgb.r * 100.0), ToneMapFilmic(linearRgb.g * 100.0), ToneMapFilmic(linearRgb.b * 100.0));
+        v = float3(LinearToSrgb(mapped.r), LinearToSrgb(mapped.g), LinearToSrgb(mapped.b));
+    } else if (yuvTransfer == 2) {
+        float3 linearRgb = float3(HlgEotf(v.r), HlgEotf(v.g), HlgEotf(v.b));
+        float3 mapped = float3(ToneMapFilmic(linearRgb.r * 100.0), ToneMapFilmic(linearRgb.g * 100.0), ToneMapFilmic(linearRgb.b * 100.0));
+        v = float3(LinearToSrgb(mapped.r), LinearToSrgb(mapped.g), LinearToSrgb(mapped.b));
+    }
+    return v;
 }
 
 float4 PS(PS_INPUT input) : SV_Target {
@@ -380,6 +387,7 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
     return color * uiAlpha;
 }
     )";
+    #endif
 }
 
 VideoWindow::VideoWindow() {}
@@ -735,30 +743,11 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
         }
     }
 
-    Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, uiBlob, errorBlob;
-    HRESULT hr = D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "VS", "vs_5_0", 0, 0, &vsBlob, &errorBlob);
-    if (FAILED(hr)) {
-        if (errorBlob) {
-            std::fprintf(stderr, "VideoWindow: VS compile error: %s\n", (const char*)errorBlob->GetBufferPointer());
-        }
-        return false;
-    }
-    hr = D3DCompile(g_shaderSource, strlen(g_shaderSource), NULL, NULL, NULL, "PS", "ps_5_0", 0, 0, &psBlob, &errorBlob);
-    if (FAILED(hr)) {
-        if (errorBlob) std::fprintf(stderr, "VideoWindow: PS compile error: %s\n", (const char*)errorBlob->GetBufferPointer());
-        return false;
-    }
-    hr = D3DCompile(g_overlayShaderSource, strlen(g_overlayShaderSource), NULL, NULL, NULL, "PS_UI", "ps_5_0", 0, 0, &uiBlob, &errorBlob);
-    if (FAILED(hr)) {
-        if (errorBlob) std::fprintf(stderr, "VideoWindow: PS_UI compile error: %s\n", (const char*)errorBlob->GetBufferPointer());
-        return false;
-    }
-
-    hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), NULL, &m_vertexShader);
+    HRESULT hr = device->CreateVertexShader(kVideoWindowVs, kVideoWindowVs_Size, NULL, &m_vertexShader);
     if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateVertexShader failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
-    hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), NULL, &m_pixelShader);
+    hr = device->CreatePixelShader(kVideoWindowPs, kVideoWindowPs_Size, NULL, &m_pixelShader);
     if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(PS) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
-    hr = device->CreatePixelShader(uiBlob->GetBufferPointer(), uiBlob->GetBufferSize(), NULL, &m_uiShader);
+    hr = device->CreatePixelShader(kVideoWindowPsUi, kVideoWindowPsUi_Size, NULL, &m_uiShader);
     if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
 
     D3D11_BUFFER_DESC cbDesc = {};
@@ -908,6 +897,10 @@ bool VideoWindow::PollInput(InputEvent& ev) {
     return true;
 }
 
+void VideoWindow::SetVsync(bool enabled) {
+    m_presentInterval = enabled ? 1u : 0u;
+}
+
 void VideoWindow::UpdateViewport(int width, int height) {
     VideoViewport vp = calculateViewport(width, height, m_videoWidth, m_videoHeight);
     m_viewportX = vp.x;
@@ -917,16 +910,25 @@ void VideoWindow::UpdateViewport(int width, int height) {
 }
 
 void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
+#if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
+#endif
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) {
+#if RADIOIFY_ENABLE_TIMING_LOG
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present early exit: window/swap not ready\n", now_ms().c_str(), thread_id_str().c_str());
+#endif
         return;
     }
     if (!frameCache.HasFrame()) {
+#if RADIOIFY_ENABLE_TIMING_LOG
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present early exit: no frame in cache\n", now_ms().c_str(), thread_id_str().c_str());
+#endif
         return;
     }
+
+    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
+    UINT presentInterval = m_presentInterval;
 
     // Refresh window dimensions to avoid stale size during fullscreen transitions
     RECT rect;
@@ -945,7 +947,9 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     m_videoWidth = frameCache.GetWidth();
     m_videoHeight = frameCache.GetHeight();
 
+#if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present frame w=%d h=%d ui.displaySec=%.3f\n", now_ms().c_str(), thread_id_str().c_str(), m_videoWidth, m_videoHeight, ui.displaySec);
+#endif
 
     // Render
     float clearColor[4] = { 0, 0, 0, 1 };
@@ -1023,13 +1027,19 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     DrawOverlay(ui);
 #endif
 
+#if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present about to Present()\n", now_ms().c_str(), thread_id_str().c_str());
-    HRESULT presHr = m_swapChain->Present(1, 0);
+#endif
+    lock.unlock();
+    if (!swapChain) return;
+    HRESULT presHr = swapChain->Present(presentInterval, 0);
+#if RADIOIFY_ENABLE_TIMING_LOG
     if (FAILED(presHr)) {
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present Present() FAILED 0x%08X\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
     } else {
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present Present() OK\n", now_ms().c_str(), thread_id_str().c_str());
     }
+#endif
 }
 
 void VideoWindow::DrawOverlay(const WindowUiState& ui) {
@@ -1055,7 +1065,11 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     // Optional: Render text to texture
     if (!ui.title.empty()) {
         int textPxH = std::clamp((int)std::round(m_height * 0.06f), 14, 48);
-        std::string textLine = ui.title + "  " + (ui.totalSec > 0.0 ? (formatTimeDouble(ui.displaySec) + " / " + formatTimeDouble(ui.totalSec)) : formatTimeDouble(ui.displaySec));
+        std::string timeLabel = ui.totalSec > 0.0
+            ? (formatTimeDouble(ui.displaySec) + " / " + formatTimeDouble(ui.totalSec))
+            : formatTimeDouble(ui.displaySec);
+        std::string textLine = ui.title + "  " + timeLabel +
+            (ui.vsyncEnabled ? "  VSync: On" : "  VSync: Off");
         
         // Very rough estimate of width
         int estScale = std::max(1, textPxH / 7);
@@ -1126,16 +1140,25 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
 }
 
 void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
+#if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
+#endif
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) {
+#if RADIOIFY_ENABLE_TIMING_LOG
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay early exit: window/swap not ready\n", now_ms().c_str(), thread_id_str().c_str());
+#endif
         return;
     }
     if (!frameCache.HasFrame()) {
+#if RADIOIFY_ENABLE_TIMING_LOG
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay early exit: no frame in cache\n", now_ms().c_str(), thread_id_str().c_str());
+#endif
         return;
     }
+
+    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
+    UINT presentInterval = m_presentInterval;
 
     // Refresh window dimensions to avoid stale size during fullscreen transitions
     RECT rect;
@@ -1193,17 +1216,27 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
     context->Draw(4, 0);
     DrawOverlay(ui);
 
+#if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay about to Present()\n", now_ms().c_str(), thread_id_str().c_str());
-    HRESULT presHr = m_swapChain->Present(1, 0);
+#endif
+    lock.unlock();
+    if (!swapChain) return;
+    HRESULT presHr = swapChain->Present(presentInterval, 0);
+#if RADIOIFY_ENABLE_TIMING_LOG
     if (FAILED(presHr)) {
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay Present() FAILED 0x%08X\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
     } else {
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay Present() OK\n", now_ms().c_str(), thread_id_str().c_str());
     }
+#endif
 }
 
 void VideoWindow::PresentBackbuffer() {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
-    m_swapChain->Present(1, 0);
+    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
+    UINT presentInterval = m_presentInterval;
+    lock.unlock();
+    if (!swapChain) return;
+    swapChain->Present(presentInterval, 0);
 }

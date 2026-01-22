@@ -17,6 +17,7 @@ struct WindowUiState {
     float progress = 0.0f;
     float overlayAlpha = 0.0f;
     bool isPaused = false;
+    bool vsyncEnabled = true;
     // UI text/metadata to display when overlay is visible
     std::string title; // filename or label
     double displaySec = 0.0; // current time shown in overlay
@@ -36,9 +37,11 @@ public:
     // Render the UI overlay using the last cached video frame as background
     void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     void PresentBackbuffer();
+    void SetVsync(bool enabled);
     
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
+    bool IsVsyncEnabled() const { return m_presentInterval != 0; }
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
     // Get viewport geometry for mouse coordinate mapping (used for seeking in window mode)
@@ -68,6 +71,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_uiShader;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
+    UINT m_presentInterval = 1;
 
     // frame cache is owned and managed externally by videoplayback
 
