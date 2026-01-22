@@ -799,6 +799,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   std::thread windowPresentThread([&]() {
     VideoFrame localFrame;
+    uint64_t lastCounter = player.videoFrameCounter();
     while (windowThreadRunning.load(std::memory_order_relaxed)) {
       if (!windowThreadEnabled.load(std::memory_order_relaxed)) {
         std::unique_lock<std::mutex> lock(windowPresentMutex);
@@ -815,7 +816,27 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         continue;
       }
 
-      bool frameChanged = player.tryGetVideoFrame(&localFrame);
+      bool waitedForFrame = false;
+      bool shouldWaitForFrame =
+          !windowForcePresent.load(std::memory_order_relaxed) &&
+          !overlayVisible() && !player.isSeeking();
+      if (shouldWaitForFrame) {
+        waitedForFrame = true;
+        player.waitForVideoFrame(lastCounter, 16);
+        if (!windowThreadRunning.load(std::memory_order_relaxed)) {
+          break;
+        }
+      }
+
+      uint64_t counterNow = player.videoFrameCounter();
+      bool frameChanged = false;
+      if (counterNow != lastCounter) {
+        frameChanged = player.tryGetVideoFrame(&localFrame);
+        lastCounter = counterNow;
+      }
+      if (!windowThreadRunning.load(std::memory_order_relaxed)) {
+        break;
+      }
       if (frameChanged) {
         if (localFrame.format != VideoPixelFormat::HWTexture ||
             !localFrame.hwTexture) {
@@ -849,19 +870,27 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           frameChanged || forcePresent || overlayVisibleNow || player.isSeeking();
 
       if (needsPresent) {
+        if (!windowThreadRunning.load(std::memory_order_relaxed)) {
+          break;
+        }
         g_videoWindow.WaitForFrameLatency(16);
+        if (!windowThreadRunning.load(std::memory_order_relaxed)) {
+          break;
+        }
         if (frameChanged) {
           g_videoWindow.Present(g_frameCache, ui);
         } else {
           g_videoWindow.PresentOverlay(g_frameCache, ui);
         }
-      } else {
+      } else if (!waitedForFrame) {
         std::unique_lock<std::mutex> lock(windowPresentMutex);
         windowPresentCv.wait_for(lock, std::chrono::milliseconds(10));
       }
     }
   });
   auto stopWindowThread = [&]() {
+    windowThreadEnabled.store(false, std::memory_order_relaxed);
+    windowForcePresent.store(false, std::memory_order_relaxed);
     windowThreadRunning.store(false, std::memory_order_relaxed);
     windowPresentCv.notify_one();
     if (windowPresentThread.joinable()) {
@@ -1270,8 +1299,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   renderScreen(true, true);
   if (renderFailed) {
-    stopWindowThread();
+    windowThreadRunning.store(false, std::memory_order_relaxed);
+    windowThreadEnabled.store(false, std::memory_order_relaxed);
+    windowPresentCv.notify_one();
     player.close();
+    stopWindowThread();
     if (audioOk) audioStop();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
@@ -1566,16 +1598,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   }
 
   if (renderFailed) {
-    stopWindowThread();
+    windowThreadRunning.store(false, std::memory_order_relaxed);
+    windowThreadEnabled.store(false, std::memory_order_relaxed);
+    windowPresentCv.notify_one();
     player.close();
+    stopWindowThread();
     if (audioOk) audioStop();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return ok;
   }
 
-  stopWindowThread();
   player.close();
+  stopWindowThread();
   if (audioOk) audioStop();
   finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
   return true;

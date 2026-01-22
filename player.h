@@ -88,6 +88,9 @@ class Player {
   int64_t durationUs() const;
   int64_t currentUs() const;
 
+  uint64_t videoFrameCounter() const;
+  bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;
+
   bool tryGetVideoFrame(VideoFrame* out);
   bool hasVideoFrame() const;
   int sourceWidth() const;

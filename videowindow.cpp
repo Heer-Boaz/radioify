@@ -900,12 +900,8 @@ void VideoWindow::Close() {
     Cleanup();
 
     // If swapchain is in full-screen exclusive, revert to windowed first and restore style
-    if (m_swapChain) {
+    if (m_swapChain && m_isFullscreen) {
         (void)m_swapChain->SetFullscreenState(FALSE, NULL);
-        IDXGISwapChain* raw = m_swapChain.Get();
-        if (raw) {
-            raw->Present(0, 0);
-        }
     }
     // Restore windowed style if we changed it
     if (m_hWnd && m_isFullscreen) {

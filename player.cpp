@@ -1332,6 +1332,8 @@ struct Player::Impl {
   std::atomic<bool> hasFrame{false};
   std::mutex currentFrameMutex;
   VideoFrame currentFrame;
+  std::condition_variable frameCv;
+  std::mutex frameCvMutex;
   std::atomic<uint64_t> frameCounter{0};
   std::atomic<uint64_t> lastReadCounter{0};
   std::mutex lastInfoMutex;
@@ -2932,6 +2934,7 @@ struct Player::Impl {
         hasFrame.store(true, std::memory_order_relaxed);
       }
       frameCounter.fetch_add(1, std::memory_order_relaxed);
+      frameCv.notify_all();
       
       // Ensure we yield to other threads (decoder, audio, etc.)
       std::this_thread::yield();
@@ -3116,6 +3119,27 @@ int64_t Player::currentUs() const {
   }
   int64_t last = impl_->lastPresentedPtsUs.load();
   return last > 0 ? last : 0;
+}
+
+uint64_t Player::videoFrameCounter() const {
+  if (!impl_) return 0;
+  return impl_->frameCounter.load(std::memory_order_relaxed);
+}
+
+bool Player::waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const {
+  if (!impl_) return false;
+  if (impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter) {
+    return true;
+  }
+  if (timeoutMs <= 0) {
+    return false;
+  }
+  std::unique_lock<std::mutex> lock(impl_->frameCvMutex);
+  impl_->frameCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&]() {
+    return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter ||
+           !impl_->running.load(std::memory_order_relaxed);
+  });
+  return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter;
 }
 
 bool Player::tryGetVideoFrame(VideoFrame* out) {
