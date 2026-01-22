@@ -2,6 +2,7 @@
 
 #include <d3d11.h>
 #include <wrl/client.h>
+#include <array>
 #include <vector>
 #include <cstdint>
 #include "videocolor.h"
@@ -35,14 +36,20 @@ public:
 
     void Reset();
 
-    bool HasFrame() const { return m_srvY != nullptr || m_srvRGBA != nullptr; }
+    bool HasFrame() const { return m_format != CacheFormat::None; }
 
-    ID3D11ShaderResourceView* GetSrvY() const { return m_srvY.Get(); }
-    ID3D11ShaderResourceView* GetSrvUV() const { return m_srvUV.Get(); }
-    ID3D11ShaderResourceView* GetSrvRGBA() const { return m_srvRGBA.Get(); }
+    ID3D11ShaderResourceView* GetSrvY() const {
+        return (m_format == CacheFormat::Yuv) ? m_srvY[m_activeIndex].Get() : nullptr;
+    }
+    ID3D11ShaderResourceView* GetSrvUV() const {
+        return (m_format == CacheFormat::Yuv) ? m_srvUV[m_activeIndex].Get() : nullptr;
+    }
+    ID3D11ShaderResourceView* GetSrvRGBA() const {
+        return (m_format == CacheFormat::Rgba) ? m_srvRGBA[m_activeIndex].Get() : nullptr;
+    }
 
-    bool IsYuv() const { return m_srvY != nullptr; }
-    bool IsRgba() const { return m_srvRGBA != nullptr; }
+    bool IsYuv() const { return m_format == CacheFormat::Yuv; }
+    bool IsRgba() const { return m_format == CacheFormat::Rgba; }
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
     bool IsFullRange() const { return m_fullRange; }
@@ -51,12 +58,18 @@ public:
     int GetBitDepth() const { return m_bitDepth; }
 
 private:
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_texYuv; // Planar (NV12/P010) or first plane
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_texRGBA;
+    static constexpr int kFrameBufferCount = 2;
+    enum class CacheFormat {
+        None,
+        Yuv,
+        Rgba,
+    };
+    std::array<Microsoft::WRL::ComPtr<ID3D11Texture2D>, kFrameBufferCount> m_texYuv; // Planar (NV12/P010) or first plane
+    std::array<Microsoft::WRL::ComPtr<ID3D11Texture2D>, kFrameBufferCount> m_texRGBA;
     
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvY;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvUV;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_srvRGBA;
+    std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, kFrameBufferCount> m_srvY;
+    std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, kFrameBufferCount> m_srvUV;
+    std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, kFrameBufferCount> m_srvRGBA;
 
 #if defined(RADIOIFY_ENABLE_STAGING_UPLOAD)
     // Staging resources used by the upload path to avoid driver implicit syncs
@@ -64,8 +77,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_stagingRGBA;
     bool EnsureStagingNV12(ID3D11Device* device, int width, int height, int bitDepth);
     bool EnsureStagingRGBA(ID3D11Device* device, int width, int height);
-    bool UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* context, const uint8_t* yuv, int stride, int planeHeight, int width, int height);
-    bool UploadRGBAToDefaultViaStaging(ID3D11DeviceContext* context, const uint8_t* rgba, int stride, int width, int height);
+    bool UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* yuv, int stride, int planeHeight, int width, int height);
+    bool UploadRGBAToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* rgba, int stride, int width, int height);
 #endif
 
     int m_width = 0;
@@ -74,6 +87,9 @@ private:
     YuvMatrix m_matrix = YuvMatrix::Bt709;
     YuvTransfer m_transfer = YuvTransfer::Sdr;
     int m_bitDepth = 8;
+    int m_activeIndex = 0;
+    int m_writeIndex = 0;
+    CacheFormat m_format = CacheFormat::None;
 
     bool EnsureNV12(ID3D11Device* device, int width, int height, int bitDepth);
     bool EnsureRGBA(ID3D11Device* device, int width, int height);

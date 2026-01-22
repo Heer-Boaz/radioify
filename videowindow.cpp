@@ -1,6 +1,7 @@
 #include "videowindow.h"
 #include "timing_log.h"
 #include "gpu_shared.h"
+#include <dxgi1_3.h>
 #include <iostream>
 #include <vector>
 #include <mutex>
@@ -463,7 +464,7 @@ bool VideoWindow::MakeFullscreen() {
                 }
             }
             if (m_renderTargetView) { m_renderTargetView.Reset(); }
-            if (m_swapChain) { m_swapChain.Reset(); }
+            ResetSwapChain();
         }
 
         // Recreate the swapchain sized to the monitor (borderless windowed fullscreen)
@@ -776,6 +777,16 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
     return true;
 }
 
+void VideoWindow::ResetSwapChain() {
+    std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+    if (m_frameLatencyWaitableObject) {
+        CloseHandle(m_frameLatencyWaitableObject);
+        m_frameLatencyWaitableObject = nullptr;
+    }
+    m_swapChain2.Reset();
+    m_swapChain.Reset();
+}
+
 bool VideoWindow::CreateSwapChain(int width, int height) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     ID3D11Device* device = getSharedGpuDevice();
@@ -787,7 +798,52 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
         std::fprintf(stderr, "VideoWindow: invalid swapchain dimensions %d x %d\n", width, height);
         return false;
     }
+
+    ResetSwapChain();
     
+    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+    device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
+    
+    Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapter;
+    dxgiDevice->GetAdapter(&dxgiAdapter);
+
+    Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory2;
+    HRESULT factoryHr = dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory2));
+    if (SUCCEEDED(factoryHr) && dxgiFactory2) {
+        DXGI_SWAP_CHAIN_DESC1 scd1 = {};
+        scd1.Width = static_cast<UINT>(width);
+        scd1.Height = static_cast<UINT>(height);
+        scd1.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        scd1.SampleDesc.Count = 1;
+        scd1.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        scd1.BufferCount = 2;
+        scd1.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        scd1.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        scd1.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+
+        Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
+        HRESULT hr = dxgiFactory2->CreateSwapChainForHwnd(
+            device, m_hWnd, &scd1, nullptr, nullptr, &swapChain1);
+        if (SUCCEEDED(hr)) {
+            m_swapChain = swapChain1;
+            swapChain1.As(&m_swapChain2);
+            if (m_swapChain2) {
+                m_swapChain2->SetMaximumFrameLatency(1);
+                std::lock_guard<std::mutex> latencyLock(m_frameLatencyMutex);
+                m_frameLatencyWaitableObject =
+                    m_swapChain2->GetFrameLatencyWaitableObject();
+            }
+            Resize(width, height);
+            return true;
+        }
+    }
+
+    Microsoft::WRL::ComPtr<IDXGIFactory> dxgiFactory;
+    if (FAILED(dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory))) || !dxgiFactory) {
+        std::fprintf(stderr, "VideoWindow: failed to get DXGI factory\n");
+        return false;
+    }
+
     DXGI_SWAP_CHAIN_DESC scd = {};
     scd.BufferCount = 2;
     scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -796,18 +852,6 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
     scd.SampleDesc.Count = 1;
     scd.Windowed = TRUE;
     scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-
-    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
-    device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
-    
-    Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapter;
-    dxgiDevice->GetAdapter(&dxgiAdapter);
-    
-    Microsoft::WRL::ComPtr<IDXGIFactory> dxgiFactory;
-    if (FAILED(dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory))) || !dxgiFactory) {
-        std::fprintf(stderr, "VideoWindow: failed to get DXGI factory\n");
-        return false;
-    }
 
     if (FAILED(dxgiFactory->CreateSwapChain(device, &scd, &m_swapChain))) {
         std::fprintf(stderr, "VideoWindow: CreateSwapChain failed\n");
@@ -822,7 +866,11 @@ void VideoWindow::Resize(int width, int height) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_swapChain) return;
     m_renderTargetView.Reset();
-    HRESULT hr = m_swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+    UINT flags = 0;
+    if (m_swapChain2) {
+        flags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    }
+    HRESULT hr = m_swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, flags);
     if (FAILED(hr)) return;
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
@@ -867,7 +915,7 @@ void VideoWindow::Close() {
     }
 
     // Release swapchain last
-    m_swapChain.Reset();
+    ResetSwapChain();
 
     if (m_hWnd) {
         DestroyWindow(m_hWnd);
@@ -898,7 +946,17 @@ bool VideoWindow::PollInput(InputEvent& ev) {
 }
 
 void VideoWindow::SetVsync(bool enabled) {
-    m_presentInterval = enabled ? 1u : 0u;
+    m_presentInterval.store(enabled ? 1u : 0u, std::memory_order_relaxed);
+}
+
+void VideoWindow::WaitForFrameLatency(DWORD timeoutMs) {
+    HANDLE waitHandle = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+        waitHandle = m_frameLatencyWaitableObject;
+    }
+    if (!waitHandle) return;
+    WaitForSingleObject(waitHandle, timeoutMs);
 }
 
 void VideoWindow::UpdateViewport(int width, int height) {
@@ -928,7 +986,7 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     }
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval;
+    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
 
     // Refresh window dimensions to avoid stale size during fullscreen transitions
     RECT rect;
@@ -1158,7 +1216,7 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
     }
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval;
+    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
 
     // Refresh window dimensions to avoid stale size during fullscreen transitions
     RECT rect;
@@ -1235,7 +1293,7 @@ void VideoWindow::PresentBackbuffer() {
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval;
+    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
     lock.unlock();
     if (!swapChain) return;
     swapChain->Present(presentInterval, 0);

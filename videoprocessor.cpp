@@ -78,6 +78,7 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
         // Copy the planar texture planes. NV12/P010 have 2 planes (Y and UV).
         // In DX11, these are represented as separate subresources.
         auto t0_copy = steady_clock::now();
+        int writeIndex = m_writeIndex;
     #if defined(RADIOIFY_ENABLE_GPU_TIMING)
         {
             Microsoft::WRL::ComPtr<ID3D11Query> qDisjoint, qStart, qEnd;
@@ -89,8 +90,8 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
 
             context->Begin(qDisjoint.Get());
             context->End(qStart.Get());
-            context->CopySubresourceRegion(m_texYuv.Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), nullptr);
-            context->CopySubresourceRegion(m_texYuv.Get(), 1, 0, 0, 0, texture, D3D11CalcSubresource(1, arrayIndex, desc.MipLevels), nullptr);
+            context->CopySubresourceRegion(m_texYuv[writeIndex].Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), nullptr);
+            context->CopySubresourceRegion(m_texYuv[writeIndex].Get(), 1, 0, 0, 0, texture, D3D11CalcSubresource(1, arrayIndex, desc.MipLevels), nullptr);
             context->End(qEnd.Get());
             context->End(qDisjoint.Get());
 
@@ -107,13 +108,14 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
             RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::Update NV12 GPU copy time %.3f ms\n", now_ms().c_str(), thread_id_str().c_str(), gpu_ms);
         }
     #else
-        context->CopySubresourceRegion(m_texYuv.Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), nullptr);
-        context->CopySubresourceRegion(m_texYuv.Get(), 1, 0, 0, 0, texture, D3D11CalcSubresource(1, arrayIndex, desc.MipLevels), nullptr);
+        context->CopySubresourceRegion(m_texYuv[writeIndex].Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), nullptr);
+        context->CopySubresourceRegion(m_texYuv[writeIndex].Get(), 1, 0, 0, 0, texture, D3D11CalcSubresource(1, arrayIndex, desc.MipLevels), nullptr);
     #endif
         auto d_copy = duration_cast<milliseconds>(steady_clock::now() - t0_copy).count();
-        
-        m_srvRGBA.Reset();
-        m_texRGBA.Reset();
+
+        m_format = CacheFormat::Yuv;
+        m_activeIndex = writeIndex;
+        m_writeIndex = (writeIndex + 1) % kFrameBufferCount;
         auto d_total = duration_cast<milliseconds>(steady_clock::now() - t0_total).count();
         RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::Update -> NV12 copy done (copy %lld ms total %lld ms)\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_copy, (long long)d_total);
     } else {
@@ -129,6 +131,7 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
         srcBox.left = 0; srcBox.top = 0; srcBox.front = 0;
         srcBox.right = width; srcBox.bottom = height; srcBox.back = 1;
         auto t0_copy = steady_clock::now();
+        int writeIndex = m_writeIndex;
     #if defined(RADIOIFY_ENABLE_GPU_TIMING)
         {
             Microsoft::WRL::ComPtr<ID3D11Query> qDisjoint, qStart, qEnd;
@@ -140,7 +143,7 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
 
             context->Begin(qDisjoint.Get());
             context->End(qStart.Get());
-            context->CopySubresourceRegion(m_texRGBA.Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), &srcBox);
+            context->CopySubresourceRegion(m_texRGBA[writeIndex].Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), &srcBox);
             context->End(qEnd.Get());
             context->End(qDisjoint.Get());
 
@@ -156,12 +159,13 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
             RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::Update RGBA GPU copy time %.3f ms\n", now_ms().c_str(), thread_id_str().c_str(), gpu_ms);
         }
     #else
-        context->CopySubresourceRegion(m_texRGBA.Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), &srcBox);
+        context->CopySubresourceRegion(m_texRGBA[writeIndex].Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), &srcBox);
     #endif
         auto d_copy = duration_cast<milliseconds>(steady_clock::now() - t0_copy).count();
 
-        m_srvY.Reset(); m_srvUV.Reset();
-        m_texYuv.Reset();
+        m_format = CacheFormat::Rgba;
+        m_activeIndex = writeIndex;
+        m_writeIndex = (writeIndex + 1) % kFrameBufferCount;
         auto d_total = duration_cast<milliseconds>(steady_clock::now() - t0_total).count();
         RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::Update -> RGBA copy done (ensure %lld ms copy %lld ms total %lld ms)\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_ensure, (long long)d_copy, (long long)d_total);
     }
@@ -177,24 +181,26 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
     if (!EnsureRGBA(device, width, height)) return false;
     auto d_ensure = duration_cast<milliseconds>(steady_clock::now() - t0_ensure).count();
     auto t0_upd = steady_clock::now();
+    int writeIndex = m_writeIndex;
 #if defined(RADIOIFY_ENABLE_STAGING_UPLOAD)
     if (!EnsureStagingRGBA(device, width, height)) {
         RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] GpuVideoFrameCache::Update(rgba) EnsureStagingRGBA failed\n", now_ms().c_str(), thread_id_str().c_str());
         return false;
     }
-    if (!UploadRGBAToDefaultViaStaging(context, rgba, stride, width, height)) {
+    if (!UploadRGBAToDefaultViaStaging(context, writeIndex, rgba, stride, width, height)) {
         RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] GpuVideoFrameCache::Update(rgba) staging upload failed\n", now_ms().c_str(), thread_id_str().c_str());
         return false;
     }
     auto d_upd = duration_cast<milliseconds>(steady_clock::now() - t0_upd).count();
 #else
-    context->UpdateSubresource(m_texRGBA.Get(), 0, nullptr, rgba, stride, 0);
+    context->UpdateSubresource(m_texRGBA[writeIndex].Get(), 0, nullptr, rgba, stride, 0);
     auto d_upd = duration_cast<milliseconds>(steady_clock::now() - t0_upd).count();
 #endif
     m_width = width;
     m_height = height;
-    m_srvY.Reset(); m_srvUV.Reset();
-    m_texYuv.Reset();
+    m_format = CacheFormat::Rgba;
+    m_activeIndex = writeIndex;
+    m_writeIndex = (writeIndex + 1) % kFrameBufferCount;
     auto d_total = duration_cast<milliseconds>(steady_clock::now() - t0_total).count();
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::Update(rgba) ensure %lld ms update %lld ms total %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_ensure, (long long)d_upd, (long long)d_total);
     return true;
@@ -216,6 +222,7 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
     // Update the planes separately
     auto t0_upd = steady_clock::now();
     using namespace std::chrono;
+    int writeIndex = m_writeIndex;
 #if defined(RADIOIFY_ENABLE_STAGING_UPLOAD)
     {
         auto t0_staging = steady_clock::now();
@@ -223,7 +230,7 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
             RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] GpuVideoFrameCache::UpdateNV12 EnsureStagingNV12 failed\n", now_ms().c_str(), thread_id_str().c_str());
             return false;
         }
-        if (!UploadNV12ToDefaultViaStaging(context, yuv, stride, planeHeight, width, height)) {
+        if (!UploadNV12ToDefaultViaStaging(context, writeIndex, yuv, stride, planeHeight, width, height)) {
             RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] GpuVideoFrameCache::UpdateNV12 staging upload failed\n", now_ms().c_str(), thread_id_str().c_str());
             return false;
         }
@@ -241,8 +248,8 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
 
         context->Begin(qDisjoint.Get());
         context->End(qStart.Get());
-        context->UpdateSubresource(m_texYuv.Get(), 0, nullptr, yuv, stride, 0);
-        context->UpdateSubresource(m_texYuv.Get(), 1, nullptr, yuv + (stride * planeHeight), stride, 0);
+        context->UpdateSubresource(m_texYuv[writeIndex].Get(), 0, nullptr, yuv, stride, 0);
+        context->UpdateSubresource(m_texYuv[writeIndex].Get(), 1, nullptr, yuv + (stride * planeHeight), stride, 0);
         context->End(qEnd.Get());
         context->End(qDisjoint.Get());
 
@@ -258,8 +265,8 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
         RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::UpdateNV12 GPU UpdateSubresource time %.3f ms\n", now_ms().c_str(), thread_id_str().c_str(), gpu_ms);
     }
 #else
-    context->UpdateSubresource(m_texYuv.Get(), 0, nullptr, yuv, stride, 0);
-    context->UpdateSubresource(m_texYuv.Get(), 1, nullptr, yuv + (stride * planeHeight), stride, 0);
+    context->UpdateSubresource(m_texYuv[writeIndex].Get(), 0, nullptr, yuv, stride, 0);
+    context->UpdateSubresource(m_texYuv[writeIndex].Get(), 1, nullptr, yuv + (stride * planeHeight), stride, 0);
 #endif
     auto d_upd = duration_cast<milliseconds>(steady_clock::now() - t0_upd).count();
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::UpdateNV12 -> UpdateSubresource done (ensure %lld ms update %lld ms)\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_ensure, (long long)d_upd);
@@ -270,9 +277,9 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
     m_matrix = matrix;
     m_transfer = transfer;
     m_bitDepth = bitDepth;
-    
-    m_srvRGBA.Reset();
-    m_texRGBA.Reset();
+    m_format = CacheFormat::Yuv;
+    m_activeIndex = writeIndex;
+    m_writeIndex = (writeIndex + 1) % kFrameBufferCount;
     auto d_total = duration_cast<milliseconds>(steady_clock::now() - t0_total).count();
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::UpdateNV12 total %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_total);
     return true;
@@ -280,12 +287,25 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
 
 bool GpuVideoFrameCache::EnsureNV12(ID3D11Device* device, int width, int height, int bitDepth) {
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureNV12 requested w=%d h=%d bd=%d (cached w=%d h=%d bd=%d)\n", now_ms().c_str(), thread_id_str().c_str(), width, height, bitDepth, m_width, m_height, m_bitDepth);
-    if (m_texYuv && m_width == width && m_height == height && m_bitDepth == bitDepth && m_srvY) {
+    bool cacheMatch = (m_width == width && m_height == height && m_bitDepth == bitDepth);
+    if (cacheMatch) {
+        for (int i = 0; i < kFrameBufferCount; ++i) {
+            if (!m_texYuv[i] || !m_srvY[i] || !m_srvUV[i]) {
+                cacheMatch = false;
+                break;
+            }
+        }
+    }
+    if (cacheMatch) {
         RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureNV12: already matched\n", now_ms().c_str(), thread_id_str().c_str());
         return true;
     }
 
-    m_texYuv.Reset(); m_srvY.Reset(); m_srvUV.Reset();
+    for (int i = 0; i < kFrameBufferCount; ++i) {
+        m_texYuv[i].Reset();
+        m_srvY[i].Reset();
+        m_srvUV[i].Reset();
+    }
     
     DXGI_FORMAT yuvFormat = (bitDepth > 8) ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
 
@@ -300,37 +320,40 @@ bool GpuVideoFrameCache::EnsureNV12(ID3D11Device* device, int width, int height,
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
     using namespace std::chrono;
-    auto t0_create = steady_clock::now();
-    if (FAILED(device->CreateTexture2D(&desc, nullptr, m_texYuv.GetAddressOf()))) {
-        RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureNV12: CreateTexture2D FAILED\n", now_ms().c_str(), thread_id_str().c_str());
-        return false;
-    }
-    auto d_create = duration_cast<milliseconds>(steady_clock::now() - t0_create).count();
-    RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureNV12: CreateTexture2D took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_create);
-
     // Create SRV for Y plane
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Format = (bitDepth > 8) ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MostDetailedMip = 0;
     srvDesc.Texture2D.MipLevels = 1;
-    auto t0_srv_y = steady_clock::now();
-    if (FAILED(device->CreateShaderResourceView(m_texYuv.Get(), &srvDesc, m_srvY.GetAddressOf()))) {
-        RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureNV12: CreateSRV Y FAILED\n", now_ms().c_str(), thread_id_str().c_str());
-        return false;
-    }
-    auto d_srv_y = duration_cast<milliseconds>(steady_clock::now() - t0_srv_y).count();
-    RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureNV12: CreateSRV Y took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_srv_y);
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvUvDesc = srvDesc;
+    srvUvDesc.Format = (bitDepth > 8) ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
 
-    // Create SRV for UV plane
-    srvDesc.Format = (bitDepth > 8) ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-    auto t0_srv_uv = steady_clock::now();
-    if (FAILED(device->CreateShaderResourceView(m_texYuv.Get(), &srvDesc, m_srvUV.GetAddressOf()))) {
-        RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureNV12: CreateSRV UV FAILED\n", now_ms().c_str(), thread_id_str().c_str());
-        return false;
+    for (int i = 0; i < kFrameBufferCount; ++i) {
+        auto t0_create = steady_clock::now();
+        if (FAILED(device->CreateTexture2D(&desc, nullptr, m_texYuv[i].GetAddressOf()))) {
+            RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureNV12: CreateTexture2D FAILED\n", now_ms().c_str(), thread_id_str().c_str());
+            return false;
+        }
+        auto d_create = duration_cast<milliseconds>(steady_clock::now() - t0_create).count();
+        RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureNV12: CreateTexture2D took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_create);
+
+        auto t0_srv_y = steady_clock::now();
+        if (FAILED(device->CreateShaderResourceView(m_texYuv[i].Get(), &srvDesc, m_srvY[i].GetAddressOf()))) {
+            RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureNV12: CreateSRV Y FAILED\n", now_ms().c_str(), thread_id_str().c_str());
+            return false;
+        }
+        auto d_srv_y = duration_cast<milliseconds>(steady_clock::now() - t0_srv_y).count();
+        RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureNV12: CreateSRV Y took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_srv_y);
+
+        auto t0_srv_uv = steady_clock::now();
+        if (FAILED(device->CreateShaderResourceView(m_texYuv[i].Get(), &srvUvDesc, m_srvUV[i].GetAddressOf()))) {
+            RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureNV12: CreateSRV UV FAILED\n", now_ms().c_str(), thread_id_str().c_str());
+            return false;
+        }
+        auto d_srv_uv = duration_cast<milliseconds>(steady_clock::now() - t0_srv_uv).count();
+        RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureNV12: CreateSRV UV took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_srv_uv);
     }
-    auto d_srv_uv = duration_cast<milliseconds>(steady_clock::now() - t0_srv_uv).count();
-    RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureNV12: CreateSRV UV took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_srv_uv);
 
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureNV12: success\n", now_ms().c_str(), thread_id_str().c_str());
     return true;
@@ -338,12 +361,24 @@ bool GpuVideoFrameCache::EnsureNV12(ID3D11Device* device, int width, int height,
 
 bool GpuVideoFrameCache::EnsureRGBA(ID3D11Device* device, int width, int height) {
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA requested w=%d h=%d (cached w=%d h=%d)\n", now_ms().c_str(), thread_id_str().c_str(), width, height, m_width, m_height);
-    if (m_texRGBA && m_width == width && m_height == height && m_srvRGBA) {
+    bool cacheMatch = (m_width == width && m_height == height);
+    if (cacheMatch) {
+        for (int i = 0; i < kFrameBufferCount; ++i) {
+            if (!m_texRGBA[i] || !m_srvRGBA[i]) {
+                cacheMatch = false;
+                break;
+            }
+        }
+    }
+    if (cacheMatch) {
         RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA: already matched\n", now_ms().c_str(), thread_id_str().c_str());
         return true;
     }
 
-    m_texRGBA.Reset(); m_srvRGBA.Reset();
+    for (int i = 0; i < kFrameBufferCount; ++i) {
+        m_texRGBA[i].Reset();
+        m_srvRGBA[i].Reset();
+    }
     
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width = width;
@@ -356,20 +391,22 @@ bool GpuVideoFrameCache::EnsureRGBA(ID3D11Device* device, int width, int height)
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
     using namespace std::chrono;
-    auto t0_create = steady_clock::now();
-    if (FAILED(device->CreateTexture2D(&desc, nullptr, m_texRGBA.GetAddressOf()))) {
-        RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureRGBA: CreateTexture2D FAILED\n", now_ms().c_str(), thread_id_str().c_str());
-        return false;
+    for (int i = 0; i < kFrameBufferCount; ++i) {
+        auto t0_create = steady_clock::now();
+        if (FAILED(device->CreateTexture2D(&desc, nullptr, m_texRGBA[i].GetAddressOf()))) {
+            RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureRGBA: CreateTexture2D FAILED\n", now_ms().c_str(), thread_id_str().c_str());
+            return false;
+        }
+        auto d_create = duration_cast<milliseconds>(steady_clock::now() - t0_create).count();
+        RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA: CreateTexture2D took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_create);
+        auto t0_srv = steady_clock::now();
+        if (FAILED(device->CreateShaderResourceView(m_texRGBA[i].Get(), nullptr, m_srvRGBA[i].GetAddressOf()))) {
+            RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureRGBA: CreateSRV FAILED\n", now_ms().c_str(), thread_id_str().c_str());
+            return false;
+        }
+        auto d_srv = duration_cast<milliseconds>(steady_clock::now() - t0_srv).count();
+        RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA: CreateSRV took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_srv);
     }
-    auto d_create = duration_cast<milliseconds>(steady_clock::now() - t0_create).count();
-    RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA: CreateTexture2D took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_create);
-    auto t0_srv = steady_clock::now();
-    if (FAILED(device->CreateShaderResourceView(m_texRGBA.Get(), nullptr, m_srvRGBA.GetAddressOf()))) {
-        RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] EnsureRGBA: CreateSRV FAILED\n", now_ms().c_str(), thread_id_str().c_str());
-        return false;
-    }
-    auto d_srv = duration_cast<milliseconds>(steady_clock::now() - t0_srv).count();
-    RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA: CreateSRV took %lld ms\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_srv);
 
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA: success\n", now_ms().c_str(), thread_id_str().c_str());
     return true;
@@ -432,7 +469,7 @@ bool GpuVideoFrameCache::EnsureStagingRGBA(ID3D11Device* device, int width, int 
     return true;
 }
 
-bool GpuVideoFrameCache::UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* context, const uint8_t* yuv, int stride, int planeHeight, int width, int height) {
+bool GpuVideoFrameCache::UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* yuv, int stride, int planeHeight, int width, int height) {
     // writes Y plane then UV plane to staging and issues CopySubresourceRegion into default texture
     if (!m_stagingYuv) return false;
 
@@ -453,12 +490,12 @@ bool GpuVideoFrameCache::UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* cont
     context->Unmap(m_stagingYuv.Get(), 1);
 
     // Copy into the default texture planes
-    context->CopySubresourceRegion(m_texYuv.Get(), 0, 0, 0, 0, m_stagingYuv.Get(), 0, nullptr);
-    context->CopySubresourceRegion(m_texYuv.Get(), 1, 0, 0, 0, m_stagingYuv.Get(), 1, nullptr);
+    context->CopySubresourceRegion(m_texYuv[dstIndex].Get(), 0, 0, 0, 0, m_stagingYuv.Get(), 0, nullptr);
+    context->CopySubresourceRegion(m_texYuv[dstIndex].Get(), 1, 0, 0, 0, m_stagingYuv.Get(), 1, nullptr);
     return true;
 }
 
-bool GpuVideoFrameCache::UploadRGBAToDefaultViaStaging(ID3D11DeviceContext* context, const uint8_t* rgba, int stride, int width, int height) {
+bool GpuVideoFrameCache::UploadRGBAToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* rgba, int stride, int width, int height) {
     if (!m_stagingRGBA) return false;
     D3D11_MAPPED_SUBRESOURCE mapped;
     if (FAILED(context->Map(m_stagingRGBA.Get(), 0, D3D11_MAP_WRITE, 0, &mapped))) return false;
@@ -467,7 +504,7 @@ bool GpuVideoFrameCache::UploadRGBAToDefaultViaStaging(ID3D11DeviceContext* cont
     }
     context->Unmap(m_stagingRGBA.Get(), 0);
 
-    context->CopySubresourceRegion(m_texRGBA.Get(), 0, 0, 0, 0, m_stagingRGBA.Get(), 0, nullptr);
+    context->CopySubresourceRegion(m_texRGBA[dstIndex].Get(), 0, 0, 0, 0, m_stagingRGBA.Get(), 0, nullptr);
     return true;
 }
 
@@ -475,6 +512,14 @@ bool GpuVideoFrameCache::UploadRGBAToDefaultViaStaging(ID3D11DeviceContext* cont
 
 void GpuVideoFrameCache::Reset() {
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::Reset\n", now_ms().c_str(), thread_id_str().c_str());
-    m_texYuv.Reset(); m_texRGBA.Reset();
-    m_srvY.Reset(); m_srvUV.Reset(); m_srvRGBA.Reset();
+    for (int i = 0; i < kFrameBufferCount; ++i) {
+        m_texYuv[i].Reset();
+        m_texRGBA[i].Reset();
+        m_srvY[i].Reset();
+        m_srvUV[i].Reset();
+        m_srvRGBA[i].Reset();
+    }
+    m_activeIndex = 0;
+    m_writeIndex = 0;
+    m_format = CacheFormat::None;
 }

@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <wrl/client.h>
+#include <atomic>
 #include <string>
 #include <memory>
 
@@ -25,6 +26,8 @@ struct WindowUiState {
     int volPct = 0; // volume percent for display
 };
 
+struct IDXGISwapChain2;
+
 class VideoWindow {
 public:
     VideoWindow();
@@ -37,11 +40,14 @@ public:
     // Render the UI overlay using the last cached video frame as background
     void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     void PresentBackbuffer();
+    void WaitForFrameLatency(DWORD timeoutMs);
     void SetVsync(bool enabled);
     
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
-    bool IsVsyncEnabled() const { return m_presentInterval != 0; }
+    bool IsVsyncEnabled() const {
+        return m_presentInterval.load(std::memory_order_relaxed) != 0;
+    }
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
     // Get viewport geometry for mouse coordinate mapping (used for seeking in window mode)
@@ -61,17 +67,21 @@ private:
     void UpdateViewport(int width, int height);
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     bool CreateSwapChain(int width, int height);
+    void ResetSwapChain();
     void Resize(int width, int height);
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
+    Microsoft::WRL::ComPtr<IDXGISwapChain2> m_swapChain2;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_renderTargetView;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_pixelShader;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_vertexShader;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_uiShader;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
-    UINT m_presentInterval = 1;
+    std::atomic<UINT> m_presentInterval{1};
+    HANDLE m_frameLatencyWaitableObject = nullptr;
+    std::mutex m_frameLatencyMutex;
 
     // frame cache is owned and managed externally by videoplayback
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <cstdarg>
 #include <cstdint>
@@ -612,12 +613,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   std::string renderFailMessage;
   std::string renderFailDetail;
   bool forceRefreshArt = false;
-  bool forceWindowPresent = false;
   bool pendingResize = false;
   bool userPaused = false;
   bool localSeekRequested = false;
+  std::atomic<bool> windowLocalSeekRequested{false};
+  bool closeWindowRequested = false;
   auto seekRequestTime = std::chrono::steady_clock::time_point::min();
   double pendingSeekTargetSec = -1.0;
+  std::atomic<double> windowPendingSeekTargetSec{-1.0};
   auto lastSeekSentTime = std::chrono::steady_clock::time_point::min();
   double queuedSeekTargetSec = -1.0;
   bool seekQueued = false;
@@ -626,6 +629,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   auto lastUiDbgLog = std::chrono::steady_clock::time_point::min();
   std::string lastUiDbgLine1;
   std::string lastUiDbgLine2;
+  std::atomic<bool> windowThreadRunning{true};
+  std::atomic<bool> windowThreadEnabled{false};
+  std::atomic<bool> windowForcePresent{false};
+  std::mutex windowPresentMutex;
+  std::condition_variable windowPresentCv;
 
   AsciiArt art;
   GpuAsciiRenderer& gpuRenderer = sharedGpuRenderer();
@@ -638,6 +646,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   g_videoWindow.SetVsync(windowVsyncEnabled);
   if (g_videoWindow.IsOpen()) {
     g_videoWindow.ShowWindow(windowEnabled);
+  }
+  if (windowEnabled && !g_videoWindow.IsOpen()) {
+    g_videoWindow.Open(1280, 720, "Radioify Output");
+    g_videoWindow.ShowWindow(true);
+  }
+  windowThreadEnabled.store(windowEnabled, std::memory_order_relaxed);
+  if (windowEnabled) {
+    windowForcePresent.store(true, std::memory_order_relaxed);
+    windowPresentCv.notify_one();
   }
   bool gpuAvailable = true;
   VideoFrame frameBuffer;
@@ -676,6 +693,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     player.requestSeek(targetUs);
     pendingSeekTargetSec = targetSec;
     localSeekRequested = true;
+    windowPendingSeekTargetSec.store(pendingSeekTargetSec,
+                                     std::memory_order_relaxed);
+    windowLocalSeekRequested.store(localSeekRequested,
+                                   std::memory_order_relaxed);
     seekRequestTime = std::chrono::steady_clock::now();
     lastSeekSentTime = seekRequestTime;
     queuedSeekTargetSec = -1.0;
@@ -690,6 +711,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   auto queueSeekRequest = [&](double targetSec) {
     pendingSeekTargetSec = targetSec;
     localSeekRequested = true;
+    windowPendingSeekTargetSec.store(pendingSeekTargetSec,
+                                     std::memory_order_relaxed);
+    windowLocalSeekRequested.store(localSeekRequested,
+                                   std::memory_order_relaxed);
     seekRequestTime = std::chrono::steady_clock::now();
     queuedSeekTargetSec = targetSec;
     seekQueued = true;
@@ -698,9 +723,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   };
 
   constexpr auto kProgressOverlayTimeout = std::chrono::milliseconds(3500);
-  auto overlayUntil = std::chrono::steady_clock::time_point::min();
+  auto nowMs = []() -> int64_t {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  };
+  std::atomic<int64_t> overlayUntilMs{0};
   auto triggerOverlay = [&]() {
-    auto now = std::chrono::steady_clock::now();
+    int64_t now = nowMs();
     // If paused/seeking/ended, extend the overlay timeout so user sees controls longer
     bool extended = false;
     if (userPaused) extended = true;
@@ -708,40 +738,23 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     // 'ended' may not be set yet at first calls; it's captured by reference and can be used
     // if present later
     // Use a longer duration for extended cases
-    if (extended) {
-      overlayUntil = now + std::chrono::milliseconds(5000);
-    } else {
-      overlayUntil = now + kProgressOverlayTimeout;
-    }
+    int64_t timeoutMs =
+        extended ? 5000 : static_cast<int64_t>(kProgressOverlayTimeout.count());
+    overlayUntilMs.store(now + timeoutMs, std::memory_order_relaxed);
+    windowForcePresent.store(true, std::memory_order_relaxed);
+    windowPresentCv.notify_one();
   };
   auto overlayVisible = [&]() {
-    if (overlayUntil == std::chrono::steady_clock::time_point::min()) {
+    int64_t until = overlayUntilMs.load(std::memory_order_relaxed);
+    if (until <= 0) {
       return false;
     }
-    return std::chrono::steady_clock::now() <= overlayUntil;
+    return nowMs() <= until;
   };
 
-  auto presentWindowFrame = [&](bool frameChanged) {
-    if (!windowEnabled) return;
-    // Ensure we have a valid texture to present (from current or previous frame)
-    if (!frame->hwTexture) return;
-    
-    // Present if: 
-    // - frame changed (new frame)
-    // - overlay is visible (UI needs update)
-    // - we are seeking (show "Seeking..." and progress bar movement in window)
-    bool isSeeking = player.isSeeking() || localSeekRequested;
-    if (!frameChanged && !forceWindowPresent && !overlayVisible() && !isSeeking) return;
-    forceWindowPresent = false;
-    if (frame->format != VideoPixelFormat::HWTexture) {
-      return;
-    }
-
-    if (!g_videoWindow.IsOpen()) {
-      g_videoWindow.Open(1280, 720, "Radioify Output");
-    }
-    g_videoWindow.ShowWindow(true);
-
+  const std::string windowTitle = toUtf8String(file.filename());
+  auto buildWindowUiState = [&]() {
+    WindowUiState ui;
     double currentSec = 0.0;
     double totalSec = -1.0;
     int64_t clockUs = player.currentUs();
@@ -751,16 +764,21 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     int64_t durUs = player.durationUs();
     if (durUs > 0) {
       totalSec = static_cast<double>(durUs) / 1000000.0;
-    } else if (audioOk) {
+    } else if (player.audioOk()) {
       totalSec = audioGetTotalSec();
     }
     if (totalSec > 0.0) {
       currentSec = std::clamp(currentSec, 0.0, totalSec);
     }
     double displaySec = currentSec;
-    bool seekingOverlay = player.isSeeking() || localSeekRequested;
-    if (seekingOverlay && totalSec > 0.0 && std::isfinite(totalSec)) {
-      displaySec = std::clamp(pendingSeekTargetSec, 0.0, totalSec);
+    bool seekingOverlay =
+        player.isSeeking() ||
+        windowLocalSeekRequested.load(std::memory_order_relaxed);
+    double pendingTarget =
+        windowPendingSeekTargetSec.load(std::memory_order_relaxed);
+    if (seekingOverlay && pendingTarget >= 0.0 && totalSec > 0.0 &&
+        std::isfinite(totalSec)) {
+      displaySec = std::clamp(pendingTarget, 0.0, totalSec);
     }
 
     double ratio = 0.0;
@@ -768,52 +786,90 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
     }
 
-    WindowUiState ui;
     ui.progress = static_cast<float>(ratio);
     ui.isPaused = player.state() == PlayerState::Paused;
     ui.overlayAlpha = overlayVisible() ? 1.0f : 0.0f;
-    // Provide textual UI info for the video window overlay/title
-    ui.title = toUtf8String(file.filename());
+    ui.title = windowTitle;
     ui.displaySec = displaySec;
     ui.totalSec = totalSec;
     ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-    ui.vsyncEnabled = windowVsyncEnabled;
+    ui.vsyncEnabled = g_videoWindow.IsVsyncEnabled();
+    return ui;
+  };
 
-    D3D11_TEXTURE2D_DESC desc{};
-    frame->hwTexture->GetDesc(&desc);
-    bool is10Bit = (desc.Format == DXGI_FORMAT_P010);
+  std::thread windowPresentThread([&]() {
+    VideoFrame localFrame;
+    while (windowThreadRunning.load(std::memory_order_relaxed)) {
+      if (!windowThreadEnabled.load(std::memory_order_relaxed)) {
+        std::unique_lock<std::mutex> lock(windowPresentMutex);
+        windowPresentCv.wait_for(lock, std::chrono::milliseconds(50), [&]() {
+          return !windowThreadRunning.load(std::memory_order_relaxed) ||
+                 windowThreadEnabled.load(std::memory_order_relaxed);
+        });
+        continue;
+      }
 
-    // Update central GPU frame cache under the shared GPU mutex to avoid races
-    ID3D11Device* device = getSharedGpuDevice();
-    if (device) {
-      Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-      device->GetImmediateContext(&context);
-      if (context) {
-#if RADIOIFY_ENABLE_TIMING_LOG
-        fprintf(stderr, "[%s] [tid=%s] videoplayback: about to lock shared GPU mutex for Update (frame %dx%d)\n", now_ms().c_str(), thread_id_str().c_str(), frame->width, frame->height);
-        auto t0_lock = std::chrono::steady_clock::now();
-#endif
-        std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-#if RADIOIFY_ENABLE_TIMING_LOG
-        auto d_lock = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0_lock).count();
-        if (d_lock > 0) {
-          fprintf(stderr, "[%s] [tid=%s] videoplayback: waited %lld ms to acquire GPU mutex\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_lock);
+      if (!g_videoWindow.IsOpen() || !g_videoWindow.IsVisible()) {
+        std::unique_lock<std::mutex> lock(windowPresentMutex);
+        windowPresentCv.wait_for(lock, std::chrono::milliseconds(50));
+        continue;
+      }
+
+      bool frameChanged = player.tryGetVideoFrame(&localFrame);
+      if (frameChanged) {
+        if (localFrame.format != VideoPixelFormat::HWTexture ||
+            !localFrame.hwTexture) {
+          frameChanged = false;
+        } else {
+          D3D11_TEXTURE2D_DESC desc{};
+          localFrame.hwTexture->GetDesc(&desc);
+          bool is10Bit = (desc.Format == DXGI_FORMAT_P010);
+
+          ID3D11Device* device = getSharedGpuDevice();
+          if (device) {
+            Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+            device->GetImmediateContext(&context);
+            if (context) {
+              std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+              (void)g_frameCache.Update(
+                  device, context.Get(), localFrame.hwTexture.Get(),
+                  localFrame.hwTextureArrayIndex, localFrame.width,
+                  localFrame.height, localFrame.fullRange, localFrame.yuvMatrix,
+                  localFrame.yuvTransfer, is10Bit ? 10 : 8);
+            }
+          }
         }
-        fprintf(stderr, "[%s] [tid=%s] videoplayback: before g_frameCache.Update\n", now_ms().c_str(), thread_id_str().c_str());
-#endif
-        (void)g_frameCache.Update(device, context.Get(), frame->hwTexture.Get(), frame->hwTextureArrayIndex,
-                                  frame->width, frame->height, frame->fullRange, frame->yuvMatrix,
-                                  frame->yuvTransfer, is10Bit ? 10 : 8);
-#if RADIOIFY_ENABLE_TIMING_LOG
-        fprintf(stderr, "[%s] [tid=%s] videoplayback: after g_frameCache.Update\n", now_ms().c_str(), thread_id_str().c_str());
-#endif
+      }
+
+      WindowUiState ui = buildWindowUiState();
+      bool overlayVisibleNow = ui.overlayAlpha > 0.01f;
+      bool forcePresent =
+          windowForcePresent.exchange(false, std::memory_order_relaxed);
+      bool needsPresent =
+          frameChanged || forcePresent || overlayVisibleNow || player.isSeeking();
+
+      if (needsPresent) {
+        g_videoWindow.WaitForFrameLatency(16);
+        if (frameChanged) {
+          g_videoWindow.Present(g_frameCache, ui);
+        } else {
+          g_videoWindow.PresentOverlay(g_frameCache, ui);
+        }
+      } else {
+        std::unique_lock<std::mutex> lock(windowPresentMutex);
+        windowPresentCv.wait_for(lock, std::chrono::milliseconds(10));
       }
     }
-
-#if RADIOIFY_ENABLE_TIMING_LOG
-    fprintf(stderr, "[%s] [tid=%s] videoplayback: about to call g_videoWindow.Present\n", now_ms().c_str(), thread_id_str().c_str());
-#endif
-    g_videoWindow.Present(g_frameCache, ui);
+  });
+  auto stopWindowThread = [&]() {
+    windowThreadRunning.store(false, std::memory_order_relaxed);
+    windowPresentCv.notify_one();
+    if (windowPresentThread.joinable()) {
+      windowPresentThread.join();
+    }
+    if (closeWindowRequested && g_videoWindow.IsOpen()) {
+      g_videoWindow.Close();
+    }
   };
 
   auto maybeLogUiDbg = [&](const std::string& line1, const std::string& line2) {
@@ -1122,10 +1178,22 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       }
       screen.writeText(0, artTop, fitLine(label, width), dimStyle);
       if (allowFrame && maxHeight > 1) {
-        std::string sizeLine =
-            "Video size: " + std::to_string(frame->width) + "x" +
-            std::to_string(frame->height);
-        screen.writeText(0, artTop + 1, fitLine(sizeLine, width), dimStyle);
+        int sizeW = frame->width;
+        int sizeH = frame->height;
+        if (windowEnabled) {
+          int srcW = player.sourceWidth();
+          int srcH = player.sourceHeight();
+          if (srcW > 0 && srcH > 0) {
+            sizeW = srcW;
+            sizeH = srcH;
+          }
+        }
+        if (sizeW > 0 && sizeH > 0) {
+          std::string sizeLine =
+              "Video size: " + std::to_string(sizeW) + "x" +
+              std::to_string(sizeH);
+          screen.writeText(0, artTop + 1, fitLine(sizeLine, width), dimStyle);
+        }
       }
     }
 
@@ -1202,6 +1270,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   renderScreen(true, true);
   if (renderFailed) {
+    stopWindowThread();
     player.close();
     if (audioOk) audioStop();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
@@ -1216,6 +1285,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       g_videoWindow.PollEvents();
       if (windowEnabled && !g_videoWindow.IsVisible()) {
         windowEnabled = false;
+        windowThreadEnabled.store(false, std::memory_order_relaxed);
+        windowPresentCv.notify_one();
         forceRefreshArt = true;
         redraw = true;
       }
@@ -1284,8 +1355,16 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (ev.key.vk == 'W') {
           windowEnabled = !windowEnabled;
           if (windowEnabled) {
-            forceWindowPresent = true;
+            if (!g_videoWindow.IsOpen()) {
+              g_videoWindow.Open(1280, 720, "Radioify Output");
+            }
+            g_videoWindow.ShowWindow(true);
+            windowThreadEnabled.store(true, std::memory_order_relaxed);
+            windowForcePresent.store(true, std::memory_order_relaxed);
+            windowPresentCv.notify_one();
           } else {
+            windowThreadEnabled.store(false, std::memory_order_relaxed);
+            windowPresentCv.notify_one();
             if (g_videoWindow.IsOpen()) {
               g_videoWindow.ShowWindow(false);
             }
@@ -1298,9 +1377,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
         if (ev.key.vk == VK_ESCAPE) {
           running = false;
-          if (g_videoWindow.IsOpen()) {
-            g_videoWindow.Close();
-          }
+          closeWindowRequested = true;
+          windowThreadEnabled.store(false, std::memory_order_relaxed);
+          windowPresentCv.notify_one();
           continue;
         }
 
@@ -1308,7 +1387,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           triggerOverlay();
           redraw = true;
           if (windowEnabled) {
-            forceWindowPresent = true;
+            windowForcePresent.store(true, std::memory_order_relaxed);
+            windowPresentCv.notify_one();
           }
           continue;
         }
@@ -1317,7 +1397,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         triggerOverlay();
         redraw = true;
         if (windowEnabled) {
-          forceWindowPresent = true;
+          windowForcePresent.store(true, std::memory_order_relaxed);
+          windowPresentCv.notify_one();
         }
         const MouseEvent& mouse = ev.mouse;
         bool leftPressed =
@@ -1407,7 +1488,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
     bool presented = false;
     VideoFrame nextFrame;
-    if (player.tryGetVideoFrame(&nextFrame)) {
+    bool useWindowPresenter =
+        windowThreadEnabled.load(std::memory_order_relaxed);
+    if (!useWindowPresenter && player.tryGetVideoFrame(&nextFrame)) {
       frameBuffer = std::move(nextFrame);
       haveFrame = true;
       presented = true;
@@ -1417,10 +1500,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
     if (!player.hasVideoFrame()) {
       haveFrame = false;
+    } else if (useWindowPresenter) {
+      haveFrame = true;
     }
 
     if (localSeekRequested && player.isSeeking()) {
       localSeekRequested = false;
+      windowLocalSeekRequested.store(localSeekRequested,
+                                     std::memory_order_relaxed);
     }
     if (localSeekRequested && !player.isSeeking()) {
       auto now = std::chrono::steady_clock::now();
@@ -1428,54 +1515,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           now - seekRequestTime > std::chrono::milliseconds(500) &&
           player.hasVideoFrame()) {
         localSeekRequested = false;
+        windowLocalSeekRequested.store(localSeekRequested,
+                                       std::memory_order_relaxed);
       }
     }
     if (!player.isSeeking() && !localSeekRequested) {
       pendingSeekTargetSec = -1.0;
-    }
-
-    presentWindowFrame(presented);
-    
-    // Render overlay update if visible AND no frame was just presented
-    // This prevents double-rendering of overlay (Present() doesn't render UI anymore)
-    if (windowEnabled && g_videoWindow.IsOpen() && overlayVisible() && !presented) {
-      // Prepare overlay UI state with current or pending seek target
-      int64_t clockUs = player.currentUs();
-      double currentSec = clockUs > 0 ? static_cast<double>(clockUs) / 1000000.0 : 0.0;
-      double totalSec = -1.0;
-      int64_t durUs = player.durationUs();
-      if (durUs > 0) {
-        totalSec = static_cast<double>(durUs) / 1000000.0;
-      } else if (audioOk) {
-        totalSec = audioGetTotalSec();
-      }
-      if (totalSec > 0.0) {
-        currentSec = std::clamp(currentSec, 0.0, totalSec);
-      }
-      
-      double displaySec = currentSec;
-      bool seekingOverlay = player.isSeeking() || localSeekRequested;
-      if (seekingOverlay && totalSec > 0.0 && std::isfinite(totalSec)) {
-        displaySec = std::clamp(pendingSeekTargetSec, 0.0, totalSec);
-      }
-      
-      double ratio = 0.0;
-      if (totalSec > 0.0 && std::isfinite(totalSec)) {
-        ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
-      }
-      
-      WindowUiState ui;
-      ui.progress = static_cast<float>(ratio);
-      ui.isPaused = player.state() == PlayerState::Paused;
-      ui.overlayAlpha = 1.0f;
-      ui.title = toUtf8String(file.filename());
-      ui.displaySec = displaySec;
-      ui.totalSec = totalSec;
-      ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-      ui.vsyncEnabled = windowVsyncEnabled;
-      
-      // Render overlay only - updates progress bar and text without touching video frame
-      g_videoWindow.PresentOverlay(g_frameCache, ui);
+      windowPendingSeekTargetSec.store(pendingSeekTargetSec,
+                                       std::memory_order_relaxed);
     }
 
     if (player.isEnded()) {
@@ -1519,6 +1566,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   }
 
   if (renderFailed) {
+    stopWindowThread();
     player.close();
     if (audioOk) audioStop();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
@@ -1526,6 +1574,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return ok;
   }
 
+  stopWindowThread();
   player.close();
   if (audioOk) audioStop();
   finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
