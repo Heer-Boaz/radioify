@@ -72,7 +72,9 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_outputUAV;
-    Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputStagingBuffer;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputStagingBuffers[2];
+    int m_outputStagingIndex = 0;
+    bool m_outputStagingPrimed = false;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_metaBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_metaUAV;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_metaSRV;

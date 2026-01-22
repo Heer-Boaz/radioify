@@ -18,6 +18,7 @@ ipch/
 [Bb]in/
 [Oo]bj/
 build/
+build-gcc/
 build-*/
 cmake-build-*/
 cmake-build*/
@@ -68,6 +69,13 @@ Desktop.ini
 *~
 *.swp
 *.swo
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+tmp/
+temp/
 **.dmp
 **.txt
 **.log
