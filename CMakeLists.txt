@@ -24,6 +24,7 @@ add_executable(radioify
   queues.cpp
   taskgate.cpp
   ui_helpers.cpp
+  subtitles.cpp
   videoplayback.cpp
   videodecoder.cpp
   videowindow.cpp

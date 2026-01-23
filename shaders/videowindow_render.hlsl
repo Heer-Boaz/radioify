@@ -21,6 +21,14 @@ cbuffer Constants : register(b0) {
     float uiTextHeight;
     float uiTextLeft;
     float uiTextWidth;
+    float subtitleTop;
+    float subtitleHeight;
+    float subtitleLeft;
+    float subtitleWidth;
+    float subtitleAlpha;
+    float pad3;
+    float pad4;
+    float pad5;
 };
 
 PS_INPUT VS(uint vid : SV_VertexID) {

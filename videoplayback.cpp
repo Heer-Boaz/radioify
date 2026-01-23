@@ -38,6 +38,7 @@ extern "C" {
 #include "audioplayback.h"
 #include "gpu_shared.h"
 #include "player.h"
+#include "subtitles.h"
 #include "ui_helpers.h"
 #include "videowindow.h"
 
@@ -256,6 +257,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                     const VideoPlaybackConfig& config) {
   bool enableAscii = config.enableAscii;
   bool enableAudio = config.enableAudio && audioIsEnabled();
+  bool enableSubtitles = config.enableSubtitles;
 
   bool fullRedrawEnabled = enableAscii;
   if (fullRedrawEnabled) {
@@ -414,6 +416,22 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   playerConfig.logPath = logPath;
   playerConfig.enableAudio = enableAudio;
   playerConfig.allowDecoderScale = enableAscii;
+  SubtitleTrack subtitles;
+  std::filesystem::path subtitlePath;
+  auto findSubtitlePath =
+      [&](const std::filesystem::path& videoPath) -> std::filesystem::path {
+    std::error_code ec;
+    std::filesystem::path baseDir = videoPath.parent_path();
+    std::string stem = videoPath.stem().string();
+    const char* exts[] = {".srt", ".vtt"};
+    for (const char* ext : exts) {
+      std::filesystem::path candidate = baseDir / (stem + ext);
+      if (std::filesystem::exists(candidate, ec) && !ec) {
+        return candidate;
+      }
+    }
+    return {};
+  };
 
   if (!player.open(playerConfig, nullptr)) {
     bool ok = showError("Failed to open video.", "");
@@ -523,6 +541,22 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return ok;
   }
 
+  if (enableSubtitles) {
+    subtitlePath = findSubtitlePath(file);
+    if (!subtitlePath.empty()) {
+      std::string subtitleError;
+      if (subtitles.loadFromFile(subtitlePath, &subtitleError)) {
+        perfLogAppendf(&perfLog, "subtitle_load ok=1 file=%s cues=%zu",
+                       toUtf8String(subtitlePath.filename()).c_str(),
+                       subtitles.size());
+      } else {
+        perfLogAppendf(&perfLog, "subtitle_load ok=0 file=%s err=%s",
+                       toUtf8String(subtitlePath.filename()).c_str(),
+                       subtitleError.c_str());
+      }
+    }
+  }
+
   int sourceWidth = player.sourceWidth();
   int sourceHeight = player.sourceHeight();
 
@@ -531,8 +565,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   int initScreenHeight = std::max(10, screen.height());
 
   auto computeTargetSizeForSource = [&](int width, int height, int srcW,
-                                        int srcH, bool showSubtitle) {
-    int headerLines = showSubtitle ? 1 : 0;
+                                        int srcH, bool showStatusLine) {
+    int headerLines = showStatusLine ? 1 : 0;
     const int footerLines = 0;
     int maxHeight = std::max(1, height - headerLines - footerLines);
     int maxOutW = std::max(1, width - 8);
@@ -571,9 +605,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   };
 
   auto computeTargetSize = [&](int width, int height) {
-    bool showSubtitle = !player.audioOk();
+    bool showStatusLine = !player.audioOk();
     return computeTargetSizeForSource(width, height, sourceWidth, sourceHeight,
-                                      showSubtitle);
+                                      showStatusLine);
   };
 
   auto computeAsciiOutputSize = [&](int maxWidth, int maxHeight, int srcW,
@@ -795,6 +829,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     ui.totalSec = totalSec;
     ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
     ui.vsyncEnabled = g_videoWindow.IsVsyncEnabled();
+    std::string subtitle = getSubtitleText(clockUs, seekingOverlay);
+    ui.subtitle = subtitle;
+    ui.subtitleAlpha = subtitle.empty() ? 0.0f : 1.0f;
     return ui;
   };
 
@@ -927,14 +964,24 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
   };
 
+  auto getSubtitleText = [&](int64_t clockUs, bool seeking) -> std::string {
+    if (!enableSubtitles || seeking || clockUs <= 0 || subtitles.empty()) {
+      return {};
+    }
+    const SubtitleCue* cue = subtitles.cueAt(clockUs);
+    if (!cue) return {};
+    return cue->text;
+  };
+
   auto renderScreen = [&](bool clearHistory, bool frameChanged) {
     screen.updateSize();
     int width = std::max(20, screen.width());
     int height = std::max(10, screen.height());
-    std::string subtitle;
+    std::string statusLine;
     if (!audioOk && !audioStarting) {
-      subtitle = enableAudio ? "Audio unavailable" : "Audio disabled";
+      statusLine = enableAudio ? "Audio unavailable" : "Audio disabled";
     }
+    std::string subtitleText;
     std::string debugLine1;
     std::string debugLine2;
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -971,7 +1018,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (!debugLine2.empty()) {
       headerLines += 1;
     }
-    if (!subtitle.empty()) {
+    if (!statusLine.empty()) {
       headerLines += 1;
     }
     const int footerLines = 0;
@@ -998,6 +1045,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (seekingOverlay && totalSec > 0.0 && std::isfinite(totalSec)) {
       displaySec = std::clamp(pendingSeekTargetSec, 0.0, totalSec);
     }
+    subtitleText = getSubtitleText(clockUs, seekingOverlay);
 
     bool waitingForAudio =
         audioOk && !audioStreamClockReady() && !audioIsFinished();
@@ -1235,8 +1283,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (!debugLine2.empty()) {
       screen.writeText(0, headerY++, fitLine(debugLine2, width), dimStyle);
     }
-    if (!subtitle.empty()) {
-      screen.writeText(0, headerY++, fitLine(subtitle, width), dimStyle);
+    if (!statusLine.empty()) {
+      screen.writeText(0, headerY++, fitLine(statusLine, width), dimStyle);
     }
 
     if (enableAscii && !windowEnabled) {
@@ -1284,6 +1332,38 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               "Video size: " + std::to_string(sizeW) + "x" +
               std::to_string(sizeH);
           screen.writeText(0, artTop + 1, fitLine(sizeLine, width), dimStyle);
+        }
+      }
+    }
+
+    if (enableAscii && !windowEnabled && !subtitleText.empty()) {
+      std::vector<std::string> lines;
+      std::string line;
+      for (char c : subtitleText) {
+        if (c == '\r') continue;
+        if (c == '\n') {
+          if (!line.empty()) lines.push_back(line);
+          line.clear();
+        } else {
+          line.push_back(c);
+        }
+      }
+      if (!line.empty()) lines.push_back(line);
+      if (lines.size() > 2) {
+        lines.resize(2);
+      }
+      if (!lines.empty()) {
+        int subtitleBottom = overlayVisible() ? height - 3 : height - 1;
+        int maxVisible = subtitleBottom - artTop + 1;
+        if (subtitleBottom >= 0 && maxVisible > 0) {
+          int visibleLines = std::min<int>(lines.size(), maxVisible);
+          int startLine = static_cast<int>(lines.size()) - visibleLines;
+          int startY = subtitleBottom - visibleLines + 1;
+          for (int i = 0; i < visibleLines; ++i) {
+            const std::string& textLine = lines[startLine + i];
+            screen.writeText(0, startY + i, fitLine(textLine, width),
+                             accentStyle);
+          }
         }
       }
     }

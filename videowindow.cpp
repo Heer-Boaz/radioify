@@ -50,6 +50,16 @@ namespace {
         float textWidth;
         uint32_t pad1;
         uint32_t pad2;
+
+        float subtitleTop;
+        float subtitleHeight;
+        float subtitleLeft;
+        float subtitleWidth;
+
+        float subtitleAlpha;
+        float pad3;
+        float pad4;
+        float pad5;
     };
 
     static_assert((sizeof(ShaderConstants) % 16) == 0, "ShaderConstants size must be 16-byte aligned");
@@ -132,51 +142,84 @@ namespace {
     static bool renderTextToBitmap(const std::string& utf8, int width, int height, std::vector<uint8_t>& outPixels) {
         outPixels.clear();
         if (width <= 0 || height <= 0) return false;
-        // Uppercase the input (font table is uppercase + digits/punct)
+
         std::string text;
+        text.reserve(utf8.size());
         for (unsigned char ch : utf8) {
+            if (ch == '\r') continue;
             if (ch >= 'a' && ch <= 'z') text.push_back(static_cast<char>(ch - 'a' + 'A'));
-            else text.push_back(ch);
+            else text.push_back(static_cast<char>(ch));
         }
+
+        std::vector<std::string> lines;
+        std::string line;
+        for (char ch : text) {
+            if (ch == '\n') {
+                lines.push_back(line);
+                line.clear();
+            } else {
+                line.push_back(ch);
+            }
+        }
+        lines.push_back(line);
+        if (lines.empty()) return false;
+
         const int glyphW = 5;
         const int glyphH = 7;
         const int spacing = 1;
-        int charCount = static_cast<int>(text.size());
-        // Compute scale constrained by both available height and width so glyphs keep correct proportions
-        int maxScaleVert = std::max(1, height / glyphH);
-        int maxScaleHoriz = std::max(1, width / std::max(1, charCount * (glyphW + spacing)));
-        // cap scale based on window size so it can grow on fullscreen but not unbounded
+        const int lineSpacing = 1;
+        int maxChars = 0;
+        for (const std::string& l : lines) {
+            maxChars = std::max(maxChars, static_cast<int>(l.size()));
+        }
+        if (maxChars == 0) {
+            outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4, 0);
+            return true;
+        }
+
+        int lineCount = static_cast<int>(lines.size());
+        int totalGlyphH = lineCount * glyphH + (lineCount - 1) * lineSpacing;
+        int maxScaleVert = std::max(1, height / totalGlyphH);
+        int maxScaleHoriz = std::max(1, width / std::max(1, maxChars * (glyphW + spacing)));
         int maxCap = std::max(3, height / 80);
         int scale = std::min({maxScaleVert, maxScaleHoriz, maxCap});
         if (scale < 1) scale = 1;
-        int textPxH = glyphH * scale;
-        // Create BGRA buffer, clear to transparent
+
+        int totalTextHeight = totalGlyphH * scale;
+        int totalTextWidth = maxChars * (glyphW + spacing) * scale;
+
         outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4, 0);
-        int totalTextWidth = charCount * (glyphW + spacing) * scale;
         int startX = std::max(0, (width - totalTextWidth) / 2);
-        int yOff = std::max(0, (height - textPxH) / 2);
-        for (int ci = 0; ci < charCount; ++ci) {
-            char c = text[ci];
-            const uint8_t* rows = menu_glyph_rows(c);
-            int baseX = startX + ci * (glyphW + spacing) * scale;
-            for (int gy = 0; gy < glyphH; ++gy) {
-                uint8_t row = rows[gy];
-                for (int gx = 0; gx < glyphW; ++gx) {
-                    bool set = ((row >> (glyphW - 1 - gx)) & 0x1) != 0;
-                    if (!set) continue;
-                    // scale pixel block
-                    for (int sy = 0; sy < scale; ++sy) {
-                        int py = yOff + gy * scale + sy;
-                        if (py < 0 || py >= height) continue;
-                        for (int sx = 0; sx < scale; ++sx) {
-                            int px = baseX + gx * scale + sx;
-                            if (px < 0 || px >= width) continue;
-                            size_t idx = (static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)) * 4;
-                            // white color, fully opaque (BGRA)
-                            outPixels[idx + 0] = 255;
-                            outPixels[idx + 1] = 255;
-                            outPixels[idx + 2] = 255;
-                            outPixels[idx + 3] = 255;
+        int startY = std::max(0, (height - totalTextHeight) / 2);
+
+        for (int li = 0; li < lineCount; ++li) {
+            const std::string& textLine = lines[li];
+            int lineChars = static_cast<int>(textLine.size());
+            if (lineChars == 0) continue;
+            int lineWidth = lineChars * (glyphW + spacing) * scale;
+            int lineX = startX + std::max(0, (totalTextWidth - lineWidth) / 2);
+            int lineY = startY + li * (glyphH + lineSpacing) * scale;
+            for (int ci = 0; ci < lineChars; ++ci) {
+                char c = textLine[ci];
+                const uint8_t* rows = menu_glyph_rows(c);
+                int baseX = lineX + ci * (glyphW + spacing) * scale;
+                for (int gy = 0; gy < glyphH; ++gy) {
+                    uint8_t row = rows[gy];
+                    for (int gx = 0; gx < glyphW; ++gx) {
+                        bool set = ((row >> (glyphW - 1 - gx)) & 0x1) != 0;
+                        if (!set) continue;
+                        for (int sy = 0; sy < scale; ++sy) {
+                            int py = lineY + gy * scale + sy;
+                            if (py < 0 || py >= height) continue;
+                            for (int sx = 0; sx < scale; ++sx) {
+                                int px = baseX + gx * scale + sx;
+                                if (px < 0 || px >= width) continue;
+                                size_t idx = (static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)) * 4;
+                                outPixels[idx + 0] = 255;
+                                outPixels[idx + 1] = 255;
+                                outPixels[idx + 2] = 255;
+                                outPixels[idx + 3] = 255;
+                            }
                         }
                     }
                 }
@@ -1118,7 +1161,9 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 }
 
 void VideoWindow::DrawOverlay(const WindowUiState& ui) {
-    if (ui.overlayAlpha <= 0.01f) return;
+    bool showOverlay = ui.overlayAlpha > 0.01f;
+    bool showSubtitle = ui.subtitleAlpha > 0.01f && !ui.subtitle.empty();
+    if (!showOverlay && !showSubtitle) return;
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;
@@ -1136,9 +1181,13 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     float textTopNorm = 0.0f;
     float textLeftNorm = 0.0f;
     float textWidthNorm = 0.0f;
+    float subtitleHeightNorm = 0.0f;
+    float subtitleTopNorm = 0.0f;
+    float subtitleLeftNorm = 0.0f;
+    float subtitleWidthNorm = 0.0f;
 
     // Optional: Render text to texture
-    if (!ui.title.empty()) {
+    if (showOverlay && !ui.title.empty()) {
         int textPxH = std::clamp((int)std::round(m_height * 0.06f), 14, 48);
         std::string timeLabel = ui.totalSec > 0.0
             ? (formatTimeDouble(ui.displaySec) + " / " + formatTimeDouble(ui.totalSec))
@@ -1186,32 +1235,94 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         }
     }
 
+    if (showSubtitle) {
+        int maxChars = 0;
+        int lineChars = 0;
+        for (char c : ui.subtitle) {
+            if (c == '\r') continue;
+            if (c == '\n') {
+                maxChars = std::max(maxChars, lineChars);
+                lineChars = 0;
+            } else {
+                ++lineChars;
+            }
+        }
+        maxChars = std::max(maxChars, lineChars);
+        if (maxChars > 0) {
+            int subtitlePxH = std::clamp((int)std::round(m_height * 0.12f), 24, 120);
+            int estScale = std::max(1, subtitlePxH / 7);
+            int totalTextWidth = maxChars * 6 * estScale;
+            int subtitlePxW = std::min(m_width, std::max(1, totalTextWidth));
+
+            bool subtitleDirty = (ui.subtitle != m_lastSubtitleText);
+            if (!m_subtitleTexture || m_subtitleWidth != subtitlePxW || m_subtitleHeight != subtitlePxH) {
+                m_subtitleWidth = subtitlePxW;
+                m_subtitleHeight = subtitlePxH;
+                m_subtitleTexture.Reset();
+                m_subtitleSrv.Reset();
+                subtitleDirty = true;
+
+                D3D11_TEXTURE2D_DESC texDesc = {};
+                texDesc.Width = subtitlePxW;
+                texDesc.Height = subtitlePxH;
+                texDesc.MipLevels = 1;
+                texDesc.ArraySize = 1;
+                texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                texDesc.SampleDesc.Count = 1;
+                texDesc.Usage = D3D11_USAGE_DEFAULT;
+                texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+                if (SUCCEEDED(device->CreateTexture2D(&texDesc, NULL, &m_subtitleTexture))) {
+                    device->CreateShaderResourceView(m_subtitleTexture.Get(), NULL, &m_subtitleSrv);
+                }
+            }
+
+            if (m_subtitleTexture && subtitleDirty) {
+                std::vector<uint8_t> bmp;
+                if (renderTextToBitmap(ui.subtitle, subtitlePxW, subtitlePxH, bmp)) {
+                    D3D11_BOX box{0, 0, 0, (UINT)subtitlePxW, (UINT)subtitlePxH, 1};
+                    context->UpdateSubresource(m_subtitleTexture.Get(), 0, &box, bmp.data(), subtitlePxW * 4, 0);
+                    m_lastSubtitleText = ui.subtitle;
+                }
+            }
+
+            subtitleHeightNorm = (float)subtitlePxH / m_height;
+            subtitleWidthNorm = (float)subtitlePxW / m_width;
+            float bottom = showOverlay ? 0.92f : 0.96f;
+            subtitleTopNorm = std::clamp(bottom - subtitleHeightNorm, 0.0f, 1.0f - subtitleHeightNorm);
+            subtitleLeftNorm = (1.0f - subtitleWidthNorm) * 0.5f;
+        }
+    }
+
     {
         D3D11_MAPPED_SUBRESOURCE mapped;
         if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
             ShaderConstants sc{};
             sc.progress = ui.progress;
-            sc.overlayAlpha = ui.overlayAlpha;
+            sc.overlayAlpha = showOverlay ? ui.overlayAlpha : 0.0f;
             sc.isPaused = ui.isPaused ? 1 : 0;
             sc.volPct = (uint32_t)std::clamp(ui.volPct, 0, 100);
             sc.textTop = textTopNorm;
             sc.textHeight = textHeightNorm;
             sc.textLeft = textLeftNorm;
             sc.textWidth = textWidthNorm;
+            sc.subtitleTop = subtitleTopNorm;
+            sc.subtitleHeight = subtitleHeightNorm;
+            sc.subtitleLeft = subtitleLeftNorm;
+            sc.subtitleWidth = subtitleWidthNorm;
+            sc.subtitleAlpha = showSubtitle ? ui.subtitleAlpha : 0.0f;
             std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }
     }
-    
-    context->Draw(4, 0);
-    
-    if (m_textSrv) {
-        context->PSSetShaderResources(3, 1, m_textSrv.GetAddressOf());
-        context->Draw(4, 0);
-    }
 
-    ID3D11ShaderResourceView* nullSRVs[4] = { nullptr };
-    context->PSSetShaderResources(0, 4, nullSRVs);
+    ID3D11ShaderResourceView* srvs[5] = {
+        nullptr, nullptr, nullptr, m_textSrv.Get(), m_subtitleSrv.Get()};
+    context->PSSetShaderResources(0, 5, srvs);
+    context->Draw(4, 0);
+
+    ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+    context->PSSetShaderResources(0, 5, nullSRVs);
 }
 
 void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
