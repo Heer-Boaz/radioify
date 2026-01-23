@@ -36,9 +36,11 @@ public:
     bool Open(int width, int height, const std::string& title);
     void Close();
 
-    void Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
+    void Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
+                 bool nonBlocking);
     // Render the UI overlay using the last cached video frame as background
-    void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
+    void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
+                        bool nonBlocking);
     void PresentBackbuffer();
     void WaitForFrameLatency(DWORD timeoutMs);
     void SetVsync(bool enabled);

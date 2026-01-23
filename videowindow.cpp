@@ -963,7 +963,8 @@ void VideoWindow::UpdateViewport(int width, int height) {
     m_viewportH = vp.h;
 }
 
-void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
+void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
+                          bool nonBlocking) {
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
@@ -1086,7 +1087,15 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 #endif
     lock.unlock();
     if (!swapChain) return;
-    HRESULT presHr = swapChain->Present(presentInterval, 0);
+    UINT flags = nonBlocking ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
+    HRESULT presHr = swapChain->Present(presentInterval, flags);
+    if (presHr == DXGI_STATUS_OCCLUDED ||
+        presHr == DXGI_ERROR_WAS_STILL_DRAWING) {
+#if RADIOIFY_ENABLE_TIMING_LOG
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
+#endif
+        return;
+    }
 #if RADIOIFY_ENABLE_TIMING_LOG
     if (FAILED(presHr)) {
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present Present() FAILED 0x%08X\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
@@ -1193,7 +1202,8 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     context->PSSetShaderResources(0, 4, nullSRVs);
 }
 
-void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
+void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
+                                 bool nonBlocking) {
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
@@ -1275,7 +1285,15 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
 #endif
     lock.unlock();
     if (!swapChain) return;
-    HRESULT presHr = swapChain->Present(presentInterval, 0);
+    UINT flags = nonBlocking ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
+    HRESULT presHr = swapChain->Present(presentInterval, flags);
+    if (presHr == DXGI_STATUS_OCCLUDED ||
+        presHr == DXGI_ERROR_WAS_STILL_DRAWING) {
+#if RADIOIFY_ENABLE_TIMING_LOG
+        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
+#endif
+        return;
+    }
 #if RADIOIFY_ENABLE_TIMING_LOG
     if (FAILED(presHr)) {
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay Present() FAILED 0x%08X\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));

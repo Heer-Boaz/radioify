@@ -618,6 +618,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   bool localSeekRequested = false;
   std::atomic<bool> windowLocalSeekRequested{false};
   bool closeWindowRequested = false;
+  bool useWindowPresenter = false;
   auto seekRequestTime = std::chrono::steady_clock::time_point::min();
   double pendingSeekTargetSec = -1.0;
   std::atomic<double> windowPendingSeekTargetSec{-1.0};
@@ -878,9 +879,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           break;
         }
         if (frameChanged) {
-          g_videoWindow.Present(g_frameCache, ui);
+          g_videoWindow.Present(g_frameCache, ui, true);
         } else {
-          g_videoWindow.PresentOverlay(g_frameCache, ui);
+          g_videoWindow.PresentOverlay(g_frameCache, ui, true);
         }
       } else if (!waitedForFrame) {
         std::unique_lock<std::mutex> lock(windowPresentMutex);
@@ -999,7 +1000,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     bool audioStarved = audioOk && audioStreamStarved();
     bool waitingForVideo = !player.hasVideoFrame();
     bool isPaused = player.state() == PlayerState::Paused;
-    bool allowFrame = haveFrame;
+    bool allowFrame = haveFrame && !useWindowPresenter;
 
     auto waitingLabel = [&]() -> std::string {
       if (seekingOverlay) return "Seeking...";
@@ -1297,6 +1298,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     screen.draw();
   };
 
+  useWindowPresenter = windowThreadEnabled.load(std::memory_order_relaxed);
   renderScreen(true, true);
   if (renderFailed) {
     windowThreadRunning.store(false, std::memory_order_relaxed);
@@ -1520,8 +1522,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
     bool presented = false;
     VideoFrame nextFrame;
-    bool useWindowPresenter =
-        windowThreadEnabled.load(std::memory_order_relaxed);
+    useWindowPresenter = windowThreadEnabled.load(std::memory_order_relaxed);
     if (!useWindowPresenter && player.tryGetVideoFrame(&nextFrame)) {
       frameBuffer = std::move(nextFrame);
       haveFrame = true;
