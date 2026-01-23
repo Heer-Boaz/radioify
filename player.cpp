@@ -2891,12 +2891,17 @@ struct Player::Impl {
         }
         // 3. Catch-up mode: video is way behind (<-100ms). Drop frames.
         else if (diffUs < -100000) {
-          logVideo("skip_behind", &front, masterUs, master.source, diffUs, delayUs);
-          QueuedFrame drop{};
-          if (videoFrames.pop(&drop)) {
-            videoFrames.release(drop.poolIndex);
+          size_t qDepth = videoFrames.size();
+          if (qDepth > 1) {
+            logVideo("skip_behind", &front, masterUs, master.source, diffUs, delayUs);
+            QueuedFrame drop{};
+            if (videoFrames.pop(&drop)) {
+              videoFrames.release(drop.poolIndex);
+            }
+            continue;
           }
-          continue;
+          // Keep the last frame when the queue is shallow to avoid starvation.
+          delayUs = 0;
         }
         // 4. Audio-ahead mode: video is ahead
         else if (diffUs > 100000) {
