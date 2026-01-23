@@ -39,6 +39,10 @@ public:
                            bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
                            bool is10Bit, AsciiArt& out, std::string* error);
 
+    // Render from a shared GPU cache (YUV or RGBA). Cache must be on this device.
+    bool RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
+                         std::string* error);
+
     const char* lastNv12TexturePath() const { return m_lastNv12TexturePath; }
     const std::string& lastNv12TextureDetail() const {
         return m_lastNv12TextureDetail;

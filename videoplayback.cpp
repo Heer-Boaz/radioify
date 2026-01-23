@@ -657,7 +657,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     windowForcePresent.store(true, std::memory_order_relaxed);
     windowPresentCv.notify_one();
   }
-  bool gpuAvailable = true;
+  const bool allowAsciiCpuFallback = false;
   VideoFrame frameBuffer;
   VideoFrame* frame = &frameBuffer;
   bool haveFrame = false;
@@ -1030,108 +1030,165 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         }
         bool artOk = false;
         try {
-          if (frame->format == VideoPixelFormat::HWTexture &&
-              frame->hwTexture) {
-            if (gpuAvailable) {
-              auto [outW, outH] =
-                  computeAsciiOutputSize(width, maxHeight, frame->width,
-                                         frame->height);
-              art.width = outW;
-              art.height = outH;
-              std::string gpuErr;
+          auto [outW, outH] =
+              computeAsciiOutputSize(width, maxHeight, frame->width,
+                                     frame->height);
+          art.width = outW;
+          art.height = outH;
 
-              bool renderRes = false;
-              auto t0 = std::chrono::steady_clock::now();
-              {
-                std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-                if (clearHistory) {
-                  gpuRenderer.ClearHistory();
-                }
+          std::string gpuErr;
+          bool cacheUpdated = false;
+          bool renderRes = false;
 
-                D3D11_TEXTURE2D_DESC desc;
-                frame->hwTexture->GetDesc(&desc);
-                bool is10Bit = (desc.Format == DXGI_FORMAT_P010);
+          ID3D11Device* device = getSharedGpuDevice();
+          if (!device) {
+            renderFailed = true;
+            renderFailMessage = "GPU device unavailable.";
+            renderFailDetail = "Shared GPU device was not initialized.";
+            return;
+          }
+          Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+          device->GetImmediateContext(&context);
+          if (!context) {
+            renderFailed = true;
+            renderFailMessage = "GPU context unavailable.";
+            renderFailDetail = "Failed to acquire D3D11 immediate context.";
+            return;
+          }
 
-                renderRes = gpuRenderer.RenderNV12Texture(
-                    frame->hwTexture.Get(), frame->hwTextureArrayIndex,
-                    frame->width, frame->height, frame->fullRange,
-                    frame->yuvMatrix, frame->yuvTransfer, is10Bit, art, &gpuErr);
-              }
-              auto t1 = std::chrono::steady_clock::now();
-              auto durMs =
-                  std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0)
-                      .count();
-              if (durMs > 50) {
-                appendTimingFmt("video_render_slow pts_us=%lld dur_ms=%lld",
-                                (long long)(frame->timestamp100ns / 10),
-                                (long long)durMs);
-              }
-
-              if (renderRes) {
-                artOk = true;
-                static bool hwTextureLogged = false;
-                if (!hwTextureLogged) {
-                  perfLogAppendf(
-                      &perfLog,
-                      "video_renderer_input format=hwtexture in=%dx%d out=%dx%d",
-                      frame->width, frame->height, outW, outH);
-                  std::string hwDetail = gpuRenderer.lastNv12TextureDetail();
-                  if (hwDetail.empty()) {
-                    hwDetail =
-                        std::string("path=") + gpuRenderer.lastNv12TexturePath();
-                  }
-                  appendTiming(std::string(
-                                   "video_renderer gpu_active=1 format=hwtexture ") +
-                               hwDetail);
-                  hwTextureLogged = true;
-                }
-              } else {
-                gpuAvailable = false;
-                appendVideoWarning(
-                    "GPU renderer failed (HWTexture), falling back to CPU: " +
-                    gpuErr);
-                throw std::runtime_error("ASCII-renderer GPU failure" + gpuErr);
-              }
+          auto t0 = std::chrono::steady_clock::now();
+          {
+            std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+            if (clearHistory) {
+              gpuRenderer.ClearHistory();
             }
-          } else if (frame->format == VideoPixelFormat::NV12 ||
-                     frame->format == VideoPixelFormat::P010) {
-            if (frame->stride <= 0 || frame->planeHeight <= 0) {
+
+            if (frame->format == VideoPixelFormat::HWTexture) {
+              if (!frame->hwTexture) {
+                renderFailed = true;
+                renderFailMessage = "Invalid video frame.";
+                renderFailDetail = "Missing hardware texture.";
+                return;
+              }
+              D3D11_TEXTURE2D_DESC desc{};
+              frame->hwTexture->GetDesc(&desc);
+              bool is10Bit = (desc.Format == DXGI_FORMAT_P010);
+              cacheUpdated = g_frameCache.Update(
+                  device, context.Get(), frame->hwTexture.Get(),
+                  frame->hwTextureArrayIndex, frame->width, frame->height,
+                  frame->fullRange, frame->yuvMatrix, frame->yuvTransfer,
+                  is10Bit ? 10 : 8);
+            } else if (frame->format == VideoPixelFormat::NV12 ||
+                       frame->format == VideoPixelFormat::P010) {
+              if (frame->stride <= 0 || frame->planeHeight <= 0 ||
+                  frame->yuv.empty()) {
+                renderFailed = true;
+                renderFailMessage = "Invalid video frame buffer.";
+                renderFailDetail = "Missing YUV plane metadata.";
+                return;
+              }
+              size_t strideBytes = static_cast<size_t>(frame->stride);
+              size_t planeHeight = static_cast<size_t>(frame->planeHeight);
+              size_t yBytes = strideBytes * planeHeight;
+              if (strideBytes == 0 || planeHeight == 0 ||
+                  yBytes / strideBytes != planeHeight) {
+                renderFailed = true;
+                renderFailMessage = "Invalid video frame buffer.";
+                renderFailDetail = "Invalid YUV plane sizing.";
+                return;
+              }
+              bool is10Bit = frame->format == VideoPixelFormat::P010;
+              cacheUpdated = g_frameCache.UpdateNV12(
+                  device, context.Get(), frame->yuv.data(), frame->stride,
+                  frame->planeHeight, frame->width, frame->height,
+                  frame->fullRange, frame->yuvMatrix, frame->yuvTransfer,
+                  is10Bit ? 10 : 8);
+            } else if (frame->format == VideoPixelFormat::RGB32 ||
+                       frame->format == VideoPixelFormat::ARGB32) {
+              if (frame->rgba.empty()) {
+                renderFailed = true;
+                renderFailMessage = "Invalid video frame buffer.";
+                renderFailDetail = "Missing RGBA data.";
+                return;
+              }
+              int stride = frame->stride > 0 ? frame->stride : frame->width * 4;
+              if (stride <= 0) {
+                renderFailed = true;
+                renderFailMessage = "Invalid video frame buffer.";
+                renderFailDetail = "Invalid RGBA stride.";
+                return;
+              }
+              cacheUpdated = g_frameCache.Update(
+                  device, context.Get(), frame->rgba.data(), stride, frame->width,
+                  frame->height);
+            } else {
               renderFailed = true;
-              renderFailMessage = "Invalid video frame buffer.";
-              renderFailDetail = "Missing YUV plane metadata.";
+              renderFailMessage = "Unsupported video frame format.";
+              renderFailDetail = "";
               return;
             }
-            size_t strideBytes = static_cast<size_t>(frame->stride);
-            size_t planeHeight = static_cast<size_t>(frame->planeHeight);
-            size_t yBytes = strideBytes * planeHeight;
-            if (strideBytes == 0 || planeHeight == 0 ||
-                yBytes / strideBytes != planeHeight) {
-              renderFailed = true;
-              renderFailMessage = "Invalid video frame buffer.";
-              renderFailDetail = "Invalid YUV plane sizing.";
-              return;
+
+            if (cacheUpdated) {
+              renderRes =
+                  gpuRenderer.RenderFromCache(g_frameCache, art, &gpuErr);
             }
-            auto [outW, outH] =
-                computeAsciiOutputSize(width, maxHeight, frame->width,
-                                       frame->height);
-            art.width = outW;
-            art.height = outH;
-            bool is10Bit = frame->format == VideoPixelFormat::P010;
-            artOk = renderAsciiArtFromYuv(
-                frame->yuv.data(), frame->width, frame->height, frame->stride,
-                frame->planeHeight,
-                is10Bit ? YuvFormat::P010 : YuvFormat::NV12, frame->fullRange,
-                frame->yuvMatrix, frame->yuvTransfer, outW, outH, art);
-          } else if (frame->format == VideoPixelFormat::RGB32 ||
-                     frame->format == VideoPixelFormat::ARGB32) {
-            auto [outW, outH] =
-                computeAsciiOutputSize(width, maxHeight, frame->width,
-                                       frame->height);
-            art.width = outW;
-            art.height = outH;
-            artOk = renderAsciiArtFromRgba(frame->rgba.data(), frame->width,
-                                           frame->height, outW, outH, art,
-                                           frame->format == VideoPixelFormat::ARGB32);
+          }
+          auto t1 = std::chrono::steady_clock::now();
+          auto durMs =
+              std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0)
+                  .count();
+          if (durMs > 50) {
+            appendTimingFmt("video_render_slow pts_us=%lld dur_ms=%lld",
+                            (long long)(frame->timestamp100ns / 10),
+                            (long long)durMs);
+          }
+
+          if (renderRes) {
+            artOk = true;
+            static bool rendererLogged = false;
+            if (!rendererLogged) {
+              const char* fmt =
+                  (frame->format == VideoPixelFormat::HWTexture)
+                      ? "hwtexture"
+                      : (frame->format == VideoPixelFormat::NV12)
+                            ? "nv12"
+                            : (frame->format == VideoPixelFormat::P010)
+                                  ? "p010"
+                                  : "rgba";
+              perfLogAppendf(&perfLog,
+                             "video_renderer_input format=%s in=%dx%d out=%dx%d",
+                             fmt, frame->width, frame->height, outW, outH);
+              std::string detail = gpuRenderer.lastNv12TextureDetail();
+              if (detail.empty()) {
+                detail = std::string("path=") +
+                         gpuRenderer.lastNv12TexturePath();
+              }
+              appendTiming(std::string("video_renderer gpu_active=1 format=") +
+                           fmt + " " + detail);
+              rendererLogged = true;
+            }
+          } else if (allowAsciiCpuFallback) {
+            if (frame->format == VideoPixelFormat::NV12 ||
+                frame->format == VideoPixelFormat::P010) {
+              bool is10Bit = frame->format == VideoPixelFormat::P010;
+              artOk = renderAsciiArtFromYuv(
+                  frame->yuv.data(), frame->width, frame->height, frame->stride,
+                  frame->planeHeight,
+                  is10Bit ? YuvFormat::P010 : YuvFormat::NV12,
+                  frame->fullRange, frame->yuvMatrix, frame->yuvTransfer, outW,
+                  outH, art);
+            } else if (frame->format == VideoPixelFormat::RGB32 ||
+                       frame->format == VideoPixelFormat::ARGB32) {
+              artOk = renderAsciiArtFromRgba(
+                  frame->rgba.data(), frame->width, frame->height, outW, outH,
+                  art, frame->format == VideoPixelFormat::ARGB32);
+            }
+          } else {
+            renderFailed = true;
+            renderFailMessage = "GPU renderer failed.";
+            renderFailDetail =
+                gpuErr.empty() ? "GPU cache update or render failed." : gpuErr;
+            return;
           }
           if (!artOk) {
             renderFailed = true;
