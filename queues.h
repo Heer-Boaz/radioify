@@ -62,6 +62,7 @@ class FrameQueue {
                     const std::atomic<bool>* running);
   bool push(const QueuedFrame& frame);
   bool peek(QueuedFrame* out) const;
+  bool peekNext(QueuedFrame* out) const;
   bool pop(QueuedFrame* out);
   void release(size_t poolIndex);
   bool waitForFrame(std::chrono::milliseconds timeout,

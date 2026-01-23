@@ -327,12 +327,24 @@ struct VideoDecoder::Impl {
       bestPts = src->pts;
     }
     int64_t ts100ns = 0;
+    int64_t duration100ns = 0;
     if (bestPts != AV_NOPTS_VALUE) {
       int64_t absUs =
           av_rescale_q(bestPts, timeBase, AVRational{1, AV_TIME_BASE});
       int64_t relUs = absUs - formatStartUs;
       if (relUs < 0) relUs = 0;
       ts100ns = relUs * 10;
+    }
+    int64_t frameDuration = src->duration;
+    if (frameDuration <= 0) {
+      frameDuration = src->pkt_duration;
+    }
+    if (frameDuration > 0) {
+      int64_t durUs =
+          av_rescale_q(frameDuration, timeBase, AVRational{1, AV_TIME_BASE});
+      if (durUs > 0) {
+        duration100ns = durUs * 10;
+      }
     }
     AVColorSpace frameSpace = src->colorspace;
     if (frameSpace == AVCOL_SPC_UNSPECIFIED ||
@@ -385,6 +397,7 @@ struct VideoDecoder::Impl {
       out.yuv.clear();
       if (info) {
         info->timestamp100ns = ts100ns;
+        info->duration100ns = duration100ns;
       }
       return true;
     }
@@ -414,7 +427,7 @@ struct VideoDecoder::Impl {
       
       if (info) {
         info->timestamp100ns = ts100ns;
-        info->duration100ns = 0;
+        info->duration100ns = duration100ns;
       }
       return true;
     }
@@ -476,7 +489,7 @@ struct VideoDecoder::Impl {
 
     if (info) {
       info->timestamp100ns = ts100ns;
-      info->duration100ns = 0;
+      info->duration100ns = duration100ns;
     }
     return true;
   }

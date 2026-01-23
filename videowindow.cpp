@@ -1062,16 +1062,16 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
             context->End(qEnd.Get());
             context->End(qDisjoint.Get());
 
-            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint;
-            while (context->GetData(qDisjoint.Get(), &disjoint, sizeof(disjoint), 0) == S_FALSE) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+            UINT64 t1 = 0;
+            UINT64 t2 = 0;
+            if (context->GetData(qDisjoint.Get(), &disjoint, sizeof(disjoint), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+                context->GetData(qStart.Get(), &t1, sizeof(t1), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+                context->GetData(qEnd.Get(), &t2, sizeof(t2), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+                !disjoint.Disjoint) {
+                double gpu_ms = (double)(t2 - t1) / (double)disjoint.Frequency * 1000.0;
+                fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present GPU draw+overlay time %.3f ms\n", now_ms().c_str(), thread_id_str().c_str(), gpu_ms);
             }
-            UINT64 t1 = 0, t2 = 0;
-            context->GetData(qStart.Get(), &t1, sizeof(t1), 0);
-            context->GetData(qEnd.Get(), &t2, sizeof(t2), 0);
-            double gpu_ms = 0.0;
-            if (!disjoint.Disjoint) gpu_ms = (double)(t2 - t1) / (double)disjoint.Frequency * 1000.0;
-            fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present GPU draw+overlay time %.3f ms\n", now_ms().c_str(), thread_id_str().c_str(), gpu_ms);
         } else {
             context->Draw(4, 0);
             DrawOverlay(ui);
@@ -1081,6 +1081,7 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     context->Draw(4, 0);
     DrawOverlay(ui);
 #endif
+    frameCache.MarkFrameInFlight(context.Get());
 
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present about to Present()\n", now_ms().c_str(), thread_id_str().c_str());
@@ -1279,6 +1280,7 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
 
     context->Draw(4, 0);
     DrawOverlay(ui);
+    frameCache.MarkFrameInFlight(context.Get());
 
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay about to Present()\n", now_ms().c_str(), thread_id_str().c_str());

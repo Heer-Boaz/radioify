@@ -853,11 +853,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             device->GetImmediateContext(&context);
             if (context) {
               std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-              (void)g_frameCache.Update(
+              bool updated = g_frameCache.Update(
                   device, context.Get(), localFrame.hwTexture.Get(),
                   localFrame.hwTextureArrayIndex, localFrame.width,
                   localFrame.height, localFrame.fullRange, localFrame.yuvMatrix,
                   localFrame.yuvTransfer, is10Bit ? 10 : 8);
+              if (!updated) {
+                frameChanged = false;
+              }
             }
           }
         }

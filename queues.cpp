@@ -214,6 +214,14 @@ bool FrameQueue::peek(QueuedFrame* out) const {
   return true;
 }
 
+bool FrameQueue::peekNext(QueuedFrame* out) const {
+  if (!out) return false;
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (queue_.size() < 2) return false;
+  *out = queue_[1];
+  return true;
+}
+
 bool FrameQueue::pop(QueuedFrame* out) {
   if (!out) return false;
   std::lock_guard<std::mutex> lock(mutex_);

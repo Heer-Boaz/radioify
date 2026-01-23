@@ -327,6 +327,8 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
     m_context->CSSetShaderResources(0, 5, nullSRV5);
 
+    m_frameCache.MarkFrameInFlight(m_context.Get());
+
     // Readback (double-buffered staging to reduce GPU stalls)
     int writeIndex = m_outputStagingIndex;
     int readIndex = m_outputStagingPrimed ? (1 - writeIndex) : writeIndex;
@@ -560,6 +562,8 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     m_context->CSSetUnorderedAccessViews(0, 3, nullUAV2, nullptr);
     m_context->CSSetShaderResources(0, 5, nullSRV2);
 
+    m_frameCache.MarkFrameInFlight(m_context.Get());
+
     // Readback (double-buffered staging to reduce GPU stalls)
     int writeIndex = m_outputStagingIndex;
     int readIndex = m_outputStagingPrimed ? (1 - writeIndex) : writeIndex;
@@ -738,6 +742,8 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
 
     m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
     m_context->CSSetShaderResources(0, 5, nullSRV5);
+
+    m_frameCache.MarkFrameInFlight(m_context.Get());
 
     // Readback (double-buffered staging to reduce GPU stalls)
     int writeIndex = m_outputStagingIndex;

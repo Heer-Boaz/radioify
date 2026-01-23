@@ -1094,6 +1094,20 @@ int64_t frameTimestamp100ns(const VideoDecodeContext& ctx,
   return relUs * 10;
 }
 
+int64_t frameDuration100ns(const VideoDecodeContext& ctx,
+                           const AVFrame* src) {
+  if (!src) return 0;
+  int64_t duration = src->duration;
+  if (duration <= 0) {
+    duration = src->pkt_duration;
+  }
+  if (duration <= 0) return 0;
+  int64_t durUs =
+      av_rescale_q(duration, ctx.timeBase, AVRational{1, AV_TIME_BASE});
+  if (durUs <= 0) return 0;
+  return durUs * 10;
+}
+
 bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
                     VideoReadInfo* info, AVFrame* src, bool decodePixels,
                     bool keepOnGpu) {
@@ -1112,6 +1126,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
   };
 
   int64_t ts100ns = frameTimestamp100ns(*ctx, src);
+  int64_t duration100ns = frameDuration100ns(*ctx, src);
   AVColorSpace frameSpace = src->colorspace;
   if (frameSpace == AVCOL_SPC_UNSPECIFIED ||
       frameSpace == AVCOL_SPC_RESERVED) {
@@ -1172,7 +1187,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
     out.yuv.clear();
     if (info) {
       info->timestamp100ns = ts100ns;
-      info->duration100ns = 0;
+      info->duration100ns = duration100ns;
     }
     return true;
   }
@@ -1191,7 +1206,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
     out.rgba.clear();
     if (info) {
       info->timestamp100ns = ts100ns;
-      info->duration100ns = 0;
+      info->duration100ns = duration100ns;
     }
     return true;
   }
@@ -1264,13 +1279,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
 
   if (info) {
     info->timestamp100ns = ts100ns;
-    if (cpuSrc->duration > 0) {
-      info->duration100ns = static_cast<int64_t>(
-          av_rescale_q(cpuSrc->duration, ctx->timeBase,
-                       AVRational{1, 10000000}));
-    } else {
-      info->duration100ns = 0;
-    }
+    info->duration100ns = duration100ns;
   }
   return true;
 }
@@ -2738,10 +2747,21 @@ struct Player::Impl {
         audioStreamSyncClockOnly(static_cast<int>(serial), sanitizedPtsUs);
       }
       
-      // Compute frame delay from frame duration only
-      // NEVER from PTS-delta, because with broken timestamps that can be 23+ seconds!
-      // Frame duration is the reliable measure of how long to display this frame.
-      delayUs = front.durationUs > 0 ? front.durationUs : lastDelayUsValue;
+      QueuedFrame next{};
+      bool hasNext = videoFrames.peekNext(&next);
+      int64_t durationFromPtsUs = 0;
+      if (hasNext && next.serial == front.serial) {
+        int64_t nextPtsUs = next.ptsUs + ptsOffsetUs;
+        int64_t ptsDiffUs = nextPtsUs - front.ptsUs;
+        if (ptsDiffUs > 0 && ptsDiffUs <= kMaxFrameDurationUs) {
+          durationFromPtsUs = ptsDiffUs;
+        }
+      }
+
+      // Prefer PTS-based duration when it looks sane; fall back to stream duration.
+      int64_t baseDurationUs =
+          (durationFromPtsUs > 0) ? durationFromPtsUs : front.durationUs;
+      delayUs = baseDurationUs > 0 ? baseDurationUs : lastDelayUsValue;
       
       // 2. DYNAMIC FRAME DURATION VALIDATION
       // Validate front.durationUs against reasonable bounds and apply smoothing

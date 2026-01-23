@@ -35,6 +35,7 @@ public:
                     bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth);
 
     void Reset();
+    void MarkFrameInFlight(ID3D11DeviceContext* context);
 
     bool HasFrame() const { return m_format != CacheFormat::None; }
 
@@ -58,7 +59,7 @@ public:
     int GetBitDepth() const { return m_bitDepth; }
 
 private:
-    static constexpr int kFrameBufferCount = 2;
+    static constexpr int kFrameBufferCount = 4;
     enum class CacheFormat {
         None,
         Yuv,
@@ -70,6 +71,8 @@ private:
     std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, kFrameBufferCount> m_srvY;
     std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, kFrameBufferCount> m_srvUV;
     std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, kFrameBufferCount> m_srvRGBA;
+    std::array<Microsoft::WRL::ComPtr<ID3D11Query>, kFrameBufferCount> m_gpuDone;
+    std::array<bool, kFrameBufferCount> m_gpuInFlight{};
 
 #if defined(RADIOIFY_ENABLE_STAGING_UPLOAD)
     // Staging resources used by the upload path to avoid driver implicit syncs
@@ -91,6 +94,9 @@ private:
     int m_writeIndex = 0;
     CacheFormat m_format = CacheFormat::None;
 
+    bool EnsureGpuQueries(ID3D11Device* device);
+    bool IsBufferReady(ID3D11DeviceContext* context, int index);
+    int AcquireWriteIndex(ID3D11DeviceContext* context);
     bool EnsureNV12(ID3D11Device* device, int width, int height, int bitDepth);
     bool EnsureRGBA(ID3D11Device* device, int width, int height);
 };
