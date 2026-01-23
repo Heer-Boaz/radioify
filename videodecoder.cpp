@@ -21,6 +21,7 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/version.h>
 #include <libswscale/swscale.h>
 }
 
@@ -46,6 +47,16 @@ static void d3d11_unlock(void* ctx) {
 namespace {
 void setError(std::string* error, const char* message) {
   if (error) *error = message;
+}
+
+int64_t frameDurationTicks(const AVFrame* frame) {
+  if (!frame) return 0;
+#if LIBAVUTIL_VERSION_MAJOR >= 59
+  return frame->duration;
+#else
+  if (frame->duration > 0) return frame->duration;
+  return frame->pkt_duration;
+#endif
 }
 
 // Upper bound for a single readFrame() call. This is used to keep the decode
@@ -335,10 +346,7 @@ struct VideoDecoder::Impl {
       if (relUs < 0) relUs = 0;
       ts100ns = relUs * 10;
     }
-    int64_t frameDuration = src->duration;
-    if (frameDuration <= 0) {
-      frameDuration = src->pkt_duration;
-    }
+    int64_t frameDuration = frameDurationTicks(src);
     if (frameDuration > 0) {
       int64_t durUs =
           av_rescale_q(frameDuration, timeBase, AVRational{1, AV_TIME_BASE});

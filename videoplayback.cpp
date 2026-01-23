@@ -877,7 +877,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (!windowThreadRunning.load(std::memory_order_relaxed)) {
           break;
         }
-        g_videoWindow.WaitForFrameLatency(16);
+        g_frameCache.WaitForFrameLatency(
+            16, g_videoWindow.GetFrameLatencyWaitableObject());
         if (!windowThreadRunning.load(std::memory_order_relaxed)) {
           break;
         }

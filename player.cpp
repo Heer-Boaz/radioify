@@ -44,6 +44,7 @@ extern "C" {
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/rational.h>
+#include <libavutil/version.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
@@ -66,6 +67,16 @@ constexpr int kIoAvioBufferSize = 64 * 1024;
 constexpr int64_t kAudioClockFreshUs = 100000;
 constexpr size_t kVideoPrefillFrames = 1;
 constexpr size_t kAudioPacketLowWater = 4;
+
+int64_t frameDurationTicks(const AVFrame* frame) {
+  if (!frame) return 0;
+#if LIBAVUTIL_VERSION_MAJOR >= 59
+  return frame->duration;
+#else
+  if (frame->duration > 0) return frame->duration;
+  return frame->pkt_duration;
+#endif
+}
 
 enum class PlayerEventType {
   SeekRequest,
@@ -1097,10 +1108,7 @@ int64_t frameTimestamp100ns(const VideoDecodeContext& ctx,
 int64_t frameDuration100ns(const VideoDecodeContext& ctx,
                            const AVFrame* src) {
   if (!src) return 0;
-  int64_t duration = src->duration;
-  if (duration <= 0) {
-    duration = src->pkt_duration;
-  }
+  int64_t duration = frameDurationTicks(src);
   if (duration <= 0) return 0;
   int64_t durUs =
       av_rescale_q(duration, ctx.timeBase, AVRational{1, AV_TIME_BASE});

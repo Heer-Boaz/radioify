@@ -1,4 +1,14 @@
 ﻿#include "videoprocessor.h"
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <d3d11_4.h>
+
 #include "timing_log.h"
 #include <algorithm>
 #include <chrono>
@@ -99,6 +109,76 @@ void GpuVideoFrameCache::MarkFrameInFlight(ID3D11DeviceContext* context) {
     if (index < 0 || index >= kFrameBufferCount) return;
     context->End(m_gpuDone[index].Get());
     m_gpuInFlight[index] = true;
+}
+
+void GpuVideoFrameCache::InitFrameLatencyFence(ID3D11Device* device) {
+    if (!device) return;
+    std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+    if (m_frameLatencyFence) return;
+    Microsoft::WRL::ComPtr<ID3D11Device5> device5;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&device5)))) return;
+    Microsoft::WRL::ComPtr<ID3D11Fence> fence;
+    HRESULT hr = device5->CreateFence(0, D3D11_FENCE_FLAG_NONE,
+                                      IID_PPV_ARGS(&fence));
+    if (FAILED(hr)) return;
+    HANDLE evt = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (!evt) return;
+    m_frameLatencyFence = fence;
+    m_frameLatencyFenceEvent = evt;
+    m_frameLatencyFenceValue = 0;
+}
+
+void GpuVideoFrameCache::ResetFrameLatencyFence() {
+    std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+    if (m_frameLatencyFenceEvent) {
+        CloseHandle(reinterpret_cast<HANDLE>(m_frameLatencyFenceEvent));
+        m_frameLatencyFenceEvent = nullptr;
+    }
+    m_frameLatencyFence.Reset();
+    m_frameLatencyFenceValue = 0;
+}
+
+void GpuVideoFrameCache::WaitForFrameLatency(uint32_t timeoutMs,
+                                             FrameLatencyWaitHandle waitableHandle) {
+    HANDLE waitHandle = reinterpret_cast<HANDLE>(waitableHandle);
+    Microsoft::WRL::ComPtr<ID3D11Fence> fence;
+    HANDLE fenceEvent = nullptr;
+    uint64_t fenceValue = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+        fence = m_frameLatencyFence;
+        fenceEvent = reinterpret_cast<HANDLE>(m_frameLatencyFenceEvent);
+        fenceValue = m_frameLatencyFenceValue;
+    }
+    if (waitHandle) {
+        WaitForSingleObject(waitHandle, timeoutMs);
+        return;
+    }
+    if (!fence || !fenceEvent || fenceValue == 0) return;
+    if (fence->GetCompletedValue() < fenceValue) {
+        fence->SetEventOnCompletion(fenceValue, fenceEvent);
+        WaitForSingleObject(fenceEvent, timeoutMs);
+    }
+}
+
+void GpuVideoFrameCache::SignalFrameLatencyFence(ID3D11DeviceContext* context) {
+    if (!context) return;
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    context->GetDevice(device.GetAddressOf());
+    InitFrameLatencyFence(device.Get());
+
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4;
+    if (FAILED(context->QueryInterface(IID_PPV_ARGS(&context4)))) return;
+
+    Microsoft::WRL::ComPtr<ID3D11Fence> fence;
+    uint64_t signalValue = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+        if (!m_frameLatencyFence) return;
+        signalValue = ++m_frameLatencyFenceValue;
+        fence = m_frameLatencyFence;
+    }
+    context4->Signal(fence.Get(), signalValue);
 }
 
 bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* context,
@@ -604,4 +684,5 @@ void GpuVideoFrameCache::Reset() {
     m_activeIndex = 0;
     m_writeIndex = 0;
     m_format = CacheFormat::None;
+    ResetFrameLatencyFence();
 }

@@ -5,6 +5,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <memory>
 
@@ -42,7 +43,7 @@ public:
     void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
                         bool nonBlocking);
     void PresentBackbuffer();
-    void WaitForFrameLatency(DWORD timeoutMs);
+    HANDLE GetFrameLatencyWaitableObject();
     void SetVsync(bool enabled);
     
     bool IsOpen() const { return m_hWnd != nullptr; }

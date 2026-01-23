@@ -778,10 +778,12 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
 }
 
 void VideoWindow::ResetSwapChain() {
-    std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
-    if (m_frameLatencyWaitableObject) {
-        CloseHandle(m_frameLatencyWaitableObject);
-        m_frameLatencyWaitableObject = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+        if (m_frameLatencyWaitableObject) {
+            CloseHandle(m_frameLatencyWaitableObject);
+            m_frameLatencyWaitableObject = nullptr;
+        }
     }
     m_swapChain2.Reset();
     m_swapChain.Reset();
@@ -852,10 +854,24 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
     scd.SampleDesc.Count = 1;
     scd.Windowed = TRUE;
     scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    scd.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
-    if (FAILED(dxgiFactory->CreateSwapChain(device, &scd, &m_swapChain))) {
+    HRESULT scHr = dxgiFactory->CreateSwapChain(device, &scd, &m_swapChain);
+    if (FAILED(scHr)) {
+        scd.Flags = 0;
+        scHr = dxgiFactory->CreateSwapChain(device, &scd, &m_swapChain);
+    }
+    if (FAILED(scHr)) {
         std::fprintf(stderr, "VideoWindow: CreateSwapChain failed\n");
         return false;
+    }
+
+    m_swapChain.As(&m_swapChain2);
+    if (m_swapChain2) {
+        m_swapChain2->SetMaximumFrameLatency(1);
+        std::lock_guard<std::mutex> latencyLock(m_frameLatencyMutex);
+        m_frameLatencyWaitableObject =
+            m_swapChain2->GetFrameLatencyWaitableObject();
     }
 
     Resize(width, height);
@@ -945,16 +961,10 @@ void VideoWindow::SetVsync(bool enabled) {
     m_presentInterval.store(enabled ? 1u : 0u, std::memory_order_relaxed);
 }
 
-void VideoWindow::WaitForFrameLatency(DWORD timeoutMs) {
-    HANDLE waitHandle = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
-        waitHandle = m_frameLatencyWaitableObject;
-    }
-    if (!waitHandle) return;
-    WaitForSingleObject(waitHandle, timeoutMs);
+HANDLE VideoWindow::GetFrameLatencyWaitableObject() {
+    std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+    return m_frameLatencyWaitableObject;
 }
-
 void VideoWindow::UpdateViewport(int width, int height) {
     VideoViewport vp = calculateViewport(width, height, m_videoWidth, m_videoHeight);
     m_viewportX = vp.x;
@@ -1090,6 +1100,7 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     if (!swapChain) return;
     UINT flags = nonBlocking ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
     HRESULT presHr = swapChain->Present(presentInterval, flags);
+    frameCache.SignalFrameLatencyFence(context.Get());
     if (presHr == DXGI_STATUS_OCCLUDED ||
         presHr == DXGI_ERROR_WAS_STILL_DRAWING) {
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -1289,6 +1300,7 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
     if (!swapChain) return;
     UINT flags = nonBlocking ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
     HRESULT presHr = swapChain->Present(presentInterval, flags);
+    frameCache.SignalFrameLatencyFence(context.Get());
     if (presHr == DXGI_STATUS_OCCLUDED ||
         presHr == DXGI_ERROR_WAS_STILL_DRAWING) {
 #if RADIOIFY_ENABLE_TIMING_LOG
