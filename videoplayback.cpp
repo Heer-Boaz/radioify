@@ -787,6 +787,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return nowMs() <= until;
   };
 
+  auto getSubtitleText = [&](int64_t clockUs, bool seeking) -> std::string {
+    if (!enableSubtitles || seeking || clockUs <= 0 || subtitles.empty()) {
+      return {};
+    }
+    const SubtitleCue* cue = subtitles.cueAt(clockUs);
+    if (!cue) return {};
+    return cue->text;
+  };
+
   const std::string windowTitle = toUtf8String(file.filename());
   auto buildWindowUiState = [&]() {
     WindowUiState ui;
@@ -962,15 +971,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (!line2.empty()) {
       perfLogAppendf(&perfLog, "ui_dbg2 %s", line2.c_str());
     }
-  };
-
-  auto getSubtitleText = [&](int64_t clockUs, bool seeking) -> std::string {
-    if (!enableSubtitles || seeking || clockUs <= 0 || subtitles.empty()) {
-      return {};
-    }
-    const SubtitleCue* cue = subtitles.cueAt(clockUs);
-    if (!cue) return {};
-    return cue->text;
   };
 
   auto renderScreen = [&](bool clearHistory, bool frameChanged) {
