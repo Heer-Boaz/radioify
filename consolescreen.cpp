@@ -650,7 +650,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         bool isSelected = (idx == browser.selected);
 
         std::string prefix;
-        if (!entry.isDir) {
+        if (!entry.isDir && entry.trackIndex < 0) {
           if (isVideo && isVideo(entry.path)) prefix = "[V] ";
           else if (isAudio && isAudio(entry.path)) prefix = "[A] ";
           else if (isImage && isImage(entry.path)) prefix = "[I] ";

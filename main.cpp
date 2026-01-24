@@ -99,14 +99,48 @@ static int trackLabelDigits(size_t count) {
   return std::max(2, digits);
 }
 
+static std::string trimAscii(const std::string& value) {
+  size_t start = 0;
+  while (start < value.size() &&
+         std::isspace(static_cast<unsigned char>(value[start]))) {
+    ++start;
+  }
+  size_t end = value.size();
+  while (end > start &&
+         std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+    --end;
+  }
+  return value.substr(start, end - start);
+}
+
+static bool isMeaningfulTitle(const std::string& value) {
+  if (value.empty()) return false;
+  int letters = 0;
+  int nonAscii = 0;
+  for (unsigned char c : value) {
+    if (c >= 0x80) {
+      nonAscii++;
+      continue;
+    }
+    if (std::isalpha(c)) {
+      letters++;
+    }
+  }
+  if (nonAscii > 0) return true;
+  return letters >= 2;
+}
+
 static std::string formatTrackLabel(const TrackEntry& track, int digits) {
   std::string idx = std::to_string(track.index + 1);
   if (static_cast<int>(idx.size()) < digits) {
     idx.insert(0, static_cast<size_t>(digits - idx.size()), '0');
   }
-  std::string label = idx;
-  if (!track.title.empty()) {
-    label += " - " + track.title;
+  std::string label;
+  std::string title = trimAscii(track.title);
+  if (isMeaningfulTitle(title)) {
+    label = idx + " - " + title;
+  } else {
+    label = "Track " + idx;
   }
   if (track.lengthMs > 0) {
     double seconds = static_cast<double>(track.lengthMs) / 1000.0;
