@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 
 struct AudioPerfStats {
   uint64_t callbacks = 0;
@@ -35,8 +36,9 @@ void audioShutdown();
 bool audioIsEnabled();
 bool audioIsReady();
 
-bool audioStartFile(const std::filesystem::path& file);
-bool audioStartFileAt(const std::filesystem::path& file, double startSec);
+bool audioStartFile(const std::filesystem::path& file, int trackIndex = 0);
+bool audioStartFileAt(const std::filesystem::path& file, double startSec,
+                      int trackIndex = 0);
 void audioStop();
 bool audioStartStream(uint64_t totalFrames);
 void audioStopStream();
@@ -89,6 +91,9 @@ void audioSeekBy(int direction);
 void audioSeekToRatio(double ratio);
 void audioSeekToSec(double sec);
 void audioToggleRadio();
+void audioToggleKss50Hz();
 void audioSetHold(bool hold);
 void audioAdjustVolume(float delta);
 float audioGetVolume();
+std::string audioGetWarning();
+bool audioIsKss50HzEnabled();

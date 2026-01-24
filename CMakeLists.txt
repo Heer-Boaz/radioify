@@ -19,6 +19,8 @@ add_executable(radioify
   consolescreen.cpp
   ffmpegaudio.cpp
   gpu_shared.cpp
+  gmeaudio.cpp
+  kssaudio.cpp
   m4adecoder.cpp
   player.cpp
   queues.cpp
@@ -461,6 +463,26 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
+include(FetchContent)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
+FetchContent_Declare(
+  libkss
+  GIT_REPOSITORY https://github.com/digital-sound-antiques/libkss.git
+  GIT_TAG 1.2.1
+  GIT_SUBMODULES_RECURSE TRUE
+)
+FetchContent_MakeAvailable(libkss)
+target_include_directories(radioify PRIVATE ${libkss_SOURCE_DIR}/src)
+target_include_directories(radioify PRIVATE ${libkss_SOURCE_DIR}/modules)
+target_link_libraries(radioify PRIVATE kss)
+FetchContent_Declare(
+  gme
+  GIT_REPOSITORY https://github.com/ShiftMediaProject/Game-Music-Emu.git
+  GIT_TAG 59e82746f6ff83df184554d17c7536e0ea609385
+)
+FetchContent_MakeAvailable(gme)
+target_include_directories(radioify PRIVATE ${gme_SOURCE_DIR})
+target_link_libraries(radioify PRIVATE gme)
 
 set_target_properties(radioify PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist"

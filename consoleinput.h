@@ -62,6 +62,7 @@ struct FileEntry {
   std::string name;
   std::filesystem::path path;
   bool isDir = false;
+  int trackIndex = -1;
 };
 
 struct BrowserState {
@@ -118,6 +119,7 @@ struct InputCallbacks {
   std::function<void()> onResize;
   std::function<void()> onTogglePause;
   std::function<void()> onToggleRadio;
+  std::function<void()> onToggleKss50Hz;
   std::function<void()> onToggleVsync;
   std::function<void(int)> onSeekBy;
   std::function<void(double)> onSeekToRatio;

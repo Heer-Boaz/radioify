@@ -73,11 +73,12 @@ dist/radioify.exe --no-radio <file-or-folder>
 - Space: pause/resume
 - Ctrl+Left/Right: seek
 - R: toggle 1938 radio filter
+- H: toggle KSS 50Hz
 - V: toggle window vsync
 - Q or Ctrl+C: quit
 
 ## Supported files
-- Audio: .wav, .mp3, .flac
+- Audio: .wav, .mp3, .flac, .kss, .nsf
 - Audio (media containers): .m4a, .webm, .mp4 (audio stream only)
 - Video (ASCII preview): .mp4, .webm (audio + video)
 - Images (ASCII art preview): .jpg, .jpeg, .png, .bmp

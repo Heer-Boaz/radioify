@@ -25,6 +25,8 @@
 #include "browsermeta.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
+#include "gmeaudio.h"
+#include "kssaudio.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "radio.h"
@@ -65,6 +67,66 @@ static std::string toLower(std::string s) {
     return static_cast<char>(std::tolower(c));
   });
   return s;
+}
+
+struct TrackBrowserState {
+  bool active = false;
+  std::filesystem::path file;
+  std::vector<TrackEntry> tracks;
+};
+
+static TrackBrowserState gTrackBrowser;
+
+static std::filesystem::path normalizeTrackBrowserPath(
+    std::filesystem::path path) {
+  if (!path.has_parent_path()) {
+    path = std::filesystem::path(".") / path;
+  }
+  return path;
+}
+
+static bool isTrackBrowserActive(const BrowserState& state) {
+  return gTrackBrowser.active && state.dir == gTrackBrowser.file;
+}
+
+static int trackLabelDigits(size_t count) {
+  int digits = 1;
+  size_t n = count;
+  while (n >= 10) {
+    n /= 10;
+    ++digits;
+  }
+  return std::max(2, digits);
+}
+
+static std::string formatTrackLabel(const TrackEntry& track, int digits) {
+  std::string idx = std::to_string(track.index + 1);
+  if (static_cast<int>(idx.size()) < digits) {
+    idx.insert(0, static_cast<size_t>(digits - idx.size()), '0');
+  }
+  std::string label = idx;
+  if (!track.title.empty()) {
+    label += " - " + track.title;
+  }
+  if (track.lengthMs > 0) {
+    double seconds = static_cast<double>(track.lengthMs) / 1000.0;
+    label += " (" + formatTime(seconds) + ")";
+  }
+  return label;
+}
+
+static const TrackEntry* findTrackEntry(int trackIndex) {
+  if (trackIndex < 0) return nullptr;
+  if (trackIndex < static_cast<int>(gTrackBrowser.tracks.size())) {
+    const auto& entry = gTrackBrowser.tracks[static_cast<size_t>(trackIndex)];
+    if (entry.index == trackIndex) {
+      return &entry;
+    }
+  }
+  for (const auto& entry : gTrackBrowser.tracks) {
+    if (entry.index == trackIndex) return &entry;
+  }
+  return nullptr;
 }
 
 static void showUsage(const char* exe) {
@@ -126,12 +188,22 @@ static bool isVideoExt(const std::filesystem::path& p) {
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4";
+         ext == ".webm" || ext == ".mp4" || ext == ".kss" || ext == ".nsf";
 }
 
 static bool isMiniaudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac";
+}
+
+static bool isGmeExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+  return ext == ".nsf";
+}
+
+static bool isKssExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+  return ext == ".kss";
 }
 
 static bool isSupportedMediaExt(const std::filesystem::path& p) {
@@ -150,7 +222,7 @@ static void validateInputFile(const std::filesystem::path& p) {
     die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
     die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4.");
+        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf.");
   }
 }
 
@@ -189,7 +261,28 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
 
 static void refreshBrowser(BrowserState& state,
                            const std::string& initialName) {
-  state.entries = listEntries(state.dir);
+  if (isTrackBrowserActive(state)) {
+    state.entries.clear();
+    if (state.dir.has_parent_path()) {
+      state.entries.push_back(FileEntry{"..", state.dir.parent_path(), true});
+    }
+    int digits = trackLabelDigits(gTrackBrowser.tracks.size());
+    for (const auto& track : gTrackBrowser.tracks) {
+      FileEntry entry;
+      entry.name = formatTrackLabel(track, digits);
+      entry.path = state.dir;
+      entry.isDir = false;
+      entry.trackIndex = track.index;
+      state.entries.push_back(std::move(entry));
+    }
+  } else {
+    if (gTrackBrowser.active && state.dir != gTrackBrowser.file) {
+      gTrackBrowser.active = false;
+      gTrackBrowser.file.clear();
+      gTrackBrowser.tracks.clear();
+    }
+    state.entries = listEntries(state.dir);
+  }
 
   if (!state.filter.empty()) {
     std::string lowFilter = toLower(state.filter);
@@ -257,6 +350,38 @@ static void refreshBrowser(BrowserState& state,
       }
     }
   }
+}
+
+static std::string buildTrackSelectionMeta(const BrowserState& browser) {
+  if (browser.entries.empty()) return "";
+  int idx = std::clamp(browser.selected, 0,
+                       static_cast<int>(browser.entries.size()) - 1);
+  const auto& entry = browser.entries[static_cast<size_t>(idx)];
+  std::string name = entry.name;
+  if (entry.isDir && name != "..") name += "/";
+
+  std::string sortLabel = "Name";
+  if (browser.sortMode == BrowserState::SortMode::Date) sortLabel = "Date";
+  else if (browser.sortMode == BrowserState::SortMode::Size) sortLabel = "Size";
+
+  std::string dirArrow = browser.sortDescending ? " \xE2\x86\x93" : " \xE2\x86\x91";
+  std::string metaLine = " [" + sortLabel + dirArrow + "]";
+  if (browser.filterActive || !browser.filter.empty()) {
+    metaLine += " [Filter: " + browser.filter + (browser.filterActive ? "_" : "") + "]";
+  }
+
+  metaLine += " Selected: " + name;
+  if (entry.trackIndex >= 0) {
+    const TrackEntry* track = findTrackEntry(entry.trackIndex);
+    if (track && track->lengthMs > 0) {
+      metaLine += "  " + formatTime(static_cast<double>(track->lengthMs) / 1000.0);
+    }
+    if (!gTrackBrowser.tracks.empty()) {
+      metaLine += "  Track " + std::to_string(entry.trackIndex + 1) + "/" +
+                  std::to_string(gTrackBrowser.tracks.size());
+    }
+  }
+  return metaLine;
 }
 
 static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
@@ -329,11 +454,25 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   const uint32_t sampleRate = 48000;
   const uint32_t channels = useRadio1938 ? 1 : (o.mono ? 1 : 2);
   const bool useM4a = isM4aExt(o.input);
+  const bool useGme = isGmeExt(o.input);
+  const bool useKss = isKssExt(o.input);
   ma_decoder decoder{};
   M4aDecoder m4a{};
+  GmeAudioDecoder gme{};
+  KssAudioDecoder kss{};
   if (useM4a) {
     std::string error;
     if (!m4a.init(o.input, channels, sampleRate, &error)) {
+      die(error.empty() ? "Failed to open input for decoding." : error);
+    }
+  } else if (useKss) {
+    std::string error;
+    if (!kss.init(o.input, channels, sampleRate, &error)) {
+      die(error.empty() ? "Failed to open input for decoding." : error);
+    }
+  } else if (useGme) {
+    std::string error;
+    if (!gme.init(o.input, channels, sampleRate, &error)) {
       die(error.empty() ? "Failed to open input for decoding." : error);
     }
   } else {
@@ -352,6 +491,10 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
       MA_SUCCESS) {
     if (useM4a) {
       m4a.uninit();
+    } else if (useKss) {
+      kss.uninit();
+    } else if (useGme) {
+      gme.uninit();
     } else {
       ma_decoder_uninit(&decoder);
     }
@@ -371,6 +514,20 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
       if (!m4a.readFrames(buffer.data(), chunkFrames, &framesRead)) {
         ma_encoder_uninit(&encoder);
         m4a.uninit();
+        die("Failed to decode input.");
+      }
+      if (framesRead == 0) break;
+    } else if (useKss) {
+      if (!kss.readFrames(buffer.data(), chunkFrames, &framesRead)) {
+        ma_encoder_uninit(&encoder);
+        kss.uninit();
+        die("Failed to decode input.");
+      }
+      if (framesRead == 0) break;
+    } else if (useGme) {
+      if (!gme.readFrames(buffer.data(), chunkFrames, &framesRead)) {
+        ma_encoder_uninit(&encoder);
+        gme.uninit();
         die("Failed to decode input.");
       }
       if (framesRead == 0) break;
@@ -400,6 +557,10 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   ma_encoder_uninit(&encoder);
   if (useM4a) {
     m4a.uninit();
+  } else if (useKss) {
+    kss.uninit();
+  } else if (useGme) {
+    gme.uninit();
   } else {
     ma_decoder_uninit(&decoder);
   }
@@ -478,7 +639,33 @@ int main(int argc, char** argv) {
         pendingVideo = inputPath;
         hasPendingVideo = true;
       } else {
-        audioStartFile(inputPath);
+        if (isKssExt(inputPath) || isGmeExt(inputPath)) {
+          std::filesystem::path trackPath =
+              normalizeTrackBrowserPath(inputPath);
+          std::vector<TrackEntry> tracks;
+          std::string error;
+          bool listed = false;
+          if (isKssExt(inputPath)) {
+            listed = kssListTracks(trackPath, &tracks, &error);
+          } else {
+            listed = gmeListTracks(trackPath, &tracks, &error);
+          }
+          if (listed && tracks.size() > 1) {
+            gTrackBrowser.active = true;
+            gTrackBrowser.file = trackPath;
+            gTrackBrowser.tracks = std::move(tracks);
+            browser.dir = trackPath;
+            browser.selected = 0;
+            browser.scrollRow = 0;
+            browser.filter.clear();
+            browser.filterActive = false;
+            refreshBrowser(browser, "");
+          } else {
+            audioStartFile(inputPath);
+          }
+        } else {
+          audioStartFile(inputPath);
+        }
       }
     }
   }
@@ -575,6 +762,17 @@ int main(int argc, char** argv) {
     refreshBrowser(nextBrowser, initialName);
   };
   callbacks.onPlayFile = [&](const std::filesystem::path& file) {
+    if (isTrackBrowserActive(browser)) {
+      if (!browser.entries.empty()) {
+        int idx = std::clamp(browser.selected, 0,
+                             static_cast<int>(browser.entries.size()) - 1);
+        const auto& entry = browser.entries[static_cast<size_t>(idx)];
+        if (entry.trackIndex >= 0) {
+          return audioStartFile(file, entry.trackIndex);
+        }
+      }
+      return true;
+    }
     if (isSupportedImageExt(file)) {
       showAsciiArt(file, input, screen, kStyleNormal, kStyleAccent, kStyleDim);
       return true;
@@ -585,6 +783,29 @@ int main(int argc, char** argv) {
           kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
           kProgressEnd, videoConfig);
       if (handled) return true;
+    }
+    if (isKssExt(file) || isGmeExt(file)) {
+      std::filesystem::path trackPath = normalizeTrackBrowserPath(file);
+      std::vector<TrackEntry> tracks;
+      std::string error;
+      bool listed = false;
+      if (isKssExt(file)) {
+        listed = kssListTracks(trackPath, &tracks, &error);
+      } else {
+        listed = gmeListTracks(trackPath, &tracks, &error);
+      }
+      if (listed && tracks.size() > 1) {
+        gTrackBrowser.active = true;
+        gTrackBrowser.file = trackPath;
+        gTrackBrowser.tracks = std::move(tracks);
+        browser.dir = trackPath;
+        browser.selected = 0;
+        browser.scrollRow = 0;
+        browser.filter.clear();
+        browser.filterActive = false;
+        refreshBrowser(browser, "");
+        return true;
+      }
     }
     return audioStartFile(file);
   };
@@ -597,6 +818,9 @@ int main(int argc, char** argv) {
   };
   callbacks.onToggleRadio = [&]() {
     audioToggleRadio();
+  };
+  callbacks.onToggleKss50Hz = [&]() {
+    audioToggleKss50Hz();
   };
   callbacks.onSeekBy = [&](int direction) { audioSeekBy(direction); };
   callbacks.onSeekToRatio = [&](double ratio) { audioSeekToRatio(ratio); };
@@ -701,28 +925,37 @@ int main(int argc, char** argv) {
             fitLine("  Mouse=select  Click=play/enter  Backspace=up  "
                     "Click+drag bar=seek  Space=pause  Arrows=move  "
                     "PgUp/PgDn=page  "
-                    "Ctrl+Left/Right=seek  Shift+Up/Dn=Vol (400%)  R=toggle  T=view  Q=quit",
+                    "Ctrl+Left/Right=seek  Shift+Up/Dn=Vol (400%)  R=toggle  H=50Hz  T=view  Q=quit",
                     width),
             kStyleNormal);
       } else {
         screen.writeText(
             0, 2,
             fitLine("  Enter=play  PgUp/Dn=page  Arrows=move  [/]=seek  "
-                    "Shift/Alt+Up/Dn=Vol  R=toggle  Q=quit",
+                    "Shift/Alt+Up/Dn=Vol  R=toggle  H=50Hz  Q=quit",
                     width),
             kStyleNormal);
       }
       std::string filterLabel =
           audioIsRadioEnabled() ? "1938 radio" : "dry";
-      screen.writeText(0, 3,
-                       fitLine(std::string("  Filter: ") + filterLabel, width),
-                       kStyleDim);
-      screen.writeText(
-          0, 4,
-          fitLine("  Showing: folders + "
-                  ".wav/.mp3/.flac/.m4a/.webm/.mp4/.jpg/.jpeg/.png/.bmp",
-                  width),
-          kStyleDim);
+      std::string kssLabel =
+          audioIsKss50HzEnabled() ? "50Hz" : "auto";
+      std::string filterLine = "  Filter: " + filterLabel;
+      std::filesystem::path nowPlaying = audioGetNowPlaying();
+      if (isKssExt(nowPlaying)) {
+        filterLine += "  KSS: " + kssLabel;
+      }
+      screen.writeText(0, 3, fitLine(filterLine, width), kStyleDim);
+      bool trackMode = isTrackBrowserActive(browser);
+      std::string showingLabel;
+      if (trackMode) {
+        showingLabel = "  Showing: tracks in " + toUtf8String(browser.dir.filename());
+      } else {
+        showingLabel =
+            "  Showing: folders + "
+            ".wav/.mp3/.flac/.m4a/.webm/.mp4/.kss/.nsf/.jpg/.jpeg/.png/.bmp";
+      }
+      screen.writeText(0, 4, fitLine(showingLabel, width), kStyleDim);
 
       drawBrowserEntries(screen, browser, layout, listTop, listHeight,
                          kStyleNormal, kStyleNormal, kStyleDir, kStyleHighlight,
@@ -735,12 +968,20 @@ int main(int argc, char** argv) {
         line++;
       }
       if (line < height) {
-        std::string meta = buildSelectionMeta(browser, isVideoExt);
+        std::string meta = trackMode
+                               ? buildTrackSelectionMeta(browser)
+                               : buildSelectionMeta(browser, isVideoExt);
         if (!meta.empty()) {
           screen.writeText(0, line++, fitLine(meta, width), kStyleDim);
         }
       }
-      std::filesystem::path nowPlaying = audioGetNowPlaying();
+      if (line < height) {
+        std::string warning = audioGetWarning();
+        if (!warning.empty()) {
+          screen.writeText(0, line++, fitLine("  Warning: " + warning, width),
+                           kStyleDim);
+        }
+      }
       std::string nowLabel =
           nowPlaying.empty() ? "(none)" : toUtf8String(nowPlaying.filename());
       screen.writeText(0, line++, fitLine(std::string(" ") + nowLabel, width),
