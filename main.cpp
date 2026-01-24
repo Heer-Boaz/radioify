@@ -96,7 +96,7 @@ static int trackLabelDigits(size_t count) {
     n /= 10;
     ++digits;
   }
-  return std::max(2, digits);
+  return std::max(3, digits);
 }
 
 static std::string trimAscii(const std::string& value) {
@@ -135,12 +135,10 @@ static std::string formatTrackLabel(const TrackEntry& track, int digits) {
   if (static_cast<int>(idx.size()) < digits) {
     idx.insert(0, static_cast<size_t>(digits - idx.size()), '0');
   }
-  std::string label;
+  std::string label = idx;
   std::string title = trimAscii(track.title);
   if (isMeaningfulTitle(title)) {
-    label = idx + " - " + title;
-  } else {
-    label = "Track " + idx;
+    label += " - " + title;
   }
   if (track.lengthMs > 0) {
     double seconds = static_cast<double>(track.lengthMs) / 1000.0;
