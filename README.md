@@ -73,7 +73,8 @@ dist/radioify.exe --no-radio <file-or-folder>
 - Space: pause/resume
 - Ctrl+Left/Right: seek
 - R: toggle 1938 radio filter
-- H: toggle KSS 50Hz
+- H: toggle 50Hz mode
+- O: options
 - V: toggle window vsync
 - Q or Ctrl+C: quit
 

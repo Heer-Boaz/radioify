@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "kssoptions.h"
 #include "tracklist.h"
 
 extern "C" {
@@ -20,6 +21,9 @@ class KssAudioDecoder {
   bool init(const std::filesystem::path& path, uint32_t channels,
             uint32_t sampleRate, std::string* error, int trackIndex = 0,
             bool force50Hz = false);
+  bool init(const std::filesystem::path& path, uint32_t channels,
+            uint32_t sampleRate, std::string* error, int trackIndex,
+            const KssPlaybackOptions& options);
   void uninit();
   bool readFrames(float* out, uint32_t frameCount, uint64_t* framesRead);
   bool seekToFrame(uint64_t frame);

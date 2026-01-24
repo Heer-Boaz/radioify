@@ -354,7 +354,7 @@ struct AudioPlaybackState {
   int gmeTrackIndex = 0;
   std::string gmeWarning;
   int kssTrackIndex = 0;
-  bool kssForce50Hz = false;
+  KssPlaybackOptions kssOptions{};
 };
 
 AudioPlaybackState gAudio;
@@ -988,7 +988,7 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
   } else if (useKss) {
     std::string error;
     if (!gAudio.state.kss.init(file, gAudio.channels, gAudio.sampleRate,
-                               &error, trackIndex, gAudio.kssForce50Hz)) {
+                               &error, trackIndex, gAudio.kssOptions)) {
       return false;
     }
     gAudio.decoderReady = true;
@@ -1967,8 +1967,7 @@ void audioToggleRadio() {
   ensureChannels(desired);
 }
 
-void audioToggleKss50Hz() {
-  gAudio.kssForce50Hz = !gAudio.kssForce50Hz;
+static void reloadKssWithOptions() {
   if (!gAudio.enableAudio || !gAudio.decoderReady) return;
   if (!gAudio.state.usingKss.load()) return;
   uint64_t resumeFrame = gAudio.state.framesPlayed.load();
@@ -1978,6 +1977,11 @@ void audioToggleKss50Hz() {
       gAudio.state.paused.store(true);
     }
   }
+}
+
+void audioToggle50Hz() {
+  gAudio.kssOptions.force50Hz = !gAudio.kssOptions.force50Hz;
+  reloadKssWithOptions();
 }
 
 void audioSetHold(bool hold) {
@@ -1999,6 +2003,70 @@ std::string audioGetWarning() {
   return gAudio.gmeWarning;
 }
 
-bool audioIsKss50HzEnabled() {
-  return gAudio.kssForce50Hz;
+bool audioIs50HzEnabled() {
+  return gAudio.kssOptions.force50Hz;
+}
+
+KssPlaybackOptions audioGetKssOptionState() {
+  return gAudio.kssOptions;
+}
+
+bool audioAdjustKssOption(KssOptionId id, int direction) {
+  if (direction == 0) return false;
+  bool changed = false;
+  switch (id) {
+    case KssOptionId::Force50Hz:
+      gAudio.kssOptions.force50Hz = !gAudio.kssOptions.force50Hz;
+      changed = true;
+      break;
+    case KssOptionId::SccType: {
+      int next = static_cast<int>(gAudio.kssOptions.sccType) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 2;
+      if (next > 2) next = 0;
+      gAudio.kssOptions.sccType = static_cast<KssSccType>(next);
+      changed = true;
+      break;
+    }
+    case KssOptionId::PsgQuality: {
+      int next = static_cast<int>(gAudio.kssOptions.psgQuality) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 2;
+      if (next > 2) next = 0;
+      gAudio.kssOptions.psgQuality = static_cast<KssQuality>(next);
+      changed = true;
+      break;
+    }
+    case KssOptionId::SccQuality: {
+      int next = static_cast<int>(gAudio.kssOptions.sccQuality) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 2;
+      if (next > 2) next = 0;
+      gAudio.kssOptions.sccQuality = static_cast<KssQuality>(next);
+      changed = true;
+      break;
+    }
+    case KssOptionId::OpllStereo:
+      gAudio.kssOptions.opllStereo = !gAudio.kssOptions.opllStereo;
+      changed = true;
+      break;
+    case KssOptionId::MutePsg:
+      gAudio.kssOptions.mutePsg = !gAudio.kssOptions.mutePsg;
+      changed = true;
+      break;
+    case KssOptionId::MuteScc:
+      gAudio.kssOptions.muteScc = !gAudio.kssOptions.muteScc;
+      changed = true;
+      break;
+    case KssOptionId::MuteOpll:
+      gAudio.kssOptions.muteOpll = !gAudio.kssOptions.muteOpll;
+      changed = true;
+      break;
+    default:
+      break;
+  }
+  if (changed) {
+    reloadKssWithOptions();
+  }
+  return changed;
 }

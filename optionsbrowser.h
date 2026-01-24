@@ -1,0 +1,18 @@
+#pragma once
+
+#include <string>
+
+struct BrowserState;
+
+enum class OptionsBrowserResult {
+  NotHandled,
+  Handled,
+  Changed,
+};
+
+bool optionsBrowserIsActive(const BrowserState& browser);
+bool optionsBrowserRefresh(BrowserState& browser);
+OptionsBrowserResult optionsBrowserActivateSelection(BrowserState& browser);
+void optionsBrowserToggle(BrowserState& browser);
+std::string optionsBrowserSelectionMeta(const BrowserState& browser);
+std::string optionsBrowserShowingLabel();

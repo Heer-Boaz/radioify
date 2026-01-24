@@ -46,6 +46,49 @@ uint32_t computeFadeMs(const KSSINFO* info) {
   }
   return kDefaultFadeMs;
 }
+
+uint32_t toKssQuality(KssQuality quality) {
+  switch (quality) {
+    case KssQuality::High:
+      return 1u;
+    case KssQuality::Low:
+    case KssQuality::Auto:
+    default:
+      return 0u;
+  }
+}
+
+uint32_t toKssSccType(KssSccType type) {
+  switch (type) {
+    case KssSccType::Standard:
+      return 1u;
+    case KssSccType::Enhanced:
+      return 2u;
+    case KssSccType::Auto:
+    default:
+      return 0u;
+  }
+}
+
+void applyOptions(KSSPLAY* kssplay, const KssPlaybackOptions& options) {
+  if (!kssplay) return;
+  kssplay->vsync_freq = options.force50Hz ? 50.0 : 0.0;
+  kssplay->opll_stereo = options.opllStereo ? 1 : 0;
+
+  KSSPLAY_set_device_type(kssplay, KSS_DEVICE_SCC,
+                          toKssSccType(options.sccType));
+  if (options.psgQuality != KssQuality::Auto) {
+    KSSPLAY_set_device_quality(kssplay, KSS_DEVICE_PSG,
+                               toKssQuality(options.psgQuality));
+  }
+  if (options.sccQuality != KssQuality::Auto) {
+    KSSPLAY_set_device_quality(kssplay, KSS_DEVICE_SCC,
+                               toKssQuality(options.sccQuality));
+  }
+  KSSPLAY_set_device_mute(kssplay, KSS_DEVICE_PSG, options.mutePsg ? 1u : 0u);
+  KSSPLAY_set_device_mute(kssplay, KSS_DEVICE_SCC, options.muteScc ? 1u : 0u);
+  KSSPLAY_set_device_mute(kssplay, KSS_DEVICE_OPLL, options.muteOpll ? 1u : 0u);
+}
 }  // namespace
 
 KssAudioDecoder::KssAudioDecoder() = default;
@@ -55,6 +98,15 @@ bool KssAudioDecoder::init(const std::filesystem::path& path,
                            uint32_t channels, uint32_t sampleRate,
                            std::string* error, int trackIndex,
                            bool force50Hz) {
+  KssPlaybackOptions options;
+  options.force50Hz = force50Hz;
+  return init(path, channels, sampleRate, error, trackIndex, options);
+}
+
+bool KssAudioDecoder::init(const std::filesystem::path& path,
+                           uint32_t channels, uint32_t sampleRate,
+                           std::string* error, int trackIndex,
+                           const KssPlaybackOptions& options) {
   uninit();
 
   if (channels != 1 && channels != 2) {
@@ -100,8 +152,8 @@ bool KssAudioDecoder::init(const std::filesystem::path& path,
     return false;
   }
 
-  force50Hz_ = force50Hz;
-  kssplay->vsync_freq = force50Hz ? 50.0 : 0.0;
+  force50Hz_ = options.force50Hz;
+  applyOptions(kssplay, options);
   KSSPLAY_reset(kssplay, static_cast<uint32_t>(song), 0);
 
   const KSSINFO* info = findTrackInfo(kss, song);

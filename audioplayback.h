@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <string>
 
+#include "kssoptions.h"
+
 struct AudioPerfStats {
   uint64_t callbacks = 0;
   uint64_t framesRequested = 0;
@@ -92,9 +94,11 @@ void audioSeekBy(int direction);
 void audioSeekToRatio(double ratio);
 void audioSeekToSec(double sec);
 void audioToggleRadio();
-void audioToggleKss50Hz();
+void audioToggle50Hz();
 void audioSetHold(bool hold);
 void audioAdjustVolume(float delta);
 float audioGetVolume();
 std::string audioGetWarning();
-bool audioIsKss50HzEnabled();
+bool audioIs50HzEnabled();
+KssPlaybackOptions audioGetKssOptionState();
+bool audioAdjustKssOption(KssOptionId id, int direction = 1);

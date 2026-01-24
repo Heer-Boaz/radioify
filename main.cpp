@@ -29,6 +29,7 @@
 #include "kssaudio.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
+#include "optionsbrowser.h"
 #include "radio.h"
 #include "tracklist.h"
 #include "ui_helpers.h"
@@ -236,7 +237,8 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
 
 static void refreshBrowser(BrowserState& state,
                            const std::string& initialName) {
-  if (isTrackBrowserActive(state)) {
+  bool optionsActive = optionsBrowserRefresh(state);
+  if (!optionsActive && isTrackBrowserActive(state)) {
     state.entries.clear();
     if (state.dir.has_parent_path()) {
       state.entries.push_back(FileEntry{"..", state.dir.parent_path(), true});
@@ -250,7 +252,7 @@ static void refreshBrowser(BrowserState& state,
       entry.trackIndex = track.index;
       state.entries.push_back(std::move(entry));
     }
-  } else {
+  } else if (!optionsActive) {
     if (gTrackBrowser.active && state.dir != gTrackBrowser.file) {
       gTrackBrowser.active = false;
     }
@@ -269,7 +271,7 @@ static void refreshBrowser(BrowserState& state,
         state.entries.end());
   }
 
-  if (!state.entries.empty()) {
+  if (!state.entries.empty() && !optionsActive) {
     auto start = state.entries.begin();
     if (start->name == "..") ++start;
 
@@ -735,6 +737,15 @@ int main(int argc, char** argv) {
     refreshBrowser(nextBrowser, initialName);
   };
   callbacks.onPlayFile = [&](const std::filesystem::path& file) {
+    OptionsBrowserResult optionsResult =
+        optionsBrowserActivateSelection(browser);
+    if (optionsResult == OptionsBrowserResult::Changed) {
+      refreshBrowser(browser, "");
+      return true;
+    }
+    if (optionsResult == OptionsBrowserResult::Handled) {
+      return true;
+    }
     if (isTrackBrowserActive(browser)) {
       if (!browser.entries.empty()) {
         int idx = std::clamp(browser.selected, 0,
@@ -792,8 +803,12 @@ int main(int argc, char** argv) {
   callbacks.onToggleRadio = [&]() {
     audioToggleRadio();
   };
-  callbacks.onToggleKss50Hz = [&]() {
-    audioToggleKss50Hz();
+  callbacks.onToggle50Hz = [&]() {
+    audioToggle50Hz();
+  };
+  callbacks.onToggleOptions = [&]() {
+    optionsBrowserToggle(browser);
+    refreshBrowser(browser, "");
   };
   callbacks.onSeekBy = [&](int direction) { audioSeekBy(direction); };
   callbacks.onSeekToRatio = [&](double ratio) { audioSeekToRatio(ratio); };
@@ -898,31 +913,35 @@ int main(int argc, char** argv) {
             fitLine("  Mouse=select  Click=play/enter  Backspace=up  "
                     "Click+drag bar=seek  Space=pause  Arrows=move  "
                     "PgUp/PgDn=page  "
-                    "Ctrl+Left/Right=seek  Shift+Up/Dn=Vol (400%)  R=toggle  H=50Hz  T=view  Q=quit",
+                    "Ctrl+Left/Right=seek  Shift+Up/Dn=Vol (400%)  R=toggle  H=50Hz  O=options  T=view  Q=quit",
                     width),
             kStyleNormal);
       } else {
         screen.writeText(
             0, 2,
             fitLine("  Enter=play  PgUp/Dn=page  Arrows=move  [/]=seek  "
-                    "Shift/Alt+Up/Dn=Vol  R=toggle  H=50Hz  Q=quit",
+                    "Shift/Alt+Up/Dn=Vol  R=toggle  H=50Hz  O=options  Q=quit",
                     width),
             kStyleNormal);
       }
       std::string filterLabel =
           audioIsRadioEnabled() ? "1938 radio" : "dry";
-      std::string kssLabel =
-          audioIsKss50HzEnabled() ? "50Hz" : "auto";
+      std::string rateLabel =
+          audioIs50HzEnabled() ? "forced" : "auto";
       std::string filterLine = "  Filter: " + filterLabel;
       std::filesystem::path nowPlaying = audioGetNowPlaying();
       if (isKssExt(nowPlaying)) {
-        filterLine += "  KSS: " + kssLabel;
+        filterLine += "  50Hz: " + rateLabel;
       }
       screen.writeText(0, 3, fitLine(filterLine, width), kStyleDim);
+      bool optionsMode = optionsBrowserIsActive(browser);
       bool trackMode = isTrackBrowserActive(browser);
       std::string showingLabel;
-      if (trackMode) {
-        showingLabel = "  Showing: tracks in " + toUtf8String(browser.dir.filename());
+      if (optionsMode) {
+        showingLabel = optionsBrowserShowingLabel();
+      } else if (trackMode) {
+        showingLabel =
+            "  Showing: tracks in " + toUtf8String(browser.dir.filename());
       } else {
         showingLabel =
             "  Showing: folders + "
@@ -941,9 +960,14 @@ int main(int argc, char** argv) {
         line++;
       }
       if (line < height) {
-        std::string meta = trackMode
-                               ? buildTrackSelectionMeta(browser)
-                               : buildSelectionMeta(browser, isVideoExt);
+        std::string meta;
+        if (optionsMode) {
+          meta = optionsBrowserSelectionMeta(browser);
+        } else if (trackMode) {
+          meta = buildTrackSelectionMeta(browser);
+        } else {
+          meta = buildSelectionMeta(browser, isVideoExt);
+        }
         if (!meta.empty()) {
           screen.writeText(0, line++, fitLine(meta, width), kStyleDim);
         }

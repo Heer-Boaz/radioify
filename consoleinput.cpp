@@ -538,7 +538,11 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
       return true;
     }
     if (key.vk == 'H' || key.ch == 'h' || key.ch == 'H') {
-      if (callbacks.onToggleKss50Hz) callbacks.onToggleKss50Hz();
+      if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
+      return true;
+    }
+    if (key.vk == 'O' || key.ch == 'o' || key.ch == 'O') {
+      if (callbacks.onToggleOptions) callbacks.onToggleOptions();
       return true;
     }
     if (key.vk == 'V' || key.ch == 'v' || key.ch == 'V') {
