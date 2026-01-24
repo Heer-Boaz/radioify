@@ -74,7 +74,7 @@ dist/radioify.exe --no-radio <file-or-folder>
 - Ctrl+Left/Right: seek
 - R: toggle 1938 radio filter
 - H: toggle 50Hz mode
-- O: options
+- O: options (KSS/NSF only)
 - V: toggle window vsync
 - Q or Ctrl+C: quit
 
@@ -86,3 +86,19 @@ dist/radioify.exe --no-radio <file-or-folder>
 
 PSF2 playback needs `hebios.bin`. Set `RADIOIFY_PSF_BIOS` to the file path or
 place `hebios.bin` next to the PSF2 file (or in the current working directory).
+
+## Options
+KSS options:
+- 50Hz (auto/forced)
+- SCC type (auto/standard/enhanced)
+- PSG quality (auto/low/high)
+- SCC quality (auto/low/high)
+- OPLL stereo (on/off)
+- PSG mute (on/off)
+- SCC mute (on/off)
+- OPLL mute (on/off)
+
+NSF options:
+- EQ preset (NES/Famicom)
+- Stereo depth (off/50%/100%)
+- Ignore silence (on/off)
