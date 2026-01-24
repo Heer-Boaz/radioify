@@ -22,6 +22,7 @@ add_executable(radioify
   gmeaudio.cpp
   kssaudio.cpp
   m4adecoder.cpp
+  tracklist.cpp
   player.cpp
   queues.cpp
   taskgate.cpp

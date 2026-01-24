@@ -1766,6 +1766,13 @@ uint64_t audioStreamUpdateCounter() {
 
 std::filesystem::path audioGetNowPlaying() { return gAudio.nowPlaying; }
 
+int audioGetTrackIndex() {
+  if (!gAudio.decoderReady || !gAudio.enableAudio) return -1;
+  if (gAudio.state.usingKss.load()) return gAudio.kssTrackIndex;
+  if (gAudio.state.usingGme.load()) return gAudio.gmeTrackIndex;
+  return -1;
+}
+
 double audioGetTimeSec() {
   if (!gAudio.decoderReady || !gAudio.enableAudio) {
     return 0.0;

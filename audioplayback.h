@@ -72,6 +72,7 @@ uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int timeoutMs);
 uint64_t audioStreamUpdateCounter();
 
 std::filesystem::path audioGetNowPlaying();
+int audioGetTrackIndex();
 
 double audioGetTimeSec();
 double audioGetTotalSec();

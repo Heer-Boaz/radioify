@@ -30,6 +30,7 @@
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "radio.h"
+#include "tracklist.h"
 #include "ui_helpers.h"
 #include "videoplayback.h"
 
@@ -87,64 +88,6 @@ static std::filesystem::path normalizeTrackBrowserPath(
 
 static bool isTrackBrowserActive(const BrowserState& state) {
   return gTrackBrowser.active && state.dir == gTrackBrowser.file;
-}
-
-static int trackLabelDigits(size_t count) {
-  int digits = 1;
-  size_t n = count;
-  while (n >= 10) {
-    n /= 10;
-    ++digits;
-  }
-  return std::max(3, digits);
-}
-
-static std::string trimAscii(const std::string& value) {
-  size_t start = 0;
-  while (start < value.size() &&
-         std::isspace(static_cast<unsigned char>(value[start]))) {
-    ++start;
-  }
-  size_t end = value.size();
-  while (end > start &&
-         std::isspace(static_cast<unsigned char>(value[end - 1]))) {
-    --end;
-  }
-  return value.substr(start, end - start);
-}
-
-static bool isMeaningfulTitle(const std::string& value) {
-  if (value.empty()) return false;
-  int letters = 0;
-  int nonAscii = 0;
-  for (unsigned char c : value) {
-    if (c >= 0x80) {
-      nonAscii++;
-      continue;
-    }
-    if (std::isalpha(c)) {
-      letters++;
-    }
-  }
-  if (nonAscii > 0) return true;
-  return letters >= 2;
-}
-
-static std::string formatTrackLabel(const TrackEntry& track, int digits) {
-  std::string idx = std::to_string(track.index + 1);
-  if (static_cast<int>(idx.size()) < digits) {
-    idx.insert(0, static_cast<size_t>(digits - idx.size()), '0');
-  }
-  std::string label = idx;
-  std::string title = trimAscii(track.title);
-  if (isMeaningfulTitle(title)) {
-    label += " - " + title;
-  }
-  if (track.lengthMs > 0) {
-    double seconds = static_cast<double>(track.lengthMs) / 1000.0;
-    label += " (" + formatTime(seconds) + ")";
-  }
-  return label;
 }
 
 static const TrackEntry* findTrackEntry(int trackIndex) {
@@ -310,8 +253,6 @@ static void refreshBrowser(BrowserState& state,
   } else {
     if (gTrackBrowser.active && state.dir != gTrackBrowser.file) {
       gTrackBrowser.active = false;
-      gTrackBrowser.file.clear();
-      gTrackBrowser.tracks.clear();
     }
     state.entries = listEntries(state.dir);
   }
@@ -1016,6 +957,21 @@ int main(int argc, char** argv) {
       }
       std::string nowLabel =
           nowPlaying.empty() ? "(none)" : toUtf8String(nowPlaying.filename());
+      int trackIndex = audioGetTrackIndex();
+      if (!nowPlaying.empty() && trackIndex >= 0) {
+        int digits = 3;
+        const TrackEntry* track = nullptr;
+        TrackEntry fallback{};
+        if (nowPlaying == gTrackBrowser.file && !gTrackBrowser.tracks.empty()) {
+          digits = trackLabelDigits(gTrackBrowser.tracks.size());
+          track = findTrackEntry(trackIndex);
+        }
+        if (!track) {
+          fallback.index = trackIndex;
+          track = &fallback;
+        }
+        nowLabel += "  |  " + formatTrackLabel(*track, digits);
+      }
       screen.writeText(0, line++, fitLine(std::string(" ") + nowLabel, width),
                        kStyleAccent);
 
