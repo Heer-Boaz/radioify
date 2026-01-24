@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "nsfoptions.h"
 #include "tracklist.h"
 
 extern "C" {
@@ -24,6 +25,8 @@ class GmeAudioDecoder {
   bool seekToFrame(uint64_t frame);
   bool getTotalFrames(uint64_t* outFrames) const;
   bool active() const { return emu_ != nullptr; }
+  bool isNsf() const { return isNsf_; }
+  void applyNsfOptions(const NsfPlaybackOptions& options);
   const std::string& warning() const { return warning_; }
 
  private:
@@ -33,6 +36,7 @@ class GmeAudioDecoder {
   uint64_t totalFrames_ = 0;
   uint64_t framePos_ = 0;
   bool atEnd_ = false;
+  bool isNsf_ = false;
   std::vector<int16_t> buffer_;
   std::string warning_;
 };

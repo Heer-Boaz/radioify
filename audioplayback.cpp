@@ -367,6 +367,7 @@ struct AudioPlaybackState {
   int kssTrackIndex = 0;
   int psfTrackIndex = 0;
   KssPlaybackOptions kssOptions{};
+  NsfPlaybackOptions nsfOptions{};
 };
 
 AudioPlaybackState gAudio;
@@ -1087,6 +1088,9 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
     gAudio.gmeTrackIndex = trackIndex;
     gAudio.kssTrackIndex = 0;
     gAudio.psfTrackIndex = 0;
+    if (gAudio.state.gme.isNsf()) {
+      gAudio.state.gme.applyNsfOptions(gAudio.nsfOptions);
+    }
     gAudio.gmeWarning = gAudio.state.gme.warning();
 
     uint64_t totalFrames = 0;
@@ -2177,6 +2181,58 @@ bool audioAdjustKssOption(KssOptionId id, int direction) {
   }
   if (changed) {
     reloadKssWithOptions();
+  }
+  return changed;
+}
+
+NsfPlaybackOptions audioGetNsfOptionState() {
+  return gAudio.nsfOptions;
+}
+
+static void reloadNsfWithOptions() {
+  if (!gAudio.enableAudio || !gAudio.decoderReady) return;
+  if (!gAudio.state.usingGme.load()) return;
+  if (!isGmeExt(gAudio.nowPlaying)) return;
+  uint64_t resumeFrame = gAudio.state.framesPlayed.load();
+  bool wasPaused = gAudio.state.paused.load();
+  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.gmeTrackIndex)) {
+    if (wasPaused) {
+      gAudio.state.paused.store(true);
+    }
+  }
+}
+
+bool audioAdjustNsfOption(NsfOptionId id, int direction) {
+  if (direction == 0) return false;
+  bool changed = false;
+  switch (id) {
+    case NsfOptionId::EqPreset: {
+      int next = static_cast<int>(gAudio.nsfOptions.eqPreset) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 1;
+      if (next > 1) next = 0;
+      gAudio.nsfOptions.eqPreset = static_cast<NsfEqPreset>(next);
+      changed = true;
+      break;
+    }
+    case NsfOptionId::StereoDepth: {
+      int next = static_cast<int>(gAudio.nsfOptions.stereoDepth) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 2;
+      if (next > 2) next = 0;
+      gAudio.nsfOptions.stereoDepth = static_cast<NsfStereoDepth>(next);
+      changed = true;
+      break;
+    }
+    case NsfOptionId::IgnoreSilence:
+      gAudio.nsfOptions.ignoreSilence = !gAudio.nsfOptions.ignoreSilence;
+      changed = true;
+      break;
+    default:
+      break;
+  }
+  if (changed) {
+    reloadNsfWithOptions();
   }
   return changed;
 }

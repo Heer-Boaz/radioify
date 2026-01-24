@@ -832,8 +832,10 @@ int main(int argc, char** argv) {
     audioToggle50Hz();
   };
   callbacks.onToggleOptions = [&]() {
-    optionsBrowserToggle(browser);
-    refreshBrowser(browser, "");
+    if (optionsBrowserCanToggle(browser)) {
+      optionsBrowserToggle(browser);
+      refreshBrowser(browser, "");
+    }
   };
   callbacks.onSeekBy = [&](int direction) { audioSeekBy(direction); };
   callbacks.onSeekToRatio = [&](double ratio) { audioSeekToRatio(ratio); };
@@ -932,20 +934,24 @@ int main(int argc, char** argv) {
         screen.writeText(crumb.startX, breadcrumbY, hoverText,
                          kStyleBreadcrumbHover);
       }
+      bool optionsAvailable = optionsBrowserCanToggle(browser);
+      std::string optionsHint = optionsAvailable ? "  O=options" : "";
       if (o.play) {
         screen.writeText(
             0, 2,
             fitLine("  Mouse=select  Click=play/enter  Backspace=up  "
                     "Click+drag bar=seek  Space=pause  Arrows=move  "
                     "PgUp/PgDn=page  "
-                    "Ctrl+Left/Right=seek  Shift+Up/Dn=Vol (400%)  R=toggle  H=50Hz  O=options  T=view  Q=quit",
+                    "Ctrl+Left/Right=seek  Shift+Up/Dn=Vol (400%)  R=toggle  H=50Hz" +
+                    optionsHint + "  T=view  Q=quit",
                     width),
             kStyleNormal);
       } else {
         screen.writeText(
             0, 2,
             fitLine("  Enter=play  PgUp/Dn=page  Arrows=move  [/]=seek  "
-                    "Shift/Alt+Up/Dn=Vol  R=toggle  H=50Hz  O=options  Q=quit",
+                    "Shift/Alt+Up/Dn=Vol  R=toggle  H=50Hz" +
+                    optionsHint + "  Q=quit",
                     width),
             kStyleNormal);
       }

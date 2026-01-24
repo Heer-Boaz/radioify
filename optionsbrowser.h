@@ -11,6 +11,7 @@ enum class OptionsBrowserResult {
 };
 
 bool optionsBrowserIsActive(const BrowserState& browser);
+bool optionsBrowserCanToggle(const BrowserState& browser);
 bool optionsBrowserRefresh(BrowserState& browser);
 OptionsBrowserResult optionsBrowserActivateSelection(BrowserState& browser);
 void optionsBrowserToggle(BrowserState& browser);

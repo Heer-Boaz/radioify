@@ -7,6 +7,9 @@
 namespace {
 constexpr float kInt16ToFloat = 1.0f / 32768.0f;
 constexpr int kDefaultTrackLengthMs = 150000;
+constexpr double kNsfEqNesTreble = -1.0;
+constexpr double kNsfEqFamicomTreble = -15.0;
+constexpr double kNsfEqBass = 80.0;
 
 void setError(std::string* error, const char* message) {
   if (error && message) {
@@ -59,6 +62,24 @@ bool tryLoadM3u(Music_Emu* emu, const std::filesystem::path& path) {
   gme_load_m3u(emu, m3uPath.string().c_str());
   return true;
 }
+
+bool isNsfType(Music_Emu* emu) {
+  if (!emu) return false;
+  gme_type_t type = gme_type(emu);
+  return type == gme_nsf_type || type == gme_nsfe_type;
+}
+
+double stereoDepthValue(NsfStereoDepth depth) {
+  switch (depth) {
+    case NsfStereoDepth::Low:
+      return 0.5;
+    case NsfStereoDepth::High:
+      return 1.0;
+    case NsfStereoDepth::Off:
+    default:
+      return 0.0;
+  }
+}
 }  // namespace
 
 GmeAudioDecoder::GmeAudioDecoder() = default;
@@ -84,7 +105,9 @@ bool GmeAudioDecoder::init(const std::filesystem::path& path,
 
   std::string warning;
   appendWarning(&warning, gme_warning(emu));
-  if (gme_type(emu) == gme_kss_type) {
+  gme_type_t type = gme_type(emu);
+  isNsf_ = (type == gme_nsf_type || type == gme_nsfe_type);
+  if (type == gme_kss_type) {
     gme_enable_accuracy(emu, 1);
   }
 
@@ -125,6 +148,19 @@ bool GmeAudioDecoder::init(const std::filesystem::path& path,
   buffer_.clear();
   warning_ = std::move(warning);
   return true;
+}
+
+void GmeAudioDecoder::applyNsfOptions(const NsfPlaybackOptions& options) {
+  if (!emu_ || !isNsf_) return;
+
+  gme_equalizer_t eq{};
+  eq.bass = kNsfEqBass;
+  eq.treble = (options.eqPreset == NsfEqPreset::Famicom)
+                  ? kNsfEqFamicomTreble
+                  : kNsfEqNesTreble;
+  gme_set_equalizer(emu_, &eq);
+  gme_set_stereo_depth(emu_, stereoDepthValue(options.stereoDepth));
+  gme_ignore_silence(emu_, options.ignoreSilence ? 1 : 0);
 }
 
 bool gmeListTracks(const std::filesystem::path& path,
@@ -179,6 +215,7 @@ void GmeAudioDecoder::uninit() {
   totalFrames_ = 0;
   framePos_ = 0;
   atEnd_ = false;
+  isNsf_ = false;
   buffer_.clear();
   warning_.clear();
 }

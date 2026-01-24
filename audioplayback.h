@@ -6,6 +6,7 @@
 #include <string>
 
 #include "kssoptions.h"
+#include "nsfoptions.h"
 
 struct AudioPerfStats {
   uint64_t callbacks = 0;
@@ -102,3 +103,5 @@ std::string audioGetWarning();
 bool audioIs50HzEnabled();
 KssPlaybackOptions audioGetKssOptionState();
 bool audioAdjustKssOption(KssOptionId id, int direction = 1);
+NsfPlaybackOptions audioGetNsfOptionState();
+bool audioAdjustNsfOption(NsfOptionId id, int direction = 1);
