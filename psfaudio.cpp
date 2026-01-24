@@ -13,8 +13,19 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include "miniaudio.h"
 
@@ -101,6 +112,29 @@ std::string toUtf8String(const std::filesystem::path& path) {
   return std::string(u8.begin(), u8.end());
 #else
   return path.string();
+#endif
+}
+
+std::filesystem::path getExecutableDir() {
+#ifdef _WIN32
+  std::wstring buffer;
+  DWORD size = MAX_PATH;
+  for (;;) {
+    buffer.resize(size);
+    DWORD len = GetModuleFileNameW(nullptr, buffer.data(), size);
+    if (len == 0) return {};
+    if (len < size) {
+      buffer.resize(len);
+      break;
+    }
+    size *= 2;
+  }
+  return std::filesystem::path(buffer).parent_path();
+#else
+  std::error_code ec;
+  std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+  if (ec) return {};
+  return exe.parent_path();
 #endif
 }
 
@@ -329,6 +363,11 @@ std::filesystem::path findBiosPath(const std::filesystem::path& psfPath) {
   if (!psfPath.empty()) {
     std::filesystem::path local = psfPath.parent_path() / "hebios.bin";
     if (std::filesystem::exists(local)) return local;
+  }
+  std::filesystem::path exeDir = getExecutableDir();
+  if (!exeDir.empty()) {
+    std::filesystem::path exeLocal = exeDir / "hebios.bin";
+    if (std::filesystem::exists(exeLocal)) return exeLocal;
   }
   std::filesystem::path cwd = std::filesystem::current_path() / "hebios.bin";
   if (std::filesystem::exists(cwd)) return cwd;

@@ -85,7 +85,8 @@ dist/radioify.exe --no-radio <file-or-folder>
 - Images (ASCII art preview): .jpg, .jpeg, .png, .bmp
 
 PSF2 playback needs `hebios.bin`. Set `RADIOIFY_PSF_BIOS` to the file path or
-place `hebios.bin` next to the PSF2 file (or in the current working directory).
+place `hebios.bin` next to the PSF2 file, in the executable directory, or in
+the current working directory.
 
 ## Options
 KSS options:
