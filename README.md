@@ -79,7 +79,10 @@ dist/radioify.exe --no-radio <file-or-folder>
 - Q or Ctrl+C: quit
 
 ## Supported files
-- Audio: .wav, .mp3, .flac, .kss, .nsf
+- Audio: .wav, .mp3, .flac, .kss, .nsf, .psf, .minipsf, .psf2, .minipsf2
 - Audio (media containers): .m4a, .webm, .mp4 (audio stream only)
 - Video (ASCII preview): .mp4, .webm (audio + video)
 - Images (ASCII art preview): .jpg, .jpeg, .png, .bmp
+
+PSF2 playback needs `hebios.bin`. Set `RADIOIFY_PSF_BIOS` to the file path or
+place `hebios.bin` next to the PSF2 file (or in the current working directory).

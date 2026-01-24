@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(radioify LANGUAGES CXX)
+project(radioify LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,6 +21,7 @@ add_executable(radioify
   gpu_shared.cpp
   gmeaudio.cpp
   kssaudio.cpp
+  psfaudio.cpp
   m4adecoder.cpp
   optionsbrowser.cpp
   tracklist.cpp
@@ -461,12 +462,69 @@ if (NOT FFMPEG_FOUND)
 endif()
 
 target_include_directories(radioify PRIVATE ${FFMPEG_INCLUDE_DIRS})
+target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
+find_package(ZLIB REQUIRED)
+add_library(sexypsf STATIC
+  ${CMAKE_SOURCE_DIR}/third_party/psx/PsxBios.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/PsxCounters.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/PsxDma.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/Spu.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/PsxHw.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/PsxMem.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/Misc.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/R3000A.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/PsxInterpreter.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/PsxHLE.c
+  ${CMAKE_SOURCE_DIR}/third_party/psx/spu/spu.c
+)
+target_include_directories(sexypsf PUBLIC ${CMAKE_SOURCE_DIR}/third_party/psx)
+if (WIN32)
+  target_compile_definitions(sexypsf PRIVATE PSS_STYLE=2)
+else()
+  target_compile_definitions(sexypsf PRIVATE PSS_STYLE=1)
+endif()
+target_compile_definitions(sexypsf PRIVATE SPSFVERSION="\"0.4.8\"")
+if (MSVC)
+  target_compile_definitions(sexypsf PRIVATE strcasecmp=_stricmp strncasecmp=_strnicmp)
+  target_compile_options(sexypsf PRIVATE /Zp1)
+endif()
+target_link_libraries(sexypsf PUBLIC ZLIB::ZLIB)
 include(FetchContent)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
+FetchContent_Declare(
+  psf2wav
+  GIT_REPOSITORY https://github.com/mitsuman/psf2wav.git
+  GIT_TAG e07e01a816ae74ba9c7eeaffcd6d9bf7fb294afc
+)
+FetchContent_GetProperties(psf2wav)
+if (NOT psf2wav_POPULATED)
+  FetchContent_Populate(psf2wav)
+endif()
+
+add_library(psfcore STATIC
+  ${psf2wav_SOURCE_DIR}/highly_experimental/psflib/psflib.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/psflib/psf2fs.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/bios.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/iop.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/ioptimer.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/psx.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/r3000.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/spu.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/spucore.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/vfs.c
+  ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/mkhebios.c
+)
+target_include_directories(psfcore PUBLIC
+  ${psf2wav_SOURCE_DIR}/highly_experimental
+)
+target_compile_definitions(psfcore PRIVATE EMU_COMPILE EMU_LITTLE_ENDIAN)
+target_link_libraries(psfcore PUBLIC ZLIB::ZLIB)
+target_link_libraries(radioify PRIVATE psfcore)
+target_link_libraries(radioify PRIVATE sexypsf)
 FetchContent_Declare(
   libkss
   GIT_REPOSITORY https://github.com/digital-sound-antiques/libkss.git

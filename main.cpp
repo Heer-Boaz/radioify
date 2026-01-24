@@ -30,6 +30,7 @@
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
+#include "psfaudio.h"
 #include "radio.h"
 #include "tracklist.h"
 #include "ui_helpers.h"
@@ -164,7 +165,9 @@ static bool isVideoExt(const std::filesystem::path& p) {
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4" || ext == ".kss" || ext == ".nsf";
+         ext == ".webm" || ext == ".mp4" || ext == ".kss" || ext == ".nsf" ||
+         ext == ".psf" || ext == ".minipsf" || ext == ".psf2" ||
+         ext == ".minipsf2";
 }
 
 static bool isMiniaudioExt(const std::filesystem::path& p) {
@@ -182,6 +185,12 @@ static bool isKssExt(const std::filesystem::path& p) {
   return ext == ".kss";
 }
 
+static bool isPsfExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+  return ext == ".psf" || ext == ".minipsf" || ext == ".psf2" ||
+         ext == ".minipsf2";
+}
+
 static bool isSupportedMediaExt(const std::filesystem::path& p) {
   return isSupportedAudioExt(p) || isSupportedImageExt(p);
 }
@@ -191,6 +200,21 @@ static bool isM4aExt(const std::filesystem::path& p) {
   return ext == ".m4a" || ext == ".mp4" || ext == ".webm";
 }
 
+static bool listTracksForFile(const std::filesystem::path& path,
+                              std::vector<TrackEntry>* tracks,
+                              std::string* error) {
+  if (isKssExt(path)) {
+    return kssListTracks(path, tracks, error);
+  }
+  if (isGmeExt(path)) {
+    return gmeListTracks(path, tracks, error);
+  }
+  if (isPsfExt(path)) {
+    return psfListTracks(path, tracks, error);
+  }
+  return false;
+}
+
 static void validateInputFile(const std::filesystem::path& p) {
   if (p.empty()) die("Missing input file path.");
   if (!std::filesystem::exists(p)) die("Input file not found: " + p.string());
@@ -198,7 +222,8 @@ static void validateInputFile(const std::filesystem::path& p) {
     die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
     die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf.");
+        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf, .psf, "
+        ".minipsf, .psf2, .minipsf2.");
   }
 }
 
@@ -614,21 +639,21 @@ int main(int argc, char** argv) {
         pendingVideo = inputPath;
         hasPendingVideo = true;
       } else {
-        if (isKssExt(inputPath) || isGmeExt(inputPath)) {
+        if (isKssExt(inputPath) || isGmeExt(inputPath) || isPsfExt(inputPath)) {
           std::filesystem::path trackPath =
               normalizeTrackBrowserPath(inputPath);
           std::vector<TrackEntry> tracks;
           std::string error;
-          bool listed = false;
-          if (isKssExt(inputPath)) {
-            listed = kssListTracks(trackPath, &tracks, &error);
+          bool listed = listTracksForFile(trackPath, &tracks, &error);
+          if (listed) {
+            gTrackBrowser.file = trackPath;
+            gTrackBrowser.tracks = tracks;
+            gTrackBrowser.active = tracks.size() > 1;
           } else {
-            listed = gmeListTracks(trackPath, &tracks, &error);
+            gTrackBrowser.active = false;
+            gTrackBrowser.tracks.clear();
           }
           if (listed && tracks.size() > 1) {
-            gTrackBrowser.active = true;
-            gTrackBrowser.file = trackPath;
-            gTrackBrowser.tracks = std::move(tracks);
             browser.dir = trackPath;
             browser.selected = 0;
             browser.scrollRow = 0;
@@ -768,20 +793,20 @@ int main(int argc, char** argv) {
           kProgressEnd, videoConfig);
       if (handled) return true;
     }
-    if (isKssExt(file) || isGmeExt(file)) {
+    if (isKssExt(file) || isGmeExt(file) || isPsfExt(file)) {
       std::filesystem::path trackPath = normalizeTrackBrowserPath(file);
       std::vector<TrackEntry> tracks;
       std::string error;
-      bool listed = false;
-      if (isKssExt(file)) {
-        listed = kssListTracks(trackPath, &tracks, &error);
+      bool listed = listTracksForFile(trackPath, &tracks, &error);
+      if (listed) {
+        gTrackBrowser.file = trackPath;
+        gTrackBrowser.tracks = tracks;
+        gTrackBrowser.active = tracks.size() > 1;
       } else {
-        listed = gmeListTracks(trackPath, &tracks, &error);
+        gTrackBrowser.active = false;
+        gTrackBrowser.tracks.clear();
       }
       if (listed && tracks.size() > 1) {
-        gTrackBrowser.active = true;
-        gTrackBrowser.file = trackPath;
-        gTrackBrowser.tracks = std::move(tracks);
         browser.dir = trackPath;
         browser.selected = 0;
         browser.scrollRow = 0;
@@ -945,7 +970,8 @@ int main(int argc, char** argv) {
       } else {
         showingLabel =
             "  Showing: folders + "
-            ".wav/.mp3/.flac/.m4a/.webm/.mp4/.kss/.nsf/.jpg/.jpeg/.png/.bmp";
+            ".wav/.mp3/.flac/.m4a/.webm/.mp4/.kss/.nsf/.psf/.minipsf/.psf2/"
+            ".minipsf2/.jpg/.jpeg/.png/.bmp";
       }
       screen.writeText(0, 4, fitLine(showingLabel, width), kStyleDim);
 
