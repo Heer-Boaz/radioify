@@ -29,6 +29,7 @@ class KssAudioDecoder {
   bool seekToFrame(uint64_t frame);
   bool getTotalFrames(uint64_t* outFrames) const;
   bool active() const { return kssplay_ != nullptr; }
+  bool readDeviceRegs(KSS_DEVICE device, std::vector<uint8_t>* out) const;
 
  private:
   KSS* kss_ = nullptr;
@@ -45,7 +46,7 @@ class KssAudioDecoder {
   int trackBase_ = 0;
   int trackCount_ = 0;
   int trackIndex_ = 0;
-  bool force50Hz_ = false;
+  KssPlaybackOptions options_{};
 };
 
 bool kssListTracks(const std::filesystem::path& path,

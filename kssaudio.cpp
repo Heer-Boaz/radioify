@@ -70,13 +70,41 @@ uint32_t toKssSccType(KssSccType type) {
   }
 }
 
+uint32_t toKssPsgType(KssPsgType type) {
+  switch (type) {
+    case KssPsgType::Ay:
+      return VM_PSG_AY;
+    case KssPsgType::Ym:
+      return VM_PSG_YM;
+    case KssPsgType::Auto:
+    default:
+      return VM_PSG_AUTO;
+  }
+}
+
+uint32_t toKssOpllType(KssOpllType type) {
+  switch (type) {
+    case KssOpllType::Vrc7:
+      return VM_OPLL_VRC7;
+    case KssOpllType::Ymf281b:
+      return VM_OPLL_281B;
+    case KssOpllType::Ym2413:
+    default:
+      return VM_OPLL_2413;
+  }
+}
+
 void applyOptions(KSSPLAY* kssplay, const KssPlaybackOptions& options) {
   if (!kssplay) return;
   kssplay->vsync_freq = options.force50Hz ? 50.0 : 0.0;
   kssplay->opll_stereo = options.opllStereo ? 1 : 0;
 
+  KSSPLAY_set_device_type(kssplay, KSS_DEVICE_PSG,
+                          toKssPsgType(options.psgType));
   KSSPLAY_set_device_type(kssplay, KSS_DEVICE_SCC,
                           toKssSccType(options.sccType));
+  KSSPLAY_set_device_type(kssplay, KSS_DEVICE_OPLL,
+                          toKssOpllType(options.opllType));
   if (options.psgQuality != KssQuality::Auto) {
     KSSPLAY_set_device_quality(kssplay, KSS_DEVICE_PSG,
                                toKssQuality(options.psgQuality));
@@ -85,9 +113,74 @@ void applyOptions(KSSPLAY* kssplay, const KssPlaybackOptions& options) {
     KSSPLAY_set_device_quality(kssplay, KSS_DEVICE_SCC,
                                toKssQuality(options.sccQuality));
   }
-  KSSPLAY_set_device_mute(kssplay, KSS_DEVICE_PSG, options.mutePsg ? 1u : 0u);
-  KSSPLAY_set_device_mute(kssplay, KSS_DEVICE_SCC, options.muteScc ? 1u : 0u);
-  KSSPLAY_set_device_mute(kssplay, KSS_DEVICE_OPLL, options.muteOpll ? 1u : 0u);
+
+  uint32_t mutePsg = options.mutePsg ? 1u : 0u;
+  uint32_t muteScc = options.muteScc ? 1u : 0u;
+  uint32_t muteOpll = options.muteOpll ? 1u : 0u;
+  uint32_t maskPsg = 0u;
+  uint32_t maskScc = 0u;
+  uint32_t maskOpll = 0u;
+
+  bool previewActive = false;
+  if (options.instrumentDevice != KssInstrumentDevice::None &&
+      options.instrumentChannel >= 0) {
+    constexpr uint32_t kPsgMaskAll =
+        PSG_MASK_CH(0) | PSG_MASK_CH(1) | PSG_MASK_CH(2);
+    constexpr uint32_t kSccMaskAll =
+        SCC_MASK_CH(0) | SCC_MASK_CH(1) | SCC_MASK_CH(2) | SCC_MASK_CH(3) |
+        SCC_MASK_CH(4);
+    constexpr uint32_t kOpllMaskAll =
+        OPLL_MASK_CH(0) | OPLL_MASK_CH(1) | OPLL_MASK_CH(2) | OPLL_MASK_CH(3) |
+        OPLL_MASK_CH(4) | OPLL_MASK_CH(5) | OPLL_MASK_CH(6) | OPLL_MASK_CH(7) |
+        OPLL_MASK_CH(8);
+
+    uint32_t previewMutePsg = 1u;
+    uint32_t previewMuteScc = 1u;
+    uint32_t previewMuteOpll = 1u;
+
+    switch (options.instrumentDevice) {
+      case KssInstrumentDevice::Psg:
+        if (options.instrumentChannel < 3) {
+          previewActive = true;
+          previewMutePsg = 0u;
+          maskPsg =
+              kPsgMaskAll ^ PSG_MASK_CH(options.instrumentChannel);
+        }
+        break;
+      case KssInstrumentDevice::Scc:
+        if (options.instrumentChannel < 5) {
+          previewActive = true;
+          previewMuteScc = 0u;
+          maskScc =
+              kSccMaskAll ^ SCC_MASK_CH(options.instrumentChannel);
+        }
+        break;
+      case KssInstrumentDevice::Opll:
+        if (options.instrumentChannel < 9) {
+          previewActive = true;
+          previewMuteOpll = 0u;
+          maskOpll =
+              kOpllMaskAll ^ OPLL_MASK_CH(options.instrumentChannel);
+        }
+        break;
+      case KssInstrumentDevice::None:
+      default:
+        break;
+    }
+
+    if (previewActive) {
+      mutePsg = previewMutePsg;
+      muteScc = previewMuteScc;
+      muteOpll = previewMuteOpll;
+    }
+  }
+
+  KSSPLAY_set_device_mute(kssplay, KSS_DEVICE_PSG, mutePsg);
+  KSSPLAY_set_device_mute(kssplay, KSS_DEVICE_SCC, muteScc);
+  KSSPLAY_set_device_mute(kssplay, KSS_DEVICE_OPLL, muteOpll);
+  KSSPLAY_set_channel_mask(kssplay, KSS_DEVICE_PSG, maskPsg);
+  KSSPLAY_set_channel_mask(kssplay, KSS_DEVICE_SCC, maskScc);
+  KSSPLAY_set_channel_mask(kssplay, KSS_DEVICE_OPLL, maskOpll);
 }
 }  // namespace
 
@@ -152,9 +245,10 @@ bool KssAudioDecoder::init(const std::filesystem::path& path,
     return false;
   }
 
-  force50Hz_ = options.force50Hz;
-  applyOptions(kssplay, options);
+  options_ = options;
+  kssplay->vsync_freq = options.force50Hz ? 50.0 : 0.0;
   KSSPLAY_reset(kssplay, static_cast<uint32_t>(song), 0);
+  applyOptions(kssplay, options);
 
   const KSSINFO* info = findTrackInfo(kss, song);
   int lengthMs = (info && info->time_in_ms > 0) ? info->time_in_ms
@@ -207,7 +301,7 @@ void KssAudioDecoder::uninit() {
   trackBase_ = 0;
   trackCount_ = 0;
   trackIndex_ = 0;
-  force50Hz_ = false;
+  options_ = {};
 }
 
 bool KssAudioDecoder::readFrames(float* out, uint32_t frameCount,
@@ -283,8 +377,9 @@ bool KssAudioDecoder::seekToFrame(uint64_t frame) {
   }
 
   int song = trackBase_ + trackIndex_;
-  kssplay_->vsync_freq = force50Hz_ ? 50.0 : 0.0;
+  kssplay_->vsync_freq = options_.force50Hz ? 50.0 : 0.0;
   KSSPLAY_reset(kssplay_, static_cast<uint32_t>(song), 0);
+  applyOptions(kssplay_, options_);
   framePos_ = 0;
   atEnd_ = false;
   fadeArmed_ = false;
@@ -308,6 +403,17 @@ bool KssAudioDecoder::seekToFrame(uint64_t frame) {
 bool KssAudioDecoder::getTotalFrames(uint64_t* outFrames) const {
   if (!outFrames || !kssplay_) return false;
   *outFrames = totalFrames_;
+  return true;
+}
+
+bool KssAudioDecoder::readDeviceRegs(KSS_DEVICE device,
+                                     std::vector<uint8_t>* out) const {
+  if (!out) return false;
+  out->assign(256, 0);
+  if (!kssplay_) return false;
+  int written = KSSPLAY_read_device_regs(kssplay_, device, out->data());
+  if (written <= 0) return false;
+  out->resize(static_cast<size_t>(written));
   return true;
 }
 

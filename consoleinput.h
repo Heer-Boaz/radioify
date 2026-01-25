@@ -64,6 +64,11 @@ struct FileEntry {
   bool isDir = false;
   int trackIndex = -1;
   int optionId = -1;
+  int instrumentDevice = -1;
+  int instrumentChannel = -1;
+  int auditionDevice = -1;
+  int auditionChannel = -1;
+  int auditionIndex = -1;
 };
 
 struct BrowserState {

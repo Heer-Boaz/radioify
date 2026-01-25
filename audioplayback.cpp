@@ -15,10 +15,12 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 extern "C" {
 #include <libavutil/avutil.h>
+#include <emu2212/emu2212.h>
 }
 
 #include "clock.h"
@@ -46,6 +48,8 @@ extern "C" {
 #include "timing_log.h"
 
 namespace {
+constexpr uint32_t kMsxClockHz = 3579545u;
+constexpr float kAuditionGain = 0.28f;
 std::string toLower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
     return static_cast<char>(std::tolower(c));
@@ -276,6 +280,173 @@ uint64_t rescaleFrames(uint64_t frames, uint32_t inRate, uint32_t outRate) {
   return static_cast<uint64_t>(std::llround(scaled));
 }
 
+enum class AuditionKind {
+  Psg,
+  SccWave,
+};
+
+struct AuditionTone {
+  AuditionKind kind = AuditionKind::SccWave;
+  PSG* psg = nullptr;
+  SCC* scc = nullptr;
+  float gain = 0.0f;
+};
+
+float clampHz(float hz, uint32_t sampleRate) {
+  float maxHz = static_cast<float>(sampleRate) * 0.45f;
+  if (!std::isfinite(hz) || hz <= 0.0f) return 440.0f;
+  if (hz < 20.0f) return 20.0f;
+  if (hz > maxHz) return maxHz;
+  return hz;
+}
+
+uint32_t fnv1a32(const uint8_t* data, size_t size) {
+  uint32_t hash = 2166136261u;
+  for (size_t i = 0; i < size; ++i) {
+    hash ^= data[i];
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+bool buildPsgAuditionTone(const KssInstrumentProfile& profile,
+                          uint32_t sampleRate, KssPsgType psgType,
+                          AuditionTone* out) {
+  if (!out || profile.device != KssInstrumentDevice::Psg) return false;
+  if (profile.data.size() < 5) return false;
+
+  const uint8_t mix = profile.data[0];
+  uint8_t volReg = profile.data[1];
+  const uint8_t envLo = profile.data[2];
+  const uint8_t envHi = profile.data[3];
+  const uint8_t envShape = profile.data[4];
+  uint8_t noisePeriod = 16;
+  if (profile.data.size() >= 6) {
+    noisePeriod = static_cast<uint8_t>(profile.data[5] & 0x1f);
+    if (noisePeriod == 0) noisePeriod = 1;
+  }
+  bool useEnv = (volReg & 0x10) != 0;
+  uint8_t volume = volReg & 0x0f;
+  if (useEnv && envLo == 0 && envHi == 0) {
+    useEnv = false;
+  }
+  if (!useEnv) {
+    if (volume == 0) volume = 0x0f;
+    volReg = volume;
+  }
+
+  PSG* psg = PSG_new(kMsxClockHz, sampleRate);
+  if (!psg) return false;
+  PSG_reset(psg);
+  PSG_setClockDivider(psg, 1);
+  switch (psgType) {
+    case KssPsgType::Ay:
+      PSG_setVolumeMode(psg, 2);
+      break;
+    case KssPsgType::Ym:
+      PSG_setVolumeMode(psg, 1);
+      break;
+    case KssPsgType::Auto:
+    default:
+      PSG_setVolumeMode(psg, 0);
+      break;
+  }
+
+  float freqHz = clampHz(440.0f, sampleRate);
+  uint16_t period =
+      static_cast<uint16_t>(std::llround(static_cast<double>(kMsxClockHz) /
+                                         (16.0 * freqHz)));
+  if (period == 0) period = 1;
+
+  const int channel = 0;
+  PSG_writeReg(psg, 0, static_cast<uint8_t>(period & 0xff));
+  PSG_writeReg(psg, 1, static_cast<uint8_t>((period >> 8) & 0x0f));
+  PSG_writeReg(psg, 6, noisePeriod);
+
+  uint8_t mixer = 0x3f;
+  if ((mix & 0x01) == 0) mixer &= ~(1 << channel);
+  if ((mix & 0x02) == 0) mixer &= ~(1 << (channel + 3));
+  PSG_writeReg(psg, 7, mixer);
+
+  PSG_writeReg(psg, 8, useEnv ? static_cast<uint8_t>(0x10 | volume) : volReg);
+  PSG_writeReg(psg, 9, 0);
+  PSG_writeReg(psg, 10, 0);
+  if (useEnv) {
+    PSG_writeReg(psg, 11, envLo);
+    PSG_writeReg(psg, 12, envHi);
+    PSG_writeReg(psg, 13, envShape);
+  } else {
+    PSG_writeReg(psg, 11, 0);
+    PSG_writeReg(psg, 12, 0);
+    PSG_writeReg(psg, 13, 0);
+  }
+
+  out->kind = AuditionKind::Psg;
+  out->psg = psg;
+  out->scc = nullptr;
+  out->gain = kAuditionGain;
+  return true;
+}
+
+bool buildSccAuditionTone(const KssInstrumentProfile& profile,
+                          uint32_t sampleRate, KssSccType sccType,
+                          KssQuality sccQuality, AuditionTone* out) {
+  if (!out || profile.device != KssInstrumentDevice::Scc) return false;
+  if (profile.data.size() < 32) return false;
+
+  SCC* scc = SCC_new(kMsxClockHz, sampleRate);
+  if (!scc) return false;
+  SCC_reset(scc);
+  SCC_set_rate(scc, sampleRate);
+  SCC_set_quality(scc, sccQuality == KssQuality::High ? 1u : 0u);
+  switch (sccType) {
+    case KssSccType::Standard:
+      SCC_set_type(scc, SCC_STANDARD);
+      break;
+    case KssSccType::Enhanced:
+      SCC_set_type(scc, SCC_ENHANCED);
+      break;
+    case KssSccType::Auto:
+    default:
+      SCC_set_type(scc, SCC_ENHANCED);
+      break;
+  }
+
+  for (size_t i = 0; i < 32; ++i) {
+    SCC_writeReg(scc, static_cast<uint32_t>(i), profile.data[i]);
+  }
+
+  float freqHz = clampHz(440.0f, sampleRate);
+  double raw = static_cast<double>(kMsxClockHz) / (32.0 * freqHz) - 1.0;
+  uint32_t freqReg = raw <= 0.0 ? 0 : static_cast<uint32_t>(std::llround(raw));
+  freqReg = std::min<uint32_t>(freqReg, 0xFFFu);
+  if (freqReg < 9) freqReg = 9;
+  SCC_writeReg(scc, 0xC0, freqReg & 0xFF);
+  SCC_writeReg(scc, 0xC1, (freqReg >> 8) & 0x0F);
+
+  uint8_t volume = profile.volume & 0x0F;
+  if (volume == 0) volume = 0x0F;
+  SCC_writeReg(scc, 0xD0, volume);
+  SCC_writeReg(scc, 0xE1, 0x01);
+
+  out->kind = AuditionKind::SccWave;
+  out->psg = nullptr;
+  out->scc = scc;
+  out->gain = kAuditionGain;
+  return true;
+}
+
+float renderAuditionSample(AuditionTone& tone) {
+  if (tone.kind == AuditionKind::Psg) {
+    if (!tone.psg) return 0.0f;
+    int16_t sample = PSG_calc(tone.psg);
+    return (static_cast<float>(sample) / 32768.0f) * tone.gain;
+  }
+  if (!tone.scc) return 0.0f;
+  int16_t sample = SCC_calc(tone.scc);
+  return (static_cast<float>(sample) / 32768.0f) * tone.gain;
+}
+
 struct AudioMetadata {
   uint64_t wpos;      // The write position (wpos) when this packet was added
   int64_t ptsUs;      // The PTS of the first sample in this packet
@@ -348,6 +519,19 @@ struct AudioState {
   bool dry = false;
 };
 
+struct AuditionState {
+  std::atomic<bool> active{false};
+  std::atomic<bool> stop{false};
+  std::thread worker;
+  KssInstrumentDevice device = KssInstrumentDevice::None;
+  uint32_t hash = 0;
+  std::filesystem::path resumeFile;
+  int resumeTrackIndex = 0;
+  uint64_t resumeFrame = 0;
+  bool resumePaused = false;
+  bool resumeValid = false;
+};
+
 struct AudioPlaybackState {
   AudioState state{};
   Radio1938 radio1938Template{};
@@ -368,9 +552,76 @@ struct AudioPlaybackState {
   int psfTrackIndex = 0;
   KssPlaybackOptions kssOptions{};
   NsfPlaybackOptions nsfOptions{};
+  AuditionState audition{};
 };
 
 AudioPlaybackState gAudio;
+
+void stopAuditionWorker() {
+  if (!gAudio.audition.active.load()) return;
+  gAudio.audition.stop.store(true);
+  if (gAudio.audition.worker.joinable()) {
+    gAudio.audition.worker.join();
+  }
+  gAudio.audition.stop.store(false);
+  gAudio.audition.active.store(false);
+  gAudio.audition.device = KssInstrumentDevice::None;
+  gAudio.audition.hash = 0;
+}
+
+void startAuditionWorker(AuditionTone tone) {
+  gAudio.audition.stop.store(false);
+  gAudio.audition.active.store(true);
+  gAudio.audition.worker = std::thread([tone = std::move(tone)]() mutable {
+    const uint32_t sampleRate = gAudio.sampleRate;
+    const uint32_t channels = gAudio.channels;
+    constexpr uint64_t kChunkFrames = 512;
+    std::vector<float> buffer;
+    buffer.resize(static_cast<size_t>(kChunkFrames) * channels);
+    uint64_t framePos = 0;
+    while (!gAudio.audition.stop.load()) {
+      if (!gAudio.state.externalStream.load() ||
+          !gAudio.state.streamQueueEnabled.load()) {
+        break;
+      }
+      for (uint64_t i = 0; i < kChunkFrames; ++i) {
+        float sample = renderAuditionSample(tone);
+        for (uint32_t ch = 0; ch < channels; ++ch) {
+          buffer[static_cast<size_t>(i * channels + ch)] = sample;
+        }
+      }
+      uint64_t remaining = kChunkFrames;
+      uint64_t offset = 0;
+      while (remaining > 0 && !gAudio.audition.stop.load()) {
+        int64_t ptsUs = static_cast<int64_t>(
+            (framePos + offset) * 1000000ULL / sampleRate);
+        uint64_t written = 0;
+        if (!audioStreamWriteSamples(
+                buffer.data() + static_cast<size_t>(offset) * channels,
+                remaining, ptsUs, 0, false, &written)) {
+          remaining = 0;
+          break;
+        }
+        if (written == 0) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;
+        }
+        remaining -= written;
+        offset += written;
+      }
+      framePos += offset;
+    }
+    if (tone.kind == AuditionKind::Psg && tone.psg) {
+      PSG_delete(tone.psg);
+      tone.psg = nullptr;
+    }
+    if (tone.kind == AuditionKind::SccWave && tone.scc) {
+      SCC_delete(tone.scc);
+      tone.scc = nullptr;
+    }
+    gAudio.audition.active.store(false);
+  });
+}
 
 void dataCallback(ma_device* device, void* output, const void*,
                   ma_uint32 frameCount) {
@@ -981,6 +1232,10 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
     return false;
   }
   validateInputFile(file);
+  if (gAudio.audition.active.load()) {
+    stopAuditionWorker();
+    gAudio.audition.resumeValid = false;
+  }
   gAudio.gmeWarning.clear();
   const bool useM4a = isM4aExt(file);
   const bool useMiniaudio = isMiniaudioExt(file);
@@ -1299,6 +1554,10 @@ bool ensureChannels(uint32_t newChannels) {
 }
 
 void stopPlayback() {
+  if (gAudio.audition.active.load()) {
+    stopAuditionWorker();
+    gAudio.audition.resumeValid = false;
+  }
   if (gAudio.deviceReady) {
     ma_device_stop(&gAudio.state.device);
   }
@@ -2125,6 +2384,334 @@ KssPlaybackOptions audioGetKssOptionState() {
   return gAudio.kssOptions;
 }
 
+static bool toKssDevice(KssInstrumentDevice device, KSS_DEVICE* out) {
+  if (!out) return false;
+  switch (device) {
+    case KssInstrumentDevice::Psg:
+      *out = KSS_DEVICE_PSG;
+      return true;
+    case KssInstrumentDevice::Scc:
+      *out = KSS_DEVICE_SCC;
+      return true;
+    case KssInstrumentDevice::Opll:
+      *out = KSS_DEVICE_OPLL;
+      return true;
+    case KssInstrumentDevice::None:
+    default:
+      break;
+  }
+  return false;
+}
+
+bool audioGetKssInstrumentRegs(KssInstrumentDevice device,
+                               std::vector<uint8_t>* out) {
+  if (!out) return false;
+  if (!gAudio.state.usingKss.load()) return false;
+  if (!gAudio.state.kss.active()) return false;
+  KSS_DEVICE kssDevice{};
+  if (!toKssDevice(device, &kssDevice)) return false;
+  return gAudio.state.kss.readDeviceRegs(kssDevice, out);
+}
+
+bool audioSetKssInstrumentPreview(KssInstrumentDevice device, int channel) {
+  bool changed = false;
+  int maxChannels = 0;
+  switch (device) {
+    case KssInstrumentDevice::Psg:
+      maxChannels = 3;
+      break;
+    case KssInstrumentDevice::Scc:
+      maxChannels = 5;
+      break;
+    case KssInstrumentDevice::Opll:
+      maxChannels = 9;
+      break;
+    case KssInstrumentDevice::None:
+    default:
+      break;
+  }
+
+  if (device == KssInstrumentDevice::None || channel < 0 ||
+      (maxChannels > 0 && channel >= maxChannels)) {
+    if (gAudio.kssOptions.instrumentDevice != KssInstrumentDevice::None ||
+        gAudio.kssOptions.instrumentChannel != -1) {
+      gAudio.kssOptions.instrumentDevice = KssInstrumentDevice::None;
+      gAudio.kssOptions.instrumentChannel = -1;
+      changed = true;
+    }
+  } else if (gAudio.kssOptions.instrumentDevice != device ||
+             gAudio.kssOptions.instrumentChannel != channel) {
+    gAudio.kssOptions.instrumentDevice = device;
+    gAudio.kssOptions.instrumentChannel = channel;
+    changed = true;
+  }
+
+  if (changed) {
+    reloadKssWithOptions();
+  }
+  return changed;
+}
+
+bool audioGetKssInstrumentAuditionState(KssInstrumentDevice* device,
+                                        uint32_t* hash) {
+  if (device) *device = gAudio.audition.device;
+  if (hash) *hash = gAudio.audition.hash;
+  return gAudio.audition.active.load();
+}
+
+bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile) {
+  if (!gAudio.enableAudio) return false;
+  if (profile.device != KssInstrumentDevice::Psg &&
+      profile.device != KssInstrumentDevice::Scc) {
+    return false;
+  }
+
+  AuditionTone tone;
+  bool ok = false;
+  if (profile.device == KssInstrumentDevice::Psg) {
+    ok = buildPsgAuditionTone(profile, gAudio.sampleRate,
+                              gAudio.kssOptions.psgType, &tone);
+  } else if (profile.device == KssInstrumentDevice::Scc) {
+    ok = buildSccAuditionTone(profile, gAudio.sampleRate,
+                              gAudio.kssOptions.sccType,
+                              gAudio.kssOptions.sccQuality, &tone);
+  }
+  if (!ok) return false;
+
+  if (gAudio.audition.active.load()) {
+    stopAuditionWorker();
+    if (gAudio.state.externalStream.load()) {
+      audioStreamReset(0);
+    }
+  } else {
+    gAudio.audition.resumeValid =
+        gAudio.decoderReady && !gAudio.nowPlaying.empty() &&
+        !gAudio.state.externalStream.load();
+    if (gAudio.audition.resumeValid) {
+      gAudio.audition.resumeFile = gAudio.nowPlaying;
+      gAudio.audition.resumeFrame = gAudio.state.framesPlayed.load();
+      gAudio.audition.resumePaused = gAudio.state.paused.load();
+      if (gAudio.state.usingKss.load()) {
+        gAudio.audition.resumeTrackIndex = gAudio.kssTrackIndex;
+      } else if (gAudio.state.usingPsf.load()) {
+        gAudio.audition.resumeTrackIndex = gAudio.psfTrackIndex;
+      } else {
+        gAudio.audition.resumeTrackIndex = gAudio.gmeTrackIndex;
+      }
+    }
+    if (!audioStartStream(0)) {
+      if (gAudio.audition.resumeValid) {
+        loadFileAt(gAudio.audition.resumeFile, gAudio.audition.resumeFrame,
+                   gAudio.audition.resumeTrackIndex);
+        if (gAudio.audition.resumePaused) {
+          gAudio.state.paused.store(true);
+        }
+      }
+      gAudio.audition.resumeValid = false;
+      return false;
+    }
+  }
+
+  gAudio.audition.device = profile.device;
+  gAudio.audition.hash = profile.hash;
+  startAuditionWorker(std::move(tone));
+  return true;
+}
+
+bool audioStopKssInstrumentAudition() {
+  if (!gAudio.audition.active.load()) return false;
+  stopAuditionWorker();
+  gAudio.audition.device = KssInstrumentDevice::None;
+  gAudio.audition.hash = 0;
+
+  if (gAudio.audition.resumeValid) {
+    bool resumed = loadFileAt(gAudio.audition.resumeFile,
+                              gAudio.audition.resumeFrame,
+                              gAudio.audition.resumeTrackIndex);
+    if (resumed && gAudio.audition.resumePaused) {
+      gAudio.state.paused.store(true);
+    }
+    gAudio.audition.resumeValid = false;
+    return resumed;
+  }
+  audioStopStream();
+  gAudio.audition.resumeValid = false;
+  return true;
+}
+
+bool audioScanKssInstruments(const std::filesystem::path& file, int trackIndex,
+                             std::vector<KssInstrumentProfile>* out,
+                             std::string* error) {
+  if (!out) return false;
+  out->clear();
+  if (!isKssExt(file)) return false;
+
+  KssPlaybackOptions options = gAudio.kssOptions;
+  options.instrumentDevice = KssInstrumentDevice::None;
+  options.instrumentChannel = -1;
+
+  KssAudioDecoder decoder;
+  if (!decoder.init(file, 1, gAudio.sampleRate, error, trackIndex, options)) {
+    return false;
+  }
+
+  uint64_t totalFrames = 0;
+  decoder.getTotalFrames(&totalFrames);
+  if (totalFrames == 0) {
+    totalFrames = static_cast<uint64_t>(gAudio.sampleRate) * 150;
+  }
+
+  std::unordered_map<std::string, size_t> seen;
+
+  auto addPsgInstrument = [&](const uint8_t* key, size_t keySize,
+                              const uint8_t* data, size_t dataSize,
+                              uint8_t volume, bool envUsed) {
+    std::string mapKey;
+    mapKey.reserve(keySize + 1);
+    mapKey.push_back('P');
+    mapKey.append(reinterpret_cast<const char*>(key), keySize);
+    auto it = seen.find(mapKey);
+    if (it != seen.end()) {
+      KssInstrumentProfile& existing = (*out)[it->second];
+      if (dataSize >= 6 && existing.data.size() >= 6) {
+        bool existingEnv = (existing.data[1] & 0x10) != 0;
+        if (envUsed && existingEnv) {
+          uint16_t envPeriod =
+              static_cast<uint16_t>(data[2]) |
+              (static_cast<uint16_t>(data[3]) << 8);
+          uint16_t existingPeriod =
+              static_cast<uint16_t>(existing.data[2]) |
+              (static_cast<uint16_t>(existing.data[3]) << 8);
+          if (envPeriod != 0 && existingPeriod == 0) {
+            existing.data[2] = data[2];
+            existing.data[3] = data[3];
+          }
+        }
+        if (!envUsed && !existingEnv) {
+          uint8_t existingVolume = existing.data[1] & 0x0f;
+          if ((volume & 0x0f) > existingVolume) {
+            existing.data[1] = static_cast<uint8_t>(volume & 0x0f);
+          }
+        }
+        bool noiseEnabled = (data[0] & 0x2) == 0;
+        if (noiseEnabled && existing.data[5] == 0 && data[5] != 0) {
+          existing.data[5] = data[5];
+        }
+      }
+      if (volume > existing.volume) existing.volume = volume;
+      return;
+    }
+
+    KssInstrumentProfile profile;
+    profile.device = KssInstrumentDevice::Psg;
+    profile.data.assign(data, data + dataSize);
+    profile.hash = fnv1a32(
+        reinterpret_cast<const uint8_t*>(mapKey.data()), mapKey.size());
+    profile.volume = volume;
+    seen.emplace(std::move(mapKey), out->size());
+    out->push_back(std::move(profile));
+  };
+
+  auto addSccInstrument = [&](const uint8_t* wave, size_t waveSize,
+                              uint8_t volume) {
+    std::string mapKey;
+    mapKey.reserve(waveSize + 1);
+    mapKey.push_back('S');
+    mapKey.append(reinterpret_cast<const char*>(wave), waveSize);
+    auto it = seen.find(mapKey);
+    if (it != seen.end()) {
+      KssInstrumentProfile& existing = (*out)[it->second];
+      if (volume > existing.volume) existing.volume = volume;
+      return;
+    }
+
+    KssInstrumentProfile profile;
+    profile.device = KssInstrumentDevice::Scc;
+    profile.data.assign(wave, wave + waveSize);
+    profile.hash = fnv1a32(profile.data.data(), profile.data.size());
+    profile.volume = volume;
+    seen.emplace(std::move(mapKey), out->size());
+    out->push_back(std::move(profile));
+  };
+
+  auto scanRegs = [&]() {
+    std::vector<uint8_t> psgRegs;
+    if (decoder.readDeviceRegs(KSS_DEVICE_PSG, &psgRegs) &&
+        psgRegs.size() >= 14) {
+      uint8_t mixer = psgRegs[7];
+      for (int ch = 0; ch < 3; ++ch) {
+        uint8_t toneDisable = (mixer >> ch) & 0x1;
+        uint8_t noiseDisable = (mixer >> (ch + 3)) & 0x1;
+        bool active = (toneDisable == 0) || (noiseDisable == 0);
+        uint8_t volReg = psgRegs[static_cast<size_t>(8 + ch)];
+        bool env = (volReg & 0x10) != 0;
+        if (env && psgRegs[11] == 0 && psgRegs[12] == 0) {
+          env = false;
+        }
+        if (!active) continue;
+        if ((volReg & 0x0f) == 0 && !env) continue;
+
+        uint8_t mixKey = static_cast<uint8_t>(
+            (toneDisable ? 1 : 0) | (noiseDisable ? 2 : 0));
+        uint8_t envShape = static_cast<uint8_t>(psgRegs[13] & 0x0f);
+        uint8_t envKey =
+            static_cast<uint8_t>((env ? 0x10 : 0x00) | (env ? envShape : 0));
+        uint8_t noiseBucket = 0xFF;
+        if (noiseDisable == 0) {
+          noiseBucket = static_cast<uint8_t>(
+              (psgRegs[6] & 0x1f) / 4);
+        }
+        uint8_t key[3] = {mixKey, envKey, noiseBucket};
+        uint8_t data[6] = {
+            mixKey,
+            static_cast<uint8_t>((env ? 0x10 : 0x00) | (volReg & 0x0f)),
+            psgRegs[11],
+            psgRegs[12],
+            envShape,
+            static_cast<uint8_t>(psgRegs[6] & 0x1f),
+        };
+        addPsgInstrument(key, sizeof(key), data, sizeof(data),
+                         static_cast<uint8_t>(volReg & 0x0f), env);
+      }
+    }
+
+    std::vector<uint8_t> sccRegs;
+    if (decoder.readDeviceRegs(KSS_DEVICE_SCC, &sccRegs) &&
+        sccRegs.size() >= 0xE0) {
+      for (int ch = 0; ch < 5; ++ch) {
+        const uint8_t* wave = sccRegs.data() + ch * 32;
+        bool allZero = true;
+        for (int i = 0; i < 32; ++i) {
+          if (wave[i] != 0) {
+            allZero = false;
+            break;
+          }
+        }
+        if (allZero) continue;
+        uint8_t volume =
+            sccRegs[0xD0 + static_cast<size_t>(ch)] & 0x0f;
+        addSccInstrument(wave, 32, volume);
+      }
+    }
+  };
+
+  scanRegs();
+  const uint32_t chunkFrames = 2048;
+  std::vector<float> buffer(chunkFrames);
+  uint64_t processed = 0;
+  while (processed < totalFrames) {
+    uint32_t toRead = static_cast<uint32_t>(
+        std::min<uint64_t>(chunkFrames, totalFrames - processed));
+    uint64_t read = 0;
+    if (!decoder.readFrames(buffer.data(), toRead, &read) || read == 0) {
+      break;
+    }
+    processed += read;
+    scanRegs();
+  }
+  return true;
+}
+
 bool audioAdjustKssOption(KssOptionId id, int direction) {
   if (direction == 0) return false;
   bool changed = false;
@@ -2139,6 +2726,24 @@ bool audioAdjustKssOption(KssOptionId id, int direction) {
       if (next < 0) next = 2;
       if (next > 2) next = 0;
       gAudio.kssOptions.sccType = static_cast<KssSccType>(next);
+      changed = true;
+      break;
+    }
+    case KssOptionId::PsgType: {
+      int next = static_cast<int>(gAudio.kssOptions.psgType) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 2;
+      if (next > 2) next = 0;
+      gAudio.kssOptions.psgType = static_cast<KssPsgType>(next);
+      changed = true;
+      break;
+    }
+    case KssOptionId::OpllType: {
+      int next = static_cast<int>(gAudio.kssOptions.opllType) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 2;
+      if (next > 2) next = 0;
+      gAudio.kssOptions.opllType = static_cast<KssOpllType>(next);
       changed = true;
       break;
     }

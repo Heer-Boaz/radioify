@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "kssoptions.h"
 #include "nsfoptions.h"
@@ -31,6 +32,13 @@ struct AudioPlaybackConfig {
   bool dry = false;
   int bwHz = 5500;
   double noise = 0.012;
+};
+
+struct KssInstrumentProfile {
+  KssInstrumentDevice device = KssInstrumentDevice::None;
+  uint32_t hash = 0;
+  std::vector<uint8_t> data;
+  uint8_t volume = 0;
 };
 
 void audioInit(const AudioPlaybackConfig& config);
@@ -103,5 +111,15 @@ std::string audioGetWarning();
 bool audioIs50HzEnabled();
 KssPlaybackOptions audioGetKssOptionState();
 bool audioAdjustKssOption(KssOptionId id, int direction = 1);
+bool audioGetKssInstrumentRegs(KssInstrumentDevice device,
+                               std::vector<uint8_t>* out);
+bool audioSetKssInstrumentPreview(KssInstrumentDevice device, int channel);
+bool audioGetKssInstrumentAuditionState(KssInstrumentDevice* device,
+                                        uint32_t* hash);
+bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile);
+bool audioStopKssInstrumentAudition();
+bool audioScanKssInstruments(const std::filesystem::path& file, int trackIndex,
+                             std::vector<KssInstrumentProfile>* out,
+                             std::string* error);
 NsfPlaybackOptions audioGetNsfOptionState();
 bool audioAdjustNsfOption(NsfOptionId id, int direction = 1);

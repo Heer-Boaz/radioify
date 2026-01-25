@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "consolescreen.h"
+#include "optionsbrowser.h"
 
 void ConsoleInput::init() {
   handle_ = GetStdHandle(STD_INPUT_HANDLE);
@@ -328,6 +329,16 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
     if (key.vk == VK_BACK) {
+      if (optionsBrowserIsActive(browser)) {
+        if (optionsBrowserNavigateUp(browser)) {
+          if (callbacks.onRefreshBrowser) {
+            callbacks.onRefreshBrowser(browser, "");
+          }
+          breadcrumbHover = -1;
+          dirty = true;
+        }
+        return;
+      }
       if (browser.dir.has_parent_path()) {
         browser.dir = browser.dir.parent_path();
         browser.selected = 0;
