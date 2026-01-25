@@ -34,6 +34,7 @@ class GmeAudioDecoder {
   uint32_t channels_ = 0;
   uint32_t sampleRate_ = 0;
   uint64_t totalFrames_ = 0;
+  int baseLengthMs_ = 0;
   uint64_t framePos_ = 0;
   bool atEnd_ = false;
   bool isNsf_ = false;

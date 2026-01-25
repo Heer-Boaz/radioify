@@ -20,6 +20,7 @@ add_executable(radioify
   ffmpegaudio.cpp
   gpu_shared.cpp
   gmeaudio.cpp
+  vgmaudio.cpp
   kssaudio.cpp
   psfaudio.cpp
   m4adecoder.cpp
@@ -543,6 +544,41 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(gme)
 target_include_directories(radioify PRIVATE ${gme_SOURCE_DIR})
 target_link_libraries(radioify PRIVATE gme)
+
+set(LIBVGM_BUILD_PLAYER OFF CACHE BOOL "Build libvgm player app" FORCE)
+set(LIBVGM_BUILD_VGM2WAV OFF CACHE BOOL "Build libvgm vgm2wav app" FORCE)
+set(LIBVGM_BUILD_TESTS OFF CACHE BOOL "Build libvgm tests" FORCE)
+set(LIBVGM_BUILD_LIBEMU ON CACHE BOOL "Build libvgm emu library" FORCE)
+set(LIBVGM_BUILD_LIBPLAYER ON CACHE BOOL "Build libvgm player library" FORCE)
+set(LIBVGM_BUILD_LIBAUDIO OFF CACHE BOOL "Build libvgm audio library" FORCE)
+set(BUILD_PLAYER OFF CACHE BOOL "Build libvgm player app" FORCE)
+set(BUILD_VGM2WAV OFF CACHE BOOL "Build libvgm vgm2wav app" FORCE)
+set(BUILD_TESTS OFF CACHE BOOL "Build libvgm tests" FORCE)
+set(BUILD_LIBEMU ON CACHE BOOL "Build libvgm emu library" FORCE)
+set(BUILD_LIBPLAYER ON CACHE BOOL "Build libvgm player library" FORCE)
+set(BUILD_LIBAUDIO OFF CACHE BOOL "Build libvgm audio library" FORCE)
+set(UTIL_CHARSET_CONV ON CACHE BOOL "Enable libvgm charset conversion" FORCE)
+set(UTIL_CHARCNV_ICONV OFF CACHE BOOL "Disable iconv conversion in libvgm" FORCE)
+set(UTIL_CHARCNV_WINAPI ON CACHE BOOL "Use WinAPI conversion in libvgm" FORCE)
+FetchContent_Declare(
+  libvgm
+  GIT_REPOSITORY https://github.com/ValleyBell/libvgm.git
+  GIT_TAG master
+)
+FetchContent_MakeAvailable(libvgm)
+target_include_directories(radioify PRIVATE ${libvgm_SOURCE_DIR})
+set(_radioify_libvgm_target "")
+foreach(_candidate IN ITEMS vgm-player vgm-player-static vgmplayer vgmplayer-static
+                           vgm_player libvgm)
+  if (TARGET ${_candidate})
+    set(_radioify_libvgm_target ${_candidate})
+    break()
+  endif()
+endforeach()
+if (NOT _radioify_libvgm_target)
+  message(FATAL_ERROR "libvgm target not found; check libvgm build options.")
+endif()
+target_link_libraries(radioify PRIVATE ${_radioify_libvgm_target})
 
 set_target_properties(radioify PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist"

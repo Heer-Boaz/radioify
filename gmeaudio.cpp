@@ -80,6 +80,10 @@ double stereoDepthValue(NsfStereoDepth depth) {
       return 0.0;
   }
 }
+
+double tempoValue(NsfTempoMode mode) {
+  return mode == NsfTempoMode::Pal50 ? (50.0 / 60.0) : 1.0;
+}
 }  // namespace
 
 GmeAudioDecoder::GmeAudioDecoder() = default;
@@ -130,10 +134,12 @@ bool GmeAudioDecoder::init(const std::filesystem::path& path,
   appendWarning(&warning, gme_warning(emu));
 
   uint64_t totalFrames = 0;
+  int baseLengthMs = 0;
   gme_info_t* info = nullptr;
   gme_err_t infoErr = gme_track_info(emu, &info, trackIndex);
   if (infoErr == nullptr && info) {
     int lengthMs = computeTrackLengthMs(info);
+    baseLengthMs = lengthMs;
     gme_set_fade(emu, lengthMs);
     totalFrames = msToFrames(lengthMs, sampleRate);
     gme_free_info(info);
@@ -143,6 +149,7 @@ bool GmeAudioDecoder::init(const std::filesystem::path& path,
   channels_ = channels;
   sampleRate_ = sampleRate;
   totalFrames_ = totalFrames;
+  baseLengthMs_ = baseLengthMs;
   framePos_ = 0;
   atEnd_ = false;
   buffer_.clear();
@@ -151,7 +158,7 @@ bool GmeAudioDecoder::init(const std::filesystem::path& path,
 }
 
 void GmeAudioDecoder::applyNsfOptions(const NsfPlaybackOptions& options) {
-  if (!emu_ || !isNsf_) return;
+  if (!emu_) return;
 
   gme_equalizer_t eq{};
   eq.bass = kNsfEqBass;
@@ -161,6 +168,14 @@ void GmeAudioDecoder::applyNsfOptions(const NsfPlaybackOptions& options) {
   gme_set_equalizer(emu_, &eq);
   gme_set_stereo_depth(emu_, stereoDepthValue(options.stereoDepth));
   gme_ignore_silence(emu_, options.ignoreSilence ? 1 : 0);
+  double tempo = tempoValue(options.tempoMode);
+  gme_set_tempo(emu_, tempo);
+  if (baseLengthMs_ > 0) {
+    int adjustedMs = static_cast<int>(
+        std::llround(static_cast<double>(baseLengthMs_) / tempo));
+    gme_set_fade(emu_, adjustedMs);
+    totalFrames_ = msToFrames(adjustedMs, sampleRate_);
+  }
 }
 
 bool gmeListTracks(const std::filesystem::path& path,
@@ -213,6 +228,7 @@ void GmeAudioDecoder::uninit() {
   channels_ = 0;
   sampleRate_ = 0;
   totalFrames_ = 0;
+  baseLengthMs_ = 0;
   framePos_ = 0;
   atEnd_ = false;
   isNsf_ = false;

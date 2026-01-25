@@ -26,6 +26,7 @@
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "gmeaudio.h"
+#include "vgmaudio.h"
 #include "kssaudio.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
@@ -166,8 +167,8 @@ static bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
          ext == ".webm" || ext == ".mp4" || ext == ".kss" || ext == ".nsf" ||
-         ext == ".psf" || ext == ".minipsf" || ext == ".psf2" ||
-         ext == ".minipsf2";
+         ext == ".vgm" || ext == ".vgz" || ext == ".psf" ||
+         ext == ".minipsf" || ext == ".psf2" || ext == ".minipsf2";
 }
 
 static bool isMiniaudioExt(const std::filesystem::path& p) {
@@ -178,6 +179,11 @@ static bool isMiniaudioExt(const std::filesystem::path& p) {
 static bool isGmeExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".nsf";
+}
+
+static bool isVgmExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+  return ext == ".vgm" || ext == ".vgz";
 }
 
 static bool isKssExt(const std::filesystem::path& p) {
@@ -209,6 +215,9 @@ static bool listTracksForFile(const std::filesystem::path& path,
   if (isGmeExt(path)) {
     return gmeListTracks(path, tracks, error);
   }
+  if (isVgmExt(path)) {
+    return vgmListTracks(path, tracks, error);
+  }
   if (isPsfExt(path)) {
     return psfListTracks(path, tracks, error);
   }
@@ -222,8 +231,8 @@ static void validateInputFile(const std::filesystem::path& p) {
     die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
     die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf, .psf, "
-        ".minipsf, .psf2, .minipsf2.");
+        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf, .vgm, "
+        ".vgz, .psf, .minipsf, .psf2, .minipsf2.");
   }
 }
 
@@ -455,10 +464,12 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   const uint32_t channels = useRadio1938 ? 1 : (o.mono ? 1 : 2);
   const bool useM4a = isM4aExt(o.input);
   const bool useGme = isGmeExt(o.input);
+  const bool useVgm = isVgmExt(o.input);
   const bool useKss = isKssExt(o.input);
   ma_decoder decoder{};
   M4aDecoder m4a{};
   GmeAudioDecoder gme{};
+  VgmAudioDecoder vgm{};
   KssAudioDecoder kss{};
   if (useM4a) {
     std::string error;
@@ -468,6 +479,11 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   } else if (useKss) {
     std::string error;
     if (!kss.init(o.input, channels, sampleRate, &error)) {
+      die(error.empty() ? "Failed to open input for decoding." : error);
+    }
+  } else if (useVgm) {
+    std::string error;
+    if (!vgm.init(o.input, channels, sampleRate, &error)) {
       die(error.empty() ? "Failed to open input for decoding." : error);
     }
   } else if (useGme) {
@@ -493,6 +509,8 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
       m4a.uninit();
     } else if (useKss) {
       kss.uninit();
+    } else if (useVgm) {
+      vgm.uninit();
     } else if (useGme) {
       gme.uninit();
     } else {
@@ -521,6 +539,13 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
       if (!kss.readFrames(buffer.data(), chunkFrames, &framesRead)) {
         ma_encoder_uninit(&encoder);
         kss.uninit();
+        die("Failed to decode input.");
+      }
+      if (framesRead == 0) break;
+    } else if (useVgm) {
+      if (!vgm.readFrames(buffer.data(), chunkFrames, &framesRead)) {
+        ma_encoder_uninit(&encoder);
+        vgm.uninit();
         die("Failed to decode input.");
       }
       if (framesRead == 0) break;
@@ -559,6 +584,8 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
     m4a.uninit();
   } else if (useKss) {
     kss.uninit();
+  } else if (useVgm) {
+    vgm.uninit();
   } else if (useGme) {
     gme.uninit();
   } else {
@@ -639,7 +666,8 @@ int main(int argc, char** argv) {
         pendingVideo = inputPath;
         hasPendingVideo = true;
       } else {
-        if (isKssExt(inputPath) || isGmeExt(inputPath) || isPsfExt(inputPath)) {
+        if (isKssExt(inputPath) || isGmeExt(inputPath) || isVgmExt(inputPath) ||
+            isPsfExt(inputPath)) {
           std::filesystem::path trackPath =
               normalizeTrackBrowserPath(inputPath);
           std::vector<TrackEntry> tracks;
@@ -793,7 +821,7 @@ int main(int argc, char** argv) {
           kProgressEnd, videoConfig);
       if (handled) return true;
     }
-    if (isKssExt(file) || isGmeExt(file) || isPsfExt(file)) {
+    if (isKssExt(file) || isGmeExt(file) || isVgmExt(file) || isPsfExt(file)) {
       std::filesystem::path trackPath = normalizeTrackBrowserPath(file);
       std::vector<TrackEntry> tracks;
       std::string error;
@@ -976,8 +1004,8 @@ int main(int argc, char** argv) {
       } else {
         showingLabel =
             "  Showing: folders + "
-            ".wav/.mp3/.flac/.m4a/.webm/.mp4/.kss/.nsf/.psf/.minipsf/.psf2/"
-            ".minipsf2/.jpg/.jpeg/.png/.bmp";
+            ".wav/.mp3/.flac/.m4a/.webm/.mp4/.kss/.nsf/.vgm/.vgz/.psf/.minipsf/"
+            ".psf2/.minipsf2/.jpg/.jpeg/.png/.bmp";
       }
       screen.writeText(0, 4, fitLine(showingLabel, width), kStyleDim);
 

@@ -12,6 +12,7 @@
 #include "consoleinput.h"
 #include "kssoptions.h"
 #include "nsfoptions.h"
+#include "vgmoptions.h"
 #include "ui_helpers.h"
 
 namespace {
@@ -19,6 +20,7 @@ enum class OptionsTarget {
   None,
   Kss,
   Nsf,
+  Vgm,
 };
 
 enum class OptionsBrowserMode {
@@ -53,14 +55,20 @@ bool isKssExt(const std::filesystem::path& p) {
   return ext == ".kss";
 }
 
-bool isNsfExt(const std::filesystem::path& p) {
+bool isGmeExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".nsf";
 }
 
+bool isVgmExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+  return ext == ".vgm" || ext == ".vgz";
+}
+
 OptionsTarget targetForPath(const std::filesystem::path& p) {
   if (isKssExt(p)) return OptionsTarget::Kss;
-  if (isNsfExt(p)) return OptionsTarget::Nsf;
+  if (isGmeExt(p)) return OptionsTarget::Nsf;
+  if (isVgmExt(p)) return OptionsTarget::Vgm;
   return OptionsTarget::None;
 }
 
@@ -130,6 +138,14 @@ std::string nsfStereoLabel(NsfStereoDepth depth) {
     default:
       return "off";
   }
+}
+
+std::string nsfTempoLabel(NsfTempoMode mode) {
+  return mode == NsfTempoMode::Pal50 ? "50Hz" : "60Hz";
+}
+
+std::string vgmTempoLabel(VgmTempoMode mode) {
+  return mode == VgmTempoMode::Pal50 ? "50Hz" : "60Hz";
 }
 
 std::string hex32(uint32_t value) {
@@ -237,6 +253,21 @@ void buildOptionsEntries(std::vector<FileEntry>& entries) {
               "Stereo depth: " + nsfStereoLabel(options.stereoDepth));
     addOption(NsfOptionId::IgnoreSilence,
               "Ignore silence: " + onOffLabel(options.ignoreSilence));
+    addOption(NsfOptionId::TempoMode,
+              "Speed: " + nsfTempoLabel(options.tempoMode));
+  } else if (gOptionsBrowser.target == OptionsTarget::Vgm) {
+    VgmPlaybackOptions options = audioGetVgmOptionState();
+    auto addOption = [&](VgmOptionId id, const std::string& label) {
+      FileEntry entry;
+      entry.name = label;
+      entry.path = gOptionsBrowser.path;
+      entry.isDir = false;
+      entry.optionId = static_cast<int>(id);
+      entries.push_back(std::move(entry));
+    };
+
+    addOption(VgmOptionId::TempoMode,
+              "Speed: " + vgmTempoLabel(options.tempoMode));
   }
 }
 
@@ -388,6 +419,10 @@ OptionsBrowserResult optionsBrowserActivateSelection(BrowserState& browser) {
       }
     } else if (gOptionsBrowser.target == OptionsTarget::Nsf) {
       if (audioAdjustNsfOption(static_cast<NsfOptionId>(entry.optionId))) {
+        return OptionsBrowserResult::Changed;
+      }
+    } else if (gOptionsBrowser.target == OptionsTarget::Vgm) {
+      if (audioAdjustVgmOption(static_cast<VgmOptionId>(entry.optionId))) {
         return OptionsBrowserResult::Changed;
       }
     }

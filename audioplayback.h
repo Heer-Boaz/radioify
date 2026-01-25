@@ -8,6 +8,7 @@
 
 #include "kssoptions.h"
 #include "nsfoptions.h"
+#include "vgmoptions.h"
 
 struct AudioPerfStats {
   uint64_t callbacks = 0;
@@ -123,3 +124,5 @@ bool audioScanKssInstruments(const std::filesystem::path& file, int trackIndex,
                              std::string* error);
 NsfPlaybackOptions audioGetNsfOptionState();
 bool audioAdjustNsfOption(NsfOptionId id, int direction = 1);
+VgmPlaybackOptions audioGetVgmOptionState();
+bool audioAdjustVgmOption(VgmOptionId id, int direction = 1);
