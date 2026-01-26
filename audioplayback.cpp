@@ -531,6 +531,8 @@ struct AudioState {
   std::atomic<uint64_t> audioLeadSilenceFrames{0};
   std::atomic<bool> audioPrimed{false};
   std::atomic<float> volume{1.0f};
+  std::atomic<float> radioMakeupGain{1.5f};
+  std::atomic<uint32_t> radioClipHold{0};
   AudioSampleRing streamRb;
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};
@@ -666,6 +668,7 @@ void startAuditionWorker(AuditionTone tone) {
 
 void dataCallback(ma_device* device, void* output, const void*,
                   ma_uint32 frameCount) {
+  static constexpr uint32_t kRadioClipHoldFrames = 2048;
   auto* state = static_cast<AudioState*>(device->pUserData);
   float* out = static_cast<float*>(output);
   if (!state) return;
@@ -698,7 +701,21 @@ void dataCallback(ma_device* device, void* output, const void*,
     }
 
     if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
+      state->radio1938.makeupGain =
+          state->radioMakeupGain.load(std::memory_order_relaxed);
       state->radio1938.process(out, static_cast<uint32_t>(framesRead));
+      bool clipped = state->radio1938.clipTriggered;
+      state->radio1938.clipTriggered = false;
+      uint32_t hold =
+          state->radioClipHold.load(std::memory_order_relaxed);
+      if (clipped) {
+        hold = kRadioClipHoldFrames;
+      } else if (hold > framesRead) {
+        hold -= framesRead;
+      } else {
+        hold = 0;
+      }
+      state->radioClipHold.store(hold, std::memory_order_relaxed);
     }
 
     state->framesPlayed.fetch_add(framesRead, std::memory_order_relaxed);
@@ -987,7 +1004,20 @@ void dataCallback(ma_device* device, void* output, const void*,
   if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
     float* audioStart =
         out + silentLeadFrames * static_cast<uint64_t>(state->channels);
+    state->radio1938.makeupGain =
+        state->radioMakeupGain.load(std::memory_order_relaxed);
     state->radio1938.process(audioStart, static_cast<uint32_t>(framesRead));
+    bool clipped = state->radio1938.clipTriggered;
+    state->radio1938.clipTriggered = false;
+    uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
+    if (clipped) {
+      hold = kRadioClipHoldFrames;
+    } else if (hold > framesRead) {
+      hold -= framesRead;
+    } else {
+      hold = 0;
+    }
+    state->radioClipHold.store(hold, std::memory_order_relaxed);
   }
   state->framesPlayed.fetch_add(framesRead);
   state->framesReadTotal.fetch_add(framesRead, std::memory_order_relaxed);
@@ -1765,6 +1795,7 @@ void audioInit(const AudioPlaybackConfig& config) {
   gAudio.state.sampleRate = gAudio.sampleRate;
   gAudio.state.dry = config.dry;
   gAudio.state.useRadio1938.store(config.enableRadio);
+  gAudio.state.radioMakeupGain.store(gAudio.radio1938Template.makeupGain);
 
   gAudio.radio1938Template.init(gAudio.channels,
                                 static_cast<float>(gAudio.sampleRate),
@@ -2548,8 +2579,22 @@ void audioAdjustVolume(float delta) {
   gAudio.state.volume.store(next, std::memory_order_relaxed);
 }
 
+void audioAdjustRadioMakeup(float delta) {
+  float current = gAudio.state.radioMakeupGain.load(std::memory_order_relaxed);
+  float next = std::clamp(current + delta, 0.5f, 4.0f);
+  gAudio.state.radioMakeupGain.store(next, std::memory_order_relaxed);
+}
+
 float audioGetVolume() {
   return gAudio.state.volume.load(std::memory_order_relaxed);
+}
+
+float audioGetRadioMakeup() {
+  return gAudio.state.radioMakeupGain.load(std::memory_order_relaxed);
+}
+
+bool audioIsRadioClipping() {
+  return gAudio.state.radioClipHold.load(std::memory_order_relaxed) > 0;
 }
 
 std::string audioGetWarning() {

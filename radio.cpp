@@ -13,8 +13,10 @@ static constexpr bool kEnableAMDetector = true;
 static constexpr bool kEnableNoiseHum = true;
 static constexpr bool kBypassRadio1938 = false;
 static constexpr float kOversampleFactor = 2.0f;
-static constexpr float kIfNoiseMix = 0.70f;
-static constexpr float kPostNoiseMix = 0.30f;
+static constexpr float kIfNoiseMix = 0.12f;
+static constexpr float kPostNoiseMix = 0.05f;
+static constexpr float kCompMakeupGain = 1.35f;  // ~+2.6 dB after compression.
+static constexpr float kRadioInputPad = 0.70f;   // ~-3.1 dB headroom.
 
 static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
@@ -56,7 +58,8 @@ static inline float processOversampled2x(float x,
 }
 
 static float updateTuningFilters(Radio1938& radio, float tuneHz, float bwHz) {
-  float safeBw = std::clamp(bwHz, 4200.0f, 6000.0f);
+  // float safeBw = std::clamp(bwHz, 4200.0f, 6000.0f);
+  float safeBw = std::clamp(bwHz, 4200.0f, 5200.0f);
   float tuneNorm =
       (safeBw > 0.0f) ? clampf(tuneHz / (safeBw * 0.5f), -1.0f, 1.0f) : 0.0f;
   radio.tuneOffsetNorm = tuneNorm;
@@ -492,8 +495,8 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   presBoost.setPeaking(sampleRate, 3500.0f, 0.8f, -1.5f);
 
   comp.setFs(sampleRate);
-  comp.thresholdDb = -22.0f;
-  comp.ratio = 2.4f;
+  comp.thresholdDb = -18.0f;
+  comp.ratio = 2.0f;
   comp.setTimes(90.0f, 900.0f);
 
   float adjAtkMs = 120.0f;
@@ -653,6 +656,7 @@ void Radio1938::reset() {
 void Radio1938::process(float* samples, uint32_t frames) {
   if (!samples || frames == 0) return;
   if (kBypassRadio1938) return;
+  clipTriggered = false; // Reset clip flag
   constexpr float twoPi = 6.283185307f;
   constexpr float kTuneTau = 0.05f;
   float rate = std::max(1.0f, sampleRate);
@@ -678,6 +682,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
     float inL = samples[f * channels];
     float inR = (channels > 1) ? samples[f * channels + 1] : inL;
     float x = (channels > 1) ? 0.5f * (inL + inR) : inL;
+    x *= kRadioInputPad;
     auto writeOut = [&](float v) {
       for (int c = 0; c < channels; ++c) {
         samples[f * channels + c] = v;
@@ -837,6 +842,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = lowMidDip.process(y);
     y = presBoost.process(y);
     y = comp.process(y);
+    y *= kCompMakeupGain;
     y = processOversampled2x(y, satOsPrev, satOsLp1, satOsLp2,
                              [&](float v) { return sat.process(v); });
     y = postLpf1.process(y);
@@ -892,6 +898,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
     if (kEnableNoiseHum) {
       y += noiseHum.process(y);
     }
+    y *= makeupGain;
     y = processOversampled2x(y, speakerOsPrev, speakerOsLp1, speakerOsLp2,
                              [&](float v) { return speaker.process(v); });
     y = postLpf2.process(y);
@@ -931,7 +938,12 @@ void Radio1938::process(float* samples, uint32_t frames) {
       }
     }
     y = processOversampled2x(y, clipOsPrev, clipOsLp1, clipOsLp2,
-                             [&](float v) { return softClip(v, 0.985f); });
+                             [&](float v) {
+                               float t = 0.995f;
+                               float av = std::fabs(v);
+                               if (av > t) clipTriggered = true;
+                               return softClip(v, t);
+                             });
 
     writeOut(y);
   }

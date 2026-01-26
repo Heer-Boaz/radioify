@@ -720,6 +720,7 @@ int main(int argc, char** argv) {
   const Style kStyleHeaderHot{{255, 249, 214}, {38, 50, 72}};
   const Style kStyleAccent{{255, 214, 120}, kBgBase};
   const Style kStyleDim{{138, 144, 153}, kBgBase};
+  const Style kStyleAlert{{255, 92, 92}, kBgBase};
   const Style kStyleDir{{110, 231, 183}, kBgBase};
   const Style kStyleHighlight{{15, 20, 28}, {230, 238, 248}};
   const Style kStyleBreadcrumbHover{{15, 20, 28}, {255, 214, 120}};
@@ -868,6 +869,9 @@ int main(int argc, char** argv) {
   callbacks.onSeekBy = [&](int direction) { audioSeekBy(direction); };
   callbacks.onSeekToRatio = [&](double ratio) { audioSeekToRatio(ratio); };
   callbacks.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
+  callbacks.onAdjustRadioMakeup = [&](float delta) {
+    audioAdjustRadioMakeup(delta);
+  };
   callbacks.onResize = [&]() { rebuildLayout(); };
 
   while (running) {
@@ -970,7 +974,8 @@ int main(int argc, char** argv) {
             fitLine("  Mouse=select  Click=play/enter  Backspace=up  "
                     "Click+drag bar=seek  Space=pause  Arrows=move  "
                     "PgUp/PgDn=page  "
-                    "Ctrl+Left/Right=seek  Shift+Up/Dn=Vol (400%)  R=toggle  H=50Hz" +
+                    "Ctrl+Left/Right=seek  Ctrl+Up/Dn=RadioGain  "
+                    "Shift+Up/Dn=Vol (400%)  R=toggle  H=50Hz" +
                     optionsHint + "  T=view  Q=quit",
                     width),
             kStyleNormal);
@@ -978,7 +983,7 @@ int main(int argc, char** argv) {
         screen.writeText(
             0, 2,
             fitLine("  Enter=play  PgUp/Dn=page  Arrows=move  [/]=seek  "
-                    "Shift/Alt+Up/Dn=Vol  R=toggle  H=50Hz" +
+                    "Ctrl+Up/Dn=RadioGain  Shift/Alt+Up/Dn=Vol  R=toggle  H=50Hz" +
                     optionsHint + "  Q=quit",
                     width),
             kStyleNormal);
@@ -1082,18 +1087,27 @@ int main(int argc, char** argv) {
         status = "\xE2\x97\x8B";  // idle icon
       }
       int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-      std::string volStr = " Vol: " + std::to_string(volPct) + (volPct > 100 ? "% (BOOST)" : "%");
+      float radioGain = audioGetRadioMakeup();
+      char radioBuf[32];
+      std::snprintf(radioBuf, sizeof(radioBuf), " RG:%.2fx", radioGain);
+      std::string clipStr = audioIsRadioClipping() ? " !" : "";
+      std::string volStr = " Vol: " + std::to_string(volPct) +
+                           (volPct > 100 ? "% (BOOST)" : "%") +
+                           radioBuf + clipStr;
       std::string suffix =
           formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status + volStr;
       int suffixWidth = utf8CodepointCount(suffix);
       int barWidth = width - suffixWidth - 3;
       if (barWidth < 10) {
-        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " + status + " V:" + std::to_string(volPct) + (volPct > 100 ? "%!" : "%");
+        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " +
+                 status + " V:" + std::to_string(volPct) +
+                 (volPct > 100 ? "%!" : "%") + radioBuf + clipStr;
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 10) {
-        suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) + (volPct > 100 ? "%!" : "%");
+        suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) +
+                 (volPct > 100 ? "%!" : "%") + radioBuf + clipStr;
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
@@ -1120,7 +1134,13 @@ int main(int argc, char** argv) {
       }
       screen.writeChar(1 + barWidth, line, L'|', kStyleProgressFrame);
       if (!suffix.empty()) {
-        screen.writeText(2 + barWidth, line, " " + suffix, kStyleNormal);
+        std::string rendered = " " + suffix;
+        int suffixBaseX = 2 + barWidth;
+        screen.writeText(suffixBaseX, line, rendered, kStyleNormal);
+        if (audioIsRadioClipping()) {
+          int clipX = suffixBaseX + utf8CodepointCount(rendered) - 1;
+          screen.writeText(clipX, line, "!", kStyleAlert);
+        }
       }
 
       screen.draw();
