@@ -29,6 +29,10 @@ class VgmAudioDecoder {
   bool active() const { return active_; }
   void applyOptions(const VgmPlaybackOptions& options);
   const std::string& warning() const { return warning_; }
+  bool getMetadata(std::vector<VgmMetadataEntry>* out) const;
+  bool getDevices(std::vector<VgmDeviceInfo>* out) const;
+  bool getDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out) const;
+  bool setDeviceOptions(uint32_t deviceId, const VgmDeviceOptions& options);
 
  private:
   bool initPlayer(std::string* error);
@@ -58,5 +62,11 @@ class VgmAudioDecoder {
 bool vgmListTracks(const std::filesystem::path& path,
                    std::vector<TrackEntry>* out,
                    std::string* error);
+bool vgmReadMetadata(const std::filesystem::path& path,
+                     std::vector<VgmMetadataEntry>* out,
+                     std::string* error);
+bool vgmReadDevices(const std::filesystem::path& path,
+                    std::vector<VgmDeviceInfo>* out,
+                    std::string* error);
 
 #endif

@@ -51,6 +51,12 @@ extern "C" {
 namespace {
 constexpr uint32_t kMsxClockHz = 3579545u;
 constexpr float kAuditionGain = 0.28f;
+constexpr int kVgmSpeedStepCount = 6;
+constexpr int kVgmVolumeStepCount = 6;
+constexpr int kVgmLoopSteps[] = {0, 1, 2, 3, 4, 6, 8, 12, 16};
+constexpr int kVgmFadeStepsMs[] = {0, 1000, 2000, 3000, 5000, 8000, 10000, 15000};
+constexpr int kVgmEndSilenceStepsMs[] = {0, 250, 500, 1000, 2000, 3000, 5000};
+constexpr uint32_t kVgmSampleRateSteps[] = {0, 11025, 22050, 32000, 44100, 48000, 88200, 96000};
 std::string toLower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
     return static_cast<char>(std::tolower(c));
@@ -71,6 +77,26 @@ int64_t nowUs() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+int advanceIndex(int idx, int count, int direction) {
+  if (count <= 0) return 0;
+  if (direction > 0) {
+    idx++;
+    if (idx >= count) idx = 0;
+  } else {
+    idx--;
+    if (idx < 0) idx = count - 1;
+  }
+  return idx;
+}
+
+template <typename T>
+int findIndex(const T* values, size_t count, T value) {
+  for (size_t i = 0; i < count; ++i) {
+    if (values[i] == value) return static_cast<int>(i);
+  }
+  return 0;
 }
 
 bool isSupportedAudioExt(const std::filesystem::path& p) {
@@ -563,6 +589,10 @@ struct AudioPlaybackState {
   KssPlaybackOptions kssOptions{};
   NsfPlaybackOptions nsfOptions{};
   VgmPlaybackOptions vgmOptions{};
+  std::filesystem::path vgmDevicesFile;
+  std::vector<VgmDeviceInfo> vgmDevices;
+  std::unordered_map<uint32_t, VgmDeviceOptions> vgmDeviceDefaults;
+  std::unordered_map<uint32_t, VgmDeviceOptions> vgmDeviceOverrides;
   AuditionState audition{};
 };
 
@@ -1261,6 +1291,21 @@ bool initDevice() {
   return true;
 }
 
+void applyVgmDeviceOverrides() {
+  if (!gAudio.state.usingVgm.load()) return;
+  if (gAudio.vgmDeviceOverrides.empty()) return;
+  for (const auto& entry : gAudio.vgmDeviceOverrides) {
+    gAudio.state.vgm.setDeviceOptions(entry.first, entry.second);
+  }
+}
+
+const VgmDeviceInfo* findVgmDeviceInfo(uint32_t deviceId) {
+  for (const auto& device : gAudio.vgmDevices) {
+    if (device.id == deviceId) return &device;
+  }
+  return nullptr;
+}
+
 bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
                 int trackIndex) {
   if (!gAudio.enableAudio) {
@@ -1392,6 +1437,7 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
     gAudio.kssTrackIndex = 0;
     gAudio.psfTrackIndex = 0;
     gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
+    applyVgmDeviceOverrides();
     gAudio.vgmWarning = gAudio.state.vgm.warning();
 
     uint64_t totalFrames = 0;
@@ -2462,7 +2508,31 @@ static void reloadKssWithOptions() {
   }
 }
 
+static void reloadNsfWithOptions();
+
 void audioToggle50Hz() {
+  if (gAudio.state.usingVgm.load()) {
+    gAudio.vgmOptions.playbackHz =
+        (gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50)
+            ? VgmPlaybackHz::Hz60
+            : VgmPlaybackHz::Hz50;
+    gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
+    uint64_t totalFrames = 0;
+    if (gAudio.state.vgm.getTotalFrames(&totalFrames)) {
+      gAudio.state.totalFrames.store(totalFrames);
+    } else {
+      gAudio.state.totalFrames.store(0);
+    }
+    return;
+  }
+  if (gAudio.state.usingGme.load()) {
+    gAudio.nsfOptions.tempoMode =
+        (gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50)
+            ? NsfTempoMode::Normal
+            : NsfTempoMode::Pal50;
+    reloadNsfWithOptions();
+    return;
+  }
   gAudio.kssOptions.force50Hz = !gAudio.kssOptions.force50Hz;
   reloadKssWithOptions();
 }
@@ -2825,6 +2895,44 @@ bool audioScanKssInstruments(const std::filesystem::path& file, int trackIndex,
   return true;
 }
 
+bool audioScanVgmMetadata(const std::filesystem::path& file,
+                          std::vector<VgmMetadataEntry>* out,
+                          std::string* error) {
+  if (!out) return false;
+  out->clear();
+  if (!isVgmExt(file)) return false;
+  return vgmReadMetadata(file, out, error);
+}
+
+bool audioScanVgmDevices(const std::filesystem::path& file,
+                         std::vector<VgmDeviceInfo>* out,
+                         std::string* error) {
+  if (!out) return false;
+  out->clear();
+  if (!isVgmExt(file)) return false;
+
+  VgmAudioDecoder decoder;
+  uint32_t channels = gAudio.channels == 0 ? 2 : gAudio.channels;
+  if (!decoder.init(file, channels, gAudio.sampleRate, error)) {
+    return false;
+  }
+  if (!decoder.getDevices(out)) {
+    if (error) *error = "Failed to scan VGM devices.";
+    return false;
+  }
+
+  gAudio.vgmDevicesFile = file;
+  gAudio.vgmDevices = *out;
+  gAudio.vgmDeviceDefaults.clear();
+  for (const auto& device : *out) {
+    VgmDeviceOptions options{};
+    if (decoder.getDeviceOptions(device.id, &options)) {
+      gAudio.vgmDeviceDefaults[device.id] = options;
+    }
+  }
+  return true;
+}
+
 bool audioAdjustKssOption(KssOptionId id, int direction) {
   if (direction == 0) return false;
   bool changed = false;
@@ -2966,6 +3074,23 @@ VgmPlaybackOptions audioGetVgmOptionState() {
   return gAudio.vgmOptions;
 }
 
+bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out) {
+  if (!out) return false;
+  if (gAudio.state.usingVgm.load()) {
+    if (gAudio.state.vgm.getDeviceOptions(deviceId, out)) {
+      return true;
+    }
+  }
+  auto it = gAudio.vgmDeviceDefaults.find(deviceId);
+  if (it == gAudio.vgmDeviceDefaults.end()) return false;
+  *out = it->second;
+  auto overrideIt = gAudio.vgmDeviceOverrides.find(deviceId);
+  if (overrideIt != gAudio.vgmDeviceOverrides.end()) {
+    *out = overrideIt->second;
+  }
+  return true;
+}
+
 static void reloadVgmWithOptions() {
   if (!gAudio.enableAudio || !gAudio.decoderReady) return;
   if (!gAudio.state.usingVgm.load()) return;
@@ -2983,18 +3108,188 @@ bool audioAdjustVgmOption(VgmOptionId id, int direction) {
   if (direction == 0) return false;
   bool changed = false;
   switch (id) {
-    case VgmOptionId::TempoMode:
-      gAudio.vgmOptions.tempoMode =
-          (gAudio.vgmOptions.tempoMode == VgmTempoMode::Pal50)
-              ? VgmTempoMode::Normal
-              : VgmTempoMode::Pal50;
+    case VgmOptionId::PlaybackHz: {
+      int next = static_cast<int>(gAudio.vgmOptions.playbackHz) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 2;
+      if (next > 2) next = 0;
+      gAudio.vgmOptions.playbackHz = static_cast<VgmPlaybackHz>(next);
       changed = true;
       break;
+    }
+    case VgmOptionId::Speed: {
+      int next = gAudio.vgmOptions.speedStep + (direction > 0 ? 1 : -1);
+      if (next < 0) next = kVgmSpeedStepCount - 1;
+      if (next >= kVgmSpeedStepCount) next = 0;
+      gAudio.vgmOptions.speedStep = next;
+      changed = true;
+      break;
+    }
+    case VgmOptionId::LoopCount: {
+      int idx = findIndex(kVgmLoopSteps,
+                          sizeof(kVgmLoopSteps) / sizeof(kVgmLoopSteps[0]),
+                          gAudio.vgmOptions.loopCount);
+      idx = advanceIndex(
+          idx,
+          static_cast<int>(sizeof(kVgmLoopSteps) / sizeof(kVgmLoopSteps[0])),
+          direction);
+      gAudio.vgmOptions.loopCount = kVgmLoopSteps[idx];
+      changed = true;
+      break;
+    }
+    case VgmOptionId::FadeLength: {
+      int idx = findIndex(
+          kVgmFadeStepsMs,
+          sizeof(kVgmFadeStepsMs) / sizeof(kVgmFadeStepsMs[0]),
+          gAudio.vgmOptions.fadeMs);
+      idx = advanceIndex(
+          idx,
+          static_cast<int>(sizeof(kVgmFadeStepsMs) /
+                           sizeof(kVgmFadeStepsMs[0])),
+          direction);
+      gAudio.vgmOptions.fadeMs = kVgmFadeStepsMs[idx];
+      changed = true;
+      break;
+    }
+    case VgmOptionId::EndSilence: {
+      int idx = findIndex(
+          kVgmEndSilenceStepsMs,
+          sizeof(kVgmEndSilenceStepsMs) / sizeof(kVgmEndSilenceStepsMs[0]),
+          gAudio.vgmOptions.endSilenceMs);
+      idx = advanceIndex(
+          idx,
+          static_cast<int>(sizeof(kVgmEndSilenceStepsMs) /
+                           sizeof(kVgmEndSilenceStepsMs[0])),
+          direction);
+      gAudio.vgmOptions.endSilenceMs = kVgmEndSilenceStepsMs[idx];
+      changed = true;
+      break;
+    }
+    case VgmOptionId::HardStopOld:
+      gAudio.vgmOptions.hardStopOld = !gAudio.vgmOptions.hardStopOld;
+      changed = true;
+      break;
+    case VgmOptionId::IgnoreVolGain:
+      gAudio.vgmOptions.ignoreVolGain = !gAudio.vgmOptions.ignoreVolGain;
+      changed = true;
+      break;
+    case VgmOptionId::MasterVolume: {
+      int next = gAudio.vgmOptions.masterVolumeStep +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = kVgmVolumeStepCount - 1;
+      if (next >= kVgmVolumeStepCount) next = 0;
+      gAudio.vgmOptions.masterVolumeStep = next;
+      changed = true;
+      break;
+    }
+    case VgmOptionId::PhaseInvert: {
+      int next = static_cast<int>(gAudio.vgmOptions.phaseInvert) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 3;
+      if (next > 3) next = 0;
+      gAudio.vgmOptions.phaseInvert = static_cast<VgmPhaseInvert>(next);
+      changed = true;
+      break;
+    }
     default:
       break;
   }
-  if (changed) {
-    reloadVgmWithOptions();
+  if (changed && gAudio.state.usingVgm.load()) {
+    gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
+    uint64_t totalFrames = 0;
+    if (gAudio.state.vgm.getTotalFrames(&totalFrames)) {
+      gAudio.state.totalFrames.store(totalFrames);
+    } else {
+      gAudio.state.totalFrames.store(0);
+    }
   }
   return changed;
+}
+
+bool audioAdjustVgmDeviceOption(uint32_t deviceId, VgmDeviceOptionId id,
+                                int direction) {
+  if (direction == 0) return false;
+
+  VgmDeviceOptions options{};
+  if (!audioGetVgmDeviceOptions(deviceId, &options)) {
+    return false;
+  }
+
+  bool changed = false;
+  switch (id) {
+    case VgmDeviceOptionId::Mute:
+      options.muted = !options.muted;
+      changed = true;
+      break;
+    case VgmDeviceOptionId::Core: {
+      const VgmDeviceInfo* info = findVgmDeviceInfo(deviceId);
+      if (!info) break;
+      std::vector<uint32_t> cores;
+      cores.reserve(info->coreIds.size() + 1);
+      cores.push_back(0);
+      for (uint32_t coreId : info->coreIds) {
+        if (coreId != 0) cores.push_back(coreId);
+      }
+      int idx = 0;
+      for (size_t i = 0; i < cores.size(); ++i) {
+        if (cores[i] == options.coreId) {
+          idx = static_cast<int>(i);
+          break;
+        }
+      }
+      idx = advanceIndex(idx, static_cast<int>(cores.size()), direction);
+      uint32_t nextCore = cores[idx];
+      if (nextCore != options.coreId) {
+        options.coreId = nextCore;
+        changed = true;
+      }
+      break;
+    }
+    case VgmDeviceOptionId::Resampler: {
+      int next = static_cast<int>(options.resamplerMode) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 2;
+      if (next > 2) next = 0;
+      options.resamplerMode = static_cast<uint8_t>(next);
+      changed = true;
+      break;
+    }
+    case VgmDeviceOptionId::SampleRateMode: {
+      int next = static_cast<int>(options.sampleRateMode) +
+                 (direction > 0 ? 1 : -1);
+      if (next < 0) next = 2;
+      if (next > 2) next = 0;
+      options.sampleRateMode = static_cast<uint8_t>(next);
+      changed = true;
+      break;
+    }
+    case VgmDeviceOptionId::SampleRate: {
+      int idx = findIndex(
+          kVgmSampleRateSteps,
+          sizeof(kVgmSampleRateSteps) / sizeof(kVgmSampleRateSteps[0]),
+          options.sampleRate);
+      idx = advanceIndex(
+          idx,
+          static_cast<int>(sizeof(kVgmSampleRateSteps) /
+                           sizeof(kVgmSampleRateSteps[0])),
+          direction);
+      options.sampleRate = kVgmSampleRateSteps[idx];
+      changed = true;
+      break;
+    }
+    default:
+      break;
+  }
+
+  if (!changed) return false;
+
+  gAudio.vgmDeviceOverrides[deviceId] = options;
+  if (gAudio.state.usingVgm.load()) {
+    if (id == VgmDeviceOptionId::Mute) {
+      gAudio.state.vgm.setDeviceOptions(deviceId, options);
+    } else {
+      reloadVgmWithOptions();
+    }
+  }
+  return true;
 }

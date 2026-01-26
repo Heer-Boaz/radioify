@@ -126,3 +126,12 @@ NsfPlaybackOptions audioGetNsfOptionState();
 bool audioAdjustNsfOption(NsfOptionId id, int direction = 1);
 VgmPlaybackOptions audioGetVgmOptionState();
 bool audioAdjustVgmOption(VgmOptionId id, int direction = 1);
+bool audioScanVgmMetadata(const std::filesystem::path& file,
+                          std::vector<VgmMetadataEntry>* out,
+                          std::string* error);
+bool audioScanVgmDevices(const std::filesystem::path& file,
+                         std::vector<VgmDeviceInfo>* out,
+                         std::string* error);
+bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out);
+bool audioAdjustVgmDeviceOption(uint32_t deviceId, VgmDeviceOptionId id,
+                                int direction = 1);
