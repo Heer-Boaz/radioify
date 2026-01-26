@@ -56,7 +56,6 @@ CPackSourceConfig.cmake
 # Other
 # *.log
 *.vsconfig
-.vscode/
 *.userprefs
 
 # OS generated files
