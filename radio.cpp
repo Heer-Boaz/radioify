@@ -13,8 +13,9 @@ static constexpr bool kEnableAMDetector = true;
 static constexpr bool kEnableNoiseHum = true;
 static constexpr bool kBypassRadio1938 = false;
 static constexpr float kOversampleFactor = 2.0f;
-static constexpr float kIfNoiseMix = 0.12f;
-static constexpr float kPostNoiseMix = 0.05f;
+static constexpr float kIfNoiseMix = 0.26f; // Was 0.12f
+static constexpr float kPostNoiseMix = 0.12f; // Was 0.05f
+static constexpr float kNoiseFloorAmp = 0.0015f;
 static constexpr float kCompMakeupGain = 1.35f;  // ~+2.6 dB after compression.
 static constexpr float kRadioInputPad = 0.70f;   // ~-3.1 dB headroom.
 
@@ -858,8 +859,8 @@ void Radio1938::process(float* samples, uint32_t frames) {
     if (kEnableRadioArtifacts) {
       y *= fade;
 
-      float postNoiseScale = noiseScale * kPostNoiseMix;
-      noiseHum.noiseAmp = noiseBase * postNoiseScale;
+      float postNoiseScale = std::max(noiseScale * kPostNoiseMix, 0.06f);
+      noiseHum.noiseAmp = std::max(noiseBase * postNoiseScale, kNoiseFloorAmp);
       noiseHum.crackleAmp = crackleBase * postNoiseScale;
       noiseHum.lightningAmp = lightningBase * postNoiseScale;
       noiseHum.motorAmp = motorBase * postNoiseScale;

@@ -80,6 +80,7 @@ dist/radioify.exe --no-radio <file-or-folder>
 
 ## Supported files
 - Audio: .wav, .mp3, .flac, .kss, .nsf, .psf, .minipsf, .psf2, .minipsf2
+- GSF (GPL, enabled by default; disable with `-DRADIOIFY_DISABLE_GSF_GPL=ON`): .gsf, .minigsf
 - Audio (media containers): .m4a, .webm, .mp4 (audio stream only)
 - Video (ASCII preview): .mp4, .webm (audio + video)
 - Images (ASCII art preview): .jpg, .jpeg, .png, .bmp

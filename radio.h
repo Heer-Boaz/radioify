@@ -62,7 +62,7 @@ struct NoiseHum {
   Biquad motorLp;
   float fs = 48000.0f;
   float noiseAmp = 0.015f;
-  float noiseHpHz = 500.0f;
+  float noiseHpHz = 220.0f; // 500.0f
   float noiseLpHz = 5500.0f;
   float humAmp = 0.0015f;
   float humHz = 50.0f;

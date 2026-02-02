@@ -263,25 +263,115 @@ int psfInfoCallback(void* context, const char* name, const char* value) {
   return 0;
 }
 
+struct PsfFileContext {
+  std::vector<std::filesystem::path> dirStack;
+  std::vector<std::filesystem::path> roots;
+};
+
+thread_local PsfFileContext g_psfFileContext;
+
+class ScopedPsfFileContext {
+ public:
+  explicit ScopedPsfFileContext(const std::filesystem::path& baseFile) {
+    savedStack_ = std::move(g_psfFileContext.dirStack);
+    savedRoots_ = std::move(g_psfFileContext.roots);
+    g_psfFileContext.dirStack.clear();
+    g_psfFileContext.roots.clear();
+    if (!baseFile.empty()) {
+      std::filesystem::path root = baseFile.parent_path();
+      if (!root.empty()) {
+        g_psfFileContext.roots.push_back(root);
+      }
+    }
+  }
+
+  ~ScopedPsfFileContext() {
+    g_psfFileContext.dirStack = std::move(savedStack_);
+    g_psfFileContext.roots = std::move(savedRoots_);
+  }
+
+ private:
+  std::vector<std::filesystem::path> savedStack_;
+  std::vector<std::filesystem::path> savedRoots_;
+};
+
+struct PsfFileHandle {
+  std::FILE* fp = nullptr;
+  std::filesystem::path path;
+  bool pushed = false;
+};
+
+bool isAbsolutePath(const std::filesystem::path& path) {
+  return path.is_absolute() || path.has_root_name();
+}
+
+PsfFileHandle* tryOpenPsfFile(const std::filesystem::path& path) {
+  if (path.empty()) return nullptr;
+  std::string pathUtf8 = toUtf8String(path);
+  std::FILE* fp = std::fopen(pathUtf8.c_str(), "rb");
+  if (!fp) return nullptr;
+  auto* handle = new PsfFileHandle();
+  handle->fp = fp;
+  handle->path = path;
+  std::filesystem::path parent = path.parent_path();
+  if (!parent.empty()) {
+    g_psfFileContext.dirStack.push_back(parent);
+    handle->pushed = true;
+  }
+  return handle;
+}
+
 void* psf_file_fopen(const char* uri) {
-  return std::fopen(uri, "rb");
+  if (!uri) return nullptr;
+  std::filesystem::path path(uri);
+
+  if (isAbsolutePath(path)) {
+    return tryOpenPsfFile(path);
+  }
+
+  for (auto it = g_psfFileContext.dirStack.rbegin();
+       it != g_psfFileContext.dirStack.rend(); ++it) {
+    if (PsfFileHandle* handle = tryOpenPsfFile((*it) / path)) {
+      return handle;
+    }
+  }
+
+  for (auto it = g_psfFileContext.roots.rbegin();
+       it != g_psfFileContext.roots.rend(); ++it) {
+    if (PsfFileHandle* handle = tryOpenPsfFile((*it) / path)) {
+      return handle;
+    }
+  }
+
+  return tryOpenPsfFile(path);
 }
 
 size_t psf_file_fread(void* buffer, size_t size, size_t count, void* handle) {
-  return std::fread(buffer, size, count, static_cast<FILE*>(handle));
+  if (!handle) return 0;
+  return std::fread(buffer, size, count,
+                    static_cast<PsfFileHandle*>(handle)->fp);
 }
 
 int psf_file_fseek(void* handle, int64_t offset, int whence) {
-  return std::fseek(static_cast<FILE*>(handle), static_cast<long>(offset),
-                    whence);
+  if (!handle) return -1;
+  return std::fseek(static_cast<PsfFileHandle*>(handle)->fp,
+                    static_cast<long>(offset), whence);
 }
 
 int psf_file_fclose(void* handle) {
-  return std::fclose(static_cast<FILE*>(handle));
+  if (!handle) return 0;
+  auto* h = static_cast<PsfFileHandle*>(handle);
+  int result = std::fclose(h->fp);
+  if (h->pushed && !g_psfFileContext.dirStack.empty()) {
+    g_psfFileContext.dirStack.pop_back();
+  }
+  delete h;
+  return result;
 }
 
 long psf_file_ftell(void* handle) {
-  return std::ftell(static_cast<FILE*>(handle));
+  if (!handle) return -1;
+  return std::ftell(static_cast<PsfFileHandle*>(handle)->fp);
 }
 
 const psf_file_callbacks psf_file_system = {
@@ -334,6 +424,7 @@ bool collectPsfMetadata(const std::filesystem::path& path, PsfMetadata* meta,
                         std::string* error) {
   if (!meta) return false;
   *meta = PsfMetadata{};
+  ScopedPsfFileContext scope(path);
   std::string pathUtf8 = toUtf8String(path);
   int version = psf_load(pathUtf8.c_str(), &psf_file_system, 0, nullptr,
                          nullptr, psfInfoCallback, meta, 0);
@@ -464,6 +555,7 @@ bool initEmulatorState(std::vector<uint8_t>* psxState,
   psx_clear_state(psxState->data(), static_cast<uint8>(version));
 
   std::string pathUtf8 = toUtf8String(path);
+  ScopedPsfFileContext scope(path);
   if (version == 1) {
     Psf1LoadState state;
     state.emu = psxState->data();

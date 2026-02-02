@@ -26,6 +26,7 @@
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "gmeaudio.h"
+#include "gsfaudio.h"
 #include "vgmaudio.h"
 #include "kssaudio.h"
 #include "m4adecoder.h"
@@ -167,8 +168,12 @@ static bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
          ext == ".webm" || ext == ".mp4" || ext == ".kss" || ext == ".nsf" ||
+#if !RADIOIFY_DISABLE_GSF_GPL
+         ext == ".gsf" || ext == ".minigsf" ||
+#endif
          ext == ".vgm" || ext == ".vgz" || ext == ".psf" ||
-         ext == ".minipsf" || ext == ".psf2" || ext == ".minipsf2";
+         ext == ".minipsf" ||
+         ext == ".psf2" || ext == ".minipsf2";
 }
 
 static bool isMiniaudioExt(const std::filesystem::path& p) {
@@ -179,6 +184,16 @@ static bool isMiniaudioExt(const std::filesystem::path& p) {
 static bool isGmeExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".nsf";
+}
+
+static bool isGsfExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+#if !RADIOIFY_DISABLE_GSF_GPL
+  return ext == ".gsf" || ext == ".minigsf";
+#else
+  (void)ext;
+  return false;
+#endif
 }
 
 static bool isVgmExt(const std::filesystem::path& p) {
@@ -215,6 +230,9 @@ static bool listTracksForFile(const std::filesystem::path& path,
   if (isGmeExt(path)) {
     return gmeListTracks(path, tracks, error);
   }
+  if (isGsfExt(path)) {
+    return gsfListTracks(path, tracks, error);
+  }
   if (isVgmExt(path)) {
     return vgmListTracks(path, tracks, error);
   }
@@ -231,8 +249,11 @@ static void validateInputFile(const std::filesystem::path& p) {
     die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
     die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf, .vgm, "
-        ".vgz, .psf, .minipsf, .psf2, .minipsf2.");
+        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf, "
+#if !RADIOIFY_DISABLE_GSF_GPL
+        ".gsf, .minigsf, "
+#endif
+        ".vgm, .vgz, .psf, .minipsf, .psf2, .minipsf2.");
   }
 }
 
@@ -1009,8 +1030,11 @@ int main(int argc, char** argv) {
       } else {
         showingLabel =
             "  Showing: folders + "
-            ".wav/.mp3/.flac/.m4a/.webm/.mp4/.kss/.nsf/.vgm/.vgz/.psf/.minipsf/"
-            ".psf2/.minipsf2/.jpg/.jpeg/.png/.bmp";
+            ".wav/.mp3/.flac/.m4a/.webm/.mp4/.kss/.nsf/"
+#if !RADIOIFY_DISABLE_GSF_GPL
+            ".gsf/.minigsf/"
+#endif
+            ".vgm/.vgz/.psf/.minipsf/.psf2/.minipsf2/.jpg/.jpeg/.png/.bmp";
       }
       screen.writeText(0, 4, fitLine(showingLabel, width), kStyleDim);
 

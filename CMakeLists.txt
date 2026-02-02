@@ -20,6 +20,7 @@ add_executable(radioify
   ffmpegaudio.cpp
   gpu_shared.cpp
   gmeaudio.cpp
+  gsfaudio.cpp
   vgmaudio.cpp
   kssaudio.cpp
   psfaudio.cpp
@@ -501,10 +502,15 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/mitsuman/psf2wav.git
   GIT_TAG e07e01a816ae74ba9c7eeaffcd6d9bf7fb294afc
 )
+cmake_policy(PUSH)
+if (POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
 FetchContent_GetProperties(psf2wav)
 if (NOT psf2wav_POPULATED)
   FetchContent_Populate(psf2wav)
 endif()
+cmake_policy(POP)
 
 add_library(psfcore STATIC
   ${psf2wav_SOURCE_DIR}/highly_experimental/psflib/psflib.c
@@ -526,6 +532,13 @@ target_compile_definitions(psfcore PRIVATE EMU_COMPILE EMU_LITTLE_ENDIAN)
 target_link_libraries(psfcore PUBLIC ZLIB::ZLIB)
 target_link_libraries(radioify PRIVATE psfcore)
 target_link_libraries(radioify PRIVATE sexypsf)
+
+set(_radioify_warn_deprecated_defined OFF)
+if (DEFINED CMAKE_WARN_DEPRECATED)
+  set(_radioify_warn_deprecated_defined ON)
+  set(_radioify_warn_deprecated_value ${CMAKE_WARN_DEPRECATED})
+endif()
+set(CMAKE_WARN_DEPRECATED OFF)
 FetchContent_Declare(
   libkss
   GIT_REPOSITORY https://github.com/digital-sound-antiques/libkss.git
@@ -536,6 +549,13 @@ FetchContent_MakeAvailable(libkss)
 target_include_directories(radioify PRIVATE ${libkss_SOURCE_DIR}/src)
 target_include_directories(radioify PRIVATE ${libkss_SOURCE_DIR}/modules)
 target_link_libraries(radioify PRIVATE kss)
+
+set(_radioify_disable_sdl2_defined OFF)
+if (DEFINED CMAKE_DISABLE_FIND_PACKAGE_SDL2)
+  set(_radioify_disable_sdl2_defined ON)
+  set(_radioify_disable_sdl2_value ${CMAKE_DISABLE_FIND_PACKAGE_SDL2})
+endif()
+set(CMAKE_DISABLE_FIND_PACKAGE_SDL2 TRUE)
 FetchContent_Declare(
   gme
   GIT_REPOSITORY https://github.com/ShiftMediaProject/Game-Music-Emu.git
@@ -544,6 +564,60 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(gme)
 target_include_directories(radioify PRIVATE ${gme_SOURCE_DIR})
 target_link_libraries(radioify PRIVATE gme)
+if (_radioify_disable_sdl2_defined)
+  set(CMAKE_DISABLE_FIND_PACKAGE_SDL2 ${_radioify_disable_sdl2_value})
+else()
+  unset(CMAKE_DISABLE_FIND_PACKAGE_SDL2 CACHE)
+  unset(CMAKE_DISABLE_FIND_PACKAGE_SDL2)
+endif()
+if (_radioify_warn_deprecated_defined)
+  set(CMAKE_WARN_DEPRECATED ${_radioify_warn_deprecated_value})
+else()
+  unset(CMAKE_WARN_DEPRECATED CACHE)
+  unset(CMAKE_WARN_DEPRECATED)
+endif()
+
+option(RADIOIFY_DISABLE_GSF_GPL "Disable GSF playback via GPL PlayGSF core" OFF)
+target_compile_definitions(radioify PRIVATE RADIOIFY_DISABLE_GSF_GPL=$<BOOL:${RADIOIFY_DISABLE_GSF_GPL}>)
+
+if (NOT RADIOIFY_DISABLE_GSF_GPL)
+  add_library(playgsf STATIC
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/gsf.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA/GBA.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA/Globals.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA/Sound.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA/Util.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA/bios.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA/snd_interp.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA/unzip.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA/memgzio.c
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA/psftag.c
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/libresample-0.1.3/src/resample.c
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/libresample-0.1.3/src/resamplesubs.c
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/libresample-0.1.3/src/filterkit.c
+  )
+  target_include_directories(playgsf PUBLIC
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/libresample-0.1.3/include
+  )
+  target_include_directories(radioify PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA
+    ${CMAKE_SOURCE_DIR}/third_party/playgsf/libresample-0.1.3/include
+  )
+  target_link_libraries(playgsf PUBLIC ZLIB::ZLIB)
+  if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+    target_compile_definitions(playgsf PRIVATE C_CORE)
+  endif()
+  if (MSVC)
+    target_compile_options(playgsf PRIVATE /W0)
+    target_compile_definitions(playgsf PRIVATE _CRT_SECURE_NO_WARNINGS)
+  else()
+    target_compile_options(playgsf PRIVATE -w)
+  endif()
+  target_link_libraries(radioify PRIVATE playgsf)
+endif()
 
 set(LIBVGM_BUILD_PLAYER OFF CACHE BOOL "Build libvgm player app" FORCE)
 set(LIBVGM_BUILD_VGM2WAV OFF CACHE BOOL "Build libvgm vgm2wav app" FORCE)
