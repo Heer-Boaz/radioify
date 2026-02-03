@@ -137,6 +137,24 @@ struct InputCallbacks {
   std::function<void(BrowserState&, const std::string&)> onRefreshBrowser;
 };
 
+enum class ActionStripItem {
+  Radio,
+  Hz50,
+  View,
+  Options
+};
+
+struct ActionStripButton {
+  ActionStripItem id = ActionStripItem::Radio;
+  int x0 = 0;
+  int x1 = 0;
+};
+
+struct ActionStripLayout {
+  int y = -1;
+  std::vector<ActionStripButton> buttons;
+};
+
 bool handlePlaybackInput(const InputEvent& ev, bool& running,
                           const InputCallbacks& callbacks);
 
@@ -151,9 +169,11 @@ void handleInputEvent(
   int progressBarX,
   int progressBarY,
   int progressBarWidth,
+  const ActionStripLayout& actionStrip,
   bool playMode,
   bool decoderReady,
   int& breadcrumbHover,
+  int& actionHover,
   bool& dirty,
   bool& running,
   const InputCallbacks& callbacks

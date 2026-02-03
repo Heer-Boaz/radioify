@@ -206,6 +206,18 @@ BrowserState::ViewMode nextViewMode(BrowserState::ViewMode mode) {
   return BrowserState::ViewMode::Thumbnails;
 }
 
+BrowserState::ViewMode prevViewMode(BrowserState::ViewMode mode) {
+  switch (mode) {
+    case BrowserState::ViewMode::Thumbnails:
+      return BrowserState::ViewMode::ListOnly;
+    case BrowserState::ViewMode::ListPreview:
+      return BrowserState::ViewMode::Thumbnails;
+    case BrowserState::ViewMode::ListOnly:
+      return BrowserState::ViewMode::ListPreview;
+  }
+  return BrowserState::ViewMode::Thumbnails;
+}
+
 void scrollFromBar(BrowserState& browser, const GridLayout& layout, int y,
                    int listTop, int listHeight, bool& dirty) {
   if (!layout.showScrollBar || layout.totalRows <= layout.rowsVisible) return;
@@ -234,15 +246,27 @@ void scrollFromBar(BrowserState& browser, const GridLayout& layout, int y,
     dirty = true;
   }
 }
+
+int actionStripIndexAt(const ActionStripLayout& layout, int x, int y) {
+  if (layout.y < 0 || y != layout.y) return -1;
+  int count = static_cast<int>(layout.buttons.size());
+  for (int i = 0; i < count; ++i) {
+    const auto& btn = layout.buttons[static_cast<size_t>(i)];
+    if (x >= btn.x0 && x < btn.x1) return i;
+  }
+  return -1;
+}
 }  // namespace
 
 void handleInputEvent(const InputEvent& ev, BrowserState& browser,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
                       int listTop, int listHeight, int progressBarX,
-                      int progressBarY, int progressBarWidth, bool playMode,
-                      bool decoderReady, int& breadcrumbHover, bool& dirty,
-                      bool& running, const InputCallbacks& callbacks) {
+                      int progressBarY, int progressBarWidth,
+                      const ActionStripLayout& actionStrip, bool playMode,
+                      bool decoderReady, int& breadcrumbHover,
+                      int& actionHover, bool& dirty, bool& running,
+                      const InputCallbacks& callbacks) {
   if (ev.type == InputEvent::Type::Resize) {
     dirty = true;
     if (callbacks.onResize) callbacks.onResize();
@@ -289,7 +313,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       dirty = true;
       return;
     }
-
     if (key.vk == VK_DIVIDE || key.ch == '/') {
       browser.filterActive = true;
       browser.filter.clear();
@@ -410,15 +433,34 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
   if (ev.type == InputEvent::Type::Mouse) {
     const MouseEvent& mouse = ev.mouse;
     bool leftPressed = (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+    bool rightPressed = (mouse.buttonState & RIGHTMOST_BUTTON_PRESSED) != 0;
     int nextHover = breadcrumbIndexAt(breadcrumbLine, mouse.pos.X, mouse.pos.Y,
                                       breadcrumbY);
     if (nextHover != breadcrumbHover) {
       breadcrumbHover = nextHover;
       dirty = true;
     }
+    int nextActionHover =
+        actionStripIndexAt(actionStrip, mouse.pos.X, mouse.pos.Y);
+    if (nextActionHover != actionHover) {
+      actionHover = nextActionHover;
+      dirty = true;
+    }
     if (mouse.eventFlags == MOUSE_WHEELED) {
       int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
       if (delta != 0) {
+        int actionIndex =
+            actionStripIndexAt(actionStrip, mouse.pos.X, mouse.pos.Y);
+        if (actionIndex >= 0) {
+          const auto& btn =
+              actionStrip.buttons[static_cast<size_t>(actionIndex)];
+          if (btn.id == ActionStripItem::View) {
+            browser.viewMode = (delta > 0) ? prevViewMode(browser.viewMode)
+                                           : nextViewMode(browser.viewMode);
+            dirty = true;
+            return;
+          }
+        }
         browser.scrollRow -= delta / WHEEL_DELTA;
         int maxScroll =
             std::max(0, layout.totalRows - layout.rowsVisible);
@@ -443,8 +485,46 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
 
+    if (rightPressed && mouse.eventFlags == 0) {
+      int actionIndex =
+          actionStripIndexAt(actionStrip, mouse.pos.X, mouse.pos.Y);
+      if (actionIndex >= 0) {
+        const auto& btn =
+            actionStrip.buttons[static_cast<size_t>(actionIndex)];
+        if (btn.id == ActionStripItem::View) {
+          browser.viewMode = prevViewMode(browser.viewMode);
+          dirty = true;
+          return;
+        }
+      }
+    }
+
     if (leftPressed &&
         (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
+      int actionIndex =
+          actionStripIndexAt(actionStrip, mouse.pos.X, mouse.pos.Y);
+      if (actionIndex >= 0) {
+        const auto& btn =
+            actionStrip.buttons[static_cast<size_t>(actionIndex)];
+        switch (btn.id) {
+          case ActionStripItem::Radio:
+            if (callbacks.onToggleRadio) callbacks.onToggleRadio();
+            dirty = true;
+            return;
+          case ActionStripItem::Hz50:
+            if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
+            dirty = true;
+            return;
+          case ActionStripItem::View:
+            browser.viewMode = nextViewMode(browser.viewMode);
+            dirty = true;
+            return;
+          case ActionStripItem::Options:
+            if (callbacks.onToggleOptions) callbacks.onToggleOptions();
+            dirty = true;
+            return;
+        }
+      }
       if (layout.showScrollBar && layout.scrollBarX >= 0 &&
           layout.scrollBarWidth > 0 &&
           mouse.pos.X >= layout.scrollBarX &&
@@ -538,7 +618,6 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
       running = false;
       return true;
     }
-
     // Playback control
     if (key.vk == VK_SPACE || key.ch == ' ') {
       if (callbacks.onTogglePause) callbacks.onTogglePause();

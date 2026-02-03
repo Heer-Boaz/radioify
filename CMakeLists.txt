@@ -10,7 +10,9 @@ option(RADIOIFY_ENABLE_FFMPEG_ERROR_LOG "Enable ffmpeg error log output" OFF)
 option(RADIOIFY_ENABLE_STAGING_UPLOAD "Enable staging-based texture uploads to avoid implicit GPU sync" OFF)
 
 add_executable(radioify
+  app_common.cpp
   main.cpp
+  tui.cpp
   asciiart.cpp
   asciiart_gpu.cpp
   audioplayback.cpp

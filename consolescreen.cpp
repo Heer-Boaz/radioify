@@ -452,7 +452,7 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
     std::string name = e.name;
     if (e.isDir && name != "..") name += "/";
     layout.names.push_back(name);
-    maxName = std::max(maxName, utf8CodepointCount(name));
+    maxName = std::max(maxName, utf8CodepointCount(name) + 2);
   }
 
   constexpr int kThumbMinWidth = 20;
@@ -587,6 +587,15 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
     }
   }
 
+  auto entryPrefix = [&](const FileEntry& entry) -> std::string {
+    if (entry.isDir) return "\xF0\x9F\x93\x81 ";
+    if (entry.trackIndex >= 0) return "\xE2\x99\xAA ";
+    if (isAudio && isAudio(entry.path)) return "\xE2\x99\xAA ";
+    if (isVideo && isVideo(entry.path)) return "\xE2\x96\xB6 ";
+    if (isImage && isImage(entry.path)) return "\xE2\x96\xA1 ";
+    return "\xC2\xB7 ";
+  };
+
   constexpr int kThumbJobsPerFrame = 4;
   constexpr size_t kMaxThumbQueue = 64;
   int enqueueBudget =
@@ -649,14 +658,8 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         bool isSelected = (idx == browser.selected);
 
-        std::string prefix;
-        if (!entry.isDir && entry.trackIndex < 0) {
-          if (isVideo && isVideo(entry.path)) prefix = "[V] ";
-          else if (isAudio && isAudio(entry.path)) prefix = "[A] ";
-          else if (isImage && isImage(entry.path)) prefix = "[I] ";
-        }
-
-        std::string cell = fitName(prefix + layout.names[static_cast<size_t>(idx)],
+        std::string cell =
+            fitName(entryPrefix(entry) + layout.names[static_cast<size_t>(idx)],
                                    layout.colWidth);
         int cellWidth = utf8CodepointCount(cell);
         if (cellWidth < layout.colWidth) {
@@ -700,15 +703,15 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       } else {
         std::string placeholder;
         if (entry.isDir) {
-          placeholder = "[DIR]";
+          placeholder = "\xF0\x9F\x93\x81";
         } else if (img) {
-          placeholder = "[IMG]";
+          placeholder = "\xE2\x96\xA1";
         } else if (vid) {
-          placeholder = "[VID]";
+          placeholder = "\xE2\x96\xB6";
         } else if (aud) {
-          placeholder = "[AUD]";
+          placeholder = "\xE2\x99\xAA";
         } else {
-          placeholder = "[FILE]";
+          placeholder = "\xC2\xB7";
         }
         if ((img || vid) && lookup.pending) {
           placeholder = "...";
@@ -762,15 +765,15 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       } else {
         std::string placeholder;
         if (entry.isDir) {
-          placeholder = "[DIR]";
+          placeholder = "\xF0\x9F\x93\x81";
         } else if (img) {
-          placeholder = "[IMG]";
+          placeholder = "\xE2\x96\xA1";
         } else if (vid) {
-          placeholder = "[VID]";
+          placeholder = "\xE2\x96\xB6";
         } else if (aud) {
-          placeholder = "[AUD]";
+          placeholder = "\xE2\x99\xAA";
         } else {
-          placeholder = "[FILE]";
+          placeholder = "\xC2\xB7";
         }
         if ((img || vid) && lookup.pending) {
           placeholder = "...";
@@ -782,8 +785,9 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
 
       int labelY = cellTop + layout.thumbHeight;
       if (labelY < listTop + listHeight) {
-        std::string label =
-            fitName(layout.names[static_cast<size_t>(idx)], layout.colWidth);
+        std::string label = fitName(entryPrefix(entry) +
+                                        layout.names[static_cast<size_t>(idx)],
+                                    layout.colWidth);
         int labelWidth = utf8CodepointCount(label);
         int labelX =
             cellLeft + std::max(0, (layout.colWidth - labelWidth) / 2);

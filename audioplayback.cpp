@@ -2731,6 +2731,12 @@ std::string audioGetWarning() {
 }
 
 bool audioIs50HzEnabled() {
+  if (gAudio.state.usingVgm.load()) {
+    return gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50;
+  }
+  if (gAudio.state.usingGme.load()) {
+    return gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50;
+  }
   return gAudio.kssOptions.force50Hz;
 }
 
