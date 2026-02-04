@@ -147,6 +147,7 @@ struct SpeakerSim {
   float drive = 1.18f;
   float mix = 0.35f;
   float limit = 0.93f;
+  bool clipTriggered = false;
 
   void init(float fs);
   void reset();
@@ -201,6 +202,13 @@ struct Radio1938 {
   float tuneSmoothedHz = 0.0f;
   float bwSmoothedHz = 0.0f;
   float tuneTiltExtra = 0.22f;
+
+  float autoEnv = 0.0f;
+  float autoGainDb = 0.0f;
+  float autoEnvAtk = 0.0f;
+  float autoEnvRel = 0.0f;
+  float autoGainAtk = 0.0f;
+  float autoGainRel = 0.0f;
 
   float adjPhase = 0.0f;
   float adjBeatHz = 980.0f;

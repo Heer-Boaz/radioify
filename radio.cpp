@@ -18,6 +18,10 @@ static constexpr float kPostNoiseMix = 0.12f; // Was 0.05f
 static constexpr float kNoiseFloorAmp = 0.0015f;
 static constexpr float kCompMakeupGain = 1.35f;  // ~+2.6 dB after compression.
 static constexpr float kRadioInputPad = 0.70f;   // ~-3.1 dB headroom.
+static constexpr bool kEnableAutoLevel = true;
+static constexpr float kAutoTargetDb = -24.0f;
+static constexpr float kAutoMaxBoostDb = 9.0f;
+static constexpr float kSatClipDelta = 0.03f;
 
 static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
@@ -451,6 +455,7 @@ void SpeakerSim::reset() {
   boxRes.reset();
   boxRes2.reset();
   coneDip.reset();
+  clipTriggered = false;
 }
 
 float SpeakerSim::process(float x) {
@@ -459,6 +464,9 @@ float SpeakerSim::process(float x) {
   y = coneDip.process(y);
   float yd = std::tanh(drive * y) / std::tanh(drive);
   y = (1.0f - mix) * y + mix * yd;
+  if (std::fabs(y) > limit) {
+    clipTriggered = true;
+  }
   return softClip(y, limit);
 }
 
@@ -509,6 +517,15 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   float sagRelMs = 900.0f;
   sagAtk = std::exp(-1.0f / (sampleRate * (sagAtkMs / 1000.0f)));
   sagRel = std::exp(-1.0f / (sampleRate * (sagRelMs / 1000.0f)));
+
+  float autoEnvAtkMs = 8.0f;
+  float autoEnvRelMs = 220.0f;
+  autoEnvAtk = std::exp(-1.0f / (sampleRate * (autoEnvAtkMs / 1000.0f)));
+  autoEnvRel = std::exp(-1.0f / (sampleRate * (autoEnvRelMs / 1000.0f)));
+  float autoGainAtkMs = 140.0f;
+  float autoGainRelMs = 1200.0f;
+  autoGainAtk = std::exp(-1.0f / (sampleRate * (autoGainAtkMs / 1000.0f)));
+  autoGainRel = std::exp(-1.0f / (sampleRate * (autoGainRelMs / 1000.0f)));
 
   // Tube saturation (warmth)
   sat.drive = 1.25f;
@@ -617,6 +634,8 @@ void Radio1938::reset() {
   detuneIndex = 0;
   std::fill(detuneBuf.begin(), detuneBuf.end(), 0.0f);
   sagEnv = 0.0f;
+  autoEnv = 0.0f;
+  autoGainDb = 0.0f;
   roomIndex = 0;
   std::fill(roomBuf.begin(), roomBuf.end(), 0.0f);
   roomTailIndex = 0;
@@ -658,6 +677,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
   if (!samples || frames == 0) return;
   if (kBypassRadio1938) return;
   clipTriggered = false; // Reset clip flag
+  speaker.clipTriggered = false;
   constexpr float twoPi = 6.283185307f;
   constexpr float kTuneTau = 0.05f;
   float rate = std::max(1.0f, sampleRate);
@@ -684,6 +704,25 @@ void Radio1938::process(float* samples, uint32_t frames) {
     float inR = (channels > 1) ? samples[f * channels + 1] : inL;
     float x = (channels > 1) ? 0.5f * (inL + inR) : inL;
     x *= kRadioInputPad;
+    if (kEnableAutoLevel) {
+      float ax = std::fabs(x);
+      if (ax > autoEnv) {
+        autoEnv = autoEnvAtk * autoEnv + (1.0f - autoEnvAtk) * ax;
+      } else {
+        autoEnv = autoEnvRel * autoEnv + (1.0f - autoEnvRel) * ax;
+      }
+      float envDb = lin2db(autoEnv);
+      float targetBoostDb =
+          std::clamp(kAutoTargetDb - envDb, 0.0f, kAutoMaxBoostDb);
+      if (targetBoostDb < autoGainDb) {
+        autoGainDb =
+            autoGainAtk * autoGainDb + (1.0f - autoGainAtk) * targetBoostDb;
+      } else {
+        autoGainDb =
+            autoGainRel * autoGainDb + (1.0f - autoGainRel) * targetBoostDb;
+      }
+      x *= db2lin(autoGainDb);
+    }
     auto writeOut = [&](float v) {
       for (int c = 0; c < channels; ++c) {
         samples[f * channels + c] = v;
@@ -845,7 +884,13 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = comp.process(y);
     y *= kCompMakeupGain;
     y = processOversampled2x(y, satOsPrev, satOsLp1, satOsLp2,
-                             [&](float v) { return sat.process(v); });
+                             [&](float v) {
+                               float out = sat.process(v);
+                               if (std::fabs(out - v) > kSatClipDelta) {
+                                 clipTriggered = true;
+                               }
+                               return out;
+                             });
     y = postLpf1.process(y);
     float level = std::fabs(y);
     if (level > sagEnv) {
@@ -901,7 +946,13 @@ void Radio1938::process(float* samples, uint32_t frames) {
     }
     y *= makeupGain;
     y = processOversampled2x(y, speakerOsPrev, speakerOsLp1, speakerOsLp2,
-                             [&](float v) { return speaker.process(v); });
+                             [&](float v) {
+                               float out = speaker.process(v);
+                               if (speaker.clipTriggered) {
+                                 clipTriggered = true;
+                               }
+                               return out;
+                             });
     y = postLpf2.process(y);
     if (!roomBuf.empty()) {
       float dry = y;

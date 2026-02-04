@@ -666,15 +666,15 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
 
     // Volume
     if (key.vk == VK_UP) {
-      if (shift || alt) {
-        float step = alt ? 0.10f : 0.01f;
+      if (shift) {
+        float step = 0.10f;
         if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(step);
         return true;
       }
     }
     if (key.vk == VK_DOWN) {
-      if (shift || alt) {
-        float step = alt ? 0.10f : 0.01f;
+      if (shift) {
+        float step = 0.10f;
         if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-step);
         return true;
       }

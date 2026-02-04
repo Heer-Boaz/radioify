@@ -809,20 +809,27 @@ void dataCallback(ma_device* device, void* output, const void*,
     }
 
     float vol = state->volume.load(std::memory_order_relaxed);
+    bool postClip = false;
     if (vol != 1.0f) {
       for (ma_uint32 i = 0; i < frameCount * channels; ++i) {
         float x = out[i] * vol;
         if (vol > 1.0f) {
           if (x > 0.9f) {
+            postClip = true;
             float r = x - 0.9f;
             x = 0.9f + 0.1f * (r / (0.1f + r));
           } else if (x < -0.9f) {
+            postClip = true;
             float r = -x - 0.9f;
             x = -(0.9f + 0.1f * (r / (0.1f + r)));
           }
         }
         out[i] = x;
       }
+    }
+    if (postClip) {
+      state->radioClipHold.store(kRadioClipHoldFrames,
+                                 std::memory_order_relaxed);
     }
     return;
   }
@@ -1076,20 +1083,27 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
 
   float vol = state->volume.load(std::memory_order_relaxed);
+  bool postClip = false;
   if (vol != 1.0f) {
     for (ma_uint32 i = 0; i < frameCount * state->channels; ++i) {
       float x = out[i] * vol;
       if (vol > 1.0f) {
         if (x > 0.9f) {
+          postClip = true;
           float r = x - 0.9f;
           x = 0.9f + 0.1f * (r / (0.1f + r));
         } else if (x < -0.9f) {
+          postClip = true;
           float r = -x - 0.9f;
           x = -(0.9f + 0.1f * (r / (0.1f + r)));
         }
       }
       out[i] = x;
     }
+  }
+  if (postClip) {
+    state->radioClipHold.store(kRadioClipHoldFrames,
+                               std::memory_order_relaxed);
   }
 }
 
