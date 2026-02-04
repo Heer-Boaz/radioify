@@ -110,6 +110,7 @@ void audioAdjustVolume(float delta);
 void audioAdjustRadioMakeup(float delta);
 float audioGetVolume();
 float audioGetRadioMakeup();
+float audioGetPeak();
 bool audioIsRadioClipping();
 std::string audioGetWarning();
 bool audioIs50HzEnabled();

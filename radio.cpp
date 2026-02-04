@@ -22,6 +22,7 @@ static constexpr bool kEnableAutoLevel = true;
 static constexpr float kAutoTargetDb = -24.0f;
 static constexpr float kAutoMaxBoostDb = 9.0f;
 static constexpr float kSatClipDelta = 0.03f;
+static constexpr float kSatClipMinLevel = 0.70f;
 
 static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
@@ -886,7 +887,10 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = processOversampled2x(y, satOsPrev, satOsLp1, satOsLp2,
                              [&](float v) {
                                float out = sat.process(v);
-                               if (std::fabs(out - v) > kSatClipDelta) {
+                               float level = std::max(std::fabs(out),
+                                                      std::fabs(v));
+                               if (level > kSatClipMinLevel &&
+                                   std::fabs(out - v) > kSatClipDelta) {
                                  clipTriggered = true;
                                }
                                return out;

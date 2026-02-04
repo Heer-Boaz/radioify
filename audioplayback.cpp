@@ -548,6 +548,7 @@ struct AudioState {
   std::atomic<uint64_t> audioLeadSilenceFrames{0};
   std::atomic<bool> audioPrimed{false};
   std::atomic<float> volume{1.0f};
+  std::atomic<float> peak{0.0f};
   std::atomic<float> radioMakeupGain{1.5f};
   std::atomic<uint32_t> radioClipHold{0};
   AudioSampleRing streamRb;
@@ -685,6 +686,27 @@ void startAuditionWorker(AuditionTone tone) {
   });
 }
 
+static void updatePeakMeter(AudioState* state, const float* samples,
+                            ma_uint32 frameCount) {
+  if (!state || !samples || frameCount == 0) {
+    if (state) {
+      state->peak.store(0.0f, std::memory_order_relaxed);
+    }
+    return;
+  }
+  const uint32_t channels = std::max(1u, state->channels);
+  const size_t count = static_cast<size_t>(frameCount) * channels;
+  float peak = 0.0f;
+  for (size_t i = 0; i < count; ++i) {
+    peak = std::max(peak, std::fabs(samples[i]));
+  }
+  float prev = state->peak.load(std::memory_order_relaxed);
+  float rate = static_cast<float>(std::max(1u, state->sampleRate));
+  float decay = std::exp(-static_cast<float>(frameCount) / (rate * 0.30f));
+  float next = std::max(peak, prev * decay);
+  state->peak.store(next, std::memory_order_relaxed);
+}
+
 void dataCallback(ma_device* device, void* output, const void*,
                   ma_uint32 frameCount) {
   static constexpr uint32_t kRadioClipHoldFrames = 2048;
@@ -707,6 +729,7 @@ void dataCallback(ma_device* device, void* output, const void*,
       state->silentFrames.fetch_add(frameCount, std::memory_order_relaxed);
       state->lastFramesRead.store(0, std::memory_order_relaxed);
       std::fill(out, out + frameCount * channels, 0.0f);
+      updatePeakMeter(state, out, frameCount);
       state->audioClock.set_paused(true, nowUs());
       state->streamStarved.store(false, std::memory_order_relaxed);
       return;
@@ -831,6 +854,7 @@ void dataCallback(ma_device* device, void* output, const void*,
       state->radioClipHold.store(kRadioClipHoldFrames,
                                  std::memory_order_relaxed);
     }
+    updatePeakMeter(state, out, frameCount);
     return;
   }
 
@@ -838,6 +862,7 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->silentFrames.fetch_add(frameCount, std::memory_order_relaxed);
     state->lastFramesRead.store(0, std::memory_order_relaxed);
     std::fill(out, out + frameCount * state->channels, 0.0f);
+    updatePeakMeter(state, out, frameCount);
     return;
   }
 
@@ -1105,6 +1130,7 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->radioClipHold.store(kRadioClipHoldFrames,
                                std::memory_order_relaxed);
   }
+  updatePeakMeter(state, out, frameCount);
 }
 
 void stopM4aWorker() {
@@ -2728,6 +2754,10 @@ float audioGetVolume() {
 
 float audioGetRadioMakeup() {
   return gAudio.state.radioMakeupGain.load(std::memory_order_relaxed);
+}
+
+float audioGetPeak() {
+  return gAudio.state.peak.load(std::memory_order_relaxed);
 }
 
 bool audioIsRadioClipping() {

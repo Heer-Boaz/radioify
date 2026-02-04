@@ -1350,6 +1350,12 @@ int runTui(Options o) {
         actionHover = -1;
       }
 
+      int peakMeterY = -1;
+      if (line + 1 < height) {
+        peakMeterY = line;
+        line++;
+      }
+
       bool audioReady = audioIsReady();
       double currentSec = audioReady ? audioGetTimeSec() : 0.0;
       double totalSec = audioReady ? audioGetTotalSec() : -1.0;
@@ -1392,10 +1398,8 @@ int runTui(Options o) {
       float radioGain = audioGetRadioMakeup();
       char radioBuf[32];
       std::snprintf(radioBuf, sizeof(radioBuf), " RG:%.2fx", radioGain);
-      std::string clipStr = audioIsRadioClipping() ? " !" : "";
       std::string volStr = " Vol: " + std::to_string(volPct) +
-                           (volPct > 100 ? "% (BOOST)" : "%") +
-                           radioBuf + clipStr;
+                           (volPct > 100 ? "% (BOOST)" : "%") + radioBuf;
       std::string suffix =
           formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status + volStr;
       int suffixWidth = utf8CodepointCount(suffix);
@@ -1403,13 +1407,13 @@ int runTui(Options o) {
       if (barWidth < 10) {
         suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " +
                  status + " V:" + std::to_string(volPct) +
-                 (volPct > 100 ? "%!" : "%") + radioBuf + clipStr;
+                 (volPct > 100 ? "%!" : "%") + radioBuf;
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
       if (barWidth < 10) {
         suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) +
-                 (volPct > 100 ? "%!" : "%") + radioBuf + clipStr;
+                 (volPct > 100 ? "%!" : "%") + radioBuf;
         suffixWidth = utf8CodepointCount(suffix);
         barWidth = width - suffixWidth - 3;
       }
@@ -1435,13 +1439,52 @@ int runTui(Options o) {
         screen.writeChar(1 + i, line, cell.ch, cell.style);
       }
       screen.writeChar(1 + barWidth, line, L'|', kStyleProgressFrame);
+      int suffixBaseX = 2 + barWidth;
+      std::string rendered;
       if (!suffix.empty()) {
-        std::string rendered = " " + suffix;
-        int suffixBaseX = 2 + barWidth;
+        rendered = " " + suffix;
         screen.writeText(suffixBaseX, line, rendered, kStyleNormal);
-        if (audioIsRadioClipping()) {
-          int clipX = suffixBaseX + utf8CodepointCount(rendered) - 1;
-          screen.writeText(clipX, line, "!", kStyleAlert);
+      }
+      if (peakMeterY >= 0 && !rendered.empty()) {
+        float peak = std::clamp(audioGetPeak(), 0.0f, 1.2f);
+        int meterWidth = 8;
+        size_t volPos = rendered.find(" Vol:");
+        if (volPos == std::string::npos) {
+          volPos = rendered.find(" V:");
+        }
+        int meterX = suffixBaseX;
+        if (volPos != std::string::npos) {
+          int prefixWidth =
+              utf8CodepointCount(rendered.substr(0, volPos + 1));
+          meterX = suffixBaseX + prefixWidth;
+        }
+        if (meterX < 0) meterX = 0;
+        if (meterX + meterWidth > width) {
+          meterWidth = std::max(0, width - meterX);
+        }
+        if (meterWidth > 0) {
+          int filled =
+              static_cast<int>(std::round(peak * meterWidth));
+          filled = std::clamp(filled, 0, meterWidth);
+          Style meterOn = kStyleProgressFrame;
+          if (peak >= 0.95f) {
+            meterOn = kStyleAlert;
+          } else if (peak >= 0.80f) {
+            meterOn = kStyleAccent;
+          }
+          if (filled > 0) {
+            screen.writeRun(meterX, peakMeterY, filled, L'|', meterOn);
+          }
+          if (meterWidth - filled > 0) {
+            screen.writeRun(meterX + filled, peakMeterY,
+                            meterWidth - filled, L'.', kStyleDim);
+          }
+          if (audioIsRadioClipping()) {
+            int clipX = std::min(width - 1, meterX + meterWidth + 1);
+            if (clipX >= 0 && clipX < width) {
+              screen.writeText(clipX, peakMeterY, "!", kStyleAlert);
+            }
+          }
         }
       }
 
