@@ -1396,33 +1396,10 @@ int runTui(Options o) {
       }
       int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
       float radioGain = audioGetRadioMakeup();
-      char radioBuf[32];
-      std::snprintf(radioBuf, sizeof(radioBuf), " RG:%.2fx", radioGain);
-      std::string volStr = " Vol: " + std::to_string(volPct) +
-                           (volPct > 100 ? "% (BOOST)" : "%") + radioBuf;
-      std::string suffix =
-          formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status + volStr;
-      int suffixWidth = utf8CodepointCount(suffix);
-      int barWidth = width - suffixWidth - 3;
-      if (barWidth < 10) {
-        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " +
-                 status + " V:" + std::to_string(volPct) +
-                 (volPct > 100 ? "%!" : "%") + radioBuf;
-        suffixWidth = utf8CodepointCount(suffix);
-        barWidth = width - suffixWidth - 3;
-      }
-      if (barWidth < 10) {
-        suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) +
-                 (volPct > 100 ? "%!" : "%") + radioBuf;
-        suffixWidth = utf8CodepointCount(suffix);
-        barWidth = width - suffixWidth - 3;
-      }
-      if (barWidth < 5) {
-        suffix.clear();
-        barWidth = width - 2;
-      }
-      int maxBar = std::max(5, width - 2);
-      barWidth = std::clamp(barWidth, 5, maxBar);
+      ProgressTextLayout progressText = buildProgressTextLayout(
+          displaySec, totalSec, status, volPct, radioGain, width);
+      std::string suffix = progressText.suffix;
+      int barWidth = progressText.barWidth;
       double ratio = 0.0;
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
         ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);

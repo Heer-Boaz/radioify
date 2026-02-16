@@ -1390,31 +1390,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         status = "\xE2\x96\xB6";  // playing icon
       }
       int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-      std::string volStr = " Vol: " + std::to_string(volPct) + (volPct > 100 ? "% (BOOST)" : "%");
-      std::string vsyncStr = windowVsyncEnabled ? " VSync: On" : " VSync: Off";
-      std::string vsyncShort = windowVsyncEnabled ? " VS:On" : " VS:Off";
-      std::string suffix =
-          formatTime(displaySec) + " / " + formatTime(totalSec) + " " + status + volStr + vsyncStr;
-      int suffixWidth = utf8CodepointCount(suffix);
-      int barWidth = width - suffixWidth - 3;
-      if (barWidth < 10) {
-        suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " + status + " V:" +
-            std::to_string(volPct) + (volPct > 100 ? "%!" : "%") + vsyncShort;
-        suffixWidth = utf8CodepointCount(suffix);
-        barWidth = width - suffixWidth - 3;
-      }
-      if (barWidth < 10) {
-        suffix = formatTime(displaySec) + " V:" +
-            std::to_string(volPct) + (volPct > 100 ? "%!" : "%") + vsyncShort;
-        suffixWidth = utf8CodepointCount(suffix);
-        barWidth = width - suffixWidth - 3;
-      }
-      if (barWidth < 5) {
-        suffix.clear();
-        barWidth = width - 2;
-      }
-      int maxBar = std::max(5, width - 2);
-      barWidth = std::clamp(barWidth, 5, maxBar);
+      float radioGain = audioGetRadioMakeup();
+      ProgressTextLayout progressText = buildProgressTextLayout(
+          displaySec, totalSec, status, volPct, radioGain, width);
+      std::string suffix = progressText.suffix;
+      int barWidth = progressText.barWidth;
       double ratio = 0.0;
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
         ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);

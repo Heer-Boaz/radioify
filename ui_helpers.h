@@ -11,6 +11,11 @@ struct BufferCell {
   Style style{};
 };
 
+struct ProgressTextLayout {
+  std::string suffix;
+  int barWidth = 5;
+};
+
 std::string toUtf8String(const std::filesystem::path& p);
 
 float clamp01(float v);
@@ -21,6 +26,12 @@ std::string utf8Take(const std::string& s, int count);
 std::string utf8Slice(const std::string& s, int start, int count);
 std::string fitLine(const std::string& s, int width);
 std::string formatTime(double seconds);
+ProgressTextLayout buildProgressTextLayout(double displaySec,
+                                           double totalSec,
+                                           const std::string& status,
+                                           int volPct,
+                                           float radioGain,
+                                           int width);
 
 std::vector<BufferCell> renderProgressBarCells(double ratio,
                                                int width,

@@ -29,6 +29,43 @@ std::string formatTime(double seconds) {
   return buf;
 }
 
+ProgressTextLayout buildProgressTextLayout(double displaySec,
+                                           double totalSec,
+                                           const std::string& status,
+                                           int volPct,
+                                           float radioGain,
+                                           int width) {
+  ProgressTextLayout out;
+  char radioBuf[32];
+  std::snprintf(radioBuf, sizeof(radioBuf), " RG:%.2fx", radioGain);
+  std::string volStr = " Vol: " + std::to_string(volPct) +
+                       (volPct > 100 ? "% (BOOST)" : "%") + radioBuf;
+  out.suffix = formatTime(displaySec) + " / " + formatTime(totalSec) + " " +
+               status + volStr;
+  int suffixWidth = utf8CodepointCount(out.suffix);
+  int barWidth = width - suffixWidth - 3;
+  if (barWidth < 10) {
+    out.suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " +
+                 status + " V:" + std::to_string(volPct) +
+                 (volPct > 100 ? "%!" : "%") + radioBuf;
+    suffixWidth = utf8CodepointCount(out.suffix);
+    barWidth = width - suffixWidth - 3;
+  }
+  if (barWidth < 10) {
+    out.suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) +
+                 (volPct > 100 ? "%!" : "%") + radioBuf;
+    suffixWidth = utf8CodepointCount(out.suffix);
+    barWidth = width - suffixWidth - 3;
+  }
+  if (barWidth < 5) {
+    out.suffix.clear();
+    barWidth = width - 2;
+  }
+  int maxBar = std::max(5, width - 2);
+  out.barWidth = std::clamp(barWidth, 5, maxBar);
+  return out;
+}
+
 float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
 
 Color lerpColor(const Color& a, const Color& b, float t) {
