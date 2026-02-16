@@ -258,6 +258,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   bool enableAscii = config.enableAscii;
   bool enableAudio = config.enableAudio && audioIsEnabled();
   bool enableSubtitles = config.enableSubtitles;
+  // Ensure previous video textures/fences are not carried into a new session.
+  g_frameCache.Reset();
 
   bool fullRedrawEnabled = enableAscii;
   if (fullRedrawEnabled) {
@@ -296,7 +298,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       while (input.poll(ev)) {
         if (ev.type == InputEvent::Type::Key) {
           const KeyEvent& key = ev.key;
-          if (key.vk == VK_RETURN || key.vk == VK_ESCAPE) {
+          if (key.vk == VK_RETURN || key.vk == VK_ESCAPE ||
+              key.vk == VK_BROWSER_BACK || key.vk == VK_BACK) {
             return true;
           }
         }
@@ -315,7 +318,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (ev.type == InputEvent::Type::Key) {
           const KeyEvent& key = ev.key;
           if (key.vk == VK_RETURN) return true;
-          if (key.vk == VK_ESCAPE) {
+          if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
+              key.vk == VK_BACK) {
             return false;
           }
         }
@@ -503,7 +507,18 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           running = false;
           break;
         }
-        if (key.vk == VK_ESCAPE) {
+        if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
+            key.vk == VK_BACK) {
+          running = false;
+          break;
+        }
+      } else if (ev.type == InputEvent::Type::Mouse) {
+        const MouseEvent& mouse = ev.mouse;
+        const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
+                               FROM_LEFT_2ND_BUTTON_PRESSED |
+                               FROM_LEFT_3RD_BUTTON_PRESSED |
+                               FROM_LEFT_4TH_BUTTON_PRESSED;
+        if ((mouse.buttonState & backMask) != 0) {
           running = false;
           break;
         }
@@ -570,13 +585,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     const int footerLines = 0;
     int maxHeight = std::max(1, height - headerLines - footerLines);
     int maxOutW = std::max(1, width - 8);
-    int safeSrcW = std::max(1, srcW);
-    int safeSrcH = std::max(1, srcH);
-    int outW = std::max(1, std::min(maxOutW, safeSrcW / 2));
-    int outH = static_cast<int>(
-        std::lround(outW * (static_cast<float>(safeSrcH) / safeSrcW) / 2.0f));
-    outH = std::max(1, std::min(outH, safeSrcH / 4));
-    if (maxHeight > 0) outH = std::min(outH, maxHeight);
+    AsciiArtLayout fitted =
+        fitAsciiArtLayout(srcW, srcH, maxOutW, std::max(1, maxHeight));
+    int outW = fitted.width;
+    int outH = fitted.height;
     int targetW = std::max(2, outW * 2);
     int targetH = std::max(4, outH * 4);
     if (targetW & 1) ++targetW;
@@ -612,15 +624,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   auto computeAsciiOutputSize = [&](int maxWidth, int maxHeight, int srcW,
                                     int srcH) {
-    int safeSrcW = std::max(1, srcW);
-    int safeSrcH = std::max(1, srcH);
     int maxOutW = std::max(1, maxWidth - 8);
-    int outW = std::max(1, std::min(maxOutW, safeSrcW / 2));
-    int outH = static_cast<int>(
-        std::lround(outW * (static_cast<float>(safeSrcH) / safeSrcW) / 2.0f));
-    outH = std::max(1, std::min(outH, safeSrcH / 4));
-    if (maxHeight > 0) outH = std::min(outH, maxHeight);
-    return std::pair<int, int>(outW, outH);
+    AsciiArtLayout fitted =
+        fitAsciiArtLayout(srcW, srcH, maxOutW, std::max(1, maxHeight));
+    return std::pair<int, int>(fitted.width, fitted.height);
   };
 
   int requestedTargetW = 0;
@@ -757,7 +764,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     redraw = true;
   };
 
-  constexpr auto kProgressOverlayTimeout = std::chrono::milliseconds(3500);
+  constexpr auto kProgressOverlayTimeout = std::chrono::milliseconds(1750);
+  constexpr auto kProgressOverlayExtendedTimeout =
+      std::chrono::milliseconds(2500);
   auto nowMs = []() -> int64_t {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
@@ -773,8 +782,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     // 'ended' may not be set yet at first calls; it's captured by reference and can be used
     // if present later
     // Use a longer duration for extended cases
-    int64_t timeoutMs =
-        extended ? 5000 : static_cast<int64_t>(kProgressOverlayTimeout.count());
+    int64_t timeoutMs = extended
+                            ? static_cast<int64_t>(
+                                  kProgressOverlayExtendedTimeout.count())
+                            : static_cast<int64_t>(
+                                  kProgressOverlayTimeout.count());
     overlayUntilMs.store(now + timeoutMs, std::memory_order_relaxed);
     windowForcePresent.store(true, std::memory_order_relaxed);
     windowPresentCv.notify_one();
@@ -785,6 +797,45 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       return false;
     }
     return nowMs() <= until;
+  };
+  auto isBackMousePressed = [&](const MouseEvent& mouse) {
+    const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
+                           FROM_LEFT_2ND_BUTTON_PRESSED |
+                           FROM_LEFT_3RD_BUTTON_PRESSED |
+                           FROM_LEFT_4TH_BUTTON_PRESSED;
+    return (mouse.buttonState & backMask) != 0;
+  };
+  auto isWindowProgressHit = [&](const MouseEvent& mouse) {
+    float winW = static_cast<float>(g_videoWindow.GetWidth());
+    float winH = static_cast<float>(g_videoWindow.GetHeight());
+    if (winW <= 0.0f || winH <= 0.0f) {
+      return false;
+    }
+    float mouseWinX = static_cast<float>(mouse.pos.X) / winW;
+    float mouseWinY = static_cast<float>(mouse.pos.Y) / winH;
+    const float barYTop = 0.95f;
+    const float barYBot = 1.0f;
+    const float barXLeft = 0.02f;
+    const float barXRight = 0.98f;
+    return mouseWinX >= barXLeft && mouseWinX <= barXRight &&
+           mouseWinY >= barYTop && mouseWinY <= barYBot;
+  };
+  auto isTerminalProgressHit = [&](const MouseEvent& mouse) {
+    int screenHeight = std::max(10, screen.height());
+    int barY = progressBarY >= 0 ? progressBarY : (screenHeight - 1);
+    if (mouse.pos.Y != barY) {
+      return false;
+    }
+    if (progressBarWidth > 0 && progressBarX >= 0) {
+      return mouse.pos.X >= progressBarX &&
+             mouse.pos.X < progressBarX + progressBarWidth;
+    }
+    return mouse.pos.X >= 0;
+  };
+  auto isProgressHit = [&](const MouseEvent& mouse) {
+    bool windowEvent = (mouse.control & 0x80000000) != 0;
+    return windowEvent ? isWindowProgressHit(mouse)
+                       : isTerminalProgressHit(mouse);
   };
 
   auto getSubtitleText = [&](int64_t clockUs, bool seeking) -> std::string {
@@ -1427,7 +1478,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     windowPresentCv.notify_one();
     player.close();
     stopWindowThread();
-    if (audioOk) audioStop();
+    if (audioOk || audioStarting) audioStop();
+    g_frameCache.Reset();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return ok;
@@ -1539,7 +1591,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           continue;
         }
 
-        if (ev.key.vk == VK_ESCAPE) {
+        if (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BROWSER_BACK ||
+            ev.key.vk == VK_BACK) {
           running = false;
           closeWindowRequested = true;
           windowThreadEnabled.store(false, std::memory_order_relaxed);
@@ -1558,40 +1611,40 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         }
       }
       if (ev.type == InputEvent::Type::Mouse) {
-        triggerOverlay();
-        redraw = true;
-        if (windowEnabled) {
-          windowForcePresent.store(true, std::memory_order_relaxed);
-          windowPresentCv.notify_one();
-        }
         const MouseEvent& mouse = ev.mouse;
+        if (isBackMousePressed(mouse)) {
+          running = false;
+          closeWindowRequested = true;
+          windowThreadEnabled.store(false, std::memory_order_relaxed);
+          windowPresentCv.notify_one();
+          continue;
+        }
+
+        bool progressHit = isProgressHit(mouse);
+        if (progressHit) {
+          triggerOverlay();
+          redraw = true;
+          if (windowEnabled) {
+            windowForcePresent.store(true, std::memory_order_relaxed);
+            windowPresentCv.notify_one();
+          }
+        }
+
         bool leftPressed =
             (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
         
         if (leftPressed && (mouse.control & 0x80000000)) {
-          // Window-originated seek
-          // The UI is drawn relative to the window dimensions (uv.y 0.96-0.985)
-          // not the video viewport.
-          float winW = static_cast<float>(g_videoWindow.GetWidth());
-          float winH = static_cast<float>(g_videoWindow.GetHeight());
-          
-          if (winW > 0.0f && winH > 0.0f) {
-            float mouseWinX = static_cast<float>(mouse.pos.X) / winW;
-            float mouseWinY = static_cast<float>(mouse.pos.Y) / winH;
-            
-            // Progress bar is at y: 0.96-0.985, x: 0.02-0.98 (normalized window coords)
-            const float barYTop = 0.95f; // slightly larger hit area
-            const float barYBot = 1.0f;
-            const float barXLeft = 0.02f;
-            const float barXRight = 0.98f;
-            
-            if (mouseWinX >= barXLeft && mouseWinX <= barXRight &&
-                mouseWinY >= barYTop && mouseWinY <= barYBot) {
+          if (progressHit) {
+            float winW = static_cast<float>(g_videoWindow.GetWidth());
+            float winH = static_cast<float>(g_videoWindow.GetHeight());
+            if (winW > 0.0f && winH > 0.0f) {
+              float mouseWinX = static_cast<float>(mouse.pos.X) / winW;
+              const float barXLeft = 0.02f;
+              const float barXRight = 0.98f;
               double barWidth = static_cast<double>(barXRight - barXLeft);
               double relX = static_cast<double>(mouseWinX - barXLeft);
               double ratio = relX / barWidth;
               ratio = std::clamp(ratio, 0.0, 1.0);
-              
               double totalSec = player.durationUs() / 1000000.0;
               if (totalSec > 0.0 && std::isfinite(totalSec)) {
                 double target = ratio * totalSec;
@@ -1599,8 +1652,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               }
             }
           }
-          triggerOverlay();
-          redraw = true;
           continue;
         }
 
@@ -1734,7 +1785,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     windowPresentCv.notify_one();
     player.close();
     stopWindowThread();
-    if (audioOk) audioStop();
+    if (audioOk || audioStarting) audioStop();
+    g_frameCache.Reset();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return ok;
@@ -1742,7 +1794,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   player.close();
   stopWindowThread();
-  if (audioOk) audioStop();
+  if (audioOk || audioStarting) audioStop();
+  g_frameCache.Reset();
   finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
   return true;
 }

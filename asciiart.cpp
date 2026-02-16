@@ -22,6 +22,8 @@
 #include <thread>
 #include <vector>
 
+#include "ui_helpers.h"
+
 #ifdef _MSC_VER
 #define FORCE_INLINE __forceinline
 #define RESTRICT __restrict
@@ -478,12 +480,11 @@ struct BrailleFastScratch {
   void ensure(int w, int h, int maxArtWidthIn, int maxHeightIn) {
     if (w <= 0 || h <= 0) return;
     int maxOutW = std::max(1, maxArtWidthIn - 8);
-    int newOutW = std::max(1, std::min(maxOutW, w / 2));
-    int outHAspect = static_cast<int>(
-        std::lround(newOutW * (static_cast<float>(h) / w) / 2.0f));
-    outHAspect = std::max(1, std::min(outHAspect, h / 4));
-    if (maxHeightIn > 0) outHAspect = std::min(outHAspect, maxHeightIn);
-    int newOutH = outHAspect;
+    int maxOutH =
+        (maxHeightIn > 0) ? maxHeightIn : std::max(1, h / 4);
+    AsciiArtLayout fitted = fitAsciiArtLayout(w, h, maxOutW, maxOutH);
+    int newOutW = fitted.width;
+    int newOutH = fitted.height;
     int newScaledW = newOutW * 2;
     int newScaledH = newOutH * 4;
     int newPadStride = newScaledW + 2;

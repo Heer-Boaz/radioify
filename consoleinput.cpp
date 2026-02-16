@@ -25,6 +25,23 @@ void ConsoleInput::restore() {
 
 bool ConsoleInput::poll(InputEvent& out) {
   if (!active_) return false;
+
+  // Fallback for terminal hosts that don't forward XBUTTON mouse events
+  // through ReadConsoleInput. Detect side-button edges via async key state.
+  bool x1Down = (GetAsyncKeyState(VK_XBUTTON1) & 0x8000) != 0;
+  bool x2Down = (GetAsyncKeyState(VK_XBUTTON2) & 0x8000) != 0;
+  bool x1Pressed = x1Down && !xButton1Prev_;
+  bool x2Pressed = x2Down && !xButton2Prev_;
+  xButton1Prev_ = x1Down;
+  xButton2Prev_ = x2Down;
+  if (x1Pressed || x2Pressed) {
+    out.type = InputEvent::Type::Key;
+    out.key.vk = VK_BROWSER_BACK;
+    out.key.ch = 0;
+    out.key.control = 0;
+    return true;
+  }
+
   DWORD count = 0;
   if (!GetNumberOfConsoleInputEvents(handle_, &count) || count == 0)
     return false;
@@ -282,6 +299,13 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     bool alt = (key.control & altMask) != 0;
     bool shift = (key.control & shiftMask) != 0;
 
+    if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
+      running = false;
+      if (callbacks.onQuit) callbacks.onQuit();
+      dirty = true;
+      return;
+    }
+
     if (browser.filterActive) {
       if (key.vk == VK_ESCAPE || key.vk == VK_RETURN) {
         browser.filterActive = false;
@@ -352,6 +376,28 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
     if (key.vk == VK_BACK) {
+      if (optionsBrowserIsActive(browser)) {
+        if (optionsBrowserNavigateUp(browser)) {
+          if (callbacks.onRefreshBrowser) {
+            callbacks.onRefreshBrowser(browser, "");
+          }
+          breadcrumbHover = -1;
+          dirty = true;
+        }
+        return;
+      }
+      if (browser.dir.has_parent_path()) {
+        browser.dir = browser.dir.parent_path();
+        browser.selected = 0;
+        if (callbacks.onRefreshBrowser) {
+          callbacks.onRefreshBrowser(browser, "");
+        }
+        breadcrumbHover = -1;
+        dirty = true;
+      }
+      return;
+    }
+    if (key.vk == VK_BROWSER_BACK) {
       if (optionsBrowserIsActive(browser)) {
         if (optionsBrowserNavigateUp(browser)) {
           if (callbacks.onRefreshBrowser) {
@@ -608,14 +654,10 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
     bool alt = (key.control & altMask) != 0;
     bool shift = (key.control & shiftMask) != 0;
 
-    // Exit shortcuts
-    if (ctrl && (key.vk == 'C' || key.ch == 'c' || key.vk == 'Q' || key.ch == 'q')) {
+    // Exit shortcut
+    if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
       running = false;
       if (callbacks.onQuit) callbacks.onQuit();
-      return true;
-    }
-    if (key.vk == VK_ESCAPE) {
-      running = false;
       return true;
     }
     // Playback control

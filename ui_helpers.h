@@ -16,6 +16,11 @@ struct ProgressTextLayout {
   int barWidth = 5;
 };
 
+struct AsciiArtLayout {
+  int width = 1;
+  int height = 1;
+};
+
 std::string toUtf8String(const std::filesystem::path& p);
 
 float clamp01(float v);
@@ -32,6 +37,10 @@ ProgressTextLayout buildProgressTextLayout(double displaySec,
                                            int volPct,
                                            float radioGain,
                                            int width);
+AsciiArtLayout fitAsciiArtLayout(int srcWidth,
+                                 int srcHeight,
+                                 int maxWidthChars,
+                                 int maxHeightChars);
 
 std::vector<BufferCell> renderProgressBarCells(double ratio,
                                                int width,

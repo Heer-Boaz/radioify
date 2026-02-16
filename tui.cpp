@@ -398,6 +398,18 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
         renderFrame();
         continue;
       }
+      if (ev.type == InputEvent::Type::Mouse) {
+        const MouseEvent& mouse = ev.mouse;
+        const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
+                               FROM_LEFT_2ND_BUTTON_PRESSED |
+                               FROM_LEFT_3RD_BUTTON_PRESSED |
+                               FROM_LEFT_4TH_BUTTON_PRESSED;
+        bool backPressed = (mouse.buttonState & backMask) != 0;
+        if (backPressed) {
+          return ok;
+        }
+        continue;
+      }
       if (ev.type == InputEvent::Type::Key) {
         return ok;
       }

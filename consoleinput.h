@@ -56,6 +56,8 @@ class ConsoleInput {
   HANDLE handle_ = INVALID_HANDLE_VALUE;
   DWORD originalMode_ = 0;
   bool active_ = false;
+  bool xButton1Prev_ = false;
+  bool xButton2Prev_ = false;
 };
 
 struct FileEntry {
