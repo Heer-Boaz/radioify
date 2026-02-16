@@ -16,6 +16,7 @@ add_executable(radioify
   asciiart.cpp
   asciiart_gpu.cpp
   audioplayback.cpp
+  melodyanalyzer.cpp
   browsermeta.cpp
   consoleinput.cpp
   consolescreen.cpp

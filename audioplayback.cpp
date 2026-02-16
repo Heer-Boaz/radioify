@@ -5,7 +5,6 @@
 #include <chrono>
 #include <cstdio>
 #include <cmath>
-#include <array>
 #include <condition_variable>
 #include <deque>
 #include <cstdint>
@@ -30,6 +29,7 @@ extern "C" {
 #include "gsfaudio.h"
 #include "vgmaudio.h"
 #include "kssaudio.h"
+#include "melodyanalyzer.h"
 #include "psfaudio.h"
 #include "radio.h"
 
@@ -59,29 +59,11 @@ constexpr int kVgmLoopSteps[] = {0, 1, 2, 3, 4, 6, 8, 12, 16};
 constexpr int kVgmFadeStepsMs[] = {0, 1000, 2000, 3000, 5000, 8000, 10000, 15000};
 constexpr int kVgmEndSilenceStepsMs[] = {0, 250, 500, 1000, 2000, 3000, 5000};
 constexpr uint32_t kVgmSampleRateSteps[] = {0, 11025, 22050, 32000, 44100, 48000, 88200, 96000};
-constexpr int kMelodyWindowFrames = 2048;
-constexpr int kMelodyAnalysisHop = 256;
-constexpr float kMelodyMinFrequencyHz = 55.0f;
-constexpr float kMelodyMaxFrequencyHz = 1200.0f;
-constexpr float kMelodyConfidenceFloor = 0.16f;
-constexpr float kMelodyConfidenceHold = 0.08f;
-constexpr float kMelodySmoothing = 0.86f;
-constexpr float kMelodyJumpRejectSemitones = 7.5f;
-constexpr float kMelodyJumpRejectConfidence = 0.34f;
 std::string toLower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
     return static_cast<char>(std::tolower(c));
   });
   return s;
-}
-
-static int midiFromFrequency(float frequencyHz) {
-  if (!std::isfinite(frequencyHz) || frequencyHz <= 0.0f) return -1;
-  float midi = 69.0f + 12.0f * std::log2(frequencyHz / 440.0f);
-  if (!std::isfinite(midi)) return -1;
-  int rounded = static_cast<int>(std::lround(midi));
-  if (rounded < 0 || rounded > 127) return -1;
-  return rounded;
 }
 
 static std::string toUtf8String(const std::filesystem::path& p) {
@@ -577,14 +559,7 @@ struct AudioState {
   std::atomic<int64_t> streamBasePtsUs{0};
   std::atomic<uint64_t> streamReadFrames{0};
   std::atomic<bool> streamClockReady{false};
-  std::array<float, kMelodyWindowFrames> melodyWindow{};
-  int melodyWindowPos = 0;
-  int melodyWindowCount = 0;
-  int melodySamplesSinceAnalysis = 0;
-  std::atomic<float> melodyFrequency{0.0f};
-  std::atomic<float> melodyConfidence{0.0f};
-  std::atomic<int> melodyMidi{-1};
-  float melodySmoothedFrequency = 0.0f;
+  MelodyAnalyzerState melody{};
 
   std::deque<AudioMetadata> streamMetadata;
   std::mutex streamMetadataMutex;
@@ -736,206 +711,14 @@ static void updatePeakMeter(AudioState* state, const float* samples,
 
 static void resetMelodyState(AudioState* state) {
   if (!state) return;
-  state->melodyWindow.fill(0.0f);
-  state->melodyWindowPos = 0;
-  state->melodyWindowCount = 0;
-  state->melodySamplesSinceAnalysis = 0;
-  state->melodySmoothedFrequency = 0.0f;
-  state->melodyFrequency.store(0.0f, std::memory_order_relaxed);
-  state->melodyConfidence.store(0.0f, std::memory_order_relaxed);
-  state->melodyMidi.store(-1, std::memory_order_relaxed);
-}
-
-static float computeLagCorrelation(const float* samples, int sampleCount, int lag) {
-  if (!samples || lag <= 0 || lag >= sampleCount) return 0.0f;
-  double sumXY = 0.0;
-  double sumXX = 0.0;
-  double sumYY = 0.0;
-  int limit = sampleCount - lag;
-  for (int i = 0; i < limit; ++i) {
-    double x = static_cast<double>(samples[i]);
-    double y = static_cast<double>(samples[i + lag]);
-    sumXY += x * y;
-    sumXX += x * x;
-    sumYY += y * y;
-  }
-  if (sumXX <= 0.0 || sumYY <= 0.0) return 0.0f;
-  return static_cast<float>(sumXY / std::sqrt(sumXX * sumYY));
-}
-
-static void applyMelodyAnalysis(AudioState* state, const float* window,
-                               int windowSize) {
-  if (!state || !window || windowSize < 3) return;
-
-  int minLag = static_cast<int>(
-      std::floor(static_cast<float>(state->sampleRate) / kMelodyMaxFrequencyHz));
-  int maxLag = static_cast<int>(
-      std::floor(static_cast<float>(state->sampleRate) / kMelodyMinFrequencyHz));
-  minLag = std::max(1, minLag);
-  maxLag = std::max(minLag + 1, std::min(windowSize - 1, maxLag));
-  if (minLag < 1 || maxLag <= minLag) return;
-
-  float correlationThreshold = kMelodyConfidenceFloor;
-  double mean = 0.0;
-  for (int i = 0; i < windowSize; ++i) {
-    mean += static_cast<double>(window[i]);
-  }
-  mean /= static_cast<double>(windowSize);
-
-  std::array<float, kMelodyWindowFrames> centered{};
-  for (int i = 0; i < windowSize; ++i) {
-    centered[static_cast<size_t>(i)] = window[i] - static_cast<float>(mean);
-  }
-
-  double energy = 0.0;
-  for (int i = 0; i < windowSize; ++i) {
-    energy += static_cast<double>(centered[static_cast<size_t>(i)] *
-                                 centered[static_cast<size_t>(i)]);
-  }
-  if (energy < 1e-8) {
-    float heldConfidence = state->melodyConfidence.load(std::memory_order_relaxed);
-    if (heldConfidence > kMelodyConfidenceHold) {
-      heldConfidence *= 0.80f;
-      if (heldConfidence < kMelodyConfidenceHold) heldConfidence = 0.0f;
-      state->melodyConfidence.store(heldConfidence, std::memory_order_relaxed);
-      if (heldConfidence <= 0.0f) {
-        state->melodyFrequency.store(0.0f, std::memory_order_relaxed);
-        state->melodyMidi.store(-1, std::memory_order_relaxed);
-        state->melodySmoothedFrequency = 0.0f;
-      }
-    } else {
-      resetMelodyState(state);
-    }
-    return;
-  }
-
-  int bestLag = -1;
-  float bestCorrelation = 0.0f;
-  for (int lag = minLag; lag <= maxLag; ++lag) {
-    float correlation = computeLagCorrelation(centered.data(), windowSize, lag);
-    if (correlation > bestCorrelation) {
-      bestCorrelation = correlation;
-      bestLag = lag;
-    }
-  }
-
-  if (bestLag <= 0 || bestCorrelation < correlationThreshold) {
-    float heldConfidence = state->melodyConfidence.load(std::memory_order_relaxed);
-    if (heldConfidence > kMelodyConfidenceHold) {
-      heldConfidence *= 0.80f;
-      if (heldConfidence < kMelodyConfidenceHold) heldConfidence = 0.0f;
-      state->melodyConfidence.store(heldConfidence, std::memory_order_relaxed);
-    } else {
-      state->melodyFrequency.store(0.0f, std::memory_order_relaxed);
-      state->melodyConfidence.store(0.0f, std::memory_order_relaxed);
-      state->melodyMidi.store(-1, std::memory_order_relaxed);
-      state->melodySmoothedFrequency = 0.0f;
-    }
-    return;
-  }
-
-  float left = computeLagCorrelation(centered.data(), windowSize,
-                                     std::max(minLag, bestLag - 1));
-  float center = bestCorrelation;
-  float right = computeLagCorrelation(centered.data(), windowSize,
-                                      std::min(maxLag, bestLag + 1));
-  float lagOffset = 0.0f;
-  float denominator = (left - 2.0f * center + right);
-  if (std::fabs(denominator) > 1e-6f) {
-    lagOffset = 0.5f * (left - right) / denominator;
-    lagOffset = std::clamp(lagOffset, -0.5f, 0.5f);
-  }
-  float refinedLag = static_cast<float>(bestLag) + lagOffset;
-  if (refinedLag <= 0.0f) refinedLag = static_cast<float>(bestLag);
-  float freq = static_cast<float>(state->sampleRate) / refinedLag;
-  if (!std::isfinite(freq) || freq < kMelodyMinFrequencyHz ||
-      freq > kMelodyMaxFrequencyHz) {
-    return;
-  }
-
-  if (state->melodySmoothedFrequency > 0.0f) {
-    float semitoneJump = std::fabs(12.0f * std::log2(
-        freq / std::max(1e-6f, state->melodySmoothedFrequency)));
-    if (semitoneJump > kMelodyJumpRejectSemitones &&
-        bestCorrelation < kMelodyJumpRejectConfidence) {
-      float heldConfidence =
-          state->melodyConfidence.load(std::memory_order_relaxed);
-      if (heldConfidence > kMelodyConfidenceHold) {
-        heldConfidence *= 0.82f;
-        if (heldConfidence < kMelodyConfidenceHold) heldConfidence = 0.0f;
-        state->melodyConfidence.store(heldConfidence, std::memory_order_relaxed);
-      }
-      return;
-    }
-  }
-
-  if (state->melodySmoothedFrequency <= 0.0f) {
-    state->melodySmoothedFrequency = freq;
-  } else {
-    state->melodySmoothedFrequency =
-        (state->melodySmoothedFrequency * kMelodySmoothing) +
-        (freq * (1.0f - kMelodySmoothing));
-  }
-  float prevConfidence = state->melodyConfidence.load(std::memory_order_relaxed);
-  float smoothedConfidence =
-      std::clamp((prevConfidence * 0.65f) + (bestCorrelation * 0.35f), 0.0f,
-                 1.0f);
-  if (smoothedConfidence < correlationThreshold) {
-    if (prevConfidence > kMelodyConfidenceHold) {
-      smoothedConfidence = prevConfidence * 0.82f;
-      if (smoothedConfidence < kMelodyConfidenceHold) {
-        smoothedConfidence = 0.0f;
-      }
-    } else {
-      smoothedConfidence = 0.0f;
-    }
-  }
-  state->melodyFrequency.store(state->melodySmoothedFrequency,
-                               std::memory_order_relaxed);
-  state->melodyConfidence.store(smoothedConfidence,
-                                std::memory_order_relaxed);
-  state->melodyMidi.store(midiFromFrequency(state->melodySmoothedFrequency),
-                          std::memory_order_relaxed);
+  melodyAnalyzerReset(&state->melody);
 }
 
 static void updateMelodyAnalysis(AudioState* state, const float* samples,
                                 ma_uint32 frameCount, uint32_t channels) {
-  if (!state || !samples || frameCount == 0 || channels == 0) return;
-
-  for (ma_uint32 i = 0; i < frameCount; ++i) {
-    float monoSample = samples[static_cast<size_t>(i) * channels];
-    if (channels > 1) {
-      for (uint32_t ch = 1; ch < channels; ++ch) {
-        monoSample += samples[static_cast<size_t>(i) * channels + ch];
-      }
-      monoSample /= static_cast<float>(channels);
-    }
-    state->melodyWindow[state->melodyWindowPos] = monoSample;
-    state->melodyWindowPos =
-        (state->melodyWindowPos + 1) % kMelodyWindowFrames;
-    if (state->melodyWindowCount < kMelodyWindowFrames) {
-      ++state->melodyWindowCount;
-    }
-    ++state->melodySamplesSinceAnalysis;
-  }
-
-  if (state->melodyWindowCount < kMelodyWindowFrames ||
-      state->melodySamplesSinceAnalysis < kMelodyAnalysisHop) {
-    return;
-  }
-  state->melodySamplesSinceAnalysis = 0;
-
-  int windowSize = std::min(kMelodyWindowFrames, state->melodyWindowCount);
-  int readStart = state->melodyWindowPos - windowSize;
-  if (readStart < 0) {
-    readStart += kMelodyWindowFrames;
-  }
-  std::array<float, kMelodyWindowFrames> analysisWindow{};
-  for (int i = 0; i < windowSize; ++i) {
-    analysisWindow[static_cast<size_t>(i)] =
-        state->melodyWindow[(readStart + i) % kMelodyWindowFrames];
-  }
-  applyMelodyAnalysis(state, analysisWindow.data(), windowSize);
+  if (!state) return;
+  melodyAnalyzerUpdate(&state->melody, samples, frameCount, channels,
+                       state->sampleRate);
 }
 
 void dataCallback(ma_device* device, void* output, const void*,
@@ -2991,11 +2774,11 @@ AudioMelodyInfo audioGetMelodyInfo() {
   if (!gAudio.decoderReady || !gAudio.enableAudio) {
     return AudioMelodyInfo{};
   }
+  MelodyAnalyzerInfo analyzerInfo = melodyAnalyzerGetInfo(&gAudio.state.melody);
   AudioMelodyInfo info;
-  info.frequencyHz =
-      gAudio.state.melodyFrequency.load(std::memory_order_relaxed);
-  info.confidence = gAudio.state.melodyConfidence.load(std::memory_order_relaxed);
-  info.midiNote = gAudio.state.melodyMidi.load(std::memory_order_relaxed);
+  info.frequencyHz = analyzerInfo.frequencyHz;
+  info.confidence = analyzerInfo.confidence;
+  info.midiNote = analyzerInfo.midiNote;
   constexpr float kDisplayFloor = 0.05f;
   if (info.confidence < kDisplayFloor) {
     info.frequencyHz = 0.0f;
