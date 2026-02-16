@@ -159,7 +159,7 @@ struct Radio1938 {
   int channels = 1;
   float bwHz = 4800.0f;
   float noiseWeight = 0.012f;
-  float makeupGain = 1.5f; // ~+3.5 dB to offset filter loss
+  float makeupGain = 1.0f; // baseline unity gain
   bool clipTriggered = false;
 
   float fadePhase = 0.0f;

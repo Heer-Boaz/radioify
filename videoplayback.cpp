@@ -1526,6 +1526,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           sendSeekRequest(currentSec + dir * 5.0);
         };
         cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
+        cb.onAdjustRadioMakeup = [&](float delta) {
+          audioAdjustRadioMakeup(delta);
+          triggerOverlay();
+          redraw = true;
+          if (windowEnabled) {
+            windowForcePresent.store(true, std::memory_order_relaxed);
+            windowPresentCv.notify_one();
+          }
+        };
 
         if (ev.key.vk == 'W') {
           windowEnabled = !windowEnabled;

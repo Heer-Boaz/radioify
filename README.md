@@ -76,6 +76,8 @@ dist/radioify.exe --no-radio <file-or-folder>
 - H: toggle 50Hz mode
 - O: options (KSS/NSF only)
 - V: toggle window vsync
+- Shift+Up/Down: volume +/-10%
+- Ctrl+Up/Down: radio makeup gain (RG)
 - Q or Ctrl+C: quit
 
 ## Supported files

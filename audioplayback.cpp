@@ -549,7 +549,7 @@ struct AudioState {
   std::atomic<bool> audioPrimed{false};
   std::atomic<float> volume{1.0f};
   std::atomic<float> peak{0.0f};
-  std::atomic<float> radioMakeupGain{1.5f};
+  std::atomic<float> radioMakeupGain{1.0f};
   std::atomic<uint32_t> radioClipHold{0};
   AudioSampleRing streamRb;
   std::atomic<bool> streamQueueEnabled{false};
