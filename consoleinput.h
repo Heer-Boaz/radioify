@@ -130,6 +130,7 @@ struct InputCallbacks {
   std::function<void()> onToggle50Hz;
   std::function<void()> onToggleOptions;
   std::function<void()> onToggleVsync;
+  std::function<void()> onToggleMelodyVisualization;
   std::function<void(int)> onSeekBy;
   std::function<void(double)> onSeekToRatio;
   std::function<void(float)> onAdjustVolume;
@@ -143,6 +144,7 @@ enum class ActionStripItem {
   Radio,
   Hz50,
   View,
+  MelodyViz,
   Options
 };
 
@@ -172,6 +174,7 @@ void handleInputEvent(
   int progressBarY,
   int progressBarWidth,
   const ActionStripLayout& actionStrip,
+  bool browserInteractionEnabled,
   bool playMode,
   bool decoderReady,
   int& breadcrumbHover,

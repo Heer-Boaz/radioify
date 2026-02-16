@@ -280,9 +280,10 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
                       int listTop, int listHeight, int progressBarX,
                       int progressBarY, int progressBarWidth,
-                      const ActionStripLayout& actionStrip, bool playMode,
-                      bool decoderReady, int& breadcrumbHover,
-                      int& actionHover, bool& dirty, bool& running,
+                      const ActionStripLayout& actionStrip,
+                      bool browserInteractionEnabled, bool playMode,
+                      bool decoderReady, int& breadcrumbHover, int& actionHover,
+                      bool& dirty, bool& running,
                       const InputCallbacks& callbacks) {
   if (ev.type == InputEvent::Type::Resize) {
     dirty = true;
@@ -306,7 +307,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
 
-    if (browser.filterActive) {
+    if (browserInteractionEnabled && browser.filterActive) {
       if (key.vk == VK_ESCAPE || key.vk == VK_RETURN) {
         browser.filterActive = false;
         dirty = true;
@@ -335,6 +336,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     if ((playMode || decoderReady) &&
         handlePlaybackInput(ev, running, callbacks)) {
       dirty = true;
+      return;
+    }
+    if (!browserInteractionEnabled) {
       return;
     }
     if (key.vk == VK_DIVIDE || key.ch == '/') {
@@ -480,10 +484,15 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     const MouseEvent& mouse = ev.mouse;
     bool leftPressed = (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
     bool rightPressed = (mouse.buttonState & RIGHTMOST_BUTTON_PRESSED) != 0;
-    int nextHover = breadcrumbIndexAt(breadcrumbLine, mouse.pos.X, mouse.pos.Y,
-                                      breadcrumbY);
-    if (nextHover != breadcrumbHover) {
-      breadcrumbHover = nextHover;
+    if (browserInteractionEnabled) {
+      int nextHover = breadcrumbIndexAt(breadcrumbLine, mouse.pos.X, mouse.pos.Y,
+                                        breadcrumbY);
+      if (nextHover != breadcrumbHover) {
+        breadcrumbHover = nextHover;
+        dirty = true;
+      }
+    } else if (breadcrumbHover != -1) {
+      breadcrumbHover = -1;
       dirty = true;
     }
     int nextActionHover =
@@ -500,12 +509,15 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         if (actionIndex >= 0) {
           const auto& btn =
               actionStrip.buttons[static_cast<size_t>(actionIndex)];
-          if (btn.id == ActionStripItem::View) {
+          if (browserInteractionEnabled && btn.id == ActionStripItem::View) {
             browser.viewMode = (delta > 0) ? prevViewMode(browser.viewMode)
                                            : nextViewMode(browser.viewMode);
             dirty = true;
             return;
           }
+        }
+        if (!browserInteractionEnabled) {
+          return;
         }
         browser.scrollRow -= delta / WHEEL_DELTA;
         int maxScroll =
@@ -516,7 +528,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
 
-    if (leftPressed && mouse.eventFlags == 0 && breadcrumbHover >= 0) {
+    if (browserInteractionEnabled && leftPressed && mouse.eventFlags == 0 &&
+        breadcrumbHover >= 0) {
       const auto& crumb =
           breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
       if (browser.dir != crumb.path) {
@@ -531,7 +544,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
 
-    if (rightPressed && mouse.eventFlags == 0) {
+    if (browserInteractionEnabled && rightPressed && mouse.eventFlags == 0) {
       int actionIndex =
           actionStripIndexAt(actionStrip, mouse.pos.X, mouse.pos.Y);
       if (actionIndex >= 0) {
@@ -569,6 +582,12 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
             if (callbacks.onToggleOptions) callbacks.onToggleOptions();
             dirty = true;
             return;
+          case ActionStripItem::MelodyViz:
+            if (callbacks.onToggleMelodyVisualization) {
+              callbacks.onToggleMelodyVisualization();
+            }
+            dirty = true;
+            return;
         }
       }
       if (layout.showScrollBar && layout.scrollBarX >= 0 &&
@@ -591,6 +610,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
           return;
         }
       }
+    }
+    if (!browserInteractionEnabled) {
+      return;
     }
 
     int count = static_cast<int>(browser.entries.size());
@@ -679,6 +701,10 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
     }
     if (key.vk == 'V' || key.ch == 'v' || key.ch == 'V') {
       if (callbacks.onToggleVsync) callbacks.onToggleVsync();
+      return true;
+    }
+    if (key.vk == 'M' || key.ch == 'm' || key.ch == 'M') {
+      if (callbacks.onToggleMelodyVisualization) callbacks.onToggleMelodyVisualization();
       return true;
     }
 

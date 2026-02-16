@@ -26,6 +26,12 @@ struct AudioPerfStats {
   bool usingFfmpeg = false;
 };
 
+struct AudioMelodyInfo {
+  float frequencyHz = 0.0f;
+  float confidence = 0.0f;
+  int midiNote = -1;
+};
+
 struct AudioPlaybackConfig {
   bool enableAudio = true;
   bool enableRadio = false;
@@ -111,6 +117,7 @@ void audioAdjustRadioMakeup(float delta);
 float audioGetVolume();
 float audioGetRadioMakeup();
 float audioGetPeak();
+AudioMelodyInfo audioGetMelodyInfo();
 bool audioIsRadioClipping();
 std::string audioGetWarning();
 bool audioIs50HzEnabled();
