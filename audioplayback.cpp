@@ -743,7 +743,6 @@ void dataCallback(ma_device* device, void* output, const void*,
       state->silentFrames.fetch_add(frameCount, std::memory_order_relaxed);
       state->lastFramesRead.store(0, std::memory_order_relaxed);
       std::fill(out, out + frameCount * channels, 0.0f);
-      updateMelodyAnalysis(state, out, frameCount, channels);
       updatePeakMeter(state, out, frameCount);
       state->audioClock.set_paused(true, nowUs());
       state->streamStarved.store(false, std::memory_order_relaxed);
@@ -869,7 +868,10 @@ void dataCallback(ma_device* device, void* output, const void*,
       state->radioClipHold.store(kRadioClipHoldFrames,
                                  std::memory_order_relaxed);
     }
-    updateMelodyAnalysis(state, out, frameCount, channels);
+    if (framesRead > 0) {
+      updateMelodyAnalysis(state, out, static_cast<ma_uint32>(framesRead),
+                          channels);
+    }
     updatePeakMeter(state, out, frameCount);
     return;
   }
@@ -878,7 +880,6 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->silentFrames.fetch_add(frameCount, std::memory_order_relaxed);
     state->lastFramesRead.store(0, std::memory_order_relaxed);
     std::fill(out, out + frameCount * state->channels, 0.0f);
-    updateMelodyAnalysis(state, out, frameCount, state->channels);
     updatePeakMeter(state, out, frameCount);
     return;
   }
@@ -932,7 +933,6 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->silentFrames.fetch_add(frameCount, std::memory_order_relaxed);
     state->lastFramesRead.store(0, std::memory_order_relaxed);
     std::fill(out, out + frameCount * state->channels, 0.0f);
-    updateMelodyAnalysis(state, out, frameCount, state->channels);
     return;
   }
 
@@ -2779,7 +2779,7 @@ AudioMelodyInfo audioGetMelodyInfo() {
   info.frequencyHz = analyzerInfo.frequencyHz;
   info.confidence = analyzerInfo.confidence;
   info.midiNote = analyzerInfo.midiNote;
-  constexpr float kDisplayFloor = 0.05f;
+  constexpr float kDisplayFloor = 0.02f;
   if (info.confidence < kDisplayFloor) {
     info.frequencyHz = 0.0f;
     info.midiNote = -1;
