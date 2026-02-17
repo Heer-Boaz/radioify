@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -34,6 +35,10 @@ constexpr float kOfflineLogFloor = -90.0f;
 constexpr int kOfflineMinVoicedRunFrames = 5;
 constexpr int kOfflineGapFillFrames = 2;
 constexpr float kOfflineGapFillConfidence = 0.22f;
+// Matches torchcrepe.threshold.Hysteresis defaults.
+constexpr float kOfflineVoicingLower = 0.19f;
+constexpr float kOfflineVoicingUpper = 0.31f;
+constexpr float kOfflineLargeJumpPenalty = 8.0f;
 
 struct MelodyAnalysisPoint {
   uint64_t frame = 0;
@@ -70,11 +75,6 @@ float sanitizeConfidence(float confidence) {
   return std::clamp(confidence, 0.0f, 1.0f);
 }
 
-bool hasValidRawPitch(const MelodyOfflineFrame& frame) {
-  if (frame.midiNote >= 0 && frame.midiNote <= 127) return true;
-  return std::isfinite(frame.frequencyHz) && frame.frequencyHz > 0.0f;
-}
-
 float estimateRawMidi(const MelodyOfflineFrame& frame) {
   if (frame.midiNote >= 0 && frame.midiNote <= 127) {
     return static_cast<float>(frame.midiNote);
@@ -90,44 +90,38 @@ void makeUnvoiced(MelodyOfflineFrame* frame, float confidenceCap = 0.12f) {
   frame->confidence = std::clamp(baseConfidence, 0.0f, confidenceCap);
 }
 
-std::array<float, kOfflineStateCount * kOfflineStateCount>
-buildTransitionPenalties() {
-  std::array<float, kOfflineStateCount * kOfflineStateCount> penalties{};
-  for (int from = 0; from < kOfflineStateCount; ++from) {
-    for (int to = 0; to < kOfflineStateCount; ++to) {
+std::vector<float> buildVoicedTransitionPenalties() {
+  constexpr int kVoicedStateCount = kOfflineStateCount - 1;
+  std::vector<float> penalties(
+      static_cast<size_t>(kVoicedStateCount * kVoicedStateCount), 0.0f);
+
+  for (int from = 0; from < kVoicedStateCount; ++from) {
+    for (int to = 0; to < kVoicedStateCount; ++to) {
+      int semitone = std::abs(to - from);
       float penalty = 0.0f;
-      if (from == to) {
-        penalty = 0.0f;
-      } else if (from == kOfflineUnvoicedState &&
-                 to == kOfflineUnvoicedState) {
-        penalty = 0.06f;
-      } else if (from == kOfflineUnvoicedState ||
-                 to == kOfflineUnvoicedState) {
-        penalty = (from == kOfflineUnvoicedState) ? 2.0f : 1.6f;
+      if (semitone >= 12) {
+        penalty = kOfflineLargeJumpPenalty;
       } else {
-        int fromMidi = stateToMidi(from);
-        int toMidi = stateToMidi(to);
-        float semitone = static_cast<float>(std::abs(toMidi - fromMidi));
-        penalty = 0.04f * semitone + 0.07f * semitone * semitone;
-        if (semitone > 12.0f) {
-          float over = semitone - 12.0f;
-          penalty += 1.8f + 0.12f * over * over;
-        }
+        // Matches the reference CREPE Viterbi topology:
+        // transition weight = max(12 - abs(i-j), 0), row-normalized.
+        float weight = static_cast<float>(12 - semitone);
+        penalty = -std::log(std::max(kOfflineProbFloor, weight / 12.0f));
       }
-      penalties[static_cast<size_t>(from) * kOfflineStateCount + to] = penalty;
+      penalties[static_cast<size_t>(from) * kVoicedStateCount +
+                static_cast<size_t>(to)] = penalty;
     }
   }
   return penalties;
 }
 
-void normalizeLogScores(std::array<float, kOfflineStateCount>* scores) {
-  if (!scores) return;
+void normalizeLogScores(std::vector<float>* scores) {
+  if (!scores || scores->empty()) return;
   float best = -std::numeric_limits<float>::infinity();
   for (float v : *scores) {
     if (std::isfinite(v) && v > best) best = v;
   }
   if (!std::isfinite(best)) {
-    scores->fill(kOfflineLogFloor);
+    std::fill(scores->begin(), scores->end(), kOfflineLogFloor);
     return;
   }
   for (float& v : *scores) {
@@ -181,71 +175,85 @@ std::array<float, kOfflineStateCount> makeSilenceEmissionLog() {
   return out;
 }
 
-std::vector<int> decodeGlobalPitchPath(
+std::vector<int> decodeGlobalVoicedPath(
     const std::vector<MelodyRawAnalysisPoint>& rawFrames) {
-  std::vector<int> path(rawFrames.size(), kOfflineUnvoicedState);
+  std::vector<int> path(rawFrames.size(), 1);
   if (rawFrames.empty()) return path;
 
-  const auto transition = buildTransitionPenalties();
+  constexpr int kVoicedStateCount = kOfflineStateCount - 1;
+  const std::vector<float> transition = buildVoicedTransitionPenalties();
 
   std::vector<uint8_t> backPointers(
-      rawFrames.size() * static_cast<size_t>(kOfflineStateCount), 0u);
-  std::array<float, kOfflineStateCount> prev{};
-  std::array<float, kOfflineStateCount> cur{};
-  prev.fill(kOfflineLogFloor);
-  cur.fill(kOfflineLogFloor);
+      rawFrames.size() * static_cast<size_t>(kVoicedStateCount), 0u);
+  std::vector<float> prev(static_cast<size_t>(kVoicedStateCount), kOfflineLogFloor);
+  std::vector<float> cur(static_cast<size_t>(kVoicedStateCount), kOfflineLogFloor);
 
   const std::array<float, kOfflineStateCount>& emission0 = rawFrames[0].emissionLog;
-  constexpr float kVoicedPrior = 0.38f;
-  float voicedPriorEach = kVoicedPrior / static_cast<float>(kOfflineStateCount - 1);
-  prev[kOfflineUnvoicedState] =
-      std::log(std::max(kOfflineProbFloor, 1.0f - kVoicedPrior)) +
-      emission0[kOfflineUnvoicedState];
-  for (int state = 1; state < kOfflineStateCount; ++state) {
-    prev[state] =
-        std::log(std::max(kOfflineProbFloor, voicedPriorEach)) + emission0[state];
+  float voicedPrior = 1.0f / static_cast<float>(kVoicedStateCount);
+  for (int state = 0; state < kVoicedStateCount; ++state) {
+    int fullState = state + 1;
+    prev[static_cast<size_t>(state)] =
+        std::log(std::max(kOfflineProbFloor, voicedPrior)) + emission0[fullState];
   }
   normalizeLogScores(&prev);
 
   for (size_t t = 1; t < rawFrames.size(); ++t) {
-    const std::array<float, kOfflineStateCount>& emission =
-        rawFrames[t].emissionLog;
-    for (int next = 0; next < kOfflineStateCount; ++next) {
+    const std::array<float, kOfflineStateCount>& emission = rawFrames[t].emissionLog;
+    for (int next = 0; next < kVoicedStateCount; ++next) {
       float best = -std::numeric_limits<float>::infinity();
       int bestPrev = 0;
-      for (int prevState = 0; prevState < kOfflineStateCount; ++prevState) {
-        float candidate =
-            prev[prevState] -
-            transition[static_cast<size_t>(prevState) * kOfflineStateCount + next];
+      for (int prevState = 0; prevState < kVoicedStateCount; ++prevState) {
+        float penalty = transition[static_cast<size_t>(prevState) *
+                                   static_cast<size_t>(kVoicedStateCount) +
+                                   static_cast<size_t>(next)];
+        float candidate = prev[static_cast<size_t>(prevState)] - penalty;
         if (candidate > best) {
           best = candidate;
           bestPrev = prevState;
         }
       }
-      cur[next] = best + emission[next];
-      backPointers[t * static_cast<size_t>(kOfflineStateCount) +
+      cur[static_cast<size_t>(next)] = best + emission[next + 1];
+      backPointers[t * static_cast<size_t>(kVoicedStateCount) +
                    static_cast<size_t>(next)] =
           static_cast<uint8_t>(bestPrev);
     }
     normalizeLogScores(&cur);
-    prev = cur;
+    prev.swap(cur);
   }
 
   int bestFinal = 0;
   float bestFinalScore = prev[0];
-  for (int state = 1; state < kOfflineStateCount; ++state) {
-    if (prev[state] > bestFinalScore) {
+  for (int state = 1; state < kVoicedStateCount; ++state) {
+    float score = prev[static_cast<size_t>(state)];
+    if (score > bestFinalScore) {
       bestFinal = state;
-      bestFinalScore = prev[state];
+      bestFinalScore = score;
     }
   }
-  path.back() = bestFinal;
+
+  path.back() = bestFinal + 1;
   for (size_t t = rawFrames.size() - 1; t > 0; --t) {
-    size_t idx = t * static_cast<size_t>(kOfflineStateCount) +
-                 static_cast<size_t>(path[t]);
-    path[t - 1] = static_cast<int>(backPointers[idx]);
+    size_t idx = t * static_cast<size_t>(kVoicedStateCount) +
+                 static_cast<size_t>(path[t] - 1);
+    path[t - 1] = static_cast<int>(backPointers[idx]) + 1;
   }
   return path;
+}
+
+std::vector<bool> buildVoicingMaskHysteresis(
+    const std::vector<MelodyRawAnalysisPoint>& rawFrames) {
+  std::vector<bool> voiced(rawFrames.size(), false);
+  bool active = false;
+  for (size_t i = 0; i < rawFrames.size(); ++i) {
+    float conf = sanitizeConfidence(rawFrames[i].frameData.confidence);
+    if (active) {
+      if (conf < kOfflineVoicingLower) active = false;
+    } else {
+      if (conf >= kOfflineVoicingUpper) active = true;
+    }
+    voiced[i] = active;
+  }
+  return voiced;
 }
 
 MelodyOfflineFrame refineFrameForState(const MelodyOfflineFrame& raw, int state) {
@@ -371,11 +379,15 @@ void medianSmoothVoicedMidi(std::vector<MelodyAnalysisPoint>* frames) {
 std::vector<MelodyAnalysisPoint> refineOfflineFrames(
     const std::vector<MelodyRawAnalysisPoint>& rawFrames) {
   if (rawFrames.empty()) return {};
-  std::vector<int> states = decodeGlobalPitchPath(rawFrames);
+  std::vector<int> voicedStates = decodeGlobalVoicedPath(rawFrames);
+  std::vector<bool> voicedMask = buildVoicingMaskHysteresis(rawFrames);
   std::vector<MelodyAnalysisPoint> refined;
   refined.reserve(rawFrames.size());
   for (size_t i = 0; i < rawFrames.size(); ++i) {
-    int state = (i < states.size()) ? states[i] : kOfflineUnvoicedState;
+    int state = kOfflineUnvoicedState;
+    if (i < voicedStates.size() && i < voicedMask.size() && voicedMask[i]) {
+      state = voicedStates[i];
+    }
     MelodyAnalysisPoint point;
     point.frame = rawFrames[i].frame;
     point.frameData = refineFrameForState(rawFrames[i].frameData, state);
@@ -777,6 +789,9 @@ void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
   uint64_t processedFrames = 0;
   uint64_t nextCaptureFrame = 0;
   bool seenNeuralFrame = false;
+  bool hasAlignedNeuralFrame = false;
+  NeuralPitchFrame alignedNeuralFrame{};
+  std::deque<NeuralPitchFrame> pendingNeuralFrames;
 
   if (job.leadInFrames > 0) {
     MelodyOfflineFrame silence;
@@ -810,11 +825,24 @@ void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
 
     neuralPitchUpdate(&neural, buffer.data(), static_cast<uint32_t>(readFrames),
                       job.channels);
+    {
+      NeuralPitchFrame produced{};
+      while (neuralPitchPopFrame(&neural, &produced)) {
+        pendingNeuralFrames.push_back(produced);
+      }
+    }
     processedFrames += readFrames;
 
     const uint64_t decodedFramePos = job.leadInFrames + processedFrames;
     while (!cache->stopRequested.load(std::memory_order_acquire) &&
            nextCaptureFrame <= decodedFramePos) {
+      while (!pendingNeuralFrames.empty() &&
+             pendingNeuralFrames.front().sourceFrame <= nextCaptureFrame) {
+        alignedNeuralFrame = pendingNeuralFrames.front();
+        pendingNeuralFrames.pop_front();
+        hasAlignedNeuralFrame = true;
+      }
+
       MelodyOfflineFrame point;
       std::array<float, kOfflineStateCount> emission{};
       if (nextCaptureFrame < job.leadInFrames) {
@@ -823,18 +851,20 @@ void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
         point.midiNote = -1;
         emission = makeSilenceEmissionLog();
       } else {
-        if (neuralPitchHasFrame(&neural)) {
-          NeuralPitchFrame neuralFrame = neuralPitchGetLatest(&neural);
-          emission = buildEmissionForPoint(&neuralFrame.posterior);
+        if (hasAlignedNeuralFrame) {
+          emission = buildEmissionForPoint(&alignedNeuralFrame.posterior);
           float neuralVoicing =
-              std::clamp(neuralFrame.voicingProb, 0.0f, 1.0f);
+              std::clamp(alignedNeuralFrame.voicingProb, 0.0f, 1.0f);
           seenNeuralFrame = true;
-          if (neuralFrame.midiNote >= 0 && neuralFrame.midiNote <= 127) {
-            point.midiNote = neuralFrame.midiNote;
-            point.frequencyHz = neuralFrame.frequencyHz;
+          if (alignedNeuralFrame.midiNote >= 0 &&
+              alignedNeuralFrame.midiNote <= 127) {
+            point.midiNote = alignedNeuralFrame.midiNote;
+            point.frequencyHz = alignedNeuralFrame.frequencyHz;
             point.confidence = neuralVoicing;
           } else {
-            makeUnvoiced(&point, std::min(0.14f, neuralVoicing));
+            point.frequencyHz = 0.0f;
+            point.midiNote = -1;
+            point.confidence = neuralVoicing;
           }
         } else {
           point.frequencyHz = 0.0f;

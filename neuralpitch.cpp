@@ -38,10 +38,11 @@ constexpr uint32_t kModelSampleRate = 16000u;
 constexpr int kModelFrameSize = 1024;
 constexpr int kModelHopSize = 256;
 constexpr int kCrepeBins = 360;
-constexpr float kCrepeMinMidi = 24.0f;
-constexpr float kCrepeBinsPerSemitone = 5.0f;
+constexpr float kCrepeCentsPerBin = 20.0f;
+constexpr float kCrepeCentsOffset = 1997.3794084376191f;
 constexpr float kProbFloor = 1.0e-9f;
 constexpr int kRingMax = 4096;
+constexpr int kProducedFrameQueueMax = 8192;
 
 float clampf(float value, float low, float high) {
   return std::max(low, std::min(high, value));
@@ -56,6 +57,14 @@ float frequencyToMidi(float hz) {
     return -1.0f;
   }
   return 69.0f + 12.0f * std::log2(hz / 440.0f);
+}
+
+float crepeBinToMidi(int bin) {
+  if (bin < 0 || bin >= kCrepeBins) return -1.0f;
+  float cents =
+      kCrepeCentsOffset + static_cast<float>(bin) * kCrepeCentsPerBin;
+  float hz = 10.0f * std::exp2(cents / 1200.0f);
+  return frequencyToMidi(hz);
 }
 
 int midiToState(float midi) {
@@ -89,25 +98,13 @@ void appendSchemaRegistrationHint(std::string* error) {
       "(build.ps1 now sets this via VCPKG_CMAKE_CONFIGURE_OPTIONS).";
 }
 
-void softmaxInplace(std::vector<float>* values) {
+void normalizePositiveInplace(std::vector<float>* values) {
   if (!values || values->empty()) return;
-  float maxValue = -std::numeric_limits<float>::infinity();
-  for (float v : *values) {
-    if (std::isfinite(v) && v > maxValue) maxValue = v;
-  }
-  if (!std::isfinite(maxValue)) {
-    float uniform = 1.0f / static_cast<float>(values->size());
-    for (float& v : *values) v = uniform;
-    return;
-  }
-
   float sum = 0.0f;
   for (float& v : *values) {
-    if (!std::isfinite(v)) {
+    if (!std::isfinite(v) || v < 0.0f) {
       v = 0.0f;
-      continue;
     }
-    v = std::exp(v - maxValue);
     sum += v;
   }
   if (!std::isfinite(sum) || sum <= 0.0f) {
@@ -118,6 +115,65 @@ void softmaxInplace(std::vector<float>* values) {
   for (float& v : *values) {
     v /= sum;
   }
+}
+
+bool convertPitchOutputToCrepeBins(const std::vector<float>& raw,
+                                   std::vector<float>* pitchBins) {
+  if (!pitchBins) return false;
+  pitchBins->clear();
+  if (raw.empty()) return false;
+
+  if (raw.size() == static_cast<size_t>(kCrepeBins)) {
+    *pitchBins = raw;
+    return true;
+  }
+
+  if (raw.size() > static_cast<size_t>(kCrepeBins)) {
+    if (raw.size() % static_cast<size_t>(kCrepeBins) == 0) {
+      size_t chunks = raw.size() / static_cast<size_t>(kCrepeBins);
+      size_t bestChunk = 0;
+      float bestPeak = -std::numeric_limits<float>::infinity();
+      for (size_t chunk = 0; chunk < chunks; ++chunk) {
+        size_t base = chunk * static_cast<size_t>(kCrepeBins);
+        float peak = -std::numeric_limits<float>::infinity();
+        for (int i = 0; i < kCrepeBins; ++i) {
+          float v = raw[base + static_cast<size_t>(i)];
+          if (std::isfinite(v) && v > peak) peak = v;
+        }
+        if (peak > bestPeak) {
+          bestPeak = peak;
+          bestChunk = chunk;
+        }
+      }
+      size_t base = bestChunk * static_cast<size_t>(kCrepeBins);
+      pitchBins->assign(raw.begin() + static_cast<std::ptrdiff_t>(base),
+                        raw.begin() + static_cast<std::ptrdiff_t>(base + kCrepeBins));
+      return true;
+    }
+
+    size_t start = (raw.size() - static_cast<size_t>(kCrepeBins)) / 2u;
+    pitchBins->assign(raw.begin() + static_cast<std::ptrdiff_t>(start),
+                      raw.begin() + static_cast<std::ptrdiff_t>(start + kCrepeBins));
+    return true;
+  }
+
+  if (raw.size() < 24) {
+    return false;
+  }
+  pitchBins->assign(static_cast<size_t>(kCrepeBins), 0.0f);
+  const size_t srcLast = raw.size() - 1;
+  const size_t dstLast = static_cast<size_t>(kCrepeBins - 1);
+  for (int i = 0; i < kCrepeBins; ++i) {
+    double pos = (static_cast<double>(i) * static_cast<double>(srcLast)) /
+                 static_cast<double>(dstLast);
+    size_t i0 = static_cast<size_t>(std::floor(pos));
+    size_t i1 = std::min(srcLast, i0 + 1);
+    float frac = static_cast<float>(pos - static_cast<double>(i0));
+    float v0 = raw[i0];
+    float v1 = raw[i1];
+    (*pitchBins)[static_cast<size_t>(i)] = v0 + (v1 - v0) * frac;
+  }
+  return true;
 }
 
 void normalizePosterior(std::array<float, kMelodyAnalyzerStates>* posterior) {
@@ -176,25 +232,39 @@ void buildPosteriorFromCrepe(const std::vector<float>& pitchBins,
   int right = std::min(static_cast<int>(pitchBins.size()) - 1, bestIdx + 5);
   for (int i = left; i <= right; ++i) {
     float p = pitchBins[static_cast<size_t>(i)];
-    float midi = kCrepeMinMidi + static_cast<float>(i) / kCrepeBinsPerSemitone;
+    float midi = crepeBinToMidi(i);
+    if (!std::isfinite(midi) || midi <= 0.0f) continue;
     weightedMidi += p * midi;
     weightSum += p;
   }
   if (weightSum <= 0.0f) {
-    weightedMidi = kCrepeMinMidi +
-                   static_cast<float>(bestIdx) / kCrepeBinsPerSemitone;
+    weightedMidi = crepeBinToMidi(bestIdx);
     weightSum = 1.0f;
   } else {
     weightedMidi /= weightSum;
   }
 
-  for (size_t i = 0; i < pitchBins.size(); ++i) {
-    float p = pitchBins[i];
+  float localMass = 0.0f;
+  int localLeft = std::max(0, bestIdx - 6);
+  int localRight = std::min(static_cast<int>(pitchBins.size()) - 1, bestIdx + 6);
+  for (int i = localLeft; i <= localRight; ++i) {
+    float p = pitchBins[static_cast<size_t>(i)];
+    if (p > 0.0f) localMass += p;
+  }
+  if (localMass <= 0.0f) {
+    localMass = std::max(kProbFloor, bestProb);
+    localLeft = bestIdx;
+    localRight = bestIdx;
+  }
+
+  for (int i = localLeft; i <= localRight; ++i) {
+    float p = pitchBins[static_cast<size_t>(i)];
     if (p <= 0.0f) continue;
-    float midi = kCrepeMinMidi + static_cast<float>(i) / kCrepeBinsPerSemitone;
+    float midi = crepeBinToMidi(i);
+    if (!std::isfinite(midi) || midi <= 0.0f) continue;
     int state = midiToState(midi);
     if (state == kMelodyUnvoicedState) continue;
-    (*out)[state] += voicedMass * p;
+    (*out)[state] += voicedMass * (p / localMass);
   }
 
   normalizePosterior(out);
@@ -395,6 +465,7 @@ struct NeuralPitchState::RuntimeOpaque {
   std::vector<std::string> outputNames;
   std::vector<const char*> outputNamePtrs;
   size_t pitchOutputIndex = static_cast<size_t>(-1);
+  size_t pitchOutputCountHint = 0;
   size_t voicingOutputIndex = static_cast<size_t>(-1);
   bool hasVoicingOutput = false;
 
@@ -432,6 +503,7 @@ void neuralPitchReset(NeuralPitchState* state) {
   state->sourceBuffer.clear();
   state->ring16k.clear();
   state->samplesSinceHop = 0;
+  state->producedFrames.clear();
   state->latest = {};
 }
 
@@ -594,8 +666,8 @@ bool neuralPitchInit(NeuralPitchState* state, uint32_t sourceSampleRate,
     runtime->outputNamePtrs.push_back(name.c_str());
   }
 
-  size_t bestPitchCountHint = 0;
-  int bestVoicingScore = -1;
+  int bestPitchScore = std::numeric_limits<int>::min();
+  int bestVoicingScore = std::numeric_limits<int>::min();
   for (size_t i = 0; i < outputCount; ++i) {
     OrtTypeInfo* typeInfo = nullptr;
     if (!checkStatus(runtime->api,
@@ -645,25 +717,39 @@ bool neuralPitchInit(NeuralPitchState* state, uint32_t sourceSampleRate,
         outputNameLower.find("voic") != std::string::npos ||
         outputNameLower.find("vuv") != std::string::npos;
 
-    if (countHint >= 256 || shapeSummary.maxKnownDim >= 256 ||
-        (nameSuggestsPitch &&
-         (countHint >= static_cast<size_t>(kCrepeBins) ||
-          runtime->pitchOutputIndex == static_cast<size_t>(-1)))) {
-      if (runtime->pitchOutputIndex == static_cast<size_t>(-1) ||
-          countHint > bestPitchCountHint) {
-        runtime->pitchOutputIndex = i;
-        bestPitchCountHint = countHint;
-      }
+    int pitchScore = std::numeric_limits<int>::min() / 4;
+    if (countHint > 0) {
+      int diff = static_cast<int>((countHint > static_cast<size_t>(kCrepeBins))
+                                      ? (countHint - static_cast<size_t>(kCrepeBins))
+                                      : (static_cast<size_t>(kCrepeBins) - countHint));
+      pitchScore = 2000 - diff;
+      if (countHint == static_cast<size_t>(kCrepeBins)) pitchScore += 2500;
+      if (countHint >= 256 && countHint <= 1024) pitchScore += 600;
+      if (countHint <= 16) pitchScore -= 3000;
+    } else {
+      pitchScore = -4000;
+    }
+    if (nameSuggestsPitch) pitchScore += 1000;
+    if (nameSuggestsVoicing) pitchScore -= 800;
+    if (pitchScore > bestPitchScore) {
+      bestPitchScore = pitchScore;
+      runtime->pitchOutputIndex = i;
+      runtime->pitchOutputCountHint = countHint;
     }
 
-    int voicingScore = -1;
+    int voicingScore = std::numeric_limits<int>::min() / 4;
     if (countHint > 0 && countHint <= 8) {
-      voicingScore = static_cast<int>(8 - countHint);
+      voicingScore = 1200 - static_cast<int>(countHint);
     } else if (shapeSummary.maxKnownDim > 0 && shapeSummary.maxKnownDim <= 8) {
-      voicingScore = static_cast<int>(8 - shapeSummary.maxKnownDim);
+      voicingScore = 1000 - static_cast<int>(shapeSummary.maxKnownDim);
+    } else {
+      voicingScore = -3000;
     }
     if (nameSuggestsVoicing) {
-      voicingScore += 16;
+      voicingScore += 1500;
+    }
+    if (nameSuggestsPitch) {
+      voicingScore -= 600;
     }
     if (voicingScore > bestVoicingScore) {
       bestVoicingScore = voicingScore;
@@ -678,7 +764,9 @@ bool neuralPitchInit(NeuralPitchState* state, uint32_t sourceSampleRate,
     return false;
   }
   runtime->hasVoicingOutput =
-      runtime->voicingOutputIndex != static_cast<size_t>(-1);
+      runtime->voicingOutputIndex != static_cast<size_t>(-1) &&
+      runtime->voicingOutputIndex != runtime->pitchOutputIndex &&
+      bestVoicingScore > 0;
 
   state->runtime = runtime.release();
   state->active = true;
@@ -709,6 +797,15 @@ bool neuralPitchHasFrame(const NeuralPitchState* state) {
 NeuralPitchFrame neuralPitchGetLatest(const NeuralPitchState* state) {
   if (!state) return {};
   return state->latest;
+}
+
+bool neuralPitchPopFrame(NeuralPitchState* state, NeuralPitchFrame* out) {
+  if (!state || !out || !state->active || state->producedFrames.empty()) {
+    return false;
+  }
+  *out = state->producedFrames.front();
+  state->producedFrames.pop_front();
+  return true;
 }
 
 void neuralPitchUpdate(NeuralPitchState* state, const float* samples,
@@ -788,6 +885,7 @@ void neuralPitchUpdate(NeuralPitchState* state, const float* samples,
       runtime->api->ReleaseValue(inputTensor);
 
       if (!runStatus) {
+        std::vector<float> rawPitch;
         std::vector<float> pitchBins;
         float voicingProb = 0.0f;
         float inferredVoicingProb = 0.0f;
@@ -813,7 +911,7 @@ void neuralPitchUpdate(NeuralPitchState* state, const float* samples,
                 if (!runtime->api->GetTensorMutableData(pitchValue,
                                                         reinterpret_cast<void**>(&data)) &&
                     data) {
-                  pitchBins.assign(data, data + elemCount);
+                  rawPitch.assign(data, data + elemCount);
                 }
               }
               runtime->api->ReleaseTensorTypeAndShapeInfo(shapeInfo);
@@ -821,21 +919,51 @@ void neuralPitchUpdate(NeuralPitchState* state, const float* samples,
           }
         }
 
+        if (rawPitch.empty() && runtime->pitchOutputCountHint > 0 &&
+            runtime->pitchOutputCountHint <= 4096 &&
+            runtime->pitchOutputIndex < outputValues.size()) {
+          OrtValue* pitchValue = outputValues[runtime->pitchOutputIndex];
+          if (pitchValue) {
+            float* data = nullptr;
+            if (!runtime->api->GetTensorMutableData(
+                    pitchValue, reinterpret_cast<void**>(&data)) &&
+                data) {
+              rawPitch.assign(data, data + runtime->pitchOutputCountHint);
+            }
+          }
+        }
+
+        convertPitchOutputToCrepeBins(rawPitch, &pitchBins);
+
         if (!pitchBins.empty()) {
-          float rawMax = -std::numeric_limits<float>::infinity();
+          float transformedMax = -std::numeric_limits<float>::infinity();
           bool inUnitRange = true;
-          for (float v : pitchBins) {
-            if (!std::isfinite(v)) continue;
-            if (v > rawMax) rawMax = v;
+          for (float& v : pitchBins) {
+            if (!std::isfinite(v)) {
+              inUnitRange = false;
+              continue;
+            }
             if (v < 0.0f || v > 1.0f) {
               inUnitRange = false;
             }
           }
-          if (std::isfinite(rawMax)) {
-            inferredVoicingProb =
-                inUnitRange ? clampf(rawMax, 0.0f, 1.0f) : stableSigmoid(rawMax);
+
+          if (inUnitRange) {
+            for (float& v : pitchBins) {
+              v = std::isfinite(v) ? clampf(v, 0.0f, 1.0f) : 0.0f;
+              if (v > transformedMax) transformedMax = v;
+            }
+          } else {
+            for (float& v : pitchBins) {
+              v = std::isfinite(v) ? stableSigmoid(v) : 0.0f;
+              if (v > transformedMax) transformedMax = v;
+            }
           }
-          softmaxInplace(&pitchBins);
+
+          if (std::isfinite(transformedMax)) {
+            inferredVoicingProb = clampf(transformedMax, 0.0f, 1.0f);
+          }
+          normalizePositiveInplace(&pitchBins);
         }
 
         if (runtime->hasVoicingOutput &&
@@ -892,6 +1020,11 @@ void neuralPitchUpdate(NeuralPitchState* state, const float* samples,
 
         state->latest = frameOut;
         state->hasLatest = true;
+        state->producedFrames.push_back(frameOut);
+        while (static_cast<int>(state->producedFrames.size()) >
+               kProducedFrameQueueMax) {
+          state->producedFrames.pop_front();
+        }
       } else {
         runtime->api->ReleaseStatus(runStatus);
       }

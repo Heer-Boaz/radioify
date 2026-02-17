@@ -554,6 +554,68 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   }
 }
 
+static std::filesystem::path defaultMelodyOutputFor(
+    const std::filesystem::path& input) {
+  std::string base = input.stem().string();
+  return input.parent_path() / (base + ".melody");
+}
+
+static std::filesystem::path resolveExtractOutputPath(
+    const std::filesystem::path& input, const std::string& outArg) {
+  if (outArg.empty()) {
+    return defaultMelodyOutputFor(input);
+  }
+
+  std::filesystem::path outPath(outArg);
+  bool directoryHint =
+      !outArg.empty() &&
+      (outArg.back() == '/' || outArg.back() == '\\');
+  if (directoryHint ||
+      (std::filesystem::exists(outPath) && std::filesystem::is_directory(outPath))) {
+    return outPath / (input.stem().string() + ".melody");
+  }
+
+  if (!outPath.has_extension()) {
+    outPath += ".melody";
+  }
+  return outPath;
+}
+
+static int runExtractSheetCli(const Options& o,
+                              const AudioPlaybackConfig& audioConfig) {
+  if (o.input.empty()) {
+    die("extract-sheet requires an input file path.");
+  }
+
+  std::filesystem::path inputPath(o.input);
+  validateInputFile(inputPath);
+  std::filesystem::path outputPath = resolveExtractOutputPath(inputPath, o.output);
+
+  audioInit(audioConfig);
+
+  std::string error;
+  int lastPct = -1;
+  auto progress = [&](float p) {
+    int pct = static_cast<int>(std::lround(std::clamp(p, 0.0f, 1.0f) * 100.0f));
+    if (pct == lastPct) return;
+    lastPct = pct;
+    std::cout << "\rAnalyzing: " << pct << "%" << std::flush;
+  };
+
+  bool ok = audioAnalyzeFileToMelodyFile(inputPath, 0, outputPath, progress, &error);
+  std::cout << "\n";
+  audioShutdown();
+
+  if (!ok) {
+    die(error.empty() ? "Failed to extract melody sheet." : error);
+  }
+
+  logLine("Extract complete.");
+  logLine("  Input:  " + inputPath.string());
+  logLine("  Output: " + outputPath.string());
+  return 0;
+}
+
 int runTui(Options o) {
   configureFfmpegVideoLog({});
 
@@ -570,6 +632,18 @@ int runTui(Options o) {
     std::string base = input.stem().string();
     return (input.parent_path() / (base + ".radio.wav")).string();
   };
+
+  AudioPlaybackConfig audioConfig;
+  audioConfig.enableAudio = o.enableAudio;
+  audioConfig.enableRadio = o.enableRadio;
+  audioConfig.mono = o.mono;
+  audioConfig.dry = o.dry;
+  audioConfig.bwHz = o.bwHz;
+  audioConfig.noise = o.noise;
+
+  if (o.extractSheet) {
+    return runExtractSheetCli(o, audioConfig);
+  }
 
   std::filesystem::path startDir = std::filesystem::current_path();
   std::string initialName;
@@ -596,13 +670,6 @@ int runTui(Options o) {
   ConsoleScreen screen;
   screen.init();
 
-  AudioPlaybackConfig audioConfig;
-  audioConfig.enableAudio = o.enableAudio;
-  audioConfig.enableRadio = o.enableRadio;
-  audioConfig.mono = o.mono;
-  audioConfig.dry = o.dry;
-  audioConfig.bwHz = o.bwHz;
-  audioConfig.noise = o.noise;
   audioInit(audioConfig);
 
   VideoPlaybackConfig videoConfig;

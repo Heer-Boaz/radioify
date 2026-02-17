@@ -29,6 +29,7 @@ struct NeuralPitchState {
   std::vector<float> sourceBuffer;
   std::deque<float> ring16k;
   int samplesSinceHop = 0;
+  std::deque<NeuralPitchFrame> producedFrames;
 
   NeuralPitchFrame latest{};
 
@@ -45,3 +46,4 @@ void neuralPitchUpdate(NeuralPitchState* state, const float* samples,
 bool neuralPitchIsActive(const NeuralPitchState* state);
 bool neuralPitchHasFrame(const NeuralPitchState* state);
 NeuralPitchFrame neuralPitchGetLatest(const NeuralPitchState* state);
+bool neuralPitchPopFrame(NeuralPitchState* state, NeuralPitchFrame* out);
