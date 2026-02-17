@@ -61,6 +61,7 @@ add_executable(radioify
   gpu_shared.cpp
   gmeaudio.cpp
   gsfaudio.cpp
+  midiaudio.cpp
   vgmaudio.cpp
   kssaudio.cpp
   psfaudio.cpp

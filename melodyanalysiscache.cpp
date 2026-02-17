@@ -7,6 +7,7 @@
 #include "melodyanalyzer.h"
 #include "neuralpitch.h"
 #include "psfaudio.h"
+#include "midiaudio.h"
 #include "vgmaudio.h"
 
 #include <algorithm>
@@ -429,6 +430,11 @@ bool isGmeExt(const std::filesystem::path& path) {
   return ext == ".nsf";
 }
 
+bool isMidiExt(const std::filesystem::path& path) {
+  const std::string ext = toLower(path.extension().string());
+  return ext == ".mid" || ext == ".midi";
+}
+
 bool isGsfExt(const std::filesystem::path& path) {
 #if !RADIOIFY_DISABLE_GSF_GPL
   const std::string ext = toLower(path.extension().string());
@@ -473,6 +479,7 @@ class DecoderContext {
     Unknown,
     Ffmpeg,
     Gme,
+    Midi,
     Gsf,
     Vgm,
     Kss,
@@ -505,6 +512,14 @@ class DecoderContext {
         return false;
       }
       gme_.applyNsfOptions(job.nsfOptions);
+      return true;
+    }
+
+    if (isMidiExt(job.file)) {
+      type_ = Type::Midi;
+      if (!midi_.init(job.file, channels_, sampleRate_, error)) {
+        return false;
+      }
       return true;
     }
 
@@ -554,6 +569,7 @@ class DecoderContext {
   void uninit() {
     if (type_ == Type::Ffmpeg) ffmpeg_.uninit();
     if (type_ == Type::Gme) gme_.uninit();
+    if (type_ == Type::Midi) midi_.uninit();
     if (type_ == Type::Gsf) gsf_.uninit();
     if (type_ == Type::Vgm) vgm_.uninit();
     if (type_ == Type::Kss) kss_.uninit();
@@ -572,6 +588,8 @@ class DecoderContext {
         return ffmpeg_.readFrames(out, frameCount, outFrames);
       case Type::Gme:
         return gme_.readFrames(out, frameCount, outFrames);
+      case Type::Midi:
+        return midi_.readFrames(out, frameCount, outFrames);
       case Type::Gsf:
         return gsf_.readFrames(out, frameCount, outFrames);
       case Type::Vgm:
@@ -593,6 +611,9 @@ class DecoderContext {
         return total;
       case Type::Gme:
         gme_.getTotalFrames(&total);
+        return total;
+      case Type::Midi:
+        midi_.getTotalFrames(&total);
         return total;
       case Type::Gsf:
         gsf_.getTotalFrames(&total);
@@ -617,6 +638,7 @@ class DecoderContext {
   uint32_t channels_ = 0;
   FfmpegAudioDecoder ffmpeg_;
   GmeAudioDecoder gme_;
+  MidiAudioDecoder midi_;
   GsfAudioDecoder gsf_;
   VgmAudioDecoder vgm_;
   KssAudioDecoder kss_;

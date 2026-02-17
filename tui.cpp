@@ -99,6 +99,7 @@ static bool isSupportedAudioExt(const std::filesystem::path& p) {
 #if !RADIOIFY_DISABLE_GSF_GPL
          ext == ".gsf" || ext == ".minigsf" ||
 #endif
+         ext == ".mid" || ext == ".midi" ||
          ext == ".vgm" || ext == ".vgz" || ext == ".psf" ||
          ext == ".minipsf" ||
          ext == ".psf2" || ext == ".minipsf2";
@@ -177,7 +178,7 @@ static void validateInputFile(const std::filesystem::path& p) {
     die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
     die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf, "
+        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf, .mid, .midi, "
 #if !RADIOIFY_DISABLE_GSF_GPL
         ".gsf, .minigsf, "
 #endif
