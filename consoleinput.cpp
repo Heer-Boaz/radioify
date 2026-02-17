@@ -428,6 +428,13 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       if (count > 0) {
         const auto& pick =
             browser.entries[static_cast<size_t>(browser.selected)];
+        if (ctrl && playMode && !pick.isDir) {
+          if (callbacks.onOpenFileContextMenu) {
+            callbacks.onOpenFileContextMenu(pick, -1, -1);
+            dirty = true;
+          }
+          return;
+        }
         if (pick.isDir) {
           browser.dir = pick.path;
           browser.selected = 0;
@@ -632,6 +639,19 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     if (mouse.eventFlags == MOUSE_MOVED && !leftPressed) {
       if (browser.selected != idx) {
         browser.selected = idx;
+        dirty = true;
+      }
+      return;
+    }
+
+    if (mouse.eventFlags == 0 && rightPressed) {
+      if (browser.selected != idx) {
+        browser.selected = idx;
+        dirty = true;
+      }
+      const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
+      if (!pick.isDir && callbacks.onOpenFileContextMenu) {
+        callbacks.onOpenFileContextMenu(pick, mouse.pos.X, mouse.pos.Y);
         dirty = true;
       }
       return;

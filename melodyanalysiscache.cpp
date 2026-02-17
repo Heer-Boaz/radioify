@@ -15,9 +15,12 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -670,31 +673,80 @@ void storePoint(MelodyOfflineCache* cache, uint64_t frame,
   cache->frameCount = cache->frames.size();
 }
 
-void analyzeTrack(MelodyOfflineJob job) {
+bool writeMelodyFramesToFile(
+    const std::filesystem::path& outputFile, uint32_t sourceSampleRate,
+    const std::vector<MelodyAnalysisPoint>& frames, std::string* error) {
+  if (outputFile.empty()) {
+    if (error) *error = "Output path is empty.";
+    return false;
+  }
+  if (frames.empty()) {
+    if (error) *error = "No melody frames available.";
+    return false;
+  }
+
+  std::error_code ec;
+  if (outputFile.has_parent_path()) {
+    std::filesystem::create_directories(outputFile.parent_path(), ec);
+    if (ec) {
+      if (error) *error = "Unable to create output directory.";
+      return false;
+    }
+  }
+
+  std::ofstream out(outputFile, std::ios::trunc);
+  if (!out.is_open()) {
+    if (error) *error = "Unable to open output file for writing.";
+    return false;
+  }
+
+  out << "RADIOIFY_MELODY 1\n";
+  out << "sample_rate " << sourceSampleRate << "\n";
+  out << "stride_frames " << kCaptureStrideFrames << "\n";
+  out << "frame_count " << frames.size() << "\n";
+  out << "columns frame frequency_hz confidence midi\n";
+  out << std::setprecision(9);
+  for (const auto& point : frames) {
+    out << point.frame << " " << point.frameData.frequencyHz << " "
+        << point.frameData.confidence << " " << point.frameData.midiNote
+        << "\n";
+  }
+
+  if (!out.good()) {
+    if (error) *error = "Failed while writing melody output.";
+    return false;
+  }
+  return true;
+}
+
+void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
+                          const std::function<void(float)>& progressCallback) {
+  if (!cache) return;
   NeuralPitchState neural{};
   DecoderContext decoder;
 
   {
-    std::lock_guard<std::mutex> lock(gCache.mutex);
-    gCache.running = true;
-    gCache.ready = false;
-    gCache.progress = 0.0f;
-    gCache.frameCount = 0;
-    gCache.frames.clear();
-    gCache.error.clear();
-    gCache.leadInFrames = job.leadInFrames;
-    gCache.sourceSampleRate = job.sourceSampleRate;
-    gCache.stopRequested.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> lock(cache->mutex);
+    cache->running = true;
+    cache->ready = false;
+    cache->progress = 0.0f;
+    cache->frameCount = 0;
+    cache->frames.clear();
+    cache->error.clear();
+    cache->leadInFrames = job.leadInFrames;
+    cache->sourceSampleRate = job.sourceSampleRate;
+    cache->stopRequested.store(false, std::memory_order_release);
   }
+  if (progressCallback) progressCallback(0.0f);
 
   std::string error;
   if (!decoder.init(job, &error)) {
-    std::lock_guard<std::mutex> lock(gCache.mutex);
-    gCache.running = false;
-    gCache.ready = false;
-    gCache.progress = 0.0f;
-    gCache.frameCount = 0;
-    gCache.error = error.empty() ? "Offline melody analysis decoder init failed."
+    std::lock_guard<std::mutex> lock(cache->mutex);
+    cache->running = false;
+    cache->ready = false;
+    cache->progress = 0.0f;
+    cache->frameCount = 0;
+    cache->error = error.empty() ? "Offline melody analysis decoder init failed."
                                  : error;
     return;
   }
@@ -702,13 +754,13 @@ void analyzeTrack(MelodyOfflineJob job) {
   std::string neuralError;
   if (!neuralPitchInit(&neural, job.sourceSampleRate, job.channels,
                        &neuralError)) {
-    std::lock_guard<std::mutex> lock(gCache.mutex);
-    gCache.running = false;
-    gCache.ready = false;
-    gCache.progress = 0.0f;
-    gCache.frameCount = 0;
-    gCache.frames.clear();
-    gCache.error = neuralError.empty() ? "Neural melody analyzer init failed."
+    std::lock_guard<std::mutex> lock(cache->mutex);
+    cache->running = false;
+    cache->ready = false;
+    cache->progress = 0.0f;
+    cache->frameCount = 0;
+    cache->frames.clear();
+    cache->error = neuralError.empty() ? "Neural melody analyzer init failed."
                                        : neuralError;
     return;
   }
@@ -732,11 +784,11 @@ void analyzeTrack(MelodyOfflineJob job) {
     silence.confidence = 0.0f;
     silence.midiNote = -1;
     rawFrames.push_back({0, silence, makeSilenceEmissionLog()});
-    storePoint(&gCache, 0, silence);
+    storePoint(cache, 0, silence);
     nextCaptureFrame = std::min(kCaptureStrideFrames, job.leadInFrames);
   }
 
-  while (!gCache.stopRequested.load(std::memory_order_acquire)) {
+  while (!cache->stopRequested.load(std::memory_order_acquire)) {
     uint64_t framesToRead = kAnalysisChunkFrames;
     if (totalKnown && totalFrames > processedFrames) {
       uint64_t remaining = totalFrames - processedFrames;
@@ -761,7 +813,7 @@ void analyzeTrack(MelodyOfflineJob job) {
     processedFrames += readFrames;
 
     const uint64_t decodedFramePos = job.leadInFrames + processedFrames;
-    while (!gCache.stopRequested.load(std::memory_order_acquire) &&
+    while (!cache->stopRequested.load(std::memory_order_acquire) &&
            nextCaptureFrame <= decodedFramePos) {
       MelodyOfflineFrame point;
       std::array<float, kOfflineStateCount> emission{};
@@ -792,7 +844,7 @@ void analyzeTrack(MelodyOfflineJob job) {
         }
       }
       rawFrames.push_back({nextCaptureFrame, point, emission});
-      storePoint(&gCache, nextCaptureFrame, point);
+      storePoint(cache, nextCaptureFrame, point);
       nextCaptureFrame += kCaptureStrideFrames;
     }
 
@@ -805,9 +857,12 @@ void analyzeTrack(MelodyOfflineJob job) {
       if (progress > 1.0f) progress = 1.0f;
     }
     {
-      std::lock_guard<std::mutex> lock(gCache.mutex);
-      updateProgressLocked(&gCache, gCache.frames.size(),
-                          totalKnown ? progress : gCache.progress);
+      std::lock_guard<std::mutex> lock(cache->mutex);
+      updateProgressLocked(cache, cache->frames.size(),
+                          totalKnown ? progress : cache->progress);
+    }
+    if (progressCallback && totalKnown) {
+      progressCallback(progress);
     }
 
     if (totalKnown && processedFrames >= totalFrames) {
@@ -815,7 +870,7 @@ void analyzeTrack(MelodyOfflineJob job) {
     }
   }
 
-  const bool stopped = gCache.stopRequested.load(std::memory_order_acquire);
+  const bool stopped = cache->stopRequested.load(std::memory_order_acquire);
   std::vector<MelodyAnalysisPoint> refinedFrames;
   if (!stopped && !rawFrames.empty()) {
     refinedFrames = refineOfflineFrames(rawFrames);
@@ -824,21 +879,34 @@ void analyzeTrack(MelodyOfflineJob job) {
   neuralPitchUninit(&neural);
 
   {
-    std::lock_guard<std::mutex> lock(gCache.mutex);
-    gCache.running = false;
-    gCache.ready = !stopped && seenNeuralFrame;
+    std::lock_guard<std::mutex> lock(cache->mutex);
+    cache->running = false;
+    cache->ready = !stopped && seenNeuralFrame;
     if (!stopped && seenNeuralFrame && !refinedFrames.empty()) {
-      gCache.frames = std::move(refinedFrames);
-      gCache.error.clear();
+      cache->frames = std::move(refinedFrames);
+      cache->error.clear();
     } else if (!stopped && !seenNeuralFrame) {
-      gCache.frames.clear();
-      gCache.error = "Neural melody analyzer produced no frames.";
+      cache->frames.clear();
+      cache->error = "Neural melody analyzer produced no frames.";
     } else if (stopped) {
-      gCache.error.clear();
+      cache->error.clear();
     }
-    gCache.progress = stopped ? gCache.progress : (seenNeuralFrame ? 1.0f : 0.0f);
-    gCache.frameCount = gCache.frames.size();
+    cache->progress =
+        stopped ? cache->progress : (seenNeuralFrame ? 1.0f : 0.0f);
+    cache->frameCount = cache->frames.size();
   }
+  if (progressCallback) {
+    float done = 0.0f;
+    {
+      std::lock_guard<std::mutex> lock(cache->mutex);
+      done = std::clamp(cache->progress, 0.0f, 1.0f);
+    }
+    progressCallback(done);
+  }
+}
+
+void analyzeTrack(MelodyOfflineJob job) {
+  analyzeTrackForCache(&gCache, std::move(job), {});
 }
 }  // namespace
 
@@ -920,4 +988,64 @@ MelodyOfflineAnalysisState melodyOfflineGetState() {
   state.frameCount = gCache.frameCount;
   state.error = gCache.error;
   return state;
+}
+
+bool melodyOfflineAnalyzeToFile(
+    const std::filesystem::path& file, int trackIndex, uint32_t sourceSampleRate,
+    uint32_t channels, uint64_t leadInFrames,
+    const KssPlaybackOptions& kssOptions,
+    const NsfPlaybackOptions& nsfOptions,
+    const VgmPlaybackOptions& vgmOptions,
+    const std::unordered_map<uint32_t, VgmDeviceOptions>& vgmDeviceOverrides,
+    const std::filesystem::path& outputFile,
+    const std::function<void(float)>& progressCallback, std::string* error) {
+  if (file.empty() || !std::filesystem::exists(file)) {
+    if (error) *error = "Input file not found.";
+    return false;
+  }
+  if (sourceSampleRate == 0 || channels == 0 || channels > 2) {
+    if (error) *error = "Invalid analysis audio format.";
+    return false;
+  }
+  if (outputFile.empty()) {
+    if (error) *error = "Output path is empty.";
+    return false;
+  }
+
+  MelodyOfflineJob job;
+  job.file = file;
+  job.trackIndex = trackIndex;
+  job.sourceSampleRate = sourceSampleRate;
+  job.channels = channels;
+  job.leadInFrames = leadInFrames;
+  job.kssOptions = kssOptions;
+  job.nsfOptions = nsfOptions;
+  job.vgmOptions = vgmOptions;
+  job.vgmDeviceOverrides = vgmDeviceOverrides;
+
+  MelodyOfflineCache localCache;
+  localCache.stopRequested.store(false, std::memory_order_release);
+  analyzeTrackForCache(&localCache, std::move(job), progressCallback);
+
+  std::vector<MelodyAnalysisPoint> frames;
+  uint32_t resultSampleRate = sourceSampleRate;
+  std::string localError;
+  {
+    std::lock_guard<std::mutex> lock(localCache.mutex);
+    resultSampleRate = localCache.sourceSampleRate;
+    if (!localCache.ready || localCache.frames.empty()) {
+      localError = localCache.error;
+    } else {
+      frames = localCache.frames;
+    }
+  }
+
+  if (frames.empty()) {
+    if (error) {
+      *error = localError.empty() ? "Melody analysis produced no frames."
+                                  : localError;
+    }
+    return false;
+  }
+  return writeMelodyFramesToFile(outputFile, resultSampleRate, frames, error);
 }

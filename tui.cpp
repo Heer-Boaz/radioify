@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -774,6 +775,36 @@ int runTui(Options o) {
     std::function<void()> run;
   };
 
+  struct FileContextMenuState {
+    bool active = false;
+    FileEntry entry{};
+    int selected = 0;
+    int anchorX = -1;
+    int anchorY = -1;
+  };
+
+  struct FileContextMenuLayout {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    int listY = 0;
+    int rows = 0;
+    bool valid = false;
+  };
+
+  struct MelodyExportTaskState {
+    std::mutex mutex;
+    std::thread worker;
+    bool running = false;
+    bool hasResult = false;
+    bool success = false;
+    float progress = 0.0f;
+    std::string status;
+    std::filesystem::path sourceFile;
+    std::filesystem::path outputFile;
+  };
+
   struct PaletteLayout {
     int x = 0;
     int y = 0;
@@ -818,6 +849,10 @@ int runTui(Options o) {
       breadcrumbHover = -1;
     }
   };
+
+  FileContextMenuState fileContextMenu;
+  FileContextMenuLayout fileContextLayout;
+  MelodyExportTaskState melodyExportTask;
 
   InputCallbacks callbacks;
   callbacks.onRefreshBrowser = [&](BrowserState& nextBrowser,
@@ -881,6 +916,17 @@ int runTui(Options o) {
     }
     return audioStartFile(file);
   };
+  callbacks.onOpenFileContextMenu = [&](const FileEntry& entry, int x, int y) {
+    if (!o.play || entry.isDir || !isSupportedAudioExt(entry.path)) {
+      return;
+    }
+    fileContextMenu.active = true;
+    fileContextMenu.entry = entry;
+    fileContextMenu.selected = 0;
+    fileContextMenu.anchorX = x;
+    fileContextMenu.anchorY = y;
+    dirty = true;
+  };
   callbacks.onRenderFile = [&](const std::filesystem::path& file) {
     renderFile(file);
     rendered = true;
@@ -920,6 +966,7 @@ int runTui(Options o) {
       actionHover = -1;
       clearMelodyHistory();
     }
+    fileContextMenu.active = false;
     dirty = true;
   };
   callbacks.onResize = [&]() { rebuildLayout(); };
@@ -947,6 +994,7 @@ int runTui(Options o) {
              actionHover = -1;
              clearMelodyHistory();
            }
+           fileContextMenu.active = false;
            dirty = true;
          }});
     cmds.push_back({audioIsRadioEnabled() ? "Radio Filter: AM"
@@ -1050,6 +1098,129 @@ int runTui(Options o) {
     }
     paletteScroll =
         std::clamp(paletteScroll, 0, std::max(0, count - visibleRows));
+  };
+
+  auto buildMelodyOutputPath = [&](const FileEntry& entry) {
+    std::filesystem::path output = entry.path;
+    int trackIndex = entry.trackIndex;
+    if (trackIndex >= 0) {
+      char suffix[32];
+      std::snprintf(suffix, sizeof(suffix), ".track%03d.melody", trackIndex);
+      output += suffix;
+      return output;
+    }
+    output.replace_extension(".melody");
+    return output;
+  };
+
+  auto cleanupMelodyExportWorker = [&]() {
+    bool shouldJoin = false;
+    {
+      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
+      shouldJoin =
+          !melodyExportTask.running && melodyExportTask.worker.joinable();
+    }
+    if (shouldJoin) {
+      melodyExportTask.worker.join();
+    }
+  };
+
+  auto joinMelodyExportWorker = [&]() {
+    if (melodyExportTask.worker.joinable()) {
+      melodyExportTask.worker.join();
+    }
+  };
+
+  auto startMelodyExport = [&](const FileEntry& entry) {
+    if (entry.isDir || !isSupportedAudioExt(entry.path)) {
+      return;
+    }
+
+    cleanupMelodyExportWorker();
+
+    int trackIndex = entry.trackIndex >= 0 ? entry.trackIndex : 0;
+    std::filesystem::path outputFile = buildMelodyOutputPath(entry);
+
+    {
+      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
+      if (melodyExportTask.running) {
+        return;
+      }
+      melodyExportTask.running = true;
+      melodyExportTask.hasResult = false;
+      melodyExportTask.success = false;
+      melodyExportTask.progress = 0.0f;
+      melodyExportTask.status.clear();
+      melodyExportTask.sourceFile = entry.path;
+      melodyExportTask.outputFile = outputFile;
+    }
+
+    melodyExportTask.worker =
+        std::thread([entryPath = entry.path, trackIndex, outputFile,
+                     &melodyExportTask]() {
+          auto onProgress = [&melodyExportTask](float progress) {
+            std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
+            melodyExportTask.progress = std::clamp(progress, 0.0f, 1.0f);
+          };
+          std::string error;
+          bool ok = audioAnalyzeFileToMelodyFile(entryPath, trackIndex,
+                                                 outputFile, onProgress, &error);
+          std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
+          melodyExportTask.running = false;
+          melodyExportTask.hasResult = true;
+          melodyExportTask.success = ok;
+          melodyExportTask.progress = ok ? 1.0f : melodyExportTask.progress;
+          if (ok) {
+            melodyExportTask.status =
+                "Saved " + toUtf8String(outputFile.filename());
+          } else {
+            melodyExportTask.status =
+                error.empty() ? "Analysis failed." : error;
+          }
+        });
+  };
+
+  auto computeFileContextLayout = [&](int w, int h) {
+    FileContextMenuLayout layout{};
+    constexpr int kRows = 2;
+    std::string item0 = " Play";
+    std::string item1 = " Analyze to .melody";
+    int itemWidth =
+        std::max(utf8CodepointCount(item0), utf8CodepointCount(item1));
+    layout.width = std::max(24, itemWidth + 4);
+    layout.height = kRows + 2;
+    int x = fileContextMenu.anchorX;
+    int y = fileContextMenu.anchorY;
+    if (x < 0 || y < 0) {
+      x = (w - layout.width) / 2;
+      y = (h - layout.height) / 2;
+    }
+    x = std::clamp(x, 0, std::max(0, w - layout.width));
+    y = std::clamp(y, 1, std::max(1, h - layout.height));
+    layout.x = x;
+    layout.y = y;
+    layout.listY = y + 1;
+    layout.rows = kRows;
+    layout.valid = true;
+    return layout;
+  };
+
+  auto runFileContextAction = [&](int actionIndex) {
+    if (!fileContextMenu.active) return;
+    const FileEntry entry = fileContextMenu.entry;
+    if (actionIndex == 0) {
+      bool played = false;
+      if (entry.trackIndex >= 0) {
+        played = audioStartFile(entry.path, entry.trackIndex);
+      } else if (callbacks.onPlayFile) {
+        played = callbacks.onPlayFile(entry.path);
+      }
+      (void)played;
+    } else if (actionIndex == 1) {
+      startMelodyExport(entry);
+    }
+    fileContextMenu.active = false;
+    dirty = true;
   };
 
   auto drawMelodyPanel = [&](int top, int panelHeight, int panelWidth,
@@ -1184,6 +1355,7 @@ int runTui(Options o) {
 
   while (running) {
     rebuildLayout();
+    cleanupMelodyExportWorker();
 
     InputEvent ev{};
     while (input.poll(ev)) {
@@ -1195,10 +1367,83 @@ int runTui(Options o) {
             ctrl && (key.vk == 'P' || key.ch == 'p' || key.ch == 'P');
         if (paletteToggle) {
           paletteActive = !paletteActive;
+          if (paletteActive) {
+            fileContextMenu.active = false;
+          }
           paletteQuery.clear();
           paletteSelected = 0;
           paletteScroll = 0;
           dirty = true;
+          continue;
+        }
+      }
+      if (fileContextMenu.active) {
+        fileContextLayout = computeFileContextLayout(width, height);
+        if (ev.type == InputEvent::Type::Key) {
+          const KeyEvent& key = ev.key;
+          if (key.vk == VK_ESCAPE) {
+            fileContextMenu.active = false;
+            dirty = true;
+            continue;
+          }
+          if (key.vk == VK_UP) {
+            fileContextMenu.selected =
+                (fileContextMenu.selected + fileContextLayout.rows - 1) %
+                fileContextLayout.rows;
+            dirty = true;
+            continue;
+          }
+          if (key.vk == VK_DOWN) {
+            fileContextMenu.selected =
+                (fileContextMenu.selected + 1) % fileContextLayout.rows;
+            dirty = true;
+            continue;
+          }
+          if (key.vk == VK_RETURN) {
+            runFileContextAction(fileContextMenu.selected);
+            continue;
+          }
+          continue;
+        }
+        if (ev.type == InputEvent::Type::Mouse) {
+          const MouseEvent& mouse = ev.mouse;
+          bool leftPressed =
+              (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+          if (mouse.eventFlags == MOUSE_WHEELED) {
+            int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
+            if (delta != 0) {
+              if (delta > 0) {
+                fileContextMenu.selected =
+                    (fileContextMenu.selected + fileContextLayout.rows - 1) %
+                    fileContextLayout.rows;
+              } else {
+                fileContextMenu.selected =
+                    (fileContextMenu.selected + 1) % fileContextLayout.rows;
+              }
+              dirty = true;
+            }
+            continue;
+          }
+          if (mouse.eventFlags == 0 && leftPressed) {
+            bool inside =
+                fileContextLayout.valid &&
+                mouse.pos.X >= fileContextLayout.x &&
+                mouse.pos.X < fileContextLayout.x + fileContextLayout.width &&
+                mouse.pos.Y >= fileContextLayout.y &&
+                mouse.pos.Y < fileContextLayout.y + fileContextLayout.height;
+            if (inside && mouse.pos.Y >= fileContextLayout.listY &&
+                mouse.pos.Y < fileContextLayout.listY + fileContextLayout.rows) {
+              int action = mouse.pos.Y - fileContextLayout.listY;
+              if (action >= 0 && action < fileContextLayout.rows) {
+                fileContextMenu.selected = action;
+                runFileContextAction(action);
+                continue;
+              }
+            }
+            fileContextMenu.active = false;
+            dirty = true;
+            continue;
+          }
           continue;
         }
       }
@@ -1314,6 +1559,7 @@ int runTui(Options o) {
                        o.play, audioIsReady(), breadcrumbHover, actionHover,
                        dirty, running, callbacks);
       if (rendered) {
+        joinMelodyExportWorker();
         audioShutdown();
         return 0;
       }
@@ -1474,6 +1720,26 @@ int runTui(Options o) {
         if (!warning.empty()) {
           screen.writeText(0, line++, fitLine("  Warning: " + warning, width),
                            kStyleDim);
+        }
+      }
+      if (line < height) {
+        bool exportRunning = false;
+        bool exportHasResult = false;
+        bool exportSuccess = false;
+        std::string exportStatus;
+        {
+          std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
+          exportRunning = melodyExportTask.running;
+          exportHasResult = melodyExportTask.hasResult;
+          exportSuccess = melodyExportTask.success;
+          exportStatus = melodyExportTask.status;
+        }
+        (void)exportRunning;
+        if (exportHasResult && !exportStatus.empty()) {
+          Style statusStyle = exportSuccess ? kStyleDim : kStyleAlert;
+          screen.writeText(0, line++,
+                           fitLine(" Analyze: " + exportStatus, width),
+                           statusStyle);
         }
       }
       std::string nowLabel =
@@ -1796,6 +2062,111 @@ int runTui(Options o) {
         paletteLayout.valid = false;
       }
 
+      if (fileContextMenu.active) {
+        fileContextLayout = computeFileContextLayout(width, height);
+        if (fileContextLayout.valid) {
+          int x0 = fileContextLayout.x;
+          int y0 = fileContextLayout.y;
+          int w = fileContextLayout.width;
+          int h = fileContextLayout.height;
+
+          for (int y = 0; y < h; ++y) {
+            screen.writeRun(x0, y0 + y, w, L' ', kStyleNormal);
+          }
+
+          screen.writeChar(x0, y0, L'+', kStyleDim);
+          screen.writeRun(x0 + 1, y0, w - 2, L'-', kStyleDim);
+          screen.writeChar(x0 + w - 1, y0, L'+', kStyleDim);
+          screen.writeChar(x0, y0 + h - 1, L'+', kStyleDim);
+          screen.writeRun(x0 + 1, y0 + h - 1, w - 2, L'-', kStyleDim);
+          screen.writeChar(x0 + w - 1, y0 + h - 1, L'+', kStyleDim);
+          for (int y = 1; y < h - 1; ++y) {
+            screen.writeChar(x0, y0 + y, L'|', kStyleDim);
+            screen.writeChar(x0 + w - 1, y0 + y, L'|', kStyleDim);
+          }
+
+          std::array<std::string, 2> items = {" Play", " Analyze to .melody"};
+          int inner = std::max(1, w - 2);
+          for (int i = 0; i < fileContextLayout.rows; ++i) {
+            std::string text = items[static_cast<size_t>(i)];
+            if (utf8CodepointCount(text) > inner) {
+              text = utf8Take(text, inner);
+            }
+            int textWidth = utf8CodepointCount(text);
+            if (textWidth < inner) {
+              text.append(static_cast<size_t>(inner - textWidth), ' ');
+            }
+            Style rowStyle =
+                (i == fileContextMenu.selected) ? kStyleHighlight : kStyleNormal;
+            screen.writeText(x0 + 1, fileContextLayout.listY + i, text, rowStyle);
+          }
+        }
+      } else {
+        fileContextLayout.valid = false;
+      }
+
+      {
+        bool exportRunning = false;
+        float exportProgress = 0.0f;
+        std::filesystem::path exportSource;
+        {
+          std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
+          exportRunning = melodyExportTask.running;
+          exportProgress = std::clamp(melodyExportTask.progress, 0.0f, 1.0f);
+          exportSource = melodyExportTask.sourceFile;
+        }
+        if (exportRunning) {
+          std::string sourceName =
+              exportSource.empty() ? std::string("(unknown)")
+                                   : toUtf8String(exportSource.filename());
+          int popupWidth = std::max(46, utf8CodepointCount(sourceName) + 8);
+          popupWidth = std::min(width - 2, popupWidth);
+          popupWidth = std::max(24, popupWidth);
+          int popupHeight = 7;
+          int x0 = std::max(0, (width - popupWidth) / 2);
+          int y0 = std::max(1, (height - popupHeight) / 2);
+
+          for (int y = 0; y < popupHeight; ++y) {
+            screen.writeRun(x0, y0 + y, popupWidth, L' ', kStyleNormal);
+          }
+          screen.writeChar(x0, y0, L'+', kStyleDim);
+          screen.writeRun(x0 + 1, y0, popupWidth - 2, L'-', kStyleDim);
+          screen.writeChar(x0 + popupWidth - 1, y0, L'+', kStyleDim);
+          screen.writeChar(x0, y0 + popupHeight - 1, L'+', kStyleDim);
+          screen.writeRun(x0 + 1, y0 + popupHeight - 1, popupWidth - 2, L'-',
+                          kStyleDim);
+          screen.writeChar(x0 + popupWidth - 1, y0 + popupHeight - 1, L'+',
+                           kStyleDim);
+          for (int y = 1; y < popupHeight - 1; ++y) {
+            screen.writeChar(x0, y0 + y, L'|', kStyleDim);
+            screen.writeChar(x0 + popupWidth - 1, y0 + y, L'|', kStyleDim);
+          }
+
+          std::string title = " Melody Analysis";
+          screen.writeText(x0 + 1, y0 + 1, fitLine(title, popupWidth - 2),
+                           kStyleAccent);
+          std::string fileLine = " " + sourceName;
+          screen.writeText(x0 + 1, y0 + 2, fitLine(fileLine, popupWidth - 2),
+                           kStyleDim);
+
+          int barInner = std::max(8, popupWidth - 8);
+          int filled = static_cast<int>(
+              std::round(static_cast<float>(barInner) * exportProgress));
+          filled = std::clamp(filled, 0, barInner);
+          std::string bar = "[";
+          bar.append(static_cast<size_t>(filled), '#');
+          bar.append(static_cast<size_t>(std::max(0, barInner - filled)), '.');
+          bar.push_back(']');
+          screen.writeText(x0 + 2, y0 + 4, fitLine(bar, popupWidth - 4),
+                           kStyleNormal);
+
+          int pct = static_cast<int>(std::round(exportProgress * 100.0f));
+          std::string pctLine = " " + std::to_string(pct) + "%";
+          screen.writeText(x0 + 2, y0 + 5, fitLine(pctLine, popupWidth - 4),
+                           kStyleDim);
+        }
+      }
+
       screen.draw();
       lastDraw = now;
       dirty = false;
@@ -1809,6 +2180,7 @@ int runTui(Options o) {
   input.restore();
   screen.restore();
   std::cout << "\n";
+  joinMelodyExportWorker();
   audioShutdown();
   return 0;
 }

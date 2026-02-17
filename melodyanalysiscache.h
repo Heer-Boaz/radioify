@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <unordered_map>
 
@@ -35,3 +36,13 @@ void melodyOfflineStart(const std::filesystem::path& file, int trackIndex,
 void melodyOfflineStop();
 MelodyOfflineFrame melodyOfflineGetFrame(double timeSec);
 MelodyOfflineAnalysisState melodyOfflineGetState();
+
+bool melodyOfflineAnalyzeToFile(
+    const std::filesystem::path& file, int trackIndex, uint32_t sourceSampleRate,
+    uint32_t channels, uint64_t leadInFrames,
+    const KssPlaybackOptions& kssOptions,
+    const NsfPlaybackOptions& nsfOptions,
+    const VgmPlaybackOptions& vgmOptions,
+    const std::unordered_map<uint32_t, VgmDeviceOptions>& vgmDeviceOverrides,
+    const std::filesystem::path& outputFile,
+    const std::function<void(float)>& progressCallback, std::string* error);

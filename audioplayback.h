@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -127,6 +128,11 @@ float audioGetRadioMakeup();
 float audioGetPeak();
 AudioMelodyInfo audioGetMelodyInfo();
 AudioMelodyAnalysisState audioGetMelodyAnalysisState();
+bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
+                                  int trackIndex,
+                                  const std::filesystem::path& outputFile,
+                                  const std::function<void(float)>& progressCallback,
+                                  std::string* error);
 bool audioIsRadioClipping();
 std::string audioGetWarning();
 bool audioIs50HzEnabled();

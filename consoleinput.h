@@ -136,6 +136,7 @@ struct InputCallbacks {
   std::function<void(float)> onAdjustVolume;
   std::function<void(float)> onAdjustRadioMakeup;
   std::function<bool(const std::filesystem::path&)> onPlayFile;
+  std::function<void(const FileEntry&, int, int)> onOpenFileContextMenu;
   std::function<void(const std::filesystem::path&)> onRenderFile;
   std::function<void(BrowserState&, const std::string&)> onRefreshBrowser;
 };

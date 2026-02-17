@@ -2792,6 +2792,24 @@ AudioMelodyAnalysisState audioGetMelodyAnalysisState() {
   return result;
 }
 
+bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
+                                  int trackIndex,
+                                  const std::filesystem::path& outputFile,
+                                  const std::function<void(float)>& progressCallback,
+                                  std::string* error) {
+  if (file.empty() || !std::filesystem::exists(file)) {
+    if (error) *error = "Input file not found.";
+    return false;
+  }
+  uint32_t analysisSampleRate = std::max<uint32_t>(1u, gAudio.sampleRate);
+  uint32_t analysisChannels =
+      std::clamp<uint32_t>(std::max<uint32_t>(1u, gAudio.baseChannels), 1u, 2u);
+  return melodyOfflineAnalyzeToFile(
+      file, trackIndex, analysisSampleRate, analysisChannels, 0,
+      gAudio.kssOptions, gAudio.nsfOptions, gAudio.vgmOptions,
+      gAudio.vgmDeviceOverrides, outputFile, progressCallback, error);
+}
+
 bool audioIsRadioClipping() {
   return gAudio.state.radioClipHold.load(std::memory_order_relaxed) > 0;
 }
