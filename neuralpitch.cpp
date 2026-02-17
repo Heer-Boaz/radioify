@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -238,6 +239,74 @@ bool checkStatus(const OrtApi* api, OrtStatus* status, std::string* error,
     }
   }
   return false;
+}
+
+struct TensorShapeSummary {
+  bool hasElementCount = false;
+  size_t elementCount = 0;
+  bool hasKnownProduct = false;
+  size_t knownProduct = 0;
+  int64_t maxKnownDim = 0;
+  int64_t lastKnownDim = 0;
+};
+
+std::string asciiLower(std::string text) {
+  for (char& c : text) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return text;
+}
+
+void summarizeTensorShape(const OrtApi* api,
+                          const OrtTensorTypeAndShapeInfo* tensorInfo,
+                          TensorShapeSummary* out) {
+  if (!api || !tensorInfo || !out) return;
+  out->hasElementCount = false;
+  out->elementCount = 0;
+  out->hasKnownProduct = false;
+  out->knownProduct = 0;
+  out->maxKnownDim = 0;
+  out->lastKnownDim = 0;
+
+  size_t elemCount = 0;
+  OrtStatus* elemStatus = api->GetTensorShapeElementCount(tensorInfo, &elemCount);
+  if (!elemStatus) {
+    out->hasElementCount = true;
+    out->elementCount = elemCount;
+  } else {
+    api->ReleaseStatus(elemStatus);
+  }
+
+  size_t dimCount = 0;
+  OrtStatus* dimCountStatus = api->GetDimensionsCount(tensorInfo, &dimCount);
+  if (dimCountStatus) {
+    api->ReleaseStatus(dimCountStatus);
+    return;
+  }
+  if (dimCount == 0) return;
+
+  std::vector<int64_t> dims(dimCount, 0);
+  OrtStatus* dimsStatus = api->GetDimensions(tensorInfo, dims.data(), dimCount);
+  if (dimsStatus) {
+    api->ReleaseStatus(dimsStatus);
+    return;
+  }
+
+  bool allKnownPositive = true;
+  size_t product = 1;
+  for (int64_t dim : dims) {
+    if (dim > 0) {
+      if (dim > out->maxKnownDim) out->maxKnownDim = dim;
+      out->lastKnownDim = dim;
+      product *= static_cast<size_t>(dim);
+    } else {
+      allKnownPositive = false;
+    }
+  }
+  if (allKnownPositive) {
+    out->hasKnownProduct = true;
+    out->knownProduct = product;
+  }
 }
 
 #ifdef _WIN32
@@ -525,6 +594,8 @@ bool neuralPitchInit(NeuralPitchState* state, uint32_t sourceSampleRate,
     runtime->outputNamePtrs.push_back(name.c_str());
   }
 
+  size_t bestPitchCountHint = 0;
+  int bestVoicingScore = -1;
   for (size_t i = 0; i < outputCount; ++i) {
     OrtTypeInfo* typeInfo = nullptr;
     if (!checkStatus(runtime->api,
@@ -550,21 +621,52 @@ bool neuralPitchInit(NeuralPitchState* state, uint32_t sourceSampleRate,
       }
       return false;
     }
-    size_t elemCount = 0;
-    OrtStatus* elemStatus = runtime->api->GetTensorShapeElementCount(
-        tensorInfo, &elemCount);
-    bool okElem = checkStatus(runtime->api, elemStatus, error,
-                              "GetTensorShapeElementCount");
-    runtime->api->ReleaseTypeInfo(typeInfo);
-    if (!okElem) return false;
 
-    if (elemCount >= 256) {
+    TensorShapeSummary shapeSummary;
+    summarizeTensorShape(runtime->api, tensorInfo, &shapeSummary);
+    runtime->api->ReleaseTypeInfo(typeInfo);
+
+    size_t countHint = 0;
+    if (shapeSummary.hasElementCount) {
+      countHint = shapeSummary.elementCount;
+    } else if (shapeSummary.hasKnownProduct) {
+      countHint = shapeSummary.knownProduct;
+    } else if (shapeSummary.maxKnownDim > 0) {
+      countHint = static_cast<size_t>(shapeSummary.maxKnownDim);
+    }
+
+    std::string outputNameLower = asciiLower(runtime->outputNames[i]);
+    bool nameSuggestsPitch =
+        outputNameLower.find("pitch") != std::string::npos ||
+        outputNameLower.find("f0") != std::string::npos ||
+        outputNameLower.find("note") != std::string::npos ||
+        outputNameLower.find("prob") != std::string::npos;
+    bool nameSuggestsVoicing =
+        outputNameLower.find("voic") != std::string::npos ||
+        outputNameLower.find("vuv") != std::string::npos;
+
+    if (countHint >= 256 || shapeSummary.maxKnownDim >= 256 ||
+        (nameSuggestsPitch &&
+         (countHint >= static_cast<size_t>(kCrepeBins) ||
+          runtime->pitchOutputIndex == static_cast<size_t>(-1)))) {
       if (runtime->pitchOutputIndex == static_cast<size_t>(-1) ||
-          elemCount > kCrepeBins) {
+          countHint > bestPitchCountHint) {
         runtime->pitchOutputIndex = i;
+        bestPitchCountHint = countHint;
       }
-    } else if (elemCount > 0 && elemCount <= 8 &&
-               runtime->voicingOutputIndex == static_cast<size_t>(-1)) {
+    }
+
+    int voicingScore = -1;
+    if (countHint > 0 && countHint <= 8) {
+      voicingScore = static_cast<int>(8 - countHint);
+    } else if (shapeSummary.maxKnownDim > 0 && shapeSummary.maxKnownDim <= 8) {
+      voicingScore = static_cast<int>(8 - shapeSummary.maxKnownDim);
+    }
+    if (nameSuggestsVoicing) {
+      voicingScore += 16;
+    }
+    if (voicingScore > bestVoicingScore) {
+      bestVoicingScore = voicingScore;
       runtime->voicingOutputIndex = i;
     }
   }
@@ -696,9 +798,17 @@ void neuralPitchUpdate(NeuralPitchState* state, const float* samples,
           if (pitchValue) {
             OrtTensorTypeAndShapeInfo* shapeInfo = nullptr;
             if (!runtime->api->GetTensorTypeAndShape(pitchValue, &shapeInfo)) {
+              TensorShapeSummary shapeSummary;
+              summarizeTensorShape(runtime->api, shapeInfo, &shapeSummary);
               size_t elemCount = 0;
-              if (!runtime->api->GetTensorShapeElementCount(shapeInfo, &elemCount) &&
-                  elemCount > 0) {
+              if (shapeSummary.hasElementCount) {
+                elemCount = shapeSummary.elementCount;
+              } else if (shapeSummary.hasKnownProduct) {
+                elemCount = shapeSummary.knownProduct;
+              } else if (shapeSummary.maxKnownDim > 0) {
+                elemCount = static_cast<size_t>(shapeSummary.maxKnownDim);
+              }
+              if (elemCount > 0) {
                 float* data = nullptr;
                 if (!runtime->api->GetTensorMutableData(pitchValue,
                                                         reinterpret_cast<void**>(&data)) &&

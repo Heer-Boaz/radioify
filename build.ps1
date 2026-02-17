@@ -102,6 +102,39 @@ function Add-VcpkgOverlayPortPath {
   $env:VCPKG_OVERLAY_PORTS = ($parts -join ';')
 }
 
+function Assert-OnnxOverlayPortComplete {
+  param([string]$OverlayPortsRoot)
+
+  if (-not $OverlayPortsRoot) { return }
+  $onnxPortDir = Join-Path $OverlayPortsRoot "onnx"
+  if (-not (Test-Path $onnxPortDir)) { return }
+
+  $requiredFiles = @(
+    "portfile.cmake",
+    "vcpkg.json",
+    "fix-cmakelists.patch",
+    "fix-pr-7390.patch"
+  )
+
+  $missing = @()
+  foreach ($name in $requiredFiles) {
+    $path = Join-Path $onnxPortDir $name
+    if (-not (Test-Path $path)) {
+      $missing += $path
+    }
+  }
+
+  if ($missing.Count -gt 0) {
+    Write-Error @"
+ONNX overlay port is incomplete. Missing required files:
+$($missing -join "`n")
+
+Restore these files in: $onnxPortDir
+"@
+    exit 1
+  }
+}
+
 function Resolve-StaticTriplet {
   param([string]$Arch)
   if (-not $Arch) { $Arch = Resolve-TargetArch }
@@ -233,6 +266,7 @@ Add-VcpkgCMakeConfigureOption "-DONNX_DISABLE_STATIC_REGISTRATION=ON"
 
 $overlayPortsDir = Join-Path $root "vcpkg-overlays\ports"
 if (Test-Path $overlayPortsDir) {
+  Assert-OnnxOverlayPortComplete $overlayPortsDir
   Add-VcpkgOverlayPortPath $overlayPortsDir
   Write-Host "Using vcpkg overlay ports: $overlayPortsDir"
 }
