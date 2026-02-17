@@ -80,6 +80,28 @@ function Add-VcpkgCMakeConfigureOption {
   $env:VCPKG_CMAKE_CONFIGURE_OPTIONS = ($parts -join ';')
 }
 
+function Add-VcpkgOverlayPortPath {
+  param([string]$PathToAdd)
+
+  if (-not $PathToAdd) { return }
+  $resolved = [System.IO.Path]::GetFullPath($PathToAdd)
+  if (-not (Test-Path $resolved)) { return }
+
+  $existing = $env:VCPKG_OVERLAY_PORTS
+  if (-not $existing) {
+    $env:VCPKG_OVERLAY_PORTS = $resolved
+    return
+  }
+
+  $parts = @()
+  foreach ($part in ($existing -split ';')) {
+    if ($part) { $parts += $part }
+  }
+  if ($parts -contains $resolved) { return }
+  $parts += $resolved
+  $env:VCPKG_OVERLAY_PORTS = ($parts -join ';')
+}
+
 function Resolve-StaticTriplet {
   param([string]$Arch)
   if (-not $Arch) { $Arch = Resolve-TargetArch }
@@ -137,6 +159,43 @@ function Copy-FfmpegRuntime {
   }
 }
 
+function Assert-OnnxStaticRegistrationDisabled {
+  param(
+    [string]$InstalledRoot,
+    [string]$Triplet
+  )
+
+  if (-not $InstalledRoot) { return }
+  $onnxBuildDir = Join-Path $InstalledRoot "vcpkg\blds\onnx"
+  if (-not (Test-Path $onnxBuildDir)) { return }
+
+  $candidates = @()
+  if ($Triplet) {
+    $candidates += (Join-Path $onnxBuildDir ("config-{0}-out.log" -f $Triplet))
+  }
+  $candidates += Get-ChildItem -Path $onnxBuildDir -Filter "config-*-out.log" -File -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty FullName
+  $candidates = $candidates | Select-Object -Unique
+
+  foreach ($logPath in $candidates) {
+    if (-not (Test-Path $logPath)) { continue }
+    $isOff = Select-String -Path $logPath -Pattern "ONNX_DISABLE_STATIC_REGISTRATION\\s*:\\s*OFF" -SimpleMatch:$false -Quiet
+    if ($isOff) {
+      Write-Error @"
+ONNX is currently built with ONNX_DISABLE_STATIC_REGISTRATION=OFF.
+That causes Melody mode schema spam/crashes with ONNX Runtime static builds.
+
+Fix:
+  1) Delete this folder: $InstalledRoot
+  2) Re-run: .\\build.ps1 -Static
+
+This build now ships an ONNX overlay port that forces ONNX_DISABLE_STATIC_REGISTRATION=ON.
+"@
+      exit 1
+    }
+  }
+}
+
 $cmake = Resolve-CMake
 if (-not $cmake) {
   Write-Error "CMake not found. Install CMake and ensure cmake.exe is on PATH."
@@ -171,6 +230,12 @@ $vcpkgExe = Resolve-VcpkgExe -VcpkgRoot $vcpkgRoot
 # ONNX Runtime static builds require ONNX static registration to be disabled to
 # avoid runtime duplicate schema registration errors.
 Add-VcpkgCMakeConfigureOption "-DONNX_DISABLE_STATIC_REGISTRATION=ON"
+
+$overlayPortsDir = Join-Path $root "vcpkg-overlays\ports"
+if (Test-Path $overlayPortsDir) {
+  Add-VcpkgOverlayPortPath $overlayPortsDir
+  Write-Host "Using vcpkg overlay ports: $overlayPortsDir"
+}
 
 $tripletStaticRequested = $false
 if ($Static) {
@@ -231,6 +296,10 @@ $cmakeArgs += "-DRADIOIFY_ENABLE_TIMING_LOG=$([bool]$TimingLog)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_STAGING_UPLOAD=$([bool]$StagingUpload)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_VIDEO_ERROR_LOG=$([bool]$VideoErrorLog)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$([bool]$FfmpegErrorLog)"
+# Never let CMake/toolchain auto-run `vcpkg install`.
+# Dependencies are installed explicitly only via `-InstallDeps`.
+$cmakeArgs += "-DVCPKG_MANIFEST_MODE=OFF"
+$cmakeArgs += "-DVCPKG_MANIFEST_INSTALL=OFF"
 if ($vcpkgRoot) {
   $toolchain = Join-Path $vcpkgRoot "scripts/buildsystems/vcpkg.cmake"
   if (Test-Path $toolchain) {
@@ -242,6 +311,13 @@ if ($installedRoot) {
 }
 if ($env:VCPKG_TARGET_TRIPLET) {
   $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
+}
+if ($env:VCPKG_OVERLAY_PORTS) {
+  $cmakeArgs += "-DVCPKG_OVERLAY_PORTS=$env:VCPKG_OVERLAY_PORTS"
+}
+
+if (Is-StaticTriplet $env:VCPKG_TARGET_TRIPLET) {
+  Assert-OnnxStaticRegistrationDisabled -InstalledRoot $installedRoot -Triplet $env:VCPKG_TARGET_TRIPLET
 }
 
 $buildArgs = @("--build", $buildDir, "--config", $Config)

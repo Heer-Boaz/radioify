@@ -535,30 +535,6 @@ if (RADIOIFY_ENABLE_NEURAL_PITCH)
   endif()
 
   if (_radioify_onnx_target)
-    get_target_property(_radioify_onnx_interface_libs ${_radioify_onnx_target}
-      INTERFACE_LINK_LIBRARIES)
-    if (_radioify_onnx_interface_libs)
-      set(_radioify_onnx_interface_libs_filtered "")
-      set(_radioify_onnx_interface_libs_removed "")
-      foreach(_dep IN LISTS _radioify_onnx_interface_libs)
-        if (_dep STREQUAL "ONNX::onnx" OR
-            _dep STREQUAL "ONNX::onnx_proto" OR
-            _dep MATCHES "ONNX::onnx(_proto)?$" OR
-            _dep MATCHES "LINK_ONLY:ONNX::onnx(_proto)?")
-          list(APPEND _radioify_onnx_interface_libs_removed "${_dep}")
-        else()
-          list(APPEND _radioify_onnx_interface_libs_filtered "${_dep}")
-        endif()
-      endforeach()
-      if (_radioify_onnx_interface_libs_removed)
-        set_property(TARGET ${_radioify_onnx_target} PROPERTY
-          INTERFACE_LINK_LIBRARIES "${_radioify_onnx_interface_libs_filtered}")
-        message(STATUS
-          "Neural pitch: filtered duplicate ONNX schema libs from ${_radioify_onnx_target}: "
-          "${_radioify_onnx_interface_libs_removed}")
-      endif()
-    endif()
-
     set(RADIOIFY_HAS_ONNXRUNTIME ON)
     target_link_libraries(radioify PRIVATE ${_radioify_onnx_target})
     message(STATUS "Neural pitch: ONNX Runtime enabled via target ${_radioify_onnx_target}.")
