@@ -612,7 +612,9 @@ static int runExtractSheetCli(const Options& o,
 
   logLine("Extract complete.");
   logLine("  Input:  " + inputPath.string());
-  logLine("  Output: " + outputPath.string());
+  std::filesystem::path midiOutputPath = outputPath;
+  midiOutputPath.replace_extension(".mid");
+  logLine("  Output: " + outputPath.string() + " + " + midiOutputPath.string());
   return 0;
 }
 
@@ -1238,8 +1240,11 @@ int runTui(Options o) {
           melodyExportTask.success = ok;
           melodyExportTask.progress = ok ? 1.0f : melodyExportTask.progress;
           if (ok) {
+            std::filesystem::path midiOutput = outputFile;
+            midiOutput.replace_extension(".mid");
             melodyExportTask.status =
-                "Saved " + toUtf8String(outputFile.filename());
+                "Saved " + toUtf8String(outputFile.filename()) + " and " +
+                midiOutput.filename().string();
           } else {
             melodyExportTask.status =
                 error.empty() ? "Analysis failed." : error;
@@ -1251,7 +1256,7 @@ int runTui(Options o) {
     FileContextMenuLayout layout{};
     constexpr int kRows = 2;
     std::string item0 = " Play";
-    std::string item1 = " Analyze to .melody";
+    std::string item1 = " Analyze";
     int itemWidth =
         std::max(utf8CodepointCount(item0), utf8CodepointCount(item1));
     layout.width = std::max(24, itemWidth + 4);
@@ -2152,7 +2157,7 @@ int runTui(Options o) {
             screen.writeChar(x0 + w - 1, y0 + y, L'|', kStyleDim);
           }
 
-          std::array<std::string, 2> items = {" Play", " Analyze to .melody"};
+          std::array<std::string, 2> items = {" Play", " Analyze"};
           int inner = std::max(1, w - 2);
           for (int i = 0; i < fileContextLayout.rows; ++i) {
             std::string text = items[static_cast<size_t>(i)];

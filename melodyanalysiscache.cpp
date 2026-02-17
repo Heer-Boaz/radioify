@@ -39,6 +39,14 @@ constexpr float kOfflineGapFillConfidence = 0.22f;
 constexpr float kOfflineVoicingLower = 0.19f;
 constexpr float kOfflineVoicingUpper = 0.31f;
 constexpr float kOfflineLargeJumpPenalty = 8.0f;
+constexpr uint16_t kMidiDivision = 480;
+constexpr uint32_t kMidiTempoBpm = 120;
+
+struct MidiRun {
+  int midi = -1;
+  uint64_t startFrame = 0;
+  uint64_t endFrame = 0;
+};
 
 struct MelodyAnalysisPoint {
   uint64_t frame = 0;
@@ -731,6 +739,199 @@ bool writeMelodyFramesToFile(
   return true;
 }
 
+void appendMidiUInt32BE(std::vector<uint8_t>& out, uint32_t value) {
+  out.push_back(static_cast<uint8_t>((value >> 24) & 0xFFu));
+  out.push_back(static_cast<uint8_t>((value >> 16) & 0xFFu));
+  out.push_back(static_cast<uint8_t>((value >> 8) & 0xFFu));
+  out.push_back(static_cast<uint8_t>(value & 0xFFu));
+}
+
+void appendMidiUInt16BE(std::vector<uint8_t>& out, uint16_t value) {
+  out.push_back(static_cast<uint8_t>((value >> 8) & 0xFFu));
+  out.push_back(static_cast<uint8_t>(value & 0xFFu));
+}
+
+void appendMidiVarLen(std::vector<uint8_t>& out, uint64_t value) {
+  uint8_t bytes[10];
+  size_t count = 0;
+  bytes[count++] = static_cast<uint8_t>(value & 0x7Fu);
+  value >>= 7;
+  while (value > 0) {
+    bytes[count++] = static_cast<uint8_t>((value & 0x7Fu) | 0x80u);
+    value >>= 7;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    out.push_back(bytes[count - 1 - i]);
+  }
+}
+
+uint64_t frameToMidiTick(uint64_t frameIndex, uint32_t sampleRate,
+                        uint16_t division, uint32_t tempoBpm) {
+  if (sampleRate == 0 || division == 0 || tempoBpm == 0) return 0;
+  constexpr double kTicksPerSecondScale = 60.0;
+  double tickRate = (static_cast<double>(division) *
+                     static_cast<double>(tempoBpm)) /
+                    kTicksPerSecondScale;
+  double ticks = static_cast<double>(frameIndex) * tickRate /
+                 static_cast<double>(sampleRate);
+  if (ticks < 0.0) return 0;
+  return static_cast<uint64_t>(std::llround(ticks));
+}
+
+bool writeMidiFramesToFile(const std::filesystem::path& outputFile,
+                          uint32_t sourceSampleRate,
+                          const std::vector<MelodyAnalysisPoint>& frames,
+                          std::string* error) {
+  if (outputFile.empty()) {
+    if (error) *error = "Output path is empty.";
+    return false;
+  }
+  if (frames.empty()) {
+    if (error) *error = "No melody frames available.";
+    return false;
+  }
+
+  std::error_code ec;
+  if (outputFile.has_parent_path()) {
+    std::filesystem::create_directories(outputFile.parent_path(), ec);
+    if (ec) {
+      if (error) *error = "Unable to create output directory.";
+      return false;
+    }
+  }
+
+  std::vector<MidiRun> runs;
+  bool inRun = false;
+  MidiRun run;
+  for (const auto& point : frames) {
+    int midi = point.frameData.midiNote;
+    if (midi >= 0 && midi <= 127) {
+      if (!inRun) {
+        inRun = true;
+        run.midi = midi;
+        run.startFrame = point.frame;
+      } else if (midi != run.midi) {
+        run.endFrame = point.frame;
+        runs.push_back(run);
+        run = {midi, point.frame, 0};
+      }
+    } else if (inRun) {
+      inRun = false;
+      run.endFrame = point.frame;
+      runs.push_back(run);
+    }
+  }
+  if (inRun) {
+    run.endFrame = frames.back().frame + kCaptureStrideFrames;
+    runs.push_back(run);
+  }
+
+  if (runs.empty()) {
+    if (error) *error = "No voiced segments available for MIDI export.";
+    return false;
+  }
+
+  std::vector<uint8_t> trackChunk;
+  uint64_t previousTick = 0;
+
+  auto appendDelta = [&](uint64_t delta) {
+    appendMidiVarLen(trackChunk, delta);
+  };
+  auto appendMeta = [&](uint64_t delta, uint8_t type,
+                        const std::vector<uint8_t>& payload) {
+    appendDelta(delta);
+    trackChunk.push_back(0xFF);
+    trackChunk.push_back(type);
+    appendMidiVarLen(trackChunk, payload.size());
+    trackChunk.insert(trackChunk.end(), payload.begin(), payload.end());
+  };
+
+  appendMeta(
+      0,
+      0x51,
+      {static_cast<uint8_t>((60000000 / kMidiTempoBpm) >> 16 & 0xFF),
+       static_cast<uint8_t>((60000000 / kMidiTempoBpm) >> 8 & 0xFF),
+       static_cast<uint8_t>(60000000 / kMidiTempoBpm)});
+  appendMeta(0, 0x58, {4, 2, 24, 8});
+
+  bool hasEvents = false;
+  for (const auto& segment : runs) {
+    if (segment.midi < 0 || segment.midi > 127) continue;
+    if (segment.endFrame <= segment.startFrame) continue;
+
+    uint64_t startTick =
+        frameToMidiTick(segment.startFrame, sourceSampleRate, kMidiDivision,
+                       kMidiTempoBpm);
+    uint64_t endTick = frameToMidiTick(segment.endFrame, sourceSampleRate,
+                                       kMidiDivision, kMidiTempoBpm);
+    if (endTick <= startTick) endTick = startTick + 1;
+    if (startTick < previousTick) startTick = previousTick;
+
+    appendDelta(startTick - previousTick);
+    trackChunk.push_back(0x90);
+    trackChunk.push_back(static_cast<uint8_t>(segment.midi));
+    trackChunk.push_back(0x64);
+
+    appendDelta(endTick - startTick);
+    trackChunk.push_back(0x80);
+    trackChunk.push_back(static_cast<uint8_t>(segment.midi));
+    trackChunk.push_back(0x40);
+
+    previousTick = endTick;
+    hasEvents = true;
+  }
+
+  if (!hasEvents) {
+    if (error) *error = "No MIDI events to write.";
+    return false;
+  }
+
+  trackChunk.push_back(0x00);
+  trackChunk.push_back(0xFF);
+  trackChunk.push_back(0x2F);
+  trackChunk.push_back(0x00);
+
+  if (trackChunk.empty() || trackChunk.size() > 0xFFFFFFFFull) {
+    if (error) {
+      *error = "MIDI track too large for current writer.";
+    }
+    return false;
+  }
+
+  std::vector<uint8_t> header;
+  header.reserve(14 + trackChunk.size());
+
+  header.push_back('M');
+  header.push_back('T');
+  header.push_back('h');
+  header.push_back('d');
+  appendMidiUInt32BE(header, 6);
+  appendMidiUInt16BE(header, 0);
+  appendMidiUInt16BE(header, 1);
+  appendMidiUInt16BE(header, kMidiDivision);
+
+  header.push_back('M');
+  header.push_back('T');
+  header.push_back('r');
+  header.push_back('k');
+  appendMidiUInt32BE(header, static_cast<uint32_t>(trackChunk.size()));
+  header.insert(header.end(), trackChunk.begin(), trackChunk.end());
+
+  std::ofstream out(outputFile, std::ios::binary | std::ios::trunc);
+  if (!out.is_open()) {
+    if (error) *error = "Unable to open output file for writing.";
+    return false;
+  }
+
+  out.write(reinterpret_cast<const char*>(header.data()),
+            static_cast<std::streamsize>(header.size()));
+  if (!out.good()) {
+    if (error) *error = "Failed while writing MIDI output.";
+    return false;
+  }
+  return true;
+}
+
 void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
                           const std::function<void(float)>& progressCallback) {
   if (!cache) return;
@@ -1077,5 +1278,15 @@ bool melodyOfflineAnalyzeToFile(
     }
     return false;
   }
-  return writeMelodyFramesToFile(outputFile, resultSampleRate, frames, error);
+  std::filesystem::path melodyPath = outputFile;
+  std::filesystem::path midiPath = melodyPath;
+  midiPath.replace_extension(".mid");
+
+  const bool melodyOk =
+      writeMelodyFramesToFile(melodyPath, resultSampleRate, frames, error);
+  bool midiOk = false;
+  if (melodyOk) {
+    midiOk = writeMidiFramesToFile(midiPath, resultSampleRate, frames, error);
+  }
+  return melodyOk && midiOk;
 }

@@ -7,7 +7,7 @@ static void showUsage(const char* exe) {
   std::string name = exe ? std::string(exe) : "radioify";
   logLine("Usage: " + name + " [options] [file_or_folder]");
   logLine("Options:");
-  logLine("  extract-sheet <file>   Analyze a track and write .melody output");
+  logLine("  extract-sheet <file>   Analyze a track and write .melody + .mid output");
   logLine("  --extract-sheet <file> Same as extract-sheet");
   logLine("  out <path>             Generic output path (for extract/render flows)");
   logLine("  --out <path>           Same as out");

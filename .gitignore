@@ -99,3 +99,12 @@ models/*.download
 # Useless files
 **.md
 !README.md
+
+# Output files
+**.melody
+**.mid
+**.wav
+**.mp3
+**.flac
+**.pyc
+**.rmi
