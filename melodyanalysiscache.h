@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <unordered_map>
 
 #include "kssoptions.h"
@@ -19,6 +21,7 @@ struct MelodyOfflineAnalysisState {
   bool running = false;
   float progress = 0.0f;
   size_t frameCount = 0;
+  std::string error;
 };
 
 void melodyOfflineStart(const std::filesystem::path& file, int trackIndex,

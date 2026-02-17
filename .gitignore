@@ -93,6 +93,8 @@ packages/
 # (Adjust as needed for any generated sources you want to ignore)
 
 **.webm
+models/*.onnx
+models/*.download
 
 # Useless files
 **.md

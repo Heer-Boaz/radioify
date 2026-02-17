@@ -61,6 +61,25 @@ function Resolve-TargetArch {
   return "x64"
 }
 
+function Add-VcpkgCMakeConfigureOption {
+  param([string]$Option)
+
+  if (-not $Option) { return }
+  $existing = $env:VCPKG_CMAKE_CONFIGURE_OPTIONS
+  if (-not $existing) {
+    $env:VCPKG_CMAKE_CONFIGURE_OPTIONS = $Option
+    return
+  }
+
+  $parts = @()
+  foreach ($part in ($existing -split ';')) {
+    if ($part) { $parts += $part }
+  }
+  if ($parts -contains $Option) { return }
+  $parts += $Option
+  $env:VCPKG_CMAKE_CONFIGURE_OPTIONS = ($parts -join ';')
+}
+
 function Resolve-StaticTriplet {
   param([string]$Arch)
   if (-not $Arch) { $Arch = Resolve-TargetArch }
@@ -148,6 +167,10 @@ if ($Clean -and -not $Rebuild) {
 
 $vcpkgRoot = Resolve-VcpkgRoot
 $vcpkgExe = Resolve-VcpkgExe -VcpkgRoot $vcpkgRoot
+
+# ONNX Runtime static builds require ONNX static registration to be disabled to
+# avoid runtime duplicate schema registration errors.
+Add-VcpkgCMakeConfigureOption "-DONNX_DISABLE_STATIC_REGISTRATION=ON"
 
 $tripletStaticRequested = $false
 if ($Static) {

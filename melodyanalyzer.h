@@ -63,6 +63,7 @@ struct MelodyAnalyzerInfo {
   float tempoBpm = 0.0f;
   float beatConfidence = 0.0f;
   std::array<float, 12> hpcpProfile{};
+  std::array<float, kMelodyAnalyzerStates> pitchPosterior{};
 };
 
 void melodyAnalyzerReset(MelodyAnalyzerState* state);

@@ -715,6 +715,9 @@ int runTui(Options o) {
   std::deque<int> melodyHistoryMidi;
   std::deque<float> melodyHistoryConfidence;
   constexpr size_t kMelodyHistoryMaxSamples = 4096;
+  std::filesystem::path lastMelodyTrack;
+  int lastMelodyTrackIndex = -1;
+  bool lastMelodyAnalysisRunning = false;
   double seekDisplaySec = -1.0;
   bool seekHoldActive = false;
   auto seekHoldStart = std::chrono::steady_clock::now();
@@ -739,8 +742,7 @@ int runTui(Options o) {
     melodyHistoryConfidence.clear();
   };
   auto pushMelodyHistory = [&](const AudioMelodyInfo& info) {
-    int midi = (info.midiNote >= 0 && info.confidence > 0.0f) ? info.midiNote
-                                                               : -1;
+    int midi = (info.midiNote >= 0) ? info.midiNote : -1;
     melodyHistoryMidi.push_back(midi);
     melodyHistoryConfidence.push_back(std::clamp(info.confidence, 0.0f, 1.0f));
     while (melodyHistoryMidi.size() > kMelodyHistoryMaxSamples) {
@@ -1051,7 +1053,8 @@ int runTui(Options o) {
   };
 
   auto drawMelodyPanel = [&](int top, int panelHeight, int panelWidth,
-                             const AudioMelodyInfo& melodyInfo) {
+                             const AudioMelodyInfo& melodyInfo,
+                             const AudioMelodyAnalysisState& melodyAnalysisState) {
     if (panelHeight <= 0 || panelWidth <= 0) return;
     int bottom = top + panelHeight;
     int row = top;
@@ -1062,7 +1065,7 @@ int runTui(Options o) {
 
     if (row < bottom) {
       std::string noteLine;
-      if (melodyInfo.midiNote >= 0 && melodyInfo.confidence > 0.0f) {
+      if (melodyInfo.midiNote >= 0) {
         int hz = static_cast<int>(std::round(melodyInfo.frequencyHz));
         noteLine = " " + midiToNoteName(melodyInfo.midiNote) + "   " +
                    std::to_string(hz) + "Hz";
@@ -1087,6 +1090,26 @@ int runTui(Options o) {
       meter.push_back(']');
       std::string confLine = " Confidence " + meter + " " + std::to_string(pct) + "%";
       screen.writeText(0, row++, fitLine(confLine, panelWidth), kStyleDim);
+    }
+
+    if (row < bottom) {
+      std::string statusLine;
+      if (!melodyAnalysisState.error.empty()) {
+        statusLine = " Analysis: Error - " + melodyAnalysisState.error;
+      } else if (melodyAnalysisState.ready) {
+        statusLine =
+            " Analysis: Ready (" + std::to_string(melodyAnalysisState.frameCount) +
+            " pts)";
+      } else if (melodyAnalysisState.running) {
+        int progressPercent =
+            static_cast<int>(std::round(std::clamp(melodyAnalysisState.progress,
+                                                   0.0f, 1.0f) *
+                                      100.0f));
+        statusLine = " Analysis: " + std::to_string(progressPercent) + "%";
+      } else {
+        statusLine = " Analysis: Idle";
+      }
+      screen.writeText(0, row++, fitLine(statusLine, panelWidth), kStyleDim);
     }
 
     int graphTop = row;
@@ -1150,7 +1173,7 @@ int runTui(Options o) {
       }
     }
 
-    if (melodyInfo.midiNote >= 0 && melodyInfo.confidence > 0.0f) {
+    if (melodyInfo.midiNote >= 0) {
       int y = midiToRow(melodyInfo.midiNote);
       int x = chartX + chartWidth - 1;
       if (x >= chartX && y >= graphTop && y < bottom) {
@@ -1391,6 +1414,13 @@ int runTui(Options o) {
         breadcrumbHover = -1;
       }
       std::filesystem::path nowPlaying = audioGetNowPlaying();
+      int nowPlayingTrackIndex = audioGetTrackIndex();
+      if (nowPlaying != lastMelodyTrack ||
+          nowPlayingTrackIndex != lastMelodyTrackIndex) {
+        clearMelodyHistory();
+        lastMelodyTrack = nowPlaying;
+        lastMelodyTrackIndex = nowPlayingTrackIndex;
+      }
       std::string showingLabel;
       if (!browserInteractionEnabled) {
         showingLabel.clear();
@@ -1406,6 +1436,11 @@ int runTui(Options o) {
         screen.writeText(0, 1, fitLine(showingLabel, width), kStyleDim);
       }
       AudioMelodyInfo melodyInfo = audioGetMelodyInfo();
+      AudioMelodyAnalysisState melodyAnalysisState = audioGetMelodyAnalysisState();
+      if (melodyAnalysisState.running && !lastMelodyAnalysisRunning) {
+        clearMelodyHistory();
+      }
+      lastMelodyAnalysisRunning = melodyAnalysisState.running;
       if (melodyVisualizationEnabled && !audioIsPaused() && !audioIsHolding()) {
         pushMelodyHistory(melodyInfo);
       }
@@ -1415,7 +1450,8 @@ int runTui(Options o) {
                            kStyleHighlight, kStyleDim, isSupportedImageExt,
                            isVideoExt, isSupportedAudioExt);
       } else {
-        drawMelodyPanel(listTop, listHeight, width, melodyInfo);
+        drawMelodyPanel(listTop, listHeight, width, melodyInfo,
+                        melodyAnalysisState);
       }
 
       int footerStart = listTop + listHeight;

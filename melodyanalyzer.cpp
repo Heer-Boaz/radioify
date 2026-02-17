@@ -648,5 +648,25 @@ MelodyAnalyzerInfo melodyAnalyzerGetInfo(const MelodyAnalyzerState* state) {
   info.tempoBpm = state->tempoBpm;
   info.beatConfidence = state->beatConfidence;
   info.hpcpProfile = state->hpcpProfile;
+  info.pitchPosterior = state->lastPosterior;
+
+  float sum = 0.0f;
+  for (float p : info.pitchPosterior) {
+    if (std::isfinite(p) && p > 0.0f) {
+      sum += p;
+    }
+  }
+  if (sum <= kEnergyEps) {
+    info.pitchPosterior.fill(0.0f);
+    info.pitchPosterior[kMelodyUnvoicedState] = 1.0f;
+  } else {
+    for (float& p : info.pitchPosterior) {
+      if (!std::isfinite(p) || p < 0.0f) {
+        p = 0.0f;
+      } else {
+        p /= sum;
+      }
+    }
+  }
   return info;
 }

@@ -29,7 +29,7 @@ extern "C" {
 #include "gsfaudio.h"
 #include "vgmaudio.h"
 #include "kssaudio.h"
-#include "melodyanalyzer.h"
+#include "melodyanalysiscache.h"
 #include "psfaudio.h"
 #include "radio.h"
 
@@ -559,7 +559,6 @@ struct AudioState {
   std::atomic<int64_t> streamBasePtsUs{0};
   std::atomic<uint64_t> streamReadFrames{0};
   std::atomic<bool> streamClockReady{false};
-  MelodyAnalyzerState melody{};
 
   std::deque<AudioMetadata> streamMetadata;
   std::mutex streamMetadataMutex;
@@ -709,18 +708,6 @@ static void updatePeakMeter(AudioState* state, const float* samples,
   state->peak.store(next, std::memory_order_relaxed);
 }
 
-static void resetMelodyState(AudioState* state) {
-  if (!state) return;
-  melodyAnalyzerReset(&state->melody);
-}
-
-static void updateMelodyAnalysis(AudioState* state, const float* samples,
-                                ma_uint32 frameCount, uint32_t channels) {
-  if (!state) return;
-  melodyAnalyzerUpdate(&state->melody, samples, frameCount, channels,
-                       state->sampleRate);
-}
-
 void dataCallback(ma_device* device, void* output, const void*,
                   ma_uint32 frameCount) {
   static constexpr uint32_t kRadioClipHoldFrames = 2048;
@@ -867,10 +854,6 @@ void dataCallback(ma_device* device, void* output, const void*,
     if (postClip) {
       state->radioClipHold.store(kRadioClipHoldFrames,
                                  std::memory_order_relaxed);
-    }
-    if (framesRead > 0) {
-      updateMelodyAnalysis(state, out, static_cast<ma_uint32>(framesRead),
-                          channels);
     }
     updatePeakMeter(state, out, frameCount);
     return;
@@ -1135,7 +1118,6 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->radioClipHold.store(kRadioClipHoldFrames,
                                std::memory_order_relaxed);
   }
-  updateMelodyAnalysis(state, out, frameCount, state->channels);
   updatePeakMeter(state, out, frameCount);
 }
 
@@ -1431,6 +1413,8 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
     return false;
   }
   validateInputFile(file);
+  melodyOfflineStop();
+  gAudio.state.audioLeadSilenceFrames.store(0);
   if (gAudio.audition.active.load()) {
     stopAuditionWorker();
     gAudio.audition.resumeValid = false;
@@ -1756,7 +1740,6 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
   gAudio.state.audioPaddingFrames.store(0);
   gAudio.state.audioTrailingPaddingFrames.store(0);
   gAudio.state.audioLeadSilenceFrames.store(0);
-  resetMelodyState(&gAudio.state);
 
   gAudio.state.channels = gAudio.channels;
   gAudio.state.radio1938 = gAudio.radio1938Template;
@@ -1805,6 +1788,10 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
       return false;
     }
   }
+  const uint64_t analysisLeadInFrames = gAudio.state.audioLeadSilenceFrames.load();
+  melodyOfflineStart(file, trackIndex, gAudio.sampleRate, gAudio.channels,
+                    analysisLeadInFrames, gAudio.kssOptions, gAudio.nsfOptions,
+                    gAudio.vgmOptions, gAudio.vgmDeviceOverrides);
 
   gAudio.nowPlaying = file;
   return true;
@@ -1930,8 +1917,8 @@ void stopPlayback() {
   gAudio.state.streamClockReady.store(false);
   gAudio.state.streamStarved.store(false);
   gAudio.state.streamRb.reset();
-  resetMelodyState(&gAudio.state);
   gAudio.state.audioClock.reset(0);
+  melodyOfflineStop();
   gAudio.nowPlaying.clear();
   gAudio.gmeTrackIndex = 0;
   gAudio.gmeWarning.clear();
@@ -1959,7 +1946,6 @@ void audioInit(const AudioPlaybackConfig& config) {
   gAudio.state.dry = config.dry;
   gAudio.state.useRadio1938.store(config.enableRadio);
   gAudio.state.radioMakeupGain.store(gAudio.radio1938Template.makeupGain);
-  resetMelodyState(&gAudio.state);
 
   gAudio.radio1938Template.init(gAudio.channels,
                                 static_cast<float>(gAudio.sampleRate),
@@ -2003,6 +1989,7 @@ bool audioStartStream(uint64_t totalFrames) {
   if (!gAudio.enableAudio) {
     return false;
   }
+  melodyOfflineStop();
   gAudio.gmeWarning.clear();
   gAudio.gsfWarning.clear();
   gAudio.vgmWarning.clear();
@@ -2092,7 +2079,6 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.state.audioTrailingPaddingFrames.store(0);
   gAudio.state.audioLeadSilenceFrames.store(0);
   gAudio.state.totalFrames.store(totalFrames);
-  resetMelodyState(&gAudio.state);
 
   gAudio.state.channels = gAudio.channels;
   gAudio.state.sampleRate = gAudio.sampleRate;
@@ -2774,17 +2760,36 @@ AudioMelodyInfo audioGetMelodyInfo() {
   if (!gAudio.decoderReady || !gAudio.enableAudio) {
     return AudioMelodyInfo{};
   }
-  MelodyAnalyzerInfo analyzerInfo = melodyAnalyzerGetInfo(&gAudio.state.melody);
-  AudioMelodyInfo info;
-  info.frequencyHz = analyzerInfo.frequencyHz;
-  info.confidence = analyzerInfo.confidence;
-  info.midiNote = analyzerInfo.midiNote;
-  constexpr float kDisplayFloor = 0.02f;
-  if (info.confidence < kDisplayFloor) {
+  MelodyOfflineAnalysisState analysisState = melodyOfflineGetState();
+  if (!analysisState.running && !analysisState.ready) {
+    return {};
+  }
+  const MelodyOfflineFrame frame =
+      melodyOfflineGetFrame(audioGetTimeSec());
+  AudioMelodyInfo info{};
+  info.frequencyHz = frame.frequencyHz;
+  info.confidence = std::clamp(frame.confidence, 0.0f, 1.0f);
+  info.midiNote = frame.midiNote;
+  if (!std::isfinite(info.frequencyHz) || !std::isfinite(info.confidence) ||
+      info.frequencyHz <= 0.0f || info.midiNote < 0 || info.midiNote > 127) {
     info.frequencyHz = 0.0f;
     info.midiNote = -1;
   }
   return info;
+}
+
+AudioMelodyAnalysisState audioGetMelodyAnalysisState() {
+  if (!gAudio.enableAudio) {
+    return {};
+  }
+  const MelodyOfflineAnalysisState state = melodyOfflineGetState();
+  AudioMelodyAnalysisState result;
+  result.ready = state.ready;
+  result.running = state.running;
+  result.progress = state.progress;
+  result.frameCount = state.frameCount;
+  result.error = state.error;
+  return result;
 }
 
 bool audioIsRadioClipping() {

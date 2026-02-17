@@ -1,13 +1,48 @@
 cmake_minimum_required(VERSION 3.16)
+if (POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
 project(radioify LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if (MSVC)
+  set(_radioify_msvc_runtime "")
+  if (DEFINED VCPKG_TARGET_TRIPLET)
+    set(_radioify_vcpkg_triplet_runtime_probe "${VCPKG_TARGET_TRIPLET}")
+  elseif (DEFINED ENV{VCPKG_TARGET_TRIPLET})
+    set(_radioify_vcpkg_triplet_runtime_probe "$ENV{VCPKG_TARGET_TRIPLET}")
+  else()
+    set(_radioify_vcpkg_triplet_runtime_probe "")
+  endif()
+
+  if (_radioify_vcpkg_triplet_runtime_probe MATCHES "-static-md$")
+    set(_radioify_msvc_runtime "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+  elseif (_radioify_vcpkg_triplet_runtime_probe MATCHES "-static$")
+    set(_radioify_msvc_runtime "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  endif()
+
+  if (_radioify_msvc_runtime)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "${_radioify_msvc_runtime}" CACHE STRING "MSVC runtime" FORCE)
+    message(STATUS "MSVC runtime forced to ${CMAKE_MSVC_RUNTIME_LIBRARY} for triplet ${_radioify_vcpkg_triplet_runtime_probe}")
+  endif()
+endif()
+
 option(RADIOIFY_ENABLE_TIMING_LOG "Enable timing log output" OFF)
 option(RADIOIFY_ENABLE_VIDEO_ERROR_LOG "Enable video error log output" OFF)
 option(RADIOIFY_ENABLE_FFMPEG_ERROR_LOG "Enable ffmpeg error log output" OFF)
 option(RADIOIFY_ENABLE_STAGING_UPLOAD "Enable staging-based texture uploads to avoid implicit GPU sync" OFF)
+option(RADIOIFY_ENABLE_NEURAL_PITCH "Enable ONNX neural pitch backend for offline analysis" ON)
+option(RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL "Download neural pitch model automatically when missing" ON)
+set(RADIOIFY_NEURAL_PITCH_MODEL_PATH "${CMAKE_SOURCE_DIR}/models/crepe_small.onnx" CACHE FILEPATH
+    "Path to the offline neural pitch ONNX model")
+set(RADIOIFY_NEURAL_PITCH_MODEL_URL
+    "https://huggingface.co/wok000/weights/resolve/main/crepe/onnx/small.onnx"
+    CACHE STRING "URL used to download the default neural pitch ONNX model")
+set(RADIOIFY_NEURAL_PITCH_MODEL_SHA256
+    "cd119f6f5f608d9342a1c6f81e4653f21dbcde440a96d474ecbf6f27c6253466"
+    CACHE STRING "Expected SHA256 hash for the downloaded neural pitch ONNX model")
 
 add_executable(radioify
   app_common.cpp
@@ -16,7 +51,9 @@ add_executable(radioify
   asciiart.cpp
   asciiart_gpu.cpp
   audioplayback.cpp
+  melodyanalysiscache.cpp
   melodyanalyzer.cpp
+  neuralpitch.cpp
   browsermeta.cpp
   consoleinput.cpp
   consolescreen.cpp
@@ -48,6 +85,20 @@ target_compile_definitions(radioify PRIVATE
   RADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_FFMPEG_ERROR_LOG}>,1,0>
   RADIOIFY_ENABLE_STAGING_UPLOAD=$<IF:$<BOOL:${RADIOIFY_ENABLE_STAGING_UPLOAD}>,1,0>
 )
+
+if (RADIOIFY_ENABLE_NEURAL_PITCH AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
+  add_custom_target(radioify_neural_pitch_model ALL
+    COMMAND ${CMAKE_COMMAND}
+            -DOUTPUT_PATH=${RADIOIFY_NEURAL_PITCH_MODEL_PATH}
+            -DURL=${RADIOIFY_NEURAL_PITCH_MODEL_URL}
+            -DSHA256=${RADIOIFY_NEURAL_PITCH_MODEL_SHA256}
+            -P "${CMAKE_SOURCE_DIR}/cmake/EnsureModelFile.cmake"
+    DEPENDS "${CMAKE_SOURCE_DIR}/cmake/EnsureModelFile.cmake"
+    COMMENT "Ensuring neural pitch model exists at ${RADIOIFY_NEURAL_PITCH_MODEL_PATH}"
+    VERBATIM
+  )
+  add_dependencies(radioify radioify_neural_pitch_model)
+endif()
 
 set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders")
 set(RADIOIFY_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -472,6 +523,72 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
+
+set(RADIOIFY_HAS_ONNXRUNTIME OFF)
+if (RADIOIFY_ENABLE_NEURAL_PITCH)
+  set(_radioify_onnx_target "")
+  find_package(onnxruntime CONFIG QUIET)
+  if (TARGET onnxruntime::onnxruntime)
+    set(_radioify_onnx_target onnxruntime::onnxruntime)
+  elseif (TARGET onnxruntime)
+    set(_radioify_onnx_target onnxruntime)
+  endif()
+
+  if (_radioify_onnx_target)
+    get_target_property(_radioify_onnx_interface_libs ${_radioify_onnx_target}
+      INTERFACE_LINK_LIBRARIES)
+    if (_radioify_onnx_interface_libs)
+      set(_radioify_onnx_interface_libs_filtered "")
+      set(_radioify_onnx_interface_libs_removed "")
+      foreach(_dep IN LISTS _radioify_onnx_interface_libs)
+        if (_dep STREQUAL "ONNX::onnx" OR
+            _dep STREQUAL "ONNX::onnx_proto" OR
+            _dep MATCHES "ONNX::onnx(_proto)?$" OR
+            _dep MATCHES "LINK_ONLY:ONNX::onnx(_proto)?")
+          list(APPEND _radioify_onnx_interface_libs_removed "${_dep}")
+        else()
+          list(APPEND _radioify_onnx_interface_libs_filtered "${_dep}")
+        endif()
+      endforeach()
+      if (_radioify_onnx_interface_libs_removed)
+        set_property(TARGET ${_radioify_onnx_target} PROPERTY
+          INTERFACE_LINK_LIBRARIES "${_radioify_onnx_interface_libs_filtered}")
+        message(STATUS
+          "Neural pitch: filtered duplicate ONNX schema libs from ${_radioify_onnx_target}: "
+          "${_radioify_onnx_interface_libs_removed}")
+      endif()
+    endif()
+
+    set(RADIOIFY_HAS_ONNXRUNTIME ON)
+    target_link_libraries(radioify PRIVATE ${_radioify_onnx_target})
+    message(STATUS "Neural pitch: ONNX Runtime enabled via target ${_radioify_onnx_target}.")
+  else()
+    find_path(ONNXRUNTIME_INCLUDE_DIR
+      NAMES onnxruntime_c_api.h onnxruntime/core/session/onnxruntime_c_api.h
+      HINTS ENV ONNXRUNTIME_DIR ENV ONNXRUNTIME_ROOT
+      PATH_SUFFIXES include include/onnxruntime/core/session
+    )
+    find_library(ONNXRUNTIME_LIBRARY
+      NAMES onnxruntime
+      HINTS ENV ONNXRUNTIME_DIR ENV ONNXRUNTIME_ROOT
+      PATH_SUFFIXES lib
+    )
+    if (ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+      set(RADIOIFY_HAS_ONNXRUNTIME ON)
+      target_include_directories(radioify PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+      target_link_libraries(radioify PRIVATE ${ONNXRUNTIME_LIBRARY})
+      message(STATUS "Neural pitch: ONNX Runtime enabled via manual lookup.")
+    else()
+      message(FATAL_ERROR "Neural pitch requested but ONNX Runtime not found (tried CMake package and manual lookup).")
+    endif()
+  endif()
+endif()
+
+target_compile_definitions(radioify PRIVATE
+  RADIOIFY_ENABLE_NEURAL_PITCH=$<IF:$<BOOL:${RADIOIFY_ENABLE_NEURAL_PITCH}>,1,0>
+  RADIOIFY_HAS_ONNXRUNTIME=$<IF:$<BOOL:${RADIOIFY_HAS_ONNXRUNTIME}>,1,0>
+)
+
 find_package(ZLIB REQUIRED)
 add_library(sexypsf STATIC
   ${CMAKE_SOURCE_DIR}/third_party/psx/PsxBios.c
@@ -674,6 +791,4 @@ endif()
 
 if (MSVC)
   target_compile_options(radioify PRIVATE /EHsc)
-  # Resolve LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs
-  target_link_options(radioify PRIVATE /NODEFAULTLIB:LIBCMT)
 endif()

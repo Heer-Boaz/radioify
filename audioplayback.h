@@ -32,6 +32,14 @@ struct AudioMelodyInfo {
   int midiNote = -1;
 };
 
+struct AudioMelodyAnalysisState {
+  bool ready = false;
+  bool running = false;
+  float progress = 0.0f;
+  size_t frameCount = 0;
+  std::string error;
+};
+
 struct AudioPlaybackConfig {
   bool enableAudio = true;
   bool enableRadio = false;
@@ -118,6 +126,7 @@ float audioGetVolume();
 float audioGetRadioMakeup();
 float audioGetPeak();
 AudioMelodyInfo audioGetMelodyInfo();
+AudioMelodyAnalysisState audioGetMelodyAnalysisState();
 bool audioIsRadioClipping();
 std::string audioGetWarning();
 bool audioIs50HzEnabled();
