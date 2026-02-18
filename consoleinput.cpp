@@ -369,13 +369,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
     if (key.vk == VK_ESCAPE) {
-      if (callbacks.onTogglePause && playMode && decoderReady) {
-        // Stop audio if it's playing
-        if (callbacks.onToggleRadio) callbacks.onToggleRadio(); // Actually use onTogglePause or a new stop?
-      }
-      // If audio is ready, we stop it
-      if (decoderReady && callbacks.onTogglePause) {
-        // Toggle pause/stop logic
+      if (callbacks.onStopPlayback) {
+        callbacks.onStopPlayback();
+        dirty = true;
       }
       return;
     }

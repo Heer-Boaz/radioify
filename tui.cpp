@@ -1004,6 +1004,11 @@ int runTui(Options o) {
   callbacks.onTogglePause = [&]() {
     audioTogglePause();
   };
+  callbacks.onStopPlayback = [&]() {
+    if (audioIsReady()) {
+      audioStop();
+    }
+  };
   callbacks.onToggleRadio = [&]() {
     audioToggleRadio();
   };

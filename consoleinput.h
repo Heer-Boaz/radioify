@@ -125,6 +125,7 @@ std::vector<DriveEntry> listDriveEntries();
 struct InputCallbacks {
   std::function<void()> onQuit;
   std::function<void()> onResize;
+  std::function<void()> onStopPlayback;
   std::function<void()> onTogglePause;
   std::function<void()> onToggleRadio;
   std::function<void()> onToggle50Hz;
