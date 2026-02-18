@@ -6,6 +6,7 @@
 struct Options {
   std::string input;
   std::string output;
+  bool splitLoop = false;
   bool extractSheet = false;
   int bwHz = 5500;
   double noise = 0.012;

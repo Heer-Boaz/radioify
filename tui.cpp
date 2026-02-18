@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -35,6 +34,8 @@
 #include "psfaudio.h"
 #include "radio.h"
 #include "tracklist.h"
+#include "loopsplit_cli.h"
+#include "loopsplit_ui.h"
 #include "ui_helpers.h"
 #include "videoplayback.h"
 
@@ -647,6 +648,9 @@ int runTui(Options o) {
   if (o.extractSheet) {
     return runExtractSheetCli(o, audioConfig);
   }
+  if (o.splitLoop) {
+    return runSplitLoopCli(o);
+  }
 
   std::filesystem::path startDir = std::filesystem::current_path();
   std::string initialName;
@@ -923,6 +927,20 @@ int runTui(Options o) {
   FileContextMenuState fileContextMenu;
   FileContextMenuLayout fileContextLayout;
   MelodyExportTaskState melodyExportTask;
+  LoopSplitTaskState loopSplitTask;
+
+  auto isBackgroundTaskRunning = [&]() {
+    bool running = false;
+    {
+      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
+      running = running || melodyExportTask.running;
+    }
+    {
+      std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
+      running = running || loopSplitTask.running;
+    }
+    return running;
+  };
 
   InputCallbacks callbacks;
   callbacks.onRefreshBrowser = [&](BrowserState& nextBrowser,
@@ -1210,6 +1228,9 @@ int runTui(Options o) {
     if (entry.isDir || !isSupportedAudioExt(entry.path)) {
       return;
     }
+    if (isBackgroundTaskRunning()) {
+      return;
+    }
 
     cleanupMelodyExportWorker();
 
@@ -1260,13 +1281,13 @@ int runTui(Options o) {
 
   auto computeFileContextLayout = [&](int w, int h) {
     FileContextMenuLayout layout{};
-    constexpr int kRows = 2;
-    std::string item0 = " Play";
-    std::string item1 = " Analyze";
-    int itemWidth =
-        std::max(utf8CodepointCount(item0), utf8CodepointCount(item1));
+    std::vector<std::string> items = {" Play", " Analyze", " Split Loop"};
+    int itemWidth = 0;
+    for (const auto& item : items) {
+      itemWidth = std::max(itemWidth, utf8CodepointCount(item));
+    }
     layout.width = std::max(24, itemWidth + 4);
-    layout.height = kRows + 2;
+    layout.height = static_cast<int>(items.size()) + 2;
     int x = fileContextMenu.anchorX;
     int y = fileContextMenu.anchorY;
     if (x < 0 || y < 0) {
@@ -1278,7 +1299,7 @@ int runTui(Options o) {
     layout.x = x;
     layout.y = y;
     layout.listY = y + 1;
-    layout.rows = kRows;
+    layout.rows = static_cast<int>(items.size());
     layout.valid = true;
     return layout;
   };
@@ -1296,6 +1317,11 @@ int runTui(Options o) {
       (void)played;
     } else if (actionIndex == 1) {
       startMelodyExport(entry);
+    } else if (actionIndex == 2) {
+      if (!entry.isDir && isSupportedAudioExt(entry.path) &&
+          !isBackgroundTaskRunning()) {
+        startLoopSplitExport(entry.path, o.output, loopSplitTask);
+      }
     }
     fileContextMenu.active = false;
     dirty = true;
@@ -1434,6 +1460,7 @@ int runTui(Options o) {
   while (running) {
     rebuildLayout();
     cleanupMelodyExportWorker();
+    cleanupLoopSplitExportWorker(loopSplitTask);
 
     InputEvent ev{};
     while (input.poll(ev)) {
@@ -1638,6 +1665,7 @@ int runTui(Options o) {
                        dirty, running, callbacks);
       if (rendered) {
         joinMelodyExportWorker();
+        joinLoopSplitExportWorker(loopSplitTask);
         audioShutdown();
         return 0;
       }
@@ -1812,11 +1840,25 @@ int runTui(Options o) {
           exportSuccess = melodyExportTask.success;
           exportStatus = melodyExportTask.status;
         }
-        (void)exportRunning;
         if (exportHasResult && !exportStatus.empty()) {
           Style statusStyle = exportSuccess ? kStyleDim : kStyleAlert;
           screen.writeText(0, line++,
                            fitLine(" Analyze: " + exportStatus, width),
+                           statusStyle);
+        }
+        bool loopSplitHasResult = false;
+        bool loopSplitSuccess = false;
+        std::string loopSplitStatus;
+        {
+          std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
+          loopSplitHasResult = loopSplitTask.hasResult;
+          loopSplitSuccess = loopSplitTask.success;
+          loopSplitStatus = loopSplitTask.status;
+        }
+        if (loopSplitHasResult && !loopSplitStatus.empty()) {
+          Style statusStyle = loopSplitSuccess ? kStyleDim : kStyleAlert;
+          screen.writeText(0, line++,
+                           fitLine(" Loop Split: " + loopSplitStatus, width),
                            statusStyle);
         }
       }
@@ -2163,9 +2205,12 @@ int runTui(Options o) {
             screen.writeChar(x0 + w - 1, y0 + y, L'|', kStyleDim);
           }
 
-          std::array<std::string, 2> items = {" Play", " Analyze"};
+          std::vector<std::string> items = {" Play", " Analyze", " Split Loop"};
           int inner = std::max(1, w - 2);
           for (int i = 0; i < fileContextLayout.rows; ++i) {
+            if (i < 0 || i >= static_cast<int>(items.size())) {
+              continue;
+            }
             std::string text = items[static_cast<size_t>(i)];
             if (utf8CodepointCount(text) > inner) {
               text = utf8Take(text, inner);
@@ -2184,16 +2229,29 @@ int runTui(Options o) {
       }
 
       {
-        bool exportRunning = false;
+        bool isRunning = false;
         float exportProgress = 0.0f;
         std::filesystem::path exportSource;
+        std::string title = " Melody Analysis";
         {
           std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-          exportRunning = melodyExportTask.running;
-          exportProgress = std::clamp(melodyExportTask.progress, 0.0f, 1.0f);
-          exportSource = melodyExportTask.sourceFile;
+          if (melodyExportTask.running) {
+            isRunning = true;
+            exportProgress = std::clamp(melodyExportTask.progress, 0.0f, 1.0f);
+            exportSource = melodyExportTask.sourceFile;
+            title = " Melody Analysis";
+          }
         }
-        if (exportRunning) {
+        if (!isRunning) {
+          std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
+          if (loopSplitTask.running) {
+            isRunning = true;
+            exportProgress = std::clamp(loopSplitTask.progress, 0.0f, 1.0f);
+            exportSource = loopSplitTask.sourceFile;
+            title = " Loop Split";
+          }
+        }
+        if (isRunning) {
           std::string sourceName =
               exportSource.empty() ? std::string("(unknown)")
                                    : toUtf8String(exportSource.filename());
@@ -2220,7 +2278,6 @@ int runTui(Options o) {
             screen.writeChar(x0 + popupWidth - 1, y0 + y, L'|', kStyleDim);
           }
 
-          std::string title = " Melody Analysis";
           screen.writeText(x0 + 1, y0 + 1, fitLine(title, popupWidth - 2),
                            kStyleAccent);
           std::string fileLine = " " + sourceName;
@@ -2259,6 +2316,7 @@ int runTui(Options o) {
   screen.restore();
   std::cout << "\n";
   joinMelodyExportWorker();
+  joinLoopSplitExportWorker(loopSplitTask);
   audioShutdown();
   return 0;
 }

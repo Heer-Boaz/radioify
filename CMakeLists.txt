@@ -78,7 +78,10 @@ add_executable(radioify
   videowindow.cpp
   videoprocessor.cpp
   radio.cpp
-)
+  loopsplit.cpp
+  loopsplit_cli.cpp
+  loopsplit_ui.cpp
+  )
 
 target_compile_definitions(radioify PRIVATE
   RADIOIFY_ENABLE_TIMING_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_TIMING_LOG}>,1,0>

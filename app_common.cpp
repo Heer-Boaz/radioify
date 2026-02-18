@@ -7,8 +7,10 @@ static void showUsage(const char* exe) {
   std::string name = exe ? std::string(exe) : "radioify";
   logLine("Usage: " + name + " [options] [file_or_folder]");
   logLine("Options:");
+  logLine("  split-loop <file>      Analyze and split audio into stinger + main loop");
   logLine("  extract-sheet <file>   Analyze a track and write .melody + .mid output");
   logLine("  --extract-sheet <file> Same as extract-sheet");
+  logLine("  --split-loop <file>    Same as split-loop");
   logLine("  out <path>             Generic output path (for extract/render flows)");
   logLine("  --out <path>           Same as out");
   logLine("  --no-ascii   Disable ASCII video rendering");
@@ -50,10 +52,28 @@ Options parseArgs(int argc, char** argv) {
       if (value.empty()) {
         die("extract-sheet requires a non-empty file path.");
       }
+      if (o.splitLoop) {
+        die("Only one analysis command can be used at once.");
+      }
       if (!o.input.empty() && o.input != value) {
         die("Input path was provided multiple times.");
       }
       o.extractSheet = true;
+      o.input = value;
+      continue;
+    }
+    if (arg == "split-loop" || arg == "--split-loop") {
+      std::string value = requireValue(arg, &i);
+      if (value.empty()) {
+        die("split-loop requires a non-empty file path.");
+      }
+      if (o.extractSheet) {
+        die("Only one analysis command can be used at once.");
+      }
+      if (!o.input.empty() && o.input != value) {
+        die("Input path was provided multiple times.");
+      }
+      o.splitLoop = true;
       o.input = value;
       continue;
     }
@@ -84,8 +104,8 @@ Options parseArgs(int argc, char** argv) {
     if (!arg.empty() && arg[0] == '-') {
       die("Unknown option: " + arg);
     }
-    if (o.extractSheet) {
-      die("Do not pass a positional input when using extract-sheet.");
+    if (o.extractSheet || o.splitLoop) {
+      die("Do not pass a positional input when using extract-sheet/split-loop.");
     }
     if (!o.input.empty()) {
       die("Provide a single file or folder path only.");
