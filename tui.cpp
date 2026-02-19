@@ -604,7 +604,9 @@ static int runExtractSheetCli(const Options& o,
     std::cout << "\rAnalyzing: " << pct << "%" << std::flush;
   };
 
-  bool ok = audioAnalyzeFileToMelodyFile(inputPath, 0, outputPath, progress, &error);
+  bool ok =
+      audioAnalyzeFileToMelodyFile(inputPath, std::max(0, o.trackIndex), outputPath,
+                                  progress, &error);
   std::cout << "\n";
   audioShutdown();
 
@@ -1320,7 +1322,14 @@ int runTui(Options o) {
     } else if (actionIndex == 2) {
       if (!entry.isDir && isSupportedAudioExt(entry.path) &&
           !isBackgroundTaskRunning()) {
-        startLoopSplitExport(entry.path, o.output, loopSplitTask);
+        LoopSplitConfig splitConfig;
+        splitConfig.channels = 2;
+        splitConfig.sampleRate = 48000;
+        splitConfig.trackIndex = std::max(0, entry.trackIndex);
+        splitConfig.kssOptions = audioGetKssOptionState();
+        splitConfig.nsfOptions = audioGetNsfOptionState();
+        splitConfig.vgmOptions = audioGetVgmOptionState();
+        startLoopSplitExport(entry.path, o.output, splitConfig, loopSplitTask);
       }
     }
     fileContextMenu.active = false;

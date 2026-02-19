@@ -86,6 +86,12 @@ int runSplitLoopCli(const Options& o) {
   LoopSplitConfig config;
   config.channels = o.mono ? 1 : 2;
   config.sampleRate = 48000;
+  config.trackIndex = std::max(0, o.trackIndex);
+  if (o.force50Hz) {
+    config.kssOptions.force50Hz = true;
+    config.nsfOptions.tempoMode = NsfTempoMode::Pal50;
+    config.vgmOptions.playbackHz = VgmPlaybackHz::Hz50;
+  }
   LoopSplitResult result;
   std::string error;
 

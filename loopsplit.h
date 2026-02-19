@@ -5,9 +5,17 @@
 #include <filesystem>
 #include <string>
 
+#include "kssoptions.h"
+#include "nsfoptions.h"
+#include "vgmoptions.h"
+
 struct LoopSplitConfig {
   uint32_t sampleRate = 48000;
   uint32_t channels = 2;
+  int trackIndex = 0;
+  KssPlaybackOptions kssOptions{};
+  NsfPlaybackOptions nsfOptions{};
+  VgmPlaybackOptions vgmOptions{};
   float minLoopSeconds = 1.0f;
   float maxLoopSeconds = 180.0f;
   uint32_t analysisHop = 256;

@@ -1,6 +1,8 @@
 #ifndef LOOPSPLIT_UI_H
 #define LOOPSPLIT_UI_H
 
+#include "loopsplit.h"
+
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -25,6 +27,7 @@ void joinLoopSplitExportWorker(LoopSplitTaskState& state);
 
 void startLoopSplitExport(const std::filesystem::path& entryPath,
                          const std::string& outputArg,
+                         const LoopSplitConfig& splitConfig,
                          LoopSplitTaskState& state);
 
 #endif  // LOOPSPLIT_UI_H

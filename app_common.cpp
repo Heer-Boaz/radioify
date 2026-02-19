@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 static void showUsage(const char* exe) {
   std::string name = exe ? std::string(exe) : "radioify";
@@ -12,6 +13,8 @@ static void showUsage(const char* exe) {
   logLine("  --extract-sheet <file> Same as extract-sheet");
   logLine("  --split-loop <file>    Same as split-loop");
   logLine("  out <path>             Generic output path (for extract/render flows)");
+  logLine("  --track <index>        Select track index for emulated formats");
+  logLine("  --50hz                 Force 50Hz playback mode where supported");
   logLine("  --out <path>           Same as out");
   logLine("  --no-ascii   Disable ASCII video rendering");
   logLine("  --no-audio   Disable audio playback");
@@ -83,6 +86,29 @@ Options parseArgs(int argc, char** argv) {
         die("out requires a non-empty path.");
       }
       o.output = value;
+      continue;
+    }
+    if (arg == "--track") {
+      std::string value = requireValue(arg, &i);
+      if (value.empty()) {
+        die("--track requires a non-empty integer.");
+      }
+      char* end = nullptr;
+      long parsed = std::strtol(value.c_str(), &end, 10);
+      if (*end != '\0') {
+        die("--track expects an integer.");
+      }
+      if (parsed < 0) {
+        die("--track expects a non-negative integer.");
+      }
+      if (parsed > static_cast<long>(std::numeric_limits<int>::max())) {
+        die("--track value is too large.");
+      }
+      o.trackIndex = static_cast<int>(parsed);
+      continue;
+    }
+    if (arg == "--50hz") {
+      o.force50Hz = true;
       continue;
     }
     if (arg == "--no-ascii") {

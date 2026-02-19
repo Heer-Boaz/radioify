@@ -124,7 +124,8 @@ class LoopSplitDecoder {
   };
 
   bool init(const std::filesystem::path& file, uint32_t channels,
-            uint32_t sampleRate, std::string* error) {
+            uint32_t sampleRate, const LoopSplitConfig& config,
+            std::string* error) {
     close();
 
     const bool useM4a = isM4aExt(file);
@@ -153,7 +154,8 @@ class LoopSplitDecoder {
     }
 
     if (useKss) {
-      if (!kss_.init(file, channels, sampleRate, error, 0, false)) {
+      if (!kss_.init(file, channels, sampleRate, error, config.trackIndex,
+                     config.kssOptions)) {
         close();
         return false;
       }
@@ -162,7 +164,7 @@ class LoopSplitDecoder {
     }
 
     if (usePsf) {
-      if (!psf_.init(file, channels, sampleRate, error, 0)) {
+      if (!psf_.init(file, channels, sampleRate, error, config.trackIndex)) {
         close();
         return false;
       }
@@ -171,7 +173,7 @@ class LoopSplitDecoder {
     }
 
     if (useGsf) {
-      if (!gsf_.init(file, channels, sampleRate, error, 0)) {
+      if (!gsf_.init(file, channels, sampleRate, error, config.trackIndex)) {
         close();
         return false;
       }
@@ -184,15 +186,17 @@ class LoopSplitDecoder {
         close();
         return false;
       }
+      vgm_.applyOptions(config.vgmOptions);
       type_ = Type::Vgm;
       return true;
     }
 
     if (useGme) {
-      if (!gme_.init(file, channels, sampleRate, error, 0)) {
+      if (!gme_.init(file, channels, sampleRate, error, config.trackIndex)) {
         close();
         return false;
       }
+      gme_.applyNsfOptions(config.nsfOptions);
       type_ = Type::Gme;
       return true;
     }
@@ -700,13 +704,14 @@ bool writeSegment(const std::filesystem::path& outputPath,
   return true;
 }
 
-bool decodeToInterleaved(const std::filesystem::path& inputFile, uint32_t sampleRate,
-                        uint32_t channels, std::vector<float>& out,
+bool decodeToInterleaved(const std::filesystem::path& inputFile,
+                        const LoopSplitConfig& config, std::vector<float>& out,
                         uint64_t* totalFrames, std::string* error) {
   if (totalFrames) *totalFrames = 0;
   out.clear();
   LoopSplitDecoder decoder;
-  if (!decoder.init(inputFile, channels, sampleRate, error)) {
+  if (!decoder.init(inputFile, config.channels, config.sampleRate, config,
+                   error)) {
     return false;
   }
 
@@ -715,11 +720,12 @@ bool decodeToInterleaved(const std::filesystem::path& inputFile, uint32_t sample
   if (totalFrames) *totalFrames = total;
   const uint64_t estimatedFrames = total > 0 ? total : 0;
   if (estimatedFrames > 0) {
-    out.reserve(static_cast<size_t>(estimatedFrames) * channels);
+    out.reserve(static_cast<size_t>(estimatedFrames) * config.channels);
   }
 
   const uint32_t chunkFrames = 2048;
-  std::vector<float> buffer(static_cast<size_t>(chunkFrames) * channels);
+  std::vector<float> buffer(
+      static_cast<size_t>(chunkFrames) * config.channels);
   uint64_t processed = 0;
 
   while (true) {
@@ -731,7 +737,8 @@ bool decodeToInterleaved(const std::filesystem::path& inputFile, uint32_t sample
     }
     if (framesRead == 0) break;
 
-    const size_t sampleCount = static_cast<size_t>(framesRead * channels);
+    const size_t sampleCount =
+        static_cast<size_t>(framesRead * config.channels);
     out.insert(out.end(), buffer.data(), buffer.data() + sampleCount);
     processed += framesRead;
     if (total > 0 && processed >= total) break;
@@ -785,7 +792,7 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
   uint32_t sampleRate = std::max<uint32_t>(1u, config.sampleRate);
   uint64_t totalFrames = 0;
   std::vector<float> interleaved;
-  if (!decodeToInterleaved(inputFile, sampleRate, config.channels, interleaved,
+  if (!decodeToInterleaved(inputFile, config, interleaved,
                            &totalFrames, error)) {
     return false;
   }

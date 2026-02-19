@@ -6,8 +6,10 @@
 struct Options {
   std::string input;
   std::string output;
+  int trackIndex = 0;
   bool splitLoop = false;
   bool extractSheet = false;
+  bool force50Hz = false;
   int bwHz = 5500;
   double noise = 0.012;
   bool mono = true;

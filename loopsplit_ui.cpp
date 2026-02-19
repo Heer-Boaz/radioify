@@ -25,6 +25,7 @@ void joinLoopSplitExportWorker(LoopSplitTaskState& state) {
 
 void startLoopSplitExport(const std::filesystem::path& entryPath,
                          const std::string& outputArg,
+                         const LoopSplitConfig& splitConfig,
                          LoopSplitTaskState& state) {
   auto [stingerOutput, loopOutput] = resolveSplitOutputPaths(entryPath, outputArg);
 
@@ -53,10 +54,7 @@ void startLoopSplitExport(const std::filesystem::path& entryPath,
   }
 
   state.worker =
-      std::thread([entryPath, stingerOutput, loopOutput, &state]() {
-        LoopSplitConfig splitConfig;
-        splitConfig.channels = 2;
-        splitConfig.sampleRate = 48000;
+      std::thread([entryPath, stingerOutput, loopOutput, splitConfig, &state]() {
         LoopSplitResult splitResult;
         std::string error;
         bool ok = splitAudioIntoLoopFiles(entryPath, stingerOutput, loopOutput,
