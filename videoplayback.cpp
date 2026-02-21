@@ -299,7 +299,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (ev.type == InputEvent::Type::Key) {
           const KeyEvent& key = ev.key;
           if (key.vk == VK_RETURN || key.vk == VK_ESCAPE ||
-              key.vk == VK_BROWSER_BACK || key.vk == VK_BACK) {
+              key.vk == VK_BROWSER_BACK || key.vk == VK_BROWSER_FORWARD ||
+              key.vk == VK_BACK) {
             return true;
           }
         }
@@ -319,7 +320,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           const KeyEvent& key = ev.key;
           if (key.vk == VK_RETURN) return true;
           if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
-              key.vk == VK_BACK) {
+              key.vk == VK_BROWSER_FORWARD || key.vk == VK_BACK) {
             return false;
           }
         }
@@ -508,7 +509,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           break;
         }
         if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
-            key.vk == VK_BACK) {
+            key.vk == VK_BROWSER_FORWARD || key.vk == VK_BACK) {
           running = false;
           break;
         }
@@ -1592,7 +1593,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         }
 
         if (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BROWSER_BACK ||
-            ev.key.vk == VK_BACK) {
+            ev.key.vk == VK_BROWSER_FORWARD || ev.key.vk == VK_BACK) {
           running = false;
           closeWindowRequested = true;
           windowThreadEnabled.store(false, std::memory_order_relaxed);

@@ -1379,6 +1379,12 @@ bool readM4aBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
   return true;
 }
 
+bool totalM4aBackend(uint64_t* outFrames) {
+  if (!outFrames) return false;
+  *outFrames = gAudio.state.totalFrames.load(std::memory_order_relaxed);
+  return true;
+}
+
 bool initFlacBackend(const std::filesystem::path& file, uint64_t, int,
                      std::string* error) {
   return gAudio.state.flac.init(file, gAudio.channels, gAudio.sampleRate, error);
@@ -1563,7 +1569,7 @@ bool is50HzVgmBackend() {
 
 const AudioBackendHandlers kBackendM4a{
     AudioMode::M4a, false, false, false, initM4aBackend, uninitM4aBackend,
-    readM4aBackend, nullptr, nullptr, nullptr, nullptr};
+    readM4aBackend, nullptr, totalM4aBackend, nullptr, nullptr};
 const AudioBackendHandlers kBackendFlac{
     AudioMode::Flac, false, true, true, initFlacBackend, uninitFlacBackend,
     readFlacBackend, seekFlacBackend, totalFlacBackend, nullptr, nullptr};
@@ -1639,7 +1645,6 @@ void activateBackend(const AudioBackendHandlers* backend, int trackIndex) {
 
 void storeTotalFramesFromBackend(const AudioBackendHandlers* backend) {
   if (!backend || !backend->totalFrames) {
-    gAudio.state.totalFrames.store(0);
     return;
   }
   uint64_t total = 0;
@@ -2346,6 +2351,8 @@ std::filesystem::path audioGetNowPlaying() { return gAudio.nowPlaying; }
 
 int audioGetTrackIndex() {
   if (!gAudio.decoderReady) return -1;
+  const AudioBackendHandlers* backend = gAudio.state.backend;
+  if (!backend || !backend->supportsTrackIndex) return -1;
   return gAudio.trackIndex;
 }
 

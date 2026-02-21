@@ -699,12 +699,25 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
             pThis->m_inputQueue.push_back(ev);
         };
+        auto enqueueForwardKey = [&]() {
+            InputEvent ev;
+            ev.type = InputEvent::Type::Key;
+            ev.key.vk = VK_BROWSER_FORWARD;
+            ev.key.ch = 0;
+            ev.key.control = 0;
+            std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
+            pThis->m_inputQueue.push_back(ev);
+        };
 
         if (uMsg == WM_XBUTTONDOWN || uMsg == WM_XBUTTONUP ||
             uMsg == WM_NCXBUTTONDOWN || uMsg == WM_NCXBUTTONUP) {
             WORD xButton = HIWORD(wParam);
             if (xButton == XBUTTON1) {
                 enqueueBackKey();
+                return TRUE;
+            }
+            if (xButton == XBUTTON2) {
+                enqueueForwardKey();
                 return TRUE;
             }
             return TRUE;
@@ -714,6 +727,10 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             int cmd = GET_APPCOMMAND_LPARAM(lParam);
             if (cmd == APPCOMMAND_BROWSER_BACKWARD) {
                 enqueueBackKey();
+                return TRUE;
+            }
+            if (cmd == APPCOMMAND_BROWSER_FORWARD) {
+                enqueueForwardKey();
                 return TRUE;
             }
         }

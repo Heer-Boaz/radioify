@@ -5,6 +5,23 @@
 #include "consolescreen.h"
 #include "optionsbrowser.h"
 
+bool ConsoleInput::hasInputFocus() const {
+  if (focusKnown_) {
+    return focusActive_;
+  }
+  HWND fg = GetForegroundWindow();
+  if (!fg) return false;
+  HWND console = GetConsoleWindow();
+  if (console) {
+    if (fg == console || IsChild(console, fg) || IsChild(fg, console)) {
+      return true;
+    }
+  }
+  DWORD fgPid = 0;
+  GetWindowThreadProcessId(fg, &fgPid);
+  return fgPid == GetCurrentProcessId();
+}
+
 void ConsoleInput::init() {
   handle_ = GetStdHandle(STD_INPUT_HANDLE);
   if (handle_ == INVALID_HANDLE_VALUE) return;
@@ -28,15 +45,23 @@ bool ConsoleInput::poll(InputEvent& out) {
 
   // Fallback for terminal hosts that don't forward XBUTTON mouse events
   // through ReadConsoleInput. Detect side-button edges via async key state.
+  bool focused = hasInputFocus();
   bool x1Down = (GetAsyncKeyState(VK_XBUTTON1) & 0x8000) != 0;
   bool x2Down = (GetAsyncKeyState(VK_XBUTTON2) & 0x8000) != 0;
-  bool x1Pressed = x1Down && !xButton1Prev_;
-  bool x2Pressed = x2Down && !xButton2Prev_;
+  bool x1Pressed = focused && x1Down && !xButton1Prev_;
+  bool x2Pressed = focused && x2Down && !xButton2Prev_;
   xButton1Prev_ = x1Down;
   xButton2Prev_ = x2Down;
-  if (x1Pressed || x2Pressed) {
+  if (x1Pressed) {
     out.type = InputEvent::Type::Key;
     out.key.vk = VK_BROWSER_BACK;
+    out.key.ch = 0;
+    out.key.control = 0;
+    return true;
+  }
+  if (x2Pressed) {
+    out.type = InputEvent::Type::Key;
+    out.key.vk = VK_BROWSER_FORWARD;
     out.key.ch = 0;
     out.key.control = 0;
     return true;
@@ -74,6 +99,12 @@ bool ConsoleInput::poll(InputEvent& out) {
       out.type = InputEvent::Type::Resize;
       out.size = rec.Event.WindowBufferSizeEvent.dwSize;
       return true;
+    }
+    if (rec.EventType == FOCUS_EVENT) {
+      focusKnown_ = true;
+      focusActive_ = rec.Event.FocusEvent.bSetFocus != FALSE;
+      count--;
+      continue;
     }
     count--;
   }
@@ -397,7 +428,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       }
       return;
     }
-    if (key.vk == VK_BROWSER_BACK) {
+    if (key.vk == VK_BROWSER_BACK || key.vk == VK_BROWSER_FORWARD) {
       if (optionsBrowserIsActive(browser)) {
         if (optionsBrowserNavigateUp(browser)) {
           if (callbacks.onRefreshBrowser) {
