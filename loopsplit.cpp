@@ -277,7 +277,7 @@ class LoopSplitDecoder {
     }
   }
 
-  bool getTotalFrames(uint64_t* outFrames) const {
+  bool getTotalFrames(uint64_t* outFrames) {
     if (!outFrames) return false;
     *outFrames = 0;
     switch (type_) {

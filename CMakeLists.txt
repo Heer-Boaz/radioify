@@ -58,6 +58,7 @@ add_executable(radioify
   consoleinput.cpp
   consolescreen.cpp
   ffmpegaudio.cpp
+  flacaudio.cpp
   gpu_shared.cpp
   gmeaudio.cpp
   gsfaudio.cpp

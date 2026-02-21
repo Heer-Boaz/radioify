@@ -25,6 +25,7 @@ extern "C" {
 
 #include "clock.h"
 #include "ffmpegaudio.h"
+#include "flacaudio.h"
 #include "gmeaudio.h"
 #include "gsfaudio.h"
 #include "vgmaudio.h"
@@ -117,7 +118,12 @@ bool isSupportedAudioExt(const std::filesystem::path& p) {
 
 bool isMiniaudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac";
+  return ext == ".wav" || ext == ".mp3";
+}
+
+bool isFlacExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+  return ext == ".flac";
 }
 
 bool isGmeExt(const std::filesystem::path& p) {
@@ -167,6 +173,46 @@ void validateInputFile(const std::filesystem::path& p) {
   if (std::filesystem::is_directory(p)) return;
   if (!isSupportedAudioExt(p)) return;
 }
+
+enum class AudioMode : int {
+  None = 0,
+  Stream,
+  M4a,
+  Flac,
+  Miniaudio,
+  Gme,
+  Midi,
+  Gsf,
+  Vgm,
+  Kss,
+  Psf,
+};
+
+using BackendInitProc = bool (*)(const std::filesystem::path& file,
+                                 uint64_t startFrame,
+                                 int trackIndex,
+                                 std::string* error);
+using BackendUninitProc = void (*)();
+using BackendReadProc = bool (*)(float* out, uint32_t frameCount,
+                                 uint64_t* framesRead);
+using BackendSeekProc = bool (*)(uint64_t frame);
+using BackendTotalFramesProc = bool (*)(uint64_t* outFrames);
+using BackendWarningProc = std::string (*)();
+using BackendIs50HzProc = bool (*)();
+
+struct AudioBackendHandlers {
+  AudioMode mode = AudioMode::None;
+  bool supportsTrackIndex = false;
+  bool allowSeekInCallback = true;
+  bool finishOnShortRead = true;
+  BackendInitProc init = nullptr;
+  BackendUninitProc uninit = nullptr;
+  BackendReadProc read = nullptr;
+  BackendSeekProc seek = nullptr;
+  BackendTotalFramesProc totalFrames = nullptr;
+  BackendWarningProc warning = nullptr;
+  BackendIs50HzProc is50HzEnabled = nullptr;
+};
 
 struct AudioRingBuffer {
   std::vector<float> data;
@@ -510,6 +556,7 @@ struct AudioMetadata {
 
 struct AudioState {
   ma_decoder decoder{};
+  FlacAudioDecoder flac{};
   GmeAudioDecoder gme{};
   GsfAudioDecoder gsf{};
   VgmAudioDecoder vgm{};
@@ -533,13 +580,8 @@ struct AudioState {
   std::atomic<bool> hold{false};
   std::atomic<bool> finished{false};
   std::atomic<bool> useRadio1938{true};
-  std::atomic<bool> usingFfmpeg{false};
-  std::atomic<bool> usingGme{false};
-  std::atomic<bool> usingGsf{false};
-  std::atomic<bool> usingVgm{false};
-  std::atomic<bool> usingKss{false};
-  std::atomic<bool> usingPsf{false};
-  std::atomic<bool> usingMidi{false};
+  std::atomic<AudioMode> mode{AudioMode::None};
+  const AudioBackendHandlers* backend = nullptr;
   std::atomic<bool> seekRequested{false};
   std::atomic<int64_t> pendingSeekFrames{0};
   std::atomic<uint64_t> framesPlayed{0};
@@ -610,14 +652,10 @@ struct AudioPlaybackState {
   float lpHz = 0.0f;
   float noise = 0.0f;
   std::filesystem::path nowPlaying;
-  int gmeTrackIndex = 0;
+  int trackIndex = 0;
   std::string gmeWarning;
-  int gsfTrackIndex = 0;
   std::string gsfWarning;
-  int vgmTrackIndex = 0;
   std::string vgmWarning;
-  int kssTrackIndex = 0;
-  int psfTrackIndex = 0;
   KssPlaybackOptions kssOptions{};
   NsfPlaybackOptions nsfOptions{};
   VgmPlaybackOptions vgmOptions{};
@@ -876,49 +914,15 @@ void dataCallback(ma_device* device, void* output, const void*,
     return;
   }
 
-  bool usingFfmpeg = state->usingFfmpeg.load();
-  bool usingGme = state->usingGme.load();
-  bool usingGsf = state->usingGsf.load();
-  bool usingVgm = state->usingVgm.load();
-  bool usingKss = state->usingKss.load();
-  bool usingPsf = state->usingPsf.load();
-  bool usingMidi = state->usingMidi.load();
-  if (!usingFfmpeg && state->seekRequested.exchange(false)) {
+  const AudioMode mode = state->mode.load(std::memory_order_relaxed);
+  const AudioBackendHandlers* backend = state->backend;
+  if (backend && backend->allowSeekInCallback && backend->seek &&
+      state->seekRequested.exchange(false)) {
     int64_t target = state->pendingSeekFrames.load();
     if (target < 0) target = 0;
-    if (usingKss) {
-      if (!state->kss.seekToFrame(static_cast<uint64_t>(target))) {
-        target = 0;
-        state->kss.seekToFrame(0);
-      }
-    } else if (usingGsf) {
-      if (!state->gsf.seekToFrame(static_cast<uint64_t>(target))) {
-        target = 0;
-        state->gsf.seekToFrame(0);
-      }
-    } else if (usingPsf) {
-      if (!state->psf.seekToFrame(static_cast<uint64_t>(target))) {
-        target = 0;
-        state->psf.seekToFrame(0);
-      }
-    } else if (usingMidi) {
-      if (!state->midi.seekToFrame(static_cast<uint64_t>(target))) {
-        target = 0;
-        state->midi.seekToFrame(0);
-      }
-    } else if (usingVgm) {
-      if (!state->vgm.seekToFrame(static_cast<uint64_t>(target))) {
-        target = 0;
-        state->vgm.seekToFrame(0);
-      }
-    } else if (usingGme) {
-      if (!state->gme.seekToFrame(static_cast<uint64_t>(target))) {
-        target = 0;
-        state->gme.seekToFrame(0);
-      }
-    } else {
-      ma_decoder_seek_to_pcm_frame(&state->decoder,
-                                   static_cast<ma_uint64>(target));
+    if (!backend->seek(static_cast<uint64_t>(target))) {
+      target = 0;
+      backend->seek(0);
     }
     state->framesPlayed.store(static_cast<uint64_t>(target));
     state->framesRequested.store(static_cast<uint64_t>(target)); // Reset request count too
@@ -963,129 +967,28 @@ void dataCallback(ma_device* device, void* output, const void*,
     framesRead = 0;
   };
   if (framesRemaining > 0) {
-    if (usingFfmpeg) {
-      if (!state->externalStream.load() && state->seekRequested.load()) {
-        std::lock_guard<std::mutex> lock(state->m4aMutex);
-        audioRingBufferReset(&state->m4aBuffer);
-        state->m4aAtEnd.store(false);
-        state->finished.store(false);
-      }
-      size_t readFrames = 0;
-      {
-        std::lock_guard<std::mutex> lock(state->m4aMutex);
-        readFrames = audioRingBufferRead(&state->m4aBuffer, outCursor,
-                                         framesRemaining, state->channels);
-      }
-      framesRead = readFrames;
-      if (readFrames < framesRemaining) {
-        std::fill(outCursor + readFrames * state->channels,
-                  outCursor + framesRemaining * state->channels, 0.0f);
-      }
-      if (readFrames == 0 && state->m4aAtEnd.load()) {
-        state->finished.store(true);
-        uint64_t total = state->totalFrames.load();
-        if (total > 0) {
-          state->framesPlayed.store(total);
-        }
-      }
-      state->m4aCv.notify_one();
-    } else if (usingKss) {
-      uint64_t framesReadKss = 0;
-      if (!state->kss.readFrames(outCursor, framesRemaining, &framesReadKss)) {
-        finishPlayback();
-      } else {
-        framesRead = framesReadKss;
-        if (framesRead < framesRemaining) {
-          std::fill(outCursor + framesRead * state->channels,
-                    outCursor + framesRemaining * state->channels, 0.0f);
-        }
-        if (framesRead == 0 || framesRead < framesRemaining) {
-          finishPlayback();
-        }
-      }
-    } else if (usingPsf) {
-      uint64_t framesReadPsf = 0;
-      if (!state->psf.readFrames(outCursor, framesRemaining, &framesReadPsf)) {
-        finishPlayback();
-      } else {
-        framesRead = framesReadPsf;
-        if (framesRead < framesRemaining) {
-          std::fill(outCursor + framesRead * state->channels,
-                    outCursor + framesRemaining * state->channels, 0.0f);
-        }
-        if (framesRead == 0 || framesRead < framesRemaining) {
-          finishPlayback();
-        }
-      }
-    } else if (usingMidi) {
-      uint64_t framesReadMidi = 0;
-      if (!state->midi.readFrames(outCursor, framesRemaining, &framesReadMidi)) {
-        finishPlayback();
-      } else {
-        framesRead = framesReadMidi;
-        if (framesRead < framesRemaining) {
-          std::fill(outCursor + framesRead * state->channels,
-                    outCursor + framesRemaining * state->channels, 0.0f);
-        }
-        if (framesRead == 0 || framesRead < framesRemaining) {
-          finishPlayback();
-        }
-      }
-    } else if (usingGsf) {
-      uint64_t framesReadGsf = 0;
-      if (!state->gsf.readFrames(outCursor, framesRemaining, &framesReadGsf)) {
-        finishPlayback();
-      } else {
-        framesRead = framesReadGsf;
-        if (framesRead < framesRemaining) {
-          std::fill(outCursor + framesRead * state->channels,
-                    outCursor + framesRemaining * state->channels, 0.0f);
-        }
-        if (framesRead == 0 || framesRead < framesRemaining) {
-          finishPlayback();
-        }
-      }
-    } else if (usingVgm) {
-      uint64_t framesReadVgm = 0;
-      if (!state->vgm.readFrames(outCursor, framesRemaining, &framesReadVgm)) {
-        finishPlayback();
-      } else {
-        framesRead = framesReadVgm;
-        if (framesRead < framesRemaining) {
-          std::fill(outCursor + framesRead * state->channels,
-                    outCursor + framesRemaining * state->channels, 0.0f);
-        }
-        if (framesRead == 0 || framesRead < framesRemaining) {
-          finishPlayback();
-        }
-      }
-    } else if (usingGme) {
-      uint64_t framesReadGme = 0;
-      if (!state->gme.readFrames(outCursor, framesRemaining, &framesReadGme)) {
-        finishPlayback();
-      } else {
-        framesRead = framesReadGme;
-        if (framesRead < framesRemaining) {
-          std::fill(outCursor + framesRead * state->channels,
-                    outCursor + framesRemaining * state->channels, 0.0f);
-        }
-        if (framesRead == 0 || framesRead < framesRemaining) {
-          finishPlayback();
-        }
-      }
+    if (!backend || !backend->read) {
+      finishPlayback();
     } else {
-      ma_uint64 framesReadMa = 0;
-      ma_result res = ma_decoder_read_pcm_frames(
-          &state->decoder, outCursor, framesRemaining, &framesReadMa);
-      if (res != MA_SUCCESS && res != MA_AT_END) {
+      uint64_t backendFramesRead = 0;
+      if (!backend->read(outCursor, framesRemaining, &backendFramesRead)) {
         finishPlayback();
       } else {
-        framesRead = framesReadMa;
+        framesRead = backendFramesRead;
         if (framesRead < framesRemaining) {
           std::fill(outCursor + framesRead * state->channels,
                     outCursor + framesRemaining * state->channels, 0.0f);
         }
-        if (res == MA_AT_END || framesRead == 0) {
+        if (mode == AudioMode::M4a) {
+          if (framesRead == 0 && state->m4aAtEnd.load()) {
+            state->finished.store(true, std::memory_order_relaxed);
+            uint64_t total = state->totalFrames.load(std::memory_order_relaxed);
+            if (total > 0) {
+              state->framesPlayed.store(total, std::memory_order_relaxed);
+            }
+          }
+        } else if (backend->finishOnShortRead &&
+                   (framesRead == 0 || framesRead < framesRemaining)) {
           finishPlayback();
         }
       }
@@ -1422,7 +1325,9 @@ bool initDevice() {
 }
 
 void applyVgmDeviceOverrides() {
-  if (!gAudio.state.usingVgm.load()) return;
+  if (gAudio.state.mode.load(std::memory_order_relaxed) != AudioMode::Vgm) {
+    return;
+  }
   if (gAudio.vgmDeviceOverrides.empty()) return;
   for (const auto& entry : gAudio.vgmDeviceOverrides) {
     gAudio.state.vgm.setDeviceOptions(entry.first, entry.second);
@@ -1436,371 +1341,359 @@ const VgmDeviceInfo* findVgmDeviceInfo(uint32_t deviceId) {
   return nullptr;
 }
 
-bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
-                int trackIndex) {
-  if (!gAudio.enableAudio) {
-    return false;
-  }
-  validateInputFile(file);
-  melodyOfflineStop();
-  gAudio.state.audioLeadSilenceFrames.store(0);
-  if (gAudio.audition.active.load()) {
-    stopAuditionWorker();
-    gAudio.audition.resumeValid = false;
-  }
-  gAudio.gmeWarning.clear();
-  gAudio.gsfWarning.clear();
-  gAudio.vgmWarning.clear();
-  const bool useM4a = isM4aExt(file);
-  const bool useMiniaudio = isMiniaudioExt(file);
-  const bool useGme = isGmeExt(file);
-  const bool useMidi = isMidiExt(file);
-  const bool useGsf = isGsfExt(file);
-  const bool useVgm = isVgmExt(file);
-  const bool useKss = isKssExt(file);
-  const bool usePsf = isPsfExt(file);
-  if (!useM4a && !useMiniaudio && !useGme && !useMidi && !useGsf && !useVgm &&
-      !useKss && !usePsf) {
-    return false;
-  }
-  if (gAudio.deviceReady) {
-    ma_device_stop(&gAudio.state.device);
-  }
-  if (gAudio.decoderReady) {
-    if (gAudio.state.usingFfmpeg.load()) {
-      stopM4aWorker();
-    } else if (gAudio.state.usingVgm.load()) {
-      gAudio.state.vgm.uninit();
-    } else if (gAudio.state.usingGsf.load()) {
-      gAudio.state.gsf.uninit();
-    } else if (gAudio.state.usingKss.load()) {
-      gAudio.state.kss.uninit();
-    } else if (gAudio.state.usingPsf.load()) {
-      gAudio.state.psf.uninit();
-    } else if (gAudio.state.usingMidi.load()) {
-      gAudio.state.midi.uninit();
-    } else if (gAudio.state.usingGme.load()) {
-      gAudio.state.gme.uninit();
-    } else {
-      ma_decoder_uninit(&gAudio.state.decoder);
-    }
-    gAudio.decoderReady = false;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
-    gAudio.state.externalStream.store(false);
+AudioMode currentAudioMode() {
+  return gAudio.state.mode.load(std::memory_order_relaxed);
+}
+
+bool isAudioMode(AudioMode mode) {
+  return currentAudioMode() == mode;
+}
+
+bool initM4aBackend(const std::filesystem::path& file, uint64_t startFrame,
+                    int, std::string* error) {
+  gAudio.state.totalFrames.store(0);
+  return startM4aWorker(file, startFrame, error);
+}
+
+void uninitM4aBackend() { stopM4aWorker(); }
+
+bool readM4aBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  if (framesRead) *framesRead = 0;
+  if (!out || frameCount == 0) return false;
+
+  if (!gAudio.state.externalStream.load() && gAudio.state.seekRequested.load()) {
+    std::lock_guard<std::mutex> lock(gAudio.state.m4aMutex);
+    audioRingBufferReset(&gAudio.state.m4aBuffer);
+    gAudio.state.m4aAtEnd.store(false);
+    gAudio.state.finished.store(false);
   }
 
-  if (useM4a) {
-    std::string error;
+  size_t readFrames = 0;
+  {
+    std::lock_guard<std::mutex> lock(gAudio.state.m4aMutex);
+    readFrames = audioRingBufferRead(&gAudio.state.m4aBuffer, out, frameCount,
+                                     gAudio.state.channels);
+  }
+  if (framesRead) *framesRead = static_cast<uint64_t>(readFrames);
+  gAudio.state.m4aCv.notify_one();
+  return true;
+}
+
+bool initFlacBackend(const std::filesystem::path& file, uint64_t, int,
+                     std::string* error) {
+  return gAudio.state.flac.init(file, gAudio.channels, gAudio.sampleRate, error);
+}
+
+void uninitFlacBackend() { gAudio.state.flac.uninit(); }
+
+bool readFlacBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  return gAudio.state.flac.readFrames(out, frameCount, framesRead);
+}
+
+bool seekFlacBackend(uint64_t frame) { return gAudio.state.flac.seekToFrame(frame); }
+
+bool totalFlacBackend(uint64_t* outFrames) {
+  return gAudio.state.flac.getTotalFrames(outFrames);
+}
+
+bool initKssBackend(const std::filesystem::path& file, uint64_t, int trackIndex,
+                    std::string* error) {
+  return gAudio.state.kss.init(file, gAudio.channels, gAudio.sampleRate, error,
+                               trackIndex, gAudio.kssOptions);
+}
+
+void uninitKssBackend() { gAudio.state.kss.uninit(); }
+
+bool readKssBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  return gAudio.state.kss.readFrames(out, frameCount, framesRead);
+}
+
+bool seekKssBackend(uint64_t frame) { return gAudio.state.kss.seekToFrame(frame); }
+
+bool totalKssBackend(uint64_t* outFrames) {
+  return gAudio.state.kss.getTotalFrames(outFrames);
+}
+
+bool initPsfBackend(const std::filesystem::path& file, uint64_t, int trackIndex,
+                    std::string* error) {
+  return gAudio.state.psf.init(file, gAudio.channels, gAudio.sampleRate, error,
+                               trackIndex);
+}
+
+void uninitPsfBackend() { gAudio.state.psf.uninit(); }
+
+bool readPsfBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  return gAudio.state.psf.readFrames(out, frameCount, framesRead);
+}
+
+bool seekPsfBackend(uint64_t frame) { return gAudio.state.psf.seekToFrame(frame); }
+
+bool totalPsfBackend(uint64_t* outFrames) {
+  return gAudio.state.psf.getTotalFrames(outFrames);
+}
+
+bool initGsfBackend(const std::filesystem::path& file, uint64_t, int trackIndex,
+                    std::string* error) {
+  return gAudio.state.gsf.init(file, gAudio.channels, gAudio.sampleRate, error,
+                               trackIndex);
+}
+
+void uninitGsfBackend() { gAudio.state.gsf.uninit(); }
+
+bool readGsfBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  return gAudio.state.gsf.readFrames(out, frameCount, framesRead);
+}
+
+bool seekGsfBackend(uint64_t frame) { return gAudio.state.gsf.seekToFrame(frame); }
+
+bool totalGsfBackend(uint64_t* outFrames) {
+  return gAudio.state.gsf.getTotalFrames(outFrames);
+}
+
+bool initVgmBackend(const std::filesystem::path& file, uint64_t, int,
+                    std::string* error) {
+  if (!gAudio.state.vgm.init(file, gAudio.channels, gAudio.sampleRate, error)) {
+    return false;
+  }
+  gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
+  applyVgmDeviceOverrides();
+  gAudio.vgmWarning = gAudio.state.vgm.warning();
+  return true;
+}
+
+void uninitVgmBackend() { gAudio.state.vgm.uninit(); }
+
+bool readVgmBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  return gAudio.state.vgm.readFrames(out, frameCount, framesRead);
+}
+
+bool seekVgmBackend(uint64_t frame) { return gAudio.state.vgm.seekToFrame(frame); }
+
+bool totalVgmBackend(uint64_t* outFrames) {
+  return gAudio.state.vgm.getTotalFrames(outFrames);
+}
+
+bool initGmeBackend(const std::filesystem::path& file, uint64_t, int trackIndex,
+                    std::string* error) {
+  if (!gAudio.state.gme.init(file, gAudio.channels, gAudio.sampleRate, error,
+                             trackIndex)) {
+    return false;
+  }
+  gAudio.state.gme.applyNsfOptions(gAudio.nsfOptions);
+  gAudio.gmeWarning = gAudio.state.gme.warning();
+  return true;
+}
+
+void uninitGmeBackend() { gAudio.state.gme.uninit(); }
+
+bool readGmeBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  return gAudio.state.gme.readFrames(out, frameCount, framesRead);
+}
+
+bool seekGmeBackend(uint64_t frame) { return gAudio.state.gme.seekToFrame(frame); }
+
+bool totalGmeBackend(uint64_t* outFrames) {
+  return gAudio.state.gme.getTotalFrames(outFrames);
+}
+
+bool initMidiBackend(const std::filesystem::path& file, uint64_t, int,
+                     std::string* error) {
+  return gAudio.state.midi.init(file, gAudio.channels, gAudio.sampleRate, error);
+}
+
+void uninitMidiBackend() { gAudio.state.midi.uninit(); }
+
+bool readMidiBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  return gAudio.state.midi.readFrames(out, frameCount, framesRead);
+}
+
+bool seekMidiBackend(uint64_t frame) { return gAudio.state.midi.seekToFrame(frame); }
+
+bool totalMidiBackend(uint64_t* outFrames) {
+  return gAudio.state.midi.getTotalFrames(outFrames);
+}
+
+bool initMiniaudioBackend(const std::filesystem::path& file, uint64_t, int,
+                          std::string*) {
+  ma_decoder_config decConfig =
+      ma_decoder_config_init(ma_format_f32, gAudio.channels, gAudio.sampleRate);
+  return ma_decoder_init_file(file.string().c_str(), &decConfig,
+                              &gAudio.state.decoder) == MA_SUCCESS;
+}
+
+void uninitMiniaudioBackend() { ma_decoder_uninit(&gAudio.state.decoder); }
+
+bool readMiniaudioBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  if (framesRead) *framesRead = 0;
+  ma_uint64 read = 0;
+  ma_result result =
+      ma_decoder_read_pcm_frames(&gAudio.state.decoder, out, frameCount, &read);
+  if (framesRead) *framesRead = static_cast<uint64_t>(read);
+  return result == MA_SUCCESS || result == MA_AT_END;
+}
+
+bool seekMiniaudioBackend(uint64_t frame) {
+  return ma_decoder_seek_to_pcm_frame(&gAudio.state.decoder,
+                                      static_cast<ma_uint64>(frame)) ==
+         MA_SUCCESS;
+}
+
+bool totalMiniaudioBackend(uint64_t* outFrames) {
+  if (!outFrames) return false;
+  ma_uint64 total = 0;
+  if (ma_decoder_get_length_in_pcm_frames(&gAudio.state.decoder, &total) !=
+      MA_SUCCESS) {
+    return false;
+  }
+  *outFrames = static_cast<uint64_t>(total);
+  return true;
+}
+
+std::string warningGmeBackend() { return gAudio.gmeWarning; }
+std::string warningGsfBackend() { return gAudio.gsfWarning; }
+std::string warningVgmBackend() { return gAudio.vgmWarning; }
+
+bool is50HzKssBackend() { return gAudio.kssOptions.force50Hz; }
+bool is50HzGmeBackend() {
+  return gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50;
+}
+bool is50HzVgmBackend() {
+  return gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50;
+}
+
+const AudioBackendHandlers kBackendM4a{
+    AudioMode::M4a, false, false, false, initM4aBackend, uninitM4aBackend,
+    readM4aBackend, nullptr, nullptr, nullptr, nullptr};
+const AudioBackendHandlers kBackendFlac{
+    AudioMode::Flac, false, true, true, initFlacBackend, uninitFlacBackend,
+    readFlacBackend, seekFlacBackend, totalFlacBackend, nullptr, nullptr};
+const AudioBackendHandlers kBackendKss{
+    AudioMode::Kss, true, true, true, initKssBackend, uninitKssBackend,
+    readKssBackend, seekKssBackend, totalKssBackend, nullptr,
+    is50HzKssBackend};
+const AudioBackendHandlers kBackendPsf{
+    AudioMode::Psf, true, true, true, initPsfBackend, uninitPsfBackend,
+    readPsfBackend, seekPsfBackend, totalPsfBackend, nullptr, nullptr};
+const AudioBackendHandlers kBackendGsf{
+    AudioMode::Gsf, true, true, true, initGsfBackend, uninitGsfBackend,
+    readGsfBackend, seekGsfBackend, totalGsfBackend, warningGsfBackend,
+    nullptr};
+const AudioBackendHandlers kBackendVgm{
+    AudioMode::Vgm, true, true, true, initVgmBackend, uninitVgmBackend,
+    readVgmBackend, seekVgmBackend, totalVgmBackend, warningVgmBackend,
+    is50HzVgmBackend};
+const AudioBackendHandlers kBackendGme{
+    AudioMode::Gme, true, true, true, initGmeBackend, uninitGmeBackend,
+    readGmeBackend, seekGmeBackend, totalGmeBackend, warningGmeBackend,
+    is50HzGmeBackend};
+const AudioBackendHandlers kBackendMidi{
+    AudioMode::Midi, false, true, true, initMidiBackend, uninitMidiBackend,
+    readMidiBackend, seekMidiBackend, totalMidiBackend, nullptr, nullptr};
+const AudioBackendHandlers kBackendMiniaudio{
+    AudioMode::Miniaudio, false, true, true, initMiniaudioBackend,
+    uninitMiniaudioBackend, readMiniaudioBackend, seekMiniaudioBackend,
+    totalMiniaudioBackend, nullptr, nullptr};
+
+struct BackendSelector {
+  bool (*matches)(const std::filesystem::path& file);
+  const AudioBackendHandlers* backend;
+};
+
+const BackendSelector kBackends[] = {
+    {isM4aExt, &kBackendM4a},         {isFlacExt, &kBackendFlac},
+    {isMiniaudioExt, &kBackendMiniaudio}, {isGmeExt, &kBackendGme},
+    {isMidiExt, &kBackendMidi},       {isGsfExt, &kBackendGsf},
+    {isVgmExt, &kBackendVgm},         {isKssExt, &kBackendKss},
+    {isPsfExt, &kBackendPsf},
+};
+
+const AudioBackendHandlers* selectAudioBackend(const std::filesystem::path& file) {
+  for (const auto& entry : kBackends) {
+    if (entry.matches(file)) return entry.backend;
+  }
+  return nullptr;
+}
+
+std::string warningForBackend(const AudioBackendHandlers* backend) {
+  if (backend && backend->warning) {
+    return backend->warning();
+  }
+  return {};
+}
+
+bool is50HzEnabledForBackend(const AudioBackendHandlers* backend) {
+  if (backend && backend->is50HzEnabled) {
+    return backend->is50HzEnabled();
+  }
+  return false;
+}
+
+void activateBackend(const AudioBackendHandlers* backend, int trackIndex) {
+  gAudio.decoderReady = true;
+  gAudio.state.backend = backend;
+  gAudio.state.mode.store(backend ? backend->mode : AudioMode::None,
+                          std::memory_order_relaxed);
+  gAudio.state.externalStream.store(false);
+  gAudio.trackIndex = (backend && backend->supportsTrackIndex) ? trackIndex : 0;
+}
+
+void storeTotalFramesFromBackend(const AudioBackendHandlers* backend) {
+  if (!backend || !backend->totalFrames) {
     gAudio.state.totalFrames.store(0);
-    if (!startM4aWorker(file, startFrame, &error)) {
-      return false;
-    }
-    gAudio.decoderReady = true;
-    gAudio.state.usingFfmpeg.store(true);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
-    gAudio.state.externalStream.store(false);
-    gAudio.gmeTrackIndex = 0;
-    gAudio.gsfTrackIndex = 0;
-    gAudio.vgmTrackIndex = 0;
-    gAudio.kssTrackIndex = 0;
-    gAudio.psfTrackIndex = 0;
-  } else if (useKss) {
-    std::string error;
-    if (!gAudio.state.kss.init(file, gAudio.channels, gAudio.sampleRate,
-                               &error, trackIndex, gAudio.kssOptions)) {
-      return false;
-    }
-    gAudio.decoderReady = true;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(true);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
-    gAudio.state.externalStream.store(false);
-    gAudio.kssTrackIndex = trackIndex;
-    gAudio.gmeTrackIndex = 0;
-    gAudio.gsfTrackIndex = 0;
-    gAudio.vgmTrackIndex = 0;
-    gAudio.psfTrackIndex = 0;
+    return;
+  }
+  uint64_t total = 0;
+  bool ok = backend->totalFrames(&total);
+  gAudio.state.totalFrames.store(ok ? total : 0);
+}
 
-    uint64_t totalFrames = 0;
-    if (gAudio.state.kss.getTotalFrames(&totalFrames)) {
-      gAudio.state.totalFrames.store(totalFrames);
-    } else {
-      gAudio.state.totalFrames.store(0);
-    }
-  } else if (usePsf) {
-    std::string error;
-    if (!gAudio.state.psf.init(file, gAudio.channels, gAudio.sampleRate,
-                               &error, trackIndex)) {
-      gAudio.gmeWarning = error;
-      return false;
-    }
-    gAudio.decoderReady = true;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(true);
-    gAudio.state.usingMidi.store(false);
-    gAudio.state.externalStream.store(false);
-    gAudio.psfTrackIndex = trackIndex;
-    gAudio.gmeTrackIndex = 0;
-    gAudio.gsfTrackIndex = 0;
-    gAudio.vgmTrackIndex = 0;
-    gAudio.kssTrackIndex = 0;
+void stopAndUninitActiveDecoder() {
+  if (!gAudio.decoderReady) return;
+  const AudioBackendHandlers* backend = gAudio.state.backend;
+  if (backend && backend->uninit) {
+    backend->uninit();
+  }
+  gAudio.decoderReady = false;
+  gAudio.state.backend = nullptr;
+  gAudio.state.mode.store(AudioMode::None, std::memory_order_relaxed);
+  gAudio.state.externalStream.store(false);
+}
 
-    uint64_t totalFrames = 0;
-    if (gAudio.state.psf.getTotalFrames(&totalFrames)) {
-      gAudio.state.totalFrames.store(totalFrames);
-    } else {
-      gAudio.state.totalFrames.store(0);
-    }
-  } else if (useGsf) {
-    std::string error;
-    if (!gAudio.state.gsf.init(file, gAudio.channels, gAudio.sampleRate,
-                               &error, trackIndex)) {
+bool initDecoderForBackend(const AudioBackendHandlers* backend,
+                           const std::filesystem::path& file,
+                           uint64_t startFrame, int trackIndex) {
+  if (!backend || !backend->init) return false;
+  std::string error;
+  if (!backend->init(file, startFrame, trackIndex, &error)) {
+    if (backend->mode == AudioMode::Gsf) {
       gAudio.gsfWarning = error;
-      return false;
-    }
-    gAudio.decoderReady = true;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(true);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
-    gAudio.state.externalStream.store(false);
-    gAudio.gsfTrackIndex = trackIndex;
-    gAudio.gmeTrackIndex = 0;
-    gAudio.vgmTrackIndex = 0;
-    gAudio.kssTrackIndex = 0;
-    gAudio.psfTrackIndex = 0;
-
-    uint64_t totalFrames = 0;
-    if (gAudio.state.gsf.getTotalFrames(&totalFrames)) {
-      gAudio.state.totalFrames.store(totalFrames);
+    } else if (backend->mode == AudioMode::Vgm) {
+      gAudio.vgmWarning = error;
     } else {
-      gAudio.state.totalFrames.store(0);
-    }
-  } else if (useVgm) {
-    std::string error;
-    if (!gAudio.state.vgm.init(file, gAudio.channels, gAudio.sampleRate,
-                               &error)) {
-      return false;
-    }
-    gAudio.decoderReady = true;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(true);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
-    gAudio.state.externalStream.store(false);
-    gAudio.vgmTrackIndex = 0;
-    gAudio.gmeTrackIndex = 0;
-    gAudio.gsfTrackIndex = 0;
-    gAudio.kssTrackIndex = 0;
-    gAudio.psfTrackIndex = 0;
-    gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
-    applyVgmDeviceOverrides();
-    gAudio.vgmWarning = gAudio.state.vgm.warning();
-
-    uint64_t totalFrames = 0;
-    if (gAudio.state.vgm.getTotalFrames(&totalFrames)) {
-      gAudio.state.totalFrames.store(totalFrames);
-    } else {
-      gAudio.state.totalFrames.store(0);
-    }
-  } else if (useGme) {
-    std::string error;
-    if (!gAudio.state.gme.init(file, gAudio.channels, gAudio.sampleRate,
-                               &error, trackIndex)) {
       gAudio.gmeWarning = error;
-      return false;
     }
-    gAudio.decoderReady = true;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(true);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
-    gAudio.state.externalStream.store(false);
-    gAudio.gmeTrackIndex = trackIndex;
-    gAudio.gsfTrackIndex = 0;
-    gAudio.vgmTrackIndex = 0;
-    gAudio.kssTrackIndex = 0;
-    gAudio.psfTrackIndex = 0;
-    gAudio.state.gme.applyNsfOptions(gAudio.nsfOptions);
-    gAudio.gmeWarning = gAudio.state.gme.warning();
-
-    uint64_t totalFrames = 0;
-    if (gAudio.state.gme.getTotalFrames(&totalFrames)) {
-      gAudio.state.totalFrames.store(totalFrames);
-    } else {
-      gAudio.state.totalFrames.store(0);
-    }
-  } else if (useMidi) {
-    std::string error;
-    if (!gAudio.state.midi.init(file, gAudio.channels, gAudio.sampleRate,
-                                &error)) {
-      gAudio.gmeWarning = error;
-      return false;
-    }
-    gAudio.decoderReady = true;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(true);
-    gAudio.state.externalStream.store(false);
-    gAudio.gmeTrackIndex = 0;
-    gAudio.gsfTrackIndex = 0;
-    gAudio.vgmTrackIndex = 0;
-    gAudio.kssTrackIndex = 0;
-    gAudio.psfTrackIndex = 0;
-
-    uint64_t totalFrames = 0;
-    if (gAudio.state.midi.getTotalFrames(&totalFrames)) {
-      gAudio.state.totalFrames.store(totalFrames);
-    } else {
-      gAudio.state.totalFrames.store(0);
-    }
-  } else {
-    if (!useMiniaudio) {
-      return false;
-    }
-    ma_decoder_config decConfig =
-        ma_decoder_config_init(ma_format_f32, gAudio.channels,
-                               gAudio.sampleRate);
-    if (ma_decoder_init_file(file.string().c_str(), &decConfig,
-                             &gAudio.state.decoder) != MA_SUCCESS) {
-      return false;
-    }
-    gAudio.decoderReady = true;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
-    gAudio.state.externalStream.store(false);
-    gAudio.gmeTrackIndex = 0;
-    gAudio.gsfTrackIndex = 0;
-    gAudio.vgmTrackIndex = 0;
-    gAudio.kssTrackIndex = 0;
-    gAudio.psfTrackIndex = 0;
-
-    ma_uint64 totalFrames = 0;
-    if (ma_decoder_get_length_in_pcm_frames(&gAudio.state.decoder,
-                                            &totalFrames) == MA_SUCCESS) {
-      gAudio.state.totalFrames.store(totalFrames);
-    } else {
-      gAudio.state.totalFrames.store(0);
-    }
+    return false;
   }
+  activateBackend(backend, trackIndex);
+  storeTotalFramesFromBackend(backend);
+  return true;
+}
 
-  if (useKss) {
-    uint64_t total = gAudio.state.totalFrames.load();
-    if (total > 0 && startFrame > total) {
-      startFrame = total;
-    }
-    if (startFrame > 0) {
-      if (!gAudio.state.kss.seekToFrame(startFrame)) {
-        startFrame = 0;
-        gAudio.state.kss.seekToFrame(0);
-      }
-    }
-  } else if (usePsf) {
-    uint64_t total = gAudio.state.totalFrames.load();
-    if (total > 0 && startFrame > total) {
-      startFrame = total;
-    }
-    if (startFrame > 0) {
-      if (!gAudio.state.psf.seekToFrame(startFrame)) {
-        startFrame = 0;
-        gAudio.state.psf.seekToFrame(0);
-      }
-    }
-  } else if (useGsf) {
-    uint64_t total = gAudio.state.totalFrames.load();
-    if (total > 0 && startFrame > total) {
-      startFrame = total;
-    }
-    if (startFrame > 0) {
-      if (!gAudio.state.gsf.seekToFrame(startFrame)) {
-        startFrame = 0;
-        gAudio.state.gsf.seekToFrame(0);
-      }
-    }
-  } else if (useVgm) {
-    uint64_t total = gAudio.state.totalFrames.load();
-    if (total > 0 && startFrame > total) {
-      startFrame = total;
-    }
-    if (startFrame > 0) {
-      if (!gAudio.state.vgm.seekToFrame(startFrame)) {
-        startFrame = 0;
-        gAudio.state.vgm.seekToFrame(0);
-      }
-    }
-  } else if (useGme) {
-    uint64_t total = gAudio.state.totalFrames.load();
-    if (total > 0 && startFrame > total) {
-      startFrame = total;
-    }
-    if (startFrame > 0) {
-      if (!gAudio.state.gme.seekToFrame(startFrame)) {
-        startFrame = 0;
-        gAudio.state.gme.seekToFrame(0);
-      }
-    }
-  } else if (useMidi) {
-    uint64_t total = gAudio.state.totalFrames.load();
-    if (total > 0 && startFrame > total) {
-      startFrame = total;
-    }
-    if (startFrame > 0) {
-      if (!gAudio.state.midi.seekToFrame(startFrame)) {
-        startFrame = 0;
-        gAudio.state.midi.seekToFrame(0);
-      }
-    }
-  } else if (!useM4a) {
-    uint64_t total = gAudio.state.totalFrames.load();
-    if (total > 0 && startFrame > total) {
-      startFrame = total;
-    }
-    if (startFrame > 0) {
-      if (ma_decoder_seek_to_pcm_frame(
-              &gAudio.state.decoder, static_cast<ma_uint64>(startFrame)) !=
-          MA_SUCCESS) {
-        startFrame = 0;
-      }
-    }
+void seekLoadedDecoderToStart(const AudioBackendHandlers* backend,
+                              uint64_t* startFrame) {
+  if (!backend || !startFrame || !backend->seek) return;
+  uint64_t total = gAudio.state.totalFrames.load();
+  if (total > 0 && *startFrame > total) {
+    *startFrame = total;
   }
+  if (*startFrame == 0) return;
+  if (!backend->seek(*startFrame)) {
+    *startFrame = 0;
+    backend->seek(0);
+  }
+}
 
+void resetPlaybackStateForLoad(uint64_t startFrame) {
   gAudio.state.framesPlayed.store(startFrame);
   gAudio.state.audioClockFrames.store(startFrame);
   gAudio.state.callbackCount.store(0);
@@ -1825,52 +1718,59 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
   gAudio.state.radio1938.init(gAudio.channels,
                               static_cast<float>(gAudio.sampleRate),
                               gAudio.lpHz, gAudio.noise);
+}
 
+bool ensurePlaybackDeviceRunning() {
   if (!gAudio.deviceReady) {
     if (!initDevice()) {
-      if (gAudio.state.usingFfmpeg.load()) {
-        stopM4aWorker();
-      } else if (gAudio.state.usingVgm.load()) {
-        gAudio.state.vgm.uninit();
-      } else if (gAudio.state.usingGsf.load()) {
-        gAudio.state.gsf.uninit();
-      } else if (gAudio.state.usingKss.load()) {
-        gAudio.state.kss.uninit();
-      } else if (gAudio.state.usingPsf.load()) {
-        gAudio.state.psf.uninit();
-      } else if (gAudio.state.usingMidi.load()) {
-        gAudio.state.midi.uninit();
-      } else if (gAudio.state.usingGme.load()) {
-        gAudio.state.gme.uninit();
-      } else {
-        ma_decoder_uninit(&gAudio.state.decoder);
-      }
-      gAudio.decoderReady = false;
+      stopAndUninitActiveDecoder();
       return false;
     }
-  } else {
-    if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
-      if (gAudio.state.usingFfmpeg.load()) {
-        stopM4aWorker();
-      } else if (gAudio.state.usingVgm.load()) {
-        gAudio.state.vgm.uninit();
-      } else if (gAudio.state.usingGsf.load()) {
-        gAudio.state.gsf.uninit();
-      } else if (gAudio.state.usingKss.load()) {
-        gAudio.state.kss.uninit();
-      } else if (gAudio.state.usingPsf.load()) {
-        gAudio.state.psf.uninit();
-      } else if (gAudio.state.usingMidi.load()) {
-        gAudio.state.midi.uninit();
-      } else if (gAudio.state.usingGme.load()) {
-        gAudio.state.gme.uninit();
-      } else {
-        ma_decoder_uninit(&gAudio.state.decoder);
-      }
-      gAudio.decoderReady = false;
-      return false;
-    }
+    return true;
   }
+
+  if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
+    stopAndUninitActiveDecoder();
+    return false;
+  }
+  return true;
+}
+
+bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
+                int trackIndex) {
+  validateInputFile(file);
+  melodyOfflineStop();
+  gAudio.state.audioLeadSilenceFrames.store(0);
+  if (gAudio.audition.active.load()) {
+    stopAuditionWorker();
+    gAudio.audition.resumeValid = false;
+  }
+
+  gAudio.gmeWarning.clear();
+  gAudio.gsfWarning.clear();
+  gAudio.vgmWarning.clear();
+
+  const AudioBackendHandlers* backend = selectAudioBackend(file);
+  if (!backend) {
+    return false;
+  }
+
+  if (gAudio.deviceReady) {
+    ma_device_stop(&gAudio.state.device);
+  }
+  stopAndUninitActiveDecoder();
+
+  if (!initDecoderForBackend(backend, file, startFrame, trackIndex)) {
+    return false;
+  }
+
+  seekLoadedDecoderToStart(backend, &startFrame);
+  resetPlaybackStateForLoad(startFrame);
+
+  if (!ensurePlaybackDeviceRunning()) {
+    return false;
+  }
+
   const uint64_t analysisLeadInFrames = gAudio.state.audioLeadSilenceFrames.load();
   melodyOfflineStart(file, trackIndex, gAudio.sampleRate, gAudio.channels,
                     analysisLeadInFrames, gAudio.kssOptions, gAudio.nsfOptions,
@@ -1880,32 +1780,13 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
   return true;
 }
 
-bool loadFile(const std::filesystem::path& file, int trackIndex) {
-  return loadFileAt(file, 0, trackIndex);
-}
-
 bool ensureChannels(uint32_t newChannels) {
   if (newChannels == gAudio.channels) return true;
 
   uint64_t resumeFrame = gAudio.decoderReady ? gAudio.state.framesPlayed.load()
                                              : 0;
   bool hadTrack = gAudio.decoderReady && !gAudio.nowPlaying.empty();
-  bool wasKss = gAudio.state.usingKss.load();
-  bool wasPsf = gAudio.state.usingPsf.load();
-  bool wasGsf = gAudio.state.usingGsf.load();
-  bool wasVgm = gAudio.state.usingVgm.load();
-  int trackIndex = 0;
-  if (wasKss) {
-    trackIndex = gAudio.kssTrackIndex;
-  } else if (wasPsf) {
-    trackIndex = gAudio.psfTrackIndex;
-  } else if (wasGsf) {
-    trackIndex = gAudio.gsfTrackIndex;
-  } else if (wasVgm) {
-    trackIndex = gAudio.vgmTrackIndex;
-  } else {
-    trackIndex = gAudio.gmeTrackIndex;
-  }
+  int trackIndex = gAudio.trackIndex;
 
   if (gAudio.deviceReady) {
     ma_device_stop(&gAudio.state.device);
@@ -1913,31 +1794,7 @@ bool ensureChannels(uint32_t newChannels) {
     gAudio.deviceReady = false;
   }
   if (gAudio.decoderReady) {
-    if (gAudio.state.usingFfmpeg.load()) {
-      stopM4aWorker();
-    } else if (gAudio.state.usingVgm.load()) {
-      gAudio.state.vgm.uninit();
-    } else if (gAudio.state.usingGsf.load()) {
-      gAudio.state.gsf.uninit();
-    } else if (gAudio.state.usingKss.load()) {
-      gAudio.state.kss.uninit();
-    } else if (gAudio.state.usingPsf.load()) {
-      gAudio.state.psf.uninit();
-    } else if (gAudio.state.usingMidi.load()) {
-      gAudio.state.midi.uninit();
-    } else if (gAudio.state.usingGme.load()) {
-      gAudio.state.gme.uninit();
-    } else {
-      ma_decoder_uninit(&gAudio.state.decoder);
-    }
-    gAudio.decoderReady = false;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
+    stopAndUninitActiveDecoder();
   }
 
   gAudio.channels = newChannels;
@@ -1963,31 +1820,7 @@ void stopPlayback() {
     ma_device_stop(&gAudio.state.device);
   }
   if (gAudio.decoderReady) {
-    if (gAudio.state.usingFfmpeg.load()) {
-      stopM4aWorker();
-    } else if (gAudio.state.usingVgm.load()) {
-      gAudio.state.vgm.uninit();
-    } else if (gAudio.state.usingGsf.load()) {
-      gAudio.state.gsf.uninit();
-    } else if (gAudio.state.usingKss.load()) {
-      gAudio.state.kss.uninit();
-    } else if (gAudio.state.usingPsf.load()) {
-      gAudio.state.psf.uninit();
-    } else if (gAudio.state.usingMidi.load()) {
-      gAudio.state.midi.uninit();
-    } else if (gAudio.state.usingGme.load()) {
-      gAudio.state.gme.uninit();
-    } else {
-      ma_decoder_uninit(&gAudio.state.decoder);
-    }
-    gAudio.decoderReady = false;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
+    stopAndUninitActiveDecoder();
   }
   gAudio.state.framesPlayed.store(0);
   gAudio.state.audioClockFrames.store(0);
@@ -2009,14 +1842,10 @@ void stopPlayback() {
   gAudio.state.audioClock.reset(0);
   melodyOfflineStop();
   gAudio.nowPlaying.clear();
-  gAudio.gmeTrackIndex = 0;
+  gAudio.trackIndex = 0;
   gAudio.gmeWarning.clear();
-  gAudio.gsfTrackIndex = 0;
   gAudio.gsfWarning.clear();
-  gAudio.vgmTrackIndex = 0;
   gAudio.vgmWarning.clear();
-  gAudio.kssTrackIndex = 0;
-  gAudio.psfTrackIndex = 0;
 }
 }  // namespace
 
@@ -2056,15 +1885,13 @@ bool audioIsEnabled() { return gAudio.enableAudio; }
 bool audioIsReady() { return gAudio.decoderReady; }
 
 bool audioStartFile(const std::filesystem::path& file, int trackIndex) {
-  if (!gAudio.enableAudio) return false;
-  return loadFile(file, trackIndex);
+  return loadFileAt(file, 0, trackIndex);
 }
 
 bool audioStartFileAt(const std::filesystem::path& file, double startSec,
                       int trackIndex) {
-  if (!gAudio.enableAudio) return false;
   if (!std::isfinite(startSec) || startSec <= 0.0) {
-    return loadFile(file, trackIndex);
+    return loadFileAt(file, 0, trackIndex);
   }
   double framesDouble = startSec * static_cast<double>(gAudio.sampleRate);
   int64_t startFrame = static_cast<int64_t>(std::llround(framesDouble));
@@ -2072,50 +1899,21 @@ bool audioStartFileAt(const std::filesystem::path& file, double startSec,
   return loadFileAt(file, static_cast<uint64_t>(startFrame), trackIndex);
 }
 
-void audioStop() { stopPlayback(); }
+void audioStop() {
+  gAudio.audition.resumeValid = false;
+  stopPlayback();
+}
 
 bool audioStartStream(uint64_t totalFrames) {
-  if (!gAudio.enableAudio) {
-    return false;
-  }
   melodyOfflineStop();
   gAudio.gmeWarning.clear();
   gAudio.gsfWarning.clear();
   gAudio.vgmWarning.clear();
-  gAudio.kssTrackIndex = 0;
-  gAudio.psfTrackIndex = 0;
-  gAudio.gsfTrackIndex = 0;
-  gAudio.vgmTrackIndex = 0;
+  gAudio.trackIndex = 0;
   if (gAudio.deviceReady) {
     ma_device_stop(&gAudio.state.device);
   }
-  if (gAudio.decoderReady) {
-    if (gAudio.state.usingFfmpeg.load()) {
-      stopM4aWorker();
-    } else if (gAudio.state.usingVgm.load()) {
-      gAudio.state.vgm.uninit();
-    } else if (gAudio.state.usingGsf.load()) {
-      gAudio.state.gsf.uninit();
-    } else if (gAudio.state.usingKss.load()) {
-      gAudio.state.kss.uninit();
-    } else if (gAudio.state.usingPsf.load()) {
-      gAudio.state.psf.uninit();
-    } else if (gAudio.state.usingMidi.load()) {
-      gAudio.state.midi.uninit();
-    } else if (gAudio.state.usingGme.load()) {
-      gAudio.state.gme.uninit();
-    } else {
-      ma_decoder_uninit(&gAudio.state.decoder);
-    }
-    gAudio.decoderReady = false;
-    gAudio.state.usingFfmpeg.store(false);
-    gAudio.state.usingGme.store(false);
-    gAudio.state.usingGsf.store(false);
-    gAudio.state.usingVgm.store(false);
-    gAudio.state.usingKss.store(false);
-    gAudio.state.usingPsf.store(false);
-    gAudio.state.usingMidi.store(false);
-  }
+  stopAndUninitActiveDecoder();
 
   const uint32_t rbFrames = std::max<uint32_t>(gAudio.sampleRate, 8192);
   {
@@ -2138,19 +1936,10 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.state.m4aStop.store(false);
   gAudio.state.m4aAtEnd.store(false);
   gAudio.state.externalStream.store(true);
-  gAudio.state.usingFfmpeg.store(true);
-  gAudio.state.usingGme.store(false);
-  gAudio.state.usingGsf.store(false);
-  gAudio.state.usingVgm.store(false);
-  gAudio.state.usingKss.store(false);
-  gAudio.state.usingPsf.store(false);
-  gAudio.state.usingMidi.store(false);
+  gAudio.state.mode.store(AudioMode::Stream, std::memory_order_relaxed);
+  gAudio.state.backend = nullptr;
   gAudio.decoderReady = true;
-  gAudio.gmeTrackIndex = 0;
-  gAudio.gsfTrackIndex = 0;
-  gAudio.vgmTrackIndex = 0;
-  gAudio.kssTrackIndex = 0;
-  gAudio.psfTrackIndex = 0;
+  gAudio.trackIndex = 0;
 
   gAudio.state.framesPlayed.store(0);
   gAudio.state.audioClockFrames.store(0);
@@ -2180,34 +1969,9 @@ bool audioStartStream(uint64_t totalFrames) {
                               static_cast<float>(gAudio.sampleRate),
                               gAudio.lpHz, gAudio.noise);
 
-  if (!gAudio.deviceReady) {
-    if (!initDevice()) {
-      gAudio.decoderReady = false;
-      gAudio.state.usingFfmpeg.store(false);
-      gAudio.state.usingGme.store(false);
-      gAudio.state.usingGsf.store(false);
-      gAudio.state.usingVgm.store(false);
-      gAudio.state.usingKss.store(false);
-      gAudio.state.usingPsf.store(false);
-      gAudio.state.usingMidi.store(false);
-      gAudio.state.externalStream.store(false);
-      gAudio.state.streamQueueEnabled.store(false);
-      return false;
-    }
-  } else {
-    if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
-      gAudio.decoderReady = false;
-      gAudio.state.usingFfmpeg.store(false);
-      gAudio.state.usingGme.store(false);
-      gAudio.state.usingGsf.store(false);
-      gAudio.state.usingVgm.store(false);
-      gAudio.state.usingKss.store(false);
-      gAudio.state.usingPsf.store(false);
-      gAudio.state.usingMidi.store(false);
-      gAudio.state.externalStream.store(false);
-      gAudio.state.streamQueueEnabled.store(false);
-      return false;
-    }
+  if (!ensurePlaybackDeviceRunning()) {
+    gAudio.state.streamQueueEnabled.store(false);
+    return false;
   }
 
   // Estimate output latency so the audio clock tracks what is actually audible,
@@ -2250,6 +2014,7 @@ bool audioStartStream(uint64_t totalFrames) {
 }
 
 void audioStopStream() {
+  gAudio.state.streamDiscardPtsUs.store(0, std::memory_order_relaxed);
   stopPlayback();
 }
 
@@ -2580,17 +2345,12 @@ uint64_t audioStreamUpdateCounter() {
 std::filesystem::path audioGetNowPlaying() { return gAudio.nowPlaying; }
 
 int audioGetTrackIndex() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) return -1;
-  if (gAudio.state.usingKss.load()) return gAudio.kssTrackIndex;
-  if (gAudio.state.usingPsf.load()) return gAudio.psfTrackIndex;
-  if (gAudio.state.usingGsf.load()) return gAudio.gsfTrackIndex;
-  if (gAudio.state.usingVgm.load()) return gAudio.vgmTrackIndex;
-  if (gAudio.state.usingGme.load()) return gAudio.gmeTrackIndex;
-  return -1;
+  if (!gAudio.decoderReady) return -1;
+  return gAudio.trackIndex;
 }
 
 double audioGetTimeSec() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) {
+  if (!gAudio.decoderReady) {
     return 0.0;
   }
   if (!gAudio.state.audioPrimed.load()) {
@@ -2644,7 +2404,7 @@ double audioGetTimeSec() {
 }
 
 double audioGetTotalSec() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) {
+  if (!gAudio.decoderReady) {
     return -1.0;
   }
   uint64_t total = gAudio.state.totalFrames.load();
@@ -2653,14 +2413,14 @@ double audioGetTotalSec() {
 }
 
 bool audioIsSeeking() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) {
+  if (!gAudio.decoderReady) {
     return false;
   }
   return gAudio.state.seekRequested.load();
 }
 
 double audioGetSeekTargetSec() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) {
+  if (!gAudio.decoderReady) {
     return -1.0;
   }
   uint64_t total = gAudio.state.totalFrames.load();
@@ -2674,30 +2434,27 @@ double audioGetSeekTargetSec() {
 }
 
 bool audioIsPrimed() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) return false;
+  if (!gAudio.decoderReady) return false;
   return gAudio.state.audioPrimed.load();
 }
 
 bool audioIsPaused() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) return false;
+  if (!gAudio.decoderReady) return false;
   return gAudio.state.paused.load();
 }
 
 bool audioIsFinished() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) return false;
+  if (!gAudio.decoderReady) return false;
   return gAudio.state.finished.load();
 }
 
 bool audioIsRadioEnabled() { return gAudio.state.useRadio1938.load(); }
 
-bool audioIsHolding() {
-  if (!gAudio.enableAudio) return false;
-  return gAudio.state.hold.load();
-}
+bool audioIsHolding() { return gAudio.state.hold.load(); }
 
 AudioPerfStats audioGetPerfStats() {
   AudioPerfStats stats{};
-  if (!gAudio.decoderReady || !gAudio.enableAudio) {
+  if (!gAudio.decoderReady) {
     return stats;
   }
   stats.callbacks = gAudio.state.callbackCount.load(std::memory_order_relaxed);
@@ -2712,7 +2469,7 @@ AudioPerfStats audioGetPerfStats() {
       gAudio.state.lastFramesRead.load(std::memory_order_relaxed);
   stats.sampleRate = gAudio.state.sampleRate;
   stats.channels = gAudio.state.channels;
-  stats.usingFfmpeg = gAudio.state.usingFfmpeg.load(std::memory_order_relaxed);
+  stats.usingFfmpeg = currentAudioMode() == AudioMode::M4a;
   if (gAudio.deviceReady &&
       ma_device_get_state(&gAudio.state.device) !=
           ma_device_state_uninitialized) {
@@ -2724,12 +2481,12 @@ AudioPerfStats audioGetPerfStats() {
 }
 
 void audioTogglePause() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) return;
+  if (!gAudio.decoderReady) return;
   gAudio.state.paused.store(!gAudio.state.paused.load());
 }
 
 void audioSeekBy(int direction) {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) return;
+  if (!gAudio.decoderReady) return;
   int64_t deltaFrames = static_cast<int64_t>(direction) * 5 * gAudio.sampleRate;
   int64_t current = static_cast<int64_t>(gAudio.state.audioClockFrames.load());
   int64_t target = current + deltaFrames;
@@ -2746,7 +2503,7 @@ void audioSeekBy(int direction) {
 }
 
 void audioSeekToRatio(double ratio) {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) return;
+  if (!gAudio.decoderReady) return;
   uint64_t total = gAudio.state.totalFrames.load();
   if (total == 0) return;
   ratio = std::clamp(ratio, 0.0, 1.0);
@@ -2759,7 +2516,7 @@ void audioSeekToRatio(double ratio) {
 }
 
 void audioSeekToSec(double sec) {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) return;
+  if (!gAudio.decoderReady) return;
   if (!std::isfinite(sec)) return;
   int64_t target =
       static_cast<int64_t>(std::llround(sec * gAudio.sampleRate));
@@ -2778,17 +2535,15 @@ void audioSeekToSec(double sec) {
 void audioToggleRadio() {
   bool next = !gAudio.state.useRadio1938.load();
   gAudio.state.useRadio1938.store(next);
-  if (!gAudio.enableAudio) return;
   uint32_t desired = next ? 1u : gAudio.baseChannels;
   ensureChannels(desired);
 }
 
 static void reloadKssWithOptions() {
-  if (!gAudio.enableAudio || !gAudio.decoderReady) return;
-  if (!gAudio.state.usingKss.load()) return;
+  if (!gAudio.decoderReady || !isAudioMode(AudioMode::Kss)) return;
   uint64_t resumeFrame = gAudio.state.framesPlayed.load();
   bool wasPaused = gAudio.state.paused.load();
-  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.kssTrackIndex)) {
+  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.trackIndex)) {
     if (wasPaused) {
       gAudio.state.paused.store(true);
     }
@@ -2798,7 +2553,7 @@ static void reloadKssWithOptions() {
 static void reloadNsfWithOptions();
 
 void audioToggle50Hz() {
-  if (gAudio.state.usingVgm.load()) {
+  if (isAudioMode(AudioMode::Vgm)) {
     gAudio.vgmOptions.playbackHz =
         (gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50)
             ? VgmPlaybackHz::Hz60
@@ -2812,7 +2567,7 @@ void audioToggle50Hz() {
     }
     return;
   }
-  if (gAudio.state.usingGme.load()) {
+  if (isAudioMode(AudioMode::Gme)) {
     gAudio.nsfOptions.tempoMode =
         (gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50)
             ? NsfTempoMode::Normal
@@ -2824,10 +2579,7 @@ void audioToggle50Hz() {
   reloadKssWithOptions();
 }
 
-void audioSetHold(bool hold) {
-  if (!gAudio.enableAudio) return;
-  gAudio.state.hold.store(hold);
-}
+void audioSetHold(bool hold) { gAudio.state.hold.store(hold); }
 
 void audioAdjustVolume(float delta) {
   float current = gAudio.state.volume.load(std::memory_order_relaxed);
@@ -2854,7 +2606,7 @@ float audioGetPeak() {
 }
 
 AudioMelodyInfo audioGetMelodyInfo() {
-  if (!gAudio.decoderReady || !gAudio.enableAudio) {
+  if (!gAudio.decoderReady) {
     return AudioMelodyInfo{};
   }
   MelodyOfflineAnalysisState analysisState = melodyOfflineGetState();
@@ -2876,9 +2628,6 @@ AudioMelodyInfo audioGetMelodyInfo() {
 }
 
 AudioMelodyAnalysisState audioGetMelodyAnalysisState() {
-  if (!gAudio.enableAudio) {
-    return {};
-  }
   const MelodyOfflineAnalysisState state = melodyOfflineGetState();
   AudioMelodyAnalysisState result;
   result.ready = state.ready;
@@ -2912,23 +2661,11 @@ bool audioIsRadioClipping() {
 }
 
 std::string audioGetWarning() {
-  if (gAudio.state.usingVgm.load()) {
-    return gAudio.vgmWarning;
-  }
-  if (gAudio.state.usingGsf.load()) {
-    return gAudio.gsfWarning;
-  }
-  return gAudio.gmeWarning;
+  return warningForBackend(gAudio.state.backend);
 }
 
 bool audioIs50HzEnabled() {
-  if (gAudio.state.usingVgm.load()) {
-    return gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50;
-  }
-  if (gAudio.state.usingGme.load()) {
-    return gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50;
-  }
-  return gAudio.kssOptions.force50Hz;
+  return is50HzEnabledForBackend(gAudio.state.backend);
 }
 
 KssPlaybackOptions audioGetKssOptionState() {
@@ -2957,7 +2694,7 @@ static bool toKssDevice(KssInstrumentDevice device, KSS_DEVICE* out) {
 bool audioGetKssInstrumentRegs(KssInstrumentDevice device,
                                std::vector<uint8_t>* out) {
   if (!out) return false;
-  if (!gAudio.state.usingKss.load()) return false;
+  if (!isAudioMode(AudioMode::Kss)) return false;
   if (!gAudio.state.kss.active()) return false;
   KSS_DEVICE kssDevice{};
   if (!toKssDevice(device, &kssDevice)) return false;
@@ -3011,7 +2748,6 @@ bool audioGetKssInstrumentAuditionState(KssInstrumentDevice* device,
 }
 
 bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile) {
-  if (!gAudio.enableAudio) return false;
   if (profile.device != KssInstrumentDevice::Psg &&
       profile.device != KssInstrumentDevice::Scc) {
     return false;
@@ -3042,15 +2778,7 @@ bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile) {
       gAudio.audition.resumeFile = gAudio.nowPlaying;
       gAudio.audition.resumeFrame = gAudio.state.framesPlayed.load();
       gAudio.audition.resumePaused = gAudio.state.paused.load();
-      if (gAudio.state.usingKss.load()) {
-        gAudio.audition.resumeTrackIndex = gAudio.kssTrackIndex;
-      } else if (gAudio.state.usingPsf.load()) {
-        gAudio.audition.resumeTrackIndex = gAudio.psfTrackIndex;
-      } else if (gAudio.state.usingGsf.load()) {
-        gAudio.audition.resumeTrackIndex = gAudio.gsfTrackIndex;
-      } else {
-        gAudio.audition.resumeTrackIndex = gAudio.gmeTrackIndex;
-      }
+      gAudio.audition.resumeTrackIndex = gAudio.trackIndex;
     }
     if (!audioStartStream(0)) {
       if (gAudio.audition.resumeValid) {
@@ -3386,12 +3114,11 @@ NsfPlaybackOptions audioGetNsfOptionState() {
 }
 
 static void reloadNsfWithOptions() {
-  if (!gAudio.enableAudio || !gAudio.decoderReady) return;
-  if (!gAudio.state.usingGme.load()) return;
+  if (!gAudio.decoderReady || !isAudioMode(AudioMode::Gme)) return;
   if (!isGmeExt(gAudio.nowPlaying)) return;
   uint64_t resumeFrame = gAudio.state.framesPlayed.load();
   bool wasPaused = gAudio.state.paused.load();
-  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.gmeTrackIndex)) {
+  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.trackIndex)) {
     if (wasPaused) {
       gAudio.state.paused.store(true);
     }
@@ -3446,7 +3173,7 @@ VgmPlaybackOptions audioGetVgmOptionState() {
 
 bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out) {
   if (!out) return false;
-  if (gAudio.state.usingVgm.load()) {
+  if (isAudioMode(AudioMode::Vgm)) {
     if (gAudio.state.vgm.getDeviceOptions(deviceId, out)) {
       return true;
     }
@@ -3462,12 +3189,11 @@ bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out) {
 }
 
 static void reloadVgmWithOptions() {
-  if (!gAudio.enableAudio || !gAudio.decoderReady) return;
-  if (!gAudio.state.usingVgm.load()) return;
+  if (!gAudio.decoderReady || !isAudioMode(AudioMode::Vgm)) return;
   if (!isVgmExt(gAudio.nowPlaying)) return;
   uint64_t resumeFrame = gAudio.state.framesPlayed.load();
   bool wasPaused = gAudio.state.paused.load();
-  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.vgmTrackIndex)) {
+  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.trackIndex)) {
     if (wasPaused) {
       gAudio.state.paused.store(true);
     }
@@ -3564,7 +3290,7 @@ bool audioAdjustVgmOption(VgmOptionId id, int direction) {
     default:
       break;
   }
-  if (changed && gAudio.state.usingVgm.load()) {
+  if (changed && isAudioMode(AudioMode::Vgm)) {
     gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
     uint64_t totalFrames = 0;
     if (gAudio.state.vgm.getTotalFrames(&totalFrames)) {
@@ -3654,7 +3380,7 @@ bool audioAdjustVgmDeviceOption(uint32_t deviceId, VgmDeviceOptionId id,
   if (!changed) return false;
 
   gAudio.vgmDeviceOverrides[deviceId] = options;
-  if (gAudio.state.usingVgm.load()) {
+  if (isAudioMode(AudioMode::Vgm)) {
     if (id == VgmDeviceOptionId::Mute) {
       gAudio.state.vgm.setDeviceOptions(deviceId, options);
     } else {
