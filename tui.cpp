@@ -1029,6 +1029,7 @@ int runTui(Options o) {
       audioStop();
     }
   };
+  callbacks.onCurrentPlaybackFile = [&]() { return audioGetNowPlaying(); };
   callbacks.onToggleRadio = [&]() {
     audioToggleRadio();
   };

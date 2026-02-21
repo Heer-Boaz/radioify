@@ -59,7 +59,6 @@ class ConsoleInput {
   bool active_ = false;
   bool xButton1Prev_ = false;
   bool xButton2Prev_ = false;
-  bool focusKnown_ = false;
   bool focusActive_ = true;
 };
 
@@ -77,6 +76,16 @@ struct FileEntry {
 };
 
 struct BrowserState {
+  enum class HistoryActionType {
+    EnterDirectory,
+    PlayFile,
+  };
+  struct HistoryAction {
+    HistoryActionType type = HistoryActionType::EnterDirectory;
+    std::filesystem::path fromPath;
+    std::filesystem::path toPath;
+  };
+
   std::filesystem::path dir;
   std::vector<FileEntry> entries;
   int selected = 0;
@@ -96,6 +105,8 @@ struct BrowserState {
   bool sortDescending = false;
   std::string filter;
   bool filterActive = false;
+  std::vector<HistoryAction> backHistory;
+  std::vector<HistoryAction> forwardHistory;
 };
 
 struct GridLayout {
@@ -129,6 +140,7 @@ struct InputCallbacks {
   std::function<void()> onQuit;
   std::function<void()> onResize;
   std::function<void()> onStopPlayback;
+  std::function<std::filesystem::path()> onCurrentPlaybackFile;
   std::function<void()> onTogglePause;
   std::function<void()> onToggleRadio;
   std::function<void()> onToggle50Hz;

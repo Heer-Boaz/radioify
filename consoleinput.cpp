@@ -6,20 +6,18 @@
 #include "optionsbrowser.h"
 
 bool ConsoleInput::hasInputFocus() const {
-  if (focusKnown_) {
+  if (!focusActive_) return false;
+  HWND console = GetConsoleWindow();
+  HWND fg = GetForegroundWindow();
+  if (!console || !fg) return focusActive_;
+  if (fg == console || IsChild(console, fg) || IsChild(fg, console)) {
+    return true;
+  }
+  // Pseudoconsole hosts may not expose a direct console HWND relation.
+  if (!IsWindowVisible(console)) {
     return focusActive_;
   }
-  HWND fg = GetForegroundWindow();
-  if (!fg) return false;
-  HWND console = GetConsoleWindow();
-  if (console) {
-    if (fg == console || IsChild(console, fg) || IsChild(fg, console)) {
-      return true;
-    }
-  }
-  DWORD fgPid = 0;
-  GetWindowThreadProcessId(fg, &fgPid);
-  return fgPid == GetCurrentProcessId();
+  return false;
 }
 
 void ConsoleInput::init() {
@@ -31,6 +29,7 @@ void ConsoleInput::init() {
   mode &= ~(ENABLE_QUICK_EDIT_MODE | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
   mode |= ENABLE_EXTENDED_FLAGS;
   if (!SetConsoleMode(handle_, mode)) return;
+  focusActive_ = true;
   active_ = true;
 }
 
@@ -101,7 +100,6 @@ bool ConsoleInput::poll(InputEvent& out) {
       return true;
     }
     if (rec.EventType == FOCUS_EVENT) {
-      focusKnown_ = true;
       focusActive_ = rec.Event.FocusEvent.bSetFocus != FALSE;
       count--;
       continue;
@@ -316,6 +314,100 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
                       bool decoderReady, int& breadcrumbHover, int& actionHover,
                       bool& dirty, bool& running,
                       const InputCallbacks& callbacks) {
+  auto clearForwardHistory = [&]() {
+    browser.forwardHistory.clear();
+  };
+  auto pushBackHistory = [&](BrowserState::HistoryActionType type,
+                             const std::filesystem::path& from,
+                             const std::filesystem::path& to) {
+    BrowserState::HistoryAction action;
+    action.type = type;
+    action.fromPath = from;
+    action.toPath = to;
+    browser.backHistory.push_back(action);
+    clearForwardHistory();
+  };
+  auto navigateToDir = [&](const std::filesystem::path& dir) {
+    browser.dir = dir;
+    browser.selected = 0;
+    if (callbacks.onRefreshBrowser) {
+      callbacks.onRefreshBrowser(browser, "");
+    }
+    breadcrumbHover = -1;
+    dirty = true;
+  };
+  auto undoBrowserBack = [&]() -> bool {
+    if (decoderReady) {
+      BrowserState::HistoryAction action;
+      bool haveAction = false;
+      if (!browser.backHistory.empty() &&
+          browser.backHistory.back().type ==
+              BrowserState::HistoryActionType::PlayFile) {
+        action = browser.backHistory.back();
+        browser.backHistory.pop_back();
+        haveAction = true;
+      } else if (callbacks.onCurrentPlaybackFile) {
+        std::filesystem::path current = callbacks.onCurrentPlaybackFile();
+        if (!current.empty()) {
+          action.type = BrowserState::HistoryActionType::PlayFile;
+          action.fromPath = browser.dir;
+          action.toPath = current;
+          haveAction = true;
+        }
+      }
+      if (callbacks.onStopPlayback) {
+        callbacks.onStopPlayback();
+      }
+      if (haveAction) {
+        browser.forwardHistory.push_back(action);
+      }
+      dirty = true;
+      return true;
+    }
+
+    while (!browser.backHistory.empty()) {
+      BrowserState::HistoryAction action = browser.backHistory.back();
+      browser.backHistory.pop_back();
+      if (action.type == BrowserState::HistoryActionType::PlayFile) {
+        browser.forwardHistory.push_back(action);
+        continue;
+      }
+      if (action.type == BrowserState::HistoryActionType::EnterDirectory &&
+          !action.fromPath.empty()) {
+        navigateToDir(action.fromPath);
+        browser.forwardHistory.push_back(action);
+        return true;
+      }
+    }
+    return false;
+  };
+  auto redoBrowserForward = [&]() -> bool {
+    if (browser.forwardHistory.empty()) {
+      return false;
+    }
+    BrowserState::HistoryAction action = browser.forwardHistory.back();
+    browser.forwardHistory.pop_back();
+
+    if (action.type == BrowserState::HistoryActionType::EnterDirectory) {
+      if (!action.toPath.empty()) {
+        navigateToDir(action.toPath);
+      }
+      browser.backHistory.push_back(action);
+      return true;
+    }
+
+    if (action.type == BrowserState::HistoryActionType::PlayFile) {
+      if (playMode && !action.toPath.empty() && callbacks.onPlayFile &&
+          callbacks.onPlayFile(action.toPath)) {
+        browser.backHistory.push_back(action);
+        dirty = true;
+        return true;
+      }
+      return false;
+    }
+    return false;
+  };
+
   if (ev.type == InputEvent::Type::Resize) {
     dirty = true;
     if (callbacks.onResize) callbacks.onResize();
@@ -363,10 +455,20 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
 
-    // Try common playback shortcuts first
     if ((playMode || decoderReady) &&
         handlePlaybackInput(ev, running, callbacks)) {
+      if (key.vk == 'O' || key.ch == 'o' || key.ch == 'O') {
+        clearForwardHistory();
+      }
       dirty = true;
+      return;
+    }
+    if (key.vk == VK_BROWSER_BACK) {
+      undoBrowserBack();
+      return;
+    }
+    if (key.vk == VK_BROWSER_FORWARD) {
+      redoBrowserForward();
       return;
     }
     if (!browserInteractionEnabled) {
@@ -401,34 +503,14 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     }
     if (key.vk == VK_ESCAPE) {
       if (callbacks.onStopPlayback) {
+        clearForwardHistory();
         callbacks.onStopPlayback();
         dirty = true;
       }
       return;
     }
     if (key.vk == VK_BACK) {
-      if (optionsBrowserIsActive(browser)) {
-        if (optionsBrowserNavigateUp(browser)) {
-          if (callbacks.onRefreshBrowser) {
-            callbacks.onRefreshBrowser(browser, "");
-          }
-          breadcrumbHover = -1;
-          dirty = true;
-        }
-        return;
-      }
-      if (browser.dir.has_parent_path()) {
-        browser.dir = browser.dir.parent_path();
-        browser.selected = 0;
-        if (callbacks.onRefreshBrowser) {
-          callbacks.onRefreshBrowser(browser, "");
-        }
-        breadcrumbHover = -1;
-        dirty = true;
-      }
-      return;
-    }
-    if (key.vk == VK_BROWSER_BACK || key.vk == VK_BROWSER_FORWARD) {
+      clearForwardHistory();
       if (optionsBrowserIsActive(browser)) {
         if (optionsBrowserNavigateUp(browser)) {
           if (callbacks.onRefreshBrowser) {
@@ -463,6 +545,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
           return;
         }
         if (pick.isDir) {
+          pushBackHistory(BrowserState::HistoryActionType::EnterDirectory,
+                          browser.dir, pick.path);
           browser.dir = pick.path;
           browser.selected = 0;
           if (callbacks.onRefreshBrowser) {
@@ -472,9 +556,12 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
           dirty = true;
         } else if (playMode) {
           if (callbacks.onPlayFile && callbacks.onPlayFile(pick.path)) {
+            pushBackHistory(BrowserState::HistoryActionType::PlayFile,
+                            browser.dir, pick.path);
             dirty = true;
           }
         } else {
+          clearForwardHistory();
           if (callbacks.onRenderFile) {
             callbacks.onRenderFile(pick.path);
           }
@@ -567,6 +654,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       const auto& crumb =
           breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
       if (browser.dir != crumb.path) {
+        pushBackHistory(BrowserState::HistoryActionType::EnterDirectory,
+                        browser.dir, crumb.path);
         browser.dir = crumb.path;
         browser.selected = 0;
         if (callbacks.onRefreshBrowser) {
@@ -613,6 +702,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
             dirty = true;
             return;
           case ActionStripItem::Options:
+            clearForwardHistory();
             if (callbacks.onToggleOptions) callbacks.onToggleOptions();
             dirty = true;
             return;
@@ -691,6 +781,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       }
       const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
       if (pick.isDir) {
+        pushBackHistory(BrowserState::HistoryActionType::EnterDirectory,
+                        browser.dir, pick.path);
         browser.dir = pick.path;
         browser.selected = 0;
         if (callbacks.onRefreshBrowser) {
@@ -700,9 +792,12 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         dirty = true;
       } else if (playMode) {
         if (callbacks.onPlayFile && callbacks.onPlayFile(pick.path)) {
+          pushBackHistory(BrowserState::HistoryActionType::PlayFile, browser.dir,
+                          pick.path);
           dirty = true;
         }
       } else {
+        clearForwardHistory();
         if (callbacks.onRenderFile) {
           callbacks.onRenderFile(pick.path);
         }
