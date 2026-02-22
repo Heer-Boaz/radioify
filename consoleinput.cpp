@@ -6,18 +6,9 @@
 #include "optionsbrowser.h"
 
 bool ConsoleInput::hasInputFocus() const {
-  if (!focusActive_) return false;
-  HWND console = GetConsoleWindow();
-  HWND fg = GetForegroundWindow();
-  if (!console || !fg) return focusActive_;
-  if (fg == console || IsChild(console, fg) || IsChild(fg, console)) {
-    return true;
-  }
-  // Pseudoconsole hosts may not expose a direct console HWND relation.
-  if (!IsWindowVisible(console)) {
-    return focusActive_;
-  }
-  return false;
+  // Trust console focus events for pseudoconsole hosts (Windows Terminal,
+  // ConPTY, etc.) where foreground-window ownership checks are unreliable.
+  return focusActive_;
 }
 
 void ConsoleInput::init() {
@@ -87,6 +78,22 @@ bool ConsoleInput::poll(InputEvent& out) {
     }
     if (rec.EventType == MOUSE_EVENT) {
       const auto& mev = rec.Event.MouseEvent;
+      if (mev.dwEventFlags == 0) {
+        DWORD sideMask = FROM_LEFT_2ND_BUTTON_PRESSED |
+                         FROM_LEFT_3RD_BUTTON_PRESSED |
+                         FROM_LEFT_4TH_BUTTON_PRESSED;
+        if ((mev.dwButtonState & sideMask) != 0) {
+          out.type = InputEvent::Type::Key;
+          if ((mev.dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) != 0) {
+            out.key.vk = VK_BROWSER_BACK;
+          } else {
+            out.key.vk = VK_BROWSER_FORWARD;
+          }
+          out.key.ch = 0;
+          out.key.control = mev.dwControlKeyState;
+          return true;
+        }
+      }
       out.type = InputEvent::Type::Mouse;
       out.mouse.pos = mev.dwMousePosition;
       out.mouse.buttonState = mev.dwButtonState;
@@ -416,6 +423,10 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
 
   if (ev.type == InputEvent::Type::Key) {
     const KeyEvent& key = ev.key;
+    bool browserBackKey =
+        (key.vk == VK_BROWSER_BACK) || (key.vk == VK_BACK && key.ch == 0);
+    bool browserForwardKey = key.vk == VK_BROWSER_FORWARD;
+    bool keyboardBackspace = key.vk == VK_BACK && key.ch != 0;
     const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
     const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
     const DWORD shiftMask = SHIFT_PRESSED;
@@ -436,7 +447,15 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         dirty = true;
         return;
       }
-      if (key.vk == VK_BACK) {
+      if (browserBackKey) {
+        undoBrowserBack();
+        return;
+      }
+      if (browserForwardKey) {
+        redoBrowserForward();
+        return;
+      }
+      if (keyboardBackspace) {
         if (!browser.filter.empty()) {
           browser.filter.pop_back();
           if (callbacks.onRefreshBrowser)
@@ -463,11 +482,11 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       dirty = true;
       return;
     }
-    if (key.vk == VK_BROWSER_BACK) {
+    if (browserBackKey) {
       undoBrowserBack();
       return;
     }
-    if (key.vk == VK_BROWSER_FORWARD) {
+    if (browserForwardKey) {
       redoBrowserForward();
       return;
     }
@@ -509,7 +528,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       }
       return;
     }
-    if (key.vk == VK_BACK) {
+    if (keyboardBackspace) {
       clearForwardHistory();
       if (optionsBrowserIsActive(browser)) {
         if (optionsBrowserNavigateUp(browser)) {
