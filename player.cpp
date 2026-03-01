@@ -1127,8 +1127,7 @@ bool initVideoDecoder(const DemuxContext& demux, bool preferHardware,
   if (!usingSharedDevice) {
     clampTargetSize(out->targetW, out->targetH);
   } else if (out->rotationQuarterTurns != 0) {
-    // Rotated shared-device streams are processed through the CPU NV12 path,
-    // which requires even dimensions.
+    // Shared-device playback rotates in GPU; keep fallback targets even.
     normalizeEvenTargetSize(out->targetW, out->targetH);
   }
   out->fullRange = mapFullRange(ctx->color_range);
@@ -1333,8 +1332,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
 
   const int rotationTurns =
       normalizeQuarterTurns(ctx->rotationQuarterTurns);
-  bool canKeepOnGpu =
-      keepOnGpu && src->format == AV_PIX_FMT_D3D11 && rotationTurns == 0;
+  bool canKeepOnGpu = keepOnGpu && src->format == AV_PIX_FMT_D3D11;
   std::shared_ptr<AVFrame> gpuFrameRef;
   if (canKeepOnGpu) {
     gpuFrameRef = frameRef(src);
@@ -1351,6 +1349,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
   out.fullRange = ctx->fullRange;
   out.yuvMatrix = frameMatrix;
   out.yuvTransfer = frameTransfer;
+  out.rotationQuarterTurns = 0;
 
   if (!decodePixels) {
     out.format = VideoPixelFormat::Unknown;
@@ -1373,6 +1372,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
     out.hwTexture = texture;
     out.hwTextureArrayIndex = static_cast<int>(arrayIndex);
     out.hwFrameRef = std::move(gpuFrameRef);
+    out.rotationQuarterTurns = rotationTurns;
     out.stride = 0;
     out.planeHeight = 0;
     out.yuv.clear();

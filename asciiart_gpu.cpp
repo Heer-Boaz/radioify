@@ -266,6 +266,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         cb->bitDepth = is10Bit ? 10u : 8u;
         cb->yuvMatrix = static_cast<uint32_t>(yuvMatrix);
         cb->yuvTransfer = static_cast<uint32_t>(yuvTransfer);
+        cb->rotationQuarterTurns = 0;
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
@@ -501,6 +502,7 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         cb->bitDepth = 8;
         cb->yuvMatrix = static_cast<uint32_t>(YuvMatrix::Bt709);
         cb->yuvTransfer = static_cast<uint32_t>(YuvTransfer::Sdr);
+        cb->rotationQuarterTurns = 0;
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
@@ -682,6 +684,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
         cb->bitDepth = is10Bit ? 10u : 8u;
         cb->yuvMatrix = static_cast<uint32_t>(yuvMatrix);
         cb->yuvTransfer = static_cast<uint32_t>(yuvTransfer);
+        cb->rotationQuarterTurns = 0;
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
@@ -843,6 +846,8 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
             cb->bitDepth = static_cast<uint32_t>(cache.GetBitDepth());
             cb->yuvMatrix = static_cast<uint32_t>(cache.GetMatrix());
             cb->yuvTransfer = static_cast<uint32_t>(cache.GetTransfer());
+            cb->rotationQuarterTurns =
+                static_cast<uint32_t>(cache.GetRotationQuarterTurns() & 3);
             m_context->Unmap(m_constantBuffer.Get(), 0);
         }
 
@@ -910,6 +915,8 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
             cb->bitDepth = 8;
             cb->yuvMatrix = static_cast<uint32_t>(YuvMatrix::Bt709);
             cb->yuvTransfer = static_cast<uint32_t>(YuvTransfer::Sdr);
+            cb->rotationQuarterTurns =
+                static_cast<uint32_t>(cache.GetRotationQuarterTurns() & 3);
             m_context->Unmap(m_constantBuffer.Get(), 0);
         }
 

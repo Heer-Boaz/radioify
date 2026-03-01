@@ -32,6 +32,7 @@ struct VideoFrame {
   int height = 0;
   int64_t timestamp100ns = 0;
   VideoPixelFormat format = VideoPixelFormat::Unknown;
+  int rotationQuarterTurns = 0;
   int stride = 0;
   int planeHeight = 0;
   bool fullRange = true;

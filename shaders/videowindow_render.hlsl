@@ -16,7 +16,7 @@ cbuffer Constants : register(b0) {
     uint uiPaused;
     uint uiHasRGBA;
     uint uiVolPct;
-    uint uiPad0;
+    uint uiRotationQuarterTurns;
     float uiTextTop;
     float uiTextHeight;
     float uiTextLeft;
@@ -36,6 +36,14 @@ PS_INPUT VS(uint vid : SV_VertexID) {
     output.tex = float2(vid & 1, vid >> 1);
     output.pos = float4(output.tex * float2(2, -2) + float2(-1, 1), 0, 1);
     return output;
+}
+
+float2 RotateInputUV(float2 uv) {
+    uint turns = uiRotationQuarterTurns & 3u;
+    if (turns == 1u) return float2(uv.y, 1.0f - uv.x);
+    if (turns == 2u) return float2(1.0f - uv.x, 1.0f - uv.y);
+    if (turns == 3u) return float2(1.0f - uv.y, uv.x);
+    return uv;
 }
 
 Texture2D texY : register(t0);
@@ -106,13 +114,14 @@ float3 ApplyHdrToSdr(float3 v) {
 }
 
 float4 PS(PS_INPUT input) : SV_Target {
+    float2 srcUv = RotateInputUV(input.tex);
     if (uiHasRGBA != 0) {
-        float4 c = texRGBA.Sample(sam, input.tex);
+        float4 c = texRGBA.Sample(sam, srcUv);
         return float4(saturate(c.rgb), 1.0);
     }
 
-    float y = ExpandYNorm(texY.Sample(sam, input.tex).r);
-    float2 uv = ExpandUV(texUV.Sample(sam, input.tex).rg);
+    float y = ExpandYNorm(texY.Sample(sam, srcUv).r);
+    float2 uv = ExpandUV(texUV.Sample(sam, srcUv).rg);
     
     float r, g, b;
     if (yuvMatrix == 2) { r = y + 1.4746 * uv.y; g = y - 0.16455 * uv.x - 0.57135 * uv.y; b = y + 1.8814 * uv.x; }

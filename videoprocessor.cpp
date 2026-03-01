@@ -37,6 +37,12 @@ static inline std::string thread_id_str() {
     std::ostringstream ss; ss << std::this_thread::get_id(); return ss.str();
 }
 
+static int normalizeQuarterTurns(int quarterTurns) {
+    quarterTurns %= 4;
+    if (quarterTurns < 0) quarterTurns += 4;
+    return quarterTurns;
+}
+
 VideoViewport calculateViewport(int windowW, int windowH, int videoW, int videoH) {
     if (windowW <= 0 || windowH <= 0 || videoW <= 0 || videoH <= 0) {
         return { 0.0f, 0.0f, static_cast<float>(windowW), static_cast<float>(windowH) };
@@ -183,7 +189,8 @@ void GpuVideoFrameCache::SignalFrameLatencyFence(ID3D11DeviceContext* context) {
 
 bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* context,
                                 ID3D11Texture2D* texture, int arrayIndex, int width, int height,
-                                bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth) {
+                                bool fullRange, YuvMatrix matrix, YuvTransfer transfer,
+                                int bitDepth, int rotationQuarterTurns) {
     if (!texture || !device || !context) return false;
 
     using namespace std::chrono;
@@ -207,6 +214,7 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
 
         m_width = width;
         m_height = height;
+        m_rotationQuarterTurns = normalizeQuarterTurns(rotationQuarterTurns);
         m_bitDepth = bitDepth;
         m_fullRange = fullRange;
         m_matrix = matrix;
@@ -267,6 +275,7 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
 
         m_width = width;
         m_height = height;
+        m_rotationQuarterTurns = normalizeQuarterTurns(rotationQuarterTurns);
 
         D3D11_BOX srcBox;
         srcBox.left = 0; srcBox.top = 0; srcBox.front = 0;
@@ -314,7 +323,8 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
 }
 
 bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* context,
-                                const uint8_t* rgba, int stride, int width, int height) {
+                                const uint8_t* rgba, int stride, int width, int height,
+                                int rotationQuarterTurns) {
     if (!device || !context || !rgba) return false;
     using namespace std::chrono;
     auto t0_total = steady_clock::now();
@@ -343,6 +353,7 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
 #endif
     m_width = width;
     m_height = height;
+    m_rotationQuarterTurns = normalizeQuarterTurns(rotationQuarterTurns);
     m_format = CacheFormat::Rgba;
     m_activeIndex = writeIndex;
     m_writeIndex = (writeIndex + 1) % kFrameBufferCount;
@@ -353,7 +364,8 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
 
 bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* context,
                                     const uint8_t* yuv, int stride, int planeHeight, int width, int height,
-                                    bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth) {
+                                    bool fullRange, YuvMatrix matrix, YuvTransfer transfer,
+                                    int bitDepth, int rotationQuarterTurns) {
     if (!device || !context || !yuv) return false;
     using namespace std::chrono;
     auto t0_total = steady_clock::now();
@@ -423,6 +435,7 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
 
     m_width = width;
     m_height = height;
+    m_rotationQuarterTurns = normalizeQuarterTurns(rotationQuarterTurns);
     m_fullRange = fullRange;
     m_matrix = matrix;
     m_transfer = transfer;
@@ -683,6 +696,13 @@ void GpuVideoFrameCache::Reset() {
     }
     m_activeIndex = 0;
     m_writeIndex = 0;
+    m_width = 0;
+    m_height = 0;
+    m_bitDepth = 8;
+    m_fullRange = false;
+    m_matrix = YuvMatrix::Bt709;
+    m_transfer = YuvTransfer::Sdr;
+    m_rotationQuarterTurns = 0;
     m_format = CacheFormat::None;
     ResetFrameLatencyFence();
 }

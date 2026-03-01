@@ -10,7 +10,8 @@ cbuffer Constants : register(b0) {
     uint bitDepth;
     uint yuvMatrix;
     uint yuvTransfer;
-    uint padding[2];
+    uint rotationQuarterTurns;
+    uint padding;
 };
 
 #ifdef NV12_INPUT
@@ -211,12 +212,21 @@ float3 ApplyHdrToSdr(float3 v) {
     return LinearToSrgb(v);
 }
 
+float2 RotateInputUV(float2 uv) {
+    uint turns = rotationQuarterTurns & 3u;
+    if (turns == 1u) return float2(uv.y, 1.0f - uv.x);
+    if (turns == 2u) return float2(1.0f - uv.x, 1.0f - uv.y);
+    if (turns == 3u) return float2(1.0f - uv.y, uv.x);
+    return uv;
+}
+
 float SampleLumaRaw(float2 uv, SamplerState s) {
+    float2 srcUv = RotateInputUV(uv);
 #ifdef NV12_INPUT
-    float yNorm = TextureY.SampleLevel(s, uv, 0);
+    float yNorm = TextureY.SampleLevel(s, srcUv, 0);
     return ExpandYNorm(yNorm) * 255.0f;
 #else
-    return GetLuma(InputTexture.SampleLevel(s, uv, 0).rgb);
+    return GetLuma(InputTexture.SampleLevel(s, srcUv, 0).rgb);
 #endif
 }
 
@@ -273,10 +283,11 @@ float GetInkLevelFromLum(float lum) {
 }
 
 float4 SampleInput(float2 uv) {
+    float2 srcUv = RotateInputUV(uv);
     float4 color;
 #ifdef NV12_INPUT
-    float y = ExpandYNorm(TextureY.SampleLevel(LinearSampler, uv, 0));
-    float2 uv_val = ExpandUV(TextureUV.SampleLevel(LinearSampler, uv, 0));
+    float y = ExpandYNorm(TextureY.SampleLevel(LinearSampler, srcUv, 0));
+    float2 uv_val = ExpandUV(TextureUV.SampleLevel(LinearSampler, srcUv, 0));
 
     float r = 0.0f;
     float g = 0.0f;
@@ -296,7 +307,7 @@ float4 SampleInput(float2 uv) {
     }
     color = float4(r, g, b, 1.0);
 #else
-    color = InputTexture.SampleLevel(LinearSampler, uv, 0);
+    color = InputTexture.SampleLevel(LinearSampler, srcUv, 0);
 #endif
 
     float3 rgb = color.rgb;

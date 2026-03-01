@@ -541,8 +541,7 @@ struct VideoDecoder::Impl {
     }
 
     const int rotationTurns = normalizeQuarterTurns(rotationQuarterTurns);
-    const bool canKeepOnGpu =
-        keepOnGpu && src->format == AV_PIX_FMT_D3D11 && rotationTurns == 0;
+    const bool canKeepOnGpu = keepOnGpu && src->format == AV_PIX_FMT_D3D11;
     int outWidth = canKeepOnGpu ? src->width : targetW;
     int outHeight = canKeepOnGpu ? src->height : targetH;
     
@@ -552,6 +551,7 @@ struct VideoDecoder::Impl {
     out.fullRange = fullRange;
     out.yuvMatrix = frameMatrix;
     out.yuvTransfer = frameTransfer;
+    out.rotationQuarterTurns = 0;
     out.hwTexture.Reset();
     out.hwTextureArrayIndex = 0;
     out.hwFrameRef.reset();
@@ -569,7 +569,6 @@ struct VideoDecoder::Impl {
       return true;
     }
     // Zero-copy GPU path: pass the texture directly without CPU transfer.
-    // Rotated streams need a software transform first.
     if (canKeepOnGpu) {
       // D3D11VA frames have texture in data[0] and array index in data[1]
       auto* texture = reinterpret_cast<ID3D11Texture2D*>(src->data[0]);
@@ -587,6 +586,7 @@ struct VideoDecoder::Impl {
       out.hwTextureArrayIndex = static_cast<int>(arrayIndex);
       out.hwFrameRef =
           std::shared_ptr<AVFrame>(copy, [](AVFrame* f) { av_frame_free(&f); });
+      out.rotationQuarterTurns = rotationTurns;
       out.stride = 0;
       out.planeHeight = 0;
       out.yuv.clear();
@@ -992,7 +992,7 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
   impl->targetH = impl->height;
   // Don't clamp for shared device mode - use native resolution
   if (impl->rotationQuarterTurns != 0) {
-    // Rotated shared-device streams are processed through the CPU NV12 path.
+    // Shared-device playback rotates in GPU; keep fallback targets even.
     normalizeEvenTargetSize(impl->targetW, impl->targetH);
   }
   impl->fullRange = mapFullRange(ctx->color_range);
@@ -1112,15 +1112,12 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
 
       AVFrame* src = impl_->lastFrame;
       if (src->format == AV_PIX_FMT_D3D11 && decodePixels) {
-        // Zero-copy path: keep frame on GPU when using shared device and
-        // no orientation transform is needed.
-        if (impl_->useSharedDevice &&
-            normalizeQuarterTurns(impl_->rotationQuarterTurns) == 0) {
+        // Zero-copy path: keep frame on GPU when using shared device.
+        if (impl_->useSharedDevice) {
           return impl_->emitFrame(out, info, decodePixels, src, true);
         }
 
-        // Transfer to CPU for standard path, or when rotation needs to be
-        // applied in software.
+        // Transfer to CPU for standard fallback path.
         av_frame_unref(impl_->scratch);
         if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
           // Try one more time with a fresh unref.
@@ -1204,9 +1201,8 @@ bool VideoDecoder::redecodeLastFrame(VideoFrame& out) {
 
   AVFrame* src = impl_->lastFrame;
   if (src->format == AV_PIX_FMT_D3D11) {
-    // Zero-copy path: directly use the GPU frame only if no rotation is needed.
-    if (impl_->useSharedDevice &&
-        normalizeQuarterTurns(impl_->rotationQuarterTurns) == 0) {
+    // Zero-copy path: directly use the GPU frame in shared-device mode.
+    if (impl_->useSharedDevice) {
         return impl_->emitFrame(out, nullptr, true, src, true);
     }
 

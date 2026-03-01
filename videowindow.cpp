@@ -42,7 +42,7 @@ namespace {
         uint32_t hasRGBA;
 
         uint32_t volPct;
-        uint32_t pad0;
+        uint32_t rotationQuarterTurns;
         float textTop;
         float textHeight;
 
@@ -1097,8 +1097,8 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     device->GetImmediateContext(&context);
     if (!context || !m_constantBuffer || !m_renderTargetView) return;
 
-    m_videoWidth = frameCache.GetWidth();
-    m_videoHeight = frameCache.GetHeight();
+    m_videoWidth = frameCache.GetDisplayWidth();
+    m_videoHeight = frameCache.GetDisplayHeight();
 
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present frame w=%d h=%d ui.displaySec=%.3f\n", now_ms().c_str(), thread_id_str().c_str(), m_videoWidth, m_videoHeight, ui.displaySec);
@@ -1129,6 +1129,8 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
             sc.yuvTransfer = (uint32_t)frameCache.GetTransfer();
             sc.bitDepth = (uint32_t)frameCache.GetBitDepth();
             sc.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
+            sc.rotationQuarterTurns =
+                (uint32_t)(frameCache.GetRotationQuarterTurns() & 3);
             std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }
@@ -1406,6 +1408,9 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
     device->GetImmediateContext(&context);
     if (!context || !m_renderTargetView || !m_constantBuffer) return;
 
+    m_videoWidth = frameCache.GetDisplayWidth();
+    m_videoHeight = frameCache.GetDisplayHeight();
+
     float clearColor[4] = { 0, 0, 0, 1 };
     context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
     context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
@@ -1432,6 +1437,8 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
             sc.yuvTransfer = (uint32_t)frameCache.GetTransfer();
             sc.bitDepth = (uint32_t)frameCache.GetBitDepth();
             sc.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
+            sc.rotationQuarterTurns =
+                (uint32_t)(frameCache.GetRotationQuarterTurns() & 3);
             std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }

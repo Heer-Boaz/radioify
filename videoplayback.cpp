@@ -954,7 +954,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                   device, context.Get(), localFrame.hwTexture.Get(),
                   localFrame.hwTextureArrayIndex, localFrame.width,
                   localFrame.height, localFrame.fullRange, localFrame.yuvMatrix,
-                  localFrame.yuvTransfer, is10Bit ? 10 : 8);
+                  localFrame.yuvTransfer, is10Bit ? 10 : 8,
+                  localFrame.rotationQuarterTurns);
               if (!updated) {
                 frameChanged = false;
               }
@@ -1129,8 +1130,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         bool artOk = false;
         try {
           auto [outW, outH] =
-              computeAsciiOutputSize(width, maxHeight, frame->width,
-                                     frame->height);
+              computeAsciiOutputSize(
+                  width, maxHeight,
+                  ((frame->rotationQuarterTurns & 1) != 0) ? frame->height
+                                                            : frame->width,
+                  ((frame->rotationQuarterTurns & 1) != 0) ? frame->width
+                                                            : frame->height);
           art.width = outW;
           art.height = outH;
 
@@ -1175,7 +1180,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                   device, context.Get(), frame->hwTexture.Get(),
                   frame->hwTextureArrayIndex, frame->width, frame->height,
                   frame->fullRange, frame->yuvMatrix, frame->yuvTransfer,
-                  is10Bit ? 10 : 8);
+                  is10Bit ? 10 : 8, frame->rotationQuarterTurns);
             } else if (frame->format == VideoPixelFormat::NV12 ||
                        frame->format == VideoPixelFormat::P010) {
               if (frame->stride <= 0 || frame->planeHeight <= 0 ||
@@ -1200,7 +1205,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                   device, context.Get(), frame->yuv.data(), frame->stride,
                   frame->planeHeight, frame->width, frame->height,
                   frame->fullRange, frame->yuvMatrix, frame->yuvTransfer,
-                  is10Bit ? 10 : 8);
+                  is10Bit ? 10 : 8, frame->rotationQuarterTurns);
             } else if (frame->format == VideoPixelFormat::RGB32 ||
                        frame->format == VideoPixelFormat::ARGB32) {
               if (frame->rgba.empty()) {
@@ -1218,7 +1223,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               }
               cacheUpdated = g_frameCache.Update(
                   device, context.Get(), frame->rgba.data(), stride, frame->width,
-                  frame->height);
+                  frame->height, frame->rotationQuarterTurns);
             } else {
               renderFailed = true;
               renderFailMessage = "Unsupported video frame format.";

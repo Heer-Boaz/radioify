@@ -27,16 +27,19 @@ public:
     // Update from an existing GPU texture
     bool Update(ID3D11Device* device, ID3D11DeviceContext* context,
                 ID3D11Texture2D* texture, int arrayIndex, int width, int height,
-                bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth);
+                bool fullRange, YuvMatrix matrix, YuvTransfer transfer,
+                int bitDepth, int rotationQuarterTurns = 0);
 
     // Update from an RGBA CPU buffer
     bool Update(ID3D11Device* device, ID3D11DeviceContext* context,
-                const uint8_t* rgba, int stride, int width, int height);
+                const uint8_t* rgba, int stride, int width, int height,
+                int rotationQuarterTurns = 0);
 
     // Update from an NV12/P010 CPU YUV buffer
     bool UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* context,
                     const uint8_t* yuv, int stride, int planeHeight, int width, int height,
-                    bool fullRange, YuvMatrix matrix, YuvTransfer transfer, int bitDepth);
+                    bool fullRange, YuvMatrix matrix, YuvTransfer transfer,
+                    int bitDepth, int rotationQuarterTurns = 0);
 
     void Reset();
     void MarkFrameInFlight(ID3D11DeviceContext* context);
@@ -62,6 +65,13 @@ public:
     bool IsRgba() const { return m_format == CacheFormat::Rgba; }
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
+    int GetRotationQuarterTurns() const { return m_rotationQuarterTurns; }
+    int GetDisplayWidth() const {
+        return ((m_rotationQuarterTurns & 1) != 0) ? m_height : m_width;
+    }
+    int GetDisplayHeight() const {
+        return ((m_rotationQuarterTurns & 1) != 0) ? m_width : m_height;
+    }
     bool IsFullRange() const { return m_fullRange; }
     YuvMatrix GetMatrix() const { return m_matrix; }
     YuvTransfer GetTransfer() const { return m_transfer; }
@@ -95,6 +105,7 @@ private:
 
     int m_width = 0;
     int m_height = 0;
+    int m_rotationQuarterTurns = 0;
     bool m_fullRange = false;
     YuvMatrix m_matrix = YuvMatrix::Bt709;
     YuvTransfer m_transfer = YuvTransfer::Sdr;

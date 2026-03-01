@@ -16,7 +16,7 @@ cbuffer Constants : register(b0) {
     uint uiPaused;
     uint uiHasRGBA;
     uint uiVolPct;
-    uint uiPad0;
+    uint uiRotationQuarterTurns;
     float uiTextTop;
     float uiTextHeight;
     float uiTextLeft;

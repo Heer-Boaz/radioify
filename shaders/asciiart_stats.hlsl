@@ -10,7 +10,8 @@ cbuffer Constants : register(b0) {
     uint bitDepth;
     uint yuvMatrix;
     uint yuvTransfer;
-    uint padding[2];
+    uint rotationQuarterTurns;
+    uint padding;
 };
 
 #if defined(NV12_INPUT)

@@ -106,7 +106,8 @@ private:
         uint32_t bitDepth;
         uint32_t yuvMatrix;
         uint32_t yuvTransfer;
-        uint32_t padding[2];
+        uint32_t rotationQuarterTurns;
+        uint32_t padding;
     };
 
     int m_currentWidth = 0;
