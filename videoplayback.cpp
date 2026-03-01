@@ -1122,9 +1122,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (enableAscii && !windowEnabled) {
       if (allowFrame && (frameChanged || clearHistory || sizeChanged)) {
         if (frame->width <= 0 || frame->height <= 0) {
-          renderFailed = true;
-          renderFailMessage = "Invalid video frame size.";
-          renderFailDetail = "";
+          appendVideoWarning("Skipping video frame with invalid dimensions.");
+          haveFrame = false;
           return;
         }
         bool artOk = false;
@@ -1266,7 +1265,22 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                            fmt + " " + detail);
               rendererLogged = true;
             }
-          } else if (allowAsciiCpuFallback) {
+          } else if (allowAsciiCpuFallback ||
+                     frame->format == VideoPixelFormat::NV12 ||
+                     frame->format == VideoPixelFormat::P010 ||
+                     frame->format == VideoPixelFormat::RGB32 ||
+                     frame->format == VideoPixelFormat::ARGB32) {
+            if (!cacheUpdated) {
+              appendVideoWarning(
+                  "GPU cache update failed; falling back to CPU ASCII path.");
+            } else if (!gpuErr.empty()) {
+              appendVideoWarning(
+                  "GPU ASCII render failed; falling back to CPU path: " +
+                  gpuErr);
+            } else {
+              appendVideoWarning(
+                  "GPU ASCII render failed; falling back to CPU path.");
+            }
             if (frame->format == VideoPixelFormat::NV12 ||
                 frame->format == VideoPixelFormat::P010) {
               bool is10Bit = frame->format == VideoPixelFormat::P010;
@@ -1314,9 +1328,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     } else {
       if (allowFrame) {
         if (frame->width <= 0 || frame->height <= 0) {
-          renderFailed = true;
-          renderFailMessage = "Invalid video frame size.";
-          renderFailDetail = "";
+          appendVideoWarning("Skipping video frame with invalid dimensions.");
+          haveFrame = false;
           return;
         }
         cachedWidth = width;

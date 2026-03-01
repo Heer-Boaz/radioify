@@ -18,7 +18,8 @@ std::string toLower(std::string value) {
 bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4" || ext == ".kss" || ext == ".nsf" ||
+         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".kss" ||
+         ext == ".nsf" ||
 #if !RADIOIFY_DISABLE_GSF_GPL
          ext == ".gsf" || ext == ".minigsf" ||
 #endif
@@ -33,7 +34,7 @@ void validateInputFile(const std::filesystem::path& p) {
   if (std::filesystem::is_directory(p)) die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
     die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .kss, .nsf, "
+        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .mov, .kss, .nsf, "
 #if !RADIOIFY_DISABLE_GSF_GPL
         ".gsf, .minigsf, "
 #endif

@@ -21,6 +21,7 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/display.h>
 #include <libavutil/version.h>
 #include <libswscale/swscale.h>
 }
@@ -31,6 +32,7 @@ extern "C" {
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -197,6 +199,160 @@ void clampTargetSize(int& width, int& height) {
   height = std::max(4, height);
 }
 
+void normalizeEvenTargetSize(int& width, int& height) {
+  width = std::max(2, width);
+  height = std::max(2, height);
+  if (width & 1) ++width;
+  if (height & 1) ++height;
+}
+
+int normalizeQuarterTurns(int quarterTurns) {
+  quarterTurns %= 4;
+  if (quarterTurns < 0) quarterTurns += 4;
+  return quarterTurns;
+}
+
+void applyRotationToDimensions(int inWidth, int inHeight, int quarterTurns,
+                               int* outWidth, int* outHeight) {
+  if (!outWidth || !outHeight) return;
+  quarterTurns = normalizeQuarterTurns(quarterTurns);
+  if ((quarterTurns & 1) != 0) {
+    *outWidth = inHeight;
+    *outHeight = inWidth;
+  } else {
+    *outWidth = inWidth;
+    *outHeight = inHeight;
+  }
+}
+
+int streamRotationQuarterTurns(AVStream* stream) {
+  if (!stream) return 0;
+
+  double theta = 0.0;
+  AVDictionaryEntry* rotateTag =
+      av_dict_get(stream->metadata, "rotate", nullptr, 0);
+  if (rotateTag && rotateTag->value && rotateTag->value[0] != '\0') {
+    theta = std::strtod(rotateTag->value, nullptr);
+  }
+
+  size_t displayMatrixSize = 0;
+  const uint8_t* displayMatrix =
+      av_stream_get_side_data(stream, AV_PKT_DATA_DISPLAYMATRIX,
+                              &displayMatrixSize);
+  if (displayMatrix &&
+      displayMatrixSize >= sizeof(int32_t) * 9u) {
+    // FFmpeg stores matrix rotation in the opposite sign for display usage.
+    const double matrixTheta = -av_display_rotation_get(
+        reinterpret_cast<const int32_t*>(displayMatrix));
+    if (std::isfinite(matrixTheta)) {
+      theta = matrixTheta;
+    }
+  }
+
+  if (!std::isfinite(theta)) return 0;
+  theta = std::fmod(theta, 360.0);
+  if (theta < 0.0) theta += 360.0;
+
+  const double snapped = std::round(theta / 90.0) * 90.0;
+  if (std::fabs(theta - snapped) > 2.0) {
+    return 0;
+  }
+  theta = snapped;
+
+  const int quarterTurns = static_cast<int>(std::lround(theta / 90.0));
+  return normalizeQuarterTurns(quarterTurns);
+}
+
+bool rotateNv12(const uint8_t* src, int srcStride, int srcPlaneHeight, int srcW,
+                int srcH, int quarterTurns, uint8_t* dst, int dstStride,
+                int dstPlaneHeight, int dstW, int dstH) {
+  if (!src || !dst) return false;
+  if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return false;
+  if (srcStride < srcW || dstStride < dstW) return false;
+
+  quarterTurns = normalizeQuarterTurns(quarterTurns);
+  int expectedW = 0;
+  int expectedH = 0;
+  applyRotationToDimensions(srcW, srcH, quarterTurns, &expectedW, &expectedH);
+  if (dstW != expectedW || dstH != expectedH) return false;
+
+  const uint8_t* srcY = src;
+  const uint8_t* srcUV =
+      src + static_cast<size_t>(srcStride) * static_cast<size_t>(srcPlaneHeight);
+  uint8_t* dstY = dst;
+  uint8_t* dstUV =
+      dst + static_cast<size_t>(dstStride) * static_cast<size_t>(dstPlaneHeight);
+
+  if (quarterTurns == 0) {
+    for (int y = 0; y < srcH; ++y) {
+      std::memcpy(dstY + y * dstStride, srcY + y * srcStride,
+                  static_cast<size_t>(srcW));
+    }
+    const int srcChromaH = srcH / 2;
+    for (int y = 0; y < srcChromaH; ++y) {
+      std::memcpy(dstUV + y * dstStride, srcUV + y * srcStride,
+                  static_cast<size_t>(srcW));
+    }
+    return true;
+  }
+
+  for (int y = 0; y < dstH; ++y) {
+    for (int x = 0; x < dstW; ++x) {
+      int sx = 0;
+      int sy = 0;
+      switch (quarterTurns) {
+        case 1:  // 90 CW
+          sx = y;
+          sy = srcH - 1 - x;
+          break;
+        case 2:  // 180
+          sx = srcW - 1 - x;
+          sy = srcH - 1 - y;
+          break;
+        case 3:  // 270 CW
+          sx = srcW - 1 - y;
+          sy = x;
+          break;
+        default:
+          return false;
+      }
+      dstY[y * dstStride + x] = srcY[sy * srcStride + sx];
+    }
+  }
+
+  const int srcChromaW = srcW / 2;
+  const int srcChromaH = srcH / 2;
+  const int dstChromaW = dstW / 2;
+  const int dstChromaH = dstH / 2;
+  for (int y = 0; y < dstChromaH; ++y) {
+    for (int x = 0; x < dstChromaW; ++x) {
+      int sx = 0;
+      int sy = 0;
+      switch (quarterTurns) {
+        case 1:  // 90 CW
+          sx = y;
+          sy = srcChromaH - 1 - x;
+          break;
+        case 2:  // 180
+          sx = srcChromaW - 1 - x;
+          sy = srcChromaH - 1 - y;
+          break;
+        case 3:  // 270 CW
+          sx = srcChromaW - 1 - y;
+          sy = x;
+          break;
+        default:
+          return false;
+      }
+      const uint8_t* srcPx = srcUV + sy * srcStride + sx * 2;
+      uint8_t* dstPx = dstUV + y * dstStride + x * 2;
+      dstPx[0] = srcPx[0];
+      dstPx[1] = srcPx[1];
+    }
+  }
+  return true;
+}
+
 struct StreamSelectionResult {
   int index = -1;
   const AVCodec* codec = nullptr;
@@ -316,6 +472,7 @@ struct VideoDecoder::Impl {
   int height = 0;
   int targetW = 0;
   int targetH = 0;
+  int rotationQuarterTurns = 0;
   bool atEnd = false;
   bool eof = false;
   int64_t duration100ns = 0;
@@ -382,10 +539,12 @@ struct VideoDecoder::Impl {
                frameMatrix == YuvMatrix::Bt2020) {
       frameTransfer = YuvTransfer::Pq;
     }
-    
-    // For shared device mode, use native resolution (no CPU downscale)
-    int outWidth = useSharedDevice ? src->width : targetW;
-    int outHeight = useSharedDevice ? src->height : targetH;
+
+    const int rotationTurns = normalizeQuarterTurns(rotationQuarterTurns);
+    const bool canKeepOnGpu =
+        keepOnGpu && src->format == AV_PIX_FMT_D3D11 && rotationTurns == 0;
+    int outWidth = canKeepOnGpu ? src->width : targetW;
+    int outHeight = canKeepOnGpu ? src->height : targetH;
     
     out.width = outWidth;
     out.height = outHeight;
@@ -409,9 +568,9 @@ struct VideoDecoder::Impl {
       }
       return true;
     }
-    
-    // Zero-copy GPU path: pass the texture directly without CPU transfer
-    if (keepOnGpu && src->format == AV_PIX_FMT_D3D11) {
+    // Zero-copy GPU path: pass the texture directly without CPU transfer.
+    // Rotated streams need a software transform first.
+    if (canKeepOnGpu) {
       // D3D11VA frames have texture in data[0] and array index in data[1]
       auto* texture = reinterpret_cast<ID3D11Texture2D*>(src->data[0]);
       if (!texture) return false;
@@ -458,23 +617,49 @@ struct VideoDecoder::Impl {
     out.stride = stride;
     out.planeHeight = planeHeight;
 
-    uint8_t* yPlane = out.yuv.data();
-    uint8_t* uvPlane = yPlane + static_cast<size_t>(stride) *
-                                    static_cast<size_t>(planeHeight);
-    uint8_t* dstData[4] = {yPlane, uvPlane, nullptr, nullptr};
-    int dstLinesize[4] = {stride, stride, 0, 0};
+    int scaledW = dstW;
+    int scaledH = dstH;
+    if ((rotationTurns & 1) != 0) {
+      std::swap(scaledW, scaledH);
+    }
+    int scaledStride = std::max(2, scaledW);
+    if (scaledStride & 1) ++scaledStride;
+    int scaledPlaneHeight = scaledH;
+
+    std::vector<uint8_t> scaled;
+    uint8_t* scaledY = out.yuv.data();
+    uint8_t* scaledUV =
+        scaledY + static_cast<size_t>(stride) * static_cast<size_t>(planeHeight);
+    if (rotationTurns != 0) {
+      size_t scaledRequired = static_cast<size_t>(scaledStride) *
+                              static_cast<size_t>(scaledPlaneHeight) * 3u / 2u;
+      try {
+        scaled.resize(scaledRequired);
+      } catch (const std::bad_alloc&) {
+        atEnd = true;
+        return false;
+      }
+      scaledY = scaled.data();
+      scaledUV = scaledY + static_cast<size_t>(scaledStride) *
+                           static_cast<size_t>(scaledPlaneHeight);
+    }
+
+    uint8_t* dstData[4] = {scaledY, scaledUV, nullptr, nullptr};
+    int dstLinesize[4] = {scaledStride, scaledStride, 0, 0};
 
     AVPixelFormat srcFmt = static_cast<AVPixelFormat>(src->format);
-    if (srcFmt == AV_PIX_FMT_NV12 && src->width == dstW &&
-        src->height == dstH) {
-      for (int y = 0; y < dstH; ++y) {
-        std::memcpy(yPlane + y * stride, src->data[0] + y * src->linesize[0],
-                    static_cast<size_t>(dstW));
+    if (srcFmt == AV_PIX_FMT_NV12 && src->width == scaledW &&
+        src->height == scaledH) {
+      for (int y = 0; y < scaledH; ++y) {
+        std::memcpy(scaledY + y * scaledStride,
+                    src->data[0] + y * src->linesize[0],
+                    static_cast<size_t>(scaledW));
       }
-      int uvH = dstH / 2;
+      int uvH = scaledH / 2;
       for (int y = 0; y < uvH; ++y) {
-        std::memcpy(uvPlane + y * stride, src->data[1] + y * src->linesize[1],
-                    static_cast<size_t>(dstW));
+        std::memcpy(scaledUV + y * scaledStride,
+                    src->data[1] + y * src->linesize[1],
+                    static_cast<size_t>(scaledW));
       }
     } else {
       // Use point sampling for high-res content (like 4K) to avoid excessive CPU usage.
@@ -485,14 +670,23 @@ struct VideoDecoder::Impl {
       }
 
       sws = sws_getCachedContext(
-          sws, src->width, src->height, srcFmt, dstW, dstH, AV_PIX_FMT_NV12,
-          flags, nullptr, nullptr, nullptr);
+          sws, src->width, src->height, srcFmt, scaledW, scaledH,
+          AV_PIX_FMT_NV12, flags, nullptr, nullptr, nullptr);
       if (!sws) {
         atEnd = true;
         return false;
       }
       sws_scale(sws, src->data, src->linesize, 0, src->height, dstData,
                 dstLinesize);
+    }
+
+    if (rotationTurns != 0) {
+      if (!rotateNv12(scaled.data(), scaledStride, scaledPlaneHeight, scaledW,
+                      scaledH, rotationTurns, out.yuv.data(), stride,
+                      planeHeight, dstW, dstH)) {
+        atEnd = true;
+        return false;
+      }
     }
 
     if (info) {
@@ -612,8 +806,11 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   impl->packet = packet;
   impl->streamIndex = streamIndex;
   impl->timeBase = fmt->streams[streamIndex]->time_base;
-  impl->width = ctx->width;
-  impl->height = ctx->height;
+  impl->rotationQuarterTurns =
+      streamRotationQuarterTurns(fmt->streams[streamIndex]);
+  applyRotationToDimensions(ctx->width, ctx->height,
+                            impl->rotationQuarterTurns, &impl->width,
+                            &impl->height);
   impl->targetW = impl->width;
   impl->targetH = impl->height;
   clampTargetSize(impl->targetW, impl->targetH);
@@ -786,11 +983,18 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
   impl->packet = packet;
   impl->streamIndex = streamIndex;
   impl->timeBase = fmt->streams[streamIndex]->time_base;
-  impl->width = ctx->width;
-  impl->height = ctx->height;
+  impl->rotationQuarterTurns =
+      streamRotationQuarterTurns(fmt->streams[streamIndex]);
+  applyRotationToDimensions(ctx->width, ctx->height,
+                            impl->rotationQuarterTurns, &impl->width,
+                            &impl->height);
   impl->targetW = impl->width;
   impl->targetH = impl->height;
   // Don't clamp for shared device mode - use native resolution
+  if (impl->rotationQuarterTurns != 0) {
+    // Rotated shared-device streams are processed through the CPU NV12 path.
+    normalizeEvenTargetSize(impl->targetW, impl->targetH);
+  }
   impl->fullRange = mapFullRange(ctx->color_range);
   impl->yuvMatrix = mapColorMatrix(ctx->colorspace);
   impl->yuvTransfer = mapColorTransfer(ctx->color_trc);
@@ -908,12 +1112,15 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
 
       AVFrame* src = impl_->lastFrame;
       if (src->format == AV_PIX_FMT_D3D11 && decodePixels) {
-        // Zero-copy path: keep frame on GPU when using shared device.
-        if (impl_->useSharedDevice) {
+        // Zero-copy path: keep frame on GPU when using shared device and
+        // no orientation transform is needed.
+        if (impl_->useSharedDevice &&
+            normalizeQuarterTurns(impl_->rotationQuarterTurns) == 0) {
           return impl_->emitFrame(out, info, decodePixels, src, true);
         }
 
-        // Legacy path: transfer to CPU.
+        // Transfer to CPU for standard path, or when rotation needs to be
+        // applied in software.
         av_frame_unref(impl_->scratch);
         if (av_hwframe_transfer_data(impl_->scratch, src, 0) < 0) {
           // Try one more time with a fresh unref.
@@ -997,8 +1204,9 @@ bool VideoDecoder::redecodeLastFrame(VideoFrame& out) {
 
   AVFrame* src = impl_->lastFrame;
   if (src->format == AV_PIX_FMT_D3D11) {
-    // Zero-copy path: directly use the GPU frame if shared device is enabled
-    if (impl_->useSharedDevice) {
+    // Zero-copy path: directly use the GPU frame only if no rotation is needed.
+    if (impl_->useSharedDevice &&
+        normalizeQuarterTurns(impl_->rotationQuarterTurns) == 0) {
         return impl_->emitFrame(out, nullptr, true, src, true);
     }
 
@@ -1110,9 +1318,11 @@ bool probeVideoMetadata(const std::filesystem::path& path, VideoMetadata* out,
 
   AVStream* stream = fmt->streams[streamIndex];
   const AVCodecParameters* params = stream ? stream->codecpar : nullptr;
+  const int rotationQuarterTurns = streamRotationQuarterTurns(stream);
   if (params) {
-    out->width = params->width;
-    out->height = params->height;
+    applyRotationToDimensions(params->width, params->height,
+                              rotationQuarterTurns, &out->width,
+                              &out->height);
     out->bitRate = params->bit_rate;
     if (out->bitRate <= 0) out->bitRate = fmt->bit_rate;
 

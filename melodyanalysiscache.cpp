@@ -422,7 +422,7 @@ bool isMiniaudioExt(const std::filesystem::path& path) {
 
 bool isM4aExt(const std::filesystem::path& path) {
   const std::string ext = toLower(path.extension().string());
-  return ext == ".m4a" || ext == ".mp4" || ext == ".webm";
+  return ext == ".m4a" || ext == ".mp4" || ext == ".webm" || ext == ".mov";
 }
 
 bool isGmeExt(const std::filesystem::path& path) {

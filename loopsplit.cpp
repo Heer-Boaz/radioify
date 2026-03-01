@@ -35,7 +35,8 @@ std::string toLower(std::string value) {
 bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4" || ext == ".kss" || ext == ".nsf" ||
+         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".kss" ||
+         ext == ".nsf" ||
 #if !RADIOIFY_DISABLE_GSF_GPL
          ext == ".gsf" || ext == ".minigsf" ||
 #endif
@@ -47,7 +48,7 @@ bool isSupportedAudioExt(const std::filesystem::path& p) {
 
 bool isM4aExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".m4a" || ext == ".mp4" || ext == ".webm";
+  return ext == ".m4a" || ext == ".mp4" || ext == ".webm" || ext == ".mov";
 }
 
 bool isMiniaudioExt(const std::filesystem::path& p) {
