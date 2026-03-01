@@ -56,6 +56,7 @@ add_executable(radioify
   neuralpitch.cpp
   browsermeta.cpp
   consoleinput.cpp
+  ui_inputlogic.cpp
   consolescreen.cpp
   ffmpegaudio.cpp
   flacaudio.cpp
