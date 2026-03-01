@@ -1218,6 +1218,18 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
     if (!context || !m_constantBuffer) return;
+
+    // UI overlay is window-space: render it on the full client viewport,
+    // not the letterboxed video viewport.
+    D3D11_VIEWPORT overlayViewport = {
+        0.0f,
+        0.0f,
+        static_cast<float>(std::max(1, m_width)),
+        static_cast<float>(std::max(1, m_height)),
+        0.0f,
+        1.0f
+    };
+    context->RSSetViewports(1, &overlayViewport);
     
     context->PSSetShader(m_uiShader.Get(), NULL, 0);
     context->VSSetShader(m_vertexShader.Get(), NULL, 0);
