@@ -1093,6 +1093,25 @@ void ConsoleScreen::setAlwaysFullRedraw(bool enabled) {
 
 bool ConsoleScreen::fastOutput() const { return fastOutput_; }
 
+bool ConsoleScreen::snapshot(std::vector<ScreenCell>& outCells, int& outWidth,
+                             int& outHeight) const {
+  outWidth = width_;
+  outHeight = height_;
+  if (width_ <= 0 || height_ <= 0 || buffer_.empty()) {
+    outCells.clear();
+    return false;
+  }
+  outCells.resize(buffer_.size());
+  for (size_t i = 0; i < buffer_.size(); ++i) {
+    const Cell& src = buffer_[i];
+    ScreenCell& dst = outCells[i];
+    dst.ch = src.ch;
+    dst.fg = src.fg;
+    dst.bg = src.bg;
+  }
+  return true;
+}
+
 bool ConsoleScreen::writeOutput(const std::wstring& text) {
   if (out_ == INVALID_HANDLE_VALUE) return false;
   if (text.empty()) return true;

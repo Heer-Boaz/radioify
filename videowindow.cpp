@@ -1,13 +1,17 @@
 #include "videowindow.h"
 #include "timing_log.h"
 #include "gpu_shared.h"
+#include "videowindow_internal.h"
 #include <dxgi1_3.h>
+#include <windowsx.h>
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <mutex>
 #include <string>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include <chrono>
 #include <thread>
@@ -30,40 +34,6 @@ static inline std::string thread_id_str() {
 #pragma comment(lib, "dxgi.lib")
 
 namespace {
-    struct ShaderConstants {
-        uint32_t isFullRange;
-        uint32_t yuvMatrix;
-        uint32_t yuvTransfer;
-        uint32_t bitDepth;
-
-        float progress;
-        float overlayAlpha;
-        uint32_t isPaused;
-        uint32_t hasRGBA;
-
-        uint32_t volPct;
-        uint32_t rotationQuarterTurns;
-        float textTop;
-        float textHeight;
-
-        float textLeft;
-        float textWidth;
-        uint32_t pad1;
-        uint32_t pad2;
-
-        float subtitleTop;
-        float subtitleHeight;
-        float subtitleLeft;
-        float subtitleWidth;
-
-        float subtitleAlpha;
-        float pad3;
-        float pad4;
-        float pad5;
-    };
-
-    static_assert((sizeof(ShaderConstants) % 16) == 0, "ShaderConstants size must be 16-byte aligned");
-
     static std::string formatTimeDouble(double s) {
         if (!(s >= 0.0) || !std::isfinite(s)) return std::string("--:--");
         int total = static_cast<int>(std::llround(s));
@@ -139,7 +109,10 @@ namespace {
     }
 
     // Bitmap-font text rasterizer (5x7 glyphs) into BGRA pixels
-    static bool renderTextToBitmap(const std::string& utf8, int width, int height, std::vector<uint8_t>& outPixels) {
+    static bool renderTextToBitmap(const std::string& utf8, int width, int height,
+                                   std::vector<uint8_t>& outPixels,
+                                   bool centerAlign = true, int padX = 0,
+                                   int padY = 0) {
         outPixels.clear();
         if (width <= 0 || height <= 0) return false;
 
@@ -189,15 +162,19 @@ namespace {
         int totalTextWidth = maxChars * (glyphW + spacing) * scale;
 
         outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4, 0);
-        int startX = std::max(0, (width - totalTextWidth) / 2);
-        int startY = std::max(0, (height - totalTextHeight) / 2);
+        int startX =
+            centerAlign ? std::max(0, (width - totalTextWidth) / 2) : std::max(0, padX);
+        int startY =
+            centerAlign ? std::max(0, (height - totalTextHeight) / 2) : std::max(0, padY);
 
         for (int li = 0; li < lineCount; ++li) {
             const std::string& textLine = lines[li];
             int lineChars = static_cast<int>(textLine.size());
             if (lineChars == 0) continue;
             int lineWidth = lineChars * (glyphW + spacing) * scale;
-            int lineX = startX + std::max(0, (totalTextWidth - lineWidth) / 2);
+            int lineX =
+                centerAlign ? startX + std::max(0, (totalTextWidth - lineWidth) / 2)
+                            : startX;
             int lineY = startY + li * (glyphH + lineSpacing) * scale;
             for (int ci = 0; ci < lineChars; ++ci) {
                 char c = textLine[ci];
@@ -638,6 +615,8 @@ void VideoWindow::Cleanup() {
     // frame cache is now owned/managed externally
     m_textTexture.Reset();
     m_textSrv.Reset();
+    m_tuiTexture.Reset();
+    m_tuiSrv.Reset();
 }
 
 LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -735,47 +714,65 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             }
         }
 
+        auto queueWindowMouseEvent = [&](int x, int y, DWORD buttonState,
+                                         DWORD eventFlags) {
+            bool acceptAll = pThis->m_captureAllMouseInput;
+            bool inBottomBand =
+                pThis->m_height > 0 &&
+                y > static_cast<int>(std::round(pThis->m_height * 0.84));
+            if (!acceptAll && !inBottomBand) return;
+            InputEvent ev;
+            ev.type = InputEvent::Type::Mouse;
+            ev.mouse.pos.X = static_cast<SHORT>(x);
+            ev.mouse.pos.Y = static_cast<SHORT>(y);
+            ev.mouse.buttonState = buttonState;
+            ev.mouse.eventFlags = eventFlags;
+            ev.mouse.control = 0x80000000; // Custom flag for window-originated event
+            std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
+            pThis->m_inputQueue.push_back(ev);
+        };
+
         if (uMsg == WM_LBUTTONDOWN) {
             int x = LOWORD(lParam);
             int y = HIWORD(lParam);
-            // Mouse seeking in bottom area (like terminal)
-            if (pThis->m_height > 0 && y > static_cast<int>(pThis->m_height * 0.90)) {
-                InputEvent ev;
-                ev.type = InputEvent::Type::Mouse;
-                ev.mouse.pos.X = (SHORT)x;
-                ev.mouse.pos.Y = (SHORT)y;
-                ev.mouse.buttonState = FROM_LEFT_1ST_BUTTON_PRESSED;
-                ev.mouse.eventFlags = 0;
-                ev.mouse.control = 0x80000000; // Custom flag for window-originated event
-                std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
-                pThis->m_inputQueue.push_back(ev);
-            }
+            queueWindowMouseEvent(x, y, FROM_LEFT_1ST_BUTTON_PRESSED, 0);
+            return 0;
+        }
+
+        if (uMsg == WM_RBUTTONDOWN) {
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+            queueWindowMouseEvent(x, y, RIGHTMOST_BUTTON_PRESSED, 0);
             return 0;
         }
 
         if (uMsg == WM_MOUSEMOVE) {
             int x = LOWORD(lParam);
             int y = HIWORD(lParam);
-            bool leftPressed = (wParam & MK_LBUTTON) != 0;
-            // Enqueue hover/move events when mouse is over the bottom area so the UI overlay can be triggered
-            if (pThis->m_height > 0 && y > static_cast<int>(pThis->m_height * 0.90)) {
-                InputEvent ev;
-                ev.type = InputEvent::Type::Mouse;
-                ev.mouse.pos.X = (SHORT)x;
-                ev.mouse.pos.Y = (SHORT)y;
-                ev.mouse.buttonState = leftPressed ? FROM_LEFT_1ST_BUTTON_PRESSED : 0;
-                ev.mouse.eventFlags = MOUSE_MOVED;
-                ev.mouse.control = 0x80000000; // Custom flag for window-originated event
-                std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
-                pThis->m_inputQueue.push_back(ev);
-            }
+            DWORD buttonState = 0;
+            if ((wParam & MK_LBUTTON) != 0) buttonState |= FROM_LEFT_1ST_BUTTON_PRESSED;
+            if ((wParam & MK_RBUTTON) != 0) buttonState |= RIGHTMOST_BUTTON_PRESSED;
+            queueWindowMouseEvent(x, y, buttonState, MOUSE_MOVED);
+            return 0;
+        }
+
+        if (uMsg == WM_MOUSEWHEEL) {
+            POINT p;
+            p.x = GET_X_LPARAM(lParam);
+            p.y = GET_Y_LPARAM(lParam);
+            ScreenToClient(pThis->m_hWnd, &p);
+            SHORT delta = GET_WHEEL_DELTA_WPARAM(wParam);
+            DWORD packedDelta =
+                static_cast<DWORD>(static_cast<uint16_t>(delta)) << 16;
+            queueWindowMouseEvent(p.x, p.y, packedDelta, MOUSE_WHEELED);
             return 0;
         }
     }
     return DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
 
-bool VideoWindow::Open(int width, int height, const std::string& title) {
+bool VideoWindow::Open(int width, int height, const std::string& title,
+                       bool startFullscreen) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     HINSTANCE hInstance = GetModuleHandle(NULL);
     const wchar_t* className = L"RadioifyVideoWindow";
@@ -811,10 +808,11 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
         return false;
     }
 
-    // Attempt to enter fullscreen immediately after creating swapchain
-    // This is best-effort (may fail on some systems) but improves UX for video playback
-    // Call MakeFullscreen only when Open is invoked for a video window; allow callers to override
-    MakeFullscreen();
+    // Video playback uses fullscreen by default, but callers can opt out
+    // (used by windowed TUI mode).
+    if (startFullscreen) {
+        MakeFullscreen();
+    }
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) {
@@ -1245,18 +1243,39 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     float subtitleLeftNorm = 0.0f;
     float subtitleWidthNorm = 0.0f;
 
-    // Optional: Render text to texture
-    if (showOverlay && !ui.title.empty()) {
-        int textPxH = std::clamp((int)std::round(m_height * 0.06f), 14, 48);
+    // Optional: Render overlay text (metadata + control strip) to texture.
+    if (showOverlay) {
         std::string timeLabel = ui.totalSec > 0.0
             ? (formatTimeDouble(ui.displaySec) + " / " + formatTimeDouble(ui.totalSec))
             : formatTimeDouble(ui.displaySec);
         std::string textLine = ui.title + "  " + timeLabel +
             (ui.vsyncEnabled ? "  VSync: On" : "  VSync: Off");
-        
-        // Very rough estimate of width
-        int estScale = std::max(1, textPxH / 7);
-        int totalTextWidth = (int)textLine.size() * 6 * estScale; 
+        if (!ui.controls.empty()) {
+            textLine += "\n";
+            textLine += ui.controls;
+        }
+
+        int lineCount = 1;
+        int maxChars = 0;
+        int lineChars = 0;
+        for (char c : textLine) {
+            if (c == '\r') continue;
+            if (c == '\n') {
+                maxChars = std::max(maxChars, lineChars);
+                lineChars = 0;
+                ++lineCount;
+            } else {
+                ++lineChars;
+            }
+        }
+        maxChars = std::max(maxChars, lineChars);
+
+        int linePxH = std::clamp((int)std::round(m_height * 0.045f), 12, 36);
+        int textPxH =
+            std::clamp(lineCount * linePxH + std::max(0, lineCount - 1) * 2,
+                       14, 96);
+        int estScale = std::max(1, linePxH / 7);
+        int totalTextWidth = std::max(1, maxChars * 6 * estScale);
         int textPxW = std::min(m_width, totalTextWidth);
 
         if (textPxW > 0 && textPxH > 0) {
@@ -1282,7 +1301,9 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             }
             
             std::vector<uint8_t> bmp;
-            if (m_textTexture && renderTextToBitmap(textLine, textPxW, textPxH, bmp)) {
+            if (m_textTexture &&
+                renderTextToBitmap(textLine, textPxW, textPxH, bmp, false, 1,
+                                   1)) {
                 D3D11_BOX box{0, 0, 0, (UINT)textPxW, (UINT)textPxH, 1};
                 context->UpdateSubresource(m_textTexture.Get(), 0, &box, bmp.data(), textPxW * 4, 0);
             }
@@ -1290,7 +1311,10 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             textHeightNorm = (float)textPxH / m_height;
             textTopNorm = 0.95f - textHeightNorm;
             textWidthNorm = (float)textPxW / m_width;
-            textLeftNorm = (1.0f - textWidthNorm) * 0.5f;
+            textLeftNorm = 0.02f;
+            if (textLeftNorm + textWidthNorm > 1.0f) {
+                textLeftNorm = std::max(0.0f, 1.0f - textWidthNorm);
+            }
         }
     }
 
@@ -1347,7 +1371,12 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
 
             subtitleHeightNorm = (float)subtitlePxH / m_height;
             subtitleWidthNorm = (float)subtitlePxW / m_width;
-            float bottom = showOverlay ? 0.92f : 0.96f;
+            bool hasOverlayText = textHeightNorm > 0.0f && textWidthNorm > 0.0f;
+            float bottom = 0.96f;
+            if (showOverlay) {
+                bottom = hasOverlayText ? std::max(0.0f, textTopNorm - 0.01f)
+                                        : 0.92f;
+            }
             subtitleTopNorm = std::clamp(bottom - subtitleHeightNorm, 0.0f, 1.0f - subtitleHeightNorm);
             subtitleLeftNorm = (1.0f - subtitleWidthNorm) * 0.5f;
         }

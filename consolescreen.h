@@ -36,6 +36,12 @@ struct BreadcrumbLine {
   std::vector<Breadcrumb> crumbs;
 };
 
+struct ScreenCell {
+  wchar_t ch = L' ';
+  Color fg{255, 255, 255};
+  Color bg{0, 0, 0};
+};
+
 BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width);
 int breadcrumbIndexAt(const BreadcrumbLine& line, int x, int y, int lineY);
 bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY, std::filesystem::path* outPath);
@@ -54,6 +60,8 @@ class ConsoleScreen {
   void setFastOutput(bool enabled);
   void setAlwaysFullRedraw(bool enabled);
   bool fastOutput() const;
+  bool snapshot(std::vector<ScreenCell>& outCells, int& outWidth,
+                int& outHeight) const;
   void draw();
 
  private:

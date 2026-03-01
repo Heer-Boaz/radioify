@@ -798,6 +798,150 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
     return nowMs() <= until;
   };
+  enum class OverlayControlId {
+    Radio,
+    Hz50,
+  };
+  struct OverlayControlSpec {
+    OverlayControlId id = OverlayControlId::Radio;
+    std::string normalText;
+    std::string hoverText;
+    std::string renderText;
+    bool active = false;
+    int width = 0;
+    int charStart = 0;
+  };
+  std::atomic<int> overlayControlHover{-1};
+
+  auto buildOverlayControlSpecs =
+      [&](int hoverIndex, std::vector<OverlayControlSpec>& out) {
+        out.clear();
+        auto makeLabels = [](const std::string& text) {
+          return std::pair<std::string, std::string>(" [" + text + "] ",
+                                                     "[ " + text + " ]");
+        };
+        OverlayControlSpec radio{};
+        radio.id = OverlayControlId::Radio;
+        radio.active = audioIsRadioEnabled();
+        auto radioLabels =
+            makeLabels(radio.active ? "Radio: AM" : "Radio: Dry");
+        radio.normalText = radioLabels.first;
+        radio.hoverText = radioLabels.second;
+        radio.width =
+            std::max(utf8CodepointCount(radio.normalText),
+                     utf8CodepointCount(radio.hoverText));
+        out.push_back(radio);
+
+        OverlayControlSpec hz50{};
+        hz50.id = OverlayControlId::Hz50;
+        hz50.active = audioIs50HzEnabled();
+        auto hzLabels = makeLabels(hz50.active ? "50Hz: 50" : "50Hz: Auto");
+        hz50.normalText = hzLabels.first;
+        hz50.hoverText = hzLabels.second;
+        hz50.width = std::max(utf8CodepointCount(hz50.normalText),
+                              utf8CodepointCount(hz50.hoverText));
+        out.push_back(hz50);
+
+        int cursor = 0;
+        for (size_t i = 0; i < out.size(); ++i) {
+          auto& spec = out[i];
+          if (i > 0) cursor += 2;  // gap
+          spec.charStart = cursor;
+          bool hovered = static_cast<int>(i) == hoverIndex;
+          spec.renderText = hovered ? spec.hoverText : spec.normalText;
+          int textWidth = utf8CodepointCount(spec.renderText);
+          if (textWidth < spec.width) {
+            spec.renderText.append(static_cast<size_t>(spec.width - textWidth),
+                                   ' ');
+          } else if (textWidth > spec.width) {
+            spec.renderText = utf8Take(spec.renderText, spec.width);
+          }
+          cursor += spec.width;
+        }
+      };
+
+  auto buildOverlayControlsText = [&](int hoverIndex) -> std::string {
+    std::vector<OverlayControlSpec> specs;
+    buildOverlayControlSpecs(hoverIndex, specs);
+    std::string line;
+    for (size_t i = 0; i < specs.size(); ++i) {
+      if (i > 0) line += "  ";
+      line += specs[i].renderText;
+    }
+    return line;
+  };
+
+  auto terminalOverlayControlAt = [&](const MouseEvent& mouse) -> int {
+    if (!overlayVisible()) return -1;
+    std::vector<OverlayControlSpec> specs;
+    buildOverlayControlSpecs(-1, specs);
+    int controlsY = std::max(0, std::max(10, screen.height()) - 3);
+    if (mouse.pos.Y != controlsY) return -1;
+    int relX = mouse.pos.X - 1;
+    if (relX < 0) return -1;
+    for (size_t i = 0; i < specs.size(); ++i) {
+      const auto& spec = specs[i];
+      if (relX >= spec.charStart && relX < spec.charStart + spec.width) {
+        return static_cast<int>(i);
+      }
+    }
+    return -1;
+  };
+
+  auto windowOverlayControlAt = [&](const MouseEvent& mouse) -> int {
+    if (!overlayVisible()) return -1;
+    int winW = std::max(1, g_videoWindow.GetWidth());
+    int winH = std::max(1, g_videoWindow.GetHeight());
+
+    std::vector<OverlayControlSpec> specs;
+    buildOverlayControlSpecs(-1, specs);
+    if (specs.empty()) return -1;
+
+    int linePxH = std::clamp(static_cast<int>(std::round(winH * 0.045f)), 12, 36);
+    int lineCount = 2;  // metadata + controls
+    int textPxH =
+        std::clamp(lineCount * linePxH + std::max(0, lineCount - 1) * 2, 14, 96);
+    float textTopNorm = 0.95f - static_cast<float>(textPxH) / winH;
+    int textTopPx = static_cast<int>(std::round(textTopNorm * winH));
+    int lineAdvance = linePxH + 2;
+    int controlsY0 = textTopPx + lineAdvance;
+    int controlsY1 = controlsY0 + linePxH;
+    if (mouse.pos.Y < controlsY0 || mouse.pos.Y >= controlsY1) return -1;
+
+    int textLeftPx = static_cast<int>(std::round(0.02f * winW));
+    int estScale = std::max(1, linePxH / 7);
+    int charAdvance = 6 * estScale;
+    for (size_t i = 0; i < specs.size(); ++i) {
+      const auto& spec = specs[i];
+      int x0 = textLeftPx + spec.charStart * charAdvance;
+      int x1 = x0 + spec.width * charAdvance;
+      if (mouse.pos.X >= x0 && mouse.pos.X < x1) {
+        return static_cast<int>(i);
+      }
+    }
+    return -1;
+  };
+
+  auto executeOverlayControl = [&](int controlIndex) -> bool {
+    std::vector<OverlayControlSpec> specs;
+    buildOverlayControlSpecs(-1, specs);
+    if (controlIndex < 0 ||
+        controlIndex >= static_cast<int>(specs.size())) {
+      return false;
+    }
+    const auto& spec = specs[static_cast<size_t>(controlIndex)];
+    switch (spec.id) {
+      case OverlayControlId::Radio:
+        if (!audioOk) return false;
+        audioToggleRadio();
+        return true;
+      case OverlayControlId::Hz50:
+        if (!audioOk) return false;
+        audioToggle50Hz();
+        return true;
+    }
+    return false;
+  };
   auto isBackMousePressed = [&](const MouseEvent& mouse) {
     const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
                            FROM_LEFT_2ND_BUTTON_PRESSED |
@@ -885,6 +1029,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     ui.isPaused = player.state() == PlayerState::Paused;
     ui.overlayAlpha = overlayVisible() ? 1.0f : 0.0f;
     ui.title = windowTitle;
+    ui.controls =
+        buildOverlayControlsText(overlayControlHover.load(std::memory_order_relaxed));
     ui.displaySec = displaySec;
     ui.totalSec = totalSec;
     ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
@@ -1029,6 +1175,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     screen.updateSize();
     int width = std::max(20, screen.width());
     int height = std::max(10, screen.height());
+    if (!overlayVisible()) {
+      overlayControlHover.store(-1, std::memory_order_relaxed);
+    }
     std::string statusLine;
     if (!audioOk && !audioStarting) {
       statusLine = enableAudio ? "Audio unavailable" : "Audio disabled";
@@ -1422,7 +1571,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         lines.resize(2);
       }
       if (!lines.empty()) {
-        int subtitleBottom = overlayVisible() ? height - 3 : height - 1;
+        int overlayReservedRows = overlayVisible() ? 3 : 0;
+        int subtitleBottom = height - overlayReservedRows - 1;
         int maxVisible = subtitleBottom - artTop + 1;
         if (subtitleBottom >= 0 && maxVisible > 0) {
           int visibleLines = std::min<int>(lines.size(), maxVisible);
@@ -1443,6 +1593,31 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (overlayVisible()) {
       int barLine = height - 1;
       int labelLine = barLine - 1;
+      int controlsLine = labelLine - 1;
+      if (controlsLine >= artTop && controlsLine >= 0) {
+        std::vector<OverlayControlSpec> controls;
+        buildOverlayControlSpecs(
+            overlayControlHover.load(std::memory_order_relaxed), controls);
+        for (size_t i = 0; i < controls.size(); ++i) {
+          const auto& spec = controls[i];
+          int x = 1 + spec.charStart;
+          if (x >= width) break;
+          int avail = width - x;
+          if (avail <= 0) break;
+          std::string text = spec.renderText;
+          if (utf8CodepointCount(text) > avail) {
+            text = utf8Take(text, avail);
+          }
+          Style style = spec.active ? accentStyle : baseStyle;
+          bool hovered =
+              static_cast<int>(i) ==
+              overlayControlHover.load(std::memory_order_relaxed);
+          if (hovered) {
+            style = {style.bg, style.fg};
+          }
+          screen.writeText(x, controlsLine, text, style);
+        }
+      }
       if (labelLine >= artTop && labelLine >= 0) {
         std::string nowLabel = " " + toUtf8String(file.filename());
         screen.writeText(0, labelLine, fitLine(nowLabel, width), accentStyle);
@@ -1567,6 +1742,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           }
         };
         cb.onToggleRadio = [&]() { if (audioOk) audioToggleRadio(); };
+        cb.onToggle50Hz = [&]() { if (audioOk) audioToggle50Hz(); };
         cb.onToggleVsync = [&]() {
           windowVsyncEnabled = !windowVsyncEnabled;
           g_videoWindow.SetVsync(windowVsyncEnabled);
@@ -1637,6 +1813,23 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           windowPresentCv.notify_one();
           continue;
         }
+        bool windowEvent = (mouse.control & 0x80000000) != 0;
+        int controlHit =
+            windowEvent ? windowOverlayControlAt(mouse)
+                        : terminalOverlayControlAt(mouse);
+        int previousHover = overlayControlHover.load(std::memory_order_relaxed);
+        int nextHover = overlayVisible() ? controlHit : -1;
+        if (nextHover != previousHover) {
+          overlayControlHover.store(nextHover, std::memory_order_relaxed);
+          redraw = true;
+          if (windowEnabled) {
+            windowForcePresent.store(true, std::memory_order_relaxed);
+            windowPresentCv.notify_one();
+          }
+        }
+        if (controlHit >= 0) {
+          triggerOverlay();
+        }
 
         bool progressHit = isProgressHit(mouse);
         if (progressHit) {
@@ -1650,8 +1843,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
         bool leftPressed =
             (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+        if (leftPressed && mouse.eventFlags == 0 && controlHit >= 0) {
+          if (executeOverlayControl(controlHit)) {
+            triggerOverlay();
+            redraw = true;
+            if (windowEnabled) {
+              windowForcePresent.store(true, std::memory_order_relaxed);
+              windowPresentCv.notify_one();
+            }
+          }
+          continue;
+        }
         
-        if (leftPressed && (mouse.control & 0x80000000)) {
+        if (leftPressed && windowEvent) {
           if (progressHit) {
             float winW = static_cast<float>(g_videoWindow.GetWidth());
             float winH = static_cast<float>(g_videoWindow.GetHeight());

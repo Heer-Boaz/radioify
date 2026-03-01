@@ -78,6 +78,7 @@ add_executable(radioify
   videoplayback.cpp
   videodecoder.cpp
   videowindow.cpp
+  videowindow_tui.cpp
   videoprocessor.cpp
   radio.cpp
   loopsplit.cpp

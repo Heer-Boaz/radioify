@@ -38,6 +38,7 @@
 #include "loopsplit_ui.h"
 #include "ui_helpers.h"
 #include "videoplayback.h"
+#include "videowindow.h"
 
 #include "tui.h"
 #include "timing_log.h"
@@ -680,13 +681,28 @@ int runTui(Options o) {
   ConsoleScreen screen;
   screen.init();
 
+  VideoWindow tuiWindow;
+  bool windowTuiEnabled = o.enableWindow;
+  if (windowTuiEnabled) {
+    if (!tuiWindow.Open(1280, 720, "Radioify TUI", false)) {
+      windowTuiEnabled = false;
+    } else {
+      tuiWindow.SetCaptureAllMouseInput(true);
+      tuiWindow.SetVsync(true);
+      tuiWindow.ShowWindow(true);
+    }
+  }
+
   audioInit(audioConfig);
 
   VideoPlaybackConfig videoConfig;
   videoConfig.enableAscii = o.enableAscii;
   videoConfig.enableAudio = o.enableAudio;
   videoConfig.debugOverlay = true;
-  videoConfig.enableWindow = o.enableWindow;
+  // If dedicated window-TUI is active, keep video playback out of the legacy
+  // window path. If window-TUI could not be opened, fall back to normal
+  // window playback behavior.
+  videoConfig.enableWindow = o.enableWindow && !windowTuiEnabled;
 
   std::filesystem::path pendingImage;
   bool hasPendingImage = false;
@@ -799,6 +815,7 @@ int runTui(Options o) {
   double seekDisplaySec = -1.0;
   bool seekHoldActive = false;
   auto seekHoldStart = std::chrono::steady_clock::now();
+  std::vector<ScreenCell> windowCells;
   auto markSeekHold = [&](double targetSec) {
     if (!std::isfinite(targetSec) || targetSec < 0.0) return;
     seekDisplaySec = targetSec;
@@ -1473,8 +1490,26 @@ int runTui(Options o) {
     cleanupMelodyExportWorker();
     cleanupLoopSplitExportWorker(loopSplitTask);
 
-    InputEvent ev{};
-    while (input.poll(ev)) {
+    if (windowTuiEnabled && tuiWindow.IsOpen()) {
+      tuiWindow.PollEvents();
+    }
+
+    auto processInputEvent = [&](InputEvent ev) {
+      if (ev.type == InputEvent::Type::Mouse &&
+          (ev.mouse.control & 0x80000000) != 0) {
+        int wndW = std::max(1, tuiWindow.GetWidth());
+        int wndH = std::max(1, tuiWindow.GetHeight());
+        int gridW = std::max(1, screen.width());
+        int gridH = std::max(1, screen.height());
+        int gx = static_cast<int>((static_cast<int64_t>(ev.mouse.pos.X) * gridW) /
+                                  wndW);
+        int gy = static_cast<int>((static_cast<int64_t>(ev.mouse.pos.Y) * gridH) /
+                                  wndH);
+        gx = std::clamp(gx, 0, gridW - 1);
+        gy = std::clamp(gy, 0, gridH - 1);
+        ev.mouse.pos.X = static_cast<SHORT>(gx);
+        ev.mouse.pos.Y = static_cast<SHORT>(gy);
+      }
       if (ev.type == InputEvent::Type::Key) {
         const KeyEvent& key = ev.key;
         const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
@@ -1490,7 +1525,7 @@ int runTui(Options o) {
           paletteSelected = 0;
           paletteScroll = 0;
           dirty = true;
-          continue;
+          return;
         }
       }
       if (fileContextMenu.active) {
@@ -1500,26 +1535,26 @@ int runTui(Options o) {
           if (key.vk == VK_ESCAPE) {
             fileContextMenu.active = false;
             dirty = true;
-            continue;
+            return;
           }
           if (key.vk == VK_UP) {
             fileContextMenu.selected =
                 (fileContextMenu.selected + fileContextLayout.rows - 1) %
                 fileContextLayout.rows;
             dirty = true;
-            continue;
+            return;
           }
           if (key.vk == VK_DOWN) {
             fileContextMenu.selected =
                 (fileContextMenu.selected + 1) % fileContextLayout.rows;
             dirty = true;
-            continue;
+            return;
           }
           if (key.vk == VK_RETURN) {
             runFileContextAction(fileContextMenu.selected);
-            continue;
+            return;
           }
-          continue;
+          return;
         }
         if (ev.type == InputEvent::Type::Mouse) {
           const MouseEvent& mouse = ev.mouse;
@@ -1538,7 +1573,7 @@ int runTui(Options o) {
               }
               dirty = true;
             }
-            continue;
+            return;
           }
           if (mouse.eventFlags == 0 && leftPressed) {
             bool inside =
@@ -1553,14 +1588,14 @@ int runTui(Options o) {
               if (action >= 0 && action < fileContextLayout.rows) {
                 fileContextMenu.selected = action;
                 runFileContextAction(action);
-                continue;
+                return;
               }
             }
             fileContextMenu.active = false;
             dirty = true;
-            continue;
+            return;
           }
-          continue;
+          return;
         }
       }
       if (paletteActive) {
@@ -1580,7 +1615,7 @@ int runTui(Options o) {
           if (key.vk == VK_ESCAPE) {
             paletteActive = false;
             dirty = true;
-            continue;
+            return;
           }
           if (key.vk == VK_RETURN) {
             if (!paletteFiltered.empty()) {
@@ -1593,21 +1628,21 @@ int runTui(Options o) {
             }
             paletteActive = false;
             dirty = true;
-            continue;
+            return;
           }
           if (key.vk == VK_UP) {
             paletteSelected--;
             ensurePaletteScroll(static_cast<int>(paletteFiltered.size()),
                                 visibleRows);
             dirty = true;
-            continue;
+            return;
           }
           if (key.vk == VK_DOWN) {
             paletteSelected++;
             ensurePaletteScroll(static_cast<int>(paletteFiltered.size()),
                                 visibleRows);
             dirty = true;
-            continue;
+            return;
           }
           if (key.vk == VK_BACK) {
             if (!paletteQuery.empty()) {
@@ -1616,16 +1651,16 @@ int runTui(Options o) {
               paletteScroll = 0;
             }
             dirty = true;
-            continue;
+            return;
           }
           if (!ctrl && !alt && key.ch >= 32) {
             paletteQuery.push_back(key.ch);
             paletteSelected = 0;
             paletteScroll = 0;
             dirty = true;
-            continue;
+            return;
           }
-          continue;
+          return;
         }
         if (ev.type == InputEvent::Type::Mouse) {
           const MouseEvent& mouse = ev.mouse;
@@ -1639,7 +1674,7 @@ int runTui(Options o) {
                                   visibleRows);
               dirty = true;
             }
-            continue;
+            return;
           }
           if (leftPressed && mouse.eventFlags == 0) {
             paletteLayout = computePaletteLayout(width, height, visibleRows);
@@ -1660,12 +1695,12 @@ int runTui(Options o) {
                   }
                   paletteActive = false;
                   dirty = true;
-                  continue;
+                  return;
                 }
               }
             }
           }
-          continue;
+          return;
         }
       }
       bool browserInteractionEnabled = !melodyVisualizationEnabled;
@@ -1674,14 +1709,41 @@ int runTui(Options o) {
                        progressBarWidth, actionStrip, browserInteractionEnabled,
                        o.play, audioIsReady(), breadcrumbHover, actionHover,
                        dirty, running, callbacks);
+    };
+
+    auto finalizeRenderedExit = [&]() {
+      if (windowTuiEnabled && tuiWindow.IsOpen()) {
+        tuiWindow.Close();
+      }
+      joinMelodyExportWorker();
+      joinLoopSplitExportWorker(loopSplitTask);
+      audioShutdown();
+    };
+
+    InputEvent ev{};
+    if (windowTuiEnabled && tuiWindow.IsOpen()) {
+      while (running && tuiWindow.PollInput(ev)) {
+        processInputEvent(ev);
+        if (rendered) {
+          finalizeRenderedExit();
+          return 0;
+        }
+      }
+    }
+
+    while (running && input.poll(ev)) {
+      processInputEvent(ev);
       if (rendered) {
-        joinMelodyExportWorker();
-        joinLoopSplitExportWorker(loopSplitTask);
-        audioShutdown();
+        finalizeRenderedExit();
         return 0;
       }
       if (!running) break;
     }
+    if (rendered) {
+      finalizeRenderedExit();
+      return 0;
+    }
+    if (!running) break;
 
     auto now = std::chrono::steady_clock::now();
     if (dirty || now - lastDraw >= std::chrono::milliseconds(150)) {
@@ -2314,6 +2376,13 @@ int runTui(Options o) {
       }
 
       screen.draw();
+      if (windowTuiEnabled && tuiWindow.IsOpen()) {
+        int gridW = 0;
+        int gridH = 0;
+        if (screen.snapshot(windowCells, gridW, gridH)) {
+          tuiWindow.PresentTextGrid(windowCells, gridW, gridH, true);
+        }
+      }
       lastDraw = now;
       dirty = false;
     }
@@ -2323,6 +2392,9 @@ int runTui(Options o) {
   // Clear screen before exiting
   screen.clear(kStyleNormal);
   screen.draw();
+  if (windowTuiEnabled && tuiWindow.IsOpen()) {
+    tuiWindow.Close();
+  }
   input.restore();
   screen.restore();
   std::cout << "\n";

@@ -22,6 +22,7 @@ struct WindowUiState {
     bool vsyncEnabled = true;
     // UI text/metadata to display when overlay is visible
     std::string title; // filename or label
+    std::string controls; // temporary control-strip labels (e.g. radio/50Hz)
     std::string subtitle;
     double displaySec = 0.0; // current time shown in overlay
     double totalSec = -1.0; // total duration (or -1 if unknown)
@@ -36,7 +37,8 @@ public:
     VideoWindow();
     ~VideoWindow();
 
-    bool Open(int width, int height, const std::string& title);
+    bool Open(int width, int height, const std::string& title,
+              bool startFullscreen = true);
     void Close();
 
     void Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
@@ -44,9 +46,13 @@ public:
     // Render the UI overlay using the last cached video frame as background
     void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
                         bool nonBlocking);
+    // Render a full-screen text grid (TUI) into the window backbuffer.
+    void PresentTextGrid(const std::vector<ScreenCell>& cells, int cols, int rows,
+                         bool nonBlocking);
     void PresentBackbuffer();
     HANDLE GetFrameLatencyWaitableObject();
     void SetVsync(bool enabled);
+    void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
     
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
@@ -100,6 +106,10 @@ private:
     int m_subtitleWidth = 0;
     int m_subtitleHeight = 0;
     std::string m_lastSubtitleText;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_tuiTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_tuiSrv;
+    int m_tuiTexWidth = 0;
+    int m_tuiTexHeight = 0;
     
     int m_width = 0;
     int m_height = 0;
@@ -127,6 +137,7 @@ private:
     bool m_ignoreWindowSizeEvents = false;
     // When true, Present should skip until the render-target view and sizes are ready
     bool m_waitingForRenderTarget = false;
+    bool m_captureAllMouseInput = false;
     bool MakeFullscreen();
     bool ExitFullscreen();
 };
