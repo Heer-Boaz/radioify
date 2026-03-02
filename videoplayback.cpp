@@ -798,6 +798,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
     return nowMs() <= until;
   };
+  const std::string windowTitle = toUtf8String(file.filename());
   enum class OverlayControlId {
     Radio,
     Hz50,
@@ -870,6 +871,52 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
     return line;
   };
+  auto formatWindowOverlayTime = [&](double s) -> std::string {
+    if (!(s >= 0.0) || !std::isfinite(s)) return "--:--";
+    int total = static_cast<int>(std::llround(s));
+    int h = total / 3600;
+    int m = (total % 3600) / 60;
+    int sec = total % 60;
+    char buf[64];
+    if (h > 0)
+      std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, sec);
+    else
+      std::snprintf(buf, sizeof(buf), "%02d:%02d", m, sec);
+    return std::string(buf);
+  };
+  auto buildWindowOverlayTopLine = [&]() -> std::string {
+    double currentSec = 0.0;
+    double totalSec = -1.0;
+    int64_t clockUs = player.currentUs();
+    if (clockUs > 0) {
+      currentSec = static_cast<double>(clockUs) / 1000000.0;
+    }
+    int64_t durUs = player.durationUs();
+    if (durUs > 0) {
+      totalSec = static_cast<double>(durUs) / 1000000.0;
+    } else if (player.audioOk()) {
+      totalSec = audioGetTotalSec();
+    }
+    if (totalSec > 0.0) {
+      currentSec = std::clamp(currentSec, 0.0, totalSec);
+    }
+    double displaySec = currentSec;
+    bool seekingOverlay =
+        player.isSeeking() ||
+        windowLocalSeekRequested.load(std::memory_order_relaxed);
+    double pendingTarget =
+        windowPendingSeekTargetSec.load(std::memory_order_relaxed);
+    if (seekingOverlay && pendingTarget >= 0.0 && totalSec > 0.0 &&
+        std::isfinite(totalSec)) {
+      displaySec = std::clamp(pendingTarget, 0.0, totalSec);
+    }
+    std::string timeLabel = totalSec > 0.0
+                                ? (formatWindowOverlayTime(displaySec) + " / " +
+                                   formatWindowOverlayTime(totalSec))
+                                : formatWindowOverlayTime(displaySec);
+    return windowTitle + "  " + timeLabel +
+           (g_videoWindow.IsVsyncEnabled() ? "  VSync: On" : "  VSync: Off");
+  };
 
   auto terminalOverlayControlAt = [&](const MouseEvent& mouse) -> int {
     if (!overlayVisible()) return -1;
@@ -897,23 +944,39 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     buildOverlayControlSpecs(-1, specs);
     if (specs.empty()) return -1;
 
+    std::string topLine = buildWindowOverlayTopLine();
+    std::string controlsLine = buildOverlayControlsText(-1);
+    int maxChars = std::max(utf8CodepointCount(topLine),
+                            utf8CodepointCount(controlsLine));
+    if (maxChars <= 0) return -1;
     int linePxH = std::clamp(static_cast<int>(std::round(winH * 0.045f)), 12, 36);
     int lineCount = 2;  // metadata + controls
     int textPxH =
         std::clamp(lineCount * linePxH + std::max(0, lineCount - 1) * 2, 14, 96);
-    float textTopNorm = 0.95f - static_cast<float>(textPxH) / winH;
-    int textTopPx = static_cast<int>(std::round(textTopNorm * winH));
-    int lineAdvance = linePxH + 2;
-    int controlsY0 = textTopPx + lineAdvance;
-    int controlsY1 = controlsY0 + linePxH;
-    if (mouse.pos.Y < controlsY0 || mouse.pos.Y >= controlsY1) return -1;
-
-    int textLeftPx = static_cast<int>(std::round(0.02f * winW));
     int estScale = std::max(1, linePxH / 7);
-    int charAdvance = 6 * estScale;
+    int textPxW = std::min(winW, std::max(1, maxChars * 6 * estScale));
+    int totalGlyphH = lineCount * 7 + (lineCount - 1);
+    int maxScaleVert = std::max(1, textPxH / std::max(1, totalGlyphH));
+    int maxScaleHoriz = std::max(1, textPxW / std::max(1, maxChars * 6));
+    int maxCap = std::max(3, textPxH / 80);
+    int scale = std::min({maxScaleVert, maxScaleHoriz, maxCap});
+    if (scale < 1) scale = 1;
+    int charAdvance = 6 * scale;
+    float textHeightNorm = static_cast<float>(textPxH) / winH;
+    float textWidthNorm = static_cast<float>(textPxW) / winW;
+    float textLeftNorm = 0.02f;
+    if (textLeftNorm + textWidthNorm > 1.0f) {
+      textLeftNorm = std::max(0.0f, 1.0f - textWidthNorm);
+    }
+    float textTopNorm = 0.95f - textHeightNorm;
+    int textLeftPx = static_cast<int>(std::round(textLeftNorm * winW));
+    int textTopPx = static_cast<int>(std::round(textTopNorm * winH));
+    int controlsY0 = textTopPx + 1 + (7 + 1) * scale;
+    int controlsY1 = controlsY0 + 7 * scale;
+    if (mouse.pos.Y < controlsY0 || mouse.pos.Y >= controlsY1) return -1;
     for (size_t i = 0; i < specs.size(); ++i) {
       const auto& spec = specs[i];
-      int x0 = textLeftPx + spec.charStart * charAdvance;
+      int x0 = textLeftPx + 1 + spec.charStart * charAdvance;
       int x1 = x0 + spec.width * charAdvance;
       if (mouse.pos.X >= x0 && mouse.pos.X < x1) {
         return static_cast<int>(i);
@@ -991,7 +1054,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return cue->text;
   };
 
-  const std::string windowTitle = toUtf8String(file.filename());
   auto buildWindowUiState = [&]() {
     WindowUiState ui;
     double currentSec = 0.0;
@@ -1029,8 +1091,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     ui.isPaused = player.state() == PlayerState::Paused;
     ui.overlayAlpha = overlayVisible() ? 1.0f : 0.0f;
     ui.title = windowTitle;
-    ui.controls =
-        buildOverlayControlsText(overlayControlHover.load(std::memory_order_relaxed));
+    int hoverIndex = overlayControlHover.load(std::memory_order_relaxed);
+    std::vector<OverlayControlSpec> controlSpecs;
+    buildOverlayControlSpecs(hoverIndex, controlSpecs);
+    ui.controls = buildOverlayControlsText(hoverIndex);
+    ui.controlButtons.clear();
+    ui.controlButtons.reserve(controlSpecs.size());
+    for (size_t i = 0; i < controlSpecs.size(); ++i) {
+      WindowUiState::ControlButton btn;
+      btn.text = controlSpecs[i].renderText;
+      btn.active = controlSpecs[i].active;
+      btn.hovered = static_cast<int>(i) == hoverIndex;
+      ui.controlButtons.push_back(std::move(btn));
+    }
     ui.displaySec = displaySec;
     ui.totalSec = totalSec;
     ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));

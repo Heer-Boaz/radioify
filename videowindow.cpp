@@ -93,6 +93,8 @@ namespace {
         {'X', {0x11,0x0A,0x04,0x04,0x04,0x0A,0x11}},
         {'Y', {0x11,0x0A,0x04,0x04,0x04,0x04,0x04}},
         {'Z', {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}},
+        {'[', {0x1E,0x10,0x10,0x10,0x10,0x10,0x1E}},
+        {']', {0x0F,0x01,0x01,0x01,0x01,0x01,0x0F}},
         {'(', {0x02,0x04,0x08,0x08,0x08,0x04,0x02}},
         {')', {0x08,0x04,0x02,0x02,0x02,0x04,0x08}},
         {'_', {0x00,0x00,0x00,0x00,0x00,0x00,0x1F}},
@@ -201,6 +203,202 @@ namespace {
                     }
                 }
             }
+        }
+        return true;
+    }
+
+    static bool renderOverlayTextToBitmap(
+        const std::string& topLine,
+        const std::vector<WindowUiState::ControlButton>& controlButtons,
+        const std::string& fallbackControlsLine, int width, int height,
+        std::vector<uint8_t>& outPixels, bool centerAlign = false, int padX = 1,
+        int padY = 1) {
+        outPixels.clear();
+        if (width <= 0 || height <= 0) return false;
+
+        auto normalizeLine = [](const std::string& in) {
+            std::string out;
+            out.reserve(in.size());
+            for (unsigned char ch : in) {
+                if (ch == '\r' || ch == '\n') continue;
+                if (ch >= 'a' && ch <= 'z') out.push_back(static_cast<char>(ch - 'a' + 'A'));
+                else out.push_back(static_cast<char>(ch));
+            }
+            return out;
+        };
+
+        struct ControlSegment {
+            int charStart = 0;
+            int width = 0;
+            bool active = false;
+            bool hovered = false;
+        };
+
+        std::string line0 = normalizeLine(topLine);
+        std::string line1;
+        std::vector<ControlSegment> segments;
+        if (!controlButtons.empty()) {
+            int cursor = 0;
+            for (size_t i = 0; i < controlButtons.size(); ++i) {
+                if (i > 0) {
+                    line1 += "  ";
+                    cursor += 2;
+                }
+                std::string txt = normalizeLine(controlButtons[i].text);
+                int widthChars = static_cast<int>(txt.size());
+                segments.push_back(
+                    ControlSegment{cursor, widthChars, controlButtons[i].active,
+                                   controlButtons[i].hovered});
+                line1 += txt;
+                cursor += widthChars;
+            }
+        } else {
+            line1 = normalizeLine(fallbackControlsLine);
+        }
+
+        int lineCount = line1.empty() ? 1 : 2;
+        int maxChars = static_cast<int>(line0.size());
+        if (!line1.empty()) maxChars = std::max(maxChars, static_cast<int>(line1.size()));
+        if (maxChars <= 0) {
+            outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u, 0u);
+            return true;
+        }
+
+        const int glyphW = 5;
+        const int glyphH = 7;
+        const int spacing = 1;
+        const int lineSpacing = 1;
+
+        int totalGlyphH = lineCount * glyphH + (lineCount - 1) * lineSpacing;
+        int maxScaleVert = std::max(1, height / std::max(1, totalGlyphH));
+        int maxScaleHoriz =
+            std::max(1, width / std::max(1, maxChars * (glyphW + spacing)));
+        int maxCap = std::max(3, height / 80);
+        int scale = std::min({maxScaleVert, maxScaleHoriz, maxCap});
+        if (scale < 1) scale = 1;
+
+        int charAdvance = (glyphW + spacing) * scale;
+        int totalTextWidth = maxChars * charAdvance;
+        int totalTextHeight = totalGlyphH * scale;
+        int startX = centerAlign ? std::max(0, (width - totalTextWidth) / 2)
+                                 : std::max(0, padX);
+        int startY = centerAlign ? std::max(0, (height - totalTextHeight) / 2)
+                                 : std::max(0, padY);
+
+        outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u, 0u);
+
+        auto setPixel = [&](int x, int y, uint8_t r, uint8_t g, uint8_t b,
+                            uint8_t a) {
+            if (x < 0 || x >= width || y < 0 || y >= height) return;
+            size_t idx =
+                (static_cast<size_t>(y) * static_cast<size_t>(width) +
+                 static_cast<size_t>(x)) *
+                4u;
+            outPixels[idx + 0] = b;
+            outPixels[idx + 1] = g;
+            outPixels[idx + 2] = r;
+            outPixels[idx + 3] = a;
+        };
+
+        auto fillRect = [&](int x0, int y0, int x1, int y1, uint8_t r, uint8_t g,
+                            uint8_t b, uint8_t a) {
+            int rx0 = std::max(0, x0);
+            int ry0 = std::max(0, y0);
+            int rx1 = std::min(width, x1);
+            int ry1 = std::min(height, y1);
+            if (rx0 >= rx1 || ry0 >= ry1) return;
+            for (int y = ry0; y < ry1; ++y) {
+                for (int x = rx0; x < rx1; ++x) {
+                    setPixel(x, y, r, g, b, a);
+                }
+            }
+        };
+
+        auto drawGlyph = [&](char ch, int x, int y, uint8_t r, uint8_t g,
+                             uint8_t b, uint8_t a) {
+            if (ch == ' ') return;
+            const uint8_t* rows = menu_glyph_rows(ch);
+            for (int gy = 0; gy < glyphH; ++gy) {
+                uint8_t row = rows[gy];
+                for (int gx = 0; gx < glyphW; ++gx) {
+                    bool set = ((row >> (glyphW - 1 - gx)) & 0x1) != 0;
+                    if (!set) continue;
+                    int px0 = x + gx * scale;
+                    int py0 = y + gy * scale;
+                    for (int sy = 0; sy < scale; ++sy) {
+                        for (int sx = 0; sx < scale; ++sx) {
+                            setPixel(px0 + sx, py0 + sy, r, g, b, a);
+                        }
+                    }
+                }
+            }
+        };
+
+        auto drawLine = [&](const std::string& lineText, int lineIndex,
+                            bool withStyledButtons) {
+            if (lineText.empty()) return;
+            int lineWidth = static_cast<int>(lineText.size()) * charAdvance;
+            int lineX = centerAlign ? startX + std::max(0, (totalTextWidth - lineWidth) / 2)
+                                    : startX;
+            int lineY = startY + lineIndex * (glyphH + lineSpacing) * scale;
+
+            if (withStyledButtons && !segments.empty()) {
+                for (const auto& seg : segments) {
+                    int x0 = lineX + seg.charStart * charAdvance;
+                    int x1 = x0 + seg.width * charAdvance;
+                    int y0 = lineY;
+                    int y1 = y0 + glyphH * scale;
+                    uint8_t bgR = 36, bgG = 36, bgB = 36, bgA = 190;
+                    if (seg.active) {
+                        bgR = 64;
+                        bgG = 48;
+                        bgB = 24;
+                        bgA = 215;
+                    }
+                    if (seg.hovered) {
+                        bgR = 226;
+                        bgG = 226;
+                        bgB = 226;
+                        bgA = 235;
+                    }
+                    fillRect(x0, y0, x1, y1, bgR, bgG, bgB, bgA);
+                }
+            }
+
+            for (int i = 0; i < static_cast<int>(lineText.size()); ++i) {
+                char ch = lineText[static_cast<size_t>(i)];
+                uint8_t fgR = 235, fgG = 235, fgB = 235, fgA = 255;
+                if (withStyledButtons && !segments.empty()) {
+                    for (const auto& seg : segments) {
+                        if (i >= seg.charStart && i < seg.charStart + seg.width) {
+                            if (seg.hovered) {
+                                fgR = 18;
+                                fgG = 18;
+                                fgB = 18;
+                                fgA = 255;
+                            } else if (seg.active) {
+                                fgR = 255;
+                                fgG = 220;
+                                fgB = 135;
+                                fgA = 255;
+                            } else {
+                                fgR = 222;
+                                fgG = 222;
+                                fgB = 222;
+                                fgA = 255;
+                            }
+                            break;
+                        }
+                    }
+                }
+                int x = lineX + i * charAdvance;
+                drawGlyph(ch, x, lineY, fgR, fgG, fgB, fgA);
+            }
+        };
+
+        drawLine(line0, 0, false);
+        if (!line1.empty()) {
+            drawLine(line1, 1, true);
         }
         return true;
     }
@@ -1248,27 +1446,35 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         std::string timeLabel = ui.totalSec > 0.0
             ? (formatTimeDouble(ui.displaySec) + " / " + formatTimeDouble(ui.totalSec))
             : formatTimeDouble(ui.displaySec);
-        std::string textLine = ui.title + "  " + timeLabel +
+        std::string topLine = ui.title + "  " + timeLabel +
             (ui.vsyncEnabled ? "  VSync: On" : "  VSync: Off");
-        if (!ui.controls.empty()) {
-            textLine += "\n";
-            textLine += ui.controls;
-        }
 
         int lineCount = 1;
         int maxChars = 0;
-        int lineChars = 0;
-        for (char c : textLine) {
-            if (c == '\r') continue;
-            if (c == '\n') {
-                maxChars = std::max(maxChars, lineChars);
-                lineChars = 0;
-                ++lineCount;
-            } else {
-                ++lineChars;
+        int topChars = 0;
+        for (char c : topLine) {
+            if (c == '\r' || c == '\n') continue;
+            ++topChars;
+        }
+        maxChars = std::max(maxChars, topChars);
+
+        std::string controlsLine = ui.controls;
+        if (!ui.controlButtons.empty()) {
+            controlsLine.clear();
+            for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
+                if (i > 0) controlsLine += "  ";
+                controlsLine += ui.controlButtons[i].text;
             }
         }
-        maxChars = std::max(maxChars, lineChars);
+        if (!controlsLine.empty()) {
+            int controlsChars = 0;
+            for (char c : controlsLine) {
+                if (c == '\r' || c == '\n') continue;
+                ++controlsChars;
+            }
+            maxChars = std::max(maxChars, controlsChars);
+            lineCount = 2;
+        }
 
         int linePxH = std::clamp((int)std::round(m_height * 0.045f), 12, 36);
         int textPxH =
@@ -1302,8 +1508,9 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             
             std::vector<uint8_t> bmp;
             if (m_textTexture &&
-                renderTextToBitmap(textLine, textPxW, textPxH, bmp, false, 1,
-                                   1)) {
+                renderOverlayTextToBitmap(topLine, ui.controlButtons,
+                                          controlsLine, textPxW, textPxH, bmp,
+                                          false, 1, 1)) {
                 D3D11_BOX box{0, 0, 0, (UINT)textPxW, (UINT)textPxH, 1};
                 context->UpdateSubresource(m_textTexture.Get(), 0, &box, bmp.data(), textPxW * 4, 0);
             }

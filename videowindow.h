@@ -16,6 +16,12 @@
 #include <mutex>
 
 struct WindowUiState {
+    struct ControlButton {
+        std::string text;
+        bool active = false;
+        bool hovered = false;
+    };
+
     float progress = 0.0f;
     float overlayAlpha = 0.0f;
     bool isPaused = false;
@@ -23,6 +29,7 @@ struct WindowUiState {
     // UI text/metadata to display when overlay is visible
     std::string title; // filename or label
     std::string controls; // temporary control-strip labels (e.g. radio/50Hz)
+    std::vector<ControlButton> controlButtons;
     std::string subtitle;
     double displaySec = 0.0; // current time shown in overlay
     double totalSec = -1.0; // total duration (or -1 if unknown)
