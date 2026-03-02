@@ -42,6 +42,7 @@ extern "C" {
 #include "ui_helpers.h"
 #include "videowindow.h"
 #include "playback_mode.h"
+#include "playback_subtitles.h"
 #include "playback_frame_output.h"
 
 #include "timing_log.h"
@@ -436,23 +437,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   playerConfig.logPath = logPath;
   playerConfig.enableAudio = enableAudio;
   playerConfig.allowDecoderScale = enableAscii;
-  SubtitleTrack subtitles;
-  std::filesystem::path subtitlePath;
+  playback_subtitles::SubtitleManager subtitleManager;
   bool hasSubtitles = false;
-  auto findSubtitlePath =
-      [&](const std::filesystem::path& videoPath) -> std::filesystem::path {
-    std::error_code ec;
-    std::filesystem::path baseDir = videoPath.parent_path();
-    std::string stem = videoPath.stem().string();
-    const char* exts[] = {".srt", ".vtt"};
-    for (const char* ext : exts) {
-      std::filesystem::path candidate = baseDir / (stem + ext);
-      if (std::filesystem::exists(candidate, ec) && !ec) {
-        return candidate;
-      }
-    }
-    return {};
-  };
 
   if (!player.open(playerConfig, nullptr)) {
     bool ok = showError("Failed to open video.", "");
@@ -578,18 +564,23 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return ok;
   }
 
-  subtitlePath = findSubtitlePath(file);
-  if (!subtitlePath.empty()) {
-    std::string subtitleError;
-    if (subtitles.loadFromFile(subtitlePath, &subtitleError)) {
-      hasSubtitles = !subtitles.empty();
-      perfLogAppendf(&perfLog, "subtitle_load ok=1 file=%s cues=%zu",
-                     toUtf8String(subtitlePath.filename()).c_str(),
-                     subtitles.size());
+  {
+    std::string lastSubtitleError;
+    bool anyLoaded = subtitleManager.load(file, &lastSubtitleError);
+    hasSubtitles = subtitleManager.hasSubtitles();
+    perfLogAppendf(&perfLog, "subtitle_discovery_count=%zu",
+                   subtitleManager.trackCount());
+    if (!subtitleManager.tracks().empty()) {
+      size_t loadedCount = subtitleManager.tracks().size();
+      perfLogAppendf(&perfLog, "subtitle_load ok=%d loaded=%zu",
+                     anyLoaded ? 1 : 0, loadedCount);
+      if (!anyLoaded && !lastSubtitleError.empty()) {
+        perfLogAppendf(&perfLog, "subtitle_load err=%s", lastSubtitleError.c_str());
+      }
     } else {
-      perfLogAppendf(&perfLog, "subtitle_load ok=0 file=%s err=%s",
-                     toUtf8String(subtitlePath.filename()).c_str(),
-                     subtitleError.c_str());
+      perfLogAppendf(&perfLog, "subtitle_load ok=0 err=%s",
+                     lastSubtitleError.empty() ? "No matching subtitle files found."
+                                              : lastSubtitleError.c_str());
     }
   }
 
@@ -823,6 +814,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     Radio,
     Hz50,
     Subtitles,
+    SubtitleLanguage,
   };
   struct OverlayControlSpec {
     OverlayControlId id = OverlayControlId::Radio;
@@ -877,6 +869,20 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         subtitles.width = std::max(utf8CodepointCount(subtitles.normalText),
                                    utf8CodepointCount(subtitles.hoverText));
         out.push_back(subtitles);
+
+        if (subtitleManager.canCycle()) {
+          OverlayControlSpec subtitleLanguage{};
+          subtitleLanguage.id = OverlayControlId::SubtitleLanguage;
+          subtitleLanguage.active = hasSubtitles && enableSubtitles;
+          auto languageLabel = subtitleManager.activeLanguageLabel();
+          auto subtitleLanguageLabels = makeLabels("Lang: " + languageLabel);
+          subtitleLanguage.normalText = subtitleLanguageLabels.first;
+          subtitleLanguage.hoverText = subtitleLanguageLabels.second;
+          subtitleLanguage.width =
+              std::max(utf8CodepointCount(subtitleLanguage.normalText),
+                       utf8CodepointCount(subtitleLanguage.hoverText));
+          out.push_back(subtitleLanguage);
+        }
 
         int cursor = 0;
         for (size_t i = 0; i < out.size(); ++i) {
@@ -1041,6 +1047,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return -1;
   };
 
+  auto cycleSubtitleLanguage = [&]() -> bool {
+    if (!hasSubtitles) return false;
+    return subtitleManager.cycleLanguage();
+  };
+
   auto executeOverlayControl = [&](int controlIndex) -> bool {
     std::vector<OverlayControlSpec> specs;
     buildOverlayControlSpecs(-1, specs);
@@ -1062,6 +1073,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (!hasSubtitles) return false;
         enableSubtitles = !enableSubtitles;
         return true;
+      case OverlayControlId::SubtitleLanguage:
+        return cycleSubtitleLanguage();
     }
     return false;
   };
@@ -1106,10 +1119,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   };
 
   auto getSubtitleText = [&](int64_t clockUs, bool seeking) -> std::string {
-    if (!enableSubtitles || seeking || clockUs <= 0 || subtitles.empty()) {
+    if (!enableSubtitles || seeking || clockUs <= 0 || !hasSubtitles) {
       return {};
     }
-    const SubtitleCue* cue = subtitles.cueAt(clockUs);
+    const SubtitleTrack* activeTrack = subtitleManager.activeTrack();
+    if (!activeTrack) {
+      return {};
+    }
+    const SubtitleCue* cue = activeTrack->cueAt(clockUs);
     if (!cue) return {};
     return cue->text;
   };
@@ -1669,6 +1686,17 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (ev.key.vk == 'S' || ev.key.vk == 's') {
           if (hasSubtitles) {
             enableSubtitles = !enableSubtitles;
+            triggerOverlay();
+            redraw = true;
+            if (windowEnabled) {
+              windowForcePresent.store(true, std::memory_order_relaxed);
+              windowPresentCv.notify_one();
+            }
+          }
+          continue;
+        }
+        if (ev.key.vk == 'L' || ev.key.vk == 'l') {
+          if (cycleSubtitleLanguage()) {
             triggerOverlay();
             redraw = true;
             if (windowEnabled) {

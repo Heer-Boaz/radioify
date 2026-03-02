@@ -83,6 +83,7 @@ add_executable(radioify
   playback_frame_output_ascii.cpp
   playback_frame_output_console.cpp
   playback_subtitle_lines.cpp
+  playback_subtitles.cpp
   radio.cpp
   loopsplit.cpp
   loopsplit_cli.cpp
