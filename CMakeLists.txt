@@ -80,6 +80,9 @@ add_executable(radioify
   videowindow.cpp
   videowindow_tui.cpp
   videoprocessor.cpp
+  playback_frame_output_ascii.cpp
+  playback_frame_output_console.cpp
+  playback_subtitle_lines.cpp
   radio.cpp
   loopsplit.cpp
   loopsplit_cli.cpp

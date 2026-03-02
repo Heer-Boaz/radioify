@@ -41,6 +41,8 @@ extern "C" {
 #include "subtitles.h"
 #include "ui_helpers.h"
 #include "videowindow.h"
+#include "playback_mode.h"
+#include "playback_frame_output.h"
 
 #include "timing_log.h"
 
@@ -1302,6 +1304,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
   };
 
+  auto playbackMode = [&]() { return resolvePlaybackMode(enableAscii, windowEnabled); };
+
   auto renderScreen = [&](bool clearHistory, bool frameChanged) {
     screen.updateSize();
     int width = std::max(20, screen.width());
@@ -1396,232 +1400,47 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       return "Waiting for video...";
     };
 
+    const PlaybackRenderMode currentMode = playbackMode();
     bool sizeChanged = (width != cachedWidth || maxHeight != cachedMaxHeight ||
                         frame->width != cachedFrameWidth ||
                         frame->height != cachedFrameHeight);
 
-    if (enableAscii && !windowEnabled) {
-      if (allowFrame && (frameChanged || clearHistory || sizeChanged)) {
-        if (frame->width <= 0 || frame->height <= 0) {
-          appendVideoWarning("Skipping video frame with invalid dimensions.");
-          haveFrame = false;
-          return;
-        }
-        bool artOk = false;
-        try {
-          auto [outW, outH] =
-              computeAsciiOutputSize(
-                  width, maxHeight,
-                  ((frame->rotationQuarterTurns & 1) != 0) ? frame->height
-                                                            : frame->width,
-                  ((frame->rotationQuarterTurns & 1) != 0) ? frame->width
-                                                            : frame->height);
-          art.width = outW;
-          art.height = outH;
-
-          std::string gpuErr;
-          bool cacheUpdated = false;
-          bool renderRes = false;
-
-          ID3D11Device* device = getSharedGpuDevice();
-          if (!device) {
-            renderFailed = true;
-            renderFailMessage = "GPU device unavailable.";
-            renderFailDetail = "Shared GPU device was not initialized.";
-            return;
-          }
-          Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-          device->GetImmediateContext(&context);
-          if (!context) {
-            renderFailed = true;
-            renderFailMessage = "GPU context unavailable.";
-            renderFailDetail = "Failed to acquire D3D11 immediate context.";
-            return;
-          }
-
-          auto t0 = std::chrono::steady_clock::now();
-          {
-            std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-            if (clearHistory) {
-              gpuRenderer.ClearHistory();
-            }
-
-            if (frame->format == VideoPixelFormat::HWTexture) {
-              if (!frame->hwTexture) {
-                renderFailed = true;
-                renderFailMessage = "Invalid video frame.";
-                renderFailDetail = "Missing hardware texture.";
-                return;
-              }
-              D3D11_TEXTURE2D_DESC desc{};
-              frame->hwTexture->GetDesc(&desc);
-              bool is10Bit = (desc.Format == DXGI_FORMAT_P010);
-              cacheUpdated = g_frameCache.Update(
-                  device, context.Get(), frame->hwTexture.Get(),
-                  frame->hwTextureArrayIndex, frame->width, frame->height,
-                  frame->fullRange, frame->yuvMatrix, frame->yuvTransfer,
-                  is10Bit ? 10 : 8, frame->rotationQuarterTurns);
-            } else if (frame->format == VideoPixelFormat::NV12 ||
-                       frame->format == VideoPixelFormat::P010) {
-              if (frame->stride <= 0 || frame->planeHeight <= 0 ||
-                  frame->yuv.empty()) {
-                renderFailed = true;
-                renderFailMessage = "Invalid video frame buffer.";
-                renderFailDetail = "Missing YUV plane metadata.";
-                return;
-              }
-              size_t strideBytes = static_cast<size_t>(frame->stride);
-              size_t planeHeight = static_cast<size_t>(frame->planeHeight);
-              size_t yBytes = strideBytes * planeHeight;
-              if (strideBytes == 0 || planeHeight == 0 ||
-                  yBytes / strideBytes != planeHeight) {
-                renderFailed = true;
-                renderFailMessage = "Invalid video frame buffer.";
-                renderFailDetail = "Invalid YUV plane sizing.";
-                return;
-              }
-              bool is10Bit = frame->format == VideoPixelFormat::P010;
-              cacheUpdated = g_frameCache.UpdateNV12(
-                  device, context.Get(), frame->yuv.data(), frame->stride,
-                  frame->planeHeight, frame->width, frame->height,
-                  frame->fullRange, frame->yuvMatrix, frame->yuvTransfer,
-                  is10Bit ? 10 : 8, frame->rotationQuarterTurns);
-            } else if (frame->format == VideoPixelFormat::RGB32 ||
-                       frame->format == VideoPixelFormat::ARGB32) {
-              if (frame->rgba.empty()) {
-                renderFailed = true;
-                renderFailMessage = "Invalid video frame buffer.";
-                renderFailDetail = "Missing RGBA data.";
-                return;
-              }
-              int stride = frame->stride > 0 ? frame->stride : frame->width * 4;
-              if (stride <= 0) {
-                renderFailed = true;
-                renderFailMessage = "Invalid video frame buffer.";
-                renderFailDetail = "Invalid RGBA stride.";
-                return;
-              }
-              cacheUpdated = g_frameCache.Update(
-                  device, context.Get(), frame->rgba.data(), stride, frame->width,
-                  frame->height, frame->rotationQuarterTurns);
-            } else {
-              renderFailed = true;
-              renderFailMessage = "Unsupported video frame format.";
-              renderFailDetail = "";
-              return;
-            }
-
-            if (cacheUpdated) {
-              renderRes =
-                  gpuRenderer.RenderFromCache(g_frameCache, art, &gpuErr);
-            }
-          }
-          auto t1 = std::chrono::steady_clock::now();
-          auto durMs =
-              std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0)
-                  .count();
-          if (durMs > 50) {
-            appendTimingFmt("video_render_slow pts_us=%lld dur_ms=%lld",
-                            (long long)(frame->timestamp100ns / 10),
-                            (long long)durMs);
-          }
-
-          if (renderRes) {
-            artOk = true;
-            static bool rendererLogged = false;
-            if (!rendererLogged) {
-              const char* fmt =
-                  (frame->format == VideoPixelFormat::HWTexture)
-                      ? "hwtexture"
-                      : (frame->format == VideoPixelFormat::NV12)
-                            ? "nv12"
-                            : (frame->format == VideoPixelFormat::P010)
-                                  ? "p010"
-                                  : "rgba";
-              perfLogAppendf(&perfLog,
-                             "video_renderer_input format=%s in=%dx%d out=%dx%d",
-                             fmt, frame->width, frame->height, outW, outH);
-              std::string detail = gpuRenderer.lastNv12TextureDetail();
-              if (detail.empty()) {
-                detail = std::string("path=") +
-                         gpuRenderer.lastNv12TexturePath();
-              }
-              appendTiming(std::string("video_renderer gpu_active=1 format=") +
-                           fmt + " " + detail);
-              rendererLogged = true;
-            }
-          } else if (allowAsciiCpuFallback ||
-                     frame->format == VideoPixelFormat::NV12 ||
-                     frame->format == VideoPixelFormat::P010 ||
-                     frame->format == VideoPixelFormat::RGB32 ||
-                     frame->format == VideoPixelFormat::ARGB32) {
-            if (!cacheUpdated) {
-              appendVideoWarning(
-                  "GPU cache update failed; falling back to CPU ASCII path.");
-            } else if (!gpuErr.empty()) {
-              appendVideoWarning(
-                  "GPU ASCII render failed; falling back to CPU path: " +
-                  gpuErr);
-            } else {
-              appendVideoWarning(
-                  "GPU ASCII render failed; falling back to CPU path.");
-            }
-            if (frame->format == VideoPixelFormat::NV12 ||
-                frame->format == VideoPixelFormat::P010) {
-              bool is10Bit = frame->format == VideoPixelFormat::P010;
-              artOk = renderAsciiArtFromYuv(
-                  frame->yuv.data(), frame->width, frame->height, frame->stride,
-                  frame->planeHeight,
-                  is10Bit ? YuvFormat::P010 : YuvFormat::NV12,
-                  frame->fullRange, frame->yuvMatrix, frame->yuvTransfer, outW,
-                  outH, art);
-            } else if (frame->format == VideoPixelFormat::RGB32 ||
-                       frame->format == VideoPixelFormat::ARGB32) {
-              artOk = renderAsciiArtFromRgba(
-                  frame->rgba.data(), frame->width, frame->height, outW, outH,
-                  art, frame->format == VideoPixelFormat::ARGB32);
-            }
-          } else {
-            renderFailed = true;
-            renderFailMessage = "GPU renderer failed.";
-            renderFailDetail =
-                gpuErr.empty() ? "GPU cache update or render failed." : gpuErr;
-            return;
-          }
-          if (!artOk) {
-            renderFailed = true;
-            renderFailMessage = "Failed to render video frame.";
-            renderFailDetail = "";
-            return;
-          }
-        } catch (...) {
-          renderFailed = true;
-          renderFailMessage = "Failed to render video frame.";
-          renderFailDetail = "";
-          return;
-        }
-        cachedWidth = width;
-        cachedMaxHeight = maxHeight;
-        cachedFrameWidth = frame->width;
-        cachedFrameHeight = frame->height;
-      } else if (!allowFrame) {
-        cachedWidth = -1;
-        cachedMaxHeight = -1;
-        cachedFrameWidth = -1;
-        cachedFrameHeight = -1;
-      }
+    if (currentMode == PlaybackRenderMode::AsciiTerminal) {
+      playback_frame_output::AsciiModePrepareInput asciiInput;
+      asciiInput.allowFrame = allowFrame;
+      asciiInput.clearHistory = clearHistory;
+      asciiInput.frameChanged = frameChanged;
+      asciiInput.sizeChanged = sizeChanged;
+      asciiInput.allowAsciiCpuFallback = allowAsciiCpuFallback;
+      asciiInput.width = width;
+      asciiInput.maxHeight = maxHeight;
+      asciiInput.computeAsciiOutputSize = computeAsciiOutputSize;
+      asciiInput.frame = frame;
+      asciiInput.art = &art;
+      asciiInput.gpuRenderer = &gpuRenderer;
+      asciiInput.frameCache = &g_frameCache;
+      asciiInput.renderFailed = &renderFailed;
+      asciiInput.renderFailMessage = &renderFailMessage;
+      asciiInput.renderFailDetail = &renderFailDetail;
+      asciiInput.haveFrame = &haveFrame;
+      asciiInput.cachedWidth = &cachedWidth;
+      asciiInput.cachedMaxHeight = &cachedMaxHeight;
+      asciiInput.cachedFrameWidth = &cachedFrameWidth;
+      asciiInput.cachedFrameHeight = &cachedFrameHeight;
+      asciiInput.warningSink = [&](const std::string& message) {
+        appendVideoWarning(message);
+      };
+      asciiInput.timingSink = [&](const std::string& message) {
+        appendTiming(message);
+      };
+      playback_frame_output::prepareAsciiModeFrame(asciiInput);
     } else {
-      if (allowFrame) {
-        if (frame->width <= 0 || frame->height <= 0) {
-          appendVideoWarning("Skipping video frame with invalid dimensions.");
-          haveFrame = false;
-          return;
-        }
-        cachedWidth = width;
-        cachedMaxHeight = maxHeight;
-        cachedFrameWidth = frame->width;
-        cachedFrameHeight = frame->height;
-      }
+      playback_frame_output::prepareNonAsciiModeFrame(
+          allowFrame, width, maxHeight, frame->width, frame->height,
+          &cachedWidth, &cachedMaxHeight, &cachedFrameWidth,
+          &cachedFrameHeight,
+          [&](const std::string& message) { appendVideoWarning(message); },
+          &haveFrame);
     }
 
     screen.clear(baseStyle);
@@ -1636,85 +1455,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       screen.writeText(0, headerY++, fitLine(statusLine, width), dimStyle);
     }
 
-    if (enableAscii && !windowEnabled) {
-      int artWidth = std::min(art.width, width);
-      int artHeight = std::min(art.height, maxHeight);
-      // Ensure we don't render past screen bounds
-      int availableHeight = height - artTop;
-      artHeight = std::min(artHeight, availableHeight);
-      int artX = std::max(0, (width - artWidth) / 2);
-
-      if (allowFrame && artHeight > 0) {
-        for (int y = 0; y < artHeight; ++y) {
-          for (int x = 0; x < artWidth; ++x) {
-            const auto& cell =
-                art.cells[static_cast<size_t>(y * art.width + x)];
-            Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
-            screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
-          }
-        }
-      } else if (!allowFrame) {
-        screen.writeText(0, artTop, fitLine(waitingLabel(), width), dimStyle);
-      }
+    if (currentMode == PlaybackRenderMode::AsciiTerminal) {
+      playback_frame_output::renderAsciiModeContent(
+          screen, art, width, height, maxHeight, artTop, waitingLabel(),
+          allowFrame, baseStyle, overlayVisible(), subtitleText, accentStyle,
+          dimStyle);
     } else {
-      std::string label;
-      if (windowEnabled) {
-        label = "Video window active (W to toggle back)";
-      } else {
-        label = allowFrame ? "ASCII rendering disabled" : waitingLabel();
-      }
-      screen.writeText(0, artTop, fitLine(label, width), dimStyle);
-      if (allowFrame && maxHeight > 1) {
-        int sizeW = frame->width;
-        int sizeH = frame->height;
-        if (windowEnabled) {
-          int srcW = player.sourceWidth();
-          int srcH = player.sourceHeight();
-          if (srcW > 0 && srcH > 0) {
-            sizeW = srcW;
-            sizeH = srcH;
-          }
-        }
-        if (sizeW > 0 && sizeH > 0) {
-          std::string sizeLine =
-              "Video size: " + std::to_string(sizeW) + "x" +
-              std::to_string(sizeH);
-          screen.writeText(0, artTop + 1, fitLine(sizeLine, width), dimStyle);
-        }
-      }
-    }
-
-    if (enableAscii && !windowEnabled && !subtitleText.empty()) {
-      std::vector<std::string> lines;
-      std::string line;
-      for (char c : subtitleText) {
-        if (c == '\r') continue;
-        if (c == '\n') {
-          if (!line.empty()) lines.push_back(line);
-          line.clear();
-        } else {
-          line.push_back(c);
-        }
-      }
-      if (!line.empty()) lines.push_back(line);
-      if (lines.size() > 2) {
-        lines.resize(2);
-      }
-      if (!lines.empty()) {
-        int overlayReservedRows = overlayVisible() ? 4 : 0;
-        int subtitleBottom = height - overlayReservedRows - 1;
-        int maxVisible = subtitleBottom - artTop + 1;
-        if (subtitleBottom >= 0 && maxVisible > 0) {
-          int visibleLines = std::min<int>(lines.size(), maxVisible);
-          int startLine = static_cast<int>(lines.size()) - visibleLines;
-          int startY = subtitleBottom - visibleLines + 1;
-          for (int i = 0; i < visibleLines; ++i) {
-            const std::string& textLine = lines[startLine + i];
-            screen.writeText(0, startY + i, fitLine(textLine, width),
-                             accentStyle);
-          }
-        }
-      }
+      playback_frame_output::renderNonAsciiModeContent(
+          screen, windowEnabled, allowFrame, width, artTop, maxHeight, frame,
+          player.sourceWidth(), player.sourceHeight(), dimStyle);
     }
 
     progressBarX = -1;
@@ -2049,7 +1798,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       screen.updateSize();
       int width = std::max(20, screen.width());
       int height = std::max(10, screen.height());
-      if (enableAscii) {
+      if (isAsciiPlaybackMode(playbackMode())) {
         requestTargetSize(width, height);
       }
       pendingResize = false;
