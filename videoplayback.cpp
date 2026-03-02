@@ -38,6 +38,7 @@ extern "C" {
 #include "audioplayback.h"
 #include "gpu_shared.h"
 #include "player.h"
+#include "playback_dialog.h"
 #include "subtitles.h"
 #include "ui_helpers.h"
 #include "videowindow.h"
@@ -283,66 +284,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     screen.setAlwaysFullRedraw(true);
   }
 
-  auto renderDialog = [&](const std::string& title,
-                          const std::string& message,
-                          const std::string& detail,
-                          const std::string& footer) {
-    screen.updateSize();
-    int width = std::max(20, screen.width());
-    int height = std::max(10, screen.height());
-    screen.clear(baseStyle);
-    int y = 0;
-    if (!title.empty()) {
-      screen.writeText(0, y++, fitLine(title, width), accentStyle);
-    }
-    if (!message.empty() && y < height) {
-      screen.writeText(0, y++, fitLine(message, width), baseStyle);
-    }
-    if (!detail.empty() && y < height) {
-      screen.writeText(0, y++, fitLine(detail, width), dimStyle);
-    }
-    if (!footer.empty()) {
-      screen.writeText(0, height - 1, fitLine(footer, width), dimStyle);
-    }
-    screen.draw();
-  };
-
   auto showError = [&](const std::string& message,
                        const std::string& detail) -> bool {
-    renderDialog("Video error", message, detail, "Press Enter to continue.");
-    InputEvent ev{};
-    while (true) {
-      while (input.poll(ev)) {
-        if (ev.type == InputEvent::Type::Key) {
-          const KeyEvent& key = ev.key;
-          if (key.vk == VK_RETURN || key.vk == VK_ESCAPE ||
-              key.vk == VK_BROWSER_BACK || key.vk == VK_BACK) {
-            return true;
-          }
-        }
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    std::string footer = "Press Enter to continue.";
+    return playback_dialog::showErrorDialog(input, screen, baseStyle, accentStyle,
+                                           dimStyle, "Video error", message,
+                                           detail, footer);
   };
 
   auto showAudioFallbackPrompt = [&](const std::string& message,
                                      const std::string& detail) -> bool {
-    renderDialog("Audio only?", message, detail,
-                 "Enter: play audio  Esc: cancel");
-    InputEvent ev{};
-    while (true) {
-      while (input.poll(ev)) {
-        if (ev.type == InputEvent::Type::Key) {
-          const KeyEvent& key = ev.key;
-          if (key.vk == VK_RETURN) return true;
-          if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
-              key.vk == VK_BACK) {
-            return false;
-          }
-        }
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    return playback_dialog::showErrorDialog(
+        input, screen, baseStyle, accentStyle, dimStyle, "Audio only?", message,
+        detail, "Enter: play audio  Esc: cancel");
   };
 
   PerfLog perfLog;
@@ -446,7 +400,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   bool hasSubtitles = false;
 
   if (!player.open(playerConfig, nullptr)) {
-    bool ok = showError("Failed to open video.", "");
+    bool ok = reportVideoError("Failed to open video.", "");
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return ok;
   }
@@ -551,8 +505,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     std::string initError = player.initError();
     if (initError.rfind("No video stream found", 0) == 0) {
       if (!enableAudio) {
-        bool ok =
-            showError("No video stream found.", "Audio playback is disabled.");
+        bool ok = reportVideoError("No video stream found.",
+                                   "Audio playback is disabled.");
         finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
         return ok;
       }
@@ -564,7 +518,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (initError.empty()) {
       initError = "Failed to open video.";
     }
-    bool ok = showError(initError, "");
+    bool ok = reportVideoError(initError, "");
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return ok;
   }
@@ -1566,6 +1520,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (audioOk || audioStarting) audioStop();
     g_frameCache.Reset();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
+    renderScreen(true, true);
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return ok;
   }
@@ -1925,6 +1880,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (audioOk || audioStarting) audioStop();
     g_frameCache.Reset();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
+    renderScreen(true, true);
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return ok;
   }
