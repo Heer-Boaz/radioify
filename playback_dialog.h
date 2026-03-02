@@ -21,12 +21,19 @@
 
 namespace playback_dialog {
 
-inline bool showErrorDialog(ConsoleInput& input, ConsoleScreen& screen,
-                           const Style& baseStyle, const Style& accentStyle,
-                           const Style& dimStyle, const std::string& title,
-                           const std::string& message,
-                           const std::string& detail,
-                           const std::string& footer) {
+enum class DialogResult {
+  Confirmed,
+  Cancelled,
+};
+
+namespace {
+
+inline void renderDialogBody(ConsoleScreen& screen,
+                            const Style& baseStyle, const Style& accentStyle,
+                            const Style& dimStyle, const std::string& title,
+                            const std::string& message,
+                            const std::string& detail,
+                            const std::string& footer) {
   std::vector<std::string> lines;
   if (!title.empty()) {
     lines.push_back(title);
@@ -96,22 +103,71 @@ inline bool showErrorDialog(ConsoleInput& input, ConsoleScreen& screen,
                      dimStyle);
   }
   screen.draw();
+}
+
+}  // namespace
+
+inline void showInfoDialog(ConsoleInput& input, ConsoleScreen& screen,
+                          const Style& baseStyle, const Style& accentStyle,
+                          const Style& dimStyle, const std::string& title,
+                          const std::string& message,
+                          const std::string& detail,
+                          const std::string& footer) {
+  renderDialogBody(screen, baseStyle, accentStyle, dimStyle, title, message,
+                  detail, footer);
+
+  InputEvent ev{};
+  while (true) {
+    while (input.poll(ev)) {
+      if (ev.type == InputEvent::Type::Key) {
+        const KeyEvent& key = ev.key;
+        if (key.vk == VK_RETURN || key.vk == VK_SPACE || key.vk == VK_ESCAPE ||
+            key.vk == VK_BROWSER_BACK || key.vk == VK_BACK) {
+          return;
+        }
+      }
+      if (ev.type == InputEvent::Type::Mouse) {
+        if (ev.mouse.buttonState != 0) return;
+      }
+      if (ev.type == InputEvent::Type::Resize) {
+        renderDialogBody(screen, baseStyle, accentStyle, dimStyle, title,
+                        message, detail, footer);
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+
+inline DialogResult showConfirmDialog(ConsoleInput& input, ConsoleScreen& screen,
+                                    const Style& baseStyle,
+                                    const Style& accentStyle,
+                                    const Style& dimStyle,
+                                    const std::string& title,
+                                    const std::string& message,
+                                    const std::string& detail,
+                                    const std::string& footer) {
+  renderDialogBody(screen, baseStyle, accentStyle, dimStyle, title, message,
+                  detail, footer);
 
   InputEvent ev{};
   while (true) {
     while (input.poll(ev)) {
       if (ev.type == InputEvent::Type::Mouse) {
-        if (ev.mouse.buttonState != 0) return true;
+        if (ev.mouse.buttonState != 0) return DialogResult::Confirmed;
       }
       if (ev.type == InputEvent::Type::Key) {
         const KeyEvent& key = ev.key;
         if (key.vk == VK_RETURN || key.vk == VK_SPACE) {
-          return true;
+          return DialogResult::Confirmed;
         }
         if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
             key.vk == VK_BACK) {
-          return false;
+          return DialogResult::Cancelled;
         }
+      }
+      if (ev.type == InputEvent::Type::Resize) {
+        renderDialogBody(screen, baseStyle, accentStyle, dimStyle, title,
+                        message, detail, footer);
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
