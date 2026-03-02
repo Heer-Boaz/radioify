@@ -914,13 +914,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         std::isfinite(totalSec)) {
       displaySec = std::clamp(pendingTarget, 0.0, totalSec);
     }
-    std::string status = "PLAY";
+    std::string status = "\xE2\x96\xB6";  // ▶
     bool audioFinished = audioOk && audioIsFinished();
     bool paused = audioOk ? audioIsPaused() : userPaused;
     if (audioFinished) {
-      status = "END";
+      status = "\xE2\x96\xA0";  // ■
     } else if (paused) {
-      status = "PAUSE";
+      status = "\xE2\x8F\xB8";  // ⏸
     }
     int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
     float radioGain = audioGetRadioMakeup();

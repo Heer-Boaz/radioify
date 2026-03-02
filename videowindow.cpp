@@ -39,7 +39,11 @@ namespace {
 
     static const MenuGlyph kMenuGlyphs[] = {
         {' ', {0x00,0x00,0x00,0x00,0x00,0x00,0x00}},
+        {'\x01', {0x08,0x0C,0x0E,0x0F,0x0E,0x0C,0x08}}, // U+25B6 ▶
+        {'\x02', {0x1B,0x1B,0x1B,0x1B,0x1B,0x1B,0x1B}}, // U+23F8 ⏸
+        {'\x03', {0x00,0x1F,0x1F,0x1F,0x1F,0x1F,0x00}}, // U+25A0 ■
         {'+', {0x00,0x04,0x04,0x1F,0x04,0x04,0x00}},
+        {'%', {0x13,0x13,0x02,0x04,0x08,0x19,0x19}},
         {'-', {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}},
         {'.', {0x00,0x00,0x00,0x00,0x00,0x06,0x06}},
         {'/', {0x01,0x02,0x04,0x08,0x10,0x00,0x00}},
@@ -208,10 +212,60 @@ namespace {
         auto normalizeLine = [](const std::string& in) {
             std::string out;
             out.reserve(in.size());
-            for (unsigned char ch : in) {
-                if (ch == '\r' || ch == '\n') continue;
-                if (ch >= 'a' && ch <= 'z') out.push_back(static_cast<char>(ch - 'a' + 'A'));
-                else out.push_back(static_cast<char>(ch));
+            for (size_t i = 0; i < in.size();) {
+                unsigned char ch = static_cast<unsigned char>(in[i]);
+                if (ch == '\r' || ch == '\n') {
+                    ++i;
+                    continue;
+                }
+                if (ch < 0x80) {
+                    if (ch >= 'a' && ch <= 'z') {
+                        out.push_back(static_cast<char>(ch - 'a' + 'A'));
+                    } else {
+                        out.push_back(static_cast<char>(ch));
+                    }
+                    ++i;
+                    continue;
+                }
+
+                uint32_t cp = 0;
+                size_t extra = 0;
+                if ((ch & 0xE0u) == 0xC0u && i + 1 < in.size()) {
+                    cp = (static_cast<uint32_t>(ch & 0x1Fu) << 6) |
+                         (static_cast<uint32_t>(static_cast<unsigned char>(in[i + 1]) & 0x3Fu));
+                    extra = 1;
+                } else if ((ch & 0xF0u) == 0xE0u && i + 2 < in.size()) {
+                    cp = (static_cast<uint32_t>(ch & 0x0Fu) << 12) |
+                         (static_cast<uint32_t>(static_cast<unsigned char>(in[i + 1]) & 0x3Fu) << 6) |
+                         (static_cast<uint32_t>(static_cast<unsigned char>(in[i + 2]) & 0x3Fu));
+                    extra = 2;
+                } else if ((ch & 0xF8u) == 0xF0u && i + 3 < in.size()) {
+                    cp = (static_cast<uint32_t>(ch & 0x07u) << 18) |
+                         (static_cast<uint32_t>(static_cast<unsigned char>(in[i + 1]) & 0x3Fu) << 12) |
+                         (static_cast<uint32_t>(static_cast<unsigned char>(in[i + 2]) & 0x3Fu) << 6) |
+                         (static_cast<uint32_t>(static_cast<unsigned char>(in[i + 3]) & 0x3Fu));
+                    extra = 3;
+                } else {
+                    out.push_back('?');
+                    ++i;
+                    continue;
+                }
+
+                switch (cp) {
+                    case 0x25B6u:
+                        out.push_back('\x01');
+                        break;
+                    case 0x23F8u:
+                        out.push_back('\x02');
+                        break;
+                    case 0x25A0u:
+                        out.push_back('\x03');
+                        break;
+                    default:
+                        out.push_back('?');
+                        break;
+                }
+                i += extra + 1;
             }
             return out;
         };
