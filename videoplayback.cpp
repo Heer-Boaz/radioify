@@ -286,17 +286,16 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   auto showError = [&](const std::string& message,
                        const std::string& detail) -> bool {
-    std::string footer = "Press Enter to continue.";
     return playback_dialog::showErrorDialog(input, screen, baseStyle, accentStyle,
-                                           dimStyle, "Video error", message,
-                                           detail, footer);
+                                           dimStyle, "Video error", message, detail,
+                                           "");
   };
 
   auto showAudioFallbackPrompt = [&](const std::string& message,
                                      const std::string& detail) -> bool {
     return playback_dialog::showErrorDialog(
         input, screen, baseStyle, accentStyle, dimStyle, "Audio only?", message,
-        detail, "Enter: play audio  Esc: cancel");
+        detail, "");
   };
 
   PerfLog perfLog;

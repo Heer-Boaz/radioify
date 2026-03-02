@@ -100,11 +100,17 @@ inline bool showErrorDialog(ConsoleInput& input, ConsoleScreen& screen,
   InputEvent ev{};
   while (true) {
     while (input.poll(ev)) {
+      if (ev.type == InputEvent::Type::Mouse) {
+        if (ev.mouse.buttonState != 0) return true;
+      }
       if (ev.type == InputEvent::Type::Key) {
         const KeyEvent& key = ev.key;
-        if (key.vk == VK_RETURN || key.vk == VK_ESCAPE ||
-            key.vk == VK_BROWSER_BACK || key.vk == VK_BACK) {
+        if (key.vk == VK_RETURN || key.vk == VK_SPACE) {
           return true;
+        }
+        if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
+            key.vk == VK_BACK) {
+          return false;
         }
       }
     }
