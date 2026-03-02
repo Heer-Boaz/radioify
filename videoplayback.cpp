@@ -885,6 +885,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return std::string(buf);
   };
   auto buildWindowOverlayTopLine = [&]() -> std::string {
+    return windowTitle +
+           (g_videoWindow.IsVsyncEnabled() ? "  VSync: On" : "  VSync: Off");
+  };
+  auto buildWindowOverlayProgressSuffix = [&]() -> std::string {
     double currentSec = 0.0;
     double totalSec = -1.0;
     int64_t clockUs = player.currentUs();
@@ -910,12 +914,25 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         std::isfinite(totalSec)) {
       displaySec = std::clamp(pendingTarget, 0.0, totalSec);
     }
+    std::string status = "PLAY";
+    bool audioFinished = audioOk && audioIsFinished();
+    bool paused = audioOk ? audioIsPaused() : userPaused;
+    if (audioFinished) {
+      status = "END";
+    } else if (paused) {
+      status = "PAUSE";
+    }
+    int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
+    float radioGain = audioGetRadioMakeup();
+    char radioBuf[32];
+    std::snprintf(radioBuf, sizeof(radioBuf), " RG:%.2fx", radioGain);
     std::string timeLabel = totalSec > 0.0
                                 ? (formatWindowOverlayTime(displaySec) + " / " +
                                    formatWindowOverlayTime(totalSec))
                                 : formatWindowOverlayTime(displaySec);
-    return windowTitle + "  " + timeLabel +
-           (g_videoWindow.IsVsyncEnabled() ? "  VSync: On" : "  VSync: Off");
+    std::string volStr = " Vol: " + std::to_string(volPct) +
+                         (volPct > 100 ? "% (BOOST)" : "%") + radioBuf;
+    return timeLabel + " " + status + volStr;
   };
 
   auto terminalOverlayControlAt = [&](const MouseEvent& mouse) -> int {
@@ -949,12 +966,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     int maxChars = std::max(utf8CodepointCount(topLine),
                             utf8CodepointCount(controlsLine));
     if (maxChars <= 0) return -1;
-    int linePxH = std::clamp(static_cast<int>(std::round(winH * 0.045f)), 12, 36);
-    int lineCount = 2;  // metadata + controls
+    std::string progressLine = buildWindowOverlayProgressSuffix();
+    int linePxH =
+        std::clamp(static_cast<int>(std::round(winH * 0.045f)), 12, 36);
+    int lineCount = 1 + (controlsLine.empty() ? 0 : 1) +
+                    (progressLine.empty() ? 0 : 1);
     int textPxH =
         std::clamp(lineCount * linePxH + std::max(0, lineCount - 1) * 2, 14, 96);
-    int estScale = std::max(1, linePxH / 7);
-    int textPxW = std::min(winW, std::max(1, maxChars * 6 * estScale));
+    int textPxW =
+        std::clamp(static_cast<int>(std::lround(winW * 0.96)), 1, winW);
     int totalGlyphH = lineCount * 7 + (lineCount - 1);
     int maxScaleVert = std::max(1, textPxH / std::max(1, totalGlyphH));
     int maxScaleHoriz = std::max(1, textPxW / std::max(1, maxChars * 6));
@@ -971,7 +991,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     float textTopNorm = 0.95f - textHeightNorm;
     int textLeftPx = static_cast<int>(std::round(textLeftNorm * winW));
     int textTopPx = static_cast<int>(std::round(textTopNorm * winH));
-    int controlsY0 = textTopPx + 1 + (7 + 1) * scale;
+    int controlsLineIndex = controlsLine.empty() ? -1 : 1;
+    if (controlsLineIndex < 0) return -1;
+    int controlsY0 =
+        textTopPx + 1 + controlsLineIndex * (7 + 1) * scale;
     int controlsY1 = controlsY0 + 7 * scale;
     if (mouse.pos.Y < controlsY0 || mouse.pos.Y >= controlsY1) return -1;
     for (size_t i = 0; i < specs.size(); ++i) {
@@ -1095,6 +1118,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     std::vector<OverlayControlSpec> controlSpecs;
     buildOverlayControlSpecs(hoverIndex, controlSpecs);
     ui.controls = buildOverlayControlsText(hoverIndex);
+    ui.progressSuffix = buildWindowOverlayProgressSuffix();
     ui.controlButtons.clear();
     ui.controlButtons.reserve(controlSpecs.size());
     for (size_t i = 0; i < controlSpecs.size(); ++i) {

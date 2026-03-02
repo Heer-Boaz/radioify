@@ -34,18 +34,6 @@ static inline std::string thread_id_str() {
 #pragma comment(lib, "dxgi.lib")
 
 namespace {
-    static std::string formatTimeDouble(double s) {
-        if (!(s >= 0.0) || !std::isfinite(s)) return std::string("--:--");
-        int total = static_cast<int>(std::llround(s));
-        int h = total / 3600;
-        int m = (total % 3600) / 60;
-        int sec = total % 60;
-        char buf[64];
-        if (h > 0) std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, sec);
-        else std::snprintf(buf, sizeof(buf), "%02d:%02d", m, sec);
-        return std::string(buf);
-    }
-
     // Glyph font for ASCII-style overlay (5x7) -----------------------------------------------------------------
     typedef struct MenuGlyph { char c; uint8_t rows[7]; } MenuGlyph;
 
@@ -210,7 +198,8 @@ namespace {
     static bool renderOverlayTextToBitmap(
         const std::string& topLine,
         const std::vector<WindowUiState::ControlButton>& controlButtons,
-        const std::string& fallbackControlsLine, int width, int height,
+        const std::string& fallbackControlsLine,
+        const std::string& progressSuffix, int width, int height,
         std::vector<uint8_t>& outPixels, bool centerAlign = false, int padX = 1,
         int padY = 1) {
         outPixels.clear();
@@ -236,6 +225,7 @@ namespace {
 
         std::string line0 = normalizeLine(topLine);
         std::string line1;
+        std::string line2 = normalizeLine(progressSuffix);
         std::vector<ControlSegment> segments;
         if (!controlButtons.empty()) {
             int cursor = 0;
@@ -256,9 +246,14 @@ namespace {
             line1 = normalizeLine(fallbackControlsLine);
         }
 
-        int lineCount = line1.empty() ? 1 : 2;
+        int lineCount = 1;
+        if (!line1.empty()) ++lineCount;
+        if (!line2.empty()) ++lineCount;
+
+        // Keep control layout stable by sizing width from top + controls lines.
         int maxChars = static_cast<int>(line0.size());
-        if (!line1.empty()) maxChars = std::max(maxChars, static_cast<int>(line1.size()));
+        if (!line1.empty())
+            maxChars = std::max(maxChars, static_cast<int>(line1.size()));
         if (maxChars <= 0) {
             outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u, 0u);
             return true;
@@ -335,11 +330,15 @@ namespace {
         };
 
         auto drawLine = [&](const std::string& lineText, int lineIndex,
-                            bool withStyledButtons) {
+                            bool withStyledButtons, bool rightAlign) {
             if (lineText.empty()) return;
             int lineWidth = static_cast<int>(lineText.size()) * charAdvance;
-            int lineX = centerAlign ? startX + std::max(0, (totalTextWidth - lineWidth) / 2)
-                                    : startX;
+            int lineX = startX;
+            if (centerAlign) {
+                lineX = startX + std::max(0, (totalTextWidth - lineWidth) / 2);
+            } else if (rightAlign) {
+                lineX = std::max(padX, width - padX - lineWidth);
+            }
             int lineY = startY + lineIndex * (glyphH + lineSpacing) * scale;
 
             if (withStyledButtons && !segments.empty()) {
@@ -396,9 +395,13 @@ namespace {
             }
         };
 
-        drawLine(line0, 0, false);
+        int lineIndex = 0;
+        drawLine(line0, lineIndex++, false, false);
         if (!line1.empty()) {
-            drawLine(line1, 1, true);
+            drawLine(line1, lineIndex++, true, false);
+        }
+        if (!line2.empty()) {
+            drawLine(line2, lineIndex, false, true);
         }
         return true;
     }
@@ -1443,11 +1446,8 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
 
     // Optional: Render overlay text (metadata + control strip) to texture.
     if (showOverlay) {
-        std::string timeLabel = ui.totalSec > 0.0
-            ? (formatTimeDouble(ui.displaySec) + " / " + formatTimeDouble(ui.totalSec))
-            : formatTimeDouble(ui.displaySec);
-        std::string topLine = ui.title + "  " + timeLabel +
-            (ui.vsyncEnabled ? "  VSync: On" : "  VSync: Off");
+        std::string topLine =
+            ui.title + (ui.vsyncEnabled ? "  VSync: On" : "  VSync: Off");
 
         int lineCount = 1;
         int maxChars = 0;
@@ -1476,13 +1476,21 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             lineCount = 2;
         }
 
+        int progressChars = 0;
+        for (char c : ui.progressSuffix) {
+            if (c == '\r' || c == '\n') continue;
+            ++progressChars;
+        }
+        if (progressChars > 0) {
+            lineCount += 1;
+        }
+
         int linePxH = std::clamp((int)std::round(m_height * 0.045f), 12, 36);
         int textPxH =
             std::clamp(lineCount * linePxH + std::max(0, lineCount - 1) * 2,
                        14, 96);
-        int estScale = std::max(1, linePxH / 7);
-        int totalTextWidth = std::max(1, maxChars * 6 * estScale);
-        int textPxW = std::min(m_width, totalTextWidth);
+        int textPxW =
+            std::clamp(static_cast<int>(std::lround(m_width * 0.96)), 1, m_width);
 
         if (textPxW > 0 && textPxH > 0) {
             if (!m_textTexture || m_textWidth != textPxW || m_textHeight != textPxH) {
@@ -1509,8 +1517,8 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             std::vector<uint8_t> bmp;
             if (m_textTexture &&
                 renderOverlayTextToBitmap(topLine, ui.controlButtons,
-                                          controlsLine, textPxW, textPxH, bmp,
-                                          false, 1, 1)) {
+                                          controlsLine, ui.progressSuffix,
+                                          textPxW, textPxH, bmp, false, 1, 1)) {
                 D3D11_BOX box{0, 0, 0, (UINT)textPxW, (UINT)textPxH, 1};
                 context->UpdateSubresource(m_textTexture.Get(), 0, &box, bmp.data(), textPxW * 4, 0);
             }

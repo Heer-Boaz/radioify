@@ -29,6 +29,7 @@ struct WindowUiState {
     // UI text/metadata to display when overlay is visible
     std::string title; // filename or label
     std::string controls; // temporary control-strip labels (e.g. radio/50Hz)
+    std::string progressSuffix; // playback time/status/volume line
     std::vector<ControlButton> controlButtons;
     std::string subtitle;
     double displaySec = 0.0; // current time shown in overlay
