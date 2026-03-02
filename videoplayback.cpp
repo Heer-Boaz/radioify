@@ -930,8 +930,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                                 ? (formatWindowOverlayTime(displaySec) + " / " +
                                    formatWindowOverlayTime(totalSec))
                                 : formatWindowOverlayTime(displaySec);
-    std::string volStr = " Vol: " + std::to_string(volPct) +
-                         (volPct > 100 ? "% (BOOST)" : "%") + radioBuf;
+    std::string volStr = " Vol: " + std::to_string(volPct) + "%" + radioBuf;
     return timeLabel + " " + status + volStr;
   };
 
@@ -1668,7 +1667,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         lines.resize(2);
       }
       if (!lines.empty()) {
-        int overlayReservedRows = overlayVisible() ? 3 : 0;
+        int overlayReservedRows = overlayVisible() ? 4 : 0;
         int subtitleBottom = height - overlayReservedRows - 1;
         int maxVisible = subtitleBottom - artTop + 1;
         if (subtitleBottom >= 0 && maxVisible > 0) {
@@ -1689,8 +1688,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     progressBarWidth = 0;
     if (overlayVisible()) {
       int barLine = height - 1;
-      int labelLine = barLine - 1;
-      int controlsLine = labelLine - 1;
+      int suffixLine = barLine - 1;
+      int controlsLine = suffixLine - 1;
+      int titleLine = controlsLine - 1;
       if (controlsLine >= artTop && controlsLine >= 0) {
         std::vector<OverlayControlSpec> controls;
         buildOverlayControlSpecs(
@@ -1715,27 +1715,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           screen.writeText(x, controlsLine, text, style);
         }
       }
-      if (labelLine >= artTop && labelLine >= 0) {
-        std::string nowLabel = " " + toUtf8String(file.filename());
-        screen.writeText(0, labelLine, fitLine(nowLabel, width), accentStyle);
+      if (titleLine >= artTop && titleLine >= 0) {
+        std::string titleLineText = " " + buildWindowOverlayTopLine();
+        screen.writeText(0, titleLine, fitLine(titleLineText, width),
+                         accentStyle);
       }
 
-      std::string status;
-      bool audioFinished = audioOk && audioIsFinished();
-      bool paused = audioOk ? audioIsPaused() : userPaused;
-      if (audioFinished) {
-        status = "\xE2\x96\xA0";  // ended icon
-      } else if (paused) {
-        status = "\xE2\x8F\xB8";  // paused icon
-      } else {
-        status = "\xE2\x96\xB6";  // playing icon
-      }
-      int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-      float radioGain = audioGetRadioMakeup();
-      ProgressTextLayout progressText = buildProgressTextLayout(
-          displaySec, totalSec, status, volPct, radioGain, width);
-      std::string suffix = progressText.suffix;
-      int barWidth = progressText.barWidth;
+      std::string suffix = buildWindowOverlayProgressSuffix();
+      int barWidth = std::max(5, width - 2);
       double ratio = 0.0;
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
         ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
@@ -1752,8 +1739,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         screen.writeChar(1 + i, barLine, cell.ch, cell.style);
       }
       screen.writeChar(1 + barWidth, barLine, L'|', progressFrameStyle);
-      if (!suffix.empty()) {
-        screen.writeText(2 + barWidth, barLine, " " + suffix, baseStyle);
+      if (!suffix.empty() && suffixLine >= artTop && suffixLine >= 0) {
+        std::string suffixFit = fitLine(suffix, width);
+        int suffixWidth = utf8CodepointCount(suffixFit);
+        int suffixX = std::max(0, width - suffixWidth);
+        screen.writeText(suffixX, suffixLine, suffixFit, baseStyle);
       }
     }
 

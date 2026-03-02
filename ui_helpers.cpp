@@ -38,22 +38,20 @@ ProgressTextLayout buildProgressTextLayout(double displaySec,
   ProgressTextLayout out;
   char radioBuf[32];
   std::snprintf(radioBuf, sizeof(radioBuf), " RG:%.2fx", radioGain);
-  std::string volStr = " Vol: " + std::to_string(volPct) +
-                       (volPct > 100 ? "% (BOOST)" : "%") + radioBuf;
+  std::string volStr = " Vol: " + std::to_string(volPct) + "%" + radioBuf;
   out.suffix = formatTime(displaySec) + " / " + formatTime(totalSec) + " " +
                status + volStr;
   int suffixWidth = utf8CodepointCount(out.suffix);
   int barWidth = width - suffixWidth - 3;
   if (barWidth < 10) {
     out.suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " +
-                 status + " V:" + std::to_string(volPct) +
-                 (volPct > 100 ? "%!" : "%") + radioBuf;
+                 status + " V:" + std::to_string(volPct) + "%" + radioBuf;
     suffixWidth = utf8CodepointCount(out.suffix);
     barWidth = width - suffixWidth - 3;
   }
   if (barWidth < 10) {
-    out.suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) +
-                 (volPct > 100 ? "%!" : "%") + radioBuf;
+    out.suffix =
+        formatTime(displaySec) + " V:" + std::to_string(volPct) + "%" + radioBuf;
     suffixWidth = utf8CodepointCount(out.suffix);
     barWidth = width - suffixWidth - 3;
   }
