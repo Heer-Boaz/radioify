@@ -91,7 +91,7 @@ static bool isSupportedImageExt(const std::filesystem::path& p) {
 
 static bool isVideoExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
-  return ext == ".mp4" || ext == ".webm" || ext == ".mov";
+  return ext == ".mp4" || ext == ".webm" || ext == ".mov" || ext == ".mkv";
 }
 
 static bool isSupportedAudioExt(const std::filesystem::path& p) {
@@ -145,7 +145,7 @@ static bool isPsfExt(const std::filesystem::path& p) {
 }
 
 static bool isSupportedMediaExt(const std::filesystem::path& p) {
-  return isSupportedAudioExt(p) || isSupportedImageExt(p);
+  return isSupportedAudioExt(p) || isSupportedImageExt(p) || isVideoExt(p);
 }
 
 static bool isM4aExt(const std::filesystem::path& p) {
