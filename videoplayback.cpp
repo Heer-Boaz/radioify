@@ -1751,14 +1751,21 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     windowThreadRunning.store(false, std::memory_order_relaxed);
     windowThreadEnabled.store(false, std::memory_order_relaxed);
     windowPresentCv.notify_one();
-    player.close();
     stopWindowThread();
+    player.close();
     if (audioOk || audioStarting) audioStop();
     g_frameCache.Reset();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return ok;
   }
+
+  auto requestPlaybackExit = [&]() {
+    running = false;
+    closeWindowRequested = true;
+    windowThreadEnabled.store(false, std::memory_order_relaxed);
+    windowPresentCv.notify_one();
+  };
 
   while (running) {
     finalizeAudioStart();
@@ -1813,7 +1820,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       }
       if (ev.type == InputEvent::Type::Key) {
         InputCallbacks cb;
-        cb.onQuit = [&]() { running = false; };
+        cb.onQuit = [&]() { requestPlaybackExit(); };
         cb.onTogglePause = [&]() {
           if (audioOk) {
             audioTogglePause();
@@ -1865,10 +1872,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
         if (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BROWSER_BACK ||
             ev.key.vk == VK_BACK) {
-          running = false;
-          closeWindowRequested = true;
-          windowThreadEnabled.store(false, std::memory_order_relaxed);
-          windowPresentCv.notify_one();
+          requestPlaybackExit();
           continue;
         }
 
@@ -1885,10 +1889,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       if (ev.type == InputEvent::Type::Mouse) {
         const MouseEvent& mouse = ev.mouse;
         if (isBackMousePressed(mouse)) {
-          running = false;
-          closeWindowRequested = true;
-          windowThreadEnabled.store(false, std::memory_order_relaxed);
-          windowPresentCv.notify_one();
+          requestPlaybackExit();
           continue;
         }
         bool windowEvent = (mouse.control & 0x80000000) != 0;
@@ -2083,8 +2084,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     windowThreadRunning.store(false, std::memory_order_relaxed);
     windowThreadEnabled.store(false, std::memory_order_relaxed);
     windowPresentCv.notify_one();
-    player.close();
     stopWindowThread();
+    player.close();
     if (audioOk || audioStarting) audioStop();
     g_frameCache.Reset();
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
@@ -2092,8 +2093,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return ok;
   }
 
-  player.close();
   stopWindowThread();
+  player.close();
   if (audioOk || audioStarting) audioStop();
   g_frameCache.Reset();
   finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
