@@ -852,11 +852,15 @@ int runTui(Options o) {
     dirty = true;
   }
   if (hasPendingVideo) {
+    bool quitAppRequested = false;
     bool handled =
         showAsciiVideo(pendingVideo, input, screen, kStyleNormal, kStyleAccent,
                        kStyleDim, kStyleProgressEmpty, kStyleProgressFrame,
-                       kProgressStart, kProgressEnd, videoConfig);
-    if (!handled) {
+                       kProgressStart, kProgressEnd, videoConfig,
+                       &quitAppRequested);
+    if (quitAppRequested) {
+      running = false;
+    } else if (!handled) {
       audioStartFile(pendingVideo);
     }
     dirty = true;
@@ -993,10 +997,15 @@ int runTui(Options o) {
       return true;
     }
     if (isVideoExt(file)) {
+      bool quitAppRequested = false;
       bool handled = showAsciiVideo(
           file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
           kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
-          kProgressEnd, videoConfig);
+          kProgressEnd, videoConfig, &quitAppRequested);
+      if (quitAppRequested) {
+        running = false;
+        return true;
+      }
       if (handled) return true;
     }
     if (isKssExt(file) || isGmeExt(file) || isVgmExt(file) || isPsfExt(file)) {

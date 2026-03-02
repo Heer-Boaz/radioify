@@ -253,7 +253,22 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                     const Style& progressEmptyStyle,
                     const Style& progressFrameStyle,
                     const Color& progressStart, const Color& progressEnd,
-                    const VideoPlaybackConfig& config) {
+                    const VideoPlaybackConfig& config,
+                    bool* quitAppRequested) {
+  bool quitApplicationRequested = false;
+  if (quitAppRequested) {
+    *quitAppRequested = false;
+  }
+  struct QuitFlagScope {
+    bool* out = nullptr;
+    bool* value = nullptr;
+    ~QuitFlagScope() {
+      if (out && value) {
+        *out = *value;
+      }
+    }
+  } quitFlagScope{quitAppRequested, &quitApplicationRequested};
+
   bool enableAscii = config.enableAscii;
   bool enableAudio = config.enableAudio && audioIsEnabled();
   bool enableSubtitles = config.enableSubtitles;
@@ -502,6 +517,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         const KeyEvent& key = ev.key;
         const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
         bool ctrl = (key.control & ctrlMask) != 0;
+        if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
+          quitApplicationRequested = true;
+          running = false;
+          break;
+        }
         if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
           running = false;
           break;
@@ -1760,11 +1780,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return ok;
   }
 
-  auto requestPlaybackExit = [&]() {
+  auto requestPlaybackExit = [&](bool quitApp) {
     running = false;
     closeWindowRequested = true;
     windowThreadEnabled.store(false, std::memory_order_relaxed);
     windowPresentCv.notify_one();
+    if (quitApp) {
+      quitApplicationRequested = true;
+    }
   };
 
   while (running) {
@@ -1820,7 +1843,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       }
       if (ev.type == InputEvent::Type::Key) {
         InputCallbacks cb;
-        cb.onQuit = [&]() { requestPlaybackExit(); };
+        cb.onQuit = [&]() { requestPlaybackExit(true); };
         cb.onTogglePause = [&]() {
           if (audioOk) {
             audioTogglePause();
@@ -1872,7 +1895,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
         if (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BROWSER_BACK ||
             ev.key.vk == VK_BACK) {
-          requestPlaybackExit();
+          requestPlaybackExit(false);
           continue;
         }
 
@@ -1889,7 +1912,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       if (ev.type == InputEvent::Type::Mouse) {
         const MouseEvent& mouse = ev.mouse;
         if (isBackMousePressed(mouse)) {
-          requestPlaybackExit();
+          requestPlaybackExit(false);
           continue;
         }
         bool windowEvent = (mouse.control & 0x80000000) != 0;

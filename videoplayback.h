@@ -25,4 +25,5 @@ bool showAsciiVideo(const std::filesystem::path& file,
                     const Style& progressFrameStyle,
                     const Color& progressStart,
                     const Color& progressEnd,
-                    const VideoPlaybackConfig& config);
+                    const VideoPlaybackConfig& config,
+                    bool* quitAppRequested = nullptr);
