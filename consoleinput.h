@@ -145,7 +145,6 @@ struct InputCallbacks {
   std::function<void()> onToggleRadio;
   std::function<void()> onToggle50Hz;
   std::function<void()> onToggleOptions;
-  std::function<void()> onToggleVsync;
   std::function<void()> onToggleMelodyVisualization;
   std::function<void(int)> onSeekBy;
   std::function<void(double)> onSeekToRatio;

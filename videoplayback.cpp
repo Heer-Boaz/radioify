@@ -49,7 +49,6 @@ static VideoWindow g_videoWindow;
 static GpuVideoFrameCache g_frameCache;
 static bool g_windowEnabledPersistent = false;
 static bool g_windowEnabledInitialized = false;
-static bool g_windowVsyncEnabledPersistent = true;
 
 #if RADIOIFY_ENABLE_TIMING_LOG
 static inline std::string now_ms() {
@@ -684,8 +683,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     g_windowEnabledInitialized = true;
   }
   bool& windowEnabled = g_windowEnabledPersistent;
-  bool& windowVsyncEnabled = g_windowVsyncEnabledPersistent;
-  g_videoWindow.SetVsync(windowVsyncEnabled);
+  g_videoWindow.SetVsync(true);
   if (g_videoWindow.IsOpen()) {
     g_videoWindow.ShowWindow(windowEnabled);
   }
@@ -885,8 +883,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return std::string(buf);
   };
   auto buildWindowOverlayTopLine = [&]() -> std::string {
-    return windowTitle +
-           (g_videoWindow.IsVsyncEnabled() ? "  VSync: On" : "  VSync: Off");
+    return windowTitle;
   };
   auto buildWindowOverlayProgressSuffix = [&]() -> std::string {
     double currentSec = 0.0;
@@ -1130,7 +1127,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     ui.displaySec = displaySec;
     ui.totalSec = totalSec;
     ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-    ui.vsyncEnabled = g_videoWindow.IsVsyncEnabled();
     std::string subtitle = getSubtitleText(clockUs, seekingOverlay);
     ui.subtitle = subtitle;
     ui.subtitleAlpha = subtitle.empty() ? 0.0f : 1.0f;
@@ -1625,7 +1621,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       std::string label;
       if (windowEnabled) {
         label = "Video window active (W to toggle back)";
-        label += windowVsyncEnabled ? "  VSync: On" : "  VSync: Off";
       } else {
         label = allowFrame ? "ASCII rendering disabled" : waitingLabel();
       }
@@ -1830,10 +1825,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         };
         cb.onToggleRadio = [&]() { if (audioOk) audioToggleRadio(); };
         cb.onToggle50Hz = [&]() { if (audioOk) audioToggle50Hz(); };
-        cb.onToggleVsync = [&]() {
-          windowVsyncEnabled = !windowVsyncEnabled;
-          g_videoWindow.SetVsync(windowVsyncEnabled);
-        };
         cb.onSeekBy = [&](int dir) {
           double currentSec = player.currentUs() / 1000000.0;
           sendSeekRequest(currentSec + dir * 5.0);

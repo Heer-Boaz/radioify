@@ -1299,7 +1299,9 @@ bool VideoWindow::PollInput(InputEvent& ev) {
 }
 
 void VideoWindow::SetVsync(bool enabled) {
-    m_presentInterval.store(enabled ? 1u : 0u, std::memory_order_relaxed);
+    (void)enabled;
+    // VSync is always enforced on.
+    m_presentInterval.store(1u, std::memory_order_relaxed);
 }
 
 HANDLE VideoWindow::GetFrameLatencyWaitableObject() {
@@ -1500,8 +1502,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
 
     // Optional: Render overlay text (metadata + control strip) to texture.
     if (showOverlay) {
-        std::string topLine =
-            ui.title + (ui.vsyncEnabled ? "  VSync: On" : "  VSync: Off");
+        std::string topLine = ui.title;
 
         int lineCount = 1;
         int maxChars = 0;

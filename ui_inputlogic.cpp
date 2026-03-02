@@ -706,10 +706,6 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
       if (callbacks.onToggleOptions) callbacks.onToggleOptions();
       return true;
     }
-    if (key.vk == 'V' || key.ch == 'v' || key.ch == 'V') {
-      if (callbacks.onToggleVsync) callbacks.onToggleVsync();
-      return true;
-    }
     if (key.vk == 'M' || key.ch == 'm' || key.ch == 'M') {
       if (callbacks.onToggleMelodyVisualization)
         callbacks.onToggleMelodyVisualization();

@@ -25,7 +25,6 @@ struct WindowUiState {
     float progress = 0.0f;
     float overlayAlpha = 0.0f;
     bool isPaused = false;
-    bool vsyncEnabled = true;
     // UI text/metadata to display when overlay is visible
     std::string title; // filename or label
     std::string controls; // temporary control-strip labels (e.g. radio/50Hz)
