@@ -428,7 +428,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   auto reportVideoError = [&](const std::string& message,
                               const std::string& detail) -> bool {
     appendVideoError(message, detail);
-    return true;
+    std::string uiMessage = message.empty() ? "Video playback error." : message;
+    std::string uiDetail = detail;
+    if (uiMessage.empty() && uiDetail.empty()) {
+      uiDetail = "Video playback encountered an unexpected error.";
+    }
+    return showError(uiMessage, uiDetail);
   };
 
   Player player;
