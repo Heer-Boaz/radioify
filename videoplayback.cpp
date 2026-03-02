@@ -436,6 +436,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   playerConfig.allowDecoderScale = enableAscii;
   SubtitleTrack subtitles;
   std::filesystem::path subtitlePath;
+  bool hasSubtitles = false;
   auto findSubtitlePath =
       [&](const std::filesystem::path& videoPath) -> std::filesystem::path {
     std::error_code ec;
@@ -575,19 +576,18 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return ok;
   }
 
-  if (enableSubtitles) {
-    subtitlePath = findSubtitlePath(file);
-    if (!subtitlePath.empty()) {
-      std::string subtitleError;
-      if (subtitles.loadFromFile(subtitlePath, &subtitleError)) {
-        perfLogAppendf(&perfLog, "subtitle_load ok=1 file=%s cues=%zu",
-                       toUtf8String(subtitlePath.filename()).c_str(),
-                       subtitles.size());
-      } else {
-        perfLogAppendf(&perfLog, "subtitle_load ok=0 file=%s err=%s",
-                       toUtf8String(subtitlePath.filename()).c_str(),
-                       subtitleError.c_str());
-      }
+  subtitlePath = findSubtitlePath(file);
+  if (!subtitlePath.empty()) {
+    std::string subtitleError;
+    if (subtitles.loadFromFile(subtitlePath, &subtitleError)) {
+      hasSubtitles = !subtitles.empty();
+      perfLogAppendf(&perfLog, "subtitle_load ok=1 file=%s cues=%zu",
+                     toUtf8String(subtitlePath.filename()).c_str(),
+                     subtitles.size());
+    } else {
+      perfLogAppendf(&perfLog, "subtitle_load ok=0 file=%s err=%s",
+                     toUtf8String(subtitlePath.filename()).c_str(),
+                     subtitleError.c_str());
     }
   }
 
@@ -820,6 +820,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   enum class OverlayControlId {
     Radio,
     Hz50,
+    Subtitles,
   };
   struct OverlayControlSpec {
     OverlayControlId id = OverlayControlId::Radio;
@@ -860,6 +861,20 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         hz50.width = std::max(utf8CodepointCount(hz50.normalText),
                               utf8CodepointCount(hz50.hoverText));
         out.push_back(hz50);
+
+        OverlayControlSpec subtitles{};
+        subtitles.id = OverlayControlId::Subtitles;
+        subtitles.active = hasSubtitles && enableSubtitles;
+        auto subtitleLabels =
+            makeLabels(subtitles.active ? "Subs: On" : "Subs: Off");
+        if (!hasSubtitles) {
+          subtitleLabels = makeLabels("Subs: N/A");
+        }
+        subtitles.normalText = subtitleLabels.first;
+        subtitles.hoverText = subtitleLabels.second;
+        subtitles.width = std::max(utf8CodepointCount(subtitles.normalText),
+                                   utf8CodepointCount(subtitles.hoverText));
+        out.push_back(subtitles);
 
         int cursor = 0;
         for (size_t i = 0; i < out.size(); ++i) {
@@ -1040,6 +1055,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       case OverlayControlId::Hz50:
         if (!audioOk) return false;
         audioToggle50Hz();
+        return true;
+      case OverlayControlId::Subtitles:
+        if (!hasSubtitles) return false;
+        enableSubtitles = !enableSubtitles;
         return true;
     }
     return false;
@@ -1896,6 +1915,18 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BROWSER_BACK ||
             ev.key.vk == VK_BACK) {
           requestPlaybackExit(false);
+          continue;
+        }
+        if (ev.key.vk == 'S' || ev.key.vk == 's') {
+          if (hasSubtitles) {
+            enableSubtitles = !enableSubtitles;
+            triggerOverlay();
+            redraw = true;
+            if (windowEnabled) {
+              windowForcePresent.store(true, std::memory_order_relaxed);
+              windowPresentCv.notify_one();
+            }
+          }
           continue;
         }
 
