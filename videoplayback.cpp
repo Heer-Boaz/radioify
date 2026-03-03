@@ -770,12 +770,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return nowMs() <= until;
   };
   const std::string windowTitle = toUtf8String(file.filename());
-  enum class OverlayControlId {
-    Radio,
-    Hz50,
-    Subtitles,
-    SubtitleLanguage,
-  };
+    enum class OverlayControlId {
+      Radio,
+      Hz50,
+      AudioTrack,
+      Subtitles,
+      SubtitleLanguage,
+    };
   struct OverlayControlSpec {
     OverlayControlId id = OverlayControlId::Radio;
     std::string normalText;
@@ -812,12 +813,33 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         auto hzLabels = makeLabels(hz50.active ? "50Hz: 50" : "50Hz: Auto");
         hz50.normalText = hzLabels.first;
         hz50.hoverText = hzLabels.second;
-        hz50.width = std::max(utf8CodepointCount(hz50.normalText),
-                              utf8CodepointCount(hz50.hoverText));
-        out.push_back(hz50);
+          hz50.width = std::max(utf8CodepointCount(hz50.normalText),
+                                utf8CodepointCount(hz50.hoverText));
+          out.push_back(hz50);
 
-        OverlayControlSpec subtitles{};
-        subtitles.id = OverlayControlId::Subtitles;
+          OverlayControlSpec audioTrack{};
+          audioTrack.id = OverlayControlId::AudioTrack;
+          size_t audioTracks = player.audioTrackCount();
+          std::string audioLabel = "Audio: N/A";
+          if (audioTracks > 0 && audioOk) {
+            std::string activeAudio = player.activeAudioTrackLabel();
+            if (activeAudio.empty()) activeAudio = "N/A";
+            if (utf8CodepointCount(activeAudio) > 14) {
+              activeAudio = utf8Take(activeAudio, 14);
+            }
+            audioLabel = "Audio: " + activeAudio;
+          }
+          auto audioLabels = makeLabels(audioLabel);
+          audioTrack.normalText = audioLabels.first;
+          audioTrack.hoverText = audioLabels.second;
+          audioTrack.active =
+              audioOk && player.canCycleAudioTracks();
+          audioTrack.width = std::max(utf8CodepointCount(audioTrack.normalText),
+                                      utf8CodepointCount(audioTrack.hoverText));
+          out.push_back(audioTrack);
+
+          OverlayControlSpec subtitles{};
+          subtitles.id = OverlayControlId::Subtitles;
         bool subtitlesEnabled =
             enableSubtitlesShared.load(std::memory_order_relaxed);
         subtitles.active = hasSubtitles && subtitlesEnabled;
@@ -832,15 +854,18 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                                    utf8CodepointCount(subtitles.hoverText));
         out.push_back(subtitles);
 
-        if (subtitleManager.canCycle()) {
-          OverlayControlSpec subtitleLanguage{};
-          subtitleLanguage.id = OverlayControlId::SubtitleLanguage;
-          subtitleLanguage.active = hasSubtitles && subtitlesEnabled;
-          auto languageLabel = subtitleManager.activeLanguageLabel();
-          auto subtitleLanguageLabels = makeLabels("Lang: " + languageLabel);
-          subtitleLanguage.normalText = subtitleLanguageLabels.first;
-          subtitleLanguage.hoverText = subtitleLanguageLabels.second;
-          subtitleLanguage.width =
+          if (subtitleManager.canCycle()) {
+            OverlayControlSpec subtitleLanguage{};
+            subtitleLanguage.id = OverlayControlId::SubtitleLanguage;
+            subtitleLanguage.active = hasSubtitles;
+            auto trackLabel = subtitleManager.activeTrackLabel();
+            if (utf8CodepointCount(trackLabel) > 14) {
+              trackLabel = utf8Take(trackLabel, 14);
+            }
+            auto subtitleLanguageLabels = makeLabels("Sub: " + trackLabel);
+            subtitleLanguage.normalText = subtitleLanguageLabels.first;
+            subtitleLanguage.hoverText = subtitleLanguageLabels.second;
+            subtitleLanguage.width =
               std::max(utf8CodepointCount(subtitleLanguage.normalText),
                        utf8CodepointCount(subtitleLanguage.hoverText));
           out.push_back(subtitleLanguage);
@@ -1022,18 +1047,21 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       return false;
     }
     const auto& spec = specs[static_cast<size_t>(controlIndex)];
-    switch (spec.id) {
-      case OverlayControlId::Radio:
-        if (!audioOk) return false;
-        audioToggleRadio();
-        return true;
-      case OverlayControlId::Hz50:
-        if (!audioOk) return false;
-        audioToggle50Hz();
-        return true;
-      case OverlayControlId::Subtitles:
-        if (!hasSubtitles) return false;
-        enableSubtitles = !enableSubtitles;
+      switch (spec.id) {
+        case OverlayControlId::Radio:
+          if (!audioOk) return false;
+          audioToggleRadio();
+          return true;
+        case OverlayControlId::Hz50:
+          if (!audioOk) return false;
+          audioToggle50Hz();
+          return true;
+        case OverlayControlId::AudioTrack:
+          if (!audioOk) return false;
+          return player.cycleAudioTrack();
+        case OverlayControlId::Subtitles:
+          if (!hasSubtitles) return false;
+          enableSubtitles = !enableSubtitles;
         enableSubtitlesShared.store(enableSubtitles,
                                     std::memory_order_relaxed);
         return true;
@@ -1664,19 +1692,30 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           }
           continue;
         }
-        if (ev.key.vk == 'L' || ev.key.vk == 'l') {
-          if (cycleSubtitleLanguage()) {
-            triggerOverlay();
-            redraw = true;
-            if (windowEnabled) {
-              windowForcePresent.store(true, std::memory_order_relaxed);
-              windowPresentCv.notify_one();
+          if (ev.key.vk == 'L' || ev.key.vk == 'l') {
+            if (cycleSubtitleLanguage()) {
+              triggerOverlay();
+              redraw = true;
+              if (windowEnabled) {
+                windowForcePresent.store(true, std::memory_order_relaxed);
+                windowPresentCv.notify_one();
+              }
             }
+            continue;
           }
-          continue;
-        }
+          if (ev.key.vk == 'A' || ev.key.vk == 'a') {
+            if (player.cycleAudioTrack()) {
+              triggerOverlay();
+              redraw = true;
+              if (windowEnabled) {
+                windowForcePresent.store(true, std::memory_order_relaxed);
+                windowPresentCv.notify_one();
+              }
+            }
+            continue;
+          }
 
-        if (handlePlaybackInput(ev, running, cb)) {
+          if (handlePlaybackInput(ev, running, cb)) {
           triggerOverlay();
           redraw = true;
           if (windowEnabled) {

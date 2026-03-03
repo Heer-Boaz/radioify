@@ -70,6 +70,10 @@ class Player {
   void requestSeek(int64_t targetUs);
   void requestResize(int targetW, int targetH);
   void setVideoPaused(bool paused);
+  size_t audioTrackCount() const;
+  std::string activeAudioTrackLabel() const;
+  bool canCycleAudioTracks() const;
+  bool cycleAudioTrack();
 
   bool initDone() const;
   bool initOk() const;

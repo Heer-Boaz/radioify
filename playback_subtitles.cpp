@@ -88,6 +88,24 @@ std::string normalizeLanguageLabel(const std::string& language) {
   return label;
 }
 
+std::string subtitleOptionLabel(const playback_subtitles::SubtitleOption& option,
+                                size_t index) {
+  std::string label;
+  if (!option.language.empty()) {
+    label = normalizeLanguageLabel(option.language);
+  }
+  if (label.empty() && !option.isEmbedded) {
+    std::string stem = option.path.stem().string();
+    if (!stem.empty()) {
+      label = stem;
+    }
+  }
+  if (label.empty()) {
+    label = "Track " + std::to_string(index + 1);
+  }
+  return label;
+}
+
 std::string formatSrtTimestamp(int64_t timeUs) {
   int64_t safeUs = std::max<int64_t>(kMinValidTimestampUs, timeUs);
   int64_t totalMs = safeUs / kUsPerMs;
@@ -102,12 +120,29 @@ std::string formatSrtTimestamp(int64_t timeUs) {
 }
 
 std::string stripEmbeddedText(std::string_view raw) {
+  std::string_view source = raw;
+  while (!source.empty() &&
+         std::isspace(static_cast<unsigned char>(source.front())) != 0) {
+    source.remove_prefix(1);
+  }
+  if (startsWithIgnoreCase(source, "dialogue:")) {
+    int commaCount = 0;
+    for (size_t i = 0; i < source.size(); ++i) {
+      if (source[i] != ',') continue;
+      ++commaCount;
+      if (commaCount >= 9) {
+        source = source.substr(i + 1);
+        break;
+      }
+    }
+  }
+
   std::string out;
-  out.reserve(raw.size());
+  out.reserve(source.size());
   bool inAssTag = false;
   bool inHtmlTag = false;
-  for (size_t i = 0; i < raw.size(); ++i) {
-    char c = raw[i];
+  for (size_t i = 0; i < source.size(); ++i) {
+    char c = source[i];
     if (inAssTag) {
       if (c == '}') inAssTag = false;
       continue;
@@ -125,13 +160,14 @@ std::string stripEmbeddedText(std::string_view raw) {
       inHtmlTag = true;
       continue;
     }
-    if (c == '\\' && i + 1 < raw.size() &&
-        (raw[i + 1] == 'N' || raw[i + 1] == 'n')) {
+    if (c == '\\' && i + 1 < source.size() &&
+        (source[i + 1] == 'N' || source[i + 1] == 'n')) {
       out.push_back('\n');
       ++i;
       continue;
     }
-    if (c == '\\' && i + 1 < raw.size() && (raw[i + 1] == 'h' || raw[i + 1] == 'H')) {
+    if (c == '\\' && i + 1 < source.size() &&
+        (source[i + 1] == 'h' || source[i + 1] == 'H')) {
       out.push_back(' ');
       ++i;
       continue;
@@ -218,9 +254,11 @@ bool writeEmbeddedCuesToSrt(const std::vector<EmbeddedSubtitleCue>& cues,
 bool appendEmbeddedCuesFromSubtitle(const AVSubtitle& sub, int64_t fallbackBaseUs,
                                    const AVRational& streamTimeBase,
                                    std::vector<EmbeddedSubtitleCue>& out) {
+  (void)streamTimeBase;
   int64_t baseUs = AV_NOPTS_VALUE;
   if (sub.pts != AV_NOPTS_VALUE) {
-    baseUs = av_rescale_q(sub.pts, streamTimeBase, AVRational{1, 1000000});
+    baseUs =
+        av_rescale_q(sub.pts, AVRational{1, AV_TIME_BASE}, AVRational{1, 1000000});
   }
   if (baseUs == AV_NOPTS_VALUE) {
     baseUs = fallbackBaseUs;
@@ -308,9 +346,6 @@ bool decodeEmbeddedSubtitleStream(AVFormatContext* format, AVStream* stream,
     }
     avsubtitle_free(&sub);
     av_packet_unref(packet);
-    if (decodeRes < 0) {
-      break;
-    }
   }
 
   // Flush decoder.
@@ -497,6 +532,14 @@ bool SubtitleManager::canCycle() const {
   return trackCount() > 1;
 }
 
+size_t SubtitleManager::activeTrackIndex() const {
+  int activeIndex = activeIndex_.load(std::memory_order_relaxed);
+  if (activeIndex < 0 || activeIndex >= static_cast<int>(options_.size())) {
+    return static_cast<size_t>(-1);
+  }
+  return static_cast<size_t>(activeIndex);
+}
+
 bool SubtitleManager::cycleLanguage() {
   if (!canCycle()) return false;
   int activeIndex = activeIndex_.load(std::memory_order_relaxed);
@@ -509,12 +552,16 @@ bool SubtitleManager::cycleLanguage() {
   return true;
 }
 
-std::string SubtitleManager::activeLanguageLabel() const {
-  const SubtitleOption* option = activeOption();
-  if (!option) {
+std::string SubtitleManager::activeTrackLabel() const {
+  size_t activeIndex = activeTrackIndex();
+  if (activeIndex == static_cast<size_t>(-1) || activeIndex >= options_.size()) {
     return "N/A";
   }
-  return normalizeLanguageLabel(option->language);
+  return subtitleOptionLabel(options_[activeIndex], activeIndex);
+}
+
+std::string SubtitleManager::activeLanguageLabel() const {
+  return activeTrackLabel();
 }
 
 bool SubtitleManager::loadEmbeddedTracks(const std::filesystem::path& videoPath,
@@ -543,6 +590,14 @@ bool SubtitleManager::loadEmbeddedTracks(const std::filesystem::path& videoPath,
     AVStream* stream = format->streams[i];
     if (!stream || !stream->codecpar) continue;
     if (stream->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE) continue;
+
+    int64_t rewindTarget =
+        (format->start_time != AV_NOPTS_VALUE) ? format->start_time : 0;
+    if (avformat_seek_file(format, -1, INT64_MIN, rewindTarget, INT64_MAX,
+                           AVSEEK_FLAG_BACKWARD) < 0) {
+      av_seek_frame(format, -1, 0, AVSEEK_FLAG_BACKWARD);
+    }
+    avformat_flush(format);
 
     std::vector<EmbeddedSubtitleCue> cues;
     std::string decodeError;

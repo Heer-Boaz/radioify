@@ -27,8 +27,10 @@ class SubtitleManager {
   const SubtitleTrack* activeTrack() const;
   const SubtitleOption* activeOption() const;
   size_t trackCount() const;
+  size_t activeTrackIndex() const;
   bool canCycle() const;
   bool cycleLanguage();
+  std::string activeTrackLabel() const;
   std::string activeLanguageLabel() const;
 
  private:

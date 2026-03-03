@@ -84,6 +84,7 @@ enum class PlayerEventType {
   SeekRequest,
   PauseRequest,
   ResizeRequest,
+  CycleAudioTrack,
   CloseRequest,
   SeekApplied,
   FirstFramePresented,
@@ -757,12 +758,33 @@ int64_t ioSeek(void* opaque, int64_t offset, int whence) {
   return cache->seek(offset, whence);
 }
 
+std::string streamMetadataValue(const AVStream* stream, const char* key) {
+  if (!stream || !stream->metadata || !key) return {};
+  const AVDictionaryEntry* entry = av_dict_get(stream->metadata, key, nullptr, 0);
+  if (!entry || !entry->value || entry->value[0] == '\0') return {};
+  return std::string(entry->value);
+}
+
+std::string formatAudioTrackLabel(const AVStream* stream, size_t ordinal) {
+  std::string language = streamMetadataValue(stream, "language");
+  std::string title = streamMetadataValue(stream, "title");
+  if (!title.empty() && !language.empty()) {
+    return language + " - " + title;
+  }
+  if (!language.empty()) return language;
+  if (!title.empty()) return title;
+  return "Track " + std::to_string(ordinal + 1);
+}
+
 struct DemuxContext {
   AVFormatContext* fmt = nullptr;
   AVIOContext* avio = nullptr;
   std::unique_ptr<IoCache> io;
   int videoStreamIndex = -1;
   int audioStreamIndex = -1;
+  std::vector<int> audioStreamIndices;
+  std::vector<std::string> audioTrackLabels;
+  int activeAudioTrack = -1;
   AVRational videoTimeBase{0, 1};
   AVRational audioTimeBase{0, 1};
   int64_t formatStartUs = 0;
@@ -967,19 +989,43 @@ bool initDemuxer(const std::filesystem::path& path, DemuxContext* out,
       out->videoStartUs = out->formatStartUs;
     }
   }
-  const AVCodec* acodec = nullptr;
-  out->audioStreamIndex =
-      av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, &acodec, 0);
-  if (out->audioStreamIndex >= 0) {
-    AVStream* stream = fmt->streams[out->audioStreamIndex];
-    out->audioTimeBase = stream->time_base;
-    if (stream->start_time != AV_NOPTS_VALUE) {
+    out->audioStreamIndices.clear();
+    out->audioTrackLabels.clear();
+    out->activeAudioTrack = -1;
+    for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+      AVStream* stream = fmt->streams[i];
+      if (!stream || !stream->codecpar) continue;
+      if (stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) continue;
+      out->audioStreamIndices.push_back(static_cast<int>(i));
+      out->audioTrackLabels.push_back(
+          formatAudioTrackLabel(stream, out->audioTrackLabels.size()));
+    }
+
+    const AVCodec* acodec = nullptr;
+    out->audioStreamIndex =
+        av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, &acodec, 0);
+    if (out->audioStreamIndex < 0 && !out->audioStreamIndices.empty()) {
+      out->audioStreamIndex = out->audioStreamIndices.front();
+    }
+    if (out->audioStreamIndex >= 0) {
+      auto it = std::find(out->audioStreamIndices.begin(),
+                          out->audioStreamIndices.end(), out->audioStreamIndex);
+      if (it != out->audioStreamIndices.end()) {
+        out->activeAudioTrack =
+            static_cast<int>(std::distance(out->audioStreamIndices.begin(), it));
+      }
+      AVStream* stream = fmt->streams[out->audioStreamIndex];
+      out->audioTimeBase = stream->time_base;
+      if (stream->start_time != AV_NOPTS_VALUE) {
       out->audioStartUs = av_rescale_q(stream->start_time, stream->time_base,
                                        AVRational{1, AV_TIME_BASE});
     } else {
-      out->audioStartUs = out->formatStartUs;
+        out->audioStartUs = out->formatStartUs;
+      }
     }
-  }
+    if (out->activeAudioTrack < 0 && !out->audioStreamIndices.empty()) {
+      out->activeAudioTrack = 0;
+    }
 
   if (out->videoStreamIndex < 0 && out->audioStreamIndex < 0) {
     avformat_close_input(&fmt);
@@ -1138,11 +1184,14 @@ bool initVideoDecoder(const DemuxContext& demux, bool preferHardware,
   return true;
 }
 
-bool initAudioDecoder(const DemuxContext& demux, uint32_t outRate,
-                      uint32_t outChannels, AudioDecodeContext* out,
-                      std::string* error) {
-  if (!out || demux.audioStreamIndex < 0) return false;
-  AVStream* stream = demux.fmt->streams[demux.audioStreamIndex];
+bool initAudioDecoder(const DemuxContext& demux, int streamIndex, uint32_t outRate,
+                       uint32_t outChannels, AudioDecodeContext* out,
+                       std::string* error) {
+    if (!out || !demux.fmt || streamIndex < 0 ||
+        streamIndex >= static_cast<int>(demux.fmt->nb_streams)) {
+      return false;
+    }
+    AVStream* stream = demux.fmt->streams[streamIndex];
   const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
   if (!codec) {
     if (error) *error = "No audio decoder found.";
@@ -1525,11 +1574,16 @@ struct Player::Impl {
   std::atomic<int> resizeTargetW{0};
   std::atomic<int> resizeTargetH{0};
 
-  std::atomic<size_t> maxQueue{3};
-  std::atomic<int64_t> fallbackFrameDurationUs{33333};
-  std::atomic<int64_t> durationUs{0};
-  std::atomic<int> sourceWidth{0};
-  std::atomic<int> sourceHeight{0};
+    std::atomic<size_t> maxQueue{3};
+    std::atomic<int64_t> fallbackFrameDurationUs{33333};
+    std::atomic<int64_t> durationUs{0};
+    std::atomic<int> sourceWidth{0};
+    std::atomic<int> sourceHeight{0};
+    std::mutex audioTrackMutex;
+    std::vector<int> audioTrackStreams;
+    std::vector<std::string> audioTrackLabels;
+    std::atomic<int> activeAudioTrack{-1};
+    std::atomic<int> activeAudioStream{-1};
 
   std::atomic<int64_t> lastPresentedPtsUs{0};
   std::atomic<int64_t> lastPresentedDurationUs{0};
@@ -1765,14 +1819,21 @@ struct Player::Impl {
     seekPending.store(false, std::memory_order_relaxed);
     seekTargetUs.store(0, std::memory_order_relaxed);
     pendingSeekSerial.store(0, std::memory_order_relaxed);
-    clearFrameRequested.store(false, std::memory_order_relaxed);
-    audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
-    audioBufferedStartSerial.store(0, std::memory_order_relaxed);
-    audioBufferedStartValid.store(false, std::memory_order_relaxed);
-    {
-      std::lock_guard<std::mutex> lock(eventMutex);
-      events.clear();
-    }
+      clearFrameRequested.store(false, std::memory_order_relaxed);
+      audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
+      audioBufferedStartSerial.store(0, std::memory_order_relaxed);
+      audioBufferedStartValid.store(false, std::memory_order_relaxed);
+      activeAudioTrack.store(-1, std::memory_order_relaxed);
+      activeAudioStream.store(-1, std::memory_order_relaxed);
+      {
+        std::lock_guard<std::mutex> lock(audioTrackMutex);
+        audioTrackStreams.clear();
+        audioTrackLabels.clear();
+      }
+      {
+        std::lock_guard<std::mutex> lock(eventMutex);
+        events.clear();
+      }
   }
 
   void startThreads() {
@@ -1809,26 +1870,19 @@ struct Player::Impl {
     demuxThread = std::thread([this]() { demuxMain(); });
   }
 
-  void handleEvent(const PlayerEvent& ev) {
-    switch (ev.type) {
-      case PlayerEventType::SeekRequest: {
-        if (!running.load()) break;
+    void handleEvent(const PlayerEvent& ev) {
+      auto beginSerialTransition = [&](int64_t targetUs, const char* tag) {
+        if (!running.load()) return;
         int nextSerial = currentSerial.load() + 1;
         currentSerial.store(nextSerial);
         seekInFlightSerial.store(nextSerial, std::memory_order_relaxed);
         seekFailed.store(false, std::memory_order_relaxed);
         pendingSeekSerial.store(nextSerial, std::memory_order_relaxed);
-        int64_t clampedTarget = std::max<int64_t>(0, ev.arg1);
-        
-        // 3. KEYFRAME SEEKING
-        // Seek goes to the nearest keyframe BEFORE the target,
-        // not the exact target. This is because decoders need keyframes to start.
-        // We reduce the target by ~1 second to account for typical keyframe interval.
-        int64_t seekTarget = std::max<int64_t>(0, clampedTarget - 1000000); // Go back 1s for keyframe
-        
+        int64_t clampedTarget = std::max<int64_t>(0, targetUs);
+        int64_t seekTarget = std::max<int64_t>(0, clampedTarget - 1000000);
         seekDisplayUs.store(clampedTarget, std::memory_order_relaxed);
-        seekTargetUs.store(seekTarget, std::memory_order_relaxed); // Use keyframe-adjusted target
-        lastPresentedPtsUs.store(clampedTarget, std::memory_order_relaxed); // Reset base for automated recovery
+        seekTargetUs.store(seekTarget, std::memory_order_relaxed);
+        lastPresentedPtsUs.store(clampedTarget, std::memory_order_relaxed);
         lastPresentedSerial.store(nextSerial, std::memory_order_relaxed);
         seekPending.store(true, std::memory_order_relaxed);
         if (initDone.load(std::memory_order_relaxed)) {
@@ -1836,8 +1890,6 @@ struct Player::Impl {
         }
         clearFrameRequested.store(true, std::memory_order_relaxed);
         videoClock.reset(nextSerial);
-        // Unblock demux/decode threads that may be back-pressured while the UI
-        // is showing Seeking (videoOutput pauses consumption outside Playing).
         videoPackets.flush(static_cast<uint64_t>(nextSerial));
         audioPackets.flush(static_cast<uint64_t>(nextSerial));
         videoFrames.flush(static_cast<uint64_t>(nextSerial));
@@ -1845,32 +1897,65 @@ struct Player::Impl {
         audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
         audioBufferedStartSerial.store(0, std::memory_order_relaxed);
         audioBufferedStartValid.store(false, std::memory_order_relaxed);
-        // After seek, go back to Priming to re-prebuffer both streams.
-        // This ensures we don't have timing misalignment between audio and video.
         setState(PlayerState::Seeking);
-        appendTimingFmt("ctrl_seek_request serial=%d target_us=%lld seek_target_us=%lld (keyframe-adjusted)",
-                        nextSerial, static_cast<long long>(clampedTarget), 
+        appendTimingFmt("%s serial=%d target_us=%lld seek_target_us=%lld",
+                        tag ? tag : "ctrl_seek_request", nextSerial,
+                        static_cast<long long>(clampedTarget),
                         static_cast<long long>(seekTarget));
-        break;
-      }
-      case PlayerEventType::PauseRequest: {
-        pauseRequested.store(ev.arg1 != 0, std::memory_order_relaxed);
-        appendTimingFmt("ctrl_pause_request paused=%d",
-                        ev.arg1 != 0 ? 1 : 0);
+      };
+
+      switch (ev.type) {
+        case PlayerEventType::SeekRequest: {
+          beginSerialTransition(ev.arg1, "ctrl_seek_request");
+          break;
+        }
+        case PlayerEventType::PauseRequest: {
+          pauseRequested.store(ev.arg1 != 0, std::memory_order_relaxed);
+          appendTimingFmt("ctrl_pause_request paused=%d",
+                          ev.arg1 != 0 ? 1 : 0);
         break;
       }
       case PlayerEventType::ResizeRequest: {
         resizeTargetW.store(static_cast<int>(ev.arg1), std::memory_order_relaxed);
         resizeTargetH.store(static_cast<int>(ev.arg2), std::memory_order_relaxed);
         resizeEpoch.fetch_add(1, std::memory_order_relaxed);
-        appendTimingFmt("ctrl_resize_request w=%d h=%d",
-                        static_cast<int>(ev.arg1),
-                        static_cast<int>(ev.arg2));
-        break;
-      }
-      case PlayerEventType::CloseRequest: {
-        ctrlRunning.store(false, std::memory_order_relaxed);
-        running.store(false, std::memory_order_relaxed);
+          appendTimingFmt("ctrl_resize_request w=%d h=%d",
+                          static_cast<int>(ev.arg1),
+                          static_cast<int>(ev.arg2));
+          break;
+        }
+        case PlayerEventType::CycleAudioTrack: {
+          int nextTrack = -1;
+          int nextStream = -1;
+          std::string nextLabel;
+          {
+            std::lock_guard<std::mutex> lock(audioTrackMutex);
+            if (audioTrackStreams.size() <= 1) break;
+            int currentTrack = activeAudioTrack.load(std::memory_order_relaxed);
+            if (currentTrack < 0 ||
+                currentTrack >= static_cast<int>(audioTrackStreams.size())) {
+              currentTrack = 0;
+            }
+            nextTrack = (currentTrack + 1) %
+                        static_cast<int>(audioTrackStreams.size());
+            nextStream = audioTrackStreams[static_cast<size_t>(nextTrack)];
+            if (nextStream < 0) break;
+            activeAudioTrack.store(nextTrack, std::memory_order_relaxed);
+            activeAudioStream.store(nextStream, std::memory_order_relaxed);
+            if (nextTrack >= 0 &&
+                nextTrack < static_cast<int>(audioTrackLabels.size())) {
+              nextLabel = audioTrackLabels[static_cast<size_t>(nextTrack)];
+            }
+          }
+          beginSerialTransition(masterClockUs(), "ctrl_audio_track_switch");
+          appendTimingFmt("audio_track_switch track=%d stream=%d label=%s",
+                          nextTrack, nextStream,
+                          nextLabel.empty() ? "N/A" : nextLabel.c_str());
+          break;
+        }
+        case PlayerEventType::CloseRequest: {
+          ctrlRunning.store(false, std::memory_order_relaxed);
+          running.store(false, std::memory_order_relaxed);
         commandPending.store(true, std::memory_order_relaxed);
         appendTiming("ctrl_close_request");
         break;
@@ -2058,9 +2143,16 @@ struct Player::Impl {
       }
     }
 
-    sourceWidth.store(videoDec.width);
-    sourceHeight.store(videoDec.height);
-    durationUs.store(demux.durationUs > 0 ? demux.durationUs : 0);
+      sourceWidth.store(videoDec.width);
+      sourceHeight.store(videoDec.height);
+      durationUs.store(demux.durationUs > 0 ? demux.durationUs : 0);
+      {
+        std::lock_guard<std::mutex> lock(audioTrackMutex);
+        audioTrackStreams = demux.audioStreamIndices;
+        audioTrackLabels = demux.audioTrackLabels;
+      }
+      activeAudioTrack.store(demux.activeAudioTrack, std::memory_order_relaxed);
+      activeAudioStream.store(demux.audioStreamIndex, std::memory_order_relaxed);
 
     double estimatedFrameDurationSec = 0.0;
     if (demux.videoStreamIndex >= 0 && demux.fmt) {
@@ -2213,7 +2305,9 @@ struct Player::Impl {
         continue;
       }
 
-      if (pkt.stream_index == demux.videoStreamIndex) {
+        int selectedAudioStream =
+            activeAudioStream.load(std::memory_order_relaxed);
+        if (pkt.stream_index == demux.videoStreamIndex) {
         // Always allow blocking to prevent packet drops (which cause gaps).
         // Deadlock risk is handled by appropriate queue sizing and master clock.
         bool allowBlock = true; 
@@ -2228,7 +2322,8 @@ struct Player::Impl {
           av_packet_unref(&pkt);
           continue;
         }
-      } else if (pkt.stream_index == demux.audioStreamIndex) {
+        } else if (selectedAudioStream >= 0 &&
+                   pkt.stream_index == selectedAudioStream) {
         bool allowBlock = true;
         bool queued = false;
         if (!audioPackets.pushPacket(&pkt, serial, allowBlock, &commandPending,
@@ -2456,14 +2551,21 @@ struct Player::Impl {
     }
   }
 
-  void audioDecodeMain() {
-    bool audioReady = false;
-    if (config.enableAudio && demux.audioStreamIndex >= 0) {
-      uint64_t totalFrames = 0;
-      AVStream* stream = demux.fmt->streams[demux.audioStreamIndex];
-      if (stream && stream->duration > 0) {
-        int64_t us = av_rescale_q(stream->duration, stream->time_base,
-                                  AVRational{1, AV_TIME_BASE});
+    void audioDecodeMain() {
+      int decoderStreamIndex =
+          activeAudioStream.load(std::memory_order_relaxed);
+      uint32_t outRate = 48000;
+      uint32_t outChannels = 2;
+      bool audioReady = false;
+      if (config.enableAudio && decoderStreamIndex >= 0) {
+        uint64_t totalFrames = 0;
+        AVStream* stream =
+            (demux.fmt && decoderStreamIndex < static_cast<int>(demux.fmt->nb_streams))
+                ? demux.fmt->streams[decoderStreamIndex]
+                : nullptr;
+        if (stream && stream->duration > 0) {
+          int64_t us = av_rescale_q(stream->duration, stream->time_base,
+                                    AVRational{1, AV_TIME_BASE});
         if (us > 0) {
           totalFrames = static_cast<uint64_t>(
               rescaleToFrames(us, AVRational{1, AV_TIME_BASE}, 48000));
@@ -2473,16 +2575,17 @@ struct Player::Impl {
             rescaleToFrames(demux.durationUs, AVRational{1, AV_TIME_BASE},
                             48000));
       }
-      if (audioStartStream(totalFrames)) {
-        audioStreamFlushSerial(currentSerial.load());
-        AudioPerfStats stats = audioGetPerfStats();
-        uint32_t outRate = stats.sampleRate ? stats.sampleRate : 48000;
-        uint32_t outChannels = stats.channels ? stats.channels : 2;
-        std::string error;
-        if (initAudioDecoder(demux, outRate, outChannels, &audioDec, &error)) {
-          audioReady = true;
-        } else {
-          appendTimingFmt("audio_init_failed msg=%s", error.c_str());
+        if (audioStartStream(totalFrames)) {
+          audioStreamFlushSerial(currentSerial.load());
+          AudioPerfStats stats = audioGetPerfStats();
+          outRate = stats.sampleRate ? stats.sampleRate : 48000;
+          outChannels = stats.channels ? stats.channels : 2;
+          std::string error;
+          if (initAudioDecoder(demux, decoderStreamIndex, outRate, outChannels,
+                               &audioDec, &error)) {
+            audioReady = true;
+          } else {
+            appendTimingFmt("audio_init_failed msg=%s", error.c_str());
           audioStopStream();
         }
       } else {
@@ -2491,14 +2594,40 @@ struct Player::Impl {
     }
     audioStartOk.store(audioReady);
     audioStartDone.store(true);
-    if (!audioReady) {
-      audioDecodeEnded.store(true);
-      return;
-    }
+      if (!audioReady) {
+        audioDecodeEnded.store(true);
+        return;
+      }
 
-    // Timeout detection for audio decoder stall
-    int64_t lastAudioFrameTimeUs = nowUs();
-    constexpr int64_t kAudioStallThresholdUs = 5000000;  // 5 seconds
+      auto reinitializeDecoderForActiveTrack = [&]() -> bool {
+        int desiredStream = activeAudioStream.load(std::memory_order_relaxed);
+        if (desiredStream == decoderStreamIndex) {
+          return true;
+        }
+        if (!demux.fmt || desiredStream < 0 ||
+            desiredStream >= static_cast<int>(demux.fmt->nb_streams)) {
+          appendTimingFmt("audio_track_switch_failed stream=%d", desiredStream);
+          return false;
+        }
+        AudioDecodeContext nextAudioDec{};
+        std::string error;
+        if (!initAudioDecoder(demux, desiredStream, outRate, outChannels,
+                              &nextAudioDec, &error)) {
+          appendTimingFmt("audio_track_init_failed stream=%d msg=%s",
+                          desiredStream, error.c_str());
+          destroyAudioDecoder(&nextAudioDec);
+          return false;
+        }
+        destroyAudioDecoder(&audioDec);
+        audioDec = std::move(nextAudioDec);
+        decoderStreamIndex = desiredStream;
+        appendTimingFmt("audio_track_decoder_reset stream=%d", desiredStream);
+        return true;
+      };
+
+      // Timeout detection for audio decoder stall
+      int64_t lastAudioFrameTimeUs = nowUs();
+      constexpr int64_t kAudioStallThresholdUs = 5000000;  // 5 seconds
 
     QueuedPacket pendingPacket{};
     bool hasPendingPacket = false;
@@ -2510,12 +2639,16 @@ struct Player::Impl {
           break;
         }
         hasPendingPacket = true;
-      }
+        }
 
-      if (pendingPacket.flush) {
-        avcodec_flush_buffers(audioDec.codec);
-        audioDec.writePosFrames = 0;
-        audioDec.nextPtsUs = 0;
+        if (pendingPacket.flush) {
+          if (!reinitializeDecoderForActiveTrack()) {
+            audioStartOk.store(false, std::memory_order_relaxed);
+            break;
+          }
+          avcodec_flush_buffers(audioDec.codec);
+          audioDec.writePosFrames = 0;
+          audioDec.nextPtsUs = 0;
         audioDec.nextPtsValid = false;
         decoderSerial = pendingPacket.serial;
         audioStreamFlushSerial(static_cast<int>(decoderSerial));
@@ -3287,6 +3420,38 @@ void Player::setVideoPaused(bool paused) {
   ev.type = PlayerEventType::PauseRequest;
   ev.arg1 = paused ? 1 : 0;
   impl_->postEvent(ev);
+}
+
+size_t Player::audioTrackCount() const {
+  if (!impl_) return 0;
+  std::lock_guard<std::mutex> lock(impl_->audioTrackMutex);
+  return impl_->audioTrackStreams.size();
+}
+
+std::string Player::activeAudioTrackLabel() const {
+  if (!impl_) return "N/A";
+  std::lock_guard<std::mutex> lock(impl_->audioTrackMutex);
+  int active = impl_->activeAudioTrack.load(std::memory_order_relaxed);
+  if (active < 0 ||
+      active >= static_cast<int>(impl_->audioTrackLabels.size())) {
+    return "N/A";
+  }
+  const std::string& label = impl_->audioTrackLabels[static_cast<size_t>(active)];
+  return label.empty() ? "N/A" : label;
+}
+
+bool Player::canCycleAudioTracks() const { return audioTrackCount() > 1; }
+
+bool Player::cycleAudioTrack() {
+  if (!impl_ || !impl_->ctrlRunning.load(std::memory_order_relaxed)) return false;
+  {
+    std::lock_guard<std::mutex> lock(impl_->audioTrackMutex);
+    if (impl_->audioTrackStreams.size() <= 1) return false;
+  }
+  PlayerEvent ev{};
+  ev.type = PlayerEventType::CycleAudioTrack;
+  impl_->postEvent(ev);
+  return true;
 }
 
 bool Player::initDone() const {
