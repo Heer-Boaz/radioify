@@ -485,20 +485,92 @@ namespace {
         return out;
     }
 
-    static bool renderSubtitleTextToBitmap(const std::string& text, int width,
-                                           int height,
+    struct SubtitleBitmapLayout {
+        int width = 0;
+        int height = 0;
+        int fontPx = 16;
+        int marginPx = 0;
+        RECT textRect{0, 0, 0, 0};
+    };
+
+    static HFONT createCaptionFont(int fontPx, const CaptionStyleProfile& captionStyle) {
+        int weight = (captionStyle.fontStyle == 7) ? FW_SEMIBOLD : FW_NORMAL;
+        return CreateFontW(-std::max(8, fontPx), 0, 0, 0, weight, FALSE, FALSE,
+                           FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                           DEFAULT_PITCH | FF_DONTCARE,
+                           captionFontFaceForStyle(captionStyle.fontStyle));
+    }
+
+    static bool computeSubtitleLayout(const std::wstring& text,
+                                      int viewportWidth,
+                                      int viewportHeight,
+                                      const CaptionStyleProfile& captionStyle,
+                                      SubtitleBitmapLayout* outLayout) {
+        if (!outLayout || text.empty() || viewportWidth <= 0 || viewportHeight <= 0) {
+            return false;
+        }
+
+        const int areaHeight = std::min(viewportHeight, viewportWidth);
+        // Match VLC's relative sizing: default 6.25% of output height (portrait capped by width).
+        int fontPx = static_cast<int>(std::lround(
+            static_cast<double>(areaHeight) * 0.0625 *
+            std::max(0.60f, captionStyle.sizeScale)));
+        fontPx = std::clamp(fontPx, 10, std::max(10, viewportHeight / 4));
+
+        HDC hdc = CreateCompatibleDC(nullptr);
+        if (!hdc) return false;
+        HFONT font = createCaptionFont(fontPx, captionStyle);
+        HGDIOBJ oldFont = nullptr;
+        if (font) oldFont = SelectObject(hdc, font);
+
+        const int maxTextWidth = std::max(24, static_cast<int>(std::lround(
+            static_cast<double>(viewportWidth) * 0.92)));
+        const int maxTextHeight = std::max(
+            16, static_cast<int>(std::lround(static_cast<double>(viewportHeight) * 0.80)));
+
+        RECT measure{0, 0, maxTextWidth, maxTextHeight};
+        UINT measureFlags = DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX |
+                            DT_CALCRECT | DT_EDITCONTROL;
+        DrawTextW(hdc, text.c_str(), static_cast<int>(text.size()), &measure,
+                  measureFlags);
+
+        int textW = (std::max)(1, static_cast<int>(measure.right - measure.left));
+        int textH = (std::max)(1, static_cast<int>(measure.bottom - measure.top));
+        int marginPx = (captionStyle.backgroundAlpha > 0.01f)
+                           ? std::max(2, fontPx / 4)  // VLC-like text bg margin
+                           : std::max(1, fontPx / 8);
+
+        outLayout->fontPx = fontPx;
+        outLayout->marginPx = marginPx;
+        outLayout->width =
+            std::clamp(textW + marginPx * 2, 8, std::max(8, viewportWidth));
+        outLayout->height =
+            std::clamp(textH + marginPx * 2, 8, std::max(8, viewportHeight));
+        outLayout->textRect = RECT{marginPx, marginPx,
+                                   std::max(marginPx + 1, outLayout->width - marginPx),
+                                   std::max(marginPx + 1, outLayout->height - marginPx)};
+
+        if (oldFont) SelectObject(hdc, oldFont);
+        if (font) DeleteObject(font);
+        DeleteDC(hdc);
+        return true;
+    }
+
+    static bool renderSubtitleTextToBitmap(const std::string& text,
+                                           const SubtitleBitmapLayout& layout,
                                            const CaptionStyleProfile& captionStyle,
                                            std::vector<uint8_t>& outPixels) {
         outPixels.clear();
-        if (width <= 0 || height <= 0 || text.empty()) return false;
+        if (layout.width <= 0 || layout.height <= 0 || text.empty()) return false;
 
         std::wstring wide = utf8ToWide(text);
         if (wide.empty()) return false;
 
         BITMAPINFO bmi = {};
         bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bmi.bmiHeader.biWidth = width;
-        bmi.bmiHeader.biHeight = -height;  // top-down
+        bmi.bmiHeader.biWidth = layout.width;
+        bmi.bmiHeader.biHeight = -layout.height;  // top-down
         bmi.bmiHeader.biPlanes = 1;
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
@@ -514,8 +586,9 @@ namespace {
         }
 
         HGDIOBJ oldBmp = SelectObject(hdc, dib);
-        HFONT font = nullptr;
+        HFONT font = createCaptionFont(layout.fontPx, captionStyle);
         HGDIOBJ oldFont = nullptr;
+        if (font) oldFont = SelectObject(hdc, font);
 
         const uint8_t bgR = captionStyle.backgroundR;
         const uint8_t bgG = captionStyle.backgroundG;
@@ -527,33 +600,35 @@ namespace {
 
         uint8_t* px = reinterpret_cast<uint8_t*>(bits);
         const size_t pixelBytes =
-            static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+            static_cast<size_t>(layout.width) * static_cast<size_t>(layout.height) * 4u;
+        constexpr uint8_t kSentinelB = 1;
+        constexpr uint8_t kSentinelG = 0;
+        constexpr uint8_t kSentinelR = 1;
         for (size_t i = 0; i < pixelBytes; i += 4) {
-            px[i + 0] = bgB;
-            px[i + 1] = bgG;
-            px[i + 2] = bgR;
-            px[i + 3] = bgA;
+            px[i + 0] = kSentinelB;
+            px[i + 1] = kSentinelG;
+            px[i + 2] = kSentinelR;
+            px[i + 3] = 0;
         }
 
-        int fontPx = std::clamp(
-            static_cast<int>(std::lround(height * 0.44f *
-                                         std::max(0.60f, captionStyle.sizeScale))),
-            10, std::max(10, height));
-        int weight = (captionStyle.fontStyle == 7) ? FW_SEMIBOLD : FW_NORMAL;
-        font = CreateFontW(-fontPx, 0, 0, 0, weight, FALSE, FALSE, FALSE,
-                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                           captionFontFaceForStyle(captionStyle.fontStyle));
-        if (font) {
-            oldFont = SelectObject(hdc, font);
+        if (bgA > 0) {
+            for (int y = 0; y < layout.height; ++y) {
+                for (int x = 0; x < layout.width; ++x) {
+                    size_t i = static_cast<size_t>(y * layout.width + x) * 4u;
+                    px[i + 0] = bgB;
+                    px[i + 1] = bgG;
+                    px[i + 2] = bgR;
+                    px[i + 3] = bgA;
+                }
+            }
         }
 
         SetBkMode(hdc, TRANSPARENT);
-        RECT textRect{6, 4, std::max(7, width - 6), std::max(5, height - 4)};
-        UINT drawFlags = DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX;
+        UINT drawFlags = DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX |
+                         DT_EDITCONTROL;
 
         auto drawTextOffset = [&](int dx, int dy, COLORREF color) {
-            RECT r = textRect;
+            RECT r = layout.textRect;
             OffsetRect(&r, dx, dy);
             SetTextColor(hdc, color);
             DrawTextW(hdc, wide.c_str(), static_cast<int>(wide.size()), &r,
@@ -583,22 +658,27 @@ namespace {
         }
 
         SetTextColor(hdc, RGB(captionStyle.textR, captionStyle.textG, captionStyle.textB));
-        DrawTextW(hdc, wide.c_str(), static_cast<int>(wide.size()), &textRect,
+        RECT mainTextRect = layout.textRect;
+        DrawTextW(hdc, wide.c_str(), static_cast<int>(wide.size()), &mainTextRect,
                   drawFlags);
 
         outPixels.assign(px, px + pixelBytes);
-
         bool hasText = false;
+        const uint8_t baseB = (bgA > 0) ? bgB : kSentinelB;
+        const uint8_t baseG = (bgA > 0) ? bgG : kSentinelG;
+        const uint8_t baseR = (bgA > 0) ? bgR : kSentinelR;
         for (size_t i = 0; i < outPixels.size(); i += 4) {
             const uint8_t b = outPixels[i + 0];
             const uint8_t g = outPixels[i + 1];
             const uint8_t r = outPixels[i + 2];
-            const int diff = std::abs(static_cast<int>(b) - static_cast<int>(bgB)) +
-                             std::abs(static_cast<int>(g) - static_cast<int>(bgG)) +
-                             std::abs(static_cast<int>(r) - static_cast<int>(bgR));
+            const int diff = std::abs(static_cast<int>(b) - static_cast<int>(baseB)) +
+                             std::abs(static_cast<int>(g) - static_cast<int>(baseG)) +
+                             std::abs(static_cast<int>(r) - static_cast<int>(baseR));
             if (diff > 8) {
                 outPixels[i + 3] = std::max(textA, bgA);
                 hasText = true;
+            } else if (bgA == 0) {
+                outPixels[i + 3] = 0;
             } else {
                 outPixels[i + 3] = bgA;
             }
@@ -1657,6 +1737,22 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     float subtitleHeightNorm = 0.0f;
     float subtitleLeftNorm = 0.0f;
     float subtitleWidthNorm = 0.0f;
+    int textTopPx = m_height;
+
+    int viewportX = std::clamp(static_cast<int>(std::lround(m_viewportX)),
+                               0, std::max(0, m_width - 1));
+    int viewportY = std::clamp(static_cast<int>(std::lround(m_viewportY)),
+                               0, std::max(0, m_height - 1));
+    int viewportW = std::clamp(static_cast<int>(std::lround(m_viewportW)),
+                               1, std::max(1, m_width - viewportX));
+    int viewportH = std::clamp(static_cast<int>(std::lround(m_viewportH)),
+                               1, std::max(1, m_height - viewportY));
+    if (viewportW <= 1 || viewportH <= 1) {
+        viewportX = 0;
+        viewportY = 0;
+        viewportW = std::max(1, m_width);
+        viewportH = std::max(1, m_height);
+    }
 
     // Optional: Render overlay text (metadata + control strip) to texture.
     if (showOverlay) {
@@ -1738,6 +1834,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
 
             textHeightNorm = (float)textPxH / m_height;
             textTopNorm = 0.95f - textHeightNorm;
+            textTopPx = static_cast<int>(std::lround(textTopNorm * m_height));
             textWidthNorm = (float)textPxW / m_width;
             textLeftNorm = 0.02f;
             if (textLeftNorm + textWidthNorm > 1.0f) {
@@ -1748,35 +1845,19 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
 
     if (showSubtitle) {
         const CaptionStyleProfile captionStyle = getWindowsCaptionStyleProfile();
-        int subtitleLineCount = 1;
-        for (char c : ui.subtitle) {
-            if (c == '\n') ++subtitleLineCount;
-        }
-        subtitleLineCount = std::clamp(subtitleLineCount, 1, 3);
-
-        int linePxH = std::clamp(
-            static_cast<int>(std::round(m_height * 0.05f *
-                                        std::max(0.60f, captionStyle.sizeScale))),
-            10, 56);
-        int subtitlePxH = std::clamp(
-            subtitleLineCount * linePxH +
-                std::max(0, subtitleLineCount - 1) * 2 + 6,
-            20, std::max(24, m_height / 3));
-        int subtitlePxW =
-            std::clamp(static_cast<int>(std::lround(m_width * 0.82)),
-                       1, std::max(1, m_width));
-
-        if (subtitlePxW > 0 && subtitlePxH > 0) {
-            if (!m_subtitleTexture || m_subtitleWidth != subtitlePxW ||
-                m_subtitleHeight != subtitlePxH) {
-                m_subtitleWidth = subtitlePxW;
-                m_subtitleHeight = subtitlePxH;
+        SubtitleBitmapLayout layout{};
+        if (computeSubtitleLayout(utf8ToWide(ui.subtitle), viewportW, viewportH,
+                                  captionStyle, &layout)) {
+            if (!m_subtitleTexture || m_subtitleWidth != layout.width ||
+                m_subtitleHeight != layout.height) {
+                m_subtitleWidth = layout.width;
+                m_subtitleHeight = layout.height;
                 m_subtitleTexture.Reset();
                 m_subtitleSrv.Reset();
 
                 D3D11_TEXTURE2D_DESC texDesc = {};
-                texDesc.Width = static_cast<UINT>(subtitlePxW);
-                texDesc.Height = static_cast<UINT>(subtitlePxH);
+                texDesc.Width = static_cast<UINT>(layout.width);
+                texDesc.Height = static_cast<UINT>(layout.height);
                 texDesc.MipLevels = 1;
                 texDesc.ArraySize = 1;
                 texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -1793,22 +1874,33 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
 
             std::vector<uint8_t> bmp;
             if (m_subtitleTexture &&
-                renderSubtitleTextToBitmap(ui.subtitle, subtitlePxW, subtitlePxH,
-                                           captionStyle, bmp)) {
-                D3D11_BOX box{0, 0, 0, (UINT)subtitlePxW, (UINT)subtitlePxH, 1};
+                renderSubtitleTextToBitmap(ui.subtitle, layout, captionStyle, bmp)) {
+                D3D11_BOX box{0, 0, 0, (UINT)layout.width, (UINT)layout.height, 1};
                 context->UpdateSubresource(m_subtitleTexture.Get(), 0, &box,
-                                           bmp.data(), subtitlePxW * 4, 0);
+                                           bmp.data(), layout.width * 4, 0);
             }
 
+            const int vlcLikeSubMarginPx = 0;  // VLC default "sub-margin" is 0.
+            int subtitleBottomPx = viewportY + viewportH - vlcLikeSubMarginPx;
+            if (showOverlay) {
+                subtitleBottomPx =
+                    std::min(subtitleBottomPx, textTopPx - std::max(4, layout.fontPx / 3));
+            }
+            int subtitleLeftPx =
+                viewportX + std::max(0, (viewportW - layout.width) / 2);
+            int subtitleTopPx = subtitleBottomPx - layout.height;
+            subtitleTopPx = std::clamp(
+                subtitleTopPx, viewportY,
+                std::max(viewportY, viewportY + viewportH - layout.height));
+
             subtitleHeightNorm =
-                static_cast<float>(subtitlePxH) / std::max(1, m_height);
+                static_cast<float>(layout.height) / std::max(1, m_height);
             subtitleWidthNorm =
-                static_cast<float>(subtitlePxW) / std::max(1, m_width);
-            subtitleLeftNorm = std::max(0.0f, (1.0f - subtitleWidthNorm) * 0.5f);
-            float subtitleBottomNorm = showOverlay ? (textTopNorm - 0.02f) : 0.94f;
-            subtitleTopNorm = subtitleBottomNorm - subtitleHeightNorm;
-            subtitleTopNorm = std::clamp(
-                subtitleTopNorm, 0.02f, std::max(0.02f, 1.0f - subtitleHeightNorm));
+                static_cast<float>(layout.width) / std::max(1, m_width);
+            subtitleLeftNorm =
+                static_cast<float>(subtitleLeftPx) / std::max(1, m_width);
+            subtitleTopNorm =
+                static_cast<float>(subtitleTopPx) / std::max(1, m_height);
         }
     }
 

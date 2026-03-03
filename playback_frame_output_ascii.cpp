@@ -438,15 +438,9 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
   const int subtitleAreaX = (allowFrame && artWidth > 0) ? artX : 0;
   const int subtitleAreaW =
       (allowFrame && artWidth > 0) ? artWidth : std::max(1, width);
-  const int usableChars = std::max(8, subtitleAreaW - 4);
-  const int maxSubtitleChars = std::max(
-      8, static_cast<int>(std::lround(
-             static_cast<double>(usableChars) /
-             std::max(0.60f, captionStyle.sizeScale))));
+  // VLC-like wrapping behavior: fit to available subtitle area width.
+  const int maxSubtitleChars = std::max(8, subtitleAreaW - 4);
   int maxSubtitleLines = overlayVisible ? 2 : 3;
-  if (captionStyle.sizeScale >= 1.35f && maxSubtitleLines > 1) {
-    --maxSubtitleLines;
-  }
   std::vector<std::string> lines =
       wrapSubtitle(subtitleText, maxSubtitleChars, maxSubtitleLines);
   if (lines.empty()) return;
@@ -472,7 +466,7 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
     int lineWidth = utf8CodepointCount(line);
     int x = subtitleAreaX + std::max(0, (subtitleAreaW - lineWidth) / 2);
     if (captionStyle.backgroundAlpha > 0.01f) {
-      const int pad = (captionStyle.sizeScale >= 1.35f) ? 2 : 1;
+      const int pad = 1;
       int bgX = std::max(0, x - pad);
       int bgW = std::min(width - bgX, lineWidth + pad * 2);
       if (bgW > 0) {
