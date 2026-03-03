@@ -314,10 +314,18 @@ bool decodeEmbeddedSubtitleStream(AVFormatContext* format, AVStream* stream,
   }
 
   // Flush decoder.
+  // Some FFmpeg builds dereference the packet pointer unconditionally in
+  // avcodec_decode_subtitle2(), so do not pass nullptr here.
+  AVPacket flushPacket{};
+  flushPacket.data = nullptr;
+  flushPacket.size = 0;
+  flushPacket.pts = AV_NOPTS_VALUE;
+  flushPacket.dts = AV_NOPTS_VALUE;
   while (true) {
     AVSubtitle sub{};
     int got = 0;
-    int decodeRes = avcodec_decode_subtitle2(codecCtx, &sub, &got, nullptr);
+    int decodeRes =
+        avcodec_decode_subtitle2(codecCtx, &sub, &got, &flushPacket);
     if (decodeRes < 0 || got == 0) {
       avsubtitle_free(&sub);
       break;
