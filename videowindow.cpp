@@ -512,11 +512,12 @@ namespace {
         }
 
         const int areaHeight = std::min(viewportHeight, viewportWidth);
-        // Match VLC's relative sizing: default 6.25% of output height (portrait capped by width).
-        int fontPx = static_cast<int>(std::lround(
+        // VLC uses 6.25% relsize by default: i_font_size = area_height * 6.25 / 100.
+        int targetLinePx = static_cast<int>(
             static_cast<double>(areaHeight) * 0.0625 *
-            std::max(0.60f, captionStyle.sizeScale)));
-        fontPx = std::clamp(fontPx, 10, std::max(10, viewportHeight / 4));
+            std::max(0.60f, captionStyle.sizeScale));
+        targetLinePx = std::clamp(targetLinePx, 10, std::max(10, viewportHeight / 4));
+        int fontPx = targetLinePx;
 
         HDC hdc = CreateCompatibleDC(nullptr);
         if (!hdc) return false;
@@ -524,14 +525,30 @@ namespace {
         HGDIOBJ oldFont = nullptr;
         if (font) oldFont = SelectObject(hdc, font);
 
+        // GDI and VLC/freetype do not map "font size" identically. Normalize to
+        // the target line-height so visual size tracks VLC defaults more closely.
+        TEXTMETRICW tm{};
+        if (font && GetTextMetricsW(hdc, &tm) && tm.tmHeight > 0) {
+            const int correctedPx = std::max(
+                8, static_cast<int>(std::lround(
+                       static_cast<double>(fontPx) * targetLinePx / tm.tmHeight)));
+            if (correctedPx != fontPx) {
+                if (oldFont) SelectObject(hdc, oldFont);
+                DeleteObject(font);
+                fontPx = correctedPx;
+                font = createCaptionFont(fontPx, captionStyle);
+                oldFont = font ? SelectObject(hdc, font) : nullptr;
+            }
+        }
+
         const int maxTextWidth = std::max(24, static_cast<int>(std::lround(
             static_cast<double>(viewportWidth) * 0.92)));
         const int maxTextHeight = std::max(
             16, static_cast<int>(std::lround(static_cast<double>(viewportHeight) * 0.80)));
 
         RECT measure{0, 0, maxTextWidth, maxTextHeight};
-        UINT measureFlags = DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX |
-                            DT_CALCRECT | DT_EDITCONTROL;
+        UINT measureFlags = DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX |
+                            DT_CALCRECT;
         DrawTextW(hdc, text.c_str(), static_cast<int>(text.size()), &measure,
                   measureFlags);
 
@@ -624,8 +641,7 @@ namespace {
         }
 
         SetBkMode(hdc, TRANSPARENT);
-        UINT drawFlags = DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX |
-                         DT_EDITCONTROL;
+        UINT drawFlags = DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX;
 
         auto drawTextOffset = [&](int dx, int dy, COLORREF color) {
             RECT r = layout.textRect;
@@ -633,6 +649,20 @@ namespace {
             SetTextColor(hdc, color);
             DrawTextW(hdc, wide.c_str(), static_cast<int>(wide.size()), &r,
                       drawFlags);
+        };
+
+        const int outlinePx =
+            std::max(1, static_cast<int>(std::lround(layout.fontPx * 0.04f)));
+        const int shadowPx =
+            std::max(1, static_cast<int>(std::lround(layout.fontPx * 0.06f)));
+        auto drawOutline = [&](int radius, COLORREF color) {
+            for (int dy = -radius; dy <= radius; ++dy) {
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    if (dx == 0 && dy == 0) continue;
+                    if (dx * dx + dy * dy > radius * radius + radius) continue;
+                    drawTextOffset(dx, dy, color);
+                }
+            }
         };
 
         switch (captionStyle.fontEffect) {
@@ -645,13 +675,10 @@ namespace {
                 drawTextOffset(1, 1, RGB(245, 245, 245));
                 break;
             case 4:  // Uniform outline
-                drawTextOffset(-1, 0, RGB(0, 0, 0));
-                drawTextOffset(1, 0, RGB(0, 0, 0));
-                drawTextOffset(0, -1, RGB(0, 0, 0));
-                drawTextOffset(0, 1, RGB(0, 0, 0));
+                drawOutline(outlinePx, RGB(0, 0, 0));
                 break;
             case 5:  // Drop shadow
-                drawTextOffset(2, 2, RGB(0, 0, 0));
+                drawTextOffset(shadowPx, shadowPx, RGB(0, 0, 0));
                 break;
             default:
                 break;  // None/default
@@ -1098,6 +1125,7 @@ void VideoWindow::Cleanup() {
     m_pixelShader.Reset();
     m_vertexShader.Reset();
     m_uiShader.Reset();
+    m_uiBlendState.Reset();
     m_sampler.Reset();
     m_constantBuffer.Reset();
     // frame cache is now owned/managed externally
@@ -1347,6 +1375,18 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
     hr = device->CreateSamplerState(&sampDesc, &m_sampler);
     if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateSamplerState failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
+
+    D3D11_BLEND_DESC blendDesc = {};
+    blendDesc.RenderTarget[0].BlendEnable = TRUE;
+    blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    hr = device->CreateBlendState(&blendDesc, &m_uiBlendState);
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBlendState(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
 
     ::ShowWindow(m_hWnd, SW_SHOW);
     m_width = width;
@@ -1728,6 +1768,10 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     context->VSSetShader(m_vertexShader.Get(), NULL, 0);
     context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
     context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
+    if (m_uiBlendState) {
+        const float blendFactor[4] = {0.f, 0.f, 0.f, 0.f};
+        context->OMSetBlendState(m_uiBlendState.Get(), blendFactor, 0xffffffffu);
+    }
     
     float textHeightNorm = 0.0f;
     float textTopNorm = 0.0f;
@@ -1931,6 +1975,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         nullptr, nullptr, nullptr, m_textSrv.Get(), m_subtitleSrv.Get()};
     context->PSSetShaderResources(0, 5, srvs);
     context->Draw(4, 0);
+    context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
 
     ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
     context->PSSetShaderResources(0, 5, nullSRVs);

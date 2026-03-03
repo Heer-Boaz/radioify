@@ -80,7 +80,7 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
                 uiHit = true;
             }
         }
-        if (uiHit) uiColor *= uiAlpha;
+        if (uiHit) uiColor.a *= uiAlpha;
     }
 
     float4 subtitleColor = float4(0, 0, 0, 0);
@@ -93,7 +93,8 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
             float2 textUV = float2(localX, localY);
             float4 t = texSubtitle.Sample(sam, textUV);
             if (t.a > 0.01) {
-                subtitleColor = t * subtitleAlpha;
+                subtitleColor = t;
+                subtitleColor.a *= subtitleAlpha;
                 subtitleHit = true;
             }
         }
@@ -103,8 +104,10 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
 
     float4 color = uiHit ? uiColor : subtitleColor;
     if (uiHit && subtitleHit) {
-        color = lerp(uiColor, subtitleColor, subtitleColor.a);
-        color.a = max(uiColor.a, subtitleColor.a);
+        // Source-over composition inside the overlay pass:
+        // subtitle layer over UI layer, then GPU blend-state composites over video.
+        color.rgb = lerp(uiColor.rgb, subtitleColor.rgb, subtitleColor.a);
+        color.a = subtitleColor.a + uiColor.a * (1.0 - subtitleColor.a);
     }
     return color;
 }

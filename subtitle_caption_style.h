@@ -21,11 +21,14 @@ struct CaptionStyleProfile {
   uint8_t backgroundR = 0;
   uint8_t backgroundG = 0;
   uint8_t backgroundB = 0;
-  float backgroundAlpha = 0.60f;
+  // Match VLC defaults: no background box unless user explicitly enables one.
+  float backgroundAlpha = 0.0f;
 
   float sizeScale = 1.0f;
-  int fontStyle = 0;
-  int fontEffect = 0;
+  // Windows "Proportional sans serif" maps best to VLC's default family on Windows.
+  int fontStyle = 4;
+  // Match VLC-style readability defaults when no explicit Windows effect is set.
+  int fontEffect = 4;
 };
 
 inline float captionOpacityFromValue(DWORD raw, float defaultOpacity) {
@@ -120,15 +123,15 @@ inline const wchar_t* captionFontFaceForStyle(int fontStyle) {
     case 3:
       return L"Consolas";         // MonospacedWithoutSerifs
     case 4:
-      return L"Segoe UI";         // ProportionalWithoutSerifs
+      return L"Arial";            // ProportionalWithoutSerifs
     case 5:
       return L"Comic Sans MS";    // Casual
     case 6:
       return L"Segoe Script";     // Cursive
     case 7:
-      return L"Segoe UI";         // SmallCapitals
+      return L"Arial";            // SmallCapitals
     default:
-      return L"Segoe UI";         // Default
+      return L"Arial";            // Default
   }
 }
 
