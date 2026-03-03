@@ -381,7 +381,7 @@ namespace playback_subtitles {
 bool SubtitleManager::load(const std::filesystem::path& videoPath,
                           std::string* error) {
   options_.clear();
-  activeIndex_ = -1;
+  activeIndex_.store(-1, std::memory_order_relaxed);
   if (error) {
     error->clear();
   }
@@ -438,7 +438,7 @@ bool SubtitleManager::load(const std::filesystem::path& videoPath,
                 }
                 return aLang < bLang;
               });
-    activeIndex_ = 0;
+    activeIndex_.store(0, std::memory_order_relaxed);
   }
 
   if (!anyLoaded) {
@@ -466,17 +466,19 @@ const std::vector<SubtitleOption>& SubtitleManager::tracks() const {
 }
 
 const SubtitleTrack* SubtitleManager::activeTrack() const {
-  if (activeIndex_ < 0 || activeIndex_ >= static_cast<int>(options_.size())) {
+  int activeIndex = activeIndex_.load(std::memory_order_relaxed);
+  if (activeIndex < 0 || activeIndex >= static_cast<int>(options_.size())) {
     return nullptr;
   }
-  return &options_[static_cast<size_t>(activeIndex_)].track;
+  return &options_[static_cast<size_t>(activeIndex)].track;
 }
 
 const SubtitleOption* SubtitleManager::activeOption() const {
-  if (activeIndex_ < 0 || activeIndex_ >= static_cast<int>(options_.size())) {
+  int activeIndex = activeIndex_.load(std::memory_order_relaxed);
+  if (activeIndex < 0 || activeIndex >= static_cast<int>(options_.size())) {
     return nullptr;
   }
-  return &options_[static_cast<size_t>(activeIndex_)];
+  return &options_[static_cast<size_t>(activeIndex)];
 }
 
 size_t SubtitleManager::trackCount() const {
@@ -489,11 +491,13 @@ bool SubtitleManager::canCycle() const {
 
 bool SubtitleManager::cycleLanguage() {
   if (!canCycle()) return false;
-  if (activeIndex_ < 0 || activeIndex_ >= static_cast<int>(options_.size())) {
-    activeIndex_ = 0;
+  int activeIndex = activeIndex_.load(std::memory_order_relaxed);
+  if (activeIndex < 0 || activeIndex >= static_cast<int>(options_.size())) {
+    activeIndex_.store(0, std::memory_order_relaxed);
     return true;
   }
-  activeIndex_ = (activeIndex_ + 1) % static_cast<int>(options_.size());
+  activeIndex = (activeIndex + 1) % static_cast<int>(options_.size());
+  activeIndex_.store(activeIndex, std::memory_order_relaxed);
   return true;
 }
 

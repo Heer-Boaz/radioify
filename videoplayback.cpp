@@ -276,6 +276,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   bool enableAscii = config.enableAscii;
   bool enableAudio = config.enableAudio && audioIsEnabled();
   bool enableSubtitles = config.enableSubtitles;
+  std::atomic<bool> enableSubtitlesShared{enableSubtitles};
   // Ensure previous video textures/fences are not carried into a new session.
   g_frameCache.Reset();
 
@@ -817,7 +818,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
         OverlayControlSpec subtitles{};
         subtitles.id = OverlayControlId::Subtitles;
-        subtitles.active = hasSubtitles && enableSubtitles;
+        bool subtitlesEnabled =
+            enableSubtitlesShared.load(std::memory_order_relaxed);
+        subtitles.active = hasSubtitles && subtitlesEnabled;
         auto subtitleLabels =
             makeLabels(subtitles.active ? "Subs: On" : "Subs: Off");
         if (!hasSubtitles) {
@@ -832,7 +835,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (subtitleManager.canCycle()) {
           OverlayControlSpec subtitleLanguage{};
           subtitleLanguage.id = OverlayControlId::SubtitleLanguage;
-          subtitleLanguage.active = hasSubtitles && enableSubtitles;
+          subtitleLanguage.active = hasSubtitles && subtitlesEnabled;
           auto languageLabel = subtitleManager.activeLanguageLabel();
           auto subtitleLanguageLabels = makeLabels("Lang: " + languageLabel);
           subtitleLanguage.normalText = subtitleLanguageLabels.first;
@@ -1031,6 +1034,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       case OverlayControlId::Subtitles:
         if (!hasSubtitles) return false;
         enableSubtitles = !enableSubtitles;
+        enableSubtitlesShared.store(enableSubtitles,
+                                    std::memory_order_relaxed);
         return true;
       case OverlayControlId::SubtitleLanguage:
         return cycleSubtitleLanguage();
@@ -1078,7 +1083,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   };
 
   auto getSubtitleText = [&](int64_t clockUs, bool seeking) -> std::string {
-    if (!enableSubtitles || seeking || clockUs <= 0 || !hasSubtitles) {
+    bool subtitlesEnabled =
+        enableSubtitlesShared.load(std::memory_order_relaxed);
+    if (!subtitlesEnabled || seeking || clockUs <= 0 || !hasSubtitles) {
       return {};
     }
     const SubtitleTrack* activeTrack = subtitleManager.activeTrack();
@@ -1646,6 +1653,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         if (ev.key.vk == 'S' || ev.key.vk == 's') {
           if (hasSubtitles) {
             enableSubtitles = !enableSubtitles;
+            enableSubtitlesShared.store(enableSubtitles,
+                                        std::memory_order_relaxed);
             triggerOverlay();
             redraw = true;
             if (windowEnabled) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -26,13 +27,13 @@ class SubtitleManager {
   const SubtitleTrack* activeTrack() const;
   const SubtitleOption* activeOption() const;
   size_t trackCount() const;
- bool canCycle() const;
+  bool canCycle() const;
   bool cycleLanguage();
   std::string activeLanguageLabel() const;
 
  private:
   std::vector<SubtitleOption> options_;
-  int activeIndex_ = -1;
+  std::atomic<int> activeIndex_{-1};
 
   bool loadEmbeddedTracks(const std::filesystem::path& videoPath,
                          std::vector<SubtitleOption>& out,
