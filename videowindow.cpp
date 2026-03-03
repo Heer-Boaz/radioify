@@ -20,6 +20,7 @@
 #include "videowindow_vs.h"
 #include "videowindow_ps.h"
 #include "videowindow_ps_ui.h"
+#include "subtitle_caption_style.h"
 
 static inline std::string now_ms() {
     using namespace std::chrono;
@@ -460,47 +461,156 @@ namespace {
         return true;
     }
 
+    static std::wstring utf8ToWide(const std::string& text) {
+        if (text.empty()) return {};
+        int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                                         static_cast<int>(text.size()), nullptr, 0);
+        if (needed <= 0) {
+            needed = MultiByteToWideChar(CP_UTF8, 0, text.data(),
+                                         static_cast<int>(text.size()), nullptr, 0);
+        }
+        if (needed <= 0) {
+            std::wstring fallback;
+            fallback.reserve(text.size());
+            for (unsigned char ch : text) {
+                fallback.push_back(static_cast<wchar_t>(ch));
+            }
+            return fallback;
+        }
+        std::wstring out(static_cast<size_t>(needed), L'\0');
+        int written = MultiByteToWideChar(CP_UTF8, 0, text.data(),
+                                          static_cast<int>(text.size()),
+                                          out.data(), needed);
+        if (written <= 0) return {};
+        return out;
+    }
+
     static bool renderSubtitleTextToBitmap(const std::string& text, int width,
                                            int height,
+                                           const CaptionStyleProfile& captionStyle,
                                            std::vector<uint8_t>& outPixels) {
         outPixels.clear();
         if (width <= 0 || height <= 0 || text.empty()) return false;
 
-        std::vector<uint8_t> textPixels;
-        if (!renderTextToBitmap(text, width, height, textPixels, true, 0, 0)) {
+        std::wstring wide = utf8ToWide(text);
+        if (wide.empty()) return false;
+
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height;  // top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        HDC hdc = CreateCompatibleDC(nullptr);
+        if (!hdc) return false;
+        void* bits = nullptr;
+        HBITMAP dib = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!dib || !bits) {
+            if (dib) DeleteObject(dib);
+            DeleteDC(hdc);
             return false;
         }
-        if (textPixels.empty()) return false;
+
+        HGDIOBJ oldBmp = SelectObject(hdc, dib);
+        HFONT font = nullptr;
+        HGDIOBJ oldFont = nullptr;
+
+        const uint8_t bgR = captionStyle.backgroundR;
+        const uint8_t bgG = captionStyle.backgroundG;
+        const uint8_t bgB = captionStyle.backgroundB;
+        const uint8_t bgA = static_cast<uint8_t>(std::lround(
+            255.0f * std::clamp(captionStyle.backgroundAlpha, 0.0f, 1.0f)));
+        const uint8_t textA = static_cast<uint8_t>(std::lround(
+            255.0f * std::clamp(captionStyle.textAlpha, 0.0f, 1.0f)));
+
+        uint8_t* px = reinterpret_cast<uint8_t*>(bits);
+        const size_t pixelBytes =
+            static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+        for (size_t i = 0; i < pixelBytes; i += 4) {
+            px[i + 0] = bgB;
+            px[i + 1] = bgG;
+            px[i + 2] = bgR;
+            px[i + 3] = bgA;
+        }
+
+        int fontPx = std::clamp(
+            static_cast<int>(std::lround(height * 0.44f *
+                                         std::max(0.60f, captionStyle.sizeScale))),
+            10, std::max(10, height));
+        int weight = (captionStyle.fontStyle == 7) ? FW_SEMIBOLD : FW_NORMAL;
+        font = CreateFontW(-fontPx, 0, 0, 0, weight, FALSE, FALSE, FALSE,
+                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                           captionFontFaceForStyle(captionStyle.fontStyle));
+        if (font) {
+            oldFont = SelectObject(hdc, font);
+        }
+
+        SetBkMode(hdc, TRANSPARENT);
+        RECT textRect{6, 4, std::max(7, width - 6), std::max(5, height - 4)};
+        UINT drawFlags = DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX;
+
+        auto drawTextOffset = [&](int dx, int dy, COLORREF color) {
+            RECT r = textRect;
+            OffsetRect(&r, dx, dy);
+            SetTextColor(hdc, color);
+            DrawTextW(hdc, wide.c_str(), static_cast<int>(wide.size()), &r,
+                      drawFlags);
+        };
+
+        switch (captionStyle.fontEffect) {
+            case 2:  // Raised
+                drawTextOffset(-1, -1, RGB(245, 245, 245));
+                drawTextOffset(1, 1, RGB(25, 25, 25));
+                break;
+            case 3:  // Depressed
+                drawTextOffset(-1, -1, RGB(25, 25, 25));
+                drawTextOffset(1, 1, RGB(245, 245, 245));
+                break;
+            case 4:  // Uniform outline
+                drawTextOffset(-1, 0, RGB(0, 0, 0));
+                drawTextOffset(1, 0, RGB(0, 0, 0));
+                drawTextOffset(0, -1, RGB(0, 0, 0));
+                drawTextOffset(0, 1, RGB(0, 0, 0));
+                break;
+            case 5:  // Drop shadow
+                drawTextOffset(2, 2, RGB(0, 0, 0));
+                break;
+            default:
+                break;  // None/default
+        }
+
+        SetTextColor(hdc, RGB(captionStyle.textR, captionStyle.textG, captionStyle.textB));
+        DrawTextW(hdc, wide.c_str(), static_cast<int>(wide.size()), &textRect,
+                  drawFlags);
+
+        outPixels.assign(px, px + pixelBytes);
 
         bool hasText = false;
-        for (size_t i = 3; i < textPixels.size(); i += 4) {
-            if (textPixels[i] > 0) {
+        for (size_t i = 0; i < outPixels.size(); i += 4) {
+            const uint8_t b = outPixels[i + 0];
+            const uint8_t g = outPixels[i + 1];
+            const uint8_t r = outPixels[i + 2];
+            const int diff = std::abs(static_cast<int>(b) - static_cast<int>(bgB)) +
+                             std::abs(static_cast<int>(g) - static_cast<int>(bgG)) +
+                             std::abs(static_cast<int>(r) - static_cast<int>(bgR));
+            if (diff > 8) {
+                outPixels[i + 3] = std::max(textA, bgA);
                 hasText = true;
-                break;
+            } else {
+                outPixels[i + 3] = bgA;
             }
         }
-        if (!hasText) return false;
 
-        outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
-                         0u);
+        if (oldFont) SelectObject(hdc, oldFont);
+        if (font) DeleteObject(font);
+        if (oldBmp) SelectObject(hdc, oldBmp);
+        DeleteObject(dib);
+        DeleteDC(hdc);
 
-        // Add a translucent backdrop for readability against bright frames.
-        for (size_t i = 0; i < outPixels.size(); i += 4) {
-            outPixels[i + 0] = 0;
-            outPixels[i + 1] = 0;
-            outPixels[i + 2] = 0;
-            outPixels[i + 3] = 150;
-        }
-
-        for (size_t i = 0; i < textPixels.size(); i += 4) {
-            uint8_t a = textPixels[i + 3];
-            if (a == 0) continue;
-            outPixels[i + 0] = 255;
-            outPixels[i + 1] = 255;
-            outPixels[i + 2] = 255;
-            outPixels[i + 3] = 255;
-        }
-        return true;
+        return hasText;
     }
 
     #if 0
@@ -1637,13 +1747,17 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     }
 
     if (showSubtitle) {
+        const CaptionStyleProfile captionStyle = getWindowsCaptionStyleProfile();
         int subtitleLineCount = 1;
         for (char c : ui.subtitle) {
             if (c == '\n') ++subtitleLineCount;
         }
         subtitleLineCount = std::clamp(subtitleLineCount, 1, 3);
 
-        int linePxH = std::clamp((int)std::round(m_height * 0.05f), 12, 42);
+        int linePxH = std::clamp(
+            static_cast<int>(std::round(m_height * 0.05f *
+                                        std::max(0.60f, captionStyle.sizeScale))),
+            10, 56);
         int subtitlePxH = std::clamp(
             subtitleLineCount * linePxH +
                 std::max(0, subtitleLineCount - 1) * 2 + 6,
@@ -1680,7 +1794,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             std::vector<uint8_t> bmp;
             if (m_subtitleTexture &&
                 renderSubtitleTextToBitmap(ui.subtitle, subtitlePxW, subtitlePxH,
-                                           bmp)) {
+                                           captionStyle, bmp)) {
                 D3D11_BOX box{0, 0, 0, (UINT)subtitlePxW, (UINT)subtitlePxH, 1};
                 context->UpdateSubresource(m_subtitleTexture.Get(), 0, &box,
                                            bmp.data(), subtitlePxW * 4, 0);

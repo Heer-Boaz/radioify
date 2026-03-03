@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <mutex>
@@ -15,6 +16,8 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <wrl/client.h>
+
+#include "subtitle_caption_style.h"
 
 namespace {
 
@@ -338,6 +341,37 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
     return;
   }
 
+  const CaptionStyleProfile captionStyle = getWindowsCaptionStyleProfile();
+  auto blendColor = [](const Color& src, const Color& dst, float alpha) -> Color {
+    const float a = std::clamp(alpha, 0.0f, 1.0f);
+    Color out;
+    out.r = static_cast<uint8_t>(
+        std::lround(static_cast<float>(src.r) * a +
+                    static_cast<float>(dst.r) * (1.0f - a)));
+    out.g = static_cast<uint8_t>(
+        std::lround(static_cast<float>(src.g) * a +
+                    static_cast<float>(dst.g) * (1.0f - a)));
+    out.b = static_cast<uint8_t>(
+        std::lround(static_cast<float>(src.b) * a +
+                    static_cast<float>(dst.b) * (1.0f - a)));
+    return out;
+  };
+
+  const Color targetText{
+      captionStyle.textR, captionStyle.textG, captionStyle.textB};
+  const Color targetBg{
+      captionStyle.backgroundR, captionStyle.backgroundG, captionStyle.backgroundB};
+  const Color blendedText =
+      blendColor(targetText, baseStyle.bg, captionStyle.textAlpha);
+  const Color blendedBg =
+      blendColor(targetBg, baseStyle.bg, captionStyle.backgroundAlpha);
+
+  Style subtitleTextStyle = accentStyle;
+  subtitleTextStyle.fg = blendedText;
+  subtitleTextStyle.bg = blendedBg;
+  Style subtitleBoxStyle = subtitleTextStyle;
+  subtitleBoxStyle.fg = blendedBg;
+
   auto trimAscii = [](std::string s) {
     size_t begin = 0;
     while (begin < s.size() &&
@@ -401,14 +435,30 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
     return lines;
   };
 
-  const int maxSubtitleChars = std::max(8, width - 4);
-  const int maxSubtitleLines = overlayVisible ? 2 : 3;
+  const int subtitleAreaX = (allowFrame && artWidth > 0) ? artX : 0;
+  const int subtitleAreaW =
+      (allowFrame && artWidth > 0) ? artWidth : std::max(1, width);
+  const int usableChars = std::max(8, subtitleAreaW - 4);
+  const int maxSubtitleChars = std::max(
+      8, static_cast<int>(std::lround(
+             static_cast<double>(usableChars) /
+             std::max(0.60f, captionStyle.sizeScale))));
+  int maxSubtitleLines = overlayVisible ? 2 : 3;
+  if (captionStyle.sizeScale >= 1.35f && maxSubtitleLines > 1) {
+    --maxSubtitleLines;
+  }
   std::vector<std::string> lines =
       wrapSubtitle(subtitleText, maxSubtitleChars, maxSubtitleLines);
   if (lines.empty()) return;
 
-  const int reservedBottomLines = overlayVisible ? 5 : 1;
-  const int subtitleBottomY = height - reservedBottomLines;
+  const int artBottomY =
+      (allowFrame && visibleArtHeight > 0)
+          ? (artTop + visibleArtHeight - 1)
+          : (height - 1);
+  const int overlayTopY = overlayVisible ? (height - 5) : height;
+  int subtitleBottomY = std::min(artBottomY - 1, overlayTopY - 1);
+  subtitleBottomY = std::max(artTop, subtitleBottomY);
+
   int y = subtitleBottomY - static_cast<int>(lines.size()) + 1;
   if (y < artTop) {
     y = artTop;
@@ -416,12 +466,20 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
   for (const std::string& rawLine : lines) {
     if (y >= height) break;
     std::string line = rawLine;
-    if (utf8CodepointCount(line) > width - 2) {
-      line = utf8Take(line, std::max(1, width - 2));
+    if (utf8CodepointCount(line) > subtitleAreaW - 2) {
+      line = utf8Take(line, std::max(1, subtitleAreaW - 2));
     }
     int lineWidth = utf8CodepointCount(line);
-    int x = std::max(0, (width - lineWidth) / 2);
-    screen.writeText(x, y, line, accentStyle);
+    int x = subtitleAreaX + std::max(0, (subtitleAreaW - lineWidth) / 2);
+    if (captionStyle.backgroundAlpha > 0.01f) {
+      const int pad = (captionStyle.sizeScale >= 1.35f) ? 2 : 1;
+      int bgX = std::max(0, x - pad);
+      int bgW = std::min(width - bgX, lineWidth + pad * 2);
+      if (bgW > 0) {
+        screen.writeRun(bgX, y, bgW, L' ', subtitleBoxStyle);
+      }
+    }
+    screen.writeText(x, y, line, subtitleTextStyle);
     ++y;
   }
 }
