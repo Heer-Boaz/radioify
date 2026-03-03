@@ -109,20 +109,31 @@ bool GpuAsciiRenderer::CreateDeviceWithFlags(UINT extraFlags) {
     creationFlags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 
-    HRESULT hr = D3D11CreateDevice(
-        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, creationFlags,
-        featureLevels, 1, D3D11_SDK_VERSION,
-        &m_device, nullptr, &m_context
-    );
-    
-    if (FAILED(hr) && (extraFlags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
-        // Fallback without video support flag
-        creationFlags &= ~D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
-        hr = D3D11CreateDevice(
-            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, creationFlags,
+    auto tryCreate = [&](UINT flags) -> HRESULT {
+        m_device.Reset();
+        m_context.Reset();
+        return D3D11CreateDevice(
+            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
             featureLevels, 1, D3D11_SDK_VERSION,
             &m_device, nullptr, &m_context
         );
+    };
+
+    HRESULT hr = tryCreate(creationFlags);
+
+    const bool hasVideoSupport =
+        (creationFlags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT) != 0;
+    const bool hasDebug = (creationFlags & D3D11_CREATE_DEVICE_DEBUG) != 0;
+
+    if (FAILED(hr) && hasVideoSupport) {
+        hr = tryCreate(creationFlags & ~D3D11_CREATE_DEVICE_VIDEO_SUPPORT);
+    }
+    if (FAILED(hr) && hasDebug) {
+        hr = tryCreate(creationFlags & ~D3D11_CREATE_DEVICE_DEBUG);
+    }
+    if (FAILED(hr) && hasVideoSupport && hasDebug) {
+        hr = tryCreate(creationFlags & ~D3D11_CREATE_DEVICE_VIDEO_SUPPORT &
+                       ~D3D11_CREATE_DEVICE_DEBUG);
     }
     
     if (SUCCEEDED(hr)) {
