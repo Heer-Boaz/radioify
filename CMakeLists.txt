@@ -74,7 +74,6 @@ add_executable(radioify
   queues.cpp
   taskgate.cpp
   ui_helpers.cpp
-  subtitles.cpp
   videoplayback.cpp
   videodecoder.cpp
   videowindow.cpp
@@ -82,8 +81,6 @@ add_executable(radioify
   videoprocessor.cpp
   playback_frame_output_ascii.cpp
   playback_frame_output_console.cpp
-  playback_subtitle_lines.cpp
-  playback_subtitles.cpp
   radio.cpp
   loopsplit.cpp
   loopsplit_cli.cpp

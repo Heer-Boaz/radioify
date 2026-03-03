@@ -57,6 +57,7 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
                            const std::string& waitingLabel, bool allowFrame,
                            const Style& baseStyle,
                            bool overlayVisible,
+                           const std::string& subtitleText,
                            const Style& accentStyle, const Style& dimStyle);
 
 void renderNonAsciiModeContent(ConsoleScreen& screen, bool windowEnabled,

@@ -314,6 +314,7 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
                            int height, int maxHeight, int artTop,
                            const std::string& waitingLabel, bool allowFrame,
                            const Style& baseStyle, bool overlayVisible,
+                           const std::string& subtitleText,
                            const Style& accentStyle, const Style& dimStyle) {
   const int artWidth = std::min(art.width, width);
   const int artHeight = std::min(art.height, maxHeight);
@@ -331,6 +332,97 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
     }
   } else if (!allowFrame) {
     screen.writeText(0, artTop, fitLine(waitingLabel, width), dimStyle);
+  }
+
+  if (subtitleText.empty() || width <= 2 || height <= artTop + 1) {
+    return;
+  }
+
+  auto trimAscii = [](std::string s) {
+    size_t begin = 0;
+    while (begin < s.size() &&
+           (s[begin] == ' ' || s[begin] == '\t' || s[begin] == '\r')) {
+      ++begin;
+    }
+    size_t end = s.size();
+    while (end > begin &&
+           (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\r')) {
+      --end;
+    }
+    return s.substr(begin, end - begin);
+  };
+
+  auto wrapSubtitle = [&](const std::string& text, int maxChars,
+                          int maxLines) -> std::vector<std::string> {
+    std::vector<std::string> lines;
+    if (maxChars <= 0 || maxLines <= 0) return lines;
+    size_t start = 0;
+    while (start <= text.size() && static_cast<int>(lines.size()) < maxLines) {
+      size_t end = text.find('\n', start);
+      std::string raw =
+          (end == std::string::npos) ? text.substr(start)
+                                     : text.substr(start, end - start);
+      raw = trimAscii(raw);
+      if (raw.empty()) {
+        if (end == std::string::npos) break;
+        start = end + 1;
+        continue;
+      }
+
+      std::string remaining = raw;
+      while (!remaining.empty() &&
+             static_cast<int>(lines.size()) < maxLines) {
+        int charCount = utf8CodepointCount(remaining);
+        if (charCount <= maxChars) {
+          lines.push_back(remaining);
+          break;
+        }
+        std::string chunk = utf8Take(remaining, maxChars);
+        size_t split = chunk.find_last_of(" \t");
+        if (split == std::string::npos || split < chunk.size() / 3) {
+          split = chunk.size();
+        }
+        std::string line = trimAscii(remaining.substr(0, split));
+        if (line.empty()) {
+          line = chunk;
+          split = chunk.size();
+        }
+        lines.push_back(line);
+        if (split >= remaining.size()) {
+          remaining.clear();
+        } else {
+          remaining = trimAscii(remaining.substr(split));
+        }
+      }
+
+      if (end == std::string::npos) break;
+      start = end + 1;
+    }
+    return lines;
+  };
+
+  const int maxSubtitleChars = std::max(8, width - 4);
+  const int maxSubtitleLines = overlayVisible ? 2 : 3;
+  std::vector<std::string> lines =
+      wrapSubtitle(subtitleText, maxSubtitleChars, maxSubtitleLines);
+  if (lines.empty()) return;
+
+  const int reservedBottomLines = overlayVisible ? 5 : 1;
+  const int subtitleBottomY = height - reservedBottomLines;
+  int y = subtitleBottomY - static_cast<int>(lines.size()) + 1;
+  if (y < artTop) {
+    y = artTop;
+  }
+  for (const std::string& rawLine : lines) {
+    if (y >= height) break;
+    std::string line = rawLine;
+    if (utf8CodepointCount(line) > width - 2) {
+      line = utf8Take(line, std::max(1, width - 2));
+    }
+    int lineWidth = utf8CodepointCount(line);
+    int x = std::max(0, (width - lineWidth) / 2);
+    screen.writeText(x, y, line, accentStyle);
+    ++y;
   }
 }
 

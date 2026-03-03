@@ -20,12 +20,17 @@ struct ShaderConstants {
 
     float textLeft;
     float textWidth;
-    uint32_t pad1;
-    uint32_t pad2;
+    float subtitleTop;
+    float subtitleHeight;
 
+    float subtitleLeft;
+    float subtitleWidth;
+    float subtitleAlpha;
     float pad3;
     float pad4;
     float pad5;
+    float pad6;
+    float pad7;
 };
 
 static_assert((sizeof(ShaderConstants) % 16) == 0,

@@ -460,6 +460,49 @@ namespace {
         return true;
     }
 
+    static bool renderSubtitleTextToBitmap(const std::string& text, int width,
+                                           int height,
+                                           std::vector<uint8_t>& outPixels) {
+        outPixels.clear();
+        if (width <= 0 || height <= 0 || text.empty()) return false;
+
+        std::vector<uint8_t> textPixels;
+        if (!renderTextToBitmap(text, width, height, textPixels, true, 0, 0)) {
+            return false;
+        }
+        if (textPixels.empty()) return false;
+
+        bool hasText = false;
+        for (size_t i = 3; i < textPixels.size(); i += 4) {
+            if (textPixels[i] > 0) {
+                hasText = true;
+                break;
+            }
+        }
+        if (!hasText) return false;
+
+        outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
+                         0u);
+
+        // Add a translucent backdrop for readability against bright frames.
+        for (size_t i = 0; i < outPixels.size(); i += 4) {
+            outPixels[i + 0] = 0;
+            outPixels[i + 1] = 0;
+            outPixels[i + 2] = 0;
+            outPixels[i + 3] = 150;
+        }
+
+        for (size_t i = 0; i < textPixels.size(); i += 4) {
+            uint8_t a = textPixels[i + 3];
+            if (a == 0) continue;
+            outPixels[i + 0] = 255;
+            outPixels[i + 1] = 255;
+            outPixels[i + 2] = 255;
+            outPixels[i + 3] = 255;
+        }
+        return true;
+    }
+
     #if 0
     // Runtime shader sources retained for reference; build uses precompiled blobs.
     // Video frame rendering shader (combined from videowindow_render.hlsl)
@@ -870,6 +913,10 @@ void VideoWindow::Cleanup() {
     // frame cache is now owned/managed externally
     m_textTexture.Reset();
     m_textSrv.Reset();
+    m_subtitleTexture.Reset();
+    m_subtitleSrv.Reset();
+    m_subtitleWidth = 0;
+    m_subtitleHeight = 0;
     m_tuiTexture.Reset();
     m_tuiSrv.Reset();
 }
@@ -1464,7 +1511,9 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 
 void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     bool showOverlay = ui.overlayAlpha > 0.01f;
-    if (!showOverlay) return;
+    bool showSubtitle =
+        ui.subtitleAlpha > 0.01f && !ui.subtitle.empty();
+    if (!showOverlay && !showSubtitle) return;
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;
@@ -1494,6 +1543,10 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     float textTopNorm = 0.0f;
     float textLeftNorm = 0.0f;
     float textWidthNorm = 0.0f;
+    float subtitleTopNorm = 0.0f;
+    float subtitleHeightNorm = 0.0f;
+    float subtitleLeftNorm = 0.0f;
+    float subtitleWidthNorm = 0.0f;
 
     // Optional: Render overlay text (metadata + control strip) to texture.
     if (showOverlay) {
@@ -1583,6 +1636,68 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         }
     }
 
+    if (showSubtitle) {
+        int subtitleLineCount = 1;
+        for (char c : ui.subtitle) {
+            if (c == '\n') ++subtitleLineCount;
+        }
+        subtitleLineCount = std::clamp(subtitleLineCount, 1, 3);
+
+        int linePxH = std::clamp((int)std::round(m_height * 0.05f), 12, 42);
+        int subtitlePxH = std::clamp(
+            subtitleLineCount * linePxH +
+                std::max(0, subtitleLineCount - 1) * 2 + 6,
+            20, std::max(24, m_height / 3));
+        int subtitlePxW =
+            std::clamp(static_cast<int>(std::lround(m_width * 0.82)),
+                       1, std::max(1, m_width));
+
+        if (subtitlePxW > 0 && subtitlePxH > 0) {
+            if (!m_subtitleTexture || m_subtitleWidth != subtitlePxW ||
+                m_subtitleHeight != subtitlePxH) {
+                m_subtitleWidth = subtitlePxW;
+                m_subtitleHeight = subtitlePxH;
+                m_subtitleTexture.Reset();
+                m_subtitleSrv.Reset();
+
+                D3D11_TEXTURE2D_DESC texDesc = {};
+                texDesc.Width = static_cast<UINT>(subtitlePxW);
+                texDesc.Height = static_cast<UINT>(subtitlePxH);
+                texDesc.MipLevels = 1;
+                texDesc.ArraySize = 1;
+                texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                texDesc.SampleDesc.Count = 1;
+                texDesc.Usage = D3D11_USAGE_DEFAULT;
+                texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+                if (SUCCEEDED(device->CreateTexture2D(
+                        &texDesc, NULL, &m_subtitleTexture))) {
+                    device->CreateShaderResourceView(
+                        m_subtitleTexture.Get(), NULL, &m_subtitleSrv);
+                }
+            }
+
+            std::vector<uint8_t> bmp;
+            if (m_subtitleTexture &&
+                renderSubtitleTextToBitmap(ui.subtitle, subtitlePxW, subtitlePxH,
+                                           bmp)) {
+                D3D11_BOX box{0, 0, 0, (UINT)subtitlePxW, (UINT)subtitlePxH, 1};
+                context->UpdateSubresource(m_subtitleTexture.Get(), 0, &box,
+                                           bmp.data(), subtitlePxW * 4, 0);
+            }
+
+            subtitleHeightNorm =
+                static_cast<float>(subtitlePxH) / std::max(1, m_height);
+            subtitleWidthNorm =
+                static_cast<float>(subtitlePxW) / std::max(1, m_width);
+            subtitleLeftNorm = std::max(0.0f, (1.0f - subtitleWidthNorm) * 0.5f);
+            float subtitleBottomNorm = showOverlay ? (textTopNorm - 0.02f) : 0.94f;
+            subtitleTopNorm = subtitleBottomNorm - subtitleHeightNorm;
+            subtitleTopNorm = std::clamp(
+                subtitleTopNorm, 0.02f, std::max(0.02f, 1.0f - subtitleHeightNorm));
+        }
+    }
+
     {
         D3D11_MAPPED_SUBRESOURCE mapped;
         if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -1595,6 +1710,12 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             sc.textHeight = textHeightNorm;
             sc.textLeft = textLeftNorm;
             sc.textWidth = textWidthNorm;
+            sc.subtitleTop = subtitleTopNorm;
+            sc.subtitleHeight = subtitleHeightNorm;
+            sc.subtitleLeft = subtitleLeftNorm;
+            sc.subtitleWidth = subtitleWidthNorm;
+            sc.subtitleAlpha =
+                showSubtitle ? std::clamp(ui.subtitleAlpha, 0.0f, 1.0f) : 0.0f;
             std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }

@@ -33,6 +33,8 @@ struct WindowUiState {
     double displaySec = 0.0; // current time shown in overlay
     double totalSec = -1.0; // total duration (or -1 if unknown)
     int volPct = 0; // volume percent for display
+    std::string subtitle; // current subtitle cue text
+    float subtitleAlpha = 0.0f; // subtitle opacity
 };
 
 struct IDXGISwapChain2;
@@ -106,6 +108,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_textSrv;
     int m_textWidth = 0;
     int m_textHeight = 0;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_subtitleTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_subtitleSrv;
+    int m_subtitleWidth = 0;
+    int m_subtitleHeight = 0;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_tuiTexture;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_tuiSrv;
     int m_tuiTexWidth = 0;
