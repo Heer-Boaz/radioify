@@ -30,11 +30,9 @@ struct WindowUiState {
     std::string controls; // temporary control-strip labels (e.g. radio/50Hz)
     std::string progressSuffix; // playback time/status/volume line
     std::vector<ControlButton> controlButtons;
-    std::string subtitle;
     double displaySec = 0.0; // current time shown in overlay
     double totalSec = -1.0; // total duration (or -1 if unknown)
     int volPct = 0; // volume percent for display
-    float subtitleAlpha = 0.0f;
 };
 
 struct IDXGISwapChain2;
@@ -108,11 +106,6 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_textSrv;
     int m_textWidth = 0;
     int m_textHeight = 0;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_subtitleTexture;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_subtitleSrv;
-    int m_subtitleWidth = 0;
-    int m_subtitleHeight = 0;
-    std::string m_lastSubtitleText;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_tuiTexture;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_tuiSrv;
     int m_tuiTexWidth = 0;

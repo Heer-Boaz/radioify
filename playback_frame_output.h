@@ -56,7 +56,7 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
                            int height, int maxHeight, int artTop,
                            const std::string& waitingLabel, bool allowFrame,
                            const Style& baseStyle,
-                           bool overlayVisible, const std::string& subtitleText,
+                           bool overlayVisible,
                            const Style& accentStyle, const Style& dimStyle);
 
 void renderNonAsciiModeContent(ConsoleScreen& screen, bool windowEnabled,
@@ -64,8 +64,5 @@ void renderNonAsciiModeContent(ConsoleScreen& screen, bool windowEnabled,
                               int maxHeight, const VideoFrame* frame,
                               int sourceWidth, int sourceHeight,
                               const Style& dimStyle);
-
-std::vector<std::string> extractSubtitleLines(const std::string& subtitleText,
-                                            size_t maxLines);
 
 }  // namespace playback_frame_output

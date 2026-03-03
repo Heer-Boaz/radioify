@@ -23,12 +23,6 @@ struct ShaderConstants {
     uint32_t pad1;
     uint32_t pad2;
 
-    float subtitleTop;
-    float subtitleHeight;
-    float subtitleLeft;
-    float subtitleWidth;
-
-    float subtitleAlpha;
     float pad3;
     float pad4;
     float pad5;

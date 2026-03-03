@@ -10,7 +10,6 @@ struct VideoPlaybackConfig {
   bool enableAudio = true;
   bool debugOverlay = false;
   bool enableWindow = false;
-  bool enableSubtitles = true;
 };
 
 void configureFfmpegVideoLog(const std::filesystem::path& path);

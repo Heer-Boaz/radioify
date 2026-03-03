@@ -39,11 +39,9 @@ extern "C" {
 #include "gpu_shared.h"
 #include "player.h"
 #include "playback_dialog.h"
-#include "subtitles.h"
 #include "ui_helpers.h"
 #include "videowindow.h"
 #include "playback_mode.h"
-#include "playback_subtitles.h"
 #include "playback_frame_output.h"
 
 #include "timing_log.h"
@@ -275,8 +273,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   bool enableAscii = config.enableAscii;
   bool enableAudio = config.enableAudio && audioIsEnabled();
-  bool enableSubtitles = config.enableSubtitles;
-  std::atomic<bool> enableSubtitlesShared{enableSubtitles};
   // Ensure previous video textures/fences are not carried into a new session.
   g_frameCache.Reset();
 
@@ -397,8 +393,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   playerConfig.logPath = logPath;
   playerConfig.enableAudio = enableAudio;
   playerConfig.allowDecoderScale = enableAscii;
-  playback_subtitles::SubtitleManager subtitleManager;
-  bool hasSubtitles = false;
 
   if (!player.open(playerConfig, nullptr)) {
     bool ok = reportVideoError("Failed to open video.", "");
@@ -522,30 +516,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     bool ok = reportVideoError(initError, "");
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return ok;
-  }
-
-    {
-      std::string lastSubtitleError;
-      bool anyLoaded = subtitleManager.load(file, &lastSubtitleError);
-      hasSubtitles = subtitleManager.hasSubtitles();
-      if (hasSubtitles && !enableSubtitles) {
-        enableSubtitles = true;
-        enableSubtitlesShared.store(true, std::memory_order_relaxed);
-      }
-      perfLogAppendf(&perfLog, "subtitle_discovery_count=%zu",
-                     subtitleManager.trackCount());
-    if (!subtitleManager.tracks().empty()) {
-      size_t loadedCount = subtitleManager.tracks().size();
-      perfLogAppendf(&perfLog, "subtitle_load ok=%d loaded=%zu",
-                     anyLoaded ? 1 : 0, loadedCount);
-      if (!anyLoaded && !lastSubtitleError.empty()) {
-        perfLogAppendf(&perfLog, "subtitle_load err=%s", lastSubtitleError.c_str());
-      }
-    } else {
-      perfLogAppendf(&perfLog, "subtitle_load ok=0 err=%s",
-                     lastSubtitleError.empty() ? "No matching subtitle files found."
-                                              : lastSubtitleError.c_str());
-    }
   }
 
   int sourceWidth = player.sourceWidth();

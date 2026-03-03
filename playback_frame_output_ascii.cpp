@@ -314,7 +314,6 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
                            int height, int maxHeight, int artTop,
                            const std::string& waitingLabel, bool allowFrame,
                            const Style& baseStyle, bool overlayVisible,
-                           const std::string& subtitleText,
                            const Style& accentStyle, const Style& dimStyle) {
   const int artWidth = std::min(art.width, width);
   const int artHeight = std::min(art.height, maxHeight);
@@ -332,25 +331,6 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
     }
   } else if (!allowFrame) {
     screen.writeText(0, artTop, fitLine(waitingLabel, width), dimStyle);
-  }
-
-  if (!subtitleText.empty()) {
-    auto lines = extractSubtitleLines(subtitleText, 2);
-    if (!lines.empty()) {
-      const int overlayReservedRows = overlayVisible ? 4 : 0;
-      const int subtitleBottom = height - overlayReservedRows - 1;
-      const int maxVisible = subtitleBottom - artTop + 1;
-      if (subtitleBottom >= 0 && maxVisible > 0) {
-        const int visibleLines = std::min<int>(static_cast<int>(lines.size()),
-                                              maxVisible);
-        const int startLine = static_cast<int>(lines.size()) - visibleLines;
-        const int startY = subtitleBottom - visibleLines + 1;
-        for (int i = 0; i < visibleLines; ++i) {
-          const std::string& textLine = lines[static_cast<size_t>(startLine + i)];
-          screen.writeText(0, startY + i, fitLine(textLine, width), accentStyle);
-        }
-      }
-    }
   }
 }
 
