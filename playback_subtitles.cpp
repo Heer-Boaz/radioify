@@ -607,6 +607,15 @@ bool SubtitleManager::loadEmbeddedTracks(const std::filesystem::path& videoPath,
       }
       continue;
     }
+
+    int64_t formatStartUs =
+        (format->start_time != AV_NOPTS_VALUE) ? format->start_time : 0;
+    if (formatStartUs != 0) {
+      for (auto& cue : cues) {
+        cue.startUs -= formatStartUs;
+        cue.endUs -= formatStartUs;
+      }
+    }
     fixEmbeddedCueOrdering(cues);
     if (cues.empty()) continue;
 

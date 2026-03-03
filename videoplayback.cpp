@@ -524,12 +524,16 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return ok;
   }
 
-  {
-    std::string lastSubtitleError;
-    bool anyLoaded = subtitleManager.load(file, &lastSubtitleError);
-    hasSubtitles = subtitleManager.hasSubtitles();
-    perfLogAppendf(&perfLog, "subtitle_discovery_count=%zu",
-                   subtitleManager.trackCount());
+    {
+      std::string lastSubtitleError;
+      bool anyLoaded = subtitleManager.load(file, &lastSubtitleError);
+      hasSubtitles = subtitleManager.hasSubtitles();
+      if (hasSubtitles && !enableSubtitles) {
+        enableSubtitles = true;
+        enableSubtitlesShared.store(true, std::memory_order_relaxed);
+      }
+      perfLogAppendf(&perfLog, "subtitle_discovery_count=%zu",
+                     subtitleManager.trackCount());
     if (!subtitleManager.tracks().empty()) {
       size_t loadedCount = subtitleManager.tracks().size();
       perfLogAppendf(&perfLog, "subtitle_load ok=%d loaded=%zu",
@@ -775,7 +779,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       Hz50,
       AudioTrack,
       Subtitles,
-      SubtitleLanguage,
     };
   struct OverlayControlSpec {
     OverlayControlId id = OverlayControlId::Radio;
@@ -840,36 +843,30 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
           OverlayControlSpec subtitles{};
           subtitles.id = OverlayControlId::Subtitles;
-        bool subtitlesEnabled =
-            enableSubtitlesShared.load(std::memory_order_relaxed);
-        subtitles.active = hasSubtitles && subtitlesEnabled;
-        auto subtitleLabels =
-            makeLabels(subtitles.active ? "Subs: On" : "Subs: Off");
-        if (!hasSubtitles) {
-          subtitleLabels = makeLabels("Subs: N/A");
-        }
-        subtitles.normalText = subtitleLabels.first;
-        subtitles.hoverText = subtitleLabels.second;
-        subtitles.width = std::max(utf8CodepointCount(subtitles.normalText),
-                                   utf8CodepointCount(subtitles.hoverText));
-        out.push_back(subtitles);
-
-          if (subtitleManager.canCycle()) {
-            OverlayControlSpec subtitleLanguage{};
-            subtitleLanguage.id = OverlayControlId::SubtitleLanguage;
-            subtitleLanguage.active = hasSubtitles;
-            auto trackLabel = subtitleManager.activeTrackLabel();
-            if (utf8CodepointCount(trackLabel) > 14) {
-              trackLabel = utf8Take(trackLabel, 14);
+          bool subtitlesEnabled = enableSubtitlesShared.load(std::memory_order_relaxed);
+          subtitles.active = hasSubtitles;
+          std::string subtitleLabel = "Subs: N/A";
+          if (hasSubtitles) {
+            if (!subtitlesEnabled) {
+              subtitleLabel = "Subs: Off";
+            } else {
+              std::string activeSubtitle = subtitleManager.activeTrackLabel();
+              if (activeSubtitle.empty()) activeSubtitle = "N/A";
+              if (utf8CodepointCount(activeSubtitle) > 14) {
+                activeSubtitle = utf8Take(activeSubtitle, 14);
+              }
+              subtitleLabel = "Subs: " + activeSubtitle;
             }
-            auto subtitleLanguageLabels = makeLabels("Sub: " + trackLabel);
-            subtitleLanguage.normalText = subtitleLanguageLabels.first;
-            subtitleLanguage.hoverText = subtitleLanguageLabels.second;
-            subtitleLanguage.width =
-              std::max(utf8CodepointCount(subtitleLanguage.normalText),
-                       utf8CodepointCount(subtitleLanguage.hoverText));
-          out.push_back(subtitleLanguage);
-        }
+          }
+          auto subtitleLabels = makeLabels(subtitleLabel);
+          if (!hasSubtitles) {
+            subtitleLabels = makeLabels("Subs: N/A");
+          }
+          subtitles.normalText = subtitleLabels.first;
+          subtitles.hoverText = subtitleLabels.second;
+          subtitles.width = std::max(utf8CodepointCount(subtitles.normalText),
+                                     utf8CodepointCount(subtitles.hoverText));
+          out.push_back(subtitles);
 
         int cursor = 0;
         for (size_t i = 0; i < out.size(); ++i) {
@@ -1034,10 +1031,29 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     return -1;
   };
 
-  auto cycleSubtitleLanguage = [&]() -> bool {
-    if (!hasSubtitles) return false;
-    return subtitleManager.cycleLanguage();
-  };
+    auto cycleSubtitleSelection = [&]() -> bool {
+      if (!hasSubtitles) return false;
+      const bool enabled = enableSubtitlesShared.load(std::memory_order_relaxed);
+      if (!enabled) {
+        enableSubtitles = true;
+        enableSubtitlesShared.store(true, std::memory_order_relaxed);
+        return true;
+      }
+
+      const size_t count = subtitleManager.trackCount();
+      if (count <= 1) {
+        enableSubtitles = false;
+        enableSubtitlesShared.store(false, std::memory_order_relaxed);
+        return true;
+      }
+      const size_t index = subtitleManager.activeTrackIndex();
+      if (index == static_cast<size_t>(-1) || index + 1 >= count) {
+        enableSubtitles = false;
+        enableSubtitlesShared.store(false, std::memory_order_relaxed);
+        return true;
+      }
+      return subtitleManager.cycleLanguage();
+    };
 
   auto executeOverlayControl = [&](int controlIndex) -> bool {
     std::vector<OverlayControlSpec> specs;
@@ -1060,16 +1076,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           if (!audioOk) return false;
           return player.cycleAudioTrack();
         case OverlayControlId::Subtitles:
-          if (!hasSubtitles) return false;
-          enableSubtitles = !enableSubtitles;
-        enableSubtitlesShared.store(enableSubtitles,
-                                    std::memory_order_relaxed);
-        return true;
-      case OverlayControlId::SubtitleLanguage:
-        return cycleSubtitleLanguage();
-    }
-    return false;
-  };
+          return cycleSubtitleSelection();
+      }
+      return false;
+    };
   auto isBackMousePressed = [&](const MouseEvent& mouse) {
     const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
                            FROM_LEFT_2ND_BUTTON_PRESSED |
@@ -1678,22 +1688,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           requestPlaybackExit(false);
           continue;
         }
-        if (ev.key.vk == 'S' || ev.key.vk == 's') {
-          if (hasSubtitles) {
-            enableSubtitles = !enableSubtitles;
-            enableSubtitlesShared.store(enableSubtitles,
-                                        std::memory_order_relaxed);
-            triggerOverlay();
-            redraw = true;
-            if (windowEnabled) {
+          if (ev.key.vk == 'S' || ev.key.vk == 's') {
+            if (cycleSubtitleSelection()) {
+              triggerOverlay();
+              redraw = true;
+              if (windowEnabled) {
               windowForcePresent.store(true, std::memory_order_relaxed);
               windowPresentCv.notify_one();
             }
           }
           continue;
-        }
+          }
           if (ev.key.vk == 'L' || ev.key.vk == 'l') {
-            if (cycleSubtitleLanguage()) {
+            if (cycleSubtitleSelection()) {
               triggerOverlay();
               redraw = true;
               if (windowEnabled) {
