@@ -1404,39 +1404,77 @@ class SubtitleManager {
     }
 
     activeTrack_ = 0;
-    for (size_t i = 0; i < tracks_.size(); ++i) {
-      if (!tracks_[i].cues.empty()) {
-        activeTrack_ = i;
-        break;
-      }
-    }
+    selectFirstTrackWithCues();
   }
 
   size_t trackCount() const { return tracks_.size(); }
+  size_t selectableTrackCount() const {
+    return static_cast<size_t>(std::count_if(
+        tracks_.begin(), tracks_.end(),
+        [](const SubtitleTrack& t) { return !t.cues.empty(); }));
+  }
+
+  bool selectFirstTrackWithCues() {
+    for (size_t i = 0; i < tracks_.size(); ++i) {
+      if (tracks_[i].cues.empty()) continue;
+      activeTrack_ = i;
+      tracks_[activeTrack_].resetLookup();
+      return true;
+    }
+    return false;
+  }
 
   size_t activeTrackIndex() const {
-    if (tracks_.empty() || activeTrack_ >= tracks_.size()) {
+    if (tracks_.empty() || activeTrack_ >= tracks_.size() ||
+        tracks_[activeTrack_].cues.empty()) {
       return static_cast<size_t>(-1);
     }
     return activeTrack_;
   }
 
   const SubtitleTrack* activeTrack() const {
-    if (tracks_.empty() || activeTrack_ >= tracks_.size()) return nullptr;
+    if (tracks_.empty() || activeTrack_ >= tracks_.size() ||
+        tracks_[activeTrack_].cues.empty()) {
+      return nullptr;
+    }
     return &tracks_[activeTrack_];
   }
 
   std::string activeTrackLabel() const {
-    if (tracks_.empty() || activeTrack_ >= tracks_.size()) return "N/A";
+    if (tracks_.empty() || activeTrack_ >= tracks_.size() ||
+        tracks_[activeTrack_].cues.empty()) {
+      return "N/A";
+    }
     return tracks_[activeTrack_].label.empty() ? "N/A"
                                                : tracks_[activeTrack_].label;
   }
 
+  bool isActiveLastCueTrack() const {
+    if (tracks_.empty() || activeTrack_ >= tracks_.size() ||
+        tracks_[activeTrack_].cues.empty()) {
+      return false;
+    }
+    for (size_t i = activeTrack_ + 1; i < tracks_.size(); ++i) {
+      if (!tracks_[i].cues.empty()) return false;
+    }
+    return true;
+  }
+
   bool cycleLanguage() {
     if (tracks_.empty()) return false;
-    activeTrack_ = (activeTrack_ + 1) % tracks_.size();
-    tracks_[activeTrack_].resetLookup();
-    return true;
+    if (activeTrack_ >= tracks_.size()) activeTrack_ = 0;
+    if (tracks_[activeTrack_].cues.empty() && !selectFirstTrackWithCues()) {
+      return false;
+    }
+    if (tracks_[activeTrack_].cues.empty()) return false;
+
+    for (size_t i = activeTrack_ + 1; i < tracks_.size(); ++i) {
+      if (tracks_[i].cues.empty()) continue;
+      activeTrack_ = i;
+      tracks_[activeTrack_].resetLookup();
+      return true;
+    }
+    return false;
   }
 
  private:
@@ -1817,10 +1855,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   int sourceHeight = player.sourceHeight();
   SubtitleManager subtitleManager;
   subtitleManager.loadForVideo(file);
-  const bool hasSubtitles = subtitleManager.trackCount() > 0;
+  const bool hasSubtitles = subtitleManager.selectableTrackCount() > 0;
   std::atomic<bool> enableSubtitlesShared{hasSubtitles};
-  perfLogAppendf(&perfLog, "subtitle_detect tracks=%zu active=%s",
+  perfLogAppendf(&perfLog, "subtitle_detect tracks=%zu usable=%zu active=%s",
                  subtitleManager.trackCount(),
+                 subtitleManager.selectableTrackCount(),
                  subtitleManager.activeTrackLabel().c_str());
 
   screen.updateSize();
@@ -2308,17 +2347,17 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     const bool enabled =
         enableSubtitlesShared.load(std::memory_order_relaxed);
     if (!enabled) {
+      subtitleManager.selectFirstTrackWithCues();
       enableSubtitlesShared.store(true, std::memory_order_relaxed);
       return true;
     }
 
-    const size_t count = subtitleManager.trackCount();
+    const size_t count = subtitleManager.selectableTrackCount();
     if (count <= 1) {
       enableSubtitlesShared.store(false, std::memory_order_relaxed);
       return true;
     }
-    const size_t index = subtitleManager.activeTrackIndex();
-    if (index == static_cast<size_t>(-1) || index + 1 >= count) {
+    if (subtitleManager.isActiveLastCueTrack()) {
       enableSubtitlesShared.store(false, std::memory_order_relaxed);
       return true;
     }
