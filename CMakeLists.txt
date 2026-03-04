@@ -536,31 +536,74 @@ target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
 set(RADIOIFY_HAS_LIBASS OFF)
 set(_radioify_libass_include_dirs "")
 set(_radioify_libass_libraries "")
+set(_radioify_libass_hints "")
+
+if (DEFINED VCPKG_INSTALLED_DIR)
+  if (DEFINED VCPKG_TARGET_TRIPLET)
+    list(APPEND _radioify_libass_hints "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+  endif()
+  if (EXISTS "${VCPKG_INSTALLED_DIR}/x64-windows/tools/pkgconf/pkgconf.exe")
+    set(PKG_CONFIG_EXECUTABLE
+      "${VCPKG_INSTALLED_DIR}/x64-windows/tools/pkgconf/pkgconf.exe")
+  elseif (EXISTS "${VCPKG_INSTALLED_DIR}/x86-windows/tools/pkgconf/pkgconf.exe")
+    set(PKG_CONFIG_EXECUTABLE
+      "${VCPKG_INSTALLED_DIR}/x86-windows/tools/pkgconf/pkgconf.exe")
+  elseif (EXISTS "${VCPKG_INSTALLED_DIR}/arm64-windows/tools/pkgconf/pkgconf.exe")
+    set(PKG_CONFIG_EXECUTABLE
+      "${VCPKG_INSTALLED_DIR}/arm64-windows/tools/pkgconf/pkgconf.exe")
+  endif()
+endif()
 
 find_package(PkgConfig QUIET)
 if (PkgConfig_FOUND)
-  pkg_check_modules(RADIOIFY_LIBASS QUIET libass)
+  set(_radioify_saved_pkg_config_argn "${PKG_CONFIG_ARGN}")
+  if (DEFINED VCPKG_TARGET_TRIPLET AND VCPKG_TARGET_TRIPLET MATCHES "-static")
+    set(PKG_CONFIG_ARGN --static)
+  endif()
+  pkg_check_modules(RADIOIFY_LIBASS QUIET IMPORTED_TARGET libass)
+  set(PKG_CONFIG_ARGN "${_radioify_saved_pkg_config_argn}")
 endif()
 
 if (RADIOIFY_LIBASS_FOUND)
   set(RADIOIFY_HAS_LIBASS ON)
   set(_radioify_libass_include_dirs ${RADIOIFY_LIBASS_INCLUDE_DIRS})
-  set(_radioify_libass_libraries ${RADIOIFY_LIBASS_LIBRARIES})
+  if (TARGET PkgConfig::RADIOIFY_LIBASS)
+    set(_radioify_libass_libraries PkgConfig::RADIOIFY_LIBASS)
+  else()
+    set(_radioify_libass_libraries ${RADIOIFY_LIBASS_LIBRARIES})
+  endif()
 elseif (NOT RADIOIFY_HAS_LIBASS)
   find_path(RADIOIFY_LIBASS_INCLUDE_DIR
     NAMES ass/ass.h
-    HINTS ENV LIBASS_DIR ENV LIBASS_ROOT
+    HINTS ENV LIBASS_DIR ENV LIBASS_ROOT ${_radioify_libass_hints}
     PATH_SUFFIXES include
   )
   find_library(RADIOIFY_LIBASS_LIBRARY
     NAMES ass libass
-    HINTS ENV LIBASS_DIR ENV LIBASS_ROOT
+    HINTS ENV LIBASS_DIR ENV LIBASS_ROOT ${_radioify_libass_hints}
     PATH_SUFFIXES lib
   )
   if (RADIOIFY_LIBASS_INCLUDE_DIR AND RADIOIFY_LIBASS_LIBRARY)
     set(RADIOIFY_HAS_LIBASS ON)
     set(_radioify_libass_include_dirs ${RADIOIFY_LIBASS_INCLUDE_DIR})
     set(_radioify_libass_libraries ${RADIOIFY_LIBASS_LIBRARY})
+
+    if (DEFINED VCPKG_TARGET_TRIPLET AND VCPKG_TARGET_TRIPLET MATCHES "-static")
+      set(_radioify_libass_dep_libraries "")
+      foreach(_radioify_ass_dep freetype harfbuzz fribidi brotlidec brotlicommon bz2 libpng16 png16 zlib)
+        string(TOUPPER "${_radioify_ass_dep}" _radioify_ass_dep_upper)
+        set(_radioify_ass_dep_var "RADIOIFY_LIBASS_DEP_${_radioify_ass_dep_upper}")
+        find_library(${_radioify_ass_dep_var}
+          NAMES ${_radioify_ass_dep}
+          HINTS ${_radioify_libass_hints}
+          PATH_SUFFIXES lib
+        )
+        if (${_radioify_ass_dep_var})
+          list(APPEND _radioify_libass_dep_libraries ${${_radioify_ass_dep_var}})
+        endif()
+      endforeach()
+      list(APPEND _radioify_libass_libraries ${_radioify_libass_dep_libraries})
+    endif()
   endif()
 endif()
 

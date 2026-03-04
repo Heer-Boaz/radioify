@@ -56,6 +56,7 @@ struct WindowUiState {
     std::vector<SubtitleCue> subtitleCues; // active subtitle cues for current frame
     int64_t subtitleClockUs = 0;
     std::shared_ptr<const std::string> subtitleAssScript;
+    std::string subtitleRenderError;
     double displaySec = 0.0; // current time shown in overlay
     double totalSec = -1.0; // total duration (or -1 if unknown)
     int volPct = 0; // volume percent for display
@@ -85,6 +86,7 @@ public:
     void PresentBackbuffer();
     HANDLE GetFrameLatencyWaitableObject();
     void SetVsync(bool enabled);
+    std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
     
     bool IsOpen() const { return m_hWnd != nullptr; }
@@ -171,6 +173,9 @@ private:
     // When true, Present should skip until the render-target view and sizes are ready
     bool m_waitingForRenderTarget = false;
     bool m_captureAllMouseInput = false;
+    mutable std::mutex m_subtitleStateMutex;
+    std::string m_subtitleRenderError;
+    void setSubtitleRenderError(std::string error);
     bool MakeFullscreen();
     bool ExitFullscreen();
 };

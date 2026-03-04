@@ -229,6 +229,23 @@ This build now ships an ONNX overlay port that forces ONNX_DISABLE_STATIC_REGIST
   }
 }
 
+function Get-CMakeCacheValue {
+  param(
+    [string]$CachePath,
+    [string]$Variable
+  )
+
+  if (-not $CachePath -or -not (Test-Path $CachePath)) { return $null }
+  if (-not $Variable) { return $null }
+
+  $pattern = "^{0}:(?:BOOL|STRING|PATH|FILEPATH|INTERNAL)=([^\r\n]*)$" -f [regex]::Escape($Variable)
+  $match = Select-String -Path $CachePath -Pattern $pattern -CaseSensitive |
+    Select-Object -First 1
+  if (-not $match) { return $null }
+
+  return $match.Matches[0].Groups[1].Value
+}
+
 $cmake = Resolve-CMake
 if (-not $cmake) {
   Write-Error "CMake not found. Install CMake and ensure cmake.exe is on PATH."
@@ -332,7 +349,8 @@ $cmakeArgs += "-DRADIOIFY_ENABLE_VIDEO_ERROR_LOG=$([bool]$VideoErrorLog)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$([bool]$FfmpegErrorLog)"
 # Never let CMake/toolchain auto-run `vcpkg install`.
 # Dependencies are installed explicitly only via `-InstallDeps`.
-$cmakeArgs += "-DVCPKG_MANIFEST_MODE=OFF"
+$desiredManifestMode = "OFF"
+$cmakeArgs += "-DVCPKG_MANIFEST_MODE=$desiredManifestMode"
 $cmakeArgs += "-DVCPKG_MANIFEST_INSTALL=OFF"
 if ($vcpkgRoot) {
   $toolchain = Join-Path $vcpkgRoot "scripts/buildsystems/vcpkg.cmake"
@@ -390,6 +408,25 @@ if ($installedRoot -and (Test-Path $installedRoot)) {
 if (-not $foundFfmpeg -and -not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT)) {
   Write-Error "FFmpeg not found. Run .\build.ps1 -InstallDeps (vcpkg) or set FFMPEG_DIR/FFMPEG_ROOT."
   exit 1
+}
+
+$cachePath = Join-Path $buildDir "CMakeCache.txt"
+$cachedManifestMode = Get-CMakeCacheValue -CachePath $cachePath -Variable "VCPKG_MANIFEST_MODE"
+$initialManifestMode = Get-CMakeCacheValue -CachePath $cachePath -Variable "Z_VCPKG_CHECK_MANIFEST_MODE"
+$effectiveCachedManifestMode = $null
+if ($initialManifestMode) {
+  $effectiveCachedManifestMode = $initialManifestMode
+}
+elseif ($cachedManifestMode) {
+  $effectiveCachedManifestMode = $cachedManifestMode
+}
+
+if ($effectiveCachedManifestMode -and ($effectiveCachedManifestMode.ToUpperInvariant() -ne $desiredManifestMode)) {
+  Write-Host "Detected VCPKG_MANIFEST_MODE mismatch in build cache: $effectiveCachedManifestMode -> $desiredManifestMode"
+  Write-Host "Recreating build directory to avoid unsupported cache transition."
+  if (Test-Path $buildDir) {
+    Remove-Item -Recurse -Force $buildDir
+  }
 }
 
 & $cmake @cmakeArgs

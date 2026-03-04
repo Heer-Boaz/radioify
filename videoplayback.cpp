@@ -1242,6 +1242,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     ui.displaySec = displaySec;
     ui.totalSec = totalSec;
     ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
+    ui.subtitleRenderError = g_videoWindow.GetSubtitleRenderError();
     ui.subtitleCues = getSubtitleCues(clockUs, seekingOverlay);
     const bool subtitlesEnabledNow =
         enableSubtitlesShared.load(std::memory_order_relaxed);
