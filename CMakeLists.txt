@@ -564,16 +564,16 @@ elseif (NOT RADIOIFY_HAS_LIBASS)
   endif()
 endif()
 
-if (RADIOIFY_HAS_LIBASS)
-  target_include_directories(radioify PRIVATE ${_radioify_libass_include_dirs})
-  if (RADIOIFY_LIBASS_LIBRARY_DIRS)
-    target_link_directories(radioify PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
-  endif()
-  target_link_libraries(radioify PRIVATE ${_radioify_libass_libraries})
-  message(STATUS "libass found: ASS advanced renderer enabled")
-else()
-  message(STATUS "libass not found: using fallback subtitle renderer")
+if (NOT RADIOIFY_HAS_LIBASS)
+  message(FATAL_ERROR
+    "libass is required for ASS subtitle rendering. Install libass (for vcpkg: `vcpkg install libass:x64-windows`) and reconfigure.")
 endif()
+target_include_directories(radioify PRIVATE ${_radioify_libass_include_dirs})
+if (RADIOIFY_LIBASS_LIBRARY_DIRS)
+  target_link_directories(radioify PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
+endif()
+target_link_libraries(radioify PRIVATE ${_radioify_libass_libraries})
+message(STATUS "libass found: ASS advanced renderer enabled")
 
 target_compile_definitions(radioify PRIVATE
   RADIOIFY_HAS_LIBASS=$<IF:$<BOOL:${RADIOIFY_HAS_LIBASS}>,1,0>
