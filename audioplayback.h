@@ -136,6 +136,7 @@ bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
 bool audioIsRadioClipping();
 std::string audioGetWarning();
 bool audioIs50HzEnabled();
+bool audioSupports50HzToggle();
 KssPlaybackOptions audioGetKssOptionState();
 bool audioAdjustKssOption(KssOptionId id, int direction = 1);
 bool audioGetKssInstrumentRegs(KssInstrumentDevice device,

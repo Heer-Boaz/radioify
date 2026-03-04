@@ -790,15 +790,17 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                      utf8CodepointCount(radio.hoverText));
         out.push_back(radio);
 
-        OverlayControlSpec hz50{};
-        hz50.id = OverlayControlId::Hz50;
-        hz50.active = audioIs50HzEnabled();
-        auto hzLabels = makeLabels(hz50.active ? "50Hz: 50" : "50Hz: Auto");
-        hz50.normalText = hzLabels.first;
-        hz50.hoverText = hzLabels.second;
+        if (audioOk && audioSupports50HzToggle()) {
+          OverlayControlSpec hz50{};
+          hz50.id = OverlayControlId::Hz50;
+          hz50.active = audioIs50HzEnabled();
+          auto hzLabels = makeLabels(hz50.active ? "50Hz: 50" : "50Hz: Auto");
+          hz50.normalText = hzLabels.first;
+          hz50.hoverText = hzLabels.second;
           hz50.width = std::max(utf8CodepointCount(hz50.normalText),
                                 utf8CodepointCount(hz50.hoverText));
           out.push_back(hz50);
+        }
 
           OverlayControlSpec audioTrack{};
           audioTrack.id = OverlayControlId::AudioTrack;
@@ -1047,7 +1049,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           audioToggleRadio();
           return true;
         case OverlayControlId::Hz50:
-          if (!audioOk) return false;
+          if (!audioOk || !audioSupports50HzToggle()) return false;
           audioToggle50Hz();
           return true;
         case OverlayControlId::AudioTrack:
@@ -1713,7 +1715,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           }
         };
         cb.onToggleRadio = [&]() { if (audioOk) audioToggleRadio(); };
-        cb.onToggle50Hz = [&]() { if (audioOk) audioToggle50Hz(); };
+        cb.onToggle50Hz = [&]() {
+          if (audioOk && audioSupports50HzToggle()) audioToggle50Hz();
+        };
         cb.onSeekBy = [&](int dir) {
           double currentSec = player.currentUs() / 1000000.0;
           sendSeekRequest(currentSec + dir * 5.0);
@@ -1767,17 +1771,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             }
           }
           continue;
-          }
-          if (ev.key.vk == 'L' || ev.key.vk == 'l') {
-            if (cycleSubtitleSelection()) {
-              triggerOverlay();
-              redraw = true;
-              if (windowEnabled) {
-                windowForcePresent.store(true, std::memory_order_relaxed);
-                windowPresentCv.notify_one();
-              }
-            }
-            continue;
           }
           if (ev.key.vk == 'A' || ev.key.vk == 'a') {
             if (player.cycleAudioTrack()) {

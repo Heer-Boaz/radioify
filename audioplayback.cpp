@@ -199,7 +199,6 @@ using BackendReadProc = bool (*)(float* out, uint32_t frameCount,
 using BackendSeekProc = bool (*)(uint64_t frame);
 using BackendTotalFramesProc = bool (*)(uint64_t* outFrames);
 using BackendWarningProc = std::string (*)();
-using BackendIs50HzProc = bool (*)();
 
 struct AudioBackendHandlers {
   AudioMode mode = AudioMode::None;
@@ -212,7 +211,6 @@ struct AudioBackendHandlers {
   BackendSeekProc seek = nullptr;
   BackendTotalFramesProc totalFrames = nullptr;
   BackendWarningProc warning = nullptr;
-  BackendIs50HzProc is50HzEnabled = nullptr;
 };
 
 struct AudioRingBuffer {
@@ -1560,46 +1558,34 @@ std::string warningGmeBackend() { return gAudio.gmeWarning; }
 std::string warningGsfBackend() { return gAudio.gsfWarning; }
 std::string warningVgmBackend() { return gAudio.vgmWarning; }
 
-bool is50HzKssBackend() { return gAudio.kssOptions.force50Hz; }
-bool is50HzGmeBackend() {
-  return gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50;
-}
-bool is50HzVgmBackend() {
-  return gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50;
-}
-
 const AudioBackendHandlers kBackendM4a{
     AudioMode::M4a, false, false, false, initM4aBackend, uninitM4aBackend,
-    readM4aBackend, nullptr, totalM4aBackend, nullptr, nullptr};
+    readM4aBackend, nullptr, totalM4aBackend, nullptr};
 const AudioBackendHandlers kBackendFlac{
     AudioMode::Flac, false, true, true, initFlacBackend, uninitFlacBackend,
-    readFlacBackend, seekFlacBackend, totalFlacBackend, nullptr, nullptr};
+    readFlacBackend, seekFlacBackend, totalFlacBackend, nullptr};
 const AudioBackendHandlers kBackendKss{
     AudioMode::Kss, true, true, true, initKssBackend, uninitKssBackend,
-    readKssBackend, seekKssBackend, totalKssBackend, nullptr,
-    is50HzKssBackend};
+    readKssBackend, seekKssBackend, totalKssBackend, nullptr};
 const AudioBackendHandlers kBackendPsf{
     AudioMode::Psf, true, true, true, initPsfBackend, uninitPsfBackend,
-    readPsfBackend, seekPsfBackend, totalPsfBackend, nullptr, nullptr};
+    readPsfBackend, seekPsfBackend, totalPsfBackend, nullptr};
 const AudioBackendHandlers kBackendGsf{
     AudioMode::Gsf, true, true, true, initGsfBackend, uninitGsfBackend,
-    readGsfBackend, seekGsfBackend, totalGsfBackend, warningGsfBackend,
-    nullptr};
+    readGsfBackend, seekGsfBackend, totalGsfBackend, warningGsfBackend};
 const AudioBackendHandlers kBackendVgm{
     AudioMode::Vgm, true, true, true, initVgmBackend, uninitVgmBackend,
-    readVgmBackend, seekVgmBackend, totalVgmBackend, warningVgmBackend,
-    is50HzVgmBackend};
+    readVgmBackend, seekVgmBackend, totalVgmBackend, warningVgmBackend};
 const AudioBackendHandlers kBackendGme{
     AudioMode::Gme, true, true, true, initGmeBackend, uninitGmeBackend,
-    readGmeBackend, seekGmeBackend, totalGmeBackend, warningGmeBackend,
-    is50HzGmeBackend};
+    readGmeBackend, seekGmeBackend, totalGmeBackend, warningGmeBackend};
 const AudioBackendHandlers kBackendMidi{
     AudioMode::Midi, false, true, true, initMidiBackend, uninitMidiBackend,
-    readMidiBackend, seekMidiBackend, totalMidiBackend, nullptr, nullptr};
+    readMidiBackend, seekMidiBackend, totalMidiBackend, nullptr};
 const AudioBackendHandlers kBackendMiniaudio{
     AudioMode::Miniaudio, false, true, true, initMiniaudioBackend,
     uninitMiniaudioBackend, readMiniaudioBackend, seekMiniaudioBackend,
-    totalMiniaudioBackend, nullptr, nullptr};
+    totalMiniaudioBackend, nullptr};
 
 struct BackendSelector {
   bool (*matches)(const std::filesystem::path& file);
@@ -1626,13 +1612,6 @@ std::string warningForBackend(const AudioBackendHandlers* backend) {
     return backend->warning();
   }
   return {};
-}
-
-bool is50HzEnabledForBackend(const AudioBackendHandlers* backend) {
-  if (backend && backend->is50HzEnabled) {
-    return backend->is50HzEnabled();
-  }
-  return false;
 }
 
 void activateBackend(const AudioBackendHandlers* backend, int trackIndex) {
@@ -2561,30 +2540,38 @@ static void reloadKssWithOptions() {
 static void reloadNsfWithOptions();
 
 void audioToggle50Hz() {
-  if (isAudioMode(AudioMode::Vgm)) {
-    gAudio.vgmOptions.playbackHz =
-        (gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50)
-            ? VgmPlaybackHz::Hz60
-            : VgmPlaybackHz::Hz50;
-    gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
-    uint64_t totalFrames = 0;
-    if (gAudio.state.vgm.getTotalFrames(&totalFrames)) {
-      gAudio.state.totalFrames.store(totalFrames);
-    } else {
-      gAudio.state.totalFrames.store(0);
+  if (!audioSupports50HzToggle()) {
+    return;
+  }
+  switch (currentAudioMode()) {
+    case AudioMode::Vgm: {
+      gAudio.vgmOptions.playbackHz =
+          (gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50)
+              ? VgmPlaybackHz::Hz60
+              : VgmPlaybackHz::Hz50;
+      gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
+      uint64_t totalFrames = 0;
+      if (gAudio.state.vgm.getTotalFrames(&totalFrames)) {
+        gAudio.state.totalFrames.store(totalFrames);
+      } else {
+        gAudio.state.totalFrames.store(0);
+      }
+      return;
     }
-    return;
+    case AudioMode::Gme:
+      gAudio.nsfOptions.tempoMode =
+          (gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50)
+              ? NsfTempoMode::Normal
+              : NsfTempoMode::Pal50;
+      reloadNsfWithOptions();
+      return;
+    case AudioMode::Kss:
+      gAudio.kssOptions.force50Hz = !gAudio.kssOptions.force50Hz;
+      reloadKssWithOptions();
+      return;
+    default:
+      return;
   }
-  if (isAudioMode(AudioMode::Gme)) {
-    gAudio.nsfOptions.tempoMode =
-        (gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50)
-            ? NsfTempoMode::Normal
-            : NsfTempoMode::Pal50;
-    reloadNsfWithOptions();
-    return;
-  }
-  gAudio.kssOptions.force50Hz = !gAudio.kssOptions.force50Hz;
-  reloadKssWithOptions();
 }
 
 void audioSetHold(bool hold) { gAudio.state.hold.store(hold); }
@@ -2673,7 +2660,22 @@ std::string audioGetWarning() {
 }
 
 bool audioIs50HzEnabled() {
-  return is50HzEnabledForBackend(gAudio.state.backend);
+  switch (currentAudioMode()) {
+    case AudioMode::Vgm:
+      return gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50;
+    case AudioMode::Gme:
+      return gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50;
+    case AudioMode::Kss:
+      return gAudio.kssOptions.force50Hz;
+    default:
+      return false;
+  }
+}
+
+bool audioSupports50HzToggle() {
+  const AudioMode mode = currentAudioMode();
+  return mode == AudioMode::Kss || mode == AudioMode::Gme ||
+         mode == AudioMode::Vgm;
 }
 
 KssPlaybackOptions audioGetKssOptionState() {

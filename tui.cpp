@@ -1061,7 +1061,9 @@ int runTui(Options o) {
     audioToggleRadio();
   };
   callbacks.onToggle50Hz = [&]() {
-    audioToggle50Hz();
+    if (audioSupports50HzToggle()) {
+      audioToggle50Hz();
+    }
   };
   callbacks.onToggleOptions = [&]() {
     if (optionsBrowserCanToggle(browser)) {
@@ -1126,9 +1128,7 @@ int runTui(Options o) {
                       audioToggleRadio();
                       dirty = true;
                     }});
-    std::filesystem::path nowPlaying = audioGetNowPlaying();
-    bool show50Hz = isKssExt(nowPlaying) || isGmeExt(nowPlaying) ||
-                    isVgmExt(nowPlaying);
+    bool show50Hz = audioSupports50HzToggle();
     if (show50Hz) {
       cmds.push_back({audioIs50HzEnabled() ? "50Hz: 50" : "50Hz: Auto",
                       "H", true, [&]() {
@@ -1993,8 +1993,7 @@ int runTui(Options o) {
              melodyLabels.second, melodyVisualizationEnabled,
              std::max(utf8CodepointCount(melodyLabels.first),
                       utf8CodepointCount(melodyLabels.second))});
-        bool show50Hz = isKssExt(nowPlaying) || isGmeExt(nowPlaying) ||
-                        isVgmExt(nowPlaying);
+        bool show50Hz = audioSupports50HzToggle();
         if (browserInteractionEnabled) {
           const std::string gridIcon = "\xE2\x96\xA6";
           const std::string listIcon = "\xE2\x89\xA1";
