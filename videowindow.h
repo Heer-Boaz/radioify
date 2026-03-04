@@ -22,6 +22,19 @@ struct WindowUiState {
         bool hovered = false;
     };
 
+    struct SubtitleCue {
+        std::string text;
+        float sizeScale = 1.0f;
+        int alignment = 2;  // ASS alignment (1..9), default bottom-center.
+        int layer = 0;
+        bool hasPosition = false;
+        float posX = 0.5f;  // normalized in video viewport
+        float posY = 0.9f;  // normalized in video viewport
+        float marginVNorm = 0.0f;
+        float marginLNorm = 0.0f;
+        float marginRNorm = 0.0f;
+    };
+
     float progress = 0.0f;
     float overlayAlpha = 0.0f;
     bool isPaused = false;
@@ -30,6 +43,7 @@ struct WindowUiState {
     std::string controls; // temporary control-strip labels (e.g. radio/50Hz)
     std::string progressSuffix; // playback time/status/volume line
     std::vector<ControlButton> controlButtons;
+    std::vector<SubtitleCue> subtitleCues; // active subtitle cues for current frame
     double displaySec = 0.0; // current time shown in overlay
     double totalSec = -1.0; // total duration (or -1 if unknown)
     int volPct = 0; // volume percent for display

@@ -1742,7 +1742,7 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     bool showOverlay = ui.overlayAlpha > 0.01f;
     bool showSubtitle =
-        ui.subtitleAlpha > 0.01f && !ui.subtitle.empty();
+        ui.subtitleAlpha > 0.01f && !ui.subtitleCues.empty();
     if (!showOverlay && !showSubtitle) return;
 
     ID3D11Device* device = getSharedGpuDevice();
@@ -1888,63 +1888,198 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     }
 
     if (showSubtitle) {
-        const CaptionStyleProfile captionStyle = getWindowsCaptionStyleProfile();
-        SubtitleBitmapLayout layout{};
-        if (computeSubtitleLayout(utf8ToWide(ui.subtitle), viewportW, viewportH,
-                                  captionStyle, &layout)) {
-            if (!m_subtitleTexture || m_subtitleWidth != layout.width ||
-                m_subtitleHeight != layout.height) {
-                m_subtitleWidth = layout.width;
-                m_subtitleHeight = layout.height;
-                m_subtitleTexture.Reset();
-                m_subtitleSrv.Reset();
+        const CaptionStyleProfile baseCaptionStyle = getWindowsCaptionStyleProfile();
+        const int canvasW = std::max(1, viewportW);
+        const int canvasH = std::max(1, viewportH);
+        if (!m_subtitleTexture || m_subtitleWidth != canvasW ||
+            m_subtitleHeight != canvasH) {
+            m_subtitleWidth = canvasW;
+            m_subtitleHeight = canvasH;
+            m_subtitleTexture.Reset();
+            m_subtitleSrv.Reset();
 
-                D3D11_TEXTURE2D_DESC texDesc = {};
-                texDesc.Width = static_cast<UINT>(layout.width);
-                texDesc.Height = static_cast<UINT>(layout.height);
-                texDesc.MipLevels = 1;
-                texDesc.ArraySize = 1;
-                texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                texDesc.SampleDesc.Count = 1;
-                texDesc.Usage = D3D11_USAGE_DEFAULT;
-                texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            D3D11_TEXTURE2D_DESC texDesc = {};
+            texDesc.Width = static_cast<UINT>(canvasW);
+            texDesc.Height = static_cast<UINT>(canvasH);
+            texDesc.MipLevels = 1;
+            texDesc.ArraySize = 1;
+            texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            texDesc.SampleDesc.Count = 1;
+            texDesc.Usage = D3D11_USAGE_DEFAULT;
+            texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-                if (SUCCEEDED(device->CreateTexture2D(
-                        &texDesc, NULL, &m_subtitleTexture))) {
-                    device->CreateShaderResourceView(
-                        m_subtitleTexture.Get(), NULL, &m_subtitleSrv);
+            if (SUCCEEDED(device->CreateTexture2D(
+                    &texDesc, NULL, &m_subtitleTexture))) {
+                device->CreateShaderResourceView(
+                    m_subtitleTexture.Get(), NULL, &m_subtitleSrv);
+            }
+        }
+
+        if (m_subtitleTexture) {
+            std::vector<uint8_t> canvas(
+                static_cast<size_t>(canvasW) * static_cast<size_t>(canvasH) * 4u, 0u);
+            std::vector<RECT> occupiedRects;
+            bool drewAnySubtitle = false;
+
+            auto rectsOverlap = [](const RECT& a, const RECT& b) {
+                return a.left < b.right && a.right > b.left && a.top < b.bottom &&
+                       a.bottom > b.top;
+            };
+
+            for (const auto& cue : ui.subtitleCues) {
+                if (cue.text.empty()) continue;
+
+                CaptionStyleProfile cueStyle = baseCaptionStyle;
+                cueStyle.sizeScale = std::clamp(
+                    baseCaptionStyle.sizeScale * std::max(0.40f, cue.sizeScale), 0.35f,
+                    3.0f);
+
+                SubtitleBitmapLayout layout{};
+                if (!computeSubtitleLayout(utf8ToWide(cue.text), canvasW, canvasH,
+                                          cueStyle, &layout)) {
+                    continue;
                 }
+
+                int align = std::clamp(cue.alignment, 1, 9);
+                const int alignCol = ((align - 1) % 3) + 1;  // 1:left, 2:center, 3:right
+                const int alignRow = ((align - 1) / 3) + 1;  // 1:bottom, 2:middle, 3:top
+
+                int marginL = std::max(
+                    0, static_cast<int>(std::lround(cue.marginLNorm * canvasW)));
+                int marginR = std::max(
+                    0, static_cast<int>(std::lround(cue.marginRNorm * canvasW)));
+                int marginV = std::max(
+                    0, static_cast<int>(std::lround(cue.marginVNorm * canvasH)));
+                if (!cue.hasPosition && marginV == 0) {
+                    marginV = std::max(2, layout.fontPx / 6);
+                }
+
+                int anchorX = canvasW / 2;
+                int anchorY = canvasH - marginV;
+                if (cue.hasPosition) {
+                    anchorX = static_cast<int>(std::lround(cue.posX * canvasW));
+                    anchorY = static_cast<int>(std::lround(cue.posY * canvasH));
+                } else {
+                    if (alignCol == 1) {
+                        anchorX = marginL;
+                    } else if (alignCol == 2) {
+                        anchorX = canvasW / 2;
+                    } else {
+                        anchorX = canvasW - marginR;
+                    }
+
+                    if (alignRow == 1) {
+                        anchorY = canvasH - marginV;
+                    } else if (alignRow == 2) {
+                        anchorY = canvasH / 2;
+                    } else {
+                        anchorY = marginV;
+                    }
+                }
+
+                int drawX = anchorX;
+                if (alignCol == 2) drawX -= layout.width / 2;
+                if (alignCol == 3) drawX -= layout.width;
+
+                int drawY = anchorY;
+                if (alignRow == 1) drawY -= layout.height;
+                if (alignRow == 2) drawY -= layout.height / 2;
+
+                drawX = std::clamp(drawX, 0, std::max(0, canvasW - layout.width));
+                drawY = std::clamp(drawY, 0, std::max(0, canvasH - layout.height));
+
+                RECT rect{drawX, drawY, drawX + layout.width, drawY + layout.height};
+                if (!cue.hasPosition) {
+                    const int moveStep = std::max(2, layout.fontPx / 3);
+                    for (int tries = 0; tries < 64; ++tries) {
+                        bool overlaps = false;
+                        for (const RECT& occupied : occupiedRects) {
+                            if (rectsOverlap(rect, occupied)) {
+                                overlaps = true;
+                                break;
+                            }
+                        }
+                        if (!overlaps) break;
+
+                        if (alignRow == 1) {
+                            drawY -= moveStep;
+                        } else if (alignRow == 3) {
+                            drawY += moveStep;
+                        } else {
+                            drawY += moveStep;
+                        }
+                        drawY =
+                            std::clamp(drawY, 0, std::max(0, canvasH - layout.height));
+                        rect = RECT{drawX, drawY, drawX + layout.width,
+                                    drawY + layout.height};
+                    }
+                }
+
+                std::vector<uint8_t> cueBitmap;
+                if (!renderSubtitleTextToBitmap(cue.text, layout, cueStyle, cueBitmap) ||
+                    cueBitmap.empty()) {
+                    continue;
+                }
+
+                for (int y = 0; y < layout.height; ++y) {
+                    int dstY = drawY + y;
+                    if (dstY < 0 || dstY >= canvasH) continue;
+                    for (int x = 0; x < layout.width; ++x) {
+                        int dstX = drawX + x;
+                        if (dstX < 0 || dstX >= canvasW) continue;
+
+                        const size_t srcIdx =
+                            (static_cast<size_t>(y) * static_cast<size_t>(layout.width) +
+                             static_cast<size_t>(x)) *
+                            4u;
+                        const uint8_t srcA8 = cueBitmap[srcIdx + 3];
+                        if (srcA8 == 0) continue;
+                        const float srcA = static_cast<float>(srcA8) / 255.0f;
+
+                        const size_t dstIdx =
+                            (static_cast<size_t>(dstY) * static_cast<size_t>(canvasW) +
+                             static_cast<size_t>(dstX)) *
+                            4u;
+                        const float dstA = static_cast<float>(canvas[dstIdx + 3]) / 255.0f;
+                        const float outA = srcA + dstA * (1.0f - srcA);
+                        if (outA <= 0.0001f) continue;
+
+                        for (int c = 0; c < 3; ++c) {
+                            const float srcC =
+                                static_cast<float>(cueBitmap[srcIdx + static_cast<size_t>(c)]) /
+                                255.0f;
+                            const float dstC =
+                                static_cast<float>(canvas[dstIdx + static_cast<size_t>(c)]) /
+                                255.0f;
+                            const float outC =
+                                (srcC * srcA + dstC * dstA * (1.0f - srcA)) / outA;
+                            canvas[dstIdx + static_cast<size_t>(c)] = static_cast<uint8_t>(
+                                std::lround(255.0f * std::clamp(outC, 0.0f, 1.0f)));
+                        }
+                        canvas[dstIdx + 3] = static_cast<uint8_t>(
+                            std::lround(255.0f * std::clamp(outA, 0.0f, 1.0f)));
+                    }
+                }
+
+                occupiedRects.push_back(rect);
+                drewAnySubtitle = true;
             }
 
-            std::vector<uint8_t> bmp;
-            if (m_subtitleTexture &&
-                renderSubtitleTextToBitmap(ui.subtitle, layout, captionStyle, bmp)) {
-                D3D11_BOX box{0, 0, 0, (UINT)layout.width, (UINT)layout.height, 1};
+            if (drewAnySubtitle) {
+                D3D11_BOX box{0, 0, 0, static_cast<UINT>(canvasW),
+                              static_cast<UINT>(canvasH), 1};
                 context->UpdateSubresource(m_subtitleTexture.Get(), 0, &box,
-                                           bmp.data(), layout.width * 4, 0);
-            }
+                                           canvas.data(), canvasW * 4, 0);
 
-            const int vlcLikeSubMarginPx = 0;  // VLC default "sub-margin" is 0.
-            int subtitleBottomPx = viewportY + viewportH - vlcLikeSubMarginPx;
-            if (showOverlay) {
-                subtitleBottomPx =
-                    std::min(subtitleBottomPx, textTopPx - std::max(4, layout.fontPx / 3));
+                subtitleHeightNorm =
+                    static_cast<float>(canvasH) / std::max(1, m_height);
+                subtitleWidthNorm =
+                    static_cast<float>(canvasW) / std::max(1, m_width);
+                subtitleLeftNorm =
+                    static_cast<float>(viewportX) / std::max(1, m_width);
+                subtitleTopNorm =
+                    static_cast<float>(viewportY) / std::max(1, m_height);
             }
-            int subtitleLeftPx =
-                viewportX + std::max(0, (viewportW - layout.width) / 2);
-            int subtitleTopPx = subtitleBottomPx - layout.height;
-            subtitleTopPx = std::clamp(
-                subtitleTopPx, viewportY,
-                std::max(viewportY, viewportY + viewportH - layout.height));
-
-            subtitleHeightNorm =
-                static_cast<float>(layout.height) / std::max(1, m_height);
-            subtitleWidthNorm =
-                static_cast<float>(layout.width) / std::max(1, m_width);
-            subtitleLeftNorm =
-                static_cast<float>(subtitleLeftPx) / std::max(1, m_width);
-            subtitleTopNorm =
-                static_cast<float>(subtitleTopPx) / std::max(1, m_height);
         }
     }
 
