@@ -33,8 +33,16 @@ option(RADIOIFY_ENABLE_TIMING_LOG "Enable timing log output" OFF)
 option(RADIOIFY_ENABLE_VIDEO_ERROR_LOG "Enable video error log output" OFF)
 option(RADIOIFY_ENABLE_FFMPEG_ERROR_LOG "Enable ffmpeg error log output" OFF)
 option(RADIOIFY_ENABLE_STAGING_UPLOAD "Enable staging-based texture uploads to avoid implicit GPU sync" OFF)
-option(RADIOIFY_ENABLE_NEURAL_PITCH "Enable ONNX neural pitch backend for offline analysis" ON)
+option(RADIOIFY_ENABLE_MELODY_ANALYSIS "Enable offline melody analysis (ONNX backend)" OFF)
+option(RADIOIFY_ENABLE_NEURAL_PITCH "Deprecated alias for RADIOIFY_ENABLE_MELODY_ANALYSIS" OFF)
 option(RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL "Download neural pitch model automatically when missing" ON)
+set(RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE OFF)
+if (RADIOIFY_ENABLE_MELODY_ANALYSIS OR RADIOIFY_ENABLE_NEURAL_PITCH)
+  set(RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE ON)
+endif()
+if (RADIOIFY_ENABLE_NEURAL_PITCH AND NOT RADIOIFY_ENABLE_MELODY_ANALYSIS)
+  message(WARNING "RADIOIFY_ENABLE_NEURAL_PITCH is deprecated; use RADIOIFY_ENABLE_MELODY_ANALYSIS instead.")
+endif()
 set(RADIOIFY_NEURAL_PITCH_MODEL_PATH "${CMAKE_SOURCE_DIR}/models/crepe_small.onnx" CACHE FILEPATH
     "Path to the offline neural pitch ONNX model")
 set(RADIOIFY_NEURAL_PITCH_MODEL_URL
@@ -95,7 +103,7 @@ target_compile_definitions(radioify PRIVATE
   RADIOIFY_ENABLE_STAGING_UPLOAD=$<IF:$<BOOL:${RADIOIFY_ENABLE_STAGING_UPLOAD}>,1,0>
 )
 
-if (RADIOIFY_ENABLE_NEURAL_PITCH AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
+if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL
     COMMAND ${CMAKE_COMMAND}
             -DOUTPUT_PATH=${RADIOIFY_NEURAL_PITCH_MODEL_PATH}
@@ -623,7 +631,7 @@ target_compile_definitions(radioify PRIVATE
 )
 
 set(RADIOIFY_HAS_ONNXRUNTIME OFF)
-if (RADIOIFY_ENABLE_NEURAL_PITCH)
+if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE)
   set(_radioify_onnx_target "")
   find_package(onnxruntime CONFIG QUIET)
   if (TARGET onnxruntime::onnxruntime)
@@ -653,13 +661,14 @@ if (RADIOIFY_ENABLE_NEURAL_PITCH)
       target_link_libraries(radioify PRIVATE ${ONNXRUNTIME_LIBRARY})
       message(STATUS "Neural pitch: ONNX Runtime enabled via manual lookup.")
     else()
-      message(FATAL_ERROR "Neural pitch requested but ONNX Runtime not found (tried CMake package and manual lookup).")
+      message(FATAL_ERROR "Melody analysis requested but ONNX Runtime not found (tried CMake package and manual lookup).")
     endif()
   endif()
 endif()
 
 target_compile_definitions(radioify PRIVATE
-  RADIOIFY_ENABLE_NEURAL_PITCH=$<IF:$<BOOL:${RADIOIFY_ENABLE_NEURAL_PITCH}>,1,0>
+  RADIOIFY_ENABLE_MELODY_ANALYSIS=$<IF:$<BOOL:${RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE}>,1,0>
+  RADIOIFY_ENABLE_NEURAL_PITCH=$<IF:$<BOOL:${RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE}>,1,0>
   RADIOIFY_HAS_ONNXRUNTIME=$<IF:$<BOOL:${RADIOIFY_HAS_ONNXRUNTIME}>,1,0>
 )
 
