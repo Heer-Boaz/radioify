@@ -318,8 +318,14 @@ if ($InstallDeps) {
     exit 1
   }
 
+  $vcpkgInstallArgs = @(
+    "install",
+    "--clean-buildtrees-after-build",
+    "--clean-packages-after-build"
+  )
+
   Push-Location $root
-  & $vcpkgExe install
+  & $vcpkgExe @vcpkgInstallArgs
   $installExit = $LASTEXITCODE
   Pop-Location
 
