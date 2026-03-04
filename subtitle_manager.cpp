@@ -973,7 +973,7 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     std::string line = trimAscii(rawLine);
     if (line.empty()) continue;
 
-    if (!line.empty() && line.front() == '[' && line.back() == ']') {
+    if (line.front() == '[' && line.back() == ']') {
       std::string sectionName = toLowerAscii(line);
       if (sectionName == "[script info]") {
         section = AssSection::ScriptInfo;
@@ -1614,6 +1614,16 @@ bool parseAssPacketFields(const std::string& line, bool tenFieldDialogueFormat,
   const int textIndex = tenFieldDialogueFormat ? 9 : 8;
   int parsedInt = 0;
 
+  if (tenFieldDialogueFormat) {
+    if (fields.size() < 3) return false;
+    int64_t startUs = 0;
+    int64_t endUs = 0;
+    if (!parseTimecodeUs(fields[1], &startUs) ||
+        !parseTimecodeUs(fields[2], &endUs)) {
+      return false;
+    }
+  }
+
   const bool validLayer =
       (layerIndex >= 0 && layerIndex < static_cast<int>(fields.size()) &&
        parseSignedInt(fields[static_cast<size_t>(layerIndex)], &parsedInt));
@@ -1678,20 +1688,7 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
             line, true, &cue.layer, &marginL, &marginR, &marginV, &payload);
       }
     }
-    if (!parsedAssFields) {
-      size_t start = 0;
-      const int neededCommas = hasDialoguePrefix ? 9 : 8;
-      int commas = 0;
-      while (start < line.size() && commas < neededCommas) {
-        size_t comma = line.find(',', start);
-        if (comma == std::string::npos) break;
-        start = comma + 1;
-        ++commas;
-      }
-      if (commas == neededCommas && start < line.size()) {
-        payload = line.substr(start);
-      }
-    }
+    if (!parsedAssFields) return false;
 
     cue.marginLNorm =
         std::clamp(static_cast<float>(std::max(0, marginL)) / 384.0f, 0.0f, 0.7f);
@@ -1733,14 +1730,10 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
       cue.underline = overrides.underline;
     }
 
-    replaceAll(&payload, "\\N", "\n");
-    replaceAll(&payload, "\\n", "\n");
-    cue.text = stripSubtitleMarkup(payload);
-  } else {
-    replaceAll(&payload, "\\N", "\n");
-    replaceAll(&payload, "\\n", "\n");
-    cue.text = stripSubtitleMarkup(payload);
   }
+  replaceAll(&payload, "\\N", "\n");
+  replaceAll(&payload, "\\n", "\n");
+  cue.text = stripSubtitleMarkup(payload);
 
   if (cue.text.empty()) return false;
   *outCue = std::move(cue);
