@@ -4,8 +4,15 @@
   "dependencies": [
     "ffmpeg",
     "libass",
-    "onnxruntime",
     "zlib"
   ],
+  "features": {
+    "melody-analysis": {
+      "description": "Enable offline melody analysis with ONNX Runtime",
+      "dependencies": [
+        "onnxruntime"
+      ]
+    }
+  },
   "builtin-baseline": "14bb451131ccf6be50a63a8d9dfe7980e46b5958"
 }
