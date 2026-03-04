@@ -5,6 +5,8 @@
 #include <dxgi1_3.h>
 #include <windowsx.h>
 #include <algorithm>
+#include <cstddef>
+#include <cstdarg>
 #include <iostream>
 #include <vector>
 #include <mutex>
@@ -21,6 +23,11 @@
 #include "videowindow_ps.h"
 #include "videowindow_ps_ui.h"
 #include "subtitle_caption_style.h"
+#if RADIOIFY_HAS_LIBASS
+extern "C" {
+#include <ass/ass.h>
+}
+#endif
 
 static inline std::string now_ms() {
     using namespace std::chrono;
@@ -484,6 +491,172 @@ namespace {
         if (written <= 0) return {};
         return out;
     }
+
+#if RADIOIFY_HAS_LIBASS
+    class LibassOverlayRenderer {
+    public:
+        LibassOverlayRenderer() {
+            library_ = ass_library_init();
+            if (!library_) return;
+            ass_set_message_cb(library_, &LibassOverlayRenderer::logCallback, nullptr);
+            renderer_ = ass_renderer_init(library_);
+            if (!renderer_) return;
+            ass_set_fonts(renderer_, nullptr, "Arial", 1, nullptr, 1);
+        }
+
+        ~LibassOverlayRenderer() {
+            if (track_) {
+                ass_free_track(track_);
+                track_ = nullptr;
+            }
+            if (renderer_) {
+                ass_renderer_done(renderer_);
+                renderer_ = nullptr;
+            }
+            if (library_) {
+                ass_library_done(library_);
+                library_ = nullptr;
+            }
+        }
+
+        bool render(const std::shared_ptr<const std::string>& assScript,
+                    int64_t clockUs, int canvasW, int canvasH,
+                    std::vector<uint8_t>* outCanvas) {
+            if (!renderer_ || !library_ || !outCanvas || canvasW <= 0 || canvasH <= 0 ||
+                !assScript || assScript->empty()) {
+                return false;
+            }
+            if (!ensureTrack(assScript)) return false;
+
+            ass_set_frame_size(renderer_, canvasW, canvasH);
+            ass_set_storage_size(renderer_, canvasW, canvasH);
+
+            int detectChange = 0;
+            ASS_Image* img = ass_render_frame(
+                renderer_, track_,
+                static_cast<long long>(std::max<int64_t>(0, clockUs / 1000)),
+                &detectChange);
+            (void)detectChange;
+
+            if (outCanvas->size() !=
+                static_cast<size_t>(canvasW) * static_cast<size_t>(canvasH) * 4u) {
+                outCanvas->assign(static_cast<size_t>(canvasW) * static_cast<size_t>(canvasH) * 4u, 0u);
+            }
+
+            bool drewAny = false;
+            for (ASS_Image* cur = img; cur != nullptr; cur = cur->next) {
+                if (!cur->bitmap || cur->w <= 0 || cur->h <= 0) continue;
+                const uint8_t r = static_cast<uint8_t>((cur->color >> 24) & 0xFFu);
+                const uint8_t g = static_cast<uint8_t>((cur->color >> 16) & 0xFFu);
+                const uint8_t b = static_cast<uint8_t>((cur->color >> 8) & 0xFFu);
+                const float colorAlpha =
+                    static_cast<float>(255u - (cur->color & 0xFFu)) / 255.0f;
+                if (colorAlpha <= 0.0f) continue;
+                drewAny = true;
+
+                for (int y = 0; y < cur->h; ++y) {
+                    const int dstY = cur->dst_y + y;
+                    if (dstY < 0 || dstY >= canvasH) continue;
+                    const uint8_t* srcRow =
+                        cur->bitmap + static_cast<std::ptrdiff_t>(y) * cur->stride;
+                    for (int x = 0; x < cur->w; ++x) {
+                        const int dstX = cur->dst_x + x;
+                        if (dstX < 0 || dstX >= canvasW) continue;
+                        const float cov =
+                            static_cast<float>(srcRow[x]) / 255.0f;
+                        if (cov <= 0.0f) continue;
+
+                        const float srcA = std::clamp(cov * colorAlpha, 0.0f, 1.0f);
+                        const size_t dstIdx =
+                            (static_cast<size_t>(dstY) * static_cast<size_t>(canvasW) +
+                             static_cast<size_t>(dstX)) *
+                            4u;
+                        const float dstA =
+                            static_cast<float>((*outCanvas)[dstIdx + 3]) / 255.0f;
+                        const float outA = srcA + dstA * (1.0f - srcA);
+                        if (outA <= 0.0001f) continue;
+
+                        const float srcRgb[3] = {
+                            static_cast<float>(b) / 255.0f,
+                            static_cast<float>(g) / 255.0f,
+                            static_cast<float>(r) / 255.0f};
+                        for (int c = 0; c < 3; ++c) {
+                            const float dstC =
+                                static_cast<float>((*outCanvas)[dstIdx + static_cast<size_t>(c)]) / 255.0f;
+                            const float outC =
+                                (srcRgb[c] * srcA + dstC * dstA * (1.0f - srcA)) / outA;
+                            (*outCanvas)[dstIdx + static_cast<size_t>(c)] = static_cast<uint8_t>(
+                                std::lround(255.0f * std::clamp(outC, 0.0f, 1.0f)));
+                        }
+                        (*outCanvas)[dstIdx + 3] = static_cast<uint8_t>(
+                            std::lround(255.0f * std::clamp(outA, 0.0f, 1.0f)));
+                    }
+                }
+            }
+            return drewAny;
+        }
+
+    private:
+        bool ensureTrack(const std::shared_ptr<const std::string>& assScript) {
+            if (!library_ || !assScript) return false;
+            if (track_) {
+                std::shared_ptr<const std::string> loaded = loadedScript_.lock();
+                if (loaded && loaded.get() == assScript.get()) return true;
+            }
+
+            if (track_) {
+                ass_free_track(track_);
+                track_ = nullptr;
+            }
+            loadedScript_.reset();
+            scriptCache_.clear();
+
+            scriptCache_ = *assScript;
+            if (scriptCache_.empty()) return false;
+
+            track_ = ass_read_memory(library_, scriptCache_.data(),
+                                     static_cast<int>(scriptCache_.size()), nullptr);
+            if (!track_) {
+                scriptCache_.clear();
+                return false;
+            }
+            loadedScript_ = assScript;
+            return true;
+        }
+
+        static void logCallback(int level, const char* fmt, va_list va,
+                                void* data) {
+            (void)level;
+            (void)fmt;
+            (void)va;
+            (void)data;
+        }
+
+        ASS_Library* library_ = nullptr;
+        ASS_Renderer* renderer_ = nullptr;
+        ASS_Track* track_ = nullptr;
+        std::weak_ptr<const std::string> loadedScript_;
+        std::string scriptCache_;
+    };
+
+    static bool renderAssSubtitlesToCanvas(
+        const std::shared_ptr<const std::string>& assScript, int64_t clockUs,
+        int canvasW, int canvasH, std::vector<uint8_t>* outCanvas) {
+        static LibassOverlayRenderer renderer;
+        return renderer.render(assScript, clockUs, canvasW, canvasH, outCanvas);
+    }
+#else
+    static bool renderAssSubtitlesToCanvas(
+        const std::shared_ptr<const std::string>& assScript, int64_t clockUs,
+        int canvasW, int canvasH, std::vector<uint8_t>* outCanvas) {
+        (void)assScript;
+        (void)clockUs;
+        (void)canvasW;
+        (void)canvasH;
+        (void)outCanvas;
+        return false;
+    }
+#endif
 
     struct SubtitleBitmapLayout {
         int width = 0;
@@ -1769,8 +1942,10 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 
 void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     bool showOverlay = ui.overlayAlpha > 0.01f;
+    const bool hasAssScript =
+        static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
     bool showSubtitle =
-        ui.subtitleAlpha > 0.01f && !ui.subtitleCues.empty();
+        ui.subtitleAlpha > 0.01f && (!ui.subtitleCues.empty() || hasAssScript);
     if (!showOverlay && !showSubtitle) return;
 
     ID3D11Device* device = getSharedGpuDevice();
@@ -1947,7 +2122,12 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             std::vector<uint8_t> canvas(
                 static_cast<size_t>(canvasW) * static_cast<size_t>(canvasH) * 4u, 0u);
             std::vector<RECT> occupiedRects;
-            bool drewAnySubtitle = false;
+            const bool useAssScript =
+                static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
+            if (useAssScript) {
+                (void)renderAssSubtitlesToCanvas(ui.subtitleAssScript, ui.subtitleClockUs,
+                                                 canvasW, canvasH, &canvas);
+            }
 
             auto rectsOverlap = [](const RECT& a, const RECT& b) {
                 return a.left < b.right && a.right > b.left && a.top < b.bottom &&
@@ -1955,6 +2135,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             };
 
             for (const auto& cue : ui.subtitleCues) {
+                if (useAssScript && cue.assStyled && !cue.rawText.empty()) continue;
                 if (cue.text.empty()) continue;
 
                 CaptionStyleProfile cueStyle = baseCaptionStyle;
@@ -2098,24 +2279,21 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
                 }
 
                 occupiedRects.push_back(rect);
-                drewAnySubtitle = true;
             }
 
-            if (drewAnySubtitle) {
-                D3D11_BOX box{0, 0, 0, static_cast<UINT>(canvasW),
-                              static_cast<UINT>(canvasH), 1};
-                context->UpdateSubresource(m_subtitleTexture.Get(), 0, &box,
-                                           canvas.data(), canvasW * 4, 0);
+            D3D11_BOX box{0, 0, 0, static_cast<UINT>(canvasW),
+                          static_cast<UINT>(canvasH), 1};
+            context->UpdateSubresource(m_subtitleTexture.Get(), 0, &box,
+                                       canvas.data(), canvasW * 4, 0);
 
-                subtitleHeightNorm =
-                    static_cast<float>(canvasH) / std::max(1, m_height);
-                subtitleWidthNorm =
-                    static_cast<float>(canvasW) / std::max(1, m_width);
-                subtitleLeftNorm =
-                    static_cast<float>(viewportX) / std::max(1, m_width);
-                subtitleTopNorm =
-                    static_cast<float>(viewportY) / std::max(1, m_height);
-            }
+            subtitleHeightNorm =
+                static_cast<float>(canvasH) / std::max(1, m_height);
+            subtitleWidthNorm =
+                static_cast<float>(canvasW) / std::max(1, m_width);
+            subtitleLeftNorm =
+                static_cast<float>(viewportX) / std::max(1, m_width);
+            subtitleTopNorm =
+                static_cast<float>(viewportY) / std::max(1, m_height);
         }
     }
 

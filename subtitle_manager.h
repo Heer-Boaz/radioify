@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,7 @@ struct SubtitleCue {
   int64_t startUs = 0;
   int64_t endUs = 0;
   std::string text;
+  std::string rawText;
   int layer = 0;
   int alignment = 2;  // ASS grid: 1..9, default bottom-center.
   float sizeScale = 1.0f;
@@ -19,6 +21,7 @@ struct SubtitleCue {
   bool bold = false;
   bool italic = false;
   bool underline = false;
+  bool assStyled = false;
   bool hasPosition = false;
   float posXNorm = 0.5f;
   float posYNorm = 0.9f;
@@ -30,6 +33,7 @@ struct SubtitleCue {
 struct SubtitleTrack {
   std::string label;
   std::vector<SubtitleCue> cues;
+  std::shared_ptr<const std::string> assScript;
   mutable size_t lastCueIndex = 0;
 
   void cuesAt(int64_t clockUs, std::vector<const SubtitleCue*>* out) const;

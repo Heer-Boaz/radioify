@@ -1149,9 +1149,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (active.empty()) return out;
     out.reserve(active.size());
     for (const SubtitleCue* cue : active) {
-      if (!cue || cue->text.empty()) continue;
+      if (!cue) continue;
+      const bool hasRenderableAss = cue->assStyled && !cue->rawText.empty();
+      if (cue->text.empty() && !hasRenderableAss) continue;
       WindowUiState::SubtitleCue item;
       item.text = cue->text;
+      item.rawText = cue->rawText;
       item.sizeScale = std::clamp(cue->sizeScale, 0.40f, 3.0f);
       item.scaleX = std::clamp(cue->scaleX, 0.40f, 3.5f);
       item.scaleY = std::clamp(cue->scaleY, 0.40f, 3.5f);
@@ -1159,6 +1162,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       item.bold = cue->bold;
       item.italic = cue->italic;
       item.underline = cue->underline;
+      item.assStyled = cue->assStyled;
+      item.startUs = cue->startUs;
+      item.endUs = cue->endUs;
       item.alignment = cue->alignment;
       item.layer = cue->layer;
       item.hasPosition = cue->hasPosition;
@@ -1186,6 +1192,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     double currentSec = 0.0;
     double totalSec = -1.0;
     int64_t clockUs = player.currentUs();
+    ui.subtitleClockUs = clockUs;
     if (clockUs > 0) {
       currentSec = static_cast<double>(clockUs) / 1000000.0;
     }
@@ -1236,12 +1243,23 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     ui.totalSec = totalSec;
     ui.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
     ui.subtitleCues = getSubtitleCues(clockUs, seekingOverlay);
-    if (!ui.subtitleCues.empty()) {
-      ui.subtitle = ui.subtitleCues.front().text;
-    } else {
-      ui.subtitle.clear();
+    const bool subtitlesEnabledNow =
+        enableSubtitlesShared.load(std::memory_order_relaxed);
+    if (subtitlesEnabledNow && !seekingOverlay && clockUs >= 0 && hasSubtitles) {
+      if (const SubtitleTrack* activeTrack = subtitleManager.activeTrack()) {
+        ui.subtitleAssScript = activeTrack->assScript;
+      }
     }
-    ui.subtitleAlpha = ui.subtitleCues.empty() ? 0.0f : 1.0f;
+    const bool hasAssScript =
+        static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
+    ui.subtitle.clear();
+    for (const auto& cue : ui.subtitleCues) {
+      if (!cue.text.empty()) {
+        ui.subtitle = cue.text;
+        break;
+      }
+    }
+    ui.subtitleAlpha = (ui.subtitleCues.empty() && !hasAssScript) ? 0.0f : 1.0f;
     return ui;
   };
 

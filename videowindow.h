@@ -24,6 +24,7 @@ struct WindowUiState {
 
     struct SubtitleCue {
         std::string text;
+        std::string rawText;
         float sizeScale = 1.0f;
         float scaleX = 1.0f;
         float scaleY = 1.0f;
@@ -31,6 +32,9 @@ struct WindowUiState {
         bool bold = false;
         bool italic = false;
         bool underline = false;
+        bool assStyled = false;
+        int64_t startUs = 0;
+        int64_t endUs = 0;
         int alignment = 2;  // ASS alignment (1..9), default bottom-center.
         int layer = 0;
         bool hasPosition = false;
@@ -50,6 +54,8 @@ struct WindowUiState {
     std::string progressSuffix; // playback time/status/volume line
     std::vector<ControlButton> controlButtons;
     std::vector<SubtitleCue> subtitleCues; // active subtitle cues for current frame
+    int64_t subtitleClockUs = 0;
+    std::shared_ptr<const std::string> subtitleAssScript;
     double displaySec = 0.0; // current time shown in overlay
     double totalSec = -1.0; // total duration (or -1 if unknown)
     int volPct = 0; // volume percent for display

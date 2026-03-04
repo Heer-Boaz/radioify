@@ -533,6 +533,52 @@ if (FFMPEG_LIBRARY_DIRS)
 endif()
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
 
+set(RADIOIFY_HAS_LIBASS OFF)
+set(_radioify_libass_include_dirs "")
+set(_radioify_libass_libraries "")
+
+find_package(PkgConfig QUIET)
+if (PkgConfig_FOUND)
+  pkg_check_modules(RADIOIFY_LIBASS QUIET libass)
+endif()
+
+if (RADIOIFY_LIBASS_FOUND)
+  set(RADIOIFY_HAS_LIBASS ON)
+  set(_radioify_libass_include_dirs ${RADIOIFY_LIBASS_INCLUDE_DIRS})
+  set(_radioify_libass_libraries ${RADIOIFY_LIBASS_LIBRARIES})
+elseif (NOT RADIOIFY_HAS_LIBASS)
+  find_path(RADIOIFY_LIBASS_INCLUDE_DIR
+    NAMES ass/ass.h
+    HINTS ENV LIBASS_DIR ENV LIBASS_ROOT
+    PATH_SUFFIXES include
+  )
+  find_library(RADIOIFY_LIBASS_LIBRARY
+    NAMES ass libass
+    HINTS ENV LIBASS_DIR ENV LIBASS_ROOT
+    PATH_SUFFIXES lib
+  )
+  if (RADIOIFY_LIBASS_INCLUDE_DIR AND RADIOIFY_LIBASS_LIBRARY)
+    set(RADIOIFY_HAS_LIBASS ON)
+    set(_radioify_libass_include_dirs ${RADIOIFY_LIBASS_INCLUDE_DIR})
+    set(_radioify_libass_libraries ${RADIOIFY_LIBASS_LIBRARY})
+  endif()
+endif()
+
+if (RADIOIFY_HAS_LIBASS)
+  target_include_directories(radioify PRIVATE ${_radioify_libass_include_dirs})
+  if (RADIOIFY_LIBASS_LIBRARY_DIRS)
+    target_link_directories(radioify PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
+  endif()
+  target_link_libraries(radioify PRIVATE ${_radioify_libass_libraries})
+  message(STATUS "libass found: ASS advanced renderer enabled")
+else()
+  message(STATUS "libass not found: using fallback subtitle renderer")
+endif()
+
+target_compile_definitions(radioify PRIVATE
+  RADIOIFY_HAS_LIBASS=$<IF:$<BOOL:${RADIOIFY_HAS_LIBASS}>,1,0>
+)
+
 set(RADIOIFY_HAS_ONNXRUNTIME OFF)
 if (RADIOIFY_ENABLE_NEURAL_PITCH)
   set(_radioify_onnx_target "")

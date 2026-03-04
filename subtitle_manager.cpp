@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -1337,6 +1338,8 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     cue.startUs = startUs;
     cue.endUs = endUs;
     cue.text = std::move(text);
+    cue.rawText = rawText;
+    cue.assStyled = true;
     cue.layer = cueLayer;
     cue.alignment = clampAssAlignment(styleInfo.alignment);
     cue.marginLNorm = std::clamp(
@@ -1382,11 +1385,14 @@ bool loadSubtitleTrackFile(const std::filesystem::path& path,
 
   auto parseBySniffing = [&](const std::string& payload,
                              std::vector<SubtitleCue>* outCues) {
-    return tryParser(payload, &parseSrtCues, outCues) ||
-           tryParser(payload, &parseVttCues, outCues) ||
-           tryParser(payload, &parseAssCues, outCues) ||
-           tryParser(payload, &parseSbvCues, outCues) ||
-           tryParser(payload, &parseMicroDvdCues, outCues);
+    if (tryParser(payload, &parseSrtCues, outCues)) return true;
+    if (tryParser(payload, &parseVttCues, outCues)) return true;
+    if (tryParser(payload, &parseAssCues, outCues)) {
+      return true;
+    }
+    if (tryParser(payload, &parseSbvCues, outCues)) return true;
+    if (tryParser(payload, &parseMicroDvdCues, outCues)) return true;
+    return false;
   };
 
   if (!outTrack) return false;
@@ -1406,6 +1412,9 @@ bool loadSubtitleTrackFile(const std::filesystem::path& path,
     ok = tryParser(raw, &parseVttCues, &outTrack->cues);
   } else if (ext == ".ass" || ext == ".ssa") {
     ok = tryParser(raw, &parseAssCues, &outTrack->cues);
+    if (ok) {
+      outTrack->assScript = std::make_shared<const std::string>(raw);
+    }
   } else if (ext == ".sbv") {
     ok = tryParser(raw, &parseSbvCues, &outTrack->cues);
   } else if (ext == ".sub") {
@@ -1417,6 +1426,14 @@ bool loadSubtitleTrackFile(const std::filesystem::path& path,
   }
   if (!ok) {
     ok = parseBySniffing(raw, &outTrack->cues);
+  }
+  if (ok && !outTrack->assScript && !outTrack->cues.empty()) {
+    const bool looksAss = std::all_of(
+        outTrack->cues.begin(), outTrack->cues.end(),
+        [](const SubtitleCue& cue) { return cue.assStyled; });
+    if (looksAss) {
+      outTrack->assScript = std::make_shared<const std::string>(raw);
+    }
   }
   if (!ok || outTrack->cues.empty()) {
     outTrack->cues.clear();
@@ -1687,59 +1704,214 @@ int64_t packetDurationUs(const AVPacket& pkt, AVRational timeBase) {
   return durUs > 0 ? durUs : 0;
 }
 
-bool parseAssPacketFields(const std::string& line, bool tenFieldDialogueFormat,
-                          int* outLayer, int* outMarginL, int* outMarginR,
-                          int* outMarginV, std::string* outText) {
-  if (!outText) return false;
-  std::vector<std::string> fields;
-  const size_t fieldCount = tenFieldDialogueFormat ? 10u : 9u;
-  if (!splitCsvPrefix(line, fieldCount, &fields) || fields.size() < fieldCount) {
-    return false;
+bool containsAsciiInsensitive(std::string_view haystack, std::string_view needle) {
+  if (needle.empty() || haystack.size() < needle.size()) return false;
+  for (size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
+    bool match = true;
+    for (size_t j = 0; j < needle.size(); ++j) {
+      unsigned char lhs = static_cast<unsigned char>(haystack[i + j]);
+      unsigned char rhs = static_cast<unsigned char>(needle[j]);
+      lhs = static_cast<unsigned char>(std::tolower(lhs));
+      rhs = static_cast<unsigned char>(std::tolower(rhs));
+      if (lhs != rhs) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return true;
   }
+  return false;
+}
 
-  const int layerIndex = tenFieldDialogueFormat ? 0 : 1;
-  const int marginLIndex = tenFieldDialogueFormat ? 5 : 4;
-  const int marginRIndex = tenFieldDialogueFormat ? 6 : 5;
-  const int marginVIndex = tenFieldDialogueFormat ? 7 : 6;
-  const int textIndex = tenFieldDialogueFormat ? 9 : 8;
-  int parsedInt = 0;
+void normalizeAssNewlines(std::string* text) {
+  if (!text) return;
+  std::string normalized;
+  normalized.reserve(text->size());
+  for (size_t i = 0; i < text->size(); ++i) {
+    char ch = (*text)[i];
+    if (ch == '\r') {
+      if (i + 1 < text->size() && (*text)[i + 1] == '\n') {
+        continue;
+      }
+      normalized.push_back('\n');
+      continue;
+    }
+    normalized.push_back(ch);
+  }
+  *text = std::move(normalized);
+}
 
-  if (tenFieldDialogueFormat) {
-    if (fields.size() < 3) return false;
+std::string assTimestampFromUs(int64_t us) {
+  if (us < 0) us = 0;
+  const int64_t cs = us / 10000;
+  const int64_t h = cs / 360000;
+  const int64_t m = (cs / 6000) % 60;
+  const int64_t s = (cs / 100) % 60;
+  const int64_t cc = cs % 100;
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%lld:%02lld:%02lld.%02lld",
+                static_cast<long long>(h), static_cast<long long>(m),
+                static_cast<long long>(s), static_cast<long long>(cc));
+  return std::string(buf);
+}
+
+void ensureEmbeddedAssScriptPreamble(std::string* script) {
+  if (!script) return;
+  normalizeAssNewlines(script);
+  if (!script->empty() && script->back() != '\n') {
+    script->push_back('\n');
+  }
+  if (!containsAsciiInsensitive(*script, "[Script Info]")) {
+    script->append("[Script Info]\n");
+    script->append("ScriptType: v4.00+\n");
+    script->append("PlayResX: 384\n");
+    script->append("PlayResY: 288\n");
+  }
+  if (!containsAsciiInsensitive(*script, "[V4+ Styles]") &&
+      !containsAsciiInsensitive(*script, "[V4 Styles]")) {
+    script->append("\n[V4+ Styles]\n");
+    script->append(
+        "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,"
+        "OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,"
+        "ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,"
+        "Alignment,MarginL,MarginR,MarginV,Encoding\n");
+    script->append(
+        "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
+        "0,0,0,0,100,100,0,0,1,2,0,2,12,12,12,1\n");
+  }
+  if (!containsAsciiInsensitive(*script, "[Events]")) {
+    script->append("\n[Events]\n");
+  }
+  if (!containsAsciiInsensitive(
+          *script,
+          "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text") &&
+      !containsAsciiInsensitive(
+          *script,
+          "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")) {
+    script->append(
+        "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n");
+  }
+}
+
+struct AssPacketEventFields {
+  int layer = 0;
+  std::string style = "Default";
+  std::string name;
+  int marginL = 0;
+  int marginR = 0;
+  int marginV = 0;
+  std::string effect;
+  std::string text;
+};
+
+bool parseAssPacketEventLine(const std::string& payload,
+                             AssPacketEventFields* outFields) {
+  if (!outFields) return false;
+  *outFields = AssPacketEventFields{};
+  std::string line = trimAscii(payload);
+  if (line.empty()) return false;
+
+  std::string lower = toLowerAscii(line);
+  if (startsWith(lower, "dialogue:")) {
+    size_t colon = line.find(':');
+    if (colon == std::string::npos) return false;
+    line = trimAscii(line.substr(colon + 1));
+  }
+  if (line.empty()) return false;
+
+  auto parseMargins = [&](const std::vector<std::string>& fields, int idxL,
+                          int idxR, int idxV) {
+    int parsed = 0;
+    if (idxL >= 0 && idxL < static_cast<int>(fields.size()) &&
+        parseNonNegativeInt(fields[static_cast<size_t>(idxL)], &parsed)) {
+      outFields->marginL = parsed;
+    }
+    if (idxR >= 0 && idxR < static_cast<int>(fields.size()) &&
+        parseNonNegativeInt(fields[static_cast<size_t>(idxR)], &parsed)) {
+      outFields->marginR = parsed;
+    }
+    if (idxV >= 0 && idxV < static_cast<int>(fields.size()) &&
+        parseNonNegativeInt(fields[static_cast<size_t>(idxV)], &parsed)) {
+      outFields->marginV = parsed;
+    }
+  };
+
+  std::vector<std::string> fields;
+  if (splitCsvPrefix(line, 10u, &fields) && fields.size() >= 10u) {
+    int parsedLayer = 0;
     int64_t startUs = 0;
     int64_t endUs = 0;
-    if (!parseTimecodeUs(fields[1], &startUs) ||
-        !parseTimecodeUs(fields[2], &endUs)) {
-      return false;
+    if (parseSignedInt(fields[0], &parsedLayer) &&
+        parseTimecodeUs(fields[1], &startUs) && parseTimecodeUs(fields[2], &endUs)) {
+      outFields->layer = (std::max)(0, parsedLayer);
+      outFields->style = trimAscii(fields[3]);
+      if (outFields->style.empty()) outFields->style = "Default";
+      outFields->name = trimAscii(fields[4]);
+      parseMargins(fields, 5, 6, 7);
+      outFields->effect = trimAscii(fields[8]);
+      outFields->text = fields[9];
+      return !outFields->text.empty();
     }
   }
 
-  const bool validLayer =
-      (layerIndex >= 0 && layerIndex < static_cast<int>(fields.size()) &&
-       parseSignedInt(fields[static_cast<size_t>(layerIndex)], &parsedInt));
-  if (!validLayer) return false;
-  if (outLayer) {
-    *outLayer = std::max(0, parsedInt);
-  }
-  if (outMarginL && marginLIndex >= 0 &&
-      marginLIndex < static_cast<int>(fields.size()) &&
-      parseNonNegativeInt(fields[static_cast<size_t>(marginLIndex)], &parsedInt)) {
-    *outMarginL = parsedInt;
-  }
-  if (outMarginR && marginRIndex >= 0 &&
-      marginRIndex < static_cast<int>(fields.size()) &&
-      parseNonNegativeInt(fields[static_cast<size_t>(marginRIndex)], &parsedInt)) {
-    *outMarginR = parsedInt;
-  }
-  if (outMarginV && marginVIndex >= 0 &&
-      marginVIndex < static_cast<int>(fields.size()) &&
-      parseNonNegativeInt(fields[static_cast<size_t>(marginVIndex)], &parsedInt)) {
-    *outMarginV = parsedInt;
+  fields.clear();
+  if (splitCsvPrefix(line, 9u, &fields) && fields.size() >= 9u) {
+    int parsedLayer = 0;
+    if (!parseSignedInt(fields[1], &parsedLayer)) return false;
+    outFields->layer = (std::max)(0, parsedLayer);
+    outFields->style = trimAscii(fields[2]);
+    if (outFields->style.empty()) outFields->style = "Default";
+    outFields->name = trimAscii(fields[3]);
+    parseMargins(fields, 4, 5, 6);
+    outFields->effect = trimAscii(fields[7]);
+    outFields->text = fields[8];
+    return !outFields->text.empty();
   }
 
-  if (textIndex < 0 || textIndex >= static_cast<int>(fields.size())) return false;
-  *outText = fields[static_cast<size_t>(textIndex)];
-  return true;
+  return false;
+}
+
+std::string assNormalizeDialogueText(std::string text) {
+  std::string out;
+  out.reserve(text.size() + 8);
+  for (char ch : text) {
+    if (ch == '\r') continue;
+    if (ch == '\n') {
+      out += "\\N";
+      continue;
+    }
+    out.push_back(ch);
+  }
+  return out;
+}
+
+void appendEmbeddedAssDialogue(std::string* script, int64_t startUs, int64_t endUs,
+                               const AssPacketEventFields& event) {
+  if (!script || event.text.empty()) return;
+  if (endUs <= startUs) endUs = startUs + 100000;
+  if (!script->empty() && script->back() != '\n') script->push_back('\n');
+
+  script->append("Dialogue: ");
+  script->append(std::to_string((std::max)(0, event.layer)));
+  script->push_back(',');
+  script->append(assTimestampFromUs(startUs));
+  script->push_back(',');
+  script->append(assTimestampFromUs(endUs));
+  script->push_back(',');
+  script->append(event.style.empty() ? "Default" : event.style);
+  script->push_back(',');
+  script->append(event.name);
+  script->push_back(',');
+  script->append(std::to_string((std::max)(0, event.marginL)));
+  script->push_back(',');
+  script->append(std::to_string((std::max)(0, event.marginR)));
+  script->push_back(',');
+  script->append(std::to_string((std::max)(0, event.marginV)));
+  script->push_back(',');
+  script->append(event.effect);
+  script->push_back(',');
+  script->append(assNormalizeDialogueText(event.text));
+  script->push_back('\n');
 }
 
 bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outCue) {
@@ -1749,43 +1921,21 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
 
   SubtitleCue cue;
   if (codecId == AV_CODEC_ID_ASS || codecId == AV_CODEC_ID_SSA) {
-    std::string line = trimAscii(payload);
-    std::string lower = toLowerAscii(line);
-    bool hasDialoguePrefix = startsWith(lower, "dialogue:");
-    if (hasDialoguePrefix) {
-      size_t colon = line.find(':');
-      if (colon != std::string::npos) {
-        line = trimAscii(line.substr(colon + 1));
-      }
-    }
-
-    int marginL = 0;
-    int marginR = 0;
-    int marginV = 0;
-    bool parsedAssFields = false;
-    if (hasDialoguePrefix) {
-      parsedAssFields = parseAssPacketFields(
-          line, true, &cue.layer, &marginL, &marginR, &marginV, &payload);
-      if (!parsedAssFields) {
-        parsedAssFields = parseAssPacketFields(
-            line, false, &cue.layer, &marginL, &marginR, &marginV, &payload);
-      }
-    } else {
-      parsedAssFields = parseAssPacketFields(
-          line, false, &cue.layer, &marginL, &marginR, &marginV, &payload);
-      if (!parsedAssFields) {
-        parsedAssFields = parseAssPacketFields(
-            line, true, &cue.layer, &marginL, &marginR, &marginV, &payload);
-      }
-    }
-    if (!parsedAssFields) return false;
+    cue.assStyled = true;
+    AssPacketEventFields event;
+    if (!parseAssPacketEventLine(payload, &event)) return false;
+    cue.layer = event.layer;
+    payload = event.text;
 
     cue.marginLNorm =
-        std::clamp(static_cast<float>(std::max(0, marginL)) / 384.0f, 0.0f, 0.7f);
+        std::clamp(static_cast<float>((std::max)(0, event.marginL)) / 384.0f, 0.0f,
+                   0.7f);
     cue.marginRNorm =
-        std::clamp(static_cast<float>(std::max(0, marginR)) / 384.0f, 0.0f, 0.7f);
+        std::clamp(static_cast<float>((std::max)(0, event.marginR)) / 384.0f, 0.0f,
+                   0.7f);
     cue.marginVNorm =
-        std::clamp(static_cast<float>(std::max(0, marginV)) / 288.0f, 0.0f, 0.7f);
+        std::clamp(static_cast<float>((std::max)(0, event.marginV)) / 288.0f, 0.0f,
+                   0.7f);
 
     AssOverrideInfo overrides;
     parseAssOverridesFromText(payload, &overrides);
@@ -1821,6 +1971,7 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
     }
 
   }
+  cue.rawText = payload;
   replaceAll(&payload, "\\N", "\n");
   replaceAll(&payload, "\\n", "\n");
   cue.text = stripSubtitleMarkup(payload);
@@ -1853,6 +2004,8 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     int streamIndex = -1;
     AVRational timeBase{0, 1};
     AVCodecID codecId = AV_CODEC_ID_NONE;
+    bool assLike = false;
+    std::string assScript;
     SubtitleTrack track;
   };
   std::vector<EmbeddedTrackInfo> refs;
@@ -1865,6 +2018,18 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     info.streamIndex = static_cast<int>(i);
     info.timeBase = stream->time_base;
     info.codecId = stream->codecpar->codec_id;
+    info.assLike =
+        (info.codecId == AV_CODEC_ID_ASS || info.codecId == AV_CODEC_ID_SSA);
+    if (info.assLike && stream->codecpar->extradata &&
+        stream->codecpar->extradata_size > 0) {
+      info.assScript.assign(
+          reinterpret_cast<const char*>(stream->codecpar->extradata),
+          reinterpret_cast<const char*>(stream->codecpar->extradata +
+                                        stream->codecpar->extradata_size));
+    }
+    if (info.assLike) {
+      ensureEmbeddedAssScriptPreamble(&info.assScript);
+    }
     info.track.label = subtitleLabelFromStream(stream, refs.size());
     refs.push_back(std::move(info));
   }
@@ -1886,6 +2051,11 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     for (auto& ref : refs) {
       if (pkt->stream_index != ref.streamIndex) continue;
       if (!isTextSubtitleCodec(ref.codecId)) break;
+      std::string assPacketPayload;
+      if (ref.assLike && pkt->data && pkt->size > 0) {
+        assPacketPayload.assign(reinterpret_cast<const char*>(pkt->data),
+                                reinterpret_cast<const char*>(pkt->data + pkt->size));
+      }
       SubtitleCue cue;
       if (!packetSubtitleCue(ref.codecId, *pkt, &cue)) break;
       int64_t startUs = packetPtsUs(*pkt, ref.timeBase);
@@ -1898,6 +2068,25 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
       }
       cue.startUs = startUs;
       cue.endUs = endUs;
+      if (ref.assLike && !assPacketPayload.empty()) {
+        AssPacketEventFields event;
+        if (parseAssPacketEventLine(assPacketPayload, &event)) {
+          appendEmbeddedAssDialogue(&ref.assScript, startUs, endUs, event);
+        } else {
+          AssPacketEventFields fallback;
+          fallback.layer = cue.layer;
+          fallback.marginL =
+              static_cast<int>(std::lround(cue.marginLNorm * 384.0f));
+          fallback.marginR =
+              static_cast<int>(std::lround(cue.marginRNorm * 384.0f));
+          fallback.marginV =
+              static_cast<int>(std::lround(cue.marginVNorm * 288.0f));
+          fallback.text = cue.rawText.empty() ? cue.text : cue.rawText;
+          if (!fallback.text.empty()) {
+            appendEmbeddedAssDialogue(&ref.assScript, startUs, endUs, fallback);
+          }
+        }
+      }
       ref.track.cues.push_back(std::move(cue));
       break;
     }
@@ -1912,6 +2101,9 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
                   if (a.startUs != b.startUs) return a.startUs < b.startUs;
                   return a.endUs < b.endUs;
                 });
+    }
+    if (ref.assLike && !ref.assScript.empty()) {
+      ref.track.assScript = std::make_shared<const std::string>(ref.assScript);
     }
     ref.track.resetLookup();
     outTracks->push_back(std::move(ref.track));
