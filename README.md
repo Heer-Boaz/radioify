@@ -9,19 +9,32 @@ Console media browser/player with a vintage radio filter toggle.
 - vcpkg (for `-InstallDeps`)
 
 ## Build
-Install deps (FFmpeg via vcpkg):
+Install deps (core: FFmpeg/libass/zlib via vcpkg):
 ```powershell
 ./build.ps1 -InstallDeps
 ```
-Static deps (FFmpeg via vcpkg):
+Install deps with melody analysis (adds ONNX Runtime):
+```powershell
+./build.ps1 -InstallDeps -MelodyAnalysis
+```
+(`-SongAnalysis` is accepted as an alias.)
+Static deps (core):
 ```powershell
 ./build.ps1 -InstallDeps -Static
+```
+Static deps with melody analysis:
+```powershell
+./build.ps1 -InstallDeps -Static -MelodyAnalysis
 ```
 If `vcpkg` complains about an invalid Visual Studio instance, install the C++ build tools ("Desktop development with C++") and retry.
 
 Build:
 ```powershell
 ./build.ps1
+```
+Build with melody analysis enabled:
+```powershell
+./build.ps1 -MelodyAnalysis
 ```
 
 Clean build:
@@ -47,6 +60,11 @@ Or:
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
+```
+
+Optional CMake switch for melody analysis:
+```sh
+cmake -S . -B build -DRADIOIFY_ENABLE_MELODY_ANALYSIS=ON
 ```
 
 The binary is written to `dist/radioify.exe`.
