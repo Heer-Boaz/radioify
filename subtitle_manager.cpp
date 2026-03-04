@@ -349,6 +349,88 @@ void replaceAll(std::string* text, const std::string& from,
   }
 }
 
+bool parseAssAlphaValue(std::string_view token, int* outAlpha) {
+  if (!outAlpha) return false;
+  token = trimAsciiView(token);
+  if (token.empty()) return false;
+  size_t start = 0;
+  size_t marker = token.find("&H");
+  if (marker == std::string_view::npos) marker = token.find("&h");
+  if (marker != std::string_view::npos) {
+    start = marker + 2;
+  } else if (token.size() >= 1 && (token[0] == 'H' || token[0] == 'h')) {
+    start = 1;
+  }
+
+  unsigned value = 0;
+  bool sawHex = false;
+  for (size_t i = start; i < token.size(); ++i) {
+    char ch = token[i];
+    unsigned digit = 0;
+    if (ch >= '0' && ch <= '9') {
+      digit = static_cast<unsigned>(ch - '0');
+    } else if (ch >= 'a' && ch <= 'f') {
+      digit = static_cast<unsigned>(10 + (ch - 'a'));
+    } else if (ch >= 'A' && ch <= 'F') {
+      digit = static_cast<unsigned>(10 + (ch - 'A'));
+    } else {
+      if (sawHex) break;
+      continue;
+    }
+    sawHex = true;
+    value = (value << 4) | digit;
+  }
+  if (!sawHex) return false;
+  *outAlpha = static_cast<int>(value & 0xFFu);
+  return true;
+}
+
+void parseAssVisibilityOverrides(std::string_view block, int* inOutPrimaryAlpha) {
+  if (!inOutPrimaryAlpha || block.empty()) return;
+  size_t i = 0;
+  while (i < block.size()) {
+    if (block[i] != '\\') {
+      ++i;
+      continue;
+    }
+    ++i;
+    if (i >= block.size()) break;
+
+    if (block[i] == 'r' || block[i] == 'R') {
+      *inOutPrimaryAlpha = 0;
+      ++i;
+      while (i < block.size() && block[i] != '\\') ++i;
+      continue;
+    }
+
+    auto parseAlphaToken = [&](size_t tagLen) {
+      i += tagLen;
+      size_t valueStart = i;
+      while (i < block.size() && block[i] != '\\') ++i;
+      int parsedAlpha = 0;
+      if (parseAssAlphaValue(block.substr(valueStart, i - valueStart),
+                             &parsedAlpha)) {
+        *inOutPrimaryAlpha = parsedAlpha;
+      }
+    };
+
+    if (i + 5 <= block.size() &&
+        (block[i] == 'a' || block[i] == 'A') &&
+        (block[i + 1] == 'l' || block[i + 1] == 'L') &&
+        (block[i + 2] == 'p' || block[i + 2] == 'P') &&
+        (block[i + 3] == 'h' || block[i + 3] == 'H') &&
+        (block[i + 4] == 'a' || block[i + 4] == 'A')) {
+      parseAlphaToken(5);
+      continue;
+    }
+    if (i + 2 <= block.size() && block[i] == '1' &&
+        (block[i + 1] == 'a' || block[i + 1] == 'A')) {
+      parseAlphaToken(2);
+      continue;
+    }
+  }
+}
+
 std::string stripSubtitleMarkup(const std::string& in) {
   std::string noHtml;
   noHtml.reserve(in.size());
@@ -367,17 +449,25 @@ std::string stripSubtitleMarkup(const std::string& in) {
 
   std::string noAss;
   noAss.reserve(noHtml.size());
-  bool inBrace = false;
-  for (char ch : noHtml) {
-    if (ch == '{') {
-      inBrace = true;
+  int primaryAlpha = 0;  // ASS alpha: 0 = opaque, 255 = transparent
+  size_t pos = 0;
+  while (pos < noHtml.size()) {
+    if (noHtml[pos] == '{') {
+      size_t close = noHtml.find('}', pos + 1);
+      if (close == std::string::npos) {
+        ++pos;
+        continue;
+      }
+      parseAssVisibilityOverrides(
+          std::string_view(noHtml.data() + pos + 1, close - pos - 1),
+          &primaryAlpha);
+      pos = close + 1;
       continue;
     }
-    if (inBrace) {
-      if (ch == '}') inBrace = false;
-      continue;
+    if (primaryAlpha < 255) {
+      noAss.push_back(noHtml[pos]);
     }
-    noAss.push_back(ch);
+    ++pos;
   }
 
   replaceAll(&noAss, "&nbsp;", " ");
