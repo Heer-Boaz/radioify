@@ -5,6 +5,10 @@ param(
   [switch]$Rebuild,
   [switch]$Static,
   [switch]$InstallDeps,
+  [Alias("VCPKG_ROOT")]
+  [string]$VcpkgRoot,
+  [Alias("SongAnalysis")]
+  [switch]$MelodyAnalysis,
   [switch]$TimingLog,
   [switch]$StagingUpload,
   [switch]$VideoErrorLog,
@@ -20,6 +24,11 @@ function Resolve-CMake {
 }
 
 function Resolve-VcpkgRoot {
+  param([string]$PreferredRoot)
+
+  $vcpkgRoot = $PreferredRoot
+  if ($vcpkgRoot -and (Test-Path $vcpkgRoot)) { return $vcpkgRoot }
+
   $vcpkgRoot = $env:VCPKG_ROOT
   if ($vcpkgRoot -and (Test-Path $vcpkgRoot)) { return $vcpkgRoot }
 
@@ -30,6 +39,60 @@ function Resolve-VcpkgRoot {
   }
 
   return $null
+}
+
+function Assert-ExplicitVcpkgRootValid {
+  param([string]$ProvidedRoot)
+
+  if (-not $ProvidedRoot) { return }
+  if (-not (Test-Path $ProvidedRoot)) {
+    Write-Error "Explicit -VcpkgRoot path does not exist: $ProvidedRoot"
+    exit 1
+  }
+
+  $exe = Join-Path $ProvidedRoot "vcpkg.exe"
+  if (-not (Test-Path $exe)) {
+    Write-Error "Explicit -VcpkgRoot is missing vcpkg.exe: $ProvidedRoot"
+    exit 1
+  }
+}
+
+function Assert-VcpkgRootReadableWhenRequired {
+  param(
+    [string]$VcpkgRoot,
+    [string]$VcpkgExe,
+    [string]$RepoRoot,
+    [bool]$NeedsVcpkg
+  )
+
+  if (-not $NeedsVcpkg) { return }
+  if ($VcpkgRoot -and (Test-Path $VcpkgRoot) -and $VcpkgExe) { return }
+
+  $defaultHint = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\vcpkg"
+  $manifestInstalled = Join-Path $RepoRoot "vcpkg_installed"
+
+  Write-Error @"
+vcpkg kon niet automatisch worden gevonden, maar is wel nodig voor deze build.
+
+Waarom dit vaak gebeurt (vooral in WSL2):
+- vcpkg.exe staat niet op PATH in deze PowerShell sessie.
+- VCPKG_ROOT is niet gezet voor deze sessie/gebruiker.
+
+Zo los je het op:
+1) Eenmalig meegeven:
+   .\build.ps1 -Static -InstallDeps -VcpkgRoot "$defaultHint"
+
+2) Of environment variabele zetten (PowerShell):
+   `$env:VCPKG_ROOT="$defaultHint"
+
+3) Persistente user-waarde:
+   [Environment]::SetEnvironmentVariable("VCPKG_ROOT", "$defaultHint", "User")
+
+Extra context:
+- Script root: $RepoRoot
+- Verwachte manifest install map: $manifestInstalled
+"@
+  exit 1
 }
 
 function Resolve-VcpkgExe {
@@ -274,18 +337,21 @@ if ($Clean -and -not $Rebuild) {
   exit 0
 }
 
-$vcpkgRoot = Resolve-VcpkgRoot
+Assert-ExplicitVcpkgRootValid -ProvidedRoot $VcpkgRoot
+$vcpkgRoot = Resolve-VcpkgRoot -PreferredRoot $VcpkgRoot
 $vcpkgExe = Resolve-VcpkgExe -VcpkgRoot $vcpkgRoot
 
-# ONNX Runtime static builds require ONNX static registration to be disabled to
-# avoid runtime duplicate schema registration errors.
-Add-VcpkgCMakeConfigureOption "-DONNX_DISABLE_STATIC_REGISTRATION=ON"
+if ($MelodyAnalysis) {
+  # ONNX Runtime static builds require ONNX static registration to be disabled
+  # to avoid runtime duplicate schema registration errors.
+  Add-VcpkgCMakeConfigureOption "-DONNX_DISABLE_STATIC_REGISTRATION=ON"
 
-$overlayPortsDir = Join-Path $root "vcpkg-overlays\ports"
-if (Test-Path $overlayPortsDir) {
-  Assert-OnnxOverlayPortComplete $overlayPortsDir
-  Add-VcpkgOverlayPortPath $overlayPortsDir
-  Write-Host "Using vcpkg overlay ports: $overlayPortsDir"
+  $overlayPortsDir = Join-Path $root "vcpkg-overlays\ports"
+  if (Test-Path $overlayPortsDir) {
+    Assert-OnnxOverlayPortComplete $overlayPortsDir
+    Add-VcpkgOverlayPortPath $overlayPortsDir
+    Write-Host "Using vcpkg overlay ports: $overlayPortsDir"
+  }
 }
 
 $tripletStaticRequested = $false
@@ -307,10 +373,7 @@ if ($Static) {
 }
 
 if ($InstallDeps) {
-  if (-not $vcpkgExe) {
-    Write-Error "vcpkg not found. Set VCPKG_ROOT or ensure vcpkg.exe is on PATH."
-    exit 1
-  }
+  Assert-VcpkgRootReadableWhenRequired -VcpkgRoot $vcpkgRoot -VcpkgExe $vcpkgExe -RepoRoot $root -NeedsVcpkg $true
 
   $manifest = Join-Path $root "vcpkg.json"
   if (-not (Test-Path $manifest)) {
@@ -323,6 +386,9 @@ if ($InstallDeps) {
     "--clean-buildtrees-after-build",
     "--clean-packages-after-build"
   )
+  if ($MelodyAnalysis) {
+    $vcpkgInstallArgs += "--x-feature=melody-analysis"
+  }
 
   Push-Location $root
   & $vcpkgExe @vcpkgInstallArgs
@@ -348,11 +414,18 @@ if (-not $installedRoot) {
   }
 }
 
+$ffmpegEnvConfigured = [bool]($env:FFMPEG_DIR -or $env:FFMPEG_ROOT)
+$manifestInstalledAvailable = [bool]($installedRoot -and (Test-Path $installedRoot))
+$needsVcpkgForBuild = -not $ffmpegEnvConfigured -and -not $manifestInstalledAvailable
+Assert-VcpkgRootReadableWhenRequired -VcpkgRoot $vcpkgRoot -VcpkgExe $vcpkgExe -RepoRoot $root -NeedsVcpkg $needsVcpkgForBuild
+
 $cmakeArgs = @("-S", $root, "-B", $buildDir, "-DCMAKE_BUILD_TYPE=$Config")
 $cmakeArgs += "-DRADIOIFY_ENABLE_TIMING_LOG=$([bool]$TimingLog)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_STAGING_UPLOAD=$([bool]$StagingUpload)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_VIDEO_ERROR_LOG=$([bool]$VideoErrorLog)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$([bool]$FfmpegErrorLog)"
+$cmakeArgs += "-DRADIOIFY_ENABLE_MELODY_ANALYSIS=$([bool]$MelodyAnalysis)"
+$cmakeArgs += "-DRADIOIFY_ENABLE_NEURAL_PITCH=$([bool]$MelodyAnalysis)"
 # Never let CMake/toolchain auto-run `vcpkg install`.
 # Dependencies are installed explicitly only via `-InstallDeps`.
 $desiredManifestMode = "OFF"
@@ -374,7 +447,7 @@ if ($env:VCPKG_OVERLAY_PORTS) {
   $cmakeArgs += "-DVCPKG_OVERLAY_PORTS=$env:VCPKG_OVERLAY_PORTS"
 }
 
-if (Is-StaticTriplet $env:VCPKG_TARGET_TRIPLET) {
+if ($MelodyAnalysis -and (Is-StaticTriplet $env:VCPKG_TARGET_TRIPLET)) {
   Assert-OnnxStaticRegistrationDisabled -InstalledRoot $installedRoot -Triplet $env:VCPKG_TARGET_TRIPLET
 }
 
