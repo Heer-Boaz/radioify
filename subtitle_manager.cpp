@@ -75,6 +75,21 @@ bool parseNonNegativeInt(std::string_view v, int* out) {
   return true;
 }
 
+bool parseSignedInt(std::string_view v, int* out) {
+  if (!out) return false;
+  std::string s = trimAscii(v);
+  if (s.empty()) return false;
+  char* endPtr = nullptr;
+  long parsed = std::strtol(s.c_str(), &endPtr, 10);
+  if (!endPtr || *endPtr != '\0') return false;
+  if (parsed < (std::numeric_limits<int>::min)() ||
+      parsed > (std::numeric_limits<int>::max)()) {
+    return false;
+  }
+  *out = static_cast<int>(parsed);
+  return true;
+}
+
 bool parseFloatAscii(std::string_view v, float* out) {
   if (!out) return false;
   std::string s = trimAscii(v);
@@ -97,6 +112,12 @@ struct AssStyleInfo {
   int marginR = 0;
   int marginV = 0;
   float fontSize = 0.0f;
+  float scaleX = 1.0f;
+  float scaleY = 1.0f;
+  std::string fontName;
+  bool bold = false;
+  bool italic = false;
+  bool underline = false;
 };
 
 struct AssOverrideInfo {
@@ -105,6 +126,16 @@ struct AssOverrideInfo {
   float posX = 0.0f;
   float posY = 0.0f;
   float fontSize = 0.0f;
+  float scaleX = 0.0f;
+  float scaleY = 0.0f;
+  bool hasFontName = false;
+  std::string fontName;
+  bool hasBold = false;
+  bool bold = false;
+  bool hasItalic = false;
+  bool italic = false;
+  bool hasUnderline = false;
+  bool underline = false;
 };
 
 void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
@@ -179,6 +210,40 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
       continue;
     }
 
+    if (i + 4 <= block.size() && block.substr(i, 4) == "fscx") {
+      i += 4;
+      size_t start = i;
+      if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
+      while (i < block.size() &&
+             (std::isdigit(static_cast<unsigned char>(block[i])) != 0 ||
+              block[i] == '.')) {
+        ++i;
+      }
+      float value = 0.0f;
+      if (parseFloatAscii(block.substr(start, i - start), &value) &&
+          value > 0.0f) {
+        out->scaleX = value * 0.01f;
+      }
+      continue;
+    }
+
+    if (i + 4 <= block.size() && block.substr(i, 4) == "fscy") {
+      i += 4;
+      size_t start = i;
+      if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
+      while (i < block.size() &&
+             (std::isdigit(static_cast<unsigned char>(block[i])) != 0 ||
+              block[i] == '.')) {
+        ++i;
+      }
+      float value = 0.0f;
+      if (parseFloatAscii(block.substr(start, i - start), &value) &&
+          value > 0.0f) {
+        out->scaleY = value * 0.01f;
+      }
+      continue;
+    }
+
     if (i + 2 <= block.size() && block.substr(i, 2) == "fs") {
       i += 2;
       size_t start = i;
@@ -192,6 +257,68 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
       if (parseFloatAscii(block.substr(start, i - start), &value) &&
           value > 0.0f) {
         out->fontSize = value;
+      }
+      continue;
+    }
+
+    if (i + 2 <= block.size() && block.substr(i, 2) == "fn") {
+      i += 2;
+      size_t start = i;
+      while (i < block.size() && block[i] != '\\') {
+        ++i;
+      }
+      std::string value = trimAscii(block.substr(start, i - start));
+      if (!value.empty()) {
+        out->hasFontName = true;
+        out->fontName = std::move(value);
+      }
+      continue;
+    }
+
+    if (i < block.size() && block[i] == 'b') {
+      ++i;
+      size_t start = i;
+      if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
+      while (i < block.size() &&
+             std::isdigit(static_cast<unsigned char>(block[i])) != 0) {
+        ++i;
+      }
+      int value = 0;
+      if (parseSignedInt(block.substr(start, i - start), &value)) {
+        out->hasBold = true;
+        out->bold = value != 0;
+      }
+      continue;
+    }
+
+    if (i < block.size() && block[i] == 'i') {
+      ++i;
+      size_t start = i;
+      if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
+      while (i < block.size() &&
+             std::isdigit(static_cast<unsigned char>(block[i])) != 0) {
+        ++i;
+      }
+      int value = 0;
+      if (parseSignedInt(block.substr(start, i - start), &value)) {
+        out->hasItalic = true;
+        out->italic = value != 0;
+      }
+      continue;
+    }
+
+    if (i < block.size() && block[i] == 'u') {
+      ++i;
+      size_t start = i;
+      if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
+      while (i < block.size() &&
+             std::isdigit(static_cast<unsigned char>(block[i])) != 0) {
+        ++i;
+      }
+      int value = 0;
+      if (parseSignedInt(block.substr(start, i - start), &value)) {
+        out->hasUnderline = true;
+        out->underline = value != 0;
       }
       continue;
     }
@@ -796,6 +923,12 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
   int styleMarginRIndex = -1;
   int styleMarginVIndex = -1;
   int styleFontSizeIndex = -1;
+  int styleFontNameIndex = -1;
+  int styleBoldIndex = -1;
+  int styleItalicIndex = -1;
+  int styleUnderlineIndex = -1;
+  int styleScaleXIndex = -1;
+  int styleScaleYIndex = -1;
 
   std::vector<std::string> eventFormatFields;
   int startIndex = -1;
@@ -881,6 +1014,12 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
         styleMarginRIndex = findFieldIndex(styleFormatFields, "marginr");
         styleMarginVIndex = findFieldIndex(styleFormatFields, "marginv");
         styleFontSizeIndex = findFieldIndex(styleFormatFields, "fontsize");
+        styleFontNameIndex = findFieldIndex(styleFormatFields, "fontname");
+        styleBoldIndex = findFieldIndex(styleFormatFields, "bold");
+        styleItalicIndex = findFieldIndex(styleFormatFields, "italic");
+        styleUnderlineIndex = findFieldIndex(styleFormatFields, "underline");
+        styleScaleXIndex = findFieldIndex(styleFormatFields, "scalex");
+        styleScaleYIndex = findFieldIndex(styleFormatFields, "scaley");
         continue;
       }
       if (line.size() < stylePrefix.size() ||
@@ -932,6 +1071,40 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
                           &parsedFloat) &&
           parsedFloat > 0.0f) {
         style.fontSize = parsedFloat;
+      }
+      if (styleFontNameIndex >= 0 &&
+          styleFontNameIndex < static_cast<int>(fields.size())) {
+        style.fontName =
+            trimAscii(fields[static_cast<size_t>(styleFontNameIndex)]);
+      }
+      if (styleBoldIndex >= 0 && styleBoldIndex < static_cast<int>(fields.size()) &&
+          parseSignedInt(fields[static_cast<size_t>(styleBoldIndex)], &parsedInt)) {
+        style.bold = parsedInt != 0;
+      }
+      if (styleItalicIndex >= 0 &&
+          styleItalicIndex < static_cast<int>(fields.size()) &&
+          parseSignedInt(fields[static_cast<size_t>(styleItalicIndex)], &parsedInt)) {
+        style.italic = parsedInt != 0;
+      }
+      if (styleUnderlineIndex >= 0 &&
+          styleUnderlineIndex < static_cast<int>(fields.size()) &&
+          parseSignedInt(fields[static_cast<size_t>(styleUnderlineIndex)],
+                         &parsedInt)) {
+        style.underline = parsedInt != 0;
+      }
+      if (styleScaleXIndex >= 0 &&
+          styleScaleXIndex < static_cast<int>(fields.size()) &&
+          parseFloatAscii(fields[static_cast<size_t>(styleScaleXIndex)],
+                          &parsedFloat) &&
+          parsedFloat > 0.0f) {
+        style.scaleX = std::clamp(parsedFloat * 0.01f, 0.40f, 3.5f);
+      }
+      if (styleScaleYIndex >= 0 &&
+          styleScaleYIndex < static_cast<int>(fields.size()) &&
+          parseFloatAscii(fields[static_cast<size_t>(styleScaleYIndex)],
+                          &parsedFloat) &&
+          parsedFloat > 0.0f) {
+        style.scaleY = std::clamp(parsedFloat * 0.01f, 0.40f, 3.5f);
       }
       std::string nameLower = toLowerAscii(styleName);
       styles[nameLower] = style;
@@ -1039,6 +1212,24 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     if (overrides.fontSize > 0.0f) {
       cueFontSize = overrides.fontSize;
     }
+    if (overrides.scaleX > 0.0f) {
+      styleInfo.scaleX = overrides.scaleX;
+    }
+    if (overrides.scaleY > 0.0f) {
+      styleInfo.scaleY = overrides.scaleY;
+    }
+    if (overrides.hasFontName) {
+      styleInfo.fontName = overrides.fontName;
+    }
+    if (overrides.hasBold) {
+      styleInfo.bold = overrides.bold;
+    }
+    if (overrides.hasItalic) {
+      styleInfo.italic = overrides.italic;
+    }
+    if (overrides.hasUnderline) {
+      styleInfo.underline = overrides.underline;
+    }
 
     std::string text = rawText;
     replaceAll(&text, "\\N", "\n");
@@ -1068,6 +1259,13 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     if (cueFontSize > 0.0f && resolvedBaseFont > 0.0f) {
       cue.sizeScale = std::clamp(cueFontSize / resolvedBaseFont, 0.45f, 2.5f);
     }
+    cue.scaleX = std::clamp(styleInfo.scaleX, 0.40f, 3.5f);
+    cue.scaleY = std::clamp(styleInfo.scaleY, 0.40f, 3.5f);
+    cue.sizeScale = std::clamp(cue.sizeScale * cue.scaleY, 0.35f, 3.5f);
+    cue.fontName = styleInfo.fontName;
+    cue.bold = styleInfo.bold;
+    cue.italic = styleInfo.italic;
+    cue.underline = styleInfo.underline;
     if (overrides.hasPosition) {
       cue.hasPosition = true;
       cue.posXNorm =
@@ -1399,6 +1597,51 @@ int64_t packetDurationUs(const AVPacket& pkt, AVRational timeBase) {
   return durUs > 0 ? durUs : 0;
 }
 
+bool parseAssPacketFields(const std::string& line, bool tenFieldDialogueFormat,
+                          int* outLayer, int* outMarginL, int* outMarginR,
+                          int* outMarginV, std::string* outText) {
+  if (!outText) return false;
+  std::vector<std::string> fields;
+  const size_t fieldCount = tenFieldDialogueFormat ? 10u : 9u;
+  if (!splitCsvPrefix(line, fieldCount, &fields) || fields.size() < fieldCount) {
+    return false;
+  }
+
+  const int layerIndex = tenFieldDialogueFormat ? 0 : 1;
+  const int marginLIndex = tenFieldDialogueFormat ? 5 : 4;
+  const int marginRIndex = tenFieldDialogueFormat ? 6 : 5;
+  const int marginVIndex = tenFieldDialogueFormat ? 7 : 6;
+  const int textIndex = tenFieldDialogueFormat ? 9 : 8;
+  int parsedInt = 0;
+
+  const bool validLayer =
+      (layerIndex >= 0 && layerIndex < static_cast<int>(fields.size()) &&
+       parseSignedInt(fields[static_cast<size_t>(layerIndex)], &parsedInt));
+  if (!validLayer) return false;
+  if (outLayer) {
+    *outLayer = std::max(0, parsedInt);
+  }
+  if (outMarginL && marginLIndex >= 0 &&
+      marginLIndex < static_cast<int>(fields.size()) &&
+      parseNonNegativeInt(fields[static_cast<size_t>(marginLIndex)], &parsedInt)) {
+    *outMarginL = parsedInt;
+  }
+  if (outMarginR && marginRIndex >= 0 &&
+      marginRIndex < static_cast<int>(fields.size()) &&
+      parseNonNegativeInt(fields[static_cast<size_t>(marginRIndex)], &parsedInt)) {
+    *outMarginR = parsedInt;
+  }
+  if (outMarginV && marginVIndex >= 0 &&
+      marginVIndex < static_cast<int>(fields.size()) &&
+      parseNonNegativeInt(fields[static_cast<size_t>(marginVIndex)], &parsedInt)) {
+    *outMarginV = parsedInt;
+  }
+
+  if (textIndex < 0 || textIndex >= static_cast<int>(fields.size())) return false;
+  *outText = fields[static_cast<size_t>(textIndex)];
+  return true;
+}
+
 bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outCue) {
   if (!outCue || !pkt.data || pkt.size <= 0) return false;
   std::string payload(reinterpret_cast<const char*>(pkt.data),
@@ -1406,49 +1649,62 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
 
   SubtitleCue cue;
   if (codecId == AV_CODEC_ID_ASS || codecId == AV_CODEC_ID_SSA) {
-    std::string line = payload;
-    std::string lower = toLowerAscii(trimAscii(payload));
-    if (startsWith(lower, "dialogue:")) {
-      size_t colon = payload.find(':');
+    std::string line = trimAscii(payload);
+    std::string lower = toLowerAscii(line);
+    bool hasDialoguePrefix = startsWith(lower, "dialogue:");
+    if (hasDialoguePrefix) {
+      size_t colon = line.find(':');
       if (colon != std::string::npos) {
-        line = payload.substr(colon + 1);
+        line = trimAscii(line.substr(colon + 1));
       }
     }
 
-    std::vector<std::string> fields;
-    if (splitCsvPrefix(line, 10, &fields) && fields.size() >= 10) {
-      int parsedInt = 0;
-      if (parseNonNegativeInt(fields[0], &parsedInt)) cue.layer = parsedInt;
-      if (parseNonNegativeInt(fields[5], &parsedInt) && parsedInt > 0) {
-        cue.marginLNorm =
-            std::clamp(static_cast<float>(parsedInt) / 384.0f, 0.0f, 0.7f);
+    int marginL = 0;
+    int marginR = 0;
+    int marginV = 0;
+    bool parsedAssFields = false;
+    if (hasDialoguePrefix) {
+      parsedAssFields = parseAssPacketFields(
+          line, true, &cue.layer, &marginL, &marginR, &marginV, &payload);
+      if (!parsedAssFields) {
+        parsedAssFields = parseAssPacketFields(
+            line, false, &cue.layer, &marginL, &marginR, &marginV, &payload);
       }
-      if (parseNonNegativeInt(fields[6], &parsedInt) && parsedInt > 0) {
-        cue.marginRNorm =
-            std::clamp(static_cast<float>(parsedInt) / 384.0f, 0.0f, 0.7f);
-      }
-      if (parseNonNegativeInt(fields[7], &parsedInt) && parsedInt > 0) {
-        cue.marginVNorm =
-            std::clamp(static_cast<float>(parsedInt) / 288.0f, 0.0f, 0.7f);
-      }
-      payload = fields[9];
     } else {
+      parsedAssFields = parseAssPacketFields(
+          line, false, &cue.layer, &marginL, &marginR, &marginV, &payload);
+      if (!parsedAssFields) {
+        parsedAssFields = parseAssPacketFields(
+            line, true, &cue.layer, &marginL, &marginR, &marginV, &payload);
+      }
+    }
+    if (!parsedAssFields) {
       size_t start = 0;
+      const int neededCommas = hasDialoguePrefix ? 9 : 8;
       int commas = 0;
-      while (start < line.size() && commas < 8) {
+      while (start < line.size() && commas < neededCommas) {
         size_t comma = line.find(',', start);
         if (comma == std::string::npos) break;
         start = comma + 1;
         ++commas;
       }
-      if (commas == 8 && start < line.size()) {
+      if (commas == neededCommas && start < line.size()) {
         payload = line.substr(start);
       }
     }
 
+    cue.marginLNorm =
+        std::clamp(static_cast<float>(std::max(0, marginL)) / 384.0f, 0.0f, 0.7f);
+    cue.marginRNorm =
+        std::clamp(static_cast<float>(std::max(0, marginR)) / 384.0f, 0.0f, 0.7f);
+    cue.marginVNorm =
+        std::clamp(static_cast<float>(std::max(0, marginV)) / 288.0f, 0.0f, 0.7f);
+
     AssOverrideInfo overrides;
     parseAssOverridesFromText(payload, &overrides);
-    if (overrides.alignment >= 1) cue.alignment = overrides.alignment;
+    if (overrides.alignment >= 1) {
+      cue.alignment = clampAssAlignment(overrides.alignment);
+    }
     if (overrides.hasPosition) {
       cue.hasPosition = true;
       cue.posXNorm = std::clamp(overrides.posX / 384.0f, 0.0f, 1.0f);
@@ -1456,6 +1712,25 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
     }
     if (overrides.fontSize > 0.0f) {
       cue.sizeScale = std::clamp(overrides.fontSize / 48.0f, 0.45f, 2.5f);
+    }
+    if (overrides.scaleX > 0.0f) {
+      cue.scaleX = std::clamp(overrides.scaleX, 0.40f, 3.5f);
+    }
+    if (overrides.scaleY > 0.0f) {
+      cue.scaleY = std::clamp(overrides.scaleY, 0.40f, 3.5f);
+      cue.sizeScale = std::clamp(cue.sizeScale * cue.scaleY, 0.35f, 3.5f);
+    }
+    if (overrides.hasFontName) {
+      cue.fontName = overrides.fontName;
+    }
+    if (overrides.hasBold) {
+      cue.bold = overrides.bold;
+    }
+    if (overrides.hasItalic) {
+      cue.italic = overrides.italic;
+    }
+    if (overrides.hasUnderline) {
+      cue.underline = overrides.underline;
     }
 
     replaceAll(&payload, "\\N", "\n");
@@ -1575,7 +1850,6 @@ void SubtitleTrack::cuesAt(int64_t clockUs,
                              });
   while (it != cues.begin()) {
     --it;
-    if (clockUs >= it->endUs) break;
     if (clockUs >= it->startUs && clockUs < it->endUs) {
       out->push_back(&(*it));
     }
@@ -1707,4 +1981,3 @@ std::string SubtitleManager::makeUniqueLabel(const std::string& rawLabel) const 
   }
   return candidate;
 }
-

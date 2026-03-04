@@ -13,6 +13,12 @@ struct SubtitleCue {
   int layer = 0;
   int alignment = 2;  // ASS grid: 1..9, default bottom-center.
   float sizeScale = 1.0f;
+  float scaleX = 1.0f;
+  float scaleY = 1.0f;
+  std::string fontName;
+  bool bold = false;
+  bool italic = false;
+  bool underline = false;
   bool hasPosition = false;
   float posXNorm = 0.5f;
   float posYNorm = 0.9f;
@@ -50,4 +56,3 @@ class SubtitleManager {
   std::vector<SubtitleTrack> tracks_;
   size_t activeTrack_ = 0;
 };
-

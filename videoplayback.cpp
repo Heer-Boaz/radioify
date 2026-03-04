@@ -1108,9 +1108,27 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (!activeTrack) {
       return {};
     }
-    const SubtitleCue* cue = activeTrack->cueAt(clockUs);
-    if (!cue) return {};
-    return cue->text;
+    std::vector<const SubtitleCue*> active;
+    activeTrack->cuesAt(clockUs, &active);
+    if (active.empty()) return {};
+
+    std::stable_sort(active.begin(), active.end(),
+                     [](const SubtitleCue* a, const SubtitleCue* b) {
+                       if (!a || !b) return a < b;
+                       if (a->layer != b->layer) return a->layer < b->layer;
+                       if (a->sizeScale != b->sizeScale)
+                         return a->sizeScale > b->sizeScale;
+                       if (a->startUs != b->startUs) return a->startUs < b->startUs;
+                       return a->text < b->text;
+                     });
+
+    std::string merged;
+    for (const SubtitleCue* cue : active) {
+      if (!cue || cue->text.empty()) continue;
+      if (!merged.empty()) merged.push_back('\n');
+      merged += cue->text;
+    }
+    return merged;
   };
 
   auto getSubtitleCues =
@@ -1135,6 +1153,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       WindowUiState::SubtitleCue item;
       item.text = cue->text;
       item.sizeScale = std::clamp(cue->sizeScale, 0.40f, 3.0f);
+      item.scaleX = std::clamp(cue->scaleX, 0.40f, 3.5f);
+      item.scaleY = std::clamp(cue->scaleY, 0.40f, 3.5f);
+      item.fontName = cue->fontName;
+      item.bold = cue->bold;
+      item.italic = cue->italic;
+      item.underline = cue->underline;
       item.alignment = cue->alignment;
       item.layer = cue->layer;
       item.hasPosition = cue->hasPosition;

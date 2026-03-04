@@ -493,19 +493,38 @@ namespace {
         RECT textRect{0, 0, 0, 0};
     };
 
-    static HFONT createCaptionFont(int fontPx, const CaptionStyleProfile& captionStyle) {
-        int weight = (captionStyle.fontStyle == 7) ? FW_SEMIBOLD : FW_NORMAL;
-        return CreateFontW(-std::max(8, fontPx), 0, 0, 0, weight, FALSE, FALSE,
-                           FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                           DEFAULT_PITCH | FF_DONTCARE,
-                           captionFontFaceForStyle(captionStyle.fontStyle));
+    static HFONT createCaptionFont(int fontPx, const CaptionStyleProfile& captionStyle,
+                                   const wchar_t* cueFontName, float cueScaleX,
+                                   bool cueBold, bool cueItalic,
+                                   bool cueUnderline) {
+        const float safeScaleX = std::clamp(cueScaleX, 0.40f, 3.5f);
+        int weight = cueBold ? FW_BOLD
+                             : ((captionStyle.fontStyle == 7) ? FW_SEMIBOLD
+                                                              : FW_NORMAL);
+        int widthPx = 0;
+        if (std::abs(safeScaleX - 1.0f) > 0.02f) {
+            widthPx = std::max(
+                1, static_cast<int>(std::lround(
+                       static_cast<double>(std::max(8, fontPx)) * 0.48 *
+                       static_cast<double>(safeScaleX))));
+        }
+        const wchar_t* face = (cueFontName && cueFontName[0] != L'\0')
+                                  ? cueFontName
+                                  : captionFontFaceForStyle(captionStyle.fontStyle);
+        return CreateFontW(-std::max(8, fontPx), widthPx, 0, 0, weight,
+                           cueItalic ? TRUE : FALSE,
+                           cueUnderline ? TRUE : FALSE, FALSE, DEFAULT_CHARSET,
+                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, face);
     }
 
     static bool computeSubtitleLayout(const std::wstring& text,
                                       int viewportWidth,
                                       int viewportHeight,
                                       const CaptionStyleProfile& captionStyle,
+                                      const std::wstring& cueFontName,
+                                      float cueScaleX, bool cueBold,
+                                      bool cueItalic, bool cueUnderline,
                                       SubtitleBitmapLayout* outLayout) {
         if (!outLayout || text.empty() || viewportWidth <= 0 || viewportHeight <= 0) {
             return false;
@@ -521,7 +540,9 @@ namespace {
 
         HDC hdc = CreateCompatibleDC(nullptr);
         if (!hdc) return false;
-        HFONT font = createCaptionFont(fontPx, captionStyle);
+        HFONT font = createCaptionFont(fontPx, captionStyle, cueFontName.c_str(),
+                                       cueScaleX, cueBold, cueItalic,
+                                       cueUnderline);
         HGDIOBJ oldFont = nullptr;
         if (font) oldFont = SelectObject(hdc, font);
 
@@ -536,7 +557,9 @@ namespace {
                 if (oldFont) SelectObject(hdc, oldFont);
                 DeleteObject(font);
                 fontPx = correctedPx;
-                font = createCaptionFont(fontPx, captionStyle);
+                font = createCaptionFont(fontPx, captionStyle, cueFontName.c_str(),
+                                         cueScaleX, cueBold, cueItalic,
+                                         cueUnderline);
                 oldFont = font ? SelectObject(hdc, font) : nullptr;
             }
         }
@@ -577,6 +600,9 @@ namespace {
     static bool renderSubtitleTextToBitmap(const std::string& text,
                                            const SubtitleBitmapLayout& layout,
                                            const CaptionStyleProfile& captionStyle,
+                                           const std::wstring& cueFontName,
+                                           float cueScaleX, bool cueBold,
+                                           bool cueItalic, bool cueUnderline,
                                            std::vector<uint8_t>& outPixels) {
         outPixels.clear();
         if (layout.width <= 0 || layout.height <= 0 || text.empty()) return false;
@@ -603,7 +629,9 @@ namespace {
         }
 
         HGDIOBJ oldBmp = SelectObject(hdc, dib);
-        HFONT font = createCaptionFont(layout.fontPx, captionStyle);
+        HFONT font = createCaptionFont(layout.fontPx, captionStyle,
+                                       cueFontName.c_str(), cueScaleX, cueBold,
+                                       cueItalic, cueUnderline);
         HGDIOBJ oldFont = nullptr;
         if (font) oldFont = SelectObject(hdc, font);
 
@@ -1933,10 +1961,15 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
                 cueStyle.sizeScale = std::clamp(
                     baseCaptionStyle.sizeScale * std::max(0.40f, cue.sizeScale), 0.35f,
                     3.0f);
+                const std::wstring cueTextWide = utf8ToWide(cue.text);
+                if (cueTextWide.empty()) continue;
+                const std::wstring cueFontNameWide = utf8ToWide(cue.fontName);
 
                 SubtitleBitmapLayout layout{};
-                if (!computeSubtitleLayout(utf8ToWide(cue.text), canvasW, canvasH,
-                                          cueStyle, &layout)) {
+                if (!computeSubtitleLayout(
+                        cueTextWide, canvasW, canvasH, cueStyle, cueFontNameWide,
+                        std::clamp(cue.scaleX, 0.40f, 3.5f), cue.bold, cue.italic,
+                        cue.underline, &layout)) {
                     continue;
                 }
 
@@ -2016,7 +2049,10 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
                 }
 
                 std::vector<uint8_t> cueBitmap;
-                if (!renderSubtitleTextToBitmap(cue.text, layout, cueStyle, cueBitmap) ||
+                if (!renderSubtitleTextToBitmap(
+                        cue.text, layout, cueStyle, cueFontNameWide,
+                        std::clamp(cue.scaleX, 0.40f, 3.5f), cue.bold, cue.italic,
+                        cue.underline, cueBitmap) ||
                     cueBitmap.empty()) {
                     continue;
                 }

@@ -25,6 +25,12 @@ struct WindowUiState {
     struct SubtitleCue {
         std::string text;
         float sizeScale = 1.0f;
+        float scaleX = 1.0f;
+        float scaleY = 1.0f;
+        std::string fontName;
+        bool bold = false;
+        bool italic = false;
+        bool underline = false;
         int alignment = 2;  // ASS alignment (1..9), default bottom-center.
         int layer = 0;
         bool hasPosition = false;
