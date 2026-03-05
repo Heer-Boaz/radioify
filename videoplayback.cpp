@@ -1644,6 +1644,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   auto requestPlaybackExit = [&](bool quitApp) {
     running = false;
     closeWindowRequested = true;
+    g_videoWindow.SetCursorVisible(true);
     windowThreadEnabled.store(false, std::memory_order_relaxed);
     windowPresentCv.notify_one();
     if (quitApp) {
@@ -1888,6 +1889,16 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     if (!running) break;
 
     finalizeAudioStart();
+
+    if (windowEnabled && g_videoWindow.IsOpen() && g_videoWindow.IsVisible()) {
+      const PlayerState state = player.state();
+      const bool isActivelyPlaying =
+          state == PlayerState::Playing || state == PlayerState::Draining;
+      const bool showCursor = overlayVisible() || !isActivelyPlaying;
+      g_videoWindow.SetCursorVisible(showCursor);
+    } else {
+      g_videoWindow.SetCursorVisible(true);
+    }
 
     if (seekQueued) {
       auto now = std::chrono::steady_clock::now();

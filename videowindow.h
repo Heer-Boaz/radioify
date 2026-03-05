@@ -88,6 +88,7 @@ public:
     void SetVsync(bool enabled);
     std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
+    void SetCursorVisible(bool visible);
     
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
@@ -173,6 +174,7 @@ private:
     // When true, Present should skip until the render-target view and sizes are ready
     bool m_waitingForRenderTarget = false;
     bool m_captureAllMouseInput = false;
+    std::atomic<bool> m_cursorVisible{true};
     mutable std::mutex m_subtitleStateMutex;
     std::string m_subtitleRenderError;
     void setSubtitleRenderError(std::string error);

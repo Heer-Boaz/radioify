@@ -1248,6 +1248,23 @@ VideoWindow::~VideoWindow() {
     Close();
 }
 
+void VideoWindow::SetCursorVisible(bool visible) {
+    bool old = m_cursorVisible.exchange(visible, std::memory_order_relaxed);
+    if (old == visible) {
+        return;
+    }
+    if (!m_hWnd) {
+        return;
+    }
+    if (visible) {
+        ::SetCursor(::LoadCursor(NULL, IDC_ARROW));
+    } else {
+        ::SetCursor(nullptr);
+    }
+    ::PostMessage(m_hWnd, WM_SETCURSOR, reinterpret_cast<WPARAM>(m_hWnd),
+                  MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+}
+
 bool VideoWindow::MakeFullscreen() {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain) return false;
@@ -1471,6 +1488,16 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
     }
 
     if (pThis) {
+        if (uMsg == WM_SETCURSOR) {
+            if (LOWORD(lParam) == HTCLIENT) {
+                if (pThis->m_cursorVisible.load(std::memory_order_relaxed)) {
+                    ::SetCursor(::LoadCursor(NULL, IDC_ARROW));
+                } else {
+                    ::SetCursor(nullptr);
+                }
+                return TRUE;
+            }
+        }
         if (uMsg == WM_SIZE) {
             pThis->Resize(LOWORD(lParam), HIWORD(lParam));
             return 0;
@@ -1842,6 +1869,7 @@ void VideoWindow::Resize(int width, int height) {
 }
 
 void VideoWindow::Close() {
+    SetCursorVisible(true);
     // Hide the window first to release focus/ownership of the monitor
     if (m_hWnd) {
         ::ShowWindow(m_hWnd, SW_HIDE);
