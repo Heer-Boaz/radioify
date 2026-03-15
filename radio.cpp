@@ -336,10 +336,11 @@ float NoiseHum::process(float programSample) {
   return n + c + l + m + h;
 }
 
-void AMDetector::init(float newFs, float newBw) {
+void AMDetector::init(float newFs, float newBw, float newTuneHz) {
   fs = newFs;
   carrierHz = std::min(9000.0f, fs * 0.24f);
-  setBandwidth(newBw);
+  tuneOffsetHz = newTuneHz;
+  setBandwidth(newBw, newTuneHz);
 
   float agcAtkMs = 120.0f;
   float agcRelMs = 1400.0f;
@@ -354,11 +355,14 @@ void AMDetector::init(float newFs, float newBw) {
   reset();
 }
 
-void AMDetector::setBandwidth(float newBw) {
+void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   bwHz = newBw;
   float halfBw = std::clamp(bwHz * 0.95f, 1500.0f, fs * 0.2f);
-  float ifLow = std::clamp(carrierHz - halfBw, 1000.0f, fs * 0.45f);
-  float ifHigh = std::clamp(carrierHz + halfBw, ifLow + 800.0f, fs * 0.48f);
+  tuneOffsetHz = std::clamp(newTuneHz, -halfBw, halfBw);
+  float ifCenter = carrierHz + tuneOffsetHz;
+  ifCenter = std::clamp(ifCenter, 1000.0f + halfBw, fs * 0.48f - halfBw);
+  float ifLow = std::clamp(ifCenter - halfBw, 1000.0f, fs * 0.45f);
+  float ifHigh = std::clamp(ifCenter + halfBw, ifLow + 800.0f, fs * 0.48f);
   ifHp1.setHighpass(fs, ifLow, 0.707f);
   ifHp2.setHighpass(fs, ifLow, 0.707f);
   ifLp1.setLowpass(fs, ifHigh, 0.707f);
@@ -375,6 +379,7 @@ void AMDetector::setBandwidth(float newBw) {
 
 void AMDetector::reset() {
   phase = 0.0f;
+  rxPhase = 0.0f;
   agcEnv = 0.0f;
   agcGainDb = 0.0f;
   dcEnv = 0.0f;
@@ -396,6 +401,10 @@ float AMDetector::process(float x) {
   constexpr float twoPi = 6.283185307f;
   phase += twoPi * (carrierHz / fs);
   if (phase > twoPi) phase -= twoPi;
+  float rxCarrierHz =
+      std::clamp(carrierHz + tuneOffsetHz, 1000.0f, fs * 0.45f);
+  rxPhase += twoPi * (rxCarrierHz / fs);
+  if (rxPhase > twoPi) rxPhase -= twoPi;
   float carrier = std::sin(phase);
   float ifSample = (1.0f + mod) * carrier * carrierGain;
   if (ifNoiseAmp > 0.0f) {
@@ -435,8 +444,9 @@ float AMDetector::process(float x) {
       env = std::max(0.0f, env - diodeDrop);
     }
   } else {
-    float carrierQ = std::cos(phase);
-    float mixI = ifAgc * carrier;
+    float carrierI = std::sin(rxPhase);
+    float carrierQ = std::cos(rxPhase);
+    float mixI = ifAgc * carrierI;
     float mixQ = ifAgc * carrierQ;
     float i = detLp1.process(mixI);
     i = detLp2.process(i);
@@ -543,7 +553,7 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   clipOsLp1.setLowpass(osFs, osCut, 0.707f);
   clipOsLp2.setLowpass(osFs, osCut, 0.707f);
 
-  am.init(sampleRate, tunedBwValue);
+  am.init(sampleRate, tunedBwValue, tuneOffsetHz);
   speaker.init(osFs);
   speaker.drive = 0.72f;
   roomTapSamples.clear();
@@ -692,13 +702,15 @@ void Radio1938::process(float* samples, uint32_t frames) {
       clampf(tuneSmoothedHz / bwHalf, -1.0f, 1.0f);
   const float offT = std::fabs(tuneNorm);
   const float offHz = std::fabs(tuneSmoothedHz);
+  const float cosmeticOffT =
+      clampf((offT - 0.18f) / 0.82f, 0.0f, 1.0f);
   constexpr float kTuneUpdateEps = 0.25f;
   if (std::fabs(tuneSmoothedHz - tuneAppliedHz) > kTuneUpdateEps ||
       std::fabs(bwSmoothedHz - bwAppliedHz) > kTuneUpdateEps) {
     float tunedBw = updateTuningFilters(*this, tuneSmoothedHz, bwSmoothedHz);
     tuneAppliedHz = tuneSmoothedHz;
     bwAppliedHz = bwSmoothedHz;
-    am.setBandwidth(tunedBw);
+    am.setBandwidth(tunedBw, tuneSmoothedHz);
     noiseHum.setFs(sampleRate, tunedBw);
   }
   for (uint32_t f = 0; f < frames; ++f) {
@@ -765,7 +777,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
     float high = y - low;
     float tiltMix = ifTiltMix;
     if (tuneNorm != 0.0f) {
-      float extra = std::abs(tuneNorm) * tuneTiltExtra;
+      float extra = cosmeticOffT * tuneTiltExtra;
       if (tuneNorm > 0.0f) {
         float highGain = std::max(0.0f, 1.0f - tiltMix - extra);
         y = low + high * highGain;
@@ -871,7 +883,8 @@ void Radio1938::process(float* samples, uint32_t frames) {
       float adjGain = (adjEnv > 1e-6f) ? (adjTarget / adjEnv) : adjMaxGain;
       adjGain = std::clamp(adjGain, adjMinGain, adjMaxGain);
       adjOut *= adjGain;
-      float mix = std::clamp(adjMix * (offT * offT), 0.0f, 0.20f);
+      float mix = std::clamp(adjMix * (cosmeticOffT * cosmeticOffT), 0.0f,
+                             0.20f);
       y += mix * adjOut;
     }
     am.ifNoiseAmp =
@@ -942,6 +955,7 @@ void Radio1938::process(float* samples, uint32_t frames) {
           float amp =
               heteroDepth * heteroBaseScale * (0.6f + 0.4f * noiseScale) * quiet;
           amp *= gate;
+          amp *= cosmeticOffT;
           y += hetero * amp;
         }
       }

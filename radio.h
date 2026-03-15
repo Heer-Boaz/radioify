@@ -94,6 +94,7 @@ struct AMDetector {
   float fs = 48000.0f;
   float bwHz = 4800.0f;
   float carrierHz = 12000.0f;
+  float tuneOffsetHz = 0.0f;
   float modIndex = 0.80f;
   float carrierGain = 0.40f;
   float diodeDrop = 0.008f;
@@ -121,6 +122,7 @@ struct AMDetector {
   Biquad detLp3Q;
 
   float phase = 0.0f;
+  float rxPhase = 0.0f;
   float agcEnv = 0.0f;
   float agcGainDb = 0.0f;
   float agcTargetDb = -18.0f;
@@ -134,8 +136,8 @@ struct AMDetector {
   float dcEnv = 0.0f;
   float dcCoeff = 0.0f;
 
-  void init(float newFs, float newBw);
-  void setBandwidth(float newBw);
+  void init(float newFs, float newBw, float newTuneHz = 0.0f);
+  void setBandwidth(float newBw, float newTuneHz = 0.0f);
   void reset();
   float process(float x);
 };
