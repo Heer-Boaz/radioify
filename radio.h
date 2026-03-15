@@ -156,7 +156,9 @@ struct AMDetector {
 struct SpeakerSim {
   Biquad boxRes;
   Biquad boxRes2;
+  Biquad cabNasal;
   Biquad coneDip;
+  Biquad paperPeak;
   Biquad hornPeak;
   float drive = 1.05f;
   float mix = 0.24f;

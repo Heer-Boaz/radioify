@@ -356,19 +356,21 @@ void AMDetector::init(float newFs, float newBw, float newTuneHz) {
   tuneOffsetHz = newTuneHz;
   setBandwidth(newBw, newTuneHz);
 
-  float agcAtkMs = 120.0f;
-  float agcRelMs = 1400.0f;
+  float agcAtkMs = 95.0f;
+  float agcRelMs = 2400.0f;
   agcAtk = std::exp(-1.0f / (fs * (agcAtkMs / 1000.0f)));
   agcRel = std::exp(-1.0f / (fs * (agcRelMs / 1000.0f)));
-  agcGainAtk = agcAtk;
-  agcGainRel = agcRel;
+  float agcGainAtkMs = 70.0f;
+  float agcGainRelMs = 3100.0f;
+  agcGainAtk = std::exp(-1.0f / (fs * (agcGainAtkMs / 1000.0f)));
+  agcGainRel = std::exp(-1.0f / (fs * (agcGainRelMs / 1000.0f)));
 
-  float detChargeMs = 0.02f;
-  float detReleaseMs = 0.14f;
+  float detChargeMs = 0.18f;
+  float detReleaseMs = 1.60f;
   detChargeCoeff = std::exp(-1.0f / (fs * (detChargeMs / 1000.0f)));
   detReleaseCoeff = std::exp(-1.0f / (fs * (detReleaseMs / 1000.0f)));
-  float avcChargeMs = 35.0f;
-  float avcReleaseMs = 1800.0f;
+  float avcChargeMs = 24.0f;
+  float avcReleaseMs = 2600.0f;
   avcChargeCoeff = std::exp(-1.0f / (fs * (avcChargeMs / 1000.0f)));
   avcReleaseCoeff = std::exp(-1.0f / (fs * (avcReleaseMs / 1000.0f)));
 
@@ -382,10 +384,18 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   bwHz = newBw;
   float halfBw = std::clamp(bwHz * 0.95f, 1500.0f, fs * 0.2f);
   tuneOffsetHz = std::clamp(newTuneHz, -halfBw, halfBw);
+  float skewT =
+      clampf(tuneOffsetHz / std::max(halfBw, 1.0f), -1.0f, 1.0f);
   float ifCenter = carrierHz + tuneOffsetHz;
   ifCenter = std::clamp(ifCenter, 1000.0f + halfBw, fs * 0.48f - halfBw);
-  float ifLow = std::clamp(ifCenter - halfBw, 1000.0f, fs * 0.45f);
-  float ifHigh = std::clamp(ifCenter + halfBw, ifLow + 800.0f, fs * 0.48f);
+  float lowSpan =
+      halfBw * (1.0f + 0.10f * skewT - 0.18f * std::max(0.0f, -skewT));
+  float highSpan =
+      halfBw * (1.0f - 0.18f * std::max(0.0f, skewT) + 0.10f * -std::min(0.0f, skewT));
+  lowSpan = std::clamp(lowSpan, 1200.0f, fs * 0.22f);
+  highSpan = std::clamp(highSpan, 1200.0f, fs * 0.22f);
+  float ifLow = std::clamp(ifCenter - lowSpan, 1000.0f, fs * 0.45f);
+  float ifHigh = std::clamp(ifCenter + highSpan, ifLow + 800.0f, fs * 0.48f);
   ifHp1.setHighpass(fs, ifLow, 0.707f);
   ifHp2.setHighpass(fs, ifLow, 0.707f);
   ifLp1.setLowpass(fs, ifHigh, 0.707f);
@@ -445,24 +455,29 @@ float AMDetector::process(float x) {
 
   float ifAgc = ifSample * db2lin(agcGainDb);
   float rectified = std::max(0.0f, ifAgc - diodeDrop);
+  float detectorIn = rectified / (1.0f + 0.85f * rectified);
   float detRelease =
       detReleaseCoeff + (1.0f - detReleaseCoeff) * (0.45f * mistuneT);
-  if (rectified > detectorCap) {
+  if (detectorIn > detectorCap) {
     detectorCap =
-        detChargeCoeff * detectorCap + (1.0f - detChargeCoeff) * rectified;
+        detChargeCoeff * detectorCap + (1.0f - detChargeCoeff) * detectorIn;
   } else {
-    detectorCap = detRelease * detectorCap + (1.0f - detRelease) * rectified;
+    detectorCap = detRelease * detectorCap + (1.0f - detRelease) * detectorIn;
   }
 
-  if (detectorCap > avcCap) {
-    avcCap = avcChargeCoeff * avcCap + (1.0f - avcChargeCoeff) * detectorCap;
+  float avcImpulse = std::max(0.0f, detectorIn - detectorCap);
+  float avcSense = detectorCap + avcImpulse * (0.55f + 0.20f * mistuneT);
+  if (avcSense > avcCap) {
+    avcCap = avcChargeCoeff * avcCap + (1.0f - avcChargeCoeff) * avcSense;
   } else {
-    avcCap = avcReleaseCoeff * avcCap + (1.0f - avcReleaseCoeff) * detectorCap;
+    avcCap = avcReleaseCoeff * avcCap + (1.0f - avcReleaseCoeff) * avcSense;
   }
   agcEnv = avcCap;
   float avcDb = lin2db(avcCap);
+  float consonantPullDb = clampf(avcImpulse * 8.0f, 0.0f, 1.2f);
   float targetGainDb =
-      std::clamp(agcTargetDb - avcDb, agcMinGainDb, agcMaxGainDb);
+      std::clamp(agcTargetDb - avcDb - consonantPullDb - 0.8f * mistuneT,
+                 agcMinGainDb, agcMaxGainDb);
   if (targetGainDb < agcGainDb) {
     agcGainDb = agcGainAtk * agcGainDb + (1.0f - agcGainAtk) * targetGainDb;
   } else {
@@ -500,16 +515,20 @@ float AMDetector::process(float x) {
 }
 
 void SpeakerSim::init(float fs) {
-  boxRes.setPeaking(fs, 165.0f, 0.72f, 0.8f);
-  boxRes2.setPeaking(fs, 480.0f, 0.80f, 0.35f);
-  hornPeak.setPeaking(fs, 1550.0f, 1.05f, 0.75f);
-  coneDip.setPeaking(fs, 2700.0f, 1.00f, -1.4f);
+  boxRes.setPeaking(fs, 155.0f, 0.68f, 1.15f);
+  boxRes2.setPeaking(fs, 430.0f, 0.82f, 0.45f);
+  cabNasal.setPeaking(fs, 820.0f, 1.10f, -0.65f);
+  hornPeak.setPeaking(fs, 1680.0f, 0.98f, 0.95f);
+  paperPeak.setPeaking(fs, 2280.0f, 1.25f, 0.40f);
+  coneDip.setPeaking(fs, 3180.0f, 0.95f, -1.75f);
 }
 
 void SpeakerSim::reset() {
   boxRes.reset();
   boxRes2.reset();
+  cabNasal.reset();
   hornPeak.reset();
+  paperPeak.reset();
   coneDip.reset();
   clipTriggered = false;
 }
@@ -517,7 +536,9 @@ void SpeakerSim::reset() {
 float SpeakerSim::process(float x) {
   float y = boxRes.process(x);
   y = boxRes2.process(y);
+  y = cabNasal.process(y);
   y = hornPeak.process(y);
+  y = paperPeak.process(y);
   y = coneDip.process(y);
   float biased = y + asymBias;
   float yd =
