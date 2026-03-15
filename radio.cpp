@@ -591,7 +591,9 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
 
   float osFs = sampleRate * kOversampleFactor;
   float osCut = sampleRate * 0.45f;
-  am.mode = AMDetector::Mode::Envelope;
+  // Keep the detector on coherent demod until the synthetic IF path is
+  // oversampled high enough for a whistle-free envelope detector.
+  am.mode = AMDetector::Mode::Iq;
   satOsLp1.setLowpass(osFs, osCut, 0.707f);
   satOsLp2.setLowpass(osFs, osCut, 0.707f);
   speakerOsLp1.setLowpass(osFs, osCut, 0.707f);
