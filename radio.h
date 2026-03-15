@@ -97,7 +97,7 @@ struct AMDetector {
   float modIndex = 0.80f;
   float carrierGain = 0.40f;
   float diodeDrop = 0.008f;
-  float detGain = 3.20f;
+  float detGain = 2.70f;
   float ifNoiseAmp = 0.0f;
 
   enum class Mode {
@@ -123,9 +123,9 @@ struct AMDetector {
   float phase = 0.0f;
   float agcEnv = 0.0f;
   float agcGainDb = 0.0f;
-  float agcTargetDb = -14.0f;
-  float agcMaxGainDb = 22.0f;
-  float agcMinGainDb = -6.0f;
+  float agcTargetDb = -18.0f;
+  float agcMaxGainDb = 12.0f;
+  float agcMinGainDb = -4.0f;
   float agcAtk = 0.0f;
   float agcRel = 0.0f;
   float agcGainAtk = 0.0f;
@@ -144,8 +144,8 @@ struct SpeakerSim {
   Biquad boxRes;
   Biquad boxRes2;
   Biquad coneDip;
-  float drive = 1.18f;
-  float mix = 0.35f;
+  float drive = 1.05f;
+  float mix = 0.24f;
   float limit = 0.93f;
   bool clipTriggered = false;
 
@@ -180,10 +180,10 @@ struct Radio1938 {
   float heteroDriftHz = 0.06f;
   float heteroGateStart = 0.015f;
   float heteroGateEnd = 0.05f;
-  float fadeDepth = 0.10f;
-  float noiseDepth = 0.35f;
+  float fadeDepth = 0.05f;
+  float noiseDepth = 0.20f;
   float detuneDepth = 0.0f;
-  float heteroDepth = 0.0007f;
+  float heteroDepth = 0.00035f;
   float detuneBaseDelay = 2.0f;
   std::vector<float> detuneBuf;
   int detuneIndex = 0;
@@ -201,7 +201,7 @@ struct Radio1938 {
   float bwAppliedHz = 0.0f;
   float tuneSmoothedHz = 0.0f;
   float bwSmoothedHz = 0.0f;
-  float tuneTiltExtra = 0.22f;
+  float tuneTiltExtra = 0.14f;
 
   float autoEnv = 0.0f;
   float autoGainDb = 0.0f;
@@ -212,10 +212,10 @@ struct Radio1938 {
 
   float adjPhase = 0.0f;
   float adjBeatHz = 980.0f;
-  float adjModDepth = 0.18f;
-  float adjMix = 0.020f;
-  float adjDrive = 1.55f;
-  float adjSplatterMix = 0.22f;
+  float adjModDepth = 0.12f;
+  float adjMix = 0.010f;
+  float adjDrive = 1.40f;
+  float adjSplatterMix = 0.14f;
   float adjEnv = 0.0f;
   float adjAtk = 0.0f;
   float adjRel = 0.0f;
@@ -248,17 +248,17 @@ struct Radio1938 {
   float sagRel = 0.0f;
   float sagStart = 0.06f;
   float sagEnd = 0.22f;
-  float sagDepth = 0.07f;
+  float sagDepth = 0.04f;
 
-  float ifTiltMix = 0.16f;
-  float roomMix = 0.08f;
+  float ifTiltMix = 0.10f;
+  float roomMix = 0.025f;
   float roomLpHz = 1800.0f;
   int roomIndex = 0;
   int roomDelaySamples = 0;
   std::vector<float> roomBuf;
   std::vector<int> roomTapSamples;
   std::vector<float> roomTapGains;
-  float roomTailMix = 0.05f;
+  float roomTailMix = 0.0f;
   float roomTailFeedback = 0.28f;
   float roomTailMs = 45.0f;
   float roomTailLpHz = 1600.0f;
