@@ -254,6 +254,11 @@ void NoiseHum::reset() {
   lightningEnv = 0.0f;
   motorEnv = 0.0f;
   motorPhase = 0.0f;
+  pink1 = 0.0f;
+  pink2 = 0.0f;
+  brown = 0.0f;
+  hissDrift = 0.0f;
+  hissDrift2 = 0.0f;
   hp.reset();
   lp.reset();
   crackleHp.reset();
@@ -275,7 +280,16 @@ float NoiseHum::process(float programSample) {
   float hissMask = 1.0f - 0.12f * maskT;
   float burstMask = 1.0f - 0.04f * maskT;
 
-  float n = dist(rng);
+  float white = dist(rng);
+  pink1 = 0.985f * pink1 + 0.015f * white;
+  pink2 = 0.9975f * pink2 + 0.0025f * white;
+  brown = clampf(brown + 0.0015f * white, -1.0f, 1.0f);
+  hissDrift = 0.9995f * hissDrift + 0.0005f * dist(rng);
+  hissDrift2 = 0.99985f * hissDrift2 + 0.00015f * dist(rng);
+  float n = 0.82f * white + 0.22f * pink1 +
+            0.12f * (pink2 - 0.5f * pink1) + 0.08f * brown;
+  n *= 0.88f + 0.20f * hissDrift;
+  n += 0.06f * hissDrift2;
   n = hp.process(n);
   n = lp.process(n);
   n *= noiseAmp * hissMask;
@@ -349,6 +363,15 @@ void AMDetector::init(float newFs, float newBw, float newTuneHz) {
   agcGainAtk = agcAtk;
   agcGainRel = agcRel;
 
+  float detChargeMs = 0.02f;
+  float detReleaseMs = 0.14f;
+  detChargeCoeff = std::exp(-1.0f / (fs * (detChargeMs / 1000.0f)));
+  detReleaseCoeff = std::exp(-1.0f / (fs * (detReleaseMs / 1000.0f)));
+  float avcChargeMs = 35.0f;
+  float avcReleaseMs = 1800.0f;
+  avcChargeCoeff = std::exp(-1.0f / (fs * (avcChargeMs / 1000.0f)));
+  avcReleaseCoeff = std::exp(-1.0f / (fs * (avcReleaseMs / 1000.0f)));
+
   float dcMs = 450.0f;
   dcCoeff = std::exp(-1.0f / (fs * (dcMs / 1000.0f)));
 
@@ -382,6 +405,8 @@ void AMDetector::reset() {
   rxPhase = 0.0f;
   agcEnv = 0.0f;
   agcGainDb = 0.0f;
+  detectorCap = 0.0f;
+  avcCap = 0.0f;
   dcEnv = 0.0f;
   ifNoiseAmp = 0.0f;
   ifHp1.reset();
@@ -399,6 +424,8 @@ void AMDetector::reset() {
 float AMDetector::process(float x) {
   float mod = std::clamp(x * modIndex, -0.98f, 0.98f);
   constexpr float twoPi = 6.283185307f;
+  float mistuneT =
+      clampf(std::fabs(tuneOffsetHz) / std::max(1.0f, bwHz * 0.5f), 0.0f, 1.0f);
   phase += twoPi * (carrierHz / fs);
   if (phase > twoPi) phase -= twoPi;
   float rxCarrierHz =
@@ -416,33 +443,42 @@ float AMDetector::process(float x) {
   ifSample = ifLp1.process(ifSample);
   ifSample = ifLp2.process(ifSample);
 
-  float level = std::fabs(ifSample);
-  if (level > agcEnv) {
-    agcEnv = agcAtk * agcEnv + (1.0f - agcAtk) * level;
+  float ifAgc = ifSample * db2lin(agcGainDb);
+  float rectified = std::max(0.0f, ifAgc - diodeDrop);
+  float detRelease =
+      detReleaseCoeff + (1.0f - detReleaseCoeff) * (0.45f * mistuneT);
+  if (rectified > detectorCap) {
+    detectorCap =
+        detChargeCoeff * detectorCap + (1.0f - detChargeCoeff) * rectified;
   } else {
-    agcEnv = agcRel * agcEnv + (1.0f - agcRel) * level;
+    detectorCap = detRelease * detectorCap + (1.0f - detRelease) * rectified;
   }
-  float envDb = lin2db(agcEnv);
+
+  if (detectorCap > avcCap) {
+    avcCap = avcChargeCoeff * avcCap + (1.0f - avcChargeCoeff) * detectorCap;
+  } else {
+    avcCap = avcReleaseCoeff * avcCap + (1.0f - avcReleaseCoeff) * detectorCap;
+  }
+  agcEnv = avcCap;
+  float avcDb = lin2db(avcCap);
   float targetGainDb =
-      std::clamp(agcTargetDb - envDb, agcMinGainDb, agcMaxGainDb);
+      std::clamp(agcTargetDb - avcDb, agcMinGainDb, agcMaxGainDb);
   if (targetGainDb < agcGainDb) {
     agcGainDb = agcGainAtk * agcGainDb + (1.0f - agcGainAtk) * targetGainDb;
   } else {
     agcGainDb = agcGainRel * agcGainDb + (1.0f - agcGainRel) * targetGainDb;
   }
-  float ifAgc = ifSample * db2lin(agcGainDb);
 
   float env = 0.0f;
   if (mode == Mode::Envelope) {
-    float p = ifAgc * ifAgc;
-    float e = detLp1.process(p);
-    e = detLp2.process(e);
-    env = std::sqrt(std::max(e, 0.0f));
-    constexpr float kRmsToPeak = 1.41421356f;
-    env *= kRmsToPeak;
-    if (diodeDrop > 0.0f) {
-      env = std::max(0.0f, env - diodeDrop);
-    }
+    float audio = detectorCap;
+    dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * audio;
+    env = audio - dcEnv;
+    env = detLp1.process(env);
+    env = detLp2.process(env);
+    float detectorRipple = detLp3.process(rectified - detectorCap);
+    env += detectorRipple * (0.08f + 0.12f * mistuneT);
+    return env * detGain;
   } else {
     float carrierI = std::sin(rxPhase);
     float carrierQ = std::cos(rxPhase);
@@ -466,12 +502,14 @@ float AMDetector::process(float x) {
 void SpeakerSim::init(float fs) {
   boxRes.setPeaking(fs, 165.0f, 0.72f, 0.8f);
   boxRes2.setPeaking(fs, 480.0f, 0.80f, 0.35f);
+  hornPeak.setPeaking(fs, 1550.0f, 1.05f, 0.75f);
   coneDip.setPeaking(fs, 2700.0f, 1.00f, -1.4f);
 }
 
 void SpeakerSim::reset() {
   boxRes.reset();
   boxRes2.reset();
+  hornPeak.reset();
   coneDip.reset();
   clipTriggered = false;
 }
@@ -479,8 +517,12 @@ void SpeakerSim::reset() {
 float SpeakerSim::process(float x) {
   float y = boxRes.process(x);
   y = boxRes2.process(y);
+  y = hornPeak.process(y);
   y = coneDip.process(y);
-  float yd = std::tanh(drive * y) / std::tanh(drive);
+  float biased = y + asymBias;
+  float yd =
+      std::tanh(drive * biased) / std::tanh(drive) -
+      std::tanh(drive * asymBias) / std::tanh(drive);
   y = (1.0f - mix) * y + mix * yd;
   if (std::fabs(y) > limit) {
     clipTriggered = true;
@@ -530,6 +572,10 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   float sagRelMs = 900.0f;
   sagAtk = std::exp(-1.0f / (sampleRate * (sagAtkMs / 1000.0f)));
   sagRel = std::exp(-1.0f / (sampleRate * (sagRelMs / 1000.0f)));
+  float powerAtkMs = 25.0f;
+  float powerRelMs = 520.0f;
+  powerAtk = std::exp(-1.0f / (sampleRate * (powerAtkMs / 1000.0f)));
+  powerRel = std::exp(-1.0f / (sampleRate * (powerRelMs / 1000.0f)));
 
   float autoEnvAtkMs = 8.0f;
   float autoEnvRelMs = 220.0f;
@@ -646,6 +692,9 @@ void Radio1938::reset() {
   detuneIndex = 0;
   std::fill(detuneBuf.begin(), detuneBuf.end(), 0.0f);
   sagEnv = 0.0f;
+  powerEnv = 0.0f;
+  powerPhase = 0.0f;
+  powerPhase2 = 0.0f;
   autoEnv = 0.0f;
   autoGainDb = 0.0f;
   roomIndex = 0;
@@ -898,6 +947,26 @@ void Radio1938::process(float* samples, uint32_t frames) {
     y = presBoost.process(y);
     y = comp.process(y);
     y *= kCompMakeupGain;
+    float powerLevel = std::fabs(y);
+    if (powerLevel > powerEnv) {
+      powerEnv = powerAtk * powerEnv + (1.0f - powerAtk) * powerLevel;
+    } else {
+      powerEnv = powerRel * powerEnv + (1.0f - powerRel) * powerLevel;
+    }
+    float powerT = clampf((powerEnv - 0.05f) / 0.25f, 0.0f, 1.0f);
+    float rectHz = std::max(80.0f, noiseHum.humHz * 2.0f);
+    powerPhase += twoPi * (rectHz / sampleRate);
+    powerPhase2 += twoPi * ((rectHz * 0.5f) / sampleRate);
+    if (powerPhase > twoPi) powerPhase -= twoPi;
+    if (powerPhase2 > twoPi) powerPhase2 -= twoPi;
+    float ripple = std::sin(powerPhase) + 0.28f * std::sin(2.0f * powerPhase) +
+                   0.15f * std::sin(powerPhase2);
+    float powerGain =
+        1.0f - 0.018f * powerT +
+        ripple * powerRippleDepth * (0.35f + 0.65f * powerT);
+    powerGain = std::clamp(powerGain, 0.88f, 1.04f);
+    float powerBias = ripple * powerBiasDepth * (0.2f + 0.8f * powerT);
+    y = y * powerGain + powerBias;
     y = processOversampled2x(y, satOsPrev, satOsLp1, satOsLp2,
                              [&](float v) {
                                float out = sat.process(v);

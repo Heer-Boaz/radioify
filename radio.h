@@ -84,6 +84,11 @@ struct NoiseHum {
   float motorDecay = 0.0f;
   float motorPhase = 0.0f;
   float motorBuzzHz = 18.0f;
+  float pink1 = 0.0f;
+  float pink2 = 0.0f;
+  float brown = 0.0f;
+  float hissDrift = 0.0f;
+  float hissDrift2 = 0.0f;
 
   void setFs(float newFs, float noiseBwHz);
   void reset();
@@ -133,6 +138,12 @@ struct AMDetector {
   float agcGainAtk = 0.0f;
   float agcGainRel = 0.0f;
 
+  float detectorCap = 0.0f;
+  float detChargeCoeff = 0.0f;
+  float detReleaseCoeff = 0.0f;
+  float avcCap = 0.0f;
+  float avcChargeCoeff = 0.0f;
+  float avcReleaseCoeff = 0.0f;
   float dcEnv = 0.0f;
   float dcCoeff = 0.0f;
 
@@ -146,9 +157,11 @@ struct SpeakerSim {
   Biquad boxRes;
   Biquad boxRes2;
   Biquad coneDip;
+  Biquad hornPeak;
   float drive = 1.05f;
   float mix = 0.24f;
   float limit = 0.93f;
+  float asymBias = 0.028f;
   bool clipTriggered = false;
 
   void init(float fs);
@@ -251,6 +264,13 @@ struct Radio1938 {
   float sagStart = 0.06f;
   float sagEnd = 0.22f;
   float sagDepth = 0.04f;
+  float powerEnv = 0.0f;
+  float powerAtk = 0.0f;
+  float powerRel = 0.0f;
+  float powerPhase = 0.0f;
+  float powerPhase2 = 0.0f;
+  float powerRippleDepth = 0.010f;
+  float powerBiasDepth = 0.006f;
 
   float ifTiltMix = 0.10f;
   float roomMix = 0.025f;
