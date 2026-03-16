@@ -490,11 +490,18 @@ struct RadioOutputClipNode {
 };
 
 struct Radio1938 {
+  enum class Preset {
+    Mid30sHeroic,
+    Mid30sDocumentary,
+  };
+
   float sampleRate = 48000.0f;
   int channels = 1;
   float bwHz = 4800.0f;
   float noiseWeight = 0.012f;
   float makeupGain = 1.0f; // baseline unity gain
+  Preset preset = Preset::Mid30sHeroic;
+  bool initialized = false;
 
   using BlockPrepareFn = void (*)(Radio1938&, RadioBlockControl&, uint32_t);
   using SampleControlFn = void (*)(Radio1938&, RadioSampleContext&);
@@ -1012,6 +1019,9 @@ struct Radio1938 {
     Biquad clipOsLpOut;
   } output;
 
+  static std::string_view presetName(Preset preset);
+  bool applyPreset(std::string_view presetName);
+  void applyPreset(Preset preset);
   void init(int ch, float sr, float bw, float noise);
   void reset();
   void process(float* samples, uint32_t frames);

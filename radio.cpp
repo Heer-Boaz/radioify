@@ -1562,6 +1562,150 @@ static float runPresentationPath(
   return y;
 }
 
+static void applyMid30sHeroicPreset(Radio1938& radio) {
+  radio.makeupGain = 1.0f;
+
+  radio.globals.ifNoiseMix = 0.22f;
+  radio.globals.postNoiseMix = 0.14f;
+  radio.globals.noiseFloorAmp = 0.0022f;
+  radio.globals.compMakeupGain = 1.18f;
+  radio.globals.enableAutoLevel = true;
+  radio.globals.autoTargetDb = -21.0f;
+  radio.globals.autoMaxBoostDb = 4.0f;
+
+  radio.tuning.safeBwMinHz = 4200.0f;
+  radio.tuning.safeBwMaxHz = 5600.0f;
+  radio.tuning.tunedBwMistuneDepth = 0.28f;
+  radio.tuning.preBwScale = 1.08f;
+  radio.tuning.postBwScale = 1.18f;
+
+  radio.frontEnd.ifTiltMix = 0.10f;
+
+  radio.multipath.mix = 0.12f;
+  radio.multipath.depth = 0.08f;
+
+  radio.adjacent.mix = 0.010f;
+
+  radio.demod.diodeColorDrop = 0.004f;
+
+  radio.tone.midBoostGainDb = 1.4f;
+  radio.tone.lowMidDipGainDb = -1.0f;
+  radio.tone.presBoostGainDb = -0.8f;
+  radio.tone.compThresholdDb = -12.0f;
+  radio.tone.compRatio = 1.35f;
+  radio.tone.lowBaseGain = 0.80f;
+  radio.tone.lowGainDepth = 0.18f;
+  radio.tone.midBaseGain = 0.90f;
+  radio.tone.midGainDepth = 0.18f;
+  radio.tone.highBaseGain = 0.46f;
+  radio.tone.highGainDepth = 0.34f;
+
+  radio.power.satMix = 0.24f;
+
+  radio.noiseConfig.enableHumTone = true;
+  radio.noiseConfig.humAmpScale = 0.0018f;
+  radio.noiseConfig.crackleAmpScale = 0.008f;
+  radio.noiseConfig.lightningAmpScale = 0.022f;
+  radio.noiseConfig.motorAmpScale = 0.0045f;
+
+  radio.speakerStage.drive = 0.72f;
+
+  radio.room.enableEarlyReflections = true;
+  radio.room.mix = 0.025f;
+  radio.room.enableTail = false;
+  radio.room.tailMix = 0.0f;
+}
+
+static void applyMid30sDocumentaryPreset(Radio1938& radio) {
+  radio.makeupGain = 0.96f;
+
+  radio.globals.ifNoiseMix = 0.28f;
+  radio.globals.postNoiseMix = 0.17f;
+  radio.globals.noiseFloorAmp = 0.0032f;
+  radio.globals.compMakeupGain = 1.0f;
+  radio.globals.enableAutoLevel = false;
+  radio.globals.autoTargetDb = -21.0f;
+  radio.globals.autoMaxBoostDb = 2.5f;
+
+  radio.tuning.safeBwMinHz = 3600.0f;
+  radio.tuning.safeBwMaxHz = 4700.0f;
+  radio.tuning.tunedBwMistuneDepth = 0.34f;
+  radio.tuning.preBwScale = 1.03f;
+  radio.tuning.postBwScale = 1.10f;
+
+  radio.frontEnd.ifTiltMix = 0.14f;
+
+  radio.multipath.mix = 0.05f;
+  radio.multipath.depth = 0.04f;
+
+  radio.adjacent.mix = 0.008f;
+
+  radio.demod.diodeColorDrop = 0.008f;
+
+  radio.tone.midBoostGainDb = 0.7f;
+  radio.tone.lowMidDipGainDb = -0.5f;
+  radio.tone.presBoostGainDb = -1.8f;
+  radio.tone.compThresholdDb = -6.0f;
+  radio.tone.compRatio = 1.0f;
+  radio.tone.lowBaseGain = 0.76f;
+  radio.tone.lowGainDepth = 0.10f;
+  radio.tone.midBaseGain = 0.86f;
+  radio.tone.midGainDepth = 0.10f;
+  radio.tone.highBaseGain = 0.30f;
+  radio.tone.highGainDepth = 0.18f;
+
+  radio.power.satMix = 0.20f;
+
+  radio.noiseConfig.enableHumTone = true;
+  radio.noiseConfig.humAmpScale = 0.0024f;
+  radio.noiseConfig.crackleAmpScale = 0.0095f;
+  radio.noiseConfig.lightningAmpScale = 0.026f;
+  radio.noiseConfig.motorAmpScale = 0.0054f;
+
+  radio.speakerStage.drive = 0.66f;
+
+  radio.room.enableEarlyReflections = false;
+  radio.room.mix = 0.0f;
+  radio.room.enableTail = false;
+  radio.room.tailMix = 0.0f;
+}
+
+std::string_view Radio1938::presetName(Preset preset) {
+  switch (preset) {
+    case Preset::Mid30sHeroic:
+      return "mid30s_heroic";
+    case Preset::Mid30sDocumentary:
+      return "mid30s_documentary";
+  }
+  return "mid30s_heroic";
+}
+
+bool Radio1938::applyPreset(std::string_view presetNameValue) {
+  if (presetNameValue == "mid30s_heroic") {
+    applyPreset(Preset::Mid30sHeroic);
+    return true;
+  }
+  if (presetNameValue == "mid30s_documentary") {
+    applyPreset(Preset::Mid30sDocumentary);
+    return true;
+  }
+  return false;
+}
+
+void Radio1938::applyPreset(Preset presetValue) {
+  preset = presetValue;
+  switch (presetValue) {
+    case Preset::Mid30sHeroic:
+      applyMid30sHeroicPreset(*this);
+      break;
+    case Preset::Mid30sDocumentary:
+      applyMid30sDocumentaryPreset(*this);
+      break;
+  }
+  if (!initialized) return;
+  init(channels, sampleRate, bwHz, noiseWeight);
+}
+
 void Radio1938::init(int ch, float sr, float bw, float noise) {
   channels = std::max(1, ch);
   sampleRate = sr;
@@ -1571,6 +1715,7 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   lifecycle.configure(*this, initCtx);
   lifecycle.allocate(*this, initCtx);
   lifecycle.initializeDependentState(*this, initCtx);
+  initialized = true;
   reset();
 }
 

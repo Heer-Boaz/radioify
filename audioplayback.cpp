@@ -679,6 +679,12 @@ void stopAuditionWorker() {
   gAudio.audition.hash = 0;
 }
 
+void applyRadioTogglePreset() {
+  gAudio.radio1938Template.applyPreset(Radio1938::Preset::Mid30sDocumentary);
+  gAudio.state.radioMakeupGain.store(gAudio.radio1938Template.makeupGain);
+  gAudio.state.radio1938 = gAudio.radio1938Template;
+}
+
 void startAuditionWorker(AuditionTone tone) {
   gAudio.audition.stop.store(false);
   gAudio.audition.active.store(true);
@@ -1846,12 +1852,15 @@ void audioInit(const AudioPlaybackConfig& config) {
   gAudio.state.sampleRate = gAudio.sampleRate;
   gAudio.state.dry = config.dry;
   gAudio.state.useRadio1938.store(config.enableRadio);
-  gAudio.state.radioMakeupGain.store(gAudio.radio1938Template.makeupGain);
 
   gAudio.radio1938Template.init(gAudio.channels,
                                 static_cast<float>(gAudio.sampleRate),
                                 gAudio.lpHz,
                                 gAudio.noise);
+  if (config.enableRadio) {
+    applyRadioTogglePreset();
+  }
+  gAudio.state.radioMakeupGain.store(gAudio.radio1938Template.makeupGain);
   gAudio.state.radio1938 = gAudio.radio1938Template;
 }
 
@@ -2522,6 +2531,9 @@ void audioToggleRadio() {
   gAudio.state.useRadio1938.store(next);
   uint32_t desired = next ? 1u : gAudio.baseChannels;
   ensureChannels(desired);
+  if (next) {
+    applyRadioTogglePreset();
+  }
 }
 
 static void reloadKssWithOptions() {
