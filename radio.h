@@ -59,6 +59,20 @@ struct Saturator {
   float process(float x);
 };
 
+struct NoiseInput {
+  float programSample = 0.0f;
+  float noiseAmp = 0.0f;
+  float crackleAmp = 0.0f;
+  float crackleRate = 0.0f;
+  float lightningAmp = 0.0f;
+  float lightningRate = 0.0f;
+  float motorAmp = 0.0f;
+  float motorRate = 0.0f;
+  float motorBuzzHz = 0.0f;
+  float humAmp = 0.0f;
+  bool humToneEnabled = true;
+};
+
 struct NoiseHum {
   std::mt19937 rng{0x1938u};
   std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
@@ -72,29 +86,20 @@ struct NoiseHum {
   Biquad motorHp;
   Biquad motorLp;
   float fs = 48000.0f;
-  float noiseAmp = 0.015f;
   float noiseHpHz = 220.0f; // 500.0f
   float noiseLpHz = 5500.0f;
-  float humAmp = 0.0015f;
   float humHz = 50.0f;
   float humPhase = 0.0f;
   float scEnv = 0.0f;
   float scAtk = 0.0f;
   float scRel = 0.0f;
-  float crackleRate = 0.9f;
-  float crackleAmp = 0.015f;
   float crackleEnv = 0.0f;
   float crackleDecay = 0.0f;
-  float lightningRate = 0.03f;
-  float lightningAmp = 0.045f;
   float lightningEnv = 0.0f;
   float lightningDecay = 0.0f;
-  float motorRate = 0.20f;
-  float motorAmp = 0.010f;
   float motorEnv = 0.0f;
   float motorDecay = 0.0f;
   float motorPhase = 0.0f;
-  float motorBuzzHz = 18.0f;
   float pinkFast = 0.0f;
   float pinkSlow = 0.0f;
   float brown = 0.0f;
@@ -134,11 +139,15 @@ struct NoiseHum {
   float motorBuzzBase = 0.65f;
   float motorBuzzDepth = 0.35f;
   float humSecondHarmonicMix = 0.35f;
-  bool humToneEnabled = true;
 
   void setFs(float newFs, float noiseBwHz);
   void reset();
-  float process(float programSample);
+  float process(const NoiseInput& in);
+};
+
+struct AMDetectorSampleInput {
+  float signal = 0.0f;
+  float ifNoiseAmp = 0.0f;
 };
 
 struct AMDetector {
@@ -150,7 +159,6 @@ struct AMDetector {
   float carrierGain = 0.40f;
   float diodeDrop = 0.008f;
   float detGain = 2.70f;
-  float ifNoiseAmp = 0.0f;
 
   enum class Mode {
     Envelope,
@@ -246,7 +254,7 @@ struct AMDetector {
   void init(float newFs, float newBw, float newTuneHz = 0.0f);
   void setBandwidth(float newBw, float newTuneHz = 0.0f);
   void reset();
-  float process(float x);
+  float process(const AMDetectorSampleInput& in);
 };
 
 struct SpeakerSim {
@@ -264,7 +272,6 @@ struct SpeakerSim {
   float limit = 0.93f;
   float asymBias = 0.028f;
   float backWaveMix = 0.10f;
-  bool clipTriggered = false;
   int backWaveIndex = 0;
   std::vector<float> backWaveBuf;
   float filterQ = kRadioBiquadQ;
@@ -295,19 +302,62 @@ struct SpeakerSim {
 
   void init(float fs);
   void reset();
-  float process(float x);
+  float process(float x, bool& clipped);
 };
 
 struct Radio1938;
 
-struct RadioFrameContext {
+enum class StageId : uint8_t {
+  Tuning,
+  Input,
+  Reception,
+  InterferenceDerived,
+  FrontEnd,
+  Multipath,
+  Detune,
+  Adjacent,
+  Demod,
+  Tone,
+  Power,
+  Noise,
+  Heterodyne,
+  Speaker,
+  Room,
+  OutputClip,
+};
+
+struct RadioBlockControl {
   float sampleRate = 48000.0f;
   float tuneNorm = 0.0f;
   float offT = 0.0f;
   float offHz = 0.0f;
   float cosmeticOffT = 0.0f;
-  float fade = 1.0f;
+};
+
+struct RadioSampleControl {
+  float receptionGain = 1.0f;
   float noiseScale = 1.0f;
+};
+
+struct RadioDerivedSampleParams {
+  float demodIfNoiseAmp = 0.0f;
+  float noiseAmp = 0.0f;
+  float crackleAmp = 0.0f;
+  float crackleRate = 0.0f;
+  float lightningAmp = 0.0f;
+  float lightningRate = 0.0f;
+  float motorAmp = 0.0f;
+  float motorRate = 0.0f;
+  float motorBuzzHz = 0.0f;
+  float humAmp = 0.0f;
+  float quieting = 1.0f;
+  bool humToneEnabled = true;
+};
+
+struct RadioSampleContext {
+  const RadioBlockControl* block = nullptr;
+  RadioSampleControl control{};
+  RadioDerivedSampleParams derived{};
 };
 
 struct RadioInitContext {
@@ -318,136 +368,125 @@ struct RadioTuningNode {
   static float applyFilters(Radio1938& radio, float tuneHz, float bwHz);
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static void prepare(Radio1938& radio,
+                      RadioBlockControl& block,
+                      uint32_t frames);
 };
 
 struct RadioInputNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
-struct RadioReceptionNode {
+struct RadioReceptionControlNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static void update(Radio1938& radio, RadioSampleContext& ctx);
 };
 
 struct RadioFrontEndNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct RadioMultipathNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct RadioDetuneNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct RadioAdjacentNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct RadioDemodNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct RadioToneNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct RadioPowerNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
-struct RadioArtifactNode {
+struct RadioInterferenceDerivedNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static void update(Radio1938& radio, RadioSampleContext& ctx);
 };
 
 struct RadioNoiseNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
+};
+
+struct RadioHeterodyneNode {
+  static void init(Radio1938& radio, RadioInitContext& initCtx);
+  static void reset(Radio1938& radio);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct RadioSpeakerNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct RadioRoomNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct RadioOutputClipNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepareBlock(Radio1938& radio,
-                           RadioFrameContext& ctx,
-                           uint32_t frames);
-  static float process(Radio1938& radio, float y, RadioFrameContext& ctx);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
 };
 
 struct Radio1938 {
@@ -456,219 +495,193 @@ struct Radio1938 {
   float bwHz = 4800.0f;
   float noiseWeight = 0.012f;
   float makeupGain = 1.0f; // baseline unity gain
-  bool clipTriggered = false;
 
-  using BlockStageFn = void (*)(Radio1938&, RadioFrameContext&, uint32_t);
-  using SampleStageFn = float (*)(Radio1938&, float, RadioFrameContext&);
-  using InitStageFn = void (*)(Radio1938&, RadioInitContext&);
-  using ResetStageFn = void (*)(Radio1938&);
+  using BlockPrepareFn = void (*)(Radio1938&, RadioBlockControl&, uint32_t);
+  using SampleControlFn = void (*)(Radio1938&, RadioSampleContext&);
+  using SampleProcessFn = float (*)(Radio1938&, float, const RadioSampleContext&);
+  using InitFn = void (*)(Radio1938&, RadioInitContext&);
+  using ResetFn = void (*)(Radio1938&);
 
-  struct StageProcessor {
-    BlockStageFn block = nullptr;
-    SampleStageFn sample = nullptr;
-    InitStageFn init = nullptr;
-    ResetStageFn reset = nullptr;
-  };
-
-  struct PipelineStep {
+  struct BlockStep {
+    StageId id = StageId::Tuning;
     std::string_view name{};
     bool enabled = true;
-    StageProcessor processor{};
+    BlockPrepareFn prepare = nullptr;
   };
 
-  struct LifecycleStep {
+  struct SampleControlStep {
+    StageId id = StageId::Reception;
     std::string_view name{};
-    StageProcessor processor{};
+    bool enabled = true;
+    SampleControlFn update = nullptr;
   };
 
-  struct PipelineConfig {
+  struct ProgramPathStep {
+    StageId id = StageId::Input;
+    std::string_view name{};
+    bool enabled = true;
+    SampleProcessFn process = nullptr;
+  };
+
+  struct PresentationPathStep {
+    StageId id = StageId::Noise;
+    std::string_view name{};
+    bool enabled = true;
+    SampleProcessFn process = nullptr;
+  };
+
+  struct ConfigureStep {
+    StageId id = StageId::Input;
+    std::string_view name{};
+    InitFn init = nullptr;
+  };
+
+  struct AllocateStep {
+    StageId id = StageId::Input;
+    std::string_view name{};
+    InitFn init = nullptr;
+  };
+
+  struct InitializeDependentStateStep {
+    StageId id = StageId::Input;
+    std::string_view name{};
+    InitFn init = nullptr;
+  };
+
+  struct ResetStep {
+    StageId id = StageId::Input;
+    std::string_view name{};
+    ResetFn reset = nullptr;
+  };
+
+  struct RadioExecutionGraph {
     bool bypass = false;
 
-    std::array<PipelineStep, 1> blockFlow{{
-        {"PrepareBlock",
-         true,
-         {&RadioTuningNode::prepareBlock, &RadioTuningNode::process,
-          &RadioTuningNode::init, &RadioTuningNode::reset}},
+    std::array<BlockStep, 1> blockSteps{{
+        {StageId::Tuning, "Tuning", true, &RadioTuningNode::prepare},
     }};
 
-    std::array<PipelineStep, 14> sampleFlow{{
-        {"Input",
-         true,
-         {&RadioInputNode::prepareBlock, &RadioInputNode::process,
-          &RadioInputNode::init, &RadioInputNode::reset}},
-        {"Reception",
-         true,
-         {&RadioReceptionNode::prepareBlock, &RadioReceptionNode::process,
-          &RadioReceptionNode::init, &RadioReceptionNode::reset}},
-        {"FrontEnd",
-         true,
-         {&RadioFrontEndNode::prepareBlock, &RadioFrontEndNode::process,
-          &RadioFrontEndNode::init, &RadioFrontEndNode::reset}},
-        {"Multipath",
-         true,
-         {&RadioMultipathNode::prepareBlock, &RadioMultipathNode::process,
-          &RadioMultipathNode::init, &RadioMultipathNode::reset}},
-        {"Detune",
-         true,
-         {&RadioDetuneNode::prepareBlock, &RadioDetuneNode::process,
-          &RadioDetuneNode::init, &RadioDetuneNode::reset}},
-        {"Adjacent",
-         true,
-         {&RadioAdjacentNode::prepareBlock, &RadioAdjacentNode::process,
-          &RadioAdjacentNode::init, &RadioAdjacentNode::reset}},
-        {"Demod",
-         true,
-         {&RadioDemodNode::prepareBlock, &RadioDemodNode::process,
-          &RadioDemodNode::init, &RadioDemodNode::reset}},
-        {"Tone",
-         true,
-         {&RadioToneNode::prepareBlock, &RadioToneNode::process,
-          &RadioToneNode::init, &RadioToneNode::reset}},
-        {"Power",
-         true,
-         {&RadioPowerNode::prepareBlock, &RadioPowerNode::process,
-          &RadioPowerNode::init, &RadioPowerNode::reset}},
-        {"Artifacts",
-         true,
-         {&RadioArtifactNode::prepareBlock, &RadioArtifactNode::process,
-          &RadioArtifactNode::init, &RadioArtifactNode::reset}},
-        {"Noise",
-         true,
-         {&RadioNoiseNode::prepareBlock, &RadioNoiseNode::process,
-          &RadioNoiseNode::init, &RadioNoiseNode::reset}},
-        {"Speaker",
-         true,
-         {&RadioSpeakerNode::prepareBlock, &RadioSpeakerNode::process,
-          &RadioSpeakerNode::init, &RadioSpeakerNode::reset}},
-        {"Room",
-         true,
-         {&RadioRoomNode::prepareBlock, &RadioRoomNode::process,
-          &RadioRoomNode::init, &RadioRoomNode::reset}},
-        {"OutputClip",
-         true,
-         {&RadioOutputClipNode::prepareBlock, &RadioOutputClipNode::process,
-          &RadioOutputClipNode::init, &RadioOutputClipNode::reset}},
+    std::array<SampleControlStep, 2> sampleControlSteps{{
+        {StageId::Reception, "Reception", true, &RadioReceptionControlNode::update},
+        {StageId::InterferenceDerived, "InterferenceDerived", true,
+         &RadioInterferenceDerivedNode::update},
     }};
 
-    std::array<LifecycleStep, 14> initFlow{{
-        {"PrepareBlock",
-         {&RadioTuningNode::prepareBlock, &RadioTuningNode::process,
-          &RadioTuningNode::init, &RadioTuningNode::reset}},
-        {"FrontEnd",
-         {&RadioFrontEndNode::prepareBlock, &RadioFrontEndNode::process,
-          &RadioFrontEndNode::init, &RadioFrontEndNode::reset}},
-        {"Detune",
-         {&RadioDetuneNode::prepareBlock, &RadioDetuneNode::process,
-          &RadioDetuneNode::init, &RadioDetuneNode::reset}},
-        {"Multipath",
-         {&RadioMultipathNode::prepareBlock, &RadioMultipathNode::process,
-          &RadioMultipathNode::init, &RadioMultipathNode::reset}},
-        {"Adjacent",
-         {&RadioAdjacentNode::prepareBlock, &RadioAdjacentNode::process,
-          &RadioAdjacentNode::init, &RadioAdjacentNode::reset}},
-        {"Input",
-         {&RadioInputNode::prepareBlock, &RadioInputNode::process,
-          &RadioInputNode::init, &RadioInputNode::reset}},
-        {"Tone",
-         {&RadioToneNode::prepareBlock, &RadioToneNode::process,
-          &RadioToneNode::init, &RadioToneNode::reset}},
-        {"Power",
-         {&RadioPowerNode::prepareBlock, &RadioPowerNode::process,
-          &RadioPowerNode::init, &RadioPowerNode::reset}},
-        {"Demod",
-         {&RadioDemodNode::prepareBlock, &RadioDemodNode::process,
-          &RadioDemodNode::init, &RadioDemodNode::reset}},
-        {"Speaker",
-         {&RadioSpeakerNode::prepareBlock, &RadioSpeakerNode::process,
-          &RadioSpeakerNode::init, &RadioSpeakerNode::reset}},
-        {"Room",
-         {&RadioRoomNode::prepareBlock, &RadioRoomNode::process,
-          &RadioRoomNode::init, &RadioRoomNode::reset}},
-        {"Noise",
-         {&RadioNoiseNode::prepareBlock, &RadioNoiseNode::process,
-          &RadioNoiseNode::init, &RadioNoiseNode::reset}},
-        {"Artifacts",
-         {&RadioArtifactNode::prepareBlock, &RadioArtifactNode::process,
-          &RadioArtifactNode::init, &RadioArtifactNode::reset}},
-        {"OutputClip",
-         {&RadioOutputClipNode::prepareBlock, &RadioOutputClipNode::process,
-          &RadioOutputClipNode::init, &RadioOutputClipNode::reset}},
+    std::array<ProgramPathStep, 8> programPathSteps{{
+        {StageId::Input, "Input", true, &RadioInputNode::process},
+        {StageId::FrontEnd, "FrontEnd", true, &RadioFrontEndNode::process},
+        {StageId::Multipath, "Multipath", true, &RadioMultipathNode::process},
+        {StageId::Detune, "Detune", true, &RadioDetuneNode::process},
+        {StageId::Adjacent, "Adjacent", true, &RadioAdjacentNode::process},
+        {StageId::Demod, "Demod", true, &RadioDemodNode::process},
+        {StageId::Tone, "Tone", true, &RadioToneNode::process},
+        {StageId::Power, "Power", true, &RadioPowerNode::process},
     }};
 
-    std::array<LifecycleStep, 14> resetFlow{{
-        {"Reception",
-         {&RadioReceptionNode::prepareBlock, &RadioReceptionNode::process,
-          &RadioReceptionNode::init, &RadioReceptionNode::reset}},
-        {"Detune",
-         {&RadioDetuneNode::prepareBlock, &RadioDetuneNode::process,
-          &RadioDetuneNode::init, &RadioDetuneNode::reset}},
-        {"Adjacent",
-         {&RadioAdjacentNode::prepareBlock, &RadioAdjacentNode::process,
-          &RadioAdjacentNode::init, &RadioAdjacentNode::reset}},
-        {"Artifacts",
-         {&RadioArtifactNode::prepareBlock, &RadioArtifactNode::process,
-          &RadioArtifactNode::init, &RadioArtifactNode::reset}},
-        {"Multipath",
-         {&RadioMultipathNode::prepareBlock, &RadioMultipathNode::process,
-          &RadioMultipathNode::init, &RadioMultipathNode::reset}},
-        {"Power",
-         {&RadioPowerNode::prepareBlock, &RadioPowerNode::process,
-          &RadioPowerNode::init, &RadioPowerNode::reset}},
-        {"Input",
-         {&RadioInputNode::prepareBlock, &RadioInputNode::process,
-          &RadioInputNode::init, &RadioInputNode::reset}},
-        {"Room",
-         {&RadioRoomNode::prepareBlock, &RadioRoomNode::process,
-          &RadioRoomNode::init, &RadioRoomNode::reset}},
-        {"FrontEnd",
-         {&RadioFrontEndNode::prepareBlock, &RadioFrontEndNode::process,
-          &RadioFrontEndNode::init, &RadioFrontEndNode::reset}},
-        {"Tone",
-         {&RadioToneNode::prepareBlock, &RadioToneNode::process,
-          &RadioToneNode::init, &RadioToneNode::reset}},
-        {"Demod",
-         {&RadioDemodNode::prepareBlock, &RadioDemodNode::process,
-          &RadioDemodNode::init, &RadioDemodNode::reset}},
-        {"Speaker",
-         {&RadioSpeakerNode::prepareBlock, &RadioSpeakerNode::process,
-          &RadioSpeakerNode::init, &RadioSpeakerNode::reset}},
-        {"Noise",
-         {&RadioNoiseNode::prepareBlock, &RadioNoiseNode::process,
-          &RadioNoiseNode::init, &RadioNoiseNode::reset}},
-        {"OutputClip",
-         {&RadioOutputClipNode::prepareBlock, &RadioOutputClipNode::process,
-          &RadioOutputClipNode::init, &RadioOutputClipNode::reset}},
+    std::array<PresentationPathStep, 5> presentationPathSteps{{
+        {StageId::Noise, "Noise", true, &RadioNoiseNode::process},
+        {StageId::Heterodyne, "Heterodyne", true, &RadioHeterodyneNode::process},
+        {StageId::Speaker, "Speaker", true, &RadioSpeakerNode::process},
+        {StageId::Room, "Room", true, &RadioRoomNode::process},
+        {StageId::OutputClip, "OutputClip", true, &RadioOutputClipNode::process},
     }};
 
-    PipelineStep* find(std::string_view name) {
-      for (auto& step : blockFlow) {
-        if (step.name == name) return &step;
-      }
-      for (auto& step : sampleFlow) {
-        if (step.name == name) return &step;
-      }
-      return nullptr;
+    BlockStep* findBlock(StageId id);
+    const BlockStep* findBlock(StageId id) const;
+    SampleControlStep* findSampleControl(StageId id);
+    const SampleControlStep* findSampleControl(StageId id) const;
+    ProgramPathStep* findProgramPath(StageId id);
+    const ProgramPathStep* findProgramPath(StageId id) const;
+    PresentationPathStep* findPresentationPath(StageId id);
+    const PresentationPathStep* findPresentationPath(StageId id) const;
+    bool isEnabled(StageId id) const;
+    void setEnabled(StageId id, bool value);
+  } graph;
+
+  struct RadioLifecycle {
+    std::array<ConfigureStep, 8> configureSteps{{
+        {StageId::Input, "Input", &RadioInputNode::init},
+        {StageId::Reception, "Reception", &RadioReceptionControlNode::init},
+        {StageId::FrontEnd, "FrontEnd", &RadioFrontEndNode::init},
+        {StageId::Adjacent, "Adjacent", &RadioAdjacentNode::init},
+        {StageId::Tone, "Tone", &RadioToneNode::init},
+        {StageId::Power, "Power", &RadioPowerNode::init},
+        {StageId::Speaker, "Speaker", &RadioSpeakerNode::init},
+        {StageId::OutputClip, "OutputClip", &RadioOutputClipNode::init},
+    }};
+
+    std::array<AllocateStep, 3> allocateSteps{{
+        {StageId::Detune, "Detune", &RadioDetuneNode::init},
+        {StageId::Multipath, "Multipath", &RadioMultipathNode::init},
+        {StageId::Room, "Room", &RadioRoomNode::init},
+    }};
+
+    std::array<InitializeDependentStateStep, 5> initializeDependentStateSteps{{
+        {StageId::Tuning, "Tuning", &RadioTuningNode::init},
+        {StageId::Demod, "Demod", &RadioDemodNode::init},
+        {StageId::Noise, "Noise", &RadioNoiseNode::init},
+        {StageId::InterferenceDerived, "InterferenceDerived",
+         &RadioInterferenceDerivedNode::init},
+        {StageId::Heterodyne, "Heterodyne", &RadioHeterodyneNode::init},
+    }};
+
+    std::array<ResetStep, 13> resetSteps{{
+        {StageId::Reception, "Reception", &RadioReceptionControlNode::reset},
+        {StageId::Detune, "Detune", &RadioDetuneNode::reset},
+        {StageId::Adjacent, "Adjacent", &RadioAdjacentNode::reset},
+        {StageId::Heterodyne, "Heterodyne", &RadioHeterodyneNode::reset},
+        {StageId::Multipath, "Multipath", &RadioMultipathNode::reset},
+        {StageId::Power, "Power", &RadioPowerNode::reset},
+        {StageId::Input, "Input", &RadioInputNode::reset},
+        {StageId::Room, "Room", &RadioRoomNode::reset},
+        {StageId::FrontEnd, "FrontEnd", &RadioFrontEndNode::reset},
+        {StageId::Tone, "Tone", &RadioToneNode::reset},
+        {StageId::Demod, "Demod", &RadioDemodNode::reset},
+        {StageId::Speaker, "Speaker", &RadioSpeakerNode::reset},
+        {StageId::Noise, "Noise", &RadioNoiseNode::reset},
+    }};
+
+    void configure(Radio1938& radio, RadioInitContext& initCtx) const;
+    void allocate(Radio1938& radio, RadioInitContext& initCtx) const;
+    void initializeDependentState(Radio1938& radio,
+                                  RadioInitContext& initCtx) const;
+    void resetRuntime(Radio1938& radio) const;
+  } lifecycle;
+
+  struct RadioDiagnostics {
+    bool anyClip = false;
+    bool powerClip = false;
+    bool speakerClip = false;
+    bool outputClip = false;
+
+    void reset() {
+      anyClip = false;
+      powerClip = false;
+      speakerClip = false;
+      outputClip = false;
     }
 
-    const PipelineStep* find(std::string_view name) const {
-      for (const auto& step : blockFlow) {
-        if (step.name == name) return &step;
-      }
-      for (const auto& step : sampleFlow) {
-        if (step.name == name) return &step;
-      }
-      return nullptr;
+    void markPowerClip() {
+      anyClip = true;
+      powerClip = true;
     }
 
-    bool isEnabled(std::string_view name) const {
-      const PipelineStep* step = find(name);
-      return step ? step->enabled : false;
+    void markSpeakerClip() {
+      anyClip = true;
+      speakerClip = true;
     }
 
-    void setEnabled(std::string_view name, bool value) {
-      if (PipelineStep* step = find(name)) step->enabled = value;
+    void markOutputClip() {
+      anyClip = true;
+      outputClip = true;
     }
-  } pipeline;
+  } diagnostics;
+
+  struct RadioRuntimeObservables {
+    float powerSag = 0.0f;
+
+    void reset() { powerSag = 0.0f; }
+  } runtime;
 
   struct GlobalTuning {
     float oversampleFactor = 2.0f;
@@ -911,45 +924,54 @@ struct Radio1938 {
     Saturator sat;
   } power;
 
-  struct ArtifactNodeState {
-    bool enableHeterodyneWhine = true;
-    float heteroPhase = 0.0f;
-    float heteroDriftPhase = 0.0f;
-    float heteroDriftHz = 0.06f;
-    float heteroGateStart = 0.015f;
-    float heteroGateEnd = 0.05f;
-    float heteroDepth = 0.00035f;
-    float noiseBase = 0.0f;
-    float crackleBase = 0.0f;
-    float lightningBase = 0.0f;
-    float motorBase = 0.0f;
-    float humBase = 0.0f;
+  struct HeterodyneNodeState {
+    bool enabled = true;
+    float phase = 0.0f;
+    float driftPhase = 0.0f;
+    float driftHz = 0.06f;
+    float gateStart = 0.015f;
+    float gateEnd = 0.05f;
+    float depth = 0.00035f;
     float heteroBaseScale = 0.0f;
     float noiseWeightRef = 0.015f;
     float heteroBaseScaleMin = 0.10f;
     float heteroBaseScaleMax = 0.85f;
-    float heteroGateHz = 180.0f;
-    float heteroMaxHz = 2500.0f;
-    float heteroDriftDepth = 0.12f;
+    float gateHz = 180.0f;
+    float maxHz = 2500.0f;
+    float driftDepth = 0.12f;
     float quietNoiseBase = 0.6f;
     float quietNoiseDepth = 0.4f;
-  } artifacts;
+  } heterodyne;
 
-  struct NoiseNodeState {
+  struct NoiseConfig {
     bool enableHumTone = true;
     float humHzDefault = 50.0f;
     float noiseWeightRef = 0.015f;
     float noiseWeightScaleMax = 2.0f;
     float humAmpScale = 0.0018f;
-    float crackleRateScale = 0.50f;
     float crackleAmpScale = 0.008f;
-    float lightningRateScale = 0.006f;
     float lightningAmpScale = 0.022f;
-    float motorRateScale = 0.06f;
     float motorAmpScale = 0.0045f;
+    float crackleRateScale = 0.50f;
+    float lightningRateScale = 0.006f;
+    float motorRateScale = 0.06f;
     float motorBuzzHz = 18.0f;
+  } noiseConfig;
+
+  struct NoiseDerivedState {
+    float baseNoiseAmp = 0.0f;
+    float baseCrackleAmp = 0.0f;
+    float baseLightningAmp = 0.0f;
+    float baseMotorAmp = 0.0f;
+    float baseHumAmp = 0.0f;
+    float crackleRate = 0.0f;
+    float lightningRate = 0.0f;
+    float motorRate = 0.0f;
+  } noiseDerived;
+
+  struct NoiseRuntimeState {
     NoiseHum hum;
-  } noise;
+  } noiseRuntime;
 
   struct SpeakerStageState {
     float osPrev = 0.0f;

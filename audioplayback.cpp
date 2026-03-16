@@ -793,8 +793,7 @@ void dataCallback(ma_device* device, void* output, const void*,
       state->radio1938.makeupGain =
           state->radioMakeupGain.load(std::memory_order_relaxed);
       state->radio1938.process(out, static_cast<uint32_t>(framesRead));
-      bool clipped = state->radio1938.clipTriggered;
-      state->radio1938.clipTriggered = false;
+      bool clipped = state->radio1938.diagnostics.anyClip;
       uint32_t hold =
           state->radioClipHold.load(std::memory_order_relaxed);
       if (clipped) {
@@ -1001,8 +1000,7 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->radio1938.makeupGain =
         state->radioMakeupGain.load(std::memory_order_relaxed);
     state->radio1938.process(audioStart, static_cast<uint32_t>(framesRead));
-    bool clipped = state->radio1938.clipTriggered;
-    state->radio1938.clipTriggered = false;
+    bool clipped = state->radio1938.diagnostics.anyClip;
     uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
     if (clipped) {
       hold = kRadioClipHoldFrames;
