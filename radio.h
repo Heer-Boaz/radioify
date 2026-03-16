@@ -157,14 +157,20 @@ struct SpeakerSim {
   Biquad boxRes;
   Biquad boxRes2;
   Biquad cabNasal;
+  Biquad panelRes;
   Biquad coneDip;
   Biquad paperPeak;
   Biquad hornPeak;
+  Biquad backWaveHp;
+  Biquad backWaveLp;
   float drive = 1.05f;
   float mix = 0.24f;
   float limit = 0.93f;
   float asymBias = 0.028f;
+  float backWaveMix = 0.10f;
   bool clipTriggered = false;
+  int backWaveIndex = 0;
+  std::vector<float> backWaveBuf;
 
   void init(float fs);
   void reset();

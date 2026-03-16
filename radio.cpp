@@ -532,25 +532,47 @@ void SpeakerSim::init(float fs) {
   boxRes.setPeaking(fs, 155.0f, 0.68f, 1.15f);
   boxRes2.setPeaking(fs, 430.0f, 0.82f, 0.45f);
   cabNasal.setPeaking(fs, 820.0f, 1.10f, -0.65f);
+  panelRes.setPeaking(fs, 610.0f, 1.15f, 0.30f);
   hornPeak.setPeaking(fs, 1680.0f, 0.98f, 0.95f);
   paperPeak.setPeaking(fs, 2280.0f, 1.25f, 0.40f);
   coneDip.setPeaking(fs, 3180.0f, 0.95f, -1.75f);
+  backWaveHp.setHighpass(fs, 165.0f, 0.707f);
+  backWaveLp.setLowpass(fs, 920.0f, 0.707f);
+  int delaySamples =
+      std::max(2, static_cast<int>(std::lround(fs * 0.0009f)));
+  backWaveBuf.assign(static_cast<size_t>(delaySamples), 0.0f);
+  backWaveIndex = 0;
 }
 
 void SpeakerSim::reset() {
   boxRes.reset();
   boxRes2.reset();
   cabNasal.reset();
+  panelRes.reset();
   hornPeak.reset();
   paperPeak.reset();
   coneDip.reset();
+  backWaveHp.reset();
+  backWaveLp.reset();
+  backWaveIndex = 0;
+  std::fill(backWaveBuf.begin(), backWaveBuf.end(), 0.0f);
   clipTriggered = false;
 }
 
 float SpeakerSim::process(float x) {
-  float y = boxRes.process(x);
-  y = boxRes2.process(y);
+  float cone = boxRes.process(x);
+  cone = boxRes2.process(cone);
+  float y = cone;
+  if (!backWaveBuf.empty()) {
+    float rear = backWaveBuf[static_cast<size_t>(backWaveIndex)];
+    backWaveBuf[static_cast<size_t>(backWaveIndex)] = cone;
+    backWaveIndex = (backWaveIndex + 1) % static_cast<int>(backWaveBuf.size());
+    rear = backWaveHp.process(rear);
+    rear = backWaveLp.process(rear);
+    y -= rear * backWaveMix;
+  }
   y = cabNasal.process(y);
+  y = panelRes.process(y);
   y = hornPeak.process(y);
   y = paperPeak.process(y);
   y = coneDip.process(y);
