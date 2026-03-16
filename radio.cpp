@@ -511,6 +511,20 @@ float AMDetector::process(float x) {
   }
   dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * env;
   float out = (env - dcEnv) * detGain;
+  float overloadT =
+      clampf((detectorIn - 0.18f) / 0.24f + avcImpulse * 1.8f, 0.0f, 1.0f);
+  float negLimit = 0.34f - 0.12f * overloadT - 0.04f * mistuneT;
+  float posLimit = 0.92f - 0.06f * overloadT;
+  negLimit = std::max(0.12f, negLimit);
+  posLimit = std::max(negLimit + 0.15f, posLimit);
+  if (out < -negLimit) {
+    float excess = -out - negLimit;
+    out = -(negLimit + excess / (1.0f + 4.0f * overloadT));
+  }
+  if (out > posLimit) {
+    float excess = out - posLimit;
+    out = posLimit + excess / (1.0f + 1.5f * overloadT);
+  }
   return out;
 }
 
@@ -578,6 +592,8 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   midBoost.setPeaking(sampleRate, 1250.0f, 0.8f, 1.4f);
   lowMidDip.setPeaking(sampleRate, 340.0f, 1.0f, -1.0f);
   presBoost.setPeaking(sampleRate, 3300.0f, 0.9f, -0.8f);
+  toneLowLp.setLowpass(sampleRate, 430.0f, 0.707f);
+  toneHighHp.setHighpass(sampleRate, 1750.0f, 0.707f);
 
   comp.setFs(sampleRate);
   comp.thresholdDb = -12.0f;
@@ -606,6 +622,10 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   float autoGainRelMs = 1200.0f;
   autoGainAtk = std::exp(-1.0f / (sampleRate * (autoGainAtkMs / 1000.0f)));
   autoGainRel = std::exp(-1.0f / (sampleRate * (autoGainRelMs / 1000.0f)));
+  float toneAtkMs = 22.0f;
+  float toneRelMs = 320.0f;
+  toneAtk = std::exp(-1.0f / (sampleRate * (toneAtkMs / 1000.0f)));
+  toneRel = std::exp(-1.0f / (sampleRate * (toneRelMs / 1000.0f)));
 
   sat.drive = 1.12f;
   sat.mix = 0.24f;
@@ -718,6 +738,7 @@ void Radio1938::reset() {
   powerEnv = 0.0f;
   powerPhase = 0.0f;
   powerPhase2 = 0.0f;
+  toneEnv = 0.0f;
   autoEnv = 0.0f;
   autoGainDb = 0.0f;
   roomIndex = 0;
@@ -749,6 +770,8 @@ void Radio1938::reset() {
   midBoost.reset();
   lowMidDip.reset();
   presBoost.reset();
+  toneLowLp.reset();
+  toneHighHp.reset();
   comp.reset();
   am.reset();
   speaker.reset();
@@ -965,6 +988,20 @@ void Radio1938::process(float* samples, uint32_t frames) {
       y = am.process(y);
       y = diodeColor(y, 0.004f);
     }
+    float toneLevel = std::fabs(y);
+    if (toneLevel > toneEnv) {
+      toneEnv = toneAtk * toneEnv + (1.0f - toneAtk) * toneLevel;
+    } else {
+      toneEnv = toneRel * toneEnv + (1.0f - toneRel) * toneLevel;
+    }
+    float loudT = clampf((toneEnv - 0.010f) / 0.11f, 0.0f, 1.0f);
+    float lowBand = toneLowLp.process(y);
+    float highBand = toneHighHp.process(y);
+    float midBand = y - lowBand - highBand;
+    float lowGain = 0.80f + 0.18f * loudT;
+    float midGain = 0.90f + 0.18f * loudT;
+    float highGain = 0.46f + 0.34f * loudT;
+    y = lowBand * lowGain + midBand * midGain + highBand * highGain;
     y = midBoost.process(y);
     y = lowMidDip.process(y);
     y = presBoost.process(y);

@@ -273,6 +273,9 @@ struct Radio1938 {
   float powerPhase2 = 0.0f;
   float powerRippleDepth = 0.010f;
   float powerBiasDepth = 0.006f;
+  float toneEnv = 0.0f;
+  float toneAtk = 0.0f;
+  float toneRel = 0.0f;
 
   float ifTiltMix = 0.10f;
   float roomMix = 0.025f;
@@ -317,6 +320,8 @@ struct Radio1938 {
   Biquad midBoost;
   Biquad lowMidDip;
   Biquad presBoost;
+  Biquad toneLowLp;
+  Biquad toneHighHp;
   Compressor comp;
   Saturator sat;
   AMDetector am;
