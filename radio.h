@@ -152,36 +152,28 @@ struct AMDetectorSampleInput {
 
 struct AMDetector {
   float fs = 48000.0f;
+  float osFs = 192000.0f;
+  int osFactor = 4;
   float bwHz = 4800.0f;
   float carrierHz = 12000.0f;
   float tuneOffsetHz = 0.0f;
   float modIndex = 0.80f;
   float carrierGain = 0.40f;
   float diodeDrop = 0.008f;
-  float detGain = 2.70f;
-
-  enum class Mode {
-    Envelope,
-    Iq,
-  };
-  Mode mode = Mode::Iq;
+  float detGain = 2.35f;
 
   std::mt19937 rng{0x1942u};
   std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
 
-  Biquad ifHpIn;
-  Biquad ifHpOut;
-  Biquad ifLpIn;
-  Biquad ifLpOut;
-  Biquad detAudioLpIn;
-  Biquad detAudioLpOut;
-  Biquad detAudioRippleLp;
-  Biquad detQuadratureLpIn;
-  Biquad detQuadratureLpOut;
-  Biquad detQuadratureRippleLp;
+  Biquad ifHp1;
+  Biquad ifHp2;
+  Biquad ifLp1;
+  Biquad ifLp2;
+  Biquad audioLp1;
+  Biquad audioLp2;
 
   float phase = 0.0f;
-  float rxPhase = 0.0f;
+  float phaseStep = 0.0f;
   float agcEnv = 0.0f;
   float agcGainDb = 0.0f;
   float agcTargetDb = -18.0f;
@@ -192,7 +184,7 @@ struct AMDetector {
   float agcGainAtk = 0.0f;
   float agcGainRel = 0.0f;
 
-  float detectorCap = 0.0f;
+  float envelopeCap = 0.0f;
   float detChargeCoeff = 0.0f;
   float detReleaseCoeff = 0.0f;
   float avcCap = 0.0f;
@@ -206,8 +198,8 @@ struct AMDetector {
   float agcReleaseMs = 2400.0f;
   float agcGainAttackMs = 70.0f;
   float agcGainReleaseMs = 3100.0f;
-  float detChargeMs = 0.18f;
-  float detReleaseMs = 1.60f;
+  float detChargeMs = 0.10f;
+  float detReleaseMs = 2.20f;
   float avcChargeMs = 24.0f;
   float avcReleaseMs = 2600.0f;
   float dcMs = 450.0f;
@@ -224,8 +216,8 @@ struct AMDetector {
   float ifSkewNegativeExpand = 0.10f;
   float ifSpanClampMinHz = 1200.0f;
   float ifSpanClampMaxFraction = 0.22f;
-  float detLpScale = 1.15f;
-  float detLpMinHz = 2800.0f;
+  float detLpScale = 1.05f;
+  float detLpMinHz = 2400.0f;
   float mistuneNormDenomScale = 0.5f;
   float detectorCompression = 0.85f;
   float detReleaseMistuneMix = 0.45f;
@@ -234,9 +226,6 @@ struct AMDetector {
   float consonantPullScale = 8.0f;
   float consonantPullMaxDb = 1.2f;
   float mistuneGainPenaltyDb = 0.8f;
-  float iqLevelComp = 2.0f;
-  float envelopeRippleBase = 0.08f;
-  float envelopeRippleMistune = 0.12f;
   float overloadThreshold = 0.18f;
   float overloadRange = 0.24f;
   float overloadImpulseScale = 1.8f;

@@ -301,7 +301,9 @@ float NoiseHum::process(const NoiseInput& in) {
 
 void AMDetector::init(float newFs, float newBw, float newTuneHz) {
   fs = newFs;
+  osFs = fs * static_cast<float>(osFactor);
   carrierHz = std::min(initCarrierHz, fs * initCarrierMaxFraction);
+  phaseStep = kRadioTwoPi * (carrierHz / osFs);
   tuneOffsetHz = newTuneHz;
   setBandwidth(newBw, newTuneHz);
 
@@ -310,10 +312,10 @@ void AMDetector::init(float newFs, float newBw, float newTuneHz) {
   agcGainAtk = std::exp(-1.0f / (fs * (agcGainAttackMs / 1000.0f)));
   agcGainRel = std::exp(-1.0f / (fs * (agcGainReleaseMs / 1000.0f)));
 
-  detChargeCoeff = std::exp(-1.0f / (fs * (detChargeMs / 1000.0f)));
-  detReleaseCoeff = std::exp(-1.0f / (fs * (detReleaseMs / 1000.0f)));
-  avcChargeCoeff = std::exp(-1.0f / (fs * (avcChargeMs / 1000.0f)));
-  avcReleaseCoeff = std::exp(-1.0f / (fs * (avcReleaseMs / 1000.0f)));
+  detChargeCoeff = std::exp(-1.0f / (osFs * (detChargeMs / 1000.0f)));
+  detReleaseCoeff = std::exp(-1.0f / (osFs * (detReleaseMs / 1000.0f)));
+  avcChargeCoeff = std::exp(-1.0f / (osFs * (avcChargeMs / 1000.0f)));
+  avcReleaseCoeff = std::exp(-1.0f / (osFs * (avcReleaseMs / 1000.0f)));
 
   dcCoeff = std::exp(-1.0f / (fs * (dcMs / 1000.0f)));
 
@@ -322,6 +324,8 @@ void AMDetector::init(float newFs, float newBw, float newTuneHz) {
 
 void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   bwHz = newBw;
+  osFs = fs * static_cast<float>(osFactor);
+  phaseStep = kRadioTwoPi * (carrierHz / osFs);
   float halfBw = std::clamp(bwHz * ifHalfBwScale, ifHalfBwMinHz,
                             fs * ifHalfBwMaxFraction);
   tuneOffsetHz = std::clamp(newTuneHz, -halfBw, halfBw);
@@ -339,38 +343,29 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   float ifLow = std::clamp(ifCenter - lowSpan, ifCenterMinHz, fs * ifGuardFraction);
   float ifHigh =
       std::clamp(ifCenter + highSpan, ifLow + ifSpanMinHz, fs * ifMaxFraction);
-  ifHpIn.setHighpass(fs, ifLow, kRadioBiquadQ);
-  ifHpOut.setHighpass(fs, ifLow, kRadioBiquadQ);
-  ifLpIn.setLowpass(fs, ifHigh, kRadioBiquadQ);
-  ifLpOut.setLowpass(fs, ifHigh, kRadioBiquadQ);
+  ifHp1.setHighpass(osFs, ifLow, kRadioBiquadQ);
+  ifHp2.setHighpass(osFs, ifLow, kRadioBiquadQ);
+  ifLp1.setLowpass(osFs, ifHigh, kRadioBiquadQ);
+  ifLp2.setLowpass(osFs, ifHigh, kRadioBiquadQ);
 
   float detLpHz = std::clamp(bwHz * detLpScale, detLpMinHz, fs * 0.45f);
-  detAudioLpIn.setLowpass(fs, detLpHz, kRadioBiquadQ);
-  detAudioLpOut.setLowpass(fs, detLpHz, kRadioBiquadQ);
-  detAudioRippleLp.setLowpass(fs, detLpHz, kRadioBiquadQ);
-  detQuadratureLpIn.setLowpass(fs, detLpHz, kRadioBiquadQ);
-  detQuadratureLpOut.setLowpass(fs, detLpHz, kRadioBiquadQ);
-  detQuadratureRippleLp.setLowpass(fs, detLpHz, kRadioBiquadQ);
+  audioLp1.setLowpass(fs, detLpHz, kRadioBiquadQ);
+  audioLp2.setLowpass(fs, detLpHz, kRadioBiquadQ);
 }
 
 void AMDetector::reset() {
   phase = 0.0f;
-  rxPhase = 0.0f;
   agcEnv = 0.0f;
   agcGainDb = 0.0f;
-  detectorCap = 0.0f;
+  envelopeCap = 0.0f;
   avcCap = 0.0f;
   dcEnv = 0.0f;
-  ifHpIn.reset();
-  ifHpOut.reset();
-  ifLpIn.reset();
-  ifLpOut.reset();
-  detAudioLpIn.reset();
-  detAudioLpOut.reset();
-  detAudioRippleLp.reset();
-  detQuadratureLpIn.reset();
-  detQuadratureLpOut.reset();
-  detQuadratureRippleLp.reset();
+  ifHp1.reset();
+  ifHp2.reset();
+  ifLp1.reset();
+  ifLp2.reset();
+  audioLp1.reset();
+  audioLp2.reset();
 }
 
 float AMDetector::process(const AMDetectorSampleInput& in) {
@@ -378,47 +373,58 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
   float mistuneT = clampf(std::fabs(tuneOffsetHz) /
                               std::max(1.0f, bwHz * mistuneNormDenomScale),
                           0.0f, 1.0f);
-  phase += kRadioTwoPi * (carrierHz / fs);
-  if (phase > kRadioTwoPi) phase -= kRadioTwoPi;
-  float rxCarrierHz =
-      std::clamp(carrierHz + tuneOffsetHz, ifCenterMinHz, fs * ifGuardFraction);
-  rxPhase += kRadioTwoPi * (rxCarrierHz / fs);
-  if (rxPhase > kRadioTwoPi) rxPhase -= kRadioTwoPi;
-  float carrier = std::sin(phase);
-  float ifSample = (1.0f + mod) * carrier * carrierGain;
-  if (in.ifNoiseAmp > 0.0f) {
-    ifSample += dist(rng) * in.ifNoiseAmp;
+  float agcLin = db2lin(agcGainDb);
+  float envAccum = 0.0f;
+  float avcImpulsePeak = 0.0f;
+
+  for (int i = 0; i < osFactor; ++i) {
+    phase += phaseStep;
+    if (phase > kRadioTwoPi) phase -= kRadioTwoPi;
+
+    float carrier = std::sin(phase);
+    float ifSample = (1.0f + mod) * carrier * carrierGain;
+    if (in.ifNoiseAmp > 0.0f) {
+      ifSample += dist(rng) * in.ifNoiseAmp;
+    }
+
+    ifSample = ifHp1.process(ifSample);
+    ifSample = ifHp2.process(ifSample);
+    ifSample = ifLp1.process(ifSample);
+    ifSample = ifLp2.process(ifSample);
+
+    float sensed = ifSample * agcLin;
+    float rectified = std::max(0.0f, sensed - diodeDrop);
+    rectified = rectified / (1.0f + detectorCompression * rectified);
+
+    float detRelease = detReleaseCoeff +
+                       (1.0f - detReleaseCoeff) *
+                           (detReleaseMistuneMix * mistuneT);
+    if (rectified > envelopeCap) {
+      envelopeCap =
+          detChargeCoeff * envelopeCap + (1.0f - detChargeCoeff) * rectified;
+    } else {
+      envelopeCap =
+          detRelease * envelopeCap + (1.0f - detRelease) * rectified;
+    }
+
+    float avcImpulse = std::max(0.0f, rectified - envelopeCap);
+    avcImpulsePeak = std::max(avcImpulsePeak, avcImpulse);
+
+    float avcSense =
+        envelopeCap + avcImpulse * (avcImpulseBase + avcImpulseMistune * mistuneT);
+    if (avcSense > avcCap) {
+      avcCap = avcChargeCoeff * avcCap + (1.0f - avcChargeCoeff) * avcSense;
+    } else {
+      avcCap = avcReleaseCoeff * avcCap + (1.0f - avcReleaseCoeff) * avcSense;
+    }
+
+    envAccum += envelopeCap;
   }
 
-  ifSample = ifHpIn.process(ifSample);
-  ifSample = ifHpOut.process(ifSample);
-  ifSample = ifLpIn.process(ifSample);
-  ifSample = ifLpOut.process(ifSample);
-
-  float ifAgc = ifSample * db2lin(agcGainDb);
-  float rectified = std::max(0.0f, ifAgc - diodeDrop);
-  float detectorIn = rectified / (1.0f + detectorCompression * rectified);
-  float detRelease =
-      detReleaseCoeff + (1.0f - detReleaseCoeff) * (detReleaseMistuneMix * mistuneT);
-  if (detectorIn > detectorCap) {
-    detectorCap =
-        detChargeCoeff * detectorCap + (1.0f - detChargeCoeff) * detectorIn;
-  } else {
-    detectorCap = detRelease * detectorCap + (1.0f - detRelease) * detectorIn;
-  }
-
-  float avcImpulse = std::max(0.0f, detectorIn - detectorCap);
-  float avcSense =
-      detectorCap + avcImpulse * (avcImpulseBase + avcImpulseMistune * mistuneT);
-  if (avcSense > avcCap) {
-    avcCap = avcChargeCoeff * avcCap + (1.0f - avcChargeCoeff) * avcSense;
-  } else {
-    avcCap = avcReleaseCoeff * avcCap + (1.0f - avcReleaseCoeff) * avcSense;
-  }
   agcEnv = avcCap;
   float avcDb = lin2db(avcCap);
   float consonantPullDb =
-      clampf(avcImpulse * consonantPullScale, 0.0f, consonantPullMaxDb);
+      clampf(avcImpulsePeak * consonantPullScale, 0.0f, consonantPullMaxDb);
   float targetGainDb =
       std::clamp(agcTargetDb - avcDb - consonantPullDb -
                      mistuneGainPenaltyDb * mistuneT,
@@ -429,36 +435,14 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
     agcGainDb = agcGainRel * agcGainDb + (1.0f - agcGainRel) * targetGainDb;
   }
 
-  float env = 0.0f;
-  if (mode == Mode::Envelope) {
-    float audio = detectorCap;
-    dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * audio;
-    env = audio - dcEnv;
-    env = detAudioLpIn.process(env);
-    env = detAudioLpOut.process(env);
-    float detectorRipple = detAudioRippleLp.process(rectified - detectorCap);
-    env += detectorRipple *
-           (envelopeRippleBase + envelopeRippleMistune * mistuneT);
-    return env * detGain;
-  } else {
-    float carrierI = std::sin(rxPhase);
-    float carrierQ = std::cos(rxPhase);
-    float mixI = ifAgc * carrierI;
-    float mixQ = ifAgc * carrierQ;
-    float i = detAudioLpIn.process(mixI);
-    i = detAudioLpOut.process(i);
-    float q = detQuadratureLpIn.process(mixQ);
-    q = detQuadratureLpOut.process(q);
-    env = std::sqrt(i * i + q * q);
-    env *= iqLevelComp;  // Make up I/Q level loss.
-    if (diodeDrop > 0.0f) {
-      env = std::max(0.0f, env - diodeDrop);
-    }
-  }
+  float env = envAccum / static_cast<float>(osFactor);
   dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * env;
-  float out = (env - dcEnv) * detGain;
-  float overloadT = clampf((detectorIn - overloadThreshold) / overloadRange +
-                               avcImpulse * overloadImpulseScale,
+  float out = env - dcEnv;
+  out = audioLp1.process(out);
+  out = audioLp2.process(out);
+  out *= detGain;
+  float overloadT = clampf((env - overloadThreshold) / overloadRange +
+                               avcImpulsePeak * overloadImpulseScale,
                            0.0f, 1.0f);
   float negLimit = negLimitBase - negLimitOverloadDepth * overloadT -
                    negLimitMistuneDepth * mistuneT;
@@ -1583,11 +1567,6 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
 
   radio.adjacent.mix = 0.008f;
 
-  radio.demod.am.mode = AMDetector::Mode::Iq;
-  radio.demod.am.initCarrierHz = 9000.0f;
-  radio.demod.am.initCarrierMaxFraction = 0.24f;
-  radio.demod.am.envelopeRippleBase = 0.08f;
-  radio.demod.am.envelopeRippleMistune = 0.12f;
   radio.demod.diodeColorDrop = 0.008f;
 
   radio.tone.midBoostGainDb = 0.45f;
