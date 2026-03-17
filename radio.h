@@ -170,8 +170,8 @@ struct AMDetector {
   Biquad ifHp2;
   Biquad ifLp1;
   Biquad ifLp2;
+  Biquad audioHp;
   Biquad audioLp1;
-  Biquad audioLp2;
 
   float phase = 0.0f;
   float phaseStep = 0.0f;
@@ -200,7 +200,7 @@ struct AMDetector {
   float agcGainAttackMs = 70.0f;
   float agcGainReleaseMs = 3100.0f;
   float detChargeMs = 0.10f;
-  float detReleaseMs = 2.20f;
+  float detReleaseMs = 1.20f;
   float avcChargeMs = 24.0f;
   float avcReleaseMs = 2600.0f;
   float dcMs = 450.0f;
@@ -217,6 +217,7 @@ struct AMDetector {
   float ifSkewNegativeExpand = 0.10f;
   float ifSpanClampMinHz = 1200.0f;
   float ifSpanClampMaxFraction = 0.22f;
+  float audioHpHz = 220.0f;
   float detLpScale = 1.05f;
   float detLpMinHz = 2400.0f;
   float mistuneNormDenomScale = 0.5f;

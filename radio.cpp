@@ -349,8 +349,8 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   ifLp2.setLowpass(osFs, ifHigh, kRadioBiquadQ);
 
   float detLpHz = std::clamp(bwHz * detLpScale, detLpMinHz, fs * 0.45f);
+  audioHp.setHighpass(fs, audioHpHz, kRadioBiquadQ);
   audioLp1.setLowpass(fs, detLpHz, kRadioBiquadQ);
-  audioLp2.setLowpass(fs, detLpHz, kRadioBiquadQ);
 }
 
 void AMDetector::reset() {
@@ -364,8 +364,8 @@ void AMDetector::reset() {
   ifHp2.reset();
   ifLp1.reset();
   ifLp2.reset();
+  audioHp.reset();
   audioLp1.reset();
-  audioLp2.reset();
 }
 
 float AMDetector::process(const AMDetectorSampleInput& in) {
@@ -438,8 +438,8 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
   float env = envAccum / static_cast<float>(osFactor);
   dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * env;
   float out = env - dcEnv;
+  out = audioHp.process(out);
   out = audioLp1.process(out);
-  out = audioLp2.process(out);
   out *= detGain * detectorMakeupGain;
   float overloadT = clampf((env - overloadThreshold) / overloadRange +
                                avcImpulsePeak * overloadImpulseScale,
@@ -1569,17 +1569,18 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
 
   radio.demod.diodeColorDrop = 0.008f;
 
-  radio.tone.midBoostGainDb = 0.45f;
+  radio.tone.midBoostHz = 1400.0f;
+  radio.tone.midBoostGainDb = 1.2f;
   radio.tone.lowMidDipGainDb = -0.5f;
-  radio.tone.presBoostGainDb = -2.4f;
+  radio.tone.presBoostGainDb = -1.5f;
   radio.tone.compThresholdDb = -6.0f;
   radio.tone.compRatio = 1.0f;
   radio.tone.lowBaseGain = 0.76f;
   radio.tone.lowGainDepth = 0.10f;
   radio.tone.midBaseGain = 0.86f;
   radio.tone.midGainDepth = 0.10f;
-  radio.tone.highBaseGain = 0.24f;
-  radio.tone.highGainDepth = 0.10f;
+  radio.tone.highBaseGain = 0.30f;
+  radio.tone.highGainDepth = 0.12f;
 
   radio.power.satMix = 0.21f;
 
