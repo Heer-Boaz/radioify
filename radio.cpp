@@ -1349,8 +1349,15 @@ float RadioRoomNode::process(Radio1938& radio,
 
 void RadioFinalLimiterNode::init(Radio1938& radio, RadioInitContext&) {
   auto& limiter = radio.finalLimiter;
+  limiter.attackCoeff =
+      std::exp(-1.0f / (radio.sampleRate * (limiter.attackMs / 1000.0f)));
   limiter.releaseCoeff =
       std::exp(-1.0f / (radio.sampleRate * (limiter.releaseMs / 1000.0f)));
+  limiter.delaySamples = std::max(
+      1, static_cast<int>(std::lround(
+             radio.sampleRate * (limiter.lookaheadMs / 1000.0f))));
+  limiter.delayBuf.assign(static_cast<size_t>(limiter.delaySamples), 0.0f);
+  limiter.delayWriteIndex = 0;
   float osFs = radio.sampleRate * radio.globals.oversampleFactor;
   float osCut = radio.sampleRate * radio.globals.oversampleCutoffFraction;
   limiter.osLpIn.setLowpass(osFs, osCut, kRadioBiquadQ);
@@ -1360,8 +1367,11 @@ void RadioFinalLimiterNode::init(Radio1938& radio, RadioInitContext&) {
 void RadioFinalLimiterNode::reset(Radio1938& radio) {
   auto& limiter = radio.finalLimiter;
   limiter.gain = 1.0f;
+  limiter.targetGain = 1.0f;
   limiter.osPrev = 0.0f;
-  limiter.osObservedPeak = 0.0f;
+  limiter.observedPeak = 0.0f;
+  limiter.delayWriteIndex = 0;
+  std::fill(limiter.delayBuf.begin(), limiter.delayBuf.end(), 0.0f);
   limiter.osLpIn.reset();
   limiter.osLpOut.reset();
 }
@@ -1383,19 +1393,29 @@ float RadioFinalLimiterNode::process(Radio1938& radio,
   peak = std::max(peak, std::fabs(s1));
 
   limiter.osPrev = y;
-  limiter.osObservedPeak = peak;
+  limiter.observedPeak = peak;
 
-  float targetGain = 1.0f;
-  if (peak > limiter.threshold && peak > 1e-9f) {
-    targetGain = limiter.threshold / peak;
+  limiter.targetGain = 1.0f;
+  float scaledPeak = peak * limiter.finalGain;
+  if (scaledPeak > limiter.threshold && scaledPeak > 1e-9f) {
+    limiter.targetGain = limiter.threshold / scaledPeak;
   }
 
-  if (targetGain < limiter.gain) {
-    limiter.gain = targetGain;
+  if (limiter.targetGain < limiter.gain) {
+    limiter.gain = limiter.attackCoeff * limiter.gain +
+                   (1.0f - limiter.attackCoeff) * limiter.targetGain;
   } else {
     limiter.gain =
         limiter.releaseCoeff * limiter.gain +
-        (1.0f - limiter.releaseCoeff) * targetGain;
+        (1.0f - limiter.releaseCoeff) * limiter.targetGain;
+  }
+
+  float delayed = y;
+  if (!limiter.delayBuf.empty()) {
+    delayed = limiter.delayBuf[static_cast<size_t>(limiter.delayWriteIndex)];
+    limiter.delayBuf[static_cast<size_t>(limiter.delayWriteIndex)] = y;
+    limiter.delayWriteIndex =
+        (limiter.delayWriteIndex + 1) % static_cast<int>(limiter.delayBuf.size());
   }
 
   radio.diagnostics.finalLimiterPeak =
@@ -1406,7 +1426,7 @@ float RadioFinalLimiterNode::process(Radio1938& radio,
     radio.diagnostics.finalLimiterActive = true;
   }
 
-  return y * limiter.gain;
+  return delayed * limiter.gain * limiter.finalGain;
 }
 
 void RadioOutputClipNode::init(Radio1938& radio, RadioInitContext&) {
@@ -1633,6 +1653,8 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
 
   radio.adjacent.mix = 0.008f;
 
+  radio.demod.am.detectorMakeupGain = 7.0f;
+  radio.demod.am.detReleaseMs = 0.35f;
   radio.demod.diodeColorDrop = 0.008f;
 
   radio.tone.midBoostHz = 1400.0f;
@@ -1672,6 +1694,9 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.room.mix = 0.0f;
   radio.room.enableTail = false;
   radio.room.tailMix = 0.0f;
+
+  radio.finalLimiter.threshold = 0.92f;
+  radio.finalLimiter.finalGain = 1.25f;
 }
 
 std::string_view Radio1938::presetName(Preset preset) {

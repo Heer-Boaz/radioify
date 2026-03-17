@@ -1026,13 +1026,21 @@ struct Radio1938 {
   struct FinalLimiterNodeState {
     bool enabled = true;
     float threshold = 0.94f;
-    float releaseMs = 160.0f;
+    float lookaheadMs = 2.0f;
+    int delaySamples = 0;
+    std::vector<float> delayBuf;
+    int delayWriteIndex = 0;
+    float attackMs = 0.25f;
+    float releaseMs = 120.0f;
+    float attackCoeff = 0.0f;
     float gain = 1.0f;
+    float targetGain = 1.0f;
+    float finalGain = 1.0f;
     float releaseCoeff = 0.0f;
     float osPrev = 0.0f;
     Biquad osLpIn;
     Biquad osLpOut;
-    float osObservedPeak = 0.0f;
+    float observedPeak = 0.0f;
   } finalLimiter;
 
   struct OutputNodeState {
