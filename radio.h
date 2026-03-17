@@ -159,8 +159,9 @@ struct AMDetector {
   float tuneOffsetHz = 0.0f;
   float modIndex = 0.80f;
   float carrierGain = 0.40f;
-  float diodeDrop = 0.008f;
-  float detGain = 2.35f;
+  float diodeDrop = 0.0045f;
+  float detGain = 2.70f;
+  float detectorMakeupGain = 2.1f;
 
   std::mt19937 rng{0x1942u};
   std::uniform_real_distribution<float> dist{-1.0f, 1.0f};

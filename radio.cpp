@@ -440,7 +440,7 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
   float out = env - dcEnv;
   out = audioLp1.process(out);
   out = audioLp2.process(out);
-  out *= detGain;
+  out *= detGain * detectorMakeupGain;
   float overloadT = clampf((env - overloadThreshold) / overloadRange +
                                avcImpulsePeak * overloadImpulseScale,
                            0.0f, 1.0f);
