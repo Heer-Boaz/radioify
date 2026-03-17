@@ -134,6 +134,7 @@ bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
                                   const std::function<void(float)>& progressCallback,
                                   std::string* error);
 bool audioIsRadioClipping();
+bool audioIsRadioLimiting();
 std::string audioGetWarning();
 bool audioIs50HzEnabled();
 bool audioSupports50HzToggle();

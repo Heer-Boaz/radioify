@@ -315,6 +315,7 @@ enum class StageId : uint8_t {
   Heterodyne,
   Speaker,
   Room,
+  FinalLimiter,
   OutputClip,
 };
 
@@ -473,6 +474,14 @@ struct RadioRoomNode {
                        const RadioSampleContext& ctx);
 };
 
+struct RadioFinalLimiterNode {
+  static void init(Radio1938& radio, RadioInitContext& initCtx);
+  static void reset(Radio1938& radio);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
+};
+
 struct RadioOutputClipNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
@@ -576,11 +585,13 @@ struct Radio1938 {
         {StageId::Power, "Power", true, &RadioPowerNode::process},
     }};
 
-    std::array<PresentationPathStep, 5> presentationPathSteps{{
+    std::array<PresentationPathStep, 6> presentationPathSteps{{
         {StageId::Noise, "Noise", true, &RadioNoiseNode::process},
         {StageId::Heterodyne, "Heterodyne", true, &RadioHeterodyneNode::process},
         {StageId::Speaker, "Speaker", true, &RadioSpeakerNode::process},
         {StageId::Room, "Room", true, &RadioRoomNode::process},
+        {StageId::FinalLimiter, "FinalLimiter", true,
+         &RadioFinalLimiterNode::process},
         {StageId::OutputClip, "OutputClip", true, &RadioOutputClipNode::process},
     }};
 
@@ -597,7 +608,7 @@ struct Radio1938 {
   } graph;
 
   struct RadioLifecycle {
-    std::array<ConfigureStep, 8> configureSteps{{
+    std::array<ConfigureStep, 9> configureSteps{{
         {StageId::Input, "Input", &RadioInputNode::init},
         {StageId::Reception, "Reception", &RadioReceptionControlNode::init},
         {StageId::FrontEnd, "FrontEnd", &RadioFrontEndNode::init},
@@ -605,6 +616,7 @@ struct Radio1938 {
         {StageId::Tone, "Tone", &RadioToneNode::init},
         {StageId::Power, "Power", &RadioPowerNode::init},
         {StageId::Speaker, "Speaker", &RadioSpeakerNode::init},
+        {StageId::FinalLimiter, "FinalLimiter", &RadioFinalLimiterNode::init},
         {StageId::OutputClip, "OutputClip", &RadioOutputClipNode::init},
     }};
 
@@ -623,7 +635,7 @@ struct Radio1938 {
         {StageId::Heterodyne, "Heterodyne", &RadioHeterodyneNode::init},
     }};
 
-    std::array<ResetStep, 13> resetSteps{{
+    std::array<ResetStep, 14> resetSteps{{
         {StageId::Reception, "Reception", &RadioReceptionControlNode::reset},
         {StageId::Detune, "Detune", &RadioDetuneNode::reset},
         {StageId::Adjacent, "Adjacent", &RadioAdjacentNode::reset},
@@ -636,6 +648,7 @@ struct Radio1938 {
         {StageId::Tone, "Tone", &RadioToneNode::reset},
         {StageId::Demod, "Demod", &RadioDemodNode::reset},
         {StageId::Speaker, "Speaker", &RadioSpeakerNode::reset},
+        {StageId::FinalLimiter, "FinalLimiter", &RadioFinalLimiterNode::reset},
         {StageId::Noise, "Noise", &RadioNoiseNode::reset},
     }};
 
@@ -651,12 +664,18 @@ struct Radio1938 {
     bool powerClip = false;
     bool speakerClip = false;
     bool outputClip = false;
+    bool finalLimiterActive = false;
+    float finalLimiterGain = 1.0f;
+    float finalLimiterPeak = 0.0f;
 
     void reset() {
       anyClip = false;
       powerClip = false;
       speakerClip = false;
       outputClip = false;
+      finalLimiterActive = false;
+      finalLimiterGain = 1.0f;
+      finalLimiterPeak = 0.0f;
     }
 
     void markPowerClip() {
@@ -899,10 +918,6 @@ struct Radio1938 {
     float satOsPrev = 0.0f;
     float satDrive = 1.12f;
     float satMix = 0.24f;
-    float inputPeakLimit = 0.92f;
-    float inputLimitReleaseMs = 45.0f;
-    float inputLimitGain = 1.0f;
-    float inputLimitReleaseCoeff = 0.0f;
     float sagAttackMs = 60.0f;
     float sagReleaseMs = 900.0f;
     float attackMs = 25.0f;
@@ -1007,6 +1022,18 @@ struct Radio1938 {
     Biquad lp;
     Biquad tailLp;
   } room;
+
+  struct FinalLimiterNodeState {
+    bool enabled = true;
+    float threshold = 0.94f;
+    float releaseMs = 160.0f;
+    float gain = 1.0f;
+    float releaseCoeff = 0.0f;
+    float osPrev = 0.0f;
+    Biquad osLpIn;
+    Biquad osLpOut;
+    float osObservedPeak = 0.0f;
+  } finalLimiter;
 
   struct OutputNodeState {
     float clipOsPrev = 0.0f;

@@ -602,6 +602,7 @@ struct AudioState {
   std::atomic<float> peak{0.0f};
   std::atomic<float> radioMakeupGain{1.0f};
   std::atomic<uint32_t> radioClipHold{0};
+  std::atomic<uint32_t> radioLimiterHold{0};
   AudioSampleRing streamRb;
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};
@@ -799,9 +800,11 @@ void dataCallback(ma_device* device, void* output, const void*,
       state->radio1938.makeupGain =
           state->radioMakeupGain.load(std::memory_order_relaxed);
       state->radio1938.process(out, static_cast<uint32_t>(framesRead));
-      bool clipped = state->radio1938.diagnostics.anyClip;
-      uint32_t hold =
-          state->radioClipHold.load(std::memory_order_relaxed);
+      bool clipped = state->radio1938.diagnostics.outputClip;
+      bool limiting = state->radio1938.diagnostics.finalLimiterActive;
+      uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
+      uint32_t limiterHold =
+          state->radioLimiterHold.load(std::memory_order_relaxed);
       if (clipped) {
         hold = kRadioClipHoldFrames;
       } else if (hold > framesRead) {
@@ -809,7 +812,15 @@ void dataCallback(ma_device* device, void* output, const void*,
       } else {
         hold = 0;
       }
+      if (limiting) {
+        limiterHold = kRadioClipHoldFrames;
+      } else if (limiterHold > framesRead) {
+        limiterHold -= framesRead;
+      } else {
+        limiterHold = 0;
+      }
       state->radioClipHold.store(hold, std::memory_order_relaxed);
+      state->radioLimiterHold.store(limiterHold, std::memory_order_relaxed);
     }
 
     state->framesPlayed.fetch_add(framesRead, std::memory_order_relaxed);
@@ -1006,8 +1017,11 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->radio1938.makeupGain =
         state->radioMakeupGain.load(std::memory_order_relaxed);
     state->radio1938.process(audioStart, static_cast<uint32_t>(framesRead));
-    bool clipped = state->radio1938.diagnostics.anyClip;
+    bool clipped = state->radio1938.diagnostics.outputClip;
+    bool limiting = state->radio1938.diagnostics.finalLimiterActive;
     uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
+    uint32_t limiterHold =
+        state->radioLimiterHold.load(std::memory_order_relaxed);
     if (clipped) {
       hold = kRadioClipHoldFrames;
     } else if (hold > framesRead) {
@@ -1015,7 +1029,15 @@ void dataCallback(ma_device* device, void* output, const void*,
     } else {
       hold = 0;
     }
+    if (limiting) {
+      limiterHold = kRadioClipHoldFrames;
+    } else if (limiterHold > framesRead) {
+      limiterHold -= framesRead;
+    } else {
+      limiterHold = 0;
+    }
     state->radioClipHold.store(hold, std::memory_order_relaxed);
+    state->radioLimiterHold.store(limiterHold, std::memory_order_relaxed);
   }
   state->framesPlayed.fetch_add(framesRead);
   state->framesReadTotal.fetch_add(framesRead, std::memory_order_relaxed);
@@ -2663,6 +2685,10 @@ bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
 
 bool audioIsRadioClipping() {
   return gAudio.state.radioClipHold.load(std::memory_order_relaxed) > 0;
+}
+
+bool audioIsRadioLimiting() {
+  return gAudio.state.radioLimiterHold.load(std::memory_order_relaxed) > 0;
 }
 
 std::string audioGetWarning() {

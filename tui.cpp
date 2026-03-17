@@ -2172,10 +2172,14 @@ int runTui(Options o) {
             screen.writeRun(meterX + filled, peakMeterY,
                             meterWidth - filled, L'.', kStyleDim);
           }
-          if (audioIsRadioClipping()) {
+          bool radioClipping = audioIsRadioClipping();
+          bool radioLimiting = audioIsRadioLimiting();
+          if (radioClipping || radioLimiting) {
             int clipX = std::min(width - 1, meterX + meterWidth + 1);
             if (clipX >= 0 && clipX < width) {
-              screen.writeText(clipX, peakMeterY, "!", kStyleAlert);
+              const char* marker = radioClipping ? "!" : "~";
+              Style markerStyle = radioClipping ? kStyleAlert : kStyleAccent;
+              screen.writeText(clipX, peakMeterY, marker, markerStyle);
             }
           }
         }

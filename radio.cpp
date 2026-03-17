@@ -1013,8 +1013,6 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   power.rel = std::exp(-1.0f / (radio.sampleRate * (power.releaseMs / 1000.0f)));
   power.sat.drive = power.satDrive;
   power.sat.mix = power.satMix;
-  power.inputLimitReleaseCoeff =
-      std::exp(-1.0f / (radio.sampleRate * (power.inputLimitReleaseMs / 1000.0f)));
   float osFs = radio.sampleRate * radio.globals.oversampleFactor;
   float osCut = radio.sampleRate * radio.globals.oversampleCutoffFraction;
   power.satOsLpIn.setLowpass(osFs, osCut, kRadioBiquadQ);
@@ -1031,7 +1029,6 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.postLpf.reset();
   power.satOsLpIn.reset();
   power.satOsLpOut.reset();
-  power.inputLimitGain = 1.0f;
   radio.runtime.powerSag = 0.0f;
 }
 
@@ -1041,19 +1038,6 @@ float RadioPowerNode::process(Radio1938& radio,
   auto& power = radio.power;
   auto& runtime = radio.runtime;
   auto& noiseConfig = radio.noiseConfig;
-  float absIn = std::fabs(y);
-  float targetLimitGain =
-      (absIn > power.inputPeakLimit && absIn > 1e-6f)
-          ? (power.inputPeakLimit / absIn)
-          : 1.0f;
-  if (targetLimitGain < power.inputLimitGain) {
-    power.inputLimitGain = targetLimitGain;
-  } else {
-    power.inputLimitGain =
-        power.inputLimitReleaseCoeff * power.inputLimitGain +
-        (1.0f - power.inputLimitReleaseCoeff) * targetLimitGain;
-  }
-  y *= power.inputLimitGain;
   float powerLevel = std::fabs(y);
   if (powerLevel > power.env) {
     power.env = power.atk * power.env + (1.0f - power.atk) * powerLevel;
@@ -1361,6 +1345,68 @@ float RadioRoomNode::process(Radio1938& radio,
     y += room.tailMix * tailLp;
   }
   return y;
+}
+
+void RadioFinalLimiterNode::init(Radio1938& radio, RadioInitContext&) {
+  auto& limiter = radio.finalLimiter;
+  limiter.releaseCoeff =
+      std::exp(-1.0f / (radio.sampleRate * (limiter.releaseMs / 1000.0f)));
+  float osFs = radio.sampleRate * radio.globals.oversampleFactor;
+  float osCut = radio.sampleRate * radio.globals.oversampleCutoffFraction;
+  limiter.osLpIn.setLowpass(osFs, osCut, kRadioBiquadQ);
+  limiter.osLpOut.setLowpass(osFs, osCut, kRadioBiquadQ);
+}
+
+void RadioFinalLimiterNode::reset(Radio1938& radio) {
+  auto& limiter = radio.finalLimiter;
+  limiter.gain = 1.0f;
+  limiter.osPrev = 0.0f;
+  limiter.osObservedPeak = 0.0f;
+  limiter.osLpIn.reset();
+  limiter.osLpOut.reset();
+}
+
+float RadioFinalLimiterNode::process(Radio1938& radio,
+                                     float y,
+                                     const RadioSampleContext&) {
+  auto& limiter = radio.finalLimiter;
+  if (!limiter.enabled) return y;
+
+  float peak = 0.0f;
+  float mid = 0.5f * (limiter.osPrev + y);
+  float s0 = limiter.osLpIn.process(mid);
+  s0 = limiter.osLpOut.process(s0);
+  peak = std::max(peak, std::fabs(s0));
+
+  float s1 = limiter.osLpIn.process(y);
+  s1 = limiter.osLpOut.process(s1);
+  peak = std::max(peak, std::fabs(s1));
+
+  limiter.osPrev = y;
+  limiter.osObservedPeak = peak;
+
+  float targetGain = 1.0f;
+  if (peak > limiter.threshold && peak > 1e-9f) {
+    targetGain = limiter.threshold / peak;
+  }
+
+  if (targetGain < limiter.gain) {
+    limiter.gain = targetGain;
+  } else {
+    limiter.gain =
+        limiter.releaseCoeff * limiter.gain +
+        (1.0f - limiter.releaseCoeff) * targetGain;
+  }
+
+  radio.diagnostics.finalLimiterPeak =
+      std::max(radio.diagnostics.finalLimiterPeak, peak);
+  radio.diagnostics.finalLimiterGain =
+      std::min(radio.diagnostics.finalLimiterGain, limiter.gain);
+  if (limiter.gain < 0.999f) {
+    radio.diagnostics.finalLimiterActive = true;
+  }
+
+  return y * limiter.gain;
 }
 
 void RadioOutputClipNode::init(Radio1938& radio, RadioInitContext&) {
