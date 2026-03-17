@@ -491,7 +491,6 @@ struct RadioOutputClipNode {
 
 struct Radio1938 {
   enum class Preset {
-    Mid30sHeroic,
     Mid30sDocumentary,
   };
 
@@ -500,7 +499,7 @@ struct Radio1938 {
   float bwHz = 4800.0f;
   float noiseWeight = 0.012f;
   float makeupGain = 1.0f; // baseline unity gain
-  Preset preset = Preset::Mid30sHeroic;
+  Preset preset = Preset::Mid30sDocumentary;
   bool initialized = false;
 
   using BlockPrepareFn = void (*)(Radio1938&, RadioBlockControl&, uint32_t);

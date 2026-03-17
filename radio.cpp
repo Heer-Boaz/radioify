@@ -946,9 +946,6 @@ float RadioAdjacentNode::process(Radio1938& radio,
 
 void RadioDemodNode::init(Radio1938& radio, RadioInitContext& initCtx) {
   auto& demod = radio.demod;
-  // Keep the detector on coherent demod until the synthetic IF path is
-  // oversampled high enough for a whistle-free envelope detector.
-  demod.am.mode = AMDetector::Mode::Iq;
   demod.am.init(radio.sampleRate, initCtx.tunedBw, radio.tuning.tuneOffsetHz);
 }
 
@@ -1562,107 +1559,50 @@ static float runPresentationPath(
   return y;
 }
 
-static void applyMid30sHeroicPreset(Radio1938& radio) {
-  radio.makeupGain = 1.0f;
-
-  radio.globals.ifNoiseMix = 0.22f;
-  radio.globals.postNoiseMix = 0.14f;
-  radio.globals.noiseFloorAmp = 0.0022f;
-  radio.globals.compMakeupGain = 1.18f;
-  radio.globals.enableAutoLevel = true;
-  radio.globals.autoTargetDb = -21.0f;
-  radio.globals.autoMaxBoostDb = 4.0f;
-
-  radio.tuning.safeBwMinHz = 4200.0f;
-  radio.tuning.safeBwMaxHz = 5600.0f;
-  radio.tuning.tunedBwMistuneDepth = 0.28f;
-  radio.tuning.preBwScale = 1.08f;
-  radio.tuning.postBwScale = 1.18f;
-
-  radio.frontEnd.ifTiltMix = 0.10f;
-
-  radio.multipath.mix = 0.12f;
-  radio.multipath.depth = 0.08f;
-
-  radio.adjacent.mix = 0.010f;
-
-  radio.demod.diodeColorDrop = 0.004f;
-
-  radio.tone.midBoostGainDb = 1.4f;
-  radio.tone.lowMidDipGainDb = -1.0f;
-  radio.tone.presBoostGainDb = -0.8f;
-  radio.tone.compThresholdDb = -12.0f;
-  radio.tone.compRatio = 1.35f;
-  radio.tone.lowBaseGain = 0.80f;
-  radio.tone.lowGainDepth = 0.18f;
-  radio.tone.midBaseGain = 0.90f;
-  radio.tone.midGainDepth = 0.18f;
-  radio.tone.highBaseGain = 0.46f;
-  radio.tone.highGainDepth = 0.34f;
-
-  radio.power.satMix = 0.24f;
-
-  radio.noiseConfig.enableHumTone = true;
-  radio.noiseConfig.humAmpScale = 0.0018f;
-  radio.noiseConfig.crackleAmpScale = 0.008f;
-  radio.noiseConfig.lightningAmpScale = 0.022f;
-  radio.noiseConfig.motorAmpScale = 0.0045f;
-
-  radio.speakerStage.drive = 0.72f;
-  radio.speakerStage.speaker.mix = 0.24f;
-  radio.speakerStage.speaker.backWaveMix = 0.10f;
-  radio.speakerStage.speaker.boxResBassGainDb = 1.15f;
-  radio.speakerStage.speaker.boxResLowMidGainDb = 0.45f;
-  radio.speakerStage.speaker.panelResGainDb = 0.30f;
-  radio.speakerStage.speaker.hornPeakGainDb = 0.95f;
-  radio.speakerStage.speaker.paperPeakGainDb = 0.40f;
-  radio.speakerStage.speaker.coneDipGainDb = -1.75f;
-
-  radio.room.enableEarlyReflections = true;
-  radio.room.mix = 0.025f;
-  radio.room.enableTail = false;
-  radio.room.tailMix = 0.0f;
-}
-
 static void applyMid30sDocumentaryPreset(Radio1938& radio) {
-  radio.makeupGain = 0.96f;
+  radio.makeupGain = 1.0f;
 
   radio.globals.ifNoiseMix = 0.28f;
   radio.globals.postNoiseMix = 0.17f;
   radio.globals.noiseFloorAmp = 0.0032f;
-  radio.globals.compMakeupGain = 1.0f;
+  radio.globals.compMakeupGain = 1.06f;
   radio.globals.enableAutoLevel = false;
   radio.globals.autoTargetDb = -21.0f;
   radio.globals.autoMaxBoostDb = 2.5f;
 
   radio.tuning.safeBwMinHz = 3500.0f;
-  radio.tuning.safeBwMaxHz = 4400.0f;
+  radio.tuning.safeBwMaxHz = 4200.0f;
   radio.tuning.tunedBwMistuneDepth = 0.34f;
-  radio.tuning.preBwScale = 1.00f;
-  radio.tuning.postBwScale = 1.06f;
+  radio.tuning.preBwScale = 1.02f;
+  radio.tuning.postBwScale = 1.08f;
 
   radio.frontEnd.ifTiltMix = 0.14f;
 
-  radio.multipath.mix = 0.015f;
-  radio.multipath.depth = 0.012f;
+  radio.multipath.mix = 0.0f;
+  radio.multipath.depth = 0.0f;
 
   radio.adjacent.mix = 0.008f;
 
+  radio.demod.am.mode = AMDetector::Mode::Iq;
+  radio.demod.am.initCarrierHz = 9000.0f;
+  radio.demod.am.initCarrierMaxFraction = 0.24f;
+  radio.demod.am.envelopeRippleBase = 0.08f;
+  radio.demod.am.envelopeRippleMistune = 0.12f;
   radio.demod.diodeColorDrop = 0.008f;
 
   radio.tone.midBoostGainDb = 0.7f;
   radio.tone.lowMidDipGainDb = -0.5f;
-  radio.tone.presBoostGainDb = -1.8f;
+  radio.tone.presBoostGainDb = -2.0f;
   radio.tone.compThresholdDb = -6.0f;
   radio.tone.compRatio = 1.0f;
   radio.tone.lowBaseGain = 0.76f;
   radio.tone.lowGainDepth = 0.10f;
   radio.tone.midBaseGain = 0.86f;
   radio.tone.midGainDepth = 0.10f;
-  radio.tone.highBaseGain = 0.30f;
-  radio.tone.highGainDepth = 0.18f;
+  radio.tone.highBaseGain = 0.28f;
+  radio.tone.highGainDepth = 0.15f;
 
-  radio.power.satMix = 0.20f;
+  radio.power.satMix = 0.24f;
 
   radio.noiseConfig.enableHumTone = true;
   radio.noiseConfig.humAmpScale = 0.0024f;
@@ -1673,11 +1613,11 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.speakerStage.drive = 0.66f;
   radio.speakerStage.speaker.mix = 0.18f;
   radio.speakerStage.speaker.backWaveMix = 0.06f;
-  radio.speakerStage.speaker.boxResBassGainDb = 0.75f;
+  radio.speakerStage.speaker.boxResBassGainDb = 0.65f;
   radio.speakerStage.speaker.boxResLowMidGainDb = 0.20f;
   radio.speakerStage.speaker.panelResGainDb = 0.10f;
-  radio.speakerStage.speaker.hornPeakGainDb = 0.45f;
-  radio.speakerStage.speaker.paperPeakGainDb = 0.12f;
+  radio.speakerStage.speaker.hornPeakGainDb = 0.30f;
+  radio.speakerStage.speaker.paperPeakGainDb = 0.08f;
   radio.speakerStage.speaker.coneDipGainDb = -1.15f;
 
   radio.room.enableEarlyReflections = false;
@@ -1688,19 +1628,13 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
 
 std::string_view Radio1938::presetName(Preset preset) {
   switch (preset) {
-    case Preset::Mid30sHeroic:
-      return "mid30s_heroic";
     case Preset::Mid30sDocumentary:
       return "mid30s_documentary";
   }
-  return "mid30s_heroic";
+  return "mid30s_documentary";
 }
 
 bool Radio1938::applyPreset(std::string_view presetNameValue) {
-  if (presetNameValue == "mid30s_heroic") {
-    applyPreset(Preset::Mid30sHeroic);
-    return true;
-  }
   if (presetNameValue == "mid30s_documentary") {
     applyPreset(Preset::Mid30sDocumentary);
     return true;
@@ -1711,9 +1645,6 @@ bool Radio1938::applyPreset(std::string_view presetNameValue) {
 void Radio1938::applyPreset(Preset presetValue) {
   preset = presetValue;
   switch (presetValue) {
-    case Preset::Mid30sHeroic:
-      applyMid30sHeroicPreset(*this);
-      break;
     case Preset::Mid30sDocumentary:
       applyMid30sDocumentaryPreset(*this);
       break;
@@ -1727,6 +1658,11 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   sampleRate = sr;
   bwHz = bw;
   noiseWeight = noise;
+  switch (preset) {
+    case Preset::Mid30sDocumentary:
+      applyMid30sDocumentaryPreset(*this);
+      break;
+  }
   RadioInitContext initCtx{};
   lifecycle.configure(*this, initCtx);
   lifecycle.allocate(*this, initCtx);
