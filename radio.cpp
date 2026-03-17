@@ -1013,6 +1013,8 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   power.rel = std::exp(-1.0f / (radio.sampleRate * (power.releaseMs / 1000.0f)));
   power.sat.drive = power.satDrive;
   power.sat.mix = power.satMix;
+  power.inputLimitReleaseCoeff =
+      std::exp(-1.0f / (radio.sampleRate * (power.inputLimitReleaseMs / 1000.0f)));
   float osFs = radio.sampleRate * radio.globals.oversampleFactor;
   float osCut = radio.sampleRate * radio.globals.oversampleCutoffFraction;
   power.satOsLpIn.setLowpass(osFs, osCut, kRadioBiquadQ);
@@ -1029,6 +1031,7 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.postLpf.reset();
   power.satOsLpIn.reset();
   power.satOsLpOut.reset();
+  power.inputLimitGain = 1.0f;
   radio.runtime.powerSag = 0.0f;
 }
 
@@ -1038,6 +1041,19 @@ float RadioPowerNode::process(Radio1938& radio,
   auto& power = radio.power;
   auto& runtime = radio.runtime;
   auto& noiseConfig = radio.noiseConfig;
+  float absIn = std::fabs(y);
+  float targetLimitGain =
+      (absIn > power.inputPeakLimit && absIn > 1e-6f)
+          ? (power.inputPeakLimit / absIn)
+          : 1.0f;
+  if (targetLimitGain < power.inputLimitGain) {
+    power.inputLimitGain = targetLimitGain;
+  } else {
+    power.inputLimitGain =
+        power.inputLimitReleaseCoeff * power.inputLimitGain +
+        (1.0f - power.inputLimitReleaseCoeff) * targetLimitGain;
+  }
+  y *= power.inputLimitGain;
   float powerLevel = std::fabs(y);
   if (powerLevel > power.env) {
     power.env = power.atk * power.env + (1.0f - power.atk) * powerLevel;

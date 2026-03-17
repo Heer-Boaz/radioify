@@ -899,6 +899,10 @@ struct Radio1938 {
     float satOsPrev = 0.0f;
     float satDrive = 1.12f;
     float satMix = 0.24f;
+    float inputPeakLimit = 0.92f;
+    float inputLimitReleaseMs = 45.0f;
+    float inputLimitGain = 1.0f;
+    float inputLimitReleaseCoeff = 0.0f;
     float sagAttackMs = 60.0f;
     float sagReleaseMs = 900.0f;
     float attackMs = 25.0f;
