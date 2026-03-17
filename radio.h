@@ -161,7 +161,7 @@ struct AMDetector {
   float carrierGain = 0.40f;
   float diodeDrop = 0.0045f;
   float detGain = 2.70f;
-  float detectorMakeupGain = 2.1f;
+  float detectorMakeupGain = 10.0f;
 
   std::mt19937 rng{0x1942u};
   std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
@@ -218,10 +218,11 @@ struct AMDetector {
   float ifSpanClampMinHz = 1200.0f;
   float ifSpanClampMaxFraction = 0.22f;
   float audioHpHz = 220.0f;
-  float detLpScale = 1.05f;
-  float detLpMinHz = 2400.0f;
+  float detLpScale = 1.10f;
+  float detLpMinHz = 3000.0f;
   float mistuneNormDenomScale = 0.5f;
   float detectorCompression = 0.85f;
+  float detectorDetailMix = 0.15f;
   float detReleaseMistuneMix = 0.45f;
   float avcImpulseBase = 0.55f;
   float avcImpulseMistune = 0.20f;

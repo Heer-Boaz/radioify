@@ -375,6 +375,7 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
                           0.0f, 1.0f);
   float agcLin = db2lin(agcGainDb);
   float envAccum = 0.0f;
+  float rectifiedAccum = 0.0f;
   float avcImpulsePeak = 0.0f;
 
   for (int i = 0; i < osFactor; ++i) {
@@ -419,6 +420,7 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
     }
 
     envAccum += envelopeCap;
+    rectifiedAccum += rectified;
   }
 
   agcEnv = avcCap;
@@ -436,8 +438,10 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
   }
 
   float env = envAccum / static_cast<float>(osFactor);
-  dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * env;
-  float out = env - dcEnv;
+  float rectifiedAvg = rectifiedAccum / static_cast<float>(osFactor);
+  float detected = env + detectorDetailMix * (rectifiedAvg - env);
+  dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * detected;
+  float out = detected - dcEnv;
   out = audioHp.process(out);
   out = audioLp1.process(out);
   out *= detGain * detectorMakeupGain;
@@ -1549,7 +1553,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.globals.ifNoiseMix = 0.28f;
   radio.globals.postNoiseMix = 0.17f;
   radio.globals.noiseFloorAmp = 0.0032f;
-  radio.globals.compMakeupGain = 1.06f;
+  radio.globals.compMakeupGain = 1.08f;
   radio.globals.enableAutoLevel = false;
   radio.globals.autoTargetDb = -21.0f;
   radio.globals.autoMaxBoostDb = 2.5f;
@@ -1572,15 +1576,17 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.tone.midBoostHz = 1400.0f;
   radio.tone.midBoostGainDb = 1.2f;
   radio.tone.lowMidDipGainDb = -0.5f;
-  radio.tone.presBoostGainDb = -1.5f;
-  radio.tone.compThresholdDb = -6.0f;
-  radio.tone.compRatio = 1.0f;
+  radio.tone.presBoostGainDb = -1.2f;
+  radio.tone.compThresholdDb = -12.0f;
+  radio.tone.compRatio = 1.25f;
+  radio.tone.compAttackMs = 12.0f;
+  radio.tone.compReleaseMs = 220.0f;
   radio.tone.lowBaseGain = 0.76f;
   radio.tone.lowGainDepth = 0.10f;
   radio.tone.midBaseGain = 0.86f;
   radio.tone.midGainDepth = 0.10f;
-  radio.tone.highBaseGain = 0.30f;
-  radio.tone.highGainDepth = 0.12f;
+  radio.tone.highBaseGain = 0.33f;
+  radio.tone.highGainDepth = 0.14f;
 
   radio.power.satMix = 0.21f;
 
