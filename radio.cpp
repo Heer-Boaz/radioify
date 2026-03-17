@@ -1570,11 +1570,11 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.globals.autoTargetDb = -21.0f;
   radio.globals.autoMaxBoostDb = 2.5f;
 
-  radio.tuning.safeBwMinHz = 3500.0f;
-  radio.tuning.safeBwMaxHz = 4200.0f;
+  radio.tuning.safeBwMinHz = 3400.0f;
+  radio.tuning.safeBwMaxHz = 4000.0f;
   radio.tuning.tunedBwMistuneDepth = 0.34f;
-  radio.tuning.preBwScale = 1.02f;
-  radio.tuning.postBwScale = 1.08f;
+  radio.tuning.preBwScale = 1.00f;
+  radio.tuning.postBwScale = 1.04f;
 
   radio.frontEnd.ifTiltMix = 0.14f;
 
@@ -1590,35 +1590,35 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.demod.am.envelopeRippleMistune = 0.12f;
   radio.demod.diodeColorDrop = 0.008f;
 
-  radio.tone.midBoostGainDb = 0.7f;
+  radio.tone.midBoostGainDb = 0.45f;
   radio.tone.lowMidDipGainDb = -0.5f;
-  radio.tone.presBoostGainDb = -2.0f;
+  radio.tone.presBoostGainDb = -2.4f;
   radio.tone.compThresholdDb = -6.0f;
   radio.tone.compRatio = 1.0f;
   radio.tone.lowBaseGain = 0.76f;
   radio.tone.lowGainDepth = 0.10f;
   radio.tone.midBaseGain = 0.86f;
   radio.tone.midGainDepth = 0.10f;
-  radio.tone.highBaseGain = 0.28f;
-  radio.tone.highGainDepth = 0.15f;
+  radio.tone.highBaseGain = 0.24f;
+  radio.tone.highGainDepth = 0.10f;
 
-  radio.power.satMix = 0.24f;
+  radio.power.satMix = 0.21f;
 
   radio.noiseConfig.enableHumTone = true;
-  radio.noiseConfig.humAmpScale = 0.0024f;
-  radio.noiseConfig.crackleAmpScale = 0.0095f;
-  radio.noiseConfig.lightningAmpScale = 0.026f;
-  radio.noiseConfig.motorAmpScale = 0.0054f;
+  radio.noiseConfig.humAmpScale = 0.0022f;
+  radio.noiseConfig.crackleAmpScale = 0.0075f;
+  radio.noiseConfig.lightningAmpScale = 0.014f;
+  radio.noiseConfig.motorAmpScale = 0.0038f;
 
   radio.speakerStage.drive = 0.66f;
-  radio.speakerStage.speaker.mix = 0.18f;
-  radio.speakerStage.speaker.backWaveMix = 0.06f;
-  radio.speakerStage.speaker.boxResBassGainDb = 0.65f;
-  radio.speakerStage.speaker.boxResLowMidGainDb = 0.20f;
-  radio.speakerStage.speaker.panelResGainDb = 0.10f;
-  radio.speakerStage.speaker.hornPeakGainDb = 0.30f;
-  radio.speakerStage.speaker.paperPeakGainDb = 0.08f;
-  radio.speakerStage.speaker.coneDipGainDb = -1.15f;
+  radio.speakerStage.speaker.mix = 0.14f;
+  radio.speakerStage.speaker.backWaveMix = 0.03f;
+  radio.speakerStage.speaker.boxResBassGainDb = 0.35f;
+  radio.speakerStage.speaker.boxResLowMidGainDb = 0.10f;
+  radio.speakerStage.speaker.panelResGainDb = 0.05f;
+  radio.speakerStage.speaker.hornPeakGainDb = 0.12f;
+  radio.speakerStage.speaker.paperPeakGainDb = 0.02f;
+  radio.speakerStage.speaker.coneDipGainDb = -0.85f;
 
   radio.room.enableEarlyReflections = false;
   radio.room.mix = 0.0f;
