@@ -1609,6 +1609,14 @@ static void applyMid30sHeroicPreset(Radio1938& radio) {
   radio.noiseConfig.motorAmpScale = 0.0045f;
 
   radio.speakerStage.drive = 0.72f;
+  radio.speakerStage.speaker.mix = 0.24f;
+  radio.speakerStage.speaker.backWaveMix = 0.10f;
+  radio.speakerStage.speaker.boxResBassGainDb = 1.15f;
+  radio.speakerStage.speaker.boxResLowMidGainDb = 0.45f;
+  radio.speakerStage.speaker.panelResGainDb = 0.30f;
+  radio.speakerStage.speaker.hornPeakGainDb = 0.95f;
+  radio.speakerStage.speaker.paperPeakGainDb = 0.40f;
+  radio.speakerStage.speaker.coneDipGainDb = -1.75f;
 
   radio.room.enableEarlyReflections = true;
   radio.room.mix = 0.025f;
@@ -1627,16 +1635,16 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.globals.autoTargetDb = -21.0f;
   radio.globals.autoMaxBoostDb = 2.5f;
 
-  radio.tuning.safeBwMinHz = 3600.0f;
-  radio.tuning.safeBwMaxHz = 4700.0f;
+  radio.tuning.safeBwMinHz = 3500.0f;
+  radio.tuning.safeBwMaxHz = 4400.0f;
   radio.tuning.tunedBwMistuneDepth = 0.34f;
-  radio.tuning.preBwScale = 1.03f;
-  radio.tuning.postBwScale = 1.10f;
+  radio.tuning.preBwScale = 1.00f;
+  radio.tuning.postBwScale = 1.06f;
 
   radio.frontEnd.ifTiltMix = 0.14f;
 
-  radio.multipath.mix = 0.05f;
-  radio.multipath.depth = 0.04f;
+  radio.multipath.mix = 0.015f;
+  radio.multipath.depth = 0.012f;
 
   radio.adjacent.mix = 0.008f;
 
@@ -1663,6 +1671,14 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.noiseConfig.motorAmpScale = 0.0054f;
 
   radio.speakerStage.drive = 0.66f;
+  radio.speakerStage.speaker.mix = 0.18f;
+  radio.speakerStage.speaker.backWaveMix = 0.06f;
+  radio.speakerStage.speaker.boxResBassGainDb = 0.75f;
+  radio.speakerStage.speaker.boxResLowMidGainDb = 0.20f;
+  radio.speakerStage.speaker.panelResGainDb = 0.10f;
+  radio.speakerStage.speaker.hornPeakGainDb = 0.45f;
+  radio.speakerStage.speaker.paperPeakGainDb = 0.12f;
+  radio.speakerStage.speaker.coneDipGainDb = -1.15f;
 
   radio.room.enableEarlyReflections = false;
   radio.room.mix = 0.0f;
