@@ -682,7 +682,7 @@ void stopAuditionWorker() {
 
 void applyRadioTogglePreset() {
   gAudio.radio1938Template.applyPreset(Radio1938::Preset::Mid30sDocumentary);
-  gAudio.state.radioMakeupGain.store(gAudio.radio1938Template.makeupGain);
+  gAudio.state.radioMakeupGain.store(1.0f);
   gAudio.state.radio1938 = gAudio.radio1938Template;
 }
 
@@ -761,6 +761,17 @@ static void updatePeakMeter(AudioState* state, const float* samples,
   state->peak.store(next, std::memory_order_relaxed);
 }
 
+static void applyRadioOutputTrim(float* samples,
+                                 uint32_t frames,
+                                 uint32_t channels,
+                                 float gain) {
+  if (!samples || frames == 0 || channels == 0 || gain == 1.0f) return;
+  size_t count = static_cast<size_t>(frames) * channels;
+  for (size_t i = 0; i < count; ++i) {
+    samples[i] *= gain;
+  }
+}
+
 void dataCallback(ma_device* device, void* output, const void*,
                   ma_uint32 frameCount) {
   static constexpr uint32_t kRadioClipHoldFrames = 2048;
@@ -797,9 +808,9 @@ void dataCallback(ma_device* device, void* output, const void*,
     }
 
     if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
-      state->radio1938.makeupGain =
-          state->radioMakeupGain.load(std::memory_order_relaxed);
       state->radio1938.process(out, static_cast<uint32_t>(framesRead));
+      applyRadioOutputTrim(out, static_cast<uint32_t>(framesRead), channels,
+                           state->radioMakeupGain.load(std::memory_order_relaxed));
       bool clipped = state->radio1938.diagnostics.outputClip;
       bool limiting = state->radio1938.diagnostics.finalLimiterActive;
       uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
@@ -913,10 +924,6 @@ void dataCallback(ma_device* device, void* output, const void*,
         out[i] = x;
       }
     }
-    if (postClip) {
-      state->radioClipHold.store(kRadioClipHoldFrames,
-                                 std::memory_order_relaxed);
-    }
     updatePeakMeter(state, out, frameCount);
     return;
   }
@@ -1014,9 +1021,10 @@ void dataCallback(ma_device* device, void* output, const void*,
   if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
     float* audioStart =
         out + silentLeadFrames * static_cast<uint64_t>(state->channels);
-    state->radio1938.makeupGain =
-        state->radioMakeupGain.load(std::memory_order_relaxed);
     state->radio1938.process(audioStart, static_cast<uint32_t>(framesRead));
+    applyRadioOutputTrim(audioStart, static_cast<uint32_t>(framesRead),
+                         state->channels,
+                         state->radioMakeupGain.load(std::memory_order_relaxed));
     bool clipped = state->radio1938.diagnostics.outputClip;
     bool limiting = state->radio1938.diagnostics.finalLimiterActive;
     uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
@@ -1070,10 +1078,6 @@ void dataCallback(ma_device* device, void* output, const void*,
       }
       out[i] = x;
     }
-  }
-  if (postClip) {
-    state->radioClipHold.store(kRadioClipHoldFrames,
-                               std::memory_order_relaxed);
   }
   updatePeakMeter(state, out, frameCount);
 }
@@ -1882,7 +1886,7 @@ void audioInit(const AudioPlaybackConfig& config) {
   if (config.enableRadio) {
     applyRadioTogglePreset();
   }
-  gAudio.state.radioMakeupGain.store(gAudio.radio1938Template.makeupGain);
+  gAudio.state.radioMakeupGain.store(1.0f);
   gAudio.state.radio1938 = gAudio.radio1938Template;
 }
 
@@ -2616,7 +2620,7 @@ void audioAdjustVolume(float delta) {
 
 void audioAdjustRadioMakeup(float delta) {
   float current = gAudio.state.radioMakeupGain.load(std::memory_order_relaxed);
-  float next = std::clamp(current + delta, 0.5f, 4.0f);
+  float next = std::clamp(current + delta, 0.5f, 2.0f);
   gAudio.state.radioMakeupGain.store(next, std::memory_order_relaxed);
 }
 

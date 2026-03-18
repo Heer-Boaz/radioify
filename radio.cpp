@@ -2122,8 +2122,7 @@ float RadioFinalLimiterNode::process(Radio1938& radio,
   }
 
   if (limiter.targetGain < limiter.gain) {
-    limiter.gain = limiter.attackCoeff * limiter.gain +
-                   (1.0f - limiter.attackCoeff) * limiter.targetGain;
+    limiter.gain = limiter.targetGain;
   } else {
     limiter.gain =
         limiter.releaseCoeff * limiter.gain +
@@ -2196,7 +2195,8 @@ float RadioOutputClipNode::process(Radio1938& radio,
                                 float t = radio.globals.outputClipThreshold;
                                 float av = std::fabs(v);
                                 if (av > t) radio.diagnostics.markOutputClip();
-                                return softClip(v, t);
+                                float clipped = softClip(v, t);
+                                return std::clamp(clipped, -t, t);
                               });
 }
 
