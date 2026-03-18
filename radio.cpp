@@ -992,7 +992,7 @@ float SpeakerSim::process(float x, bool& clipped) {
       lowBand, lowDrive, asymBias * (0.25f + 0.75f * lowT), lowT);
   float lowMix = 0.18f + 0.28f * lowT;
   lowBand = softClip(lowLinear + (lowShaped - lowLinear) * lowMix, lowLimit);
-  lowBand *= 1.0f - 0.08f * lowT;
+  lowBand *= 1.0f + lowBloomDepth * (1.0f - lowT);
 
   float midLinear = midBand;
   float midDrive = std::max(0.15f, midDriveBase + midDriveDepth * midT);
@@ -1007,26 +1007,14 @@ float SpeakerSim::process(float x, bool& clipped) {
       breakupBand, breakupDrive, asymBias * (0.12f + 0.55f * breakupT),
       0.30f + 0.70f * breakupT);
   float breakupMix = 0.12f + 0.26f * breakupT;
-  float breakupOpen =
-      breakupLinear + breakupMix * (breakupShaped - breakupLinear);
-  float breakupClosed = breakupCloseLp.process(breakupOpen);
-  float breakupAir = breakupOpen - breakupClosed;
-  float airSense =
-      clampf(std::fabs(breakupAir) / std::max(0.02f, breakupEnvRef * 0.50f),
-             0.0f, 1.0f);
-  float breakupAirShaped = asymmetricSaturate(
-      breakupAir, 0.32f + 0.38f * breakupT + 0.10f * airSense,
-      asymBias * (0.04f + 0.04f * airSense),
-      0.10f + 0.24f * breakupT + 0.10f * airSense);
-  float openness =
-      1.0f - breakupCloseDepth *
-                 (0.18f + 0.58f * breakupT + 0.24f * airSense);
-  breakupBand = breakupClosed + openness * breakupAirShaped;
-  breakupBand *=
-      (1.0f - breakupCollapseDepth *
-                   (0.08f + 0.34f * breakupT + 0.18f * airSense));
+  breakupBand = breakupLinear + breakupMix * (breakupShaped - breakupLinear);
+  float breakupClosed = breakupCloseLp.process(breakupBand);
+  breakupBand += breakupCloseDepth * breakupT * (breakupClosed - breakupBand);
+  breakupBand *= (1.0f - breakupCollapseDepth * breakupT);
+  breakupBand += breakupGrainMix * std::tanh(2.0f * breakupBand);
 
-  float y = lowBand + midBand + breakupBand;
+  float y = lowBand * lowBandWeight + midBand * midBandWeight +
+            breakupBand * breakupBandWeight;
   if (finalConeMix > 0.0f) {
     float coneShaped =
         asymmetricSaturate(y, drive, asymBias * 0.18f, 0.20f + 0.30f * lowT);
@@ -1504,6 +1492,8 @@ void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
                                       kRadioBiquadQ);
   receiver.nonlinearDeltaBodyLp.setLowpass(radio.sampleRate, presenceSplitHz,
                                            kRadioBiquadQ);
+  receiver.avcAtk = std::exp(-1.0f / (radio.sampleRate * 0.030f));
+  receiver.avcRel = std::exp(-1.0f / (radio.sampleRate * 1.2f));
   receiver.atk =
       std::exp(-1.0f / (radio.sampleRate * (receiver.attackMs / 1000.0f)));
   receiver.rel =
@@ -1514,6 +1504,7 @@ void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
 
 void RadioReceiverCircuitNode::reset(Radio1938& radio) {
   auto& receiver = radio.receiverCircuit;
+  receiver.avcEnv = 0.0f;
   receiver.env = 0.0f;
   receiver.couplingSag = 0.0f;
   receiver.couplingHp.reset();
@@ -1534,6 +1525,17 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   y = receiver.interstagePeak.process(y);
   y = receiver.presenceDip.process(y);
   y = receiver.transformerLp.process(y);
+
+  float avcIn = std::fabs(y);
+  if (avcIn > receiver.avcEnv) {
+    receiver.avcEnv =
+        receiver.avcAtk * receiver.avcEnv + (1.0f - receiver.avcAtk) * avcIn;
+  } else {
+    receiver.avcEnv =
+        receiver.avcRel * receiver.avcEnv + (1.0f - receiver.avcRel) * avcIn;
+  }
+  float avcGain = 1.0f / (1.0f + receiver.avcStrength * receiver.avcEnv);
+  y *= avcGain;
 
   float level = std::fabs(y);
   if (level > receiver.env) {
@@ -1563,8 +1565,7 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                                0.0f, 1.0f);
   float squeezeT = envT * presenceSense;
   float presenceCompressed =
-      presence / (1.0f + receiver.presenceCompressDepth *
-                                squeezeT * (1.0f + 2.5f * presenceAbs));
+      presence / (1.0f + receiver.presenceCompressDepth * squeezeT);
   presence += (presenceCompressed - presence) * (0.18f + 0.52f * squeezeT);
 
   float circuit = body + presence;
@@ -1578,7 +1579,8 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
           (1.0f + 0.45f * receiver.gridLeakTolerance -
            0.20f * receiver.plateLoadTolerance) +
       receiver.asymBiasDepth * envT;
-  float shaped = asymmetricSaturate(circuit, drive, bias, 0.35f + 0.65f * envT);
+  float asymT = 0.35f + 0.65f * envT + 0.25f * sagT;
+  float shaped = asymmetricSaturate(circuit, drive, bias, asymT);
   float nonlinearMix =
       clampf(receiver.nonlinearMix * (0.35f + 0.65f * envT), 0.0f, 0.16f);
   float nonlinearDelta = nonlinearMix * (shaped - circuit);
@@ -2377,7 +2379,7 @@ static float runPresentationPath(
 }
 
 static void applyMid30sDocumentaryPreset(Radio1938& radio) {
-  radio.makeupGain = 0.90f;
+  radio.makeupGain = 0.82f;
 
   radio.globals.ifNoiseMix = 0.28f;
   radio.globals.postNoiseMix = 0.17f;
@@ -2401,7 +2403,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
 
   radio.adjacent.mix = 0.008f;
 
-  radio.demod.am.detectorMakeupGain = 5.5f;
+  radio.demod.am.detectorMakeupGain = 3.9f;
   radio.demod.am.detReleaseMs = 0.35f;
   radio.demod.diodeColorDrop = 0.008f;
   radio.receiverCircuit.couplingCapTolerance = 0.0f;
@@ -2409,34 +2411,35 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.receiverCircuit.plateLoadTolerance = 0.0f;
   radio.receiverCircuit.toneCapTolerance = 0.0f;
   radio.receiverCircuit.transformerTolerance = 0.0f;
-  radio.receiverCircuit.couplingHpHz = 120.0f;
-  radio.receiverCircuit.interstagePeakHz = 1450.0f;
-  radio.receiverCircuit.interstagePeakGainDb = 0.34f;
-  radio.receiverCircuit.transformerLpHz = 3050.0f;
-  radio.receiverCircuit.presenceDipHz = 2450.0f;
-  radio.receiverCircuit.presenceDipGainDb = -0.28f;
+  radio.receiverCircuit.couplingHpHz = 116.0f;
+  radio.receiverCircuit.interstagePeakHz = 1325.0f;
+  radio.receiverCircuit.interstagePeakGainDb = 0.24f;
+  radio.receiverCircuit.transformerLpHz = 3520.0f;
+  radio.receiverCircuit.presenceDipHz = 2480.0f;
+  radio.receiverCircuit.presenceDipGainDb = -0.10f;
+  radio.receiverCircuit.avcStrength = 0.60f;
   radio.receiverCircuit.attackMs = 11.0f;
   radio.receiverCircuit.releaseMs = 210.0f;
-  radio.receiverCircuit.envRef = 0.28f;
-  radio.receiverCircuit.driveBase = 1.00f;
-  radio.receiverCircuit.driveDepth = 0.14f;
+  radio.receiverCircuit.envRef = 0.22f;
+  radio.receiverCircuit.driveBase = 0.90f;
+  radio.receiverCircuit.driveDepth = 0.08f;
   radio.receiverCircuit.asymBiasBase = 0.0025f;
-  radio.receiverCircuit.asymBiasDepth = 0.0085f;
-  radio.receiverCircuit.nonlinearMix = 0.065f;
-  radio.receiverCircuit.presenceCompressDepth = 0.13f;
-  radio.receiverCircuit.bodyPreserveMix = 0.79f;
-  radio.receiverCircuit.presenceSplitHz = 1320.0f;
-  radio.receiverCircuit.couplingSagDepth = 0.032f;
-  radio.receiverCircuit.couplingSagRef = 0.20f;
+  radio.receiverCircuit.asymBiasDepth = 0.0070f;
+  radio.receiverCircuit.nonlinearMix = 0.040f;
+  radio.receiverCircuit.presenceCompressDepth = 0.09f;
+  radio.receiverCircuit.bodyPreserveMix = 0.93f;
+  radio.receiverCircuit.presenceSplitHz = 1220.0f;
+  radio.receiverCircuit.couplingSagDepth = 0.024f;
+  radio.receiverCircuit.couplingSagRef = 0.17f;
   radio.receiverCircuit.couplingSagReleaseMs = 240.0f;
 
   radio.tone.presenceHz = 1600.0f;
-  radio.tone.presenceGainDb = 0.18f;
+  radio.tone.presenceGainDb = 0.14f;
   radio.tone.tiltSplitHz = 1450.0f;
-  radio.tone.tiltBase = -0.022f;
-  radio.tone.tiltDepth = 0.030f;
+  radio.tone.tiltBase = -0.010f;
+  radio.tone.tiltDepth = 0.018f;
 
-  radio.power.satMix = 0.12f;
+  radio.power.satMix = 0.08f;
 
   radio.noiseConfig.enableHumTone = true;
   radio.noiseConfig.humAmpScale = 0.0022f;
@@ -2444,40 +2447,45 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.noiseConfig.lightningAmpScale = 0.014f;
   radio.noiseConfig.motorAmpScale = 0.0038f;
 
-  radio.speakerStage.drive = 0.66f;
-  radio.speakerStage.speaker.limit = 0.98f;
-  radio.speakerStage.speaker.suspensionGainDb = 0.35f;
-  radio.speakerStage.speaker.coneBodyGainDb = 0.10f;
-  radio.speakerStage.speaker.upperBreakupGainDb = 0.10f;
-  radio.speakerStage.speaker.paperPeakGainDb = 0.00f;
-  radio.speakerStage.speaker.coneDipGainDb = -0.95f;
-  radio.speakerStage.speaker.topLpHz = 3250.0f;
-  radio.speakerStage.speaker.lowSplitHz = 440.0f;
-  radio.speakerStage.speaker.breakupSplitHz = 1500.0f;
-  radio.speakerStage.speaker.lowEnvRef = 0.16f;
-  radio.speakerStage.speaker.midEnvRef = 0.11f;
+  radio.speakerStage.drive = 0.53f;
+  radio.speakerStage.speaker.limit = 1.08f;
+  radio.speakerStage.speaker.suspensionGainDb = 0.48f;
+  radio.speakerStage.speaker.coneBodyGainDb = 0.18f;
+  radio.speakerStage.speaker.upperBreakupGainDb = 0.02f;
+  radio.speakerStage.speaker.paperPeakGainDb = -0.14f;
+  radio.speakerStage.speaker.coneDipGainDb = -0.60f;
+  radio.speakerStage.speaker.topLpHz = 3380.0f;
+  radio.speakerStage.speaker.lowSplitHz = 410.0f;
+  radio.speakerStage.speaker.breakupSplitHz = 1420.0f;
+  radio.speakerStage.speaker.lowEnvRef = 0.19f;
+  radio.speakerStage.speaker.midEnvRef = 0.12f;
   radio.speakerStage.speaker.breakupEnvRef = 0.08f;
-  radio.speakerStage.speaker.lowExcursionDriveBase = 0.78f;
-  radio.speakerStage.speaker.lowExcursionDriveDepth = 0.90f;
-  radio.speakerStage.speaker.lowExcursionLimitBase = 0.90f;
-  radio.speakerStage.speaker.lowExcursionLimitDepth = 0.16f;
+  radio.speakerStage.speaker.lowExcursionDriveBase = 0.60f;
+  radio.speakerStage.speaker.lowExcursionDriveDepth = 0.50f;
+  radio.speakerStage.speaker.lowExcursionLimitBase = 0.98f;
+  radio.speakerStage.speaker.lowExcursionLimitDepth = 0.06f;
   radio.speakerStage.speaker.midDriveBase = 0.18f;
-  radio.speakerStage.speaker.midDriveDepth = 0.12f;
-  radio.speakerStage.speaker.midCompactionDepth = 0.07f;
-  radio.speakerStage.speaker.breakupDriveBase = 0.40f;
-  radio.speakerStage.speaker.breakupDriveDepth = 0.72f;
-  radio.speakerStage.speaker.breakupCollapseDepth = 0.18f;
-  radio.speakerStage.speaker.breakupCloseDepth = 0.24f;
-  radio.speakerStage.speaker.finalConeMix = 0.015f;
+  radio.speakerStage.speaker.midDriveDepth = 0.08f;
+  radio.speakerStage.speaker.midCompactionDepth = 0.04f;
+  radio.speakerStage.speaker.breakupDriveBase = 0.18f;
+  radio.speakerStage.speaker.breakupDriveDepth = 0.32f;
+  radio.speakerStage.speaker.breakupCollapseDepth = 0.10f;
+  radio.speakerStage.speaker.breakupCloseDepth = 0.12f;
+  radio.speakerStage.speaker.breakupGrainMix = 0.035f;
+  radio.speakerStage.speaker.lowBandWeight = 0.82f;
+  radio.speakerStage.speaker.midBandWeight = 1.15f;
+  radio.speakerStage.speaker.breakupBandWeight = 0.78f;
+  radio.speakerStage.speaker.lowBloomDepth = 0.05f;
+  radio.speakerStage.speaker.finalConeMix = 0.003f;
   radio.cabinet.panelHz = 190.0f;
-  radio.cabinet.panelGainDb = 0.48f;
+  radio.cabinet.panelGainDb = 0.74f;
   radio.cabinet.chassisHz = 420.0f;
-  radio.cabinet.chassisGainDb = 0.26f;
+  radio.cabinet.chassisGainDb = 0.44f;
   radio.cabinet.cavityDipHz = 930.0f;
-  radio.cabinet.cavityDipGainDb = -0.45f;
-  radio.cabinet.grilleLpHz = 2850.0f;
-  radio.cabinet.rearDelayMs = 1.4f;
-  radio.cabinet.rearMix = 0.045f;
+  radio.cabinet.cavityDipGainDb = -0.36f;
+  radio.cabinet.grilleLpHz = 2680.0f;
+  radio.cabinet.rearDelayMs = 1.5f;
+  radio.cabinet.rearMix = 0.058f;
   radio.cabinet.rearLpHz = 980.0f;
 
   radio.room.enableEarlyReflections = false;
@@ -2485,8 +2493,8 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.room.enableTail = false;
   radio.room.tailMix = 0.0f;
 
-  radio.finalLimiter.threshold = 0.94f;
-  radio.finalLimiter.lookaheadMs = 3.5f;
+  radio.finalLimiter.threshold = 0.98f;
+  radio.finalLimiter.lookaheadMs = 2.0f;
   radio.finalLimiter.attackMs = 0.20f;
   radio.finalLimiter.releaseMs = 160.0f;
 }

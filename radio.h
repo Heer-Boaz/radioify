@@ -314,6 +314,11 @@ struct SpeakerSim {
   float breakupDriveDepth = 0.78f;
   float breakupCollapseDepth = 0.16f;
   float breakupCloseDepth = 0.22f;
+  float breakupGrainMix = 0.05f;
+  float lowBandWeight = 1.0f;
+  float midBandWeight = 1.0f;
+  float breakupBandWeight = 1.0f;
+  float lowBloomDepth = 0.12f;
   float finalConeMix = 0.05f;
 
   void init(float fs);
@@ -811,19 +816,19 @@ struct Radio1938 {
         static_cast<size_t>(StageId::OutputClip) + 1u;
 
     struct DocumentaryVoicingTargets {
-      float speechCentroidMinHz = 1300.0f;
-      float speechCentroidMaxHz = 1850.0f;
-      float bandwidth6dBMinHz = 2000.0f;
-      float bandwidth6dBMaxHz = 3200.0f;
-      float limiterDutyCycleMax = 0.12f;
-      float melodyBandRetentionMin = 0.55f;
-      float receiverUpperMidEnergyRatioMin = 0.28f;
-      float receiverUpperMidEnergyRatioMax = 0.55f;
-      float consonantRetentionProxyMin = 0.88f;
-      float speakerMidRetentionMin = 0.92f;
-      float speakerBreakupRetentionMin = 0.82f;
-      float speakerBreakupRetentionMax = 1.02f;
-      float speakerLowOverhangProxyMax = 0.16f;
+      float speechCentroidMinHz = 1180.0f;
+      float speechCentroidMaxHz = 1680.0f;
+      float bandwidth6dBMinHz = 2800.0f;
+      float bandwidth6dBMaxHz = 4000.0f;
+      float limiterDutyCycleMax = 0.05f;
+      float melodyBandRetentionMin = 0.64f;
+      float receiverUpperMidEnergyRatioMin = 0.30f;
+      float receiverUpperMidEnergyRatioMax = 0.50f;
+      float consonantRetentionProxyMin = 0.92f;
+      float speakerMidRetentionMin = 0.98f;
+      float speakerBreakupRetentionMin = 0.58f;
+      float speakerBreakupRetentionMax = 0.84f;
+      float speakerLowOverhangProxyMax = 0.18f;
     };
 
     struct DocumentaryVoicingSnapshot {
@@ -1063,6 +1068,10 @@ struct Radio1938 {
     float presenceDipHz = 2550.0f;
     float presenceDipQ = 1.05f;
     float presenceDipGainDb = -0.45f;
+    float avcEnv = 0.0f;
+    float avcAtk = 0.0f;
+    float avcRel = 0.0f;
+    float avcStrength = 0.60f;
     float env = 0.0f;
     float atk = 0.0f;
     float rel = 0.0f;
