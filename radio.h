@@ -15,6 +15,7 @@ inline constexpr float kRadioLinDbFloor = 1e-12f;
 inline constexpr float kRadioDiodeColorLeak = 0.06f;
 inline constexpr float kRadioDiodeColorCurve = 0.35f;
 inline constexpr float kRadioSoftClipThresholdDefault = 0.98f;
+inline constexpr size_t kRadioCalibrationBandCount = 12;
 
 struct Biquad {
   float b0 = 1.0f;
@@ -29,6 +30,7 @@ struct Biquad {
   void reset();
   void setLowpass(float sampleRate, float freq, float q);
   void setHighpass(float sampleRate, float freq, float q);
+  void setBandpass(float sampleRate, float freq, float q);
   void setPeaking(float sampleRate, float freq, float q, float gainDb);
 };
 
@@ -250,47 +252,69 @@ struct AMDetector {
 };
 
 struct SpeakerSim {
-  Biquad boxResBass;
-  Biquad boxResLowMid;
-  Biquad cabNasal;
-  Biquad panelRes;
-  Biquad coneDip;
+  Biquad suspensionRes;
+  Biquad coneBody;
   Biquad paperPeak;
-  Biquad hornPeak;
-  Biquad backWaveHp;
-  Biquad backWaveLp;
+  Biquad upperBreakup;
+  Biquad coneDip;
+  Biquad topLp;
+  Biquad breakupCloseLp;
   float drive = 1.05f;
-  float mix = 0.24f;
   float limit = 0.93f;
   float asymBias = 0.028f;
-  float backWaveMix = 0.10f;
-  int backWaveIndex = 0;
-  std::vector<float> backWaveBuf;
   float filterQ = kRadioBiquadQ;
-  float boxResBassHz = 155.0f;
-  float boxResBassQ = 0.68f;
-  float boxResBassGainDb = 1.15f;
-  float boxResLowMidHz = 430.0f;
-  float boxResLowMidQ = 0.82f;
-  float boxResLowMidGainDb = 0.45f;
-  float cabNasalHz = 820.0f;
-  float cabNasalQ = 1.10f;
-  float cabNasalGainDb = -0.65f;
-  float panelResHz = 610.0f;
-  float panelResQ = 1.15f;
-  float panelResGainDb = 0.30f;
-  float hornPeakHz = 1680.0f;
-  float hornPeakQ = 0.98f;
-  float hornPeakGainDb = 0.95f;
+  float suspensionHz = 165.0f;
+  float suspensionQ = 0.70f;
+  float suspensionGainDb = 0.85f;
+  float coneBodyHz = 470.0f;
+  float coneBodyQ = 0.88f;
+  float coneBodyGainDb = 0.35f;
+  float upperBreakupHz = 1620.0f;
+  float upperBreakupQ = 1.05f;
+  float upperBreakupGainDb = 0.45f;
   float paperPeakHz = 2280.0f;
   float paperPeakQ = 1.25f;
   float paperPeakGainDb = 0.40f;
   float coneDipHz = 3180.0f;
   float coneDipQ = 0.95f;
   float coneDipGainDb = -1.75f;
-  float backWaveHpHz = 165.0f;
-  float backWaveLpHz = 920.0f;
-  float backWaveDelayMs = 0.9f;
+  float topLpHz = 3350.0f;
+  float suspensionComplianceTolerance = 0.0f;
+  float coneMassTolerance = 0.0f;
+  float breakupTolerance = 0.0f;
+  float voiceCoilTolerance = 0.0f;
+  float lowSplitHz = 430.0f;
+  float breakupSplitHz = 1500.0f;
+  float lowSplitCoeff = 0.0f;
+  float breakupSplitCoeff = 0.0f;
+  float lowSplitState = 0.0f;
+  float breakupSplitState = 0.0f;
+  float lowEnv = 0.0f;
+  float midEnv = 0.0f;
+  float breakupEnv = 0.0f;
+  float lowAtk = 0.0f;
+  float lowRel = 0.0f;
+  float midAtk = 0.0f;
+  float midRel = 0.0f;
+  float breakupAtk = 0.0f;
+  float breakupRel = 0.0f;
+  float bandAttackMs = 10.0f;
+  float bandReleaseMs = 120.0f;
+  float lowEnvRef = 0.16f;
+  float midEnvRef = 0.11f;
+  float breakupEnvRef = 0.08f;
+  float lowExcursionDriveBase = 0.80f;
+  float lowExcursionDriveDepth = 0.95f;
+  float lowExcursionLimitBase = 0.90f;
+  float lowExcursionLimitDepth = 0.18f;
+  float midDriveBase = 0.18f;
+  float midDriveDepth = 0.14f;
+  float midCompactionDepth = 0.08f;
+  float breakupDriveBase = 0.42f;
+  float breakupDriveDepth = 0.78f;
+  float breakupCollapseDepth = 0.16f;
+  float breakupCloseDepth = 0.22f;
+  float finalConeMix = 0.05f;
 
   void init(float fs);
   void reset();
@@ -309,11 +333,13 @@ enum class StageId : uint8_t {
   Detune,
   Adjacent,
   Demod,
+  ReceiverCircuit,
   Tone,
   Power,
   Noise,
   Heterodyne,
   Speaker,
+  Cabinet,
   Room,
   FinalLimiter,
   OutputClip,
@@ -420,6 +446,14 @@ struct RadioDemodNode {
                        const RadioSampleContext& ctx);
 };
 
+struct RadioReceiverCircuitNode {
+  static void init(Radio1938& radio, RadioInitContext& initCtx);
+  static void reset(Radio1938& radio);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
+};
+
 struct RadioToneNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
@@ -459,6 +493,14 @@ struct RadioHeterodyneNode {
 };
 
 struct RadioSpeakerNode {
+  static void init(Radio1938& radio, RadioInitContext& initCtx);
+  static void reset(Radio1938& radio);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
+};
+
+struct RadioCabinetNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
   static float process(Radio1938& radio,
@@ -574,21 +616,24 @@ struct Radio1938 {
          &RadioInterferenceDerivedNode::update},
     }};
 
-    std::array<ProgramPathStep, 8> programPathSteps{{
+    std::array<ProgramPathStep, 9> programPathSteps{{
         {StageId::Input, "Input", true, &RadioInputNode::process},
         {StageId::FrontEnd, "FrontEnd", true, &RadioFrontEndNode::process},
         {StageId::Multipath, "Multipath", true, &RadioMultipathNode::process},
         {StageId::Detune, "Detune", true, &RadioDetuneNode::process},
         {StageId::Adjacent, "Adjacent", true, &RadioAdjacentNode::process},
         {StageId::Demod, "Demod", true, &RadioDemodNode::process},
+        {StageId::ReceiverCircuit, "ReceiverCircuit", true,
+         &RadioReceiverCircuitNode::process},
         {StageId::Tone, "Tone", true, &RadioToneNode::process},
         {StageId::Power, "Power", true, &RadioPowerNode::process},
     }};
 
-    std::array<PresentationPathStep, 6> presentationPathSteps{{
+    std::array<PresentationPathStep, 7> presentationPathSteps{{
         {StageId::Noise, "Noise", true, &RadioNoiseNode::process},
         {StageId::Heterodyne, "Heterodyne", true, &RadioHeterodyneNode::process},
         {StageId::Speaker, "Speaker", true, &RadioSpeakerNode::process},
+        {StageId::Cabinet, "Cabinet", true, &RadioCabinetNode::process},
         {StageId::Room, "Room", true, &RadioRoomNode::process},
         {StageId::FinalLimiter, "FinalLimiter", true,
          &RadioFinalLimiterNode::process},
@@ -608,14 +653,17 @@ struct Radio1938 {
   } graph;
 
   struct RadioLifecycle {
-    std::array<ConfigureStep, 9> configureSteps{{
+    std::array<ConfigureStep, 11> configureSteps{{
         {StageId::Input, "Input", &RadioInputNode::init},
         {StageId::Reception, "Reception", &RadioReceptionControlNode::init},
         {StageId::FrontEnd, "FrontEnd", &RadioFrontEndNode::init},
         {StageId::Adjacent, "Adjacent", &RadioAdjacentNode::init},
+        {StageId::ReceiverCircuit, "ReceiverCircuit",
+         &RadioReceiverCircuitNode::init},
         {StageId::Tone, "Tone", &RadioToneNode::init},
         {StageId::Power, "Power", &RadioPowerNode::init},
         {StageId::Speaker, "Speaker", &RadioSpeakerNode::init},
+        {StageId::Cabinet, "Cabinet", &RadioCabinetNode::init},
         {StageId::FinalLimiter, "FinalLimiter", &RadioFinalLimiterNode::init},
         {StageId::OutputClip, "OutputClip", &RadioOutputClipNode::init},
     }};
@@ -635,7 +683,7 @@ struct Radio1938 {
         {StageId::Heterodyne, "Heterodyne", &RadioHeterodyneNode::init},
     }};
 
-    std::array<ResetStep, 14> resetSteps{{
+    std::array<ResetStep, 16> resetSteps{{
         {StageId::Reception, "Reception", &RadioReceptionControlNode::reset},
         {StageId::Detune, "Detune", &RadioDetuneNode::reset},
         {StageId::Adjacent, "Adjacent", &RadioAdjacentNode::reset},
@@ -645,9 +693,12 @@ struct Radio1938 {
         {StageId::Input, "Input", &RadioInputNode::reset},
         {StageId::Room, "Room", &RadioRoomNode::reset},
         {StageId::FrontEnd, "FrontEnd", &RadioFrontEndNode::reset},
+        {StageId::ReceiverCircuit, "ReceiverCircuit",
+         &RadioReceiverCircuitNode::reset},
         {StageId::Tone, "Tone", &RadioToneNode::reset},
         {StageId::Demod, "Demod", &RadioDemodNode::reset},
         {StageId::Speaker, "Speaker", &RadioSpeakerNode::reset},
+        {StageId::Cabinet, "Cabinet", &RadioCabinetNode::reset},
         {StageId::FinalLimiter, "FinalLimiter", &RadioFinalLimiterNode::reset},
         {StageId::Noise, "Noise", &RadioNoiseNode::reset},
     }};
@@ -667,6 +718,15 @@ struct Radio1938 {
     bool finalLimiterActive = false;
     float finalLimiterGain = 1.0f;
     float finalLimiterPeak = 0.0f;
+    float finalLimiterDutyCycle = 0.0f;
+    float finalLimiterAverageGainReduction = 0.0f;
+    float finalLimiterMaxGainReduction = 0.0f;
+    float finalLimiterAverageGainReductionDb = 0.0f;
+    float finalLimiterMaxGainReductionDb = 0.0f;
+    uint32_t finalLimiterActiveSamples = 0;
+    uint32_t processedSamples = 0;
+    double finalLimiterGainReductionSum = 0.0;
+    double finalLimiterGainReductionDbSum = 0.0;
 
     void reset() {
       anyClip = false;
@@ -676,6 +736,15 @@ struct Radio1938 {
       finalLimiterActive = false;
       finalLimiterGain = 1.0f;
       finalLimiterPeak = 0.0f;
+      finalLimiterDutyCycle = 0.0f;
+      finalLimiterAverageGainReduction = 0.0f;
+      finalLimiterMaxGainReduction = 0.0f;
+      finalLimiterAverageGainReductionDb = 0.0f;
+      finalLimiterMaxGainReductionDb = 0.0f;
+      finalLimiterActiveSamples = 0;
+      processedSamples = 0;
+      finalLimiterGainReductionSum = 0.0;
+      finalLimiterGainReductionDbSum = 0.0;
     }
 
     void markPowerClip() {
@@ -699,6 +768,112 @@ struct Radio1938 {
 
     void reset() { powerSag = 0.0f; }
   } runtime;
+
+  struct IdentityState {
+    uint32_t seed = 0x1937620u;
+    float driftDepth = 1.0f;
+  } identity;
+
+  struct CalibrationStageMetrics {
+    uint64_t sampleCount = 0;
+    double rmsIn = 0.0;
+    double rmsOut = 0.0;
+    float peakIn = 0.0f;
+    float peakOut = 0.0f;
+    float crestIn = 0.0f;
+    float crestOut = 0.0f;
+    float spectralCentroidHz = 0.0f;
+    float bandwidth3dBHz = 0.0f;
+    float bandwidth6dBHz = 0.0f;
+    uint64_t clipCountIn = 0;
+    uint64_t clipCountOut = 0;
+    double inSumSq = 0.0;
+    double outSumSq = 0.0;
+    std::array<double, kRadioCalibrationBandCount> bandEnergy{};
+    std::array<Biquad, kRadioCalibrationBandCount> bandpass{};
+
+    void clearAccumulators();
+    void resetMeasurementFilters();
+    void updateSnapshot(float sampleRate);
+  };
+
+  struct CalibrationState {
+    static constexpr size_t kStageCount =
+        static_cast<size_t>(StageId::OutputClip) + 1u;
+
+    struct DocumentaryVoicingTargets {
+      float speechCentroidMinHz = 1300.0f;
+      float speechCentroidMaxHz = 1850.0f;
+      float bandwidth6dBMinHz = 2000.0f;
+      float bandwidth6dBMaxHz = 3200.0f;
+      float limiterDutyCycleMax = 0.12f;
+      float melodyBandRetentionMin = 0.55f;
+      float receiverUpperMidEnergyRatioMin = 0.28f;
+      float receiverUpperMidEnergyRatioMax = 0.55f;
+      float consonantRetentionProxyMin = 0.88f;
+      float speakerMidRetentionMin = 0.92f;
+      float speakerBreakupRetentionMin = 0.82f;
+      float speakerBreakupRetentionMax = 1.02f;
+      float speakerLowOverhangProxyMax = 0.16f;
+    };
+
+    struct DocumentaryVoicingSnapshot {
+      float speechCentroidHz = 0.0f;
+      float effectiveBandwidth6dBHz = 0.0f;
+      float melodyBandRetention = 0.0f;
+      float speechCentroidDeviationHz = 0.0f;
+      float effectiveBandwidthDeviationHz = 0.0f;
+      float limiterDutyCycleExcess = 0.0f;
+      float melodyBandRetentionShortfall = 0.0f;
+      float receiverCentroidHz = 0.0f;
+      float receiverBandwidth6dBHz = 0.0f;
+      float receiverUpperMidEnergyRatio = 0.0f;
+      float receiverUpperMidEnergyRatioDeviation = 0.0f;
+      float receiverCrestReduction = 0.0f;
+      float receiverToOutputMelodyRetention = 0.0f;
+      float consonantRetentionProxy = 0.0f;
+      float consonantRetentionShortfall = 0.0f;
+      float speakerLowRetention = 0.0f;
+      float speakerMidRetention = 0.0f;
+      float speakerMidRetentionShortfall = 0.0f;
+      float speakerBreakupRetention = 0.0f;
+      float speakerBreakupRetentionDeviation = 0.0f;
+      float speakerBreakupOpenness = 0.0f;
+      float speakerLowOverhangProxy = 0.0f;
+      float speakerLowOverhangExcess = 0.0f;
+      float worstDeviationScore = 0.0f;
+      std::string_view worstDeviationMetric{};
+      bool speechCentroidInRange = false;
+      bool effectiveBandwidthInRange = false;
+      bool limiterDutyCycleInRange = false;
+      bool melodyBandRetentionInRange = false;
+      bool receiverUpperMidEnergyRatioInRange = false;
+      bool consonantRetentionInRange = false;
+      bool speakerMidRetentionInRange = false;
+      bool speakerBreakupRetentionInRange = false;
+      bool speakerLowOverhangInRange = false;
+      bool allTargetsMet = false;
+    };
+
+    bool enabled = false;
+    uint64_t totalSamples = 0;
+    uint64_t preLimiterClipCount = 0;
+    uint64_t postLimiterClipCount = 0;
+    uint64_t limiterActiveSamples = 0;
+    float limiterDutyCycle = 0.0f;
+    float limiterAverageGainReduction = 0.0f;
+    float limiterMaxGainReduction = 0.0f;
+    float limiterAverageGainReductionDb = 0.0f;
+    float limiterMaxGainReductionDb = 0.0f;
+    double limiterGainReductionSum = 0.0;
+    double limiterGainReductionDbSum = 0.0;
+    DocumentaryVoicingTargets documentaryTargets{};
+    DocumentaryVoicingSnapshot documentarySnapshot{};
+    std::array<CalibrationStageMetrics, kStageCount> stages{};
+
+    void resetMeasurementFilters();
+    void reset();
+  } calibration;
 
   struct GlobalTuning {
     float oversampleFactor = 2.0f;
@@ -864,41 +1039,64 @@ struct Radio1938 {
     float diodeColorDrop = 0.004f;
   } demod;
 
+  struct ReceiverCircuitNodeState {
+    bool enabled = true;
+    float couplingHpHz = 125.0f;
+    float couplingCapTolerance = 0.0f;
+    float gridLeakTolerance = 0.0f;
+    float interstagePeakHz = 1480.0f;
+    float plateLoadTolerance = 0.0f;
+    float interstagePeakQ = 0.82f;
+    float interstagePeakGainDb = 0.45f;
+    float transformerLpHz = 3150.0f;
+    float toneCapTolerance = 0.0f;
+    float transformerTolerance = 0.0f;
+    float presenceDipHz = 2550.0f;
+    float presenceDipQ = 1.05f;
+    float presenceDipGainDb = -0.45f;
+    float env = 0.0f;
+    float atk = 0.0f;
+    float rel = 0.0f;
+    float attackMs = 12.0f;
+    float releaseMs = 220.0f;
+    float envRef = 0.30f;
+    float driveBase = 1.02f;
+    float driveDepth = 0.16f;
+    float asymBiasBase = 0.003f;
+    float asymBiasDepth = 0.008f;
+    float nonlinearMix = 0.08f;
+    float presenceCompressDepth = 0.14f;
+    float bodyPreserveMix = 0.94f;
+    float presenceSplitHz = 1320.0f;
+    float couplingSag = 0.0f;
+    float couplingSagRel = 0.0f;
+    float couplingSagDepth = 0.035f;
+    float couplingSagRef = 0.22f;
+    float couplingSagReleaseMs = 260.0f;
+    Biquad couplingHp;
+    Biquad interstagePeak;
+    Biquad presenceDip;
+    Biquad transformerLp;
+    Biquad presenceSplitLp;
+    Biquad nonlinearDeltaBodyLp;
+  } receiverCircuit;
+
   struct ToneNodeState {
     float env = 0.0f;
     float atk = 0.0f;
     float rel = 0.0f;
-    float midBoostHz = 1250.0f;
-    float midBoostQ = 0.8f;
-    float midBoostGainDb = 1.4f;
-    float lowMidDipHz = 340.0f;
-    float lowMidDipQ = 1.0f;
-    float lowMidDipGainDb = -1.0f;
-    float presBoostHz = 3300.0f;
-    float presBoostQ = 0.9f;
-    float presBoostGainDb = -0.8f;
-    float lowLpHz = 430.0f;
-    float highHpHz = 1750.0f;
-    float compThresholdDb = -12.0f;
-    float compRatio = 1.35f;
-    float compAttackMs = 140.0f;
-    float compReleaseMs = 1100.0f;
-    float attackMs = 22.0f;
-    float releaseMs = 320.0f;
+    float presenceHz = 1650.0f;
+    float presenceQ = 0.78f;
+    float presenceGainDb = 0.28f;
+    float tiltSplitHz = 1450.0f;
+    float tiltBase = -0.020f;
+    float tiltDepth = 0.035f;
+    float attackMs = 18.0f;
+    float releaseMs = 260.0f;
     float loudnessEnvStart = 0.010f;
-    float loudnessEnvRange = 0.11f;
-    float lowBaseGain = 0.80f;
-    float lowGainDepth = 0.18f;
-    float midBaseGain = 0.90f;
-    float midGainDepth = 0.18f;
-    float highBaseGain = 0.46f;
-    float highGainDepth = 0.34f;
-    Biquad midBoost;
-    Biquad lowMidDip;
-    Biquad presBoost;
-    Biquad lowLp;
-    Biquad highHp;
-    Compressor comp;
+    float loudnessEnvRange = 0.12f;
+    Biquad presence;
+    Biquad tiltLp;
   } tone;
 
   struct PowerNodeState {
@@ -993,11 +1191,44 @@ struct Radio1938 {
   struct SpeakerStageState {
     float osPrev = 0.0f;
     float drive = 0.72f;
-    Biquad postLpf;
     Biquad osLpIn;
     Biquad osLpOut;
     SpeakerSim speaker;
   } speakerStage;
+
+  struct CabinetNodeState {
+    bool enabled = true;
+    float panelHz = 185.0f;
+    float panelQ = 0.82f;
+    float panelGainDb = 0.55f;
+    float chassisHz = 430.0f;
+    float chassisQ = 1.05f;
+    float chassisGainDb = 0.30f;
+    float cavityDipHz = 980.0f;
+    float cavityDipQ = 0.95f;
+    float cavityDipGainDb = -0.55f;
+    float grilleLpHz = 2950.0f;
+    float rearDelayMs = 1.6f;
+    float rearMix = 0.06f;
+    float rearHpHz = 170.0f;
+    float rearLpHz = 1100.0f;
+    float panelStiffnessTolerance = 0.0f;
+    float baffleLeakTolerance = 0.0f;
+    float cavityTolerance = 0.0f;
+    float grilleClothTolerance = 0.0f;
+    float rearPathTolerance = 0.0f;
+    float rearMixApplied = 0.06f;
+    int minBufferSamples = 8;
+    int bufferGuardSamples = 4;
+    std::vector<float> buf;
+    int index = 0;
+    Biquad panel;
+    Biquad chassis;
+    Biquad cavityDip;
+    Biquad grilleLp;
+    Biquad rearHp;
+    Biquad rearLp;
+  } cabinet;
 
   struct RoomNodeState {
     bool enableEarlyReflections = true;
@@ -1025,17 +1256,17 @@ struct Radio1938 {
 
   struct FinalLimiterNodeState {
     bool enabled = true;
-    float threshold = 0.94f;
-    float lookaheadMs = 2.0f;
+    float threshold = 0.92f;
+    float lookaheadMs = 2.5f;
     int delaySamples = 0;
     std::vector<float> delayBuf;
+    std::vector<float> requiredGainBuf;
     int delayWriteIndex = 0;
-    float attackMs = 0.25f;
-    float releaseMs = 120.0f;
+    float attackMs = 0.20f;
+    float releaseMs = 160.0f;
     float attackCoeff = 0.0f;
     float gain = 1.0f;
     float targetGain = 1.0f;
-    float finalGain = 1.0f;
     float releaseCoeff = 0.0f;
     float osPrev = 0.0f;
     Biquad osLpIn;
@@ -1050,8 +1281,12 @@ struct Radio1938 {
   } output;
 
   static std::string_view presetName(Preset preset);
+  static std::string_view stageName(StageId id);
   bool applyPreset(std::string_view presetName);
   void applyPreset(Preset preset);
+  void setIdentitySeed(uint32_t seed);
+  void setCalibrationEnabled(bool enabled);
+  void resetCalibration();
   void init(int ch, float sr, float bw, float noise);
   void reset();
   void process(float* samples, uint32_t frames);
