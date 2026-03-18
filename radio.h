@@ -725,6 +725,9 @@ struct Radio1938 {
     float finalLimiterMaxGainReductionDb = 0.0f;
     uint32_t finalLimiterActiveSamples = 0;
     uint32_t processedSamples = 0;
+    uint32_t powerClipSamples = 0;
+    uint32_t speakerClipSamples = 0;
+    uint32_t outputClipSamples = 0;
     double finalLimiterGainReductionSum = 0.0;
     double finalLimiterGainReductionDbSum = 0.0;
 
@@ -743,6 +746,9 @@ struct Radio1938 {
       finalLimiterMaxGainReductionDb = 0.0f;
       finalLimiterActiveSamples = 0;
       processedSamples = 0;
+      powerClipSamples = 0;
+      speakerClipSamples = 0;
+      outputClipSamples = 0;
       finalLimiterGainReductionSum = 0.0;
       finalLimiterGainReductionDbSum = 0.0;
     }
@@ -750,16 +756,19 @@ struct Radio1938 {
     void markPowerClip() {
       anyClip = true;
       powerClip = true;
+      powerClipSamples++;
     }
 
     void markSpeakerClip() {
       anyClip = true;
       speakerClip = true;
+      speakerClipSamples++;
     }
 
     void markOutputClip() {
       anyClip = true;
       outputClip = true;
+      outputClipSamples++;
     }
   } diagnostics;
 
@@ -887,7 +896,7 @@ struct Radio1938 {
     float autoMaxBoostDb = 4.0f;
     float satClipDelta = 0.03f;
     float satClipMinLevel = 0.70f;
-    float outputClipThreshold = 0.995f;
+    float outputClipThreshold = 0.98f;
     float oversampleCutoffFraction = 0.45f;
   } globals;
 
@@ -1256,8 +1265,8 @@ struct Radio1938 {
 
   struct FinalLimiterNodeState {
     bool enabled = true;
-    float threshold = 0.92f;
-    float lookaheadMs = 2.5f;
+    float threshold = 0.88f;
+    float lookaheadMs = 3.5f;
     int delaySamples = 0;
     std::vector<float> delayBuf;
     std::vector<float> requiredGainBuf;

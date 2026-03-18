@@ -772,6 +772,39 @@ static void applyRadioOutputTrim(float* samples,
   }
 }
 
+static inline float softLimitOutputSample(float x, float threshold = 0.985f) {
+  float ax = std::fabs(x);
+  if (ax <= threshold) return x;
+  float sign = (x < 0.0f) ? -1.0f : 1.0f;
+  float denom = std::max(1e-6f, 1.0f - threshold);
+  float u = (ax - threshold) / denom;
+  float y = threshold + (1.0f - std::exp(-u)) * (1.0f - threshold);
+  return sign * y;
+}
+
+static void applyOutputVolumeSafety(float* samples,
+                                    uint32_t frames,
+                                    uint32_t channels,
+                                    float volume) {
+  if (!samples || frames == 0 || channels == 0) return;
+  constexpr float kOutputClamp = 0.999f;
+  size_t count = static_cast<size_t>(frames) * channels;
+  for (size_t i = 0; i < count; ++i) {
+    float x = samples[i] * volume;
+    x = softLimitOutputSample(x);
+    samples[i] = std::clamp(x, -kOutputClamp, kOutputClamp);
+  }
+}
+
+static bool radioBlockOverloaded(const Radio1938& radio, uint32_t frames) {
+  const auto& diag = radio.diagnostics;
+  if (diag.outputClip) return true;
+  uint32_t overloadSamples =
+      diag.powerClipSamples + diag.speakerClipSamples + diag.outputClipSamples;
+  uint32_t threshold = std::max<uint32_t>(4u, frames / 256u);
+  return overloadSamples >= threshold;
+}
+
 void dataCallback(ma_device* device, void* output, const void*,
                   ma_uint32 frameCount) {
   static constexpr uint32_t kRadioClipHoldFrames = 2048;
@@ -811,7 +844,8 @@ void dataCallback(ma_device* device, void* output, const void*,
       state->radio1938.process(out, static_cast<uint32_t>(framesRead));
       applyRadioOutputTrim(out, static_cast<uint32_t>(framesRead), channels,
                            state->radioMakeupGain.load(std::memory_order_relaxed));
-      bool clipped = state->radio1938.diagnostics.outputClip;
+      bool clipped =
+          radioBlockOverloaded(state->radio1938, static_cast<uint32_t>(framesRead));
       bool limiting = state->radio1938.diagnostics.finalLimiterActive;
       uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
       uint32_t limiterHold =
@@ -906,24 +940,7 @@ void dataCallback(ma_device* device, void* output, const void*,
     }
 
     float vol = state->volume.load(std::memory_order_relaxed);
-    bool postClip = false;
-    if (vol != 1.0f) {
-      for (ma_uint32 i = 0; i < frameCount * channels; ++i) {
-        float x = out[i] * vol;
-        if (vol > 1.0f) {
-          if (x > 0.9f) {
-            postClip = true;
-            float r = x - 0.9f;
-            x = 0.9f + 0.1f * (r / (0.1f + r));
-          } else if (x < -0.9f) {
-            postClip = true;
-            float r = -x - 0.9f;
-            x = -(0.9f + 0.1f * (r / (0.1f + r)));
-          }
-        }
-        out[i] = x;
-      }
-    }
+    applyOutputVolumeSafety(out, frameCount, channels, vol);
     updatePeakMeter(state, out, frameCount);
     return;
   }
@@ -1025,7 +1042,8 @@ void dataCallback(ma_device* device, void* output, const void*,
     applyRadioOutputTrim(audioStart, static_cast<uint32_t>(framesRead),
                          state->channels,
                          state->radioMakeupGain.load(std::memory_order_relaxed));
-    bool clipped = state->radio1938.diagnostics.outputClip;
+    bool clipped =
+        radioBlockOverloaded(state->radio1938, static_cast<uint32_t>(framesRead));
     bool limiting = state->radio1938.diagnostics.finalLimiterActive;
     uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
     uint32_t limiterHold =
@@ -1061,24 +1079,7 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
 
   float vol = state->volume.load(std::memory_order_relaxed);
-  bool postClip = false;
-  if (vol != 1.0f) {
-    for (ma_uint32 i = 0; i < frameCount * state->channels; ++i) {
-      float x = out[i] * vol;
-      if (vol > 1.0f) {
-        if (x > 0.9f) {
-          postClip = true;
-          float r = x - 0.9f;
-          x = 0.9f + 0.1f * (r / (0.1f + r));
-        } else if (x < -0.9f) {
-          postClip = true;
-          float r = -x - 0.9f;
-          x = -(0.9f + 0.1f * (r / (0.1f + r)));
-        }
-      }
-      out[i] = x;
-    }
-  }
+  applyOutputVolumeSafety(out, frameCount, state->channels, vol);
   updatePeakMeter(state, out, frameCount);
 }
 

@@ -2377,7 +2377,7 @@ static float runPresentationPath(
 }
 
 static void applyMid30sDocumentaryPreset(Radio1938& radio) {
-  radio.makeupGain = 0.97f;
+  radio.makeupGain = 0.90f;
 
   radio.globals.ifNoiseMix = 0.28f;
   radio.globals.postNoiseMix = 0.17f;
@@ -2386,6 +2386,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.globals.enableAutoLevel = false;
   radio.globals.autoTargetDb = -21.0f;
   radio.globals.autoMaxBoostDb = 2.5f;
+  radio.globals.outputClipThreshold = 0.98f;
 
   radio.tuning.safeBwMinHz = 3400.0f;
   radio.tuning.safeBwMaxHz = 4000.0f;
@@ -2400,7 +2401,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
 
   radio.adjacent.mix = 0.008f;
 
-  radio.demod.am.detectorMakeupGain = 8.0f;
+  radio.demod.am.detectorMakeupGain = 5.5f;
   radio.demod.am.detReleaseMs = 0.35f;
   radio.demod.diodeColorDrop = 0.008f;
   radio.receiverCircuit.couplingCapTolerance = 0.0f;
@@ -2435,7 +2436,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.tone.tiltBase = -0.022f;
   radio.tone.tiltDepth = 0.030f;
 
-  radio.power.satMix = 0.21f;
+  radio.power.satMix = 0.12f;
 
   radio.noiseConfig.enableHumTone = true;
   radio.noiseConfig.humAmpScale = 0.0022f;
@@ -2484,8 +2485,8 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.room.enableTail = false;
   radio.room.tailMix = 0.0f;
 
-  radio.finalLimiter.threshold = 0.92f;
-  radio.finalLimiter.lookaheadMs = 2.5f;
+  radio.finalLimiter.threshold = 0.94f;
+  radio.finalLimiter.lookaheadMs = 3.5f;
   radio.finalLimiter.attackMs = 0.20f;
   radio.finalLimiter.releaseMs = 160.0f;
 }
