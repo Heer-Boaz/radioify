@@ -626,6 +626,11 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
       (demodMelody > 1e-18) ? static_cast<float>(outputMelody / demodMelody) : 0.0f;
   doc.receiverCentroidHz = receiver.spectralCentroidHz;
   doc.receiverBandwidth6dBHz = receiver.bandwidth6dBHz;
+  doc.receiverRmsRatio =
+      static_cast<float>(receiver.rmsOut / std::max(1e-9, receiver.rmsIn));
+  doc.receiverPeakRatio =
+      receiver.peakOut / std::max(1e-9f, receiver.peakIn);
+  doc.receiverCrestDelta = receiver.crestOut - receiver.crestIn;
   double receiverUpperMid = sumCalibrationBandEnergy(receiver, 1600.0f, 3150.0f);
   double receiverBody = sumCalibrationBandEnergy(receiver, 400.0f, 1250.0f);
   doc.receiverUpperMidEnergyRatio =
@@ -679,6 +684,15 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
                         targets.limiterDutyCycleMax);
   doc.melodyBandRetentionShortfall =
       belowMinDeviation(doc.melodyBandRetention, targets.melodyBandRetentionMin);
+  doc.receiverRmsRatioDeviation = rangeDeviation(
+      doc.receiverRmsRatio, targets.receiverRmsRatioMin,
+      targets.receiverRmsRatioMax);
+  doc.receiverPeakRatioDeviation = rangeDeviation(
+      doc.receiverPeakRatio, targets.receiverPeakRatioMin,
+      targets.receiverPeakRatioMax);
+  doc.receiverCrestDeltaDeviation = rangeDeviation(
+      doc.receiverCrestDelta, targets.receiverCrestDeltaMin,
+      targets.receiverCrestDeltaMax);
   doc.receiverUpperMidEnergyRatioDeviation = rangeDeviation(
       doc.receiverUpperMidEnergyRatio, targets.receiverUpperMidEnergyRatioMin,
       targets.receiverUpperMidEnergyRatioMax);
@@ -690,6 +704,9 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
   doc.speakerBreakupRetentionDeviation = rangeDeviation(
       doc.speakerBreakupRetention, targets.speakerBreakupRetentionMin,
       targets.speakerBreakupRetentionMax);
+  doc.speakerBreakupOpennessDeviation = rangeDeviation(
+      doc.speakerBreakupOpenness, targets.speakerBreakupOpennessMin,
+      targets.speakerBreakupOpennessMax);
   doc.speakerLowOverhangExcess =
       aboveMaxDeviation(doc.speakerLowOverhangProxy,
                         targets.speakerLowOverhangProxyMax);
@@ -713,6 +730,21 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
                            std::max(1e-6f, targets.melodyBandRetentionMin),
                        "melody_retention", doc.worstDeviationScore,
                        doc.worstDeviationMetric);
+  updateWorstDeviation(doc.receiverRmsRatioDeviation /
+                           std::max(1e-6f, targets.receiverRmsRatioMax -
+                                             targets.receiverRmsRatioMin),
+                       "receiver_rms_ratio", doc.worstDeviationScore,
+                       doc.worstDeviationMetric);
+  updateWorstDeviation(doc.receiverPeakRatioDeviation /
+                           std::max(1e-6f, targets.receiverPeakRatioMax -
+                                             targets.receiverPeakRatioMin),
+                       "receiver_peak_ratio", doc.worstDeviationScore,
+                       doc.worstDeviationMetric);
+  updateWorstDeviation(doc.receiverCrestDeltaDeviation /
+                           std::max(1e-6f, targets.receiverCrestDeltaMax -
+                                             targets.receiverCrestDeltaMin),
+                       "receiver_crest_delta", doc.worstDeviationScore,
+                       doc.worstDeviationMetric);
   updateWorstDeviation(doc.receiverUpperMidEnergyRatioDeviation /
                            std::max(1e-6f, targets.receiverUpperMidEnergyRatioMax -
                                              targets.receiverUpperMidEnergyRatioMin),
@@ -731,6 +763,11 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
                                              targets.speakerBreakupRetentionMin),
                        "speaker_breakup_retention", doc.worstDeviationScore,
                        doc.worstDeviationMetric);
+  updateWorstDeviation(doc.speakerBreakupOpennessDeviation /
+                           std::max(1e-6f, targets.speakerBreakupOpennessMax -
+                                             targets.speakerBreakupOpennessMin),
+                       "speaker_breakup_openness", doc.worstDeviationScore,
+                       doc.worstDeviationMetric);
   updateWorstDeviation(doc.speakerLowOverhangExcess /
                            std::max(1e-6f, targets.speakerLowOverhangProxyMax),
                        "speaker_low_overhang", doc.worstDeviationScore,
@@ -745,6 +782,15 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
       radio.calibration.limiterDutyCycle <= targets.limiterDutyCycleMax;
   doc.melodyBandRetentionInRange =
       doc.melodyBandRetention >= targets.melodyBandRetentionMin;
+  doc.receiverRmsRatioInRange =
+      doc.receiverRmsRatio >= targets.receiverRmsRatioMin &&
+      doc.receiverRmsRatio <= targets.receiverRmsRatioMax;
+  doc.receiverPeakRatioInRange =
+      doc.receiverPeakRatio >= targets.receiverPeakRatioMin &&
+      doc.receiverPeakRatio <= targets.receiverPeakRatioMax;
+  doc.receiverCrestDeltaInRange =
+      doc.receiverCrestDelta >= targets.receiverCrestDeltaMin &&
+      doc.receiverCrestDelta <= targets.receiverCrestDeltaMax;
   doc.receiverUpperMidEnergyRatioInRange =
       doc.receiverUpperMidEnergyRatio >= targets.receiverUpperMidEnergyRatioMin &&
       doc.receiverUpperMidEnergyRatio <= targets.receiverUpperMidEnergyRatioMax;
@@ -755,16 +801,23 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
   doc.speakerBreakupRetentionInRange =
       doc.speakerBreakupRetention >= targets.speakerBreakupRetentionMin &&
       doc.speakerBreakupRetention <= targets.speakerBreakupRetentionMax;
+  doc.speakerBreakupOpennessInRange =
+      doc.speakerBreakupOpenness >= targets.speakerBreakupOpennessMin &&
+      doc.speakerBreakupOpenness <= targets.speakerBreakupOpennessMax;
   doc.speakerLowOverhangInRange =
       doc.speakerLowOverhangProxy <= targets.speakerLowOverhangProxyMax;
   doc.allTargetsMet = doc.speechCentroidInRange &&
                       doc.effectiveBandwidthInRange &&
                       doc.limiterDutyCycleInRange &&
                       doc.melodyBandRetentionInRange &&
+                      doc.receiverRmsRatioInRange &&
+                      doc.receiverPeakRatioInRange &&
+                      doc.receiverCrestDeltaInRange &&
                       doc.receiverUpperMidEnergyRatioInRange &&
                       doc.consonantRetentionInRange &&
                       doc.speakerMidRetentionInRange &&
                       doc.speakerBreakupRetentionInRange &&
+                      doc.speakerBreakupOpennessInRange &&
                       doc.speakerLowOverhangInRange;
 }
 
@@ -2417,7 +2470,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.receiverCircuit.transformerLpHz = 3520.0f;
   radio.receiverCircuit.presenceDipHz = 2480.0f;
   radio.receiverCircuit.presenceDipGainDb = -0.10f;
-  radio.receiverCircuit.avcStrength = 0.60f;
+  radio.receiverCircuit.avcStrength = 0.52f;
   radio.receiverCircuit.attackMs = 11.0f;
   radio.receiverCircuit.releaseMs = 210.0f;
   radio.receiverCircuit.envRef = 0.22f;
@@ -2448,7 +2501,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.noiseConfig.motorAmpScale = 0.0038f;
 
   radio.speakerStage.drive = 0.53f;
-  radio.speakerStage.speaker.limit = 1.08f;
+  radio.speakerStage.speaker.limit = 0.99f;
   radio.speakerStage.speaker.suspensionGainDb = 0.48f;
   radio.speakerStage.speaker.coneBodyGainDb = 0.18f;
   radio.speakerStage.speaker.upperBreakupGainDb = 0.02f;
@@ -2470,11 +2523,11 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.speakerStage.speaker.breakupDriveBase = 0.18f;
   radio.speakerStage.speaker.breakupDriveDepth = 0.32f;
   radio.speakerStage.speaker.breakupCollapseDepth = 0.10f;
-  radio.speakerStage.speaker.breakupCloseDepth = 0.12f;
+  radio.speakerStage.speaker.breakupCloseDepth = 0.15f;
   radio.speakerStage.speaker.breakupGrainMix = 0.035f;
   radio.speakerStage.speaker.lowBandWeight = 0.82f;
   radio.speakerStage.speaker.midBandWeight = 1.15f;
-  radio.speakerStage.speaker.breakupBandWeight = 0.78f;
+  radio.speakerStage.speaker.breakupBandWeight = 0.70f;
   radio.speakerStage.speaker.lowBloomDepth = 0.05f;
   radio.speakerStage.speaker.finalConeMix = 0.003f;
   radio.cabinet.panelHz = 190.0f;
