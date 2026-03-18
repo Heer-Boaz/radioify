@@ -818,16 +818,24 @@ struct Radio1938 {
     struct DocumentaryVoicingTargets {
       float speechCentroidMinHz = 1180.0f;
       float speechCentroidMaxHz = 1680.0f;
-      float bandwidth6dBMinHz = 2800.0f;
-      float bandwidth6dBMaxHz = 4000.0f;
+      float bandwidth6dBMinHz = 2600.0f;
+      float bandwidth6dBMaxHz = 3600.0f;
       float limiterDutyCycleMax = 0.05f;
       float melodyBandRetentionMin = 0.64f;
+      float receiverRmsRatioMin = 0.72f;
+      float receiverRmsRatioMax = 0.90f;
+      float receiverPeakRatioMin = 0.60f;
+      float receiverPeakRatioMax = 0.82f;
+      float receiverCrestDeltaMin = -0.30f;
+      float receiverCrestDeltaMax = -0.05f;
       float receiverUpperMidEnergyRatioMin = 0.30f;
       float receiverUpperMidEnergyRatioMax = 0.50f;
       float consonantRetentionProxyMin = 0.92f;
       float speakerMidRetentionMin = 0.98f;
       float speakerBreakupRetentionMin = 0.58f;
       float speakerBreakupRetentionMax = 0.84f;
+      float speakerBreakupOpennessMin = 0.20f;
+      float speakerBreakupOpennessMax = 0.38f;
       float speakerLowOverhangProxyMax = 0.18f;
     };
 
@@ -841,6 +849,12 @@ struct Radio1938 {
       float melodyBandRetentionShortfall = 0.0f;
       float receiverCentroidHz = 0.0f;
       float receiverBandwidth6dBHz = 0.0f;
+      float receiverRmsRatio = 0.0f;
+      float receiverPeakRatio = 0.0f;
+      float receiverCrestDelta = 0.0f;
+      float receiverRmsRatioDeviation = 0.0f;
+      float receiverPeakRatioDeviation = 0.0f;
+      float receiverCrestDeltaDeviation = 0.0f;
       float receiverUpperMidEnergyRatio = 0.0f;
       float receiverUpperMidEnergyRatioDeviation = 0.0f;
       float receiverCrestReduction = 0.0f;
@@ -853,6 +867,7 @@ struct Radio1938 {
       float speakerBreakupRetention = 0.0f;
       float speakerBreakupRetentionDeviation = 0.0f;
       float speakerBreakupOpenness = 0.0f;
+      float speakerBreakupOpennessDeviation = 0.0f;
       float speakerLowOverhangProxy = 0.0f;
       float speakerLowOverhangExcess = 0.0f;
       float worstDeviationScore = 0.0f;
@@ -861,10 +876,14 @@ struct Radio1938 {
       bool effectiveBandwidthInRange = false;
       bool limiterDutyCycleInRange = false;
       bool melodyBandRetentionInRange = false;
+      bool receiverRmsRatioInRange = false;
+      bool receiverPeakRatioInRange = false;
+      bool receiverCrestDeltaInRange = false;
       bool receiverUpperMidEnergyRatioInRange = false;
       bool consonantRetentionInRange = false;
       bool speakerMidRetentionInRange = false;
       bool speakerBreakupRetentionInRange = false;
+      bool speakerBreakupOpennessInRange = false;
       bool speakerLowOverhangInRange = false;
       bool allTargetsMet = false;
     };
