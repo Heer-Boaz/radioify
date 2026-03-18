@@ -231,6 +231,7 @@ struct AMDetector {
   float consonantPullScale = 8.0f;
   float consonantPullMaxDb = 1.2f;
   float mistuneGainPenaltyDb = 0.8f;
+  float controlVoltageRef = 0.18f;
   float overloadThreshold = 0.18f;
   float overloadRange = 0.24f;
   float overloadImpulseScale = 1.8f;
@@ -332,6 +333,7 @@ enum class StageId : uint8_t {
   Tuning,
   Input,
   Reception,
+  ControlBus,
   InterferenceDerived,
   FrontEnd,
   Multipath,
@@ -406,6 +408,12 @@ struct RadioInputNode {
 };
 
 struct RadioReceptionControlNode {
+  static void init(Radio1938& radio, RadioInitContext& initCtx);
+  static void reset(Radio1938& radio);
+  static void update(Radio1938& radio, RadioSampleContext& ctx);
+};
+
+struct RadioControlBusNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
   static void update(Radio1938& radio, RadioSampleContext& ctx);
@@ -615,8 +623,9 @@ struct Radio1938 {
         {StageId::Tuning, "Tuning", true, &RadioTuningNode::prepare},
     }};
 
-    std::array<SampleControlStep, 2> sampleControlSteps{{
+    std::array<SampleControlStep, 3> sampleControlSteps{{
         {StageId::Reception, "Reception", true, &RadioReceptionControlNode::update},
+        {StageId::ControlBus, "ControlBus", true, &RadioControlBusNode::update},
         {StageId::InterferenceDerived, "InterferenceDerived", true,
          &RadioInterferenceDerivedNode::update},
     }};
@@ -658,9 +667,10 @@ struct Radio1938 {
   } graph;
 
   struct RadioLifecycle {
-    std::array<ConfigureStep, 11> configureSteps{{
+    std::array<ConfigureStep, 12> configureSteps{{
         {StageId::Input, "Input", &RadioInputNode::init},
         {StageId::Reception, "Reception", &RadioReceptionControlNode::init},
+        {StageId::ControlBus, "ControlBus", &RadioControlBusNode::init},
         {StageId::FrontEnd, "FrontEnd", &RadioFrontEndNode::init},
         {StageId::Adjacent, "Adjacent", &RadioAdjacentNode::init},
         {StageId::ReceiverCircuit, "ReceiverCircuit",
@@ -688,8 +698,9 @@ struct Radio1938 {
         {StageId::Heterodyne, "Heterodyne", &RadioHeterodyneNode::init},
     }};
 
-    std::array<ResetStep, 16> resetSteps{{
+    std::array<ResetStep, 17> resetSteps{{
         {StageId::Reception, "Reception", &RadioReceptionControlNode::reset},
+        {StageId::ControlBus, "ControlBus", &RadioControlBusNode::reset},
         {StageId::Detune, "Detune", &RadioDetuneNode::reset},
         {StageId::Adjacent, "Adjacent", &RadioAdjacentNode::reset},
         {StageId::Heterodyne, "Heterodyne", &RadioHeterodyneNode::reset},
@@ -777,19 +788,33 @@ struct Radio1938 {
     }
   } diagnostics;
 
-  struct RadioRuntimeObservables {
-    float powerSag = 0.0f;
-    float globalAvc = 0.0f;
-    float supplySag = 0.0f;
-    float programDrive = 0.0f;
+  struct RadioControlSenseState {
+    float controlVoltageSense = 0.0f;
+    float powerSagSense = 0.0f;
 
     void reset() {
-      powerSag = 0.0f;
-      globalAvc = 0.0f;
-      supplySag = 0.0f;
-      programDrive = 0.0f;
+      controlVoltageSense = 0.0f;
+      powerSagSense = 0.0f;
     }
-  } runtime;
+  } controlSense;
+
+  struct RadioControlBusState {
+    float controlVoltage = 0.0f;
+    float supplySag = 0.0f;
+    float controlVoltageAttackMs = 2.4f;
+    float controlVoltageReleaseMs = 36.0f;
+    float supplySagAttackMs = 10.0f;
+    float supplySagReleaseMs = 220.0f;
+    float controlVoltageAtk = 0.0f;
+    float controlVoltageRel = 0.0f;
+    float supplySagAtk = 0.0f;
+    float supplySagRel = 0.0f;
+
+    void reset() {
+      controlVoltage = 0.0f;
+      supplySag = 0.0f;
+    }
+  } controlBus;
 
   struct IdentityState {
     uint32_t seed = 0x1937620u;
@@ -1118,8 +1143,8 @@ struct Radio1938 {
     float couplingSagDepth = 0.035f;
     float couplingSagRef = 0.22f;
     float couplingSagReleaseMs = 260.0f;
-    float globalAvcGainDepth = 0.12f;
-    float globalAvcPresenceDepth = 0.08f;
+    float controlVoltageGainDepth = 0.12f;
+    float controlVoltagePresenceDepth = 0.08f;
     float supplySagGainDepth = 0.10f;
     float supplySagDriveDepth = 0.12f;
     Biquad couplingHp;
@@ -1182,9 +1207,8 @@ struct Radio1938 {
     float gainMax = 1.04f;
     float biasBase = 0.2f;
     float biasPowerDepth = 0.8f;
-    float globalAvcSatDriveDepth = 0.12f;
-    float globalAvcSatMixDepth = 0.10f;
-    float programDriveSagDepth = 0.08f;
+    float controlVoltageSatDriveDepth = 0.12f;
+    float controlVoltageSatMixDepth = 0.10f;
     Biquad postLpf;
     Biquad satOsLpIn;
     Biquad satOsLpOut;

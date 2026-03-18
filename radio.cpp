@@ -56,6 +56,16 @@ static inline float applySeededDrift(float base,
   return base * (1.0f + relativeDepth * seededSignedUnit(seed, salt));
 }
 
+static inline float smoothSharedState(float state,
+                                      float target,
+                                      float attackCoeff,
+                                      float releaseCoeff) {
+  if (target > state) {
+    return attackCoeff * state + (1.0f - attackCoeff) * target;
+  }
+  return releaseCoeff * state + (1.0f - releaseCoeff) * target;
+}
+
 template <typename Nonlinear>
 static inline float processOversampled2x(float x,
                                          float& prev,
@@ -1268,6 +1278,41 @@ void RadioReceptionControlNode::update(Radio1938& radio,
                                       reception.noiseScaleMax);
 }
 
+void RadioControlBusNode::init(Radio1938& radio, RadioInitContext&) {
+  auto& controlBus = radio.controlBus;
+  float sampleRate = std::max(radio.sampleRate, 1.0f);
+  controlBus.controlVoltageAtk = std::exp(
+      -1.0f / (sampleRate * (controlBus.controlVoltageAttackMs / 1000.0f)));
+  controlBus.controlVoltageRel = std::exp(
+      -1.0f / (sampleRate * (controlBus.controlVoltageReleaseMs / 1000.0f)));
+  controlBus.supplySagAtk =
+      std::exp(-1.0f / (sampleRate * (controlBus.supplySagAttackMs / 1000.0f)));
+  controlBus.supplySagRel = std::exp(
+      -1.0f / (sampleRate * (controlBus.supplySagReleaseMs / 1000.0f)));
+}
+
+void RadioControlBusNode::reset(Radio1938& radio) {
+  radio.controlSense.reset();
+  radio.controlBus.reset();
+}
+
+void RadioControlBusNode::update(Radio1938& radio, RadioSampleContext&) {
+  auto& controlBus = radio.controlBus;
+  const auto& controlSense = radio.controlSense;
+  const auto& power = radio.power;
+  float controlTarget = clampf(controlSense.controlVoltageSense, 0.0f, 1.25f);
+  float supplyTarget =
+      clampf((controlSense.powerSagSense - power.sagStart) /
+                 std::max(1e-6f, power.sagEnd - power.sagStart),
+             0.0f, 1.0f);
+  controlBus.controlVoltage =
+      smoothSharedState(controlBus.controlVoltage, controlTarget,
+                        controlBus.controlVoltageAtk, controlBus.controlVoltageRel);
+  controlBus.supplySag =
+      smoothSharedState(controlBus.supplySag, supplyTarget, controlBus.supplySagAtk,
+                        controlBus.supplySagRel);
+}
+
 void RadioFrontEndNode::init(Radio1938& radio, RadioInitContext&) {
   radio.frontEnd.hpf.setHighpass(radio.sampleRate, radio.frontEnd.inputHpHz,
                                  kRadioBiquadQ);
@@ -1499,8 +1544,8 @@ float RadioDemodNode::process(Radio1938& radio,
   auto& demod = radio.demod;
   y = demod.am.process(
       AMDetectorSampleInput{y, ctx.derived.demodIfNoiseAmp});
-  radio.runtime.globalAvc =
-      clampf(demod.am.agcEnv / std::max(demod.am.overloadThreshold, 1e-6f),
+  radio.controlSense.controlVoltageSense =
+      clampf(demod.am.agcEnv / std::max(demod.am.controlVoltageRef, 1e-6f),
              0.0f, 1.25f);
   return diodeColor(y, demod.diodeColorDrop);
 }
@@ -1575,7 +1620,7 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                                         float y,
                                         const RadioSampleContext&) {
   auto& receiver = radio.receiverCircuit;
-  auto& runtime = radio.runtime;
+  const auto& controlBus = radio.controlBus;
   if (!receiver.enabled) return y;
 
   y = receiver.couplingHp.process(y);
@@ -1583,14 +1628,14 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   y = receiver.presenceDip.process(y);
   y = receiver.transformerLp.process(y);
 
-  float globalAvcT = clampf(runtime.globalAvc, 0.0f, 1.25f);
-  float supplySagT = clampf(runtime.supplySag, 0.0f, 1.0f);
+  float controlVoltageT = clampf(controlBus.controlVoltage, 0.0f, 1.25f);
+  float supplySagT = clampf(controlBus.supplySag, 0.0f, 1.0f);
   float sharedGain =
-      1.0f - receiver.globalAvcGainDepth * globalAvcT -
+      1.0f - receiver.controlVoltageGainDepth * controlVoltageT -
       receiver.supplySagGainDepth * supplySagT;
   y *= std::max(0.55f, sharedGain);
   float sharedCompressionT =
-      clampf(0.65f * globalAvcT + 0.35f * supplySagT, 0.0f, 1.0f);
+      clampf(0.65f * controlVoltageT + 0.35f * supplySagT, 0.0f, 1.0f);
 
   float avcIn = std::fabs(y);
   if (avcIn > receiver.avcEnv) {
@@ -1629,7 +1674,8 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   float presenceAbs = std::fabs(presence);
   float presenceSense = clampf(presenceAbs / std::max(0.12f, receiver.envRef * 0.45f),
                                0.0f, 1.0f);
-  presence *= 1.0f - receiver.globalAvcPresenceDepth * globalAvcT * presenceSense;
+  presence *=
+      1.0f - receiver.controlVoltagePresenceDepth * controlVoltageT * presenceSense;
   float squeezeT = envT * presenceSense * (1.0f + 0.35f * sharedCompressionT);
   float presenceCompressed =
       presence / (1.0f + receiver.presenceCompressDepth * squeezeT);
@@ -1642,7 +1688,6 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                          0.08f * receiver.transformerTolerance) +
                         receiver.driveDepth * envT);
   drive *= 1.0f - receiver.supplySagDriveDepth * supplySagT;
-  drive *= 1.0f + 0.08f * globalAvcT;
   float bias =
       receiver.asymBiasBase *
           (1.0f + 0.45f * receiver.gridLeakTolerance -
@@ -1664,8 +1709,6 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                  (0.66f + 0.24f * envT + 0.16f * bodySense -
                   0.08f * presenceSense - 0.10f * sagT),
              0.0f, 0.35f);
-  runtime.programDrive =
-      0.985f * runtime.programDrive + 0.015f * std::max(envT, globalAvcT * 0.8f);
   return body + presence + bodyDeltaMix * bodyDelta + presenceDelta;
 }
 
@@ -1731,17 +1774,16 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.postLpf.reset();
   power.satOsLpIn.reset();
   power.satOsLpOut.reset();
-  radio.runtime.powerSag = 0.0f;
 }
 
 float RadioPowerNode::process(Radio1938& radio,
                               float y,
                               const RadioSampleContext&) {
   auto& power = radio.power;
-  auto& runtime = radio.runtime;
+  auto& controlSense = radio.controlSense;
+  const auto& controlBus = radio.controlBus;
   auto& noiseConfig = radio.noiseConfig;
-  float globalAvcT = clampf(runtime.globalAvc, 0.0f, 1.25f);
-  float programDriveT = clampf(runtime.programDrive, 0.0f, 1.0f);
+  float controlVoltageT = clampf(controlBus.controlVoltage, 0.0f, 1.25f);
   float powerLevel = std::fabs(y);
   if (powerLevel > power.env) {
     power.env = power.atk * power.env + (1.0f - power.atk) * powerLevel;
@@ -1768,15 +1810,15 @@ float RadioPowerNode::process(Radio1938& radio,
       1.0f - power.gainSagPerPower * powerT +
       ripple * power.rippleDepth *
           (power.rippleGainBase + power.rippleGainDepth * powerT);
-  powerGain -= power.programDriveSagDepth * programDriveT;
   powerGain = std::clamp(powerGain, power.gainMin, power.gainMax);
   float powerBias =
       ripple * power.biasDepth * (power.biasBase + power.biasPowerDepth * powerT);
   y = y * powerGain + powerBias;
   power.sat.drive =
-      std::max(0.2f, power.satDrive * (1.0f - power.globalAvcSatDriveDepth * globalAvcT));
+      std::max(0.2f, power.satDrive *
+                        (1.0f - power.controlVoltageSatDriveDepth * controlVoltageT));
   power.sat.mix =
-      std::clamp(power.satMix * (1.0f - power.globalAvcSatMixDepth * globalAvcT),
+      std::clamp(power.satMix * (1.0f - power.controlVoltageSatMixDepth * controlVoltageT),
                  0.0f, 1.0f);
   y = processOversampled2x(y, power.satOsPrev, power.satOsLpIn, power.satOsLpOut,
                            [&](float v) {
@@ -1798,8 +1840,7 @@ float RadioPowerNode::process(Radio1938& radio,
   float sagT = clampf((power.sagEnv - power.sagStart) /
                           (power.sagEnd - power.sagStart),
                       0.0f, 1.0f);
-  runtime.powerSag = power.sagEnv;
-  runtime.supplySag = 0.985f * runtime.supplySag + 0.015f * sagT;
+  controlSense.powerSagSense = power.sagEnv;
   return y * (1.0f - power.sagDepth * sagT);
 }
 
@@ -1837,7 +1878,7 @@ void RadioInterferenceDerivedNode::update(Radio1938& radio,
   auto& heterodyne = radio.heterodyne;
   auto& noiseConfig = radio.noiseConfig;
   auto& noiseDerived = radio.noiseDerived;
-  auto& runtime = radio.runtime;
+  const auto& controlBus = radio.controlBus;
   float postNoiseScale =
       std::max(ctx.control.noiseScale * radio.globals.postNoiseMix, 0.06f);
   ctx.derived.demodIfNoiseAmp =
@@ -1855,7 +1896,7 @@ void RadioInterferenceDerivedNode::update(Radio1938& radio,
   ctx.derived.humAmp = noiseDerived.baseHumAmp * postNoiseScale;
   ctx.derived.humToneEnabled = noiseConfig.enableHumTone;
   float quietT =
-      clampf((runtime.powerSag - heterodyne.gateStart) /
+      clampf((controlBus.supplySag - heterodyne.gateStart) /
                  std::max(1e-6f, heterodyne.gateEnd - heterodyne.gateStart),
              0.0f, 1.0f);
   ctx.derived.quieting = 1.0f - quietT;
@@ -1964,10 +2005,11 @@ float RadioSpeakerNode::process(Radio1938& radio,
                                 float y,
                                 const RadioSampleContext&) {
   auto& speakerStage = radio.speakerStage;
-  float supplySagT = clampf(radio.runtime.supplySag, 0.0f, 1.0f);
-  float avcT = clampf(radio.runtime.globalAvc, 0.0f, 1.25f);
+  float supplySagT = clampf(radio.controlBus.supplySag, 0.0f, 1.0f);
+  float controlVoltageT = clampf(radio.controlBus.controlVoltage, 0.0f, 1.25f);
   speakerStage.speaker.drive =
-      speakerStage.drive * (1.0f - 0.08f * supplySagT - 0.04f * avcT);
+      speakerStage.drive *
+      (1.0f - 0.08f * supplySagT - 0.04f * controlVoltageT);
   y *= radio.makeupGain * (1.0f - 0.03f * supplySagT);
   y = processOversampled2x(y, speakerStage.osPrev, speakerStage.osLpIn,
                            speakerStage.osLpOut, [&](float v) {
@@ -2492,6 +2534,10 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.demod.am.detectorMakeupGain = 3.9f;
   radio.demod.am.detReleaseMs = 0.35f;
   radio.demod.diodeColorDrop = 0.008f;
+  radio.controlBus.controlVoltageAttackMs = 2.4f;
+  radio.controlBus.controlVoltageReleaseMs = 36.0f;
+  radio.controlBus.supplySagAttackMs = 10.0f;
+  radio.controlBus.supplySagReleaseMs = 220.0f;
   radio.receiverCircuit.couplingCapTolerance = 0.0f;
   radio.receiverCircuit.gridLeakTolerance = 0.0f;
   radio.receiverCircuit.plateLoadTolerance = 0.0f;
@@ -2518,8 +2564,8 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.receiverCircuit.couplingSagDepth = 0.024f;
   radio.receiverCircuit.couplingSagRef = 0.17f;
   radio.receiverCircuit.couplingSagReleaseMs = 240.0f;
-  radio.receiverCircuit.globalAvcGainDepth = 0.02f;
-  radio.receiverCircuit.globalAvcPresenceDepth = 0.05f;
+  radio.receiverCircuit.controlVoltageGainDepth = 0.02f;
+  radio.receiverCircuit.controlVoltagePresenceDepth = 0.05f;
   radio.receiverCircuit.supplySagGainDepth = 0.03f;
   radio.receiverCircuit.supplySagDriveDepth = 0.10f;
 
@@ -2530,9 +2576,8 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.tone.tiltDepth = 0.018f;
 
   radio.power.satMix = 0.08f;
-  radio.power.globalAvcSatDriveDepth = 0.10f;
-  radio.power.globalAvcSatMixDepth = 0.08f;
-  radio.power.programDriveSagDepth = 0.06f;
+  radio.power.controlVoltageSatDriveDepth = 0.10f;
+  radio.power.controlVoltageSatMixDepth = 0.08f;
 
   radio.noiseConfig.enableHumTone = true;
   radio.noiseConfig.humAmpScale = 0.0022f;
@@ -2661,6 +2706,8 @@ std::string_view Radio1938::stageName(StageId id) {
       return "Input";
     case StageId::Reception:
       return "Reception";
+    case StageId::ControlBus:
+      return "ControlBus";
     case StageId::InterferenceDerived:
       return "InterferenceDerived";
     case StageId::FrontEnd:
@@ -2758,7 +2805,6 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
 
 void Radio1938::reset() {
   diagnostics.reset();
-  runtime.reset();
   lifecycle.resetRuntime(*this);
   if (calibration.enabled) {
     resetCalibration();
