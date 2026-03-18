@@ -2159,8 +2159,13 @@ int runTui(Options o) {
           int filled =
               static_cast<int>(std::round(peak * meterWidth));
           filled = std::clamp(filled, 0, meterWidth);
+          bool radioClipping = audioIsRadioClipping();
+          bool radioLimiting = audioIsRadioLimiting();
+          if (radioClipping) {
+            filled = meterWidth;
+          }
           Style meterOn = kStyleProgressFrame;
-          if (peak >= 0.95f) {
+          if (radioClipping || peak >= 0.95f) {
             meterOn = kStyleAlert;
           } else if (peak >= 0.80f) {
             meterOn = kStyleAccent;
@@ -2172,8 +2177,6 @@ int runTui(Options o) {
             screen.writeRun(meterX + filled, peakMeterY,
                             meterWidth - filled, L'.', kStyleDim);
           }
-          bool radioClipping = audioIsRadioClipping();
-          bool radioLimiting = audioIsRadioLimiting();
           if (radioClipping || radioLimiting) {
             int clipX = std::min(width - 1, meterX + meterWidth + 1);
             if (clipX >= 0 && clipX < width) {
