@@ -1499,6 +1499,9 @@ float RadioDemodNode::process(Radio1938& radio,
   auto& demod = radio.demod;
   y = demod.am.process(
       AMDetectorSampleInput{y, ctx.derived.demodIfNoiseAmp});
+  radio.runtime.globalAvc =
+      clampf(demod.am.agcEnv / std::max(demod.am.overloadThreshold, 1e-6f),
+             0.0f, 1.25f);
   return diodeColor(y, demod.diodeColorDrop);
 }
 
@@ -1572,12 +1575,22 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                                         float y,
                                         const RadioSampleContext&) {
   auto& receiver = radio.receiverCircuit;
+  auto& runtime = radio.runtime;
   if (!receiver.enabled) return y;
 
   y = receiver.couplingHp.process(y);
   y = receiver.interstagePeak.process(y);
   y = receiver.presenceDip.process(y);
   y = receiver.transformerLp.process(y);
+
+  float globalAvcT = clampf(runtime.globalAvc, 0.0f, 1.25f);
+  float supplySagT = clampf(runtime.supplySag, 0.0f, 1.0f);
+  float sharedGain =
+      1.0f - receiver.globalAvcGainDepth * globalAvcT -
+      receiver.supplySagGainDepth * supplySagT;
+  y *= std::max(0.55f, sharedGain);
+  float sharedCompressionT =
+      clampf(0.65f * globalAvcT + 0.35f * supplySagT, 0.0f, 1.0f);
 
   float avcIn = std::fabs(y);
   if (avcIn > receiver.avcEnv) {
@@ -1616,7 +1629,8 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   float presenceAbs = std::fabs(presence);
   float presenceSense = clampf(presenceAbs / std::max(0.12f, receiver.envRef * 0.45f),
                                0.0f, 1.0f);
-  float squeezeT = envT * presenceSense;
+  presence *= 1.0f - receiver.globalAvcPresenceDepth * globalAvcT * presenceSense;
+  float squeezeT = envT * presenceSense * (1.0f + 0.35f * sharedCompressionT);
   float presenceCompressed =
       presence / (1.0f + receiver.presenceCompressDepth * squeezeT);
   presence += (presenceCompressed - presence) * (0.18f + 0.52f * squeezeT);
@@ -1627,6 +1641,8 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                         (1.0f + 0.12f * receiver.plateLoadTolerance -
                          0.08f * receiver.transformerTolerance) +
                         receiver.driveDepth * envT);
+  drive *= 1.0f - receiver.supplySagDriveDepth * supplySagT;
+  drive *= 1.0f + 0.08f * globalAvcT;
   float bias =
       receiver.asymBiasBase *
           (1.0f + 0.45f * receiver.gridLeakTolerance -
@@ -1635,7 +1651,9 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   float asymT = 0.35f + 0.65f * envT + 0.25f * sagT;
   float shaped = asymmetricSaturate(circuit, drive, bias, asymT);
   float nonlinearMix =
-      clampf(receiver.nonlinearMix * (0.35f + 0.65f * envT), 0.0f, 0.16f);
+      clampf(receiver.nonlinearMix * (0.35f + 0.65f * envT) *
+                 (1.0f + 0.24f * sharedCompressionT),
+             0.0f, 0.18f);
   float nonlinearDelta = nonlinearMix * (shaped - circuit);
   float bodyDelta = receiver.nonlinearDeltaBodyLp.process(nonlinearDelta);
   float presenceDelta = nonlinearDelta - bodyDelta;
@@ -1646,6 +1664,8 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                  (0.66f + 0.24f * envT + 0.16f * bodySense -
                   0.08f * presenceSense - 0.10f * sagT),
              0.0f, 0.35f);
+  runtime.programDrive =
+      0.985f * runtime.programDrive + 0.015f * std::max(envT, globalAvcT * 0.8f);
   return body + presence + bodyDeltaMix * bodyDelta + presenceDelta;
 }
 
@@ -1720,6 +1740,8 @@ float RadioPowerNode::process(Radio1938& radio,
   auto& power = radio.power;
   auto& runtime = radio.runtime;
   auto& noiseConfig = radio.noiseConfig;
+  float globalAvcT = clampf(runtime.globalAvc, 0.0f, 1.25f);
+  float programDriveT = clampf(runtime.programDrive, 0.0f, 1.0f);
   float powerLevel = std::fabs(y);
   if (powerLevel > power.env) {
     power.env = power.atk * power.env + (1.0f - power.atk) * powerLevel;
@@ -1746,10 +1768,16 @@ float RadioPowerNode::process(Radio1938& radio,
       1.0f - power.gainSagPerPower * powerT +
       ripple * power.rippleDepth *
           (power.rippleGainBase + power.rippleGainDepth * powerT);
+  powerGain -= power.programDriveSagDepth * programDriveT;
   powerGain = std::clamp(powerGain, power.gainMin, power.gainMax);
   float powerBias =
       ripple * power.biasDepth * (power.biasBase + power.biasPowerDepth * powerT);
   y = y * powerGain + powerBias;
+  power.sat.drive =
+      std::max(0.2f, power.satDrive * (1.0f - power.globalAvcSatDriveDepth * globalAvcT));
+  power.sat.mix =
+      std::clamp(power.satMix * (1.0f - power.globalAvcSatMixDepth * globalAvcT),
+                 0.0f, 1.0f);
   y = processOversampled2x(y, power.satOsPrev, power.satOsLpIn, power.satOsLpOut,
                            [&](float v) {
                              float out = power.sat.process(v);
@@ -1771,6 +1799,7 @@ float RadioPowerNode::process(Radio1938& radio,
                           (power.sagEnd - power.sagStart),
                       0.0f, 1.0f);
   runtime.powerSag = power.sagEnv;
+  runtime.supplySag = 0.985f * runtime.supplySag + 0.015f * sagT;
   return y * (1.0f - power.sagDepth * sagT);
 }
 
@@ -1935,7 +1964,11 @@ float RadioSpeakerNode::process(Radio1938& radio,
                                 float y,
                                 const RadioSampleContext&) {
   auto& speakerStage = radio.speakerStage;
-  y *= radio.makeupGain;
+  float supplySagT = clampf(radio.runtime.supplySag, 0.0f, 1.0f);
+  float avcT = clampf(radio.runtime.globalAvc, 0.0f, 1.25f);
+  speakerStage.speaker.drive =
+      speakerStage.drive * (1.0f - 0.08f * supplySagT - 0.04f * avcT);
+  y *= radio.makeupGain * (1.0f - 0.03f * supplySagT);
   y = processOversampled2x(y, speakerStage.osPrev, speakerStage.osLpIn,
                            speakerStage.osLpOut, [&](float v) {
                              bool clipped = false;
@@ -2485,6 +2518,10 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.receiverCircuit.couplingSagDepth = 0.024f;
   radio.receiverCircuit.couplingSagRef = 0.17f;
   radio.receiverCircuit.couplingSagReleaseMs = 240.0f;
+  radio.receiverCircuit.globalAvcGainDepth = 0.02f;
+  radio.receiverCircuit.globalAvcPresenceDepth = 0.05f;
+  radio.receiverCircuit.supplySagGainDepth = 0.03f;
+  radio.receiverCircuit.supplySagDriveDepth = 0.10f;
 
   radio.tone.presenceHz = 1600.0f;
   radio.tone.presenceGainDb = 0.14f;
@@ -2493,6 +2530,9 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.tone.tiltDepth = 0.018f;
 
   radio.power.satMix = 0.08f;
+  radio.power.globalAvcSatDriveDepth = 0.10f;
+  radio.power.globalAvcSatMixDepth = 0.08f;
+  radio.power.programDriveSagDepth = 0.06f;
 
   radio.noiseConfig.enableHumTone = true;
   radio.noiseConfig.humAmpScale = 0.0022f;

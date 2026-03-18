@@ -779,8 +779,16 @@ struct Radio1938 {
 
   struct RadioRuntimeObservables {
     float powerSag = 0.0f;
+    float globalAvc = 0.0f;
+    float supplySag = 0.0f;
+    float programDrive = 0.0f;
 
-    void reset() { powerSag = 0.0f; }
+    void reset() {
+      powerSag = 0.0f;
+      globalAvc = 0.0f;
+      supplySag = 0.0f;
+      programDrive = 0.0f;
+    }
   } runtime;
 
   struct IdentityState {
@@ -1110,6 +1118,10 @@ struct Radio1938 {
     float couplingSagDepth = 0.035f;
     float couplingSagRef = 0.22f;
     float couplingSagReleaseMs = 260.0f;
+    float globalAvcGainDepth = 0.12f;
+    float globalAvcPresenceDepth = 0.08f;
+    float supplySagGainDepth = 0.10f;
+    float supplySagDriveDepth = 0.12f;
     Biquad couplingHp;
     Biquad interstagePeak;
     Biquad presenceDip;
@@ -1170,6 +1182,9 @@ struct Radio1938 {
     float gainMax = 1.04f;
     float biasBase = 0.2f;
     float biasPowerDepth = 0.8f;
+    float globalAvcSatDriveDepth = 0.12f;
+    float globalAvcSatMixDepth = 0.10f;
+    float programDriveSagDepth = 0.08f;
     Biquad postLpf;
     Biquad satOsLpIn;
     Biquad satOsLpOut;
