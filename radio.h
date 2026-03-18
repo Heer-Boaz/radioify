@@ -225,6 +225,7 @@ struct AMDetector {
   float mistuneNormDenomScale = 0.5f;
   float detectorCompression = 0.85f;
   float detectorDetailMix = 0.15f;
+  float detectorRippleMix = 0.020f;
   float detReleaseMistuneMix = 0.45f;
   float avcImpulseBase = 0.55f;
   float avcImpulseMistune = 0.20f;
@@ -316,6 +317,9 @@ struct SpeakerSim {
   float breakupCollapseDepth = 0.16f;
   float breakupCloseDepth = 0.22f;
   float breakupGrainMix = 0.05f;
+  float dynamicLowLooseDepth = 0.04f;
+  float dynamicMidPushDepth = 0.08f;
+  float dynamicHighLossDepth = 0.16f;
   float lowBandWeight = 1.0f;
   float midBandWeight = 1.0f;
   float breakupBandWeight = 1.0f;
@@ -1147,6 +1151,8 @@ struct Radio1938 {
     float controlVoltagePresenceDepth = 0.08f;
     float supplySagGainDepth = 0.10f;
     float supplySagDriveDepth = 0.12f;
+    float bodyForwardDepth = 0.06f;
+    float presenceCollapseDepth = 0.08f;
     Biquad couplingHp;
     Biquad interstagePeak;
     Biquad presenceDip;

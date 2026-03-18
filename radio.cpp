@@ -535,8 +535,7 @@ void Radio1938::CalibrationStageMetrics::updateSnapshot(float) {
     weightedHz += bandEnergy[i] * kRadioCalibrationBandHz[i];
     maxEnergy = std::max(maxEnergy, bandEnergy[i]);
   }
-  spectralCentroidHz =
-      (totalEnergy > 1e-18) ? static_cast<float>(weightedHz / totalEnergy) : 0.0f;
+  spectralCentroidHz = (totalEnergy > 1e-18) ? static_cast<float>(weightedHz / totalEnergy) : 0.0f;
   if (maxEnergy <= 0.0) return;
 
   double threshold3dB = maxEnergy * std::pow(10.0, -3.0 / 10.0);
@@ -911,6 +910,9 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
   float overloadT = clampf((env - overloadThreshold) / overloadRange +
                                avcImpulsePeak * overloadImpulseScale,
                            0.0f, 1.0f);
+  float ripple = rectifiedAvg - env;
+  out += detectorRippleMix * (0.35f + 0.65f * overloadT) *
+         (ripple + 0.22f * std::max(0.0f, ripple));
   float negLimit = negLimitBase - negLimitOverloadDepth * overloadT -
                    negLimitMistuneDepth * mistuneT;
   float posLimit = posLimitBase - posLimitOverloadDepth * overloadT;
@@ -1055,6 +1057,7 @@ float SpeakerSim::process(float x, bool& clipped) {
       lowBand, lowDrive, asymBias * (0.25f + 0.75f * lowT), lowT);
   float lowMix = 0.18f + 0.28f * lowT;
   lowBand = softClip(lowLinear + (lowShaped - lowLinear) * lowMix, lowLimit);
+  lowBand += dynamicLowLooseDepth * lowT * (lowShaped - lowLinear);
   lowBand *= 1.0f + lowBloomDepth * (1.0f - lowT);
 
   float midLinear = midBand;
@@ -1063,6 +1066,7 @@ float SpeakerSim::process(float x, bool& clipped) {
       midBand, midDrive, asymBias * (0.05f + 0.10f * midT), 0.12f + 0.24f * midT);
   float midMix = 0.04f + midCompactionDepth * midT;
   midBand = midLinear + midMix * (midShaped - midLinear);
+  midBand *= 1.0f + dynamicMidPushDepth * breakupT;
 
   float breakupLinear = breakupBand;
   float breakupDrive = breakupDriveBase + breakupDriveDepth * breakupT;
@@ -1074,6 +1078,7 @@ float SpeakerSim::process(float x, bool& clipped) {
   float breakupClosed = breakupCloseLp.process(breakupBand);
   breakupBand += breakupCloseDepth * breakupT * (breakupClosed - breakupBand);
   breakupBand *= (1.0f - breakupCollapseDepth * breakupT);
+  breakupBand *= 1.0f - dynamicHighLossDepth * breakupT;
   breakupBand += breakupGrainMix * std::tanh(2.0f * breakupBand);
 
   float y = lowBand * lowBandWeight + midBand * midBandWeight +
@@ -1670,12 +1675,19 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   float sagT = clampf(receiver.couplingSag / std::max(receiver.couplingSagRef, 1e-6f),
                       0.0f, 1.0f);
   body *= 1.0f - receiver.couplingSagDepth * envT * sagT;
+  body *= 1.0f + receiver.bodyForwardDepth *
+                     (0.30f + 0.30f * envT + 0.40f * controlVoltageT);
 
   float presenceAbs = std::fabs(presence);
   float presenceSense = clampf(presenceAbs / std::max(0.12f, receiver.envRef * 0.45f),
                                0.0f, 1.0f);
   presence *=
       1.0f - receiver.controlVoltagePresenceDepth * controlVoltageT * presenceSense;
+  float presenceCollapseT =
+      clampf(controlVoltageT * (0.30f + 0.70f * presenceSense) +
+                 0.20f * supplySagT,
+             0.0f, 1.0f);
+  presence *= 1.0f - receiver.presenceCollapseDepth * presenceCollapseT;
   float squeezeT = envT * presenceSense * (1.0f + 0.35f * sharedCompressionT);
   float presenceCompressed =
       presence / (1.0f + receiver.presenceCompressDepth * squeezeT);
@@ -2533,6 +2545,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
 
   radio.demod.am.detectorMakeupGain = 3.9f;
   radio.demod.am.detReleaseMs = 0.35f;
+  radio.demod.am.detectorRippleMix = 0.018f;
   radio.demod.diodeColorDrop = 0.008f;
   radio.controlBus.controlVoltageAttackMs = 2.4f;
   radio.controlBus.controlVoltageReleaseMs = 36.0f;
@@ -2568,6 +2581,8 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.receiverCircuit.controlVoltagePresenceDepth = 0.05f;
   radio.receiverCircuit.supplySagGainDepth = 0.03f;
   radio.receiverCircuit.supplySagDriveDepth = 0.10f;
+  radio.receiverCircuit.bodyForwardDepth = 0.07f;
+  radio.receiverCircuit.presenceCollapseDepth = 0.06f;
 
   radio.tone.presenceHz = 1600.0f;
   radio.tone.presenceGainDb = 0.14f;
@@ -2610,9 +2625,12 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.speakerStage.speaker.breakupCollapseDepth = 0.10f;
   radio.speakerStage.speaker.breakupCloseDepth = 0.15f;
   radio.speakerStage.speaker.breakupGrainMix = 0.035f;
+  radio.speakerStage.speaker.dynamicLowLooseDepth = 0.045f;
+  radio.speakerStage.speaker.dynamicMidPushDepth = 0.08f;
+  radio.speakerStage.speaker.dynamicHighLossDepth = 0.13f;
   radio.speakerStage.speaker.lowBandWeight = 0.82f;
-  radio.speakerStage.speaker.midBandWeight = 1.15f;
-  radio.speakerStage.speaker.breakupBandWeight = 0.70f;
+  radio.speakerStage.speaker.midBandWeight = 1.16f;
+  radio.speakerStage.speaker.breakupBandWeight = 0.68f;
   radio.speakerStage.speaker.lowBloomDepth = 0.05f;
   radio.speakerStage.speaker.finalConeMix = 0.003f;
   radio.cabinet.panelHz = 190.0f;
