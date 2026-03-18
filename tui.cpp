@@ -2156,26 +2156,24 @@ int runTui(Options o) {
           meterWidth = std::max(0, width - meterX);
         }
         if (meterWidth > 0) {
-          int filled =
-              static_cast<int>(std::round(peak * meterWidth));
-          filled = std::clamp(filled, 0, meterWidth);
           bool radioClipping = audioIsRadioClipping();
           bool radioLimiting = audioIsRadioLimiting();
+          double meterRatio =
+              radioClipping ? 1.0 : std::clamp(static_cast<double>(peak), 0.0, 1.0);
+          Color meterStart = kStyleProgressFrame.fg;
+          Color meterEnd = kStyleProgressFrame.fg;
           if (radioClipping) {
-            filled = meterWidth;
+            meterStart = kStyleAlert.fg;
+            meterEnd = kStyleAlert.fg;
+          } else if (radioLimiting || peak >= 0.80f) {
+            meterStart = kStyleAccent.fg;
+            meterEnd = kProgressEnd;
           }
-          Style meterOn = kStyleProgressFrame;
-          if (radioClipping || peak >= 0.95f) {
-            meterOn = kStyleAlert;
-          } else if (peak >= 0.80f) {
-            meterOn = kStyleAccent;
-          }
-          if (filled > 0) {
-            screen.writeRun(meterX, peakMeterY, filled, L'|', meterOn);
-          }
-          if (meterWidth - filled > 0) {
-            screen.writeRun(meterX + filled, peakMeterY,
-                            meterWidth - filled, L'.', kStyleDim);
+          auto meterCells = renderProgressBarCells(
+              meterRatio, meterWidth, kStyleProgressEmpty, meterStart, meterEnd);
+          for (int i = 0; i < meterWidth; ++i) {
+            const auto& cell = meterCells[static_cast<size_t>(i)];
+            screen.writeChar(meterX + i, peakMeterY, cell.ch, cell.style);
           }
           if (radioClipping || radioLimiting) {
             int clipX = std::min(width - 1, meterX + meterWidth + 1);
