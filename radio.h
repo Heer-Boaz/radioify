@@ -16,6 +16,9 @@ inline constexpr float kRadioDiodeColorLeak = 0.06f;
 inline constexpr float kRadioDiodeColorCurve = 0.35f;
 inline constexpr float kRadioSoftClipThresholdDefault = 0.98f;
 inline constexpr size_t kRadioCalibrationBandCount = 12;
+inline constexpr size_t kRadioCalibrationFftSize = 1024;
+inline constexpr size_t kRadioCalibrationFftBinCount =
+    kRadioCalibrationFftSize / 2 + 1;
 
 struct Biquad {
   float b0 = 1.0f;
@@ -842,10 +845,13 @@ struct Radio1938 {
     double inSumSq = 0.0;
     double outSumSq = 0.0;
     std::array<double, kRadioCalibrationBandCount> bandEnergy{};
-    std::array<Biquad, kRadioCalibrationBandCount> bandpass{};
+    std::array<double, kRadioCalibrationFftBinCount> fftBinEnergy{};
+    std::array<float, kRadioCalibrationFftSize> fftTimeBuffer{};
+    size_t fftFill = 0;
+    uint64_t fftBlockCount = 0;
 
     void clearAccumulators();
-    void resetMeasurementFilters();
+    void resetMeasurementState();
     void updateSnapshot(float sampleRate);
   };
 
@@ -942,7 +948,7 @@ struct Radio1938 {
     DocumentaryVoicingSnapshot documentarySnapshot{};
     std::array<CalibrationStageMetrics, kStageCount> stages{};
 
-    void resetMeasurementFilters();
+    void resetMeasurementState();
     void reset();
   } calibration;
 

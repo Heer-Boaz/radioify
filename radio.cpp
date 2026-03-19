@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 
 using BlockStep = Radio1938::BlockStep;
 using AllocateStep = Radio1938::AllocateStep;
@@ -446,12 +447,117 @@ void Radio1938::CalibrationStageMetrics::clearAccumulators() {
   inSumSq = 0.0;
   outSumSq = 0.0;
   bandEnergy.fill(0.0);
+  fftBinEnergy.fill(0.0);
+  fftTimeBuffer.fill(0.0f);
+  fftFill = 0;
+  fftBlockCount = 0;
 }
 
-void Radio1938::CalibrationStageMetrics::resetMeasurementFilters() {
-  for (auto& filter : bandpass) {
-    filter.reset();
+void Radio1938::CalibrationStageMetrics::resetMeasurementState() {
+  fftTimeBuffer.fill(0.0f);
+  fftFill = 0;
+}
+
+static constexpr std::array<float, kRadioCalibrationBandCount>
+    kRadioCalibrationBandHz{{125.0f, 250.0f, 400.0f, 630.0f, 1000.0f, 1250.0f,
+                             1600.0f, 2000.0f, 2500.0f, 3150.0f, 4000.0f,
+                             5000.0f}};
+
+static const std::array<float, kRadioCalibrationBandCount + 1>&
+calibrationBandEdgesHz() {
+  static const auto kEdges = [] {
+    std::array<float, kRadioCalibrationBandCount + 1> edges{};
+    edges[0] = kRadioCalibrationBandHz[0] /
+               std::sqrt(kRadioCalibrationBandHz[1] / kRadioCalibrationBandHz[0]);
+    for (size_t i = 1; i < kRadioCalibrationBandHz.size(); ++i) {
+      edges[i] = std::sqrt(kRadioCalibrationBandHz[i - 1] *
+                           kRadioCalibrationBandHz[i]);
+    }
+    edges[kRadioCalibrationBandCount] =
+        kRadioCalibrationBandHz.back() *
+        std::sqrt(kRadioCalibrationBandHz.back() /
+                  kRadioCalibrationBandHz[kRadioCalibrationBandCount - 2]);
+    return edges;
+  }();
+  return kEdges;
+}
+
+static const std::array<float, kRadioCalibrationFftSize>&
+calibrationWindow() {
+  static const auto kWindow = [] {
+    std::array<float, kRadioCalibrationFftSize> window{};
+    for (size_t i = 0; i < window.size(); ++i) {
+      window[i] = 0.5f - 0.5f * std::cos(kRadioTwoPi * static_cast<float>(i) /
+                                         static_cast<float>(window.size() - 1));
+    }
+    return window;
+  }();
+  return kWindow;
+}
+
+static void fftInPlace(
+    std::array<std::complex<float>, kRadioCalibrationFftSize>& bins) {
+  const size_t n = bins.size();
+  for (size_t i = 1, j = 0; i < n; ++i) {
+    size_t bit = n >> 1;
+    for (; j & bit; bit >>= 1) {
+      j ^= bit;
+    }
+    j ^= bit;
+    if (i < j) {
+      std::swap(bins[i], bins[j]);
+    }
   }
+
+  for (size_t len = 2; len <= n; len <<= 1) {
+    float angle = -kRadioTwoPi / static_cast<float>(len);
+    std::complex<float> wLen(std::cos(angle), std::sin(angle));
+    for (size_t i = 0; i < n; i += len) {
+      std::complex<float> w(1.0f, 0.0f);
+      size_t half = len >> 1;
+      for (size_t j = 0; j < half; ++j) {
+        std::complex<float> u = bins[i + j];
+        std::complex<float> v = bins[i + j + half] * w;
+        bins[i + j] = u + v;
+        bins[i + j + half] = u - v;
+        w *= wLen;
+      }
+    }
+  }
+}
+
+static void accumulateCalibrationSpectrum(
+    Radio1938::CalibrationStageMetrics& stage,
+    float sampleRate,
+    bool flushPartial) {
+  if (stage.fftFill == 0) return;
+  if (!flushPartial && stage.fftFill < kRadioCalibrationFftSize) return;
+
+  std::array<std::complex<float>, kRadioCalibrationFftSize> bins{};
+  const auto& window = calibrationWindow();
+  for (size_t i = 0; i < kRadioCalibrationFftSize; ++i) {
+    float sample = (i < stage.fftFill) ? stage.fftTimeBuffer[i] : 0.0f;
+    bins[i] = std::complex<float>(sample * window[i], 0.0f);
+  }
+  fftInPlace(bins);
+
+  const auto& edges = calibrationBandEdgesHz();
+  float binHz = sampleRate / static_cast<float>(kRadioCalibrationFftSize);
+  for (size_t i = 1; i < kRadioCalibrationFftBinCount; ++i) {
+    float hz = static_cast<float>(i) * binHz;
+    double energy = std::norm(bins[i]);
+    stage.fftBinEnergy[i] += energy;
+    for (size_t band = 0; band < kRadioCalibrationBandCount; ++band) {
+      if (hz >= edges[band] && hz < edges[band + 1]) {
+        stage.bandEnergy[band] += energy;
+        break;
+      }
+    }
+  }
+
+  stage.fftBlockCount++;
+  stage.fftTimeBuffer.fill(0.0f);
+  stage.fftFill = 0;
 }
 
 void Radio1938::CalibrationState::reset() {
@@ -472,26 +578,9 @@ void Radio1938::CalibrationState::reset() {
   }
 }
 
-void Radio1938::CalibrationState::resetMeasurementFilters() {
+void Radio1938::CalibrationState::resetMeasurementState() {
   for (auto& stage : stages) {
-    stage.resetMeasurementFilters();
-  }
-}
-
-static constexpr std::array<float, kRadioCalibrationBandCount>
-    kRadioCalibrationBandHz{{125.0f, 250.0f, 400.0f, 630.0f, 1000.0f, 1250.0f,
-                             1600.0f, 2000.0f, 2500.0f, 3150.0f, 4000.0f,
-                             5000.0f}};
-
-static void configureCalibrationFilters(Radio1938& radio) {
-  radio.calibration.resetMeasurementFilters();
-  for (auto& stage : radio.calibration.stages) {
-    for (size_t i = 0; i < stage.bandpass.size(); ++i) {
-      float centerHz =
-          std::min(kRadioCalibrationBandHz[i], radio.sampleRate * 0.45f);
-      stage.bandpass[i].setBandpass(radio.sampleRate, centerHz, 1.10f);
-      stage.bandpass[i].reset();
-    }
+    stage.resetMeasurementState();
   }
 }
 
@@ -509,13 +598,16 @@ static void updateStageCalibration(Radio1938& radio,
   stage.peakOut = std::max(stage.peakOut, std::fabs(out));
   if (std::fabs(in) > 1.0f) stage.clipCountIn++;
   if (std::fabs(out) > 1.0f) stage.clipCountOut++;
-  for (size_t i = 0; i < stage.bandpass.size(); ++i) {
-    float band = stage.bandpass[i].process(out);
-    stage.bandEnergy[i] += static_cast<double>(band) * static_cast<double>(band);
+  if (stage.fftFill < stage.fftTimeBuffer.size()) {
+    stage.fftTimeBuffer[stage.fftFill++] = out;
+  }
+  if (stage.fftFill == stage.fftTimeBuffer.size()) {
+    accumulateCalibrationSpectrum(stage, radio.sampleRate, false);
   }
 }
 
-void Radio1938::CalibrationStageMetrics::updateSnapshot(float) {
+void Radio1938::CalibrationStageMetrics::updateSnapshot(float sampleRate) {
+  accumulateCalibrationSpectrum(*this, sampleRate, true);
   if (sampleCount == 0) return;
   double invCount = 1.0 / static_cast<double>(sampleCount);
   rmsIn = std::sqrt(inSumSq * invCount);
@@ -530,22 +622,26 @@ void Radio1938::CalibrationStageMetrics::updateSnapshot(float) {
   double maxEnergy = 0.0;
   bandwidth3dBHz = 0.0f;
   bandwidth6dBHz = 0.0f;
-  for (size_t i = 0; i < bandEnergy.size(); ++i) {
-    totalEnergy += bandEnergy[i];
-    weightedHz += bandEnergy[i] * kRadioCalibrationBandHz[i];
-    maxEnergy = std::max(maxEnergy, bandEnergy[i]);
+  float binHz = sampleRate / static_cast<float>(kRadioCalibrationFftSize);
+  for (size_t i = 1; i < fftBinEnergy.size(); ++i) {
+    double energy = fftBinEnergy[i];
+    float hz = static_cast<float>(i) * binHz;
+    totalEnergy += energy;
+    weightedHz += energy * hz;
+    maxEnergy = std::max(maxEnergy, energy);
   }
   spectralCentroidHz = (totalEnergy > 1e-18) ? static_cast<float>(weightedHz / totalEnergy) : 0.0f;
   if (maxEnergy <= 0.0) return;
 
   double threshold3dB = maxEnergy * std::pow(10.0, -3.0 / 10.0);
   double threshold6dB = maxEnergy * std::pow(10.0, -6.0 / 10.0);
-  for (size_t i = 0; i < bandEnergy.size(); ++i) {
-    if (bandEnergy[i] >= threshold3dB) {
-      bandwidth3dBHz = kRadioCalibrationBandHz[i];
+  for (size_t i = 1; i < fftBinEnergy.size(); ++i) {
+    float hz = static_cast<float>(i) * binHz;
+    if (fftBinEnergy[i] >= threshold3dB) {
+      bandwidth3dBHz = hz;
     }
-    if (bandEnergy[i] >= threshold6dB) {
-      bandwidth6dBHz = kRadioCalibrationBandHz[i];
+    if (fftBinEnergy[i] >= threshold6dB) {
+      bandwidth6dBHz = hz;
     }
   }
 }
@@ -2798,9 +2894,6 @@ void Radio1938::setCalibrationEnabled(bool enabled) {
 
 void Radio1938::resetCalibration() {
   calibration.reset();
-  if (calibration.enabled && sampleRate > 0.0f) {
-    configureCalibrationFilters(*this);
-  }
 }
 
 void Radio1938::init(int ch, float sr, float bw, float noise) {
