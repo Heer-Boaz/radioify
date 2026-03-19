@@ -2546,7 +2546,8 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
 
   radio.adjacent.mix = 0.008f;
 
-  radio.demod.am.detectorMakeupGain = 3.9f;
+  radio.demod.am.detectorMakeupGain = 4.4f;
+  radio.demod.am.detectorCompression = 0.98f;
   radio.demod.am.detReleaseMs = 0.35f;
   radio.demod.am.detectorRippleMix = 0.018f;
   radio.demod.diodeColorDrop = 0.008f;
@@ -2565,7 +2566,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.receiverCircuit.transformerLpHz = 3520.0f;
   radio.receiverCircuit.presenceDipHz = 2480.0f;
   radio.receiverCircuit.presenceDipGainDb = -0.10f;
-  radio.receiverCircuit.avcStrength = 0.52f;
+  radio.receiverCircuit.avcStrength = 0.44f;
   radio.receiverCircuit.attackMs = 11.0f;
   radio.receiverCircuit.releaseMs = 210.0f;
   radio.receiverCircuit.envRef = 0.22f;
@@ -2584,7 +2585,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.receiverCircuit.controlVoltagePresenceDepth = 0.05f;
   radio.receiverCircuit.supplySagGainDepth = 0.03f;
   radio.receiverCircuit.supplySagDriveDepth = 0.10f;
-  radio.receiverCircuit.bodyForwardDepth = 0.07f;
+  radio.receiverCircuit.bodyForwardDepth = 0.09f;
   radio.receiverCircuit.presenceCollapseDepth = 0.06f;
 
   radio.tone.presenceHz = 1600.0f;
