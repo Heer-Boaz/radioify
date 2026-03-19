@@ -766,6 +766,12 @@ struct Radio1938 {
     float oversampleCutoffFraction = 0.0f;
   } globals;
 
+  struct IqInputState {
+    float iqPhase = 0.0f;
+
+    void resetRuntime() { iqPhase = 0.0f; }
+  } iqInput;
+
   struct TuningNodeState {
     bool magneticTuningEnabled = false;
     float tuneOffsetHz = 0.0f;
@@ -1020,7 +1026,11 @@ struct Radio1938 {
   void resetCalibration();
   void init(int ch, float sr, float bw, float noise);
   void reset();
-  void process(float* samples, uint32_t frames);
+  void processAudioPcm(float* samples, uint32_t frames);
+  void processIfReal(float* samples, uint32_t frames);
+  void processIqBaseband(const float* iqInterleaved,
+                         float* outSamples,
+                         uint32_t frames);
 };
 
 #endif

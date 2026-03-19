@@ -17,6 +17,12 @@ static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
 }
 
+static inline float wrapPhase(float phase) {
+  while (phase >= kRadioTwoPi) phase -= kRadioTwoPi;
+  while (phase < 0.0f) phase += kRadioTwoPi;
+  return phase;
+}
+
 static inline float db2lin(float db) { return std::pow(10.0f, db / 20.0f); }
 
 static inline float lin2db(float x) {
@@ -89,6 +95,7 @@ static void applyRadioBaseDefaults(Radio1938& radio) {
   radio.controlSense = Radio1938::RadioControlSenseState{};
   radio.controlBus = Radio1938::RadioControlBusState{};
   radio.identity = Radio1938::IdentityState{};
+  radio.iqInput = Radio1938::IqInputState{};
   radio.identity.driftDepth = 1.0f;
   radio.frontEnd = Radio1938::FrontEndNodeState{};
   radio.mixer = Radio1938::MixerNodeState{};
@@ -1808,6 +1815,8 @@ void Radio1938::RadioLifecycle::resetRuntime(Radio1938& radio) const {
   }
 }
 
+static void updateCalibrationSnapshot(Radio1938& radio);
+
 template <size_t StepCount>
 static RadioBlockControl runBlockPrepare(
     Radio1938& radio,
@@ -1848,6 +1857,23 @@ static float runProgramPath(
 }
 
 template <size_t StepCount>
+static float runProgramPathFromIndex(
+    Radio1938& radio,
+    float y,
+    const RadioSampleContext& ctx,
+    const std::array<ProgramPathStep, StepCount>& steps,
+    size_t startIndex) {
+  for (size_t i = startIndex; i < StepCount; ++i) {
+    const auto& step = steps[i];
+    if (!step.enabled || !step.process) continue;
+    float in = y;
+    y = step.process(radio, y, ctx);
+    updateStageCalibration(radio, step.id, in, y);
+  }
+  return y;
+}
+
+template <size_t StepCount>
 static float runPresentationPath(
     Radio1938& radio,
     float y,
@@ -1860,6 +1886,82 @@ static float runPresentationPath(
     updateStageCalibration(radio, step.id, in, y);
   }
   return y;
+}
+
+static constexpr size_t kAudioProgramStartIndex = 0;
+static constexpr size_t kMixerProgramStartIndex = 2;
+static constexpr size_t kIfProgramStartIndex = 3;
+
+template <typename InputSampleFn, typename OutputSampleFn>
+static void processRadioFrames(Radio1938& radio,
+                               uint32_t frames,
+                               size_t programStartIndex,
+                               InputSampleFn&& inputSample,
+                               OutputSampleFn&& outputSample) {
+  if (frames == 0 || radio.graph.bypass) return;
+
+  radio.diagnostics.reset();
+  RadioBlockControl block = runBlockPrepare(radio, radio.graph.blockSteps, frames);
+  for (uint32_t frame = 0; frame < frames; ++frame) {
+    RadioSampleContext ctx{};
+    ctx.block = &block;
+    runSampleControl(radio, ctx, radio.graph.sampleControlSteps);
+    float x = inputSample(frame);
+    float y = runProgramPathFromIndex(radio, x, ctx, radio.graph.programPathSteps,
+                                      programStartIndex);
+    y = runPresentationPath(radio, y, ctx, radio.graph.presentationPathSteps);
+    outputSample(frame, y);
+  }
+
+  if (radio.diagnostics.processedSamples > 0) {
+    float invCount = 1.0f / static_cast<float>(radio.diagnostics.processedSamples);
+    radio.diagnostics.finalLimiterDutyCycle =
+        radio.diagnostics.finalLimiterActiveSamples * invCount;
+    radio.diagnostics.finalLimiterAverageGainReduction =
+        static_cast<float>(radio.diagnostics.finalLimiterGainReductionSum * invCount);
+    radio.diagnostics.finalLimiterAverageGainReductionDb = static_cast<float>(
+        radio.diagnostics.finalLimiterGainReductionDbSum * invCount);
+  }
+  if (radio.calibration.enabled) {
+    updateCalibrationSnapshot(radio);
+  }
+}
+
+static float sampleInterleavedToMono(const float* samples,
+                                     uint32_t frame,
+                                     int channels) {
+  if (!samples) return 0.0f;
+  if (channels <= 1) return samples[frame];
+  float sum = 0.0f;
+  size_t base = static_cast<size_t>(frame) * static_cast<size_t>(channels);
+  for (int channel = 0; channel < channels; ++channel) {
+    sum += samples[base + static_cast<size_t>(channel)];
+  }
+  return sum / static_cast<float>(channels);
+}
+
+static void writeMonoToInterleaved(float* samples,
+                                   uint32_t frame,
+                                   int channels,
+                                   float y) {
+  if (!samples) return;
+  if (channels <= 1) {
+    samples[frame] = y;
+    return;
+  }
+  size_t base = static_cast<size_t>(frame) * static_cast<size_t>(channels);
+  for (int channel = 0; channel < channels; ++channel) {
+    samples[base + static_cast<size_t>(channel)] = y;
+  }
+}
+
+static float projectIqBasebandToReal(Radio1938& radio, float i, float q) {
+  float phase = radio.iqInput.iqPhase;
+  float projected = i * std::cos(phase) - q * std::sin(phase);
+  float phaseStep =
+      kRadioTwoPi * (radio.tuning.tuneSmoothedHz / std::max(radio.sampleRate, 1.0f));
+  radio.iqInput.iqPhase = wrapPhase(phase + phaseStep);
+  return projected;
 }
 
 static void applyPhilco37116XPreset(Radio1938& radio) {
@@ -2198,40 +2300,45 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
 
 void Radio1938::reset() {
   diagnostics.reset();
+  iqInput.resetRuntime();
   lifecycle.resetRuntime(*this);
   if (calibration.enabled) {
     resetCalibration();
   }
 }
 
-void Radio1938::process(float* samples, uint32_t frames) {
+void Radio1938::processAudioPcm(float* samples, uint32_t frames) {
   if (!samples || frames == 0) return;
-  if (graph.bypass) return;
-  diagnostics.reset();
-  RadioBlockControl block = runBlockPrepare(*this, graph.blockSteps, frames);
-  for (uint32_t f = 0; f < frames; ++f) {
-    float inL = samples[f * channels];
-    float inR = (channels > 1) ? samples[f * channels + 1] : inL;
-    float x = (channels > 1) ? 0.5f * (inL + inR) : inL;
-    RadioSampleContext ctx{};
-    ctx.block = &block;
-    runSampleControl(*this, ctx, graph.sampleControlSteps);
-    float y = runProgramPath(*this, x, ctx, graph.programPathSteps);
-    y = runPresentationPath(*this, y, ctx, graph.presentationPathSteps);
-    for (int c = 0; c < channels; ++c) {
-      samples[f * channels + c] = y;
-    }
-  }
-  if (diagnostics.processedSamples > 0) {
-    float invCount = 1.0f / static_cast<float>(diagnostics.processedSamples);
-    diagnostics.finalLimiterDutyCycle =
-        diagnostics.finalLimiterActiveSamples * invCount;
-    diagnostics.finalLimiterAverageGainReduction =
-        static_cast<float>(diagnostics.finalLimiterGainReductionSum * invCount);
-    diagnostics.finalLimiterAverageGainReductionDb =
-        static_cast<float>(diagnostics.finalLimiterGainReductionDbSum * invCount);
-  }
-  if (calibration.enabled) {
-    updateCalibrationSnapshot(*this);
-  }
+  processRadioFrames(
+      *this, frames, kAudioProgramStartIndex,
+      [&](uint32_t frame) { return sampleInterleavedToMono(samples, frame, channels); },
+      [&](uint32_t frame, float y) {
+        writeMonoToInterleaved(samples, frame, channels, y);
+      });
+}
+
+void Radio1938::processIfReal(float* samples, uint32_t frames) {
+  if (!samples || frames == 0) return;
+  processRadioFrames(
+      *this, frames, kIfProgramStartIndex,
+      [&](uint32_t frame) { return sampleInterleavedToMono(samples, frame, channels); },
+      [&](uint32_t frame, float y) {
+        writeMonoToInterleaved(samples, frame, channels, y);
+      });
+}
+
+void Radio1938::processIqBaseband(const float* iqInterleaved,
+                                  float* outSamples,
+                                  uint32_t frames) {
+  if (!iqInterleaved || !outSamples || frames == 0) return;
+  processRadioFrames(
+      *this, frames, kMixerProgramStartIndex,
+      [&](uint32_t frame) {
+        size_t base = static_cast<size_t>(frame) * 2u;
+        return projectIqBasebandToReal(*this, iqInterleaved[base],
+                                       iqInterleaved[base + 1u]);
+      },
+      [&](uint32_t frame, float y) {
+        writeMonoToInterleaved(outSamples, frame, channels, y);
+      });
 }

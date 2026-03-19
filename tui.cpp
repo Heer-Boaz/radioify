@@ -533,7 +533,7 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
 
     if (!o.dry && useRadio1938) {
       if (channels == 1) {
-        radio1938.process(buffer.data(), static_cast<uint32_t>(framesRead));
+        radio1938.processAudioPcm(buffer.data(), static_cast<uint32_t>(framesRead));
       } else {
         const float foldGain =
             1.0f / std::sqrt(static_cast<float>(channels));
@@ -545,7 +545,8 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
           }
           radioMono[frame] = sum * foldGain;
         }
-        radio1938.process(radioMono.data(), static_cast<uint32_t>(framesRead));
+        radio1938.processAudioPcm(radioMono.data(),
+                                  static_cast<uint32_t>(framesRead));
         for (uint32_t frame = 0; frame < framesRead; ++frame) {
           float y = radioMono[frame];
           size_t base = static_cast<size_t>(frame) * channels;

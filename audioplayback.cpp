@@ -810,7 +810,7 @@ static void processRadioBlock(AudioState* state,
   const uint32_t channels = std::max(1u, state->channels);
   const float gain = state->radioMakeupGain.load(std::memory_order_relaxed);
   if (channels == 1) {
-    state->radio1938.process(samples, frames);
+    state->radio1938.processAudioPcm(samples, frames);
     applyRadioOutputTrim(samples, frames, 1, gain);
     updateRadioIndicatorHolds(state, frames);
     return;
@@ -829,7 +829,7 @@ static void processRadioBlock(AudioState* state,
     mono[frame] = sum * foldGain;
   }
 
-  state->radio1938.process(mono.data(), frames);
+  state->radio1938.processAudioPcm(mono.data(), frames);
   applyRadioOutputTrim(mono.data(), frames, 1, gain);
   for (uint32_t frame = 0; frame < frames; ++frame) {
     float y = mono[frame];
