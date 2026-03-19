@@ -559,6 +559,7 @@ struct Radio1938 {
   float bwHz = 4800.0f;
   float noiseWeight = 0.012f;
   float makeupGain = 1.0f; // baseline unity gain
+  float presentationGain = 1.0f;
   Preset preset = Preset::Mid30sDocumentary;
   bool initialized = false;
 

@@ -2228,18 +2228,19 @@ float RadioFinalLimiterNode::process(Radio1938& radio,
                                      const RadioSampleContext&) {
   auto& limiter = radio.finalLimiter;
   if (!limiter.enabled) return y;
+  float limitedIn = y * radio.presentationGain;
 
   float peak = 0.0f;
-  float mid = 0.5f * (limiter.osPrev + y);
+  float mid = 0.5f * (limiter.osPrev + limitedIn);
   float s0 = limiter.osLpIn.process(mid);
   s0 = limiter.osLpOut.process(s0);
   peak = std::max(peak, std::fabs(s0));
 
-  float s1 = limiter.osLpIn.process(y);
+  float s1 = limiter.osLpIn.process(limitedIn);
   s1 = limiter.osLpOut.process(s1);
   peak = std::max(peak, std::fabs(s1));
 
-  limiter.osPrev = y;
+  limiter.osPrev = limitedIn;
   limiter.observedPeak = peak;
 
   float requiredGain = 1.0f;
@@ -2247,11 +2248,11 @@ float RadioFinalLimiterNode::process(Radio1938& radio,
     requiredGain = limiter.threshold / peak;
   }
 
-  float delayed = y;
+  float delayed = limitedIn;
   if (!limiter.delayBuf.empty()) {
     size_t writeIndex = static_cast<size_t>(limiter.delayWriteIndex);
     delayed = limiter.delayBuf[writeIndex];
-    limiter.delayBuf[writeIndex] = y;
+    limiter.delayBuf[writeIndex] = limitedIn;
     limiter.requiredGainBuf[writeIndex] = requiredGain;
     limiter.delayWriteIndex =
         (limiter.delayWriteIndex + 1) % static_cast<int>(limiter.delayBuf.size());
@@ -2292,7 +2293,7 @@ float RadioFinalLimiterNode::process(Radio1938& radio,
   }
 
   if (radio.calibration.enabled) {
-    if (std::fabs(y) > radio.globals.outputClipThreshold) {
+    if (std::fabs(limitedIn) > radio.globals.outputClipThreshold) {
       radio.calibration.preLimiterClipCount++;
     }
     if (std::fabs(out) > radio.globals.outputClipThreshold) {
@@ -2520,6 +2521,7 @@ static float runPresentationPath(
 
 static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.makeupGain = 0.82f;
+  radio.presentationGain = 1.08f;
 
   radio.globals.ifNoiseMix = 0.28f;
   radio.globals.postNoiseMix = 0.17f;
