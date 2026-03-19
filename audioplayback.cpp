@@ -623,6 +623,7 @@ struct AudioState {
   uint32_t channels = 1;
   uint32_t sampleRate = 48000;
   bool dry = false;
+  std::vector<float> radioMonoScratch;
 };
 
 struct AuditionState {
@@ -667,6 +668,8 @@ struct AudioPlaybackState {
 };
 
 AudioPlaybackState gAudio;
+
+static constexpr uint32_t kRadioProcessChannels = 1u;
 
 void stopAuditionWorker() {
   if (!gAudio.audition.active.load()) return;
@@ -772,6 +775,73 @@ static void applyRadioOutputTrim(float* samples,
   }
 }
 
+static bool radioBlockOverloaded(const Radio1938& radio, uint32_t frames);
+
+static void updateRadioIndicatorHolds(AudioState* state, uint32_t frames) {
+  static constexpr uint32_t kRadioClipHoldFrames = 2048;
+  if (!state || frames == 0) return;
+  bool clipped = radioBlockOverloaded(state->radio1938, frames);
+  bool limiting = state->radio1938.diagnostics.finalLimiterActive;
+  uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
+  uint32_t limiterHold =
+      state->radioLimiterHold.load(std::memory_order_relaxed);
+  if (clipped) {
+    hold = kRadioClipHoldFrames;
+  } else if (hold > frames) {
+    hold -= frames;
+  } else {
+    hold = 0;
+  }
+  if (limiting) {
+    limiterHold = kRadioClipHoldFrames;
+  } else if (limiterHold > frames) {
+    limiterHold -= frames;
+  } else {
+    limiterHold = 0;
+  }
+  state->radioClipHold.store(hold, std::memory_order_relaxed);
+  state->radioLimiterHold.store(limiterHold, std::memory_order_relaxed);
+}
+
+static void processRadioBlock(AudioState* state,
+                              float* samples,
+                              uint32_t frames) {
+  if (!state || !samples || frames == 0) return;
+  const uint32_t channels = std::max(1u, state->channels);
+  const float gain = state->radioMakeupGain.load(std::memory_order_relaxed);
+  if (channels == 1) {
+    state->radio1938.process(samples, frames);
+    applyRadioOutputTrim(samples, frames, 1, gain);
+    updateRadioIndicatorHolds(state, frames);
+    return;
+  }
+
+  auto& mono = state->radioMonoScratch;
+  mono.resize(frames);
+  const float foldGain =
+      1.0f / std::sqrt(static_cast<float>(channels));
+  for (uint32_t frame = 0; frame < frames; ++frame) {
+    float sum = 0.0f;
+    size_t base = static_cast<size_t>(frame) * channels;
+    for (uint32_t ch = 0; ch < channels; ++ch) {
+      sum += samples[base + ch];
+    }
+    mono[frame] = sum * foldGain;
+  }
+
+  state->radio1938.process(mono.data(), frames);
+  applyRadioOutputTrim(mono.data(), frames, 1, gain);
+  for (uint32_t frame = 0; frame < frames; ++frame) {
+    float y = mono[frame];
+    size_t base = static_cast<size_t>(frame) * channels;
+    for (uint32_t ch = 0; ch < channels; ++ch) {
+      samples[base + ch] = y;
+    }
+  }
+
+  updateRadioIndicatorHolds(state, frames);
+}
+
 static inline float softLimitOutputSample(float x, float threshold = 0.985f) {
   float ax = std::fabs(x);
   if (ax <= threshold) return x;
@@ -807,7 +877,6 @@ static bool radioBlockOverloaded(const Radio1938& radio, uint32_t frames) {
 
 void dataCallback(ma_device* device, void* output, const void*,
                   ma_uint32 frameCount) {
-  static constexpr uint32_t kRadioClipHoldFrames = 2048;
   auto* state = static_cast<AudioState*>(device->pUserData);
   float* out = static_cast<float*>(output);
   if (!state) return;
@@ -841,31 +910,7 @@ void dataCallback(ma_device* device, void* output, const void*,
     }
 
     if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
-      state->radio1938.process(out, static_cast<uint32_t>(framesRead));
-      applyRadioOutputTrim(out, static_cast<uint32_t>(framesRead), channels,
-                           state->radioMakeupGain.load(std::memory_order_relaxed));
-      bool clipped =
-          radioBlockOverloaded(state->radio1938, static_cast<uint32_t>(framesRead));
-      bool limiting = state->radio1938.diagnostics.finalLimiterActive;
-      uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
-      uint32_t limiterHold =
-          state->radioLimiterHold.load(std::memory_order_relaxed);
-      if (clipped) {
-        hold = kRadioClipHoldFrames;
-      } else if (hold > framesRead) {
-        hold -= framesRead;
-      } else {
-        hold = 0;
-      }
-      if (limiting) {
-        limiterHold = kRadioClipHoldFrames;
-      } else if (limiterHold > framesRead) {
-        limiterHold -= framesRead;
-      } else {
-        limiterHold = 0;
-      }
-      state->radioClipHold.store(hold, std::memory_order_relaxed);
-      state->radioLimiterHold.store(limiterHold, std::memory_order_relaxed);
+      processRadioBlock(state, out, static_cast<uint32_t>(framesRead));
     }
 
     state->framesPlayed.fetch_add(framesRead, std::memory_order_relaxed);
@@ -1038,32 +1083,7 @@ void dataCallback(ma_device* device, void* output, const void*,
   if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
     float* audioStart =
         out + silentLeadFrames * static_cast<uint64_t>(state->channels);
-    state->radio1938.process(audioStart, static_cast<uint32_t>(framesRead));
-    applyRadioOutputTrim(audioStart, static_cast<uint32_t>(framesRead),
-                         state->channels,
-                         state->radioMakeupGain.load(std::memory_order_relaxed));
-    bool clipped =
-        radioBlockOverloaded(state->radio1938, static_cast<uint32_t>(framesRead));
-    bool limiting = state->radio1938.diagnostics.finalLimiterActive;
-    uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
-    uint32_t limiterHold =
-        state->radioLimiterHold.load(std::memory_order_relaxed);
-    if (clipped) {
-      hold = kRadioClipHoldFrames;
-    } else if (hold > framesRead) {
-      hold -= framesRead;
-    } else {
-      hold = 0;
-    }
-    if (limiting) {
-      limiterHold = kRadioClipHoldFrames;
-    } else if (limiterHold > framesRead) {
-      limiterHold -= framesRead;
-    } else {
-      limiterHold = 0;
-    }
-    state->radioClipHold.store(hold, std::memory_order_relaxed);
-    state->radioLimiterHold.store(limiterHold, std::memory_order_relaxed);
+    processRadioBlock(state, audioStart, static_cast<uint32_t>(framesRead));
   }
   state->framesPlayed.fetch_add(framesRead);
   state->framesReadTotal.fetch_add(framesRead, std::memory_order_relaxed);
@@ -1731,7 +1751,7 @@ void resetPlaybackStateForLoad(uint64_t startFrame) {
 
   gAudio.state.channels = gAudio.channels;
   gAudio.state.radio1938 = gAudio.radio1938Template;
-  gAudio.state.radio1938.init(gAudio.channels,
+  gAudio.state.radio1938.init(kRadioProcessChannels,
                               static_cast<float>(gAudio.sampleRate),
                               gAudio.lpHz, gAudio.noise);
 }
@@ -1815,7 +1835,7 @@ bool ensureChannels(uint32_t newChannels) {
 
   gAudio.channels = newChannels;
   gAudio.state.channels = gAudio.channels;
-  gAudio.radio1938Template.init(gAudio.channels,
+  gAudio.radio1938Template.init(kRadioProcessChannels,
                                 static_cast<float>(gAudio.sampleRate),
                                 gAudio.lpHz,
                                 gAudio.noise);
@@ -1880,7 +1900,7 @@ void audioInit(const AudioPlaybackConfig& config) {
   gAudio.state.dry = config.dry;
   gAudio.state.useRadio1938.store(config.enableRadio);
 
-  gAudio.radio1938Template.init(gAudio.channels,
+  gAudio.radio1938Template.init(kRadioProcessChannels,
                                 static_cast<float>(gAudio.sampleRate),
                                 gAudio.lpHz,
                                 gAudio.noise);
@@ -1984,7 +2004,7 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.state.channels = gAudio.channels;
   gAudio.state.sampleRate = gAudio.sampleRate;
   gAudio.state.radio1938 = gAudio.radio1938Template;
-  gAudio.state.radio1938.init(gAudio.channels,
+  gAudio.state.radio1938.init(kRadioProcessChannels,
                               static_cast<float>(gAudio.sampleRate),
                               gAudio.lpHz, gAudio.noise);
 
@@ -2556,8 +2576,6 @@ void audioSeekToSec(double sec) {
 void audioToggleRadio() {
   bool next = !gAudio.state.useRadio1938.load();
   gAudio.state.useRadio1938.store(next);
-  uint32_t desired = next ? 1u : gAudio.baseChannels;
-  ensureChannels(desired);
   if (next) {
     applyRadioTogglePreset();
   }

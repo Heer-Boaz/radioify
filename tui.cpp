@@ -426,7 +426,8 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
 static void renderToFile(const Options& o, const Radio1938& radio1938Template,
                          bool useRadio1938) {
   const uint32_t sampleRate = 48000;
-  const uint32_t channels = useRadio1938 ? 1 : (o.mono ? 1 : 2);
+  const uint32_t channels = o.mono ? 1 : 2;
+  constexpr uint32_t kRadioProcessChannels = 1u;
   const bool useM4a = isM4aExt(o.input);
   const bool useGme = isGmeExt(o.input);
   const bool useVgm = isVgmExt(o.input);
@@ -485,10 +486,11 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   }
 
   Radio1938 radio1938 = radio1938Template;
-  radio1938.init(channels, static_cast<float>(sampleRate),
+  radio1938.init(kRadioProcessChannels, static_cast<float>(sampleRate),
                  static_cast<float>(o.bwHz), static_cast<float>(o.noise));
   constexpr uint32_t chunkFrames = 1024;
   std::vector<float> buffer(chunkFrames * channels);
+  std::vector<float> radioMono(chunkFrames);
   std::vector<int16_t> out(buffer.size());
 
   while (true) {
@@ -530,7 +532,28 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
     }
 
     if (!o.dry && useRadio1938) {
-      radio1938.process(buffer.data(), static_cast<uint32_t>(framesRead));
+      if (channels == 1) {
+        radio1938.process(buffer.data(), static_cast<uint32_t>(framesRead));
+      } else {
+        const float foldGain =
+            1.0f / std::sqrt(static_cast<float>(channels));
+        for (uint32_t frame = 0; frame < framesRead; ++frame) {
+          float sum = 0.0f;
+          size_t base = static_cast<size_t>(frame) * channels;
+          for (uint32_t ch = 0; ch < channels; ++ch) {
+            sum += buffer[base + ch];
+          }
+          radioMono[frame] = sum * foldGain;
+        }
+        radio1938.process(radioMono.data(), static_cast<uint32_t>(framesRead));
+        for (uint32_t frame = 0; frame < framesRead; ++frame) {
+          float y = radioMono[frame];
+          size_t base = static_cast<size_t>(frame) * channels;
+          for (uint32_t ch = 0; ch < channels; ++ch) {
+            buffer[base + ch] = y;
+          }
+        }
+      }
     }
 
     for (size_t i = 0; i < static_cast<size_t>(framesRead * channels); ++i) {
@@ -633,7 +656,7 @@ int runTui(Options o) {
   uint32_t channels = baseChannels;
 
   Radio1938 radio1938Template;
-  radio1938Template.init(channels, static_cast<float>(sampleRate), lpHz,
+  radio1938Template.init(1, static_cast<float>(sampleRate), lpHz,
                          static_cast<float>(o.noise));
 
   auto defaultOutputFor = [](const std::filesystem::path& input) {

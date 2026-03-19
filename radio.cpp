@@ -2520,8 +2520,8 @@ static float runPresentationPath(
 }
 
 static void applyMid30sDocumentaryPreset(Radio1938& radio) {
-  radio.makeupGain = 0.82f;
-  radio.presentationGain = 1.08f;
+  radio.makeupGain = 0.86f;
+  radio.presentationGain = 1.04f;
 
   radio.globals.ifNoiseMix = 0.28f;
   radio.globals.postNoiseMix = 0.17f;
