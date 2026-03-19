@@ -2527,6 +2527,7 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.globals.postNoiseMix = 0.17f;
   radio.globals.noiseFloorAmp = 0.0032f;
   radio.globals.compMakeupGain = 1.0f;
+  radio.globals.inputPad = 1.0f;
   radio.globals.enableAutoLevel = false;
   radio.globals.autoTargetDb = -21.0f;
   radio.globals.autoMaxBoostDb = 2.5f;
