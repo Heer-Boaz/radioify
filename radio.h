@@ -168,7 +168,6 @@ struct AMDetectorSampleInput {
 
 struct AMDetector {
   float fs = 0.0f;
-  int osFactor = 0;
   float bwHz = 0.0f;
   float tuneOffsetHz = 0.0f;
 
@@ -192,12 +191,12 @@ struct AMDetector {
   float audioDiodeDrop = 0.0f;
   float avcDiodeDrop = 0.0f;
   float detectorChargeResNorm = 0.0f;
-  float detectorDischargeMs = 0.0f;
+  float audioDischargeMs = 0.0f;
   float avcChargeMs = 0.0f;
   float avcReleaseMs = 0.0f;
 
-  float detectorChargeCoeff = 0.0f;
-  float detectorReleaseCoeff = 0.0f;
+  float audioChargeCoeff = 0.0f;
+  float audioReleaseCoeff = 0.0f;
   float avcChargeCoeff = 0.0f;
   float avcReleaseCoeff = 0.0f;
   float dcCoeff = 0.0f;
@@ -225,6 +224,7 @@ struct SpeakerSim {
   Biquad upperBreakup;
   Biquad coneDip;
   Biquad topLp;
+  Biquad hfLossLp;
   float drive = 0.0f;
   float limit = 0.0f;
   float asymBias = 0.0f;
@@ -242,6 +242,7 @@ struct SpeakerSim {
   float coneDipQ = 0.0f;
   float coneDipGainDb = 0.0f;
   float topLpHz = 0.0f;
+  float hfLossLpHz = 0.0f;
   float suspensionComplianceTolerance = 0.0f;
   float coneMassTolerance = 0.0f;
   float breakupTolerance = 0.0f;
@@ -278,9 +279,7 @@ enum class StageId : uint8_t {
 };
 
 struct RadioBlockControl {
-  float sampleRate = 48000.0f;
   float tuneNorm = 0.0f;
-  float offHz = 0.0f;
 };
 
 struct RadioDerivedSampleParams {
@@ -734,7 +733,6 @@ struct Radio1938 {
 
   struct TuningNodeState {
     float tuneOffsetHz = 0.0f;
-    float tuneOffsetNorm = 0.0f;
     float tunedBw = 0.0f;
     float tuneAppliedHz = 0.0f;
     float bwAppliedHz = 0.0f;
@@ -806,6 +804,8 @@ struct Radio1938 {
     Biquad interstagePeak;
     Biquad presenceDip;
     Biquad transformerLp;
+    Biquad postTransformerLp;
+    float postTransformerLpHz = 0.0f;
   } receiverCircuit;
 
   struct ToneNodeState {
