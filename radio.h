@@ -180,6 +180,8 @@ struct AMDetector {
   Biquad ifLp2;
   Biquad audioHp;
   Biquad audioLp1;
+  Biquad audioEnvelopeLp;
+  Biquad avcSenseLp;
 
   float audioRect = 0.0f;
   float avcRect = 0.0f;
@@ -187,7 +189,6 @@ struct AMDetector {
   float avcEnv = 0.0f;
   float dcEnv = 0.0f;
 
-  float diodeDrop = 0.0f;
   float audioDiodeDrop = 0.0f;
   float avcDiodeDrop = 0.0f;
   float detectorChargeResNorm = 0.0f;
@@ -211,6 +212,8 @@ struct AMDetector {
   float audioHpHz = 0.0f;
   float detLpScale = 0.0f;
   float detLpMinHz = 0.0f;
+  float audioEnvelopeLpHz = 0.0f;
+  float avcSenseLpHz = 0.0f;
 
   void init(float newFs, float newBw, float newTuneHz = 0.0f);
   void setBandwidth(float newBw, float newTuneHz = 0.0f);
