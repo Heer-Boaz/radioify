@@ -182,19 +182,23 @@ struct AMDetector {
   Biquad audioHp;
   Biquad audioLp1;
 
+  float audioRect = 0.0f;
+  float avcRect = 0.0f;
   float audioEnv = 0.0f;
   float avcEnv = 0.0f;
   float dcEnv = 0.0f;
 
   float diodeDrop = 0.0f;
-  float audioChargeMs = 0.0f;
-  float audioReleaseMs = 0.0f;
-  float avcAttackMs = 0.0f;
+  float audioDiodeDrop = 0.0f;
+  float avcDiodeDrop = 0.0f;
+  float detectorChargeResNorm = 0.0f;
+  float detectorDischargeMs = 0.0f;
+  float avcChargeMs = 0.0f;
   float avcReleaseMs = 0.0f;
 
-  float audioChargeCoeff = 0.0f;
-  float audioReleaseCoeff = 0.0f;
-  float avcAttackCoeff = 0.0f;
+  float detectorChargeCoeff = 0.0f;
+  float detectorReleaseCoeff = 0.0f;
+  float avcChargeCoeff = 0.0f;
   float avcReleaseCoeff = 0.0f;
   float dcCoeff = 0.0f;
 
@@ -246,6 +250,8 @@ struct SpeakerSim {
   float excursionAtk = 0.0f;
   float excursionRel = 0.0f;
   float excursionRef = 0.0f;
+  float complianceLossDepth = 0.0f;
+  float hfLossDepth = 0.0f;
 
   void init(float fs);
   void reset();
@@ -257,22 +263,16 @@ struct Radio1938;
 enum class StageId : uint8_t {
   Tuning,
   Input,
-  Reception,
   ControlBus,
   InterferenceDerived,
   FrontEnd,
-  Multipath,
-  Detune,
-  Adjacent,
   Demod,
   ReceiverCircuit,
   Tone,
   Power,
   Noise,
-  Heterodyne,
   Speaker,
   Cabinet,
-  Room,
   FinalLimiter,
   OutputClip,
 };
@@ -283,24 +283,17 @@ struct RadioBlockControl {
   float offHz = 0.0f;
 };
 
-struct RadioSampleControl {
-  float receptionGain = 1.0f;
-  float noiseScale = 1.0f;
-};
-
 struct RadioDerivedSampleParams {
   float demodIfNoiseAmp = 0.0f;
   float noiseAmp = 0.0f;
   float crackleAmp = 0.0f;
   float crackleRate = 0.0f;
   float humAmp = 0.0f;
-  float quieting = 1.0f;
   bool humToneEnabled = true;
 };
 
 struct RadioSampleContext {
   const RadioBlockControl* block = nullptr;
-  RadioSampleControl control{};
   RadioDerivedSampleParams derived{};
 };
 
@@ -325,12 +318,6 @@ struct RadioInputNode {
                        const RadioSampleContext& ctx);
 };
 
-struct RadioReceptionControlNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static void update(Radio1938& radio, RadioSampleContext& ctx);
-};
-
 struct RadioControlBusNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
@@ -338,30 +325,6 @@ struct RadioControlBusNode {
 };
 
 struct RadioFrontEndNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioMultipathNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioDetuneNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioAdjacentNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
   static float process(Radio1938& radio,
@@ -415,14 +378,6 @@ struct RadioNoiseNode {
                        const RadioSampleContext& ctx);
 };
 
-struct RadioHeterodyneNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
 struct RadioSpeakerNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
@@ -432,14 +387,6 @@ struct RadioSpeakerNode {
 };
 
 struct RadioCabinetNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioRoomNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
   static float process(Radio1938& radio,
@@ -492,7 +439,7 @@ struct Radio1938 {
   };
 
   struct SampleControlStep {
-    StageId id = StageId::Reception;
+    StageId id = StageId::ControlBus;
     std::string_view name{};
     bool enabled = true;
     SampleControlFn update = nullptr;
@@ -543,19 +490,15 @@ struct Radio1938 {
         {StageId::Tuning, "Tuning", true, &RadioTuningNode::prepare},
     }};
 
-    std::array<SampleControlStep, 3> sampleControlSteps{{
-        {StageId::Reception, "Reception", true, &RadioReceptionControlNode::update},
+    std::array<SampleControlStep, 2> sampleControlSteps{{
         {StageId::ControlBus, "ControlBus", true, &RadioControlBusNode::update},
         {StageId::InterferenceDerived, "InterferenceDerived", true,
          &RadioInterferenceDerivedNode::update},
     }};
 
-    std::array<ProgramPathStep, 9> programPathSteps{{
+    std::array<ProgramPathStep, 6> programPathSteps{{
         {StageId::Input, "Input", true, &RadioInputNode::process},
         {StageId::FrontEnd, "FrontEnd", true, &RadioFrontEndNode::process},
-        {StageId::Multipath, "Multipath", true, &RadioMultipathNode::process},
-        {StageId::Detune, "Detune", true, &RadioDetuneNode::process},
-        {StageId::Adjacent, "Adjacent", true, &RadioAdjacentNode::process},
         {StageId::Demod, "Demod", true, &RadioDemodNode::process},
         {StageId::ReceiverCircuit, "ReceiverCircuit", true,
          &RadioReceiverCircuitNode::process},
@@ -563,12 +506,10 @@ struct Radio1938 {
         {StageId::Power, "Power", true, &RadioPowerNode::process},
     }};
 
-    std::array<PresentationPathStep, 7> presentationPathSteps{{
+    std::array<PresentationPathStep, 5> presentationPathSteps{{
         {StageId::Noise, "Noise", true, &RadioNoiseNode::process},
-        {StageId::Heterodyne, "Heterodyne", true, &RadioHeterodyneNode::process},
         {StageId::Speaker, "Speaker", true, &RadioSpeakerNode::process},
         {StageId::Cabinet, "Cabinet", true, &RadioCabinetNode::process},
-        {StageId::Room, "Room", true, &RadioRoomNode::process},
         {StageId::FinalLimiter, "FinalLimiter", true,
          &RadioFinalLimiterNode::process},
         {StageId::OutputClip, "OutputClip", true, &RadioOutputClipNode::process},
@@ -587,12 +528,10 @@ struct Radio1938 {
   } graph;
 
   struct RadioLifecycle {
-    std::array<ConfigureStep, 12> configureSteps{{
+    std::array<ConfigureStep, 10> configureSteps{{
         {StageId::Input, "Input", &RadioInputNode::init},
-        {StageId::Reception, "Reception", &RadioReceptionControlNode::init},
         {StageId::ControlBus, "ControlBus", &RadioControlBusNode::init},
         {StageId::FrontEnd, "FrontEnd", &RadioFrontEndNode::init},
-        {StageId::Adjacent, "Adjacent", &RadioAdjacentNode::init},
         {StageId::ReceiverCircuit, "ReceiverCircuit",
          &RadioReceiverCircuitNode::init},
         {StageId::Tone, "Tone", &RadioToneNode::init},
@@ -603,31 +542,20 @@ struct Radio1938 {
         {StageId::OutputClip, "OutputClip", &RadioOutputClipNode::init},
     }};
 
-    std::array<AllocateStep, 3> allocateSteps{{
-        {StageId::Detune, "Detune", &RadioDetuneNode::init},
-        {StageId::Multipath, "Multipath", &RadioMultipathNode::init},
-        {StageId::Room, "Room", &RadioRoomNode::init},
-    }};
+    std::array<AllocateStep, 0> allocateSteps{};
 
-    std::array<InitializeDependentStateStep, 5> initializeDependentStateSteps{{
+    std::array<InitializeDependentStateStep, 4> initializeDependentStateSteps{{
         {StageId::Tuning, "Tuning", &RadioTuningNode::init},
         {StageId::Demod, "Demod", &RadioDemodNode::init},
         {StageId::Noise, "Noise", &RadioNoiseNode::init},
         {StageId::InterferenceDerived, "InterferenceDerived",
          &RadioInterferenceDerivedNode::init},
-        {StageId::Heterodyne, "Heterodyne", &RadioHeterodyneNode::init},
     }};
 
-    std::array<ResetStep, 17> resetSteps{{
-        {StageId::Reception, "Reception", &RadioReceptionControlNode::reset},
+    std::array<ResetStep, 11> resetSteps{{
         {StageId::ControlBus, "ControlBus", &RadioControlBusNode::reset},
-        {StageId::Detune, "Detune", &RadioDetuneNode::reset},
-        {StageId::Adjacent, "Adjacent", &RadioAdjacentNode::reset},
-        {StageId::Heterodyne, "Heterodyne", &RadioHeterodyneNode::reset},
-        {StageId::Multipath, "Multipath", &RadioMultipathNode::reset},
         {StageId::Power, "Power", &RadioPowerNode::reset},
         {StageId::Input, "Input", &RadioInputNode::reset},
-        {StageId::Room, "Room", &RadioRoomNode::reset},
         {StageId::FrontEnd, "FrontEnd", &RadioFrontEndNode::reset},
         {StageId::ReceiverCircuit, "ReceiverCircuit",
          &RadioReceiverCircuitNode::reset},
@@ -816,9 +744,6 @@ struct Radio1938 {
     float safeBwMaxHz = 0.0f;
     float preBwScale = 0.0f;
     float postBwScale = 0.0f;
-    float adjLpScale = 0.0f;
-    float adjLpMinHz = 0.0f;
-    float adjLpMaxScale = 0.0f;
     float smoothTau = 0.0f;
     float updateEps = 0.0f;
   } tuning;
@@ -836,84 +761,16 @@ struct Radio1938 {
     float autoGainReleaseMs = 0.0f;
   } input;
 
-  struct ReceptionNodeState {
-    float fadePhaseFast = 0.0f;
-    float fadePhaseSlow = 0.0f;
-    float noisePhaseFast = 0.0f;
-    float noisePhaseSlow = 0.0f;
-    float fadeRateFast = 0.0f;
-    float fadeRateSlow = 0.0f;
-    float noiseRateFast = 0.0f;
-    float noiseRateSlow = 0.0f;
-    float fadeDepth = 0.0f;
-    float noiseDepth = 0.0f;
-    float lfoMixA = 0.0f;
-    float lfoMixB = 0.0f;
-    float fadeMin = 0.0f;
-    float fadeMax = 0.0f;
-    float receptionBase = 0.0f;
-    float receptionOffTScale = 0.0f;
-    float receptionFadeScale = 0.0f;
-    float noiseScaleMin = 0.0f;
-    float noiseScaleMax = 0.0f;
-  } reception;
-
   struct FrontEndNodeState {
     float inputHpHz = 0.0f;
+    float selectivityPeakHz = 0.0f;
+    float selectivityPeakQ = 0.0f;
+    float selectivityPeakGainDb = 0.0f;
     Biquad hpf;
     Biquad preLpfIn;
     Biquad preLpfOut;
+    Biquad selectivityPeak;
   } frontEnd;
-
-  struct MultipathNodeState {
-    float mixPhase = 0.0f;
-    float blendPhase = 0.0f;
-    float delayPhase = 0.0f;
-    float mixRate = 0.0f;
-    float blendRate = 0.0f;
-    float delayRate = 0.0f;
-    float mix = 0.0f;
-    float depth = 0.0f;
-    float delayMs = 0.0f;
-    float delayModMs = 0.0f;
-    float tiltMix = 0.0f;
-    float tiltLpHz = 0.0f;
-    int minBufferSamples = 8;
-    int bufferGuardSamples = 4;
-    float maxMix = 0.0f;
-    float lfoMixA = 0.0f;
-    float lfoMixB = 0.0f;
-    float directMixDepth = 0.0f;
-    std::vector<float> buf;
-    int index = 0;
-    Biquad tiltLp;
-  } multipath;
-
-  struct DetuneNodeState {
-    float lfoPhaseFast = 0.0f;
-    float lfoPhaseSlow = 0.0f;
-    float lfoRateFast = 0.0f;
-    float lfoRateSlow = 0.0f;
-    float depth = 0.0f;
-    float baseDelay = 0.0f;
-    int bufferSamples = 64;
-    float minDelay = 0.0f;
-    float lfoMixA = 0.0f;
-    float lfoMixB = 0.0f;
-    std::vector<float> buf;
-    int index = 0;
-  } detune;
-
-  struct AdjacentNodeState {
-    float phase = 0.0f;
-    float beatHz = 0.0f;
-    float modDepth = 0.0f;
-    float mix = 0.0f;
-    float hpHz = 0.0f;
-    float maxMix = 0.0f;
-    Biquad hp;
-    Biquad lp;
-  } adjacent;
 
   struct DemodNodeState {
     AMDetector am;
@@ -934,11 +791,17 @@ struct Radio1938 {
     float presenceDipHz = 0.0f;
     float presenceDipQ = 0.0f;
     float presenceDipGainDb = 0.0f;
+    float stageInputRef = 0.0f;
     float driveBase = 0.0f;
     float asymBiasBase = 0.0f;
     float controlVoltageGainDepth = 0.0f;
     float supplySagGainDepth = 0.0f;
     float supplySagDriveDepth = 0.0f;
+    float gridConductionStart = 0.0f;
+    float gridConductionDepth = 0.0f;
+    float stageEnv = 0.0f;
+    float stageAtk = 0.0f;
+    float stageRel = 0.0f;
     Biquad couplingHp;
     Biquad interstagePeak;
     Biquad presenceDip;
@@ -974,28 +837,13 @@ struct Radio1938 {
     float rippleGainDepth = 0.0f;
     float gainMin = 0.0f;
     float gainMax = 0.0f;
+    float supplyDriveDepth = 0.0f;
+    float supplyBiasDepth = 0.0f;
     Biquad postLpf;
     Biquad satOsLpIn;
     Biquad satOsLpOut;
     Saturator sat;
   } power;
-
-  struct HeterodyneNodeState {
-    bool enabled = false;
-    float phase = 0.0f;
-    float driftPhase = 0.0f;
-    float driftHz = 0.0f;
-    float gateStart = 0.0f;
-    float gateEnd = 0.0f;
-    float depth = 0.0f;
-    float heteroBaseScale = 0.0f;
-    float noiseWeightRef = 0.0f;
-    float heteroBaseScaleMin = 0.0f;
-    float heteroBaseScaleMax = 0.0f;
-    float gateHz = 0.0f;
-    float maxHz = 0.0f;
-    float driftDepth = 0.0f;
-  } heterodyne;
 
   struct NoiseConfig {
     bool enableHumTone = false;
@@ -1059,30 +907,6 @@ struct Radio1938 {
     Biquad rearHp;
     Biquad rearLp;
   } cabinet;
-
-  struct RoomNodeState {
-    bool enableEarlyReflections = false;
-    bool enableTail = false;
-    float mix = 0.0f;
-    float lpHz = 0.0f;
-    int index = 0;
-    int delaySamples = 0;
-    std::vector<float> buf;
-    std::vector<int> tapSamples;
-    std::vector<float> tapGains;
-    float tailMix = 0.0f;
-    float tailFeedback = 0.0f;
-    float tailMs = 0.0f;
-    float tailLpHz = 0.0f;
-    int tailIndex = 0;
-    std::vector<float> tailBuf;
-    std::array<float, 5> tapMs{};
-    std::array<float, 5> tapGain{};
-    float baseDelayMs = 0.0f;
-    int tailMinSamples = 4;
-    Biquad lp;
-    Biquad tailLp;
-  } room;
 
   struct FinalLimiterNodeState {
     bool enabled = false;
