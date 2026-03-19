@@ -2,6 +2,7 @@
 #define RADIO_H
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <random>
@@ -12,13 +13,48 @@ inline constexpr float kRadioPi = 3.1415926535f;
 inline constexpr float kRadioTwoPi = 6.283185307f;
 inline constexpr float kRadioBiquadQ = 0.707f;
 inline constexpr float kRadioLinDbFloor = 1e-12f;
-inline constexpr float kRadioDiodeColorLeak = 0.06f;
-inline constexpr float kRadioDiodeColorCurve = 0.35f;
 inline constexpr float kRadioSoftClipThresholdDefault = 0.98f;
+inline constexpr float kRadioHashUnitInv = 1.0f / 4294967295.0f;
 inline constexpr size_t kRadioCalibrationBandCount = 12;
 inline constexpr size_t kRadioCalibrationFftSize = 1024;
 inline constexpr size_t kRadioCalibrationFftBinCount =
     kRadioCalibrationFftSize / 2 + 1;
+inline constexpr std::array<float, kRadioCalibrationBandCount>
+    kRadioCalibrationBandHz{{125.0f, 250.0f, 400.0f, 630.0f, 1000.0f, 1250.0f,
+                             1600.0f, 2000.0f, 2500.0f, 3150.0f, 4000.0f,
+                             5000.0f}};
+
+inline const std::array<float, kRadioCalibrationBandCount + 1>&
+radioCalibrationBandEdgesHz() {
+  static const auto kEdges = [] {
+    std::array<float, kRadioCalibrationBandCount + 1> edges{};
+    edges[0] = kRadioCalibrationBandHz[0] /
+               std::sqrt(kRadioCalibrationBandHz[1] / kRadioCalibrationBandHz[0]);
+    for (size_t i = 1; i < kRadioCalibrationBandCount; ++i) {
+      edges[i] = std::sqrt(kRadioCalibrationBandHz[i - 1] *
+                           kRadioCalibrationBandHz[i]);
+    }
+    edges[kRadioCalibrationBandCount] =
+        kRadioCalibrationBandHz.back() *
+        std::sqrt(kRadioCalibrationBandHz.back() /
+                  kRadioCalibrationBandHz[kRadioCalibrationBandCount - 2]);
+    return edges;
+  }();
+  return kEdges;
+}
+
+inline const std::array<float, kRadioCalibrationFftSize>&
+radioCalibrationWindow() {
+  static const auto kWindow = [] {
+    std::array<float, kRadioCalibrationFftSize> window{};
+    for (size_t i = 0; i < kRadioCalibrationFftSize; ++i) {
+      window[i] = 0.5f - 0.5f * std::cos(kRadioTwoPi * static_cast<float>(i) /
+                                         static_cast<float>(window.size() - 1));
+    }
+    return window;
+  }();
+  return kWindow;
+}
 
 struct Biquad {
   float b0 = 1.0f;
@@ -69,11 +105,6 @@ struct NoiseInput {
   float noiseAmp = 0.0f;
   float crackleAmp = 0.0f;
   float crackleRate = 0.0f;
-  float lightningAmp = 0.0f;
-  float lightningRate = 0.0f;
-  float motorAmp = 0.0f;
-  float motorRate = 0.0f;
-  float motorBuzzHz = 0.0f;
   float humAmp = 0.0f;
   bool humToneEnabled = true;
 };
@@ -86,64 +117,44 @@ struct NoiseHum {
   Biquad lp;
   Biquad crackleHp;
   Biquad crackleLp;
-  Biquad lightningHp;
-  Biquad lightningLp;
-  Biquad motorHp;
-  Biquad motorLp;
-  float fs = 48000.0f;
-  float noiseHpHz = 220.0f; // 500.0f
-  float noiseLpHz = 5500.0f;
-  float humHz = 50.0f;
+  float fs = 0.0f;
+  float noiseHpHz = 0.0f; // 500.0f
+  float noiseLpHz = 0.0f;
+  float humHz = 0.0f;
   float humPhase = 0.0f;
   float scEnv = 0.0f;
   float scAtk = 0.0f;
   float scRel = 0.0f;
   float crackleEnv = 0.0f;
   float crackleDecay = 0.0f;
-  float lightningEnv = 0.0f;
-  float lightningDecay = 0.0f;
-  float motorEnv = 0.0f;
-  float motorDecay = 0.0f;
-  float motorPhase = 0.0f;
   float pinkFast = 0.0f;
   float pinkSlow = 0.0f;
   float brown = 0.0f;
   float hissDrift = 0.0f;
   float hissDriftSlow = 0.0f;
-  float filterQ = kRadioBiquadQ;
-  float lightningHpHz = 200.0f;
-  float lightningLpScale = 1.1f;
-  float lightningLpMinGapHz = 500.0f;
-  float motorHpHz = 800.0f;
-  float motorLpHz = 3600.0f;
-  float scAttackMs = 10.0f;
-  float scReleaseMs = 320.0f;
-  float crackleDecayMs = 12.0f;
-  float lightningDecayMs = 180.0f;
-  float motorDecayMs = 70.0f;
-  float sidechainMaskRef = 0.18f;
-  float hissMaskDepth = 0.12f;
-  float burstMaskDepth = 0.04f;
-  float pinkFastPole = 0.985f;
-  float pinkSlowPole = 0.9975f;
-  float brownStep = 0.0015f;
-  float hissDriftPole = 0.9995f;
-  float hissDriftNoise = 0.0005f;
-  float hissDriftSlowPole = 0.99985f;
-  float hissDriftSlowNoise = 0.00015f;
-  float whiteMix = 0.82f;
-  float pinkFastMix = 0.22f;
-  float pinkDifferenceMix = 0.12f;
-  float pinkFastSubtract = 0.5f;
-  float brownMix = 0.08f;
-  float hissBase = 0.88f;
-  float hissDriftDepth = 0.20f;
-  float hissDriftSlowMix = 0.06f;
-  float noiseScaleRef = 0.015f;
-  float noiseScaleMax = 3.0f;
-  float motorBuzzBase = 0.65f;
-  float motorBuzzDepth = 0.35f;
-  float humSecondHarmonicMix = 0.35f;
+  float filterQ = 0.0f;
+  float scAttackMs = 0.0f;
+  float scReleaseMs = 0.0f;
+  float crackleDecayMs = 0.0f;
+  float sidechainMaskRef = 0.0f;
+  float hissMaskDepth = 0.0f;
+  float burstMaskDepth = 0.0f;
+  float pinkFastPole = 0.0f;
+  float pinkSlowPole = 0.0f;
+  float brownStep = 0.0f;
+  float hissDriftPole = 0.0f;
+  float hissDriftNoise = 0.0f;
+  float hissDriftSlowPole = 0.0f;
+  float hissDriftSlowNoise = 0.0f;
+  float whiteMix = 0.0f;
+  float pinkFastMix = 0.0f;
+  float pinkDifferenceMix = 0.0f;
+  float pinkFastSubtract = 0.0f;
+  float brownMix = 0.0f;
+  float hissBase = 0.0f;
+  float hissDriftDepth = 0.0f;
+  float hissDriftSlowMix = 0.0f;
+  float humSecondHarmonicMix = 0.0f;
 
   void setFs(float newFs, float noiseBwHz);
   void reset();
@@ -156,17 +167,10 @@ struct AMDetectorSampleInput {
 };
 
 struct AMDetector {
-  float fs = 48000.0f;
-  float osFs = 192000.0f;
-  int osFactor = 4;
-  float bwHz = 4800.0f;
-  float carrierHz = 12000.0f;
+  float fs = 0.0f;
+  int osFactor = 0;
+  float bwHz = 0.0f;
   float tuneOffsetHz = 0.0f;
-  float modIndex = 0.80f;
-  float carrierGain = 0.40f;
-  float diodeDrop = 0.0045f;
-  float detGain = 2.70f;
-  float detectorMakeupGain = 10.0f;
 
   std::mt19937 rng{0x1942u};
   std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
@@ -178,77 +182,32 @@ struct AMDetector {
   Biquad audioHp;
   Biquad audioLp1;
 
-  float phase = 0.0f;
-  float phaseStep = 0.0f;
-  float agcEnv = 0.0f;
-  float agcGainDb = 0.0f;
-  float agcTargetDb = -18.0f;
-  float agcMaxGainDb = 12.0f;
-  float agcMinGainDb = -4.0f;
-  float agcAtk = 0.0f;
-  float agcRel = 0.0f;
-  float agcGainAtk = 0.0f;
-  float agcGainRel = 0.0f;
-
-  float envelopeCap = 0.0f;
-  float detChargeCoeff = 0.0f;
-  float detReleaseCoeff = 0.0f;
-  float avcCap = 0.0f;
-  float avcChargeCoeff = 0.0f;
-  float avcReleaseCoeff = 0.0f;
+  float audioEnv = 0.0f;
+  float avcEnv = 0.0f;
   float dcEnv = 0.0f;
+
+  float diodeDrop = 0.0f;
+  float audioChargeMs = 0.0f;
+  float audioReleaseMs = 0.0f;
+  float avcAttackMs = 0.0f;
+  float avcReleaseMs = 0.0f;
+
+  float audioChargeCoeff = 0.0f;
+  float audioReleaseCoeff = 0.0f;
+  float avcAttackCoeff = 0.0f;
+  float avcReleaseCoeff = 0.0f;
   float dcCoeff = 0.0f;
-  float initCarrierHz = 9000.0f;
-  float initCarrierMaxFraction = 0.24f;
-  float agcAttackMs = 95.0f;
-  float agcReleaseMs = 2400.0f;
-  float agcGainAttackMs = 70.0f;
-  float agcGainReleaseMs = 3100.0f;
-  float detChargeMs = 0.10f;
-  float detReleaseMs = 1.20f;
-  float avcChargeMs = 24.0f;
-  float avcReleaseMs = 2600.0f;
-  float dcMs = 450.0f;
-  float ifHalfBwScale = 0.95f;
-  float ifHalfBwMinHz = 1500.0f;
-  float ifHalfBwMaxFraction = 0.2f;
-  float ifCenterMinHz = 1000.0f;
-  float ifGuardFraction = 0.45f;
-  float ifMaxFraction = 0.48f;
-  float ifSpanMinHz = 800.0f;
-  float ifSkewPositiveExpand = 0.10f;
-  float ifSkewNegativeShrink = 0.18f;
-  float ifSkewPositiveShrink = 0.18f;
-  float ifSkewNegativeExpand = 0.10f;
-  float ifSpanClampMinHz = 1200.0f;
-  float ifSpanClampMaxFraction = 0.22f;
-  float audioHpHz = 220.0f;
-  float detLpScale = 1.10f;
-  float detLpMinHz = 3000.0f;
-  float mistuneNormDenomScale = 0.5f;
-  float detectorCompression = 0.85f;
-  float detectorDetailMix = 0.15f;
-  float detectorRippleMix = 0.020f;
-  float detReleaseMistuneMix = 0.45f;
-  float avcImpulseBase = 0.55f;
-  float avcImpulseMistune = 0.20f;
-  float consonantPullScale = 8.0f;
-  float consonantPullMaxDb = 1.2f;
-  float mistuneGainPenaltyDb = 0.8f;
-  float controlVoltageRef = 0.18f;
-  float overloadThreshold = 0.18f;
-  float overloadRange = 0.24f;
-  float overloadImpulseScale = 1.8f;
-  float negLimitBase = 0.34f;
-  float negLimitOverloadDepth = 0.12f;
-  float negLimitMistuneDepth = 0.04f;
-  float negLimitMin = 0.12f;
-  float posLimitBase = 0.92f;
-  float posLimitOverloadDepth = 0.06f;
-  float posLimitGuard = 0.15f;
-  float negOverloadSoftness = 4.0f;
-  float posOverloadSoftness = 1.5f;
-  float modulationClamp = 0.98f;
+
+  float detectorGain = 0.0f;
+  float controlVoltageRef = 0.0f;
+
+  float dcMs = 0.0f;
+  float ifLowBaseHz = 0.0f;
+  float ifMinBwHz = 0.0f;
+  float ifMaxFraction = 0.0f;
+  float audioHpHz = 0.0f;
+  float detLpScale = 0.0f;
+  float detLpMinHz = 0.0f;
 
   void init(float newFs, float newBw, float newTuneHz = 0.0f);
   void setBandwidth(float newBw, float newTuneHz = 0.0f);
@@ -259,75 +218,34 @@ struct AMDetector {
 struct SpeakerSim {
   Biquad suspensionRes;
   Biquad coneBody;
-  Biquad paperPeak;
   Biquad upperBreakup;
   Biquad coneDip;
   Biquad topLp;
-  Biquad breakupCloseLp;
-  float drive = 1.05f;
-  float limit = 0.93f;
-  float asymBias = 0.028f;
-  float filterQ = kRadioBiquadQ;
-  float suspensionHz = 165.0f;
-  float suspensionQ = 0.70f;
-  float suspensionGainDb = 0.85f;
-  float coneBodyHz = 470.0f;
-  float coneBodyQ = 0.88f;
-  float coneBodyGainDb = 0.35f;
-  float upperBreakupHz = 1620.0f;
-  float upperBreakupQ = 1.05f;
-  float upperBreakupGainDb = 0.45f;
-  float paperPeakHz = 2280.0f;
-  float paperPeakQ = 1.25f;
-  float paperPeakGainDb = 0.40f;
-  float coneDipHz = 3180.0f;
-  float coneDipQ = 0.95f;
-  float coneDipGainDb = -1.75f;
-  float topLpHz = 3350.0f;
+  float drive = 0.0f;
+  float limit = 0.0f;
+  float asymBias = 0.0f;
+  float filterQ = 0.0f;
+  float suspensionHz = 0.0f;
+  float suspensionQ = 0.0f;
+  float suspensionGainDb = 0.0f;
+  float coneBodyHz = 0.0f;
+  float coneBodyQ = 0.0f;
+  float coneBodyGainDb = 0.0f;
+  float upperBreakupHz = 0.0f;
+  float upperBreakupQ = 0.0f;
+  float upperBreakupGainDb = 0.0f;
+  float coneDipHz = 0.0f;
+  float coneDipQ = 0.0f;
+  float coneDipGainDb = 0.0f;
+  float topLpHz = 0.0f;
   float suspensionComplianceTolerance = 0.0f;
   float coneMassTolerance = 0.0f;
   float breakupTolerance = 0.0f;
   float voiceCoilTolerance = 0.0f;
-  float lowSplitHz = 430.0f;
-  float breakupSplitHz = 1500.0f;
-  float lowSplitCoeff = 0.0f;
-  float breakupSplitCoeff = 0.0f;
-  float lowSplitState = 0.0f;
-  float breakupSplitState = 0.0f;
-  float lowEnv = 0.0f;
-  float midEnv = 0.0f;
-  float breakupEnv = 0.0f;
-  float lowAtk = 0.0f;
-  float lowRel = 0.0f;
-  float midAtk = 0.0f;
-  float midRel = 0.0f;
-  float breakupAtk = 0.0f;
-  float breakupRel = 0.0f;
-  float bandAttackMs = 10.0f;
-  float bandReleaseMs = 120.0f;
-  float lowEnvRef = 0.16f;
-  float midEnvRef = 0.11f;
-  float breakupEnvRef = 0.08f;
-  float lowExcursionDriveBase = 0.80f;
-  float lowExcursionDriveDepth = 0.95f;
-  float lowExcursionLimitBase = 0.90f;
-  float lowExcursionLimitDepth = 0.18f;
-  float midDriveBase = 0.18f;
-  float midDriveDepth = 0.14f;
-  float midCompactionDepth = 0.08f;
-  float breakupDriveBase = 0.42f;
-  float breakupDriveDepth = 0.78f;
-  float breakupCollapseDepth = 0.16f;
-  float breakupCloseDepth = 0.22f;
-  float breakupGrainMix = 0.05f;
-  float dynamicLowLooseDepth = 0.04f;
-  float dynamicMidPushDepth = 0.08f;
-  float dynamicHighLossDepth = 0.16f;
-  float lowBandWeight = 1.0f;
-  float midBandWeight = 1.0f;
-  float breakupBandWeight = 1.0f;
-  float lowBloomDepth = 0.12f;
-  float finalConeMix = 0.05f;
+  float excursionEnv = 0.0f;
+  float excursionAtk = 0.0f;
+  float excursionRel = 0.0f;
+  float excursionRef = 0.0f;
 
   void init(float fs);
   void reset();
@@ -362,9 +280,7 @@ enum class StageId : uint8_t {
 struct RadioBlockControl {
   float sampleRate = 48000.0f;
   float tuneNorm = 0.0f;
-  float offT = 0.0f;
   float offHz = 0.0f;
-  float cosmeticOffT = 0.0f;
 };
 
 struct RadioSampleControl {
@@ -377,11 +293,6 @@ struct RadioDerivedSampleParams {
   float noiseAmp = 0.0f;
   float crackleAmp = 0.0f;
   float crackleRate = 0.0f;
-  float lightningAmp = 0.0f;
-  float lightningRate = 0.0f;
-  float motorAmp = 0.0f;
-  float motorRate = 0.0f;
-  float motorBuzzHz = 0.0f;
   float humAmp = 0.0f;
   float quieting = 1.0f;
   bool humToneEnabled = true;
@@ -554,17 +465,18 @@ struct RadioOutputClipNode {
 
 struct Radio1938 {
   enum class Preset {
-    Mid30sDocumentary,
+    Philco37116X,
   };
 
-  float sampleRate = 48000.0f;
+  float sampleRate = 0.0f;
   int channels = 1;
-  float bwHz = 4800.0f;
-  float noiseWeight = 0.012f;
-  float makeupGain = 1.0f; // baseline unity gain
-  float presentationGain = 1.0f;
-  Preset preset = Preset::Mid30sDocumentary;
+  float bwHz = 0.0f;
+  float noiseWeight = 0.0f;
+  float makeupGain = 0.0f; // baseline unity gain
+  float presentationGain = 0.0f;
+  Preset preset;
   bool initialized = false;
+  Radio1938();
 
   using BlockPrepareFn = void (*)(Radio1938&, RadioBlockControl&, uint32_t);
   using SampleControlFn = void (*)(Radio1938&, RadioSampleContext&);
@@ -809,10 +721,10 @@ struct Radio1938 {
   struct RadioControlBusState {
     float controlVoltage = 0.0f;
     float supplySag = 0.0f;
-    float controlVoltageAttackMs = 2.4f;
-    float controlVoltageReleaseMs = 36.0f;
-    float supplySagAttackMs = 10.0f;
-    float supplySagReleaseMs = 220.0f;
+    float controlVoltageAttackMs = 0.0f;
+    float controlVoltageReleaseMs = 0.0f;
+    float supplySagAttackMs = 0.0f;
+    float supplySagReleaseMs = 0.0f;
     float controlVoltageAtk = 0.0f;
     float controlVoltageRel = 0.0f;
     float supplySagAtk = 0.0f;
@@ -826,7 +738,7 @@ struct Radio1938 {
 
   struct IdentityState {
     uint32_t seed = 0x1937620u;
-    float driftDepth = 1.0f;
+    float driftDepth = 0.0f;
   } identity;
 
   struct CalibrationStageMetrics {
@@ -859,79 +771,6 @@ struct Radio1938 {
     static constexpr size_t kStageCount =
         static_cast<size_t>(StageId::OutputClip) + 1u;
 
-    struct DocumentaryVoicingTargets {
-      float speechCentroidMinHz = 1180.0f;
-      float speechCentroidMaxHz = 1680.0f;
-      float bandwidth6dBMinHz = 2600.0f;
-      float bandwidth6dBMaxHz = 3600.0f;
-      float limiterDutyCycleMax = 0.05f;
-      float melodyBandRetentionMin = 0.64f;
-      float receiverRmsRatioMin = 0.72f;
-      float receiverRmsRatioMax = 0.90f;
-      float receiverPeakRatioMin = 0.60f;
-      float receiverPeakRatioMax = 0.82f;
-      float receiverCrestDeltaMin = -0.30f;
-      float receiverCrestDeltaMax = -0.05f;
-      float receiverUpperMidEnergyRatioMin = 0.30f;
-      float receiverUpperMidEnergyRatioMax = 0.50f;
-      float consonantRetentionProxyMin = 0.92f;
-      float speakerMidRetentionMin = 0.98f;
-      float speakerBreakupRetentionMin = 0.58f;
-      float speakerBreakupRetentionMax = 0.84f;
-      float speakerBreakupOpennessMin = 0.20f;
-      float speakerBreakupOpennessMax = 0.38f;
-      float speakerLowOverhangProxyMax = 0.18f;
-    };
-
-    struct DocumentaryVoicingSnapshot {
-      float speechCentroidHz = 0.0f;
-      float effectiveBandwidth6dBHz = 0.0f;
-      float melodyBandRetention = 0.0f;
-      float speechCentroidDeviationHz = 0.0f;
-      float effectiveBandwidthDeviationHz = 0.0f;
-      float limiterDutyCycleExcess = 0.0f;
-      float melodyBandRetentionShortfall = 0.0f;
-      float receiverCentroidHz = 0.0f;
-      float receiverBandwidth6dBHz = 0.0f;
-      float receiverRmsRatio = 0.0f;
-      float receiverPeakRatio = 0.0f;
-      float receiverCrestDelta = 0.0f;
-      float receiverRmsRatioDeviation = 0.0f;
-      float receiverPeakRatioDeviation = 0.0f;
-      float receiverCrestDeltaDeviation = 0.0f;
-      float receiverUpperMidEnergyRatio = 0.0f;
-      float receiverUpperMidEnergyRatioDeviation = 0.0f;
-      float receiverCrestReduction = 0.0f;
-      float receiverToOutputMelodyRetention = 0.0f;
-      float consonantRetentionProxy = 0.0f;
-      float consonantRetentionShortfall = 0.0f;
-      float speakerLowRetention = 0.0f;
-      float speakerMidRetention = 0.0f;
-      float speakerMidRetentionShortfall = 0.0f;
-      float speakerBreakupRetention = 0.0f;
-      float speakerBreakupRetentionDeviation = 0.0f;
-      float speakerBreakupOpenness = 0.0f;
-      float speakerBreakupOpennessDeviation = 0.0f;
-      float speakerLowOverhangProxy = 0.0f;
-      float speakerLowOverhangExcess = 0.0f;
-      float worstDeviationScore = 0.0f;
-      std::string_view worstDeviationMetric{};
-      bool speechCentroidInRange = false;
-      bool effectiveBandwidthInRange = false;
-      bool limiterDutyCycleInRange = false;
-      bool melodyBandRetentionInRange = false;
-      bool receiverRmsRatioInRange = false;
-      bool receiverPeakRatioInRange = false;
-      bool receiverCrestDeltaInRange = false;
-      bool receiverUpperMidEnergyRatioInRange = false;
-      bool consonantRetentionInRange = false;
-      bool speakerMidRetentionInRange = false;
-      bool speakerBreakupRetentionInRange = false;
-      bool speakerBreakupOpennessInRange = false;
-      bool speakerLowOverhangInRange = false;
-      bool allTargetsMet = false;
-    };
-
     bool enabled = false;
     uint64_t totalSamples = 0;
     uint64_t preLimiterClipCount = 0;
@@ -944,8 +783,6 @@ struct Radio1938 {
     float limiterMaxGainReductionDb = 0.0f;
     double limiterGainReductionSum = 0.0;
     double limiterGainReductionDbSum = 0.0;
-    DocumentaryVoicingTargets documentaryTargets{};
-    DocumentaryVoicingSnapshot documentarySnapshot{};
     std::array<CalibrationStageMetrics, kStageCount> stages{};
 
     void resetMeasurementState();
@@ -953,19 +790,18 @@ struct Radio1938 {
   } calibration;
 
   struct GlobalTuning {
-    float oversampleFactor = 2.0f;
-    float ifNoiseMix = 0.22f;
-    float postNoiseMix = 0.14f;
-    float noiseFloorAmp = 0.0022f;
-    float compMakeupGain = 1.18f;
-    float inputPad = 0.76f;
-    bool enableAutoLevel = true;
-    float autoTargetDb = -21.0f;
-    float autoMaxBoostDb = 4.0f;
-    float satClipDelta = 0.03f;
-    float satClipMinLevel = 0.70f;
-    float outputClipThreshold = 0.98f;
-    float oversampleCutoffFraction = 0.45f;
+    float oversampleFactor = 0.0f;
+    float ifNoiseMix = 0.0f;
+    float postNoiseMix = 0.0f;
+    float noiseFloorAmp = 0.0f;
+    float inputPad = 0.0f;
+    bool enableAutoLevel = false;
+    float autoTargetDb = 0.0f;
+    float autoMaxBoostDb = 0.0f;
+    float satClipDelta = 0.0f;
+    float satClipMinLevel = 0.0f;
+    float outputClipThreshold = 0.0f;
+    float oversampleCutoffFraction = 0.0f;
   } globals;
 
   struct TuningNodeState {
@@ -976,33 +812,15 @@ struct Radio1938 {
     float bwAppliedHz = 0.0f;
     float tuneSmoothedHz = 0.0f;
     float bwSmoothedHz = 0.0f;
-    float tuneTiltExtra = 0.14f;
-    float safeBwMinHz = 4200.0f;
-    float safeBwMaxHz = 5600.0f;
-    float tunedBwMistuneDepth = 0.28f;
-    float tunedBwMinHz = 3000.0f;
-    float preBwScale = 1.08f;
-    float postBwScale = 1.18f;
-    float rippleShiftScale = 0.18f;
-    float ifRippleLowHz = 950.0f;
-    float ifRippleLowMinHz = 500.0f;
-    float ifRippleLowQ = 0.9f;
-    float ifRippleLowGainDb = 0.35f;
-    float ifRippleHighHz = 2300.0f;
-    float ifRippleHighMinHz = 800.0f;
-    float ifRippleHighQ = 1.1f;
-    float ifRippleHighGainDb = -0.45f;
-    float tiltDetuneDepth = 0.12f;
-    float tiltHz = 1700.0f;
-    float tiltTuneScale = 0.15f;
-    float tiltMinHz = 800.0f;
-    float adjLpScale = 0.78f;
-    float adjLpMinHz = 2200.0f;
-    float adjLpMaxScale = 0.90f;
-    float smoothTau = 0.05f;
-    float updateEps = 0.25f;
-    float mistuneCosmeticStart = 0.18f;
-    float mistuneCosmeticRange = 0.82f;
+    float safeBwMinHz = 0.0f;
+    float safeBwMaxHz = 0.0f;
+    float preBwScale = 0.0f;
+    float postBwScale = 0.0f;
+    float adjLpScale = 0.0f;
+    float adjLpMinHz = 0.0f;
+    float adjLpMaxScale = 0.0f;
+    float smoothTau = 0.0f;
+    float updateEps = 0.0f;
   } tuning;
 
   struct InputNodeState {
@@ -1012,10 +830,10 @@ struct Radio1938 {
     float autoEnvRel = 0.0f;
     float autoGainAtk = 0.0f;
     float autoGainRel = 0.0f;
-    float autoEnvAttackMs = 8.0f;
-    float autoEnvReleaseMs = 220.0f;
-    float autoGainAttackMs = 140.0f;
-    float autoGainReleaseMs = 1200.0f;
+    float autoEnvAttackMs = 0.0f;
+    float autoEnvReleaseMs = 0.0f;
+    float autoGainAttackMs = 0.0f;
+    float autoGainReleaseMs = 0.0f;
   } input;
 
   struct ReceptionNodeState {
@@ -1023,53 +841,49 @@ struct Radio1938 {
     float fadePhaseSlow = 0.0f;
     float noisePhaseFast = 0.0f;
     float noisePhaseSlow = 0.0f;
-    float fadeRateFast = 0.08f;
-    float fadeRateSlow = 0.05f;
-    float noiseRateFast = 0.04f;
-    float noiseRateSlow = 0.031f;
-    float fadeDepth = 0.05f;
-    float noiseDepth = 0.20f;
-    float lfoMixA = 0.6f;
-    float lfoMixB = 0.4f;
-    float fadeMin = 0.65f;
-    float fadeMax = 1.35f;
-    float receptionBase = 0.6f;
-    float receptionOffTScale = 0.6f;
-    float receptionFadeScale = 0.4f;
-    float noiseScaleMin = 0.3f;
-    float noiseScaleMax = 1.6f;
+    float fadeRateFast = 0.0f;
+    float fadeRateSlow = 0.0f;
+    float noiseRateFast = 0.0f;
+    float noiseRateSlow = 0.0f;
+    float fadeDepth = 0.0f;
+    float noiseDepth = 0.0f;
+    float lfoMixA = 0.0f;
+    float lfoMixB = 0.0f;
+    float fadeMin = 0.0f;
+    float fadeMax = 0.0f;
+    float receptionBase = 0.0f;
+    float receptionOffTScale = 0.0f;
+    float receptionFadeScale = 0.0f;
+    float noiseScaleMin = 0.0f;
+    float noiseScaleMax = 0.0f;
   } reception;
 
   struct FrontEndNodeState {
-    float ifTiltMix = 0.10f;
-    float inputHpHz = 115.0f;
+    float inputHpHz = 0.0f;
     Biquad hpf;
     Biquad preLpfIn;
     Biquad preLpfOut;
-    Biquad ifRippleLow;
-    Biquad ifRippleHigh;
-    Biquad ifTiltLp;
   } frontEnd;
 
   struct MultipathNodeState {
     float mixPhase = 0.0f;
     float blendPhase = 0.0f;
     float delayPhase = 0.0f;
-    float mixRate = 0.035f;
-    float blendRate = 0.027f;
-    float delayRate = 0.041f;
-    float mix = 0.12f;
-    float depth = 0.08f;
-    float delayMs = 5.5f;
-    float delayModMs = 1.5f;
-    float tiltMix = 0.35f;
-    float tiltLpHz = 1800.0f;
+    float mixRate = 0.0f;
+    float blendRate = 0.0f;
+    float delayRate = 0.0f;
+    float mix = 0.0f;
+    float depth = 0.0f;
+    float delayMs = 0.0f;
+    float delayModMs = 0.0f;
+    float tiltMix = 0.0f;
+    float tiltLpHz = 0.0f;
     int minBufferSamples = 8;
     int bufferGuardSamples = 4;
-    float maxMix = 0.35f;
-    float lfoMixA = 0.6f;
-    float lfoMixB = 0.4f;
-    float directMixDepth = 0.5f;
+    float maxMix = 0.0f;
+    float lfoMixA = 0.0f;
+    float lfoMixB = 0.0f;
+    float directMixDepth = 0.0f;
     std::vector<float> buf;
     int index = 0;
     Biquad tiltLp;
@@ -1078,110 +892,64 @@ struct Radio1938 {
   struct DetuneNodeState {
     float lfoPhaseFast = 0.0f;
     float lfoPhaseSlow = 0.0f;
-    float lfoRateFast = 0.13f;
-    float lfoRateSlow = 0.09f;
+    float lfoRateFast = 0.0f;
+    float lfoRateSlow = 0.0f;
     float depth = 0.0f;
-    float baseDelay = 2.0f;
+    float baseDelay = 0.0f;
     int bufferSamples = 64;
-    float minDelay = 0.25f;
-    float lfoMixA = 0.6f;
-    float lfoMixB = 0.4f;
+    float minDelay = 0.0f;
+    float lfoMixA = 0.0f;
+    float lfoMixB = 0.0f;
     std::vector<float> buf;
     int index = 0;
   } detune;
 
   struct AdjacentNodeState {
     float phase = 0.0f;
-    float beatHz = 980.0f;
-    float modDepth = 0.12f;
-    float mix = 0.010f;
-    float drive = 1.40f;
-    float splatterMix = 0.14f;
-    float env = 0.0f;
-    float atk = 0.0f;
-    float rel = 0.0f;
-    float target = 0.18f;
-    float minGain = 0.25f;
-    float maxGain = 4.0f;
-    float hpHz = 250.0f;
-    float attackMs = 120.0f;
-    float releaseMs = 900.0f;
-    float maxMix = 0.20f;
+    float beatHz = 0.0f;
+    float modDepth = 0.0f;
+    float mix = 0.0f;
+    float hpHz = 0.0f;
+    float maxMix = 0.0f;
     Biquad hp;
     Biquad lp;
   } adjacent;
 
   struct DemodNodeState {
     AMDetector am;
-    float diodeColorDrop = 0.004f;
   } demod;
 
   struct ReceiverCircuitNodeState {
-    bool enabled = true;
-    float couplingHpHz = 125.0f;
+    bool enabled = false;
+    float couplingHpHz = 0.0f;
     float couplingCapTolerance = 0.0f;
     float gridLeakTolerance = 0.0f;
-    float interstagePeakHz = 1480.0f;
+    float interstagePeakHz = 0.0f;
     float plateLoadTolerance = 0.0f;
-    float interstagePeakQ = 0.82f;
-    float interstagePeakGainDb = 0.45f;
-    float transformerLpHz = 3150.0f;
+    float interstagePeakQ = 0.0f;
+    float interstagePeakGainDb = 0.0f;
+    float transformerLpHz = 0.0f;
     float toneCapTolerance = 0.0f;
     float transformerTolerance = 0.0f;
-    float presenceDipHz = 2550.0f;
-    float presenceDipQ = 1.05f;
-    float presenceDipGainDb = -0.45f;
-    float avcEnv = 0.0f;
-    float avcAtk = 0.0f;
-    float avcRel = 0.0f;
-    float avcStrength = 0.60f;
-    float env = 0.0f;
-    float atk = 0.0f;
-    float rel = 0.0f;
-    float attackMs = 12.0f;
-    float releaseMs = 220.0f;
-    float envRef = 0.30f;
-    float driveBase = 1.02f;
-    float driveDepth = 0.16f;
-    float asymBiasBase = 0.003f;
-    float asymBiasDepth = 0.008f;
-    float nonlinearMix = 0.08f;
-    float presenceCompressDepth = 0.14f;
-    float bodyPreserveMix = 0.94f;
-    float presenceSplitHz = 1320.0f;
-    float couplingSag = 0.0f;
-    float couplingSagRel = 0.0f;
-    float couplingSagDepth = 0.035f;
-    float couplingSagRef = 0.22f;
-    float couplingSagReleaseMs = 260.0f;
-    float controlVoltageGainDepth = 0.12f;
-    float controlVoltagePresenceDepth = 0.08f;
-    float supplySagGainDepth = 0.10f;
-    float supplySagDriveDepth = 0.12f;
-    float bodyForwardDepth = 0.06f;
-    float presenceCollapseDepth = 0.08f;
+    float presenceDipHz = 0.0f;
+    float presenceDipQ = 0.0f;
+    float presenceDipGainDb = 0.0f;
+    float driveBase = 0.0f;
+    float asymBiasBase = 0.0f;
+    float controlVoltageGainDepth = 0.0f;
+    float supplySagGainDepth = 0.0f;
+    float supplySagDriveDepth = 0.0f;
     Biquad couplingHp;
     Biquad interstagePeak;
     Biquad presenceDip;
     Biquad transformerLp;
-    Biquad presenceSplitLp;
-    Biquad nonlinearDeltaBodyLp;
   } receiverCircuit;
 
   struct ToneNodeState {
-    float env = 0.0f;
-    float atk = 0.0f;
-    float rel = 0.0f;
-    float presenceHz = 1650.0f;
-    float presenceQ = 0.78f;
-    float presenceGainDb = 0.28f;
-    float tiltSplitHz = 1450.0f;
-    float tiltBase = -0.020f;
-    float tiltDepth = 0.035f;
-    float attackMs = 18.0f;
-    float releaseMs = 260.0f;
-    float loudnessEnvStart = 0.010f;
-    float loudnessEnvRange = 0.12f;
+    float presenceHz = 0.0f;
+    float presenceQ = 0.0f;
+    float presenceGainDb = 0.0f;
+    float tiltSplitHz = 0.0f;
     Biquad presence;
     Biquad tiltLp;
   } tone;
@@ -1190,38 +958,22 @@ struct Radio1938 {
     float sagEnv = 0.0f;
     float sagAtk = 0.0f;
     float sagRel = 0.0f;
-    float sagStart = 0.06f;
-    float sagEnd = 0.22f;
-    float sagDepth = 0.04f;
-    float env = 0.0f;
-    float atk = 0.0f;
-    float rel = 0.0f;
+    float sagStart = 0.0f;
+    float sagEnd = 0.0f;
     float rectifierPhase = 0.0f;
-    float subharmonicPhase = 0.0f;
-    float rippleDepth = 0.010f;
-    float biasDepth = 0.006f;
+    float rippleDepth = 0.0f;
     float satOsPrev = 0.0f;
-    float satDrive = 1.12f;
-    float satMix = 0.24f;
-    float sagAttackMs = 60.0f;
-    float sagReleaseMs = 900.0f;
-    float attackMs = 25.0f;
-    float releaseMs = 520.0f;
-    float powerEnvStart = 0.05f;
-    float powerEnvRange = 0.25f;
-    float rectifierMinHz = 80.0f;
-    float rectifierSubharmonic = 0.5f;
-    float rippleSecondHarmonicMix = 0.28f;
-    float rippleSubharmonicMix = 0.15f;
-    float gainSagPerPower = 0.018f;
-    float rippleGainBase = 0.35f;
-    float rippleGainDepth = 0.65f;
-    float gainMin = 0.88f;
-    float gainMax = 1.04f;
-    float biasBase = 0.2f;
-    float biasPowerDepth = 0.8f;
-    float controlVoltageSatDriveDepth = 0.12f;
-    float controlVoltageSatMixDepth = 0.10f;
+    float satDrive = 0.0f;
+    float satMix = 0.0f;
+    float sagAttackMs = 0.0f;
+    float sagReleaseMs = 0.0f;
+    float rectifierMinHz = 0.0f;
+    float rippleSecondHarmonicMix = 0.0f;
+    float gainSagPerPower = 0.0f;
+    float rippleGainBase = 0.0f;
+    float rippleGainDepth = 0.0f;
+    float gainMin = 0.0f;
+    float gainMax = 0.0f;
     Biquad postLpf;
     Biquad satOsLpIn;
     Biquad satOsLpOut;
@@ -1229,48 +981,37 @@ struct Radio1938 {
   } power;
 
   struct HeterodyneNodeState {
-    bool enabled = true;
+    bool enabled = false;
     float phase = 0.0f;
     float driftPhase = 0.0f;
-    float driftHz = 0.06f;
-    float gateStart = 0.015f;
-    float gateEnd = 0.05f;
-    float depth = 0.00035f;
+    float driftHz = 0.0f;
+    float gateStart = 0.0f;
+    float gateEnd = 0.0f;
+    float depth = 0.0f;
     float heteroBaseScale = 0.0f;
-    float noiseWeightRef = 0.015f;
-    float heteroBaseScaleMin = 0.10f;
-    float heteroBaseScaleMax = 0.85f;
-    float gateHz = 180.0f;
-    float maxHz = 2500.0f;
-    float driftDepth = 0.12f;
-    float quietNoiseBase = 0.6f;
-    float quietNoiseDepth = 0.4f;
+    float noiseWeightRef = 0.0f;
+    float heteroBaseScaleMin = 0.0f;
+    float heteroBaseScaleMax = 0.0f;
+    float gateHz = 0.0f;
+    float maxHz = 0.0f;
+    float driftDepth = 0.0f;
   } heterodyne;
 
   struct NoiseConfig {
-    bool enableHumTone = true;
-    float humHzDefault = 50.0f;
-    float noiseWeightRef = 0.015f;
-    float noiseWeightScaleMax = 2.0f;
-    float humAmpScale = 0.0018f;
-    float crackleAmpScale = 0.008f;
-    float lightningAmpScale = 0.022f;
-    float motorAmpScale = 0.0045f;
-    float crackleRateScale = 0.50f;
-    float lightningRateScale = 0.006f;
-    float motorRateScale = 0.06f;
-    float motorBuzzHz = 18.0f;
+    bool enableHumTone = false;
+    float humHzDefault = 0.0f;
+    float noiseWeightRef = 0.0f;
+    float noiseWeightScaleMax = 0.0f;
+    float humAmpScale = 0.0f;
+    float crackleAmpScale = 0.0f;
+    float crackleRateScale = 0.0f;
   } noiseConfig;
 
   struct NoiseDerivedState {
     float baseNoiseAmp = 0.0f;
     float baseCrackleAmp = 0.0f;
-    float baseLightningAmp = 0.0f;
-    float baseMotorAmp = 0.0f;
     float baseHumAmp = 0.0f;
     float crackleRate = 0.0f;
-    float lightningRate = 0.0f;
-    float motorRate = 0.0f;
   } noiseDerived;
 
   struct NoiseRuntimeState {
@@ -1279,34 +1020,34 @@ struct Radio1938 {
 
   struct SpeakerStageState {
     float osPrev = 0.0f;
-    float drive = 0.72f;
+    float drive = 0.0f;
     Biquad osLpIn;
     Biquad osLpOut;
     SpeakerSim speaker;
   } speakerStage;
 
   struct CabinetNodeState {
-    bool enabled = true;
-    float panelHz = 185.0f;
-    float panelQ = 0.82f;
-    float panelGainDb = 0.55f;
-    float chassisHz = 430.0f;
-    float chassisQ = 1.05f;
-    float chassisGainDb = 0.30f;
-    float cavityDipHz = 980.0f;
-    float cavityDipQ = 0.95f;
-    float cavityDipGainDb = -0.55f;
-    float grilleLpHz = 2950.0f;
-    float rearDelayMs = 1.6f;
-    float rearMix = 0.06f;
-    float rearHpHz = 170.0f;
-    float rearLpHz = 1100.0f;
+    bool enabled = false;
+    float panelHz = 0.0f;
+    float panelQ = 0.0f;
+    float panelGainDb = 0.0f;
+    float chassisHz = 0.0f;
+    float chassisQ = 0.0f;
+    float chassisGainDb = 0.0f;
+    float cavityDipHz = 0.0f;
+    float cavityDipQ = 0.0f;
+    float cavityDipGainDb = 0.0f;
+    float grilleLpHz = 0.0f;
+    float rearDelayMs = 0.0f;
+    float rearMix = 0.0f;
+    float rearHpHz = 0.0f;
+    float rearLpHz = 0.0f;
     float panelStiffnessTolerance = 0.0f;
     float baffleLeakTolerance = 0.0f;
     float cavityTolerance = 0.0f;
     float grilleClothTolerance = 0.0f;
     float rearPathTolerance = 0.0f;
-    float rearMixApplied = 0.06f;
+    float rearMixApplied = 0.0f;
     int minBufferSamples = 8;
     int bufferGuardSamples = 4;
     std::vector<float> buf;
@@ -1320,39 +1061,39 @@ struct Radio1938 {
   } cabinet;
 
   struct RoomNodeState {
-    bool enableEarlyReflections = true;
+    bool enableEarlyReflections = false;
     bool enableTail = false;
-    float mix = 0.025f;
-    float lpHz = 1800.0f;
+    float mix = 0.0f;
+    float lpHz = 0.0f;
     int index = 0;
     int delaySamples = 0;
     std::vector<float> buf;
     std::vector<int> tapSamples;
     std::vector<float> tapGains;
     float tailMix = 0.0f;
-    float tailFeedback = 0.28f;
-    float tailMs = 45.0f;
-    float tailLpHz = 1600.0f;
+    float tailFeedback = 0.0f;
+    float tailMs = 0.0f;
+    float tailLpHz = 0.0f;
     int tailIndex = 0;
     std::vector<float> tailBuf;
-    std::array<float, 5> tapMs{{6.0f, 10.5f, 16.0f, 23.0f, 31.0f}};
-    std::array<float, 5> tapGain{{0.18f, 0.14f, 0.10f, 0.07f, 0.05f}};
-    float baseDelayMs = 12.0f;
+    std::array<float, 5> tapMs{};
+    std::array<float, 5> tapGain{};
+    float baseDelayMs = 0.0f;
     int tailMinSamples = 4;
     Biquad lp;
     Biquad tailLp;
   } room;
 
   struct FinalLimiterNodeState {
-    bool enabled = true;
-    float threshold = 0.88f;
-    float lookaheadMs = 3.5f;
+    bool enabled = false;
+    float threshold = 0.0f;
+    float lookaheadMs = 0.0f;
     int delaySamples = 0;
     std::vector<float> delayBuf;
     std::vector<float> requiredGainBuf;
     int delayWriteIndex = 0;
-    float attackMs = 0.20f;
-    float releaseMs = 160.0f;
+    float attackMs = 0.0f;
+    float releaseMs = 0.0f;
     float attackCoeff = 0.0f;
     float gain = 1.0f;
     float targetGain = 1.0f;

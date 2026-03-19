@@ -23,18 +23,6 @@ static inline float lin2db(float x) {
   return 20.0f * std::log10(std::max(x, kRadioLinDbFloor));
 }
 
-static inline float diodeColor(float x, float drop) {
-  float mag = std::fabs(x);
-  if (drop <= 0.0f) return x;
-  float sign = (x >= 0.0f) ? 1.0f : -1.0f;
-  if (mag <= drop) {
-    return sign * mag * kRadioDiodeColorLeak;
-  }
-  float shaped = mag - drop;
-  float curve = 1.0f + kRadioDiodeColorCurve * shaped;
-  return sign * shaped * curve;
-}
-
 static inline uint32_t hash32(uint32_t x) {
   x ^= x >> 16;
   x *= 0x7feb352du;
@@ -46,8 +34,7 @@ static inline uint32_t hash32(uint32_t x) {
 
 static inline float seededSignedUnit(uint32_t seed, uint32_t salt) {
   uint32_t h = hash32(seed ^ salt);
-  constexpr float kInv = 1.0f / 4294967295.0f;
-  return 2.0f * (static_cast<float>(h) * kInv) - 1.0f;
+  return 2.0f * (static_cast<float>(h) * kRadioHashUnitInv) - 1.0f;
 }
 
 static inline float applySeededDrift(float base,
@@ -55,6 +42,265 @@ static inline float applySeededDrift(float base,
                                      uint32_t seed,
                                      uint32_t salt) {
   return base * (1.0f + relativeDepth * seededSignedUnit(seed, salt));
+}
+
+static void applyNoiseHumDefaults(NoiseHum& hum) {
+  hum.fs = 48000.0f;
+  hum.noiseHpHz = 220.0f;
+  hum.noiseLpHz = 5500.0f;
+  hum.humHz = 50.0f;
+  hum.filterQ = kRadioBiquadQ;
+  hum.scAttackMs = 10.0f;
+  hum.scReleaseMs = 320.0f;
+  hum.crackleDecayMs = 12.0f;
+  hum.sidechainMaskRef = 0.18f;
+  hum.hissMaskDepth = 0.12f;
+  hum.burstMaskDepth = 0.04f;
+  hum.pinkFastPole = 0.985f;
+  hum.pinkSlowPole = 0.9975f;
+  hum.brownStep = 0.0015f;
+  hum.hissDriftPole = 0.9995f;
+  hum.hissDriftNoise = 0.0005f;
+  hum.hissDriftSlowPole = 0.99985f;
+  hum.hissDriftSlowNoise = 0.00015f;
+  hum.whiteMix = 0.82f;
+  hum.pinkFastMix = 0.22f;
+  hum.pinkDifferenceMix = 0.12f;
+  hum.pinkFastSubtract = 0.5f;
+  hum.brownMix = 0.08f;
+  hum.hissBase = 0.88f;
+  hum.hissDriftDepth = 0.20f;
+  hum.hissDriftSlowMix = 0.06f;
+  hum.humSecondHarmonicMix = 0.35f;
+}
+
+static void applyAMDetectorDefaults(AMDetector& detector) {
+  detector.fs = 48000.0f;
+  detector.osFactor = 1;
+  detector.bwHz = 4800.0f;
+  detector.diodeDrop = 0.0045f;
+  detector.audioChargeMs = 0.05f;
+  detector.audioReleaseMs = 0.80f;
+  detector.avcAttackMs = 80.0f;
+  detector.avcReleaseMs = 1200.0f;
+  detector.detectorGain = 1.0f;
+  detector.controlVoltageRef = 0.18f;
+  detector.dcMs = 450.0f;
+  detector.ifLowBaseHz = 120.0f;
+  detector.ifMinBwHz = 1200.0f;
+  detector.ifMaxFraction = 0.45f;
+  detector.audioHpHz = 220.0f;
+  detector.detLpScale = 1.10f;
+  detector.detLpMinHz = 3000.0f;
+}
+
+static void applySpeakerSimDefaults(SpeakerSim& speaker) {
+  speaker.drive = 1.0f;
+  speaker.limit = 0.95f;
+  speaker.asymBias = 0.02f;
+  speaker.filterQ = kRadioBiquadQ;
+  speaker.suspensionHz = 165.0f;
+  speaker.suspensionQ = 0.70f;
+  speaker.suspensionGainDb = 0.85f;
+  speaker.coneBodyHz = 470.0f;
+  speaker.coneBodyQ = 0.88f;
+  speaker.coneBodyGainDb = 0.35f;
+  speaker.upperBreakupHz = 1620.0f;
+  speaker.upperBreakupQ = 1.05f;
+  speaker.upperBreakupGainDb = 0.45f;
+  speaker.coneDipHz = 3180.0f;
+  speaker.coneDipQ = 0.95f;
+  speaker.coneDipGainDb = -1.75f;
+  speaker.topLpHz = 3350.0f;
+  speaker.excursionRef = 0.18f;
+}
+
+static void applyRadioBaseDefaults(Radio1938& radio) {
+  radio.sampleRate = 48000.0f;
+  radio.channels = 1;
+  radio.bwHz = 4800.0f;
+  radio.noiseWeight = 0.012f;
+  radio.makeupGain = 1.0f;
+  radio.presentationGain = 1.0f;
+  radio.preset = Radio1938::Preset::Philco37116X;
+  radio.initialized = false;
+
+  radio.controlBus.controlVoltageAttackMs = 2.4f;
+  radio.controlBus.controlVoltageReleaseMs = 36.0f;
+  radio.controlBus.supplySagAttackMs = 10.0f;
+  radio.controlBus.supplySagReleaseMs = 220.0f;
+
+  radio.identity.driftDepth = 1.0f;
+
+  applyNoiseHumDefaults(radio.noiseRuntime.hum);
+  applyAMDetectorDefaults(radio.demod.am);
+  applySpeakerSimDefaults(radio.speakerStage.speaker);
+
+  radio.globals.oversampleFactor = 2.0f;
+  radio.globals.ifNoiseMix = 0.22f;
+  radio.globals.postNoiseMix = 0.14f;
+  radio.globals.noiseFloorAmp = 0.0022f;
+  radio.globals.inputPad = 0.76f;
+  radio.globals.enableAutoLevel = true;
+  radio.globals.autoTargetDb = -21.0f;
+  radio.globals.autoMaxBoostDb = 4.0f;
+  radio.globals.satClipDelta = 0.03f;
+  radio.globals.satClipMinLevel = 0.70f;
+  radio.globals.outputClipThreshold = 0.98f;
+  radio.globals.oversampleCutoffFraction = 0.45f;
+
+  radio.tuning.safeBwMinHz = 4200.0f;
+  radio.tuning.safeBwMaxHz = 5600.0f;
+  radio.tuning.preBwScale = 1.08f;
+  radio.tuning.postBwScale = 1.18f;
+  radio.tuning.adjLpScale = 0.78f;
+  radio.tuning.adjLpMinHz = 2200.0f;
+  radio.tuning.adjLpMaxScale = 0.90f;
+  radio.tuning.smoothTau = 0.05f;
+  radio.tuning.updateEps = 0.25f;
+
+  radio.input.autoEnvAttackMs = 8.0f;
+  radio.input.autoEnvReleaseMs = 220.0f;
+  radio.input.autoGainAttackMs = 140.0f;
+  radio.input.autoGainReleaseMs = 1200.0f;
+
+  radio.reception.fadeRateFast = 0.08f;
+  radio.reception.fadeRateSlow = 0.05f;
+  radio.reception.noiseRateFast = 0.04f;
+  radio.reception.noiseRateSlow = 0.031f;
+  radio.reception.fadeDepth = 0.05f;
+  radio.reception.noiseDepth = 0.20f;
+  radio.reception.lfoMixA = 0.6f;
+  radio.reception.lfoMixB = 0.4f;
+  radio.reception.fadeMin = 0.65f;
+  radio.reception.fadeMax = 1.35f;
+  radio.reception.receptionBase = 0.6f;
+  radio.reception.receptionOffTScale = 0.6f;
+  radio.reception.receptionFadeScale = 0.4f;
+  radio.reception.noiseScaleMin = 0.3f;
+  radio.reception.noiseScaleMax = 1.6f;
+
+  radio.frontEnd.inputHpHz = 115.0f;
+
+  radio.multipath.mixRate = 0.035f;
+  radio.multipath.blendRate = 0.027f;
+  radio.multipath.delayRate = 0.041f;
+  radio.multipath.mix = 0.12f;
+  radio.multipath.depth = 0.08f;
+  radio.multipath.delayMs = 5.5f;
+  radio.multipath.delayModMs = 1.5f;
+  radio.multipath.tiltMix = 0.35f;
+  radio.multipath.tiltLpHz = 1800.0f;
+  radio.multipath.maxMix = 0.35f;
+  radio.multipath.lfoMixA = 0.6f;
+  radio.multipath.lfoMixB = 0.4f;
+  radio.multipath.directMixDepth = 0.5f;
+
+  radio.detune.lfoRateFast = 0.13f;
+  radio.detune.lfoRateSlow = 0.09f;
+  radio.detune.depth = 0.0f;
+  radio.detune.baseDelay = 2.0f;
+  radio.detune.minDelay = 0.25f;
+  radio.detune.lfoMixA = 0.6f;
+  radio.detune.lfoMixB = 0.4f;
+
+  radio.adjacent.beatHz = 980.0f;
+  radio.adjacent.modDepth = 0.12f;
+  radio.adjacent.mix = 0.010f;
+  radio.adjacent.hpHz = 250.0f;
+  radio.adjacent.maxMix = 0.20f;
+
+  radio.receiverCircuit.enabled = true;
+  radio.receiverCircuit.couplingHpHz = 125.0f;
+  radio.receiverCircuit.interstagePeakHz = 1480.0f;
+  radio.receiverCircuit.interstagePeakQ = 0.82f;
+  radio.receiverCircuit.interstagePeakGainDb = 0.45f;
+  radio.receiverCircuit.transformerLpHz = 3150.0f;
+  radio.receiverCircuit.presenceDipHz = 2550.0f;
+  radio.receiverCircuit.presenceDipQ = 1.05f;
+  radio.receiverCircuit.presenceDipGainDb = -0.45f;
+  radio.receiverCircuit.driveBase = 1.02f;
+  radio.receiverCircuit.asymBiasBase = 0.003f;
+  radio.receiverCircuit.controlVoltageGainDepth = 0.12f;
+  radio.receiverCircuit.supplySagGainDepth = 0.10f;
+  radio.receiverCircuit.supplySagDriveDepth = 0.12f;
+
+  radio.tone.presenceHz = 1650.0f;
+  radio.tone.presenceQ = 0.78f;
+  radio.tone.presenceGainDb = 0.28f;
+  radio.tone.tiltSplitHz = 1450.0f;
+
+  radio.power.sagStart = 0.06f;
+  radio.power.sagEnd = 0.22f;
+  radio.power.rippleDepth = 0.010f;
+  radio.power.satDrive = 1.12f;
+  radio.power.satMix = 0.24f;
+  radio.power.sagAttackMs = 60.0f;
+  radio.power.sagReleaseMs = 900.0f;
+  radio.power.rectifierMinHz = 80.0f;
+  radio.power.rippleSecondHarmonicMix = 0.28f;
+  radio.power.gainSagPerPower = 0.018f;
+  radio.power.rippleGainBase = 0.35f;
+  radio.power.rippleGainDepth = 0.65f;
+  radio.power.gainMin = 0.88f;
+  radio.power.gainMax = 1.04f;
+
+  radio.heterodyne.enabled = true;
+  radio.heterodyne.driftHz = 0.06f;
+  radio.heterodyne.gateStart = 0.015f;
+  radio.heterodyne.gateEnd = 0.05f;
+  radio.heterodyne.depth = 0.00035f;
+  radio.heterodyne.noiseWeightRef = 0.015f;
+  radio.heterodyne.heteroBaseScaleMin = 0.10f;
+  radio.heterodyne.heteroBaseScaleMax = 0.85f;
+  radio.heterodyne.gateHz = 180.0f;
+  radio.heterodyne.maxHz = 2500.0f;
+  radio.heterodyne.driftDepth = 0.12f;
+
+  radio.noiseConfig.enableHumTone = true;
+  radio.noiseConfig.humHzDefault = 50.0f;
+  radio.noiseConfig.noiseWeightRef = 0.015f;
+  radio.noiseConfig.noiseWeightScaleMax = 2.0f;
+  radio.noiseConfig.humAmpScale = 0.0018f;
+  radio.noiseConfig.crackleAmpScale = 0.008f;
+  radio.noiseConfig.crackleRateScale = 0.50f;
+
+  radio.speakerStage.drive = 0.72f;
+
+  radio.cabinet.enabled = true;
+  radio.cabinet.panelHz = 185.0f;
+  radio.cabinet.panelQ = 0.82f;
+  radio.cabinet.panelGainDb = 0.55f;
+  radio.cabinet.chassisHz = 430.0f;
+  radio.cabinet.chassisQ = 1.05f;
+  radio.cabinet.chassisGainDb = 0.30f;
+  radio.cabinet.cavityDipHz = 980.0f;
+  radio.cabinet.cavityDipQ = 0.95f;
+  radio.cabinet.cavityDipGainDb = -0.55f;
+  radio.cabinet.grilleLpHz = 2950.0f;
+  radio.cabinet.rearDelayMs = 1.6f;
+  radio.cabinet.rearMix = 0.06f;
+  radio.cabinet.rearHpHz = 170.0f;
+  radio.cabinet.rearLpHz = 1100.0f;
+  radio.cabinet.rearMixApplied = 0.06f;
+
+  radio.room.enableEarlyReflections = true;
+  radio.room.enableTail = false;
+  radio.room.mix = 0.025f;
+  radio.room.lpHz = 1800.0f;
+  radio.room.tailMix = 0.0f;
+  radio.room.tailFeedback = 0.28f;
+  radio.room.tailMs = 45.0f;
+  radio.room.tailLpHz = 1600.0f;
+  radio.room.tapMs = {6.0f, 10.5f, 16.0f, 23.0f, 31.0f};
+  radio.room.tapGain = {0.18f, 0.14f, 0.10f, 0.07f, 0.05f};
+  radio.room.baseDelayMs = 12.0f;
+
+  radio.finalLimiter.enabled = true;
+  radio.finalLimiter.threshold = 0.88f;
+  radio.finalLimiter.lookaheadMs = 3.5f;
+  radio.finalLimiter.attackMs = 0.20f;
+  radio.finalLimiter.releaseMs = 160.0f;
 }
 
 static inline float smoothSharedState(float state,
@@ -234,36 +480,19 @@ void NoiseHum::setFs(float newFs, float noiseBwHz) {
   lp.setLowpass(fs, safeLp, filterQ);
   crackleHp.setHighpass(fs, noiseHpHz, filterQ);
   crackleLp.setLowpass(fs, safeLp, filterQ);
-  float lightningLpHz = std::clamp(safeLp * lightningLpScale,
-                                   lightningHpHz + lightningLpMinGapHz,
-                                   fs * 0.45f);
-  lightningHp.setHighpass(fs, lightningHpHz, filterQ);
-  lightningLp.setLowpass(fs, lightningLpHz, filterQ);
-  float safeMotorLp = std::min(motorLpHz, fs * 0.45f);
-  motorHp.setHighpass(fs, motorHpHz, filterQ);
-  motorLp.setLowpass(fs, safeMotorLp, filterQ);
   hp.reset();
   lp.reset();
   crackleHp.reset();
   crackleLp.reset();
-  lightningHp.reset();
-  lightningLp.reset();
-  motorHp.reset();
-  motorLp.reset();
   scAtk = std::exp(-1.0f / (fs * (scAttackMs / 1000.0f)));
   scRel = std::exp(-1.0f / (fs * (scReleaseMs / 1000.0f)));
   crackleDecay = std::exp(-1.0f / (fs * (crackleDecayMs / 1000.0f)));
-  lightningDecay = std::exp(-1.0f / (fs * (lightningDecayMs / 1000.0f)));
-  motorDecay = std::exp(-1.0f / (fs * (motorDecayMs / 1000.0f)));
 }
 
 void NoiseHum::reset() {
   humPhase = 0.0f;
   scEnv = 0.0f;
   crackleEnv = 0.0f;
-  lightningEnv = 0.0f;
-  motorEnv = 0.0f;
-  motorPhase = 0.0f;
   pinkFast = 0.0f;
   pinkSlow = 0.0f;
   brown = 0.0f;
@@ -273,10 +502,6 @@ void NoiseHum::reset() {
   lp.reset();
   crackleHp.reset();
   crackleLp.reset();
-  lightningHp.reset();
-  lightningLp.reset();
-  motorHp.reset();
-  motorLp.reset();
 }
 
 float NoiseHum::process(const NoiseInput& in) {
@@ -319,38 +544,6 @@ float NoiseHum::process(const NoiseInput& in) {
     c = raw * in.crackleAmp * burstMask;
   }
 
-  float noiseScale =
-      std::clamp(in.noiseAmp / noiseScaleRef, 0.0f, noiseScaleMax);
-
-  float l = 0.0f;
-  if (in.lightningRate > 0.0f && in.lightningAmp > 0.0f && fs > 0.0f) {
-    float chance = in.lightningRate / fs;
-    if (dist01(rng) < chance) {
-      lightningEnv = 1.0f;
-    }
-    float raw = dist(rng) * lightningEnv;
-    lightningEnv *= lightningDecay;
-    raw = lightningHp.process(raw);
-    raw = lightningLp.process(raw);
-    l = raw * in.lightningAmp * noiseScale * burstMask;
-  }
-
-  float m = 0.0f;
-  if (in.motorRate > 0.0f && in.motorAmp > 0.0f && fs > 0.0f) {
-    float chance = in.motorRate / fs;
-    if (dist01(rng) < chance) {
-      motorEnv = 1.0f;
-    }
-    motorEnv *= motorDecay;
-    motorPhase += kRadioTwoPi * (in.motorBuzzHz / fs);
-    if (motorPhase > kRadioTwoPi) motorPhase -= kRadioTwoPi;
-    float buzz = motorBuzzBase + motorBuzzDepth * std::sin(motorPhase);
-    float raw = dist(rng) * motorEnv * buzz;
-    raw = motorHp.process(raw);
-    raw = motorLp.process(raw);
-    m = raw * in.motorAmp * noiseScale * burstMask;
-  }
-
   float h = 0.0f;
   if (in.humToneEnabled && in.humAmp > 0.0f && fs > 0.0f) {
     humPhase += kRadioTwoPi * (humHz / fs);
@@ -359,69 +552,42 @@ float NoiseHum::process(const NoiseInput& in) {
     h *= in.humAmp * hissMask;
   }
 
-  return n + c + l + m + h;
+  return n + c + h;
 }
 
 void AMDetector::init(float newFs, float newBw, float newTuneHz) {
-  fs = newFs;
-  osFs = fs * static_cast<float>(osFactor);
-  carrierHz = std::min(initCarrierHz, fs * initCarrierMaxFraction);
-  phaseStep = kRadioTwoPi * (carrierHz / osFs);
+  fs = std::max(newFs, 1.0f);
+  bwHz = newBw;
   tuneOffsetHz = newTuneHz;
-  setBandwidth(newBw, newTuneHz);
-
-  agcAtk = std::exp(-1.0f / (fs * (agcAttackMs / 1000.0f)));
-  agcRel = std::exp(-1.0f / (fs * (agcReleaseMs / 1000.0f)));
-  agcGainAtk = std::exp(-1.0f / (fs * (agcGainAttackMs / 1000.0f)));
-  agcGainRel = std::exp(-1.0f / (fs * (agcGainReleaseMs / 1000.0f)));
-
-  detChargeCoeff = std::exp(-1.0f / (osFs * (detChargeMs / 1000.0f)));
-  detReleaseCoeff = std::exp(-1.0f / (osFs * (detReleaseMs / 1000.0f)));
-  avcChargeCoeff = std::exp(-1.0f / (osFs * (avcChargeMs / 1000.0f)));
-  avcReleaseCoeff = std::exp(-1.0f / (osFs * (avcReleaseMs / 1000.0f)));
-
+  audioChargeCoeff = std::exp(-1.0f / (fs * (audioChargeMs / 1000.0f)));
+  audioReleaseCoeff = std::exp(-1.0f / (fs * (audioReleaseMs / 1000.0f)));
+  avcAttackCoeff = std::exp(-1.0f / (fs * (avcAttackMs / 1000.0f)));
+  avcReleaseCoeff = std::exp(-1.0f / (fs * (avcReleaseMs / 1000.0f)));
   dcCoeff = std::exp(-1.0f / (fs * (dcMs / 1000.0f)));
-
+  setBandwidth(newBw, newTuneHz);
   reset();
 }
 
 void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   bwHz = newBw;
-  osFs = fs * static_cast<float>(osFactor);
-  phaseStep = kRadioTwoPi * (carrierHz / osFs);
-  float halfBw = std::clamp(bwHz * ifHalfBwScale, ifHalfBwMinHz,
-                            fs * ifHalfBwMaxFraction);
-  tuneOffsetHz = std::clamp(newTuneHz, -halfBw, halfBw);
-  float skewT =
-      clampf(tuneOffsetHz / std::max(halfBw, 1.0f), -1.0f, 1.0f);
-  float ifCenter = carrierHz + tuneOffsetHz;
-  ifCenter = std::clamp(ifCenter, ifCenterMinHz + halfBw,
-                        fs * ifMaxFraction - halfBw);
-  float lowSpan = halfBw * (1.0f + ifSkewPositiveExpand * skewT -
-                            ifSkewNegativeShrink * std::max(0.0f, -skewT));
-  float highSpan = halfBw * (1.0f - ifSkewPositiveShrink * std::max(0.0f, skewT) +
-                             ifSkewNegativeExpand * -std::min(0.0f, skewT));
-  lowSpan = std::clamp(lowSpan, ifSpanClampMinHz, fs * ifSpanClampMaxFraction);
-  highSpan = std::clamp(highSpan, ifSpanClampMinHz, fs * ifSpanClampMaxFraction);
-  float ifLow = std::clamp(ifCenter - lowSpan, ifCenterMinHz, fs * ifGuardFraction);
-  float ifHigh =
-      std::clamp(ifCenter + highSpan, ifLow + ifSpanMinHz, fs * ifMaxFraction);
-  ifHp1.setHighpass(osFs, ifLow, kRadioBiquadQ);
-  ifHp2.setHighpass(osFs, ifLow, kRadioBiquadQ);
-  ifLp1.setLowpass(osFs, ifHigh, kRadioBiquadQ);
-  ifLp2.setLowpass(osFs, ifHigh, kRadioBiquadQ);
+  tuneOffsetHz = newTuneHz;
+  float maxIfHz = std::max(ifLowBaseHz + ifMinBwHz + 100.0f, fs * ifMaxFraction);
+  float safeBw = std::clamp(bwHz, ifMinBwHz, maxIfHz - 40.0f);
+  float ifLow = std::clamp(ifLowBaseHz + tuneOffsetHz, 40.0f, maxIfHz - safeBw);
+  float ifHigh = std::clamp(ifLow + safeBw, ifLow + 400.0f, maxIfHz);
+  ifHp1.setHighpass(fs, ifLow, kRadioBiquadQ);
+  ifHp2.setHighpass(fs, ifLow, kRadioBiquadQ);
+  ifLp1.setLowpass(fs, ifHigh, kRadioBiquadQ);
+  ifLp2.setLowpass(fs, ifHigh, kRadioBiquadQ);
 
-  float detLpHz = std::clamp(bwHz * detLpScale, detLpMinHz, fs * 0.45f);
+  float detLpHz = std::clamp(safeBw * detLpScale, detLpMinHz, fs * 0.45f);
   audioHp.setHighpass(fs, audioHpHz, kRadioBiquadQ);
   audioLp1.setLowpass(fs, detLpHz, kRadioBiquadQ);
 }
 
 void AMDetector::reset() {
-  phase = 0.0f;
-  agcEnv = 0.0f;
-  agcGainDb = 0.0f;
-  envelopeCap = 0.0f;
-  avcCap = 0.0f;
+  audioEnv = 0.0f;
+  avcEnv = 0.0f;
   dcEnv = 0.0f;
   ifHp1.reset();
   ifHp2.reset();
@@ -456,43 +622,6 @@ void Radio1938::CalibrationStageMetrics::clearAccumulators() {
 void Radio1938::CalibrationStageMetrics::resetMeasurementState() {
   fftTimeBuffer.fill(0.0f);
   fftFill = 0;
-}
-
-static constexpr std::array<float, kRadioCalibrationBandCount>
-    kRadioCalibrationBandHz{{125.0f, 250.0f, 400.0f, 630.0f, 1000.0f, 1250.0f,
-                             1600.0f, 2000.0f, 2500.0f, 3150.0f, 4000.0f,
-                             5000.0f}};
-
-static const std::array<float, kRadioCalibrationBandCount + 1>&
-calibrationBandEdgesHz() {
-  static const auto kEdges = [] {
-    std::array<float, kRadioCalibrationBandCount + 1> edges{};
-    edges[0] = kRadioCalibrationBandHz[0] /
-               std::sqrt(kRadioCalibrationBandHz[1] / kRadioCalibrationBandHz[0]);
-    for (size_t i = 1; i < kRadioCalibrationBandHz.size(); ++i) {
-      edges[i] = std::sqrt(kRadioCalibrationBandHz[i - 1] *
-                           kRadioCalibrationBandHz[i]);
-    }
-    edges[kRadioCalibrationBandCount] =
-        kRadioCalibrationBandHz.back() *
-        std::sqrt(kRadioCalibrationBandHz.back() /
-                  kRadioCalibrationBandHz[kRadioCalibrationBandCount - 2]);
-    return edges;
-  }();
-  return kEdges;
-}
-
-static const std::array<float, kRadioCalibrationFftSize>&
-calibrationWindow() {
-  static const auto kWindow = [] {
-    std::array<float, kRadioCalibrationFftSize> window{};
-    for (size_t i = 0; i < window.size(); ++i) {
-      window[i] = 0.5f - 0.5f * std::cos(kRadioTwoPi * static_cast<float>(i) /
-                                         static_cast<float>(window.size() - 1));
-    }
-    return window;
-  }();
-  return kWindow;
 }
 
 static void fftInPlace(
@@ -534,14 +663,14 @@ static void accumulateCalibrationSpectrum(
   if (!flushPartial && stage.fftFill < kRadioCalibrationFftSize) return;
 
   std::array<std::complex<float>, kRadioCalibrationFftSize> bins{};
-  const auto& window = calibrationWindow();
+  const auto& window = radioCalibrationWindow();
   for (size_t i = 0; i < kRadioCalibrationFftSize; ++i) {
     float sample = (i < stage.fftFill) ? stage.fftTimeBuffer[i] : 0.0f;
     bins[i] = std::complex<float>(sample * window[i], 0.0f);
   }
   fftInPlace(bins);
 
-  const auto& edges = calibrationBandEdgesHz();
+  const auto& edges = radioCalibrationBandEdgesHz();
   float binHz = sampleRate / static_cast<float>(kRadioCalibrationFftSize);
   for (size_t i = 1; i < kRadioCalibrationFftBinCount; ++i) {
     float hz = static_cast<float>(i) * binHz;
@@ -572,7 +701,6 @@ void Radio1938::CalibrationState::reset() {
   limiterMaxGainReductionDb = 0.0f;
   limiterGainReductionSum = 0.0;
   limiterGainReductionDbSum = 0.0;
-  documentarySnapshot = {};
   for (auto& stage : stages) {
     stage.clearAccumulators();
   }
@@ -646,50 +774,6 @@ void Radio1938::CalibrationStageMetrics::updateSnapshot(float sampleRate) {
   }
 }
 
-static double sumCalibrationBandEnergy(const Radio1938::CalibrationStageMetrics& stage,
-                                       float lowHz,
-                                       float highHz) {
-  double sum = 0.0;
-  for (size_t i = 0; i < kRadioCalibrationBandHz.size(); ++i) {
-    if (kRadioCalibrationBandHz[i] >= lowHz && kRadioCalibrationBandHz[i] <= highHz) {
-      sum += stage.bandEnergy[i];
-    }
-  }
-  return sum;
-}
-
-static double sumCalibrationTotalEnergy(
-    const Radio1938::CalibrationStageMetrics& stage) {
-  double sum = 0.0;
-  for (double band : stage.bandEnergy) {
-    sum += band;
-  }
-  return sum;
-}
-
-static float belowMinDeviation(float value, float minValue) {
-  return std::max(0.0f, minValue - value);
-}
-
-static float aboveMaxDeviation(float value, float maxValue) {
-  return std::max(0.0f, value - maxValue);
-}
-
-static float rangeDeviation(float value, float minValue, float maxValue) {
-  return std::max(belowMinDeviation(value, minValue),
-                  aboveMaxDeviation(value, maxValue));
-}
-
-static void updateWorstDeviation(float score,
-                                 std::string_view name,
-                                 float& bestScore,
-                                 std::string_view& bestName) {
-  if (score > bestScore) {
-    bestScore = score;
-    bestName = name;
-  }
-}
-
 static void updateCalibrationSnapshot(Radio1938& radio) {
   if (!radio.calibration.enabled) return;
   for (auto& stage : radio.calibration.stages) {
@@ -705,323 +789,39 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
     radio.calibration.limiterAverageGainReductionDb =
         static_cast<float>(radio.calibration.limiterGainReductionDbSum * invCount);
   }
-
-  const auto& demod =
-      radio.calibration.stages[static_cast<size_t>(StageId::Demod)];
-  const auto& receiver =
-      radio.calibration.stages[static_cast<size_t>(StageId::ReceiverCircuit)];
-  const auto& power =
-      radio.calibration.stages[static_cast<size_t>(StageId::Power)];
-  const auto& speaker =
-      radio.calibration.stages[static_cast<size_t>(StageId::Speaker)];
-  const auto& output =
-      radio.calibration.stages[static_cast<size_t>(StageId::OutputClip)];
-  auto& doc = radio.calibration.documentarySnapshot;
-  const auto& targets = radio.calibration.documentaryTargets;
-  doc.speechCentroidHz = output.spectralCentroidHz;
-  doc.effectiveBandwidth6dBHz = output.bandwidth6dBHz;
-  double demodMelody = sumCalibrationBandEnergy(demod, 1000.0f, 3150.0f);
-  double receiverMelody = sumCalibrationBandEnergy(receiver, 1000.0f, 3150.0f);
-  double outputMelody = sumCalibrationBandEnergy(output, 1000.0f, 3150.0f);
-  double receiverTotal = std::max(1e-18, sumCalibrationTotalEnergy(receiver));
-  double outputTotal = std::max(1e-18, sumCalibrationTotalEnergy(output));
-  double powerTotal = std::max(1e-18, sumCalibrationTotalEnergy(power));
-  double speakerTotal = std::max(1e-18, sumCalibrationTotalEnergy(speaker));
-  doc.melodyBandRetention =
-      (demodMelody > 1e-18) ? static_cast<float>(outputMelody / demodMelody) : 0.0f;
-  doc.receiverCentroidHz = receiver.spectralCentroidHz;
-  doc.receiverBandwidth6dBHz = receiver.bandwidth6dBHz;
-  doc.receiverRmsRatio =
-      static_cast<float>(receiver.rmsOut / std::max(1e-9, receiver.rmsIn));
-  doc.receiverPeakRatio =
-      receiver.peakOut / std::max(1e-9f, receiver.peakIn);
-  doc.receiverCrestDelta = receiver.crestOut - receiver.crestIn;
-  double receiverUpperMid = sumCalibrationBandEnergy(receiver, 1600.0f, 3150.0f);
-  double receiverBody = sumCalibrationBandEnergy(receiver, 400.0f, 1250.0f);
-  doc.receiverUpperMidEnergyRatio =
-      (receiverBody > 1e-18) ? static_cast<float>(receiverUpperMid / receiverBody)
-                             : 0.0f;
-  doc.receiverCrestReduction =
-      std::max(0.0f, demod.crestOut - receiver.crestOut);
-  doc.receiverToOutputMelodyRetention =
-      (receiverMelody > 1e-18)
-          ? static_cast<float>((outputMelody / outputTotal) /
-                               (receiverMelody / receiverTotal))
-          : 0.0f;
-  double receiverConsonants = sumCalibrationBandEnergy(receiver, 2000.0f, 4000.0f);
-  double outputConsonants = sumCalibrationBandEnergy(output, 2000.0f, 4000.0f);
-  doc.consonantRetentionProxy =
-      (receiverConsonants > 1e-18)
-          ? static_cast<float>((outputConsonants / outputTotal) /
-                               (receiverConsonants / receiverTotal))
-          : 0.0f;
-  double powerLow = sumCalibrationBandEnergy(power, 125.0f, 400.0f);
-  double powerMid = sumCalibrationBandEnergy(power, 500.0f, 1600.0f);
-  double powerBreakup = sumCalibrationBandEnergy(power, 1600.0f, 3150.0f);
-  double speakerLow = sumCalibrationBandEnergy(speaker, 125.0f, 400.0f);
-  double speakerMid = sumCalibrationBandEnergy(speaker, 500.0f, 1600.0f);
-  double speakerBreakup = sumCalibrationBandEnergy(speaker, 1600.0f, 3150.0f);
-  doc.speakerLowRetention =
-      (powerLow > 1e-18) ? static_cast<float>((speakerLow / speakerTotal) /
-                                              (powerLow / powerTotal))
-                         : 0.0f;
-  doc.speakerMidRetention =
-      (powerMid > 1e-18) ? static_cast<float>((speakerMid / speakerTotal) /
-                                              (powerMid / powerTotal))
-                         : 0.0f;
-  doc.speakerBreakupRetention =
-      (powerBreakup > 1e-18)
-          ? static_cast<float>((speakerBreakup / speakerTotal) /
-                               (powerBreakup / powerTotal))
-                             : 0.0f;
-  doc.speakerBreakupOpenness =
-      (speakerMid > 1e-18) ? static_cast<float>(speakerBreakup / speakerMid) : 0.0f;
-  doc.speakerLowOverhangProxy =
-      (speakerMid > 1e-18) ? static_cast<float>(speakerLow / speakerMid) : 0.0f;
-  doc.speechCentroidDeviationHz = rangeDeviation(
-      doc.speechCentroidHz, targets.speechCentroidMinHz,
-      targets.speechCentroidMaxHz);
-  doc.effectiveBandwidthDeviationHz = rangeDeviation(
-      doc.effectiveBandwidth6dBHz, targets.bandwidth6dBMinHz,
-      targets.bandwidth6dBMaxHz);
-  doc.limiterDutyCycleExcess =
-      aboveMaxDeviation(radio.calibration.limiterDutyCycle,
-                        targets.limiterDutyCycleMax);
-  doc.melodyBandRetentionShortfall =
-      belowMinDeviation(doc.melodyBandRetention, targets.melodyBandRetentionMin);
-  doc.receiverRmsRatioDeviation = rangeDeviation(
-      doc.receiverRmsRatio, targets.receiverRmsRatioMin,
-      targets.receiverRmsRatioMax);
-  doc.receiverPeakRatioDeviation = rangeDeviation(
-      doc.receiverPeakRatio, targets.receiverPeakRatioMin,
-      targets.receiverPeakRatioMax);
-  doc.receiverCrestDeltaDeviation = rangeDeviation(
-      doc.receiverCrestDelta, targets.receiverCrestDeltaMin,
-      targets.receiverCrestDeltaMax);
-  doc.receiverUpperMidEnergyRatioDeviation = rangeDeviation(
-      doc.receiverUpperMidEnergyRatio, targets.receiverUpperMidEnergyRatioMin,
-      targets.receiverUpperMidEnergyRatioMax);
-  doc.consonantRetentionShortfall =
-      belowMinDeviation(doc.consonantRetentionProxy,
-                        targets.consonantRetentionProxyMin);
-  doc.speakerMidRetentionShortfall =
-      belowMinDeviation(doc.speakerMidRetention, targets.speakerMidRetentionMin);
-  doc.speakerBreakupRetentionDeviation = rangeDeviation(
-      doc.speakerBreakupRetention, targets.speakerBreakupRetentionMin,
-      targets.speakerBreakupRetentionMax);
-  doc.speakerBreakupOpennessDeviation = rangeDeviation(
-      doc.speakerBreakupOpenness, targets.speakerBreakupOpennessMin,
-      targets.speakerBreakupOpennessMax);
-  doc.speakerLowOverhangExcess =
-      aboveMaxDeviation(doc.speakerLowOverhangProxy,
-                        targets.speakerLowOverhangProxyMax);
-  doc.worstDeviationScore = 0.0f;
-  doc.worstDeviationMetric = {};
-  updateWorstDeviation(doc.speechCentroidDeviationHz /
-                           std::max(1.0f, targets.speechCentroidMaxHz -
-                                            targets.speechCentroidMinHz),
-                       "speech_centroid", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.effectiveBandwidthDeviationHz /
-                           std::max(1.0f, targets.bandwidth6dBMaxHz -
-                                            targets.bandwidth6dBMinHz),
-                       "bandwidth_6db", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.limiterDutyCycleExcess /
-                           std::max(1e-6f, targets.limiterDutyCycleMax),
-                       "limiter_duty", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.melodyBandRetentionShortfall /
-                           std::max(1e-6f, targets.melodyBandRetentionMin),
-                       "melody_retention", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.receiverRmsRatioDeviation /
-                           std::max(1e-6f, targets.receiverRmsRatioMax -
-                                             targets.receiverRmsRatioMin),
-                       "receiver_rms_ratio", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.receiverPeakRatioDeviation /
-                           std::max(1e-6f, targets.receiverPeakRatioMax -
-                                             targets.receiverPeakRatioMin),
-                       "receiver_peak_ratio", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.receiverCrestDeltaDeviation /
-                           std::max(1e-6f, targets.receiverCrestDeltaMax -
-                                             targets.receiverCrestDeltaMin),
-                       "receiver_crest_delta", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.receiverUpperMidEnergyRatioDeviation /
-                           std::max(1e-6f, targets.receiverUpperMidEnergyRatioMax -
-                                             targets.receiverUpperMidEnergyRatioMin),
-                       "receiver_upper_mid", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.consonantRetentionShortfall /
-                           std::max(1e-6f, targets.consonantRetentionProxyMin),
-                       "consonant_retention", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.speakerMidRetentionShortfall /
-                           std::max(1e-6f, targets.speakerMidRetentionMin),
-                       "speaker_mid_retention", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.speakerBreakupRetentionDeviation /
-                           std::max(1e-6f, targets.speakerBreakupRetentionMax -
-                                             targets.speakerBreakupRetentionMin),
-                       "speaker_breakup_retention", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.speakerBreakupOpennessDeviation /
-                           std::max(1e-6f, targets.speakerBreakupOpennessMax -
-                                             targets.speakerBreakupOpennessMin),
-                       "speaker_breakup_openness", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  updateWorstDeviation(doc.speakerLowOverhangExcess /
-                           std::max(1e-6f, targets.speakerLowOverhangProxyMax),
-                       "speaker_low_overhang", doc.worstDeviationScore,
-                       doc.worstDeviationMetric);
-  doc.speechCentroidInRange =
-      doc.speechCentroidHz >= targets.speechCentroidMinHz &&
-      doc.speechCentroidHz <= targets.speechCentroidMaxHz;
-  doc.effectiveBandwidthInRange =
-      doc.effectiveBandwidth6dBHz >= targets.bandwidth6dBMinHz &&
-      doc.effectiveBandwidth6dBHz <= targets.bandwidth6dBMaxHz;
-  doc.limiterDutyCycleInRange =
-      radio.calibration.limiterDutyCycle <= targets.limiterDutyCycleMax;
-  doc.melodyBandRetentionInRange =
-      doc.melodyBandRetention >= targets.melodyBandRetentionMin;
-  doc.receiverRmsRatioInRange =
-      doc.receiverRmsRatio >= targets.receiverRmsRatioMin &&
-      doc.receiverRmsRatio <= targets.receiverRmsRatioMax;
-  doc.receiverPeakRatioInRange =
-      doc.receiverPeakRatio >= targets.receiverPeakRatioMin &&
-      doc.receiverPeakRatio <= targets.receiverPeakRatioMax;
-  doc.receiverCrestDeltaInRange =
-      doc.receiverCrestDelta >= targets.receiverCrestDeltaMin &&
-      doc.receiverCrestDelta <= targets.receiverCrestDeltaMax;
-  doc.receiverUpperMidEnergyRatioInRange =
-      doc.receiverUpperMidEnergyRatio >= targets.receiverUpperMidEnergyRatioMin &&
-      doc.receiverUpperMidEnergyRatio <= targets.receiverUpperMidEnergyRatioMax;
-  doc.consonantRetentionInRange =
-      doc.consonantRetentionProxy >= targets.consonantRetentionProxyMin;
-  doc.speakerMidRetentionInRange =
-      doc.speakerMidRetention >= targets.speakerMidRetentionMin;
-  doc.speakerBreakupRetentionInRange =
-      doc.speakerBreakupRetention >= targets.speakerBreakupRetentionMin &&
-      doc.speakerBreakupRetention <= targets.speakerBreakupRetentionMax;
-  doc.speakerBreakupOpennessInRange =
-      doc.speakerBreakupOpenness >= targets.speakerBreakupOpennessMin &&
-      doc.speakerBreakupOpenness <= targets.speakerBreakupOpennessMax;
-  doc.speakerLowOverhangInRange =
-      doc.speakerLowOverhangProxy <= targets.speakerLowOverhangProxyMax;
-  doc.allTargetsMet = doc.speechCentroidInRange &&
-                      doc.effectiveBandwidthInRange &&
-                      doc.limiterDutyCycleInRange &&
-                      doc.melodyBandRetentionInRange &&
-                      doc.receiverRmsRatioInRange &&
-                      doc.receiverPeakRatioInRange &&
-                      doc.receiverCrestDeltaInRange &&
-                      doc.receiverUpperMidEnergyRatioInRange &&
-                      doc.consonantRetentionInRange &&
-                      doc.speakerMidRetentionInRange &&
-                      doc.speakerBreakupRetentionInRange &&
-                      doc.speakerBreakupOpennessInRange &&
-                      doc.speakerLowOverhangInRange;
 }
 
 float AMDetector::process(const AMDetectorSampleInput& in) {
-  float mod = std::clamp(in.signal * modIndex, -modulationClamp, modulationClamp);
-  float mistuneT = clampf(std::fabs(tuneOffsetHz) /
-                              std::max(1.0f, bwHz * mistuneNormDenomScale),
-                          0.0f, 1.0f);
-  float agcLin = db2lin(agcGainDb);
-  float envAccum = 0.0f;
-  float rectifiedAccum = 0.0f;
-  float avcImpulsePeak = 0.0f;
-
-  for (int i = 0; i < osFactor; ++i) {
-    phase += phaseStep;
-    if (phase > kRadioTwoPi) phase -= kRadioTwoPi;
-
-    float carrier = std::sin(phase);
-    float ifSample = (1.0f + mod) * carrier * carrierGain;
-    if (in.ifNoiseAmp > 0.0f) {
-      ifSample += dist(rng) * in.ifNoiseAmp;
-    }
-
-    ifSample = ifHp1.process(ifSample);
-    ifSample = ifHp2.process(ifSample);
-    ifSample = ifLp1.process(ifSample);
-    ifSample = ifLp2.process(ifSample);
-
-    float sensed = ifSample * agcLin;
-    float rectified = std::max(0.0f, sensed - diodeDrop);
-    rectified = rectified / (1.0f + detectorCompression * rectified);
-
-    float detRelease = detReleaseCoeff +
-                       (1.0f - detReleaseCoeff) *
-                           (detReleaseMistuneMix * mistuneT);
-    if (rectified > envelopeCap) {
-      envelopeCap =
-          detChargeCoeff * envelopeCap + (1.0f - detChargeCoeff) * rectified;
-    } else {
-      envelopeCap =
-          detRelease * envelopeCap + (1.0f - detRelease) * rectified;
-    }
-
-    float avcImpulse = std::max(0.0f, rectified - envelopeCap);
-    avcImpulsePeak = std::max(avcImpulsePeak, avcImpulse);
-
-    float avcSense =
-        envelopeCap + avcImpulse * (avcImpulseBase + avcImpulseMistune * mistuneT);
-    if (avcSense > avcCap) {
-      avcCap = avcChargeCoeff * avcCap + (1.0f - avcChargeCoeff) * avcSense;
-    } else {
-      avcCap = avcReleaseCoeff * avcCap + (1.0f - avcReleaseCoeff) * avcSense;
-    }
-
-    envAccum += envelopeCap;
-    rectifiedAccum += rectified;
+  float ifSample = in.signal;
+  if (in.ifNoiseAmp > 0.0f) {
+    ifSample += dist(rng) * in.ifNoiseAmp;
   }
 
-  agcEnv = avcCap;
-  float avcDb = lin2db(avcCap);
-  float consonantPullDb =
-      clampf(avcImpulsePeak * consonantPullScale, 0.0f, consonantPullMaxDb);
-  float targetGainDb =
-      std::clamp(agcTargetDb - avcDb - consonantPullDb -
-                     mistuneGainPenaltyDb * mistuneT,
-                 agcMinGainDb, agcMaxGainDb);
-  if (targetGainDb < agcGainDb) {
-    agcGainDb = agcGainAtk * agcGainDb + (1.0f - agcGainAtk) * targetGainDb;
+  ifSample = ifHp1.process(ifSample);
+  ifSample = ifHp2.process(ifSample);
+  ifSample = ifLp1.process(ifSample);
+  ifSample = ifLp2.process(ifSample);
+
+  float rectified = std::max(0.0f, ifSample - diodeDrop);
+  if (rectified > audioEnv) {
+    audioEnv =
+        audioChargeCoeff * audioEnv + (1.0f - audioChargeCoeff) * rectified;
   } else {
-    agcGainDb = agcGainRel * agcGainDb + (1.0f - agcGainRel) * targetGainDb;
+    audioEnv =
+        audioReleaseCoeff * audioEnv + (1.0f - audioReleaseCoeff) * rectified;
   }
 
-  float env = envAccum / static_cast<float>(osFactor);
-  float rectifiedAvg = rectifiedAccum / static_cast<float>(osFactor);
-  float detected = env + detectorDetailMix * (rectifiedAvg - env);
-  dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * detected;
-  float out = detected - dcEnv;
+  if (audioEnv > avcEnv) {
+    avcEnv = avcAttackCoeff * avcEnv + (1.0f - avcAttackCoeff) * audioEnv;
+  } else {
+    avcEnv = avcReleaseCoeff * avcEnv + (1.0f - avcReleaseCoeff) * audioEnv;
+  }
+
+  dcEnv = dcCoeff * dcEnv + (1.0f - dcCoeff) * audioEnv;
+  float out = audioEnv - dcEnv;
   out = audioHp.process(out);
   out = audioLp1.process(out);
-  out *= detGain * detectorMakeupGain;
-  float overloadT = clampf((env - overloadThreshold) / overloadRange +
-                               avcImpulsePeak * overloadImpulseScale,
-                           0.0f, 1.0f);
-  float ripple = rectifiedAvg - env;
-  out += detectorRippleMix * (0.35f + 0.65f * overloadT) *
-         (ripple + 0.22f * std::max(0.0f, ripple));
-  float negLimit = negLimitBase - negLimitOverloadDepth * overloadT -
-                   negLimitMistuneDepth * mistuneT;
-  float posLimit = posLimitBase - posLimitOverloadDepth * overloadT;
-  negLimit = std::max(negLimitMin, negLimit);
-  posLimit = std::max(negLimit + posLimitGuard, posLimit);
-  if (out < -negLimit) {
-    float excess = -out - negLimit;
-    out = -(negLimit + excess / (1.0f + negOverloadSoftness * overloadT));
-  }
-  if (out > posLimit) {
-    float excess = out - posLimit;
-    out = posLimit + excess / (1.0f + posOverloadSoftness * overloadT);
-  }
+  out *= detectorGain;
   return out;
 }
 
@@ -1041,149 +841,56 @@ void SpeakerSim::init(float fs) {
                      (1.0f + 0.40f * breakupTolerance +
                       0.10f * voiceCoilTolerance),
                  coneBodyHzDerived + 240.0f, fs * 0.42f);
-  float paperPeakHzDerived =
-      std::clamp(paperPeakHz *
-                     (1.0f + 0.32f * breakupTolerance +
-                      0.08f * voiceCoilTolerance),
-                 upperBreakupHzDerived + 180.0f, fs * 0.44f);
   float coneDipHzDerived =
       std::clamp(coneDipHz *
                      (1.0f + 0.28f * breakupTolerance -
                       0.08f * coneMassTolerance),
-                 paperPeakHzDerived + 180.0f, fs * 0.46f);
+                 upperBreakupHzDerived + 180.0f, fs * 0.46f);
   float topLpHzDerived =
       std::clamp(topLpHz /
                      std::max(0.35f, 1.0f + 0.40f * voiceCoilTolerance +
                                          0.24f * breakupTolerance),
-                 paperPeakHzDerived + 220.0f, fs * 0.45f);
-  float lowSplitHzDerived =
-      std::clamp(lowSplitHz *
-                     (1.0f + 0.22f * coneMassTolerance -
-                      0.18f * suspensionComplianceTolerance),
-                 suspensionHzDerived + 90.0f, fs * 0.18f);
-  float breakupSplitHzDerived =
-      std::clamp(breakupSplitHz *
-                     (1.0f + 0.28f * breakupTolerance +
-                      0.10f * voiceCoilTolerance),
-                 lowSplitHzDerived + 420.0f, fs * 0.36f);
+                 coneDipHzDerived + 220.0f, fs * 0.45f);
 
   suspensionRes.setPeaking(fs, suspensionHzDerived, suspensionQ, suspensionGainDb);
   coneBody.setPeaking(fs, coneBodyHzDerived, coneBodyQ, coneBodyGainDb);
   upperBreakup.setPeaking(fs, upperBreakupHzDerived, upperBreakupQ,
                           upperBreakupGainDb);
-  paperPeak.setPeaking(fs, paperPeakHzDerived, paperPeakQ, paperPeakGainDb);
   coneDip.setPeaking(fs, coneDipHzDerived, coneDipQ, coneDipGainDb);
   topLp.setLowpass(fs, topLpHzDerived, filterQ);
-  lowSplitCoeff = std::exp(-kRadioTwoPi * lowSplitHzDerived / fs);
-  breakupSplitCoeff = std::exp(-kRadioTwoPi * breakupSplitHzDerived / fs);
-  float breakupCloseHzDerived =
-      std::clamp(topLpHzDerived * 0.74f, breakupSplitHzDerived + 180.0f,
-                 fs * 0.40f);
-  breakupCloseLp.setLowpass(fs, breakupCloseHzDerived, filterQ);
-  lowAtk = std::exp(-1.0f / (fs * (bandAttackMs / 1000.0f)));
-  lowRel = std::exp(-1.0f / (fs * (bandReleaseMs / 1000.0f)));
-  midAtk = lowAtk;
-  midRel = lowRel;
-  breakupAtk = lowAtk;
-  breakupRel = lowRel;
+  excursionAtk = std::exp(-1.0f / (fs * 0.010f));
+  excursionRel = std::exp(-1.0f / (fs * 0.120f));
 }
 
 void SpeakerSim::reset() {
   suspensionRes.reset();
   coneBody.reset();
   upperBreakup.reset();
-  paperPeak.reset();
   coneDip.reset();
   topLp.reset();
-  breakupCloseLp.reset();
-  lowSplitState = 0.0f;
-  breakupSplitState = 0.0f;
-  lowEnv = 0.0f;
-  midEnv = 0.0f;
-  breakupEnv = 0.0f;
+  excursionEnv = 0.0f;
 }
 
 float SpeakerSim::process(float x, bool& clipped) {
-  lowSplitState =
-      lowSplitCoeff * lowSplitState + (1.0f - lowSplitCoeff) * x;
-  float lowBand = lowSplitState;
-  float upperBand = x - lowBand;
-  breakupSplitState = breakupSplitCoeff * breakupSplitState +
-                      (1.0f - breakupSplitCoeff) * upperBand;
-  float midBand = breakupSplitState;
-  float breakupBand = upperBand - midBand;
+  float y = x;
+  y = suspensionRes.process(y);
+  y = coneBody.process(y);
+  y = upperBreakup.process(y);
+  y = coneDip.process(y);
+  y = topLp.process(y);
 
-  lowBand = suspensionRes.process(lowBand);
-  midBand = coneBody.process(midBand);
-  breakupBand = upperBreakup.process(breakupBand);
-  breakupBand = paperPeak.process(breakupBand);
-  breakupBand = coneDip.process(breakupBand);
-  breakupBand = topLp.process(breakupBand);
-
-  float lowLevel = std::fabs(lowBand);
-  if (lowLevel > lowEnv) {
-    lowEnv = lowAtk * lowEnv + (1.0f - lowAtk) * lowLevel;
+  float a = std::fabs(y);
+  if (a > excursionEnv) {
+    excursionEnv = excursionAtk * excursionEnv + (1.0f - excursionAtk) * a;
   } else {
-    lowEnv = lowRel * lowEnv + (1.0f - lowRel) * lowLevel;
-  }
-  float midLevel = std::fabs(midBand);
-  if (midLevel > midEnv) {
-    midEnv = midAtk * midEnv + (1.0f - midAtk) * midLevel;
-  } else {
-    midEnv = midRel * midEnv + (1.0f - midRel) * midLevel;
-  }
-  float breakupLevel = std::fabs(breakupBand);
-  if (breakupLevel > breakupEnv) {
-    breakupEnv = breakupAtk * breakupEnv + (1.0f - breakupAtk) * breakupLevel;
-  } else {
-    breakupEnv =
-        breakupRel * breakupEnv + (1.0f - breakupRel) * breakupLevel;
+    excursionEnv = excursionRel * excursionEnv + (1.0f - excursionRel) * a;
   }
 
-  float lowT = clampf(lowEnv / std::max(lowEnvRef, 1e-6f), 0.0f, 1.0f);
-  float midT = clampf(midEnv / std::max(midEnvRef, 1e-6f), 0.0f, 1.0f);
-  float breakupT =
-      clampf(breakupEnv / std::max(breakupEnvRef, 1e-6f), 0.0f, 1.0f);
-
-  float lowDrive = lowExcursionDriveBase + lowExcursionDriveDepth * lowT;
-  float lowLimit =
-      std::max(0.35f, lowExcursionLimitBase - lowExcursionLimitDepth * lowT);
-  float lowLinear = lowBand;
-  float lowShaped = asymmetricSaturate(
-      lowBand, lowDrive, asymBias * (0.25f + 0.75f * lowT), lowT);
-  float lowMix = 0.18f + 0.28f * lowT;
-  lowBand = softClip(lowLinear + (lowShaped - lowLinear) * lowMix, lowLimit);
-  lowBand += dynamicLowLooseDepth * lowT * (lowShaped - lowLinear);
-  lowBand *= 1.0f + lowBloomDepth * (1.0f - lowT);
-
-  float midLinear = midBand;
-  float midDrive = std::max(0.15f, midDriveBase + midDriveDepth * midT);
-  float midShaped = asymmetricSaturate(
-      midBand, midDrive, asymBias * (0.05f + 0.10f * midT), 0.12f + 0.24f * midT);
-  float midMix = 0.04f + midCompactionDepth * midT;
-  midBand = midLinear + midMix * (midShaped - midLinear);
-  midBand *= 1.0f + dynamicMidPushDepth * breakupT;
-
-  float breakupLinear = breakupBand;
-  float breakupDrive = breakupDriveBase + breakupDriveDepth * breakupT;
-  float breakupShaped = asymmetricSaturate(
-      breakupBand, breakupDrive, asymBias * (0.12f + 0.55f * breakupT),
-      0.30f + 0.70f * breakupT);
-  float breakupMix = 0.12f + 0.26f * breakupT;
-  breakupBand = breakupLinear + breakupMix * (breakupShaped - breakupLinear);
-  float breakupClosed = breakupCloseLp.process(breakupBand);
-  breakupBand += breakupCloseDepth * breakupT * (breakupClosed - breakupBand);
-  breakupBand *= (1.0f - breakupCollapseDepth * breakupT);
-  breakupBand *= 1.0f - dynamicHighLossDepth * breakupT;
-  breakupBand += breakupGrainMix * std::tanh(2.0f * breakupBand);
-
-  float y = lowBand * lowBandWeight + midBand * midBandWeight +
-            breakupBand * breakupBandWeight;
-  if (finalConeMix > 0.0f) {
-    float coneShaped =
-        asymmetricSaturate(y, drive, asymBias * 0.18f, 0.20f + 0.30f * lowT);
-    y += finalConeMix * (coneShaped - y);
-  }
+  float excursionT =
+      clampf(excursionEnv / std::max(excursionRef, 1e-6f), 0.0f, 1.0f);
+  float stageDrive = std::max(0.2f, drive * (1.0f + 0.35f * excursionT));
+  float stageBias = asymBias * (1.0f + 0.2f * excursionT);
+  y = asymmetricSaturate(y, stageDrive, stageBias, 0.15f + 0.20f * excursionT);
   clipped = std::fabs(y) > limit;
   return softClip(y, limit);
 }
@@ -1197,42 +904,21 @@ float RadioTuningNode::applyFilters(Radio1938& radio, float tuneHz, float bwHz) 
   float tuneNorm =
       (safeBw > 0.0f) ? clampf(tuneHz / (safeBw * 0.5f), -1.0f, 1.0f) : 0.0f;
   tuning.tuneOffsetNorm = tuneNorm;
-  float detuneT = std::clamp(std::fabs(tuneNorm), 0.0f, 1.0f);
-  float tunedBw = std::clamp(
-      safeBw * (1.0f - tuning.tunedBwMistuneDepth * detuneT), tuning.tunedBwMinHz,
-      safeBw);
   float preBw =
-      std::clamp(tunedBw * tuning.preBwScale, tunedBw, radio.sampleRate * 0.45f);
+      std::clamp(safeBw * tuning.preBwScale, 1200.0f, radio.sampleRate * 0.45f);
   float postBw =
-      std::clamp(tunedBw * tuning.postBwScale, preBw, radio.sampleRate * 0.45f);
+      std::clamp(safeBw * tuning.postBwScale, preBw, radio.sampleRate * 0.45f);
 
   frontEnd.preLpfIn.setLowpass(radio.sampleRate, preBw, kRadioBiquadQ);
   frontEnd.preLpfOut.setLowpass(radio.sampleRate, preBw, kRadioBiquadQ);
   power.postLpf.setLowpass(radio.sampleRate, postBw, kRadioBiquadQ);
 
-  float shift = 1.0f + tuneNorm * tuning.rippleShiftScale;
-  float rippleLowHz = std::clamp(
-      tuning.ifRippleLowHz * shift, tuning.ifRippleLowMinHz, tunedBw * 0.95f);
-  float rippleHighHz = std::clamp(
-      tuning.ifRippleHighHz * shift, tuning.ifRippleHighMinHz, tunedBw * 0.95f);
-  frontEnd.ifRippleLow.setPeaking(radio.sampleRate, rippleLowHz, tuning.ifRippleLowQ,
-                                  tuning.ifRippleLowGainDb);
-  frontEnd.ifRippleHigh.setPeaking(radio.sampleRate, rippleHighHz,
-                                   tuning.ifRippleHighQ,
-                                   tuning.ifRippleHighGainDb);
-
-  float tiltScale = 1.0f - tuning.tiltDetuneDepth * detuneT;
-  float tiltHz = std::clamp(
-      tuning.tiltHz * (1.0f + tuneNorm * tuning.tiltTuneScale) * tiltScale,
-      tuning.tiltMinHz, tunedBw * 0.95f);
-  frontEnd.ifTiltLp.setLowpass(radio.sampleRate, tiltHz, kRadioBiquadQ);
-
-  float adjLpHz = std::clamp(tunedBw * tuning.adjLpScale, tuning.adjLpMinHz,
-                             tunedBw * tuning.adjLpMaxScale);
+  float adjLpHz = std::clamp(safeBw * tuning.adjLpScale, tuning.adjLpMinHz,
+                             safeBw * tuning.adjLpMaxScale);
   adjacent.lp.setLowpass(radio.sampleRate, adjLpHz, kRadioBiquadQ);
 
-  tuning.tunedBw = tunedBw;
-  return tunedBw;
+  tuning.tunedBw = safeBw;
+  return safeBw;
 }
 
 void RadioTuningNode::init(Radio1938& radio, RadioInitContext& initCtx) {
@@ -1263,11 +949,7 @@ void RadioTuningNode::prepare(Radio1938& radio,
       std::clamp(tuning.bwSmoothedHz, tuning.safeBwMinHz, tuning.safeBwMaxHz);
   float bwHalf = 0.5f * std::max(1.0f, safeBw);
   block.tuneNorm = clampf(tuning.tuneSmoothedHz / bwHalf, -1.0f, 1.0f);
-  block.offT = std::fabs(block.tuneNorm);
   block.offHz = std::fabs(tuning.tuneSmoothedHz);
-  block.cosmeticOffT = clampf((block.offT - tuning.mistuneCosmeticStart) /
-                                  tuning.mistuneCosmeticRange,
-                              0.0f, 1.0f);
 
   if (std::fabs(tuning.tuneSmoothedHz - tuning.tuneAppliedHz) > tuning.updateEps ||
       std::fabs(tuning.bwSmoothedHz - tuning.bwAppliedHz) > tuning.updateEps) {
@@ -1370,8 +1052,9 @@ void RadioReceptionControlNode::update(Radio1938& radio,
   float fadeT =
       clampf((1.0f - ctx.control.receptionGain) / (1.0f - reception.fadeMin), 0.0f,
              1.0f);
+  float tuneOffNorm = std::fabs(block.tuneNorm);
   float receptionScale = reception.receptionBase +
-                         reception.receptionOffTScale * block.offT +
+                         reception.receptionOffTScale * tuneOffNorm +
                          reception.receptionFadeScale * fadeT;
   ctx.control.noiseScale *= receptionScale;
   ctx.control.noiseScale = std::clamp(ctx.control.noiseScale,
@@ -1424,36 +1107,16 @@ void RadioFrontEndNode::reset(Radio1938& radio) {
   frontEnd.hpf.reset();
   frontEnd.preLpfIn.reset();
   frontEnd.preLpfOut.reset();
-  frontEnd.ifRippleLow.reset();
-  frontEnd.ifRippleHigh.reset();
-  frontEnd.ifTiltLp.reset();
 }
 
 float RadioFrontEndNode::process(Radio1938& radio,
                                  float x,
-                                 const RadioSampleContext& ctx) {
+                                 const RadioSampleContext&) {
   auto& frontEnd = radio.frontEnd;
-  auto& tuning = radio.tuning;
-  const auto& block = *ctx.block;
   float y = frontEnd.hpf.process(x);
   y = frontEnd.preLpfIn.process(y);
   y = frontEnd.preLpfOut.process(y);
-  y = frontEnd.ifRippleLow.process(y);
-  y = frontEnd.ifRippleHigh.process(y);
-  float low = frontEnd.ifTiltLp.process(y);
-  float high = y - low;
-  float tiltMix = frontEnd.ifTiltMix;
-  if (block.tuneNorm != 0.0f) {
-    float extra = block.cosmeticOffT * tuning.tuneTiltExtra;
-    if (block.tuneNorm > 0.0f) {
-      float highGain = std::max(0.0f, 1.0f - tiltMix - extra);
-      return low + high * highGain;
-    }
-    float lowGain = std::max(0.0f, 1.0f - extra);
-    float highGain = std::max(0.0f, 1.0f - tiltMix);
-    return low * lowGain + high * highGain;
-  }
-  return low + high * (1.0f - tiltMix);
+  return y;
 }
 
 void RadioMultipathNode::init(Radio1938& radio, RadioInitContext&) {
@@ -1583,16 +1246,11 @@ float RadioDetuneNode::process(Radio1938& radio,
 void RadioAdjacentNode::init(Radio1938& radio, RadioInitContext&) {
   auto& adjacent = radio.adjacent;
   adjacent.hp.setHighpass(radio.sampleRate, adjacent.hpHz, kRadioBiquadQ);
-  adjacent.atk =
-      std::exp(-1.0f / (radio.sampleRate * (adjacent.attackMs / 1000.0f)));
-  adjacent.rel =
-      std::exp(-1.0f / (radio.sampleRate * (adjacent.releaseMs / 1000.0f)));
 }
 
 void RadioAdjacentNode::reset(Radio1938& radio) {
   auto& adjacent = radio.adjacent;
   adjacent.phase = 0.0f;
-  adjacent.env = 0.0f;
   adjacent.hp.reset();
   adjacent.lp.reset();
 }
@@ -1602,34 +1260,18 @@ float RadioAdjacentNode::process(Radio1938& radio,
                                  const RadioSampleContext& ctx) {
   auto& adjacent = radio.adjacent;
   const auto& block = *ctx.block;
-  if (!(adjacent.mix > 0.0f && block.offT > 0.0f)) {
+  float overlap = clampf(std::fabs(block.tuneNorm), 0.0f, 1.0f);
+  if (!(adjacent.mix > 0.0f && overlap > 0.0f)) {
     return y;
   }
 
-  float adjSource = y;
   adjacent.phase += kRadioTwoPi * (adjacent.beatHz / radio.sampleRate);
   if (adjacent.phase > kRadioTwoPi) adjacent.phase -= kRadioTwoPi;
-  float mod = 1.0f - 0.5f * adjacent.modDepth +
-              0.5f * adjacent.modDepth * std::sin(adjacent.phase);
-  float adj = adjacent.hp.process(adjSource);
-  float splatter = std::tanh(adj * adjacent.drive) - adj;
-  float adjOut = adj + adjacent.splatterMix * splatter;
-  adjOut = adjacent.lp.process(adjOut);
-  adjOut *= mod;
-  float adjAbs = std::fabs(adjOut);
-  if (adjAbs > adjacent.env) {
-    adjacent.env = adjacent.atk * adjacent.env + (1.0f - adjacent.atk) * adjAbs;
-  } else {
-    adjacent.env = adjacent.rel * adjacent.env + (1.0f - adjacent.rel) * adjAbs;
-  }
-  float adjGain =
-      (adjacent.env > 1e-6f) ? (adjacent.target / adjacent.env) : adjacent.maxGain;
-  adjGain = std::clamp(adjGain, adjacent.minGain, adjacent.maxGain);
-  adjOut *= adjGain;
-  float mix =
-      std::clamp(adjacent.mix * (block.cosmeticOffT * block.cosmeticOffT), 0.0f,
-                 adjacent.maxMix);
-  return y + mix * adjOut;
+  float beat = 1.0f + adjacent.modDepth * std::sin(adjacent.phase);
+  float adj = adjacent.hp.process(y);
+  adj = adjacent.lp.process(adj);
+  float mix = std::clamp(adjacent.mix * overlap, 0.0f, adjacent.maxMix);
+  return y + mix * beat * adj;
 }
 
 void RadioDemodNode::init(Radio1938& radio, RadioInitContext& initCtx) {
@@ -1646,9 +1288,9 @@ float RadioDemodNode::process(Radio1938& radio,
   y = demod.am.process(
       AMDetectorSampleInput{y, ctx.derived.demodIfNoiseAmp});
   radio.controlSense.controlVoltageSense =
-      clampf(demod.am.agcEnv / std::max(demod.am.controlVoltageRef, 1e-6f),
+      clampf(demod.am.avcEnv / std::max(demod.am.controlVoltageRef, 1e-6f),
              0.0f, 1.25f);
-  return diodeColor(y, demod.diodeColorDrop);
+  return y;
 }
 
 void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
@@ -1685,36 +1327,14 @@ void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
                                   receiver.presenceDipGainDb);
   receiver.transformerLp.setLowpass(radio.sampleRate, transformerLpHz,
                                     kRadioBiquadQ);
-  float presenceSplitHz = std::clamp(
-      receiver.presenceSplitHz *
-          (1.0f + 0.18f * receiver.plateLoadTolerance -
-           0.10f * receiver.transformerTolerance),
-      850.0f, radio.sampleRate * 0.35f);
-  receiver.presenceSplitLp.setLowpass(radio.sampleRate, presenceSplitHz,
-                                      kRadioBiquadQ);
-  receiver.nonlinearDeltaBodyLp.setLowpass(radio.sampleRate, presenceSplitHz,
-                                           kRadioBiquadQ);
-  receiver.avcAtk = std::exp(-1.0f / (radio.sampleRate * 0.030f));
-  receiver.avcRel = std::exp(-1.0f / (radio.sampleRate * 1.2f));
-  receiver.atk =
-      std::exp(-1.0f / (radio.sampleRate * (receiver.attackMs / 1000.0f)));
-  receiver.rel =
-      std::exp(-1.0f / (radio.sampleRate * (receiver.releaseMs / 1000.0f)));
-  receiver.couplingSagRel = std::exp(
-      -1.0f / (radio.sampleRate * (receiver.couplingSagReleaseMs / 1000.0f)));
 }
 
 void RadioReceiverCircuitNode::reset(Radio1938& radio) {
   auto& receiver = radio.receiverCircuit;
-  receiver.avcEnv = 0.0f;
-  receiver.env = 0.0f;
-  receiver.couplingSag = 0.0f;
   receiver.couplingHp.reset();
   receiver.interstagePeak.reset();
   receiver.presenceDip.reset();
   receiver.transformerLp.reset();
-  receiver.presenceSplitLp.reset();
-  receiver.nonlinearDeltaBodyLp.reset();
 }
 
 float RadioReceiverCircuitNode::process(Radio1938& radio,
@@ -1731,93 +1351,18 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
 
   float controlVoltageT = clampf(controlBus.controlVoltage, 0.0f, 1.25f);
   float supplySagT = clampf(controlBus.supplySag, 0.0f, 1.0f);
-  float sharedGain =
-      1.0f - receiver.controlVoltageGainDepth * controlVoltageT -
-      receiver.supplySagGainDepth * supplySagT;
-  y *= std::max(0.55f, sharedGain);
-  float sharedCompressionT =
-      clampf(0.65f * controlVoltageT + 0.35f * supplySagT, 0.0f, 1.0f);
+  float stageGain = 1.0f - receiver.controlVoltageGainDepth * controlVoltageT -
+                    receiver.supplySagGainDepth * supplySagT;
+  y *= std::max(0.5f, stageGain);
 
-  float avcIn = std::fabs(y);
-  if (avcIn > receiver.avcEnv) {
-    receiver.avcEnv =
-        receiver.avcAtk * receiver.avcEnv + (1.0f - receiver.avcAtk) * avcIn;
-  } else {
-    receiver.avcEnv =
-        receiver.avcRel * receiver.avcEnv + (1.0f - receiver.avcRel) * avcIn;
-  }
-  float avcGain = 1.0f / (1.0f + receiver.avcStrength * receiver.avcEnv);
-  y *= avcGain;
-
-  float level = std::fabs(y);
-  if (level > receiver.env) {
-    receiver.env = receiver.atk * receiver.env + (1.0f - receiver.atk) * level;
-  } else {
-    receiver.env = receiver.rel * receiver.env + (1.0f - receiver.rel) * level;
-  }
-  float envT = clampf(receiver.env / std::max(receiver.envRef, 1e-6f), 0.0f, 1.0f);
-
-  float body = receiver.presenceSplitLp.process(y);
-  float presence = y - body;
-
-  float bodyLevel = std::fabs(body);
-  if (bodyLevel > receiver.couplingSag) {
-    receiver.couplingSag =
-        receiver.atk * receiver.couplingSag + (1.0f - receiver.atk) * bodyLevel;
-  } else {
-    receiver.couplingSag = receiver.couplingSagRel * receiver.couplingSag +
-                           (1.0f - receiver.couplingSagRel) * bodyLevel;
-  }
-  float sagT = clampf(receiver.couplingSag / std::max(receiver.couplingSagRef, 1e-6f),
-                      0.0f, 1.0f);
-  body *= 1.0f - receiver.couplingSagDepth * envT * sagT;
-  body *= 1.0f + receiver.bodyForwardDepth *
-                     (0.30f + 0.30f * envT + 0.40f * controlVoltageT);
-
-  float presenceAbs = std::fabs(presence);
-  float presenceSense = clampf(presenceAbs / std::max(0.12f, receiver.envRef * 0.45f),
-                               0.0f, 1.0f);
-  presence *=
-      1.0f - receiver.controlVoltagePresenceDepth * controlVoltageT * presenceSense;
-  float presenceCollapseT =
-      clampf(controlVoltageT * (0.30f + 0.70f * presenceSense) +
-                 0.20f * supplySagT,
-             0.0f, 1.0f);
-  presence *= 1.0f - receiver.presenceCollapseDepth * presenceCollapseT;
-  float squeezeT = envT * presenceSense * (1.0f + 0.35f * sharedCompressionT);
-  float presenceCompressed =
-      presence / (1.0f + receiver.presenceCompressDepth * squeezeT);
-  presence += (presenceCompressed - presence) * (0.18f + 0.52f * squeezeT);
-
-  float circuit = body + presence;
-  float drive =
-      std::max(0.2f, receiver.driveBase *
-                        (1.0f + 0.12f * receiver.plateLoadTolerance -
-                         0.08f * receiver.transformerTolerance) +
-                        receiver.driveDepth * envT);
+  float drive = receiver.driveBase *
+                (1.0f + 0.12f * receiver.plateLoadTolerance -
+                 0.08f * receiver.transformerTolerance);
   drive *= 1.0f - receiver.supplySagDriveDepth * supplySagT;
-  float bias =
-      receiver.asymBiasBase *
-          (1.0f + 0.45f * receiver.gridLeakTolerance -
-           0.20f * receiver.plateLoadTolerance) +
-      receiver.asymBiasDepth * envT;
-  float asymT = 0.35f + 0.65f * envT + 0.25f * sagT;
-  float shaped = asymmetricSaturate(circuit, drive, bias, asymT);
-  float nonlinearMix =
-      clampf(receiver.nonlinearMix * (0.35f + 0.65f * envT) *
-                 (1.0f + 0.24f * sharedCompressionT),
-             0.0f, 0.18f);
-  float nonlinearDelta = nonlinearMix * (shaped - circuit);
-  float bodyDelta = receiver.nonlinearDeltaBodyLp.process(nonlinearDelta);
-  float presenceDelta = nonlinearDelta - bodyDelta;
-  float bodySense =
-      clampf(bodyLevel / std::max(receiver.envRef * 0.72f, 1e-6f), 0.0f, 1.0f);
-  float bodyDeltaMix =
-      clampf((1.0f - receiver.bodyPreserveMix) *
-                 (0.66f + 0.24f * envT + 0.16f * bodySense -
-                  0.08f * presenceSense - 0.10f * sagT),
-             0.0f, 0.35f);
-  return body + presence + bodyDeltaMix * bodyDelta + presenceDelta;
+  float bias = receiver.asymBiasBase *
+               (1.0f + 0.45f * receiver.gridLeakTolerance -
+                0.20f * receiver.plateLoadTolerance);
+  return asymmetricSaturate(y, std::max(0.2f, drive), bias, 0.2f);
 }
 
 void RadioToneNode::init(Radio1938& radio, RadioInitContext&) {
@@ -1825,13 +1370,10 @@ void RadioToneNode::init(Radio1938& radio, RadioInitContext&) {
   tone.presence.setPeaking(radio.sampleRate, tone.presenceHz, tone.presenceQ,
                            tone.presenceGainDb);
   tone.tiltLp.setLowpass(radio.sampleRate, tone.tiltSplitHz, kRadioBiquadQ);
-  tone.atk = std::exp(-1.0f / (radio.sampleRate * (tone.attackMs / 1000.0f)));
-  tone.rel = std::exp(-1.0f / (radio.sampleRate * (tone.releaseMs / 1000.0f)));
 }
 
 void RadioToneNode::reset(Radio1938& radio) {
   auto& tone = radio.tone;
-  tone.env = 0.0f;
   tone.presence.reset();
   tone.tiltLp.reset();
 }
@@ -1840,20 +1382,11 @@ float RadioToneNode::process(Radio1938& radio,
                              float y,
                              const RadioSampleContext&) {
   auto& tone = radio.tone;
-  float toneLevel = std::fabs(y);
-  if (toneLevel > tone.env) {
-    tone.env = tone.atk * tone.env + (1.0f - tone.atk) * toneLevel;
-  } else {
-    tone.env = tone.rel * tone.env + (1.0f - tone.rel) * toneLevel;
-  }
-  float loudT = clampf((tone.env - tone.loudnessEnvStart) / tone.loudnessEnvRange,
-                       0.0f, 1.0f);
   float lowBand = tone.tiltLp.process(y);
   float highBand = y - lowBand;
-  float tilt = clampf(tone.tiltBase + tone.tiltDepth * loudT, -0.12f, 0.12f);
-  y = lowBand * (1.0f - tilt) + highBand * (1.0f + tilt);
+  y = lowBand * 1.01f + highBand * 0.96f;
   y = tone.presence.process(y);
-  return y * radio.globals.compMakeupGain;
+  return y;
 }
 
 void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
@@ -1862,8 +1395,6 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
       std::exp(-1.0f / (radio.sampleRate * (power.sagAttackMs / 1000.0f)));
   power.sagRel =
       std::exp(-1.0f / (radio.sampleRate * (power.sagReleaseMs / 1000.0f)));
-  power.atk = std::exp(-1.0f / (radio.sampleRate * (power.attackMs / 1000.0f)));
-  power.rel = std::exp(-1.0f / (radio.sampleRate * (power.releaseMs / 1000.0f)));
   power.sat.drive = power.satDrive;
   power.sat.mix = power.satMix;
   float osFs = radio.sampleRate * radio.globals.oversampleFactor;
@@ -1875,9 +1406,7 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
 void RadioPowerNode::reset(Radio1938& radio) {
   auto& power = radio.power;
   power.sagEnv = 0.0f;
-  power.env = 0.0f;
   power.rectifierPhase = 0.0f;
-  power.subharmonicPhase = 0.0f;
   power.satOsPrev = 0.0f;
   power.postLpf.reset();
   power.satOsLpIn.reset();
@@ -1889,45 +1418,34 @@ float RadioPowerNode::process(Radio1938& radio,
                               const RadioSampleContext&) {
   auto& power = radio.power;
   auto& controlSense = radio.controlSense;
-  const auto& controlBus = radio.controlBus;
   auto& noiseConfig = radio.noiseConfig;
-  float controlVoltageT = clampf(controlBus.controlVoltage, 0.0f, 1.25f);
-  float powerLevel = std::fabs(y);
-  if (powerLevel > power.env) {
-    power.env = power.atk * power.env + (1.0f - power.atk) * powerLevel;
+  float load = std::fabs(y);
+  if (load > power.sagEnv) {
+    power.sagEnv = power.sagAtk * power.sagEnv + (1.0f - power.sagAtk) * load;
   } else {
-    power.env = power.rel * power.env + (1.0f - power.rel) * powerLevel;
+    power.sagEnv = power.sagRel * power.sagEnv + (1.0f - power.sagRel) * load;
   }
-  float powerT =
-      clampf((power.env - power.powerEnvStart) / power.powerEnvRange, 0.0f, 1.0f);
+  float powerT = clampf((power.sagEnv - power.sagStart) /
+                            std::max(1e-6f, power.sagEnd - power.sagStart),
+                        0.0f, 1.0f);
   float rectHz = std::max(power.rectifierMinHz, noiseConfig.humHzDefault * 2.0f);
   power.rectifierPhase += kRadioTwoPi * (rectHz / radio.sampleRate);
-  power.subharmonicPhase +=
-      kRadioTwoPi * ((rectHz * power.rectifierSubharmonic) / radio.sampleRate);
   if (power.rectifierPhase > kRadioTwoPi) {
     power.rectifierPhase -= kRadioTwoPi;
   }
-  if (power.subharmonicPhase > kRadioTwoPi) {
-    power.subharmonicPhase -= kRadioTwoPi;
-  }
-  float ripple =
-      std::sin(power.rectifierPhase) +
-      power.rippleSecondHarmonicMix * std::sin(2.0f * power.rectifierPhase) +
-      power.rippleSubharmonicMix * std::sin(power.subharmonicPhase);
-  float powerGain =
-      1.0f - power.gainSagPerPower * powerT +
-      ripple * power.rippleDepth *
-          (power.rippleGainBase + power.rippleGainDepth * powerT);
-  powerGain = std::clamp(powerGain, power.gainMin, power.gainMax);
-  float powerBias =
-      ripple * power.biasDepth * (power.biasBase + power.biasPowerDepth * powerT);
-  y = y * powerGain + powerBias;
-  power.sat.drive =
-      std::max(0.2f, power.satDrive *
-                        (1.0f - power.controlVoltageSatDriveDepth * controlVoltageT));
-  power.sat.mix =
-      std::clamp(power.satMix * (1.0f - power.controlVoltageSatMixDepth * controlVoltageT),
-                 0.0f, 1.0f);
+  float rippleAmp =
+      power.rippleDepth * (power.rippleGainBase + power.rippleGainDepth * powerT);
+  float ripple = rippleAmp *
+                 (std::sin(power.rectifierPhase) +
+                  power.rippleSecondHarmonicMix *
+                      std::sin(2.0f * power.rectifierPhase));
+  float supplyGain =
+      std::clamp(1.0f - power.gainSagPerPower * powerT, power.gainMin,
+                 power.gainMax);
+  y *= supplyGain;
+  y += ripple;
+  power.sat.drive = power.satDrive;
+  power.sat.mix = power.satMix;
   y = processOversampled2x(y, power.satOsPrev, power.satOsLpIn, power.satOsLpOut,
                            [&](float v) {
                              float out = power.sat.process(v);
@@ -1939,17 +1457,8 @@ float RadioPowerNode::process(Radio1938& radio,
                              return out;
                            });
   y = power.postLpf.process(y);
-  float level = std::fabs(y);
-  if (level > power.sagEnv) {
-    power.sagEnv = power.sagAtk * power.sagEnv + (1.0f - power.sagAtk) * level;
-  } else {
-    power.sagEnv = power.sagRel * power.sagEnv + (1.0f - power.sagRel) * level;
-  }
-  float sagT = clampf((power.sagEnv - power.sagStart) /
-                          (power.sagEnd - power.sagStart),
-                      0.0f, 1.0f);
   controlSense.powerSagSense = power.sagEnv;
-  return y * (1.0f - power.sagDepth * sagT);
+  return y;
 }
 
 void RadioInterferenceDerivedNode::init(Radio1938& radio, RadioInitContext&) {
@@ -1958,12 +1467,8 @@ void RadioInterferenceDerivedNode::init(Radio1938& radio, RadioInitContext&) {
   if (radio.noiseWeight <= 0.0f) {
     noiseDerived.baseNoiseAmp = 0.0f;
     noiseDerived.baseCrackleAmp = 0.0f;
-    noiseDerived.baseLightningAmp = 0.0f;
-    noiseDerived.baseMotorAmp = 0.0f;
     noiseDerived.baseHumAmp = 0.0f;
     noiseDerived.crackleRate = 0.0f;
-    noiseDerived.lightningRate = 0.0f;
-    noiseDerived.motorRate = 0.0f;
     return;
   }
 
@@ -1971,12 +1476,8 @@ void RadioInterferenceDerivedNode::init(Radio1938& radio, RadioInitContext&) {
                            noiseConfig.noiseWeightScaleMax);
   noiseDerived.baseNoiseAmp = radio.noiseWeight;
   noiseDerived.baseCrackleAmp = noiseConfig.crackleAmpScale * scale;
-  noiseDerived.baseLightningAmp = noiseConfig.lightningAmpScale * scale;
-  noiseDerived.baseMotorAmp = noiseConfig.motorAmpScale * scale;
   noiseDerived.baseHumAmp = noiseConfig.humAmpScale * scale;
   noiseDerived.crackleRate = noiseConfig.crackleRateScale * scale;
-  noiseDerived.lightningRate = noiseConfig.lightningRateScale * scale;
-  noiseDerived.motorRate = noiseConfig.motorRateScale * scale;
 }
 
 void RadioInterferenceDerivedNode::reset(Radio1938&) {}
@@ -1996,11 +1497,6 @@ void RadioInterferenceDerivedNode::update(Radio1938& radio,
                radio.globals.noiseFloorAmp);
   ctx.derived.crackleAmp = noiseDerived.baseCrackleAmp * postNoiseScale;
   ctx.derived.crackleRate = noiseDerived.crackleRate;
-  ctx.derived.lightningAmp = noiseDerived.baseLightningAmp * postNoiseScale;
-  ctx.derived.lightningRate = noiseDerived.lightningRate;
-  ctx.derived.motorAmp = noiseDerived.baseMotorAmp * postNoiseScale;
-  ctx.derived.motorRate = noiseDerived.motorRate;
-  ctx.derived.motorBuzzHz = noiseConfig.motorBuzzHz;
   ctx.derived.humAmp = noiseDerived.baseHumAmp * postNoiseScale;
   ctx.derived.humToneEnabled = noiseConfig.enableHumTone;
   float quietT =
@@ -2056,11 +1552,8 @@ float RadioHeterodyneNode::process(Radio1938& radio,
                       0.0f, 1.0f);
   gate *= gate;
   float amp = heterodyne.depth * heterodyne.heteroBaseScale *
-              (heterodyne.quietNoiseBase +
-               heterodyne.quietNoiseDepth * ctx.control.noiseScale) *
-              ctx.derived.quieting;
-  amp *= gate;
-  amp *= block.cosmeticOffT;
+              ctx.derived.quieting * gate *
+              clampf(std::fabs(block.tuneNorm), 0.0f, 1.0f);
   return y + hetero * amp;
 }
 
@@ -2081,11 +1574,6 @@ float RadioNoiseNode::process(Radio1938& radio,
   noiseIn.noiseAmp = ctx.derived.noiseAmp;
   noiseIn.crackleAmp = ctx.derived.crackleAmp;
   noiseIn.crackleRate = ctx.derived.crackleRate;
-  noiseIn.lightningAmp = ctx.derived.lightningAmp;
-  noiseIn.lightningRate = ctx.derived.lightningRate;
-  noiseIn.motorAmp = ctx.derived.motorAmp;
-  noiseIn.motorRate = ctx.derived.motorRate;
-  noiseIn.motorBuzzHz = ctx.derived.motorBuzzHz;
   noiseIn.humAmp = ctx.derived.humAmp;
   noiseIn.humToneEnabled = ctx.derived.humToneEnabled;
   return y + radio.noiseRuntime.hum.process(noiseIn);
@@ -2615,14 +2103,17 @@ static float runPresentationPath(
   return y;
 }
 
-static void applyMid30sDocumentaryPreset(Radio1938& radio) {
-  radio.makeupGain = 0.86f;
-  radio.presentationGain = 1.04f;
+static void applyPhilco37116XPreset(Radio1938& radio) {
+  radio.makeupGain = 0.88f;
+  radio.presentationGain = 1.03f;
+
+  radio.graph.setEnabled(StageId::Multipath, false);
+  radio.graph.setEnabled(StageId::Detune, false);
+  radio.graph.setEnabled(StageId::Room, false);
 
   radio.globals.ifNoiseMix = 0.28f;
   radio.globals.postNoiseMix = 0.17f;
   radio.globals.noiseFloorAmp = 0.0032f;
-  radio.globals.compMakeupGain = 1.0f;
   radio.globals.inputPad = 1.0f;
   radio.globals.enableAutoLevel = false;
   radio.globals.autoTargetDb = -21.0f;
@@ -2631,26 +2122,33 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
 
   radio.tuning.safeBwMinHz = 3400.0f;
   radio.tuning.safeBwMaxHz = 4000.0f;
-  radio.tuning.tunedBwMistuneDepth = 0.34f;
   radio.tuning.preBwScale = 1.00f;
   radio.tuning.postBwScale = 1.04f;
+  radio.tuning.adjLpScale = 0.80f;
 
-  radio.frontEnd.ifTiltMix = 0.14f;
+  radio.frontEnd.inputHpHz = 115.0f;
 
   radio.multipath.mix = 0.0f;
   radio.multipath.depth = 0.0f;
+  radio.detune.depth = 0.0f;
 
   radio.adjacent.mix = 0.008f;
+  radio.adjacent.modDepth = 0.10f;
+  radio.adjacent.beatHz = 920.0f;
 
-  radio.demod.am.detectorMakeupGain = 4.4f;
-  radio.demod.am.detectorCompression = 0.98f;
-  radio.demod.am.detReleaseMs = 0.35f;
-  radio.demod.am.detectorRippleMix = 0.018f;
-  radio.demod.diodeColorDrop = 0.008f;
+  radio.demod.am.detectorGain = 4.2f;
+  radio.demod.am.diodeDrop = 0.0060f;
+  radio.demod.am.audioChargeMs = 0.05f;
+  radio.demod.am.audioReleaseMs = 0.35f;
+  radio.demod.am.avcAttackMs = 90.0f;
+  radio.demod.am.avcReleaseMs = 1500.0f;
+  radio.demod.am.controlVoltageRef = 0.18f;
+
   radio.controlBus.controlVoltageAttackMs = 2.4f;
   radio.controlBus.controlVoltageReleaseMs = 36.0f;
   radio.controlBus.supplySagAttackMs = 10.0f;
   radio.controlBus.supplySagReleaseMs = 220.0f;
+
   radio.receiverCircuit.couplingCapTolerance = 0.0f;
   radio.receiverCircuit.gridLeakTolerance = 0.0f;
   radio.receiverCircuit.plateLoadTolerance = 0.0f;
@@ -2662,77 +2160,43 @@ static void applyMid30sDocumentaryPreset(Radio1938& radio) {
   radio.receiverCircuit.transformerLpHz = 3520.0f;
   radio.receiverCircuit.presenceDipHz = 2480.0f;
   radio.receiverCircuit.presenceDipGainDb = -0.10f;
-  radio.receiverCircuit.avcStrength = 0.44f;
-  radio.receiverCircuit.attackMs = 11.0f;
-  radio.receiverCircuit.releaseMs = 210.0f;
-  radio.receiverCircuit.envRef = 0.22f;
-  radio.receiverCircuit.driveBase = 0.90f;
-  radio.receiverCircuit.driveDepth = 0.08f;
-  radio.receiverCircuit.asymBiasBase = 0.0025f;
-  radio.receiverCircuit.asymBiasDepth = 0.0070f;
-  radio.receiverCircuit.nonlinearMix = 0.040f;
-  radio.receiverCircuit.presenceCompressDepth = 0.09f;
-  radio.receiverCircuit.bodyPreserveMix = 0.93f;
-  radio.receiverCircuit.presenceSplitHz = 1220.0f;
-  radio.receiverCircuit.couplingSagDepth = 0.024f;
-  radio.receiverCircuit.couplingSagRef = 0.17f;
-  radio.receiverCircuit.couplingSagReleaseMs = 240.0f;
+  radio.receiverCircuit.driveBase = 0.92f;
+  radio.receiverCircuit.asymBiasBase = 0.0030f;
   radio.receiverCircuit.controlVoltageGainDepth = 0.02f;
-  radio.receiverCircuit.controlVoltagePresenceDepth = 0.05f;
   radio.receiverCircuit.supplySagGainDepth = 0.03f;
   radio.receiverCircuit.supplySagDriveDepth = 0.10f;
-  radio.receiverCircuit.bodyForwardDepth = 0.09f;
-  radio.receiverCircuit.presenceCollapseDepth = 0.06f;
 
   radio.tone.presenceHz = 1600.0f;
   radio.tone.presenceGainDb = 0.14f;
   radio.tone.tiltSplitHz = 1450.0f;
-  radio.tone.tiltBase = -0.010f;
-  radio.tone.tiltDepth = 0.018f;
 
+  radio.power.sagAttackMs = 60.0f;
+  radio.power.sagReleaseMs = 900.0f;
+  radio.power.rippleDepth = 0.010f;
+  radio.power.rippleSecondHarmonicMix = 0.28f;
+  radio.power.gainSagPerPower = 0.020f;
+  radio.power.rippleGainBase = 0.35f;
+  radio.power.rippleGainDepth = 0.65f;
+  radio.power.gainMin = 0.88f;
+  radio.power.gainMax = 1.02f;
+  radio.power.satDrive = 1.08f;
   radio.power.satMix = 0.08f;
-  radio.power.controlVoltageSatDriveDepth = 0.10f;
-  radio.power.controlVoltageSatMixDepth = 0.08f;
 
   radio.noiseConfig.enableHumTone = true;
   radio.noiseConfig.humAmpScale = 0.0022f;
-  radio.noiseConfig.crackleAmpScale = 0.0075f;
-  radio.noiseConfig.lightningAmpScale = 0.014f;
-  radio.noiseConfig.motorAmpScale = 0.0038f;
+  radio.noiseConfig.crackleAmpScale = 0.0035f;
+  radio.noiseConfig.crackleRateScale = 0.08f;
 
-  radio.speakerStage.drive = 0.53f;
+  radio.speakerStage.drive = 0.60f;
   radio.speakerStage.speaker.limit = 0.99f;
+  radio.speakerStage.speaker.asymBias = 0.018f;
   radio.speakerStage.speaker.suspensionGainDb = 0.48f;
   radio.speakerStage.speaker.coneBodyGainDb = 0.18f;
   radio.speakerStage.speaker.upperBreakupGainDb = 0.02f;
-  radio.speakerStage.speaker.paperPeakGainDb = -0.14f;
   radio.speakerStage.speaker.coneDipGainDb = -0.60f;
   radio.speakerStage.speaker.topLpHz = 3380.0f;
-  radio.speakerStage.speaker.lowSplitHz = 410.0f;
-  radio.speakerStage.speaker.breakupSplitHz = 1420.0f;
-  radio.speakerStage.speaker.lowEnvRef = 0.19f;
-  radio.speakerStage.speaker.midEnvRef = 0.12f;
-  radio.speakerStage.speaker.breakupEnvRef = 0.08f;
-  radio.speakerStage.speaker.lowExcursionDriveBase = 0.60f;
-  radio.speakerStage.speaker.lowExcursionDriveDepth = 0.50f;
-  radio.speakerStage.speaker.lowExcursionLimitBase = 0.98f;
-  radio.speakerStage.speaker.lowExcursionLimitDepth = 0.06f;
-  radio.speakerStage.speaker.midDriveBase = 0.18f;
-  radio.speakerStage.speaker.midDriveDepth = 0.08f;
-  radio.speakerStage.speaker.midCompactionDepth = 0.04f;
-  radio.speakerStage.speaker.breakupDriveBase = 0.18f;
-  radio.speakerStage.speaker.breakupDriveDepth = 0.32f;
-  radio.speakerStage.speaker.breakupCollapseDepth = 0.10f;
-  radio.speakerStage.speaker.breakupCloseDepth = 0.15f;
-  radio.speakerStage.speaker.breakupGrainMix = 0.035f;
-  radio.speakerStage.speaker.dynamicLowLooseDepth = 0.045f;
-  radio.speakerStage.speaker.dynamicMidPushDepth = 0.08f;
-  radio.speakerStage.speaker.dynamicHighLossDepth = 0.13f;
-  radio.speakerStage.speaker.lowBandWeight = 0.82f;
-  radio.speakerStage.speaker.midBandWeight = 1.16f;
-  radio.speakerStage.speaker.breakupBandWeight = 0.68f;
-  radio.speakerStage.speaker.lowBloomDepth = 0.05f;
-  radio.speakerStage.speaker.finalConeMix = 0.003f;
+  radio.speakerStage.speaker.excursionRef = 0.19f;
+
   radio.cabinet.panelHz = 190.0f;
   radio.cabinet.panelGainDb = 0.74f;
   radio.cabinet.chassisHz = 420.0f;
@@ -2810,11 +2274,13 @@ static void refreshIdentityDependentStages(Radio1938& radio) {
 
 std::string_view Radio1938::presetName(Preset preset) {
   switch (preset) {
-    case Preset::Mid30sDocumentary:
-      return "mid30s_documentary";
+    case Preset::Philco37116X:
+      return "philco_37_116x";
   }
-  return "mid30s_documentary";
+  return "philco_37_116x";
 }
+
+Radio1938::Radio1938() { applyRadioBaseDefaults(*this); }
 
 std::string_view Radio1938::stageName(StageId id) {
   switch (id) {
@@ -2863,8 +2329,8 @@ std::string_view Radio1938::stageName(StageId id) {
 }
 
 bool Radio1938::applyPreset(std::string_view presetNameValue) {
-  if (presetNameValue == "mid30s_documentary") {
-    applyPreset(Preset::Mid30sDocumentary);
+  if (presetNameValue == "philco_37_116x") {
+    applyPreset(Preset::Philco37116X);
     return true;
   }
   return false;
@@ -2873,8 +2339,8 @@ bool Radio1938::applyPreset(std::string_view presetNameValue) {
 void Radio1938::applyPreset(Preset presetValue) {
   preset = presetValue;
   switch (presetValue) {
-    case Preset::Mid30sDocumentary:
-      applyMid30sDocumentaryPreset(*this);
+    case Preset::Philco37116X:
+      applyPhilco37116XPreset(*this);
       break;
   }
   if (!initialized) return;
@@ -2902,8 +2368,8 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   bwHz = bw;
   noiseWeight = noise;
   switch (preset) {
-    case Preset::Mid30sDocumentary:
-      applyMid30sDocumentaryPreset(*this);
+    case Preset::Philco37116X:
+      applyPhilco37116XPreset(*this);
       break;
   }
   applySetIdentity(*this);

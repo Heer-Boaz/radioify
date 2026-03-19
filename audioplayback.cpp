@@ -684,7 +684,7 @@ void stopAuditionWorker() {
 }
 
 void applyRadioTogglePreset() {
-  gAudio.radio1938Template.applyPreset(Radio1938::Preset::Mid30sDocumentary);
+  gAudio.radio1938Template.applyPreset(Radio1938::Preset::Philco37116X);
   gAudio.state.radioMakeupGain.store(1.0f);
   gAudio.state.radio1938 = gAudio.radio1938Template;
 }
