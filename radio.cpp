@@ -29,6 +29,16 @@ static inline float lin2db(float x) {
   return 20.0f * std::log10(std::max(x, kRadioLinDbFloor));
 }
 
+static inline float diodeJunctionRectify(float vIn,
+                                         float dropVolts,
+                                         float junctionSlopeVolts) {
+  float slope = std::max(junctionSlopeVolts, 1e-5f);
+  float x = (vIn - dropVolts) / slope;
+  if (x >= 20.0f) return vIn - dropVolts;
+  if (x <= -20.0f) return 0.0f;
+  return slope * std::log1p(std::exp(x));
+}
+
 static inline uint32_t hash32(uint32_t x) {
   x ^= x >> 16;
   x *= 0x7feb352du;
@@ -178,6 +188,8 @@ static void applyRadioBaseDefaults(Radio1938& radio) {
 
   radio.demod.am.audioDiodeDrop = 0.0f;
   radio.demod.am.avcDiodeDrop = 0.0f;
+  radio.demod.am.audioJunctionSlopeVolts = 0.006f;
+  radio.demod.am.avcJunctionSlopeVolts = 0.006f;
   radio.demod.am.detectorChargeResNorm = 1.0f;
   radio.demod.am.audioDischargeMs = 1.0f;
   radio.demod.am.avcChargeMs = 100.0f;
@@ -746,8 +758,10 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
   float rawAfcError = (afcHigh - afcLow) / afcDen;
   afcError = afcErrorLp.process(rawAfcError);
 
-  audioRect = std::max(0.0f, ifSample - audioDiodeDrop);
-  avcRect = std::max(0.0f, ifSample - avcDiodeDrop);
+  audioRect = diodeJunctionRectify(ifSample, audioDiodeDrop,
+                                   audioJunctionSlopeVolts);
+  avcRect = diodeJunctionRectify(ifSample, avcDiodeDrop,
+                                 avcJunctionSlopeVolts);
 
   if (audioRect > audioEnv) {
     audioEnv = audioChargeCoeff * audioEnv +
@@ -2077,6 +2091,8 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
 
   radio.demod.am.audioDiodeDrop = 0.0100f;
   radio.demod.am.avcDiodeDrop = 0.0080f;
+  radio.demod.am.audioJunctionSlopeVolts = 0.0045f;
+  radio.demod.am.avcJunctionSlopeVolts = 0.0040f;
   radio.demod.am.detectorChargeResNorm = 1.0f;
   radio.demod.am.audioDischargeMs = 0.10f;
   radio.demod.am.avcChargeMs = 90.0f;
@@ -2393,7 +2409,7 @@ void Radio1938::processIfReal(float* samples, uint32_t frames) {
 void Radio1938::processAmAudio(const float* audioSamples,
                                float* outSamples,
                                uint32_t frames,
-                               float carrierAmplitude,
+                               float receivedCarrierRmsVolts,
                                float modulationIndex) {
   if (!audioSamples || !outSamples || frames == 0) return;
   std::vector<float> rfScratch(frames);
@@ -2401,7 +2417,8 @@ void Radio1938::processAmAudio(const float* audioSamples,
   float carrierHz =
       std::clamp(ifStrip.sourceCarrierHz, 1000.0f, safeSampleRate * 0.45f);
   float carrierStep = kRadioTwoPi * (carrierHz / safeSampleRate);
-  float carrierPeak = std::sqrt(2.0f) * std::max(carrierAmplitude, 0.0f);
+  float carrierPeak =
+      std::sqrt(2.0f) * std::max(receivedCarrierRmsVolts, 0.0f);
   float phase = iqInput.iqPhase;
   for (uint32_t frame = 0; frame < frames; ++frame) {
     float envelope = carrierPeak * (1.0f + modulationIndex * audioSamples[frame]);

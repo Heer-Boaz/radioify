@@ -9,6 +9,12 @@ float clampfLocal(float v, float lo, float hi) {
   return std::clamp(v, lo, hi);
 }
 
+float computeOpenCircuitCarrierRmsVolts(float fieldStrengthVoltsPerMeter,
+                                        float antennaEffectiveHeightMeters) {
+  return std::max(fieldStrengthVoltsPerMeter, 0.0f) *
+         std::max(antennaEffectiveHeightMeters, 0.0f);
+}
+
 void applyMonoGain(float* samples, uint32_t frames, float gain) {
   if (!samples || frames == 0 || gain == 1.0f) return;
   for (uint32_t i = 0; i < frames; ++i) {
@@ -28,7 +34,8 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
   carrierHz =
       clampfLocal(radio.ifStrip.sourceCarrierHz, 1000.0f, sampleRate * 0.45f);
   carrierPhase = 0.0f;
-  carrierAmplitude = 1.0f;
+  fieldStrengthVoltsPerMeter = 0.08f;
+  antennaEffectiveHeightMeters = 12.0f;
   modulationIndex = 0.85f;
 
   programHp.setHighpass(sampleRate, 45.0f, kRadioBiquadQ);
@@ -58,7 +65,9 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
     return program;
   };
   float carrierStep = kRadioTwoPi * (carrierHz / sampleRate);
-  float carrierPeak = std::sqrt(2.0f) * std::max(carrierAmplitude, 0.0f);
+  float carrierRms = computeOpenCircuitCarrierRmsVolts(
+      fieldStrengthVoltsPerMeter, antennaEffectiveHeightMeters);
+  float carrierPeak = std::sqrt(2.0f) * carrierRms;
 
   monoScratch.resize(frames);
 

@@ -191,6 +191,8 @@ struct AMDetector {
 
   float audioDiodeDrop = 0.0f;
   float avcDiodeDrop = 0.0f;
+  float audioJunctionSlopeVolts = 0.0f;
+  float avcJunctionSlopeVolts = 0.0f;
   float detectorChargeResNorm = 0.0f;
   float audioDischargeMs = 0.0f;
   float avcChargeMs = 0.0f;
@@ -1070,7 +1072,7 @@ struct Radio1938 {
   void processAmAudio(const float* audioSamples,
                       float* outSamples,
                       uint32_t frames,
-                      float carrierAmplitude,
+                      float receivedCarrierRmsVolts,
                       float modulationIndex);
   void processIqBaseband(const float* iqInterleaved,
                          float* outSamples,
