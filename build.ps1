@@ -19,7 +19,58 @@ $ErrorActionPreference = "Stop"
 
 function Resolve-CMake {
   $cmd = Get-Command cmake -ErrorAction SilentlyContinue
-  if ($cmd) { return $cmd.Source }
+  if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
+    return $cmd.Source
+  }
+
+  $whereExe = Get-Command where.exe -ErrorAction SilentlyContinue
+  if ($whereExe) {
+    $whereMatches = & $whereExe.Source cmake.exe 2>$null
+    foreach ($match in $whereMatches) {
+      if ($match -and (Test-Path $match)) {
+        return $match
+      }
+    }
+  }
+
+  $vswhereCandidates = @()
+  if ($env:ProgramFiles -and (Test-Path $env:ProgramFiles)) {
+    $vswhereCandidates += (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
+  }
+  if (${env:ProgramFiles(x86)} -and (Test-Path ${env:ProgramFiles(x86)})) {
+    $vswhereCandidates += (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe")
+  }
+
+  foreach ($vswhere in ($vswhereCandidates | Select-Object -Unique)) {
+    if (-not (Test-Path $vswhere)) { continue }
+    $installRoots = & $vswhere -all -products * -property installationPath 2>$null
+    foreach ($installRoot in $installRoots) {
+      if (-not $installRoot) { continue }
+      $candidate = Join-Path $installRoot "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+      if (Test-Path $candidate) {
+        return $candidate
+      }
+    }
+  }
+
+  $defaultCandidates = @(
+    "C:\Program Files\CMake\bin\cmake.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\Preview\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2019\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+  )
+  foreach ($candidate in $defaultCandidates) {
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+
   return $null
 }
 
