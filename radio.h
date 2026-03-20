@@ -772,6 +772,26 @@ struct Radio1938 {
     void resetRuntime() { iqPhase = 0.0f; }
   } iqInput;
 
+  struct SourceFrameState {
+    float i = 0.0f;
+    float q = 0.0f;
+
+    void resetRuntime() {
+      i = 0.0f;
+      q = 0.0f;
+    }
+
+    void setReal(float x) {
+      i = x;
+      q = 0.0f;
+    }
+
+    void setComplex(float inI, float inQ) {
+      i = inI;
+      q = inQ;
+    }
+  } sourceFrame;
+
   struct TuningNodeState {
     bool magneticTuningEnabled = false;
     float tuneOffsetHz = 0.0f;
@@ -829,15 +849,20 @@ struct Radio1938 {
 
   struct IFStripNodeState {
     bool enabled = false;
-    float ifLowBaseHz = 0.0f;
     float ifMinBwHz = 0.0f;
-    float ifMaxFraction = 0.0f;
     float stageGain = 0.0f;
     float avcGainDepth = 0.0f;
-    Biquad hp1;
-    Biquad hp2;
-    Biquad lp1;
-    Biquad lp2;
+    float ifCenterHz = 0.0f;
+    int oversampleFactor = 1;
+    float internalSampleRate = 0.0f;
+    float sourceCarrierHz = 0.0f;
+    float loFrequencyHz = 0.0f;
+    float rfPhase = 0.0f;
+    float loPhase = 0.0f;
+    float prevSourceI = 0.0f;
+    float prevSourceQ = 0.0f;
+    Biquad bp1;
+    Biquad bp2;
   } ifStrip;
 
   struct DemodNodeState {

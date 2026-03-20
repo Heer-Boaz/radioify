@@ -22,31 +22,13 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
                                    float newSampleRate,
                                    float bwHz) {
   sampleRate = std::max(newSampleRate, 1.0f);
-  const auto& ifStrip = radio.ifStrip;
-  float safeMaxFraction = std::max(ifStrip.ifMaxFraction, 0.10f);
-  float safeBw =
-      clampfLocal(bwHz, std::max(400.0f, ifStrip.ifMinBwHz),
-                  sampleRate * safeMaxFraction);
-  float lowMax = sampleRate * 0.40f;
-  float highMax = sampleRate * safeMaxFraction;
-  ifLowHz =
-      clampfLocal(std::max(ifStrip.ifLowBaseHz, 120.0f), 40.0f, lowMax);
-  float ifSpan =
-      clampfLocal(safeBw, 400.0f, std::max(400.0f, highMax - ifLowHz));
-  ifHighHz = clampfLocal(ifLowHz + ifSpan, ifLowHz + 400.0f, highMax);
-  carrierHz = 0.5f * (ifLowHz + ifHighHz);
-  float lowerSidebandRoom = std::max(80.0f, carrierHz - ifLowHz);
-  float upperSidebandRoom = std::max(80.0f, ifHighHz - carrierHz);
-  float sidebandRoom = std::min(lowerSidebandRoom, upperSidebandRoom);
-  audioBandwidthHz = clampfLocal(0.82f * sidebandRoom, 180.0f,
-                                 std::min(4600.0f, sampleRate * 0.18f));
-
-  float stageGainRef = std::max(ifStrip.stageGain, 1e-3f);
-  carrierAmplitude = clampfLocal(
-      0.78f * radio.demod.am.controlVoltageRef / stageGainRef, 0.06f, 0.22f);
-  modulationIndex = 0.82f;
-  modulationLimit = 0.92f;
-  modulationRef = 0.30f;
+  float safeBw = std::max(bwHz, radio.ifStrip.ifMinBwHz);
+  audioBandwidthHz = clampfLocal(0.48f * safeBw, 180.0f,
+                                 std::min(4600.0f, sampleRate * 0.45f));
+  carrierAmplitude = 0.14f;
+  modulationIndex = 0.85f;
+  modulationLimit = 0.95f;
+  modulationRef = 0.35f;
   programLevelAtk = std::exp(-1.0f / (sampleRate * 0.0025f));
   programLevelRel = std::exp(-1.0f / (sampleRate * 0.160f));
 
@@ -57,7 +39,6 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
 }
 
 void PcmToIfPreviewModulator::reset() {
-  phase = 0.0f;
   programLevelEnv = 0.0f;
   programHp.reset();
   programLp1.reset();
@@ -71,7 +52,7 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
                                            float makeupGain) {
   if (!samples || frames == 0 || channels == 0) return;
 
-  auto nextIfSample = [&](float x) {
+  auto nextEnvelopeSample = [&](float x) {
     float program = programHp.process(x);
     program = programLp1.process(program);
     program = programLp2.process(program);
@@ -87,25 +68,25 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
     float levelRef = std::max(modulationRef, programLevelEnv);
     float mod = modulationIndex * (program / levelRef);
     mod = clampfLocal(mod, -modulationLimit, modulationLimit);
-    float envelope = carrierAmplitude * (1.0f + mod);
-    float y = envelope * std::sin(phase);
-    phase += kRadioTwoPi * (carrierHz / std::max(sampleRate, 1.0f));
-    if (phase >= kRadioTwoPi) {
-      phase = std::fmod(phase, kRadioTwoPi);
-    }
-    return y;
+    return carrierAmplitude * (1.0f + mod);
   };
+
+  iqScratch.resize(static_cast<size_t>(frames) * 2u);
+  monoScratch.resize(frames);
 
   if (channels == 1u) {
     for (uint32_t frame = 0; frame < frames; ++frame) {
-      samples[frame] = nextIfSample(samples[frame]);
+      iqScratch[static_cast<size_t>(frame) * 2u] = nextEnvelopeSample(samples[frame]);
+      iqScratch[static_cast<size_t>(frame) * 2u + 1u] = 0.0f;
     }
-    radio.processIfReal(samples, frames);
-    applyMonoGain(samples, frames, makeupGain);
+    radio.processIqBaseband(iqScratch.data(), monoScratch.data(), frames);
+    applyMonoGain(monoScratch.data(), frames, makeupGain);
+    for (uint32_t frame = 0; frame < frames; ++frame) {
+      samples[frame] = monoScratch[frame];
+    }
     return;
   }
 
-  monoScratch.resize(frames);
   float foldGain = 1.0f / static_cast<float>(channels);
   for (uint32_t frame = 0; frame < frames; ++frame) {
     float sum = 0.0f;
@@ -113,10 +94,11 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
     for (uint32_t ch = 0; ch < channels; ++ch) {
       sum += samples[base + ch];
     }
-    monoScratch[frame] = nextIfSample(sum * foldGain);
+    iqScratch[static_cast<size_t>(frame) * 2u] = nextEnvelopeSample(sum * foldGain);
+    iqScratch[static_cast<size_t>(frame) * 2u + 1u] = 0.0f;
   }
 
-  radio.processIfReal(monoScratch.data(), frames);
+  radio.processIqBaseband(iqScratch.data(), monoScratch.data(), frames);
   applyMonoGain(monoScratch.data(), frames, makeupGain);
 
   for (uint32_t frame = 0; frame < frames; ++frame) {

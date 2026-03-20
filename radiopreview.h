@@ -7,11 +7,7 @@
 
 struct PcmToIfPreviewModulator {
   float sampleRate = 0.0f;
-  float ifLowHz = 0.0f;
-  float ifHighHz = 0.0f;
   float audioBandwidthHz = 0.0f;
-  float carrierHz = 0.0f;
-  float phase = 0.0f;
   float carrierAmplitude = 0.0f;
   float modulationIndex = 0.0f;
   float modulationLimit = 0.0f;
@@ -22,6 +18,7 @@ struct PcmToIfPreviewModulator {
   Biquad programHp;
   Biquad programLp1;
   Biquad programLp2;
+  std::vector<float> iqScratch;
   std::vector<float> monoScratch;
 
   void init(const Radio1938& radio, float newSampleRate, float bwHz);
