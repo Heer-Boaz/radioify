@@ -1,6 +1,7 @@
 #include "radio.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <complex>
 #include <limits>
@@ -63,6 +64,300 @@ static float deviceTriodePlateCurrent(float gridVolts,
                                       float mu,
                                       float plateKneeVolts,
                                       float gridSoftnessVolts);
+
+static float deviceTubePlateCurrent(float gridVolts,
+                                    float plateVolts,
+                                    float screenVolts,
+                                    float biasVolts,
+                                    float cutoffVolts,
+                                    float quiescentPlateVolts,
+                                    float quiescentScreenVolts,
+                                    float quiescentPlateCurrentAmps,
+                                    float mutualConductanceSiemens,
+                                    float plateKneeVolts,
+                                    float gridSoftnessVolts);
+
+template <typename Fn>
+static float finiteDifferenceDerivative(Fn&& fn, float x, float delta) {
+  float safeDelta = std::max(delta, 1e-5f);
+  float low = fn(x - safeDelta);
+  float high = fn(x + safeDelta);
+  return (high - low) / (2.0f * safeDelta);
+}
+
+static float fitTriodeModelCutoffVolts(float biasVolts,
+                                       float plateVolts,
+                                       float plateCurrentAmps,
+                                       float mutualConductanceSiemens,
+                                       float mu,
+                                       float plateKneeVolts,
+                                       float gridSoftnessVolts) {
+  float safePlateVolts = std::max(plateVolts, 1.0f);
+  float safePlateCurrent = std::max(plateCurrentAmps, 1e-6f);
+  float safeMu = std::max(mu, 1e-3f);
+  float controlQ = biasVolts + safePlateVolts / safeMu;
+  float searchMin = std::min(controlQ - 60.0f, biasVolts - 80.0f);
+  float searchMax = controlQ + 6.0f;
+  float bestCutoff = searchMin;
+  float bestError = std::numeric_limits<float>::infinity();
+  constexpr int kSteps = 256;
+  for (int i = 0; i <= kSteps; ++i) {
+    float t = static_cast<float>(i) / static_cast<float>(kSteps);
+    float cutoffVolts = searchMin + (searchMax - searchMin) * t;
+    float gmEstimate = finiteDifferenceDerivative(
+        [&](float gridVolts) {
+          return deviceTriodePlateCurrent(
+              gridVolts, safePlateVolts, biasVolts, cutoffVolts, safePlateVolts,
+              safePlateCurrent, mutualConductanceSiemens, mu, plateKneeVolts,
+              gridSoftnessVolts);
+        },
+        biasVolts, 0.02f);
+    float error = std::fabs(gmEstimate - mutualConductanceSiemens);
+    if (error < bestError) {
+      bestError = error;
+      bestCutoff = cutoffVolts;
+    }
+  }
+  return bestCutoff;
+}
+
+static float fitPentodeModelCutoffVolts(float biasVolts,
+                                        float plateVolts,
+                                        float screenVolts,
+                                        float plateCurrentAmps,
+                                        float mutualConductanceSiemens,
+                                        float plateKneeVolts,
+                                        float gridSoftnessVolts) {
+  float safePlateVolts = std::max(plateVolts, 1.0f);
+  float safeScreenVolts = std::max(screenVolts, 1.0f);
+  float safePlateCurrent = std::max(plateCurrentAmps, 1e-6f);
+  float searchMin = biasVolts - 80.0f;
+  float searchMax = biasVolts + 6.0f;
+  float bestCutoff = searchMin;
+  float bestError = std::numeric_limits<float>::infinity();
+  constexpr int kSteps = 256;
+  for (int i = 0; i <= kSteps; ++i) {
+    float t = static_cast<float>(i) / static_cast<float>(kSteps);
+    float cutoffVolts = searchMin + (searchMax - searchMin) * t;
+    float gmEstimate = finiteDifferenceDerivative(
+        [&](float gridVolts) {
+          return deviceTubePlateCurrent(
+              gridVolts, safePlateVolts, safeScreenVolts, biasVolts,
+              cutoffVolts, safePlateVolts, safeScreenVolts, safePlateCurrent,
+              mutualConductanceSiemens, plateKneeVolts, gridSoftnessVolts);
+        },
+        biasVolts, 0.02f);
+    float error = std::fabs(gmEstimate - mutualConductanceSiemens);
+    if (error < bestError) {
+      bestError = error;
+      bestCutoff = cutoffVolts;
+    }
+  }
+  return bestCutoff;
+}
+
+template <typename PlateCurrentFn>
+static float solveLoadLinePlateVoltage(float plateSupplyVolts,
+                                       float loadResistanceOhms,
+                                       float initialGuessVolts,
+                                       PlateCurrentFn&& plateCurrentForPlate) {
+  float safeSupply = std::max(plateSupplyVolts, 1.0f);
+  if (loadResistanceOhms <= 0.0f) {
+    return clampf(initialGuessVolts, 0.0f, safeSupply);
+  }
+
+  auto residual = [&](float plateVolts) {
+    float safePlate = clampf(plateVolts, 0.0f, safeSupply);
+    return safeSupply -
+           plateCurrentForPlate(safePlate) * std::max(loadResistanceOhms, 1.0f) -
+           safePlate;
+  };
+
+  float bestPlate = clampf(initialGuessVolts, 0.0f, safeSupply);
+  float bestResidual = residual(bestPlate);
+  float low = 0.0f;
+  float high = safeSupply;
+  float lowResidual = residual(low);
+  float highResidual = residual(high);
+  if (std::fabs(lowResidual) < std::fabs(bestResidual)) {
+    bestPlate = low;
+    bestResidual = lowResidual;
+  }
+  if (std::fabs(highResidual) < std::fabs(bestResidual)) {
+    bestPlate = high;
+    bestResidual = highResidual;
+  }
+
+  if (lowResidual * highResidual <= 0.0f) {
+    for (int i = 0; i < 24; ++i) {
+      float mid = 0.5f * (low + high);
+      float midResidual = residual(mid);
+      if (std::fabs(midResidual) < std::fabs(bestResidual)) {
+        bestPlate = mid;
+        bestResidual = midResidual;
+      }
+      if (midResidual == 0.0f) break;
+      if (lowResidual * midResidual <= 0.0f) {
+        high = mid;
+        highResidual = midResidual;
+      } else {
+        low = mid;
+        lowResidual = midResidual;
+      }
+    }
+    return bestPlate;
+  }
+
+  float plateVolts = bestPlate;
+  for (int i = 0; i < 16; ++i) {
+    float targetPlate =
+        safeSupply - plateCurrentForPlate(plateVolts) *
+                         std::max(loadResistanceOhms, 1.0f);
+    targetPlate = clampf(targetPlate, 0.0f, safeSupply);
+    plateVolts = 0.5f * (plateVolts + targetPlate);
+  }
+  return plateVolts;
+}
+
+static TriodeOperatingPoint solveTriodeOperatingPoint(
+    float plateSupplyVolts,
+    float loadResistanceOhms,
+    float biasVolts,
+    float targetPlateVolts,
+    float targetPlateCurrentAmps,
+    float targetMutualConductanceSiemens,
+    float mu,
+    float plateKneeVolts,
+    float gridSoftnessVolts,
+    float& fittedCutoffVolts) {
+  auto solveOnce = [&](float referencePlateVolts,
+                       float referencePlateCurrentAmps) {
+    float safeReferencePlate = std::max(referencePlateVolts, 1.0f);
+    float safeReferenceCurrent = std::max(referencePlateCurrentAmps, 1e-6f);
+    fittedCutoffVolts = fitTriodeModelCutoffVolts(
+        biasVolts, safeReferencePlate, safeReferenceCurrent,
+        targetMutualConductanceSiemens, mu, plateKneeVolts, gridSoftnessVolts);
+    float solvedPlateVolts = solveLoadLinePlateVoltage(
+        plateSupplyVolts, loadResistanceOhms, safeReferencePlate,
+        [&](float plateVolts) {
+          return deviceTriodePlateCurrent(
+              biasVolts, plateVolts, biasVolts, fittedCutoffVolts,
+              safeReferencePlate, safeReferenceCurrent,
+              targetMutualConductanceSiemens, mu, plateKneeVolts,
+              gridSoftnessVolts);
+        });
+    float solvedPlateCurrent = deviceTriodePlateCurrent(
+        biasVolts, solvedPlateVolts, biasVolts, fittedCutoffVolts,
+        safeReferencePlate, safeReferenceCurrent, targetMutualConductanceSiemens,
+        mu, plateKneeVolts, gridSoftnessVolts);
+    float plateSlope = finiteDifferenceDerivative(
+        [&](float plateVolts) {
+          return deviceTriodePlateCurrent(
+              biasVolts, std::max(plateVolts, 0.0f), biasVolts,
+              fittedCutoffVolts, solvedPlateVolts,
+              std::max(solvedPlateCurrent, 1e-6f),
+              targetMutualConductanceSiemens, mu, plateKneeVolts,
+              gridSoftnessVolts);
+        },
+        solvedPlateVolts, 0.5f);
+    float rpOhms = 1.0f / std::max(std::fabs(plateSlope), 1e-9f);
+    return TriodeOperatingPoint{solvedPlateVolts, solvedPlateCurrent, rpOhms};
+  };
+
+  TriodeOperatingPoint solved =
+      solveOnce(targetPlateVolts, targetPlateCurrentAmps);
+  solved = solveOnce(solved.plateVolts, solved.plateCurrentAmps);
+  return solved;
+}
+
+static PentodeOperatingPoint solvePentodeOperatingPoint(
+    float plateSupplyVolts,
+    float screenVolts,
+    float loadResistanceOhms,
+    float biasVolts,
+    float targetPlateVolts,
+    float targetPlateCurrentAmps,
+    float targetMutualConductanceSiemens,
+    float plateKneeVolts,
+    float gridSoftnessVolts,
+    float& fittedCutoffVolts) {
+  auto solveOnce = [&](float referencePlateVolts,
+                       float referencePlateCurrentAmps) {
+    float safeReferencePlate = std::max(referencePlateVolts, 1.0f);
+    float safeReferenceCurrent = std::max(referencePlateCurrentAmps, 1e-6f);
+    fittedCutoffVolts = fitPentodeModelCutoffVolts(
+        biasVolts, safeReferencePlate, screenVolts, safeReferenceCurrent,
+        targetMutualConductanceSiemens, plateKneeVolts, gridSoftnessVolts);
+    float solvedPlateVolts = solveLoadLinePlateVoltage(
+        plateSupplyVolts, loadResistanceOhms, safeReferencePlate,
+        [&](float plateVolts) {
+          return deviceTubePlateCurrent(
+              biasVolts, plateVolts, screenVolts, biasVolts, fittedCutoffVolts,
+              safeReferencePlate, screenVolts, safeReferenceCurrent,
+              targetMutualConductanceSiemens, plateKneeVolts,
+              gridSoftnessVolts);
+        });
+    float solvedPlateCurrent = deviceTubePlateCurrent(
+        biasVolts, solvedPlateVolts, screenVolts, biasVolts, fittedCutoffVolts,
+        safeReferencePlate, screenVolts, safeReferenceCurrent,
+        targetMutualConductanceSiemens, plateKneeVolts, gridSoftnessVolts);
+    float plateSlope = finiteDifferenceDerivative(
+        [&](float plateVolts) {
+          return deviceTubePlateCurrent(
+              biasVolts, std::max(plateVolts, 0.0f), screenVolts, biasVolts,
+              fittedCutoffVolts, solvedPlateVolts,
+              std::max(solvedPlateCurrent, 1e-6f), screenVolts,
+              targetMutualConductanceSiemens, plateKneeVolts,
+              gridSoftnessVolts);
+        },
+        solvedPlateVolts, 0.5f);
+    float rpOhms = 1.0f / std::max(std::fabs(plateSlope), 1e-9f);
+    return PentodeOperatingPoint{solvedPlateVolts, solvedPlateCurrent, rpOhms};
+  };
+
+  PentodeOperatingPoint solved =
+      solveOnce(targetPlateVolts, targetPlateCurrentAmps);
+  solved = solveOnce(solved.plateVolts, solved.plateCurrentAmps);
+  return solved;
+}
+
+static float effectiveLoadResistanceFromDrive(float volts, float current) {
+  float absCurrent = std::fabs(current);
+  if (absCurrent < 1e-9f) {
+    return std::numeric_limits<float>::infinity();
+  }
+  return std::max(std::fabs(volts) / absCurrent, 1.0f);
+}
+
+static PushPullGridDriveResult solvePushPullGridDrive(
+    float secondaryDifferentialVolts,
+    float biasVolts,
+    float gridLeakResistanceOhms,
+    float gridCurrentResistanceOhms) {
+  float gridAVolts = 0.5f * secondaryDifferentialVolts;
+  float gridBVolts = -gridAVolts;
+  float gridLeakConductance =
+      1.0f / std::max(gridLeakResistanceOhms, 1.0f);
+  float gridCurrentConductance =
+      1.0f / std::max(gridCurrentResistanceOhms, 1.0f);
+  float currentA = gridAVolts * gridLeakConductance;
+  float currentB = gridBVolts * gridLeakConductance;
+  if (biasVolts + gridAVolts > 0.0f) {
+    currentA += gridAVolts * gridCurrentConductance;
+  }
+  if (biasVolts + gridBVolts > 0.0f) {
+    currentB += gridBVolts * gridCurrentConductance;
+  }
+  float differentialCurrent = 0.5f * (currentA - currentB);
+  return {gridAVolts, gridBVolts, differentialCurrent};
+}
+
+static float scalePhysicalSpeakerVoltsToDigital(const Radio1938& radio,
+                                                float speakerVolts) {
+  if (!radio.graph.isEnabled(StageId::Power)) return speakerVolts;
+  return speakerVolts /
+         std::max(radio.output.digitalReferenceSpeakerVoltsPeak, 1e-3f);
+}
 
 static float deviceTubePlateCurrent(float gridVolts,
                                     float plateVolts,
@@ -889,6 +1184,8 @@ void Radio1938::CalibrationStageMetrics::clearAccumulators() {
   sampleCount = 0;
   rmsIn = 0.0;
   rmsOut = 0.0;
+  meanIn = 0.0;
+  meanOut = 0.0;
   peakIn = 0.0f;
   peakOut = 0.0f;
   crestIn = 0.0f;
@@ -898,6 +1195,8 @@ void Radio1938::CalibrationStageMetrics::clearAccumulators() {
   bandwidth6dBHz = 0.0f;
   clipCountIn = 0;
   clipCountOut = 0;
+  inSum = 0.0;
+  outSum = 0.0;
   inSumSq = 0.0;
   outSumSq = 0.0;
   bandEnergy.fill(0.0);
@@ -989,6 +1288,23 @@ void Radio1938::CalibrationState::reset() {
   limiterMaxGainReductionDb = 0.0f;
   limiterGainReductionSum = 0.0;
   limiterGainReductionDbSum = 0.0;
+  validationSampleCount = 0;
+  driverGridPositiveSamples = 0;
+  outputGridPositiveSamples = 0;
+  driverGridPositiveFraction = 0.0f;
+  outputGridPositiveFraction = 0.0f;
+  maxMixerPlateCurrentAmps = 0.0f;
+  maxReceiverPlateCurrentAmps = 0.0f;
+  maxDriverPlateCurrentAmps = 0.0f;
+  maxOutputPlateCurrentAAmps = 0.0f;
+  maxOutputPlateCurrentBAmps = 0.0f;
+  maxSpeakerSecondaryVolts = 0.0f;
+  maxSpeakerReferenceRatio = 0.0f;
+  validationFailed = false;
+  validationOutputGridPositive = false;
+  validationSpeakerOverReference = false;
+  validationDcShift = false;
+  validationDigitalClip = false;
   for (auto& stage : stages) {
     stage.clearAccumulators();
   }
@@ -1007,13 +1323,19 @@ static void updateStageCalibration(Radio1938& radio,
   if (!radio.calibration.enabled) return;
   auto& stage =
       radio.calibration.stages[static_cast<size_t>(id)];
+  float clipThreshold = 1.0f;
+  if (id == StageId::Power) {
+    clipThreshold = std::max(radio.output.digitalReferenceSpeakerVoltsPeak, 1e-3f);
+  }
   stage.sampleCount++;
+  stage.inSum += static_cast<double>(in);
+  stage.outSum += static_cast<double>(out);
   stage.inSumSq += static_cast<double>(in) * static_cast<double>(in);
   stage.outSumSq += static_cast<double>(out) * static_cast<double>(out);
   stage.peakIn = std::max(stage.peakIn, std::fabs(in));
   stage.peakOut = std::max(stage.peakOut, std::fabs(out));
-  if (std::fabs(in) > 1.0f) stage.clipCountIn++;
-  if (std::fabs(out) > 1.0f) stage.clipCountOut++;
+  if (std::fabs(in) > clipThreshold) stage.clipCountIn++;
+  if (std::fabs(out) > clipThreshold) stage.clipCountOut++;
   if (stage.fftFill < stage.fftTimeBuffer.size()) {
     stage.fftTimeBuffer[stage.fftFill++] = out;
   }
@@ -1026,6 +1348,8 @@ void Radio1938::CalibrationStageMetrics::updateSnapshot(float sampleRate) {
   accumulateCalibrationSpectrum(*this, sampleRate, true);
   if (sampleCount == 0) return;
   double invCount = 1.0 / static_cast<double>(sampleCount);
+  meanIn = inSum * invCount;
+  meanOut = outSum * invCount;
   rmsIn = std::sqrt(inSumSq * invCount);
   rmsOut = std::sqrt(outSumSq * invCount);
   crestIn =
@@ -1077,6 +1401,36 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
     radio.calibration.limiterAverageGainReductionDb =
         static_cast<float>(radio.calibration.limiterGainReductionDbSum * invCount);
   }
+
+  if (radio.calibration.validationSampleCount > 0) {
+    float invValidationCount =
+        1.0f / static_cast<float>(radio.calibration.validationSampleCount);
+    radio.calibration.driverGridPositiveFraction =
+        radio.calibration.driverGridPositiveSamples * invValidationCount;
+    radio.calibration.outputGridPositiveFraction =
+        radio.calibration.outputGridPositiveSamples * invValidationCount;
+  }
+
+  const auto& receiverStage =
+      radio.calibration.stages[static_cast<size_t>(StageId::ReceiverCircuit)];
+  const auto& powerStage =
+      radio.calibration.stages[static_cast<size_t>(StageId::Power)];
+  radio.calibration.validationOutputGridPositive =
+      radio.calibration.outputGridPositiveFraction > 0.02f;
+  radio.calibration.validationSpeakerOverReference =
+      radio.calibration.maxSpeakerReferenceRatio > 1.10f;
+  radio.calibration.validationDcShift =
+      (std::fabs(receiverStage.meanOut) >
+           std::max(0.02, 0.10 * receiverStage.rmsOut)) ||
+      (std::fabs(powerStage.meanOut) >
+           std::max(0.10, 0.05 * powerStage.peakOut));
+  radio.calibration.validationDigitalClip =
+      radio.diagnostics.outputClip || radio.diagnostics.finalLimiterActive;
+  radio.calibration.validationFailed =
+      radio.calibration.validationOutputGridPositive ||
+      radio.calibration.validationSpeakerOverReference ||
+      radio.calibration.validationDcShift ||
+      radio.calibration.validationDigitalClip;
 }
 
 float AMDetector::process(const AMDetectorSampleInput& in) {
@@ -1420,7 +1774,26 @@ float RadioFrontEndNode::process(Radio1938& radio,
   return y;
 }
 
-void RadioMixerNode::init(Radio1938&, RadioInitContext&) {}
+void RadioMixerNode::init(Radio1938& radio, RadioInitContext&) {
+  auto& mixer = radio.mixer;
+  float dcLoadResistanceOhms = 0.0f;
+  if (mixer.plateCurrentAmps > 1e-6f &&
+      mixer.plateSupplyVolts > mixer.plateDcVolts) {
+    dcLoadResistanceOhms =
+        (mixer.plateSupplyVolts - mixer.plateDcVolts) / mixer.plateCurrentAmps;
+  }
+  PentodeOperatingPoint op = solvePentodeOperatingPoint(
+      mixer.plateSupplyVolts, mixer.screenVolts, dcLoadResistanceOhms,
+      mixer.biasVolts, mixer.plateDcVolts, mixer.plateCurrentAmps,
+      mixer.mutualConductanceSiemens, mixer.plateKneeVolts,
+      mixer.gridSoftnessVolts, mixer.modelCutoffVolts);
+  mixer.plateQuiescentVolts = op.plateVolts;
+  mixer.plateQuiescentCurrentAmps = op.plateCurrentAmps;
+  mixer.plateResistanceOhms = op.rpOhms;
+  assert((std::fabs(mixer.plateQuiescentVolts - mixer.plateDcVolts) <=
+          mixer.operatingPointToleranceVolts) &&
+         "Mixer operating point diverged from the preset target");
+}
 
 void RadioMixerNode::reset(Radio1938&) {}
 
@@ -1608,11 +1981,24 @@ static float processSuperhetSourceFrame(Radio1938& radio,
     float mixerPlateAcVolts = processConverterTubeStage(
         baseGridVolts, rfGridVolts, mixer.loGridBiasVolts,
         oscillatorGridVolts, 1.0f,
-        mixer.plateDcVolts,
-        mixer.screenVolts, mixer.biasVolts, mixer.cutoffVolts,
-        mixer.plateCurrentAmps, mixer.mutualConductanceSiemens,
+      mixer.plateQuiescentVolts,
+        mixer.screenVolts, mixer.biasVolts, mixer.modelCutoffVolts,
+        mixer.plateQuiescentCurrentAmps, mixer.mutualConductanceSiemens,
         mixer.acLoadResistanceOhms, mixer.plateKneeVolts,
         mixer.gridSoftnessVolts);
+    if (radio.calibration.enabled) {
+      float instantaneousMixerCurrent = deviceTubePlateCurrent(
+          baseGridVolts + mixer.loGridBiasVolts + rfGridVolts +
+              oscillatorGridVolts,
+          mixer.plateQuiescentVolts, mixer.screenVolts, mixer.biasVolts,
+          mixer.modelCutoffVolts, mixer.plateQuiescentVolts,
+          mixer.screenVolts, mixer.plateQuiescentCurrentAmps,
+          mixer.mutualConductanceSiemens, mixer.plateKneeVolts,
+          mixer.gridSoftnessVolts);
+      radio.calibration.maxMixerPlateCurrentAmps = std::max(
+          radio.calibration.maxMixerPlateCurrentAmps,
+          instantaneousMixerCurrent);
+    }
     float ifGainControl =
         std::max(0.20f, 1.0f - ifStrip.avcGainDepth * avcT);
     float ifSample = mixerPlateAcVolts * ifGain * ifGainControl;
@@ -1639,14 +2025,30 @@ float RadioDemodNode::process(Radio1938& radio,
   return y;
 }
 
-void RadioReceiverCircuitNode::init(Radio1938&, RadioInitContext&) {}
+void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
+  auto& receiver = radio.receiverCircuit;
+  if (!receiver.enabled || !receiver.tubeTriodeConnected) return;
+  TriodeOperatingPoint op = solveTriodeOperatingPoint(
+      receiver.tubePlateSupplyVolts, receiver.tubeLoadResistanceOhms,
+      receiver.tubeBiasVolts, receiver.tubePlateDcVolts,
+      receiver.tubePlateCurrentAmps, receiver.tubeMutualConductanceSiemens,
+      receiver.tubeMu, receiver.tubePlateKneeVolts,
+      receiver.tubeGridSoftnessVolts, receiver.tubeModelCutoffVolts);
+  receiver.tubeQuiescentPlateVolts = op.plateVolts;
+  receiver.tubeQuiescentPlateCurrentAmps = op.plateCurrentAmps;
+  receiver.tubePlateResistanceOhms = op.rpOhms;
+  assert((std::fabs(receiver.tubeQuiescentPlateVolts -
+                    receiver.tubePlateDcVolts) <=
+          receiver.operatingPointToleranceVolts) &&
+         "6J5 first-audio operating point diverged from the preset target");
+}
 
 void RadioReceiverCircuitNode::reset(Radio1938& radio) {
   auto& receiver = radio.receiverCircuit;
   receiver.couplingCapVoltage = 0.0f;
   receiver.gridVoltage = 0.0f;
   receiver.volumeControlTapVoltage = 0.0f;
-  receiver.tubePlateVoltage = receiver.tubePlateDcVolts;
+  receiver.tubePlateVoltage = receiver.tubeQuiescentPlateVolts;
 }
 
 float RadioReceiverCircuitNode::process(Radio1938& radio,
@@ -1727,24 +2129,47 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
     reset(radio);
     return 0.0f;
   }
+  float out = 0.0f;
+  float plateCurrent = 0.0f;
   if (receiver.tubeTriodeConnected) {
-    return processResistorLoadedTriodeStage(
+    out = processResistorLoadedTriodeStage(
         receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
-        receiver.tubePlateSupplyVolts, receiver.tubePlateDcVolts,
-        receiver.tubeBiasVolts, receiver.tubeCutoffVolts,
-        receiver.tubePlateCurrentAmps, receiver.tubeMutualConductanceSiemens,
+        receiver.tubePlateSupplyVolts, receiver.tubeQuiescentPlateVolts,
+        receiver.tubeBiasVolts, receiver.tubeModelCutoffVolts,
+        receiver.tubeQuiescentPlateCurrentAmps,
+        receiver.tubeMutualConductanceSiemens,
         receiver.tubeMu, receiver.tubeLoadResistanceOhms,
         receiver.tubePlateKneeVolts, receiver.tubeGridSoftnessVolts,
         receiver.tubePlateVoltage);
+    plateCurrent = deviceTriodePlateCurrent(
+        receiver.tubeBiasVolts + receiver.gridVoltage, receiver.tubePlateVoltage,
+        receiver.tubeBiasVolts, receiver.tubeModelCutoffVolts,
+        receiver.tubeQuiescentPlateVolts, receiver.tubeQuiescentPlateCurrentAmps,
+        receiver.tubeMutualConductanceSiemens, receiver.tubeMu,
+        receiver.tubePlateKneeVolts, receiver.tubeGridSoftnessVolts);
+  } else {
+    out = processResistorLoadedTubeStage(
+        receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
+        receiver.tubePlateSupplyVolts, receiver.tubeQuiescentPlateVolts,
+        receiver.tubeScreenVolts, receiver.tubeBiasVolts,
+        receiver.tubeModelCutoffVolts,
+        receiver.tubeQuiescentPlateCurrentAmps,
+        receiver.tubeMutualConductanceSiemens,
+        receiver.tubeLoadResistanceOhms, receiver.tubePlateKneeVolts,
+        receiver.tubeGridSoftnessVolts, receiver.tubePlateVoltage);
+    plateCurrent = deviceTubePlateCurrent(
+        receiver.tubeBiasVolts + receiver.gridVoltage, receiver.tubePlateVoltage,
+        receiver.tubeScreenVolts, receiver.tubeBiasVolts,
+        receiver.tubeModelCutoffVolts, receiver.tubeQuiescentPlateVolts,
+        receiver.tubeScreenVolts, receiver.tubeQuiescentPlateCurrentAmps,
+        receiver.tubeMutualConductanceSiemens, receiver.tubePlateKneeVolts,
+        receiver.tubeGridSoftnessVolts);
   }
-  return processResistorLoadedTubeStage(
-      receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
-      receiver.tubePlateSupplyVolts, receiver.tubePlateDcVolts,
-      receiver.tubeScreenVolts, receiver.tubeBiasVolts,
-      receiver.tubeCutoffVolts, receiver.tubePlateCurrentAmps,
-      receiver.tubeMutualConductanceSiemens,
-      receiver.tubeLoadResistanceOhms, receiver.tubePlateKneeVolts,
-      receiver.tubeGridSoftnessVolts, receiver.tubePlateVoltage);
+  if (radio.calibration.enabled) {
+    radio.calibration.maxReceiverPlateCurrentAmps =
+        std::max(radio.calibration.maxReceiverPlateCurrentAmps, plateCurrent);
+  }
+  return out;
 }
 
 void RadioToneNode::init(Radio1938& radio, RadioInitContext&) {
@@ -1768,33 +2193,6 @@ float RadioToneNode::process(Radio1938& radio,
   return tone.presence.process(y);
 }
 
-static float tubeGridLoadResistance(float acGridVolts,
-                                    float biasVolts,
-                                    float gridLeakResistanceOhms,
-                                    float gridCurrentResistanceOhms) {
-  float loadResistance = std::max(gridLeakResistanceOhms, 1.0f);
-  if (biasVolts + acGridVolts > 0.0f) {
-    loadResistance =
-        parallelResistance(loadResistance,
-                           std::max(gridCurrentResistanceOhms, 1.0f));
-  }
-  return loadResistance;
-}
-
-static float differentialGridLoadResistance(float secondaryVolts,
-                                            float biasVolts,
-                                            float gridLeakResistanceOhms,
-                                            float gridCurrentResistanceOhms) {
-  float halfSecondaryVolts = 0.5f * secondaryVolts;
-  float loadA = tubeGridLoadResistance(halfSecondaryVolts, biasVolts,
-                                       gridLeakResistanceOhms,
-                                       gridCurrentResistanceOhms);
-  float loadB = tubeGridLoadResistance(-halfSecondaryVolts, biasVolts,
-                                       gridLeakResistanceOhms,
-                                       gridCurrentResistanceOhms);
-  return std::max(loadA + loadB, 2.0f);
-}
-
 void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   auto& power = radio.power;
   power.sagAtk =
@@ -1806,7 +2204,42 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   } else {
     power.postLpf = Biquad{};
   }
-  power.tubePlateVoltage = power.tubePlateDcVolts;
+  power.driverSourceResistanceOhms = parallelResistance(
+      radio.receiverCircuit.tubeLoadResistanceOhms,
+      radio.receiverCircuit.tubePlateResistanceOhms);
+  power.driverSourceResistanceOhms =
+      std::max(power.driverSourceResistanceOhms, 1.0f);
+  TriodeOperatingPoint driverOp = solveTriodeOperatingPoint(
+      power.tubePlateSupplyVolts, power.interstagePrimaryResistanceOhms,
+      power.tubeBiasVolts, power.tubePlateDcVolts, power.tubePlateCurrentAmps,
+      power.tubeMutualConductanceSiemens, power.tubeMu,
+      power.tubePlateKneeVolts, power.tubeGridSoftnessVolts,
+      power.tubeModelCutoffVolts);
+  power.tubeQuiescentPlateVolts = driverOp.plateVolts;
+  power.tubeQuiescentPlateCurrentAmps = driverOp.plateCurrentAmps;
+  power.tubePlateResistanceOhms = driverOp.rpOhms;
+  assert((std::fabs(power.tubeQuiescentPlateVolts - power.tubePlateDcVolts) <=
+          power.operatingPointToleranceVolts) &&
+         "6F6 driver operating point diverged from the preset target");
+
+  TriodeOperatingPoint outputOp = solveTriodeOperatingPoint(
+      power.outputTubePlateSupplyVolts,
+      0.5f * power.outputTransformerPrimaryResistanceOhms,
+      power.outputTubeBiasVolts, power.outputTubePlateDcVolts,
+      power.outputTubePlateCurrentAmps, power.outputTubeMutualConductanceSiemens,
+      power.outputTubeMu, power.outputTubePlateKneeVolts,
+      power.outputTubeGridSoftnessVolts, power.outputTubeModelCutoffVolts);
+  power.outputTubeQuiescentPlateVolts = outputOp.plateVolts;
+  power.outputTubeQuiescentPlateCurrentAmps = outputOp.plateCurrentAmps;
+  power.outputTubePlateResistanceOhms = outputOp.rpOhms;
+  assert((std::fabs(power.outputTubeQuiescentPlateVolts -
+                    power.outputTubePlateDcVolts) <=
+          power.outputOperatingPointToleranceVolts) &&
+         "6B4 output operating point diverged from the preset target");
+
+  power.tubePlateVoltage = power.tubeQuiescentPlateVolts;
+  power.outputGridAVolts = 0.0f;
+  power.outputGridBVolts = 0.0f;
   power.interstageTransformer.configure(
       radio.sampleRate, power.interstagePrimaryLeakageInductanceHenries,
       power.interstageMagnetizingInductanceHenries,
@@ -1840,7 +2273,9 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.satOsPrev = 0.0f;
   power.gridCouplingCapVoltage = 0.0f;
   power.gridVoltage = 0.0f;
-  power.tubePlateVoltage = power.tubePlateDcVolts;
+  power.tubePlateVoltage = power.tubeQuiescentPlateVolts;
+  power.outputGridAVolts = 0.0f;
+  power.outputGridBVolts = 0.0f;
   power.interstageTransformer.reset();
   power.outputTransformer.reset();
   power.postLpf.reset();
@@ -1853,6 +2288,9 @@ float RadioPowerNode::process(Radio1938& radio,
                               const RadioSampleContext&) {
   auto& power = radio.power;
   auto& controlSense = radio.controlSense;
+  if (radio.calibration.enabled) {
+    radio.calibration.validationSampleCount++;
+  }
   float powerT = clampf((power.sagEnv - power.sagStart) /
                             std::max(1e-6f, power.sagEnd - power.sagStart),
                         0.0f, 1.0f);
@@ -1877,22 +2315,26 @@ float RadioPowerNode::process(Radio1938& radio,
     power.gridVoltage = couplingCurrent * loadResistance;
     controlGridVolts = power.tubeBiasVolts + power.gridVoltage;
   }
-  float driverSupply = std::max(power.tubePlateSupplyVolts * supplyScale, 1.0f);
-  float driverPlateQuiescent = power.tubePlateDcVolts * supplyScale;
+  if (radio.calibration.enabled && controlGridVolts > 0.0f) {
+    radio.calibration.driverGridPositiveSamples++;
+  }
+  float driverPlateQuiescent =
+      std::max(power.tubeQuiescentPlateVolts * supplyScale, 1.0f);
   float driverScreenVolts =
       std::max(power.tubeScreenVolts * supplyScale, 1.0f);
   auto driverPlateCurrentForState = [&](float gridVolts, float plateVolts) {
     if (power.tubeTriodeConnected) {
       return deviceTriodePlateCurrent(
-          gridVolts, plateVolts, power.tubeBiasVolts, power.tubeCutoffVolts,
-          driverPlateQuiescent, power.tubePlateCurrentAmps,
+          gridVolts, plateVolts, power.tubeBiasVolts, power.tubeModelCutoffVolts,
+          driverPlateQuiescent, power.tubeQuiescentPlateCurrentAmps,
           power.tubeMutualConductanceSiemens, power.tubeMu,
           power.tubePlateKneeVolts, power.tubeGridSoftnessVolts);
     }
     return deviceTubePlateCurrent(
         gridVolts, plateVolts, driverScreenVolts, power.tubeBiasVolts,
-        power.tubeCutoffVolts, driverPlateQuiescent, driverScreenVolts,
-        power.tubePlateCurrentAmps, power.tubeMutualConductanceSiemens,
+        power.tubeModelCutoffVolts, driverPlateQuiescent, driverScreenVolts,
+        power.tubeQuiescentPlateCurrentAmps,
+        power.tubeMutualConductanceSiemens,
         power.tubePlateKneeVolts, power.tubeGridSoftnessVolts);
   };
   float driverQuiescentCurrent =
@@ -1993,85 +2435,99 @@ float RadioPowerNode::process(Radio1938& radio,
   float interstageSecondaryGuess = power.interstageTransformer.secondaryVoltage;
   float interstageLoadResistance = std::numeric_limits<float>::infinity();
   SolvedTransformerDrive interstageSolved{};
-  float interstagePrimaryMin = 1.0f - driverPlateQuiescent;
-  float interstagePrimaryMax = driverSupply - driverPlateQuiescent;
+  float interstageMaxSwing = 2.5f * std::max(driverPlateQuiescent, 1.0f);
   for (int i = 0; i < 2; ++i) {
-    interstageLoadResistance = differentialGridLoadResistance(
+    PushPullGridDriveResult interstageGridDrive = solvePushPullGridDrive(
         interstageSecondaryGuess, power.outputTubeBiasVolts,
         power.outputGridLeakResistanceOhms,
         power.outputGridCurrentResistanceOhms);
+    interstageLoadResistance = effectiveLoadResistanceFromDrive(
+        interstageSecondaryGuess, interstageGridDrive.effectiveSecondaryCurrent);
     interstageSolved = solvePrimaryVoltage(
         power.interstageTransformer,
         [&](float primaryVoltageGuess) {
           return driverCurrentForPrimaryVoltage(primaryVoltageGuess) -
                  driverQuiescentCurrent;
         },
-        interstageLoadResistance, 0.0f, interstagePrimaryMin,
-        interstagePrimaryMax);
+        interstageLoadResistance, 0.0f, -interstageMaxSwing,
+        interstageMaxSwing);
     interstageSecondaryGuess = interstageSolved.sample.secondaryVoltage;
   }
   auto interstageSample = power.interstageTransformer.process(
       interstageSolved.driveCurrent, interstageLoadResistance);
-  power.tubePlateVoltage = driverPlateQuiescent + interstageSample.primaryVoltage;
-  float gridDriveA = 0.5f * interstageSample.secondaryVoltage;
-  float gridDriveB = -gridDriveA;
-  float outputSupply =
-      std::max(power.outputTubePlateSupplyVolts * supplyScale, 1.0f);
-  float outputPlateQuiescent = power.outputTubePlateDcVolts * supplyScale;
-  float outputPrimaryLoadResistance = std::max(
-      2.0f * power.outputTubeMu /
-          std::max(power.outputTubeMutualConductanceSiemens, 1e-6f),
-      1.0f);
+  power.tubePlateVoltage =
+      driverPlateQuiescent + interstageSample.primaryVoltage;
+  PushPullGridDriveResult outputGridDrive = solvePushPullGridDrive(
+      interstageSample.secondaryVoltage, power.outputTubeBiasVolts,
+      power.outputGridLeakResistanceOhms, power.outputGridCurrentResistanceOhms);
+  power.outputGridAVolts = outputGridDrive.gridAVolts;
+  power.outputGridBVolts = outputGridDrive.gridBVolts;
+  if (radio.calibration.enabled &&
+      ((power.outputTubeBiasVolts + power.outputGridAVolts) > 0.0f ||
+       (power.outputTubeBiasVolts + power.outputGridBVolts) > 0.0f)) {
+    radio.calibration.outputGridPositiveSamples++;
+  }
+  float outputPlateQuiescent =
+      std::max(power.outputTubeQuiescentPlateVolts * supplyScale, 1.0f);
+  float outputMaxSwing = 2.5f * std::max(outputPlateQuiescent, 1.0f);
   auto outputSolved = solvePrimaryVoltage(
       power.outputTransformer,
       [&](float primaryVoltageGuess) {
         float plateA = outputPlateQuiescent - 0.5f * primaryVoltageGuess;
         float plateB = outputPlateQuiescent + 0.5f * primaryVoltageGuess;
         float plateCurrentA = deviceTriodePlateCurrent(
-            power.outputTubeBiasVolts + gridDriveA, plateA,
-            power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
-            outputPlateQuiescent, power.outputTubePlateCurrentAmps,
+            power.outputTubeBiasVolts + power.outputGridAVolts, plateA,
+            power.outputTubeBiasVolts, power.outputTubeModelCutoffVolts,
+            outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
             power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
             power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
         float plateCurrentB = deviceTriodePlateCurrent(
-            power.outputTubeBiasVolts + gridDriveB, plateB,
-            power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
-            outputPlateQuiescent, power.outputTubePlateCurrentAmps,
+            power.outputTubeBiasVolts + power.outputGridBVolts, plateB,
+            power.outputTubeBiasVolts, power.outputTubeModelCutoffVolts,
+            outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
             power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
             power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
         return 0.5f * (plateCurrentA - plateCurrentB);
       },
-      power.outputLoadResistanceOhms, outputPrimaryLoadResistance,
-      2.0f * (1.0f - outputPlateQuiescent),
-      2.0f * (outputSupply - outputPlateQuiescent));
+      power.outputLoadResistanceOhms, 0.0f, -outputMaxSwing, outputMaxSwing);
   auto outputSample = power.outputTransformer.process(
-      outputSolved.driveCurrent, power.outputLoadResistanceOhms,
-      outputPrimaryLoadResistance);
+      outputSolved.driveCurrent, power.outputLoadResistanceOhms, 0.0f);
   float actualDriverCurrent =
       driverCurrentForPrimaryVoltage(interstageSample.primaryVoltage);
   float outputPlateA = outputPlateQuiescent - 0.5f * outputSample.primaryVoltage;
   float outputPlateB = outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
   float actualPlateCurrentA = deviceTriodePlateCurrent(
-      power.outputTubeBiasVolts + gridDriveA, outputPlateA,
-      power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
-      outputPlateQuiescent, power.outputTubePlateCurrentAmps,
+      power.outputTubeBiasVolts + power.outputGridAVolts, outputPlateA,
+      power.outputTubeBiasVolts, power.outputTubeModelCutoffVolts,
+      outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
       power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
       power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
   float actualPlateCurrentB = deviceTriodePlateCurrent(
-      power.outputTubeBiasVolts + gridDriveB, outputPlateB,
-      power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
-      outputPlateQuiescent, power.outputTubePlateCurrentAmps,
+      power.outputTubeBiasVolts + power.outputGridBVolts, outputPlateB,
+      power.outputTubeBiasVolts, power.outputTubeModelCutoffVolts,
+      outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
       power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
       power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
   y = outputSample.secondaryVoltage;
-  float nominalSpeakerPeakVolts = std::sqrt(
-      2.0f * power.nominalOutputPowerWatts * power.outputLoadResistanceOhms);
-  y /= std::max(nominalSpeakerPeakVolts, 1e-3f);
   if (power.postLpHz > 0.0f) {
     y = power.postLpf.process(y);
   }
+  if (radio.calibration.enabled) {
+    radio.calibration.maxDriverPlateCurrentAmps = std::max(
+        radio.calibration.maxDriverPlateCurrentAmps, actualDriverCurrent);
+    radio.calibration.maxOutputPlateCurrentAAmps = std::max(
+        radio.calibration.maxOutputPlateCurrentAAmps, actualPlateCurrentA);
+    radio.calibration.maxOutputPlateCurrentBAmps = std::max(
+        radio.calibration.maxOutputPlateCurrentBAmps, actualPlateCurrentB);
+    radio.calibration.maxSpeakerSecondaryVolts =
+        std::max(radio.calibration.maxSpeakerSecondaryVolts, std::fabs(y));
+    radio.calibration.maxSpeakerReferenceRatio = std::max(
+        radio.calibration.maxSpeakerReferenceRatio,
+        std::fabs(y) /
+            std::max(radio.output.digitalReferenceSpeakerVoltsPeak, 1e-3f));
+  }
   float quiescentSupplyCurrent =
-      driverQuiescentCurrent + 2.0f * power.outputTubePlateCurrentAmps;
+      driverQuiescentCurrent + 2.0f * power.outputTubeQuiescentPlateCurrentAmps;
   float actualSupplyCurrent =
       actualDriverCurrent + actualPlateCurrentA + actualPlateCurrentB;
   float load = std::max(
@@ -2615,9 +3071,10 @@ static void processRadioFrames(Radio1938& radio,
     ctx.block = &block;
     runSampleControl(radio, ctx, radio.graph.sampleControlSteps);
     float x = inputSample(frame);
-    float y = runProgramPathFromIndex(radio, x, ctx, radio.graph.programPathSteps,
-                                      programStartIndex);
-    outputSample(frame, y);
+    float yPhysical = runProgramPathFromIndex(
+        radio, x, ctx, radio.graph.programPathSteps, programStartIndex);
+    float yDigital = scalePhysicalSpeakerVoltsToDigital(radio, yPhysical);
+    outputSample(frame, yDigital);
   }
 
   if (radio.calibration.enabled) {
@@ -2741,10 +3198,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // first-audio tube are now anchored to the 37-116 chassis rather than 116X.
   radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 1000000.0f;
-  // Render/preview needs a definite physical knob setting. A strong local
-  // station with the control fully open still overdrives the full 6J5/6F6G/6B4G
-  // chain; a modest clockwise setting is a more representative operating point.
-  radio.receiverCircuit.volumeControlPosition = 0.36f;
+  radio.receiverCircuit.volumeControlPosition = 0.5f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 490000.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.015e-6f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
@@ -2757,7 +3211,6 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.receiverCircuit.tubePlateDcVolts = 90.0f;
   radio.receiverCircuit.tubeScreenVolts = 0.0f;
   radio.receiverCircuit.tubeBiasVolts = -8.0f;
-  radio.receiverCircuit.tubeCutoffVolts = -8.0f;
   radio.receiverCircuit.tubePlateCurrentAmps = 0.009f;
   radio.receiverCircuit.tubeMutualConductanceSiemens = 0.0026f;
   radio.receiverCircuit.tubeMu = 20.0f;
@@ -2794,12 +3247,10 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // for single-ended class-A triode operation.
   radio.power.gridCouplingCapFarads = 0.05e-6f;
   radio.power.gridLeakResistanceOhms = 100000.0f;
-  radio.power.driverSourceResistanceOhms = 10000.0f;
   radio.power.tubePlateSupplyVolts = 250.0f;
   radio.power.tubePlateDcVolts = 230.0f;
   radio.power.tubeScreenVolts = 250.0f;
   radio.power.tubeBiasVolts = -20.0f;
-  radio.power.tubeCutoffVolts = -20.0f;
   radio.power.tubePlateCurrentAmps = 0.031f;
   radio.power.tubeMutualConductanceSiemens = 0.0027f;
   radio.power.tubeMu = 7.0f;
@@ -2825,14 +3276,10 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.outputGridCurrentResistanceOhms = 1200.0f;
   // The 37-116 uses push-pull 6B4G output tubes. The 6B4G is the octal form of
   // the 2A3 family, so the reduced-order triode law keeps the same mu/gm class
-  // and 37-116 speaker/load targets. The effective control-grid bias is kept a
-  // little warmer than the textbook fixed-bias number so this simplified
-  // driver/transformer/output solve does not collapse to near-silence at
-  // ordinary preview drive levels.
+  // and the 37-116's plate-to-plate load target.
   radio.power.outputTubePlateSupplyVolts = 325.0f;
   radio.power.outputTubePlateDcVolts = 300.0f;
   radio.power.outputTubeBiasVolts = -39.0f;
-  radio.power.outputTubeCutoffVolts = 0.0f;
   radio.power.outputTubePlateCurrentAmps = 0.040f;
   radio.power.outputTubeMutualConductanceSiemens = 0.00525f;
   radio.power.outputTubeMu = 4.2f;
@@ -2852,6 +3299,9 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.outputTransformerIntegrationSubsteps = 2;
   radio.power.outputLoadResistanceOhms = 3.9f;
   radio.power.nominalOutputPowerWatts = 15.0f;
+  radio.output.digitalReferenceSpeakerVoltsPeak = std::sqrt(
+      2.0f * radio.power.nominalOutputPowerWatts *
+      radio.power.outputLoadResistanceOhms);
 }
 
 static void applySetIdentity(Radio1938& radio) {
@@ -2861,8 +3311,12 @@ static void applySetIdentity(Radio1938& radio) {
 static void refreshIdentityDependentStages(Radio1938& radio) {
   applySetIdentity(radio);
   RadioInitContext initCtx{};
+  RadioMixerNode::init(radio, initCtx);
+  RadioMixerNode::reset(radio);
   RadioReceiverCircuitNode::init(radio, initCtx);
   RadioReceiverCircuitNode::reset(radio);
+  RadioPowerNode::init(radio, initCtx);
+  RadioPowerNode::reset(radio);
   if (radio.calibration.enabled) {
     radio.resetCalibration();
   }

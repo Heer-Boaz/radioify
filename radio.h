@@ -130,6 +130,24 @@ struct CurrentDrivenTransformerSample {
   float secondaryCurrent = 0.0f;
 };
 
+struct TriodeOperatingPoint {
+  float plateVolts = 0.0f;
+  float plateCurrentAmps = 0.0f;
+  float rpOhms = 0.0f;
+};
+
+struct PentodeOperatingPoint {
+  float plateVolts = 0.0f;
+  float plateCurrentAmps = 0.0f;
+  float rpOhms = 0.0f;
+};
+
+struct PushPullGridDriveResult {
+  float gridAVolts = 0.0f;
+  float gridBVolts = 0.0f;
+  float effectiveSecondaryCurrent = 0.0f;
+};
+
 struct CurrentDrivenTransformer {
   float fs = 0.0f;
   float primaryLeakageInductanceHenries = 0.0f;
@@ -769,6 +787,8 @@ struct RadioOutputClipNode {
     uint64_t sampleCount = 0;
     double rmsIn = 0.0;
     double rmsOut = 0.0;
+    double meanIn = 0.0;
+    double meanOut = 0.0;
     float peakIn = 0.0f;
     float peakOut = 0.0f;
     float crestIn = 0.0f;
@@ -778,6 +798,8 @@ struct RadioOutputClipNode {
     float bandwidth6dBHz = 0.0f;
     uint64_t clipCountIn = 0;
     uint64_t clipCountOut = 0;
+    double inSum = 0.0;
+    double outSum = 0.0;
     double inSumSq = 0.0;
     double outSumSq = 0.0;
     std::array<double, kRadioCalibrationBandCount> bandEnergy{};
@@ -807,6 +829,23 @@ struct RadioOutputClipNode {
     float limiterMaxGainReductionDb = 0.0f;
     double limiterGainReductionSum = 0.0;
     double limiterGainReductionDbSum = 0.0;
+    uint64_t validationSampleCount = 0;
+    uint64_t driverGridPositiveSamples = 0;
+    uint64_t outputGridPositiveSamples = 0;
+    float driverGridPositiveFraction = 0.0f;
+    float outputGridPositiveFraction = 0.0f;
+    float maxMixerPlateCurrentAmps = 0.0f;
+    float maxReceiverPlateCurrentAmps = 0.0f;
+    float maxDriverPlateCurrentAmps = 0.0f;
+    float maxOutputPlateCurrentAAmps = 0.0f;
+    float maxOutputPlateCurrentBAmps = 0.0f;
+    float maxSpeakerSecondaryVolts = 0.0f;
+    float maxSpeakerReferenceRatio = 0.0f;
+    bool validationFailed = false;
+    bool validationOutputGridPositive = false;
+    bool validationSpeakerOverReference = false;
+    bool validationDcShift = false;
+    bool validationDigitalClip = false;
     std::array<CalibrationStageMetrics, kStageCount> stages{};
 
     void resetMeasurementState();
@@ -927,14 +966,19 @@ struct RadioOutputClipNode {
     float avcGridDriveVolts = 0.0f;
     float plateSupplyVolts = 0.0f;
     float plateDcVolts = 0.0f;
+    float plateQuiescentVolts = 0.0f;
     float screenVolts = 0.0f;
     float biasVolts = 0.0f;
     float cutoffVolts = 0.0f;
+    float modelCutoffVolts = 0.0f;
     float plateCurrentAmps = 0.0f;
+    float plateQuiescentCurrentAmps = 0.0f;
     float mutualConductanceSiemens = 0.0f;
     float acLoadResistanceOhms = 0.0f;
     float plateKneeVolts = 0.0f;
     float gridSoftnessVolts = 0.0f;
+    float plateResistanceOhms = 0.0f;
+    float operatingPointToleranceVolts = 35.0f;
   } mixer;
 
   struct IFStripNodeState {
@@ -985,16 +1029,20 @@ struct RadioOutputClipNode {
     float gridVoltage = 0.0f;
     float tubePlateSupplyVolts = 0.0f;
     float tubePlateDcVolts = 0.0f;
+    float tubeQuiescentPlateVolts = 0.0f;
     float tubeScreenVolts = 0.0f;
     float tubeBiasVolts = 0.0f;
-    float tubeCutoffVolts = 0.0f;
     float tubePlateCurrentAmps = 0.0f;
+    float tubeQuiescentPlateCurrentAmps = 0.0f;
     float tubeMutualConductanceSiemens = 0.0f;
     float tubeMu = 0.0f;
     bool tubeTriodeConnected = false;
     float tubeLoadResistanceOhms = 0.0f;
     float tubePlateKneeVolts = 0.0f;
     float tubeGridSoftnessVolts = 0.0f;
+    float tubeModelCutoffVolts = 0.0f;
+    float tubePlateResistanceOhms = 0.0f;
+    float operatingPointToleranceVolts = 35.0f;
     float tubePlateVoltage = 0.0f;
   } receiverCircuit;
 
@@ -1037,10 +1085,11 @@ struct RadioOutputClipNode {
     float driverSourceResistanceOhms = 0.0f;
     float tubePlateSupplyVolts = 0.0f;
     float tubePlateDcVolts = 0.0f;
+    float tubeQuiescentPlateVolts = 0.0f;
     float tubeScreenVolts = 0.0f;
     float tubeBiasVolts = 0.0f;
-    float tubeCutoffVolts = 0.0f;
     float tubePlateCurrentAmps = 0.0f;
+    float tubeQuiescentPlateCurrentAmps = 0.0f;
     float tubeMutualConductanceSiemens = 0.0f;
     float tubeMu = 0.0f;
     bool tubeTriodeConnected = false;
@@ -1048,6 +1097,9 @@ struct RadioOutputClipNode {
     float tubePlateKneeVolts = 0.0f;
     float tubeGridSoftnessVolts = 0.0f;
     float tubeGridCurrentResistanceOhms = 0.0f;
+    float tubeModelCutoffVolts = 0.0f;
+    float tubePlateResistanceOhms = 0.0f;
+    float operatingPointToleranceVolts = 35.0f;
     float tubePlateVoltage = 0.0f;
     float interstagePrimaryLeakageInductanceHenries = 0.0f;
     float interstageMagnetizingInductanceHenries = 0.0f;
@@ -1063,14 +1115,20 @@ struct RadioOutputClipNode {
     float outputGridCurrentResistanceOhms = 0.0f;
     float outputTubePlateSupplyVolts = 0.0f;
     float outputTubePlateDcVolts = 0.0f;
+    float outputTubeQuiescentPlateVolts = 0.0f;
     float outputTubeBiasVolts = 0.0f;
-    float outputTubeCutoffVolts = 0.0f;
     float outputTubePlateCurrentAmps = 0.0f;
+    float outputTubeQuiescentPlateCurrentAmps = 0.0f;
     float outputTubeMutualConductanceSiemens = 0.0f;
     float outputTubeMu = 0.0f;
     float outputTubePlateToPlateLoadOhms = 0.0f;
     float outputTubePlateKneeVolts = 0.0f;
     float outputTubeGridSoftnessVolts = 0.0f;
+    float outputTubeModelCutoffVolts = 0.0f;
+    float outputTubePlateResistanceOhms = 0.0f;
+    float outputGridAVolts = 0.0f;
+    float outputGridBVolts = 0.0f;
+    float outputOperatingPointToleranceVolts = 35.0f;
     float outputTransformerPrimaryLeakageInductanceHenries = 0.0f;
     float outputTransformerMagnetizingInductanceHenries = 0.0f;
     float outputTransformerTurnsRatioPrimaryToSecondary = 0.0f;
@@ -1187,6 +1245,7 @@ struct RadioOutputClipNode {
   } finalLimiter;
 
   struct OutputNodeState {
+    float digitalReferenceSpeakerVoltsPeak = 1.0f;
     float clipOsPrev = 0.0f;
     Biquad clipOsLpIn;
     Biquad clipOsLpOut;

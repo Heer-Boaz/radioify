@@ -453,7 +453,8 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
 }
 
 static void renderToFile(const Options& o, const Radio1938& radio1938Template,
-                         bool useRadio1938) {
+                         bool useRadio1938,
+                         Radio1938* renderedRadioOut = nullptr) {
   const uint32_t sampleRate = 48000;
   const uint32_t channels = o.mono ? 1 : 2;
   constexpr uint32_t kRadioProcessChannels = 1u;
@@ -610,7 +611,9 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
       std::cout << "  " << Radio1938::stageName(id)
                 << " rms_in=" << stage.rmsIn
                 << " rms_out=" << stage.rmsOut
+                << " mean_out=" << stage.meanOut
                 << " peak_out=" << stage.peakOut
+                << " crest_out=" << stage.crestOut
                 << " centroid_hz=" << stage.spectralCentroidHz
                 << " bw3_hz=" << stage.bandwidth3dBHz
                 << " bw6_hz=" << stage.bandwidth6dBHz
@@ -626,8 +629,41 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
               << " max_gr_db="
               << radio1938->calibration.limiterMaxGainReductionDb
               << "\n";
+    std::cout << "  driver_grid_positive="
+              << radio1938->calibration.driverGridPositiveFraction
+              << " output_grid_positive="
+              << radio1938->calibration.outputGridPositiveFraction
+              << " max_mixer_ip=" << radio1938->calibration.maxMixerPlateCurrentAmps
+              << " max_receiver_ip="
+              << radio1938->calibration.maxReceiverPlateCurrentAmps
+              << " max_driver_ip="
+              << radio1938->calibration.maxDriverPlateCurrentAmps
+              << " max_output_ip_a="
+              << radio1938->calibration.maxOutputPlateCurrentAAmps
+              << " max_output_ip_b="
+              << radio1938->calibration.maxOutputPlateCurrentBAmps
+              << " max_speaker_v="
+              << radio1938->calibration.maxSpeakerSecondaryVolts
+              << " max_speaker_ref_ratio="
+              << radio1938->calibration.maxSpeakerReferenceRatio
+              << "\n";
+    std::cout << "  validation failed="
+              << (radio1938->calibration.validationFailed ? 1 : 0)
+              << " output_grid_over="
+              << (radio1938->calibration.validationOutputGridPositive ? 1 : 0)
+              << " speaker_over="
+              << (radio1938->calibration.validationSpeakerOverReference ? 1 : 0)
+              << " dc_shift="
+              << (radio1938->calibration.validationDcShift ? 1 : 0)
+              << " digital_clip="
+              << (radio1938->calibration.validationDigitalClip ? 1 : 0)
+              << "\n";
     std::cout.flags(oldFlags);
     std::cout.precision(oldPrecision);
+  }
+
+  if (renderedRadioOut) {
+    *renderedRadioOut = *radio1938;
   }
 }
 
@@ -659,8 +695,14 @@ static int runRenderRadioCli(const Options& o) {
   logLine(std::string("  Report: ") +
           (renderOpt.calibrationReport ? "calibration" : "off"));
   logLine("Rendering output...");
-  renderToFile(renderOpt, radio1938Template, true);
+  Radio1938 renderedRadio;
+  renderToFile(renderOpt, radio1938Template, true, &renderedRadio);
   logLine("Done.");
+  if (renderOpt.calibrationReport && renderedRadio.calibration.enabled &&
+      renderedRadio.calibration.validationFailed) {
+    logLine("Validation failed.");
+    return 2;
+  }
   return 0;
 }
 
