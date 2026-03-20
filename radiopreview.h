@@ -14,7 +14,6 @@ struct PcmToIfPreviewModulator {
   Biquad programHp;
   Biquad programLp1;
   Biquad programLp2;
-  std::vector<float> iqScratch;
   std::vector<float> monoScratch;
 
   void init(const Radio1938& radio, float newSampleRate, float bwHz);

@@ -48,24 +48,21 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
                                            float makeupGain) {
   if (!samples || frames == 0 || channels == 0) return;
 
-  auto nextEnvelopeSample = [&](float x) {
+  auto nextProgramSample = [&](float x) {
     float program = programHp.process(x);
     program = programLp1.process(program);
     program = programLp2.process(program);
-    float mod = modulationIndex * program;
-    mod = clampfLocal(mod, -modulationLimit, modulationLimit);
-    return carrierAmplitude * (1.0f + mod);
+    return program;
   };
 
-  iqScratch.resize(static_cast<size_t>(frames) * 2u);
   monoScratch.resize(frames);
 
   if (channels == 1u) {
     for (uint32_t frame = 0; frame < frames; ++frame) {
-      iqScratch[static_cast<size_t>(frame) * 2u] = nextEnvelopeSample(samples[frame]);
-      iqScratch[static_cast<size_t>(frame) * 2u + 1u] = 0.0f;
+      monoScratch[frame] = nextProgramSample(samples[frame]);
     }
-    radio.processIqBaseband(iqScratch.data(), monoScratch.data(), frames);
+    radio.processAmAudio(monoScratch.data(), monoScratch.data(), frames,
+                         carrierAmplitude, modulationIndex, modulationLimit);
     applyMonoGain(monoScratch.data(), frames, makeupGain);
     for (uint32_t frame = 0; frame < frames; ++frame) {
       samples[frame] = monoScratch[frame];
@@ -80,11 +77,11 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
     for (uint32_t ch = 0; ch < channels; ++ch) {
       sum += samples[base + ch];
     }
-    iqScratch[static_cast<size_t>(frame) * 2u] = nextEnvelopeSample(sum * foldGain);
-    iqScratch[static_cast<size_t>(frame) * 2u + 1u] = 0.0f;
+    monoScratch[frame] = nextProgramSample(sum * foldGain);
   }
 
-  radio.processIqBaseband(iqScratch.data(), monoScratch.data(), frames);
+  radio.processAmAudio(monoScratch.data(), monoScratch.data(), frames,
+                       carrierAmplitude, modulationIndex, modulationLimit);
   applyMonoGain(monoScratch.data(), frames, makeupGain);
 
   for (uint32_t frame = 0; frame < frames; ++frame) {

@@ -1065,6 +1065,7 @@ void RadioIFStripNode::reset(Radio1938& radio) {
   auto& ifStrip = radio.ifStrip;
   ifStrip.rfPhase = 0.0f;
   ifStrip.loPhase = 0.0f;
+  ifStrip.prevSourceMode = SourceInputMode::ComplexEnvelope;
   ifStrip.prevSourceI = 0.0f;
   ifStrip.prevSourceQ = 0.0f;
   ifStrip.bp1.reset();
@@ -1111,8 +1112,8 @@ void RadioDemodNode::init(Radio1938& radio, RadioInitContext& initCtx) {
 
 void RadioDemodNode::reset(Radio1938& radio) { radio.demod.am.reset(); }
 
-static float processSuperhetEnvelopeFrame(Radio1938& radio,
-                                          const RadioSampleContext& ctx) {
+static float processSuperhetSourceFrame(Radio1938& radio,
+                                        const RadioSampleContext& ctx) {
   auto& frontEnd = radio.frontEnd;
   auto& ifStrip = radio.ifStrip;
   auto& demod = radio.demod.am;
@@ -1121,10 +1122,15 @@ static float processSuperhetEnvelopeFrame(Radio1938& radio,
     return radio.sourceFrame.i;
   }
 
+  SourceInputMode mode = radio.sourceFrame.mode;
   float currI = radio.sourceFrame.i;
   float currQ = radio.sourceFrame.q;
   float prevI = ifStrip.prevSourceI;
   float prevQ = ifStrip.prevSourceQ;
+  if (mode != ifStrip.prevSourceMode) {
+    prevI = currI;
+    prevQ = currQ;
+  }
   float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
   float rfGain =
       frontEnd.rfGain * std::max(0.35f, 1.0f - frontEnd.avcGainDepth * avcT);
@@ -1141,11 +1147,25 @@ static float processSuperhetEnvelopeFrame(Radio1938& radio,
   for (int step = 0; step < ifStrip.oversampleFactor; ++step) {
     float t =
         static_cast<float>(step + 1) / static_cast<float>(ifStrip.oversampleFactor);
-    float envI = prevI + (currI - prevI) * t;
-    float envQ = prevQ + (currQ - prevQ) * t;
-    float rf =
-        rfGain * (envI * std::cos(ifStrip.rfPhase) - envQ * std::sin(ifStrip.rfPhase));
-    ifStrip.rfPhase = wrapPhase(ifStrip.rfPhase + rfStep);
+    float rf = 0.0f;
+    if (mode == SourceInputMode::ComplexEnvelope) {
+      float envI = prevI + (currI - prevI) * t;
+      float envQ = prevQ + (currQ - prevQ) * t;
+      rf = rfGain *
+           (envI * std::cos(ifStrip.rfPhase) - envQ * std::sin(ifStrip.rfPhase));
+      ifStrip.rfPhase = wrapPhase(ifStrip.rfPhase + rfStep);
+    } else if (mode == SourceInputMode::AmAudio) {
+      float program = prevI + (currI - prevI) * t;
+      float modLimit = std::max(std::fabs(radio.sourceFrame.modulationLimit), 0.0f);
+      float mod = clampf(radio.sourceFrame.modulationIndex * program,
+                         -modLimit, modLimit);
+      float envelope =
+          std::max(radio.sourceFrame.carrierAmplitude, 0.0f) * (1.0f + mod);
+      rf = rfGain * envelope * std::cos(ifStrip.rfPhase);
+      ifStrip.rfPhase = wrapPhase(ifStrip.rfPhase + rfStep);
+    } else {
+      rf = rfGain * (prevI + (currI - prevI) * t);
+    }
     float lo = std::cos(ifStrip.loPhase);
     ifStrip.loPhase = wrapPhase(ifStrip.loPhase + loStep);
     float ifSample = 2.0f * rf * lo * ifGain;
@@ -1154,6 +1174,7 @@ static float processSuperhetEnvelopeFrame(Radio1938& radio,
     audioAcc += demod.process(AMDetectorSampleInput{ifSample, noiseAmp});
   }
 
+  ifStrip.prevSourceMode = mode;
   ifStrip.prevSourceI = currI;
   ifStrip.prevSourceQ = currQ;
   return audioAcc / static_cast<float>(ifStrip.oversampleFactor);
@@ -1164,7 +1185,7 @@ float RadioDemodNode::process(Radio1938& radio,
                               const RadioSampleContext& ctx) {
   auto& demod = radio.demod;
   (void)y;
-  y = processSuperhetEnvelopeFrame(radio, ctx);
+  y = processSuperhetSourceFrame(radio, ctx);
   radio.controlSense.controlVoltageSense =
       clampf(demod.am.avcEnv / std::max(demod.am.controlVoltageRef, 1e-6f),
              0.0f, 1.25f);
@@ -2343,12 +2364,30 @@ void Radio1938::processIfReal(float* samples, uint32_t frames) {
       *this, frames, kMixerProgramStartIndex,
       [&](uint32_t frame) {
         float x = sampleInterleavedToMono(samples, frame, channels);
-        sourceFrame.setReal(x);
+        sourceFrame.setRealRf(x);
         return x;
       },
       [&](uint32_t frame, float y) {
         writeMonoToInterleaved(samples, frame, channels, y);
       });
+}
+
+void Radio1938::processAmAudio(const float* audioSamples,
+                               float* outSamples,
+                               uint32_t frames,
+                               float carrierAmplitude,
+                               float modulationIndex,
+                               float modulationLimit) {
+  if (!audioSamples || !outSamples || frames == 0) return;
+  processRadioFrames(
+      *this, frames, kMixerProgramStartIndex,
+      [&](uint32_t frame) {
+        float x = audioSamples[frame];
+        sourceFrame.setAmAudio(x, carrierAmplitude, modulationIndex,
+                               modulationLimit);
+        return x;
+      },
+      [&](uint32_t frame, float y) { outSamples[frame] = y; });
 }
 
 void Radio1938::processIqBaseband(const float* iqInterleaved,
@@ -2361,7 +2400,7 @@ void Radio1938::processIqBaseband(const float* iqInterleaved,
         size_t base = static_cast<size_t>(frame) * 2u;
         float i = iqInterleaved[base];
         float q = iqInterleaved[base + 1u];
-        sourceFrame.setComplex(i, q);
+        sourceFrame.setComplexEnvelope(i, q);
         return i;
       },
       [&](uint32_t frame, float y) {

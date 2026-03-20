@@ -264,6 +264,11 @@ struct SpeakerSim {
 };
 
 struct Radio1938;
+enum class SourceInputMode : uint8_t {
+  ComplexEnvelope,
+  RealRf,
+  AmAudio,
+};
 
 enum class StageId : uint8_t {
   Tuning,
@@ -773,22 +778,44 @@ struct Radio1938 {
   } iqInput;
 
   struct SourceFrameState {
+    SourceInputMode mode = SourceInputMode::ComplexEnvelope;
     float i = 0.0f;
     float q = 0.0f;
+    float carrierAmplitude = 1.0f;
+    float modulationIndex = 1.0f;
+    float modulationLimit = 1.0f;
 
     void resetRuntime() {
+      mode = SourceInputMode::ComplexEnvelope;
       i = 0.0f;
       q = 0.0f;
+      carrierAmplitude = 1.0f;
+      modulationIndex = 1.0f;
+      modulationLimit = 1.0f;
     }
 
-    void setReal(float x) {
+    void setRealRf(float x) {
+      mode = SourceInputMode::RealRf;
       i = x;
       q = 0.0f;
     }
 
-    void setComplex(float inI, float inQ) {
+    void setComplexEnvelope(float inI, float inQ) {
+      mode = SourceInputMode::ComplexEnvelope;
       i = inI;
       q = inQ;
+    }
+
+    void setAmAudio(float x,
+                    float newCarrierAmplitude,
+                    float newModulationIndex,
+                    float newModulationLimit) {
+      mode = SourceInputMode::AmAudio;
+      i = x;
+      q = 0.0f;
+      carrierAmplitude = newCarrierAmplitude;
+      modulationIndex = newModulationIndex;
+      modulationLimit = newModulationLimit;
     }
   } sourceFrame;
 
@@ -859,6 +886,7 @@ struct Radio1938 {
     float loFrequencyHz = 0.0f;
     float rfPhase = 0.0f;
     float loPhase = 0.0f;
+    SourceInputMode prevSourceMode = SourceInputMode::ComplexEnvelope;
     float prevSourceI = 0.0f;
     float prevSourceQ = 0.0f;
     Biquad bp1;
@@ -1053,6 +1081,12 @@ struct Radio1938 {
   void init(int ch, float sr, float bw, float noise);
   void reset();
   void processIfReal(float* samples, uint32_t frames);
+  void processAmAudio(const float* audioSamples,
+                      float* outSamples,
+                      uint32_t frames,
+                      float carrierAmplitude,
+                      float modulationIndex,
+                      float modulationLimit);
   void processIqBaseband(const float* iqInterleaved,
                          float* outSamples,
                          uint32_t frames);
