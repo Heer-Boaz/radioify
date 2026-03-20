@@ -227,44 +227,32 @@ struct AMDetector {
   Biquad afcLowSense;
   Biquad afcHighSense;
   Biquad afcErrorLp;
-  Biquad audioHp;
-  Biquad audioLp1;
-  Biquad audioEnvelopeLp;
-  Biquad avcSenseLp;
 
   float audioRect = 0.0f;
   float avcRect = 0.0f;
   float audioEnv = 0.0f;
   float avcEnv = 0.0f;
-  float dcEnv = 0.0f;
   float afcError = 0.0f;
 
   float audioDiodeDrop = 0.0f;
   float avcDiodeDrop = 0.0f;
   float audioJunctionSlopeVolts = 0.0f;
   float avcJunctionSlopeVolts = 0.0f;
-  float detectorChargeResNorm = 0.0f;
-  float audioDischargeMs = 0.0f;
-  float avcChargeMs = 0.0f;
-  float avcReleaseMs = 0.0f;
+  float detectorPlateCouplingCapFarads = 0.0f;
+  float audioChargeResistanceOhms = 0.0f;
+  float audioDischargeResistanceOhms = 0.0f;
+  float avcChargeResistanceOhms = 0.0f;
+  float avcDischargeResistanceOhms = 0.0f;
+  float avcFilterCapFarads = 0.0f;
 
   float audioChargeCoeff = 0.0f;
   float audioReleaseCoeff = 0.0f;
   float avcChargeCoeff = 0.0f;
   float avcReleaseCoeff = 0.0f;
-  float dcCoeff = 0.0f;
-
-  float detectorGain = 0.0f;
   float controlVoltageRef = 0.0f;
 
-  float dcMs = 0.0f;
   float senseLowHz = 0.0f;
   float senseHighHz = 0.0f;
-  float audioHpHz = 0.0f;
-  float detLpScale = 0.0f;
-  float detLpMinHz = 0.0f;
-  float audioEnvelopeLpHz = 0.0f;
-  float avcSenseLpHz = 0.0f;
   float afcSenseLpHz = 0.0f;
 
   void init(float newFs, float newBw, float newTuneHz = 0.0f);
@@ -886,11 +874,19 @@ struct Radio1938 {
   } frontEnd;
 
   struct MixerNodeState {
-    float conversionGain = 0.0f;
-    float tuneLossDepth = 0.0f;
-    float loFeedthrough = 0.0f;
-    float drive = 0.0f;
-    float bias = 0.0f;
+    float rfGridDriveVolts = 0.0f;
+    float loGridDriveVolts = 0.0f;
+    float avcGridDriveVolts = 0.0f;
+    float plateSupplyVolts = 0.0f;
+    float plateDcVolts = 0.0f;
+    float screenVolts = 0.0f;
+    float biasVolts = 0.0f;
+    float cutoffVolts = 0.0f;
+    float plateCurrentAmps = 0.0f;
+    float mutualConductanceSiemens = 0.0f;
+    float acLoadResistanceOhms = 0.0f;
+    float plateKneeVolts = 0.0f;
+    float gridSoftnessVolts = 0.0f;
   } mixer;
 
   struct IFStripNodeState {
@@ -929,37 +925,24 @@ struct Radio1938 {
 
   struct ReceiverCircuitNodeState {
     bool enabled = false;
-    float couplingHpHz = 0.0f;
-    float voltageGain = 1.0f;
-    float couplingCapTolerance = 0.0f;
-    float gridLeakTolerance = 0.0f;
-    float interstagePeakHz = 0.0f;
-    float plateLoadTolerance = 0.0f;
-    float interstagePeakQ = 0.0f;
-    float interstagePeakGainDb = 0.0f;
-    float transformerLpHz = 0.0f;
-    float toneCapTolerance = 0.0f;
-    float transformerTolerance = 0.0f;
-    float presenceDipHz = 0.0f;
-    float presenceDipQ = 0.0f;
-    float presenceDipGainDb = 0.0f;
-    float stageInputRef = 0.0f;
-    float driveBase = 0.0f;
-    float asymBiasBase = 0.0f;
-    float controlVoltageGainDepth = 0.0f;
-    float supplySagGainDepth = 0.0f;
-    float supplySagDriveDepth = 0.0f;
-    float gridConductionStart = 0.0f;
-    float gridConductionDepth = 0.0f;
-    float stageEnv = 0.0f;
-    float stageAtk = 0.0f;
-    float stageRel = 0.0f;
-    Biquad couplingHp;
-    Biquad interstagePeak;
-    Biquad presenceDip;
-    Biquad transformerLp;
-    Biquad postTransformerLp;
-    float postTransformerLpHz = 0.0f;
+    float volumeControlResistanceOhms = 0.0f;
+    float volumeControlTapResistanceOhms = 0.0f;
+    float volumeControlPosition = 1.0f;
+    float couplingCapFarads = 0.0f;
+    float gridLeakResistanceOhms = 0.0f;
+    float couplingCapVoltage = 0.0f;
+    float gridVoltage = 0.0f;
+    float tubePlateSupplyVolts = 0.0f;
+    float tubePlateDcVolts = 0.0f;
+    float tubeScreenVolts = 0.0f;
+    float tubeBiasVolts = 0.0f;
+    float tubeCutoffVolts = 0.0f;
+    float tubePlateCurrentAmps = 0.0f;
+    float tubeMutualConductanceSiemens = 0.0f;
+    float tubeLoadResistanceOhms = 0.0f;
+    float tubePlateKneeVolts = 0.0f;
+    float tubeGridSoftnessVolts = 0.0f;
+    float tubePlateVoltage = 0.0f;
   } receiverCircuit;
 
   struct ToneNodeState {
@@ -994,6 +977,24 @@ struct Radio1938 {
     float supplyDriveDepth = 0.0f;
     float supplyBiasDepth = 0.0f;
     float postLpHz = 0.0f;
+    float gridCouplingCapFarads = 0.0f;
+    float gridLeakResistanceOhms = 0.0f;
+    float gridCouplingCapVoltage = 0.0f;
+    float gridVoltage = 0.0f;
+    float driverSourceResistanceOhms = 0.0f;
+    float tubePlateSupplyVolts = 0.0f;
+    float tubePlateDcVolts = 0.0f;
+    float tubeScreenVolts = 0.0f;
+    float tubeBiasVolts = 0.0f;
+    float tubeCutoffVolts = 0.0f;
+    float tubePlateCurrentAmps = 0.0f;
+    float tubeMutualConductanceSiemens = 0.0f;
+    float tubeAcLoadResistanceOhms = 0.0f;
+    float tubePlateKneeVolts = 0.0f;
+    float tubeGridSoftnessVolts = 0.0f;
+    float tubeGridCurrentResistanceOhms = 0.0f;
+    float outputLoadResistanceOhms = 0.0f;
+    float nominalOutputPowerWatts = 0.0f;
     Biquad postLpf;
     Biquad satOsLpIn;
     Biquad satOsLpOut;
