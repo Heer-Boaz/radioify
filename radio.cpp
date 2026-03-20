@@ -281,190 +281,6 @@ static inline float applySeededDrift(float base,
   return base * (1.0f + relativeDepth * seededSignedUnit(seed, salt));
 }
 
-static void applyRadioBaseDefaults(Radio1938& radio) {
-  radio.sampleRate = 48000.0f;
-  radio.channels = 1;
-  radio.bwHz = 4800.0f;
-  radio.noiseWeight = 0.0f;
-  radio.preset = Radio1938::Preset::Philco37116X;
-  radio.initialized = false;
-
-  radio.graph = Radio1938::RadioExecutionGraph{};
-
-  radio.controlSense = Radio1938::RadioControlSenseState{};
-  radio.controlBus = Radio1938::RadioControlBusState{};
-  radio.identity = Radio1938::IdentityState{};
-  radio.iqInput = Radio1938::IqInputState{};
-  radio.sourceFrame = Radio1938::SourceFrameState{};
-  radio.identity.driftDepth = 1.0f;
-  radio.frontEnd = Radio1938::FrontEndNodeState{};
-  radio.mixer = Radio1938::MixerNodeState{};
-  radio.ifStrip = Radio1938::IFStripNodeState{};
-  radio.demod = Radio1938::DemodNodeState{};
-  radio.receiverCircuit = Radio1938::ReceiverCircuitNodeState{};
-  radio.tone = Radio1938::ToneNodeState{};
-  radio.power = Radio1938::PowerNodeState{};
-  radio.noiseDerived = Radio1938::NoiseDerivedState{};
-
-  radio.globals.oversampleFactor = 2.0f;
-  radio.globals.ifNoiseMix = 0.0f;
-  radio.globals.postNoiseMix = 0.0f;
-  radio.globals.noiseFloorAmp = 0.0f;
-  radio.globals.inputPad = 1.0f;
-  radio.globals.enableAutoLevel = false;
-  radio.globals.autoTargetDb = 0.0f;
-  radio.globals.autoMaxBoostDb = 0.0f;
-  radio.globals.satClipDelta = 0.03f;
-  radio.globals.satClipMinLevel = 0.70f;
-  radio.globals.outputClipThreshold = 0.98f;
-  radio.globals.oversampleCutoffFraction = 0.45f;
-
-  radio.tuning.safeBwMinHz = 2400.0f;
-  radio.tuning.safeBwMaxHz = 9000.0f;
-  radio.tuning.preBwScale = 1.0f;
-  radio.tuning.postBwScale = 1.0f;
-  radio.tuning.smoothTau = 0.05f;
-  radio.tuning.updateEps = 0.25f;
-  radio.tuning.magneticTuningEnabled = false;
-  radio.tuning.afcCorrectionHz = 0.0f;
-  radio.tuning.afcCaptureHz = 0.0f;
-  radio.tuning.afcMaxCorrectionHz = 0.0f;
-  radio.tuning.afcDeadband = 0.0f;
-  radio.tuning.afcResponseMs = 0.0f;
-
-  radio.input.autoEnvAttackMs = 8.0f;
-  radio.input.autoEnvReleaseMs = 220.0f;
-  radio.input.autoGainAttackMs = 140.0f;
-  radio.input.autoGainReleaseMs = 1200.0f;
-  radio.input.sourceResistanceOhms = 300.0f;
-  radio.input.inputResistanceOhms = 47000.0f;
-  radio.input.couplingCapFarads = 1.0e-9f;
-
-  radio.frontEnd.rfGain = 1.0f;
-  radio.frontEnd.avcGainDepth = 0.0f;
-  radio.frontEnd.selectivityPeakHz = 0.0f;
-  radio.frontEnd.selectivityPeakQ = 0.707f;
-  radio.frontEnd.selectivityPeakGainDb = 0.0f;
-  radio.frontEnd.antennaInductanceHenries = 0.012f;
-  radio.frontEnd.antennaLoadResistanceOhms = 2200.0f;
-  radio.frontEnd.rfInductanceHenries = 0.018f;
-  radio.frontEnd.rfLoadResistanceOhms = 3300.0f;
-
-  radio.mixer.rfGridDriveVolts = 1.0f;
-  radio.mixer.loGridDriveVolts = 6.5f;
-  radio.mixer.avcGridDriveVolts = 12.0f;
-  radio.mixer.plateSupplyVolts = 250.0f;
-  radio.mixer.plateDcVolts = 250.0f;
-  radio.mixer.screenVolts = 100.0f;
-  radio.mixer.biasVolts = -3.0f;
-  radio.mixer.cutoffVolts = -42.5f;
-  radio.mixer.plateCurrentAmps = 0.007f;
-  radio.mixer.mutualConductanceSiemens = 0.00145f;
-  radio.mixer.acLoadResistanceOhms = 7000.0f;
-  radio.mixer.plateKneeVolts = 22.0f;
-  radio.mixer.gridSoftnessVolts = 2.5f;
-
-  radio.ifStrip.enabled = true;
-  radio.ifStrip.ifMinBwHz = 2400.0f;
-  radio.ifStrip.stageGain = 1.0f;
-  radio.ifStrip.avcGainDepth = 0.0f;
-  radio.ifStrip.ifCenterHz = 470000.0f;
-  radio.ifStrip.primaryInductanceHenries = 220e-6f;
-  radio.ifStrip.secondaryInductanceHenries = 240e-6f;
-  radio.ifStrip.secondaryLoadResistanceOhms = 680.0f;
-  radio.ifStrip.interstageCouplingCoeff = 0.16f;
-  radio.ifStrip.outputCouplingCoeff = 0.12f;
-
-  radio.cabinet.enabled = false;
-  radio.speakerStage.drive = 0.0f;
-  radio.speakerStage.speaker.suspensionHz = 0.0f;
-  radio.speakerStage.speaker.coneBodyHz = 0.0f;
-  radio.speakerStage.speaker.upperBreakupHz = 0.0f;
-  radio.speakerStage.speaker.coneDipHz = 0.0f;
-  radio.speakerStage.speaker.topLpHz = 0.0f;
-  radio.speakerStage.speaker.hfLossLpHz = 0.0f;
-  radio.speakerStage.speaker.complianceLossDepth = 0.0f;
-  radio.speakerStage.speaker.hfLossDepth = 0.0f;
-
-  radio.demod.am.audioDiodeDrop = 0.0f;
-  radio.demod.am.avcDiodeDrop = 0.0f;
-  radio.demod.am.audioJunctionSlopeVolts = 0.006f;
-  radio.demod.am.avcJunctionSlopeVolts = 0.006f;
-  radio.demod.am.detectorPlateCouplingCapFarads = 110e-12f;
-  radio.demod.am.audioChargeResistanceOhms = 5100.0f;
-  radio.demod.am.audioDischargeResistanceOhms = 190000.0f;
-  radio.demod.am.avcChargeResistanceOhms = 1000000.0f;
-  radio.demod.am.avcDischargeResistanceOhms = 500000.0f;
-  radio.demod.am.avcFilterCapFarads = 0.15e-6f;
-  radio.demod.am.controlVoltageRef = 1.0f;
-  radio.demod.am.senseLowHz = 120.0f;
-  radio.demod.am.senseHighHz = 3600.0f;
-  radio.demod.am.afcSenseLpHz = 0.0f;
-
-  radio.receiverCircuit.enabled = true;
-  radio.receiverCircuit.volumeControlResistanceOhms = 250000.0f;
-  radio.receiverCircuit.volumeControlTapResistanceOhms = 60000.0f;
-  // Render/preview needs a definite physical knob setting. A strong local
-  // station with the 2 Mohm control fully open grossly overdrives the 77/42/6A3
-  // chain; a position a little above the lower third of travel is a much more
-  // representative listening operating point for this set.
-  radio.receiverCircuit.volumeControlPosition = 0.36f;
-  radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
-  radio.receiverCircuit.gridLeakResistanceOhms = 1000000.0f;
-  radio.receiverCircuit.tubePlateSupplyVolts = 250.0f;
-  radio.receiverCircuit.tubePlateDcVolts = 95.0f;
-  radio.receiverCircuit.tubeScreenVolts = 72.0f;
-  radio.receiverCircuit.tubeBiasVolts = -1.5f;
-  radio.receiverCircuit.tubeCutoffVolts = -5.5f;
-  radio.receiverCircuit.tubePlateCurrentAmps = 0.00155f;
-  radio.receiverCircuit.tubeMutualConductanceSiemens = 0.0011f;
-  radio.receiverCircuit.tubeLoadResistanceOhms = 100000.0f;
-  radio.receiverCircuit.tubePlateKneeVolts = 18.0f;
-  radio.receiverCircuit.tubeGridSoftnessVolts = 0.4f;
-
-  radio.cabinet.clarifier1Hz = 0.0f;
-  radio.cabinet.clarifier1Q = 0.0f;
-  radio.cabinet.clarifier1Coupling = 0.0f;
-  radio.cabinet.clarifier2Hz = 0.0f;
-  radio.cabinet.clarifier2Q = 0.0f;
-  radio.cabinet.clarifier2Coupling = 0.0f;
-  radio.cabinet.clarifier3Hz = 0.0f;
-  radio.cabinet.clarifier3Q = 0.0f;
-  radio.cabinet.clarifier3Coupling = 0.0f;
-
-  radio.noiseConfig.enableHumTone = true;
-  radio.noiseConfig.humHzDefault = 50.0f;
-  radio.noiseConfig.noiseWeightRef = 0.015f;
-  radio.noiseConfig.noiseWeightScaleMax = 2.0f;
-  radio.noiseConfig.humAmpScale = 0.0018f;
-  radio.noiseConfig.crackleAmpScale = 0.0f;
-  radio.noiseConfig.crackleRateScale = 0.0f;
-
-  radio.finalLimiter.enabled = true;
-  radio.finalLimiter.threshold = 0.98f;
-  radio.finalLimiter.lookaheadMs = 2.0f;
-  radio.finalLimiter.attackMs = 0.20f;
-  radio.finalLimiter.releaseMs = 160.0f;
-
-  radio.power.postLpHz = 0.0f;
-  radio.power.gridCouplingCapFarads = 0.05e-6f;
-  radio.power.gridLeakResistanceOhms = 100000.0f;
-  radio.power.driverSourceResistanceOhms = 160000.0f;
-  radio.power.tubePlateSupplyVolts = 250.0f;
-  radio.power.tubePlateDcVolts = 250.0f;
-  radio.power.tubeScreenVolts = 250.0f;
-  radio.power.tubeBiasVolts = -16.5f;
-  radio.power.tubeCutoffVolts = -33.0f;
-  radio.power.tubePlateCurrentAmps = 0.034f;
-  radio.power.tubeMutualConductanceSiemens = 0.0022f;
-  radio.power.tubeAcLoadResistanceOhms = 7000.0f;
-  radio.power.tubePlateKneeVolts = 28.0f;
-  radio.power.tubeGridSoftnessVolts = 0.8f;
-  radio.power.tubeGridCurrentResistanceOhms = 1000.0f;
-  radio.power.outputLoadResistanceOhms = 8.0f;
-  radio.power.nominalOutputPowerWatts = 3.0f;
-}
-
 template <typename Nonlinear>
 static inline float processOversampled2x(float x,
                                          float& prev,
@@ -963,19 +779,15 @@ float NoiseHum::process(const NoiseInput& in) {
 }
 
 void AMDetector::init(float newFs, float newBw, float newTuneHz) {
-  fs = std::max(newFs, 1.0f);
+  fs = newFs;
   bwHz = newBw;
   tuneOffsetHz = newTuneHz;
-  float audioCap = std::max(detectorPlateCouplingCapFarads, 1e-12f);
-  float avcCap = std::max(avcFilterCapFarads, 1e-12f);
-  float audioChargeSeconds =
-      std::max(audioChargeResistanceOhms, 1e-6f) * audioCap;
-  float audioReleaseSeconds =
-      std::max(audioDischargeResistanceOhms, 1e-6f) * audioCap;
-  float avcChargeSeconds =
-      std::max(avcChargeResistanceOhms, 1e-6f) * avcCap;
-  float avcReleaseSeconds =
-      std::max(avcDischargeResistanceOhms, 1e-6f) * avcCap;
+  float audioCap = detectorPlateCouplingCapFarads;
+  float avcCap = avcFilterCapFarads;
+  float audioChargeSeconds = audioChargeResistanceOhms * audioCap;
+  float audioReleaseSeconds = audioDischargeResistanceOhms * audioCap;
+  float avcChargeSeconds = avcChargeResistanceOhms * avcCap;
+  float avcReleaseSeconds = avcDischargeResistanceOhms * avcCap;
   audioChargeCoeff = std::exp(-1.0f / (fs * audioChargeSeconds));
   audioReleaseCoeff = std::exp(-1.0f / (fs * audioReleaseSeconds));
   avcChargeCoeff = std::exp(-1.0f / (fs * avcChargeSeconds));
@@ -1267,24 +1079,17 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
 
 void SpeakerSim::init(float fs) {
   float suspensionHzDerived =
-      std::clamp(suspensionHz *
-                     (1.0f + 0.45f * coneMassTolerance -
-                      0.65f * suspensionComplianceTolerance),
-                 80.0f, fs * 0.20f);
+      suspensionHz * (1.0f + 0.45f * coneMassTolerance -
+                      0.65f * suspensionComplianceTolerance);
   float coneBodyHzDerived =
-      std::clamp(coneBodyHz *
-                     (1.0f + 0.22f * coneMassTolerance +
-                      0.16f * voiceCoilTolerance),
-                 suspensionHzDerived + 120.0f, fs * 0.30f);
+      coneBodyHz * (1.0f + 0.22f * coneMassTolerance +
+                    0.16f * voiceCoilTolerance);
   suspensionRes.setPeaking(fs, suspensionHzDerived, suspensionQ, suspensionGainDb);
   coneBody.setPeaking(fs, coneBodyHzDerived, coneBodyQ, coneBodyGainDb);
   upperBreakup = Biquad{};
   coneDip = Biquad{};
   if (topLpHz > 0.0f) {
-    float topLpHzDerived =
-        std::clamp(topLpHz /
-                       std::max(0.35f, 1.0f + 0.40f * voiceCoilTolerance),
-                   coneBodyHzDerived + 220.0f, fs * 0.45f);
+    float topLpHzDerived = topLpHz / (1.0f + 0.40f * voiceCoilTolerance);
     topLp.setLowpass(fs, topLpHzDerived, filterQ);
   } else {
     topLp = Biquad{};
@@ -1333,14 +1138,11 @@ float SpeakerSim::process(float x, bool& clipped) {
 float RadioTuningNode::applyFilters(Radio1938& radio, float tuneHz, float bwHz) {
   auto& tuning = radio.tuning;
   auto& frontEnd = radio.frontEnd;
-  float safeBw = std::clamp(bwHz, tuning.safeBwMinHz, tuning.safeBwMaxHz);
-  float preBw =
-      std::clamp(safeBw * tuning.preBwScale, 1200.0f, radio.sampleRate * 0.45f);
-  float rfBw =
-      std::clamp(safeBw * tuning.postBwScale, preBw, radio.sampleRate * 0.45f);
+  float safeBw = bwHz;
+  float preBw = safeBw * tuning.preBwScale;
+  float rfBw = safeBw * tuning.postBwScale;
   RadioIFStripNode::setBandwidth(radio, safeBw, tuneHz);
-  float rfCenterHz =
-      std::clamp(radio.ifStrip.sourceCarrierHz, 80.0f, radio.sampleRate * 0.45f);
+  float rfCenterHz = radio.ifStrip.sourceCarrierHz;
   auto resonantCapacitanceFarads = [](float freqHz, float inductanceHenries) {
     float omega = kRadioTwoPi * std::max(freqHz, 1.0f);
     return 1.0f / std::max(omega * omega * std::max(inductanceHenries, 1e-9f),
@@ -1416,8 +1218,7 @@ void RadioTuningNode::prepare(Radio1938& radio,
   tuning.tuneSmoothedHz += tick * (effectiveTuneHz - tuning.tuneSmoothedHz);
   tuning.bwSmoothedHz += tick * (radio.bwHz - tuning.bwSmoothedHz);
 
-  float safeBw =
-      std::clamp(tuning.bwSmoothedHz, tuning.safeBwMinHz, tuning.safeBwMaxHz);
+  float safeBw = tuning.bwSmoothedHz;
   float bwHalf = 0.5f * std::max(1.0f, safeBw);
   block.tuneNorm = clampf(tuning.tuneSmoothedHz / bwHalf, -1.0f, 1.0f);
 
@@ -1441,14 +1242,11 @@ void RadioInputNode::init(Radio1938& radio, RadioInitContext&) {
       std::exp(-1.0f / (radio.sampleRate * (input.autoGainAttackMs / 1000.0f)));
   input.autoGainRel =
       std::exp(-1.0f / (radio.sampleRate * (input.autoGainReleaseMs / 1000.0f)));
-  float sourceR = std::max(input.sourceResistanceOhms, 0.0f);
-  float loadR = std::max(input.inputResistanceOhms, 1.0f);
-  input.sourceDivider = loadR / std::max(sourceR + loadR, 1.0f);
+  float sourceR = input.sourceResistanceOhms;
+  float loadR = input.inputResistanceOhms;
+  input.sourceDivider = loadR / (sourceR + loadR);
   if (input.couplingCapFarads > 0.0f) {
-    float hpHz =
-        1.0f / (kRadioTwoPi * std::max((sourceR + loadR) * input.couplingCapFarads,
-                                       1e-12f));
-    hpHz = std::clamp(hpHz, 1.0f, radio.sampleRate * 0.45f);
+    float hpHz = 1.0f / (kRadioTwoPi * (sourceR + loadR) * input.couplingCapFarads);
     input.sourceCouplingHp.setHighpass(radio.sampleRate, hpHz, kRadioBiquadQ);
   } else {
     input.sourceCouplingHp = Biquad{};
@@ -1797,30 +1595,7 @@ float RadioDemodNode::process(Radio1938& radio,
   return y;
 }
 
-void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
-  auto& receiver = radio.receiverCircuit;
-  receiver.volumeControlResistanceOhms =
-      std::max(receiver.volumeControlResistanceOhms, 1e3f);
-  receiver.volumeControlTapResistanceOhms =
-      clampf(receiver.volumeControlTapResistanceOhms, 0.0f,
-             receiver.volumeControlResistanceOhms);
-  receiver.volumeControlPosition =
-      clampf(receiver.volumeControlPosition, 0.0f, 1.0f);
-  receiver.volumeControlLoudnessResistanceOhms =
-      std::max(receiver.volumeControlLoudnessResistanceOhms, 1.0f);
-  receiver.volumeControlLoudnessCapFarads =
-      std::max(receiver.volumeControlLoudnessCapFarads, 0.0f);
-  receiver.couplingCapFarads = std::max(receiver.couplingCapFarads, 1e-12f);
-  receiver.gridLeakResistanceOhms =
-      std::max(receiver.gridLeakResistanceOhms, 1e3f);
-  receiver.tubePlateSupplyVolts = std::max(receiver.tubePlateSupplyVolts, 1.0f);
-  receiver.tubePlateDcVolts =
-      clampf(receiver.tubePlateDcVolts, 1.0f, receiver.tubePlateSupplyVolts);
-  receiver.tubeScreenVolts = std::max(receiver.tubeScreenVolts, 1.0f);
-  receiver.tubeLoadResistanceOhms = std::max(receiver.tubeLoadResistanceOhms, 1.0f);
-  receiver.tubePlateKneeVolts = std::max(receiver.tubePlateKneeVolts, 1.0f);
-  receiver.tubeGridSoftnessVolts = std::max(receiver.tubeGridSoftnessVolts, 1e-3f);
-}
+void RadioReceiverCircuitNode::init(Radio1938&, RadioInitContext&) {}
 
 void RadioReceiverCircuitNode::reset(Radio1938& radio) {
   auto& receiver = radio.receiverCircuit;
@@ -1837,8 +1612,7 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   if (!receiver.enabled) return y;
   float dt = 1.0f / std::max(radio.sampleRate, 1.0f);
   float totalResistance = receiver.volumeControlResistanceOhms;
-  float wiperResistance =
-      clampf(receiver.volumeControlPosition, 0.0f, 1.0f) * totalResistance;
+  float wiperResistance = receiver.volumeControlPosition * totalResistance;
   float tapResistance = receiver.volumeControlTapResistanceOhms;
   constexpr float kNodeLinkOhms = 1e-3f;
   auto addGroundBranch = [](float (&a)[3][3], int node, float resistanceOhms) {
@@ -1978,80 +1752,11 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   } else {
     power.postLpf = Biquad{};
   }
-  power.gridCouplingCapFarads = std::max(power.gridCouplingCapFarads, 1e-12f);
-  power.gridLeakResistanceOhms = std::max(power.gridLeakResistanceOhms, 1e3f);
-  power.driverSourceResistanceOhms = std::max(power.driverSourceResistanceOhms, 1.0f);
-  power.tubePlateSupplyVolts = std::max(power.tubePlateSupplyVolts, 1.0f);
-  power.tubePlateDcVolts =
-      clampf(power.tubePlateDcVolts, 1.0f, power.tubePlateSupplyVolts);
-  power.tubeScreenVolts = std::max(power.tubeScreenVolts, 1.0f);
-  power.tubeAcLoadResistanceOhms = std::max(power.tubeAcLoadResistanceOhms, 1.0f);
-  power.tubePlateKneeVolts = std::max(power.tubePlateKneeVolts, 1.0f);
-  power.tubeGridSoftnessVolts = std::max(power.tubeGridSoftnessVolts, 1e-3f);
-  power.tubeGridCurrentResistanceOhms =
-      std::max(power.tubeGridCurrentResistanceOhms, 1.0f);
   power.tubePlateVoltage = power.tubePlateDcVolts;
-  power.interstagePrimaryLeakageInductanceHenries =
-      std::max(power.interstagePrimaryLeakageInductanceHenries, 0.0f);
-  power.interstageMagnetizingInductanceHenries =
-      std::max(power.interstageMagnetizingInductanceHenries, 1e-6f);
-  power.interstageTurnsRatioPrimaryToSecondary =
-      std::max(power.interstageTurnsRatioPrimaryToSecondary, 1e-4f);
-  power.interstagePrimaryResistanceOhms =
-      std::max(power.interstagePrimaryResistanceOhms, 1e-6f);
-  power.interstagePrimaryCoreLossResistanceOhms =
-      std::max(power.interstagePrimaryCoreLossResistanceOhms, 0.0f);
-  power.interstagePrimaryShuntCapFarads =
-      std::max(power.interstagePrimaryShuntCapFarads, 0.0f);
-  power.interstageSecondaryLeakageInductanceHenries =
-      std::max(power.interstageSecondaryLeakageInductanceHenries, 0.0f);
-  power.interstageSecondaryResistanceOhms =
-      std::max(power.interstageSecondaryResistanceOhms, 1.0f);
-  power.interstageSecondaryShuntCapFarads =
-      std::max(power.interstageSecondaryShuntCapFarads, 0.0f);
-  power.interstageIntegrationSubsteps =
-      std::max(power.interstageIntegrationSubsteps, 1);
-  power.outputGridLeakResistanceOhms =
-      std::max(power.outputGridLeakResistanceOhms, 1e3f);
-  power.outputGridCurrentResistanceOhms =
-      std::max(power.outputGridCurrentResistanceOhms, 1.0f);
-  power.outputTubePlateSupplyVolts =
-      std::max(power.outputTubePlateSupplyVolts, 1.0f);
-  power.outputTubePlateDcVolts = clampf(power.outputTubePlateDcVolts, 1.0f,
-                                        power.outputTubePlateSupplyVolts);
-  power.outputTubeMu = std::max(power.outputTubeMu, 1.0f);
-  power.outputTubePlateToPlateLoadOhms =
-      std::max(power.outputTubePlateToPlateLoadOhms, 1.0f);
-  power.outputTubePlateKneeVolts =
-      std::max(power.outputTubePlateKneeVolts, 1.0f);
-  power.outputTubeGridSoftnessVolts =
-      std::max(power.outputTubeGridSoftnessVolts, 1e-3f);
-  power.outputTransformerPrimaryLeakageInductanceHenries =
-      std::max(power.outputTransformerPrimaryLeakageInductanceHenries, 0.0f);
-  power.outputTransformerMagnetizingInductanceHenries =
-      std::max(power.outputTransformerMagnetizingInductanceHenries, 1e-6f);
   if (power.outputTransformerTurnsRatioPrimaryToSecondary <= 0.0f) {
     power.outputTransformerTurnsRatioPrimaryToSecondary = std::sqrt(
         power.outputTubePlateToPlateLoadOhms / power.outputLoadResistanceOhms);
   }
-  power.outputTransformerTurnsRatioPrimaryToSecondary =
-      std::max(power.outputTransformerTurnsRatioPrimaryToSecondary, 1e-4f);
-  power.outputTransformerPrimaryResistanceOhms =
-      std::max(power.outputTransformerPrimaryResistanceOhms, 1e-6f);
-  power.outputTransformerPrimaryCoreLossResistanceOhms =
-      std::max(power.outputTransformerPrimaryCoreLossResistanceOhms, 0.0f);
-  power.outputTransformerPrimaryShuntCapFarads =
-      std::max(power.outputTransformerPrimaryShuntCapFarads, 0.0f);
-  power.outputTransformerSecondaryLeakageInductanceHenries =
-      std::max(power.outputTransformerSecondaryLeakageInductanceHenries, 0.0f);
-  power.outputTransformerSecondaryResistanceOhms =
-      std::max(power.outputTransformerSecondaryResistanceOhms, 1e-6f);
-  power.outputTransformerSecondaryShuntCapFarads =
-      std::max(power.outputTransformerSecondaryShuntCapFarads, 0.0f);
-  power.outputTransformerIntegrationSubsteps =
-      std::max(power.outputTransformerIntegrationSubsteps, 1);
-  power.outputLoadResistanceOhms = std::max(power.outputLoadResistanceOhms, 1.0f);
-  power.nominalOutputPowerWatts = std::max(power.nominalOutputPowerWatts, 1e-3f);
   power.interstageTransformer.configure(
       radio.sampleRate, power.interstagePrimaryLeakageInductanceHenries,
       power.interstageMagnetizingInductanceHenries,
@@ -2101,9 +1806,7 @@ float RadioPowerNode::process(Radio1938& radio,
   float powerT = clampf((power.sagEnv - power.sagStart) /
                             std::max(1e-6f, power.sagEnd - power.sagStart),
                         0.0f, 1.0f);
-  float supplyScale =
-      std::clamp(1.0f - power.gainSagPerPower * powerT, power.gainMin,
-                 power.gainMax);
+  float supplyScale = 1.0f - power.gainSagPerPower * powerT;
   float dt = 1.0f / std::max(radio.sampleRate, 1.0f);
   float loadResistance = power.gridLeakResistanceOhms;
   float pathResistance =
@@ -2125,8 +1828,7 @@ float RadioPowerNode::process(Radio1938& radio,
     controlGridVolts = power.tubeBiasVolts + power.gridVoltage;
   }
   float driverSupply = std::max(power.tubePlateSupplyVolts * supplyScale, 1.0f);
-  float driverPlateQuiescent =
-      clampf(power.tubePlateDcVolts * supplyScale, 1.0f, driverSupply);
+  float driverPlateQuiescent = power.tubePlateDcVolts * supplyScale;
   float driverScreenVolts =
       std::max(power.tubeScreenVolts * supplyScale, 1.0f);
   float driverQuiescentCurrent = deviceTubePlateCurrent(
@@ -2136,8 +1838,7 @@ float RadioPowerNode::process(Radio1938& radio,
       power.tubeMutualConductanceSiemens, power.tubePlateKneeVolts,
       power.tubeGridSoftnessVolts);
   auto driverCurrentForPrimaryVoltage = [&](float primaryVoltageGuess) {
-    float driverPlateVolts =
-        clampf(driverPlateQuiescent + primaryVoltageGuess, 1.0f, driverSupply);
+    float driverPlateVolts = driverPlateQuiescent + primaryVoltageGuess;
     return deviceTubePlateCurrent(
         controlGridVolts, driverPlateVolts, driverScreenVolts,
         power.tubeBiasVolts, power.tubeCutoffVolts, driverPlateQuiescent,
@@ -2158,16 +1859,13 @@ float RadioPowerNode::process(Radio1938& radio,
     auto evalResidual = [&](float primaryVoltageGuess,
                             CurrentDrivenTransformerSample& sampleOut,
                             float& driveCurrentOut) {
-      float clampedGuess =
-          clampf(primaryVoltageGuess, minPrimaryVoltage, maxPrimaryVoltage);
-      driveCurrentOut = driveCurrentForVoltage(clampedGuess);
+      driveCurrentOut = driveCurrentForVoltage(primaryVoltageGuess);
       sampleOut = transformer.project(driveCurrentOut, secondaryLoadResistance,
                                       primaryLoadResistance);
-      return sampleOut.primaryVoltage - clampedGuess;
+      return sampleOut.primaryVoltage - primaryVoltageGuess;
     };
 
-    float bestGuess = clampf(transformer.primaryVoltage, minPrimaryVoltage,
-                             maxPrimaryVoltage);
+    float bestGuess = transformer.primaryVoltage;
     float bestDriveCurrent = 0.0f;
     CurrentDrivenTransformerSample bestSample{};
     float bestResidual =
@@ -2231,8 +1929,7 @@ float RadioPowerNode::process(Radio1938& radio,
           bestDriveCurrent = driveCurrent;
           bestSample = predicted;
         }
-        guess = clampf(0.5f * (guess + predicted.primaryVoltage),
-                       minPrimaryVoltage, maxPrimaryVoltage);
+        guess = 0.5f * (guess + predicted.primaryVoltage);
       }
     }
 
@@ -2260,15 +1957,12 @@ float RadioPowerNode::process(Radio1938& radio,
   }
   auto interstageSample = power.interstageTransformer.process(
       interstageSolved.driveCurrent, interstageLoadResistance);
-  power.tubePlateVoltage =
-      clampf(driverPlateQuiescent + interstageSample.primaryVoltage, 1.0f,
-             driverSupply);
+  power.tubePlateVoltage = driverPlateQuiescent + interstageSample.primaryVoltage;
   float gridDriveA = 0.5f * interstageSample.secondaryVoltage;
   float gridDriveB = -gridDriveA;
   float outputSupply =
       std::max(power.outputTubePlateSupplyVolts * supplyScale, 1.0f);
-  float outputPlateQuiescent =
-      clampf(power.outputTubePlateDcVolts * supplyScale, 1.0f, outputSupply);
+  float outputPlateQuiescent = power.outputTubePlateDcVolts * supplyScale;
   float outputPrimaryLoadResistance = std::max(
       2.0f * power.outputTubeMu /
           std::max(power.outputTubeMutualConductanceSiemens, 1e-6f),
@@ -2276,12 +1970,8 @@ float RadioPowerNode::process(Radio1938& radio,
   auto outputSolved = solvePrimaryVoltage(
       power.outputTransformer,
       [&](float primaryVoltageGuess) {
-        float plateA =
-            clampf(outputPlateQuiescent - 0.5f * primaryVoltageGuess, 1.0f,
-                   outputSupply);
-        float plateB =
-            clampf(outputPlateQuiescent + 0.5f * primaryVoltageGuess, 1.0f,
-                   outputSupply);
+        float plateA = outputPlateQuiescent - 0.5f * primaryVoltageGuess;
+        float plateB = outputPlateQuiescent + 0.5f * primaryVoltageGuess;
         float plateCurrentA = deviceTriodePlateCurrent(
             power.outputTubeBiasVolts + gridDriveA, plateA,
             power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
@@ -2330,8 +2020,7 @@ void RadioInterferenceDerivedNode::init(Radio1938& radio, RadioInitContext&) {
     return;
   }
 
-  float scale = std::clamp(radio.noiseWeight / noiseConfig.noiseWeightRef, 0.0f,
-                           noiseConfig.noiseWeightScaleMax);
+  float scale = radio.noiseWeight / noiseConfig.noiseWeightRef;
   noiseDerived.baseNoiseAmp = radio.noiseWeight;
   noiseDerived.baseCrackleAmp = noiseConfig.crackleAmpScale * scale;
   noiseDerived.baseHumAmp = noiseConfig.humAmpScale * scale;
@@ -2409,24 +2098,20 @@ float RadioSpeakerNode::process(Radio1938& radio,
 
 void RadioCabinetNode::init(Radio1938& radio, RadioInitContext&) {
   auto& cabinet = radio.cabinet;
-  float panelHzDerived = std::clamp(
-      cabinet.panelHz * (1.0f + 0.52f * cabinet.panelStiffnessTolerance),
-      90.0f, radio.sampleRate * 0.22f);
-  float chassisHzDerived = std::clamp(
+  float panelHzDerived =
+      cabinet.panelHz * (1.0f + 0.52f * cabinet.panelStiffnessTolerance);
+  float chassisHzDerived =
       cabinet.chassisHz * (1.0f + 0.28f * cabinet.panelStiffnessTolerance -
-                           0.18f * cabinet.baffleLeakTolerance),
-      panelHzDerived + 80.0f, radio.sampleRate * 0.30f);
-  float cavityDipHzDerived = std::clamp(
-      cabinet.cavityDipHz * (1.0f + 0.35f * cabinet.cavityTolerance),
-      chassisHzDerived + 140.0f, radio.sampleRate * 0.42f);
-  float rearDelayMsDerived = std::max(
-      0.4f, cabinet.rearDelayMs *
-                (1.0f + 0.30f * cabinet.rearPathTolerance +
-                 0.12f * cabinet.baffleLeakTolerance));
-  cabinet.rearMixApplied = std::clamp(
+                           0.18f * cabinet.baffleLeakTolerance);
+  float cavityDipHzDerived =
+      cabinet.cavityDipHz * (1.0f + 0.35f * cabinet.cavityTolerance);
+  float rearDelayMsDerived =
+      cabinet.rearDelayMs *
+      (1.0f + 0.30f * cabinet.rearPathTolerance +
+       0.12f * cabinet.baffleLeakTolerance);
+  cabinet.rearMixApplied =
       cabinet.rearMix * (1.0f + 0.42f * cabinet.baffleLeakTolerance -
-                         0.25f * cabinet.grilleClothTolerance),
-      0.0f, 0.12f);
+                         0.25f * cabinet.grilleClothTolerance);
 
   if (cabinet.panelHz > 0.0f && cabinet.panelQ > 0.0f) {
     cabinet.panel.setPeaking(radio.sampleRate, panelHzDerived, cabinet.panelQ,
@@ -2447,10 +2132,8 @@ void RadioCabinetNode::init(Radio1938& radio, RadioInitContext&) {
     cabinet.cavityDip = Biquad{};
   }
   if (cabinet.grilleLpHz > 0.0f) {
-    float grilleLpHzDerived = std::clamp(
-        cabinet.grilleLpHz /
-            std::max(0.35f, 1.0f + 0.55f * cabinet.grilleClothTolerance),
-        cavityDipHzDerived + 220.0f, radio.sampleRate * 0.45f);
+    float grilleLpHzDerived =
+        cabinet.grilleLpHz / (1.0f + 0.55f * cabinet.grilleClothTolerance);
     cabinet.grilleLp.setLowpass(radio.sampleRate, grilleLpHzDerived,
                                 kRadioBiquadQ);
   } else {
@@ -2530,9 +2213,9 @@ void RadioFinalLimiterNode::init(Radio1938& radio, RadioInitContext&) {
       std::exp(-1.0f / (radio.sampleRate * (limiter.attackMs / 1000.0f)));
   limiter.releaseCoeff =
       std::exp(-1.0f / (radio.sampleRate * (limiter.releaseMs / 1000.0f)));
-  limiter.delaySamples = std::max(
-      1, static_cast<int>(std::lround(
-             radio.sampleRate * (limiter.lookaheadMs / 1000.0f))));
+  limiter.delaySamples =
+      static_cast<int>(std::lround(radio.sampleRate *
+                                   (limiter.lookaheadMs / 1000.0f)));
   limiter.delayBuf.assign(static_cast<size_t>(limiter.delaySamples), 0.0f);
   limiter.requiredGainBuf.assign(static_cast<size_t>(limiter.delaySamples), 1.0f);
   limiter.delayWriteIndex = 0;
@@ -2978,7 +2661,8 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   // station with the 2 Mohm control fully open grossly overdrives the 77/42/6A3
   // chain; a position a little above the lower third of travel is a much more
   // representative listening operating point for this set.
-  radio.receiverCircuit.volumeControlPosition = 0.36f;
+  // radio.receiverCircuit.volumeControlPosition = 0.36f;
+  radio.receiverCircuit.volumeControlPosition = 1.0f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 500000.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.15e-6f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
@@ -3101,7 +2785,7 @@ std::string_view Radio1938::presetName(Preset preset) {
   return "philco_37_116x";
 }
 
-Radio1938::Radio1938() { applyRadioBaseDefaults(*this); }
+Radio1938::Radio1938() { }
 
 std::string_view Radio1938::stageName(StageId id) {
   switch (id) {
@@ -3180,7 +2864,7 @@ void Radio1938::resetCalibration() {
 }
 
 void Radio1938::init(int ch, float sr, float bw, float noise) {
-  channels = std::max(1, ch);
+  channels = ch;
   sampleRate = sr;
   bwHz = bw;
   noiseWeight = noise;

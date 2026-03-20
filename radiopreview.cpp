@@ -5,10 +5,6 @@
 
 namespace {
 
-float clampfLocal(float v, float lo, float hi) {
-  return std::clamp(v, lo, hi);
-}
-
 constexpr uint32_t kPreviewWarmupFrames = 16384u;
 
 float computeOpenCircuitCarrierRmsVolts(float fieldStrengthVoltsPerMeter,
@@ -22,12 +18,9 @@ float computeOpenCircuitCarrierRmsVolts(float fieldStrengthVoltsPerMeter,
 void PcmToIfPreviewModulator::init(const Radio1938& radio,
                                    float newSampleRate,
                                    float bwHz) {
-  sampleRate = std::max(newSampleRate, 1.0f);
-  float safeBw = std::max(bwHz, radio.ifStrip.ifMinBwHz);
-  audioBandwidthHz = clampfLocal(0.48f * safeBw, 180.0f,
-                                 std::min(4600.0f, sampleRate * 0.45f));
-  carrierHz =
-      clampfLocal(radio.ifStrip.sourceCarrierHz, 1000.0f, sampleRate * 0.45f);
+  sampleRate = newSampleRate;
+  audioBandwidthHz = 0.48f * bwHz;
+  carrierHz = radio.ifStrip.sourceCarrierHz;
   carrierPhase = 0.0f;
   // Preview mode should resemble a strong local broadcast station rather than
   // a distant fringe signal. With roughly 10 mV/m into a 12 m effective
