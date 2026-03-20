@@ -1156,11 +1156,10 @@ static float processSuperhetSourceFrame(Radio1938& radio,
       ifStrip.rfPhase = wrapPhase(ifStrip.rfPhase + rfStep);
     } else if (mode == SourceInputMode::AmAudio) {
       float program = prevI + (currI - prevI) * t;
-      float modLimit = std::max(std::fabs(radio.sourceFrame.modulationLimit), 0.0f);
-      float mod = clampf(radio.sourceFrame.modulationIndex * program,
-                         -modLimit, modLimit);
-      float envelope =
-          std::max(radio.sourceFrame.carrierAmplitude, 0.0f) * (1.0f + mod);
+      float mod = radio.sourceFrame.modulationIndex * program;
+      float carrierPeak =
+          std::sqrt(2.0f) * std::max(radio.sourceFrame.carrierAmplitude, 0.0f);
+      float envelope = carrierPeak * (1.0f + mod);
       rf = rfGain * envelope * std::cos(ifStrip.rfPhase);
       ifStrip.rfPhase = wrapPhase(ifStrip.rfPhase + rfStep);
     } else {

@@ -8,9 +8,10 @@
 struct PcmToIfPreviewModulator {
   float sampleRate = 0.0f;
   float audioBandwidthHz = 0.0f;
+  float carrierHz = 0.0f;
+  float carrierPhase = 0.0f;
   float carrierAmplitude = 0.0f;
   float modulationIndex = 0.0f;
-  float modulationLimit = 0.0f;
   Biquad programHp;
   Biquad programLp1;
   Biquad programLp2;

@@ -25,9 +25,11 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
   float safeBw = std::max(bwHz, radio.ifStrip.ifMinBwHz);
   audioBandwidthHz = clampfLocal(0.48f * safeBw, 180.0f,
                                  std::min(4600.0f, sampleRate * 0.45f));
+  carrierHz =
+      clampfLocal(radio.ifStrip.sourceCarrierHz, 1000.0f, sampleRate * 0.45f);
+  carrierPhase = 0.0f;
   carrierAmplitude = 1.0f;
   modulationIndex = 0.85f;
-  modulationLimit = 0.98f;
 
   programHp.setHighpass(sampleRate, 45.0f, kRadioBiquadQ);
   programLp1.setLowpass(sampleRate, audioBandwidthHz, kRadioBiquadQ);
@@ -36,6 +38,7 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
 }
 
 void PcmToIfPreviewModulator::reset() {
+  carrierPhase = 0.0f;
   programHp.reset();
   programLp1.reset();
   programLp2.reset();
@@ -54,15 +57,20 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
     program = programLp2.process(program);
     return program;
   };
+  float carrierStep = kRadioTwoPi * (carrierHz / sampleRate);
+  float carrierPeak = std::sqrt(2.0f) * std::max(carrierAmplitude, 0.0f);
 
   monoScratch.resize(frames);
 
   if (channels == 1u) {
     for (uint32_t frame = 0; frame < frames; ++frame) {
-      monoScratch[frame] = nextProgramSample(samples[frame]);
+      float program = nextProgramSample(samples[frame]);
+      float envelope = carrierPeak * (1.0f + modulationIndex * program);
+      monoScratch[frame] = envelope * std::cos(carrierPhase);
+      carrierPhase += carrierStep;
+      if (carrierPhase >= kRadioTwoPi) carrierPhase -= kRadioTwoPi;
     }
-    radio.processAmAudio(monoScratch.data(), monoScratch.data(), frames,
-                         carrierAmplitude, modulationIndex, modulationLimit);
+    radio.processIfReal(monoScratch.data(), frames);
     applyMonoGain(monoScratch.data(), frames, makeupGain);
     for (uint32_t frame = 0; frame < frames; ++frame) {
       samples[frame] = monoScratch[frame];
@@ -77,11 +85,14 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
     for (uint32_t ch = 0; ch < channels; ++ch) {
       sum += samples[base + ch];
     }
-    monoScratch[frame] = nextProgramSample(sum * foldGain);
+    float program = nextProgramSample(sum * foldGain);
+    float envelope = carrierPeak * (1.0f + modulationIndex * program);
+    monoScratch[frame] = envelope * std::cos(carrierPhase);
+    carrierPhase += carrierStep;
+    if (carrierPhase >= kRadioTwoPi) carrierPhase -= kRadioTwoPi;
   }
 
-  radio.processAmAudio(monoScratch.data(), monoScratch.data(), frames,
-                       carrierAmplitude, modulationIndex, modulationLimit);
+  radio.processIfReal(monoScratch.data(), frames);
   applyMonoGain(monoScratch.data(), frames, makeupGain);
 
   for (uint32_t frame = 0; frame < frames; ++frame) {
