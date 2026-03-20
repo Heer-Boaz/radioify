@@ -417,12 +417,12 @@ void SeriesRlcBandpass::configure(float newFs,
                                   float newSeriesResistanceOhms,
                                   float newOutputResistanceOhms,
                                   int newIntegrationSubsteps) {
-  fs = std::max(newFs, 1.0f);
-  inductanceHenries = std::max(newInductanceHenries, 1e-9f);
-  capacitanceFarads = std::max(newCapacitanceFarads, 1e-12f);
-  seriesResistanceOhms = std::max(newSeriesResistanceOhms, 1e-6f);
-  outputResistanceOhms = std::max(newOutputResistanceOhms, 0.0f);
-  integrationSubsteps = std::max(newIntegrationSubsteps, 1);
+  fs = newFs;
+  inductanceHenries = newInductanceHenries;
+  capacitanceFarads = newCapacitanceFarads;
+  seriesResistanceOhms = newSeriesResistanceOhms;
+  outputResistanceOhms = newOutputResistanceOhms;
+  integrationSubsteps = newIntegrationSubsteps;
   reset();
 }
 
@@ -457,16 +457,16 @@ void CoupledTunedTransformer::configure(float newFs,
                                         float newCouplingCoeff,
                                         float newOutputResistanceOhms,
                                         int newIntegrationSubsteps) {
-  fs = std::max(newFs, 1.0f);
-  primaryInductanceHenries = std::max(newPrimaryInductanceHenries, 1e-9f);
-  primaryCapacitanceFarads = std::max(newPrimaryCapacitanceFarads, 1e-12f);
-  primaryResistanceOhms = std::max(newPrimaryResistanceOhms, 1e-6f);
-  secondaryInductanceHenries = std::max(newSecondaryInductanceHenries, 1e-9f);
-  secondaryCapacitanceFarads = std::max(newSecondaryCapacitanceFarads, 1e-12f);
-  secondaryResistanceOhms = std::max(newSecondaryResistanceOhms, 1e-6f);
-  couplingCoeff = clampf(newCouplingCoeff, 0.0f, 0.999f);
-  outputResistanceOhms = std::max(newOutputResistanceOhms, 0.0f);
-  integrationSubsteps = std::max(newIntegrationSubsteps, 1);
+  fs = newFs;
+  primaryInductanceHenries = newPrimaryInductanceHenries;
+  primaryCapacitanceFarads = newPrimaryCapacitanceFarads;
+  primaryResistanceOhms = newPrimaryResistanceOhms;
+  secondaryInductanceHenries = newSecondaryInductanceHenries;
+  secondaryCapacitanceFarads = newSecondaryCapacitanceFarads;
+  secondaryResistanceOhms = newSecondaryResistanceOhms;
+  couplingCoeff = newCouplingCoeff;
+  outputResistanceOhms = newOutputResistanceOhms;
+  integrationSubsteps = newIntegrationSubsteps;
   reset();
 }
 
@@ -527,22 +527,17 @@ void CurrentDrivenTransformer::configure(
     float newSecondaryResistanceOhms,
     float newSecondaryShuntCapFarads,
     int newIntegrationSubsteps) {
-  fs = std::max(newFs, 1.0f);
-  primaryLeakageInductanceHenries =
-      std::max(newPrimaryLeakageInductanceHenries, 0.0f);
-  magnetizingInductanceHenries =
-      std::max(newMagnetizingInductanceHenries, 1e-6f);
-  turnsRatioPrimaryToSecondary =
-      std::max(newTurnsRatioPrimaryToSecondary, 1e-4f);
-  primaryResistanceOhms = std::max(newPrimaryResistanceOhms, 1e-6f);
-  primaryCoreLossResistanceOhms =
-      std::max(newPrimaryCoreLossResistanceOhms, 0.0f);
-  primaryShuntCapFarads = std::max(newPrimaryShuntCapFarads, 0.0f);
-  secondaryLeakageInductanceHenries =
-      std::max(newSecondaryLeakageInductanceHenries, 0.0f);
-  secondaryResistanceOhms = std::max(newSecondaryResistanceOhms, 1e-6f);
-  secondaryShuntCapFarads = std::max(newSecondaryShuntCapFarads, 0.0f);
-  integrationSubsteps = std::max(newIntegrationSubsteps, 1);
+  fs = newFs;
+  primaryLeakageInductanceHenries = newPrimaryLeakageInductanceHenries;
+  magnetizingInductanceHenries = newMagnetizingInductanceHenries;
+  turnsRatioPrimaryToSecondary = newTurnsRatioPrimaryToSecondary;
+  primaryResistanceOhms = newPrimaryResistanceOhms;
+  primaryCoreLossResistanceOhms = newPrimaryCoreLossResistanceOhms;
+  primaryShuntCapFarads = newPrimaryShuntCapFarads;
+  secondaryLeakageInductanceHenries = newSecondaryLeakageInductanceHenries;
+  secondaryResistanceOhms = newSecondaryResistanceOhms;
+  secondaryShuntCapFarads = newSecondaryShuntCapFarads;
+  integrationSubsteps = newIntegrationSubsteps;
   reset();
 }
 
@@ -1812,10 +1807,6 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
     power.postLpf = Biquad{};
   }
   power.tubePlateVoltage = power.tubePlateDcVolts;
-  if (power.outputTransformerTurnsRatioPrimaryToSecondary <= 0.0f) {
-    power.outputTransformerTurnsRatioPrimaryToSecondary = std::sqrt(
-        power.outputTubePlateToPlateLoadOhms / power.outputLoadResistanceOhms);
-  }
   power.interstageTransformer.configure(
       radio.sampleRate, power.interstagePrimaryLeakageInductanceHenries,
       power.interstageMagnetizingInductanceHenries,
@@ -2239,11 +2230,14 @@ void RadioCabinetNode::init(Radio1938& radio, RadioInitContext&) {
       cabinet.rearLp = Biquad{};
     }
     int rearSamples =
-        std::max(cabinet.minBufferSamples,
-                 static_cast<int>(std::ceil(rearDelayMsDerived * 0.001f *
-                                            radio.sampleRate)) +
-                     cabinet.bufferGuardSamples);
-    cabinet.buf.assign(static_cast<size_t>(rearSamples), 0.0f);
+        static_cast<int>(std::ceil(rearDelayMsDerived * 0.001f *
+                                   radio.sampleRate)) +
+        cabinet.bufferGuardSamples;
+    if (rearSamples > 0) {
+      cabinet.buf.assign(static_cast<size_t>(rearSamples), 0.0f);
+    } else {
+      cabinet.buf.clear();
+    }
   } else {
     cabinet.rearHp = Biquad{};
     cabinet.rearLp = Biquad{};
@@ -2819,10 +2813,13 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.interstageTurnsRatioPrimaryToSecondary = 1.0f / 0.30f;
   radio.power.interstagePrimaryResistanceOhms = 430.0f;
   radio.power.interstagePrimaryCoreLossResistanceOhms = 220000.0f;
-  radio.power.interstagePrimaryShuntCapFarads = 20e-12f;
+  // The pF stray capacitances are ultrasonic details in the real chassis.
+  // In this 48 kHz reduced-order audio model they destabilize the transformer
+  // solve and collapse the audible output, so the preset leaves them out.
+  radio.power.interstagePrimaryShuntCapFarads = 0.0f;
   radio.power.interstageSecondaryLeakageInductanceHenries = 0.040f;
   radio.power.interstageSecondaryResistanceOhms = 296.0f;
-  radio.power.interstageSecondaryShuntCapFarads = 40e-12f;
+  radio.power.interstageSecondaryShuntCapFarads = 0.0f;
   radio.power.interstageIntegrationSubsteps = 2;
   radio.power.outputGridLeakResistanceOhms = 50000.0f;
   radio.power.outputGridCurrentResistanceOhms = 1200.0f;
@@ -2844,13 +2841,14 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.outputTubeGridSoftnessVolts = 2.0f;
   radio.power.outputTransformerPrimaryLeakageInductanceHenries = 35e-3f;
   radio.power.outputTransformerMagnetizingInductanceHenries = 20.0f;
-  radio.power.outputTransformerTurnsRatioPrimaryToSecondary = 0.0f;
+  radio.power.outputTransformerTurnsRatioPrimaryToSecondary =
+      std::sqrt(3000.0f / 3.9f);
   radio.power.outputTransformerPrimaryResistanceOhms = 235.0f;
   radio.power.outputTransformerPrimaryCoreLossResistanceOhms = 90000.0f;
-  radio.power.outputTransformerPrimaryShuntCapFarads = 2e-12f;
+  radio.power.outputTransformerPrimaryShuntCapFarads = 0.0f;
   radio.power.outputTransformerSecondaryLeakageInductanceHenries = 60e-6f;
   radio.power.outputTransformerSecondaryResistanceOhms = 0.32f;
-  radio.power.outputTransformerSecondaryShuntCapFarads = 150e-12f;
+  radio.power.outputTransformerSecondaryShuntCapFarads = 0.0f;
   radio.power.outputTransformerIntegrationSubsteps = 2;
   radio.power.outputLoadResistanceOhms = 3.9f;
   radio.power.nominalOutputPowerWatts = 15.0f;

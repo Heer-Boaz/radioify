@@ -675,9 +675,7 @@ static void rebuildRadioFromTemplate(Radio1938* target,
                                      float bwHz,
                                      float noise) {
   if (!target) return;
-  target->preset = source.preset;
-  target->identity = source.identity;
-  target->setCalibrationEnabled(source.calibration.enabled);
+  *target = source;
   target->init(kRadioProcessChannels, sampleRate, bwHz, noise);
 }
 
