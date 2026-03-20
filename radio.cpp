@@ -861,6 +861,8 @@ void AMDetector::init(float newFs, float newBw, float newTuneHz) {
 void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   bwHz = newBw;
   tuneOffsetHz = newTuneHz;
+  float audioPostLpHz = std::clamp(0.48f * std::max(bwHz, 1.0f), 1200.0f,
+                                   std::min(6000.0f, 0.12f * fs));
   float lowSenseBound = std::max(40.0f, senseLowHz);
   float highSenseBound = std::max(lowSenseBound + 180.0f, senseHighHz);
   float ifCenter = 0.5f * (lowSenseBound + highSenseBound);
@@ -877,6 +879,8 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   afcLowSense.setBandpass(fs, lowSenseHz, 1.10f);
   afcHighSense.setBandpass(fs, highSenseHz, 1.10f);
   afcErrorLp.setLowpass(fs, afcLpHz, kRadioBiquadQ);
+  audioPostLp1.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
+  audioPostLp2.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
 }
 
 void AMDetector::setSenseWindow(float lowHz, float highHz) {
@@ -896,6 +900,8 @@ void AMDetector::reset() {
   afcLowSense.reset();
   afcHighSense.reset();
   afcErrorLp.reset();
+  audioPostLp1.reset();
+  audioPostLp2.reset();
 }
 
 void Radio1938::CalibrationStageMetrics::clearAccumulators() {
@@ -1123,7 +1129,9 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
     avcEnv =
         avcReleaseCoeff * avcEnv + (1.0f - avcReleaseCoeff) * avcRect;
   }
-  return audioEnv;
+  float audioOut = audioPostLp1.process(audioEnv);
+  audioOut = audioPostLp2.process(audioOut);
+  return audioOut;
 }
 
 void SpeakerSim::init(float fs) {
@@ -1462,10 +1470,20 @@ static int computeIfOversampleFactor(float outputFs,
   return std::max(8, static_cast<int>(std::ceil(minInternalFs / safeFs)));
 }
 
-static float selectSourceCarrierHz(float internalFs, float ifCenterHz) {
-  float maxCarrier = 0.48f * internalFs - ifCenterHz - 8000.0f;
-  if (maxCarrier <= 12000.0f) return 12000.0f;
-  return std::clamp(0.5f * maxCarrier, 12000.0f, 40000.0f);
+static float selectSourceCarrierHz(float outputFs,
+                                   float internalFs,
+                                   float ifCenterHz,
+                                   float bwHz) {
+  float maxCarrierByIf = 0.48f * internalFs - ifCenterHz - 8000.0f;
+  float audioSidebandHz = 0.48f * std::max(bwHz, 1.0f);
+  float maxCarrierByOutput =
+      0.5f * std::max(outputFs, 1.0f) - audioSidebandHz - 1600.0f;
+  float maxCarrier = std::min(maxCarrierByIf, maxCarrierByOutput);
+  if (maxCarrier <= 6000.0f) {
+    return std::clamp(0.25f * std::max(outputFs, 1.0f), 3000.0f,
+                      std::max(3000.0f, maxCarrierByOutput));
+  }
+  return std::clamp(0.62f * maxCarrier, 6000.0f, maxCarrier);
 }
 
 void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
@@ -1504,8 +1522,8 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
   ifStrip.oversampleFactor =
       computeIfOversampleFactor(sampleRate, ifStrip.ifCenterHz, safeBw);
   ifStrip.internalSampleRate = sampleRate * ifStrip.oversampleFactor;
-  ifStrip.sourceCarrierHz =
-      selectSourceCarrierHz(ifStrip.internalSampleRate, ifStrip.ifCenterHz);
+  ifStrip.sourceCarrierHz = selectSourceCarrierHz(
+      sampleRate, ifStrip.internalSampleRate, ifStrip.ifCenterHz, safeBw);
   ifStrip.loFrequencyHz = ifStrip.sourceCarrierHz + ifStrip.ifCenterHz + tuneHz;
 
   float stageBandwidthHz = std::max(safeBw * 1.55f, 600.0f);
@@ -2636,9 +2654,10 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   // The 42 driver uses the RC-12 / 2A5 operating point. The 77->42 coupling
   // keeps the 116PX schematic values around C85 and the visible 160k/100k
   // grid network. Transformer 92 shows roughly 430 ohms primary resistance
-  // and 296 ohms total secondary resistance on the schematic; the voltage
-  // ratio is inferred here to hit a 6A3 push-pull grid swing compatible with
-  // the visible self-bias resistor string and classic 2A3/6A3 data.
+  // and 296 ohms total secondary resistance on the schematic; in practice the
+  // 42 plate swing is much larger than the 6A3 grids can use linearly here,
+  // so this model needs a clear step-down rather than the earlier guessed
+  // step-up to avoid grossly overdriving the push-pull output pair.
   radio.power.gridCouplingCapFarads = 0.05e-6f;
   radio.power.gridLeakResistanceOhms = 100000.0f;
   radio.power.driverSourceResistanceOhms = 160000.0f;
@@ -2653,7 +2672,7 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.tubePlateKneeVolts = 28.0f;
   radio.power.tubeGridSoftnessVolts = 0.8f;
   radio.power.tubeGridCurrentResistanceOhms = 1000.0f;
-  radio.power.interstageTurnsRatio = 1.8f;
+  radio.power.interstageTurnsRatio = 0.15f;
   radio.power.interstageSecondaryResistanceOhms = 296.0f;
   radio.power.outputGridLeakResistanceOhms = 250000.0f;
   radio.power.outputGridCurrentResistanceOhms = 1200.0f;
@@ -2835,7 +2854,9 @@ void Radio1938::processAmAudio(const float* audioSamples,
       std::sqrt(2.0f) * std::max(receivedCarrierRmsVolts, 0.0f);
   float phase = iqInput.iqPhase;
   for (uint32_t frame = 0; frame < frames; ++frame) {
-    float envelope = carrierPeak * (1.0f + modulationIndex * audioSamples[frame]);
+    float envelopeFactor =
+        std::max(0.0f, 1.0f + modulationIndex * audioSamples[frame]);
+    float envelope = carrierPeak * envelopeFactor;
     rfScratch[frame] = envelope * std::cos(phase);
     phase += carrierStep;
     if (phase >= kRadioTwoPi) phase -= kRadioTwoPi;

@@ -8,14 +8,17 @@ static void showUsage(const char* exe) {
   std::string name = exe ? std::string(exe) : "radioify";
   logLine("Usage: " + name + " [options] [file_or_folder]");
   logLine("Options:");
+  logLine("  render-radio <file>    Render the explicit radio filter chain to WAV");
   logLine("  split-loop <file>      Analyze and split audio into stinger + main loop");
   logLine("  extract-sheet <file>   Analyze a track and write .melody + .mid output");
+  logLine("  --render-radio <file>  Same as render-radio");
   logLine("  --extract-sheet <file> Same as extract-sheet");
   logLine("  --split-loop <file>    Same as split-loop");
   logLine("  out <path>             Generic output path (for extract/render flows)");
   logLine("  --track <index>        Select track index for emulated formats");
   logLine("  --50hz                 Force 50Hz playback mode where supported");
   logLine("  --out <path>           Same as out");
+  logLine("  --dry        Bypass radio processing for render/playback");
   logLine("  --no-ascii   Disable ASCII video rendering");
   logLine("  --no-audio   Disable audio playback");
   logLine("  --no-radio   Start with radio filter disabled");
@@ -55,7 +58,7 @@ Options parseArgs(int argc, char** argv) {
       if (value.empty()) {
         die("extract-sheet requires a non-empty file path.");
       }
-      if (o.splitLoop) {
+      if (o.splitLoop || o.renderRadio) {
         die("Only one analysis command can be used at once.");
       }
       if (!o.input.empty() && o.input != value) {
@@ -70,13 +73,28 @@ Options parseArgs(int argc, char** argv) {
       if (value.empty()) {
         die("split-loop requires a non-empty file path.");
       }
-      if (o.extractSheet) {
+      if (o.extractSheet || o.renderRadio) {
         die("Only one analysis command can be used at once.");
       }
       if (!o.input.empty() && o.input != value) {
         die("Input path was provided multiple times.");
       }
       o.splitLoop = true;
+      o.input = value;
+      continue;
+    }
+    if (arg == "render-radio" || arg == "--render-radio") {
+      std::string value = requireValue(arg, &i);
+      if (value.empty()) {
+        die("render-radio requires a non-empty file path.");
+      }
+      if (o.extractSheet || o.splitLoop) {
+        die("Only one analysis command can be used at once.");
+      }
+      if (!o.input.empty() && o.input != value) {
+        die("Input path was provided multiple times.");
+      }
+      o.renderRadio = true;
       o.input = value;
       continue;
     }
@@ -111,6 +129,10 @@ Options parseArgs(int argc, char** argv) {
       o.force50Hz = true;
       continue;
     }
+    if (arg == "--dry") {
+      o.dry = true;
+      continue;
+    }
     if (arg == "--no-ascii") {
       o.enableAscii = false;
       continue;
@@ -130,8 +152,8 @@ Options parseArgs(int argc, char** argv) {
     if (!arg.empty() && arg[0] == '-') {
       die("Unknown option: " + arg);
     }
-    if (o.extractSheet || o.splitLoop) {
-      die("Do not pass a positional input when using extract-sheet/split-loop.");
+    if (o.extractSheet || o.splitLoop || o.renderRadio) {
+      die("Do not pass a positional input when using extract-sheet/split-loop/render-radio.");
     }
     if (!o.input.empty()) {
       die("Provide a single file or folder path only.");

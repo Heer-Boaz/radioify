@@ -69,7 +69,8 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
   if (channels == 1u) {
     for (uint32_t frame = 0; frame < frames; ++frame) {
       float program = nextProgramSample(samples[frame]);
-      float envelope = carrierPeak * (1.0f + modulationIndex * program);
+      float envelopeFactor = std::max(0.0f, 1.0f + modulationIndex * program);
+      float envelope = carrierPeak * envelopeFactor;
       monoScratch[frame] = envelope * std::cos(carrierPhase);
       carrierPhase += carrierStep;
       if (carrierPhase >= kRadioTwoPi) carrierPhase -= kRadioTwoPi;
@@ -89,7 +90,8 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
       sum += samples[base + ch];
     }
     float program = nextProgramSample(sum * foldGain);
-    float envelope = carrierPeak * (1.0f + modulationIndex * program);
+    float envelopeFactor = std::max(0.0f, 1.0f + modulationIndex * program);
+    float envelope = carrierPeak * envelopeFactor;
     monoScratch[frame] = envelope * std::cos(carrierPhase);
     carrierPhase += carrierStep;
     if (carrierPhase >= kRadioTwoPi) carrierPhase -= kRadioTwoPi;

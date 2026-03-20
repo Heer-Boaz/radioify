@@ -191,6 +191,32 @@ static void validateInputFile(const std::filesystem::path& p) {
   }
 }
 
+static std::filesystem::path defaultRadioOutputFor(
+    const std::filesystem::path& input) {
+  return input.parent_path() / (input.stem().string() + ".radio.wav");
+}
+
+static std::filesystem::path resolveRenderOutputPath(
+    const std::filesystem::path& input, const std::string& outArg) {
+  if (outArg.empty()) {
+    return defaultRadioOutputFor(input);
+  }
+
+  std::filesystem::path outPath(outArg);
+  bool directoryHint =
+      !outArg.empty() &&
+      (outArg.back() == '/' || outArg.back() == '\\');
+  if (directoryHint ||
+      (std::filesystem::exists(outPath) && std::filesystem::is_directory(outPath))) {
+    return outPath / defaultRadioOutputFor(input).filename();
+  }
+
+  if (!outPath.has_extension()) {
+    outPath += ".wav";
+  }
+  return outPath;
+}
+
 static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
   std::vector<FileEntry> entries;
   std::vector<FileEntry> items;
@@ -572,6 +598,34 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   }
 }
 
+static int runRenderRadioCli(const Options& o) {
+  if (o.input.empty()) {
+    die("render-radio requires an input file path.");
+  }
+
+  std::filesystem::path inputPath(o.input);
+  validateInputFile(inputPath);
+  std::filesystem::path outputPath = resolveRenderOutputPath(inputPath, o.output);
+
+  Radio1938 radio1938Template;
+  radio1938Template.init(1, 48000.0f, static_cast<float>(o.bwHz),
+                         static_cast<float>(o.noise));
+
+  Options renderOpt = o;
+  renderOpt.input = inputPath.string();
+  renderOpt.output = outputPath.string();
+
+  logLine("Radioify");
+  logLine("  Mode:   render-radio");
+  logLine("  Input:  " + renderOpt.input);
+  logLine("  Output: " + renderOpt.output);
+  logLine(std::string("  Chain:  ") + (renderOpt.dry ? "dry" : "radio"));
+  logLine("Rendering output...");
+  renderToFile(renderOpt, radio1938Template, true);
+  logLine("Done.");
+  return 0;
+}
+
 static std::filesystem::path defaultMelodyOutputFor(
     const std::filesystem::path& input) {
   std::string base = input.stem().string();
@@ -641,20 +695,6 @@ static int runExtractSheetCli(const Options& o,
 int runTui(Options o) {
   configureFfmpegVideoLog({});
 
-  float lpHz = static_cast<float>(o.bwHz);
-  const uint32_t sampleRate = 48000;
-  const uint32_t baseChannels = o.mono ? 1 : 2;
-  uint32_t channels = baseChannels;
-
-  auto radio1938Template = std::make_unique<Radio1938>();
-  radio1938Template->init(1, static_cast<float>(sampleRate), lpHz,
-                          static_cast<float>(o.noise));
-
-  auto defaultOutputFor = [](const std::filesystem::path& input) {
-    std::string base = input.stem().string();
-    return (input.parent_path() / (base + ".radio.wav")).string();
-  };
-
   AudioPlaybackConfig audioConfig;
   audioConfig.enableAudio = o.enableAudio;
   audioConfig.enableRadio = o.enableRadio;
@@ -669,6 +709,18 @@ int runTui(Options o) {
   if (o.splitLoop) {
     return runSplitLoopCli(o);
   }
+  if (o.renderRadio) {
+    return runRenderRadioCli(o);
+  }
+
+  float lpHz = static_cast<float>(o.bwHz);
+  const uint32_t sampleRate = 48000;
+  const uint32_t baseChannels = o.mono ? 1 : 2;
+  uint32_t channels = baseChannels;
+
+  auto radio1938Template = std::make_unique<Radio1938>();
+  radio1938Template->init(1, static_cast<float>(sampleRate), lpHz,
+                          static_cast<float>(o.noise));
 
   std::filesystem::path startDir = std::filesystem::current_path();
   std::string initialName;
@@ -768,7 +820,9 @@ int runTui(Options o) {
   auto renderFile = [&](const std::filesystem::path& file) -> void {
     Options renderOpt = o;
     renderOpt.input = file.string();
-    if (renderOpt.output.empty()) renderOpt.output = defaultOutputFor(file);
+    if (renderOpt.output.empty()) {
+      renderOpt.output = defaultRadioOutputFor(file).string();
+    }
     input.restore();
     screen.restore();
     logLine("Radioify");

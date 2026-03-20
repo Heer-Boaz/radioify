@@ -227,6 +227,8 @@ struct AMDetector {
   Biquad afcLowSense;
   Biquad afcHighSense;
   Biquad afcErrorLp;
+  Biquad audioPostLp1;
+  Biquad audioPostLp2;
 
   float audioRect = 0.0f;
   float avcRect = 0.0f;

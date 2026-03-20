@@ -9,6 +9,7 @@ struct Options {
   int trackIndex = 0;
   bool splitLoop = false;
   bool extractSheet = false;
+  bool renderRadio = false;
   bool force50Hz = false;
   int bwHz = 5500;
   double noise = 0.012;
