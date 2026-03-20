@@ -725,15 +725,6 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
       return true;
     }
 
-    if (ctrl && key.vk == VK_UP) {
-      if (callbacks.onAdjustRadioMakeup) callbacks.onAdjustRadioMakeup(0.05f);
-      return true;
-    }
-    if (ctrl && key.vk == VK_DOWN) {
-      if (callbacks.onAdjustRadioMakeup) callbacks.onAdjustRadioMakeup(-0.05f);
-      return true;
-    }
-
     if (key.vk == VK_UP) {
       if (shift) {
         float step = 0.10f;

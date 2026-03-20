@@ -149,7 +149,6 @@ struct InputCallbacks {
   std::function<void(int)> onSeekBy;
   std::function<void(double)> onSeekToRatio;
   std::function<void(float)> onAdjustVolume;
-  std::function<void(float)> onAdjustRadioMakeup;
   std::function<bool(const std::filesystem::path&)> onPlayFile;
   std::function<void(const FileEntry&, int, int)> onOpenFileContextMenu;
   std::function<void(const std::filesystem::path&)> onRenderFile;

@@ -122,9 +122,7 @@ void audioToggleRadio();
 void audioToggle50Hz();
 void audioSetHold(bool hold);
 void audioAdjustVolume(float delta);
-void audioAdjustRadioMakeup(float delta);
 float audioGetVolume();
-float audioGetRadioMakeup();
 float audioGetPeak();
 AudioMelodyInfo audioGetMelodyInfo();
 AudioMelodyAnalysisState audioGetMelodyAnalysisState();
@@ -133,8 +131,6 @@ bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
                                   const std::filesystem::path& outputFile,
                                   const std::function<void(float)>& progressCallback,
                                   std::string* error);
-bool audioIsRadioClipping();
-bool audioIsRadioLimiting();
 std::string audioGetWarning();
 bool audioIs50HzEnabled();
 bool audioSupports50HzToggle();

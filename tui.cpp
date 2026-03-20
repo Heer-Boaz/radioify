@@ -544,8 +544,7 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
 
     if (!o.dry && useRadio1938) {
       radioPreview.processBlock(*radio1938, buffer.data(),
-                                static_cast<uint32_t>(framesRead), channels,
-                                1.0f);
+                                static_cast<uint32_t>(framesRead), channels);
     }
 
     for (size_t i = 0; i < static_cast<size_t>(framesRead * channels); ++i) {
@@ -1095,9 +1094,6 @@ int runTui(Options o) {
     markSeekHold(audioGetSeekTargetSec());
   };
   callbacks.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
-  callbacks.onAdjustRadioMakeup = [&](float delta) {
-    audioAdjustRadioMakeup(delta);
-  };
   callbacks.onToggleMelodyVisualization = [&]() {
     melodyVisualizationEnabled = !melodyVisualizationEnabled;
     if (melodyVisualizationEnabled) {
@@ -2126,9 +2122,8 @@ int runTui(Options o) {
         status = "\xE2\x97\x8B";  // idle icon
       }
       int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-      float radioGain = audioGetRadioMakeup();
       ProgressTextLayout progressText = buildProgressTextLayout(
-          displaySec, totalSec, status, volPct, radioGain, width);
+          displaySec, totalSec, status, volPct, width);
       std::string suffix = progressText.suffix;
       int barWidth = progressText.barWidth;
       double ratio = 0.0;
@@ -2171,16 +2166,10 @@ int runTui(Options o) {
           meterWidth = std::max(0, width - meterX);
         }
         if (meterWidth > 0) {
-          bool radioClipping = audioIsRadioClipping();
-          bool radioLimiting = audioIsRadioLimiting();
-          double meterRatio =
-              radioClipping ? 1.0 : std::clamp(static_cast<double>(peak), 0.0, 1.0);
+          double meterRatio = std::clamp(static_cast<double>(peak), 0.0, 1.0);
           Color meterStart = kStyleProgressFrame.fg;
           Color meterEnd = kStyleProgressFrame.fg;
-          if (radioClipping) {
-            meterStart = kStyleAlert.fg;
-            meterEnd = kStyleAlert.fg;
-          } else if (radioLimiting || peak >= 0.80f) {
+          if (peak >= 0.80f) {
             meterStart = kStyleAccent.fg;
             meterEnd = kProgressEnd;
           }
@@ -2189,14 +2178,6 @@ int runTui(Options o) {
           for (int i = 0; i < meterWidth; ++i) {
             const auto& cell = meterCells[static_cast<size_t>(i)];
             screen.writeChar(meterX + i, peakMeterY, cell.ch, cell.style);
-          }
-          if (radioClipping || radioLimiting) {
-            int clipX = std::min(width - 1, meterX + meterWidth + 1);
-            if (clipX >= 0 && clipX < width) {
-              const char* marker = radioClipping ? "!" : "~";
-              Style markerStyle = radioClipping ? kStyleAlert : kStyleAccent;
-              screen.writeText(clipX, peakMeterY, marker, markerStyle);
-            }
           }
         }
       }

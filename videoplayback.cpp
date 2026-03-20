@@ -929,14 +929,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       status = "\xE2\x8F\xB8";  // ⏸
     }
     int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-    float radioGain = audioGetRadioMakeup();
-    char radioBuf[32];
-    std::snprintf(radioBuf, sizeof(radioBuf), " RG:%.2fx", radioGain);
     std::string timeLabel = totalSec > 0.0
                                 ? (formatWindowOverlayTime(displaySec) + " / " +
                                    formatWindowOverlayTime(totalSec))
                                 : formatWindowOverlayTime(displaySec);
-    std::string volStr = " Vol: " + std::to_string(volPct) + "%" + radioBuf;
+    std::string volStr = " Vol: " + std::to_string(volPct) + "%";
     return timeLabel + " " + status + volStr;
   };
 
@@ -1724,15 +1721,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           sendSeekRequest(currentSec + dir * 5.0);
         };
         cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
-        cb.onAdjustRadioMakeup = [&](float delta) {
-          audioAdjustRadioMakeup(delta);
-          triggerOverlay();
-          redraw = true;
-          if (windowEnabled) {
-            windowForcePresent.store(true, std::memory_order_relaxed);
-            windowPresentCv.notify_one();
-          }
-        };
 
         if (ev.key.vk == 'W') {
           windowEnabled = !windowEnabled;

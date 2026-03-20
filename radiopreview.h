@@ -23,8 +23,5 @@ struct PcmToIfPreviewModulator {
   void processBlock(Radio1938& radio,
                     float* samples,
                     uint32_t frames,
-                    uint32_t channels,
-                    float makeupGain);
+                    uint32_t channels);
 };
-
-bool radioPreviewBlockOverloaded(const Radio1938& radio, uint32_t frames);

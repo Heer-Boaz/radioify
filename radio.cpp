@@ -8,7 +8,6 @@ using BlockStep = Radio1938::BlockStep;
 using AllocateStep = Radio1938::AllocateStep;
 using ConfigureStep = Radio1938::ConfigureStep;
 using InitializeDependentStateStep = Radio1938::InitializeDependentStateStep;
-using PresentationPathStep = Radio1938::PresentationPathStep;
 using ProgramPathStep = Radio1938::ProgramPathStep;
 using ResetStep = Radio1938::ResetStep;
 using SampleControlStep = Radio1938::SampleControlStep;
@@ -60,43 +59,11 @@ static inline float applySeededDrift(float base,
   return base * (1.0f + relativeDepth * seededSignedUnit(seed, salt));
 }
 
-static void applyNoiseHumDefaults(NoiseHum& hum) {
-  hum.fs = 48000.0f;
-  hum.noiseHpHz = 220.0f;
-  hum.noiseLpHz = 5500.0f;
-  hum.humHz = 50.0f;
-  hum.filterQ = kRadioBiquadQ;
-  hum.scAttackMs = 10.0f;
-  hum.scReleaseMs = 320.0f;
-  hum.crackleDecayMs = 12.0f;
-  hum.sidechainMaskRef = 0.18f;
-  hum.hissMaskDepth = 0.12f;
-  hum.burstMaskDepth = 0.04f;
-  hum.pinkFastPole = 0.985f;
-  hum.pinkSlowPole = 0.9975f;
-  hum.brownStep = 0.0015f;
-  hum.hissDriftPole = 0.9995f;
-  hum.hissDriftNoise = 0.0005f;
-  hum.hissDriftSlowPole = 0.99985f;
-  hum.hissDriftSlowNoise = 0.00015f;
-  hum.whiteMix = 0.82f;
-  hum.pinkFastMix = 0.22f;
-  hum.pinkDifferenceMix = 0.12f;
-  hum.pinkFastSubtract = 0.5f;
-  hum.brownMix = 0.08f;
-  hum.hissBase = 0.88f;
-  hum.hissDriftDepth = 0.20f;
-  hum.hissDriftSlowMix = 0.06f;
-  hum.humSecondHarmonicMix = 0.35f;
-}
-
 static void applyRadioBaseDefaults(Radio1938& radio) {
   radio.sampleRate = 48000.0f;
   radio.channels = 1;
   radio.bwHz = 4800.0f;
   radio.noiseWeight = 0.0f;
-  radio.makeupGain = 1.0f;
-  radio.presentationGain = 1.0f;
   radio.preset = Radio1938::Preset::Philco37116X;
   radio.initialized = false;
 
@@ -116,12 +83,6 @@ static void applyRadioBaseDefaults(Radio1938& radio) {
   radio.tone = Radio1938::ToneNodeState{};
   radio.power = Radio1938::PowerNodeState{};
   radio.noiseDerived = Radio1938::NoiseDerivedState{};
-  radio.speakerStage = Radio1938::SpeakerStageState{};
-  radio.cabinet = Radio1938::CabinetNodeState{};
-  radio.finalLimiter = Radio1938::FinalLimiterNodeState{};
-  radio.output = Radio1938::OutputNodeState{};
-
-  applyNoiseHumDefaults(radio.noiseRuntime.hum);
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.ifNoiseMix = 0.0f;
@@ -1634,17 +1595,14 @@ void RadioInterferenceDerivedNode::reset(Radio1938&) {}
 
 void RadioInterferenceDerivedNode::update(Radio1938& radio,
                                           RadioSampleContext& ctx) {
-  auto& noiseConfig = radio.noiseConfig;
   auto& noiseDerived = radio.noiseDerived;
-  float postNoiseScale = std::max(radio.globals.postNoiseMix, 0.0f);
   ctx.derived.demodIfNoiseAmp =
       noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix;
-  ctx.derived.noiseAmp =
-      noiseDerived.baseNoiseAmp * postNoiseScale + radio.globals.noiseFloorAmp;
-  ctx.derived.crackleAmp = noiseDerived.baseCrackleAmp * postNoiseScale;
-  ctx.derived.crackleRate = noiseDerived.crackleRate;
-  ctx.derived.humAmp = noiseDerived.baseHumAmp * postNoiseScale;
-  ctx.derived.humToneEnabled = noiseConfig.enableHumTone;
+  ctx.derived.noiseAmp = 0.0f;
+  ctx.derived.crackleAmp = 0.0f;
+  ctx.derived.crackleRate = 0.0f;
+  ctx.derived.humAmp = 0.0f;
+  ctx.derived.humToneEnabled = false;
 }
 
 void RadioNoiseNode::init(Radio1938& radio, RadioInitContext& initCtx) {
@@ -1692,7 +1650,6 @@ float RadioSpeakerNode::process(Radio1938& radio,
                                 const RadioSampleContext&) {
   auto& speakerStage = radio.speakerStage;
   speakerStage.speaker.drive = std::max(speakerStage.drive, 0.0f);
-  y *= radio.makeupGain;
   y = processOversampled2x(y, speakerStage.osPrev, speakerStage.osLpIn,
                            speakerStage.osLpOut, [&](float v) {
                              bool clipped = false;
@@ -1856,7 +1813,7 @@ float RadioFinalLimiterNode::process(Radio1938& radio,
                                      const RadioSampleContext&) {
   auto& limiter = radio.finalLimiter;
   if (!limiter.enabled) return y;
-  float limitedIn = y * radio.presentationGain;
+  float limitedIn = y;
 
   float peak = 0.0f;
   float mid = 0.5f * (limiter.osPrev + limitedIn);
@@ -2018,27 +1975,10 @@ const Radio1938::ProgramPathStep* Radio1938::RadioExecutionGraph::findProgramPat
   return nullptr;
 }
 
-Radio1938::PresentationPathStep*
-Radio1938::RadioExecutionGraph::findPresentationPath(StageId id) {
-  for (auto& step : presentationPathSteps) {
-    if (step.id == id) return &step;
-  }
-  return nullptr;
-}
-
-const Radio1938::PresentationPathStep*
-Radio1938::RadioExecutionGraph::findPresentationPath(StageId id) const {
-  for (const auto& step : presentationPathSteps) {
-    if (step.id == id) return &step;
-  }
-  return nullptr;
-}
-
 bool Radio1938::RadioExecutionGraph::isEnabled(StageId id) const {
   if (const auto* step = findBlock(id)) return step->enabled;
   if (const auto* step = findSampleControl(id)) return step->enabled;
   if (const auto* step = findProgramPath(id)) return step->enabled;
-  if (const auto* step = findPresentationPath(id)) return step->enabled;
   return false;
 }
 
@@ -2054,9 +1994,6 @@ void Radio1938::RadioExecutionGraph::setEnabled(StageId id, bool value) {
   if (auto* step = findProgramPath(id)) {
     step->enabled = value;
     return;
-  }
-  if (auto* step = findPresentationPath(id)) {
-    step->enabled = value;
   }
 }
 
@@ -2150,21 +2087,6 @@ static float runProgramPathFromIndex(
   return y;
 }
 
-template <size_t StepCount>
-static float runPresentationPath(
-    Radio1938& radio,
-    float y,
-    const RadioSampleContext& ctx,
-    const std::array<PresentationPathStep, StepCount>& steps) {
-  for (const auto& step : steps) {
-    if (!step.enabled || !step.process) continue;
-    float in = y;
-    y = step.process(radio, y, ctx);
-    updateStageCalibration(radio, step.id, in, y);
-  }
-  return y;
-}
-
 static constexpr size_t kInputProgramStartIndex = 0;
 static constexpr size_t kMixerProgramStartIndex = 2;
 
@@ -2185,19 +2107,9 @@ static void processRadioFrames(Radio1938& radio,
     float x = inputSample(frame);
     float y = runProgramPathFromIndex(radio, x, ctx, radio.graph.programPathSteps,
                                       programStartIndex);
-    y = runPresentationPath(radio, y, ctx, radio.graph.presentationPathSteps);
     outputSample(frame, y);
   }
 
-  if (radio.diagnostics.processedSamples > 0) {
-    float invCount = 1.0f / static_cast<float>(radio.diagnostics.processedSamples);
-    radio.diagnostics.finalLimiterDutyCycle =
-        radio.diagnostics.finalLimiterActiveSamples * invCount;
-    radio.diagnostics.finalLimiterAverageGainReduction =
-        static_cast<float>(radio.diagnostics.finalLimiterGainReductionSum * invCount);
-    radio.diagnostics.finalLimiterAverageGainReductionDb = static_cast<float>(
-        radio.diagnostics.finalLimiterGainReductionDbSum * invCount);
-  }
   if (radio.calibration.enabled) {
     updateCalibrationSnapshot(radio);
   }
@@ -2232,16 +2144,11 @@ static void writeMonoToInterleaved(float* samples,
 }
 
 static void applyPhilco37116XPreset(Radio1938& radio) {
-  radio.makeupGain = 1.0f;
-  radio.presentationGain = 1.0f;
   radio.globals.ifNoiseMix = 0.22f;
-  radio.globals.postNoiseMix = 0.11f;
-  radio.globals.noiseFloorAmp = 0.0024f;
   radio.globals.inputPad = 1.0f;
   radio.globals.enableAutoLevel = false;
   radio.globals.autoTargetDb = -21.0f;
   radio.globals.autoMaxBoostDb = 2.5f;
-  radio.globals.outputClipThreshold = 0.98f;
 
   radio.tuning.safeBwMinHz = 2400.0f;
   radio.tuning.safeBwMaxHz = 9000.0f;
@@ -2350,69 +2257,6 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.supplyDriveDepth = 0.0f;
   radio.power.supplyBiasDepth = 0.0f;
   radio.power.postLpHz = 0.0f;
-
-  radio.speakerStage.drive = 1.0f;
-  radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
-  radio.speakerStage.speaker.suspensionHz = 175.0f;
-  radio.speakerStage.speaker.suspensionQ = 0.70f;
-  radio.speakerStage.speaker.suspensionGainDb = 0.25f;
-  radio.speakerStage.speaker.coneBodyHz = 480.0f;
-  radio.speakerStage.speaker.coneBodyQ = 0.88f;
-  radio.speakerStage.speaker.coneBodyGainDb = 0.0f;
-  radio.speakerStage.speaker.upperBreakupHz = 0.0f;
-  radio.speakerStage.speaker.upperBreakupQ = 1.05f;
-  radio.speakerStage.speaker.upperBreakupGainDb = 0.00f;
-  radio.speakerStage.speaker.coneDipHz = 0.0f;
-  radio.speakerStage.speaker.coneDipQ = 0.95f;
-  radio.speakerStage.speaker.coneDipGainDb = 0.0f;
-  radio.speakerStage.speaker.topLpHz = 4200.0f;
-  radio.speakerStage.speaker.limit = 0.99f;
-  radio.speakerStage.speaker.asymBias = 0.0f;
-  radio.speakerStage.speaker.excursionRef = 0.28f;
-  radio.speakerStage.speaker.complianceLossDepth = 0.05f;
-  radio.speakerStage.speaker.hfLossDepth = 0.0f;
-  radio.speakerStage.speaker.hfLossLpHz = 0.0f;
-
-  radio.cabinet.enabled = true;
-  radio.cabinet.panelHz = 205.0f;
-  radio.cabinet.panelQ = 0.82f;
-  radio.cabinet.panelGainDb = 0.25f;
-  radio.cabinet.chassisHz = 455.0f;
-  radio.cabinet.chassisQ = 1.05f;
-  radio.cabinet.chassisGainDb = 0.10f;
-  radio.cabinet.cavityDipHz = 960.0f;
-  radio.cabinet.cavityDipQ = 0.95f;
-  radio.cabinet.cavityDipGainDb = -0.18f;
-  radio.cabinet.grilleLpHz = 0.0f;
-  radio.cabinet.rearDelayMs = 1.2f;
-  radio.cabinet.rearMix = 0.03f;
-  radio.cabinet.rearHpHz = 170.0f;
-  radio.cabinet.rearLpHz = 820.0f;
-  radio.cabinet.clarifier1Hz = 0.0f;
-  radio.cabinet.clarifier1Q = 0.78f;
-  radio.cabinet.clarifier1Coupling = 0.0f;
-  radio.cabinet.clarifier2Hz = 0.0f;
-  radio.cabinet.clarifier2Q = 0.92f;
-  radio.cabinet.clarifier2Coupling = 0.0f;
-  radio.cabinet.clarifier3Hz = 0.0f;
-  radio.cabinet.clarifier3Q = 1.08f;
-  radio.cabinet.clarifier3Coupling = 0.0f;
-
-  radio.noiseConfig.enableHumTone = true;
-  radio.noiseConfig.humAmpScale = 0.0016f;
-  radio.noiseConfig.crackleAmpScale = 0.0012f;
-  radio.noiseConfig.crackleRateScale = 0.012f;
-  radio.noiseRuntime.hum.crackleDecayMs = 4.5f;
-  radio.noiseRuntime.hum.noiseHpHz = 320.0f;
-  radio.noiseRuntime.hum.noiseLpHz = 3300.0f;
-  radio.noiseRuntime.hum.hissMaskDepth = 0.06f;
-  radio.noiseRuntime.hum.burstMaskDepth = 0.01f;
-
-  radio.finalLimiter.enabled = true;
-  radio.finalLimiter.threshold = 0.995f;
-  radio.finalLimiter.lookaheadMs = 1.2f;
-  radio.finalLimiter.attackMs = 0.08f;
-  radio.finalLimiter.releaseMs = 120.0f;
 }
 
 static void applySetIdentity(Radio1938& radio) {
@@ -2431,38 +2275,13 @@ static void applySetIdentity(Radio1938& radio) {
   receiver.transformerTolerance = 0.08f * depth *
                                   seededSignedUnit(seed, 0x1005u);
 
-  auto& speaker = radio.speakerStage.speaker;
-  speaker.suspensionComplianceTolerance =
-      0.10f * depth * seededSignedUnit(seed, 0x2001u);
-  speaker.coneMassTolerance =
-      0.08f * depth * seededSignedUnit(seed, 0x2002u);
-  speaker.breakupTolerance =
-      0.07f * depth * seededSignedUnit(seed, 0x2003u);
-  speaker.voiceCoilTolerance =
-      0.05f * depth * seededSignedUnit(seed, 0x2004u);
-
-  auto& cabinet = radio.cabinet;
-  cabinet.panelStiffnessTolerance =
-      0.10f * depth * seededSignedUnit(seed, 0x3001u);
-  cabinet.baffleLeakTolerance =
-      0.12f * depth * seededSignedUnit(seed, 0x3002u);
-  cabinet.cavityTolerance =
-      0.08f * depth * seededSignedUnit(seed, 0x3003u);
-  cabinet.grilleClothTolerance =
-      0.06f * depth * seededSignedUnit(seed, 0x3004u);
-  cabinet.rearPathTolerance =
-      0.10f * depth * seededSignedUnit(seed, 0x3005u);
 }
 
 static void refreshIdentityDependentStages(Radio1938& radio) {
   applySetIdentity(radio);
   RadioInitContext initCtx{};
   RadioReceiverCircuitNode::init(radio, initCtx);
-  RadioSpeakerNode::init(radio, initCtx);
-  RadioCabinetNode::init(radio, initCtx);
   RadioReceiverCircuitNode::reset(radio);
-  RadioSpeakerNode::reset(radio);
-  RadioCabinetNode::reset(radio);
   if (radio.calibration.enabled) {
     radio.resetCalibration();
   }

@@ -601,9 +601,6 @@ struct AudioState {
   std::atomic<bool> audioPrimed{false};
   std::atomic<float> volume{1.0f};
   std::atomic<float> peak{0.0f};
-  std::atomic<float> radioMakeupGain{1.0f};
-  std::atomic<uint32_t> radioClipHold{0};
-  std::atomic<uint32_t> radioLimiterHold{0};
   AudioSampleRing streamRb;
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};
@@ -692,8 +689,6 @@ void rebuildRadioPreviewChain(AudioState* state) {
   state->radioPreview.init(state->radio1938,
                            static_cast<float>(gAudio.sampleRate),
                            gAudio.lpHz);
-  state->radioClipHold.store(0, std::memory_order_relaxed);
-  state->radioLimiterHold.store(0, std::memory_order_relaxed);
 }
 
 void stopAuditionWorker() {
@@ -710,7 +705,6 @@ void stopAuditionWorker() {
 
 void applyRadioTogglePreset() {
   gAudio.radio1938Template.applyPreset(Radio1938::Preset::Philco37116X);
-  gAudio.state.radioMakeupGain.store(1.0f);
   rebuildRadioPreviewChain(&gAudio.state);
 }
 
@@ -789,41 +783,12 @@ static void updatePeakMeter(AudioState* state, const float* samples,
   state->peak.store(next, std::memory_order_relaxed);
 }
 
-static void updateRadioIndicatorHolds(AudioState* state, uint32_t frames) {
-  static constexpr uint32_t kRadioClipHoldFrames = 2048;
-  if (!state || frames == 0) return;
-  bool clipped = radioPreviewBlockOverloaded(state->radio1938, frames);
-  bool limiting = state->radio1938.diagnostics.finalLimiterActive;
-  uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
-  uint32_t limiterHold =
-      state->radioLimiterHold.load(std::memory_order_relaxed);
-  if (clipped) {
-    hold = kRadioClipHoldFrames;
-  } else if (hold > frames) {
-    hold -= frames;
-  } else {
-    hold = 0;
-  }
-  if (limiting) {
-    limiterHold = kRadioClipHoldFrames;
-  } else if (limiterHold > frames) {
-    limiterHold -= frames;
-  } else {
-    limiterHold = 0;
-  }
-  state->radioClipHold.store(hold, std::memory_order_relaxed);
-  state->radioLimiterHold.store(limiterHold, std::memory_order_relaxed);
-}
-
 static void processRadioBlock(AudioState* state,
                               float* samples,
                               uint32_t frames) {
   if (!state || !samples || frames == 0) return;
   const uint32_t channels = std::max(1u, state->channels);
-  const float gain = state->radioMakeupGain.load(std::memory_order_relaxed);
-  state->radioPreview.processBlock(state->radio1938, samples, frames, channels,
-                                   gain);
-  updateRadioIndicatorHolds(state, frames);
+  state->radioPreview.processBlock(state->radio1938, samples, frames, channels);
 }
 
 static inline float softLimitOutputSample(float x, float threshold = 0.985f) {
@@ -1880,7 +1845,6 @@ void audioInit(const AudioPlaybackConfig& config) {
     applyRadioTogglePreset();
   } else {
     rebuildRadioPreviewChain(&gAudio.state);
-    gAudio.state.radioMakeupGain.store(1.0f);
   }
 }
 
@@ -2548,9 +2512,6 @@ void audioToggleRadio() {
   gAudio.state.useRadio1938.store(next);
   if (next) {
     applyRadioTogglePreset();
-  } else {
-    gAudio.state.radioClipHold.store(0, std::memory_order_relaxed);
-    gAudio.state.radioLimiterHold.store(0, std::memory_order_relaxed);
   }
 }
 
@@ -2610,18 +2571,8 @@ void audioAdjustVolume(float delta) {
   gAudio.state.volume.store(next, std::memory_order_relaxed);
 }
 
-void audioAdjustRadioMakeup(float delta) {
-  float current = gAudio.state.radioMakeupGain.load(std::memory_order_relaxed);
-  float next = std::clamp(current + delta, 0.5f, 2.0f);
-  gAudio.state.radioMakeupGain.store(next, std::memory_order_relaxed);
-}
-
 float audioGetVolume() {
   return gAudio.state.volume.load(std::memory_order_relaxed);
-}
-
-float audioGetRadioMakeup() {
-  return gAudio.state.radioMakeupGain.load(std::memory_order_relaxed);
 }
 
 float audioGetPeak() {
@@ -2677,14 +2628,6 @@ bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
       file, trackIndex, analysisSampleRate, analysisChannels, 0,
       gAudio.kssOptions, gAudio.nsfOptions, gAudio.vgmOptions,
       gAudio.vgmDeviceOverrides, outputFile, progressCallback, error);
-}
-
-bool audioIsRadioClipping() {
-  return gAudio.state.radioClipHold.load(std::memory_order_relaxed) > 0;
-}
-
-bool audioIsRadioLimiting() {
-  return gAudio.state.radioLimiterHold.load(std::memory_order_relaxed) > 0;
 }
 
 std::string audioGetWarning() {

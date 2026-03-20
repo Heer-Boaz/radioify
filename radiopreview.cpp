@@ -15,13 +15,6 @@ float computeOpenCircuitCarrierRmsVolts(float fieldStrengthVoltsPerMeter,
          std::max(antennaEffectiveHeightMeters, 0.0f);
 }
 
-void applyMonoGain(float* samples, uint32_t frames, float gain) {
-  if (!samples || frames == 0 || gain == 1.0f) return;
-  for (uint32_t i = 0; i < frames; ++i) {
-    samples[i] *= gain;
-  }
-}
-
 }  // namespace
 
 void PcmToIfPreviewModulator::init(const Radio1938& radio,
@@ -54,8 +47,7 @@ void PcmToIfPreviewModulator::reset() {
 void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
                                            float* samples,
                                            uint32_t frames,
-                                           uint32_t channels,
-                                           float makeupGain) {
+                                           uint32_t channels) {
   if (!samples || frames == 0 || channels == 0) return;
 
   auto nextProgramSample = [&](float x) {
@@ -80,7 +72,6 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
       if (carrierPhase >= kRadioTwoPi) carrierPhase -= kRadioTwoPi;
     }
     radio.processIfReal(monoScratch.data(), frames);
-    applyMonoGain(monoScratch.data(), frames, makeupGain);
     for (uint32_t frame = 0; frame < frames; ++frame) {
       samples[frame] = monoScratch[frame];
     }
@@ -102,7 +93,6 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
   }
 
   radio.processIfReal(monoScratch.data(), frames);
-  applyMonoGain(monoScratch.data(), frames, makeupGain);
 
   for (uint32_t frame = 0; frame < frames; ++frame) {
     float y = monoScratch[frame];
@@ -111,13 +101,4 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
       samples[base + ch] = y;
     }
   }
-}
-
-bool radioPreviewBlockOverloaded(const Radio1938& radio, uint32_t frames) {
-  const auto& diag = radio.diagnostics;
-  if (diag.outputClip) return true;
-  uint32_t overloadSamples =
-      diag.powerClipSamples + diag.speakerClipSamples + diag.outputClipSamples;
-  uint32_t threshold = std::max<uint32_t>(4u, frames / 256u);
-  return overloadSamples >= threshold;
 }

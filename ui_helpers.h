@@ -35,7 +35,6 @@ ProgressTextLayout buildProgressTextLayout(double displaySec,
                                            double totalSec,
                                            const std::string& status,
                                            int volPct,
-                                           float radioGain,
                                            int width);
 AsciiArtLayout fitAsciiArtLayout(int srcWidth,
                                  int srcHeight,
