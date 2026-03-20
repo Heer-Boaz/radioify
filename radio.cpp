@@ -143,6 +143,9 @@ static void applyRadioBaseDefaults(Radio1938& radio) {
   radio.input.autoEnvReleaseMs = 220.0f;
   radio.input.autoGainAttackMs = 140.0f;
   radio.input.autoGainReleaseMs = 1200.0f;
+  radio.input.sourceResistanceOhms = 300.0f;
+  radio.input.inputResistanceOhms = 47000.0f;
+  radio.input.couplingCapFarads = 1.0e-9f;
 
   radio.frontEnd.rfGain = 1.0f;
   radio.frontEnd.avcGainDepth = 0.0f;
@@ -915,17 +918,36 @@ void RadioInputNode::init(Radio1938& radio, RadioInitContext&) {
       std::exp(-1.0f / (radio.sampleRate * (input.autoGainAttackMs / 1000.0f)));
   input.autoGainRel =
       std::exp(-1.0f / (radio.sampleRate * (input.autoGainReleaseMs / 1000.0f)));
+  float sourceR = std::max(input.sourceResistanceOhms, 0.0f);
+  float loadR = std::max(input.inputResistanceOhms, 1.0f);
+  input.sourceDivider = loadR / std::max(sourceR + loadR, 1.0f);
+  if (input.couplingCapFarads > 0.0f) {
+    float hpHz =
+        1.0f / (kRadioTwoPi * std::max((sourceR + loadR) * input.couplingCapFarads,
+                                       1e-12f));
+    hpHz = std::clamp(hpHz, 1.0f, radio.sampleRate * 0.45f);
+    input.sourceCouplingHp.setHighpass(radio.sampleRate, hpHz, kRadioBiquadQ);
+  } else {
+    input.sourceCouplingHp = Biquad{};
+  }
 }
 
 void RadioInputNode::reset(Radio1938& radio) {
   radio.input.autoEnv = 0.0f;
   radio.input.autoGainDb = 0.0f;
+  radio.input.sourceCouplingHp.reset();
 }
 
 float RadioInputNode::process(Radio1938& radio,
                               float x,
                               const RadioSampleContext&) {
   auto& input = radio.input;
+  if (radio.sourceFrame.mode == SourceInputMode::RealRf) {
+    x *= input.sourceDivider;
+    if (input.couplingCapFarads > 0.0f) {
+      x = input.sourceCouplingHp.process(x);
+    }
+  }
   x *= radio.globals.inputPad;
   if (!radio.globals.enableAutoLevel) return x;
 
@@ -1158,14 +1180,6 @@ static float processSuperhetSourceFrame(Radio1938& radio,
       float envQ = prevQ + (currQ - prevQ) * t;
       rf = rfGain *
            (envI * std::cos(ifStrip.rfPhase) - envQ * std::sin(ifStrip.rfPhase));
-      ifStrip.rfPhase = wrapPhase(ifStrip.rfPhase + rfStep);
-    } else if (mode == SourceInputMode::AmAudio) {
-      float program = prevI + (currI - prevI) * t;
-      float mod = radio.sourceFrame.modulationIndex * program;
-      float carrierPeak =
-          std::sqrt(2.0f) * std::max(radio.sourceFrame.carrierAmplitude, 0.0f);
-      float envelope = carrierPeak * (1.0f + mod);
-      rf = rfGain * envelope * std::cos(ifStrip.rfPhase);
       ifStrip.rfPhase = wrapPhase(ifStrip.rfPhase + rfStep);
     } else {
       rf = prevI + (currI - prevI) * t;
@@ -2380,18 +2394,24 @@ void Radio1938::processAmAudio(const float* audioSamples,
                                float* outSamples,
                                uint32_t frames,
                                float carrierAmplitude,
-                               float modulationIndex,
-                               float modulationLimit) {
+                               float modulationIndex) {
   if (!audioSamples || !outSamples || frames == 0) return;
-  processRadioFrames(
-      *this, frames, kMixerProgramStartIndex,
-      [&](uint32_t frame) {
-        float x = audioSamples[frame];
-        sourceFrame.setAmAudio(x, carrierAmplitude, modulationIndex,
-                               modulationLimit);
-        return x;
-      },
-      [&](uint32_t frame, float y) { outSamples[frame] = y; });
+  std::vector<float> rfScratch(frames);
+  float safeSampleRate = std::max(sampleRate, 1.0f);
+  float carrierHz =
+      std::clamp(ifStrip.sourceCarrierHz, 1000.0f, safeSampleRate * 0.45f);
+  float carrierStep = kRadioTwoPi * (carrierHz / safeSampleRate);
+  float carrierPeak = std::sqrt(2.0f) * std::max(carrierAmplitude, 0.0f);
+  float phase = iqInput.iqPhase;
+  for (uint32_t frame = 0; frame < frames; ++frame) {
+    float envelope = carrierPeak * (1.0f + modulationIndex * audioSamples[frame]);
+    rfScratch[frame] = envelope * std::cos(phase);
+    phase += carrierStep;
+    if (phase >= kRadioTwoPi) phase -= kRadioTwoPi;
+  }
+  iqInput.iqPhase = phase;
+  processIfReal(rfScratch.data(), frames);
+  std::copy(rfScratch.begin(), rfScratch.end(), outSamples);
 }
 
 void Radio1938::processIqBaseband(const float* iqInterleaved,
