@@ -27,7 +27,10 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
   carrierHz =
       clampfLocal(radio.ifStrip.sourceCarrierHz, 1000.0f, sampleRate * 0.45f);
   carrierPhase = 0.0f;
-  fieldStrengthVoltsPerMeter = 0.08f;
+  // A moderate broadcast field keeps the explicit RF/IF chain in a plausible
+  // detector range; the previous near-volt open-circuit antenna drive badly
+  // overran the now non-ideal mixer and audio stages.
+  fieldStrengthVoltsPerMeter = 0.0002f;
   antennaEffectiveHeightMeters = 12.0f;
   modulationIndex = 0.85f;
 

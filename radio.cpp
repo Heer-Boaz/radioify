@@ -149,6 +149,39 @@ static float processTransformerLoadedTubeStage(
   return (current - quiescentCurrent) * std::max(acLoadResistanceOhms, 1.0f);
 }
 
+static float processConverterTubeStage(float baseGridVolts,
+                                       float rfGridVolts,
+                                       float oscillatorGridVolts,
+                                       float supplyScale,
+                                       float quiescentPlateVolts,
+                                       float screenVolts,
+                                       float biasVolts,
+                                       float cutoffVolts,
+                                       float quiescentPlateCurrentAmps,
+                                       float mutualConductanceSiemens,
+                                       float acLoadResistanceOhms,
+                                       float plateKneeVolts,
+                                       float gridSoftnessVolts) {
+  float plateVoltage = std::max(quiescentPlateVolts * supplyScale, 1.0f);
+  float screen = std::max(screenVolts * supplyScale, 1.0f);
+  auto plateCurrentForGrid = [&](float gridVolts) {
+    return deviceTubePlateCurrent(
+        gridVolts, plateVoltage, screen, biasVolts, cutoffVolts,
+        quiescentPlateVolts * supplyScale, screenVolts * supplyScale,
+        quiescentPlateCurrentAmps, mutualConductanceSiemens, plateKneeVolts,
+        gridSoftnessVolts);
+  };
+  float idleCurrent = plateCurrentForGrid(baseGridVolts);
+  float rfOnlyCurrent = plateCurrentForGrid(baseGridVolts + rfGridVolts);
+  float loOnlyCurrent =
+      plateCurrentForGrid(baseGridVolts + oscillatorGridVolts);
+  float mixedCurrent =
+      plateCurrentForGrid(baseGridVolts + rfGridVolts + oscillatorGridVolts);
+  float conversionCurrent =
+      mixedCurrent - rfOnlyCurrent - loOnlyCurrent + idleCurrent;
+  return conversionCurrent * std::max(acLoadResistanceOhms, 1.0f);
+}
+
 static bool solveLinear3x3(float a[3][3], float b[3], float x[3]) {
   for (int pivot = 0; pivot < 3; ++pivot) {
     int pivotRow = pivot;
@@ -1578,14 +1611,17 @@ static float processSuperhetSourceFrame(Radio1938& radio,
     }
     float lo = std::cos(ifStrip.loPhase);
     ifStrip.loPhase = wrapPhase(ifStrip.loPhase + loStep);
-    float controlGridVolts =
-        mixer.biasVolts + mixer.rfGridDriveVolts * rf +
-        mixer.loGridDriveVolts * lo - mixer.avcGridDriveVolts * avcT;
-    float mixerPlateAcVolts = processTransformerLoadedTubeStage(
-        controlGridVolts, 1.0f, mixer.plateDcVolts, mixer.screenVolts,
-        mixer.biasVolts, mixer.cutoffVolts, mixer.plateCurrentAmps,
-        mixer.mutualConductanceSiemens, mixer.acLoadResistanceOhms,
-        mixer.plateKneeVolts, mixer.gridSoftnessVolts);
+    float baseGridVolts =
+        mixer.biasVolts - mixer.avcGridDriveVolts * avcT;
+    float rfGridVolts = mixer.rfGridDriveVolts * rf;
+    float oscillatorGridVolts = mixer.loGridDriveVolts * lo;
+    float mixerPlateAcVolts = processConverterTubeStage(
+        baseGridVolts, rfGridVolts, oscillatorGridVolts, 1.0f,
+        mixer.plateDcVolts,
+        mixer.screenVolts, mixer.biasVolts, mixer.cutoffVolts,
+        mixer.plateCurrentAmps, mixer.mutualConductanceSiemens,
+        mixer.acLoadResistanceOhms, mixer.plateKneeVolts,
+        mixer.gridSoftnessVolts);
     float ifGainControl =
         std::max(0.20f, 1.0f - ifStrip.avcGainDepth * avcT);
     float ifSample = mixerPlateAcVolts * ifGain * ifGainControl;
