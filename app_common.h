@@ -13,6 +13,7 @@ struct Options {
   bool force50Hz = false;
   int bwHz = 5500;
   double noise = 0.012;
+  bool calibrationReport = false;
   bool mono = true;
   bool play = true;
   bool dry = false;

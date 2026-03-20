@@ -713,32 +713,54 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::project(
        std::isfinite(secondaryLoadResistanceOhms))
           ? 1.0f / std::max(secondaryLoadResistanceOhms, 1e-9f)
           : 0.0f;
+  float determinant = std::max(
+      primaryInductance * secondaryInductance - mutualInductance * mutualInductance,
+      1e-18f);
+  float a11 = secondaryInductance / determinant;
+  float a12 = -mutualInductance / determinant;
+  float a21 = -mutualInductance / determinant;
+  float a22 = primaryInductance / determinant;
   float projectedPrimaryCurrent = primaryCurrent;
   float projectedSecondaryCurrent = secondaryCurrent;
   float projectedPrimaryVoltage = primaryVoltage;
   float projectedSecondaryVoltage = secondaryVoltage;
 
   for (int step = 0; step < integrationSubsteps; ++step) {
-    float a[4][4] = {
-        {primaryInductance / dt + primaryResistanceOhms,
-         mutualInductance / dt, -1.0f, 0.0f},
-        {mutualInductance / dt,
-         secondaryInductance / dt + secondaryResistanceOhms, 0.0f, -1.0f},
-        {1.0f, 0.0f, primaryCap / dt + primaryCoreConductance, 0.0f},
-        {0.0f, 1.0f, 0.0f,
-         secondaryCap / dt + secondaryLoadConductance},
+    float system[4][4] = {
+        {1.0f + 0.5f * dt * a11 * primaryResistanceOhms,
+         0.5f * dt * a12 * secondaryResistanceOhms,
+         -0.5f * dt * a11, -0.5f * dt * a12},
+        {0.5f * dt * a21 * primaryResistanceOhms,
+         1.0f + 0.5f * dt * a22 * secondaryResistanceOhms,
+         -0.5f * dt * a21, -0.5f * dt * a22},
+        {0.5f * dt / primaryCap, 0.0f,
+         1.0f + 0.5f * dt * primaryCoreConductance / primaryCap, 0.0f},
+        {0.0f, 0.5f * dt / secondaryCap, 0.0f,
+         1.0f + 0.5f * dt * secondaryLoadConductance / secondaryCap},
     };
     float b[4] = {
-        primaryInductance / dt * projectedPrimaryCurrent +
-            mutualInductance / dt * projectedSecondaryCurrent,
-        mutualInductance / dt * projectedPrimaryCurrent +
-            secondaryInductance / dt * projectedSecondaryCurrent,
-        primaryDriveCurrentAmps + primaryCap / dt * projectedPrimaryVoltage,
-        secondaryCap / dt * projectedSecondaryVoltage,
+        (1.0f - 0.5f * dt * a11 * primaryResistanceOhms) *
+                projectedPrimaryCurrent -
+            0.5f * dt * a12 * secondaryResistanceOhms *
+                projectedSecondaryCurrent +
+            0.5f * dt * a11 * projectedPrimaryVoltage +
+            0.5f * dt * a12 * projectedSecondaryVoltage,
+        -0.5f * dt * a21 * primaryResistanceOhms * projectedPrimaryCurrent +
+            (1.0f - 0.5f * dt * a22 * secondaryResistanceOhms) *
+                projectedSecondaryCurrent +
+            0.5f * dt * a21 * projectedPrimaryVoltage +
+            0.5f * dt * a22 * projectedSecondaryVoltage,
+        -0.5f * dt / primaryCap * projectedPrimaryCurrent +
+            (1.0f - 0.5f * dt * primaryCoreConductance / primaryCap) *
+                projectedPrimaryVoltage +
+            dt * (primaryDriveCurrentAmps / primaryCap),
+        -0.5f * dt / secondaryCap * projectedSecondaryCurrent +
+            (1.0f - 0.5f * dt * secondaryLoadConductance / secondaryCap) *
+                projectedSecondaryVoltage,
     };
     float x[4] = {projectedPrimaryCurrent, projectedSecondaryCurrent,
                   projectedPrimaryVoltage, projectedSecondaryVoltage};
-    if (!solveLinear4x4(a, b, x)) return {};
+    if (!solveLinear4x4(system, b, x)) return {};
     projectedPrimaryCurrent = x[0];
     projectedSecondaryCurrent = x[1];
     projectedPrimaryVoltage = x[2];
@@ -2167,7 +2189,7 @@ float RadioPowerNode::process(Radio1938& radio,
     if (lowResidual * highResidual <= 0.0f) {
       float low = minPrimaryVoltage;
       float high = maxPrimaryVoltage;
-      for (int i = 0; i < 20; ++i) {
+      for (int i = 0; i < 8; ++i) {
         float mid = 0.5f * (low + high);
         CurrentDrivenTransformerSample midSample{};
         float midDriveCurrent = 0.0f;
@@ -2190,7 +2212,7 @@ float RadioPowerNode::process(Radio1938& radio,
       }
     } else {
       float guess = bestGuess;
-      for (int i = 0; i < 12; ++i) {
+      for (int i = 0; i < 6; ++i) {
         CurrentDrivenTransformerSample predicted{};
         float driveCurrent = 0.0f;
         float residual = evalResidual(guess, predicted, driveCurrent);
@@ -2212,7 +2234,7 @@ float RadioPowerNode::process(Radio1938& radio,
   SolvedTransformerDrive interstageSolved{};
   float interstagePrimaryMin = 1.0f - driverPlateQuiescent;
   float interstagePrimaryMax = driverSupply - driverPlateQuiescent;
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < 2; ++i) {
     interstageLoadResistance = differentialGridLoadResistance(
         interstageSecondaryGuess, power.outputTubeBiasVolts,
         power.outputGridLeakResistanceOhms,
@@ -3013,7 +3035,7 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.interstageSecondaryLeakageInductanceHenries = 0.040f;
   radio.power.interstageSecondaryResistanceOhms = 296.0f;
   radio.power.interstageSecondaryShuntCapFarads = 40e-12f;
-  radio.power.interstageIntegrationSubsteps = 8;
+  radio.power.interstageIntegrationSubsteps = 2;
   radio.power.outputGridLeakResistanceOhms = 250000.0f;
   radio.power.outputGridCurrentResistanceOhms = 1200.0f;
   // 6A3 is the 6.3 V heater version of the 2A3. The output stage now drives
@@ -3039,7 +3061,7 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.outputTransformerSecondaryLeakageInductanceHenries = 60e-6f;
   radio.power.outputTransformerSecondaryResistanceOhms = 0.32f;
   radio.power.outputTransformerSecondaryShuntCapFarads = 150e-12f;
-  radio.power.outputTransformerIntegrationSubsteps = 8;
+  radio.power.outputTransformerIntegrationSubsteps = 2;
   radio.power.outputLoadResistanceOhms = 8.0f;
   radio.power.nominalOutputPowerWatts = 10.0f;
 }

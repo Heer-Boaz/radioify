@@ -17,6 +17,7 @@ static void showUsage(const char* exe) {
   logLine("  out <path>             Generic output path (for extract/render flows)");
   logLine("  --track <index>        Select track index for emulated formats");
   logLine("  --50hz                 Force 50Hz playback mode where supported");
+  logLine("  --calibration-report   Dump per-stage radio metrics after render-radio");
   logLine("  --out <path>           Same as out");
   logLine("  --dry        Bypass radio processing for render/playback");
   logLine("  --no-ascii   Disable ASCII video rendering");
@@ -127,6 +128,10 @@ Options parseArgs(int argc, char** argv) {
     }
     if (arg == "--50hz") {
       o.force50Hz = true;
+      continue;
+    }
+    if (arg == "--calibration-report") {
+      o.calibrationReport = true;
       continue;
     }
     if (arg == "--dry") {

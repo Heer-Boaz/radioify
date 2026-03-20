@@ -10,6 +10,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <memory>
@@ -596,6 +597,38 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   } else {
     ma_decoder_uninit(&decoder);
   }
+
+  if (o.calibrationReport && useRadio1938 && radio1938->calibration.enabled) {
+    auto oldFlags = std::cout.flags();
+    auto oldPrecision = std::cout.precision();
+    std::cout << std::fixed << std::setprecision(3);
+    logLine("Calibration report:");
+    for (size_t i = 0; i < radio1938->calibration.stages.size(); ++i) {
+      StageId id = static_cast<StageId>(i);
+      const auto& stage = radio1938->calibration.stages[i];
+      if (stage.sampleCount == 0) continue;
+      std::cout << "  " << Radio1938::stageName(id)
+                << " rms_in=" << stage.rmsIn
+                << " rms_out=" << stage.rmsOut
+                << " peak_out=" << stage.peakOut
+                << " centroid_hz=" << stage.spectralCentroidHz
+                << " bw3_hz=" << stage.bandwidth3dBHz
+                << " bw6_hz=" << stage.bandwidth6dBHz
+                << " clips_in=" << stage.clipCountIn
+                << " clips_out=" << stage.clipCountOut
+                << "\n";
+    }
+    std::cout << "  limiter duty=" << radio1938->calibration.limiterDutyCycle
+              << " avg_gr=" << radio1938->calibration.limiterAverageGainReduction
+              << " max_gr=" << radio1938->calibration.limiterMaxGainReduction
+              << " avg_gr_db="
+              << radio1938->calibration.limiterAverageGainReductionDb
+              << " max_gr_db="
+              << radio1938->calibration.limiterMaxGainReductionDb
+              << "\n";
+    std::cout.flags(oldFlags);
+    std::cout.precision(oldPrecision);
+  }
 }
 
 static int runRenderRadioCli(const Options& o) {
@@ -610,6 +643,9 @@ static int runRenderRadioCli(const Options& o) {
   Radio1938 radio1938Template;
   radio1938Template.init(1, 48000.0f, static_cast<float>(o.bwHz),
                          static_cast<float>(o.noise));
+  if (o.calibrationReport) {
+    radio1938Template.setCalibrationEnabled(true);
+  }
 
   Options renderOpt = o;
   renderOpt.input = inputPath.string();
@@ -620,6 +656,8 @@ static int runRenderRadioCli(const Options& o) {
   logLine("  Input:  " + renderOpt.input);
   logLine("  Output: " + renderOpt.output);
   logLine(std::string("  Chain:  ") + (renderOpt.dry ? "dry" : "radio"));
+  logLine(std::string("  Report: ") +
+          (renderOpt.calibrationReport ? "calibration" : "off"));
   logLine("Rendering output...");
   renderToFile(renderOpt, radio1938Template, true);
   logLine("Done.");

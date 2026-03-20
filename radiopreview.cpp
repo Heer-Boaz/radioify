@@ -27,10 +27,12 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
   carrierHz =
       clampfLocal(radio.ifStrip.sourceCarrierHz, 1000.0f, sampleRate * 0.45f);
   carrierPhase = 0.0f;
-  // A moderate broadcast field keeps the explicit RF/IF chain in a plausible
-  // detector range; the previous near-volt open-circuit antenna drive badly
-  // overran the now non-ideal mixer and audio stages.
-  fieldStrengthVoltsPerMeter = 0.0002f;
+  // Preview mode should resemble a strong local broadcast station rather than
+  // a distant fringe signal. With roughly 10 mV/m into a 12 m effective
+  // antenna height the explicit RF/IF/audio chain lands near the same carrier
+  // order as the standalone AM sanity checks, without returning to the old
+  // unrealistic near-volt antenna overdrive.
+  fieldStrengthVoltsPerMeter = 0.010f;
   antennaEffectiveHeightMeters = 12.0f;
   modulationIndex = 0.85f;
 
