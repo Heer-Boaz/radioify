@@ -872,6 +872,7 @@ struct Radio1938 {
   struct ReceiverCircuitNodeState {
     bool enabled = false;
     float couplingHpHz = 0.0f;
+    float voltageGain = 1.0f;
     float couplingCapTolerance = 0.0f;
     float gridLeakTolerance = 0.0f;
     float interstagePeakHz = 0.0f;

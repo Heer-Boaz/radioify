@@ -25,12 +25,9 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
   float safeBw = std::max(bwHz, radio.ifStrip.ifMinBwHz);
   audioBandwidthHz = clampfLocal(0.48f * safeBw, 180.0f,
                                  std::min(4600.0f, sampleRate * 0.45f));
-  carrierAmplitude = 0.14f;
+  carrierAmplitude = 1.0f;
   modulationIndex = 0.85f;
-  modulationLimit = 0.95f;
-  modulationRef = 0.35f;
-  programLevelAtk = std::exp(-1.0f / (sampleRate * 0.0025f));
-  programLevelRel = std::exp(-1.0f / (sampleRate * 0.160f));
+  modulationLimit = 0.98f;
 
   programHp.setHighpass(sampleRate, 45.0f, kRadioBiquadQ);
   programLp1.setLowpass(sampleRate, audioBandwidthHz, kRadioBiquadQ);
@@ -39,7 +36,6 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
 }
 
 void PcmToIfPreviewModulator::reset() {
-  programLevelEnv = 0.0f;
   programHp.reset();
   programLp1.reset();
   programLp2.reset();
@@ -56,17 +52,7 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
     float program = programHp.process(x);
     program = programLp1.process(program);
     program = programLp2.process(program);
-    float a = std::fabs(program);
-    if (a > programLevelEnv) {
-      programLevelEnv =
-          programLevelAtk * programLevelEnv + (1.0f - programLevelAtk) * a;
-    } else {
-      programLevelEnv =
-          programLevelRel * programLevelEnv + (1.0f - programLevelRel) * a;
-    }
-
-    float levelRef = std::max(modulationRef, programLevelEnv);
-    float mod = modulationIndex * (program / levelRef);
+    float mod = modulationIndex * program;
     mod = clampfLocal(mod, -modulationLimit, modulationLimit);
     return carrierAmplitude * (1.0f + mod);
   };

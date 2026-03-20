@@ -11,10 +11,6 @@ struct PcmToIfPreviewModulator {
   float carrierAmplitude = 0.0f;
   float modulationIndex = 0.0f;
   float modulationLimit = 0.0f;
-  float programLevelEnv = 0.0f;
-  float programLevelAtk = 0.0f;
-  float programLevelRel = 0.0f;
-  float modulationRef = 0.0f;
   Biquad programHp;
   Biquad programLp1;
   Biquad programLp2;
