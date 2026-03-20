@@ -149,6 +149,113 @@ static float processTransformerLoadedTubeStage(
   return (current - quiescentCurrent) * std::max(acLoadResistanceOhms, 1.0f);
 }
 
+static bool solveLinear3x3(float a[3][3], float b[3], float x[3]) {
+  for (int pivot = 0; pivot < 3; ++pivot) {
+    int pivotRow = pivot;
+    float pivotAbs = std::fabs(a[pivot][pivot]);
+    for (int row = pivot + 1; row < 3; ++row) {
+      float candidateAbs = std::fabs(a[row][pivot]);
+      if (candidateAbs > pivotAbs) {
+        pivotAbs = candidateAbs;
+        pivotRow = row;
+      }
+    }
+    if (pivotAbs < 1e-12f) return false;
+    if (pivotRow != pivot) {
+      for (int col = pivot; col < 3; ++col) std::swap(a[pivot][col], a[pivotRow][col]);
+      std::swap(b[pivot], b[pivotRow]);
+    }
+    float invPivot = 1.0f / a[pivot][pivot];
+    for (int row = pivot + 1; row < 3; ++row) {
+      float scale = a[row][pivot] * invPivot;
+      if (std::fabs(scale) < 1e-12f) continue;
+      for (int col = pivot; col < 3; ++col) a[row][col] -= scale * a[pivot][col];
+      b[row] -= scale * b[pivot];
+    }
+  }
+  for (int row = 2; row >= 0; --row) {
+    float sum = b[row];
+    for (int col = row + 1; col < 3; ++col) sum -= a[row][col] * x[col];
+    if (std::fabs(a[row][row]) < 1e-12f) return false;
+    x[row] = sum / a[row][row];
+  }
+  return true;
+}
+
+static float deviceTriodePlateCurrent(float gridVolts,
+                                      float plateVolts,
+                                      float biasVolts,
+                                      float cutoffVolts,
+                                      float quiescentPlateVolts,
+                                      float quiescentPlateCurrentAmps,
+                                      float mutualConductanceSiemens,
+                                      float mu,
+                                      float plateKneeVolts,
+                                      float gridSoftnessVolts) {
+  float safeMu = std::max(mu, 1e-3f);
+  float controlQ = biasVolts + quiescentPlateVolts / safeMu;
+  float control = gridVolts + plateVolts / safeMu;
+  float activationQ =
+      softplusVolts(controlQ - cutoffVolts, gridSoftnessVolts);
+  float activation =
+      softplusVolts(control - cutoffVolts, gridSoftnessVolts);
+  activationQ = std::max(activationQ, 1e-5f);
+  activation = std::max(activation, 0.0f);
+  float exponent = clampf(mutualConductanceSiemens * activationQ /
+                              std::max(quiescentPlateCurrentAmps, 1e-9f),
+                          1.05f, 6.0f);
+  float kneeQ =
+      1.0f - std::exp(-std::max(quiescentPlateVolts, 0.0f) /
+                      std::max(plateKneeVolts, 1e-3f));
+  float knee =
+      1.0f - std::exp(-std::max(plateVolts, 0.0f) /
+                      std::max(plateKneeVolts, 1e-3f));
+  float perveance =
+      quiescentPlateCurrentAmps /
+      (std::pow(activationQ, exponent) * std::max(kneeQ, 1e-6f));
+  return perveance * std::pow(activation, exponent) * std::max(knee, 0.0f);
+}
+
+static float processPushPullTriodeOutputStage(
+    float controlGridVoltsA,
+    float controlGridVoltsB,
+    float supplyScale,
+    float plateSupplyVolts,
+    float quiescentPlateVolts,
+    float biasVolts,
+    float cutoffVolts,
+    float quiescentPlateCurrentAmps,
+    float mutualConductanceSiemens,
+    float mu,
+    float plateToPlateLoadOhms,
+    float plateKneeVolts,
+    float gridSoftnessVolts) {
+  float supply = std::max(plateSupplyVolts * supplyScale, 1.0f);
+  float plateQ =
+      std::clamp(quiescentPlateVolts * supplyScale, 1.0f, supply);
+  float halfPrimaryImpedance = std::max(plateToPlateLoadOhms, 1.0f) * 0.125f;
+  float plateA = plateQ;
+  float plateB = plateQ;
+  float currentA = quiescentPlateCurrentAmps;
+  float currentB = quiescentPlateCurrentAmps;
+  for (int i = 0; i < 4; ++i) {
+    currentA = deviceTriodePlateCurrent(
+        controlGridVoltsA, plateA, biasVolts, cutoffVolts,
+        quiescentPlateVolts * supplyScale, quiescentPlateCurrentAmps,
+        mutualConductanceSiemens, mu, plateKneeVolts, gridSoftnessVolts);
+    currentB = deviceTriodePlateCurrent(
+        controlGridVoltsB, plateB, biasVolts, cutoffVolts,
+        quiescentPlateVolts * supplyScale, quiescentPlateCurrentAmps,
+        mutualConductanceSiemens, mu, plateKneeVolts, gridSoftnessVolts);
+    float differentialCurrent = currentA - currentB;
+    plateA = std::clamp(plateQ - differentialCurrent * halfPrimaryImpedance,
+                        1.0f, supply);
+    plateB = std::clamp(plateQ + differentialCurrent * halfPrimaryImpedance,
+                        1.0f, supply);
+  }
+  return plateB - plateA;
+}
+
 static inline uint32_t hash32(uint32_t x) {
   x ^= x >> 16;
   x *= 0x7feb352du;
@@ -1514,6 +1621,10 @@ void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
              receiver.volumeControlResistanceOhms);
   receiver.volumeControlPosition =
       clampf(receiver.volumeControlPosition, 0.0f, 1.0f);
+  receiver.volumeControlLoudnessResistanceOhms =
+      std::max(receiver.volumeControlLoudnessResistanceOhms, 1.0f);
+  receiver.volumeControlLoudnessCapFarads =
+      std::max(receiver.volumeControlLoudnessCapFarads, 0.0f);
   receiver.couplingCapFarads = std::max(receiver.couplingCapFarads, 1e-12f);
   receiver.gridLeakResistanceOhms =
       std::max(receiver.gridLeakResistanceOhms, 1e3f);
@@ -1530,6 +1641,7 @@ void RadioReceiverCircuitNode::reset(Radio1938& radio) {
   auto& receiver = radio.receiverCircuit;
   receiver.couplingCapVoltage = 0.0f;
   receiver.gridVoltage = 0.0f;
+  receiver.volumeControlTapVoltage = 0.0f;
   receiver.tubePlateVoltage = receiver.tubePlateDcVolts;
 }
 
@@ -1538,21 +1650,77 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                                         const RadioSampleContext&) {
   auto& receiver = radio.receiverCircuit;
   if (!receiver.enabled) return y;
-  float volumePos = clampf(receiver.volumeControlPosition, 0.0f, 1.0f);
-  float rTop = (1.0f - volumePos) * receiver.volumeControlResistanceOhms;
-  float rBottom = volumePos * receiver.volumeControlResistanceOhms;
-  float sourceVoltage = y * volumePos;
-  float sourceResistance = parallelResistance(rTop, rBottom);
-  float pathResistance =
-      std::max(sourceResistance + receiver.gridLeakResistanceOhms, 1e-6f);
-  float detectorCurrent =
-      (sourceVoltage - receiver.couplingCapVoltage) / pathResistance;
   float dt = 1.0f / std::max(radio.sampleRate, 1.0f);
-  receiver.couplingCapVoltage +=
-      dt * (detectorCurrent / receiver.couplingCapFarads);
-  receiver.gridVoltage = detectorCurrent * receiver.gridLeakResistanceOhms;
+  float totalResistance = receiver.volumeControlResistanceOhms;
+  float wiperResistance =
+      clampf(receiver.volumeControlPosition, 0.0f, 1.0f) * totalResistance;
+  float tapResistance = receiver.volumeControlTapResistanceOhms;
+  constexpr float kNodeLinkOhms = 1e-3f;
+  auto addGroundBranch = [](float (&a)[3][3], int node, float resistanceOhms) {
+    if (resistanceOhms <= 0.0f) return;
+    a[node][node] += 1.0f / std::max(resistanceOhms, 1e-9f);
+  };
+  auto addSourceBranch = [](float (&a)[3][3], float (&b)[3], int node,
+                            float resistanceOhms, float sourceVoltage) {
+    if (resistanceOhms <= 0.0f) return;
+    float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
+    a[node][node] += conductance;
+    b[node] += conductance * sourceVoltage;
+  };
+  auto addNodeBranch = [](float (&a)[3][3], int aNode, int bNode,
+                          float resistanceOhms) {
+    if (resistanceOhms <= 0.0f) return;
+    float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
+    a[aNode][aNode] += conductance;
+    a[bNode][bNode] += conductance;
+    a[aNode][bNode] -= conductance;
+    a[bNode][aNode] -= conductance;
+  };
+  float a[3][3] = {};
+  float b[3] = {};
+  constexpr int kWiperNode = 0;
+  constexpr int kTapNode = 1;
+  constexpr int kGridNode = 2;
+  if (wiperResistance >= tapResistance) {
+    addSourceBranch(a, b, kWiperNode,
+                    std::max(totalResistance - wiperResistance, kNodeLinkOhms),
+                    y);
+    addNodeBranch(a, kWiperNode, kTapNode,
+                  std::max(wiperResistance - tapResistance, kNodeLinkOhms));
+    addGroundBranch(a, kTapNode, std::max(tapResistance, kNodeLinkOhms));
+  } else {
+    addSourceBranch(a, b, kTapNode,
+                    std::max(totalResistance - tapResistance, kNodeLinkOhms), y);
+    addNodeBranch(a, kTapNode, kWiperNode,
+                  std::max(tapResistance - wiperResistance, kNodeLinkOhms));
+    addGroundBranch(a, kWiperNode, std::max(wiperResistance, kNodeLinkOhms));
+  }
+  addGroundBranch(a, kTapNode, receiver.volumeControlLoudnessResistanceOhms);
+  if (receiver.volumeControlLoudnessCapFarads > 0.0f) {
+    float loudnessGc = receiver.volumeControlLoudnessCapFarads / dt;
+    a[kTapNode][kTapNode] += loudnessGc;
+    b[kTapNode] += loudnessGc * receiver.volumeControlTapVoltage;
+  }
+  addGroundBranch(a, kGridNode, receiver.gridLeakResistanceOhms);
+  float couplingGc = receiver.couplingCapFarads / dt;
+  a[kWiperNode][kWiperNode] += couplingGc;
+  a[kGridNode][kGridNode] += couplingGc;
+  a[kWiperNode][kGridNode] -= couplingGc;
+  a[kGridNode][kWiperNode] -= couplingGc;
+  b[kWiperNode] += couplingGc * receiver.couplingCapVoltage;
+  b[kGridNode] -= couplingGc * receiver.couplingCapVoltage;
+  float nodeVoltages[3] = {};
+  if (!solveLinear3x3(a, b, nodeVoltages)) {
+    reset(radio);
+    return 0.0f;
+  }
+  receiver.gridVoltage = nodeVoltages[kGridNode];
+  receiver.volumeControlTapVoltage = nodeVoltages[kTapNode];
+  receiver.couplingCapVoltage =
+      nodeVoltages[kWiperNode] - nodeVoltages[kGridNode];
   if (!std::isfinite(receiver.couplingCapVoltage) ||
-      !std::isfinite(receiver.gridVoltage)) {
+      !std::isfinite(receiver.gridVoltage) ||
+      !std::isfinite(receiver.volumeControlTapVoltage)) {
     reset(radio);
     return 0.0f;
   }
@@ -1610,6 +1778,25 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   power.tubeGridSoftnessVolts = std::max(power.tubeGridSoftnessVolts, 1e-3f);
   power.tubeGridCurrentResistanceOhms =
       std::max(power.tubeGridCurrentResistanceOhms, 1.0f);
+  power.tubePlateVoltage = power.tubePlateDcVolts;
+  power.interstageTurnsRatio = std::max(power.interstageTurnsRatio, 1e-3f);
+  power.interstageSecondaryResistanceOhms =
+      std::max(power.interstageSecondaryResistanceOhms, 1.0f);
+  power.outputGridLeakResistanceOhms =
+      std::max(power.outputGridLeakResistanceOhms, 1e3f);
+  power.outputGridCurrentResistanceOhms =
+      std::max(power.outputGridCurrentResistanceOhms, 1.0f);
+  power.outputTubePlateSupplyVolts =
+      std::max(power.outputTubePlateSupplyVolts, 1.0f);
+  power.outputTubePlateDcVolts = clampf(power.outputTubePlateDcVolts, 1.0f,
+                                        power.outputTubePlateSupplyVolts);
+  power.outputTubeMu = std::max(power.outputTubeMu, 1.0f);
+  power.outputTubePlateToPlateLoadOhms =
+      std::max(power.outputTubePlateToPlateLoadOhms, 1.0f);
+  power.outputTubePlateKneeVolts =
+      std::max(power.outputTubePlateKneeVolts, 1.0f);
+  power.outputTubeGridSoftnessVolts =
+      std::max(power.outputTubeGridSoftnessVolts, 1e-3f);
   power.outputLoadResistanceOhms = std::max(power.outputLoadResistanceOhms, 1.0f);
   power.nominalOutputPowerWatts = std::max(power.nominalOutputPowerWatts, 1e-3f);
   power.satOsLpIn = Biquad{};
@@ -1623,6 +1810,7 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.satOsPrev = 0.0f;
   power.gridCouplingCapVoltage = 0.0f;
   power.gridVoltage = 0.0f;
+  power.tubePlateVoltage = power.tubePlateDcVolts;
   power.postLpf.reset();
   power.satOsLpIn.reset();
   power.satOsLpOut.reset();
@@ -1633,12 +1821,6 @@ float RadioPowerNode::process(Radio1938& radio,
                               const RadioSampleContext&) {
   auto& power = radio.power;
   auto& controlSense = radio.controlSense;
-  float load = std::fabs(y);
-  if (load > power.sagEnv) {
-    power.sagEnv = power.sagAtk * power.sagEnv + (1.0f - power.sagAtk) * load;
-  } else {
-    power.sagEnv = power.sagRel * power.sagEnv + (1.0f - power.sagRel) * load;
-  }
   float powerT = clampf((power.sagEnv - power.sagStart) /
                             std::max(1e-6f, power.sagEnd - power.sagStart),
                         0.0f, 1.0f);
@@ -1665,20 +1847,56 @@ float RadioPowerNode::process(Radio1938& radio,
     power.gridVoltage = couplingCurrent * loadResistance;
     controlGridVolts = power.tubeBiasVolts + power.gridVoltage;
   }
-  float plateAcVolts = processTransformerLoadedTubeStage(
+  float driverPlateAcVolts = processTransformerLoadedTubeStage(
       controlGridVolts, supplyScale,
       power.tubePlateDcVolts, power.tubeScreenVolts, power.tubeBiasVolts,
       power.tubeCutoffVolts, power.tubePlateCurrentAmps,
       power.tubeMutualConductanceSiemens, power.tubeAcLoadResistanceOhms,
       power.tubePlateKneeVolts, power.tubeGridSoftnessVolts);
+  float halfSecondarySourceResistance =
+      std::max(0.5f * power.interstageSecondaryResistanceOhms, 1.0f);
+  float openHalfSecondaryVolts =
+      driverPlateAcVolts * power.interstageTurnsRatio;
+  auto resolveGridDrive = [&](float openHalfVoltage) {
+    float halfVoltage = openHalfVoltage;
+    for (int i = 0; i < 2; ++i) {
+      float outputGridLoad = power.outputGridLeakResistanceOhms;
+      if (power.outputTubeBiasVolts + halfVoltage > 0.0f) {
+        outputGridLoad = parallelResistance(outputGridLoad,
+                                            power.outputGridCurrentResistanceOhms);
+      }
+      halfVoltage =
+          openHalfVoltage *
+          (outputGridLoad /
+           std::max(outputGridLoad + halfSecondarySourceResistance, 1e-6f));
+    }
+    return halfVoltage;
+  };
+  float gridDriveA = resolveGridDrive(openHalfSecondaryVolts);
+  float gridDriveB = resolveGridDrive(-openHalfSecondaryVolts);
+  float primaryPlateToPlateVolts = processPushPullTriodeOutputStage(
+      power.outputTubeBiasVolts + gridDriveA,
+      power.outputTubeBiasVolts + gridDriveB, supplyScale,
+      power.outputTubePlateSupplyVolts, power.outputTubePlateDcVolts,
+      power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
+      power.outputTubePlateCurrentAmps,
+      power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
+      power.outputTubePlateToPlateLoadOhms, power.outputTubePlateKneeVolts,
+      power.outputTubeGridSoftnessVolts);
   float turnsRatio =
-      std::sqrt(power.tubeAcLoadResistanceOhms / power.outputLoadResistanceOhms);
-  y = plateAcVolts / std::max(turnsRatio, 1.0f);
+      std::sqrt(power.outputTubePlateToPlateLoadOhms / power.outputLoadResistanceOhms);
+  y = primaryPlateToPlateVolts / std::max(turnsRatio, 1.0f);
   float nominalSpeakerPeakVolts = std::sqrt(
       2.0f * power.nominalOutputPowerWatts * power.outputLoadResistanceOhms);
   y /= std::max(nominalSpeakerPeakVolts, 1e-3f);
   if (power.postLpHz > 0.0f) {
     y = power.postLpf.process(y);
+  }
+  float load = std::fabs(y);
+  if (load > power.sagEnv) {
+    power.sagEnv = power.sagAtk * power.sagEnv + (1.0f - power.sagAtk) * load;
+  } else {
+    power.sagEnv = power.sagRel * power.sagEnv + (1.0f - power.sagRel) * load;
   }
   controlSense.powerSagSense = power.sagEnv;
   return y;
@@ -2317,11 +2535,13 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.demod.am.audioJunctionSlopeVolts = 0.0045f;
   radio.demod.am.avcJunctionSlopeVolts = 0.0040f;
   // Philco 116PX code 122 detector: R63=5.1k, R69=51k, R70=330k, C64=110 pF,
-  // AVC feeds R45/R81A=1M and AVC bypass C82=0.15 uF.
+  // AVC feeds R45/R81A=1M and AVC bypass C82=0.15 uF. The audio discharge
+  // path is loaded mainly by the 2M volume control rather than the earlier
+  // placeholder 250k receiver-scale control.
   radio.demod.am.detectorPlateCouplingCapFarads = 110e-12f;
   radio.demod.am.audioChargeResistanceOhms = 5100.0f;
   radio.demod.am.audioDischargeResistanceOhms =
-      51000.0f + parallelResistance(330000.0f, 250000.0f);
+      51000.0f + parallelResistance(330000.0f, 2000000.0f);
   radio.demod.am.avcChargeResistanceOhms = 1000000.0f;
   radio.demod.am.avcDischargeResistanceOhms =
       parallelResistance(1000000.0f, 1000000.0f);
@@ -2332,13 +2552,16 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.demod.am.afcSenseLpHz = 34.0f;
 
   radio.receiverCircuit.enabled = true;
-  // Philco 116PX code 122 volume/grid input: control 68 is 250k with 60k tap,
-  // coupling capacitor 65 is 0.01 uF, and 66 is a 1M grid leak.
-  radio.receiverCircuit.volumeControlResistanceOhms = 250000.0f;
-  radio.receiverCircuit.volumeControlTapResistanceOhms = 60000.0f;
+  // Philco 116PX code 122 volume/grid input: control 68 is 2M total with a
+  // fixed tap at 400k, 81 is the 0.5M loudness shunt, 82 is 0.15 uF, 65 is
+  // the 0.01 uF coupling capacitor, and 66 is a 1.4M grid leak.
+  radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
+  radio.receiverCircuit.volumeControlTapResistanceOhms = 400000.0f;
   radio.receiverCircuit.volumeControlPosition = 1.0f;
+  radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 500000.0f;
+  radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.15e-6f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
-  radio.receiverCircuit.gridLeakResistanceOhms = 1000000.0f;
+  radio.receiverCircuit.gridLeakResistanceOhms = 1400000.0f;
   // RCA RC-12 type 77 data with the 116PX set voltages: plate about 95 V,
   // screen about 72 V, bias close to -1.5 V, gm about 1100 umho.
   radio.receiverCircuit.tubePlateSupplyVolts = 250.0f;
@@ -2374,10 +2597,12 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.supplyDriveDepth = 0.0f;
   radio.power.supplyBiasDepth = 0.0f;
   radio.power.postLpHz = 0.0f;
-  // Type 42 shares the 2A5 Class-A pentode operating point in RC-12:
-  // 250 V plate/screen, -16.5 V bias, 34 mA plate current, 2200 umho gm.
-  // The 77->42 coupling here uses the 116PX values C85=0.05 uF, R87=160k,
-  // and R91=100k as the driving RC network.
+  // The 42 driver uses the RC-12 / 2A5 operating point. The 77->42 coupling
+  // keeps the 116PX schematic values around C85 and the visible 160k/100k
+  // grid network. Transformer 92 shows roughly 430 ohms primary resistance
+  // and 296 ohms total secondary resistance on the schematic; the voltage
+  // ratio is inferred here to hit a 6A3 push-pull grid swing compatible with
+  // the visible self-bias resistor string and classic 2A3/6A3 data.
   radio.power.gridCouplingCapFarads = 0.05e-6f;
   radio.power.gridLeakResistanceOhms = 100000.0f;
   radio.power.driverSourceResistanceOhms = 160000.0f;
@@ -2392,8 +2617,25 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.tubePlateKneeVolts = 28.0f;
   radio.power.tubeGridSoftnessVolts = 0.8f;
   radio.power.tubeGridCurrentResistanceOhms = 1000.0f;
+  radio.power.interstageTurnsRatio = 1.8f;
+  radio.power.interstageSecondaryResistanceOhms = 296.0f;
+  radio.power.outputGridLeakResistanceOhms = 250000.0f;
+  radio.power.outputGridCurrentResistanceOhms = 1200.0f;
+  // 6A3 is the 6.3 V heater version of the 2A3. This pair is modeled as a
+  // transformer-coupled push-pull triode output with an effective 5k
+  // plate-to-plate load and about -42 V self-bias from the 96/96/96 string.
+  radio.power.outputTubePlateSupplyVolts = 325.0f;
+  radio.power.outputTubePlateDcVolts = 300.0f;
+  radio.power.outputTubeBiasVolts = -42.0f;
+  radio.power.outputTubeCutoffVolts = 0.0f;
+  radio.power.outputTubePlateCurrentAmps = 0.040f;
+  radio.power.outputTubeMutualConductanceSiemens = 0.00525f;
+  radio.power.outputTubeMu = 4.2f;
+  radio.power.outputTubePlateToPlateLoadOhms = 5000.0f;
+  radio.power.outputTubePlateKneeVolts = 18.0f;
+  radio.power.outputTubeGridSoftnessVolts = 2.0f;
   radio.power.outputLoadResistanceOhms = 8.0f;
-  radio.power.nominalOutputPowerWatts = 3.0f;
+  radio.power.nominalOutputPowerWatts = 10.0f;
 }
 
 static void applySetIdentity(Radio1938& radio) {
