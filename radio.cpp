@@ -2661,8 +2661,7 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   // station with the 2 Mohm control fully open grossly overdrives the 77/42/6A3
   // chain; a position a little above the lower third of travel is a much more
   // representative listening operating point for this set.
-  // radio.receiverCircuit.volumeControlPosition = 0.36f;
-  radio.receiverCircuit.volumeControlPosition = 1.0f;
+  radio.receiverCircuit.volumeControlPosition = 0.36f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 500000.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.15e-6f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
