@@ -1157,6 +1157,9 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   afcErrorLp.setLowpass(fs, afcLpHz, kRadioBiquadQ);
   audioPostLp1.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
   audioPostLp2.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
+  audioQuadratureLp1.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
+  audioQuadratureLp2.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
+  audioDcBlock.setHighpass(fs, 35.0f, kRadioBiquadQ);
 }
 
 void AMDetector::setSenseWindow(float lowHz, float highHz) {
@@ -1173,11 +1176,15 @@ void AMDetector::reset() {
   audioEnv = 0.0f;
   avcEnv = 0.0f;
   afcError = 0.0f;
+  audioSyncPhase = 0.0f;
   afcLowSense.reset();
   afcHighSense.reset();
   afcErrorLp.reset();
   audioPostLp1.reset();
   audioPostLp2.reset();
+  audioQuadratureLp1.reset();
+  audioQuadratureLp2.reset();
+  audioDcBlock.reset();
 }
 
 void Radio1938::CalibrationStageMetrics::clearAccumulators() {
@@ -1445,9 +1452,22 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
   float rawAfcError = (afcHigh - afcLow) / afcDen;
   afcError = afcErrorLp.process(rawAfcError);
 
-  audioRect = diodeJunctionRectify(ifSample, audioDiodeDrop,
+  float ifCenter = 0.5f * std::max(senseLowHz + senseHighHz, 2.0f);
+  float syncStep = kRadioTwoPi * (ifCenter / std::max(fs, 1.0f));
+  float syncCos = std::cos(audioSyncPhase);
+  float syncSin = std::sin(audioSyncPhase);
+  audioSyncPhase = wrapPhase(audioSyncPhase + syncStep);
+
+  float basebandI = audioPostLp1.process(ifSample * syncCos);
+  basebandI = audioPostLp2.process(basebandI);
+  float basebandQ = audioQuadratureLp1.process(-ifSample * syncSin);
+  basebandQ = audioQuadratureLp2.process(basebandQ);
+  float recoveredEnvelope =
+      2.0f * std::sqrt(basebandI * basebandI + basebandQ * basebandQ);
+
+  audioRect = diodeJunctionRectify(recoveredEnvelope, audioDiodeDrop,
                                    audioJunctionSlopeVolts);
-  avcRect = diodeJunctionRectify(ifSample, avcDiodeDrop,
+  avcRect = diodeJunctionRectify(recoveredEnvelope, avcDiodeDrop,
                                  avcJunctionSlopeVolts);
 
   if (audioRect > audioEnv) {
@@ -1464,14 +1484,7 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
     avcEnv =
         avcReleaseCoeff * avcEnv + (1.0f - avcReleaseCoeff) * avcRect;
   }
-  // The audio branch should carry only the envelope deviation around the
-  // carrier/DC level. The slower AVC envelope is the physical DC reference of
-  // the detector output; feeding the raw positive envelope forward would
-  // unrealistically inject carrier bias into the audio path and overdrive the
-  // following tube stage.
-  float audioOut = audioPostLp1.process(audioEnv - avcEnv);
-  audioOut = audioPostLp2.process(audioOut);
-  return audioOut;
+  return audioDcBlock.process(audioRect);
 }
 
 void SpeakerSim::init(float fs) {
@@ -2060,6 +2073,11 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   float totalResistance = receiver.volumeControlResistanceOhms;
   float wiperResistance = receiver.volumeControlPosition * totalResistance;
   float tapResistance = receiver.volumeControlTapResistanceOhms;
+  float loudnessBlend = 0.0f;
+  if (tapResistance > 0.0f) {
+    loudnessBlend = clampf((tapResistance - wiperResistance) / tapResistance,
+                           0.0f, 1.0f);
+  }
   constexpr float kNodeLinkOhms = 1e-3f;
   auto addGroundBranch = [](float (&a)[3][3], int node, float resistanceOhms) {
     if (resistanceOhms <= 0.0f) return;
@@ -2100,9 +2118,16 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                   std::max(tapResistance - wiperResistance, kNodeLinkOhms));
     addGroundBranch(a, kWiperNode, std::max(wiperResistance, kNodeLinkOhms));
   }
-  addGroundBranch(a, kTapNode, receiver.volumeControlLoudnessResistanceOhms);
-  if (receiver.volumeControlLoudnessCapFarads > 0.0f) {
-    float loudnessGc = receiver.volumeControlLoudnessCapFarads / dt;
+  if (loudnessBlend > 0.0f &&
+      receiver.volumeControlLoudnessResistanceOhms > 0.0f) {
+    a[kTapNode][kTapNode] +=
+        loudnessBlend /
+        std::max(receiver.volumeControlLoudnessResistanceOhms, 1e-9f);
+  }
+  if (loudnessBlend > 0.0f &&
+      receiver.volumeControlLoudnessCapFarads > 0.0f) {
+    float loudnessGc =
+        loudnessBlend * receiver.volumeControlLoudnessCapFarads / dt;
     a[kTapNode][kTapNode] += loudnessGc;
     b[kTapNode] += loudnessGc * receiver.volumeControlTapVoltage;
   }
@@ -2340,70 +2365,44 @@ float RadioPowerNode::process(Radio1938& radio,
   float driverQuiescentCurrent =
       driverPlateCurrentForState(power.tubeBiasVolts, driverPlateQuiescent);
   auto driverCurrentForPrimaryVoltage = [&](float primaryVoltageGuess) {
-    float driverPlateVolts = driverPlateQuiescent + primaryVoltageGuess;
+    float driverPlateVolts = driverPlateQuiescent - primaryVoltageGuess;
     return driverPlateCurrentForState(controlGridVolts, driverPlateVolts);
   };
-  struct SolvedTransformerDrive {
-    float driveCurrent = 0.0f;
-    CurrentDrivenTransformerSample sample{};
-  };
-  auto solvePrimaryVoltage = [&](const CurrentDrivenTransformer& transformer,
-                                 auto&& driveCurrentForVoltage,
-                                 float secondaryLoadResistance,
-                                 float primaryLoadResistance,
-                                 float minPrimaryVoltage,
-                                 float maxPrimaryVoltage) {
-    auto evalResidual = [&](float primaryVoltageGuess,
-                            CurrentDrivenTransformerSample& sampleOut,
-                            float& driveCurrentOut) {
-      driveCurrentOut = driveCurrentForVoltage(primaryVoltageGuess);
-      sampleOut = transformer.project(driveCurrentOut, secondaryLoadResistance,
-                                      primaryLoadResistance);
-      return sampleOut.primaryVoltage - primaryVoltageGuess;
+  auto solveReflectedPrimaryVoltage = [&](auto&& currentForPrimaryVoltage,
+                                          float reflectedLoadResistance,
+                                          float initialGuess,
+                                          float minPrimaryVoltage,
+                                          float maxPrimaryVoltage) {
+    float safeLoad = std::max(reflectedLoadResistance, 1.0f);
+    auto residual = [&](float primaryVoltageGuess) {
+      return currentForPrimaryVoltage(primaryVoltageGuess) * safeLoad -
+             primaryVoltageGuess;
     };
 
-    float bestGuess = transformer.primaryVoltage;
-    float bestDriveCurrent = 0.0f;
-    CurrentDrivenTransformerSample bestSample{};
-    float bestResidual =
-        evalResidual(bestGuess, bestSample, bestDriveCurrent);
-
-    CurrentDrivenTransformerSample lowSample{};
-    CurrentDrivenTransformerSample highSample{};
-    float lowDriveCurrent = 0.0f;
-    float highDriveCurrent = 0.0f;
-    float lowResidual =
-        evalResidual(minPrimaryVoltage, lowSample, lowDriveCurrent);
-    float highResidual =
-        evalResidual(maxPrimaryVoltage, highSample, highDriveCurrent);
+    float bestGuess =
+        clampf(initialGuess, minPrimaryVoltage, maxPrimaryVoltage);
+    float bestResidual = residual(bestGuess);
+    float low = minPrimaryVoltage;
+    float high = maxPrimaryVoltage;
+    float lowResidual = residual(low);
+    float highResidual = residual(high);
 
     if (std::fabs(lowResidual) < std::fabs(bestResidual)) {
-      bestGuess = minPrimaryVoltage;
+      bestGuess = low;
       bestResidual = lowResidual;
-      bestDriveCurrent = lowDriveCurrent;
-      bestSample = lowSample;
     }
     if (std::fabs(highResidual) < std::fabs(bestResidual)) {
-      bestGuess = maxPrimaryVoltage;
+      bestGuess = high;
       bestResidual = highResidual;
-      bestDriveCurrent = highDriveCurrent;
-      bestSample = highSample;
     }
 
     if (lowResidual * highResidual <= 0.0f) {
-      float low = minPrimaryVoltage;
-      float high = maxPrimaryVoltage;
-      for (int i = 0; i < 8; ++i) {
+      for (int i = 0; i < 24; ++i) {
         float mid = 0.5f * (low + high);
-        CurrentDrivenTransformerSample midSample{};
-        float midDriveCurrent = 0.0f;
-        float midResidual =
-            evalResidual(mid, midSample, midDriveCurrent);
+        float midResidual = residual(mid);
         if (std::fabs(midResidual) < std::fabs(bestResidual)) {
           bestGuess = mid;
           bestResidual = midResidual;
-          bestDriveCurrent = midDriveCurrent;
-          bestSample = midSample;
         }
         if (midResidual == 0.0f) break;
         if (lowResidual * midResidual <= 0.0f) {
@@ -2414,28 +2413,29 @@ float RadioPowerNode::process(Radio1938& radio,
           lowResidual = midResidual;
         }
       }
-    } else {
-      float guess = bestGuess;
-      for (int i = 0; i < 6; ++i) {
-        CurrentDrivenTransformerSample predicted{};
-        float driveCurrent = 0.0f;
-        float residual = evalResidual(guess, predicted, driveCurrent);
-        if (std::fabs(residual) < std::fabs(bestResidual)) {
-          bestGuess = guess;
-          bestResidual = residual;
-          bestDriveCurrent = driveCurrent;
-          bestSample = predicted;
-        }
-        guess = 0.5f * (guess + predicted.primaryVoltage);
-      }
+      return bestGuess;
     }
 
-    return SolvedTransformerDrive{bestDriveCurrent, bestSample};
+    float guess = bestGuess;
+    for (int i = 0; i < 12; ++i) {
+      float target = currentForPrimaryVoltage(guess) * safeLoad;
+      target = clampf(target, minPrimaryVoltage, maxPrimaryVoltage);
+      guess = 0.5f * (guess + target);
+      float guessResidual = residual(guess);
+      if (std::fabs(guessResidual) < std::fabs(bestResidual)) {
+        bestGuess = guess;
+        bestResidual = guessResidual;
+      }
+    }
+    return bestGuess;
   };
   float interstageSecondaryGuess = power.interstageTransformer.secondaryVoltage;
   float interstageLoadResistance = std::numeric_limits<float>::infinity();
-  SolvedTransformerDrive interstageSolved{};
   float interstageMaxSwing = 2.5f * std::max(driverPlateQuiescent, 1.0f);
+  float interstageTurns =
+      std::max(power.interstageTurnsRatioPrimaryToSecondary, 1e-3f);
+  float interstagePrimaryVoltage =
+      power.interstageTransformer.primaryVoltage;
   for (int i = 0; i < 2; ++i) {
     PushPullGridDriveResult interstageGridDrive = solvePushPullGridDrive(
         interstageSecondaryGuess, power.outputTubeBiasVolts,
@@ -2443,22 +2443,28 @@ float RadioPowerNode::process(Radio1938& radio,
         power.outputGridCurrentResistanceOhms);
     interstageLoadResistance = effectiveLoadResistanceFromDrive(
         interstageSecondaryGuess, interstageGridDrive.effectiveSecondaryCurrent);
-    interstageSolved = solvePrimaryVoltage(
-        power.interstageTransformer,
+    if (!std::isfinite(interstageLoadResistance)) {
+      interstageLoadResistance =
+          std::max(2.0f * power.outputGridLeakResistanceOhms, 1.0f);
+    }
+    float interstageReflectedLoad =
+        std::max(interstageLoadResistance, 1.0f) * interstageTurns * interstageTurns +
+        power.interstagePrimaryResistanceOhms;
+    interstagePrimaryVoltage = solveReflectedPrimaryVoltage(
         [&](float primaryVoltageGuess) {
           return driverCurrentForPrimaryVoltage(primaryVoltageGuess) -
                  driverQuiescentCurrent;
         },
-        interstageLoadResistance, 0.0f, -interstageMaxSwing,
+        interstageReflectedLoad, interstagePrimaryVoltage, -interstageMaxSwing,
         interstageMaxSwing);
-    interstageSecondaryGuess = interstageSolved.sample.secondaryVoltage;
+    interstageSecondaryGuess = interstagePrimaryVoltage / interstageTurns;
   }
-  auto interstageSample = power.interstageTransformer.process(
-      interstageSolved.driveCurrent, interstageLoadResistance);
+  power.interstageTransformer.primaryVoltage = interstagePrimaryVoltage;
+  power.interstageTransformer.secondaryVoltage = interstageSecondaryGuess;
   power.tubePlateVoltage =
-      driverPlateQuiescent + interstageSample.primaryVoltage;
+      driverPlateQuiescent - interstagePrimaryVoltage;
   PushPullGridDriveResult outputGridDrive = solvePushPullGridDrive(
-      interstageSample.secondaryVoltage, power.outputTubeBiasVolts,
+      interstageSecondaryGuess, power.outputTubeBiasVolts,
       power.outputGridLeakResistanceOhms, power.outputGridCurrentResistanceOhms);
   power.outputGridAVolts = outputGridDrive.gridAVolts;
   power.outputGridBVolts = outputGridDrive.gridBVolts;
@@ -2470,8 +2476,12 @@ float RadioPowerNode::process(Radio1938& radio,
   float outputPlateQuiescent =
       std::max(power.outputTubeQuiescentPlateVolts * supplyScale, 1.0f);
   float outputMaxSwing = 2.5f * std::max(outputPlateQuiescent, 1.0f);
-  auto outputSolved = solvePrimaryVoltage(
-      power.outputTransformer,
+  float outputTurns =
+      std::max(power.outputTransformerTurnsRatioPrimaryToSecondary, 1e-3f);
+  float outputReflectedLoad =
+      power.outputLoadResistanceOhms * outputTurns * outputTurns +
+      power.outputTransformerPrimaryResistanceOhms;
+  float outputPrimaryVoltage = solveReflectedPrimaryVoltage(
       [&](float primaryVoltageGuess) {
         float plateA = outputPlateQuiescent - 0.5f * primaryVoltageGuess;
         float plateB = outputPlateQuiescent + 0.5f * primaryVoltageGuess;
@@ -2487,15 +2497,17 @@ float RadioPowerNode::process(Radio1938& radio,
             outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
             power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
             power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
-        return 0.5f * (plateCurrentA - plateCurrentB);
+        return plateCurrentA - plateCurrentB;
       },
-      power.outputLoadResistanceOhms, 0.0f, -outputMaxSwing, outputMaxSwing);
-  auto outputSample = power.outputTransformer.process(
-      outputSolved.driveCurrent, power.outputLoadResistanceOhms, 0.0f);
+      outputReflectedLoad, power.outputTransformer.primaryVoltage,
+      -outputMaxSwing, outputMaxSwing);
+  float outputSecondaryVoltage = outputPrimaryVoltage / outputTurns;
+  power.outputTransformer.primaryVoltage = outputPrimaryVoltage;
+  power.outputTransformer.secondaryVoltage = outputSecondaryVoltage;
   float actualDriverCurrent =
-      driverCurrentForPrimaryVoltage(interstageSample.primaryVoltage);
-  float outputPlateA = outputPlateQuiescent - 0.5f * outputSample.primaryVoltage;
-  float outputPlateB = outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
+      driverCurrentForPrimaryVoltage(interstagePrimaryVoltage);
+  float outputPlateA = outputPlateQuiescent - 0.5f * outputPrimaryVoltage;
+  float outputPlateB = outputPlateQuiescent + 0.5f * outputPrimaryVoltage;
   float actualPlateCurrentA = deviceTriodePlateCurrent(
       power.outputTubeBiasVolts + power.outputGridAVolts, outputPlateA,
       power.outputTubeBiasVolts, power.outputTubeModelCutoffVolts,
@@ -2508,7 +2520,7 @@ float RadioPowerNode::process(Radio1938& radio,
       outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
       power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
       power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
-  y = outputSample.secondaryVoltage;
+  y = outputSecondaryVoltage;
   if (power.postLpHz > 0.0f) {
     y = power.postLpf.process(y);
   }
@@ -3240,7 +3252,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.gainMax = 1.02f;
   radio.power.supplyDriveDepth = 0.0f;
   radio.power.supplyBiasDepth = 0.0f;
-  radio.power.postLpHz = 0.0f;
+  radio.power.postLpHz = 4200.0f;
   // The 37-116 driver is a triode-connected 6F6G feeding the 6B4G pair through
   // an interstage transformer. RC-13 gives 250 V plate, -20 V grid, about
   // 31 mA plate current, mu about 7, gm about 2700 umho, and 4000 ohm load
@@ -3261,7 +3273,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.tubeGridCurrentResistanceOhms = 1000.0f;
   radio.power.interstagePrimaryLeakageInductanceHenries = 0.45f;
   radio.power.interstageMagnetizingInductanceHenries = 15.0f;
-  radio.power.interstageTurnsRatioPrimaryToSecondary = 1.0f / 0.30f;
+  radio.power.interstageTurnsRatioPrimaryToSecondary = 0.30f;
   radio.power.interstagePrimaryResistanceOhms = 430.0f;
   radio.power.interstagePrimaryCoreLossResistanceOhms = 220000.0f;
   // The pF stray capacitances are ultrasonic details in the real chassis.
