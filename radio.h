@@ -532,16 +532,17 @@ struct RadioOutputClipNode {
                        const RadioSampleContext& ctx);
 };
 
-struct Radio1938 {
-  enum class Preset {
-    Philco37116X,
-  };
+  struct Radio1938 {
+    enum class Preset {
+    Philco37116,
+    Philco37116X = Philco37116,
+    };
 
   float sampleRate = 0.0f;
   int channels = 1;
   float bwHz = 0.0f;
   float noiseWeight = 0.0f;
-  Preset preset;
+  Preset preset = Preset::Philco37116;
   bool initialized = false;
   Radio1938();
 
@@ -922,6 +923,7 @@ struct Radio1938 {
   struct MixerNodeState {
     float rfGridDriveVolts = 0.0f;
     float loGridDriveVolts = 0.0f;
+    float loGridBiasVolts = 0.0f;
     float avcGridDriveVolts = 0.0f;
     float plateSupplyVolts = 0.0f;
     float plateDcVolts = 0.0f;
@@ -988,6 +990,8 @@ struct Radio1938 {
     float tubeCutoffVolts = 0.0f;
     float tubePlateCurrentAmps = 0.0f;
     float tubeMutualConductanceSiemens = 0.0f;
+    float tubeMu = 0.0f;
+    bool tubeTriodeConnected = false;
     float tubeLoadResistanceOhms = 0.0f;
     float tubePlateKneeVolts = 0.0f;
     float tubeGridSoftnessVolts = 0.0f;
@@ -1038,6 +1042,8 @@ struct Radio1938 {
     float tubeCutoffVolts = 0.0f;
     float tubePlateCurrentAmps = 0.0f;
     float tubeMutualConductanceSiemens = 0.0f;
+    float tubeMu = 0.0f;
+    bool tubeTriodeConnected = false;
     float tubeAcLoadResistanceOhms = 0.0f;
     float tubePlateKneeVolts = 0.0f;
     float tubeGridSoftnessVolts = 0.0f;

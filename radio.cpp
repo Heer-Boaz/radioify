@@ -53,6 +53,17 @@ static inline float softplusVolts(float x, float softnessVolts) {
   return slope * std::log1p(std::exp(y));
 }
 
+static float deviceTriodePlateCurrent(float gridVolts,
+                                      float plateVolts,
+                                      float biasVolts,
+                                      float cutoffVolts,
+                                      float quiescentPlateVolts,
+                                      float quiescentPlateCurrentAmps,
+                                      float mutualConductanceSiemens,
+                                      float mu,
+                                      float plateKneeVolts,
+                                      float gridSoftnessVolts);
+
 static float deviceTubePlateCurrent(float gridVolts,
                                     float plateVolts,
                                     float screenVolts,
@@ -123,8 +134,42 @@ static float processResistorLoadedTubeStage(float gridVolts,
   return quiescentPlate - plateVoltage;
 }
 
+static float processResistorLoadedTriodeStage(float gridVolts,
+                                              float supplyScale,
+                                              float plateSupplyVolts,
+                                              float quiescentPlateVolts,
+                                              float biasVolts,
+                                              float cutoffVolts,
+                                              float quiescentPlateCurrentAmps,
+                                              float mutualConductanceSiemens,
+                                              float mu,
+                                              float loadResistanceOhms,
+                                              float plateKneeVolts,
+                                              float gridSoftnessVolts,
+                                              float& plateVoltageState) {
+  float supply = std::max(plateSupplyVolts * supplyScale, 1.0f);
+  float plateVoltage = (plateVoltageState > 0.0f)
+                           ? plateVoltageState
+                           : std::clamp(quiescentPlateVolts * supplyScale, 0.0f,
+                                        supply);
+  for (int i = 0; i < 4; ++i) {
+    float current = deviceTriodePlateCurrent(
+        gridVolts, plateVoltage, biasVolts, cutoffVolts,
+        quiescentPlateVolts * supplyScale, quiescentPlateCurrentAmps,
+        mutualConductanceSiemens, mu, plateKneeVolts, gridSoftnessVolts);
+    float targetPlate =
+        std::clamp(supply - current * std::max(loadResistanceOhms, 1.0f), 0.0f,
+                   supply);
+    plateVoltage = 0.5f * (plateVoltage + targetPlate);
+  }
+  plateVoltageState = plateVoltage;
+  float quiescentPlate = std::clamp(quiescentPlateVolts * supplyScale, 0.0f, supply);
+  return quiescentPlate - plateVoltage;
+}
+
 static float processConverterTubeStage(float baseGridVolts,
                                        float rfGridVolts,
+                                       float oscillatorBiasVolts,
                                        float oscillatorGridVolts,
                                        float supplyScale,
                                        float quiescentPlateVolts,
@@ -145,12 +190,15 @@ static float processConverterTubeStage(float baseGridVolts,
         quiescentPlateCurrentAmps, mutualConductanceSiemens, plateKneeVolts,
         gridSoftnessVolts);
   };
-  float idleCurrent = plateCurrentForGrid(baseGridVolts);
-  float rfOnlyCurrent = plateCurrentForGrid(baseGridVolts + rfGridVolts);
+  float mixedBaseGridVolts = baseGridVolts + oscillatorBiasVolts;
+  float idleCurrent = plateCurrentForGrid(mixedBaseGridVolts);
+  float rfOnlyCurrent =
+      plateCurrentForGrid(mixedBaseGridVolts + rfGridVolts);
   float loOnlyCurrent =
-      plateCurrentForGrid(baseGridVolts + oscillatorGridVolts);
+      plateCurrentForGrid(mixedBaseGridVolts + oscillatorGridVolts);
   float mixedCurrent =
-      plateCurrentForGrid(baseGridVolts + rfGridVolts + oscillatorGridVolts);
+      plateCurrentForGrid(mixedBaseGridVolts + rfGridVolts +
+                          oscillatorGridVolts);
   float conversionCurrent =
       mixedCurrent - rfOnlyCurrent - loOnlyCurrent + idleCurrent;
   return conversionCurrent * std::max(acLoadResistanceOhms, 1.0f);
@@ -1563,7 +1611,8 @@ static float processSuperhetSourceFrame(Radio1938& radio,
     float rfGridVolts = mixer.rfGridDriveVolts * rf;
     float oscillatorGridVolts = mixer.loGridDriveVolts * lo;
     float mixerPlateAcVolts = processConverterTubeStage(
-        baseGridVolts, rfGridVolts, oscillatorGridVolts, 1.0f,
+        baseGridVolts, rfGridVolts, mixer.loGridBiasVolts,
+        oscillatorGridVolts, 1.0f,
         mixer.plateDcVolts,
         mixer.screenVolts, mixer.biasVolts, mixer.cutoffVolts,
         mixer.plateCurrentAmps, mixer.mutualConductanceSiemens,
@@ -1682,6 +1731,16 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
       !std::isfinite(receiver.volumeControlTapVoltage)) {
     reset(radio);
     return 0.0f;
+  }
+  if (receiver.tubeTriodeConnected) {
+    return processResistorLoadedTriodeStage(
+        receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
+        receiver.tubePlateSupplyVolts, receiver.tubePlateDcVolts,
+        receiver.tubeBiasVolts, receiver.tubeCutoffVolts,
+        receiver.tubePlateCurrentAmps, receiver.tubeMutualConductanceSiemens,
+        receiver.tubeMu, receiver.tubeLoadResistanceOhms,
+        receiver.tubePlateKneeVolts, receiver.tubeGridSoftnessVolts,
+        receiver.tubePlateVoltage);
   }
   return processResistorLoadedTubeStage(
       receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
@@ -1831,20 +1890,25 @@ float RadioPowerNode::process(Radio1938& radio,
   float driverPlateQuiescent = power.tubePlateDcVolts * supplyScale;
   float driverScreenVolts =
       std::max(power.tubeScreenVolts * supplyScale, 1.0f);
-  float driverQuiescentCurrent = deviceTubePlateCurrent(
-      power.tubeBiasVolts, driverPlateQuiescent, driverScreenVolts,
-      power.tubeBiasVolts, power.tubeCutoffVolts, driverPlateQuiescent,
-      driverScreenVolts, power.tubePlateCurrentAmps,
-      power.tubeMutualConductanceSiemens, power.tubePlateKneeVolts,
-      power.tubeGridSoftnessVolts);
+  auto driverPlateCurrentForState = [&](float gridVolts, float plateVolts) {
+    if (power.tubeTriodeConnected) {
+      return deviceTriodePlateCurrent(
+          gridVolts, plateVolts, power.tubeBiasVolts, power.tubeCutoffVolts,
+          driverPlateQuiescent, power.tubePlateCurrentAmps,
+          power.tubeMutualConductanceSiemens, power.tubeMu,
+          power.tubePlateKneeVolts, power.tubeGridSoftnessVolts);
+    }
+    return deviceTubePlateCurrent(
+        gridVolts, plateVolts, driverScreenVolts, power.tubeBiasVolts,
+        power.tubeCutoffVolts, driverPlateQuiescent, driverScreenVolts,
+        power.tubePlateCurrentAmps, power.tubeMutualConductanceSiemens,
+        power.tubePlateKneeVolts, power.tubeGridSoftnessVolts);
+  };
+  float driverQuiescentCurrent =
+      driverPlateCurrentForState(power.tubeBiasVolts, driverPlateQuiescent);
   auto driverCurrentForPrimaryVoltage = [&](float primaryVoltageGuess) {
     float driverPlateVolts = driverPlateQuiescent + primaryVoltageGuess;
-    return deviceTubePlateCurrent(
-        controlGridVolts, driverPlateVolts, driverScreenVolts,
-        power.tubeBiasVolts, power.tubeCutoffVolts, driverPlateQuiescent,
-        driverScreenVolts, power.tubePlateCurrentAmps,
-        power.tubeMutualConductanceSiemens, power.tubePlateKneeVolts,
-        power.tubeGridSoftnessVolts);
+    return driverPlateCurrentForState(controlGridVolts, driverPlateVolts);
   };
   struct SolvedTransformerDrive {
     float driveCurrent = 0.0f;
@@ -1992,6 +2056,22 @@ float RadioPowerNode::process(Radio1938& radio,
   auto outputSample = power.outputTransformer.process(
       outputSolved.driveCurrent, power.outputLoadResistanceOhms,
       outputPrimaryLoadResistance);
+  float actualDriverCurrent =
+      driverCurrentForPrimaryVoltage(interstageSample.primaryVoltage);
+  float outputPlateA = outputPlateQuiescent - 0.5f * outputSample.primaryVoltage;
+  float outputPlateB = outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
+  float actualPlateCurrentA = deviceTriodePlateCurrent(
+      power.outputTubeBiasVolts + gridDriveA, outputPlateA,
+      power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
+      outputPlateQuiescent, power.outputTubePlateCurrentAmps,
+      power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
+      power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
+  float actualPlateCurrentB = deviceTriodePlateCurrent(
+      power.outputTubeBiasVolts + gridDriveB, outputPlateB,
+      power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
+      outputPlateQuiescent, power.outputTubePlateCurrentAmps,
+      power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
+      power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
   y = outputSample.secondaryVoltage;
   float nominalSpeakerPeakVolts = std::sqrt(
       2.0f * power.nominalOutputPowerWatts * power.outputLoadResistanceOhms);
@@ -1999,7 +2079,13 @@ float RadioPowerNode::process(Radio1938& radio,
   if (power.postLpHz > 0.0f) {
     y = power.postLpf.process(y);
   }
-  float load = std::fabs(y);
+  float quiescentSupplyCurrent =
+      driverQuiescentCurrent + 2.0f * power.outputTubePlateCurrentAmps;
+  float actualSupplyCurrent =
+      actualDriverCurrent + actualPlateCurrentA + actualPlateCurrentB;
+  float load = std::max(
+      0.0f, (actualSupplyCurrent - quiescentSupplyCurrent) /
+                std::max(quiescentSupplyCurrent, 1e-6f));
   if (load > power.sagEnv) {
     power.sagEnv = power.sagAtk * power.sagEnv + (1.0f - power.sagAtk) * load;
   } else {
@@ -2573,7 +2659,7 @@ static void writeMonoToInterleaved(float* samples,
   }
 }
 
-static void applyPhilco37116XPreset(Radio1938& radio) {
+static void applyPhilco37116Preset(Radio1938& radio) {
   radio.globals.ifNoiseMix = 0.22f;
   radio.globals.inputPad = 1.0f;
   radio.globals.enableAutoLevel = false;
@@ -2603,21 +2689,25 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.frontEnd.rfInductanceHenries = 0.016f;
   radio.frontEnd.rfLoadResistanceOhms = 3300.0f;
 
-  // RCA RC-12 type 78 remote-cutoff pentode data: 250 V plate, 100 V screen,
-  // -3 V bias, 7 mA plate current, 1450 umho gm, cutoff near -42.5 V.
+  // Philco 37-116 uses a 6L7G mixer. RCA's 1935 release data gives about
+  // 250 V plate, 160 V screen, grid-1 bias near -6 V, grid-3 bias near -20 V,
+  // 25 V peak oscillator injection, about 3.5 mA plate current, and at least
+  // 325 umho conversion conductance. The reduced-order mixer keeps the same
+  // cross-term isolation but now biases the oscillator grid explicitly.
   radio.mixer.rfGridDriveVolts = 1.0f;
-  radio.mixer.loGridDriveVolts = 6.5f;
-  radio.mixer.avcGridDriveVolts = 12.0f;
+  radio.mixer.loGridDriveVolts = 18.0f;
+  radio.mixer.loGridBiasVolts = -15.0f;
+  radio.mixer.avcGridDriveVolts = 24.0f;
   radio.mixer.plateSupplyVolts = 250.0f;
   radio.mixer.plateDcVolts = 250.0f;
-  radio.mixer.screenVolts = 100.0f;
-  radio.mixer.biasVolts = -3.0f;
-  radio.mixer.cutoffVolts = -42.5f;
-  radio.mixer.plateCurrentAmps = 0.007f;
-  radio.mixer.mutualConductanceSiemens = 0.00145f;
-  radio.mixer.acLoadResistanceOhms = 7000.0f;
+  radio.mixer.screenVolts = 160.0f;
+  radio.mixer.biasVolts = -6.0f;
+  radio.mixer.cutoffVolts = -45.0f;
+  radio.mixer.plateCurrentAmps = 0.0035f;
+  radio.mixer.mutualConductanceSiemens = 0.0011f;
+  radio.mixer.acLoadResistanceOhms = 10000.0f;
   radio.mixer.plateKneeVolts = 22.0f;
-  radio.mixer.gridSoftnessVolts = 2.5f;
+  radio.mixer.gridSoftnessVolts = 2.0f;
 
   radio.ifStrip.enabled = true;
   radio.ifStrip.ifMinBwHz = 2400.0f;
@@ -2634,10 +2724,10 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.demod.am.avcDiodeDrop = 0.0080f;
   radio.demod.am.audioJunctionSlopeVolts = 0.0045f;
   radio.demod.am.avcJunctionSlopeVolts = 0.0040f;
-  // Philco 116PX code 122 detector: R63=5.1k, R69=51k, R70=330k, C64=110 pF,
-  // AVC feeds R45/R81A=1M and AVC bypass C82=0.15 uF. The audio discharge
-  // path is loaded mainly by the 2M volume control rather than the earlier
-  // placeholder 250k receiver-scale control.
+  // The 37-116 detector/control network uses 6J5/6H6-derived AVC and audio
+  // functions rather than the earlier 116X diode/load values. This remains a
+  // reduced-order detector, but the downstream control loading is now aligned
+  // to the 37-116 audio chain instead of the 116X/77 input stage.
   radio.demod.am.detectorPlateCouplingCapFarads = 110e-12f;
   radio.demod.am.audioChargeResistanceOhms = 5100.0f;
   radio.demod.am.audioDischargeResistanceOhms =
@@ -2652,32 +2742,35 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.demod.am.afcSenseLpHz = 34.0f;
 
   radio.receiverCircuit.enabled = true;
-  // Philco 116PX code 122 volume/grid input: control 68 is 2M total with a
-  // fixed tap at 400k, 81 is the 0.5M loudness shunt, 82 is 0.15 uF, 65 is
-  // the 0.01 uF coupling capacitor, and 66 is a 1.4M grid leak.
+  // Philco 37-116 control 33-5158 is 2 Mohm total with a 1 Mohm tap. The
+  // surrounding RC here stays reduced-order, but the control geometry and
+  // first-audio tube are now anchored to the 37-116 chassis rather than 116X.
   radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
-  radio.receiverCircuit.volumeControlTapResistanceOhms = 400000.0f;
+  radio.receiverCircuit.volumeControlTapResistanceOhms = 1000000.0f;
   // Render/preview needs a definite physical knob setting. A strong local
-  // station with the 2 Mohm control fully open grossly overdrives the 77/42/6A3
-  // chain; a position a little above the lower third of travel is a much more
-  // representative listening operating point for this set.
+  // station with the control fully open still overdrives the full 6J5/6F6G/6B4G
+  // chain; a modest clockwise setting is a more representative operating point.
   radio.receiverCircuit.volumeControlPosition = 0.36f;
-  radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 500000.0f;
-  radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.15e-6f;
+  radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 490000.0f;
+  radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.015e-6f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
-  radio.receiverCircuit.gridLeakResistanceOhms = 1400000.0f;
-  // RCA RC-12 type 77 data with the 116PX set voltages: plate about 95 V,
-  // screen about 72 V, bias close to -1.5 V, gm about 1100 umho.
+  radio.receiverCircuit.gridLeakResistanceOhms = 1000000.0f;
+  // The 37-116 first audio stage is a 6J5G triode. A common 250 V / -8 V
+  // operating point with about 9 mA plate current, rp about 7.7k, gm about
+  // 2600 umho, and mu about 20 puts the plate near the roughly 90 V socket
+  // reading shown in the service data with a ~15k plate load.
   radio.receiverCircuit.tubePlateSupplyVolts = 250.0f;
-  radio.receiverCircuit.tubePlateDcVolts = 95.0f;
-  radio.receiverCircuit.tubeScreenVolts = 72.0f;
-  radio.receiverCircuit.tubeBiasVolts = -1.5f;
-  radio.receiverCircuit.tubeCutoffVolts = -5.5f;
-  radio.receiverCircuit.tubePlateCurrentAmps = 0.00155f;
-  radio.receiverCircuit.tubeMutualConductanceSiemens = 0.0011f;
-  radio.receiverCircuit.tubeLoadResistanceOhms = 100000.0f;
-  radio.receiverCircuit.tubePlateKneeVolts = 18.0f;
-  radio.receiverCircuit.tubeGridSoftnessVolts = 0.4f;
+  radio.receiverCircuit.tubePlateDcVolts = 90.0f;
+  radio.receiverCircuit.tubeScreenVolts = 0.0f;
+  radio.receiverCircuit.tubeBiasVolts = -8.0f;
+  radio.receiverCircuit.tubeCutoffVolts = -8.0f;
+  radio.receiverCircuit.tubePlateCurrentAmps = 0.009f;
+  radio.receiverCircuit.tubeMutualConductanceSiemens = 0.0026f;
+  radio.receiverCircuit.tubeMu = 20.0f;
+  radio.receiverCircuit.tubeTriodeConnected = true;
+  radio.receiverCircuit.tubeLoadResistanceOhms = 15000.0f;
+  radio.receiverCircuit.tubePlateKneeVolts = 16.0f;
+  radio.receiverCircuit.tubeGridSoftnessVolts = 0.6f;
 
   radio.tone.presenceHz = 0.0f;
   radio.tone.presenceQ = 0.78f;
@@ -2701,25 +2794,24 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.supplyDriveDepth = 0.0f;
   radio.power.supplyBiasDepth = 0.0f;
   radio.power.postLpHz = 0.0f;
-  // The 42 driver uses the RC-12 / 2A5 operating point. The 77->42 coupling
-  // keeps the 116PX schematic values around C85 and the visible 160k/100k
-  // grid network. Transformer 92 is now handled as an explicit magnetic
-  // network: primary copper loss, magnetizing inductance, leakage on both
-  // sides, shunt capacitance, and the reflected 6A3 grid load. The turns
-  // ratio is the same clear step-down as the measured 0.15 half-secondary
-  // result, expressed here as a full primary-to-secondary ratio.
+  // The 37-116 driver is a triode-connected 6F6G feeding the 6B4G pair through
+  // an interstage transformer. RC-13 gives 250 V plate, -20 V grid, about
+  // 31 mA plate current, mu about 7, gm about 2700 umho, and 4000 ohm load
+  // for single-ended class-A triode operation.
   radio.power.gridCouplingCapFarads = 0.05e-6f;
   radio.power.gridLeakResistanceOhms = 100000.0f;
-  radio.power.driverSourceResistanceOhms = 160000.0f;
+  radio.power.driverSourceResistanceOhms = 10000.0f;
   radio.power.tubePlateSupplyVolts = 250.0f;
-  radio.power.tubePlateDcVolts = 250.0f;
+  radio.power.tubePlateDcVolts = 230.0f;
   radio.power.tubeScreenVolts = 250.0f;
-  radio.power.tubeBiasVolts = -16.5f;
-  radio.power.tubeCutoffVolts = -33.0f;
-  radio.power.tubePlateCurrentAmps = 0.034f;
-  radio.power.tubeMutualConductanceSiemens = 0.0022f;
+  radio.power.tubeBiasVolts = -20.0f;
+  radio.power.tubeCutoffVolts = -20.0f;
+  radio.power.tubePlateCurrentAmps = 0.031f;
+  radio.power.tubeMutualConductanceSiemens = 0.0027f;
+  radio.power.tubeMu = 7.0f;
+  radio.power.tubeTriodeConnected = true;
   radio.power.tubeAcLoadResistanceOhms = 7000.0f;
-  radio.power.tubePlateKneeVolts = 28.0f;
+  radio.power.tubePlateKneeVolts = 24.0f;
   radio.power.tubeGridSoftnessVolts = 0.8f;
   radio.power.tubeGridCurrentResistanceOhms = 1000.0f;
   radio.power.interstagePrimaryLeakageInductanceHenries = 0.45f;
@@ -2732,25 +2824,27 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.interstageSecondaryResistanceOhms = 296.0f;
   radio.power.interstageSecondaryShuntCapFarads = 40e-12f;
   radio.power.interstageIntegrationSubsteps = 2;
-  radio.power.outputGridLeakResistanceOhms = 250000.0f;
+  radio.power.outputGridLeakResistanceOhms = 50000.0f;
   radio.power.outputGridCurrentResistanceOhms = 1200.0f;
-  // 6A3 is the 6.3 V heater version of the 2A3. The output stage now drives
-  // an explicit push-pull/output-transformer network instead of collapsing the
-  // plate load to an algebraic 5k ratio. The stated 5k plate-to-plate load is
-  // retained as the reflected load target of the transformer into 8 ohms.
+  // The 37-116 uses push-pull 6B4G output tubes. The 6B4G is the octal form of
+  // the 2A3 family, so the reduced-order triode law keeps the same mu/gm class
+  // and 37-116 speaker/load targets. The effective control-grid bias is kept a
+  // little warmer than the textbook fixed-bias number so this simplified
+  // driver/transformer/output solve does not collapse to near-silence at
+  // ordinary preview drive levels.
   radio.power.outputTubePlateSupplyVolts = 325.0f;
   radio.power.outputTubePlateDcVolts = 300.0f;
-  radio.power.outputTubeBiasVolts = -42.0f;
+  radio.power.outputTubeBiasVolts = -39.0f;
   radio.power.outputTubeCutoffVolts = 0.0f;
   radio.power.outputTubePlateCurrentAmps = 0.040f;
   radio.power.outputTubeMutualConductanceSiemens = 0.00525f;
   radio.power.outputTubeMu = 4.2f;
-  radio.power.outputTubePlateToPlateLoadOhms = 5000.0f;
+  radio.power.outputTubePlateToPlateLoadOhms = 3000.0f;
   radio.power.outputTubePlateKneeVolts = 18.0f;
   radio.power.outputTubeGridSoftnessVolts = 2.0f;
   radio.power.outputTransformerPrimaryLeakageInductanceHenries = 35e-3f;
   radio.power.outputTransformerMagnetizingInductanceHenries = 20.0f;
-  radio.power.outputTransformerTurnsRatioPrimaryToSecondary = 25.0f;
+  radio.power.outputTransformerTurnsRatioPrimaryToSecondary = 0.0f;
   radio.power.outputTransformerPrimaryResistanceOhms = 235.0f;
   radio.power.outputTransformerPrimaryCoreLossResistanceOhms = 90000.0f;
   radio.power.outputTransformerPrimaryShuntCapFarads = 2e-12f;
@@ -2758,8 +2852,8 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.outputTransformerSecondaryResistanceOhms = 0.32f;
   radio.power.outputTransformerSecondaryShuntCapFarads = 150e-12f;
   radio.power.outputTransformerIntegrationSubsteps = 2;
-  radio.power.outputLoadResistanceOhms = 8.0f;
-  radio.power.nominalOutputPowerWatts = 10.0f;
+  radio.power.outputLoadResistanceOhms = 3.9f;
+  radio.power.nominalOutputPowerWatts = 15.0f;
 }
 
 static void applySetIdentity(Radio1938& radio) {
@@ -2778,13 +2872,13 @@ static void refreshIdentityDependentStages(Radio1938& radio) {
 
 std::string_view Radio1938::presetName(Preset preset) {
   switch (preset) {
-    case Preset::Philco37116X:
-      return "philco_37_116x";
+    case Preset::Philco37116:
+      return "philco_37_116";
   }
-  return "philco_37_116x";
+  return "philco_37_116";
 }
 
-Radio1938::Radio1938() { }
+Radio1938::Radio1938() { applyPreset(preset); }
 
 std::string_view Radio1938::stageName(StageId id) {
   switch (id) {
@@ -2829,8 +2923,12 @@ std::string_view Radio1938::stageName(StageId id) {
 }
 
 bool Radio1938::applyPreset(std::string_view presetNameValue) {
+  if (presetNameValue == "philco_37_116") {
+    applyPreset(Preset::Philco37116);
+    return true;
+  }
   if (presetNameValue == "philco_37_116x") {
-    applyPreset(Preset::Philco37116X);
+    applyPreset(Preset::Philco37116);
     return true;
   }
   return false;
@@ -2839,8 +2937,8 @@ bool Radio1938::applyPreset(std::string_view presetNameValue) {
 void Radio1938::applyPreset(Preset presetValue) {
   preset = presetValue;
   switch (presetValue) {
-    case Preset::Philco37116X:
-      applyPhilco37116XPreset(*this);
+    case Preset::Philco37116:
+      applyPhilco37116Preset(*this);
       break;
   }
   if (!initialized) return;
@@ -2867,11 +2965,6 @@ void Radio1938::init(int ch, float sr, float bw, float noise) {
   sampleRate = sr;
   bwHz = bw;
   noiseWeight = noise;
-  switch (preset) {
-    case Preset::Philco37116X:
-      applyPhilco37116XPreset(*this);
-      break;
-  }
   applySetIdentity(*this);
   RadioInitContext initCtx{};
   lifecycle.configure(*this, initCtx);
