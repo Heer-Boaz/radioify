@@ -9,6 +9,8 @@ float clampfLocal(float v, float lo, float hi) {
   return std::clamp(v, lo, hi);
 }
 
+constexpr uint32_t kPreviewWarmupFrames = 16384u;
+
 float computeOpenCircuitCarrierRmsVolts(float fieldStrengthVoltsPerMeter,
                                         float antennaEffectiveHeightMeters) {
   return std::max(fieldStrengthVoltsPerMeter, 0.0f) *
@@ -44,6 +46,7 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
 
 void PcmToIfPreviewModulator::reset() {
   carrierPhase = 0.0f;
+  warmedUp = false;
   programHp.reset();
   programLp1.reset();
   programLp2.reset();
@@ -65,6 +68,23 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
   float carrierRms = computeOpenCircuitCarrierRmsVolts(
       fieldStrengthVoltsPerMeter, antennaEffectiveHeightMeters);
   float carrierPeak = std::sqrt(2.0f) * carrierRms;
+
+  if (!warmedUp) {
+    monoScratch.assign(std::min<uint32_t>(kPreviewWarmupFrames, 4096u), 0.0f);
+    uint32_t remaining = kPreviewWarmupFrames;
+    while (remaining > 0u) {
+      uint32_t batch =
+          std::min<uint32_t>(remaining, static_cast<uint32_t>(monoScratch.size()));
+      for (uint32_t frame = 0; frame < batch; ++frame) {
+        monoScratch[frame] = carrierPeak * std::cos(carrierPhase);
+        carrierPhase += carrierStep;
+        if (carrierPhase >= kRadioTwoPi) carrierPhase -= kRadioTwoPi;
+      }
+      radio.processIfReal(monoScratch.data(), batch);
+      remaining -= batch;
+    }
+    warmedUp = true;
+  }
 
   monoScratch.resize(frames);
 

@@ -13,6 +13,7 @@ struct PcmToIfPreviewModulator {
   float fieldStrengthVoltsPerMeter = 0.0f;
   float antennaEffectiveHeightMeters = 0.0f;
   float modulationIndex = 0.0f;
+  bool warmedUp = false;
   Biquad programHp;
   Biquad programLp1;
   Biquad programLp2;

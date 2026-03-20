@@ -404,7 +404,11 @@ static void applyRadioBaseDefaults(Radio1938& radio) {
   radio.receiverCircuit.enabled = true;
   radio.receiverCircuit.volumeControlResistanceOhms = 250000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 60000.0f;
-  radio.receiverCircuit.volumeControlPosition = 1.0f;
+  // Render/preview needs a definite physical knob setting. A strong local
+  // station with the 2 Mohm control fully open grossly overdrives the 77/42/6A3
+  // chain; a position near the lower quarter of travel is a much more
+  // representative listening operating point for this set.
+  radio.receiverCircuit.volumeControlPosition = 0.30f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
   radio.receiverCircuit.gridLeakResistanceOhms = 1000000.0f;
   radio.receiverCircuit.tubePlateSupplyVolts = 250.0f;
@@ -1251,7 +1255,12 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
     avcEnv =
         avcReleaseCoeff * avcEnv + (1.0f - avcReleaseCoeff) * avcRect;
   }
-  float audioOut = audioPostLp1.process(audioEnv);
+  // The audio branch should carry only the envelope deviation around the
+  // carrier/DC level. The slower AVC envelope is the physical DC reference of
+  // the detector output; feeding the raw positive envelope forward would
+  // unrealistically inject carrier bias into the audio path and overdrive the
+  // following tube stage.
+  float audioOut = audioPostLp1.process(audioEnv - avcEnv);
   audioOut = audioPostLp2.process(audioOut);
   return audioOut;
 }
@@ -2965,7 +2974,11 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   // the 0.01 uF coupling capacitor, and 66 is a 1.4M grid leak.
   radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 400000.0f;
-  radio.receiverCircuit.volumeControlPosition = 1.0f;
+  // Render/preview needs a definite physical knob setting. A strong local
+  // station with the 2 Mohm control fully open grossly overdrives the 77/42/6A3
+  // chain; a position near the lower quarter of travel is a much more
+  // representative listening operating point for this set.
+  radio.receiverCircuit.volumeControlPosition = 0.30f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 500000.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.15e-6f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
