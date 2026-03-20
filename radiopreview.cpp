@@ -27,26 +27,41 @@ void PcmToIfPreviewModulator::init(const Radio1938& radio,
   float safeBw =
       clampfLocal(bwHz, std::max(400.0f, ifStrip.ifMinBwHz),
                   sampleRate * safeMaxFraction);
-  float ifLow =
-      clampfLocal(std::max(ifStrip.ifLowBaseHz, 120.0f), 40.0f, sampleRate * 0.40f);
-  float ifHigh =
-      clampfLocal(ifLow + safeBw, ifLow + 400.0f, sampleRate * safeMaxFraction);
-  float ifSpan = std::max(400.0f, ifHigh - ifLow);
-  carrierHz = clampfLocal(0.5f * (ifLow + ifHigh), ifLow + 0.20f * ifSpan,
-                          ifHigh - 0.20f * ifSpan);
+  float lowMax = sampleRate * 0.40f;
+  float highMax = sampleRate * safeMaxFraction;
+  ifLowHz =
+      clampfLocal(std::max(ifStrip.ifLowBaseHz, 120.0f), 40.0f, lowMax);
+  float ifSpan =
+      clampfLocal(safeBw, 400.0f, std::max(400.0f, highMax - ifLowHz));
+  ifHighHz = clampfLocal(ifLowHz + ifSpan, ifLowHz + 400.0f, highMax);
+  carrierHz = 0.5f * (ifLowHz + ifHighHz);
+  float lowerSidebandRoom = std::max(80.0f, carrierHz - ifLowHz);
+  float upperSidebandRoom = std::max(80.0f, ifHighHz - carrierHz);
+  float sidebandRoom = std::min(lowerSidebandRoom, upperSidebandRoom);
+  audioBandwidthHz = clampfLocal(0.82f * sidebandRoom, 180.0f,
+                                 std::min(4600.0f, sampleRate * 0.18f));
 
-  float programHpHz = 55.0f;
-  float programLpHz =
-      clampfLocal(safeBw * 0.42f, 1400.0f, std::min(4200.0f, sampleRate * 0.18f));
-  programHp.setHighpass(sampleRate, programHpHz, kRadioBiquadQ);
-  programLp.setLowpass(sampleRate, programLpHz, kRadioBiquadQ);
+  float stageGainRef = std::max(ifStrip.stageGain, 1e-3f);
+  carrierAmplitude = clampfLocal(
+      0.78f * radio.demod.am.controlVoltageRef / stageGainRef, 0.06f, 0.22f);
+  modulationIndex = 0.82f;
+  modulationLimit = 0.92f;
+  modulationRef = 0.30f;
+  programLevelAtk = std::exp(-1.0f / (sampleRate * 0.0025f));
+  programLevelRel = std::exp(-1.0f / (sampleRate * 0.160f));
+
+  programHp.setHighpass(sampleRate, 45.0f, kRadioBiquadQ);
+  programLp1.setLowpass(sampleRate, audioBandwidthHz, kRadioBiquadQ);
+  programLp2.setLowpass(sampleRate, audioBandwidthHz, kRadioBiquadQ);
   reset();
 }
 
 void PcmToIfPreviewModulator::reset() {
   phase = 0.0f;
+  programLevelEnv = 0.0f;
   programHp.reset();
-  programLp.reset();
+  programLp1.reset();
+  programLp2.reset();
 }
 
 void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
@@ -58,10 +73,22 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
 
   auto nextIfSample = [&](float x) {
     float program = programHp.process(x);
-    program = programLp.process(program);
-    float env = std::max(minEnvelope, carrierLevel + modulationDepth * program);
-    env = std::min(env, 1.25f);
-    float y = env * std::sin(phase);
+    program = programLp1.process(program);
+    program = programLp2.process(program);
+    float a = std::fabs(program);
+    if (a > programLevelEnv) {
+      programLevelEnv =
+          programLevelAtk * programLevelEnv + (1.0f - programLevelAtk) * a;
+    } else {
+      programLevelEnv =
+          programLevelRel * programLevelEnv + (1.0f - programLevelRel) * a;
+    }
+
+    float levelRef = std::max(modulationRef, programLevelEnv);
+    float mod = modulationIndex * (program / levelRef);
+    mod = clampfLocal(mod, -modulationLimit, modulationLimit);
+    float envelope = carrierAmplitude * (1.0f + mod);
+    float y = envelope * std::sin(phase);
     phase += kRadioTwoPi * (carrierHz / std::max(sampleRate, 1.0f));
     if (phase >= kRadioTwoPi) {
       phase = std::fmod(phase, kRadioTwoPi);
@@ -79,7 +106,7 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
   }
 
   monoScratch.resize(frames);
-  float foldGain = 1.0f / std::sqrt(static_cast<float>(channels));
+  float foldGain = 1.0f / static_cast<float>(channels);
   for (uint32_t frame = 0; frame < frames; ++frame) {
     float sum = 0.0f;
     size_t base = static_cast<size_t>(frame) * channels;
