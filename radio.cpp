@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <limits>
 
 using BlockStep = Radio1938::BlockStep;
 using AllocateStep = Radio1938::AllocateStep;
@@ -122,33 +123,6 @@ static float processResistorLoadedTubeStage(float gridVolts,
   return quiescentPlate - plateVoltage;
 }
 
-static float processTransformerLoadedTubeStage(
-    float gridVolts,
-    float supplyScale,
-    float quiescentPlateVolts,
-    float screenVolts,
-    float biasVolts,
-    float cutoffVolts,
-    float quiescentPlateCurrentAmps,
-    float mutualConductanceSiemens,
-    float acLoadResistanceOhms,
-    float plateKneeVolts,
-    float gridSoftnessVolts) {
-  float plateVoltage = std::max(quiescentPlateVolts * supplyScale, 1.0f);
-  float screen = std::max(screenVolts * supplyScale, 1.0f);
-  float current = deviceTubePlateCurrent(
-      gridVolts, plateVoltage, screen, biasVolts, cutoffVolts,
-      quiescentPlateVolts * supplyScale, screenVolts * supplyScale,
-      quiescentPlateCurrentAmps, mutualConductanceSiemens, plateKneeVolts,
-      gridSoftnessVolts);
-  float quiescentCurrent = deviceTubePlateCurrent(
-      biasVolts, plateVoltage, screen, biasVolts, cutoffVolts,
-      quiescentPlateVolts * supplyScale, screenVolts * supplyScale,
-      quiescentPlateCurrentAmps, mutualConductanceSiemens, plateKneeVolts,
-      gridSoftnessVolts);
-  return (current - quiescentCurrent) * std::max(acLoadResistanceOhms, 1.0f);
-}
-
 static float processConverterTubeStage(float baseGridVolts,
                                        float rfGridVolts,
                                        float oscillatorGridVolts,
@@ -215,6 +189,43 @@ static bool solveLinear3x3(float a[3][3], float b[3], float x[3]) {
   return true;
 }
 
+static bool solveLinear4x4(float a[4][4], float b[4], float x[4]) {
+  for (int pivot = 0; pivot < 4; ++pivot) {
+    int pivotRow = pivot;
+    float pivotAbs = std::fabs(a[pivot][pivot]);
+    for (int row = pivot + 1; row < 4; ++row) {
+      float candidateAbs = std::fabs(a[row][pivot]);
+      if (candidateAbs > pivotAbs) {
+        pivotAbs = candidateAbs;
+        pivotRow = row;
+      }
+    }
+    if (pivotAbs < 1e-12f) return false;
+    if (pivotRow != pivot) {
+      for (int col = pivot; col < 4; ++col) {
+        std::swap(a[pivot][col], a[pivotRow][col]);
+      }
+      std::swap(b[pivot], b[pivotRow]);
+    }
+    float invPivot = 1.0f / a[pivot][pivot];
+    for (int row = pivot + 1; row < 4; ++row) {
+      float scale = a[row][pivot] * invPivot;
+      if (std::fabs(scale) < 1e-12f) continue;
+      for (int col = pivot; col < 4; ++col) {
+        a[row][col] -= scale * a[pivot][col];
+      }
+      b[row] -= scale * b[pivot];
+    }
+  }
+  for (int row = 3; row >= 0; --row) {
+    float sum = b[row];
+    for (int col = row + 1; col < 4; ++col) sum -= a[row][col] * x[col];
+    if (std::fabs(a[row][row]) < 1e-12f) return false;
+    x[row] = sum / a[row][row];
+  }
+  return true;
+}
+
 static float deviceTriodePlateCurrent(float gridVolts,
                                       float plateVolts,
                                       float biasVolts,
@@ -247,46 +258,6 @@ static float deviceTriodePlateCurrent(float gridVolts,
       quiescentPlateCurrentAmps /
       (std::pow(activationQ, exponent) * std::max(kneeQ, 1e-6f));
   return perveance * std::pow(activation, exponent) * std::max(knee, 0.0f);
-}
-
-static float processPushPullTriodeOutputStage(
-    float controlGridVoltsA,
-    float controlGridVoltsB,
-    float supplyScale,
-    float plateSupplyVolts,
-    float quiescentPlateVolts,
-    float biasVolts,
-    float cutoffVolts,
-    float quiescentPlateCurrentAmps,
-    float mutualConductanceSiemens,
-    float mu,
-    float plateToPlateLoadOhms,
-    float plateKneeVolts,
-    float gridSoftnessVolts) {
-  float supply = std::max(plateSupplyVolts * supplyScale, 1.0f);
-  float plateQ =
-      std::clamp(quiescentPlateVolts * supplyScale, 1.0f, supply);
-  float halfPrimaryImpedance = std::max(plateToPlateLoadOhms, 1.0f) * 0.125f;
-  float plateA = plateQ;
-  float plateB = plateQ;
-  float currentA = quiescentPlateCurrentAmps;
-  float currentB = quiescentPlateCurrentAmps;
-  for (int i = 0; i < 4; ++i) {
-    currentA = deviceTriodePlateCurrent(
-        controlGridVoltsA, plateA, biasVolts, cutoffVolts,
-        quiescentPlateVolts * supplyScale, quiescentPlateCurrentAmps,
-        mutualConductanceSiemens, mu, plateKneeVolts, gridSoftnessVolts);
-    currentB = deviceTriodePlateCurrent(
-        controlGridVoltsB, plateB, biasVolts, cutoffVolts,
-        quiescentPlateVolts * supplyScale, quiescentPlateCurrentAmps,
-        mutualConductanceSiemens, mu, plateKneeVolts, gridSoftnessVolts);
-    float differentialCurrent = currentA - currentB;
-    plateA = std::clamp(plateQ - differentialCurrent * halfPrimaryImpedance,
-                        1.0f, supply);
-    plateB = std::clamp(plateQ + differentialCurrent * halfPrimaryImpedance,
-                        1.0f, supply);
-  }
-  return plateB - plateA;
 }
 
 static inline uint32_t hash32(uint32_t x) {
@@ -674,6 +645,135 @@ float CoupledTunedTransformer::process(float vin) {
   }
 
   return secondaryCurrent * outputResistanceOhms;
+}
+
+void CurrentDrivenTransformer::configure(
+    float newFs,
+    float newPrimaryLeakageInductanceHenries,
+    float newMagnetizingInductanceHenries,
+    float newTurnsRatioPrimaryToSecondary,
+    float newPrimaryResistanceOhms,
+    float newPrimaryCoreLossResistanceOhms,
+    float newPrimaryShuntCapFarads,
+    float newSecondaryLeakageInductanceHenries,
+    float newSecondaryResistanceOhms,
+    float newSecondaryShuntCapFarads,
+    int newIntegrationSubsteps) {
+  fs = std::max(newFs, 1.0f);
+  primaryLeakageInductanceHenries =
+      std::max(newPrimaryLeakageInductanceHenries, 0.0f);
+  magnetizingInductanceHenries =
+      std::max(newMagnetizingInductanceHenries, 1e-6f);
+  turnsRatioPrimaryToSecondary =
+      std::max(newTurnsRatioPrimaryToSecondary, 1e-4f);
+  primaryResistanceOhms = std::max(newPrimaryResistanceOhms, 1e-6f);
+  primaryCoreLossResistanceOhms =
+      std::max(newPrimaryCoreLossResistanceOhms, 0.0f);
+  primaryShuntCapFarads = std::max(newPrimaryShuntCapFarads, 0.0f);
+  secondaryLeakageInductanceHenries =
+      std::max(newSecondaryLeakageInductanceHenries, 0.0f);
+  secondaryResistanceOhms = std::max(newSecondaryResistanceOhms, 1e-6f);
+  secondaryShuntCapFarads = std::max(newSecondaryShuntCapFarads, 0.0f);
+  integrationSubsteps = std::max(newIntegrationSubsteps, 1);
+  reset();
+}
+
+void CurrentDrivenTransformer::reset() {
+  primaryCurrent = 0.0f;
+  secondaryCurrent = 0.0f;
+  primaryVoltage = 0.0f;
+  secondaryVoltage = 0.0f;
+}
+
+CurrentDrivenTransformerSample CurrentDrivenTransformer::project(
+    float primaryDriveCurrentAmps,
+    float secondaryLoadResistanceOhms,
+    float primaryLoadResistanceOhms) const {
+  float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
+  float safeTurns = std::max(turnsRatioPrimaryToSecondary, 1e-4f);
+  float primaryInductance =
+      primaryLeakageInductanceHenries + magnetizingInductanceHenries;
+  float secondaryInductance =
+      secondaryLeakageInductanceHenries +
+      magnetizingInductanceHenries / (safeTurns * safeTurns);
+  float mutualInductance = magnetizingInductanceHenries / safeTurns;
+  float primaryCap = std::max(primaryShuntCapFarads, 1e-15f);
+  float secondaryCap = std::max(secondaryShuntCapFarads, 1e-15f);
+  float primaryCoreConductance =
+      (primaryCoreLossResistanceOhms > 0.0f)
+          ? 1.0f / std::max(primaryCoreLossResistanceOhms, 1e-9f)
+          : 0.0f;
+  if (primaryLoadResistanceOhms > 0.0f &&
+      std::isfinite(primaryLoadResistanceOhms)) {
+    primaryCoreConductance +=
+        1.0f / std::max(primaryLoadResistanceOhms, 1e-9f);
+  }
+  float secondaryLoadConductance =
+      (secondaryLoadResistanceOhms > 0.0f &&
+       std::isfinite(secondaryLoadResistanceOhms))
+          ? 1.0f / std::max(secondaryLoadResistanceOhms, 1e-9f)
+          : 0.0f;
+  float projectedPrimaryCurrent = primaryCurrent;
+  float projectedSecondaryCurrent = secondaryCurrent;
+  float projectedPrimaryVoltage = primaryVoltage;
+  float projectedSecondaryVoltage = secondaryVoltage;
+
+  for (int step = 0; step < integrationSubsteps; ++step) {
+    float a[4][4] = {
+        {primaryInductance / dt + primaryResistanceOhms,
+         mutualInductance / dt, -1.0f, 0.0f},
+        {mutualInductance / dt,
+         secondaryInductance / dt + secondaryResistanceOhms, 0.0f, -1.0f},
+        {1.0f, 0.0f, primaryCap / dt + primaryCoreConductance, 0.0f},
+        {0.0f, 1.0f, 0.0f,
+         secondaryCap / dt + secondaryLoadConductance},
+    };
+    float b[4] = {
+        primaryInductance / dt * projectedPrimaryCurrent +
+            mutualInductance / dt * projectedSecondaryCurrent,
+        mutualInductance / dt * projectedPrimaryCurrent +
+            secondaryInductance / dt * projectedSecondaryCurrent,
+        primaryDriveCurrentAmps + primaryCap / dt * projectedPrimaryVoltage,
+        secondaryCap / dt * projectedSecondaryVoltage,
+    };
+    float x[4] = {projectedPrimaryCurrent, projectedSecondaryCurrent,
+                  projectedPrimaryVoltage, projectedSecondaryVoltage};
+    if (!solveLinear4x4(a, b, x)) return {};
+    projectedPrimaryCurrent = x[0];
+    projectedSecondaryCurrent = x[1];
+    projectedPrimaryVoltage = x[2];
+    projectedSecondaryVoltage = x[3];
+    if (!std::isfinite(projectedPrimaryCurrent) ||
+        !std::isfinite(projectedSecondaryCurrent) ||
+        !std::isfinite(projectedPrimaryVoltage) ||
+        !std::isfinite(projectedSecondaryVoltage)) {
+      return {};
+    }
+  }
+
+  return {projectedPrimaryVoltage, projectedSecondaryVoltage,
+          projectedPrimaryCurrent, projectedSecondaryCurrent};
+}
+
+CurrentDrivenTransformerSample CurrentDrivenTransformer::process(
+    float primaryDriveCurrentAmps,
+    float secondaryLoadResistanceOhms,
+    float primaryLoadResistanceOhms) {
+  CurrentDrivenTransformerSample projected =
+      project(primaryDriveCurrentAmps, secondaryLoadResistanceOhms,
+              primaryLoadResistanceOhms);
+  if (!std::isfinite(projected.primaryVoltage) ||
+      !std::isfinite(projected.secondaryVoltage) ||
+      !std::isfinite(projected.primaryCurrent) ||
+      !std::isfinite(projected.secondaryCurrent)) {
+    reset();
+    return {};
+  }
+  primaryVoltage = projected.primaryVoltage;
+  secondaryVoltage = projected.secondaryVoltage;
+  primaryCurrent = projected.primaryCurrent;
+  secondaryCurrent = projected.secondaryCurrent;
+  return projected;
 }
 
 void Compressor::setFs(float newFs) {
@@ -1809,6 +1909,33 @@ float RadioToneNode::process(Radio1938& radio,
   return tone.presence.process(y);
 }
 
+static float tubeGridLoadResistance(float acGridVolts,
+                                    float biasVolts,
+                                    float gridLeakResistanceOhms,
+                                    float gridCurrentResistanceOhms) {
+  float loadResistance = std::max(gridLeakResistanceOhms, 1.0f);
+  if (biasVolts + acGridVolts > 0.0f) {
+    loadResistance =
+        parallelResistance(loadResistance,
+                           std::max(gridCurrentResistanceOhms, 1.0f));
+  }
+  return loadResistance;
+}
+
+static float differentialGridLoadResistance(float secondaryVolts,
+                                            float biasVolts,
+                                            float gridLeakResistanceOhms,
+                                            float gridCurrentResistanceOhms) {
+  float halfSecondaryVolts = 0.5f * secondaryVolts;
+  float loadA = tubeGridLoadResistance(halfSecondaryVolts, biasVolts,
+                                       gridLeakResistanceOhms,
+                                       gridCurrentResistanceOhms);
+  float loadB = tubeGridLoadResistance(-halfSecondaryVolts, biasVolts,
+                                       gridLeakResistanceOhms,
+                                       gridCurrentResistanceOhms);
+  return std::max(loadA + loadB, 2.0f);
+}
+
 void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   auto& power = radio.power;
   power.sagAtk =
@@ -1833,9 +1960,26 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   power.tubeGridCurrentResistanceOhms =
       std::max(power.tubeGridCurrentResistanceOhms, 1.0f);
   power.tubePlateVoltage = power.tubePlateDcVolts;
-  power.interstageTurnsRatio = std::max(power.interstageTurnsRatio, 1e-3f);
+  power.interstagePrimaryLeakageInductanceHenries =
+      std::max(power.interstagePrimaryLeakageInductanceHenries, 0.0f);
+  power.interstageMagnetizingInductanceHenries =
+      std::max(power.interstageMagnetizingInductanceHenries, 1e-6f);
+  power.interstageTurnsRatioPrimaryToSecondary =
+      std::max(power.interstageTurnsRatioPrimaryToSecondary, 1e-4f);
+  power.interstagePrimaryResistanceOhms =
+      std::max(power.interstagePrimaryResistanceOhms, 1e-6f);
+  power.interstagePrimaryCoreLossResistanceOhms =
+      std::max(power.interstagePrimaryCoreLossResistanceOhms, 0.0f);
+  power.interstagePrimaryShuntCapFarads =
+      std::max(power.interstagePrimaryShuntCapFarads, 0.0f);
+  power.interstageSecondaryLeakageInductanceHenries =
+      std::max(power.interstageSecondaryLeakageInductanceHenries, 0.0f);
   power.interstageSecondaryResistanceOhms =
       std::max(power.interstageSecondaryResistanceOhms, 1.0f);
+  power.interstageSecondaryShuntCapFarads =
+      std::max(power.interstageSecondaryShuntCapFarads, 0.0f);
+  power.interstageIntegrationSubsteps =
+      std::max(power.interstageIntegrationSubsteps, 1);
   power.outputGridLeakResistanceOhms =
       std::max(power.outputGridLeakResistanceOhms, 1e3f);
   power.outputGridCurrentResistanceOhms =
@@ -1851,8 +1995,54 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
       std::max(power.outputTubePlateKneeVolts, 1.0f);
   power.outputTubeGridSoftnessVolts =
       std::max(power.outputTubeGridSoftnessVolts, 1e-3f);
+  power.outputTransformerPrimaryLeakageInductanceHenries =
+      std::max(power.outputTransformerPrimaryLeakageInductanceHenries, 0.0f);
+  power.outputTransformerMagnetizingInductanceHenries =
+      std::max(power.outputTransformerMagnetizingInductanceHenries, 1e-6f);
+  if (power.outputTransformerTurnsRatioPrimaryToSecondary <= 0.0f) {
+    power.outputTransformerTurnsRatioPrimaryToSecondary = std::sqrt(
+        power.outputTubePlateToPlateLoadOhms / power.outputLoadResistanceOhms);
+  }
+  power.outputTransformerTurnsRatioPrimaryToSecondary =
+      std::max(power.outputTransformerTurnsRatioPrimaryToSecondary, 1e-4f);
+  power.outputTransformerPrimaryResistanceOhms =
+      std::max(power.outputTransformerPrimaryResistanceOhms, 1e-6f);
+  power.outputTransformerPrimaryCoreLossResistanceOhms =
+      std::max(power.outputTransformerPrimaryCoreLossResistanceOhms, 0.0f);
+  power.outputTransformerPrimaryShuntCapFarads =
+      std::max(power.outputTransformerPrimaryShuntCapFarads, 0.0f);
+  power.outputTransformerSecondaryLeakageInductanceHenries =
+      std::max(power.outputTransformerSecondaryLeakageInductanceHenries, 0.0f);
+  power.outputTransformerSecondaryResistanceOhms =
+      std::max(power.outputTransformerSecondaryResistanceOhms, 1e-6f);
+  power.outputTransformerSecondaryShuntCapFarads =
+      std::max(power.outputTransformerSecondaryShuntCapFarads, 0.0f);
+  power.outputTransformerIntegrationSubsteps =
+      std::max(power.outputTransformerIntegrationSubsteps, 1);
   power.outputLoadResistanceOhms = std::max(power.outputLoadResistanceOhms, 1.0f);
   power.nominalOutputPowerWatts = std::max(power.nominalOutputPowerWatts, 1e-3f);
+  power.interstageTransformer.configure(
+      radio.sampleRate, power.interstagePrimaryLeakageInductanceHenries,
+      power.interstageMagnetizingInductanceHenries,
+      power.interstageTurnsRatioPrimaryToSecondary,
+      power.interstagePrimaryResistanceOhms,
+      power.interstagePrimaryCoreLossResistanceOhms,
+      power.interstagePrimaryShuntCapFarads,
+      power.interstageSecondaryLeakageInductanceHenries,
+      power.interstageSecondaryResistanceOhms,
+      power.interstageSecondaryShuntCapFarads,
+      power.interstageIntegrationSubsteps);
+  power.outputTransformer.configure(
+      radio.sampleRate, power.outputTransformerPrimaryLeakageInductanceHenries,
+      power.outputTransformerMagnetizingInductanceHenries,
+      power.outputTransformerTurnsRatioPrimaryToSecondary,
+      power.outputTransformerPrimaryResistanceOhms,
+      power.outputTransformerPrimaryCoreLossResistanceOhms,
+      power.outputTransformerPrimaryShuntCapFarads,
+      power.outputTransformerSecondaryLeakageInductanceHenries,
+      power.outputTransformerSecondaryResistanceOhms,
+      power.outputTransformerSecondaryShuntCapFarads,
+      power.outputTransformerIntegrationSubsteps);
   power.satOsLpIn = Biquad{};
   power.satOsLpOut = Biquad{};
 }
@@ -1865,6 +2055,8 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.gridCouplingCapVoltage = 0.0f;
   power.gridVoltage = 0.0f;
   power.tubePlateVoltage = power.tubePlateDcVolts;
+  power.interstageTransformer.reset();
+  power.outputTransformer.reset();
   power.postLpf.reset();
   power.satOsLpIn.reset();
   power.satOsLpOut.reset();
@@ -1901,45 +2093,185 @@ float RadioPowerNode::process(Radio1938& radio,
     power.gridVoltage = couplingCurrent * loadResistance;
     controlGridVolts = power.tubeBiasVolts + power.gridVoltage;
   }
-  float driverPlateAcVolts = processTransformerLoadedTubeStage(
-      controlGridVolts, supplyScale,
-      power.tubePlateDcVolts, power.tubeScreenVolts, power.tubeBiasVolts,
-      power.tubeCutoffVolts, power.tubePlateCurrentAmps,
-      power.tubeMutualConductanceSiemens, power.tubeAcLoadResistanceOhms,
-      power.tubePlateKneeVolts, power.tubeGridSoftnessVolts);
-  float halfSecondarySourceResistance =
-      std::max(0.5f * power.interstageSecondaryResistanceOhms, 1.0f);
-  float openHalfSecondaryVolts =
-      driverPlateAcVolts * power.interstageTurnsRatio;
-  auto resolveGridDrive = [&](float openHalfVoltage) {
-    float halfVoltage = openHalfVoltage;
-    for (int i = 0; i < 2; ++i) {
-      float outputGridLoad = power.outputGridLeakResistanceOhms;
-      if (power.outputTubeBiasVolts + halfVoltage > 0.0f) {
-        outputGridLoad = parallelResistance(outputGridLoad,
-                                            power.outputGridCurrentResistanceOhms);
-      }
-      halfVoltage =
-          openHalfVoltage *
-          (outputGridLoad /
-           std::max(outputGridLoad + halfSecondarySourceResistance, 1e-6f));
-    }
-    return halfVoltage;
+  float driverSupply = std::max(power.tubePlateSupplyVolts * supplyScale, 1.0f);
+  float driverPlateQuiescent =
+      clampf(power.tubePlateDcVolts * supplyScale, 1.0f, driverSupply);
+  float driverScreenVolts =
+      std::max(power.tubeScreenVolts * supplyScale, 1.0f);
+  float driverQuiescentCurrent = deviceTubePlateCurrent(
+      power.tubeBiasVolts, driverPlateQuiescent, driverScreenVolts,
+      power.tubeBiasVolts, power.tubeCutoffVolts, driverPlateQuiescent,
+      driverScreenVolts, power.tubePlateCurrentAmps,
+      power.tubeMutualConductanceSiemens, power.tubePlateKneeVolts,
+      power.tubeGridSoftnessVolts);
+  auto driverCurrentForPrimaryVoltage = [&](float primaryVoltageGuess) {
+    float driverPlateVolts =
+        clampf(driverPlateQuiescent + primaryVoltageGuess, 1.0f, driverSupply);
+    return deviceTubePlateCurrent(
+        controlGridVolts, driverPlateVolts, driverScreenVolts,
+        power.tubeBiasVolts, power.tubeCutoffVolts, driverPlateQuiescent,
+        driverScreenVolts, power.tubePlateCurrentAmps,
+        power.tubeMutualConductanceSiemens, power.tubePlateKneeVolts,
+        power.tubeGridSoftnessVolts);
   };
-  float gridDriveA = resolveGridDrive(openHalfSecondaryVolts);
-  float gridDriveB = resolveGridDrive(-openHalfSecondaryVolts);
-  float primaryPlateToPlateVolts = processPushPullTriodeOutputStage(
-      power.outputTubeBiasVolts + gridDriveA,
-      power.outputTubeBiasVolts + gridDriveB, supplyScale,
-      power.outputTubePlateSupplyVolts, power.outputTubePlateDcVolts,
-      power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
-      power.outputTubePlateCurrentAmps,
-      power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
-      power.outputTubePlateToPlateLoadOhms, power.outputTubePlateKneeVolts,
-      power.outputTubeGridSoftnessVolts);
-  float turnsRatio =
-      std::sqrt(power.outputTubePlateToPlateLoadOhms / power.outputLoadResistanceOhms);
-  y = primaryPlateToPlateVolts / std::max(turnsRatio, 1.0f);
+  struct SolvedTransformerDrive {
+    float driveCurrent = 0.0f;
+    CurrentDrivenTransformerSample sample{};
+  };
+  auto solvePrimaryVoltage = [&](const CurrentDrivenTransformer& transformer,
+                                 auto&& driveCurrentForVoltage,
+                                 float secondaryLoadResistance,
+                                 float primaryLoadResistance,
+                                 float minPrimaryVoltage,
+                                 float maxPrimaryVoltage) {
+    auto evalResidual = [&](float primaryVoltageGuess,
+                            CurrentDrivenTransformerSample& sampleOut,
+                            float& driveCurrentOut) {
+      float clampedGuess =
+          clampf(primaryVoltageGuess, minPrimaryVoltage, maxPrimaryVoltage);
+      driveCurrentOut = driveCurrentForVoltage(clampedGuess);
+      sampleOut = transformer.project(driveCurrentOut, secondaryLoadResistance,
+                                      primaryLoadResistance);
+      return sampleOut.primaryVoltage - clampedGuess;
+    };
+
+    float bestGuess = clampf(transformer.primaryVoltage, minPrimaryVoltage,
+                             maxPrimaryVoltage);
+    float bestDriveCurrent = 0.0f;
+    CurrentDrivenTransformerSample bestSample{};
+    float bestResidual =
+        evalResidual(bestGuess, bestSample, bestDriveCurrent);
+
+    CurrentDrivenTransformerSample lowSample{};
+    CurrentDrivenTransformerSample highSample{};
+    float lowDriveCurrent = 0.0f;
+    float highDriveCurrent = 0.0f;
+    float lowResidual =
+        evalResidual(minPrimaryVoltage, lowSample, lowDriveCurrent);
+    float highResidual =
+        evalResidual(maxPrimaryVoltage, highSample, highDriveCurrent);
+
+    if (std::fabs(lowResidual) < std::fabs(bestResidual)) {
+      bestGuess = minPrimaryVoltage;
+      bestResidual = lowResidual;
+      bestDriveCurrent = lowDriveCurrent;
+      bestSample = lowSample;
+    }
+    if (std::fabs(highResidual) < std::fabs(bestResidual)) {
+      bestGuess = maxPrimaryVoltage;
+      bestResidual = highResidual;
+      bestDriveCurrent = highDriveCurrent;
+      bestSample = highSample;
+    }
+
+    if (lowResidual * highResidual <= 0.0f) {
+      float low = minPrimaryVoltage;
+      float high = maxPrimaryVoltage;
+      for (int i = 0; i < 20; ++i) {
+        float mid = 0.5f * (low + high);
+        CurrentDrivenTransformerSample midSample{};
+        float midDriveCurrent = 0.0f;
+        float midResidual =
+            evalResidual(mid, midSample, midDriveCurrent);
+        if (std::fabs(midResidual) < std::fabs(bestResidual)) {
+          bestGuess = mid;
+          bestResidual = midResidual;
+          bestDriveCurrent = midDriveCurrent;
+          bestSample = midSample;
+        }
+        if (midResidual == 0.0f) break;
+        if (lowResidual * midResidual <= 0.0f) {
+          high = mid;
+          highResidual = midResidual;
+        } else {
+          low = mid;
+          lowResidual = midResidual;
+        }
+      }
+    } else {
+      float guess = bestGuess;
+      for (int i = 0; i < 12; ++i) {
+        CurrentDrivenTransformerSample predicted{};
+        float driveCurrent = 0.0f;
+        float residual = evalResidual(guess, predicted, driveCurrent);
+        if (std::fabs(residual) < std::fabs(bestResidual)) {
+          bestGuess = guess;
+          bestResidual = residual;
+          bestDriveCurrent = driveCurrent;
+          bestSample = predicted;
+        }
+        guess = clampf(0.5f * (guess + predicted.primaryVoltage),
+                       minPrimaryVoltage, maxPrimaryVoltage);
+      }
+    }
+
+    return SolvedTransformerDrive{bestDriveCurrent, bestSample};
+  };
+  float interstageSecondaryGuess = power.interstageTransformer.secondaryVoltage;
+  float interstageLoadResistance = std::numeric_limits<float>::infinity();
+  SolvedTransformerDrive interstageSolved{};
+  float interstagePrimaryMin = 1.0f - driverPlateQuiescent;
+  float interstagePrimaryMax = driverSupply - driverPlateQuiescent;
+  for (int i = 0; i < 3; ++i) {
+    interstageLoadResistance = differentialGridLoadResistance(
+        interstageSecondaryGuess, power.outputTubeBiasVolts,
+        power.outputGridLeakResistanceOhms,
+        power.outputGridCurrentResistanceOhms);
+    interstageSolved = solvePrimaryVoltage(
+        power.interstageTransformer,
+        [&](float primaryVoltageGuess) {
+          return driverCurrentForPrimaryVoltage(primaryVoltageGuess) -
+                 driverQuiescentCurrent;
+        },
+        interstageLoadResistance, 0.0f, interstagePrimaryMin,
+        interstagePrimaryMax);
+    interstageSecondaryGuess = interstageSolved.sample.secondaryVoltage;
+  }
+  auto interstageSample = power.interstageTransformer.process(
+      interstageSolved.driveCurrent, interstageLoadResistance);
+  power.tubePlateVoltage =
+      clampf(driverPlateQuiescent + interstageSample.primaryVoltage, 1.0f,
+             driverSupply);
+  float gridDriveA = 0.5f * interstageSample.secondaryVoltage;
+  float gridDriveB = -gridDriveA;
+  float outputSupply =
+      std::max(power.outputTubePlateSupplyVolts * supplyScale, 1.0f);
+  float outputPlateQuiescent =
+      clampf(power.outputTubePlateDcVolts * supplyScale, 1.0f, outputSupply);
+  float outputPrimaryLoadResistance = std::max(
+      2.0f * power.outputTubeMu /
+          std::max(power.outputTubeMutualConductanceSiemens, 1e-6f),
+      1.0f);
+  auto outputSolved = solvePrimaryVoltage(
+      power.outputTransformer,
+      [&](float primaryVoltageGuess) {
+        float plateA =
+            clampf(outputPlateQuiescent - 0.5f * primaryVoltageGuess, 1.0f,
+                   outputSupply);
+        float plateB =
+            clampf(outputPlateQuiescent + 0.5f * primaryVoltageGuess, 1.0f,
+                   outputSupply);
+        float plateCurrentA = deviceTriodePlateCurrent(
+            power.outputTubeBiasVolts + gridDriveA, plateA,
+            power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
+            outputPlateQuiescent, power.outputTubePlateCurrentAmps,
+            power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
+            power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
+        float plateCurrentB = deviceTriodePlateCurrent(
+            power.outputTubeBiasVolts + gridDriveB, plateB,
+            power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
+            outputPlateQuiescent, power.outputTubePlateCurrentAmps,
+            power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
+            power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
+        return 0.5f * (plateCurrentA - plateCurrentB);
+      },
+      power.outputLoadResistanceOhms, outputPrimaryLoadResistance,
+      2.0f * (1.0f - outputPlateQuiescent),
+      2.0f * (outputSupply - outputPlateQuiescent));
+  auto outputSample = power.outputTransformer.process(
+      outputSolved.driveCurrent, power.outputLoadResistanceOhms,
+      outputPrimaryLoadResistance);
+  y = outputSample.secondaryVoltage;
   float nominalSpeakerPeakVolts = std::sqrt(
       2.0f * power.nominalOutputPowerWatts * power.outputLoadResistanceOhms);
   y /= std::max(nominalSpeakerPeakVolts, 1e-3f);
@@ -2653,11 +2985,11 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.postLpHz = 0.0f;
   // The 42 driver uses the RC-12 / 2A5 operating point. The 77->42 coupling
   // keeps the 116PX schematic values around C85 and the visible 160k/100k
-  // grid network. Transformer 92 shows roughly 430 ohms primary resistance
-  // and 296 ohms total secondary resistance on the schematic; in practice the
-  // 42 plate swing is much larger than the 6A3 grids can use linearly here,
-  // so this model needs a clear step-down rather than the earlier guessed
-  // step-up to avoid grossly overdriving the push-pull output pair.
+  // grid network. Transformer 92 is now handled as an explicit magnetic
+  // network: primary copper loss, magnetizing inductance, leakage on both
+  // sides, shunt capacitance, and the reflected 6A3 grid load. The turns
+  // ratio is the same clear step-down as the measured 0.15 half-secondary
+  // result, expressed here as a full primary-to-secondary ratio.
   radio.power.gridCouplingCapFarads = 0.05e-6f;
   radio.power.gridLeakResistanceOhms = 100000.0f;
   radio.power.driverSourceResistanceOhms = 160000.0f;
@@ -2672,13 +3004,22 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.tubePlateKneeVolts = 28.0f;
   radio.power.tubeGridSoftnessVolts = 0.8f;
   radio.power.tubeGridCurrentResistanceOhms = 1000.0f;
-  radio.power.interstageTurnsRatio = 0.15f;
+  radio.power.interstagePrimaryLeakageInductanceHenries = 0.45f;
+  radio.power.interstageMagnetizingInductanceHenries = 15.0f;
+  radio.power.interstageTurnsRatioPrimaryToSecondary = 1.0f / 0.30f;
+  radio.power.interstagePrimaryResistanceOhms = 430.0f;
+  radio.power.interstagePrimaryCoreLossResistanceOhms = 220000.0f;
+  radio.power.interstagePrimaryShuntCapFarads = 20e-12f;
+  radio.power.interstageSecondaryLeakageInductanceHenries = 0.040f;
   radio.power.interstageSecondaryResistanceOhms = 296.0f;
+  radio.power.interstageSecondaryShuntCapFarads = 40e-12f;
+  radio.power.interstageIntegrationSubsteps = 8;
   radio.power.outputGridLeakResistanceOhms = 250000.0f;
   radio.power.outputGridCurrentResistanceOhms = 1200.0f;
-  // 6A3 is the 6.3 V heater version of the 2A3. This pair is modeled as a
-  // transformer-coupled push-pull triode output with an effective 5k
-  // plate-to-plate load and about -42 V self-bias from the 96/96/96 string.
+  // 6A3 is the 6.3 V heater version of the 2A3. The output stage now drives
+  // an explicit push-pull/output-transformer network instead of collapsing the
+  // plate load to an algebraic 5k ratio. The stated 5k plate-to-plate load is
+  // retained as the reflected load target of the transformer into 8 ohms.
   radio.power.outputTubePlateSupplyVolts = 325.0f;
   radio.power.outputTubePlateDcVolts = 300.0f;
   radio.power.outputTubeBiasVolts = -42.0f;
@@ -2689,6 +3030,16 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.power.outputTubePlateToPlateLoadOhms = 5000.0f;
   radio.power.outputTubePlateKneeVolts = 18.0f;
   radio.power.outputTubeGridSoftnessVolts = 2.0f;
+  radio.power.outputTransformerPrimaryLeakageInductanceHenries = 35e-3f;
+  radio.power.outputTransformerMagnetizingInductanceHenries = 20.0f;
+  radio.power.outputTransformerTurnsRatioPrimaryToSecondary = 25.0f;
+  radio.power.outputTransformerPrimaryResistanceOhms = 235.0f;
+  radio.power.outputTransformerPrimaryCoreLossResistanceOhms = 90000.0f;
+  radio.power.outputTransformerPrimaryShuntCapFarads = 2e-12f;
+  radio.power.outputTransformerSecondaryLeakageInductanceHenries = 60e-6f;
+  radio.power.outputTransformerSecondaryResistanceOhms = 0.32f;
+  radio.power.outputTransformerSecondaryShuntCapFarads = 150e-12f;
+  radio.power.outputTransformerIntegrationSubsteps = 8;
   radio.power.outputLoadResistanceOhms = 8.0f;
   radio.power.nominalOutputPowerWatts = 10.0f;
 }

@@ -123,6 +123,50 @@ struct CoupledTunedTransformer {
   float process(float vin);
 };
 
+struct CurrentDrivenTransformerSample {
+  float primaryVoltage = 0.0f;
+  float secondaryVoltage = 0.0f;
+  float primaryCurrent = 0.0f;
+  float secondaryCurrent = 0.0f;
+};
+
+struct CurrentDrivenTransformer {
+  float fs = 0.0f;
+  float primaryLeakageInductanceHenries = 0.0f;
+  float magnetizingInductanceHenries = 0.0f;
+  float turnsRatioPrimaryToSecondary = 1.0f;
+  float primaryResistanceOhms = 0.0f;
+  float primaryCoreLossResistanceOhms = 0.0f;
+  float primaryShuntCapFarads = 0.0f;
+  float secondaryLeakageInductanceHenries = 0.0f;
+  float secondaryResistanceOhms = 0.0f;
+  float secondaryShuntCapFarads = 0.0f;
+  int integrationSubsteps = 1;
+  float primaryCurrent = 0.0f;
+  float secondaryCurrent = 0.0f;
+  float primaryVoltage = 0.0f;
+  float secondaryVoltage = 0.0f;
+
+  void configure(float newFs,
+                 float newPrimaryLeakageInductanceHenries,
+                 float newMagnetizingInductanceHenries,
+                 float newTurnsRatioPrimaryToSecondary,
+                 float newPrimaryResistanceOhms,
+                 float newPrimaryCoreLossResistanceOhms,
+                 float newPrimaryShuntCapFarads,
+                 float newSecondaryLeakageInductanceHenries,
+                 float newSecondaryResistanceOhms,
+                 float newSecondaryShuntCapFarads,
+                 int newIntegrationSubsteps = 1);
+  void reset();
+  CurrentDrivenTransformerSample project(float primaryDriveCurrentAmps,
+                                         float secondaryLoadResistanceOhms,
+                                         float primaryLoadResistanceOhms = 0.0f) const;
+  CurrentDrivenTransformerSample process(float primaryDriveCurrentAmps,
+                                         float secondaryLoadResistanceOhms,
+                                         float primaryLoadResistanceOhms = 0.0f);
+};
+
 struct Compressor {
   float fs = 48000.0f;
   float thresholdDb = -24.0f;
@@ -999,8 +1043,16 @@ struct Radio1938 {
     float tubeGridSoftnessVolts = 0.0f;
     float tubeGridCurrentResistanceOhms = 0.0f;
     float tubePlateVoltage = 0.0f;
-    float interstageTurnsRatio = 0.0f;
+    float interstagePrimaryLeakageInductanceHenries = 0.0f;
+    float interstageMagnetizingInductanceHenries = 0.0f;
+    float interstageTurnsRatioPrimaryToSecondary = 0.0f;
+    float interstagePrimaryResistanceOhms = 0.0f;
+    float interstagePrimaryCoreLossResistanceOhms = 0.0f;
+    float interstagePrimaryShuntCapFarads = 0.0f;
+    float interstageSecondaryLeakageInductanceHenries = 0.0f;
     float interstageSecondaryResistanceOhms = 0.0f;
+    float interstageSecondaryShuntCapFarads = 0.0f;
+    int interstageIntegrationSubsteps = 1;
     float outputGridLeakResistanceOhms = 0.0f;
     float outputGridCurrentResistanceOhms = 0.0f;
     float outputTubePlateSupplyVolts = 0.0f;
@@ -1013,8 +1065,20 @@ struct Radio1938 {
     float outputTubePlateToPlateLoadOhms = 0.0f;
     float outputTubePlateKneeVolts = 0.0f;
     float outputTubeGridSoftnessVolts = 0.0f;
+    float outputTransformerPrimaryLeakageInductanceHenries = 0.0f;
+    float outputTransformerMagnetizingInductanceHenries = 0.0f;
+    float outputTransformerTurnsRatioPrimaryToSecondary = 0.0f;
+    float outputTransformerPrimaryResistanceOhms = 0.0f;
+    float outputTransformerPrimaryCoreLossResistanceOhms = 0.0f;
+    float outputTransformerPrimaryShuntCapFarads = 0.0f;
+    float outputTransformerSecondaryLeakageInductanceHenries = 0.0f;
+    float outputTransformerSecondaryResistanceOhms = 0.0f;
+    float outputTransformerSecondaryShuntCapFarads = 0.0f;
+    int outputTransformerIntegrationSubsteps = 1;
     float outputLoadResistanceOhms = 0.0f;
     float nominalOutputPowerWatts = 0.0f;
+    CurrentDrivenTransformer interstageTransformer;
+    CurrentDrivenTransformer outputTransformer;
     Biquad postLpf;
     Biquad satOsLpIn;
     Biquad satOsLpOut;
