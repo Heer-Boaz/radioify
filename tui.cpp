@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <memory>
 #include <new>
 #include <string>
 #include <thread>
@@ -429,6 +430,14 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   const uint32_t sampleRate = 48000;
   const uint32_t channels = o.mono ? 1 : 2;
   constexpr uint32_t kRadioProcessChannels = 1u;
+  auto rebuildRadioFromTemplate = [&](Radio1938* target) {
+    if (!target) return;
+    target->preset = radio1938Template.preset;
+    target->identity = radio1938Template.identity;
+    target->setCalibrationEnabled(radio1938Template.calibration.enabled);
+    target->init(kRadioProcessChannels, static_cast<float>(sampleRate),
+                 static_cast<float>(o.bwHz), static_cast<float>(o.noise));
+  };
   const bool useM4a = isM4aExt(o.input);
   const bool useGme = isGmeExt(o.input);
   const bool useVgm = isVgmExt(o.input);
@@ -486,11 +495,10 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
     die("Failed to open output for encoding.");
   }
 
-  Radio1938 radio1938 = radio1938Template;
-  radio1938.init(kRadioProcessChannels, static_cast<float>(sampleRate),
-                 static_cast<float>(o.bwHz), static_cast<float>(o.noise));
+  auto radio1938 = std::make_unique<Radio1938>();
+  rebuildRadioFromTemplate(radio1938.get());
   PcmToIfPreviewModulator radioPreview;
-  radioPreview.init(radio1938, static_cast<float>(sampleRate),
+  radioPreview.init(*radio1938, static_cast<float>(sampleRate),
                     static_cast<float>(o.bwHz));
   constexpr uint32_t chunkFrames = 1024;
   std::vector<float> buffer(chunkFrames * channels);
@@ -535,7 +543,7 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
     }
 
     if (!o.dry && useRadio1938) {
-      radioPreview.processBlock(radio1938, buffer.data(),
+      radioPreview.processBlock(*radio1938, buffer.data(),
                                 static_cast<uint32_t>(framesRead), channels,
                                 1.0f);
     }
@@ -639,9 +647,9 @@ int runTui(Options o) {
   const uint32_t baseChannels = o.mono ? 1 : 2;
   uint32_t channels = baseChannels;
 
-  Radio1938 radio1938Template;
-  radio1938Template.init(1, static_cast<float>(sampleRate), lpHz,
-                         static_cast<float>(o.noise));
+  auto radio1938Template = std::make_unique<Radio1938>();
+  radio1938Template->init(1, static_cast<float>(sampleRate), lpHz,
+                          static_cast<float>(o.noise));
 
   auto defaultOutputFor = [](const std::filesystem::path& input) {
     std::string base = input.stem().string();
@@ -769,7 +777,7 @@ int runTui(Options o) {
     logLine(std::string("  Input:  ") + renderOpt.input);
     logLine(std::string("  Output: ") + renderOpt.output);
     logLine("Rendering output...");
-    renderToFile(renderOpt, radio1938Template, audioIsRadioEnabled());
+    renderToFile(renderOpt, *radio1938Template, audioIsRadioEnabled());
     logLine("Done.");
   };
 

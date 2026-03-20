@@ -54,6 +54,7 @@ set(RADIOIFY_NEURAL_PITCH_MODEL_SHA256
 
 add_executable(radioify
   app_common.cpp
+  crash_handler.cpp
   main.cpp
   tui.cpp
   asciiart.cpp
@@ -870,7 +871,7 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if (WIN32)
-  target_link_libraries(radioify PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32)
+  target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32)
 endif()
 
 if (MSVC)

@@ -672,12 +672,23 @@ AudioPlaybackState gAudio;
 
 static constexpr uint32_t kRadioProcessChannels = 1u;
 
+static void rebuildRadioFromTemplate(Radio1938* target,
+                                     const Radio1938& source,
+                                     float sampleRate,
+                                     float bwHz,
+                                     float noise) {
+  if (!target) return;
+  target->preset = source.preset;
+  target->identity = source.identity;
+  target->setCalibrationEnabled(source.calibration.enabled);
+  target->init(kRadioProcessChannels, sampleRate, bwHz, noise);
+}
+
 void rebuildRadioPreviewChain(AudioState* state) {
   if (!state) return;
-  state->radio1938 = gAudio.radio1938Template;
-  state->radio1938.init(kRadioProcessChannels,
-                        static_cast<float>(gAudio.sampleRate),
-                        gAudio.lpHz, gAudio.noise);
+  rebuildRadioFromTemplate(&state->radio1938, gAudio.radio1938Template,
+                           static_cast<float>(gAudio.sampleRate), gAudio.lpHz,
+                           gAudio.noise);
   state->radioPreview.init(state->radio1938,
                            static_cast<float>(gAudio.sampleRate),
                            gAudio.lpHz);
