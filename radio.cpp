@@ -843,10 +843,13 @@ float RadioTuningNode::applyFilters(Radio1938& radio, float tuneHz, float bwHz) 
       std::clamp(safeBw * tuning.preBwScale, 1200.0f, radio.sampleRate * 0.45f);
   float rfBw =
       std::clamp(safeBw * tuning.postBwScale, preBw, radio.sampleRate * 0.45f);
-
-  frontEnd.preLpfIn.setLowpass(radio.sampleRate, preBw, kRadioBiquadQ);
-  frontEnd.preLpfOut.setLowpass(radio.sampleRate, rfBw, kRadioBiquadQ);
   RadioIFStripNode::setBandwidth(radio, safeBw, tuneHz);
+  float rfCenterHz =
+      std::clamp(radio.ifStrip.sourceCarrierHz, 80.0f, radio.sampleRate * 0.45f);
+  frontEnd.preLpfIn.setBandpass(
+      radio.sampleRate, rfCenterHz, std::max(0.35f, rfCenterHz / preBw));
+  frontEnd.preLpfOut.setBandpass(
+      radio.sampleRate, rfCenterHz, std::max(0.35f, rfCenterHz / rfBw));
 
   tuning.tunedBw = safeBw;
   return safeBw;
@@ -1113,6 +1116,7 @@ void RadioDemodNode::init(Radio1938& radio, RadioInitContext& initCtx) {
 void RadioDemodNode::reset(Radio1938& radio) { radio.demod.am.reset(); }
 
 static float processSuperhetSourceFrame(Radio1938& radio,
+                                        float frontEndSample,
                                         const RadioSampleContext& ctx) {
   auto& frontEnd = radio.frontEnd;
   auto& ifStrip = radio.ifStrip;
@@ -1123,7 +1127,8 @@ static float processSuperhetSourceFrame(Radio1938& radio,
   }
 
   SourceInputMode mode = radio.sourceFrame.mode;
-  float currI = radio.sourceFrame.i;
+  float currI =
+      (mode == SourceInputMode::RealRf) ? frontEndSample : radio.sourceFrame.i;
   float currQ = radio.sourceFrame.q;
   float prevI = ifStrip.prevSourceI;
   float prevQ = ifStrip.prevSourceQ;
@@ -1163,7 +1168,7 @@ static float processSuperhetSourceFrame(Radio1938& radio,
       rf = rfGain * envelope * std::cos(ifStrip.rfPhase);
       ifStrip.rfPhase = wrapPhase(ifStrip.rfPhase + rfStep);
     } else {
-      rf = rfGain * (prevI + (currI - prevI) * t);
+      rf = prevI + (currI - prevI) * t;
     }
     float lo = std::cos(ifStrip.loPhase);
     ifStrip.loPhase = wrapPhase(ifStrip.loPhase + loStep);
@@ -1183,8 +1188,7 @@ float RadioDemodNode::process(Radio1938& radio,
                               float y,
                               const RadioSampleContext& ctx) {
   auto& demod = radio.demod;
-  (void)y;
-  y = processSuperhetSourceFrame(radio, ctx);
+  y = processSuperhetSourceFrame(radio, y, ctx);
   radio.controlSense.controlVoltageSense =
       clampf(demod.am.avcEnv / std::max(demod.am.controlVoltageRef, 1e-6f),
              0.0f, 1.25f);
@@ -1948,6 +1952,7 @@ static float runPresentationPath(
   return y;
 }
 
+static constexpr size_t kInputProgramStartIndex = 0;
 static constexpr size_t kMixerProgramStartIndex = 2;
 
 template <typename InputSampleFn, typename OutputSampleFn>
@@ -2360,7 +2365,7 @@ void Radio1938::reset() {
 void Radio1938::processIfReal(float* samples, uint32_t frames) {
   if (!samples || frames == 0) return;
   processRadioFrames(
-      *this, frames, kMixerProgramStartIndex,
+      *this, frames, kInputProgramStartIndex,
       [&](uint32_t frame) {
         float x = sampleInterleavedToMono(samples, frame, channels);
         sourceFrame.setRealRf(x);
