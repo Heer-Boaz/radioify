@@ -291,16 +291,12 @@ struct AMDetector {
   Biquad afcErrorLp;
   Biquad audioPostLp1;
   Biquad audioPostLp2;
-  Biquad audioQuadratureLp1;
-  Biquad audioQuadratureLp2;
-  Biquad audioDcBlock;
 
   float audioRect = 0.0f;
   float avcRect = 0.0f;
   float audioEnv = 0.0f;
   float avcEnv = 0.0f;
   float afcError = 0.0f;
-  float audioSyncPhase = 0.0f;
 
   float audioDiodeDrop = 0.0f;
   float avcDiodeDrop = 0.0f;
