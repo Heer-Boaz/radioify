@@ -34,6 +34,7 @@ extern "C" {
 #include "midiaudio.h"
 #include "psfaudio.h"
 #include "radio.h"
+#include "radiopreview.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -623,7 +624,7 @@ struct AudioState {
   uint32_t channels = 1;
   uint32_t sampleRate = 48000;
   bool dry = false;
-  std::vector<float> radioMonoScratch;
+  PcmToIfPreviewModulator radioPreview;
 };
 
 struct AuditionState {
@@ -671,6 +672,19 @@ AudioPlaybackState gAudio;
 
 static constexpr uint32_t kRadioProcessChannels = 1u;
 
+void rebuildRadioPreviewChain(AudioState* state) {
+  if (!state) return;
+  state->radio1938 = gAudio.radio1938Template;
+  state->radio1938.init(kRadioProcessChannels,
+                        static_cast<float>(gAudio.sampleRate),
+                        gAudio.lpHz, gAudio.noise);
+  state->radioPreview.init(state->radio1938,
+                           static_cast<float>(gAudio.sampleRate),
+                           gAudio.lpHz);
+  state->radioClipHold.store(0, std::memory_order_relaxed);
+  state->radioLimiterHold.store(0, std::memory_order_relaxed);
+}
+
 void stopAuditionWorker() {
   if (!gAudio.audition.active.load()) return;
   gAudio.audition.stop.store(true);
@@ -686,7 +700,7 @@ void stopAuditionWorker() {
 void applyRadioTogglePreset() {
   gAudio.radio1938Template.applyPreset(Radio1938::Preset::Philco37116X);
   gAudio.state.radioMakeupGain.store(1.0f);
-  gAudio.state.radio1938 = gAudio.radio1938Template;
+  rebuildRadioPreviewChain(&gAudio.state);
 }
 
 void startAuditionWorker(AuditionTone tone) {
@@ -764,23 +778,10 @@ static void updatePeakMeter(AudioState* state, const float* samples,
   state->peak.store(next, std::memory_order_relaxed);
 }
 
-static void applyRadioOutputTrim(float* samples,
-                                 uint32_t frames,
-                                 uint32_t channels,
-                                 float gain) {
-  if (!samples || frames == 0 || channels == 0 || gain == 1.0f) return;
-  size_t count = static_cast<size_t>(frames) * channels;
-  for (size_t i = 0; i < count; ++i) {
-    samples[i] *= gain;
-  }
-}
-
-static bool radioBlockOverloaded(const Radio1938& radio, uint32_t frames);
-
 static void updateRadioIndicatorHolds(AudioState* state, uint32_t frames) {
   static constexpr uint32_t kRadioClipHoldFrames = 2048;
   if (!state || frames == 0) return;
-  bool clipped = radioBlockOverloaded(state->radio1938, frames);
+  bool clipped = radioPreviewBlockOverloaded(state->radio1938, frames);
   bool limiting = state->radio1938.diagnostics.finalLimiterActive;
   uint32_t hold = state->radioClipHold.load(std::memory_order_relaxed);
   uint32_t limiterHold =
@@ -809,36 +810,8 @@ static void processRadioBlock(AudioState* state,
   if (!state || !samples || frames == 0) return;
   const uint32_t channels = std::max(1u, state->channels);
   const float gain = state->radioMakeupGain.load(std::memory_order_relaxed);
-  if (channels == 1) {
-    state->radio1938.processAudioPcm(samples, frames);
-    applyRadioOutputTrim(samples, frames, 1, gain);
-    updateRadioIndicatorHolds(state, frames);
-    return;
-  }
-
-  auto& mono = state->radioMonoScratch;
-  mono.resize(frames);
-  const float foldGain =
-      1.0f / std::sqrt(static_cast<float>(channels));
-  for (uint32_t frame = 0; frame < frames; ++frame) {
-    float sum = 0.0f;
-    size_t base = static_cast<size_t>(frame) * channels;
-    for (uint32_t ch = 0; ch < channels; ++ch) {
-      sum += samples[base + ch];
-    }
-    mono[frame] = sum * foldGain;
-  }
-
-  state->radio1938.processAudioPcm(mono.data(), frames);
-  applyRadioOutputTrim(mono.data(), frames, 1, gain);
-  for (uint32_t frame = 0; frame < frames; ++frame) {
-    float y = mono[frame];
-    size_t base = static_cast<size_t>(frame) * channels;
-    for (uint32_t ch = 0; ch < channels; ++ch) {
-      samples[base + ch] = y;
-    }
-  }
-
+  state->radioPreview.processBlock(state->radio1938, samples, frames, channels,
+                                   gain);
   updateRadioIndicatorHolds(state, frames);
 }
 
@@ -864,15 +837,6 @@ static void applyOutputVolumeSafety(float* samples,
     x = softLimitOutputSample(x);
     samples[i] = std::clamp(x, -kOutputClamp, kOutputClamp);
   }
-}
-
-static bool radioBlockOverloaded(const Radio1938& radio, uint32_t frames) {
-  const auto& diag = radio.diagnostics;
-  if (diag.outputClip) return true;
-  uint32_t overloadSamples =
-      diag.powerClipSamples + diag.speakerClipSamples + diag.outputClipSamples;
-  uint32_t threshold = std::max<uint32_t>(4u, frames / 256u);
-  return overloadSamples >= threshold;
 }
 
 void dataCallback(ma_device* device, void* output, const void*,
@@ -1750,10 +1714,7 @@ void resetPlaybackStateForLoad(uint64_t startFrame) {
   gAudio.state.audioLeadSilenceFrames.store(0);
 
   gAudio.state.channels = gAudio.channels;
-  gAudio.state.radio1938 = gAudio.radio1938Template;
-  gAudio.state.radio1938.init(kRadioProcessChannels,
-                              static_cast<float>(gAudio.sampleRate),
-                              gAudio.lpHz, gAudio.noise);
+  rebuildRadioPreviewChain(&gAudio.state);
 }
 
 bool ensurePlaybackDeviceRunning() {
@@ -1839,7 +1800,7 @@ bool ensureChannels(uint32_t newChannels) {
                                 static_cast<float>(gAudio.sampleRate),
                                 gAudio.lpHz,
                                 gAudio.noise);
-  gAudio.state.radio1938 = gAudio.radio1938Template;
+  rebuildRadioPreviewChain(&gAudio.state);
 
   if (hadTrack) {
     return loadFileAt(gAudio.nowPlaying, resumeFrame, trackIndex);
@@ -1906,9 +1867,10 @@ void audioInit(const AudioPlaybackConfig& config) {
                                 gAudio.noise);
   if (config.enableRadio) {
     applyRadioTogglePreset();
+  } else {
+    rebuildRadioPreviewChain(&gAudio.state);
+    gAudio.state.radioMakeupGain.store(1.0f);
   }
-  gAudio.state.radioMakeupGain.store(1.0f);
-  gAudio.state.radio1938 = gAudio.radio1938Template;
 }
 
 void audioShutdown() {
@@ -2003,10 +1965,7 @@ bool audioStartStream(uint64_t totalFrames) {
 
   gAudio.state.channels = gAudio.channels;
   gAudio.state.sampleRate = gAudio.sampleRate;
-  gAudio.state.radio1938 = gAudio.radio1938Template;
-  gAudio.state.radio1938.init(kRadioProcessChannels,
-                              static_cast<float>(gAudio.sampleRate),
-                              gAudio.lpHz, gAudio.noise);
+  rebuildRadioPreviewChain(&gAudio.state);
 
   if (!ensurePlaybackDeviceRunning()) {
     gAudio.state.streamQueueEnabled.store(false);
@@ -2578,6 +2537,9 @@ void audioToggleRadio() {
   gAudio.state.useRadio1938.store(next);
   if (next) {
     applyRadioTogglePreset();
+  } else {
+    gAudio.state.radioClipHold.store(0, std::memory_order_relaxed);
+    gAudio.state.radioLimiterHold.store(0, std::memory_order_relaxed);
   }
 }
 

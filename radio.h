@@ -1026,7 +1026,6 @@ struct Radio1938 {
   void resetCalibration();
   void init(int ch, float sr, float bw, float noise);
   void reset();
-  void processAudioPcm(float* samples, uint32_t frames);
   void processIfReal(float* samples, uint32_t frames);
   void processIqBaseband(const float* iqInterleaved,
                          float* outSamples,

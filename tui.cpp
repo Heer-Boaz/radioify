@@ -33,6 +33,7 @@
 #include "optionsbrowser.h"
 #include "psfaudio.h"
 #include "radio.h"
+#include "radiopreview.h"
 #include "tracklist.h"
 #include "loopsplit_cli.h"
 #include "loopsplit_ui.h"
@@ -488,9 +489,11 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   Radio1938 radio1938 = radio1938Template;
   radio1938.init(kRadioProcessChannels, static_cast<float>(sampleRate),
                  static_cast<float>(o.bwHz), static_cast<float>(o.noise));
+  PcmToIfPreviewModulator radioPreview;
+  radioPreview.init(radio1938, static_cast<float>(sampleRate),
+                    static_cast<float>(o.bwHz));
   constexpr uint32_t chunkFrames = 1024;
   std::vector<float> buffer(chunkFrames * channels);
-  std::vector<float> radioMono(chunkFrames);
   std::vector<int16_t> out(buffer.size());
 
   while (true) {
@@ -532,29 +535,9 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
     }
 
     if (!o.dry && useRadio1938) {
-      if (channels == 1) {
-        radio1938.processAudioPcm(buffer.data(), static_cast<uint32_t>(framesRead));
-      } else {
-        const float foldGain =
-            1.0f / std::sqrt(static_cast<float>(channels));
-        for (uint32_t frame = 0; frame < framesRead; ++frame) {
-          float sum = 0.0f;
-          size_t base = static_cast<size_t>(frame) * channels;
-          for (uint32_t ch = 0; ch < channels; ++ch) {
-            sum += buffer[base + ch];
-          }
-          radioMono[frame] = sum * foldGain;
-        }
-        radio1938.processAudioPcm(radioMono.data(),
-                                  static_cast<uint32_t>(framesRead));
-        for (uint32_t frame = 0; frame < framesRead; ++frame) {
-          float y = radioMono[frame];
-          size_t base = static_cast<size_t>(frame) * channels;
-          for (uint32_t ch = 0; ch < channels; ++ch) {
-            buffer[base + ch] = y;
-          }
-        }
-      }
+      radioPreview.processBlock(radio1938, buffer.data(),
+                                static_cast<uint32_t>(framesRead), channels,
+                                1.0f);
     }
 
     for (size_t i = 0; i < static_cast<size_t>(framesRead * channels); ++i) {

@@ -91,6 +91,7 @@ add_executable(radioify
   playback_frame_output_console.cpp
   subtitle_manager.cpp
   radio.cpp
+  radiopreview.cpp
   loopsplit.cpp
   loopsplit_cli.cpp
   loopsplit_ui.cpp

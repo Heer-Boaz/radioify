@@ -1888,7 +1888,6 @@ static float runPresentationPath(
   return y;
 }
 
-static constexpr size_t kAudioProgramStartIndex = 0;
 static constexpr size_t kMixerProgramStartIndex = 2;
 static constexpr size_t kIfProgramStartIndex = 3;
 
@@ -2305,16 +2304,6 @@ void Radio1938::reset() {
   if (calibration.enabled) {
     resetCalibration();
   }
-}
-
-void Radio1938::processAudioPcm(float* samples, uint32_t frames) {
-  if (!samples || frames == 0) return;
-  processRadioFrames(
-      *this, frames, kAudioProgramStartIndex,
-      [&](uint32_t frame) { return sampleInterleavedToMono(samples, frame, channels); },
-      [&](uint32_t frame, float y) {
-        writeMonoToInterleaved(samples, frame, channels, y);
-      });
 }
 
 void Radio1938::processIfReal(float* samples, uint32_t frames) {
