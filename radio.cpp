@@ -162,6 +162,10 @@ static void applyRadioBaseDefaults(Radio1938& radio) {
   radio.frontEnd.selectivityPeakHz = 0.0f;
   radio.frontEnd.selectivityPeakQ = 0.707f;
   radio.frontEnd.selectivityPeakGainDb = 0.0f;
+  radio.frontEnd.antennaInductanceHenries = 0.012f;
+  radio.frontEnd.antennaLoadResistanceOhms = 2200.0f;
+  radio.frontEnd.rfInductanceHenries = 0.018f;
+  radio.frontEnd.rfLoadResistanceOhms = 3300.0f;
 
   radio.mixer.conversionGain = 1.0f;
   radio.mixer.tuneLossDepth = 0.0f;
@@ -174,6 +178,11 @@ static void applyRadioBaseDefaults(Radio1938& radio) {
   radio.ifStrip.stageGain = 1.0f;
   radio.ifStrip.avcGainDepth = 0.0f;
   radio.ifStrip.ifCenterHz = 470000.0f;
+  radio.ifStrip.primaryInductanceHenries = 220e-6f;
+  radio.ifStrip.secondaryInductanceHenries = 240e-6f;
+  radio.ifStrip.secondaryLoadResistanceOhms = 680.0f;
+  radio.ifStrip.interstageCouplingCoeff = 0.16f;
+  radio.ifStrip.outputCouplingCoeff = 0.12f;
 
   radio.cabinet.enabled = false;
   radio.speakerStage.drive = 0.0f;
@@ -315,6 +324,110 @@ void Biquad::setPeaking(float sampleRate, float freq, float q, float gainDb) {
   b2 = (1.0f - alpha * a) / a0;
   a1 = -2.0f * cosw / a0;
   a2 = (1.0f - alpha / a) / a0;
+}
+
+void SeriesRlcBandpass::configure(float newFs,
+                                  float newInductanceHenries,
+                                  float newCapacitanceFarads,
+                                  float newSeriesResistanceOhms,
+                                  float newOutputResistanceOhms,
+                                  int newIntegrationSubsteps) {
+  fs = std::max(newFs, 1.0f);
+  inductanceHenries = std::max(newInductanceHenries, 1e-9f);
+  capacitanceFarads = std::max(newCapacitanceFarads, 1e-12f);
+  seriesResistanceOhms = std::max(newSeriesResistanceOhms, 1e-6f);
+  outputResistanceOhms = std::max(newOutputResistanceOhms, 0.0f);
+  integrationSubsteps = std::max(newIntegrationSubsteps, 1);
+  reset();
+}
+
+void SeriesRlcBandpass::reset() {
+  inductorCurrent = 0.0f;
+  capacitorVoltage = 0.0f;
+}
+
+float SeriesRlcBandpass::process(float vin) {
+  float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
+  for (int step = 0; step < integrationSubsteps; ++step) {
+    float di =
+        (vin - seriesResistanceOhms * inductorCurrent - capacitorVoltage) /
+        inductanceHenries;
+    inductorCurrent += dt * di;
+    capacitorVoltage += dt * (inductorCurrent / capacitanceFarads);
+    if (!std::isfinite(inductorCurrent) || !std::isfinite(capacitorVoltage)) {
+      reset();
+      return 0.0f;
+    }
+  }
+  return inductorCurrent * outputResistanceOhms;
+}
+
+void CoupledTunedTransformer::configure(float newFs,
+                                        float newPrimaryInductanceHenries,
+                                        float newPrimaryCapacitanceFarads,
+                                        float newPrimaryResistanceOhms,
+                                        float newSecondaryInductanceHenries,
+                                        float newSecondaryCapacitanceFarads,
+                                        float newSecondaryResistanceOhms,
+                                        float newCouplingCoeff,
+                                        float newOutputResistanceOhms,
+                                        int newIntegrationSubsteps) {
+  fs = std::max(newFs, 1.0f);
+  primaryInductanceHenries = std::max(newPrimaryInductanceHenries, 1e-9f);
+  primaryCapacitanceFarads = std::max(newPrimaryCapacitanceFarads, 1e-12f);
+  primaryResistanceOhms = std::max(newPrimaryResistanceOhms, 1e-6f);
+  secondaryInductanceHenries = std::max(newSecondaryInductanceHenries, 1e-9f);
+  secondaryCapacitanceFarads = std::max(newSecondaryCapacitanceFarads, 1e-12f);
+  secondaryResistanceOhms = std::max(newSecondaryResistanceOhms, 1e-6f);
+  couplingCoeff = clampf(newCouplingCoeff, 0.0f, 0.999f);
+  outputResistanceOhms = std::max(newOutputResistanceOhms, 0.0f);
+  integrationSubsteps = std::max(newIntegrationSubsteps, 1);
+  reset();
+}
+
+void CoupledTunedTransformer::reset() {
+  primaryCurrent = 0.0f;
+  primaryCapVoltage = 0.0f;
+  secondaryCurrent = 0.0f;
+  secondaryCapVoltage = 0.0f;
+}
+
+float CoupledTunedTransformer::process(float vin) {
+  float mutualInductance =
+      couplingCoeff *
+      std::sqrt(primaryInductanceHenries * secondaryInductanceHenries);
+  float determinant = std::max(
+      primaryInductanceHenries * secondaryInductanceHenries -
+          mutualInductance * mutualInductance,
+      1e-18f);
+  float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
+
+  for (int step = 0; step < integrationSubsteps; ++step) {
+    float primaryDrive =
+        vin - primaryResistanceOhms * primaryCurrent - primaryCapVoltage;
+    float secondaryDrive =
+        -secondaryResistanceOhms * secondaryCurrent - secondaryCapVoltage;
+    float dPrimary =
+        (secondaryInductanceHenries * primaryDrive -
+         mutualInductance * secondaryDrive) /
+        determinant;
+    float dSecondary =
+        (primaryInductanceHenries * secondaryDrive -
+         mutualInductance * primaryDrive) /
+        determinant;
+    primaryCurrent += dt * dPrimary;
+    secondaryCurrent += dt * dSecondary;
+    primaryCapVoltage += dt * (primaryCurrent / primaryCapacitanceFarads);
+    secondaryCapVoltage += dt * (secondaryCurrent / secondaryCapacitanceFarads);
+    if (!std::isfinite(primaryCurrent) || !std::isfinite(primaryCapVoltage) ||
+        !std::isfinite(secondaryCurrent) ||
+        !std::isfinite(secondaryCapVoltage)) {
+      reset();
+      return 0.0f;
+    }
+  }
+
+  return secondaryCurrent * outputResistanceOhms;
 }
 
 void Compressor::setFs(float newFs) {
@@ -863,6 +976,37 @@ float RadioTuningNode::applyFilters(Radio1938& radio, float tuneHz, float bwHz) 
   RadioIFStripNode::setBandwidth(radio, safeBw, tuneHz);
   float rfCenterHz =
       std::clamp(radio.ifStrip.sourceCarrierHz, 80.0f, radio.sampleRate * 0.45f);
+  auto resonantCapacitanceFarads = [](float freqHz, float inductanceHenries) {
+    float omega = kRadioTwoPi * std::max(freqHz, 1.0f);
+    return 1.0f / std::max(omega * omega * std::max(inductanceHenries, 1e-9f),
+                           1e-18f);
+  };
+  auto seriesResistanceForBandwidth = [](float inductanceHenries,
+                                         float bandwidthHz) {
+    return std::max(kRadioTwoPi * std::max(inductanceHenries, 1e-9f) *
+                        std::max(bandwidthHz, 1.0f),
+                    1e-4f);
+  };
+
+  frontEnd.antennaCapacitanceFarads =
+      resonantCapacitanceFarads(rfCenterHz, frontEnd.antennaInductanceHenries);
+  frontEnd.rfCapacitanceFarads =
+      resonantCapacitanceFarads(rfCenterHz, frontEnd.rfInductanceHenries);
+  frontEnd.antennaSeriesResistanceOhms =
+      seriesResistanceForBandwidth(frontEnd.antennaInductanceHenries, preBw);
+  frontEnd.rfSeriesResistanceOhms =
+      seriesResistanceForBandwidth(frontEnd.rfInductanceHenries, rfBw);
+  frontEnd.antennaTank.configure(
+      radio.sampleRate, frontEnd.antennaInductanceHenries,
+      frontEnd.antennaCapacitanceFarads,
+      frontEnd.antennaSeriesResistanceOhms + frontEnd.antennaLoadResistanceOhms,
+      frontEnd.antennaLoadResistanceOhms, 8);
+  frontEnd.rfTank.configure(radio.sampleRate, frontEnd.rfInductanceHenries,
+                            frontEnd.rfCapacitanceFarads,
+                            frontEnd.rfSeriesResistanceOhms +
+                                frontEnd.rfLoadResistanceOhms,
+                            frontEnd.rfLoadResistanceOhms, 8);
+
   frontEnd.preLpfIn.setBandpass(
       radio.sampleRate, rfCenterHz, std::max(0.35f, rfCenterHz / preBw));
   frontEnd.preLpfOut.setBandpass(
@@ -1053,6 +1197,8 @@ void RadioFrontEndNode::reset(Radio1938& radio) {
   frontEnd.preLpfIn.reset();
   frontEnd.preLpfOut.reset();
   frontEnd.selectivityPeak.reset();
+  frontEnd.antennaTank.reset();
+  frontEnd.rfTank.reset();
 }
 
 float RadioFrontEndNode::process(Radio1938& radio,
@@ -1061,9 +1207,9 @@ float RadioFrontEndNode::process(Radio1938& radio,
   auto& frontEnd = radio.frontEnd;
   float rfHold = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
   float y = frontEnd.hpf.process(x);
+  y = frontEnd.antennaTank.process(y);
   y *= frontEnd.rfGain * std::max(0.35f, 1.0f - frontEnd.avcGainDepth * rfHold);
-  y = frontEnd.preLpfIn.process(y);
-  y = frontEnd.preLpfOut.process(y);
+  y = frontEnd.rfTank.process(y);
   y = frontEnd.selectivityPeak.process(y);
   return y;
 }
@@ -1109,11 +1255,24 @@ void RadioIFStripNode::reset(Radio1938& radio) {
   ifStrip.prevSourceQ = 0.0f;
   ifStrip.bp1.reset();
   ifStrip.bp2.reset();
+  ifStrip.interstageTransformer.reset();
+  ifStrip.outputTransformer.reset();
 }
 
 void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) {
   auto& ifStrip = radio.ifStrip;
   auto& demod = radio.demod;
+  auto resonantCapacitanceFarads = [](float freqHz, float inductanceHenries) {
+    float omega = kRadioTwoPi * std::max(freqHz, 1.0f);
+    return 1.0f / std::max(omega * omega * std::max(inductanceHenries, 1e-9f),
+                           1e-18f);
+  };
+  auto seriesResistanceForBandwidth = [](float inductanceHenries,
+                                         float bandwidthHz) {
+    return std::max(kRadioTwoPi * std::max(inductanceHenries, 1e-9f) *
+                        std::max(bandwidthHz, 1.0f),
+                    1e-4f);
+  };
   float sampleRate = std::max(radio.sampleRate, 1.0f);
   float safeBw = std::max(bwHz, ifStrip.ifMinBwHz);
   ifStrip.oversampleFactor =
@@ -1127,6 +1286,32 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
   float stageQ = std::max(0.35f, ifStrip.ifCenterHz / stageBandwidthHz);
   ifStrip.bp1.setBandpass(ifStrip.internalSampleRate, ifStrip.ifCenterHz, stageQ);
   ifStrip.bp2.setBandpass(ifStrip.internalSampleRate, ifStrip.ifCenterHz, stageQ);
+  ifStrip.primaryCapacitanceFarads =
+      resonantCapacitanceFarads(ifStrip.ifCenterHz,
+                                ifStrip.primaryInductanceHenries);
+  ifStrip.secondaryCapacitanceFarads =
+      resonantCapacitanceFarads(ifStrip.ifCenterHz,
+                                ifStrip.secondaryInductanceHenries);
+  ifStrip.primaryResistanceOhms =
+      seriesResistanceForBandwidth(ifStrip.primaryInductanceHenries,
+                                   stageBandwidthHz);
+  ifStrip.secondaryResistanceOhms =
+      seriesResistanceForBandwidth(ifStrip.secondaryInductanceHenries,
+                                   stageBandwidthHz);
+  ifStrip.interstageTransformer.configure(
+      ifStrip.internalSampleRate, ifStrip.primaryInductanceHenries,
+      ifStrip.primaryCapacitanceFarads, ifStrip.primaryResistanceOhms,
+      ifStrip.secondaryInductanceHenries, ifStrip.secondaryCapacitanceFarads,
+      ifStrip.secondaryResistanceOhms + ifStrip.secondaryLoadResistanceOhms,
+      ifStrip.interstageCouplingCoeff,
+      ifStrip.secondaryLoadResistanceOhms, 8);
+  ifStrip.outputTransformer.configure(
+      ifStrip.internalSampleRate, ifStrip.primaryInductanceHenries,
+      ifStrip.primaryCapacitanceFarads, ifStrip.primaryResistanceOhms,
+      ifStrip.secondaryInductanceHenries, ifStrip.secondaryCapacitanceFarads,
+      ifStrip.secondaryResistanceOhms + ifStrip.secondaryLoadResistanceOhms,
+      ifStrip.outputCouplingCoeff,
+      ifStrip.secondaryLoadResistanceOhms, 8);
 
   float senseLow = ifStrip.ifCenterHz - 0.5f * safeBw;
   float senseHigh = ifStrip.ifCenterHz + 0.5f * safeBw;
@@ -1201,8 +1386,8 @@ static float processSuperhetSourceFrame(Radio1938& radio,
     float lo = std::cos(ifStrip.loPhase);
     ifStrip.loPhase = wrapPhase(ifStrip.loPhase + loStep);
     float ifSample = 2.0f * rf * lo * ifGain;
-    ifSample = ifStrip.bp1.process(ifSample);
-    ifSample = ifStrip.bp2.process(ifSample);
+    ifSample = ifStrip.interstageTransformer.process(ifSample);
+    ifSample = ifStrip.outputTransformer.process(ifSample);
     audioAcc += demod.process(AMDetectorSampleInput{ifSample, noiseAmp});
   }
 
@@ -2076,6 +2261,10 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.frontEnd.selectivityPeakHz = 0.0f;
   radio.frontEnd.selectivityPeakQ = 0.707f;
   radio.frontEnd.selectivityPeakGainDb = 0.0f;
+  radio.frontEnd.antennaInductanceHenries = 0.011f;
+  radio.frontEnd.antennaLoadResistanceOhms = 2200.0f;
+  radio.frontEnd.rfInductanceHenries = 0.016f;
+  radio.frontEnd.rfLoadResistanceOhms = 3300.0f;
 
   radio.mixer.conversionGain = 1.10f;
   radio.mixer.tuneLossDepth = 0.22f;
@@ -2088,6 +2277,11 @@ static void applyPhilco37116XPreset(Radio1938& radio) {
   radio.ifStrip.stageGain = 1.0f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
+  radio.ifStrip.primaryInductanceHenries = 220e-6f;
+  radio.ifStrip.secondaryInductanceHenries = 250e-6f;
+  radio.ifStrip.secondaryLoadResistanceOhms = 680.0f;
+  radio.ifStrip.interstageCouplingCoeff = 0.15f;
+  radio.ifStrip.outputCouplingCoeff = 0.11f;
 
   radio.demod.am.audioDiodeDrop = 0.0100f;
   radio.demod.am.avcDiodeDrop = 0.0080f;

@@ -73,6 +73,56 @@ struct Biquad {
   void setPeaking(float sampleRate, float freq, float q, float gainDb);
 };
 
+struct SeriesRlcBandpass {
+  float fs = 0.0f;
+  float inductanceHenries = 0.0f;
+  float capacitanceFarads = 0.0f;
+  float seriesResistanceOhms = 0.0f;
+  float outputResistanceOhms = 0.0f;
+  int integrationSubsteps = 1;
+  float inductorCurrent = 0.0f;
+  float capacitorVoltage = 0.0f;
+
+  void configure(float newFs,
+                 float newInductanceHenries,
+                 float newCapacitanceFarads,
+                 float newSeriesResistanceOhms,
+                 float newOutputResistanceOhms,
+                 int newIntegrationSubsteps = 1);
+  void reset();
+  float process(float vin);
+};
+
+struct CoupledTunedTransformer {
+  float fs = 0.0f;
+  float primaryInductanceHenries = 0.0f;
+  float primaryCapacitanceFarads = 0.0f;
+  float primaryResistanceOhms = 0.0f;
+  float secondaryInductanceHenries = 0.0f;
+  float secondaryCapacitanceFarads = 0.0f;
+  float secondaryResistanceOhms = 0.0f;
+  float couplingCoeff = 0.0f;
+  float outputResistanceOhms = 0.0f;
+  int integrationSubsteps = 1;
+  float primaryCurrent = 0.0f;
+  float primaryCapVoltage = 0.0f;
+  float secondaryCurrent = 0.0f;
+  float secondaryCapVoltage = 0.0f;
+
+  void configure(float newFs,
+                 float newPrimaryInductanceHenries,
+                 float newPrimaryCapacitanceFarads,
+                 float newPrimaryResistanceOhms,
+                 float newSecondaryInductanceHenries,
+                 float newSecondaryCapacitanceFarads,
+                 float newSecondaryResistanceOhms,
+                 float newCouplingCoeff,
+                 float newOutputResistanceOhms,
+                 int newIntegrationSubsteps = 1);
+  void reset();
+  float process(float vin);
+};
+
 struct Compressor {
   float fs = 48000.0f;
   float thresholdDb = -24.0f;
@@ -848,10 +898,20 @@ struct Radio1938 {
     float selectivityPeakHz = 0.0f;
     float selectivityPeakQ = 0.0f;
     float selectivityPeakGainDb = 0.0f;
+    float antennaInductanceHenries = 0.0f;
+    float antennaCapacitanceFarads = 0.0f;
+    float antennaSeriesResistanceOhms = 0.0f;
+    float antennaLoadResistanceOhms = 0.0f;
+    float rfInductanceHenries = 0.0f;
+    float rfCapacitanceFarads = 0.0f;
+    float rfSeriesResistanceOhms = 0.0f;
+    float rfLoadResistanceOhms = 0.0f;
     Biquad hpf;
     Biquad preLpfIn;
     Biquad preLpfOut;
     Biquad selectivityPeak;
+    SeriesRlcBandpass antennaTank;
+    SeriesRlcBandpass rfTank;
   } frontEnd;
 
   struct MixerNodeState {
@@ -868,6 +928,15 @@ struct Radio1938 {
     float stageGain = 0.0f;
     float avcGainDepth = 0.0f;
     float ifCenterHz = 0.0f;
+    float primaryInductanceHenries = 0.0f;
+    float primaryCapacitanceFarads = 0.0f;
+    float primaryResistanceOhms = 0.0f;
+    float secondaryInductanceHenries = 0.0f;
+    float secondaryCapacitanceFarads = 0.0f;
+    float secondaryResistanceOhms = 0.0f;
+    float secondaryLoadResistanceOhms = 0.0f;
+    float interstageCouplingCoeff = 0.0f;
+    float outputCouplingCoeff = 0.0f;
     int oversampleFactor = 1;
     float internalSampleRate = 0.0f;
     float sourceCarrierHz = 0.0f;
@@ -879,6 +948,8 @@ struct Radio1938 {
     float prevSourceQ = 0.0f;
     Biquad bp1;
     Biquad bp2;
+    CoupledTunedTransformer interstageTransformer;
+    CoupledTunedTransformer outputTransformer;
   } ifStrip;
 
   struct DemodNodeState {
