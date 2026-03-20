@@ -507,6 +507,22 @@ static inline float asymmetricSaturate(float x,
   return y - base;
 }
 
+static inline float processHeptodeStyleMixer(
+    float rf,
+    float lo,
+    const Radio1938::MixerNodeState& mixer,
+    float tuneNorm) {
+  float detuneT = clampf(std::fabs(tuneNorm), 0.0f, 1.0f);
+  float conversionGain =
+      mixer.conversionGain * std::max(0.15f, 1.0f - mixer.tuneLossDepth * detuneT);
+  float drive = std::max(
+      0.25f, 1.0f + mixer.drive * std::max(0.30f, 1.0f - 0.45f * detuneT));
+  float loBias = mixer.bias + 0.85f * lo;
+  float mixed = asymmetricSaturate(rf, drive, loBias, 0.20f);
+  float loLeak = mixer.loFeedthrough * lo;
+  return conversionGain * mixed + loLeak;
+}
+
 void NoiseHum::setFs(float newFs, float noiseBwHz) {
   fs = newFs;
   noiseLpHz = (noiseBwHz > 0.0f) ? noiseBwHz : noiseLpHz;
@@ -1340,6 +1356,7 @@ static float processSuperhetSourceFrame(Radio1938& radio,
                                         float frontEndSample,
                                         const RadioSampleContext& ctx) {
   auto& frontEnd = radio.frontEnd;
+  auto& mixer = radio.mixer;
   auto& ifStrip = radio.ifStrip;
   auto& demod = radio.demod.am;
   if (!ifStrip.enabled || ifStrip.internalSampleRate <= 0.0f ||
@@ -1369,6 +1386,7 @@ static float processSuperhetSourceFrame(Radio1938& radio,
   float noiseAmp =
       ctx.derived.demodIfNoiseAmp / std::sqrt(static_cast<float>(ifStrip.oversampleFactor));
   float audioAcc = 0.0f;
+  float tuneNorm = (ctx.block != nullptr) ? ctx.block->tuneNorm : 0.0f;
 
   for (int step = 0; step < ifStrip.oversampleFactor; ++step) {
     float t =
@@ -1385,7 +1403,8 @@ static float processSuperhetSourceFrame(Radio1938& radio,
     }
     float lo = std::cos(ifStrip.loPhase);
     ifStrip.loPhase = wrapPhase(ifStrip.loPhase + loStep);
-    float ifSample = 2.0f * rf * lo * ifGain;
+    float ifSample =
+        processHeptodeStyleMixer(rf, lo, mixer, tuneNorm) * ifGain;
     ifSample = ifStrip.interstageTransformer.process(ifSample);
     ifSample = ifStrip.outputTransformer.process(ifSample);
     audioAcc += demod.process(AMDetectorSampleInput{ifSample, noiseAmp});
