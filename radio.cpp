@@ -18,6 +18,18 @@ static inline float clampf(float x, float a, float b) {
   return std::min(std::max(x, a), b);
 }
 
+template <typename T>
+static inline T requirePositiveFinite(T x) {
+  assert(std::isfinite(x) && x > static_cast<T>(0));
+  return x;
+}
+
+template <typename T>
+static inline T requireNonNegativeFinite(T x) {
+  assert(std::isfinite(x) && x >= static_cast<T>(0));
+  return x;
+}
+
 static inline float wrapPhase(float phase) {
   while (phase >= kRadioTwoPi) phase -= kRadioTwoPi;
   while (phase < 0.0f) phase += kRadioTwoPi;
@@ -39,7 +51,7 @@ static inline float parallelResistance(float a, float b) {
 static inline float diodeJunctionRectify(float vIn,
                                          float dropVolts,
                                          float junctionSlopeVolts) {
-  float slope = std::max(junctionSlopeVolts, 1e-5f);
+  float slope = requirePositiveFinite(junctionSlopeVolts);
   float x = (vIn - dropVolts) / slope;
   if (x >= 20.0f) return vIn - dropVolts;
   if (x <= -20.0f) return 0.0f;
@@ -47,7 +59,7 @@ static inline float diodeJunctionRectify(float vIn,
 }
 
 static inline float softplusVolts(float x, float softnessVolts) {
-  float slope = std::max(softnessVolts, 1e-4f);
+  float slope = requirePositiveFinite(softnessVolts);
   float y = x / slope;
   if (y >= 20.0f) return x;
   if (y <= -20.0f) return 0.0f;
@@ -98,7 +110,7 @@ static float deviceTubePlateCurrent(float gridVolts,
 
 template <typename Fn, typename T>
 static T finiteDifferenceDerivative(Fn&& fn, T x, T delta) {
-  T safeDelta = std::max(delta, static_cast<T>(1e-4));
+  T safeDelta = requirePositiveFinite(delta);
   T high = fn(x + safeDelta);
   T low = fn(x - safeDelta);
   return (high - low) / (static_cast<T>(2.0) * safeDelta);
@@ -138,13 +150,13 @@ static KorenTriodeModel fitKorenTriodeModel(double vgkQ,
 
   double gpTarget = gmTarget / mu;
   double kpInit = 100.0;
-  double kvbInit = std::max(vpkQ * vpkQ, 1.0);
+  double kvbInit = vpkQ * vpkQ;
   KorenTriodeModel initShape = makeKorenTriodeModel(mu, 1.0, kpInit, kvbInit);
   double initCurrent = korenTriodePlateCurrent(vgkQ, vpkQ, initShape);
   double kg1Init =
       (initCurrent > 0.0)
           ? (initCurrent / iqTarget)
-          : (std::pow(std::max(vpkQ, 1.0), initShape.ex) / iqTarget);
+          : (std::pow(vpkQ, initShape.ex) / iqTarget);
 
   double u[3] = {std::log(kg1Init), std::log(kpInit), std::log(kvbInit)};
   double bestU[3] = {u[0], u[1], u[2]};
@@ -264,15 +276,12 @@ static float solveLoadLinePlateVoltage(float plateSupplyVolts,
                                        float loadResistanceOhms,
                                        float initialGuessVolts,
                                        PlateCurrentFn&& plateCurrentForPlate) {
-  float safeSupply = std::max(plateSupplyVolts, 1.0f);
-  if (loadResistanceOhms <= 0.0f) {
-    return clampf(initialGuessVolts, 0.0f, safeSupply);
-  }
+  float safeSupply = requirePositiveFinite(plateSupplyVolts);
+  float safeLoadResistance = requirePositiveFinite(loadResistanceOhms);
 
   auto residual = [&](float plateVolts) {
     float safePlate = clampf(plateVolts, 0.0f, safeSupply);
-    return safeSupply -
-           plateCurrentForPlate(safePlate) * std::max(loadResistanceOhms, 1.0f) -
+    return safeSupply - plateCurrentForPlate(safePlate) * safeLoadResistance -
            safePlate;
   };
 
@@ -313,9 +322,8 @@ static float solveLoadLinePlateVoltage(float plateSupplyVolts,
 
   float plateVolts = bestPlate;
   for (int i = 0; i < 16; ++i) {
-    float targetPlate =
-        safeSupply - plateCurrentForPlate(plateVolts) *
-                         std::max(loadResistanceOhms, 1.0f);
+    float targetPlate = safeSupply - plateCurrentForPlate(plateVolts) *
+                                         safeLoadResistance;
     targetPlate = clampf(targetPlate, 0.0f, safeSupply);
     plateVolts = 0.5f * (plateVolts + targetPlate);
   }
@@ -407,13 +415,12 @@ static float tubeGridBranchCurrent(float acGridVolts,
                                    float biasVolts,
                                    float gridLeakResistanceOhms,
                                    float gridCurrentResistanceOhms) {
-  float leakCurrent = acGridVolts / std::max(gridLeakResistanceOhms, 1.0f);
+  float leakCurrent = acGridVolts / requirePositiveFinite(gridLeakResistanceOhms);
 
   float controlGridVolts = biasVolts + acGridVolts;
   float positiveGridCurrent =
       (controlGridVolts > 0.0f)
-          ? (controlGridVolts /
-             std::max(gridCurrentResistanceOhms, 1.0f))
+          ? (controlGridVolts / requirePositiveFinite(gridCurrentResistanceOhms))
           : 0.0f;
 
   return leakCurrent + positiveGridCurrent;
@@ -423,9 +430,9 @@ static float tubeGridBranchSlope(float acGridVolts,
                                  float biasVolts,
                                  float gridLeakResistanceOhms,
                                  float gridCurrentResistanceOhms) {
-  float slope = 1.0f / std::max(gridLeakResistanceOhms, 1.0f);
+  float slope = 1.0f / requirePositiveFinite(gridLeakResistanceOhms);
   if (biasVolts + acGridVolts > 0.0f) {
-    slope += 1.0f / std::max(gridCurrentResistanceOhms, 1.0f);
+    slope += 1.0f / requirePositiveFinite(gridCurrentResistanceOhms);
   }
   return slope;
 }
@@ -438,12 +445,12 @@ static float solveCapCoupledGridVoltage(float sourceVolts,
                                         float gridLeakResistanceOhms,
                                         float biasVolts,
                                         float gridCurrentResistanceOhms) {
-  float seriesTerm = std::max(sourceResistanceOhms, 1.0f) +
-                     dt / std::max(couplingCapFarads, 1e-12f);
+  float seriesTerm = requirePositiveFinite(sourceResistanceOhms) +
+                     dt / requirePositiveFinite(couplingCapFarads);
 
-  float leakConductance = 1.0f / std::max(gridLeakResistanceOhms, 1.0f);
+  float leakConductance = 1.0f / requirePositiveFinite(gridLeakResistanceOhms);
   float gridCurrentConductance =
-      1.0f / std::max(gridCurrentResistanceOhms, 1.0f);
+      1.0f / requirePositiveFinite(gridCurrentResistanceOhms);
 
   float gridVolts = sourceVolts - previousCapVoltage;
 
@@ -460,7 +467,8 @@ static float solveCapCoupledGridVoltage(float sourceVolts,
 
     float df = -1.0f / seriesTerm - leakConductance - positiveGridSlope;
 
-    gridVolts -= f / std::max(std::fabs(df), 1e-9f);
+    assert(std::fabs(df) > 1e-9f);
+    gridVolts -= f / df;
   }
 
   return gridVolts;
@@ -470,7 +478,7 @@ static float scalePhysicalSpeakerVoltsToDigital(const Radio1938& radio,
                                                 float speakerVolts) {
   if (!radio.graph.isEnabled(StageId::Power)) return speakerVolts;
   return speakerVolts /
-         std::max(radio.output.digitalReferenceSpeakerVoltsPeak, 1e-3f);
+         requirePositiveFinite(radio.output.digitalReferenceSpeakerVoltsPeak);
 }
 
 static float deviceTubePlateCurrent(float gridVolts,
@@ -491,16 +499,15 @@ static float deviceTubePlateCurrent(float gridVolts,
   activationQ = std::max(activationQ, 1e-5f);
   activation = std::max(activation, 0.0f);
   float exponent = clampf(mutualConductanceSiemens * activationQ /
-                              std::max(quiescentPlateCurrentAmps, 1e-9f),
+                              requirePositiveFinite(quiescentPlateCurrentAmps),
                           1.05f, 10.0f);
   float kneeQ =
       1.0f - std::exp(-std::max(quiescentPlateVolts, 0.0f) /
-                      std::max(plateKneeVolts, 1e-3f));
+                      requirePositiveFinite(plateKneeVolts));
   float knee =
       1.0f - std::exp(-std::max(plateVolts, 0.0f) /
-                      std::max(plateKneeVolts, 1e-3f));
-  float screenScale =
-      std::max(screenVolts, 1e-3f) / std::max(quiescentScreenVolts, 1e-3f);
+                      requirePositiveFinite(plateKneeVolts));
+  float screenScale = screenVolts / requirePositiveFinite(quiescentScreenVolts);
   float perveance =
       quiescentPlateCurrentAmps /
       (std::pow(activationQ, exponent) * std::max(kneeQ, 1e-6f));
@@ -521,8 +528,9 @@ static float processResistorLoadedTubeStage(float gridVolts,
                                             float plateKneeVolts,
                                             float gridSoftnessVolts,
                                             float& plateVoltageState) {
-  float supply = std::max(plateSupplyVolts * supplyScale, 1.0f);
-  float screen = std::max(screenVolts * supplyScale, 1.0f);
+  float supply = requirePositiveFinite(plateSupplyVolts * supplyScale);
+  float screen = requirePositiveFinite(screenVolts * supplyScale);
+  float safeLoadResistance = requirePositiveFinite(loadResistanceOhms);
   float plateVoltage = (plateVoltageState > 0.0f)
                            ? plateVoltageState
                            : std::clamp(quiescentPlateVolts * supplyScale, 0.0f,
@@ -534,8 +542,7 @@ static float processResistorLoadedTubeStage(float gridVolts,
         quiescentPlateCurrentAmps, mutualConductanceSiemens, plateKneeVolts,
         gridSoftnessVolts);
     float targetPlate =
-        std::clamp(supply - current * std::max(loadResistanceOhms, 1.0f), 0.0f,
-                   supply);
+        std::clamp(supply - current * safeLoadResistance, 0.0f, supply);
     plateVoltage = 0.5f * (plateVoltage + targetPlate);
   }
   plateVoltageState = plateVoltage;
@@ -551,7 +558,8 @@ static float processResistorLoadedTriodeStage(
     const KorenTriodeModel& model,
     float loadResistanceOhms,
     float& plateVoltageState) {
-  float supply = std::max(plateSupplyVolts * supplyScale, 1.0f);
+  float supply = requirePositiveFinite(plateSupplyVolts * supplyScale);
+  float safeLoadResistance = requirePositiveFinite(loadResistanceOhms);
   float plateVoltage = (plateVoltageState > 0.0f)
                            ? plateVoltageState
                            : std::clamp(quiescentPlateVolts * supplyScale, 0.0f,
@@ -560,8 +568,7 @@ static float processResistorLoadedTriodeStage(
     float current =
         static_cast<float>(korenTriodePlateCurrent(gridVolts, plateVoltage, model));
     float targetPlate =
-        std::clamp(supply - current * std::max(loadResistanceOhms, 1.0f), 0.0f,
-                   supply);
+        std::clamp(supply - current * safeLoadResistance, 0.0f, supply);
     plateVoltage = 0.5f * (plateVoltage + targetPlate);
   }
   plateVoltageState = plateVoltage;
@@ -583,8 +590,8 @@ static float processConverterTubeStage(float baseGridVolts,
                                        float acLoadResistanceOhms,
                                        float plateKneeVolts,
                                        float gridSoftnessVolts) {
-  float plateVoltage = std::max(quiescentPlateVolts * supplyScale, 1.0f);
-  float screen = std::max(screenVolts * supplyScale, 1.0f);
+  float plateVoltage = requirePositiveFinite(quiescentPlateVolts * supplyScale);
+  float screen = requirePositiveFinite(screenVolts * supplyScale);
   auto plateCurrentForGrid = [&](float gridVolts) {
     return deviceTubePlateCurrent(
         gridVolts, plateVoltage, screen, biasVolts, cutoffVolts,
@@ -603,7 +610,7 @@ static float processConverterTubeStage(float baseGridVolts,
                           oscillatorGridVolts);
   float conversionCurrent =
       mixedCurrent - rfOnlyCurrent - loOnlyCurrent + idleCurrent;
-  return conversionCurrent * std::max(acLoadResistanceOhms, 1.0f);
+  return conversionCurrent * requirePositiveFinite(acLoadResistanceOhms);
 }
 
 static bool solveLinear3x3(float a[3][3], float b[3], float x[3]) {
@@ -841,6 +848,12 @@ void SeriesRlcBandpass::configure(float newFs,
                                   float newSeriesResistanceOhms,
                                   float newOutputResistanceOhms,
                                   int newIntegrationSubsteps) {
+  assert(std::isfinite(newFs) && newFs > 0.0f);
+  assert(std::isfinite(newInductanceHenries) && newInductanceHenries > 0.0f);
+  assert(std::isfinite(newCapacitanceFarads) && newCapacitanceFarads > 0.0f);
+  assert(std::isfinite(newSeriesResistanceOhms) && newSeriesResistanceOhms >= 0.0f);
+  assert(std::isfinite(newOutputResistanceOhms) && newOutputResistanceOhms >= 0.0f);
+  assert(newIntegrationSubsteps > 0);
   fs = newFs;
   inductanceHenries = newInductanceHenries;
   capacitanceFarads = newCapacitanceFarads;
@@ -881,6 +894,21 @@ void CoupledTunedTransformer::configure(float newFs,
                                         float newCouplingCoeff,
                                         float newOutputResistanceOhms,
                                         int newIntegrationSubsteps) {
+  assert(std::isfinite(newFs) && newFs > 0.0f);
+  assert(std::isfinite(newPrimaryInductanceHenries) &&
+         newPrimaryInductanceHenries > 0.0f);
+  assert(std::isfinite(newPrimaryCapacitanceFarads) &&
+         newPrimaryCapacitanceFarads > 0.0f);
+  assert(std::isfinite(newPrimaryResistanceOhms) && newPrimaryResistanceOhms >= 0.0f);
+  assert(std::isfinite(newSecondaryInductanceHenries) &&
+         newSecondaryInductanceHenries > 0.0f);
+  assert(std::isfinite(newSecondaryCapacitanceFarads) &&
+         newSecondaryCapacitanceFarads > 0.0f);
+  assert(std::isfinite(newSecondaryResistanceOhms) &&
+         newSecondaryResistanceOhms >= 0.0f);
+  assert(std::isfinite(newCouplingCoeff) && std::fabs(newCouplingCoeff) < 1.0f);
+  assert(std::isfinite(newOutputResistanceOhms) && newOutputResistanceOhms >= 0.0f);
+  assert(newIntegrationSubsteps > 0);
   fs = newFs;
   primaryInductanceHenries = newPrimaryInductanceHenries;
   primaryCapacitanceFarads = newPrimaryCapacitanceFarads;
@@ -905,10 +933,9 @@ float CoupledTunedTransformer::process(float vin) {
   float mutualInductance =
       couplingCoeff *
       std::sqrt(primaryInductanceHenries * secondaryInductanceHenries);
-  float determinant = std::max(
-      primaryInductanceHenries * secondaryInductanceHenries -
-          mutualInductance * mutualInductance,
-      1e-18f);
+  float determinant = primaryInductanceHenries * secondaryInductanceHenries -
+                      mutualInductance * mutualInductance;
+  assert(determinant > 0.0f);
   float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
 
   for (int step = 0; step < integrationSubsteps; ++step) {
@@ -946,7 +973,7 @@ static CurrentDrivenTransformerSample projectNoShuntCap(
     float primaryLoadResistanceOhms) {
   float dt =
       1.0f / (transformer.fs * static_cast<float>(transformer.integrationSubsteps));
-  float safeTurns = std::max(transformer.turnsRatioPrimaryToSecondary, 1e-4f);
+  float safeTurns = requirePositiveFinite(transformer.turnsRatioPrimaryToSecondary);
   float Rp = transformer.primaryResistanceOhms;
   float Rs = transformer.secondaryResistanceOhms;
   float Lp = transformer.primaryLeakageInductanceHenries +
@@ -957,17 +984,17 @@ static CurrentDrivenTransformerSample projectNoShuntCap(
   float M = transformer.magnetizingInductanceHenries / safeTurns;
   float coreLossConductance =
       (transformer.primaryCoreLossResistanceOhms > 0.0f)
-          ? 1.0f / std::max(transformer.primaryCoreLossResistanceOhms, 1e-9f)
+          ? 1.0f / transformer.primaryCoreLossResistanceOhms
           : 0.0f;
   float primaryLoadConductance =
       (primaryLoadResistanceOhms > 0.0f &&
        std::isfinite(primaryLoadResistanceOhms))
-          ? 1.0f / std::max(primaryLoadResistanceOhms, 1e-9f)
+          ? 1.0f / primaryLoadResistanceOhms
           : 0.0f;
   float Gp = coreLossConductance + primaryLoadConductance;
   float Gs = (secondaryLoadResistanceOhms > 0.0f &&
               std::isfinite(secondaryLoadResistanceOhms))
-                 ? 1.0f / std::max(secondaryLoadResistanceOhms, 1e-9f)
+                 ? 1.0f / secondaryLoadResistanceOhms
                  : 0.0f;
   float projectedPrimaryCurrent = transformer.primaryCurrent;
   float projectedSecondaryCurrent = transformer.secondaryCurrent;
@@ -1057,7 +1084,7 @@ static DriverInterstageSolveResult solveDriverInterstageNoCap(
   float dt =
       1.0f / (transformer.fs * static_cast<float>(transformer.integrationSubsteps));
 
-  float n = std::max(transformer.turnsRatioPrimaryToSecondary, 1e-4f);
+  float n = requirePositiveFinite(transformer.turnsRatioPrimaryToSecondary);
   float Rp = transformer.primaryResistanceOhms;
   float Rs = transformer.secondaryResistanceOhms;
   float Lp = transformer.primaryLeakageInductanceHenries +
@@ -1068,13 +1095,13 @@ static DriverInterstageSolveResult solveDriverInterstageNoCap(
 
   float coreLossConductance =
       (transformer.primaryCoreLossResistanceOhms > 0.0f)
-          ? 1.0f / std::max(transformer.primaryCoreLossResistanceOhms, 1e-9f)
+          ? 1.0f / transformer.primaryCoreLossResistanceOhms
           : 0.0f;
 
   float primaryLoadConductance =
       (primaryLoadResistanceOhms > 0.0f &&
        std::isfinite(primaryLoadResistanceOhms))
-          ? 1.0f / std::max(primaryLoadResistanceOhms, 1e-9f)
+          ? 1.0f / primaryLoadResistanceOhms
           : 0.0f;
 
   float Gp = coreLossConductance + primaryLoadConductance;
@@ -1241,6 +1268,24 @@ void CurrentDrivenTransformer::configure(
     float newSecondaryResistanceOhms,
     float newSecondaryShuntCapFarads,
     int newIntegrationSubsteps) {
+  assert(std::isfinite(newFs) && newFs > 0.0f);
+  assert(std::isfinite(newPrimaryLeakageInductanceHenries) &&
+         newPrimaryLeakageInductanceHenries >= 0.0f);
+  assert(std::isfinite(newMagnetizingInductanceHenries) &&
+         newMagnetizingInductanceHenries > 0.0f);
+  assert(std::isfinite(newTurnsRatioPrimaryToSecondary) &&
+         newTurnsRatioPrimaryToSecondary > 0.0f);
+  assert(std::isfinite(newPrimaryResistanceOhms) && newPrimaryResistanceOhms >= 0.0f);
+  assert(std::isfinite(newPrimaryCoreLossResistanceOhms) &&
+         newPrimaryCoreLossResistanceOhms >= 0.0f);
+  assert(std::isfinite(newPrimaryShuntCapFarads) && newPrimaryShuntCapFarads >= 0.0f);
+  assert(std::isfinite(newSecondaryLeakageInductanceHenries) &&
+         newSecondaryLeakageInductanceHenries >= 0.0f);
+  assert(std::isfinite(newSecondaryResistanceOhms) &&
+         newSecondaryResistanceOhms >= 0.0f);
+  assert(std::isfinite(newSecondaryShuntCapFarads) &&
+         newSecondaryShuntCapFarads >= 0.0f);
+  assert(newIntegrationSubsteps > 0);
   fs = newFs;
   primaryLeakageInductanceHenries = newPrimaryLeakageInductanceHenries;
   magnetizingInductanceHenries = newMagnetizingInductanceHenries;
@@ -1273,32 +1318,31 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::project(
   }
 
   float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
-  float safeTurns = std::max(turnsRatioPrimaryToSecondary, 1e-4f);
+  float safeTurns = requirePositiveFinite(turnsRatioPrimaryToSecondary);
   float primaryInductance =
       primaryLeakageInductanceHenries + magnetizingInductanceHenries;
   float secondaryInductance =
       secondaryLeakageInductanceHenries +
       magnetizingInductanceHenries / (safeTurns * safeTurns);
   float mutualInductance = magnetizingInductanceHenries / safeTurns;
-  float primaryCap = std::max(primaryShuntCapFarads, 1e-15f);
-  float secondaryCap = std::max(secondaryShuntCapFarads, 1e-15f);
+  float primaryCap = requirePositiveFinite(primaryShuntCapFarads);
+  float secondaryCap = requirePositiveFinite(secondaryShuntCapFarads);
   float primaryCoreConductance =
       (primaryCoreLossResistanceOhms > 0.0f)
-          ? 1.0f / std::max(primaryCoreLossResistanceOhms, 1e-9f)
+          ? 1.0f / primaryCoreLossResistanceOhms
           : 0.0f;
   if (primaryLoadResistanceOhms > 0.0f &&
       std::isfinite(primaryLoadResistanceOhms)) {
-    primaryCoreConductance +=
-        1.0f / std::max(primaryLoadResistanceOhms, 1e-9f);
+    primaryCoreConductance += 1.0f / primaryLoadResistanceOhms;
   }
   float secondaryLoadConductance =
       (secondaryLoadResistanceOhms > 0.0f &&
        std::isfinite(secondaryLoadResistanceOhms))
-          ? 1.0f / std::max(secondaryLoadResistanceOhms, 1e-9f)
+          ? 1.0f / secondaryLoadResistanceOhms
           : 0.0f;
-  float determinant = std::max(
-      primaryInductance * secondaryInductance - mutualInductance * mutualInductance,
-      1e-18f);
+  float determinant = primaryInductance * secondaryInductance -
+                      mutualInductance * mutualInductance;
+  assert(determinant > 0.0f);
   float a11 = secondaryInductance / determinant;
   float a12 = -mutualInductance / determinant;
   float a21 = -mutualInductance / determinant;
@@ -2662,8 +2706,8 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   power.driverSourceResistanceOhms = parallelResistance(
       radio.receiverCircuit.tubeLoadResistanceOhms,
       radio.receiverCircuit.tubePlateResistanceOhms);
-  power.driverSourceResistanceOhms =
-      std::max(power.driverSourceResistanceOhms, 1.0f);
+  assert(std::isfinite(power.driverSourceResistanceOhms) &&
+         power.driverSourceResistanceOhms > 0.0f);
   TriodeOperatingPoint driverOp = solveTriodeOperatingPoint(
       power.tubePlateSupplyVolts, power.interstagePrimaryResistanceOhms,
       power.tubeBiasVolts, power.tubePlateDcVolts, power.tubePlateCurrentAmps,
@@ -2749,7 +2793,7 @@ float RadioPowerNode::process(Radio1938& radio,
                             std::max(1e-6f, power.sagEnd - power.sagStart),
                         0.0f, 1.0f);
   float supplyScale = 1.0f - power.gainSagPerPower * powerT;
-  float dt = 1.0f / std::max(radio.sampleRate, 1.0f);
+  float dt = 1.0f / requirePositiveFinite(radio.sampleRate);
   float previousCapVoltage = power.gridCouplingCapVoltage;
   power.gridVoltage = solveCapCoupledGridVoltage(
       y, previousCapVoltage, dt, power.gridCouplingCapFarads,
@@ -2757,10 +2801,10 @@ float RadioPowerNode::process(Radio1938& radio,
       power.tubeBiasVolts, power.tubeGridCurrentResistanceOhms);
   float seriesCurrent =
       (y - previousCapVoltage - power.gridVoltage) /
-      (std::max(power.driverSourceResistanceOhms, 1.0f) +
-       dt / std::max(power.gridCouplingCapFarads, 1e-12f));
+      (power.driverSourceResistanceOhms +
+       dt / requirePositiveFinite(power.gridCouplingCapFarads));
   power.gridCouplingCapVoltage +=
-      dt * (seriesCurrent / std::max(power.gridCouplingCapFarads, 1e-12f));
+      dt * (seriesCurrent / requirePositiveFinite(power.gridCouplingCapFarads));
   float controlGridVolts = power.tubeBiasVolts + power.gridVoltage;
   if (radio.calibration.enabled && controlGridVolts > 0.0f) {
     radio.calibration.driverGridPositiveSamples++;
@@ -2768,7 +2812,7 @@ float RadioPowerNode::process(Radio1938& radio,
   assert(power.tubeTriodeConnected &&
          "Interstage driver solve requires triode-connected 6F6 operation");
   float driverPlateQuiescent =
-      std::max(power.tubeQuiescentPlateVolts * supplyScale, 1.0f);
+      requirePositiveFinite(power.tubeQuiescentPlateVolts * supplyScale);
   float driverQuiescentCurrent = static_cast<float>(korenTriodePlateCurrent(
       power.tubeBiasVolts, driverPlateQuiescent, power.tubeTriodeModel));
   struct SolvedTransformerDrive {
@@ -2894,9 +2938,8 @@ float RadioPowerNode::process(Radio1938& radio,
     }
   }
   float outputPlateQuiescent =
-      std::max(power.outputTubeQuiescentPlateVolts * supplyScale, 1.0f);
-  float outputPrimaryMaxSwing =
-      2.5f * std::max(outputPlateQuiescent, 1.0f);
+      requirePositiveFinite(power.outputTubeQuiescentPlateVolts * supplyScale);
+  float outputPrimaryMaxSwing = 2.5f * outputPlateQuiescent;
   const float outputPrimaryLoadResistance = 0.0f;
   auto outputSolved = solvePrimaryVoltage(
       [&](float driveCurrentAmps) {
@@ -2953,7 +2996,7 @@ float RadioPowerNode::process(Radio1938& radio,
       actualDriverCurrent + actualPlateCurrentA + actualPlateCurrentB;
   float load = std::max(
       0.0f, (actualSupplyCurrent - quiescentSupplyCurrent) /
-                std::max(quiescentSupplyCurrent, 1e-6f));
+                requirePositiveFinite(quiescentSupplyCurrent));
   if (load > power.sagEnv) {
     power.sagEnv = power.sagAtk * power.sagEnv + (1.0f - power.sagAtk) * load;
   } else {
