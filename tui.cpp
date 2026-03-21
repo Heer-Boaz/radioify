@@ -629,8 +629,21 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
               << " max_gr_db="
               << radio1938->calibration.limiterMaxGainReductionDb
               << "\n";
+    const auto& receiverStage =
+        radio1938->calibration.stages[static_cast<size_t>(StageId::ReceiverCircuit)];
+    std::cout << "  receiver_out_rms=" << receiverStage.rmsOut
+              << " receiver_out_peak=" << receiverStage.peakOut
+              << " interstage_secondary_rms="
+              << radio1938->calibration.interstageSecondaryRmsVolts
+              << " interstage_secondary_peak="
+              << radio1938->calibration.interstageSecondaryPeakVolts
+              << "\n";
     std::cout << "  driver_grid_positive="
               << radio1938->calibration.driverGridPositiveFraction
+              << " output_grid_a_positive="
+              << radio1938->calibration.outputGridAPositiveFraction
+              << " output_grid_b_positive="
+              << radio1938->calibration.outputGridBPositiveFraction
               << " output_grid_positive="
               << radio1938->calibration.outputGridPositiveFraction
               << " max_mixer_ip=" << radio1938->calibration.maxMixerPlateCurrentAmps
@@ -644,13 +657,21 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
               << radio1938->calibration.maxOutputPlateCurrentBAmps
               << " max_speaker_v="
               << radio1938->calibration.maxSpeakerSecondaryVolts
-              << " max_speaker_ref_ratio="
-              << radio1938->calibration.maxSpeakerReferenceRatio
+              << " max_digital_output="
+              << radio1938->calibration.maxDigitalOutput
               << "\n";
     std::cout << "  validation failed="
               << (radio1938->calibration.validationFailed ? 1 : 0)
+              << " driver_grid_over="
+              << (radio1938->calibration.validationDriverGridPositive ? 1 : 0)
+              << " output_grid_a_over="
+              << (radio1938->calibration.validationOutputGridAPositive ? 1 : 0)
+              << " output_grid_b_over="
+              << (radio1938->calibration.validationOutputGridBPositive ? 1 : 0)
               << " output_grid_over="
               << (radio1938->calibration.validationOutputGridPositive ? 1 : 0)
+              << " interstage_over="
+              << (radio1938->calibration.validationInterstageSecondary ? 1 : 0)
               << " speaker_over="
               << (radio1938->calibration.validationSpeakerOverReference ? 1 : 0)
               << " dc_shift="
