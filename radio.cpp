@@ -911,6 +911,74 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::project(
     float primaryDriveCurrentAmps,
     float secondaryLoadResistanceOhms,
     float primaryLoadResistanceOhms) const {
+  auto projectNoShuntCap = [&](float driveCurrentAmps,
+                               float secondaryLoadOhms,
+                               float primaryLoadOhms) {
+    float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
+    float safeTurns = std::max(turnsRatioPrimaryToSecondary, 1e-4f);
+    float Rp = primaryResistanceOhms;
+    float Rs = secondaryResistanceOhms;
+    float Lp = primaryLeakageInductanceHenries + magnetizingInductanceHenries;
+    float Ls = secondaryLeakageInductanceHenries +
+               magnetizingInductanceHenries / (safeTurns * safeTurns);
+    float M = magnetizingInductanceHenries / safeTurns;
+    float coreLossConductance =
+        (primaryCoreLossResistanceOhms > 0.0f)
+            ? 1.0f / std::max(primaryCoreLossResistanceOhms, 1e-9f)
+            : 0.0f;
+    float primaryLoadConductance =
+        (primaryLoadOhms > 0.0f && std::isfinite(primaryLoadOhms))
+            ? 1.0f / std::max(primaryLoadOhms, 1e-9f)
+            : 0.0f;
+    float Gp = coreLossConductance + primaryLoadConductance;
+    float Gs = (secondaryLoadOhms > 0.0f && std::isfinite(secondaryLoadOhms))
+                   ? 1.0f / std::max(secondaryLoadOhms, 1e-9f)
+                   : 0.0f;
+    float projectedPrimaryCurrent = primaryCurrent;
+    float projectedSecondaryCurrent = secondaryCurrent;
+    float projectedPrimaryVoltage = primaryVoltage;
+    float projectedSecondaryVoltage = secondaryVoltage;
+
+    for (int step = 0; step < integrationSubsteps; ++step) {
+      float ipPrev = projectedPrimaryCurrent;
+      float isPrev = projectedSecondaryCurrent;
+      float a[4][4] = {
+          {Rp + Lp / dt, M / dt, -1.0f, 0.0f},
+          {M / dt, Rs + Ls / dt, 0.0f, -1.0f},
+          {1.0f, 0.0f, Gp, 0.0f},
+          {0.0f, 1.0f, 0.0f, Gs},
+      };
+      float b[4] = {
+          (Lp / dt) * ipPrev + (M / dt) * isPrev,
+          (M / dt) * ipPrev + (Ls / dt) * isPrev,
+          driveCurrentAmps,
+          0.0f,
+      };
+      float x[4] = {projectedPrimaryCurrent, projectedSecondaryCurrent,
+                    projectedPrimaryVoltage, projectedSecondaryVoltage};
+      if (!solveLinear4x4(a, b, x)) return CurrentDrivenTransformerSample{};
+      projectedPrimaryCurrent = x[0];
+      projectedSecondaryCurrent = x[1];
+      projectedPrimaryVoltage = x[2];
+      projectedSecondaryVoltage = x[3];
+      if (!std::isfinite(projectedPrimaryCurrent) ||
+          !std::isfinite(projectedSecondaryCurrent) ||
+          !std::isfinite(projectedPrimaryVoltage) ||
+          !std::isfinite(projectedSecondaryVoltage)) {
+        return CurrentDrivenTransformerSample{};
+      }
+    }
+
+    return CurrentDrivenTransformerSample{
+        projectedPrimaryVoltage, projectedSecondaryVoltage,
+        projectedPrimaryCurrent, projectedSecondaryCurrent};
+  };
+
+  if (primaryShuntCapFarads <= 0.0f && secondaryShuntCapFarads <= 0.0f) {
+    return projectNoShuntCap(primaryDriveCurrentAmps, secondaryLoadResistanceOhms,
+                             primaryLoadResistanceOhms);
+  }
+
   float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
   float safeTurns = std::max(turnsRatioPrimaryToSecondary, 1e-4f);
   float primaryInductance =
@@ -3389,7 +3457,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.tubeMutualConductanceSiemens = 0.0027f;
   radio.power.tubeMu = 7.0f;
   radio.power.tubeTriodeConnected = true;
-  radio.power.tubeAcLoadResistanceOhms = 7000.0f;
+  radio.power.tubeAcLoadResistanceOhms = 4000.0f;
   radio.power.tubePlateKneeVolts = 24.0f;
   radio.power.tubeGridSoftnessVolts = 0.8f;
   radio.power.tubeGridCurrentResistanceOhms = 1000.0f;
