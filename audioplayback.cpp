@@ -659,6 +659,7 @@ struct AudioPlaybackState {
   float noise = 0.0f;
   std::filesystem::path nowPlaying;
   int trackIndex = 0;
+  std::string lastInitError;
   std::string gmeWarning;
   std::string gsfWarning;
   std::string vgmWarning;
@@ -2008,6 +2009,7 @@ bool initDecoderForBackend(const AudioBackendHandlers* backend,
   if (!backend || !backend->init) return false;
   std::string error;
   if (!backend->init(file, startFrame, trackIndex, &error)) {
+    gAudio.lastInitError = error;
     if (backend->mode == AudioMode::Gsf) {
       gAudio.gsfWarning = error;
     } else if (backend->mode == AudioMode::Vgm) {
@@ -2017,6 +2019,7 @@ bool initDecoderForBackend(const AudioBackendHandlers* backend,
     }
     return false;
   }
+  gAudio.lastInitError.clear();
   activateBackend(backend, trackIndex);
   storeTotalFramesFromBackend(backend);
   return true;
@@ -2096,12 +2099,14 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
     gAudio.audition.resumeValid = false;
   }
 
+  gAudio.lastInitError.clear();
   gAudio.gmeWarning.clear();
   gAudio.gsfWarning.clear();
   gAudio.vgmWarning.clear();
 
   const AudioBackendHandlers* backend = selectAudioBackend(file);
   if (!backend) {
+    gAudio.lastInitError = "Unsupported audio format.";
     return false;
   }
 
@@ -2209,6 +2214,7 @@ void stopPlayback() {
   melodyOfflineStop();
   gAudio.nowPlaying.clear();
   gAudio.trackIndex = 0;
+  gAudio.lastInitError.clear();
   gAudio.gmeWarning.clear();
   gAudio.gsfWarning.clear();
   gAudio.vgmWarning.clear();
@@ -2279,6 +2285,7 @@ void audioStop() {
 
 bool audioStartStream(uint64_t totalFrames) {
   melodyOfflineStop();
+  gAudio.lastInitError.clear();
   gAudio.gmeWarning.clear();
   gAudio.gsfWarning.clear();
   gAudio.vgmWarning.clear();
@@ -2966,7 +2973,9 @@ bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
 }
 
 std::string audioGetWarning() {
-  return warningForBackend(gAudio.state.backend);
+  std::string warning = warningForBackend(gAudio.state.backend);
+  if (!warning.empty()) return warning;
+  return gAudio.lastInitError;
 }
 
 bool audioIs50HzEnabled() {

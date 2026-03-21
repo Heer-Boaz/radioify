@@ -33,6 +33,7 @@
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
+#include "playback_dialog.h"
 #include "psfaudio.h"
 #include "radio.h"
 #include "radiopreview.h"
@@ -876,48 +877,6 @@ int runTui(Options o) {
   std::filesystem::path pendingVideo;
   bool hasPendingVideo = false;
 
-  if (!o.input.empty() && o.play && std::filesystem::exists(o.input)) {
-    std::filesystem::path inputPath(o.input);
-    if (!std::filesystem::is_directory(inputPath)) {
-      if (isSupportedImageExt(inputPath)) {
-        pendingImage = inputPath;
-        hasPendingImage = true;
-      } else if (isVideoExt(inputPath)) {
-        pendingVideo = inputPath;
-        hasPendingVideo = true;
-      } else {
-        if (isKssExt(inputPath) || isGmeExt(inputPath) || isVgmExt(inputPath) ||
-            isPsfExt(inputPath)) {
-          std::filesystem::path trackPath =
-              normalizeTrackBrowserPath(inputPath);
-          std::vector<TrackEntry> tracks;
-          std::string error;
-          bool listed = listTracksForFile(trackPath, &tracks, &error);
-          if (listed) {
-            gTrackBrowser.file = trackPath;
-            gTrackBrowser.tracks = tracks;
-            gTrackBrowser.active = tracks.size() > 1;
-          } else {
-            gTrackBrowser.active = false;
-            gTrackBrowser.tracks.clear();
-          }
-          if (listed && tracks.size() > 1) {
-            browser.dir = trackPath;
-            browser.selected = 0;
-            browser.scrollRow = 0;
-            browser.filter.clear();
-            browser.filterActive = false;
-            refreshBrowser(browser, "");
-          } else {
-            audioStartFile(inputPath);
-          }
-        } else {
-          audioStartFile(inputPath);
-        }
-      }
-    }
-  }
-
   auto renderFile = [&](const std::filesystem::path& file) -> void {
     Options renderOpt = o;
     renderOpt.input = file.string();
@@ -951,6 +910,81 @@ int runTui(Options o) {
   const Color kProgressEnd{255, 214, 110};
   const Style kStyleProgressEmpty{{32, 38, 46}, {32, 38, 46}};
   const Style kStyleProgressFrame{{160, 170, 182}, kBgBase};
+
+  auto showPlaybackErrorDialog = [&](const std::filesystem::path& file) {
+    std::string error = audioGetWarning();
+    if (error.empty()) {
+      error = "Failed to start playback.";
+    }
+
+    std::string title = "Playback Error";
+    std::string message = error;
+    std::string detail = toUtf8String(file.filename());
+    std::string ext = toLower(file.extension().string());
+    if ((ext == ".psf2" || ext == ".minipsf2") &&
+        error.find("hebios.bin") != std::string::npos) {
+      title = "PSF2 BIOS Required";
+      message = "Missing hebios.bin for PSF2 playback.";
+      detail =
+          "Set RADIOIFY_PSF_BIOS or place hebios.bin next to the file, next "
+          "to radioify.exe, or in the current folder.";
+    }
+
+    playback_dialog::showInfoDialog(
+        input, screen, kStyleNormal, kStyleAccent, kStyleDim, title, message,
+        detail, "Enter/Space/Esc: close");
+  };
+
+  auto tryStartAudioFile = [&](const std::filesystem::path& file,
+                               int trackIndex = 0) {
+    if (audioStartFile(file, trackIndex)) {
+      return true;
+    }
+    showPlaybackErrorDialog(file);
+    return false;
+  };
+
+  if (!o.input.empty() && o.play && std::filesystem::exists(o.input)) {
+    std::filesystem::path inputPath(o.input);
+    if (!std::filesystem::is_directory(inputPath)) {
+      if (isSupportedImageExt(inputPath)) {
+        pendingImage = inputPath;
+        hasPendingImage = true;
+      } else if (isVideoExt(inputPath)) {
+        pendingVideo = inputPath;
+        hasPendingVideo = true;
+      } else {
+        if (isKssExt(inputPath) || isGmeExt(inputPath) || isVgmExt(inputPath) ||
+            isPsfExt(inputPath)) {
+          std::filesystem::path trackPath =
+              normalizeTrackBrowserPath(inputPath);
+          std::vector<TrackEntry> tracks;
+          std::string error;
+          bool listed = listTracksForFile(trackPath, &tracks, &error);
+          if (listed) {
+            gTrackBrowser.file = trackPath;
+            gTrackBrowser.tracks = tracks;
+            gTrackBrowser.active = tracks.size() > 1;
+          } else {
+            gTrackBrowser.active = false;
+            gTrackBrowser.tracks.clear();
+          }
+          if (listed && tracks.size() > 1) {
+            browser.dir = trackPath;
+            browser.selected = 0;
+            browser.scrollRow = 0;
+            browser.filter.clear();
+            browser.filterActive = false;
+            refreshBrowser(browser, "");
+          } else {
+            tryStartAudioFile(inputPath);
+          }
+        } else {
+          tryStartAudioFile(inputPath);
+        }
+      }
+    }
+  }
 
   screen.clear(kStyleNormal);
   screen.draw();
@@ -1030,7 +1064,7 @@ int runTui(Options o) {
     if (quitAppRequested) {
       running = false;
     } else if (!handled) {
-      audioStartFile(pendingVideo);
+      tryStartAudioFile(pendingVideo);
     }
     dirty = true;
   }
@@ -1156,7 +1190,7 @@ int runTui(Options o) {
                              static_cast<int>(browser.entries.size()) - 1);
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         if (entry.trackIndex >= 0) {
-          return audioStartFile(file, entry.trackIndex);
+          return tryStartAudioFile(file, entry.trackIndex);
         }
       }
       return true;
@@ -1200,7 +1234,7 @@ int runTui(Options o) {
         return true;
       }
     }
-    return audioStartFile(file);
+    return tryStartAudioFile(file);
   };
   callbacks.onOpenFileContextMenu = [&](const FileEntry& entry, int x, int y) {
     if (!o.play || entry.isDir || !isSupportedAudioExt(entry.path)) {
@@ -1506,7 +1540,7 @@ int runTui(Options o) {
     if (actionIndex == 0) {
       bool played = false;
       if (entry.trackIndex >= 0) {
-        played = audioStartFile(entry.path, entry.trackIndex);
+        played = tryStartAudioFile(entry.path, entry.trackIndex);
       } else if (callbacks.onPlayFile) {
         played = callbacks.onPlayFile(entry.path);
       }
