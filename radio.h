@@ -142,12 +142,6 @@ struct PentodeOperatingPoint {
   float rpOhms = 0.0f;
 };
 
-struct PushPullGridDriveResult {
-  float gridAVolts = 0.0f;
-  float gridBVolts = 0.0f;
-  float effectiveSecondaryCurrent = 0.0f;
-};
-
 struct CurrentDrivenTransformer {
   float fs = 0.0f;
   float primaryLeakageInductanceHenries = 0.0f;
