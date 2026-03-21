@@ -389,6 +389,7 @@ static PSFINFO *LoadPSF(char *path, int level, int type) // Type==1 for just inf
 	  {
 	   u32 ba[3];
 	   char *tmpfn;
+           PSFINFO *tmpi = 0;
 
  	   if(cache[cur].num < 2) continue;
 
@@ -400,15 +401,15 @@ static PSFINFO *LoadPSF(char *path, int level, int type) // Type==1 for just inf
                 the full path(directory + file name) "path"
              */
            tmpfn=GetFileWithBase(path,cache[cur].value);
-           if(!(tmpi=LoadPSF(tmpfn,level+1,0)))
-           {
-            //free(key);
-            //free(value);
-            //free(tmpfn);
-            //fclose(fp);
-            //return(0);
-           }
+           tmpi=LoadPSF(tmpfn,level+1,0);
            free(tmpfn);
+           if(!tmpi)
+           {
+            free(cache);
+            FreeTags(psfi->tags);
+            free(psfi);
+            return(0);
+           }
 	   FreeTags(tmpi->tags);
 	   free(tmpi);
 
@@ -466,4 +467,9 @@ PSFINFO *sexy_load(char *path)
 void sexy_execute(void)
 {
  psxCpu->Execute();
+}
+
+void sexy_shutdown(void)
+{
+ psxShutdown();
 }

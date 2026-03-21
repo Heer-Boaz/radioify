@@ -45,6 +45,7 @@ namespace {
 constexpr uint32_t kPsfSampleRate = 44100;
 constexpr uint32_t kPsfChannels = 2;
 constexpr uint32_t kPsfChunkFrames = 1024;
+constexpr uint32_t kPsfNoOutputExecutionLimit = 256;
 constexpr int kDefaultTrackLengthMs = 150000;
 constexpr size_t kSexyMaxBufferedFrames =
     static_cast<size_t>(kPsfSampleRate) * 2;  // Throttle sexypsf buffering.
@@ -706,6 +707,7 @@ void PsfAudioDecoder::Impl::stopSexyPlayback() {
   sexy.cv.notify_all();
   sexy_stop();
   sexyThread.join();
+  sexy_shutdown();
   g_sexyState.store(nullptr, std::memory_order_release);
   resetSexyState(&sexy);
 }
@@ -895,6 +897,7 @@ bool PsfAudioDecoder::readFrames(float* out, uint32_t frameCount,
   }
 
   uint64_t produced = 0;
+  uint32_t emptyExecutions = 0;
   while (produced < toRead) {
     uint64_t remainingOut = toRead - produced;
     ma_uint64 requiredIn = 0;
@@ -920,9 +923,16 @@ bool PsfAudioDecoder::readFrames(float* out, uint32_t frameCount,
         return false;
       }
       if (framesOut == 0) {
-        if (err < 0) impl_->inputEnded = true;
-        break;
+        if (err < 0) {
+          impl_->inputEnded = true;
+          break;
+        }
+        if (++emptyExecutions >= kPsfNoOutputExecutionLimit) {
+          return false;
+        }
+        continue;
       }
+      emptyExecutions = 0;
       size_t oldSize = impl_->inputBuffer.size();
       impl_->inputBuffer.resize(oldSize +
                                 static_cast<size_t>(framesOut) * kPsfChannels);
@@ -938,8 +948,11 @@ bool PsfAudioDecoder::readFrames(float* out, uint32_t frameCount,
     size_t available =
         inputAvailableFrames(impl_->inputBuffer, impl_->inputReadPos);
     if (available == 0) {
-      impl_->atEnd = true;
-      break;
+      if (impl_->inputEnded) {
+        impl_->atEnd = true;
+        break;
+      }
+      return false;
     }
 
     ma_uint64 inFrames = static_cast<ma_uint64>(available);
