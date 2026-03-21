@@ -1153,7 +1153,7 @@ static DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap
           {-1.0f, 1.0f, 0.0f, 0.0f, coreLossConductance, 0.0f, 0.0f},
           {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, dia_dva, 0.0f},
           {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, dib_dvb},
-          {1.0f, 0.0f, 0.0f, 0.0f, dIdriver_dVp, 0.0f, 0.0f},
+          {1.0f, 0.0f, 0.0f, 0.0f, -dIdriver_dVp, 0.0f, 0.0f},
       };
 
       float rhs[7] = {-f[0], -f[1], -f[2], -f[3],
