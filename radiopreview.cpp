@@ -6,6 +6,7 @@
 namespace {
 
 constexpr uint32_t kPreviewWarmupFrames = 16384u;
+constexpr uint32_t kPreviewProcessChunkFrames = 64u;
 
 float computeOpenCircuitCarrierRmsVolts(float fieldStrengthVoltsPerMeter,
                                         float antennaEffectiveHeightMeters) {
@@ -63,7 +64,7 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
   float carrierPeak = std::sqrt(2.0f) * carrierRms;
 
   if (!warmedUp) {
-    monoScratch.assign(std::min<uint32_t>(kPreviewWarmupFrames, 4096u), 0.0f);
+    monoScratch.assign(kPreviewProcessChunkFrames, 0.0f);
     uint32_t remaining = kPreviewWarmupFrames;
     while (remaining > 0u) {
       uint32_t batch =
@@ -79,46 +80,56 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
     warmedUp = true;
   }
 
-  monoScratch.resize(frames);
+  monoScratch.resize(kPreviewProcessChunkFrames);
 
   if (channels == 1u) {
-    for (uint32_t frame = 0; frame < frames; ++frame) {
-      float program = nextProgramSample(samples[frame]);
+    for (uint32_t offset = 0; offset < frames;
+         offset += kPreviewProcessChunkFrames) {
+      uint32_t batch = std::min<uint32_t>(kPreviewProcessChunkFrames,
+                                          frames - offset);
+      for (uint32_t frame = 0; frame < batch; ++frame) {
+        float program = nextProgramSample(samples[offset + frame]);
+        float envelopeFactor = std::max(0.0f, 1.0f + modulationIndex * program);
+        float envelope = carrierPeak * envelopeFactor;
+        monoScratch[frame] = envelope * std::cos(carrierPhase);
+        carrierPhase += carrierStep;
+        if (carrierPhase >= kRadioTwoPi) carrierPhase -= kRadioTwoPi;
+      }
+      radio.processIfReal(monoScratch.data(), batch);
+      for (uint32_t frame = 0; frame < batch; ++frame) {
+        samples[offset + frame] = monoScratch[frame];
+      }
+    }
+    return;
+  }
+
+  float foldGain = 1.0f / static_cast<float>(channels);
+  for (uint32_t offset = 0; offset < frames;
+       offset += kPreviewProcessChunkFrames) {
+    uint32_t batch =
+        std::min<uint32_t>(kPreviewProcessChunkFrames, frames - offset);
+    for (uint32_t frame = 0; frame < batch; ++frame) {
+      float sum = 0.0f;
+      size_t base = static_cast<size_t>(offset + frame) * channels;
+      for (uint32_t ch = 0; ch < channels; ++ch) {
+        sum += samples[base + ch];
+      }
+      float program = nextProgramSample(sum * foldGain);
       float envelopeFactor = std::max(0.0f, 1.0f + modulationIndex * program);
       float envelope = carrierPeak * envelopeFactor;
       monoScratch[frame] = envelope * std::cos(carrierPhase);
       carrierPhase += carrierStep;
       if (carrierPhase >= kRadioTwoPi) carrierPhase -= kRadioTwoPi;
     }
-    radio.processIfReal(monoScratch.data(), frames);
-    for (uint32_t frame = 0; frame < frames; ++frame) {
-      samples[frame] = monoScratch[frame];
-    }
-    return;
-  }
 
-  float foldGain = 1.0f / static_cast<float>(channels);
-  for (uint32_t frame = 0; frame < frames; ++frame) {
-    float sum = 0.0f;
-    size_t base = static_cast<size_t>(frame) * channels;
-    for (uint32_t ch = 0; ch < channels; ++ch) {
-      sum += samples[base + ch];
-    }
-    float program = nextProgramSample(sum * foldGain);
-    float envelopeFactor = std::max(0.0f, 1.0f + modulationIndex * program);
-    float envelope = carrierPeak * envelopeFactor;
-    monoScratch[frame] = envelope * std::cos(carrierPhase);
-    carrierPhase += carrierStep;
-    if (carrierPhase >= kRadioTwoPi) carrierPhase -= kRadioTwoPi;
-  }
+    radio.processIfReal(monoScratch.data(), batch);
 
-  radio.processIfReal(monoScratch.data(), frames);
-
-  for (uint32_t frame = 0; frame < frames; ++frame) {
-    float y = monoScratch[frame];
-    size_t base = static_cast<size_t>(frame) * channels;
-    for (uint32_t ch = 0; ch < channels; ++ch) {
-      samples[base + ch] = y;
+    for (uint32_t frame = 0; frame < batch; ++frame) {
+      float y = monoScratch[frame];
+      size_t base = static_cast<size_t>(offset + frame) * channels;
+      for (uint32_t ch = 0; ch < channels; ++ch) {
+        samples[base + ch] = y;
+      }
     }
   }
 }
