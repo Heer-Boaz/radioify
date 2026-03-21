@@ -130,10 +130,19 @@ struct CurrentDrivenTransformerSample {
   float secondaryCurrent = 0.0f;
 };
 
+struct KorenTriodeModel {
+  double mu = 1.0;
+  double ex = 1.5;
+  double kg1 = 1.0;
+  double kp = 1.0;
+  double kvb = 1.0;
+};
+
 struct TriodeOperatingPoint {
   float plateVolts = 0.0f;
   float plateCurrentAmps = 0.0f;
   float rpOhms = 0.0f;
+  KorenTriodeModel model{};
 };
 
 struct PentodeOperatingPoint {
@@ -1046,7 +1055,7 @@ struct RadioOutputClipNode {
     float tubeLoadResistanceOhms = 0.0f;
     float tubePlateKneeVolts = 0.0f;
     float tubeGridSoftnessVolts = 0.0f;
-    float tubeModelCutoffVolts = 0.0f;
+    KorenTriodeModel tubeTriodeModel{};
     float tubePlateResistanceOhms = 0.0f;
     float operatingPointToleranceVolts = 35.0f;
     float tubePlateVoltage = 0.0f;
@@ -1103,7 +1112,7 @@ struct RadioOutputClipNode {
     float tubePlateKneeVolts = 0.0f;
     float tubeGridSoftnessVolts = 0.0f;
     float tubeGridCurrentResistanceOhms = 0.0f;
-    float tubeModelCutoffVolts = 0.0f;
+    KorenTriodeModel tubeTriodeModel{};
     float tubePlateResistanceOhms = 0.0f;
     float operatingPointToleranceVolts = 35.0f;
     float tubePlateVoltage = 0.0f;
@@ -1130,7 +1139,7 @@ struct RadioOutputClipNode {
     float outputTubePlateToPlateLoadOhms = 0.0f;
     float outputTubePlateKneeVolts = 0.0f;
     float outputTubeGridSoftnessVolts = 0.0f;
-    float outputTubeModelCutoffVolts = 0.0f;
+    KorenTriodeModel outputTubeTriodeModel{};
     float outputTubePlateResistanceOhms = 0.0f;
     float outputGridAVolts = 0.0f;
     float outputGridBVolts = 0.0f;

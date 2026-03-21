@@ -54,16 +54,35 @@ static inline float softplusVolts(float x, float softnessVolts) {
   return slope * std::log1p(std::exp(y));
 }
 
-static float deviceTriodePlateCurrent(float gridVolts,
-                                      float plateVolts,
-                                      float biasVolts,
-                                      float cutoffVolts,
-                                      float quiescentPlateVolts,
-                                      float quiescentPlateCurrentAmps,
-                                      float mutualConductanceSiemens,
-                                      float mu,
-                                      float plateKneeVolts,
-                                      float gridSoftnessVolts);
+static inline double stableLog1pExp(double x) {
+  if (x > 50.0) return x;
+  if (x < -50.0) return std::exp(x);
+  return std::log1p(std::exp(x));
+}
+
+static KorenTriodeModel makeKorenTriodeModel(double mu,
+                                             double kg1,
+                                             double kp,
+                                             double kvb) {
+  assert(std::isfinite(mu) && mu > 0.0);
+  assert(std::isfinite(kg1) && kg1 > 0.0);
+  assert(std::isfinite(kp) && kp > 0.0);
+  assert(std::isfinite(kvb) && kvb > 0.0);
+
+  KorenTriodeModel m{};
+  m.mu = mu;
+  m.ex = 1.5;
+  m.kg1 = kg1;
+  m.kp = kp;
+  m.kvb = kvb;
+  return m;
+}
+
+static double korenTriodePlateCurrent(double vgk,
+                                      double vpk,
+                                      const KorenTriodeModel& m);
+
+static bool solveLinear3x3(float a[3][3], float b[3], float x[3]);
 
 static float deviceTubePlateCurrent(float gridVolts,
                                     float plateVolts,
@@ -77,48 +96,132 @@ static float deviceTubePlateCurrent(float gridVolts,
                                     float plateKneeVolts,
                                     float gridSoftnessVolts);
 
-template <typename Fn>
-static float finiteDifferenceDerivative(Fn&& fn, float x, float delta) {
-  float safeDelta = std::max(delta, 1e-4f);
-  float high = fn(x + safeDelta);
-  float low = fn(x - safeDelta);
-  return (high - low) / (2.0f * safeDelta);
+template <typename Fn, typename T>
+static T finiteDifferenceDerivative(Fn&& fn, T x, T delta) {
+  T safeDelta = std::max(delta, static_cast<T>(1e-4));
+  T high = fn(x + safeDelta);
+  T low = fn(x - safeDelta);
+  return (high - low) / (static_cast<T>(2.0) * safeDelta);
 }
 
-static float fitTriodeModelCutoffVolts(float biasVolts,
-                                       float plateVolts,
-                                       float plateCurrentAmps,
-                                       float mutualConductanceSiemens,
-                                       float mu,
-                                       float plateKneeVolts,
-                                       float gridSoftnessVolts) {
-  float safePlateVolts = std::max(plateVolts, 1.0f);
-  float safePlateCurrent = std::max(plateCurrentAmps, 1e-6f);
-  float safeMu = std::max(mu, 1e-3f);
-  float controlQ = biasVolts + safePlateVolts / safeMu;
-  float searchMin = std::min(controlQ - 60.0f, biasVolts - 80.0f);
-  float searchMax = controlQ + 6.0f;
-  float bestCutoff = searchMin;
-  float bestError = std::numeric_limits<float>::infinity();
-  constexpr int kSteps = 256;
-  for (int i = 0; i <= kSteps; ++i) {
-    float t = static_cast<float>(i) / static_cast<float>(kSteps);
-    float cutoffVolts = searchMin + (searchMax - searchMin) * t;
-    float gmEstimate = finiteDifferenceDerivative(
-        [&](float gridVolts) {
-          return deviceTriodePlateCurrent(
-              gridVolts, safePlateVolts, biasVolts, cutoffVolts, safePlateVolts,
-              safePlateCurrent, mutualConductanceSiemens, mu, plateKneeVolts,
-              gridSoftnessVolts);
-        },
-        biasVolts, 0.02f);
-    float error = std::fabs(gmEstimate - mutualConductanceSiemens);
-    if (error < bestError) {
-      bestError = error;
-      bestCutoff = cutoffVolts;
+struct KorenTriodeMetrics {
+  double currentAmps = 0.0;
+  double gmSiemens = 0.0;
+  double gpSiemens = 0.0;
+};
+
+static KorenTriodeMetrics evaluateKorenTriodeMetrics(
+    double vgkQ,
+    double vpkQ,
+    const KorenTriodeModel& m) {
+  KorenTriodeMetrics metrics{};
+  metrics.currentAmps = korenTriodePlateCurrent(vgkQ, vpkQ, m);
+  metrics.gmSiemens = finiteDifferenceDerivative(
+      [&](double vgk) { return korenTriodePlateCurrent(vgk, vpkQ, m); }, vgkQ,
+      0.01);
+  metrics.gpSiemens = finiteDifferenceDerivative(
+      [&](double vpk) { return korenTriodePlateCurrent(vgkQ, vpk, m); }, vpkQ,
+      0.25);
+  return metrics;
+}
+
+static KorenTriodeModel fitKorenTriodeModel(double vgkQ,
+                                            double vpkQ,
+                                            double iqTarget,
+                                            double gmTarget,
+                                            double mu) {
+  assert(std::isfinite(vgkQ));
+  assert(std::isfinite(vpkQ) && vpkQ > 0.0);
+  assert(std::isfinite(iqTarget) && iqTarget > 0.0);
+  assert(std::isfinite(gmTarget) && gmTarget > 0.0);
+  assert(std::isfinite(mu) && mu > 0.0);
+
+  double gpTarget = gmTarget / mu;
+  double kpInit = 100.0;
+  double kvbInit = std::max(vpkQ * vpkQ, 1.0);
+  KorenTriodeModel initShape = makeKorenTriodeModel(mu, 1.0, kpInit, kvbInit);
+  double initCurrent = korenTriodePlateCurrent(vgkQ, vpkQ, initShape);
+  double kg1Init =
+      (initCurrent > 0.0)
+          ? (initCurrent / iqTarget)
+          : (std::pow(std::max(vpkQ, 1.0), initShape.ex) / iqTarget);
+
+  double u[3] = {std::log(kg1Init), std::log(kpInit), std::log(kvbInit)};
+  double bestU[3] = {u[0], u[1], u[2]};
+  double bestNorm = std::numeric_limits<double>::infinity();
+
+  auto evalResiduals = [&](const double params[3], double residuals[3]) {
+    KorenTriodeModel model = makeKorenTriodeModel(
+        mu, std::exp(params[0]), std::exp(params[1]), std::exp(params[2]));
+    KorenTriodeMetrics metrics = evaluateKorenTriodeMetrics(vgkQ, vpkQ, model);
+    residuals[0] = metrics.currentAmps / iqTarget - 1.0;
+    residuals[1] = metrics.gmSiemens / gmTarget - 1.0;
+    residuals[2] = metrics.gpSiemens / gpTarget - 1.0;
+  };
+
+  for (int iter = 0; iter < 16; ++iter) {
+    double f[3] = {};
+    evalResiduals(u, f);
+    double norm = std::fabs(f[0]) + std::fabs(f[1]) + std::fabs(f[2]);
+    if (norm < bestNorm) {
+      bestNorm = norm;
+      bestU[0] = u[0];
+      bestU[1] = u[1];
+      bestU[2] = u[2];
     }
+    if (norm < 1e-8) break;
+
+    float a[3][3] = {};
+    float b[3] = {-static_cast<float>(f[0]), -static_cast<float>(f[1]),
+                  -static_cast<float>(f[2])};
+    for (int col = 0; col < 3; ++col) {
+      double up[3] = {u[0], u[1], u[2]};
+      double um[3] = {u[0], u[1], u[2]};
+      up[col] += 1e-3;
+      um[col] -= 1e-3;
+      double fp[3] = {};
+      double fm[3] = {};
+      evalResiduals(up, fp);
+      evalResiduals(um, fm);
+      for (int row = 0; row < 3; ++row) {
+        a[row][col] = static_cast<float>((fp[row] - fm[row]) / 2e-3);
+      }
+    }
+
+    float delta[3] = {};
+    if (!solveLinear3x3(a, b, delta)) break;
+
+    double lambda = 1.0;
+    double candidateBestNorm = bestNorm;
+    double candidateBestU[3] = {u[0], u[1], u[2]};
+    for (int ls = 0; ls < 8; ++ls) {
+      double candU[3] = {u[0] + lambda * delta[0], u[1] + lambda * delta[1],
+                         u[2] + lambda * delta[2]};
+      double candF[3] = {};
+      evalResiduals(candU, candF);
+      double candNorm =
+          std::fabs(candF[0]) + std::fabs(candF[1]) + std::fabs(candF[2]);
+      if (candNorm < candidateBestNorm) {
+        candidateBestNorm = candNorm;
+        candidateBestU[0] = candU[0];
+        candidateBestU[1] = candU[1];
+        candidateBestU[2] = candU[2];
+      }
+      lambda *= 0.5;
+    }
+
+    u[0] = candidateBestU[0];
+    u[1] = candidateBestU[1];
+    u[2] = candidateBestU[2];
+
+    double maxDelta =
+        std::max(std::fabs(delta[0]),
+                 std::max(std::fabs(delta[1]), std::fabs(delta[2])));
+    if (maxDelta < 1e-6) break;
   }
-  return bestCutoff;
+
+  return makeKorenTriodeModel(mu, std::exp(bestU[0]), std::exp(bestU[1]),
+                              std::exp(bestU[2]));
 }
 
 static float fitPentodeModelCutoffVolts(float biasVolts,
@@ -226,48 +329,27 @@ static TriodeOperatingPoint solveTriodeOperatingPoint(
     float targetPlateVolts,
     float targetPlateCurrentAmps,
     float targetMutualConductanceSiemens,
-    float mu,
-    float plateKneeVolts,
-    float gridSoftnessVolts,
-    float& fittedCutoffVolts) {
-  auto solveOnce = [&](float referencePlateVolts,
-                       float referencePlateCurrentAmps) {
-    float safeReferencePlate = std::max(referencePlateVolts, 1.0f);
-    float safeReferenceCurrent = std::max(referencePlateCurrentAmps, 1e-6f);
-    fittedCutoffVolts = fitTriodeModelCutoffVolts(
-        biasVolts, safeReferencePlate, safeReferenceCurrent,
-        targetMutualConductanceSiemens, mu, plateKneeVolts, gridSoftnessVolts);
-    float solvedPlateVolts = solveLoadLinePlateVoltage(
-        plateSupplyVolts, loadResistanceOhms, safeReferencePlate,
-        [&](float plateVolts) {
-          return deviceTriodePlateCurrent(
-              biasVolts, plateVolts, biasVolts, fittedCutoffVolts,
-              safeReferencePlate, safeReferenceCurrent,
-              targetMutualConductanceSiemens, mu, plateKneeVolts,
-              gridSoftnessVolts);
-        });
-    float solvedPlateCurrent = deviceTriodePlateCurrent(
-        biasVolts, solvedPlateVolts, biasVolts, fittedCutoffVolts,
-        safeReferencePlate, safeReferenceCurrent, targetMutualConductanceSiemens,
-        mu, plateKneeVolts, gridSoftnessVolts);
-    float plateSlope = finiteDifferenceDerivative(
-        [&](float plateVolts) {
-          return deviceTriodePlateCurrent(
-              biasVolts, std::max(plateVolts, 0.0f), biasVolts,
-              fittedCutoffVolts, solvedPlateVolts,
-              std::max(solvedPlateCurrent, 1e-6f),
-              targetMutualConductanceSiemens, mu, plateKneeVolts,
-              gridSoftnessVolts);
-        },
-        solvedPlateVolts, 0.5f);
-    float rpOhms = 1.0f / std::max(std::fabs(plateSlope), 1e-9f);
-    return TriodeOperatingPoint{solvedPlateVolts, solvedPlateCurrent, rpOhms};
-  };
-
-  TriodeOperatingPoint solved =
-      solveOnce(targetPlateVolts, targetPlateCurrentAmps);
-  solved = solveOnce(solved.plateVolts, solved.plateCurrentAmps);
-  return solved;
+    float mu) {
+  KorenTriodeModel model = fitKorenTriodeModel(
+      biasVolts, targetPlateVolts, targetPlateCurrentAmps,
+      targetMutualConductanceSiemens, mu);
+  float solvedPlateVolts = solveLoadLinePlateVoltage(
+      plateSupplyVolts, loadResistanceOhms, targetPlateVolts,
+      [&](float plateVolts) {
+        return static_cast<float>(
+            korenTriodePlateCurrent(biasVolts, plateVolts, model));
+      });
+  float solvedPlateCurrent = static_cast<float>(
+      korenTriodePlateCurrent(biasVolts, solvedPlateVolts, model));
+  float plateSlope = finiteDifferenceDerivative(
+      [&](float plateVolts) {
+        return static_cast<float>(
+            korenTriodePlateCurrent(biasVolts, plateVolts, model));
+      },
+      solvedPlateVolts, 0.5f);
+  float rpOhms = 1.0f / std::max(std::fabs(plateSlope), 1e-9f);
+  return TriodeOperatingPoint{solvedPlateVolts, solvedPlateCurrent, rpOhms,
+                              model};
 }
 
 static PentodeOperatingPoint solvePentodeOperatingPoint(
@@ -461,29 +543,22 @@ static float processResistorLoadedTubeStage(float gridVolts,
   return quiescentPlate - plateVoltage;
 }
 
-static float processResistorLoadedTriodeStage(float gridVolts,
-                                              float supplyScale,
-                                              float plateSupplyVolts,
-                                              float quiescentPlateVolts,
-                                              float biasVolts,
-                                              float cutoffVolts,
-                                              float quiescentPlateCurrentAmps,
-                                              float mutualConductanceSiemens,
-                                              float mu,
-                                              float loadResistanceOhms,
-                                              float plateKneeVolts,
-                                              float gridSoftnessVolts,
-                                              float& plateVoltageState) {
+static float processResistorLoadedTriodeStage(
+    float gridVolts,
+    float supplyScale,
+    float plateSupplyVolts,
+    float quiescentPlateVolts,
+    const KorenTriodeModel& model,
+    float loadResistanceOhms,
+    float& plateVoltageState) {
   float supply = std::max(plateSupplyVolts * supplyScale, 1.0f);
   float plateVoltage = (plateVoltageState > 0.0f)
                            ? plateVoltageState
                            : std::clamp(quiescentPlateVolts * supplyScale, 0.0f,
                                         supply);
   for (int i = 0; i < 4; ++i) {
-    float current = deviceTriodePlateCurrent(
-        gridVolts, plateVoltage, biasVolts, cutoffVolts,
-        quiescentPlateVolts * supplyScale, quiescentPlateCurrentAmps,
-        mutualConductanceSiemens, mu, plateKneeVolts, gridSoftnessVolts);
+    float current =
+        static_cast<float>(korenTriodePlateCurrent(gridVolts, plateVoltage, model));
     float targetPlate =
         std::clamp(supply - current * std::max(loadResistanceOhms, 1.0f), 0.0f,
                    supply);
@@ -640,38 +715,21 @@ static bool solveLinear5x5(float a[5][5], float b[5], float x[5]) {
   return true;
 }
 
-static float deviceTriodePlateCurrent(float gridVolts,
-                                      float plateVolts,
-                                      float biasVolts,
-                                      float cutoffVolts,
-                                      float quiescentPlateVolts,
-                                      float quiescentPlateCurrentAmps,
-                                      float mutualConductanceSiemens,
-                                      float mu,
-                                      float plateKneeVolts,
-                                      float gridSoftnessVolts) {
-  float safeMu = std::max(mu, 1e-3f);
-  float controlQ = biasVolts + quiescentPlateVolts / safeMu;
-  float control = gridVolts + plateVolts / safeMu;
-  float activationQ =
-      softplusVolts(controlQ - cutoffVolts, gridSoftnessVolts);
-  float activation =
-      softplusVolts(control - cutoffVolts, gridSoftnessVolts);
-  activationQ = std::max(activationQ, 1e-5f);
-  activation = std::max(activation, 0.0f);
-  float exponent = clampf(mutualConductanceSiemens * activationQ /
-                              std::max(quiescentPlateCurrentAmps, 1e-9f),
-                          1.05f, 6.0f);
-  float kneeQ =
-      1.0f - std::exp(-std::max(quiescentPlateVolts, 0.0f) /
-                      std::max(plateKneeVolts, 1e-3f));
-  float knee =
-      1.0f - std::exp(-std::max(plateVolts, 0.0f) /
-                      std::max(plateKneeVolts, 1e-3f));
-  float perveance =
-      quiescentPlateCurrentAmps /
-      (std::pow(activationQ, exponent) * std::max(kneeQ, 1e-6f));
-  return perveance * std::pow(activation, exponent) * std::max(knee, 0.0f);
+static double korenTriodePlateCurrent(double vgk,
+                                      double vpk,
+                                      const KorenTriodeModel& m) {
+  if (vpk <= 0.0) {
+    return 0.0;
+  }
+
+  double term = (1.0 / m.mu) + vgk / std::sqrt(m.kvb + vpk * vpk);
+  double e1 = (vpk / m.kp) * stableLog1pExp(m.kp * term);
+
+  if (e1 <= 0.0) {
+    return 0.0;
+  }
+
+  return std::pow(e1, m.ex) / m.kg1;
 }
 
 static inline uint32_t hash32(uint32_t x) {
@@ -987,14 +1045,9 @@ struct DriverInterstageSolveResult {
 static DriverInterstageSolveResult solveDriverInterstageNoCap(
     const CurrentDrivenTransformer& transformer,
     float controlGridVolts,
-    float driverBiasVolts,
     float driverPlateQuiescent,
     float driverQuiescentCurrent,
-    float driverMutualConductanceSiemens,
-    float driverMu,
-    float driverPlateKneeVolts,
-    float driverGridSoftnessVolts,
-    float driverModelCutoffVolts,
+    const KorenTriodeModel& driverTriodeModel,
     float primaryLoadResistanceOhms,
     float outputTubeBiasVolts,
     float outputGridLeakResistanceOhms,
@@ -1039,11 +1092,8 @@ static DriverInterstageSolveResult solveDriverInterstageNoCap(
     for (int iter = 0; iter < 12; ++iter) {
       float driverPlateVolts = driverPlateQuiescent - vp;
 
-      float driverPlateCurrentAbs = deviceTriodePlateCurrent(
-          controlGridVolts, std::max(driverPlateVolts, 0.0f), driverBiasVolts,
-          driverModelCutoffVolts, driverPlateQuiescent,
-          driverQuiescentCurrent, driverMutualConductanceSiemens, driverMu,
-          driverPlateKneeVolts, driverGridSoftnessVolts);
+      float driverPlateCurrentAbs = static_cast<float>(korenTriodePlateCurrent(
+          controlGridVolts, driverPlateVolts, driverTriodeModel));
 
       float idiff = interstageDifferentialGridCurrent(
           vs, outputTubeBiasVolts, outputGridLeakResistanceOhms,
@@ -1054,11 +1104,9 @@ static DriverInterstageSolveResult solveDriverInterstageNoCap(
           outputGridCurrentResistanceOhms);
 
       auto driverPlateCurrentFromPlateVolts = [&](float plateVolts) {
-        return deviceTriodePlateCurrent(
-            controlGridVolts, std::max(plateVolts, 0.0f), driverBiasVolts,
-            driverModelCutoffVolts, driverPlateQuiescent,
-            driverQuiescentCurrent, driverMutualConductanceSiemens, driverMu,
-            driverPlateKneeVolts, driverGridSoftnessVolts);
+        return static_cast<float>(
+            korenTriodePlateCurrent(controlGridVolts, plateVolts,
+                                    driverTriodeModel));
       };
 
       float dIdriver_dVp = finiteDifferenceDerivative(
@@ -1117,11 +1165,8 @@ static DriverInterstageSolveResult solveDriverInterstageNoCap(
         }
 
         float candPlateVolts = driverPlateQuiescent - candVp;
-        float candDriverAbs = deviceTriodePlateCurrent(
-            controlGridVolts, std::max(candPlateVolts, 0.0f), driverBiasVolts,
-            driverModelCutoffVolts, driverPlateQuiescent,
-            driverQuiescentCurrent, driverMutualConductanceSiemens, driverMu,
-            driverPlateKneeVolts, driverGridSoftnessVolts);
+        float candDriverAbs = static_cast<float>(korenTriodePlateCurrent(
+            controlGridVolts, candPlateVolts, driverTriodeModel));
 
         float candIdiff = interstageDifferentialGridCurrent(
             candVs, outputTubeBiasVolts, outputGridLeakResistanceOhms,
@@ -1177,11 +1222,9 @@ static DriverInterstageSolveResult solveDriverInterstageNoCap(
   }
 
   float finalDriverPlateVolts = driverPlateQuiescent - vp;
-  float finalDriverPlateCurrentAbs = deviceTriodePlateCurrent(
-      controlGridVolts, std::max(finalDriverPlateVolts, 0.0f), driverBiasVolts,
-      driverModelCutoffVolts, driverPlateQuiescent, driverQuiescentCurrent,
-      driverMutualConductanceSiemens, driverMu, driverPlateKneeVolts,
-      driverGridSoftnessVolts);
+  float finalDriverPlateCurrentAbs = static_cast<float>(
+      korenTriodePlateCurrent(controlGridVolts, finalDriverPlateVolts,
+                              driverTriodeModel));
 
   return {{vp, vs, ip, is}, finalDriverPlateCurrentAbs};
 }
@@ -2441,11 +2484,11 @@ void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
       receiver.tubePlateSupplyVolts, receiver.tubeLoadResistanceOhms,
       receiver.tubeBiasVolts, receiver.tubePlateDcVolts,
       receiver.tubePlateCurrentAmps, receiver.tubeMutualConductanceSiemens,
-      receiver.tubeMu, receiver.tubePlateKneeVolts,
-      receiver.tubeGridSoftnessVolts, receiver.tubeModelCutoffVolts);
+      receiver.tubeMu);
   receiver.tubeQuiescentPlateVolts = op.plateVolts;
   receiver.tubeQuiescentPlateCurrentAmps = op.plateCurrentAmps;
   receiver.tubePlateResistanceOhms = op.rpOhms;
+  receiver.tubeTriodeModel = op.model;
   assert((std::fabs(receiver.tubeQuiescentPlateVolts -
                     receiver.tubePlateDcVolts) <=
           receiver.operatingPointToleranceVolts) &&
@@ -2552,40 +2595,16 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   }
   float out = 0.0f;
   float plateCurrent = 0.0f;
-  if (receiver.tubeTriodeConnected) {
-    out = processResistorLoadedTriodeStage(
-        receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
-        receiver.tubePlateSupplyVolts, receiver.tubeQuiescentPlateVolts,
-        receiver.tubeBiasVolts, receiver.tubeModelCutoffVolts,
-        receiver.tubeQuiescentPlateCurrentAmps,
-        receiver.tubeMutualConductanceSiemens,
-        receiver.tubeMu, receiver.tubeLoadResistanceOhms,
-        receiver.tubePlateKneeVolts, receiver.tubeGridSoftnessVolts,
-        receiver.tubePlateVoltage);
-    plateCurrent = deviceTriodePlateCurrent(
-        receiver.tubeBiasVolts + receiver.gridVoltage, receiver.tubePlateVoltage,
-        receiver.tubeBiasVolts, receiver.tubeModelCutoffVolts,
-        receiver.tubeQuiescentPlateVolts, receiver.tubeQuiescentPlateCurrentAmps,
-        receiver.tubeMutualConductanceSiemens, receiver.tubeMu,
-        receiver.tubePlateKneeVolts, receiver.tubeGridSoftnessVolts);
-  } else {
-    out = processResistorLoadedTubeStage(
-        receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
-        receiver.tubePlateSupplyVolts, receiver.tubeQuiescentPlateVolts,
-        receiver.tubeScreenVolts, receiver.tubeBiasVolts,
-        receiver.tubeModelCutoffVolts,
-        receiver.tubeQuiescentPlateCurrentAmps,
-        receiver.tubeMutualConductanceSiemens,
-        receiver.tubeLoadResistanceOhms, receiver.tubePlateKneeVolts,
-        receiver.tubeGridSoftnessVolts, receiver.tubePlateVoltage);
-    plateCurrent = deviceTubePlateCurrent(
-        receiver.tubeBiasVolts + receiver.gridVoltage, receiver.tubePlateVoltage,
-        receiver.tubeScreenVolts, receiver.tubeBiasVolts,
-        receiver.tubeModelCutoffVolts, receiver.tubeQuiescentPlateVolts,
-        receiver.tubeScreenVolts, receiver.tubeQuiescentPlateCurrentAmps,
-        receiver.tubeMutualConductanceSiemens, receiver.tubePlateKneeVolts,
-        receiver.tubeGridSoftnessVolts);
-  }
+  assert(receiver.tubeTriodeConnected &&
+         "Receiver audio stage expects a triode model");
+  out = processResistorLoadedTriodeStage(
+      receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
+      receiver.tubePlateSupplyVolts, receiver.tubeQuiescentPlateVolts,
+      receiver.tubeTriodeModel, receiver.tubeLoadResistanceOhms,
+      receiver.tubePlateVoltage);
+  plateCurrent = static_cast<float>(korenTriodePlateCurrent(
+      receiver.tubeBiasVolts + receiver.gridVoltage, receiver.tubePlateVoltage,
+      receiver.tubeTriodeModel));
   if (radio.calibration.enabled) {
     radio.calibration.maxReceiverPlateCurrentAmps =
         std::max(radio.calibration.maxReceiverPlateCurrentAmps, plateCurrent);
@@ -2648,12 +2667,11 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   TriodeOperatingPoint driverOp = solveTriodeOperatingPoint(
       power.tubePlateSupplyVolts, power.interstagePrimaryResistanceOhms,
       power.tubeBiasVolts, power.tubePlateDcVolts, power.tubePlateCurrentAmps,
-      power.tubeMutualConductanceSiemens, power.tubeMu,
-      power.tubePlateKneeVolts, power.tubeGridSoftnessVolts,
-      power.tubeModelCutoffVolts);
+      power.tubeMutualConductanceSiemens, power.tubeMu);
   power.tubeQuiescentPlateVolts = driverOp.plateVolts;
   power.tubeQuiescentPlateCurrentAmps = driverOp.plateCurrentAmps;
   power.tubePlateResistanceOhms = driverOp.rpOhms;
+  power.tubeTriodeModel = driverOp.model;
   assert((std::fabs(power.tubeQuiescentPlateVolts - power.tubePlateDcVolts) <=
           power.operatingPointToleranceVolts) &&
          "6F6 driver operating point diverged from the preset target");
@@ -2662,12 +2680,12 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
       power.outputTubePlateSupplyVolts,
       0.5f * power.outputTransformerPrimaryResistanceOhms,
       power.outputTubeBiasVolts, power.outputTubePlateDcVolts,
-      power.outputTubePlateCurrentAmps, power.outputTubeMutualConductanceSiemens,
-      power.outputTubeMu, power.outputTubePlateKneeVolts,
-      power.outputTubeGridSoftnessVolts, power.outputTubeModelCutoffVolts);
+      power.outputTubePlateCurrentAmps,
+      power.outputTubeMutualConductanceSiemens, power.outputTubeMu);
   power.outputTubeQuiescentPlateVolts = outputOp.plateVolts;
   power.outputTubeQuiescentPlateCurrentAmps = outputOp.plateCurrentAmps;
   power.outputTubePlateResistanceOhms = outputOp.rpOhms;
+  power.outputTubeTriodeModel = outputOp.model;
   assert((std::fabs(power.outputTubeQuiescentPlateVolts -
                     power.outputTubePlateDcVolts) <=
           power.outputOperatingPointToleranceVolts) &&
@@ -2751,13 +2769,8 @@ float RadioPowerNode::process(Radio1938& radio,
          "Interstage driver solve requires triode-connected 6F6 operation");
   float driverPlateQuiescent =
       std::max(power.tubeQuiescentPlateVolts * supplyScale, 1.0f);
-  float driverQuiescentCurrent =
-      deviceTriodePlateCurrent(
-          power.tubeBiasVolts, driverPlateQuiescent, power.tubeBiasVolts,
-          power.tubeModelCutoffVolts, driverPlateQuiescent,
-          power.tubeQuiescentPlateCurrentAmps,
-          power.tubeMutualConductanceSiemens, power.tubeMu,
-          power.tubePlateKneeVolts, power.tubeGridSoftnessVolts);
+  float driverQuiescentCurrent = static_cast<float>(korenTriodePlateCurrent(
+      power.tubeBiasVolts, driverPlateQuiescent, power.tubeTriodeModel));
   struct SolvedTransformerDrive {
     float driveCurrent = 0.0f;
     CurrentDrivenTransformerSample sample{};
@@ -2845,11 +2858,9 @@ float RadioPowerNode::process(Radio1938& radio,
     return SolvedTransformerDrive{bestDriveCurrent, bestSample};
   };
   auto interstageSolved = solveDriverInterstageNoCap(
-      power.interstageTransformer, controlGridVolts, power.tubeBiasVolts,
-      driverPlateQuiescent, driverQuiescentCurrent,
-      power.tubeMutualConductanceSiemens, power.tubeMu,
-      power.tubePlateKneeVolts, power.tubeGridSoftnessVolts,
-      power.tubeModelCutoffVolts, 0.0f, power.outputTubeBiasVolts,
+      power.interstageTransformer, controlGridVolts, driverPlateQuiescent,
+      driverQuiescentCurrent, power.tubeTriodeModel, 0.0f,
+      power.outputTubeBiasVolts,
       power.outputGridLeakResistanceOhms,
       power.outputGridCurrentResistanceOhms);
   const auto& interstageSample = interstageSolved.transformer;
@@ -2896,18 +2907,12 @@ float RadioPowerNode::process(Radio1938& radio,
       [&](float primaryVoltageGuess) {
         float plateA = outputPlateQuiescent - 0.5f * primaryVoltageGuess;
         float plateB = outputPlateQuiescent + 0.5f * primaryVoltageGuess;
-        float plateCurrentA = deviceTriodePlateCurrent(
+        float plateCurrentA = static_cast<float>(korenTriodePlateCurrent(
             power.outputTubeBiasVolts + power.outputGridAVolts, plateA,
-            power.outputTubeBiasVolts, power.outputTubeModelCutoffVolts,
-            outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
-            power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
-            power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
-        float plateCurrentB = deviceTriodePlateCurrent(
+            power.outputTubeTriodeModel));
+        float plateCurrentB = static_cast<float>(korenTriodePlateCurrent(
             power.outputTubeBiasVolts + power.outputGridBVolts, plateB,
-            power.outputTubeBiasVolts, power.outputTubeModelCutoffVolts,
-            outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
-            power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
-            power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
+            power.outputTubeTriodeModel));
         return 0.5f * (plateCurrentA - plateCurrentB);
       },
       power.outputTransformer.primaryVoltage,
@@ -2918,18 +2923,12 @@ float RadioPowerNode::process(Radio1938& radio,
   float actualDriverCurrent = interstageSolved.driverPlateCurrentAbs;
   float outputPlateA = outputPlateQuiescent - 0.5f * outputSample.primaryVoltage;
   float outputPlateB = outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
-  float actualPlateCurrentA = deviceTriodePlateCurrent(
+  float actualPlateCurrentA = static_cast<float>(korenTriodePlateCurrent(
       power.outputTubeBiasVolts + power.outputGridAVolts, outputPlateA,
-      power.outputTubeBiasVolts, power.outputTubeModelCutoffVolts,
-      outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
-      power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
-      power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
-  float actualPlateCurrentB = deviceTriodePlateCurrent(
+      power.outputTubeTriodeModel));
+  float actualPlateCurrentB = static_cast<float>(korenTriodePlateCurrent(
       power.outputTubeBiasVolts + power.outputGridBVolts, outputPlateB,
-      power.outputTubeBiasVolts, power.outputTubeModelCutoffVolts,
-      outputPlateQuiescent, power.outputTubeQuiescentPlateCurrentAmps,
-      power.outputTubeMutualConductanceSiemens, power.outputTubeMu,
-      power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts);
+      power.outputTubeTriodeModel));
   y = outputSample.secondaryVoltage;
   if (power.postLpHz > 0.0f) {
     y = power.postLpf.process(y);
