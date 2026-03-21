@@ -1120,7 +1120,7 @@ static bool applyOutputVolumeSafety(float* samples,
   size_t count = static_cast<size_t>(frames) * channels;
   for (size_t i = 0; i < count; ++i) {
     float x = samples[i] * volume;
-    if (std::fabs(x) > 1.02f) limited = true;
+    if (std::fabs(x) > 1.0f) limited = true;
     x = softLimitOutputSample(x);
     if (std::fabs(x) >= kOutputClamp) limited = true;
     samples[i] = std::clamp(x, -kOutputClamp, kOutputClamp);
