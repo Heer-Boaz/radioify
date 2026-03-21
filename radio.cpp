@@ -3802,6 +3802,33 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.noiseConfig.crackleAmpScale = 0.08f;
   radio.noiseConfig.crackleRateScale = 0.06f;
 
+  // --- Noise shaping (tube hiss spectral character for 1930s receiver) ---
+  radio.noiseRuntime.hum.noiseHpHz = 500.0f;
+  radio.noiseRuntime.hum.noiseLpHz = 5500.0f;
+  radio.noiseRuntime.hum.filterQ = kRadioBiquadQ;
+  radio.noiseRuntime.hum.scAttackMs = 2.0f;
+  radio.noiseRuntime.hum.scReleaseMs = 80.0f;
+  radio.noiseRuntime.hum.crackleDecayMs = 8.0f;
+  radio.noiseRuntime.hum.sidechainMaskRef = 0.15f;
+  radio.noiseRuntime.hum.hissMaskDepth = 0.5f;
+  radio.noiseRuntime.hum.burstMaskDepth = 0.3f;
+  radio.noiseRuntime.hum.pinkFastPole = 0.85f;
+  radio.noiseRuntime.hum.pinkSlowPole = 0.97f;
+  radio.noiseRuntime.hum.brownStep = 0.02f;
+  radio.noiseRuntime.hum.hissDriftPole = 0.9992f;
+  radio.noiseRuntime.hum.hissDriftNoise = 0.002f;
+  radio.noiseRuntime.hum.hissDriftSlowPole = 0.9998f;
+  radio.noiseRuntime.hum.hissDriftSlowNoise = 0.001f;
+  radio.noiseRuntime.hum.whiteMix = 0.35f;
+  radio.noiseRuntime.hum.pinkFastMix = 0.45f;
+  radio.noiseRuntime.hum.pinkDifferenceMix = 0.12f;
+  radio.noiseRuntime.hum.pinkFastSubtract = 0.6f;
+  radio.noiseRuntime.hum.brownMix = 0.08f;
+  radio.noiseRuntime.hum.hissBase = 0.7f;
+  radio.noiseRuntime.hum.hissDriftDepth = 0.3f;
+  radio.noiseRuntime.hum.hissDriftSlowMix = 0.04f;
+  radio.noiseRuntime.hum.humSecondHarmonicMix = 0.42f;
+
   // --- Speaker: 12" electrodynamic field-coil driver (Philco 37-116) ---
   radio.speakerStage.drive = 1.0f;
   radio.speakerStage.speaker.suspensionHz = 65.0f;
