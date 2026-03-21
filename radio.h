@@ -1366,6 +1366,7 @@ struct RadioOutputClipNode {
 
   struct OutputNodeState {
     float digitalReferenceSpeakerVoltsPeak = 1.0f;
+    float digitalMakeupGain = 1.0f;
     float clipOsPrev = 0.0f;
     Biquad clipOsLpIn;
     Biquad clipOsLpOut;

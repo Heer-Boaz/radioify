@@ -493,6 +493,11 @@ static float scalePhysicalSpeakerVoltsToDigital(const Radio1938& radio,
          requirePositiveFinite(radio.output.digitalReferenceSpeakerVoltsPeak);
 }
 
+static float applyDigitalMakeupGain(const Radio1938& radio, float yDigital) {
+  if (!radio.graph.isEnabled(StageId::Power)) return yDigital;
+  return yDigital * std::max(radio.output.digitalMakeupGain, 0.0f);
+}
+
 static float deviceTubePlateCurrent(float gridVolts,
                                     float plateVolts,
                                     float screenVolts,
@@ -4031,6 +4036,7 @@ static void processRadioFrames(Radio1938& radio,
         programStartIndex, physEnd);
     // Convert physical speaker volts to digital [-1,1] range.
     float yDigital = scalePhysicalSpeakerVoltsToDigital(radio, yPhysical);
+    yDigital = applyDigitalMakeupGain(radio, yDigital);
     // Digital-domain stages (FinalLimiter, OutputClip).
     yDigital = runProgramPathRange(
         radio, yDigital, ctx, radio.graph.programPathSteps,
@@ -4281,6 +4287,9 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.output.digitalReferenceSpeakerVoltsPeak = std::sqrt(
       2.0f * radio.power.nominalOutputPowerWatts *
       radio.power.outputLoadResistanceOhms);
+  // The physical speaker model lands far below the direct digital path, so add
+  // fixed make-up gain before the safety limiter to restore comparable loudness.
+  radio.output.digitalMakeupGain = 10.0f;
 
   // --- Global oversampling and output clip settings ---
   // The speaker, limiter and output-clip stages use processOversampled2x, so
