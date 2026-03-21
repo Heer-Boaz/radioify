@@ -1006,7 +1006,7 @@ static CurrentDrivenTransformerSample projectNoShuntCap(
     float isPrev = projectedSecondaryCurrent;
     float a[4][4] = {
         {Rp + Lp / dt, M / dt, -1.0f, 0.0f},
-        {M / dt, Rs + Ls / dt, 0.0f, -1.0f},
+        {M / dt, Rs + Ls / dt, 0.0f, +1.0f},
         {1.0f, 0.0f, Gp, 0.0f},
         {0.0f, 1.0f, 0.0f, Gs},
     };
@@ -1143,7 +1143,7 @@ static DriverInterstageSolveResult solveDriverInterstageNoCap(
           (Rp + Lp / dt) * ip + (M / dt) * is - vp -
               ((Lp / dt) * ipPrev + (M / dt) * isPrev),
 
-          (M / dt) * ip + (Rs + Ls / dt) * is - vs -
+          (M / dt) * ip + (Rs + Ls / dt) * is + vs -
               ((M / dt) * ipPrev + (Ls / dt) * isPrev),
 
           ip + Gp * vp - idrive,
@@ -1155,7 +1155,7 @@ static DriverInterstageSolveResult solveDriverInterstageNoCap(
 
       float j[5][5] = {
           {0.0f, Rp + Lp / dt, M / dt, -1.0f, 0.0f},
-          {0.0f, M / dt, Rs + Ls / dt, 0.0f, -1.0f},
+          {0.0f, M / dt, Rs + Ls / dt, 0.0f, +1.0f},
           {-1.0f, 1.0f, 0.0f, Gp, 0.0f},
           {0.0f, 0.0f, 1.0f, 0.0f, dIdiff_dVs},
           {1.0f, 0.0f, 0.0f, dIdriver_dVp, 0.0f},
@@ -1203,7 +1203,7 @@ static DriverInterstageSolveResult solveDriverInterstageNoCap(
             (Rp + Lp / dt) * candIp + (M / dt) * candIs - candVp -
                 ((Lp / dt) * ipPrev + (M / dt) * isPrev),
 
-            (M / dt) * candIp + (Rs + Ls / dt) * candIs - candVs -
+            (M / dt) * candIp + (Rs + Ls / dt) * candIs + candVs -
                 ((M / dt) * ipPrev + (Ls / dt) * isPrev),
 
             candIp + Gp * candVp - candIdrive,
