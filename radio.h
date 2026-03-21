@@ -633,7 +633,7 @@ struct RadioOutputClipNode {
          &RadioInterferenceDerivedNode::update},
     }};
 
-    std::array<ProgramPathStep, 8> programPathSteps{{
+    std::array<ProgramPathStep, 13> programPathSteps{{
         {StageId::Input, "Input", true, &RadioInputNode::process},
         {StageId::FrontEnd, "RFFrontEnd", true, &RadioFrontEndNode::process},
         {StageId::Mixer, "Mixer", true, &RadioMixerNode::process},
@@ -643,6 +643,13 @@ struct RadioOutputClipNode {
          &RadioReceiverCircuitNode::process},
         {StageId::Tone, "Tone", true, &RadioToneNode::process},
         {StageId::Power, "Power", true, &RadioPowerNode::process},
+        {StageId::Noise, "Noise", true, &RadioNoiseNode::process},
+        {StageId::Speaker, "Speaker", true, &RadioSpeakerNode::process},
+        {StageId::Cabinet, "Cabinet", true, &RadioCabinetNode::process},
+        {StageId::FinalLimiter, "FinalLimiter", true,
+         &RadioFinalLimiterNode::process},
+        {StageId::OutputClip, "OutputClip", true,
+         &RadioOutputClipNode::process},
     }};
 
     BlockStep* findBlock(StageId id);
@@ -656,7 +663,7 @@ struct RadioOutputClipNode {
   } graph;
 
   struct RadioLifecycle {
-    std::array<ConfigureStep, 8> configureSteps{{
+    std::array<ConfigureStep, 12> configureSteps{{
         {StageId::Input, "Input", &RadioInputNode::init},
         {StageId::ControlBus, "ControlBus", &RadioControlBusNode::init},
         {StageId::FrontEnd, "RFFrontEnd", &RadioFrontEndNode::init},
@@ -666,18 +673,23 @@ struct RadioOutputClipNode {
          &RadioReceiverCircuitNode::init},
         {StageId::Tone, "Tone", &RadioToneNode::init},
         {StageId::Power, "Power", &RadioPowerNode::init},
+        {StageId::Speaker, "Speaker", &RadioSpeakerNode::init},
+        {StageId::Cabinet, "Cabinet", &RadioCabinetNode::init},
+        {StageId::FinalLimiter, "FinalLimiter", &RadioFinalLimiterNode::init},
+        {StageId::OutputClip, "OutputClip", &RadioOutputClipNode::init},
     }};
 
     std::array<AllocateStep, 0> allocateSteps{};
 
-    std::array<InitializeDependentStateStep, 3> initializeDependentStateSteps{{
+    std::array<InitializeDependentStateStep, 4> initializeDependentStateSteps{{
         {StageId::Tuning, "MagneticTuning", &RadioTuningNode::init},
         {StageId::Demod, "Detector", &RadioDemodNode::init},
         {StageId::InterferenceDerived, "InterferenceDerived",
          &RadioInterferenceDerivedNode::init},
+        {StageId::Noise, "Noise", &RadioNoiseNode::init},
     }};
 
-    std::array<ResetStep, 9> resetSteps{{
+    std::array<ResetStep, 14> resetSteps{{
         {StageId::ControlBus, "ControlBus", &RadioControlBusNode::reset},
         {StageId::Power, "Power", &RadioPowerNode::reset},
         {StageId::Input, "Input", &RadioInputNode::reset},
@@ -688,6 +700,12 @@ struct RadioOutputClipNode {
          &RadioReceiverCircuitNode::reset},
         {StageId::Tone, "Tone", &RadioToneNode::reset},
         {StageId::Demod, "Detector", &RadioDemodNode::reset},
+        {StageId::Noise, "Noise", &RadioNoiseNode::reset},
+        {StageId::Speaker, "Speaker", &RadioSpeakerNode::reset},
+        {StageId::Cabinet, "Cabinet", &RadioCabinetNode::reset},
+        {StageId::FinalLimiter, "FinalLimiter",
+         &RadioFinalLimiterNode::reset},
+        {StageId::OutputClip, "OutputClip", &RadioOutputClipNode::reset},
     }};
 
     void configure(Radio1938& radio, RadioInitContext& initCtx) const;

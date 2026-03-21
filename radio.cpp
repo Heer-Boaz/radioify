@@ -857,7 +857,9 @@ void SeriesRlcBandpass::configure(float newFs,
   seriesResistanceOhms = newSeriesResistanceOhms;
   outputResistanceOhms = newOutputResistanceOhms;
   integrationSubsteps = newIntegrationSubsteps;
-  reset();
+  // Retuning a live LC network changes component values, but it does not
+  // instantaneously zero inductor current or capacitor voltage. Runtime resets
+  // are handled by the owning stage when the radio itself is reset.
 }
 
 void SeriesRlcBandpass::reset() {
@@ -916,7 +918,9 @@ void CoupledTunedTransformer::configure(float newFs,
   couplingCoeff = newCouplingCoeff;
   outputResistanceOhms = newOutputResistanceOhms;
   integrationSubsteps = newIntegrationSubsteps;
-  reset();
+  // Preserve stored magnetic/electric state across retunes. A tuned IF can
+  // move its resonance while currents and capacitor voltages remain continuous;
+  // hard zeroing here causes audible zippering/stutter during AFC/tuning.
 }
 
 void CoupledTunedTransformer::reset() {
@@ -2995,11 +2999,12 @@ void RadioInterferenceDerivedNode::update(Radio1938& radio,
   auto& noiseDerived = radio.noiseDerived;
   ctx.derived.demodIfNoiseAmp =
       noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix;
-  ctx.derived.noiseAmp = 0.0f;
-  ctx.derived.crackleAmp = 0.0f;
-  ctx.derived.crackleRate = 0.0f;
-  ctx.derived.humAmp = 0.0f;
-  ctx.derived.humToneEnabled = false;
+  ctx.derived.noiseAmp =
+      noiseDerived.baseNoiseAmp * radio.globals.postNoiseMix;
+  ctx.derived.crackleAmp = noiseDerived.baseCrackleAmp;
+  ctx.derived.crackleRate = noiseDerived.crackleRate;
+  ctx.derived.humAmp = noiseDerived.baseHumAmp;
+  ctx.derived.humToneEnabled = radio.noiseConfig.enableHumTone;
 }
 
 void RadioNoiseNode::init(Radio1938& radio, RadioInitContext& initCtx) {
@@ -3481,8 +3486,29 @@ static float runProgramPathFromIndex(
   return y;
 }
 
+template <size_t StepCount>
+static float runProgramPathRange(
+    Radio1938& radio,
+    float y,
+    const RadioSampleContext& ctx,
+    const std::array<ProgramPathStep, StepCount>& steps,
+    size_t startIndex,
+    size_t endIndex) {
+  size_t end = std::min(endIndex, static_cast<size_t>(StepCount));
+  for (size_t i = startIndex; i < end; ++i) {
+    const auto& step = steps[i];
+    if (!step.enabled || !step.process) continue;
+    float in = y;
+    y = step.process(radio, y, ctx);
+    updateStageCalibration(radio, step.id, in, y);
+  }
+  return y;
+}
+
 static constexpr size_t kInputProgramStartIndex = 0;
 static constexpr size_t kMixerProgramStartIndex = 2;
+// FinalLimiter and OutputClip operate in the digital domain (post-scaling).
+static constexpr size_t kDigitalProgramStartIndex = 11;
 
 template <typename InputSampleFn, typename OutputSampleFn>
 static void processRadioFrames(Radio1938& radio,
@@ -3499,9 +3525,18 @@ static void processRadioFrames(Radio1938& radio,
     ctx.block = &block;
     runSampleControl(radio, ctx, radio.graph.sampleControlSteps);
     float x = inputSample(frame);
-    float yPhysical = runProgramPathFromIndex(
-        radio, x, ctx, radio.graph.programPathSteps, programStartIndex);
+    // Physical-domain stages (Input through Cabinet).
+    size_t physEnd = std::min(kDigitalProgramStartIndex,
+                              radio.graph.programPathSteps.size());
+    float yPhysical = runProgramPathRange(
+        radio, x, ctx, radio.graph.programPathSteps,
+        programStartIndex, physEnd);
+    // Convert physical speaker volts to digital [-1,1] range.
     float yDigital = scalePhysicalSpeakerVoltsToDigital(radio, yPhysical);
+    // Digital-domain stages (FinalLimiter, OutputClip).
+    yDigital = runProgramPathRange(
+        radio, yDigital, ctx, radio.graph.programPathSteps,
+        physEnd, radio.graph.programPathSteps.size());
     if (radio.calibration.enabled) {
       radio.calibration.maxDigitalOutput =
           std::max(radio.calibration.maxDigitalOutput, std::fabs(yDigital));
@@ -3748,6 +3783,63 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.output.digitalReferenceSpeakerVoltsPeak = std::sqrt(
       2.0f * radio.power.nominalOutputPowerWatts *
       radio.power.outputLoadResistanceOhms);
+
+  // --- Global oversampling and output clip settings ---
+  // The speaker, limiter and output-clip stages use processOversampled2x, so
+  // the oversample factor for biquad anti-alias filters is 2.
+  radio.globals.oversampleFactor = 2.0f;
+  radio.globals.oversampleCutoffFraction = 0.45f;
+  radio.globals.outputClipThreshold = 0.98f;
+  radio.globals.postNoiseMix = 0.35f;
+  radio.globals.noiseFloorAmp = 0.0f;
+
+  // --- Noise configuration (1938 US AC-powered set) ---
+  radio.noiseConfig.enableHumTone = true;
+  radio.noiseConfig.humHzDefault = 60.0f;
+  radio.noiseConfig.noiseWeightRef = 0.15f;
+  radio.noiseConfig.noiseWeightScaleMax = 2.0f;
+  radio.noiseConfig.humAmpScale = 0.12f;
+  radio.noiseConfig.crackleAmpScale = 0.08f;
+  radio.noiseConfig.crackleRateScale = 0.06f;
+
+  // --- Speaker: 12" electrodynamic field-coil driver (Philco 37-116) ---
+  radio.speakerStage.drive = 1.0f;
+  radio.speakerStage.speaker.suspensionHz = 65.0f;
+  radio.speakerStage.speaker.suspensionQ = 0.90f;
+  radio.speakerStage.speaker.suspensionGainDb = 3.5f;
+  radio.speakerStage.speaker.coneBodyHz = 1200.0f;
+  radio.speakerStage.speaker.coneBodyQ = 0.50f;
+  radio.speakerStage.speaker.coneBodyGainDb = 1.5f;
+  radio.speakerStage.speaker.topLpHz = 5500.0f;
+  radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
+  radio.speakerStage.speaker.drive = 1.0f;
+  radio.speakerStage.speaker.limit = 0.0f;
+  radio.speakerStage.speaker.excursionRef = 6.0f;
+  radio.speakerStage.speaker.complianceLossDepth = 0.08f;
+
+  // --- Cabinet: large floor-model console (Philco 37-116) ---
+  radio.cabinet.enabled = true;
+  radio.cabinet.panelHz = 180.0f;
+  radio.cabinet.panelQ = 1.5f;
+  radio.cabinet.panelGainDb = 2.5f;
+  radio.cabinet.chassisHz = 650.0f;
+  radio.cabinet.chassisQ = 0.90f;
+  radio.cabinet.chassisGainDb = -1.5f;
+  radio.cabinet.cavityDipHz = 900.0f;
+  radio.cabinet.cavityDipQ = 2.0f;
+  radio.cabinet.cavityDipGainDb = -3.0f;
+  radio.cabinet.grilleLpHz = 7500.0f;
+  radio.cabinet.rearDelayMs = 0.90f;
+  radio.cabinet.rearMix = 0.15f;
+  radio.cabinet.rearHpHz = 200.0f;
+  radio.cabinet.rearLpHz = 3500.0f;
+
+  // --- Final limiter (digital safety brick-wall) ---
+  radio.finalLimiter.enabled = true;
+  radio.finalLimiter.threshold = 0.95f;
+  radio.finalLimiter.lookaheadMs = 1.5f;
+  radio.finalLimiter.attackMs = 0.5f;
+  radio.finalLimiter.releaseMs = 100.0f;
 }
 
 static void applySetIdentity(Radio1938& radio) {
