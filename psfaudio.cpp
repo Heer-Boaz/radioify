@@ -116,6 +116,14 @@ std::string toUtf8String(const std::filesystem::path& path) {
 #endif
 }
 
+std::string toLowerAscii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return value;
+}
+
 std::filesystem::path getExecutableDir() {
 #ifdef _WIN32
   std::wstring buffer;
@@ -137,6 +145,57 @@ std::filesystem::path getExecutableDir() {
   if (ec) return {};
   return exe.parent_path();
 #endif
+}
+
+std::filesystem::path getEnvPath(const char* name) {
+  const char* value = std::getenv(name);
+  if (!value || value[0] == '\0') return {};
+  return std::filesystem::path(value);
+}
+
+void appendUniquePath(std::vector<std::filesystem::path>* out,
+                      const std::filesystem::path& path) {
+  if (!out || path.empty()) return;
+  for (const auto& existing : *out) {
+    if (existing == path) return;
+  }
+  out->push_back(path);
+}
+
+bool isLikelyPs2BiosFile(const std::filesystem::path& path) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(path, ec)) return false;
+
+  const std::string ext = toLowerAscii(path.extension().string());
+  if (ext != ".bin" && ext != ".rom") return false;
+
+  const uintmax_t size = std::filesystem::file_size(path, ec);
+  if (ec) return false;
+  if (size < 0x300000 || size > 0x1000000) return false;
+
+  const std::string name = toLowerAscii(path.filename().string());
+  if (name == "hebios.bin" || name.rfind("hebios-", 0) == 0) return true;
+  if (name.find("scph") != std::string::npos) return true;
+  if (name.find("ps2") != std::string::npos) return true;
+  return name == "bios.bin";
+}
+
+void appendBiosCandidatesFromDir(std::vector<std::filesystem::path>* out,
+                                 const std::filesystem::path& dir) {
+  if (!out || dir.empty()) return;
+
+  std::error_code ec;
+  if (!std::filesystem::is_directory(dir, ec)) return;
+
+  appendUniquePath(out, dir / "hebios.bin");
+
+  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (ec) break;
+    const std::filesystem::path candidate = entry.path();
+    if (isLikelyPs2BiosFile(candidate)) {
+      appendUniquePath(out, candidate);
+    }
+  }
 }
 
 uint64_t msToFrames(int64_t ms, uint32_t sampleRate) {
