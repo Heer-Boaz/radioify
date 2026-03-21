@@ -2324,7 +2324,7 @@ int runTui(Options o) {
           double meterRatio = std::clamp(static_cast<double>(peak), 0.0, 1.0);
           Color meterStart = kStyleProgressFrame.fg;
           Color meterEnd = kStyleProgressFrame.fg;
-          if (audioHasClipAlert() && peak >= 0.95f) {
+          if (audioHasClipAlert() && peak >= 0.90f) {
             meterStart = kStyleAlert.fg;
             meterEnd = kStyleAlert.fg;
           } else if (peak >= 0.80f) {

@@ -4289,7 +4289,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
       radio.power.outputLoadResistanceOhms);
   // The physical speaker model lands far below the direct digital path, so add
   // fixed make-up gain before the safety limiter to restore comparable loudness.
-  radio.output.digitalMakeupGain = 10.0f;
+  radio.output.digitalMakeupGain = 6.0f;
 
   // --- Global oversampling and output clip settings ---
   // The speaker, limiter and output-clip stages use processOversampled2x, so
