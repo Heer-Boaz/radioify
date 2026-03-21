@@ -81,6 +81,12 @@ struct SeriesRlcBandpass {
   float outputResistanceOhms = 0.0f;
   int integrationSubsteps = 1;
   float dtSub = 0.0f;
+  float macroA00 = 1.0f;
+  float macroA01 = 0.0f;
+  float macroA10 = 0.0f;
+  float macroA11 = 1.0f;
+  float macroB0 = 0.0f;
+  float macroB1 = 0.0f;
   float inductorCurrent = 0.0f;
   float capacitorVoltage = 0.0f;
 
@@ -108,6 +114,8 @@ struct CoupledTunedTransformer {
   float dtSub = 0.0f;
   float mutualInductance = 0.0f;
   float determinantInv = 0.0f;
+  std::array<float, 16> macroA{};
+  std::array<float, 4> macroB{};
   float primaryCurrent = 0.0f;
   float primaryCapVoltage = 0.0f;
   float secondaryCurrent = 0.0f;

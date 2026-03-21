@@ -583,41 +583,95 @@ static float processResistorLoadedTriodeStage(
   return quiescentPlate - plateVoltage;
 }
 
-static float processConverterTubeStage(float baseGridVolts,
-                                       float rfGridVolts,
-                                       float oscillatorBiasVolts,
-                                       float oscillatorGridVolts,
-                                       float supplyScale,
-                                       float quiescentPlateVolts,
-                                       float screenVolts,
-                                       float biasVolts,
-                                       float cutoffVolts,
-                                       float quiescentPlateCurrentAmps,
-                                       float mutualConductanceSiemens,
-                                       float acLoadResistanceOhms,
-                                       float plateKneeVolts,
-                                       float gridSoftnessVolts) {
+struct FixedPlatePentodeEvaluator {
+  float cutoffVolts = 0.0f;
+  float gridSoftnessVolts = 0.0f;
+  float exponent = 1.0f;
+  float currentScale = 0.0f;
+
+  float eval(float gridVolts) const {
+    float activation =
+        std::max(softplusVolts(gridVolts - cutoffVolts, gridSoftnessVolts), 0.0f);
+    return currentScale * std::pow(activation, exponent);
+  }
+};
+
+static FixedPlatePentodeEvaluator prepareFixedPlatePentodeEvaluator(
+    float plateVolts,
+    float screenVolts,
+    float biasVolts,
+    float cutoffVolts,
+    float quiescentPlateVolts,
+    float quiescentScreenVolts,
+    float quiescentPlateCurrentAmps,
+    float mutualConductanceSiemens,
+    float plateKneeVolts,
+    float gridSoftnessVolts) {
+  float activationQ =
+      std::max(softplusVolts(biasVolts - cutoffVolts, gridSoftnessVolts), 1e-5f);
+  float exponent = clampf(mutualConductanceSiemens * activationQ /
+                              requirePositiveFinite(quiescentPlateCurrentAmps),
+                          1.05f, 10.0f);
+  float knee =
+      1.0f - std::exp(-std::max(plateVolts, 0.0f) /
+                      requirePositiveFinite(plateKneeVolts));
+  float kneeQ =
+      1.0f - std::exp(-std::max(quiescentPlateVolts, 0.0f) /
+                      requirePositiveFinite(plateKneeVolts));
+  float screenScale = screenVolts / requirePositiveFinite(quiescentScreenVolts);
+  float perveance =
+      quiescentPlateCurrentAmps /
+      (std::pow(activationQ, exponent) * std::max(kneeQ, 1e-6f));
+
+  FixedPlatePentodeEvaluator out{};
+  out.cutoffVolts = cutoffVolts;
+  out.gridSoftnessVolts = gridSoftnessVolts;
+  out.exponent = exponent;
+  out.currentScale =
+      perveance * std::max(knee, 0.0f) * std::max(screenScale, 0.0f);
+  return out;
+}
+
+struct ConverterTubeStageResult {
+  float plateAcVolts = 0.0f;
+  float mixedPlateCurrent = 0.0f;
+};
+
+static ConverterTubeStageResult processConverterTubeStage(float baseGridVolts,
+                                                          float rfGridVolts,
+                                                          float oscillatorBiasVolts,
+                                                          float oscillatorGridVolts,
+                                                          float supplyScale,
+                                                          float quiescentPlateVolts,
+                                                          float screenVolts,
+                                                          float biasVolts,
+                                                          float cutoffVolts,
+                                                          float quiescentPlateCurrentAmps,
+                                                          float mutualConductanceSiemens,
+                                                          float acLoadResistanceOhms,
+                                                          float plateKneeVolts,
+                                                          float gridSoftnessVolts) {
   float plateVoltage = requirePositiveFinite(quiescentPlateVolts * supplyScale);
   float screen = requirePositiveFinite(screenVolts * supplyScale);
-  auto plateCurrentForGrid = [&](float gridVolts) {
-    return deviceTubePlateCurrent(
-        gridVolts, plateVoltage, screen, biasVolts, cutoffVolts,
-        quiescentPlateVolts * supplyScale, screenVolts * supplyScale,
-        quiescentPlateCurrentAmps, mutualConductanceSiemens, plateKneeVolts,
-        gridSoftnessVolts);
-  };
+  auto plateCurrentForGrid = prepareFixedPlatePentodeEvaluator(
+      plateVoltage, screen, biasVolts, cutoffVolts,
+      quiescentPlateVolts * supplyScale, screenVolts * supplyScale,
+      quiescentPlateCurrentAmps, mutualConductanceSiemens, plateKneeVolts,
+      gridSoftnessVolts);
   float mixedBaseGridVolts = baseGridVolts + oscillatorBiasVolts;
-  float idleCurrent = plateCurrentForGrid(mixedBaseGridVolts);
-  float rfOnlyCurrent =
-      plateCurrentForGrid(mixedBaseGridVolts + rfGridVolts);
+  float idleCurrent = plateCurrentForGrid.eval(mixedBaseGridVolts);
+  float rfOnlyCurrent = plateCurrentForGrid.eval(mixedBaseGridVolts + rfGridVolts);
   float loOnlyCurrent =
-      plateCurrentForGrid(mixedBaseGridVolts + oscillatorGridVolts);
-  float mixedCurrent =
-      plateCurrentForGrid(mixedBaseGridVolts + rfGridVolts +
-                          oscillatorGridVolts);
+      plateCurrentForGrid.eval(mixedBaseGridVolts + oscillatorGridVolts);
+  float mixedCurrent = plateCurrentForGrid.eval(mixedBaseGridVolts + rfGridVolts +
+                                                oscillatorGridVolts);
   float conversionCurrent =
       mixedCurrent - rfOnlyCurrent - loOnlyCurrent + idleCurrent;
-  return conversionCurrent * requirePositiveFinite(acLoadResistanceOhms);
+  ConverterTubeStageResult out{};
+  out.plateAcVolts =
+      conversionCurrent * requirePositiveFinite(acLoadResistanceOhms);
+  out.mixedPlateCurrent = mixedCurrent;
+  return out;
 }
 
 static bool solveLinear3x3(float a[3][3], float b[3], float x[3]) {
@@ -863,6 +917,34 @@ void SeriesRlcBandpass::configure(float newFs,
   outputResistanceOhms = newOutputResistanceOhms;
   integrationSubsteps = newIntegrationSubsteps;
   dtSub = 1.0f / (fs * static_cast<float>(integrationSubsteps));
+  float subA00 =
+      1.0f - dtSub * (seriesResistanceOhms / inductanceHenries);
+  float subA01 = -dtSub / inductanceHenries;
+  float subB0 = dtSub / inductanceHenries;
+  float capStep = dtSub / capacitanceFarads;
+  float subA10 = capStep * subA00;
+  float subA11 = 1.0f + capStep * subA01;
+  float subB1 = capStep * subB0;
+  macroA00 = 1.0f;
+  macroA01 = 0.0f;
+  macroA10 = 0.0f;
+  macroA11 = 1.0f;
+  macroB0 = 0.0f;
+  macroB1 = 0.0f;
+  for (int step = 0; step < integrationSubsteps; ++step) {
+    float nextA00 = subA00 * macroA00 + subA01 * macroA10;
+    float nextA01 = subA00 * macroA01 + subA01 * macroA11;
+    float nextA10 = subA10 * macroA00 + subA11 * macroA10;
+    float nextA11 = subA10 * macroA01 + subA11 * macroA11;
+    float nextB0 = subA00 * macroB0 + subA01 * macroB1 + subB0;
+    float nextB1 = subA10 * macroB0 + subA11 * macroB1 + subB1;
+    macroA00 = nextA00;
+    macroA01 = nextA01;
+    macroA10 = nextA10;
+    macroA11 = nextA11;
+    macroB0 = nextB0;
+    macroB1 = nextB1;
+  }
   // Retuning a live LC network changes component values, but it does not
   // instantaneously zero inductor current or capacitor voltage. Runtime resets
   // are handled by the owning stage when the radio itself is reset.
@@ -874,16 +956,15 @@ void SeriesRlcBandpass::reset() {
 }
 
 float SeriesRlcBandpass::process(float vin) {
-  for (int step = 0; step < integrationSubsteps; ++step) {
-    float di =
-        (vin - seriesResistanceOhms * inductorCurrent - capacitorVoltage) /
-        inductanceHenries;
-    inductorCurrent += dtSub * di;
-    capacitorVoltage += dtSub * (inductorCurrent / capacitanceFarads);
-    if (!std::isfinite(inductorCurrent) || !std::isfinite(capacitorVoltage)) {
-      reset();
-      return 0.0f;
-    }
+  float nextInductorCurrent =
+      macroA00 * inductorCurrent + macroA01 * capacitorVoltage + macroB0 * vin;
+  float nextCapacitorVoltage =
+      macroA10 * inductorCurrent + macroA11 * capacitorVoltage + macroB1 * vin;
+  inductorCurrent = nextInductorCurrent;
+  capacitorVoltage = nextCapacitorVoltage;
+  if (!std::isfinite(inductorCurrent) || !std::isfinite(capacitorVoltage)) {
+    reset();
+    return 0.0f;
   }
   return inductorCurrent * outputResistanceOhms;
 }
@@ -931,6 +1012,71 @@ void CoupledTunedTransformer::configure(float newFs,
   assert(determinant > 0.0f);
   determinantInv = 1.0f / determinant;
   dtSub = 1.0f / (fs * static_cast<float>(integrationSubsteps));
+  float k = dtSub * determinantInv;
+  float subA00 =
+      1.0f - k * secondaryInductanceHenries * primaryResistanceOhms;
+  float subA01 = k * mutualInductance * secondaryResistanceOhms;
+  float subA02 = -k * secondaryInductanceHenries;
+  float subA03 = k * mutualInductance;
+  float subA10 = k * mutualInductance * primaryResistanceOhms;
+  float subA11 =
+      1.0f - k * primaryInductanceHenries * secondaryResistanceOhms;
+  float subA12 = k * mutualInductance;
+  float subA13 = -k * primaryInductanceHenries;
+  float subB0 = k * secondaryInductanceHenries;
+  float subB1 = -k * mutualInductance;
+  float primaryCapStep = dtSub / primaryCapacitanceFarads;
+  float secondaryCapStep = dtSub / secondaryCapacitanceFarads;
+  std::array<float, 16> subA{
+      subA00,
+      subA01,
+      subA02,
+      subA03,
+      subA10,
+      subA11,
+      subA12,
+      subA13,
+      primaryCapStep * subA00,
+      primaryCapStep * subA01,
+      1.0f + primaryCapStep * subA02,
+      primaryCapStep * subA03,
+      secondaryCapStep * subA10,
+      secondaryCapStep * subA11,
+      secondaryCapStep * subA12,
+      1.0f + secondaryCapStep * subA13,
+  };
+  std::array<float, 4> subB{
+      subB0,
+      subB1,
+      primaryCapStep * subB0,
+      secondaryCapStep * subB1,
+  };
+  macroA = {};
+  macroA[0] = 1.0f;
+  macroA[5] = 1.0f;
+  macroA[10] = 1.0f;
+  macroA[15] = 1.0f;
+  macroB = {};
+  for (int step = 0; step < integrationSubsteps; ++step) {
+    std::array<float, 16> nextA{};
+    std::array<float, 4> nextB{};
+    for (int row = 0; row < 4; ++row) {
+      for (int col = 0; col < 4; ++col) {
+        float sum = 0.0f;
+        for (int kIdx = 0; kIdx < 4; ++kIdx) {
+          sum += subA[row * 4 + kIdx] * macroA[kIdx * 4 + col];
+        }
+        nextA[row * 4 + col] = sum;
+      }
+      float sum = subB[row];
+      for (int kIdx = 0; kIdx < 4; ++kIdx) {
+        sum += subA[row * 4 + kIdx] * macroB[kIdx];
+      }
+      nextB[row] = sum;
+    }
+    macroA = nextA;
+    macroB = nextB;
+  }
   // Preserve stored magnetic/electric state across retunes. A tuned IF can
   // move its resonance while currents and capacitor voltages remain continuous;
   // hard zeroing here causes audible zippering/stutter during AFC/tuning.
@@ -944,30 +1090,31 @@ void CoupledTunedTransformer::reset() {
 }
 
 float CoupledTunedTransformer::process(float vin) {
-  for (int step = 0; step < integrationSubsteps; ++step) {
-    float primaryDrive =
-        vin - primaryResistanceOhms * primaryCurrent - primaryCapVoltage;
-    float secondaryDrive =
-        -secondaryResistanceOhms * secondaryCurrent - secondaryCapVoltage;
-    float dPrimary =
-        (secondaryInductanceHenries * primaryDrive -
-         mutualInductance * secondaryDrive) *
-        determinantInv;
-    float dSecondary =
-        (primaryInductanceHenries * secondaryDrive -
-         mutualInductance * primaryDrive) *
-        determinantInv;
-    primaryCurrent += dtSub * dPrimary;
-    secondaryCurrent += dtSub * dSecondary;
-    primaryCapVoltage += dtSub * (primaryCurrent / primaryCapacitanceFarads);
-    secondaryCapVoltage +=
-        dtSub * (secondaryCurrent / secondaryCapacitanceFarads);
-    if (!std::isfinite(primaryCurrent) || !std::isfinite(primaryCapVoltage) ||
-        !std::isfinite(secondaryCurrent) ||
-        !std::isfinite(secondaryCapVoltage)) {
-      reset();
-      return 0.0f;
-    }
+  float nextPrimaryCurrent = macroA[0] * primaryCurrent +
+                             macroA[1] * secondaryCurrent +
+                             macroA[2] * primaryCapVoltage +
+                             macroA[3] * secondaryCapVoltage + macroB[0] * vin;
+  float nextSecondaryCurrent = macroA[4] * primaryCurrent +
+                               macroA[5] * secondaryCurrent +
+                               macroA[6] * primaryCapVoltage +
+                               macroA[7] * secondaryCapVoltage + macroB[1] * vin;
+  float nextPrimaryCapVoltage = macroA[8] * primaryCurrent +
+                                macroA[9] * secondaryCurrent +
+                                macroA[10] * primaryCapVoltage +
+                                macroA[11] * secondaryCapVoltage + macroB[2] * vin;
+  float nextSecondaryCapVoltage = macroA[12] * primaryCurrent +
+                                  macroA[13] * secondaryCurrent +
+                                  macroA[14] * primaryCapVoltage +
+                                  macroA[15] * secondaryCapVoltage + macroB[3] * vin;
+  primaryCurrent = nextPrimaryCurrent;
+  secondaryCurrent = nextSecondaryCurrent;
+  primaryCapVoltage = nextPrimaryCapVoltage;
+  secondaryCapVoltage = nextSecondaryCapVoltage;
+  if (!std::isfinite(primaryCurrent) || !std::isfinite(primaryCapVoltage) ||
+      !std::isfinite(secondaryCurrent) ||
+      !std::isfinite(secondaryCapVoltage)) {
+    reset();
+    return 0.0f;
   }
 
   return secondaryCurrent * outputResistanceOhms;
@@ -2540,7 +2687,7 @@ static float processSuperhetSourceFrame(Radio1938& radio,
         mixer.biasVolts - mixer.avcGridDriveVolts * avcT;
     float rfGridVolts = mixer.rfGridDriveVolts * rf;
     float oscillatorGridVolts = mixer.loGridDriveVolts * lo;
-    float mixerPlateAcVolts = processConverterTubeStage(
+    ConverterTubeStageResult mixerResult = processConverterTubeStage(
         baseGridVolts, rfGridVolts, mixer.loGridBiasVolts,
         oscillatorGridVolts, 1.0f,
         mixer.plateQuiescentVolts,
@@ -2548,18 +2695,11 @@ static float processSuperhetSourceFrame(Radio1938& radio,
         mixer.plateQuiescentCurrentAmps, mixer.mutualConductanceSiemens,
         mixer.acLoadResistanceOhms, mixer.plateKneeVolts,
         mixer.gridSoftnessVolts);
+    float mixerPlateAcVolts = mixerResult.plateAcVolts;
     if (radio.calibration.enabled) {
-      float instantaneousMixerCurrent = deviceTubePlateCurrent(
-          baseGridVolts + mixer.loGridBiasVolts + rfGridVolts +
-              oscillatorGridVolts,
-          mixer.plateQuiescentVolts, mixer.screenVolts, mixer.biasVolts,
-          mixer.modelCutoffVolts, mixer.plateQuiescentVolts,
-          mixer.screenVolts, mixer.plateQuiescentCurrentAmps,
-          mixer.mutualConductanceSiemens, mixer.plateKneeVolts,
-          mixer.gridSoftnessVolts);
       radio.calibration.maxMixerPlateCurrentAmps = std::max(
           radio.calibration.maxMixerPlateCurrentAmps,
-          instantaneousMixerCurrent);
+          mixerResult.mixedPlateCurrent);
     }
     float ifGainControl =
         std::max(0.20f, 1.0f - ifStrip.avcGainDepth * avcT);
