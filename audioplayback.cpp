@@ -606,6 +606,7 @@ struct AudioState {
   std::atomic<bool> audioPrimed{false};
   std::atomic<float> volume{1.0f};
   std::atomic<float> peak{0.0f};
+  std::atomic<int64_t> clipAlertUntilUs{0};
   AudioSampleRing streamRb;
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};
@@ -804,12 +805,22 @@ static void updatePeakMeter(AudioState* state, const float* samples,
   state->peak.store(next, std::memory_order_relaxed);
 }
 
+static void holdClipAlert(AudioState* state) {
+  if (!state) return;
+  constexpr int64_t kClipAlertHoldUs = 900000;
+  state->clipAlertUntilUs.store(nowUs() + kClipAlertHoldUs,
+                                std::memory_order_relaxed);
+}
+
 static void processRadioBlock(AudioState* state,
                               float* samples,
                               uint32_t frames) {
   if (!state || !samples || frames == 0) return;
   const uint32_t channels = std::max(1u, state->channels);
   state->radioPreview.processBlock(state->radio1938, samples, frames, channels);
+  if (state->radio1938.diagnostics.anyClip) {
+    holdClipAlert(state);
+  }
 }
 
 static void audioStreamProcessRadioImpl(float* interleaved, uint32_t frames) {
@@ -1099,18 +1110,22 @@ static inline float softLimitOutputSample(float x, float threshold = 0.985f) {
   return sign * y;
 }
 
-static void applyOutputVolumeSafety(float* samples,
+static bool applyOutputVolumeSafety(float* samples,
                                     uint32_t frames,
                                     uint32_t channels,
                                     float volume) {
-  if (!samples || frames == 0 || channels == 0) return;
+  if (!samples || frames == 0 || channels == 0) return false;
   constexpr float kOutputClamp = 0.999f;
+  bool limited = false;
   size_t count = static_cast<size_t>(frames) * channels;
   for (size_t i = 0; i < count; ++i) {
     float x = samples[i] * volume;
+    if (std::fabs(x) > 1.02f) limited = true;
     x = softLimitOutputSample(x);
+    if (std::fabs(x) >= kOutputClamp) limited = true;
     samples[i] = std::clamp(x, -kOutputClamp, kOutputClamp);
   }
+  return limited;
 }
 
 void dataCallback(ma_device* device, void* output, const void*,
@@ -1221,7 +1236,9 @@ void dataCallback(ma_device* device, void* output, const void*,
     }
 
     float vol = state->volume.load(std::memory_order_relaxed);
-    applyOutputVolumeSafety(out, frameCount, channels, vol);
+    if (applyOutputVolumeSafety(out, frameCount, channels, vol)) {
+      holdClipAlert(state);
+    }
     updatePeakMeter(state, out, frameCount);
     return;
   }
@@ -1335,7 +1352,9 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
 
   float vol = state->volume.load(std::memory_order_relaxed);
-  applyOutputVolumeSafety(out, frameCount, state->channels, vol);
+  if (applyOutputVolumeSafety(out, frameCount, state->channels, vol)) {
+    holdClipAlert(state);
+  }
   updatePeakMeter(state, out, frameCount);
 }
 
@@ -2848,6 +2867,11 @@ float audioGetVolume() {
 
 float audioGetPeak() {
   return gAudio.state.peak.load(std::memory_order_relaxed);
+}
+
+bool audioHasClipAlert() {
+  return gAudio.state.clipAlertUntilUs.load(std::memory_order_relaxed) >
+         nowUs();
 }
 
 AudioMelodyInfo audioGetMelodyInfo() {
