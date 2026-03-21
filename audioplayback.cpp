@@ -668,6 +668,7 @@ struct AudioPlaybackState {
 AudioPlaybackState gAudio;
 
 static constexpr uint32_t kRadioProcessChannels = 1u;
+static void audioStreamProcessRadioImpl(float* interleaved, uint32_t frames);
 
 static void rebuildRadioFromTemplate(Radio1938* target,
                                      const Radio1938& source,
@@ -727,6 +728,7 @@ void startAuditionWorker(AuditionTone tone) {
           buffer[static_cast<size_t>(i * channels + ch)] = sample;
         }
       }
+      audioStreamProcessRadioImpl(buffer.data(), static_cast<uint32_t>(kChunkFrames));
       uint64_t remaining = kChunkFrames;
       uint64_t offset = 0;
       while (remaining > 0 && !gAudio.audition.stop.load()) {
@@ -789,6 +791,14 @@ static void processRadioBlock(AudioState* state,
   state->radioPreview.processBlock(state->radio1938, samples, frames, channels);
 }
 
+static void audioStreamProcessRadioImpl(float* interleaved, uint32_t frames) {
+  if (!interleaved || frames == 0) return;
+  if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) return;
+  if (!gAudio.state.streamQueueEnabled.load()) return;
+  if (gAudio.state.dry || !gAudio.state.useRadio1938.load()) return;
+  processRadioBlock(&gAudio.state, interleaved, frames);
+}
+
 static inline float softLimitOutputSample(float x, float threshold = 0.985f) {
   float ax = std::fabs(x);
   if (ax <= threshold) return x;
@@ -845,10 +855,6 @@ void dataCallback(ma_device* device, void* output, const void*,
     if (framesRead < frameCount) {
       std::fill(out + framesRead * channels,
                 out + frameCount * channels, 0.0f);
-    }
-
-    if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
-      processRadioBlock(state, out, static_cast<uint32_t>(framesRead));
     }
 
     state->framesPlayed.fetch_add(framesRead, std::memory_order_relaxed);
@@ -1819,6 +1825,10 @@ void stopPlayback() {
   gAudio.vgmWarning.clear();
 }
 }  // namespace
+
+void audioStreamProcessRadio(float* interleaved, uint32_t frames) {
+  audioStreamProcessRadioImpl(interleaved, frames);
+}
 
 void audioInit(const AudioPlaybackConfig& config) {
   gAudio.enableAudio = config.enableAudio;

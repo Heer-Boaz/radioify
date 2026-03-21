@@ -78,6 +78,7 @@ bool audioStreamWriteSamples(const float* interleaved,
                              int serial,
                              bool allowBlock,
                              uint64_t* writtenFrames);
+void audioStreamProcessRadio(float* interleaved, uint32_t frames);
 uint64_t audioStreamDropFrames(uint64_t frames);
 void audioStreamDiscardUntil(int64_t ptsUs);
 void audioStreamSynchronize(int serial, int64_t targetPtsUs);

@@ -2794,6 +2794,8 @@ struct Player::Impl {
         audioDec.nextPtsUs = ptsUs + durationUs;
         audioDec.nextPtsValid = true;
         audioDec.writePosFrames += static_cast<int64_t>(converted);
+        audioStreamProcessRadio(audioDec.convertBuffer.data(),
+                                static_cast<uint32_t>(converted));
         
         uint64_t totalWritten = 0;
         while (running.load() && totalWritten < static_cast<uint64_t>(converted)) {
