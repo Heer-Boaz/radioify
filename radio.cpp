@@ -93,6 +93,9 @@ static KorenTriodeModel makeKorenTriodeModel(double mu,
 static double korenTriodePlateCurrent(double vgk,
                                       double vpk,
                                       const KorenTriodeModel& m);
+static double korenTriodePlateConductance(double vgk,
+                                          double vpk,
+                                          const KorenTriodeModel& m);
 
 static bool solveLinear3x3(float a[3][3], float b[3], float x[3]);
 
@@ -680,45 +683,6 @@ static bool solveLinear4x4(float a[4][4], float b[4], float x[4]) {
   return true;
 }
 
-static bool solveLinear7x7(float a[7][7], float b[7], float x[7]) {
-  for (int pivot = 0; pivot < 7; ++pivot) {
-    int pivotRow = pivot;
-    float pivotAbs = std::fabs(a[pivot][pivot]);
-    for (int row = pivot + 1; row < 7; ++row) {
-      float candidateAbs = std::fabs(a[row][pivot]);
-      if (candidateAbs > pivotAbs) {
-        pivotAbs = candidateAbs;
-        pivotRow = row;
-      }
-    }
-    if (pivotAbs < 1e-12f) return false;
-    if (pivotRow != pivot) {
-      for (int col = pivot; col < 7; ++col) {
-        std::swap(a[pivot][col], a[pivotRow][col]);
-      }
-      std::swap(b[pivot], b[pivotRow]);
-    }
-    float invPivot = 1.0f / a[pivot][pivot];
-    for (int row = pivot + 1; row < 7; ++row) {
-      float scale = a[row][pivot] * invPivot;
-      if (std::fabs(scale) < 1e-12f) continue;
-      for (int col = pivot; col < 7; ++col) {
-        a[row][col] -= scale * a[pivot][col];
-      }
-      b[row] -= scale * b[pivot];
-    }
-  }
-  for (int row = 6; row >= 0; --row) {
-    float sum = b[row];
-    for (int col = row + 1; col < 7; ++col) {
-      sum -= a[row][col] * x[col];
-    }
-    if (std::fabs(a[row][row]) < 1e-12f) return false;
-    x[row] = sum / a[row][row];
-  }
-  return true;
-}
-
 static double korenTriodePlateCurrent(double vgk,
                                       double vpk,
                                       const KorenTriodeModel& m) {
@@ -734,6 +698,16 @@ static double korenTriodePlateCurrent(double vgk,
   }
 
   return std::pow(e1, m.ex) / m.kg1;
+}
+
+static double korenTriodePlateConductance(double vgk,
+                                          double vpk,
+                                          const KorenTriodeModel& m) {
+  return finiteDifferenceDerivative(
+      [&](double plateVolts) {
+        return korenTriodePlateCurrent(vgk, std::max(plateVolts, 0.0), m);
+      },
+      vpk, 0.25);
 }
 
 static inline uint32_t hash32(uint32_t x) {
@@ -857,6 +831,7 @@ void SeriesRlcBandpass::configure(float newFs,
   seriesResistanceOhms = newSeriesResistanceOhms;
   outputResistanceOhms = newOutputResistanceOhms;
   integrationSubsteps = newIntegrationSubsteps;
+  dtSub = 1.0f / (fs * static_cast<float>(integrationSubsteps));
   // Retuning a live LC network changes component values, but it does not
   // instantaneously zero inductor current or capacitor voltage. Runtime resets
   // are handled by the owning stage when the radio itself is reset.
@@ -868,13 +843,12 @@ void SeriesRlcBandpass::reset() {
 }
 
 float SeriesRlcBandpass::process(float vin) {
-  float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
   for (int step = 0; step < integrationSubsteps; ++step) {
     float di =
         (vin - seriesResistanceOhms * inductorCurrent - capacitorVoltage) /
         inductanceHenries;
-    inductorCurrent += dt * di;
-    capacitorVoltage += dt * (inductorCurrent / capacitanceFarads);
+    inductorCurrent += dtSub * di;
+    capacitorVoltage += dtSub * (inductorCurrent / capacitanceFarads);
     if (!std::isfinite(inductorCurrent) || !std::isfinite(capacitorVoltage)) {
       reset();
       return 0.0f;
@@ -918,6 +892,14 @@ void CoupledTunedTransformer::configure(float newFs,
   couplingCoeff = newCouplingCoeff;
   outputResistanceOhms = newOutputResistanceOhms;
   integrationSubsteps = newIntegrationSubsteps;
+  mutualInductance =
+      couplingCoeff *
+      std::sqrt(primaryInductanceHenries * secondaryInductanceHenries);
+  float determinant = primaryInductanceHenries * secondaryInductanceHenries -
+                      mutualInductance * mutualInductance;
+  assert(determinant > 0.0f);
+  determinantInv = 1.0f / determinant;
+  dtSub = 1.0f / (fs * static_cast<float>(integrationSubsteps));
   // Preserve stored magnetic/electric state across retunes. A tuned IF can
   // move its resonance while currents and capacitor voltages remain continuous;
   // hard zeroing here causes audible zippering/stutter during AFC/tuning.
@@ -931,14 +913,6 @@ void CoupledTunedTransformer::reset() {
 }
 
 float CoupledTunedTransformer::process(float vin) {
-  float mutualInductance =
-      couplingCoeff *
-      std::sqrt(primaryInductanceHenries * secondaryInductanceHenries);
-  float determinant = primaryInductanceHenries * secondaryInductanceHenries -
-                      mutualInductance * mutualInductance;
-  assert(determinant > 0.0f);
-  float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
-
   for (int step = 0; step < integrationSubsteps; ++step) {
     float primaryDrive =
         vin - primaryResistanceOhms * primaryCurrent - primaryCapVoltage;
@@ -946,16 +920,17 @@ float CoupledTunedTransformer::process(float vin) {
         -secondaryResistanceOhms * secondaryCurrent - secondaryCapVoltage;
     float dPrimary =
         (secondaryInductanceHenries * primaryDrive -
-         mutualInductance * secondaryDrive) /
-        determinant;
+         mutualInductance * secondaryDrive) *
+        determinantInv;
     float dSecondary =
         (primaryInductanceHenries * secondaryDrive -
-         mutualInductance * primaryDrive) /
-        determinant;
-    primaryCurrent += dt * dPrimary;
-    secondaryCurrent += dt * dSecondary;
-    primaryCapVoltage += dt * (primaryCurrent / primaryCapacitanceFarads);
-    secondaryCapVoltage += dt * (secondaryCurrent / secondaryCapacitanceFarads);
+         mutualInductance * primaryDrive) *
+        determinantInv;
+    primaryCurrent += dtSub * dPrimary;
+    secondaryCurrent += dtSub * dSecondary;
+    primaryCapVoltage += dtSub * (primaryCurrent / primaryCapacitanceFarads);
+    secondaryCapVoltage +=
+        dtSub * (secondaryCurrent / secondaryCapacitanceFarads);
     if (!std::isfinite(primaryCurrent) || !std::isfinite(primaryCapVoltage) ||
         !std::isfinite(secondaryCurrent) ||
         !std::isfinite(secondaryCapVoltage)) {
@@ -972,17 +947,12 @@ static CurrentDrivenTransformerSample projectNoShuntCap(
     float primaryDriveCurrentAmps,
     float secondaryLoadResistanceOhms,
     float primaryLoadResistanceOhms) {
-  float dt =
-      1.0f / (transformer.fs * static_cast<float>(transformer.integrationSubsteps));
-  float safeTurns = requirePositiveFinite(transformer.turnsRatioPrimaryToSecondary);
+  float dt = requirePositiveFinite(transformer.dtSub);
   float Rp = transformer.primaryResistanceOhms;
   float Rs = transformer.secondaryResistanceOhms;
-  float Lp = transformer.primaryLeakageInductanceHenries +
-             transformer.magnetizingInductanceHenries;
-  float Ls = transformer.secondaryLeakageInductanceHenries +
-             transformer.magnetizingInductanceHenries /
-                 (safeTurns * safeTurns);
-  float M = transformer.magnetizingInductanceHenries / safeTurns;
+  float Lp = transformer.cachedPrimaryInductance;
+  float Ls = transformer.cachedSecondaryInductance;
+  float M = transformer.cachedMutualInductance;
   float coreLossConductance =
       (transformer.primaryCoreLossResistanceOhms > 0.0f)
           ? 1.0f / transformer.primaryCoreLossResistanceOhms
@@ -1001,19 +971,22 @@ static CurrentDrivenTransformerSample projectNoShuntCap(
   float projectedSecondaryCurrent = transformer.secondaryCurrent;
   float projectedPrimaryVoltage = transformer.primaryVoltage;
   float projectedSecondaryVoltage = transformer.secondaryVoltage;
+  float lpOverDt = Lp / dt;
+  float lsOverDt = Ls / dt;
+  float mOverDt = M / dt;
 
   for (int step = 0; step < transformer.integrationSubsteps; ++step) {
     float ipPrev = projectedPrimaryCurrent;
     float isPrev = projectedSecondaryCurrent;
     float a[4][4] = {
-        {Rp + Lp / dt, M / dt, -1.0f, 0.0f},
-        {M / dt, Rs + Ls / dt, 0.0f, -1.0f},
+        {Rp + lpOverDt, mOverDt, -1.0f, 0.0f},
+        {mOverDt, Rs + lsOverDt, 0.0f, -1.0f},
         {1.0f, 0.0f, Gp, 0.0f},
         {0.0f, 1.0f, 0.0f, Gs},
     };
     float b[4] = {
-        (Lp / dt) * ipPrev + (M / dt) * isPrev,
-        (M / dt) * ipPrev + (Ls / dt) * isPrev,
+        lpOverDt * ipPrev + mOverDt * isPrev,
+        mOverDt * ipPrev + lsOverDt * isPrev,
         primaryDriveCurrentAmps,
         0.0f,
     };
@@ -1037,6 +1010,84 @@ static CurrentDrivenTransformerSample projectNoShuntCap(
       projectedPrimaryCurrent, projectedSecondaryCurrent};
 }
 
+struct AffineTransformerProjection {
+  CurrentDrivenTransformerSample base{};
+  CurrentDrivenTransformerSample slope{};
+};
+
+static AffineTransformerProjection buildAffineProjection(
+    const CurrentDrivenTransformer& t,
+    float secondaryLoadResistanceOhms,
+    float primaryLoadResistanceOhms) {
+  auto s0 =
+      t.project(0.0f, secondaryLoadResistanceOhms, primaryLoadResistanceOhms);
+  auto s1 =
+      t.project(1.0f, secondaryLoadResistanceOhms, primaryLoadResistanceOhms);
+
+  AffineTransformerProjection p{};
+  p.base = s0;
+  p.slope.primaryVoltage = s1.primaryVoltage - s0.primaryVoltage;
+  p.slope.secondaryVoltage = s1.secondaryVoltage - s0.secondaryVoltage;
+  p.slope.primaryCurrent = s1.primaryCurrent - s0.primaryCurrent;
+  p.slope.secondaryCurrent = s1.secondaryCurrent - s0.secondaryCurrent;
+  return p;
+}
+
+static CurrentDrivenTransformerSample evalAffineProjection(
+    const AffineTransformerProjection& p,
+    float driveCurrent) {
+  CurrentDrivenTransformerSample s{};
+  s.primaryVoltage = p.base.primaryVoltage + driveCurrent * p.slope.primaryVoltage;
+  s.secondaryVoltage =
+      p.base.secondaryVoltage + driveCurrent * p.slope.secondaryVoltage;
+  s.primaryCurrent = p.base.primaryCurrent + driveCurrent * p.slope.primaryCurrent;
+  s.secondaryCurrent =
+      p.base.secondaryCurrent + driveCurrent * p.slope.secondaryCurrent;
+  return s;
+}
+
+static float solveOutputPrimaryVoltageAffine(
+    const AffineTransformerProjection& proj,
+    const Radio1938::PowerNodeState& power,
+    float outputPlateQuiescent,
+    float gridA,
+    float gridB,
+    float initialVp) {
+  float vp = initialVp;
+
+  for (int iter = 0; iter < 8; ++iter) {
+    float plateA = outputPlateQuiescent - 0.5f * vp;
+    float plateB = outputPlateQuiescent + 0.5f * vp;
+
+    float ia = static_cast<float>(korenTriodePlateCurrent(
+        power.outputTubeBiasVolts + gridA, plateA, power.outputTubeTriodeModel));
+    float ib = static_cast<float>(korenTriodePlateCurrent(
+        power.outputTubeBiasVolts + gridB, plateB, power.outputTubeTriodeModel));
+
+    float gpa = static_cast<float>(korenTriodePlateConductance(
+        power.outputTubeBiasVolts + gridA, plateA, power.outputTubeTriodeModel));
+    float gpb = static_cast<float>(korenTriodePlateConductance(
+        power.outputTubeBiasVolts + gridB, plateB, power.outputTubeTriodeModel));
+
+    float drive = 0.5f * (ia - ib);
+    float driveSlope = -0.25f * (gpa + gpb);
+
+    float f =
+        proj.base.primaryVoltage + proj.slope.primaryVoltage * drive - vp;
+    float df = proj.slope.primaryVoltage * driveSlope - 1.0f;
+    if (!std::isfinite(df) || std::fabs(df) < 1e-9f) {
+      break;
+    }
+
+    vp -= f / df;
+    if (!std::isfinite(vp)) {
+      return initialVp;
+    }
+  }
+
+  return vp;
+}
+
 struct DriverInterstageCenterTappedResult {
   float driverPlateCurrentAbs = 0.0f;
   float primaryCurrent = 0.0f;
@@ -1055,147 +1106,126 @@ static DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap
     float driverQuiescentCurrent) {
   assert(power.tubeTriodeConnected);
 
-  float dt = 1.0f / (t.fs * static_cast<float>(t.integrationSubsteps));
-
-  float nTotal = t.turnsRatioPrimaryToSecondary;
-  assert(std::isfinite(nTotal) && nTotal > 0.0f);
-
+  float dt = requirePositiveFinite(t.dtSub);
+  float nTotal = requirePositiveFinite(t.cachedTurns);
   float nHalf = 2.0f * nTotal;
 
   float Rp = t.primaryResistanceOhms;
   float Ra = 0.5f * t.secondaryResistanceOhms;
   float Rb = 0.5f * t.secondaryResistanceOhms;
 
-  float Lp = t.primaryLeakageInductanceHenries + t.magnetizingInductanceHenries;
+  float Lp = t.cachedPrimaryInductance;
   float LlkHalf = 0.5f * t.secondaryLeakageInductanceHenries;
   float LhalfMag = t.magnetizingInductanceHenries / (nHalf * nHalf);
   float La = LlkHalf + LhalfMag;
   float Lb = LlkHalf + LhalfMag;
   float Mab = LhalfMag;
-  float M = t.magnetizingInductanceHenries / nHalf;
+  float M = 0.5f * t.cachedMutualInductance;
 
   float coreLossConductance =
       (t.primaryCoreLossResistanceOhms > 0.0f)
           ? (1.0f / t.primaryCoreLossResistanceOhms)
           : 0.0f;
 
-  float ip = power.interstageCt.primaryCurrent;
   float vp = power.interstageCt.primaryVoltage;
-  float ia = power.interstageCt.secondaryACurrent;
   float va = power.interstageCt.secondaryAVoltage;
-  float ib = power.interstageCt.secondaryBCurrent;
   float vb = power.interstageCt.secondaryBVoltage;
-
-  float initialDriverPlateVolts = driverPlateQuiescent - vp;
-  float initialDriverPlateCurrentAbs = static_cast<float>(
-      korenTriodePlateCurrent(controlGridVolts, initialDriverPlateVolts,
-                              power.tubeTriodeModel));
-  float idrive = initialDriverPlateCurrentAbs - driverQuiescentCurrent;
+  float ip = power.interstageCt.primaryCurrent;
+  float ia = power.interstageCt.secondaryACurrent;
+  float ib = power.interstageCt.secondaryBCurrent;
+  float lpOverDt = Lp / dt;
+  float laOverDt = La / dt;
+  float lbOverDt = Lb / dt;
+  float mOverDt = M / dt;
+  float mabOverDt = Mab / dt;
 
   for (int step = 0; step < t.integrationSubsteps; ++step) {
     float ipPrev = ip;
     float iaPrev = ia;
     float ibPrev = ib;
+    float cPrimary = lpOverDt * ipPrev + mOverDt * iaPrev - mOverDt * ibPrev;
+    float cSecondaryA = mOverDt * ipPrev + laOverDt * iaPrev - mabOverDt * ibPrev;
+    float cSecondaryB =
+        -mOverDt * ipPrev - mabOverDt * iaPrev + lbOverDt * ibPrev;
 
     for (int iter = 0; iter < 12; ++iter) {
       float driverPlateVolts = driverPlateQuiescent - vp;
       float driverPlateCurrentAbs = static_cast<float>(
           korenTriodePlateCurrent(controlGridVolts, driverPlateVolts,
                                   power.tubeTriodeModel));
+      float dIdrive_dVp = -static_cast<float>(korenTriodePlateConductance(
+          controlGridVolts, driverPlateVolts, power.tubeTriodeModel));
+      float idrive = driverPlateCurrentAbs - driverQuiescentCurrent;
+      float ipNow = idrive - coreLossConductance * vp;
 
       float iaBranch = tubeGridBranchCurrent(
           va, power.outputTubeBiasVolts, power.outputGridLeakResistanceOhms,
           power.outputGridCurrentResistanceOhms);
-
+      float iaNow = -iaBranch;
+      float dIa_dVa = -tubeGridBranchSlope(
+          va, power.outputTubeBiasVolts, power.outputGridLeakResistanceOhms,
+          power.outputGridCurrentResistanceOhms);
       float ibBranch = tubeGridBranchCurrent(
           vb, power.outputTubeBiasVolts, power.outputGridLeakResistanceOhms,
           power.outputGridCurrentResistanceOhms);
-
-      float dia_dva = tubeGridBranchSlope(
-          va, power.outputTubeBiasVolts, power.outputGridLeakResistanceOhms,
-          power.outputGridCurrentResistanceOhms);
-
-      float dib_dvb = tubeGridBranchSlope(
+      float ibNow = -ibBranch;
+      float dIb_dVb = -tubeGridBranchSlope(
           vb, power.outputTubeBiasVolts, power.outputGridLeakResistanceOhms,
           power.outputGridCurrentResistanceOhms);
+      float dIp_dVp = dIdrive_dVp - coreLossConductance;
 
-      auto driverPlateCurrentFromVp = [&](float vpEval) {
-        float plateVolts = driverPlateQuiescent - vpEval;
-        return static_cast<float>(korenTriodePlateCurrent(
-            controlGridVolts, plateVolts, power.tubeTriodeModel));
+      float f[3] = {
+          (Rp + lpOverDt) * ipNow + mOverDt * iaNow - mOverDt * ibNow - vp -
+              cPrimary,
+          mOverDt * ipNow + (Ra + laOverDt) * iaNow - mabOverDt * ibNow - va -
+              cSecondaryA,
+          -mOverDt * ipNow - mabOverDt * iaNow + (Rb + lbOverDt) * ibNow - vb -
+              cSecondaryB,
       };
 
-      float dIdriver_dVp = finiteDifferenceDerivative(
-          driverPlateCurrentFromVp, vp, 0.25f);
-
-      float f[7] = {
-          (Rp + Lp / dt) * ip + (M / dt) * ia + (-M / dt) * ib - vp -
-              ((Lp / dt) * ipPrev + (M / dt) * iaPrev +
-               (-M / dt) * ibPrev),
-
-          (M / dt) * ip + (Ra + La / dt) * ia + (-Mab / dt) * ib - va -
-              ((M / dt) * ipPrev + (La / dt) * iaPrev +
-               (-Mab / dt) * ibPrev),
-
-          (-M / dt) * ip + (-Mab / dt) * ia + (Rb + Lb / dt) * ib - vb -
-              ((-M / dt) * ipPrev + (-Mab / dt) * iaPrev +
-               (Lb / dt) * ibPrev),
-
-          ip + coreLossConductance * vp - idrive,
-
-          ia + iaBranch,
-
-          ib + ibBranch,
-
-          idrive - (driverPlateCurrentAbs - driverQuiescentCurrent),
+      float j[3][3] = {
+          {(Rp + lpOverDt) * dIp_dVp - 1.0f, mOverDt * dIa_dVa,
+           -mOverDt * dIb_dVb},
+          {mOverDt * dIp_dVp, (Ra + laOverDt) * dIa_dVa - 1.0f,
+           -mabOverDt * dIb_dVb},
+          {-mOverDt * dIp_dVp, -mabOverDt * dIa_dVa,
+           (Rb + lbOverDt) * dIb_dVb - 1.0f},
       };
 
-      float j[7][7] = {
-          {0.0f, Rp + Lp / dt, M / dt, -M / dt, -1.0f, 0.0f, 0.0f},
-          {0.0f, M / dt, Ra + La / dt, -Mab / dt, 0.0f, -1.0f, 0.0f},
-          {0.0f, -M / dt, -Mab / dt, Rb + Lb / dt, 0.0f, 0.0f, -1.0f},
-          {-1.0f, 1.0f, 0.0f, 0.0f, coreLossConductance, 0.0f, 0.0f},
-          {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, dia_dva, 0.0f},
-          {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, dib_dvb},
-          {1.0f, 0.0f, 0.0f, 0.0f, -dIdriver_dVp, 0.0f, 0.0f},
-      };
-
-      float rhs[7] = {-f[0], -f[1], -f[2], -f[3],
-                      -f[4], -f[5], -f[6]};
-      float delta[7] = {};
-      if (!solveLinear7x7(j, rhs, delta)) {
-        assert(false && "interstage 7x7 solve failed");
+      float rhs[3] = {-f[0], -f[1], -f[2]};
+      float delta[3] = {};
+      if (!solveLinear3x3(j, rhs, delta)) {
+        assert(false && "interstage 3x3 solve failed");
       }
 
-      idrive += delta[0];
-      ip += delta[1];
-      ia += delta[2];
-      ib += delta[3];
-      vp += delta[4];
-      va += delta[5];
-      vb += delta[6];
+      vp += delta[0];
+      va += delta[1];
+      vb += delta[2];
 
       float maxDelta = std::max(
           std::fabs(delta[0]),
-          std::max(std::fabs(delta[1]),
-                   std::max(std::fabs(delta[2]),
-                            std::max(std::fabs(delta[3]),
-                                     std::max(std::fabs(delta[4]),
-                                              std::max(std::fabs(delta[5]),
-                                                       std::fabs(delta[6])))))));
+          std::max(std::fabs(delta[1]), std::fabs(delta[2])));
 
       if (maxDelta < 1e-6f) {
         break;
       }
 
-      assert(std::isfinite(idrive));
-      assert(std::isfinite(ip));
-      assert(std::isfinite(ia));
-      assert(std::isfinite(ib));
       assert(std::isfinite(vp));
       assert(std::isfinite(va));
       assert(std::isfinite(vb));
     }
+
+    float driverPlateVolts = driverPlateQuiescent - vp;
+    float driverPlateCurrentAbs = static_cast<float>(korenTriodePlateCurrent(
+        controlGridVolts, driverPlateVolts, power.tubeTriodeModel));
+    ip = driverPlateCurrentAbs - driverQuiescentCurrent -
+         coreLossConductance * vp;
+    ia = -tubeGridBranchCurrent(
+        va, power.outputTubeBiasVolts, power.outputGridLeakResistanceOhms,
+        power.outputGridCurrentResistanceOhms);
+    ib = -tubeGridBranchCurrent(
+        vb, power.outputTubeBiasVolts, power.outputGridLeakResistanceOhms,
+        power.outputGridCurrentResistanceOhms);
   }
 
   float finalDriverPlateVolts = driverPlateQuiescent - vp;
@@ -1255,6 +1285,14 @@ void CurrentDrivenTransformer::configure(
   secondaryResistanceOhms = newSecondaryResistanceOhms;
   secondaryShuntCapFarads = newSecondaryShuntCapFarads;
   integrationSubsteps = newIntegrationSubsteps;
+  dtSub = 1.0f / (fs * static_cast<float>(integrationSubsteps));
+  cachedTurns = turnsRatioPrimaryToSecondary;
+  cachedPrimaryInductance =
+      primaryLeakageInductanceHenries + magnetizingInductanceHenries;
+  cachedSecondaryInductance =
+      secondaryLeakageInductanceHenries +
+      magnetizingInductanceHenries / (cachedTurns * cachedTurns);
+  cachedMutualInductance = magnetizingInductanceHenries / cachedTurns;
   reset();
 }
 
@@ -1275,14 +1313,10 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::project(
                              primaryLoadResistanceOhms);
   }
 
-  float dt = 1.0f / (fs * static_cast<float>(integrationSubsteps));
-  float safeTurns = requirePositiveFinite(turnsRatioPrimaryToSecondary);
-  float primaryInductance =
-      primaryLeakageInductanceHenries + magnetizingInductanceHenries;
-  float secondaryInductance =
-      secondaryLeakageInductanceHenries +
-      magnetizingInductanceHenries / (safeTurns * safeTurns);
-  float mutualInductance = magnetizingInductanceHenries / safeTurns;
+  float dt = requirePositiveFinite(dtSub);
+  float primaryInductance = cachedPrimaryInductance;
+  float secondaryInductance = cachedSecondaryInductance;
+  float mutualInductance = cachedMutualInductance;
   float primaryCap = requirePositiveFinite(primaryShuntCapFarads);
   float secondaryCap = requirePositiveFinite(secondaryShuntCapFarads);
   float primaryCoreConductance =
@@ -2409,6 +2443,14 @@ static float processSuperhetSourceFrame(Radio1938& radio,
       kRadioTwoPi * (ifStrip.sourceCarrierHz / ifStrip.internalSampleRate);
   float loStep =
       kRadioTwoPi * (ifStrip.loFrequencyHz / ifStrip.internalSampleRate);
+  float rfStepCos = std::cos(rfStep);
+  float rfStepSin = std::sin(rfStep);
+  float loStepCos = std::cos(loStep);
+  float loStepSin = std::sin(loStep);
+  float rfCos = std::cos(ifStrip.rfPhase);
+  float rfSin = std::sin(ifStrip.rfPhase);
+  float loCos = std::cos(ifStrip.loPhase);
+  float loSin = std::sin(ifStrip.loPhase);
   float noiseAmp =
       ctx.derived.demodIfNoiseAmp / std::sqrt(static_cast<float>(ifStrip.oversampleFactor));
   float audioAcc = 0.0f;
@@ -2420,14 +2462,20 @@ static float processSuperhetSourceFrame(Radio1938& radio,
     if (mode == SourceInputMode::ComplexEnvelope) {
       float envI = prevI + (currI - prevI) * t;
       float envQ = prevQ + (currQ - prevQ) * t;
-      rf = rfGain *
-           (envI * std::cos(ifStrip.rfPhase) - envQ * std::sin(ifStrip.rfPhase));
-      ifStrip.rfPhase = wrapPhase(ifStrip.rfPhase + rfStep);
+      rf = rfGain * (envI * rfCos - envQ * rfSin);
+
+      float nextRfCos = rfCos * rfStepCos - rfSin * rfStepSin;
+      float nextRfSin = rfSin * rfStepCos + rfCos * rfStepSin;
+      rfCos = nextRfCos;
+      rfSin = nextRfSin;
     } else {
       rf = prevI + (currI - prevI) * t;
     }
-    float lo = std::cos(ifStrip.loPhase);
-    ifStrip.loPhase = wrapPhase(ifStrip.loPhase + loStep);
+    float lo = loCos;
+    float nextLoCos = loCos * loStepCos - loSin * loStepSin;
+    float nextLoSin = loSin * loStepCos + loCos * loStepSin;
+    loCos = nextLoCos;
+    loSin = nextLoSin;
     float baseGridVolts =
         mixer.biasVolts - mixer.avcGridDriveVolts * avcT;
     float rfGridVolts = mixer.rfGridDriveVolts * rf;
@@ -2435,7 +2483,7 @@ static float processSuperhetSourceFrame(Radio1938& radio,
     float mixerPlateAcVolts = processConverterTubeStage(
         baseGridVolts, rfGridVolts, mixer.loGridBiasVolts,
         oscillatorGridVolts, 1.0f,
-      mixer.plateQuiescentVolts,
+        mixer.plateQuiescentVolts,
         mixer.screenVolts, mixer.biasVolts, mixer.modelCutoffVolts,
         mixer.plateQuiescentCurrentAmps, mixer.mutualConductanceSiemens,
         mixer.acLoadResistanceOhms, mixer.plateKneeVolts,
@@ -2464,6 +2512,11 @@ static float processSuperhetSourceFrame(Radio1938& radio,
   ifStrip.prevSourceMode = mode;
   ifStrip.prevSourceI = currI;
   ifStrip.prevSourceQ = currQ;
+  if (mode == SourceInputMode::ComplexEnvelope) {
+    ifStrip.rfPhase =
+        wrapPhase(ifStrip.rfPhase + ifStrip.oversampleFactor * rfStep);
+  }
+  ifStrip.loPhase = wrapPhase(ifStrip.loPhase + ifStrip.oversampleFactor * loStep);
   return audioAcc / static_cast<float>(ifStrip.oversampleFactor);
 }
 
@@ -2778,92 +2831,6 @@ float RadioPowerNode::process(Radio1938& radio,
       requirePositiveFinite(power.tubeQuiescentPlateVolts * supplyScale);
   float driverQuiescentCurrent = static_cast<float>(korenTriodePlateCurrent(
       power.tubeBiasVolts, driverPlateQuiescent, power.tubeTriodeModel));
-  struct SolvedTransformerDrive {
-    float driveCurrent = 0.0f;
-    CurrentDrivenTransformerSample sample{};
-  };
-  auto solvePrimaryVoltage = [&](auto&& projectTransformerSample,
-                                 auto&& driveCurrentForVoltage,
-                                 float initialGuess,
-                                 float minPrimaryVoltage,
-                                 float maxPrimaryVoltage) {
-    auto evalResidual = [&](float primaryVoltageGuess,
-                            CurrentDrivenTransformerSample& sampleOut,
-                            float& driveCurrentOut) {
-      driveCurrentOut = driveCurrentForVoltage(primaryVoltageGuess);
-      sampleOut = projectTransformerSample(driveCurrentOut);
-      return sampleOut.primaryVoltage - primaryVoltageGuess;
-    };
-
-    float bestGuess = clampf(initialGuess, minPrimaryVoltage, maxPrimaryVoltage);
-    float bestDriveCurrent = 0.0f;
-    CurrentDrivenTransformerSample bestSample{};
-    float bestResidual =
-        evalResidual(bestGuess, bestSample, bestDriveCurrent);
-
-    CurrentDrivenTransformerSample lowSample{};
-    CurrentDrivenTransformerSample highSample{};
-    float lowDriveCurrent = 0.0f;
-    float highDriveCurrent = 0.0f;
-    float lowResidual =
-        evalResidual(minPrimaryVoltage, lowSample, lowDriveCurrent);
-    float highResidual =
-        evalResidual(maxPrimaryVoltage, highSample, highDriveCurrent);
-
-    if (std::fabs(lowResidual) < std::fabs(bestResidual)) {
-      bestGuess = minPrimaryVoltage;
-      bestResidual = lowResidual;
-      bestDriveCurrent = lowDriveCurrent;
-      bestSample = lowSample;
-    }
-    if (std::fabs(highResidual) < std::fabs(bestResidual)) {
-      bestGuess = maxPrimaryVoltage;
-      bestResidual = highResidual;
-      bestDriveCurrent = highDriveCurrent;
-      bestSample = highSample;
-    }
-
-    if (lowResidual * highResidual <= 0.0f) {
-      float low = minPrimaryVoltage;
-      float high = maxPrimaryVoltage;
-      for (int i = 0; i < 8; ++i) {
-        float mid = 0.5f * (low + high);
-        CurrentDrivenTransformerSample midSample{};
-        float midDriveCurrent = 0.0f;
-        float midResidual = evalResidual(mid, midSample, midDriveCurrent);
-        if (std::fabs(midResidual) < std::fabs(bestResidual)) {
-          bestGuess = mid;
-          bestResidual = midResidual;
-          bestDriveCurrent = midDriveCurrent;
-          bestSample = midSample;
-        }
-        if (midResidual == 0.0f) break;
-        if (lowResidual * midResidual <= 0.0f) {
-          high = mid;
-          highResidual = midResidual;
-        } else {
-          low = mid;
-          lowResidual = midResidual;
-        }
-      }
-    } else {
-      float guess = bestGuess;
-      for (int i = 0; i < 6; ++i) {
-        CurrentDrivenTransformerSample predicted{};
-        float driveCurrent = 0.0f;
-        float residual = evalResidual(guess, predicted, driveCurrent);
-        if (std::fabs(residual) < std::fabs(bestResidual)) {
-          bestGuess = guess;
-          bestResidual = residual;
-          bestDriveCurrent = driveCurrent;
-          bestSample = predicted;
-        }
-        guess = 0.5f * (guess + predicted.primaryVoltage);
-      }
-    }
-
-    return SolvedTransformerDrive{bestDriveCurrent, bestSample};
-  };
   auto interstageSolved = solveDriverInterstageCenterTappedNoCap(
       power.interstageTransformer, power, controlGridVolts,
       driverPlateQuiescent, driverQuiescentCurrent);
@@ -2908,37 +2875,38 @@ float RadioPowerNode::process(Radio1938& radio,
   }
   float outputPlateQuiescent =
       requirePositiveFinite(power.outputTubeQuiescentPlateVolts * supplyScale);
-  float outputPrimaryMaxSwing = 2.5f * outputPlateQuiescent;
   const float outputPrimaryLoadResistance = 0.0f;
-  auto outputSolved = solvePrimaryVoltage(
-      [&](float driveCurrentAmps) {
-        return power.outputTransformer.project(
-            driveCurrentAmps, power.outputLoadResistanceOhms,
-            outputPrimaryLoadResistance);
-      },
-      [&](float primaryVoltageGuess) {
-        float plateA = outputPlateQuiescent - 0.5f * primaryVoltageGuess;
-        float plateB = outputPlateQuiescent + 0.5f * primaryVoltageGuess;
-        float plateCurrentA = static_cast<float>(korenTriodePlateCurrent(
-            power.outputTubeBiasVolts + power.outputGridAVolts, plateA,
-            power.outputTubeTriodeModel));
-        float plateCurrentB = static_cast<float>(korenTriodePlateCurrent(
-            power.outputTubeBiasVolts + power.outputGridBVolts, plateB,
-            power.outputTubeTriodeModel));
-        return 0.5f * (plateCurrentA - plateCurrentB);
-      },
-      power.outputTransformer.primaryVoltage,
-      -outputPrimaryMaxSwing, outputPrimaryMaxSwing);
-  auto outputSample = power.outputTransformer.process(
-      outputSolved.driveCurrent, power.outputLoadResistanceOhms,
+  auto affineOut = buildAffineProjection(
+      power.outputTransformer, power.outputLoadResistanceOhms,
       outputPrimaryLoadResistance);
-  float outputPlateA = outputPlateQuiescent - 0.5f * outputSample.primaryVoltage;
-  float outputPlateB = outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
-  float actualPlateCurrentA = static_cast<float>(korenTriodePlateCurrent(
+  float solvedOutputPrimaryVoltage = solveOutputPrimaryVoltageAffine(
+      affineOut, power, outputPlateQuiescent, power.outputGridAVolts,
+      power.outputGridBVolts, power.outputTransformer.primaryVoltage);
+  float outputPlateA =
+      outputPlateQuiescent - 0.5f * solvedOutputPrimaryVoltage;
+  float outputPlateB =
+      outputPlateQuiescent + 0.5f * solvedOutputPrimaryVoltage;
+  float plateCurrentA = static_cast<float>(korenTriodePlateCurrent(
       power.outputTubeBiasVolts + power.outputGridAVolts, outputPlateA,
       power.outputTubeTriodeModel));
-  float actualPlateCurrentB = static_cast<float>(korenTriodePlateCurrent(
+  float plateCurrentB = static_cast<float>(korenTriodePlateCurrent(
       power.outputTubeBiasVolts + power.outputGridBVolts, outputPlateB,
+      power.outputTubeTriodeModel));
+  float driveCurrent = 0.5f * (plateCurrentA - plateCurrentB);
+  auto outputSample = evalAffineProjection(affineOut, driveCurrent);
+  power.outputTransformer.primaryVoltage = outputSample.primaryVoltage;
+  power.outputTransformer.secondaryVoltage = outputSample.secondaryVoltage;
+  power.outputTransformer.primaryCurrent = outputSample.primaryCurrent;
+  power.outputTransformer.secondaryCurrent = outputSample.secondaryCurrent;
+  float actualOutputPlateA =
+      outputPlateQuiescent - 0.5f * outputSample.primaryVoltage;
+  float actualOutputPlateB =
+      outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
+  float actualPlateCurrentA = static_cast<float>(korenTriodePlateCurrent(
+      power.outputTubeBiasVolts + power.outputGridAVolts, actualOutputPlateA,
+      power.outputTubeTriodeModel));
+  float actualPlateCurrentB = static_cast<float>(korenTriodePlateCurrent(
+      power.outputTubeBiasVolts + power.outputGridBVolts, actualOutputPlateB,
       power.outputTubeTriodeModel));
   y = outputSample.secondaryVoltage;
   if (power.postLpHz > 0.0f) {

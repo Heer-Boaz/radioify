@@ -80,6 +80,7 @@ struct SeriesRlcBandpass {
   float seriesResistanceOhms = 0.0f;
   float outputResistanceOhms = 0.0f;
   int integrationSubsteps = 1;
+  float dtSub = 0.0f;
   float inductorCurrent = 0.0f;
   float capacitorVoltage = 0.0f;
 
@@ -104,6 +105,9 @@ struct CoupledTunedTransformer {
   float couplingCoeff = 0.0f;
   float outputResistanceOhms = 0.0f;
   int integrationSubsteps = 1;
+  float dtSub = 0.0f;
+  float mutualInductance = 0.0f;
+  float determinantInv = 0.0f;
   float primaryCurrent = 0.0f;
   float primaryCapVoltage = 0.0f;
   float secondaryCurrent = 0.0f;
@@ -163,6 +167,11 @@ struct CurrentDrivenTransformer {
   float secondaryResistanceOhms = 0.0f;
   float secondaryShuntCapFarads = 0.0f;
   int integrationSubsteps = 1;
+  float dtSub = 0.0f;
+  float cachedTurns = 0.0f;
+  float cachedPrimaryInductance = 0.0f;
+  float cachedSecondaryInductance = 0.0f;
+  float cachedMutualInductance = 0.0f;
   float primaryCurrent = 0.0f;
   float secondaryCurrent = 0.0f;
   float primaryVoltage = 0.0f;
