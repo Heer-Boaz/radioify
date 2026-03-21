@@ -637,36 +637,22 @@ struct ConverterTubeStageResult {
   float mixedPlateCurrent = 0.0f;
 };
 
-static ConverterTubeStageResult processConverterTubeStage(float baseGridVolts,
-                                                          float rfGridVolts,
-                                                          float oscillatorBiasVolts,
+static ConverterTubeStageResult processConverterTubeStage(float rfGridVolts,
+                                                          float mixedBaseGridVolts,
                                                           float oscillatorGridVolts,
-                                                          float supplyScale,
-                                                          float quiescentPlateVolts,
-                                                          float screenVolts,
-                                                          float biasVolts,
-                                                          float cutoffVolts,
-                                                          float quiescentPlateCurrentAmps,
-                                                          float mutualConductanceSiemens,
+                                                          const FixedPlatePentodeEvaluator& plateCurrentForGrid,
                                                           float acLoadResistanceOhms,
-                                                          float plateKneeVolts,
-                                                          float gridSoftnessVolts) {
-  float plateVoltage = requirePositiveFinite(quiescentPlateVolts * supplyScale);
-  float screen = requirePositiveFinite(screenVolts * supplyScale);
-  auto plateCurrentForGrid = prepareFixedPlatePentodeEvaluator(
-      plateVoltage, screen, biasVolts, cutoffVolts,
-      quiescentPlateVolts * supplyScale, screenVolts * supplyScale,
-      quiescentPlateCurrentAmps, mutualConductanceSiemens, plateKneeVolts,
-      gridSoftnessVolts);
-  float mixedBaseGridVolts = baseGridVolts + oscillatorBiasVolts;
+                                                          float& mixedCurrentOut) {
   float idleCurrent = plateCurrentForGrid.eval(mixedBaseGridVolts);
-  float rfOnlyCurrent = plateCurrentForGrid.eval(mixedBaseGridVolts + rfGridVolts);
+  float rfOnlyCurrent =
+      plateCurrentForGrid.eval(mixedBaseGridVolts + rfGridVolts);
   float loOnlyCurrent =
       plateCurrentForGrid.eval(mixedBaseGridVolts + oscillatorGridVolts);
   float mixedCurrent = plateCurrentForGrid.eval(mixedBaseGridVolts + rfGridVolts +
                                                 oscillatorGridVolts);
   float conversionCurrent =
       mixedCurrent - rfOnlyCurrent - loOnlyCurrent + idleCurrent;
+  mixedCurrentOut = mixedCurrent;
   ConverterTubeStageResult out{};
   out.plateAcVolts =
       conversionCurrent * requirePositiveFinite(acLoadResistanceOhms);
@@ -1221,6 +1207,81 @@ struct AffineTransformerProjection {
   CurrentDrivenTransformerSample base{};
   CurrentDrivenTransformerSample slope{};
 };
+
+struct FixedLoadAffineTransformerProjection {
+  std::array<float, 16> stateA{};
+  CurrentDrivenTransformerSample slope{};
+};
+
+static float transformerStateComponent(const CurrentDrivenTransformerSample& s,
+                                       int index) {
+  switch (index) {
+    case 0:
+      return s.primaryCurrent;
+    case 1:
+      return s.secondaryCurrent;
+    case 2:
+      return s.primaryVoltage;
+    default:
+      return s.secondaryVoltage;
+  }
+}
+
+static CurrentDrivenTransformerSample evalFixedLoadAffineBase(
+    const std::array<float, 16>& stateA,
+    const CurrentDrivenTransformer& t) {
+  float state[4] = {t.primaryCurrent, t.secondaryCurrent, t.primaryVoltage,
+                    t.secondaryVoltage};
+  float next[4] = {};
+  for (int row = 0; row < 4; ++row) {
+    float sum = 0.0f;
+    for (int col = 0; col < 4; ++col) {
+      sum += stateA[row * 4 + col] * state[col];
+    }
+    next[row] = sum;
+  }
+
+  return CurrentDrivenTransformerSample{
+      next[2], next[3], next[0], next[1]};
+}
+
+static FixedLoadAffineTransformerProjection buildFixedLoadAffineProjection(
+    const CurrentDrivenTransformer& t,
+    float secondaryLoadResistanceOhms,
+    float primaryLoadResistanceOhms) {
+  FixedLoadAffineTransformerProjection p{};
+
+  CurrentDrivenTransformer zero = t;
+  zero.reset();
+  p.slope =
+      zero.project(1.0f, secondaryLoadResistanceOhms, primaryLoadResistanceOhms);
+
+  for (int col = 0; col < 4; ++col) {
+    CurrentDrivenTransformer basis = t;
+    basis.reset();
+    switch (col) {
+      case 0:
+        basis.primaryCurrent = 1.0f;
+        break;
+      case 1:
+        basis.secondaryCurrent = 1.0f;
+        break;
+      case 2:
+        basis.primaryVoltage = 1.0f;
+        break;
+      case 3:
+        basis.secondaryVoltage = 1.0f;
+        break;
+    }
+    CurrentDrivenTransformerSample out =
+        basis.project(0.0f, secondaryLoadResistanceOhms, primaryLoadResistanceOhms);
+    for (int row = 0; row < 4; ++row) {
+      p.stateA[row * 4 + col] = transformerStateComponent(out, row);
+    }
+  }
+
+  return p;
+}
 
 static AffineTransformerProjection buildAffineProjection(
     const CurrentDrivenTransformer& t,
@@ -2645,7 +2706,10 @@ static float processSuperhetSourceFrame(Radio1938& radio,
   float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
   float rfGain =
       frontEnd.rfGain * std::max(0.35f, 1.0f - frontEnd.avcGainDepth * avcT);
-  float ifGain = ifStrip.stageGain;
+  float baseGridVolts = mixer.biasVolts - mixer.avcGridDriveVolts * avcT;
+  float ifGainControl =
+      std::max(0.20f, 1.0f - ifStrip.avcGainDepth * avcT);
+  float ifGain = ifStrip.stageGain * ifGainControl;
   float rfStep =
       kRadioTwoPi * (ifStrip.sourceCarrierHz / ifStrip.internalSampleRate);
   float loStep =
@@ -2658,52 +2722,55 @@ static float processSuperhetSourceFrame(Radio1938& radio,
   float rfSin = std::sin(ifStrip.rfPhase);
   float loCos = std::cos(ifStrip.loPhase);
   float loSin = std::sin(ifStrip.loPhase);
+  float invOversample = 1.0f / static_cast<float>(ifStrip.oversampleFactor);
+  float inputIStep = (currI - prevI) * invOversample;
+  float inputQStep = (currQ - prevQ) * invOversample;
+  float runningI = prevI;
+  float runningQ = prevQ;
+  float mixedBaseGridVolts = baseGridVolts + mixer.loGridBiasVolts;
+  FixedPlatePentodeEvaluator mixerPlateCurrentForGrid =
+      prepareFixedPlatePentodeEvaluator(
+          mixer.plateQuiescentVolts, mixer.screenVolts, mixer.biasVolts,
+          mixer.modelCutoffVolts, mixer.plateQuiescentVolts, mixer.screenVolts,
+          mixer.plateQuiescentCurrentAmps, mixer.mutualConductanceSiemens,
+          mixer.plateKneeVolts, mixer.gridSoftnessVolts);
   float noiseAmp =
       ctx.derived.demodIfNoiseAmp / std::sqrt(static_cast<float>(ifStrip.oversampleFactor));
   float audioAcc = 0.0f;
 
   for (int step = 0; step < ifStrip.oversampleFactor; ++step) {
-    float t =
-        static_cast<float>(step + 1) / static_cast<float>(ifStrip.oversampleFactor);
     float rf = 0.0f;
     if (mode == SourceInputMode::ComplexEnvelope) {
-      float envI = prevI + (currI - prevI) * t;
-      float envQ = prevQ + (currQ - prevQ) * t;
-      rf = rfGain * (envI * rfCos - envQ * rfSin);
+      runningI += inputIStep;
+      runningQ += inputQStep;
+      rf = rfGain * (runningI * rfCos - runningQ * rfSin);
 
       float nextRfCos = rfCos * rfStepCos - rfSin * rfStepSin;
       float nextRfSin = rfSin * rfStepCos + rfCos * rfStepSin;
       rfCos = nextRfCos;
       rfSin = nextRfSin;
     } else {
-      rf = prevI + (currI - prevI) * t;
+      runningI += inputIStep;
+      rf = runningI;
     }
     float lo = loCos;
     float nextLoCos = loCos * loStepCos - loSin * loStepSin;
     float nextLoSin = loSin * loStepCos + loCos * loStepSin;
     loCos = nextLoCos;
     loSin = nextLoSin;
-    float baseGridVolts =
-        mixer.biasVolts - mixer.avcGridDriveVolts * avcT;
     float rfGridVolts = mixer.rfGridDriveVolts * rf;
     float oscillatorGridVolts = mixer.loGridDriveVolts * lo;
+    float mixedCurrent = 0.0f;
     ConverterTubeStageResult mixerResult = processConverterTubeStage(
-        baseGridVolts, rfGridVolts, mixer.loGridBiasVolts,
-        oscillatorGridVolts, 1.0f,
-        mixer.plateQuiescentVolts,
-        mixer.screenVolts, mixer.biasVolts, mixer.modelCutoffVolts,
-        mixer.plateQuiescentCurrentAmps, mixer.mutualConductanceSiemens,
-        mixer.acLoadResistanceOhms, mixer.plateKneeVolts,
-        mixer.gridSoftnessVolts);
+        rfGridVolts, mixedBaseGridVolts, oscillatorGridVolts,
+        mixerPlateCurrentForGrid, mixer.acLoadResistanceOhms, mixedCurrent);
     float mixerPlateAcVolts = mixerResult.plateAcVolts;
     if (radio.calibration.enabled) {
       radio.calibration.maxMixerPlateCurrentAmps = std::max(
           radio.calibration.maxMixerPlateCurrentAmps,
-          mixerResult.mixedPlateCurrent);
+          mixedCurrent);
     }
-    float ifGainControl =
-        std::max(0.20f, 1.0f - ifStrip.avcGainDepth * avcT);
-    float ifSample = mixerPlateAcVolts * ifGain * ifGainControl;
+    float ifSample = mixerPlateAcVolts * ifGain;
     ifSample = ifStrip.interstageTransformer.process(ifSample);
     ifSample = ifStrip.outputTransformer.process(ifSample);
     audioAcc += demod.process(AMDetectorSampleInput{ifSample, noiseAmp});
@@ -2971,10 +3038,14 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
       power.outputTransformerSecondaryResistanceOhms,
       power.outputTransformerSecondaryShuntCapFarads,
       power.outputTransformerIntegrationSubsteps);
-  power.outputTransformerAffineSlope =
-      buildAffineProjection(power.outputTransformer, power.outputLoadResistanceOhms,
-                            0.0f)
-          .slope;
+  {
+    FixedLoadAffineTransformerProjection outputAffine =
+        buildFixedLoadAffineProjection(power.outputTransformer,
+                                       power.outputLoadResistanceOhms, 0.0f);
+    power.outputTransformerAffineReady = true;
+    power.outputTransformerAffineStateA = outputAffine.stateA;
+    power.outputTransformerAffineSlope = outputAffine.slope;
+  }
   power.satOsLpIn = Biquad{};
   power.satOsLpOut = Biquad{};
 }
@@ -3081,9 +3152,15 @@ float RadioPowerNode::process(Radio1938& radio,
       requirePositiveFinite(power.outputTubeQuiescentPlateVolts * supplyScale);
   const float outputPrimaryLoadResistance = 0.0f;
   AffineTransformerProjection affineOut{};
-  affineOut.base = power.outputTransformer.project(
-      0.0f, power.outputLoadResistanceOhms, outputPrimaryLoadResistance);
-  affineOut.slope = power.outputTransformerAffineSlope;
+  if (power.outputTransformerAffineReady) {
+    affineOut.base = evalFixedLoadAffineBase(
+        power.outputTransformerAffineStateA, power.outputTransformer);
+    affineOut.slope = power.outputTransformerAffineSlope;
+  } else {
+    affineOut = buildAffineProjection(
+        power.outputTransformer, power.outputLoadResistanceOhms,
+        outputPrimaryLoadResistance);
+  }
   float solvedOutputPrimaryVoltage = solveOutputPrimaryVoltageAffine(
       affineOut, power, outputPlateQuiescent, power.outputGridAVolts,
       power.outputGridBVolts, power.outputTransformer.primaryVoltage);

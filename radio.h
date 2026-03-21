@@ -1203,6 +1203,8 @@ struct RadioOutputClipNode {
     CenterTappedInterstageState interstageCt;
     CurrentDrivenTransformer interstageTransformer;
     CurrentDrivenTransformer outputTransformer;
+    bool outputTransformerAffineReady = false;
+    std::array<float, 16> outputTransformerAffineStateA{};
     CurrentDrivenTransformerSample outputTransformerAffineSlope;
     Biquad postLpf;
     Biquad satOsLpIn;
