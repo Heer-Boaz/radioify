@@ -1071,6 +1071,15 @@ struct RadioOutputClipNode {
   } tone;
 
   struct PowerNodeState {
+    struct CenterTappedInterstageState {
+      float primaryCurrent = 0.0f;
+      float primaryVoltage = 0.0f;
+      float secondaryACurrent = 0.0f;
+      float secondaryAVoltage = 0.0f;
+      float secondaryBCurrent = 0.0f;
+      float secondaryBVoltage = 0.0f;
+    };
+
     float sagEnv = 0.0f;
     float sagAtk = 0.0f;
     float sagRel = 0.0f;
@@ -1156,6 +1165,7 @@ struct RadioOutputClipNode {
     int outputTransformerIntegrationSubsteps = 1;
     float outputLoadResistanceOhms = 0.0f;
     float nominalOutputPowerWatts = 0.0f;
+    CenterTappedInterstageState interstageCt;
     CurrentDrivenTransformer interstageTransformer;
     CurrentDrivenTransformer outputTransformer;
     Biquad postLpf;
