@@ -3771,7 +3771,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.outputTransformerSecondaryShuntCapFarads = 0.0f;
   radio.power.outputTransformerIntegrationSubsteps = 8;
   radio.power.outputLoadResistanceOhms = 3.9f;
-  radio.power.nominalOutputPowerWatts = 2.0f;
+  radio.power.nominalOutputPowerWatts = 0.5f;
   assert(std::fabs(radio.power.tubePlateSupplyVolts -
                    radio.power.tubePlateCurrentAmps *
                        radio.power.interstagePrimaryResistanceOhms -
