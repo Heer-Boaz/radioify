@@ -468,8 +468,3 @@ void sexy_execute(void)
 {
  psxCpu->Execute();
 }
-
-void sexy_shutdown(void)
-{
- psxShutdown();
-}

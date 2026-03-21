@@ -707,7 +707,6 @@ void PsfAudioDecoder::Impl::stopSexyPlayback() {
   sexy.cv.notify_all();
   sexy_stop();
   sexyThread.join();
-  sexy_shutdown();
   g_sexyState.store(nullptr, std::memory_order_release);
   resetSexyState(&sexy);
 }

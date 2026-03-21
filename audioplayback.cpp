@@ -206,6 +206,7 @@ struct AudioBackendHandlers {
   bool supportsTrackIndex = false;
   bool allowSeekInCallback = true;
   bool finishOnShortRead = true;
+  bool allowConcurrentOfflineAnalysis = true;
   BackendInitProc init = nullptr;
   BackendUninitProc uninit = nullptr;
   BackendReadProc read = nullptr;
@@ -874,6 +875,26 @@ static void stopDecodeWorker() {
   gAudio.state.decodeStop.store(false, std::memory_order_relaxed);
 }
 
+static bool queuedDecodeReachedKnownEnd(const AudioState* state,
+                                        uint64_t framePos) {
+  if (!state) return false;
+  uint64_t totalFrames = state->totalFrames.load(std::memory_order_relaxed);
+  return totalFrames > 0 && framePos >= totalFrames;
+}
+
+static bool waitForQueuedDecodeRetry(AudioState* state) {
+  if (!state) return false;
+  std::unique_lock<std::mutex> lock(state->decodeMutex);
+  state->decodeCv.wait_for(lock, std::chrono::milliseconds(5), [&]() {
+    return state->decodeStop.load(std::memory_order_relaxed) ||
+           state->seekRequested.load(std::memory_order_relaxed) ||
+           !state->streamQueueEnabled.load(std::memory_order_relaxed);
+  });
+  return !state->decodeStop.load(std::memory_order_relaxed) &&
+         !state->seekRequested.load(std::memory_order_relaxed) &&
+         state->streamQueueEnabled.load(std::memory_order_relaxed);
+}
+
 static void updateDeviceDelayFrames() {
   uint64_t latencyFrames = 0;
   if (gAudio.deviceReady &&
@@ -1007,9 +1028,11 @@ static bool startDecodeWorker(const AudioBackendHandlers* backend,
       std::thread([backend, startFrame, workerChannels, workerRate,
                    finishOnShortRead]() {
         constexpr uint32_t kChunkFrames = 2048;
+        constexpr uint32_t kQueuedDecodeEmptyReadLimit = 32;
         std::vector<float> buffer(static_cast<size_t>(kChunkFrames) *
                                   workerChannels);
         uint64_t framePos = startFrame;
+        uint32_t consecutiveEmptyReads = 0;
         while (!gAudio.state.decodeStop.load(std::memory_order_relaxed)) {
           if (backend->seek &&
               gAudio.state.seekRequested.exchange(false,
@@ -1027,6 +1050,7 @@ static bool startDecodeWorker(const AudioBackendHandlers* backend,
               backend->seek(0);
             }
             framePos = targetFrame;
+            consecutiveEmptyReads = 0;
             resetQueuedPlaybackState(&gAudio.state, targetFrame, 0);
             continue;
           }
@@ -1055,12 +1079,22 @@ static bool startDecodeWorker(const AudioBackendHandlers* backend,
 
           bool reachedEnd = false;
           if (framesRead == 0) {
-            reachedEnd = true;
-          } else if (finishOnShortRead && framesRead < framesToRead) {
+            if (queuedDecodeReachedKnownEnd(&gAudio.state, framePos)) {
+              reachedEnd = true;
+            } else if (++consecutiveEmptyReads >=
+                       kQueuedDecodeEmptyReadLimit) {
+              reachedEnd = true;
+            } else {
+              waitForQueuedDecodeRetry(&gAudio.state);
+            }
+          } else if (finishOnShortRead && framesRead < framesToRead &&
+                     queuedDecodeReachedKnownEnd(&gAudio.state,
+                                                framePos + framesRead)) {
             reachedEnd = true;
           }
 
           if (framesRead > 0) {
+            consecutiveEmptyReads = 0;
             if (!gAudio.state.dry && gAudio.state.useRadio1938.load()) {
               processRadioBlock(&gAudio.state, buffer.data(),
                                 static_cast<uint32_t>(framesRead));
@@ -1087,6 +1121,9 @@ static bool startDecodeWorker(const AudioBackendHandlers* backend,
               offset += written;
             }
             framePos += offset;
+            if (queuedDecodeReachedKnownEnd(&gAudio.state, framePos)) {
+              reachedEnd = true;
+            }
           }
 
           if (reachedEnd) {
@@ -1865,31 +1902,31 @@ std::string warningGsfBackend() { return gAudio.gsfWarning; }
 std::string warningVgmBackend() { return gAudio.vgmWarning; }
 
 const AudioBackendHandlers kBackendM4a{
-    AudioMode::M4a, false, false, false, initM4aBackend, uninitM4aBackend,
+    AudioMode::M4a, false, false, false, true, initM4aBackend, uninitM4aBackend,
     readM4aBackend, nullptr, totalM4aBackend, nullptr};
 const AudioBackendHandlers kBackendFlac{
-    AudioMode::Flac, false, true, true, initFlacBackend, uninitFlacBackend,
+    AudioMode::Flac, false, true, true, true, initFlacBackend, uninitFlacBackend,
     readFlacBackend, seekFlacBackend, totalFlacBackend, nullptr};
 const AudioBackendHandlers kBackendKss{
-    AudioMode::Kss, true, true, true, initKssBackend, uninitKssBackend,
+    AudioMode::Kss, true, true, true, true, initKssBackend, uninitKssBackend,
     readKssBackend, seekKssBackend, totalKssBackend, nullptr};
 const AudioBackendHandlers kBackendPsf{
-    AudioMode::Psf, true, true, true, initPsfBackend, uninitPsfBackend,
+    AudioMode::Psf, true, true, true, false, initPsfBackend, uninitPsfBackend,
     readPsfBackend, seekPsfBackend, totalPsfBackend, nullptr};
 const AudioBackendHandlers kBackendGsf{
-    AudioMode::Gsf, true, true, true, initGsfBackend, uninitGsfBackend,
+    AudioMode::Gsf, true, true, true, false, initGsfBackend, uninitGsfBackend,
     readGsfBackend, seekGsfBackend, totalGsfBackend, warningGsfBackend};
 const AudioBackendHandlers kBackendVgm{
-    AudioMode::Vgm, true, true, true, initVgmBackend, uninitVgmBackend,
+    AudioMode::Vgm, true, true, true, true, initVgmBackend, uninitVgmBackend,
     readVgmBackend, seekVgmBackend, totalVgmBackend, warningVgmBackend};
 const AudioBackendHandlers kBackendGme{
-    AudioMode::Gme, true, true, true, initGmeBackend, uninitGmeBackend,
+    AudioMode::Gme, true, true, true, true, initGmeBackend, uninitGmeBackend,
     readGmeBackend, seekGmeBackend, totalGmeBackend, warningGmeBackend};
 const AudioBackendHandlers kBackendMidi{
-    AudioMode::Midi, false, true, true, initMidiBackend, uninitMidiBackend,
+    AudioMode::Midi, false, true, true, true, initMidiBackend, uninitMidiBackend,
     readMidiBackend, seekMidiBackend, totalMidiBackend, nullptr};
 const AudioBackendHandlers kBackendMiniaudio{
-    AudioMode::Miniaudio, false, true, true, initMiniaudioBackend,
+    AudioMode::Miniaudio, false, true, true, true, initMiniaudioBackend,
     uninitMiniaudioBackend, readMiniaudioBackend, seekMiniaudioBackend,
     totalMiniaudioBackend, nullptr};
 
@@ -2098,9 +2135,12 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
   updateDeviceDelayFrames();
 
   const uint64_t analysisLeadInFrames = gAudio.state.audioLeadSilenceFrames.load();
-  melodyOfflineStart(file, trackIndex, gAudio.sampleRate, gAudio.channels,
-                    analysisLeadInFrames, gAudio.kssOptions, gAudio.nsfOptions,
-                    gAudio.vgmOptions, gAudio.vgmDeviceOverrides);
+  if (backend->allowConcurrentOfflineAnalysis) {
+    melodyOfflineStart(file, trackIndex, gAudio.sampleRate, gAudio.channels,
+                      analysisLeadInFrames, gAudio.kssOptions,
+                      gAudio.nsfOptions, gAudio.vgmOptions,
+                      gAudio.vgmDeviceOverrides);
+  }
 
   gAudio.nowPlaying = file;
   return true;
