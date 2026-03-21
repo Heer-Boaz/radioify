@@ -594,6 +594,28 @@ struct FixedPlatePentodeEvaluator {
         std::max(softplusVolts(gridVolts - cutoffVolts, gridSoftnessVolts), 0.0f);
     return currentScale * std::pow(activation, exponent);
   }
+
+  float evalDerivative(float gridVolts) const {
+    float slope = requirePositiveFinite(gridSoftnessVolts);
+    float y = (gridVolts - cutoffVolts) / slope;
+    float activation = 0.0f;
+    float logistic = 0.0f;
+    if (y >= 20.0f) {
+      activation = gridVolts - cutoffVolts;
+      logistic = 1.0f;
+    } else if (y <= -20.0f) {
+      activation = 0.0f;
+      logistic = 0.0f;
+    } else {
+      activation = slope * std::log1p(std::exp(y));
+      logistic = 1.0f / (1.0f + std::exp(-y));
+    }
+    if (activation <= 0.0f) {
+      return 0.0f;
+    }
+    return currentScale * exponent * std::pow(activation, exponent - 1.0f) *
+           logistic;
+  }
 };
 
 static FixedPlatePentodeEvaluator prepareFixedPlatePentodeEvaluator(
@@ -1878,11 +1900,14 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
       std::clamp(ifCenter - afcOffset, lowSenseBound, highSenseBound - 180.0f);
   float highSenseHz =
       std::clamp(ifCenter + afcOffset, lowSenseHz + 120.0f, highSenseBound);
-  float afcLpHz = (afcSenseLpHz > 0.0f)
-                      ? std::clamp(afcSenseLpHz, 5.0f, 180.0f)
-                      : 45.0f;
-  afcLowSense.setBandpass(fs, lowSenseHz, 1.10f);
-  afcHighSense.setBandpass(fs, highSenseHz, 1.10f);
+  float afcLpHz = std::clamp(0.30f * std::max(bwHz, 1.0f), 80.0f,
+                             std::min(1800.0f, 0.12f * fs));
+  afcLowOffsetHz = lowSenseHz - ifCenter;
+  afcHighOffsetHz = highSenseHz - ifCenter;
+  afcLowStep = kRadioTwoPi * (afcLowOffsetHz / std::max(fs, 1.0f));
+  afcHighStep = kRadioTwoPi * (afcHighOffsetHz / std::max(fs, 1.0f));
+  afcLowProbe.setLowpass(fs, afcLpHz, kRadioBiquadQ);
+  afcHighProbe.setLowpass(fs, afcLpHz, kRadioBiquadQ);
   afcErrorLp.setLowpass(fs, afcLpHz, kRadioBiquadQ);
   audioPostLp1.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
   audioPostLp2.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
@@ -1902,8 +1927,12 @@ void AMDetector::reset() {
   audioEnv = 0.0f;
   avcEnv = 0.0f;
   afcError = 0.0f;
+  afcLowPhase = 0.0f;
+  afcHighPhase = 0.0f;
   afcLowSense.reset();
   afcHighSense.reset();
+  afcLowProbe.reset();
+  afcHighProbe.reset();
   afcErrorLp.reset();
   audioPostLp1.reset();
   audioPostLp2.reset();
@@ -2194,21 +2223,48 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
       radio.calibration.validationDigitalClip;
 }
 
-float AMDetector::process(const AMDetectorSampleInput& in) {
-  float ifSample = in.signal;
-  if (in.ifNoiseAmp > 0.0f) {
-    ifSample += dist(rng) * in.ifNoiseAmp;
+float AMDetector::processEnvelope(float signalI,
+                                  float signalQ,
+                                  float ifNoiseAmp) {
+  constexpr float kInvSqrt2 = 0.70710678118f;
+  float ifI = signalI;
+  float ifQ = signalQ;
+  if (ifNoiseAmp > 0.0f) {
+    float noiseScale = ifNoiseAmp * kInvSqrt2;
+    ifI += dist(rng) * noiseScale;
+    ifQ += dist(rng) * noiseScale;
   }
 
-  float afcLow = std::fabs(afcLowSense.process(ifSample));
-  float afcHigh = std::fabs(afcHighSense.process(ifSample));
+  auto processProbe = [&](float phase,
+                          float step,
+                          IQBiquad& probe,
+                          float& nextPhase) {
+    float c = std::cos(phase);
+    float s = std::sin(phase);
+    float mixedI = ifI * c + ifQ * s;
+    float mixedQ = ifQ * c - ifI * s;
+    auto filtered = probe.process(mixedI, mixedQ);
+    nextPhase = wrapPhase(phase + step);
+    return std::sqrt(filtered[0] * filtered[0] + filtered[1] * filtered[1]);
+  };
+
+  float nextLowPhase = afcLowPhase;
+  float nextHighPhase = afcHighPhase;
+  float afcLow =
+      processProbe(afcLowPhase, afcLowStep, afcLowProbe, nextLowPhase);
+  float afcHigh =
+      processProbe(afcHighPhase, afcHighStep, afcHighProbe, nextHighPhase);
+  afcLowPhase = nextLowPhase;
+  afcHighPhase = nextHighPhase;
+
   float afcDen = std::max(afcLow + afcHigh, 1e-6f);
   float rawAfcError = (afcHigh - afcLow) / afcDen;
   afcError = afcErrorLp.process(rawAfcError);
 
-  audioRect = diodeJunctionRectify(ifSample, audioDiodeDrop,
+  float ifMagnitude = std::sqrt(ifI * ifI + ifQ * ifQ);
+  audioRect = diodeJunctionRectify(ifMagnitude, audioDiodeDrop,
                                    audioJunctionSlopeVolts);
-  avcRect = diodeJunctionRectify(ifSample, avcDiodeDrop,
+  avcRect = diodeJunctionRectify(ifMagnitude, avcDiodeDrop,
                                  avcJunctionSlopeVolts);
 
   if (audioRect > audioEnv) {
@@ -2228,6 +2284,10 @@ float AMDetector::process(const AMDetectorSampleInput& in) {
   float audioOut = audioPostLp1.process(audioEnv - avcEnv);
   audioOut = audioPostLp2.process(audioOut);
   return audioOut;
+}
+
+float AMDetector::process(const AMDetectorSampleInput& in) {
+  return processEnvelope(in.signal, 0.0f, in.ifNoiseAmp);
 }
 
 void SpeakerSim::init(float fs) {
@@ -2579,7 +2639,10 @@ static float selectSourceCarrierHz(float outputFs,
   float audioSidebandHz = 0.48f * std::max(bwHz, 1.0f);
   float maxCarrierByOutput =
       0.5f * std::max(outputFs, 1.0f) - audioSidebandHz - 1600.0f;
-  float maxCarrier = std::min(maxCarrierByIf, maxCarrierByOutput);
+  float maxCarrier = maxCarrierByOutput;
+  if (ifCenterHz > 0.0f) {
+    maxCarrier = std::min(maxCarrierByIf, maxCarrierByOutput);
+  }
   if (maxCarrier <= 6000.0f) {
     return std::clamp(0.25f * std::max(outputFs, 1.0f), 3000.0f,
                       std::max(3000.0f, maxCarrierByOutput));
@@ -2595,11 +2658,16 @@ void RadioIFStripNode::reset(Radio1938& radio) {
   auto& ifStrip = radio.ifStrip;
   ifStrip.rfPhase = 0.0f;
   ifStrip.loPhase = 0.0f;
+  ifStrip.sourceDownmixPhase = 0.0f;
+  ifStrip.ifEnvelopePhase = 0.0f;
   ifStrip.prevSourceMode = SourceInputMode::ComplexEnvelope;
   ifStrip.prevSourceI = 0.0f;
   ifStrip.prevSourceQ = 0.0f;
   ifStrip.bp1.reset();
   ifStrip.bp2.reset();
+  ifStrip.sourceEnvelope.reset();
+  ifStrip.interstageEnvelope.reset();
+  ifStrip.outputEnvelope.reset();
   ifStrip.interstageTransformer.reset();
   ifStrip.outputTransformer.reset();
 }
@@ -2620,17 +2688,21 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
   };
   float sampleRate = std::max(radio.sampleRate, 1.0f);
   float safeBw = std::max(bwHz, ifStrip.ifMinBwHz);
-  ifStrip.oversampleFactor =
-      computeIfOversampleFactor(sampleRate, ifStrip.ifCenterHz, safeBw);
-  ifStrip.internalSampleRate = sampleRate * ifStrip.oversampleFactor;
+  ifStrip.oversampleFactor = 1;
+  ifStrip.internalSampleRate = sampleRate;
   ifStrip.sourceCarrierHz = selectSourceCarrierHz(
-      sampleRate, ifStrip.internalSampleRate, ifStrip.ifCenterHz, safeBw);
+      sampleRate, sampleRate, 0.0f, safeBw);
   ifStrip.loFrequencyHz = ifStrip.sourceCarrierHz + ifStrip.ifCenterHz + tuneHz;
 
   float stageBandwidthHz = std::max(safeBw * 1.55f, 600.0f);
-  float stageQ = std::max(0.35f, ifStrip.ifCenterHz / stageBandwidthHz);
-  ifStrip.bp1.setBandpass(ifStrip.internalSampleRate, ifStrip.ifCenterHz, stageQ);
-  ifStrip.bp2.setBandpass(ifStrip.internalSampleRate, ifStrip.ifCenterHz, stageQ);
+  float sourceEnvelopeLpHz =
+      std::clamp(0.78f * safeBw, 1200.0f, 0.18f * sampleRate);
+  float ifEnvelopeLpHz =
+      std::clamp(0.50f * stageBandwidthHz, 800.0f, 0.18f * sampleRate);
+  ifStrip.sourceEnvelope.setLowpass(sampleRate, sourceEnvelopeLpHz,
+                                    kRadioBiquadQ);
+  ifStrip.interstageEnvelope.setLowpass(sampleRate, ifEnvelopeLpHz, 0.82f);
+  ifStrip.outputEnvelope.setLowpass(sampleRate, ifEnvelopeLpHz, 0.82f);
   ifStrip.primaryCapacitanceFarads =
       resonantCapacitanceFarads(ifStrip.ifCenterHz,
                                 ifStrip.primaryInductanceHenries);
@@ -2643,20 +2715,6 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
   ifStrip.secondaryResistanceOhms =
       seriesResistanceForBandwidth(ifStrip.secondaryInductanceHenries,
                                    stageBandwidthHz);
-  ifStrip.interstageTransformer.configure(
-      ifStrip.internalSampleRate, ifStrip.primaryInductanceHenries,
-      ifStrip.primaryCapacitanceFarads, ifStrip.primaryResistanceOhms,
-      ifStrip.secondaryInductanceHenries, ifStrip.secondaryCapacitanceFarads,
-      ifStrip.secondaryResistanceOhms + ifStrip.secondaryLoadResistanceOhms,
-      ifStrip.interstageCouplingCoeff,
-      ifStrip.secondaryLoadResistanceOhms, 8);
-  ifStrip.outputTransformer.configure(
-      ifStrip.internalSampleRate, ifStrip.primaryInductanceHenries,
-      ifStrip.primaryCapacitanceFarads, ifStrip.primaryResistanceOhms,
-      ifStrip.secondaryInductanceHenries, ifStrip.secondaryCapacitanceFarads,
-      ifStrip.secondaryResistanceOhms + ifStrip.secondaryLoadResistanceOhms,
-      ifStrip.outputCouplingCoeff,
-      ifStrip.secondaryLoadResistanceOhms, 8);
 
   float senseLow = ifStrip.ifCenterHz - 0.5f * safeBw;
   float senseHigh = ifStrip.ifCenterHz + 0.5f * safeBw;
@@ -2675,11 +2733,30 @@ float RadioIFStripNode::process(Radio1938& radio,
 
 void RadioDemodNode::init(Radio1938& radio, RadioInitContext& initCtx) {
   auto& demod = radio.demod;
-  demod.am.init(radio.ifStrip.internalSampleRate, initCtx.tunedBw,
+  demod.am.init(radio.sampleRate, initCtx.tunedBw,
                 radio.tuning.tuneOffsetHz);
 }
 
 void RadioDemodNode::reset(Radio1938& radio) { radio.demod.am.reset(); }
+
+static float estimateMixerEnvelopeConversionGain(
+    const FixedPlatePentodeEvaluator& plateCurrentForGrid,
+    float mixedBaseGridVolts,
+    float loGridDriveVolts) {
+  constexpr int kMixerHarmonicSamples = 8;
+  float baseDerivative = plateCurrentForGrid.evalDerivative(mixedBaseGridVolts);
+  float harmonicSum = 0.0f;
+  for (int i = 0; i < kMixerHarmonicSamples; ++i) {
+    float phase =
+        kRadioTwoPi * (static_cast<float>(i) + 0.5f) /
+        static_cast<float>(kMixerHarmonicSamples);
+    float loGridVolts = loGridDriveVolts * std::cos(phase);
+    float drivenDerivative = plateCurrentForGrid.evalDerivative(
+        mixedBaseGridVolts + loGridVolts);
+    harmonicSum += (drivenDerivative - baseDerivative) * std::cos(phase);
+  }
+  return harmonicSum / static_cast<float>(kMixerHarmonicSamples);
+}
 
 static float processSuperhetSourceFrame(Radio1938& radio,
                                         float frontEndSample,
@@ -2688,8 +2765,7 @@ static float processSuperhetSourceFrame(Radio1938& radio,
   auto& mixer = radio.mixer;
   auto& ifStrip = radio.ifStrip;
   auto& demod = radio.demod.am;
-  if (!ifStrip.enabled || ifStrip.internalSampleRate <= 0.0f ||
-      ifStrip.oversampleFactor <= 0) {
+  if (!ifStrip.enabled || ifStrip.internalSampleRate <= 0.0f) {
     return radio.sourceFrame.i;
   }
 
@@ -2697,11 +2773,9 @@ static float processSuperhetSourceFrame(Radio1938& radio,
   float currI =
       (mode == SourceInputMode::RealRf) ? frontEndSample : radio.sourceFrame.i;
   float currQ = radio.sourceFrame.q;
-  float prevI = ifStrip.prevSourceI;
-  float prevQ = ifStrip.prevSourceQ;
   if (mode != ifStrip.prevSourceMode) {
-    prevI = currI;
-    prevQ = currQ;
+    ifStrip.sourceEnvelope.reset();
+    ifStrip.sourceDownmixPhase = 0.0f;
   }
   float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
   float rfGain =
@@ -2710,23 +2784,6 @@ static float processSuperhetSourceFrame(Radio1938& radio,
   float ifGainControl =
       std::max(0.20f, 1.0f - ifStrip.avcGainDepth * avcT);
   float ifGain = ifStrip.stageGain * ifGainControl;
-  float rfStep =
-      kRadioTwoPi * (ifStrip.sourceCarrierHz / ifStrip.internalSampleRate);
-  float loStep =
-      kRadioTwoPi * (ifStrip.loFrequencyHz / ifStrip.internalSampleRate);
-  float rfStepCos = std::cos(rfStep);
-  float rfStepSin = std::sin(rfStep);
-  float loStepCos = std::cos(loStep);
-  float loStepSin = std::sin(loStep);
-  float rfCos = std::cos(ifStrip.rfPhase);
-  float rfSin = std::sin(ifStrip.rfPhase);
-  float loCos = std::cos(ifStrip.loPhase);
-  float loSin = std::sin(ifStrip.loPhase);
-  float invOversample = 1.0f / static_cast<float>(ifStrip.oversampleFactor);
-  float inputIStep = (currI - prevI) * invOversample;
-  float inputQStep = (currQ - prevQ) * invOversample;
-  float runningI = prevI;
-  float runningQ = prevQ;
   float mixedBaseGridVolts = baseGridVolts + mixer.loGridBiasVolts;
   FixedPlatePentodeEvaluator mixerPlateCurrentForGrid =
       prepareFixedPlatePentodeEvaluator(
@@ -2734,57 +2791,58 @@ static float processSuperhetSourceFrame(Radio1938& radio,
           mixer.modelCutoffVolts, mixer.plateQuiescentVolts, mixer.screenVolts,
           mixer.plateQuiescentCurrentAmps, mixer.mutualConductanceSiemens,
           mixer.plateKneeVolts, mixer.gridSoftnessVolts);
-  float noiseAmp =
-      ctx.derived.demodIfNoiseAmp / std::sqrt(static_cast<float>(ifStrip.oversampleFactor));
-  float audioAcc = 0.0f;
+  float sourceEnvI = 0.0f;
+  float sourceEnvQ = 0.0f;
+  if (mode == SourceInputMode::ComplexEnvelope) {
+    sourceEnvI = rfGain * currI;
+    sourceEnvQ = rfGain * currQ;
+  } else {
+    float sourceStep =
+        kRadioTwoPi * (ifStrip.sourceCarrierHz / std::max(radio.sampleRate, 1.0f));
+    float phase = ifStrip.sourceDownmixPhase;
+    float c = std::cos(phase);
+    float s = std::sin(phase);
+    auto env = ifStrip.sourceEnvelope.process(2.0f * currI * c,
+                                              -2.0f * currI * s);
+    sourceEnvI = rfGain * env[0];
+    sourceEnvQ = rfGain * env[1];
+    ifStrip.sourceDownmixPhase = wrapPhase(phase + sourceStep);
+  }
 
-  for (int step = 0; step < ifStrip.oversampleFactor; ++step) {
-    float rf = 0.0f;
-    if (mode == SourceInputMode::ComplexEnvelope) {
-      runningI += inputIStep;
-      runningQ += inputQStep;
-      rf = rfGain * (runningI * rfCos - runningQ * rfSin);
+  float tuneHz = ifStrip.loFrequencyHz - ifStrip.sourceCarrierHz - ifStrip.ifCenterHz;
+  float tuneStep = kRadioTwoPi * (tuneHz / std::max(radio.sampleRate, 1.0f));
+  float tunePhase = ifStrip.ifEnvelopePhase;
+  float tuneCos = std::cos(tunePhase);
+  float tuneSin = std::sin(tunePhase);
+  float rotatedEnvI = sourceEnvI * tuneCos + sourceEnvQ * tuneSin;
+  float rotatedEnvQ = sourceEnvQ * tuneCos - sourceEnvI * tuneSin;
+  ifStrip.ifEnvelopePhase = wrapPhase(tunePhase + tuneStep);
 
-      float nextRfCos = rfCos * rfStepCos - rfSin * rfStepSin;
-      float nextRfSin = rfSin * rfStepCos + rfCos * rfStepSin;
-      rfCos = nextRfCos;
-      rfSin = nextRfSin;
-    } else {
-      runningI += inputIStep;
-      rf = runningI;
-    }
-    float lo = loCos;
-    float nextLoCos = loCos * loStepCos - loSin * loStepSin;
-    float nextLoSin = loSin * loStepCos + loCos * loStepSin;
-    loCos = nextLoCos;
-    loSin = nextLoSin;
-    float rfGridVolts = mixer.rfGridDriveVolts * rf;
-    float oscillatorGridVolts = mixer.loGridDriveVolts * lo;
-    float mixedCurrent = 0.0f;
-    ConverterTubeStageResult mixerResult = processConverterTubeStage(
-        rfGridVolts, mixedBaseGridVolts, oscillatorGridVolts,
-        mixerPlateCurrentForGrid, mixer.acLoadResistanceOhms, mixedCurrent);
-    float mixerPlateAcVolts = mixerResult.plateAcVolts;
-    if (radio.calibration.enabled) {
-      radio.calibration.maxMixerPlateCurrentAmps = std::max(
-          radio.calibration.maxMixerPlateCurrentAmps,
-          mixedCurrent);
-    }
-    float ifSample = mixerPlateAcVolts * ifGain;
-    ifSample = ifStrip.interstageTransformer.process(ifSample);
-    ifSample = ifStrip.outputTransformer.process(ifSample);
-    audioAcc += demod.process(AMDetectorSampleInput{ifSample, noiseAmp});
+  float mixerConversionGain =
+      estimateMixerEnvelopeConversionGain(mixerPlateCurrentForGrid,
+                                          mixedBaseGridVolts,
+                                          mixer.loGridDriveVolts) *
+      mixer.rfGridDriveVolts * mixer.acLoadResistanceOhms;
+  float ifEnvI = rotatedEnvI * mixerConversionGain * ifGain;
+  float ifEnvQ = rotatedEnvQ * mixerConversionGain * ifGain;
+  auto ifStage1 = ifStrip.interstageEnvelope.process(ifEnvI, ifEnvQ);
+  auto ifStage2 =
+      ifStrip.outputEnvelope.process(ifStage1[0], ifStage1[1]);
+  if (radio.calibration.enabled) {
+    float sourceEnvAbs =
+        std::sqrt(sourceEnvI * sourceEnvI + sourceEnvQ * sourceEnvQ);
+    float mixedCurrent = mixerPlateCurrentForGrid.eval(
+        mixedBaseGridVolts + mixer.loGridDriveVolts +
+        mixer.rfGridDriveVolts * sourceEnvAbs);
+    radio.calibration.maxMixerPlateCurrentAmps =
+        std::max(radio.calibration.maxMixerPlateCurrentAmps, mixedCurrent);
   }
 
   ifStrip.prevSourceMode = mode;
   ifStrip.prevSourceI = currI;
   ifStrip.prevSourceQ = currQ;
-  if (mode == SourceInputMode::ComplexEnvelope) {
-    ifStrip.rfPhase =
-        wrapPhase(ifStrip.rfPhase + ifStrip.oversampleFactor * rfStep);
-  }
-  ifStrip.loPhase = wrapPhase(ifStrip.loPhase + ifStrip.oversampleFactor * loStep);
-  return audioAcc / static_cast<float>(ifStrip.oversampleFactor);
+  return demod.processEnvelope(ifStage2[0], ifStage2[1],
+                               ctx.derived.demodIfNoiseAmp);
 }
 
 float RadioDemodNode::process(Radio1938& radio,

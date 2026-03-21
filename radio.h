@@ -73,6 +73,25 @@ struct Biquad {
   void setPeaking(float sampleRate, float freq, float q, float gainDb);
 };
 
+struct IQBiquad {
+  Biquad i;
+  Biquad q;
+
+  void reset() {
+    i.reset();
+    q.reset();
+  }
+
+  void setLowpass(float sampleRate, float freq, float qValue) {
+    i.setLowpass(sampleRate, freq, qValue);
+    q.setLowpass(sampleRate, freq, qValue);
+  }
+
+  std::array<float, 2> process(float inI, float inQ) {
+    return {i.process(inI), q.process(inQ)};
+  }
+};
+
 struct SeriesRlcBandpass {
   float fs = 0.0f;
   float inductanceHenries = 0.0f;
@@ -338,12 +357,21 @@ struct AMDetector {
   float senseLowHz = 0.0f;
   float senseHighHz = 0.0f;
   float afcSenseLpHz = 0.0f;
+  float afcLowOffsetHz = 0.0f;
+  float afcHighOffsetHz = 0.0f;
+  float afcLowStep = 0.0f;
+  float afcHighStep = 0.0f;
+  float afcLowPhase = 0.0f;
+  float afcHighPhase = 0.0f;
+  IQBiquad afcLowProbe;
+  IQBiquad afcHighProbe;
 
   void init(float newFs, float newBw, float newTuneHz = 0.0f);
   void setBandwidth(float newBw, float newTuneHz = 0.0f);
   void setSenseWindow(float lowHz, float highHz);
   void reset();
   float process(const AMDetectorSampleInput& in);
+  float processEnvelope(float signalI, float signalQ, float ifNoiseAmp);
 };
 
 struct SpeakerSim {
@@ -1052,11 +1080,16 @@ struct RadioOutputClipNode {
     float loFrequencyHz = 0.0f;
     float rfPhase = 0.0f;
     float loPhase = 0.0f;
+    float sourceDownmixPhase = 0.0f;
+    float ifEnvelopePhase = 0.0f;
     SourceInputMode prevSourceMode = SourceInputMode::ComplexEnvelope;
     float prevSourceI = 0.0f;
     float prevSourceQ = 0.0f;
     Biquad bp1;
     Biquad bp2;
+    IQBiquad sourceEnvelope;
+    IQBiquad interstageEnvelope;
+    IQBiquad outputEnvelope;
     CoupledTunedTransformer interstageTransformer;
     CoupledTunedTransformer outputTransformer;
   } ifStrip;
