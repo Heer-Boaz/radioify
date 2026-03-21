@@ -1195,6 +1195,7 @@ struct RadioOutputClipNode {
     CenterTappedInterstageState interstageCt;
     CurrentDrivenTransformer interstageTransformer;
     CurrentDrivenTransformer outputTransformer;
+    CurrentDrivenTransformerSample outputTransformerAffineSlope;
     Biquad postLpf;
     Biquad satOsLpIn;
     Biquad satOsLpOut;
