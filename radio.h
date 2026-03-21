@@ -169,6 +169,27 @@ struct KorenTriodeModel {
   double kvb = 1.0;
 };
 
+struct KorenTriodeLut {
+  float vgkMin = 0.0f;
+  float vgkMax = 0.0f;
+  float vpkMin = 0.0f;
+  float vpkMax = 0.0f;
+  float vgkInvStep = 0.0f;
+  float vpkInvStep = 0.0f;
+  int vgkBins = 0;
+  int vpkBins = 0;
+  std::vector<float> currentAmps;
+  std::vector<float> conductanceSiemens;
+
+  bool valid() const {
+    return vgkBins >= 2 && vpkBins >= 2 &&
+           currentAmps.size() ==
+               static_cast<size_t>(vgkBins * vpkBins) &&
+           conductanceSiemens.size() ==
+               static_cast<size_t>(vgkBins * vpkBins);
+  }
+};
+
 struct TriodeOperatingPoint {
   float plateVolts = 0.0f;
   float plateCurrentAmps = 0.0f;
@@ -1124,6 +1145,7 @@ struct RadioOutputClipNode {
     float tubePlateKneeVolts = 0.0f;
     float tubeGridSoftnessVolts = 0.0f;
     KorenTriodeModel tubeTriodeModel{};
+    KorenTriodeLut tubeTriodeLut;
     float tubePlateResistanceOhms = 0.0f;
     float operatingPointToleranceVolts = 35.0f;
     float tubePlateVoltage = 0.0f;
@@ -1190,6 +1212,7 @@ struct RadioOutputClipNode {
     float tubeGridSoftnessVolts = 0.0f;
     float tubeGridCurrentResistanceOhms = 0.0f;
     KorenTriodeModel tubeTriodeModel{};
+    KorenTriodeLut tubeTriodeLut;
     float tubePlateResistanceOhms = 0.0f;
     float operatingPointToleranceVolts = 35.0f;
     float tubePlateVoltage = 0.0f;
@@ -1217,6 +1240,7 @@ struct RadioOutputClipNode {
     float outputTubePlateKneeVolts = 0.0f;
     float outputTubeGridSoftnessVolts = 0.0f;
     KorenTriodeModel outputTubeTriodeModel{};
+    KorenTriodeLut outputTubeTriodeLut;
     float outputTubePlateResistanceOhms = 0.0f;
     float outputGridAVolts = 0.0f;
     float outputGridBVolts = 0.0f;

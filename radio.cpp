@@ -104,6 +104,11 @@ static double korenTriodePlateConductance(double vgk,
 static KorenTriodePlateEval evaluateKorenTriodePlate(double vgk,
                                                      double vpk,
                                                      const KorenTriodeModel& m);
+static KorenTriodePlateEval evaluateKorenTriodePlateRuntime(
+    double vgk,
+    double vpk,
+    const KorenTriodeModel& model,
+    const KorenTriodeLut& lut);
 
 static bool solveLinear3x3(float a[3][3], float b[3], float x[3]);
 
@@ -563,6 +568,7 @@ static float processResistorLoadedTriodeStage(
     float plateSupplyVolts,
     float quiescentPlateVolts,
     const KorenTriodeModel& model,
+    const KorenTriodeLut* lut,
     float loadResistanceOhms,
     float& plateVoltageState) {
   float supply = requirePositiveFinite(plateSupplyVolts * supplyScale);
@@ -572,8 +578,12 @@ static float processResistorLoadedTriodeStage(
                            : std::clamp(quiescentPlateVolts * supplyScale, 0.0f,
                                         supply);
   for (int i = 0; i < 4; ++i) {
-    float current =
-        static_cast<float>(korenTriodePlateCurrent(gridVolts, plateVoltage, model));
+    KorenTriodePlateEval eval =
+        (lut != nullptr)
+            ? evaluateKorenTriodePlateRuntime(gridVolts, plateVoltage, model,
+                                              *lut)
+            : evaluateKorenTriodePlate(gridVolts, plateVoltage, model);
+    float current = static_cast<float>(eval.currentAmps);
     float targetPlate =
         std::clamp(supply - current * safeLoadResistance, 0.0f, supply);
     plateVoltage = 0.5f * (plateVoltage + targetPlate);
@@ -801,6 +811,154 @@ static KorenTriodePlateEval evaluateKorenTriodePlate(
   eval.conductanceSiemens =
       eval.currentAmps * (m.ex * dE1dVpk / std::max(e1, 1e-18));
   return eval;
+}
+
+static void configureKorenTriodeLut(KorenTriodeLut& lut,
+                                    const KorenTriodeModel& model,
+                                    float vgkMin,
+                                    float vgkMax,
+                                    int vgkBins,
+                                    float vpkMin,
+                                    float vpkMax,
+                                    int vpkBins) {
+  lut.vgkMin = vgkMin;
+  lut.vgkMax = vgkMax;
+  lut.vpkMin = vpkMin;
+  lut.vpkMax = vpkMax;
+  lut.vgkBins = std::max(vgkBins, 2);
+  lut.vpkBins = std::max(vpkBins, 2);
+  lut.vgkInvStep = static_cast<float>(lut.vgkBins - 1) /
+                   std::max(lut.vgkMax - lut.vgkMin, 1e-6f);
+  lut.vpkInvStep = static_cast<float>(lut.vpkBins - 1) /
+                   std::max(lut.vpkMax - lut.vpkMin, 1e-6f);
+  size_t sampleCount =
+      static_cast<size_t>(lut.vgkBins) * static_cast<size_t>(lut.vpkBins);
+  lut.currentAmps.resize(sampleCount);
+  lut.conductanceSiemens.resize(sampleCount);
+
+  for (int y = 0; y < lut.vpkBins; ++y) {
+    float vpk = lut.vpkMin +
+                static_cast<float>(y) /
+                    static_cast<float>(lut.vpkBins - 1) *
+                    (lut.vpkMax - lut.vpkMin);
+    for (int x = 0; x < lut.vgkBins; ++x) {
+      float vgk = lut.vgkMin +
+                  static_cast<float>(x) /
+                      static_cast<float>(lut.vgkBins - 1) *
+                      (lut.vgkMax - lut.vgkMin);
+      KorenTriodePlateEval eval =
+          evaluateKorenTriodePlate(vgk, vpk, model);
+      size_t index =
+          static_cast<size_t>(y) * static_cast<size_t>(lut.vgkBins) +
+          static_cast<size_t>(x);
+      lut.currentAmps[index] = static_cast<float>(eval.currentAmps);
+      lut.conductanceSiemens[index] =
+          static_cast<float>(eval.conductanceSiemens);
+    }
+  }
+}
+
+static KorenTriodePlateEval evaluateKorenTriodePlateLut(
+    double vgk,
+    double vpk,
+    const KorenTriodeLut& lut) {
+  if (!lut.valid()) {
+    return {};
+  }
+
+  float clampedVgk =
+      std::clamp(static_cast<float>(vgk), lut.vgkMin, lut.vgkMax);
+  float clampedVpk =
+      std::clamp(static_cast<float>(vpk), lut.vpkMin, lut.vpkMax);
+  float x = (clampedVgk - lut.vgkMin) * lut.vgkInvStep;
+  float y = (clampedVpk - lut.vpkMin) * lut.vpkInvStep;
+  int x0 = std::clamp(static_cast<int>(x), 0, lut.vgkBins - 2);
+  int y0 = std::clamp(static_cast<int>(y), 0, lut.vpkBins - 2);
+  float tx = x - static_cast<float>(x0);
+  float ty = y - static_cast<float>(y0);
+  int x1 = x0 + 1;
+  int y1 = y0 + 1;
+
+  auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+  auto sampleAt = [&](const std::vector<float>& values, int xi, int yi) {
+    size_t index =
+        static_cast<size_t>(yi) * static_cast<size_t>(lut.vgkBins) +
+        static_cast<size_t>(xi);
+    return values[index];
+  };
+
+  float i00 = sampleAt(lut.currentAmps, x0, y0);
+  float i10 = sampleAt(lut.currentAmps, x1, y0);
+  float i01 = sampleAt(lut.currentAmps, x0, y1);
+  float i11 = sampleAt(lut.currentAmps, x1, y1);
+  float g00 = sampleAt(lut.conductanceSiemens, x0, y0);
+  float g10 = sampleAt(lut.conductanceSiemens, x1, y0);
+  float g01 = sampleAt(lut.conductanceSiemens, x0, y1);
+  float g11 = sampleAt(lut.conductanceSiemens, x1, y1);
+
+  KorenTriodePlateEval eval{};
+  eval.currentAmps = lerp(lerp(i00, i10, tx), lerp(i01, i11, tx), ty);
+  eval.conductanceSiemens = lerp(lerp(g00, g10, tx), lerp(g01, g11, tx), ty);
+  return eval;
+}
+
+static KorenTriodePlateEval evaluateKorenTriodePlateRuntime(
+    double vgk,
+    double vpk,
+    const KorenTriodeModel& model,
+    const KorenTriodeLut& lut) {
+  if (lut.valid()) {
+    return evaluateKorenTriodePlateLut(vgk, vpk, lut);
+  }
+  return evaluateKorenTriodePlate(vgk, vpk, model);
+}
+
+static bool solveLinear3x3Direct(float a00,
+                                 float a01,
+                                 float a02,
+                                 float a10,
+                                 float a11,
+                                 float a12,
+                                 float a20,
+                                 float a21,
+                                 float a22,
+                                 const float rhs[3],
+                                 float x[3]) {
+  float c00 = a11 * a22 - a12 * a21;
+  float c01 = a12 * a20 - a10 * a22;
+  float c02 = a10 * a21 - a11 * a20;
+  float det = a00 * c00 + a01 * c01 + a02 * c02;
+  if (!std::isfinite(det) || std::fabs(det) < 1e-12f) {
+    return false;
+  }
+  float invDet = 1.0f / det;
+
+  x[0] = (rhs[0] * c00 +
+          rhs[1] * (a02 * a21 - a01 * a22) +
+          rhs[2] * (a01 * a12 - a02 * a11)) *
+         invDet;
+  x[1] = (rhs[0] * c01 +
+          rhs[1] * (a00 * a22 - a02 * a20) +
+          rhs[2] * (a02 * a10 - a00 * a12)) *
+         invDet;
+  x[2] = (rhs[0] * c02 +
+          rhs[1] * (a01 * a20 - a00 * a21) +
+          rhs[2] * (a00 * a11 - a01 * a10)) *
+         invDet;
+  return std::isfinite(x[0]) && std::isfinite(x[1]) && std::isfinite(x[2]);
+}
+
+static void configureRuntimeTriodeLut(KorenTriodeLut& lut,
+                                      const KorenTriodeModel& model,
+                                      float biasVolts,
+                                      float plateSupplyVolts,
+                                      float extraNegativeGridHeadroomVolts,
+                                      float positiveGridHeadroomVolts) {
+  float vgkMin = std::max(-140.0f, biasVolts - extraNegativeGridHeadroomVolts);
+  float vgkMax = std::max(10.0f, positiveGridHeadroomVolts);
+  float vpkMax =
+      std::max(plateSupplyVolts + 80.0f, 1.25f * plateSupplyVolts);
+  configureKorenTriodeLut(lut, model, vgkMin, vgkMax, 257, 0.0f, vpkMax, 385);
 }
 
 static inline uint32_t hash32(uint32_t x) {
@@ -1348,10 +1506,12 @@ static float solveOutputPrimaryVoltageAffine(
   for (int iter = 0; iter < 8; ++iter) {
     float plateA = outputPlateQuiescent - 0.5f * vp;
     float plateB = outputPlateQuiescent + 0.5f * vp;
-    KorenTriodePlateEval evalA = evaluateKorenTriodePlate(
-        power.outputTubeBiasVolts + gridA, plateA, power.outputTubeTriodeModel);
-    KorenTriodePlateEval evalB = evaluateKorenTriodePlate(
-        power.outputTubeBiasVolts + gridB, plateB, power.outputTubeTriodeModel);
+    KorenTriodePlateEval evalA = evaluateKorenTriodePlateRuntime(
+        power.outputTubeBiasVolts + gridA, plateA, power.outputTubeTriodeModel,
+        power.outputTubeTriodeLut);
+    KorenTriodePlateEval evalB = evaluateKorenTriodePlateRuntime(
+        power.outputTubeBiasVolts + gridB, plateB, power.outputTubeTriodeModel,
+        power.outputTubeTriodeLut);
 
     float drive =
         0.5f * static_cast<float>(evalA.currentAmps - evalB.currentAmps);
@@ -1437,8 +1597,9 @@ static DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap
 
     for (int iter = 0; iter < 12; ++iter) {
       float driverPlateVolts = driverPlateQuiescent - vp;
-      KorenTriodePlateEval driverEval = evaluateKorenTriodePlate(
-          controlGridVolts, driverPlateVolts, power.tubeTriodeModel);
+      KorenTriodePlateEval driverEval = evaluateKorenTriodePlateRuntime(
+          controlGridVolts, driverPlateVolts, power.tubeTriodeModel,
+          power.tubeTriodeLut);
       float driverPlateCurrentAbs = static_cast<float>(driverEval.currentAmps);
       float dIdrive_dVp =
           -static_cast<float>(driverEval.conductanceSiemens);
@@ -1481,7 +1642,9 @@ static DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap
 
       float rhs[3] = {-f[0], -f[1], -f[2]};
       float delta[3] = {};
-      if (!solveLinear3x3(j, rhs, delta)) {
+      if (!solveLinear3x3Direct(j[0][0], j[0][1], j[0][2], j[1][0], j[1][1],
+                                j[1][2], j[2][0], j[2][1], j[2][2], rhs,
+                                delta)) {
         assert(false && "interstage 3x3 solve failed");
       }
 
@@ -1504,8 +1667,9 @@ static DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap
 
     float driverPlateVolts = driverPlateQuiescent - vp;
     float driverPlateCurrentAbs = static_cast<float>(
-        evaluateKorenTriodePlate(controlGridVolts, driverPlateVolts,
-                                 power.tubeTriodeModel)
+        evaluateKorenTriodePlateRuntime(controlGridVolts, driverPlateVolts,
+                                        power.tubeTriodeModel,
+                                        power.tubeTriodeLut)
             .currentAmps);
     ip = driverPlateCurrentAbs - driverQuiescentCurrent -
          coreLossConductance * vp;
@@ -1519,8 +1683,9 @@ static DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap
 
   float finalDriverPlateVolts = driverPlateQuiescent - vp;
   float finalDriverPlateCurrentAbs = static_cast<float>(
-      evaluateKorenTriodePlate(controlGridVolts, finalDriverPlateVolts,
-                               power.tubeTriodeModel)
+      evaluateKorenTriodePlateRuntime(controlGridVolts, finalDriverPlateVolts,
+                                      power.tubeTriodeModel,
+                                      power.tubeTriodeLut)
           .currentAmps);
 
   DriverInterstageCenterTappedResult out{};
@@ -2869,6 +3034,9 @@ void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
   receiver.tubeQuiescentPlateCurrentAmps = op.plateCurrentAmps;
   receiver.tubePlateResistanceOhms = op.rpOhms;
   receiver.tubeTriodeModel = op.model;
+  configureRuntimeTriodeLut(receiver.tubeTriodeLut, receiver.tubeTriodeModel,
+                            receiver.tubeBiasVolts,
+                            receiver.tubePlateSupplyVolts, 36.0f, 8.0f);
   assert((std::fabs(receiver.tubeQuiescentPlateVolts -
                     receiver.tubePlateDcVolts) <=
           receiver.operatingPointToleranceVolts) &&
@@ -2980,11 +3148,16 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   out = processResistorLoadedTriodeStage(
       receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
       receiver.tubePlateSupplyVolts, receiver.tubeQuiescentPlateVolts,
-      receiver.tubeTriodeModel, receiver.tubeLoadResistanceOhms,
+      receiver.tubeTriodeModel, &receiver.tubeTriodeLut,
+      receiver.tubeLoadResistanceOhms,
       receiver.tubePlateVoltage);
-  plateCurrent = static_cast<float>(korenTriodePlateCurrent(
-      receiver.tubeBiasVolts + receiver.gridVoltage, receiver.tubePlateVoltage,
-      receiver.tubeTriodeModel));
+  plateCurrent = static_cast<float>(
+      evaluateKorenTriodePlateRuntime(receiver.tubeBiasVolts +
+                                          receiver.gridVoltage,
+                                      receiver.tubePlateVoltage,
+                                      receiver.tubeTriodeModel,
+                                      receiver.tubeTriodeLut)
+          .currentAmps);
   if (radio.calibration.enabled) {
     radio.calibration.maxReceiverPlateCurrentAmps =
         std::max(radio.calibration.maxReceiverPlateCurrentAmps, plateCurrent);
@@ -3052,6 +3225,9 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   power.tubeQuiescentPlateCurrentAmps = driverOp.plateCurrentAmps;
   power.tubePlateResistanceOhms = driverOp.rpOhms;
   power.tubeTriodeModel = driverOp.model;
+  configureRuntimeTriodeLut(power.tubeTriodeLut, power.tubeTriodeModel,
+                            power.tubeBiasVolts, power.tubePlateSupplyVolts,
+                            96.0f, 18.0f);
   assert((std::fabs(power.tubeQuiescentPlateVolts - power.tubePlateDcVolts) <=
           power.operatingPointToleranceVolts) &&
          "6F6 driver operating point diverged from the preset target");
@@ -3066,6 +3242,10 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   power.outputTubeQuiescentPlateCurrentAmps = outputOp.plateCurrentAmps;
   power.outputTubePlateResistanceOhms = outputOp.rpOhms;
   power.outputTubeTriodeModel = outputOp.model;
+  configureRuntimeTriodeLut(power.outputTubeTriodeLut,
+                            power.outputTubeTriodeModel,
+                            power.outputTubeBiasVolts,
+                            power.outputTubePlateSupplyVolts, 120.0f, 24.0f);
   assert((std::fabs(power.outputTubeQuiescentPlateVolts -
                     power.outputTubePlateDcVolts) <=
           power.outputOperatingPointToleranceVolts) &&
@@ -3162,8 +3342,12 @@ float RadioPowerNode::process(Radio1938& radio,
          "Interstage driver solve requires triode-connected 6F6 operation");
   float driverPlateQuiescent =
       requirePositiveFinite(power.tubeQuiescentPlateVolts * supplyScale);
-  float driverQuiescentCurrent = static_cast<float>(korenTriodePlateCurrent(
-      power.tubeBiasVolts, driverPlateQuiescent, power.tubeTriodeModel));
+  float driverQuiescentCurrent = static_cast<float>(
+      evaluateKorenTriodePlateRuntime(power.tubeBiasVolts,
+                                      driverPlateQuiescent,
+                                      power.tubeTriodeModel,
+                                      power.tubeTriodeLut)
+          .currentAmps);
   auto interstageSolved = solveDriverInterstageCenterTappedNoCap(
       power.interstageTransformer, power, controlGridVolts,
       driverPlateQuiescent, driverQuiescentCurrent);
@@ -3226,12 +3410,12 @@ float RadioPowerNode::process(Radio1938& radio,
       outputPlateQuiescent - 0.5f * solvedOutputPrimaryVoltage;
   float outputPlateB =
       outputPlateQuiescent + 0.5f * solvedOutputPrimaryVoltage;
-  KorenTriodePlateEval outputEvalA = evaluateKorenTriodePlate(
+  KorenTriodePlateEval outputEvalA = evaluateKorenTriodePlateRuntime(
       power.outputTubeBiasVolts + power.outputGridAVolts, outputPlateA,
-      power.outputTubeTriodeModel);
-  KorenTriodePlateEval outputEvalB = evaluateKorenTriodePlate(
+      power.outputTubeTriodeModel, power.outputTubeTriodeLut);
+  KorenTriodePlateEval outputEvalB = evaluateKorenTriodePlateRuntime(
       power.outputTubeBiasVolts + power.outputGridBVolts, outputPlateB,
-      power.outputTubeTriodeModel);
+      power.outputTubeTriodeModel, power.outputTubeTriodeLut);
   float plateCurrentA = static_cast<float>(outputEvalA.currentAmps);
   float plateCurrentB = static_cast<float>(outputEvalB.currentAmps);
   float driveCurrent = 0.5f * (plateCurrentA - plateCurrentB);
@@ -3245,14 +3429,14 @@ float RadioPowerNode::process(Radio1938& radio,
   float actualOutputPlateB =
       outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
   float actualPlateCurrentA = static_cast<float>(
-      evaluateKorenTriodePlate(
+      evaluateKorenTriodePlateRuntime(
           power.outputTubeBiasVolts + power.outputGridAVolts, actualOutputPlateA,
-          power.outputTubeTriodeModel)
+          power.outputTubeTriodeModel, power.outputTubeTriodeLut)
           .currentAmps);
   float actualPlateCurrentB = static_cast<float>(
-      evaluateKorenTriodePlate(
+      evaluateKorenTriodePlateRuntime(
           power.outputTubeBiasVolts + power.outputGridBVolts, actualOutputPlateB,
-          power.outputTubeTriodeModel)
+          power.outputTubeTriodeModel, power.outputTubeTriodeLut)
           .currentAmps);
   y = outputSample.secondaryVoltage;
   if (power.postLpHz > 0.0f) {
