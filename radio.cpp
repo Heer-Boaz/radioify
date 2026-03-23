@@ -5183,7 +5183,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // first-audio tube are now anchored to the 37-116 chassis rather than 116X.
   radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 1000000.0f;
-  radio.receiverCircuit.volumeControlPosition = 1.0f;
+  radio.receiverCircuit.volumeControlPosition = 0.36f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 490000.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.015e-6f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;

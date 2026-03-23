@@ -462,9 +462,7 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   constexpr uint32_t kRadioProcessChannels = 1u;
   auto rebuildRadioFromTemplate = [&](Radio1938* target) {
     if (!target) return;
-    target->preset = radio1938Template.preset;
-    target->identity = radio1938Template.identity;
-    target->setCalibrationEnabled(radio1938Template.calibration.enabled);
+    *target = radio1938Template;
     target->init(kRadioProcessChannels, static_cast<float>(sampleRate),
                  static_cast<float>(o.bwHz), static_cast<float>(o.noise));
   };
