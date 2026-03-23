@@ -223,6 +223,26 @@ nominalOutputPowerWatts = 0.5
 
 [audio-filter.default.noise]
 
+[audio-filter.default.nodes]
+tuning = true
+input = true
+avc = true
+afc = true
+controlbus = true
+interferencederived = true
+frontend = true
+mixer = true
+ifstrip = true
+demod = true
+receivercircuit = true
+tone = true
+power = true
+noise = true
+speaker = true
+cabinet = true
+finallimiter = true
+outputclip = true
+
 [audio-filter.clean.globals]
 enableAutoLevel = true
 enableHumTone = true
@@ -232,3 +252,23 @@ noiseWeightScaleMax = 2.0
 humAmpScale = 0.12
 crackleAmpScale = 0.08
 crackleRateScale = 0.06
+
+[audio-filter.clean.nodes]
+tuning = true
+input = true
+avc = true
+afc = true
+controlbus = true
+interferencederived = true
+frontend = true
+mixer = true
+ifstrip = true
+demod = true
+receivercircuit = true
+tone = true
+power = true
+noise = true
+speaker = true
+cabinet = true
+finallimiter = true
+outputclip = true

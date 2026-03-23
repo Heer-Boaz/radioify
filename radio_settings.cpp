@@ -69,7 +69,7 @@ static bool isKnownRadioSection(const std::string& section) {
          section == "tuning" || section == "frontend" ||
          section == "mixer" || section == "ifstrip" || section == "demod" ||
          section == "receivercircuit" || section == "tone" || section == "power" ||
-         section == "noise";
+         section == "noise" || section == "nodes";
 }
 
 static bool applyRadioSettingsValue(Radio1938& radio,
@@ -78,6 +78,55 @@ static bool applyRadioSettingsValue(Radio1938& radio,
                                    const std::string& valueText,
                                    int lineNumber,
                                    std::string* error);
+
+static bool applyAudioFilterNodeSetting(Radio1938& radio,
+                                       const std::string& keyNorm,
+                                       const std::string& valueText,
+                                       int lineNumber,
+                                       std::string* error) {
+  auto setNode = [&](StageId id, const std::string& settingName) {
+    bool parsed = false;
+    if (!parseIniBool(valueText, parsed, error, lineNumber, settingName)) {
+      return false;
+    }
+    radio.graph.setEnabled(id, parsed);
+    return true;
+  };
+
+  if (keyNorm == "tuning") return setNode(StageId::Tuning, "nodes.tuning");
+  if (keyNorm == "input") return setNode(StageId::Input, "nodes.input");
+  if (keyNorm == "avc") return setNode(StageId::AVC, "nodes.avc");
+  if (keyNorm == "afc") return setNode(StageId::AFC, "nodes.afc");
+  if (keyNorm == "controlbus") {
+    return setNode(StageId::ControlBus, "nodes.controlbus");
+  }
+  if (keyNorm == "interferencederived") {
+    return setNode(StageId::InterferenceDerived, "nodes.interferencederived");
+  }
+  if (keyNorm == "frontend") return setNode(StageId::FrontEnd, "nodes.frontend");
+  if (keyNorm == "mixer") return setNode(StageId::Mixer, "nodes.mixer");
+  if (keyNorm == "ifstrip") return setNode(StageId::IFStrip, "nodes.ifstrip");
+  if (keyNorm == "demod") return setNode(StageId::Demod, "nodes.demod");
+  if (keyNorm == "receivercircuit") {
+    return setNode(StageId::ReceiverCircuit, "nodes.receivercircuit");
+  }
+  if (keyNorm == "tone") return setNode(StageId::Tone, "nodes.tone");
+  if (keyNorm == "power") return setNode(StageId::Power, "nodes.power");
+  if (keyNorm == "noise") return setNode(StageId::Noise, "nodes.noise");
+  if (keyNorm == "speaker") return setNode(StageId::Speaker, "nodes.speaker");
+  if (keyNorm == "cabinet") return setNode(StageId::Cabinet, "nodes.cabinet");
+  if (keyNorm == "finallimiter") {
+    return setNode(StageId::FinalLimiter, "nodes.finallimiter");
+  }
+  if (keyNorm == "outputclip") {
+    return setNode(StageId::OutputClip, "nodes.outputclip");
+  }
+
+  if (error) {
+    *error = iniError(lineNumber, "unknown node '" + keyNorm + "' in settings file");
+  }
+  return false;
+}
 
 static std::string iniError(int line, const std::string& details) {
   return std::string("line ") + std::to_string(line) + ": " + details;
@@ -968,6 +1017,10 @@ static bool applyRadioSettingsValue(Radio1938& radio,
       return setFloat(radio.noiseConfig.crackleRateScale, "noise.crackleRateScale");
     }
     return false;
+  }
+
+  if (section == "nodes") {
+    return applyAudioFilterNodeSetting(radio, keyNorm, valueText, lineNumber, error);
   }
 
   if (error) {
