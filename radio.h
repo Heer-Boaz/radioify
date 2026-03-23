@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <random>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -1391,5 +1392,10 @@ struct RadioOutputClipNode {
                          float* outSamples,
                          uint32_t frames);
 };
+
+bool applyRadioSettingsIni(Radio1938& radio,
+                          const std::string& path,
+                          const std::string& presetName = std::string(),
+                          std::string* error = nullptr);
 
 #endif

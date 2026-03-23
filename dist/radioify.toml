@@ -1,0 +1,234 @@
+# radioify.toml (generic config container).
+# Preset sections use the format:
+# [audio-filter.<preset>.<subsection>]
+
+[audio-filter.default.globals]
+ifNoiseMix = 0.22
+inputPad = 1.0
+enableAutoLevel = false
+autoTargetDb = -21.0
+autoMaxBoostDb = 2.5
+satClipDelta = 0.0
+satClipMinLevel = 0.0
+outputClipThreshold = 0.98
+oversampleFactor = 2.0
+oversampleCutoffFraction = 0.45
+postNoiseMix = 0.35
+noiseFloorAmp = 0.0
+
+[audio-filter.default.tuning]
+tuneOffsetHz = 0.0
+safeBwMinHz = 2400.0
+safeBwMaxHz = 9000.0
+preBwScale = 1.0
+postBwScale = 1.0
+smoothTau = 0.05
+updateEps = 0.25
+magneticTuningEnabled = true
+afcCaptureHz = 420.0
+afcMaxCorrectionHz = 110.0
+afcDeadband = 0.015
+afcResponseMs = 240.0
+
+[audio-filter.default.frontend]
+inputHpHz = 115.0
+rfGain = 1.0
+avcGainDepth = 0.18
+selectivityPeakHz = 0.0
+selectivityPeakQ = 0.707
+selectivityPeakGainDb = 0.0
+antennaInductanceHenries = 0.011
+antennaCapacitanceFarads = 0.0
+antennaSeriesResistanceOhms = 0.0
+antennaLoadResistanceOhms = 2200.0
+rfInductanceHenries = 0.016
+rfCapacitanceFarads = 0.0
+rfSeriesResistanceOhms = 0.0
+rfLoadResistanceOhms = 3300.0
+
+[audio-filter.default.mixer]
+rfGridDriveVolts = 1.0
+loGridDriveVolts = 18.0
+loGridBiasVolts = -15.0
+avcGridDriveVolts = 24.0
+plateSupplyVolts = 250.0
+plateDcVolts = 250.0
+plateQuiescentVolts = 0.0
+screenVolts = 160.0
+biasVolts = -6.0
+cutoffVolts = -45.0
+modelCutoffVolts = 0.0
+plateCurrentAmps = 0.0035
+plateQuiescentCurrentAmps = 0.0
+mutualConductanceSiemens = 0.0011
+acLoadResistanceOhms = 10000.0
+plateKneeVolts = 22.0
+gridSoftnessVolts = 2.0
+plateResistanceOhms = 0.0
+operatingPointToleranceVolts = 0.0
+
+[audio-filter.default.ifstrip]
+enabled = true
+ifMinBwHz = 2400.0
+stageGain = 1.0
+avcGainDepth = 0.18
+ifCenterHz = 470000.0
+primaryInductanceHenries = 0.00022
+primaryCapacitanceFarads = 0.0
+primaryResistanceOhms = 0.0
+secondaryInductanceHenries = 0.00025
+secondaryCapacitanceFarads = 0.0
+secondaryResistanceOhms = 0.0
+secondaryLoadResistanceOhms = 680.0
+interstageCouplingCoeff = 0.15
+outputCouplingCoeff = 0.11
+oversampleFactor = 0
+
+[audio-filter.default.demod]
+audioDiodeDrop = 0.01
+avcDiodeDrop = 0.008
+audioJunctionSlopeVolts = 0.0045
+avcJunctionSlopeVolts = 0.004
+detectorPlateCouplingCapFarads = 0.00000000011
+audioChargeResistanceOhms = 5100.0
+audioDischargeResistanceOhms = 509300.0
+avcChargeResistanceOhms = 1000000.0
+avcDischargeResistanceOhms = 500000.0
+avcFilterCapFarads = 0.00000015
+controlVoltageRef = 0.75
+senseLowHz = 0.0
+senseHighHz = 0.0
+afcSenseLpHz = 34.0
+afcsoffsethz = 1.2
+afchoffsethz = 1.2
+afcLowStep = 0.5
+afcHighStep = 0.5
+afcLowPhase = 0.0
+afcHighPhase = 0.0
+
+[audio-filter.default.receivercircuit]
+enabled = true
+volumeControlResistanceOhms = 2000000.0
+volumeControlTapResistanceOhms = 1000000.0
+volumeControlPosition = 1.0
+volumeControlLoudnessResistanceOhms = 490000.0
+volumeControlLoudnessCapFarads = 0.000000015
+volumeControlTapVoltage = 0.0
+couplingCapFarads = 0.00000001
+gridLeakResistanceOhms = 1000000.0
+tubePlateSupplyVolts = 250.0
+tubePlateDcVolts = 90.0
+tubeQuiescentPlateVolts = 90.0
+tubeScreenVolts = 0.0
+tubeBiasVolts = -8.0
+tubePlateCurrentAmps = 0.009
+tubeQuiescentPlateCurrentAmps = 0.0
+tubeMutualConductanceSiemens = 0.0026
+tubeMu = 20.0
+tubeTriodeConnected = true
+tubeLoadResistanceOhms = 15000.0
+tubePlateKneeVolts = 16.0
+tubeGridSoftnessVolts = 0.6
+tubePlatResistanceOhms = 0.0
+operatingPointToleranceVolts = 0.0
+tubePlateVoltage = 90.0
+
+[audio-filter.default.tone]
+presenceHz = 0.0
+presenceQ = 0.78
+presenceGainDb = 0.0
+tiltSplitHz = 0.0
+
+[audio-filter.default.power]
+sagEnv = 0.0
+sagAtk = 0.0
+sagRel = 0.0
+sagStart = 0.06
+sagEnd = 0.22
+rectifierPhase = 0.0
+rippleDepth = 0.0
+satOsPrev = 0.0
+satDrive = 1.0
+satMix = 0.0
+sagAttackMs = 60.0
+sagReleaseMs = 900.0
+rectifierMinHz = 80.0
+rippelesecondharmonicmix = 0.0
+gainSagPerPower = 0.015
+rippleGainBase = 0.0
+rippleGainDepth = 0.0
+gainMin = 0.92
+gainMax = 1.02
+supplyDriveDepth = 0.0
+supplyBiasDepth = 0.0
+postLpHz = 0.0
+gridCouplingCapFarads = 0.00000005
+gridLeakResistanceOhms = 100000.0
+driverSourceResistanceOhms = 0.0
+tubePlateSupplyVolts = 250.0
+tubePlateDcVolts = 250.0
+tubeQuiescentPlateVolts = 250.0
+tubeScreenVolts = 0.0
+tubeBiasVolts = -20.0
+tubePlateCurrentAmps = 0.031
+tubeQuiescentPlateCurrentAmps = 0.0
+tubeMutualConductanceSiemens = 0.0027
+tubeMu = 7.0
+tubeTriodeConnected = true
+tubeAcLoadResistanceOhms = 4000.0
+tubePlateKneeVolts = 24.0
+tubeGridSoftnessVolts = 0.8
+tubeGridCurrentResistanceOhms = 1000.0
+tubePlatResistanceOhms = 0.0
+operatingPointToleranceVolts = 0.0
+tubePlateVoltage = 0.0
+interstagePrimaryLeakageInductanceHenries = 0.45
+interstageMagnetizingInductanceHenries = 15.0
+interstagePrimaryResistanceOhms = 430.0
+interstagePrimaryCoreLossResistanceOhms = 220000.0
+interstagePrimaryShuntCapFarads = 0.0
+interstageSecondaryLeakageInductanceHenries = 0.04
+interstageSecondaryResistanceOhms = 296.0
+interstageSecondaryShuntCapFarads = 0.0
+interstageIntegrationSubsteps = 8
+outputGridLeakResistanceOhms = 250000.0
+outputGridCurrentResistanceOhms = 1200.0
+outputTubePlateSupplyVolts = 325.0
+outputTubePlateDcVolts = 325.0
+outputTubeQuiescentPlateVolts = 325.0
+outputTubeBiasVolts = -39.0
+outputTubePlateCurrentAmps = 0.04
+outputTubeQuiescentPlateCurrentAmps = 0.0
+outputTubeMutualConductanceSiemens = 0.00525
+outputTubeMu = 4.2
+outputTubePlateToPlateLoadOhms = 3000.0
+outputTubePlateKneeVolts = 18.0
+outputTubeGridSoftnessVolts = 2.0
+outputTubePlatResistanceOhms = 0.0
+outputGridAVolts = 0.0
+outputGridBVolts = 0.0
+outputOperatingPointToleranceVolts = 0.0
+outputTransformerPrimaryLeakageInductanceHenries = 0.035
+outputTransformerMagnetizingInductanceHenries = 20.0
+outputTransformerTurnsRatioPrimaryToSecondary = 2.775
+outputTransformerPrimaryResistanceOhms = 235.0
+outputTransformerPrimaryCoreLossResistanceOhms = 90000.0
+outputTransformerPrimaryShuntCapFarads = 0.0
+outputTransformerSecondaryLeakageInductanceHenries = 0.00006
+outputTransformerSecondaryResistanceOhms = 0.32
+outputTransformerSecondaryShuntCapFarads = 0.0
+outputTransformerIntegrationSubsteps = 8
+outputLoadResistanceOhms = 3.9
+nominalOutputPowerWatts = 0.5
+
+[audio-filter.default.noise]
+
+[audio-filter.clean.globals]
+enableAutoLevel = true
+enableHumTone = true
+humHzDefault = 60.0
+noiseref = 0.15
+noiseWeightScaleMax = 2.0
+humAmpScale = 0.12
+crackleAmpScale = 0.08
+crackleRateScale = 0.06

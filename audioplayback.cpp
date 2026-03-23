@@ -1,5 +1,7 @@
 #include "audioplayback.h"
 
+#include "app_common.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -657,6 +659,8 @@ struct AudioPlaybackState {
   uint32_t channels = 1;
   float lpHz = 0.0f;
   float noise = 0.0f;
+  std::string radioSettingsPath;
+  std::string radioPresetName;
   std::filesystem::path nowPlaying;
   int trackIndex = 0;
   std::string lastInitError;
@@ -704,6 +708,19 @@ static void rebuildRadioFromTemplate(Radio1938* target,
   target->init(kRadioProcessChannels, sampleRate, bwHz, noise);
 }
 
+static void applyRadioSettingsToTemplate(Radio1938& target,
+                                        const std::string& presetName,
+                                        const std::string& settingsPath) {
+  if (settingsPath.empty()) return;
+  std::string error;
+  if (!applyRadioSettingsIni(target, settingsPath, presetName, &error)) {
+    std::fprintf(stderr,
+                 "WARNING: Failed to apply radio settings from %s: %s\n",
+                 settingsPath.c_str(),
+                 error.c_str());
+  }
+}
+
 void rebuildRadioPreviewChain(AudioState* state) {
   if (!state) return;
   rebuildRadioFromTemplate(&state->radio1938, gAudio.radio1938Template,
@@ -728,6 +745,9 @@ void stopAuditionWorker() {
 
 void applyRadioTogglePreset() {
   gAudio.radio1938Template.applyPreset(Radio1938::Preset::Philco37116X);
+  applyRadioSettingsToTemplate(gAudio.radio1938Template,
+                               gAudio.radioPresetName,
+                               gAudio.radioSettingsPath);
   rebuildRadioPreviewChain(&gAudio.state);
 }
 
@@ -2234,11 +2254,13 @@ void audioInit(const AudioPlaybackConfig& config) {
   gAudio.channels = gAudio.baseChannels;
   gAudio.lpHz = static_cast<float>(config.bwHz);
   gAudio.noise = static_cast<float>(config.noise);
+  gAudio.radioPresetName = config.radioPresetName;
 
   gAudio.state.channels = gAudio.channels;
   gAudio.state.sampleRate = gAudio.sampleRate;
   gAudio.state.dry = config.dry;
   gAudio.state.useRadio1938.store(config.enableRadio);
+  gAudio.radioSettingsPath = config.radioSettingsPath;
 
   gAudio.radio1938Template.init(kRadioProcessChannels,
                                 static_cast<float>(gAudio.sampleRate),

@@ -46,6 +46,8 @@ struct AudioPlaybackConfig {
   bool enableRadio = false;
   bool mono = true;
   bool dry = false;
+  std::string radioSettingsPath;
+  std::string radioPresetName;
   int bwHz = 5500;
   double noise = 0.012;
 };

@@ -88,6 +88,7 @@ add_executable(radioify
   videowindow.cpp
   videowindow_tui.cpp
   videoprocessor.cpp
+  radio_settings.cpp
   playback_frame_output_ascii.cpp
   playback_frame_output_console.cpp
   subtitle_manager.cpp

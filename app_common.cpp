@@ -19,6 +19,8 @@ static void showUsage(const char* exe) {
   logLine("  --50hz                 Force 50Hz playback mode where supported");
   logLine("  --calibration-report   Dump per-stage radio metrics after render-radio");
   logLine("  --out <path>           Same as out");
+  logLine("  --radio-settings <path> Override audio-filter settings from a .toml file");
+  logLine("  --radio-preset <name>   Select named audio-filter preset from the settings file");
   logLine("  --dry        Bypass radio processing for render/playback");
   logLine("  --no-ascii   Disable ASCII video rendering");
   logLine("  --no-audio   Disable audio playback");
@@ -105,6 +107,22 @@ Options parseArgs(int argc, char** argv) {
         die("out requires a non-empty path.");
       }
       o.output = value;
+      continue;
+    }
+    if (arg == "--radio-settings") {
+      std::string value = requireValue(arg, &i);
+      if (value.empty()) {
+        die("--radio-settings requires a non-empty path.");
+      }
+      o.radioSettingsPath = value;
+      continue;
+    }
+    if (arg == "--radio-preset") {
+      std::string value = requireValue(arg, &i);
+      if (value.empty()) {
+        die("--radio-preset requires a non-empty preset name.");
+      }
+      o.radioPresetName = value;
       continue;
     }
     if (arg == "--track") {

@@ -701,6 +701,14 @@ static int runRenderRadioCli(const Options& o) {
   Radio1938 radio1938Template;
   radio1938Template.init(1, 48000.0f, static_cast<float>(o.bwHz),
                          static_cast<float>(o.noise));
+  if (!o.radioSettingsPath.empty()) {
+    std::string radioIniError;
+    if (!applyRadioSettingsIni(radio1938Template, o.radioSettingsPath,
+                               o.radioPresetName, &radioIniError)) {
+      die("Failed to apply radio settings from '" + o.radioSettingsPath +
+          "': " + radioIniError);
+    }
+  }
   if (o.calibrationReport) {
     radio1938Template.setCalibrationEnabled(true);
   }
@@ -802,6 +810,8 @@ int runTui(Options o) {
   audioConfig.enableRadio = o.enableRadio;
   audioConfig.mono = o.mono;
   audioConfig.dry = o.dry;
+  audioConfig.radioSettingsPath = o.radioSettingsPath;
+  audioConfig.radioPresetName = o.radioPresetName;
   audioConfig.bwHz = o.bwHz;
   audioConfig.noise = o.noise;
 
@@ -823,6 +833,14 @@ int runTui(Options o) {
   auto radio1938Template = std::make_unique<Radio1938>();
   radio1938Template->init(1, static_cast<float>(sampleRate), lpHz,
                           static_cast<float>(o.noise));
+  if (!o.radioSettingsPath.empty()) {
+    std::string radioIniError;
+    if (!applyRadioSettingsIni(*radio1938Template, o.radioSettingsPath,
+                               o.radioPresetName, &radioIniError)) {
+      die("Failed to apply radio settings from '" + o.radioSettingsPath +
+          "': " + radioIniError);
+    }
+  }
 
   std::filesystem::path startDir = std::filesystem::current_path();
   std::string initialName;

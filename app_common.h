@@ -6,6 +6,8 @@
 struct Options {
   std::string input;
   std::string output;
+  std::string radioSettingsPath;
+  std::string radioPresetName;
   int trackIndex = 0;
   bool splitLoop = false;
   bool extractSheet = false;
