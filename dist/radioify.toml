@@ -38,12 +38,8 @@ selectivityPeakHz = 0.0
 selectivityPeakQ = 0.707
 selectivityPeakGainDb = 0.0
 antennaInductanceHenries = 0.011
-antennaCapacitanceFarads = 0.0
-antennaSeriesResistanceOhms = 0.0
 antennaLoadResistanceOhms = 2200.0
 rfInductanceHenries = 0.016
-rfCapacitanceFarads = 0.0
-rfSeriesResistanceOhms = 0.0
 rfLoadResistanceOhms = 3300.0
 
 [audio-filter.default.mixer]
@@ -53,19 +49,14 @@ loGridBiasVolts = -15.0
 avcGridDriveVolts = 24.0
 plateSupplyVolts = 250.0
 plateDcVolts = 250.0
-plateQuiescentVolts = 0.0
 screenVolts = 160.0
 biasVolts = -6.0
 cutoffVolts = -45.0
-modelCutoffVolts = 0.0
 plateCurrentAmps = 0.0035
-plateQuiescentCurrentAmps = 0.0
 mutualConductanceSiemens = 0.0011
 acLoadResistanceOhms = 10000.0
 plateKneeVolts = 22.0
 gridSoftnessVolts = 2.0
-plateResistanceOhms = 0.0
-operatingPointToleranceVolts = 0.0
 
 [audio-filter.default.ifstrip]
 enabled = true
@@ -74,15 +65,10 @@ stageGain = 1.0
 avcGainDepth = 0.18
 ifCenterHz = 470000.0
 primaryInductanceHenries = 0.00022
-primaryCapacitanceFarads = 0.0
-primaryResistanceOhms = 0.0
 secondaryInductanceHenries = 0.00025
-secondaryCapacitanceFarads = 0.0
-secondaryResistanceOhms = 0.0
 secondaryLoadResistanceOhms = 680.0
 interstageCouplingCoeff = 0.15
 outputCouplingCoeff = 0.11
-oversampleFactor = 0
 
 [audio-filter.default.demod]
 audioDiodeDrop = 0.01
@@ -91,7 +77,7 @@ audioJunctionSlopeVolts = 0.0045
 avcJunctionSlopeVolts = 0.004
 detectorPlateCouplingCapFarads = 0.00000000011
 audioChargeResistanceOhms = 5100.0
-audioDischargeResistanceOhms = 509300.0
+audioDischargeResistanceOhms = 334261.8025751073
 avcChargeResistanceOhms = 1000000.0
 avcDischargeResistanceOhms = 500000.0
 avcFilterCapFarads = 0.00000015
@@ -99,39 +85,27 @@ controlVoltageRef = 0.75
 senseLowHz = 0.0
 senseHighHz = 0.0
 afcSenseLpHz = 34.0
-afcsoffsethz = 1.2
-afchoffsethz = 1.2
-afcLowStep = 0.5
-afcHighStep = 0.5
-afcLowPhase = 0.0
-afcHighPhase = 0.0
 
 [audio-filter.default.receivercircuit]
 enabled = true
 volumeControlResistanceOhms = 2000000.0
 volumeControlTapResistanceOhms = 1000000.0
-volumeControlPosition = 1.0
+volumeControlPosition = 0.36
 volumeControlLoudnessResistanceOhms = 490000.0
 volumeControlLoudnessCapFarads = 0.000000015
-volumeControlTapVoltage = 0.0
 couplingCapFarads = 0.00000001
 gridLeakResistanceOhms = 1000000.0
 tubePlateSupplyVolts = 250.0
 tubePlateDcVolts = 90.0
-tubeQuiescentPlateVolts = 90.0
 tubeScreenVolts = 0.0
 tubeBiasVolts = -8.0
 tubePlateCurrentAmps = 0.009
-tubeQuiescentPlateCurrentAmps = 0.0
 tubeMutualConductanceSiemens = 0.0026
 tubeMu = 20.0
 tubeTriodeConnected = true
 tubeLoadResistanceOhms = 15000.0
 tubePlateKneeVolts = 16.0
 tubeGridSoftnessVolts = 0.6
-tubePlatResistanceOhms = 0.0
-operatingPointToleranceVolts = 0.0
-tubePlateVoltage = 90.0
 
 [audio-filter.default.tone]
 presenceHz = 0.0
@@ -140,20 +114,15 @@ presenceGainDb = 0.0
 tiltSplitHz = 0.0
 
 [audio-filter.default.power]
-sagEnv = 0.0
-sagAtk = 0.0
-sagRel = 0.0
 sagStart = 0.06
 sagEnd = 0.22
-rectifierPhase = 0.0
 rippleDepth = 0.0
-satOsPrev = 0.0
 satDrive = 1.0
 satMix = 0.0
 sagAttackMs = 60.0
 sagReleaseMs = 900.0
 rectifierMinHz = 80.0
-rippelesecondharmonicmix = 0.0
+rippleSecondHarmonicMix = 0.0
 gainSagPerPower = 0.015
 rippleGainBase = 0.0
 rippleGainDepth = 0.0
@@ -164,14 +133,11 @@ supplyBiasDepth = 0.0
 postLpHz = 0.0
 gridCouplingCapFarads = 0.00000005
 gridLeakResistanceOhms = 100000.0
-driverSourceResistanceOhms = 0.0
 tubePlateSupplyVolts = 250.0
-tubePlateDcVolts = 250.0
-tubeQuiescentPlateVolts = 250.0
-tubeScreenVolts = 0.0
+tubePlateDcVolts = 236.67
+tubeScreenVolts = 250.0
 tubeBiasVolts = -20.0
 tubePlateCurrentAmps = 0.031
-tubeQuiescentPlateCurrentAmps = 0.0
 tubeMutualConductanceSiemens = 0.0027
 tubeMu = 7.0
 tubeTriodeConnected = true
@@ -179,38 +145,30 @@ tubeAcLoadResistanceOhms = 4000.0
 tubePlateKneeVolts = 24.0
 tubeGridSoftnessVolts = 0.8
 tubeGridCurrentResistanceOhms = 1000.0
-tubePlatResistanceOhms = 0.0
-operatingPointToleranceVolts = 0.0
-tubePlateVoltage = 0.0
+outputGridLeakResistanceOhms = 250000.0
+outputGridCurrentResistanceOhms = 1200.0
 interstagePrimaryLeakageInductanceHenries = 0.45
 interstageMagnetizingInductanceHenries = 15.0
 interstagePrimaryResistanceOhms = 430.0
+interstageTurnsRatioPrimaryToSecondary = 0.7142857142857143
 interstagePrimaryCoreLossResistanceOhms = 220000.0
 interstagePrimaryShuntCapFarads = 0.0
 interstageSecondaryLeakageInductanceHenries = 0.04
 interstageSecondaryResistanceOhms = 296.0
 interstageSecondaryShuntCapFarads = 0.0
 interstageIntegrationSubsteps = 8
-outputGridLeakResistanceOhms = 250000.0
-outputGridCurrentResistanceOhms = 1200.0
 outputTubePlateSupplyVolts = 325.0
-outputTubePlateDcVolts = 325.0
-outputTubeQuiescentPlateVolts = 325.0
+outputTubePlateDcVolts = 320.3
 outputTubeBiasVolts = -39.0
 outputTubePlateCurrentAmps = 0.04
-outputTubeQuiescentPlateCurrentAmps = 0.0
 outputTubeMutualConductanceSiemens = 0.00525
 outputTubeMu = 4.2
 outputTubePlateToPlateLoadOhms = 3000.0
 outputTubePlateKneeVolts = 18.0
 outputTubeGridSoftnessVolts = 2.0
-outputTubePlatResistanceOhms = 0.0
-outputGridAVolts = 0.0
-outputGridBVolts = 0.0
-outputOperatingPointToleranceVolts = 0.0
 outputTransformerPrimaryLeakageInductanceHenries = 0.035
 outputTransformerMagnetizingInductanceHenries = 20.0
-outputTransformerTurnsRatioPrimaryToSecondary = 2.775
+outputTransformerTurnsRatioPrimaryToSecondary = 27.735009811261456
 outputTransformerPrimaryResistanceOhms = 235.0
 outputTransformerPrimaryCoreLossResistanceOhms = 90000.0
 outputTransformerPrimaryShuntCapFarads = 0.0
@@ -222,6 +180,79 @@ outputLoadResistanceOhms = 3.9
 nominalOutputPowerWatts = 0.5
 
 [audio-filter.default.noise]
+enableHumTone = true
+humHzDefault = 60.0
+noiseref = 0.15
+noiseWeightScaleMax = 2.0
+humAmpScale = 0.12
+crackleAmpScale = 0.025
+crackleRateScale = 1.2
+noiseHpHz = 500.0
+noiseLpHz = 5500.0
+filterQ = 0.707
+scAttackMs = 2.0
+scReleaseMs = 80.0
+crackleDecayMs = 8.0
+sidechainMaskRef = 0.15
+hissMaskDepth = 0.5
+burstMaskDepth = 0.3
+pinkFastPole = 0.85
+pinkSlowPole = 0.97
+brownStep = 0.02
+hissDriftPole = 0.9992
+hissDriftNoise = 0.002
+hissDriftSlowPole = 0.9998
+hissDriftSlowNoise = 0.001
+whiteMix = 0.35
+pinkFastMix = 0.45
+pinkDifferenceMix = 0.12
+pinkFastSubtract = 0.6
+brownMix = 0.08
+hissBase = 0.7
+hissDriftDepth = 0.3
+hissDriftSlowMix = 0.04
+humSecondHarmonicMix = 0.42
+
+[audio-filter.default.speaker]
+drive = 1.0
+suspensionHz = 65.0
+suspensionQ = 0.9
+suspensionGainDb = 3.5
+coneBodyHz = 1200.0
+coneBodyQ = 0.5
+coneBodyGainDb = 1.5
+topLpHz = 5500.0
+filterQ = 0.707
+limit = 0.0
+excursionRef = 6.0
+complianceLossDepth = 0.08
+
+[audio-filter.default.cabinet]
+enabled = true
+panelHz = 180.0
+panelQ = 1.5
+panelGainDb = 2.5
+chassisHz = 650.0
+chassisQ = 0.9
+chassisGainDb = -1.5
+cavityDipHz = 900.0
+cavityDipQ = 2.0
+cavityDipGainDb = -3.0
+grilleLpHz = 7500.0
+rearDelayMs = 0.9
+rearMix = 0.15
+rearHpHz = 200.0
+rearLpHz = 3500.0
+
+[audio-filter.default.finallimiter]
+enabled = true
+threshold = 0.95
+lookaheadMs = 1.5
+attackMs = 0.5
+releaseMs = 100.0
+
+[audio-filter.default.output]
+digitalMakeupGain = 5.0
 
 [audio-filter.default.nodes]
 tuning = true
@@ -243,32 +274,7 @@ cabinet = true
 finallimiter = true
 outputclip = true
 
+# The clean preset inherits the compiled Philco defaults and only applies
+# lightweight overrides.
 [audio-filter.clean.globals]
 enableAutoLevel = true
-enableHumTone = true
-humHzDefault = 60.0
-noiseref = 0.15
-noiseWeightScaleMax = 2.0
-humAmpScale = 0.12
-crackleAmpScale = 0.08
-crackleRateScale = 0.06
-
-[audio-filter.clean.nodes]
-tuning = true
-input = true
-avc = true
-afc = true
-controlbus = true
-interferencederived = true
-frontend = true
-mixer = true
-ifstrip = true
-demod = true
-receivercircuit = true
-tone = true
-power = true
-noise = true
-speaker = true
-cabinet = true
-finallimiter = true
-outputclip = true

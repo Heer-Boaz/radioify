@@ -69,7 +69,9 @@ static bool isKnownRadioSection(const std::string& section) {
          section == "tuning" || section == "frontend" ||
          section == "mixer" || section == "ifstrip" || section == "demod" ||
          section == "receivercircuit" || section == "tone" || section == "power" ||
-         section == "noise" || section == "nodes";
+         section == "noise" || section == "speaker" ||
+         section == "cabinet" || section == "finallimiter" ||
+         section == "output" || section == "nodes";
 }
 
 static bool applyRadioSettingsValue(Radio1938& radio,
@@ -746,7 +748,8 @@ static bool applyRadioSettingsValue(Radio1938& radio,
     if (keyNorm == "rectifierminhz") {
       return setFloat(radio.power.rectifierMinHz, "power.rectifierMinHz");
     }
-    if (keyNorm == "rippelesecondharmonicmix") {
+    if (keyNorm == "ripplesecondharmonicmix" ||
+        keyNorm == "rippelesecondharmonicmix") {
       return setFloat(radio.power.rippleSecondHarmonicMix,
                       "power.rippleSecondHarmonicMix");
     }
@@ -859,6 +862,10 @@ static bool applyRadioSettingsValue(Radio1938& radio,
       return setFloat(
           radio.power.interstagePrimaryCoreLossResistanceOhms,
           "power.interstagePrimaryCoreLossResistanceOhms");
+    }
+    if (keyNorm == "interstageturnsratioprimarytosecondary") {
+      return setFloat(radio.power.interstageTurnsRatioPrimaryToSecondary,
+                      "power.interstageTurnsRatioPrimaryToSecondary");
     }
     if (keyNorm == "interstageprimaryshuntcapfarads") {
       return setFloat(radio.power.interstagePrimaryShuntCapFarads,
@@ -1023,6 +1030,223 @@ static bool applyRadioSettingsValue(Radio1938& radio,
     }
     if (keyNorm == "crackleratescale") {
       return setFloat(radio.noiseConfig.crackleRateScale, "noise.crackleRateScale");
+    }
+    if (keyNorm == "noisehphz") {
+      return setFloat(radio.noiseRuntime.hum.noiseHpHz, "noise.noiseHpHz");
+    }
+    if (keyNorm == "noiselphz") {
+      return setFloat(radio.noiseRuntime.hum.noiseLpHz, "noise.noiseLpHz");
+    }
+    if (keyNorm == "filterq") {
+      return setFloat(radio.noiseRuntime.hum.filterQ, "noise.filterQ");
+    }
+    if (keyNorm == "scattackms") {
+      return setFloat(radio.noiseRuntime.hum.scAttackMs, "noise.scAttackMs");
+    }
+    if (keyNorm == "screleasems") {
+      return setFloat(radio.noiseRuntime.hum.scReleaseMs, "noise.scReleaseMs");
+    }
+    if (keyNorm == "crackledecayms") {
+      return setFloat(radio.noiseRuntime.hum.crackleDecayMs,
+                      "noise.crackleDecayMs");
+    }
+    if (keyNorm == "sidechainmaskref") {
+      return setFloat(radio.noiseRuntime.hum.sidechainMaskRef,
+                      "noise.sidechainMaskRef");
+    }
+    if (keyNorm == "hissmaskdepth") {
+      return setFloat(radio.noiseRuntime.hum.hissMaskDepth,
+                      "noise.hissMaskDepth");
+    }
+    if (keyNorm == "burstmaskdepth") {
+      return setFloat(radio.noiseRuntime.hum.burstMaskDepth,
+                      "noise.burstMaskDepth");
+    }
+    if (keyNorm == "pinkfastpole") {
+      return setFloat(radio.noiseRuntime.hum.pinkFastPole,
+                      "noise.pinkFastPole");
+    }
+    if (keyNorm == "pinkslowpole") {
+      return setFloat(radio.noiseRuntime.hum.pinkSlowPole,
+                      "noise.pinkSlowPole");
+    }
+    if (keyNorm == "brownstep") {
+      return setFloat(radio.noiseRuntime.hum.brownStep, "noise.brownStep");
+    }
+    if (keyNorm == "hissdriftpole") {
+      return setFloat(radio.noiseRuntime.hum.hissDriftPole,
+                      "noise.hissDriftPole");
+    }
+    if (keyNorm == "hissdriftnoise") {
+      return setFloat(radio.noiseRuntime.hum.hissDriftNoise,
+                      "noise.hissDriftNoise");
+    }
+    if (keyNorm == "hissdriftslowpole") {
+      return setFloat(radio.noiseRuntime.hum.hissDriftSlowPole,
+                      "noise.hissDriftSlowPole");
+    }
+    if (keyNorm == "hissdriftslownoise") {
+      return setFloat(radio.noiseRuntime.hum.hissDriftSlowNoise,
+                      "noise.hissDriftSlowNoise");
+    }
+    if (keyNorm == "whitemix") {
+      return setFloat(radio.noiseRuntime.hum.whiteMix, "noise.whiteMix");
+    }
+    if (keyNorm == "pinkfastmix") {
+      return setFloat(radio.noiseRuntime.hum.pinkFastMix,
+                      "noise.pinkFastMix");
+    }
+    if (keyNorm == "pinkdifferencemix") {
+      return setFloat(radio.noiseRuntime.hum.pinkDifferenceMix,
+                      "noise.pinkDifferenceMix");
+    }
+    if (keyNorm == "pinkfastsubtract") {
+      return setFloat(radio.noiseRuntime.hum.pinkFastSubtract,
+                      "noise.pinkFastSubtract");
+    }
+    if (keyNorm == "brownmix") {
+      return setFloat(radio.noiseRuntime.hum.brownMix, "noise.brownMix");
+    }
+    if (keyNorm == "hissbase") {
+      return setFloat(radio.noiseRuntime.hum.hissBase, "noise.hissBase");
+    }
+    if (keyNorm == "hissdriftdepth") {
+      return setFloat(radio.noiseRuntime.hum.hissDriftDepth,
+                      "noise.hissDriftDepth");
+    }
+    if (keyNorm == "hissdriftslowmix") {
+      return setFloat(radio.noiseRuntime.hum.hissDriftSlowMix,
+                      "noise.hissDriftSlowMix");
+    }
+    if (keyNorm == "humsecondharmonicmix") {
+      return setFloat(radio.noiseRuntime.hum.humSecondHarmonicMix,
+                      "noise.humSecondHarmonicMix");
+    }
+    return false;
+  }
+
+  if (section == "speaker") {
+    if (keyNorm == "drive") {
+      return setFloat(radio.speakerStage.drive, "speaker.drive");
+    }
+    if (keyNorm == "suspensionhz") {
+      return setFloat(radio.speakerStage.speaker.suspensionHz,
+                      "speaker.suspensionHz");
+    }
+    if (keyNorm == "suspensionq") {
+      return setFloat(radio.speakerStage.speaker.suspensionQ,
+                      "speaker.suspensionQ");
+    }
+    if (keyNorm == "suspensiongaindb") {
+      return setFloat(radio.speakerStage.speaker.suspensionGainDb,
+                      "speaker.suspensionGainDb");
+    }
+    if (keyNorm == "conebodyhz") {
+      return setFloat(radio.speakerStage.speaker.coneBodyHz,
+                      "speaker.coneBodyHz");
+    }
+    if (keyNorm == "conebodyq") {
+      return setFloat(radio.speakerStage.speaker.coneBodyQ,
+                      "speaker.coneBodyQ");
+    }
+    if (keyNorm == "conebodygaindb") {
+      return setFloat(radio.speakerStage.speaker.coneBodyGainDb,
+                      "speaker.coneBodyGainDb");
+    }
+    if (keyNorm == "toplphz") {
+      return setFloat(radio.speakerStage.speaker.topLpHz, "speaker.topLpHz");
+    }
+    if (keyNorm == "filterq") {
+      return setFloat(radio.speakerStage.speaker.filterQ, "speaker.filterQ");
+    }
+    if (keyNorm == "limit") {
+      return setFloat(radio.speakerStage.speaker.limit, "speaker.limit");
+    }
+    if (keyNorm == "excursionref") {
+      return setFloat(radio.speakerStage.speaker.excursionRef,
+                      "speaker.excursionRef");
+    }
+    if (keyNorm == "compliancelossdepth") {
+      return setFloat(radio.speakerStage.speaker.complianceLossDepth,
+                      "speaker.complianceLossDepth");
+    }
+    return false;
+  }
+
+  if (section == "cabinet") {
+    if (keyNorm == "enabled") {
+      return setBool(radio.cabinet.enabled, "cabinet.enabled");
+    }
+    if (keyNorm == "panelhz") {
+      return setFloat(radio.cabinet.panelHz, "cabinet.panelHz");
+    }
+    if (keyNorm == "panelq") {
+      return setFloat(radio.cabinet.panelQ, "cabinet.panelQ");
+    }
+    if (keyNorm == "panelgaindb") {
+      return setFloat(radio.cabinet.panelGainDb, "cabinet.panelGainDb");
+    }
+    if (keyNorm == "chassishz") {
+      return setFloat(radio.cabinet.chassisHz, "cabinet.chassisHz");
+    }
+    if (keyNorm == "chassisq") {
+      return setFloat(radio.cabinet.chassisQ, "cabinet.chassisQ");
+    }
+    if (keyNorm == "chassisgaindb") {
+      return setFloat(radio.cabinet.chassisGainDb, "cabinet.chassisGainDb");
+    }
+    if (keyNorm == "cavitydiphz") {
+      return setFloat(radio.cabinet.cavityDipHz, "cabinet.cavityDipHz");
+    }
+    if (keyNorm == "cavitydipq") {
+      return setFloat(radio.cabinet.cavityDipQ, "cabinet.cavityDipQ");
+    }
+    if (keyNorm == "cavitydipgaindb") {
+      return setFloat(radio.cabinet.cavityDipGainDb,
+                      "cabinet.cavityDipGainDb");
+    }
+    if (keyNorm == "grillelphz") {
+      return setFloat(radio.cabinet.grilleLpHz, "cabinet.grilleLpHz");
+    }
+    if (keyNorm == "reardelayms") {
+      return setFloat(radio.cabinet.rearDelayMs, "cabinet.rearDelayMs");
+    }
+    if (keyNorm == "rearmix") {
+      return setFloat(radio.cabinet.rearMix, "cabinet.rearMix");
+    }
+    if (keyNorm == "rearhphz") {
+      return setFloat(radio.cabinet.rearHpHz, "cabinet.rearHpHz");
+    }
+    if (keyNorm == "rearlphz") {
+      return setFloat(radio.cabinet.rearLpHz, "cabinet.rearLpHz");
+    }
+    return false;
+  }
+
+  if (section == "finallimiter") {
+    if (keyNorm == "enabled") {
+      return setBool(radio.finalLimiter.enabled, "finalLimiter.enabled");
+    }
+    if (keyNorm == "threshold") {
+      return setFloat(radio.finalLimiter.threshold, "finalLimiter.threshold");
+    }
+    if (keyNorm == "lookaheadms") {
+      return setFloat(radio.finalLimiter.lookaheadMs,
+                      "finalLimiter.lookaheadMs");
+    }
+    if (keyNorm == "attackms") {
+      return setFloat(radio.finalLimiter.attackMs, "finalLimiter.attackMs");
+    }
+    if (keyNorm == "releasems") {
+      return setFloat(radio.finalLimiter.releaseMs, "finalLimiter.releaseMs");
+    }
+    return false;
+  }
+
+  if (section == "output") {
+    if (keyNorm == "digitalmakeupgain") {
+      return setFloat(radio.output.digitalMakeupGain,
+                      "output.digitalMakeupGain");
     }
     return false;
   }
