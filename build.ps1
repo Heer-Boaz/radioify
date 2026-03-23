@@ -276,6 +276,48 @@ function Stop-BuildProcessesUsingPath {
   Start-Sleep -Milliseconds 500
 }
 
+function Invoke-NativeProcess {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$FilePath,
+    [string[]]$ArgumentList = @(),
+    [string]$WorkingDirectory = $null
+  )
+
+  $startInfo = @{
+    FilePath     = $FilePath
+    ArgumentList = $ArgumentList
+    NoNewWindow  = $true
+    Wait         = $true
+    PassThru     = $true
+  }
+  if ($WorkingDirectory) {
+    $startInfo.WorkingDirectory = $WorkingDirectory
+  }
+
+  $process = Start-Process @startInfo
+  return $process.ExitCode
+}
+
+function Convert-ToCMakePath {
+  param([string]$Path)
+  if (-not $Path) { return $null }
+  return ([System.IO.Path]::GetFullPath($Path) -replace "\\", "/")
+}
+
+function Convert-ToCMakePathList {
+  param([string]$PathList)
+  if (-not $PathList) { return $null }
+
+  $parts = @()
+  foreach ($part in ($PathList -split ';')) {
+    if ($part) {
+      $parts += (Convert-ToCMakePath $part)
+    }
+  }
+  return ($parts -join ';')
+}
+
 function Assert-OnnxOverlayPortComplete {
   param([string]$OverlayPortsRoot)
 
@@ -502,8 +544,7 @@ if ($InstallDeps) {
   }
 
   Push-Location $root
-  & $vcpkgExe @vcpkgInstallArgs
-  $installExit = $LASTEXITCODE
+  $installExit = Invoke-NativeProcess -FilePath $vcpkgExe -ArgumentList $vcpkgInstallArgs -WorkingDirectory $root
   Pop-Location
 
   if ($installExit -ne 0) {
@@ -529,7 +570,10 @@ $manifestInstalledAvailable = [bool]($installedRoot -and (Test-Path $installedRo
 $needsVcpkgForBuild = -not ([bool]($env:FFMPEG_DIR -or $env:FFMPEG_ROOT)) -and -not $manifestInstalledAvailable
 Assert-VcpkgRootReadableWhenRequired -VcpkgRoot $vcpkgRoot -VcpkgExe $vcpkgExe -RepoRoot $root -NeedsVcpkg $needsVcpkgForBuild
 
-$cmakeArgs = @("-S", $root, "-B", $buildDir, "-DCMAKE_BUILD_TYPE=$Config")
+$rootForCMake = Convert-ToCMakePath $root
+$buildDirForCMake = Convert-ToCMakePath $buildDir
+$installedRootForCMake = Convert-ToCMakePath $installedRoot
+$cmakeArgs = @("-S", $rootForCMake, "-B", $buildDirForCMake, "-DCMAKE_BUILD_TYPE=$Config")
 $cmakeArgs += "-DRADIOIFY_ENABLE_TIMING_LOG=$([bool]$TimingLog)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_STAGING_UPLOAD=$([bool]$StagingUpload)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_VIDEO_ERROR_LOG=$([bool]$VideoErrorLog)"
@@ -544,30 +588,30 @@ $cmakeArgs += "-DVCPKG_MANIFEST_INSTALL=OFF"
 if ($vcpkgRoot) {
   $toolchain = Join-Path $vcpkgRoot "scripts/buildsystems/vcpkg.cmake"
   if (Test-Path $toolchain) {
-    $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain"
+    $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$(Convert-ToCMakePath $toolchain)"
   }
 }
 if ($installedRoot) {
-  $cmakeArgs += "-DVCPKG_INSTALLED_DIR=$installedRoot"
+  $cmakeArgs += "-DVCPKG_INSTALLED_DIR=$installedRootForCMake"
 }
 if ($env:VCPKG_TARGET_TRIPLET) {
   $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
 }
 if ($env:FFMPEG_DIR) {
-  $cmakeArgs += "-DFFMPEG_DIR=$($env:FFMPEG_DIR)"
+  $cmakeArgs += "-DFFMPEG_DIR=$(Convert-ToCMakePath $env:FFMPEG_DIR)"
 }
 if ($env:FFMPEG_ROOT) {
-  $cmakeArgs += "-DFFMPEG_ROOT=$($env:FFMPEG_ROOT)"
+  $cmakeArgs += "-DFFMPEG_ROOT=$(Convert-ToCMakePath $env:FFMPEG_ROOT)"
 }
 if ($env:VCPKG_OVERLAY_PORTS) {
-  $cmakeArgs += "-DVCPKG_OVERLAY_PORTS=$env:VCPKG_OVERLAY_PORTS"
+  $cmakeArgs += "-DVCPKG_OVERLAY_PORTS=$(Convert-ToCMakePathList $env:VCPKG_OVERLAY_PORTS)"
 }
 
 if ($MelodyAnalysis -and (Is-StaticTriplet $env:VCPKG_TARGET_TRIPLET)) {
   Assert-OnnxStaticRegistrationDisabled -InstalledRoot $installedRoot -Triplet $env:VCPKG_TARGET_TRIPLET
 }
 
-$buildArgs = @("--build", $buildDir, "--config", $Config)
+$buildArgs = @("--build", $buildDirForCMake, "--config", $Config)
 
 $foundFfmpeg = $false
 $ffmpegTripletDir = $null
@@ -605,7 +649,7 @@ if (-not $foundFfmpeg -and -not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT)) {
   exit 1
 }
 if (-not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT) -and $foundFfmpeg -and $ffmpegTripletDir) {
-  $env:FFMPEG_DIR = $ffmpegTripletDir
+  $env:FFMPEG_DIR = Convert-ToCMakePath $ffmpegTripletDir
   $cmakeArgs += "-DFFMPEG_DIR=$($env:FFMPEG_DIR)"
 }
 
@@ -628,13 +672,12 @@ if ($effectiveCachedManifestMode -and ($effectiveCachedManifestMode.ToUpperInvar
   }
 }
 
-& $cmake @cmakeArgs
-if ($LASTEXITCODE -ne 0) {
-  exit $LASTEXITCODE
+$configureExit = Invoke-NativeProcess -FilePath $cmake -ArgumentList $cmakeArgs -WorkingDirectory $root
+if ($configureExit -ne 0) {
+  exit $configureExit
 }
 
-& $cmake @buildArgs
-$buildExit = $LASTEXITCODE
+$buildExit = Invoke-NativeProcess -FilePath $cmake -ArgumentList $buildArgs -WorkingDirectory $root
 if ($buildExit -eq 0) {
   $staticTriplet = $tripletStaticRequested -or (Is-StaticTriplet $env:VCPKG_TARGET_TRIPLET) -or (Is-StaticTriplet $env:VCPKG_DEFAULT_TRIPLET)
   if (-not $Static -and -not $staticTriplet) {
