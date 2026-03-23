@@ -3074,6 +3074,11 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   tuneOffsetHz = newTuneHz;
   float audioPostLpHz = std::clamp(0.48f * std::max(bwHz, 1.0f), 1200.0f,
                                    std::min(6000.0f, 0.12f * fs));
+  float ifCrackleTauSeconds =
+      1.0f / (kRadioPi * std::max(bwHz, 1.0f));
+  ifCrackleDecay =
+      std::exp(-1.0f / (std::max(fs, 1.0f) *
+                        std::max(ifCrackleTauSeconds, 1e-6f)));
   float lowSenseBound = std::max(40.0f, senseLowHz);
   float highSenseBound = std::max(lowSenseBound + 180.0f, senseHighHz);
   float ifCenter = 0.5f * (lowSenseBound + highSenseBound);
@@ -3111,6 +3116,8 @@ void AMDetector::reset() {
   audioEnv = 0.0f;
   avcEnv = 0.0f;
   afcError = 0.0f;
+  ifCrackleEnv = 0.0f;
+  ifCracklePhase = 0.0f;
   afcLowPhase = 0.0f;
   afcHighPhase = 0.0f;
   afcLowSense.reset();
@@ -3409,7 +3416,9 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
 
 float AMDetector::processEnvelope(float signalI,
                                   float signalQ,
-                                  float ifNoiseAmp) {
+                                  float ifNoiseAmp,
+                                  float ifCrackleAmp,
+                                  float ifCrackleRate) {
   constexpr float kInvSqrt2 = 0.70710678118f;
   float ifI = signalI;
   float ifQ = signalQ;
@@ -3417,6 +3426,25 @@ float AMDetector::processEnvelope(float signalI,
     float noiseScale = ifNoiseAmp * kInvSqrt2;
     ifI += dist(rng) * noiseScale;
     ifQ += dist(rng) * noiseScale;
+  }
+  if (ifCrackleAmp > 0.0f && ifCrackleRate > 0.0f && fs > 0.0f) {
+    float chance = std::min(ifCrackleRate / fs, 1.0f);
+    float eventDraw = 0.5f * (dist(rng) + 1.0f);
+    if (eventDraw < chance) {
+      // Impulsive RF interference reaches the detector through the tuned IF
+      // path, so model it as a short ring-down in the complex envelope instead
+      // of a post-audio click.
+      float burstPhase = kRadioPi * (dist(rng) + 1.0f);
+      float burstAmpDraw = 0.5f * (dist(rng) + 1.0f);
+      float burstAmp = ifCrackleAmp * (0.35f + 0.65f * burstAmpDraw);
+      ifCrackleEnv = std::max(ifCrackleEnv, burstAmp);
+      ifCracklePhase = burstPhase;
+    }
+  }
+  if (ifCrackleEnv > 1e-6f) {
+    ifI += ifCrackleEnv * std::cos(ifCracklePhase);
+    ifQ += ifCrackleEnv * std::sin(ifCracklePhase);
+    ifCrackleEnv *= ifCrackleDecay;
   }
 
   auto processProbe = [&](float phase,
@@ -3471,7 +3499,8 @@ float AMDetector::processEnvelope(float signalI,
 }
 
 float AMDetector::process(const AMDetectorSampleInput& in) {
-  return processEnvelope(in.signal, 0.0f, in.ifNoiseAmp);
+  return processEnvelope(in.signal, 0.0f, in.ifNoiseAmp, in.ifCrackleAmp,
+                         in.ifCrackleRate);
 }
 
 void SpeakerSim::init(float fs) {
@@ -4026,7 +4055,9 @@ static float processSuperhetSourceFrame(Radio1938& radio,
   ifStrip.prevSourceI = currI;
   ifStrip.prevSourceQ = currQ;
   return demod.processEnvelope(ifStage2[0], ifStage2[1],
-                               ctx.derived.demodIfNoiseAmp);
+                               ctx.derived.demodIfNoiseAmp,
+                               ctx.derived.demodIfCrackleAmp,
+                               ctx.derived.demodIfCrackleRate);
 }
 
 float RadioDemodNode::process(Radio1938& radio,
@@ -4502,7 +4533,11 @@ void RadioInterferenceDerivedNode::init(Radio1938& radio, RadioInitContext&) {
     return;
   }
 
-  float scale = radio.noiseWeight / noiseConfig.noiseWeightRef;
+  float scale =
+      radio.noiseWeight / std::max(noiseConfig.noiseWeightRef, 1e-6f);
+  if (noiseConfig.noiseWeightScaleMax > 0.0f) {
+    scale = std::min(scale, noiseConfig.noiseWeightScaleMax);
+  }
   noiseDerived.baseNoiseAmp = radio.noiseWeight;
   noiseDerived.baseCrackleAmp = noiseConfig.crackleAmpScale * scale;
   noiseDerived.baseHumAmp = noiseConfig.humAmpScale * scale;
@@ -4514,12 +4549,56 @@ void RadioInterferenceDerivedNode::reset(Radio1938&) {}
 void RadioInterferenceDerivedNode::update(Radio1938& radio,
                                           RadioSampleContext& ctx) {
   auto& noiseDerived = radio.noiseDerived;
+  float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
+  float rfGainControl = std::max(
+      0.35f, 1.0f - radio.frontEnd.avcGainDepth * avcT);
+  float ifGainControl = std::max(
+      0.20f, 1.0f - radio.ifStrip.avcGainDepth * avcT);
+  float preDetectorGain = rfGainControl * ifGainControl;
+  float mistuneT = 0.0f;
+  if (ctx.block) {
+    mistuneT = clampf(std::fabs(ctx.block->tuneNorm), 0.0f, 1.0f);
+  } else {
+    float bwHalf = 0.5f * std::max(radio.tuning.tunedBw, 1.0f);
+    mistuneT = clampf(std::fabs(radio.tuning.tuneAppliedHz) /
+                          std::max(bwHalf, 1e-6f),
+                      0.0f, 1.0f);
+  }
+  float detectorLockT =
+      1.0f - clampf(std::fabs(radio.controlSense.tuningErrorSense),
+                    0.0f, 1.0f);
+  float tunedCaptureT = 1.0f - mistuneT;
+  float carrierT = clampf(radio.controlBus.controlVoltage, 0.0f, 1.0f);
+  float crackleExposure = 1.0f - clampf(carrierT * tunedCaptureT * detectorLockT,
+                                        0.0f, 1.0f);
+  float crackleExposureSq = crackleExposure * crackleExposure;
+
+  // RF/IF interference follows the same AVC-governed gain as the incoming
+  // carrier. Impulsive bursts are most audible when carrier capture is weak,
+  // either because the station is weak or because the tuned passband is
+  // offset enough that the detector sees an asymmetric envelope.
   ctx.derived.demodIfNoiseAmp =
-      noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix;
+      noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix * preDetectorGain;
+  bool crackleAtDetector =
+      radio.graph.isEnabled(StageId::IFStrip) &&
+      radio.graph.isEnabled(StageId::Demod);
+  if (crackleAtDetector) {
+    ctx.derived.demodIfCrackleAmp =
+        noiseDerived.baseCrackleAmp * preDetectorGain * crackleExposureSq;
+    ctx.derived.demodIfCrackleRate =
+        noiseDerived.crackleRate * crackleExposure;
+    ctx.derived.crackleAmp = 0.0f;
+    ctx.derived.crackleRate = 0.0f;
+  } else {
+    ctx.derived.demodIfCrackleAmp = 0.0f;
+    ctx.derived.demodIfCrackleRate = 0.0f;
+    ctx.derived.crackleAmp =
+        noiseDerived.baseCrackleAmp * crackleExposureSq;
+    ctx.derived.crackleRate =
+        noiseDerived.crackleRate * crackleExposure;
+  }
   ctx.derived.noiseAmp =
       noiseDerived.baseNoiseAmp * radio.globals.postNoiseMix;
-  ctx.derived.crackleAmp = noiseDerived.baseCrackleAmp;
-  ctx.derived.crackleRate = noiseDerived.crackleRate;
   ctx.derived.humAmp = noiseDerived.baseHumAmp;
   ctx.derived.humToneEnabled = radio.noiseConfig.enableHumTone;
 }
@@ -5320,8 +5399,8 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.noiseConfig.noiseWeightRef = 0.15f;
   radio.noiseConfig.noiseWeightScaleMax = 2.0f;
   radio.noiseConfig.humAmpScale = 0.12f;
-  radio.noiseConfig.crackleAmpScale = 0.08f;
-  radio.noiseConfig.crackleRateScale = 0.06f;
+  radio.noiseConfig.crackleAmpScale = 0.025f;
+  radio.noiseConfig.crackleRateScale = 1.2f;
 
   // --- Noise shaping (tube hiss spectral character for 1930s receiver) ---
   radio.noiseRuntime.hum.noiseHpHz = 500.0f;

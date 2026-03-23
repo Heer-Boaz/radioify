@@ -337,6 +337,8 @@ struct NoiseHum {
 struct AMDetectorSampleInput {
   float signal = 0.0f;
   float ifNoiseAmp = 0.0f;
+  float ifCrackleAmp = 0.0f;
+  float ifCrackleRate = 0.0f;
 };
 
 struct AMDetector {
@@ -358,6 +360,9 @@ struct AMDetector {
   float audioEnv = 0.0f;
   float avcEnv = 0.0f;
   float afcError = 0.0f;
+  float ifCrackleEnv = 0.0f;
+  float ifCrackleDecay = 0.0f;
+  float ifCracklePhase = 0.0f;
 
   float audioDiodeDrop = 0.0f;
   float avcDiodeDrop = 0.0f;
@@ -393,7 +398,11 @@ struct AMDetector {
   void setSenseWindow(float lowHz, float highHz);
   void reset();
   float process(const AMDetectorSampleInput& in);
-  float processEnvelope(float signalI, float signalQ, float ifNoiseAmp);
+  float processEnvelope(float signalI,
+                        float signalQ,
+                        float ifNoiseAmp,
+                        float ifCrackleAmp = 0.0f,
+                        float ifCrackleRate = 0.0f);
 };
 
 struct SpeakerSim {
@@ -470,6 +479,8 @@ struct RadioBlockControl {
 
 struct RadioDerivedSampleParams {
   float demodIfNoiseAmp = 0.0f;
+  float demodIfCrackleAmp = 0.0f;
+  float demodIfCrackleRate = 0.0f;
   float noiseAmp = 0.0f;
   float crackleAmp = 0.0f;
   float crackleRate = 0.0f;
