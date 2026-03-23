@@ -10,7 +10,6 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <memory>
@@ -35,6 +34,7 @@
 #include "optionsbrowser.h"
 #include "playback_dialog.h"
 #include "psfaudio.h"
+#include "calibration_report.h"
 #include "radio.h"
 #include "radiopreview.h"
 #include "tracklist.h"
@@ -455,7 +455,8 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
 
 static void renderToFile(const Options& o, const Radio1938& radio1938Template,
                          bool useRadio1938,
-                         Radio1938* renderedRadioOut = nullptr) {
+                         Radio1938* renderedRadioOut = nullptr,
+                         bool writeOutput = true) {
   const uint32_t sampleRate = 48000;
   const uint32_t channels = o.mono ? 1 : 2;
   constexpr uint32_t kRadioProcessChannels = 1u;
@@ -471,6 +472,7 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   const bool useGme = isGmeExt(o.input);
   const bool useVgm = isVgmExt(o.input);
   const bool useKss = isKssExt(o.input);
+  constexpr uint32_t chunkFrames = 1024;
   ma_decoder decoder{};
   M4aDecoder m4a{};
   GmeAudioDecoder gme{};
@@ -506,10 +508,35 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   }
 
   ma_encoder encoder{};
-  ma_encoder_config encConfig = ma_encoder_config_init(
-      ma_encoding_format_wav, ma_format_s16, channels, sampleRate);
-  if (ma_encoder_init_file(o.output.c_str(), &encConfig, &encoder) !=
-      MA_SUCCESS) {
+  ma_encoder_config encConfig;
+  std::vector<int16_t> out;
+  if (writeOutput) {
+    encConfig = ma_encoder_config_init(
+        ma_encoding_format_wav, ma_format_s16, channels, sampleRate);
+    if (ma_encoder_init_file(o.output.c_str(), &encConfig, &encoder) !=
+        MA_SUCCESS) {
+      if (useM4a) {
+        m4a.uninit();
+      } else if (useKss) {
+        kss.uninit();
+      } else if (useVgm) {
+        vgm.uninit();
+      } else if (useGme) {
+        gme.uninit();
+      } else {
+        ma_decoder_uninit(&decoder);
+      }
+      die("Failed to open output for encoding.");
+    }
+    out.resize(static_cast<size_t>(chunkFrames * channels));
+  }
+
+  auto uninitEncoder = [&]() {
+    if (!writeOutput) return;
+    ma_encoder_uninit(&encoder);
+  };
+
+  auto uninitDecoder = [&]() {
     if (useM4a) {
       m4a.uninit();
     } else if (useKss) {
@@ -521,44 +548,41 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
     } else {
       ma_decoder_uninit(&decoder);
     }
-    die("Failed to open output for encoding.");
-  }
+  };
 
   auto radio1938 = std::make_unique<Radio1938>();
   rebuildRadioFromTemplate(radio1938.get());
   PcmToIfPreviewModulator radioPreview;
   radioPreview.init(*radio1938, static_cast<float>(sampleRate),
                     static_cast<float>(o.bwHz));
-  constexpr uint32_t chunkFrames = 1024;
   std::vector<float> buffer(chunkFrames * channels);
-  std::vector<int16_t> out(buffer.size());
 
   while (true) {
     uint64_t framesRead = 0;
     if (useM4a) {
       if (!m4a.readFrames(buffer.data(), chunkFrames, &framesRead)) {
-        ma_encoder_uninit(&encoder);
+        uninitEncoder();
         m4a.uninit();
         die("Failed to decode input.");
       }
       if (framesRead == 0) break;
     } else if (useKss) {
       if (!kss.readFrames(buffer.data(), chunkFrames, &framesRead)) {
-        ma_encoder_uninit(&encoder);
+        uninitEncoder();
         kss.uninit();
         die("Failed to decode input.");
       }
       if (framesRead == 0) break;
     } else if (useVgm) {
       if (!vgm.readFrames(buffer.data(), chunkFrames, &framesRead)) {
-        ma_encoder_uninit(&encoder);
+        uninitEncoder();
         vgm.uninit();
         die("Failed to decode input.");
       }
       if (framesRead == 0) break;
     } else if (useGme) {
       if (!gme.readFrames(buffer.data(), chunkFrames, &framesRead)) {
-        ma_encoder_uninit(&encoder);
+        uninitEncoder();
         gme.uninit();
         die("Failed to decode input.");
       }
@@ -576,112 +600,23 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
                                 static_cast<uint32_t>(framesRead), channels);
     }
 
-    for (size_t i = 0; i < static_cast<size_t>(framesRead * channels); ++i) {
-      float v = std::clamp(buffer[i], -1.0f, 1.0f);
-      out[i] = static_cast<int16_t>(std::lrint(v * 32767.0f));
+    if (writeOutput) {
+      for (size_t i = 0; i < static_cast<size_t>(framesRead * channels); ++i) {
+        float v = std::clamp(buffer[i], -1.0f, 1.0f);
+        out[i] = static_cast<int16_t>(std::lrint(v * 32767.0f));
+      }
+      ma_uint64 framesWritten = 0;
+      ma_encoder_write_pcm_frames(&encoder, out.data(),
+                                  static_cast<ma_uint64>(framesRead),
+                                  &framesWritten);
     }
-
-    ma_uint64 framesWritten = 0;
-    ma_encoder_write_pcm_frames(&encoder, out.data(),
-                                static_cast<ma_uint64>(framesRead),
-                                &framesWritten);
   }
 
-  ma_encoder_uninit(&encoder);
-  if (useM4a) {
-    m4a.uninit();
-  } else if (useKss) {
-    kss.uninit();
-  } else if (useVgm) {
-    vgm.uninit();
-  } else if (useGme) {
-    gme.uninit();
-  } else {
-    ma_decoder_uninit(&decoder);
-  }
+  uninitEncoder();
+  uninitDecoder();
 
   if (o.calibrationReport && useRadio1938 && radio1938->calibration.enabled) {
-    auto oldFlags = std::cout.flags();
-    auto oldPrecision = std::cout.precision();
-    std::cout << std::fixed << std::setprecision(3);
-    logLine("Calibration report:");
-    for (size_t i = 0; i < radio1938->calibration.stages.size(); ++i) {
-      StageId id = static_cast<StageId>(i);
-      const auto& stage = radio1938->calibration.stages[i];
-      if (stage.sampleCount == 0) continue;
-      std::cout << "  " << Radio1938::stageName(id)
-                << " rms_in=" << stage.rmsIn
-                << " rms_out=" << stage.rmsOut
-                << " mean_out=" << stage.meanOut
-                << " peak_out=" << stage.peakOut
-                << " crest_out=" << stage.crestOut
-                << " centroid_hz=" << stage.spectralCentroidHz
-                << " bw3_hz=" << stage.bandwidth3dBHz
-                << " bw6_hz=" << stage.bandwidth6dBHz
-                << " clips_in=" << stage.clipCountIn
-                << " clips_out=" << stage.clipCountOut
-                << "\n";
-    }
-    std::cout << "  limiter duty=" << radio1938->calibration.limiterDutyCycle
-              << " avg_gr=" << radio1938->calibration.limiterAverageGainReduction
-              << " max_gr=" << radio1938->calibration.limiterMaxGainReduction
-              << " avg_gr_db="
-              << radio1938->calibration.limiterAverageGainReductionDb
-              << " max_gr_db="
-              << radio1938->calibration.limiterMaxGainReductionDb
-              << "\n";
-    const auto& receiverStage =
-        radio1938->calibration.stages[static_cast<size_t>(StageId::ReceiverCircuit)];
-    std::cout << "  receiver_out_rms=" << receiverStage.rmsOut
-              << " receiver_out_peak=" << receiverStage.peakOut
-              << " interstage_secondary_rms="
-              << radio1938->calibration.interstageSecondaryRmsVolts
-              << " interstage_secondary_peak="
-              << radio1938->calibration.interstageSecondaryPeakVolts
-              << "\n";
-    std::cout << "  driver_grid_positive="
-              << radio1938->calibration.driverGridPositiveFraction
-              << " output_grid_a_positive="
-              << radio1938->calibration.outputGridAPositiveFraction
-              << " output_grid_b_positive="
-              << radio1938->calibration.outputGridBPositiveFraction
-              << " output_grid_positive="
-              << radio1938->calibration.outputGridPositiveFraction
-              << " max_mixer_ip=" << radio1938->calibration.maxMixerPlateCurrentAmps
-              << " max_receiver_ip="
-              << radio1938->calibration.maxReceiverPlateCurrentAmps
-              << " max_driver_ip="
-              << radio1938->calibration.maxDriverPlateCurrentAmps
-              << " max_output_ip_a="
-              << radio1938->calibration.maxOutputPlateCurrentAAmps
-              << " max_output_ip_b="
-              << radio1938->calibration.maxOutputPlateCurrentBAmps
-              << " max_speaker_v="
-              << radio1938->calibration.maxSpeakerSecondaryVolts
-              << " max_digital_output="
-              << radio1938->calibration.maxDigitalOutput
-              << "\n";
-    std::cout << "  validation failed="
-              << (radio1938->calibration.validationFailed ? 1 : 0)
-              << " driver_grid_over="
-              << (radio1938->calibration.validationDriverGridPositive ? 1 : 0)
-              << " output_grid_a_over="
-              << (radio1938->calibration.validationOutputGridAPositive ? 1 : 0)
-              << " output_grid_b_over="
-              << (radio1938->calibration.validationOutputGridBPositive ? 1 : 0)
-              << " output_grid_over="
-              << (radio1938->calibration.validationOutputGridPositive ? 1 : 0)
-              << " interstage_over="
-              << (radio1938->calibration.validationInterstageSecondary ? 1 : 0)
-              << " speaker_over="
-              << (radio1938->calibration.validationSpeakerOverReference ? 1 : 0)
-              << " dc_shift="
-              << (radio1938->calibration.validationDcShift ? 1 : 0)
-              << " digital_clip="
-              << (radio1938->calibration.validationDigitalClip ? 1 : 0)
-              << "\n";
-    std::cout.flags(oldFlags);
-    std::cout.precision(oldPrecision);
+    printCalibrationReport(*radio1938, "Calibration report:");
   }
 
   if (renderedRadioOut) {
@@ -709,7 +644,7 @@ static int runRenderRadioCli(const Options& o) {
           "': " + radioIniError);
     }
   }
-  if (o.calibrationReport) {
+  if (o.calibrationReport || o.measureNodeSteps) {
     radio1938Template.setCalibrationEnabled(true);
   }
 
@@ -722,9 +657,51 @@ static int runRenderRadioCli(const Options& o) {
   logLine("  Input:  " + renderOpt.input);
   logLine("  Output: " + renderOpt.output);
   logLine(std::string("  Chain:  ") + (renderOpt.dry ? "dry" : "radio"));
+  if (o.measureNodeSteps) {
+    logLine("  Measure: Node-step sweep (enabled)");
+  }
   logLine(std::string("  Report: ") +
-          (renderOpt.calibrationReport ? "calibration" : "off"));
-  logLine("Rendering output...");
+          ((o.calibrationReport || o.measureNodeSteps) ? "calibration" : "off"));
+  if (o.measureNodeSteps) {
+    logLine("Measuring node-step variants...");
+    printNodeStepSummaryHeader();
+    Radio1938 baselineRadio;
+    renderOpt.calibrationReport = o.calibrationReport;
+    renderToFile(renderOpt, radio1938Template, true, &baselineRadio, false);
+    printNodeStepSummaryLine("baseline", baselineRadio, nullptr);
+    if (renderOpt.calibrationReport) {
+      printCalibrationReport(baselineRadio, "Calibration report [baseline]:");
+    }
+    bool validationFailed = baselineRadio.calibration.validationFailed;
+    for (size_t stageIndex = 0;
+         stageIndex <= static_cast<size_t>(StageId::OutputClip); ++stageIndex) {
+      StageId stageId = static_cast<StageId>(stageIndex);
+      if (!radio1938Template.graph.isEnabled(stageId)) continue;
+      std::string stageName = std::string(Radio1938::stageName(stageId));
+      if (stageName == "Unknown") continue;
+      Radio1938 stepTemplate = radio1938Template;
+      stepTemplate.graph.setEnabled(stageId, false);
+      Radio1938 stepRadio;
+      renderToFile(renderOpt, stepTemplate, true, &stepRadio, false);
+      printNodeStepSummaryLine(stageName, stepRadio, &baselineRadio);
+      if (renderOpt.calibrationReport) {
+        printCalibrationReport(stepRadio,
+                              std::string("Calibration report [disable ") +
+                                  stageName + "]:");
+      }
+      if (stepRadio.calibration.validationFailed) {
+        validationFailed = true;
+      }
+    }
+    logLine("Done.");
+    if (validationFailed) {
+      logLine("Validation failed.");
+      return 2;
+    }
+    return 0;
+  }
+
+  renderOpt.calibrationReport = o.calibrationReport;
   Radio1938 renderedRadio;
   renderToFile(renderOpt, radio1938Template, true, &renderedRadio);
   logLine("Done.");

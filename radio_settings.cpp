@@ -79,6 +79,14 @@ static bool applyRadioSettingsValue(Radio1938& radio,
                                    int lineNumber,
                                    std::string* error);
 
+static bool parseIniBool(const std::string& valueText,
+                        bool& value,
+                        std::string* error,
+                        int lineNumber,
+                        const std::string& settingName);
+
+static std::string iniError(int line, const std::string& details);
+
 static bool applyAudioFilterNodeSetting(Radio1938& radio,
                                        const std::string& keyNorm,
                                        const std::string& valueText,

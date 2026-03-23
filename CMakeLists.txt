@@ -92,6 +92,7 @@ add_executable(radioify
   playback_frame_output_ascii.cpp
   playback_frame_output_console.cpp
   subtitle_manager.cpp
+  calibration_report.cpp
   radio.cpp
   radiopreview.cpp
   loopsplit.cpp
@@ -494,29 +495,36 @@ if (NOT FFMPEG_FOUND)
 endif()
 
 if (NOT FFMPEG_FOUND)
+  set(_radioify_ffmpeg_hint_dirs)
+  if (DEFINED FFMPEG_DIR AND FFMPEG_DIR)
+    list(APPEND _radioify_ffmpeg_hint_dirs "${FFMPEG_DIR}")
+  endif()
+  if (DEFINED FFMPEG_ROOT AND FFMPEG_ROOT)
+    list(APPEND _radioify_ffmpeg_hint_dirs "${FFMPEG_ROOT}")
+  endif()
   find_path(FFMPEG_INCLUDE_DIR
     NAMES libavformat/avformat.h
-    HINTS ENV FFMPEG_DIR ENV FFMPEG_ROOT
+    HINTS ${_radioify_ffmpeg_hint_dirs} ENV FFMPEG_DIR ENV FFMPEG_ROOT
     PATH_SUFFIXES include
   )
   find_library(AVFORMAT_LIBRARY NAMES avformat
-    HINTS ENV FFMPEG_DIR ENV FFMPEG_ROOT
+    HINTS ${_radioify_ffmpeg_hint_dirs} ENV FFMPEG_DIR ENV FFMPEG_ROOT
     PATH_SUFFIXES lib
   )
   find_library(AVCODEC_LIBRARY NAMES avcodec
-    HINTS ENV FFMPEG_DIR ENV FFMPEG_ROOT
+    HINTS ${_radioify_ffmpeg_hint_dirs} ENV FFMPEG_DIR ENV FFMPEG_ROOT
     PATH_SUFFIXES lib
   )
   find_library(AVUTIL_LIBRARY NAMES avutil
-    HINTS ENV FFMPEG_DIR ENV FFMPEG_ROOT
+    HINTS ${_radioify_ffmpeg_hint_dirs} ENV FFMPEG_DIR ENV FFMPEG_ROOT
     PATH_SUFFIXES lib
   )
   find_library(SWSCALE_LIBRARY NAMES swscale
-    HINTS ENV FFMPEG_DIR ENV FFMPEG_ROOT
+    HINTS ${_radioify_ffmpeg_hint_dirs} ENV FFMPEG_DIR ENV FFMPEG_ROOT
     PATH_SUFFIXES lib
   )
   find_library(SWRESAMPLE_LIBRARY NAMES swresample
-    HINTS ENV FFMPEG_DIR ENV FFMPEG_ROOT
+    HINTS ${_radioify_ffmpeg_hint_dirs} ENV FFMPEG_DIR ENV FFMPEG_ROOT
     PATH_SUFFIXES lib
   )
   if (FFMPEG_INCLUDE_DIR AND AVFORMAT_LIBRARY AND AVCODEC_LIBRARY AND

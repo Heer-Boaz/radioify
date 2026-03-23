@@ -216,6 +216,66 @@ function Add-VcpkgOverlayPortPath {
   $env:VCPKG_OVERLAY_PORTS = ($parts -join ';')
 }
 
+function Remove-PathWithRetry {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path,
+    [int]$MaxRetries = 12,
+    [int]$DelayMilliseconds = 500
+  )
+
+  if (-not (Test-Path $Path)) { return }
+
+  for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+    try {
+      Remove-Item -Recurse -Force $Path -ErrorAction Stop
+      return
+    }
+    catch {
+      if ($attempt -eq 4 -and (Test-Path $Path)) {
+        Stop-BuildProcessesUsingPath -TargetPath $Path
+      }
+
+      if ($attempt -ge $MaxRetries) {
+        Write-Error "Could not delete path '$Path' after $MaxRetries retries: $($_.Exception.Message)"
+        exit 1
+      }
+
+      Write-Warning "Delete attempt $attempt failed for '$Path'. Retrying in $DelayMilliseconds ms..."
+      Start-Sleep -Milliseconds $DelayMilliseconds
+    }
+  }
+}
+
+function Stop-BuildProcessesUsingPath {
+  param([string]$TargetPath)
+  if (-not $TargetPath) { return }
+
+  $pathMarker = "*$TargetPath*"
+  $candidateNames = @(
+    "cmake.exe",
+    "MSBuild.exe",
+    "ninja.exe",
+    "cl.exe",
+    "link.exe",
+    "devenv.exe"
+  )
+
+  $processes = Get-CimInstance Win32_Process | Where-Object {
+    $_.CommandLine -and $_.CommandLine -like $pathMarker -and ($candidateNames -contains $_.Name)
+  }
+  if (-not $processes) {
+    return
+  }
+
+  Write-Warning "Stopping processes that still lock build path '$TargetPath':"
+  foreach ($process in $processes) {
+    Write-Warning " - $($process.Name) ($($process.ProcessId))"
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Milliseconds 500
+}
+
 function Assert-OnnxOverlayPortComplete {
   param([string]$OverlayPortsRoot)
 
@@ -377,10 +437,10 @@ if ($Rebuild) {
 }
 
 if ($Clean -and (Test-Path $buildDir)) {
-  Remove-Item -Recurse -Force $buildDir
+  Remove-PathWithRetry -Path $buildDir
 }
 if ($Clean -and (Test-Path $distDir)) {
-  Remove-Item -Recurse -Force $distDir
+  Remove-PathWithRetry -Path $distDir
 }
 if ($Clean -and -not $Rebuild) {
   Write-Host "Cleaned build directory: $buildDir"
@@ -465,9 +525,8 @@ if (-not $installedRoot) {
   }
 }
 
-$ffmpegEnvConfigured = [bool]($env:FFMPEG_DIR -or $env:FFMPEG_ROOT)
 $manifestInstalledAvailable = [bool]($installedRoot -and (Test-Path $installedRoot))
-$needsVcpkgForBuild = -not $ffmpegEnvConfigured -and -not $manifestInstalledAvailable
+$needsVcpkgForBuild = -not ([bool]($env:FFMPEG_DIR -or $env:FFMPEG_ROOT)) -and -not $manifestInstalledAvailable
 Assert-VcpkgRootReadableWhenRequired -VcpkgRoot $vcpkgRoot -VcpkgExe $vcpkgExe -RepoRoot $root -NeedsVcpkg $needsVcpkgForBuild
 
 $cmakeArgs = @("-S", $root, "-B", $buildDir, "-DCMAKE_BUILD_TYPE=$Config")
@@ -493,6 +552,12 @@ if ($installedRoot) {
 }
 if ($env:VCPKG_TARGET_TRIPLET) {
   $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
+}
+if ($env:FFMPEG_DIR) {
+  $cmakeArgs += "-DFFMPEG_DIR=$($env:FFMPEG_DIR)"
+}
+if ($env:FFMPEG_ROOT) {
+  $cmakeArgs += "-DFFMPEG_ROOT=$($env:FFMPEG_ROOT)"
 }
 if ($env:VCPKG_OVERLAY_PORTS) {
   $cmakeArgs += "-DVCPKG_OVERLAY_PORTS=$env:VCPKG_OVERLAY_PORTS"
@@ -539,6 +604,10 @@ if (-not $foundFfmpeg -and -not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT)) {
   Write-Error "FFmpeg not found. Run .\build.ps1 -InstallDeps (vcpkg) or set FFMPEG_DIR/FFMPEG_ROOT."
   exit 1
 }
+if (-not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT) -and $foundFfmpeg -and $ffmpegTripletDir) {
+  $env:FFMPEG_DIR = $ffmpegTripletDir
+  $cmakeArgs += "-DFFMPEG_DIR=$($env:FFMPEG_DIR)"
+}
 
 $cachePath = Join-Path $buildDir "CMakeCache.txt"
 $cachedManifestMode = Get-CMakeCacheValue -CachePath $cachePath -Variable "VCPKG_MANIFEST_MODE"
@@ -555,7 +624,7 @@ if ($effectiveCachedManifestMode -and ($effectiveCachedManifestMode.ToUpperInvar
   Write-Host "Detected VCPKG_MANIFEST_MODE mismatch in build cache: $effectiveCachedManifestMode -> $desiredManifestMode"
   Write-Host "Recreating build directory to avoid unsupported cache transition."
   if (Test-Path $buildDir) {
-    Remove-Item -Recurse -Force $buildDir
+    Remove-PathWithRetry -Path $buildDir
   }
 }
 

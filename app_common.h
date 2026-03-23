@@ -16,6 +16,7 @@ struct Options {
   int bwHz = 5500;
   double noise = 0.012;
   bool calibrationReport = false;
+  bool measureNodeSteps = false;
   bool mono = true;
   bool play = true;
   bool dry = false;

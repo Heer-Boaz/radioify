@@ -99,6 +99,7 @@ models/*.download
 # Useless files
 **.md
 !README.md
+!BUILD_WINDOWS.md
 
 # Output files
 **.melody

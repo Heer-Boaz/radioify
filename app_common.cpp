@@ -18,6 +18,7 @@ static void showUsage(const char* exe) {
   logLine("  --track <index>        Select track index for emulated formats");
   logLine("  --50hz                 Force 50Hz playback mode where supported");
   logLine("  --calibration-report   Dump per-stage radio metrics after render-radio");
+  logLine("  --measure-node-steps   Render and report every disabled-node variant for render-radio");
   logLine("  --out <path>           Same as out");
   logLine("  --radio-settings <path> Override audio-filter settings from a .toml file");
   logLine("  --radio-preset <name>   Select named audio-filter preset from the settings file");
@@ -150,6 +151,10 @@ Options parseArgs(int argc, char** argv) {
     }
     if (arg == "--calibration-report") {
       o.calibrationReport = true;
+      continue;
+    }
+    if (arg == "--measure-node-steps") {
+      o.measureNodeSteps = true;
       continue;
     }
     if (arg == "--dry") {

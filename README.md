@@ -9,62 +9,14 @@ Console media browser/player with a vintage radio filter toggle.
 - vcpkg (for `-InstallDeps`)
 
 ## Build
-Install deps (core: FFmpeg/libass/zlib via vcpkg):
-```powershell
-./build.ps1 -InstallDeps
-```
-Install deps with melody analysis (adds ONNX Runtime):
-```powershell
-./build.ps1 -InstallDeps -MelodyAnalysis
-```
-(`-SongAnalysis` is accepted as an alias.)
-Static deps (core):
-```powershell
-./build.ps1 -InstallDeps -Static
-```
-Static deps with melody analysis:
-```powershell
-./build.ps1 -InstallDeps -Static -MelodyAnalysis
-```
-If `vcpkg` complains about an invalid Visual Studio instance, install the C++ build tools ("Desktop development with C++") and retry.
+For the repo-specific Windows build/run flow and common failure recovery, see
+[`BUILD_WINDOWS.md`](BUILD_WINDOWS.md).
 
-Build:
-```powershell
-./build.ps1
-```
-Build with melody analysis enabled:
-```powershell
-./build.ps1 -MelodyAnalysis
-```
+Quick start:
 
-Clean build:
 ```powershell
-./build.ps1 -Clean
-```
-This removes `build` and `dist`.
-
-Rebuild (clean + build):
-```powershell
-./build.ps1 -Rebuild
-```
-
-Static build (no FFmpeg DLLs copied to `dist`):
-```powershell
-./build.ps1 -Static
-```
-By default this uses `x64-windows-static` and will override a non-static
-`VCPKG_TARGET_TRIPLET`. Set `VCPKG_TARGET_TRIPLET` to
-`arm64-windows-static` or `x86-windows-static` if needed.
-
-Or:
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-```
-
-Optional CMake switch for melody analysis:
-```sh
-cmake -S . -B build -DRADIOIFY_ENABLE_MELODY_ANALYSIS=ON
+.\build.ps1 -Static
+.\dist\radioify.exe
 ```
 
 The binary is written to `dist/radioify.exe`.
