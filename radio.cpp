@@ -5380,9 +5380,9 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.output.digitalReferenceSpeakerVoltsPeak = std::sqrt(
       2.0f * radio.power.nominalOutputPowerWatts *
       radio.power.outputLoadResistanceOhms);
-  // The physical speaker model lands far below the direct digital path, so add
-  // fixed make-up gain before the safety limiter to restore comparable loudness.
-  radio.output.digitalMakeupGain = 5.0f;
+  // The physical speaker path now lands several dB below the bypassed path on
+  // broadband material, so restore loudness before the safety limiter.
+  radio.output.digitalMakeupGain = 9.0f;
 
   // --- Global oversampling and output clip settings ---
   // The speaker, limiter and output-clip stages use processOversampled2x, so
