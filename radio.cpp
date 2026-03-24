@@ -1050,6 +1050,66 @@ static inline float wrapPhase(float phase) {
   return phase;
 }
 
+static inline float computePowerLoadT(
+    const Radio1938::PowerNodeState& power) {
+  return clampf((power.sagEnv - power.sagStart) /
+                    std::max(1e-6f, power.sagEnd - power.sagStart),
+                0.0f, 1.0f);
+}
+
+static inline float computeRectifierRippleHz(const Radio1938& radio) {
+  float mainsHz = std::max(radio.noiseConfig.humHzDefault, 0.0f);
+  float rectifierHz = 2.0f * mainsHz;
+  if (radio.power.rectifierMinHz > 0.0f) {
+    rectifierHz = std::max(rectifierHz, radio.power.rectifierMinHz);
+  }
+  return rectifierHz;
+}
+
+static inline float computeRectifierRippleWave(
+    const Radio1938::PowerNodeState& power) {
+  float rectified = std::fabs(std::sin(power.rectifierPhase));
+  float centered = rectified - (2.0f / kRadioPi);
+  centered +=
+      power.rippleSecondHarmonicMix * std::sin(2.0f * power.rectifierPhase);
+  return centered;
+}
+
+static inline float clampPowerSupplyScale(
+    const Radio1938::PowerNodeState& power,
+    float scale) {
+  float low = std::min(power.gainMin, power.gainMax);
+  float high = std::max(power.gainMin, power.gainMax);
+  if (high > 0.0f) {
+    if (low <= 0.0f) low = 0.0f;
+    scale = std::clamp(scale, low, high);
+  }
+  return std::max(scale, 0.0f);
+}
+
+static inline float computePowerBranchSupplyScale(const Radio1938& radio,
+                                                  float branchDepth) {
+  const auto& power = radio.power;
+  float powerT = computePowerLoadT(power);
+  float scale = 1.0f - power.gainSagPerPower * powerT;
+  branchDepth = std::max(branchDepth, 0.0f);
+  if (power.rippleDepth > 0.0f && branchDepth > 0.0f) {
+    float rippleGain =
+        power.rippleDepth * branchDepth *
+        (power.rippleGainBase + power.rippleGainDepth * powerT);
+    scale *= 1.0f + computeRectifierRippleWave(power) * rippleGain;
+  }
+  return clampPowerSupplyScale(power, scale);
+}
+
+static inline void advanceRectifierRipplePhase(Radio1938& radio) {
+  float rectifierHz = computeRectifierRippleHz(radio);
+  if (rectifierHz <= 0.0f) return;
+  radio.power.rectifierPhase = wrapPhase(
+      radio.power.rectifierPhase +
+      kRadioTwoPi * (rectifierHz / std::max(radio.sampleRate, 1.0f)));
+}
+
 static inline float db2lin(float db) { return std::pow(10.0f, db / 20.0f); }
 
 static inline float lin2db(float x) {
@@ -4106,6 +4166,8 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                                         const RadioSampleContext&) {
   auto& receiver = radio.receiverCircuit;
   if (!receiver.enabled) return y;
+  float receiverSupplyScale =
+      computePowerBranchSupplyScale(radio, radio.power.supplyDriveDepth);
   float dt = 1.0f / std::max(radio.sampleRate, 1.0f);
   float totalResistance = receiver.volumeControlResistanceOhms;
   float wiperResistance = receiver.volumeControlPosition * totalResistance;
@@ -4196,7 +4258,7 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   assert(receiver.tubeTriodeConnected &&
          "Receiver audio stage expects a triode model");
   out = processResistorLoadedTriodeStage(
-      receiver.tubeBiasVolts + receiver.gridVoltage, 1.0f,
+      receiver.tubeBiasVolts + receiver.gridVoltage, receiverSupplyScale,
       receiver.tubePlateSupplyVolts, receiver.tubeQuiescentPlateVolts,
       receiver.tubeTriodeModel, &receiver.tubeTriodeLut,
       receiver.tubeLoadResistanceOhms,
@@ -4368,10 +4430,10 @@ float RadioPowerNode::process(Radio1938& radio,
   if (radio.calibration.enabled) {
     radio.calibration.validationSampleCount++;
   }
-  float powerT = clampf((power.sagEnv - power.sagStart) /
-                            std::max(1e-6f, power.sagEnd - power.sagStart),
-                        0.0f, 1.0f);
-  float supplyScale = 1.0f - power.gainSagPerPower * powerT;
+  float powerT = computePowerLoadT(power);
+  float driverSupplyScale =
+      computePowerBranchSupplyScale(radio, power.supplyDriveDepth);
+  float outputSupplyScale = computePowerBranchSupplyScale(radio, 1.0f);
   float dt = 1.0f / requirePositiveFinite(radio.sampleRate);
   float previousCapVoltage = power.gridCouplingCapVoltage;
   power.gridVoltage = solveCapCoupledGridVoltage(
@@ -4391,7 +4453,7 @@ float RadioPowerNode::process(Radio1938& radio,
   assert(power.tubeTriodeConnected &&
          "Interstage driver solve requires triode-connected 6F6 operation");
   float driverPlateQuiescent =
-      requirePositiveFinite(power.tubeQuiescentPlateVolts * supplyScale);
+      requirePositiveFinite(power.tubeQuiescentPlateVolts * driverSupplyScale);
   float driverQuiescentCurrent = static_cast<float>(
       evaluateKorenTriodePlateRuntime(power.tubeBiasVolts,
                                       driverPlateQuiescent,
@@ -4441,7 +4503,8 @@ float RadioPowerNode::process(Radio1938& radio,
     }
   }
   float outputPlateQuiescent =
-      requirePositiveFinite(power.outputTubeQuiescentPlateVolts * supplyScale);
+      requirePositiveFinite(power.outputTubeQuiescentPlateVolts *
+                            outputSupplyScale);
   const float outputPrimaryLoadResistance = 0.0f;
   AffineTransformerProjection affineOut{};
   if (power.outputTransformerAffineReady) {
@@ -4519,6 +4582,7 @@ float RadioPowerNode::process(Radio1938& radio,
     power.sagEnv = power.sagRel * power.sagEnv + (1.0f - power.sagRel) * load;
   }
   controlSense.powerSagSense = power.sagEnv;
+  advanceRectifierRipplePhase(radio);
   return y;
 }
 
@@ -4599,8 +4663,10 @@ void RadioInterferenceDerivedNode::update(Radio1938& radio,
   }
   ctx.derived.noiseAmp =
       noiseDerived.baseNoiseAmp * radio.globals.postNoiseMix;
-  ctx.derived.humAmp = noiseDerived.baseHumAmp;
-  ctx.derived.humToneEnabled = radio.noiseConfig.enableHumTone;
+  // Mains hum is modeled through power-supply ripple in the receiver/power
+  // stages, not as a post-speaker tone injector.
+  ctx.derived.humAmp = 0.0f;
+  ctx.derived.humToneEnabled = false;
 }
 
 void RadioNoiseNode::init(Radio1938& radio, RadioInitContext& initCtx) {
@@ -5290,7 +5356,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
 
   radio.power.sagStart = 0.06f;
   radio.power.sagEnd = 0.22f;
-  radio.power.rippleDepth = 0.0f;
+  radio.power.rippleDepth = 0.01f;
   radio.power.satDrive = 1.0f;
   radio.power.satMix = 0.0f;
   radio.power.sagAttackMs = 60.0f;
@@ -5298,11 +5364,11 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.rectifierMinHz = 80.0f;
   radio.power.rippleSecondHarmonicMix = 0.0f;
   radio.power.gainSagPerPower = 0.015f;
-  radio.power.rippleGainBase = 0.0f;
-  radio.power.rippleGainDepth = 0.0f;
+  radio.power.rippleGainBase = 0.20f;
+  radio.power.rippleGainDepth = 0.30f;
   radio.power.gainMin = 0.92f;
   radio.power.gainMax = 1.02f;
-  radio.power.supplyDriveDepth = 0.0f;
+  radio.power.supplyDriveDepth = 0.01f;
   radio.power.supplyBiasDepth = 0.0f;
   radio.power.postLpHz = 0.0f;
   // The 37-116 driver is a triode-connected 6F6G feeding the 6B4G pair through
@@ -5393,12 +5459,13 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.globals.postNoiseMix = 0.35f;
   radio.globals.noiseFloorAmp = 0.0f;
 
-  // --- Noise configuration (1938 US AC-powered set) ---
-  radio.noiseConfig.enableHumTone = true;
+  // --- Noise configuration (mains frequency feeds the physical ripple model;
+  // hiss/crackle remain explicit stochastic stages) ---
+  radio.noiseConfig.enableHumTone = false;
   radio.noiseConfig.humHzDefault = 60.0f;
   radio.noiseConfig.noiseWeightRef = 0.15f;
   radio.noiseConfig.noiseWeightScaleMax = 2.0f;
-  radio.noiseConfig.humAmpScale = 0.12f;
+  radio.noiseConfig.humAmpScale = 0.0f;
   radio.noiseConfig.crackleAmpScale = 0.025f;
   radio.noiseConfig.crackleRateScale = 1.2f;
 

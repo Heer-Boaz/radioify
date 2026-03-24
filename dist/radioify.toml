@@ -116,7 +116,7 @@ tiltSplitHz = 0.0
 [audio-filter.default.power]
 sagStart = 0.06
 sagEnd = 0.22
-rippleDepth = 0.0
+rippleDepth = 0.01
 satDrive = 1.0
 satMix = 0.0
 sagAttackMs = 60.0
@@ -124,11 +124,11 @@ sagReleaseMs = 900.0
 rectifierMinHz = 80.0
 rippleSecondHarmonicMix = 0.0
 gainSagPerPower = 0.015
-rippleGainBase = 0.0
-rippleGainDepth = 0.0
+rippleGainBase = 0.2
+rippleGainDepth = 0.3
 gainMin = 0.92
 gainMax = 1.02
-supplyDriveDepth = 0.0
+supplyDriveDepth = 0.01
 supplyBiasDepth = 0.0
 postLpHz = 0.0
 gridCouplingCapFarads = 0.00000005
@@ -180,11 +180,11 @@ outputLoadResistanceOhms = 3.9
 nominalOutputPowerWatts = 0.5
 
 [audio-filter.default.noise]
-enableHumTone = true
+enableHumTone = false
 humHzDefault = 60.0
 noiseref = 0.15
 noiseWeightScaleMax = 2.0
-humAmpScale = 0.12
+humAmpScale = 0.0
 crackleAmpScale = 0.025
 crackleRateScale = 1.2
 noiseHpHz = 500.0
