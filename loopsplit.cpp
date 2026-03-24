@@ -35,7 +35,8 @@ std::string toLower(std::string value) {
 bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".kss" ||
+         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".ogg" ||
+         ext == ".kss" ||
          ext == ".nsf" ||
 #if !RADIOIFY_DISABLE_GSF_GPL
          ext == ".gsf" || ext == ".minigsf" ||

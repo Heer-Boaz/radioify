@@ -51,9 +51,9 @@ dist/radioify.exe --no-radio <file-or-folder>
 - Q or Ctrl+C: quit
 
 ## Supported files
-- Audio: .wav, .mp3, .flac, .kss, .nsf, .psf, .minipsf, .psf2, .minipsf2
+- Audio: .wav, .mp3, .flac, .ogg, .kss, .nsf, .psf, .minipsf, .psf2, .minipsf2
 - GSF (GPL, enabled by default; disable with `-DRADIOIFY_DISABLE_GSF_GPL=ON`): .gsf, .minigsf
-- Audio (media containers): .m4a, .webm, .mp4, .mov, .mkv (audio stream only)
+- Audio (media containers): .m4a, .webm, .mp4, .mov, .mkv, .ogg (audio stream only)
 - Video (ASCII preview): .mp4, .webm, .mov, .mkv (audio + video)
 - Subtitles: .srt and .vtt sidecar files (same basename, e.g. `video.mkv` + `video.srt`)
 - Images (ASCII art preview): .jpg, .jpeg, .png, .bmp

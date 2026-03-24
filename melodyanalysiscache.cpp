@@ -420,6 +420,11 @@ bool isMiniaudioExt(const std::filesystem::path& path) {
   return ext == ".wav" || ext == ".mp3" || ext == ".flac";
 }
 
+bool isOggExt(const std::filesystem::path& path) {
+  const std::string ext = toLower(path.extension().string());
+  return ext == ".ogg";
+}
+
 bool isM4aExt(const std::filesystem::path& path) {
   const std::string ext = toLower(path.extension().string());
   return ext == ".m4a" || ext == ".mp4" || ext == ".webm" || ext == ".mov";
@@ -498,7 +503,7 @@ class DecoderContext {
     sampleRate_ = std::max<uint32_t>(1u, job.sourceSampleRate);
     type_ = Type::Unknown;
 
-    if (isM4aExt(job.file) || isMiniaudioExt(job.file)) {
+    if (isM4aExt(job.file) || isMiniaudioExt(job.file) || isOggExt(job.file)) {
       type_ = Type::Ffmpeg;
       if (!ffmpeg_.init(job.file, channels_, sampleRate_, error)) {
         return false;

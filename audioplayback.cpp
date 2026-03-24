@@ -109,7 +109,8 @@ int findIndex(const T* values, size_t count, T value) {
 bool isSupportedAudioExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".kss" ||
+         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".ogg" ||
+         ext == ".kss" ||
          ext == ".nsf" ||
 #if !RADIOIFY_DISABLE_GSF_GPL
          ext == ".gsf" || ext == ".minigsf" ||
@@ -165,6 +166,11 @@ bool isKssExt(const std::filesystem::path& p) {
   return ext == ".kss";
 }
 
+bool isOggExt(const std::filesystem::path& p) {
+  std::string ext = toLower(p.extension().string());
+  return ext == ".ogg";
+}
+
 bool isPsfExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".psf" || ext == ".minipsf" || ext == ".psf2" ||
@@ -182,6 +188,7 @@ enum class AudioMode : int {
   None = 0,
   Stream,
   M4a,
+  Ffmpeg,
   Flac,
   Miniaudio,
   Gme,
@@ -559,6 +566,7 @@ struct AudioMetadata {
 
 struct AudioState {
   ma_decoder decoder{};
+  FfmpegAudioDecoder ffmpeg{};
   FlacAudioDecoder flac{};
   GmeAudioDecoder gme{};
   GsfAudioDecoder gsf{};
@@ -1718,7 +1726,28 @@ bool initM4aBackend(const std::filesystem::path& file, uint64_t startFrame,
   return startM4aWorker(file, startFrame, error);
 }
 
+bool initFfmpegBackend(const std::filesystem::path& file, uint64_t, int,
+                       std::string* error) {
+  gAudio.state.totalFrames.store(0);
+  return gAudio.state.ffmpeg.init(file, gAudio.channels, gAudio.sampleRate, error);
+}
+
 void uninitM4aBackend() { stopM4aWorker(); }
+
+void uninitFfmpegBackend() { gAudio.state.ffmpeg.uninit(); }
+
+bool readFfmpegBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
+  return gAudio.state.ffmpeg.readFrames(out, frameCount, framesRead);
+}
+
+bool seekFfmpegBackend(uint64_t frame) {
+  return gAudio.state.ffmpeg.seekToFrame(frame);
+}
+
+bool totalFfmpegBackend(uint64_t* outFrames) {
+  if (!outFrames) return false;
+  return gAudio.state.ffmpeg.getTotalFrames(outFrames);
+}
 
 bool readM4aBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
   if (framesRead) *framesRead = 0;
@@ -1925,6 +1954,10 @@ std::string warningVgmBackend() { return gAudio.vgmWarning; }
 const AudioBackendHandlers kBackendM4a{
     AudioMode::M4a, false, false, false, true, initM4aBackend, uninitM4aBackend,
     readM4aBackend, nullptr, totalM4aBackend, nullptr};
+const AudioBackendHandlers kBackendFfmpeg{
+    AudioMode::Ffmpeg, false, true, true, true, initFfmpegBackend,
+    uninitFfmpegBackend, readFfmpegBackend, seekFfmpegBackend,
+    totalFfmpegBackend, nullptr};
 const AudioBackendHandlers kBackendFlac{
     AudioMode::Flac, false, true, true, true, initFlacBackend, uninitFlacBackend,
     readFlacBackend, seekFlacBackend, totalFlacBackend, nullptr};
@@ -1957,7 +1990,8 @@ struct BackendSelector {
 };
 
 const BackendSelector kBackends[] = {
-    {isM4aExt, &kBackendM4a},         {isFlacExt, &kBackendFlac},
+    {isM4aExt, &kBackendM4a},         {isOggExt, &kBackendFfmpeg},
+    {isFlacExt, &kBackendFlac},
     {isMiniaudioExt, &kBackendMiniaudio}, {isGmeExt, &kBackendGme},
     {isMidiExt, &kBackendMidi},       {isGsfExt, &kBackendGsf},
     {isVgmExt, &kBackendVgm},         {isKssExt, &kBackendKss},
@@ -2800,7 +2834,8 @@ AudioPerfStats audioGetPerfStats() {
       gAudio.state.lastFramesRead.load(std::memory_order_relaxed);
   stats.sampleRate = gAudio.state.sampleRate;
   stats.channels = gAudio.state.channels;
-  stats.usingFfmpeg = currentAudioMode() == AudioMode::M4a;
+  const AudioMode mode = currentAudioMode();
+  stats.usingFfmpeg = mode == AudioMode::M4a || mode == AudioMode::Ffmpeg;
   if (gAudio.deviceReady &&
       ma_device_get_state(&gAudio.state.device) !=
           ma_device_state_uninitialized) {
