@@ -363,6 +363,9 @@ struct AMDetector {
   float ifCrackleEnv = 0.0f;
   float ifCrackleDecay = 0.0f;
   float ifCracklePhase = 0.0f;
+  uint64_t ifCrackleEventCount = 0;
+  float ifCrackleMaxBurstAmp = 0.0f;
+  float ifCrackleMaxEnv = 0.0f;
 
   float audioDiodeDrop = 0.0f;
   float avcDiodeDrop = 0.0f;
@@ -948,6 +951,9 @@ struct RadioOutputClipNode {
     float maxSpeakerSecondaryVolts = 0.0f;
     float maxSpeakerReferenceRatio = 0.0f;
     float maxDigitalOutput = 0.0f;
+    uint64_t detectorIfCrackleEventCount = 0;
+    float detectorIfCrackleMaxBurstAmp = 0.0f;
+    float detectorIfCrackleMaxEnv = 0.0f;
     bool validationDriverGridPositive = false;
     bool validationFailed = false;
     bool validationOutputGridPositive = false;

@@ -69,6 +69,13 @@ void printCalibrationReport(const Radio1938& radio1938,
             << " max_digital_output="
             << radio1938.calibration.maxDigitalOutput
             << "\n";
+  std::cout << "  detector_if_crackle_events="
+            << radio1938.calibration.detectorIfCrackleEventCount
+            << " detector_if_crackle_max_burst="
+            << radio1938.calibration.detectorIfCrackleMaxBurstAmp
+            << " detector_if_crackle_max_env="
+            << radio1938.calibration.detectorIfCrackleMaxEnv
+            << "\n";
   std::cout << "  validation failed="
             << (radio1938.calibration.validationFailed ? 1 : 0)
             << " driver_grid_over="

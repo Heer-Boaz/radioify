@@ -3178,6 +3178,9 @@ void AMDetector::reset() {
   afcError = 0.0f;
   ifCrackleEnv = 0.0f;
   ifCracklePhase = 0.0f;
+  ifCrackleEventCount = 0;
+  ifCrackleMaxBurstAmp = 0.0f;
+  ifCrackleMaxEnv = 0.0f;
   afcLowPhase = 0.0f;
   afcHighPhase = 0.0f;
   afcLowSense.reset();
@@ -3317,6 +3320,9 @@ void Radio1938::CalibrationState::reset() {
   maxSpeakerSecondaryVolts = 0.0f;
   maxSpeakerReferenceRatio = 0.0f;
   maxDigitalOutput = 0.0f;
+  detectorIfCrackleEventCount = 0;
+  detectorIfCrackleMaxBurstAmp = 0.0f;
+  detectorIfCrackleMaxEnv = 0.0f;
   validationDriverGridPositive = false;
   validationFailed = false;
   validationOutputGridPositive = false;
@@ -3443,6 +3449,11 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
       radio.calibration.stages[static_cast<size_t>(StageId::ReceiverCircuit)];
   const auto& powerStage =
       radio.calibration.stages[static_cast<size_t>(StageId::Power)];
+  radio.calibration.detectorIfCrackleEventCount =
+      radio.demod.am.ifCrackleEventCount;
+  radio.calibration.detectorIfCrackleMaxBurstAmp =
+      radio.demod.am.ifCrackleMaxBurstAmp;
+  radio.calibration.detectorIfCrackleMaxEnv = radio.demod.am.ifCrackleMaxEnv;
   radio.calibration.validationDriverGridPositive =
       radio.calibration.driverGridPositiveFraction > 0.01f;
   radio.calibration.validationOutputGridAPositive =
@@ -3498,10 +3509,13 @@ float AMDetector::processEnvelope(float signalI,
       float burstAmpDraw = 0.5f * (dist(rng) + 1.0f);
       float burstAmp = ifCrackleAmp * (0.35f + 0.65f * burstAmpDraw);
       ifCrackleEnv = std::max(ifCrackleEnv, burstAmp);
+      ifCrackleEventCount++;
+      ifCrackleMaxBurstAmp = std::max(ifCrackleMaxBurstAmp, burstAmp);
       ifCracklePhase = burstPhase;
     }
   }
   if (ifCrackleEnv > 1e-6f) {
+    ifCrackleMaxEnv = std::max(ifCrackleMaxEnv, ifCrackleEnv);
     ifI += ifCrackleEnv * std::cos(ifCracklePhase);
     ifQ += ifCrackleEnv * std::sin(ifCracklePhase);
     ifCrackleEnv *= ifCrackleDecay;
@@ -5328,7 +5342,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // first-audio tube are now anchored to the 37-116 chassis rather than 116X.
   radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 1000000.0f;
-  radio.receiverCircuit.volumeControlPosition = 1.0f;
+  radio.receiverCircuit.volumeControlPosition = 0.95f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 490000.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.015e-6f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
