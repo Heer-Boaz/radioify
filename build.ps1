@@ -17,6 +17,68 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-VswhereCandidates {
+  $vswhereCandidates = @()
+  if ($env:ProgramFiles -and (Test-Path $env:ProgramFiles)) {
+    $vswhereCandidates += (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
+  }
+  if (${env:ProgramFiles(x86)} -and (Test-Path ${env:ProgramFiles(x86)})) {
+    $vswhereCandidates += (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe")
+  }
+
+  return ($vswhereCandidates |
+    Where-Object { $_ -and (Test-Path $_) } |
+    Select-Object -Unique)
+}
+
+function Get-VisualStudioInstallRoots {
+  $roots = @()
+
+  foreach ($vswhere in (Get-VswhereCandidates)) {
+    $installRoots = & $vswhere -all -products * -property installationPath 2>$null
+    foreach ($installRoot in $installRoots) {
+      if ($installRoot -and (Test-Path $installRoot)) {
+        $roots += $installRoot
+      }
+    }
+  }
+
+  return ($roots | Select-Object -Unique)
+}
+
+function Get-VisualStudioVcpkgRoots {
+  $candidates = @()
+
+  foreach ($installRoot in (Get-VisualStudioInstallRoots)) {
+    $candidate = Join-Path $installRoot "VC\vcpkg"
+    $candidateExe = Join-Path $candidate "vcpkg.exe"
+    if (Test-Path $candidateExe) {
+      $candidates += $candidate
+    }
+  }
+
+  $defaultCandidates = @(
+    "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\vcpkg",
+    "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\vcpkg",
+    "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\vcpkg",
+    "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\vcpkg",
+    "C:\Program Files\Microsoft Visual Studio\2022\Preview\VC\vcpkg",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\vcpkg",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\vcpkg",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2019\Professional\VC\vcpkg",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\vcpkg"
+  )
+
+  foreach ($candidate in $defaultCandidates) {
+    $candidateExe = Join-Path $candidate "vcpkg.exe"
+    if (Test-Path $candidateExe) {
+      $candidates += $candidate
+    }
+  }
+
+  return ($candidates | Select-Object -Unique)
+}
+
 function Resolve-CMake {
   $cmd = Get-Command cmake -ErrorAction SilentlyContinue
   if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
@@ -33,23 +95,10 @@ function Resolve-CMake {
     }
   }
 
-  $vswhereCandidates = @()
-  if ($env:ProgramFiles -and (Test-Path $env:ProgramFiles)) {
-    $vswhereCandidates += (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
-  }
-  if (${env:ProgramFiles(x86)} -and (Test-Path ${env:ProgramFiles(x86)})) {
-    $vswhereCandidates += (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe")
-  }
-
-  foreach ($vswhere in ($vswhereCandidates | Select-Object -Unique)) {
-    if (-not (Test-Path $vswhere)) { continue }
-    $installRoots = & $vswhere -all -products * -property installationPath 2>$null
-    foreach ($installRoot in $installRoots) {
-      if (-not $installRoot) { continue }
-      $candidate = Join-Path $installRoot "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-      if (Test-Path $candidate) {
-        return $candidate
-      }
+  foreach ($installRoot in (Get-VisualStudioInstallRoots)) {
+    $candidate = Join-Path $installRoot "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    if (Test-Path $candidate) {
+      return $candidate
     }
   }
 
@@ -89,6 +138,12 @@ function Resolve-VcpkgRoot {
     if ($candidate -and (Test-Path $candidate)) { return $candidate }
   }
 
+  foreach ($candidate in (Get-VisualStudioVcpkgRoots)) {
+    if ($candidate -and (Test-Path $candidate)) {
+      return $candidate
+    }
+  }
+
   return $null
 }
 
@@ -119,7 +174,11 @@ function Assert-VcpkgRootReadableWhenRequired {
   if (-not $NeedsVcpkg) { return }
   if ($VcpkgRoot -and (Test-Path $VcpkgRoot) -and $VcpkgExe) { return }
 
-  $defaultHint = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\vcpkg"
+  $visualStudioVcpkgRoots = @(Get-VisualStudioVcpkgRoots)
+  $defaultHint = "<Visual Studio>\\VC\\vcpkg"
+  if ($visualStudioVcpkgRoots.Count -gt 0) {
+    $defaultHint = $visualStudioVcpkgRoots[0]
+  }
   $manifestInstalled = Join-Path $RepoRoot "vcpkg_installed"
 
   Write-Error @"
@@ -130,13 +189,17 @@ Waarom dit vaak gebeurt (vooral in WSL2):
 - VCPKG_ROOT is niet gezet voor deze sessie/gebruiker.
 
 Zo los je het op:
-1) Eenmalig meegeven:
+1) Laat Visual Studio de root dynamisch bepalen:
+   `$vswhere = Join-Path `${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+   `$env:VCPKG_ROOT = Join-Path (& `$vswhere -latest -products * -property installationPath) "VC\vcpkg"
+
+2) Eenmalig expliciet meegeven:
    .\build.ps1 -Static -InstallDeps -VcpkgRoot "$defaultHint"
 
-2) Of environment variabele zetten (PowerShell):
+3) Of environment variabele zetten (PowerShell):
    `$env:VCPKG_ROOT="$defaultHint"
 
-3) Persistente user-waarde:
+4) Persistente user-waarde:
    [Environment]::SetEnvironmentVariable("VCPKG_ROOT", "$defaultHint", "User")
 
 Extra context:
@@ -276,6 +339,60 @@ function Stop-BuildProcessesUsingPath {
   Start-Sleep -Milliseconds 500
 }
 
+function Format-WindowsCommandLineArgument {
+  param([AllowEmptyString()][string]$Argument)
+
+  if ($null -eq $Argument) { return '""' }
+  if ($Argument -eq "") { return '""' }
+  if ($Argument -notmatch '[\s"]') { return $Argument }
+
+  $builder = New-Object System.Text.StringBuilder
+  [void]$builder.Append('"')
+
+  $backslashCount = 0
+  foreach ($char in $Argument.ToCharArray()) {
+    if ($char -eq '\') {
+      $backslashCount++
+      continue
+    }
+
+    if ($char -eq '"') {
+      [void]$builder.Append(('\' * ($backslashCount * 2 + 1)))
+      [void]$builder.Append('"')
+      $backslashCount = 0
+      continue
+    }
+
+    if ($backslashCount -gt 0) {
+      [void]$builder.Append(('\' * $backslashCount))
+      $backslashCount = 0
+    }
+
+    [void]$builder.Append($char)
+  }
+
+  if ($backslashCount -gt 0) {
+    [void]$builder.Append(('\' * ($backslashCount * 2)))
+  }
+
+  [void]$builder.Append('"')
+  return $builder.ToString()
+}
+
+function Join-WindowsCommandLineArguments {
+  param([string[]]$ArgumentList = @())
+
+  if (-not $ArgumentList -or $ArgumentList.Count -eq 0) {
+    return ""
+  }
+
+  $formatted = @()
+  foreach ($arg in $ArgumentList) {
+    $formatted += (Format-WindowsCommandLineArgument -Argument $arg)
+  }
+  return ($formatted -join ' ')
+}
+
 function Invoke-NativeProcess {
   param(
     [Parameter(Mandatory = $true)]
@@ -284,19 +401,30 @@ function Invoke-NativeProcess {
     [string]$WorkingDirectory = $null
   )
 
-  $startInfo = @{
-    FilePath     = $FilePath
-    ArgumentList = $ArgumentList
-    NoNewWindow  = $true
-    Wait         = $true
-    PassThru     = $true
-  }
-  if ($WorkingDirectory) {
-    $startInfo.WorkingDirectory = $WorkingDirectory
-  }
+  try {
+    if ($WorkingDirectory) {
+      Push-Location $WorkingDirectory
+    }
 
-  $process = Start-Process @startInfo
-  return $process.ExitCode
+    $startInfo = @{
+      FilePath    = $FilePath
+      ArgumentList = (Join-WindowsCommandLineArguments -ArgumentList $ArgumentList)
+      NoNewWindow = $true
+      Wait        = $true
+      PassThru    = $true
+    }
+    if ($WorkingDirectory) {
+      $startInfo.WorkingDirectory = $WorkingDirectory
+    }
+
+    $process = Start-Process @startInfo
+    return $process.ExitCode
+  }
+  finally {
+    if ($WorkingDirectory) {
+      Pop-Location
+    }
+  }
 }
 
 function Convert-ToCMakePath {
@@ -374,6 +502,67 @@ function Convert-ToStaticTriplet {
     return "$($matches[1])-windows-static"
   }
   return Resolve-StaticTriplet
+}
+
+function Normalize-RemainingSwitchArguments {
+  param([string[]]$RemainingArguments)
+
+  if (-not $RemainingArguments -or $RemainingArguments.Count -eq 0) {
+    return
+  }
+
+  $knownSwitches = @(
+    "Clean",
+    "Rebuild",
+    "Static",
+    "InstallDeps",
+    "MelodyAnalysis",
+    "TimingLog",
+    "StagingUpload",
+    "VideoErrorLog",
+    "FfmpegErrorLog"
+  )
+
+  $unexpected = @()
+  foreach ($arg in $RemainingArguments) {
+    if (-not $arg) { continue }
+
+    $normalized = $null
+    foreach ($switchName in $knownSwitches) {
+      if ($arg -imatch "^-{1,2}$([regex]::Escape($switchName))[\\/]+$") {
+        $normalized = $switchName
+        break
+      }
+    }
+
+    if ($normalized) {
+      Write-Warning "Treating '$arg' as '-$normalized'. Remove the trailing slash/backslash."
+      Set-Variable -Scope Script -Name $normalized -Value $true
+      continue
+    }
+
+    $unexpected += $arg
+  }
+
+  if ($unexpected.Count -gt 0) {
+    Write-Error ("Unknown arguments: {0}" -f ($unexpected -join ", "))
+    exit 1
+  }
+}
+
+function Resolve-BuildTriplet {
+  param([bool]$PreferStatic = $false)
+
+  if ($env:VCPKG_TARGET_TRIPLET) {
+    return $env:VCPKG_TARGET_TRIPLET
+  }
+  if ($env:VCPKG_DEFAULT_TRIPLET) {
+    return $env:VCPKG_DEFAULT_TRIPLET
+  }
+  if ($PreferStatic) {
+    return Resolve-StaticTriplet
+  }
+  return "$(Resolve-TargetArch)-windows"
 }
 
 function Copy-FfmpegRuntime {
@@ -507,6 +696,8 @@ if ($MelodyAnalysis) {
   }
 }
 
+Normalize-RemainingSwitchArguments -RemainingArguments $args
+
 $tripletStaticRequested = $false
 if ($Static) {
   $requestedTriplet = $env:VCPKG_TARGET_TRIPLET
@@ -525,6 +716,12 @@ if ($Static) {
   $tripletStaticRequested = $true
 }
 
+$effectiveTargetTriplet = Resolve-BuildTriplet -PreferStatic:$Static
+$effectiveDefaultTriplet = $env:VCPKG_DEFAULT_TRIPLET
+if (-not $effectiveDefaultTriplet) {
+  $effectiveDefaultTriplet = $effectiveTargetTriplet
+}
+
 if ($InstallDeps) {
   Assert-VcpkgRootReadableWhenRequired -VcpkgRoot $vcpkgRoot -VcpkgExe $vcpkgExe -RepoRoot $root -NeedsVcpkg $true
 
@@ -539,18 +736,20 @@ if ($InstallDeps) {
     "--clean-buildtrees-after-build",
     "--clean-packages-after-build"
   )
+  if ($effectiveTargetTriplet) {
+    $vcpkgInstallArgs += @("--triplet", $effectiveTargetTriplet)
+  }
   if ($MelodyAnalysis) {
     $vcpkgInstallArgs += "--x-feature=melody-analysis"
   }
 
-  Push-Location $root
+  Write-Host "Using vcpkg: $vcpkgExe"
   $installExit = Invoke-NativeProcess -FilePath $vcpkgExe -ArgumentList $vcpkgInstallArgs -WorkingDirectory $root
-  Pop-Location
 
   if ($installExit -ne 0) {
     Write-Host ""
     Write-Host "If the error mentions a missing/invalid Visual Studio instance, install the C++ build tools (Desktop development with C++) and try again." -ForegroundColor Yellow
-    Write-Error "vcpkg install failed."
+    Write-Error "vcpkg install failed with exit code $installExit."
     exit $installExit
   }
 }
@@ -594,8 +793,8 @@ if ($vcpkgRoot) {
 if ($installedRoot) {
   $cmakeArgs += "-DVCPKG_INSTALLED_DIR=$installedRootForCMake"
 }
-if ($env:VCPKG_TARGET_TRIPLET) {
-  $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
+if ($effectiveTargetTriplet) {
+  $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$effectiveTargetTriplet"
 }
 if ($env:FFMPEG_DIR) {
   $cmakeArgs += "-DFFMPEG_DIR=$(Convert-ToCMakePath $env:FFMPEG_DIR)"
@@ -607,8 +806,8 @@ if ($env:VCPKG_OVERLAY_PORTS) {
   $cmakeArgs += "-DVCPKG_OVERLAY_PORTS=$(Convert-ToCMakePathList $env:VCPKG_OVERLAY_PORTS)"
 }
 
-if ($MelodyAnalysis -and (Is-StaticTriplet $env:VCPKG_TARGET_TRIPLET)) {
-  Assert-OnnxStaticRegistrationDisabled -InstalledRoot $installedRoot -Triplet $env:VCPKG_TARGET_TRIPLET
+if ($MelodyAnalysis -and (Is-StaticTriplet $effectiveTargetTriplet)) {
+  Assert-OnnxStaticRegistrationDisabled -InstalledRoot $installedRoot -Triplet $effectiveTargetTriplet
 }
 
 $buildArgs = @("--build", $buildDirForCMake, "--config", $Config)
@@ -617,8 +816,8 @@ $foundFfmpeg = $false
 $ffmpegTripletDir = $null
 if ($installedRoot -and (Test-Path $installedRoot)) {
   $tripletCandidates = @()
-  if ($env:VCPKG_TARGET_TRIPLET) { $tripletCandidates += $env:VCPKG_TARGET_TRIPLET }
-  if ($env:VCPKG_DEFAULT_TRIPLET) { $tripletCandidates += $env:VCPKG_DEFAULT_TRIPLET }
+  if ($effectiveTargetTriplet) { $tripletCandidates += $effectiveTargetTriplet }
+  if ($effectiveDefaultTriplet) { $tripletCandidates += $effectiveDefaultTriplet }
   $tripletCandidates = $tripletCandidates | Select-Object -Unique
 
   foreach ($triplet in $tripletCandidates) {
@@ -631,7 +830,7 @@ if ($installedRoot -and (Test-Path $installedRoot)) {
     }
   }
 
-  if (-not $foundFfmpeg) {
+  if (-not $foundFfmpeg -and -not $effectiveTargetTriplet -and -not $effectiveDefaultTriplet) {
     $tripletDirs = Get-ChildItem -Path $installedRoot -Directory -ErrorAction SilentlyContinue
     foreach ($dir in $tripletDirs) {
       $ffmpegHeader = Join-Path $dir.FullName "include\libavformat\avformat.h"
@@ -645,7 +844,12 @@ if ($installedRoot -and (Test-Path $installedRoot)) {
 }
 
 if (-not $foundFfmpeg -and -not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT)) {
-  Write-Error "FFmpeg not found. Run .\build.ps1 -InstallDeps (vcpkg) or set FFMPEG_DIR/FFMPEG_ROOT."
+  if ($effectiveTargetTriplet) {
+    Write-Error "FFmpeg not found for triplet '$effectiveTargetTriplet'. Run .\build.ps1 -InstallDeps$(if ($Static) { ' -Static' }) or set FFMPEG_DIR/FFMPEG_ROOT."
+  }
+  else {
+    Write-Error "FFmpeg not found. Run .\build.ps1 -InstallDeps (vcpkg) or set FFMPEG_DIR/FFMPEG_ROOT."
+  }
   exit 1
 }
 if (-not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT) -and $foundFfmpeg -and $ffmpegTripletDir) {
@@ -656,6 +860,7 @@ if (-not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT) -and $foundFfmpeg -and $ffmpegTr
 $cachePath = Join-Path $buildDir "CMakeCache.txt"
 $cachedManifestMode = Get-CMakeCacheValue -CachePath $cachePath -Variable "VCPKG_MANIFEST_MODE"
 $initialManifestMode = Get-CMakeCacheValue -CachePath $cachePath -Variable "Z_VCPKG_CHECK_MANIFEST_MODE"
+$cachedToolchainFile = Get-CMakeCacheValue -CachePath $cachePath -Variable "CMAKE_TOOLCHAIN_FILE"
 $effectiveCachedManifestMode = $null
 if ($initialManifestMode) {
   $effectiveCachedManifestMode = $initialManifestMode
@@ -664,9 +869,26 @@ elseif ($cachedManifestMode) {
   $effectiveCachedManifestMode = $cachedManifestMode
 }
 
+$desiredToolchainForCache = $null
+if ($vcpkgRoot) {
+  $toolchain = Join-Path $vcpkgRoot "scripts/buildsystems/vcpkg.cmake"
+  if (Test-Path $toolchain) {
+    $desiredToolchainForCache = Convert-ToCMakePath $toolchain
+  }
+}
+
 if ($effectiveCachedManifestMode -and ($effectiveCachedManifestMode.ToUpperInvariant() -ne $desiredManifestMode)) {
   Write-Host "Detected VCPKG_MANIFEST_MODE mismatch in build cache: $effectiveCachedManifestMode -> $desiredManifestMode"
   Write-Host "Recreating build directory to avoid unsupported cache transition."
+  if (Test-Path $buildDir) {
+    Remove-PathWithRetry -Path $buildDir
+  }
+}
+elseif ($desiredToolchainForCache -and $cachedToolchainFile -and ($cachedToolchainFile -ne $desiredToolchainForCache)) {
+  Write-Host "Detected CMAKE_TOOLCHAIN_FILE mismatch in build cache:"
+  Write-Host "  cached : $cachedToolchainFile"
+  Write-Host "  desired: $desiredToolchainForCache"
+  Write-Host "Recreating build directory to clear stale broken CMake cache."
   if (Test-Path $buildDir) {
     Remove-PathWithRetry -Path $buildDir
   }
@@ -679,7 +901,7 @@ if ($configureExit -ne 0) {
 
 $buildExit = Invoke-NativeProcess -FilePath $cmake -ArgumentList $buildArgs -WorkingDirectory $root
 if ($buildExit -eq 0) {
-  $staticTriplet = $tripletStaticRequested -or (Is-StaticTriplet $env:VCPKG_TARGET_TRIPLET) -or (Is-StaticTriplet $env:VCPKG_DEFAULT_TRIPLET)
+  $staticTriplet = $tripletStaticRequested -or (Is-StaticTriplet $effectiveTargetTriplet) -or (Is-StaticTriplet $effectiveDefaultTriplet)
   if (-not $Static -and -not $staticTriplet) {
     Copy-FfmpegRuntime -TripletDir $ffmpegTripletDir -Config $Config -DistDir (Join-Path $root "dist")
   }

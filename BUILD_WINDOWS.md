@@ -21,6 +21,10 @@ Use this file instead of guessing from memory.
 - PowerShell
 - `vcpkg` if you need to install dependencies from scratch
 
+`build.ps1` now tries to auto-detect the Visual Studio-bundled `vcpkg` via
+`vswhere`, so in the normal case you should not need to set `VCPKG_ROOT`
+manually.
+
 ## Preferred Build Flow
 
 Open a Windows PowerShell prompt in the repo root.
@@ -130,20 +134,24 @@ Remove-Item -Recurse -Force .\build
 
 ### 2. `vcpkg` Not Found
 
-If `build.ps1` says `vcpkg` could not be found, point it at the Windows vcpkg
-install explicitly:
+If `build.ps1` says `vcpkg` could not be found, first resolve the Visual Studio
+copy dynamically instead of hardcoding a specific VS edition:
 
 ```powershell
-.\build.ps1 -InstallDeps -Static -VcpkgRoot "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\vcpkg"
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+$env:VCPKG_ROOT = Join-Path (& $vswhere -latest -products * -property installationPath) "VC\vcpkg"
+.\build.ps1 -InstallDeps -Static
 ```
 
-Or set it once for the session:
+Or pass that resolved path explicitly:
 
 ```powershell
-$env:VCPKG_ROOT="C:\Program Files\Microsoft Visual Studio\2022\Community\VC\vcpkg"
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+.\build.ps1 -InstallDeps -Static -VcpkgRoot (Join-Path (& $vswhere -latest -products * -property installationPath) "VC\vcpkg")
 ```
 
-If your VS edition is not `Community`, change that path accordingly.
+If you use a custom standalone `vcpkg`, point `-VcpkgRoot` at that directory
+instead.
 
 ### 3. FFmpeg Not Found
 
