@@ -1112,9 +1112,7 @@ static inline void advanceRectifierRipplePhase(Radio1938& radio) {
 
 static inline float db2lin(float db) { return std::pow(10.0f, db / 20.0f); }
 
-static inline float lin2db(float x) {
-  return 20.0f * std::log10(std::max(x, kRadioLinDbFloor));
-}
+static inline float lin2db(float x) { return 20.0f * std::log10(std::max(x, kRadioLinDbFloor)); }
 
 static inline float parallelResistance(float a, float b) {
   if (a <= 0.0f) return std::max(b, 0.0f);
