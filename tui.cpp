@@ -43,6 +43,7 @@
 #include "ui_helpers.h"
 #include "videoplayback.h"
 #include "videowindow.h"
+#include "media_formats.h"
 
 #include "tui.h"
 #include "timing_log.h"
@@ -98,64 +99,8 @@ static bool isVideoExt(const std::filesystem::path& p) {
   return ext == ".mp4" || ext == ".webm" || ext == ".mov" || ext == ".mkv";
 }
 
-static bool isSupportedAudioExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".ogg" ||
-         ext == ".kss" ||
-         ext == ".nsf" ||
-#if !RADIOIFY_DISABLE_GSF_GPL
-         ext == ".gsf" || ext == ".minigsf" ||
-#endif
-         ext == ".mid" || ext == ".midi" ||
-         ext == ".vgm" || ext == ".vgz" || ext == ".psf" ||
-         ext == ".minipsf" ||
-         ext == ".psf2" || ext == ".minipsf2";
-}
-
-static bool isMiniaudioExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac";
-}
-
-static bool isGmeExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".nsf";
-}
-
-static bool isGsfExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-#if !RADIOIFY_DISABLE_GSF_GPL
-  return ext == ".gsf" || ext == ".minigsf";
-#else
-  (void)ext;
-  return false;
-#endif
-}
-
-static bool isVgmExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".vgm" || ext == ".vgz";
-}
-
-static bool isKssExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".kss";
-}
-
-static bool isPsfExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".psf" || ext == ".minipsf" || ext == ".psf2" ||
-         ext == ".minipsf2";
-}
-
 static bool isSupportedMediaExt(const std::filesystem::path& p) {
   return isSupportedAudioExt(p) || isSupportedImageExt(p) || isVideoExt(p);
-}
-
-static bool isM4aExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".m4a" || ext == ".mp4" || ext == ".webm" || ext == ".mov";
 }
 
 static bool listTracksForFile(const std::filesystem::path& path,
@@ -186,11 +131,7 @@ static void validateInputFile(const std::filesystem::path& p) {
     die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
     die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .mov, .ogg, .kss, .nsf, .mid, .midi, "
-#if !RADIOIFY_DISABLE_GSF_GPL
-        ".gsf, .minigsf, "
-#endif
-        ".vgm, .vgz, .psf, .minipsf, .psf2, .minipsf2.");
+        "'. Supported: " + supportedAudioExtensionsText() + ".");
   }
 }
 

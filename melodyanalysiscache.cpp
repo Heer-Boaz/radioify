@@ -6,13 +6,13 @@
 #include "kssaudio.h"
 #include "melodyanalyzer.h"
 #include "neuralpitch.h"
+#include "media_formats.h"
 #include "psfaudio.h"
 #include "midiaudio.h"
 #include "vgmaudio.h"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -406,64 +406,6 @@ std::vector<MelodyAnalysisPoint> refineOfflineFrames(
   suppressShortVoicedRuns(&refined);
   medianSmoothVoicedMidi(&refined);
   return refined;
-}
-
-std::string toLower(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return value;
-}
-
-bool isMiniaudioExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(path.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac";
-}
-
-bool isOggExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(path.extension().string());
-  return ext == ".ogg";
-}
-
-bool isM4aExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(path.extension().string());
-  return ext == ".m4a" || ext == ".mp4" || ext == ".webm" || ext == ".mov";
-}
-
-bool isGmeExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(path.extension().string());
-  return ext == ".nsf";
-}
-
-bool isMidiExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(path.extension().string());
-  return ext == ".mid" || ext == ".midi";
-}
-
-bool isGsfExt(const std::filesystem::path& path) {
-#if !RADIOIFY_DISABLE_GSF_GPL
-  const std::string ext = toLower(path.extension().string());
-  return ext == ".gsf" || ext == ".minigsf";
-#else
-  (void)path;
-  return false;
-#endif
-}
-
-bool isVgmExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(path.extension().string());
-  return ext == ".vgm" || ext == ".vgz";
-}
-
-bool isPsfExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(path.extension().string());
-  return ext == ".psf" || ext == ".minipsf" || ext == ".psf2" ||
-         ext == ".minipsf2";
-}
-
-bool isKssExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(path.extension().string());
-  return ext == ".kss";
 }
 
 struct MelodyOfflineJob {

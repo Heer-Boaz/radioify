@@ -1,7 +1,6 @@
 #include "loopsplit.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -12,6 +11,7 @@
 #include "gmeaudio.h"
 #include "gsfaudio.h"
 #include "kssaudio.h"
+#include "media_formats.h"
 #include "m4adecoder.h"
 #include "midiaudio.h"
 #include "psfaudio.h"
@@ -25,71 +25,6 @@
 namespace {
 
 constexpr float kScoreEpsilon = 1e-6f;
-
-std::string toLower(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
-
-bool isSupportedAudioExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".ogg" ||
-         ext == ".kss" ||
-         ext == ".nsf" ||
-#if !RADIOIFY_DISABLE_GSF_GPL
-         ext == ".gsf" || ext == ".minigsf" ||
-#endif
-         ext == ".mid" || ext == ".midi" ||
-         ext == ".vgm" || ext == ".vgz" || ext == ".psf" ||
-         ext == ".minipsf" ||
-         ext == ".psf2" || ext == ".minipsf2";
-}
-
-bool isM4aExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".m4a" || ext == ".mp4" || ext == ".webm" || ext == ".mov";
-}
-
-bool isMiniaudioExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac";
-}
-
-bool isGmeExt(const std::filesystem::path& p) {
-  return toLower(p.extension().string()) == ".nsf";
-}
-
-bool isPsfExt(const std::filesystem::path& p) {
-  const std::string ext = toLower(p.extension().string());
-  return ext == ".psf" || ext == ".minipsf" || ext == ".psf2" ||
-         ext == ".minipsf2";
-}
-
-bool isMidiExt(const std::filesystem::path& p) {
-  const std::string ext = toLower(p.extension().string());
-  return ext == ".mid" || ext == ".midi";
-}
-
-bool isGsfExt(const std::filesystem::path& p) {
-#if !RADIOIFY_DISABLE_GSF_GPL
-  const std::string ext = toLower(p.extension().string());
-  return ext == ".gsf" || ext == ".minigsf";
-#else
-  (void)p;
-  return false;
-#endif
-}
-
-bool isVgmExt(const std::filesystem::path& p) {
-  const std::string ext = toLower(p.extension().string());
-  return ext == ".vgm" || ext == ".vgz";
-}
-
-bool isKssExt(const std::filesystem::path& p) {
-  return toLower(p.extension().string()) == ".kss";
-}
 
 uint64_t secToFrames(double seconds, uint32_t sampleRate) {
   if (seconds <= 0.0 || sampleRate == 0) return 0;

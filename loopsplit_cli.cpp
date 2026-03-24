@@ -1,32 +1,13 @@
 #include "loopsplit_cli.h"
 
 #include <algorithm>
-#include <cctype>
 #include <filesystem>
 #include <string>
 
 #include "loopsplit.h"
+#include "media_formats.h"
 
 namespace {
-
-std::string toLower(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
-
-bool isSupportedAudioExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".kss" ||
-         ext == ".nsf" || ext == ".ogg" ||
-#if !RADIOIFY_DISABLE_GSF_GPL
-         ext == ".gsf" || ext == ".minigsf" ||
-#endif
-         ext == ".mid" || ext == ".midi" || ext == ".vgm" || ext == ".vgz" ||
-         ext == ".psf" || ext == ".minipsf" || ext == ".psf2" ||
-         ext == ".minipsf2";
-}
 
 void validateInputFile(const std::filesystem::path& p) {
   if (p.empty()) die("Missing input file path.");
@@ -34,11 +15,7 @@ void validateInputFile(const std::filesystem::path& p) {
   if (std::filesystem::is_directory(p)) die("Input path must be a file: " + p.string());
   if (!isSupportedAudioExt(p)) {
     die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: .wav, .mp3, .flac, .m4a, .webm, .mp4, .mov, .ogg, .kss, .nsf, "
-#if !RADIOIFY_DISABLE_GSF_GPL
-        ".gsf, .minigsf, "
-#endif
-        ".mid, .midi, .vgm, .vgz, .psf, .minipsf, .psf2, .minipsf2.");
+        "'. Supported: " + supportedAudioExtensionsText() + ".");
   }
 }
 

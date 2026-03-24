@@ -1,7 +1,6 @@
 #include "optionsbrowser.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -10,6 +9,7 @@
 #include <vector>
 
 #include "audioplayback.h"
+#include "media_formats.h"
 #include "consoleinput.h"
 #include "kssoptions.h"
 #include "nsfoptions.h"
@@ -50,28 +50,6 @@ struct OptionsBrowserState {
 };
 
 OptionsBrowserState gOptionsBrowser;
-
-std::string toLower(std::string s) {
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return s;
-}
-
-bool isKssExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".kss";
-}
-
-bool isGmeExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".nsf";
-}
-
-bool isVgmExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
-  return ext == ".vgm" || ext == ".vgz";
-}
 
 OptionsTarget targetForPath(const std::filesystem::path& p) {
   if (isKssExt(p)) return OptionsTarget::Kss;

@@ -60,15 +60,17 @@ add_executable(radioify
   asciiart.cpp
   asciiart_gpu.cpp
   audioplayback.cpp
+  audio_format_options.cpp
   melodyanalysiscache.cpp
   melodyanalyzer.cpp
   neuralpitch.cpp
   browsermeta.cpp
-  consoleinput.cpp
-  ui_inputlogic.cpp
-  consolescreen.cpp
-  ffmpegaudio.cpp
-  flacaudio.cpp
+    consoleinput.cpp
+    ui_inputlogic.cpp
+    consolescreen.cpp
+    ffmpegaudio.cpp
+    media_formats.cpp
+    flacaudio.cpp
   gpu_shared.cpp
   gmeaudio.cpp
   gsfaudio.cpp
