@@ -827,10 +827,6 @@ std::string optionsBrowserSelectionMeta(const BrowserState& browser) {
 
   std::string dirArrow = browser.sortDescending ? " \xE2\x86\x93" : " \xE2\x86\x91";
   std::string metaLine = " [" + sortLabel + dirArrow + "]";
-  if (browser.filterActive || !browser.filter.empty()) {
-    metaLine += " [Filter: " + browser.filter +
-                (browser.filterActive ? "_" : "") + "]";
-  }
 
   metaLine += " Selected: " + name;
   return metaLine;

@@ -123,9 +123,6 @@ std::string buildSelectionMeta(const BrowserState& browser,
 
   std::string dirArrow = browser.sortDescending ? " \xE2\x86\x93" : " \xE2\x86\x91"; // Down/Up arrows
   std::string metaLine = " [" + sortLabel + dirArrow + "]";
-  if (browser.filterActive || !browser.filter.empty()) {
-    metaLine += " [Filter: " + browser.filter + (browser.filterActive ? "_" : "") + "]";
-  }
 
   metaLine += " Selected: " + name;
   if (!meta.sizeLabel.empty()) metaLine += "  " + meta.sizeLabel;

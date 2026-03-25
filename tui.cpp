@@ -165,6 +165,7 @@ static std::filesystem::path resolveRenderOutputPath(
 static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
   std::vector<FileEntry> entries;
   std::vector<FileEntry> items;
+  std::vector<FileEntry> knownFolders;
 #ifdef _WIN32
   std::filesystem::path browseDir = dir;
   if (browseDir.has_root_name() && !browseDir.has_root_directory() &&
@@ -188,7 +189,11 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
     } catch (...) {
       return;
     }
-    entries.push_back(FileEntry{name, path, true});
+    knownFolders.push_back(FileEntry{name, path, true});
+  };
+
+  auto appendSectionHeader = [&](const std::string& name) {
+    entries.push_back(FileEntry{name, std::filesystem::path(), false, true});
   };
 
   auto addWindowsKnownFolders = [&]() {
@@ -217,10 +222,18 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
 
 #ifdef _WIN32
   if (browseDir.empty()) {
-    for (const auto& drive : listDriveEntries()) {
+    auto drives = listDriveEntries();
+    if (!drives.empty()) {
+      appendSectionHeader("Drives");
+      for (const auto& drive : drives) {
       entries.push_back(FileEntry{drive.label, drive.path, true});
+      }
     }
     addWindowsKnownFolders();
+    if (!knownFolders.empty()) {
+      appendSectionHeader("Locations");
+      entries.insert(entries.end(), knownFolders.begin(), knownFolders.end());
+    }
   } else if (browseDir == browseDir.root_path()) {
     entries.push_back(FileEntry{"..", std::filesystem::path(), true});
   }
@@ -282,7 +295,7 @@ static void refreshBrowser(BrowserState& state,
     state.entries.erase(
         std::remove_if(state.entries.begin(), state.entries.end(),
                        [&](const FileEntry& e) {
-                         if (e.name == "..") return false;
+                         if (e.isSectionHeader || e.name == "..") return false;
                          return toLower(e.name).find(lowFilter) ==
                                 std::string::npos;
                        }),
@@ -290,9 +303,6 @@ static void refreshBrowser(BrowserState& state,
   }
 
   if (!state.entries.empty() && !optionsActive) {
-    auto start = state.entries.begin();
-    if (start->name == "..") ++start;
-
     const bool sortingRootLevel = state.dir.empty();
 #ifdef _WIN32
     auto isDriveEntry = [](const FileEntry& entry) {
@@ -304,10 +314,12 @@ static void refreshBrowser(BrowserState& state,
 #else
     auto isDriveEntry = [](const FileEntry&) { return false; };
 #endif
-
-    std::sort(start, state.entries.end(), [&](const FileEntry& a, const FileEntry& b) {
+    const bool hasSectionHeaders =
+        std::any_of(state.entries.begin(), state.entries.end(),
+                    [](const FileEntry& e) { return e.isSectionHeader; });
+    auto sectionComparator = [&](const FileEntry& a, const FileEntry& b) {
       if (a.isDir != b.isDir) return a.isDir > b.isDir;
-      if (sortingRootLevel && isDriveEntry(a) != isDriveEntry(b)) {
+      if (sortingRootLevel && !hasSectionHeaders && isDriveEntry(a) != isDriveEntry(b)) {
         return isDriveEntry(a);
       }
       bool aLessB = false;
@@ -335,7 +347,29 @@ static void refreshBrowser(BrowserState& state,
 
       if (state.sortDescending) return !aLessB;
       return aLessB;
-    });
+    };
+    auto sortSection = [&](size_t begin, size_t end) {
+      if (end <= begin + 1) return;
+      std::sort(state.entries.begin() + static_cast<long long>(begin),
+                state.entries.begin() + static_cast<long long>(end),
+                sectionComparator);
+    };
+
+    size_t sectionStart = 0;
+    if (state.entries.front().name == "..") ++sectionStart;
+    while (sectionStart < state.entries.size()) {
+      if (state.entries[sectionStart].isSectionHeader) {
+        ++sectionStart;
+        continue;
+      }
+      size_t sectionEnd = sectionStart;
+      while (sectionEnd < state.entries.size() &&
+             !state.entries[sectionEnd].isSectionHeader) {
+        ++sectionEnd;
+      }
+      sortSection(sectionStart, sectionEnd);
+      sectionStart = sectionEnd;
+    }
   }
 
   if (state.entries.empty()) {
@@ -344,14 +378,27 @@ static void refreshBrowser(BrowserState& state,
     return;
   }
 
-  if (state.selected < 0 ||
-      state.selected >= static_cast<int>(state.entries.size())) {
-    state.selected = 0;
+  auto isSelectable = [](const FileEntry& entry) {
+    return !entry.isSectionHeader;
+  };
+  if (state.selected < 0 || state.selected >= static_cast<int>(state.entries.size()) ||
+      !isSelectable(state.entries[static_cast<size_t>(state.selected)])) {
+    state.selected = -1;
+    for (size_t i = 0; i < state.entries.size(); ++i) {
+      if (isSelectable(state.entries[i])) {
+        state.selected = static_cast<int>(i);
+        break;
+      }
+    }
+    if (state.selected < 0) {
+      state.selected = 0;
+    }
   }
   state.scrollRow = 0;
 
   if (!initialName.empty()) {
     for (size_t i = 0; i < state.entries.size(); ++i) {
+      if (state.entries[i].isSectionHeader) continue;
       if (toLower(state.entries[i].name) == toLower(initialName)) {
         state.selected = static_cast<int>(i);
         break;
@@ -374,9 +421,6 @@ static std::string buildTrackSelectionMeta(const BrowserState& browser) {
 
   std::string dirArrow = browser.sortDescending ? " \xE2\x86\x93" : " \xE2\x86\x91";
   std::string metaLine = " [" + sortLabel + dirArrow + "]";
-  if (browser.filterActive || !browser.filter.empty()) {
-    metaLine += " [Filter: " + browser.filter + (browser.filterActive ? "_" : "") + "]";
-  }
 
   metaLine += " Selected: " + name;
   if (entry.trackIndex >= 0) {
@@ -908,6 +952,9 @@ int runTui(Options o) {
   const Style kStyleHeader{{230, 238, 248}, {18, 28, 44}};
   const Style kStyleHeaderGlow{{255, 213, 118}, {22, 34, 52}};
   const Style kStyleHeaderHot{{255, 249, 214}, {38, 50, 72}};
+  const Style kStyleSearchBar{{24, 36, 66}, {160, 190, 238}};
+  const Style kStyleSearchBarGlow{{18, 30, 60}, {178, 206, 246}};
+  const Style kStyleSearchBarActive{{14, 24, 50}, {196, 220, 248}};
   const Style kStyleAccent{{255, 214, 120}, kBgBase};
   const Style kStyleDim{{138, 144, 153}, kBgBase};
   const Style kStyleAlert{{255, 92, 92}, kBgBase};
@@ -984,6 +1031,8 @@ int runTui(Options o) {
             browser.scrollRow = 0;
             browser.filter.clear();
             browser.filterActive = false;
+            browser.pathSearch.clear();
+            browser.pathSearchActive = false;
             refreshBrowser(browser, "");
           } else {
             tryStartAudioFile(inputPath);
@@ -1007,9 +1056,16 @@ int runTui(Options o) {
   ActionStripLayout actionStrip;
   int actionHover = -1;
   int breadcrumbHover = -1;
+  bool searchBarHover = false;
+  bool searchBarClearHover = false;
+  const int searchBarClearButtonWidth = 5;
   int headerLines = 0;
   int listTop = 0;
   int breadcrumbY = 0;
+  int searchBarY = -1;
+  int searchBarWidth = 0;
+  int searchBarClearStart = -1;
+  int searchBarClearEnd = -1;
   const int footerLines = 5;
   int width = 0;
   int height = 0;
@@ -1135,11 +1191,16 @@ int runTui(Options o) {
     bool showHeaderLabel = browserInteractionEnabled &&
                            (optionsBrowserIsActive(browser) ||
                             isTrackBrowserActive(browser));
-    headerLines = showHeaderLabel ? 2 : 1;
     if (browserInteractionEnabled) {
+      headerLines = 2 + (showHeaderLabel ? 1 : 0);
+      searchBarY = 1;
+      searchBarWidth = width;
       listTop = headerLines + 1;
-      breadcrumbY = listTop - 1;
+      breadcrumbY = headerLines;
     } else {
+      headerLines = 1;
+      searchBarY = -1;
+      searchBarWidth = 0;
       listTop = headerLines;
       breadcrumbY = -1;
     }
@@ -1239,6 +1300,8 @@ int runTui(Options o) {
         browser.scrollRow = 0;
         browser.filter.clear();
         browser.filterActive = false;
+        browser.pathSearch.clear();
+        browser.pathSearchActive = false;
         refreshBrowser(browser, "");
         return true;
       }
@@ -1293,12 +1356,14 @@ int runTui(Options o) {
   };
   callbacks.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
   callbacks.onToggleMelodyVisualization = [&]() {
-    melodyVisualizationEnabled = !melodyVisualizationEnabled;
-    if (melodyVisualizationEnabled) {
-      browser.filterActive = false;
-      breadcrumbHover = -1;
-      actionHover = -1;
-      clearMelodyHistory();
+           melodyVisualizationEnabled = !melodyVisualizationEnabled;
+           if (melodyVisualizationEnabled) {
+              browser.filterActive = false;
+              browser.pathSearchActive = false;
+              browser.pathSearch.clear();
+              breadcrumbHover = -1;
+              actionHover = -1;
+              clearMelodyHistory();
     }
     fileContextMenu.active = false;
     dirty = true;
@@ -1323,10 +1388,12 @@ int runTui(Options o) {
          "M", true, [&]() {
            melodyVisualizationEnabled = !melodyVisualizationEnabled;
            if (melodyVisualizationEnabled) {
-             browser.filterActive = false;
-             breadcrumbHover = -1;
-             actionHover = -1;
-             clearMelodyHistory();
+           browser.filterActive = false;
+            browser.pathSearchActive = false;
+            browser.pathSearch.clear();
+            breadcrumbHover = -1;
+            actionHover = -1;
+            clearMelodyHistory();
            }
            fileContextMenu.active = false;
            dirty = true;
@@ -1712,7 +1779,23 @@ int runTui(Options o) {
       tuiWindow.PollEvents();
     }
 
-    auto processInputEvent = [&](InputEvent ev) {
+  auto processInputEvent = [&](InputEvent ev) {
+      const bool browserInteractionEnabled = !melodyVisualizationEnabled;
+      bool isLeftClick = (ev.type == InputEvent::Type::Mouse) &&
+                        (ev.mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+      bool clearBtnHover = false;
+      if (ev.type == InputEvent::Type::Mouse) {
+        clearBtnHover =
+            browserInteractionEnabled && searchBarY >= 0 &&
+            ev.mouse.pos.Y == searchBarY && searchBarClearStart >= 0 &&
+            searchBarClearEnd > searchBarClearStart &&
+            ev.mouse.pos.X >= searchBarClearStart &&
+            ev.mouse.pos.X < searchBarClearEnd;
+        if (searchBarClearHover != clearBtnHover) {
+          searchBarClearHover = clearBtnHover;
+          dirty = true;
+        }
+      }
       if (ev.type == InputEvent::Type::Mouse &&
           (ev.mouse.control & 0x80000000) != 0) {
         int wndW = std::max(1, tuiWindow.GetWidth());
@@ -1739,12 +1822,28 @@ int runTui(Options o) {
           if (paletteActive) {
             fileContextMenu.active = false;
           }
+          browser.pathSearchActive = false;
+          browser.pathSearch.clear();
           paletteQuery.clear();
           paletteSelected = 0;
           paletteScroll = 0;
           dirty = true;
           return;
         }
+      }
+      if (ev.type == InputEvent::Type::Mouse && clearBtnHover && isLeftClick) {
+        if (!browser.filterActive) {
+          browser.filterBackup = browser.filter;
+        }
+        browser.filter.clear();
+        browser.filterActive = true;
+        browser.pathSearchActive = false;
+        browser.pathSearch.clear();
+        if (callbacks.onRefreshBrowser) {
+          callbacks.onRefreshBrowser(browser, "");
+        }
+        dirty = true;
+        return;
       }
       if (fileContextMenu.active) {
         fileContextLayout = computeFileContextLayout(width, height);
@@ -1921,11 +2020,12 @@ int runTui(Options o) {
           return;
         }
       }
-      bool browserInteractionEnabled = !melodyVisualizationEnabled;
       handleInputEvent(ev, browser, layout, breadcrumbLine, breadcrumbY,
-                       listTop, listHeight, progressBarX, progressBarY,
+                       searchBarY, searchBarWidth, listTop, listHeight,
+                       progressBarX, progressBarY,
                        progressBarWidth, actionStrip, browserInteractionEnabled,
                        o.play, audioIsReady(), breadcrumbHover, actionHover,
+                       searchBarHover,
                        dirty, running, callbacks);
     };
 
@@ -1973,14 +2073,28 @@ int runTui(Options o) {
       bool browserInteractionEnabled = !melodyVisualizationEnabled;
       bool showHeaderLabel =
           browserInteractionEnabled && (optionsMode || trackMode);
-      headerLines = showHeaderLabel ? 2 : 1;
       if (browserInteractionEnabled) {
+        headerLines = 2 + (showHeaderLabel ? 1 : 0);
+        searchBarY = 1;
+        searchBarWidth = width;
         listTop = headerLines + 1;
-        breadcrumbY = listTop - 1;
+        breadcrumbY = headerLines;
       } else {
+        headerLines = 1;
+        searchBarY = -1;
+        searchBarWidth = 0;
+        searchBarClearStart = -1;
+        searchBarClearEnd = -1;
         listTop = headerLines;
         breadcrumbY = -1;
       }
+      searchBarClearEnd = (searchBarY >= 0 && width > 0)
+                             ? width
+                             : -1;
+      searchBarClearStart =
+          (searchBarClearEnd > 0)
+              ? std::max(0, searchBarClearEnd - searchBarClearButtonWidth)
+              : -1;
       listHeight = height - listTop - footerLines;
       if (listHeight < 1) listHeight = 1;
       layout = buildLayout(browser, width, listHeight);
@@ -2041,6 +2155,37 @@ int runTui(Options o) {
       }
       breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
       if (browserInteractionEnabled) {
+        Style searchStyle =
+            browser.filterActive
+                ? kStyleSearchBarActive
+                : (searchBarHover ? kStyleSearchBarGlow : kStyleSearchBar);
+        screen.writeRun(0, searchBarY, width, L' ', searchStyle);
+        bool showSearchCursor =
+            browser.filterActive &&
+            ((std::chrono::duration_cast<std::chrono::milliseconds>(
+                  now.time_since_epoch())
+                  .count() /
+              500) %
+             2) == 0;
+        std::string searchText =
+            browser.filter.empty() ? "type to filter" : browser.filter;
+        std::string searchLine = " Search: " + searchText;
+        int searchTextWidth = std::max(
+            1, width - searchBarClearButtonWidth);
+        std::string shownSearchLine = fitLine(searchLine, searchTextWidth);
+        screen.writeText(0, searchBarY, shownSearchLine, searchStyle);
+        if (showSearchCursor && searchTextWidth > 0) {
+          int cursorX = std::min(searchTextWidth - 1, static_cast<int>(shownSearchLine.size()));
+          screen.writeChar(cursorX, searchBarY, L'\u2588', searchStyle);
+        }
+        if (searchBarClearStart >= 0 && searchBarClearEnd > searchBarClearStart) {
+          Style clearStyle =
+              searchBarClearHover ? kStyleSearchBarActive : searchStyle;
+          screen.writeText(searchBarClearStart, searchBarY,
+                           fitLine(" [x] ", searchBarClearEnd - searchBarClearStart),
+                           clearStyle);
+        }
+
         if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
           breadcrumbHover = -1;
         }
@@ -2076,7 +2221,8 @@ int runTui(Options o) {
         showingLabel.clear();
       }
       if (!showingLabel.empty()) {
-        screen.writeText(0, 1, fitLine(showingLabel, width), kStyleDim);
+        screen.writeText(0, std::min(height - 1, searchBarY + 1),
+                         fitLine(showingLabel, width), kStyleDim);
       }
       AudioMelodyInfo melodyInfo = audioGetMelodyInfo();
       AudioMelodyAnalysisState melodyAnalysisState = audioGetMelodyAnalysisState();

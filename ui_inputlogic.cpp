@@ -1,11 +1,60 @@
 #include "consoleinput.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "consolescreen.h"
 #include "optionsbrowser.h"
 
 namespace {
+bool isSelectableEntry(const FileEntry& entry) {
+  return !entry.isSectionHeader;
+}
+
+int nearestSelectableEntryAny(const std::vector<FileEntry>& entries, int start) {
+  if (entries.empty()) return -1;
+  int n = static_cast<int>(entries.size());
+  int idx = std::clamp(start, 0, n - 1);
+  if (isSelectableEntry(entries[static_cast<size_t>(idx)])) return idx;
+  for (int delta = 1; delta < n; ++delta) {
+    int forward = idx + delta;
+    if (forward >= n) forward -= n;
+    if (isSelectableEntry(entries[static_cast<size_t>(forward)])) return forward;
+
+    int backward = idx - delta;
+    if (backward < 0) backward += n;
+    if (isSelectableEntry(entries[static_cast<size_t>(backward)])) return backward;
+  }
+  return -1;
+}
+
+bool isMouseInSearchBar(const MouseEvent& mouse, int searchBarY,
+                       int searchBarWidth) {
+  return searchBarY >= 0 && searchBarWidth > 0 && mouse.pos.Y == searchBarY &&
+         mouse.pos.X >= 0 && mouse.pos.X < searchBarWidth;
+}
+
+void blurSearchBarFocus(BrowserState& browser, bool& dirty) {
+  if (!browser.filterActive) return;
+  browser.filterActive = false;
+  dirty = true;
+}
+
+int nearestSelectableEntry(const std::vector<FileEntry>& entries, int start,
+                          int direction) {
+  if (entries.empty()) return 0;
+  int n = static_cast<int>(entries.size());
+  int idx = std::clamp(start, 0, n - 1);
+  int step = direction >= 0 ? 1 : -1;
+  for (int i = 0; i < n; ++i) {
+    if (isSelectableEntry(entries[static_cast<size_t>(idx)])) return idx;
+    idx += step;
+    if (idx >= n) idx = 0;
+    if (idx < 0) idx = n - 1;
+  }
+  return start;
+}
+
 int getEntryIndex(int row, int col, int totalRows, int cols, int count,
                   BrowserState::ViewMode mode) {
   if (mode == BrowserState::ViewMode::ListOnly) {
@@ -74,7 +123,7 @@ void moveSelection(BrowserState& browser, const GridLayout& layout,
   int nextRow = std::clamp(row + deltaRow, 0, layout.totalRows - 1);
   int nextCol = std::clamp(col + deltaCol, 0, layout.cols - 1);
 
-  int idx =
+int idx =
       getEntryIndex(nextRow, nextCol, layout.totalRows, layout.cols, count,
                     browser.viewMode);
   if (idx < 0) {
@@ -83,6 +132,9 @@ void moveSelection(BrowserState& browser, const GridLayout& layout,
     else
       idx = 0;
   }
+
+  int direction = (deltaCol > 0 || deltaRow > 0) ? 1 : -1;
+  idx = nearestSelectableEntry(browser.entries, idx, direction);
 
   if (idx != browser.selected) {
     browser.selected = idx;
@@ -107,6 +159,7 @@ void pageSelection(BrowserState& browser, const GridLayout& layout,
   int idx = getEntryIndex(nextRow, col, layout.totalRows, layout.cols, count,
                           browser.viewMode);
   if (idx < 0) idx = count - 1;
+  idx = nearestSelectableEntry(browser.entries, idx, direction);
 
   if (idx != browser.selected) {
     browser.selected = idx;
@@ -182,12 +235,13 @@ int actionStripIndexAt(const ActionStripLayout& layout, int x, int y) {
 void handleInputEvent(const InputEvent& ev, BrowserState& browser,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
-                      int listTop, int listHeight, int progressBarX,
+                      int searchBarY, int searchBarWidth, int listTop,
+                      int listHeight, int progressBarX,
                       int progressBarY, int progressBarWidth,
                       const ActionStripLayout& actionStrip,
                       bool browserInteractionEnabled, bool playMode,
                       bool decoderReady, int& breadcrumbHover, int& actionHover,
-                      bool& dirty, bool& running,
+                      bool& searchBarHover, bool& dirty, bool& running,
                       const InputCallbacks& callbacks) {
   auto clearForwardHistory = [&]() { browser.forwardHistory.clear(); };
   auto pushBackHistory = [&](BrowserState::HistoryActionType type,
@@ -202,6 +256,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
   };
   auto navigateToDir = [&](const std::filesystem::path& dir) {
     browser.dir = dir;
+    browser.pathSearchActive = false;
+    browser.pathSearch.clear();
     browser.selected = 0;
     if (callbacks.onRefreshBrowser) {
       callbacks.onRefreshBrowser(browser, "");
@@ -281,6 +337,72 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     return false;
   };
 
+  auto resolvePathSearchTarget = [&](const std::string& query,
+                                    std::filesystem::path& out) -> bool {
+    if (query.empty()) return false;
+    std::string text = query;
+    if (!text.empty() && text[0] == '~') {
+      std::string home;
+      if (const char* envProfile = std::getenv("USERPROFILE")) {
+        home = envProfile;
+      }
+      if (home.empty()) {
+        const char* homeDrive = std::getenv("HOMEDRIVE");
+        const char* homePath = std::getenv("HOMEPATH");
+        if (homeDrive && *homeDrive && homePath && *homePath) {
+          home = std::string(homeDrive) + homePath;
+        }
+      }
+      if (!home.empty()) {
+        if (text == "~") {
+          text = home;
+        } else if (text.size() > 1 && (text[1] == '/' || text[1] == '\\')) {
+          std::string rest = text.substr(2);
+          std::filesystem::path homePath(home);
+          homePath /= rest;
+          text = homePath.string();
+        } else {
+          std::filesystem::path homePath(home);
+          homePath /= text.substr(1);
+          text = homePath.string();
+        }
+      }
+    }
+
+    std::filesystem::path target(text);
+    if (target.has_root_name() && !target.has_root_directory() &&
+        target.relative_path().empty()) {
+      target = target.root_name();
+      target /= std::filesystem::path();
+    }
+    if (!target.is_absolute()) {
+      target = browser.dir / target;
+    }
+
+    if (!target.has_root_name() && !target.has_root_directory() &&
+        target.relative_path().empty()) {
+      return false;
+    }
+
+    std::error_code existsEc;
+    if (!std::filesystem::exists(target, existsEc)) return false;
+    std::error_code dirEc;
+    if (!std::filesystem::is_directory(target, dirEc)) return false;
+    out = target;
+    return true;
+  };
+
+  auto applyPathSearch = [&]() {
+    if (!browser.pathSearchActive) return;
+    std::filesystem::path target;
+    if (!resolvePathSearchTarget(browser.pathSearch, target)) return;
+    if (target != browser.dir) {
+      navigateToDir(target);
+    } else {
+      dirty = true;
+    }
+  };
+
   if (ev.type == InputEvent::Type::Resize) {
     dirty = true;
     if (callbacks.onResize) callbacks.onResize();
@@ -307,9 +429,51 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
 
-    if (browserInteractionEnabled && browser.filterActive) {
+    if (browserInteractionEnabled && browser.pathSearchActive) {
       if (key.vk == VK_ESCAPE || key.vk == VK_RETURN) {
+        browser.pathSearchActive = false;
+        browser.pathSearch.clear();
+        dirty = true;
+        return;
+      }
+      if (browserBackKey) {
+        undoBrowserBack();
+        return;
+      }
+      if (browserForwardKey) {
+        redoBrowserForward();
+        return;
+      }
+      if (keyboardBackspace) {
+        if (!browser.pathSearch.empty()) {
+          browser.pathSearch.pop_back();
+          if (browser.pathSearch.empty()) {
+            dirty = true;
+          } else {
+            applyPathSearch();
+          }
+        }
+        return;
+      }
+      if (key.ch >= 32) {
+        browser.pathSearch.push_back(key.ch);
+        applyPathSearch();
+        return;
+      }
+      return;
+    }
+
+    if (browserInteractionEnabled && browser.filterActive) {
+      if (key.vk == VK_ESCAPE) {
+        browser.filter = browser.filterBackup;
         browser.filterActive = false;
+        if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
+        dirty = true;
+        return;
+      }
+      if (key.vk == VK_RETURN) {
+        browser.filterActive = false;
+        if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
         dirty = true;
         return;
       }
@@ -324,17 +488,41 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       if (keyboardBackspace) {
         if (!browser.filter.empty()) {
           browser.filter.pop_back();
-          if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
           dirty = true;
         }
         return;
       }
       if (key.ch >= 32) {
         browser.filter += key.ch;
-        if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
         dirty = true;
         return;
       }
+      return;
+    }
+
+    if (browserInteractionEnabled && ctrl &&
+        (key.vk == 'G' || key.ch == 'g' || key.ch == 'G')) {
+      browser.filterActive = false;
+      browser.pathSearchActive = true;
+      browser.pathSearch.clear();
+      dirty = true;
+      return;
+    }
+    if (browserInteractionEnabled && ctrl &&
+        (key.vk == 'F' || key.ch == 'f' || key.ch == 'F')) {
+      browser.pathSearchActive = false;
+      browser.pathSearch.clear();
+      browser.filterBackup = browser.filter;
+      browser.filterActive = true;
+      dirty = true;
+      return;
+    }
+    if (browserInteractionEnabled && (key.vk == VK_DIVIDE || key.ch == '/')) {
+      browser.pathSearchActive = false;
+      browser.pathSearch.clear();
+      browser.filterBackup = browser.filter;
+      browser.filterActive = true;
+      dirty = true;
       return;
     }
 
@@ -354,12 +542,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
     if (!browserInteractionEnabled) {
-      return;
-    }
-    if (key.vk == VK_DIVIDE || key.ch == '/') {
-      browser.filterActive = true;
-      browser.filter.clear();
-      dirty = true;
       return;
     }
     if (key.vk == 'S' || key.ch == 's' || key.ch == 'S') {
@@ -402,13 +584,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         return;
       }
       if (browser.dir.has_parent_path()) {
-        browser.dir = browser.dir.parent_path();
-        browser.selected = 0;
-        if (callbacks.onRefreshBrowser) {
-          callbacks.onRefreshBrowser(browser, "");
-        }
-        breadcrumbHover = -1;
-        dirty = true;
+        navigateToDir(browser.dir.parent_path());
       }
       return;
     }
@@ -416,6 +592,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       int count = static_cast<int>(browser.entries.size());
       if (count > 0) {
         const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
+        if (pick.isSectionHeader) return;
         if (ctrl && playMode && !pick.isDir) {
           if (callbacks.onOpenFileContextMenu) {
             callbacks.onOpenFileContextMenu(pick, -1, -1);
@@ -426,13 +603,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         if (pick.isDir) {
           pushBackHistory(BrowserState::HistoryActionType::EnterDirectory,
                           browser.dir, pick.path);
-          browser.dir = pick.path;
-          browser.selected = 0;
-          if (callbacks.onRefreshBrowser) {
-            callbacks.onRefreshBrowser(browser, "");
-          }
-          breadcrumbHover = -1;
-          dirty = true;
+          navigateToDir(pick.path);
         } else if (playMode) {
           if (callbacks.onPlayFile && callbacks.onPlayFile(pick.path)) {
             pushBackHistory(BrowserState::HistoryActionType::PlayFile, browser.dir,
@@ -484,6 +655,17 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     const MouseEvent& mouse = ev.mouse;
     bool leftPressed = (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
     bool rightPressed = (mouse.buttonState & RIGHTMOST_BUTTON_PRESSED) != 0;
+    bool hoveredSearch = browserInteractionEnabled &&
+                         isMouseInSearchBar(mouse, searchBarY, searchBarWidth);
+    if (browser.filterActive && browserInteractionEnabled &&
+        (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_WHEELED) &&
+        !hoveredSearch && (leftPressed || rightPressed || mouse.eventFlags == MOUSE_WHEELED)) {
+      blurSearchBarFocus(browser, dirty);
+    }
+    if (searchBarHover != hoveredSearch) {
+      searchBarHover = hoveredSearch;
+      dirty = true;
+    }
     if (browserInteractionEnabled) {
       int nextHover =
           breadcrumbIndexAt(breadcrumbLine, mouse.pos.X, mouse.pos.Y, breadcrumbY);
@@ -531,14 +713,20 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       if (browser.dir != crumb.path) {
         pushBackHistory(BrowserState::HistoryActionType::EnterDirectory, browser.dir,
                         crumb.path);
-        browser.dir = crumb.path;
-        browser.selected = 0;
-        if (callbacks.onRefreshBrowser) {
-          callbacks.onRefreshBrowser(browser, "");
-        }
+        navigateToDir(crumb.path);
         breadcrumbHover = -1;
         dirty = true;
       }
+      return;
+    }
+
+    if (browserInteractionEnabled && leftPressed && mouse.eventFlags == 0 &&
+        hoveredSearch) {
+      browser.filterBackup = browser.filter;
+      browser.filterActive = true;
+      browser.pathSearchActive = false;
+      browser.pathSearch.clear();
+      dirty = true;
       return;
     }
 
@@ -621,8 +809,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     if (idx < 0 || idx >= count) return;
 
     if (mouse.eventFlags == MOUSE_MOVED && !leftPressed) {
-      if (browser.selected != idx) {
-        browser.selected = idx;
+      int hoverIdx = nearestSelectableEntryAny(browser.entries, idx);
+      if (hoverIdx >= 0 && browser.selected != hoverIdx) {
+        browser.selected = hoverIdx;
         dirty = true;
       }
       return;
@@ -630,8 +819,15 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
 
     if (mouse.eventFlags == 0 && rightPressed) {
       if (browser.selected != idx) {
-        browser.selected = idx;
-        dirty = true;
+        int hoverIdx = nearestSelectableEntryAny(browser.entries, idx);
+        if (hoverIdx < 0) return;
+        if (browser.selected != hoverIdx) {
+          browser.selected = hoverIdx;
+          dirty = true;
+        }
+      }
+      if (!isSelectableEntry(browser.entries[static_cast<size_t>(browser.selected)])) {
+        return;
       }
       const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
       if (!pick.isDir && callbacks.onOpenFileContextMenu) {
@@ -642,21 +838,17 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     }
 
     if (mouse.eventFlags == 0 && leftPressed) {
-      if (browser.selected != idx) {
-        browser.selected = idx;
+      int clickIdx = nearestSelectableEntryAny(browser.entries, idx);
+      if (clickIdx < 0) return;
+      if (browser.selected != clickIdx) {
+        browser.selected = clickIdx;
         dirty = true;
       }
       const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
       if (pick.isDir) {
         pushBackHistory(BrowserState::HistoryActionType::EnterDirectory, browser.dir,
                         pick.path);
-        browser.dir = pick.path;
-        browser.selected = 0;
-        if (callbacks.onRefreshBrowser) {
-          callbacks.onRefreshBrowser(browser, "");
-        }
-        breadcrumbHover = -1;
-        dirty = true;
+        navigateToDir(pick.path);
       } else if (playMode) {
         if (callbacks.onPlayFile && callbacks.onPlayFile(pick.path)) {
           pushBackHistory(BrowserState::HistoryActionType::PlayFile, browser.dir,

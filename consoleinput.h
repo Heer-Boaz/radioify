@@ -66,6 +66,7 @@ struct FileEntry {
   std::string name;
   std::filesystem::path path;
   bool isDir = false;
+  bool isSectionHeader = false;
   int trackIndex = -1;
   int optionId = -1;
   int instrumentDevice = -1;
@@ -105,6 +106,9 @@ struct BrowserState {
   bool sortDescending = false;
   std::string filter;
   bool filterActive = false;
+  std::string filterBackup;
+  std::string pathSearch;
+  bool pathSearchActive = false;
   std::vector<HistoryAction> backHistory;
   std::vector<HistoryAction> forwardHistory;
 };
@@ -183,6 +187,8 @@ void handleInputEvent(
   const GridLayout& layout,
   const BreadcrumbLine& breadcrumbLine,
   int breadcrumbY,
+  int searchBarY,
+  int searchBarWidth,
   int listTop,
   int listHeight,
   int progressBarX,
@@ -194,6 +200,7 @@ void handleInputEvent(
   bool decoderReady,
   int& breadcrumbHover,
   int& actionHover,
+  bool& searchBarHover,
   bool& dirty,
   bool& running,
   const InputCallbacks& callbacks

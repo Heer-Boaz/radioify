@@ -447,6 +447,10 @@ static void startThumbWorkerLocked(ThumbCacheState& cache) {
 GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   GridLayout layout;
   layout.names.reserve(state.entries.size());
+  bool hasSectionHeaders = std::any_of(state.entries.begin(), state.entries.end(),
+                                       [](const FileEntry& entry) {
+                                         return entry.isSectionHeader;
+                                       });
   int maxName = 0;
   for (const auto& e : state.entries) {
     std::string name = e.name;
@@ -528,6 +532,32 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   int totalRows =
       cols > 0 ? static_cast<int>((state.entries.size() + cols - 1) / cols) : 0;
   int visibleRows = std::min(safeRows, totalRows);
+
+  if (hasSectionHeaders) {
+    layout.showThumbs = false;
+    layout.showPreview = false;
+    layout.previewX = 0;
+    layout.previewWidth = 0;
+    layout.previewHeight = 0;
+    layout.listWidth = std::max(1, width);
+    layout.cellHeight = 1;
+    layout.thumbWidth = 0;
+    layout.thumbHeight = 0;
+    layout.colWidth = layout.listWidth;
+    layout.cols = 1;
+    layout.totalRows = static_cast<int>(state.entries.size());
+    layout.rowsVisible = std::min(std::max(1, safeRows), layout.totalRows);
+    if (layout.rowsVisible <= 0) layout.rowsVisible = 1;
+    layout.showScrollBar = (layout.totalRows > layout.rowsVisible);
+    layout.scrollBarWidth = 0;
+    layout.scrollBarX = -1;
+    if (layout.showScrollBar) {
+      int barWidth = std::min(kScrollBarWidth, std::max(1, width));
+      layout.scrollBarWidth = barWidth;
+      layout.scrollBarX = std::max(0, width - barWidth);
+    }
+    return layout;
+  }
 
   layout.rowsVisible = visibleRows;
   layout.totalRows = totalRows;
@@ -658,8 +688,24 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         bool isSelected = (idx == browser.selected);
 
-        std::string cell =
-            fitName(entryPrefix(entry) + layout.names[static_cast<size_t>(idx)],
+        if (entry.isSectionHeader) {
+          std::string cell = fitName("[" + entry.name + "]", layout.colWidth);
+          int cellWidth = utf8CodepointCount(cell);
+          if (cellWidth < layout.colWidth) {
+            cell.append(static_cast<size_t>(layout.colWidth - cellWidth), ' ');
+          } else if (cellWidth > layout.colWidth) {
+            cell = utf8Take(cell, layout.colWidth);
+          }
+          Style headerStyle = dimStyle;
+          if (isSelected) {
+            headerStyle = dimStyle;
+          }
+          screen.writeText(c * layout.colWidth, y, cell, headerStyle);
+          continue;
+        }
+
+        std::string cell = fitName(entryPrefix(entry) +
+                                       layout.names[static_cast<size_t>(idx)],
                                    layout.colWidth);
         int cellWidth = utf8CodepointCount(cell);
         if (cellWidth < layout.colWidth) {
