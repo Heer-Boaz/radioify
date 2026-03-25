@@ -825,6 +825,7 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
   std::filesystem::path cur;
   std::filesystem::path root = dir.root_path();
 #ifdef _WIN32
+  items.push_back(Item{"This PC", {}});
   if (!root.empty()) {
     std::string rootLabel = pathToUtf8(dir.root_name());
     if (rootLabel.empty()) rootLabel = pathToUtf8(root);

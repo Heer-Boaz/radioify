@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -164,26 +165,84 @@ static std::filesystem::path resolveRenderOutputPath(
 static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
   std::vector<FileEntry> entries;
   std::vector<FileEntry> items;
+#ifdef _WIN32
+  std::filesystem::path browseDir = dir;
+  if (browseDir.has_root_name() && !browseDir.has_root_directory() &&
+      browseDir.relative_path().empty()) {
+    std::string root = browseDir.root_name().string();
+    root.push_back('\\');
+    browseDir = std::filesystem::path(root);
+  }
+#else
+  const std::filesystem::path& browseDir = dir;
+#endif
+
+  auto appendKnownFolder = [&](const std::string& name,
+                              const std::filesystem::path& path) {
+    if (path.empty()) return;
+    try {
+      if (!std::filesystem::exists(path) ||
+          !std::filesystem::is_directory(path)) {
+        return;
+      }
+    } catch (...) {
+      return;
+    }
+    entries.push_back(FileEntry{name, path, true});
+  };
+
+  auto addWindowsKnownFolders = [&]() {
+    std::string userProfile;
+    if (const char* envProfile = std::getenv("USERPROFILE")) {
+      userProfile = envProfile;
+    }
+    if (userProfile.empty()) {
+      const char* homeDrive = std::getenv("HOMEDRIVE");
+      const char* homePath = std::getenv("HOMEPATH");
+      if (homeDrive && *homeDrive && homePath && *homePath) {
+        userProfile = std::string(homeDrive) + homePath;
+      } else {
+        return;
+      }
+    }
+    std::filesystem::path homePath = std::filesystem::path(userProfile);
+    appendKnownFolder("Home", homePath);
+    appendKnownFolder("Desktop", homePath / "Desktop");
+    appendKnownFolder("Documents", homePath / "Documents");
+    appendKnownFolder("Downloads", homePath / "Downloads");
+    appendKnownFolder("Music", homePath / "Music");
+    appendKnownFolder("Pictures", homePath / "Pictures");
+    appendKnownFolder("Videos", homePath / "Videos");
+  };
 
 #ifdef _WIN32
-  if (dir.empty() || dir == dir.root_path()) {
+  if (browseDir.empty()) {
     for (const auto& drive : listDriveEntries()) {
       entries.push_back(FileEntry{drive.label, drive.path, true});
     }
+    addWindowsKnownFolders();
+  } else if (browseDir == browseDir.root_path()) {
+    entries.push_back(FileEntry{"..", std::filesystem::path(), true});
   }
 #endif
 
-  if (dir.has_parent_path() && dir != dir.root_path()) {
-    entries.push_back(FileEntry{"..", dir.parent_path(), true});
+  if (browseDir.has_parent_path() && browseDir != browseDir.root_path()) {
+    entries.push_back(FileEntry{"..", browseDir.parent_path(), true});
   }
 
   try {
-    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    for (const auto& entry :
+         std::filesystem::directory_iterator(
+             browseDir,
+             std::filesystem::directory_options::skip_permission_denied)) {
       const auto& p = entry.path();
-      if (entry.is_directory()) {
+      std::error_code ec;
+      if (entry.is_directory(ec) && !ec) {
         items.push_back(FileEntry{toUtf8String(p.filename()), p, true});
-      } else if (entry.is_regular_file() && isSupportedMediaExt(p)) {
-        items.push_back(FileEntry{toUtf8String(p.filename()), p, false});
+      } else {
+        if (entry.is_regular_file(ec) && !ec && isSupportedMediaExt(p)) {
+          items.push_back(FileEntry{toUtf8String(p.filename()), p, false});
+        }
       }
     }
   } catch (...) {
@@ -234,8 +293,23 @@ static void refreshBrowser(BrowserState& state,
     auto start = state.entries.begin();
     if (start->name == "..") ++start;
 
+    const bool sortingRootLevel = state.dir.empty();
+#ifdef _WIN32
+    auto isDriveEntry = [](const FileEntry& entry) {
+      if (entry.path.empty()) return false;
+      return entry.path.has_root_name() &&
+             entry.path.has_root_directory() &&
+             entry.path.relative_path().empty();
+    };
+#else
+    auto isDriveEntry = [](const FileEntry&) { return false; };
+#endif
+
     std::sort(start, state.entries.end(), [&](const FileEntry& a, const FileEntry& b) {
       if (a.isDir != b.isDir) return a.isDir > b.isDir;
+      if (sortingRootLevel && isDriveEntry(a) != isDriveEntry(b)) {
+        return isDriveEntry(a);
+      }
       bool aLessB = false;
       if (state.sortMode == BrowserState::SortMode::Date) {
         try {
