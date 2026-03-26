@@ -159,6 +159,15 @@ struct InputCallbacks {
   std::function<void(BrowserState&, const std::string&)> onRefreshBrowser;
 };
 
+enum class BrowserSearchFocus {
+  None,
+  Filter,
+  PathSearch,
+};
+
+void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
+                          bool& dirty);
+
 enum class ActionStripItem {
   Radio,
   Hz50,

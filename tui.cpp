@@ -1000,6 +1000,7 @@ int runTui(Options o) {
     return false;
   };
 
+  bool dirty = true;
   if (!o.input.empty() && o.play && std::filesystem::exists(o.input)) {
     std::filesystem::path inputPath(o.input);
     if (!std::filesystem::is_directory(inputPath)) {
@@ -1030,9 +1031,7 @@ int runTui(Options o) {
             browser.selected = 0;
             browser.scrollRow = 0;
             browser.filter.clear();
-            browser.filterActive = false;
-            browser.pathSearch.clear();
-            browser.pathSearchActive = false;
+            setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
             refreshBrowser(browser, "");
           } else {
             tryStartAudioFile(inputPath);
@@ -1048,7 +1047,6 @@ int runTui(Options o) {
   screen.draw();
 
   bool running = true;
-  bool dirty = true;
   auto lastDraw = std::chrono::steady_clock::now();
   int progressBarX = -1;
   int progressBarY = -1;
@@ -1299,9 +1297,7 @@ int runTui(Options o) {
         browser.selected = 0;
         browser.scrollRow = 0;
         browser.filter.clear();
-        browser.filterActive = false;
-        browser.pathSearch.clear();
-        browser.pathSearchActive = false;
+        setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
         refreshBrowser(browser, "");
         return true;
       }
@@ -1358,9 +1354,7 @@ int runTui(Options o) {
   callbacks.onToggleMelodyVisualization = [&]() {
            melodyVisualizationEnabled = !melodyVisualizationEnabled;
            if (melodyVisualizationEnabled) {
-              browser.filterActive = false;
-              browser.pathSearchActive = false;
-              browser.pathSearch.clear();
+              setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
               breadcrumbHover = -1;
               actionHover = -1;
               clearMelodyHistory();
@@ -1388,9 +1382,7 @@ int runTui(Options o) {
          "M", true, [&]() {
            melodyVisualizationEnabled = !melodyVisualizationEnabled;
            if (melodyVisualizationEnabled) {
-           browser.filterActive = false;
-            browser.pathSearchActive = false;
-            browser.pathSearch.clear();
+              setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
             breadcrumbHover = -1;
             actionHover = -1;
             clearMelodyHistory();
@@ -1822,8 +1814,7 @@ int runTui(Options o) {
           if (paletteActive) {
             fileContextMenu.active = false;
           }
-          browser.pathSearchActive = false;
-          browser.pathSearch.clear();
+          setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
           paletteQuery.clear();
           paletteSelected = 0;
           paletteScroll = 0;
@@ -1832,13 +1823,17 @@ int runTui(Options o) {
         }
       }
       if (ev.type == InputEvent::Type::Mouse && clearBtnHover && isLeftClick) {
-        if (!browser.filterActive) {
+        if (browser.filterActive) {
+          browser.filter.clear();
+          setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, dirty);
+        } else if (browser.pathSearchActive) {
+          browser.pathSearch.clear();
+          setBrowserSearchFocus(browser, BrowserSearchFocus::PathSearch, dirty);
+        } else {
           browser.filterBackup = browser.filter;
+          browser.filter.clear();
+          setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, dirty);
         }
-        browser.filter.clear();
-        browser.filterActive = true;
-        browser.pathSearchActive = false;
-        browser.pathSearch.clear();
         if (callbacks.onRefreshBrowser) {
           callbacks.onRefreshBrowser(browser, "");
         }
@@ -2155,21 +2150,26 @@ int runTui(Options o) {
       }
       breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
       if (browserInteractionEnabled) {
+        const bool browserSearchFocused =
+            browser.filterActive || browser.pathSearchActive;
         Style searchStyle =
-            browser.filterActive
+            browserSearchFocused
                 ? kStyleSearchBarActive
                 : (searchBarHover ? kStyleSearchBarGlow : kStyleSearchBar);
         screen.writeRun(0, searchBarY, width, L' ', searchStyle);
         bool showSearchCursor =
-            browser.filterActive &&
+            browserSearchFocused &&
             ((std::chrono::duration_cast<std::chrono::milliseconds>(
                   now.time_since_epoch())
                   .count() /
               500) %
              2) == 0;
-        std::string searchText =
-            browser.filter.empty() ? "type to filter" : browser.filter;
-        std::string searchLine = " Search: " + searchText;
+        const bool usingPathSearch = browser.pathSearchActive;
+        const std::string searchText =
+            usingPathSearch ? browser.pathSearch
+                            : (browser.filter.empty() ? "type to filter"
+                                                     : browser.filter);
+        const std::string searchLine = std::string(usingPathSearch ? " Path: " : " Search: ") + searchText;
         int searchTextWidth = std::max(
             1, width - searchBarClearButtonWidth);
         std::string shownSearchLine = fitLine(searchLine, searchTextWidth);

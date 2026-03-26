@@ -34,12 +34,6 @@ bool isMouseInSearchBar(const MouseEvent& mouse, int searchBarY,
          mouse.pos.X >= 0 && mouse.pos.X < searchBarWidth;
 }
 
-void blurSearchBarFocus(BrowserState& browser, bool& dirty) {
-  if (!browser.filterActive) return;
-  browser.filterActive = false;
-  dirty = true;
-}
-
 int nearestSelectableEntry(const std::vector<FileEntry>& entries, int start,
                           int direction) {
   if (entries.empty()) return 0;
@@ -232,6 +226,40 @@ int actionStripIndexAt(const ActionStripLayout& layout, int x, int y) {
 }
 }  // namespace
 
+void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
+                          bool& dirty) {
+  if (focus == BrowserSearchFocus::None) {
+    if (!browser.filterActive && !browser.pathSearchActive) return;
+    browser.filterActive = false;
+    browser.pathSearchActive = false;
+    browser.pathSearch.clear();
+    dirty = true;
+    return;
+  }
+
+  if (focus == BrowserSearchFocus::Filter) {
+    const bool previouslyFocused = browser.filterActive;
+    const bool previouslyPathSearching = browser.pathSearchActive;
+    browser.filterActive = true;
+    if (browser.pathSearchActive) {
+      browser.pathSearchActive = false;
+      browser.pathSearch.clear();
+    }
+    if (!previouslyFocused || previouslyPathSearching) {
+      dirty = true;
+    }
+    return;
+  }
+
+  const bool previouslyFocused = browser.filterActive;
+  const bool previouslyPathSearching = browser.pathSearchActive;
+  browser.pathSearchActive = true;
+  browser.filterActive = false;
+  if (!previouslyPathSearching || previouslyFocused) {
+    dirty = true;
+  }
+}
+
 void handleInputEvent(const InputEvent& ev, BrowserState& browser,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
@@ -256,8 +284,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
   };
   auto navigateToDir = [&](const std::filesystem::path& dir) {
     browser.dir = dir;
-    browser.pathSearchActive = false;
-    browser.pathSearch.clear();
+    setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
     browser.selected = 0;
     if (callbacks.onRefreshBrowser) {
       callbacks.onRefreshBrowser(browser, "");
@@ -431,8 +458,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
 
     if (browserInteractionEnabled && browser.pathSearchActive) {
       if (key.vk == VK_ESCAPE || key.vk == VK_RETURN) {
-        browser.pathSearchActive = false;
-        browser.pathSearch.clear();
+        setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
         dirty = true;
         return;
       }
@@ -466,15 +492,13 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     if (browserInteractionEnabled && browser.filterActive) {
       if (key.vk == VK_ESCAPE) {
         browser.filter = browser.filterBackup;
-        browser.filterActive = false;
+        setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
         if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
-        dirty = true;
         return;
       }
       if (key.vk == VK_RETURN) {
-        browser.filterActive = false;
+        setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
         if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
-        dirty = true;
         return;
       }
       if (browserBackKey) {
@@ -502,26 +526,23 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
 
     if (browserInteractionEnabled && ctrl &&
         (key.vk == 'G' || key.ch == 'g' || key.ch == 'G')) {
-      browser.filterActive = false;
-      browser.pathSearchActive = true;
+      setBrowserSearchFocus(browser, BrowserSearchFocus::PathSearch, dirty);
       browser.pathSearch.clear();
       dirty = true;
       return;
     }
     if (browserInteractionEnabled && ctrl &&
         (key.vk == 'F' || key.ch == 'f' || key.ch == 'F')) {
-      browser.pathSearchActive = false;
-      browser.pathSearch.clear();
       browser.filterBackup = browser.filter;
-      browser.filterActive = true;
+      setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, dirty);
+      browser.pathSearch.clear();
       dirty = true;
       return;
     }
     if (browserInteractionEnabled && (key.vk == VK_DIVIDE || key.ch == '/')) {
-      browser.pathSearchActive = false;
-      browser.pathSearch.clear();
       browser.filterBackup = browser.filter;
-      browser.filterActive = true;
+      setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, dirty);
+      browser.pathSearch.clear();
       dirty = true;
       return;
     }
@@ -657,10 +678,12 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     bool rightPressed = (mouse.buttonState & RIGHTMOST_BUTTON_PRESSED) != 0;
     bool hoveredSearch = browserInteractionEnabled &&
                          isMouseInSearchBar(mouse, searchBarY, searchBarWidth);
-    if (browser.filterActive && browserInteractionEnabled &&
+    if ((browser.filterActive || browser.pathSearchActive) &&
+        browserInteractionEnabled &&
         (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_WHEELED) &&
-        !hoveredSearch && (leftPressed || rightPressed || mouse.eventFlags == MOUSE_WHEELED)) {
-      blurSearchBarFocus(browser, dirty);
+        !hoveredSearch &&
+        (leftPressed || rightPressed || mouse.eventFlags == MOUSE_WHEELED)) {
+      setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
     }
     if (searchBarHover != hoveredSearch) {
       searchBarHover = hoveredSearch;
@@ -723,9 +746,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     if (browserInteractionEnabled && leftPressed && mouse.eventFlags == 0 &&
         hoveredSearch) {
       browser.filterBackup = browser.filter;
-      browser.filterActive = true;
-      browser.pathSearchActive = false;
-      browser.pathSearch.clear();
+      setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, dirty);
       dirty = true;
       return;
     }
