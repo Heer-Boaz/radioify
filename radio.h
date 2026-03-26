@@ -357,6 +357,7 @@ struct AMDetector {
 
   float audioRect = 0.0f;
   float avcRect = 0.0f;
+  float detectorNode = 0.0f;
   float audioEnv = 0.0f;
   float avcEnv = 0.0f;
   float afcError = 0.0f;
@@ -1119,6 +1120,8 @@ struct RadioOutputClipNode {
     float loFrequencyHz = 0.0f;
     float rfPhase = 0.0f;
     float loPhase = 0.0f;
+    float stage1OffsetHz = 0.0f;
+    float stage2OffsetHz = 0.0f;
     float sourceDownmixPhase = 0.0f;
     float ifEnvelopePhase = 0.0f;
     SourceInputMode prevSourceMode = SourceInputMode::ComplexEnvelope;
