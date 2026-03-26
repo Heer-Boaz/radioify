@@ -372,6 +372,7 @@ struct AMDetector {
   float avcDiodeDrop = 0.0f;
   float audioJunctionSlopeVolts = 0.0f;
   float avcJunctionSlopeVolts = 0.0f;
+  float detectorStorageCapFarads = 0.0f;
   float detectorPlateCouplingCapFarads = 0.0f;
   float audioChargeResistanceOhms = 0.0f;
   float audioDischargeResistanceOhms = 0.0f;
@@ -405,6 +406,7 @@ struct AMDetector {
   float processEnvelope(float signalI,
                         float signalQ,
                         float ifNoiseAmp,
+                        float audioLoadResistanceOhms,
                         float ifCrackleAmp = 0.0f,
                         float ifCrackleRate = 0.0f);
 };
@@ -884,6 +886,14 @@ struct RadioOutputClipNode {
   struct IdentityState {
     uint32_t seed = 0x1937620u;
     float driftDepth = 0.0f;
+    float frontEndAntennaDrift = 1.0f;
+    float frontEndRfDrift = 1.0f;
+    float mixerDriveDrift = 1.0f;
+    float mixerBiasDrift = 1.0f;
+    float ifPrimaryDrift = 1.0f;
+    float ifSecondaryDrift = 1.0f;
+    float ifCouplingDrift = 1.0f;
+    float detectorLoadDrift = 1.0f;
   } identity;
 
   struct CalibrationStageMetrics {
@@ -1097,6 +1107,9 @@ struct RadioOutputClipNode {
     float gridSoftnessVolts = 0.0f;
     float plateResistanceOhms = 0.0f;
     float operatingPointToleranceVolts = 35.0f;
+    float mixedBaseGridVolts = 0.0f;
+    float conversionGain = 1.0f;
+    float inputDriveEnv = 0.0f;
   } mixer;
 
   struct IFStripNodeState {
@@ -1124,6 +1137,22 @@ struct RadioOutputClipNode {
     float stage2OffsetHz = 0.0f;
     float sourceDownmixPhase = 0.0f;
     float ifEnvelopePhase = 0.0f;
+    float detectorInputI = 0.0f;
+    float detectorInputQ = 0.0f;
+    float stage1DriveEnv = 0.0f;
+    float stage2DriveEnv = 0.0f;
+    float stage1RingI = 0.0f;
+    float stage1RingQ = 0.0f;
+    float stage2RingI = 0.0f;
+    float stage2RingQ = 0.0f;
+    float stage1PrevOutI = 0.0f;
+    float stage1PrevOutQ = 0.0f;
+    float stage2PrevOutI = 0.0f;
+    float stage2PrevOutQ = 0.0f;
+    float stage1RingDecay = 0.0f;
+    float stage2RingDecay = 0.0f;
+    float stage1RingMix = 0.0f;
+    float stage2RingMix = 0.0f;
     SourceInputMode prevSourceMode = SourceInputMode::ComplexEnvelope;
     float prevSourceI = 0.0f;
     float prevSourceQ = 0.0f;

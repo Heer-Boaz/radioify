@@ -10,7 +10,7 @@ autoTargetDb = -21.0
 autoMaxBoostDb = 2.5
 satClipDelta = 0.0
 satClipMinLevel = 0.0
-outputClipThreshold = 0.98
+outputClipThreshold = 0.995
 oversampleFactor = 2.0
 oversampleCutoffFraction = 0.45
 postNoiseMix = 0.35
@@ -75,7 +75,8 @@ audioDiodeDrop = 0.01
 avcDiodeDrop = 0.008
 audioJunctionSlopeVolts = 0.0045
 avcJunctionSlopeVolts = 0.004
-detectorPlateCouplingCapFarads = 0.00000000011
+detectorStorageCapFarads = 0.0000000033
+detectorPlateCouplingCapFarads = 0.0000000012
 audioChargeResistanceOhms = 5100.0
 audioDischargeResistanceOhms = 334261.8025751073
 avcChargeResistanceOhms = 1000000.0
@@ -177,7 +178,7 @@ outputTransformerSecondaryResistanceOhms = 0.32
 outputTransformerSecondaryShuntCapFarads = 0.0
 outputTransformerIntegrationSubsteps = 8
 outputLoadResistanceOhms = 3.9
-nominalOutputPowerWatts = 0.5
+nominalOutputPowerWatts = 0.3
 
 [audio-filter.default.noise]
 enableHumTone = false
@@ -246,13 +247,13 @@ rearLpHz = 3500.0
 
 [audio-filter.default.finallimiter]
 enabled = true
-threshold = 0.95
-lookaheadMs = 1.5
+threshold = 0.985
+lookaheadMs = 2.0
 attackMs = 0.5
-releaseMs = 100.0
+releaseMs = 80.0
 
 [audio-filter.default.output]
-digitalMakeupGain = 9.0
+digitalMakeupGain = 1.1
 
 [audio-filter.default.nodes]
 tuning = true
