@@ -253,7 +253,7 @@ attackMs = 0.5
 releaseMs = 80.0
 
 [audio-filter.default.output]
-digitalMakeupGain = 1.1
+digitalMakeupGain = 1.4
 
 [audio-filter.default.nodes]
 tuning = true

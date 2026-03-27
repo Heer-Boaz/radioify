@@ -282,6 +282,8 @@ struct NoiseInput {
   bool humToneEnabled = true;
 };
 
+struct Radio1938;
+
 struct NoiseHum {
   std::mt19937 rng{0x1938u};
   std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
@@ -406,7 +408,6 @@ struct AMDetector {
   float processEnvelope(float signalI,
                         float signalQ,
                         float ifNoiseAmp,
-                        float audioLoadResistanceOhms,
                         float ifCrackleAmp = 0.0f,
                         float ifCrackleRate = 0.0f);
 };

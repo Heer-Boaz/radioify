@@ -2209,10 +2209,7 @@ float SeriesRlcBandpass::process(float vin) {
       macroA10 * inductorCurrent + macroA11 * capacitorVoltage + macroB1 * vin;
   inductorCurrent = nextInductorCurrent;
   capacitorVoltage = nextCapacitorVoltage;
-  if (!std::isfinite(inductorCurrent) || !std::isfinite(capacitorVoltage)) {
-    reset();
-    return 0.0f;
-  }
+  assert(std::isfinite(inductorCurrent) && std::isfinite(capacitorVoltage));
   return inductorCurrent * outputResistanceOhms;
 }
 
@@ -2357,12 +2354,9 @@ float CoupledTunedTransformer::process(float vin) {
   secondaryCurrent = nextSecondaryCurrent;
   primaryCapVoltage = nextPrimaryCapVoltage;
   secondaryCapVoltage = nextSecondaryCapVoltage;
-  if (!std::isfinite(primaryCurrent) || !std::isfinite(primaryCapVoltage) ||
-      !std::isfinite(secondaryCurrent) ||
-      !std::isfinite(secondaryCapVoltage)) {
-    reset();
-    return 0.0f;
-  }
+  assert(std::isfinite(primaryCurrent) && std::isfinite(primaryCapVoltage) &&
+         std::isfinite(secondaryCurrent) &&
+         std::isfinite(secondaryCapVoltage));
 
   return secondaryCurrent * outputResistanceOhms;
 }
@@ -2420,19 +2414,19 @@ static CurrentDrivenTransformerSample projectNoShuntCap(
         projectedSecondaryCurrent = 0.0f;
       } else {
         float denom = a22 + invGs;
-        if (std::fabs(denom) < 1e-12f) return CurrentDrivenTransformerSample{};
+        assert(std::fabs(denom) >= 1e-12f);
         projectedSecondaryCurrent =
             (c2 - a21 * projectedPrimaryCurrent) / denom;
       }
     } else if (!secondaryConductive) {
       projectedSecondaryCurrent = 0.0f;
       float denom = a11 + invGp;
-      if (std::fabs(denom) < 1e-12f) return CurrentDrivenTransformerSample{};
+      assert(std::fabs(denom) >= 1e-12f);
       projectedPrimaryCurrent =
           (c1 + primaryDriveCurrentAmps * invGp) / denom;
     } else {
       float det = (a11 + invGp) * (a22 + invGs) - a12 * a21;
-      if (std::fabs(det) < 1e-12f) return CurrentDrivenTransformerSample{};
+      assert(std::fabs(det) >= 1e-12f);
       float rhs0 = c1 + primaryDriveCurrentAmps * invGp;
       float rhs1 = c2;
       projectedPrimaryCurrent =
@@ -2451,12 +2445,10 @@ static CurrentDrivenTransformerSample projectNoShuntCap(
                                     ? (-projectedSecondaryCurrent * invGs)
                                     : (a21 * projectedPrimaryCurrent +
                                        a22 * projectedSecondaryCurrent - c2);
-    if (!std::isfinite(projectedPrimaryCurrent) ||
-        !std::isfinite(projectedSecondaryCurrent) ||
-        !std::isfinite(projectedPrimaryVoltage) ||
-        !std::isfinite(projectedSecondaryVoltage)) {
-      return CurrentDrivenTransformerSample{};
-    }
+    assert(std::isfinite(projectedPrimaryCurrent) &&
+           std::isfinite(projectedSecondaryCurrent) &&
+           std::isfinite(projectedPrimaryVoltage) &&
+           std::isfinite(projectedSecondaryVoltage));
   }
 
   return CurrentDrivenTransformerSample{
@@ -2603,14 +2595,10 @@ static float solveOutputPrimaryVoltageAffine(
     float f =
         proj.base.primaryVoltage + proj.slope.primaryVoltage * drive - vp;
     float df = proj.slope.primaryVoltage * driveSlope - 1.0f;
-    if (!std::isfinite(df) || std::fabs(df) < 1e-9f) {
-      break;
-    }
+    assert(std::isfinite(df) && std::fabs(df) >= 1e-9f);
 
     vp -= f / df;
-    if (!std::isfinite(vp)) {
-      return initialVp;
-    }
+    assert(std::isfinite(vp));
   }
 
   return vp;
@@ -2879,6 +2867,7 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::project(
   float projectedSecondaryCurrent = secondaryCurrent;
   float projectedPrimaryVoltage = primaryVoltage;
   float projectedSecondaryVoltage = secondaryVoltage;
+  constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
 
   for (int step = 0; step < integrationSubsteps; ++step) {
     float system[4][4] = {
@@ -2913,19 +2902,17 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::project(
             (1.0f - 0.5f * dt * secondaryLoadConductance / secondaryCap) *
                 projectedSecondaryVoltage,
     };
-    float x[4] = {projectedPrimaryCurrent, projectedSecondaryCurrent,
-                  projectedPrimaryVoltage, projectedSecondaryVoltage};
-    if (!solveLinear4x4(system, b, x)) return {};
+    float x[4] = {kNaN, kNaN, kNaN, kNaN};
+    bool solved = solveLinear4x4(system, b, x);
+    assert(solved);
     projectedPrimaryCurrent = x[0];
     projectedSecondaryCurrent = x[1];
     projectedPrimaryVoltage = x[2];
     projectedSecondaryVoltage = x[3];
-    if (!std::isfinite(projectedPrimaryCurrent) ||
-        !std::isfinite(projectedSecondaryCurrent) ||
-        !std::isfinite(projectedPrimaryVoltage) ||
-        !std::isfinite(projectedSecondaryVoltage)) {
-      return {};
-    }
+    assert(std::isfinite(projectedPrimaryCurrent) &&
+           std::isfinite(projectedSecondaryCurrent) &&
+           std::isfinite(projectedPrimaryVoltage) &&
+           std::isfinite(projectedSecondaryVoltage));
   }
 
   return {projectedPrimaryVoltage, projectedSecondaryVoltage,
@@ -2939,13 +2926,10 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::process(
   CurrentDrivenTransformerSample projected =
       project(primaryDriveCurrentAmps, secondaryLoadResistanceOhms,
               primaryLoadResistanceOhms);
-  if (!std::isfinite(projected.primaryVoltage) ||
-      !std::isfinite(projected.secondaryVoltage) ||
-      !std::isfinite(projected.primaryCurrent) ||
-      !std::isfinite(projected.secondaryCurrent)) {
-    reset();
-    return {};
-  }
+  assert(std::isfinite(projected.primaryVoltage) &&
+         std::isfinite(projected.secondaryVoltage) &&
+         std::isfinite(projected.primaryCurrent) &&
+         std::isfinite(projected.secondaryCurrent));
   primaryVoltage = projected.primaryVoltage;
   secondaryVoltage = projected.secondaryVoltage;
   primaryCurrent = projected.primaryCurrent;
@@ -3491,7 +3475,6 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
 float AMDetector::processEnvelope(float signalI,
                                   float signalQ,
                                   float ifNoiseAmp,
-                                  float audioLoadResistanceOhms,
                                   float ifCrackleAmp,
                                   float ifCrackleRate) {
   constexpr float kInvSqrt2 = 0.70710678118f;
@@ -3557,12 +3540,8 @@ float AMDetector::processEnvelope(float signalI,
   float dt = 1.0f / std::max(fs, 1.0f);
   float storageCapG =
       std::max(detectorStorageCapFarads, 1e-12f) / dt;
-  float couplingCapG =
-      std::max(detectorPlateCouplingCapFarads, 1e-12f) / dt;
   float detectorLeakG =
       1.0f / std::max(audioDischargeResistanceOhms, 1e-6f);
-  float audioLoadG =
-      1.0f / std::max(audioLoadResistanceOhms, 1e-6f);
   float sourceG = 0.0f;
   if (audioRect > detectorNode) {
     sourceG = 1.0f / std::max(audioChargeResistanceOhms, 1e-6f);
@@ -3575,48 +3554,30 @@ float AMDetector::processEnvelope(float signalI,
   }
   float avcLeakG = 1.0f / std::max(avcDischargeResistanceOhms, 1e-6f);
   float avcCapG = std::max(avcFilterCapFarads, 1e-12f) / dt;
+  float a00 = storageCapG + detectorLeakG + sourceG + avcFeedG;
+  float a01 = -avcFeedG;
+  float a10 = -avcFeedG;
+  float a11 = avcFeedG + avcLeakG + avcCapG;
+  float b0 = storageCapG * detectorNode + sourceG * audioRect -
+             avcFeedG * delayedAvcThreshold;
+  float b1 = avcCapG * avcEnv + avcFeedG * delayedAvcThreshold;
+  float det = a00 * a11 - a01 * a10;
+  assert(std::fabs(det) >= 1e-12f);
 
-  float a[3][3] = {};
-  float b[3] = {};
-  constexpr int kDetectorNode = 0;
-  constexpr int kAudioNode = 1;
-  constexpr int kAvcNode = 2;
-
-  a[kDetectorNode][kDetectorNode] +=
-      storageCapG + detectorLeakG + couplingCapG + sourceG + avcFeedG;
-  a[kDetectorNode][kAudioNode] -= couplingCapG;
-  a[kDetectorNode][kAvcNode] -= avcFeedG;
-  b[kDetectorNode] += storageCapG * detectorNode;
-  b[kDetectorNode] += couplingCapG * (detectorNode - audioEnv);
-  b[kDetectorNode] += sourceG * audioRect;
-  b[kDetectorNode] -= avcFeedG * delayedAvcThreshold;
-
-  a[kAudioNode][kDetectorNode] -= couplingCapG;
-  a[kAudioNode][kAudioNode] += couplingCapG + audioLoadG;
-  b[kAudioNode] -= couplingCapG * (detectorNode - audioEnv);
-
-  a[kAvcNode][kDetectorNode] -= avcFeedG;
-  a[kAvcNode][kAvcNode] += avcFeedG + avcLeakG + avcCapG;
-  b[kAvcNode] += avcCapG * avcEnv + avcFeedG * delayedAvcThreshold;
-
-  float nodes[3] = {};
-  if (!solveLinear3x3(a, b, nodes)) {
-    reset();
-    return 0.0f;
-  }
-
-  detectorNode = std::max(nodes[kDetectorNode], 0.0f);
-  audioEnv = nodes[kAudioNode];
-  avcEnv = std::max(nodes[kAvcNode], 0.0f);
+  float solvedDetectorNode = (b0 * a11 - a01 * b1) / det;
+  float solvedAvcNode = (a00 * b1 - b0 * a10) / det;
+  detectorNode = std::max(solvedDetectorNode, 0.0f);
+  avcEnv = std::max(solvedAvcNode, 0.0f);
   avcRect = avcEnv;
+  assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
 
-  float audioOut = audioPostLp1.process(audioEnv);
-  audioOut = audioPostLp2.process(audioOut);
-  return audioOut;
+  audioEnv = audioPostLp1.process(detectorNode);
+  audioEnv = audioPostLp2.process(audioEnv);
+  return audioEnv;
 }
 
 float AMDetector::process(const AMDetectorSampleInput& in) {
-  return processEnvelope(in.signal, 0.0f, in.ifNoiseAmp, 1e6f,
+  return processEnvelope(in.signal, 0.0f, in.ifNoiseAmp,
                          in.ifCrackleAmp, in.ifCrackleRate);
 }
 
@@ -4067,18 +4028,6 @@ static std::array<float, 2> processEquivalentIfStage(float inI,
                                                      float& prevOutQ,
                                                      float& driveEnv);
 
-static inline void injectEquivalentCanResponse(float& ioI,
-                                               float& ioQ,
-                                               float scalar,
-                                               float mix) {
-  float magnitude = std::sqrt(ioI * ioI + ioQ * ioQ);
-  float dirI = (magnitude > 1e-6f) ? (ioI / magnitude) : 1.0f;
-  float dirQ = (magnitude > 1e-6f) ? (ioQ / magnitude) : 0.0f;
-  float response = mix * scalar;
-  ioI += response * dirI;
-  ioQ += response * dirQ;
-}
-
 void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
   setBandwidth(radio, radio.bwHz, radio.tuning.tuneOffsetHz);
 }
@@ -4170,6 +4119,32 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
       std::clamp(0.22f * stage1BandwidthHz, 90.0f, 0.08f * sampleRate);
   float stage2RingBwHz =
       std::clamp(0.18f * stage2BandwidthHz, 70.0f, 0.06f * sampleRate);
+  // These transformer "can" paths are an equivalent low-frequency memory
+  // model for the IF cans. They operate on envelope-drive deviations, not on
+  // the literal 470 kHz carrier, so tune them in the low-kHz region where the
+  // current sample rate can represent their ring-down safely.
+  float canPrimaryInductance =
+      18e-3f * std::max(primaryDrift, 0.65f);
+  float canSecondaryInductance =
+      22e-3f * std::max(secondaryDrift, 0.65f);
+  float interstageCanHz =
+      std::clamp(0.58f * stage1RingBwHz, 120.0f, 0.045f * sampleRate);
+  float outputCanHz =
+      std::clamp(0.58f * stage2RingBwHz, 100.0f, 0.040f * sampleRate);
+  float interstageCanPrimaryC =
+      resonantCapacitanceFarads(interstageCanHz, canPrimaryInductance);
+  float interstageCanSecondaryC = resonantCapacitanceFarads(
+      interstageCanHz * (0.96f + 0.08f * std::fabs(stage1Drift - 1.0f)),
+      canSecondaryInductance);
+  float outputCanPrimaryC =
+      resonantCapacitanceFarads(outputCanHz, canSecondaryInductance);
+  float outputCanSecondaryC = resonantCapacitanceFarads(
+      outputCanHz * (0.95f + 0.10f * std::fabs(stage2Drift - 1.0f)),
+      canSecondaryInductance * (0.94f + 0.08f * std::fabs(stage2Drift - 1.0f)));
+  float interstageCanResistance = seriesResistanceForBandwidth(
+      canPrimaryInductance, std::max(0.85f * stage1RingBwHz, 80.0f));
+  float outputCanResistance = seriesResistanceForBandwidth(
+      canSecondaryInductance, std::max(0.85f * stage2RingBwHz, 70.0f));
   float stage1RingTau = 1.0f / (kRadioTwoPi * std::max(stage1RingBwHz, 1.0f));
   float stage2RingTau = 1.0f / (kRadioTwoPi * std::max(stage2RingBwHz, 1.0f));
   ifStrip.stage1RingDecay =
@@ -4197,22 +4172,23 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
   ifStrip.secondaryResistanceOhms =
       seriesResistanceForBandwidth(secondaryInductance, stageBandwidthHz);
   int transformerSubsteps = std::clamp(ifStrip.oversampleFactor / 8, 1, 4);
-  float secondaryLoadResistance =
-      ifStrip.secondaryLoadResistanceOhms * secondaryDrift;
+  float canOutputScale =
+      std::clamp(0.18f + 0.30f * std::max(couplingDrift - 0.65f, 0.0f),
+                 0.18f, 0.40f);
   ifStrip.interstageTransformer.configure(
-      sampleRate, primaryInductance, ifStrip.primaryCapacitanceFarads,
-      ifStrip.primaryResistanceOhms, secondaryInductance,
-      ifStrip.secondaryCapacitanceFarads, ifStrip.secondaryResistanceOhms,
-      interstageCouplingCoeff, secondaryLoadResistance, transformerSubsteps);
+      sampleRate, canPrimaryInductance, interstageCanPrimaryC,
+      interstageCanResistance, canSecondaryInductance, interstageCanSecondaryC,
+      interstageCanResistance, interstageCouplingCoeff, canOutputScale,
+      transformerSubsteps);
   ifStrip.outputTransformer.configure(
-      sampleRate, secondaryInductance, ifStrip.secondaryCapacitanceFarads,
-      ifStrip.secondaryResistanceOhms,
-      secondaryInductance * (0.96f + 0.06f * std::fabs(stage2Drift - 1.0f)),
-      resonantCapacitanceFarads(ifStrip.ifCenterHz + 0.5f * ifStrip.stage2OffsetHz,
-                                secondaryInductance),
-      ifStrip.secondaryResistanceOhms *
-          (1.05f + 0.10f * std::fabs(stage2Drift - 1.0f)),
-      outputCouplingCoeff, secondaryLoadResistance, transformerSubsteps);
+      sampleRate, canSecondaryInductance, outputCanPrimaryC,
+      outputCanResistance,
+      canSecondaryInductance *
+          (0.94f + 0.08f * std::fabs(stage2Drift - 1.0f)),
+      outputCanSecondaryC,
+      outputCanResistance *
+          (1.03f + 0.08f * std::fabs(stage2Drift - 1.0f)),
+      outputCouplingCoeff, canOutputScale, transformerSubsteps);
 
   float senseLow = ifStrip.ifCenterHz - 0.5f * safeBw;
   float senseHigh = ifStrip.ifCenterHz + 0.5f * safeBw;
@@ -4250,6 +4226,10 @@ float RadioIFStripNode::process(Radio1938& radio,
     ifStrip.stage1RingQ = 0.0f;
     ifStrip.stage2RingI = 0.0f;
     ifStrip.stage2RingQ = 0.0f;
+    ifStrip.bp1.reset();
+    ifStrip.bp2.reset();
+    ifStrip.interstageTransformer.reset();
+    ifStrip.outputTransformer.reset();
   }
   float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
   float rfGain =
@@ -4285,21 +4265,8 @@ float RadioIFStripNode::process(Radio1938& radio,
   ifStrip.ifEnvelopePhase = wrapPhase(tunePhase + tuneStep);
 
   float mixerConversionGain = mixer.conversionGain;
-  if (!std::isfinite(mixerConversionGain) ||
-      std::fabs(mixerConversionGain) < 1e-6f) {
-    FixedPlatePentodeEvaluator mixerPlateCurrentForGrid =
-        prepareFixedPlatePentodeEvaluator(
-            mixer.plateQuiescentVolts, mixer.screenVolts, mixer.biasVolts,
-            mixer.modelCutoffVolts, mixer.plateQuiescentVolts,
-            mixer.screenVolts, mixer.plateQuiescentCurrentAmps,
-            mixer.mutualConductanceSiemens, mixer.plateKneeVolts,
-            mixer.gridSoftnessVolts);
-    mixerConversionGain =
-        estimateMixerEnvelopeConversionGain(mixerPlateCurrentForGrid,
-                                            mixer.mixedBaseGridVolts,
-                                            mixer.loGridDriveVolts) *
-        mixer.rfGridDriveVolts * mixer.acLoadResistanceOhms;
-  }
+  assert(std::isfinite(mixerConversionGain) &&
+         std::fabs(mixerConversionGain) >= 1e-6f);
   float ifEnvI = rotatedEnvI * mixerConversionGain * ifGain;
   float ifEnvQ = rotatedEnvQ * mixerConversionGain * ifGain;
   float tunedBw = std::max(radio.tuning.tunedBw, 1.0f);
@@ -4317,26 +4284,13 @@ float RadioIFStripNode::process(Radio1938& radio,
       ifStrip.stage1RingDecay,
       ifStrip.stage1RingMix, ifStrip.stage1RingI, ifStrip.stage1RingQ,
       ifStrip.stage1PrevOutI, ifStrip.stage1PrevOutQ, ifStrip.stage1DriveEnv);
-  float stage1Magnitude =
-      std::sqrt(ifStage1[0] * ifStage1[0] + ifStage1[1] * ifStage1[1]);
-  float interstageKick =
-      ifStrip.interstageTransformer.process(stage1Magnitude - ifStrip.stage1DriveEnv);
-  float interstageCan = ifStrip.bp1.process(interstageKick);
-  injectEquivalentCanResponse(ifStage1[0], ifStage1[1], interstageCan,
-                              0.07f + 0.03f * mistuneT);
   auto ifStage2 = processEquivalentIfStage(
       ifStage1[0] + 0.06f * ifEnvI, ifStage1[1] + 0.06f * ifEnvQ,
       ifStrip.loPhase, stage2Step, sampleRate, ifStrip.outputEnvelope,
       stage2Drive, 0.7f * stageAsymmetry, 0.03f, ifStrip.stage2RingDecay,
       ifStrip.stage2RingMix, ifStrip.stage2RingI, ifStrip.stage2RingQ,
       ifStrip.stage2PrevOutI, ifStrip.stage2PrevOutQ, ifStrip.stage2DriveEnv);
-  float stage2Magnitude =
-      std::sqrt(ifStage2[0] * ifStage2[0] + ifStage2[1] * ifStage2[1]);
-  float outputKick =
-      ifStrip.outputTransformer.process(stage2Magnitude - ifStrip.stage2DriveEnv);
-  float outputCan = ifStrip.bp2.process(outputKick);
-  injectEquivalentCanResponse(ifStage2[0], ifStage2[1], outputCan,
-                              0.09f + 0.04f * mistuneT);
+  assert(std::isfinite(ifStage2[0]) && std::isfinite(ifStage2[1]));
   ifStrip.detectorInputI = ifStage2[0];
   ifStrip.detectorInputQ = ifStage2[1];
   radio.sourceFrame.setComplexEnvelope(ifStage2[0], ifStage2[1]);
@@ -4460,29 +4414,19 @@ float RadioDemodNode::process(Radio1938& radio,
                               float y,
                               const RadioSampleContext& ctx) {
   auto& demod = radio.demod;
-  float audioLoadResistanceOhms = 1e6f;
-  if (radio.receiverCircuit.enabled) {
-    audioLoadResistanceOhms = std::max(
-        radio.receiverCircuit.volumeControlResistanceOhms,
-        radio.receiverCircuit.gridLeakResistanceOhms);
-  }
-  audioLoadResistanceOhms *= std::max(radio.identity.detectorLoadDrift, 0.5f);
   if (radio.ifStrip.enabled) {
     y = demod.am.processEnvelope(radio.ifStrip.detectorInputI,
                                  radio.ifStrip.detectorInputQ,
                                  ctx.derived.demodIfNoiseAmp,
-                                 audioLoadResistanceOhms,
                                  ctx.derived.demodIfCrackleAmp,
                                  ctx.derived.demodIfCrackleRate);
   } else if (radio.sourceFrame.mode == SourceInputMode::ComplexEnvelope) {
     y = demod.am.processEnvelope(radio.sourceFrame.i, radio.sourceFrame.q,
                                  ctx.derived.demodIfNoiseAmp,
-                                 audioLoadResistanceOhms,
                                  ctx.derived.demodIfCrackleAmp,
                                  ctx.derived.demodIfCrackleRate);
   } else {
     y = demod.am.processEnvelope(y, 0.0f, ctx.derived.demodIfNoiseAmp,
-                                 audioLoadResistanceOhms,
                                  ctx.derived.demodIfCrackleAmp,
                                  ctx.derived.demodIfCrackleRate);
   }
@@ -4600,20 +4544,15 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   b[kWiperNode] += couplingGc * receiver.couplingCapVoltage;
   b[kGridNode] -= couplingGc * receiver.couplingCapVoltage;
   float nodeVoltages[3] = {};
-  if (!solveLinear3x3(a, b, nodeVoltages)) {
-    reset(radio);
-    return 0.0f;
-  }
+  bool solved = solveLinear3x3(a, b, nodeVoltages);
+  assert(solved);
   receiver.gridVoltage = nodeVoltages[kGridNode];
   receiver.volumeControlTapVoltage = nodeVoltages[kTapNode];
   receiver.couplingCapVoltage =
       nodeVoltages[kWiperNode] - nodeVoltages[kGridNode];
-  if (!std::isfinite(receiver.couplingCapVoltage) ||
-      !std::isfinite(receiver.gridVoltage) ||
-      !std::isfinite(receiver.volumeControlTapVoltage)) {
-    reset(radio);
-    return 0.0f;
-  }
+  assert(std::isfinite(receiver.couplingCapVoltage) &&
+         std::isfinite(receiver.gridVoltage) &&
+         std::isfinite(receiver.volumeControlTapVoltage));
   float out = 0.0f;
   float plateCurrent = 0.0f;
   assert(receiver.tubeTriodeConnected &&
@@ -5667,8 +5606,9 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.demod.am.avcDiodeDrop = 0.0080f;
   radio.demod.am.audioJunctionSlopeVolts = 0.0045f;
   radio.demod.am.avcJunctionSlopeVolts = 0.0040f;
-  // Reduced-order 6H6 detector network: explicit detector storage plus a
-  // separate audio coupling path so AVC and audio loading share one node.
+  // Reduced-order 6H6 detector network: detector storage and delayed AVC live
+  // here; the volume/loudness/coupling path stays entirely in the first-audio
+  // receiver stage.
   radio.demod.am.detectorStorageCapFarads = 3.3e-9f;
   radio.demod.am.detectorPlateCouplingCapFarads = 1.2e-9f;
   radio.demod.am.audioChargeResistanceOhms = 5100.0f;
@@ -5811,8 +5751,10 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.output.digitalReferenceSpeakerVoltsPeak = std::sqrt(
       2.0f * radio.power.nominalOutputPowerWatts *
       radio.power.outputLoadResistanceOhms);
-  // Keep only a small digital trim after calibrating the physical reference.
-  radio.output.digitalMakeupGain = 1.10f;
+  // Temporary A/B trim while the physical gain staging is still being
+  // recalibrated. This keeps comparison against the older voicing honest
+  // without leaning on the limiter.
+  radio.output.digitalMakeupGain = 1.40f;
 
   // --- Global oversampling and output clip settings ---
   // The speaker, limiter and output-clip stages use processOversampled2x, so

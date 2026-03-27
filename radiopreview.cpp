@@ -76,6 +76,15 @@ void PcmToIfPreviewModulator::processBlock(Radio1938& radio,
       radio.processIfReal(monoScratch.data(), batch);
       remaining -= batch;
     }
+    // Do not carry a fully charged AVC/AFC state from the carrier-only warmup
+    // into the first audible preview block.
+    radio.demod.am.avcRect = 0.0f;
+    radio.demod.am.avcEnv = 0.0f;
+    radio.demod.am.afcError = 0.0f;
+    radio.controlSense.reset();
+    radio.controlBus.reset();
+    radio.tuning.afcCorrectionHz = 0.0f;
+    radio.diagnostics.reset();
     warmedUp = true;
   }
 
