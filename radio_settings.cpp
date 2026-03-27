@@ -525,10 +525,6 @@ static bool applyRadioSettingsValue(Radio1938& radio,
       return setFloat(radio.demod.am.detectorStorageCapFarads,
                       "demod.detectorStorageCapFarads");
     }
-    if (keyNorm == "detectorplatecouplingcapfarads") {
-      return setFloat(radio.demod.am.detectorPlateCouplingCapFarads,
-                      "demod.detectorPlateCouplingCapFarads");
-    }
     if (keyNorm == "audiochargeresistanceohms") {
       return setFloat(radio.demod.am.audioChargeResistanceOhms,
                       "demod.audioChargeResistanceOhms");

@@ -74,7 +74,6 @@ avcDiodeDrop = 0.008
 audioJunctionSlopeVolts = 0.0045
 avcJunctionSlopeVolts = 0.004
 detectorStorageCapFarads = 0.0000000033
-detectorPlateCouplingCapFarads = 0.0000000012
 audioChargeResistanceOhms = 5100.0
 audioDischargeResistanceOhms = 334261.8025751073
 avcChargeResistanceOhms = 1000000.0

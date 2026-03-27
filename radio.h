@@ -348,15 +348,12 @@ struct AMDetector {
   float audioJunctionSlopeVolts = 0.0f;
   float avcJunctionSlopeVolts = 0.0f;
   float detectorStorageCapFarads = 0.0f;
-  float detectorPlateCouplingCapFarads = 0.0f;
   float audioChargeResistanceOhms = 0.0f;
   float audioDischargeResistanceOhms = 0.0f;
   float avcChargeResistanceOhms = 0.0f;
   float avcDischargeResistanceOhms = 0.0f;
   float avcFilterCapFarads = 0.0f;
 
-  float audioChargeCoeff = 0.0f;
-  float audioReleaseCoeff = 0.0f;
   float avcChargeCoeff = 0.0f;
   float avcReleaseCoeff = 0.0f;
   float controlVoltageRef = 0.0f;
@@ -1147,6 +1144,7 @@ struct RadioOutputClipNode {
     float gridLeakResistanceOhms = 0.0f;
     float couplingCapVoltage = 0.0f;
     float gridVoltage = 0.0f;
+    bool inputNetworkDrivenFromDetector = false;
     bool warmStartPending = true;
     float tubePlateSupplyVolts = 0.0f;
     float tubePlateDcVolts = 0.0f;
