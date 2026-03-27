@@ -1506,5 +1506,16 @@ bool applyRadioSettingsIni(Radio1938& radio,
     }
     return false;
   }
-  return applyRadioSettingsFromIniFile(radio, path, presetName, error);
+  bool wasInitialized = radio.initialized;
+  int channels = radio.channels;
+  float sampleRate = radio.sampleRate;
+  float bwHz = radio.bwHz;
+  float noiseWeight = radio.noiseWeight;
+  if (!applyRadioSettingsFromIniFile(radio, path, presetName, error)) {
+    return false;
+  }
+  if (wasInitialized) {
+    radio.init(channels, sampleRate, bwHz, noiseWeight);
+  }
+  return true;
 }
