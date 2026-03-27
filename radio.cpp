@@ -6044,33 +6044,33 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.drive = 1.0f;
   radio.speakerStage.speaker.suspensionHz = 65.0f;
   radio.speakerStage.speaker.suspensionQ = 0.90f;
-  radio.speakerStage.speaker.suspensionGainDb = 3.5f;
+  radio.speakerStage.speaker.suspensionGainDb = 2.2f;
   radio.speakerStage.speaker.coneBodyHz = 1200.0f;
   radio.speakerStage.speaker.coneBodyQ = 0.50f;
-  radio.speakerStage.speaker.coneBodyGainDb = 1.0f;
-  radio.speakerStage.speaker.topLpHz = 4800.0f;
+  radio.speakerStage.speaker.coneBodyGainDb = 0.25f;
+  radio.speakerStage.speaker.topLpHz = 3800.0f;
   radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
   radio.speakerStage.speaker.drive = 1.0f;
   radio.speakerStage.speaker.limit = 0.0f;
-  radio.speakerStage.speaker.excursionRef = 6.0f;
-  radio.speakerStage.speaker.complianceLossDepth = 0.08f;
+  radio.speakerStage.speaker.excursionRef = 8.0f;
+  radio.speakerStage.speaker.complianceLossDepth = 0.05f;
 
   // --- Cabinet: large floor-model console (Philco 37-116) ---
   radio.cabinet.enabled = true;
   radio.cabinet.panelHz = 180.0f;
-  radio.cabinet.panelQ = 1.5f;
-  radio.cabinet.panelGainDb = 2.5f;
+  radio.cabinet.panelQ = 1.25f;
+  radio.cabinet.panelGainDb = 1.0f;
   radio.cabinet.chassisHz = 650.0f;
-  radio.cabinet.chassisQ = 0.90f;
-  radio.cabinet.chassisGainDb = -1.5f;
+  radio.cabinet.chassisQ = 0.80f;
+  radio.cabinet.chassisGainDb = -0.8f;
   radio.cabinet.cavityDipHz = 900.0f;
-  radio.cabinet.cavityDipQ = 2.0f;
-  radio.cabinet.cavityDipGainDb = -3.0f;
-  radio.cabinet.grilleLpHz = 6200.0f;
+  radio.cabinet.cavityDipQ = 1.6f;
+  radio.cabinet.cavityDipGainDb = -1.6f;
+  radio.cabinet.grilleLpHz = 5000.0f;
   radio.cabinet.rearDelayMs = 0.90f;
-  radio.cabinet.rearMix = 0.15f;
+  radio.cabinet.rearMix = 0.08f;
   radio.cabinet.rearHpHz = 200.0f;
-  radio.cabinet.rearLpHz = 3500.0f;
+  radio.cabinet.rearLpHz = 2600.0f;
 
   // --- Final limiter (digital safety brick-wall) ---
   radio.finalLimiter.enabled = true;

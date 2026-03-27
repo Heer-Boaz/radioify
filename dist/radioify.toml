@@ -218,32 +218,32 @@ humSecondHarmonicMix = 0.42
 drive = 1.0
 suspensionHz = 65.0
 suspensionQ = 0.9
-suspensionGainDb = 3.5
+suspensionGainDb = 2.2
 coneBodyHz = 1200.0
 coneBodyQ = 0.5
-coneBodyGainDb = 1.0
-topLpHz = 4800.0
+coneBodyGainDb = 0.25
+topLpHz = 3800.0
 filterQ = 0.707
 limit = 0.0
-excursionRef = 6.0
-complianceLossDepth = 0.08
+excursionRef = 8.0
+complianceLossDepth = 0.05
 
 [audio-filter.default.cabinet]
 enabled = true
 panelHz = 180.0
-panelQ = 1.5
-panelGainDb = 2.5
+panelQ = 1.25
+panelGainDb = 1.0
 chassisHz = 650.0
-chassisQ = 0.9
-chassisGainDb = -1.5
+chassisQ = 0.8
+chassisGainDb = -0.8
 cavityDipHz = 900.0
-cavityDipQ = 2.0
-cavityDipGainDb = -3.0
-grilleLpHz = 6200.0
+cavityDipQ = 1.6
+cavityDipGainDb = -1.6
+grilleLpHz = 5000.0
 rearDelayMs = 0.9
-rearMix = 0.15
+rearMix = 0.08
 rearHpHz = 200.0
-rearLpHz = 3500.0
+rearLpHz = 2600.0
 
 [audio-filter.default.finallimiter]
 enabled = true
