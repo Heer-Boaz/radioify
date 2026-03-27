@@ -4328,9 +4328,12 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
   float tunedCanEnvelopeQ =
       std::clamp(0.82f + 0.85f * couplingMean - 0.30f * loadSeverity, 0.70f,
                  1.10f);
+  // This stage is only the analytic downmix image rejector. It must stay
+  // substantially wider than the loaded IF-can equivalent so the IF can, not a
+  // cascaded helper LP, sets the audio sideband bandwidth.
   float sourceEnvelopeLpHz =
-      std::clamp(1.85f * tunedCanEnvelopeBandwidthHz,
-                 tunedCanEnvelopeBandwidthHz, 0.22f * sampleRate);
+      std::clamp(std::max(4.0f * safeAudioBw, 0.72f * ifStrip.sourceCarrierHz),
+                 2.0f * tunedCanEnvelopeBandwidthHz, 0.42f * sampleRate);
   // The IF strip stays a reduced-order baseband model, but its single complex
   // transfer is still derived from the tuned-can bandwidth, coupling, loading,
   // and primary/secondary mismatch. The user-facing bwHz remains an audio
@@ -5654,10 +5657,9 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // Reduced-order 6H6 detector network: detector storage and delayed AVC live
   // here, while the explicit volume/loudness/grid-coupling load is solved in
   // the first-audio receiver stage and applied directly back onto the detector.
-  radio.demod.am.detectorStorageCapFarads = 3.3e-9f;
+  radio.demod.am.detectorStorageCapFarads = 350e-12f;
   radio.demod.am.audioChargeResistanceOhms = 5100.0f;
-  radio.demod.am.audioDischargeResistanceOhms =
-      51000.0f + parallelResistance(330000.0f, 2000000.0f);
+  radio.demod.am.audioDischargeResistanceOhms = 160000.0f;
   radio.demod.am.avcChargeResistanceOhms = 1000000.0f;
   radio.demod.am.avcDischargeResistanceOhms =
       parallelResistance(1000000.0f, 1000000.0f);
