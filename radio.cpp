@@ -1252,8 +1252,8 @@ static KorenTriodeModel fitKorenTriodeModel(double vgkQ,
   double u[3] = {std::log(kg1Init), std::log(kpInit), std::log(kvbInit)};
   double bestU[3] = {u[0], u[1], u[2]};
   double bestNorm = std::numeric_limits<double>::infinity();
-  constexpr double kModelLogMin = std::log(1e-12);
-  constexpr double kModelLogMax = std::log(1e12);
+  const double kModelLogMin = std::log(1e-12);
+  const double kModelLogMax = std::log(1e12);
 
   auto clampModelLog = [&](double x) {
     return std::clamp(x, kModelLogMin, kModelLogMax);
@@ -5937,10 +5937,12 @@ static void applyPhilco37116Preset(Radio1938& radio) {
       radio.power.tubePlateCurrentAmps *
           radio.power.interstagePrimaryResistanceOhms;
   // The 6F6 driver must voltage-step up into the fixed-bias 6B4G pair; the
-  // earlier 1:1.4 equivalent left the output grids an order of magnitude shy
-  // of the AB1 drive range. A conservative 1:3 step-up keeps the reduced-order
-  // grids comfortably below positive conduction while restoring realistic drive.
-  radio.power.interstageTurnsRatioPrimaryToSecondary = 1.0f / 3.0f;
+  // earlier 1:1.4 and 1:3 equivalents still left each 6B4 grid far below the
+  // AB1 drive window. In this center-tapped model the ratio is primary to full
+  // secondary, so a 1:8 transformer means about 1:4 step-up to each grid half.
+  // That is the first clean range where the 6B4 pair stops being materially
+  // underdriven without pushing either grid positive.
+  radio.power.interstageTurnsRatioPrimaryToSecondary = 1.0f / 8.0f;
   radio.power.interstagePrimaryCoreLossResistanceOhms = 220000.0f;
   // The pF stray capacitances are ultrasonic details in the real chassis.
   // In this 48 kHz reduced-order audio model they destabilize the transformer
