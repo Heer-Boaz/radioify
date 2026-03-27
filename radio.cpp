@@ -4081,21 +4081,12 @@ float RadioMixerNode::process(Radio1938& radio,
   float envCoeff = std::exp(-1.0f / (sampleRate * 0.0015f));
   mixer.inputDriveEnv =
       envCoeff * mixer.inputDriveEnv + (1.0f - envCoeff) * signalMagnitude;
-  float overloadT = clampf(mixer.inputDriveEnv * rfGridDrive, 0.0f, 1.5f);
-  float compression = 1.0f / (1.0f + 0.42f * overloadT);
-  float satDrive = 1.0f + 0.45f * overloadT + 0.10f * avcT;
-  mixer.conversionGain *= 0.90f + 0.12f * compression;
 
   if (radio.sourceFrame.mode == SourceInputMode::ComplexEnvelope) {
-    float outI = asymmetricSaturate(radio.sourceFrame.i * compression, satDrive,
-                                    0.010f, 0.22f);
-    float outQ = asymmetricSaturate(radio.sourceFrame.q * compression, satDrive,
-                                    -0.006f, 0.18f);
-    radio.sourceFrame.setComplexEnvelope(outI, outQ);
-    return outI;
+    return radio.sourceFrame.i;
   }
 
-  return asymmetricSaturate(y * compression, satDrive, 0.008f, 0.16f);
+  return y;
 }
 
 static int computeIfOversampleFactor(float outputFs,
@@ -4572,31 +4563,21 @@ static std::array<float, 2> processEquivalentIfStage(float inI,
   float magnitudeIn = std::sqrt(inI * inI + inQ * inQ);
   float envCoeff = std::exp(-1.0f / (std::max(sampleRate, 1.0f) * 0.0035f));
   driveEnv = envCoeff * driveEnv + (1.0f - envCoeff) * magnitudeIn;
-  float dynamicStep =
-      baseStep * (1.0f + 0.12f * clampf(driveEnv, 0.0f, 1.5f) *
-                              std::max(saturationDrive, 0.0f));
   auto mixed = rotateComplexEnvelope(inI, inQ, phase);
   auto filtered = resonator.process(mixed[0], mixed[1]);
   auto staged = unrotateComplexEnvelope(filtered[0], filtered[1], phase);
-  phase = wrapPhase(phase + dynamicStep);
+  phase = wrapPhase(phase + baseStep);
 
   float dryMix = clampf(leakMix, 0.0f, 0.25f);
   float wetMix = 1.0f - dryMix;
   float outI = wetMix * staged[0] + dryMix * inI;
   float outQ = wetMix * staged[1] + dryMix * inQ;
-  float magnitude = std::sqrt(outI * outI + outQ * outQ);
-  float compression = 1.0f / (1.0f + saturationDrive * magnitude);
-  float drive = 1.0f + 0.55f * saturationDrive;
-  outI = asymmetricSaturate(outI * compression, drive, 0.028f * asymmetry,
-                            std::fabs(asymmetry));
-  outQ = asymmetricSaturate(outQ * compression, drive, -0.016f * asymmetry,
-                            std::fabs(asymmetry));
-  float exciteScale = 0.12f + 0.20f * clampf(driveEnv, 0.0f, 1.5f);
-  auto rotatedRing = rotateComplexEnvelope(ringI, ringQ, dynamicStep);
-  ringI = ringDecay * rotatedRing[0] + exciteScale * (outI - prevOutI);
-  ringQ = ringDecay * rotatedRing[1] + exciteScale * (outQ - prevOutQ);
-  outI += ringMix * ringI;
-  outQ += ringMix * ringQ;
+  (void)saturationDrive;
+  (void)asymmetry;
+  (void)ringDecay;
+  (void)ringMix;
+  ringI = 0.0f;
+  ringQ = 0.0f;
   prevOutI = outI;
   prevOutQ = outQ;
   return {outI, outQ};
@@ -5828,7 +5809,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // 470 kHz strip. Calibrate it to land the detector audio in the few-hundred
   // millivolt range before the 6J5/6F6/6B4 chain, rather than recovering that
   // level digitally after the speaker model.
-  radio.ifStrip.stageGain = 4.0f;
+  radio.ifStrip.stageGain = 2.0f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.primaryInductanceHenries = 220e-6f;
