@@ -5809,7 +5809,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // 470 kHz strip. Calibrate it to land the detector audio in the few-hundred
   // millivolt range before the 6J5/6F6/6B4 chain, rather than recovering that
   // level digitally after the speaker model.
-  radio.ifStrip.stageGain = 1.5f;
+  radio.ifStrip.stageGain = 2.0f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.primaryInductanceHenries = 220e-6f;
