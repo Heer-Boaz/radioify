@@ -5809,7 +5809,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // 470 kHz strip. Calibrate it to land the detector audio in the few-hundred
   // millivolt range before the 6J5/6F6/6B4 chain, rather than recovering that
   // level digitally after the speaker model.
-  radio.ifStrip.stageGain = 2.0f;
+  radio.ifStrip.stageGain = 1.5f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.primaryInductanceHenries = 220e-6f;
@@ -5920,10 +5920,10 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // The 6F6 driver must voltage-step up into the fixed-bias 6B4G pair; the
   // earlier 1:1.4 and 1:3 equivalents still left each 6B4 grid far below the
   // AB1 drive window. In this center-tapped model the ratio is primary to full
-  // secondary, so a 1:8 transformer means about 1:4 step-up to each grid half.
-  // That is the first clean range where the 6B4 pair stops being materially
-  // underdriven without pushing either grid positive.
-  radio.power.interstageTurnsRatioPrimaryToSecondary = 1.0f / 8.0f;
+  // secondary, so a 1:6 transformer means about 1:3 step-up to each grid half.
+  // Keep enough voltage gain for the 6B4 pair, but avoid using the interstage
+  // transformer itself as a hidden loudness boost.
+  radio.power.interstageTurnsRatioPrimaryToSecondary = 1.0f / 6.0f;
   radio.power.interstagePrimaryCoreLossResistanceOhms = 220000.0f;
   // The pF stray capacitances are ultrasonic details in the real chassis.
   // In this 48 kHz reduced-order audio model they destabilize the transformer
