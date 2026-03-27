@@ -5980,7 +5980,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // the oversample factor for biquad anti-alias filters is 2.
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
-  radio.globals.outputClipThreshold = 0.995f;
+  radio.globals.outputClipThreshold = 1.0f;
   radio.globals.postNoiseMix = 0.35f;
   radio.globals.noiseFloorAmp = 0.0f;
 
@@ -6054,8 +6054,8 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.cabinet.rearLpHz = 2600.0f;
 
   // --- Final limiter (digital safety brick-wall) ---
-  radio.finalLimiter.enabled = true;
-  radio.finalLimiter.threshold = 0.985f;
+  radio.finalLimiter.enabled = false;
+  radio.finalLimiter.threshold = 1.0f;
   radio.finalLimiter.lookaheadMs = 2.0f;
   radio.finalLimiter.attackMs = 0.5f;
   radio.finalLimiter.releaseMs = 80.0f;

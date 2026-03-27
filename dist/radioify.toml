@@ -10,7 +10,7 @@ autoTargetDb = -21.0
 autoMaxBoostDb = 2.5
 satClipDelta = 0.0
 satClipMinLevel = 0.0
-outputClipThreshold = 0.995
+outputClipThreshold = 1.0
 oversampleFactor = 2.0
 oversampleCutoffFraction = 0.45
 postNoiseMix = 0.35
@@ -246,8 +246,8 @@ rearHpHz = 200.0
 rearLpHz = 2600.0
 
 [audio-filter.default.finallimiter]
-enabled = true
-threshold = 0.985
+enabled = false
+threshold = 1.0
 lookaheadMs = 2.0
 attackMs = 0.5
 releaseMs = 80.0
@@ -272,8 +272,8 @@ power = true
 noise = true
 speaker = true
 cabinet = true
-finallimiter = true
-outputclip = true
+finallimiter = false
+outputclip = false
 
 # The clean preset inherits the compiled Philco defaults and only applies
 # lightweight overrides.
