@@ -328,7 +328,6 @@ struct AMDetector {
   Biquad afcHighSense;
   Biquad afcErrorLp;
   Biquad audioPostLp1;
-  Biquad audioPostLp2;
 
   float audioRect = 0.0f;
   float avcRect = 0.0f;
@@ -1119,10 +1118,6 @@ struct RadioOutputClipNode {
     float outputCouplingCoeff = 0.0f;
     float sourceCarrierHz = 0.0f;
     float loFrequencyHz = 0.0f;
-    float rfPhase = 0.0f;
-    float loPhase = 0.0f;
-    float stage1OffsetHz = 0.0f;
-    float stage2OffsetHz = 0.0f;
     float sourceDownmixPhase = 0.0f;
     float ifEnvelopePhase = 0.0f;
     float detectorInputI = 0.0f;
@@ -1131,10 +1126,9 @@ struct RadioOutputClipNode {
     float prevSourceI = 0.0f;
     float prevSourceQ = 0.0f;
     // Active IF runtime: a tuned-can equivalent mapped onto source downmix
-    // plus two linear reduced-order envelope resonators feeding the detector.
+    // plus one loaded complex envelope transfer feeding the detector.
     IQBiquad sourceEnvelope;
-    IQBiquad interstageEnvelope;
-    IQBiquad outputEnvelope;
+    IQBiquad loadedCanEnvelope;
   } ifStrip;
 
   struct DemodNodeState {

@@ -3091,8 +3091,8 @@ void AMDetector::init(float newFs, float newBw, float newTuneHz) {
 void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   bwHz = newBw;
   tuneOffsetHz = newTuneHz;
-  float audioPostLpHz = std::clamp(0.48f * std::max(bwHz, 1.0f), 1200.0f,
-                                   std::min(6000.0f, 0.12f * fs));
+  float audioPostLpHz = std::clamp(0.72f * std::max(bwHz, 1.0f), 1800.0f,
+                                   std::min(7500.0f, 0.16f * fs));
   float ifCrackleTauSeconds =
       1.0f / (kRadioPi * std::max(bwHz, 1.0f));
   ifCrackleDecay =
@@ -3118,7 +3118,6 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   afcHighProbe.setLowpass(fs, afcLpHz, kRadioBiquadQ);
   afcErrorLp.setLowpass(fs, afcLpHz, kRadioBiquadQ);
   audioPostLp1.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
-  audioPostLp2.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
 }
 
 void AMDetector::setSenseWindow(float lowHz, float highHz) {
@@ -3150,7 +3149,6 @@ void AMDetector::reset() {
   afcHighProbe.reset();
   afcErrorLp.reset();
   audioPostLp1.reset();
-  audioPostLp2.reset();
 }
 
 void Radio1938::CalibrationStageMetrics::clearAccumulators() {
@@ -3563,7 +3561,6 @@ float AMDetector::processEnvelope(float signalI,
       biquad.z2 = dcLevel * (biquad.b2 - biquad.a2);
     };
     prechargeUnityLowpass(audioPostLp1, detectorNode);
-    prechargeUnityLowpass(audioPostLp2, detectorNode);
     warmStartPending = false;
   }
   float dt = 1.0f / std::max(fs, 1.0f);
@@ -3603,7 +3600,6 @@ float AMDetector::processEnvelope(float signalI,
   }
 
   audioEnv = audioPostLp1.process(detectorNode);
-  audioEnv = audioPostLp2.process(audioEnv);
   return audioEnv;
 }
 
@@ -3673,10 +3669,11 @@ float SpeakerSim::process(float x, bool& clipped) {
 float RadioTuningNode::applyFilters(Radio1938& radio, float tuneHz, float bwHz) {
   auto& tuning = radio.tuning;
   auto& frontEnd = radio.frontEnd;
-  float safeBw = bwHz;
-  float preBw = safeBw * tuning.preBwScale;
-  float rfBw = safeBw * tuning.postBwScale;
-  RadioIFStripNode::setBandwidth(radio, safeBw, tuneHz);
+  float safeAudioBw = bwHz;
+  float physicalChannelBw = 2.0f * safeAudioBw;
+  float preBw = physicalChannelBw * tuning.preBwScale;
+  float rfBw = physicalChannelBw * tuning.postBwScale;
+  RadioIFStripNode::setBandwidth(radio, safeAudioBw, tuneHz);
   float rfCenterHz = radio.ifStrip.sourceCarrierHz;
   auto resonantCapacitanceFarads = [](float freqHz, float inductanceHenries) {
     float omega = kRadioTwoPi * std::max(freqHz, 1.0f);
@@ -3720,8 +3717,8 @@ float RadioTuningNode::applyFilters(Radio1938& radio, float tuneHz, float bwHz) 
   frontEnd.preLpfOut.setBandpass(
       radio.sampleRate, rfCenterHz, std::max(0.35f, rfCenterHz / rfBw));
 
-  tuning.tunedBw = safeBw;
-  return safeBw;
+  tuning.tunedBw = safeAudioBw;
+  return safeAudioBw;
 }
 
 void RadioTuningNode::init(Radio1938& radio, RadioInitContext& initCtx) {
@@ -4023,13 +4020,6 @@ static inline std::array<float, 2> unrotateComplexEnvelope(float inI,
                                                            float inQ,
                                                            float phase);
 
-static std::array<float, 2> processEquivalentIfStage(float inI,
-                                                     float inQ,
-                                                     float& phase,
-                                                     float baseStep,
-                                                     IQBiquad& resonator,
-                                                     float leakMix);
-
 static std::array<float, 2> computeReceiverControlDcNodes(
     const Radio1938::ReceiverCircuitNodeState& receiver,
     float sourceVoltage) {
@@ -4104,8 +4094,6 @@ void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
 
 void RadioIFStripNode::reset(Radio1938& radio) {
   auto& ifStrip = radio.ifStrip;
-  ifStrip.rfPhase = 0.0f;
-  ifStrip.loPhase = 0.0f;
   ifStrip.sourceDownmixPhase = 0.0f;
   ifStrip.ifEnvelopePhase = 0.0f;
   ifStrip.detectorInputI = 0.0f;
@@ -4114,8 +4102,7 @@ void RadioIFStripNode::reset(Radio1938& radio) {
   ifStrip.prevSourceI = 0.0f;
   ifStrip.prevSourceQ = 0.0f;
   ifStrip.sourceEnvelope.reset();
-  ifStrip.interstageEnvelope.reset();
-  ifStrip.outputEnvelope.reset();
+  ifStrip.loadedCanEnvelope.reset();
 }
 
 void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) {
@@ -4142,9 +4129,10 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
     return 1.0f / (kRadioTwoPi * resistanceOhms * capacitanceFarads);
   };
   float sampleRate = std::max(radio.sampleRate, 1.0f);
-  float safeBw = std::max(bwHz, ifStrip.ifMinBwHz);
+  float safeAudioBw = std::max(bwHz, ifStrip.ifMinBwHz);
+  float physicalChannelBw = 2.0f * safeAudioBw;
   ifStrip.sourceCarrierHz = selectSourceCarrierHz(
-      sampleRate, sampleRate, 0.0f, safeBw);
+      sampleRate, sampleRate, 0.0f, physicalChannelBw);
   ifStrip.loFrequencyHz = ifStrip.sourceCarrierHz + ifStrip.ifCenterHz + tuneHz;
 
   float primaryDrift = std::max(radio.identity.ifPrimaryDrift, 0.65f);
@@ -4158,7 +4146,7 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
       clampf(ifStrip.interstageCouplingCoeff * couplingDrift, 0.05f, 0.35f);
   float outputCouplingCoeff =
       clampf(ifStrip.outputCouplingCoeff * couplingDrift, 0.04f, 0.30f);
-  float nominalCanBandwidthHz = std::max(safeBw * 1.20f, 600.0f);
+  float nominalCanBandwidthHz = std::max(physicalChannelBw * 1.10f, 1200.0f);
   float primaryCapacitanceFarads =
       resonantCapacitanceFarads(ifStrip.ifCenterHz, primaryInductance);
   float secondaryCapacitanceFarads =
@@ -4173,61 +4161,44 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
       seriesBandwidthHz(secondaryInductance, secondarySeriesResistance);
   float secondaryLoadBandwidthHz = parallelLoadBandwidthHz(
       secondaryCapacitanceFarads, ifStrip.secondaryLoadResistanceOhms);
-  float effectiveCanBandwidthHz =
-      std::max(0.5f * (primaryTankBandwidthHz + secondaryTankBandwidthHz) +
-                   0.12f * secondaryLoadBandwidthHz,
-               600.0f);
-  float sourceEnvelopeLpHz = std::clamp(
-      0.78f * std::min(safeBw, effectiveCanBandwidthHz), 1200.0f,
-      0.18f * sampleRate);
-  float identityDrift = std::clamp(radio.identity.driftDepth, 0.0f, 0.25f);
-  float stage1Drift =
-      1.0f + 0.40f * identityDrift * seededSignedUnit(radio.identity.seed, 0x1f01u);
-  float stage2Drift =
-      1.0f + 0.40f * identityDrift * seededSignedUnit(radio.identity.seed, 0x1f02u);
   float inductanceAsymmetry =
-      std::clamp(std::sqrt(primaryInductance / secondaryInductance), 0.85f, 1.15f);
-  float loadDamping = std::clamp(
-      1.0f + 0.18f * (secondaryLoadBandwidthHz /
-                      std::max(effectiveCanBandwidthHz, 1.0f)),
-      1.0f, 1.22f);
-  float stage1BandwidthHz =
-      std::clamp(effectiveCanBandwidthHz *
-                     (0.78f + 0.90f * interstageCouplingCoeff) *
-                     std::max(stage1Drift, 0.65f) * inductanceAsymmetry,
-                 700.0f, 0.18f * sampleRate);
-  float stage2BandwidthHz =
-      std::clamp(effectiveCanBandwidthHz *
-                     (0.72f + 0.95f * outputCouplingCoeff) *
-                     std::max(stage2Drift, 0.65f) * loadDamping /
-                     inductanceAsymmetry,
-                 650.0f, 0.18f * sampleRate);
-  float stageOffsetBaseHz = std::max(120.0f, 0.17f * effectiveCanBandwidthHz);
-  float canAsymmetry = std::clamp(0.5f * (inductanceAsymmetry - 1.0f),
-                                  -0.12f, 0.12f);
-  float loadAsymmetry = std::clamp(
-      0.30f * (secondaryLoadBandwidthHz / std::max(effectiveCanBandwidthHz, 1.0f)),
-      0.0f, 0.15f);
-  ifStrip.stage1OffsetHz =
-      -stageOffsetBaseHz *
-      (0.60f + interstageCouplingCoeff + canAsymmetry) * stage1Drift;
-  ifStrip.stage2OffsetHz =
-      stageOffsetBaseHz *
-      (0.45f + outputCouplingCoeff + loadAsymmetry - canAsymmetry) * stage2Drift;
-  // Map the tuned-can equivalent onto a linear reduced-order envelope path:
-  // source downmix, two staggered resonant low-pass stages, and detector feed.
-  // The runtime stays O(1) per sample, but the stage bandwidths and asymmetry
-  // remain tied to the configured IF cans and their loading.
+      std::clamp(std::sqrt(primaryInductance / secondaryInductance), 0.85f, 1.18f);
+  float tankBandwidthTracking =
+      std::clamp(0.5f * (primaryTankBandwidthHz + secondaryTankBandwidthHz) /
+                     std::max(nominalCanBandwidthHz, 1.0f),
+                 0.70f, 1.35f);
+  float couplingMean = 0.5f * (interstageCouplingCoeff + outputCouplingCoeff);
+  float loadSeverity =
+      std::clamp(nominalCanBandwidthHz /
+                     std::max(secondaryLoadBandwidthHz, nominalCanBandwidthHz),
+                 0.0f, 1.0f);
+  float tunedCanEnvelopeBandwidthHz =
+      std::clamp(nominalCanBandwidthHz * tankBandwidthTracking *
+                     (1.0f + 1.35f * couplingMean) *
+                     (1.0f - 0.22f * std::fabs(inductanceAsymmetry - 1.0f)) *
+                     (1.0f - 0.18f * loadSeverity),
+                 std::max(1800.0f, 0.80f * safeAudioBw), 0.20f * sampleRate);
+  float tunedCanEnvelopeQ =
+      std::clamp(0.82f + 0.85f * couplingMean - 0.30f * loadSeverity, 0.70f,
+                 1.10f);
+  float sourceEnvelopeLpHz =
+      std::clamp(1.85f * tunedCanEnvelopeBandwidthHz,
+                 tunedCanEnvelopeBandwidthHz, 0.22f * sampleRate);
+  // The IF strip stays a reduced-order baseband model, but its single complex
+  // transfer is still derived from the tuned-can bandwidth, coupling, loading,
+  // and primary/secondary mismatch. The user-facing bwHz remains an audio
+  // sideband target; the physical IF channel that feeds this baseband transfer
+  // is double-sideband around the carrier.
   ifStrip.sourceEnvelope.setLowpass(sampleRate, sourceEnvelopeLpHz,
                                     kRadioBiquadQ);
-  ifStrip.interstageEnvelope.setLowpass(sampleRate, stage1BandwidthHz, 1.05f);
-  ifStrip.outputEnvelope.setLowpass(sampleRate, stage2BandwidthHz, 1.12f);
+  ifStrip.loadedCanEnvelope.setLowpass(sampleRate, tunedCanEnvelopeBandwidthHz,
+                                       tunedCanEnvelopeQ);
 
-  float senseLow = ifStrip.ifCenterHz - 0.5f * safeBw;
-  float senseHigh = ifStrip.ifCenterHz + 0.5f * safeBw;
+  float senseLow = ifStrip.ifCenterHz - 0.5f * physicalChannelBw;
+  float senseHigh = ifStrip.ifCenterHz + 0.5f * physicalChannelBw;
   demod.am.setSenseWindow(senseLow, senseHigh);
   if (demod.am.fs > 0.0f) {
-    demod.am.setBandwidth(safeBw, tuneHz);
+    demod.am.setBandwidth(safeAudioBw, tuneHz);
   }
 }
 
@@ -4249,10 +4220,9 @@ float RadioIFStripNode::process(Radio1938& radio,
   float currQ = radio.sourceFrame.q;
   if (mode != ifStrip.prevSourceMode) {
     ifStrip.sourceEnvelope.reset();
+    ifStrip.loadedCanEnvelope.reset();
     ifStrip.sourceDownmixPhase = 0.0f;
     ifStrip.ifEnvelopePhase = 0.0f;
-    ifStrip.rfPhase = 0.0f;
-    ifStrip.loPhase = 0.0f;
   }
   float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
   float rfGain =
@@ -4292,18 +4262,13 @@ float RadioIFStripNode::process(Radio1938& radio,
          std::fabs(mixerConversionGain) >= 1e-6f);
   float ifEnvI = rotatedEnvI * mixerConversionGain * ifGain;
   float ifEnvQ = rotatedEnvQ * mixerConversionGain * ifGain;
-  float stage1Step = kRadioTwoPi * (ifStrip.stage1OffsetHz / sampleRate);
-  float stage2Step = kRadioTwoPi * (ifStrip.stage2OffsetHz / sampleRate);
-  auto ifStage1 = processEquivalentIfStage(
-      ifEnvI, ifEnvQ, ifStrip.rfPhase, stage1Step, ifStrip.interstageEnvelope,
-      0.04f);
-  auto ifStage2 = processEquivalentIfStage(
-      ifStage1[0] + 0.06f * ifEnvI, ifStage1[1] + 0.06f * ifEnvQ,
-      ifStrip.loPhase, stage2Step, ifStrip.outputEnvelope, 0.03f);
-  assert(std::isfinite(ifStage2[0]) && std::isfinite(ifStage2[1]));
-  ifStrip.detectorInputI = ifStage2[0];
-  ifStrip.detectorInputQ = ifStage2[1];
-  radio.sourceFrame.setComplexEnvelope(ifStage2[0], ifStage2[1]);
+  auto loadedCanEnv = ifStrip.loadedCanEnvelope.process(ifEnvI, ifEnvQ);
+  auto detectorEnv =
+      unrotateComplexEnvelope(loadedCanEnv[0], loadedCanEnv[1], tunePhase);
+  assert(std::isfinite(detectorEnv[0]) && std::isfinite(detectorEnv[1]));
+  ifStrip.detectorInputI = detectorEnv[0];
+  ifStrip.detectorInputQ = detectorEnv[1];
+  radio.sourceFrame.setComplexEnvelope(detectorEnv[0], detectorEnv[1]);
 
   if (radio.calibration.enabled) {
     FixedPlatePentodeEvaluator mixerPlateCurrentForGrid =
@@ -4325,7 +4290,8 @@ float RadioIFStripNode::process(Radio1938& radio,
   ifStrip.prevSourceMode = mode;
   ifStrip.prevSourceI = currI;
   ifStrip.prevSourceQ = currQ;
-  return std::sqrt(ifStage2[0] * ifStage2[0] + ifStage2[1] * ifStage2[1]);
+  return std::sqrt(detectorEnv[0] * detectorEnv[0] +
+                   detectorEnv[1] * detectorEnv[1]);
 }
 
 void RadioDemodNode::init(Radio1938& radio, RadioInitContext& initCtx) {
@@ -4369,22 +4335,6 @@ static inline std::array<float, 2> unrotateComplexEnvelope(float inI,
   float c = std::cos(phase);
   float s = std::sin(phase);
   return {inI * c - inQ * s, inQ * c + inI * s};
-}
-
-static std::array<float, 2> processEquivalentIfStage(float inI,
-                                                     float inQ,
-                                                     float& phase,
-                                                     float baseStep,
-                                                     IQBiquad& resonator,
-                                                     float leakMix) {
-  auto mixed = rotateComplexEnvelope(inI, inQ, phase);
-  auto filtered = resonator.process(mixed[0], mixed[1]);
-  auto staged = unrotateComplexEnvelope(filtered[0], filtered[1], phase);
-  phase = wrapPhase(phase + baseStep);
-
-  float dryMix = clampf(leakMix, 0.0f, 0.25f);
-  float wetMix = 1.0f - dryMix;
-  return {wetMix * staged[0] + dryMix * inI, wetMix * staged[1] + dryMix * inQ};
 }
 
 float RadioDemodNode::process(Radio1938& radio,
