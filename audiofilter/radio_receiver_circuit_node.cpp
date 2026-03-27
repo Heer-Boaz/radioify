@@ -1,4 +1,7 @@
 #include "../radio.h"
+#include "physics/radio_power_supply.h"
+#include "physics/radio_tube_models.h"
+#include "receiver/receiver_input_network.h"
 
 #include <algorithm>
 #include <cassert>

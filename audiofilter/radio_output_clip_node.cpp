@@ -1,4 +1,5 @@
 #include "../radio.h"
+#include "math/radio_math.h"
 
 #include <algorithm>
 #include <cassert>
@@ -32,4 +33,3 @@ float RadioOutputClipNode::process(Radio1938& radio,
                                 return std::clamp(clipped, -t, t);
                               });
 }
-

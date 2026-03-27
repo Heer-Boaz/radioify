@@ -1,4 +1,6 @@
 #include "../radio.h"
+#include "math/radio_math.h"
+#include "physics/radio_tube_models.h"
 
 #include <algorithm>
 #include <cassert>

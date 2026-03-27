@@ -1,4 +1,8 @@
 #include "../radio.h"
+#include "math/radio_math.h"
+#include "physics/radio_power_supply.h"
+#include "physics/radio_transformers.h"
+#include "physics/radio_tube_models.h"
 
 #include <algorithm>
 #include <cassert>
@@ -304,4 +308,3 @@ float RadioPowerNode::process(Radio1938& radio,
   advanceRectifierRipplePhase(radio);
   return y;
 }
-

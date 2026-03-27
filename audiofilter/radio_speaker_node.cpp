@@ -1,4 +1,5 @@
 #include "../radio.h"
+#include "math/radio_math.h"
 
 #include <algorithm>
 #include <cassert>
@@ -36,4 +37,3 @@ float RadioSpeakerNode::process(Radio1938& radio,
                            });
   return y;
 }
-

@@ -117,6 +117,11 @@ static bool applyAudioFilterNodeSetting(Radio1938& radio,
   if (keyNorm == "mixer") return setNode(StageId::Mixer, "nodes.mixer");
   if (keyNorm == "ifstrip") return setNode(StageId::IFStrip, "nodes.ifstrip");
   if (keyNorm == "demod") return setNode(StageId::Demod, "nodes.demod");
+  if (keyNorm == "receiverinputnetwork" || keyNorm == "detectorload" ||
+      keyNorm == "receiverinput") {
+    return setNode(StageId::ReceiverInputNetwork,
+                   "nodes.receiverinputnetwork");
+  }
   if (keyNorm == "receivercircuit") {
     return setNode(StageId::ReceiverCircuit, "nodes.receivercircuit");
   }

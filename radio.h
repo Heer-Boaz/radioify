@@ -441,6 +441,7 @@ enum class StageId : uint8_t {
   Mixer,
   IFStrip,
   Demod,
+  ReceiverInputNetwork,
   ReceiverCircuit,
   Tone,
   Power,
@@ -534,6 +535,12 @@ struct RadioIFStripNode {
 struct RadioDemodNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
+  static float process(Radio1938& radio,
+                       float y,
+                       const RadioSampleContext& ctx);
+};
+
+struct RadioDetectorLoadNode {
   static float process(Radio1938& radio,
                        float y,
                        const RadioSampleContext& ctx);
@@ -648,6 +655,7 @@ struct RadioOutputClipNode {
     std::string_view name{};
     bool enabled = true;
     SampleProcessFn process = nullptr;
+    bool stateOnly = false;
   };
 
   struct ConfigureStep {
@@ -676,6 +684,7 @@ struct RadioOutputClipNode {
 
   struct RadioExecutionGraph {
     bool bypass = false;
+    bool compiled = false;
 
     std::array<BlockStep, 1> blockSteps{{
         {StageId::Tuning, "MagneticTuning", true, &RadioTuningNode::prepare},
@@ -689,12 +698,14 @@ struct RadioOutputClipNode {
          &RadioInterferenceDerivedNode::update},
     }};
 
-    std::array<ProgramPathStep, 13> programPathSteps{{
+    std::array<ProgramPathStep, 14> programPathSteps{{
         {StageId::Input, "Input", true, &RadioInputNode::process},
         {StageId::FrontEnd, "RFFrontEnd", true, &RadioFrontEndNode::process},
         {StageId::Mixer, "Mixer", true, &RadioMixerNode::process},
         {StageId::IFStrip, "IFStrip", true, &RadioIFStripNode::process},
         {StageId::Demod, "Detector", true, &RadioDemodNode::process},
+        {StageId::ReceiverInputNetwork, "ReceiverInputNetwork", true,
+         &RadioDetectorLoadNode::process, true},
         {StageId::ReceiverCircuit, "AudioStage", true,
          &RadioReceiverCircuitNode::process},
         {StageId::Tone, "Tone", true, &RadioToneNode::process},
@@ -716,6 +727,23 @@ struct RadioOutputClipNode {
     const ProgramPathStep* findProgramPath(StageId id) const;
     bool isEnabled(StageId id) const;
     void setEnabled(StageId id, bool value);
+    void invalidate();
+    void compile();
+    size_t findBlockOrderIndex(StageId id) const;
+    size_t findSampleControlOrderIndex(StageId id) const;
+    size_t findProgramPathOrderIndex(StageId id) const;
+    const std::vector<size_t>& blockOrder() const { return blockExecutionOrder; }
+    const std::vector<size_t>& sampleControlOrder() const {
+      return sampleControlExecutionOrder;
+    }
+    const std::vector<size_t>& programPathOrder() const {
+      return programPathExecutionOrder;
+    }
+
+   private:
+    std::vector<size_t> blockExecutionOrder{};
+    std::vector<size_t> sampleControlExecutionOrder{};
+    std::vector<size_t> programPathExecutionOrder{};
   } graph;
 
   struct RadioLifecycle {

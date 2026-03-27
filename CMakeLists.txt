@@ -52,6 +52,44 @@ set(RADIOIFY_NEURAL_PITCH_MODEL_SHA256
     "cd119f6f5f608d9342a1c6f81e4653f21dbcde440a96d474ecbf6f27c6253466"
     CACHE STRING "Expected SHA256 hash for the downloaded neural pitch ONNX model")
 
+set(RADIOIFY_AUDIOFILTER_SOURCES
+  audiofilter/am_detector.cpp
+  audiofilter/dsp/biquad.cpp
+  audiofilter/math/radio_linear_solvers.cpp
+  audiofilter/noise/noise_hum.cpp
+  audiofilter/physics/radio_power_supply.cpp
+  audiofilter/physics/radio_resonant_networks.cpp
+  audiofilter/physics/radio_transformers.cpp
+  audiofilter/physics/radio_tube_models.cpp
+  audiofilter/receiver/receiver_input_network.cpp
+  audiofilter/radio_afc_node.cpp
+  audiofilter/radio_avc_node.cpp
+  audiofilter/radio_cabinet_node.cpp
+  audiofilter/radio_control_bus_node.cpp
+  audiofilter/radio_demod_node.cpp
+  audiofilter/radio_detector_load_node.cpp
+  audiofilter/radio_final_limiter_node.cpp
+  audiofilter/radio_front_end_node.cpp
+  audiofilter/radio_if_strip_node.cpp
+  audiofilter/radio_input_node.cpp
+  audiofilter/radio_interference_derived_node.cpp
+  audiofilter/radio_mixer_node.cpp
+  audiofilter/radio_noise_node.cpp
+  audiofilter/radio_output_clip_node.cpp
+  audiofilter/radio_pipeline.cpp
+  audiofilter/radio_power_node.cpp
+  audiofilter/radio_receiver_circuit_node.cpp
+  audiofilter/radio_speaker_node.cpp
+  audiofilter/radio_tone_node.cpp
+  audiofilter/radio_tuning_node.cpp
+  audiofilter/speaker/speaker_sim.cpp
+)
+
+set(RADIOIFY_RADIO_ENGINE_SOURCES
+  radio_settings.cpp
+  ${RADIOIFY_AUDIOFILTER_SOURCES}
+)
+
 add_executable(radioify
   app_common.cpp
   crash_handler.cpp
@@ -90,12 +128,11 @@ add_executable(radioify
   videowindow.cpp
   videowindow_tui.cpp
   videoprocessor.cpp
-  radio_settings.cpp
+  ${RADIOIFY_RADIO_ENGINE_SOURCES}
   playback_frame_output_ascii.cpp
   playback_frame_output_console.cpp
   subtitle_manager.cpp
   calibration_report.cpp
-  radio.cpp
   radiopreview.cpp
   loopsplit.cpp
   loopsplit_cli.cpp
@@ -104,8 +141,7 @@ add_executable(radioify
 
 add_executable(radio_measurements
   radio_measurements.cpp
-  radio_settings.cpp
-  radio.cpp
+  ${RADIOIFY_RADIO_ENGINE_SOURCES}
   )
 
 target_compile_definitions(radioify PRIVATE

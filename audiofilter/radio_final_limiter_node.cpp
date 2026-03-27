@@ -1,4 +1,5 @@
 #include "../radio.h"
+#include "math/radio_math.h"
 
 #include <algorithm>
 #include <cassert>
@@ -125,4 +126,3 @@ float RadioFinalLimiterNode::process(Radio1938& radio,
 
   return out;
 }
-

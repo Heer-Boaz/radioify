@@ -1,4 +1,5 @@
 #include "../radio.h"
+#include "math/radio_math.h"
 
 #include <algorithm>
 #include <cassert>
@@ -86,4 +87,3 @@ void RadioInterferenceDerivedNode::update(Radio1938& radio,
   ctx.derived.humAmp = 0.0f;
   ctx.derived.humToneEnabled = false;
 }
-

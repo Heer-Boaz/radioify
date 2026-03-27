@@ -1,4 +1,5 @@
 #include "../radio.h"
+#include "math/radio_math.h"
 
 void RadioAVCNode::update(Radio1938& radio, RadioSampleContext&) {
   auto& controlBus = radio.controlBus;

@@ -1,11 +1,14 @@
-#include "../radio.h"
+#include "receiver_input_network.h"
+
+#include "../math/radio_linear_solvers.h"
+#include "../math/radio_math.h"
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
 
-static std::array<float, 2> computeReceiverControlDcNodes(
+std::array<float, 2> computeReceiverControlDcNodes(
     const Radio1938::ReceiverCircuitNodeState& receiver,
     float sourceVoltage) {
   float totalResistance = receiver.volumeControlResistanceOhms;
@@ -73,7 +76,7 @@ static std::array<float, 2> computeReceiverControlDcNodes(
   return {wiperVoltage, tapVoltage};
 }
 
-static ReceiverInputNetworkSolve solveReceiverInputNetwork(
+ReceiverInputNetworkSolve solveReceiverInputNetwork(
     const Radio1938::ReceiverCircuitNodeState& receiver,
     float dt,
     float sourceVoltage) {
@@ -169,23 +172,16 @@ static ReceiverInputNetworkSolve solveReceiverInputNetwork(
   return result;
 }
 
-static float computeReceiverDetectorLoadConductance(
+float computeReceiverDetectorLoadConductance(
     const Radio1938::ReceiverCircuitNodeState& receiver) {
   if (!receiver.enabled) return 0.0f;
 
-  float totalResistance =
-      std::max(receiver.volumeControlResistanceOhms, 1e-6f);
+  float totalResistance = std::max(receiver.volumeControlResistanceOhms, 1e-6f);
   float volumePosition = clampf(receiver.volumeControlPosition, 0.0f, 1.0f);
   float wiperResistance = volumePosition * totalResistance;
   float sourceToWiperResistance =
       std::max(totalResistance - wiperResistance, 0.0f);
 
-  // Reduced-order detector loading: the detector sees the full volume control
-  // track to ground at all times, and above the coupling-cap corner it also
-  // sees the first-audio grid-leak path through the top segment of the pot.
-  // Keep this load explicit and physically interpretable, but avoid the older
-  // dynamic Norton reduction here because its discrete companion branch was
-  // measurably over-damping the detector and falsifying IMD/SINAD.
   float detectorLoadResistance = totalResistance;
   float gridLeakResistance = std::max(receiver.gridLeakResistanceOhms, 1e-6f);
   float gridPathResistance =
@@ -211,7 +207,7 @@ static float computeReceiverDetectorLoadConductance(
   return 1.0f / std::max(detectorLoadResistance, 1e-6f);
 }
 
-static void commitReceiverInputNetworkSolve(
+void commitReceiverInputNetworkSolve(
     Radio1938::ReceiverCircuitNodeState& receiver,
     const ReceiverInputNetworkSolve& solve) {
   receiver.gridVoltage = solve.gridVoltage;

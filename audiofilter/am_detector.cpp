@@ -1,28 +1,10 @@
 #include "../radio.h"
+#include "math/radio_math.h"
+#include "receiver/receiver_input_network.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-
-struct ReceiverInputNetworkSolve {
-  float inputCurrent = 0.0f;
-  float wiperVoltage = 0.0f;
-  float tapVoltage = 0.0f;
-  float gridVoltage = 0.0f;
-  float couplingCapVoltage = 0.0f;
-};
-static std::array<float, 2> computeReceiverControlDcNodes(
-    const Radio1938::ReceiverCircuitNodeState& receiver,
-    float sourceVoltage);
-static ReceiverInputNetworkSolve solveReceiverInputNetwork(
-    const Radio1938::ReceiverCircuitNodeState& receiver,
-    float dt,
-    float sourceVoltage);
-static float computeReceiverDetectorLoadConductance(
-    const Radio1938::ReceiverCircuitNodeState& receiver);
-static void commitReceiverInputNetworkSolve(
-    Radio1938::ReceiverCircuitNodeState& receiver,
-    const ReceiverInputNetworkSolve& solve);
 
 void AMDetector::init(float newFs, float newBw, float newTuneHz) {
   fs = newFs;
@@ -168,7 +150,6 @@ float AMDetector::processEnvelope(float signalI,
                                    audioJunctionSlopeVolts);
   float delayedAvcThreshold = 0.18f * std::max(controlVoltageRef, 1e-6f);
   float dt = 1.0f / std::max(fs, 1.0f);
-  bool useReceiverLoad = radio.receiverCircuit.enabled;
   if (warmStartPending) {
     detectorNode = audioRect;
     avcEnv = std::max(detectorNode - delayedAvcThreshold, 0.0f);
@@ -179,14 +160,6 @@ float AMDetector::processEnvelope(float signalI,
     };
     prechargeUnityLowpass(audioPostLp1, detectorNode);
     warmStartPending = false;
-  }
-  if (useReceiverLoad && radio.receiverCircuit.warmStartPending) {
-    auto dcNodes =
-        computeReceiverControlDcNodes(radio.receiverCircuit, detectorNode);
-    radio.receiverCircuit.volumeControlTapVoltage = dcNodes[1];
-    radio.receiverCircuit.couplingCapVoltage = dcNodes[0];
-    radio.receiverCircuit.gridVoltage = 0.0f;
-    radio.receiverCircuit.warmStartPending = false;
   }
   float storageCapG =
       std::max(detectorStorageCapFarads, 1e-12f) / dt;
@@ -212,7 +185,7 @@ float AMDetector::processEnvelope(float signalI,
   float b1 = avcCapG * avcEnv + avcFeedG * delayedAvcThreshold;
   float solvedDetectorNode = detectorNode;
   float solvedAvcNode = avcEnv;
-  if (useReceiverLoad) {
+  if (radio.receiverCircuit.enabled) {
     a00 += computeReceiverDetectorLoadConductance(radio.receiverCircuit);
   }
   float det = a00 * a11 - a01 * a10;
@@ -220,11 +193,6 @@ float AMDetector::processEnvelope(float signalI,
   solvedDetectorNode = (b0 * a11 - a01 * b1) / det;
   solvedAvcNode = (a00 * b1 - b0 * a10) / det;
   detectorNode = std::max(solvedDetectorNode, 0.0f);
-  if (useReceiverLoad) {
-    auto receiverSolve =
-        solveReceiverInputNetwork(radio.receiverCircuit, dt, detectorNode);
-    commitReceiverInputNetworkSolve(radio.receiverCircuit, receiverSolve);
-  }
   avcEnv = std::max(solvedAvcNode, 0.0f);
   avcRect = avcEnv;
   assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
