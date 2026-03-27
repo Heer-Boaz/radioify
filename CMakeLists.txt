@@ -102,6 +102,12 @@ add_executable(radioify
   loopsplit_ui.cpp
   )
 
+add_executable(radio_measurements
+  radio_measurements.cpp
+  radio_settings.cpp
+  radio.cpp
+  )
+
 target_compile_definitions(radioify PRIVATE
   RADIOIFY_ENABLE_TIMING_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_TIMING_LOG}>,1,0>
   RADIOIFY_ENABLE_VIDEO_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_VIDEO_ERROR_LOG}>,1,0>
