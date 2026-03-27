@@ -282,13 +282,6 @@ static bool applyRadioSettingsValue(Radio1938& radio,
     if (keyNorm == "automaxboostdb") {
       return setFloat(radio.globals.autoMaxBoostDb, "globals.autoMaxBoostDb");
     }
-    if (keyNorm == "satclipdelta") {
-      return setFloat(radio.globals.satClipDelta, "globals.satClipDelta");
-    }
-    if (keyNorm == "satclipminlevel") {
-      return setFloat(radio.globals.satClipMinLevel,
-                      "globals.satClipMinLevel");
-    }
     if (keyNorm == "outputclipthreshold") {
       return setFloat(radio.globals.outputClipThreshold,
                       "globals.outputClipThreshold");
@@ -494,25 +487,9 @@ static bool applyRadioSettingsValue(Radio1938& radio,
       return setFloat(radio.ifStrip.primaryInductanceHenries,
                       "ifStrip.primaryInductanceHenries");
     }
-    if (keyNorm == "primarycapacitancefarads") {
-      return setFloat(radio.ifStrip.primaryCapacitanceFarads,
-                      "ifStrip.primaryCapacitanceFarads");
-    }
-    if (keyNorm == "primaryresistanceohms") {
-      return setFloat(radio.ifStrip.primaryResistanceOhms,
-                      "ifStrip.primaryResistanceOhms");
-    }
     if (keyNorm == "secondaryinductancehenries") {
       return setFloat(radio.ifStrip.secondaryInductanceHenries,
                       "ifStrip.secondaryInductanceHenries");
-    }
-    if (keyNorm == "secondarycapacitancefarads") {
-      return setFloat(radio.ifStrip.secondaryCapacitanceFarads,
-                      "ifStrip.secondaryCapacitanceFarads");
-    }
-    if (keyNorm == "secondaryresistanceohms") {
-      return setFloat(radio.ifStrip.secondaryResistanceOhms,
-                      "ifStrip.secondaryResistanceOhms");
     }
     if (keyNorm == "secondaryloadresistanceohms") {
       return setFloat(radio.ifStrip.secondaryLoadResistanceOhms,
@@ -525,10 +502,6 @@ static bool applyRadioSettingsValue(Radio1938& radio,
     if (keyNorm == "outputcouplingcoeff") {
       return setFloat(radio.ifStrip.outputCouplingCoeff,
                       "ifStrip.outputCouplingCoeff");
-    }
-    if (keyNorm == "oversamplefactor") {
-      return setInt(radio.ifStrip.oversampleFactor,
-                      "ifStrip.oversampleFactor");
     }
     return false;
   }
@@ -738,11 +711,6 @@ static bool applyRadioSettingsValue(Radio1938& radio,
     if (keyNorm == "rippledepth") {
       return setFloat(radio.power.rippleDepth, "power.rippleDepth");
     }
-    if (keyNorm == "satosprev") {
-      return setFloat(radio.power.satOsPrev, "power.satOsPrev");
-    }
-    if (keyNorm == "satdrive") return setFloat(radio.power.satDrive, "power.satDrive");
-    if (keyNorm == "satmix") return setFloat(radio.power.satMix, "power.satMix");
     if (keyNorm == "sagattackms") {
       return setFloat(radio.power.sagAttackMs, "power.sagAttackMs");
     }

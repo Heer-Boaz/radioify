@@ -246,33 +246,6 @@ struct CurrentDrivenTransformer {
                                          float primaryLoadResistanceOhms = 0.0f);
 };
 
-struct Compressor {
-  float fs = 48000.0f;
-  float thresholdDb = -24.0f;
-  float ratio = 4.0f;
-  float attackMs = 12.0f;
-  float releaseMs = 180.0f;
-
-  float env = 0.0f;
-  float gainDb = 0.0f;
-  float atkCoeff = 0.0f;
-  float relCoeff = 0.0f;
-  float gainAtkCoeff = 0.0f;
-  float gainRelCoeff = 0.0f;
-
-  void setFs(float newFs);
-  void setTimes(float aMs, float rMs);
-  void reset();
-  float process(float x);
-};
-
-struct Saturator {
-  float drive = 1.35f;
-  float mix = 0.45f;
-
-  float process(float x);
-};
-
 struct NoiseInput {
   float programSample = 0.0f;
   float noiseAmp = 0.0f;
@@ -1012,8 +985,6 @@ struct RadioOutputClipNode {
     bool enableAutoLevel = false;
     float autoTargetDb = 0.0f;
     float autoMaxBoostDb = 0.0f;
-    float satClipDelta = 0.0f;
-    float satClipMinLevel = 0.0f;
     float outputClipThreshold = 0.0f;
     float oversampleCutoffFraction = 0.0f;
   } globals;
@@ -1142,16 +1113,10 @@ struct RadioOutputClipNode {
     float avcGainDepth = 0.0f;
     float ifCenterHz = 0.0f;
     float primaryInductanceHenries = 0.0f;
-    float primaryCapacitanceFarads = 0.0f;
-    float primaryResistanceOhms = 0.0f;
     float secondaryInductanceHenries = 0.0f;
-    float secondaryCapacitanceFarads = 0.0f;
-    float secondaryResistanceOhms = 0.0f;
     float secondaryLoadResistanceOhms = 0.0f;
     float interstageCouplingCoeff = 0.0f;
     float outputCouplingCoeff = 0.0f;
-    int oversampleFactor = 1;
-    float internalSampleRate = 0.0f;
     float sourceCarrierHz = 0.0f;
     float loFrequencyHz = 0.0f;
     float rfPhase = 0.0f;
@@ -1162,30 +1127,14 @@ struct RadioOutputClipNode {
     float ifEnvelopePhase = 0.0f;
     float detectorInputI = 0.0f;
     float detectorInputQ = 0.0f;
-    float stage1DriveEnv = 0.0f;
-    float stage2DriveEnv = 0.0f;
-    float stage1RingI = 0.0f;
-    float stage1RingQ = 0.0f;
-    float stage2RingI = 0.0f;
-    float stage2RingQ = 0.0f;
-    float stage1PrevOutI = 0.0f;
-    float stage1PrevOutQ = 0.0f;
-    float stage2PrevOutI = 0.0f;
-    float stage2PrevOutQ = 0.0f;
-    float stage1RingDecay = 0.0f;
-    float stage2RingDecay = 0.0f;
-    float stage1RingMix = 0.0f;
-    float stage2RingMix = 0.0f;
     SourceInputMode prevSourceMode = SourceInputMode::ComplexEnvelope;
     float prevSourceI = 0.0f;
     float prevSourceQ = 0.0f;
-    Biquad bp1;
-    Biquad bp2;
+    // Active IF runtime: a tuned-can equivalent mapped onto source downmix
+    // plus two linear reduced-order envelope resonators feeding the detector.
     IQBiquad sourceEnvelope;
     IQBiquad interstageEnvelope;
     IQBiquad outputEnvelope;
-    CoupledTunedTransformer interstageTransformer;
-    CoupledTunedTransformer outputTransformer;
   } ifStrip;
 
   struct DemodNodeState {
@@ -1251,9 +1200,6 @@ struct RadioOutputClipNode {
     float sagEnd = 0.0f;
     float rectifierPhase = 0.0f;
     float rippleDepth = 0.0f;
-    float satOsPrev = 0.0f;
-    float satDrive = 0.0f;
-    float satMix = 0.0f;
     float sagAttackMs = 0.0f;
     float sagReleaseMs = 0.0f;
     float rectifierMinHz = 0.0f;
@@ -1338,9 +1284,6 @@ struct RadioOutputClipNode {
     std::array<float, 16> outputTransformerAffineStateA{};
     CurrentDrivenTransformerSample outputTransformerAffineSlope;
     Biquad postLpf;
-    Biquad satOsLpIn;
-    Biquad satOsLpOut;
-    Saturator sat;
   } power;
 
   struct NoiseConfig {
@@ -1439,6 +1382,7 @@ struct RadioOutputClipNode {
   } finalLimiter;
 
   struct OutputNodeState {
+    // Derived clean speaker-secondary peak from the modeled output stage.
     float digitalReferenceSpeakerVoltsPeak = 1.0f;
     float digitalMakeupGain = 1.0f;
     float clipOsPrev = 0.0f;

@@ -216,13 +216,6 @@ static bool applyRadioSettingsValue(Radio1938& radio,
     if (keyNorm == "automaxboostdb") {
       return setFloat(radio.globals.autoMaxBoostDb, "globals.autoMaxBoostDb");
     }
-    if (keyNorm == "satclipdelta") {
-      return setFloat(radio.globals.satClipDelta, "globals.satClipDelta");
-    }
-    if (keyNorm == "satclipminlevel") {
-      return setFloat(radio.globals.satClipMinLevel,
-                      "globals.satClipMinLevel");
-    }
     if (keyNorm == "outputclipthreshold") {
       return setFloat(radio.globals.outputClipThreshold,
                       "globals.outputClipThreshold");
@@ -428,25 +421,9 @@ static bool applyRadioSettingsValue(Radio1938& radio,
       return setFloat(radio.ifStrip.primaryInductanceHenries,
                       "ifStrip.primaryInductanceHenries");
     }
-    if (keyNorm == "primarycapacitancefarads") {
-      return setFloat(radio.ifStrip.primaryCapacitanceFarads,
-                      "ifStrip.primaryCapacitanceFarads");
-    }
-    if (keyNorm == "primaryresistanceohms") {
-      return setFloat(radio.ifStrip.primaryResistanceOhms,
-                      "ifStrip.primaryResistanceOhms");
-    }
     if (keyNorm == "secondaryinductancehenries") {
       return setFloat(radio.ifStrip.secondaryInductanceHenries,
                       "ifStrip.secondaryInductanceHenries");
-    }
-    if (keyNorm == "secondarycapacitancefarads") {
-      return setFloat(radio.ifStrip.secondaryCapacitanceFarads,
-                      "ifStrip.secondaryCapacitanceFarads");
-    }
-    if (keyNorm == "secondaryresistanceohms") {
-      return setFloat(radio.ifStrip.secondaryResistanceOhms,
-                      "ifStrip.secondaryResistanceOhms");
     }
     if (keyNorm == "secondaryloadresistanceohms") {
       return setFloat(radio.ifStrip.secondaryLoadResistanceOhms,
@@ -459,10 +436,6 @@ static bool applyRadioSettingsValue(Radio1938& radio,
     if (keyNorm == "outputcouplingcoeff") {
       return setFloat(radio.ifStrip.outputCouplingCoeff,
                       "ifStrip.outputCouplingCoeff");
-    }
-    if (keyNorm == "oversamplefactor") {
-      return setInt(radio.ifStrip.oversampleFactor,
-                      "ifStrip.oversampleFactor");
     }
     return false;
   }
@@ -672,11 +645,6 @@ static bool applyRadioSettingsValue(Radio1938& radio,
     if (keyNorm == "rippledepth") {
       return setFloat(radio.power.rippleDepth, "power.rippleDepth");
     }
-    if (keyNorm == "satosprev") {
-      return setFloat(radio.power.satOsPrev, "power.satOsPrev");
-    }
-    if (keyNorm == "satdrive") return setFloat(radio.power.satDrive, "power.satDrive");
-    if (keyNorm == "satmix") return setFloat(radio.power.satMix, "power.satMix");
     if (keyNorm == "sagattackms") {
       return setFloat(radio.power.sagAttackMs, "power.sagAttackMs");
     }
@@ -1574,8 +1542,14 @@ static float solveCapCoupledGridVoltage(float sourceVolts,
 static float scalePhysicalSpeakerVoltsToDigital(const Radio1938& radio,
                                                 float speakerVolts) {
   if (!radio.graph.isEnabled(StageId::Power)) return speakerVolts;
+  // The modeled output-stage reference is a clean-power truth value. Leave a
+  // small digital peak margin above that clean reference so real program crest
+  // factor, cabinet lift, and modest user volume boosts do not immediately hit
+  // the post-scaling safety clipper.
+  constexpr float kDigitalProgramPeakHeadroom = 1.12f;
   return speakerVolts /
-         requirePositiveFinite(radio.output.digitalReferenceSpeakerVoltsPeak);
+         (requirePositiveFinite(radio.output.digitalReferenceSpeakerVoltsPeak) *
+          kDigitalProgramPeakHeadroom);
 }
 
 static float applyDigitalMakeupGain(const Radio1938& radio, float yDigital) {
@@ -3003,56 +2977,6 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::process(
   return projected;
 }
 
-void Compressor::setFs(float newFs) {
-  fs = newFs;
-  setTimes(attackMs, releaseMs);
-}
-
-void Compressor::setTimes(float aMs, float rMs) {
-  attackMs = aMs;
-  releaseMs = rMs;
-  atkCoeff = std::exp(-1.0f / (fs * (attackMs / 1000.0f)));
-  relCoeff = std::exp(-1.0f / (fs * (releaseMs / 1000.0f)));
-  gainAtkCoeff = std::exp(-1.0f / (fs * (attackMs / 1000.0f)));
-  gainRelCoeff = std::exp(-1.0f / (fs * (releaseMs / 1000.0f)));
-}
-
-void Compressor::reset() {
-  env = 0.0f;
-  gainDb = 0.0f;
-}
-
-float Compressor::process(float x) {
-  float a = std::fabs(x);
-  if (a > env) {
-    env = atkCoeff * env + (1.0f - atkCoeff) * a;
-  } else {
-    env = relCoeff * env + (1.0f - relCoeff) * a;
-  }
-
-  float levelDb = lin2db(env);
-  float targetGrDb = 0.0f;
-  if (levelDb > thresholdDb) {
-    float over = levelDb - thresholdDb;
-    float compressedOver = over / ratio;
-    float outDb = thresholdDb + compressedOver;
-    targetGrDb = outDb - levelDb;
-  }
-
-  if (targetGrDb < gainDb) {
-    gainDb = gainAtkCoeff * gainDb + (1.0f - gainAtkCoeff) * targetGrDb;
-  } else {
-    gainDb = gainRelCoeff * gainDb + (1.0f - gainRelCoeff) * targetGrDb;
-  }
-
-  return x * db2lin(gainDb);
-}
-
-float Saturator::process(float x) {
-  float yd = std::tanh(drive * x) / std::tanh(drive);
-  return (1.0f - mix) * x + mix * yd;
-}
-
 static inline float softClip(float x,
                              float t = kRadioSoftClipThresholdDefault) {
   float ax = std::fabs(x);
@@ -3061,23 +2985,6 @@ static inline float softClip(float x,
   float u = (ax - t) / (1.0f - t);
   float y = t + (1.0f - std::exp(-u)) * (1.0f - t);
   return s * y;
-}
-
-static inline float asymmetricSaturate(float x,
-                                       float drive,
-                                       float bias,
-                                       float asymT) {
-  auto shapeHalf = [](float v, float d) {
-    return std::tanh(d * v) / std::max(1e-6f, d);
-  };
-  float shifted = x + bias;
-  float posDrive = drive * std::max(0.25f, 1.0f - 0.10f * asymT);
-  float negDrive = drive * (1.0f + 0.18f * asymT);
-  float y = (shifted >= 0.0f) ? shapeHalf(shifted, posDrive)
-                              : shapeHalf(shifted, negDrive);
-  float base = (bias >= 0.0f) ? shapeHalf(bias, posDrive)
-                              : shapeHalf(bias, negDrive);
-  return y - base;
 }
 
 void NoiseHum::setFs(float newFs, float noiseBwHz) {
@@ -4089,16 +3996,6 @@ float RadioMixerNode::process(Radio1938& radio,
   return y;
 }
 
-static int computeIfOversampleFactor(float outputFs,
-                                     float ifCenterHz,
-                                     float bwHz) {
-  float safeFs = std::max(outputFs, 1.0f);
-  float safeBw = std::max(bwHz, 1.0f);
-  float guardHz = std::max(16000.0f, 1.5f * safeBw + 12000.0f);
-  float minInternalFs = (ifCenterHz + guardHz) / 0.48f;
-  return std::max(8, static_cast<int>(std::ceil(minInternalFs / safeFs)));
-}
-
 static float selectSourceCarrierHz(float outputFs,
                                    float internalFs,
                                    float ifCenterHz,
@@ -4130,18 +4027,8 @@ static std::array<float, 2> processEquivalentIfStage(float inI,
                                                      float inQ,
                                                      float& phase,
                                                      float baseStep,
-                                                     float sampleRate,
                                                      IQBiquad& resonator,
-                                                     float saturationDrive,
-                                                     float asymmetry,
-                                                     float leakMix,
-                                                     float ringDecay,
-                                                     float ringMix,
-                                                     float& ringI,
-                                                     float& ringQ,
-                                                     float& prevOutI,
-                                                     float& prevOutQ,
-                                                     float& driveEnv);
+                                                     float leakMix);
 
 static std::array<float, 2> computeReceiverControlDcNodes(
     const Radio1938::ReceiverCircuitNodeState& receiver,
@@ -4223,26 +4110,12 @@ void RadioIFStripNode::reset(Radio1938& radio) {
   ifStrip.ifEnvelopePhase = 0.0f;
   ifStrip.detectorInputI = 0.0f;
   ifStrip.detectorInputQ = 0.0f;
-  ifStrip.stage1DriveEnv = 0.0f;
-  ifStrip.stage2DriveEnv = 0.0f;
-  ifStrip.stage1RingI = 0.0f;
-  ifStrip.stage1RingQ = 0.0f;
-  ifStrip.stage2RingI = 0.0f;
-  ifStrip.stage2RingQ = 0.0f;
-  ifStrip.stage1PrevOutI = 0.0f;
-  ifStrip.stage1PrevOutQ = 0.0f;
-  ifStrip.stage2PrevOutI = 0.0f;
-  ifStrip.stage2PrevOutQ = 0.0f;
   ifStrip.prevSourceMode = SourceInputMode::ComplexEnvelope;
   ifStrip.prevSourceI = 0.0f;
   ifStrip.prevSourceQ = 0.0f;
-  ifStrip.bp1.reset();
-  ifStrip.bp2.reset();
   ifStrip.sourceEnvelope.reset();
   ifStrip.interstageEnvelope.reset();
   ifStrip.outputEnvelope.reset();
-  ifStrip.interstageTransformer.reset();
-  ifStrip.outputTransformer.reset();
 }
 
 void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) {
@@ -4250,8 +4123,8 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
   auto& demod = radio.demod;
   auto resonantCapacitanceFarads = [](float freqHz, float inductanceHenries) {
     float omega = kRadioTwoPi * std::max(freqHz, 1.0f);
-    return 1.0f / std::max(omega * omega * std::max(inductanceHenries, 1e-9f),
-                           1e-18f);
+    return 1.0f /
+           std::max(omega * omega * std::max(inductanceHenries, 1e-9f), 1e-18f);
   };
   auto seriesResistanceForBandwidth = [](float inductanceHenries,
                                          float bandwidthHz) {
@@ -4259,11 +4132,17 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
                         std::max(bandwidthHz, 1.0f),
                     1e-4f);
   };
+  auto seriesBandwidthHz = [](float inductanceHenries, float resistanceOhms) {
+    return std::max(resistanceOhms, 1e-4f) /
+           (kRadioTwoPi * std::max(inductanceHenries, 1e-9f));
+  };
+  auto parallelLoadBandwidthHz = [](float capacitanceFarads,
+                                    float resistanceOhms) {
+    if (capacitanceFarads <= 0.0f || resistanceOhms <= 0.0f) return 0.0f;
+    return 1.0f / (kRadioTwoPi * resistanceOhms * capacitanceFarads);
+  };
   float sampleRate = std::max(radio.sampleRate, 1.0f);
   float safeBw = std::max(bwHz, ifStrip.ifMinBwHz);
-  ifStrip.oversampleFactor =
-      computeIfOversampleFactor(sampleRate, ifStrip.ifCenterHz, safeBw);
-  ifStrip.internalSampleRate = sampleRate;
   ifStrip.sourceCarrierHz = selectSourceCarrierHz(
       sampleRate, sampleRate, 0.0f, safeBw);
   ifStrip.loFrequencyHz = ifStrip.sourceCarrierHz + ifStrip.ifCenterHz + tuneHz;
@@ -4271,107 +4150,78 @@ void RadioIFStripNode::setBandwidth(Radio1938& radio, float bwHz, float tuneHz) 
   float primaryDrift = std::max(radio.identity.ifPrimaryDrift, 0.65f);
   float secondaryDrift = std::max(radio.identity.ifSecondaryDrift, 0.65f);
   float couplingDrift = std::max(radio.identity.ifCouplingDrift, 0.65f);
-  float primaryInductance = ifStrip.primaryInductanceHenries * primaryDrift;
-  float secondaryInductance = ifStrip.secondaryInductanceHenries * secondaryDrift;
+  float primaryInductance =
+      std::max(ifStrip.primaryInductanceHenries * primaryDrift, 1e-9f);
+  float secondaryInductance =
+      std::max(ifStrip.secondaryInductanceHenries * secondaryDrift, 1e-9f);
   float interstageCouplingCoeff =
       clampf(ifStrip.interstageCouplingCoeff * couplingDrift, 0.05f, 0.35f);
   float outputCouplingCoeff =
       clampf(ifStrip.outputCouplingCoeff * couplingDrift, 0.04f, 0.30f);
-  float stageBandwidthHz = std::max(safeBw * 1.20f, 600.0f);
-  float sourceEnvelopeLpHz =
-      std::clamp(0.78f * safeBw, 1200.0f, 0.18f * sampleRate);
+  float nominalCanBandwidthHz = std::max(safeBw * 1.20f, 600.0f);
+  float primaryCapacitanceFarads =
+      resonantCapacitanceFarads(ifStrip.ifCenterHz, primaryInductance);
+  float secondaryCapacitanceFarads =
+      resonantCapacitanceFarads(ifStrip.ifCenterHz, secondaryInductance);
+  float primarySeriesResistance =
+      seriesResistanceForBandwidth(primaryInductance, nominalCanBandwidthHz);
+  float secondarySeriesResistance =
+      seriesResistanceForBandwidth(secondaryInductance, nominalCanBandwidthHz);
+  float primaryTankBandwidthHz =
+      seriesBandwidthHz(primaryInductance, primarySeriesResistance);
+  float secondaryTankBandwidthHz =
+      seriesBandwidthHz(secondaryInductance, secondarySeriesResistance);
+  float secondaryLoadBandwidthHz = parallelLoadBandwidthHz(
+      secondaryCapacitanceFarads, ifStrip.secondaryLoadResistanceOhms);
+  float effectiveCanBandwidthHz =
+      std::max(0.5f * (primaryTankBandwidthHz + secondaryTankBandwidthHz) +
+                   0.12f * secondaryLoadBandwidthHz,
+               600.0f);
+  float sourceEnvelopeLpHz = std::clamp(
+      0.78f * std::min(safeBw, effectiveCanBandwidthHz), 1200.0f,
+      0.18f * sampleRate);
   float identityDrift = std::clamp(radio.identity.driftDepth, 0.0f, 0.25f);
   float stage1Drift =
       1.0f + 0.40f * identityDrift * seededSignedUnit(radio.identity.seed, 0x1f01u);
   float stage2Drift =
       1.0f + 0.40f * identityDrift * seededSignedUnit(radio.identity.seed, 0x1f02u);
+  float inductanceAsymmetry =
+      std::clamp(std::sqrt(primaryInductance / secondaryInductance), 0.85f, 1.15f);
+  float loadDamping = std::clamp(
+      1.0f + 0.18f * (secondaryLoadBandwidthHz /
+                      std::max(effectiveCanBandwidthHz, 1.0f)),
+      1.0f, 1.22f);
   float stage1BandwidthHz =
-      std::clamp(stageBandwidthHz * (0.78f + 0.90f * interstageCouplingCoeff) *
-                     std::max(stage1Drift, 0.65f),
+      std::clamp(effectiveCanBandwidthHz *
+                     (0.78f + 0.90f * interstageCouplingCoeff) *
+                     std::max(stage1Drift, 0.65f) * inductanceAsymmetry,
                  700.0f, 0.18f * sampleRate);
   float stage2BandwidthHz =
-      std::clamp(stageBandwidthHz * (0.72f + 0.95f * outputCouplingCoeff) *
-                     std::max(stage2Drift, 0.65f),
+      std::clamp(effectiveCanBandwidthHz *
+                     (0.72f + 0.95f * outputCouplingCoeff) *
+                     std::max(stage2Drift, 0.65f) * loadDamping /
+                     inductanceAsymmetry,
                  650.0f, 0.18f * sampleRate);
-  float stageOffsetBaseHz = std::max(120.0f, 0.17f * safeBw);
+  float stageOffsetBaseHz = std::max(120.0f, 0.17f * effectiveCanBandwidthHz);
+  float canAsymmetry = std::clamp(0.5f * (inductanceAsymmetry - 1.0f),
+                                  -0.12f, 0.12f);
+  float loadAsymmetry = std::clamp(
+      0.30f * (secondaryLoadBandwidthHz / std::max(effectiveCanBandwidthHz, 1.0f)),
+      0.0f, 0.15f);
   ifStrip.stage1OffsetHz =
-      -stageOffsetBaseHz * (0.60f + interstageCouplingCoeff) * stage1Drift;
+      -stageOffsetBaseHz *
+      (0.60f + interstageCouplingCoeff + canAsymmetry) * stage1Drift;
   ifStrip.stage2OffsetHz =
-      stageOffsetBaseHz * (0.45f + outputCouplingCoeff) * stage2Drift;
-  float stage1RingBwHz =
-      std::clamp(0.22f * stage1BandwidthHz, 90.0f, 0.08f * sampleRate);
-  float stage2RingBwHz =
-      std::clamp(0.18f * stage2BandwidthHz, 70.0f, 0.06f * sampleRate);
-  // These transformer "can" paths are an equivalent low-frequency memory
-  // model for the IF cans. They operate on envelope-drive deviations, not on
-  // the literal 470 kHz carrier, so tune them in the low-kHz region where the
-  // current sample rate can represent their ring-down safely.
-  float canPrimaryInductance =
-      18e-3f * std::max(primaryDrift, 0.65f);
-  float canSecondaryInductance =
-      22e-3f * std::max(secondaryDrift, 0.65f);
-  float interstageCanHz =
-      std::clamp(0.58f * stage1RingBwHz, 120.0f, 0.045f * sampleRate);
-  float outputCanHz =
-      std::clamp(0.58f * stage2RingBwHz, 100.0f, 0.040f * sampleRate);
-  float interstageCanPrimaryC =
-      resonantCapacitanceFarads(interstageCanHz, canPrimaryInductance);
-  float interstageCanSecondaryC = resonantCapacitanceFarads(
-      interstageCanHz * (0.96f + 0.08f * std::fabs(stage1Drift - 1.0f)),
-      canSecondaryInductance);
-  float outputCanPrimaryC =
-      resonantCapacitanceFarads(outputCanHz, canSecondaryInductance);
-  float outputCanSecondaryC = resonantCapacitanceFarads(
-      outputCanHz * (0.95f + 0.10f * std::fabs(stage2Drift - 1.0f)),
-      canSecondaryInductance * (0.94f + 0.08f * std::fabs(stage2Drift - 1.0f)));
-  float interstageCanResistance = seriesResistanceForBandwidth(
-      canPrimaryInductance, std::max(0.85f * stage1RingBwHz, 80.0f));
-  float outputCanResistance = seriesResistanceForBandwidth(
-      canSecondaryInductance, std::max(0.85f * stage2RingBwHz, 70.0f));
-  float stage1RingTau = 1.0f / (kRadioTwoPi * std::max(stage1RingBwHz, 1.0f));
-  float stage2RingTau = 1.0f / (kRadioTwoPi * std::max(stage2RingBwHz, 1.0f));
-  ifStrip.stage1RingDecay =
-      std::exp(-1.0f / (sampleRate * std::max(stage1RingTau, 1e-6f)));
-  ifStrip.stage2RingDecay =
-      std::exp(-1.0f / (sampleRate * std::max(stage2RingTau, 1e-6f)));
-  ifStrip.stage1RingMix =
-      std::clamp(0.06f + 0.16f * interstageCouplingCoeff, 0.04f, 0.14f);
-  ifStrip.stage2RingMix =
-      std::clamp(0.07f + 0.18f * outputCouplingCoeff, 0.05f, 0.16f);
-  ifStrip.bp1.setBandpass(sampleRate, stage1RingBwHz, 0.82f);
-  ifStrip.bp2.setBandpass(sampleRate, stage2RingBwHz, 0.88f);
+      stageOffsetBaseHz *
+      (0.45f + outputCouplingCoeff + loadAsymmetry - canAsymmetry) * stage2Drift;
+  // Map the tuned-can equivalent onto a linear reduced-order envelope path:
+  // source downmix, two staggered resonant low-pass stages, and detector feed.
+  // The runtime stays O(1) per sample, but the stage bandwidths and asymmetry
+  // remain tied to the configured IF cans and their loading.
   ifStrip.sourceEnvelope.setLowpass(sampleRate, sourceEnvelopeLpHz,
                                     kRadioBiquadQ);
   ifStrip.interstageEnvelope.setLowpass(sampleRate, stage1BandwidthHz, 1.05f);
   ifStrip.outputEnvelope.setLowpass(sampleRate, stage2BandwidthHz, 1.12f);
-  ifStrip.primaryCapacitanceFarads =
-      resonantCapacitanceFarads(ifStrip.ifCenterHz + ifStrip.stage1OffsetHz,
-                                primaryInductance);
-  ifStrip.secondaryCapacitanceFarads =
-      resonantCapacitanceFarads(ifStrip.ifCenterHz + ifStrip.stage2OffsetHz,
-                                secondaryInductance);
-  ifStrip.primaryResistanceOhms =
-      seriesResistanceForBandwidth(primaryInductance, stageBandwidthHz);
-  ifStrip.secondaryResistanceOhms =
-      seriesResistanceForBandwidth(secondaryInductance, stageBandwidthHz);
-  int transformerSubsteps = std::clamp(ifStrip.oversampleFactor / 8, 1, 4);
-  float canOutputScale =
-      std::clamp(0.18f + 0.30f * std::max(couplingDrift - 0.65f, 0.0f),
-                 0.18f, 0.40f);
-  ifStrip.interstageTransformer.configure(
-      sampleRate, canPrimaryInductance, interstageCanPrimaryC,
-      interstageCanResistance, canSecondaryInductance, interstageCanSecondaryC,
-      interstageCanResistance, interstageCouplingCoeff, canOutputScale,
-      transformerSubsteps);
-  ifStrip.outputTransformer.configure(
-      sampleRate, canSecondaryInductance, outputCanPrimaryC,
-      outputCanResistance,
-      canSecondaryInductance *
-          (0.94f + 0.08f * std::fabs(stage2Drift - 1.0f)),
-      outputCanSecondaryC,
-      outputCanResistance *
-          (1.03f + 0.08f * std::fabs(stage2Drift - 1.0f)),
-      outputCouplingCoeff, canOutputScale, transformerSubsteps);
 
   float senseLow = ifStrip.ifCenterHz - 0.5f * safeBw;
   float senseHigh = ifStrip.ifCenterHz + 0.5f * safeBw;
@@ -4389,7 +4239,7 @@ float RadioIFStripNode::process(Radio1938& radio,
   auto& ifStrip = radio.ifStrip;
   ifStrip.detectorInputI = 0.0f;
   ifStrip.detectorInputQ = 0.0f;
-  if (!ifStrip.enabled || ifStrip.internalSampleRate <= 0.0f) {
+  if (!ifStrip.enabled || radio.sampleRate <= 0.0f) {
     return y;
   }
 
@@ -4403,16 +4253,6 @@ float RadioIFStripNode::process(Radio1938& radio,
     ifStrip.ifEnvelopePhase = 0.0f;
     ifStrip.rfPhase = 0.0f;
     ifStrip.loPhase = 0.0f;
-    ifStrip.stage1DriveEnv = 0.0f;
-    ifStrip.stage2DriveEnv = 0.0f;
-    ifStrip.stage1RingI = 0.0f;
-    ifStrip.stage1RingQ = 0.0f;
-    ifStrip.stage2RingI = 0.0f;
-    ifStrip.stage2RingQ = 0.0f;
-    ifStrip.bp1.reset();
-    ifStrip.bp2.reset();
-    ifStrip.interstageTransformer.reset();
-    ifStrip.outputTransformer.reset();
   }
   float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
   float rfGain =
@@ -4452,27 +4292,14 @@ float RadioIFStripNode::process(Radio1938& radio,
          std::fabs(mixerConversionGain) >= 1e-6f);
   float ifEnvI = rotatedEnvI * mixerConversionGain * ifGain;
   float ifEnvQ = rotatedEnvQ * mixerConversionGain * ifGain;
-  float tunedBw = std::max(radio.tuning.tunedBw, 1.0f);
-  float mistuneT =
-      clampf(std::fabs(tuneHz) / std::max(0.5f * tunedBw, 1.0f), 0.0f, 1.0f);
   float stage1Step = kRadioTwoPi * (ifStrip.stage1OffsetHz / sampleRate);
   float stage2Step = kRadioTwoPi * (ifStrip.stage2OffsetHz / sampleRate);
-  float stageAsymmetry =
-      clampf(tuneHz / std::max(0.5f * tunedBw, 1.0f), -1.0f, 1.0f);
-  float stage1Drive = 0.10f + 0.45f * mistuneT + 0.18f * avcT;
-  float stage2Drive = 0.16f + 0.55f * mistuneT + 0.12f * avcT;
   auto ifStage1 = processEquivalentIfStage(
-      ifEnvI, ifEnvQ, ifStrip.rfPhase, stage1Step, sampleRate,
-      ifStrip.interstageEnvelope, stage1Drive, stageAsymmetry, 0.04f,
-      ifStrip.stage1RingDecay,
-      ifStrip.stage1RingMix, ifStrip.stage1RingI, ifStrip.stage1RingQ,
-      ifStrip.stage1PrevOutI, ifStrip.stage1PrevOutQ, ifStrip.stage1DriveEnv);
+      ifEnvI, ifEnvQ, ifStrip.rfPhase, stage1Step, ifStrip.interstageEnvelope,
+      0.04f);
   auto ifStage2 = processEquivalentIfStage(
       ifStage1[0] + 0.06f * ifEnvI, ifStage1[1] + 0.06f * ifEnvQ,
-      ifStrip.loPhase, stage2Step, sampleRate, ifStrip.outputEnvelope,
-      stage2Drive, 0.7f * stageAsymmetry, 0.03f, ifStrip.stage2RingDecay,
-      ifStrip.stage2RingMix, ifStrip.stage2RingI, ifStrip.stage2RingQ,
-      ifStrip.stage2PrevOutI, ifStrip.stage2PrevOutQ, ifStrip.stage2DriveEnv);
+      ifStrip.loPhase, stage2Step, ifStrip.outputEnvelope, 0.03f);
   assert(std::isfinite(ifStage2[0]) && std::isfinite(ifStage2[1]));
   ifStrip.detectorInputI = ifStage2[0];
   ifStrip.detectorInputQ = ifStage2[1];
@@ -4548,21 +4375,8 @@ static std::array<float, 2> processEquivalentIfStage(float inI,
                                                      float inQ,
                                                      float& phase,
                                                      float baseStep,
-                                                     float sampleRate,
                                                      IQBiquad& resonator,
-                                                     float saturationDrive,
-                                                     float asymmetry,
-                                                     float leakMix,
-                                                     float ringDecay,
-                                                     float ringMix,
-                                                     float& ringI,
-                                                     float& ringQ,
-                                                     float& prevOutI,
-                                                     float& prevOutQ,
-                                                     float& driveEnv) {
-  float magnitudeIn = std::sqrt(inI * inI + inQ * inQ);
-  float envCoeff = std::exp(-1.0f / (std::max(sampleRate, 1.0f) * 0.0035f));
-  driveEnv = envCoeff * driveEnv + (1.0f - envCoeff) * magnitudeIn;
+                                                     float leakMix) {
   auto mixed = rotateComplexEnvelope(inI, inQ, phase);
   auto filtered = resonator.process(mixed[0], mixed[1]);
   auto staged = unrotateComplexEnvelope(filtered[0], filtered[1], phase);
@@ -4570,17 +4384,7 @@ static std::array<float, 2> processEquivalentIfStage(float inI,
 
   float dryMix = clampf(leakMix, 0.0f, 0.25f);
   float wetMix = 1.0f - dryMix;
-  float outI = wetMix * staged[0] + dryMix * inI;
-  float outQ = wetMix * staged[1] + dryMix * inQ;
-  (void)saturationDrive;
-  (void)asymmetry;
-  (void)ringDecay;
-  (void)ringMix;
-  ringI = 0.0f;
-  ringQ = 0.0f;
-  prevOutI = outI;
-  prevOutQ = outQ;
-  return {outI, outQ};
+  return {wetMix * staged[0] + dryMix * inI, wetMix * staged[1] + dryMix * inQ};
 }
 
 float RadioDemodNode::process(Radio1938& radio,
@@ -4897,15 +4701,12 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
          power.nominalOutputPowerWatts > 0.0f);
   radio.output.digitalReferenceSpeakerVoltsPeak = std::sqrt(
       2.0f * power.nominalOutputPowerWatts * power.outputLoadResistanceOhms);
-  power.satOsLpIn = Biquad{};
-  power.satOsLpOut = Biquad{};
 }
 
 void RadioPowerNode::reset(Radio1938& radio) {
   auto& power = radio.power;
   power.sagEnv = 0.0f;
   power.rectifierPhase = 0.0f;
-  power.satOsPrev = 0.0f;
   power.gridCouplingCapVoltage = 0.0f;
   power.gridVoltage = 0.0f;
   power.tubePlateVoltage = power.tubeQuiescentPlateVolts;
@@ -4919,8 +4720,6 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.interstageCt.secondaryBVoltage = 0.0f;
   power.outputTransformer.reset();
   power.postLpf.reset();
-  power.satOsLpIn.reset();
-  power.satOsLpOut.reset();
 }
 
 float RadioPowerNode::process(Radio1938& radio,
@@ -5805,6 +5604,9 @@ static void applyPhilco37116Preset(Radio1938& radio) {
 
   radio.ifStrip.enabled = true;
   radio.ifStrip.ifMinBwHz = 2400.0f;
+  radio.ifStrip.primaryInductanceHenries = 0.00022f;
+  radio.ifStrip.secondaryInductanceHenries = 0.00025f;
+  radio.ifStrip.secondaryLoadResistanceOhms = 680.0f;
   // Reduced-order IF gain stands in for the missing plate-voltage swing of the
   // 470 kHz strip. Calibrate it to land the detector audio in the few-hundred
   // millivolt range before the 6J5/6F6/6B4 chain, rather than recovering that
@@ -5812,9 +5614,6 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.ifStrip.stageGain = 2.0f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
-  radio.ifStrip.primaryInductanceHenries = 220e-6f;
-  radio.ifStrip.secondaryInductanceHenries = 250e-6f;
-  radio.ifStrip.secondaryLoadResistanceOhms = 680.0f;
   radio.ifStrip.interstageCouplingCoeff = 0.15f;
   radio.ifStrip.outputCouplingCoeff = 0.11f;
 
@@ -5877,8 +5676,6 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.sagStart = 0.06f;
   radio.power.sagEnd = 0.22f;
   radio.power.rippleDepth = 0.01f;
-  radio.power.satDrive = 1.0f;
-  radio.power.satMix = 0.0f;
   radio.power.sagAttackMs = 60.0f;
   radio.power.sagReleaseMs = 900.0f;
   radio.power.rectifierMinHz = 80.0f;
