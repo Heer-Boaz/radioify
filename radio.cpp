@@ -1252,10 +1252,19 @@ static KorenTriodeModel fitKorenTriodeModel(double vgkQ,
   double u[3] = {std::log(kg1Init), std::log(kpInit), std::log(kvbInit)};
   double bestU[3] = {u[0], u[1], u[2]};
   double bestNorm = std::numeric_limits<double>::infinity();
+  constexpr double kModelLogMin = std::log(1e-12);
+  constexpr double kModelLogMax = std::log(1e12);
+
+  auto clampModelLog = [&](double x) {
+    return std::clamp(x, kModelLogMin, kModelLogMax);
+  };
 
   auto evalResiduals = [&](const double params[3], double residuals[3]) {
+    double safeParams[3] = {clampModelLog(params[0]), clampModelLog(params[1]),
+                            clampModelLog(params[2])};
     KorenTriodeModel model = makeKorenTriodeModel(
-        mu, std::exp(params[0]), std::exp(params[1]), std::exp(params[2]));
+        mu, std::exp(safeParams[0]), std::exp(safeParams[1]),
+        std::exp(safeParams[2]));
     KorenTriodeMetrics metrics = evaluateKorenTriodeMetrics(vgkQ, vpkQ, model);
     residuals[0] = metrics.currentAmps / iqTarget - 1.0;
     residuals[1] = metrics.gmSiemens / gmTarget - 1.0;
@@ -1313,9 +1322,9 @@ static KorenTriodeModel fitKorenTriodeModel(double vgkQ,
       lambda *= 0.5;
     }
 
-    u[0] = candidateBestU[0];
-    u[1] = candidateBestU[1];
-    u[2] = candidateBestU[2];
+    u[0] = clampModelLog(candidateBestU[0]);
+    u[1] = clampModelLog(candidateBestU[1]);
+    u[2] = clampModelLog(candidateBestU[2]);
 
     double maxDelta =
         std::max(std::fabs(delta[0]),
@@ -2604,6 +2613,63 @@ static float solveOutputPrimaryVoltageAffine(
   return vp;
 }
 
+static float estimateOutputStageNominalPowerWatts(
+    const Radio1938::PowerNodeState& power) {
+  float loadResistance = requirePositiveFinite(power.outputLoadResistanceOhms);
+  float outputPlateQuiescent =
+      requirePositiveFinite(power.outputTubeQuiescentPlateVolts);
+  float maxGridPeak = 0.92f * std::max(std::fabs(power.outputTubeBiasVolts), 1.0f);
+  constexpr int kAmplitudeSteps = 40;
+  constexpr int kSamplesPerCycle = 96;
+  constexpr int kSettleCycles = 6;
+  constexpr int kMeasureCycles = 2;
+  float bestSecondaryRms = 0.0f;
+
+  for (int step = 1; step <= kAmplitudeSteps; ++step) {
+    float gridPeak =
+        maxGridPeak * static_cast<float>(step) / static_cast<float>(kAmplitudeSteps);
+    CurrentDrivenTransformer transformer = power.outputTransformer;
+    transformer.reset();
+    double sumSq = 0.0;
+    int sampleCount = 0;
+
+    for (int cycle = 0; cycle < (kSettleCycles + kMeasureCycles); ++cycle) {
+      for (int i = 0; i < kSamplesPerCycle; ++i) {
+        float phase = kRadioTwoPi * static_cast<float>(i) /
+                      static_cast<float>(kSamplesPerCycle);
+        float gridA = gridPeak * std::sin(phase);
+        float gridB = -gridA;
+        AffineTransformerProjection affineOut =
+            buildAffineProjection(transformer, loadResistance, 0.0f);
+        float solvedPrimaryVoltage = solveOutputPrimaryVoltageAffine(
+            affineOut, power, outputPlateQuiescent, gridA, gridB,
+            transformer.primaryVoltage);
+        float plateA = outputPlateQuiescent - 0.5f * solvedPrimaryVoltage;
+        float plateB = outputPlateQuiescent + 0.5f * solvedPrimaryVoltage;
+        KorenTriodePlateEval evalA = evaluateKorenTriodePlateRuntime(
+            power.outputTubeBiasVolts + gridA, plateA,
+            power.outputTubeTriodeModel, power.outputTubeTriodeLut);
+        KorenTriodePlateEval evalB = evaluateKorenTriodePlateRuntime(
+            power.outputTubeBiasVolts + gridB, plateB,
+            power.outputTubeTriodeModel, power.outputTubeTriodeLut);
+        float driveCurrent = 0.5f * static_cast<float>(evalA.currentAmps -
+                                                       evalB.currentAmps);
+        auto outputSample = transformer.process(driveCurrent, loadResistance, 0.0f);
+        if (cycle >= kSettleCycles) {
+          sumSq += static_cast<double>(outputSample.secondaryVoltage) *
+                   static_cast<double>(outputSample.secondaryVoltage);
+          sampleCount++;
+        }
+      }
+    }
+
+    float secondaryRms = std::sqrt(sumSq / std::max(sampleCount, 1));
+    bestSecondaryRms = std::max(bestSecondaryRms, secondaryRms);
+  }
+
+  return (bestSecondaryRms * bestSecondaryRms) / loadResistance;
+}
+
 struct DriverInterstageCenterTappedResult {
   float driverPlateCurrentAbs = 0.0f;
   float primaryCurrent = 0.0f;
@@ -3162,6 +3228,7 @@ void AMDetector::reset() {
   detectorNode = 0.0f;
   audioEnv = 0.0f;
   avcEnv = 0.0f;
+  warmStartPending = true;
   afcError = 0.0f;
   ifCrackleEnv = 0.0f;
   ifCracklePhase = 0.0f;
@@ -3208,6 +3275,29 @@ void Radio1938::CalibrationStageMetrics::clearAccumulators() {
 void Radio1938::CalibrationStageMetrics::resetMeasurementState() {
   fftTimeBuffer.fill(0.0f);
   fftFill = 0;
+}
+
+void Radio1938::CalibrationRmsMetric::reset() {
+  sampleCount = 0;
+  sumSq = 0.0;
+  rms = 0.0f;
+  peak = 0.0f;
+}
+
+void Radio1938::CalibrationRmsMetric::accumulate(float value) {
+  if (!std::isfinite(value)) return;
+  sampleCount++;
+  sumSq += static_cast<double>(value) * static_cast<double>(value);
+  peak = std::max(peak, std::fabs(value));
+}
+
+void Radio1938::CalibrationRmsMetric::updateSnapshot() {
+  if (sampleCount == 0) {
+    rms = 0.0f;
+    return;
+  }
+  rms = static_cast<float>(
+      std::sqrt(sumSq / static_cast<double>(sampleCount)));
 }
 
 static void fftInPlace(
@@ -3310,6 +3400,15 @@ void Radio1938::CalibrationState::reset() {
   detectorIfCrackleEventCount = 0;
   detectorIfCrackleMaxBurstAmp = 0.0f;
   detectorIfCrackleMaxEnv = 0.0f;
+  detectorNodeVolts.reset();
+  receiverGridVolts.reset();
+  receiverPlateSwingVolts.reset();
+  driverGridVolts.reset();
+  driverPlateSwingVolts.reset();
+  outputGridAVolts.reset();
+  outputGridBVolts.reset();
+  outputPrimaryVolts.reset();
+  speakerSecondaryVolts.reset();
   validationDriverGridPositive = false;
   validationFailed = false;
   validationOutputGridPositive = false;
@@ -3405,6 +3504,15 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
   for (auto& stage : radio.calibration.stages) {
     stage.updateSnapshot(radio.sampleRate);
   }
+  radio.calibration.detectorNodeVolts.updateSnapshot();
+  radio.calibration.receiverGridVolts.updateSnapshot();
+  radio.calibration.receiverPlateSwingVolts.updateSnapshot();
+  radio.calibration.driverGridVolts.updateSnapshot();
+  radio.calibration.driverPlateSwingVolts.updateSnapshot();
+  radio.calibration.outputGridAVolts.updateSnapshot();
+  radio.calibration.outputGridBVolts.updateSnapshot();
+  radio.calibration.outputPrimaryVolts.updateSnapshot();
+  radio.calibration.speakerSecondaryVolts.updateSnapshot();
 
   if (radio.calibration.totalSamples > 0) {
     float invCount = 1.0f / static_cast<float>(radio.calibration.totalSamples);
@@ -3475,6 +3583,7 @@ static void updateCalibrationSnapshot(Radio1938& radio) {
 float AMDetector::processEnvelope(float signalI,
                                   float signalQ,
                                   float ifNoiseAmp,
+                                  Radio1938& radio,
                                   float ifCrackleAmp,
                                   float ifCrackleRate) {
   constexpr float kInvSqrt2 = 0.70710678118f;
@@ -3537,6 +3646,19 @@ float AMDetector::processEnvelope(float signalI,
   float ifMagnitude = std::sqrt(ifI * ifI + ifQ * ifQ);
   audioRect = diodeJunctionRectify(ifMagnitude, audioDiodeDrop,
                                    audioJunctionSlopeVolts);
+  float delayedAvcThreshold = 0.18f * std::max(controlVoltageRef, 1e-6f);
+  if (warmStartPending) {
+    detectorNode = audioRect;
+    avcEnv = std::max(detectorNode - delayedAvcThreshold, 0.0f);
+    avcRect = avcEnv;
+    auto prechargeUnityLowpass = [](Biquad& biquad, float dcLevel) {
+      biquad.z1 = dcLevel * (1.0f - biquad.b0);
+      biquad.z2 = dcLevel * (biquad.b2 - biquad.a2);
+    };
+    prechargeUnityLowpass(audioPostLp1, detectorNode);
+    prechargeUnityLowpass(audioPostLp2, detectorNode);
+    warmStartPending = false;
+  }
   float dt = 1.0f / std::max(fs, 1.0f);
   float storageCapG =
       std::max(detectorStorageCapFarads, 1e-12f) / dt;
@@ -3547,7 +3669,6 @@ float AMDetector::processEnvelope(float signalI,
     sourceG = 1.0f / std::max(audioChargeResistanceOhms, 1e-6f);
   }
 
-  float delayedAvcThreshold = 0.18f * std::max(controlVoltageRef, 1e-6f);
   float avcFeedG = 0.0f;
   if (std::max(audioRect, detectorNode) > delayedAvcThreshold) {
     avcFeedG = 1.0f / std::max(avcChargeResistanceOhms, 1e-6f);
@@ -3570,14 +3691,17 @@ float AMDetector::processEnvelope(float signalI,
   avcEnv = std::max(solvedAvcNode, 0.0f);
   avcRect = avcEnv;
   assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
+  if (radio.calibration.enabled) {
+    radio.calibration.detectorNodeVolts.accumulate(detectorNode);
+  }
 
   audioEnv = audioPostLp1.process(detectorNode);
   audioEnv = audioPostLp2.process(audioEnv);
   return audioEnv;
 }
 
-float AMDetector::process(const AMDetectorSampleInput& in) {
-  return processEnvelope(in.signal, 0.0f, in.ifNoiseAmp,
+float AMDetector::process(const AMDetectorSampleInput& in, Radio1938& radio) {
+  return processEnvelope(in.signal, 0.0f, in.ifNoiseAmp, radio,
                          in.ifCrackleAmp, in.ifCrackleRate);
 }
 
@@ -4028,6 +4152,74 @@ static std::array<float, 2> processEquivalentIfStage(float inI,
                                                      float& prevOutQ,
                                                      float& driveEnv);
 
+static std::array<float, 2> computeReceiverControlDcNodes(
+    const Radio1938::ReceiverCircuitNodeState& receiver,
+    float sourceVoltage) {
+  float totalResistance = receiver.volumeControlResistanceOhms;
+  float wiperResistance = receiver.volumeControlPosition * totalResistance;
+  float tapResistance = receiver.volumeControlTapResistanceOhms;
+  float loudnessBlend = 0.0f;
+  if (tapResistance > 0.0f) {
+    loudnessBlend = clampf((tapResistance - wiperResistance) / tapResistance,
+                           0.0f, 1.0f);
+  }
+
+  constexpr float kNodeLinkOhms = 1e-3f;
+  auto addGroundBranch = [](float (&a)[2][2], int node, float resistanceOhms) {
+    if (resistanceOhms <= 0.0f) return;
+    a[node][node] += 1.0f / std::max(resistanceOhms, 1e-9f);
+  };
+  auto addSourceBranch = [](float (&a)[2][2], float (&b)[2], int node,
+                            float resistanceOhms, float sourceVoltageIn) {
+    if (resistanceOhms <= 0.0f) return;
+    float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
+    a[node][node] += conductance;
+    b[node] += conductance * sourceVoltageIn;
+  };
+  auto addNodeBranch = [](float (&a)[2][2], int aNode, int bNode,
+                          float resistanceOhms) {
+    if (resistanceOhms <= 0.0f) return;
+    float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
+    a[aNode][aNode] += conductance;
+    a[bNode][bNode] += conductance;
+    a[aNode][bNode] -= conductance;
+    a[bNode][aNode] -= conductance;
+  };
+
+  float a[2][2] = {};
+  float b[2] = {};
+  constexpr int kWiperNode = 0;
+  constexpr int kTapNode = 1;
+  if (wiperResistance >= tapResistance) {
+    addSourceBranch(a, b, kWiperNode,
+                    std::max(totalResistance - wiperResistance, kNodeLinkOhms),
+                    sourceVoltage);
+    addNodeBranch(a, kWiperNode, kTapNode,
+                  std::max(wiperResistance - tapResistance, kNodeLinkOhms));
+    addGroundBranch(a, kTapNode, std::max(tapResistance, kNodeLinkOhms));
+  } else {
+    addSourceBranch(a, b, kTapNode,
+                    std::max(totalResistance - tapResistance, kNodeLinkOhms),
+                    sourceVoltage);
+    addNodeBranch(a, kTapNode, kWiperNode,
+                  std::max(tapResistance - wiperResistance, kNodeLinkOhms));
+    addGroundBranch(a, kWiperNode, std::max(wiperResistance, kNodeLinkOhms));
+  }
+  if (loudnessBlend > 0.0f &&
+      receiver.volumeControlLoudnessResistanceOhms > 0.0f) {
+    a[kTapNode][kTapNode] +=
+        loudnessBlend /
+        std::max(receiver.volumeControlLoudnessResistanceOhms, 1e-9f);
+  }
+
+  float det = a[0][0] * a[1][1] - a[0][1] * a[1][0];
+  assert(std::fabs(det) >= 1e-12f);
+  float wiperVoltage = (b[0] * a[1][1] - a[0][1] * b[1]) / det;
+  float tapVoltage = (a[0][0] * b[1] - b[0] * a[1][0]) / det;
+  assert(std::isfinite(wiperVoltage) && std::isfinite(tapVoltage));
+  return {wiperVoltage, tapVoltage};
+}
+
 void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
   setBandwidth(radio, radio.bwHz, radio.tuning.tuneOffsetHz);
 }
@@ -4418,15 +4610,18 @@ float RadioDemodNode::process(Radio1938& radio,
     y = demod.am.processEnvelope(radio.ifStrip.detectorInputI,
                                  radio.ifStrip.detectorInputQ,
                                  ctx.derived.demodIfNoiseAmp,
+                                 radio,
                                  ctx.derived.demodIfCrackleAmp,
                                  ctx.derived.demodIfCrackleRate);
   } else if (radio.sourceFrame.mode == SourceInputMode::ComplexEnvelope) {
     y = demod.am.processEnvelope(radio.sourceFrame.i, radio.sourceFrame.q,
                                  ctx.derived.demodIfNoiseAmp,
+                                 radio,
                                  ctx.derived.demodIfCrackleAmp,
                                  ctx.derived.demodIfCrackleRate);
   } else {
     y = demod.am.processEnvelope(y, 0.0f, ctx.derived.demodIfNoiseAmp,
+                                 radio,
                                  ctx.derived.demodIfCrackleAmp,
                                  ctx.derived.demodIfCrackleRate);
   }
@@ -4463,6 +4658,7 @@ void RadioReceiverCircuitNode::reset(Radio1938& radio) {
   receiver.couplingCapVoltage = 0.0f;
   receiver.gridVoltage = 0.0f;
   receiver.volumeControlTapVoltage = 0.0f;
+  receiver.warmStartPending = true;
   receiver.tubePlateVoltage = receiver.tubeQuiescentPlateVolts;
 }
 
@@ -4481,6 +4677,17 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   if (tapResistance > 0.0f) {
     loudnessBlend = clampf((tapResistance - wiperResistance) / tapResistance,
                            0.0f, 1.0f);
+  }
+  if (receiver.warmStartPending) {
+    auto dcNodes = computeReceiverControlDcNodes(receiver, y);
+    receiver.volumeControlTapVoltage = dcNodes[1];
+    // On a warmed set the detector-side control network already sits at its
+    // DC operating point, so precharge the coupling capacitor to the current
+    // wiper potential instead of letting the first audio grid absorb a false
+    // startup step from an empty capacitor.
+    receiver.couplingCapVoltage = dcNodes[0];
+    receiver.gridVoltage = 0.0f;
+    receiver.warmStartPending = false;
   }
   constexpr float kNodeLinkOhms = 1e-3f;
   auto addGroundBranch = [](float (&a)[3][3], int node, float resistanceOhms) {
@@ -4553,6 +4760,9 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
   assert(std::isfinite(receiver.couplingCapVoltage) &&
          std::isfinite(receiver.gridVoltage) &&
          std::isfinite(receiver.volumeControlTapVoltage));
+  if (radio.calibration.enabled) {
+    radio.calibration.receiverGridVolts.accumulate(receiver.gridVoltage);
+  }
   float out = 0.0f;
   float plateCurrent = 0.0f;
   assert(receiver.tubeTriodeConnected &&
@@ -4571,6 +4781,7 @@ float RadioReceiverCircuitNode::process(Radio1938& radio,
                                       receiver.tubeTriodeLut)
           .currentAmps);
   if (radio.calibration.enabled) {
+    radio.calibration.receiverPlateSwingVolts.accumulate(out);
     radio.calibration.maxReceiverPlateCurrentAmps =
         std::max(radio.calibration.maxReceiverPlateCurrentAmps, plateCurrent);
   }
@@ -4696,6 +4907,15 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
     power.outputTransformerAffineStateA = outputAffine.stateA;
     power.outputTransformerAffineSlope = outputAffine.slope;
   }
+  // Derive the digital speaker reference from the modeled 6B4/output-transformer
+  // combination instead of a hand-tuned watt scalar. This keeps the digital
+  // scale anchored to the clean power the current tube/load model can actually
+  // produce.
+  power.nominalOutputPowerWatts = estimateOutputStageNominalPowerWatts(power);
+  assert(std::isfinite(power.nominalOutputPowerWatts) &&
+         power.nominalOutputPowerWatts > 0.0f);
+  radio.output.digitalReferenceSpeakerVoltsPeak = std::sqrt(
+      2.0f * power.nominalOutputPowerWatts * power.outputLoadResistanceOhms);
   power.satOsLpIn = Biquad{};
   power.satOsLpOut = Biquad{};
 }
@@ -4747,6 +4967,9 @@ float RadioPowerNode::process(Radio1938& radio,
   power.gridCouplingCapVoltage +=
       dt * (seriesCurrent / requirePositiveFinite(power.gridCouplingCapFarads));
   float controlGridVolts = power.tubeBiasVolts + power.gridVoltage;
+  if (radio.calibration.enabled) {
+    radio.calibration.driverGridVolts.accumulate(power.gridVoltage);
+  }
   if (radio.calibration.enabled && controlGridVolts > 0.0f) {
     radio.calibration.driverGridPositiveSamples++;
   }
@@ -4780,6 +5003,10 @@ float RadioPowerNode::process(Radio1938& radio,
   float actualDriverCurrent = interstageSolved.driverPlateCurrentAbs;
 
   if (radio.calibration.enabled) {
+    radio.calibration.driverPlateSwingVolts.accumulate(
+        interstageSolved.primaryVoltage);
+    radio.calibration.outputGridAVolts.accumulate(power.outputGridAVolts);
+    radio.calibration.outputGridBVolts.accumulate(power.outputGridBVolts);
     float interstageDifferentialVolts =
         interstageSolved.secondaryAVoltage - interstageSolved.secondaryBVoltage;
 
@@ -4856,6 +5083,8 @@ float RadioPowerNode::process(Radio1938& radio,
     y = power.postLpf.process(y);
   }
   if (radio.calibration.enabled) {
+    radio.calibration.outputPrimaryVolts.accumulate(outputSample.primaryVoltage);
+    radio.calibration.speakerSecondaryVolts.accumulate(y);
     radio.calibration.maxDriverPlateCurrentAmps = std::max(
         radio.calibration.maxDriverPlateCurrentAmps, actualDriverCurrent);
     radio.calibration.maxOutputPlateCurrentAAmps = std::max(
@@ -5572,16 +5801,18 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.frontEnd.rfLoadResistanceOhms = 3300.0f;
 
   // Philco 37-116 uses a 6L7G mixer. RCA's 1935 release data gives about
-  // 250 V plate, 160 V screen, grid-1 bias near -6 V, grid-3 bias near -20 V,
-  // 25 V peak oscillator injection, about 3.5 mA plate current, and at least
-  // 325 umho conversion conductance. The reduced-order mixer keeps the same
-  // cross-term isolation but now biases the oscillator grid explicitly.
+  // 250 V plate supply, 160 V screen, grid-1 bias near -6 V, grid-3 bias near
+  // -20 V, 25 V peak oscillator injection, about 3.5 mA plate current, and at
+  // least 325 umho conversion conductance. The reduced-order mixer needs a
+  // finite DC plate drop for its operating-point fit, so keep the quiescent
+  // plate near the same 10 k load order used for the AC conversion model
+  // instead of the impossible 250 V-at-3.5 mA no-drop placeholder.
   radio.mixer.rfGridDriveVolts = 1.0f;
   radio.mixer.loGridDriveVolts = 18.0f;
   radio.mixer.loGridBiasVolts = -15.0f;
   radio.mixer.avcGridDriveVolts = 24.0f;
   radio.mixer.plateSupplyVolts = 250.0f;
-  radio.mixer.plateDcVolts = 250.0f;
+  radio.mixer.plateDcVolts = 215.0f;
   radio.mixer.screenVolts = 160.0f;
   radio.mixer.biasVolts = -6.0f;
   radio.mixer.cutoffVolts = -45.0f;
@@ -5593,7 +5824,11 @@ static void applyPhilco37116Preset(Radio1938& radio) {
 
   radio.ifStrip.enabled = true;
   radio.ifStrip.ifMinBwHz = 2400.0f;
-  radio.ifStrip.stageGain = 1.0f;
+  // Reduced-order IF gain stands in for the missing plate-voltage swing of the
+  // 470 kHz strip. Calibrate it to land the detector audio in the few-hundred
+  // millivolt range before the 6J5/6F6/6B4 chain, rather than recovering that
+  // level digitally after the speaker model.
+  radio.ifStrip.stageGain = 4.0f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.primaryInductanceHenries = 220e-6f;
@@ -5618,7 +5853,10 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.demod.am.avcDischargeResistanceOhms =
       parallelResistance(1000000.0f, 1000000.0f);
   radio.demod.am.avcFilterCapFarads = 0.15e-6f;
-  radio.demod.am.controlVoltageRef = 0.75f;
+  // Let delayed AVC ride on a multi-volt detector reference so the detector
+  // can build a realistic carrier/audio voltage before the RF/IF gain is
+  // pinched back.
+  radio.demod.am.controlVoltageRef = 3.0f;
   radio.demod.am.senseLowHz = 0.0f;
   radio.demod.am.senseHighHz = 0.0f;
   radio.demod.am.afcSenseLpHz = 34.0f;
@@ -5629,7 +5867,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   // first-audio tube are now anchored to the 37-116 chassis rather than 116X.
   radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 1000000.0f;
-  radio.receiverCircuit.volumeControlPosition = 0.95f;
+  radio.receiverCircuit.volumeControlPosition = 1.0f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 490000.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.015e-6f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
@@ -5673,17 +5911,17 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.supplyBiasDepth = 0.0f;
   radio.power.postLpHz = 0.0f;
   // The 37-116 driver is a triode-connected 6F6G feeding the 6B4G pair through
-  // an interstage transformer. RC-13 gives 250 V plate, -20 V grid, about
-  // 31 mA plate current, mu about 7, gm about 2700 umho, and 4000 ohm load
-  // for single-ended class-A triode operation.
+  // an interstage transformer. Tung-Sol RC-13 gives 250 V plate, 250 V screen,
+  // -20 V grid, about 21 mA plate current, mu about 6.8, gm about 2600 umho,
+  // and 4000 ohm load for single-ended class-A triode operation.
   radio.power.gridCouplingCapFarads = 0.05e-6f;
   radio.power.gridLeakResistanceOhms = 100000.0f;
   radio.power.tubePlateSupplyVolts = 250.0f;
   radio.power.tubeScreenVolts = 250.0f;
   radio.power.tubeBiasVolts = -20.0f;
-  radio.power.tubePlateCurrentAmps = 0.031f;
-  radio.power.tubeMutualConductanceSiemens = 0.0027f;
-  radio.power.tubeMu = 7.0f;
+  radio.power.tubePlateCurrentAmps = 0.021f;
+  radio.power.tubeMutualConductanceSiemens = 0.0026f;
+  radio.power.tubeMu = 6.8f;
   radio.power.tubeTriodeConnected = true;
   radio.power.tubeAcLoadResistanceOhms = 4000.0f;
   radio.power.tubePlateKneeVolts = 24.0f;
@@ -5698,7 +5936,11 @@ static void applyPhilco37116Preset(Radio1938& radio) {
       radio.power.tubePlateSupplyVolts -
       radio.power.tubePlateCurrentAmps *
           radio.power.interstagePrimaryResistanceOhms;
-  radio.power.interstageTurnsRatioPrimaryToSecondary = 1.0f / 1.4f;
+  // The 6F6 driver must voltage-step up into the fixed-bias 6B4G pair; the
+  // earlier 1:1.4 equivalent left the output grids an order of magnitude shy
+  // of the AB1 drive range. A conservative 1:3 step-up keeps the reduced-order
+  // grids comfortably below positive conduction while restoring realistic drive.
+  radio.power.interstageTurnsRatioPrimaryToSecondary = 1.0f / 3.0f;
   radio.power.interstagePrimaryCoreLossResistanceOhms = 220000.0f;
   // The pF stray capacitances are ultrasonic details in the real chassis.
   // In this 48 kHz reduced-order audio model they destabilize the transformer
@@ -5708,11 +5950,13 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.interstageSecondaryResistanceOhms = 296.0f;
   radio.power.interstageSecondaryShuntCapFarads = 0.0f;
   radio.power.interstageIntegrationSubsteps = 8;
-  // The 37-116 uses push-pull 6B4G output tubes. The 6B4G is the octal form of
-  // the 2A3 family, so the reduced-order triode law keeps the same mu/gm class
-  // and the 37-116's plate-to-plate load target.
+  // The 37-116 uses push-pull 6B4G output tubes. Tung-Sol gives the fixed-bias
+  // AB1 pair at 325 V plate, -68 V grid, 40 mA zero-signal plate current per
+  // tube, and 3000 ohm plate-to-plate load for 15 W output. The 6B4G is the
+  // octal 2A3 family member, so keep the same mu/gm class but bias it at the
+  // published Philco-era AB1 point instead of the earlier too-hot -39 V guess.
   radio.power.outputTubePlateSupplyVolts = 325.0f;
-  radio.power.outputTubeBiasVolts = -39.0f;
+  radio.power.outputTubeBiasVolts = -68.0f;
   radio.power.outputTubePlateCurrentAmps = 0.040f;
   radio.power.outputTubeMutualConductanceSiemens = 0.00525f;
   radio.power.outputTubeMu = 4.2f;
@@ -5735,11 +5979,9 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.outputTransformerSecondaryShuntCapFarads = 0.0f;
   radio.power.outputTransformerIntegrationSubsteps = 8;
   radio.power.outputLoadResistanceOhms = 3.9f;
-  // The reduced-order power/speaker path currently delivers about 1.4 to 1.5 Vpk
-  // on strong fully modulated program into the 3.9 ohm load. Use that as the
-  // effective full-scale reference so the digital domain stays close to unity
-  // and the limiter remains a safety net instead of a loudness shaper.
-  radio.power.nominalOutputPowerWatts = 0.30f;
+  // The clean output power reference is derived from the modeled 6B4/output
+  // transformer combination during RadioPowerNode::init, not hard-coded here.
+  radio.power.nominalOutputPowerWatts = 0.0f;
   assert(std::fabs(radio.power.tubePlateSupplyVolts -
                    radio.power.tubePlateCurrentAmps *
                        radio.power.interstagePrimaryResistanceOhms -
@@ -5748,13 +5990,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
                    radio.power.outputTubePlateCurrentAmps *
                        (0.5f * radio.power.outputTransformerPrimaryResistanceOhms) -
                    radio.power.outputTubePlateDcVolts) < 1.0f);
-  radio.output.digitalReferenceSpeakerVoltsPeak = std::sqrt(
-      2.0f * radio.power.nominalOutputPowerWatts *
-      radio.power.outputLoadResistanceOhms);
-  // Temporary A/B trim while the physical gain staging is still being
-  // recalibrated. This keeps comparison against the older voicing honest
-  // without leaning on the limiter.
-  radio.output.digitalMakeupGain = 1.40f;
+  radio.output.digitalMakeupGain = 1.0f;
 
   // --- Global oversampling and output clip settings ---
   // The speaker, limiter and output-clip stages use processOversampled2x, so
@@ -5809,8 +6045,8 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.speaker.suspensionGainDb = 3.5f;
   radio.speakerStage.speaker.coneBodyHz = 1200.0f;
   radio.speakerStage.speaker.coneBodyQ = 0.50f;
-  radio.speakerStage.speaker.coneBodyGainDb = 1.5f;
-  radio.speakerStage.speaker.topLpHz = 5500.0f;
+  radio.speakerStage.speaker.coneBodyGainDb = 1.0f;
+  radio.speakerStage.speaker.topLpHz = 4800.0f;
   radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
   radio.speakerStage.speaker.drive = 1.0f;
   radio.speakerStage.speaker.limit = 0.0f;
@@ -5828,7 +6064,7 @@ static void applyPhilco37116Preset(Radio1938& radio) {
   radio.cabinet.cavityDipHz = 900.0f;
   radio.cabinet.cavityDipQ = 2.0f;
   radio.cabinet.cavityDipGainDb = -3.0f;
-  radio.cabinet.grilleLpHz = 7500.0f;
+  radio.cabinet.grilleLpHz = 6200.0f;
   radio.cabinet.rearDelayMs = 0.90f;
   radio.cabinet.rearMix = 0.15f;
   radio.cabinet.rearHpHz = 200.0f;

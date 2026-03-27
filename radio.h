@@ -362,6 +362,7 @@ struct AMDetector {
   float detectorNode = 0.0f;
   float audioEnv = 0.0f;
   float avcEnv = 0.0f;
+  bool warmStartPending = true;
   float afcError = 0.0f;
   float ifCrackleEnv = 0.0f;
   float ifCrackleDecay = 0.0f;
@@ -404,10 +405,11 @@ struct AMDetector {
   void setBandwidth(float newBw, float newTuneHz = 0.0f);
   void setSenseWindow(float lowHz, float highHz);
   void reset();
-  float process(const AMDetectorSampleInput& in);
+  float process(const AMDetectorSampleInput& in, Radio1938& radio);
   float processEnvelope(float signalI,
                         float signalQ,
                         float ifNoiseAmp,
+                        Radio1938& radio,
                         float ifCrackleAmp = 0.0f,
                         float ifCrackleRate = 0.0f);
 };
@@ -927,6 +929,17 @@ struct RadioOutputClipNode {
     void updateSnapshot(float sampleRate);
   };
 
+  struct CalibrationRmsMetric {
+    uint64_t sampleCount = 0;
+    double sumSq = 0.0;
+    float rms = 0.0f;
+    float peak = 0.0f;
+
+    void reset();
+    void accumulate(float value);
+    void updateSnapshot();
+  };
+
   struct CalibrationState {
     static constexpr size_t kStageCount =
         static_cast<size_t>(StageId::OutputClip) + 1u;
@@ -966,6 +979,15 @@ struct RadioOutputClipNode {
     uint64_t detectorIfCrackleEventCount = 0;
     float detectorIfCrackleMaxBurstAmp = 0.0f;
     float detectorIfCrackleMaxEnv = 0.0f;
+    CalibrationRmsMetric detectorNodeVolts;
+    CalibrationRmsMetric receiverGridVolts;
+    CalibrationRmsMetric receiverPlateSwingVolts;
+    CalibrationRmsMetric driverGridVolts;
+    CalibrationRmsMetric driverPlateSwingVolts;
+    CalibrationRmsMetric outputGridAVolts;
+    CalibrationRmsMetric outputGridBVolts;
+    CalibrationRmsMetric outputPrimaryVolts;
+    CalibrationRmsMetric speakerSecondaryVolts;
     bool validationDriverGridPositive = false;
     bool validationFailed = false;
     bool validationOutputGridPositive = false;
@@ -1182,6 +1204,7 @@ struct RadioOutputClipNode {
     float gridLeakResistanceOhms = 0.0f;
     float couplingCapVoltage = 0.0f;
     float gridVoltage = 0.0f;
+    bool warmStartPending = true;
     float tubePlateSupplyVolts = 0.0f;
     float tubePlateDcVolts = 0.0f;
     float tubeQuiescentPlateVolts = 0.0f;
