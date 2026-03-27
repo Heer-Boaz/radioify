@@ -3150,11 +3150,6 @@ struct ReceiverInputNetworkSolve {
   float couplingCapVoltage = 0.0f;
 };
 
-struct ReceiverInputNorton {
-  float conductance = 0.0f;
-  float historyCurrent = 0.0f;
-};
-
 static std::array<float, 2> computeReceiverControlDcNodes(
     const Radio1938::ReceiverCircuitNodeState& receiver,
     float sourceVoltage);
@@ -3255,17 +3250,46 @@ static ReceiverInputNetworkSolve solveReceiverInputNetwork(
   return result;
 }
 
-static ReceiverInputNorton computeReceiverInputNorton(
-    const Radio1938::ReceiverCircuitNodeState& receiver,
-    float dt) {
-  ReceiverInputNorton result{};
-  if (!receiver.enabled) return result;
-  auto zero = solveReceiverInputNetwork(receiver, dt, 0.0f);
-  auto one = solveReceiverInputNetwork(receiver, dt, 1.0f);
-  result.historyCurrent = zero.inputCurrent;
-  result.conductance =
-      std::max(one.inputCurrent - zero.inputCurrent, 0.0f);
-  return result;
+static float computeReceiverDetectorLoadConductance(
+    const Radio1938::ReceiverCircuitNodeState& receiver) {
+  if (!receiver.enabled) return 0.0f;
+
+  float totalResistance =
+      std::max(receiver.volumeControlResistanceOhms, 1e-6f);
+  float volumePosition = clampf(receiver.volumeControlPosition, 0.0f, 1.0f);
+  float wiperResistance = volumePosition * totalResistance;
+  float sourceToWiperResistance =
+      std::max(totalResistance - wiperResistance, 0.0f);
+
+  // Reduced-order detector loading: the detector sees the full volume control
+  // track to ground at all times, and above the coupling-cap corner it also
+  // sees the first-audio grid-leak path through the top segment of the pot.
+  // Keep this load explicit and physically interpretable, but avoid the older
+  // dynamic Norton reduction here because its discrete companion branch was
+  // measurably over-damping the detector and falsifying IMD/SINAD.
+  float detectorLoadResistance = totalResistance;
+  float gridLeakResistance = std::max(receiver.gridLeakResistanceOhms, 1e-6f);
+  float gridPathResistance =
+      std::max(sourceToWiperResistance + gridLeakResistance, 1e-6f);
+  detectorLoadResistance =
+      parallelResistance(detectorLoadResistance, gridPathResistance);
+
+  if (receiver.volumeControlTapResistanceOhms > 0.0f &&
+      receiver.volumeControlLoudnessResistanceOhms > 0.0f) {
+    float tapResistance = receiver.volumeControlTapResistanceOhms;
+    float loudnessBlend =
+        clampf((tapResistance - wiperResistance) / tapResistance, 0.0f, 1.0f);
+    if (loudnessBlend > 0.0f) {
+      float loudnessResistance =
+          std::max(receiver.volumeControlLoudnessResistanceOhms /
+                       std::max(loudnessBlend, 1e-6f),
+                   1e-6f);
+      detectorLoadResistance =
+          parallelResistance(detectorLoadResistance, loudnessResistance);
+    }
+  }
+
+  return 1.0f / std::max(detectorLoadResistance, 1e-6f);
 }
 
 static void commitReceiverInputNetworkSolve(
@@ -3724,10 +3748,7 @@ float AMDetector::processEnvelope(float signalI,
   float solvedDetectorNode = detectorNode;
   float solvedAvcNode = avcEnv;
   if (useReceiverLoad) {
-    ReceiverInputNorton receiverInput =
-        computeReceiverInputNorton(radio.receiverCircuit, dt);
-    a00 += receiverInput.conductance;
-    b0 -= receiverInput.historyCurrent;
+    a00 += computeReceiverDetectorLoadConductance(radio.receiverCircuit);
   }
   float det = a00 * a11 - a01 * a10;
   assert(std::fabs(det) >= 1e-12f);
