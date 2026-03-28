@@ -1129,6 +1129,78 @@ void runNoise(const HarnessConfig& config) {
   std::cout << "hiss_1500_5000_rms," << bandRmsFromSpectrum(spectrum, config.sampleRate, 1500.0f, 5000.0f) << "\n\n";
 }
 
+void runAmValidate(const HarnessConfig& config) {
+  std::cout << "[am_validate]\n";
+  std::cout << "metric,value\n";
+
+  // Program (audio) used for AM excitation
+  auto program = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 0.35f);
+  // Run trace to collect detector/audio/env data
+  EnvelopeTraceResult trace = runAmProgramWithEnvelopeTrace(
+      config, program, std::min(config.modulationIndex, 0.999f),
+      std::max(config.noiseWeight, config.noiseOnlyWeight));
+
+  // Reconstruct RF samples used for the run (same envelope & carrier)
+  float safeSampleRate = std::max(config.sampleRate, 1.0f);
+  float carrierHz = std::clamp(trace.radio.ifStrip.sourceCarrierHz, 1000.0f, safeSampleRate * 0.45f);
+  float carrierPeak = std::sqrt(2.0f) * std::max(config.carrierRmsVolts, 0.0f);
+  std::vector<float> rfSamples(program.size(), 0.0f);
+  for (size_t i = 0; i < program.size(); ++i) {
+    float t = static_cast<float>(i) / safeSampleRate;
+    float envelopeFactor = std::max(0.0f, 1.0f + std::min(config.modulationIndex, 0.999f) * program[i]);
+    rfSamples[i] = carrierPeak * envelopeFactor * std::cos(kRadioTwoPi * carrierHz * t);
+  }
+
+  // RF-domain spectrum and sidebands
+  std::vector<double> rfSpec = computeSpectrumPeakAmplitudes(rfSamples, config.sampleRate);
+  double carrierAmp = peakAmplitudeAtHz(rfSpec, config.sampleRate, carrierHz);
+  double sideUpper = peakAmplitudeAtHz(rfSpec, config.sampleRate, carrierHz + 1000.0f);
+  double sideLower = peakAmplitudeAtHz(rfSpec, config.sampleRate, carrierHz - 1000.0f);
+  double expectedSide = (config.modulationIndex * 0.5) * carrierAmp;
+  double sideAvg = 0.5 * (sideUpper + sideLower);
+
+  std::cout << "carrier_amplitude," << carrierAmp << "\n";
+  std::cout << "sideband_upper," << sideUpper << "\n";
+  std::cout << "sideband_lower," << sideLower << "\n";
+  std::cout << "sideband_expected_per_side," << expectedSide << "\n";
+  std::cout << "sideband_avg_ratio_vs_expected," << (sideAvg / std::max(expectedSide, 1e-20)) << "\n";
+
+  // Detector-domain analysis
+  std::vector<double> detSpec = computeSpectrumPeakAmplitudes(trace.detectorNode, config.sampleRate);
+  double detDc = (detSpec.size() > 0) ? detSpec[0] : 0.0;
+  double detTone = peakAmplitudeAtHz(detSpec, config.sampleRate, 1000.0f);
+  std::cout << "detector_dc," << detDc << "\n";
+  std::cout << "detector_tone_1khz," << detTone << "\n";
+  std::cout << "detector_tone_to_dc_ratio," << (detTone / std::max(detDc, 1e-20)) << "\n";
+
+    // Envelope-derived modulation index (from detector audioEnv)
+    double envMax = -1e300, envMin = 1e300;
+    size_t start = program.size() / 4;
+    for (size_t i = start; i < trace.audioEnv.size(); ++i) {
+      envMax = std::max(envMax, static_cast<double>(trace.audioEnv[i]));
+      envMin = std::min(envMin, static_cast<double>(trace.audioEnv[i]));
+    }
+    double m_measured = 0.0;
+    if (envMax + envMin > 1e-12) m_measured = (envMax - envMin) / (envMax + envMin);
+    std::cout << "mod_index_config," << config.modulationIndex << "\n";
+    std::cout << "mod_index_measured_env," << m_measured << "\n";
+
+    // Tone metrics and SINAD at detector and final output
+    ToneMetrics detToneMetrics = measureToneMetrics(trace.detectorNode, config.sampleRate, 1000.0f, start);
+    ToneMetrics outToneMetrics = measureToneMetrics(trace.output, config.sampleRate, 1000.0f, start);
+    std::cout << "detector_sinad_db," << detToneMetrics.sinadDb << "\n";
+    std::cout << "output_sinad_db," << outToneMetrics.sinadDb << "\n";
+
+    // Speaker reference & digital output anchors (from radio calibration)
+    double speakerRef = trace.radio.calibration.maxSpeakerReferenceRatio;
+    double maxDigital = trace.radio.calibration.maxDigitalOutput;
+    std::cout << "speaker_reference_ratio," << speakerRef << "\n";
+    std::cout << "max_digital_output," << maxDigital << "\n";
+    std::cout << "if_center_hz," << trace.radio.ifStrip.ifCenterHz << "\n";
+    std::cout << "nominal_output_power_watts," << trace.radio.power.nominalOutputPowerWatts << "\n";
+    std::cout << "\n";
+  }
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1147,6 +1219,7 @@ int main(int argc, char** argv) {
     if (wantsSection(config, "reference")) runReference(config);
     if (wantsSection(config, "noise")) runNoise(config);
     if (wantsSection(config, "spectrum")) runSpectrum(config);
+    if (wantsSection(config, "am_validate")) runAmValidate(config);
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "radio_measurements: " << ex.what() << "\n";
