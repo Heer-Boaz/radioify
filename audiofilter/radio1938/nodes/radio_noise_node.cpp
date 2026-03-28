@@ -28,6 +28,7 @@ void resetNoiseRuntime(NoiseHum& hum) {
   hum.humPhase = 0.0f;
   hum.scEnv = 0.0f;
   hum.crackleEnv = 0.0f;
+  hum.cracklePulse = 0.0f;
   hum.pinkFast = 0.0f;
   hum.pinkSlow = 0.0f;
   hum.brown = 0.0f;
@@ -80,10 +81,15 @@ float processNoiseRuntime(NoiseHum& hum, const NoiseInput& in) {
   if (in.crackleRate > 0.0f && in.crackleAmp > 0.0f && hum.fs > 0.0f) {
     float chance = in.crackleRate / hum.fs;
     if (hum.dist01(hum.rng) < chance) {
-      hum.crackleEnv = 1.0f;
+      float eventSign = (hum.dist(hum.rng) >= 0.0f) ? 1.0f : -1.0f;
+      float eventAmp = 0.35f + 0.65f * hum.dist01(hum.rng);
+      hum.crackleEnv = std::max(hum.crackleEnv, eventAmp);
+      hum.cracklePulse = clampf(hum.cracklePulse + eventSign * eventAmp,
+                                -1.5f, 1.5f);
     }
-    float raw = hum.dist(hum.rng) * hum.crackleEnv;
+    hum.cracklePulse *= hum.crackleDecay;
     hum.crackleEnv *= hum.crackleDecay;
+    float raw = hum.cracklePulse;
     raw = hum.crackleHp.process(raw);
     raw = hum.crackleLp.process(raw);
     crackle = raw * in.crackleAmp * burstMask;

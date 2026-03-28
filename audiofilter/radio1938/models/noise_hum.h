@@ -31,6 +31,7 @@ struct NoiseHum {
   float scAtk = 0.0f;
   float scRel = 0.0f;
   float crackleEnv = 0.0f;
+  float cracklePulse = 0.0f;
   float crackleDecay = 0.0f;
   float pinkFast = 0.0f;
   float pinkSlow = 0.0f;

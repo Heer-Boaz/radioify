@@ -435,6 +435,9 @@ struct Radio1938 {
     float tubePlateResistanceOhms = 0.0f;
     float operatingPointToleranceVolts = 35.0f;
     float tubePlateVoltage = 0.0f;
+    float osPrevGridVolts = 0.0f;
+    Biquad osLpIn;
+    Biquad osLpOut;
   } receiverCircuit;
 
   struct ToneNodeState {
