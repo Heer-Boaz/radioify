@@ -20,8 +20,12 @@ struct AMDetector {
 
   float audioRect = 0.0f;
   float avcRect = 0.0f;
+  float detectorStorageNode = 0.0f;
   float detectorNode = 0.0f;
   float avcEnv = 0.0f;
+  float ifWavePhase = 0.0f;
+  float prevIfI = 0.0f;
+  float prevIfQ = 0.0f;
   bool warmStartPending = true;
   float afcError = 0.0f;
   float ifCrackleEnv = 0.0f;
