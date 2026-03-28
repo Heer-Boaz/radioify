@@ -110,6 +110,7 @@
 #presenceQ = 0.78
 #presenceGainDb = 0.0
 #tiltSplitHz = 0.0
+#tiltDepthDb = 0.0
 #
 #[audio-filter.default.power]
 #sagStart = 0.06

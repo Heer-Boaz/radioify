@@ -703,6 +703,9 @@ static bool applyRadioSettingsValue(Radio1938& radio,
     if (keyNorm == "tiltsplithz") {
       return setFloat(radio.tone.tiltSplitHz, "tone.tiltSplitHz");
     }
+    if (keyNorm == "tiltdepthdb") {
+      return setFloat(radio.tone.tiltDepthDb, "tone.tiltDepthDb");
+    }
     return false;
   }
 

@@ -445,6 +445,7 @@ struct Radio1938 {
     float presenceQ = 0.0f;
     float presenceGainDb = 0.0f;
     float tiltSplitHz = 0.0f;
+    float tiltDepthDb = 0.0f;
     Biquad presence;
     Biquad tiltLp;
   } tone;
