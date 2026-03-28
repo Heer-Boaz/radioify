@@ -26,8 +26,10 @@ struct AMDetector {
   float ifWavePhase = 0.0f;
   float prevIfI = 0.0f;
   float prevIfQ = 0.0f;
-  float waveformSamplesPerCycle = 3.0f;
-  int waveformMaxSubsteps = 32;
+  // Conservative detector-island defaults until the multirate numerics are
+  // tightened further. This keeps the live path off the known-bad 3 spc regime.
+  float waveformSamplesPerCycle = 6.0f;
+  int waveformMaxSubsteps = 96;
   int lastWaveformSubsteps = 0;
   bool warmStartPending = true;
   float afcError = 0.0f;
