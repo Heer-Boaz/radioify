@@ -868,6 +868,20 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
     float mutedOut = RadioFrontEndNode::run(muted, 0.4f, mutedCtx);
     addRange(rows, "FrontEnd", "zero_rf_gain_mutes_output", mutedOut, -1e-7, 1e-7,
              "explicit RF gain of zero must kill the stage");
+
+    bool finiteSweep = true;
+    for (float controlVoltage : {0.0f, 0.625f, 1.25f}) {
+      for (float detuneScale : {0.0f, 1.0f, 2.0f}) {
+        Radio1938 swept = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
+        float signalHz = std::min(
+            swept.tuning.sourceCarrierHz + detuneScale * swept.tuning.tunedBw,
+            0.45f * swept.sampleRate);
+        double rms = runFrontEndRms(swept, signalHz, controlVoltage);
+        finiteSweep = finiteSweep && std::isfinite(rms);
+      }
+    }
+    addPredicate(rows, "FrontEnd", "finite_over_control_and_detune_sweep", finiteSweep,
+                 finiteSweep ? 1.0 : 0.0, "no NaN/Inf over RF operating sweep");
   }
 
   {
@@ -944,6 +958,24 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
              std::fabs(zeroOut) + std::fabs(zeroCtx.signal.detectorInputI) +
                  std::fabs(zeroCtx.signal.detectorInputQ),
              0.0, 1e-7, "zero source envelope must not create IF energy");
+
+    bool finiteIfSweep = true;
+    for (float detuneScale : {0.0f, 0.5f, 1.0f, 2.0f}) {
+      Radio1938 swept = makeNodeFixture(config, 0.0f, {PassId::IFStrip});
+      swept.ifStrip.loFrequencyHz =
+          swept.ifStrip.sourceCarrierHz + swept.ifStrip.ifCenterHz +
+          detuneScale * swept.tuning.tunedBw;
+      for (float env : {0.1f, 0.5f, 1.0f}) {
+        RadioSampleContext sweepCtx{};
+        sweepCtx.signal.setComplexEnvelope(env, -0.25f * env);
+        float out = RadioIFStripNode::run(swept, env, sweepCtx);
+        finiteIfSweep = finiteIfSweep && std::isfinite(out) &&
+                        std::isfinite(sweepCtx.signal.detectorInputI) &&
+                        std::isfinite(sweepCtx.signal.detectorInputQ);
+      }
+    }
+    addPredicate(rows, "IFStrip", "finite_over_detune_and_level_sweep", finiteIfSweep,
+                 finiteIfSweep ? 1.0 : 0.0, "no NaN/Inf over IF operating sweep");
 
     Radio1938 radioRfLow =
         makeNodeFixture(config, 0.0f, {PassId::FrontEnd, PassId::Mixer, PassId::IFStrip,
@@ -1273,6 +1305,23 @@ std::vector<TestRow> runAudioPhysics(const HarnessConfig& config) {
     }
     addRange(rows, "Power", "output_grids_are_antiphase", correlation(gridA, gridB),
              -1.0, -0.30, "A/B grid correlation");
+
+    bool finitePowerSweep = true;
+    for (float drivePeak : {1.0f, 10.0f, 25.0f, 40.0f}) {
+      Radio1938 swept = makeNodeFixture(config, 0.0f, {PassId::Power});
+      RadioPowerNode::reset(swept);
+      for (uint32_t i = 0; i < 512u; ++i) {
+        float t = static_cast<float>(i) / std::max(swept.sampleRate, 1.0f);
+        float drive = drivePeak * std::sin(kRadioTwoPi * 400.0f * t);
+        float out = RadioPowerNode::run(swept, drive, ctx);
+        finitePowerSweep = finitePowerSweep && std::isfinite(out) &&
+                           std::isfinite(swept.power.gridVoltage) &&
+                           std::isfinite(swept.controlSense.powerSagSense) &&
+                           swept.controlSense.powerSagSense >= 0.0f;
+      }
+    }
+    addPredicate(rows, "Power", "finite_over_drive_sweep", finitePowerSweep,
+                 finitePowerSweep ? 1.0 : 0.0, "no NaN/Inf over power-stage sweep");
   }
 
   {
@@ -1370,6 +1419,24 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     float mutedOut = RadioSpeakerNode::run(muted, 0.25f, mutedCtx);
     addRange(rows, "Speaker", "zero_drive_mutes_cone_motion", mutedOut, -1e-7, 1e-7,
              "zero electromechanical drive must null speaker output");
+
+    bool finiteSpeakerSweep = true;
+    for (float drive : {0.2f, 0.6f, 1.0f}) {
+      Radio1938 swept = makeNodeFixture(config, 0.0f, {PassId::Speaker});
+      swept.speakerStage.drive = drive;
+      RadioSpeakerNode::init(swept, initCtx);
+      RadioSpeakerNode::reset(swept);
+      RadioSampleContext sweepCtx{};
+      for (uint32_t i = 0; i < 512u; ++i) {
+        float t = static_cast<float>(i) / std::max(swept.sampleRate, 1.0f);
+        float x = 0.9f * std::sin(kRadioTwoPi * 120.0f * t);
+        float out = RadioSpeakerNode::run(swept, x, sweepCtx);
+        finiteSpeakerSweep = finiteSpeakerSweep && std::isfinite(out);
+      }
+    }
+    addPredicate(rows, "Speaker", "finite_over_drive_sweep", finiteSpeakerSweep,
+                 finiteSpeakerSweep ? 1.0 : 0.0,
+                 "no NaN/Inf over speaker operating sweep");
   }
 
   {
