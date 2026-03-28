@@ -103,9 +103,6 @@ DetectorSolveResult stepDetectorStorageAndAvc(const AMDetector& detector,
 
 namespace {
 
-constexpr float kDetectorWaveformSamplesPerCycle = 3.0f;
-constexpr int kDetectorWaveformMaxSubsteps = 32;
-
 float effectiveDetectorLoadConductance(const Radio1938& radio) {
   float dischargeG =
       1.0f / std::max(radio.demod.am.audioDischargeResistanceOhms, 1e-6f);
@@ -119,11 +116,13 @@ float detectorWaveformCarrierHz(const AMDetector& detector,
   return std::fabs(radio.ifStrip.ifCenterHz + detector.tuneOffsetHz);
 }
 
-int detectorWaveformSubsteps(float sampleRate, float carrierHz) {
+int detectorWaveformSubsteps(const AMDetector& detector,
+                             float sampleRate,
+                             float carrierHz) {
   if (!(sampleRate > 0.0f) || !(carrierHz > 0.0f)) return 1;
   int substeps = static_cast<int>(std::ceil(
-      kDetectorWaveformSamplesPerCycle * carrierHz / sampleRate));
-  return std::clamp(substeps, 1, kDetectorWaveformMaxSubsteps);
+      std::max(detector.waveformSamplesPerCycle, 1.0f) * carrierHz / sampleRate));
+  return std::clamp(substeps, 1, std::max(detector.waveformMaxSubsteps, 1));
 }
 
 void runWaveformDetectorIsland(AMDetector& detector,
@@ -132,7 +131,8 @@ void runWaveformDetectorIsland(AMDetector& detector,
                                float detectorLeakG,
                                float carrierHz) {
   float sampleRate = std::max(detector.fs, 1.0f);
-  int substeps = detectorWaveformSubsteps(sampleRate, carrierHz);
+  int substeps = detectorWaveformSubsteps(detector, sampleRate, carrierHz);
+  detector.lastWaveformSubsteps = substeps;
   if (substeps <= 1) {
     float ifMagnitude = std::sqrt(ifI * ifI + ifQ * ifQ);
     detector.audioRect = diodeJunctionRectify(ifMagnitude, detector.audioDiodeDrop,
@@ -272,6 +272,7 @@ void AMDetector::reset() {
   ifWavePhase = 0.0f;
   prevIfI = 0.0f;
   prevIfQ = 0.0f;
+  lastWaveformSubsteps = 0;
   warmStartPending = true;
   afcError = 0.0f;
   ifCrackleEnv = 0.0f;
@@ -354,6 +355,7 @@ float AMDetector::run(float signalI,
   if (carrierHz > 0.0f) {
     runWaveformDetectorIsland(*this, ifI, ifQ, detectorLeakG, carrierHz);
   } else {
+    lastWaveformSubsteps = 1;
     float ifMagnitude = std::sqrt(ifI * ifI + ifQ * ifQ);
     audioRect = diodeJunctionRectify(ifMagnitude, audioDiodeDrop,
                                      audioJunctionSlopeVolts);
