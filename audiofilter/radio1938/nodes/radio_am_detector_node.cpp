@@ -139,6 +139,68 @@ float interpolateEnvelopeQuadratic(float prevPrevSample,
   return prevSample + slope * t + curvature * t * t;
 }
 
+float interpolateEnvelopeSample(bool useQuadratic,
+                                float prevPrevSample,
+                                float prevSample,
+                                float currentSample,
+                                float t) {
+  return useQuadratic
+             ? interpolateEnvelopeQuadratic(prevPrevSample, prevSample,
+                                            currentSample, t)
+             : interpolateEnvelopeLinear(prevSample, currentSample, t);
+}
+
+float sampleIfWave(bool useQuadratic,
+                   float prevPrevIfI,
+                   float prevPrevIfQ,
+                   float prevIfI,
+                   float prevIfQ,
+                   float ifI,
+                   float ifQ,
+                   float t,
+                   float c,
+                   float s) {
+  float envI =
+      interpolateEnvelopeSample(useQuadratic, prevPrevIfI, prevIfI, ifI, t);
+  float envQ =
+      interpolateEnvelopeSample(useQuadratic, prevPrevIfQ, prevIfQ, ifQ, t);
+  return envI * c - envQ * s;
+}
+
+struct DetectorIslandAccum {
+  float audioRectArea = 0.0f;
+  float avcRectArea = 0.0f;
+  float detectorNodeArea = 0.0f;
+  int solveSteps = 0;
+};
+
+void accumulateDetectorInterval(AMDetector& detector,
+                                float dt,
+                                float intervalWidth,
+                                float ifWave,
+                                float delayedAvcThreshold,
+                                float detectorLeakG,
+                                DetectorIslandAccum& accum) {
+  detector.audioRect = diodeJunctionRectify(
+      ifWave, detector.audioDiodeDrop, detector.audioJunctionSlopeVolts);
+  float avcRectified = diodeJunctionRectify(
+      ifWave, detector.avcDiodeDrop, detector.avcJunctionSlopeVolts);
+  float avcDrive = std::max(avcRectified - delayedAvcThreshold, 0.0f);
+  if (detector.warmStartPending) {
+    primeDetectorWarmStart(detector, detector.audioRect, avcDrive);
+  }
+  float prevNode = std::max(detector.detectorStorageNode, 0.0f);
+  DetectorSolveResult solve = stepDetectorStorageAndAvc(
+      detector, dt, ifWave, avcDrive, detectorLeakG);
+  detector.detectorStorageNode = solve.detectorNode;
+  detector.avcEnv = solve.avcNode;
+  accum.audioRectArea += detector.audioRect * intervalWidth;
+  accum.avcRectArea += avcDrive * intervalWidth;
+  accum.detectorNodeArea +=
+      0.5f * (prevNode + solve.detectorNode) * intervalWidth;
+  accum.solveSteps += 1;
+}
+
 void runWaveformDetectorIsland(AMDetector& detector,
                                float ifI,
                                float ifQ,
@@ -193,53 +255,80 @@ void runWaveformDetectorIsland(AMDetector& detector,
   float s = std::sin(detector.ifWavePhase);
   float cHalfStep = std::cos(0.5f * phaseStep);
   float sHalfStep = std::sin(0.5f * phaseStep);
+  float cQuarterStep = std::cos(0.25f * phaseStep);
+  float sQuarterStep = std::sin(0.25f * phaseStep);
   float cStep = std::cos(phaseStep);
   float sStep = std::sin(phaseStep);
   float delayedAvcThreshold =
       0.18f * std::max(detector.controlVoltageRef, 1e-6f);
-  float audioRectSum = 0.0f;
-  float avcRectSum = 0.0f;
-  float detectorNodeSum = 0.0f;
-  float detectorNodePrev = std::max(detector.detectorStorageNode, 0.0f);
+  float coarseIntervalWidth = 1.0f / static_cast<float>(substeps);
+  DetectorIslandAccum accum{};
 
   for (int step = 0; step < substeps; ++step) {
-    float t = (static_cast<float>(step) + 0.5f) / static_cast<float>(substeps);
-    float envI = useQuadraticInterp
-                     ? interpolateEnvelopeQuadratic(prevPrevIfI, prevIfI, ifI, t)
-                     : interpolateEnvelopeLinear(prevIfI, ifI, t);
-    float envQ = useQuadraticInterp
-                     ? interpolateEnvelopeQuadratic(prevPrevIfQ, prevIfQ, ifQ, t)
-                     : interpolateEnvelopeLinear(prevIfQ, ifQ, t);
+    float t0 = static_cast<float>(step) / static_cast<float>(substeps);
+    float tMid =
+        (static_cast<float>(step) + 0.5f) / static_cast<float>(substeps);
+    float t1 = static_cast<float>(step + 1) / static_cast<float>(substeps);
     float cMid = c * cHalfStep - s * sHalfStep;
     float sMid = s * cHalfStep + c * sHalfStep;
-    float ifWave = envI * cMid - envQ * sMid;
-    detector.audioRect = diodeJunctionRectify(
-        ifWave, detector.audioDiodeDrop, detector.audioJunctionSlopeVolts);
-    float avcRectified = diodeJunctionRectify(
-        ifWave, detector.avcDiodeDrop, detector.avcJunctionSlopeVolts);
-    float avcDrive = std::max(avcRectified - delayedAvcThreshold, 0.0f);
-    if (detector.warmStartPending) {
-      primeDetectorWarmStart(detector, detector.audioRect, avcDrive);
-    }
-    DetectorSolveResult solve =
-        stepDetectorStorageAndAvc(detector, dtSub, ifWave, avcDrive,
-                                  detectorLeakG);
-    detector.detectorStorageNode = solve.detectorNode;
-    detector.avcEnv = solve.avcNode;
-    audioRectSum += detector.audioRect;
-    avcRectSum += avcDrive;
-    detectorNodeSum += 0.5f * (detectorNodePrev + solve.detectorNode);
-    detectorNodePrev = solve.detectorNode;
-
     float nextC = c * cStep - s * sStep;
     float nextS = s * cStep + c * sStep;
+    float ifWaveStart =
+        sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
+                     prevIfQ, ifI, ifQ, t0, c, s);
+    float ifWaveMid =
+        sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
+                     prevIfQ, ifI, ifQ, tMid, cMid, sMid);
+    float ifWaveEnd =
+        sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
+                     prevIfQ, ifI, ifQ, t1, nextC, nextS);
+    float audioForwardThreshold =
+        std::max(detector.detectorStorageNode, 0.0f) + detector.audioDiodeDrop;
+    float avcForwardThreshold = std::max(detector.avcEnv, 0.0f) +
+                                detector.avcDiodeDrop +
+                                delayedAvcThreshold;
+    float forwardThreshold =
+        std::min(audioForwardThreshold, avcForwardThreshold);
+    float ifWavePeak =
+        std::max(ifWaveStart, std::max(ifWaveMid, ifWaveEnd));
+    bool shouldSplit = ifWavePeak > forwardThreshold;
+
+    if (shouldSplit) {
+      float tQuarter = (static_cast<float>(step) + 0.25f) /
+                       static_cast<float>(substeps);
+      float tThreeQuarter = (static_cast<float>(step) + 0.75f) /
+                            static_cast<float>(substeps);
+      float cQuarter = c * cQuarterStep - s * sQuarterStep;
+      float sQuarter = s * cQuarterStep + c * sQuarterStep;
+      float cThreeQuarter = cMid * cQuarterStep - sMid * sQuarterStep;
+      float sThreeQuarter = sMid * cQuarterStep + cMid * sQuarterStep;
+      float ifWaveQuarter =
+          sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
+                       prevIfQ, ifI, ifQ, tQuarter, cQuarter, sQuarter);
+      float ifWaveThreeQuarter =
+          sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
+                       prevIfQ, ifI, ifQ, tThreeQuarter, cThreeQuarter,
+                       sThreeQuarter);
+      float halfDt = 0.5f * dtSub;
+      float halfWidth = 0.5f * coarseIntervalWidth;
+      accumulateDetectorInterval(detector, halfDt, halfWidth, ifWaveQuarter,
+                                 delayedAvcThreshold, detectorLeakG, accum);
+      accumulateDetectorInterval(detector, halfDt, halfWidth,
+                                 ifWaveThreeQuarter, delayedAvcThreshold,
+                                 detectorLeakG, accum);
+    } else {
+      accumulateDetectorInterval(detector, dtSub, coarseIntervalWidth,
+                                 ifWaveMid, delayedAvcThreshold,
+                                 detectorLeakG, accum);
+    }
     c = nextC;
     s = nextS;
   }
 
-  detector.audioRect = audioRectSum / static_cast<float>(substeps);
-  detector.avcRect = avcRectSum / static_cast<float>(substeps);
-  detector.detectorNode = detectorNodeSum / static_cast<float>(substeps);
+  detector.audioRect = accum.audioRectArea;
+  detector.avcRect = accum.avcRectArea;
+  detector.detectorNode = accum.detectorNodeArea;
+  detector.lastWaveformSubsteps = accum.solveSteps;
   detector.ifWavePhase =
       wrapPhase(detector.ifWavePhase + kRadioTwoPi * (carrierHz / sampleRate));
   detector.prevPrevIfI = prevIfI;

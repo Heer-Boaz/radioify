@@ -30,9 +30,10 @@ struct AMDetector {
   float prevIfQ = 0.0f;
   int ifEnvelopeHistorySamples = 0;
   // Conservative detector-island defaults until the multirate numerics are
-  // tightened further. 8 spc tracks the higher-rate reference materially
-  // better than the old 3 spc path and better than the interim 6 spc default.
-  float waveformSamplesPerCycle = 8.0f;
+  // tightened further. With local conduction-aware refinement, 4 spc now
+  // tracks the higher-rate reference closely without the extra baseline cost
+  // of the earlier 8 spc fallback.
+  float waveformSamplesPerCycle = 4.0f;
   int waveformMaxSubsteps = 96;
   int lastWaveformSubsteps = 0;
   bool warmStartPending = true;
