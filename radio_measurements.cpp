@@ -30,6 +30,9 @@ constexpr float kSweepProgramPeak = 0.35f;
 constexpr float kImdTonePeak = 0.25f;
 constexpr float kOverdriveProgramPeak = 0.95f;
 constexpr size_t kSpectrumSize = 4096u;
+constexpr double kAmSidebandRatioMin = 0.90;
+constexpr double kAmSidebandRatioMax = 1.10;
+constexpr double kAmModIndexTolerance = 0.10;
 constexpr std::array<float, 20> kSweepFrequenciesHz = {
     50.0f,   75.0f,   100.0f,  150.0f,  200.0f,
     300.0f,  400.0f,  600.0f,  800.0f,  1000.0f,
@@ -173,7 +176,7 @@ void printUsage() {
       << "  --noise-only <value>\n"
       << "  --radio-settings <path>\n"
       << "  --preset <name>\n"
-      << "  --section <all|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise>\n";
+      << "  --section <all|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise|spectrum|am_validate>\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -278,9 +281,18 @@ EnvelopeTraceResult runAmProgramWithEnvelopeTrace(const HarnessConfig& config,
   float carrierPeak =
       std::sqrt(2.0f) * std::max(config.carrierRmsVolts, 0.0f);
   float phase = result.radio.iqInput.iqPhase;
+  float maxAbs = 0.0f;
+  for (float sample : program) {
+    maxAbs = std::max(maxAbs, std::fabs(sample));
+  }
+  float normScale = 1.0f;
+  if (maxAbs > 0.0f && maxAbs < 0.999f) {
+    normScale = 1.0f / maxAbs;
+  }
   std::array<float, 1> sample{};
   for (size_t i = 0; i < program.size(); ++i) {
-    float envelopeFactor = std::max(0.0f, 1.0f + modulationIndex * program[i]);
+    float envelopeFactor =
+        std::max(0.0f, 1.0f + modulationIndex * program[i] * normScale);
     sample[0] = carrierPeak * envelopeFactor * std::cos(phase);
     phase += carrierStep;
     if (phase >= kRadioTwoPi) phase -= kRadioTwoPi;
@@ -1134,36 +1146,84 @@ void runAmValidate(const HarnessConfig& config) {
   std::cout << "metric,value\n";
 
   // Program (audio) used for AM excitation
-  auto program = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 1.0f);
+  auto program =
+      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, kSweepProgramPeak);
+  float modulationIndex = std::min(config.modulationIndex, 0.999f);
+  float effectiveNoiseWeight =
+      std::max(config.noiseWeight, config.noiseOnlyWeight);
   // Run trace to collect detector/audio/env data
   EnvelopeTraceResult trace = runAmProgramWithEnvelopeTrace(
-      config, program, std::min(config.modulationIndex, 0.999f),
-      std::max(config.noiseWeight, config.noiseOnlyWeight));
+      config, program, modulationIndex, effectiveNoiseWeight);
+  RunResult directRun =
+      runAmProgram(config, program, modulationIndex, effectiveNoiseWeight);
+
+  double maxOutputAbsDiff = 0.0;
+  if (effectiveNoiseWeight <= 0.0f) {
+    for (size_t i = 0; i < directRun.output.size() && i < trace.output.size();
+         ++i) {
+      maxOutputAbsDiff =
+          std::max(maxOutputAbsDiff,
+                   std::fabs(static_cast<double>(directRun.output[i]) -
+                             static_cast<double>(trace.output[i])));
+    }
+    std::cout << "am_output_max_abs_diff," << maxOutputAbsDiff << "\n";
+    if (maxOutputAbsDiff > 1e-4) {
+      fail("AM output mismatch between processAmAudio and envelope trace: " +
+           std::to_string(maxOutputAbsDiff));
+    }
+  } else {
+    std::cout << "am_output_compare_skipped,1\n";
+  }
+  std::cout << "am_output_max_abs_diff," << maxOutputAbsDiff << "\n";
 
   // Reconstruct RF samples used for the run (same envelope & carrier)
   float safeSampleRate = std::max(config.sampleRate, 1.0f);
-  float carrierHz = std::clamp(trace.radio.ifStrip.sourceCarrierHz, 1000.0f, safeSampleRate * 0.45f);
+  float carrierHz = std::clamp(trace.radio.ifStrip.sourceCarrierHz, 1000.0f,
+                               safeSampleRate * 0.45f);
   float carrierPeak = std::sqrt(2.0f) * std::max(config.carrierRmsVolts, 0.0f);
   std::vector<float> rfSamples(program.size(), 0.0f);
+  float maxAbs = 0.0f;
+  for (float sample : program) {
+    maxAbs = std::max(maxAbs, std::fabs(sample));
+  }
+  float normScale = 1.0f;
+  if (maxAbs > 0.0f && maxAbs < 0.999f) {
+    normScale = 1.0f / maxAbs;
+  }
   for (size_t i = 0; i < program.size(); ++i) {
     float t = static_cast<float>(i) / safeSampleRate;
-    float envelopeFactor = std::max(0.0f, 1.0f + std::min(config.modulationIndex, 0.999f) * program[i]);
+    float sampleVal = program[i] * normScale;
+    float envelopeFactor = std::max(0.0f, 1.0f + modulationIndex * sampleVal);
     rfSamples[i] = carrierPeak * envelopeFactor * std::cos(kRadioTwoPi * carrierHz * t);
   }
 
-  // RF-domain spectrum and sidebands
-  std::vector<double> rfSpec = computeSpectrumPeakAmplitudes(rfSamples, config.sampleRate);
-  double carrierAmp = peakAmplitudeAtHz(rfSpec, config.sampleRate, carrierHz);
-  double sideUpper = peakAmplitudeAtHz(rfSpec, config.sampleRate, carrierHz + 1000.0f);
-  double sideLower = peakAmplitudeAtHz(rfSpec, config.sampleRate, carrierHz - 1000.0f);
-  double expectedSide = (config.modulationIndex * 0.5) * carrierAmp;
-  double sideAvg = 0.5 * (sideUpper + sideLower);
+  // RF-domain carrier and sideband checks.
+  double carrierRms = measureToneRms(rfSamples, config.sampleRate, carrierHz, 0);
+  double sideUpperRms =
+      measureToneRms(rfSamples, config.sampleRate, carrierHz + 1000.0f, 0);
+  double sideLowerRms =
+      measureToneRms(rfSamples, config.sampleRate, carrierHz - 1000.0f, 0);
+  double expectedSideRms = (modulationIndex * 0.5) * carrierRms;
+  double sideAvgRms = 0.5 * (sideUpperRms + sideLowerRms);
+  double sidebandRatio =
+      sideAvgRms / std::max(expectedSideRms, 1e-20);
+  bool sidebandRatioInBand =
+      sidebandRatio >= kAmSidebandRatioMin &&
+      sidebandRatio <= kAmSidebandRatioMax;
 
-  std::cout << "carrier_amplitude," << carrierAmp << "\n";
-  std::cout << "sideband_upper," << sideUpper << "\n";
-  std::cout << "sideband_lower," << sideLower << "\n";
-  std::cout << "sideband_expected_per_side," << expectedSide << "\n";
-  std::cout << "sideband_avg_ratio_vs_expected," << (sideAvg / std::max(expectedSide, 1e-20)) << "\n";
+  std::cout << "carrier_rms," << carrierRms << "\n";
+  std::cout << "sideband_upper_rms," << sideUpperRms << "\n";
+  std::cout << "sideband_lower_rms," << sideLowerRms << "\n";
+  std::cout << "sideband_expected_per_side_rms," << expectedSideRms << "\n";
+  std::cout << "sideband_avg_ratio_vs_expected," << sidebandRatio << "\n";
+  std::cout << "sideband_ratio_in_band," << (sidebandRatioInBand ? 1 : 0)
+            << "\n";
+  if (!sidebandRatioInBand) {
+    fail("AM sideband ratio out of range: measured " +
+         std::to_string(sidebandRatio) + ", expected [" +
+         std::to_string(kAmSidebandRatioMin) + ", " +
+         std::to_string(kAmSidebandRatioMax) + "]");
+  }
 
   // Detector-domain analysis
   std::vector<double> detSpec = computeSpectrumPeakAmplitudes(trace.detectorNode, config.sampleRate);
@@ -1182,8 +1242,16 @@ void runAmValidate(const HarnessConfig& config) {
     }
     double m_measured = 0.0;
     if (envMax + envMin > 1e-12) m_measured = (envMax - envMin) / (envMax + envMin);
-    std::cout << "mod_index_config," << config.modulationIndex << "\n";
+    std::cout << "mod_index_config," << modulationIndex << "\n";
     std::cout << "mod_index_measured_env," << m_measured << "\n";
+    bool modIndexInBand =
+        std::fabs(m_measured - modulationIndex) <= kAmModIndexTolerance;
+    std::cout << "mod_index_in_band," << (modIndexInBand ? 1 : 0) << "\n";
+    if (!modIndexInBand) {
+      fail("AM modulation index out of range: measured " +
+           std::to_string(m_measured) + ", expected around " +
+           std::to_string(modulationIndex));
+    }
 
     // Tone metrics and SINAD at detector and final output
     ToneMetrics detToneMetrics = measureToneMetrics(trace.detectorNode, config.sampleRate, 1000.0f, start);
