@@ -1134,7 +1134,7 @@ void runAmValidate(const HarnessConfig& config) {
   std::cout << "metric,value\n";
 
   // Program (audio) used for AM excitation
-  auto program = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 0.35f);
+  auto program = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 1.0f);
   // Run trace to collect detector/audio/env data
   EnvelopeTraceResult trace = runAmProgramWithEnvelopeTrace(
       config, program, std::min(config.modulationIndex, 0.999f),
