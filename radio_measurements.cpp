@@ -48,6 +48,34 @@ struct HarnessConfig {
   std::string section = "all";
 };
 
+// --- Target ranges for harness validation (user-specified anchors) ---
+constexpr float kTargetAudioLow3dBMin = 60.0f;
+constexpr float kTargetAudioLow3dBMax = 200.0f;
+constexpr float kTargetAudioHigh3dBMin = 2500.0f;
+constexpr float kTargetAudioHigh3dBMax = 5500.0f;
+constexpr float kTargetDetectorTauUsMin = 35.0f;
+constexpr float kTargetDetectorTauUsMax = 55.0f;
+constexpr float kTargetAvcTauMsMin = 60.0f;
+constexpr float kTargetAvcTauMsMax = 90.0f;
+// IMD: lower is better. Expect <= -25 dB (prefer ~-30 dB)
+constexpr float kTargetImdDbMin = -100.0f;
+constexpr float kTargetImdDbMax = -25.0f;
+constexpr float kTargetSinadNominalDbMin = 35.0f;
+constexpr float kTargetSinadNominalDbMax = 100.0f;
+constexpr float kTargetSpeakerReferenceRatioMin = 0.90f;
+constexpr float kTargetSpeakerReferenceRatioMax = 1.10f;
+// Prefer max digital output < ~0.95
+constexpr float kTargetMaxDigitalOutputMin = 0.0f;
+constexpr float kTargetMaxDigitalOutputMax = 0.95f;
+// IF center and nominal output power
+constexpr float kTargetIfCenterMinHz = 469000.0f;
+constexpr float kTargetIfCenterMaxHz = 471000.0f;
+constexpr float kTargetNominalOutputPowerMinW = 12.0f;
+constexpr float kTargetNominalOutputPowerMaxW = 18.0f;
+// Clip/flag targets: expect zero in nominal bench
+constexpr int kTargetFlagZero = 0;
+
+
 struct SignalStats {
   double mean = 0.0;
   double rms = 0.0;
@@ -968,23 +996,30 @@ void runReference(const HarnessConfig& config) {
           config.sampleRate, 30.0f);
   ToneMetrics sinad = measureNominalSinad(config);
   double imdDb = measureImdSummaryDb(config);
-  Radio1938 radio = makeRadio(config, 0.0f, false);
+  // Run a nominal program to populate calibration/diagnostic metrics used
+  // for reference checks.
+  auto nominalInput = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 0.35f);
+  HarnessConfig nominalConfig = config;
+  nominalConfig.carrierRmsVolts = kDefaultCarrierRmsVolts;
+  RunResult nominalRun = runAmProgram(nominalConfig, nominalInput,
+                   std::min(config.modulationIndex, 0.5f),
+                   std::max(config.noiseWeight, config.noiseOnlyWeight));
+  Radio1938& radio = nominalRun.radio;
   double detectorTauUs = 1e6 * effectiveDetectorAudioTauSeconds(radio);
-  double carrierPeriodUs =
-      1e6 / std::max<double>(radio.ifStrip.ifCenterHz, 1.0);
-  double sidebandPeriodUs =
-      1e6 / std::max<double>(radio.tuning.tunedBw, 1.0);
   double avcTauMs = 1e3 * avcTauSeconds(radio);
 
   // Working bands only. The frequency-domain limits are still coarse. The
   // detector / AVC timing rows below are based on named RC state and service
   // sideband constraints, not on arbitrary output-envelope taste metrics.
-  printReferenceRow("audio_low_3db_hz", sweep.low3dBHz, 60.0, 200.0);
-  printReferenceRow("audio_high_3db_hz", sweep.high3dBHz, 2500.0, 5500.0);
-  printReferenceRow("imd_db", imdDb, -45.0, -18.0);
-  printReferenceRow("detector_tau_us", detectorTauUs, 4.0 * carrierPeriodUs,
-                    0.75 * sidebandPeriodUs);
-  printReferenceRow("avc_tau_ms", avcTauMs, 10.0, 500.0);
+  printReferenceRow("audio_low_3db_hz", sweep.low3dBHz,
+                    kTargetAudioLow3dBMin, kTargetAudioLow3dBMax);
+  printReferenceRow("audio_high_3db_hz", sweep.high3dBHz,
+                    kTargetAudioHigh3dBMin, kTargetAudioHigh3dBMax);
+  printReferenceRow("imd_db", imdDb, kTargetImdDbMin, kTargetImdDbMax);
+  printReferenceRow("detector_tau_us", detectorTauUs,
+                    kTargetDetectorTauUsMin, kTargetDetectorTauUsMax);
+  printReferenceRow("avc_tau_ms", avcTauMs, kTargetAvcTauMsMin,
+                    kTargetAvcTauMsMax);
   printReferenceRow("avc_to_detector_tau_ratio",
                     avcTauMs / std::max(detectorTauUs * 1e-3, 1e-9), 50.0,
                     1e9);
@@ -992,7 +1027,33 @@ void runReference(const HarnessConfig& config) {
                     10.0);
   printReferenceRow("envelope_fall_ms_observed", envelope.fall90To10Ms, 0.0,
                     10.0);
-  printReferenceRow("sinad_nominal_db", sinad.sinadDb, 10.0, 40.0);
+  printReferenceRow("sinad_nominal_db", sinad.sinadDb,
+                    kTargetSinadNominalDbMin, kTargetSinadNominalDbMax);
+  // Speaker/reference and digital output targets (measured from nominal run)
+  double speakerRefRatio = nominalRun.radio.calibration.maxSpeakerReferenceRatio;
+  double maxDigitalOutput = nominalRun.radio.calibration.maxDigitalOutput;
+  printReferenceRow("speaker_reference_ratio", speakerRefRatio,
+                    kTargetSpeakerReferenceRatioMin,
+                    kTargetSpeakerReferenceRatioMax);
+  printReferenceRow("max_digital_output", maxDigitalOutput,
+                    kTargetMaxDigitalOutputMin, kTargetMaxDigitalOutputMax);
+  // Diagnostic flags expected to be zero in nominal bench
+  printReferenceRow("power_clip", nominalRun.radio.diagnostics.powerClip ? 1 : 0,
+                    kTargetFlagZero, kTargetFlagZero);
+  printReferenceRow("speaker_clip", nominalRun.radio.diagnostics.speakerClip ? 1 : 0,
+                    kTargetFlagZero, kTargetFlagZero);
+  printReferenceRow("output_clip", nominalRun.radio.diagnostics.outputClip ? 1 : 0,
+                    kTargetFlagZero, kTargetFlagZero);
+  printReferenceRow("final_limiter_active",
+                    nominalRun.radio.diagnostics.finalLimiterActive ? 1 : 0,
+                    kTargetFlagZero, kTargetFlagZero);
+  // IF center and nominal output power anchor
+  printReferenceRow("if_center_hz", radio.ifStrip.ifCenterHz,
+                    kTargetIfCenterMinHz, kTargetIfCenterMaxHz);
+  printReferenceRow("nominal_output_power_watts",
+                    radio.power.nominalOutputPowerWatts,
+                    kTargetNominalOutputPowerMinW,
+                    kTargetNominalOutputPowerMaxW);
   std::cout << "\n";
 }
 
