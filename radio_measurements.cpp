@@ -115,6 +115,22 @@ double clampFinite(double value) {
   return value;
 }
 
+double effectiveDetectorAudioTauSeconds(const Radio1938& radio) {
+  double storageCapFarads =
+      std::max<double>(radio.demod.am.detectorStorageCapFarads, 1e-12);
+  double dischargeG =
+      1.0 / std::max<double>(radio.demod.am.audioDischargeResistanceOhms, 1e-6);
+  double receiverLoadG =
+      std::max<double>(radio.receiverCircuit.detectorLoadConductance, 0.0);
+  double totalLoadG = std::max(dischargeG + receiverLoadG, 1e-12);
+  return storageCapFarads / totalLoadG;
+}
+
+double avcTauSeconds(const Radio1938& radio) {
+  return std::max<double>(radio.demod.am.avcDischargeResistanceOhms, 1e-6) *
+         std::max<double>(radio.demod.am.avcFilterCapFarads, 1e-12);
+}
+
 float parseFloatArg(char** argv, int& index, int argc, const char* name) {
   if (index + 1 >= argc) {
     fail(std::string("missing value for ") + name);
@@ -957,14 +973,30 @@ void runReference(const HarnessConfig& config) {
           config.sampleRate, 30.0f);
   ToneMetrics sinad = measureNominalSinad(config);
   double imdDb = measureImdSummaryDb(config);
+  Radio1938 radio = makeRadio(config, 0.0f, false);
+  double detectorTauUs = 1e6 * effectiveDetectorAudioTauSeconds(radio);
+  double carrierPeriodUs =
+      1e6 / std::max<double>(radio.ifStrip.ifCenterHz, 1.0);
+  double sidebandPeriodUs =
+      1e6 / std::max<double>(radio.tuning.tunedBw, 1.0);
+  double avcTauMs = 1e3 * avcTauSeconds(radio);
 
-  // Working bands only. Tighten these against chassis measurements or
-  // reference recordings before treating them as historical acceptance limits.
+  // Working bands only. The frequency-domain limits are still coarse. The
+  // detector / AVC timing rows below are based on named RC state and service
+  // sideband constraints, not on arbitrary output-envelope taste metrics.
   printReferenceRow("audio_low_3db_hz", sweep.low3dBHz, 60.0, 200.0);
   printReferenceRow("audio_high_3db_hz", sweep.high3dBHz, 2500.0, 5500.0);
   printReferenceRow("imd_db", imdDb, -45.0, -18.0);
-  printReferenceRow("envelope_rise_ms", envelope.rise10To90Ms, 0.05, 2.0);
-  printReferenceRow("envelope_fall_ms", envelope.fall90To10Ms, 0.20, 10.0);
+  printReferenceRow("detector_tau_us", detectorTauUs, 4.0 * carrierPeriodUs,
+                    0.75 * sidebandPeriodUs);
+  printReferenceRow("avc_tau_ms", avcTauMs, 10.0, 500.0);
+  printReferenceRow("avc_to_detector_tau_ratio",
+                    avcTauMs / std::max(detectorTauUs * 1e-3, 1e-9), 50.0,
+                    1e9);
+  printReferenceRow("envelope_rise_ms_observed", envelope.rise10To90Ms, 0.0,
+                    10.0);
+  printReferenceRow("envelope_fall_ms_observed", envelope.fall90To10Ms, 0.0,
+                    10.0);
   printReferenceRow("sinad_nominal_db", sinad.sinadDb, 10.0, 40.0);
   std::cout << "\n";
 }
@@ -990,7 +1022,7 @@ void runNoise(const HarnessConfig& config) {
 int main(int argc, char** argv) {
   try {
     HarnessConfig config = parseArgs(argc, argv);
-    std::cout << std::fixed << std::setprecision(6);
+    std::cout << std::setprecision(9);
     printConfig(config);
     if (wantsSection(config, "sweep")) runSweep(config);
     if (wantsSection(config, "envelope")) runEnvelope(config);
