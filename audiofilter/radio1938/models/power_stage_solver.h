@@ -2,6 +2,7 @@
 #define RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_POWER_STAGE_SOLVER_H
 
 #include "../../../radio.h"
+#include "speaker_sim.h"
 #include "../../models/transformer_models.h"
 
 struct DriverInterstageCenterTappedResult {
@@ -14,6 +15,17 @@ struct DriverInterstageCenterTappedResult {
   float secondaryBVoltage = 0.0f;
 };
 
+struct SpeakerElectricalLinearization {
+  SecondaryNortonLoad load;
+  float electricalCoeff = 0.0f;
+  float mechanicalCoeff = 0.0f;
+  float determinant = 0.0f;
+  float rhsElectrical = 0.0f;
+  float rhsMechanical = 0.0f;
+  float dt = 0.0f;
+  float forceFactorBl = 0.0f;
+};
+
 float solveOutputPrimaryVoltageAffine(
     const AffineTransformerProjection& projection,
     const Radio1938::PowerNodeState& power,
@@ -21,6 +33,15 @@ float solveOutputPrimaryVoltageAffine(
     float gridA,
     float gridB,
     float initialPrimaryVoltage);
+
+SpeakerElectricalLinearization linearizeSpeakerElectricalLoad(
+    const SpeakerSim& speaker,
+    float nominalLoadOhms,
+    float dt);
+
+void commitSpeakerElectricalLoad(SpeakerSim& speaker,
+                                 const SpeakerElectricalLinearization& l,
+                                 float appliedVolts);
 
 float estimateOutputStageNominalPowerWatts(
     const Radio1938::PowerNodeState& power);

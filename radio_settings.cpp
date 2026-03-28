@@ -1203,6 +1203,38 @@ static bool applyRadioSettingsValue(Radio1938& radio,
       return setFloat(radio.speakerStage.speaker.complianceLossDepth,
                       "speaker.complianceLossDepth");
     }
+    if (keyNorm == "voicecoilresistanceohms") {
+      return setFloat(radio.speakerStage.speaker.voiceCoilResistanceOhms,
+                      "speaker.voiceCoilResistanceOhms");
+    }
+    if (keyNorm == "voicecoilinductancehenries") {
+      return setFloat(radio.speakerStage.speaker.voiceCoilInductanceHenries,
+                      "speaker.voiceCoilInductanceHenries");
+    }
+    if (keyNorm == "movingmasskg") {
+      return setFloat(radio.speakerStage.speaker.movingMassKg,
+                      "speaker.movingMassKg");
+    }
+    if (keyNorm == "mechanicalq") {
+      return setFloat(radio.speakerStage.speaker.mechanicalQ,
+                      "speaker.mechanicalQ");
+    }
+    if (keyNorm == "electricalq") {
+      return setFloat(radio.speakerStage.speaker.electricalQ,
+                      "speaker.electricalQ");
+    }
+    if (keyNorm == "forcefactorbl") {
+      return setFloat(radio.speakerStage.speaker.forceFactorBl,
+                      "speaker.forceFactorBl");
+    }
+    if (keyNorm == "suspensioncompliancemeterspernewton") {
+      return setFloat(radio.speakerStage.speaker.suspensionComplianceMetersPerNewton,
+                      "speaker.suspensionComplianceMetersPerNewton");
+    }
+    if (keyNorm == "mechanicaldampingnspermeter") {
+      return setFloat(radio.speakerStage.speaker.mechanicalDampingNsPerMeter,
+                      "speaker.mechanicalDampingNsPerMeter");
+    }
     return false;
   }
 

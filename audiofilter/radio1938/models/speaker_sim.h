@@ -42,6 +42,8 @@ struct SpeakerSim {
   float voiceCoilResistanceOhms = 0.0f;
   float voiceCoilInductanceHenries = 0.0f;
   float movingMassKg = 0.0f;
+  float mechanicalQ = 0.0f;
+  float electricalQ = 0.0f;
   float forceFactorBl = 0.0f;
   float suspensionComplianceMetersPerNewton = 0.0f;
   float mechanicalDampingNsPerMeter = 0.0f;

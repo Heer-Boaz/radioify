@@ -40,6 +40,24 @@ float deriveSpeakerForceFactor(float movingMassKg,
                             1e-9f));
 }
 
+float deriveSpeakerMechanicalDampingFromQ(float movingMassKg,
+                                          float suspensionHz,
+                                          float mechanicalQ) {
+  float q = std::max(mechanicalQ, 0.35f);
+  float w0 = kRadioTwoPi * std::max(suspensionHz, 1.0f);
+  return (movingMassKg * w0) / q;
+}
+
+float deriveSpeakerForceFactorFromQ(float movingMassKg,
+                                    float suspensionHz,
+                                    float voiceCoilResistanceOhms,
+                                    float electricalQ) {
+  float q = std::max(electricalQ, 0.35f);
+  float w0 = kRadioTwoPi * std::max(suspensionHz, 1.0f);
+  return std::sqrt(std::max(w0 * movingMassKg * voiceCoilResistanceOhms / q,
+                            1e-9f));
+}
+
 void configureSpeakerElectromechanics(SpeakerSim& speaker,
                                       float fs,
                                       float nominalLoadOhms) {
@@ -56,17 +74,28 @@ void configureSpeakerElectromechanics(SpeakerSim& speaker,
         deriveSpeakerCompliance(speaker.movingMassKg, speaker.suspensionHz);
   }
   if (speaker.mechanicalDampingNsPerMeter <= 0.0f) {
-    speaker.mechanicalDampingNsPerMeter = deriveSpeakerMechanicalDamping(
-        speaker.movingMassKg, speaker.suspensionHz, speaker.suspensionQ);
+    if (speaker.mechanicalQ > 0.0f) {
+      speaker.mechanicalDampingNsPerMeter = deriveSpeakerMechanicalDampingFromQ(
+          speaker.movingMassKg, speaker.suspensionHz, speaker.mechanicalQ);
+    } else {
+      speaker.mechanicalDampingNsPerMeter = deriveSpeakerMechanicalDamping(
+          speaker.movingMassKg, speaker.suspensionHz, speaker.suspensionQ);
+    }
   }
   if (speaker.voiceCoilInductanceHenries <= 0.0f) {
     speaker.voiceCoilInductanceHenries = deriveSpeakerVoiceCoilInductance(
         speaker.voiceCoilResistanceOhms, speaker.topLpHz);
   }
   if (speaker.forceFactorBl <= 0.0f) {
-    speaker.forceFactorBl =
-        deriveSpeakerForceFactor(speaker.movingMassKg, speaker.suspensionHz,
-                                 speaker.voiceCoilResistanceOhms);
+    if (speaker.electricalQ > 0.0f) {
+      speaker.forceFactorBl = deriveSpeakerForceFactorFromQ(
+          speaker.movingMassKg, speaker.suspensionHz,
+          speaker.voiceCoilResistanceOhms, speaker.electricalQ);
+    } else {
+      speaker.forceFactorBl =
+          deriveSpeakerForceFactor(speaker.movingMassKg, speaker.suspensionHz,
+                                   speaker.voiceCoilResistanceOhms);
+    }
   }
   float loadSenseMs = 1.0f;
   speaker.loadSenseCoeff =
@@ -82,47 +111,6 @@ void resetSpeakerElectromechanics(SpeakerSim& speaker) {
   speaker.loadSenseVoltage = 0.0f;
   speaker.loadSenseCurrent = 0.0f;
   speaker.effectiveLoadOhms = std::max(speaker.nominalLoadOhms, 1e-3f);
-}
-
-void advanceSpeakerElectromechanics(SpeakerSim& speaker, float appliedVolts) {
-  float fs = std::max(speaker.electricalSampleRate, 1.0f);
-  float dt = 1.0f / fs;
-  float re = std::max(speaker.voiceCoilResistanceOhms, 1e-4f);
-  float le = std::max(speaker.voiceCoilInductanceHenries, 1e-7f);
-  float mass = std::max(speaker.movingMassKg, 1e-6f);
-  float compliance =
-      std::max(speaker.suspensionComplianceMetersPerNewton, 1e-8f);
-  float damping = std::max(speaker.mechanicalDampingNsPerMeter, 1e-5f);
-  float bl = std::max(speaker.forceFactorBl, 1e-4f);
-
-  float i0 = speaker.electricalCurrentAmps;
-  float v0 = speaker.coneVelocityMetersPerSecond;
-  float x0 = speaker.coneDisplacementMeters;
-  float diDt = (appliedVolts - re * i0 - bl * v0) / le;
-  float i1 = i0 + dt * diDt;
-  float forceNewtons = bl * i1;
-  float accel =
-      (forceNewtons - damping * v0 - (x0 / compliance)) / mass;
-  float v1 = v0 + dt * accel;
-  float x1 = x0 + dt * v1;
-  float backEmf = bl * v1;
-
-  speaker.electricalCurrentAmps = i1;
-  speaker.coneVelocityMetersPerSecond = v1;
-  speaker.coneDisplacementMeters = x1;
-  speaker.backEmfVolts = backEmf;
-
-  float coeff = clampf(speaker.loadSenseCoeff, 0.0f, 0.99999f);
-  speaker.loadSenseVoltage =
-      coeff * speaker.loadSenseVoltage + (1.0f - coeff) * std::fabs(appliedVolts);
-  speaker.loadSenseCurrent = coeff * speaker.loadSenseCurrent +
-                             (1.0f - coeff) * std::fabs(i1);
-  if (speaker.loadSenseCurrent > 1e-5f && speaker.loadSenseVoltage > 1e-5f) {
-    float minLoad = 0.70f * std::max(speaker.nominalLoadOhms, 1e-3f);
-    float maxLoad = 4.5f * std::max(speaker.nominalLoadOhms, 1e-3f);
-    speaker.effectiveLoadOhms = std::clamp(
-        speaker.loadSenseVoltage / speaker.loadSenseCurrent, minLoad, maxLoad);
-  }
 }
 
 float asymmetricSoftLimit(float x, float positiveLimit, float negativeLimit) {
@@ -220,22 +208,26 @@ float runSpeakerModel(SpeakerSim& speaker, float x, bool& clipped) {
     y = speaker.topLp.process(y);
   }
 
-  float a = std::fabs(y);
-  if (a > speaker.excursionEnv) {
+  // The audible compliance/asymmetry should follow actual cone travel, not
+  // instantaneous speaker voltage. The electrical branch in the power stage
+  // now solves displacement explicitly, so use that state here.
+  float excursionRefMm = std::max(speaker.excursionRef, 1e-6f);
+  float signedExcursionMm = 1000.0f * speaker.coneDisplacementMeters;
+  float excursionMagnitudeMm = std::fabs(signedExcursionMm);
+  if (excursionMagnitudeMm > speaker.excursionEnv) {
     speaker.excursionEnv =
         speaker.excursionAtk * speaker.excursionEnv +
-        (1.0f - speaker.excursionAtk) * a;
+        (1.0f - speaker.excursionAtk) * excursionMagnitudeMm;
   } else {
     speaker.excursionEnv =
         speaker.excursionRel * speaker.excursionEnv +
-        (1.0f - speaker.excursionRel) * a;
+        (1.0f - speaker.excursionRel) * excursionMagnitudeMm;
   }
 
   float excursionT =
-      clampf(speaker.excursionEnv / std::max(speaker.excursionRef, 1e-6f),
-             0.0f, 1.0f);
+      clampf(speaker.excursionEnv / excursionRefMm, 0.0f, 1.0f);
   float signedExcursionT =
-      clampf(y / std::max(speaker.excursionRef, 1e-6f), -1.0f, 1.0f);
+      clampf(signedExcursionMm / excursionRefMm, -1.0f, 1.0f);
   float asymmetry =
       1.0f + clampf(speaker.asymBias, -0.75f, 0.75f) * signedExcursionT;
   float complianceGain =
@@ -262,7 +254,8 @@ void RadioSpeakerNode::init(Radio1938& radio, RadioInitContext&) {
   speakerStage.osLpIn.setLowpass(osFs, osCut, kRadioBiquadQ);
   speakerStage.osLpOut.setLowpass(osFs, osCut, kRadioBiquadQ);
   initSpeakerModel(speakerStage.speaker, osFs);
-  configureSpeakerElectromechanics(speakerStage.speaker, radio.sampleRate,
+  float electricalFs = std::max(radio.power.internalSampleRate, radio.sampleRate);
+  configureSpeakerElectromechanics(speakerStage.speaker, electricalFs,
                                    radio.power.outputLoadResistanceOhms);
   speakerStage.speaker.drive = speakerStage.drive;
   speakerStage.physicalDriveVolts = 0.0f;
@@ -281,8 +274,6 @@ void RadioSpeakerNode::reset(Radio1938& radio) {
 float RadioSpeakerNode::run(Radio1938& radio, float y, RadioSampleContext&) {
   auto& speakerStage = radio.speakerStage;
   speakerStage.speaker.drive = std::max(speakerStage.drive, 0.0f);
-  advanceSpeakerElectromechanics(speakerStage.speaker,
-                                 speakerStage.physicalDriveVolts);
   y = processOversampled2x(y, speakerStage.osPrev, speakerStage.osLpIn,
                            speakerStage.osLpOut, [&](float v) {
                              bool clipped = false;

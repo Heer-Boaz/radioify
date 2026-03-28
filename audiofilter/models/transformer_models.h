@@ -10,6 +10,11 @@ struct CurrentDrivenTransformerSample {
   float secondaryCurrent = 0.0f;
 };
 
+struct SecondaryNortonLoad {
+  float conductanceSiemens = 0.0f;
+  float currentAmps = 0.0f;
+};
+
 struct CurrentDrivenTransformer {
   float fs = 0.0f;
   float primaryLeakageInductanceHenries = 0.0f;
@@ -48,8 +53,15 @@ struct CurrentDrivenTransformer {
       float primaryDriveCurrentAmps,
       float secondaryLoadResistanceOhms,
       float primaryLoadResistanceOhms = 0.0f) const;
+  CurrentDrivenTransformerSample projectStep(
+      float primaryDriveCurrentAmps,
+      const SecondaryNortonLoad& secondaryLoad,
+      float primaryLoadResistanceOhms = 0.0f) const;
   CurrentDrivenTransformerSample step(float primaryDriveCurrentAmps,
                                       float secondaryLoadResistanceOhms,
+                                      float primaryLoadResistanceOhms = 0.0f);
+  CurrentDrivenTransformerSample step(float primaryDriveCurrentAmps,
+                                      const SecondaryNortonLoad& secondaryLoad,
                                       float primaryLoadResistanceOhms = 0.0f);
 };
 
@@ -75,6 +87,11 @@ FixedLoadAffineTransformerProjection buildFixedLoadAffineProjection(
 AffineTransformerProjection buildAffineProjection(
     const CurrentDrivenTransformer& transformer,
     float secondaryLoadResistanceOhms,
+    float primaryLoadResistanceOhms);
+
+AffineTransformerProjection buildAffineProjection(
+    const CurrentDrivenTransformer& transformer,
+    const SecondaryNortonLoad& secondaryLoad,
     float primaryLoadResistanceOhms);
 
 CurrentDrivenTransformerSample evalAffineProjection(

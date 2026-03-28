@@ -1611,12 +1611,12 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
   {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::Speaker});
     RadioSpeakerNode::reset(radio);
-    std::vector<float> out(kNodeTestFrames, 0.0f);
+    std::vector<float> outv(kNodeTestFrames, 0.0f);
     RadioSampleContext ctx{};
     for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
-      out[i] = RadioSpeakerNode::run(radio, 0.0f, ctx);
+      outv[i] = RadioSpeakerNode::run(radio, 0.0f, ctx);
     }
-    addRange(rows, "Speaker", "zero_input_stays_zero", rmsOf(out), 0.0, 1e-7,
+    addRange(rows, "Speaker", "zero_input_stays_zero", rmsOf(outv), 0.0, 1e-7,
              "no spontaneous motion");
 
     Radio1938 muted = makeNodeFixture(config, 0.0f, {PassId::Speaker});

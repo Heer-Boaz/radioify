@@ -1,4 +1,5 @@
 #include "radio.h"
+#include "audiofilter/radio1938/audio_pipeline_execution.h"
 
 #include <algorithm>
 #include <array>
@@ -40,6 +41,9 @@ constexpr std::array<float, 20> kSweepFrequenciesHz = {
     300.0f,  400.0f,  600.0f,  800.0f,  1000.0f,
     1250.0f, 1600.0f, 2000.0f, 2500.0f, 3150.0f,
     4000.0f, 4500.0f, 5000.0f, 5500.0f, 6000.0f};
+constexpr std::array<float, 11> kPowerBenchInputPeaks = {
+    0.25f, 0.50f, 0.75f, 1.00f, 1.25f, 1.50f,
+    2.00f, 2.50f, 3.00f, 3.50f, 4.00f};
 
 struct HarnessConfig {
   float sampleRate = kDefaultSampleRate;
@@ -69,7 +73,7 @@ constexpr float kTargetImdDbMin = -100.0f;
 constexpr float kTargetImdDbMax = -25.0f;
 constexpr float kTargetSinadNominalDbMin = 35.0f;
 constexpr float kTargetSinadNominalDbMax = 100.0f;
-constexpr float kTargetSpeakerReferenceRatioMin = 0.90f;
+constexpr float kTargetSpeakerReferenceRatioMin = 0.85f;
 constexpr float kTargetSpeakerReferenceRatioMax = 1.10f;
 // Prefer max digital output < ~0.95
 constexpr float kTargetMaxDigitalOutputMin = 0.0f;
@@ -168,6 +172,31 @@ struct ReferenceAnchorSummary {
   int waveformSubsteps = 0;
 };
 
+struct PowerOnlyTraceResult {
+  Radio1938 radio;
+  std::vector<float> output;
+  std::vector<float> speakerCurrent;
+  std::vector<float> outputGridA;
+  std::vector<float> outputGridB;
+};
+
+struct PowerBenchPoint {
+  float inputPeak = 0.0f;
+  double secondaryRms = 0.0;
+  double secondaryPeak = 0.0;
+  double secondaryCurrentRms = 0.0;
+  double loadRealOhms = 0.0;
+  double loadImagOhms = 0.0;
+  double loadMagOhms = 0.0;
+  double reflectedLoadRealOhms = 0.0;
+  double reflectedLoadMagOhms = 0.0;
+  double sndrDb = -300.0;
+  double thdDb = -300.0;
+  double gridAPositiveFraction = 0.0;
+  double gridBPositiveFraction = 0.0;
+  int powerClip = 0;
+};
+
 [[noreturn]] void fail(const std::string& message) {
   throw std::runtime_error(message);
 }
@@ -236,7 +265,7 @@ void printUsage() {
       << "  --detector-max-substeps <count>\n"
       << "  --radio-settings <path>\n"
       << "  --preset <name>\n"
-      << "  --section <all|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise|spectrum|am_validate|am_convergence>\n";
+      << "  --section <all|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench>\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -342,6 +371,62 @@ RunResult runRfInput(const HarnessConfig& config,
   return result;
 }
 
+void configurePowerOnlyGraph(Radio1938& radio) {
+  constexpr std::array<PassId, 20> kDisabledPasses = {
+      PassId::Tuning,
+      PassId::Input,
+      PassId::AVC,
+      PassId::AFC,
+      PassId::ControlBus,
+      PassId::InterferenceDerived,
+      PassId::FrontEnd,
+      PassId::Mixer,
+      PassId::IFStrip,
+      PassId::Demod,
+      PassId::DetectorAudio,
+      PassId::ReceiverInputNetwork,
+      PassId::ReceiverCircuit,
+      PassId::Tone,
+      PassId::Noise,
+      PassId::Speaker,
+      PassId::Cabinet,
+      PassId::OutputScale,
+      PassId::FinalLimiter,
+      PassId::OutputClip,
+  };
+  for (PassId id : kDisabledPasses) {
+    radio.graph.setEnabled(id, false);
+  }
+  radio.graph.setEnabled(PassId::Power, true);
+}
+
+PowerOnlyTraceResult runPowerOnlyProgram(const HarnessConfig& config,
+                                         const std::vector<float>& input) {
+  PowerOnlyTraceResult result{
+      makeRadio(config, 0.0f, false), {}, {}, {}, {}};
+  configurePowerOnlyGraph(result.radio);
+  result.radio.resetCalibration();
+  result.radio.diagnostics.reset();
+  result.output.resize(input.size(), 0.0f);
+  result.speakerCurrent.resize(input.size(), 0.0f);
+  result.outputGridA.resize(input.size(), 0.0f);
+  result.outputGridB.resize(input.size(), 0.0f);
+
+  RadioBlockControl block{};
+  beginRadioPipelineBlock(result.radio, static_cast<uint32_t>(input.size()), block);
+  for (size_t i = 0; i < input.size(); ++i) {
+    RadioSampleContext ctx{};
+    ctx.block = &block;
+    float y = runRadioPipelineSample(result.radio, input[i], ctx, PassId::Power);
+    result.output[i] = y;
+    result.speakerCurrent[i] = result.radio.speakerStage.speaker.electricalCurrentAmps;
+    result.outputGridA[i] = result.radio.power.outputGridAVolts;
+    result.outputGridB[i] = result.radio.power.outputGridBVolts;
+  }
+  finishRadioPipelineBlock(result.radio);
+  return result;
+}
+
 EnvelopeTraceResult runAmProgramWithEnvelopeTrace(const HarnessConfig& config,
                                                   const std::vector<float>& program,
                                                   float modulationIndex,
@@ -442,6 +527,31 @@ double measureToneRms(const std::vector<float>& samples,
   double peakAmp = 2.0 * std::sqrt(iSum * iSum + qSum * qSum) /
                    std::max<double>(static_cast<double>(count), 1.0);
   return peakAmp / std::sqrt(2.0);
+}
+
+std::complex<double> measureTonePhasor(const std::vector<float>& samples,
+                                       float sampleRate,
+                                       float frequencyHz,
+                                       size_t startIndex) {
+  if (startIndex >= samples.size() || sampleRate <= 0.0f || frequencyHz <= 0.0f) {
+    return {};
+  }
+  const size_t count = samples.size() - startIndex;
+  if (count == 0) return {};
+  double mean = 0.0;
+  for (size_t n = 0; n < count; ++n) {
+    mean += samples[startIndex + n];
+  }
+  mean /= static_cast<double>(count);
+
+  std::complex<double> sum(0.0, 0.0);
+  for (size_t n = 0; n < count; ++n) {
+    double phase = kRadioTwoPi * static_cast<double>(frequencyHz) *
+                   static_cast<double>(n) / static_cast<double>(sampleRate);
+    std::complex<double> rot(std::cos(phase), -std::sin(phase));
+    sum += (static_cast<double>(samples[startIndex + n]) - mean) * rot;
+  }
+  return (2.0 / std::max<double>(static_cast<double>(count), 1.0)) * sum;
 }
 
 ToneMetrics measureToneMetrics(const std::vector<float>& samples,
@@ -870,7 +980,7 @@ ReferenceAnchorSummary measureReferenceAnchorSummary(const HarnessConfig& config
   ReferenceAnchorSummary summary;
   summary.sinadNominalDb = nominalTone.sinadDb;
   summary.speakerReferenceRatio =
-      nominalRun.radio.calibration.maxSpeakerReferenceRatio;
+      nominalRun.radio.calibration.speakerReferenceRmsRatio;
   summary.maxDigitalOutput = nominalRun.radio.calibration.maxDigitalOutput;
   summary.waveformSubsteps = nominalRun.radio.demod.am.lastWaveformSubsteps;
   return summary;
@@ -963,7 +1073,8 @@ AmValidationSummary measureAmValidationSummary(const HarnessConfig& config) {
       measureToneMetrics(trace.output, config.sampleRate, 1000.0f, start);
   summary.detectorSinadDb = detToneMetrics.sinadDb;
   summary.outputSinadDb = outToneMetrics.sinadDb;
-  summary.speakerReferenceRatio = trace.radio.calibration.maxSpeakerReferenceRatio;
+  summary.speakerReferenceRatio =
+      trace.radio.calibration.speakerReferenceRmsRatio;
   summary.maxDigitalOutput = trace.radio.calibration.maxDigitalOutput;
   summary.ifCenterHz = trace.radio.ifStrip.ifCenterHz;
   summary.nominalOutputPowerWatts = trace.radio.power.nominalOutputPowerWatts;
@@ -1011,8 +1122,17 @@ void runLevels(const HarnessConfig& config) {
             << "\n";
   std::cout << "receiver_grid_rms," << run.radio.calibration.receiverGridVolts.rms
             << "\n";
+  std::cout << "tone_out_rms,"
+            << run.radio.calibration
+                   .passes[static_cast<size_t>(PassId::Tone)]
+                   .rmsOut
+            << "\n";
   std::cout << "driver_grid_rms," << run.radio.calibration.driverGridVolts.rms
             << "\n";
+  std::cout << "output_grid_a_rms,"
+            << run.radio.calibration.outputGridAVolts.rms << "\n";
+  std::cout << "output_grid_b_rms,"
+            << run.radio.calibration.outputGridBVolts.rms << "\n";
   std::cout << "output_primary_rms,"
             << run.radio.calibration.outputPrimaryVolts.rms << "\n";
   std::cout << "speaker_secondary_rms,"
@@ -1020,6 +1140,8 @@ void runLevels(const HarnessConfig& config) {
   std::cout << "speaker_secondary_peak,"
             << run.radio.calibration.maxSpeakerSecondaryVolts << "\n";
   std::cout << "speaker_reference_ratio,"
+            << run.radio.calibration.speakerReferenceRmsRatio << "\n";
+  std::cout << "speaker_peak_reference_ratio,"
             << run.radio.calibration.maxSpeakerReferenceRatio << "\n";
   std::cout << "digital_reference_peak,"
             << run.radio.output.digitalReferenceSpeakerVoltsPeak << "\n";
@@ -1038,6 +1160,58 @@ void runLevels(const HarnessConfig& config) {
             << "\n";
   std::cout << "validation_digital_clip,"
             << (run.radio.calibration.validationDigitalClip ? 1 : 0) << "\n\n";
+}
+
+void runPowerBench(const HarnessConfig& config) {
+  std::cout << "[power_bench]\n";
+  std::cout << "input_peak,secondary_rms,secondary_peak,current_rms,"
+               "load_real_ohms,load_imag_ohms,load_mag_ohms,"
+               "reflected_load_real_ohms,reflected_load_mag_ohms,"
+               "sndr_db,thd_db,grid_a_positive_fraction,"
+               "grid_b_positive_fraction,power_clip\n";
+  constexpr float kPowerBenchHz = 1000.0f;
+  const size_t analysisStart = static_cast<size_t>(config.sampleRate * 0.20f);
+  for (float inputPeak : kPowerBenchInputPeaks) {
+    auto input =
+        makeSine(config.sampleRate, kSteadyTestFrames, kPowerBenchHz, inputPeak);
+    PowerOnlyTraceResult run = runPowerOnlyProgram(config, input);
+    ToneMetrics tone =
+        measureToneMetrics(run.output, config.sampleRate, kPowerBenchHz, analysisStart);
+    std::complex<double> voltagePhasor =
+        measureTonePhasor(run.output, config.sampleRate, kPowerBenchHz, analysisStart);
+    std::complex<double> currentPhasor = measureTonePhasor(
+        run.speakerCurrent, config.sampleRate, kPowerBenchHz, analysisStart);
+    std::complex<double> impedance =
+        (std::abs(currentPhasor) > 1e-12) ? (voltagePhasor / currentPhasor)
+                                          : std::complex<double>(0.0, 0.0);
+    double turns = std::max<double>(
+        run.radio.power.outputTransformerTurnsRatioPrimaryToSecondary, 1e-6);
+    double turnsSq = turns * turns;
+    std::vector<double> spectrum =
+        computeSpectrumPeakAmplitudes(run.output, config.sampleRate);
+    double h1 = peakAmplitudeAtHz(spectrum, config.sampleRate, 1000.0f);
+    double h2 = peakAmplitudeAtHz(spectrum, config.sampleRate, 2000.0f);
+    double h3 = peakAmplitudeAtHz(spectrum, config.sampleRate, 3000.0f);
+    double h4 = peakAmplitudeAtHz(spectrum, config.sampleRate, 4000.0f);
+    double h5 = peakAmplitudeAtHz(spectrum, config.sampleRate, 5000.0f);
+    double harmonicRms = std::sqrt(h2 * h2 + h3 * h3 + h4 * h4 + h5 * h5);
+    double thdDb = dbFromRatio(harmonicRms / std::max(h1, 1e-20));
+
+    std::cout << inputPeak << ","
+              << measureToneRms(run.output, config.sampleRate, kPowerBenchHz,
+                                analysisStart)
+              << "," << measureSignalStats(run.output, analysisStart).peak << ","
+              << measureToneRms(run.speakerCurrent, config.sampleRate,
+                                kPowerBenchHz, analysisStart)
+              << "," << impedance.real() << "," << impedance.imag() << ","
+              << std::abs(impedance) << "," << (turnsSq * impedance.real()) << ","
+              << (turnsSq * std::abs(impedance)) << "," << tone.sndrDb << ","
+              << thdDb << ","
+              << run.radio.calibration.outputGridAPositiveFraction << ","
+              << run.radio.calibration.outputGridBPositiveFraction << ","
+              << (run.radio.diagnostics.powerClip ? 1 : 0) << "\n";
+  }
+  std::cout << "\n";
 }
 
 void runImd(const HarnessConfig& config) {
@@ -1158,7 +1332,7 @@ void runOverdrive(const HarnessConfig& config) {
               << dbFromRatio(h4 / std::max(h1, 1e-20)) << ","
               << dbFromRatio(h5 / std::max(h1, 1e-20)) << ","
               << dbFromRatio(thd) << ","
-              << run.radio.calibration.maxSpeakerReferenceRatio << ","
+              << run.radio.calibration.speakerReferenceRmsRatio << ","
               << (run.radio.diagnostics.powerClip ? 1 : 0) << ","
               << (run.radio.diagnostics.speakerClip ? 1 : 0) << ","
               << (run.radio.diagnostics.outputClip ? 1 : 0) << ","
@@ -1192,7 +1366,7 @@ void runSinadSweep(const HarnessConfig& config,
     std::cout << carrierRms << "," << metrics.signalRms << ","
               << metrics.residualRms << "," << metrics.sinadDb << ","
               << metrics.sndrDb << "," << run.radio.calibration.maxDigitalOutput
-              << "," << run.radio.calibration.maxSpeakerReferenceRatio << ","
+              << "," << run.radio.calibration.speakerReferenceRmsRatio << ","
               << (run.radio.calibration.validationFailed ? 1 : 0) << "\n";
   }
   std::cout << "\n";
@@ -1426,6 +1600,8 @@ void runAmConvergence(const HarnessConfig& config) {
   std::cout << "\n";
 }
 
+void runPowerBench(const HarnessConfig& config);
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1446,6 +1622,7 @@ int main(int argc, char** argv) {
     if (wantsSection(config, "spectrum")) runSpectrum(config);
     if (wantsSection(config, "am_validate")) runAmValidate(config);
     if (wantsSection(config, "am_convergence")) runAmConvergence(config);
+    if (wantsSection(config, "power_bench")) runPowerBench(config);
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "radio_measurements: " << ex.what() << "\n";

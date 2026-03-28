@@ -221,6 +221,14 @@
 #topLpHz = 3800.0
 #filterQ = 0.707
 #limit = 0.0
+#voiceCoilResistanceOhms = 3.2
+#voiceCoilInductanceHenries = 0.0001
+#movingMassKg = 0.014
+#mechanicalQ = 4.0
+#electricalQ = 2.3
+#forceFactorBl = 0.0
+#suspensionComplianceMetersPerNewton = 0.0
+#mechanicalDampingNsPerMeter = 0.0
 #excursionRef = 8.0
 #complianceLossDepth = 0.05
 #

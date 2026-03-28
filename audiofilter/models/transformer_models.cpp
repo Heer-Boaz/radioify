@@ -13,7 +13,7 @@ namespace {
 CurrentDrivenTransformerSample projectNoShuntCap(
     const CurrentDrivenTransformer& transformer,
     float primaryDriveCurrentAmps,
-    float secondaryLoadResistanceOhms,
+    const SecondaryNortonLoad& secondaryLoad,
     float primaryLoadResistanceOhms) {
   float dt = requirePositiveFinite(transformer.dtSub);
   float Rp = transformer.primaryResistanceOhms;
@@ -31,10 +31,13 @@ CurrentDrivenTransformerSample projectNoShuntCap(
           ? 1.0f / primaryLoadResistanceOhms
           : 0.0f;
   float Gp = coreLossConductance + primaryLoadConductance;
-  float Gs = (secondaryLoadResistanceOhms > 0.0f &&
-              std::isfinite(secondaryLoadResistanceOhms))
-                 ? 1.0f / secondaryLoadResistanceOhms
+  float Gs = (secondaryLoad.conductanceSiemens > 0.0f &&
+              std::isfinite(secondaryLoad.conductanceSiemens))
+                 ? secondaryLoad.conductanceSiemens
                  : 0.0f;
+  float secondaryLoadCurrent = std::isfinite(secondaryLoad.currentAmps)
+                                   ? secondaryLoad.currentAmps
+                                   : 0.0f;
   float projectedPrimaryCurrent = transformer.primaryCurrent;
   float projectedSecondaryCurrent = transformer.secondaryCurrent;
   float projectedPrimaryVoltage = transformer.primaryVoltage;
@@ -62,10 +65,11 @@ CurrentDrivenTransformerSample projectNoShuntCap(
       if (!secondaryConductive) {
         projectedSecondaryCurrent = 0.0f;
       } else {
+        float c2Adjusted = c2 - invGs * secondaryLoadCurrent;
         float denom = a22 + invGs;
         assert(std::fabs(denom) >= 1e-12f);
         projectedSecondaryCurrent =
-            (c2 - a21 * projectedPrimaryCurrent) / denom;
+            (c2Adjusted - a21 * projectedPrimaryCurrent) / denom;
       }
     } else if (!secondaryConductive) {
       projectedSecondaryCurrent = 0.0f;
@@ -76,7 +80,7 @@ CurrentDrivenTransformerSample projectNoShuntCap(
       float det = (a11 + invGp) * (a22 + invGs) - a12 * a21;
       assert(std::fabs(det) >= 1e-12f);
       float rhs0 = c1 + primaryDriveCurrentAmps * invGp;
-      float rhs1 = c2;
+      float rhs1 = c2 - invGs * secondaryLoadCurrent;
       projectedPrimaryCurrent = (rhs0 * (a22 + invGs) - a12 * rhs1) / det;
       projectedSecondaryCurrent =
           ((a11 + invGp) * rhs1 - rhs0 * a21) / det;
@@ -89,7 +93,7 @@ CurrentDrivenTransformerSample projectNoShuntCap(
                a12 * projectedSecondaryCurrent - c1);
     projectedSecondaryVoltage =
         secondaryConductive
-            ? (-projectedSecondaryCurrent * invGs)
+            ? (-(projectedSecondaryCurrent + secondaryLoadCurrent) * invGs)
             : (a21 * projectedPrimaryCurrent +
                a22 * projectedSecondaryCurrent - c2);
     assert(std::isfinite(projectedPrimaryCurrent) &&
@@ -141,12 +145,15 @@ FixedLoadAffineTransformerProjection buildFixedLoadAffineProjection(
     float secondaryLoadResistanceOhms,
     float primaryLoadResistanceOhms) {
   FixedLoadAffineTransformerProjection p{};
+  SecondaryNortonLoad secondaryLoad{};
+  if (secondaryLoadResistanceOhms > 0.0f &&
+      std::isfinite(secondaryLoadResistanceOhms)) {
+    secondaryLoad.conductanceSiemens = 1.0f / secondaryLoadResistanceOhms;
+  }
 
   CurrentDrivenTransformer zero = t;
   zero.clearState();
-  p.slope =
-      zero.projectStep(1.0f, secondaryLoadResistanceOhms,
-                       primaryLoadResistanceOhms);
+  p.slope = zero.projectStep(1.0f, secondaryLoad, primaryLoadResistanceOhms);
 
   for (int col = 0; col < 4; ++col) {
     CurrentDrivenTransformer basis = t;
@@ -166,8 +173,7 @@ FixedLoadAffineTransformerProjection buildFixedLoadAffineProjection(
         break;
     }
     CurrentDrivenTransformerSample out =
-        basis.projectStep(0.0f, secondaryLoadResistanceOhms,
-                          primaryLoadResistanceOhms);
+        basis.projectStep(0.0f, secondaryLoad, primaryLoadResistanceOhms);
     for (int row = 0; row < 4; ++row) {
       p.stateA[row * 4 + col] = transformerStateComponent(out, row);
     }
@@ -180,10 +186,20 @@ AffineTransformerProjection buildAffineProjection(
     const CurrentDrivenTransformer& t,
     float secondaryLoadResistanceOhms,
     float primaryLoadResistanceOhms) {
-  auto s0 =
-      t.projectStep(0.0f, secondaryLoadResistanceOhms, primaryLoadResistanceOhms);
-  auto s1 =
-      t.projectStep(1.0f, secondaryLoadResistanceOhms, primaryLoadResistanceOhms);
+  SecondaryNortonLoad secondaryLoad{};
+  if (secondaryLoadResistanceOhms > 0.0f &&
+      std::isfinite(secondaryLoadResistanceOhms)) {
+    secondaryLoad.conductanceSiemens = 1.0f / secondaryLoadResistanceOhms;
+  }
+  return buildAffineProjection(t, secondaryLoad, primaryLoadResistanceOhms);
+}
+
+AffineTransformerProjection buildAffineProjection(
+    const CurrentDrivenTransformer& t,
+    const SecondaryNortonLoad& secondaryLoad,
+    float primaryLoadResistanceOhms) {
+  auto s0 = t.projectStep(0.0f, secondaryLoad, primaryLoadResistanceOhms);
+  auto s1 = t.projectStep(1.0f, secondaryLoad, primaryLoadResistanceOhms);
 
   AffineTransformerProjection p{};
   p.base = s0;
@@ -272,9 +288,21 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::projectStep(
     float primaryDriveCurrentAmps,
     float secondaryLoadResistanceOhms,
     float primaryLoadResistanceOhms) const {
+  SecondaryNortonLoad secondaryLoad{};
+  if (secondaryLoadResistanceOhms > 0.0f &&
+      std::isfinite(secondaryLoadResistanceOhms)) {
+    secondaryLoad.conductanceSiemens = 1.0f / secondaryLoadResistanceOhms;
+  }
+  return projectStep(primaryDriveCurrentAmps, secondaryLoad,
+                     primaryLoadResistanceOhms);
+}
+
+CurrentDrivenTransformerSample CurrentDrivenTransformer::projectStep(
+    float primaryDriveCurrentAmps,
+    const SecondaryNortonLoad& secondaryLoad,
+    float primaryLoadResistanceOhms) const {
   if (primaryShuntCapFarads <= 0.0f && secondaryShuntCapFarads <= 0.0f) {
-    return projectNoShuntCap(*this, primaryDriveCurrentAmps,
-                             secondaryLoadResistanceOhms,
+    return projectNoShuntCap(*this, primaryDriveCurrentAmps, secondaryLoad,
                              primaryLoadResistanceOhms);
   }
 
@@ -293,10 +321,12 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::projectStep(
     primaryCoreConductance += 1.0f / primaryLoadResistanceOhms;
   }
   float secondaryLoadConductance =
-      (secondaryLoadResistanceOhms > 0.0f &&
-       std::isfinite(secondaryLoadResistanceOhms))
-          ? 1.0f / secondaryLoadResistanceOhms
+      (secondaryLoad.conductanceSiemens > 0.0f &&
+       std::isfinite(secondaryLoad.conductanceSiemens))
+          ? secondaryLoad.conductanceSiemens
           : 0.0f;
+  float secondaryLoadCurrent =
+      std::isfinite(secondaryLoad.currentAmps) ? secondaryLoad.currentAmps : 0.0f;
   float determinant = primaryInductance * secondaryInductance -
                       mutualInductance * mutualInductance;
   assert(determinant > 0.0f);
@@ -341,7 +371,8 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::projectStep(
             dt * (primaryDriveCurrentAmps / primaryCap),
         -0.5f * dt / secondaryCap * projectedSecondaryCurrent +
             (1.0f - 0.5f * dt * secondaryLoadConductance / secondaryCap) *
-                projectedSecondaryVoltage,
+                projectedSecondaryVoltage -
+            dt * (secondaryLoadCurrent / secondaryCap),
     };
     float x[4] = {kNaN, kNaN, kNaN, kNaN};
     bool solved = solveLinear4x4(system, b, x);
@@ -365,9 +396,20 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::step(
     float primaryDriveCurrentAmps,
     float secondaryLoadResistanceOhms,
     float primaryLoadResistanceOhms) {
-  CurrentDrivenTransformerSample projected =
-      projectStep(primaryDriveCurrentAmps, secondaryLoadResistanceOhms,
-                  primaryLoadResistanceOhms);
+  SecondaryNortonLoad secondaryLoad{};
+  if (secondaryLoadResistanceOhms > 0.0f &&
+      std::isfinite(secondaryLoadResistanceOhms)) {
+    secondaryLoad.conductanceSiemens = 1.0f / secondaryLoadResistanceOhms;
+  }
+  return step(primaryDriveCurrentAmps, secondaryLoad, primaryLoadResistanceOhms);
+}
+
+CurrentDrivenTransformerSample CurrentDrivenTransformer::step(
+    float primaryDriveCurrentAmps,
+    const SecondaryNortonLoad& secondaryLoad,
+    float primaryLoadResistanceOhms) {
+  CurrentDrivenTransformerSample projected = projectStep(
+      primaryDriveCurrentAmps, secondaryLoad, primaryLoadResistanceOhms);
   assert(std::isfinite(projected.primaryVoltage) &&
          std::isfinite(projected.secondaryVoltage) &&
          std::isfinite(projected.primaryCurrent) &&

@@ -158,6 +158,7 @@ void Radio1938::CalibrationState::reset() {
   interstageSecondaryPeakVolts = 0.0f;
   maxSpeakerSecondaryVolts = 0.0f;
   maxSpeakerReferenceRatio = 0.0f;
+  speakerReferenceRmsRatio = 0.0f;
   maxDigitalOutput = 0.0f;
   detectorIfCrackleEventCount = 0;
   detectorIfCrackleMaxBurstAmp = 0.0f;
@@ -276,6 +277,12 @@ void updateCalibrationSnapshot(Radio1938& radio) {
   radio.calibration.outputGridBVolts.updateSnapshot();
   radio.calibration.outputPrimaryVolts.updateSnapshot();
   radio.calibration.speakerSecondaryVolts.updateSnapshot();
+  float referencePeak =
+      std::max(radio.output.digitalReferenceSpeakerVoltsPeak, 1e-3f);
+  float referenceRms = referencePeak * std::sqrt(0.5f);
+  radio.calibration.speakerReferenceRmsRatio =
+      radio.calibration.speakerSecondaryVolts.rms /
+      std::max(referenceRms, 1e-6f);
 
   if (radio.calibration.totalSamples > 0) {
     float invCount = 1.0f / static_cast<float>(radio.calibration.totalSamples);
@@ -322,7 +329,7 @@ void updateCalibrationSnapshot(Radio1938& radio) {
       radio.calibration.validationOutputGridAPositive ||
       radio.calibration.validationOutputGridBPositive;
   radio.calibration.validationSpeakerOverReference =
-      radio.calibration.maxSpeakerReferenceRatio > 1.10f;
+      radio.calibration.speakerReferenceRmsRatio > 1.10f;
   radio.calibration.validationInterstageSecondary =
       radio.calibration.interstageSecondaryPeakVolts >
       4.0f * std::max(std::fabs(radio.power.outputTubeBiasVolts), 1.0f);

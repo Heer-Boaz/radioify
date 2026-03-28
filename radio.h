@@ -211,6 +211,7 @@ struct Radio1938 {
     float interstageSecondaryPeakVolts = 0.0f;
     float maxSpeakerSecondaryVolts = 0.0f;
     float maxSpeakerReferenceRatio = 0.0f;
+    float speakerReferenceRmsRatio = 0.0f;
     float maxDigitalOutput = 0.0f;
     uint64_t detectorIfCrackleEventCount = 0;
     float detectorIfCrackleMaxBurstAmp = 0.0f;

@@ -71,6 +71,77 @@ float solveOutputPrimaryVoltageAffine(
   return primaryVoltage;
 }
 
+SpeakerElectricalLinearization linearizeSpeakerElectricalLoad(
+    const SpeakerSim& speaker,
+    float nominalLoadOhms,
+    float dt) {
+  SpeakerElectricalLinearization linearization{};
+  float nominalLoad = requirePositiveFinite(nominalLoadOhms);
+  float re = std::max(speaker.voiceCoilResistanceOhms, 1e-4f);
+  float le = std::max(speaker.voiceCoilInductanceHenries, 1e-7f);
+  float mass = std::max(speaker.movingMassKg, 1e-6f);
+  float compliance =
+      std::max(speaker.suspensionComplianceMetersPerNewton, 1e-8f);
+  float damping = std::max(speaker.mechanicalDampingNsPerMeter, 1e-5f);
+  float bl = std::max(speaker.forceFactorBl, 1e-4f);
+  float safeDt = std::max(dt, 1e-9f);
+  float a = le / safeDt + re;
+  float d = mass / safeDt + damping + safeDt / compliance;
+  float det = a * d + bl * bl;
+  if (!std::isfinite(det) || det <= 1e-9f) {
+    linearization.load.conductanceSiemens = 1.0f / nominalLoad;
+    return linearization;
+  }
+  float rhsElectrical = (le / safeDt) * speaker.electricalCurrentAmps;
+  float rhsMechanical = (mass / safeDt) * speaker.coneVelocityMetersPerSecond -
+                        speaker.coneDisplacementMeters / compliance;
+  linearization.load.conductanceSiemens = d / det;
+  linearization.load.currentAmps =
+      (rhsElectrical * d - bl * rhsMechanical) / det;
+  linearization.electricalCoeff = a;
+  linearization.mechanicalCoeff = d;
+  linearization.determinant = det;
+  linearization.rhsElectrical = rhsElectrical;
+  linearization.rhsMechanical = rhsMechanical;
+  linearization.dt = safeDt;
+  linearization.forceFactorBl = bl;
+  return linearization;
+}
+
+void commitSpeakerElectricalLoad(SpeakerSim& speaker,
+                                 const SpeakerElectricalLinearization& l,
+                                 float appliedVolts) {
+  if (!std::isfinite(l.determinant) || l.determinant <= 1e-9f) {
+    return;
+  }
+  float drive = appliedVolts + l.rhsElectrical;
+  float currentAmps =
+      (drive * l.mechanicalCoeff - l.forceFactorBl * l.rhsMechanical) /
+      l.determinant;
+  float velocityMetersPerSecond =
+      (l.electricalCoeff * l.rhsMechanical + l.forceFactorBl * drive) /
+      l.determinant;
+  float displacementMeters =
+      speaker.coneDisplacementMeters + l.dt * velocityMetersPerSecond;
+  float backEmfVolts = l.forceFactorBl * velocityMetersPerSecond;
+  speaker.electricalCurrentAmps = currentAmps;
+  speaker.coneVelocityMetersPerSecond = velocityMetersPerSecond;
+  speaker.coneDisplacementMeters = displacementMeters;
+  speaker.backEmfVolts = backEmfVolts;
+
+  float coeff = clampf(speaker.loadSenseCoeff, 0.0f, 0.99999f);
+  speaker.loadSenseVoltage =
+      coeff * speaker.loadSenseVoltage + (1.0f - coeff) * std::fabs(appliedVolts);
+  speaker.loadSenseCurrent =
+      coeff * speaker.loadSenseCurrent + (1.0f - coeff) * std::fabs(currentAmps);
+  if (speaker.loadSenseCurrent > 1e-5f && speaker.loadSenseVoltage > 1e-5f) {
+    float minLoad = 0.70f * std::max(speaker.nominalLoadOhms, 1e-3f);
+    float maxLoad = 4.5f * std::max(speaker.nominalLoadOhms, 1e-3f);
+    speaker.effectiveLoadOhms = std::clamp(
+        speaker.loadSenseVoltage / speaker.loadSenseCurrent, minLoad, maxLoad);
+  }
+}
+
 float estimateOutputStageNominalPowerWatts(
     const Radio1938::PowerNodeState& power) {
   float loadResistance = requirePositiveFinite(power.outputLoadResistanceOhms);
