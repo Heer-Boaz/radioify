@@ -126,7 +126,7 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.supplyDriveDepth = 0.01f;
   radio.power.supplyBiasDepth = 0.0f;
   radio.power.postLpHz = 0.0f;
-  radio.power.gridCouplingCapFarads = 0.05e-6f;
+  radio.power.gridCouplingCapFarads = 0.02e-6f;
   radio.power.gridLeakResistanceOhms = 100000.0f;
   radio.power.tubePlateSupplyVolts = 250.0f;
   radio.power.tubeScreenVolts = 250.0f;
