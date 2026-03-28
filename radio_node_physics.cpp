@@ -1,5 +1,6 @@
 #include "radio.h"
 
+#include "audiofilter/math/signal_math.h"
 #include "audiofilter/radio1938/audio_pipeline.h"
 #include "audiofilter/radio1938/radio_pipeline_types.h"
 
@@ -775,6 +776,33 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
                  "detector crackle exposure rises when capture is lost");
   }
 
+  {
+    Radio1938 radio = makeNodeFixture(config, 0.4f, {PassId::InterferenceDerived});
+    radio.controlBus.controlVoltage = 0.625f;
+    radio.frontEnd.avcGainDepth = 0.40f;
+    radio.ifStrip.avcGainDepth = 0.60f;
+    radio.globals.ifNoiseMix = 0.35f;
+    radio.globals.postNoiseMix = 0.20f;
+    RadioSampleContext ctx{};
+    RadioInterferenceDerivedNode::run(radio, ctx);
+    double avcT = 0.625 / 1.25;
+    double rfGainControl =
+        std::max(0.35, 1.0 - radio.frontEnd.avcGainDepth * avcT);
+    double ifGainControl =
+        std::max(0.20, 1.0 - radio.ifStrip.avcGainDepth * avcT);
+    double expectedRfNoise =
+        radio.noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix * rfGainControl *
+        ifGainControl;
+    double expectedAudioNoise =
+        radio.noiseDerived.baseNoiseAmp * radio.globals.postNoiseMix;
+    addRange(rows, "InterferenceDerived", "rf_noise_matches_gain_law",
+             ctx.derived.demodIfNoiseAmp, expectedRfNoise - 1e-6,
+             expectedRfNoise + 1e-6, "baseNoise * ifMix * RF AVC * IF AVC");
+    addRange(rows, "InterferenceDerived", "audio_noise_matches_post_mix",
+             ctx.derived.noiseAmp, expectedAudioNoise - 1e-6,
+             expectedAudioNoise + 1e-6, "baseNoise * postNoiseMix");
+  }
+
   return rows;
 }
 
@@ -831,6 +859,15 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
     addPredicate(rows, "FrontEnd", "avc_reduces_rf_gain",
                  highAvc < lowAvc, highAvc / std::max(lowAvc, 1e-12),
                  "high AVC / low AVC RMS");
+
+    Radio1938 muted = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
+    muted.frontEnd.rfGain = 0.0f;
+    RadioFrontEndNode::reset(muted);
+    RadioSampleContext mutedCtx{};
+    mutedCtx.signal.setRealRf(0.4f);
+    float mutedOut = RadioFrontEndNode::run(muted, 0.4f, mutedCtx);
+    addRange(rows, "FrontEnd", "zero_rf_gain_mutes_output", mutedOut, -1e-7, 1e-7,
+             "explicit RF gain of zero must kill the stage");
   }
 
   {
@@ -899,6 +936,15 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
                  high.detectorAudioRms / std::max(low.detectorAudioRms, 1e-12),
                  "5 kHz / 100 Hz detector-audio ripple");
 
+    Radio1938 zero = makeNodeFixture(config, 0.0f, {PassId::IFStrip});
+    RadioSampleContext zeroCtx{};
+    zeroCtx.signal.setComplexEnvelope(0.0f, 0.0f);
+    float zeroOut = RadioIFStripNode::run(zero, 0.0f, zeroCtx);
+    addRange(rows, "IFStrip", "zero_envelope_keeps_zero_detector_feed",
+             std::fabs(zeroOut) + std::fabs(zeroCtx.signal.detectorInputI) +
+                 std::fabs(zeroCtx.signal.detectorInputQ),
+             0.0, 1e-7, "zero source envelope must not create IF energy");
+
     Radio1938 radioRfLow =
         makeNodeFixture(config, 0.0f, {PassId::FrontEnd, PassId::Mixer, PassId::IFStrip,
                                        PassId::Demod, PassId::DetectorAudio});
@@ -962,6 +1008,44 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
                  strong.demod.am.avcEnv > weak.demod.am.avcEnv,
                  strong.demod.am.avcEnv - weak.demod.am.avcEnv,
                  "strong minus weak AVC node");
+
+    Radio1938 zero = makeNodeFixture(config, 0.0f, {PassId::Demod});
+    RadioSampleContext zeroCtx{};
+    zeroCtx.signal.setComplexEnvelope(0.0f, 0.0f);
+    zeroCtx.signal.detectorInputI = 0.0f;
+    zeroCtx.signal.detectorInputQ = 0.0f;
+    float zeroOut = RadioAMDetectorNode::run(zero, 0.0f, zeroCtx);
+    double expectedAudioRect = diodeJunctionRectify(
+        0.0f, zero.demod.am.audioDiodeDrop, zero.demod.am.audioJunctionSlopeVolts);
+    double expectedAvcRectified = diodeJunctionRectify(
+        0.0f, zero.demod.am.avcDiodeDrop, zero.demod.am.avcJunctionSlopeVolts);
+    double expectedAvcDrive =
+        std::max(expectedAvcRectified -
+                     0.18 * std::max<double>(zero.demod.am.controlVoltageRef, 1e-6),
+                 0.0);
+    double dt = 1.0 / std::max<double>(zero.demod.am.fs, 1.0);
+    double storageCapG =
+        std::max<double>(zero.demod.am.detectorStorageCapFarads, 1e-12) / dt;
+    double detectorLeakG =
+        1.0 / std::max<double>(zero.demod.am.audioDischargeResistanceOhms, 1e-6);
+    double avcLeakG =
+        1.0 / std::max<double>(zero.demod.am.avcDischargeResistanceOhms, 1e-6);
+    double avcCapG =
+        std::max<double>(zero.demod.am.avcFilterCapFarads, 1e-12) / dt;
+    double expectedDetectorNodeAfterStep =
+        std::max(storageCapG * expectedAudioRect /
+                     std::max(storageCapG + detectorLeakG, 1e-12),
+                 0.0);
+    double expectedAvcNodeAfterStep =
+        std::max(avcCapG * expectedAvcDrive / std::max(avcCapG + avcLeakG, 1e-12),
+                 0.0);
+    addRange(rows, "AMDetector", "zero_input_matches_diode_equation", zeroOut,
+             expectedAudioRect - 1e-9, expectedAudioRect + 1e-9,
+             "audio rectifier output at zero carrier");
+    addRange(rows, "AMDetector", "zero_input_follows_rc_relaxation",
+             std::fabs(zero.demod.am.detectorNode - expectedDetectorNodeAfterStep) +
+                 std::fabs(zero.demod.am.avcEnv - expectedAvcNodeAfterStep),
+             0.0, 1e-7, "warm-started detector/AVC nodes must equal diode solution");
   }
 
   {
@@ -1051,6 +1135,13 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
                  ripple.avcRippleRms < 0.10 * std::max(ripple.audioRippleRms, 1e-12),
                  ripple.avcRippleRms / std::max(ripple.audioRippleRms, 1e-12),
                  "AVC ripple / detector-audio ripple");
+
+    Radio1938 zero =
+        makeNodeFixture(config, 0.0f, {PassId::Demod, PassId::DetectorAudio});
+    RadioSampleContext zeroCtx{};
+    float zeroOut = RadioDetectorAudioNode::run(zero, 0.0f, zeroCtx);
+    addRange(rows, "DetectorAudio", "zero_input_stays_zero", zeroOut, -1e-7, 1e-7,
+             "no detected envelope means no audio output");
   }
 
   {
@@ -1127,6 +1218,12 @@ std::vector<TestRow> runAudioPhysics(const HarnessConfig& config) {
              quiescent.receiverCircuit.tubeQuiescentPlateVolts +
                  quiescent.receiverCircuit.operatingPointToleranceVolts,
              "quiescent grid bias should stay near solved operating point");
+
+    Radio1938 bypass = makeNodeFixture(config, 0.0f, {PassId::ReceiverCircuit});
+    bypass.receiverCircuit.enabled = false;
+    float bypassOut = RadioReceiverCircuitNode::run(bypass, 0.23f, ctx);
+    addRange(rows, "ReceiverCircuit", "disabled_stage_is_passthrough", bypassOut,
+             0.23f - 1e-6, 0.23f + 1e-6, "disabled triode stage must not alter signal");
   }
 
   {
@@ -1214,6 +1311,14 @@ std::vector<TestRow> runAudioPhysics(const HarnessConfig& config) {
                  rmsOf(brightOut, kNodeTestFrames / 2u) /
                      std::max(rmsOf(flatOut, kNodeTestFrames / 2u), 1e-12),
                  "bright / flat RMS at 2.5 kHz");
+
+    Radio1938 bypass = makeNodeFixture(config, 0.0f, {PassId::Tone});
+    bypass.tone.presenceHz = 0.0f;
+    RadioToneNode::init(bypass, initCtx);
+    RadioToneNode::reset(bypass);
+    float bypassOut = RadioToneNode::run(bypass, 0.18f, ctx);
+    addRange(rows, "Tone", "disabled_presence_is_passthrough", bypassOut,
+             0.18f - 1e-6, 0.18f + 1e-6, "presence stage off means identity map");
   }
 
   {
@@ -1255,6 +1360,16 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     }
     addRange(rows, "Speaker", "zero_input_stays_zero", rmsOf(out), 0.0, 1e-7,
              "no spontaneous motion");
+
+    Radio1938 muted = makeNodeFixture(config, 0.0f, {PassId::Speaker});
+    muted.speakerStage.drive = 0.0f;
+    RadioInitContext initCtx{};
+    RadioSpeakerNode::init(muted, initCtx);
+    RadioSpeakerNode::reset(muted);
+    RadioSampleContext mutedCtx{};
+    float mutedOut = RadioSpeakerNode::run(muted, 0.25f, mutedCtx);
+    addRange(rows, "Speaker", "zero_drive_mutes_cone_motion", mutedOut, -1e-7, 1e-7,
+             "zero electromechanical drive must null speaker output");
   }
 
   {
@@ -1317,6 +1432,12 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     }
     addRange(rows, "Cabinet", "zero_input_stays_zero", rmsOf(out), 0.0, 1e-7,
              "passive cabinet coloration");
+
+    Radio1938 bypass = makeNodeFixture(config, 0.0f, {PassId::Cabinet});
+    bypass.cabinet.enabled = false;
+    float bypassOut = RadioCabinetNode::run(bypass, 0.22f, ctx);
+    addRange(rows, "Cabinet", "disabled_cabinet_is_passthrough", bypassOut,
+             0.22f - 1e-6, 0.22f + 1e-6, "cabinet bypass must preserve signal");
 
     Radio1938 flat = makeNodeFixture(config, 0.0f, {PassId::Cabinet});
     Radio1938 resonant = makeNodeFixture(config, 0.0f, {PassId::Cabinet});
