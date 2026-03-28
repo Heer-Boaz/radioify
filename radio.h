@@ -1,626 +1,28 @@
 #ifndef RADIO_H
 #define RADIO_H
 
+#include "audiofilter/math/biquad.h"
+#include "audiofilter/models/resonant_networks.h"
+#include "audiofilter/models/transformer_models.h"
+#include "audiofilter/models/tube_models.h"
+#include "audiofilter/radio1938/models/am_detector.h"
+#include "audiofilter/radio1938/models/noise_hum.h"
+#include "audiofilter/radio1938/models/speaker_sim.h"
+#include "audiofilter/radio1938/radio1938_constants.h"
+#include "audiofilter/radio1938/radio_pipeline_types.h"
+
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
 
-inline constexpr float kRadioPi = 3.1415926535f;
-inline constexpr float kRadioTwoPi = 6.283185307f;
-inline constexpr float kRadioBiquadQ = 0.707f;
-inline constexpr float kRadioLinDbFloor = 1e-12f;
-inline constexpr float kRadioSoftClipThresholdDefault = 0.98f;
-inline constexpr float kRadioHashUnitInv = 1.0f / 4294967295.0f;
-inline constexpr size_t kRadioCalibrationBandCount = 12;
-inline constexpr size_t kRadioCalibrationFftSize = 1024;
-inline constexpr size_t kRadioCalibrationFftBinCount =
-    kRadioCalibrationFftSize / 2 + 1;
-inline constexpr std::array<float, kRadioCalibrationBandCount>
-    kRadioCalibrationBandHz{{125.0f, 250.0f, 400.0f, 630.0f, 1000.0f, 1250.0f,
-                             1600.0f, 2000.0f, 2500.0f, 3150.0f, 4000.0f,
-                             5000.0f}};
-
-inline const std::array<float, kRadioCalibrationBandCount + 1>&
-radioCalibrationBandEdgesHz() {
-  static const auto kEdges = [] {
-    std::array<float, kRadioCalibrationBandCount + 1> edges{};
-    edges[0] = kRadioCalibrationBandHz[0] /
-               std::sqrt(kRadioCalibrationBandHz[1] / kRadioCalibrationBandHz[0]);
-    for (size_t i = 1; i < kRadioCalibrationBandCount; ++i) {
-      edges[i] = std::sqrt(kRadioCalibrationBandHz[i - 1] *
-                           kRadioCalibrationBandHz[i]);
-    }
-    edges[kRadioCalibrationBandCount] =
-        kRadioCalibrationBandHz.back() *
-        std::sqrt(kRadioCalibrationBandHz.back() /
-                  kRadioCalibrationBandHz[kRadioCalibrationBandCount - 2]);
-    return edges;
-  }();
-  return kEdges;
-}
-
-inline const std::array<float, kRadioCalibrationFftSize>&
-radioCalibrationWindow() {
-  static const auto kWindow = [] {
-    std::array<float, kRadioCalibrationFftSize> window{};
-    for (size_t i = 0; i < kRadioCalibrationFftSize; ++i) {
-      window[i] = 0.5f - 0.5f * std::cos(kRadioTwoPi * static_cast<float>(i) /
-                                         static_cast<float>(window.size() - 1));
-    }
-    return window;
-  }();
-  return kWindow;
-}
-
-struct Biquad {
-  float b0 = 1.0f;
-  float b1 = 0.0f;
-  float b2 = 0.0f;
-  float a1 = 0.0f;
-  float a2 = 0.0f;
-  float z1 = 0.0f;
-  float z2 = 0.0f;
-
-  float process(float x);
-  void reset();
-  void setLowpass(float sampleRate, float freq, float q);
-  void setHighpass(float sampleRate, float freq, float q);
-  void setBandpass(float sampleRate, float freq, float q);
-  void setPeaking(float sampleRate, float freq, float q, float gainDb);
-};
-
-struct IQBiquad {
-  Biquad i;
-  Biquad q;
-
-  void reset() {
-    i.reset();
-    q.reset();
-  }
-
-  void setLowpass(float sampleRate, float freq, float qValue) {
-    i.setLowpass(sampleRate, freq, qValue);
-    q.setLowpass(sampleRate, freq, qValue);
-  }
-
-  std::array<float, 2> process(float inI, float inQ) {
-    return {i.process(inI), q.process(inQ)};
-  }
-};
-
-struct SeriesRlcBandpass {
-  float fs = 0.0f;
-  float inductanceHenries = 0.0f;
-  float capacitanceFarads = 0.0f;
-  float seriesResistanceOhms = 0.0f;
-  float outputResistanceOhms = 0.0f;
-  int integrationSubsteps = 1;
-  float dtSub = 0.0f;
-  float macroA00 = 1.0f;
-  float macroA01 = 0.0f;
-  float macroA10 = 0.0f;
-  float macroA11 = 1.0f;
-  float macroB0 = 0.0f;
-  float macroB1 = 0.0f;
-  float inductorCurrent = 0.0f;
-  float capacitorVoltage = 0.0f;
-
-  void configure(float newFs,
-                 float newInductanceHenries,
-                 float newCapacitanceFarads,
-                 float newSeriesResistanceOhms,
-                 float newOutputResistanceOhms,
-                 int newIntegrationSubsteps = 1);
-  void reset();
-  float process(float vin);
-};
-
-struct CoupledTunedTransformer {
-  float fs = 0.0f;
-  float primaryInductanceHenries = 0.0f;
-  float primaryCapacitanceFarads = 0.0f;
-  float primaryResistanceOhms = 0.0f;
-  float secondaryInductanceHenries = 0.0f;
-  float secondaryCapacitanceFarads = 0.0f;
-  float secondaryResistanceOhms = 0.0f;
-  float couplingCoeff = 0.0f;
-  float outputResistanceOhms = 0.0f;
-  int integrationSubsteps = 1;
-  float dtSub = 0.0f;
-  float mutualInductance = 0.0f;
-  float determinantInv = 0.0f;
-  std::array<float, 16> macroA{};
-  std::array<float, 4> macroB{};
-  float primaryCurrent = 0.0f;
-  float primaryCapVoltage = 0.0f;
-  float secondaryCurrent = 0.0f;
-  float secondaryCapVoltage = 0.0f;
-
-  void configure(float newFs,
-                 float newPrimaryInductanceHenries,
-                 float newPrimaryCapacitanceFarads,
-                 float newPrimaryResistanceOhms,
-                 float newSecondaryInductanceHenries,
-                 float newSecondaryCapacitanceFarads,
-                 float newSecondaryResistanceOhms,
-                 float newCouplingCoeff,
-                 float newOutputResistanceOhms,
-                 int newIntegrationSubsteps = 1);
-  void reset();
-  float process(float vin);
-};
-
-struct CurrentDrivenTransformerSample {
-  float primaryVoltage = 0.0f;
-  float secondaryVoltage = 0.0f;
-  float primaryCurrent = 0.0f;
-  float secondaryCurrent = 0.0f;
-};
-
-struct KorenTriodeModel {
-  double mu = 1.0;
-  double ex = 1.5;
-  double kg1 = 1.0;
-  double kp = 1.0;
-  double kvb = 1.0;
-};
-
-struct KorenTriodeLut {
-  float vgkMin = 0.0f;
-  float vgkMax = 0.0f;
-  float vpkMin = 0.0f;
-  float vpkMax = 0.0f;
-  float vgkInvStep = 0.0f;
-  float vpkInvStep = 0.0f;
-  int vgkBins = 0;
-  int vpkBins = 0;
-  std::vector<float> currentAmps;
-  std::vector<float> conductanceSiemens;
-
-  bool valid() const {
-    return vgkBins >= 2 && vpkBins >= 2 &&
-           currentAmps.size() ==
-               static_cast<size_t>(vgkBins * vpkBins) &&
-           conductanceSiemens.size() ==
-               static_cast<size_t>(vgkBins * vpkBins);
-  }
-};
-
-struct TriodeOperatingPoint {
-  float plateVolts = 0.0f;
-  float plateCurrentAmps = 0.0f;
-  float rpOhms = 0.0f;
-  KorenTriodeModel model{};
-};
-
-struct PentodeOperatingPoint {
-  float plateVolts = 0.0f;
-  float plateCurrentAmps = 0.0f;
-  float rpOhms = 0.0f;
-};
-
-struct CurrentDrivenTransformer {
-  float fs = 0.0f;
-  float primaryLeakageInductanceHenries = 0.0f;
-  float magnetizingInductanceHenries = 0.0f;
-  float turnsRatioPrimaryToSecondary = 1.0f;
-  float primaryResistanceOhms = 0.0f;
-  float primaryCoreLossResistanceOhms = 0.0f;
-  float primaryShuntCapFarads = 0.0f;
-  float secondaryLeakageInductanceHenries = 0.0f;
-  float secondaryResistanceOhms = 0.0f;
-  float secondaryShuntCapFarads = 0.0f;
-  int integrationSubsteps = 1;
-  float dtSub = 0.0f;
-  float cachedTurns = 0.0f;
-  float cachedPrimaryInductance = 0.0f;
-  float cachedSecondaryInductance = 0.0f;
-  float cachedMutualInductance = 0.0f;
-  float primaryCurrent = 0.0f;
-  float secondaryCurrent = 0.0f;
-  float primaryVoltage = 0.0f;
-  float secondaryVoltage = 0.0f;
-
-  void configure(float newFs,
-                 float newPrimaryLeakageInductanceHenries,
-                 float newMagnetizingInductanceHenries,
-                 float newTurnsRatioPrimaryToSecondary,
-                 float newPrimaryResistanceOhms,
-                 float newPrimaryCoreLossResistanceOhms,
-                 float newPrimaryShuntCapFarads,
-                 float newSecondaryLeakageInductanceHenries,
-                 float newSecondaryResistanceOhms,
-                 float newSecondaryShuntCapFarads,
-                 int newIntegrationSubsteps = 1);
-  void reset();
-  CurrentDrivenTransformerSample project(float primaryDriveCurrentAmps,
-                                         float secondaryLoadResistanceOhms,
-                                         float primaryLoadResistanceOhms = 0.0f) const;
-  CurrentDrivenTransformerSample process(float primaryDriveCurrentAmps,
-                                         float secondaryLoadResistanceOhms,
-                                         float primaryLoadResistanceOhms = 0.0f);
-};
-
-struct NoiseInput {
-  float programSample = 0.0f;
-  float noiseAmp = 0.0f;
-  float crackleAmp = 0.0f;
-  float crackleRate = 0.0f;
-  float humAmp = 0.0f;
-  bool humToneEnabled = true;
-};
-
-struct Radio1938;
-
-struct NoiseHum {
-  std::mt19937 rng{0x1938u};
-  std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
-  std::uniform_real_distribution<float> dist01{0.0f, 1.0f};
-  Biquad hp;
-  Biquad lp;
-  Biquad crackleHp;
-  Biquad crackleLp;
-  float fs = 0.0f;
-  float noiseHpHz = 0.0f; // 500.0f
-  float noiseLpHz = 0.0f;
-  float humHz = 0.0f;
-  float humPhase = 0.0f;
-  float scEnv = 0.0f;
-  float scAtk = 0.0f;
-  float scRel = 0.0f;
-  float crackleEnv = 0.0f;
-  float crackleDecay = 0.0f;
-  float pinkFast = 0.0f;
-  float pinkSlow = 0.0f;
-  float brown = 0.0f;
-  float hissDrift = 0.0f;
-  float hissDriftSlow = 0.0f;
-  float filterQ = 0.0f;
-  float scAttackMs = 0.0f;
-  float scReleaseMs = 0.0f;
-  float crackleDecayMs = 0.0f;
-  float sidechainMaskRef = 0.0f;
-  float hissMaskDepth = 0.0f;
-  float burstMaskDepth = 0.0f;
-  float pinkFastPole = 0.0f;
-  float pinkSlowPole = 0.0f;
-  float brownStep = 0.0f;
-  float hissDriftPole = 0.0f;
-  float hissDriftNoise = 0.0f;
-  float hissDriftSlowPole = 0.0f;
-  float hissDriftSlowNoise = 0.0f;
-  float whiteMix = 0.0f;
-  float pinkFastMix = 0.0f;
-  float pinkDifferenceMix = 0.0f;
-  float pinkFastSubtract = 0.0f;
-  float brownMix = 0.0f;
-  float hissBase = 0.0f;
-  float hissDriftDepth = 0.0f;
-  float hissDriftSlowMix = 0.0f;
-  float humSecondHarmonicMix = 0.0f;
-
-  void setFs(float newFs, float noiseBwHz);
-  void reset();
-  float process(const NoiseInput& in);
-};
-
-struct AMDetectorSampleInput {
-  float signal = 0.0f;
-  float ifNoiseAmp = 0.0f;
-  float ifCrackleAmp = 0.0f;
-  float ifCrackleRate = 0.0f;
-};
-
-struct AMDetector {
-  float fs = 0.0f;
-  float bwHz = 0.0f;
-  float tuneOffsetHz = 0.0f;
-
-  std::mt19937 rng{0x1942u};
-  std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
-
-  Biquad afcLowSense;
-  Biquad afcHighSense;
-  Biquad afcErrorLp;
-  Biquad audioPostLp1;
-
-  float audioRect = 0.0f;
-  float avcRect = 0.0f;
-  float detectorNode = 0.0f;
-  float audioEnv = 0.0f;
-  float avcEnv = 0.0f;
-  bool warmStartPending = true;
-  float afcError = 0.0f;
-  float ifCrackleEnv = 0.0f;
-  float ifCrackleDecay = 0.0f;
-  float ifCracklePhase = 0.0f;
-  uint64_t ifCrackleEventCount = 0;
-  float ifCrackleMaxBurstAmp = 0.0f;
-  float ifCrackleMaxEnv = 0.0f;
-
-  float audioDiodeDrop = 0.0f;
-  float avcDiodeDrop = 0.0f;
-  float audioJunctionSlopeVolts = 0.0f;
-  float avcJunctionSlopeVolts = 0.0f;
-  float detectorStorageCapFarads = 0.0f;
-  float audioChargeResistanceOhms = 0.0f;
-  float audioDischargeResistanceOhms = 0.0f;
-  float avcChargeResistanceOhms = 0.0f;
-  float avcDischargeResistanceOhms = 0.0f;
-  float avcFilterCapFarads = 0.0f;
-
-  float avcChargeCoeff = 0.0f;
-  float avcReleaseCoeff = 0.0f;
-  float controlVoltageRef = 0.0f;
-
-  float senseLowHz = 0.0f;
-  float senseHighHz = 0.0f;
-  float afcSenseLpHz = 0.0f;
-  float afcLowOffsetHz = 0.0f;
-  float afcHighOffsetHz = 0.0f;
-  float afcLowStep = 0.0f;
-  float afcHighStep = 0.0f;
-  float afcLowPhase = 0.0f;
-  float afcHighPhase = 0.0f;
-  IQBiquad afcLowProbe;
-  IQBiquad afcHighProbe;
-
-  void init(float newFs, float newBw, float newTuneHz = 0.0f);
-  void setBandwidth(float newBw, float newTuneHz = 0.0f);
-  void setSenseWindow(float lowHz, float highHz);
-  void reset();
-  float process(const AMDetectorSampleInput& in, Radio1938& radio);
-  float processEnvelope(float signalI,
-                        float signalQ,
-                        float ifNoiseAmp,
-                        Radio1938& radio,
-                        float ifCrackleAmp = 0.0f,
-                        float ifCrackleRate = 0.0f);
-};
-
-struct SpeakerSim {
-  Biquad suspensionRes;
-  Biquad coneBody;
-  Biquad upperBreakup;
-  Biquad coneDip;
-  Biquad topLp;
-  Biquad hfLossLp;
-  float drive = 0.0f;
-  float limit = 0.0f;
-  float asymBias = 0.0f;
-  float filterQ = 0.0f;
-  float suspensionHz = 0.0f;
-  float suspensionQ = 0.0f;
-  float suspensionGainDb = 0.0f;
-  float coneBodyHz = 0.0f;
-  float coneBodyQ = 0.0f;
-  float coneBodyGainDb = 0.0f;
-  float upperBreakupHz = 0.0f;
-  float upperBreakupQ = 0.0f;
-  float upperBreakupGainDb = 0.0f;
-  float coneDipHz = 0.0f;
-  float coneDipQ = 0.0f;
-  float coneDipGainDb = 0.0f;
-  float topLpHz = 0.0f;
-  float hfLossLpHz = 0.0f;
-  float suspensionComplianceTolerance = 0.0f;
-  float coneMassTolerance = 0.0f;
-  float breakupTolerance = 0.0f;
-  float voiceCoilTolerance = 0.0f;
-  float excursionEnv = 0.0f;
-  float excursionAtk = 0.0f;
-  float excursionRel = 0.0f;
-  float excursionRef = 0.0f;
-  float complianceLossDepth = 0.0f;
-  float hfLossDepth = 0.0f;
-
-  void init(float fs);
-  void reset();
-  float process(float x, bool& clipped);
-};
-
-struct Radio1938;
-enum class SourceInputMode : uint8_t {
-  ComplexEnvelope,
-  RealRf,
-};
-
-enum class StageId : uint8_t {
-  Tuning,
-  Input,
-  AVC,
-  AFC,
-  ControlBus,
-  InterferenceDerived,
-  FrontEnd,
-  Mixer,
-  IFStrip,
-  Demod,
-  ReceiverInputNetwork,
-  ReceiverCircuit,
-  Tone,
-  Power,
-  Noise,
-  Speaker,
-  Cabinet,
-  FinalLimiter,
-  OutputClip,
-};
-
-struct RadioBlockControl {
-  float tuneNorm = 0.0f;
-};
-
-struct RadioDerivedSampleParams {
-  float demodIfNoiseAmp = 0.0f;
-  float demodIfCrackleAmp = 0.0f;
-  float demodIfCrackleRate = 0.0f;
-  float noiseAmp = 0.0f;
-  float crackleAmp = 0.0f;
-  float crackleRate = 0.0f;
-  float humAmp = 0.0f;
-  bool humToneEnabled = true;
-};
-
-struct RadioSampleContext {
-  const RadioBlockControl* block = nullptr;
-  RadioDerivedSampleParams derived{};
-};
-
-struct RadioInitContext {
-  float tunedBw = 0.0f;
-};
-
-struct RadioTuningNode {
-  static float applyFilters(Radio1938& radio, float tuneHz, float bwHz);
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static void prepare(Radio1938& radio,
-                      RadioBlockControl& block,
-                      uint32_t frames);
-};
-
-struct RadioInputNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioControlBusNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static void update(Radio1938& radio, RadioSampleContext& ctx);
-};
-
-struct RadioAVCNode {
-  static void update(Radio1938& radio, RadioSampleContext& ctx);
-};
-
-struct RadioAFCNode {
-  static void update(Radio1938& radio, RadioSampleContext& ctx);
-};
-
-struct RadioFrontEndNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioMixerNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioIFStripNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static void setBandwidth(Radio1938& radio, float bwHz, float tuneHz);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioDemodNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioDetectorLoadNode {
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioReceiverCircuitNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioToneNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioPowerNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioInterferenceDerivedNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static void update(Radio1938& radio, RadioSampleContext& ctx);
-};
-
-struct RadioNoiseNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioSpeakerNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioCabinetNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioFinalLimiterNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-struct RadioOutputClipNode {
-  static void init(Radio1938& radio, RadioInitContext& initCtx);
-  static void reset(Radio1938& radio);
-  static float process(Radio1938& radio,
-                       float y,
-                       const RadioSampleContext& ctx);
-};
-
-  struct Radio1938 {
-    enum class Preset {
+struct Radio1938 {
+  enum class Preset {
     Philco37116,
     Philco37116X = Philco37116,
-    };
+  };
 
   float sampleRate = 0.0f;
   int channels = 1;
@@ -630,174 +32,11 @@ struct RadioOutputClipNode {
   bool initialized = false;
   Radio1938();
 
-  using BlockPrepareFn = void (*)(Radio1938&, RadioBlockControl&, uint32_t);
-  using SampleControlFn = void (*)(Radio1938&, RadioSampleContext&);
-  using SampleProcessFn = float (*)(Radio1938&, float, const RadioSampleContext&);
-  using InitFn = void (*)(Radio1938&, RadioInitContext&);
-  using ResetFn = void (*)(Radio1938&);
+  using Graph = RadioGraph;
+  using Lifecycle = RadioLifecycle;
 
-  struct BlockStep {
-    StageId id = StageId::Tuning;
-    std::string_view name{};
-    bool enabled = true;
-    BlockPrepareFn prepare = nullptr;
-  };
-
-  struct SampleControlStep {
-    StageId id = StageId::ControlBus;
-    std::string_view name{};
-    bool enabled = true;
-    SampleControlFn update = nullptr;
-  };
-
-  struct ProgramPathStep {
-    StageId id = StageId::Input;
-    std::string_view name{};
-    bool enabled = true;
-    SampleProcessFn process = nullptr;
-    bool stateOnly = false;
-  };
-
-  struct ConfigureStep {
-    StageId id = StageId::Input;
-    std::string_view name{};
-    InitFn init = nullptr;
-  };
-
-  struct AllocateStep {
-    StageId id = StageId::Input;
-    std::string_view name{};
-    InitFn init = nullptr;
-  };
-
-  struct InitializeDependentStateStep {
-    StageId id = StageId::Input;
-    std::string_view name{};
-    InitFn init = nullptr;
-  };
-
-  struct ResetStep {
-    StageId id = StageId::Input;
-    std::string_view name{};
-    ResetFn reset = nullptr;
-  };
-
-  struct RadioExecutionGraph {
-    bool bypass = false;
-    bool compiled = false;
-
-    std::array<BlockStep, 1> blockSteps{{
-        {StageId::Tuning, "MagneticTuning", true, &RadioTuningNode::prepare},
-    }};
-
-    std::array<SampleControlStep, 4> sampleControlSteps{{
-        {StageId::AVC, "AVC", true, &RadioAVCNode::update},
-        {StageId::AFC, "AFC", true, &RadioAFCNode::update},
-        {StageId::ControlBus, "ControlBus", true, &RadioControlBusNode::update},
-        {StageId::InterferenceDerived, "InterferenceDerived", true,
-         &RadioInterferenceDerivedNode::update},
-    }};
-
-    std::array<ProgramPathStep, 14> programPathSteps{{
-        {StageId::Input, "Input", true, &RadioInputNode::process},
-        {StageId::FrontEnd, "RFFrontEnd", true, &RadioFrontEndNode::process},
-        {StageId::Mixer, "Mixer", true, &RadioMixerNode::process},
-        {StageId::IFStrip, "IFStrip", true, &RadioIFStripNode::process},
-        {StageId::Demod, "Detector", true, &RadioDemodNode::process},
-        {StageId::ReceiverInputNetwork, "ReceiverInputNetwork", true,
-         &RadioDetectorLoadNode::process, true},
-        {StageId::ReceiverCircuit, "AudioStage", true,
-         &RadioReceiverCircuitNode::process},
-        {StageId::Tone, "Tone", true, &RadioToneNode::process},
-        {StageId::Power, "Power", true, &RadioPowerNode::process},
-        {StageId::Noise, "Noise", true, &RadioNoiseNode::process},
-        {StageId::Speaker, "Speaker", true, &RadioSpeakerNode::process},
-        {StageId::Cabinet, "Cabinet", true, &RadioCabinetNode::process},
-        {StageId::FinalLimiter, "FinalLimiter", true,
-         &RadioFinalLimiterNode::process},
-        {StageId::OutputClip, "OutputClip", true,
-         &RadioOutputClipNode::process},
-    }};
-
-    BlockStep* findBlock(StageId id);
-    const BlockStep* findBlock(StageId id) const;
-    SampleControlStep* findSampleControl(StageId id);
-    const SampleControlStep* findSampleControl(StageId id) const;
-    ProgramPathStep* findProgramPath(StageId id);
-    const ProgramPathStep* findProgramPath(StageId id) const;
-    bool isEnabled(StageId id) const;
-    void setEnabled(StageId id, bool value);
-    void invalidate();
-    void compile();
-    size_t findBlockOrderIndex(StageId id) const;
-    size_t findSampleControlOrderIndex(StageId id) const;
-    size_t findProgramPathOrderIndex(StageId id) const;
-    const std::vector<size_t>& blockOrder() const { return blockExecutionOrder; }
-    const std::vector<size_t>& sampleControlOrder() const {
-      return sampleControlExecutionOrder;
-    }
-    const std::vector<size_t>& programPathOrder() const {
-      return programPathExecutionOrder;
-    }
-
-   private:
-    std::vector<size_t> blockExecutionOrder{};
-    std::vector<size_t> sampleControlExecutionOrder{};
-    std::vector<size_t> programPathExecutionOrder{};
-  } graph;
-
-  struct RadioLifecycle {
-    std::array<ConfigureStep, 12> configureSteps{{
-        {StageId::Input, "Input", &RadioInputNode::init},
-        {StageId::ControlBus, "ControlBus", &RadioControlBusNode::init},
-        {StageId::FrontEnd, "RFFrontEnd", &RadioFrontEndNode::init},
-        {StageId::Mixer, "Mixer", &RadioMixerNode::init},
-        {StageId::IFStrip, "IFStrip", &RadioIFStripNode::init},
-        {StageId::ReceiverCircuit, "AudioStage",
-         &RadioReceiverCircuitNode::init},
-        {StageId::Tone, "Tone", &RadioToneNode::init},
-        {StageId::Power, "Power", &RadioPowerNode::init},
-        {StageId::Speaker, "Speaker", &RadioSpeakerNode::init},
-        {StageId::Cabinet, "Cabinet", &RadioCabinetNode::init},
-        {StageId::FinalLimiter, "FinalLimiter", &RadioFinalLimiterNode::init},
-        {StageId::OutputClip, "OutputClip", &RadioOutputClipNode::init},
-    }};
-
-    std::array<AllocateStep, 0> allocateSteps{};
-
-    std::array<InitializeDependentStateStep, 4> initializeDependentStateSteps{{
-        {StageId::Tuning, "MagneticTuning", &RadioTuningNode::init},
-        {StageId::Demod, "Detector", &RadioDemodNode::init},
-        {StageId::InterferenceDerived, "InterferenceDerived",
-         &RadioInterferenceDerivedNode::init},
-        {StageId::Noise, "Noise", &RadioNoiseNode::init},
-    }};
-
-    std::array<ResetStep, 14> resetSteps{{
-        {StageId::ControlBus, "ControlBus", &RadioControlBusNode::reset},
-        {StageId::Power, "Power", &RadioPowerNode::reset},
-        {StageId::Input, "Input", &RadioInputNode::reset},
-        {StageId::FrontEnd, "RFFrontEnd", &RadioFrontEndNode::reset},
-        {StageId::Mixer, "Mixer", &RadioMixerNode::reset},
-        {StageId::IFStrip, "IFStrip", &RadioIFStripNode::reset},
-        {StageId::ReceiverCircuit, "AudioStage",
-         &RadioReceiverCircuitNode::reset},
-        {StageId::Tone, "Tone", &RadioToneNode::reset},
-        {StageId::Demod, "Detector", &RadioDemodNode::reset},
-        {StageId::Noise, "Noise", &RadioNoiseNode::reset},
-        {StageId::Speaker, "Speaker", &RadioSpeakerNode::reset},
-        {StageId::Cabinet, "Cabinet", &RadioCabinetNode::reset},
-        {StageId::FinalLimiter, "FinalLimiter",
-         &RadioFinalLimiterNode::reset},
-        {StageId::OutputClip, "OutputClip", &RadioOutputClipNode::reset},
-    }};
-
-    void configure(Radio1938& radio, RadioInitContext& initCtx) const;
-    void allocate(Radio1938& radio, RadioInitContext& initCtx) const;
-    void initializeDependentState(Radio1938& radio,
-                                  RadioInitContext& initCtx) const;
-    void resetRuntime(Radio1938& radio) const;
-  } lifecycle;
+  Graph graph = makeRadioGraph();
+  Lifecycle lifecycle = makeRadioLifecycle();
 
   struct RadioDiagnostics {
     bool anyClip = false;
@@ -896,7 +135,7 @@ struct RadioOutputClipNode {
     float detectorLoadDrift = 1.0f;
   } identity;
 
-  struct CalibrationStageMetrics {
+  struct CalibrationPassMetrics {
     uint64_t sampleCount = 0;
     double rmsIn = 0.0;
     double rmsOut = 0.0;
@@ -938,8 +177,8 @@ struct RadioOutputClipNode {
   };
 
   struct CalibrationState {
-    static constexpr size_t kStageCount =
-        static_cast<size_t>(StageId::OutputClip) + 1u;
+    static constexpr size_t kPassCount =
+        static_cast<size_t>(PassId::OutputClip) + 1u;
 
     bool enabled = false;
     uint64_t totalSamples = 0;
@@ -994,7 +233,7 @@ struct RadioOutputClipNode {
     bool validationInterstageSecondary = false;
     bool validationDcShift = false;
     bool validationDigitalClip = false;
-    std::array<CalibrationStageMetrics, kStageCount> stages{};
+    std::array<CalibrationPassMetrics, kPassCount> passes{};
 
     void resetMeasurementState();
     void reset();
@@ -1019,30 +258,6 @@ struct RadioOutputClipNode {
     void resetRuntime() { iqPhase = 0.0f; }
   } iqInput;
 
-  struct SourceFrameState {
-    SourceInputMode mode = SourceInputMode::ComplexEnvelope;
-    float i = 0.0f;
-    float q = 0.0f;
-
-    void resetRuntime() {
-      mode = SourceInputMode::ComplexEnvelope;
-      i = 0.0f;
-      q = 0.0f;
-    }
-
-    void setRealRf(float x) {
-      mode = SourceInputMode::RealRf;
-      i = x;
-      q = 0.0f;
-    }
-
-    void setComplexEnvelope(float inI, float inQ) {
-      mode = SourceInputMode::ComplexEnvelope;
-      i = inI;
-      q = inQ;
-    }
-  } sourceFrame;
-
   struct TuningNodeState {
     bool magneticTuningEnabled = false;
     float tuneOffsetHz = 0.0f;
@@ -1062,6 +277,8 @@ struct RadioOutputClipNode {
     float postBwScale = 0.0f;
     float smoothTau = 0.0f;
     float updateEps = 0.0f;
+    float sourceCarrierHz = 0.0f;
+    uint32_t configRevision = 0;
   } tuning;
 
   struct InputNodeState {
@@ -1083,6 +300,7 @@ struct RadioOutputClipNode {
   } input;
 
   struct FrontEndNodeState {
+    uint32_t appliedConfigRevision = 0;
     float inputHpHz = 0.0f;
     float rfGain = 0.0f;
     float avcGainDepth = 0.0f;
@@ -1132,6 +350,7 @@ struct RadioOutputClipNode {
 
   struct IFStripNodeState {
     bool enabled = false;
+    uint32_t appliedConfigRevision = 0;
     float ifMinBwHz = 0.0f;
     float stageGain = 0.0f;
     float avcGainDepth = 0.0f;
@@ -1145,11 +364,11 @@ struct RadioOutputClipNode {
     float loFrequencyHz = 0.0f;
     float sourceDownmixPhase = 0.0f;
     float ifEnvelopePhase = 0.0f;
-    float detectorInputI = 0.0f;
-    float detectorInputQ = 0.0f;
     SourceInputMode prevSourceMode = SourceInputMode::ComplexEnvelope;
-    float prevSourceI = 0.0f;
-    float prevSourceQ = 0.0f;
+    float senseLowHz = 0.0f;
+    float senseHighHz = 0.0f;
+    float demodBandwidthHz = 0.0f;
+    float demodTuneOffsetHz = 0.0f;
     // Active IF runtime: a tuned-can equivalent mapped onto source downmix
     // plus one loaded complex envelope transfer feeding the detector.
     IQBiquad sourceEnvelope;
@@ -1158,6 +377,7 @@ struct RadioOutputClipNode {
 
   struct DemodNodeState {
     AMDetector am;
+    uint32_t appliedConfigRevision = 0;
   } demod;
 
   struct ReceiverCircuitNodeState {
@@ -1170,9 +390,9 @@ struct RadioOutputClipNode {
     float volumeControlTapVoltage = 0.0f;
     float couplingCapFarads = 0.0f;
     float gridLeakResistanceOhms = 0.0f;
+    float detectorLoadConductance = 0.0f;
     float couplingCapVoltage = 0.0f;
     float gridVoltage = 0.0f;
-    bool inputNetworkDrivenFromDetector = false;
     bool warmStartPending = true;
     float tubePlateSupplyVolts = 0.0f;
     float tubePlateDcVolts = 0.0f;
@@ -1411,12 +631,16 @@ struct RadioOutputClipNode {
   } output;
 
   static std::string_view presetName(Preset preset);
-  static std::string_view stageName(StageId id);
+  static std::string_view passName(PassId id);
   bool applyPreset(std::string_view presetName);
   void applyPreset(Preset preset);
   void setIdentitySeed(uint32_t seed);
   void setCalibrationEnabled(bool enabled);
   void resetCalibration();
+  float resolvedInputCarrierHz() const;
+  void warmInputCarrier(float receivedCarrierRmsVolts,
+                        uint32_t warmupFrames = 16384u);
+  void resetAfterCarrierWarmup();
   void init(int ch, float sr, float bw, float noise);
   void reset();
   void processIfReal(float* samples, uint32_t frames);

@@ -53,36 +53,42 @@ set(RADIOIFY_NEURAL_PITCH_MODEL_SHA256
     CACHE STRING "Expected SHA256 hash for the downloaded neural pitch ONNX model")
 
 set(RADIOIFY_AUDIOFILTER_SOURCES
-  audiofilter/am_detector.cpp
-  audiofilter/dsp/biquad.cpp
-  audiofilter/math/radio_linear_solvers.cpp
-  audiofilter/noise/noise_hum.cpp
-  audiofilter/physics/radio_power_supply.cpp
-  audiofilter/physics/radio_resonant_networks.cpp
-  audiofilter/physics/radio_transformers.cpp
-  audiofilter/physics/radio_tube_models.cpp
-  audiofilter/receiver/receiver_input_network.cpp
-  audiofilter/radio_afc_node.cpp
-  audiofilter/radio_avc_node.cpp
-  audiofilter/radio_cabinet_node.cpp
-  audiofilter/radio_control_bus_node.cpp
-  audiofilter/radio_demod_node.cpp
-  audiofilter/radio_detector_load_node.cpp
-  audiofilter/radio_final_limiter_node.cpp
-  audiofilter/radio_front_end_node.cpp
-  audiofilter/radio_if_strip_node.cpp
-  audiofilter/radio_input_node.cpp
-  audiofilter/radio_interference_derived_node.cpp
-  audiofilter/radio_mixer_node.cpp
-  audiofilter/radio_noise_node.cpp
-  audiofilter/radio_output_clip_node.cpp
-  audiofilter/radio_pipeline.cpp
-  audiofilter/radio_power_node.cpp
-  audiofilter/radio_receiver_circuit_node.cpp
-  audiofilter/radio_speaker_node.cpp
-  audiofilter/radio_tone_node.cpp
-  audiofilter/radio_tuning_node.cpp
-  audiofilter/speaker/speaker_sim.cpp
+  audiofilter/models/resonant_networks.cpp
+  audiofilter/models/transformer_models.cpp
+  audiofilter/models/tube_models.cpp
+  audiofilter/radio1938/analysis/radio_calibration.cpp
+  audiofilter/radio1938/audio_pipeline.cpp
+  audiofilter/radio1938/audio_pipeline_execution.cpp
+  audiofilter/radio1938/radio_state.cpp
+  audiofilter/radio1938/preview/radio_preview_pipeline.cpp
+  audiofilter/radio1938/preview/radio_preview_pipeline_execution.cpp
+  audiofilter/radio1938/preview/nodes/radio_preview_program_filter_node.cpp
+  audiofilter/radio1938/preview/nodes/radio_preview_warmup_node.cpp
+  audiofilter/radio1938/models/power_stage_solver.cpp
+  audiofilter/radio1938/models/power_supply.cpp
+  audiofilter/radio1938/nodes/radio_afc_node.cpp
+  audiofilter/radio1938/nodes/radio_am_detector_node.cpp
+  audiofilter/radio1938/nodes/radio_avc_node.cpp
+  audiofilter/radio1938/nodes/radio_cabinet_node.cpp
+  audiofilter/radio1938/nodes/radio_control_bus_node.cpp
+  audiofilter/radio1938/nodes/radio_final_limiter_node.cpp
+  audiofilter/radio1938/nodes/radio_front_end_node.cpp
+  audiofilter/radio1938/nodes/radio_if_strip_node.cpp
+  audiofilter/radio1938/nodes/radio_input_node.cpp
+  audiofilter/radio1938/nodes/radio_interference_derived_node.cpp
+  audiofilter/radio1938/nodes/radio_mixer_node.cpp
+  audiofilter/radio1938/nodes/radio_noise_node.cpp
+  audiofilter/radio1938/nodes/radio_output_clip_node.cpp
+  audiofilter/radio1938/nodes/radio_output_scale_node.cpp
+  audiofilter/radio1938/nodes/radio_power_node.cpp
+  audiofilter/radio1938/nodes/radio_receiver_circuit_node.cpp
+  audiofilter/radio1938/nodes/radio_receiver_input_network_node.cpp
+  audiofilter/radio1938/nodes/radio_speaker_node.cpp
+  audiofilter/radio1938/nodes/radio_tone_node.cpp
+  audiofilter/radio1938/nodes/radio_tuning_node.cpp
+  audiofilter/radio1938/radio_lifecycle.cpp
+  audiofilter/radio1938/radio_presets.cpp
+  audiofilter/radio1938/signal_entrypoints.cpp
 )
 
 set(RADIOIFY_RADIO_ENGINE_SOURCES
@@ -133,7 +139,6 @@ add_executable(radioify
   playback_frame_output_console.cpp
   subtitle_manager.cpp
   calibration_report.cpp
-  radiopreview.cpp
   loopsplit.cpp
   loopsplit_cli.cpp
   loopsplit_ui.cpp

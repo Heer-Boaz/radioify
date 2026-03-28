@@ -34,7 +34,7 @@ extern "C" {
 #include "midiaudio.h"
 #include "psfaudio.h"
 #include "radio.h"
-#include "radiopreview.h"
+#include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -201,9 +201,11 @@ void rebuildRadioPreviewChain(AudioState* state) {
   rebuildRadioFromTemplate(&state->radio1938, gAudio.radio1938Template,
                            static_cast<float>(gAudio.sampleRate), gAudio.lpHz,
                            gAudio.noise);
-  state->radioPreview.init(state->radio1938,
-                           static_cast<float>(gAudio.sampleRate),
-                           gAudio.lpHz);
+  state->radioPreviewConfig.programBandwidthHz = 0.48f * gAudio.lpHz;
+  state->radioPreview.initialize(state->radio1938,
+                                 state->radioAmIngress,
+                                 state->radioPreviewConfig,
+                                 static_cast<float>(gAudio.sampleRate));
 }
 
 void applyRadioTogglePreset() {
@@ -314,7 +316,7 @@ static void processRadioBlock(AudioState* state,
                               uint32_t frames) {
   if (!state || !samples || frames == 0) return;
   const uint32_t channels = std::max(1u, state->channels);
-  state->radioPreview.processBlock(state->radio1938, samples, frames, channels);
+  state->radioPreview.runBlock(state->radio1938, samples, frames, channels);
   if (state->radio1938.diagnostics.anyClip) {
     holdClipAlert(state);
   }

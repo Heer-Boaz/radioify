@@ -37,7 +37,8 @@
 #include "psfaudio.h"
 #include "calibration_report.h"
 #include "radio.h"
-#include "radiopreview.h"
+#include "audiofilter/radio1938/radio_buffer_io.h"
+#include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "tracklist.h"
 #include "loopsplit_cli.h"
 #include "loopsplit_ui.h"
@@ -608,12 +609,33 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
     }
   };
 
-  auto radio1938 = std::make_unique<Radio1938>();
-  rebuildRadioFromTemplate(radio1938.get());
-  PcmToIfPreviewModulator radioPreview;
-  radioPreview.init(*radio1938, static_cast<float>(sampleRate),
-                    static_cast<float>(o.bwHz));
+  const bool usePreviewRender = !o.dry && useRadio1938 && writeOutput;
+  const bool useCalibrationRender =
+      !o.dry && useRadio1938 && (renderedRadioOut || o.calibrationReport);
+  RadioAmIngressConfig radioAmIngress;
+  RadioPreviewConfig radioPreviewConfig;
+  radioPreviewConfig.programBandwidthHz = 0.48f * static_cast<float>(o.bwHz);
+
+  auto renderRadio = std::make_unique<Radio1938>();
+  rebuildRadioFromTemplate(renderRadio.get());
+
+  std::unique_ptr<Radio1938> calibrationRadio;
+  if (useCalibrationRender) {
+    calibrationRadio = std::make_unique<Radio1938>();
+    rebuildRadioFromTemplate(calibrationRadio.get());
+  }
+
+  RadioPreviewPipeline radioPreview;
+  if (usePreviewRender) {
+    radioPreview.initialize(*renderRadio, radioAmIngress, radioPreviewConfig,
+                            static_cast<float>(sampleRate));
+  }
+  if (calibrationRadio) {
+    calibrationRadio->warmInputCarrier(radioAmIngress.receivedCarrierRmsVolts);
+  }
+
   std::vector<float> buffer(chunkFrames * channels);
+  std::vector<float> calibrationMono;
 
   while (true) {
     uint64_t framesRead = 0;
@@ -653,9 +675,24 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
       if (framesRead == 0 || res == MA_AT_END) break;
     }
 
-    if (!o.dry && useRadio1938) {
-      radioPreview.processBlock(*radio1938, buffer.data(),
-                                static_cast<uint32_t>(framesRead), channels);
+    if (calibrationRadio) {
+      calibrationMono.resize(static_cast<size_t>(framesRead));
+      for (uint32_t frame = 0; frame < static_cast<uint32_t>(framesRead);
+           ++frame) {
+        calibrationMono[frame] = sampleInterleavedToMono(
+            buffer.data(), frame, static_cast<int>(channels));
+      }
+      calibrationRadio->processAmAudio(
+          calibrationMono.data(),
+          calibrationMono.data(),
+          static_cast<uint32_t>(framesRead),
+          radioAmIngress.receivedCarrierRmsVolts,
+          radioAmIngress.modulationIndex);
+    }
+
+    if (usePreviewRender) {
+      radioPreview.runBlock(*renderRadio, buffer.data(),
+                            static_cast<uint32_t>(framesRead), channels);
     }
 
     if (writeOutput) {
@@ -673,12 +710,17 @@ static void renderToFile(const Options& o, const Radio1938& radio1938Template,
   uninitEncoder();
   uninitDecoder();
 
-  if (o.calibrationReport && useRadio1938 && radio1938->calibration.enabled) {
-    printCalibrationReport(*radio1938, "Calibration report:");
+  if (o.calibrationReport && calibrationRadio &&
+      calibrationRadio->calibration.enabled) {
+    printCalibrationReport(*calibrationRadio, "Calibration report:");
   }
 
   if (renderedRadioOut) {
-    *renderedRadioOut = *radio1938;
+    if (calibrationRadio) {
+      *renderedRadioOut = *calibrationRadio;
+    } else {
+      *renderedRadioOut = *renderRadio;
+    }
   }
 }
 
@@ -731,21 +773,21 @@ static int runRenderRadioCli(const Options& o) {
       printCalibrationReport(baselineRadio, "Calibration report [baseline]:");
     }
     bool validationFailed = baselineRadio.calibration.validationFailed;
-    for (size_t stageIndex = 0;
-         stageIndex <= static_cast<size_t>(StageId::OutputClip); ++stageIndex) {
-      StageId stageId = static_cast<StageId>(stageIndex);
-      if (!radio1938Template.graph.isEnabled(stageId)) continue;
-      std::string stageName = std::string(Radio1938::stageName(stageId));
-      if (stageName == "Unknown") continue;
+    for (size_t passIndex = 0;
+         passIndex <= static_cast<size_t>(PassId::OutputClip); ++passIndex) {
+      PassId passId = static_cast<PassId>(passIndex);
+      if (!radio1938Template.graph.isEnabled(passId)) continue;
+      std::string passName = std::string(Radio1938::passName(passId));
+      if (passName == "Unknown") continue;
       Radio1938 stepTemplate = radio1938Template;
-      stepTemplate.graph.setEnabled(stageId, false);
+      stepTemplate.graph.setEnabled(passId, false);
       Radio1938 stepRadio;
       renderToFile(renderOpt, stepTemplate, true, &stepRadio, false);
-      printNodeStepSummaryLine(stageName, stepRadio, &baselineRadio);
+      printNodeStepSummaryLine(passName, stepRadio, &baselineRadio);
       if (renderOpt.calibrationReport) {
         printCalibrationReport(stepRadio,
                               std::string("Calibration report [disable ") +
-                                  stageName + "]:");
+                                  passName + "]:");
       }
       if (stepRadio.calibration.validationFailed) {
         validationFailed = true;

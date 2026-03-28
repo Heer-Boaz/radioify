@@ -13,21 +13,21 @@ void printCalibrationReport(const Radio1938& radio1938,
   auto oldPrecision = std::cout.precision();
   std::cout << std::fixed << std::setprecision(3);
   std::cout << label << "\n";
-  for (size_t i = 0; i < radio1938.calibration.stages.size(); ++i) {
-    StageId id = static_cast<StageId>(i);
-    const auto& stage = radio1938.calibration.stages[i];
-    if (stage.sampleCount == 0) continue;
-    std::cout << "  " << Radio1938::stageName(id)
-              << " rms_in=" << stage.rmsIn
-              << " rms_out=" << stage.rmsOut
-              << " mean_out=" << stage.meanOut
-              << " peak_out=" << stage.peakOut
-              << " crest_out=" << stage.crestOut
-              << " centroid_hz=" << stage.spectralCentroidHz
-              << " bw3_hz=" << stage.bandwidth3dBHz
-              << " bw6_hz=" << stage.bandwidth6dBHz
-              << " clips_in=" << stage.clipCountIn
-              << " clips_out=" << stage.clipCountOut
+  for (size_t i = 0; i < radio1938.calibration.passes.size(); ++i) {
+    PassId id = static_cast<PassId>(i);
+    const auto& pass = radio1938.calibration.passes[i];
+    if (pass.sampleCount == 0) continue;
+    std::cout << "  " << Radio1938::passName(id)
+              << " rms_in=" << pass.rmsIn
+              << " rms_out=" << pass.rmsOut
+              << " mean_out=" << pass.meanOut
+              << " peak_out=" << pass.peakOut
+              << " crest_out=" << pass.crestOut
+              << " centroid_hz=" << pass.spectralCentroidHz
+              << " bw3_hz=" << pass.bandwidth3dBHz
+              << " bw6_hz=" << pass.bandwidth6dBHz
+              << " clips_in=" << pass.clipCountIn
+              << " clips_out=" << pass.clipCountOut
               << "\n";
   }
   std::cout << "  limiter duty=" << radio1938.calibration.limiterDutyCycle
@@ -38,10 +38,10 @@ void printCalibrationReport(const Radio1938& radio1938,
             << " max_gr_db="
             << radio1938.calibration.limiterMaxGainReductionDb
             << "\n";
-  const auto& receiverStage =
-      radio1938.calibration.stages[static_cast<size_t>(StageId::ReceiverCircuit)];
-  std::cout << "  receiver_out_rms=" << receiverStage.rmsOut
-            << " receiver_out_peak=" << receiverStage.peakOut
+  const auto& receiverPass =
+      radio1938.calibration.passes[static_cast<size_t>(PassId::ReceiverCircuit)];
+  std::cout << "  receiver_out_rms=" << receiverPass.rmsOut
+            << " receiver_out_peak=" << receiverPass.peakOut
             << " interstage_secondary_rms="
             << radio1938.calibration.interstageSecondaryRmsVolts
             << " interstage_secondary_peak="
@@ -99,18 +99,18 @@ void printCalibrationReport(const Radio1938& radio1938,
   std::cout.precision(oldPrecision);
 }
 
-static uint64_t sumStageClipsIn(const Radio1938& radio1938) {
+static uint64_t sumPassClipsIn(const Radio1938& radio1938) {
   uint64_t total = 0;
-  for (size_t i = 0; i < radio1938.calibration.stages.size(); ++i) {
-    total += radio1938.calibration.stages[i].clipCountIn;
+  for (size_t i = 0; i < radio1938.calibration.passes.size(); ++i) {
+    total += radio1938.calibration.passes[i].clipCountIn;
   }
   return total;
 }
 
-static uint64_t sumStageClipsOut(const Radio1938& radio1938) {
+static uint64_t sumPassClipsOut(const Radio1938& radio1938) {
   uint64_t total = 0;
-  for (size_t i = 0; i < radio1938.calibration.stages.size(); ++i) {
-    total += radio1938.calibration.stages[i].clipCountOut;
+  for (size_t i = 0; i < radio1938.calibration.passes.size(); ++i) {
+    total += radio1938.calibration.passes[i].clipCountOut;
   }
   return total;
 }
@@ -119,8 +119,8 @@ void printNodeStepSummaryHeader() {
   std::cout
       << "node_step,disabled_node,max_digital,delta_max_digital,pre_lim_clip,"
          "delta_pre_lim_clip,post_lim_clip,delta_post_lim_clip,limiter_duty,"
-         "delta_limiter_duty,max_speaker_v,delta_max_speaker_v,max_stage_clips_in,"
-         "delta_stage_clips_in,max_stage_clips_out,delta_stage_clips_out,"
+         "delta_limiter_duty,max_speaker_v,delta_max_speaker_v,max_pass_clips_in,"
+         "delta_pass_clips_in,max_pass_clips_out,delta_pass_clips_out,"
          "pre_limiter_active,validation_digital_clip,validation_failed\n";
 }
 
@@ -135,8 +135,8 @@ void printNodeStepSummaryLine(const std::string& disabledNode,
   const auto basePreClip = baseCal.preLimiterClipCount;
   const auto basePostClip = baseCal.postLimiterClipCount;
   const auto baseLimiterDuty = baseCal.limiterDutyCycle;
-  const auto baseInClips = sumStageClipsIn(*base);
-  const auto baseOutClips = sumStageClipsOut(*base);
+  const auto baseInClips = sumPassClipsIn(*base);
+  const auto baseOutClips = sumPassClipsOut(*base);
 
   float deltaMaxDigital = currentCal.maxDigitalOutput - baseMaxDigital;
   float deltaMaxSpeaker = currentCal.maxSpeakerSecondaryVolts - baseMaxSpeaker;
@@ -145,8 +145,8 @@ void printNodeStepSummaryLine(const std::string& disabledNode,
   auto deltaPostClip =
       static_cast<long long>(currentCal.postLimiterClipCount - basePostClip);
   float deltaLimiterDuty = currentCal.limiterDutyCycle - baseLimiterDuty;
-  auto currentInClips = static_cast<long long>(sumStageClipsIn(result));
-  auto currentOutClips = static_cast<long long>(sumStageClipsOut(result));
+  auto currentInClips = static_cast<long long>(sumPassClipsIn(result));
+  auto currentOutClips = static_cast<long long>(sumPassClipsOut(result));
   auto baseInClipsSigned = static_cast<long long>(baseInClips);
   auto baseOutClipsSigned = static_cast<long long>(baseOutClips);
 

@@ -27,7 +27,7 @@
 #include "nsfoptions.h"
 #include "psfaudio.h"
 #include "radio.h"
-#include "radiopreview.h"
+#include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "vgmaudio.h"
 #include "vgmoptions.h"
 
@@ -254,7 +254,9 @@ struct AudioState {
   uint32_t channels = 1;
   uint32_t sampleRate = 48000;
   bool dry = false;
-  PcmToIfPreviewModulator radioPreview;
+  RadioAmIngressConfig radioAmIngress;
+  RadioPreviewConfig radioPreviewConfig;
+  RadioPreviewPipeline radioPreview;
 };
 
 struct AuditionState {

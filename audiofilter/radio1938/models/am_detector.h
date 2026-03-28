@@ -1,0 +1,77 @@
+#ifndef RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_AM_DETECTOR_H
+#define RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_AM_DETECTOR_H
+
+#include "../../math/biquad.h"
+
+#include <cstdint>
+#include <random>
+
+struct Radio1938;
+
+struct AMDetector {
+  float fs = 0.0f;
+  float bwHz = 0.0f;
+  float tuneOffsetHz = 0.0f;
+
+  std::mt19937 rng{0x1942u};
+  std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
+
+  Biquad afcLowSense;
+  Biquad afcHighSense;
+  Biquad afcErrorLp;
+  Biquad audioPostLp1;
+
+  float audioRect = 0.0f;
+  float avcRect = 0.0f;
+  float detectorNode = 0.0f;
+  float audioEnv = 0.0f;
+  float avcEnv = 0.0f;
+  bool warmStartPending = true;
+  float afcError = 0.0f;
+  float ifCrackleEnv = 0.0f;
+  float ifCrackleDecay = 0.0f;
+  float ifCracklePhase = 0.0f;
+  uint64_t ifCrackleEventCount = 0;
+  float ifCrackleMaxBurstAmp = 0.0f;
+  float ifCrackleMaxEnv = 0.0f;
+
+  float audioDiodeDrop = 0.0f;
+  float avcDiodeDrop = 0.0f;
+  float audioJunctionSlopeVolts = 0.0f;
+  float avcJunctionSlopeVolts = 0.0f;
+  float detectorStorageCapFarads = 0.0f;
+  float audioChargeResistanceOhms = 0.0f;
+  float audioDischargeResistanceOhms = 0.0f;
+  float avcChargeResistanceOhms = 0.0f;
+  float avcDischargeResistanceOhms = 0.0f;
+  float avcFilterCapFarads = 0.0f;
+
+  float avcChargeCoeff = 0.0f;
+  float avcReleaseCoeff = 0.0f;
+  float controlVoltageRef = 0.0f;
+
+  float senseLowHz = 0.0f;
+  float senseHighHz = 0.0f;
+  float afcSenseLpHz = 0.0f;
+  float afcLowOffsetHz = 0.0f;
+  float afcHighOffsetHz = 0.0f;
+  float afcLowStep = 0.0f;
+  float afcHighStep = 0.0f;
+  float afcLowPhase = 0.0f;
+  float afcHighPhase = 0.0f;
+  IQBiquad afcLowProbe;
+  IQBiquad afcHighProbe;
+
+  void init(float newFs, float newBw, float newTuneHz = 0.0f);
+  void setBandwidth(float newBw, float newTuneHz = 0.0f);
+  void setSenseWindow(float lowHz, float highHz);
+  void reset();
+  float run(float signalI,
+            float signalQ,
+            float ifNoiseAmp,
+            Radio1938& radio,
+            float ifCrackleAmp = 0.0f,
+            float ifCrackleRate = 0.0f);
+};
+
+#endif  // RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_AM_DETECTOR_H

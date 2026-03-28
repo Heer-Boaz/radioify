@@ -94,7 +94,7 @@ static bool applyAudioFilterNodeSetting(Radio1938& radio,
                                        const std::string& valueText,
                                        int lineNumber,
                                        std::string* error) {
-  auto setNode = [&](StageId id, const std::string& settingName) {
+  auto setNode = [&](PassId id, const std::string& settingName) {
     bool parsed = false;
     if (!parseIniBool(valueText, parsed, error, lineNumber, settingName)) {
       return false;
@@ -103,38 +103,41 @@ static bool applyAudioFilterNodeSetting(Radio1938& radio,
     return true;
   };
 
-  if (keyNorm == "tuning") return setNode(StageId::Tuning, "nodes.tuning");
-  if (keyNorm == "input") return setNode(StageId::Input, "nodes.input");
-  if (keyNorm == "avc") return setNode(StageId::AVC, "nodes.avc");
-  if (keyNorm == "afc") return setNode(StageId::AFC, "nodes.afc");
+  if (keyNorm == "tuning") return setNode(PassId::Tuning, "nodes.tuning");
+  if (keyNorm == "input") return setNode(PassId::Input, "nodes.input");
+  if (keyNorm == "avc") return setNode(PassId::AVC, "nodes.avc");
+  if (keyNorm == "afc") return setNode(PassId::AFC, "nodes.afc");
   if (keyNorm == "controlbus") {
-    return setNode(StageId::ControlBus, "nodes.controlbus");
+    return setNode(PassId::ControlBus, "nodes.controlbus");
   }
   if (keyNorm == "interferencederived") {
-    return setNode(StageId::InterferenceDerived, "nodes.interferencederived");
+    return setNode(PassId::InterferenceDerived, "nodes.interferencederived");
   }
-  if (keyNorm == "frontend") return setNode(StageId::FrontEnd, "nodes.frontend");
-  if (keyNorm == "mixer") return setNode(StageId::Mixer, "nodes.mixer");
-  if (keyNorm == "ifstrip") return setNode(StageId::IFStrip, "nodes.ifstrip");
-  if (keyNorm == "demod") return setNode(StageId::Demod, "nodes.demod");
+  if (keyNorm == "frontend") return setNode(PassId::FrontEnd, "nodes.frontend");
+  if (keyNorm == "mixer") return setNode(PassId::Mixer, "nodes.mixer");
+  if (keyNorm == "ifstrip") return setNode(PassId::IFStrip, "nodes.ifstrip");
+  if (keyNorm == "demod") return setNode(PassId::Demod, "nodes.demod");
   if (keyNorm == "receiverinputnetwork" || keyNorm == "detectorload" ||
       keyNorm == "receiverinput") {
-    return setNode(StageId::ReceiverInputNetwork,
+    return setNode(PassId::ReceiverInputNetwork,
                    "nodes.receiverinputnetwork");
   }
   if (keyNorm == "receivercircuit") {
-    return setNode(StageId::ReceiverCircuit, "nodes.receivercircuit");
+    return setNode(PassId::ReceiverCircuit, "nodes.receivercircuit");
   }
-  if (keyNorm == "tone") return setNode(StageId::Tone, "nodes.tone");
-  if (keyNorm == "power") return setNode(StageId::Power, "nodes.power");
-  if (keyNorm == "noise") return setNode(StageId::Noise, "nodes.noise");
-  if (keyNorm == "speaker") return setNode(StageId::Speaker, "nodes.speaker");
-  if (keyNorm == "cabinet") return setNode(StageId::Cabinet, "nodes.cabinet");
+  if (keyNorm == "tone") return setNode(PassId::Tone, "nodes.tone");
+  if (keyNorm == "power") return setNode(PassId::Power, "nodes.power");
+  if (keyNorm == "noise") return setNode(PassId::Noise, "nodes.noise");
+  if (keyNorm == "speaker") return setNode(PassId::Speaker, "nodes.speaker");
+  if (keyNorm == "cabinet") return setNode(PassId::Cabinet, "nodes.cabinet");
+  if (keyNorm == "outputscale") {
+    return setNode(PassId::OutputScale, "nodes.outputscale");
+  }
   if (keyNorm == "finallimiter") {
-    return setNode(StageId::FinalLimiter, "nodes.finallimiter");
+    return setNode(PassId::FinalLimiter, "nodes.finallimiter");
   }
   if (keyNorm == "outputclip") {
-    return setNode(StageId::OutputClip, "nodes.outputclip");
+    return setNode(PassId::OutputClip, "nodes.outputclip");
   }
 
   if (error) {

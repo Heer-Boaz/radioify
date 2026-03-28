@@ -172,26 +172,8 @@ HarnessConfig parseArgs(int argc, char** argv) {
   return config;
 }
 
-void warmCarrier(Radio1938& radio, float sampleRate, float carrierRmsVolts) {
-  std::vector<float> warmup(kWarmupFrames, 0.0f);
-  float carrierHz = std::max(radio.ifStrip.sourceCarrierHz, 1000.0f);
-  float carrierStep = kRadioTwoPi * (carrierHz / std::max(sampleRate, 1.0f));
-  float carrierPeak = std::sqrt(2.0f) * std::max(carrierRmsVolts, 0.0f);
-  float phase = 0.0f;
-  for (uint32_t i = 0; i < kWarmupFrames; ++i) {
-    warmup[i] = carrierPeak * std::cos(phase);
-    phase += carrierStep;
-    if (phase >= kRadioTwoPi) phase -= kRadioTwoPi;
-  }
-  radio.processIfReal(warmup.data(), kWarmupFrames);
-  radio.demod.am.avcRect = 0.0f;
-  radio.demod.am.avcEnv = 0.0f;
-  radio.demod.am.afcError = 0.0f;
-  radio.controlSense.reset();
-  radio.controlBus.reset();
-  radio.tuning.afcCorrectionHz = 0.0f;
-  radio.diagnostics.reset();
-  radio.resetCalibration();
+void warmCarrier(Radio1938& radio, float carrierRmsVolts) {
+  radio.warmInputCarrier(carrierRmsVolts, kWarmupFrames);
 }
 
 Radio1938 makeRadio(const HarnessConfig& config, float noiseWeight,
@@ -211,7 +193,7 @@ Radio1938 makeRadio(const HarnessConfig& config, float noiseWeight,
   }
   radio.setCalibrationEnabled(true);
   if (warmWithCarrier) {
-    warmCarrier(radio, config.sampleRate, config.carrierRmsVolts);
+    warmCarrier(radio, config.carrierRmsVolts);
   } else {
     radio.resetCalibration();
     radio.diagnostics.reset();
