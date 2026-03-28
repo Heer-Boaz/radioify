@@ -78,11 +78,11 @@ float solveDetectorAudioNode(const AMDetector& detector,
   return nodeVolts;
 }
 
-DetectorSolveResult solveDetectorAndAvcNodes(const AMDetector& detector,
-                                             float dt,
-                                             float detectorDriveVolts,
-                                             float avcDrive,
-                                             float detectorLeakG) {
+DetectorSolveResult stepDetectorStorageAndAvc(const AMDetector& detector,
+                                              float dt,
+                                              float detectorDriveVolts,
+                                              float avcDrive,
+                                              float detectorLeakG) {
   float avcSourceG = 0.0f;
   if (avcDrive > detector.avcEnv) {
     avcSourceG = 1.0f / std::max(detector.avcChargeResistanceOhms, 1e-6f);
@@ -147,8 +147,8 @@ void runWaveformDetectorIsland(AMDetector& detector,
       primeDetectorWarmStart(detector, detector.audioRect, avcDrive);
     }
     DetectorSolveResult solve =
-        solveDetectorAndAvcNodes(detector, dt, ifMagnitude, avcDrive,
-                                 detectorLeakG);
+        stepDetectorStorageAndAvc(detector, dt, ifMagnitude, avcDrive,
+                                  detectorLeakG);
     detector.detectorStorageNode = solve.detectorNode;
     detector.detectorNode = solve.detectorNode;
     detector.avcEnv = solve.avcNode;
@@ -190,8 +190,8 @@ void runWaveformDetectorIsland(AMDetector& detector,
       primeDetectorWarmStart(detector, detector.audioRect, avcDrive);
     }
     DetectorSolveResult solve =
-        solveDetectorAndAvcNodes(detector, dtSub, ifWave, avcDrive,
-                                 detectorLeakG);
+        stepDetectorStorageAndAvc(detector, dtSub, ifWave, avcDrive,
+                                  detectorLeakG);
     detector.detectorStorageNode = solve.detectorNode;
     detector.avcEnv = solve.avcNode;
     audioRectSum += detector.audioRect;
@@ -367,8 +367,8 @@ float AMDetector::run(float signalI,
     }
 
     DetectorSolveResult solve =
-        solveDetectorAndAvcNodes(*this, dt, ifMagnitude, avcDrive,
-                                 detectorLeakG);
+        stepDetectorStorageAndAvc(*this, dt, ifMagnitude, avcDrive,
+                                  detectorLeakG);
     detectorStorageNode = solve.detectorNode;
     detectorNode = solve.detectorNode;
     avcEnv = solve.avcNode;
