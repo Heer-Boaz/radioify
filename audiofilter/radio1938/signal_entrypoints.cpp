@@ -37,12 +37,17 @@ void Radio1938::processAmAudio(const float* audioSamples,
       std::sqrt(2.0f) * std::max(receivedCarrierRmsVolts, 0.0f);
   float phase = iqInput.iqPhase;
 
-  // Compute normalization scale for audioSamples so that callers who pass a
-  // program with peak < 1.0 still get the expected modulationIndex mapping.
+  // Ensure input drive is within [-1.0, 1.0] but do not up-scale low-level
+  // caller audio; the caller is responsible for explicitly providing a
+  // normalized program (peak 1.0) when full modulationIndex should apply.
   float maxAbs = 0.0f;
-  for (uint32_t i = 0; i < frames; ++i) maxAbs = std::max(maxAbs, std::fabs(audioSamples[i]));
+  for (uint32_t i = 0; i < frames; ++i) {
+    maxAbs = std::max(maxAbs, std::fabs(audioSamples[i]));
+  }
   float normScale = 1.0f;
-  if (maxAbs > 0.0f && maxAbs < 0.999f) normScale = 1.0f / maxAbs;
+  if (maxAbs > 1.0f) {
+    normScale = 1.0f / maxAbs;
+  }
 
   for (uint32_t frame = 0; frame < frames; ++frame) {
     // Normalize audioSamples peak to 1.0 if it's lower so modulationIndex maps
