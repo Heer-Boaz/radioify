@@ -58,7 +58,11 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.ifStrip.primaryInductanceHenries = 0.00022f;
   radio.ifStrip.secondaryInductanceHenries = 0.00025f;
   radio.ifStrip.secondaryLoadResistanceOhms = 680.0f;
-  radio.ifStrip.stageGain = 2.0f;
+  // Reduced-order IF gain stands in for the missing plate-voltage swing of the
+  // 470 kHz strip. Keep enough detector drive for the 6J5/6F6/6B4 chain so the
+  // physical speaker-reference scaling is not forced to make the whole radio
+  // sound abnormally quiet.
+  radio.ifStrip.stageGain = 4.0f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.interstageCouplingCoeff = 0.15f;

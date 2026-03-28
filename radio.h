@@ -362,7 +362,12 @@ struct Radio1938 {
     float outputCouplingCoeff = 0.0f;
     float sourceCarrierHz = 0.0f;
     float loFrequencyHz = 0.0f;
+    // Phase used only to strip the real RF source carrier down to a complex
+    // source envelope. This is not the IF tuning phase.
     float sourceDownmixPhase = 0.0f;
+    // Phase used only for the residual tuning offset between the source
+    // envelope and the IF tuned center. Do not fold the full LO phase into
+    // this baseband state or the detector feed will collapse.
     float ifEnvelopePhase = 0.0f;
     SourceInputMode prevSourceMode = SourceInputMode::ComplexEnvelope;
     float senseLowHz = 0.0f;

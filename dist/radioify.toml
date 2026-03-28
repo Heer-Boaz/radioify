@@ -59,7 +59,7 @@ gridSoftnessVolts = 2.0
 [audio-filter.default.ifstrip]
 enabled = true
 ifMinBwHz = 2400.0
-stageGain = 2.0
+stageGain = 4.0
 avcGainDepth = 0.18
 ifCenterHz = 470000.0
 primaryInductanceHenries = 0.00022

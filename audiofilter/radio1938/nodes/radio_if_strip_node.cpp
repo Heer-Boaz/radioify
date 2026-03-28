@@ -45,6 +45,60 @@ float parallelLoadBandwidthHz(float capacitanceFarads, float resistanceOhms) {
   return 1.0f / (kRadioTwoPi * resistanceOhms * capacitanceFarads);
 }
 
+void resetIfStripRuntimeEnvelopeState(Radio1938::IFStripNodeState& ifStrip) {
+  ifStrip.sourceDownmixPhase = 0.0f;
+  ifStrip.ifEnvelopePhase = 0.0f;
+  ifStrip.sourceEnvelope.reset();
+  ifStrip.loadedCanEnvelope.reset();
+}
+
+float computeIfTuneOffsetHz(const Radio1938::IFStripNodeState& ifStrip) {
+  return ifStrip.loFrequencyHz - ifStrip.sourceCarrierHz - ifStrip.ifCenterHz;
+}
+
+std::array<float, 2> extractSourceEnvelope(Radio1938& radio,
+                                           float rfSample,
+                                           const RadioSignalFrame& signal,
+                                           float rfGain) {
+  auto& ifStrip = radio.ifStrip;
+  if (signal.mode == SourceInputMode::ComplexEnvelope) {
+    return {rfGain * signal.i, rfGain * signal.q};
+  }
+
+  float sourceStep =
+      kRadioTwoPi * (ifStrip.sourceCarrierHz / std::max(radio.sampleRate, 1.0f));
+  float sourcePhase = ifStrip.sourceDownmixPhase;
+  float c = std::cos(sourcePhase);
+  float s = std::sin(sourcePhase);
+  auto sourceEnv = ifStrip.sourceEnvelope.process(2.0f * rfSample * rfGain * c,
+                                                  -2.0f * rfSample * rfGain * s);
+  ifStrip.sourceDownmixPhase = wrapPhase(sourcePhase + sourceStep);
+  return sourceEnv;
+}
+
+std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
+                                              float sourceEnvI,
+                                              float sourceEnvQ,
+                                              float mixerConversionGain,
+                                              float ifGain) {
+  auto& ifStrip = radio.ifStrip;
+  float tuneOffsetHz = computeIfTuneOffsetHz(ifStrip);
+  float sampleRate = std::max(radio.sampleRate, 1.0f);
+  float tuneStep = kRadioTwoPi * (tuneOffsetHz / sampleRate);
+  float tunePhase = ifStrip.ifEnvelopePhase;
+  auto rotatedEnv = rotateComplexEnvelope(sourceEnvI, sourceEnvQ, tunePhase);
+  ifStrip.ifEnvelopePhase = wrapPhase(tunePhase + tuneStep);
+
+  float ifEnvI = rotatedEnv[0] * mixerConversionGain * ifGain;
+  float ifEnvQ = rotatedEnv[1] * mixerConversionGain * ifGain;
+  auto loadedCanEnv = ifStrip.loadedCanEnvelope.process(ifEnvI, ifEnvQ);
+
+  // The detector must see the loaded IF can mapped back into the original
+  // source-envelope frame. Unrotate only the residual tuning offset here;
+  // source carrier removal was already handled by sourceDownmixPhase.
+  return unrotateComplexEnvelope(loadedCanEnv[0], loadedCanEnv[1], tunePhase);
+}
+
 void ensureIfStripConfigured(Radio1938& radio) {
   auto& ifStrip = radio.ifStrip;
   const auto& tuning = radio.tuning;
@@ -127,64 +181,43 @@ void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
 
 void RadioIFStripNode::reset(Radio1938& radio) {
   auto& ifStrip = radio.ifStrip;
-  ifStrip.sourceDownmixPhase = 0.0f;
-  ifStrip.ifEnvelopePhase = 0.0f;
   ifStrip.prevSourceMode = SourceInputMode::ComplexEnvelope;
-  ifStrip.sourceEnvelope.reset();
-  ifStrip.loadedCanEnvelope.reset();
+  resetIfStripRuntimeEnvelopeState(ifStrip);
 }
 
 float RadioIFStripNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) {
   auto& frontEnd = radio.frontEnd;
+  auto& mixer = radio.mixer;
   auto& ifStrip = radio.ifStrip;
   ensureIfStripConfigured(radio);
+  SourceInputMode mode = ctx.signal.mode;
   ctx.signal.detectorInputI = 0.0f;
   ctx.signal.detectorInputQ = 0.0f;
   if (!ifStrip.enabled || radio.sampleRate <= 0.0f) {
     return y;
   }
 
-  float frontEndT =
-      clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
+  float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
   float rfGain =
-      frontEnd.rfGain * std::max(0.35f, 1.0f - frontEnd.avcGainDepth * frontEndT);
-  float ifGain = std::max(0.20f, 1.0f - ifStrip.avcGainDepth * frontEndT);
-  float signal = y * rfGain * ifGain;
-
-  if (ifStrip.prevSourceMode != ctx.signal.mode) {
-    ifStrip.sourceEnvelope.reset();
-    ifStrip.loadedCanEnvelope.reset();
+      frontEnd.rfGain * std::max(0.35f, 1.0f - frontEnd.avcGainDepth * avcT);
+  float ifGainControl =
+      std::max(0.20f, 1.0f - ifStrip.avcGainDepth * avcT);
+  float ifGain = ifStrip.stageGain * ifGainControl;
+  if (ifStrip.prevSourceMode != mode) {
+    resetIfStripRuntimeEnvelopeState(ifStrip);
   }
 
-  float downmixPhase = ifStrip.sourceDownmixPhase;
-  float downmixStep = kRadioTwoPi * (ifStrip.loFrequencyHz / radio.sampleRate);
-  float sourceStep = kRadioTwoPi * (ifStrip.sourceCarrierHz / radio.sampleRate);
-  float sourcePhase = ifStrip.ifEnvelopePhase;
-
-  float sourceEnvI = signal;
-  float sourceEnvQ = 0.0f;
-  if (ctx.signal.mode == SourceInputMode::ComplexEnvelope) {
-    sourceEnvI = ctx.signal.i;
-    sourceEnvQ = ctx.signal.q;
-  } else {
-    sourceEnvI = signal * std::cos(sourcePhase);
-    sourceEnvQ = signal * std::sin(sourcePhase);
-    ifStrip.ifEnvelopePhase = wrapPhase(sourcePhase + sourceStep);
-  }
-
-  auto rotatedEnv =
-      rotateComplexEnvelope(sourceEnvI, sourceEnvQ, downmixPhase);
-  auto sourceEnv = ifStrip.sourceEnvelope.process(rotatedEnv[0], rotatedEnv[1]);
-  ifStrip.sourceDownmixPhase = wrapPhase(downmixPhase + downmixStep);
-  auto loadedCanEnv =
-      ifStrip.loadedCanEnvelope.process(sourceEnv[0], sourceEnv[1]);
-  auto detectorEnv =
-      unrotateComplexEnvelope(loadedCanEnv[0], loadedCanEnv[1], downmixPhase);
+  float mixerConversionGain = mixer.conversionGain;
+  assert(std::isfinite(mixerConversionGain) &&
+         std::fabs(mixerConversionGain) >= 1e-6f);
+  auto sourceEnv = extractSourceEnvelope(radio, y, ctx.signal, rfGain);
+  auto detectorEnv = runLoadedIfCanEquivalent(radio, sourceEnv[0], sourceEnv[1],
+                                              mixerConversionGain, ifGain);
   assert(std::isfinite(detectorEnv[0]) && std::isfinite(detectorEnv[1]));
   ctx.signal.detectorInputI = detectorEnv[0];
   ctx.signal.detectorInputQ = detectorEnv[1];
   ctx.signal.setComplexEnvelope(detectorEnv[0], detectorEnv[1]);
-  ifStrip.prevSourceMode = ctx.signal.mode;
+  ifStrip.prevSourceMode = mode;
 
   if (radio.calibration.enabled) {
     float detectorMag =
