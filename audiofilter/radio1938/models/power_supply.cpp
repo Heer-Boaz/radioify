@@ -60,7 +60,10 @@ float computePowerBranchSupplyScale(const Radio1938& radio, float branchDepth) {
 void advanceRectifierRipplePhase(Radio1938& radio) {
   float rectifierHz = computeRectifierRippleHz(radio);
   if (rectifierHz <= 0.0f) return;
+  float sampleRate = (radio.power.internalSampleRate > 0.0f)
+                         ? radio.power.internalSampleRate
+                         : radio.sampleRate;
   radio.power.rectifierPhase = wrapPhase(
       radio.power.rectifierPhase +
-      kRadioTwoPi * (rectifierHz / std::max(radio.sampleRate, 1.0f)));
+      kRadioTwoPi * (rectifierHz / std::max(sampleRate, 1.0f)));
 }

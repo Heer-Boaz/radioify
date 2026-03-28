@@ -543,12 +543,16 @@ struct Radio1938 {
     int outputTransformerIntegrationSubsteps = 1;
     float outputLoadResistanceOhms = 0.0f;
     float nominalOutputPowerWatts = 0.0f;
+    float internalSampleRate = 0.0f;
+    float osPrevInput = 0.0f;
     CenterTappedInterstageState interstageCt;
     CurrentDrivenTransformer interstageTransformer;
     CurrentDrivenTransformer outputTransformer;
     bool outputTransformerAffineReady = false;
     std::array<float, 16> outputTransformerAffineStateA{};
     CurrentDrivenTransformerSample outputTransformerAffineSlope;
+    Biquad osLpIn;
+    Biquad osLpOut;
     Biquad postLpf;
   } power;
 
