@@ -139,7 +139,9 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.tubeGridCurrentResistanceOhms = 1000.0f;
   radio.power.outputGridLeakResistanceOhms = 250000.0f;
   radio.power.outputGridCurrentResistanceOhms = 1200.0f;
-  radio.power.interstagePrimaryLeakageInductanceHenries = 0.45f;
+  // Leakage belongs in the tens-of-millihenries range here; 0.45 H darkens the
+  // power-chain like a total primary inductance, not a leakage term.
+  radio.power.interstagePrimaryLeakageInductanceHenries = 0.045f;
   radio.power.interstageMagnetizingInductanceHenries = 15.0f;
   radio.power.interstagePrimaryResistanceOhms = 430.0f;
   radio.power.tubePlateDcVolts =

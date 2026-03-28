@@ -49,6 +49,8 @@ void refreshIdentityDependentStages(Radio1938& radio) {
   RadioIFStripNode::reset(radio);
   RadioAMDetectorNode::init(radio, initCtx);
   RadioAMDetectorNode::reset(radio);
+  RadioDetectorAudioNode::init(radio, initCtx);
+  RadioDetectorAudioNode::reset(radio);
   RadioReceiverCircuitNode::init(radio, initCtx);
   RadioReceiverCircuitNode::reset(radio);
   RadioPowerNode::init(radio, initCtx);

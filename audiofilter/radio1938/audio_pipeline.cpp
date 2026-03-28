@@ -56,10 +56,15 @@ const Radio1938AudioPipeline& radio1938AudioPipeline() {
         .reset(&RadioAMDetectorNode::reset)
         .dependsOn(PassId::IFStrip)
         .run(&RadioAMDetectorNode::run);
+    builder.program(PassId::DetectorAudio, "DetectorAudio")
+        .init(&RadioDetectorAudioNode::init)
+        .reset(&RadioDetectorAudioNode::reset)
+        .dependsOn(PassId::Demod)
+        .run(&RadioDetectorAudioNode::run);
     builder.program(PassId::ReceiverInputNetwork, "ReceiverInputNetwork")
         .init(&RadioReceiverInputNetworkNode::init)
         .reset(&RadioReceiverInputNetworkNode::reset)
-        .dependsOn(PassId::Demod)
+        .dependsOn(PassId::DetectorAudio)
         .stateOnly()
         .run(&RadioReceiverInputNetworkNode::run);
     builder.program(PassId::ReceiverCircuit, "AudioStage")

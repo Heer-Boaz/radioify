@@ -19,7 +19,6 @@ void primeDetectorWarmStart(AMDetector& detector,
   detector.avcEnv =
       std::max(detector.detectorNode - delayedAvcThreshold, 0.0f);
   detector.avcRect = detector.avcEnv;
-  prechargeUnityLowpass(detector.audioPostLp1, detector.detectorNode);
   detector.warmStartPending = false;
 }
 
@@ -29,7 +28,6 @@ struct DetectorSolveResult {
 };
 
 DetectorSolveResult solveDetectorAndAvcNodes(const AMDetector& detector,
-                                             const Radio1938& radio,
                                              float dt,
                                              float audioRect,
                                              float delayedAvcThreshold) {
@@ -55,12 +53,6 @@ DetectorSolveResult solveDetectorAndAvcNodes(const AMDetector& detector,
   float b0 = storageCapG * detector.detectorNode + sourceG * audioRect -
              avcFeedG * delayedAvcThreshold;
   float b1 = avcCapG * detector.avcEnv + avcFeedG * delayedAvcThreshold;
-  if (radio.receiverCircuit.enabled) {
-    // ReceiverInputNetwork owns the explicit pot/grid network state. The
-    // detector sees only its reduced-order conductance equivalent here.
-    a00 += radio.receiverCircuit.detectorLoadConductance;
-  }
-
   float det = a00 * a11 - a01 * a10;
   assert(std::fabs(det) >= 1e-12f);
 
@@ -88,8 +80,6 @@ void AMDetector::init(float newFs, float newBw, float newTuneHz) {
 void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   bwHz = newBw;
   tuneOffsetHz = newTuneHz;
-  float audioPostLpHz = std::clamp(0.72f * std::max(bwHz, 1.0f), 1800.0f,
-                                   std::min(7500.0f, 0.16f * fs));
   float ifCrackleTauSeconds =
       1.0f / (kRadioPi * std::max(bwHz, 1.0f));
   float ifCrackleDecay =
@@ -114,7 +104,6 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   afcLowProbe.setLowpass(fs, afcLpHz, kRadioBiquadQ);
   afcHighProbe.setLowpass(fs, afcLpHz, kRadioBiquadQ);
   afcErrorLp.setLowpass(fs, afcLpHz, kRadioBiquadQ);
-  audioPostLp1.setLowpass(fs, audioPostLpHz, kRadioBiquadQ);
 }
 
 void AMDetector::setSenseWindow(float lowHz, float highHz) {
@@ -129,7 +118,6 @@ void AMDetector::reset() {
   audioRect = 0.0f;
   avcRect = 0.0f;
   detectorNode = 0.0f;
-  audioEnv = 0.0f;
   avcEnv = 0.0f;
   warmStartPending = true;
   afcError = 0.0f;
@@ -145,7 +133,6 @@ void AMDetector::reset() {
   afcLowProbe.reset();
   afcHighProbe.reset();
   afcErrorLp.reset();
-  audioPostLp1.reset();
 }
 
 float AMDetector::run(float signalI,
@@ -221,7 +208,7 @@ float AMDetector::run(float signalI,
   }
 
   DetectorSolveResult solve =
-      solveDetectorAndAvcNodes(*this, radio, dt, audioRect, delayedAvcThreshold);
+      solveDetectorAndAvcNodes(*this, dt, audioRect, delayedAvcThreshold);
   detectorNode = solve.detectorNode;
   avcEnv = solve.avcNode;
   avcRect = avcEnv;
@@ -229,9 +216,7 @@ float AMDetector::run(float signalI,
   if (radio.calibration.enabled) {
     radio.calibration.detectorNodeVolts.accumulate(detectorNode);
   }
-
-  audioEnv = audioPostLp1.process(detectorNode);
-  return audioEnv;
+  return audioRect;
 }
 
 namespace {

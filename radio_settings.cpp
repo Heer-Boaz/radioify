@@ -117,6 +117,9 @@ static bool applyAudioFilterNodeSetting(Radio1938& radio,
   if (keyNorm == "mixer") return setNode(PassId::Mixer, "nodes.mixer");
   if (keyNorm == "ifstrip") return setNode(PassId::IFStrip, "nodes.ifstrip");
   if (keyNorm == "demod") return setNode(PassId::Demod, "nodes.demod");
+  if (keyNorm == "detectoraudio" || keyNorm == "audiodetector") {
+    return setNode(PassId::DetectorAudio, "nodes.detectoraudio");
+  }
   if (keyNorm == "receiverinputnetwork" || keyNorm == "detectorload" ||
       keyNorm == "receiverinput") {
     return setNode(PassId::ReceiverInputNetwork,

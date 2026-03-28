@@ -385,6 +385,16 @@ struct Radio1938 {
     uint32_t appliedConfigRevision = 0;
   } demod;
 
+  struct DetectorAudioNodeState {
+    uint32_t appliedConfigRevision = 0;
+    // Reduced-order audio detector branch fed from the demodulated diode output.
+    // This is separate from the slower storage/AVC node inside AMDetector.
+    float audioNode = 0.0f;
+    float audioEnv = 0.0f;
+    bool warmStartPending = true;
+    Biquad postLp;
+  } detectorAudio;
+
   struct ReceiverCircuitNodeState {
     bool enabled = false;
     float volumeControlResistanceOhms = 0.0f;
@@ -395,8 +405,9 @@ struct Radio1938 {
     float volumeControlTapVoltage = 0.0f;
     float couplingCapFarads = 0.0f;
     float gridLeakResistanceOhms = 0.0f;
-    // Reduced-order load seen by the detector node, derived from the explicit
-    // pot / loudness / first-audio grid path. This is not a generic gain knob.
+    // Reduced-order load seen by the detector-audio node, derived from the
+    // explicit pot / loudness / first-audio grid path. This is not a generic
+    // gain knob.
     float detectorLoadConductance = 0.0f;
     // Dynamic state of the receiver input network driven from the detector:
     // coupling-cap voltage, first-audio grid AC voltage, and loudness-tap

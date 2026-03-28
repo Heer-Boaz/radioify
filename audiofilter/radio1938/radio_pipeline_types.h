@@ -24,6 +24,7 @@ enum class PassId : uint8_t {
   Mixer,
   IFStrip,
   Demod,
+  DetectorAudio,
   ReceiverInputNetwork,
   ReceiverCircuit,
   Tone,
@@ -132,6 +133,12 @@ struct RadioIFStripNode {
 };
 
 struct RadioAMDetectorNode {
+  static void init(Radio1938& radio, RadioInitContext& initCtx);
+  static void reset(Radio1938& radio);
+  static float run(Radio1938& radio, float y, RadioSampleContext& ctx);
+};
+
+struct RadioDetectorAudioNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
   static float run(Radio1938& radio, float y, RadioSampleContext& ctx);

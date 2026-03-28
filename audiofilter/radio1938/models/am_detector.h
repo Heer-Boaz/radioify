@@ -19,12 +19,10 @@ struct AMDetector {
   Biquad afcLowSense;
   Biquad afcHighSense;
   Biquad afcErrorLp;
-  Biquad audioPostLp1;
 
   float audioRect = 0.0f;
   float avcRect = 0.0f;
   float detectorNode = 0.0f;
-  float audioEnv = 0.0f;
   float avcEnv = 0.0f;
   bool warmStartPending = true;
   float afcError = 0.0f;

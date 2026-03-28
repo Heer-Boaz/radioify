@@ -71,6 +71,7 @@ set(RADIOIFY_AUDIOFILTER_SOURCES
   audiofilter/radio1938/nodes/radio_avc_node.cpp
   audiofilter/radio1938/nodes/radio_cabinet_node.cpp
   audiofilter/radio1938/nodes/radio_control_bus_node.cpp
+  audiofilter/radio1938/nodes/radio_detector_audio_node.cpp
   audiofilter/radio1938/nodes/radio_final_limiter_node.cpp
   audiofilter/radio1938/nodes/radio_front_end_node.cpp
   audiofilter/radio1938/nodes/radio_if_strip_node.cpp

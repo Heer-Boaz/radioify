@@ -248,7 +248,7 @@ EnvelopeTraceResult runAmProgramWithEnvelopeTrace(const HarnessConfig& config,
     result.radio.processIfReal(sample.data(), 1u);
     result.output[i] = sample[0];
     result.detectorNode[i] = result.radio.demod.am.detectorNode;
-    result.audioEnv[i] = result.radio.demod.am.audioEnv;
+    result.audioEnv[i] = result.radio.detectorAudio.audioEnv;
     result.avcEnv[i] = result.radio.demod.am.avcEnv;
   }
   result.radio.iqInput.iqPhase = phase;
@@ -270,7 +270,7 @@ EnvelopeTraceResult runRfInputWithTrace(const HarnessConfig& config,
     result.radio.processIfReal(sample.data(), 1u);
     result.output[i] = sample[0];
     result.detectorNode[i] = result.radio.demod.am.detectorNode;
-    result.audioEnv[i] = result.radio.demod.am.audioEnv;
+    result.audioEnv[i] = result.radio.detectorAudio.audioEnv;
     result.avcEnv[i] = result.radio.demod.am.avcEnv;
   }
   return result;

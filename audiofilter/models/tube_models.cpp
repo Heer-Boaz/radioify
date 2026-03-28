@@ -648,21 +648,19 @@ float processResistorLoadedTriodeStage(float gridVolts,
                                        float& plateVoltageState) {
   float supply = requirePositiveFinite(plateSupplyVolts * supplyScale);
   float safeLoadResistance = requirePositiveFinite(loadResistanceOhms);
-  float plateVoltage = (plateVoltageState > 0.0f)
-                           ? plateVoltageState
-                           : std::clamp(quiescentPlateVolts * supplyScale, 0.0f,
-                                        supply);
-  for (int i = 0; i < 4; ++i) {
-    KorenTriodePlateEval eval =
-        (lut != nullptr)
-            ? evaluateKorenTriodePlateRuntime(gridVolts, plateVoltage, model,
-                                              *lut)
-            : evaluateKorenTriodePlate(gridVolts, plateVoltage, model);
-    float current = static_cast<float>(eval.currentAmps);
-    float targetPlate =
-        std::clamp(supply - current * safeLoadResistance, 0.0f, supply);
-    plateVoltage = 0.5f * (plateVoltage + targetPlate);
-  }
+  float initialPlateVoltage =
+      (plateVoltageState > 0.0f)
+          ? plateVoltageState
+          : std::clamp(quiescentPlateVolts * supplyScale, 0.0f, supply);
+  float plateVoltage = solveLoadLinePlateVoltage(
+      supply, safeLoadResistance, initialPlateVoltage, [&](float plateVolts) {
+        KorenTriodePlateEval eval =
+            (lut != nullptr)
+                ? evaluateKorenTriodePlateRuntime(gridVolts, plateVolts, model,
+                                                  *lut)
+                : evaluateKorenTriodePlate(gridVolts, plateVolts, model);
+        return static_cast<float>(eval.currentAmps);
+      });
   plateVoltageState = plateVoltage;
   float quiescentPlate =
       std::clamp(quiescentPlateVolts * supplyScale, 0.0f, supply);
