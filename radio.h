@@ -395,7 +395,13 @@ struct Radio1938 {
     float volumeControlTapVoltage = 0.0f;
     float couplingCapFarads = 0.0f;
     float gridLeakResistanceOhms = 0.0f;
+    // Reduced-order load seen by the detector node, derived from the explicit
+    // pot / loudness / first-audio grid path. This is not a generic gain knob.
     float detectorLoadConductance = 0.0f;
+    // Dynamic state of the receiver input network driven from the detector:
+    // coupling-cap voltage, first-audio grid AC voltage, and loudness-tap
+    // capacitor state. These belong to the analog-equivalent receiver input,
+    // not to the detector solve itself.
     float couplingCapVoltage = 0.0f;
     float gridVoltage = 0.0f;
     bool warmStartPending = true;

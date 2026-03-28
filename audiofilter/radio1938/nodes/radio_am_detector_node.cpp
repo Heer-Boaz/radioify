@@ -5,6 +5,73 @@
 #include <cassert>
 #include <cmath>
 
+namespace {
+
+void prechargeUnityLowpass(Biquad& biquad, float dcLevel) {
+  biquad.z1 = dcLevel * (1.0f - biquad.b0);
+  biquad.z2 = dcLevel * (biquad.b2 - biquad.a2);
+}
+
+void primeDetectorWarmStart(AMDetector& detector,
+                            float audioRect,
+                            float delayedAvcThreshold) {
+  detector.detectorNode = audioRect;
+  detector.avcEnv =
+      std::max(detector.detectorNode - delayedAvcThreshold, 0.0f);
+  detector.avcRect = detector.avcEnv;
+  prechargeUnityLowpass(detector.audioPostLp1, detector.detectorNode);
+  detector.warmStartPending = false;
+}
+
+struct DetectorSolveResult {
+  float detectorNode = 0.0f;
+  float avcNode = 0.0f;
+};
+
+DetectorSolveResult solveDetectorAndAvcNodes(const AMDetector& detector,
+                                             const Radio1938& radio,
+                                             float dt,
+                                             float audioRect,
+                                             float delayedAvcThreshold) {
+  float storageCapG =
+      std::max(detector.detectorStorageCapFarads, 1e-12f) / dt;
+  float detectorLeakG =
+      1.0f / std::max(detector.audioDischargeResistanceOhms, 1e-6f);
+  float sourceG = 0.0f;
+  if (audioRect > detector.detectorNode) {
+    sourceG = 1.0f / std::max(detector.audioChargeResistanceOhms, 1e-6f);
+  }
+
+  float avcFeedG = 0.0f;
+  if (std::max(audioRect, detector.detectorNode) > delayedAvcThreshold) {
+    avcFeedG = 1.0f / std::max(detector.avcChargeResistanceOhms, 1e-6f);
+  }
+  float avcLeakG = 1.0f / std::max(detector.avcDischargeResistanceOhms, 1e-6f);
+  float avcCapG = std::max(detector.avcFilterCapFarads, 1e-12f) / dt;
+  float a00 = storageCapG + detectorLeakG + sourceG + avcFeedG;
+  float a01 = -avcFeedG;
+  float a10 = -avcFeedG;
+  float a11 = avcFeedG + avcLeakG + avcCapG;
+  float b0 = storageCapG * detector.detectorNode + sourceG * audioRect -
+             avcFeedG * delayedAvcThreshold;
+  float b1 = avcCapG * detector.avcEnv + avcFeedG * delayedAvcThreshold;
+  if (radio.receiverCircuit.enabled) {
+    // ReceiverInputNetwork owns the explicit pot/grid network state. The
+    // detector sees only its reduced-order conductance equivalent here.
+    a00 += radio.receiverCircuit.detectorLoadConductance;
+  }
+
+  float det = a00 * a11 - a01 * a10;
+  assert(std::fabs(det) >= 1e-12f);
+
+  DetectorSolveResult result{};
+  result.detectorNode = std::max((b0 * a11 - a01 * b1) / det, 0.0f);
+  result.avcNode = std::max((a00 * b1 - b0 * a10) / det, 0.0f);
+  return result;
+}
+
+}  // namespace
+
 void AMDetector::init(float newFs, float newBw, float newTuneHz) {
   fs = newFs;
   bwHz = newBw;
@@ -150,49 +217,13 @@ float AMDetector::run(float signalI,
   float delayedAvcThreshold = 0.18f * std::max(controlVoltageRef, 1e-6f);
   float dt = 1.0f / std::max(fs, 1.0f);
   if (warmStartPending) {
-    detectorNode = audioRect;
-    avcEnv = std::max(detectorNode - delayedAvcThreshold, 0.0f);
-    avcRect = avcEnv;
-    auto prechargeUnityLowpass = [](Biquad& biquad, float dcLevel) {
-      biquad.z1 = dcLevel * (1.0f - biquad.b0);
-      biquad.z2 = dcLevel * (biquad.b2 - biquad.a2);
-    };
-    prechargeUnityLowpass(audioPostLp1, detectorNode);
-    warmStartPending = false;
-  }
-  float storageCapG =
-      std::max(detectorStorageCapFarads, 1e-12f) / dt;
-  float detectorLeakG =
-      1.0f / std::max(audioDischargeResistanceOhms, 1e-6f);
-  float sourceG = 0.0f;
-  if (audioRect > detectorNode) {
-    sourceG = 1.0f / std::max(audioChargeResistanceOhms, 1e-6f);
+    primeDetectorWarmStart(*this, audioRect, delayedAvcThreshold);
   }
 
-  float avcFeedG = 0.0f;
-  if (std::max(audioRect, detectorNode) > delayedAvcThreshold) {
-    avcFeedG = 1.0f / std::max(avcChargeResistanceOhms, 1e-6f);
-  }
-  float avcLeakG = 1.0f / std::max(avcDischargeResistanceOhms, 1e-6f);
-  float avcCapG = std::max(avcFilterCapFarads, 1e-12f) / dt;
-  float a00 = storageCapG + detectorLeakG + sourceG + avcFeedG;
-  float a01 = -avcFeedG;
-  float a10 = -avcFeedG;
-  float a11 = avcFeedG + avcLeakG + avcCapG;
-  float b0 = storageCapG * detectorNode + sourceG * audioRect -
-             avcFeedG * delayedAvcThreshold;
-  float b1 = avcCapG * avcEnv + avcFeedG * delayedAvcThreshold;
-  float solvedDetectorNode = detectorNode;
-  float solvedAvcNode = avcEnv;
-  if (radio.receiverCircuit.enabled) {
-    a00 += radio.receiverCircuit.detectorLoadConductance;
-  }
-  float det = a00 * a11 - a01 * a10;
-  assert(std::fabs(det) >= 1e-12f);
-  solvedDetectorNode = (b0 * a11 - a01 * b1) / det;
-  solvedAvcNode = (a00 * b1 - b0 * a10) / det;
-  detectorNode = std::max(solvedDetectorNode, 0.0f);
-  avcEnv = std::max(solvedAvcNode, 0.0f);
+  DetectorSolveResult solve =
+      solveDetectorAndAvcNodes(*this, radio, dt, audioRect, delayedAvcThreshold);
+  detectorNode = solve.detectorNode;
+  avcEnv = solve.avcNode;
   avcRect = avcEnv;
   assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
   if (radio.calibration.enabled) {

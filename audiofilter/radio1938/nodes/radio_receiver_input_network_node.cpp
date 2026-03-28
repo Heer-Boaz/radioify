@@ -9,6 +9,11 @@
 
 namespace {
 
+constexpr float kReceiverNodeLinkOhms = 1e-3f;
+constexpr int kReceiverWiperNode = 0;
+constexpr int kReceiverTapNode = 1;
+constexpr int kReceiverGridNode = 2;
+
 struct ReceiverInputNetworkSolve {
   float inputCurrent = 0.0f;
   float wiperVoltage = 0.0f;
@@ -17,65 +22,143 @@ struct ReceiverInputNetworkSolve {
   float couplingCapVoltage = 0.0f;
 };
 
+struct ReceiverVolumeControlDerived {
+  float totalResistance = 0.0f;
+  float wiperResistance = 0.0f;
+  float tapResistance = 0.0f;
+  float loudnessBlend = 0.0f;
+  int sourceNode = kReceiverWiperNode;
+  int groundedNode = kReceiverTapNode;
+  float sourceResistance = kReceiverNodeLinkOhms;
+  float interNodeResistance = kReceiverNodeLinkOhms;
+  float groundedResistance = kReceiverNodeLinkOhms;
+};
+
+ReceiverVolumeControlDerived deriveReceiverVolumeControl(
+    const Radio1938::ReceiverCircuitNodeState& receiver) {
+  ReceiverVolumeControlDerived control{};
+  control.totalResistance =
+      std::max(receiver.volumeControlResistanceOhms, kReceiverNodeLinkOhms);
+  control.wiperResistance =
+      clampf(receiver.volumeControlPosition, 0.0f, 1.0f) *
+      control.totalResistance;
+  control.tapResistance =
+      std::max(receiver.volumeControlTapResistanceOhms, 0.0f);
+  if (control.tapResistance > 0.0f) {
+    control.loudnessBlend =
+        clampf((control.tapResistance - control.wiperResistance) /
+                   control.tapResistance,
+               0.0f, 1.0f);
+  }
+
+  if (control.wiperResistance >= control.tapResistance) {
+    control.sourceNode = kReceiverWiperNode;
+    control.groundedNode = kReceiverTapNode;
+    control.sourceResistance =
+        std::max(control.totalResistance - control.wiperResistance,
+                 kReceiverNodeLinkOhms);
+    control.interNodeResistance =
+        std::max(control.wiperResistance - control.tapResistance,
+                 kReceiverNodeLinkOhms);
+    control.groundedResistance =
+        std::max(control.tapResistance, kReceiverNodeLinkOhms);
+  } else {
+    control.sourceNode = kReceiverTapNode;
+    control.groundedNode = kReceiverWiperNode;
+    control.sourceResistance =
+        std::max(control.totalResistance - control.tapResistance,
+                 kReceiverNodeLinkOhms);
+    control.interNodeResistance =
+        std::max(control.tapResistance - control.wiperResistance,
+                 kReceiverNodeLinkOhms);
+    control.groundedResistance =
+        std::max(control.wiperResistance, kReceiverNodeLinkOhms);
+  }
+  return control;
+}
+
+template <size_t N>
+void addGroundBranch(float (&a)[N][N], int node, float resistanceOhms) {
+  if (resistanceOhms <= 0.0f) return;
+  a[node][node] += 1.0f / std::max(resistanceOhms, 1e-9f);
+}
+
+template <size_t N>
+void addSourceBranch(float (&a)[N][N],
+                     float (&b)[N],
+                     int node,
+                     float resistanceOhms,
+                     float sourceVoltage) {
+  if (resistanceOhms <= 0.0f) return;
+  float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
+  a[node][node] += conductance;
+  b[node] += conductance * sourceVoltage;
+}
+
+template <size_t N>
+void addNodeBranch(float (&a)[N][N],
+                   int aNode,
+                   int bNode,
+                   float resistanceOhms) {
+  if (resistanceOhms <= 0.0f) return;
+  float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
+  a[aNode][aNode] += conductance;
+  a[bNode][bNode] += conductance;
+  a[aNode][bNode] -= conductance;
+  a[bNode][aNode] -= conductance;
+}
+
+template <size_t N>
+void stampReceiverVolumeControl(const ReceiverVolumeControlDerived& control,
+                                float sourceVoltage,
+                                float (&a)[N][N],
+                                float (&b)[N]) {
+  addSourceBranch(a, b, control.sourceNode, control.sourceResistance,
+                  sourceVoltage);
+  addNodeBranch(a, control.sourceNode, control.groundedNode,
+                control.interNodeResistance);
+  addGroundBranch(a, control.groundedNode, control.groundedResistance);
+}
+
+template <size_t N>
+void stampReceiverLoudnessResistor(
+    const Radio1938::ReceiverCircuitNodeState& receiver,
+    const ReceiverVolumeControlDerived& control,
+    float (&a)[N][N]) {
+  if (control.loudnessBlend <= 0.0f ||
+      receiver.volumeControlLoudnessResistanceOhms <= 0.0f) {
+    return;
+  }
+  a[kReceiverTapNode][kReceiverTapNode] +=
+      control.loudnessBlend /
+      std::max(receiver.volumeControlLoudnessResistanceOhms, 1e-9f);
+}
+
+void stampReceiverLoudnessCap(
+    const Radio1938::ReceiverCircuitNodeState& receiver,
+    const ReceiverVolumeControlDerived& control,
+    float dt,
+    float (&a)[3][3],
+    float (&b)[3]) {
+  if (control.loudnessBlend <= 0.0f ||
+      receiver.volumeControlLoudnessCapFarads <= 0.0f) {
+    return;
+  }
+  float loudnessGc =
+      control.loudnessBlend * receiver.volumeControlLoudnessCapFarads /
+      std::max(dt, 1e-9f);
+  a[kReceiverTapNode][kReceiverTapNode] += loudnessGc;
+  b[kReceiverTapNode] += loudnessGc * receiver.volumeControlTapVoltage;
+}
+
 std::array<float, 2> computeReceiverControlDcNodes(
     const Radio1938::ReceiverCircuitNodeState& receiver,
     float sourceVoltage) {
-  float totalResistance = receiver.volumeControlResistanceOhms;
-  float wiperResistance = receiver.volumeControlPosition * totalResistance;
-  float tapResistance = receiver.volumeControlTapResistanceOhms;
-  float loudnessBlend = 0.0f;
-  if (tapResistance > 0.0f) {
-    loudnessBlend = clampf((tapResistance - wiperResistance) / tapResistance,
-                           0.0f, 1.0f);
-  }
-
-  constexpr float kNodeLinkOhms = 1e-3f;
-  auto addGroundBranch = [](float (&a)[2][2], int node, float resistanceOhms) {
-    if (resistanceOhms <= 0.0f) return;
-    a[node][node] += 1.0f / std::max(resistanceOhms, 1e-9f);
-  };
-  auto addSourceBranch = [](float (&a)[2][2], float (&b)[2], int node,
-                            float resistanceOhms, float sourceVoltageIn) {
-    if (resistanceOhms <= 0.0f) return;
-    float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
-    a[node][node] += conductance;
-    b[node] += conductance * sourceVoltageIn;
-  };
-  auto addNodeBranch = [](float (&a)[2][2], int aNode, int bNode,
-                          float resistanceOhms) {
-    if (resistanceOhms <= 0.0f) return;
-    float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
-    a[aNode][aNode] += conductance;
-    a[bNode][bNode] += conductance;
-    a[aNode][bNode] -= conductance;
-    a[bNode][aNode] -= conductance;
-  };
-
+  ReceiverVolumeControlDerived control = deriveReceiverVolumeControl(receiver);
   float a[2][2] = {};
   float b[2] = {};
-  constexpr int kWiperNode = 0;
-  constexpr int kTapNode = 1;
-  if (wiperResistance >= tapResistance) {
-    addSourceBranch(a, b, kWiperNode,
-                    std::max(totalResistance - wiperResistance, kNodeLinkOhms),
-                    sourceVoltage);
-    addNodeBranch(a, kWiperNode, kTapNode,
-                  std::max(wiperResistance - tapResistance, kNodeLinkOhms));
-    addGroundBranch(a, kTapNode, std::max(tapResistance, kNodeLinkOhms));
-  } else {
-    addSourceBranch(a, b, kTapNode,
-                    std::max(totalResistance - tapResistance, kNodeLinkOhms),
-                    sourceVoltage);
-    addNodeBranch(a, kTapNode, kWiperNode,
-                  std::max(tapResistance - wiperResistance, kNodeLinkOhms));
-    addGroundBranch(a, kWiperNode, std::max(wiperResistance, kNodeLinkOhms));
-  }
-  if (loudnessBlend > 0.0f &&
-      receiver.volumeControlLoudnessResistanceOhms > 0.0f) {
-    a[kTapNode][kTapNode] +=
-        loudnessBlend /
-        std::max(receiver.volumeControlLoudnessResistanceOhms, 1e-9f);
-  }
+  stampReceiverVolumeControl(control, sourceVoltage, a, b);
+  stampReceiverLoudnessResistor(receiver, control, a);
 
   float det = a[0][0] * a[1][1] - a[0][1] * a[1][0];
   assert(std::fabs(det) >= 1e-12f);
@@ -90,93 +173,31 @@ ReceiverInputNetworkSolve solveReceiverInputNetwork(
     float dt,
     float sourceVoltage) {
   ReceiverInputNetworkSolve result{};
-  float totalResistance = receiver.volumeControlResistanceOhms;
-  float wiperResistance = receiver.volumeControlPosition * totalResistance;
-  float tapResistance = receiver.volumeControlTapResistanceOhms;
-  float loudnessBlend = 0.0f;
-  if (tapResistance > 0.0f) {
-    loudnessBlend = clampf((tapResistance - wiperResistance) / tapResistance,
-                           0.0f, 1.0f);
-  }
-
-  constexpr float kNodeLinkOhms = 1e-3f;
-  auto addGroundBranch = [](float (&a)[3][3], int node, float resistanceOhms) {
-    if (resistanceOhms <= 0.0f) return;
-    a[node][node] += 1.0f / std::max(resistanceOhms, 1e-9f);
-  };
-  auto addSourceBranch = [](float (&a)[3][3], float (&b)[3], int node,
-                            float resistanceOhms, float sourceVoltageIn) {
-    if (resistanceOhms <= 0.0f) return;
-    float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
-    a[node][node] += conductance;
-    b[node] += conductance * sourceVoltageIn;
-  };
-  auto addNodeBranch = [](float (&a)[3][3], int aNode, int bNode,
-                          float resistanceOhms) {
-    if (resistanceOhms <= 0.0f) return;
-    float conductance = 1.0f / std::max(resistanceOhms, 1e-9f);
-    a[aNode][aNode] += conductance;
-    a[bNode][bNode] += conductance;
-    a[aNode][bNode] -= conductance;
-    a[bNode][aNode] -= conductance;
-  };
-
+  ReceiverVolumeControlDerived control = deriveReceiverVolumeControl(receiver);
   float a[3][3] = {};
   float b[3] = {};
-  constexpr int kWiperNode = 0;
-  constexpr int kTapNode = 1;
-  constexpr int kGridNode = 2;
-  int sourceNode = kWiperNode;
-  float sourceResistance = kNodeLinkOhms;
-  if (wiperResistance >= tapResistance) {
-    sourceNode = kWiperNode;
-    sourceResistance =
-        std::max(totalResistance - wiperResistance, kNodeLinkOhms);
-    addSourceBranch(a, b, kWiperNode, sourceResistance, sourceVoltage);
-    addNodeBranch(a, kWiperNode, kTapNode,
-                  std::max(wiperResistance - tapResistance, kNodeLinkOhms));
-    addGroundBranch(a, kTapNode, std::max(tapResistance, kNodeLinkOhms));
-  } else {
-    sourceNode = kTapNode;
-    sourceResistance = std::max(totalResistance - tapResistance, kNodeLinkOhms);
-    addSourceBranch(a, b, kTapNode, sourceResistance, sourceVoltage);
-    addNodeBranch(a, kTapNode, kWiperNode,
-                  std::max(tapResistance - wiperResistance, kNodeLinkOhms));
-    addGroundBranch(a, kWiperNode, std::max(wiperResistance, kNodeLinkOhms));
-  }
-  if (loudnessBlend > 0.0f &&
-      receiver.volumeControlLoudnessResistanceOhms > 0.0f) {
-    a[kTapNode][kTapNode] +=
-        loudnessBlend /
-        std::max(receiver.volumeControlLoudnessResistanceOhms, 1e-9f);
-  }
-  if (loudnessBlend > 0.0f &&
-      receiver.volumeControlLoudnessCapFarads > 0.0f) {
-    float loudnessGc =
-        loudnessBlend * receiver.volumeControlLoudnessCapFarads /
-        std::max(dt, 1e-9f);
-    a[kTapNode][kTapNode] += loudnessGc;
-    b[kTapNode] += loudnessGc * receiver.volumeControlTapVoltage;
-  }
-  addGroundBranch(a, kGridNode, receiver.gridLeakResistanceOhms);
+  stampReceiverVolumeControl(control, sourceVoltage, a, b);
+  stampReceiverLoudnessResistor(receiver, control, a);
+  stampReceiverLoudnessCap(receiver, control, dt, a, b);
+  addGroundBranch(a, kReceiverGridNode, receiver.gridLeakResistanceOhms);
   float couplingGc = receiver.couplingCapFarads / std::max(dt, 1e-9f);
-  a[kWiperNode][kWiperNode] += couplingGc;
-  a[kGridNode][kGridNode] += couplingGc;
-  a[kWiperNode][kGridNode] -= couplingGc;
-  a[kGridNode][kWiperNode] -= couplingGc;
-  b[kWiperNode] += couplingGc * receiver.couplingCapVoltage;
-  b[kGridNode] -= couplingGc * receiver.couplingCapVoltage;
+  a[kReceiverWiperNode][kReceiverWiperNode] += couplingGc;
+  a[kReceiverGridNode][kReceiverGridNode] += couplingGc;
+  a[kReceiverWiperNode][kReceiverGridNode] -= couplingGc;
+  a[kReceiverGridNode][kReceiverWiperNode] -= couplingGc;
+  b[kReceiverWiperNode] += couplingGc * receiver.couplingCapVoltage;
+  b[kReceiverGridNode] -= couplingGc * receiver.couplingCapVoltage;
   float nodeVoltages[3] = {};
   bool solved = solveLinear3x3(a, b, nodeVoltages);
   assert(solved);
-  result.wiperVoltage = nodeVoltages[kWiperNode];
-  result.tapVoltage = nodeVoltages[kTapNode];
-  result.gridVoltage = nodeVoltages[kGridNode];
+  result.wiperVoltage = nodeVoltages[kReceiverWiperNode];
+  result.tapVoltage = nodeVoltages[kReceiverTapNode];
+  result.gridVoltage = nodeVoltages[kReceiverGridNode];
   result.couplingCapVoltage =
-      nodeVoltages[kWiperNode] - nodeVoltages[kGridNode];
+      nodeVoltages[kReceiverWiperNode] - nodeVoltages[kReceiverGridNode];
   result.inputCurrent =
-      (sourceVoltage - nodeVoltages[sourceNode]) /
-      std::max(sourceResistance, kNodeLinkOhms);
+      (sourceVoltage - nodeVoltages[control.sourceNode]) /
+      std::max(control.sourceResistance, kReceiverNodeLinkOhms);
   return result;
 }
 
@@ -223,6 +244,16 @@ void updateDetectorLoadState(Radio1938::ReceiverCircuitNodeState& receiver,
   receiver.warmStartPending = false;
 }
 
+void primeReceiverInputWarmStart(Radio1938::ReceiverCircuitNodeState& receiver,
+                                 float detectorNode) {
+  auto dcNodes = computeReceiverControlDcNodes(receiver, detectorNode);
+  receiver.volumeControlTapVoltage = dcNodes[1];
+  // Warm start at the control-network DC operating point so the first-audio
+  // coupling capacitor does not inject a false startup transient into the grid.
+  receiver.couplingCapVoltage = dcNodes[0];
+  receiver.gridVoltage = 0.0f;
+}
+
 }  // namespace
 
 void RadioReceiverInputNetworkNode::init(Radio1938& radio, RadioInitContext&) {
@@ -247,10 +278,7 @@ float RadioReceiverInputNetworkNode::run(Radio1938& radio,
   float detectorNode = radio.demod.am.detectorNode;
   float dt = 1.0f / std::max(radio.sampleRate, 1.0f);
   if (receiver.warmStartPending) {
-    auto dcNodes = computeReceiverControlDcNodes(receiver, detectorNode);
-    receiver.volumeControlTapVoltage = dcNodes[1];
-    receiver.couplingCapVoltage = dcNodes[0];
-    receiver.gridVoltage = 0.0f;
+    primeReceiverInputWarmStart(receiver, detectorNode);
   }
 
   auto solve = solveReceiverInputNetwork(receiver, dt, detectorNode);
