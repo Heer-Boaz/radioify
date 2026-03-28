@@ -117,8 +117,8 @@ KorenTriodeModel fitKorenTriodeModel(double vgkQ,
   assert(std::isfinite(gmTarget) && gmTarget > 0.0);
   assert(std::isfinite(mu) && mu > 0.0);
 
-  constexpr double kModelLogMin = std::log(1e-12);
-  constexpr double kModelLogMax = std::log(1e12);
+  const double kModelLogMin = std::log(1e-12);
+  const double kModelLogMax = std::log(1e12);
   constexpr double kCostConverged = 1e-18;
   constexpr double kCurrentWeight = 10.0;
   constexpr double kGmWeight = 1.0;
