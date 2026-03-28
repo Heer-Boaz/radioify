@@ -82,7 +82,7 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   tuneOffsetHz = newTuneHz;
   float ifCrackleTauSeconds =
       1.0f / (kRadioPi * std::max(bwHz, 1.0f));
-  float ifCrackleDecay =
+  ifCrackleDecay =
       std::exp(-1.0f / (std::max(fs, 1.0f) *
                         std::max(ifCrackleTauSeconds, 1e-6f)));
   float lowSenseBound = std::max(40.0f, senseLowHz);

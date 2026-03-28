@@ -117,24 +117,25 @@ KorenTriodeModel fitKorenTriodeModel(double vgkQ,
   assert(std::isfinite(gmTarget) && gmTarget > 0.0);
   assert(std::isfinite(mu) && mu > 0.0);
 
+  constexpr double kModelLogMin = std::log(1e-12);
+  constexpr double kModelLogMax = std::log(1e12);
+  constexpr double kCostConverged = 1e-18;
+  constexpr double kCurrentWeight = 10.0;
+  constexpr double kGmWeight = 1.0;
+  constexpr double kGpWeight = 1.0;
   double gpTarget = gmTarget / mu;
-  double kpInit = 100.0;
-  double kvbInit = vpkQ * vpkQ;
-  KorenTriodeModel initShape = makeKorenTriodeModel(mu, 1.0, kpInit, kvbInit);
-  double initCurrent = korenTriodePlateCurrent(vgkQ, vpkQ, initShape);
-  double kg1Init =
-      (initCurrent > 0.0)
-          ? (initCurrent / iqTarget)
-          : (std::pow(vpkQ, initShape.ex) / iqTarget);
-
-  double u[3] = {std::log(kg1Init), std::log(kpInit), std::log(kvbInit)};
-  double bestU[3] = {u[0], u[1], u[2]};
-  double bestNorm = std::numeric_limits<double>::infinity();
-  const double kModelLogMin = std::log(1e-12);
-  const double kModelLogMax = std::log(1e12);
 
   auto clampModelLog = [&](double x) {
     return std::clamp(x, kModelLogMin, kModelLogMax);
+  };
+
+  auto computeKg1ForShape = [&](double kp, double kvb) {
+    KorenTriodeModel shape = makeKorenTriodeModel(mu, 1.0, kp, kvb);
+    double shapeCurrent = korenTriodePlateCurrent(vgkQ, vpkQ, shape);
+    if (shapeCurrent > 0.0 && std::isfinite(shapeCurrent)) {
+      return std::max(shapeCurrent / iqTarget, 1e-12);
+    }
+    return std::max(std::pow(vpkQ, shape.ex) / iqTarget, 1e-12);
   };
 
   auto evalResiduals = [&](const double params[3], double residuals[3]) {
@@ -144,70 +145,186 @@ KorenTriodeModel fitKorenTriodeModel(double vgkQ,
         mu, std::exp(safeParams[0]), std::exp(safeParams[1]),
         std::exp(safeParams[2]));
     KorenTriodeMetrics metrics = evaluateKorenTriodeMetrics(vgkQ, vpkQ, model);
-    residuals[0] = metrics.currentAmps / iqTarget - 1.0;
-    residuals[1] = metrics.gmSiemens / gmTarget - 1.0;
-    residuals[2] = metrics.gpSiemens / gpTarget - 1.0;
+    residuals[0] = kCurrentWeight * (metrics.currentAmps / iqTarget - 1.0);
+    residuals[1] = kGmWeight * (metrics.gmSiemens / gmTarget - 1.0);
+    residuals[2] = kGpWeight * (metrics.gpSiemens / gpTarget - 1.0);
   };
 
-  for (int iter = 0; iter < 16; ++iter) {
-    double f[3] = {};
-    evalResiduals(u, f);
-    double norm = std::fabs(f[0]) + std::fabs(f[1]) + std::fabs(f[2]);
-    if (norm < bestNorm) {
-      bestNorm = norm;
-      bestU[0] = u[0];
-      bestU[1] = u[1];
-      bestU[2] = u[2];
-    }
-    if (norm < 1e-8) break;
+  auto residualCost = [&](const double residuals[3]) {
+    return residuals[0] * residuals[0] + residuals[1] * residuals[1] +
+           residuals[2] * residuals[2];
+  };
 
-    float a[3][3] = {};
-    float b[3] = {-static_cast<float>(f[0]), -static_cast<float>(f[1]),
-                  -static_cast<float>(f[2])};
+  auto finiteDifferenceJacobian = [&](const double params[3],
+                                      double jacobian[3][3]) {
     for (int col = 0; col < 3; ++col) {
-      double up[3] = {u[0], u[1], u[2]};
-      double um[3] = {u[0], u[1], u[2]};
-      up[col] += 1e-3;
-      um[col] -= 1e-3;
+      double step = 1e-3 * std::max(1.0, std::fabs(params[col]));
+      double up[3] = {params[0], params[1], params[2]};
+      double um[3] = {params[0], params[1], params[2]};
+      up[col] += step;
+      um[col] -= step;
       double fp[3] = {};
       double fm[3] = {};
       evalResiduals(up, fp);
       evalResiduals(um, fm);
+      double invStep = 1.0 / (2.0 * step);
       for (int row = 0; row < 3; ++row) {
-        a[row][col] = static_cast<float>((fp[row] - fm[row]) / 2e-3);
+        jacobian[row][col] = (fp[row] - fm[row]) * invStep;
       }
     }
+  };
 
-    float delta[3] = {};
-    if (!solveLinear3x3(a, b, delta)) break;
-
-    double lambda = 1.0;
-    double candidateBestNorm = bestNorm;
-    double candidateBestU[3] = {u[0], u[1], u[2]};
-    for (int ls = 0; ls < 8; ++ls) {
-      double candU[3] = {u[0] + lambda * delta[0], u[1] + lambda * delta[1],
-                         u[2] + lambda * delta[2]};
-      double candF[3] = {};
-      evalResiduals(candU, candF);
-      double candNorm =
-          std::fabs(candF[0]) + std::fabs(candF[1]) + std::fabs(candF[2]);
-      if (candNorm < candidateBestNorm) {
-        candidateBestNorm = candNorm;
-        candidateBestU[0] = candU[0];
-        candidateBestU[1] = candU[1];
-        candidateBestU[2] = candU[2];
+  auto solveDampedNormalEquations = [&](const double jacobian[3][3],
+                                        const double residuals[3],
+                                        double lambda,
+                                        double delta[3]) {
+    double jtJ[3][3] = {};
+    double jtR[3] = {};
+    for (int row = 0; row < 3; ++row) {
+      for (int col = 0; col < 3; ++col) {
+        double accum = 0.0;
+        for (int k = 0; k < 3; ++k) {
+          accum += jacobian[k][row] * jacobian[k][col];
+        }
+        jtJ[row][col] = accum;
       }
-      lambda *= 0.5;
+      double accum = 0.0;
+      for (int k = 0; k < 3; ++k) {
+        accum += jacobian[k][row] * residuals[k];
+      }
+      jtR[row] = accum;
     }
 
-    u[0] = clampModelLog(candidateBestU[0]);
-    u[1] = clampModelLog(candidateBestU[1]);
-    u[2] = clampModelLog(candidateBestU[2]);
+    float a[3][3] = {};
+    float b[3] = {};
+    for (int row = 0; row < 3; ++row) {
+      double diag = std::max(std::fabs(jtJ[row][row]), 1e-9);
+      for (int col = 0; col < 3; ++col) {
+        double value = jtJ[row][col];
+        if (row == col) {
+          value += lambda * diag;
+        }
+        a[row][col] = static_cast<float>(value);
+      }
+      b[row] = static_cast<float>(-jtR[row]);
+    }
 
-    double maxDelta =
-        std::max(std::fabs(delta[0]),
-                 std::max(std::fabs(delta[1]), std::fabs(delta[2])));
-    if (maxDelta < 1e-6) break;
+    float solved[3] = {};
+    if (!solveLinear3x3(a, b, solved)) {
+      return false;
+    }
+    delta[0] = solved[0];
+    delta[1] = solved[1];
+    delta[2] = solved[2];
+    return std::isfinite(delta[0]) && std::isfinite(delta[1]) &&
+           std::isfinite(delta[2]);
+  };
+
+  auto clampStep = [&](double delta[3]) {
+    double maxAbs = std::max(std::fabs(delta[0]),
+                             std::max(std::fabs(delta[1]), std::fabs(delta[2])));
+    if (maxAbs > 2.0) {
+      double scale = 2.0 / maxAbs;
+      delta[0] *= scale;
+      delta[1] *= scale;
+      delta[2] *= scale;
+    }
+  };
+
+  auto runFitFromSeed = [&](const double seed[3], double bestSeedU[3],
+                            double& bestSeedCost) {
+    double u[3] = {seed[0], seed[1], seed[2]};
+    bestSeedU[0] = u[0];
+    bestSeedU[1] = u[1];
+    bestSeedU[2] = u[2];
+    double residuals[3] = {};
+    evalResiduals(u, residuals);
+    bestSeedCost = residualCost(residuals);
+    double lambda = 1e-3;
+
+    for (int iter = 0; iter < 64; ++iter) {
+      evalResiduals(u, residuals);
+      double currentCost = residualCost(residuals);
+      if (currentCost < bestSeedCost) {
+        bestSeedCost = currentCost;
+        bestSeedU[0] = u[0];
+        bestSeedU[1] = u[1];
+        bestSeedU[2] = u[2];
+      }
+      if (currentCost < kCostConverged) {
+        break;
+      }
+
+      double jacobian[3][3] = {};
+      finiteDifferenceJacobian(u, jacobian);
+
+      bool accepted = false;
+      for (int attempt = 0; attempt < 12; ++attempt) {
+        double delta[3] = {};
+        if (!solveDampedNormalEquations(jacobian, residuals, lambda, delta)) {
+          lambda *= 10.0;
+          continue;
+        }
+
+        clampStep(delta);
+        const double stepScales[] = {1.0, 0.5, 0.25, 0.125, 0.0625};
+        for (double stepScale : stepScales) {
+          double candidate[3] = {clampModelLog(u[0] + stepScale * delta[0]),
+                                 clampModelLog(u[1] + stepScale * delta[1]),
+                                 clampModelLog(u[2] + stepScale * delta[2])};
+          double candidateResiduals[3] = {};
+          evalResiduals(candidate, candidateResiduals);
+          double candidateCost = residualCost(candidateResiduals);
+          if (candidateCost + 1e-18 < currentCost) {
+            u[0] = candidate[0];
+            u[1] = candidate[1];
+            u[2] = candidate[2];
+            currentCost = candidateCost;
+            if (candidateCost < bestSeedCost) {
+              bestSeedCost = candidateCost;
+              bestSeedU[0] = u[0];
+              bestSeedU[1] = u[1];
+              bestSeedU[2] = u[2];
+            }
+            lambda = std::max(lambda * 0.35, 1e-8);
+            accepted = true;
+            break;
+          }
+        }
+        if (accepted) break;
+        lambda = std::min(lambda * 10.0, 1e12);
+      }
+
+      if (!accepted) {
+        break;
+      }
+    }
+  };
+
+  double kpBase = 100.0;
+  double kvbBase = vpkQ * vpkQ;
+  const double kpSeeds[] = {0.25 * kpBase, 0.5 * kpBase, kpBase,
+                            2.0 * kpBase, 4.0 * kpBase, 8.0 * kpBase};
+  const double kvbSeeds[] = {0.01 * kvbBase, 0.05 * kvbBase, 0.1 * kvbBase,
+                             0.5 * kvbBase, kvbBase, 4.0 * kvbBase};
+
+  double bestU[3] = {0.0, 0.0, 0.0};
+  double bestCost = std::numeric_limits<double>::infinity();
+
+  for (double kpSeed : kpSeeds) {
+    for (double kvbSeed : kvbSeeds) {
+      double seed[3] = {std::log(computeKg1ForShape(kpSeed, kvbSeed)),
+                        std::log(kpSeed), std::log(kvbSeed)};
+      double candidateU[3] = {seed[0], seed[1], seed[2]};
+      double candidateCost = std::numeric_limits<double>::infinity();
+      runFitFromSeed(seed, candidateU, candidateCost);
+      if (candidateCost < bestCost) {
+        bestCost = candidateCost;
+        bestU[0] = candidateU[0];
+        bestU[1] = candidateU[1];
+        bestU[2] = candidateU[2];
+      }
+    }
   }
 
   return makeKorenTriodeModel(mu, std::exp(bestU[0]), std::exp(bestU[1]),
