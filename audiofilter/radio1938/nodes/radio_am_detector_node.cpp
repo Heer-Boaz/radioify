@@ -125,6 +125,20 @@ int detectorWaveformSubsteps(const AMDetector& detector,
   return std::clamp(substeps, 1, std::max(detector.waveformMaxSubsteps, 1));
 }
 
+float interpolateEnvelopeLinear(float prevSample, float currentSample, float t) {
+  return prevSample + (currentSample - prevSample) * t;
+}
+
+float interpolateEnvelopeQuadratic(float prevPrevSample,
+                                   float prevSample,
+                                   float currentSample,
+                                   float t) {
+  float slope = 0.5f * (currentSample - prevPrevSample);
+  float curvature =
+      0.5f * (prevPrevSample - 2.0f * prevSample + currentSample);
+  return prevSample + slope * t + curvature * t * t;
+}
+
 void runWaveformDetectorIsland(AMDetector& detector,
                                float ifI,
                                float ifQ,
@@ -153,21 +167,32 @@ void runWaveformDetectorIsland(AMDetector& detector,
     detector.detectorNode = solve.detectorNode;
     detector.avcEnv = solve.avcNode;
     detector.avcRect = avcDrive;
+    detector.prevPrevIfI = detector.prevIfI;
+    detector.prevPrevIfQ = detector.prevIfQ;
     detector.prevIfI = ifI;
     detector.prevIfQ = ifQ;
+    detector.ifEnvelopeHistorySamples =
+        std::min(detector.ifEnvelopeHistorySamples + 1, 2);
     return;
   }
 
+  float prevPrevIfI = detector.prevPrevIfI;
+  float prevPrevIfQ = detector.prevPrevIfQ;
   float prevIfI = detector.prevIfI;
   float prevIfQ = detector.prevIfQ;
   if (detector.warmStartPending) {
+    prevPrevIfI = ifI;
+    prevPrevIfQ = ifQ;
     prevIfI = ifI;
     prevIfQ = ifQ;
   }
+  bool useQuadraticInterp = detector.ifEnvelopeHistorySamples >= 2;
   float dtSub = 1.0f / (sampleRate * static_cast<float>(substeps));
   float phaseStep = kRadioTwoPi * (carrierHz / (sampleRate * substeps));
   float c = std::cos(detector.ifWavePhase);
   float s = std::sin(detector.ifWavePhase);
+  float cHalfStep = std::cos(0.5f * phaseStep);
+  float sHalfStep = std::sin(0.5f * phaseStep);
   float cStep = std::cos(phaseStep);
   float sStep = std::sin(phaseStep);
   float delayedAvcThreshold =
@@ -175,12 +200,19 @@ void runWaveformDetectorIsland(AMDetector& detector,
   float audioRectSum = 0.0f;
   float avcRectSum = 0.0f;
   float detectorNodeSum = 0.0f;
+  float detectorNodePrev = std::max(detector.detectorStorageNode, 0.0f);
 
   for (int step = 0; step < substeps; ++step) {
     float t = (static_cast<float>(step) + 0.5f) / static_cast<float>(substeps);
-    float envI = prevIfI + (ifI - prevIfI) * t;
-    float envQ = prevIfQ + (ifQ - prevIfQ) * t;
-    float ifWave = envI * c - envQ * s;
+    float envI = useQuadraticInterp
+                     ? interpolateEnvelopeQuadratic(prevPrevIfI, prevIfI, ifI, t)
+                     : interpolateEnvelopeLinear(prevIfI, ifI, t);
+    float envQ = useQuadraticInterp
+                     ? interpolateEnvelopeQuadratic(prevPrevIfQ, prevIfQ, ifQ, t)
+                     : interpolateEnvelopeLinear(prevIfQ, ifQ, t);
+    float cMid = c * cHalfStep - s * sHalfStep;
+    float sMid = s * cHalfStep + c * sHalfStep;
+    float ifWave = envI * cMid - envQ * sMid;
     detector.audioRect = diodeJunctionRectify(
         ifWave, detector.audioDiodeDrop, detector.audioJunctionSlopeVolts);
     float avcRectified = diodeJunctionRectify(
@@ -196,7 +228,8 @@ void runWaveformDetectorIsland(AMDetector& detector,
     detector.avcEnv = solve.avcNode;
     audioRectSum += detector.audioRect;
     avcRectSum += avcDrive;
-    detectorNodeSum += solve.detectorNode;
+    detectorNodeSum += 0.5f * (detectorNodePrev + solve.detectorNode);
+    detectorNodePrev = solve.detectorNode;
 
     float nextC = c * cStep - s * sStep;
     float nextS = s * cStep + c * sStep;
@@ -209,8 +242,12 @@ void runWaveformDetectorIsland(AMDetector& detector,
   detector.detectorNode = detectorNodeSum / static_cast<float>(substeps);
   detector.ifWavePhase =
       wrapPhase(detector.ifWavePhase + kRadioTwoPi * (carrierHz / sampleRate));
+  detector.prevPrevIfI = prevIfI;
+  detector.prevPrevIfQ = prevIfQ;
   detector.prevIfI = ifI;
   detector.prevIfQ = ifQ;
+  detector.ifEnvelopeHistorySamples =
+      std::min(detector.ifEnvelopeHistorySamples + 1, 2);
 }
 
 }  // namespace
@@ -270,8 +307,11 @@ void AMDetector::reset() {
   detectorNode = 0.0f;
   avcEnv = 0.0f;
   ifWavePhase = 0.0f;
+  prevPrevIfI = 0.0f;
+  prevPrevIfQ = 0.0f;
   prevIfI = 0.0f;
   prevIfQ = 0.0f;
+  ifEnvelopeHistorySamples = 0;
   lastWaveformSubsteps = 0;
   warmStartPending = true;
   afcError = 0.0f;
@@ -375,8 +415,11 @@ float AMDetector::run(float signalI,
     detectorNode = solve.detectorNode;
     avcEnv = solve.avcNode;
     avcRect = avcDrive;
+    prevPrevIfI = prevIfI;
+    prevPrevIfQ = prevIfQ;
     prevIfI = ifI;
     prevIfQ = ifQ;
+    ifEnvelopeHistorySamples = std::min(ifEnvelopeHistorySamples + 1, 2);
   }
   assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
   if (radio.calibration.enabled) {
