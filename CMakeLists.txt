@@ -150,6 +150,11 @@ add_executable(radio_measurements
   ${RADIOIFY_RADIO_ENGINE_SOURCES}
   )
 
+add_executable(radio_node_physics
+  radio_node_physics.cpp
+  ${RADIOIFY_RADIO_ENGINE_SOURCES}
+  )
+
 target_compile_definitions(radioify PRIVATE
   RADIOIFY_ENABLE_TIMING_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_TIMING_LOG}>,1,0>
   RADIOIFY_ENABLE_VIDEO_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_VIDEO_ERROR_LOG}>,1,0>
