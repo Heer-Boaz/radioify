@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -47,6 +48,8 @@ struct HarnessConfig {
   float modulationIndex = kDefaultModulationIndex;
   float noiseWeight = kDefaultNoiseWeight;
   float noiseOnlyWeight = kDefaultNoiseOnlyWeight;
+  float detectorWaveformSamplesPerCycle = 0.0f;
+  int detectorWaveformMaxSubsteps = 0;
   std::string settingsPath;
   std::string presetName;
   std::string section = "all";
@@ -134,6 +137,37 @@ struct SweepSummary {
   double high3dBHz = 0.0;
 };
 
+struct AmValidationSummary {
+  double maxOutputAbsDiff = 0.0;
+  double carrierRms = 0.0;
+  double sideUpperRms = 0.0;
+  double sideLowerRms = 0.0;
+  double expectedSideRms = 0.0;
+  double sidebandRatio = 0.0;
+  bool sidebandRatioInBand = false;
+  double detectorDc = 0.0;
+  double detectorTone = 0.0;
+  double detectorToneToDcRatio = 0.0;
+  double modulationIndexConfig = 0.0;
+  double effectiveModulationDepth = 0.0;
+  double modulationIndexMeasuredEnv = 0.0;
+  bool modulationIndexInBand = false;
+  double detectorSinadDb = -300.0;
+  double outputSinadDb = -300.0;
+  double speakerReferenceRatio = 0.0;
+  double maxDigitalOutput = 0.0;
+  double ifCenterHz = 0.0;
+  double nominalOutputPowerWatts = 0.0;
+  int waveformSubsteps = 0;
+};
+
+struct ReferenceAnchorSummary {
+  double sinadNominalDb = -300.0;
+  double speakerReferenceRatio = 0.0;
+  double maxDigitalOutput = 0.0;
+  int waveformSubsteps = 0;
+};
+
 [[noreturn]] void fail(const std::string& message) {
   throw std::runtime_error(message);
 }
@@ -181,6 +215,14 @@ float parseFloatArg(char** argv, int& index, int argc, const char* name) {
   return std::strtof(argv[index], nullptr);
 }
 
+int parseIntArg(char** argv, int& index, int argc, const char* name) {
+  if (index + 1 >= argc) {
+    fail(std::string("missing value for ") + name);
+  }
+  ++index;
+  return std::strtol(argv[index], nullptr, 10);
+}
+
 void printUsage() {
   std::cout
       << "radio_measurements [options]\n"
@@ -190,9 +232,11 @@ void printUsage() {
       << "  --mod-index <value>\n"
       << "  --noise <value>\n"
       << "  --noise-only <value>\n"
+      << "  --detector-spc <value>\n"
+      << "  --detector-max-substeps <count>\n"
       << "  --radio-settings <path>\n"
       << "  --preset <name>\n"
-      << "  --section <all|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise|spectrum|am_validate>\n";
+      << "  --section <all|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise|spectrum|am_validate|am_convergence>\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -211,6 +255,12 @@ HarnessConfig parseArgs(int argc, char** argv) {
       config.noiseWeight = parseFloatArg(argv, i, argc, "--noise");
     } else if (arg == "--noise-only") {
       config.noiseOnlyWeight = parseFloatArg(argv, i, argc, "--noise-only");
+    } else if (arg == "--detector-spc") {
+      config.detectorWaveformSamplesPerCycle =
+          parseFloatArg(argv, i, argc, "--detector-spc");
+    } else if (arg == "--detector-max-substeps") {
+      config.detectorWaveformMaxSubsteps =
+          parseIntArg(argv, i, argc, "--detector-max-substeps");
     } else if (arg == "--radio-settings") {
       if (i + 1 >= argc) fail("missing value for --radio-settings");
       config.settingsPath = argv[++i];
@@ -234,6 +284,17 @@ void warmCarrier(Radio1938& radio, float carrierRmsVolts) {
   radio.warmInputCarrier(carrierRmsVolts, kWarmupFrames);
 }
 
+void applyHarnessDetectorWaveformSettings(const HarnessConfig& config,
+                                          Radio1938& radio) {
+  if (config.detectorWaveformSamplesPerCycle > 0.0f) {
+    radio.demod.am.waveformSamplesPerCycle =
+        config.detectorWaveformSamplesPerCycle;
+  }
+  if (config.detectorWaveformMaxSubsteps > 0) {
+    radio.demod.am.waveformMaxSubsteps = config.detectorWaveformMaxSubsteps;
+  }
+}
+
 Radio1938 makeRadio(const HarnessConfig& config, float noiseWeight,
                     bool warmWithCarrier) {
   Radio1938 radio;
@@ -249,6 +310,7 @@ Radio1938 makeRadio(const HarnessConfig& config, float noiseWeight,
       fail("unknown preset: " + config.presetName);
     }
   }
+  applyHarnessDetectorWaveformSettings(config, radio);
   radio.setCalibrationEnabled(true);
   if (warmWithCarrier) {
     warmCarrier(radio, config.carrierRmsVolts);
@@ -713,7 +775,11 @@ void printConfig(const HarnessConfig& config) {
   std::cout << "carrier_rms_volts," << config.carrierRmsVolts << "\n";
   std::cout << "modulation_index," << config.modulationIndex << "\n";
   std::cout << "noise_weight," << config.noiseWeight << "\n";
-  std::cout << "noise_only_weight," << config.noiseOnlyWeight << "\n\n";
+  std::cout << "noise_only_weight," << config.noiseOnlyWeight << "\n";
+  std::cout << "detector_waveform_spc_override,"
+            << config.detectorWaveformSamplesPerCycle << "\n";
+  std::cout << "detector_waveform_max_substeps_override,"
+            << config.detectorWaveformMaxSubsteps << "\n\n";
 }
 
 bool wantsSection(const HarnessConfig& config, std::string_view section) {
@@ -787,6 +853,121 @@ ToneMetrics measureNominalSinad(const HarnessConfig& config) {
                    std::max(config.noiseWeight, config.noiseOnlyWeight));
   return measureToneMetrics(run.output, config.sampleRate, 1000.0f,
                             static_cast<size_t>(config.sampleRate * 0.20f));
+}
+
+ReferenceAnchorSummary measureReferenceAnchorSummary(const HarnessConfig& config) {
+  HarnessConfig nominalConfig = config;
+  nominalConfig.carrierRmsVolts = kDefaultCarrierRmsVolts;
+  auto nominalInput =
+      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f,
+               kNominalProgramPeak);
+  RunResult nominalRun = runAmProgram(
+      nominalConfig, nominalInput, nominalHarnessModulationIndex(config),
+      std::max(config.noiseWeight, config.noiseOnlyWeight));
+  ToneMetrics nominalTone = measureToneMetrics(
+      nominalRun.output, config.sampleRate, 1000.0f,
+      static_cast<size_t>(config.sampleRate * 0.20f));
+  ReferenceAnchorSummary summary;
+  summary.sinadNominalDb = nominalTone.sinadDb;
+  summary.speakerReferenceRatio =
+      nominalRun.radio.calibration.maxSpeakerReferenceRatio;
+  summary.maxDigitalOutput = nominalRun.radio.calibration.maxDigitalOutput;
+  summary.waveformSubsteps = nominalRun.radio.demod.am.lastWaveformSubsteps;
+  return summary;
+}
+
+AmValidationSummary measureAmValidationSummary(const HarnessConfig& config) {
+  auto program =
+      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, kSweepProgramPeak);
+  float modulationIndex = std::min(config.modulationIndex, 0.999f);
+  float effectiveNoiseWeight =
+      std::max(config.noiseWeight, config.noiseOnlyWeight);
+  EnvelopeTraceResult trace = runAmProgramWithEnvelopeTrace(
+      config, program, modulationIndex, effectiveNoiseWeight);
+  RunResult directRun =
+      runAmProgram(config, program, modulationIndex, effectiveNoiseWeight);
+
+  AmValidationSummary summary;
+  summary.modulationIndexConfig = modulationIndex;
+  summary.waveformSubsteps = trace.radio.demod.am.lastWaveformSubsteps;
+  if (effectiveNoiseWeight <= 0.0f) {
+    for (size_t i = 0; i < directRun.output.size() && i < trace.output.size();
+         ++i) {
+      summary.maxOutputAbsDiff =
+          std::max(summary.maxOutputAbsDiff,
+                   std::fabs(static_cast<double>(directRun.output[i]) -
+                             static_cast<double>(trace.output[i])));
+    }
+  }
+
+  float safeSampleRate = std::max(config.sampleRate, 1.0f);
+  float carrierHz = trace.radio.resolvedInputCarrierHz();
+  float carrierPeak = std::sqrt(2.0f) * std::max(config.carrierRmsVolts, 0.0f);
+  std::vector<float> rfSamples(program.size(), 0.0f);
+  float normScale = amProgramNormScale(program);
+  double programPeakAfterNorm = 0.0;
+  for (float sample : program) {
+    programPeakAfterNorm =
+        std::max(programPeakAfterNorm,
+                 std::fabs(static_cast<double>(sample * normScale)));
+  }
+  summary.effectiveModulationDepth = modulationIndex * programPeakAfterNorm;
+  for (size_t i = 0; i < program.size(); ++i) {
+    float t = static_cast<float>(i) / safeSampleRate;
+    float sampleVal = program[i] * normScale;
+    float envelopeFactor = std::max(0.0f, 1.0f + modulationIndex * sampleVal);
+    rfSamples[i] =
+        carrierPeak * envelopeFactor * std::cos(kRadioTwoPi * carrierHz * t);
+  }
+
+  summary.carrierRms =
+      measureToneRms(rfSamples, config.sampleRate, carrierHz, 0);
+  summary.sideUpperRms =
+      measureToneRms(rfSamples, config.sampleRate, carrierHz + 1000.0f, 0);
+  summary.sideLowerRms =
+      measureToneRms(rfSamples, config.sampleRate, carrierHz - 1000.0f, 0);
+  summary.expectedSideRms =
+      (summary.effectiveModulationDepth * 0.5) * summary.carrierRms;
+  double sideAvgRms = 0.5 * (summary.sideUpperRms + summary.sideLowerRms);
+  summary.sidebandRatio =
+      sideAvgRms / std::max(summary.expectedSideRms, 1e-20);
+  summary.sidebandRatioInBand =
+      summary.sidebandRatio >= kAmSidebandRatioMin &&
+      summary.sidebandRatio <= kAmSidebandRatioMax;
+
+  std::vector<double> detSpec =
+      computeSpectrumPeakAmplitudes(trace.detectorNode, config.sampleRate);
+  summary.detectorDc = (detSpec.size() > 0) ? detSpec[0] : 0.0;
+  summary.detectorTone =
+      peakAmplitudeAtHz(detSpec, config.sampleRate, 1000.0f);
+  summary.detectorToneToDcRatio =
+      summary.detectorTone / std::max(summary.detectorDc, 1e-20);
+
+  double envMax = -1e300;
+  double envMin = 1e300;
+  size_t start = program.size() / 4;
+  for (size_t i = start; i < trace.audioEnv.size(); ++i) {
+    envMax = std::max(envMax, static_cast<double>(trace.audioEnv[i]));
+    envMin = std::min(envMin, static_cast<double>(trace.audioEnv[i]));
+  }
+  if (envMax + envMin > 1e-12) {
+    summary.modulationIndexMeasuredEnv = (envMax - envMin) / (envMax + envMin);
+  }
+  summary.modulationIndexInBand =
+      std::fabs(summary.modulationIndexMeasuredEnv -
+                summary.effectiveModulationDepth) <= kAmModIndexTolerance;
+
+  ToneMetrics detToneMetrics =
+      measureToneMetrics(trace.detectorNode, config.sampleRate, 1000.0f, start);
+  ToneMetrics outToneMetrics =
+      measureToneMetrics(trace.output, config.sampleRate, 1000.0f, start);
+  summary.detectorSinadDb = detToneMetrics.sinadDb;
+  summary.outputSinadDb = outToneMetrics.sinadDb;
+  summary.speakerReferenceRatio = trace.radio.calibration.maxSpeakerReferenceRatio;
+  summary.maxDigitalOutput = trace.radio.calibration.maxDigitalOutput;
+  summary.ifCenterHz = trace.radio.ifStrip.ifCenterHz;
+  summary.nominalOutputPowerWatts = trace.radio.power.nominalOutputPowerWatts;
+  return summary;
 }
 
 void runSweep(const HarnessConfig& config) {
@@ -1078,7 +1259,7 @@ void runReference(const HarnessConfig& config) {
               config.modulationIndex, config.noiseWeight)
               .audioEnv,
           config.sampleRate, 30.0f);
-  ToneMetrics sinad = measureNominalSinad(config);
+  ReferenceAnchorSummary anchors = measureReferenceAnchorSummary(config);
   double imdDb = measureImdSummaryDb(config);
   // Run a nominal program to populate calibration/diagnostic metrics used
   // for reference checks.
@@ -1113,15 +1294,13 @@ void runReference(const HarnessConfig& config) {
                     10.0);
   printReferenceRow("envelope_fall_ms_observed", envelope.fall90To10Ms, 0.0,
                     10.0);
-  printReferenceRow("sinad_nominal_db", sinad.sinadDb,
+  printReferenceRow("sinad_nominal_db", anchors.sinadNominalDb,
                     kTargetSinadNominalDbMin, kTargetSinadNominalDbMax);
   // Speaker/reference and digital output targets (measured from nominal run)
-  double speakerRefRatio = nominalRun.radio.calibration.maxSpeakerReferenceRatio;
-  double maxDigitalOutput = nominalRun.radio.calibration.maxDigitalOutput;
-  printReferenceRow("speaker_reference_ratio", speakerRefRatio,
+  printReferenceRow("speaker_reference_ratio", anchors.speakerReferenceRatio,
                     kTargetSpeakerReferenceRatioMin,
                     kTargetSpeakerReferenceRatioMax);
-  printReferenceRow("max_digital_output", maxDigitalOutput,
+  printReferenceRow("max_digital_output", anchors.maxDigitalOutput,
                     kTargetMaxDigitalOutputMin, kTargetMaxDigitalOutputMax);
   // Diagnostic flags expected to be zero in nominal bench
   printReferenceRow("power_clip", nominalRun.radio.diagnostics.powerClip ? 1 : 0,
@@ -1162,131 +1341,90 @@ void runNoise(const HarnessConfig& config) {
 void runAmValidate(const HarnessConfig& config) {
   std::cout << "[am_validate]\n";
   std::cout << "metric,value\n";
-
-  // Program (audio) used for AM excitation
-  auto program =
-      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, kSweepProgramPeak);
-  float modulationIndex = std::min(config.modulationIndex, 0.999f);
-  float effectiveNoiseWeight =
-      std::max(config.noiseWeight, config.noiseOnlyWeight);
-  // Run trace to collect detector/audio/env data
-  EnvelopeTraceResult trace = runAmProgramWithEnvelopeTrace(
-      config, program, modulationIndex, effectiveNoiseWeight);
-  RunResult directRun =
-      runAmProgram(config, program, modulationIndex, effectiveNoiseWeight);
-
-  double maxOutputAbsDiff = 0.0;
-  if (effectiveNoiseWeight <= 0.0f) {
-    for (size_t i = 0; i < directRun.output.size() && i < trace.output.size();
-         ++i) {
-      maxOutputAbsDiff =
-          std::max(maxOutputAbsDiff,
-                   std::fabs(static_cast<double>(directRun.output[i]) -
-                             static_cast<double>(trace.output[i])));
-    }
-    std::cout << "am_output_max_abs_diff," << maxOutputAbsDiff << "\n";
-    if (maxOutputAbsDiff > 1e-4) {
-      fail("AM output mismatch between processAmAudio and envelope trace: " +
-           std::to_string(maxOutputAbsDiff));
-    }
-  } else {
+  AmValidationSummary summary = measureAmValidationSummary(config);
+  bool compareSkipped =
+      std::max(config.noiseWeight, config.noiseOnlyWeight) > 0.0f;
+  if (compareSkipped) {
     std::cout << "am_output_compare_skipped,1\n";
   }
-  std::cout << "am_output_max_abs_diff," << maxOutputAbsDiff << "\n";
-
-  // Reconstruct RF samples used for the run (same envelope & carrier)
-  float safeSampleRate = std::max(config.sampleRate, 1.0f);
-  float carrierHz = trace.radio.resolvedInputCarrierHz();
-  float carrierPeak = std::sqrt(2.0f) * std::max(config.carrierRmsVolts, 0.0f);
-  std::vector<float> rfSamples(program.size(), 0.0f);
-  float normScale = amProgramNormScale(program);
-  double programPeakAfterNorm = 0.0;
-  for (float sample : program) {
-    programPeakAfterNorm =
-        std::max(programPeakAfterNorm,
-                 std::fabs(static_cast<double>(sample * normScale)));
-  }
-  double effectiveModulationDepth = modulationIndex * programPeakAfterNorm;
-  for (size_t i = 0; i < program.size(); ++i) {
-    float t = static_cast<float>(i) / safeSampleRate;
-    float sampleVal = program[i] * normScale;
-    float envelopeFactor = std::max(0.0f, 1.0f + modulationIndex * sampleVal);
-    rfSamples[i] = carrierPeak * envelopeFactor * std::cos(kRadioTwoPi * carrierHz * t);
-  }
-
-  // RF-domain carrier and sideband checks.
-  double carrierRms = measureToneRms(rfSamples, config.sampleRate, carrierHz, 0);
-  double sideUpperRms =
-      measureToneRms(rfSamples, config.sampleRate, carrierHz + 1000.0f, 0);
-  double sideLowerRms =
-      measureToneRms(rfSamples, config.sampleRate, carrierHz - 1000.0f, 0);
-  double expectedSideRms = (effectiveModulationDepth * 0.5) * carrierRms;
-  double sideAvgRms = 0.5 * (sideUpperRms + sideLowerRms);
-  double sidebandRatio =
-      sideAvgRms / std::max(expectedSideRms, 1e-20);
-  bool sidebandRatioInBand =
-      sidebandRatio >= kAmSidebandRatioMin &&
-      sidebandRatio <= kAmSidebandRatioMax;
-
-  std::cout << "carrier_rms," << carrierRms << "\n";
-  std::cout << "sideband_upper_rms," << sideUpperRms << "\n";
-  std::cout << "sideband_lower_rms," << sideLowerRms << "\n";
-  std::cout << "sideband_expected_per_side_rms," << expectedSideRms << "\n";
-  std::cout << "sideband_avg_ratio_vs_expected," << sidebandRatio << "\n";
-  std::cout << "sideband_ratio_in_band," << (sidebandRatioInBand ? 1 : 0)
+  std::cout << "am_output_max_abs_diff," << summary.maxOutputAbsDiff << "\n";
+  std::cout << "carrier_rms," << summary.carrierRms << "\n";
+  std::cout << "sideband_upper_rms," << summary.sideUpperRms << "\n";
+  std::cout << "sideband_lower_rms," << summary.sideLowerRms << "\n";
+  std::cout << "sideband_expected_per_side_rms," << summary.expectedSideRms
             << "\n";
-  if (!sidebandRatioInBand) {
+  std::cout << "sideband_avg_ratio_vs_expected," << summary.sidebandRatio
+            << "\n";
+  std::cout << "sideband_ratio_in_band,"
+            << (summary.sidebandRatioInBand ? 1 : 0) << "\n";
+  std::cout << "detector_dc," << summary.detectorDc << "\n";
+  std::cout << "detector_tone_1khz," << summary.detectorTone << "\n";
+  std::cout << "detector_tone_to_dc_ratio,"
+            << summary.detectorToneToDcRatio << "\n";
+  std::cout << "mod_index_config," << summary.modulationIndexConfig << "\n";
+  std::cout << "mod_index_expected_effective,"
+            << summary.effectiveModulationDepth << "\n";
+  std::cout << "mod_index_measured_env,"
+            << summary.modulationIndexMeasuredEnv << "\n";
+  std::cout << "mod_index_in_band," << (summary.modulationIndexInBand ? 1 : 0)
+            << "\n";
+  std::cout << "detector_sinad_db," << summary.detectorSinadDb << "\n";
+  std::cout << "output_sinad_db," << summary.outputSinadDb << "\n";
+  std::cout << "speaker_reference_ratio," << summary.speakerReferenceRatio
+            << "\n";
+  std::cout << "max_digital_output," << summary.maxDigitalOutput << "\n";
+  std::cout << "if_center_hz," << summary.ifCenterHz << "\n";
+  std::cout << "nominal_output_power_watts,"
+            << summary.nominalOutputPowerWatts << "\n";
+  std::cout << "waveform_substeps," << summary.waveformSubsteps << "\n\n";
+
+  if (!compareSkipped && summary.maxOutputAbsDiff > 1e-4) {
+    fail("AM output mismatch between processAmAudio and envelope trace: " +
+         std::to_string(summary.maxOutputAbsDiff));
+  }
+  if (!summary.sidebandRatioInBand) {
     fail("AM sideband ratio out of range: measured " +
-         std::to_string(sidebandRatio) + ", expected [" +
+         std::to_string(summary.sidebandRatio) + ", expected [" +
          std::to_string(kAmSidebandRatioMin) + ", " +
          std::to_string(kAmSidebandRatioMax) + "]");
   }
-
-  // Detector-domain analysis
-  std::vector<double> detSpec = computeSpectrumPeakAmplitudes(trace.detectorNode, config.sampleRate);
-  double detDc = (detSpec.size() > 0) ? detSpec[0] : 0.0;
-  double detTone = peakAmplitudeAtHz(detSpec, config.sampleRate, 1000.0f);
-  std::cout << "detector_dc," << detDc << "\n";
-  std::cout << "detector_tone_1khz," << detTone << "\n";
-  std::cout << "detector_tone_to_dc_ratio," << (detTone / std::max(detDc, 1e-20)) << "\n";
-
-    // Envelope-derived modulation index (from detector audioEnv)
-    double envMax = -1e300, envMin = 1e300;
-    size_t start = program.size() / 4;
-    for (size_t i = start; i < trace.audioEnv.size(); ++i) {
-      envMax = std::max(envMax, static_cast<double>(trace.audioEnv[i]));
-      envMin = std::min(envMin, static_cast<double>(trace.audioEnv[i]));
-    }
-    double m_measured = 0.0;
-    if (envMax + envMin > 1e-12) m_measured = (envMax - envMin) / (envMax + envMin);
-    std::cout << "mod_index_config," << modulationIndex << "\n";
-    std::cout << "mod_index_expected_effective," << effectiveModulationDepth << "\n";
-    std::cout << "mod_index_measured_env," << m_measured << "\n";
-    bool modIndexInBand =
-        std::fabs(m_measured - effectiveModulationDepth) <=
-        kAmModIndexTolerance;
-    std::cout << "mod_index_in_band," << (modIndexInBand ? 1 : 0) << "\n";
-    if (!modIndexInBand) {
-      fail("AM modulation index out of range: measured " +
-           std::to_string(m_measured) + ", expected around " +
-           std::to_string(effectiveModulationDepth));
-    }
-
-    // Tone metrics and SINAD at detector and final output
-    ToneMetrics detToneMetrics = measureToneMetrics(trace.detectorNode, config.sampleRate, 1000.0f, start);
-    ToneMetrics outToneMetrics = measureToneMetrics(trace.output, config.sampleRate, 1000.0f, start);
-    std::cout << "detector_sinad_db," << detToneMetrics.sinadDb << "\n";
-    std::cout << "output_sinad_db," << outToneMetrics.sinadDb << "\n";
-
-    // Speaker reference & digital output anchors (from radio calibration)
-    double speakerRef = trace.radio.calibration.maxSpeakerReferenceRatio;
-    double maxDigital = trace.radio.calibration.maxDigitalOutput;
-    std::cout << "speaker_reference_ratio," << speakerRef << "\n";
-    std::cout << "max_digital_output," << maxDigital << "\n";
-    std::cout << "if_center_hz," << trace.radio.ifStrip.ifCenterHz << "\n";
-    std::cout << "nominal_output_power_watts," << trace.radio.power.nominalOutputPowerWatts << "\n";
-    std::cout << "\n";
+  if (!summary.modulationIndexInBand) {
+    fail("AM modulation index out of range: measured " +
+         std::to_string(summary.modulationIndexMeasuredEnv) +
+         ", expected around " +
+         std::to_string(summary.effectiveModulationDepth));
   }
+}
+
+void runAmConvergence(const HarnessConfig& config) {
+  std::cout << "[am_convergence]\n";
+  std::cout << "samples_per_cycle,waveform_substeps,elapsed_ms,"
+               "sideband_avg_ratio_vs_expected,mod_index_measured_env,"
+               "detector_sinad_db,output_sinad_db,sinad_nominal_db,"
+               "speaker_reference_ratio,max_digital_output\n";
+  constexpr std::array<float, 5> kSamplesPerCycle = {2.0f, 3.0f, 4.0f, 6.0f,
+                                                      8.0f};
+  for (float samplesPerCycle : kSamplesPerCycle) {
+    HarnessConfig stepConfig = config;
+    stepConfig.detectorWaveformSamplesPerCycle = samplesPerCycle;
+    auto startTime = std::chrono::steady_clock::now();
+    AmValidationSummary amSummary = measureAmValidationSummary(stepConfig);
+    ReferenceAnchorSummary referenceSummary =
+        measureReferenceAnchorSummary(stepConfig);
+    auto endTime = std::chrono::steady_clock::now();
+    double elapsedMs = std::chrono::duration<double, std::milli>(
+                           endTime - startTime)
+                           .count();
+    std::cout << samplesPerCycle << "," << amSummary.waveformSubsteps << ","
+              << elapsedMs << "," << amSummary.sidebandRatio << ","
+              << amSummary.modulationIndexMeasuredEnv << ","
+              << amSummary.detectorSinadDb << "," << amSummary.outputSinadDb
+              << "," << referenceSummary.sinadNominalDb << ","
+              << referenceSummary.speakerReferenceRatio << ","
+              << referenceSummary.maxDigitalOutput << "\n";
+  }
+  std::cout << "\n";
+}
 
 }  // namespace
 
@@ -1307,6 +1445,7 @@ int main(int argc, char** argv) {
     if (wantsSection(config, "noise")) runNoise(config);
     if (wantsSection(config, "spectrum")) runSpectrum(config);
     if (wantsSection(config, "am_validate")) runAmValidate(config);
+    if (wantsSection(config, "am_convergence")) runAmConvergence(config);
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "radio_measurements: " << ex.what() << "\n";

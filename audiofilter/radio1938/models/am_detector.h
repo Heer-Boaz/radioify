@@ -26,6 +26,9 @@ struct AMDetector {
   float ifWavePhase = 0.0f;
   float prevIfI = 0.0f;
   float prevIfQ = 0.0f;
+  float waveformSamplesPerCycle = 3.0f;
+  int waveformMaxSubsteps = 32;
+  int lastWaveformSubsteps = 0;
   bool warmStartPending = true;
   float afcError = 0.0f;
   float ifCrackleEnv = 0.0f;
