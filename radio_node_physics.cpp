@@ -523,18 +523,31 @@ EnvelopeMetrics measureStepEnvelope(const std::vector<float>& env,
 }
 
 std::vector<float> runDetectorAudioStepTrace(Radio1938& radio) {
+  RadioAMDetectorNode::reset(radio);
   RadioDetectorAudioNode::reset(radio);
   std::vector<float> env;
   env.reserve(3072u);
   RadioSampleContext ctx{};
   for (uint32_t i = 0; i < 512u; ++i) {
-    env.push_back(RadioDetectorAudioNode::run(radio, 0.0f, ctx));
+    ctx.signal.setComplexEnvelope(0.0f, 0.0f);
+    ctx.signal.detectorInputI = 0.0f;
+    ctx.signal.detectorInputQ = 0.0f;
+    float audioRect = RadioAMDetectorNode::run(radio, 0.0f, ctx);
+    env.push_back(RadioDetectorAudioNode::run(radio, audioRect, ctx));
   }
   for (uint32_t i = 0; i < 512u; ++i) {
-    env.push_back(RadioDetectorAudioNode::run(radio, 1.0f, ctx));
+    ctx.signal.setComplexEnvelope(1.0f, 0.0f);
+    ctx.signal.detectorInputI = 1.0f;
+    ctx.signal.detectorInputQ = 0.0f;
+    float audioRect = RadioAMDetectorNode::run(radio, 1.0f, ctx);
+    env.push_back(RadioDetectorAudioNode::run(radio, audioRect, ctx));
   }
   for (uint32_t i = 0; i < 2048u; ++i) {
-    env.push_back(RadioDetectorAudioNode::run(radio, 0.0f, ctx));
+    ctx.signal.setComplexEnvelope(0.0f, 0.0f);
+    ctx.signal.detectorInputI = 0.0f;
+    ctx.signal.detectorInputQ = 0.0f;
+    float audioRect = RadioAMDetectorNode::run(radio, 0.0f, ctx);
+    env.push_back(RadioDetectorAudioNode::run(radio, audioRect, ctx));
   }
   return env;
 }
@@ -1243,28 +1256,23 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
                      0.18 * std::max<double>(zero.demod.am.controlVoltageRef, 1e-6),
                  0.0);
     double dt = 1.0 / std::max<double>(zero.demod.am.fs, 1.0);
-    double storageCapG =
-        std::max<double>(zero.demod.am.detectorStorageCapFarads, 1e-12) / dt;
-    double detectorLeakG =
-        1.0 / std::max<double>(zero.demod.am.audioDischargeResistanceOhms, 1e-6);
     double avcLeakG =
         1.0 / std::max<double>(zero.demod.am.avcDischargeResistanceOhms, 1e-6);
     double avcCapG =
         std::max<double>(zero.demod.am.avcFilterCapFarads, 1e-12) / dt;
-    double expectedDetectorNodeAfterStep =
-        std::max(storageCapG * expectedAudioRect /
-                     std::max(storageCapG + detectorLeakG, 1e-12),
-                 0.0);
     double expectedAvcNodeAfterStep =
         std::max(avcCapG * expectedAvcDrive / std::max(avcCapG + avcLeakG, 1e-12),
                  0.0);
     addRange(rows, "AMDetector", "zero_input_matches_diode_equation", zeroOut,
              expectedAudioRect - 1e-9, expectedAudioRect + 1e-9,
              "audio rectifier output at zero carrier");
-    addRange(rows, "AMDetector", "zero_input_follows_rc_relaxation",
-             std::fabs(zero.demod.am.detectorNode - expectedDetectorNodeAfterStep) +
-                 std::fabs(zero.demod.am.avcEnv - expectedAvcNodeAfterStep),
-             0.0, 1e-7, "warm-started detector/AVC nodes must equal diode solution");
+    addPredicate(rows, "AMDetector", "zero_input_node_does_not_self_charge",
+                 zero.demod.am.detectorNode <= expectedAudioRect + 1e-6,
+                 zero.demod.am.detectorNode - expectedAudioRect,
+                 "warm-started detector node may relax but must not grow at zero carrier");
+    addRange(rows, "AMDetector", "zero_input_avc_follows_rc_relaxation",
+             std::fabs(zero.demod.am.avcEnv - expectedAvcNodeAfterStep),
+             0.0, 1e-7, "warm-started AVC node must follow the RC solution");
   }
 
   {

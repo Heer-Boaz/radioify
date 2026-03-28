@@ -276,7 +276,7 @@ float RadioReceiverInputNetworkNode::run(Radio1938& radio,
       computeReceiverDetectorLoadConductance(receiver);
   if (!receiver.enabled) return y;
 
-  float detectorNode = radio.detectorAudio.audioEnv;
+  float detectorNode = radio.demod.am.detectorNode;
   float dt = 1.0f / std::max(radio.sampleRate, 1.0f);
   if (receiver.warmStartPending) {
     primeReceiverInputWarmStart(receiver, detectorNode);

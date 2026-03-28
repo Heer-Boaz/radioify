@@ -21,34 +21,92 @@ struct DetectorSolveResult {
   float avcNode = 0.0f;
 };
 
-DetectorSolveResult solveDetectorAndAvcNodes(const AMDetector& detector,
-                                             float dt,
-                                             float audioRect,
-                                             float avcDrive) {
-  float storageCapG =
-      std::max(detector.detectorStorageCapFarads, 1e-12f) / dt;
-  float detectorLeakG =
-      1.0f / std::max(detector.audioDischargeResistanceOhms, 1e-6f);
-  float sourceG = 0.0f;
-  if (audioRect > detector.detectorNode) {
-    sourceG = 1.0f / std::max(detector.audioChargeResistanceOhms, 1e-6f);
+struct DetectorChargeBranch {
+  float currentAmps = 0.0f;
+  float conductanceSiemens = 0.0f;
+};
+
+DetectorChargeBranch evaluateDetectorChargeBranch(float sourceVolts,
+                                                  float nodeVolts,
+                                                  float diodeDropVolts,
+                                                  float junctionSlopeVolts,
+                                                  float chargeResistanceOhms) {
+  float safeSlope = requirePositiveFinite(junctionSlopeVolts);
+  float safeResistance = requirePositiveFinite(chargeResistanceOhms);
+  float availableVolts = sourceVolts - nodeVolts - diodeDropVolts;
+  float x = availableVolts / safeSlope;
+  float conductionT = 0.0f;
+  if (x >= 20.0f) {
+    conductionT = 1.0f;
+  } else if (x > -20.0f) {
+    conductionT = 1.0f / (1.0f + std::exp(-x));
   }
 
+  DetectorChargeBranch branch{};
+  if (availableVolts > 0.0f) {
+    branch.currentAmps = (availableVolts * conductionT) / safeResistance;
+    branch.conductanceSiemens =
+        (conductionT +
+         availableVolts * conductionT * (1.0f - conductionT) / safeSlope) /
+        safeResistance;
+  }
+  return branch;
+}
+
+float solveDetectorAudioNode(const AMDetector& detector,
+                             float dt,
+                             float sourceVolts,
+                             float detectorLeakG) {
+  float storageCapG =
+      std::max(detector.detectorStorageCapFarads, 1e-12f) / dt;
+  float nodeVolts = std::max(detector.detectorNode, 0.0f);
+
+  for (int iter = 0; iter < 8; ++iter) {
+    DetectorChargeBranch branch = evaluateDetectorChargeBranch(
+        sourceVolts, nodeVolts, detector.audioDiodeDrop,
+        detector.audioJunctionSlopeVolts, detector.audioChargeResistanceOhms);
+    float f = storageCapG * (nodeVolts - detector.detectorNode) +
+              detectorLeakG * nodeVolts - branch.currentAmps;
+    float df = storageCapG + detectorLeakG + branch.conductanceSiemens;
+    assert(std::isfinite(df) && df > 1e-12f);
+    float delta = f / df;
+    nodeVolts = std::max(nodeVolts - delta, 0.0f);
+    if (std::fabs(delta) < 1e-7f) break;
+  }
+
+  return nodeVolts;
+}
+
+DetectorSolveResult solveDetectorAndAvcNodes(const AMDetector& detector,
+                                             float dt,
+                                             float ifMagnitude,
+                                             float avcDrive,
+                                             float detectorLeakG) {
   float avcSourceG = 0.0f;
   if (avcDrive > detector.avcEnv) {
     avcSourceG = 1.0f / std::max(detector.avcChargeResistanceOhms, 1e-6f);
   }
   float avcLeakG = 1.0f / std::max(detector.avcDischargeResistanceOhms, 1e-6f);
   float avcCapG = std::max(detector.avcFilterCapFarads, 1e-12f) / dt;
-  float a00 = storageCapG + detectorLeakG + sourceG;
   float a11 = avcSourceG + avcLeakG + avcCapG;
-  float b0 = storageCapG * detector.detectorNode + sourceG * audioRect;
   float b1 = avcCapG * detector.avcEnv + avcSourceG * avcDrive;
 
   DetectorSolveResult result{};
-  result.detectorNode = std::max(b0 / std::max(a00, 1e-12f), 0.0f);
+  result.detectorNode =
+      solveDetectorAudioNode(detector, dt, ifMagnitude, detectorLeakG);
   result.avcNode = std::max(b1 / std::max(a11, 1e-12f), 0.0f);
   return result;
+}
+
+}  // namespace
+
+namespace {
+
+float effectiveDetectorLoadConductance(const Radio1938& radio) {
+  float dischargeG =
+      1.0f / std::max(radio.demod.am.audioDischargeResistanceOhms, 1e-6f);
+  if (!radio.receiverCircuit.enabled) return dischargeG;
+  return dischargeG + radio.receiverCircuit.detectorLoadConductance;
 }
 
 }  // namespace
@@ -191,12 +249,13 @@ float AMDetector::run(float signalI,
   float delayedAvcThreshold = 0.18f * std::max(controlVoltageRef, 1e-6f);
   float avcDrive = std::max(avcRectified - delayedAvcThreshold, 0.0f);
   float dt = 1.0f / std::max(fs, 1.0f);
+  float detectorLeakG = effectiveDetectorLoadConductance(radio);
   if (warmStartPending) {
     primeDetectorWarmStart(*this, audioRect, avcDrive);
   }
 
   DetectorSolveResult solve =
-      solveDetectorAndAvcNodes(*this, dt, audioRect, avcDrive);
+      solveDetectorAndAvcNodes(*this, dt, ifMagnitude, avcDrive, detectorLeakG);
   detectorNode = solve.detectorNode;
   avcEnv = solve.avcNode;
   avcRect = avcDrive;

@@ -157,6 +157,17 @@ double avcTauSeconds(const Radio1938& radio) {
          std::max<double>(radio.demod.am.avcFilterCapFarads, 1e-12);
 }
 
+float amProgramNormScale(const std::vector<float>& program) {
+  float maxAbs = 0.0f;
+  for (float sample : program) {
+    maxAbs = std::max(maxAbs, std::fabs(sample));
+  }
+  if (maxAbs > 1.0f) {
+    return 1.0f / maxAbs;
+  }
+  return 1.0f;
+}
+
 float parseFloatArg(char** argv, int& index, int argc, const char* name) {
   if (index + 1 >= argc) {
     fail(std::string("missing value for ") + name);
@@ -275,20 +286,12 @@ EnvelopeTraceResult runAmProgramWithEnvelopeTrace(const HarnessConfig& config,
   result.avcEnv.resize(program.size(), 0.0f);
 
   float safeSampleRate = std::max(config.sampleRate, 1.0f);
-  float carrierHz =
-      std::clamp(result.radio.ifStrip.sourceCarrierHz, 1000.0f, safeSampleRate * 0.45f);
+  float carrierHz = result.radio.resolvedInputCarrierHz();
   float carrierStep = kRadioTwoPi * (carrierHz / safeSampleRate);
   float carrierPeak =
       std::sqrt(2.0f) * std::max(config.carrierRmsVolts, 0.0f);
   float phase = result.radio.iqInput.iqPhase;
-  float maxAbs = 0.0f;
-  for (float sample : program) {
-    maxAbs = std::max(maxAbs, std::fabs(sample));
-  }
-  float normScale = 1.0f;
-  if (maxAbs > 0.0f && maxAbs < 0.999f) {
-    normScale = 1.0f / maxAbs;
-  }
+  float normScale = amProgramNormScale(program);
   std::array<float, 1> sample{};
   for (size_t i = 0; i < program.size(); ++i) {
     float envelopeFactor =
@@ -1178,18 +1181,17 @@ void runAmValidate(const HarnessConfig& config) {
 
   // Reconstruct RF samples used for the run (same envelope & carrier)
   float safeSampleRate = std::max(config.sampleRate, 1.0f);
-  float carrierHz = std::clamp(trace.radio.ifStrip.sourceCarrierHz, 1000.0f,
-                               safeSampleRate * 0.45f);
+  float carrierHz = trace.radio.resolvedInputCarrierHz();
   float carrierPeak = std::sqrt(2.0f) * std::max(config.carrierRmsVolts, 0.0f);
   std::vector<float> rfSamples(program.size(), 0.0f);
-  float maxAbs = 0.0f;
+  float normScale = amProgramNormScale(program);
+  double programPeakAfterNorm = 0.0;
   for (float sample : program) {
-    maxAbs = std::max(maxAbs, std::fabs(sample));
+    programPeakAfterNorm =
+        std::max(programPeakAfterNorm,
+                 std::fabs(static_cast<double>(sample * normScale)));
   }
-  float normScale = 1.0f;
-  if (maxAbs > 0.0f && maxAbs < 0.999f) {
-    normScale = 1.0f / maxAbs;
-  }
+  double effectiveModulationDepth = modulationIndex * programPeakAfterNorm;
   for (size_t i = 0; i < program.size(); ++i) {
     float t = static_cast<float>(i) / safeSampleRate;
     float sampleVal = program[i] * normScale;
@@ -1203,7 +1205,7 @@ void runAmValidate(const HarnessConfig& config) {
       measureToneRms(rfSamples, config.sampleRate, carrierHz + 1000.0f, 0);
   double sideLowerRms =
       measureToneRms(rfSamples, config.sampleRate, carrierHz - 1000.0f, 0);
-  double expectedSideRms = (modulationIndex * 0.5) * carrierRms;
+  double expectedSideRms = (effectiveModulationDepth * 0.5) * carrierRms;
   double sideAvgRms = 0.5 * (sideUpperRms + sideLowerRms);
   double sidebandRatio =
       sideAvgRms / std::max(expectedSideRms, 1e-20);
@@ -1243,14 +1245,16 @@ void runAmValidate(const HarnessConfig& config) {
     double m_measured = 0.0;
     if (envMax + envMin > 1e-12) m_measured = (envMax - envMin) / (envMax + envMin);
     std::cout << "mod_index_config," << modulationIndex << "\n";
+    std::cout << "mod_index_expected_effective," << effectiveModulationDepth << "\n";
     std::cout << "mod_index_measured_env," << m_measured << "\n";
     bool modIndexInBand =
-        std::fabs(m_measured - modulationIndex) <= kAmModIndexTolerance;
+        std::fabs(m_measured - effectiveModulationDepth) <=
+        kAmModIndexTolerance;
     std::cout << "mod_index_in_band," << (modIndexInBand ? 1 : 0) << "\n";
     if (!modIndexInBand) {
       fail("AM modulation index out of range: measured " +
            std::to_string(m_measured) + ", expected around " +
-           std::to_string(modulationIndex));
+           std::to_string(effectiveModulationDepth));
     }
 
     // Tone metrics and SINAD at detector and final output

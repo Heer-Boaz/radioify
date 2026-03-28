@@ -50,10 +50,6 @@ void Radio1938::processAmAudio(const float* audioSamples,
   }
 
   for (uint32_t frame = 0; frame < frames; ++frame) {
-    // Normalize audioSamples peak to 1.0 if it's lower so modulationIndex maps
-    // directly to effective modulation depth. This prevents callers accidentally
-    // passing a low-amplitude program (e.g. 0.35 peak) from reducing the
-    // intended modulation.
     const float sampleVal = audioSamples[frame] * normScale;
     const float envelopeFactor =
         std::max(0.0f, 1.0f + modulationIndex * sampleVal);
