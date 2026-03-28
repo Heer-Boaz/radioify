@@ -7,6 +7,19 @@
 
 namespace {
 
+float clampSpeakerFilterHz(float fs, float hz) {
+  return std::clamp(hz, 20.0f, 0.45f * std::max(fs, 1.0f));
+}
+
+float asymmetricSoftLimit(float x, float positiveLimit, float negativeLimit) {
+  if (x >= 0.0f) {
+    float safeLimit = std::max(positiveLimit, 1e-6f);
+    return softClip(x / safeLimit, 0.98f) * safeLimit;
+  }
+  float safeLimit = std::max(negativeLimit, 1e-6f);
+  return softClip(x / safeLimit, 0.98f) * safeLimit;
+}
+
 void initSpeakerModel(SpeakerSim& speaker, float fs) {
   float suspensionHzDerived =
       speaker.suspensionHz * (1.0f + 0.45f * speaker.coneMassTolerance -
@@ -14,20 +27,56 @@ void initSpeakerModel(SpeakerSim& speaker, float fs) {
   float coneBodyHzDerived =
       speaker.coneBodyHz * (1.0f + 0.22f * speaker.coneMassTolerance +
                             0.16f * speaker.voiceCoilTolerance);
+  float breakupShift = speaker.breakupTolerance;
+  float upperBreakupHzDerived =
+      speaker.upperBreakupHz *
+      (1.0f + 0.30f * speaker.coneMassTolerance + 0.48f * breakupShift);
+  float coneDipHzDerived =
+      speaker.coneDipHz *
+      (1.0f + 0.18f * speaker.coneMassTolerance + 0.55f * breakupShift);
+  float upperBreakupGainDbDerived =
+      speaker.upperBreakupGainDb *
+      std::clamp(1.0f + 0.35f * breakupShift, 0.25f, 1.75f);
+  float coneDipGainDbDerived =
+      speaker.coneDipGainDb *
+      std::clamp(1.0f + 0.20f * breakupShift, 0.25f, 1.75f);
   speaker.suspensionRes.setPeaking(fs, suspensionHzDerived, speaker.suspensionQ,
                                    speaker.suspensionGainDb);
   speaker.coneBody.setPeaking(fs, coneBodyHzDerived, speaker.coneBodyQ,
                               speaker.coneBodyGainDb);
-  speaker.upperBreakup = Biquad{};
-  speaker.coneDip = Biquad{};
+  if (speaker.upperBreakupHz > 0.0f && speaker.upperBreakupQ > 0.0f &&
+      std::fabs(speaker.upperBreakupGainDb) > 1e-3f) {
+    speaker.upperBreakup.setPeaking(
+        fs, clampSpeakerFilterHz(fs, upperBreakupHzDerived),
+        speaker.upperBreakupQ, upperBreakupGainDbDerived);
+  } else {
+    speaker.upperBreakup = Biquad{};
+  }
+  if (speaker.coneDipHz > 0.0f && speaker.coneDipQ > 0.0f &&
+      std::fabs(speaker.coneDipGainDb) > 1e-3f) {
+    speaker.coneDip.setPeaking(fs, clampSpeakerFilterHz(fs, coneDipHzDerived),
+                               speaker.coneDipQ, coneDipGainDbDerived);
+  } else {
+    speaker.coneDip = Biquad{};
+  }
   if (speaker.topLpHz > 0.0f) {
     float topLpHzDerived =
         speaker.topLpHz / (1.0f + 0.40f * speaker.voiceCoilTolerance);
-    speaker.topLp.setLowpass(fs, topLpHzDerived, speaker.filterQ);
+    speaker.topLp.setLowpass(fs, clampSpeakerFilterHz(fs, topLpHzDerived),
+                             speaker.filterQ);
   } else {
     speaker.topLp = Biquad{};
   }
-  speaker.hfLossLp = Biquad{};
+  if (speaker.hfLossLpHz > 0.0f && speaker.hfLossDepth > 0.0f) {
+    float hfLossLpHzDerived =
+        speaker.hfLossLpHz /
+        (1.0f + 0.35f * speaker.voiceCoilTolerance +
+         0.45f * std::max(speaker.breakupTolerance, 0.0f));
+    speaker.hfLossLp.setLowpass(fs, clampSpeakerFilterHz(fs, hfLossLpHzDerived),
+                                kRadioBiquadQ);
+  } else {
+    speaker.hfLossLp = Biquad{};
+  }
   speaker.excursionAtk = std::exp(-1.0f / (fs * 0.010f));
   speaker.excursionRel = std::exp(-1.0f / (fs * 0.120f));
 }
@@ -46,6 +95,13 @@ float runSpeakerModel(SpeakerSim& speaker, float x, bool& clipped) {
   float y = x * std::max(speaker.drive, 0.0f);
   y = speaker.suspensionRes.process(y);
   y = speaker.coneBody.process(y);
+  y = speaker.upperBreakup.process(y);
+  y = speaker.coneDip.process(y);
+  if (speaker.hfLossLpHz > 0.0f && speaker.hfLossDepth > 0.0f) {
+    float hfLossDepth = clampf(speaker.hfLossDepth, 0.0f, 1.0f);
+    float rolledOff = speaker.hfLossLp.process(y);
+    y += hfLossDepth * (rolledOff - y);
+  }
   if (speaker.topLpHz > 0.0f) {
     y = speaker.topLp.process(y);
   }
@@ -64,12 +120,22 @@ float runSpeakerModel(SpeakerSim& speaker, float x, bool& clipped) {
   float excursionT =
       clampf(speaker.excursionEnv / std::max(speaker.excursionRef, 1e-6f),
              0.0f, 1.0f);
-  float complianceGain = 1.0f - speaker.complianceLossDepth * excursionT;
+  float signedExcursionT =
+      clampf(y / std::max(speaker.excursionRef, 1e-6f), -1.0f, 1.0f);
+  float asymmetry =
+      1.0f + clampf(speaker.asymBias, -0.75f, 0.75f) * signedExcursionT;
+  float complianceGain =
+      1.0f - speaker.complianceLossDepth * excursionT *
+                 clampf(asymmetry, 0.35f, 1.65f);
   y *= std::max(0.70f, complianceGain);
-  clipped = speaker.limit > 0.0f && std::fabs(y) > speaker.limit;
-  if (speaker.limit > 0.0f && speaker.limit < 1.0f) {
-    return softClip(y, speaker.limit);
+  if (speaker.limit > 0.0f) {
+    float asym = clampf(speaker.asymBias, -0.75f, 0.75f);
+    float positiveLimit = std::max(speaker.limit * (1.0f - 0.35f * asym), 1e-6f);
+    float negativeLimit = std::max(speaker.limit * (1.0f + 0.35f * asym), 1e-6f);
+    clipped = (y > positiveLimit) || (y < -negativeLimit);
+    return asymmetricSoftLimit(y, positiveLimit, negativeLimit);
   }
+  clipped = false;
   return y;
 }
 

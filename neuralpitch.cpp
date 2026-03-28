@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "ui_helpers.h"
+
 #ifndef RADIOIFY_HAS_ONNXRUNTIME
 #define RADIOIFY_HAS_ONNXRUNTIME 0
 #endif
@@ -392,9 +394,8 @@ std::wstring utf8ToWide(const std::string& text) {
 #endif
 
 std::filesystem::path resolveModelPath() {
-  const char* envPath = std::getenv("RADIOIFY_NEURAL_PITCH_MODEL");
-  if (envPath && envPath[0] != '\0') {
-    std::filesystem::path p(envPath);
+  if (const auto envPath = getEnvString("RADIOIFY_NEURAL_PITCH_MODEL")) {
+    std::filesystem::path p(*envPath);
     if (std::filesystem::exists(p)) return p;
   }
 

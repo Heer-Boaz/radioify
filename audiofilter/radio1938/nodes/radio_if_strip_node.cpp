@@ -123,8 +123,6 @@ void ensureIfStripConfigured(Radio1938& radio) {
   float outputCouplingCoeff =
       clampf(ifStrip.outputCouplingCoeff * couplingDrift, 0.04f, 0.30f);
   float nominalCanBandwidthHz = std::max(physicalChannelBw * 1.10f, 1200.0f);
-  float primaryCapacitanceFarads =
-      resonantCapacitanceFarads(ifStrip.ifCenterHz, primaryInductance);
   float secondaryCapacitanceFarads =
       resonantCapacitanceFarads(ifStrip.ifCenterHz, secondaryInductance);
   float primarySeriesResistance =

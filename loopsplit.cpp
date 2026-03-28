@@ -525,7 +525,7 @@ MatchCandidate detectLoopByFeatures(const std::vector<float>& feature,
 }
 
 MatchCandidate refineSampleMatch(const std::vector<float>& mono,
-                                size_t sampleRate, uint64_t approxStartFrame,
+                                uint32_t sampleRate, uint64_t approxStartFrame,
                                 uint64_t approxLenFrames,
                                 const LoopSplitConfig& config,
                                 size_t minLoopFrames,
@@ -536,9 +536,9 @@ MatchCandidate refineSampleMatch(const std::vector<float>& mono,
 
   const size_t shiftLimit = std::max<size_t>(1u, config.analysisHop);
   const int64_t shiftStep = std::max<int64_t>(16, static_cast<int64_t>(config.analysisHop / 8));
-  const size_t maxWindow = std::max<size_t>(1u, secToFrames(config.refineWindowSeconds, sampleRate));
-  const size_t maxStart = std::min<size_t>(mono.size() - 1, approxStartFrame + shiftLimit);
-  const size_t minStart = approxStartFrame > shiftLimit ? approxStartFrame - shiftLimit : 0;
+  const size_t maxWindow = std::max<size_t>(
+      1u, static_cast<size_t>(
+              secToFrames(config.refineWindowSeconds, sampleRate)));
 
   int64_t bestStart = static_cast<int64_t>(approxStartFrame);
   int64_t bestLen = static_cast<int64_t>(approxLenFrames);

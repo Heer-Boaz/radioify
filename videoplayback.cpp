@@ -1683,7 +1683,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                 // In VideoWindow::WindowProc we ensure y > height * 0.9
                 // We'll treat this as a ratio seek directly if possible, or fake a progress bar event.
                 // Since handleInputEvent is complex, let's just handle it here.
-                double ratio = (double)ev.mouse.pos.X / 1280.0; // This is a bit hacky as we don't know window width here
                 // Wait, if I want it to be robust, I should pass the ratio in the event.
                 // But InputEvent doesn't have a ratio field.
             }

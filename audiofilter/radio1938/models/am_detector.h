@@ -16,8 +16,6 @@ struct AMDetector {
   std::mt19937 rng{0x1942u};
   std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
 
-  Biquad afcLowSense;
-  Biquad afcHighSense;
   Biquad afcErrorLp;
 
   float audioRect = 0.0f;
@@ -44,8 +42,6 @@ struct AMDetector {
   float avcDischargeResistanceOhms = 0.0f;
   float avcFilterCapFarads = 0.0f;
 
-  float avcChargeCoeff = 0.0f;
-  float avcReleaseCoeff = 0.0f;
   float controlVoltageRef = 0.0f;
 
   float senseLowHz = 0.0f;

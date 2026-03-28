@@ -34,8 +34,7 @@ void PacketQueue::flush(uint64_t serial) {
   }
   packets_.clear();
   bytes_ = 0;
-  QueuedPacket item;
-  av_init_packet(&item.pkt);
+  QueuedPacket item{};
   item.serial = serial;
   item.flush = true;
   item.eof = false;
@@ -70,8 +69,7 @@ bool PacketQueue::pushPacket(const AVPacket* pkt, uint64_t serial,
   if (cancel && cancel->load(std::memory_order_relaxed)) {
     return true;
   }
-  QueuedPacket item;
-  av_init_packet(&item.pkt);
+  QueuedPacket item{};
   if (av_packet_ref(&item.pkt, pkt) < 0) {
     return false;
   }
@@ -90,8 +88,7 @@ bool PacketQueue::pushPacket(const AVPacket* pkt, uint64_t serial,
 bool PacketQueue::pushFlush(uint64_t serial) {
   std::unique_lock<std::mutex> lock(mutex_);
   if (aborted_) return false;
-  QueuedPacket item;
-  av_init_packet(&item.pkt);
+  QueuedPacket item{};
   item.serial = serial;
   item.flush = true;
   item.eof = false;
@@ -103,8 +100,7 @@ bool PacketQueue::pushFlush(uint64_t serial) {
 bool PacketQueue::pushEof(uint64_t serial) {
   std::unique_lock<std::mutex> lock(mutex_);
   if (aborted_) return false;
-  QueuedPacket item;
-  av_init_packet(&item.pkt);
+  QueuedPacket item{};
   item.serial = serial;
   item.flush = false;
   item.eof = true;

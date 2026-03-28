@@ -346,6 +346,7 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::projectStep(
     float x[4] = {kNaN, kNaN, kNaN, kNaN};
     bool solved = solveLinear4x4(system, b, x);
     assert(solved);
+    (void)solved;
     projectedPrimaryCurrent = x[0];
     projectedSecondaryCurrent = x[1];
     projectedPrimaryVoltage = x[2];

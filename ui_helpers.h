@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdio>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,6 +24,8 @@ struct AsciiArtLayout {
 };
 
 std::string toUtf8String(const std::filesystem::path& p);
+std::optional<std::string> getEnvString(const char* name);
+std::FILE* openFileUtf8(const std::filesystem::path& path, const char* mode);
 
 float clamp01(float v);
 Color lerpColor(const Color& a, const Color& b, float t);

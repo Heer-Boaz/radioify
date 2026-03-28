@@ -68,9 +68,6 @@ KorenTriodeModel makeKorenTriodeModel(double mu,
 double korenTriodePlateCurrent(double vgk,
                                double vpk,
                                const KorenTriodeModel& m);
-double korenTriodePlateConductance(double vgk,
-                                   double vpk,
-                                   const KorenTriodeModel& m);
 KorenTriodePlateEval evaluateKorenTriodePlate(double vgk,
                                               double vpk,
                                               const KorenTriodeModel& m);
@@ -429,12 +426,6 @@ double korenTriodePlateCurrent(double vgk,
                                double vpk,
                                const KorenTriodeModel& m) {
   return evaluateKorenTriodePlate(vgk, vpk, m).currentAmps;
-}
-
-double korenTriodePlateConductance(double vgk,
-                                   double vpk,
-                                   const KorenTriodeModel& m) {
-  return evaluateKorenTriodePlate(vgk, vpk, m).conductanceSiemens;
 }
 
 KorenTriodePlateEval evaluateKorenTriodePlate(double vgk,

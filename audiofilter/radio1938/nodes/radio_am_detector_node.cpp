@@ -7,17 +7,11 @@
 
 namespace {
 
-void prechargeUnityLowpass(Biquad& biquad, float dcLevel) {
-  biquad.z1 = dcLevel * (1.0f - biquad.b0);
-  biquad.z2 = dcLevel * (biquad.b2 - biquad.a2);
-}
-
 void primeDetectorWarmStart(AMDetector& detector,
                             float audioRect,
-                            float delayedAvcThreshold) {
+                            float avcDrive) {
   detector.detectorNode = audioRect;
-  detector.avcEnv =
-      std::max(detector.detectorNode - delayedAvcThreshold, 0.0f);
+  detector.avcEnv = avcDrive;
   detector.avcRect = detector.avcEnv;
   detector.warmStartPending = false;
 }
@@ -30,7 +24,7 @@ struct DetectorSolveResult {
 DetectorSolveResult solveDetectorAndAvcNodes(const AMDetector& detector,
                                              float dt,
                                              float audioRect,
-                                             float delayedAvcThreshold) {
+                                             float avcDrive) {
   float storageCapG =
       std::max(detector.detectorStorageCapFarads, 1e-12f) / dt;
   float detectorLeakG =
@@ -40,25 +34,20 @@ DetectorSolveResult solveDetectorAndAvcNodes(const AMDetector& detector,
     sourceG = 1.0f / std::max(detector.audioChargeResistanceOhms, 1e-6f);
   }
 
-  float avcFeedG = 0.0f;
-  if (std::max(audioRect, detector.detectorNode) > delayedAvcThreshold) {
-    avcFeedG = 1.0f / std::max(detector.avcChargeResistanceOhms, 1e-6f);
+  float avcSourceG = 0.0f;
+  if (avcDrive > detector.avcEnv) {
+    avcSourceG = 1.0f / std::max(detector.avcChargeResistanceOhms, 1e-6f);
   }
   float avcLeakG = 1.0f / std::max(detector.avcDischargeResistanceOhms, 1e-6f);
   float avcCapG = std::max(detector.avcFilterCapFarads, 1e-12f) / dt;
-  float a00 = storageCapG + detectorLeakG + sourceG + avcFeedG;
-  float a01 = -avcFeedG;
-  float a10 = -avcFeedG;
-  float a11 = avcFeedG + avcLeakG + avcCapG;
-  float b0 = storageCapG * detector.detectorNode + sourceG * audioRect -
-             avcFeedG * delayedAvcThreshold;
-  float b1 = avcCapG * detector.avcEnv + avcFeedG * delayedAvcThreshold;
-  float det = a00 * a11 - a01 * a10;
-  assert(std::fabs(det) >= 1e-12f);
+  float a00 = storageCapG + detectorLeakG + sourceG;
+  float a11 = avcSourceG + avcLeakG + avcCapG;
+  float b0 = storageCapG * detector.detectorNode + sourceG * audioRect;
+  float b1 = avcCapG * detector.avcEnv + avcSourceG * avcDrive;
 
   DetectorSolveResult result{};
-  result.detectorNode = std::max((b0 * a11 - a01 * b1) / det, 0.0f);
-  result.avcNode = std::max((a00 * b1 - b0 * a10) / det, 0.0f);
+  result.detectorNode = std::max(b0 / std::max(a00, 1e-12f), 0.0f);
+  result.avcNode = std::max(b1 / std::max(a11, 1e-12f), 0.0f);
   return result;
 }
 
@@ -68,11 +57,6 @@ void AMDetector::init(float newFs, float newBw, float newTuneHz) {
   fs = newFs;
   bwHz = newBw;
   tuneOffsetHz = newTuneHz;
-  float avcCap = avcFilterCapFarads;
-  float avcChargeSeconds = avcChargeResistanceOhms * avcCap;
-  float avcReleaseSeconds = avcDischargeResistanceOhms * avcCap;
-  avcChargeCoeff = std::exp(-1.0f / (fs * avcChargeSeconds));
-  avcReleaseCoeff = std::exp(-1.0f / (fs * avcReleaseSeconds));
   setBandwidth(newBw, newTuneHz);
   reset();
 }
@@ -95,8 +79,11 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
       std::clamp(ifCenter - afcOffset, lowSenseBound, highSenseBound - 180.0f);
   float highSenseHz =
       std::clamp(ifCenter + afcOffset, lowSenseHz + 120.0f, highSenseBound);
-  float afcLpHz = std::clamp(0.30f * std::max(bwHz, 1.0f), 80.0f,
-                             std::min(1800.0f, 0.12f * fs));
+  float afcLpHz = afcSenseLpHz;
+  if (!(afcLpHz > 0.0f)) {
+    afcLpHz = 0.30f * std::max(bwHz, 1.0f);
+  }
+  afcLpHz = std::clamp(afcLpHz, 1.0f, std::min(1800.0f, 0.12f * fs));
   afcLowOffsetHz = lowSenseHz - ifCenter;
   afcHighOffsetHz = highSenseHz - ifCenter;
   afcLowStep = kRadioTwoPi * (afcLowOffsetHz / std::max(fs, 1.0f));
@@ -128,8 +115,6 @@ void AMDetector::reset() {
   ifCrackleMaxEnv = 0.0f;
   afcLowPhase = 0.0f;
   afcHighPhase = 0.0f;
-  afcLowSense.reset();
-  afcHighSense.reset();
   afcLowProbe.reset();
   afcHighProbe.reset();
   afcErrorLp.reset();
@@ -201,17 +186,20 @@ float AMDetector::run(float signalI,
   float ifMagnitude = std::sqrt(ifI * ifI + ifQ * ifQ);
   audioRect = diodeJunctionRectify(ifMagnitude, audioDiodeDrop,
                                    audioJunctionSlopeVolts);
+  float avcRectified = diodeJunctionRectify(ifMagnitude, avcDiodeDrop,
+                                            avcJunctionSlopeVolts);
   float delayedAvcThreshold = 0.18f * std::max(controlVoltageRef, 1e-6f);
+  float avcDrive = std::max(avcRectified - delayedAvcThreshold, 0.0f);
   float dt = 1.0f / std::max(fs, 1.0f);
   if (warmStartPending) {
-    primeDetectorWarmStart(*this, audioRect, delayedAvcThreshold);
+    primeDetectorWarmStart(*this, audioRect, avcDrive);
   }
 
   DetectorSolveResult solve =
-      solveDetectorAndAvcNodes(*this, dt, audioRect, delayedAvcThreshold);
+      solveDetectorAndAvcNodes(*this, dt, audioRect, avcDrive);
   detectorNode = solve.detectorNode;
   avcEnv = solve.avcNode;
-  avcRect = avcEnv;
+  avcRect = avcDrive;
   assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
   if (radio.calibration.enabled) {
     radio.calibration.detectorNodeVolts.accumulate(detectorNode);

@@ -299,8 +299,8 @@ void updateCalibrationSnapshot(Radio1938& radio) {
     radio.calibration.outputGridBPositiveFraction =
         radio.calibration.outputGridBPositiveSamples * invValidationCount;
     radio.calibration.interstageSecondaryRmsVolts =
-        std::sqrt(radio.calibration.interstageSecondarySumSq *
-                  invValidationCount);
+        static_cast<float>(std::sqrt(radio.calibration.interstageSecondarySumSq *
+                                     invValidationCount));
   }
 
   const auto& receiverPass =

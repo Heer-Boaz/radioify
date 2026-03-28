@@ -96,22 +96,22 @@ const std::array<float, kMelodyAnalyzerStates * kMelodyAnalyzerStates>&
 viterbiTransitionPenalty() {
   static const std::array<float, kMelodyAnalyzerStates * kMelodyAnalyzerStates>
       penalties = []() {
-        std::array<float, kMelodyAnalyzerStates * kMelodyAnalyzerStates> penalties{};
+        std::array<float, kMelodyAnalyzerStates * kMelodyAnalyzerStates> table{};
         for (int from = 0; from < kMelodyAnalyzerStates; ++from) {
           for (int to = 0; to < kMelodyAnalyzerStates; ++to) {
             if (from == to) {
-              penalties[from * kMelodyAnalyzerStates + to] = 0.0f;
+              table[from * kMelodyAnalyzerStates + to] = 0.0f;
               continue;
             }
 
             bool fromUnvoiced = (from == kMelodyUnvoicedState);
             bool toUnvoiced = (to == kMelodyUnvoicedState);
             if (fromUnvoiced && toUnvoiced) {
-              penalties[from * kMelodyAnalyzerStates + to] = 0.4f;
+              table[from * kMelodyAnalyzerStates + to] = 0.4f;
               continue;
             }
             if (fromUnvoiced || toUnvoiced) {
-              penalties[from * kMelodyAnalyzerStates + to] =
+              table[from * kMelodyAnalyzerStates + to] =
                   fromUnvoiced ? kMelodyUnvoicedToVoicedPenalty
                                : kMelodyUnvoicedPenalty;
               continue;
@@ -122,10 +122,10 @@ viterbiTransitionPenalty() {
             float semitone = static_cast<float>(std::abs(toMidi - fromMidi));
             float penalty = 0.11f * semitone * semitone;
             if (semitone > 12.0f) penalty *= 2.2f;
-            penalties[from * kMelodyAnalyzerStates + to] = penalty;
+            table[from * kMelodyAnalyzerStates + to] = penalty;
           }
         }
-        return penalties;
+        return table;
       }();
   return penalties;
 }

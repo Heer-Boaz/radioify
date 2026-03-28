@@ -190,6 +190,7 @@ ReceiverInputNetworkSolve solveReceiverInputNetwork(
   float nodeVoltages[3] = {};
   bool solved = solveLinear3x3(a, b, nodeVoltages);
   assert(solved);
+  (void)solved;
   result.wiperVoltage = nodeVoltages[kReceiverWiperNode];
   result.tapVoltage = nodeVoltages[kReceiverTapNode];
   result.gridVoltage = nodeVoltages[kReceiverGridNode];

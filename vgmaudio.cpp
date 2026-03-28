@@ -189,7 +189,7 @@ bool VgmAudioDecoder::initPlayer(std::string* error) {
 
   player_ = new PlayerA();
   player_->RegisterPlayerEngine(new VGMPlayer());
-  player_->SetOutputSettings(sampleRate_, outputChannels_, 16,
+  player_->SetOutputSettings(sampleRate_, static_cast<uint8_t>(outputChannels_), 16,
                              kDefaultBufferFrames);
   player_->SetPlaybackSpeed(playbackSpeed_);
 

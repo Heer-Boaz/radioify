@@ -1054,12 +1054,12 @@ int CPULoadRom(const char *szFile)
   {
 	  rom = (u8 *)malloc(0x200);
 	  loadedsize=0;
-	  i = (int)utilLoad(szFile,utilIsGBAImage,whereToLoad,size);
+	  i = utilLoad(szFile,utilIsGBAImage,whereToLoad,size) != NULL;
   }
   else
   {
 	  rom = utilLoad(szFile,utilIsGBAImage,whereToLoad,size);
-	  i = (int) rom;
+	  i = rom != NULL;
   }
 
   //loadedsize = sizeof(*rom);

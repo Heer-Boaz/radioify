@@ -110,11 +110,6 @@ double dbFromRatio(double ratio) {
   return (ratio > 1e-20) ? 20.0 * std::log10(ratio) : -300.0;
 }
 
-double clampFinite(double value) {
-  if (!std::isfinite(value)) return 0.0;
-  return value;
-}
-
 double effectiveDetectorAudioTauSeconds(const Radio1938& radio) {
   double storageCapFarads =
       std::max<double>(radio.demod.am.detectorStorageCapFarads, 1e-12);

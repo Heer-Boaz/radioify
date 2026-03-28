@@ -5,6 +5,7 @@
 
 #include "consolescreen.h"
 #include "optionsbrowser.h"
+#include "ui_helpers.h"
 
 namespace {
 bool isSelectableEntry(const FileEntry& entry) {
@@ -370,14 +371,15 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     std::string text = query;
     if (!text.empty() && text[0] == '~') {
       std::string home;
-      if (const char* envProfile = std::getenv("USERPROFILE")) {
-        home = envProfile;
+      if (const auto envProfile = getEnvString("USERPROFILE")) {
+        home = *envProfile;
       }
       if (home.empty()) {
-        const char* homeDrive = std::getenv("HOMEDRIVE");
-        const char* homePath = std::getenv("HOMEPATH");
-        if (homeDrive && *homeDrive && homePath && *homePath) {
-          home = std::string(homeDrive) + homePath;
+        const auto homeDrive = getEnvString("HOMEDRIVE");
+        const auto homePath = getEnvString("HOMEPATH");
+        if (homeDrive && !homeDrive->empty() && homePath &&
+            !homePath->empty()) {
+          home = *homeDrive + *homePath;
         }
       }
       if (!home.empty()) {
@@ -443,11 +445,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     bool browserForwardKey = key.vk == VK_BROWSER_FORWARD;
     bool keyboardBackspace = key.vk == VK_BACK && key.ch != 0;
     const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-    const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
-    const DWORD shiftMask = SHIFT_PRESSED;
     bool ctrl = (key.control & ctrlMask) != 0;
-    bool alt = (key.control & altMask) != 0;
-    bool shift = (key.control & shiftMask) != 0;
 
     if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
       running = false;
@@ -566,9 +564,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
     if (key.vk == 'S' || key.ch == 's' || key.ch == 'S') {
-      const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
-      bool alt = (key.control & altMask) != 0;
-      if (alt) {
+      const DWORD sortAltMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
+      bool sortAlt = (key.control & sortAltMask) != 0;
+      if (sortAlt) {
         browser.sortDescending = !browser.sortDescending;
       } else {
         int next = static_cast<int>(browser.sortMode) + 1;
@@ -892,10 +890,8 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
   if (ev.type == InputEvent::Type::Key) {
     const KeyEvent& key = ev.key;
     const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-    const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
     const DWORD shiftMask = SHIFT_PRESSED;
     bool ctrl = (key.control & ctrlMask) != 0;
-    bool alt = (key.control & altMask) != 0;
     bool shift = (key.control & shiftMask) != 0;
 
     if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {

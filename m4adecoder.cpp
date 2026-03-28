@@ -100,7 +100,8 @@ bool M4aDecoder::init(const std::filesystem::path& path, uint32_t channels, uint
     hr = type->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, sampleRate * channels * sizeof(float));
   }
   if (SUCCEEDED(hr)) {
-    hr = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr, type);
+    hr = reader->SetCurrentMediaType(
+        static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), nullptr, type);
   }
   safeRelease(type);
   if (FAILED(hr)) {
@@ -110,7 +111,8 @@ bool M4aDecoder::init(const std::filesystem::path& path, uint32_t channels, uint
   }
 
   IMFMediaType* actualType = nullptr;
-  hr = reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, &actualType);
+  hr = reader->GetCurrentMediaType(
+      static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), &actualType);
   if (FAILED(hr)) {
     safeRelease(reader);
     setError(error, "Failed to query output format.");
@@ -132,7 +134,9 @@ bool M4aDecoder::init(const std::filesystem::path& path, uint32_t channels, uint
   totalFrames_ = 0;
   PROPVARIANT duration{};
   PropVariantInit(&duration);
-  hr = reader->GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &duration);
+  hr = reader->GetPresentationAttribute(
+      static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION,
+      &duration);
   if (SUCCEEDED(hr) && duration.vt == VT_UI8 && sampleRate > 0) {
     totalFrames_ = static_cast<uint64_t>((duration.uhVal.QuadPart * sampleRate) / 10000000ULL);
   }
@@ -189,7 +193,9 @@ bool M4aDecoder::readFrames(float* out, uint32_t frameCount, uint64_t* framesRea
 
     DWORD flags = 0;
     IMFSample* sample = nullptr;
-    HRESULT hr = reader_->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, nullptr, &flags, nullptr, &sample);
+    HRESULT hr = reader_->ReadSample(
+        static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), 0, nullptr,
+        &flags, nullptr, &sample);
     if (FAILED(hr)) {
       atEnd_ = true;
       break;

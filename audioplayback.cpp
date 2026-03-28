@@ -39,11 +39,18 @@ extern "C" {
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4100 4189 4244 4245 4267 4456 4458 4996)
+#endif
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_ENABLE_WAV
 #define MA_ENABLE_MP3
 #define MA_ENABLE_FLAC
 #include "miniaudio.h"
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 #ifdef min
 #undef min
 #endif
@@ -56,6 +63,7 @@ extern "C" {
 
 AudioPlaybackState gAudio;
 
+#if RADIOIFY_ENABLE_TIMING_LOG
 static std::string toUtf8String(const std::filesystem::path& p) {
 #ifdef _WIN32
   auto u8 = p.u8string();
@@ -64,6 +72,7 @@ static std::string toUtf8String(const std::filesystem::path& p) {
   return p.string();
 #endif
 }
+#endif
 
 int64_t nowUs() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -916,7 +925,7 @@ bool startM4aWorker(const std::filesystem::path& file, uint64_t startFrame,
                     std::string* error) {
   stopM4aWorker();
   const uint32_t rbFrames = std::max<uint32_t>(gAudio.sampleRate / 2, 8192);
-  const uint32_t targetFrames =
+    const uint32_t targetFrames =
       std::min<uint32_t>(rbFrames, std::max<uint32_t>(gAudio.sampleRate / 4, 4096));
   {
     std::lock_guard<std::mutex> lock(gAudio.state.m4aMutex);
@@ -1027,18 +1036,18 @@ bool startM4aWorker(const std::filesystem::path& file, uint64_t startFrame,
         int64_t target = gAudio.state.pendingSeekFrames.load();
         if (target < 0) target = 0;
         gAudio.state.seekRequested.store(false);
-        uint64_t targetFrames = static_cast<uint64_t>(target);
-        uint64_t rawTarget = targetFrames + paddingFrames;
+        uint64_t seekTargetFrames = static_cast<uint64_t>(target);
+        uint64_t rawTarget = seekTargetFrames + paddingFrames;
         if (rawTotalFrames > 0 && rawTarget > rawTotalFrames) {
           rawTarget = rawTotalFrames;
         }
         if (!decoder.seekToFrame(rawTarget)) {
           rawTarget = 0;
-          targetFrames = 0;
+          seekTargetFrames = 0;
           decoder.seekToFrame(0);
         }
-        gAudio.state.framesPlayed.store(targetFrames);
-        gAudio.state.audioClockFrames.store(targetFrames);
+        gAudio.state.framesPlayed.store(seekTargetFrames);
+        gAudio.state.audioClockFrames.store(seekTargetFrames);
         gAudio.state.finished.store(false);
         gAudio.state.m4aAtEnd.store(false);
         gAudio.state.audioLeadSilenceFrames.store(0);

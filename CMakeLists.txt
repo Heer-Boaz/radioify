@@ -7,6 +7,48 @@ project(radioify LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+function(radioify_enable_strict_warnings target_name)
+  target_compile_options(${target_name} PRIVATE
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/W4>
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/we4100>
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/we4101>
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/we4189>
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/we4505>
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4>
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/we4100>
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/we4101>
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/we4189>
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/we4505>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wall>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wextra>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wpedantic>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wunused-parameter>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wunused-variable>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wunused-function>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Werror=unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Werror=unused-variable>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Werror=unused-function>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wall>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wextra>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wpedantic>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wunused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wunused-variable>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wunused-function>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Werror=unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Werror=unused-variable>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Werror=unused-function>
+  )
+endfunction()
+
+function(radioify_disable_warnings target_name)
+  target_compile_options(${target_name} PRIVATE
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/W0>
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W0>
+    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-w>
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-w>
+  )
+endfunction()
+
 if (MSVC)
   set(_radioify_msvc_runtime "")
   if (DEFINED VCPKG_TARGET_TRIPLET)
@@ -144,16 +186,19 @@ add_executable(radioify
   loopsplit_cli.cpp
   loopsplit_ui.cpp
   )
+radioify_enable_strict_warnings(radioify)
 
 add_executable(radio_measurements
   radio_measurements.cpp
   ${RADIOIFY_RADIO_ENGINE_SOURCES}
   )
+radioify_enable_strict_warnings(radio_measurements)
 
 add_executable(radio_node_physics
   radio_node_physics.cpp
   ${RADIOIFY_RADIO_ENGINE_SOURCES}
   )
+radioify_enable_strict_warnings(radio_node_physics)
 
 target_compile_definitions(radioify PRIVATE
   RADIOIFY_ENABLE_TIMING_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_TIMING_LOG}>,1,0>
@@ -752,6 +797,7 @@ add_library(sexypsf STATIC
   ${CMAKE_SOURCE_DIR}/third_party/psx/PsxHLE.c
   ${CMAKE_SOURCE_DIR}/third_party/psx/spu/spu.c
 )
+radioify_disable_warnings(sexypsf)
 target_include_directories(sexypsf PUBLIC ${CMAKE_SOURCE_DIR}/third_party/psx)
 if (WIN32)
   target_compile_definitions(sexypsf PRIVATE PSS_STYLE=2)
@@ -794,6 +840,7 @@ add_library(psfcore STATIC
   ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/vfs.c
   ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/mkhebios.c
 )
+radioify_disable_warnings(psfcore)
 target_include_directories(psfcore PUBLIC
   ${psf2wav_SOURCE_DIR}/highly_experimental
 )
@@ -815,6 +862,11 @@ FetchContent_Declare(
   GIT_SUBMODULES_RECURSE TRUE
 )
 FetchContent_MakeAvailable(libkss)
+foreach(_radioify_libkss_target IN ITEMS emu2149 emu2212 emu2413 emu8950 emu76489 kmz80 kss kss2wav)
+  if (TARGET ${_radioify_libkss_target})
+    radioify_disable_warnings(${_radioify_libkss_target})
+  endif()
+endforeach()
 target_include_directories(radioify PRIVATE ${libkss_SOURCE_DIR}/src)
 target_include_directories(radioify PRIVATE ${libkss_SOURCE_DIR}/modules)
 target_link_libraries(radioify PRIVATE kss)
@@ -831,6 +883,11 @@ FetchContent_Declare(
   GIT_TAG 59e82746f6ff83df184554d17c7536e0ea609385
 )
 FetchContent_MakeAvailable(gme)
+foreach(_radioify_gme_target IN ITEMS gme gme_player demo demo_mem)
+  if (TARGET ${_radioify_gme_target})
+    radioify_disable_warnings(${_radioify_gme_target})
+  endif()
+endforeach()
 target_include_directories(radioify PRIVATE ${gme_SOURCE_DIR})
 target_link_libraries(radioify PRIVATE gme)
 if (_radioify_disable_sdl2_defined)
@@ -879,12 +936,7 @@ if (NOT RADIOIFY_DISABLE_GSF_GPL)
   if (CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_compile_definitions(playgsf PRIVATE C_CORE)
   endif()
-  if (MSVC)
-    target_compile_options(playgsf PRIVATE /W0)
-    target_compile_definitions(playgsf PRIVATE _CRT_SECURE_NO_WARNINGS)
-  else()
-    target_compile_options(playgsf PRIVATE -w)
-  endif()
+  radioify_disable_warnings(playgsf)
   target_link_libraries(radioify PRIVATE playgsf)
 endif()
 
@@ -909,6 +961,11 @@ FetchContent_Declare(
   GIT_TAG master
 )
 FetchContent_MakeAvailable(libvgm)
+foreach(_radioify_libvgm_target IN ITEMS vgm-utils vgm-audio vgm-emu vgm-player vgmplayer vgmplayer-static vgm-player-static)
+  if (TARGET ${_radioify_libvgm_target})
+    radioify_disable_warnings(${_radioify_libvgm_target})
+  endif()
+endforeach()
 target_include_directories(radioify PRIVATE ${libvgm_SOURCE_DIR})
 set(_radioify_libvgm_target "")
 foreach(_candidate IN ITEMS vgm-player vgm-player-static vgmplayer vgmplayer-static

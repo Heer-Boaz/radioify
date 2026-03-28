@@ -145,6 +145,25 @@ double acRmsOf(const std::vector<float>& samples, size_t startIndex = 0u) {
   return std::sqrt(sumSq / static_cast<double>(samples.size() - startIndex));
 }
 
+double positivePeakOf(const std::vector<float>& samples, size_t startIndex = 0u) {
+  if (startIndex >= samples.size()) return 0.0;
+  double peak = 0.0;
+  for (size_t i = startIndex; i < samples.size(); ++i) {
+    peak = std::max(peak, static_cast<double>(samples[i]));
+  }
+  return peak;
+}
+
+double negativePeakAbsOf(const std::vector<float>& samples,
+                         size_t startIndex = 0u) {
+  if (startIndex >= samples.size()) return 0.0;
+  double peak = 0.0;
+  for (size_t i = startIndex; i < samples.size(); ++i) {
+    peak = std::max(peak, static_cast<double>(-samples[i]));
+  }
+  return peak;
+}
+
 double minOf(const std::vector<float>& samples) {
   if (samples.empty()) return 0.0;
   double minValue = std::numeric_limits<double>::infinity();
@@ -302,6 +321,22 @@ double runIfDetectorMagnitudeRms(Radio1938& radio, float detuneHz) {
         ctx.signal.detectorInputQ * ctx.signal.detectorInputQ);
   }
   return rmsOf(detectorMagnitude, kNodeTestFrames / 2u);
+}
+
+std::vector<float> runSpeakerTone(Radio1938& radio,
+                                  float frequencyHz,
+                                  float peakAmplitude) {
+  RadioInitContext initCtx{};
+  RadioSpeakerNode::init(radio, initCtx);
+  RadioSpeakerNode::reset(radio);
+  std::vector<float> output(kNodeTestFrames, 0.0f);
+  for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
+    float t = static_cast<float>(i) / std::max(radio.sampleRate, 1.0f);
+    float x = peakAmplitude * std::sin(kRadioTwoPi * frequencyHz * t);
+    RadioSampleContext ctx{};
+    output[i] = RadioSpeakerNode::run(radio, x, ctx);
+  }
+  return output;
 }
 
 struct EnvelopeMetrics {
@@ -749,6 +784,48 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
   }
 
   {
+    Radio1938 slowerAfc = makeRadio(config, 0.0f, false);
+    Radio1938 fasterAfc = makeRadio(config, 0.0f, false);
+    slowerAfc.demod.am.afcSenseLpHz = 34.0f;
+    fasterAfc.demod.am.afcSenseLpHz = 340.0f;
+    slowerAfc.demod.am.setBandwidth(slowerAfc.demod.am.bwHz,
+                                    slowerAfc.demod.am.tuneOffsetHz);
+    fasterAfc.demod.am.setBandwidth(fasterAfc.demod.am.bwHz,
+                                    fasterAfc.demod.am.tuneOffsetHz);
+    addPredicate(rows, "AMDetector", "afc_sense_lp_hz_controls_probe_bandwidth",
+                 slowerAfc.demod.am.afcLowProbe.i.b0 <
+                     fasterAfc.demod.am.afcLowProbe.i.b0,
+                 fasterAfc.demod.am.afcLowProbe.i.b0 /
+                     std::max<double>(slowerAfc.demod.am.afcLowProbe.i.b0, 1e-12),
+                 "fast/slow AFC probe b0 ratio");
+  }
+
+  {
+    Radio1938 lowThreshold = makeRadio(config, 0.0f, false);
+    Radio1938 highThreshold = makeRadio(config, 0.0f, false);
+    lowThreshold.demod.am.avcDiodeDrop = 0.0f;
+    lowThreshold.demod.am.avcJunctionSlopeVolts = 0.002f;
+    highThreshold.demod.am.avcDiodeDrop = 0.18f;
+    highThreshold.demod.am.avcJunctionSlopeVolts = 0.020f;
+    RadioAMDetectorNode::reset(lowThreshold);
+    RadioAMDetectorNode::reset(highThreshold);
+    for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
+      RadioSampleContext lowCtx{};
+      RadioSampleContext highCtx{};
+      lowCtx.signal.setComplexEnvelope(0.90f, 0.0f);
+      highCtx.signal.setComplexEnvelope(0.90f, 0.0f);
+      lowCtx.signal.detectorInputI = 0.90f;
+      highCtx.signal.detectorInputI = 0.90f;
+      RadioAMDetectorNode::run(lowThreshold, 0.90f, lowCtx);
+      RadioAMDetectorNode::run(highThreshold, 0.90f, highCtx);
+    }
+    addPredicate(rows, "AMDetector", "avc_diode_params_shift_charge_threshold",
+                 lowThreshold.demod.am.avcEnv > highThreshold.demod.am.avcEnv,
+                 lowThreshold.demod.am.avcEnv - highThreshold.demod.am.avcEnv,
+                 "low-threshold minus high-threshold AVC");
+  }
+
+  {
     Radio1938 radio = makeRadio(config, 0.0f, false);
     auto env = runDetectorAudioStepTrace(radio);
     EnvelopeMetrics metrics =
@@ -942,6 +1019,56 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     }
     addRange(rows, "Speaker", "zero_input_stays_zero", rmsOf(out), 0.0, 1e-7,
              "no spontaneous motion");
+  }
+
+  {
+    Radio1938 flat = makeRadio(config, 0.0f, false);
+    Radio1938 breakup = makeRadio(config, 0.0f, false);
+    breakup.speakerStage.speaker.upperBreakupHz = 2400.0f;
+    breakup.speakerStage.speaker.upperBreakupQ = 0.90f;
+    breakup.speakerStage.speaker.upperBreakupGainDb = 3.0f;
+    auto flatOut = runSpeakerTone(flat, 2400.0f, 0.2f);
+    auto breakupOut = runSpeakerTone(breakup, 2400.0f, 0.2f);
+    addPredicate(rows, "Speaker", "upper_breakup_peak_changes_response",
+                 rmsOf(breakupOut, kNodeTestFrames / 2u) >
+                     1.10 * std::max(rmsOf(flatOut, kNodeTestFrames / 2u), 1e-12),
+                 rmsOf(breakupOut, kNodeTestFrames / 2u) /
+                     std::max(rmsOf(flatOut, kNodeTestFrames / 2u), 1e-12),
+                 "breakup-enabled / flat RMS");
+  }
+
+  {
+    Radio1938 flat = makeRadio(config, 0.0f, false);
+    Radio1938 hfLoss = makeRadio(config, 0.0f, false);
+    hfLoss.speakerStage.speaker.hfLossLpHz = 2200.0f;
+    hfLoss.speakerStage.speaker.hfLossDepth = 0.85f;
+    auto flatOut = runSpeakerTone(flat, 4000.0f, 0.2f);
+    auto hfLossOut = runSpeakerTone(hfLoss, 4000.0f, 0.2f);
+    addPredicate(rows, "Speaker", "hf_loss_depth_reduces_top_end",
+                 rmsOf(hfLossOut, kNodeTestFrames / 2u) <
+                     0.85 * std::max(rmsOf(flatOut, kNodeTestFrames / 2u), 1e-12),
+                 rmsOf(hfLossOut, kNodeTestFrames / 2u) /
+                     std::max(rmsOf(flatOut, kNodeTestFrames / 2u), 1e-12),
+                 "hf-loss / flat RMS");
+  }
+
+  {
+    Radio1938 symmetric = makeRadio(config, 0.0f, false);
+    Radio1938 asymmetric = makeRadio(config, 0.0f, false);
+    symmetric.speakerStage.speaker.limit = 0.12f;
+    asymmetric.speakerStage.speaker.limit = 0.12f;
+    asymmetric.speakerStage.speaker.asymBias = 0.60f;
+    auto symmetricOut = runSpeakerTone(symmetric, 120.0f, 0.5f);
+    auto asymmetricOut = runSpeakerTone(asymmetric, 120.0f, 0.5f);
+    double symmetricSkew = std::fabs(
+        positivePeakOf(symmetricOut, kNodeTestFrames / 2u) -
+        negativePeakAbsOf(symmetricOut, kNodeTestFrames / 2u));
+    double asymmetricSkew = std::fabs(
+        positivePeakOf(asymmetricOut, kNodeTestFrames / 2u) -
+        negativePeakAbsOf(asymmetricOut, kNodeTestFrames / 2u));
+    addPredicate(rows, "Speaker", "asym_bias_skews_limit_symmetry",
+                 asymmetricSkew > symmetricSkew + 1e-4, asymmetricSkew - symmetricSkew,
+                 "asymmetric minus symmetric peak skew");
   }
 
   {

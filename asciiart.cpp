@@ -54,10 +54,10 @@ constexpr std::array<wchar_t, 16> kDensityRamp = {
     L'#',  // 9
     L'%',  // 10
     L'@',  // 11
-    L'░',  // 12
-    L'▓',  // 13
-    L'▒',  // 14
-    L'█'   // 15 (darkest)
+    L'\u2591',  // 12
+    L'\u2593',  // 13
+    L'\u2592',  // 14
+    L'\u2588'   // 15 (darkest)
 };
 
 // Pre-computed: for each dot count (0-8), what density character to use
@@ -669,7 +669,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int a01 = p[-padStride];
               int a02 = p[-padStride + 1];
               int a10 = p[-1];
-              int a11 = p[0];
               int a12 = p[1];
               int a20 = p[padStride - 1];
               int a21 = p[padStride];
@@ -861,8 +860,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 (bgLum * (255 - alpha) + cellBgLum * alpha + 127) / 255;
             bool useLocalThreshold =
                 cellLumRange > 20;  // Alleen bij voldoende lokaal contrast
-            int localMidpoint =
-                useLocalThreshold ? ((cellLumMin + cellLumMax) >> 1) : bgLum;
             bool useDither = false;
 
             size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
@@ -1229,14 +1226,14 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                      static_cast<int>(outG) * 183 +
                      static_cast<int>(outB) * 19 + 128) >>
                     8;
-                int bgY =
+                int bgY2 =
                     (static_cast<int>(outBgR) * 54 +
                      static_cast<int>(outBgG) * 183 +
                      static_cast<int>(outBgB) * 19 + 128) >>
                     8;
                 int dir = (cellLumMean < bgLum) ? 1 : -1;
                 int minDeltaY = 6;
-                int need = minDeltaY - dir * (bgY - fgY);
+                int need = minDeltaY - dir * (bgY2 - fgY);
                 if (need > 0) {
                   int shift = dir * need;
                   outBgR = static_cast<uint8_t>(

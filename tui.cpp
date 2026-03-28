@@ -199,14 +199,14 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
 
   auto addWindowsKnownFolders = [&]() {
     std::string userProfile;
-    if (const char* envProfile = std::getenv("USERPROFILE")) {
-      userProfile = envProfile;
+    if (const auto envProfile = getEnvString("USERPROFILE")) {
+      userProfile = *envProfile;
     }
     if (userProfile.empty()) {
-      const char* homeDrive = std::getenv("HOMEDRIVE");
-      const char* homePath = std::getenv("HOMEPATH");
-      if (homeDrive && *homeDrive && homePath && *homePath) {
-        userProfile = std::string(homeDrive) + homePath;
+      const auto homeDrive = getEnvString("HOMEDRIVE");
+      const auto homePath = getEnvString("HOMEPATH");
+      if (homeDrive && !homeDrive->empty() && homePath && !homePath->empty()) {
+        userProfile = *homeDrive + *homePath;
       } else {
         return;
       }
@@ -904,8 +904,6 @@ int runTui(Options o) {
 
   float lpHz = static_cast<float>(o.bwHz);
   const uint32_t sampleRate = 48000;
-  const uint32_t baseChannels = o.mono ? 1 : 2;
-  uint32_t channels = baseChannels;
 
   auto radio1938Template = std::make_unique<Radio1938>();
   radio1938Template->init(1, static_cast<float>(sampleRate), lpHz,
@@ -1112,7 +1110,7 @@ int runTui(Options o) {
   int listHeight = 0;
   GridLayout layout;
   BreadcrumbLine breadcrumbLine;
-  bool rendered = false;
+  bool didRender = false;
   bool melodyVisualizationEnabled = false;
   std::deque<int> melodyHistoryMidi;
   std::deque<float> melodyHistoryConfidence;
@@ -1359,7 +1357,7 @@ int runTui(Options o) {
   };
   callbacks.onRenderFile = [&](const std::filesystem::path& file) {
     renderFile(file);
-    rendered = true;
+    didRender = true;
   };
   callbacks.onTogglePause = [&]() {
     audioTogglePause();
@@ -2079,7 +2077,7 @@ int runTui(Options o) {
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       while (running && tuiWindow.PollInput(ev)) {
         processInputEvent(ev);
-        if (rendered) {
+        if (didRender) {
           finalizeRenderedExit();
           return 0;
         }
@@ -2088,13 +2086,13 @@ int runTui(Options o) {
 
     while (running && input.poll(ev)) {
       processInputEvent(ev);
-      if (rendered) {
+      if (didRender) {
         finalizeRenderedExit();
         return 0;
       }
       if (!running) break;
     }
-    if (rendered) {
+    if (didRender) {
       finalizeRenderedExit();
       return 0;
     }
@@ -2144,13 +2142,13 @@ int runTui(Options o) {
 
       screen.clear(kStyleNormal);
 
-      const std::string titleRaw = "Radioify";
-      std::string title = titleRaw;
-      if (static_cast<int>(title.size()) > width) {
-        title = fitLine(titleRaw, width);
+      const std::string headerTitleRaw = "Radioify";
+      std::string headerTitle = headerTitleRaw;
+      if (static_cast<int>(headerTitle.size()) > width) {
+        headerTitle = fitLine(headerTitleRaw, width);
       }
-      int titleLen = static_cast<int>(title.size());
-      int titleX = std::max(0, (width - titleLen) / 2);
+      int headerTitleLen = static_cast<int>(headerTitle.size());
+      int headerTitleX = std::max(0, (width - headerTitleLen) / 2);
       double seconds =
           std::chrono::duration<double>(now.time_since_epoch()).count();
       double speed = 1.3;
@@ -2185,10 +2183,10 @@ int runTui(Options o) {
         titleFg = lerpColor(titleFg, Color{255, 236, 186}, clamp01(flash));
       }
       Style titleAttr{titleFg, headerBg};
-      for (int i = 0; i < titleLen; ++i) {
+      for (int i = 0; i < headerTitleLen; ++i) {
         wchar_t ch = static_cast<wchar_t>(
-            static_cast<unsigned char>(title[static_cast<size_t>(i)]));
-        screen.writeChar(titleX + i, 0, ch, titleAttr);
+            static_cast<unsigned char>(headerTitle[static_cast<size_t>(i)]));
+        screen.writeChar(headerTitleX + i, 0, ch, titleAttr);
       }
       breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
       if (browserInteractionEnabled) {

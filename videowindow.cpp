@@ -1303,7 +1303,7 @@ bool VideoWindow::MakeFullscreen() {
         m_ignoreWindowSizeEvents = true;
         SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
         LONG newEx = m_prevExStyle & ~(WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
-        LONG prevExSet = SetWindowLong(m_hWnd, GWL_EXSTYLE, newEx);
+        SetWindowLong(m_hWnd, GWL_EXSTYLE, newEx);
     // SetWindowLong diagnostic removed
 
         SetWindowPos(m_hWnd, HWND_TOPMOST, mi.rcMonitor.left, mi.rcMonitor.top, monW, monH, SWP_SHOWWINDOW | SWP_FRAMECHANGED);
@@ -1354,7 +1354,6 @@ bool VideoWindow::MakeFullscreen() {
             // Defensive: explicitly call Resize to ensure internal size/state is updated
             Resize(static_cast<int>(monW), static_cast<int>(monH));
             // after CreateSwapChain diagnostic removed
-            DWORD err = GetLastError();
             // entered borderless fullscreen (diagnostic removed)
             m_isFullscreen = true;
             // Allow WM_SIZE processing again now that we've updated internal state
@@ -2036,12 +2035,12 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     {
         Microsoft::WRL::ComPtr<ID3D11Query> qDisjoint, qStart, qEnd;
         D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
-        ID3D11Device* device = getSharedGpuDevice();
-        if (device) {
-            device->CreateQuery(&qd, qDisjoint.GetAddressOf());
+        ID3D11Device* gpuDevice = getSharedGpuDevice();
+        if (gpuDevice) {
+            gpuDevice->CreateQuery(&qd, qDisjoint.GetAddressOf());
             qd.Query = D3D11_QUERY_TIMESTAMP;
-            device->CreateQuery(&qd, qStart.GetAddressOf());
-            device->CreateQuery(&qd, qEnd.GetAddressOf());
+            gpuDevice->CreateQuery(&qd, qStart.GetAddressOf());
+            gpuDevice->CreateQuery(&qd, qEnd.GetAddressOf());
 
             context->Begin(qDisjoint.Get());
             context->End(qStart.Get());

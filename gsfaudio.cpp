@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "ui_helpers.h"
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -52,15 +54,6 @@ struct GsfMetadata {
   int lengthMs = -1;
   int fadeMs = 0;
 };
-
-std::string toUtf8String(const std::filesystem::path& path) {
-#ifdef _WIN32
-  auto u8 = path.u8string();
-  return std::string(u8.begin(), u8.end());
-#else
-  return path.string();
-#endif
-}
 
 uint64_t msToFrames(int64_t ms, uint32_t sampleRate) {
   if (ms <= 0 || sampleRate == 0) return 0;
@@ -220,8 +213,7 @@ bool isAbsolutePath(const std::filesystem::path& path) {
 
 PsfFileHandle* tryOpenPsfFile(const std::filesystem::path& path) {
   if (path.empty()) return nullptr;
-  std::string pathUtf8 = toUtf8String(path);
-  std::FILE* fp = std::fopen(pathUtf8.c_str(), "rb");
+  std::FILE* fp = openFileUtf8(path, "rb");
   if (!fp) return nullptr;
   auto* handle = new PsfFileHandle();
   handle->fp = fp;

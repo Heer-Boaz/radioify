@@ -15,6 +15,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavcodec/codec.h>
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/frame.h>
@@ -59,6 +60,20 @@ int64_t frameDurationTicks(const AVFrame* frame) {
   if (frame->duration > 0) return frame->duration;
   return frame->pkt_duration;
 #endif
+}
+
+const uint8_t* streamSideData(AVStream* stream, AVPacketSideDataType type,
+                              size_t* size) {
+  if (size) *size = 0;
+  if (!stream || !stream->codecpar || !stream->codecpar->coded_side_data) {
+    return nullptr;
+  }
+  const AVPacketSideData* sideData = av_packet_side_data_get(
+      stream->codecpar->coded_side_data, stream->codecpar->nb_coded_side_data,
+      type);
+  if (!sideData) return nullptr;
+  if (size) *size = sideData->size;
+  return sideData->data;
 }
 
 // Upper bound for a single readFrame() call. This is used to keep the decode
@@ -237,8 +252,7 @@ int streamRotationQuarterTurns(AVStream* stream) {
 
   size_t displayMatrixSize = 0;
   const uint8_t* displayMatrix =
-      av_stream_get_side_data(stream, AV_PKT_DATA_DISPLAYMATRIX,
-                              &displayMatrixSize);
+      streamSideData(stream, AV_PKT_DATA_DISPLAYMATRIX, &displayMatrixSize);
   if (displayMatrix &&
       displayMatrixSize >= sizeof(int32_t) * 9u) {
     // FFmpeg stores matrix rotation in the opposite sign for display usage.
@@ -495,7 +509,7 @@ struct VideoDecoder::Impl {
       bestPts = src->pts;
     }
     int64_t ts100ns = 0;
-    int64_t duration100ns = 0;
+    int64_t frameDuration100ns = 0;
     if (bestPts != AV_NOPTS_VALUE) {
       int64_t absUs =
           av_rescale_q(bestPts, timeBase, AVRational{1, AV_TIME_BASE});
@@ -508,7 +522,7 @@ struct VideoDecoder::Impl {
       int64_t durUs =
           av_rescale_q(frameDuration, timeBase, AVRational{1, AV_TIME_BASE});
       if (durUs > 0) {
-        duration100ns = durUs * 10;
+        frameDuration100ns = durUs * 10;
       }
     }
     AVColorSpace frameSpace = src->colorspace;
@@ -564,7 +578,7 @@ struct VideoDecoder::Impl {
       out.yuv.clear();
       if (info) {
         info->timestamp100ns = ts100ns;
-        info->duration100ns = duration100ns;
+        info->duration100ns = frameDuration100ns;
       }
       return true;
     }
@@ -594,7 +608,7 @@ struct VideoDecoder::Impl {
       
       if (info) {
         info->timestamp100ns = ts100ns;
-        info->duration100ns = duration100ns;
+        info->duration100ns = frameDuration100ns;
       }
       return true;
     }
@@ -691,7 +705,7 @@ struct VideoDecoder::Impl {
 
     if (info) {
       info->timestamp100ns = ts100ns;
-      info->duration100ns = duration100ns;
+      info->duration100ns = frameDuration100ns;
     }
     return true;
   }
@@ -700,7 +714,7 @@ struct VideoDecoder::Impl {
 VideoDecoder::~VideoDecoder() { uninit(); }
 
 bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
-                        bool preferHardware, bool allowRgbOutput,
+                        bool preferHardware, [[maybe_unused]] bool allowRgbOutput,
                         VideoStreamSelection* streamSelection) {
   uninit();
 
@@ -1336,15 +1350,15 @@ bool probeVideoMetadata(const std::filesystem::path& path, VideoMetadata* out,
     if (lookup && lookup->name) out->codecName = lookup->name;
   }
 
-  int64_t duration100ns = 0;
+  int64_t totalDuration100ns = 0;
   if (stream && stream->duration > 0) {
     int64_t us =
         av_rescale_q(stream->duration, stream->time_base, AVRational{1, 1000000});
-    duration100ns = us * 10;
+    totalDuration100ns = us * 10;
   } else if (fmt->duration > 0) {
-    duration100ns = fmt->duration * 10;
+    totalDuration100ns = fmt->duration * 10;
   }
-  out->duration100ns = duration100ns;
+  out->duration100ns = totalDuration100ns;
 
   avformat_close_input(&fmt);
   return true;

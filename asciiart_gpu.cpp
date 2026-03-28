@@ -42,6 +42,8 @@ void GpuAsciiRenderer::ClearHistory() {
 }
 
 bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* error) {
+    (void)maxWidth;
+    (void)maxHeight;
     if (!CreateDevice()) {
         if (error) *error = "Failed to create D3D11 device";
         return false;
@@ -69,6 +71,8 @@ bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* erro
 
 bool GpuAsciiRenderer::InitializeWithDevice(ID3D11Device* device, ID3D11DeviceContext* context,
                                             int maxWidth, int maxHeight, std::string* error) {
+    (void)maxWidth;
+    (void)maxHeight;
     if (!device || !context) {
         if (error) *error = "Invalid device or context";
         return false;
@@ -634,12 +638,6 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     // Check texture format
     D3D11_TEXTURE2D_DESC srcDesc;
     texture->GetDesc(&srcDesc);
-    const char* fmtLabel = "unknown";
-    if (srcDesc.Format == DXGI_FORMAT_NV12) {
-        fmtLabel = "NV12";
-    } else if (srcDesc.Format == DXGI_FORMAT_P010) {
-        fmtLabel = "P010";
-    }
 
     // Check device compatibility
     Microsoft::WRL::ComPtr<ID3D11Device> texDevice;
@@ -674,10 +672,11 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     m_lastNv12TexturePath = "gpu_cache";
     {
         char buf[128];
-        const char* fmtLabel = (srcDesc.Format == DXGI_FORMAT_NV12) ? "NV12" : 
-                               (srcDesc.Format == DXGI_FORMAT_P010) ? "P010" : "OTHER";
+        const char* textureFmtLabel =
+            (srcDesc.Format == DXGI_FORMAT_NV12) ? "NV12" :
+            (srcDesc.Format == DXGI_FORMAT_P010) ? "P010" : "OTHER";
         std::snprintf(buf, sizeof(buf), "path=gpu_cache fmt=%s bind=0x%X",
-                      fmtLabel, static_cast<unsigned int>(srcDesc.BindFlags));
+                      textureFmtLabel, static_cast<unsigned int>(srcDesc.BindFlags));
         m_lastNv12TextureDetail = buf;
     }
 
@@ -839,8 +838,10 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
         m_lastNv12TexturePath = "shared_cache";
         {
             char buf[128];
-            const char* fmtLabel = (cache.GetBitDepth() > 8) ? "P010" : "NV12";
-            std::snprintf(buf, sizeof(buf), "path=shared_cache fmt=%s", fmtLabel);
+            const char* cacheFmtLabel =
+                (cache.GetBitDepth() > 8) ? "P010" : "NV12";
+            std::snprintf(buf, sizeof(buf), "path=shared_cache fmt=%s",
+                          cacheFmtLabel);
             m_lastNv12TextureDetail = buf;
         }
 

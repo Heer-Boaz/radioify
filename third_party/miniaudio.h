@@ -61653,30 +61653,30 @@ static ma_result ma_default_vfs_info(ma_vfs* pVFS, ma_vfs_file file, ma_file_inf
 
     if (result == MA_NOT_IMPLEMENTED) {
         /* Not implemented. Fall back to seek/tell/seek. */
-        ma_result result;
+        ma_result fallbackResult;
         ma_int64 cursor;
         ma_int64 sizeInBytes;
         
-        result = ma_default_vfs_tell(pVFS, file, &cursor);
-        if (result != MA_SUCCESS) {
-            return result;
+        fallbackResult = ma_default_vfs_tell(pVFS, file, &cursor);
+        if (fallbackResult != MA_SUCCESS) {
+            return fallbackResult;
         }
 
-        result = ma_default_vfs_seek(pVFS, file, 0, ma_seek_origin_end);
-        if (result != MA_SUCCESS) {
-            return result;
+        fallbackResult = ma_default_vfs_seek(pVFS, file, 0, ma_seek_origin_end);
+        if (fallbackResult != MA_SUCCESS) {
+            return fallbackResult;
         }
 
-        result = ma_default_vfs_tell(pVFS, file, &sizeInBytes);
-        if (result != MA_SUCCESS) {
-            return result;
+        fallbackResult = ma_default_vfs_tell(pVFS, file, &sizeInBytes);
+        if (fallbackResult != MA_SUCCESS) {
+            return fallbackResult;
         }
 
         pInfo->sizeInBytes = sizeInBytes;
 
-        result = ma_default_vfs_seek(pVFS, file, cursor, ma_seek_origin_start);
-        if (result != MA_SUCCESS) {
-            return result;
+        fallbackResult = ma_default_vfs_seek(pVFS, file, cursor, ma_seek_origin_start);
+        if (fallbackResult != MA_SUCCESS) {
+            return fallbackResult;
         }
 
         MA_ASSERT(result == MA_SUCCESS);
@@ -82449,7 +82449,7 @@ MA_PRIVATE ma_bool32 ma_dr_wav__on_seek_memory_write(void* pUserData, int offset
         newCursor = (ma_int64)pWav->memoryStreamWrite.dataSize;
     } else {
         MA_DR_WAV_ASSERT(!"Invalid seek origin");
-        return MA_INVALID_ARGS;
+        return MA_FALSE;
     }
     newCursor += offset;
     if (newCursor < 0) {

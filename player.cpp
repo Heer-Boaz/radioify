@@ -33,6 +33,7 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/dict.h>
@@ -78,6 +79,20 @@ int64_t frameDurationTicks(const AVFrame* frame) {
   if (frame->duration > 0) return frame->duration;
   return frame->pkt_duration;
 #endif
+}
+
+const uint8_t* streamSideData(AVStream* stream, AVPacketSideDataType type,
+                              size_t* size) {
+  if (size) *size = 0;
+  if (!stream || !stream->codecpar || !stream->codecpar->coded_side_data) {
+    return nullptr;
+  }
+  const AVPacketSideData* sideData = av_packet_side_data_get(
+      stream->codecpar->coded_side_data, stream->codecpar->nb_coded_side_data,
+      type);
+  if (!sideData) return nullptr;
+  if (size) *size = sideData->size;
+  return sideData->data;
 }
 
 enum class PlayerEventType {
@@ -254,8 +269,7 @@ int streamRotationQuarterTurns(AVStream* stream) {
 
   size_t displayMatrixSize = 0;
   const uint8_t* displayMatrix =
-      av_stream_get_side_data(stream, AV_PKT_DATA_DISPLAYMATRIX,
-                              &displayMatrixSize);
+      streamSideData(stream, AV_PKT_DATA_DISPLAYMATRIX, &displayMatrixSize);
   if (displayMatrix &&
       displayMatrixSize >= sizeof(int32_t) * 9u) {
     const double matrixTheta = -av_display_rotation_get(
@@ -530,7 +544,7 @@ struct IoCache {
   std::atomic<bool>* commandPending = nullptr;
 
   bool open(const std::filesystem::path& path, std::string* error) {
-    file = std::fopen(path.string().c_str(), "rb");
+    file = openFileUtf8(path, "rb");
     if (!file) {
       if (error) *error = "Failed to open media file for caching.";
       return false;
@@ -2190,11 +2204,8 @@ struct Player::Impl {
     }
 
     uint64_t serial = static_cast<uint64_t>(currentSerial.load());
-    AVPacket pkt;
-    av_init_packet(&pkt);
+    AVPacket pkt{};
     bool demuxAtEof = false;
-    int demuxRetryCount = 0;
-    int64_t lastAutoRecoverUs = -1;
     
     // Packet queue backpressure monitoring
     int64_t lastQueueWarnTimeUs = nowUs();
@@ -2522,21 +2533,21 @@ struct Player::Impl {
         } else if (lastPtsUs > 0) {
           ptsUs = lastPtsUs + lastDurationUs;
         }
-        int64_t durationUs = 0;
+        int64_t frameDurationUs = 0;
         if (info.duration100ns > 0) {
-          durationUs = info.duration100ns / 10;
+          frameDurationUs = info.duration100ns / 10;
         } else {
-          durationUs = lastDurationUs;
+          frameDurationUs = lastDurationUs;
         }
-        if (durationUs <= 0) {
-          durationUs = (fallbackFrameDurationUs.load() > 0)
-                           ? fallbackFrameDurationUs.load()
-                           : 33333;
+        if (frameDurationUs <= 0) {
+          frameDurationUs = (fallbackFrameDurationUs.load() > 0)
+                                ? fallbackFrameDurationUs.load()
+                                : 33333;
         }
         lastPtsUs = ptsUs;
-        lastDurationUs = durationUs;
+        lastDurationUs = frameDurationUs;
 
-        videoFrames.push(QueuedFrame{poolIndex, ptsUs, durationUs,
+        videoFrames.push(QueuedFrame{poolIndex, ptsUs, frameDurationUs,
                                      static_cast<uint64_t>(decoderSerial), info,
                                      decodeMs});
       }
@@ -2779,7 +2790,7 @@ struct Player::Impl {
             }
           }
         }
-        int64_t durationUs = static_cast<int64_t>(
+        int64_t audioDurationUs = static_cast<int64_t>(
             (static_cast<uint64_t>(converted) * 1000000ULL) /
             static_cast<uint64_t>(audioDec.outRate));
         if (ptsUs == AV_NOPTS_VALUE) {
@@ -2791,7 +2802,7 @@ struct Player::Impl {
                 static_cast<uint64_t>(audioDec.outRate));
           }
         }
-        audioDec.nextPtsUs = ptsUs + durationUs;
+        audioDec.nextPtsUs = ptsUs + audioDurationUs;
         audioDec.nextPtsValid = true;
         audioDec.writePosFrames += static_cast<int64_t>(converted);
         audioStreamProcessRadio(audioDec.convertBuffer.data(),
@@ -2803,7 +2814,7 @@ struct Player::Impl {
             break;
           }
           uint64_t written = 0;
-          PlayerState st = state.load(std::memory_order_relaxed);
+          [[maybe_unused]] PlayerState st = state.load(std::memory_order_relaxed);
           // Always allow blocking to ensure we don't discard audio during prefill.
           // The demuxer deadlock is now prevented by prefillReady returning true if video is full.
           bool allowBlock = true;
@@ -3049,7 +3060,7 @@ struct Player::Impl {
       
       static int64_t lastSanitizedPtsUs = -1;
       static int64_t ptsOffsetUs = 0;
-      static int lastSanitizedSerial = -1;
+      static uint64_t lastSanitizedSerial = 0;
       int64_t rawPtsUs = front.ptsUs;
       int64_t sanitizedPtsUs = rawPtsUs;
       int64_t ptsRepairErr = 0;
@@ -3374,6 +3385,7 @@ Player::~Player() { close(); }
 
 bool Player::open(const PlayerConfig& config, std::string* error) {
   if (!impl_) return false;
+  (void)error;
   if (impl_->ctrlRunning.load()) {
     close();
   }

@@ -122,7 +122,8 @@ float estimateOutputStageNominalPowerWatts(
       }
     }
 
-    float secondaryRms = std::sqrt(sumSq / std::max(sampleCount, 1));
+    float secondaryRms =
+        static_cast<float>(std::sqrt(sumSq / std::max(sampleCount, 1)));
     bestSecondaryRms = std::max(bestSecondaryRms, secondaryRms);
   }
 
@@ -243,6 +244,7 @@ DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
                                          j[1][1], j[1][2], j[2][0], j[2][1],
                                          j[2][2], rhs, delta);
       assert(solved && "interstage 3x3 solve failed");
+      (void)solved;
 
       primaryVoltage += delta[0];
       secondaryAVoltage += delta[1];

@@ -1132,14 +1132,65 @@ static bool applyRadioSettingsValue(Radio1938& radio,
       return setFloat(radio.speakerStage.speaker.coneBodyGainDb,
                       "speaker.coneBodyGainDb");
     }
+    if (keyNorm == "upperbreakuphz") {
+      return setFloat(radio.speakerStage.speaker.upperBreakupHz,
+                      "speaker.upperBreakupHz");
+    }
+    if (keyNorm == "upperbreakupq") {
+      return setFloat(radio.speakerStage.speaker.upperBreakupQ,
+                      "speaker.upperBreakupQ");
+    }
+    if (keyNorm == "upperbreakupgaindb") {
+      return setFloat(radio.speakerStage.speaker.upperBreakupGainDb,
+                      "speaker.upperBreakupGainDb");
+    }
+    if (keyNorm == "conediphz") {
+      return setFloat(radio.speakerStage.speaker.coneDipHz,
+                      "speaker.coneDipHz");
+    }
+    if (keyNorm == "conedipq") {
+      return setFloat(radio.speakerStage.speaker.coneDipQ,
+                      "speaker.coneDipQ");
+    }
+    if (keyNorm == "conedipgaindb") {
+      return setFloat(radio.speakerStage.speaker.coneDipGainDb,
+                      "speaker.coneDipGainDb");
+    }
     if (keyNorm == "toplphz") {
       return setFloat(radio.speakerStage.speaker.topLpHz, "speaker.topLpHz");
+    }
+    if (keyNorm == "hflosslphz") {
+      return setFloat(radio.speakerStage.speaker.hfLossLpHz,
+                      "speaker.hfLossLpHz");
+    }
+    if (keyNorm == "hflossdepth") {
+      return setFloat(radio.speakerStage.speaker.hfLossDepth,
+                      "speaker.hfLossDepth");
     }
     if (keyNorm == "filterq") {
       return setFloat(radio.speakerStage.speaker.filterQ, "speaker.filterQ");
     }
     if (keyNorm == "limit") {
       return setFloat(radio.speakerStage.speaker.limit, "speaker.limit");
+    }
+    if (keyNorm == "asymbias") {
+      return setFloat(radio.speakerStage.speaker.asymBias, "speaker.asymBias");
+    }
+    if (keyNorm == "suspensioncompliancetolerance") {
+      return setFloat(radio.speakerStage.speaker.suspensionComplianceTolerance,
+                      "speaker.suspensionComplianceTolerance");
+    }
+    if (keyNorm == "conemasstolerance") {
+      return setFloat(radio.speakerStage.speaker.coneMassTolerance,
+                      "speaker.coneMassTolerance");
+    }
+    if (keyNorm == "breakuptolerance") {
+      return setFloat(radio.speakerStage.speaker.breakupTolerance,
+                      "speaker.breakupTolerance");
+    }
+    if (keyNorm == "voicecoiltolerance") {
+      return setFloat(radio.speakerStage.speaker.voiceCoilTolerance,
+                      "speaker.voiceCoilTolerance");
     }
     if (keyNorm == "excursionref") {
       return setFloat(radio.speakerStage.speaker.excursionRef,

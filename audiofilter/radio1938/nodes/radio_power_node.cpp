@@ -143,7 +143,6 @@ float RadioPowerNode::run(Radio1938& radio, float y, RadioSampleContext&) {
   if (radio.calibration.enabled) {
     radio.calibration.validationSampleCount++;
   }
-  float powerT = computePowerLoadT(power);
   float driverSupplyScale =
       computePowerBranchSupplyScale(radio, power.supplyDriveDepth);
   float outputSupplyScale = computePowerBranchSupplyScale(radio, 1.0f);

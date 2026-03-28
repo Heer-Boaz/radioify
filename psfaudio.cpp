@@ -17,6 +17,8 @@
 #include <thread>
 #include <vector>
 
+#include "ui_helpers.h"
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -107,15 +109,6 @@ struct FreeDeleter {
   }
 };
 
-std::string toUtf8String(const std::filesystem::path& path) {
-#ifdef _WIN32
-  auto u8 = path.u8string();
-  return std::string(u8.begin(), u8.end());
-#else
-  return path.string();
-#endif
-}
-
 std::string toLowerAscii(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char ch) {
@@ -148,9 +141,10 @@ std::filesystem::path getExecutableDir() {
 }
 
 std::filesystem::path getEnvPath(const char* name) {
-  const char* value = std::getenv(name);
-  if (!value || value[0] == '\0') return {};
-  return std::filesystem::path(value);
+  if (const auto value = getEnvString(name)) {
+    return std::filesystem::path(*value);
+  }
+  return {};
 }
 
 void appendUniquePath(std::vector<std::filesystem::path>* out,
@@ -367,8 +361,7 @@ bool isAbsolutePath(const std::filesystem::path& path) {
 
 PsfFileHandle* tryOpenPsfFile(const std::filesystem::path& path) {
   if (path.empty()) return nullptr;
-  std::string pathUtf8 = toUtf8String(path);
-  std::FILE* fp = std::fopen(pathUtf8.c_str(), "rb");
+  std::FILE* fp = openFileUtf8(path, "rb");
   if (!fp) return nullptr;
   auto* handle = new PsfFileHandle();
   handle->fp = fp;
@@ -507,9 +500,8 @@ int computeTrackLengthMs(const PsfMetadata& meta) {
 }
 
 std::filesystem::path findBiosPath(const std::filesystem::path& psfPath) {
-  const char* env = std::getenv("RADIOIFY_PSF_BIOS");
-  if (env && env[0] != '\0') {
-    return std::filesystem::path(env);
+  if (const auto env = getEnvPath("RADIOIFY_PSF_BIOS"); !env.empty()) {
+    return env;
   }
   if (!psfPath.empty()) {
     std::filesystem::path local = psfPath.parent_path() / "hebios.bin";
@@ -542,8 +534,7 @@ bool ensureBiosLoaded(const std::filesystem::path& psfPath,
     return false;
   }
 
-  std::string biosUtf8 = toUtf8String(biosPath);
-  std::FILE* fp = std::fopen(biosUtf8.c_str(), "rb");
+  std::FILE* fp = openFileUtf8(biosPath, "rb");
   if (!fp) {
     if (error) *error = "Failed to open hebios.bin.";
     return false;
