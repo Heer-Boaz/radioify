@@ -10,6 +10,7 @@ struct SpeakerSim {
   Biquad coneDip;
   Biquad topLp;
   Biquad hfLossLp;
+  float electricalSampleRate = 0.0f;
   float drive = 0.0f;
   float limit = 0.0f;
   float asymBias = 0.0f;
@@ -38,6 +39,21 @@ struct SpeakerSim {
   float excursionRef = 0.0f;
   float complianceLossDepth = 0.0f;
   float hfLossDepth = 0.0f;
+  float voiceCoilResistanceOhms = 0.0f;
+  float voiceCoilInductanceHenries = 0.0f;
+  float movingMassKg = 0.0f;
+  float forceFactorBl = 0.0f;
+  float suspensionComplianceMetersPerNewton = 0.0f;
+  float mechanicalDampingNsPerMeter = 0.0f;
+  float nominalLoadOhms = 0.0f;
+  float electricalCurrentAmps = 0.0f;
+  float coneVelocityMetersPerSecond = 0.0f;
+  float coneDisplacementMeters = 0.0f;
+  float backEmfVolts = 0.0f;
+  float loadSenseVoltage = 0.0f;
+  float loadSenseCurrent = 0.0f;
+  float loadSenseCoeff = 0.0f;
+  float effectiveLoadOhms = 0.0f;
 };
 
 #endif  // RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_SPEAKER_SIM_H

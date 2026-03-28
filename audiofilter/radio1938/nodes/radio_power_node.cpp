@@ -19,6 +19,15 @@ bool powerUsesInternalOversampling(const Radio1938& radio) {
   return powerInternalOversampleFactor(radio) > 1.0f;
 }
 
+float resolvedSpeakerLoadOhms(const Radio1938& radio) {
+  float nominal = requirePositiveFinite(radio.power.outputLoadResistanceOhms);
+  float reflected = radio.speakerStage.speaker.effectiveLoadOhms;
+  if (!std::isfinite(reflected) || reflected <= 0.0f) {
+    return nominal;
+  }
+  return std::clamp(reflected, 0.4f * nominal, 8.0f * nominal);
+}
+
 float runPowerStageSample(Radio1938& radio, float y) {
   auto& power = radio.power;
   auto& controlSense = radio.controlSense;
@@ -109,16 +118,10 @@ float runPowerStageSample(Radio1938& radio, float y) {
       requirePositiveFinite(power.outputTubeQuiescentPlateVolts *
                             outputSupplyScale);
   const float outputPrimaryLoadResistance = 0.0f;
-  AffineTransformerProjection affineOut{};
-  if (power.outputTransformerAffineReady) {
-    affineOut.base = evalFixedLoadAffineBase(
-        power.outputTransformerAffineStateA, power.outputTransformer);
-    affineOut.slope = power.outputTransformerAffineSlope;
-  } else {
-    affineOut = buildAffineProjection(
-        power.outputTransformer, power.outputLoadResistanceOhms,
-        outputPrimaryLoadResistance);
-  }
+  float secondaryLoadResistance = resolvedSpeakerLoadOhms(radio);
+  AffineTransformerProjection affineOut = buildAffineProjection(
+      power.outputTransformer, secondaryLoadResistance,
+      outputPrimaryLoadResistance);
   float solvedOutputPrimaryVoltage = solveOutputPrimaryVoltageAffine(
       affineOut, power, outputPlateQuiescent, power.outputGridAVolts,
       power.outputGridBVolts, power.outputTransformer.primaryVoltage);
@@ -158,6 +161,7 @@ float runPowerStageSample(Radio1938& radio, float y) {
   if (power.postLpHz > 0.0f) {
     y = power.postLpf.process(y);
   }
+  radio.speakerStage.physicalDriveVolts = y;
   if (radio.calibration.enabled) {
     radio.calibration.outputPrimaryVolts.accumulate(outputSample.primaryVoltage);
     radio.calibration.speakerSecondaryVolts.accumulate(y);
@@ -331,6 +335,7 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.osLpIn.reset();
   power.osLpOut.reset();
   power.postLpf.reset();
+  radio.speakerStage.physicalDriveVolts = 0.0f;
 }
 
 float RadioPowerNode::run(Radio1938& radio, float y, RadioSampleContext&) {

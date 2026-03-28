@@ -581,6 +581,7 @@ struct Radio1938 {
   struct SpeakerStageState {
     float osPrev = 0.0f;
     float drive = 0.0f;
+    float physicalDriveVolts = 0.0f;
     Biquad osLpIn;
     Biquad osLpOut;
     SpeakerSim speaker;

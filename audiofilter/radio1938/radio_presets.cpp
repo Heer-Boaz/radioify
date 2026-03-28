@@ -252,6 +252,12 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
   radio.speakerStage.speaker.drive = 1.0f;
   radio.speakerStage.speaker.limit = 0.0f;
+  radio.speakerStage.speaker.voiceCoilResistanceOhms = 3.2f;
+  radio.speakerStage.speaker.voiceCoilInductanceHenries = 0.18e-3f;
+  radio.speakerStage.speaker.movingMassKg = 0.014f;
+  radio.speakerStage.speaker.forceFactorBl = 4.3f;
+  radio.speakerStage.speaker.suspensionComplianceMetersPerNewton = 4.3e-4f;
+  radio.speakerStage.speaker.mechanicalDampingNsPerMeter = 5.0f;
   radio.speakerStage.speaker.excursionRef = 8.0f;
   radio.speakerStage.speaker.complianceLossDepth = 0.05f;
   radio.speakerStage.speaker.asymBias = 0.06f;
