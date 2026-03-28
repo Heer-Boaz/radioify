@@ -387,8 +387,9 @@ struct Radio1938 {
 
   struct DetectorAudioNodeState {
     uint32_t appliedConfigRevision = 0;
-    // Reduced-order audio detector branch fed from the demodulated diode output.
-    // This is separate from the slower storage/AVC node inside AMDetector.
+    // Reduced-order second-detector audio branch fed from the demodulated
+    // detector output. This is separate from the slower AVC storage path inside
+    // AMDetector; do not turn it into an extra synthetic bandwidth knob.
     float audioNode = 0.0f;
     float audioEnv = 0.0f;
     bool warmStartPending = true;

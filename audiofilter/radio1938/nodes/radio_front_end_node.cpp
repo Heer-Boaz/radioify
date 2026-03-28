@@ -25,8 +25,26 @@ void ensureFrontEndConfigured(Radio1938& radio) {
 
   float safeAudioBw = std::max(tuning.tunedBw, 1.0f);
   float physicalChannelBw = 2.0f * safeAudioBw;
-  float preBw = std::max(physicalChannelBw * tuning.preBwScale, 1.0f);
-  float rfBw = std::max(physicalChannelBw * tuning.postBwScale, 1.0f);
+  // Two tuned RF circuits in cascade should not each be set to the final
+  // desired channel width, or the combined response collapses the sidebands.
+  // Derive broader per-stage RF bandwidths so the overall front-end still
+  // passes the published AM channel while the IF strip remains the dominant
+  // selectivity element.
+  constexpr float kRfStageCascadeCompensation = 1.85f;
+  // The pre/post biquad bandpasses are numerical helpers around the explicit RF
+  // tanks; they must stay wider than the physical channel so they do not become
+  // hidden selectivity bottlenecks.
+  constexpr float kRfHelperBandpassCompensation = 4.0f;
+  float preBw = std::max(physicalChannelBw * tuning.preBwScale *
+                             kRfStageCascadeCompensation,
+                         1.0f);
+  float rfBw = std::max(physicalChannelBw * tuning.postBwScale *
+                            kRfStageCascadeCompensation,
+                        1.0f);
+  float preHelperBw =
+      std::max(physicalChannelBw * kRfHelperBandpassCompensation, preBw);
+  float postHelperBw =
+      std::max(physicalChannelBw * kRfHelperBandpassCompensation, rfBw);
   float rfCenterHz = tuning.sourceCarrierHz;
   float antennaDrift = std::max(radio.identity.frontEndAntennaDrift, 0.5f);
   float rfDrift = std::max(radio.identity.frontEndRfDrift, 0.5f);
@@ -54,9 +72,11 @@ void ensureFrontEndConfigured(Radio1938& radio) {
                            frontEnd.rfSeriesResistanceOhms + rfLoadResistance,
                            rfLoadResistance, 8);
   frontEnd.preLpfIn.setBandpass(
-      radio.sampleRate, rfCenterHz, std::max(0.35f, rfCenterHz / preBw));
+      radio.sampleRate, rfCenterHz,
+      std::max(0.35f, rfCenterHz / std::max(preHelperBw, 1.0f)));
   frontEnd.preLpfOut.setBandpass(
-      radio.sampleRate, rfCenterHz, std::max(0.35f, rfCenterHz / rfBw));
+      radio.sampleRate, rfCenterHz,
+      std::max(0.35f, rfCenterHz / std::max(postHelperBw, 1.0f)));
   frontEnd.appliedConfigRevision = tuning.configRevision;
 }
 

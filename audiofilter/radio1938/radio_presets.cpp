@@ -89,7 +89,9 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.receiverCircuit.volumeControlTapResistanceOhms = 1000000.0f;
   radio.receiverCircuit.volumeControlPosition = 1.0f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 490000.0f;
-  radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.015e-6f;
+  // Philco Service Bulletin 258 shows the tapped 2 M volume control feeding a
+  // small 110 mmfd loudness / compensation branch, not a broad 15 nF shunt.
+  radio.receiverCircuit.volumeControlLoudnessCapFarads = 110e-12f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
   radio.receiverCircuit.gridLeakResistanceOhms = 1000000.0f;
   radio.receiverCircuit.tubePlateSupplyVolts = 250.0f;

@@ -28,9 +28,9 @@ void ensureDetectorAudioConfigured(Radio1938& radio) {
   if (detectorAudio.appliedConfigRevision == desiredRevision) return;
 
   float safeBwHz = std::max(detectorAudioBandwidthHz(radio), 1.0f);
-  // This pole is residual cleanup on the already-demodulated audio branch. It
-  // should sit above the intended sideband so the detector audio node, not an
-  // arbitrary monitor filter, sets the audible bandwidth.
+  // This pole is residual cleanup on the reduced-order second-detector audio
+  // branch. Keep it above the intended service sideband so the named detector
+  // / receiver network, not a hidden monitor filter, sets the bandwidth.
   float audioCleanupHz = std::clamp(1.35f * safeBwHz, 3800.0f,
                                     std::min(9500.0f, 0.20f * radio.sampleRate));
   detectorAudio.postLp.setLowpass(radio.sampleRate, audioCleanupHz,
@@ -45,12 +45,12 @@ float effectiveDetectorAudioLoadConductance(const Radio1938& radio) {
   return dischargeG + radio.receiverCircuit.detectorLoadConductance;
 }
 
-float deriveDetectorAudioCapFarads(const Radio1938& radio, float loadG) {
-  float safeLoadG = std::max(loadG, 1e-9f);
-  float targetAudioPoleHz =
-      std::clamp(1.15f * std::max(detectorAudioBandwidthHz(radio), 1.0f),
-                 3000.0f, std::min(9000.0f, 0.18f * radio.sampleRate));
-  return safeLoadG / (kRadioTwoPi * targetAudioPoleHz);
+float detectorAudioStorageCapFarads(const Radio1938& radio) {
+  // Keep the fast detector-audio branch anchored to the explicit detector
+  // storage capacitor instead of inventing a separate audio pole from the
+  // desired bandwidth. The branch is still reduced-order, but its state now
+  // names the actual capacitance that stores charge at the detector.
+  return std::max(radio.demod.am.detectorStorageCapFarads, 1e-12f);
 }
 
 }  // namespace
@@ -86,7 +86,7 @@ float RadioDetectorAudioNode::run(Radio1938& radio,
 
   float dt = 1.0f / std::max(radio.sampleRate, 1.0f);
   float loadG = effectiveDetectorAudioLoadConductance(radio);
-  float audioCapG = deriveDetectorAudioCapFarads(radio, loadG) / dt;
+  float audioCapG = detectorAudioStorageCapFarads(radio) / dt;
   float sourceG = 0.0f;
   if (audioRect > detectorAudio.audioNode) {
     sourceG = 1.0f / std::max(detector.audioChargeResistanceOhms, 1e-6f);
