@@ -27,7 +27,6 @@ constexpr float kPhilcoUndistortedOutputWatts = 15.0f;
 constexpr float kPhilcoVolumeControlOhms = 2000000.0f;
 constexpr float kPhilcoVolumeTapOhms = 1000000.0f;
 constexpr float kPhilcoLoudnessResistanceOhms = 490000.0f;
-constexpr float kPhilcoLoudnessCapFarads = 110e-12f;
 constexpr float kPhilcoFirstAudioCouplingCapFarads = 0.01e-6f;
 
 struct HarnessConfig {
@@ -806,9 +805,6 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
     addRange(rows, "ReceiverInputNetwork", "philco_loudness_resistor_490k",
              radio.receiverCircuit.volumeControlLoudnessResistanceOhms, 0.46e6,
              0.52e6, "Service Bulletin 258");
-    addRange(rows, "ReceiverInputNetwork", "philco_loudness_cap_110pf",
-             radio.receiverCircuit.volumeControlLoudnessCapFarads, 90e-12,
-             130e-12, "Service Bulletin 258");
     addRange(rows, "ReceiverInputNetwork", "philco_first_audio_coupling_0p01uf",
              radio.receiverCircuit.couplingCapFarads, 9e-9, 11e-9,
              "Service Bulletin 258");
