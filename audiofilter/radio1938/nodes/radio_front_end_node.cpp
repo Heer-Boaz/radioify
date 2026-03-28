@@ -30,11 +30,11 @@ void ensureFrontEndConfigured(Radio1938& radio) {
   // Derive broader per-stage RF bandwidths so the overall front-end still
   // passes the published AM channel while the IF strip remains the dominant
   // selectivity element.
-  constexpr float kRfStageCascadeCompensation = 1.85f;
+  constexpr float kRfStageCascadeCompensation = 2.35f;
   // The pre/post biquad bandpasses are numerical helpers around the explicit RF
   // tanks; they must stay wider than the physical channel so they do not become
   // hidden selectivity bottlenecks.
-  constexpr float kRfHelperBandpassCompensation = 4.0f;
+  constexpr float kRfHelperBandpassCompensation = 5.0f;
   float preBw = std::max(physicalChannelBw * tuning.preBwScale *
                              kRfStageCascadeCompensation,
                          1.0f);

@@ -639,17 +639,67 @@ DemodSidebandMetrics runRealRfDetectorSidebandResponse(Radio1938& radio,
                               acRmsOf(detectorAudio, kNodeTestFrames / 2u)};
 }
 
+DemodSidebandMetrics runIfStripRealRfDetectorSidebandResponse(Radio1938& radio,
+                                                              float audioHz,
+                                                              float carrierRmsVolts) {
+  RadioIFStripNode::reset(radio);
+  RadioAMDetectorNode::reset(radio);
+  RadioDetectorAudioNode::reset(radio);
+  radio.controlBus.controlVoltage = 0.0f;
+  radio.frontEnd.rfGain = 1.0f;
+  radio.mixer.conversionGain = 1.0f;
+  float carrierHz = radio.tuning.sourceCarrierHz;
+  float carrierPeak = std::sqrt(2.0f) * std::max(carrierRmsVolts, 0.0f);
+  std::vector<float> detectorFeed;
+  std::vector<float> detectorAudio;
+  detectorFeed.reserve(kNodeTestFrames);
+  detectorAudio.reserve(kNodeTestFrames);
+  for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
+    float t = static_cast<float>(i) / std::max(radio.sampleRate, 1.0f);
+    float env = 1.0f + 0.5f * std::sin(kRadioTwoPi * audioHz * t);
+    float rf = carrierPeak * env * std::cos(kRadioTwoPi * carrierHz * t);
+    RadioSampleContext ctx{};
+    ctx.signal.setRealRf(rf);
+    float y = RadioIFStripNode::run(radio, rf, ctx);
+    float feedMag = std::sqrt(ctx.signal.detectorInputI * ctx.signal.detectorInputI +
+                              ctx.signal.detectorInputQ * ctx.signal.detectorInputQ);
+    float audioRect = RadioAMDetectorNode::run(radio, y, ctx);
+    float audio = RadioDetectorAudioNode::run(radio, audioRect, ctx);
+    detectorFeed.push_back(feedMag);
+    detectorAudio.push_back(audio);
+  }
+  return DemodSidebandMetrics{acRmsOf(detectorFeed, kNodeTestFrames / 2u),
+                              acRmsOf(detectorAudio, kNodeTestFrames / 2u)};
+}
+
 std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
   std::vector<TestRow> rows;
 
   {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::Tuning, PassId::IFStrip});
+    float serviceEdgeHz = std::max(300.0f, 0.80f * radio.tuning.tunedBw);
     addRange(rows, "Tuning", "source_carrier_positive", radio.tuning.sourceCarrierHz,
              1000.0, 0.49 * radio.sampleRate, "published carrier");
     addRange(rows, "Tuning", "bandwidth_clamped", radio.tuning.tunedBw,
              radio.tuning.safeBwMinHz, radio.tuning.safeBwMaxHz, "published bw");
+    addPredicate(rows, "Tuning", "source_carrier_exceeds_service_edge",
+                 radio.tuning.sourceCarrierHz > 1.25f * serviceEdgeHz,
+                 radio.tuning.sourceCarrierHz /
+                     std::max<double>(serviceEdgeHz, 1e-12),
+                 "carrier must remain meaningfully above the published service edge");
     addRange(rows, "IFStrip", "philco_if_center_470kc", radio.ifStrip.ifCenterHz,
              469000.0, 471000.0, "Service Bulletin 258");
+  }
+
+  {
+    HarnessConfig lowFsConfig = config;
+    lowFsConfig.sampleRate = 32000.0f;
+    lowFsConfig.bandwidthHz = 9000.0f;
+    Radio1938 radio = makeNodeFixture(lowFsConfig, 0.0f, {PassId::Tuning});
+    addPredicate(rows, "Tuning", "bandwidth_is_sample_rate_limited",
+                 radio.tuning.tunedBw <= 0.20f * lowFsConfig.sampleRate + 1e-3f,
+                 radio.tuning.tunedBw,
+                 "published audio bandwidth must fit sample-rate-limited physics");
   }
 
   {
@@ -869,6 +919,21 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
     addRange(rows, "FrontEnd", "zero_rf_gain_mutes_output", mutedOut, -1e-7, 1e-7,
              "explicit RF gain of zero must kill the stage");
 
+    float serviceEdgeHz = std::max(300.0f, 0.80f * radio.tuning.tunedBw);
+    Radio1938 radioUpperEdge = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
+    Radio1938 radioLowerEdge = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
+    double upperEdgeRms = runFrontEndRms(
+        radioUpperEdge, radioUpperEdge.tuning.sourceCarrierHz + serviceEdgeHz, 0.0f);
+    double lowerEdgeRms = runFrontEndRms(
+        radioLowerEdge,
+        std::max(40.0f, radioLowerEdge.tuning.sourceCarrierHz - serviceEdgeHz), 0.0f);
+    addPredicate(rows, "FrontEnd", "service_edge_sidebands_remain_in_passband",
+                 std::min(lowerEdgeRms, upperEdgeRms) >
+                     0.35 * std::max(tunedRms, 1e-12),
+                 std::min(lowerEdgeRms, upperEdgeRms) /
+                     std::max(tunedRms, 1e-12),
+                 "weakest service-edge sideband / carrier-centered RMS");
+
     bool finiteSweep = true;
     for (float controlVoltage : {0.0f, 0.625f, 1.25f}) {
       for (float detuneScale : {0.0f, 1.0f, 2.0f}) {
@@ -928,8 +993,10 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
     Radio1938 radioTuned = makeNodeFixture(config, 0.0f, {PassId::IFStrip});
     Radio1938 radioDetuned = makeNodeFixture(config, 0.0f, {PassId::IFStrip});
     double tunedMag = runIfDetectorMagnitudeRms(radioTuned, 0.0f);
+    float detuneHz = std::min(3.0f * radioDetuned.tuning.tunedBw,
+                              0.40f * radioDetuned.sampleRate);
     double detunedMag =
-        runIfDetectorMagnitudeRms(radioDetuned, 4.0f * radioDetuned.tuning.tunedBw);
+        runIfDetectorMagnitudeRms(radioDetuned, detuneHz);
     addPredicate(rows, "IFStrip", "loaded_can_prefers_tuned_envelope",
                  tunedMag > 1.25 * std::max(detunedMag, 1e-12),
                  tunedMag / std::max(detunedMag, 1e-12),
@@ -939,16 +1006,32 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
         makeNodeFixture(config, 0.0f, {PassId::IFStrip, PassId::Demod, PassId::DetectorAudio});
     Radio1938 radioHighSideband =
         makeNodeFixture(config, 0.0f, {PassId::IFStrip, PassId::Demod, PassId::DetectorAudio});
+    float serviceEdgeHz = std::max(300.0f, 0.80f * radioLowSideband.tuning.tunedBw);
     auto low = runIfDetectorSidebandResponse(radioLowSideband, 100.0f);
-    auto high = runIfDetectorSidebandResponse(radioHighSideband, 5000.0f);
-    addPredicate(rows, "IFStrip", "detector_feed_supports_5khz_sideband",
+    auto high = runIfDetectorSidebandResponse(radioHighSideband, serviceEdgeHz);
+    addPredicate(rows, "IFStrip", "detector_feed_supports_service_edge_sideband",
                  high.detectorFeedRms > 0.25 * std::max(low.detectorFeedRms, 1e-12),
                  high.detectorFeedRms / std::max(low.detectorFeedRms, 1e-12),
-                 "5 kHz / 100 Hz detector-feed ripple");
-    addPredicate(rows, "IFStrip", "detector_audio_supports_5khz_sideband",
+                 "edge-of-service-band / 100 Hz detector-feed ripple");
+    addPredicate(rows, "IFStrip", "detector_audio_supports_service_edge_sideband",
                  high.detectorAudioRms > 0.20 * std::max(low.detectorAudioRms, 1e-12),
                  high.detectorAudioRms / std::max(low.detectorAudioRms, 1e-12),
-                 "5 kHz / 100 Hz detector-audio ripple");
+                 "edge-of-service-band / 100 Hz detector-audio ripple");
+
+    Radio1938 radioDirectRfLow =
+        makeNodeFixture(config, 0.0f, {PassId::IFStrip, PassId::Demod, PassId::DetectorAudio});
+    Radio1938 radioDirectRfHigh =
+        makeNodeFixture(config, 0.0f, {PassId::IFStrip, PassId::Demod, PassId::DetectorAudio});
+    auto directRfLow = runIfStripRealRfDetectorSidebandResponse(
+        radioDirectRfLow, 100.0f, config.carrierRmsVolts);
+    auto directRfHigh = runIfStripRealRfDetectorSidebandResponse(
+        radioDirectRfHigh, serviceEdgeHz, config.carrierRmsVolts);
+    addPredicate(rows, "IFStrip", "real_rf_source_envelope_supports_service_edge_sideband",
+                 directRfHigh.detectorFeedRms >
+                     0.45 * std::max(directRfLow.detectorFeedRms, 1e-12),
+                 directRfHigh.detectorFeedRms /
+                     std::max(directRfLow.detectorFeedRms, 1e-12),
+                 "direct real-RF into IF strip, edge / 100 Hz detector-feed ripple");
 
     Radio1938 zero = makeNodeFixture(config, 0.0f, {PassId::IFStrip});
     RadioSampleContext zeroCtx{};
@@ -985,16 +1068,47 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
                                        PassId::Demod, PassId::DetectorAudio});
     auto rfLow =
         runRealRfDetectorSidebandResponse(radioRfLow, 100.0f, config.carrierRmsVolts);
-    auto rfHigh =
-        runRealRfDetectorSidebandResponse(radioRfHigh, 5000.0f, config.carrierRmsVolts);
-    addPredicate(rows, "RFChain", "real_rf_detector_feed_supports_5khz_sideband",
-                 rfHigh.detectorFeedRms > 0.50 * std::max(rfLow.detectorFeedRms, 1e-12),
-                 rfHigh.detectorFeedRms / std::max(rfLow.detectorFeedRms, 1e-12),
-                 "5 kHz / 100 Hz detector-feed ripple");
-    addPredicate(rows, "RFChain", "real_rf_detector_audio_supports_5khz_sideband",
-                 rfHigh.detectorAudioRms > 0.50 * std::max(rfLow.detectorAudioRms, 1e-12),
-                 rfHigh.detectorAudioRms / std::max(rfLow.detectorAudioRms, 1e-12),
-                 "5 kHz / 100 Hz detector-audio ripple");
+    auto rfHigh = runRealRfDetectorSidebandResponse(radioRfHigh, serviceEdgeHz,
+                                                    config.carrierRmsVolts);
+    Radio1938 radioFrontEndCarrier = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
+    Radio1938 radioFrontEndLower = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
+    Radio1938 radioFrontEndUpper = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
+    double frontEndCarrierRms = runFrontEndRms(
+        radioFrontEndCarrier, radioFrontEndCarrier.tuning.sourceCarrierHz, 0.0f);
+    double frontEndLowerEdgeRms = runFrontEndRms(
+        radioFrontEndLower,
+        std::max(40.0f, radioFrontEndLower.tuning.sourceCarrierHz - serviceEdgeHz), 0.0f);
+    double frontEndUpperEdgeRms = runFrontEndRms(
+        radioFrontEndUpper, radioFrontEndUpper.tuning.sourceCarrierHz + serviceEdgeHz, 0.0f);
+    double frontEndAmEdgeRatio =
+        0.5 * (frontEndLowerEdgeRms + frontEndUpperEdgeRms) /
+        std::max(frontEndCarrierRms, 1e-12);
+    double directFeedRatio =
+        directRfHigh.detectorFeedRms / std::max(directRfLow.detectorFeedRms, 1e-12);
+    double directAudioRatio =
+        directRfHigh.detectorAudioRms / std::max(directRfLow.detectorAudioRms, 1e-12);
+    double expectedFeedRatio = frontEndAmEdgeRatio * directFeedRatio;
+    double expectedAudioRatio = frontEndAmEdgeRatio * directAudioRatio;
+    double actualFeedRatio =
+        rfHigh.detectorFeedRms / std::max(rfLow.detectorFeedRms, 1e-12);
+    double actualAudioRatio =
+        rfHigh.detectorAudioRms / std::max(rfLow.detectorAudioRms, 1e-12);
+    addPredicate(rows, "RFChain", "real_rf_detector_feed_matches_front_end_and_if_prediction",
+                 actualFeedRatio > 0.65 * expectedFeedRatio &&
+                     actualFeedRatio < 1.35 * expectedFeedRatio,
+                 actualFeedRatio / std::max(expectedFeedRatio, 1e-12),
+                 "actual / predicted feed ratio from FrontEnd sidebands and direct IF strip");
+    addPredicate(rows, "RFChain", "real_rf_detector_audio_matches_front_end_and_if_prediction",
+                 actualAudioRatio > 0.60 * expectedAudioRatio &&
+                     actualAudioRatio < 1.40 * expectedAudioRatio,
+                 actualAudioRatio / std::max(expectedAudioRatio, 1e-12),
+                 "actual / predicted audio ratio from FrontEnd sidebands and direct IF strip");
+    addPredicate(rows, "RFChain", "front_end_plus_mixer_tracks_front_end_am_sideband_average",
+                 actualFeedRatio >
+                     0.65 * frontEndAmEdgeRatio * directFeedRatio,
+                 actualFeedRatio /
+                     std::max(frontEndAmEdgeRatio * directFeedRatio, 1e-12),
+                 "full-chain feed ratio / front-end-plus-direct-IF prediction");
   }
 
   return rows;
@@ -1174,6 +1288,20 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
     float zeroOut = RadioDetectorAudioNode::run(zero, 0.0f, zeroCtx);
     addRange(rows, "DetectorAudio", "zero_input_stays_zero", zeroOut, -1e-7, 1e-7,
              "no detected envelope means no audio output");
+
+    bool nonnegativeSweep = true;
+    for (float sampleRate : {32000.0f, 44100.0f, 48000.0f, 96000.0f}) {
+      HarnessConfig alt = config;
+      alt.sampleRate = sampleRate;
+      alt.bandwidthHz = 2400.0f;
+      Radio1938 swept =
+          makeNodeFixture(alt, 0.0f, {PassId::Demod, PassId::DetectorAudio});
+      auto trace = runDetectorAudioStepTrace(swept);
+      nonnegativeSweep = nonnegativeSweep && minOf(trace) >= -1e-7;
+    }
+    addPredicate(rows, "DetectorAudio", "nonnegative_over_sample_rate_sweep",
+                 nonnegativeSweep, nonnegativeSweep ? 1.0 : 0.0,
+                 "detector-audio envelope must stay nonnegative across common sample rates");
   }
 
   {
@@ -1638,6 +1766,7 @@ void printCoverage(const HarnessConfig& config, const std::vector<TestRow>& rows
 
 bool allRequestedNodesCovered(const HarnessConfig& config,
                               const std::vector<TestRow>& rows) {
+  if (config.section != "all") return true;
   for (const auto& [_, label] : kNodeLabels) {
     if (!wantsNode(config, label)) continue;
     bool covered = false;

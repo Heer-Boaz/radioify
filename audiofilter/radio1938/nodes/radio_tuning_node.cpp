@@ -9,7 +9,10 @@ namespace {
 float clampPublishedBandwidth(const Radio1938& radio, float bwHz) {
   const auto& tuning = radio.tuning;
   float safeBwMinHz = std::max(tuning.safeBwMinHz, 1.0f);
-  float safeBwMaxHz = std::max(safeBwMinHz, tuning.safeBwMaxHz);
+  float sampleRateLimitedBwHz =
+      0.20f * std::max(radio.sampleRate, 1.0f);
+  float safeBwMaxHz =
+      std::max(safeBwMinHz, std::min(tuning.safeBwMaxHz, sampleRateLimitedBwHz));
   return std::clamp(bwHz, safeBwMinHz, safeBwMaxHz);
 }
 
@@ -25,11 +28,12 @@ float selectSourceCarrierHz(float outputFs,
   if (ifCenterHz > 0.0f) {
     maxCarrier = std::min(maxCarrierByIf, maxCarrierByOutput);
   }
+  float minCarrier = std::max(3000.0f, 0.70f * std::max(bwHz, 1.0f));
   if (maxCarrier <= 6000.0f) {
-    return std::clamp(0.25f * std::max(outputFs, 1.0f), 3000.0f,
+    return std::clamp(0.88f * std::max(maxCarrier, 3000.0f), 3000.0f,
                       std::max(3000.0f, maxCarrierByOutput));
   }
-  return std::clamp(0.62f * maxCarrier, 6000.0f, maxCarrier);
+  return std::clamp(0.92f * maxCarrier, minCarrier, maxCarrier);
 }
 
 float publishTuningConfig(Radio1938& radio, float tuneHz, float bwHz) {

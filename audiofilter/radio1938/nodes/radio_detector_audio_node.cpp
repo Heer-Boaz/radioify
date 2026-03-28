@@ -95,6 +95,7 @@ float RadioDetectorAudioNode::run(Radio1938& radio,
   assert(std::isfinite(denom) && denom > 1e-12f);
   detectorAudio.audioNode = std::max(
       (audioCapG * detectorAudio.audioNode + sourceG * audioRect) / denom, 0.0f);
-  detectorAudio.audioEnv = detectorAudio.postLp.process(detectorAudio.audioNode);
+  detectorAudio.audioEnv =
+      std::max(detectorAudio.postLp.process(detectorAudio.audioNode), 0.0f);
   return detectorAudio.audioEnv;
 }
