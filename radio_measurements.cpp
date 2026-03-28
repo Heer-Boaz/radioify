@@ -27,6 +27,7 @@ constexpr uint32_t kWarmupFrames = 16384u;
 constexpr uint32_t kSteadyTestFrames = 24000u;
 constexpr uint32_t kEnvelopeTestFrames = 9600u;
 constexpr float kSweepProgramPeak = 0.35f;
+constexpr float kNominalProgramPeak = 1.0f;
 constexpr float kImdTonePeak = 0.25f;
 constexpr float kOverdriveProgramPeak = 0.95f;
 constexpr size_t kSpectrumSize = 4096u;
@@ -166,6 +167,10 @@ float amProgramNormScale(const std::vector<float>& program) {
     return 1.0f / maxAbs;
   }
   return 1.0f;
+}
+
+float nominalHarnessModulationIndex(const HarnessConfig& config) {
+  return std::clamp(config.modulationIndex, 0.0f, 0.95f);
 }
 
 float parseFloatArg(char** argv, int& index, int argc, const char* name) {
@@ -774,9 +779,12 @@ double measureImdSummaryDb(const HarnessConfig& config) {
 ToneMetrics measureNominalSinad(const HarnessConfig& config) {
   HarnessConfig nominalConfig = config;
   nominalConfig.carrierRmsVolts = kDefaultCarrierRmsVolts;
-  auto input = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 0.35f);
-  RunResult run = runAmProgram(nominalConfig, input, std::min(config.modulationIndex, 0.5f),
-                               std::max(config.noiseWeight, config.noiseOnlyWeight));
+  auto input =
+      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f,
+               kNominalProgramPeak);
+  RunResult run =
+      runAmProgram(nominalConfig, input, nominalHarnessModulationIndex(config),
+                   std::max(config.noiseWeight, config.noiseOnlyWeight));
   return measureToneMetrics(run.output, config.sampleRate, 1000.0f,
                             static_cast<size_t>(config.sampleRate * 0.20f));
 }
@@ -813,8 +821,9 @@ void runEnvelope(const HarnessConfig& config) {
 void runLevels(const HarnessConfig& config) {
   std::cout << "[levels]\n";
   std::cout << "metric,value\n";
-  auto input = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f,
-                        kSweepProgramPeak);
+  auto input =
+      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f,
+               kNominalProgramPeak);
   RunResult run = runAmProgram(config, input, config.modulationIndex,
                                config.noiseWeight);
   std::cout << "detector_node_rms," << run.radio.calibration.detectorNodeVolts.rms
@@ -881,10 +890,12 @@ void runSpectrum(const HarnessConfig& config) {
   std::cout << "[spectrum]\n";
   std::cout << "freq_hz,peak_amp,dbfs\n";
   // Nominal run to get output waveform
-  auto input = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 0.35f);
+  auto input =
+      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f,
+               kNominalProgramPeak);
   // Use the envelope-trace run to also capture detector node and audioEnv
   EnvelopeTraceResult trace = runAmProgramWithEnvelopeTrace(
-      config, input, std::min(config.modulationIndex, 0.5f),
+      config, input, nominalHarnessModulationIndex(config),
       std::max(config.noiseWeight, config.noiseOnlyWeight));
 
   // Detector node spectrum
@@ -983,8 +994,10 @@ void runSinadSweep(const HarnessConfig& config,
   std::cout << "[" << sectionName << "]\n";
   std::cout << "carrier_rms,tone_rms,residual_rms,sinad_db,sndr_db,max_digital,"
                "speaker_ref_ratio,validation_failed\n";
-  auto input = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 0.35f);
-  float modulationIndex = std::min(config.modulationIndex, 0.5f);
+  auto input =
+      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f,
+               kNominalProgramPeak);
+  float modulationIndex = nominalHarnessModulationIndex(config);
   float effectiveNoiseWeight =
       std::max(config.noiseWeight, config.noiseOnlyWeight);
   size_t analysisStart = static_cast<size_t>(config.sampleRate * 0.20f);
@@ -1069,11 +1082,13 @@ void runReference(const HarnessConfig& config) {
   double imdDb = measureImdSummaryDb(config);
   // Run a nominal program to populate calibration/diagnostic metrics used
   // for reference checks.
-  auto nominalInput = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 0.35f);
+  auto nominalInput =
+      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f,
+               kNominalProgramPeak);
   HarnessConfig nominalConfig = config;
   nominalConfig.carrierRmsVolts = kDefaultCarrierRmsVolts;
   RunResult nominalRun = runAmProgram(nominalConfig, nominalInput,
-                   std::min(config.modulationIndex, 0.5f),
+                   nominalHarnessModulationIndex(config),
                    std::max(config.noiseWeight, config.noiseOnlyWeight));
   Radio1938& radio = nominalRun.radio;
   double detectorTauUs = 1e6 * effectiveDetectorAudioTauSeconds(radio);
