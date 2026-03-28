@@ -6,6 +6,14 @@
 
 void RadioCabinetNode::init(Radio1938& radio, RadioInitContext&) {
   auto& cabinet = radio.cabinet;
+  auto initClarifier = [&](Biquad& clarifier, float hz, float q,
+                           float coupling) {
+    if (hz > 0.0f && q > 0.0f && std::fabs(coupling) > 1e-4f) {
+      clarifier.setBandpass(radio.sampleRate, hz, q);
+    } else {
+      clarifier = Biquad{};
+    }
+  };
   float panelHzDerived =
       cabinet.panelHz * (1.0f + 0.52f * cabinet.panelStiffnessTolerance);
   float chassisHzDerived =
@@ -74,9 +82,12 @@ void RadioCabinetNode::init(Radio1938& radio, RadioInitContext&) {
     cabinet.rearLp = Biquad{};
     cabinet.buf.clear();
   }
-  cabinet.clarifier1 = Biquad{};
-  cabinet.clarifier2 = Biquad{};
-  cabinet.clarifier3 = Biquad{};
+  initClarifier(cabinet.clarifier1, cabinet.clarifier1Hz, cabinet.clarifier1Q,
+                cabinet.clarifier1Coupling);
+  initClarifier(cabinet.clarifier2, cabinet.clarifier2Hz, cabinet.clarifier2Q,
+                cabinet.clarifier2Coupling);
+  initClarifier(cabinet.clarifier3, cabinet.clarifier3Hz, cabinet.clarifier3Q,
+                cabinet.clarifier3Coupling);
   cabinet.index = 0;
 }
 
@@ -98,6 +109,10 @@ void RadioCabinetNode::reset(Radio1938& radio) {
 float RadioCabinetNode::run(Radio1938& radio, float y, RadioSampleContext&) {
   auto& cabinet = radio.cabinet;
   if (!cabinet.enabled) return y;
+  auto applyClarifier = [&](Biquad& clarifier, float coupling, float signal) {
+    if (std::fabs(coupling) <= 1e-4f) return 0.0f;
+    return coupling * clarifier.process(signal);
+  };
 
   float out = cabinet.panel.process(y);
   out = cabinet.chassis.process(out);
@@ -110,6 +125,10 @@ float RadioCabinetNode::run(Radio1938& radio, float y, RadioSampleContext&) {
     rear = cabinet.rearLp.process(rear);
     out -= rear * cabinet.rearMixApplied;
   }
+  float dry = out;
+  out += applyClarifier(cabinet.clarifier1, cabinet.clarifier1Coupling, dry);
+  out += applyClarifier(cabinet.clarifier2, cabinet.clarifier2Coupling, dry);
+  out += applyClarifier(cabinet.clarifier3, cabinet.clarifier3Coupling, dry);
   if (cabinet.grilleLpHz > 0.0f) {
     out = cabinet.grilleLp.process(out);
   }
