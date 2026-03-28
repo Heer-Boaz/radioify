@@ -549,6 +549,12 @@ struct DemodSidebandMetrics {
   double detectorAudioRms = 0.0;
 };
 
+struct CarrierQuietMetrics {
+  double detectorFeedMean = 0.0;
+  double detectorFeedAcRms = 0.0;
+  double detectorAudioAcRms = 0.0;
+};
+
 DetectorRippleMetrics runDetectorRippleTrace(Radio1938& radio) {
   RadioAMDetectorNode::reset(radio);
   RadioDetectorAudioNode::reset(radio);
@@ -670,6 +676,47 @@ DemodSidebandMetrics runIfStripRealRfDetectorSidebandResponse(Radio1938& radio,
   }
   return DemodSidebandMetrics{acRmsOf(detectorFeed, kNodeTestFrames / 2u),
                               acRmsOf(detectorAudio, kNodeTestFrames / 2u)};
+}
+
+CarrierQuietMetrics runRealRfCarrierQuietMetrics(Radio1938& radio,
+                                                 bool includeFrontEnd,
+                                                 float carrierRmsVolts) {
+  RadioInputNode::reset(radio);
+  RadioFrontEndNode::reset(radio);
+  RadioMixerNode::reset(radio);
+  RadioIFStripNode::reset(radio);
+  RadioAMDetectorNode::reset(radio);
+  RadioDetectorAudioNode::reset(radio);
+  radio.controlBus.controlVoltage = 0.0f;
+  float carrierHz = radio.tuning.sourceCarrierHz;
+  float carrierPeak = std::sqrt(2.0f) * std::max(carrierRmsVolts, 0.0f);
+  std::vector<float> detectorFeed;
+  std::vector<float> detectorAudio;
+  detectorFeed.reserve(kNodeTestFrames);
+  detectorAudio.reserve(kNodeTestFrames);
+  for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
+    float t = static_cast<float>(i) / std::max(radio.sampleRate, 1.0f);
+    float rf = carrierPeak * std::cos(kRadioTwoPi * carrierHz * t);
+    RadioSampleContext ctx{};
+    ctx.signal.setRealRf(rf);
+    float y = includeFrontEnd ? RadioInputNode::run(radio, rf, ctx) : rf;
+    if (includeFrontEnd) {
+      y = RadioFrontEndNode::run(radio, y, ctx);
+      y = RadioMixerNode::run(radio, y, ctx);
+    }
+    y = RadioIFStripNode::run(radio, y, ctx);
+    float feedMag = std::sqrt(ctx.signal.detectorInputI * ctx.signal.detectorInputI +
+                              ctx.signal.detectorInputQ * ctx.signal.detectorInputQ);
+    float audioRect = RadioAMDetectorNode::run(radio, y, ctx);
+    float audio = RadioDetectorAudioNode::run(radio, audioRect, ctx);
+    detectorFeed.push_back(feedMag);
+    detectorAudio.push_back(audio);
+  }
+  return CarrierQuietMetrics{
+      meanOf(detectorFeed, kNodeTestFrames / 2u),
+      acRmsOf(detectorFeed, kNodeTestFrames / 2u),
+      acRmsOf(detectorAudio, kNodeTestFrames / 2u),
+  };
 }
 
 std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
@@ -1033,6 +1080,19 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
                      std::max(directRfLow.detectorFeedRms, 1e-12),
                  "direct real-RF into IF strip, edge / 100 Hz detector-feed ripple");
 
+    Radio1938 radioDirectCarrier =
+        makeNodeFixture(config, 0.0f, {PassId::IFStrip, PassId::Demod, PassId::DetectorAudio});
+    CarrierQuietMetrics directCarrier = runRealRfCarrierQuietMetrics(
+        radioDirectCarrier, false, config.carrierRmsVolts);
+    addPredicate(rows, "IFStrip", "real_rf_carrier_stays_quiet_after_downmix",
+                 directCarrier.detectorFeedAcRms <
+                         0.08 * std::max(directCarrier.detectorFeedMean, 1e-12) &&
+                     directCarrier.detectorAudioAcRms <
+                         0.05 * std::max(directCarrier.detectorFeedMean, 1e-12),
+                 directCarrier.detectorAudioAcRms /
+                     std::max(directCarrier.detectorFeedMean, 1e-12),
+                 "pure carrier must not create spurious audio after source-envelope extraction");
+
     Radio1938 zero = makeNodeFixture(config, 0.0f, {PassId::IFStrip});
     RadioSampleContext zeroCtx{};
     zeroCtx.signal.setComplexEnvelope(0.0f, 0.0f);
@@ -1109,6 +1169,19 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
                  actualFeedRatio /
                      std::max(frontEndAmEdgeRatio * directFeedRatio, 1e-12),
                  "full-chain feed ratio / front-end-plus-direct-IF prediction");
+    Radio1938 radioRfCarrier =
+        makeNodeFixture(config, 0.0f, {PassId::FrontEnd, PassId::Mixer, PassId::IFStrip,
+                                       PassId::Demod, PassId::DetectorAudio});
+    CarrierQuietMetrics rfCarrier = runRealRfCarrierQuietMetrics(
+        radioRfCarrier, true, config.carrierRmsVolts);
+    addPredicate(rows, "RFChain", "real_rf_carrier_stays_quiet_through_detector",
+                 rfCarrier.detectorFeedAcRms <
+                         0.10 * std::max(rfCarrier.detectorFeedMean, 1e-12) &&
+                     rfCarrier.detectorAudioAcRms <
+                         0.06 * std::max(rfCarrier.detectorFeedMean, 1e-12),
+                 rfCarrier.detectorAudioAcRms /
+                     std::max(rfCarrier.detectorFeedMean, 1e-12),
+                 "pure carrier must not whistle after full RF path");
   }
 
   return rows;

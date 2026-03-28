@@ -45,6 +45,10 @@ float parallelLoadBandwidthHz(float capacitanceFarads, float resistanceOhms) {
   return 1.0f / (kRadioTwoPi * resistanceOhms * capacitanceFarads);
 }
 
+float downmixImageHz(float sampleRate, float carrierHz) {
+  return std::fabs(sampleRate - 2.0f * carrierHz);
+}
+
 void resetIfStripRuntimeEnvelopeState(Radio1938::IFStripNodeState& ifStrip) {
   ifStrip.sourceDownmixPhase = 0.0f;
   ifStrip.ifEnvelopePhase = 0.0f;
@@ -156,9 +160,18 @@ void ensureIfStripConfigured(Radio1938& radio) {
   float tunedCanEnvelopeQ =
       std::clamp(0.82f + 0.85f * couplingMean - 0.30f * loadSeverity, 0.70f,
                  1.10f);
-  float sourceEnvelopeLpHz =
-      std::clamp(std::max(4.0f * safeAudioBw, 0.72f * ifStrip.sourceCarrierHz),
-                 2.0f * tunedCanEnvelopeBandwidthHz, 0.42f * sampleRate);
+  // Real-RF envelope extraction must reject the image at |fs - 2*fc| after
+  // quadrature downmix. If this lowpass is tied to carrier frequency instead
+  // of service bandwidth, the image leaks into the complex envelope and shows
+  // up as a false audio whistle on an otherwise unmodulated carrier.
+  float sourceEnvelopeMinHz =
+      std::max(1.20f * safeAudioBw, 0.90f * tunedCanEnvelopeBandwidthHz);
+  float sourceEnvelopeMaxHz =
+      std::min(0.24f * sampleRate,
+               0.60f * downmixImageHz(sampleRate, ifStrip.sourceCarrierHz));
+  float sourceEnvelopeLpHz = std::clamp(
+      sourceEnvelopeMinHz, std::max(sourceEnvelopeMinHz, 1800.0f),
+      std::max(sourceEnvelopeMinHz, sourceEnvelopeMaxHz));
 
   ifStrip.sourceEnvelope.setLowpass(sampleRate, sourceEnvelopeLpHz,
                                     kRadioBiquadQ);
