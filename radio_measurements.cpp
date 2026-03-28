@@ -862,6 +862,62 @@ void runImd(const HarnessConfig& config) {
             << "\n\n";
 }
 
+void runSpectrum(const HarnessConfig& config) {
+  std::cout << "[spectrum]\n";
+  std::cout << "freq_hz,peak_amp,dbfs\n";
+  // Nominal run to get output waveform
+  auto input = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 0.35f);
+  // Use the envelope-trace run to also capture detector node and audioEnv
+  EnvelopeTraceResult trace = runAmProgramWithEnvelopeTrace(
+      config, input, std::min(config.modulationIndex, 0.5f),
+      std::max(config.noiseWeight, config.noiseOnlyWeight));
+
+  // Detector node spectrum
+  std::cout << "[detector_spectrum]\n";
+  std::cout << "freq_hz,peak_amp,dbfs\n";
+  std::vector<double> detSpec = computeSpectrumPeakAmplitudes(trace.detectorNode, config.sampleRate);
+  for (size_t i = 0; i < detSpec.size(); ++i) {
+    double hz = static_cast<double>(i) * static_cast<double>(config.sampleRate) / static_cast<double>(kSpectrumSize);
+    double amp = detSpec[i];
+    double db = dbFromRatio(amp);
+    std::cout << hz << "," << amp << "," << db << "\n";
+  }
+  std::cout << "\n";
+
+  // Final output spectrum
+  std::cout << "[output_spectrum]\n";
+  std::cout << "freq_hz,peak_amp,dbfs\n";
+  std::vector<double> outSpec = computeSpectrumPeakAmplitudes(trace.output, config.sampleRate);
+  for (size_t i = 0; i < outSpec.size(); ++i) {
+    double hz = static_cast<double>(i) * static_cast<double>(config.sampleRate) / static_cast<double>(kSpectrumSize);
+    double amp = outSpec[i];
+    double db = dbFromRatio(amp);
+    std::cout << hz << "," << amp << "," << db << "\n";
+  }
+  std::cout << "\n";
+
+  // Print top peaks summary for quick inspection
+  auto printTopPeaks = [&](const std::vector<double>& spec, const std::string& label) {
+    std::vector<size_t> idx(spec.size());
+    for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
+    std::sort(idx.begin(), idx.end(), [&](size_t a, size_t b) { return spec[a] > spec[b]; });
+    std::cout << "[" << label << " top_peaks]\n";
+    std::cout << "rank,bin,freq_hz,amp,dbfs\n";
+    size_t topN = std::min<size_t>(8, idx.size());
+    for (size_t r = 0; r < topN; ++r) {
+      size_t bin = idx[r];
+      double hz = static_cast<double>(bin) * static_cast<double>(config.sampleRate) / static_cast<double>(kSpectrumSize);
+      double amp = spec[bin];
+      double db = dbFromRatio(amp);
+      std::cout << (r + 1) << "," << bin << "," << hz << "," << amp << "," << db << "\n";
+    }
+    std::cout << "\n";
+  };
+
+  printTopPeaks(detSpec, "detector");
+  printTopPeaks(outSpec, "output");
+}
+
 void runOverdrive(const HarnessConfig& config) {
   std::cout << "[overdrive]\n";
   std::cout << "mod_index,max_digital,pos_peak,neg_peak,peak_asymmetry,dc_shift,"
@@ -1090,6 +1146,7 @@ int main(int argc, char** argv) {
     if (wantsSection(config, "transient")) runTransient(config);
     if (wantsSection(config, "reference")) runReference(config);
     if (wantsSection(config, "noise")) runNoise(config);
+    if (wantsSection(config, "spectrum")) runSpectrum(config);
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "radio_measurements: " << ex.what() << "\n";
