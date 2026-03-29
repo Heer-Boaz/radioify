@@ -185,6 +185,11 @@ void Radio1938::CalibrationState::reset() {
   powerOutputSolveUsPerSample = 0.0f;
   powerInterstageDriverEvalCallsPerSample = 0.0f;
   powerInterstageDriverEvalUsPerCall = 0.0f;
+  powerInterstageAdaptiveValidationAttempts = 0;
+  powerInterstageAdaptiveAcceptedDownshifts = 0;
+  powerInterstageAdaptiveAcceptedDownshiftFraction = 0.0f;
+  powerInterstageAdaptiveAverageBoundaryErrorVolts = 0.0f;
+  powerInterstageAdaptiveMaxBoundaryErrorVolts = 0.0f;
   detectorNodeVolts.reset();
   receiverGridVolts.reset();
   receiverPlateSwingVolts.reset();
@@ -422,6 +427,21 @@ void updateCalibrationSnapshot(Radio1938& radio) {
         static_cast<double>(radio.power.interstageDriverEvalTimeNs) /
         static_cast<double>(radio.power.interstageDriverEvalCount) * 1e-3);
   }
+  radio.calibration.powerInterstageAdaptiveValidationAttempts =
+      radio.power.interstageAdaptiveValidationAttemptCount;
+  radio.calibration.powerInterstageAdaptiveAcceptedDownshifts =
+      radio.power.interstageAdaptiveAcceptedDownshiftCount;
+  if (radio.power.interstageAdaptiveValidationAttemptCount > 0) {
+    radio.calibration.powerInterstageAdaptiveAcceptedDownshiftFraction =
+        static_cast<float>(radio.power.interstageAdaptiveAcceptedDownshiftCount) /
+        static_cast<float>(radio.power.interstageAdaptiveValidationAttemptCount);
+    radio.calibration.powerInterstageAdaptiveAverageBoundaryErrorVolts =
+        static_cast<float>(radio.power.interstageAdaptiveBoundaryErrorSumVolts /
+                           static_cast<double>(
+                               radio.power.interstageAdaptiveValidationAttemptCount));
+  }
+  radio.calibration.powerInterstageAdaptiveMaxBoundaryErrorVolts =
+      radio.power.interstageAdaptiveBoundaryErrorMaxVolts;
   radio.calibration.validationDriverGridPositive =
       radio.calibration.driverGridPositiveFraction > 0.01f;
   radio.calibration.validationOutputGridAPositive =

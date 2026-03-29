@@ -1,133 +1,11 @@
 #include "../../../radio.h"
 #include "../../math/signal_math.h"
+#include "am_detector_internal.h"
 
 #include <algorithm>
-#include <cassert>
-#include <chrono>
 #include <cmath>
 
 namespace {
-
-uint64_t monotonicNowNs() {
-  return static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now().time_since_epoch())
-          .count());
-}
-
-void primeDetectorWarmStart(AMDetector& detector,
-                            float audioRect,
-                            float avcDrive) {
-  detector.detectorStorageNode = audioRect;
-  detector.detectorNode = audioRect;
-  detector.avcEnv = avcDrive;
-  detector.avcRect = detector.avcEnv;
-  detector.warmStartPending = false;
-}
-
-struct DetectorSolveResult {
-  float detectorNode = 0.0f;
-  float avcNode = 0.0f;
-};
-
-struct DetectorChargeBranch {
-  float currentAmps = 0.0f;
-  float conductanceSiemens = 0.0f;
-};
-
-DetectorChargeBranch evaluateDetectorChargeBranch(float sourceVolts,
-                                                  float nodeVolts,
-                                                  float diodeDropVolts,
-                                                  float junctionSlopeVolts,
-                                                  float chargeResistanceOhms) {
-  float safeSlope = requirePositiveFinite(junctionSlopeVolts);
-  float safeResistance = requirePositiveFinite(chargeResistanceOhms);
-  float availableVolts = sourceVolts - nodeVolts - diodeDropVolts;
-  float x = availableVolts / safeSlope;
-  float conductionT = 0.0f;
-  if (x >= 20.0f) {
-    conductionT = 1.0f;
-  } else if (x > -20.0f) {
-    conductionT = 1.0f / (1.0f + std::exp(-x));
-  }
-
-  DetectorChargeBranch branch{};
-  if (availableVolts > 0.0f) {
-    branch.currentAmps = (availableVolts * conductionT) / safeResistance;
-    branch.conductanceSiemens =
-        (conductionT +
-         availableVolts * conductionT * (1.0f - conductionT) / safeSlope) /
-        safeResistance;
-  }
-  return branch;
-}
-
-float solveDetectorAudioNode(AMDetector& detector,
-                             float dt,
-                             float sourceVolts,
-                             float detectorLeakG) {
-  uint64_t startNs = detector.metricsEnabled ? monotonicNowNs() : 0;
-  float storageCapG =
-      std::max(detector.detectorStorageCapFarads, 1e-12f) / dt;
-  float previousNode = std::max(detector.detectorStorageNode, 0.0f);
-  float nodeVolts = previousNode;
-  int iterations = 0;
-
-  if (sourceVolts <= detector.audioDiodeDrop) {
-    detector.storageSolveCallCount++;
-    if (detector.metricsEnabled) {
-      detector.storageSolveTimeNs += monotonicNowNs() - startNs;
-    }
-    return (storageCapG * previousNode) /
-           std::max(storageCapG + detectorLeakG, 1e-12f);
-  }
-
-  for (int iter = 0; iter < 8; ++iter) {
-    iterations = iter + 1;
-    DetectorChargeBranch branch = evaluateDetectorChargeBranch(
-        sourceVolts, nodeVolts, detector.audioDiodeDrop,
-        detector.audioJunctionSlopeVolts, detector.audioChargeResistanceOhms);
-    float f = storageCapG * (nodeVolts - previousNode) +
-              detectorLeakG * nodeVolts - branch.currentAmps;
-    float df = storageCapG + detectorLeakG + branch.conductanceSiemens;
-    assert(std::isfinite(df) && df > 1e-12f);
-    float delta = f / df;
-    nodeVolts = std::max(nodeVolts - delta, 0.0f);
-    if (std::fabs(delta) < 1e-7f) break;
-  }
-
-  detector.storageSolveCallCount++;
-  detector.storageSolveIterationCount += static_cast<uint64_t>(iterations);
-  detector.storageSolveMaxIterations =
-      std::max(detector.storageSolveMaxIterations,
-               static_cast<uint32_t>(iterations));
-  if (detector.metricsEnabled) {
-    detector.storageSolveTimeNs += monotonicNowNs() - startNs;
-  }
-
-  return nodeVolts;
-}
-
-DetectorSolveResult stepDetectorStorageAndAvc(AMDetector& detector,
-                                              float dt,
-                                              float detectorDriveVolts,
-                                              float avcDrive,
-                                              float detectorLeakG) {
-  float avcSourceG = 0.0f;
-  if (avcDrive > detector.avcEnv) {
-    avcSourceG = 1.0f / std::max(detector.avcChargeResistanceOhms, 1e-6f);
-  }
-  float avcLeakG = 1.0f / std::max(detector.avcDischargeResistanceOhms, 1e-6f);
-  float avcCapG = std::max(detector.avcFilterCapFarads, 1e-12f) / dt;
-  float a11 = avcSourceG + avcLeakG + avcCapG;
-  float b1 = avcCapG * detector.avcEnv + avcSourceG * avcDrive;
-
-  DetectorSolveResult result{};
-  result.detectorNode =
-      solveDetectorAudioNode(detector, dt, detectorDriveVolts, detectorLeakG);
-  result.avcNode = std::max(b1 / std::max(a11, 1e-12f), 0.0f);
-  return result;
-}
 
 float effectiveDetectorLoadConductance(const Radio1938& radio) {
   float dischargeG =
@@ -142,251 +20,16 @@ float detectorWaveformCarrierHz(const AMDetector& detector,
   return std::fabs(radio.ifStrip.ifCenterHz + detector.tuneOffsetHz);
 }
 
-int detectorWaveformSubsteps(const AMDetector& detector,
-                             float sampleRate,
-                             float carrierHz) {
-  if (!(sampleRate > 0.0f) || !(carrierHz > 0.0f)) return 1;
-  int substeps = static_cast<int>(std::ceil(
-      std::max(detector.waveformSamplesPerCycle, 1.0f) * carrierHz / sampleRate));
-  return std::clamp(substeps, 1, std::max(detector.waveformMaxSubsteps, 1));
-}
-
-struct EnvelopeTrajectory {
-  float i0 = 0.0f;
-  float i1 = 0.0f;
-  float i2 = 0.0f;
-  float q0 = 0.0f;
-  float q1 = 0.0f;
-  float q2 = 0.0f;
-};
-
-EnvelopeTrajectory buildEnvelopeTrajectory(bool useQuadratic,
-                                           float prevPrevIfI,
-                                           float prevPrevIfQ,
-                                           float prevIfI,
-                                           float prevIfQ,
-                                           float ifI,
-                                           float ifQ) {
-  EnvelopeTrajectory trajectory{};
-  trajectory.i0 = prevIfI;
-  trajectory.q0 = prevIfQ;
-  if (useQuadratic) {
-    trajectory.i1 = 0.5f * (ifI - prevPrevIfI);
-    trajectory.q1 = 0.5f * (ifQ - prevPrevIfQ);
-    trajectory.i2 = 0.5f * (prevPrevIfI - 2.0f * prevIfI + ifI);
-    trajectory.q2 = 0.5f * (prevPrevIfQ - 2.0f * prevIfQ + ifQ);
-  } else {
-    trajectory.i1 = ifI - prevIfI;
-    trajectory.q1 = ifQ - prevIfQ;
-  }
-  return trajectory;
-}
-
-void evaluateEnvelopeAt(const EnvelopeTrajectory& trajectory,
-                        float t,
-                        float& envI,
-                        float& envQ) {
-  envI = trajectory.i0 + t * (trajectory.i1 + t * trajectory.i2);
-  envQ = trajectory.q0 + t * (trajectory.q1 + t * trajectory.q2);
-}
-
-float sampleIfWave(const EnvelopeTrajectory& trajectory,
-                   float t,
-                   float c,
-                   float s) {
-  float envI = 0.0f;
-  float envQ = 0.0f;
-  evaluateEnvelopeAt(trajectory, t, envI, envQ);
-  return envI * c - envQ * s;
-}
-
-struct DetectorIslandAccum {
-  float audioRectArea = 0.0f;
-  float avcRectArea = 0.0f;
-  float detectorNodeArea = 0.0f;
-  int solveSteps = 0;
-  int intervalCount = 0;
-  int splitIntervalCount = 0;
-};
-
-void accumulateDetectorInterval(AMDetector& detector,
-                                float dt,
-                                float intervalWidth,
-                                float ifWave,
-                                float delayedAvcThreshold,
-                                float detectorLeakG,
-                                DetectorIslandAccum& accum) {
-  detector.audioRect = diodeJunctionRectify(
-      ifWave, detector.audioDiodeDrop, detector.audioJunctionSlopeVolts);
-  float avcRectified = diodeJunctionRectify(
-      ifWave, detector.avcDiodeDrop, detector.avcJunctionSlopeVolts);
-  float avcDrive = std::max(avcRectified - delayedAvcThreshold, 0.0f);
-  if (detector.warmStartPending) {
-    primeDetectorWarmStart(detector, detector.audioRect, avcDrive);
-  }
-  float prevNode = std::max(detector.detectorStorageNode, 0.0f);
-  DetectorSolveResult solve = stepDetectorStorageAndAvc(
-      detector, dt, ifWave, avcDrive, detectorLeakG);
-  detector.detectorStorageNode = solve.detectorNode;
-  detector.avcEnv = solve.avcNode;
-  accum.audioRectArea += detector.audioRect * intervalWidth;
-  accum.avcRectArea += avcDrive * intervalWidth;
-  accum.detectorNodeArea +=
-      0.5f * (prevNode + solve.detectorNode) * intervalWidth;
-  accum.solveSteps += 1;
-}
-
-void updateDetectorEnvelopeHistory(AMDetector& detector, float ifI, float ifQ) {
-  detector.prevPrevIfI = detector.prevIfI;
-  detector.prevPrevIfQ = detector.prevIfQ;
-  detector.prevIfI = ifI;
-  detector.prevIfQ = ifQ;
-  detector.ifEnvelopeHistorySamples =
-      std::min(detector.ifEnvelopeHistorySamples + 1, 2);
-}
-
-void runEnvelopeDetectorPath(AMDetector& detector,
-                             float ifMagnitude,
-                             float detectorLeakG) {
-  detector.lastWaveformSubsteps = 1;
-  detector.audioRect = diodeJunctionRectify(ifMagnitude, detector.audioDiodeDrop,
-                                            detector.audioJunctionSlopeVolts);
-  float avcRectified = diodeJunctionRectify(ifMagnitude, detector.avcDiodeDrop,
-                                            detector.avcJunctionSlopeVolts);
-  float delayedAvcThreshold =
-      0.18f * std::max(detector.controlVoltageRef, 1e-6f);
-  float avcDrive = std::max(avcRectified - delayedAvcThreshold, 0.0f);
-  float dt = 1.0f / std::max(detector.fs, 1.0f);
-  if (detector.warmStartPending) {
-    primeDetectorWarmStart(detector, detector.audioRect, avcDrive);
-  }
-  DetectorSolveResult solve =
-      stepDetectorStorageAndAvc(detector, dt, ifMagnitude, avcDrive,
-                                detectorLeakG);
-  detector.detectorStorageNode = solve.detectorNode;
-  detector.detectorNode = solve.detectorNode;
-  detector.avcEnv = solve.avcNode;
-  detector.avcRect = avcDrive;
-}
-
-void runWaveformDetectorIsland(AMDetector& detector,
-                               float ifI,
-                               float ifQ,
-                               float detectorLeakG,
-                               float carrierHz) {
-  float sampleRate = std::max(detector.fs, 1.0f);
-  int substeps = detectorWaveformSubsteps(detector, sampleRate, carrierHz);
-  detector.waveformSampleCount++;
-  detector.lastWaveformSubsteps = substeps;
-  if (substeps <= 1) {
-    runEnvelopeDetectorPath(detector, std::sqrt(ifI * ifI + ifQ * ifQ),
-                            detectorLeakG);
-    detector.waveformIntervalCount += 1;
-    detector.waveformSolveStepCount += 1;
-    updateDetectorEnvelopeHistory(detector, ifI, ifQ);
-    return;
-  }
-
-  float prevPrevIfI = detector.prevPrevIfI;
-  float prevPrevIfQ = detector.prevPrevIfQ;
-  float prevIfI = detector.prevIfI;
-  float prevIfQ = detector.prevIfQ;
-  if (detector.warmStartPending) {
-    prevPrevIfI = ifI;
-    prevPrevIfQ = ifQ;
-    prevIfI = ifI;
-    prevIfQ = ifQ;
-  }
-  bool useQuadraticInterp = detector.ifEnvelopeHistorySamples >= 2;
-  EnvelopeTrajectory trajectory =
-      buildEnvelopeTrajectory(useQuadraticInterp, prevPrevIfI, prevPrevIfQ,
-                              prevIfI, prevIfQ, ifI, ifQ);
-  float dtSub = 1.0f / (sampleRate * static_cast<float>(substeps));
-  float phaseStep = kRadioTwoPi * (carrierHz / (sampleRate * substeps));
-  float c = std::cos(detector.ifWavePhase);
-  float s = std::sin(detector.ifWavePhase);
-  float cHalfStep = std::cos(0.5f * phaseStep);
-  float sHalfStep = std::sin(0.5f * phaseStep);
-  float cQuarterStep = std::cos(0.25f * phaseStep);
-  float sQuarterStep = std::sin(0.25f * phaseStep);
-  float cStep = std::cos(phaseStep);
-  float sStep = std::sin(phaseStep);
-  float delayedAvcThreshold =
-      0.18f * std::max(detector.controlVoltageRef, 1e-6f);
-  float coarseIntervalWidth = 1.0f / static_cast<float>(substeps);
-  DetectorIslandAccum accum{};
-  float ifWaveStart = sampleIfWave(trajectory, 0.0f, c, s);
-
-  for (int step = 0; step < substeps; ++step) {
-    float tMid =
-        (static_cast<float>(step) + 0.5f) / static_cast<float>(substeps);
-    float t1 = static_cast<float>(step + 1) / static_cast<float>(substeps);
-    float cMid = c * cHalfStep - s * sHalfStep;
-    float sMid = s * cHalfStep + c * sHalfStep;
-    float nextC = c * cStep - s * sStep;
-    float nextS = s * cStep + c * sStep;
-    float ifWaveMid = sampleIfWave(trajectory, tMid, cMid, sMid);
-    float ifWaveEnd = sampleIfWave(trajectory, t1, nextC, nextS);
-    float audioForwardThreshold =
-        std::max(detector.detectorStorageNode, 0.0f) + detector.audioDiodeDrop;
-    float avcForwardThreshold = std::max(detector.avcEnv, 0.0f) +
-                                detector.avcDiodeDrop +
-                                delayedAvcThreshold;
-    float forwardThreshold =
-        std::min(audioForwardThreshold, avcForwardThreshold);
-    float ifWavePeak =
-        std::max(ifWaveStart, std::max(ifWaveMid, ifWaveEnd));
-    bool shouldSplit = ifWavePeak > forwardThreshold;
-
-    if (shouldSplit) {
-      accum.intervalCount += 2;
-      accum.splitIntervalCount += 1;
-      float tQuarter = (static_cast<float>(step) + 0.25f) /
-                       static_cast<float>(substeps);
-      float tThreeQuarter = (static_cast<float>(step) + 0.75f) /
-                            static_cast<float>(substeps);
-      float cQuarter = c * cQuarterStep - s * sQuarterStep;
-      float sQuarter = s * cQuarterStep + c * sQuarterStep;
-      float cThreeQuarter = cMid * cQuarterStep - sMid * sQuarterStep;
-      float sThreeQuarter = sMid * cQuarterStep + cMid * sQuarterStep;
-      float ifWaveQuarter =
-          sampleIfWave(trajectory, tQuarter, cQuarter, sQuarter);
-      float ifWaveThreeQuarter =
-          sampleIfWave(trajectory, tThreeQuarter, cThreeQuarter, sThreeQuarter);
-      float halfDt = 0.5f * dtSub;
-      float halfWidth = 0.5f * coarseIntervalWidth;
-      accumulateDetectorInterval(detector, halfDt, halfWidth, ifWaveQuarter,
-                                 delayedAvcThreshold, detectorLeakG, accum);
-      accumulateDetectorInterval(detector, halfDt, halfWidth,
-                                 ifWaveThreeQuarter, delayedAvcThreshold,
-                                 detectorLeakG, accum);
-    } else {
-      accum.intervalCount += 1;
-      accumulateDetectorInterval(detector, dtSub, coarseIntervalWidth,
-                                 ifWaveMid, delayedAvcThreshold,
-                                 detectorLeakG, accum);
-    }
-    ifWaveStart = ifWaveEnd;
-    c = nextC;
-    s = nextS;
-  }
-
-  detector.audioRect = accum.audioRectArea;
-  detector.avcRect = accum.avcRectArea;
-  detector.detectorNode = accum.detectorNodeArea;
-  detector.lastWaveformSubsteps = accum.solveSteps;
-  detector.waveformIntervalCount += static_cast<uint64_t>(accum.intervalCount);
-  detector.waveformSplitIntervalCount +=
-      static_cast<uint64_t>(accum.splitIntervalCount);
-  detector.waveformSolveStepCount += static_cast<uint64_t>(accum.solveSteps);
-  detector.ifWavePhase =
-      wrapPhase(detector.ifWavePhase + kRadioTwoPi * (carrierHz / sampleRate));
-  detector.prevPrevIfI = prevIfI;
-  detector.prevPrevIfQ = prevIfQ;
-  detector.prevIfI = ifI;
-  detector.prevIfQ = ifQ;
-  detector.ifEnvelopeHistorySamples =
-      std::min(detector.ifEnvelopeHistorySamples + 1, 2);
+void advanceProbeOscillator(float stepCos,
+                            float stepSin,
+                            float& oscCos,
+                            float& oscSin) {
+  float nextCos = oscCos * stepCos - oscSin * stepSin;
+  float nextSin = oscSin * stepCos + oscCos * stepSin;
+  float magnitudeSq = nextCos * nextCos + nextSin * nextSin;
+  float renorm = 1.5f - 0.5f * magnitudeSq;
+  oscCos = nextCos * renorm;
+  oscSin = nextSin * renorm;
 }
 
 }  // namespace
@@ -426,6 +69,14 @@ void AMDetector::setBandwidth(float newBw, float newTuneHz) {
   afcHighOffsetHz = highSenseHz - ifCenter;
   afcLowStep = kRadioTwoPi * (afcLowOffsetHz / std::max(fs, 1.0f));
   afcHighStep = kRadioTwoPi * (afcHighOffsetHz / std::max(fs, 1.0f));
+  afcLowStepCos = std::cos(afcLowStep);
+  afcLowStepSin = std::sin(afcLowStep);
+  afcHighStepCos = std::cos(afcHighStep);
+  afcHighStepSin = std::sin(afcHighStep);
+  afcLowOscCos = std::cos(afcLowPhase);
+  afcLowOscSin = std::sin(afcLowPhase);
+  afcHighOscCos = std::cos(afcHighPhase);
+  afcHighOscSin = std::sin(afcHighPhase);
   afcLowProbe.setLowpass(fs, afcLpHz, kRadioBiquadQ);
   afcHighProbe.setLowpass(fs, afcLpHz, kRadioBiquadQ);
   afcErrorLp.setLowpass(fs, afcLpHz, kRadioBiquadQ);
@@ -473,6 +124,10 @@ void AMDetector::reset() {
   ifCrackleMaxEnv = 0.0f;
   afcLowPhase = 0.0f;
   afcHighPhase = 0.0f;
+  afcLowOscCos = 1.0f;
+  afcLowOscSin = 0.0f;
+  afcHighOscCos = 1.0f;
+  afcHighOscSin = 0.0f;
   afcLowProbe.reset();
   afcHighProbe.reset();
   afcErrorLp.reset();
@@ -513,31 +168,32 @@ float AMDetector::run(float signalI,
     ifCrackleEnv *= ifCrackleDecay;
   }
 
-  auto processProbe = [&](float phase,
-                          float step,
-                          IQBiquad& probe,
-                          float& nextPhase) {
-    float c = std::cos(phase);
-    float s = std::sin(phase);
-    float mixedI = ifI * c + ifQ * s;
-    float mixedQ = ifQ * c - ifI * s;
+  auto processProbe = [&](float step,
+                          float stepCos,
+                          float stepSin,
+                          float& oscCos,
+                          float& oscSin,
+                          float& phase,
+                          IQBiquad& probe) {
+    float mixedI = ifI * oscCos + ifQ * oscSin;
+    float mixedQ = ifQ * oscCos - ifI * oscSin;
     auto filtered = probe.process(mixedI, mixedQ);
-    nextPhase = wrapPhase(phase + step);
+    phase = wrapPhase(phase + step);
+    advanceProbeOscillator(stepCos, stepSin, oscCos, oscSin);
     return std::sqrt(filtered[0] * filtered[0] + filtered[1] * filtered[1]);
   };
 
-  float nextLowPhase = afcLowPhase;
-  float nextHighPhase = afcHighPhase;
-  uint64_t afcStartNs = metricsEnabled ? monotonicNowNs() : 0;
-  float afcLow =
-      processProbe(afcLowPhase, afcLowStep, afcLowProbe, nextLowPhase);
-  float afcHigh =
-      processProbe(afcHighPhase, afcHighStep, afcHighProbe, nextHighPhase);
+  uint64_t afcStartNs =
+      metricsEnabled ? am_detector_internal::monotonicNowNs() : 0;
+  float afcLow = processProbe(afcLowStep, afcLowStepCos, afcLowStepSin,
+                              afcLowOscCos, afcLowOscSin, afcLowPhase,
+                              afcLowProbe);
+  float afcHigh = processProbe(afcHighStep, afcHighStepCos, afcHighStepSin,
+                               afcHighOscCos, afcHighOscSin, afcHighPhase,
+                               afcHighProbe);
   if (metricsEnabled) {
-    afcProbeTimeNs += monotonicNowNs() - afcStartNs;
+    afcProbeTimeNs += am_detector_internal::monotonicNowNs() - afcStartNs;
   }
-  afcLowPhase = nextLowPhase;
-  afcHighPhase = nextHighPhase;
 
   float afcDen = std::max(afcLow + afcHigh, 1e-6f);
   float rawAfcError = (afcHigh - afcLow) / afcDen;
@@ -545,16 +201,19 @@ float AMDetector::run(float signalI,
 
   float detectorLeakG = effectiveDetectorLoadConductance(radio);
   float carrierHz = detectorWaveformCarrierHz(*this, radio);
-  uint64_t islandStartNs = metricsEnabled ? monotonicNowNs() : 0;
+  uint64_t islandStartNs =
+      metricsEnabled ? am_detector_internal::monotonicNowNs() : 0;
   if (carrierHz > 0.0f) {
-    runWaveformDetectorIsland(*this, ifI, ifQ, detectorLeakG, carrierHz);
+    am_detector_internal::runWaveformDetectorIsland(*this, ifI, ifQ,
+                                                    detectorLeakG, carrierHz);
   } else {
-    runEnvelopeDetectorPath(*this, std::sqrt(ifI * ifI + ifQ * ifQ),
-                            detectorLeakG);
-    updateDetectorEnvelopeHistory(*this, ifI, ifQ);
+    am_detector_internal::runEnvelopeDetectorPath(
+        *this, std::sqrt(ifI * ifI + ifQ * ifQ), detectorLeakG);
+    am_detector_internal::updateDetectorEnvelopeHistory(*this, ifI, ifQ);
   }
   if (metricsEnabled) {
-    detectorIslandTimeNs += monotonicNowNs() - islandStartNs;
+    detectorIslandTimeNs +=
+        am_detector_internal::monotonicNowNs() - islandStartNs;
   }
   assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
   if (radio.calibration.enabled) {

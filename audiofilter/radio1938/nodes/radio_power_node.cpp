@@ -83,6 +83,15 @@ float runPowerStageSample(Radio1938& radio, float y) {
       static_cast<uint32_t>(std::max(interstageSolved.maxIterations, 0)));
   power.interstageDriverEvalCount += interstageSolved.driverEvalCount;
   power.interstageDriverEvalTimeNs += interstageSolved.driverEvalTimeNs;
+  power.interstageAdaptiveValidationAttemptCount +=
+      interstageSolved.adaptiveValidationAttempts;
+  power.interstageAdaptiveAcceptedDownshiftCount +=
+      interstageSolved.adaptiveAcceptedDownshifts;
+  power.interstageAdaptiveBoundaryErrorSumVolts +=
+      static_cast<double>(interstageSolved.adaptiveBoundaryErrorVolts);
+  power.interstageAdaptiveBoundaryErrorMaxVolts =
+      std::max(power.interstageAdaptiveBoundaryErrorMaxVolts,
+               interstageSolved.adaptiveBoundaryErrorVolts);
   power.interstageAdaptiveSubsteps =
       std::max(interstageSolved.suggestedSubsteps, 1);
   power.interstageAdaptiveValidationCountdown =
@@ -336,6 +345,10 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.interstageSolveTimeNs = 0;
   power.interstageDriverEvalCount = 0;
   power.interstageDriverEvalTimeNs = 0;
+  power.interstageAdaptiveValidationAttemptCount = 0;
+  power.interstageAdaptiveAcceptedDownshiftCount = 0;
+  power.interstageAdaptiveBoundaryErrorSumVolts = 0.0;
+  power.interstageAdaptiveBoundaryErrorMaxVolts = 0.0f;
   power.outputSolveTimeNs = 0;
   power.interstageAdaptiveSubsteps = 0;
   power.interstageAdaptiveValidationCountdown = 0;

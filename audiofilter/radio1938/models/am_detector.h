@@ -76,8 +76,16 @@ struct AMDetector {
   float afcHighOffsetHz = 0.0f;
   float afcLowStep = 0.0f;
   float afcHighStep = 0.0f;
+  float afcLowStepCos = 1.0f;
+  float afcLowStepSin = 0.0f;
+  float afcHighStepCos = 1.0f;
+  float afcHighStepSin = 0.0f;
   float afcLowPhase = 0.0f;
   float afcHighPhase = 0.0f;
+  float afcLowOscCos = 1.0f;
+  float afcLowOscSin = 0.0f;
+  float afcHighOscCos = 1.0f;
+  float afcHighOscSin = 0.0f;
   IQBiquad afcLowProbe;
   IQBiquad afcHighProbe;
 

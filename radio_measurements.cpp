@@ -1189,6 +1189,24 @@ void runLevels(const HarnessConfig& config) {
             << "\n";
   std::cout << "power_interstage_driver_eval_us_per_call,"
             << run.radio.calibration.powerInterstageDriverEvalUsPerCall << "\n";
+  std::cout << "power_interstage_adaptive_validation_attempts,"
+            << run.radio.calibration.powerInterstageAdaptiveValidationAttempts
+            << "\n";
+  std::cout << "power_interstage_adaptive_accepted_downshifts,"
+            << run.radio.calibration.powerInterstageAdaptiveAcceptedDownshifts
+            << "\n";
+  std::cout << "power_interstage_adaptive_accepted_downshift_fraction,"
+            << run.radio.calibration
+                   .powerInterstageAdaptiveAcceptedDownshiftFraction
+            << "\n";
+  std::cout << "power_interstage_adaptive_avg_boundary_error_volts,"
+            << run.radio.calibration
+                   .powerInterstageAdaptiveAverageBoundaryErrorVolts
+            << "\n";
+  std::cout << "power_interstage_adaptive_max_boundary_error_volts,"
+            << run.radio.calibration
+                   .powerInterstageAdaptiveMaxBoundaryErrorVolts
+            << "\n";
   std::cout << "digital_reference_peak,"
             << run.radio.output.digitalReferenceSpeakerVoltsPeak << "\n";
   std::cout << "max_digital_output," << run.radio.calibration.maxDigitalOutput

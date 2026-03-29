@@ -18,6 +18,9 @@ struct DriverInterstageCenterTappedResult {
   int maxIterations = 0;
   uint64_t driverEvalCount = 0;
   uint64_t driverEvalTimeNs = 0;
+  uint32_t adaptiveValidationAttempts = 0;
+  uint32_t adaptiveAcceptedDownshifts = 0;
+  float adaptiveBoundaryErrorVolts = 0.0f;
   int suggestedSubsteps = 0;
   int suggestedValidationCountdown = 0;
 };

@@ -238,6 +238,11 @@ struct Radio1938 {
     float powerOutputSolveUsPerSample = 0.0f;
     float powerInterstageDriverEvalCallsPerSample = 0.0f;
     float powerInterstageDriverEvalUsPerCall = 0.0f;
+    uint64_t powerInterstageAdaptiveValidationAttempts = 0;
+    uint64_t powerInterstageAdaptiveAcceptedDownshifts = 0;
+    float powerInterstageAdaptiveAcceptedDownshiftFraction = 0.0f;
+    float powerInterstageAdaptiveAverageBoundaryErrorVolts = 0.0f;
+    float powerInterstageAdaptiveMaxBoundaryErrorVolts = 0.0f;
     CalibrationRmsMetric detectorNodeVolts;
     CalibrationRmsMetric receiverGridVolts;
     CalibrationRmsMetric receiverPlateSwingVolts;
@@ -581,6 +586,10 @@ struct Radio1938 {
     uint64_t interstageSolveTimeNs = 0;
     uint64_t interstageDriverEvalCount = 0;
     uint64_t interstageDriverEvalTimeNs = 0;
+    uint64_t interstageAdaptiveValidationAttemptCount = 0;
+    uint64_t interstageAdaptiveAcceptedDownshiftCount = 0;
+    double interstageAdaptiveBoundaryErrorSumVolts = 0.0;
+    float interstageAdaptiveBoundaryErrorMaxVolts = 0.0f;
     uint64_t outputSolveTimeNs = 0;
     int interstageAdaptiveSubsteps = 0;
     int interstageAdaptiveValidationCountdown = 0;

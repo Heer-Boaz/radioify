@@ -131,6 +131,10 @@ void Radio1938::resetCalibration() {
   power.interstageSolveTimeNs = 0;
   power.interstageDriverEvalCount = 0;
   power.interstageDriverEvalTimeNs = 0;
+  power.interstageAdaptiveValidationAttemptCount = 0;
+  power.interstageAdaptiveAcceptedDownshiftCount = 0;
+  power.interstageAdaptiveBoundaryErrorSumVolts = 0.0;
+  power.interstageAdaptiveBoundaryErrorMaxVolts = 0.0f;
   power.outputSolveTimeNs = 0;
 }
 
