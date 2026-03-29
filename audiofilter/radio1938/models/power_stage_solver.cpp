@@ -10,6 +10,13 @@
 
 namespace {
 
+struct OutputTubePairEval {
+  float plateCurrentA = 0.0f;
+  float plateCurrentB = 0.0f;
+  float driveCurrent = 0.0f;
+  float driveSlope = 0.0f;
+};
+
 float tubeGridBranchCurrent(float acGridVolts,
                             float biasVolts,
                             float gridLeakResistanceOhms,
@@ -33,9 +40,33 @@ float tubeGridBranchSlope(float acGridVolts,
   return slope;
 }
 
+OutputTubePairEval evaluateOutputTubePair(
+    const Radio1938::PowerNodeState& power,
+    float outputPlateQuiescent,
+    float gridA,
+    float gridB,
+    float primaryVoltage) {
+  float plateA = outputPlateQuiescent - 0.5f * primaryVoltage;
+  float plateB = outputPlateQuiescent + 0.5f * primaryVoltage;
+  KorenTriodePlateEval evalA = evaluateKorenTriodePlateRuntime(
+      power.outputTubeBiasVolts + gridA, plateA, power.outputTubeTriodeModel,
+      power.outputTubeTriodeLut);
+  KorenTriodePlateEval evalB = evaluateKorenTriodePlateRuntime(
+      power.outputTubeBiasVolts + gridB, plateB, power.outputTubeTriodeModel,
+      power.outputTubeTriodeLut);
+
+  OutputTubePairEval result{};
+  result.plateCurrentA = static_cast<float>(evalA.currentAmps);
+  result.plateCurrentB = static_cast<float>(evalB.currentAmps);
+  result.driveCurrent = 0.5f * (result.plateCurrentA - result.plateCurrentB);
+  result.driveSlope = -0.25f * static_cast<float>(evalA.conductanceSiemens +
+                                                  evalB.conductanceSiemens);
+  return result;
+}
+
 }  // namespace
 
-float solveOutputPrimaryVoltageAffine(
+OutputPrimarySolveResult solveOutputPrimaryAffine(
     const AffineTransformerProjection& projection,
     const Radio1938::PowerNodeState& power,
     float outputPlateQuiescent,
@@ -43,32 +74,32 @@ float solveOutputPrimaryVoltageAffine(
     float gridB,
     float initialPrimaryVoltage) {
   float primaryVoltage = initialPrimaryVoltage;
+  constexpr float kPrimaryVoltageTolerance = 1e-5f;
 
   for (int iter = 0; iter < 8; ++iter) {
-    float plateA = outputPlateQuiescent - 0.5f * primaryVoltage;
-    float plateB = outputPlateQuiescent + 0.5f * primaryVoltage;
-    KorenTriodePlateEval evalA = evaluateKorenTriodePlateRuntime(
-        power.outputTubeBiasVolts + gridA, plateA, power.outputTubeTriodeModel,
-        power.outputTubeTriodeLut);
-    KorenTriodePlateEval evalB = evaluateKorenTriodePlateRuntime(
-        power.outputTubeBiasVolts + gridB, plateB, power.outputTubeTriodeModel,
-        power.outputTubeTriodeLut);
-
-    float driveCurrent =
-        0.5f * static_cast<float>(evalA.currentAmps - evalB.currentAmps);
-    float driveSlope = -0.25f * static_cast<float>(evalA.conductanceSiemens +
-                                                   evalB.conductanceSiemens);
+    OutputTubePairEval pair = evaluateOutputTubePair(
+        power, outputPlateQuiescent, gridA, gridB, primaryVoltage);
 
     float f = projection.base.primaryVoltage +
-              projection.slope.primaryVoltage * driveCurrent - primaryVoltage;
-    float df = projection.slope.primaryVoltage * driveSlope - 1.0f;
+              projection.slope.primaryVoltage * pair.driveCurrent -
+              primaryVoltage;
+    float df = projection.slope.primaryVoltage * pair.driveSlope - 1.0f;
     assert(std::isfinite(df) && std::fabs(df) >= 1e-9f);
 
-    primaryVoltage -= f / df;
+    float deltaPrimaryVoltage = f / df;
+    primaryVoltage -= deltaPrimaryVoltage;
     assert(std::isfinite(primaryVoltage));
+    if (std::fabs(deltaPrimaryVoltage) < kPrimaryVoltageTolerance) break;
   }
 
-  return primaryVoltage;
+  OutputTubePairEval finalPair = evaluateOutputTubePair(
+      power, outputPlateQuiescent, gridA, gridB, primaryVoltage);
+  OutputPrimarySolveResult result{};
+  result.primaryVoltage = primaryVoltage;
+  result.driveCurrent = finalPair.driveCurrent;
+  result.plateCurrentA = finalPair.plateCurrentA;
+  result.plateCurrentB = finalPair.plateCurrentB;
+  return result;
 }
 
 SpeakerElectricalLinearization linearizeSpeakerElectricalLoad(
@@ -162,24 +193,11 @@ OutputStageSubstepResult runOutputStageSubsteps(
                                        transformer.dtSub);
     AffineTransformerProjection affineOut = buildAffineProjection(
         transformer, speakerLoad.load, outputPrimaryLoadResistance);
-    float solvedOutputPrimaryVoltage = solveOutputPrimaryVoltageAffine(
+    OutputPrimarySolveResult outputSolve = solveOutputPrimaryAffine(
         affineOut, power, outputPlateQuiescent, power.outputGridAVolts,
         power.outputGridBVolts, transformer.primaryVoltage);
-    float outputPlateA =
-        outputPlateQuiescent - 0.5f * solvedOutputPrimaryVoltage;
-    float outputPlateB =
-        outputPlateQuiescent + 0.5f * solvedOutputPrimaryVoltage;
-    KorenTriodePlateEval outputEvalA = evaluateKorenTriodePlateRuntime(
-        power.outputTubeBiasVolts + power.outputGridAVolts, outputPlateA,
-        power.outputTubeTriodeModel, power.outputTubeTriodeLut);
-    KorenTriodePlateEval outputEvalB = evaluateKorenTriodePlateRuntime(
-        power.outputTubeBiasVolts + power.outputGridBVolts, outputPlateB,
-        power.outputTubeTriodeModel, power.outputTubeTriodeLut);
-    float plateCurrentA = static_cast<float>(outputEvalA.currentAmps);
-    float plateCurrentB = static_cast<float>(outputEvalB.currentAmps);
-    float driveCurrent = 0.5f * (plateCurrentA - plateCurrentB);
     CurrentDrivenTransformerSample outputSample = transformer.step(
-        driveCurrent, speakerLoad.load, outputPrimaryLoadResistance);
+        outputSolve.driveCurrent, speakerLoad.load, outputPrimaryLoadResistance);
     float actualOutputPlateA =
         outputPlateQuiescent - 0.5f * outputSample.primaryVoltage;
     float actualOutputPlateB =
@@ -246,20 +264,11 @@ float estimateOutputStageNominalPowerWatts(
         float gridB = -gridA;
         AffineTransformerProjection projection =
             buildAffineProjection(transformer, loadResistance, 0.0f);
-        float primaryVoltage = solveOutputPrimaryVoltageAffine(
+        OutputPrimarySolveResult outputSolve = solveOutputPrimaryAffine(
             projection, power, outputPlateQuiescent, gridA, gridB,
             transformer.primaryVoltage);
-        float plateA = outputPlateQuiescent - 0.5f * primaryVoltage;
-        float plateB = outputPlateQuiescent + 0.5f * primaryVoltage;
-        KorenTriodePlateEval evalA = evaluateKorenTriodePlateRuntime(
-            power.outputTubeBiasVolts + gridA, plateA,
-            power.outputTubeTriodeModel, power.outputTubeTriodeLut);
-        KorenTriodePlateEval evalB = evaluateKorenTriodePlateRuntime(
-            power.outputTubeBiasVolts + gridB, plateB,
-            power.outputTubeTriodeModel, power.outputTubeTriodeLut);
-        float driveCurrent =
-            0.5f * static_cast<float>(evalA.currentAmps - evalB.currentAmps);
-        auto outputSample = transformer.step(driveCurrent, loadResistance, 0.0f);
+        auto outputSample =
+            transformer.step(outputSolve.driveCurrent, loadResistance, 0.0f);
         if (cycle >= kSettleCycles) {
           sumSq += static_cast<double>(outputSample.secondaryVoltage) *
                    static_cast<double>(outputSample.secondaryVoltage);

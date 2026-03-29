@@ -34,7 +34,14 @@ struct OutputStageSubstepResult {
   float averagePlateCurrentB = 0.0f;
 };
 
-float solveOutputPrimaryVoltageAffine(
+struct OutputPrimarySolveResult {
+  float primaryVoltage = 0.0f;
+  float driveCurrent = 0.0f;
+  float plateCurrentA = 0.0f;
+  float plateCurrentB = 0.0f;
+};
+
+OutputPrimarySolveResult solveOutputPrimaryAffine(
     const AffineTransformerProjection& projection,
     const Radio1938::PowerNodeState& power,
     float outputPlateQuiescent,
