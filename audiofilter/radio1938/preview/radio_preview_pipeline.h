@@ -18,7 +18,12 @@ enum class RadioPreviewPassId : uint8_t {
   ProgramFilter,
 };
 
-struct RadioPreviewBlockControl {};
+struct RadioPreviewBlockControl {
+  mutable bool programStartCached = false;
+  mutable RadioPreviewPassId cachedProgramStartPass =
+      RadioPreviewPassId::ProgramFilter;
+  mutable size_t cachedProgramStartIndex = 0;
+};
 
 struct RadioPreviewSampleContext {
   const RadioPreviewBlockControl* block = nullptr;

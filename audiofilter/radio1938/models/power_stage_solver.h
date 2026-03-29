@@ -26,6 +26,14 @@ struct SpeakerElectricalLinearization {
   float forceFactorBl = 0.0f;
 };
 
+struct OutputStageSubstepResult {
+  CurrentDrivenTransformer transformer;
+  float averagePrimaryVoltage = 0.0f;
+  float averageSecondaryVoltage = 0.0f;
+  float averagePlateCurrentA = 0.0f;
+  float averagePlateCurrentB = 0.0f;
+};
+
 float solveOutputPrimaryVoltageAffine(
     const AffineTransformerProjection& projection,
     const Radio1938::PowerNodeState& power,
@@ -42,6 +50,13 @@ SpeakerElectricalLinearization linearizeSpeakerElectricalLoad(
 void commitSpeakerElectricalLoad(SpeakerSim& speaker,
                                  const SpeakerElectricalLinearization& l,
                                  float appliedVolts);
+
+OutputStageSubstepResult runOutputStageSubsteps(
+    CurrentDrivenTransformer transformer,
+    SpeakerSim& speaker,
+    const Radio1938::PowerNodeState& power,
+    float outputPlateQuiescent,
+    float outputPrimaryLoadResistance);
 
 float estimateOutputStageNominalPowerWatts(
     const Radio1938::PowerNodeState& power);

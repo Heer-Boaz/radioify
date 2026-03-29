@@ -39,6 +39,9 @@ enum class PassId : uint8_t {
 
 struct RadioBlockControl {
   float tuneNorm = 0.0f;
+  mutable bool programStartCached = false;
+  mutable PassId cachedProgramStartPass = PassId::Input;
+  mutable size_t cachedProgramStartIndex = 0;
 };
 
 struct RadioDerivedSampleParams {

@@ -24,18 +24,37 @@ void runControlPasses(Radio1938& radio, RadioSampleContext& ctx) {
                                  });
 }
 
+size_t resolveFirstProgramIndex(Radio1938& radio,
+                                const RadioSampleContext& ctx,
+                                PassId firstProgramPass) {
+  const RadioBlockControl* block = ctx.block;
+  if (block && block->programStartCached &&
+      block->cachedProgramStartPass == firstProgramPass) {
+    return block->cachedProgramStartIndex;
+  }
+  const size_t orderIndex =
+      radio.graph.findOrderIndex(AudioPassDomain::Program, firstProgramPass);
+  if (block) {
+    block->cachedProgramStartPass = firstProgramPass;
+    block->cachedProgramStartIndex = orderIndex;
+    block->programStartCached = true;
+  }
+  return orderIndex;
+}
+
 float runProgramPasses(Radio1938& radio,
                        float y,
                        RadioSampleContext& ctx,
                        size_t firstProgramIndex) {
   const auto& order = radio.graph.order(AudioPassDomain::Program);
   const size_t begin = std::min(firstProgramIndex, order.size());
+  const bool calibrationEnabled = radio.calibration.enabled;
   for (size_t orderIndex = begin; orderIndex < order.size(); ++orderIndex) {
     const auto& pass = radio.graph.pass(order[orderIndex]);
     if (!pass.runSample) continue;
     const float in = y;
     y = pass.runSample(radio, y, ctx);
-    if (!pass.stateOnly) {
+    if (calibrationEnabled && !pass.stateOnly) {
       updatePassCalibration(radio, pass.id, in, y);
     }
   }
@@ -59,7 +78,7 @@ float runRadioPipelineSample(Radio1938& radio,
                              PassId firstProgramPass) {
   runControlPasses(radio, ctx);
   const size_t firstProgramIndex =
-      radio.graph.findOrderIndex(AudioPassDomain::Program, firstProgramPass);
+      resolveFirstProgramIndex(radio, ctx, firstProgramPass);
   const float y = runProgramPasses(radio, x, ctx, firstProgramIndex);
   if (radio.calibration.enabled) {
     radio.calibration.maxDigitalOutput =

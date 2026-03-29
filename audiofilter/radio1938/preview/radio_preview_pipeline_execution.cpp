@@ -32,6 +32,24 @@ float runProgramPasses(RadioPreviewPipeline& preview,
   return y;
 }
 
+size_t resolveFirstProgramIndex(RadioPreviewPipeline& preview,
+                                const RadioPreviewSampleContext& ctx,
+                                RadioPreviewPassId firstProgramPass) {
+  const RadioPreviewBlockControl* block = ctx.block;
+  if (block && block->programStartCached &&
+      block->cachedProgramStartPass == firstProgramPass) {
+    return block->cachedProgramStartIndex;
+  }
+  const size_t orderIndex =
+      preview.graph.findOrderIndex(AudioPassDomain::Program, firstProgramPass);
+  if (block) {
+    block->cachedProgramStartPass = firstProgramPass;
+    block->cachedProgramStartIndex = orderIndex;
+    block->programStartCached = true;
+  }
+  return orderIndex;
+}
+
 }  // namespace
 
 void beginRadioPreviewPipelineBlock(RadioPreviewPipeline& preview,
@@ -47,7 +65,7 @@ float runRadioPreviewPipelineSample(RadioPreviewPipeline& preview,
                                     RadioPreviewSampleContext& ctx,
                                     RadioPreviewPassId firstProgramPass) {
   const size_t firstProgramIndex =
-      preview.graph.findOrderIndex(AudioPassDomain::Program, firstProgramPass);
+      resolveFirstProgramIndex(preview, ctx, firstProgramPass);
   return runProgramPasses(preview, x, ctx, firstProgramIndex);
 }
 

@@ -142,6 +142,81 @@ void commitSpeakerElectricalLoad(SpeakerSim& speaker,
   }
 }
 
+OutputStageSubstepResult runOutputStageSubsteps(
+    CurrentDrivenTransformer transformer,
+    SpeakerSim& speaker,
+    const Radio1938::PowerNodeState& power,
+    float outputPlateQuiescent,
+    float outputPrimaryLoadResistance) {
+  const int transformerSubsteps = std::max(transformer.integrationSubsteps, 1);
+  transformer.integrationSubsteps = 1;
+
+  float primaryVoltageSum = 0.0f;
+  float secondaryVoltageSum = 0.0f;
+  float actualPlateCurrentASum = 0.0f;
+  float actualPlateCurrentBSum = 0.0f;
+
+  for (int step = 0; step < transformerSubsteps; ++step) {
+    SpeakerElectricalLinearization speakerLoad =
+        linearizeSpeakerElectricalLoad(speaker, power.outputLoadResistanceOhms,
+                                       transformer.dtSub);
+    AffineTransformerProjection affineOut = buildAffineProjection(
+        transformer, speakerLoad.load, outputPrimaryLoadResistance);
+    float solvedOutputPrimaryVoltage = solveOutputPrimaryVoltageAffine(
+        affineOut, power, outputPlateQuiescent, power.outputGridAVolts,
+        power.outputGridBVolts, transformer.primaryVoltage);
+    float outputPlateA =
+        outputPlateQuiescent - 0.5f * solvedOutputPrimaryVoltage;
+    float outputPlateB =
+        outputPlateQuiescent + 0.5f * solvedOutputPrimaryVoltage;
+    KorenTriodePlateEval outputEvalA = evaluateKorenTriodePlateRuntime(
+        power.outputTubeBiasVolts + power.outputGridAVolts, outputPlateA,
+        power.outputTubeTriodeModel, power.outputTubeTriodeLut);
+    KorenTriodePlateEval outputEvalB = evaluateKorenTriodePlateRuntime(
+        power.outputTubeBiasVolts + power.outputGridBVolts, outputPlateB,
+        power.outputTubeTriodeModel, power.outputTubeTriodeLut);
+    float plateCurrentA = static_cast<float>(outputEvalA.currentAmps);
+    float plateCurrentB = static_cast<float>(outputEvalB.currentAmps);
+    float driveCurrent = 0.5f * (plateCurrentA - plateCurrentB);
+    CurrentDrivenTransformerSample outputSample = transformer.step(
+        driveCurrent, speakerLoad.load, outputPrimaryLoadResistance);
+    float actualOutputPlateA =
+        outputPlateQuiescent - 0.5f * outputSample.primaryVoltage;
+    float actualOutputPlateB =
+        outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
+    float actualPlateCurrentA = static_cast<float>(
+        evaluateKorenTriodePlateRuntime(
+            power.outputTubeBiasVolts + power.outputGridAVolts,
+            actualOutputPlateA, power.outputTubeTriodeModel,
+            power.outputTubeTriodeLut)
+            .currentAmps);
+    float actualPlateCurrentB = static_cast<float>(
+        evaluateKorenTriodePlateRuntime(
+            power.outputTubeBiasVolts + power.outputGridBVolts,
+            actualOutputPlateB, power.outputTubeTriodeModel,
+            power.outputTubeTriodeLut)
+            .currentAmps);
+    commitSpeakerElectricalLoad(speaker, speakerLoad,
+                                outputSample.secondaryVoltage);
+    primaryVoltageSum += outputSample.primaryVoltage;
+    secondaryVoltageSum += outputSample.secondaryVoltage;
+    actualPlateCurrentASum += actualPlateCurrentA;
+    actualPlateCurrentBSum += actualPlateCurrentB;
+  }
+
+  OutputStageSubstepResult result{};
+  result.transformer = transformer;
+  result.averagePrimaryVoltage =
+      primaryVoltageSum / static_cast<float>(transformerSubsteps);
+  result.averageSecondaryVoltage =
+      secondaryVoltageSum / static_cast<float>(transformerSubsteps);
+  result.averagePlateCurrentA =
+      actualPlateCurrentASum / static_cast<float>(transformerSubsteps);
+  result.averagePlateCurrentB =
+      actualPlateCurrentBSum / static_cast<float>(transformerSubsteps);
+  return result;
+}
+
 float estimateOutputStageNominalPowerWatts(
     const Radio1938::PowerNodeState& power) {
   float loadResistance = requirePositiveFinite(power.outputLoadResistanceOhms);

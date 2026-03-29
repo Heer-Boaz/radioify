@@ -104,6 +104,9 @@ class AudioGraphRuntime {
     m_blockOrder.clear();
     m_sampleControlOrder.clear();
     m_programOrder.clear();
+    m_blockOrderIndex.clear();
+    m_sampleControlOrderIndex.clear();
+    m_programOrderIndex.clear();
   }
 
   void compile() {
@@ -111,6 +114,9 @@ class AudioGraphRuntime {
     m_blockOrder = compileDomainOrder(AudioPassDomain::Block);
     m_sampleControlOrder = compileDomainOrder(AudioPassDomain::SampleControl);
     m_programOrder = compileDomainOrder(AudioPassDomain::Program);
+    m_blockOrderIndex = buildOrderIndexLookup(m_blockOrder);
+    m_sampleControlOrderIndex = buildOrderIndexLookup(m_sampleControlOrder);
+    m_programOrderIndex = buildOrderIndexLookup(m_programOrder);
     m_compiled = true;
   }
 
@@ -129,13 +135,13 @@ class AudioGraphRuntime {
   const Pass& pass(size_t index) const { return m_passes[index]; }
 
   size_t findOrderIndex(AudioPassDomain domain, Id id) const {
-    const auto& compiledOrder = order(domain);
-    for (size_t orderIndex = 0; orderIndex < compiledOrder.size(); ++orderIndex) {
-      if (m_passes[compiledOrder[orderIndex]].id == id) {
-        return orderIndex;
-      }
-    }
-    return compiledOrder.size();
+    const auto* passPtr = findPass(id);
+    if (!passPtr) return order(domain).size();
+    const size_t passIndex =
+        static_cast<size_t>(passPtr - m_passes.data());
+    const auto& lookup = orderIndexLookup(domain);
+    if (passIndex < lookup.size()) return lookup[passIndex];
+    return order(domain).size();
   }
 
   template <typename Fn>
@@ -147,6 +153,29 @@ class AudioGraphRuntime {
   }
 
  private:
+  static constexpr size_t kInvalidOrderIndex = static_cast<size_t>(-1);
+
+  std::vector<size_t> buildOrderIndexLookup(
+      const std::vector<size_t>& compiledOrder) const {
+    std::vector<size_t> lookup(m_passes.size(), kInvalidOrderIndex);
+    for (size_t orderIndex = 0; orderIndex < compiledOrder.size(); ++orderIndex) {
+      lookup[compiledOrder[orderIndex]] = orderIndex;
+    }
+    return lookup;
+  }
+
+  const std::vector<size_t>& orderIndexLookup(AudioPassDomain domain) const {
+    switch (domain) {
+      case AudioPassDomain::Block:
+        return m_blockOrderIndex;
+      case AudioPassDomain::SampleControl:
+        return m_sampleControlOrderIndex;
+      case AudioPassDomain::Program:
+        return m_programOrderIndex;
+    }
+    return m_programOrderIndex;
+  }
+
   std::vector<size_t> compileDomainOrder(AudioPassDomain domain) const {
     std::vector<size_t> enabledIndices;
     enabledIndices.reserve(m_passes.size());
@@ -206,6 +235,9 @@ class AudioGraphRuntime {
   std::vector<size_t> m_blockOrder{};
   std::vector<size_t> m_sampleControlOrder{};
   std::vector<size_t> m_programOrder{};
+  std::vector<size_t> m_blockOrderIndex{};
+  std::vector<size_t> m_sampleControlOrderIndex{};
+  std::vector<size_t> m_programOrderIndex{};
 };
 
 #endif  // RADIOIFY_AUDIOFILTER_GRAPH_AUDIO_GRAPH_H

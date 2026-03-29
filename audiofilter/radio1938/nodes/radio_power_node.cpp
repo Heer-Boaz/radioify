@@ -109,68 +109,14 @@ float runPowerStageSample(Radio1938& radio, float y) {
       requirePositiveFinite(power.outputTubeQuiescentPlateVolts *
                             outputSupplyScale);
   const float outputPrimaryLoadResistance = 0.0f;
-  int transformerSubsteps = std::max(power.outputTransformer.integrationSubsteps, 1);
-  CurrentDrivenTransformer outputTransformer = power.outputTransformer;
-  outputTransformer.integrationSubsteps = 1;
-  float primaryVoltageSum = 0.0f;
-  float secondaryVoltageSum = 0.0f;
-  float actualPlateCurrentASum = 0.0f;
-  float actualPlateCurrentBSum = 0.0f;
-  for (int step = 0; step < transformerSubsteps; ++step) {
-    SpeakerElectricalLinearization speakerLoad =
-        linearizeSpeakerElectricalLoad(radio.speakerStage.speaker,
-                                       power.outputLoadResistanceOhms,
-                                       outputTransformer.dtSub);
-    AffineTransformerProjection affineOut = buildAffineProjection(
-        outputTransformer, speakerLoad.load, outputPrimaryLoadResistance);
-    float solvedOutputPrimaryVoltage = solveOutputPrimaryVoltageAffine(
-        affineOut, power, outputPlateQuiescent, power.outputGridAVolts,
-        power.outputGridBVolts, outputTransformer.primaryVoltage);
-    float outputPlateA =
-        outputPlateQuiescent - 0.5f * solvedOutputPrimaryVoltage;
-    float outputPlateB =
-        outputPlateQuiescent + 0.5f * solvedOutputPrimaryVoltage;
-    KorenTriodePlateEval outputEvalA = evaluateKorenTriodePlateRuntime(
-        power.outputTubeBiasVolts + power.outputGridAVolts, outputPlateA,
-        power.outputTubeTriodeModel, power.outputTubeTriodeLut);
-    KorenTriodePlateEval outputEvalB = evaluateKorenTriodePlateRuntime(
-        power.outputTubeBiasVolts + power.outputGridBVolts, outputPlateB,
-        power.outputTubeTriodeModel, power.outputTubeTriodeLut);
-    float plateCurrentA = static_cast<float>(outputEvalA.currentAmps);
-    float plateCurrentB = static_cast<float>(outputEvalB.currentAmps);
-    float driveCurrent = 0.5f * (plateCurrentA - plateCurrentB);
-    CurrentDrivenTransformerSample outputSample = outputTransformer.step(
-        driveCurrent, speakerLoad.load, outputPrimaryLoadResistance);
-    float actualOutputPlateA =
-        outputPlateQuiescent - 0.5f * outputSample.primaryVoltage;
-    float actualOutputPlateB =
-        outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
-    float actualPlateCurrentA = static_cast<float>(
-        evaluateKorenTriodePlateRuntime(
-            power.outputTubeBiasVolts + power.outputGridAVolts, actualOutputPlateA,
-            power.outputTubeTriodeModel, power.outputTubeTriodeLut)
-            .currentAmps);
-    float actualPlateCurrentB = static_cast<float>(
-        evaluateKorenTriodePlateRuntime(
-            power.outputTubeBiasVolts + power.outputGridBVolts, actualOutputPlateB,
-            power.outputTubeTriodeModel, power.outputTubeTriodeLut)
-            .currentAmps);
-    commitSpeakerElectricalLoad(radio.speakerStage.speaker, speakerLoad,
-                                outputSample.secondaryVoltage);
-    primaryVoltageSum += outputSample.primaryVoltage;
-    secondaryVoltageSum += outputSample.secondaryVoltage;
-    actualPlateCurrentASum += actualPlateCurrentA;
-    actualPlateCurrentBSum += actualPlateCurrentB;
-  }
-  power.outputTransformer = outputTransformer;
-  float averagePrimaryVoltage =
-      primaryVoltageSum / static_cast<float>(transformerSubsteps);
-  float averageSecondaryVoltage =
-      secondaryVoltageSum / static_cast<float>(transformerSubsteps);
-  float actualPlateCurrentA =
-      actualPlateCurrentASum / static_cast<float>(transformerSubsteps);
-  float actualPlateCurrentB =
-      actualPlateCurrentBSum / static_cast<float>(transformerSubsteps);
+  OutputStageSubstepResult outputSolved = runOutputStageSubsteps(
+      power.outputTransformer, radio.speakerStage.speaker, power,
+      outputPlateQuiescent, outputPrimaryLoadResistance);
+  power.outputTransformer = outputSolved.transformer;
+  float averagePrimaryVoltage = outputSolved.averagePrimaryVoltage;
+  float averageSecondaryVoltage = outputSolved.averageSecondaryVoltage;
+  float actualPlateCurrentA = outputSolved.averagePlateCurrentA;
+  float actualPlateCurrentB = outputSolved.averagePlateCurrentB;
   y = averageSecondaryVoltage;
   if (power.postLpHz > 0.0f) {
     y = power.postLpf.process(y);
