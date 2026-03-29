@@ -69,15 +69,25 @@ float solveDetectorAudioNode(AMDetector& detector,
   uint64_t startNs = detector.metricsEnabled ? monotonicNowNs() : 0;
   float storageCapG =
       std::max(detector.detectorStorageCapFarads, 1e-12f) / dt;
-  float nodeVolts = std::max(detector.detectorStorageNode, 0.0f);
+  float previousNode = std::max(detector.detectorStorageNode, 0.0f);
+  float nodeVolts = previousNode;
   int iterations = 0;
+
+  if (sourceVolts <= detector.audioDiodeDrop) {
+    detector.storageSolveCallCount++;
+    if (detector.metricsEnabled) {
+      detector.storageSolveTimeNs += monotonicNowNs() - startNs;
+    }
+    return (storageCapG * previousNode) /
+           std::max(storageCapG + detectorLeakG, 1e-12f);
+  }
 
   for (int iter = 0; iter < 8; ++iter) {
     iterations = iter + 1;
     DetectorChargeBranch branch = evaluateDetectorChargeBranch(
         sourceVolts, nodeVolts, detector.audioDiodeDrop,
         detector.audioJunctionSlopeVolts, detector.audioChargeResistanceOhms);
-    float f = storageCapG * (nodeVolts - detector.detectorStorageNode) +
+    float f = storageCapG * (nodeVolts - previousNode) +
               detectorLeakG * nodeVolts - branch.currentAmps;
     float df = storageCapG + detectorLeakG + branch.conductanceSiemens;
     assert(std::isfinite(df) && df > 1e-12f);
@@ -141,45 +151,52 @@ int detectorWaveformSubsteps(const AMDetector& detector,
   return std::clamp(substeps, 1, std::max(detector.waveformMaxSubsteps, 1));
 }
 
-float interpolateEnvelopeLinear(float prevSample, float currentSample, float t) {
-  return prevSample + (currentSample - prevSample) * t;
+struct EnvelopeTrajectory {
+  float i0 = 0.0f;
+  float i1 = 0.0f;
+  float i2 = 0.0f;
+  float q0 = 0.0f;
+  float q1 = 0.0f;
+  float q2 = 0.0f;
+};
+
+EnvelopeTrajectory buildEnvelopeTrajectory(bool useQuadratic,
+                                           float prevPrevIfI,
+                                           float prevPrevIfQ,
+                                           float prevIfI,
+                                           float prevIfQ,
+                                           float ifI,
+                                           float ifQ) {
+  EnvelopeTrajectory trajectory{};
+  trajectory.i0 = prevIfI;
+  trajectory.q0 = prevIfQ;
+  if (useQuadratic) {
+    trajectory.i1 = 0.5f * (ifI - prevPrevIfI);
+    trajectory.q1 = 0.5f * (ifQ - prevPrevIfQ);
+    trajectory.i2 = 0.5f * (prevPrevIfI - 2.0f * prevIfI + ifI);
+    trajectory.q2 = 0.5f * (prevPrevIfQ - 2.0f * prevIfQ + ifQ);
+  } else {
+    trajectory.i1 = ifI - prevIfI;
+    trajectory.q1 = ifQ - prevIfQ;
+  }
+  return trajectory;
 }
 
-float interpolateEnvelopeQuadratic(float prevPrevSample,
-                                   float prevSample,
-                                   float currentSample,
-                                   float t) {
-  float slope = 0.5f * (currentSample - prevPrevSample);
-  float curvature =
-      0.5f * (prevPrevSample - 2.0f * prevSample + currentSample);
-  return prevSample + slope * t + curvature * t * t;
+void evaluateEnvelopeAt(const EnvelopeTrajectory& trajectory,
+                        float t,
+                        float& envI,
+                        float& envQ) {
+  envI = trajectory.i0 + t * (trajectory.i1 + t * trajectory.i2);
+  envQ = trajectory.q0 + t * (trajectory.q1 + t * trajectory.q2);
 }
 
-float interpolateEnvelopeSample(bool useQuadratic,
-                                float prevPrevSample,
-                                float prevSample,
-                                float currentSample,
-                                float t) {
-  return useQuadratic
-             ? interpolateEnvelopeQuadratic(prevPrevSample, prevSample,
-                                            currentSample, t)
-             : interpolateEnvelopeLinear(prevSample, currentSample, t);
-}
-
-float sampleIfWave(bool useQuadratic,
-                   float prevPrevIfI,
-                   float prevPrevIfQ,
-                   float prevIfI,
-                   float prevIfQ,
-                   float ifI,
-                   float ifQ,
+float sampleIfWave(const EnvelopeTrajectory& trajectory,
                    float t,
                    float c,
                    float s) {
-  float envI =
-      interpolateEnvelopeSample(useQuadratic, prevPrevIfI, prevIfI, ifI, t);
-  float envQ =
-      interpolateEnvelopeSample(useQuadratic, prevPrevIfQ, prevIfQ, ifQ, t);
+  float envI = 0.0f;
+  float envQ = 0.0f;
+  evaluateEnvelopeAt(trajectory, t, envI, envQ);
   return envI * c - envQ * s;
 }
 
@@ -281,6 +298,9 @@ void runWaveformDetectorIsland(AMDetector& detector,
     prevIfQ = ifQ;
   }
   bool useQuadraticInterp = detector.ifEnvelopeHistorySamples >= 2;
+  EnvelopeTrajectory trajectory =
+      buildEnvelopeTrajectory(useQuadraticInterp, prevPrevIfI, prevPrevIfQ,
+                              prevIfI, prevIfQ, ifI, ifQ);
   float dtSub = 1.0f / (sampleRate * static_cast<float>(substeps));
   float phaseStep = kRadioTwoPi * (carrierHz / (sampleRate * substeps));
   float c = std::cos(detector.ifWavePhase);
@@ -295,9 +315,9 @@ void runWaveformDetectorIsland(AMDetector& detector,
       0.18f * std::max(detector.controlVoltageRef, 1e-6f);
   float coarseIntervalWidth = 1.0f / static_cast<float>(substeps);
   DetectorIslandAccum accum{};
+  float ifWaveStart = sampleIfWave(trajectory, 0.0f, c, s);
 
   for (int step = 0; step < substeps; ++step) {
-    float t0 = static_cast<float>(step) / static_cast<float>(substeps);
     float tMid =
         (static_cast<float>(step) + 0.5f) / static_cast<float>(substeps);
     float t1 = static_cast<float>(step + 1) / static_cast<float>(substeps);
@@ -305,15 +325,8 @@ void runWaveformDetectorIsland(AMDetector& detector,
     float sMid = s * cHalfStep + c * sHalfStep;
     float nextC = c * cStep - s * sStep;
     float nextS = s * cStep + c * sStep;
-    float ifWaveStart =
-        sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
-                     prevIfQ, ifI, ifQ, t0, c, s);
-    float ifWaveMid =
-        sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
-                     prevIfQ, ifI, ifQ, tMid, cMid, sMid);
-    float ifWaveEnd =
-        sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
-                     prevIfQ, ifI, ifQ, t1, nextC, nextS);
+    float ifWaveMid = sampleIfWave(trajectory, tMid, cMid, sMid);
+    float ifWaveEnd = sampleIfWave(trajectory, t1, nextC, nextS);
     float audioForwardThreshold =
         std::max(detector.detectorStorageNode, 0.0f) + detector.audioDiodeDrop;
     float avcForwardThreshold = std::max(detector.avcEnv, 0.0f) +
@@ -337,12 +350,9 @@ void runWaveformDetectorIsland(AMDetector& detector,
       float cThreeQuarter = cMid * cQuarterStep - sMid * sQuarterStep;
       float sThreeQuarter = sMid * cQuarterStep + cMid * sQuarterStep;
       float ifWaveQuarter =
-          sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
-                       prevIfQ, ifI, ifQ, tQuarter, cQuarter, sQuarter);
+          sampleIfWave(trajectory, tQuarter, cQuarter, sQuarter);
       float ifWaveThreeQuarter =
-          sampleIfWave(useQuadraticInterp, prevPrevIfI, prevPrevIfQ, prevIfI,
-                       prevIfQ, ifI, ifQ, tThreeQuarter, cThreeQuarter,
-                       sThreeQuarter);
+          sampleIfWave(trajectory, tThreeQuarter, cThreeQuarter, sThreeQuarter);
       float halfDt = 0.5f * dtSub;
       float halfWidth = 0.5f * coarseIntervalWidth;
       accumulateDetectorInterval(detector, halfDt, halfWidth, ifWaveQuarter,
@@ -356,6 +366,7 @@ void runWaveformDetectorIsland(AMDetector& detector,
                                  ifWaveMid, delayedAvcThreshold,
                                  detectorLeakG, accum);
     }
+    ifWaveStart = ifWaveEnd;
     c = nextC;
     s = nextS;
   }
