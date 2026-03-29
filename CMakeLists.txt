@@ -106,6 +106,7 @@ set(RADIOIFY_AUDIOFILTER_SOURCES
   audiofilter/radio1938/preview/radio_preview_pipeline_execution.cpp
   audiofilter/radio1938/preview/nodes/radio_preview_program_filter_node.cpp
   audiofilter/radio1938/preview/nodes/radio_preview_warmup_node.cpp
+  audiofilter/radio1938/models/am_detector_runtime.cpp
   audiofilter/radio1938/models/power_stage_solver.cpp
   audiofilter/radio1938/models/power_supply.cpp
   audiofilter/radio1938/nodes/radio_afc_node.cpp

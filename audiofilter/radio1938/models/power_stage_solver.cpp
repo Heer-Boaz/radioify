@@ -408,11 +408,10 @@ DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
       float maxDelta = std::max(std::fabs(delta[0]),
                                 std::max(std::fabs(delta[1]),
                                          std::fabs(delta[2])));
-      if (maxDelta < 1e-6f) break;
-
       assert(std::isfinite(primaryVoltage));
       assert(std::isfinite(secondaryAVoltage));
       assert(std::isfinite(secondaryBVoltage));
+      if (maxDelta < 1e-6f) break;
     }
 
     float driverPlateVolts = driverPlateQuiescent - primaryVoltage;
