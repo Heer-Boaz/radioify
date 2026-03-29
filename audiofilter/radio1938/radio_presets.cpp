@@ -240,15 +240,15 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.speaker.coneBodyHz = 1200.0f;
   radio.speakerStage.speaker.coneBodyQ = 0.50f;
   radio.speakerStage.speaker.coneBodyGainDb = 0.25f;
-  radio.speakerStage.speaker.upperBreakupHz = 2800.0f;
+  radio.speakerStage.speaker.upperBreakupHz = 2600.0f;
   radio.speakerStage.speaker.upperBreakupQ = 1.05f;
-  radio.speakerStage.speaker.upperBreakupGainDb = 0.6f;
-  radio.speakerStage.speaker.coneDipHz = 1900.0f;
+  radio.speakerStage.speaker.upperBreakupGainDb = 0.25f;
+  radio.speakerStage.speaker.coneDipHz = 1850.0f;
   radio.speakerStage.speaker.coneDipQ = 0.85f;
-  radio.speakerStage.speaker.coneDipGainDb = -0.5f;
-  radio.speakerStage.speaker.topLpHz = 3800.0f;
-  radio.speakerStage.speaker.hfLossLpHz = 3000.0f;
-  radio.speakerStage.speaker.hfLossDepth = 0.12f;
+  radio.speakerStage.speaker.coneDipGainDb = -0.35f;
+  radio.speakerStage.speaker.topLpHz = 3400.0f;
+  radio.speakerStage.speaker.hfLossLpHz = 2700.0f;
+  radio.speakerStage.speaker.hfLossDepth = 0.18f;
   radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
   radio.speakerStage.speaker.drive = 1.0f;
   radio.speakerStage.speaker.limit = 0.0f;
@@ -279,15 +279,18 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.cabinet.rearMix = 0.08f;
   radio.cabinet.rearHpHz = 200.0f;
   radio.cabinet.rearLpHz = 2600.0f;
-  radio.cabinet.clarifier1Hz = 1550.0f;
-  radio.cabinet.clarifier1Q = 0.90f;
-  radio.cabinet.clarifier1Coupling = 0.018f;
-  radio.cabinet.clarifier2Hz = 2350.0f;
-  radio.cabinet.clarifier2Q = 1.05f;
-  radio.cabinet.clarifier2Coupling = 0.022f;
-  radio.cabinet.clarifier3Hz = 3150.0f;
-  radio.cabinet.clarifier3Q = 1.10f;
-  radio.cabinet.clarifier3Coupling = 0.014f;
+  // Philco's acoustic clarifiers are low-frequency cabinet absorbers. Keep
+  // them near the cabinet boom region instead of using them as upper-mid
+  // brighteners.
+  radio.cabinet.clarifier1Hz = 165.0f;
+  radio.cabinet.clarifier1Q = 0.95f;
+  radio.cabinet.clarifier1Coupling = 0.042f;
+  radio.cabinet.clarifier2Hz = 205.0f;
+  radio.cabinet.clarifier2Q = 0.90f;
+  radio.cabinet.clarifier2Coupling = 0.036f;
+  radio.cabinet.clarifier3Hz = 255.0f;
+  radio.cabinet.clarifier3Q = 0.85f;
+  radio.cabinet.clarifier3Coupling = 0.028f;
 
   radio.finalLimiter.enabled = false;
   radio.finalLimiter.threshold = 1.0f;

@@ -111,7 +111,9 @@ float RadioCabinetNode::run(Radio1938& radio, float y, RadioSampleContext&) {
   if (!cabinet.enabled) return y;
   auto applyClarifier = [&](Biquad& clarifier, float coupling, float signal) {
     if (std::fabs(coupling) <= 1e-4f) return 0.0f;
-    return coupling * clarifier.process(signal);
+    // Philco's acoustic clarifiers are passive dampers for cabinet boom, not
+    // extra radiators. Positive coupling therefore means stronger absorption.
+    return -std::fabs(coupling) * clarifier.process(signal);
   };
 
   float out = cabinet.panel.process(y);
