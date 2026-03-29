@@ -252,11 +252,15 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
   radio.speakerStage.speaker.drive = 1.0f;
   radio.speakerStage.speaker.limit = 0.0f;
+  // Philco 37-116 uses a 14-inch type-W electrodynamic speaker with a 3.9 ohm
+  // voice-coil load. Exact T/S data is not published, so keep the motor close
+  // to the documented load while fitting the remaining parameters to a large,
+  // lightly damped prewar field-coil cone rather than a modern PM speaker.
   radio.speakerStage.speaker.voiceCoilResistanceOhms = 3.2f;
-  radio.speakerStage.speaker.voiceCoilInductanceHenries = 0.10e-3f;
-  radio.speakerStage.speaker.movingMassKg = 0.014f;
-  radio.speakerStage.speaker.mechanicalQ = 4.0f;
-  radio.speakerStage.speaker.electricalQ = 2.3f;
+  radio.speakerStage.speaker.voiceCoilInductanceHenries = 0.12e-3f;
+  radio.speakerStage.speaker.movingMassKg = 0.0153f;
+  radio.speakerStage.speaker.mechanicalQ = 5.2f;
+  radio.speakerStage.speaker.electricalQ = 2.5f;
   radio.speakerStage.speaker.forceFactorBl = 0.0f;
   radio.speakerStage.speaker.suspensionComplianceMetersPerNewton = 0.0f;
   radio.speakerStage.speaker.mechanicalDampingNsPerMeter = 0.0f;
