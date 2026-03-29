@@ -6,9 +6,17 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 
 namespace {
+
+uint64_t monotonicNowNs() {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 
 struct OutputTubePairEval {
   float plateCurrentA = 0.0f;
@@ -17,27 +25,163 @@ struct OutputTubePairEval {
   float driveSlope = 0.0f;
 };
 
-float tubeGridBranchCurrent(float acGridVolts,
-                            float biasVolts,
-                            float gridLeakResistanceOhms,
-                            float gridCurrentResistanceOhms) {
-  float leakCurrent = acGridVolts / gridLeakResistanceOhms;
-  float positiveGridCurrent =
-      (biasVolts + acGridVolts > 0.0f)
-          ? ((biasVolts + acGridVolts) / gridCurrentResistanceOhms)
-          : 0.0f;
-  return leakCurrent + positiveGridCurrent;
+struct TriodeLutView {
+  const float* currentAmps = nullptr;
+  const float* conductanceSiemens = nullptr;
+  float vgkMin = 0.0f;
+  float vgkMax = 0.0f;
+  float vpkMin = 0.0f;
+  float vpkMax = 0.0f;
+  float vgkInvStep = 0.0f;
+  float vpkInvStep = 0.0f;
+  int vgkBins = 0;
+  int vpkBins = 0;
+  bool valid = false;
+};
+
+struct TubeGridBranchEval {
+  float current = 0.0f;
+  float slope = 0.0f;
+};
+
+TubeGridBranchEval evaluateTubeGridBranch(float acGridVolts,
+                                          float biasVolts,
+                                          float gridLeakConductance,
+                                          float gridCurrentConductance) {
+  float slope = gridLeakConductance;
+  float current = acGridVolts * gridLeakConductance;
+  float conductingVolts = biasVolts + acGridVolts;
+  if (conductingVolts > 0.0f) {
+    current += conductingVolts * gridCurrentConductance;
+    slope += gridCurrentConductance;
+  }
+  TubeGridBranchEval result{};
+  result.current = current;
+  result.slope = slope;
+  return result;
 }
 
-float tubeGridBranchSlope(float acGridVolts,
-                          float biasVolts,
-                          float gridLeakResistanceOhms,
-                          float gridCurrentResistanceOhms) {
-  float slope = 1.0f / gridLeakResistanceOhms;
-  if (biasVolts + acGridVolts > 0.0f) {
-    slope += 1.0f / gridCurrentResistanceOhms;
+TriodeLutView makeTriodeLutView(const KorenTriodeLut& lut) {
+  TriodeLutView view{};
+  if (!lut.valid()) {
+    return view;
   }
-  return slope;
+  view.currentAmps = lut.currentAmps.data();
+  view.conductanceSiemens = lut.conductanceSiemens.data();
+  view.vgkMin = lut.vgkMin;
+  view.vgkMax = lut.vgkMax;
+  view.vpkMin = lut.vpkMin;
+  view.vpkMax = lut.vpkMax;
+  view.vgkInvStep = lut.vgkInvStep;
+  view.vpkInvStep = lut.vpkInvStep;
+  view.vgkBins = lut.vgkBins;
+  view.vpkBins = lut.vpkBins;
+  view.valid = true;
+  return view;
+}
+
+KorenTriodePlateEval evaluateTriodePlateFast(float vgk,
+                                             float vpk,
+                                             const KorenTriodeModel& model,
+                                             const KorenTriodeLut& lut,
+                                             const TriodeLutView& view) {
+  if (!view.valid) {
+    return evaluateKorenTriodePlateRuntime(vgk, vpk, model, lut);
+  }
+
+  float clampedVgk = std::clamp(vgk, view.vgkMin, view.vgkMax);
+  float clampedVpk = std::clamp(vpk, view.vpkMin, view.vpkMax);
+  float x = (clampedVgk - view.vgkMin) * view.vgkInvStep;
+  float y = (clampedVpk - view.vpkMin) * view.vpkInvStep;
+  int x0 = std::clamp(static_cast<int>(x), 0, view.vgkBins - 2);
+  int y0 = std::clamp(static_cast<int>(y), 0, view.vpkBins - 2);
+  float tx = x - static_cast<float>(x0);
+  float ty = y - static_cast<float>(y0);
+  int x1 = x0 + 1;
+  int y1 = y0 + 1;
+
+  size_t row0 = static_cast<size_t>(y0) * static_cast<size_t>(view.vgkBins);
+  size_t row1 = static_cast<size_t>(y1) * static_cast<size_t>(view.vgkBins);
+  float i00 = view.currentAmps[row0 + static_cast<size_t>(x0)];
+  float i10 = view.currentAmps[row0 + static_cast<size_t>(x1)];
+  float i01 = view.currentAmps[row1 + static_cast<size_t>(x0)];
+  float i11 = view.currentAmps[row1 + static_cast<size_t>(x1)];
+  float g00 = view.conductanceSiemens[row0 + static_cast<size_t>(x0)];
+  float g10 = view.conductanceSiemens[row0 + static_cast<size_t>(x1)];
+  float g01 = view.conductanceSiemens[row1 + static_cast<size_t>(x0)];
+  float g11 = view.conductanceSiemens[row1 + static_cast<size_t>(x1)];
+
+  float i0 = i00 + (i10 - i00) * tx;
+  float i1 = i01 + (i11 - i01) * tx;
+  float g0 = g00 + (g10 - g00) * tx;
+  float g1 = g01 + (g11 - g01) * tx;
+
+  KorenTriodePlateEval eval{};
+  eval.currentAmps = i0 + (i1 - i0) * ty;
+  eval.conductanceSiemens = g0 + (g1 - g0) * ty;
+  return eval;
+}
+
+int chooseAdaptiveInterstageSubsteps(
+    const CurrentDrivenTransformer& transformer,
+    const Radio1938::PowerNodeState& power,
+    float controlGridVolts) {
+  int maxSubsteps = std::max(transformer.integrationSubsteps, 1);
+  if (maxSubsteps <= 2) {
+    return maxSubsteps;
+  }
+
+  int mediumSubsteps = std::max(2, (maxSubsteps + 1) / 2);
+  int quietSubsteps = std::max(2, (maxSubsteps + 3) / 4);
+  float driverBiasMagnitude = std::max(std::fabs(power.tubeBiasVolts), 1.0f);
+  float outputBiasMagnitude =
+      std::max(std::fabs(power.outputTubeBiasVolts), 1.0f);
+  float driverSignalRatio =
+      std::fabs(controlGridVolts - power.tubeBiasVolts) / driverBiasMagnitude;
+  float outputSignalRatio =
+      std::max(std::fabs(power.interstageCt.secondaryAVoltage),
+               std::fabs(power.interstageCt.secondaryBVoltage)) /
+      outputBiasMagnitude;
+  float primarySwingRatio =
+      std::fabs(power.interstageCt.primaryVoltage) /
+      std::max(power.tubeQuiescentPlateVolts, 1.0f);
+  float outputGridTotalA =
+      power.outputTubeBiasVolts + power.interstageCt.secondaryAVoltage;
+  float outputGridTotalB =
+      power.outputTubeBiasVolts + power.interstageCt.secondaryBVoltage;
+  float conductionMargin = std::max(outputGridTotalA, outputGridTotalB);
+
+  if (conductionMargin > -2.0f || driverSignalRatio > 0.30f ||
+      outputSignalRatio > 0.30f || primarySwingRatio > 0.10f) {
+    return maxSubsteps;
+  }
+  if (conductionMargin > -8.0f || driverSignalRatio > 0.08f ||
+      outputSignalRatio > 0.08f || primarySwingRatio > 0.03f) {
+    return mediumSubsteps;
+  }
+  return quietSubsteps;
+}
+
+int nextLowerAdaptiveSubsteps(int currentSubsteps) {
+  if (currentSubsteps <= 1) {
+    return 1;
+  }
+  if (currentSubsteps <= 2) {
+    return 1;
+  }
+  return std::max(2, currentSubsteps / 2);
+}
+
+float estimateInterstageBoundaryErrorVolts(
+    const DriverInterstageCenterTappedResult& coarse,
+    const DriverInterstageCenterTappedResult& fine) {
+  float primaryError = std::fabs(coarse.primaryVoltage - fine.primaryVoltage);
+  float secondaryAError =
+      std::fabs(coarse.secondaryAVoltage - fine.secondaryAVoltage);
+  float secondaryBError =
+      std::fabs(coarse.secondaryBVoltage - fine.secondaryBVoltage);
+  return std::max(primaryError,
+                  std::max(secondaryAError, secondaryBError));
 }
 
 OutputTubePairEval evaluateOutputTubePair(
@@ -75,8 +219,10 @@ OutputPrimarySolveResult solveOutputPrimaryAffine(
     float initialPrimaryVoltage) {
   float primaryVoltage = initialPrimaryVoltage;
   constexpr float kPrimaryVoltageTolerance = 1e-5f;
+  int iterations = 0;
 
   for (int iter = 0; iter < 8; ++iter) {
+    iterations = iter + 1;
     OutputTubePairEval pair = evaluateOutputTubePair(
         power, outputPlateQuiescent, gridA, gridB, primaryVoltage);
 
@@ -99,6 +245,7 @@ OutputPrimarySolveResult solveOutputPrimaryAffine(
   result.driveCurrent = finalPair.driveCurrent;
   result.plateCurrentA = finalPair.plateCurrentA;
   result.plateCurrentB = finalPair.plateCurrentB;
+  result.iterations = iterations;
   return result;
 }
 
@@ -186,6 +333,8 @@ OutputStageSubstepResult runOutputStageSubsteps(
   float secondaryVoltageSum = 0.0f;
   float actualPlateCurrentASum = 0.0f;
   float actualPlateCurrentBSum = 0.0f;
+  int totalNewtonIterations = 0;
+  int maxNewtonIterations = 0;
 
   for (int step = 0; step < transformerSubsteps; ++step) {
     SpeakerElectricalLinearization speakerLoad =
@@ -196,6 +345,9 @@ OutputStageSubstepResult runOutputStageSubsteps(
     OutputPrimarySolveResult outputSolve = solveOutputPrimaryAffine(
         affineOut, power, outputPlateQuiescent, power.outputGridAVolts,
         power.outputGridBVolts, transformer.primaryVoltage);
+    totalNewtonIterations += outputSolve.iterations;
+    maxNewtonIterations =
+        std::max(maxNewtonIterations, outputSolve.iterations);
     CurrentDrivenTransformerSample outputSample = transformer.step(
         outputSolve.driveCurrent, speakerLoad.load, outputPrimaryLoadResistance);
     float actualOutputPlateA =
@@ -232,6 +384,9 @@ OutputStageSubstepResult runOutputStageSubsteps(
       actualPlateCurrentASum / static_cast<float>(transformerSubsteps);
   result.averagePlateCurrentB =
       actualPlateCurrentBSum / static_cast<float>(transformerSubsteps);
+  result.transformerSubsteps = transformerSubsteps;
+  result.totalNewtonIterations = totalNewtonIterations;
+  result.maxNewtonIterations = maxNewtonIterations;
   return result;
 }
 
@@ -285,15 +440,22 @@ float estimateOutputStageNominalPowerWatts(
   return (bestSecondaryRms * bestSecondaryRms) / loadResistance;
 }
 
-DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
+DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCapAtSubsteps(
     const CurrentDrivenTransformer& transformer,
     const Radio1938::PowerNodeState& power,
     float controlGridVolts,
     float driverPlateQuiescent,
-    float driverQuiescentCurrent) {
+    float driverQuiescentCurrent,
+    int substeps,
+    bool measureDriverEvalTime) {
   assert(power.tubeTriodeConnected);
 
-  float dt = requirePositiveFinite(transformer.dtSub);
+  int configuredSubsteps = std::max(transformer.integrationSubsteps, 1);
+  int clampedSubsteps = std::clamp(substeps, 1, configuredSubsteps);
+  float sampleDt =
+      requirePositiveFinite(transformer.dtSub) *
+      static_cast<float>(configuredSubsteps);
+  float dt = sampleDt / static_cast<float>(clampedSubsteps);
   float turns = requirePositiveFinite(transformer.cachedTurns);
   float halfTurns = 2.0f * turns;
 
@@ -326,8 +488,22 @@ DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
   float lbOverDt = Lb / dt;
   float mOverDt = M / dt;
   float mabOverDt = Mab / dt;
+  float primarySeries = Rp + lpOverDt;
+  float secondaryASeries = Ra + laOverDt;
+  float secondaryBSeries = Rb + lbOverDt;
+  float gridLeakConductance =
+      1.0f / requirePositiveFinite(power.outputGridLeakResistanceOhms);
+  float gridCurrentConductance =
+      1.0f / requirePositiveFinite(power.outputGridCurrentResistanceOhms);
+  TriodeLutView driverTriodeLut = makeTriodeLutView(power.tubeTriodeLut);
+  constexpr float kInterstageConvergenceTolerance = 2e-5f;
+  constexpr uint64_t kDriverEvalTimingStride = 32;
+  int totalIterations = 0;
+  int maxIterations = 0;
+  uint64_t driverEvalCount = 0;
+  uint64_t driverEvalTimeNs = 0;
 
-  for (int step = 0; step < transformer.integrationSubsteps; ++step) {
+  for (int step = 0; step < clampedSubsteps; ++step) {
     float ipPrev = primaryCurrent;
     float iaPrev = secondaryACurrent;
     float ibPrev = secondaryBCurrent;
@@ -337,67 +513,65 @@ DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
         -mOverDt * ipPrev - mabOverDt * iaPrev + lbOverDt * ibPrev;
 
     for (int iter = 0; iter < 12; ++iter) {
+      totalIterations++;
+      maxIterations = std::max(maxIterations, iter + 1);
       float driverPlateVolts = driverPlateQuiescent - primaryVoltage;
-      KorenTriodePlateEval driverEval = evaluateKorenTriodePlateRuntime(
+      driverEvalCount++;
+      bool sampleDriverEvalTime =
+          measureDriverEvalTime &&
+          ((driverEvalCount - 1u) % kDriverEvalTimingStride == 0u);
+      uint64_t driverEvalStartNs =
+          sampleDriverEvalTime ? monotonicNowNs() : 0;
+      KorenTriodePlateEval driverEval = evaluateTriodePlateFast(
           controlGridVolts, driverPlateVolts, power.tubeTriodeModel,
-          power.tubeTriodeLut);
+          power.tubeTriodeLut, driverTriodeLut);
+      if (sampleDriverEvalTime) {
+        driverEvalTimeNs +=
+            (monotonicNowNs() - driverEvalStartNs) * kDriverEvalTimingStride;
+      }
       float driverPlateCurrentAbs = static_cast<float>(driverEval.currentAmps);
       float dIdriveDvp = -static_cast<float>(driverEval.conductanceSiemens);
       float driveCurrent = driverPlateCurrentAbs - driverQuiescentCurrent;
       float primaryCurrentNow = driveCurrent - coreLossConductance * primaryVoltage;
 
-      float iaBranch = tubeGridBranchCurrent(
-          secondaryAVoltage, power.outputTubeBiasVolts,
-          power.outputGridLeakResistanceOhms,
-          power.outputGridCurrentResistanceOhms);
-      float secondaryACurrentNow = -iaBranch;
-      float dIaDva = -tubeGridBranchSlope(
-          secondaryAVoltage, power.outputTubeBiasVolts,
-          power.outputGridLeakResistanceOhms,
-          power.outputGridCurrentResistanceOhms);
-      float ibBranch = tubeGridBranchCurrent(
-          secondaryBVoltage, power.outputTubeBiasVolts,
-          power.outputGridLeakResistanceOhms,
-          power.outputGridCurrentResistanceOhms);
-      float secondaryBCurrentNow = -ibBranch;
-      float dIbDvb = -tubeGridBranchSlope(
-          secondaryBVoltage, power.outputTubeBiasVolts,
-          power.outputGridLeakResistanceOhms,
-          power.outputGridCurrentResistanceOhms);
+      TubeGridBranchEval aBranch = evaluateTubeGridBranch(
+          secondaryAVoltage, power.outputTubeBiasVolts, gridLeakConductance,
+          gridCurrentConductance);
+      float secondaryACurrentNow = -aBranch.current;
+      float dIaDva = -aBranch.slope;
+      TubeGridBranchEval bBranch = evaluateTubeGridBranch(
+          secondaryBVoltage, power.outputTubeBiasVolts, gridLeakConductance,
+          gridCurrentConductance);
+      float secondaryBCurrentNow = -bBranch.current;
+      float dIbDvb = -bBranch.slope;
       float dIpDvp = dIdriveDvp - coreLossConductance;
 
-      float f[3] = {
-          (Rp + lpOverDt) * primaryCurrentNow +
-                  mOverDt * secondaryACurrentNow -
-                  mOverDt * secondaryBCurrentNow -
-                  primaryVoltage -
-                  cPrimary,
-          mOverDt * primaryCurrentNow +
-                  (Ra + laOverDt) * secondaryACurrentNow -
-                  mabOverDt * secondaryBCurrentNow -
-                  secondaryAVoltage -
-                  cSecondaryA,
-          -mOverDt * primaryCurrentNow -
-                  mabOverDt * secondaryACurrentNow +
-                  (Rb + lbOverDt) * secondaryBCurrentNow -
-                  secondaryBVoltage -
-                  cSecondaryB,
-      };
+      float f0 = primarySeries * primaryCurrentNow +
+                 mOverDt * secondaryACurrentNow -
+                 mOverDt * secondaryBCurrentNow - primaryVoltage - cPrimary;
+      float f1 = mOverDt * primaryCurrentNow +
+                 secondaryASeries * secondaryACurrentNow -
+                 mabOverDt * secondaryBCurrentNow - secondaryAVoltage -
+                 cSecondaryA;
+      float f2 = -mOverDt * primaryCurrentNow -
+                 mabOverDt * secondaryACurrentNow +
+                 secondaryBSeries * secondaryBCurrentNow - secondaryBVoltage -
+                 cSecondaryB;
 
-      float j[3][3] = {
-          {(Rp + lpOverDt) * dIpDvp - 1.0f, mOverDt * dIaDva,
-           -mOverDt * dIbDvb},
-          {mOverDt * dIpDvp, (Ra + laOverDt) * dIaDva - 1.0f,
-           -mabOverDt * dIbDvb},
-          {-mOverDt * dIpDvp, -mabOverDt * dIaDva,
-           (Rb + lbOverDt) * dIbDvb - 1.0f},
-      };
+      float a00 = primarySeries * dIpDvp - 1.0f;
+      float a01 = mOverDt * dIaDva;
+      float a02 = -mOverDt * dIbDvb;
+      float a10 = mOverDt * dIpDvp;
+      float a11 = secondaryASeries * dIaDva - 1.0f;
+      float a12 = -mabOverDt * dIbDvb;
+      float a20 = -mOverDt * dIpDvp;
+      float a21 = -mabOverDt * dIaDva;
+      float a22 = secondaryBSeries * dIbDvb - 1.0f;
 
-      float rhs[3] = {-f[0], -f[1], -f[2]};
+      float rhs[3] = {-f0, -f1, -f2};
       float delta[3] = {};
-      bool solved = solveLinear3x3Direct(j[0][0], j[0][1], j[0][2], j[1][0],
-                                         j[1][1], j[1][2], j[2][0], j[2][1],
-                                         j[2][2], rhs, delta);
+      bool solved = solveLinear3x3Direct(a00, a01, a02, a10, a11, a12, a20,
+                                         a21, a22, rhs, delta);
       assert(solved && "interstage 3x3 solve failed");
       (void)solved;
 
@@ -411,34 +585,56 @@ DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
       assert(std::isfinite(primaryVoltage));
       assert(std::isfinite(secondaryAVoltage));
       assert(std::isfinite(secondaryBVoltage));
-      if (maxDelta < 1e-6f) break;
+      if (maxDelta < kInterstageConvergenceTolerance) break;
     }
 
     float driverPlateVolts = driverPlateQuiescent - primaryVoltage;
-    float driverPlateCurrentAbs = static_cast<float>(
-        evaluateKorenTriodePlateRuntime(controlGridVolts, driverPlateVolts,
-                                        power.tubeTriodeModel,
-                                        power.tubeTriodeLut)
-            .currentAmps);
+    driverEvalCount++;
+    bool sampleDriverEvalTime =
+        measureDriverEvalTime &&
+        ((driverEvalCount - 1u) % kDriverEvalTimingStride == 0u);
+    uint64_t driverEvalStartNs =
+        sampleDriverEvalTime ? monotonicNowNs() : 0;
+    float driverPlateCurrentAbs =
+        static_cast<float>(evaluateTriodePlateFast(
+                               controlGridVolts, driverPlateVolts,
+                               power.tubeTriodeModel, power.tubeTriodeLut,
+                               driverTriodeLut)
+                               .currentAmps);
+    if (sampleDriverEvalTime) {
+      driverEvalTimeNs +=
+          (monotonicNowNs() - driverEvalStartNs) * kDriverEvalTimingStride;
+    }
     primaryCurrent =
         driverPlateCurrentAbs - driverQuiescentCurrent -
         coreLossConductance * primaryVoltage;
-    secondaryACurrent = -tubeGridBranchCurrent(
-        secondaryAVoltage, power.outputTubeBiasVolts,
-        power.outputGridLeakResistanceOhms,
-        power.outputGridCurrentResistanceOhms);
-    secondaryBCurrent = -tubeGridBranchCurrent(
-        secondaryBVoltage, power.outputTubeBiasVolts,
-        power.outputGridLeakResistanceOhms,
-        power.outputGridCurrentResistanceOhms);
+    secondaryACurrent = -evaluateTubeGridBranch(
+                             secondaryAVoltage, power.outputTubeBiasVolts,
+                             gridLeakConductance, gridCurrentConductance)
+                             .current;
+    secondaryBCurrent = -evaluateTubeGridBranch(
+                             secondaryBVoltage, power.outputTubeBiasVolts,
+                             gridLeakConductance, gridCurrentConductance)
+                             .current;
   }
 
   float finalDriverPlateVolts = driverPlateQuiescent - primaryVoltage;
-  float finalDriverPlateCurrentAbs = static_cast<float>(
-      evaluateKorenTriodePlateRuntime(controlGridVolts, finalDriverPlateVolts,
-                                      power.tubeTriodeModel,
-                                      power.tubeTriodeLut)
-          .currentAmps);
+  driverEvalCount++;
+  bool sampleFinalDriverEvalTime =
+      measureDriverEvalTime &&
+      ((driverEvalCount - 1u) % kDriverEvalTimingStride == 0u);
+  uint64_t finalDriverEvalStartNs =
+      sampleFinalDriverEvalTime ? monotonicNowNs() : 0;
+  float finalDriverPlateCurrentAbs =
+      static_cast<float>(evaluateTriodePlateFast(
+                             controlGridVolts, finalDriverPlateVolts,
+                             power.tubeTriodeModel, power.tubeTriodeLut,
+                             driverTriodeLut)
+                             .currentAmps);
+  if (sampleFinalDriverEvalTime) {
+    driverEvalTimeNs +=
+        (monotonicNowNs() - finalDriverEvalStartNs) * kDriverEvalTimingStride;
+  }
 
   DriverInterstageCenterTappedResult result{};
   result.driverPlateCurrentAbs = finalDriverPlateCurrentAbs;
@@ -448,5 +644,79 @@ DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
   result.secondaryAVoltage = secondaryAVoltage;
   result.secondaryBCurrent = secondaryBCurrent;
   result.secondaryBVoltage = secondaryBVoltage;
+  result.substeps = clampedSubsteps;
+  result.totalIterations = totalIterations;
+  result.maxIterations = maxIterations;
+  result.driverEvalCount = driverEvalCount;
+  result.driverEvalTimeNs = driverEvalTimeNs;
   return result;
+}
+
+DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
+    const CurrentDrivenTransformer& transformer,
+    const Radio1938::PowerNodeState& power,
+    float controlGridVolts,
+    float driverPlateQuiescent,
+    float driverQuiescentCurrent,
+    bool measureDriverEvalTime) {
+  constexpr int kAdaptiveValidationCooldown = 8;
+  constexpr float kAdaptiveStepErrorToleranceVolts = 0.25f;
+
+  int configuredSubsteps = std::max(transformer.integrationSubsteps, 1);
+  int heuristicSubsteps =
+      chooseAdaptiveInterstageSubsteps(transformer, power, controlGridVolts);
+  int currentAdaptiveSubsteps =
+      (power.interstageAdaptiveSubsteps > 0) ? power.interstageAdaptiveSubsteps
+                                             : configuredSubsteps;
+  currentAdaptiveSubsteps =
+      std::clamp(currentAdaptiveSubsteps, 1, configuredSubsteps);
+  int currentValidationCountdown =
+      std::max(power.interstageAdaptiveValidationCountdown, 0);
+
+  if (heuristicSubsteps > currentAdaptiveSubsteps) {
+    DriverInterstageCenterTappedResult raised =
+        solveDriverInterstageCenterTappedNoCapAtSubsteps(
+            transformer, power, controlGridVolts, driverPlateQuiescent,
+            driverQuiescentCurrent, heuristicSubsteps, measureDriverEvalTime);
+    raised.suggestedSubsteps = heuristicSubsteps;
+    raised.suggestedValidationCountdown = kAdaptiveValidationCooldown;
+    return raised;
+  }
+
+  if (heuristicSubsteps < currentAdaptiveSubsteps &&
+      currentValidationCountdown <= 0) {
+    int trialSubsteps = std::max(heuristicSubsteps,
+                                 nextLowerAdaptiveSubsteps(
+                                     currentAdaptiveSubsteps));
+    trialSubsteps = std::clamp(trialSubsteps, 1, currentAdaptiveSubsteps);
+    DriverInterstageCenterTappedResult fine =
+        solveDriverInterstageCenterTappedNoCapAtSubsteps(
+            transformer, power, controlGridVolts, driverPlateQuiescent,
+            driverQuiescentCurrent, currentAdaptiveSubsteps,
+            measureDriverEvalTime);
+    DriverInterstageCenterTappedResult coarse =
+        solveDriverInterstageCenterTappedNoCapAtSubsteps(
+            transformer, power, controlGridVolts, driverPlateQuiescent,
+            driverQuiescentCurrent, trialSubsteps, measureDriverEvalTime);
+    float errorVolts = estimateInterstageBoundaryErrorVolts(coarse, fine);
+    if (errorVolts <= kAdaptiveStepErrorToleranceVolts) {
+      coarse.suggestedSubsteps = trialSubsteps;
+      coarse.suggestedValidationCountdown =
+          (trialSubsteps > heuristicSubsteps) ? 0 : kAdaptiveValidationCooldown;
+      return coarse;
+    }
+    fine.suggestedSubsteps = currentAdaptiveSubsteps;
+    fine.suggestedValidationCountdown = kAdaptiveValidationCooldown;
+    return fine;
+  }
+
+  DriverInterstageCenterTappedResult steady =
+      solveDriverInterstageCenterTappedNoCapAtSubsteps(
+          transformer, power, controlGridVolts, driverPlateQuiescent,
+          driverQuiescentCurrent, currentAdaptiveSubsteps,
+          measureDriverEvalTime);
+  steady.suggestedSubsteps = currentAdaptiveSubsteps;
+  steady.suggestedValidationCountdown =
+      std::max(currentValidationCountdown - 1, 0);
+  return steady;
 }

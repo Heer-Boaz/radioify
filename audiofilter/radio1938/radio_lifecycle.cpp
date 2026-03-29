@@ -111,6 +111,27 @@ void Radio1938::setCalibrationEnabled(bool enabled) {
 
 void Radio1938::resetCalibration() {
   calibration.reset();
+  demod.am.waveformSampleCount = 0;
+  demod.am.waveformIntervalCount = 0;
+  demod.am.waveformSplitIntervalCount = 0;
+  demod.am.waveformSolveStepCount = 0;
+  demod.am.storageSolveCallCount = 0;
+  demod.am.storageSolveIterationCount = 0;
+  demod.am.storageSolveMaxIterations = 0;
+  demod.am.afcProbeTimeNs = 0;
+  demod.am.detectorIslandTimeNs = 0;
+  demod.am.storageSolveTimeNs = 0;
+  demod.am.metricsEnabled = false;
+  power.outputTransformerSubstepCount = 0;
+  power.outputNewtonIterationCount = 0;
+  power.outputNewtonMaxIterations = 0;
+  power.interstageSubstepCount = 0;
+  power.interstageIterationCount = 0;
+  power.interstageMaxIterations = 0;
+  power.interstageSolveTimeNs = 0;
+  power.interstageDriverEvalCount = 0;
+  power.interstageDriverEvalTimeNs = 0;
+  power.outputSolveTimeNs = 0;
 }
 
 void Radio1938::init(int ch, float sr, float bw, float noise) {

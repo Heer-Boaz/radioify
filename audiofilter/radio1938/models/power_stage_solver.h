@@ -13,6 +13,13 @@ struct DriverInterstageCenterTappedResult {
   float secondaryAVoltage = 0.0f;
   float secondaryBCurrent = 0.0f;
   float secondaryBVoltage = 0.0f;
+  int substeps = 0;
+  int totalIterations = 0;
+  int maxIterations = 0;
+  uint64_t driverEvalCount = 0;
+  uint64_t driverEvalTimeNs = 0;
+  int suggestedSubsteps = 0;
+  int suggestedValidationCountdown = 0;
 };
 
 struct SpeakerElectricalLinearization {
@@ -32,6 +39,9 @@ struct OutputStageSubstepResult {
   float averageSecondaryVoltage = 0.0f;
   float averagePlateCurrentA = 0.0f;
   float averagePlateCurrentB = 0.0f;
+  int transformerSubsteps = 0;
+  int totalNewtonIterations = 0;
+  int maxNewtonIterations = 0;
 };
 
 struct OutputPrimarySolveResult {
@@ -39,6 +49,7 @@ struct OutputPrimarySolveResult {
   float driveCurrent = 0.0f;
   float plateCurrentA = 0.0f;
   float plateCurrentB = 0.0f;
+  int iterations = 0;
 };
 
 OutputPrimarySolveResult solveOutputPrimaryAffine(
@@ -73,6 +84,7 @@ DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
     const Radio1938::PowerNodeState& power,
     float controlGridVolts,
     float driverPlateQuiescent,
-    float driverQuiescentCurrent);
+    float driverQuiescentCurrent,
+    bool measureDriverEvalTime);
 
 #endif  // RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_POWER_STAGE_SOLVER_H

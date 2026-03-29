@@ -1143,6 +1143,52 @@ void runLevels(const HarnessConfig& config) {
             << run.radio.calibration.speakerReferenceRmsRatio << "\n";
   std::cout << "speaker_peak_reference_ratio,"
             << run.radio.calibration.maxSpeakerReferenceRatio << "\n";
+  std::cout << "detector_waveform_avg_solve_steps,"
+            << run.radio.calibration.detectorWaveformAverageSolveSteps << "\n";
+  std::cout << "detector_waveform_split_fraction,"
+            << run.radio.calibration.detectorWaveformSplitFraction << "\n";
+  std::cout << "detector_storage_avg_iterations,"
+            << run.radio.calibration.detectorStorageAverageIterations << "\n";
+  std::cout << "detector_storage_max_iterations,"
+            << run.radio.calibration.detectorStorageMaxIterations << "\n";
+  std::cout << "detector_afc_probe_ms,"
+            << run.radio.calibration.detectorAfcProbeMs << "\n";
+  std::cout << "detector_afc_probe_us_per_sample,"
+            << run.radio.calibration.detectorAfcProbeUsPerSample << "\n";
+  std::cout << "detector_island_ms,"
+            << run.radio.calibration.detectorIslandMs << "\n";
+  std::cout << "detector_island_us_per_sample,"
+            << run.radio.calibration.detectorIslandUsPerSample << "\n";
+  std::cout << "detector_storage_solve_ms,"
+            << run.radio.calibration.detectorStorageSolveMs << "\n";
+  std::cout << "detector_storage_solve_us_per_call,"
+            << run.radio.calibration.detectorStorageSolveUsPerCall << "\n";
+  std::cout << "power_output_avg_newton_iterations,"
+            << run.radio.calibration.powerOutputAverageNewtonIterations << "\n";
+  std::cout << "power_output_max_newton_iterations,"
+            << run.radio.calibration.powerOutputMaxNewtonIterations << "\n";
+  std::cout << "power_output_avg_transformer_substeps,"
+            << run.radio.calibration.powerOutputAverageTransformerSubsteps
+            << "\n";
+  std::cout << "power_output_solve_ms,"
+            << run.radio.calibration.powerOutputSolveMs << "\n";
+  std::cout << "power_output_solve_us_per_sample,"
+            << run.radio.calibration.powerOutputSolveUsPerSample << "\n";
+  std::cout << "power_interstage_avg_iterations,"
+            << run.radio.calibration.powerInterstageAverageIterations << "\n";
+  std::cout << "power_interstage_max_iterations,"
+            << run.radio.calibration.powerInterstageMaxIterations << "\n";
+  std::cout << "power_interstage_avg_substeps,"
+            << run.radio.calibration.powerInterstageAverageSubsteps << "\n";
+  std::cout << "power_interstage_solve_ms,"
+            << run.radio.calibration.powerInterstageSolveMs << "\n";
+  std::cout << "power_interstage_solve_us_per_sample,"
+            << run.radio.calibration.powerInterstageSolveUsPerSample << "\n";
+  std::cout << "power_interstage_driver_eval_calls_per_sample,"
+            << run.radio.calibration.powerInterstageDriverEvalCallsPerSample
+            << "\n";
+  std::cout << "power_interstage_driver_eval_us_per_call,"
+            << run.radio.calibration.powerInterstageDriverEvalUsPerCall << "\n";
   std::cout << "digital_reference_peak,"
             << run.radio.output.digitalReferenceSpeakerVoltsPeak << "\n";
   std::cout << "max_digital_output," << run.radio.calibration.maxDigitalOutput

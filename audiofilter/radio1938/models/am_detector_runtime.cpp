@@ -3,9 +3,17 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 
 namespace {
+
+uint64_t monotonicNowNs() {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 
 void primeDetectorWarmStart(AMDetector& detector,
                             float audioRect,
@@ -54,15 +62,18 @@ DetectorChargeBranch evaluateDetectorChargeBranch(float sourceVolts,
   return branch;
 }
 
-float solveDetectorAudioNode(const AMDetector& detector,
+float solveDetectorAudioNode(AMDetector& detector,
                              float dt,
                              float sourceVolts,
                              float detectorLeakG) {
+  uint64_t startNs = detector.metricsEnabled ? monotonicNowNs() : 0;
   float storageCapG =
       std::max(detector.detectorStorageCapFarads, 1e-12f) / dt;
   float nodeVolts = std::max(detector.detectorStorageNode, 0.0f);
+  int iterations = 0;
 
   for (int iter = 0; iter < 8; ++iter) {
+    iterations = iter + 1;
     DetectorChargeBranch branch = evaluateDetectorChargeBranch(
         sourceVolts, nodeVolts, detector.audioDiodeDrop,
         detector.audioJunctionSlopeVolts, detector.audioChargeResistanceOhms);
@@ -75,10 +86,19 @@ float solveDetectorAudioNode(const AMDetector& detector,
     if (std::fabs(delta) < 1e-7f) break;
   }
 
+  detector.storageSolveCallCount++;
+  detector.storageSolveIterationCount += static_cast<uint64_t>(iterations);
+  detector.storageSolveMaxIterations =
+      std::max(detector.storageSolveMaxIterations,
+               static_cast<uint32_t>(iterations));
+  if (detector.metricsEnabled) {
+    detector.storageSolveTimeNs += monotonicNowNs() - startNs;
+  }
+
   return nodeVolts;
 }
 
-DetectorSolveResult stepDetectorStorageAndAvc(const AMDetector& detector,
+DetectorSolveResult stepDetectorStorageAndAvc(AMDetector& detector,
                                               float dt,
                                               float detectorDriveVolts,
                                               float avcDrive,
@@ -168,6 +188,8 @@ struct DetectorIslandAccum {
   float avcRectArea = 0.0f;
   float detectorNodeArea = 0.0f;
   int solveSteps = 0;
+  int intervalCount = 0;
+  int splitIntervalCount = 0;
 };
 
 void accumulateDetectorInterval(AMDetector& detector,
@@ -237,10 +259,13 @@ void runWaveformDetectorIsland(AMDetector& detector,
                                float carrierHz) {
   float sampleRate = std::max(detector.fs, 1.0f);
   int substeps = detectorWaveformSubsteps(detector, sampleRate, carrierHz);
+  detector.waveformSampleCount++;
   detector.lastWaveformSubsteps = substeps;
   if (substeps <= 1) {
     runEnvelopeDetectorPath(detector, std::sqrt(ifI * ifI + ifQ * ifQ),
                             detectorLeakG);
+    detector.waveformIntervalCount += 1;
+    detector.waveformSolveStepCount += 1;
     updateDetectorEnvelopeHistory(detector, ifI, ifQ);
     return;
   }
@@ -301,6 +326,8 @@ void runWaveformDetectorIsland(AMDetector& detector,
     bool shouldSplit = ifWavePeak > forwardThreshold;
 
     if (shouldSplit) {
+      accum.intervalCount += 2;
+      accum.splitIntervalCount += 1;
       float tQuarter = (static_cast<float>(step) + 0.25f) /
                        static_cast<float>(substeps);
       float tThreeQuarter = (static_cast<float>(step) + 0.75f) /
@@ -324,6 +351,7 @@ void runWaveformDetectorIsland(AMDetector& detector,
                                  ifWaveThreeQuarter, delayedAvcThreshold,
                                  detectorLeakG, accum);
     } else {
+      accum.intervalCount += 1;
       accumulateDetectorInterval(detector, dtSub, coarseIntervalWidth,
                                  ifWaveMid, delayedAvcThreshold,
                                  detectorLeakG, accum);
@@ -336,6 +364,10 @@ void runWaveformDetectorIsland(AMDetector& detector,
   detector.avcRect = accum.avcRectArea;
   detector.detectorNode = accum.detectorNodeArea;
   detector.lastWaveformSubsteps = accum.solveSteps;
+  detector.waveformIntervalCount += static_cast<uint64_t>(accum.intervalCount);
+  detector.waveformSplitIntervalCount +=
+      static_cast<uint64_t>(accum.splitIntervalCount);
+  detector.waveformSolveStepCount += static_cast<uint64_t>(accum.solveSteps);
   detector.ifWavePhase =
       wrapPhase(detector.ifWavePhase + kRadioTwoPi * (carrierHz / sampleRate));
   detector.prevPrevIfI = prevIfI;
@@ -409,6 +441,17 @@ void AMDetector::reset() {
   prevIfQ = 0.0f;
   ifEnvelopeHistorySamples = 0;
   lastWaveformSubsteps = 0;
+  waveformSampleCount = 0;
+  waveformIntervalCount = 0;
+  waveformSplitIntervalCount = 0;
+  waveformSolveStepCount = 0;
+  storageSolveCallCount = 0;
+  storageSolveIterationCount = 0;
+  storageSolveMaxIterations = 0;
+  afcProbeTimeNs = 0;
+  detectorIslandTimeNs = 0;
+  storageSolveTimeNs = 0;
+  metricsEnabled = false;
   warmStartPending = true;
   afcError = 0.0f;
   ifCrackleEnv = 0.0f;
@@ -431,6 +474,7 @@ float AMDetector::run(float signalI,
                       float ifCrackleAmp,
                       float ifCrackleRate) {
   constexpr float kInvSqrt2 = 0.70710678118f;
+  metricsEnabled = radio.calibration.enabled;
   float ifI = signalI;
   float ifQ = signalQ;
   if (ifNoiseAmp > 0.0f) {
@@ -473,10 +517,14 @@ float AMDetector::run(float signalI,
 
   float nextLowPhase = afcLowPhase;
   float nextHighPhase = afcHighPhase;
+  uint64_t afcStartNs = metricsEnabled ? monotonicNowNs() : 0;
   float afcLow =
       processProbe(afcLowPhase, afcLowStep, afcLowProbe, nextLowPhase);
   float afcHigh =
       processProbe(afcHighPhase, afcHighStep, afcHighProbe, nextHighPhase);
+  if (metricsEnabled) {
+    afcProbeTimeNs += monotonicNowNs() - afcStartNs;
+  }
   afcLowPhase = nextLowPhase;
   afcHighPhase = nextHighPhase;
 
@@ -486,12 +534,16 @@ float AMDetector::run(float signalI,
 
   float detectorLeakG = effectiveDetectorLoadConductance(radio);
   float carrierHz = detectorWaveformCarrierHz(*this, radio);
+  uint64_t islandStartNs = metricsEnabled ? monotonicNowNs() : 0;
   if (carrierHz > 0.0f) {
     runWaveformDetectorIsland(*this, ifI, ifQ, detectorLeakG, carrierHz);
   } else {
     runEnvelopeDetectorPath(*this, std::sqrt(ifI * ifI + ifQ * ifQ),
                             detectorLeakG);
     updateDetectorEnvelopeHistory(*this, ifI, ifQ);
+  }
+  if (metricsEnabled) {
+    detectorIslandTimeNs += monotonicNowNs() - islandStartNs;
   }
   assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
   if (radio.calibration.enabled) {

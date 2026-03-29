@@ -36,6 +36,17 @@ struct AMDetector {
   float waveformSamplesPerCycle = 4.0f;
   int waveformMaxSubsteps = 96;
   int lastWaveformSubsteps = 0;
+  uint64_t waveformSampleCount = 0;
+  uint64_t waveformIntervalCount = 0;
+  uint64_t waveformSplitIntervalCount = 0;
+  uint64_t waveformSolveStepCount = 0;
+  uint64_t storageSolveCallCount = 0;
+  uint64_t storageSolveIterationCount = 0;
+  uint32_t storageSolveMaxIterations = 0;
+  uint64_t afcProbeTimeNs = 0;
+  uint64_t detectorIslandTimeNs = 0;
+  uint64_t storageSolveTimeNs = 0;
+  bool metricsEnabled = false;
   bool warmStartPending = true;
   float afcError = 0.0f;
   float ifCrackleEnv = 0.0f;

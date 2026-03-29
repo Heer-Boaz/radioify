@@ -163,6 +163,28 @@ void Radio1938::CalibrationState::reset() {
   detectorIfCrackleEventCount = 0;
   detectorIfCrackleMaxBurstAmp = 0.0f;
   detectorIfCrackleMaxEnv = 0.0f;
+  detectorWaveformAverageSolveSteps = 0.0f;
+  detectorWaveformSplitFraction = 0.0f;
+  detectorStorageAverageIterations = 0.0f;
+  detectorStorageMaxIterations = 0;
+  detectorAfcProbeMs = 0.0;
+  detectorIslandMs = 0.0;
+  detectorStorageSolveMs = 0.0;
+  detectorAfcProbeUsPerSample = 0.0f;
+  detectorIslandUsPerSample = 0.0f;
+  detectorStorageSolveUsPerCall = 0.0f;
+  powerOutputAverageNewtonIterations = 0.0f;
+  powerOutputMaxNewtonIterations = 0;
+  powerOutputAverageTransformerSubsteps = 0.0f;
+  powerInterstageAverageIterations = 0.0f;
+  powerInterstageMaxIterations = 0;
+  powerInterstageAverageSubsteps = 0.0f;
+  powerInterstageSolveMs = 0.0;
+  powerOutputSolveMs = 0.0;
+  powerInterstageSolveUsPerSample = 0.0f;
+  powerOutputSolveUsPerSample = 0.0f;
+  powerInterstageDriverEvalCallsPerSample = 0.0f;
+  powerInterstageDriverEvalUsPerCall = 0.0f;
   detectorNodeVolts.reset();
   receiverGridVolts.reset();
   receiverPlateSwingVolts.reset();
@@ -319,6 +341,87 @@ void updateCalibrationSnapshot(Radio1938& radio) {
   radio.calibration.detectorIfCrackleMaxBurstAmp =
       radio.demod.am.ifCrackleMaxBurstAmp;
   radio.calibration.detectorIfCrackleMaxEnv = radio.demod.am.ifCrackleMaxEnv;
+  if (radio.demod.am.waveformSampleCount > 0) {
+    radio.calibration.detectorWaveformAverageSolveSteps =
+        static_cast<float>(radio.demod.am.waveformSolveStepCount) /
+        static_cast<float>(radio.demod.am.waveformSampleCount);
+  }
+  if (radio.demod.am.waveformIntervalCount > 0) {
+    radio.calibration.detectorWaveformSplitFraction =
+        static_cast<float>(radio.demod.am.waveformSplitIntervalCount) /
+        static_cast<float>(radio.demod.am.waveformIntervalCount);
+  }
+  if (radio.demod.am.storageSolveCallCount > 0) {
+  radio.calibration.detectorStorageAverageIterations =
+        static_cast<float>(radio.demod.am.storageSolveIterationCount) /
+        static_cast<float>(radio.demod.am.storageSolveCallCount);
+  }
+  radio.calibration.detectorStorageMaxIterations =
+      radio.demod.am.storageSolveMaxIterations;
+  radio.calibration.detectorAfcProbeMs =
+      static_cast<double>(radio.demod.am.afcProbeTimeNs) * 1e-6;
+  radio.calibration.detectorIslandMs =
+      static_cast<double>(radio.demod.am.detectorIslandTimeNs) * 1e-6;
+  radio.calibration.detectorStorageSolveMs =
+      static_cast<double>(radio.demod.am.storageSolveTimeNs) * 1e-6;
+  if (radio.demod.am.waveformSampleCount > 0) {
+    double invSamples =
+        1.0 / static_cast<double>(radio.demod.am.waveformSampleCount);
+    radio.calibration.detectorAfcProbeUsPerSample = static_cast<float>(
+        static_cast<double>(radio.demod.am.afcProbeTimeNs) * invSamples * 1e-3);
+    radio.calibration.detectorIslandUsPerSample = static_cast<float>(
+        static_cast<double>(radio.demod.am.detectorIslandTimeNs) * invSamples *
+        1e-3);
+  }
+  if (radio.demod.am.storageSolveCallCount > 0) {
+    radio.calibration.detectorStorageSolveUsPerCall = static_cast<float>(
+        static_cast<double>(radio.demod.am.storageSolveTimeNs) /
+        static_cast<double>(radio.demod.am.storageSolveCallCount) * 1e-3);
+  }
+  if (radio.power.outputTransformerSubstepCount > 0) {
+    radio.calibration.powerOutputAverageNewtonIterations =
+        static_cast<float>(radio.power.outputNewtonIterationCount) /
+        static_cast<float>(radio.power.outputTransformerSubstepCount);
+    radio.calibration.powerOutputAverageTransformerSubsteps =
+        static_cast<float>(radio.power.outputTransformerSubstepCount) /
+        static_cast<float>(std::max(radio.calibration.validationSampleCount,
+                                    uint64_t{1}));
+  }
+  radio.calibration.powerOutputMaxNewtonIterations =
+      radio.power.outputNewtonMaxIterations;
+  radio.calibration.powerInterstageSolveMs =
+      static_cast<double>(radio.power.interstageSolveTimeNs) * 1e-6;
+  radio.calibration.powerOutputSolveMs =
+      static_cast<double>(radio.power.outputSolveTimeNs) * 1e-6;
+  if (radio.power.interstageSubstepCount > 0) {
+    radio.calibration.powerInterstageAverageIterations =
+        static_cast<float>(radio.power.interstageIterationCount) /
+        static_cast<float>(radio.power.interstageSubstepCount);
+    radio.calibration.powerInterstageAverageSubsteps =
+        static_cast<float>(radio.power.interstageSubstepCount) /
+        static_cast<float>(std::max(radio.calibration.validationSampleCount,
+                                    uint64_t{1}));
+  }
+  radio.calibration.powerInterstageMaxIterations =
+      radio.power.interstageMaxIterations;
+  if (radio.calibration.validationSampleCount > 0) {
+    double invValidation =
+        1.0 / static_cast<double>(radio.calibration.validationSampleCount);
+    radio.calibration.powerInterstageSolveUsPerSample = static_cast<float>(
+        static_cast<double>(radio.power.interstageSolveTimeNs) * invValidation *
+        1e-3);
+    radio.calibration.powerOutputSolveUsPerSample = static_cast<float>(
+        static_cast<double>(radio.power.outputSolveTimeNs) * invValidation *
+        1e-3);
+    radio.calibration.powerInterstageDriverEvalCallsPerSample =
+        static_cast<float>(radio.power.interstageDriverEvalCount) *
+        static_cast<float>(invValidation);
+  }
+  if (radio.power.interstageDriverEvalCount > 0) {
+    radio.calibration.powerInterstageDriverEvalUsPerCall = static_cast<float>(
+        static_cast<double>(radio.power.interstageDriverEvalTimeNs) /
+        static_cast<double>(radio.power.interstageDriverEvalCount) * 1e-3);
+  }
   radio.calibration.validationDriverGridPositive =
       radio.calibration.driverGridPositiveFraction > 0.01f;
   radio.calibration.validationOutputGridAPositive =
