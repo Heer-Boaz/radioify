@@ -62,7 +62,10 @@ void applyPhilco37116Preset(Radio1938& radio) {
   // 470 kHz strip. Keep enough detector drive for the 6J5/6F6/6B4 chain so the
   // physical speaker-reference scaling is not forced to make the whole radio
   // sound abnormally quiet.
-  radio.ifStrip.stageGain = 4.0f;
+  // Keep detector drive healthy, but back off the reduced-order IF gain a bit:
+  // measurements show this cuts nominal and overdrive distortion without
+  // pushing the Philco out of its expected output range.
+  radio.ifStrip.stageGain = 3.6f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.interstageCouplingCoeff = 0.15f;
@@ -114,14 +117,14 @@ void applyPhilco37116Preset(Radio1938& radio) {
 
   radio.power.sagStart = 0.06f;
   radio.power.sagEnd = 0.22f;
-  radio.power.rippleDepth = 0.09f;
+  radio.power.rippleDepth = 0.012f;
   radio.power.sagAttackMs = 60.0f;
   radio.power.sagReleaseMs = 900.0f;
   radio.power.rectifierMinHz = 80.0f;
   radio.power.rippleSecondHarmonicMix = 0.0f;
   radio.power.gainSagPerPower = 0.015f;
-  radio.power.rippleGainBase = 0.95f;
-  radio.power.rippleGainDepth = 0.70f;
+  radio.power.rippleGainBase = 0.18f;
+  radio.power.rippleGainDepth = 0.08f;
   radio.power.gainMin = 0.92f;
   radio.power.gainMax = 1.02f;
   radio.power.supplyDriveDepth = 0.01f;
@@ -203,7 +206,7 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.noiseConfig.humHzDefault = 60.0f;
   radio.noiseConfig.noiseWeightRef = 0.15f;
   radio.noiseConfig.noiseWeightScaleMax = 2.0f;
-  radio.noiseConfig.humAmpScale = 0.09f;
+  radio.noiseConfig.humAmpScale = 0.008f;
   radio.noiseConfig.crackleAmpScale = 0.025f;
   radio.noiseConfig.crackleRateScale = 1.2f;
 
