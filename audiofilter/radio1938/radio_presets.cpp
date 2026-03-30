@@ -114,14 +114,14 @@ void applyPhilco37116Preset(Radio1938& radio) {
 
   radio.power.sagStart = 0.06f;
   radio.power.sagEnd = 0.22f;
-  radio.power.rippleDepth = 0.01f;
+  radio.power.rippleDepth = 0.09f;
   radio.power.sagAttackMs = 60.0f;
   radio.power.sagReleaseMs = 900.0f;
   radio.power.rectifierMinHz = 80.0f;
   radio.power.rippleSecondHarmonicMix = 0.0f;
   radio.power.gainSagPerPower = 0.015f;
-  radio.power.rippleGainBase = 0.20f;
-  radio.power.rippleGainDepth = 0.30f;
+  radio.power.rippleGainBase = 0.95f;
+  radio.power.rippleGainDepth = 0.70f;
   radio.power.gainMin = 0.92f;
   radio.power.gainMax = 1.02f;
   radio.power.supplyDriveDepth = 0.01f;
@@ -199,11 +199,11 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.globals.postNoiseMix = 0.35f;
   radio.globals.noiseFloorAmp = 0.0f;
 
-  radio.noiseConfig.enableHumTone = false;
+  radio.noiseConfig.enableHumTone = true;
   radio.noiseConfig.humHzDefault = 60.0f;
   radio.noiseConfig.noiseWeightRef = 0.15f;
   radio.noiseConfig.noiseWeightScaleMax = 2.0f;
-  radio.noiseConfig.humAmpScale = 0.0f;
+  radio.noiseConfig.humAmpScale = 0.09f;
   radio.noiseConfig.crackleAmpScale = 0.025f;
   radio.noiseConfig.crackleRateScale = 1.2f;
 

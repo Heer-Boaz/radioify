@@ -8,10 +8,12 @@
 void RadioInterferenceDerivedNode::init(Radio1938& radio, RadioInitContext&) {
   auto& noiseConfig = radio.noiseConfig;
   auto& noiseDerived = radio.noiseDerived;
+  noiseDerived.baseHumAmp =
+      noiseConfig.enableHumTone ? std::max(noiseConfig.humAmpScale, 0.0f)
+                                : 0.0f;
   if (radio.noiseWeight <= 0.0f) {
     noiseDerived.baseNoiseAmp = 0.0f;
     noiseDerived.baseCrackleAmp = 0.0f;
-    noiseDerived.baseHumAmp = 0.0f;
     noiseDerived.crackleRate = 0.0f;
     return;
   }
@@ -23,7 +25,6 @@ void RadioInterferenceDerivedNode::init(Radio1938& radio, RadioInitContext&) {
   }
   noiseDerived.baseNoiseAmp = radio.noiseWeight;
   noiseDerived.baseCrackleAmp = noiseConfig.crackleAmpScale * scale;
-  noiseDerived.baseHumAmp = noiseConfig.humAmpScale * scale;
   noiseDerived.crackleRate = noiseConfig.crackleRateScale * scale;
 }
 
@@ -82,8 +83,9 @@ void RadioInterferenceDerivedNode::run(Radio1938& radio,
   }
   ctx.derived.noiseAmp =
       noiseDerived.baseNoiseAmp * radio.globals.postNoiseMix;
-  // Mains hum is modeled through power-supply ripple in the receiver/power
-  // stages, not as a post-speaker tone injector.
-  ctx.derived.humAmp = 0.0f;
-  ctx.derived.humToneEnabled = false;
+  // Allow a small configurable hum contribution in addition to the supply
+  // ripple path so preset-level hum controls are actually audible.
+  ctx.derived.humAmp = noiseDerived.baseHumAmp;
+  ctx.derived.humToneEnabled =
+      radio.noiseConfig.enableHumTone && (noiseDerived.baseHumAmp > 0.0f);
 }
