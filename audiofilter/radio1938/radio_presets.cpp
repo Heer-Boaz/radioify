@@ -166,13 +166,15 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.power.outputTubePlateCurrentAmps = 0.040f;
   radio.power.outputTubeMutualConductanceSiemens = 0.00525f;
   radio.power.outputTubeMu = 4.2f;
-  radio.power.outputTubePlateToPlateLoadOhms = 3000.0f;
+  // A slightly lighter reflected load keeps the output pair in a more
+  // believable clean region while preserving the Philco's expected power.
+  radio.power.outputTubePlateToPlateLoadOhms = 3300.0f;
   radio.power.outputTubePlateKneeVolts = 18.0f;
   radio.power.outputTubeGridSoftnessVolts = 2.0f;
   radio.power.outputTransformerPrimaryLeakageInductanceHenries = 35e-3f;
   radio.power.outputTransformerMagnetizingInductanceHenries = 20.0f;
   radio.power.outputTransformerTurnsRatioPrimaryToSecondary =
-      std::sqrt(3000.0f / 3.9f);
+      std::sqrt(3300.0f / 3.9f);
   radio.power.outputTransformerPrimaryResistanceOhms = 235.0f;
   radio.power.outputTubePlateDcVolts =
       radio.power.outputTubePlateSupplyVolts -

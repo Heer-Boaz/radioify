@@ -114,6 +114,7 @@ KorenTriodeModel fitKorenTriodeModel(double vgkQ,
   assert(std::isfinite(gmTarget) && gmTarget > 0.0);
   assert(std::isfinite(mu) && mu > 0.0);
 
+  const double minKvb = std::max(1.0, 0.005 * vpkQ * vpkQ);
   const double kModelLogMin = std::log(1e-12);
   const double kModelLogMax = std::log(1e12);
   constexpr double kCostConverged = 1e-18;
@@ -122,8 +123,12 @@ KorenTriodeModel fitKorenTriodeModel(double vgkQ,
   constexpr double kGpWeight = 1.0;
   double gpTarget = gmTarget / mu;
 
-  auto clampModelLog = [&](double x) {
-    return std::clamp(x, kModelLogMin, kModelLogMax);
+  auto clampModelLog = [&](double x, int paramIndex) {
+    double minLog = kModelLogMin;
+    if (paramIndex == 2) {
+      minLog = std::max(minLog, std::log(minKvb));
+    }
+    return std::clamp(x, minLog, kModelLogMax);
   };
 
   auto computeKg1ForShape = [&](double kp, double kvb) {
@@ -136,8 +141,9 @@ KorenTriodeModel fitKorenTriodeModel(double vgkQ,
   };
 
   auto evalResiduals = [&](const double params[3], double residuals[3]) {
-    double safeParams[3] = {clampModelLog(params[0]), clampModelLog(params[1]),
-                            clampModelLog(params[2])};
+    double safeParams[3] = {clampModelLog(params[0], 0),
+                            clampModelLog(params[1], 1),
+                            clampModelLog(params[2], 2)};
     KorenTriodeModel model = makeKorenTriodeModel(
         mu, std::exp(safeParams[0]), std::exp(safeParams[1]),
         std::exp(safeParams[2]));
@@ -266,9 +272,10 @@ KorenTriodeModel fitKorenTriodeModel(double vgkQ,
         clampStep(delta);
         const double stepScales[] = {1.0, 0.5, 0.25, 0.125, 0.0625};
         for (double stepScale : stepScales) {
-          double candidate[3] = {clampModelLog(u[0] + stepScale * delta[0]),
-                                 clampModelLog(u[1] + stepScale * delta[1]),
-                                 clampModelLog(u[2] + stepScale * delta[2])};
+          double candidate[3] = {
+              clampModelLog(u[0] + stepScale * delta[0], 0),
+              clampModelLog(u[1] + stepScale * delta[1], 1),
+              clampModelLog(u[2] + stepScale * delta[2], 2)};
           double candidateResiduals[3] = {};
           evalResiduals(candidate, candidateResiduals);
           double candidateCost = residualCost(candidateResiduals);
