@@ -48,6 +48,7 @@ public:
         return m_lastNv12TextureDetail;
     }
 
+    void ResetSessionState();
     void ClearHistory();
 
 private:

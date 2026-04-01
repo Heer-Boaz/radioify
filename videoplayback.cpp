@@ -275,8 +275,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   bool enableAscii = config.enableAscii;
   bool enableAudio = config.enableAudio && audioIsEnabled();
-  // Ensure previous video textures/fences are not carried into a new session.
+  // Ensure previous video textures/fences and shared ASCII GPU buffers are not
+  // carried into a new session.
   g_frameCache.Reset();
+  sharedGpuRenderer().ResetSessionState();
 
   bool fullRedrawEnabled = enableAscii;
   if (fullRedrawEnabled) {
@@ -1635,6 +1637,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     bool ok = reportVideoError(renderFailMessage, renderFailDetail);
     renderScreen(true, true);
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
+    sharedGpuRenderer().ResetSessionState();
     return ok;
   }
 
@@ -2005,5 +2008,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   if (audioOk || audioStarting) audioStop();
   g_frameCache.Reset();
   finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
+  sharedGpuRenderer().ResetSessionState();
   return true;
 }

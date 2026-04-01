@@ -41,6 +41,33 @@ void GpuAsciiRenderer::ClearHistory() {
     }
 }
 
+void GpuAsciiRenderer::ResetSessionState() {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    m_frameCache.Reset();
+    m_outputBuffer.Reset();
+    m_outputUAV.Reset();
+    m_outputStagingBuffers[0].Reset();
+    m_outputStagingBuffers[1].Reset();
+    m_metaBuffer.Reset();
+    m_metaUAV.Reset();
+    m_metaSRV.Reset();
+    m_statsBuffer.Reset();
+    m_statsUAV.Reset();
+    m_statsSRV.Reset();
+    m_historyBuffer.Reset();
+    m_historyUAV.Reset();
+    m_historySRV.Reset();
+    m_constantBuffer.Reset();
+    m_outputStagingIndex = 0;
+    m_outputStagingPrimed = false;
+    m_currentWidth = 0;
+    m_currentHeight = 0;
+    m_currentOutW = 0;
+    m_currentOutH = 0;
+    m_lastNv12TexturePath = "unknown";
+    m_lastNv12TextureDetail.clear();
+}
+
 bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* error) {
     (void)maxWidth;
     (void)maxHeight;
@@ -400,6 +427,24 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
         m_currentOutW == outW && m_currentOutH == outH) {
         return true;
     }
+
+    m_outputBuffer.Reset();
+    m_outputUAV.Reset();
+    m_outputStagingBuffers[0].Reset();
+    m_outputStagingBuffers[1].Reset();
+    m_metaBuffer.Reset();
+    m_metaUAV.Reset();
+    m_metaSRV.Reset();
+    m_historyBuffer.Reset();
+    m_historyUAV.Reset();
+    m_historySRV.Reset();
+    m_constantBuffer.Reset();
+    m_outputStagingIndex = 0;
+    m_outputStagingPrimed = false;
+    m_currentWidth = 0;
+    m_currentHeight = 0;
+    m_currentOutW = 0;
+    m_currentOutH = 0;
 
     // Output Buffer
     D3D11_BUFFER_DESC bufDesc = {};
