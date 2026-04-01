@@ -190,11 +190,15 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
                                                     : input.frame->width,
       ((input.frame->rotationQuarterTurns & 1) != 0) ? input.frame->width
                                                     : input.frame->height);
+  const int prevArtWidth = input.art->width;
+  const int prevArtHeight = input.art->height;
   input.art->width = outW;
   input.art->height = outH;
 
   bool cacheUpdated = false;
   bool renderFromCache = false;
+  bool keepPreviousFrame = false;
+  bool hadCachedFrame = false;
   std::string gpuErr;
 
   try {
@@ -215,6 +219,7 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
     const auto start = std::chrono::steady_clock::now();
     {
       std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+      hadCachedFrame = input.frameCache->HasFrame();
       if (input.clearHistory) {
         input.gpuRenderer->ClearHistory();
       }
@@ -223,6 +228,11 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       if (cacheUpdated) {
         renderFromCache = input.gpuRenderer->RenderFromCache(*input.frameCache,
                                                             *input.art, &gpuErr);
+        if (!renderFromCache && hadCachedFrame) {
+          keepPreviousFrame = true;
+        }
+      } else if (hadCachedFrame) {
+        keepPreviousFrame = true;
       }
     }
     const auto end = std::chrono::steady_clock::now();
@@ -240,7 +250,7 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
     }
 
     bool asciiOk = false;
-  if (renderFromCache) {
+    if (renderFromCache) {
       asciiOk = true;
       if (input.timingSink && logAsciiRendererStartup(*input.frame, *input.art,
                                                      input.timingSink)) {
@@ -273,6 +283,10 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
                       details.c_str());
         input.timingSink(std::string(buf));
       }
+    } else if (keepPreviousFrame) {
+      input.art->width = prevArtWidth;
+      input.art->height = prevArtHeight;
+      asciiOk = true;
     } else if (input.allowAsciiCpuFallback ||
                input.frame->format == VideoPixelFormat::NV12 ||
                input.frame->format == VideoPixelFormat::P010 ||
@@ -292,8 +306,12 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       }
       asciiOk = cpuRenderFallback(input);
     } else {
-      setFailure(input, "GPU renderer failed.",
-                 gpuErr.empty() ? "GPU cache update or render failed." : gpuErr);
+      emitWarning(input.warningSink,
+                  gpuErr.empty() ? "GPU renderer temporarily unavailable."
+                                 : gpuErr);
+      if (input.haveFrame) {
+        *input.haveFrame = false;
+      }
       return false;
     }
 
@@ -324,8 +342,13 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
   const int availableHeight = height - artTop;
   const int visibleArtHeight = std::min(artHeight, availableHeight);
   const int artX = std::max(0, (width - artWidth) / 2);
+  const size_t expectedCellCount = static_cast<size_t>(std::max(0, art.width)) *
+                                   static_cast<size_t>(std::max(0, art.height));
+  const bool canDrawArt =
+      allowFrame && artWidth > 0 && artHeight > 0 &&
+      art.cells.size() >= expectedCellCount;
 
-  if (allowFrame && visibleArtHeight > 0) {
+  if (canDrawArt && visibleArtHeight > 0) {
     for (int y = 0; y < visibleArtHeight; ++y) {
       for (int x = 0; x < artWidth; ++x) {
         const auto& cell = art.cells[static_cast<size_t>(y * art.width + x)];
