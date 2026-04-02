@@ -1646,6 +1646,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     running = false;
     closeWindowRequested = true;
     g_videoWindow.SetCursorVisible(true);
+    windowThreadRunning.store(false, std::memory_order_relaxed);
+    windowForcePresent.store(false, std::memory_order_relaxed);
     windowThreadEnabled.store(false, std::memory_order_relaxed);
     windowPresentCv.notify_one();
     if (quitApp) {
@@ -1699,9 +1701,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       if (!running) break;
       
       if (ev.type == InputEvent::Type::Resize) {
-        if (ended || player.isEnded()) {
-          continue;
-        }
         pendingResize = true;
         redraw = true;
         continue;
@@ -1727,43 +1726,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           sendSeekRequest(currentSec + dir * 5.0);
         };
         cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
-
-        if (ended || player.isEnded()) {
-          const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-          bool ctrl = (ev.key.control & ctrlMask) != 0;
-          if (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BROWSER_BACK ||
-              ev.key.vk == VK_BACK) {
-            requestPlaybackExit(false);
-            continue;
-          }
-          if (ctrl && (ev.key.vk == 'Q' || ev.key.ch == 'q' ||
-                       ev.key.ch == 'Q')) {
-            running = false;
-            if (cb.onQuit) cb.onQuit();
-            continue;
-          }
-          if (ev.key.vk == VK_OEM_4 || ev.key.ch == '[') {
-            if (cb.onSeekBy) cb.onSeekBy(-1);
-            triggerOverlay();
-            redraw = true;
-            continue;
-          }
-          if (ev.key.vk == VK_OEM_6 || ev.key.ch == ']') {
-            if (cb.onSeekBy) cb.onSeekBy(1);
-            triggerOverlay();
-            redraw = true;
-            continue;
-          }
-          if (ctrl && (ev.key.vk == VK_LEFT || ev.key.vk == VK_RIGHT)) {
-            if (cb.onSeekBy) {
-              cb.onSeekBy((ev.key.vk == VK_LEFT) ? -1 : 1);
-            }
-            triggerOverlay();
-            redraw = true;
-            continue;
-          }
-          continue;
-        }
 
         if (ev.key.vk == 'W') {
           windowEnabled = !windowEnabled;
@@ -1828,56 +1790,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       }
       if (ev.type == InputEvent::Type::Mouse) {
         const MouseEvent& mouse = ev.mouse;
-        if (ended || player.isEnded()) {
-          if (isBackMousePressed(mouse)) {
-            requestPlaybackExit(false);
-            continue;
-          }
-          bool windowEvent = (mouse.control & 0x80000000) != 0;
-          bool leftPressed =
-              (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
-          if (windowEvent) {
-            if (leftPressed && isWindowProgressHit(mouse)) {
-              float winW = static_cast<float>(g_videoWindow.GetWidth());
-              float winH = static_cast<float>(g_videoWindow.GetHeight());
-              if (winW > 0.0f && winH > 0.0f) {
-                float mouseWinX = static_cast<float>(mouse.pos.X) / winW;
-                const float barXLeft = 0.02f;
-                const float barXRight = 0.98f;
-                double barWidth = static_cast<double>(barXRight - barXLeft);
-                double relX = static_cast<double>(mouseWinX - barXLeft);
-                double ratio = relX / barWidth;
-                ratio = std::clamp(ratio, 0.0, 1.0);
-                double totalSec = player.durationUs() / 1000000.0;
-                if (totalSec > 0.0 && std::isfinite(totalSec)) {
-                  double target = ratio * totalSec;
-                  queueSeekRequest(target);
-                }
-              }
-            }
-            continue;
-          }
-          if (leftPressed &&
-              (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
-            if (progressBarWidth > 0 && mouse.pos.Y == progressBarY &&
-                progressBarX >= 0) {
-              int rel = mouse.pos.X - progressBarX;
-              if (rel >= 0 && rel < progressBarWidth) {
-                double denom =
-                    static_cast<double>(std::max(1, progressBarWidth - 1));
-                double ratio = static_cast<double>(rel) / denom;
-                ratio = std::clamp(ratio, 0.0, 1.0);
-                double totalSec = player.durationUs() / 1000000.0;
-                if (totalSec > 0.0 && std::isfinite(totalSec)) {
-                  double targetSec = ratio * totalSec;
-                  queueSeekRequest(targetSec);
-                }
-                continue;
-              }
-            }
-          }
-          continue;
-        }
         if (isBackMousePressed(mouse)) {
           requestPlaybackExit(false);
           continue;
