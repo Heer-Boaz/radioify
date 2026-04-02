@@ -545,7 +545,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
 
-    if ((playMode || decoderReady) && handlePlaybackInput(ev, running, callbacks)) {
+    if ((playMode || decoderReady) && handlePlaybackInput(ev, callbacks)) {
       if (key.vk == 'O' || key.ch == 'o' || key.ch == 'O') {
         clearForwardHistory();
       }
@@ -885,7 +885,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
   }
 }
 
-bool handlePlaybackInput(const InputEvent& ev, bool& running,
+bool handlePlaybackInput(const InputEvent& ev,
                          const InputCallbacks& callbacks) {
   if (ev.type == InputEvent::Type::Key) {
     const KeyEvent& key = ev.key;
@@ -895,7 +895,6 @@ bool handlePlaybackInput(const InputEvent& ev, bool& running,
     bool shift = (key.control & shiftMask) != 0;
 
     if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
-      running = false;
       if (callbacks.onQuit) callbacks.onQuit();
       return true;
     }

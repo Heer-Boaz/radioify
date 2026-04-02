@@ -187,8 +187,8 @@ struct ActionStripLayout {
   std::vector<ActionStripButton> buttons;
 };
 
-bool handlePlaybackInput(const InputEvent& ev, bool& running,
-                          const InputCallbacks& callbacks);
+bool handlePlaybackInput(const InputEvent& ev,
+                         const InputCallbacks& callbacks);
 
 void handleInputEvent(
   const InputEvent& ev,

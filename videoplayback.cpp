@@ -440,10 +440,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     screen.draw();
   };
 
-  bool running = true;
+  enum class PlaybackLoopState : uint8_t {
+    Running,
+    Stopped,
+  };
+  PlaybackLoopState loopState = PlaybackLoopState::Running;
   auto initStart = std::chrono::steady_clock::now();
   auto lastInitDraw = std::chrono::steady_clock::time_point::min();
-  while (running) {
+  while (loopState == PlaybackLoopState::Running) {
     if (player.initDone()) {
       break;
     }
@@ -466,16 +470,16 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         bool ctrl = (key.control & ctrlMask) != 0;
         if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
           quitApplicationRequested = true;
-          running = false;
+          loopState = PlaybackLoopState::Stopped;
           break;
         }
         if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
-          running = false;
+          loopState = PlaybackLoopState::Stopped;
           break;
         }
         if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
             key.vk == VK_BACK) {
-          running = false;
+          loopState = PlaybackLoopState::Stopped;
           break;
         }
       } else if (ev.type == InputEvent::Type::Mouse) {
@@ -485,7 +489,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                                FROM_LEFT_3RD_BUTTON_PRESSED |
                                FROM_LEFT_4TH_BUTTON_PRESSED;
         if ((mouse.buttonState & backMask) != 0) {
-          running = false;
+          loopState = PlaybackLoopState::Stopped;
           break;
         }
       } else if (ev.type == InputEvent::Type::Resize) {
@@ -494,7 +498,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
   }
 
-  if (!running) {
+  if (loopState == PlaybackLoopState::Stopped) {
     player.close();
     finalizeVideoPlayback(screen, fullRedrawEnabled, &perfLog);
     return true;
@@ -613,10 +617,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   std::string renderFailDetail;
   bool forceRefreshArt = false;
   bool pendingResize = false;
-  bool userPaused = false;
   bool localSeekRequested = false;
   std::atomic<bool> windowLocalSeekRequested{false};
-  bool closeWindowRequested = false;
   bool useWindowPresenter = false;
   auto seekRequestTime = std::chrono::steady_clock::time_point::min();
   double pendingSeekTargetSec = -1.0;
@@ -625,12 +627,23 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   double queuedSeekTargetSec = -1.0;
   bool seekQueued = false;
   constexpr auto kSeekThrottleInterval = std::chrono::milliseconds(50);
-  bool ended = false;
+  enum class PlaybackSessionState : uint8_t {
+    Active,
+    Paused,
+    Ended,
+    Exiting,
+  };
+  enum class WindowThreadState : uint8_t {
+    Disabled,
+    Enabled,
+    Stopping,
+  };
+  PlaybackSessionState playbackState = PlaybackSessionState::Active;
   auto lastUiDbgLog = std::chrono::steady_clock::time_point::min();
   std::string lastUiDbgLine1;
   std::string lastUiDbgLine2;
-  std::atomic<bool> windowThreadRunning{true};
-  std::atomic<bool> windowThreadEnabled{false};
+  std::atomic<WindowThreadState> windowThreadState{
+      WindowThreadState::Disabled};
   std::atomic<bool> windowForcePresent{false};
   std::mutex windowPresentMutex;
   std::condition_variable windowPresentCv;
@@ -650,7 +663,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     g_videoWindow.Open(1280, 720, "Radioify Output");
     g_videoWindow.ShowWindow(true);
   }
-  windowThreadEnabled.store(windowEnabled, std::memory_order_relaxed);
+  windowThreadState.store(windowEnabled ? WindowThreadState::Enabled
+                                        : WindowThreadState::Disabled,
+                          std::memory_order_relaxed);
   if (windowEnabled) {
     windowForcePresent.store(true, std::memory_order_relaxed);
     windowPresentCv.notify_one();
@@ -732,13 +747,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   std::atomic<int64_t> overlayUntilMs{0};
   auto triggerOverlay = [&]() {
     int64_t now = nowMs();
-    // If paused/seeking/ended, extend the overlay timeout so user sees controls longer
+    // If paused/seeking/ended, extend the overlay timeout so user sees controls longer.
     bool extended = false;
-    if (userPaused) extended = true;
+    if (playbackState == PlaybackSessionState::Paused) extended = true;
+    if (playbackState == PlaybackSessionState::Ended) extended = true;
     if (player.isSeeking()) extended = true;
-    // 'ended' may not be set yet at first calls; it's captured by reference and can be used
-    // if present later
-    // Use a longer duration for extended cases
     int64_t timeoutMs = extended
                             ? static_cast<int64_t>(
                                   kProgressOverlayExtendedTimeout.count())
@@ -924,8 +937,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
     std::string status = "\xE2\x96\xB6";  // ▶
     bool audioFinished = audioOk && audioIsFinished();
-    bool paused = audioOk ? audioIsPaused() : userPaused;
-    if (audioFinished) {
+    bool paused = playbackState == PlaybackSessionState::Paused ||
+                  player.state() == PlayerState::Paused;
+    if (playbackState == PlaybackSessionState::Ended || audioFinished) {
       status = "\xE2\x96\xA0";  // ■
     } else if (paused) {
       status = "\xE2\x8F\xB8";  // ⏸
@@ -1268,12 +1282,16 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   std::thread windowPresentThread([&]() {
     VideoFrame localFrame;
     uint64_t lastCounter = player.videoFrameCounter();
-    while (windowThreadRunning.load(std::memory_order_relaxed)) {
-      if (!windowThreadEnabled.load(std::memory_order_relaxed)) {
+    while (windowThreadState.load(std::memory_order_relaxed) !=
+           WindowThreadState::Stopping) {
+      if (windowThreadState.load(std::memory_order_relaxed) ==
+          WindowThreadState::Disabled) {
         std::unique_lock<std::mutex> lock(windowPresentMutex);
         windowPresentCv.wait_for(lock, std::chrono::milliseconds(50), [&]() {
-          return !windowThreadRunning.load(std::memory_order_relaxed) ||
-                 windowThreadEnabled.load(std::memory_order_relaxed);
+          return windowThreadState.load(std::memory_order_relaxed) ==
+                     WindowThreadState::Stopping ||
+                 windowThreadState.load(std::memory_order_relaxed) ==
+                     WindowThreadState::Enabled;
         });
         continue;
       }
@@ -1291,7 +1309,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       if (shouldWaitForFrame) {
         waitedForFrame = true;
         player.waitForVideoFrame(lastCounter, 16);
-        if (!windowThreadRunning.load(std::memory_order_relaxed)) {
+        if (windowThreadState.load(std::memory_order_relaxed) ==
+            WindowThreadState::Stopping) {
           break;
         }
       }
@@ -1302,7 +1321,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         frameChanged = player.tryGetVideoFrame(&localFrame);
         lastCounter = counterNow;
       }
-      if (!windowThreadRunning.load(std::memory_order_relaxed)) {
+      if (windowThreadState.load(std::memory_order_relaxed) ==
+          WindowThreadState::Stopping) {
         break;
       }
       if (frameChanged) {
@@ -1342,12 +1362,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
           frameChanged || forcePresent || overlayVisibleNow || player.isSeeking();
 
       if (needsPresent) {
-        if (!windowThreadRunning.load(std::memory_order_relaxed)) {
+        if (windowThreadState.load(std::memory_order_relaxed) ==
+            WindowThreadState::Stopping) {
           break;
         }
         g_frameCache.WaitForFrameLatency(
             16, g_videoWindow.GetFrameLatencyWaitableObject());
-        if (!windowThreadRunning.load(std::memory_order_relaxed)) {
+        if (windowThreadState.load(std::memory_order_relaxed) ==
+            WindowThreadState::Stopping) {
           break;
         }
         if (frameChanged) {
@@ -1362,14 +1384,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
   });
   auto stopWindowThread = [&]() {
-    windowThreadEnabled.store(false, std::memory_order_relaxed);
+    windowThreadState.store(WindowThreadState::Stopping,
+                            std::memory_order_relaxed);
     windowForcePresent.store(false, std::memory_order_relaxed);
-    windowThreadRunning.store(false, std::memory_order_relaxed);
     windowPresentCv.notify_one();
     if (windowPresentThread.joinable()) {
       windowPresentThread.join();
     }
-    if (closeWindowRequested && g_videoWindow.IsOpen()) {
+    if (g_videoWindow.IsOpen()) {
       g_videoWindow.Close();
     }
   };
@@ -1478,11 +1500,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         audioOk && !audioStreamClockReady() && !audioIsFinished();
     bool audioStarved = audioOk && audioStreamStarved();
     bool waitingForVideo = !player.hasVideoFrame();
-    bool isPaused = player.state() == PlayerState::Paused;
+    bool isPaused = playbackState == PlaybackSessionState::Paused ||
+                    player.state() == PlayerState::Paused;
     bool allowFrame = haveFrame && !useWindowPresenter;
 
     auto waitingLabel = [&]() -> std::string {
-      if (ended) return "Ended";
+      if (playbackState == PlaybackSessionState::Ended) return "Ended";
       if (seekingOverlay) return "Seeking...";
       if (isPaused) return "Paused";
       if (player.state() == PlayerState::Opening) return "Opening...";
@@ -1625,11 +1648,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     screen.draw();
   };
 
-  useWindowPresenter = windowThreadEnabled.load(std::memory_order_relaxed);
+  useWindowPresenter = windowThreadState.load(std::memory_order_relaxed) ==
+                       WindowThreadState::Enabled;
   renderScreen(true, true);
   if (renderFailed) {
-    windowThreadRunning.store(false, std::memory_order_relaxed);
-    windowThreadEnabled.store(false, std::memory_order_relaxed);
+    windowThreadState.store(WindowThreadState::Stopping,
+                            std::memory_order_relaxed);
     windowPresentCv.notify_one();
     stopWindowThread();
     player.close();
@@ -1643,40 +1667,42 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   }
 
   auto requestPlaybackExit = [&](bool quitApp) {
-    running = false;
-    closeWindowRequested = true;
+    playbackState = PlaybackSessionState::Exiting;
+    loopState = PlaybackLoopState::Stopped;
     g_videoWindow.SetCursorVisible(true);
-    windowThreadRunning.store(false, std::memory_order_relaxed);
+    windowThreadState.store(WindowThreadState::Stopping,
+                            std::memory_order_relaxed);
     windowForcePresent.store(false, std::memory_order_relaxed);
-    windowThreadEnabled.store(false, std::memory_order_relaxed);
     windowPresentCv.notify_one();
     if (quitApp) {
       quitApplicationRequested = true;
     }
   };
 
-  while (running) {
+  while (loopState == PlaybackLoopState::Running) {
     finalizeAudioStart();
 
     if (g_videoWindow.IsOpen()) {
       g_videoWindow.PollEvents();
       if (windowEnabled && !g_videoWindow.IsVisible()) {
         windowEnabled = false;
-        windowThreadEnabled.store(false, std::memory_order_relaxed);
+        windowThreadState.store(WindowThreadState::Disabled,
+                                std::memory_order_relaxed);
         windowPresentCv.notify_one();
         forceRefreshArt = true;
         redraw = true;
       }
     }
     
-    if (!running) break;
+    if (loopState == PlaybackLoopState::Stopped) break;
 
     // UI HEARTBEAT
     static auto lastUiHeartbeat = std::chrono::steady_clock::now();
     auto nowUi = std::chrono::steady_clock::now();
     if (nowUi - lastUiHeartbeat >= std::chrono::seconds(1)) {
         appendTimingFmt("video_heartbeat_ui redraw=%d seeker=%d paused=%d", 
-                        redraw ? 1 : 0, localSeekRequested ? 1 : 0, userPaused ? 1 : 0);
+                        redraw ? 1 : 0, localSeekRequested ? 1 : 0,
+                        isPaused ? 1 : 0);
         lastUiHeartbeat = nowUi;
     }
 
@@ -1698,7 +1724,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     };
 
     while (getNextEvent()) {
-      if (!running) break;
+      if (loopState == PlaybackLoopState::Stopped) break;
       
       if (ev.type == InputEvent::Type::Resize) {
         pendingResize = true;
@@ -1709,13 +1735,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         InputCallbacks cb;
         cb.onQuit = [&]() { requestPlaybackExit(true); };
         cb.onTogglePause = [&]() {
+          bool pauseNow = playbackState != PlaybackSessionState::Paused;
           if (audioOk) {
             audioTogglePause();
-            userPaused = audioIsPaused();
+            pauseNow = audioIsPaused();
           } else {
-            userPaused = !userPaused;
-            player.setVideoPaused(userPaused);
+            player.setVideoPaused(pauseNow);
           }
+          playbackState = pauseNow ? PlaybackSessionState::Paused
+                                   : PlaybackSessionState::Active;
         };
         cb.onToggleRadio = [&]() { if (audioOk) audioToggleRadio(); };
         cb.onToggle50Hz = [&]() {
@@ -1734,11 +1762,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
               g_videoWindow.Open(1280, 720, "Radioify Output");
             }
             g_videoWindow.ShowWindow(true);
-            windowThreadEnabled.store(true, std::memory_order_relaxed);
+            windowThreadState.store(WindowThreadState::Enabled,
+                                    std::memory_order_relaxed);
             windowForcePresent.store(true, std::memory_order_relaxed);
             windowPresentCv.notify_one();
           } else {
-            windowThreadEnabled.store(false, std::memory_order_relaxed);
+            windowThreadState.store(WindowThreadState::Disabled,
+                                    std::memory_order_relaxed);
             windowPresentCv.notify_one();
             if (g_videoWindow.IsOpen()) {
               g_videoWindow.ShowWindow(false);
@@ -1778,15 +1808,15 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
             continue;
           }
 
-          if (handlePlaybackInput(ev, running, cb)) {
-          triggerOverlay();
-          redraw = true;
-          if (windowEnabled) {
-            windowForcePresent.store(true, std::memory_order_relaxed);
-            windowPresentCv.notify_one();
+          if (handlePlaybackInput(ev, cb)) {
+            triggerOverlay();
+            redraw = true;
+            if (windowEnabled) {
+              windowForcePresent.store(true, std::memory_order_relaxed);
+              windowPresentCv.notify_one();
+            }
+            continue;
           }
-          continue;
-        }
       }
       if (ev.type == InputEvent::Type::Mouse) {
         const MouseEvent& mouse = ev.mouse;
@@ -1879,7 +1909,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         }
       }
     }
-    if (!running) break;
+    if (loopState == PlaybackLoopState::Stopped) break;
 
     finalizeAudioStart();
 
@@ -1916,7 +1946,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
     bool presented = false;
     VideoFrame nextFrame;
-    useWindowPresenter = windowThreadEnabled.load(std::memory_order_relaxed);
+    useWindowPresenter = windowThreadState.load(std::memory_order_relaxed) ==
+                         WindowThreadState::Enabled;
     if (!useWindowPresenter && player.tryGetVideoFrame(&nextFrame)) {
       frameBuffer = std::move(nextFrame);
       haveFrame = true;
@@ -1958,22 +1989,25 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
 
     if (player.isEnded()) {
-      // Mark ended but keep the loop running so user can seek back without causing
-      // the program to immediately exit. This matches ASCII renderer behavior.
-      if (!ended) {
-        ended = true;
-        userPaused = true;
+      // Mark ended but keep the playback loop alive so user can seek back without
+      // forcing an immediate exit. This matches ASCII renderer behavior.
+      if (playbackState != PlaybackSessionState::Ended) {
+        playbackState = PlaybackSessionState::Ended;
       }
-      // do not set running = false here; let user exit explicitly or seek
+      // Let the user exit explicitly or seek; EOF is not a stop signal.
     } else {
-      ended = false;
+      if (playbackState == PlaybackSessionState::Ended) {
+        playbackState = PlaybackSessionState::Active;
+      }
     }
 
     const bool shouldRender =
 #if RADIOIFY_ENABLE_TIMING_LOG
-        redraw || ((overlayVisible() || config.debugOverlay) && !ended);
+        redraw || ((overlayVisible() || config.debugOverlay) &&
+                   playbackState != PlaybackSessionState::Ended);
 #else
-        redraw || (overlayVisible() && !ended);
+        redraw || (overlayVisible() &&
+                   playbackState != PlaybackSessionState::Ended);
 #endif
     if (shouldRender) {
       auto t0 = std::chrono::steady_clock::now();
@@ -1985,7 +2019,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       }
       
       if (renderFailed) {
-        running = false;
+        loopState = PlaybackLoopState::Stopped;
         break;
       }
       redraw = false;
@@ -1993,17 +2027,19 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
 
 #if RADIOIFY_ENABLE_TIMING_LOG
-    if (ended || (!redraw && !overlayVisible() && !config.debugOverlay)) {
+    if (playbackState == PlaybackSessionState::Ended ||
+        (!redraw && !overlayVisible() && !config.debugOverlay)) {
 #else
-    if (ended || (!redraw && !overlayVisible())) {
+    if (playbackState == PlaybackSessionState::Ended ||
+        (!redraw && !overlayVisible())) {
 #endif
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
 
   if (renderFailed) {
-    windowThreadRunning.store(false, std::memory_order_relaxed);
-    windowThreadEnabled.store(false, std::memory_order_relaxed);
+    windowThreadState.store(WindowThreadState::Stopping,
+                            std::memory_order_relaxed);
     windowPresentCv.notify_one();
     stopWindowThread();
     player.close();
