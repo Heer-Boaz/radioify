@@ -350,20 +350,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   }
   bool& windowEnabled = g_windowEnabledPersistent;
   g_videoWindow.SetVsync(true);
-  if (g_videoWindow.IsOpen()) {
-    g_videoWindow.ShowWindow(windowEnabled);
+  if (!windowEnabled && g_videoWindow.IsOpen()) {
+    g_videoWindow.Close();
   }
-  if (windowEnabled && !g_videoWindow.IsOpen()) {
-    g_videoWindow.Open(1280, 720, "Radioify Output");
-    g_videoWindow.ShowWindow(true);
-  }
-  windowThreadState.store(windowEnabled ? WindowThreadState::Enabled
-                                        : WindowThreadState::Disabled,
+  windowThreadState.store(WindowThreadState::Disabled,
                           std::memory_order_relaxed);
-  if (windowEnabled) {
-    windowForcePresent.store(true, std::memory_order_relaxed);
-    windowPresentCv.notify_one();
-  }
   const bool allowAsciiCpuFallback = false;
   VideoFrame frameBuffer;
   VideoFrame* frame = &frameBuffer;
@@ -447,29 +438,58 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         overlayControlHover,
         playback_session_input::isOverlayVisible(inputSignals));
   };
-  std::thread windowPresentThread([&]() {
-    playback_framebuffer_presenter::runFramebufferPresenterLoop(
-        player, g_videoWindow, g_frameCache, windowThreadState,
-        windowForcePresent, windowPresentMutex, windowPresentCv,
-        [&]() { return playback_session_input::isOverlayVisible(inputSignals); },
-        buildWindowUiState);
-  });
+  std::thread windowPresentThread;
+  auto startWindowThread = [&]() {
+    if (windowPresentThread.joinable()) {
+      windowThreadState.store(WindowThreadState::Enabled,
+                              std::memory_order_relaxed);
+      windowForcePresent.store(true, std::memory_order_relaxed);
+      windowPresentCv.notify_one();
+      return;
+    }
+    if (!g_videoWindow.IsOpen() &&
+        !g_videoWindow.Open(1280, 720, "Radioify Output")) {
+      windowEnabled = false;
+      windowThreadState.store(WindowThreadState::Disabled,
+                              std::memory_order_relaxed);
+      forceRefreshArt = true;
+      redraw = true;
+      return;
+    }
+    g_videoWindow.ShowWindow(true);
+    windowThreadState.store(WindowThreadState::Enabled,
+                            std::memory_order_relaxed);
+    windowForcePresent.store(true, std::memory_order_relaxed);
+    windowPresentThread = std::thread([&]() {
+      playback_framebuffer_presenter::runFramebufferPresenterLoop(
+          player, g_videoWindow, g_frameCache, windowThreadState,
+          windowForcePresent, windowPresentMutex, windowPresentCv,
+          [&]() { return playback_session_input::isOverlayVisible(inputSignals); },
+          buildWindowUiState);
+    });
+    windowPresentCv.notify_one();
+  };
   auto stopWindowThread = [&]() {
-    windowEnabled = false;
     overlayUntilMs.store(0, std::memory_order_relaxed);
     overlayControlHover.store(-1, std::memory_order_relaxed);
     if (g_videoWindow.IsOpen()) {
       g_videoWindow.SetCursorVisible(true);
       g_videoWindow.ShowWindow(false);
     }
-    playback_session_input::signalWindowPresenterStop(inputSignals);
     if (windowPresentThread.joinable()) {
+      playback_session_input::signalWindowPresenterStop(inputSignals);
       windowPresentThread.join();
     }
+    windowThreadState.store(WindowThreadState::Disabled,
+                            std::memory_order_relaxed);
+    windowForcePresent.store(false, std::memory_order_relaxed);
     if (g_videoWindow.IsOpen()) {
       g_videoWindow.Close();
     }
   };
+  if (windowEnabled) {
+    startWindowThread();
+  }
   PlaybackLoopState loopState = PlaybackLoopState::Running;
   auto shutdownPlaybackInfrastructure = [&]() {
     stopWindowThread();
@@ -582,9 +602,6 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       g_videoWindow.PollEvents();
       if (windowEnabled && !g_videoWindow.IsVisible()) {
         windowEnabled = false;
-        windowThreadState.store(WindowThreadState::Disabled,
-                                std::memory_order_relaxed);
-        windowPresentCv.notify_one();
         forceRefreshArt = true;
         redraw = true;
       }
@@ -637,6 +654,12 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       loopState = PlaybackLoopState::Stopped;
     }
     if (loopState == PlaybackLoopState::Stopped) break;
+
+    if (windowEnabled) {
+      startWindowThread();
+    } else if (windowPresentThread.joinable() || g_videoWindow.IsOpen()) {
+      stopWindowThread();
+    }
 
     finalizeAudioStart();
 
