@@ -445,10 +445,15 @@ function Invoke-NativeProcess {
 
   if ($WorkingDirectory) { Push-Location $WorkingDirectory }
   try {
-    # Stream stdout to the console instead of letting it become function output.
-    # If the caller assigns this function result, leaked stdout would turn the
-    # return value into an object array and break subsequent exit-code checks.
-    & $FilePath @ArgumentList | Out-Host
+    # Route through a script block so PowerShell can stream native-process
+    # stdout without treating the executable path itself as a pipeline item.
+    # Direct `& $FilePath ... | Out-Host` fails on Windows PowerShell when the
+    # executable path contains spaces.
+    $invokeNative = {
+      param($NativeFilePath, $NativeArgumentList)
+      & $NativeFilePath @NativeArgumentList
+    }
+    & $invokeNative $FilePath $ArgumentList | Out-Host
     if ($null -eq $LASTEXITCODE) {
       return 0
     }

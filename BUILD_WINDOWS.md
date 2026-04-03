@@ -7,7 +7,7 @@ Use this file instead of guessing from memory.
 ## Known-Good Defaults
 
 - Build script: `.\build.ps1`
-- Build directory: `.\build`
+- Build directory: `.\build-ninja` when Ninja is auto-detected, otherwise `.\build`
 - Output directory: `.\dist`
 - Main binary: `.\dist\radioify.exe`
 - Preferred config: `Release`
@@ -67,16 +67,19 @@ Optional variants:
 
 ## From WSL
 
-This can work, but on this machine it has also produced false-positive runs
-where PowerShell/CMake returned success without leaving a finished
-`dist\radioify.exe`.
-
-Use native Windows PowerShell when possible.
+This is supported and has been tested from this repo. Use `powershell.exe`,
+not `pwsh`.
 
 If the repo is open in WSL and you still want to trigger the Windows build:
 
 ```bash
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PWD")\\build.ps1" -Static
+```
+
+Equivalent wrapper:
+
+```bash
+./scripts/build_windows_from_wsl.sh
 ```
 
 Only use a clean rebuild when the cache is genuinely broken:
@@ -85,14 +88,13 @@ Only use a clean rebuild when the cache is genuinely broken:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PWD")\\build.ps1" -Rebuild
 ```
 
-After any WSL-triggered build, always verify:
+After any WSL-triggered build, verify:
 
 ```powershell
 Get-Item .\dist\radioify.exe
 ```
 
-If that file is missing, rerun the build from a native Windows PowerShell prompt
-in the repo root.
+If that file is missing, the build did not really finish successfully.
 
 ## Run
 

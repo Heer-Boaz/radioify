@@ -2,6 +2,9 @@
 
 # Visual Studio
 .vs/
+.vscode/*
+!.vscode/tasks.json
+.codex
 *.vcxproj.user
 *.suo
 *.user
@@ -75,14 +78,17 @@ Desktop.ini
 *.rej
 tmp/
 temp/
+audio/audiofilter/tmp/
 **.dmp
 **.txt
 **.log
 
 # Package managers and caches
+node_modules/
 packages/
 .vcpkg/
 .vcpkg_installed/
+__pycache__/
 
 # CPack artifacts
 *.tar.gz
