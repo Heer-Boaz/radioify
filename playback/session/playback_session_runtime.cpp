@@ -487,9 +487,14 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       g_videoWindow.Close();
     }
   };
-  if (windowEnabled) {
-    startWindowThread();
-  }
+  auto syncWindowPresenterState = [&]() {
+    if (windowEnabled) {
+      startWindowThread();
+    } else if (windowPresentThread.joinable() || g_videoWindow.IsOpen()) {
+      stopWindowThread();
+    }
+  };
+  syncWindowPresenterState();
   PlaybackLoopState loopState = PlaybackLoopState::Running;
   auto shutdownPlaybackInfrastructure = [&]() {
     stopWindowThread();
@@ -611,6 +616,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         windowEnabled = false;
         forceRefreshArt = true;
         redraw = true;
+        syncWindowPresenterState();
       }
     }
     
@@ -643,17 +649,20 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       if (ev.type == InputEvent::Type::Resize) {
         pendingResize = true;
         redraw = true;
+        syncWindowPresenterState();
         continue;
       }
       if (ev.type == InputEvent::Type::Key) {
         playback_session_input::handlePlaybackKeyEvent(inputView, inputSignals,
                                                        seekState, ev.key);
+        syncWindowPresenterState();
         if (loopStopRequested) break;
         continue;
       }
       if (ev.type == InputEvent::Type::Mouse) {
         playback_session_input::handlePlaybackMouseEvent(inputView, inputSignals,
                                                          seekState, ev.mouse);
+        syncWindowPresenterState();
         if (loopStopRequested) break;
       }
     }
@@ -662,11 +671,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     }
     if (loopState == PlaybackLoopState::Stopped) break;
 
-    if (windowEnabled) {
-      startWindowThread();
-    } else if (windowPresentThread.joinable() || g_videoWindow.IsOpen()) {
-      stopWindowThread();
-    }
+    syncWindowPresenterState();
 
     finalizeAudioStart();
 
