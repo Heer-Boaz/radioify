@@ -60,6 +60,11 @@ static const int kInkMaxScale = 1280;
 static const float kShadowSatStartLuma = 16.0f;
 static const float kShadowSatFullLuma = 96.0f;
 static const float kShadowMinSaturation = 24.0f / 256.0f;
+static const float kShadowBlueGuardStartLuma = 44.0f;
+static const float kShadowBlueGuardRange = 36.0f;
+static const float kShadowBlueDominanceStart = 0.06f;
+static const float kShadowBlueDominanceFull = 0.20f;
+static const float kShadowBlueGuardKeep = 0.45f;
 static const float kSignalStrengthFloor = 0.2f;
 #define BG_CLAMP 1
 #define BG_CLAMP_DEBUG 0
@@ -99,7 +104,7 @@ float GetLuma(float3 c) {
 float GetShadowSaturation(float y255) {
     float t = saturate((y255 - kShadowSatStartLuma) /
                        max(kShadowSatFullLuma - kShadowSatStartLuma, 1.0f));
-    return lerp(kShadowMinSaturation, 1.0f, t);
+    return lerp(kShadowMinSaturation, 1.0f, sqrt(t));
 }
 
 float3 ApplySaturationAroundLuma(float3 rgb, float y255, float saturation) {
@@ -110,10 +115,21 @@ float3 ApplySaturationAroundLuma(float3 rgb, float y255, float saturation) {
 float3 CompressShadowChroma(float3 rgb) {
     float y = GetLuma(rgb);
     float keep = GetShadowSaturation(y);
-    if (keep >= 0.999f) {
+    rgb = ApplySaturationAroundLuma(rgb, y, keep);
+
+    float blueDominance = rgb.b - max(rgb.r, rgb.g);
+    float dark = saturate((kShadowBlueGuardStartLuma - y) /
+                          max(kShadowBlueGuardRange, 1.0f));
+    float dominance = saturate((blueDominance - kShadowBlueDominanceStart) /
+                               max(kShadowBlueDominanceFull -
+                                       kShadowBlueDominanceStart,
+                                   1e-5f));
+    float guard = dark * dominance;
+    if (guard <= 0.0f) {
         return saturate(rgb);
     }
-    return ApplySaturationAroundLuma(rgb, y, keep);
+    return ApplySaturationAroundLuma(rgb, y,
+                                     lerp(1.0f, kShadowBlueGuardKeep, guard));
 }
 
 float Median9(float v[9]) {
@@ -614,9 +630,11 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Adjust saturation based on brightness.
     // Dark colors get reduced saturation to prevent blue/purple artifacts in shadows.
     curY = GetLuma(curFg);
-    float adaptiveSat =
-        ((float)kColorSaturation / 256.0f) * GetShadowSaturation(curY);
-    curFg = ApplySaturationAroundLuma(curFg, curY, adaptiveSat);
+    float adaptiveSat = (float)kColorSaturation;
+    if (curY < 60.0f) {
+        adaptiveSat = adaptiveSat * (curY / 60.0f);
+    }
+    curFg = ApplySaturationAroundLuma(curFg, curY, adaptiveSat / 256.0f);
 
     // Temporal Stability (Ghosting Reduction)
     // We blend the current frame's color with the previous frame's color to reduce flickering.

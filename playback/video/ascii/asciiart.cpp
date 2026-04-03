@@ -198,6 +198,9 @@ constexpr int kColorSaturation = 340;    // Iets meer saturatie
 constexpr int kShadowSatStartLuma = 16;
 constexpr int kShadowSatFullLuma = 96;
 constexpr int kShadowMinSaturation = 24;
+constexpr int kShadowChromaBoostStart = 12;
+constexpr int kShadowChromaBoostFull = 72;
+constexpr int kShadowChromaPreserveStrength = 160;
 constexpr bool kUseEdgeBoost = true;
 constexpr uint8_t kEdgeMin = 4;      // Reverted to 4 for sensitivity
 constexpr uint8_t kEdgeBoost = 245;  // Sterker edge boost
@@ -223,6 +226,24 @@ FORCE_INLINE int shadowSaturationFromLuma(int y) {
   return kShadowMinSaturation + (numer + denom / 2) / denom;
 }
 
+FORCE_INLINE int shadowSaturationWithChroma(int y, int chroma) {
+  int keep = shadowSaturationFromLuma(y);
+  if (keep >= 256) return 256;
+  if (chroma <= kShadowChromaBoostStart) return keep;
+  int chromaBoost = 256;
+  if (chroma < kShadowChromaBoostFull) {
+    int numer = (chroma - kShadowChromaBoostStart) * 256;
+    int denom = kShadowChromaBoostFull - kShadowChromaBoostStart;
+    chromaBoost = (numer + denom / 2) / denom;
+  }
+  int shadowWeight = 256 - keep;
+  int preserveGain =
+      (shadowWeight * chromaBoost * kShadowChromaPreserveStrength +
+       (256 * 256) / 2) /
+      (256 * 256);
+  return std::min(256, keep + ((256 - keep) * preserveGain + 128) / 256);
+}
+
 FORCE_INLINE void applySaturationAroundLuma(uint8_t& r, uint8_t& g,
                                             uint8_t& b, int y,
                                             int saturation256) {
@@ -242,7 +263,11 @@ FORCE_INLINE void compressShadowChroma(uint8_t& r, uint8_t& g, uint8_t& b) {
       (static_cast<int>(r) * 54 + static_cast<int>(g) * 183 +
        static_cast<int>(b) * 19 + 128) >>
       8;
-  int keep = shadowSaturationFromLuma(y);
+  int maxC = std::max({static_cast<int>(r), static_cast<int>(g),
+                       static_cast<int>(b)});
+  int minC = std::min({static_cast<int>(r), static_cast<int>(g),
+                       static_cast<int>(b)});
+  int keep = shadowSaturationWithChroma(y, maxC - minC);
   if (keep >= 256) return;
   applySaturationAroundLuma(r, g, b, y, keep);
 }
@@ -1154,8 +1179,15 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // Adaptive Saturation (Ink)
               // Adjust saturation based on brightness.
               // Dark colors get reduced saturation to prevent blue/purple artifacts in shadows.
+              int inkMaxC = std::max({static_cast<int>(curR), static_cast<int>(curG),
+                                      static_cast<int>(curB)});
+              int inkMinC = std::min({static_cast<int>(curR), static_cast<int>(curG),
+                                      static_cast<int>(curB)});
               int adaptiveSat =
-                  (kColorSaturation * shadowSaturationFromLuma(y) + 128) >> 8;
+                  (kColorSaturation *
+                       shadowSaturationWithChroma(y, inkMaxC - inkMinC) +
+                   128) >>
+                  8;
               applySaturationAroundLuma(curR, curG, curB, y, adaptiveSat);
 
               if (cellIndex < scratch.prevFg.size() &&
