@@ -253,6 +253,17 @@ struct ThumbJob {
 };
 
 struct ThumbCacheState {
+  ThumbCacheState() {
+    thumbnailReadyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  }
+
+  ~ThumbCacheState() {
+    if (thumbnailReadyEvent) {
+      CloseHandle(thumbnailReadyEvent);
+      thumbnailReadyEvent = nullptr;
+    }
+  }
+
   int thumbW = 0;
   int thumbH = 0;
   uint64_t generation = 1;
@@ -261,6 +272,7 @@ struct ThumbCacheState {
   std::mutex mutex;
   std::condition_variable cv;
   bool workerStarted = false;
+  HANDLE thumbnailReadyEvent = nullptr;
 };
 
 static ThumbCacheState& thumbCache() {
@@ -435,6 +447,9 @@ static void thumbWorkerLoop() {
         }
       }
     }
+    if (cache.thumbnailReadyEvent) {
+      SetEvent(cache.thumbnailReadyEvent);
+    }
   }
 }
 
@@ -442,6 +457,19 @@ static void startThumbWorkerLocked(ThumbCacheState& cache) {
   if (cache.workerStarted) return;
   cache.workerStarted = true;
   std::thread(thumbWorkerLoop).detach();
+}
+
+HANDLE browserThumbnailWakeHandle() {
+  return thumbCache().thumbnailReadyEvent;
+}
+
+bool consumeBrowserThumbnailWake() {
+  ThumbCacheState& cache = thumbCache();
+  if (!cache.thumbnailReadyEvent) return false;
+  DWORD state = WaitForSingleObject(cache.thumbnailReadyEvent, 0);
+  if (state != WAIT_OBJECT_0) return false;
+  ResetEvent(cache.thumbnailReadyEvent);
+  return true;
 }
 
 GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {

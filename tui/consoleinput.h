@@ -51,6 +51,7 @@ class ConsoleInput {
   void restore();
   bool poll(InputEvent& out);
   bool active() const;
+  HANDLE waitHandle() const;
 
  private:
   bool hasInputFocus() const;

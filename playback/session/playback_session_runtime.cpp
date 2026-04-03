@@ -129,17 +129,11 @@ bool refreshFrameAvailability(Player& player, bool useWindowPresenter,
   return presented;
 }
 
-bool shouldRenderPlaybackFrame(bool redraw, bool overlayVisible,
-                               bool debugOverlay,
+bool shouldRenderPlaybackFrame(bool redraw, bool overlayRefreshDue,
+                               bool debugRefreshDue,
                                PlaybackSessionState playbackState) {
-#if RADIOIFY_ENABLE_TIMING_LOG
-  return redraw || ((overlayVisible || debugOverlay) &&
+  return redraw || ((overlayRefreshDue || debugRefreshDue) &&
                     playbackState != PlaybackSessionState::Ended);
-#else
-  (void)debugOverlay;
-  return redraw ||
-         (overlayVisible && playbackState != PlaybackSessionState::Ended);
-#endif
 }
 
 }  // namespace
@@ -405,6 +399,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   const std::string windowTitle = toUtf8String(file.filename());
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
+  auto lastOverlayRefresh = std::chrono::steady_clock::time_point::min();
+  auto lastDebugRefresh = std::chrono::steady_clock::time_point::min();
 
   playback_session_input::PlaybackInputView inputView;
   inputView.player = &player;
@@ -535,6 +531,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   {
     updateRenderInputs(true, true);
     playback_screen_renderer::renderPlaybackScreen(renderInputs);
+    const auto now = std::chrono::steady_clock::now();
+    lastOverlayRefresh = now;
+    lastDebugRefresh = now;
   }
   if (renderFailed) {
     shutdownPlaybackInfrastructure();
@@ -553,6 +552,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
     updateRenderInputs(forceRefreshArt, presented);
     playback_screen_renderer::renderPlaybackScreen(renderInputs);
     auto t1 = std::chrono::steady_clock::now();
+    lastOverlayRefresh = t1;
+    lastDebugRefresh = t1;
     auto durMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
     if (durMs > 100) {
@@ -675,25 +676,28 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                   seekRequestTime, pendingSeekTargetSec,
                   windowPendingSeekTargetSec);
     syncPlaybackEndedState(player, playbackState);
+    const bool overlayVisibleNow =
+        playback_session_input::isOverlayVisible(inputSignals);
+    const auto nowForRefresh = std::chrono::steady_clock::now();
+    const bool overlayRefreshDue =
+        overlayVisibleNow &&
+        (lastOverlayRefresh == std::chrono::steady_clock::time_point::min() ||
+         nowForRefresh - lastOverlayRefresh >= std::chrono::milliseconds(100));
+    const bool debugRefreshDue =
+        config.debugOverlay &&
+        (lastDebugRefresh == std::chrono::steady_clock::time_point::min() ||
+         nowForRefresh - lastDebugRefresh >= std::chrono::milliseconds(250));
 
     if (shouldRenderPlaybackFrame(
-            redraw, playback_session_input::isOverlayVisible(inputSignals),
-            config.debugOverlay, playbackState)) {
+            redraw, overlayRefreshDue, debugRefreshDue, playbackState)) {
       renderPlaybackFrame(presented);
       if (renderFailed) {
         break;
       }
     }
 
-#if RADIOIFY_ENABLE_TIMING_LOG
     if (playbackState == PlaybackSessionState::Ended ||
-        (!redraw &&
-         !playback_session_input::isOverlayVisible(inputSignals) &&
-         !config.debugOverlay)) {
-#else
-    if (playbackState == PlaybackSessionState::Ended ||
-        (!redraw && !playback_session_input::isOverlayVisible(inputSignals))) {
-#endif
+        (!redraw && !overlayRefreshDue && !debugRefreshDue)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }

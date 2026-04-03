@@ -66,6 +66,84 @@ struct TrackBrowserState {
 
 static TrackBrowserState gTrackBrowser;
 
+enum class UiDirtyFlags : uint32_t {
+  None = 0,
+  Frame = 1u << 0,
+  Layout = 1u << 1,
+  Async = 1u << 2,
+};
+
+inline UiDirtyFlags operator|(UiDirtyFlags a, UiDirtyFlags b) {
+  return static_cast<UiDirtyFlags>(static_cast<uint32_t>(a) |
+                                   static_cast<uint32_t>(b));
+}
+
+inline UiDirtyFlags& operator|=(UiDirtyFlags& a, UiDirtyFlags b) {
+  a = a | b;
+  return a;
+}
+
+inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
+  return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flag)) != 0;
+}
+
+struct BrowserViewport {
+  int width = 40;
+  int height = 10;
+  int headerLines = 1;
+  int listTop = 1;
+  int breadcrumbY = -1;
+  int searchBarY = -1;
+  int searchBarWidth = 0;
+  int searchBarClearStart = -1;
+  int searchBarClearEnd = -1;
+  int listHeight = 1;
+  bool browserInteractionEnabled = true;
+};
+
+static BrowserViewport computeBrowserViewport(ConsoleScreen& screen,
+                                              bool browserInteractionEnabled,
+                                              bool showHeaderLabel,
+                                              int footerLines,
+                                              int searchBarClearButtonWidth) {
+  BrowserViewport viewport;
+  screen.updateSize();
+  viewport.width = std::max(40, screen.width());
+  viewport.height = std::max(10, screen.height());
+  viewport.browserInteractionEnabled = browserInteractionEnabled;
+  if (browserInteractionEnabled) {
+    viewport.headerLines = 2 + (showHeaderLabel ? 1 : 0);
+    viewport.searchBarY = 1;
+    viewport.searchBarWidth = viewport.width;
+    viewport.listTop = viewport.headerLines + 1;
+    viewport.breadcrumbY = viewport.headerLines;
+    viewport.searchBarClearEnd = viewport.width;
+    viewport.searchBarClearStart =
+        std::max(0, viewport.searchBarClearEnd - searchBarClearButtonWidth);
+  } else {
+    viewport.headerLines = 1;
+    viewport.listTop = viewport.headerLines;
+  }
+  viewport.listHeight = viewport.height - viewport.listTop - footerLines;
+  if (viewport.listHeight < 1) viewport.listHeight = 1;
+  return viewport;
+}
+
+static DWORD waitForBrowserWake(ConsoleInput& input, HANDLE asyncWakeHandle,
+                                DWORD timeoutMs) {
+  std::vector<HANDLE> handles;
+  if (HANDLE inputHandle = input.waitHandle()) {
+    handles.push_back(inputHandle);
+  }
+  if (asyncWakeHandle) {
+    handles.push_back(asyncWakeHandle);
+  }
+  return MsgWaitForMultipleObjectsEx(
+      static_cast<DWORD>(handles.size()),
+      handles.empty() ? nullptr : handles.data(), timeoutMs, QS_ALLINPUT,
+      MWMO_INPUTAVAILABLE);
+}
+
 static std::filesystem::path normalizeTrackBrowserPath(
     std::filesystem::path path) {
   if (!path.has_parent_path()) {
@@ -721,6 +799,17 @@ int runTui(Options o) {
   bool seekHoldActive = false;
   auto seekHoldStart = std::chrono::steady_clock::now();
   std::vector<ScreenCell> windowCells;
+  UiDirtyFlags dirtyFlags = UiDirtyFlags::Frame | UiDirtyFlags::Layout;
+  bool layoutDirty = true;
+  BrowserViewport viewport;
+  auto markDirty = [&](UiDirtyFlags flags = UiDirtyFlags::Frame) {
+    dirty = true;
+    dirtyFlags |= flags;
+    if (hasDirtyFlag(flags, UiDirtyFlags::Layout)) {
+      layoutDirty = true;
+    }
+  };
+  auto markLayoutDirty = [&]() { markDirty(UiDirtyFlags::Frame | UiDirtyFlags::Layout); };
   auto markSeekHold = [&](double targetSec) {
     if (!std::isfinite(targetSec) || targetSec < 0.0) return;
     seekDisplaySec = targetSec;
@@ -754,7 +843,7 @@ int runTui(Options o) {
   if (hasPendingImage) {
     showAsciiArt(pendingImage, input, screen, kStyleNormal, kStyleAccent,
                  kStyleDim);
-    dirty = true;
+    markDirty();
   }
   if (hasPendingVideo) {
     bool quitAppRequested = false;
@@ -768,7 +857,7 @@ int runTui(Options o) {
     } else if (!handled) {
       tryStartAudioFile(pendingVideo);
     }
-    dirty = true;
+    markDirty();
   }
 
   struct CommandEntry {
@@ -821,28 +910,23 @@ int runTui(Options o) {
   };
 
   auto rebuildLayout = [&]() {
-    screen.updateSize();
-    width = std::max(40, screen.width());
-    height = std::max(10, screen.height());
-    bool browserInteractionEnabled = !melodyVisualizationEnabled;
-    bool showHeaderLabel = browserInteractionEnabled &&
-                           (optionsBrowserIsActive(browser) ||
-                            isTrackBrowserActive(browser));
-    if (browserInteractionEnabled) {
-      headerLines = 2 + (showHeaderLabel ? 1 : 0);
-      searchBarY = 1;
-      searchBarWidth = width;
-      listTop = headerLines + 1;
-      breadcrumbY = headerLines;
-    } else {
-      headerLines = 1;
-      searchBarY = -1;
-      searchBarWidth = 0;
-      listTop = headerLines;
-      breadcrumbY = -1;
-    }
-    listHeight = height - listTop - footerLines;
-    if (listHeight < 1) listHeight = 1;
+    const bool browserInteractionEnabled = !melodyVisualizationEnabled;
+    const bool showHeaderLabel =
+        browserInteractionEnabled &&
+        (optionsBrowserIsActive(browser) || isTrackBrowserActive(browser));
+    viewport = computeBrowserViewport(screen, browserInteractionEnabled,
+                                      showHeaderLabel, footerLines,
+                                      searchBarClearButtonWidth);
+    width = viewport.width;
+    height = viewport.height;
+    headerLines = viewport.headerLines;
+    searchBarY = viewport.searchBarY;
+    searchBarWidth = viewport.searchBarWidth;
+    searchBarClearStart = viewport.searchBarClearStart;
+    searchBarClearEnd = viewport.searchBarClearEnd;
+    listTop = viewport.listTop;
+    breadcrumbY = viewport.breadcrumbY;
+    listHeight = viewport.listHeight;
     layout = buildLayout(browser, width, listHeight);
     if (layout.totalRows <= layout.rowsVisible) {
       browser.scrollRow = 0;
@@ -856,6 +940,7 @@ int runTui(Options o) {
     } else if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
       breadcrumbHover = -1;
     }
+    layoutDirty = false;
   };
 
   FileContextMenuState fileContextMenu;
@@ -880,12 +965,14 @@ int runTui(Options o) {
   callbacks.onRefreshBrowser = [&](BrowserState& nextBrowser,
                                    const std::string& initialName) {
     refreshBrowser(nextBrowser, initialName);
+    markLayoutDirty();
   };
   callbacks.onPlayFile = [&](const std::filesystem::path& file) {
     OptionsBrowserResult optionsResult =
         optionsBrowserActivateSelection(browser);
     if (optionsResult == OptionsBrowserResult::Changed) {
       refreshBrowser(browser, "");
+      markLayoutDirty();
       return true;
     }
     if (optionsResult == OptionsBrowserResult::Handled) {
@@ -904,6 +991,7 @@ int runTui(Options o) {
     }
     if (isSupportedImageExt(file)) {
       showAsciiArt(file, input, screen, kStyleNormal, kStyleAccent, kStyleDim);
+      markDirty();
       return true;
     }
     if (isVideoExt(file)) {
@@ -916,7 +1004,10 @@ int runTui(Options o) {
         running = false;
         return true;
       }
-      if (handled) return true;
+      if (handled) {
+        markDirty();
+        return true;
+      }
     }
     if (isKssExt(file) || isGmeExt(file) || isVgmExt(file) || isPsfExt(file)) {
       std::filesystem::path trackPath = normalizeTrackBrowserPath(file);
@@ -938,6 +1029,7 @@ int runTui(Options o) {
         browser.filter.clear();
         setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
         refreshBrowser(browser, "");
+        markLayoutDirty();
         return true;
       }
     }
@@ -952,7 +1044,7 @@ int runTui(Options o) {
     fileContextMenu.selected = 0;
     fileContextMenu.anchorX = x;
     fileContextMenu.anchorY = y;
-    dirty = true;
+    markDirty();
   };
   callbacks.onRenderFile = [&](const std::filesystem::path& file) {
     renderFile(file);
@@ -969,39 +1061,47 @@ int runTui(Options o) {
   callbacks.onCurrentPlaybackFile = [&]() { return audioGetNowPlaying(); };
   callbacks.onToggleRadio = [&]() {
     audioToggleRadio();
+    markDirty();
   };
   callbacks.onToggle50Hz = [&]() {
     if (audioSupports50HzToggle()) {
       audioToggle50Hz();
+      markDirty();
     }
   };
   callbacks.onToggleOptions = [&]() {
     if (optionsBrowserCanToggle(browser)) {
       optionsBrowserToggle(browser);
       refreshBrowser(browser, "");
+      markLayoutDirty();
     }
   };
   callbacks.onSeekBy = [&](int direction) {
     audioSeekBy(direction);
     markSeekHold(audioGetSeekTargetSec());
+    markDirty();
   };
   callbacks.onSeekToRatio = [&](double ratio) {
     audioSeekToRatio(ratio);
     markSeekHold(audioGetSeekTargetSec());
+    markDirty();
   };
-  callbacks.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
+  callbacks.onAdjustVolume = [&](float delta) {
+    audioAdjustVolume(delta);
+    markDirty();
+  };
   callbacks.onToggleMelodyVisualization = [&]() {
-           melodyVisualizationEnabled = !melodyVisualizationEnabled;
-           if (melodyVisualizationEnabled) {
-              setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-              breadcrumbHover = -1;
-              actionHover = -1;
-              clearMelodyHistory();
+    melodyVisualizationEnabled = !melodyVisualizationEnabled;
+    if (melodyVisualizationEnabled) {
+      setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
+      breadcrumbHover = -1;
+      actionHover = -1;
+      clearMelodyHistory();
     }
     fileContextMenu.active = false;
-    dirty = true;
+    markLayoutDirty();
   };
-  callbacks.onResize = [&]() { rebuildLayout(); };
+  callbacks.onResize = [&]() { markLayoutDirty(); };
 
   bool paletteActive = false;
   std::string paletteQuery;
@@ -1014,7 +1114,7 @@ int runTui(Options o) {
     std::vector<CommandEntry> cmds;
     cmds.push_back({"Play/Pause", "Space", true, [&]() {
                       audioTogglePause();
-                      dirty = true;
+                      markDirty();
                     }});
     cmds.push_back(
         {melodyVisualizationEnabled ? "Melody Viz: On" : "Melody Viz: Off",
@@ -1027,40 +1127,40 @@ int runTui(Options o) {
             clearMelodyHistory();
            }
            fileContextMenu.active = false;
-           dirty = true;
+           markLayoutDirty();
          }});
     cmds.push_back({audioIsRadioEnabled() ? "Radio Filter: AM"
                                           : "Radio Filter: Dry",
                     "R", true, [&]() {
                       audioToggleRadio();
-                      dirty = true;
+                      markDirty();
                     }});
     bool show50Hz = audioSupports50HzToggle();
     if (show50Hz) {
       cmds.push_back({audioIs50HzEnabled() ? "50Hz: 50" : "50Hz: Auto",
                       "H", true, [&]() {
                         audioToggle50Hz();
-                        dirty = true;
+                        markDirty();
                       }});
     }
     if (!melodyVisualizationEnabled) {
       cmds.push_back({"View: Grid", "T", true, [&]() {
                         browser.viewMode = BrowserState::ViewMode::Thumbnails;
-                        dirty = true;
+                        markLayoutDirty();
                       }});
       cmds.push_back({"View: List", "T", true, [&]() {
                         browser.viewMode = BrowserState::ViewMode::ListOnly;
-                        dirty = true;
+                        markLayoutDirty();
                       }});
       cmds.push_back({"View: Preview", "T", true, [&]() {
                         browser.viewMode = BrowserState::ViewMode::ListPreview;
-                        dirty = true;
+                        markLayoutDirty();
                       }});
       if (optionsBrowserCanToggle(browser)) {
         cmds.push_back({"Options", "O", true, [&]() {
                           optionsBrowserToggle(browser);
                           refreshBrowser(browser, "");
-                          dirty = true;
+                          markLayoutDirty();
                         }});
       }
     }
@@ -1402,7 +1502,9 @@ int runTui(Options o) {
   };
 
   while (running) {
-    rebuildLayout();
+    if (layoutDirty) {
+      rebuildLayout();
+    }
     cleanupMelodyExportWorker();
     cleanupLoopSplitExportWorker(loopSplitTask);
 
@@ -1410,7 +1512,11 @@ int runTui(Options o) {
       tuiWindow.PollEvents();
     }
 
-  auto processInputEvent = [&](InputEvent ev) {
+    if (consumeBrowserThumbnailWake()) {
+      markDirty(UiDirtyFlags::Async);
+    }
+
+    auto processInputEvent = [&](InputEvent ev) {
       const bool browserInteractionEnabled = !melodyVisualizationEnabled;
       bool isLeftClick = (ev.type == InputEvent::Type::Mouse) &&
                         (ev.mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
@@ -1424,7 +1530,7 @@ int runTui(Options o) {
             ev.mouse.pos.X < searchBarClearEnd;
         if (searchBarClearHover != clearBtnHover) {
           searchBarClearHover = clearBtnHover;
-          dirty = true;
+          markDirty();
         }
       }
       if (ev.type == InputEvent::Type::Mouse &&
@@ -1457,7 +1563,7 @@ int runTui(Options o) {
           paletteQuery.clear();
           paletteSelected = 0;
           paletteScroll = 0;
-          dirty = true;
+          markDirty();
           return;
         }
       }
@@ -1476,7 +1582,7 @@ int runTui(Options o) {
         if (callbacks.onRefreshBrowser) {
           callbacks.onRefreshBrowser(browser, "");
         }
-        dirty = true;
+        markDirty();
         return;
       }
       if (fileContextMenu.active) {
@@ -1672,6 +1778,10 @@ int runTui(Options o) {
       audioShutdown();
     };
 
+    const BrowserState::ViewMode preInputViewMode = browser.viewMode;
+    const bool preInputMelodyVisualization = melodyVisualizationEnabled;
+    const bool preInputOptionsMode = optionsBrowserIsActive(browser);
+    const bool preInputTrackMode = isTrackBrowserActive(browser);
     InputEvent ev{};
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       while (running && tuiWindow.PollInput(ev)) {
@@ -1697,47 +1807,65 @@ int runTui(Options o) {
     }
     if (!running) break;
 
+    if (browser.viewMode != preInputViewMode ||
+        melodyVisualizationEnabled != preInputMelodyVisualization ||
+        optionsBrowserIsActive(browser) != preInputOptionsMode ||
+        isTrackBrowserActive(browser) != preInputTrackMode) {
+      markLayoutDirty();
+    }
+
     auto now = std::chrono::steady_clock::now();
-    if (dirty || now - lastDraw >= std::chrono::milliseconds(150)) {
-      screen.updateSize();
-      width = std::max(40, screen.width());
-      height = std::max(10, screen.height());
+    auto computeWakeTimeout = [&](std::chrono::steady_clock::time_point nowTime) {
+      DWORD timeout = INFINITE;
+      auto reduceTimeout = [&](std::chrono::milliseconds interval) {
+        if (interval.count() <= 0) {
+          timeout = 0;
+          return;
+        }
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(nowTime -
+                                                                  lastDraw);
+        long long remaining = interval.count() - elapsed.count();
+        DWORD candidate =
+            remaining <= 0 ? 0u : static_cast<DWORD>(remaining);
+        timeout = (timeout == INFINITE) ? candidate : std::min(timeout, candidate);
+      };
+
+      if (viewport.browserInteractionEnabled &&
+          (browser.filterActive || browser.pathSearchActive)) {
+        reduceTimeout(std::chrono::milliseconds(250));
+      }
+      if (melodyVisualizationEnabled) {
+        reduceTimeout(std::chrono::milliseconds(50));
+      }
+      if (o.play &&
+          (audioIsReady() || !audioGetNowPlaying().empty() || seekHoldActive)) {
+        reduceTimeout(std::chrono::milliseconds(100));
+      }
+      if (isBackgroundTaskRunning()) {
+        reduceTimeout(std::chrono::milliseconds(100));
+      }
+      return timeout;
+    };
+
+    if (!dirty) {
+      DWORD waitTimeout = computeWakeTimeout(now);
+      DWORD waitResult =
+          waitForBrowserWake(input, browserThumbnailWakeHandle(), waitTimeout);
+      if (consumeBrowserThumbnailWake()) {
+        markDirty(UiDirtyFlags::Async);
+      } else if (waitResult == WAIT_TIMEOUT) {
+        markDirty();
+      }
+      continue;
+    }
+    if (layoutDirty && hasDirtyFlag(dirtyFlags, UiDirtyFlags::Layout)) {
+      rebuildLayout();
+    }
+    if (dirty) {
       bool optionsMode = optionsBrowserIsActive(browser);
       bool trackMode = isTrackBrowserActive(browser);
       bool browserInteractionEnabled = !melodyVisualizationEnabled;
-      bool showHeaderLabel =
-          browserInteractionEnabled && (optionsMode || trackMode);
-      if (browserInteractionEnabled) {
-        headerLines = 2 + (showHeaderLabel ? 1 : 0);
-        searchBarY = 1;
-        searchBarWidth = width;
-        listTop = headerLines + 1;
-        breadcrumbY = headerLines;
-      } else {
-        headerLines = 1;
-        searchBarY = -1;
-        searchBarWidth = 0;
-        searchBarClearStart = -1;
-        searchBarClearEnd = -1;
-        listTop = headerLines;
-        breadcrumbY = -1;
-      }
-      searchBarClearEnd = (searchBarY >= 0 && width > 0)
-                             ? width
-                             : -1;
-      searchBarClearStart =
-          (searchBarClearEnd > 0)
-              ? std::max(0, searchBarClearEnd - searchBarClearButtonWidth)
-              : -1;
-      listHeight = height - listTop - footerLines;
-      if (listHeight < 1) listHeight = 1;
-      layout = buildLayout(browser, width, listHeight);
-      if (layout.totalRows <= layout.rowsVisible) {
-        browser.scrollRow = 0;
-      } else {
-        int maxScroll = layout.totalRows - layout.rowsVisible;
-        browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
-      }
 
       screen.clear(kStyleNormal);
 
@@ -2380,9 +2508,8 @@ int runTui(Options o) {
       }
       lastDraw = now;
       dirty = false;
+      dirtyFlags = UiDirtyFlags::None;
     }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   // Clear screen before exiting
   screen.clear(kStyleNormal);

@@ -113,6 +113,11 @@ bool ConsoleInput::poll(InputEvent& out) {
 
 bool ConsoleInput::active() const { return active_; }
 
+HANDLE ConsoleInput::waitHandle() const {
+  if (!active_) return nullptr;
+  return handle_;
+}
+
 std::vector<DriveEntry> listDriveEntries() {
   std::vector<DriveEntry> drives;
 #ifdef _WIN32

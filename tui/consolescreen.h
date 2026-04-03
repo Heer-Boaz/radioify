@@ -45,6 +45,8 @@ struct ScreenCell {
 BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width);
 int breadcrumbIndexAt(const BreadcrumbLine& line, int x, int y, int lineY);
 bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY, std::filesystem::path* outPath);
+HANDLE browserThumbnailWakeHandle();
+bool consumeBrowserThumbnailWake();
 
 class ConsoleScreen {
  public:

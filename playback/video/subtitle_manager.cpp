@@ -386,8 +386,9 @@ bool parseAssAlphaValue(std::string_view token, int* outAlpha) {
   return true;
 }
 
-void parseAssVisibilityOverrides(std::string_view block, int* inOutPrimaryAlpha) {
-  if (!inOutPrimaryAlpha || block.empty()) return;
+void parseAssTextOverrides(std::string_view block, int* inOutPrimaryAlpha,
+                           int* inOutDrawingMode) {
+  if (!inOutPrimaryAlpha || !inOutDrawingMode || block.empty()) return;
   size_t i = 0;
   while (i < block.size()) {
     if (block[i] != '\\') {
@@ -399,8 +400,27 @@ void parseAssVisibilityOverrides(std::string_view block, int* inOutPrimaryAlpha)
 
     if (block[i] == 'r' || block[i] == 'R') {
       *inOutPrimaryAlpha = 0;
+      *inOutDrawingMode = 0;
       ++i;
       while (i < block.size() && block[i] != '\\') ++i;
+      continue;
+    }
+
+    if ((block[i] == 'p' || block[i] == 'P') &&
+        !(i + 1 < block.size() &&
+          (block[i + 1] == 'o' || block[i + 1] == 'O' || block[i + 1] == 'b' ||
+           block[i + 1] == 'B'))) {
+      ++i;
+      size_t valueStart = i;
+      if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
+      while (i < block.size() &&
+             std::isdigit(static_cast<unsigned char>(block[i])) != 0) {
+        ++i;
+      }
+      int drawingMode = 0;
+      if (parseSignedInt(block.substr(valueStart, i - valueStart), &drawingMode)) {
+        *inOutDrawingMode = (std::max)(0, drawingMode);
+      }
       continue;
     }
 
@@ -451,6 +471,7 @@ std::string stripSubtitleMarkup(const std::string& in) {
   std::string noAss;
   noAss.reserve(noHtml.size());
   int primaryAlpha = 0;  // ASS alpha: 0 = opaque, 255 = transparent
+  int drawingMode = 0;   // ASS \p vector drawing mode: 0 = text.
   size_t pos = 0;
   while (pos < noHtml.size()) {
     if (noHtml[pos] == '{') {
@@ -459,13 +480,13 @@ std::string stripSubtitleMarkup(const std::string& in) {
         ++pos;
         continue;
       }
-      parseAssVisibilityOverrides(
+      parseAssTextOverrides(
           std::string_view(noHtml.data() + pos + 1, close - pos - 1),
-          &primaryAlpha);
+          &primaryAlpha, &drawingMode);
       pos = close + 1;
       continue;
     }
-    if (primaryAlpha < 255) {
+    if (primaryAlpha < 255 && drawingMode == 0) {
       noAss.push_back(noHtml[pos]);
     }
     ++pos;
