@@ -902,12 +902,24 @@ bool handlePlaybackInput(const InputEvent& ev,
       if (callbacks.onTogglePause) callbacks.onTogglePause();
       return true;
     }
+    if (key.vk == 'W' || key.ch == 'w' || key.ch == 'W') {
+      if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+      return true;
+    }
     if (key.vk == 'R' || key.ch == 'r' || key.ch == 'R') {
       if (callbacks.onToggleRadio) callbacks.onToggleRadio();
       return true;
     }
     if (key.vk == 'H' || key.ch == 'h' || key.ch == 'H') {
       if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
+      return true;
+    }
+    if (key.vk == 'S' || key.ch == 's' || key.ch == 'S') {
+      if (callbacks.onToggleSubtitles) callbacks.onToggleSubtitles();
+      return true;
+    }
+    if (key.vk == 'A' || key.ch == 'a' || key.ch == 'A') {
+      if (callbacks.onToggleAudioTrack) callbacks.onToggleAudioTrack();
       return true;
     }
     if (key.vk == 'O' || key.ch == 'o' || key.ch == 'O') {

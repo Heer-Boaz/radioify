@@ -44,6 +44,13 @@ struct AsciiModePrepareInput {
   LogLineWriter timingSink;
 };
 
+std::pair<int, int> computeAsciiPlaybackTargetSize(int width, int height,
+                                                  int srcW, int srcH,
+                                                  bool showStatusLine);
+
+std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
+                                          int srcW, int srcH);
+
 bool prepareAsciiModeFrame(AsciiModePrepareInput& input);
 
 void prepareNonAsciiModeFrame(bool allowFrame, int width, int maxHeight,

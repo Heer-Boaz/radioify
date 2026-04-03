@@ -160,6 +160,52 @@ bool cpuRenderFallback(const playback_frame_output::AsciiModePrepareInput& input
 
 namespace playback_frame_output {
 
+std::pair<int, int> computeAsciiPlaybackTargetSize(int width, int height,
+                                                  int srcW, int srcH,
+                                                  bool showStatusLine) {
+  int headerLines = showStatusLine ? 1 : 0;
+  const int footerLines = 0;
+  int maxHeight = std::max(1, height - headerLines - footerLines);
+  int maxOutW = std::max(1, width - 8);
+  AsciiArtLayout fitted =
+      fitAsciiArtLayout(srcW, srcH, maxOutW, std::max(1, maxHeight));
+  int outW = fitted.width;
+  int outH = fitted.height;
+  int targetW = std::max(2, outW * 2);
+  int targetH = std::max(4, outH * 4);
+  if (targetW & 1) ++targetW;
+  if (targetH & 1) ++targetH;
+  if (srcW > 0) targetW = std::min(targetW, srcW & ~1);
+  if (srcH > 0) targetH = std::min(targetH, srcH & ~1);
+  targetW = std::max(2, targetW);
+  targetH = std::max(4, targetH);
+
+  const int kMaxDecodeWidth = 1024;
+  const int kMaxDecodeHeight = 768;
+  if (targetW > kMaxDecodeWidth || targetH > kMaxDecodeHeight) {
+    double scaleW = static_cast<double>(kMaxDecodeWidth) / targetW;
+    double scaleH = static_cast<double>(kMaxDecodeHeight) / targetH;
+    double scale = std::min(scaleW, scaleH);
+    targetW = static_cast<int>(std::lround(targetW * scale));
+    targetH = static_cast<int>(std::lround(targetH * scale));
+    targetW = std::min(targetW, kMaxDecodeWidth);
+    targetH = std::min(targetH, kMaxDecodeHeight);
+    targetW &= ~1;
+    targetH &= ~1;
+    targetW = std::max(2, targetW);
+    targetH = std::max(4, targetH);
+  }
+  return std::pair<int, int>(targetW, targetH);
+}
+
+std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
+                                          int srcW, int srcH) {
+  int maxOutW = std::max(1, maxWidth - 8);
+  AsciiArtLayout fitted =
+      fitAsciiArtLayout(srcW, srcH, maxOutW, std::max(1, maxHeight));
+  return std::pair<int, int>(fitted.width, fitted.height);
+}
+
 bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
   if (!input.allowFrame) {
     if (input.cachedWidth) *input.cachedWidth = -1;

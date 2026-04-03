@@ -176,14 +176,19 @@ add_executable(radioify
   queues.cpp
   taskgate.cpp
   ui_helpers.cpp
-  videoplayback.cpp
+  playback/session/playback_session_runtime.cpp
   videodecoder.cpp
   videowindow.cpp
   videowindow_tui.cpp
   videoprocessor.cpp
+  playback/overlay/playback_overlay.cpp
+  playback/render/playback_screen_renderer.cpp
+  playback/render/playback_frame_output_ascii.cpp
+  playback/render/playback_frame_output_console.cpp
+  playback/window/playback_window_presenter.cpp
+  playback/session/playback_session_bootstrap.cpp
+  playback/session/playback_session_log.cpp
   ${RADIOIFY_RADIO_ENGINE_SOURCES}
-  playback_frame_output_ascii.cpp
-  playback_frame_output_console.cpp
   subtitle_manager.cpp
   calibration_report.cpp
   loopsplit.cpp
@@ -517,6 +522,11 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 target_include_directories(radioify PRIVATE third_party)
+target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/session)
+target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/render)
+target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/window)
+target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/overlay)
 
 # vcpkg's FFmpeg port ships a `FindFFMPEG.cmake` module under
 # `vcpkg_installed/<triplet>/share/ffmpeg/`. If the vcpkg toolchain file wasn't
