@@ -57,6 +57,9 @@ static const int kTemporalResetDelta = 48;
 static const int kInkMinLuma = 40;  // Reduced from 110 to allow dark details
 static const int kBgMinLuma = 10;   // Reduced from 20
 static const int kInkMaxScale = 1280;
+static const float kShadowSatStartLuma = 16.0f;
+static const float kShadowSatFullLuma = 96.0f;
+static const float kShadowMinSaturation = 24.0f / 256.0f;
 static const float kSignalStrengthFloor = 0.2f;
 #define BG_CLAMP 1
 #define BG_CLAMP_DEBUG 0
@@ -91,6 +94,26 @@ float3 UnpackColor(uint c) {
 
 float GetLuma(float3 c) {
     return dot(c, kLumaCoeff) * 255.0f;
+}
+
+float GetShadowSaturation(float y255) {
+    float t = saturate((y255 - kShadowSatStartLuma) /
+                       max(kShadowSatFullLuma - kShadowSatStartLuma, 1.0f));
+    return lerp(kShadowMinSaturation, 1.0f, t);
+}
+
+float3 ApplySaturationAroundLuma(float3 rgb, float y255, float saturation) {
+    float gray = y255 / 255.0f;
+    return saturate(gray.xxx + (rgb - gray.xxx) * saturation);
+}
+
+float3 CompressShadowChroma(float3 rgb) {
+    float y = GetLuma(rgb);
+    float keep = GetShadowSaturation(y);
+    if (keep >= 0.999f) {
+        return saturate(rgb);
+    }
+    return ApplySaturationAroundLuma(rgb, y, keep);
 }
 
 float Median9(float v[9]) {
@@ -591,11 +614,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Adjust saturation based on brightness.
     // Dark colors get reduced saturation to prevent blue/purple artifacts in shadows.
     curY = GetLuma(curFg);
-    float adaptiveSat = (float)kColorSaturation;
-    if (curY < 60.0f) {
-        adaptiveSat = adaptiveSat * (curY / 60.0f); 
-    }
-    curFg = saturate(curY/255.0f + (curFg - curY/255.0f) * (adaptiveSat / 256.0f));
+    float adaptiveSat =
+        ((float)kColorSaturation / 256.0f) * GetShadowSaturation(curY);
+    curFg = ApplySaturationAroundLuma(curFg, curY, adaptiveSat);
 
     // Temporal Stability (Ghosting Reduction)
     // We blend the current frame's color with the previous frame's color to reduce flickering.
@@ -632,6 +653,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (diffBg < resetThresh) {
         curBg = lerp(prevBg, curBg, bgBlendAlpha);
     }
+    curFg = CompressShadowChroma(curFg);
+    curBg = CompressShadowChroma(curBg);
 
     bool fullMask = (dotCount == 8u);
     if (fullMask && bgCount == 0) {

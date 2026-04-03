@@ -131,6 +131,11 @@ FORCE_INLINE float clampFloat(float v, float lo, float hi) {
   return (v < lo) ? lo : (v > hi ? hi : v);
 }
 
+FORCE_INLINE int scaleDelta256(int delta, int scale) {
+  int bias = (delta >= 0) ? 128 : -128;
+  return (delta * scale + bias) / 256;
+}
+
 constexpr int kParallelBatchRows = 8;
 
 int hardwareThreadCount() {
@@ -190,6 +195,9 @@ constexpr uint8_t kBgMinLuma = 10;    // Reduced
 constexpr int kInkMaxScale = 1280;  // Verhoogd voor meer bereik
 constexpr int kTemporalResetDelta = 48;  // Snellere scene change detectie
 constexpr int kColorSaturation = 340;    // Iets meer saturatie
+constexpr int kShadowSatStartLuma = 16;
+constexpr int kShadowSatFullLuma = 96;
+constexpr int kShadowMinSaturation = 24;
 constexpr bool kUseEdgeBoost = true;
 constexpr uint8_t kEdgeMin = 4;      // Reverted to 4 for sensitivity
 constexpr uint8_t kEdgeBoost = 245;  // Sterker edge boost
@@ -205,6 +213,39 @@ constexpr int kLumSmoothAlpha = 40;   // Snellere adaptatie
 constexpr int kLumResetDelta = 28;
 constexpr float kHdrReferenceNits = 100.0f;
 constexpr float kHdrScale = 10000.0f / kHdrReferenceNits;
+
+FORCE_INLINE int shadowSaturationFromLuma(int y) {
+  if (y <= kShadowSatStartLuma) return kShadowMinSaturation;
+  if (y >= kShadowSatFullLuma) return 256;
+  int numer =
+      (y - kShadowSatStartLuma) * (256 - kShadowMinSaturation);
+  int denom = kShadowSatFullLuma - kShadowSatStartLuma;
+  return kShadowMinSaturation + (numer + denom / 2) / denom;
+}
+
+FORCE_INLINE void applySaturationAroundLuma(uint8_t& r, uint8_t& g,
+                                            uint8_t& b, int y,
+                                            int saturation256) {
+  r = static_cast<uint8_t>(
+      std::clamp(y + scaleDelta256(static_cast<int>(r) - y, saturation256), 0,
+                 255));
+  g = static_cast<uint8_t>(
+      std::clamp(y + scaleDelta256(static_cast<int>(g) - y, saturation256), 0,
+                 255));
+  b = static_cast<uint8_t>(
+      std::clamp(y + scaleDelta256(static_cast<int>(b) - y, saturation256), 0,
+                 255));
+}
+
+FORCE_INLINE void compressShadowChroma(uint8_t& r, uint8_t& g, uint8_t& b) {
+  int y =
+      (static_cast<int>(r) * 54 + static_cast<int>(g) * 183 +
+       static_cast<int>(b) * 19 + 128) >>
+      8;
+  int keep = shadowSaturationFromLuma(y);
+  if (keep >= 256) return;
+  applySaturationAroundLuma(r, g, b, y, keep);
+}
 
 // Rec. 709 coefficients met hogere precisie (fixed-point 16.16)
 // Geen per-kanaal lookup tables meer - direct berekening is sneller!
@@ -1113,17 +1154,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // Adaptive Saturation (Ink)
               // Adjust saturation based on brightness.
               // Dark colors get reduced saturation to prevent blue/purple artifacts in shadows.
-              int adaptiveSat = kColorSaturation + ((255 - y) >> 2);
-              if (adaptiveSat > 400) adaptiveSat = 400;
-              curR = static_cast<uint8_t>(std::clamp(
-                  y + ((static_cast<int>(curR) - y) * adaptiveSat >> 8), 0,
-                  255));
-              curG = static_cast<uint8_t>(std::clamp(
-                  y + ((static_cast<int>(curG) - y) * adaptiveSat >> 8), 0,
-                  255));
-              curB = static_cast<uint8_t>(std::clamp(
-                  y + ((static_cast<int>(curB) - y) * adaptiveSat >> 8), 0,
-                  255));
+              int adaptiveSat =
+                  (kColorSaturation * shadowSaturationFromLuma(y) + 128) >> 8;
+              applySaturationAroundLuma(curR, curG, curB, y, adaptiveSat);
 
               if (cellIndex < scratch.prevFg.size() &&
                   scratch.prevFgValid[cellIndex]) {
@@ -1146,6 +1179,13 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = pg + (((int)curG - pg) * 230 >> 8);
                   pb = pb + (((int)curB - pb) * 230 >> 8);
                 }
+                uint8_t fgR = static_cast<uint8_t>(pr);
+                uint8_t fgG = static_cast<uint8_t>(pg);
+                uint8_t fgB = static_cast<uint8_t>(pb);
+                compressShadowChroma(fgR, fgG, fgB);
+                pr = fgR;
+                pg = fgG;
+                pb = fgB;
                 outR = static_cast<uint8_t>(pr);
                 outG = static_cast<uint8_t>(pg);
                 outB = static_cast<uint8_t>(pb);
@@ -1156,11 +1196,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 outR = curR;
                 outG = curG;
                 outB = curB;
+                compressShadowChroma(outR, outG, outB);
                 if (cellIndex < scratch.prevFg.size()) {
                   scratch.prevFg[cellIndex] =
-                      (static_cast<uint32_t>(curR) << 16) |
-                      (static_cast<uint32_t>(curG) << 8) |
-                      static_cast<uint32_t>(curB);
+                      (static_cast<uint32_t>(outR) << 16) |
+                      (static_cast<uint32_t>(outG) << 8) |
+                      static_cast<uint32_t>(outB);
                   scratch.prevFgValid[cellIndex] = 1;
                 }
               }
@@ -1205,6 +1246,13 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = pg + (((int)bgG - pg) * bgBlendAlpha >> 8);
                   pb = pb + (((int)bgB - pb) * bgBlendAlpha >> 8);
                 }
+                uint8_t bgOutR = static_cast<uint8_t>(pr);
+                uint8_t bgOutG = static_cast<uint8_t>(pg);
+                uint8_t bgOutB = static_cast<uint8_t>(pb);
+                compressShadowChroma(bgOutR, bgOutG, bgOutB);
+                pr = bgOutR;
+                pg = bgOutG;
+                pb = bgOutB;
                 outBgR = static_cast<uint8_t>(pr);
                 outBgG = static_cast<uint8_t>(pg);
                 outBgB = static_cast<uint8_t>(pb);
@@ -1215,9 +1263,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 outBgR = bgR;
                 outBgG = bgG;
                 outBgB = bgB;
-                scratch.prevBg[cellIndex] = (static_cast<uint32_t>(bgR) << 16) |
-                                            (static_cast<uint32_t>(bgG) << 8) |
-                                            static_cast<uint32_t>(bgB);
+                compressShadowChroma(outBgR, outBgG, outBgB);
+                scratch.prevBg[cellIndex] = (static_cast<uint32_t>(outBgR) << 16) |
+                                            (static_cast<uint32_t>(outBgG) << 8) |
+                                            static_cast<uint32_t>(outBgB);
                 scratch.prevBgValid[cellIndex] = 1;
               }
               if (dotCount == 8 && bgCount == 0) {
@@ -1242,6 +1291,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                       std::clamp(static_cast<int>(outBgG) + shift, 0, 255));
                   outBgB = static_cast<uint8_t>(
                       std::clamp(static_cast<int>(outBgB) + shift, 0, 255));
+                  compressShadowChroma(outBgR, outBgG, outBgB);
                   if (cellIndex < scratch.prevBg.size()) {
                     scratch.prevBg[cellIndex] =
                         (static_cast<uint32_t>(outBgR) << 16) |
