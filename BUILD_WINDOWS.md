@@ -12,6 +12,7 @@ Use this file instead of guessing from memory.
 - Main binary: `.\dist\radioify.exe`
 - Preferred config: `Release`
 - Preferred build command: `.\build.ps1 -Static`
+- Optional Ninja build command: `.\build.ps1 -Static -Ninja`
 
 ## Requirements
 
@@ -41,6 +42,12 @@ Normal build:
 .\build.ps1 -Static
 ```
 
+Normal build with Ninja progress output:
+
+```powershell
+.\build.ps1 -Static -Ninja
+```
+
 Clean only:
 
 ```powershell
@@ -52,6 +59,8 @@ Optional variants:
 ```powershell
 .\build.ps1 -Static
 .\build.ps1 -InstallDeps -Static
+.\build.ps1 -Static -Ninja
+.\build.ps1 -InstallDeps -Static -Ninja
 .\build.ps1 -Static -MelodyAnalysis
 .\build.ps1 -InstallDeps -Static -MelodyAnalysis
 ```
@@ -208,6 +217,7 @@ Get-ChildItem .\dist\hebios.bin
 ## Notes
 
 - `build.ps1` writes to `.\build` and `.\dist`.
+- `build.ps1 -Ninja` writes to `.\build-ninja` and `.\dist`.
 - Non-static builds may copy FFmpeg runtime DLLs into `.\dist`.
 - Static builds do not copy FFmpeg DLLs.
 - Use `.\build.ps1 -Static` as the normal Windows build command.

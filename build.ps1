@@ -4,6 +4,8 @@ param(
   [switch]$Clean,
   [switch]$Rebuild,
   [switch]$Static,
+  [switch]$Ninja,
+  [switch]$VerboseBuild,
   [switch]$InstallDeps,
   [Alias("VCPKG_ROOT")]
   [string]$VcpkgRoot,
@@ -113,6 +115,46 @@ function Resolve-CMake {
     "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     "C:\Program Files (x86)\Microsoft Visual Studio\2019\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+  )
+  foreach ($candidate in $defaultCandidates) {
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+
+  return $null
+}
+
+function Resolve-Ninja {
+  $cmd = Get-Command ninja -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
+    return $cmd.Source
+  }
+
+  $whereExe = Get-Command where.exe -ErrorAction SilentlyContinue
+  if ($whereExe) {
+    $whereMatches = & $whereExe.Source ninja.exe 2>$null
+    foreach ($match in $whereMatches) {
+      if ($match -and (Test-Path $match)) {
+        return $match
+      }
+    }
+  }
+
+  foreach ($installRoot in (Get-VisualStudioInstallRoots)) {
+    $candidate = Join-Path $installRoot "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+
+  $defaultCandidates = @(
+    "C:\Program Files\Ninja\ninja.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\Preview\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
   )
   foreach ($candidate in $defaultCandidates) {
     if (Test-Path $candidate) {
@@ -401,29 +443,19 @@ function Invoke-NativeProcess {
     [string]$WorkingDirectory = $null
   )
 
+  if ($WorkingDirectory) { Push-Location $WorkingDirectory }
   try {
-    if ($WorkingDirectory) {
-      Push-Location $WorkingDirectory
+    # Stream stdout to the console instead of letting it become function output.
+    # If the caller assigns this function result, leaked stdout would turn the
+    # return value into an object array and break subsequent exit-code checks.
+    & $FilePath @ArgumentList | Out-Host
+    if ($null -eq $LASTEXITCODE) {
+      return 0
     }
-
-    $startInfo = @{
-      FilePath    = $FilePath
-      ArgumentList = (Join-WindowsCommandLineArguments -ArgumentList $ArgumentList)
-      NoNewWindow = $true
-      Wait        = $true
-      PassThru    = $true
-    }
-    if ($WorkingDirectory) {
-      $startInfo.WorkingDirectory = $WorkingDirectory
-    }
-
-    $process = Start-Process @startInfo
-    return $process.ExitCode
+    return [int]$LASTEXITCODE
   }
   finally {
-    if ($WorkingDirectory) {
-      Pop-Location
-    }
+    if ($WorkingDirectory) { Pop-Location }
   }
 }
 
@@ -515,6 +547,8 @@ function Normalize-RemainingSwitchArguments {
     "Clean",
     "Rebuild",
     "Static",
+    "Ninja",
+    "VerboseBuild",
     "InstallDeps",
     "MelodyAnalysis",
     "TimingLog",
@@ -651,6 +685,42 @@ function Get-CMakeCacheValue {
   return $match.Matches[0].Groups[1].Value
 }
 
+function Find-RadioifyExecutable {
+  param(
+    [string]$Root,
+    [string]$BuildDir,
+    [string]$Config
+  )
+
+  $candidates = @()
+  if ($Root) {
+    $candidates += (Join-Path $Root "dist\radioify.exe")
+  }
+  if ($BuildDir) {
+    $candidates += (Join-Path $BuildDir "radioify.exe")
+    if ($Config) {
+      $candidates += (Join-Path (Join-Path $BuildDir $Config) "radioify.exe")
+    }
+  }
+
+  foreach ($candidate in ($candidates | Select-Object -Unique)) {
+    if ($candidate -and (Test-Path $candidate)) {
+      return $candidate
+    }
+  }
+
+  if ($BuildDir -and (Test-Path $BuildDir)) {
+    $found = Get-ChildItem -Path $BuildDir -Filter "radioify.exe" -File -Recurse -ErrorAction SilentlyContinue |
+      Sort-Object FullName |
+      Select-Object -First 1
+    if ($found) {
+      return $found.FullName
+    }
+  }
+
+  return $null
+}
+
 $cmake = Resolve-CMake
 if (-not $cmake) {
   Write-Error "CMake not found. Install CMake and ensure cmake.exe is on PATH."
@@ -660,8 +730,39 @@ if (-not $cmake) {
 Write-Host "Using CMake: $cmake"
 
 $root = $PSScriptRoot
-$buildDir = Join-Path $root "build"
 $distDir = Join-Path $root "dist"
+
+# Detect/resolve Ninja. If the user explicitly requested -Ninja, require it; otherwise
+# auto-enable Ninja when ninja.exe is available on the system so builds default to Ninja.
+$ninjaExe = $null
+if ($Ninja) {
+  $ninjaExe = Resolve-Ninja
+  if (-not $ninjaExe) {
+    Write-Error "Ninja requested but ninja.exe was not found. Install Ninja or make sure it is on PATH."
+    exit 1
+  }
+}
+else {
+  $detectedNinja = Resolve-Ninja
+  if ($detectedNinja) {
+    $Ninja = $true
+    $ninjaExe = $detectedNinja
+    Write-Host "Auto-enabled Ninja: $ninjaExe"
+  }
+}
+
+$buildDirName = if ($Ninja) { "build-ninja" } else { "build" }
+$buildDir = Join-Path $root $buildDirName
+
+$cmakeGenerator = if ($Ninja) { "Ninja" } else { $null }
+if ($Ninja) {
+  Write-Host "Using generator: $cmakeGenerator"
+  Write-Host "Using Ninja: $ninjaExe"
+  if (-not $env:NINJA_STATUS) {
+    $env:NINJA_STATUS = "[%p %f/%t | %w elapsed | ETA %W] "
+  }
+  Write-Host "Using Ninja status: $env:NINJA_STATUS"
+}
 
 if ($Rebuild) {
   $Clean = $true
@@ -772,7 +873,20 @@ Assert-VcpkgRootReadableWhenRequired -VcpkgRoot $vcpkgRoot -VcpkgExe $vcpkgExe -
 $rootForCMake = Convert-ToCMakePath $root
 $buildDirForCMake = Convert-ToCMakePath $buildDir
 $installedRootForCMake = Convert-ToCMakePath $installedRoot
-$cmakeArgs = @("-S", $rootForCMake, "-B", $buildDirForCMake, "-DCMAKE_BUILD_TYPE=$Config")
+$cmakeArgs = @("-S", $rootForCMake, "-B", $buildDirForCMake, "-Wno-deprecated")
+if ($cmakeGenerator) {
+  $cmakeArgs += @("-G", $cmakeGenerator)
+  if ($ninjaExe) {
+    $cmakeArgs += "-DCMAKE_MAKE_PROGRAM=$(Convert-ToCMakePath $ninjaExe)"
+  }
+  # For single-config Ninja generator, forward the desired config explicitly.
+  if ($cmakeGenerator -eq "Ninja") {
+    $cmakeArgs += "-DCMAKE_BUILD_TYPE=$Config"
+  }
+}
+else {
+  $cmakeArgs += "-DCMAKE_BUILD_TYPE=$Config"
+}
 $cmakeArgs += "-DRADIOIFY_ENABLE_TIMING_LOG=$([bool]$TimingLog)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_STAGING_UPLOAD=$([bool]$StagingUpload)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_VIDEO_ERROR_LOG=$([bool]$VideoErrorLog)"
@@ -796,12 +910,6 @@ if ($installedRoot) {
 if ($effectiveTargetTriplet) {
   $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$effectiveTargetTriplet"
 }
-if ($env:FFMPEG_DIR) {
-  $cmakeArgs += "-DFFMPEG_DIR=$(Convert-ToCMakePath $env:FFMPEG_DIR)"
-}
-if ($env:FFMPEG_ROOT) {
-  $cmakeArgs += "-DFFMPEG_ROOT=$(Convert-ToCMakePath $env:FFMPEG_ROOT)"
-}
 if ($env:VCPKG_OVERLAY_PORTS) {
   $cmakeArgs += "-DVCPKG_OVERLAY_PORTS=$(Convert-ToCMakePathList $env:VCPKG_OVERLAY_PORTS)"
 }
@@ -809,8 +917,6 @@ if ($env:VCPKG_OVERLAY_PORTS) {
 if ($MelodyAnalysis -and (Is-StaticTriplet $effectiveTargetTriplet)) {
   Assert-OnnxStaticRegistrationDisabled -InstalledRoot $installedRoot -Triplet $effectiveTargetTriplet
 }
-
-$buildArgs = @("--build", $buildDirForCMake, "--config", $Config)
 
 $foundFfmpeg = $false
 $ffmpegTripletDir = $null
@@ -854,7 +960,12 @@ if (-not $foundFfmpeg -and -not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT)) {
 }
 if (-not ($env:FFMPEG_DIR -or $env:FFMPEG_ROOT) -and $foundFfmpeg -and $ffmpegTripletDir) {
   $env:FFMPEG_DIR = Convert-ToCMakePath $ffmpegTripletDir
-  $cmakeArgs += "-DFFMPEG_DIR=$($env:FFMPEG_DIR)"
+}
+elseif ($env:FFMPEG_DIR) {
+  $env:FFMPEG_DIR = Convert-ToCMakePath $env:FFMPEG_DIR
+}
+elseif ($env:FFMPEG_ROOT) {
+  $env:FFMPEG_ROOT = Convert-ToCMakePath $env:FFMPEG_ROOT
 }
 
 $cachePath = Join-Path $buildDir "CMakeCache.txt"
@@ -899,11 +1010,48 @@ if ($configureExit -ne 0) {
   exit $configureExit
 }
 
+$buildArgs = @("--build", $buildDirForCMake, "--target", "radioify")
+if (-not $Ninja) {
+  $buildArgs += @("--config", $Config)
+}
+if ($VerboseBuild) {
+  $buildArgs += "--verbose"
+}
+
 $buildExit = Invoke-NativeProcess -FilePath $cmake -ArgumentList $buildArgs -WorkingDirectory $root
 if ($buildExit -eq 0) {
   $staticTriplet = $tripletStaticRequested -or (Is-StaticTriplet $effectiveTargetTriplet) -or (Is-StaticTriplet $effectiveDefaultTriplet)
   if (-not $Static -and -not $staticTriplet) {
     Copy-FfmpegRuntime -TripletDir $ffmpegTripletDir -Config $Config -DistDir (Join-Path $root "dist")
+  }
+
+  $distPath = Join-Path $root "dist"
+  $expectedExe = Join-Path $distPath "radioify.exe"
+  $builtExe = Find-RadioifyExecutable -Root $root -BuildDir $buildDir -Config $Config
+  if ($builtExe -and ($builtExe -ne $expectedExe)) {
+    if (-not (Test-Path $distPath)) {
+      New-Item -ItemType Directory -Force -Path $distPath | Out-Null
+    }
+    Copy-Item -Force -Path $builtExe -Destination $expectedExe
+
+    $pdbSource = [System.IO.Path]::ChangeExtension($builtExe, ".pdb")
+    if (Test-Path $pdbSource) {
+      $pdbDest = Join-Path $distPath ([System.IO.Path]::GetFileName($pdbSource))
+      Copy-Item -Force -Path $pdbSource -Destination $pdbDest
+    }
+  }
+
+  if (-not (Test-Path $expectedExe)) {
+    Write-Error "Build completed without producing $expectedExe. Check the Ninja/MSVC output above."
+    exit 1
+  }
+
+  if (Test-Path $distPath) {
+    Write-Host "Build artifacts written to: $distPath"
+    Get-ChildItem -Path $distPath -Recurse -File | ForEach-Object {
+      Write-Host " - $($_.FullName)"
+    }
+    Write-Host "Run with: .\dist\radioify.exe <file-or-folder>"
   }
 }
 

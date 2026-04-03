@@ -16,6 +16,7 @@ Quick start:
 
 ```powershell
 .\build.ps1 -Static
+.\build.ps1 -Static -Ninja
 .\dist\radioify.exe
 ```
 
