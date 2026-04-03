@@ -455,6 +455,13 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         buildWindowUiState);
   });
   auto stopWindowThread = [&]() {
+    windowEnabled = false;
+    overlayUntilMs.store(0, std::memory_order_relaxed);
+    overlayControlHover.store(-1, std::memory_order_relaxed);
+    if (g_videoWindow.IsOpen()) {
+      g_videoWindow.SetCursorVisible(true);
+      g_videoWindow.ShowWindow(false);
+    }
     playback_session_input::signalWindowPresenterStop(inputSignals);
     if (windowPresentThread.joinable()) {
       windowPresentThread.join();

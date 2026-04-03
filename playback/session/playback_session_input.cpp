@@ -76,8 +76,23 @@ void requestPlaybackExit(const PlaybackInputView& view,
   if (signals.loopStopRequested) {
     *signals.loopStopRequested = true;
   }
+  if (signals.windowEnabled) {
+    *signals.windowEnabled = false;
+  }
+  if (signals.overlayUntilMs) {
+    signals.overlayUntilMs->store(0, std::memory_order_relaxed);
+  }
+  if (signals.redraw) {
+    *signals.redraw = true;
+  }
+  if (signals.forceRefreshArt) {
+    *signals.forceRefreshArt = true;
+  }
   if (view.videoWindow) {
     view.videoWindow->SetCursorVisible(true);
+    if (view.videoWindow->IsOpen()) {
+      view.videoWindow->ShowWindow(false);
+    }
   }
   signalWindowPresenterStop(signals);
   if (quitApp && signals.quitApplicationRequested) {
