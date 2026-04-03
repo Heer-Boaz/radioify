@@ -96,6 +96,7 @@ class Player {
   bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;
 
   bool tryGetVideoFrame(VideoFrame* out);
+  bool copyCurrentVideoFrame(VideoFrame* out);
   bool hasVideoFrame() const;
   int sourceWidth() const;
   int sourceHeight() const;

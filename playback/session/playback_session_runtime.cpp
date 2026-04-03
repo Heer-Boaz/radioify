@@ -555,6 +555,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   useWindowPresenter = windowThreadState.load(std::memory_order_relaxed) ==
                        WindowThreadState::Enabled;
+  bool previousUseWindowPresenter = useWindowPresenter;
   if (!useWindowPresenter) {
     updateRenderInputs(true, true);
     playback_screen_renderer::renderPlaybackScreen(renderInputs);
@@ -705,6 +706,10 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
     useWindowPresenter = windowThreadState.load(std::memory_order_relaxed) ==
                          WindowThreadState::Enabled;
+    if (previousUseWindowPresenter && !useWindowPresenter &&
+        player.copyCurrentVideoFrame(&frameBuffer)) {
+      haveFrame = true;
+    }
     bool presented = refreshFrameAvailability(player, useWindowPresenter,
                                               frameBuffer, frame, haveFrame,
                                               redraw, windowEnabled);
@@ -734,6 +739,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       redraw = false;
       forceRefreshArt = false;
     }
+    previousUseWindowPresenter = useWindowPresenter;
 
     if (playbackState == PlaybackSessionState::Ended ||
         (!redraw && !overlayRefreshDue && !debugRefreshDue)) {

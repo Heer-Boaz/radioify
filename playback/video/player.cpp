@@ -3575,6 +3575,19 @@ bool Player::tryGetVideoFrame(VideoFrame* out) {
   return true;
 }
 
+bool Player::copyCurrentVideoFrame(VideoFrame* out) {
+  if (!impl_ || !out) return false;
+  if (!impl_->hasFrame.load(std::memory_order_relaxed)) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(impl_->currentFrameMutex);
+  if (!impl_->hasFrame.load(std::memory_order_relaxed)) {
+    return false;
+  }
+  *out = impl_->currentFrame;
+  return true;
+}
+
 bool Player::hasVideoFrame() const {
   return impl_ && impl_->hasFrame.load(std::memory_order_relaxed);
 }
