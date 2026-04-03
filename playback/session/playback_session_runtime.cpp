@@ -555,12 +555,18 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
 
   useWindowPresenter = windowThreadState.load(std::memory_order_relaxed) ==
                        WindowThreadState::Enabled;
-  {
+  if (!useWindowPresenter) {
     updateRenderInputs(true, true);
     playback_screen_renderer::renderPlaybackScreen(renderInputs);
     const auto now = std::chrono::steady_clock::now();
     lastOverlayRefresh = now;
     lastDebugRefresh = now;
+  } else {
+    const auto now = std::chrono::steady_clock::now();
+    lastOverlayRefresh = now;
+    lastDebugRefresh = now;
+    redraw = false;
+    forceRefreshArt = false;
   }
   if (renderFailed) {
     shutdownPlaybackInfrastructure();
@@ -710,11 +716,11 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         playback_session_input::isOverlayVisible(inputSignals);
     const auto nowForRefresh = std::chrono::steady_clock::now();
     const bool overlayRefreshDue =
-        overlayVisibleNow &&
+        !useWindowPresenter && overlayVisibleNow &&
         (lastOverlayRefresh == std::chrono::steady_clock::time_point::min() ||
          nowForRefresh - lastOverlayRefresh >= std::chrono::milliseconds(100));
     const bool debugRefreshDue =
-        config.debugOverlay &&
+        !useWindowPresenter && config.debugOverlay &&
         (lastDebugRefresh == std::chrono::steady_clock::time_point::min() ||
          nowForRefresh - lastDebugRefresh >= std::chrono::milliseconds(250));
 
@@ -724,6 +730,9 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
       if (renderFailed) {
         break;
       }
+    } else if (useWindowPresenter) {
+      redraw = false;
+      forceRefreshArt = false;
     }
 
     if (playbackState == PlaybackSessionState::Ended ||
