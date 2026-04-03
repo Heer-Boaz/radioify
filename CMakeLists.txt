@@ -177,6 +177,7 @@ add_executable(radioify
   taskgate.cpp
   ui_helpers.cpp
   playback/session/playback_session_runtime.cpp
+  playback/session/playback_session_input.cpp
   videodecoder.cpp
   videowindow.cpp
   videowindow_tui.cpp
