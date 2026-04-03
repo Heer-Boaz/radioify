@@ -104,7 +104,12 @@ set(RADIOIFY_PROJECT_INCLUDE_DIRS
   ${CMAKE_SOURCE_DIR}/core
   ${CMAKE_SOURCE_DIR}/tui
   ${CMAKE_SOURCE_DIR}/tui/ui
+  ${CMAKE_SOURCE_DIR}/playback/ascii
+  ${CMAKE_SOURCE_DIR}/playback/framebuffer
   ${CMAKE_SOURCE_DIR}/playback/video
+  ${CMAKE_SOURCE_DIR}/playback/video/ascii
+  ${CMAKE_SOURCE_DIR}/playback/video/framebuffer
+  ${CMAKE_SOURCE_DIR}/playback/video/gpu
 )
 
 add_library(radioify_project_options INTERFACE)
@@ -112,8 +117,6 @@ target_include_directories(radioify_project_options INTERFACE
   ${CMAKE_SOURCE_DIR}
   ${RADIOIFY_PROJECT_INCLUDE_DIRS}
   ${CMAKE_SOURCE_DIR}/playback/session
-  ${CMAKE_SOURCE_DIR}/playback/render
-  ${CMAKE_SOURCE_DIR}/playback/window
   ${CMAKE_SOURCE_DIR}/playback/overlay
 )
 target_include_directories(radioify_project_options SYSTEM INTERFACE

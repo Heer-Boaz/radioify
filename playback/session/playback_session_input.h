@@ -7,7 +7,7 @@
 #include <string>
 
 #include "consoleinput.h"
-#include "playback/render/playback_frame_output.h"
+#include "playback/ascii/playback_frame_output.h"
 #include "playback/overlay/playback_overlay.h"
 #include "playback_session_state.h"
 

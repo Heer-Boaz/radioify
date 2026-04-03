@@ -1,4 +1,4 @@
-#include "playback_window_presenter.h"
+#include "playback_framebuffer_presenter.h"
 
 #include <algorithm>
 #include <chrono>
@@ -7,9 +7,9 @@
 
 #include "audioplayback.h"
 
-namespace playback_window_presenter {
+namespace playback_framebuffer_presenter {
 
-WindowUiState buildPlaybackWindowUiState(
+WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
     SubtitleManager& subtitleManager, PlaybackSessionState playbackState,
     bool audioOk, bool hasSubtitles,
@@ -82,7 +82,7 @@ WindowUiState buildPlaybackWindowUiState(
       overlayState, overlayControlHover.load(std::memory_order_relaxed));
 }
 
-void runWindowPresenterLoop(
+void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, std::mutex& presentMutex,
@@ -195,4 +195,4 @@ void runWindowPresenterLoop(
   }
 }
 
-}  // namespace playback_window_presenter
+}  // namespace playback_framebuffer_presenter

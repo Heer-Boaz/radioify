@@ -36,12 +36,12 @@
 #include "subtitle_manager.h"
 #include "playback_session_state.h"
 #include "playback_session_input.h"
-#include "playback_window_presenter.h"
+#include "playback_framebuffer_presenter.h"
 #include "playback_screen_renderer.h"
 #include "playback_session_bootstrap.h"
 #include "videowindow.h"
 #include "playback_mode.h"
-#include "playback/render/playback_frame_output.h"
+#include "playback/ascii/playback_frame_output.h"
 #include "playback_session_log.h"
 
 #include "timing_log.h"
@@ -444,7 +444,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
   seekState.seekQueued = &seekQueued;
 
   auto buildWindowUiState = [&]() {
-    return playback_window_presenter::buildPlaybackWindowUiState(
+    return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
         windowTitle, g_videoWindow, player, subtitleManager, playbackState,
         audioOk, hasSubtitles, enableSubtitlesShared,
         windowLocalSeekRequested, windowPendingSeekTargetSec,
@@ -452,7 +452,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
         playback_session_input::isOverlayVisible(inputSignals));
   };
   std::thread windowPresentThread([&]() {
-    playback_window_presenter::runWindowPresenterLoop(
+    playback_framebuffer_presenter::runFramebufferPresenterLoop(
         player, g_videoWindow, g_frameCache, windowThreadState,
         windowForcePresent, windowPresentMutex, windowPresentCv,
         [&]() { return playback_session_input::isOverlayVisible(inputSignals); },
