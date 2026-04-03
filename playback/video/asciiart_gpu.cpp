@@ -12,7 +12,7 @@
 #define BG_CLAMP_DEBUG 0
 
 namespace {
-    // Precompiled shader bytecode (generated from shaders/*.hlsl)
+    // Precompiled shader bytecode (generated from playback/render/shaders/*.hlsl)
     #include "asciiart_gpu_cs_main.h"
     #include "asciiart_gpu_cs_main_nv12.h"
     #include "asciiart_gpu_cs_bg_clamp.h"

@@ -149,7 +149,8 @@ namespace {
             maxChars = std::max(maxChars, static_cast<int>(l.size()));
         }
         if (maxChars == 0) {
-            outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4, 0);
+            outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4,
+                             static_cast<uint8_t>(0));
             return true;
         }
 
@@ -164,7 +165,8 @@ namespace {
         int totalTextHeight = totalGlyphH * scale;
         int totalTextWidth = maxChars * (glyphW + spacing) * scale;
 
-        outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4, 0);
+        outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4,
+                         static_cast<uint8_t>(0));
         int startX =
             centerAlign ? std::max(0, (width - totalTextWidth) / 2) : std::max(0, padX);
         int startY =
@@ -318,7 +320,8 @@ namespace {
         if (!line1.empty())
             maxChars = std::max(maxChars, static_cast<int>(line1.size()));
         if (maxChars <= 0) {
-            outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u, 0u);
+            outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
+                             static_cast<uint8_t>(0));
             return true;
         }
 
@@ -343,7 +346,8 @@ namespace {
         int startY = centerAlign ? std::max(0, (height - totalTextHeight) / 2)
                                  : std::max(0, padY);
 
-        outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u, 0u);
+        outPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
+                         static_cast<uint8_t>(0));
 
         auto setPixel = [&](int x, int y, uint8_t r, uint8_t g, uint8_t b,
                             uint8_t a) {
@@ -559,9 +563,10 @@ namespace {
             const size_t pixelBytes = static_cast<size_t>(canvasW) *
                                       static_cast<size_t>(canvasH) * 4u;
             if (outCanvas->size() != pixelBytes) {
-                outCanvas->assign(pixelBytes, 0u);
+                outCanvas->assign(pixelBytes, static_cast<uint8_t>(0));
             } else {
-                std::fill(outCanvas->begin(), outCanvas->end(), 0u);
+                std::fill(outCanvas->begin(), outCanvas->end(),
+                          static_cast<uint8_t>(0));
             }
 
             if (!assScript || assScript->empty()) {

@@ -94,142 +94,86 @@ set(RADIOIFY_NEURAL_PITCH_MODEL_SHA256
     "cd119f6f5f608d9342a1c6f81e4653f21dbcde440a96d474ecbf6f27c6253466"
     CACHE STRING "Expected SHA256 hash for the downloaded neural pitch ONNX model")
 
-set(RADIOIFY_AUDIOFILTER_SOURCES
-  audiofilter/models/resonant_networks.cpp
-  audiofilter/models/transformer_models.cpp
-  audiofilter/models/tube_models.cpp
-  audiofilter/radio1938/analysis/radio_calibration.cpp
-  audiofilter/radio1938/audio_pipeline.cpp
-  audiofilter/radio1938/audio_pipeline_execution.cpp
-  audiofilter/radio1938/radio_state.cpp
-  audiofilter/radio1938/preview/radio_preview_pipeline.cpp
-  audiofilter/radio1938/preview/radio_preview_pipeline_execution.cpp
-  audiofilter/radio1938/preview/nodes/radio_preview_program_filter_node.cpp
-  audiofilter/radio1938/preview/nodes/radio_preview_warmup_node.cpp
-  audiofilter/radio1938/models/am_detector_runtime.cpp
-  audiofilter/radio1938/models/am_detector_solver.cpp
-  audiofilter/radio1938/models/am_detector_waveform.cpp
-  audiofilter/radio1938/models/power_stage_solver.cpp
-  audiofilter/radio1938/models/power_stage_interstage.cpp
-  audiofilter/radio1938/models/power_supply.cpp
-  audiofilter/radio1938/nodes/radio_afc_node.cpp
-  audiofilter/radio1938/nodes/radio_am_detector_node.cpp
-  audiofilter/radio1938/nodes/radio_avc_node.cpp
-  audiofilter/radio1938/nodes/radio_cabinet_node.cpp
-  audiofilter/radio1938/nodes/radio_control_bus_node.cpp
-  audiofilter/radio1938/nodes/radio_detector_audio_node.cpp
-  audiofilter/radio1938/nodes/radio_final_limiter_node.cpp
-  audiofilter/radio1938/nodes/radio_front_end_node.cpp
-  audiofilter/radio1938/nodes/radio_if_strip_node.cpp
-  audiofilter/radio1938/nodes/radio_input_node.cpp
-  audiofilter/radio1938/nodes/radio_interference_derived_node.cpp
-  audiofilter/radio1938/nodes/radio_mixer_node.cpp
-  audiofilter/radio1938/nodes/radio_noise_node.cpp
-  audiofilter/radio1938/nodes/radio_output_clip_node.cpp
-  audiofilter/radio1938/nodes/radio_output_scale_node.cpp
-  audiofilter/radio1938/nodes/radio_power_node.cpp
-  audiofilter/radio1938/nodes/radio_receiver_circuit_node.cpp
-  audiofilter/radio1938/nodes/radio_receiver_input_network_node.cpp
-  audiofilter/radio1938/nodes/radio_speaker_node.cpp
-  audiofilter/radio1938/nodes/radio_tone_node.cpp
-  audiofilter/radio1938/nodes/radio_tuning_node.cpp
-  audiofilter/radio1938/radio_lifecycle.cpp
-  audiofilter/radio1938/radio_presets.cpp
-  audiofilter/radio1938/signal_entrypoints.cpp
-)
-
-set(RADIOIFY_RADIO_ENGINE_SOURCES
-  config/radio_settings.cpp
-  ${RADIOIFY_AUDIOFILTER_SOURCES}
-)
-
 set(RADIOIFY_PROJECT_INCLUDE_DIRS
   ${CMAKE_SOURCE_DIR}/app
   ${CMAKE_SOURCE_DIR}/audio
-  ${CMAKE_SOURCE_DIR}/analysis
-  ${CMAKE_SOURCE_DIR}/config
+  ${CMAKE_SOURCE_DIR}/audio/analysis
+  ${CMAKE_SOURCE_DIR}/audio/audiofilter
+  ${CMAKE_SOURCE_DIR}/audio/audiofilter/config
+  ${CMAKE_SOURCE_DIR}/audio/loopsplit
   ${CMAKE_SOURCE_DIR}/core
-  ${CMAKE_SOURCE_DIR}/features/loopsplit
   ${CMAKE_SOURCE_DIR}/tui
-  ${CMAKE_SOURCE_DIR}/ui
-  ${CMAKE_SOURCE_DIR}/video
+  ${CMAKE_SOURCE_DIR}/tui/ui
+  ${CMAKE_SOURCE_DIR}/playback/video
 )
 
-add_executable(radioify
-  app/app_common.cpp
-  app/crash_handler.cpp
-  app/main.cpp
-  tui/tui.cpp
-  tui/tui_export.cpp
-  video/asciiart.cpp
-  video/asciiart_gpu.cpp
-  audio/audioplayback.cpp
-  audio/audio_format_options.cpp
-  analysis/melodyanalysiscache.cpp
-  analysis/melodyanalyzer.cpp
-  analysis/neuralpitch.cpp
-  ui/browsermeta.cpp
-    ui/consoleinput.cpp
-    ui/ui_inputlogic.cpp
-    ui/consolescreen.cpp
-    audio/ffmpegaudio.cpp
-    audio/media_formats.cpp
-    core/runtime_helpers.cpp
-    audio/flacaudio.cpp
-  video/gpu_shared.cpp
-  audio/gmeaudio.cpp
-  audio/gsfaudio.cpp
-  audio/midiaudio.cpp
-  audio/vgmaudio.cpp
-  audio/kssaudio.cpp
-  audio/psfaudio.cpp
-  audio/m4adecoder.cpp
-  ui/optionsbrowser.cpp
-  ui/tracklist.cpp
-  video/player.cpp
-  core/queues.cpp
-  core/taskgate.cpp
-  ui/ui_helpers.cpp
-  playback/session/playback_session_runtime.cpp
-  playback/session/playback_session_input.cpp
-  video/videodecoder.cpp
-  video/videowindow.cpp
-  tui/videowindow_tui.cpp
-  video/videoprocessor.cpp
-  playback/overlay/playback_overlay.cpp
-  playback/render/playback_screen_renderer.cpp
-  playback/render/playback_frame_output_ascii.cpp
-  playback/render/playback_frame_output_console.cpp
-  playback/window/playback_window_presenter.cpp
-  playback/session/playback_session_bootstrap.cpp
-  playback/session/playback_session_log.cpp
-  ${RADIOIFY_RADIO_ENGINE_SOURCES}
-  video/subtitle_manager.cpp
-  analysis/calibration_report.cpp
-  features/loopsplit/loopsplit.cpp
-  features/loopsplit/loopsplit_cli.cpp
-  features/loopsplit/loopsplit_ui.cpp
-  )
-radioify_enable_strict_warnings(radioify)
-
-add_executable(radio_measurements
-  tools/radio_measurements.cpp
-  ${RADIOIFY_RADIO_ENGINE_SOURCES}
-  )
-radioify_enable_strict_warnings(radio_measurements)
-
-add_executable(radio_node_physics
-  tools/radio_node_physics.cpp
-  ${RADIOIFY_RADIO_ENGINE_SOURCES}
-  )
-radioify_enable_strict_warnings(radio_node_physics)
-
-target_compile_definitions(radioify PRIVATE
+add_library(radioify_project_options INTERFACE)
+target_include_directories(radioify_project_options INTERFACE
+  ${CMAKE_SOURCE_DIR}
+  ${RADIOIFY_PROJECT_INCLUDE_DIRS}
+  ${CMAKE_SOURCE_DIR}/playback/session
+  ${CMAKE_SOURCE_DIR}/playback/render
+  ${CMAKE_SOURCE_DIR}/playback/window
+  ${CMAKE_SOURCE_DIR}/playback/overlay
+)
+target_include_directories(radioify_project_options SYSTEM INTERFACE
+  ${CMAKE_SOURCE_DIR}/third_party
+)
+target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_ENABLE_TIMING_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_TIMING_LOG}>,1,0>
   RADIOIFY_ENABLE_VIDEO_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_VIDEO_ERROR_LOG}>,1,0>
   RADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_FFMPEG_ERROR_LOG}>,1,0>
   RADIOIFY_ENABLE_STAGING_UPLOAD=$<IF:$<BOOL:${RADIOIFY_ENABLE_STAGING_UPLOAD}>,1,0>
 )
+target_compile_options(radioify_project_options INTERFACE
+  $<$<COMPILE_LANG_AND_ID:C,MSVC>:/external:W0>
+  $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/external:W0>
+)
+
+function(radioify_add_module_object_library target_name)
+  add_library(${target_name} OBJECT ${ARGN})
+  target_link_libraries(${target_name} PRIVATE radioify_project_options)
+  radioify_enable_strict_warnings(${target_name})
+endfunction()
+
+add_subdirectory(app)
+add_subdirectory(audio)
+add_subdirectory(core)
+add_subdirectory(playback)
+add_subdirectory(tools)
+add_subdirectory(tui)
+
+add_executable(radioify)
+target_sources(radioify PRIVATE
+  $<TARGET_OBJECTS:radioify_app>
+  $<TARGET_OBJECTS:radioify_tui>
+  $<TARGET_OBJECTS:radioify_video>
+  $<TARGET_OBJECTS:radioify_audio>
+  $<TARGET_OBJECTS:radioify_analysis>
+  $<TARGET_OBJECTS:radioify_ui>
+  $<TARGET_OBJECTS:radioify_core>
+  $<TARGET_OBJECTS:radioify_playback>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+  $<TARGET_OBJECTS:radioify_loopsplit>
+)
+target_link_libraries(radioify PRIVATE radioify_project_options)
+
+add_executable(radio_measurements)
+target_sources(radio_measurements PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_radio_measurements>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+)
+target_link_libraries(radio_measurements PRIVATE radioify_project_options)
+
+add_executable(radio_node_physics)
+target_sources(radio_node_physics PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_radio_node_physics>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+)
+target_link_libraries(radio_node_physics PRIVATE radioify_project_options)
 
 if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL
@@ -245,7 +189,7 @@ if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH
   add_dependencies(radioify radioify_neural_pitch_model)
 endif()
 
-set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders")
+set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/playback/render/shaders")
 set(RADIOIFY_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(RADIOIFY_EMBED_BINARY_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/EmbedBinary.cmake")
 
@@ -526,7 +470,8 @@ if (WIN32)
   )
 
   add_dependencies(radioify radioify_shader_blobs)
-  target_include_directories(radioify PRIVATE "${RADIOIFY_GENERATED_DIR}")
+  add_dependencies(radioify_video radioify_shader_blobs)
+  target_include_directories(radioify_project_options INTERFACE "${RADIOIFY_GENERATED_DIR}")
   target_sources(radioify PRIVATE ${RADIOIFY_SHADER_HEADERS})
 endif()
 
@@ -535,19 +480,6 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
   string(TOUPPER "${config}" config_upper)
   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_SOURCE_DIR}/dist")
 endforeach()
-
-target_include_directories(radioify PRIVATE third_party)
-target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR})
-target_include_directories(radioify PRIVATE ${RADIOIFY_PROJECT_INCLUDE_DIRS})
-target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/session)
-target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/render)
-target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/window)
-target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/overlay)
-
-target_include_directories(radio_measurements PRIVATE ${CMAKE_SOURCE_DIR})
-target_include_directories(radio_measurements PRIVATE ${RADIOIFY_PROJECT_INCLUDE_DIRS})
-target_include_directories(radio_node_physics PRIVATE ${CMAKE_SOURCE_DIR})
-target_include_directories(radio_node_physics PRIVATE ${RADIOIFY_PROJECT_INCLUDE_DIRS})
 
 # vcpkg's FFmpeg port ships a `FindFFMPEG.cmake` module under
 # `vcpkg_installed/<triplet>/share/ffmpeg/`. If the vcpkg toolchain file wasn't
@@ -680,8 +612,7 @@ if (NOT FFMPEG_FOUND)
   message(FATAL_ERROR "FFmpeg not found. Set FFMPEG_DIR or install dev libraries.")
 endif()
 
-target_include_directories(radioify PRIVATE ${FFMPEG_INCLUDE_DIRS})
-target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+target_include_directories(radioify_project_options SYSTEM INTERFACE ${FFMPEG_INCLUDE_DIRS})
 if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
@@ -765,14 +696,14 @@ if (NOT RADIOIFY_HAS_LIBASS)
   message(FATAL_ERROR
     "libass is required for ASS subtitle rendering. Install libass (for vcpkg: `vcpkg install libass:x64-windows`) and reconfigure.")
 endif()
-target_include_directories(radioify PRIVATE ${_radioify_libass_include_dirs})
+target_include_directories(radioify_project_options SYSTEM INTERFACE ${_radioify_libass_include_dirs})
 if (RADIOIFY_LIBASS_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${_radioify_libass_libraries})
 message(STATUS "libass found: ASS advanced renderer enabled")
 
-target_compile_definitions(radioify PRIVATE
+target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_HAS_LIBASS=$<IF:$<BOOL:${RADIOIFY_HAS_LIBASS}>,1,0>
 )
 
@@ -788,6 +719,7 @@ if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE)
 
   if (_radioify_onnx_target)
     set(RADIOIFY_HAS_ONNXRUNTIME ON)
+    target_link_libraries(radioify_analysis PRIVATE ${_radioify_onnx_target})
     target_link_libraries(radioify PRIVATE ${_radioify_onnx_target})
     message(STATUS "Neural pitch: ONNX Runtime enabled via target ${_radioify_onnx_target}.")
   else()
@@ -803,7 +735,7 @@ if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE)
     )
     if (ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
       set(RADIOIFY_HAS_ONNXRUNTIME ON)
-      target_include_directories(radioify PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+      target_include_directories(radioify_project_options SYSTEM INTERFACE ${ONNXRUNTIME_INCLUDE_DIR})
       target_link_libraries(radioify PRIVATE ${ONNXRUNTIME_LIBRARY})
       message(STATUS "Neural pitch: ONNX Runtime enabled via manual lookup.")
     else()
@@ -812,7 +744,7 @@ if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE)
   endif()
 endif()
 
-target_compile_definitions(radioify PRIVATE
+target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_ENABLE_MELODY_ANALYSIS=$<IF:$<BOOL:${RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE}>,1,0>
   RADIOIFY_ENABLE_NEURAL_PITCH=$<IF:$<BOOL:${RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE}>,1,0>
   RADIOIFY_HAS_ONNXRUNTIME=$<IF:$<BOOL:${RADIOIFY_HAS_ONNXRUNTIME}>,1,0>
@@ -881,6 +813,7 @@ target_include_directories(psfcore PUBLIC
 )
 target_compile_definitions(psfcore PRIVATE EMU_COMPILE EMU_LITTLE_ENDIAN)
 target_link_libraries(psfcore PUBLIC ZLIB::ZLIB)
+target_link_libraries(radioify_audio PRIVATE psfcore)
 target_link_libraries(radioify PRIVATE psfcore)
 target_link_libraries(radioify PRIVATE sexypsf)
 
@@ -889,6 +822,7 @@ if (DEFINED CMAKE_WARN_DEPRECATED)
   set(_radioify_warn_deprecated_defined ON)
   set(_radioify_warn_deprecated_value ${CMAKE_WARN_DEPRECATED})
 endif()
+set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "Suppress third-party CMake deprecation warnings" FORCE)
 set(CMAKE_WARN_DEPRECATED OFF)
 FetchContent_Declare(
   libkss
@@ -902,8 +836,10 @@ foreach(_radioify_libkss_target IN ITEMS emu2149 emu2212 emu2413 emu8950 emu7648
     radioify_disable_warnings(${_radioify_libkss_target})
   endif()
 endforeach()
-target_include_directories(radioify PRIVATE ${libkss_SOURCE_DIR}/src)
-target_include_directories(radioify PRIVATE ${libkss_SOURCE_DIR}/modules)
+target_include_directories(radioify_project_options SYSTEM INTERFACE
+  ${libkss_SOURCE_DIR}/src
+  ${libkss_SOURCE_DIR}/modules
+)
 target_link_libraries(radioify PRIVATE kss)
 
 set(_radioify_disable_sdl2_defined OFF)
@@ -923,7 +859,7 @@ foreach(_radioify_gme_target IN ITEMS gme gme_player demo demo_mem)
     radioify_disable_warnings(${_radioify_gme_target})
   endif()
 endforeach()
-target_include_directories(radioify PRIVATE ${gme_SOURCE_DIR})
+target_include_directories(radioify_project_options SYSTEM INTERFACE ${gme_SOURCE_DIR})
 target_link_libraries(radioify PRIVATE gme)
 if (_radioify_disable_sdl2_defined)
   set(CMAKE_DISABLE_FIND_PACKAGE_SDL2 ${_radioify_disable_sdl2_value})
@@ -932,6 +868,7 @@ else()
   unset(CMAKE_DISABLE_FIND_PACKAGE_SDL2)
 endif()
 if (_radioify_warn_deprecated_defined)
+  set(CMAKE_WARN_DEPRECATED ${_radioify_warn_deprecated_value} CACHE BOOL "Restore third-party CMake deprecation warning setting" FORCE)
   set(CMAKE_WARN_DEPRECATED ${_radioify_warn_deprecated_value})
 else()
   unset(CMAKE_WARN_DEPRECATED CACHE)
@@ -939,7 +876,9 @@ else()
 endif()
 
 option(RADIOIFY_DISABLE_GSF_GPL "Disable GSF playback via GPL PlayGSF core" OFF)
-target_compile_definitions(radioify PRIVATE RADIOIFY_DISABLE_GSF_GPL=$<BOOL:${RADIOIFY_DISABLE_GSF_GPL}>)
+target_compile_definitions(radioify_project_options INTERFACE
+  RADIOIFY_DISABLE_GSF_GPL=$<BOOL:${RADIOIFY_DISABLE_GSF_GPL}>
+)
 
 if (NOT RADIOIFY_DISABLE_GSF_GPL)
   add_library(playgsf STATIC
@@ -962,7 +901,7 @@ if (NOT RADIOIFY_DISABLE_GSF_GPL)
     ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA
     ${CMAKE_SOURCE_DIR}/third_party/playgsf/libresample-0.1.3/include
   )
-  target_include_directories(radioify PRIVATE
+  target_include_directories(radioify_project_options SYSTEM INTERFACE
     ${CMAKE_SOURCE_DIR}/third_party/playgsf
     ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA
     ${CMAKE_SOURCE_DIR}/third_party/playgsf/libresample-0.1.3/include
@@ -1001,7 +940,7 @@ foreach(_radioify_libvgm_target IN ITEMS vgm-utils vgm-audio vgm-emu vgm-player 
     radioify_disable_warnings(${_radioify_libvgm_target})
   endif()
 endforeach()
-target_include_directories(radioify PRIVATE ${libvgm_SOURCE_DIR})
+target_include_directories(radioify_project_options SYSTEM INTERFACE ${libvgm_SOURCE_DIR})
 set(_radioify_libvgm_target "")
 foreach(_candidate IN ITEMS vgm-player vgm-player-static vgmplayer vgmplayer-static
                            vgm_player libvgm)
