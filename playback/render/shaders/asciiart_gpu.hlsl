@@ -65,6 +65,12 @@ static const float kShadowBlueGuardRange = 36.0f;
 static const float kShadowBlueDominanceStart = 0.06f;
 static const float kShadowBlueDominanceFull = 0.20f;
 static const float kShadowBlueGuardKeep = 0.45f;
+static const float kSourceBlueSignalStart = 0.030f;
+static const float kSourceBlueSignalFull = 0.180f;
+static const float kSourceChromaSignalStart = 0.020f;
+static const float kSourceChromaSignalFull = 0.140f;
+static const float kSourceBlueGuardRelax = 0.30f;
+static const float kSourceBlueInkBoost = 0.10f;
 static const float kSignalStrengthFloor = 0.2f;
 #define BG_CLAMP 1
 #define BG_CLAMP_DEBUG 0
@@ -107,12 +113,23 @@ float GetShadowSaturation(float y255) {
     return lerp(kShadowMinSaturation, 1.0f, sqrt(t));
 }
 
+float GetSourceBlueConfidence(float blueSignal, float chromaSignal) {
+    float blue = saturate((blueSignal - kSourceBlueSignalStart) /
+                          max(kSourceBlueSignalFull - kSourceBlueSignalStart,
+                              1e-5f));
+    float chroma = saturate((chromaSignal - kSourceChromaSignalStart) /
+                            max(kSourceChromaSignalFull -
+                                    kSourceChromaSignalStart,
+                                1e-5f));
+    return blue * chroma;
+}
+
 float3 ApplySaturationAroundLuma(float3 rgb, float y255, float saturation) {
     float gray = y255 / 255.0f;
     return saturate(gray.xxx + (rgb - gray.xxx) * saturation);
 }
 
-float3 CompressShadowChroma(float3 rgb) {
+float3 CompressShadowChroma(float3 rgb, float sourceBlueConfidence) {
     float y = GetLuma(rgb);
     float keep = GetShadowSaturation(y);
     rgb = ApplySaturationAroundLuma(rgb, y, keep);
@@ -124,7 +141,9 @@ float3 CompressShadowChroma(float3 rgb) {
                                max(kShadowBlueDominanceFull -
                                        kShadowBlueDominanceStart,
                                    1e-5f));
-    float guard = dark * dominance;
+    float guard =
+        dark * dominance * (1.0f - kSourceBlueGuardRelax *
+                                          saturate(sourceBlueConfidence));
     if (guard <= 0.0f) {
         return saturate(rgb);
     }
@@ -321,12 +340,20 @@ float GetInkLevelFromLum(float lum) {
     return saturate(coverage);
 }
 
-float4 SampleInput(float2 uv) {
+struct InputSample {
+    float3 rgb;
+    float chromaSignal;
+    float blueSignal;
+};
+
+InputSample SampleInput(float2 uv) {
     float2 srcUv = RotateInputUV(uv);
-    float4 color;
+    InputSample sample;
 #ifdef NV12_INPUT
     float y = ExpandYNorm(TextureY.SampleLevel(LinearSampler, srcUv, 0));
     float2 uv_val = ExpandUV(TextureUV.SampleLevel(LinearSampler, srcUv, 0));
+    sample.chromaSignal = max(abs(uv_val.x), abs(uv_val.y));
+    sample.blueSignal = max(uv_val.x - max(uv_val.y, 0.0f) * 0.75f, 0.0f);
 
     float r = 0.0f;
     float g = 0.0f;
@@ -344,12 +371,16 @@ float4 SampleInput(float2 uv) {
         g = y - 0.1873 * uv_val.x - 0.4681 * uv_val.y;
         b = y + 1.8556 * uv_val.x;
     }
-    color = float4(r, g, b, 1.0);
+    sample.rgb = float3(r, g, b);
 #else
-    color = InputTexture.SampleLevel(LinearSampler, srcUv, 0);
+    sample.rgb = InputTexture.SampleLevel(LinearSampler, srcUv, 0).rgb;
+    float maxC = max(max(sample.rgb.r, sample.rgb.g), sample.rgb.b);
+    float minC = min(min(sample.rgb.r, sample.rgb.g), sample.rgb.b);
+    sample.chromaSignal = maxC - minC;
+    sample.blueSignal = max(sample.rgb.b - max(sample.rgb.r, sample.rgb.g), 0.0f);
 #endif
 
-    float3 rgb = color.rgb;
+    float3 rgb = sample.rgb;
 #ifdef NV12_INPUT
     if (yuvTransfer != kTransferSdr) {
         rgb = ApplyHdrToSdr(rgb);
@@ -361,7 +392,8 @@ float4 SampleInput(float2 uv) {
         rgb = saturate(rgb);
     }
 
-    return float4(rgb, color.a);
+    sample.rgb = rgb;
+    return sample;
 }
 
 struct DotInfo {
@@ -369,6 +401,7 @@ struct DotInfo {
     float luma;
     float edge;
     float3 color;
+    float sourceBlueConfidence;
 };
 
 [numthreads(8, 8, 1)]
@@ -390,6 +423,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float cellEdgeMax = 0.0f;
 
     float3 sumAll = float3(0,0,0);
+    float sumAllBlueConfidence = 0.0f;
 
     // 1. Gather Data
     for (int i = 0; i < 8; ++i) {
@@ -406,7 +440,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         
         // For color, we still use the center sample (or could implement SampleInputArea)
         // Using center sample for color is usually fine as luma drives the structure
-        float4 color = SampleInput(float2(u, v)); 
+        InputSample sample = SampleInput(float2(u, v)); 
         
         // 3x3 Sobel Edge Detection (using area samples for stability)
         // Use dot stride to match CPU behavior (detect edges between dots, not pixels)
@@ -432,13 +466,16 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         dots[i].idx = i;
         dots[i].luma = luma;
         dots[i].edge = edge;
-        dots[i].color = color.rgb;
+        dots[i].color = sample.rgb;
+        dots[i].sourceBlueConfidence =
+            GetSourceBlueConfidence(sample.blueSignal, sample.chromaSignal);
 
         cellLumMin = min(cellLumMin, luma);
         cellLumMax = max(cellLumMax, luma);
         cellLumSum += luma;
         cellEdgeMax = max(cellEdgeMax, edge);
-        sumAll += color.rgb;
+        sumAll += sample.rgb;
+        sumAllBlueConfidence += dots[i].sourceBlueConfidence;
     }
 
     float cellBgLum = (cellLumSum - cellLumMin - cellLumMax) * (1.0f / 6.0f);
@@ -475,6 +512,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     uint bitmask = 0;
     float3 sumInk = float3(0,0,0);
     float3 sumBg = float3(0,0,0);
+    float sumInkBlueConfidence = 0.0f;
+    float sumBgBlueConfidence = 0.0f;
     int inkCount = 0;
     int bgCount = 0;
 
@@ -507,9 +546,11 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         if (isDot) {
             bitmask |= (1 << bit);
             sumInk += dots[j].color;
+            sumInkBlueConfidence += dots[j].sourceBlueConfidence;
             inkCount++;
         } else {
             sumBg += dots[j].color;
+            sumBgBlueConfidence += dots[j].sourceBlueConfidence;
             bgCount++;
         }
     }
@@ -533,6 +574,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         bitmask = ditherMask;
         sumInk = float3(0,0,0);
         sumBg = float3(0,0,0);
+        sumInkBlueConfidence = 0.0f;
+        sumBgBlueConfidence = 0.0f;
         inkCount = 0;
         bgCount = 0;
         [unroll]
@@ -540,9 +583,11 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             uint bit = (uint)bitMap[dots[k2].idx];
             if (bitmask & (1u << bit)) {
                 sumInk += dots[k2].color;
+                sumInkBlueConfidence += dots[k2].sourceBlueConfidence;
                 inkCount++;
             } else {
                 sumBg += dots[k2].color;
+                sumBgBlueConfidence += dots[k2].sourceBlueConfidence;
                 bgCount++;
             }
         }
@@ -555,6 +600,12 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // If no dots are set, the cell is effectively all background.
     float3 curFg = (inkCount > 0) ? (sumInk / inkCount) : (sumAll / 8.0f);
     float3 curBg = (bgCount > 0) ? (sumBg / bgCount) : (sumAll / 8.0f);
+    float curFgBlueConfidence =
+        (inkCount > 0) ? (sumInkBlueConfidence / inkCount)
+                       : (sumAllBlueConfidence / 8.0f);
+    float curBgBlueConfidence =
+        (bgCount > 0) ? (sumBgBlueConfidence / bgCount)
+                      : (sumAllBlueConfidence / 8.0f);
 
     // Color Lift: Ensure colors aren't completely black to maintain some visibility.
     // Currently set to 0 to allow true black (zwart-zwart).
@@ -634,6 +685,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (curY < 60.0f) {
         adaptiveSat = adaptiveSat * (curY / 60.0f);
     }
+    adaptiveSat *=
+        1.0f + kSourceBlueInkBoost * saturate(curFgBlueConfidence) *
+        saturate((60.0f - curY) / 60.0f);
     curFg = ApplySaturationAroundLuma(curFg, curY, adaptiveSat / 256.0f);
 
     // Temporal Stability (Ghosting Reduction)
@@ -671,8 +725,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (diffBg < resetThresh) {
         curBg = lerp(prevBg, curBg, bgBlendAlpha);
     }
-    curFg = CompressShadowChroma(curFg);
-    curBg = CompressShadowChroma(curBg);
+    curFg = CompressShadowChroma(curFg, curFgBlueConfidence);
+    curBg = CompressShadowChroma(curBg, curBgBlueConfidence);
 
     bool fullMask = (dotCount == 8u);
     if (fullMask && bgCount == 0) {
