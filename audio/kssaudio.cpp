@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "runtime_helpers.h"
+
 namespace {
 constexpr float kInt16ToFloat = 1.0f / 32768.0f;
 constexpr int kDefaultTrackLengthMs = 150000;
@@ -12,15 +14,6 @@ void setError(std::string* error, const char* message) {
   if (error && message) {
     *error = message;
   }
-}
-
-std::string toUtf8String(const std::filesystem::path& path) {
-#ifdef _WIN32
-  auto u8 = path.u8string();
-  return std::string(u8.begin(), u8.end());
-#else
-  return path.string();
-#endif
 }
 
 uint64_t msToFrames(int64_t ms, uint32_t sampleRate) {

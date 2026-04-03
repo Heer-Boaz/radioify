@@ -56,6 +56,7 @@ extern "C" {
 #include "clock.h"
 #include "gpu_shared.h"
 #include "queues.h"
+#include "runtime_helpers.h"
 #include "timing_log.h"
 #include "ui_helpers.h"
 
@@ -117,12 +118,6 @@ std::string ffmpegError(int err) {
   buf[0] = '\0';
   av_strerror(err, buf, sizeof(buf));
   return std::string(buf);
-}
-
-int64_t nowUs() {
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
 }
 
 int64_t ptsToUs(int64_t pts, AVRational tb) {

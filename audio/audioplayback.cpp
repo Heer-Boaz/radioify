@@ -35,6 +35,7 @@ extern "C" {
 #include "psfaudio.h"
 #include "radio.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
+#include "runtime_helpers.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -62,30 +63,6 @@ extern "C" {
 #include "audioplayback_internal.h"
 
 AudioPlaybackState gAudio;
-
-#if RADIOIFY_ENABLE_TIMING_LOG
-static std::string toUtf8String(const std::filesystem::path& p) {
-#ifdef _WIN32
-  auto u8 = p.u8string();
-  return std::string(u8.begin(), u8.end());
-#else
-  return p.string();
-#endif
-}
-#endif
-
-int64_t nowUs() {
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
-
-void validateInputFile(const std::filesystem::path& p) {
-  if (p.empty()) return;
-  if (!std::filesystem::exists(p)) return;
-  if (std::filesystem::is_directory(p)) return;
-  if (!isSupportedAudioExt(p)) return;
-}
 
 void audioRingBufferInit(AudioRingBuffer* buffer, size_t frames,
                          uint32_t channels) {
@@ -1623,7 +1600,9 @@ bool ensurePlaybackDeviceRunning() {
 
 bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
                 int trackIndex) {
-  validateInputFile(file);
+  if (!validateSupportedAudioInputFile(file, &gAudio.lastInitError)) {
+    return false;
+  }
   melodyOfflineStop();
   gAudio.state.audioLeadSilenceFrames.store(0);
   if (gAudio.audition.active.load()) {

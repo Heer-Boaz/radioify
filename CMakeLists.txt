@@ -139,49 +139,63 @@ set(RADIOIFY_AUDIOFILTER_SOURCES
 )
 
 set(RADIOIFY_RADIO_ENGINE_SOURCES
-  radio_settings.cpp
+  config/radio_settings.cpp
   ${RADIOIFY_AUDIOFILTER_SOURCES}
 )
 
+set(RADIOIFY_PROJECT_INCLUDE_DIRS
+  ${CMAKE_SOURCE_DIR}/app
+  ${CMAKE_SOURCE_DIR}/audio
+  ${CMAKE_SOURCE_DIR}/analysis
+  ${CMAKE_SOURCE_DIR}/config
+  ${CMAKE_SOURCE_DIR}/core
+  ${CMAKE_SOURCE_DIR}/features/loopsplit
+  ${CMAKE_SOURCE_DIR}/tui
+  ${CMAKE_SOURCE_DIR}/ui
+  ${CMAKE_SOURCE_DIR}/video
+)
+
 add_executable(radioify
-  app_common.cpp
-  crash_handler.cpp
-  main.cpp
-  tui.cpp
-  asciiart.cpp
-  asciiart_gpu.cpp
-  audioplayback.cpp
-  audio_format_options.cpp
-  melodyanalysiscache.cpp
-  melodyanalyzer.cpp
-  neuralpitch.cpp
-  browsermeta.cpp
-    consoleinput.cpp
-    ui_inputlogic.cpp
-    consolescreen.cpp
-    ffmpegaudio.cpp
-    media_formats.cpp
-    flacaudio.cpp
-  gpu_shared.cpp
-  gmeaudio.cpp
-  gsfaudio.cpp
-  midiaudio.cpp
-  vgmaudio.cpp
-  kssaudio.cpp
-  psfaudio.cpp
-  m4adecoder.cpp
-  optionsbrowser.cpp
-  tracklist.cpp
-  player.cpp
-  queues.cpp
-  taskgate.cpp
-  ui_helpers.cpp
+  app/app_common.cpp
+  app/crash_handler.cpp
+  app/main.cpp
+  tui/tui.cpp
+  tui/tui_export.cpp
+  video/asciiart.cpp
+  video/asciiart_gpu.cpp
+  audio/audioplayback.cpp
+  audio/audio_format_options.cpp
+  analysis/melodyanalysiscache.cpp
+  analysis/melodyanalyzer.cpp
+  analysis/neuralpitch.cpp
+  ui/browsermeta.cpp
+    ui/consoleinput.cpp
+    ui/ui_inputlogic.cpp
+    ui/consolescreen.cpp
+    audio/ffmpegaudio.cpp
+    audio/media_formats.cpp
+    core/runtime_helpers.cpp
+    audio/flacaudio.cpp
+  video/gpu_shared.cpp
+  audio/gmeaudio.cpp
+  audio/gsfaudio.cpp
+  audio/midiaudio.cpp
+  audio/vgmaudio.cpp
+  audio/kssaudio.cpp
+  audio/psfaudio.cpp
+  audio/m4adecoder.cpp
+  ui/optionsbrowser.cpp
+  ui/tracklist.cpp
+  video/player.cpp
+  core/queues.cpp
+  core/taskgate.cpp
+  ui/ui_helpers.cpp
   playback/session/playback_session_runtime.cpp
   playback/session/playback_session_input.cpp
-  videodecoder.cpp
-  videowindow.cpp
-  videowindow_tui.cpp
-  videoprocessor.cpp
+  video/videodecoder.cpp
+  video/videowindow.cpp
+  tui/videowindow_tui.cpp
+  video/videoprocessor.cpp
   playback/overlay/playback_overlay.cpp
   playback/render/playback_screen_renderer.cpp
   playback/render/playback_frame_output_ascii.cpp
@@ -190,22 +204,22 @@ add_executable(radioify
   playback/session/playback_session_bootstrap.cpp
   playback/session/playback_session_log.cpp
   ${RADIOIFY_RADIO_ENGINE_SOURCES}
-  subtitle_manager.cpp
-  calibration_report.cpp
-  loopsplit.cpp
-  loopsplit_cli.cpp
-  loopsplit_ui.cpp
+  video/subtitle_manager.cpp
+  analysis/calibration_report.cpp
+  features/loopsplit/loopsplit.cpp
+  features/loopsplit/loopsplit_cli.cpp
+  features/loopsplit/loopsplit_ui.cpp
   )
 radioify_enable_strict_warnings(radioify)
 
 add_executable(radio_measurements
-  radio_measurements.cpp
+  tools/radio_measurements.cpp
   ${RADIOIFY_RADIO_ENGINE_SOURCES}
   )
 radioify_enable_strict_warnings(radio_measurements)
 
 add_executable(radio_node_physics
-  radio_node_physics.cpp
+  tools/radio_node_physics.cpp
   ${RADIOIFY_RADIO_ENGINE_SOURCES}
   )
 radioify_enable_strict_warnings(radio_node_physics)
@@ -524,10 +538,16 @@ endforeach()
 
 target_include_directories(radioify PRIVATE third_party)
 target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(radioify PRIVATE ${RADIOIFY_PROJECT_INCLUDE_DIRS})
 target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/session)
 target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/render)
 target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/window)
 target_include_directories(radioify PRIVATE ${CMAKE_SOURCE_DIR}/playback/overlay)
+
+target_include_directories(radio_measurements PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(radio_measurements PRIVATE ${RADIOIFY_PROJECT_INCLUDE_DIRS})
+target_include_directories(radio_node_physics PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(radio_node_physics PRIVATE ${RADIOIFY_PROJECT_INCLUDE_DIRS})
 
 # vcpkg's FFmpeg port ships a `FindFFMPEG.cmake` module under
 # `vcpkg_installed/<triplet>/share/ffmpeg/`. If the vcpkg toolchain file wasn't

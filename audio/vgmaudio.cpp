@@ -6,6 +6,8 @@
 #include <cstring>
 #include <limits>
 
+#include "runtime_helpers.h"
+
 #if __has_include(<player/playera.hpp>)
 #include <player/playera.hpp>
 #elif __has_include(<player/playera.h>)
@@ -42,12 +44,6 @@ void setError(std::string* error, const char* message) {
     *error = message;
   }
 }
-
-#ifndef _WIN32
-std::string toUtf8String(const std::filesystem::path& p) {
-  return p.string();
-}
-#endif
 
 double speedFromStep(int step) {
   int idx = std::clamp(step, 0, static_cast<int>(std::size(kSpeedSteps)) - 1);

@@ -1,6 +1,6 @@
 #include "app_common.h"
 #include "crash_handler.h"
-#include "tui.h"
+#include "tui/tui.h"
 
 int main(int argc, char** argv) {
   installCrashHandler();

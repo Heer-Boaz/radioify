@@ -6,15 +6,6 @@
 #include <cstdlib>
 #include <vector>
 
-std::string toUtf8String(const std::filesystem::path& p) {
-#ifdef _WIN32
-  auto u8 = p.u8string();
-  return std::string(u8.begin(), u8.end());
-#else
-  return p.string();
-#endif
-}
-
 std::optional<std::string> getEnvString(const char* name) {
   if (!name || name[0] == '\0') return std::nullopt;
 #ifdef _WIN32

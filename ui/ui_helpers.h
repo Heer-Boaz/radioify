@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "runtime_helpers.h"
 #include "consolescreen.h"
 
 struct BufferCell {
@@ -23,7 +24,6 @@ struct AsciiArtLayout {
   int height = 1;
 };
 
-std::string toUtf8String(const std::filesystem::path& p);
 std::optional<std::string> getEnvString(const char* name);
 std::FILE* openFileUtf8(const std::filesystem::path& path, const char* mode);
 

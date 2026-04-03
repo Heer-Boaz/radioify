@@ -6,20 +6,7 @@
 
 #include "loopsplit.h"
 #include "media_formats.h"
-
-namespace {
-
-void validateInputFile(const std::filesystem::path& p) {
-  if (p.empty()) die("Missing input file path.");
-  if (!std::filesystem::exists(p)) die("Input file not found: " + p.string());
-  if (std::filesystem::is_directory(p)) die("Input path must be a file: " + p.string());
-  if (!isSupportedAudioExt(p)) {
-    die("Unsupported input format '" + p.extension().string() +
-        "'. Supported: " + supportedAudioExtensionsText() + ".");
-  }
-}
-
-}  // namespace
+#include "runtime_helpers.h"
 
 std::pair<std::filesystem::path, std::filesystem::path> resolveSplitOutputPaths(
     const std::filesystem::path& input, const std::string& outArg) {
@@ -58,7 +45,7 @@ int runSplitLoopCli(const Options& o) {
   }
 
   std::filesystem::path inputPath(o.input);
-  validateInputFile(inputPath);
+  requireSupportedAudioInputFile(inputPath);
 
   auto [stingerOutput, loopOutput] = resolveSplitOutputPaths(inputPath, o.output);
   LoopSplitConfig config;
