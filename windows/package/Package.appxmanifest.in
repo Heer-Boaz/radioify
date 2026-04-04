@@ -70,6 +70,11 @@
                 Id="RadioifyOpen"
                 Clsid="@RADIOIFY_WIN11_EXPLORER_COMMAND_GUID@" />
             </desktop5:ItemType>
+            <desktop5:ItemType Type="Directory\Background">
+              <desktop5:Verb
+                Id="RadioifyOpen"
+                Clsid="@RADIOIFY_WIN11_EXPLORER_COMMAND_GUID@" />
+            </desktop5:ItemType>
           </desktop4:FileExplorerContextMenus>
         </desktop4:Extension>
       </Extensions>
