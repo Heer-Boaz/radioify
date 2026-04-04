@@ -23,6 +23,9 @@ ipch/
 build/
 build-gcc/
 build-*/
+!scripts/build/
+!scripts/build/**
+!scripts/build/**/*.ps1
 cmake-build-*/
 cmake-build*/
 vcpkg_installed*/
