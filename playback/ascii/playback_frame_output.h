@@ -67,7 +67,7 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
                            const std::string& subtitleText,
                            const Style& accentStyle, const Style& dimStyle);
 
-void renderNonAsciiModeContent(ConsoleScreen& screen, bool windowEnabled,
+void renderNonAsciiModeContent(ConsoleScreen& screen, bool windowActive,
                               bool allowFrame, int width, int artTop,
                               int maxHeight, const VideoFrame* frame,
                               int sourceWidth, int sourceHeight,

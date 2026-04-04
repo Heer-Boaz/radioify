@@ -77,7 +77,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool enableAudio = inputs.enableAudio;
   bool audioOk = inputs.audioOk;
   bool audioStarting = inputs.audioStarting;
-  bool windowEnabled = inputs.windowEnabled;
+  bool windowActive = inputs.windowActive;
   bool hasSubtitles = inputs.hasSubtitles;
   bool allowAsciiCpuFallback = inputs.allowAsciiCpuFallback;
   bool useWindowPresenter = inputs.useWindowPresenter;
@@ -256,7 +256,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         dimStyle);
   } else {
     playback_frame_output::renderNonAsciiModeContent(
-        screen, windowEnabled, allowFrame, width, artTop, maxHeight, frame,
+        screen, windowActive, allowFrame, width, artTop, maxHeight, frame,
         videoWindow.GetWidth(), videoWindow.GetHeight(), dimStyle);
   }
 

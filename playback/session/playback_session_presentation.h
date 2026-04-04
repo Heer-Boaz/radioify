@@ -1,0 +1,59 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+
+#include "gpu_shared.h"
+#include "playback_mode.h"
+#include "playback/overlay/playback_overlay.h"
+#include "videowindow.h"
+
+class Player;
+
+struct PlaybackPresenterSyncResult {
+  PlaybackLayout previousActiveLayout = PlaybackLayout::Terminal;
+  PlaybackLayout activeLayout = PlaybackLayout::Terminal;
+
+  bool switchedAwayFromWindow() const {
+    return previousActiveLayout == PlaybackLayout::Window &&
+           activeLayout != PlaybackLayout::Window;
+  }
+};
+
+class PlaybackPresentation {
+ public:
+  explicit PlaybackPresentation(PlaybackLayout initialLayout);
+  ~PlaybackPresentation();
+
+  PlaybackPresentation(PlaybackPresentation&&) noexcept;
+  PlaybackPresentation& operator=(PlaybackPresentation&&) noexcept;
+
+  PlaybackPresentation(const PlaybackPresentation&) = delete;
+  PlaybackPresentation& operator=(const PlaybackPresentation&) = delete;
+
+  bool windowRequested() const;
+  bool windowActive() const;
+  PlaybackRenderMode renderMode(bool enableAscii) const;
+  void requestLayout(PlaybackLayout layout);
+  PlaybackLayout& desiredLayout();
+
+  PlaybackPresenterSyncResult sync(
+      Player& player,
+      const std::function<playback_overlay::WindowUiState()>& buildUiState,
+      const std::function<bool()>& overlayVisible, bool& redraw,
+      bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
+      std::atomic<int>& overlayControlHover);
+
+  void stop();
+
+  VideoWindow& window();
+  const VideoWindow& window() const;
+  GpuVideoFrameCache& frameCache();
+  void requestPresent();
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};

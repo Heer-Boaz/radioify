@@ -2,13 +2,14 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include "consoleinput.h"
 #include "playback/ascii/playback_frame_output.h"
 #include "playback/overlay/playback_overlay.h"
+#include "playback_mode.h"
 #include "playback_session_state.h"
 
 class Player;
@@ -38,12 +39,10 @@ struct PlaybackInputView {
 
 struct PlaybackInputSignals {
   std::atomic<int>* overlayControlHover = nullptr;
-  std::atomic<WindowThreadState>* windowThreadState = nullptr;
-  std::atomic<bool>* windowForcePresent = nullptr;
-  std::condition_variable* windowPresentCv = nullptr;
+  std::function<void()> requestWindowPresent;
   std::atomic<int64_t>* overlayUntilMs = nullptr;
 
-  bool* windowEnabled = nullptr;
+  PlaybackLayout* desiredLayout = nullptr;
   bool* loopStopRequested = nullptr;
   bool* quitApplicationRequested = nullptr;
   bool* redraw = nullptr;
@@ -62,7 +61,6 @@ struct PlaybackSeekState {
 };
 
 bool isOverlayVisible(const PlaybackInputSignals& signals);
-void signalWindowPresenterStop(const PlaybackInputSignals& signals);
 void queueSeekRequest(PlaybackInputSignals& signals,
                       PlaybackSeekState& seekState, double targetSec);
 void sendSeekRequest(const PlaybackInputView& view,

@@ -6,6 +6,14 @@
 #include <memory>
 #include <string>
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include "videodecoder.h"
 
 struct PlayerConfig {
@@ -94,6 +102,7 @@ class Player {
 
   uint64_t videoFrameCounter() const;
   bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;
+  HANDLE videoFrameWaitHandle() const;
 
   bool tryGetVideoFrame(VideoFrame* out);
   bool copyCurrentVideoFrame(VideoFrame* out);

@@ -1,0 +1,512 @@
+#include "playback_session_loop.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+
+#include "asciiart.h"
+#include "asciiart_gpu.h"
+#include "audioplayback.h"
+#include "gpu_shared.h"
+#include "player.h"
+#include "playback/ascii/playback_frame_output.h"
+#include "playback_framebuffer_presenter.h"
+#include "playback_mode.h"
+#include "playback_session_core.h"
+#include "playback_session_input.h"
+#include "playback_session_output.h"
+#include "playback_session_presentation.h"
+#include "playback_session_state.h"
+#include "subtitle_manager.h"
+
+namespace {
+
+enum class PlaybackLoopState : uint8_t {
+  Running,
+  Stopped,
+};
+
+bool shouldRenderPlaybackFrame(bool redraw, bool overlayRefreshDue,
+                               bool debugRefreshDue,
+                               PlaybackSessionState playbackState) {
+  return redraw || ((overlayRefreshDue || debugRefreshDue) &&
+                    playbackState != PlaybackSessionState::Ended);
+}
+
+}  // namespace
+
+struct PlaybackLoopRunner::Impl {
+  static constexpr auto kSeekThrottleInterval = std::chrono::milliseconds(50);
+
+  ConsoleInput& input;
+  ConsoleScreen& screen;
+  const VideoPlaybackConfig& config;
+  SubtitleManager& subtitleManager;
+  PerfLog& perfLog;
+  const Style& baseStyle;
+  const Style& accentStyle;
+  const Style& dimStyle;
+  const Style& progressEmptyStyle;
+  const Style& progressFrameStyle;
+  const Color& progressStart;
+  const Color& progressEnd;
+  playback_frame_output::LogLineWriter timingSink;
+  playback_frame_output::LogLineWriter warningSink;
+  std::atomic<bool>& enableSubtitlesShared;
+  const std::string& windowTitle;
+  bool* quitApplicationRequested = nullptr;
+  const bool enableAscii;
+  const bool enableAudio;
+  const bool hasSubtitles;
+
+  PlaybackOutputController output;
+  PlaybackSessionCore core;
+  GpuAsciiRenderer& gpuRenderer;
+  AsciiArt art;
+  bool redraw = true;
+  bool renderFailed = false;
+  std::string renderFailMessage;
+  std::string renderFailDetail;
+  bool forceRefreshArt = false;
+  int cachedWidth = -1;
+  int cachedMaxHeight = -1;
+  int cachedFrameWidth = -1;
+  int cachedFrameHeight = -1;
+  int progressBarX = -1;
+  int progressBarY = -1;
+  int progressBarWidth = 0;
+  std::atomic<int64_t> overlayUntilMs{0};
+  std::atomic<int> overlayControlHover{-1};
+  bool loopStopRequested = false;
+  std::chrono::steady_clock::time_point lastOverlayRefresh =
+      std::chrono::steady_clock::time_point::min();
+  std::chrono::steady_clock::time_point lastDebugRefresh =
+      std::chrono::steady_clock::time_point::min();
+  std::chrono::steady_clock::time_point lastUiHeartbeat =
+      std::chrono::steady_clock::time_point::now();
+
+  playback_session_input::PlaybackInputView inputView;
+  playback_session_input::PlaybackInputSignals inputSignals;
+  playback_session_input::PlaybackSeekState seekState;
+  playback_screen_renderer::PlaybackScreenRenderInputs renderInputs;
+
+  explicit Impl(PlaybackLoopRunner::Args args)
+      : input(args.input),
+        screen(args.screen),
+        config(args.config),
+        subtitleManager(args.subtitleManager),
+        perfLog(args.perfLog),
+        baseStyle(args.baseStyle),
+        accentStyle(args.accentStyle),
+        dimStyle(args.dimStyle),
+        progressEmptyStyle(args.progressEmptyStyle),
+        progressFrameStyle(args.progressFrameStyle),
+        progressStart(args.progressStart),
+        progressEnd(args.progressEnd),
+        timingSink(std::move(args.timingSink)),
+        warningSink(std::move(args.warningSink)),
+        enableSubtitlesShared(args.enableSubtitlesShared),
+        windowTitle(args.windowTitle),
+        quitApplicationRequested(args.quitApplicationRequested),
+        enableAscii(args.enableAscii),
+        enableAudio(args.enableAudio),
+        hasSubtitles(args.hasSubtitles),
+        output(args.config.enableWindow ? PlaybackLayout::Window
+                                        : PlaybackLayout::Terminal),
+        core({args.player, args.perfLog, args.enableAudio, args.enableAscii}),
+        gpuRenderer(sharedGpuRenderer()) {
+    core.initialize(screen);
+    bindInputState();
+    bindRenderInputs();
+    applyPresenterSync(syncPresentation());
+  }
+
+  void bindInputState() {
+    inputView.screen = &screen;
+    inputView.videoWindow = &output.window();
+    inputView.subtitleManager = &subtitleManager;
+    inputView.windowTitle = &windowTitle;
+    inputView.enableSubtitlesShared = &enableSubtitlesShared;
+    inputView.hasSubtitles = hasSubtitles;
+    inputView.progressBarX = &progressBarX;
+    inputView.progressBarY = &progressBarY;
+    inputView.progressBarWidth = &progressBarWidth;
+    inputView.timingSink = timingSink;
+    core.bindInputView(inputView);
+
+    inputSignals.overlayControlHover = &overlayControlHover;
+    inputSignals.requestWindowPresent = [this]() {
+      output.requestWindowPresent();
+    };
+    inputSignals.overlayUntilMs = &overlayUntilMs;
+    inputSignals.desiredLayout = &output.desiredLayout();
+    inputSignals.loopStopRequested = &loopStopRequested;
+    inputSignals.quitApplicationRequested = quitApplicationRequested;
+    inputSignals.redraw = &redraw;
+    inputSignals.forceRefreshArt = &forceRefreshArt;
+    core.bindSeekState(seekState);
+  }
+
+  void bindRenderInputs() {
+    renderInputs.screen = &screen;
+    renderInputs.videoWindow = &output.window();
+    renderInputs.subtitleManager = &subtitleManager;
+    renderInputs.gpuRenderer = &gpuRenderer;
+    renderInputs.frameCache = &output.frameCache();
+    renderInputs.art = &art;
+    renderInputs.windowTitle = &windowTitle;
+    renderInputs.baseStyle = &baseStyle;
+    renderInputs.accentStyle = &accentStyle;
+    renderInputs.dimStyle = &dimStyle;
+    renderInputs.progressEmptyStyle = &progressEmptyStyle;
+    renderInputs.progressFrameStyle = &progressFrameStyle;
+    renderInputs.progressStart = &progressStart;
+    renderInputs.progressEnd = &progressEnd;
+    renderInputs.enableSubtitlesShared = &enableSubtitlesShared;
+    renderInputs.overlayControlHover = &overlayControlHover;
+    renderInputs.renderFailed = &renderFailed;
+    renderInputs.renderFailMessage = &renderFailMessage;
+    renderInputs.renderFailDetail = &renderFailDetail;
+    renderInputs.cachedWidth = &cachedWidth;
+    renderInputs.cachedMaxHeight = &cachedMaxHeight;
+    renderInputs.cachedFrameWidth = &cachedFrameWidth;
+    renderInputs.cachedFrameHeight = &cachedFrameHeight;
+    renderInputs.progressBarX = &progressBarX;
+    renderInputs.progressBarY = &progressBarY;
+    renderInputs.progressBarWidth = &progressBarWidth;
+    renderInputs.warningSink = warningSink;
+    renderInputs.timingSink = timingSink;
+    core.bindRenderInputs(renderInputs);
+  }
+
+  bool overlayVisible() const {
+    return playback_session_input::isOverlayVisible(inputSignals);
+  }
+
+  playback_overlay::WindowUiState buildWindowUiState() {
+    return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
+        windowTitle, output.window(), core.player(), subtitleManager,
+        core.playbackState(), core.audioOk(), hasSubtitles,
+        enableSubtitlesShared, *seekState.windowLocalSeekRequested,
+        *seekState.windowPendingSeekTargetSec, overlayControlHover,
+        overlayVisible());
+  }
+
+  PlaybackPresenterSyncResult syncPresentation() {
+    auto buildUiState = [&]() { return buildWindowUiState(); };
+    auto overlayVisibleFn = [&]() { return overlayVisible(); };
+    return output.sync(core.player(), buildUiState, overlayVisibleFn, redraw,
+                       forceRefreshArt, overlayUntilMs, overlayControlHover);
+  }
+
+  void applyPresenterSync(const PlaybackPresenterSyncResult& syncResult) {
+    core.applyPresenterSync(syncResult);
+  }
+
+  void shutdown() {
+    output.stop();
+    core.shutdown();
+  }
+
+  void finalizeAudioStart() {
+    if (core.finalizeAudioStart()) {
+      redraw = true;
+    }
+  }
+
+  void updateRenderInputs(bool clearHistory, bool frameChanged) {
+    renderInputs.debugOverlay = config.debugOverlay;
+    renderInputs.currentMode = output.renderMode(enableAscii);
+    renderInputs.enableAudio = enableAudio;
+    renderInputs.windowActive = output.windowActive();
+    renderInputs.hasSubtitles = hasSubtitles;
+    renderInputs.allowAsciiCpuFallback = false;
+    renderInputs.useWindowPresenter = output.windowActive();
+    renderInputs.overlayVisibleNow = overlayVisible();
+    renderInputs.clearHistory = clearHistory;
+    renderInputs.frameChanged = frameChanged;
+    core.updateRenderInputs(renderInputs);
+  }
+
+  void renderPlaybackFrame(bool presented, PlaybackLoopState& loopState) {
+    auto t0 = std::chrono::steady_clock::now();
+    updateRenderInputs(forceRefreshArt, presented);
+    output.renderTerminal(renderInputs);
+    auto t1 = std::chrono::steady_clock::now();
+    lastOverlayRefresh = t1;
+    lastDebugRefresh = t1;
+    auto durMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    if (durMs > 100) {
+      perfLogAppendf(&perfLog, "video_ui_draw_slow dur_ms=%lld",
+                     static_cast<long long>(durMs));
+    }
+    if (renderFailed) {
+      loopState = PlaybackLoopState::Stopped;
+      return;
+    }
+    redraw = false;
+    forceRefreshArt = false;
+  }
+
+  bool initialize() {
+    bool useWindowPresenter = output.windowActive();
+    const auto now = std::chrono::steady_clock::now();
+    lastOverlayRefresh = now;
+    lastDebugRefresh = now;
+    if (!useWindowPresenter) {
+      updateRenderInputs(true, true);
+      output.renderTerminal(renderInputs);
+    } else {
+      redraw = false;
+      forceRefreshArt = false;
+    }
+    return !renderFailed;
+  }
+
+  void pollWindowEvents() {
+    output.pollWindowEvents();
+    if (output.windowRequested() && !output.windowVisible()) {
+      output.requestLayout(PlaybackLayout::Terminal);
+      forceRefreshArt = true;
+      redraw = true;
+      applyPresenterSync(syncPresentation());
+    }
+  }
+
+  void emitHeartbeat() {
+    auto nowUi = std::chrono::steady_clock::now();
+    if (nowUi - lastUiHeartbeat < std::chrono::seconds(1)) {
+      return;
+    }
+    const bool isPaused =
+        core.playbackState() == PlaybackSessionState::Paused || audioIsPaused();
+    const bool seeking =
+        seekState.localSeekRequested && *seekState.localSeekRequested;
+    perfLogAppendf(&perfLog,
+                   "video_heartbeat_ui redraw=%d seeker=%d paused=%d",
+                   redraw ? 1 : 0, seeking ? 1 : 0, isPaused ? 1 : 0);
+    lastUiHeartbeat = nowUi;
+  }
+
+  bool pollNextEvent(InputEvent& ev) { return output.pollInput(input, ev); }
+
+  void processInputEvents(PlaybackLoopState& loopState) {
+    InputEvent ev{};
+    while (pollNextEvent(ev)) {
+      if (loopState == PlaybackLoopState::Stopped) {
+        break;
+      }
+      if (ev.type == InputEvent::Type::Resize) {
+        core.markPendingResize();
+        redraw = true;
+        applyPresenterSync(syncPresentation());
+        continue;
+      }
+      if (ev.type == InputEvent::Type::Key) {
+        playback_session_input::handlePlaybackKeyEvent(inputView, inputSignals,
+                                                       seekState, ev.key);
+        applyPresenterSync(syncPresentation());
+        if (loopStopRequested) {
+          break;
+        }
+        continue;
+      }
+      if (ev.type == InputEvent::Type::Mouse) {
+        playback_session_input::handlePlaybackMouseEvent(inputView, inputSignals,
+                                                         seekState, ev.mouse);
+        applyPresenterSync(syncPresentation());
+        if (loopStopRequested) {
+          break;
+        }
+      }
+    }
+    if (loopStopRequested) {
+      loopState = PlaybackLoopState::Stopped;
+    }
+  }
+
+  void updateWindowCursor() {
+    output.updateWindowCursor(core.player(), core.playbackState(),
+                              overlayVisible());
+  }
+
+  void flushQueuedSeek() {
+    if (!seekState.seekQueued || !*seekState.seekQueued) {
+      return;
+    }
+    auto now = std::chrono::steady_clock::now();
+    bool canSend =
+        (*seekState.lastSeekSentTime ==
+             std::chrono::steady_clock::time_point::min()) ||
+        (now - *seekState.lastSeekSentTime >= kSeekThrottleInterval);
+    if (canSend) {
+      playback_session_input::sendSeekRequest(inputView, inputSignals, seekState,
+                                              *seekState.queuedSeekTargetSec);
+    }
+  }
+
+  void handlePendingResize() {
+    core.handlePendingResize(screen, output.renderMode(enableAscii), redraw);
+  }
+
+  struct RefreshState {
+    bool useWindowPresenter = false;
+    bool presented = false;
+    bool overlayRefreshDue = false;
+    bool debugRefreshDue = false;
+  };
+
+  int computeWaitTimeoutMs(const RefreshState& refresh) const {
+    int timeoutMs = 250;
+    const auto now = std::chrono::steady_clock::now();
+
+    if (!refresh.useWindowPresenter && overlayVisible()) {
+      auto overlayDue = lastOverlayRefresh + std::chrono::milliseconds(100);
+      timeoutMs = std::min(
+          timeoutMs,
+          std::max(
+              0, static_cast<int>(std::chrono::duration_cast<
+                                       std::chrono::milliseconds>(overlayDue -
+                                                                  now)
+                                       .count())));
+    }
+    if (!refresh.useWindowPresenter && config.debugOverlay) {
+      auto debugDue = lastDebugRefresh + std::chrono::milliseconds(250);
+      timeoutMs = std::min(
+          timeoutMs,
+          std::max(
+              0, static_cast<int>(std::chrono::duration_cast<
+                                       std::chrono::milliseconds>(debugDue -
+                                                                  now)
+                                       .count())));
+    }
+    if (seekState.seekQueued && *seekState.seekQueued &&
+        seekState.lastSeekSentTime) {
+      auto seekDue = *seekState.lastSeekSentTime + kSeekThrottleInterval;
+      timeoutMs = std::min(
+          timeoutMs,
+          std::max(
+              0, static_cast<int>(std::chrono::duration_cast<
+                                       std::chrono::milliseconds>(seekDue - now)
+                                       .count())));
+    }
+    if (!refresh.useWindowPresenter &&
+        core.playbackState() == PlaybackSessionState::Active) {
+      timeoutMs = std::min(timeoutMs, 16);
+    }
+    return std::max(0, timeoutMs);
+  }
+
+  void waitForNextActivity(const RefreshState& refresh) {
+    if (loopStopRequested || redraw || refresh.overlayRefreshDue ||
+        refresh.debugRefreshDue) {
+      return;
+    }
+
+    const int timeoutMs = computeWaitTimeoutMs(refresh);
+    if (timeoutMs <= 0) {
+      return;
+    }
+
+    if (!refresh.useWindowPresenter &&
+        core.playbackState() == PlaybackSessionState::Active) {
+      output.waitForActivity(input, timeoutMs, core.videoFrameWaitHandle());
+      return;
+    }
+
+    output.waitForActivity(input, timeoutMs);
+  }
+
+  RefreshState refreshState() {
+    RefreshState state;
+    state.useWindowPresenter = output.windowActive();
+    state.presented =
+        core.refresh(state.useWindowPresenter, output.windowActive(), redraw);
+    const bool overlayVisibleNow = overlayVisible();
+    const auto nowForRefresh = std::chrono::steady_clock::now();
+    state.overlayRefreshDue =
+        !state.useWindowPresenter && overlayVisibleNow &&
+        (lastOverlayRefresh == std::chrono::steady_clock::time_point::min() ||
+         nowForRefresh - lastOverlayRefresh >= std::chrono::milliseconds(100));
+    state.debugRefreshDue =
+        !state.useWindowPresenter && config.debugOverlay &&
+        (lastDebugRefresh == std::chrono::steady_clock::time_point::min() ||
+         nowForRefresh - lastDebugRefresh >= std::chrono::milliseconds(250));
+    return state;
+  }
+
+  void renderFailureScreen() {
+    updateRenderInputs(true, true);
+    output.renderTerminal(renderInputs);
+  }
+
+  void run() {
+    if (!initialize()) {
+      return;
+    }
+
+    PlaybackLoopState loopState = PlaybackLoopState::Running;
+    while (loopState == PlaybackLoopState::Running) {
+      finalizeAudioStart();
+      pollWindowEvents();
+
+      emitHeartbeat();
+      processInputEvents(loopState);
+      if (loopState == PlaybackLoopState::Stopped) {
+        break;
+      }
+
+      applyPresenterSync(syncPresentation());
+      finalizeAudioStart();
+      updateWindowCursor();
+      flushQueuedSeek();
+      handlePendingResize();
+
+      RefreshState refresh = refreshState();
+      if (shouldRenderPlaybackFrame(redraw, refresh.overlayRefreshDue,
+                                    refresh.debugRefreshDue,
+                                    core.playbackState())) {
+        renderPlaybackFrame(refresh.presented, loopState);
+        if (renderFailed) {
+          break;
+        }
+      } else if (refresh.useWindowPresenter) {
+        redraw = false;
+        forceRefreshArt = false;
+      }
+
+      waitForNextActivity(refresh);
+    }
+  }
+};
+
+PlaybackLoopRunner::PlaybackLoopRunner(Args args)
+    : impl_(std::make_unique<Impl>(std::move(args))) {}
+
+PlaybackLoopRunner::~PlaybackLoopRunner() = default;
+
+PlaybackLoopRunner::PlaybackLoopRunner(PlaybackLoopRunner&&) noexcept = default;
+
+PlaybackLoopRunner& PlaybackLoopRunner::operator=(
+    PlaybackLoopRunner&&) noexcept = default;
+
+void PlaybackLoopRunner::run() { impl_->run(); }
+
+void PlaybackLoopRunner::shutdown() { impl_->shutdown(); }
+
+void PlaybackLoopRunner::renderFailureScreen() { impl_->renderFailureScreen(); }
+
+bool PlaybackLoopRunner::hasRenderFailure() const { return impl_->renderFailed; }
+
+const std::string& PlaybackLoopRunner::renderFailureMessage() const {
+  return impl_->renderFailMessage;
+}
+
+const std::string& PlaybackLoopRunner::renderFailureDetail() const {
+  return impl_->renderFailDetail;
+}

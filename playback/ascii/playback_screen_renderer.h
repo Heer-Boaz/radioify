@@ -41,7 +41,7 @@ struct PlaybackScreenRenderInputs {
   bool enableAudio = false;
   bool audioOk = false;
   bool audioStarting = false;
-  bool windowEnabled = false;
+  bool windowActive = false;
   bool hasSubtitles = false;
   bool allowAsciiCpuFallback = false;
   bool useWindowPresenter = false;

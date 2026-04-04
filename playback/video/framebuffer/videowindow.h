@@ -105,7 +105,7 @@ public:
         outViewH = m_viewportH;
     }
     void ShowWindow(bool show);
-    void PollEvents();
+    bool PollEvents();
     bool PollInput(InputEvent& ev);
     void Cleanup();
 

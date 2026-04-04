@@ -1,0 +1,79 @@
+#pragma once
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+
+#include "playback_mode.h"
+#include "playback_session_state.h"
+
+class ConsoleInput;
+class Player;
+class VideoWindow;
+class GpuVideoFrameCache;
+struct InputEvent;
+
+namespace playback_overlay {
+struct WindowUiState;
+}
+
+namespace playback_screen_renderer {
+struct PlaybackScreenRenderInputs;
+}
+
+struct PlaybackPresenterSyncResult;
+
+class PlaybackOutputController {
+ public:
+  explicit PlaybackOutputController(PlaybackLayout initialLayout);
+  ~PlaybackOutputController();
+
+  PlaybackOutputController(PlaybackOutputController&&) noexcept;
+  PlaybackOutputController& operator=(PlaybackOutputController&&) noexcept;
+
+  PlaybackOutputController(const PlaybackOutputController&) = delete;
+  PlaybackOutputController& operator=(const PlaybackOutputController&) = delete;
+
+  bool windowRequested() const;
+  bool windowActive() const;
+  bool windowVisible() const;
+  PlaybackRenderMode renderMode(bool enableAscii) const;
+  void requestLayout(PlaybackLayout layout);
+  PlaybackLayout& desiredLayout();
+
+  PlaybackPresenterSyncResult sync(
+      Player& player,
+      const std::function<playback_overlay::WindowUiState()>& buildUiState,
+      const std::function<bool()>& overlayVisible, bool& redraw,
+      bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
+      std::atomic<int>& overlayControlHover);
+
+  void pollWindowEvents();
+  bool pollInput(ConsoleInput& input, InputEvent& ev);
+  bool waitForActivity(ConsoleInput& input, int timeoutMs,
+                       HANDLE extraHandle = nullptr);
+  void updateWindowCursor(Player& player, PlaybackSessionState playbackState,
+                          bool overlayVisible);
+  void renderTerminal(
+      playback_screen_renderer::PlaybackScreenRenderInputs& inputs);
+
+  void stop();
+
+  VideoWindow& window();
+  const VideoWindow& window() const;
+  GpuVideoFrameCache& frameCache();
+  void requestWindowPresent();
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};

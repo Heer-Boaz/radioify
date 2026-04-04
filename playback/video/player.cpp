@@ -1613,6 +1613,7 @@ struct Player::Impl {
   std::mutex frameCvMutex;
   std::atomic<uint64_t> frameCounter{0};
   std::atomic<uint64_t> lastReadCounter{0};
+  HANDLE frameReadyEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
   std::mutex lastInfoMutex;
   VideoReadInfo lastInfo{};
   std::atomic<bool> lastInfoValid{false};
@@ -1785,6 +1786,10 @@ struct Player::Impl {
 
   void stopThreads() {
     running.store(false);
+    if (frameReadyEvent) {
+      SetEvent(frameReadyEvent);
+    }
+    frameCv.notify_all();
     commandPending.store(false);
     videoPackets.abortQueue();
     audioPackets.abortQueue();
@@ -1866,6 +1871,9 @@ struct Player::Impl {
     lastPresentedDurationUs.store(0);
     frameCounter.store(0);
     lastReadCounter.store(0);
+    if (frameReadyEvent) {
+      ResetEvent(frameReadyEvent);
+    }
     clearCurrentFrame();
     videoPackets.init(32 * 1024 * 1024);
     audioPackets.init(8 * 1024 * 1024);
@@ -3315,6 +3323,9 @@ struct Player::Impl {
         hasFrame.store(true, std::memory_order_relaxed);
       }
       frameCounter.fetch_add(1, std::memory_order_relaxed);
+      if (frameReadyEvent) {
+        SetEvent(frameReadyEvent);
+      }
       frameCv.notify_all();
       
       // Ensure we yield to other threads (decoder, audio, etc.)
@@ -3548,12 +3559,22 @@ bool Player::waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const {
   if (timeoutMs <= 0) {
     return false;
   }
+  if (impl_->frameReadyEvent) {
+    WaitForSingleObject(impl_->frameReadyEvent,
+                        static_cast<DWORD>(std::max(0, timeoutMs)));
+    return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter;
+  }
   std::unique_lock<std::mutex> lock(impl_->frameCvMutex);
   impl_->frameCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&]() {
     return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter ||
            !impl_->running.load(std::memory_order_relaxed);
   });
   return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter;
+}
+
+HANDLE Player::videoFrameWaitHandle() const {
+  if (!impl_) return nullptr;
+  return impl_->frameReadyEvent;
 }
 
 bool Player::tryGetVideoFrame(VideoFrame* out) {
@@ -3639,3 +3660,9 @@ int Player::sourceHeight() const {
   if (!impl_) return 0;
   return impl_->sourceHeight.load(std::memory_order_relaxed);
 }
+  ~Impl() {
+    if (frameReadyEvent) {
+      CloseHandle(frameReadyEvent);
+      frameReadyEvent = nullptr;
+    }
+  }

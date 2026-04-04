@@ -1907,12 +1907,15 @@ void VideoWindow::ShowWindow(bool show) {
     }
 }
 
-void VideoWindow::PollEvents() {
+bool VideoWindow::PollEvents() {
     MSG msg;
+    bool handled = false;
     while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+        handled = true;
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+    return handled;
 }
 
 bool VideoWindow::PollInput(InputEvent& ev) {

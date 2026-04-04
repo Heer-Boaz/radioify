@@ -3,20 +3,33 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <memory>
 #include <string>
+#include <utility>
 
+#include "consoleinput.h"
+#include "consolescreen.h"
 #include "playback_dialog.h"
+#include "player.h"
 #include "ui_helpers.h"
 
 namespace {
 
-void renderPreparingScreen(ConsoleScreen& screen, const std::filesystem::path& file,
-                           const Style& baseStyle, const Style& accentStyle,
-                           const Style& dimStyle,
-                           const Style& progressEmptyStyle,
-                           const Style& progressFrameStyle,
-                           const Color& progressStart, const Color& progressEnd,
-                           double progress) {
+double pulseProgress(std::chrono::steady_clock::time_point initStart,
+                     std::chrono::steady_clock::time_point now) {
+  constexpr double kPrepPulseSeconds = 1.6;
+  double elapsed = std::chrono::duration<double>(now - initStart).count();
+  double phase = std::fmod(elapsed, kPrepPulseSeconds);
+  return (phase <= (kPrepPulseSeconds * 0.5))
+             ? (phase / (kPrepPulseSeconds * 0.5))
+             : ((kPrepPulseSeconds - phase) / (kPrepPulseSeconds * 0.5));
+}
+
+void renderPreparingScreen(
+    ConsoleScreen& screen, const std::filesystem::path& file,
+    const Style& baseStyle, const Style& accentStyle, const Style& dimStyle,
+    const Style& progressEmptyStyle, const Style& progressFrameStyle,
+    const Color& progressStart, const Color& progressEnd, double progress) {
   screen.updateSize();
   int width = std::max(20, screen.width());
   int height = std::max(10, screen.height());
@@ -71,95 +84,105 @@ bool showAudioFallbackPrompt(ConsoleInput& input, ConsoleScreen& screen,
 
 }  // namespace
 
-PlaybackSessionBootstrapOutcome bootstrapPlaybackSession(
-    const std::filesystem::path& file, ConsoleInput& input,
-    ConsoleScreen& screen, const Style& baseStyle, const Style& accentStyle,
-    const Style& dimStyle, const Style& progressEmptyStyle,
-    const Style& progressFrameStyle, const Color& progressStart,
-    const Color& progressEnd, bool enableAudio, bool enableAscii,
-    Player& player, bool* quitAppRequested) {
-  if (quitAppRequested) {
-    *quitAppRequested = false;
+struct PlaybackSessionBootstrap::Impl {
+  explicit Impl(Args args)
+      : file(args.file),
+        input(args.input),
+        screen(args.screen),
+        baseStyle(args.baseStyle),
+        accentStyle(args.accentStyle),
+        dimStyle(args.dimStyle),
+        progressEmptyStyle(args.progressEmptyStyle),
+        progressFrameStyle(args.progressFrameStyle),
+        progressStart(args.progressStart),
+        progressEnd(args.progressEnd),
+        enableAudio(args.enableAudio),
+        enableAscii(args.enableAscii),
+        player(args.player),
+        quitAppRequested(args.quitAppRequested) {}
+
+  void requestQuit() {
+    if (quitAppRequested) {
+      *quitAppRequested = true;
+    }
   }
 
-  auto playerConfig = PlayerConfig{};
-  playerConfig.file = file;
-  playerConfig.enableAudio = enableAudio;
-  playerConfig.allowDecoderScale = enableAscii;
+  bool openPlayer() {
+    if (quitAppRequested) {
+      *quitAppRequested = false;
+    }
 
-  if (!player.open(playerConfig, nullptr)) {
+    auto playerConfig = PlayerConfig{};
+    playerConfig.file = file;
+    playerConfig.enableAudio = enableAudio;
+    playerConfig.allowDecoderScale = enableAscii;
+
+    if (player.open(playerConfig, nullptr)) {
+      return true;
+    }
+
     showError(input, screen, baseStyle, accentStyle, dimStyle,
               "Failed to open video.", "");
-    return PlaybackSessionBootstrapOutcome::Handled;
+    return false;
   }
 
-  constexpr auto kPrepRedrawInterval = std::chrono::milliseconds(120);
-  constexpr double kPrepPulseSeconds = 1.6;
-  auto initStart = std::chrono::steady_clock::now();
-  auto lastInitDraw = std::chrono::steady_clock::time_point::min();
-  bool running = true;
-  while (running) {
-    if (player.initDone()) {
-      break;
-    }
-    auto now = std::chrono::steady_clock::now();
-    if (now - lastInitDraw >= kPrepRedrawInterval) {
-      double elapsed = std::chrono::duration<double>(now - initStart).count();
-      double phase = std::fmod(elapsed, kPrepPulseSeconds);
-      double ratio = (phase <= (kPrepPulseSeconds * 0.5))
-                         ? (phase / (kPrepPulseSeconds * 0.5))
-                         : ((kPrepPulseSeconds - phase) /
-                            (kPrepPulseSeconds * 0.5));
-      renderPreparingScreen(screen, file, baseStyle, accentStyle, dimStyle,
-                            progressEmptyStyle, progressFrameStyle,
-                            progressStart, progressEnd, ratio);
-      lastInitDraw = now;
-    }
+  void drawPreparingFrame(std::chrono::steady_clock::time_point initStart,
+                          std::chrono::steady_clock::time_point now) {
+    renderPreparingScreen(screen, file, baseStyle, accentStyle, dimStyle,
+                          progressEmptyStyle, progressFrameStyle, progressStart,
+                          progressEnd, pulseProgress(initStart, now));
+  }
 
-    InputEvent ev{};
-    while (input.poll(ev)) {
-      if (ev.type == InputEvent::Type::Key) {
-        const KeyEvent& key = ev.key;
-        const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-        bool ctrl = (key.control & ctrlMask) != 0;
-        if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
-          if (quitAppRequested) {
-            *quitAppRequested = true;
-          }
-          running = false;
-          break;
+  bool handleKeyCancel(const KeyEvent& key) {
+    const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+    const bool ctrl = (key.control & ctrlMask) != 0;
+    if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
+      requestQuit();
+      return true;
+    }
+    if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
+      return true;
+    }
+    return key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
+           key.vk == VK_BACK;
+  }
+
+  bool handleMouseCancel(const MouseEvent& mouse) const {
+    const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
+                           FROM_LEFT_2ND_BUTTON_PRESSED |
+                           FROM_LEFT_3RD_BUTTON_PRESSED |
+                           FROM_LEFT_4TH_BUTTON_PRESSED;
+    return (mouse.buttonState & backMask) != 0;
+  }
+
+  bool waitForInitialization() {
+    constexpr auto kPrepRedrawInterval = std::chrono::milliseconds(120);
+    auto initStart = std::chrono::steady_clock::now();
+    auto lastInitDraw = std::chrono::steady_clock::time_point::min();
+    while (!player.initDone()) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now - lastInitDraw >= kPrepRedrawInterval) {
+        drawPreparingFrame(initStart, now);
+        lastInitDraw = now;
+      }
+
+      InputEvent ev{};
+      while (input.poll(ev)) {
+        if (ev.type == InputEvent::Type::Key && handleKeyCancel(ev.key)) {
+          return false;
         }
-        if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
-          running = false;
-          break;
+        if (ev.type == InputEvent::Type::Mouse && handleMouseCancel(ev.mouse)) {
+          return false;
         }
-        if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
-            key.vk == VK_BACK) {
-          running = false;
-          break;
+        if (ev.type == InputEvent::Type::Resize) {
+          lastInitDraw = std::chrono::steady_clock::time_point::min();
         }
-      } else if (ev.type == InputEvent::Type::Mouse) {
-        const MouseEvent& mouse = ev.mouse;
-        const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
-                               FROM_LEFT_2ND_BUTTON_PRESSED |
-                               FROM_LEFT_3RD_BUTTON_PRESSED |
-                               FROM_LEFT_4TH_BUTTON_PRESSED;
-        if ((mouse.buttonState & backMask) != 0) {
-          running = false;
-          break;
-        }
-      } else if (ev.type == InputEvent::Type::Resize) {
-        lastInitDraw = std::chrono::steady_clock::time_point::min();
       }
     }
+    return true;
   }
 
-  if (!running) {
-    player.close();
-    return PlaybackSessionBootstrapOutcome::Handled;
-  }
-
-  if (!player.initOk()) {
+  PlaybackSessionBootstrapOutcome handleInitFailure() {
     player.close();
     std::string initError = player.initError();
     if (initError.rfind("No video stream found", 0) == 0) {
@@ -183,5 +206,47 @@ PlaybackSessionBootstrapOutcome bootstrapPlaybackSession(
     return PlaybackSessionBootstrapOutcome::Handled;
   }
 
-  return PlaybackSessionBootstrapOutcome::ContinueVideo;
+  PlaybackSessionBootstrapOutcome run() {
+    if (!openPlayer()) {
+      return PlaybackSessionBootstrapOutcome::Handled;
+    }
+    if (!waitForInitialization()) {
+      player.close();
+      return PlaybackSessionBootstrapOutcome::Handled;
+    }
+    if (!player.initOk()) {
+      return handleInitFailure();
+    }
+    return PlaybackSessionBootstrapOutcome::ContinueVideo;
+  }
+
+  const std::filesystem::path& file;
+  ConsoleInput& input;
+  ConsoleScreen& screen;
+  const Style& baseStyle;
+  const Style& accentStyle;
+  const Style& dimStyle;
+  const Style& progressEmptyStyle;
+  const Style& progressFrameStyle;
+  const Color& progressStart;
+  const Color& progressEnd;
+  const bool enableAudio;
+  const bool enableAscii;
+  Player& player;
+  bool* quitAppRequested = nullptr;
+};
+
+PlaybackSessionBootstrap::PlaybackSessionBootstrap(Args args)
+    : impl_(std::make_unique<Impl>(std::move(args))) {}
+
+PlaybackSessionBootstrap::~PlaybackSessionBootstrap() = default;
+
+PlaybackSessionBootstrap::PlaybackSessionBootstrap(
+    PlaybackSessionBootstrap&&) noexcept = default;
+
+PlaybackSessionBootstrap& PlaybackSessionBootstrap::operator=(
+    PlaybackSessionBootstrap&&) noexcept = default;
+
+PlaybackSessionBootstrapOutcome PlaybackSessionBootstrap::run() {
+  return impl_->run();
 }

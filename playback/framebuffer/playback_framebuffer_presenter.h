@@ -1,9 +1,15 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <functional>
-#include <mutex>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 
 #include "gpu_shared.h"
 #include "playback_overlay.h"
@@ -25,8 +31,8 @@ WindowUiState buildPlaybackFramebufferUiState(
 void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
-    std::atomic<bool>& forcePresent, std::mutex& presentMutex,
-    std::condition_variable& presentCv, const std::function<bool()>& overlayVisible,
+    std::atomic<bool>& forcePresent, HANDLE wakeEvent,
+    const std::function<bool()>& overlayVisible,
     const std::function<WindowUiState()>& buildUiState);
 
 }  // namespace playback_framebuffer_presenter

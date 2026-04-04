@@ -27,15 +27,13 @@ bool hasOverlayVisibleWindow(const PlaybackInputSignals& signals) {
 }
 
 void requestWindowRefresh(const PlaybackInputSignals& signals) {
-  if (!signals.windowEnabled || !signals.windowForcePresent ||
-      !signals.windowPresentCv) {
+  if (!signals.desiredLayout || !signals.requestWindowPresent) {
     return;
   }
-  if (!*signals.windowEnabled) {
+  if (!isWindowPlaybackLayout(*signals.desiredLayout)) {
     return;
   }
-  signals.windowForcePresent->store(true, std::memory_order_relaxed);
-  signals.windowPresentCv->notify_one();
+  signals.requestWindowPresent();
 }
 
 void triggerOverlay(const PlaybackInputView& view,
@@ -76,8 +74,8 @@ void requestPlaybackExit(const PlaybackInputView& view,
   if (signals.loopStopRequested) {
     *signals.loopStopRequested = true;
   }
-  if (signals.windowEnabled) {
-    *signals.windowEnabled = false;
+  if (signals.desiredLayout) {
+    *signals.desiredLayout = PlaybackLayout::Terminal;
   }
   if (signals.overlayUntilMs) {
     signals.overlayUntilMs->store(0, std::memory_order_relaxed);
@@ -88,13 +86,6 @@ void requestPlaybackExit(const PlaybackInputView& view,
   if (signals.forceRefreshArt) {
     *signals.forceRefreshArt = true;
   }
-  if (view.videoWindow) {
-    view.videoWindow->SetCursorVisible(true);
-    if (view.videoWindow->IsOpen()) {
-      view.videoWindow->ShowWindow(false);
-    }
-  }
-  signalWindowPresenterStop(signals);
   if (quitApp && signals.quitApplicationRequested) {
     *signals.quitApplicationRequested = true;
   }
@@ -146,32 +137,21 @@ void applySeekRequestState(PlaybackInputSignals& signals,
   }
 }
 
-bool toggleWindowEnabled(const PlaybackInputView& view,
-                         PlaybackInputSignals& signals) {
-  if (!signals.windowEnabled || !signals.windowThreadState ||
-      !signals.windowPresentCv || !signals.windowForcePresent ||
-      !view.videoWindow) {
+bool toggleRequestedLayout(const PlaybackInputView& view,
+                           PlaybackInputSignals& signals) {
+  (void)view;
+  if (!signals.desiredLayout) {
     return false;
   }
-  *signals.windowEnabled = !*signals.windowEnabled;
-  if (*signals.windowEnabled) {
-    if (!view.videoWindow->IsOpen()) {
-      view.videoWindow->Open(1280, 720, "Radioify Output");
-    }
-    view.videoWindow->ShowWindow(true);
-    signals.windowThreadState->store(WindowThreadState::Enabled,
-                                     std::memory_order_relaxed);
+  *signals.desiredLayout = togglePlaybackLayout(*signals.desiredLayout);
+  if (signals.redraw) {
+    *signals.redraw = true;
+  }
+  if (signals.forceRefreshArt) {
+    *signals.forceRefreshArt = true;
+  }
+  if (isWindowPlaybackLayout(*signals.desiredLayout)) {
     requestWindowRefresh(signals);
-  } else {
-    signals.windowThreadState->store(WindowThreadState::Disabled,
-                                     std::memory_order_relaxed);
-    signals.windowPresentCv->notify_one();
-    if (view.videoWindow->IsOpen()) {
-      view.videoWindow->ShowWindow(false);
-    }
-    if (signals.forceRefreshArt) {
-      *signals.forceRefreshArt = true;
-    }
   }
   return true;
 }
@@ -322,19 +302,6 @@ bool isOverlayVisible(const PlaybackInputSignals& signals) {
   return hasOverlayVisibleWindow(signals);
 }
 
-void signalWindowPresenterStop(const PlaybackInputSignals& signals) {
-  if (signals.windowThreadState) {
-    signals.windowThreadState->store(WindowThreadState::Stopping,
-                                     std::memory_order_relaxed);
-  }
-  if (signals.windowForcePresent) {
-    signals.windowForcePresent->store(false, std::memory_order_relaxed);
-  }
-  if (signals.windowPresentCv) {
-    signals.windowPresentCv->notify_one();
-  }
-}
-
 void sendSeekRequest(const PlaybackInputView& view,
                      PlaybackInputSignals& signals,
                      PlaybackSeekState& seekState, double targetSec) {
@@ -373,7 +340,7 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
     *view.playbackState =
         pauseNow ? PlaybackSessionState::Paused : PlaybackSessionState::Active;
   };
-  cb.onToggleWindow = [&]() { toggleWindowEnabled(view, signals); };
+  cb.onToggleWindow = [&]() { toggleRequestedLayout(view, signals); };
   cb.onToggleRadio = [&]() { toggleRadio(view); };
   cb.onToggle50Hz = [&]() { toggle50Hz(view); };
   cb.onToggleSubtitles = [&]() { toggleSubtitles(view); };

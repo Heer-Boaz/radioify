@@ -3,11 +3,49 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <thread>
 #include <utility>
 
 #include "audioplayback.h"
 
 namespace playback_framebuffer_presenter {
+namespace {
+
+constexpr auto kOverlayRefreshInterval = std::chrono::milliseconds(100);
+
+void waitForPresenterWake(HANDLE wakeEvent) {
+  if (wakeEvent) {
+    WaitForSingleObject(wakeEvent, INFINITE);
+    return;
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+}
+
+void waitForPresenterActivity(HANDLE wakeEvent, HANDLE frameEvent,
+                              int timeoutMs) {
+  HANDLE handles[2];
+  DWORD handleCount = 0;
+  if (wakeEvent) {
+    handles[handleCount++] = wakeEvent;
+  }
+  if (frameEvent) {
+    handles[handleCount++] = frameEvent;
+  }
+  if (handleCount == 0) {
+    if (timeoutMs < 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      return;
+    }
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(std::max(0, timeoutMs)));
+    return;
+  }
+  const DWORD waitMs =
+      timeoutMs < 0 ? INFINITE : static_cast<DWORD>(std::max(0, timeoutMs));
+  WaitForMultipleObjects(handleCount, handles, FALSE, waitMs);
+}
+
+}  // namespace
 
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
@@ -85,8 +123,7 @@ WindowUiState buildPlaybackFramebufferUiState(
 void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
-    std::atomic<bool>& forcePresent, std::mutex& presentMutex,
-    std::condition_variable& presentCv,
+    std::atomic<bool>& forcePresent, HANDLE wakeEvent,
     const std::function<bool()>& overlayVisible,
     const std::function<WindowUiState()>& buildUiState) {
   if (!overlayVisible || !buildUiState) {
@@ -95,36 +132,47 @@ void runFramebufferPresenterLoop(
 
   VideoFrame localFrame;
   uint64_t lastCounter = player.videoFrameCounter();
+  auto lastOverlayPresent = std::chrono::steady_clock::time_point::min();
+  const HANDLE frameEvent = player.videoFrameWaitHandle();
   while (threadState.load(std::memory_order_relaxed) !=
          WindowThreadState::Stopping) {
     if (threadState.load(std::memory_order_relaxed) ==
         WindowThreadState::Disabled) {
-      std::unique_lock<std::mutex> lock(presentMutex);
-      presentCv.wait_for(lock, std::chrono::milliseconds(50), [&]() {
-        return threadState.load(std::memory_order_relaxed) ==
-                   WindowThreadState::Stopping ||
-               threadState.load(std::memory_order_relaxed) ==
-                   WindowThreadState::Enabled;
-      });
+      waitForPresenterWake(wakeEvent);
       continue;
     }
 
     if (!videoWindow.IsOpen() || !videoWindow.IsVisible()) {
-      std::unique_lock<std::mutex> lock(presentMutex);
-      presentCv.wait_for(lock, std::chrono::milliseconds(50));
+      waitForPresenterWake(wakeEvent);
       continue;
     }
 
-    bool waitedForFrame = false;
-    bool shouldWaitForFrame = !forcePresent.load(std::memory_order_relaxed) &&
-                              !overlayVisible() && !player.isSeeking();
-    if (shouldWaitForFrame) {
-      waitedForFrame = true;
-      player.waitForVideoFrame(lastCounter, 16);
-      if (threadState.load(std::memory_order_relaxed) ==
-          WindowThreadState::Stopping) {
-        break;
+    const bool forcePresentRequested =
+        forcePresent.load(std::memory_order_relaxed);
+    const bool overlayVisibleRequested = overlayVisible();
+    const bool seekingRequested = player.isSeeking();
+    if (!forcePresentRequested) {
+      int waitTimeoutMs = -1;
+      if (overlayVisibleRequested || seekingRequested) {
+        const auto now = std::chrono::steady_clock::now();
+        if (lastOverlayPresent == std::chrono::steady_clock::time_point::min()) {
+          waitTimeoutMs = 0;
+        } else {
+          waitTimeoutMs = std::max(
+              0, static_cast<int>(std::chrono::duration_cast<
+                                       std::chrono::milliseconds>(
+                                       (lastOverlayPresent +
+                                        kOverlayRefreshInterval) -
+                                       now)
+                                       .count()));
+        }
       }
+      waitForPresenterActivity(wakeEvent, frameEvent, waitTimeoutMs);
+    }
+
+    if (threadState.load(std::memory_order_relaxed) ==
+        WindowThreadState::Stopping) {
+      break;
     }
 
     uint64_t counterNow = player.videoFrameCounter();
@@ -168,9 +216,16 @@ void runFramebufferPresenterLoop(
 
     WindowUiState ui = buildUiState();
     bool overlayVisibleNow = ui.overlayAlpha > 0.01f;
+    bool seekingNow = player.isSeeking();
     bool forcePresentNow = forcePresent.exchange(false, std::memory_order_relaxed);
-    bool needsPresent = frameChanged || forcePresentNow || overlayVisibleNow ||
-                        player.isSeeking();
+    bool overlayRefreshDue = false;
+    if (overlayVisibleNow || seekingNow) {
+      const auto now = std::chrono::steady_clock::now();
+      overlayRefreshDue =
+          lastOverlayPresent == std::chrono::steady_clock::time_point::min() ||
+          (now - lastOverlayPresent) >= kOverlayRefreshInterval;
+    }
+    bool needsPresent = frameChanged || forcePresentNow || overlayRefreshDue;
 
     if (needsPresent) {
       if (threadState.load(std::memory_order_relaxed) ==
@@ -188,9 +243,9 @@ void runFramebufferPresenterLoop(
       } else {
         videoWindow.PresentOverlay(frameCache, ui, true);
       }
-    } else if (!waitedForFrame) {
-      std::unique_lock<std::mutex> lock(presentMutex);
-      presentCv.wait_for(lock, std::chrono::milliseconds(10));
+      if (overlayVisibleNow || seekingNow) {
+        lastOverlayPresent = std::chrono::steady_clock::now();
+      }
     }
   }
 }

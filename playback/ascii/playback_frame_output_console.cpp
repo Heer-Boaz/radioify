@@ -29,14 +29,14 @@ void prepareNonAsciiModeFrame(bool allowFrame, int width, int maxHeight,
   if (cachedFrameHeight) *cachedFrameHeight = frameHeight;
 }
 
-void renderNonAsciiModeContent(ConsoleScreen& screen, bool windowEnabled,
+void renderNonAsciiModeContent(ConsoleScreen& screen, bool windowActive,
                               bool allowFrame, int width, int artTop,
                               int maxHeight, const VideoFrame* frame,
                               int sourceWidth, int sourceHeight,
                               const Style& dimStyle) {
-  std::string label = windowEnabled ? "Video window active (W to toggle back)"
+  std::string label = windowActive ? "Video window active (W to toggle back)"
                                    : (allowFrame ? "ASCII rendering disabled"
-                                                : "Waiting for video...");
+                                                 : "Waiting for video...");
   screen.writeText(0, artTop, fitLine(label, width), dimStyle);
 
   if (!allowFrame || !frame || maxHeight <= 1) {
@@ -45,7 +45,7 @@ void renderNonAsciiModeContent(ConsoleScreen& screen, bool windowEnabled,
 
   int sizeW = frame->width;
   int sizeH = frame->height;
-  if (windowEnabled && sourceWidth > 0 && sourceHeight > 0) {
+  if (windowActive && sourceWidth > 0 && sourceHeight > 0) {
     sizeW = sourceWidth;
     sizeH = sourceHeight;
   }
