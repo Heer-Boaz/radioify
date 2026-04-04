@@ -47,6 +47,7 @@
 #include "videoplayback.h"
 #include "videowindow.h"
 #include "media_formats.h"
+#include "runtime_helpers.h"
 
 #include "tui.h"
 #include "timing_log.h"
@@ -557,6 +558,15 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
 }
 
 int runTui(Options o) {
+  if (o.shellOpen && !o.input.empty()) {
+    std::error_code ec;
+    std::filesystem::path absoluteInput =
+        std::filesystem::absolute(std::filesystem::path(o.input), ec);
+    if (!ec) {
+      o.input = toUtf8String(absoluteInput);
+    }
+  }
+
   configureFfmpegVideoLog({});
 
   AudioPlaybackConfig audioConfig;
@@ -594,7 +604,7 @@ int runTui(Options o) {
     }
   }
 
-  std::filesystem::path startDir = std::filesystem::current_path();
+  std::filesystem::path startDir = radioifyLaunchDir();
   std::string initialName;
   if (!o.input.empty()) {
     std::filesystem::path inputPath(o.input);
@@ -700,7 +710,7 @@ int runTui(Options o) {
       message = "Missing hebios.bin for PSF2 playback.";
       detail =
           "Set RADIOIFY_PSF_BIOS or place hebios.bin next to the file, next "
-          "to radioify.exe, or in the current folder.";
+          "to radioify.exe, or in Radioify's launch directory.";
     }
 
     playback_dialog::showInfoDialog(

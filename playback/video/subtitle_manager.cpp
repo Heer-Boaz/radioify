@@ -18,6 +18,7 @@ extern "C" {
 #include <libavutil/dict.h>
 }
 
+#include "runtime_helpers.h"
 #include "ui_helpers.h"
 
 namespace {
@@ -1506,8 +1507,7 @@ std::vector<std::filesystem::path> discoverSubtitleFiles(
   std::error_code ec;
   std::filesystem::path dir = videoPath.parent_path();
   if (dir.empty()) {
-    dir = std::filesystem::current_path(ec);
-    if (ec) return {};
+    dir = radioifyLaunchDir();
   }
   std::string baseStem = videoPath.stem().string();
   std::string baseStemLower = toLowerAscii(baseStem);

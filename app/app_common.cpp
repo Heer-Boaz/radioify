@@ -177,6 +177,10 @@ Options parseArgs(int argc, char** argv) {
       o.enableWindow = true;
       continue;
     }
+    if (arg == "--shell-open") {
+      o.shellOpen = true;
+      continue;
+    }
     if (!arg.empty() && arg[0] == '-') {
       die("Unknown option: " + arg);
     }

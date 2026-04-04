@@ -8,6 +8,7 @@
 #include "consolescreen.h"
 #include "gpu_shared.h"
 #include "playback_dialog.h"
+#include "runtime_helpers.h"
 #include "subtitle_manager.h"
 #include "timing_log.h"
 #include "ui_helpers.h"
@@ -21,7 +22,7 @@ PlaybackSessionHost::PlaybackSessionHost(const Args& args)
       dimStyle_(args.dimStyle),
       fullRedrawEnabled_(args.enableAscii),
       quitAppRequested_(args.quitAppRequested),
-      logPath_(std::filesystem::current_path() / "radioify.log"),
+      logPath_(radioifyLogPath()),
       windowTitle_(toUtf8String(args.file.filename())) {
   if (quitAppRequested_) {
     *quitAppRequested_ = false;

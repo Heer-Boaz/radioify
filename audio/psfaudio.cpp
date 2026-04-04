@@ -17,6 +17,7 @@
 #include <thread>
 #include <vector>
 
+#include "runtime_helpers.h"
 #include "ui_helpers.h"
 
 #ifdef _WIN32
@@ -108,29 +109,6 @@ struct FreeDeleter {
     std::free(ptr);
   }
 };
-
-std::filesystem::path getExecutableDir() {
-#ifdef _WIN32
-  std::wstring buffer;
-  DWORD size = MAX_PATH;
-  for (;;) {
-    buffer.resize(size);
-    DWORD len = GetModuleFileNameW(nullptr, buffer.data(), size);
-    if (len == 0) return {};
-    if (len < size) {
-      buffer.resize(len);
-      break;
-    }
-    size *= 2;
-  }
-  return std::filesystem::path(buffer).parent_path();
-#else
-  std::error_code ec;
-  std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
-  if (ec) return {};
-  return exe.parent_path();
-#endif
-}
 
 std::filesystem::path getEnvPath(const char* name) {
   if (const auto value = getEnvString(name)) {
@@ -454,13 +432,10 @@ std::filesystem::path findBiosPath(const std::filesystem::path& psfPath) {
     std::filesystem::path local = psfPath.parent_path() / "hebios.bin";
     if (std::filesystem::exists(local)) return local;
   }
-  std::filesystem::path exeDir = getExecutableDir();
-  if (!exeDir.empty()) {
-    std::filesystem::path exeLocal = exeDir / "hebios.bin";
-    if (std::filesystem::exists(exeLocal)) return exeLocal;
+  for (const auto& root : radioifyResourceSearchRoots()) {
+    std::filesystem::path candidate = root / "hebios.bin";
+    if (std::filesystem::exists(candidate)) return candidate;
   }
-  std::filesystem::path cwd = std::filesystem::current_path() / "hebios.bin";
-  if (std::filesystem::exists(cwd)) return cwd;
   return {};
 }
 
@@ -475,8 +450,9 @@ bool ensureBiosLoaded(const std::filesystem::path& psfPath,
   std::filesystem::path biosPath = findBiosPath(psfPath);
   if (biosPath.empty() || !std::filesystem::exists(biosPath)) {
     if (error) {
-      *error =
-          "Missing hebios.bin (set RADIOIFY_PSF_BIOS or place it next to the file).";
+      *error = "Missing hebios.bin (set RADIOIFY_PSF_BIOS or place it next to "
+               "the file, next to radioify.exe, or in Radioify's launch "
+               "directory).";
     }
     return false;
   }

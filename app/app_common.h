@@ -24,6 +24,7 @@ struct Options {
   bool enableAudio = true;
   bool enableRadio = false;
   bool enableWindow = false;
+  bool shellOpen = false;
   bool verbose = false;
 };
 

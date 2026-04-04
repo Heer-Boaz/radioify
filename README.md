@@ -35,6 +35,27 @@ dist/radioify.exe --no-audio <file-or-folder>
 dist/radioify.exe --no-radio <file-or-folder>
 ```
 
+## Explorer Context Menu
+Register Radioify in the Windows Explorer context menu for supported audio and
+video extensions:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integration.ps1
+```
+
+Optional:
+
+```powershell
+# Also add "Open with Radioify" for directories
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integration.ps1 -IncludeDirectories
+
+# Use a specific executable instead of .\dist\radioify.exe
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integration.ps1 -ExePath "C:\path\to\radioify.exe"
+
+# Remove the Explorer integration again
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\uninstall_radioify_shell_integration.ps1
+```
+
 ## Controls
 - Mouse: select; click to play/open
 - Enter: open folder / play file
@@ -60,8 +81,8 @@ dist/radioify.exe --no-radio <file-or-folder>
 - Images (ASCII art preview): .jpg, .jpeg, .png, .bmp
 
 PSF2 playback needs `hebios.bin`. Set `RADIOIFY_PSF_BIOS` to the file path or
-place `hebios.bin` next to the PSF2 file, in the executable directory, or in
-the current working directory.
+place `hebios.bin` next to the PSF2 file, next to `radioify.exe`, or in the
+directory from which Radioify was launched.
 
 ## Options
 KSS options:

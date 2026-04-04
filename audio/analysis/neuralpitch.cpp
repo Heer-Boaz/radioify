@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "runtime_helpers.h"
 #include "ui_helpers.h"
 
 #ifndef RADIOIFY_HAS_ONNXRUNTIME
@@ -398,14 +399,16 @@ std::wstring utf8ToWide(const std::string& text) {
     if (std::filesystem::exists(p)) return p;
   }
 
-  const std::array<std::filesystem::path, 4> candidates = {
-      std::filesystem::current_path() / "models" / "melody_pitch.onnx",
-      std::filesystem::current_path() / "models" / "crepe_small.onnx",
-      std::filesystem::current_path() / "melody_pitch.onnx",
-      std::filesystem::current_path() / "crepe_small.onnx",
-  };
-  for (const auto& candidate : candidates) {
-    if (std::filesystem::exists(candidate)) return candidate;
+  for (const auto& root : radioifyResourceSearchRoots()) {
+    const std::array<std::filesystem::path, 4> candidates = {
+        root / "models" / "melody_pitch.onnx",
+        root / "models" / "crepe_small.onnx",
+        root / "melody_pitch.onnx",
+        root / "crepe_small.onnx",
+    };
+    for (const auto& candidate : candidates) {
+      if (std::filesystem::exists(candidate)) return candidate;
+    }
   }
   return {};
 }

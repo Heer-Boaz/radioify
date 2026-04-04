@@ -64,6 +64,16 @@ extern "C" {
 
 AudioPlaybackState gAudio;
 
+void appendAudioTimingLogLine(const char* line) {
+#if RADIOIFY_ENABLE_TIMING_LOG
+  if (!line || line[0] == '\0') return;
+  std::ofstream f(radioifyLogPath().string(), std::ios::app);
+  if (f) f << radioifyLogTimestamp() << " " << line << "\n";
+#else
+  (void)line;
+#endif
+}
+
 void audioRingBufferInit(AudioRingBuffer* buffer, size_t frames,
                          uint32_t channels) {
   if (!buffer) return;
@@ -936,13 +946,7 @@ bool startM4aWorker(const std::filesystem::path& file, uint64_t startFrame,
                             .count()),
                     toUtf8String(file.filename()).c_str(), ok ? 1 : 0,
                     initError.empty() ? "-" : initError.c_str());
-      {
-        std::ofstream f((std::filesystem::current_path() /
-                         "radioify.log")
-                            .string(),
-                        std::ios::app);
-        if (f) f << radioifyLogTimestamp() << " " << buf << "\n";
-      }
+      appendAudioTimingLogLine(buf);
     }
 #endif
     uint64_t total = 0;
@@ -1090,11 +1094,7 @@ bool startM4aWorker(const std::filesystem::path& file, uint64_t startFrame,
                       .count()),
               static_cast<unsigned long long>(framesRead),
               toUtf8String(file.filename()).c_str());
-          std::ofstream f((std::filesystem::current_path() /
-                           "radioify.log")
-                              .string(),
-                          std::ios::app);
-          if (f) f << radioifyLogTimestamp() << " " << buf << "\n";
+          appendAudioTimingLogLine(buf);
         }
 #endif
       }
@@ -1143,10 +1143,7 @@ bool initDevice() {
     std::snprintf(buf, sizeof(buf),
                   "audio_device_started sampleRate=%u channels=%u",
                   gAudio.sampleRate, gAudio.channels);
-    std::ofstream f((std::filesystem::current_path() / "radioify.log")
-                        .string(),
-                    std::ios::app);
-    if (f) f << radioifyLogTimestamp() << " " << buf << "\n";
+    appendAudioTimingLogLine(buf);
   }
 #endif
   return true;
