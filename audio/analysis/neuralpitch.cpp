@@ -37,20 +37,20 @@
 
 namespace {
 constexpr uint32_t kModelSampleRate = 16000u;
-constexpr int kModelFrameSize = 1024;
-constexpr int kModelHopSize = 256;
+[[maybe_unused]] constexpr int kModelFrameSize = 1024;
+[[maybe_unused]] constexpr int kModelHopSize = 256;
 constexpr int kCrepeBins = 360;
 constexpr float kCrepeCentsPerBin = 20.0f;
 constexpr float kCrepeCentsOffset = 1997.3794084376191f;
 constexpr float kProbFloor = 1.0e-9f;
 constexpr int kRingMax = 4096;
-constexpr int kProducedFrameQueueMax = 8192;
+[[maybe_unused]] constexpr int kProducedFrameQueueMax = 8192;
 
-float clampf(float value, float low, float high) {
+[[maybe_unused]] float clampf(float value, float low, float high) {
   return std::max(low, std::min(high, value));
 }
 
-float midiToFrequency(float midi) {
+[[maybe_unused]] float midiToFrequency(float midi) {
   return 440.0f * std::exp2((midi - 69.0f) / 12.0f);
 }
 
@@ -77,7 +77,7 @@ int midiToState(float midi) {
   return rounded - kMelodyMidiMin + 1;
 }
 
-float stableSigmoid(float x) {
+[[maybe_unused]] float stableSigmoid(float x) {
   if (!std::isfinite(x)) return 0.0f;
   if (x >= 0.0f) {
     float z = std::exp(-x);
@@ -87,7 +87,7 @@ float stableSigmoid(float x) {
   return z / (1.0f + z);
 }
 
-void appendSchemaRegistrationHint(std::string* error) {
+[[maybe_unused]] void appendSchemaRegistrationHint(std::string* error) {
   if (!error || error->empty()) return;
   if (error->find("Trying to register schema") == std::string::npos ||
       error->find("already registered") == std::string::npos ||
@@ -97,10 +97,10 @@ void appendSchemaRegistrationHint(std::string* error) {
   *error +=
       " Fix: rebuild ONNX/ONNX Runtime with "
       "ONNX_DISABLE_STATIC_REGISTRATION=ON "
-      "(build.ps1 now sets this via VCPKG_CMAKE_CONFIGURE_OPTIONS).";
+      "(the repo's vcpkg overlay now forces this during build).";
 }
 
-void normalizePositiveInplace(std::vector<float>* values) {
+[[maybe_unused]] void normalizePositiveInplace(std::vector<float>* values) {
   if (!values || values->empty()) return;
   float sum = 0.0f;
   for (float& v : *values) {
@@ -119,8 +119,8 @@ void normalizePositiveInplace(std::vector<float>* values) {
   }
 }
 
-bool convertPitchOutputToCrepeBins(const std::vector<float>& raw,
-                                   std::vector<float>* pitchBins) {
+[[maybe_unused]] bool convertPitchOutputToCrepeBins(
+    const std::vector<float>& raw, std::vector<float>* pitchBins) {
   if (!pitchBins) return false;
   pitchBins->clear();
   if (raw.empty()) return false;
@@ -200,11 +200,10 @@ void normalizePosterior(std::array<float, kMelodyAnalyzerStates>* posterior) {
   }
 }
 
-void buildPosteriorFromCrepe(const std::vector<float>& pitchBins,
-                             float voicingProb,
-                             std::array<float, kMelodyAnalyzerStates>* out,
-                             float* outMidi,
-                             int* outMidiNote) {
+[[maybe_unused]] void buildPosteriorFromCrepe(
+    const std::vector<float>& pitchBins, float voicingProb,
+    std::array<float, kMelodyAnalyzerStates>* out, float* outMidi,
+    int* outMidiNote) {
   if (!out) return;
   out->fill(0.0f);
 
@@ -393,7 +392,7 @@ std::wstring utf8ToWide(const std::string& text) {
 #endif
 #endif
 
-std::filesystem::path resolveModelPath() {
+[[maybe_unused]] std::filesystem::path resolveModelPath() {
   if (const auto envPath = getEnvString("RADIOIFY_NEURAL_PITCH_MODEL")) {
     std::filesystem::path p(*envPath);
     if (std::filesystem::exists(p)) return p;
@@ -411,14 +410,15 @@ std::filesystem::path resolveModelPath() {
   return {};
 }
 
-void trimRings(NeuralPitchState* state) {
+[[maybe_unused]] void trimRings(NeuralPitchState* state) {
   if (!state) return;
   while (static_cast<int>(state->ring16k.size()) > kRingMax) {
     state->ring16k.pop_front();
   }
 }
 
-size_t resampleOne(NeuralPitchState* state, float monoSample) {
+[[maybe_unused]] size_t resampleOne(NeuralPitchState* state,
+                                    float monoSample) {
   if (!state || state->sourceStep <= 0.0) return 0;
   state->sourceBuffer.push_back(monoSample);
   size_t emitted = 0;

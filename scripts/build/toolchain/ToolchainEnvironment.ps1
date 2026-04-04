@@ -1,6 +1,10 @@
 function Apply-BuildToolchainEnvironment {
   param([pscustomobject]$Toolchain)
 
+  if ($Toolchain.Ninja -and $Toolchain.NinjaExe) {
+    Prepend-PathDirectory (Split-Path -Parent $Toolchain.NinjaExe)
+  }
+
   if ($Toolchain.ClangCl) {
     if ($Toolchain.ClangMtExe) {
       Prepend-PathDirectory (Split-Path -Parent $Toolchain.ClangMtExe)
@@ -29,6 +33,9 @@ function Write-BuildToolchainSummary {
     Write-Host "Using Ninja: $($Toolchain.NinjaExe)"
     Write-Host "Using Ninja status: $(Get-ProcessEnvironmentVariable -Name "NINJA_STATUS")"
   }
+
+  Write-Host "Using configure preset: $($Toolchain.ConfigurePreset)"
+  Write-Host "Using build preset: $($Toolchain.BuildPreset)"
 
   if ($Toolchain.ClangCl) {
     Write-Host "Using compiler: $($Toolchain.ClangClExe)"

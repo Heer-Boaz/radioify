@@ -14,8 +14,7 @@
 #include "videoplayback.h"
 
 PlaybackSessionHost::PlaybackSessionHost(const Args& args)
-    : file_(args.file),
-      input_(args.input),
+    : input_(args.input),
       screen_(args.screen),
       baseStyle_(args.baseStyle),
       accentStyle_(args.accentStyle),
@@ -103,34 +102,36 @@ bool PlaybackSessionHost::reportVideoError(const std::string& message,
 PerfLog& PlaybackSessionHost::perfLog() { return perfLog_; }
 
 playback_frame_output::LogLineWriter PlaybackSessionHost::timingSink() const {
-  return [this](const std::string& line) {
 #if RADIOIFY_ENABLE_TIMING_LOG
+  PerfLog* perfLog = const_cast<PerfLog*>(&perfLog_);
+  return [perfLog](const std::string& line) {
     if (line.empty()) {
       return;
     }
     std::lock_guard<std::mutex> lock(timingLogMutex());
-    if (perfLog_.file.is_open()) {
-      perfLog_.file << radioifyLogTimestamp() << " " << line << "\n";
+    if (perfLog->file.is_open()) {
+      perfLog->file << radioifyLogTimestamp() << " " << line << "\n";
     }
-#else
-    (void)line;
-#endif
   };
+#else
+  return [](const std::string& line) { (void)line; };
+#endif
 }
 
 playback_frame_output::LogLineWriter PlaybackSessionHost::warningSink() const {
-  return [this](const std::string& message) {
 #if RADIOIFY_ENABLE_VIDEO_ERROR_LOG
+  const std::filesystem::path logPath = logPath_;
+  return [logPath](const std::string& message) {
     const std::string line = message.empty() ? "Video warning." : message;
     const std::string payload = "video_warning msg=" + line;
-    std::ofstream f(logPath_, std::ios::app);
+    std::ofstream f(logPath, std::ios::app);
     if (f) {
       f << radioifyLogTimestamp() << " " << payload << "\n";
     }
-#else
-    (void)message;
-#endif
   };
+#else
+  return [](const std::string& message) { (void)message; };
+#endif
 }
 
 const std::string& PlaybackSessionHost::windowTitle() const {

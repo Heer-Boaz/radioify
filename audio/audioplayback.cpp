@@ -920,10 +920,12 @@ bool startM4aWorker(const std::filesystem::path& file, uint64_t startFrame,
                                         workerRate, targetFrames]() {
     FfmpegAudioDecoder decoder;
     std::string initError;
-    auto t_init_start = std::chrono::steady_clock::now();
-    bool ok = decoder.init(file, workerChannels, workerRate, &initError);
-    auto t_init_end = std::chrono::steady_clock::now();
 #if RADIOIFY_ENABLE_TIMING_LOG
+    auto t_init_start = std::chrono::steady_clock::now();
+#endif
+    bool ok = decoder.init(file, workerChannels, workerRate, &initError);
+#if RADIOIFY_ENABLE_TIMING_LOG
+    auto t_init_end = std::chrono::steady_clock::now();
     {
       char buf[512];
       std::snprintf(buf, sizeof(buf),

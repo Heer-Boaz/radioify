@@ -28,12 +28,12 @@
 #define RADIOIFY_VIDEO_ERROR_LOG(...) do { } while (0)
 #endif
 
-static inline std::string now_ms() {
+[[maybe_unused]] static inline std::string now_ms() {
     using namespace std::chrono;
     auto t = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
     std::ostringstream ss; ss << t; return ss.str();
 }
-static inline std::string thread_id_str() {
+[[maybe_unused]] static inline std::string thread_id_str() {
     std::ostringstream ss; ss << std::this_thread::get_id(); return ss.str();
 }
 

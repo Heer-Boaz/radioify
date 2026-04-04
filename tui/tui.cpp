@@ -2033,13 +2033,11 @@ int runTui(Options o) {
         }
       }
       if (line < height) {
-        bool exportRunning = false;
         bool exportHasResult = false;
         bool exportSuccess = false;
         std::string exportStatus;
         {
           std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-          exportRunning = melodyExportTask.running;
           exportHasResult = melodyExportTask.hasResult;
           exportSuccess = melodyExportTask.success;
           exportStatus = melodyExportTask.status;

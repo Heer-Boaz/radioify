@@ -11,6 +11,8 @@ function New-BuildToolchainState {
     ClangMtExe       = $null
     WindowsFxcExe    = Resolve-WindowsSdkTool -ToolName "fxc.exe"
     BuildDirName     = "build"
+    ConfigurePreset  = "windows-default"
+    BuildPreset      = "windows-default"
     AutoEnabledNinja = $false
     AutoEnabledClang = $false
   }
@@ -84,15 +86,54 @@ Or let the build script do it:
   $ToolchainState.ClangMtExe = Resolve-WindowsSdkTool -ToolName "mt.exe"
 }
 
+function Resolve-BuildToolchainLayoutName {
+  param(
+    [System.Collections.IDictionary]$ToolchainState,
+    [pscustomobject]$Options
+  )
+
+  $parts = @()
+  if ($ToolchainState.Ninja) {
+    $parts += "ninja"
+  }
+  if ($ToolchainState.ClangCl) {
+    $parts += "clangcl"
+  }
+  if ([bool]$Options.Static) {
+    $parts += "static"
+  }
+
+  if ($parts.Count -eq 0) {
+    return "default"
+  }
+
+  return ($parts -join "-")
+}
+
 function Resolve-BuildToolchainLayout {
-  param([System.Collections.IDictionary]$ToolchainState)
+  param(
+    [System.Collections.IDictionary]$ToolchainState,
+    [pscustomobject]$Options
+  )
+
+  $layoutName = Resolve-BuildToolchainLayoutName -ToolchainState $ToolchainState -Options $Options
 
   if ($ToolchainState.Ninja) {
     $ToolchainState.Generator = "Ninja"
-    $ToolchainState.BuildDirName = "build-ninja"
   }
-  if ($ToolchainState.ClangCl) {
-    $ToolchainState.BuildDirName = if ($ToolchainState.Ninja) { "build-ninja-clangcl" } else { "build-clangcl" }
+
+  $ToolchainState.ConfigurePreset = "windows-$layoutName"
+  $ToolchainState.BuildPreset = "windows-$layoutName"
+  $ToolchainState.BuildDirName = switch ($layoutName) {
+    "default" { "build" }
+    "static" { "build-static" }
+    "ninja" { "build-ninja" }
+    "ninja-static" { "build-ninja-static" }
+    "clangcl" { "build-clangcl" }
+    "clangcl-static" { "build-clangcl-static" }
+    "ninja-clangcl" { "build-ninja-clangcl" }
+    "ninja-clangcl-static" { "build-ninja-clangcl-static" }
+    default { Fail-Build "Unsupported build layout '$layoutName'." }
   }
 }
 
@@ -102,6 +143,6 @@ function Resolve-BuildToolchain {
   $toolchainState = New-BuildToolchainState -Options $Options
   Resolve-NinjaToolchainState -ToolchainState $toolchainState -Options $Options
   Resolve-ClangToolchainState -ToolchainState $toolchainState -Options $Options
-  Resolve-BuildToolchainLayout -ToolchainState $toolchainState
+  Resolve-BuildToolchainLayout -ToolchainState $toolchainState -Options $Options
   return [pscustomobject]$toolchainState
 }

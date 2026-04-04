@@ -12,7 +12,7 @@
 namespace playback_screen_renderer {
 namespace {
 
-const char* playerStateLabel(PlayerState state) {
+[[maybe_unused]] const char* playerStateLabel(PlayerState state) {
   switch (state) {
     case PlayerState::Idle:
       return "Idle";
@@ -40,7 +40,7 @@ const char* playerStateLabel(PlayerState state) {
   return "Unknown";
 }
 
-const char* clockSourceLabel(PlayerClockSource source) {
+[[maybe_unused]] const char* clockSourceLabel(PlayerClockSource source) {
   switch (source) {
     case PlayerClockSource::None:
       return "none";

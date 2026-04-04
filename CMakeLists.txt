@@ -51,12 +51,42 @@ function(radioify_disable_warnings target_name)
       $<$<COMPILE_LANGUAGE:C>:/W0>
       $<$<COMPILE_LANGUAGE:CXX>:/W0>
     )
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+      target_compile_options(${target_name} PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:/clang:-Wno-unknown-argument>
+        $<$<COMPILE_LANGUAGE:CXX>:/clang:-Wno-unknown-argument>
+        $<$<COMPILE_LANGUAGE:C>:-Wno-unknown-argument>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unknown-argument>
+      )
+    endif()
   else()
     target_compile_options(${target_name} PRIVATE
       $<$<COMPILE_LANGUAGE:C>:-w>
       $<$<COMPILE_LANGUAGE:CXX>:-w>
     )
   endif()
+endfunction()
+
+function(radioify_add_external_include_dirs)
+  if (ARGN)
+    target_include_directories(radioify_external_options SYSTEM INTERFACE ${ARGN})
+  endif()
+endfunction()
+
+function(radioify_link_repo_target target_name)
+  target_link_libraries(${target_name} PRIVATE
+    radioify_project_options
+    radioify_external_options
+  )
+endfunction()
+
+function(radioify_configure_repo_target target_name)
+  radioify_link_repo_target(${target_name})
+  radioify_enable_strict_warnings(${target_name})
+endfunction()
+
+function(radioify_configure_external_target target_name)
+  radioify_disable_warnings(${target_name})
 endfunction()
 
 if (MSVC)
@@ -129,7 +159,8 @@ target_include_directories(radioify_project_options INTERFACE
   ${CMAKE_SOURCE_DIR}/playback/session
   ${CMAKE_SOURCE_DIR}/playback/overlay
 )
-target_include_directories(radioify_project_options SYSTEM INTERFACE
+add_library(radioify_external_options INTERFACE)
+target_include_directories(radioify_external_options SYSTEM INTERFACE
   ${CMAKE_SOURCE_DIR}/third_party
 )
 target_compile_definitions(radioify_project_options INTERFACE
@@ -139,7 +170,7 @@ target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_ENABLE_STAGING_UPLOAD=$<IF:$<BOOL:${RADIOIFY_ENABLE_STAGING_UPLOAD}>,1,0>
 )
 if (MSVC)
-  target_compile_options(radioify_project_options INTERFACE
+  target_compile_options(radioify_external_options INTERFACE
     $<$<COMPILE_LANGUAGE:C>:/external:W0>
     $<$<COMPILE_LANGUAGE:CXX>:/external:W0>
   )
@@ -147,8 +178,7 @@ endif()
 
 function(radioify_add_module_object_library target_name)
   add_library(${target_name} OBJECT ${ARGN})
-  target_link_libraries(${target_name} PRIVATE radioify_project_options)
-  radioify_enable_strict_warnings(${target_name})
+  radioify_configure_repo_target(${target_name})
 endfunction()
 
 add_subdirectory(app)
@@ -172,7 +202,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_audiofilter>
   $<TARGET_OBJECTS:radioify_loopsplit>
 )
-target_link_libraries(radioify PRIVATE radioify_project_options)
+radioify_link_repo_target(radioify)
 
 add_executable(radio_measurements)
 target_sources(radio_measurements PRIVATE
@@ -180,7 +210,7 @@ target_sources(radio_measurements PRIVATE
   $<TARGET_OBJECTS:radioify_config>
   $<TARGET_OBJECTS:radioify_audiofilter>
 )
-target_link_libraries(radio_measurements PRIVATE radioify_project_options)
+radioify_link_repo_target(radio_measurements)
 
 add_executable(radio_node_physics)
 target_sources(radio_node_physics PRIVATE
@@ -188,7 +218,7 @@ target_sources(radio_node_physics PRIVATE
   $<TARGET_OBJECTS:radioify_config>
   $<TARGET_OBJECTS:radioify_audiofilter>
 )
-target_link_libraries(radio_node_physics PRIVATE radioify_project_options)
+radioify_link_repo_target(radio_node_physics)
 
 if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL
@@ -490,10 +520,12 @@ if (WIN32)
   target_sources(radioify PRIVATE ${RADIOIFY_SHADER_HEADERS})
 endif()
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
+set(RADIOIFY_BUILD_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${RADIOIFY_BUILD_RUNTIME_OUTPUT_DIRECTORY}")
 foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
   string(TOUPPER "${config}" config_upper)
-  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_SOURCE_DIR}/dist")
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper}
+      "${RADIOIFY_BUILD_RUNTIME_OUTPUT_DIRECTORY}/${config}")
 endforeach()
 
 # vcpkg's FFmpeg port ships a `FindFFMPEG.cmake` module under
@@ -627,7 +659,7 @@ if (NOT FFMPEG_FOUND)
   message(FATAL_ERROR "FFmpeg not found. Set FFMPEG_DIR or install dev libraries.")
 endif()
 
-target_include_directories(radioify_project_options SYSTEM INTERFACE ${FFMPEG_INCLUDE_DIRS})
+radioify_add_external_include_dirs(${FFMPEG_INCLUDE_DIRS})
 if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
@@ -711,7 +743,7 @@ if (NOT RADIOIFY_HAS_LIBASS)
   message(FATAL_ERROR
     "libass is required for ASS subtitle rendering. Install libass (for vcpkg: `vcpkg install libass:x64-windows`) and reconfigure.")
 endif()
-target_include_directories(radioify_project_options SYSTEM INTERFACE ${_radioify_libass_include_dirs})
+radioify_add_external_include_dirs(${_radioify_libass_include_dirs})
 if (RADIOIFY_LIBASS_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
 endif()
@@ -750,7 +782,7 @@ if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE)
     )
     if (ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
       set(RADIOIFY_HAS_ONNXRUNTIME ON)
-      target_include_directories(radioify_project_options SYSTEM INTERFACE ${ONNXRUNTIME_INCLUDE_DIR})
+      radioify_add_external_include_dirs(${ONNXRUNTIME_INCLUDE_DIR})
       target_link_libraries(radioify PRIVATE ${ONNXRUNTIME_LIBRARY})
       message(STATUS "Neural pitch: ONNX Runtime enabled via manual lookup.")
     else()
@@ -779,7 +811,7 @@ add_library(sexypsf STATIC
   ${CMAKE_SOURCE_DIR}/third_party/psx/PsxHLE.c
   ${CMAKE_SOURCE_DIR}/third_party/psx/spu/spu.c
 )
-radioify_disable_warnings(sexypsf)
+radioify_configure_external_target(sexypsf)
 target_include_directories(sexypsf PUBLIC ${CMAKE_SOURCE_DIR}/third_party/psx)
 if (WIN32)
   target_compile_definitions(sexypsf PRIVATE PSS_STYLE=2)
@@ -822,7 +854,7 @@ add_library(psfcore STATIC
   ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/vfs.c
   ${psf2wav_SOURCE_DIR}/highly_experimental/Highly_Experimental/Core/mkhebios.c
 )
-radioify_disable_warnings(psfcore)
+radioify_configure_external_target(psfcore)
 target_include_directories(psfcore PUBLIC
   ${psf2wav_SOURCE_DIR}/highly_experimental
 )
@@ -860,10 +892,10 @@ if (EXISTS "${_radioify_libkss_kssplay_c}")
 endif()
 foreach(_radioify_libkss_target IN ITEMS emu2149 emu2212 emu2413 emu8950 emu76489 kmz80 kss kss2wav)
   if (TARGET ${_radioify_libkss_target})
-    radioify_disable_warnings(${_radioify_libkss_target})
+    radioify_configure_external_target(${_radioify_libkss_target})
   endif()
 endforeach()
-target_include_directories(radioify_project_options SYSTEM INTERFACE
+radioify_add_external_include_dirs(
   ${libkss_SOURCE_DIR}/src
   ${libkss_SOURCE_DIR}/modules
 )
@@ -883,10 +915,10 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(gme)
 foreach(_radioify_gme_target IN ITEMS gme gme_player demo demo_mem)
   if (TARGET ${_radioify_gme_target})
-    radioify_disable_warnings(${_radioify_gme_target})
+    radioify_configure_external_target(${_radioify_gme_target})
   endif()
 endforeach()
-target_include_directories(radioify_project_options SYSTEM INTERFACE ${gme_SOURCE_DIR})
+radioify_add_external_include_dirs(${gme_SOURCE_DIR})
 target_link_libraries(radioify PRIVATE gme)
 if (_radioify_disable_sdl2_defined)
   set(CMAKE_DISABLE_FIND_PACKAGE_SDL2 ${_radioify_disable_sdl2_value})
@@ -928,7 +960,7 @@ if (NOT RADIOIFY_DISABLE_GSF_GPL)
     ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA
     ${CMAKE_SOURCE_DIR}/third_party/playgsf/libresample-0.1.3/include
   )
-  target_include_directories(radioify_project_options SYSTEM INTERFACE
+  radioify_add_external_include_dirs(
     ${CMAKE_SOURCE_DIR}/third_party/playgsf
     ${CMAKE_SOURCE_DIR}/third_party/playgsf/VBA
     ${CMAKE_SOURCE_DIR}/third_party/playgsf/libresample-0.1.3/include
@@ -937,7 +969,7 @@ if (NOT RADIOIFY_DISABLE_GSF_GPL)
   if (CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_compile_definitions(playgsf PRIVATE C_CORE)
   endif()
-  radioify_disable_warnings(playgsf)
+  radioify_configure_external_target(playgsf)
   target_link_libraries(radioify PRIVATE playgsf)
 endif()
 
@@ -964,10 +996,10 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(libvgm)
 foreach(_radioify_libvgm_target IN ITEMS vgm-utils vgm-audio vgm-emu vgm-player vgmplayer vgmplayer-static vgm-player-static)
   if (TARGET ${_radioify_libvgm_target})
-    radioify_disable_warnings(${_radioify_libvgm_target})
+    radioify_configure_external_target(${_radioify_libvgm_target})
   endif()
 endforeach()
-target_include_directories(radioify_project_options SYSTEM INTERFACE ${libvgm_SOURCE_DIR})
+radioify_add_external_include_dirs(${libvgm_SOURCE_DIR})
 set(_radioify_libvgm_target "")
 foreach(_candidate IN ITEMS vgm-player vgm-player-static vgmplayer vgmplayer-static
                            vgm_player libvgm)
@@ -982,13 +1014,14 @@ endif()
 target_link_libraries(radioify PRIVATE ${_radioify_libvgm_target})
 
 set_target_properties(radioify PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist"
+  RUNTIME_OUTPUT_DIRECTORY "${RADIOIFY_BUILD_RUNTIME_OUTPUT_DIRECTORY}"
 )
 
 foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
   string(TOUPPER "${config}" config_upper)
   set_target_properties(radioify PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_SOURCE_DIR}/dist"
+    RUNTIME_OUTPUT_DIRECTORY_${config_upper}
+      "${RADIOIFY_BUILD_RUNTIME_OUTPUT_DIRECTORY}/${config}"
   )
 endforeach()
 

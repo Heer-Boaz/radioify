@@ -15,7 +15,7 @@ function Invoke-ConfigureStep {
 function New-BuildCommandArguments {
   param([pscustomobject]$Context)
 
-  $buildArgs = @("--build", $Context.Build.ConfigureInfo.BuildDirForCMake, "--target", "radioify")
+  $buildArgs = @("--build", "--preset", $Context.Tools.Toolchain.BuildPreset)
   if (-not $Context.Tools.Toolchain.Ninja) {
     $buildArgs += @("--config", $Context.Options.Config)
   }

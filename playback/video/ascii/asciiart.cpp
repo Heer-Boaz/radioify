@@ -41,7 +41,7 @@ constexpr uint32_t kBrailleBase = 0x2800;
 // === SIMPLE DENSITY-BASED ASCII RAMP ===
 // Classic ASCII art approach: characters sorted by visual density
 // This is cached as a simple lookup table indexed by density level (0-15)
-constexpr std::array<wchar_t, 16> kDensityRamp = {
+[[maybe_unused]] constexpr std::array<wchar_t, 16> kDensityRamp = {
     L' ',  // 0 (lightest)
     L'.',  // 1
     L',',  // 2
@@ -216,13 +216,13 @@ constexpr bool kUseEdgeBoost = true;
 constexpr uint8_t kEdgeMin = 4;      // Reverted to 4 for sensitivity
 constexpr uint8_t kEdgeBoost = 245;  // Sterker edge boost
 constexpr int kEdgeShift = 3;
-constexpr int kBgDelta = 6;  // Lagere threshold voor meer detail
-constexpr int kBgDeltaMin = 1;
-constexpr int kEdgeDeltaScale = 96;  // Meer edge-responsief
-constexpr int kDitherBias = 48;      // Verlaagd voor betere halftones
-constexpr bool kUseAABand = true;
-constexpr int kAAScoreBandMin = 12;
-constexpr int kAAScoreBandMax = 144;  // Soft AA band voor gladdere randen
+[[maybe_unused]] constexpr int kBgDelta = 6;  // Lagere threshold voor meer detail
+[[maybe_unused]] constexpr int kBgDeltaMin = 1;
+[[maybe_unused]] constexpr int kEdgeDeltaScale = 96;  // Meer edge-responsief
+[[maybe_unused]] constexpr int kDitherBias = 48;      // Verlaagd voor betere halftones
+[[maybe_unused]] constexpr bool kUseAABand = true;
+[[maybe_unused]] constexpr int kAAScoreBandMin = 12;
+[[maybe_unused]] constexpr int kAAScoreBandMax = 144;  // Soft AA band voor gladdere randen
 constexpr int kLumSmoothAlpha = 40;   // Snellere adaptatie
 constexpr int kLumResetDelta = 28;
 constexpr float kHdrReferenceNits = 100.0f;
@@ -380,7 +380,7 @@ const std::array<uint8_t, 8> kDitherThresholdByBit = []() {
   return lut;
 }();
 
-const std::array<uint8_t, 256> kEdgeBoostFromMag = []() {
+[[maybe_unused]] const std::array<uint8_t, 256> kEdgeBoostFromMag = []() {
   std::array<uint8_t, 256> lut{};
   if constexpr (kUseEdgeBoost) {
     const int range = 255 - kEdgeMin;
@@ -433,7 +433,7 @@ FORCE_INLINE float expandChromaNorm(int c, bool fullRange, int bitDepth) {
   return (static_cast<float>(c) - cMid) / denom;
 }
 
-FORCE_INLINE uint8_t to8bitFrom10(int v10) {
+[[maybe_unused]] FORCE_INLINE uint8_t to8bitFrom10(int v10) {
   if (v10 < 0) v10 = 0;
   if (v10 > 1023) v10 = 1023;
   return static_cast<uint8_t>((v10 * 255 + 511) / 1023);
@@ -1499,7 +1499,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
       scratch.bgLumaScratch[i] = static_cast<uint8_t>(std::clamp(bgY, 0, 255));
     }
 
-    uint64_t clampedCount = 0;
+    [[maybe_unused]] uint64_t clampedCount = 0;
     for (int cy = 0; cy < outH; ++cy) {
       for (int cx = 0; cx < outW; ++cx) {
         size_t idx = static_cast<size_t>(cy) * outW + cx;

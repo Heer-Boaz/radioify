@@ -73,8 +73,6 @@ function Configure-MelodyAnalysisBuild {
     return
   }
 
-  Add-VcpkgCMakeConfigureOption "-DONNX_DISABLE_STATIC_REGISTRATION=ON"
-
   $overlayPortsDir = Join-Path $Context.Paths.Root "vcpkg-overlays\ports"
   if (Test-Path $overlayPortsDir) {
     Assert-OnnxOverlayPortComplete $overlayPortsDir

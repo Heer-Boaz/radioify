@@ -63,12 +63,6 @@ bool tryLoadM3u(Music_Emu* emu, const std::filesystem::path& path) {
   return true;
 }
 
-bool isNsfType(Music_Emu* emu) {
-  if (!emu) return false;
-  gme_type_t type = gme_type(emu);
-  return type == gme_nsf_type || type == gme_nsfe_type;
-}
-
 double stereoDepthValue(NsfStereoDepth depth) {
   switch (depth) {
     case NsfStereoDepth::Low:

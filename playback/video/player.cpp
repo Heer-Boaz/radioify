@@ -73,7 +73,6 @@ constexpr size_t kIoCacheLowWater = 8 * 1024 * 1024;
 constexpr size_t kIoCacheHighWater = 24 * 1024 * 1024;
 constexpr int kIoAvioBufferSize = 64 * 1024;
 constexpr size_t kVideoPrefillFrames = 1;
-constexpr size_t kAudioPacketLowWater = 4;
 
 int64_t frameDurationTicks(const AVFrame* frame) {
   if (!frame) return 0;

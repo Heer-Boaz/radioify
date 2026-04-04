@@ -139,6 +139,16 @@ struct AssOverrideInfo {
   bool underline = false;
 };
 
+SubtitleCue makePlainCue(int64_t startUs, int64_t endUs, std::string text,
+                         std::string rawText) {
+  SubtitleCue cue;
+  cue.startUs = startUs;
+  cue.endUs = endUs;
+  cue.text = std::move(text);
+  cue.rawText = std::move(rawText);
+  return cue;
+}
+
 void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
   if (!out || block.empty()) return;
   size_t i = 0;
@@ -816,7 +826,9 @@ bool parseSrtCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
 
     std::string text = joinCueText(cueLines);
     if (!text.empty()) {
-      outCues->push_back(SubtitleCue{startUs, endUs, std::move(text)});
+      std::string rawText = text;
+      outCues->push_back(
+          makePlainCue(startUs, endUs, std::move(text), std::move(rawText)));
     }
   }
   return !outCues->empty();
@@ -875,7 +887,9 @@ bool parseVttCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     }
     std::string text = joinCueText(cueLines);
     if (!text.empty()) {
-      outCues->push_back(SubtitleCue{startUs, endUs, std::move(text)});
+      std::string rawText = text;
+      outCues->push_back(
+          makePlainCue(startUs, endUs, std::move(text), std::move(rawText)));
     }
   }
   return !outCues->empty();
@@ -917,7 +931,9 @@ bool parseSbvCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     }
     std::string text = joinCueText(cueLines);
     if (!text.empty()) {
-      outCues->push_back(SubtitleCue{startUs, endUs, std::move(text)});
+      std::string rawText = text;
+      outCues->push_back(
+          makePlainCue(startUs, endUs, std::move(text), std::move(rawText)));
     }
   }
 
@@ -992,7 +1008,9 @@ bool parseMicroDvdCues(const std::string& raw, std::vector<SubtitleCue>* outCues
     int64_t endUs = static_cast<int64_t>(
         std::llround((static_cast<double>(endFrame) * 1000000.0) / fps));
     if (endUs <= startUs) endUs = startUs + 100000;
-    outCues->push_back(SubtitleCue{startUs, endUs, std::move(text)});
+    std::string rawText = text;
+    outCues->push_back(
+        makePlainCue(startUs, endUs, std::move(text), std::move(rawText)));
   }
 
   return !outCues->empty();

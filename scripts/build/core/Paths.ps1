@@ -42,14 +42,18 @@ function Find-RadioifyExecutable {
   )
 
   $candidates = @()
-  if ($Root) {
-    $candidates += (Join-Path $Root "dist\radioify.exe")
-  }
   if ($BuildDir) {
+    $candidates += (Join-Path $BuildDir "bin\radioify.exe")
+    if ($Config) {
+      $candidates += (Join-Path (Join-Path $BuildDir "bin\$Config") "radioify.exe")
+    }
     $candidates += (Join-Path $BuildDir "radioify.exe")
     if ($Config) {
       $candidates += (Join-Path (Join-Path $BuildDir $Config) "radioify.exe")
     }
+  }
+  if ($Root) {
+    $candidates += (Join-Path $Root "dist\radioify.exe")
   }
 
   foreach ($candidate in ($candidates | Select-Object -Unique)) {
@@ -68,6 +72,44 @@ function Find-RadioifyExecutable {
   }
 
   return $null
+}
+
+function Try-Copy-BuildArtifact {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$SourcePath,
+    [Parameter(Mandatory = $true)]
+    [string]$DestinationPath,
+    [int]$MaxRetries = 3,
+    [int]$DelayMilliseconds = 250
+  )
+
+  $destinationDir = Split-Path -Parent $DestinationPath
+  if ($destinationDir -and -not (Test-Path $destinationDir)) {
+    New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+  }
+
+  for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+    try {
+      Copy-Item -Force -Path $SourcePath -Destination $DestinationPath -ErrorAction Stop
+      return [pscustomobject]@{
+        Success = $true
+        ErrorMessage = $null
+      }
+    }
+    catch {
+      $errorMessage = $_.Exception.Message
+      if ($attempt -lt $MaxRetries) {
+        Start-Sleep -Milliseconds $DelayMilliseconds
+        continue
+      }
+
+      return [pscustomobject]@{
+        Success = $false
+        ErrorMessage = $errorMessage
+      }
+    }
+  }
 }
 
 function Copy-FfmpegRuntime {

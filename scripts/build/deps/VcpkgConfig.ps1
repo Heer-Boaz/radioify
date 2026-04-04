@@ -1,10 +1,3 @@
-function Add-VcpkgCMakeConfigureOption {
-  param([string]$Option)
-
-  if (-not $Option) { return }
-  Add-UniqueEnvironmentListValue -Name "VCPKG_CMAKE_CONFIGURE_OPTIONS" -Value $Option
-}
-
 function Add-VcpkgOverlayPortPath {
   param([string]$PathToAdd)
 

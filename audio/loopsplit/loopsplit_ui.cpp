@@ -24,10 +24,12 @@ void joinLoopSplitExportWorker(LoopSplitTaskState& state) {
 }
 
 void startLoopSplitExport(const std::filesystem::path& entryPath,
-                         const std::string& outputArg,
-                         const LoopSplitConfig& splitConfig,
-                         LoopSplitTaskState& state) {
-  auto [stingerOutput, loopOutput] = resolveSplitOutputPaths(entryPath, outputArg);
+                          const std::string& outputArg,
+                          const LoopSplitConfig& splitConfig,
+                          LoopSplitTaskState& state) {
+  const auto outputPaths = resolveSplitOutputPaths(entryPath, outputArg);
+  const std::filesystem::path& stingerOutput = outputPaths.first;
+  const std::filesystem::path& loopOutput = outputPaths.second;
 
   bool shouldJoin = false;
   {

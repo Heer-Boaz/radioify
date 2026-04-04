@@ -38,10 +38,9 @@ class PlaybackSessionHost {
   playback_frame_output::LogLineWriter timingSink() const;
   playback_frame_output::LogLineWriter warningSink() const;
   const std::string& windowTitle() const;
-  bool* quitApplicationRequestedPtr();
+ bool* quitApplicationRequestedPtr();
 
  private:
-  const std::filesystem::path& file_;
   ConsoleInput& input_;
   ConsoleScreen& screen_;
   const Style& baseStyle_;

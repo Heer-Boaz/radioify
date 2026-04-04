@@ -7,12 +7,12 @@ Use this file instead of guessing from memory.
 ## Known-Good Defaults
 
 - Build script: `.\build.ps1`
-- Build directory: `.\build-ninja` when Ninja is auto-detected, otherwise `.\build`
-- Output directory: `.\dist`
-- Main binary: `.\dist\radioify.exe`
+- Build directory: depends on the selected preset/toolchain, for example `.\build-ninja-clangcl-static` for the default static clang-cl path
+- Published output directory: `.\dist`
+- Native link output: under the active build dir, usually `.\build-...\bin`
+- Main binary: usually published to `.\dist\radioify.exe`
 - Preferred config: `Release`
 - Preferred build command: `.\build.ps1 -Static`
-- Optional Ninja build command: `.\build.ps1 -Static -Ninja`
 
 ## Requirements
 
@@ -30,39 +30,11 @@ manually.
 
 Open a Windows PowerShell prompt in the repo root.
 
-First-time dependency install:
-
 ```powershell
 .\build.ps1 -InstallDeps -Static
-```
-
-Normal build:
-
-```powershell
 .\build.ps1 -Static
-```
-
-Normal build with Ninja progress output:
-
-```powershell
-.\build.ps1 -Static -Ninja
-```
-
-Clean only:
-
-```powershell
-.\build.ps1 -Clean
-```
-
-Optional variants:
-
-```powershell
-.\build.ps1 -Static
-.\build.ps1 -InstallDeps -Static
-.\build.ps1 -Static -Ninja
-.\build.ps1 -InstallDeps -Static -Ninja
 .\build.ps1 -Static -MelodyAnalysis
-.\build.ps1 -InstallDeps -Static -MelodyAnalysis
+.\build.ps1 -Clean
 ```
 
 ## From WSL
@@ -82,19 +54,19 @@ Equivalent wrapper:
 ./build_windows.sh
 ```
 
-Only use a clean rebuild when the cache is genuinely broken:
+Only use a rebuild when the cache is genuinely broken:
 
 ```bash
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PWD")\\build.ps1" -Rebuild
 ```
 
-After any WSL-triggered build, verify:
+After any WSL-triggered build, verify the published binary when `dist` is not locked:
 
 ```powershell
 Get-Item .\dist\radioify.exe
 ```
 
-If that file is missing, the build did not really finish successfully.
+If `dist` is locked by a running process, the build script now leaves the fresh executable in the active build dir and prints that path explicitly.
 
 ## Run
 
@@ -113,16 +85,6 @@ Examples:
 .\dist\radioify.exe --no-audio "C:\Users\boazp\Music"
 ```
 
-## Verify The Output
-
-After a build, confirm the binary exists and has a fresh timestamp:
-
-```powershell
-Get-Item .\dist\radioify.exe
-```
-
-If the app is already running, restart it after rebuilding.
-
 ## Common Failure Modes
 
 ### 1. Stale CMake Cache Or Path Mismatch
@@ -130,17 +92,16 @@ If the app is already running, restart it after rebuilding.
 This happens a lot after switching between WSL paths like `/mnt/b/radioify` and
 Windows paths like `B:\radioify`.
 
-Use:
+Usually just rerun:
 
 ```powershell
 .\build.ps1 -Static
 ```
 
-If needed:
+If the cache is genuinely broken, use:
 
 ```powershell
-Remove-Item -Recurse -Force .\build
-.\build.ps1 -Static
+.\build.ps1 -Rebuild -Static
 ```
 
 ### 2. `vcpkg` Not Found
@@ -175,33 +136,17 @@ The usual fix is:
 .\build.ps1 -InstallDeps -Static
 ```
 
-### 4. CMake Build Is Flaky
+### 4. Files In `dist` Are Locked
 
-If `cmake --build` behaves oddly, or you want a more direct fallback, build the
-generated Visual Studio project with MSBuild:
-
-```powershell
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-& "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" .\build\radioify.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
-```
-
-If you use `BuildTools`, `Professional`, or `Enterprise`, adjust the MSBuild
-path.
-
-If you launched the build from WSL and it claims success but no binary appears,
-move to a native Windows PowerShell prompt before retrying this fallback.
-
-### 5. Files In `dist` Are Locked
-
-If rebuilds fail because the executable is still running:
+If the published executable is still running:
 
 ```powershell
 Get-Process radioify -ErrorAction SilentlyContinue | Stop-Process -Force
 ```
 
-Then rebuild again.
+Then rebuild again. If you do not stop it, the build can still succeed, but the fresh executable will remain under the active build dir instead of being copied into `.\dist`.
 
-### 6. PSF2 Plays Nothing Because BIOS Is Missing
+### 5. PSF2 Plays Nothing Because BIOS Is Missing
 
 PSF2 needs a BIOS available to the app.
 
@@ -218,9 +163,8 @@ Get-ChildItem .\dist\hebios.bin
 
 ## Notes
 
-- `build.ps1` writes to `.\build` and `.\dist`.
-- `build.ps1 -Ninja` writes to `.\build-ninja` and `.\dist`.
+- `build.ps1` writes to a preset-specific build dir such as `.\build`, `.\build-static`, `.\build-ninja`, or `.\build-ninja-clangcl-static`.
+- CMake links executables into the active build dir first, then the script publishes `radioify.exe` into `.\dist` when that path is not locked.
 - Non-static builds may copy FFmpeg runtime DLLs into `.\dist`.
 - Static builds do not copy FFmpeg DLLs.
-- Use `.\build.ps1 -Static` as the normal Windows build command.
 - Reserve `-Rebuild` for stale-cache/path breakage, not for routine builds.

@@ -1,38 +1,15 @@
 function New-CMakeConfigureInfo {
   param([pscustomobject]$Context)
 
-  $rootForCMake = Convert-ToCMakePath $Context.Paths.Root
-  $buildDirForCMake = Convert-ToCMakePath $Context.Paths.BuildDir
   $installedRootForCMake = Convert-ToCMakePath $Context.Build.InstalledRoot
   $toolchain = $Context.Tools.Toolchain
   $options = $Context.Options
   $triplets = $Context.Build.TripletInfo
 
-  $cmakeArgs = @("-S", $rootForCMake, "-B", $buildDirForCMake, "-Wno-deprecated")
+  $cmakeArgs = @("--preset", $toolchain.ConfigurePreset, "-Wno-deprecated")
 
-  if ($toolchain.Generator) {
-    $cmakeArgs += @("-G", $toolchain.Generator)
-    if ($toolchain.NinjaExe) {
-      $cmakeArgs += "-DCMAKE_MAKE_PROGRAM=$(Convert-ToCMakePath $toolchain.NinjaExe)"
-    }
-    if ($toolchain.Generator -eq "Ninja") {
-      $cmakeArgs += "-DCMAKE_BUILD_TYPE=$($options.Config)"
-    }
-  }
-  else {
+  if ($toolchain.Generator -eq "Ninja" -or -not $toolchain.Generator) {
     $cmakeArgs += "-DCMAKE_BUILD_TYPE=$($options.Config)"
-  }
-
-  if ($toolchain.ClangCl) {
-    $clangClForCMake = Convert-ToCMakePath $toolchain.ClangClExe
-    $cmakeArgs += "-DCMAKE_C_COMPILER=$clangClForCMake"
-    $cmakeArgs += "-DCMAKE_CXX_COMPILER=$clangClForCMake"
-    $cmakeArgs += "-DCMAKE_C_FLAGS_INIT=/clang:-fcolor-diagnostics /clang:-fansi-escape-codes /clang:-fcommon"
-    $cmakeArgs += "-DCMAKE_CXX_FLAGS_INIT=/clang:-fcolor-diagnostics /clang:-fansi-escape-codes"
-    $cmakeArgs += "-DCMAKE_RC_COMPILER=$(Convert-ToCMakePath $toolchain.ClangRcExe)"
-    if ($toolchain.ClangMtExe) {
-      $cmakeArgs += "-DCMAKE_MT=$(Convert-ToCMakePath $toolchain.ClangMtExe)"
-    }
   }
 
   if ($toolchain.WindowsFxcExe) {
@@ -47,11 +24,6 @@ function New-CMakeConfigureInfo {
   $cmakeArgs += "-DRADIOIFY_ENABLE_NEURAL_PITCH=$([bool]$options.MelodyAnalysis)"
 
   $desiredManifestMode = "OFF"
-  $cmakeArgs += "-DVCPKG_MANIFEST_MODE=$desiredManifestMode"
-  $cmakeArgs += "-DVCPKG_MANIFEST_INSTALL=OFF"
-  if (Is-StaticTriplet $triplets.EffectiveTargetTriplet) {
-    $cmakeArgs += "-DVCPKG_APPLOCAL_DEPS=OFF"
-  }
 
   $desiredToolchainForCache = $null
   if ($Context.Tools.VcpkgRoot) {
@@ -74,7 +46,6 @@ function New-CMakeConfigureInfo {
 
   return [pscustomobject]@{
     Arguments = $cmakeArgs
-    BuildDirForCMake = $buildDirForCMake
     DesiredManifestMode = $desiredManifestMode
     DesiredToolchainForCache = $desiredToolchainForCache
   }
@@ -128,28 +99,47 @@ function Publish-BuildArtifacts {
 
   $expectedExe = Join-Path $Context.Paths.DistDir "radioify.exe"
   $builtExe = Find-RadioifyExecutable -Root $Context.Paths.Root -BuildDir $Context.Paths.BuildDir -Config $Context.Options.Config
+  $publishedExe = $builtExe
+  $publishSucceeded = ($builtExe -and ($builtExe -eq $expectedExe))
   if ($builtExe -and ($builtExe -ne $expectedExe)) {
-    if (-not (Test-Path $Context.Paths.DistDir)) {
-      New-Item -ItemType Directory -Force -Path $Context.Paths.DistDir | Out-Null
-    }
-    Copy-Item -Force -Path $builtExe -Destination $expectedExe
+    $publishResult = Try-Copy-BuildArtifact -SourcePath $builtExe -DestinationPath $expectedExe
+    if ($publishResult.Success) {
+      $publishedExe = $expectedExe
+      $publishSucceeded = $true
 
-    $pdbSource = [System.IO.Path]::ChangeExtension($builtExe, ".pdb")
-    if (Test-Path $pdbSource) {
-      $pdbDest = Join-Path $Context.Paths.DistDir ([System.IO.Path]::GetFileName($pdbSource))
-      Copy-Item -Force -Path $pdbSource -Destination $pdbDest
+      $pdbSource = [System.IO.Path]::ChangeExtension($builtExe, ".pdb")
+      if (Test-Path $pdbSource) {
+        $pdbDest = Join-Path $Context.Paths.DistDir ([System.IO.Path]::GetFileName($pdbSource))
+        $pdbPublishResult = Try-Copy-BuildArtifact -SourcePath $pdbSource -DestinationPath $pdbDest
+        if (-not $pdbPublishResult.Success) {
+          Write-Warning "Built PDB could not be published to dist: $($pdbPublishResult.ErrorMessage)"
+        }
+      }
+    }
+    else {
+      Write-Warning "Built executable could not be published to dist: $($publishResult.ErrorMessage)"
+      Write-Warning "Using build artifact directly: $builtExe"
     }
   }
 
-  if (-not (Test-Path $expectedExe)) {
-    Fail-Build "Build completed without producing $expectedExe. Check the build output above."
+  if (-not $builtExe -or -not (Test-Path $builtExe)) {
+    Fail-Build "Build completed without producing a radioify executable in $($Context.Paths.BuildDir). Check the build output above."
   }
 
-  if (Test-Path $Context.Paths.DistDir) {
+  if (Test-Path $publishedExe) {
+    Write-Host "Primary executable:"
+    Write-Host " - $publishedExe"
+  }
+
+  if ($publishSucceeded -and (Test-Path $Context.Paths.DistDir)) {
     Write-Host "Build artifacts written to: $($Context.Paths.DistDir)"
     Get-ChildItem -Path $Context.Paths.DistDir -Recurse -File | ForEach-Object {
       Write-Host " - $($_.FullName)"
     }
     Write-Host "Run with: .\dist\radioify.exe <file-or-folder>"
+  }
+  elseif ($builtExe) {
+    Write-Host "Build artifacts remain in build output because dist publish was skipped or blocked."
+    Write-Host "Run with: $builtExe <file-or-folder>"
   }
 }

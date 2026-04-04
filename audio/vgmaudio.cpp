@@ -355,7 +355,7 @@ bool VgmAudioDecoder::getDevices(std::vector<VgmDeviceInfo>* out) const {
     }
 
     const DEV_DECL* decl = devInfo.devDecl;
-    if (decl && decl->cores) {
+    if (decl) {
       for (const DEV_DEF* const* def = decl->cores; *def; ++def) {
         info.coreIds.push_back((*def)->coreID);
         info.coreNames.push_back(coreDisplayName(*def));

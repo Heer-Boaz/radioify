@@ -112,10 +112,10 @@ namespace {
     }
 
     // Bitmap-font text rasterizer (5x7 glyphs) into BGRA pixels
-    static bool renderTextToBitmap(const std::string& utf8, int width, int height,
-                                   std::vector<uint8_t>& outPixels,
-                                   bool centerAlign = true, int padX = 0,
-                                   int padY = 0) {
+    [[maybe_unused]] static bool renderTextToBitmap(
+        const std::string& utf8, int width, int height,
+        std::vector<uint8_t>& outPixels, bool centerAlign = true, int padX = 0,
+        int padY = 0) {
         outPixels.clear();
         if (width <= 0 || height <= 0) return false;
 
@@ -1644,7 +1644,8 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     HINSTANCE hInstance = GetModuleHandle(NULL);
     const wchar_t* className = L"RadioifyVideoWindow";
 
-    WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(WNDCLASSEXW);
     if (!GetClassInfoExW(hInstance, className, &wc)) {
         wc.lpfnWndProc = WindowProc;
         wc.hInstance = hInstance;
@@ -2149,8 +2150,6 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     float subtitleHeightNorm = 0.0f;
     float subtitleLeftNorm = 0.0f;
     float subtitleWidthNorm = 0.0f;
-    int textTopPx = m_height;
-
     int viewportX = std::clamp(static_cast<int>(std::lround(m_viewportX)),
                                0, std::max(0, m_width - 1));
     int viewportY = std::clamp(static_cast<int>(std::lround(m_viewportY)),
@@ -2246,7 +2245,6 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
 
             textHeightNorm = (float)textPxH / m_height;
             textTopNorm = 0.95f - textHeightNorm;
-            textTopPx = static_cast<int>(std::lround(textTopNorm * m_height));
             textWidthNorm = (float)textPxW / m_width;
             textLeftNorm = 0.02f;
             if (textLeftNorm + textWidthNorm > 1.0f) {
