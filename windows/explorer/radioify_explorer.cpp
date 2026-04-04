@@ -496,7 +496,21 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
     logModuleContextOnce();
     if (!icon) return E_POINTER;
     *icon = nullptr;
-    appendExplorerLog(L"GetIcon hr=" + formatHresult(E_NOTIMPL) + L" " +
+
+    // Look for radioify.ico next to radioify.exe.
+    const std::filesystem::path exe = findRadioifyExecutable();
+    if (!exe.empty()) {
+      const std::filesystem::path icoPath = exe.parent_path() / L"radioify.ico";
+      if (isExistingRegularFile(icoPath)) {
+        const std::wstring iconResource = icoPath.wstring() + L",0";
+        const HRESULT hr = duplicateString(iconResource, icon);
+        appendExplorerLog(L"GetIcon hr=" + formatHresult(hr) + L" icon=" +
+                          iconResource + L" " + describeSelection(items));
+        return hr;
+      }
+    }
+
+    appendExplorerLog(L"GetIcon hr=" + formatHresult(E_NOTIMPL) + L" ico-not-found " +
                       describeSelection(items));
     return E_NOTIMPL;
   }

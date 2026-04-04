@@ -169,6 +169,12 @@ function Publish-BuildArtifacts {
     Fail-Build "Build completed without producing a radioify executable in $($Context.Paths.BuildDir). Check the build output above."
   }
 
+  # Copy radioify.ico to dist/ so it ends up in the Win11 Explorer external location.
+  $icoSource = Join-Path $Context.Paths.Root "radioify.ico"
+  if (Test-Path $icoSource) {
+    Copy-Item -LiteralPath $icoSource -Destination (Join-Path $Context.Paths.DistDir "radioify.ico") -Force
+  }
+
   if (Test-Path $publishedExe) {
     Write-Host "Primary executable:"
     Write-Host " - $publishedExe"
