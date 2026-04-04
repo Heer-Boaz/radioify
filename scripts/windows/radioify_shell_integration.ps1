@@ -3,6 +3,7 @@ param(
     [string]$ExePath,
     [string]$MenuLabel = "Open with Radioify",
     [switch]$IncludeDirectories,
+    [switch]$RestartExplorer,
     [switch]$Uninstall
 )
 
@@ -40,7 +41,7 @@ function Ensure-RegistryKey {
 function Set-RegistryDefaultValue {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Value
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value
     )
 
     Ensure-RegistryKey -Path $Path
@@ -51,7 +52,7 @@ function Set-RegistryStringValue {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][string]$Value
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value
     )
 
     Ensure-RegistryKey -Path $Path
@@ -65,6 +66,33 @@ function Remove-RegistryTree {
     if (Test-Path -LiteralPath $Path) {
         Remove-Item -LiteralPath $Path -Recurse -Force
     }
+}
+
+function Invoke-ShellAssociationRefresh {
+    if (-not ("Radioify.ShellNative" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+namespace Radioify
+{
+    public static class ShellNative
+    {
+        [DllImport("shell32.dll")]
+        public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
+    }
+}
+"@
+    }
+
+    $SHCNE_ASSOCCHANGED = 0x08000000
+    $SHCNF_IDLIST = 0x0000
+    [Radioify.ShellNative]::SHChangeNotify($SHCNE_ASSOCCHANGED, $SHCNF_IDLIST, [IntPtr]::Zero, [IntPtr]::Zero)
+}
+
+function Restart-ExplorerShell {
+    Get-Process explorer -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Process explorer.exe
 }
 
 function Install-ApplicationRegistration {
@@ -104,6 +132,7 @@ function Install-ExtensionContextMenu {
 
         if ($PSCmdlet.ShouldProcess($shellKey, "Register Radioify context menu for $extension")) {
             Set-RegistryDefaultValue -Path $shellKey -Value $Label
+            Set-RegistryStringValue -Path $shellKey -Name "MUIVerb" -Value $Label
             Set-RegistryStringValue -Path $shellKey -Name "Icon" -Value "`"$ResolvedExePath`""
             Set-RegistryDefaultValue -Path $commandKey -Value $command
         }
@@ -123,6 +152,7 @@ function Install-DirectoryContextMenu {
 
     if ($PSCmdlet.ShouldProcess($shellKey, "Register Radioify context menu for directories")) {
         Set-RegistryDefaultValue -Path $shellKey -Value $Label
+        Set-RegistryStringValue -Path $shellKey -Name "MUIVerb" -Value $Label
         Set-RegistryStringValue -Path $shellKey -Name "Icon" -Value "`"$ResolvedExePath`""
         Set-RegistryDefaultValue -Path $commandKey -Value $command
     }
@@ -164,9 +194,16 @@ if (-not $Uninstall) {
     if ($WhatIfPreference) {
         Write-Host "WhatIf: no registry changes were made."
     } else {
+        Invoke-ShellAssociationRefresh
+        if ($RestartExplorer) {
+            Restart-ExplorerShell
+        }
         Write-Host "Radioify shell integration installed for supported audio/video extensions under HKCU."
         if ($IncludeDirectories) {
             Write-Host "Directory context menu integration was also installed."
+        }
+        if (-not $RestartExplorer) {
+            Write-Host "If Explorer still does not show the entry immediately, rerun with -RestartExplorer or restart Explorer/sign out once."
         }
     }
 } else {
@@ -174,6 +211,10 @@ if (-not $Uninstall) {
     if ($WhatIfPreference) {
         Write-Host "WhatIf: no registry changes were made."
     } else {
+        Invoke-ShellAssociationRefresh
+        if ($RestartExplorer) {
+            Restart-ExplorerShell
+        }
         Write-Host "Radioify shell integration removed from HKCU."
     }
 }

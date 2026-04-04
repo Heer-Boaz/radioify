@@ -1,5 +1,7 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
-param()
+param(
+    [switch]$RestartExplorer
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -11,5 +13,6 @@ if (-not (Test-Path -LiteralPath $installScript)) {
 
 & $installScript `
     -Uninstall `
+    -RestartExplorer:$RestartExplorer `
     -WhatIf:$([bool]$WhatIfPreference) `
     -Verbose:($VerbosePreference -eq [System.Management.Automation.ActionPreference]::Continue)

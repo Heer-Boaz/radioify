@@ -52,6 +52,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integr
 # Use a specific executable instead of .\dist\radioify.exe
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integration.ps1 -ExePath "C:\path\to\radioify.exe"
 
+# Force an Explorer restart if the menu does not appear immediately
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integration.ps1 -RestartExplorer
+
 # Remove the Explorer integration again
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\uninstall_radioify_shell_integration.ps1
 ```
