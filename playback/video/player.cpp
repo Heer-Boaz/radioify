@@ -3383,6 +3383,13 @@ struct Player::Impl {
       }
     }
   }
+
+  ~Impl() {
+    if (frameReadyEvent) {
+      CloseHandle(frameReadyEvent);
+      frameReadyEvent = nullptr;
+    }
+  }
 };
 
 Player::Player() : impl_(std::make_unique<Impl>()) {}
@@ -3660,9 +3667,3 @@ int Player::sourceHeight() const {
   if (!impl_) return 0;
   return impl_->sourceHeight.load(std::memory_order_relaxed);
 }
-  ~Impl() {
-    if (frameReadyEvent) {
-      CloseHandle(frameReadyEvent);
-      frameReadyEvent = nullptr;
-    }
-  }

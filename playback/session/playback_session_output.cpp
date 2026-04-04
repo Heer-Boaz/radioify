@@ -52,7 +52,7 @@ PlaybackLayout& PlaybackOutputController::desiredLayout() {
 
 PlaybackPresenterSyncResult PlaybackOutputController::sync(
     Player& player,
-    const std::function<playback_overlay::WindowUiState()>& buildUiState,
+    const std::function<WindowUiState()>& buildUiState,
     const std::function<bool()>& overlayVisible, bool& redraw,
     bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
     std::atomic<int>& overlayControlHover) {

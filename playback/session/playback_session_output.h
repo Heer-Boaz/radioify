@@ -21,10 +21,7 @@ class Player;
 class VideoWindow;
 class GpuVideoFrameCache;
 struct InputEvent;
-
-namespace playback_overlay {
 struct WindowUiState;
-}
 
 namespace playback_screen_renderer {
 struct PlaybackScreenRenderInputs;
@@ -52,7 +49,7 @@ class PlaybackOutputController {
 
   PlaybackPresenterSyncResult sync(
       Player& player,
-      const std::function<playback_overlay::WindowUiState()>& buildUiState,
+      const std::function<WindowUiState()>& buildUiState,
       const std::function<bool()>& overlayVisible, bool& redraw,
       bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
       std::atomic<int>& overlayControlHover);

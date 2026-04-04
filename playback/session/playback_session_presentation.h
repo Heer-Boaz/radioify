@@ -7,7 +7,6 @@
 
 #include "gpu_shared.h"
 #include "playback_mode.h"
-#include "playback/overlay/playback_overlay.h"
 #include "videowindow.h"
 
 class Player;
@@ -41,7 +40,7 @@ class PlaybackPresentation {
 
   PlaybackPresenterSyncResult sync(
       Player& player,
-      const std::function<playback_overlay::WindowUiState()>& buildUiState,
+      const std::function<WindowUiState()>& buildUiState,
       const std::function<bool()>& overlayVisible, bool& redraw,
       bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
       std::atomic<int>& overlayControlHover);

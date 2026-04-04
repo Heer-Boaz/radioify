@@ -14,6 +14,7 @@
 #include "gpu_shared.h"
 #include "player.h"
 #include "playback/ascii/playback_frame_output.h"
+#include "playback/ascii/playback_screen_renderer.h"
 #include "playback_framebuffer_presenter.h"
 #include "playback_mode.h"
 #include "playback_session_core.h"
@@ -87,7 +88,7 @@ struct PlaybackLoopRunner::Impl {
   std::chrono::steady_clock::time_point lastDebugRefresh =
       std::chrono::steady_clock::time_point::min();
   std::chrono::steady_clock::time_point lastUiHeartbeat =
-      std::chrono::steady_clock::time_point::now();
+      std::chrono::steady_clock::now();
 
   playback_session_input::PlaybackInputView inputView;
   playback_session_input::PlaybackInputSignals inputSignals;
@@ -187,7 +188,7 @@ struct PlaybackLoopRunner::Impl {
     return playback_session_input::isOverlayVisible(inputSignals);
   }
 
-  playback_overlay::WindowUiState buildWindowUiState() {
+  WindowUiState buildWindowUiState() {
     return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
         windowTitle, output.window(), core.player(), subtitleManager,
         core.playbackState(), core.audioOk(), hasSubtitles,

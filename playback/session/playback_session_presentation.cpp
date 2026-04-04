@@ -36,7 +36,7 @@ struct PlaybackWindowPresenter {
 
   bool start(
       Player& player,
-      const std::function<playback_overlay::WindowUiState()>& buildUiState,
+      const std::function<WindowUiState()>& buildUiState,
       const std::function<bool()>& overlayVisible) {
     if (thread.joinable()) {
       threadState.store(WindowThreadState::Enabled,
@@ -138,7 +138,7 @@ PlaybackLayout& PlaybackPresentation::desiredLayout() {
 
 PlaybackPresenterSyncResult PlaybackPresentation::sync(
     Player& player,
-    const std::function<playback_overlay::WindowUiState()>& buildUiState,
+    const std::function<WindowUiState()>& buildUiState,
     const std::function<bool()>& overlayVisible, bool& redraw,
     bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
     std::atomic<int>& overlayControlHover) {
