@@ -12,6 +12,7 @@ param(
   [string]$VcpkgRoot,
   [Alias("SongAnalysis")]
   [switch]$MelodyAnalysis,
+  [switch]$Win11ExplorerIntegration,
   [switch]$TimingLog,
   [switch]$StagingUpload,
   [switch]$VideoErrorLog,
@@ -43,6 +44,7 @@ try {
       -InstallDeps ([bool]$InstallDeps) `
       -VcpkgRoot $VcpkgRoot `
       -MelodyAnalysis ([bool]$MelodyAnalysis) `
+      -Win11ExplorerIntegration ([bool]$Win11ExplorerIntegration) `
       -TimingLog ([bool]$TimingLog) `
       -StagingUpload ([bool]$StagingUpload) `
       -VideoErrorLog ([bool]$VideoErrorLog) `

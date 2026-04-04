@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap10 desktop4 desktop5 com rescap">
+  <Identity
+    Name="@RADIOIFY_WIN11_EXPLORER_PACKAGE_NAME@"
+    Publisher="@RADIOIFY_WIN11_EXPLORER_PACKAGE_PUBLISHER@"
+    Version="1.0.0.0"
+    ProcessorArchitecture="@RADIOIFY_WIN11_EXPLORER_PACKAGE_ARCH@" />
+  <Properties>
+    <DisplayName>Radioify Explorer Integration</DisplayName>
+    <PublisherDisplayName>Radioify</PublisherDisplayName>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily
+      Name="Windows.Desktop"
+      MinVersion="10.0.22000.0"
+      MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+  <Applications>
+    <Application
+      Id="@RADIOIFY_WIN11_EXPLORER_APPLICATION_ID@"
+      Executable="radioify.exe"
+      uap10:RuntimeBehavior="win32App"
+      uap10:TrustLevel="mediumIL">
+      <uap:VisualElements
+        DisplayName="Radioify"
+        Description="Radioify Windows 11 Explorer integration"
+        Square150x150Logo="Assets\StoreLogo.png"
+        Square44x44Logo="Assets\SmallLogo.png"
+        BackgroundColor="transparent"
+        AppListEntry="none" />
+      <Extensions>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer
+              AppId="@RADIOIFY_WIN11_EXPLORER_APPID@"
+              DisplayName="Radioify Explorer Command">
+              <com:Class
+                Id="@RADIOIFY_WIN11_EXPLORER_COMMAND_GUID@"
+                Path="radioify_explorer.dll"
+                ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="*">
+              <desktop5:Verb
+                Id="RadioifyOpen"
+                Clsid="@RADIOIFY_WIN11_EXPLORER_COMMAND_GUID@" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type="Directory">
+              <desktop5:Verb
+                Id="RadioifyOpen"
+                Clsid="@RADIOIFY_WIN11_EXPLORER_COMMAND_GUID@" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

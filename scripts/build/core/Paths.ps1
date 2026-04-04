@@ -74,6 +74,53 @@ function Find-RadioifyExecutable {
   return $null
 }
 
+function Find-RadioifyExplorerDll {
+  param(
+    [string]$BuildDir,
+    [string]$Config
+  )
+
+  if (-not $BuildDir) { return $null }
+
+  $candidates = @(
+    (Join-Path $BuildDir "win11-explorer\bin\radioify_explorer.dll"),
+    (Join-Path $BuildDir "win11-explorer\radioify_explorer.dll")
+  )
+  if ($Config) {
+    $candidates += (Join-Path $BuildDir "win11-explorer\bin\$Config\radioify_explorer.dll")
+  }
+
+  foreach ($candidate in ($candidates | Select-Object -Unique)) {
+    if ($candidate -and (Test-Path $candidate)) {
+      return $candidate
+    }
+  }
+
+  return $null
+}
+
+function Find-RadioifyWin11PackageManifest {
+  param([string]$BuildDir)
+  if (-not $BuildDir) { return $null }
+
+  $candidate = Join-Path $BuildDir "win11-explorer\package\Package.appxmanifest"
+  if (Test-Path $candidate) {
+    return $candidate
+  }
+  return $null
+}
+
+function Find-RadioifyWin11PackageReadme {
+  param([string]$BuildDir)
+  if (-not $BuildDir) { return $null }
+
+  $candidate = Join-Path $BuildDir "win11-explorer\package\README.txt"
+  if (Test-Path $candidate) {
+    return $candidate
+  }
+  return $null
+}
+
 function Try-Copy-BuildArtifact {
   param(
     [Parameter(Mandatory = $true)]

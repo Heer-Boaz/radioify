@@ -18,6 +18,7 @@ ipch/
 *.opensdf
 
 # Build artifacts
+dist/
 [Bb]in/
 [Oo]bj/
 build/

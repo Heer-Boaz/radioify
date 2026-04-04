@@ -16,6 +16,9 @@ function New-BuildCommandArguments {
   param([pscustomobject]$Context)
 
   $buildArgs = @("--build", "--preset", $Context.Tools.Toolchain.BuildPreset)
+  if ($Context.Options.Win11ExplorerIntegration) {
+    $buildArgs += @("--target", "radioify_win11_explorer_integration")
+  }
   if (-not $Context.Tools.Toolchain.Ninja) {
     $buildArgs += @("--config", $Context.Options.Config)
   }

@@ -80,3 +80,43 @@ function Invoke-NativeProcess {
   }
   return [int]$process.ExitCode
 }
+
+function Invoke-NativeProcessWithOutput {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$FilePath,
+    [string[]]$ArgumentList = @(),
+    [string]$WorkingDirectory = $null
+  )
+
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $FilePath
+  $startInfo.UseShellExecute = $false
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.CreateNoWindow = $true
+
+  $formattedArgumentList = Join-WindowsCommandLineArguments -ArgumentList $ArgumentList
+  if ($formattedArgumentList) {
+    $startInfo.Arguments = $formattedArgumentList
+  }
+  if ($WorkingDirectory) {
+    $startInfo.WorkingDirectory = $WorkingDirectory
+  }
+
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $startInfo
+  [void]$process.Start()
+  $stdout = $process.StandardOutput.ReadToEnd()
+  $stderr = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+
+  if ($stdout) {
+    [Console]::Out.Write($stdout)
+  }
+  if ($stderr) {
+    [Console]::Error.Write($stderr)
+  }
+
+  return [int]$process.ExitCode
+}

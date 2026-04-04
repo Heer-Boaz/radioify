@@ -35,29 +35,52 @@ dist/radioify.exe --no-audio <file-or-folder>
 dist/radioify.exe --no-radio <file-or-folder>
 ```
 
-## Explorer Context Menu
-Register Radioify in the Windows Explorer context menu for supported audio and
-video extensions:
+## Windows 11 Explorer Integration
+This lane is currently experimental bring-up work, not a finished or preferred
+integration path.
+
+Current intent:
+- keep `radioify.exe` as the core executable
+- keep Explorer integration in a separate `IExplorerCommand` shell extension
+- use a sparse-package lane only for testing modern Win11 integration
+
+The normal front-door commands are:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integration.ps1
+.\install_win11_explorer_integration.ps1
+.\uninstall_win11_explorer_integration.ps1
 ```
 
-Optional:
+Run the install command from an elevated PowerShell window. The development
+MSIX package is self-signed, so its certificate is trusted in
+`Cert:\LocalMachine\TrustedPeople` during install.
+
+Current reality:
+- the build/install lane exists
+- end-to-end Explorer activation is still being proven
+- this should be treated as a debug path, not stable product UX
+
+Advanced / internal flow:
 
 ```powershell
-# Also add "Open with Radioify" for directories
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integration.ps1 -IncludeDirectories
-
-# Use a specific executable instead of .\dist\radioify.exe
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integration.ps1 -ExePath "C:\path\to\radioify.exe"
-
-# Force an Explorer restart if the menu does not appear immediately
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\radioify_shell_integration.ps1 -RestartExplorer
-
-# Remove the Explorer integration again
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\uninstall_radioify_shell_integration.ps1
+.\build.ps1 -Static -Win11ExplorerIntegration
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\install_radioify_win11_context_menu.ps1
 ```
+
+Dry-run the package actions without changing package or certificate state:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\install_radioify_win11_context_menu.ps1 -WhatIf
+```
+
+You can skip the rebuild during repeated install testing:
+
+```powershell
+.\install_win11_explorer_integration.ps1 -SkipBuild
+```
+
+The concrete implementation plan lives in
+[`WINDOWS11_EXPLORER_INTEGRATION.md`](WINDOWS11_EXPLORER_INTEGRATION.md).
 
 ## Controls
 - Mouse: select; click to play/open

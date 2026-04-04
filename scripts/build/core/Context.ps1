@@ -10,6 +10,7 @@ function Resolve-TrailingSwitchOverrides {
     "VerboseBuild",
     "InstallDeps",
     "MelodyAnalysis",
+    "Win11ExplorerIntegration",
     "TimingLog",
     "StagingUpload",
     "VideoErrorLog",
@@ -59,6 +60,7 @@ function New-InitialBuildOptions {
     [bool]$InstallDeps,
     [string]$VcpkgRoot,
     [bool]$MelodyAnalysis,
+    [bool]$Win11ExplorerIntegration,
     [bool]$TimingLog,
     [bool]$StagingUpload,
     [bool]$VideoErrorLog,
@@ -77,6 +79,7 @@ function New-InitialBuildOptions {
     InstallDeps = $InstallDeps
     VcpkgRoot = $VcpkgRoot
     MelodyAnalysis = $MelodyAnalysis
+    Win11ExplorerIntegration = $Win11ExplorerIntegration
     TimingLog = $TimingLog
     StagingUpload = $StagingUpload
     VideoErrorLog = $VideoErrorLog
