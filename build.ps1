@@ -5,6 +5,7 @@ param(
   [switch]$Rebuild,
   [switch]$Static,
   [switch]$Ninja,
+  [switch]$ClangCl,
   [switch]$VerboseBuild,
   [switch]$InstallDeps,
   [Alias("VCPKG_ROOT")]
@@ -18,6 +19,57 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Enable-AnsiConsole {
+  if (-not $IsWindows) {
+    return
+  }
+
+  if (-not ("Radioify.ConsoleMode" -as [type])) {
+    Add-Type -Namespace Radioify -Name ConsoleMode -MemberDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class ConsoleMode {
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern IntPtr GetStdHandle(int nStdHandle);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+}
+"@
+  }
+
+  $enableVirtualTerminalProcessing = 0x0004
+  foreach ($stdHandle in @(-11, -12)) {
+    try {
+      $handle = [Radioify.ConsoleMode]::GetStdHandle($stdHandle)
+      if ($handle -eq [IntPtr]::Zero -or $handle -eq [IntPtr]::new(-1)) {
+        continue
+      }
+
+      $mode = 0
+      if (-not [Radioify.ConsoleMode]::GetConsoleMode($handle, [ref]$mode)) {
+        continue
+      }
+
+      $targetMode = $mode -bor $enableVirtualTerminalProcessing
+      if ($targetMode -ne $mode) {
+        [void][Radioify.ConsoleMode]::SetConsoleMode($handle, $targetMode)
+      }
+    }
+    catch {
+      continue
+    }
+  }
+}
+
+Enable-AnsiConsole
 
 function Get-VswhereCandidates {
   $vswhereCandidates = @()
@@ -81,19 +133,48 @@ function Get-VisualStudioVcpkgRoots {
   return ($candidates | Select-Object -Unique)
 }
 
+function Invoke-WhereLookup {
+  param([string]$Pattern)
+
+  $whereExe = Get-Command where.exe -ErrorAction SilentlyContinue
+  if (-not $whereExe) {
+    return @()
+  }
+
+  $restoreNativePreference = $false
+  $nativePreference = $false
+  if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+    $restoreNativePreference = $true
+    $nativePreference = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+  }
+
+  try {
+    $matches = & $whereExe.Source $Pattern 2>$null
+    if ($null -eq $matches) {
+      return @()
+    }
+    return @($matches)
+  }
+  catch {
+    return @()
+  }
+  finally {
+    if ($restoreNativePreference) {
+      $PSNativeCommandUseErrorActionPreference = $nativePreference
+    }
+  }
+}
+
 function Resolve-CMake {
   $cmd = Get-Command cmake -ErrorAction SilentlyContinue
   if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
     return $cmd.Source
   }
 
-  $whereExe = Get-Command where.exe -ErrorAction SilentlyContinue
-  if ($whereExe) {
-    $whereMatches = & $whereExe.Source cmake.exe 2>$null
-    foreach ($match in $whereMatches) {
-      if ($match -and (Test-Path $match)) {
-        return $match
-      }
+  foreach ($match in (Invoke-WhereLookup "cmake.exe")) {
+    if ($match -and (Test-Path $match)) {
+      return $match
     }
   }
 
@@ -131,13 +212,9 @@ function Resolve-Ninja {
     return $cmd.Source
   }
 
-  $whereExe = Get-Command where.exe -ErrorAction SilentlyContinue
-  if ($whereExe) {
-    $whereMatches = & $whereExe.Source ninja.exe 2>$null
-    foreach ($match in $whereMatches) {
-      if ($match -and (Test-Path $match)) {
-        return $match
-      }
+  foreach ($match in (Invoke-WhereLookup "ninja.exe")) {
+    if ($match -and (Test-Path $match)) {
+      return $match
     }
   }
 
@@ -163,6 +240,219 @@ function Resolve-Ninja {
   }
 
   return $null
+}
+
+function Resolve-ClangCl {
+  $cmd = Get-Command clang-cl -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
+    return $cmd.Source
+  }
+
+  foreach ($match in (Invoke-WhereLookup "clang-cl.exe")) {
+    if ($match -and (Test-Path $match)) {
+      return $match
+    }
+  }
+
+  foreach ($installRoot in (Get-VisualStudioInstallRoots)) {
+    $vsCandidates = @(
+      (Join-Path $installRoot "VC\Tools\Llvm\bin\clang-cl.exe"),
+      (Join-Path $installRoot "VC\Tools\Llvm\x64\bin\clang-cl.exe"),
+      (Join-Path $installRoot "Common7\IDE\VC\VCTools\Llvm\bin\clang-cl.exe"),
+      (Join-Path $installRoot "Common7\IDE\VC\VCTools\Llvm\x64\bin\clang-cl.exe")
+    )
+    foreach ($candidate in $vsCandidates) {
+      if (Test-Path $candidate) {
+        return $candidate
+      }
+    }
+  }
+
+  $defaultCandidates = @(
+    "C:\Program Files\LLVM\bin\clang-cl.exe",
+    "C:\Program Files (x86)\LLVM\bin\clang-cl.exe"
+  )
+  if ($env:LOCALAPPDATA) {
+    $defaultCandidates += (Join-Path $env:LOCALAPPDATA "Programs\LLVM\bin\clang-cl.exe")
+  }
+
+  foreach ($candidate in $defaultCandidates) {
+    if ($candidate -and (Test-Path $candidate)) {
+      return $candidate
+    }
+  }
+
+  return $null
+}
+
+function Get-WindowsSdkArchVariants {
+  param([string]$Arch = $(Resolve-TargetArch))
+
+  $normalized = "x64"
+  if ($Arch) {
+    $archLower = $Arch.ToLowerInvariant()
+    if ($archLower -eq "x86" -or $archLower -eq "win32") {
+      $normalized = "x86"
+    }
+    elseif ($archLower -eq "arm64") {
+      $normalized = "arm64"
+    }
+  }
+
+  return @($normalized)
+}
+
+function Get-WindowsSdkBinRoots {
+  $roots = @()
+
+  if ($env:WindowsSdkDir -and (Test-Path $env:WindowsSdkDir)) {
+    $sdkDir = $env:WindowsSdkDir.TrimEnd('\', '/')
+    if ($env:WindowsSDKVersion) {
+      $sdkVersion = $env:WindowsSDKVersion.Trim('\', '/')
+      $candidate = Join-Path $sdkDir "bin\$sdkVersion"
+      if (Test-Path $candidate) {
+        $roots += $candidate
+      }
+    }
+
+    $sdkBinRoot = Join-Path $sdkDir "bin"
+    if (Test-Path $sdkBinRoot) {
+      $versionDirs = Get-ChildItem -Path $sdkBinRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending
+      foreach ($dir in $versionDirs) {
+        $roots += $dir.FullName
+      }
+    }
+  }
+
+  $defaultSdkBinRoot = "C:\Program Files (x86)\Windows Kits\10\bin"
+  if (Test-Path $defaultSdkBinRoot) {
+    $versionDirs = Get-ChildItem -Path $defaultSdkBinRoot -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending
+    foreach ($dir in $versionDirs) {
+      $roots += $dir.FullName
+    }
+  }
+
+  return ($roots | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique)
+}
+
+function Resolve-WindowsSdkBinary {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$BinaryName,
+    [string]$Arch = $(Resolve-TargetArch)
+  )
+
+  $archVariants = Get-WindowsSdkArchVariants -Arch $Arch
+  foreach ($binRoot in (Get-WindowsSdkBinRoots)) {
+    foreach ($archVariant in $archVariants) {
+      $candidate = Join-Path $binRoot "$archVariant\$BinaryName"
+      if (Test-Path $candidate) {
+        return $candidate
+      }
+    }
+
+    $rootCandidate = Join-Path $binRoot $BinaryName
+    if (Test-Path $rootCandidate) {
+      return $rootCandidate
+    }
+  }
+
+  return $null
+}
+
+function Resolve-Winget {
+  $cmd = Get-Command winget -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
+    return $cmd.Source
+  }
+
+  foreach ($match in (Invoke-WhereLookup "winget.exe")) {
+    if ($match -and (Test-Path $match)) {
+      return $match
+    }
+  }
+
+  if ($env:LOCALAPPDATA) {
+    $windowsApps = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\winget.exe"
+    if (Test-Path $windowsApps) {
+      return $windowsApps
+    }
+  }
+
+  return $null
+}
+
+function Resolve-WindowsSdkTool {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ToolName,
+    [string]$Arch = "x64"
+  )
+
+  $candidates = @()
+
+  if ($env:WindowsSdkDir -and $env:WindowsSDKVersion) {
+    $candidates += (Join-Path $env:WindowsSdkDir "bin\$($env:WindowsSDKVersion)\$Arch\$ToolName")
+  }
+
+  $kitRoots = @(
+    "C:\Program Files (x86)\Windows Kits\10\bin",
+    "C:\Program Files\Windows Kits\10\bin"
+  )
+
+  foreach ($kitRoot in $kitRoots) {
+    if (-not (Test-Path $kitRoot)) {
+      continue
+    }
+
+    $versionDirs = Get-ChildItem -Path $kitRoot -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+      Sort-Object { [version]$_.Name } -Descending
+
+    foreach ($dir in $versionDirs) {
+      $candidates += (Join-Path $dir.FullName (Join-Path $Arch $ToolName))
+    }
+  }
+
+  foreach ($candidate in ($candidates | Select-Object -Unique)) {
+    if ($candidate -and (Test-Path $candidate)) {
+      return $candidate
+    }
+  }
+
+  return $null
+}
+
+function Install-ClangClDependency {
+  $wingetExe = Resolve-Winget
+  if (-not $wingetExe) {
+    Write-Error @"
+clang-cl requested with -InstallDeps, but winget.exe was not found.
+
+Install App Installer / winget, or install LLVM manually:
+  winget install --id LLVM.LLVM --exact
+"@
+    exit 1
+  }
+
+  $wingetArgs = @(
+    "install",
+    "--id", "LLVM.LLVM",
+    "--exact",
+    "--source", "winget",
+    "--accept-package-agreements",
+    "--accept-source-agreements",
+    "--disable-interactivity"
+  )
+
+  Write-Host "Installing LLVM via winget: LLVM.LLVM"
+  $installExit = Invoke-NativeProcess -FilePath $wingetExe -ArgumentList $wingetArgs
+  if ($installExit -ne 0) {
+    Write-Error "winget install LLVM.LLVM failed with exit code $installExit."
+    exit $installExit
+  }
 }
 
 function Resolve-VcpkgRoot {
@@ -321,6 +611,30 @@ function Add-VcpkgOverlayPortPath {
   $env:VCPKG_OVERLAY_PORTS = ($parts -join ';')
 }
 
+function Prepend-PathDirectory {
+  param([string]$PathToAdd)
+
+  if (-not $PathToAdd) { return }
+  $resolved = [System.IO.Path]::GetFullPath($PathToAdd)
+  if (-not (Test-Path $resolved)) { return }
+
+  $parts = @()
+  $existingPath = $env:PATH
+  if (-not $existingPath) {
+    $existingPath = ""
+  }
+
+  foreach ($part in ($existingPath -split ';')) {
+    if (-not $part) { continue }
+    if ([string]::Equals($part, $resolved, [System.StringComparison]::OrdinalIgnoreCase)) {
+      continue
+    }
+    $parts += $part
+  }
+
+  $env:PATH = ($resolved + $(if ($parts.Count -gt 0) { ";" + ($parts -join ';') } else { "" }))
+}
+
 function Remove-PathWithRetry {
   param(
     [Parameter(Mandatory = $true)]
@@ -443,25 +757,25 @@ function Invoke-NativeProcess {
     [string]$WorkingDirectory = $null
   )
 
-  if ($WorkingDirectory) { Push-Location $WorkingDirectory }
-  try {
-    # Route through a script block so PowerShell can stream native-process
-    # stdout without treating the executable path itself as a pipeline item.
-    # Direct `& $FilePath ... | Out-Host` fails on Windows PowerShell when the
-    # executable path contains spaces.
-    $invokeNative = {
-      param($NativeFilePath, $NativeArgumentList)
-      & $NativeFilePath @NativeArgumentList
-    }
-    & $invokeNative $FilePath $ArgumentList | Out-Host
-    if ($null -eq $LASTEXITCODE) {
-      return 0
-    }
-    return [int]$LASTEXITCODE
+  $formattedArgumentList = Join-WindowsCommandLineArguments -ArgumentList $ArgumentList
+  $startArgs = @{
+    FilePath    = $FilePath
+    NoNewWindow = $true
+    Wait        = $true
+    PassThru    = $true
   }
-  finally {
-    if ($WorkingDirectory) { Pop-Location }
+  if ($formattedArgumentList) {
+    $startArgs.ArgumentList = $formattedArgumentList
   }
+  if ($WorkingDirectory) {
+    $startArgs.WorkingDirectory = $WorkingDirectory
+  }
+
+  $process = Start-Process @startArgs
+  if ($null -eq $process) {
+    return 0
+  }
+  return [int]$process.ExitCode
 }
 
 function Convert-ToCMakePath {
@@ -553,6 +867,7 @@ function Normalize-RemainingSwitchArguments {
     "Rebuild",
     "Static",
     "Ninja",
+    "ClangCl",
     "VerboseBuild",
     "InstallDeps",
     "MelodyAnalysis",
@@ -757,6 +1072,57 @@ else {
 }
 
 $buildDirName = if ($Ninja) { "build-ninja" } else { "build" }
+$clangClExplicitlySet = $PSBoundParameters.ContainsKey("ClangCl")
+$clangClExe = $null
+$clangRcExe = $null
+$clangMtExe = $null
+$windowsFxcExe = Resolve-WindowsSdkTool -ToolName "fxc.exe"
+if (-not $clangClExplicitlySet) {
+  $autoClangClExe = Resolve-ClangCl
+  if ($autoClangClExe) {
+    $ClangCl = $true
+    $clangClExe = $autoClangClExe
+    Write-Host "Auto-enabled clang-cl: $clangClExe"
+  }
+}
+if ($ClangCl) {
+  if (-not $clangClExe) {
+    $clangClExe = Resolve-ClangCl
+  }
+  if (-not $clangClExe -and $InstallDeps) {
+    Install-ClangClDependency
+    $clangClExe = Resolve-ClangCl
+  }
+  if (-not $clangClExe) {
+    Write-Error @"
+clang-cl requested but clang-cl.exe was not found.
+
+Install LLVM manually:
+  winget install --id LLVM.LLVM --exact
+
+Or let the build script do it:
+  .\build.ps1 -Static -ClangCl -InstallDeps
+"@
+    exit 1
+  }
+
+  $clangRcExe = Resolve-WindowsSdkTool -ToolName "rc.exe"
+  if (-not $clangRcExe) {
+    Write-Error "clang-cl requested but rc.exe was not found in the Windows SDK."
+    exit 1
+  }
+
+  $clangMtExe = Resolve-WindowsSdkTool -ToolName "mt.exe"
+  if ($clangMtExe) {
+    Prepend-PathDirectory (Split-Path -Parent $clangMtExe)
+  }
+  Prepend-PathDirectory (Split-Path -Parent $clangRcExe)
+  Prepend-PathDirectory (Split-Path -Parent $clangClExe)
+}
+
+if ($ClangCl) {
+  $buildDirName = if ($Ninja) { "build-ninja-clangcl" } else { "build-clangcl" }
+}
 $buildDir = Join-Path $root $buildDirName
 
 $cmakeGenerator = if ($Ninja) { "Ninja" } else { $null }
@@ -767,6 +1133,16 @@ if ($Ninja) {
     $env:NINJA_STATUS = "[%p %f/%t | %w elapsed | ETA %W] "
   }
   Write-Host "Using Ninja status: $env:NINJA_STATUS"
+}
+if ($ClangCl) {
+  Write-Host "Using compiler: $clangClExe"
+  Write-Host "Using Windows SDK rc: $clangRcExe"
+  if ($clangMtExe) {
+    Write-Host "Using Windows SDK mt: $clangMtExe"
+  }
+  if ($windowsFxcExe) {
+    Write-Host "Using shader compiler: $windowsFxcExe"
+  }
 }
 
 if ($Rebuild) {
@@ -892,6 +1268,20 @@ if ($cmakeGenerator) {
 else {
   $cmakeArgs += "-DCMAKE_BUILD_TYPE=$Config"
 }
+if ($ClangCl) {
+  $clangClForCMake = Convert-ToCMakePath $clangClExe
+  $cmakeArgs += "-DCMAKE_C_COMPILER=$clangClForCMake"
+  $cmakeArgs += "-DCMAKE_CXX_COMPILER=$clangClForCMake"
+  $cmakeArgs += "-DCMAKE_C_FLAGS_INIT=/clang:-fcolor-diagnostics /clang:-fansi-escape-codes /clang:-fcommon"
+  $cmakeArgs += "-DCMAKE_CXX_FLAGS_INIT=/clang:-fcolor-diagnostics /clang:-fansi-escape-codes"
+  $cmakeArgs += "-DCMAKE_RC_COMPILER=$(Convert-ToCMakePath $clangRcExe)"
+  if ($clangMtExe) {
+    $cmakeArgs += "-DCMAKE_MT=$(Convert-ToCMakePath $clangMtExe)"
+  }
+}
+if ($windowsFxcExe) {
+  $cmakeArgs += "-DRADIOIFY_FXC_EXE=$(Convert-ToCMakePath $windowsFxcExe)"
+}
 $cmakeArgs += "-DRADIOIFY_ENABLE_TIMING_LOG=$([bool]$TimingLog)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_STAGING_UPLOAD=$([bool]$StagingUpload)"
 $cmakeArgs += "-DRADIOIFY_ENABLE_VIDEO_ERROR_LOG=$([bool]$VideoErrorLog)"
@@ -903,6 +1293,11 @@ $cmakeArgs += "-DRADIOIFY_ENABLE_NEURAL_PITCH=$([bool]$MelodyAnalysis)"
 $desiredManifestMode = "OFF"
 $cmakeArgs += "-DVCPKG_MANIFEST_MODE=$desiredManifestMode"
 $cmakeArgs += "-DVCPKG_MANIFEST_INSTALL=OFF"
+if (Is-StaticTriplet $effectiveTargetTriplet) {
+  # Static triplets do not need vcpkg's post-build DLL deployment step.
+  # Disabling it avoids the applocal.ps1/dumpbin warning noise.
+  $cmakeArgs += "-DVCPKG_APPLOCAL_DEPS=OFF"
+}
 if ($vcpkgRoot) {
   $toolchain = Join-Path $vcpkgRoot "scripts/buildsystems/vcpkg.cmake"
   if (Test-Path $toolchain) {
@@ -1047,7 +1442,7 @@ if ($buildExit -eq 0) {
   }
 
   if (-not (Test-Path $expectedExe)) {
-    Write-Error "Build completed without producing $expectedExe. Check the Ninja/MSVC output above."
+    Write-Error "Build completed without producing $expectedExe. Check the build output above."
     exit 1
   }
 

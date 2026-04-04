@@ -8,45 +8,55 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 function(radioify_enable_strict_warnings target_name)
-  target_compile_options(${target_name} PRIVATE
-    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/W4>
-    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/we4100>
-    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/we4101>
-    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/we4189>
-    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/we4505>
-    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4>
-    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/we4100>
-    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/we4101>
-    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/we4189>
-    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/we4505>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wall>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wextra>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wpedantic>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wunused-parameter>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wunused-variable>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Wunused-function>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Werror=unused-parameter>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Werror=unused-variable>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-Werror=unused-function>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wall>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wextra>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wpedantic>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wunused-parameter>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wunused-variable>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Wunused-function>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Werror=unused-parameter>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Werror=unused-variable>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-Werror=unused-function>
-  )
+  if (MSVC)
+    target_compile_options(${target_name} PRIVATE
+      $<$<COMPILE_LANGUAGE:C>:/W4>
+      $<$<COMPILE_LANGUAGE:C>:/we4100>
+      $<$<COMPILE_LANGUAGE:C>:/we4101>
+      $<$<COMPILE_LANGUAGE:C>:/we4189>
+      $<$<COMPILE_LANGUAGE:C>:/we4505>
+      $<$<COMPILE_LANGUAGE:CXX>:/W4>
+      $<$<COMPILE_LANGUAGE:CXX>:/we4100>
+      $<$<COMPILE_LANGUAGE:CXX>:/we4101>
+      $<$<COMPILE_LANGUAGE:CXX>:/we4189>
+      $<$<COMPILE_LANGUAGE:CXX>:/we4505>
+    )
+  else()
+    target_compile_options(${target_name} PRIVATE
+      $<$<COMPILE_LANGUAGE:C>:-Wall>
+      $<$<COMPILE_LANGUAGE:C>:-Wextra>
+      $<$<COMPILE_LANGUAGE:C>:-Wpedantic>
+      $<$<COMPILE_LANGUAGE:C>:-Wunused-parameter>
+      $<$<COMPILE_LANGUAGE:C>:-Wunused-variable>
+      $<$<COMPILE_LANGUAGE:C>:-Wunused-function>
+      $<$<COMPILE_LANGUAGE:C>:-Werror=unused-parameter>
+      $<$<COMPILE_LANGUAGE:C>:-Werror=unused-variable>
+      $<$<COMPILE_LANGUAGE:C>:-Werror=unused-function>
+      $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+      $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+      $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+      $<$<COMPILE_LANGUAGE:CXX>:-Wunused-parameter>
+      $<$<COMPILE_LANGUAGE:CXX>:-Wunused-variable>
+      $<$<COMPILE_LANGUAGE:CXX>:-Wunused-function>
+      $<$<COMPILE_LANGUAGE:CXX>:-Werror=unused-parameter>
+      $<$<COMPILE_LANGUAGE:CXX>:-Werror=unused-variable>
+      $<$<COMPILE_LANGUAGE:CXX>:-Werror=unused-function>
+    )
+  endif()
 endfunction()
 
 function(radioify_disable_warnings target_name)
-  target_compile_options(${target_name} PRIVATE
-    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/W0>
-    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W0>
-    $<$<COMPILE_LANG_AND_ID:C,Clang,GNU,AppleClang>:-w>
-    $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU,AppleClang>:-w>
-  )
+  if (MSVC)
+    target_compile_options(${target_name} PRIVATE
+      $<$<COMPILE_LANGUAGE:C>:/W0>
+      $<$<COMPILE_LANGUAGE:CXX>:/W0>
+    )
+  else()
+    target_compile_options(${target_name} PRIVATE
+      $<$<COMPILE_LANGUAGE:C>:-w>
+      $<$<COMPILE_LANGUAGE:CXX>:-w>
+    )
+  endif()
 endfunction()
 
 if (MSVC)
@@ -128,10 +138,12 @@ target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_FFMPEG_ERROR_LOG}>,1,0>
   RADIOIFY_ENABLE_STAGING_UPLOAD=$<IF:$<BOOL:${RADIOIFY_ENABLE_STAGING_UPLOAD}>,1,0>
 )
-target_compile_options(radioify_project_options INTERFACE
-  $<$<COMPILE_LANG_AND_ID:C,MSVC>:/external:W0>
-  $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/external:W0>
-)
+if (MSVC)
+  target_compile_options(radioify_project_options INTERFACE
+    $<$<COMPILE_LANGUAGE:C>:/external:W0>
+    $<$<COMPILE_LANGUAGE:CXX>:/external:W0>
+  )
+endif()
 
 function(radioify_add_module_object_library target_name)
   add_library(${target_name} OBJECT ${ARGN})
@@ -834,6 +846,18 @@ FetchContent_Declare(
   GIT_SUBMODULES_RECURSE TRUE
 )
 FetchContent_MakeAvailable(libkss)
+set(_radioify_libkss_kssplay_c "${libkss_SOURCE_DIR}/src/kssplay.c")
+if (EXISTS "${_radioify_libkss_kssplay_c}")
+  file(READ "${_radioify_libkss_kssplay_c}" _radioify_libkss_kssplay_c_contents)
+  string(REPLACE
+    "void KSSPLAY_set_channel_mask(KSSPLAY *kssplay, uint32_t device, uint32_t mask) {"
+    "void KSSPLAY_set_channel_mask(KSSPLAY *kssplay, KSS_DEVICE device, uint32_t mask) {"
+    _radioify_libkss_kssplay_c_patched
+    "${_radioify_libkss_kssplay_c_contents}")
+  if (NOT _radioify_libkss_kssplay_c_patched STREQUAL _radioify_libkss_kssplay_c_contents)
+    file(WRITE "${_radioify_libkss_kssplay_c}" "${_radioify_libkss_kssplay_c_patched}")
+  endif()
+endif()
 foreach(_radioify_libkss_target IN ITEMS emu2149 emu2212 emu2413 emu8950 emu76489 kmz80 kss kss2wav)
   if (TARGET ${_radioify_libkss_target})
     radioify_disable_warnings(${_radioify_libkss_target})

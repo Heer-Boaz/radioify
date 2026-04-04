@@ -2005,6 +2005,23 @@ void audioStreamSynchronize(int serial, int64_t targetPtsUs) {
   gAudio.state.decodeCv.notify_all();
 }
 
+void audioStreamPrimeClock(int serial, int64_t targetPtsUs) {
+  if (!gAudio.decoderReady || !gAudio.state.externalStream.load() ||
+      !gAudio.state.streamQueueEnabled.load()) {
+    return;
+  }
+  if (serial != gAudio.state.streamSerial.load(std::memory_order_relaxed)) {
+    return;
+  }
+
+  // Seed the clock for priming without discarding buffered audio.
+  // The callback will publish the real, latency-compensated clock once audio
+  // hardware has started consuming samples.
+  gAudio.state.audioClock.set(targetPtsUs, nowUs(), serial);
+  gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
+  gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
+}
+
 void audioStreamSyncClockOnly(int serial, int64_t targetPtsUs) {
   // Soft sync: only adjust the clock, don't reset ringbuffer or drop audio
   // Used when video PTS is repaired to prevent audio clock from becoming invalid
@@ -2145,7 +2162,7 @@ bool audioStreamClockReady() {
   if (!gAudio.state.streamQueueEnabled.load()) {
     return false;
   }
-  return gAudio.state.audioClock.is_valid();
+  return gAudio.state.streamClockReady.load(std::memory_order_relaxed);
 }
 
 uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int timeoutMs) {
