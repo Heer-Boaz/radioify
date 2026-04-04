@@ -194,22 +194,19 @@ function Initialize-RadioifyWin11DeployRoot {
     $deployRoot = Join-Path $IntegrationDir "external-location"
     New-RadioifyWin11Directory -Path $deployRoot
 
-    foreach ($item in Get-ChildItem -LiteralPath $distRoot -Force) {
-        if ($item.FullName -eq $IntegrationDir) {
-            continue
-        }
-
-        Copy-Item -LiteralPath $item.FullName `
-            -Destination (Join-Path $deployRoot $item.Name) `
-            -Recurse -Force
-    }
-
-    # The COM SurrogateServer Path="radioify_explorer.dll" is resolved relative
-    # to the external location root, so the DLL must live there next to radioify.exe.
+    # Only the DLL and icon need to be in the external location.
+    # radioify.exe lives in dist/ and the DLL finds it two levels up.
     $dllSource = Join-Path $IntegrationDir "radioify_explorer.dll"
     if (Test-Path -LiteralPath $dllSource) {
         Copy-Item -LiteralPath $dllSource `
             -Destination (Join-Path $deployRoot "radioify_explorer.dll") `
+            -Force
+    }
+
+    $icoSource = Join-Path $distRoot "radioify.ico"
+    if (Test-Path -LiteralPath $icoSource) {
+        Copy-Item -LiteralPath $icoSource `
+            -Destination (Join-Path $deployRoot "radioify.ico") `
             -Force
     }
 

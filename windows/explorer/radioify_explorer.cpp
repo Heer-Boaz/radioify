@@ -328,16 +328,10 @@ std::filesystem::path findRadioifyExecutable() {
 
   std::vector<std::filesystem::path> candidates;
 
-  // When hosted by dllhost.exe as a packaged COM surrogate the DLL lives in
-  // the package install path (WindowsApps).  radioify.exe is in the package's
-  // external location, so check there first.
-  const std::filesystem::path externalDir = packageExternalLocation();
-  if (!externalDir.empty()) {
-    candidates.push_back(externalDir / "radioify.exe");
-  }
-
-  // Fall back to paths relative to the DLL for unpackaged / debug scenarios.
+  // The DLL lives in dist/win11-explorer-integration/external-location/.
+  // The primary radioify.exe is in dist/, two levels up.
   if (!moduleDir.empty()) {
+    candidates.push_back(moduleDir.parent_path().parent_path() / "radioify.exe");
     candidates.push_back(moduleDir / "radioify.exe");
     candidates.push_back(moduleDir.parent_path() / "radioify.exe");
   }
@@ -498,9 +492,10 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
     *icon = nullptr;
 
     // Look for radioify.ico next to radioify.exe.
-    const std::filesystem::path exe = findRadioifyExecutable();
-    if (!exe.empty()) {
-      const std::filesystem::path icoPath = exe.parent_path() / L"radioify.ico";
+    // Icon lives next to the DLL in the external location.
+    const std::filesystem::path moduleDir = currentModuleDirectory();
+    if (!moduleDir.empty()) {
+      const std::filesystem::path icoPath = moduleDir / L"radioify.ico";
       if (isExistingRegularFile(icoPath)) {
         const std::wstring iconResource = icoPath.wstring() + L",0";
         const HRESULT hr = duplicateString(iconResource, icon);
