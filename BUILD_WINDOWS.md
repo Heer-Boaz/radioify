@@ -79,7 +79,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PWD")\\b
 Equivalent wrapper:
 
 ```bash
-./scripts/build_windows_from_wsl.sh
+./build_windows.sh
 ```
 
 Only use a clean rebuild when the cache is genuinely broken:
