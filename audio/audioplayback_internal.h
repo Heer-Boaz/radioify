@@ -243,6 +243,8 @@ struct AudioState {
   std::atomic<int64_t> streamBasePtsUs{0};
   std::atomic<uint64_t> streamReadFrames{0};
   std::atomic<bool> streamClockReady{false};
+  std::atomic<bool> deviceRecoveryPending{false};
+  std::atomic<bool> deviceStopExpected{false};
   std::deque<AudioMetadata> streamMetadata;
   std::mutex streamMetadataMutex;
   std::condition_variable streamUpdateCv;
@@ -329,6 +331,9 @@ AudioMode currentAudioMode();
 bool isAudioMode(AudioMode mode);
 void startAuditionWorker(AuditionTone tone);
 void stopAuditionWorker();
+void appendAudioTimingLogLine(const char* line);
+void dataCallback(ma_device* device, void* output, const void* input,
+                  ma_uint32 frameCount);
 void audioStreamReset(uint64_t framePos);
 bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
                int trackIndex);

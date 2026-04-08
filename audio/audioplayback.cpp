@@ -35,6 +35,7 @@ extern "C" {
 #include "psfaudio.h"
 #include "radio.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
+#include "playback_device.h"
 #include "runtime_helpers.h"
 
 #ifndef NOMINMAX
@@ -141,15 +142,6 @@ size_t audioRingBufferWrite(AudioRingBuffer* buffer, const float* in,
   return toWrite;
 }
 
-uint64_t rescaleFrames(uint64_t frames, uint32_t inRate, uint32_t outRate) {
-  if (frames == 0 || inRate == 0 || outRate == 0 || inRate == outRate) {
-    return frames;
-  }
-  double scaled = static_cast<double>(frames) * static_cast<double>(outRate) /
-                  static_cast<double>(inRate);
-  return static_cast<uint64_t>(std::llround(scaled));
-}
-
 static constexpr uint32_t kRadioProcessChannels = 1u;
 static void audioStreamProcessRadioImpl(float* interleaved, uint32_t frames);
 static bool backendUsesQueuedDecodeThread(const AudioBackendHandlers* backend);
@@ -158,7 +150,6 @@ static void resetQueuedPlaybackState(AudioState* state,
                                      uint64_t framePos,
                                      int serial);
 static void stopDecodeWorker();
-static void updateDeviceDelayFrames();
 static bool writeQueuedSamples(AudioState* state,
                                const float* interleaved,
                                uint64_t frames,
@@ -387,41 +378,6 @@ static bool waitForQueuedDecodeRetry(AudioState* state) {
   return !state->decodeStop.load(std::memory_order_relaxed) &&
          !state->seekRequested.load(std::memory_order_relaxed) &&
          state->streamQueueEnabled.load(std::memory_order_relaxed);
-}
-
-static void updateDeviceDelayFrames() {
-  uint64_t latencyFrames = 0;
-  if (gAudio.deviceReady &&
-      ma_device_get_state(&gAudio.state.device) !=
-          ma_device_state_uninitialized) {
-    uint32_t internalRate = gAudio.state.device.playback.internalSampleRate;
-    uint64_t internalBuffer = 0;
-    uint32_t periodFrames = gAudio.state.device.playback.internalPeriodSizeInFrames;
-    uint32_t periods = gAudio.state.device.playback.internalPeriods;
-    if (periodFrames > 0 && periods > 0) {
-      internalBuffer = static_cast<uint64_t>(periodFrames) *
-                       static_cast<uint64_t>(periods);
-    }
-#ifdef MA_SUPPORT_WASAPI
-    if (gAudio.state.device.wasapi.actualBufferSizeInFramesPlayback > 0) {
-      internalBuffer = std::max<uint64_t>(
-          internalBuffer, gAudio.state.device.wasapi.actualBufferSizeInFramesPlayback);
-    }
-#endif
-    if (internalBuffer > 0) {
-      latencyFrames +=
-          rescaleFrames(internalBuffer, internalRate, gAudio.state.sampleRate);
-    }
-    latencyFrames +=
-        static_cast<uint64_t>(gAudio.state.device.playback.intermediaryBufferLen);
-    uint64_t converterLatency =
-        ma_data_converter_get_output_latency(&gAudio.state.device.playback.converter);
-    if (converterLatency > 0) {
-      latencyFrames +=
-          rescaleFrames(converterLatency, internalRate, gAudio.state.sampleRate);
-    }
-  }
-  gAudio.state.deviceDelayFrames = latencyFrames;
 }
 
 static bool writeQueuedSamples(AudioState* state,
@@ -1120,35 +1076,6 @@ bool startM4aWorker(const std::filesystem::path& file, uint64_t startFrame,
   return true;
 }
 
-bool initDevice() {
-  if (gAudio.deviceReady) return true;
-  ma_device_config devConfig = ma_device_config_init(ma_device_type_playback);
-  devConfig.playback.format = ma_format_f32;
-  devConfig.playback.channels = gAudio.channels;
-  devConfig.sampleRate = gAudio.sampleRate;
-  devConfig.dataCallback = dataCallback;
-  devConfig.pUserData = &gAudio.state;
-
-  if (ma_device_init(nullptr, &devConfig, &gAudio.state.device) != MA_SUCCESS) {
-    return false;
-  }
-  if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
-    ma_device_uninit(&gAudio.state.device);
-    return false;
-  }
-  gAudio.deviceReady = true;
-#if RADIOIFY_ENABLE_TIMING_LOG
-  {
-    char buf[256];
-    std::snprintf(buf, sizeof(buf),
-                  "audio_device_started sampleRate=%u channels=%u",
-                  gAudio.sampleRate, gAudio.channels);
-    appendAudioTimingLogLine(buf);
-  }
-#endif
-  return true;
-}
-
 void applyVgmDeviceOverrides() {
   if (gAudio.state.mode.load(std::memory_order_relaxed) != AudioMode::Vgm) {
     return;
@@ -1581,22 +1508,6 @@ void resetPlaybackStateForLoad(uint64_t startFrame) {
   rebuildRadioPreviewChain(&gAudio.state);
 }
 
-bool ensurePlaybackDeviceRunning() {
-  if (!gAudio.deviceReady) {
-    if (!initDevice()) {
-      stopAndUninitActiveDecoder();
-      return false;
-    }
-    return true;
-  }
-
-  if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
-    stopAndUninitActiveDecoder();
-    return false;
-  }
-  return true;
-}
-
 bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
                 int trackIndex) {
   if (!validateSupportedAudioInputFile(file, &gAudio.lastInitError)) {
@@ -1620,9 +1531,7 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
     return false;
   }
 
-  if (gAudio.deviceReady) {
-    ma_device_stop(&gAudio.state.device);
-  }
+  audioPlaybackDeviceUninit();
   stopAndUninitActiveDecoder();
 
   if (!initDecoderForBackend(backend, file, startFrame, trackIndex)) {
@@ -1643,11 +1552,10 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
     }
   }
 
-  if (!ensurePlaybackDeviceRunning()) {
+  if (!audioPlaybackDeviceEnsureRunning()) {
+    stopAndUninitActiveDecoder();
     return false;
   }
-
-  updateDeviceDelayFrames();
 
   const uint64_t analysisLeadInFrames = gAudio.state.audioLeadSilenceFrames.load();
   if (backend->allowConcurrentOfflineAnalysis) {
@@ -1669,11 +1577,7 @@ bool ensureChannels(uint32_t newChannels) {
   bool hadTrack = gAudio.decoderReady && !gAudio.nowPlaying.empty();
   int trackIndex = gAudio.trackIndex;
 
-  if (gAudio.deviceReady) {
-    ma_device_stop(&gAudio.state.device);
-    ma_device_uninit(&gAudio.state.device);
-    gAudio.deviceReady = false;
-  }
+  audioPlaybackDeviceUninit();
   if (gAudio.decoderReady) {
     stopAndUninitActiveDecoder();
   }
@@ -1697,9 +1601,7 @@ void stopPlayback() {
     stopAuditionWorker();
     gAudio.audition.resumeValid = false;
   }
-  if (gAudio.deviceReady) {
-    ma_device_stop(&gAudio.state.device);
-  }
+  audioPlaybackDeviceUninit();
   if (gAudio.decoderReady) {
     stopAndUninitActiveDecoder();
   }
@@ -1763,10 +1665,7 @@ void audioInit(const AudioPlaybackConfig& config) {
 
 void audioShutdown() {
   stopPlayback();
-  if (gAudio.deviceReady) {
-    ma_device_uninit(&gAudio.state.device);
-    gAudio.deviceReady = false;
-  }
+  audioPlaybackDeviceUninit();
 }
 
 bool audioIsEnabled() { return gAudio.enableAudio; }
@@ -1800,9 +1699,7 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.gsfWarning.clear();
   gAudio.vgmWarning.clear();
   gAudio.trackIndex = 0;
-  if (gAudio.deviceReady) {
-    ma_device_stop(&gAudio.state.device);
-  }
+  audioPlaybackDeviceUninit();
   stopAndUninitActiveDecoder();
 
   const uint32_t rbFrames = std::max<uint32_t>(gAudio.sampleRate, 8192);
@@ -1856,45 +1753,12 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.state.sampleRate = gAudio.sampleRate;
   rebuildRadioPreviewChain(&gAudio.state);
 
-  if (!ensurePlaybackDeviceRunning()) {
+  if (!audioPlaybackDeviceEnsureRunning()) {
+    stopAndUninitActiveDecoder();
     gAudio.state.streamQueueEnabled.store(false);
     return false;
   }
-
-  // Estimate output latency so the audio clock tracks what is actually audible,
-  // not what we just wrote into the callback buffer.
-  uint64_t latencyFrames = 0;
-  if (gAudio.deviceReady &&
-      ma_device_get_state(&gAudio.state.device) !=
-          ma_device_state_uninitialized) {
-    uint32_t internalRate = gAudio.state.device.playback.internalSampleRate;
-    uint64_t internalBuffer = 0;
-    uint32_t periodFrames = gAudio.state.device.playback.internalPeriodSizeInFrames;
-    uint32_t periods = gAudio.state.device.playback.internalPeriods;
-    if (periodFrames > 0 && periods > 0) {
-      internalBuffer = static_cast<uint64_t>(periodFrames) *
-                       static_cast<uint64_t>(periods);
-    }
-#ifdef MA_SUPPORT_WASAPI
-    if (gAudio.state.device.wasapi.actualBufferSizeInFramesPlayback > 0) {
-      internalBuffer = std::max<uint64_t>(
-          internalBuffer, gAudio.state.device.wasapi.actualBufferSizeInFramesPlayback);
-    }
-#endif
-    if (internalBuffer > 0) {
-      latencyFrames +=
-          rescaleFrames(internalBuffer, internalRate, gAudio.state.sampleRate);
-    }
-    latencyFrames +=
-        static_cast<uint64_t>(gAudio.state.device.playback.intermediaryBufferLen);
-    uint64_t converterLatency =
-        ma_data_converter_get_output_latency(&gAudio.state.device.playback.converter);
-    if (converterLatency > 0) {
-      latencyFrames +=
-          rescaleFrames(converterLatency, internalRate, gAudio.state.sampleRate);
-    }
-  }
-  gAudio.state.deviceDelayFrames = latencyFrames;
+  audioPlaybackDeviceLatencyFrames();
 
   gAudio.nowPlaying.clear();
   return true;
@@ -2193,37 +2057,7 @@ double audioGetTimeSec() {
     return 0.0;
   }
   int64_t frames = static_cast<int64_t>(gAudio.state.audioClockFrames.load());
-  uint64_t latencyFrames = 0;
-  if (gAudio.deviceReady &&
-      ma_device_get_state(&gAudio.state.device) !=
-          ma_device_state_uninitialized) {
-    uint32_t internalRate = gAudio.state.device.playback.internalSampleRate;
-    uint64_t internalBuffer = 0;
-    uint32_t periodFrames = gAudio.state.device.playback.internalPeriodSizeInFrames;
-    uint32_t periods = gAudio.state.device.playback.internalPeriods;
-    if (periodFrames > 0 && periods > 0) {
-      internalBuffer = static_cast<uint64_t>(periodFrames) *
-                       static_cast<uint64_t>(periods);
-    }
-#ifdef MA_SUPPORT_WASAPI
-    if (gAudio.state.device.wasapi.actualBufferSizeInFramesPlayback > 0) {
-      internalBuffer = std::max<uint64_t>(
-          internalBuffer, gAudio.state.device.wasapi.actualBufferSizeInFramesPlayback);
-    }
-#endif
-    if (internalBuffer > 0) {
-      latencyFrames +=
-          rescaleFrames(internalBuffer, internalRate, gAudio.sampleRate);
-    }
-    latencyFrames +=
-        static_cast<uint64_t>(gAudio.state.device.playback.intermediaryBufferLen);
-    uint64_t converterLatency =
-        ma_data_converter_get_output_latency(&gAudio.state.device.playback.converter);
-    if (converterLatency > 0) {
-      latencyFrames +=
-          rescaleFrames(converterLatency, internalRate, gAudio.sampleRate);
-    }
-  }
+  uint64_t latencyFrames = audioPlaybackDeviceLatencyFrames();
   frames -= static_cast<int64_t>(latencyFrames);
   if (frames < 0) {
     frames = 0;
@@ -2307,19 +2141,34 @@ AudioPerfStats audioGetPerfStats() {
   stats.channels = gAudio.state.channels;
   const AudioMode mode = currentAudioMode();
   stats.usingFfmpeg = mode == AudioMode::M4a || mode == AudioMode::Ffmpeg;
-  if (gAudio.deviceReady &&
-      ma_device_get_state(&gAudio.state.device) !=
-          ma_device_state_uninitialized) {
-    stats.periodFrames = gAudio.state.device.playback.internalPeriodSizeInFrames;
-    stats.periods = gAudio.state.device.playback.internalPeriods;
-    stats.bufferFrames = stats.periodFrames * stats.periods;
-  }
+  audioPlaybackDeviceFillPerfStats(&stats);
   return stats;
 }
 
 void audioTogglePause() {
   if (!gAudio.decoderReady) return;
-  gAudio.state.paused.store(!gAudio.state.paused.load());
+  const bool wasPaused = gAudio.state.paused.load(std::memory_order_relaxed);
+  if (!wasPaused) {
+    gAudio.state.paused.store(true, std::memory_order_relaxed);
+    return;
+  }
+
+  // Resume should reacquire the current output endpoint even when the backend
+  // stayed logically started during a Windows default-device switch.
+  if (!audioPlaybackDeviceRecreate()) {
+    gAudio.lastInitError = "Failed to restore audio output device.";
+    return;
+  }
+
+  gAudio.lastInitError.clear();
+  gAudio.state.audioPrimed.store(false, std::memory_order_relaxed);
+  if (gAudio.state.externalStream.load(std::memory_order_relaxed)) {
+    gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
+    gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
+    gAudio.state.audioClock.reset(
+        gAudio.state.streamSerial.load(std::memory_order_relaxed));
+  }
+  gAudio.state.paused.store(false, std::memory_order_relaxed);
 }
 
 void audioSeekBy(int direction) {
