@@ -1,5 +1,6 @@
 #include "playback_clock.h"
 
+#include <algorithm>
 #include <atomic>
 
 #include "audioplayback.h"
@@ -7,21 +8,54 @@
 namespace playback_clock {
 namespace {
 
-constexpr int64_t kAudioClockFreshnessUs = 1000000;
+constexpr int64_t kMinAudioClockFreshnessUs = 1000000;
+constexpr int64_t kMaxAudioClockFreshnessUs = 5000000;
+
+int64_t computeAudioClockFreshnessUs(const AudioPerfStats& stats) {
+  if (stats.sampleRate == 0) {
+    return kMinAudioClockFreshnessUs;
+  }
+
+  uint64_t deviceBufferFrames = stats.bufferFrames;
+  if (deviceBufferFrames == 0 && stats.periodFrames > 0) {
+    // Fall back to a double-period window when the backend does not expose the
+    // full device buffer size. This mirrors how mature players budget for a
+    // couple of hardware periods instead of assuming low-latency output.
+    deviceBufferFrames = static_cast<uint64_t>(stats.periodFrames) * 2ULL;
+  }
+  if (deviceBufferFrames == 0) {
+    return kMinAudioClockFreshnessUs;
+  }
+
+  int64_t deviceBufferUs = static_cast<int64_t>(
+      (deviceBufferFrames * 1000000ULL) / stats.sampleRate);
+  if (deviceBufferUs <= 0) {
+    return kMinAudioClockFreshnessUs;
+  }
+
+  return std::clamp(deviceBufferUs * 4, kMinAudioClockFreshnessUs,
+                    kMaxAudioClockFreshnessUs);
+}
 
 }  // namespace
 
 Snapshot sample(bool audioActive, int currentSerial, const Clock& videoClock,
                 int64_t nowUs) {
   Snapshot snapshot;
+  AudioPerfStats stats = audioGetPerfStats();
   snapshot.audioClockUpdatedUs = audioStreamClockLastUpdatedUs();
   snapshot.audioClockReady = audioStreamClockReady();
+  int64_t freshnessUs = computeAudioClockFreshnessUs(stats);
   snapshot.audioClockFresh =
       snapshot.audioClockUpdatedUs > 0 &&
-      (nowUs - snapshot.audioClockUpdatedUs) <= kAudioClockFreshnessUs;
+      (nowUs - snapshot.audioClockUpdatedUs) <= freshnessUs;
   snapshot.audioStarved = audioStreamStarved();
   snapshot.audioBufferedFrames = audioStreamBufferedFrames();
-  AudioPerfStats stats = audioGetPerfStats();
+  snapshot.audioDeviceBufferFrames = stats.bufferFrames;
+  if (snapshot.audioDeviceBufferFrames == 0 && stats.periodFrames > 0) {
+    snapshot.audioDeviceBufferFrames =
+        static_cast<size_t>(stats.periodFrames) * 2ULL;
+  }
   snapshot.audioSampleRate = stats.sampleRate;
 
   if (audioActive && audioStreamSerial() == currentSerial) {

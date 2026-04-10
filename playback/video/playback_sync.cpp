@@ -17,6 +17,18 @@ constexpr int64_t kSyncWindowUs = 100000;
 constexpr int64_t kLowAudioBufferUs = 100000;
 constexpr int64_t kRecoveredAudioBufferUs = 200000;
 
+int64_t audioBufferThresholdUs(size_t frames, uint32_t sampleRate,
+                               int64_t fallbackUs) {
+  if (frames == 0 || sampleRate == 0) {
+    return fallbackUs;
+  }
+  int64_t bufferUs = static_cast<int64_t>((frames * 1000000ULL) / sampleRate);
+  if (bufferUs <= 0) {
+    return fallbackUs;
+  }
+  return (std::max)(fallbackUs, bufferUs);
+}
+
 int64_t clampi64(int64_t v, int64_t lo, int64_t hi) {
   if (v < lo) return lo;
   if (v > hi) return hi;
@@ -217,12 +229,16 @@ FramePlan planFrame(LoopState& state, PlayerState playbackState,
                                                      : 48000;
     int64_t audioBufferedUs = static_cast<int64_t>(
         (master.audioBufferedFrames * 1000000ULL) / sampleRate);
+    int64_t lowAudioBufferUs = audioBufferThresholdUs(
+        master.audioDeviceBufferFrames / 2, sampleRate, kLowAudioBufferUs);
+    int64_t recoveredAudioBufferUs = audioBufferThresholdUs(
+        master.audioDeviceBufferFrames, sampleRate, kRecoveredAudioBufferUs);
 
-    if (audioBufferedUs < kLowAudioBufferUs && audioBufferedUs > 0) {
+    if (audioBufferedUs < lowAudioBufferUs && audioBufferedUs > 0) {
       double currentSpeed =
           videoClock.speed_q16.load(std::memory_order_relaxed) / 65536.0;
       videoClock.set_speed((std::max)(0.95, currentSpeed * 0.99), nowUs);
-    } else if (audioBufferedUs > kRecoveredAudioBufferUs) {
+    } else if (audioBufferedUs > recoveredAudioBufferUs) {
       double currentSpeed =
           videoClock.speed_q16.load(std::memory_order_relaxed) / 65536.0;
       if (currentSpeed < 1.0) {

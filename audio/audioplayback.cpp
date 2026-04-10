@@ -367,6 +367,34 @@ static bool queuedDecodeReachedKnownEnd(const AudioState* state,
   return totalFrames > 0 && framePos >= totalFrames;
 }
 
+static int64_t queuedAudioClockStarvationGraceUs(const AudioState* state,
+                                                 uint32_t frameCount) {
+  constexpr int64_t kMinClockStarvationGraceUs = 150000;
+  constexpr int64_t kMaxClockStarvationGraceUs = 2000000;
+
+  if (!state || state->sampleRate == 0) {
+    return kMinClockStarvationGraceUs;
+  }
+
+  uint64_t bufferedFrames = state->deviceDelayFrames.load(std::memory_order_relaxed);
+  if (frameCount > 0) {
+    bufferedFrames =
+        std::max<uint64_t>(bufferedFrames, static_cast<uint64_t>(frameCount) * 2ULL);
+  }
+  if (bufferedFrames == 0) {
+    return kMinClockStarvationGraceUs;
+  }
+
+  int64_t bufferedUs = static_cast<int64_t>(
+      (bufferedFrames * 1000000ULL) / state->sampleRate);
+  if (bufferedUs <= 0) {
+    return kMinClockStarvationGraceUs;
+  }
+
+  return std::clamp(bufferedUs * 2, kMinClockStarvationGraceUs,
+                    kMaxClockStarvationGraceUs);
+}
+
 static bool waitForQueuedDecodeRetry(AudioState* state) {
   if (!state) return false;
   std::unique_lock<std::mutex> lock(state->decodeMutex);
@@ -703,12 +731,15 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->streamStarved.store(starved, std::memory_order_relaxed);
     
     // If we starved, check how long it's been since the last valid update.
-    // We allow a small "free-run" window (150ms) to bridge decoder hiccups 
-    // without freezing the video clock. This prevents micro-stutters.
+    // High-latency outputs such as Remote Desktop can legitimately go much
+    // longer between stable hardware updates than local speakers, so scale the
+    // free-run window with the device buffer budget instead of using a hard
+    // local-only threshold.
     if (starved) {
       int64_t now = nowUs();
       int64_t last = state->audioClock.last_updated_us.load(std::memory_order_relaxed);
-      if (now - last > 150000) { // 150ms threshold
+      int64_t graceUs = queuedAudioClockStarvationGraceUs(state, frameCount);
+      if (now - last > graceUs) {
         state->audioClock.invalidate();
         state->streamClockReady.store(false, std::memory_order_relaxed);
       }

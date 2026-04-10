@@ -16,6 +16,7 @@ struct Snapshot {
   bool audioStarved = false;
   int64_t audioClockUpdatedUs = 0;
   size_t audioBufferedFrames = 0;
+  size_t audioDeviceBufferFrames = 0;
   uint32_t audioSampleRate = 0;
 };
 
