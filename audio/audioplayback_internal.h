@@ -251,7 +251,7 @@ struct AudioState {
   std::atomic<uint64_t> streamUpdateCounter{0};
   std::atomic<bool> streamStarved{false};
   std::atomic<int64_t> streamDiscardPtsUs{0};
-  uint64_t deviceDelayFrames = 0;
+  std::atomic<uint64_t> deviceDelayFrames{0};
   Clock audioClock;
   uint32_t channels = 1;
   uint32_t sampleRate = 48000;

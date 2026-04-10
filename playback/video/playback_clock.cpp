@@ -25,9 +25,16 @@ Snapshot sample(bool audioActive, int currentSerial, const Clock& videoClock,
   snapshot.audioSampleRate = stats.sampleRate;
 
   if (audioActive && audioStreamSerial() == currentSerial) {
-    snapshot.us = audioStreamClockUs(nowUs);
-    snapshot.source = PlayerClockSource::Audio;
-    return snapshot;
+    int64_t audioUs = audioStreamClockUs(nowUs);
+    // Guard the video clock against dead or stale audio output. If the device
+    // has stopped updating, fall back to the video clock instead of continuing
+    // to treat audio as a valid master clock.
+    if (snapshot.audioClockReady && snapshot.audioClockFresh &&
+        !snapshot.audioStarved && audioUs > 0) {
+      snapshot.us = audioUs;
+      snapshot.source = PlayerClockSource::Audio;
+      return snapshot;
+    }
   }
 
   if (videoClock.is_valid() &&

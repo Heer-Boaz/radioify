@@ -4,9 +4,14 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
 
 #include "audioplayback.h"
 #include "audioplayback_internal.h"
+
+namespace {
+
+std::mutex gPlaybackDeviceMutex;
 
 static uint64_t rescalePlaybackDeviceFrames(uint64_t frames,
                                             uint32_t inRate,
@@ -19,7 +24,15 @@ static uint64_t rescalePlaybackDeviceFrames(uint64_t frames,
   return static_cast<uint64_t>(std::llround(scaled));
 }
 
-static uint64_t calculatePlaybackDeviceLatencyFrames() {
+static void invalidatePlaybackDeviceRuntimeState() {
+  gAudio.state.audioPrimed.store(false, std::memory_order_relaxed);
+  gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
+  gAudio.state.streamStarved.store(true, std::memory_order_relaxed);
+  gAudio.state.audioClock.invalidate();
+  gAudio.state.deviceDelayFrames.store(0, std::memory_order_relaxed);
+}
+
+static uint64_t calculatePlaybackDeviceLatencyFramesUnlocked() {
   if (!gAudio.deviceReady ||
       ma_device_get_state(&gAudio.state.device) ==
           ma_device_state_uninitialized) {
@@ -58,8 +71,9 @@ static uint64_t calculatePlaybackDeviceLatencyFrames() {
   return latencyFrames;
 }
 
-static void updatePlaybackDeviceDelayFrames() {
-  gAudio.state.deviceDelayFrames = calculatePlaybackDeviceLatencyFrames();
+static void updatePlaybackDeviceDelayFramesUnlocked() {
+  gAudio.state.deviceDelayFrames.store(
+      calculatePlaybackDeviceLatencyFramesUnlocked(), std::memory_order_relaxed);
 }
 
 static void deviceNotificationCallback(
@@ -89,7 +103,7 @@ static void deviceNotificationCallback(
   }
 }
 
-static bool initPlaybackDevice() {
+static bool initPlaybackDeviceUnlocked() {
   if (gAudio.deviceReady) return true;
 
   ma_device_config devConfig = ma_device_config_init(ma_device_type_playback);
@@ -102,20 +116,20 @@ static bool initPlaybackDevice() {
 
   if (ma_device_init(nullptr, &devConfig, &gAudio.state.device) != MA_SUCCESS) {
     gAudio.lastInitError = "Failed to initialize audio output device.";
-    gAudio.state.deviceDelayFrames = 0;
+    invalidatePlaybackDeviceRuntimeState();
     return false;
   }
   if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
     ma_device_uninit(&gAudio.state.device);
     gAudio.lastInitError = "Failed to start audio output device.";
-    gAudio.state.deviceDelayFrames = 0;
+    invalidatePlaybackDeviceRuntimeState();
     return false;
   }
 
   gAudio.deviceReady = true;
   gAudio.state.deviceRecoveryPending.store(false, std::memory_order_relaxed);
   gAudio.state.deviceStopExpected.store(false, std::memory_order_relaxed);
-  updatePlaybackDeviceDelayFrames();
+  updatePlaybackDeviceDelayFramesUnlocked();
 #if RADIOIFY_ENABLE_TIMING_LOG
   {
     char buf[256];
@@ -128,49 +142,12 @@ static bool initPlaybackDevice() {
   return true;
 }
 
-static bool ensurePlaybackDeviceRunningInternal() {
-  if (!gAudio.deviceReady) {
-    return initPlaybackDevice();
-  }
-
-  if (ma_device_get_state(&gAudio.state.device) ==
-          ma_device_state_uninitialized ||
-      gAudio.state.deviceRecoveryPending.load(std::memory_order_relaxed)) {
-    return audioPlaybackDeviceRecreate();
-  }
-
-  const ma_device_state deviceState = ma_device_get_state(&gAudio.state.device);
-  if (deviceState == ma_device_state_started ||
-      deviceState == ma_device_state_starting) {
-    updatePlaybackDeviceDelayFrames();
-    return true;
-  }
-
-  if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
-    return audioPlaybackDeviceRecreate();
-  }
-
-  gAudio.state.deviceStopExpected.store(false, std::memory_order_relaxed);
-  gAudio.state.deviceRecoveryPending.store(false, std::memory_order_relaxed);
-  updatePlaybackDeviceDelayFrames();
-  return true;
-}
-
-bool audioPlaybackDeviceEnsureRunning() {
-  return ensurePlaybackDeviceRunningInternal();
-}
-
-bool audioPlaybackDeviceRecreate() {
-  audioPlaybackDeviceUninit();
-  return ensurePlaybackDeviceRunningInternal();
-}
-
-void audioPlaybackDeviceUninit() {
+static void uninitPlaybackDeviceUnlocked() {
   if (!gAudio.deviceReady) return;
   if (ma_device_get_state(&gAudio.state.device) ==
       ma_device_state_uninitialized) {
     gAudio.deviceReady = false;
-    gAudio.state.deviceDelayFrames = 0;
+    invalidatePlaybackDeviceRuntimeState();
     gAudio.state.deviceRecoveryPending.store(false, std::memory_order_relaxed);
     gAudio.state.deviceStopExpected.store(false, std::memory_order_relaxed);
     return;
@@ -181,19 +158,68 @@ void audioPlaybackDeviceUninit() {
   // may have drifted out of sync after OS-level device changes.
   ma_device_uninit(&gAudio.state.device);
   gAudio.deviceReady = false;
-  gAudio.state.audioPrimed.store(false, std::memory_order_relaxed);
-  gAudio.state.deviceDelayFrames = 0;
+  invalidatePlaybackDeviceRuntimeState();
   gAudio.state.deviceRecoveryPending.store(false, std::memory_order_relaxed);
   gAudio.state.deviceStopExpected.store(false, std::memory_order_relaxed);
 }
 
+static bool ensurePlaybackDeviceRunningInternalUnlocked() {
+  if (!gAudio.deviceReady) {
+    return initPlaybackDeviceUnlocked();
+  }
+
+  if (ma_device_get_state(&gAudio.state.device) ==
+          ma_device_state_uninitialized ||
+      gAudio.state.deviceRecoveryPending.load(std::memory_order_relaxed)) {
+    uninitPlaybackDeviceUnlocked();
+    return initPlaybackDeviceUnlocked();
+  }
+
+  const ma_device_state deviceState = ma_device_get_state(&gAudio.state.device);
+  if (deviceState == ma_device_state_started ||
+      deviceState == ma_device_state_starting) {
+    updatePlaybackDeviceDelayFramesUnlocked();
+    return true;
+  }
+
+  if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
+    uninitPlaybackDeviceUnlocked();
+    return initPlaybackDeviceUnlocked();
+  }
+
+  gAudio.state.deviceStopExpected.store(false, std::memory_order_relaxed);
+  gAudio.state.deviceRecoveryPending.store(false, std::memory_order_relaxed);
+  updatePlaybackDeviceDelayFramesUnlocked();
+  return true;
+}
+
+}  // namespace
+
+bool audioPlaybackDeviceEnsureRunning() {
+  std::lock_guard<std::mutex> lock(gPlaybackDeviceMutex);
+  return ensurePlaybackDeviceRunningInternalUnlocked();
+}
+
+bool audioPlaybackDeviceRecreate() {
+  std::lock_guard<std::mutex> lock(gPlaybackDeviceMutex);
+  uninitPlaybackDeviceUnlocked();
+  return initPlaybackDeviceUnlocked();
+}
+
+void audioPlaybackDeviceUninit() {
+  std::lock_guard<std::mutex> lock(gPlaybackDeviceMutex);
+  uninitPlaybackDeviceUnlocked();
+}
+
 uint64_t audioPlaybackDeviceLatencyFrames() {
-  updatePlaybackDeviceDelayFrames();
-  return gAudio.state.deviceDelayFrames;
+  std::lock_guard<std::mutex> lock(gPlaybackDeviceMutex);
+  updatePlaybackDeviceDelayFramesUnlocked();
+  return gAudio.state.deviceDelayFrames.load(std::memory_order_relaxed);
 }
 
 void audioPlaybackDeviceFillPerfStats(AudioPerfStats* stats) {
   if (!stats) return;
+  std::lock_guard<std::mutex> lock(gPlaybackDeviceMutex);
   if (!gAudio.deviceReady ||
       ma_device_get_state(&gAudio.state.device) ==
           ma_device_state_uninitialized) {

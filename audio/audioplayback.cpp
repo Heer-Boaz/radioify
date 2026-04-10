@@ -687,7 +687,7 @@ void dataCallback(ma_device* device, void* output, const void*,
 
       if (currentPts != AV_NOPTS_VALUE) {
         // Compensate for hardware latency: the clock represents what is currently being heard.
-        uint64_t delay = state->deviceDelayFrames;
+        uint64_t delay = state->deviceDelayFrames.load(std::memory_order_relaxed);
         int64_t delayUs = static_cast<int64_t>(delay * 1000000ULL / state->sampleRate);
         
         state->audioClock.sync_to_pts(currentPts - delayUs, nowUs(), currentSerial);
@@ -1502,7 +1502,7 @@ void resetPlaybackStateForLoad(uint64_t startFrame) {
   gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
   gAudio.state.streamDiscardPtsUs.store(0, std::memory_order_relaxed);
   gAudio.state.m4aAtEnd.store(false, std::memory_order_relaxed);
-  gAudio.state.deviceDelayFrames = 0;
+  gAudio.state.deviceDelayFrames.store(0, std::memory_order_relaxed);
 
   gAudio.state.channels = gAudio.channels;
   rebuildRadioPreviewChain(&gAudio.state);
@@ -2147,6 +2147,13 @@ AudioPerfStats audioGetPerfStats() {
 
 void audioTogglePause() {
   if (!gAudio.decoderReady) return;
+  const bool finished = gAudio.state.finished.load(std::memory_order_relaxed);
+  const bool externalStream =
+      gAudio.state.externalStream.load(std::memory_order_relaxed);
+  if (finished && !externalStream && !gAudio.nowPlaying.empty()) {
+    loadFileAt(gAudio.nowPlaying, 0, gAudio.trackIndex);
+    return;
+  }
   const bool wasPaused = gAudio.state.paused.load(std::memory_order_relaxed);
   if (!wasPaused) {
     gAudio.state.paused.store(true, std::memory_order_relaxed);
@@ -2162,6 +2169,8 @@ void audioTogglePause() {
 
   gAudio.lastInitError.clear();
   gAudio.state.audioPrimed.store(false, std::memory_order_relaxed);
+  gAudio.state.finished.store(false, std::memory_order_relaxed);
+  gAudio.state.m4aAtEnd.store(false, std::memory_order_relaxed);
   if (gAudio.state.externalStream.load(std::memory_order_relaxed)) {
     gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
     gAudio.state.streamStarved.store(false, std::memory_order_relaxed);

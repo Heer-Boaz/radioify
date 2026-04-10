@@ -330,6 +330,17 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   cb.onQuit = [&]() { requestPlaybackExit(view, signals, true); };
   cb.onTogglePause = [&]() {
     if (!view.player || !view.playbackState) return;
+    if (*view.playbackState == PlaybackSessionState::Ended) {
+      if (view.audioOk && *view.audioOk && audioIsPaused()) {
+        audioTogglePause();
+      } else {
+        view.player->setVideoPaused(false);
+      }
+      sendSeekRequest(view, signals, seekState, 0.0);
+      *view.playbackState = PlaybackSessionState::Active;
+      return;
+    }
+
     bool pauseNow = *view.playbackState != PlaybackSessionState::Paused;
     if (view.audioOk && *view.audioOk) {
       audioTogglePause();
