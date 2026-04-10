@@ -15,6 +15,8 @@
 #include <cstdio>
 #include <cwchar>
 
+#include "runtime_helpers.h"
+
 namespace {
 
 LONG WINAPI writeCrashDump(EXCEPTION_POINTERS* exceptionPointers) {
@@ -25,8 +27,8 @@ LONG WINAPI writeCrashDump(EXCEPTION_POINTERS* exceptionPointers) {
   SYSTEMTIME now{};
   GetLocalTime(&now);
 
-  wchar_t path[MAX_PATH]{};
-  swprintf(path, MAX_PATH,
+  wchar_t fileName[MAX_PATH]{};
+  swprintf(fileName, MAX_PATH,
            L"radioify_crash_%04u%02u%02u_%02u%02u%02u_%lu.dmp",
            static_cast<unsigned>(now.wYear),
            static_cast<unsigned>(now.wMonth),
@@ -36,8 +38,10 @@ LONG WINAPI writeCrashDump(EXCEPTION_POINTERS* exceptionPointers) {
            static_cast<unsigned>(now.wSecond),
            static_cast<unsigned long>(GetCurrentProcessId()));
 
+  const std::filesystem::path dumpPath =
+      radioifyCrashDumpDir() / std::filesystem::path(fileName);
   HANDLE file =
-      CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+      CreateFileW(dumpPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                   FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file != INVALID_HANDLE_VALUE) {
     MINIDUMP_EXCEPTION_INFORMATION info{};

@@ -10,6 +10,7 @@ int64_t nowUs();
 std::filesystem::path radioifyLaunchDir();
 std::filesystem::path radioifyExecutableDir();
 std::filesystem::path radioifyWritableDataDir();
+std::filesystem::path radioifyCrashDumpDir();
 std::filesystem::path radioifyLogPath();
 std::vector<std::filesystem::path> radioifyResourceSearchRoots();
 

@@ -166,7 +166,8 @@ function Copy-FfmpegRuntime {
     [string]$DistDir
   )
 
-  if (-not $TripletDir) { return }
+  $copiedArtifacts = New-Object System.Collections.Generic.List[string]
+  if (-not $TripletDir) { return $copiedArtifacts }
 
   $binDir = Join-Path $TripletDir "bin"
   if ($Config -ieq "Debug") {
@@ -178,7 +179,7 @@ function Copy-FfmpegRuntime {
 
   if (-not (Test-Path $binDir)) {
     Write-Warning "FFmpeg runtime bin directory not found: $binDir"
-    return
+    return $copiedArtifacts
   }
 
   if (-not (Test-Path $DistDir)) {
@@ -187,6 +188,10 @@ function Copy-FfmpegRuntime {
 
   $dlls = Get-ChildItem -Path $binDir -Filter *.dll -File -ErrorAction SilentlyContinue
   foreach ($dll in $dlls) {
-    Copy-Item -Force -Path $dll.FullName -Destination $DistDir
+    $destination = Join-Path $DistDir $dll.Name
+    Copy-Item -Force -Path $dll.FullName -Destination $destination
+    [void]$copiedArtifacts.Add($destination)
   }
+
+  return $copiedArtifacts
 }

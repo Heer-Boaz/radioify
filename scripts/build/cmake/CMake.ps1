@@ -94,6 +94,39 @@ function Test-Win11ExplorerIntegrationPackage {
   Remove-Item -LiteralPath $validationPackagePath -Force
 }
 
+function Add-PublishedArtifactPath {
+  param(
+    [System.Collections.Generic.List[string]]$Artifacts,
+    [string]$Path
+  )
+
+  if ($null -eq $Artifacts -or -not $Path -or -not (Test-Path -LiteralPath $Path)) {
+    return
+  }
+
+  $fullPath = (Get-Item -LiteralPath $Path).FullName
+  if (-not $Artifacts.Contains($fullPath)) {
+    [void]$Artifacts.Add($fullPath)
+  }
+}
+
+function Add-PublishedArtifactsFromDirectory {
+  param(
+    [System.Collections.Generic.List[string]]$Artifacts,
+    [string]$DirectoryPath
+  )
+
+  if ($null -eq $Artifacts -or -not $DirectoryPath -or -not (Test-Path -LiteralPath $DirectoryPath)) {
+    return
+  }
+
+  Get-ChildItem -LiteralPath $DirectoryPath -Recurse -File |
+    Sort-Object FullName |
+    ForEach-Object {
+      Add-PublishedArtifactPath -Artifacts $Artifacts -Path $_.FullName
+    }
+}
+
 function Ensure-BuildCacheCompatible {
   param([pscustomobject]$Context)
 
@@ -134,10 +167,14 @@ function Ensure-BuildCacheCompatible {
 function Publish-BuildArtifacts {
   param([pscustomobject]$Context)
 
+  $publishedArtifacts = New-Object System.Collections.Generic.List[string]
   $triplets = $Context.Build.TripletInfo
   $staticTriplet = $triplets.TripletStaticRequested -or (Is-StaticTriplet $triplets.EffectiveTargetTriplet) -or (Is-StaticTriplet $triplets.EffectiveDefaultTriplet)
   if (-not $Context.Options.Static -and -not $staticTriplet) {
-    Copy-FfmpegRuntime -TripletDir $Context.Build.FfmpegTripletDir -Config $Context.Options.Config -DistDir $Context.Paths.DistDir
+    $ffmpegRuntimeArtifacts = Copy-FfmpegRuntime -TripletDir $Context.Build.FfmpegTripletDir -Config $Context.Options.Config -DistDir $Context.Paths.DistDir
+    foreach ($artifact in $ffmpegRuntimeArtifacts) {
+      Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $artifact
+    }
   }
 
   $expectedExe = Join-Path $Context.Paths.DistDir "radioify.exe"
@@ -149,6 +186,7 @@ function Publish-BuildArtifacts {
     if ($publishResult.Success) {
       $publishedExe = $expectedExe
       $publishSucceeded = $true
+      Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $publishedExe
 
       $pdbSource = [System.IO.Path]::ChangeExtension($builtExe, ".pdb")
       if (Test-Path $pdbSource) {
@@ -156,6 +194,8 @@ function Publish-BuildArtifacts {
         $pdbPublishResult = Try-Copy-BuildArtifact -SourcePath $pdbSource -DestinationPath $pdbDest
         if (-not $pdbPublishResult.Success) {
           Write-Warning "Built PDB could not be published to dist: $($pdbPublishResult.ErrorMessage)"
+        } else {
+          Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $pdbDest
         }
       }
     }
@@ -172,10 +212,13 @@ function Publish-BuildArtifacts {
   # Copy radioify.ico to dist/ so it ends up in the Win11 Explorer external location.
   $icoSource = Join-Path $Context.Paths.Root "radioify.ico"
   if (Test-Path $icoSource) {
-    Copy-Item -LiteralPath $icoSource -Destination (Join-Path $Context.Paths.DistDir "radioify.ico") -Force
+    $icoDest = Join-Path $Context.Paths.DistDir "radioify.ico"
+    Copy-Item -LiteralPath $icoSource -Destination $icoDest -Force
+    Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $icoDest
   }
 
   if (Test-Path $publishedExe) {
+    Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $publishedExe
     Write-Host "Primary executable:"
     Write-Host " - $publishedExe"
   }
@@ -225,6 +268,7 @@ function Publish-BuildArtifacts {
     }
 
     Test-Win11ExplorerIntegrationPackage -Context $Context -IntegrationDistDir $integrationDistDir
+    Add-PublishedArtifactsFromDirectory -Artifacts $publishedArtifacts -DirectoryPath $integrationDistDir
 
     Write-Host "Win11 Explorer integration scaffold:"
     Get-ChildItem -Path $integrationDistDir -File | Sort-Object Name | ForEach-Object {
@@ -234,8 +278,8 @@ function Publish-BuildArtifacts {
 
   if ($publishSucceeded -and (Test-Path $Context.Paths.DistDir)) {
     Write-Host "Build artifacts written to: $($Context.Paths.DistDir)"
-    Get-ChildItem -Path $Context.Paths.DistDir -Recurse -File | ForEach-Object {
-      Write-Host " - $($_.FullName)"
+    foreach ($artifact in $publishedArtifacts) {
+      Write-Host " - $artifact"
     }
     Write-Host "Run with: .\dist\radioify.exe <file-or-folder>"
   }

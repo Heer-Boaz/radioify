@@ -157,6 +157,25 @@ std::filesystem::path radioifyWritableDataDir() {
   return radioifyLaunchDir();
 }
 
+std::filesystem::path radioifyCrashDumpDir() {
+  static const std::filesystem::path dir = []() {
+    const std::filesystem::path baseDir = radioifyWritableDataDir();
+    if (baseDir.empty()) {
+      return radioifyLaunchDir();
+    }
+
+    const std::filesystem::path crashDir = baseDir / "crashes";
+    std::error_code ec;
+    std::filesystem::create_directories(crashDir, ec);
+    if (!ec && std::filesystem::is_directory(crashDir, ec) && !ec) {
+      return crashDir;
+    }
+
+    return baseDir;
+  }();
+  return dir;
+}
+
 std::filesystem::path radioifyLogPath() {
   return radioifyWritableDataDir() / "radioify.log";
 }
