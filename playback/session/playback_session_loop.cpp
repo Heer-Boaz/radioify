@@ -209,8 +209,24 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void shutdown() {
+    // Stop playback threads before tearing down the shared D3D window/swapchain.
+    perfLogAppendf(&perfLog, "video_shutdown begin");
+    perfLogFlush(&perfLog);
+    perfLogAppendf(&perfLog, "video_shutdown player_close_begin");
+    perfLogFlush(&perfLog);
+    core.shutdownPlayer();
+    perfLogAppendf(&perfLog, "video_shutdown player_close_end");
+    perfLogFlush(&perfLog);
+    perfLogAppendf(&perfLog, "video_shutdown output_stop_begin");
+    perfLogFlush(&perfLog);
     output.stop();
-    core.shutdown();
+    perfLogAppendf(&perfLog, "video_shutdown output_stop_end");
+    perfLogFlush(&perfLog);
+    perfLogAppendf(&perfLog, "video_shutdown audio_stop_begin");
+    perfLogFlush(&perfLog);
+    core.shutdownAudio();
+    perfLogAppendf(&perfLog, "video_shutdown audio_stop_end");
+    perfLogFlush(&perfLog);
   }
 
   void finalizeAudioStart() {
@@ -311,19 +327,19 @@ struct PlaybackLoopRunner::Impl {
       if (ev.type == InputEvent::Type::Key) {
         playback_session_input::handlePlaybackKeyEvent(inputView, inputSignals,
                                                        seekState, ev.key);
-        applyPresenterSync(syncPresentation());
         if (loopStopRequested) {
           break;
         }
+        applyPresenterSync(syncPresentation());
         continue;
       }
       if (ev.type == InputEvent::Type::Mouse) {
         playback_session_input::handlePlaybackMouseEvent(inputView, inputSignals,
                                                          seekState, ev.mouse);
-        applyPresenterSync(syncPresentation());
         if (loopStopRequested) {
           break;
         }
+        applyPresenterSync(syncPresentation());
       }
     }
     if (loopStopRequested) {

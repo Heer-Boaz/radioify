@@ -207,11 +207,29 @@ struct PlaybackSessionCore::Impl {
     redraw = true;
   }
 
-  void shutdown() {
+  void shutdownPlayer() {
+    if (playerShutdown) {
+      return;
+    }
     player.close();
+    playerShutdown = true;
+  }
+
+  void shutdownAudio() {
+    if (audioShutdown) {
+      return;
+    }
     if (audioOk || audioStarting) {
       audioStop();
     }
+    audioOk = false;
+    audioStarting = false;
+    audioShutdown = true;
+  }
+
+  void shutdown() {
+    shutdownPlayer();
+    shutdownAudio();
   }
 
   Player& player;
@@ -236,6 +254,8 @@ struct PlaybackSessionCore::Impl {
   bool seekQueued = false;
   int requestedTargetW = 0;
   int requestedTargetH = 0;
+  bool playerShutdown = false;
+  bool audioShutdown = false;
 };
 
 PlaybackSessionCore::PlaybackSessionCore(Args args)
@@ -307,6 +327,10 @@ void PlaybackSessionCore::handlePendingResize(ConsoleScreen& screen,
                                               bool& redraw) {
   impl_->handlePendingResize(screen, renderMode, redraw);
 }
+
+void PlaybackSessionCore::shutdownPlayer() { impl_->shutdownPlayer(); }
+
+void PlaybackSessionCore::shutdownAudio() { impl_->shutdownAudio(); }
 
 void PlaybackSessionCore::shutdown() { impl_->shutdown(); }
 

@@ -1,14 +1,41 @@
 #include "playback_session_presentation.h"
 
+#include <cstdarg>
 #include <atomic>
+#include <fstream>
 #include <memory>
 #include <thread>
 
 #include "player.h"
 #include "playback_framebuffer_presenter.h"
 #include "playback_session_state.h"
+#include "runtime_helpers.h"
+#include "timing_log.h"
 
 namespace {
+
+void appendPresentationTimingLog(const char* fmt, ...) {
+#if RADIOIFY_ENABLE_TIMING_LOG
+  if (!fmt || fmt[0] == '\0') return;
+  char buf[1024];
+  va_list args;
+  va_start(args, fmt);
+  int written = std::vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  if (written <= 0) return;
+  if (written >= static_cast<int>(sizeof(buf))) {
+    written = static_cast<int>(sizeof(buf)) - 1;
+  }
+  std::lock_guard<std::mutex> lock(timingLogMutex());
+  std::ofstream f(radioifyLogPath(), std::ios::app);
+  if (!f) return;
+  f << radioifyLogTimestamp() << " "
+    << std::string(buf, buf + written) << "\n";
+  f.flush();
+#else
+  (void)fmt;
+#endif
+}
 
 struct PlaybackWindowPresenter {
   VideoWindow window;
@@ -64,21 +91,28 @@ struct PlaybackWindowPresenter {
   }
 
   void stop() {
-    if (window.IsOpen()) {
-      window.SetCursorVisible(true);
-      window.ShowWindow(false);
-    }
+    appendPresentationTimingLog("window_presenter_stop begin joinable=%d open=%d visible=%d",
+                                thread.joinable() ? 1 : 0,
+                                window.IsOpen() ? 1 : 0,
+                                window.IsVisible() ? 1 : 0);
     if (thread.joinable()) {
+      appendPresentationTimingLog("window_presenter_stop join_begin");
       threadState.store(WindowThreadState::Stopping, std::memory_order_relaxed);
       forcePresent.store(false, std::memory_order_relaxed);
       notify();
       thread.join();
+      appendPresentationTimingLog("window_presenter_stop join_end");
     }
     threadState.store(WindowThreadState::Disabled, std::memory_order_relaxed);
     forcePresent.store(false, std::memory_order_relaxed);
     if (window.IsOpen()) {
+      appendPresentationTimingLog("window_presenter_stop close_begin");
+      window.SetCursorVisible(true);
+      window.ShowWindow(false);
       window.Close();
+      appendPresentationTimingLog("window_presenter_stop close_end");
     }
+    appendPresentationTimingLog("window_presenter_stop end");
   }
 
   void requestPresent() {

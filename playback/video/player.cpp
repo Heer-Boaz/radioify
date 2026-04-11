@@ -1715,6 +1715,7 @@ struct Player::Impl {
   bool isAudioStarting() const { return !audioStartDone.load(); }
 
   void stopThreads() {
+    appendTimingFmt("stop_threads begin");
     running.store(false);
     if (frameReadyEvent) {
       SetEvent(frameReadyEvent);
@@ -1725,16 +1726,24 @@ struct Player::Impl {
     audioPackets.abortQueue();
     videoFrames.abort();
     if (demuxThread.joinable()) {
+      appendTimingFmt("stop_threads demux_join_begin");
       demuxThread.join();
+      appendTimingFmt("stop_threads demux_join_end");
     }
     if (videoDecodeThread.joinable()) {
+      appendTimingFmt("stop_threads video_decode_join_begin");
       videoDecodeThread.join();
+      appendTimingFmt("stop_threads video_decode_join_end");
     }
     if (audioDecodeThread.joinable()) {
+      appendTimingFmt("stop_threads audio_decode_join_begin");
       audioDecodeThread.join();
+      appendTimingFmt("stop_threads audio_decode_join_end");
     }
     if (videoOutputThread.joinable()) {
+      appendTimingFmt("stop_threads video_output_join_begin");
       videoOutputThread.join();
+      appendTimingFmt("stop_threads video_output_join_end");
     }
     videoPackets.flush();
     audioPackets.flush();
@@ -1752,6 +1761,7 @@ struct Player::Impl {
       demux.io.reset();
     }
     demux = DemuxContext{};
+    appendTimingFmt("stop_threads end");
   }
 
   void resetControlState() {
@@ -1963,7 +1973,9 @@ struct Player::Impl {
       }
     }
     setState(PlayerState::Closing);
+    appendTimingFmt("control_main stop_threads_begin");
     stopThreads();
+    appendTimingFmt("control_main stop_threads_end");
     setState(PlayerState::Idle);
   }
 
@@ -3073,17 +3085,28 @@ bool Player::open(const PlayerConfig& config, std::string* error) {
 
 void Player::close() {
   if (!impl_) return;
+  impl_->appendTimingFmt("player_close begin ctrl_running=%d control_joinable=%d",
+                         impl_->ctrlRunning.load(std::memory_order_relaxed) ? 1
+                                                                             : 0,
+                         impl_->controlThread.joinable() ? 1 : 0);
   if (impl_->controlThread.joinable()) {
     if (impl_->ctrlRunning.load()) {
+      impl_->appendTimingFmt("player_close post_close_request");
       impl_->postEvent(PlayerEvent{PlayerEventType::CloseRequest});
     } else {
+      impl_->appendTimingFmt("player_close notify_control_thread");
       impl_->eventCv.notify_one();
     }
     impl_->ctrlRunning.store(false, std::memory_order_relaxed);
+    impl_->appendTimingFmt("player_close control_join_begin");
     impl_->controlThread.join();
+    impl_->appendTimingFmt("player_close control_join_end");
   } else {
+    impl_->appendTimingFmt("player_close stop_threads_without_control_begin");
     impl_->stopThreads();
+    impl_->appendTimingFmt("player_close stop_threads_without_control_end");
   }
+  impl_->appendTimingFmt("player_close end");
 }
 
 void Player::requestSeek(int64_t targetUs) {
