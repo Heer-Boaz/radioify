@@ -3,16 +3,17 @@
 #include <filesystem>
 #include <functional>
 
+#include "core/runtime_defaults.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "playback/system_media_transport_controls.h"
 #include "playback/playback_transport.h"
 
 struct VideoPlaybackConfig {
-  bool enableAscii = true;
-  bool enableAudio = true;
+  bool enableAscii = kDefaultAsciiPlaybackEnabled;
+  bool enableAudio = kDefaultAudioPlaybackEnabled;
   bool debugOverlay = false;
-  bool enableWindow = false;
+  bool enableWindow = kDefaultWindowPlaybackEnabled;
 };
 
 void configureFfmpegVideoLog(const std::filesystem::path& path);

@@ -32,8 +32,8 @@ class PlaybackSessionCore {
   struct Args {
     Player& player;
     PerfLog& perfLog;
-    bool enableAudio = true;
-    bool enableAscii = true;
+    bool enableAudio;
+    bool enableAscii;
   };
 
   explicit PlaybackSessionCore(Args args);

@@ -28,8 +28,8 @@ class PlaybackSessionBootstrap {
     const Style& progressFrameStyle;
     const Color& progressStart;
     const Color& progressEnd;
-    bool enableAudio = true;
-    bool enableAscii = true;
+    bool enableAudio;
+    bool enableAscii;
     Player& player;
     bool* quitAppRequested = nullptr;
   };

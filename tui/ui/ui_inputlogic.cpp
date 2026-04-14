@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 
+#include "browser_grid_index.h"
 #include "consolescreen.h"
 #include "optionsbrowser.h"
 #include "playback/playback_media_keys.h"
@@ -51,34 +52,24 @@ int nearestSelectableEntry(const std::vector<FileEntry>& entries, int start,
   return start;
 }
 
-int getEntryIndex(int row, int col, int totalRows, int cols, int count,
-                  BrowserState::ViewMode mode) {
-  if (mode == BrowserState::ViewMode::ListOnly) {
-    int idx = col * totalRows + row;
-    return (idx >= 0 && idx < count) ? idx : -1;
-  } else {
-    int idx = row * cols + col;
-    return (idx >= 0 && idx < count) ? idx : -1;
-  }
-}
-
-void getRowColFromIndex(int idx, int totalRows, int cols,
+void getRowColFromIndex(int idx, const GridLayout& layout,
                         BrowserState::ViewMode mode, int& row, int& col) {
   if (mode == BrowserState::ViewMode::ListOnly) {
-    if (totalRows <= 0) {
+    int stride = std::max(1, layout.rowsVisible);
+    if (stride <= 0) {
       row = 0;
       col = 0;
     } else {
-      col = idx / totalRows;
-      row = idx % totalRows;
+      col = idx / stride;
+      row = idx % stride;
     }
   } else {
-    if (cols <= 0) {
+    if (layout.cols <= 0) {
       row = 0;
       col = 0;
     } else {
-      row = idx / cols;
-      col = idx % cols;
+      row = idx / layout.cols;
+      col = idx % layout.cols;
     }
   }
 }
@@ -92,10 +83,25 @@ void ensureSelectionVisible(BrowserState& state, const GridLayout& layout) {
     state.scrollRow = 0;
     return;
   }
+  if (state.viewMode == BrowserState::ViewMode::ListOnly) {
+    int visibleCapacity = browserGridVisibleCapacity(layout);
+    int maxScroll = std::max(0, layout.totalRows - layout.rowsVisible);
+    if (visibleCapacity <= 0 || maxScroll <= 0) {
+      state.scrollRow = 0;
+      return;
+    }
+    if (state.selected < state.scrollRow) {
+      state.scrollRow = state.selected;
+    } else if (state.selected >= state.scrollRow + visibleCapacity) {
+      state.scrollRow = state.selected - visibleCapacity + 1;
+    }
+    state.scrollRow = std::clamp(state.scrollRow, 0, maxScroll);
+    return;
+  }
+
   int row = 0;
   int col = 0;
-  getRowColFromIndex(state.selected, layout.totalRows, layout.cols,
-                     state.viewMode, row, col);
+  getRowColFromIndex(state.selected, layout, state.viewMode, row, col);
 
   int maxScroll = std::max(0, layout.totalRows - layout.rowsVisible);
   if (row < state.scrollRow) {
@@ -111,17 +117,33 @@ void moveSelection(BrowserState& browser, const GridLayout& layout,
   int count = static_cast<int>(browser.entries.size());
   if (count == 0 || layout.totalRows <= 0 || layout.cols <= 0) return;
 
+  if (browser.viewMode == BrowserState::ViewMode::ListOnly) {
+    int idx = browser.selected;
+    if (deltaCol != 0) {
+      idx += deltaCol * std::max(1, layout.rowsVisible);
+    } else if (deltaRow != 0) {
+      idx += deltaRow;
+    }
+    idx = std::clamp(idx, 0, count - 1);
+    int direction = (deltaCol > 0 || deltaRow > 0) ? 1 : -1;
+    idx = nearestSelectableEntry(browser.entries, idx, direction);
+    if (idx != browser.selected) {
+      browser.selected = idx;
+      ensureSelectionVisible(browser, layout);
+      dirty = true;
+    }
+    return;
+  }
+
   int row = 0;
   int col = 0;
-  getRowColFromIndex(browser.selected, layout.totalRows, layout.cols,
-                     browser.viewMode, row, col);
+  getRowColFromIndex(browser.selected, layout, browser.viewMode, row, col);
 
   int nextRow = std::clamp(row + deltaRow, 0, layout.totalRows - 1);
   int nextCol = std::clamp(col + deltaCol, 0, layout.cols - 1);
 
-int idx =
-      getEntryIndex(nextRow, nextCol, layout.totalRows, layout.cols, count,
-                    browser.viewMode);
+  int idx = browserGridEntryIndex(layout, browser.viewMode, nextRow, nextCol,
+                                  count);
   if (idx < 0) {
     if (deltaCol > 0 || deltaRow > 0)
       idx = count - 1;
@@ -144,16 +166,28 @@ void pageSelection(BrowserState& browser, const GridLayout& layout,
   int count = static_cast<int>(browser.entries.size());
   if (count == 0 || layout.totalRows <= 0 || layout.cols <= 0) return;
 
+  if (browser.viewMode == BrowserState::ViewMode::ListOnly) {
+    int step = std::max(1, layout.rowsVisible);
+    int idx =
+        std::clamp(browser.selected + direction * step, 0, count - 1);
+    idx = nearestSelectableEntry(browser.entries, idx, direction);
+    if (idx != browser.selected) {
+      browser.selected = idx;
+      ensureSelectionVisible(browser, layout);
+      dirty = true;
+    }
+    return;
+  }
+
   int row = 0;
   int col = 0;
-  getRowColFromIndex(browser.selected, layout.totalRows, layout.cols,
-                     browser.viewMode, row, col);
+  getRowColFromIndex(browser.selected, layout, browser.viewMode, row, col);
 
   int step = std::max(1, layout.rowsVisible);
   int nextRow = std::clamp(row + direction * step, 0, layout.totalRows - 1);
 
-  int idx = getEntryIndex(nextRow, col, layout.totalRows, layout.cols, count,
-                          browser.viewMode);
+  int idx =
+      browserGridEntryIndex(layout, browser.viewMode, nextRow, col, count);
   if (idx < 0) idx = count - 1;
   idx = nearestSelectableEntry(browser.entries, idx, direction);
 
@@ -824,8 +858,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     int row = (y - listTop) / cellHeight + browser.scrollRow;
     int col = layout.colWidth > 0 ? x / layout.colWidth : 0;
     if (col < 0 || col >= layout.cols) return;
-    int idx = getEntryIndex(row, col, layout.totalRows, layout.cols, count,
-                            browser.viewMode);
+    int idx =
+        browserGridEntryIndex(layout, browser.viewMode, row, col, count);
     if (idx < 0 || idx >= count) return;
 
     if (mouse.eventFlags == MOUSE_MOVED && !leftPressed) {

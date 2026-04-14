@@ -20,7 +20,7 @@ class PlaybackSessionHost {
     const Style& baseStyle;
     const Style& accentStyle;
     const Style& dimStyle;
-    bool enableAscii = true;
+    bool enableAscii;
     bool* quitAppRequested = nullptr;
   };
 

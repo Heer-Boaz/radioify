@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "core/runtime_defaults.h"
 #include "kssoptions.h"
 #include "nsfoptions.h"
 #include "vgmoptions.h"
@@ -42,14 +43,14 @@ struct AudioMelodyAnalysisState {
 };
 
 struct AudioPlaybackConfig {
-  bool enableAudio = true;
-  bool enableRadio = false;
-  bool mono = true;
-  bool dry = false;
+  bool enableAudio = kDefaultAudioPlaybackEnabled;
+  bool enableRadio = kDefaultRadioFilterEnabled;
+  bool mono = kDefaultMonoAudioEnabled;
+  bool dry = kDefaultDryAudioEnabled;
   std::string radioSettingsPath;
   std::string radioPresetName;
-  int bwHz = 5500;
-  double noise = 0.012;
+  int bwHz = kDefaultRadioBandwidthHz;
+  double noise = kDefaultRadioNoiseAmount;
 };
 
 struct KssInstrumentProfile {

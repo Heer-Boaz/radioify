@@ -35,8 +35,8 @@ class PlaybackLoopRunner {
     std::atomic<bool>& enableSubtitlesShared;
     const std::string& windowTitle;
     const std::filesystem::path& file;
-    bool enableAscii = true;
-    bool enableAudio = true;
+    bool enableAscii;
+    bool enableAudio;
     bool hasSubtitles = false;
     bool* quitApplicationRequested = nullptr;
     PlaybackSystemControls* systemControls = nullptr;

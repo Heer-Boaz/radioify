@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "asciiart.h"
+#include "browser_grid_index.h"
 #include "consoleinput.h"
 #include "videodecoder.h"
 
@@ -551,14 +552,13 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   }
 
   int safeRows = std::max(1, listHeight / std::max(1, layout.cellHeight));
-  int maxCols =
-      std::max(1, layout.listWidth / std::max(1, layout.colWidth));
+  int maxCols = std::max(1, layout.listWidth / std::max(1, layout.colWidth));
   int cols = std::max(
       1,
       std::min(maxCols, static_cast<int>((state.entries.size() + safeRows - 1) /
                                          safeRows)));
-  int totalRows =
-      cols > 0 ? static_cast<int>((state.entries.size() + cols - 1) / cols) : 0;
+  int totalRows = browserGridTotalRowsForEntryCount(
+      state.viewMode, static_cast<int>(state.entries.size()), safeRows, cols);
   int visibleRows = std::min(safeRows, totalRows);
 
   if (hasSectionHeaders) {
@@ -709,9 +709,8 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       int logicalRow = r + browser.scrollRow;
       if (logicalRow >= layout.totalRows) continue;
       for (int c = 0; c < layout.cols; ++c) {
-        int idx = (browser.viewMode == BrowserState::ViewMode::ListOnly)
-                      ? (c * layout.totalRows + logicalRow)
-                      : (logicalRow * layout.cols + c);
+        int idx = browserGridEntryIndex(layout, browser.viewMode, logicalRow, c,
+                                        static_cast<int>(browser.entries.size()));
         if (idx < 0 || idx >= static_cast<int>(browser.entries.size())) continue;
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         bool isSelected = (idx == browser.selected);
