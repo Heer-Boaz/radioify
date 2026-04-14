@@ -27,6 +27,7 @@
 #include "browsermeta.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
+#include "core/windows_message_pump.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -131,10 +132,9 @@ static DWORD waitForBrowserWake(ConsoleInput& input, HANDLE asyncWakeHandle,
   if (asyncWakeHandle) {
     handles.push_back(asyncWakeHandle);
   }
-  return MsgWaitForMultipleObjectsEx(
+  return waitForHandlesAndPumpThreadWindowMessages(
       static_cast<DWORD>(handles.size()),
-      handles.empty() ? nullptr : handles.data(), timeoutMs, QS_ALLINPUT,
-      MWMO_INPUTAVAILABLE);
+      handles.empty() ? nullptr : handles.data(), timeoutMs);
 }
 
 static bool isSupportedImageExt(const std::filesystem::path& p) {

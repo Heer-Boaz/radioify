@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "consoleinput.h"
+#include "core/windows_message_pump.h"
 #include "player.h"
 #include "playback/ascii/playback_screen_renderer.h"
 #include "playback_session_presentation.h"
@@ -95,9 +96,8 @@ bool PlaybackOutputController::waitForActivity(ConsoleInput& input, int timeoutM
 
   DWORD waitMs =
       timeoutMs < 0 ? INFINITE : static_cast<DWORD>(std::max(0, timeoutMs));
-  DWORD result = MsgWaitForMultipleObjectsEx(
-      handleCount, handleCount > 0 ? handles : nullptr, waitMs, QS_ALLINPUT,
-      MWMO_INPUTAVAILABLE);
+  DWORD result = waitForHandlesAndPumpThreadWindowMessages(
+      handleCount, handleCount > 0 ? handles : nullptr, waitMs);
   return result != WAIT_TIMEOUT && result != WAIT_FAILED;
 }
 
