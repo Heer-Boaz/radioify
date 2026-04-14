@@ -15,6 +15,8 @@
 #include "asciiart.h"
 #include "browser_grid_index.h"
 #include "consoleinput.h"
+#include "playback/playback_media_artwork_catalog.h"
+#include "playback/playback_media_metadata_catalog.h"
 #include "videodecoder.h"
 
 static std::wstring utf8ToWide(const std::string& text) {
@@ -248,6 +250,8 @@ struct ThumbJob {
   std::filesystem::path path;
   bool isImage = false;
   bool isVideo = false;
+  bool isAudio = false;
+  int trackIndex = -1;
   int width = 0;
   int height = 0;
   uint64_t generation = 0;
@@ -279,6 +283,14 @@ struct ThumbCacheState {
 static ThumbCacheState& thumbCache() {
   static ThumbCacheState cache;
   return cache;
+}
+
+static std::string thumbnailCacheKey(const FileEntry& entry) {
+  std::string key = pathToUtf8(entry.path);
+  if (entry.trackIndex >= 0) {
+    key += "#track=" + std::to_string(entry.trackIndex);
+  }
+  return key;
 }
 
 static std::string fitName(const std::string& name, int colWidth) {
@@ -412,6 +424,32 @@ static bool renderVideoThumbnail(const std::filesystem::path& file,
   return false;
 }
 
+static bool renderAudioThumbnail(const std::filesystem::path& file,
+                                 int trackIndex, int maxWidth, int maxHeight,
+                                 Thumbnail& out, std::string* error) {
+  PlaybackMediaDisplayRequest request;
+  request.file = file;
+  request.trackIndex = trackIndex;
+  request.isVideo = false;
+
+  PlaybackMediaDisplayInfo info;
+  std::string metadataError;
+  resolvePlaybackMediaDisplayInfo(request, &info, &metadataError);
+
+  AsciiArt art;
+  std::string artworkError;
+  if (!resolvePlaybackMediaArtworkAscii(request, info, maxWidth, maxHeight,
+                                        &art, &artworkError)) {
+    if (error) {
+      *error = !artworkError.empty() ? artworkError : metadataError;
+    }
+    return false;
+  }
+
+  assignThumbnailFromAscii(art, out);
+  return true;
+}
+
 static void thumbWorkerLoop() {
   ThumbCacheState& cache = thumbCache();
   for (;;) {
@@ -430,6 +468,9 @@ static void thumbWorkerLoop() {
       ok = renderImageThumbnail(job.path, job.width, job.height, thumb, &error);
     } else if (job.isVideo) {
       ok = renderVideoThumbnail(job.path, job.width, job.height, thumb, &error);
+    } else if (job.isAudio) {
+      ok = renderAudioThumbnail(job.path, job.trackIndex, job.width,
+                                job.height, thumb, &error);
     }
 
     {
@@ -665,11 +706,12 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
   };
 
   auto fetchThumb = [&](const FileEntry& entry, int width, int height,
-                        bool wantImage, bool wantVideo) -> ThumbLookup {
+                        bool wantImage, bool wantVideo,
+                        bool wantAudio) -> ThumbLookup {
     ThumbLookup result;
-    if (!wantImage && !wantVideo) return result;
+    if (!wantImage && !wantVideo && !wantAudio) return result;
     if (width <= 0 || height <= 0) return result;
-    std::string key = pathToUtf8(entry.path);
+    std::string key = thumbnailCacheKey(entry);
     {
       std::lock_guard<std::mutex> lock(cache.mutex);
       auto it = cache.entries.find(key);
@@ -691,6 +733,8 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       job.path = entry.path;
       job.isImage = wantImage;
       job.isVideo = wantVideo;
+      job.isAudio = wantAudio;
+      job.trackIndex = entry.trackIndex;
       job.width = width;
       job.height = height;
       job.generation = cache.generation;
@@ -758,7 +802,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       int previewX = layout.previewX;
       int previewY = listTop + std::max(0, (listHeight - previewH) / 2);
 
-      ThumbLookup lookup = fetchThumb(entry, previewW, previewH, img, vid);
+      ThumbLookup lookup = fetchThumb(entry, previewW, previewH, img, vid, aud);
       const Thumbnail* thumb = lookup.thumb.get();
       if (thumb && thumb->ok && thumb->width > 0 && thumb->height > 0) {
         int artW = std::min(thumb->width, previewW);
@@ -786,7 +830,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         } else {
           placeholder = "\xC2\xB7";
         }
-        if ((img || vid) && lookup.pending) {
+        if ((img || vid || aud) && lookup.pending) {
           placeholder = "...";
         }
         placeholder = fitLine(placeholder, previewW);
@@ -820,7 +864,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       bool vid = !entry.isDir && isVideo && isVideo(entry.path);
       bool aud = !entry.isDir && isAudio && isAudio(entry.path);
 
-      ThumbLookup lookup = fetchThumb(entry, thumbW, thumbH, img, vid);
+      ThumbLookup lookup = fetchThumb(entry, thumbW, thumbH, img, vid, false);
       const Thumbnail* thumb = lookup.thumb.get();
       if (thumb && thumb->ok && thumb->width > 0 && thumb->height > 0) {
         int artW = std::min(thumb->width, thumbW);
