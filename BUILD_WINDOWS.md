@@ -40,6 +40,10 @@ Open a Windows PowerShell prompt in the repo root.
 .\uninstall_radioify.ps1
 ```
 
+By default `.\install_radioify.ps1` repackages the current repo state before
+installing. Use `-SkipPackage` only when you intentionally want to reuse the
+existing bundle under `dist\packages\Radioify-Windows-x64`.
+
 Equivalent packaging entrypoints from the repo root:
 
 ```bash

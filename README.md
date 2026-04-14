@@ -57,8 +57,9 @@ From the repo root on your own machine:
 .\uninstall_radioify.ps1
 ```
 
-Those root scripts reuse the bundle in `dist\packages\Radioify-Windows-x64` and
-build it first if needed.
+`.\install_radioify.ps1` refreshes the default bundle in
+`dist\packages\Radioify-Windows-x64` before installing. Use `-SkipPackage` to
+reuse the current bundle as-is.
 
 The packaged install:
 - copies Radioify to `%LOCALAPPDATA%\Programs\Radioify`
