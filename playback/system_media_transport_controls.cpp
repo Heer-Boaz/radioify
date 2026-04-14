@@ -29,93 +29,35 @@
 #include <vector>
 
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.h>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.Streams.h>
 
+#include "playback_media_metadata_catalog.h"
 #include "playback_track_catalog.h"
 
 namespace {
 
 using Microsoft::WRL::ComPtr;
 using winrt::Windows::Foundation::TimeSpan;
+using winrt::Windows::Graphics::Imaging::BitmapAlphaMode;
+using winrt::Windows::Graphics::Imaging::BitmapEncoder;
+using winrt::Windows::Graphics::Imaging::BitmapPixelFormat;
 using winrt::Windows::Media::MediaPlaybackStatus;
 using winrt::Windows::Media::MediaPlaybackType;
 using winrt::Windows::Media::SystemMediaTransportControls;
 using winrt::Windows::Media::SystemMediaTransportControlsButton;
 using winrt::Windows::Media::SystemMediaTransportControlsTimelineProperties;
+using winrt::Windows::Storage::StorageFile;
+using winrt::Windows::Storage::Streams::DataWriter;
+using winrt::Windows::Storage::Streams::InMemoryRandomAccessStream;
+using winrt::Windows::Storage::Streams::RandomAccessStreamReference;
 
 TimeSpan toTimeSpan(double seconds) {
   const double clamped = std::max(0.0, seconds);
   const int64_t ticks = static_cast<int64_t>(std::llround(clamped * 10000000.0));
   return TimeSpan{ticks};
-}
-
-std::string utf8FromWide(const std::wstring& value) {
-  if (value.empty()) {
-    return {};
-  }
-  const int size = WideCharToMultiByte(CP_UTF8, 0, value.data(),
-                                       static_cast<int>(value.size()), nullptr,
-                                       0, nullptr, nullptr);
-  if (size <= 0) {
-    return {};
-  }
-  std::string out(static_cast<size_t>(size), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
-                      out.data(), size, nullptr, nullptr);
-  return out;
-}
-
-std::string utf8FromPath(const std::filesystem::path& path) {
-#ifdef _WIN32
-  return utf8FromWide(path.native());
-#else
-  return path.string();
-#endif
-}
-
-std::string fallbackMediaTitle(const std::filesystem::path& file) {
-  std::string title = utf8FromPath(file.stem());
-  if (!title.empty()) {
-    return title;
-  }
-  title = utf8FromPath(file.filename());
-  if (!title.empty()) {
-    return title;
-  }
-  return utf8FromPath(file);
-}
-
-struct DisplayMetadata {
-  std::string title;
-  std::string artist;
-  uint32_t trackNumber = 0;
-};
-
-DisplayMetadata buildDisplayMetadata(const PlaybackSystemControls::State& state) {
-  DisplayMetadata metadata;
-  metadata.title = fallbackMediaTitle(state.file);
-  if (state.trackIndex < 0) {
-    return metadata;
-  }
-
-  std::vector<TrackEntry> tracks;
-  std::string error;
-  if (!listPlaybackTracks(normalizePlaybackTrackPath(state.file), &tracks, &error)) {
-    metadata.title += " - Track " + std::to_string(state.trackIndex + 1);
-    return metadata;
-  }
-
-  if (const TrackEntry* track = findPlaybackTrack(tracks, state.trackIndex)) {
-    metadata.trackNumber = static_cast<uint32_t>(state.trackIndex + 1);
-    if (!track->title.empty()) {
-      metadata.artist = metadata.title;
-      metadata.title = track->title;
-      return metadata;
-    }
-  }
-
-  metadata.title += " - Track " + std::to_string(state.trackIndex + 1);
-  return metadata;
 }
 
 MediaPlaybackStatus toPlaybackStatus(PlaybackSystemControls::Status status) {
@@ -147,6 +89,64 @@ std::optional<PlaybackControlCommand> mapButton(
       return PlaybackControlCommand::Next;
     default:
       return std::nullopt;
+  }
+}
+
+RandomAccessStreamReference createStreamReferenceFromEncodedBytes(
+    const PlaybackMediaArtwork& artwork) {
+  InMemoryRandomAccessStream stream;
+  DataWriter writer(stream);
+  writer.WriteBytes(winrt::array_view<const uint8_t>(artwork.bytes));
+  writer.StoreAsync().get();
+  writer.FlushAsync().get();
+  writer.DetachStream();
+  stream.Seek(0);
+  return RandomAccessStreamReference::CreateFromStream(stream);
+}
+
+RandomAccessStreamReference createStreamReferenceFromBitmap(
+    const PlaybackMediaArtwork& artwork) {
+  InMemoryRandomAccessStream stream;
+  BitmapEncoder encoder =
+      BitmapEncoder::CreateAsync(BitmapEncoder::PngEncoderId(), stream).get();
+  encoder.SetPixelData(BitmapPixelFormat::Bgra8, BitmapAlphaMode::Straight,
+                       artwork.width, artwork.height, 96.0, 96.0,
+                       winrt::array_view<const uint8_t>(artwork.bytes));
+  encoder.FlushAsync().get();
+  stream.Seek(0);
+  return RandomAccessStreamReference::CreateFromStream(stream);
+}
+
+std::optional<RandomAccessStreamReference> createArtworkStreamReference(
+    const PlaybackMediaArtwork& artwork) {
+  try {
+    switch (artwork.kind) {
+      case PlaybackMediaArtwork::Kind::FilePath: {
+        if (artwork.filePath.empty()) {
+          return std::nullopt;
+        }
+        StorageFile file =
+            StorageFile::GetFileFromPathAsync(
+                winrt::hstring{artwork.filePath.wstring()})
+                .get();
+        return RandomAccessStreamReference::CreateFromFile(file);
+      }
+      case PlaybackMediaArtwork::Kind::EncodedBytes:
+        if (artwork.bytes.empty()) {
+          return std::nullopt;
+        }
+        return createStreamReferenceFromEncodedBytes(artwork);
+      case PlaybackMediaArtwork::Kind::Bgra32:
+        if (artwork.bytes.empty() || artwork.width == 0 || artwork.height == 0) {
+          return std::nullopt;
+        }
+        return createStreamReferenceFromBitmap(artwork);
+      case PlaybackMediaArtwork::Kind::None:
+      default:
+        return std::nullopt;
+    }
+  } catch (const winrt::hresult_error&) {
+    return std::nullopt;
   }
 }
 
@@ -243,17 +243,31 @@ struct PlaybackSystemControls::Impl {
   }
 
   void updateDisplayMetadata(const State& state) {
-    DisplayMetadata metadata = buildDisplayMetadata(state);
+    PlaybackMediaDisplayInfo metadata;
+    PlaybackMediaDisplayRequest request;
+    request.isVideo = state.isVideo;
+    request.file = state.file;
+    request.trackIndex = state.trackIndex;
+    std::string unusedError;
+    resolvePlaybackMediaDisplayInfo(request, &metadata, &unusedError);
     auto updater = controls.DisplayUpdater();
+    updater.ClearAll();
     updater.Type(state.isVideo ? MediaPlaybackType::Video
                                : MediaPlaybackType::Music);
     if (state.isVideo) {
-      updater.VideoProperties().Title(winrt::to_hstring(metadata.title));
+      auto video = updater.VideoProperties();
+      video.Title(winrt::to_hstring(metadata.title));
+      video.Subtitle(winrt::to_hstring(metadata.subtitle));
     } else {
       auto music = updater.MusicProperties();
       music.Title(winrt::to_hstring(metadata.title));
       music.Artist(winrt::to_hstring(metadata.artist));
+      music.AlbumTitle(winrt::to_hstring(metadata.albumTitle));
+      music.AlbumArtist(winrt::to_hstring(metadata.albumArtist));
       music.TrackNumber(metadata.trackNumber);
+    }
+    if (const auto thumbnail = createArtworkStreamReference(metadata.artwork)) {
+      updater.Thumbnail(*thumbnail);
     }
     updater.Update();
   }
