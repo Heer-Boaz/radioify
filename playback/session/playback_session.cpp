@@ -25,6 +25,7 @@ struct PlaybackSession::Impl {
         progressStart(args.progressStart),
         progressEnd(args.progressEnd),
         config(args.config),
+        systemControls(args.systemControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
         enableAscii(config.enableAscii),
         enableAudio(config.enableAudio && audioIsEnabled()),
@@ -71,10 +72,12 @@ struct PlaybackSession::Impl {
         host.warningSink(),
         enableSubtitlesShared,
         host.windowTitle(),
+        file,
         enableAscii,
         enableAudio,
         hasSubtitles,
         host.quitApplicationRequestedPtr(),
+        systemControls,
         requestTransportCommand});
   }
 
@@ -131,6 +134,7 @@ struct PlaybackSession::Impl {
   const Color& progressStart;
   const Color& progressEnd;
   const VideoPlaybackConfig& config;
+  PlaybackSystemControls* systemControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   const bool enableAscii;
   const bool enableAudio;

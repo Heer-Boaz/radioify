@@ -5,6 +5,7 @@
 
 #include "consoleinput.h"
 #include "consolescreen.h"
+#include "playback/system_media_transport_controls.h"
 #include "playback/playback_transport.h"
 
 struct VideoPlaybackConfig {
@@ -28,5 +29,6 @@ bool showAsciiVideo(const std::filesystem::path& file,
                     const Color& progressEnd,
                     const VideoPlaybackConfig& config,
                     bool* quitAppRequested = nullptr,
+                    PlaybackSystemControls* systemControls = nullptr,
                     std::function<bool(PlaybackTransportCommand)>
                         requestTransportCommand = {});

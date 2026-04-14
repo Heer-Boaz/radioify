@@ -22,6 +22,7 @@ class PlaybackSession {
     const Color& progressEnd;
     const VideoPlaybackConfig& config;
     bool* quitAppRequested = nullptr;
+    PlaybackSystemControls* systemControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   };
 

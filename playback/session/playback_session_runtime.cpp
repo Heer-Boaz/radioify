@@ -12,6 +12,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                     const Color& progressStart, const Color& progressEnd,
                     const VideoPlaybackConfig& config,
                     bool* quitAppRequested,
+                    PlaybackSystemControls* systemControls,
                     std::function<bool(PlaybackTransportCommand)>
                         requestTransportCommand) {
   PlaybackSession session({file,
@@ -26,6 +27,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                            progressEnd,
                            config,
                            quitAppRequested,
+                           systemControls,
                            std::move(requestTransportCommand)});
   return session.run();
 }

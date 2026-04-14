@@ -416,6 +416,43 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   }
 }
 
+void handlePlaybackControlCommand(const PlaybackInputView& view,
+                                  PlaybackInputSignals& signals,
+                                  PlaybackSeekState& seekState,
+                                  PlaybackControlCommand command) {
+  switch (command) {
+    case PlaybackControlCommand::Play:
+      setPlaybackPaused(view, signals, seekState, false);
+      break;
+    case PlaybackControlCommand::Pause:
+      setPlaybackPaused(view, signals, seekState, true);
+      break;
+    case PlaybackControlCommand::TogglePause: {
+      const bool pauseNow = !view.playbackState ||
+                            *view.playbackState != PlaybackSessionState::Paused;
+      setPlaybackPaused(view, signals, seekState, pauseNow);
+      break;
+    }
+    case PlaybackControlCommand::Stop:
+      requestPlaybackExit(view, signals, false);
+      break;
+    case PlaybackControlCommand::Previous:
+      if (requestPlaybackTransport(signals, PlaybackTransportCommand::Previous)) {
+        requestPlaybackExit(view, signals, false);
+      }
+      break;
+    case PlaybackControlCommand::Next:
+      if (requestPlaybackTransport(signals, PlaybackTransportCommand::Next)) {
+        requestPlaybackExit(view, signals, false);
+      }
+      break;
+  }
+  triggerOverlay(view, signals);
+  if (signals.redraw) {
+    *signals.redraw = true;
+  }
+}
+
 void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
                               PlaybackSeekState& seekState,

@@ -18,6 +18,7 @@
 #include "playback/ascii/playback_screen_renderer.h"
 #include "playback_framebuffer_presenter.h"
 #include "playback_mode.h"
+#include "playback/system_media_transport_controls.h"
 #include "playback_session_core.h"
 #include "playback_session_input.h"
 #include "playback_session_output.h"
@@ -60,7 +61,9 @@ struct PlaybackLoopRunner::Impl {
   playback_frame_output::LogLineWriter warningSink;
   std::atomic<bool>& enableSubtitlesShared;
   const std::string& windowTitle;
+  const std::filesystem::path& file;
   bool* quitApplicationRequested = nullptr;
+  PlaybackSystemControls* systemControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   const bool enableAscii;
   const bool enableAudio;
@@ -114,7 +117,9 @@ struct PlaybackLoopRunner::Impl {
         warningSink(std::move(args.warningSink)),
         enableSubtitlesShared(args.enableSubtitlesShared),
         windowTitle(args.windowTitle),
+        file(args.file),
         quitApplicationRequested(args.quitApplicationRequested),
+        systemControls(args.systemControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
         enableAscii(args.enableAscii),
         enableAudio(args.enableAudio),
@@ -356,6 +361,62 @@ struct PlaybackLoopRunner::Impl {
     }
   }
 
+  void processSystemCommands(PlaybackLoopState& loopState) {
+    if (!systemControls) {
+      return;
+    }
+    PlaybackControlCommand command;
+    while (systemControls->pollCommand(&command)) {
+      playback_session_input::handlePlaybackControlCommand(
+          inputView, inputSignals, seekState, command);
+      if (loopStopRequested) {
+        break;
+      }
+      applyPresenterSync(syncPresentation());
+    }
+    if (loopStopRequested) {
+      loopState = PlaybackLoopState::Stopped;
+    }
+  }
+
+  void updateSystemControls() {
+    if (!systemControls) {
+      return;
+    }
+
+    PlaybackSystemControls::State state;
+    state.active = true;
+    state.isVideo = true;
+    state.file = file;
+    state.trackIndex = -1;
+    state.canPlay = true;
+    state.canPause = true;
+    state.canStop = true;
+    state.canPrevious = requestTransportCommand != nullptr;
+    state.canNext = requestTransportCommand != nullptr;
+
+    const PlaybackSessionState playbackState = core.playbackState();
+    if (playbackState == PlaybackSessionState::Ended) {
+      state.status = PlaybackSystemControls::Status::Stopped;
+    } else if (playbackState == PlaybackSessionState::Paused ||
+               core.player().state() == PlayerState::Paused) {
+      state.status = PlaybackSystemControls::Status::Paused;
+    } else {
+      state.status = PlaybackSystemControls::Status::Playing;
+    }
+
+    if (core.player().currentUs() > 0) {
+      state.positionSec =
+          static_cast<double>(core.player().currentUs()) / 1000000.0;
+    }
+    if (core.player().durationUs() > 0) {
+      state.durationSec =
+          static_cast<double>(core.player().durationUs()) / 1000000.0;
+    }
+
+    systemControls->update(state);
+  }
+
   void updateWindowCursor() {
     output.updateWindowCursor(core.player(), core.playbackState(),
                               overlayVisible());
@@ -479,9 +540,14 @@ struct PlaybackLoopRunner::Impl {
     PlaybackLoopState loopState = PlaybackLoopState::Running;
     while (loopState == PlaybackLoopState::Running) {
       finalizeAudioStart();
+      updateSystemControls();
       pollWindowEvents();
 
       emitHeartbeat();
+      processSystemCommands(loopState);
+      if (loopState == PlaybackLoopState::Stopped) {
+        break;
+      }
       processInputEvents(loopState);
       if (loopState == PlaybackLoopState::Stopped) {
         break;

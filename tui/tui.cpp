@@ -35,6 +35,8 @@
 #include "radio.h"
 #include "audiofilter/radio1938/radio_buffer_io.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
+#include "playback/playback_control_command.h"
+#include "playback/system_media_transport_controls.h"
 #include "playback_transport_navigation.h"
 #include "tracklist.h"
 #include "track_browser_state.h"
@@ -585,6 +587,8 @@ int runTui(Options o) {
   }
 
   audioInit(audioConfig);
+  PlaybackSystemControls systemControls;
+  systemControls.initialize();
 
   VideoPlaybackConfig videoConfig;
   videoConfig.enableAscii = o.enableAscii;
@@ -816,7 +820,7 @@ int runTui(Options o) {
         bool handled = showAsciiVideo(
             target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
             kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
-            kProgressEnd, videoConfig, &quitAppRequested,
+            kProgressEnd, videoConfig, &quitAppRequested, &systemControls,
             requestTransportCommand);
         if (quitAppRequested) {
           running = false;
@@ -1096,6 +1100,65 @@ int runTui(Options o) {
     }
     fileContextMenu.active = false;
     markLayoutDirty();
+  };
+
+  auto handleSystemPlaybackCommand = [&](PlaybackControlCommand command) {
+    switch (command) {
+      case PlaybackControlCommand::Play:
+        if (callbacks.onPlay) callbacks.onPlay();
+        break;
+      case PlaybackControlCommand::Pause:
+        if (callbacks.onPause) callbacks.onPause();
+        break;
+      case PlaybackControlCommand::TogglePause:
+        if (callbacks.onTogglePause) callbacks.onTogglePause();
+        break;
+      case PlaybackControlCommand::Stop:
+        if (callbacks.onStopPlayback) callbacks.onStopPlayback();
+        break;
+      case PlaybackControlCommand::Previous:
+        if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
+        break;
+      case PlaybackControlCommand::Next:
+        if (callbacks.onPlayNext) callbacks.onPlayNext();
+        break;
+    }
+  };
+
+  auto syncAudioSystemControls = [&]() {
+    std::filesystem::path nowPlaying = audioGetNowPlaying();
+    if (nowPlaying.empty()) {
+      systemControls.clear();
+      return;
+    }
+
+    PlaybackSystemControls::State state;
+    state.active = true;
+    state.isVideo = false;
+    state.file = nowPlaying;
+    state.trackIndex = audioGetTrackIndex();
+    state.positionSec = audioGetTimeSec();
+    state.durationSec = audioGetTotalSec();
+    state.canPlay = true;
+    state.canPause = true;
+    state.canStop = true;
+    state.canPrevious = true;
+    state.canNext = true;
+    if (audioIsFinished()) {
+      state.status = PlaybackSystemControls::Status::Stopped;
+    } else if (audioIsPaused()) {
+      state.status = PlaybackSystemControls::Status::Paused;
+    } else {
+      state.status = PlaybackSystemControls::Status::Playing;
+    }
+    systemControls.update(state);
+  };
+
+  auto processSystemPlaybackCommands = [&]() {
+    PlaybackControlCommand command;
+    while (systemControls.pollCommand(&command)) {
+      handleSystemPlaybackCommand(command);
+    }
   };
   callbacks.onResize = [&]() { markLayoutDirty(); };
 
@@ -1781,6 +1844,7 @@ int runTui(Options o) {
     InputEvent ev{};
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       while (running && tuiWindow.PollInput(ev)) {
+        processSystemPlaybackCommands();
         processInputEvent(ev);
         if (didRender) {
           finalizeRenderedExit();
@@ -1790,6 +1854,7 @@ int runTui(Options o) {
     }
 
     while (running && input.poll(ev)) {
+      processSystemPlaybackCommands();
       processInputEvent(ev);
       if (didRender) {
         finalizeRenderedExit();
@@ -1802,6 +1867,9 @@ int runTui(Options o) {
       return 0;
     }
     if (!running) break;
+
+    processSystemPlaybackCommands();
+    syncAudioSystemControls();
 
     if (browser.viewMode != preInputViewMode ||
         melodyVisualizationEnabled != preInputMelodyVisualization ||

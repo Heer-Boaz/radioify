@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 
+#include "playback/system_media_transport_controls.h"
 #include "playback/playback_transport.h"
 #include "playback/ascii/playback_frame_output.h"
 #include "playback_session_log.h"
@@ -33,10 +34,12 @@ class PlaybackLoopRunner {
     playback_frame_output::LogLineWriter warningSink;
     std::atomic<bool>& enableSubtitlesShared;
     const std::string& windowTitle;
+    const std::filesystem::path& file;
     bool enableAscii = true;
     bool enableAudio = true;
     bool hasSubtitles = false;
     bool* quitApplicationRequested = nullptr;
+    PlaybackSystemControls* systemControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   };
 

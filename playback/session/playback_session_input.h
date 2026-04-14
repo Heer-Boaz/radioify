@@ -6,6 +6,7 @@
 #include <functional>
 #include <string>
 
+#include "playback/playback_control_command.h"
 #include "playback/playback_transport.h"
 #include "consoleinput.h"
 #include "playback/ascii/playback_frame_output.h"
@@ -72,6 +73,10 @@ void sendSeekRequest(const PlaybackInputView& view,
 void handlePlaybackKeyEvent(const PlaybackInputView& view,
                             PlaybackInputSignals& signals,
                             PlaybackSeekState& seekState, const KeyEvent& key);
+void handlePlaybackControlCommand(const PlaybackInputView& view,
+                                  PlaybackInputSignals& signals,
+                                  PlaybackSeekState& seekState,
+                                  PlaybackControlCommand command);
 void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
                               PlaybackSeekState& seekState,

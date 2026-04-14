@@ -225,10 +225,20 @@ function Publish-BuildArtifacts {
 
   if ($Context.Options.Win11ExplorerIntegration) {
     $integrationDistDir = Join-Path $Context.Paths.DistDir "win11-explorer-integration"
-    if (Test-Path $integrationDistDir) {
-      Get-ChildItem -LiteralPath $integrationDistDir -Force | Remove-Item -Recurse -Force
-    } else {
+    if (-not (Test-Path $integrationDistDir)) {
       New-Item -ItemType Directory -Force -Path $integrationDistDir | Out-Null
+    }
+
+    foreach ($publishedName in @(
+        "radioify_explorer.dll",
+        "radioify_explorer.pdb",
+        "Package.appxmanifest",
+        "README.txt"
+      )) {
+      $publishedPath = Join-Path $integrationDistDir $publishedName
+      if (Test-Path -LiteralPath $publishedPath) {
+        Remove-Item -LiteralPath $publishedPath -Force
+      }
     }
 
     $explorerDll = Find-RadioifyExplorerDll -BuildDir $Context.Paths.BuildDir -Config $Context.Options.Config
