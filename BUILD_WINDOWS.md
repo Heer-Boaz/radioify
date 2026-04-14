@@ -36,6 +36,8 @@ Open a Windows PowerShell prompt in the repo root.
 .\build.ps1 -Static -MelodyAnalysis
 .\build.ps1 -Clean
 .\package_windows.ps1
+.\install_radioify.ps1
+.\uninstall_radioify.ps1
 ```
 
 Equivalent packaging entrypoints from the repo root:

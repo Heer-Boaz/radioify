@@ -89,6 +89,26 @@ function Get-RadioifyWindowsPackageDefinition {
     }
 }
 
+function Get-RadioifyWindowsInstalledAppDefinition {
+    param([string]$InstallDir)
+
+    if (-not $InstallDir) {
+        $InstallDir = Get-RadioifyWindowsDefaultInstallDirectory
+    }
+
+    $resolvedInstallDir = [System.IO.Path]::GetFullPath($InstallDir)
+    $installedExecutablePath = Join-Path $resolvedInstallDir $script:RadioifyWindowsExecutableName
+
+    return [pscustomobject]@{
+        InstallDir = $resolvedInstallDir
+        InstalledExecutablePath = $installedExecutablePath
+        InstalledIconPath = Join-Path $resolvedInstallDir "radioify.ico"
+        InstalledUninstallScriptPath = Join-Path $resolvedInstallDir "uninstall_radioify.ps1"
+        InstalledUninstallCmdPath = Join-Path $resolvedInstallDir "uninstall_radioify.cmd"
+        UninstallRegistryPath = Get-RadioifyWindowsUninstallRegistryPath
+    }
+}
+
 function Set-RadioifyWindowsRegistryStringValue {
     param(
         [Parameter(Mandatory = $true)][string]$Path,

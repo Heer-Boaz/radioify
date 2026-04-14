@@ -50,6 +50,16 @@ On another Windows PC:
 - run `install_radioify.cmd` for a per-user install
 - or run `radioify.exe` directly for portable use
 
+From the repo root on your own machine:
+
+```powershell
+.\install_radioify.ps1
+.\uninstall_radioify.ps1
+```
+
+Those root scripts reuse the bundle in `dist\packages\Radioify-Windows-x64` and
+build it first if needed.
+
 The packaged install:
 - copies Radioify to `%LOCALAPPDATA%\Programs\Radioify`
 - registers it as a Windows media app

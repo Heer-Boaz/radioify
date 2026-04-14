@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 
 Assert-RadioifyWindowsHost
 
-$definition = Get-RadioifyWindowsPackageDefinition -PackageRoot (Join-Path $PSScriptRoot "..\..") -InstallDir $InstallDir
+$definition = Get-RadioifyWindowsInstalledAppDefinition -InstallDir $InstallDir
 
 if ($PSCmdlet.ShouldProcess($definition.InstallDir, "Uninstall Radioify Windows bundle")) {
     Unregister-RadioifyWindowsMediaApp -ExecutablePath $definition.InstalledExecutablePath
