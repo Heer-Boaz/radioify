@@ -1,6 +1,7 @@
 #ifndef ASCIIART_H
 #define ASCIIART_H
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -29,6 +30,13 @@ bool renderAsciiArt(const std::filesystem::path& path,
                     int maxHeight,
                     AsciiArt& out,
                     std::string* error);
+
+bool renderAsciiArtFromEncodedImageBytes(const uint8_t* bytes,
+                                         size_t size,
+                                         int maxWidth,
+                                         int maxHeight,
+                                         AsciiArt& out,
+                                         std::string* error);
 
 bool renderAsciiArtFromRgba(const uint8_t* rgba,
                             int width,

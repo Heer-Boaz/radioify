@@ -11,7 +11,6 @@
 #include <vector>
 
 extern "C" {
-#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 }
@@ -21,14 +20,17 @@ extern "C" {
 #include "playback_track_catalog.h"
 #include "ui_helpers.h"
 #include "vgmaudio.h"
+#include "video/ascii/asciiart.h"
 #include "video/framebuffer/text_grid_bitmap_renderer.h"
 
 namespace {
 
 constexpr int kPosterCols = 34;
 constexpr int kPosterRows = 18;
-constexpr int kPosterWidth = 680;
-constexpr int kPosterHeight = 680;
+constexpr int kArtworkBitmapWidth = 680;
+constexpr int kArtworkBitmapHeight = 680;
+constexpr int kArtworkMaxCols = 48;
+constexpr int kArtworkMaxRows = 48;
 
 std::string trimAscii(std::string value) {
   while (!value.empty() &&
@@ -262,6 +264,68 @@ void applyEmulatedMetadata(const PlaybackMediaDisplayRequest& request,
   applyTrackCatalogFallback(request.file, request.trackIndex, out);
 }
 
+bool buildBitmapArtworkFromAscii(const AsciiArt& art,
+                                 PlaybackMediaArtwork* outArtwork) {
+  if (!outArtwork || art.width <= 0 || art.height <= 0 ||
+      art.cells.size() !=
+          static_cast<size_t>(art.width) * static_cast<size_t>(art.height)) {
+    return false;
+  }
+
+  std::vector<ScreenCell> cells(art.cells.size());
+  for (size_t i = 0; i < art.cells.size(); ++i) {
+    const auto& src = art.cells[i];
+    auto& dst = cells[i];
+    dst.ch = src.ch;
+    dst.fg = src.fg;
+    dst.bg = src.hasBg ? src.bg : Color{};
+  }
+
+  std::vector<uint8_t> pixels;
+  if (!renderScreenGridToBitmap(cells.data(), art.width, art.height,
+                                kArtworkBitmapWidth, kArtworkBitmapHeight,
+                                &pixels)) {
+    return false;
+  }
+
+  outArtwork->kind = PlaybackMediaArtwork::Kind::Bgra32;
+  outArtwork->width = kArtworkBitmapWidth;
+  outArtwork->height = kArtworkBitmapHeight;
+  outArtwork->bytes = std::move(pixels);
+  return true;
+}
+
+bool tryBuildAsciiArtworkFromImageFile(const std::filesystem::path& file,
+                                       PlaybackMediaArtwork* out) {
+  if (!out) {
+    return false;
+  }
+
+  AsciiArt art;
+  std::string unusedError;
+  if (!renderAsciiArt(file, kArtworkMaxCols, kArtworkMaxRows, art,
+                      &unusedError)) {
+    return false;
+  }
+  return buildBitmapArtworkFromAscii(art, out);
+}
+
+bool tryBuildAsciiArtworkFromEncodedBytes(const uint8_t* bytes, size_t size,
+                                          PlaybackMediaArtwork* out) {
+  if (!out) {
+    return false;
+  }
+
+  AsciiArt art;
+  std::string unusedError;
+  if (!renderAsciiArtFromEncodedImageBytes(bytes, size, kArtworkMaxCols,
+                                           kArtworkMaxRows, art,
+                                           &unusedError)) {
+    return false;
+  }
+  return buildBitmapArtworkFromAscii(art, out);
+}
+
 bool tryResolveSidecarArtwork(const std::filesystem::path& file,
                               PlaybackMediaArtwork* out) {
   if (!out) {
@@ -297,28 +361,11 @@ bool tryResolveSidecarArtwork(const std::filesystem::path& file,
     if (!std::filesystem::is_regular_file(candidate, ec) || ec) {
       continue;
     }
-    out->kind = PlaybackMediaArtwork::Kind::FilePath;
-    out->filePath = candidate;
-    return true;
+    if (tryBuildAsciiArtworkFromImageFile(candidate, out)) {
+      return true;
+    }
   }
   return false;
-}
-
-std::string imageMimeTypeForCodec(AVCodecID codecId) {
-  switch (codecId) {
-    case AV_CODEC_ID_MJPEG:
-      return "image/jpeg";
-    case AV_CODEC_ID_PNG:
-      return "image/png";
-    case AV_CODEC_ID_BMP:
-      return "image/bmp";
-    case AV_CODEC_ID_GIF:
-      return "image/gif";
-    case AV_CODEC_ID_WEBP:
-      return "image/webp";
-    default:
-      return "application/octet-stream";
-  }
 }
 
 bool tryResolveEmbeddedArtwork(AVFormatContext* fmt, PlaybackMediaArtwork* out) {
@@ -335,11 +382,10 @@ bool tryResolveEmbeddedArtwork(AVFormatContext* fmt, PlaybackMediaArtwork* out) 
     if (!pic.data || pic.size <= 0) {
       continue;
     }
-    out->kind = PlaybackMediaArtwork::Kind::EncodedBytes;
-    out->mimeType = imageMimeTypeForCodec(
-        stream->codecpar ? stream->codecpar->codec_id : AV_CODEC_ID_NONE);
-    out->bytes.assign(pic.data, pic.data + pic.size);
-    return true;
+    if (tryBuildAsciiArtworkFromEncodedBytes(
+            pic.data, static_cast<size_t>(pic.size), out)) {
+      return true;
+    }
   }
   return false;
 }
@@ -609,16 +655,15 @@ bool buildAsciiPosterArtwork(const PlaybackMediaDisplayRequest& request,
 
   std::vector<uint8_t> pixels;
   if (!renderScreenGridToBitmap(cells.data(), kPosterCols, kPosterRows,
-                                kPosterWidth, kPosterHeight, &pixels)) {
+                                kArtworkBitmapWidth, kArtworkBitmapHeight,
+                                &pixels)) {
     return false;
   }
 
   outArtwork->kind = PlaybackMediaArtwork::Kind::Bgra32;
-  outArtwork->width = kPosterWidth;
-  outArtwork->height = kPosterHeight;
+  outArtwork->width = kArtworkBitmapWidth;
+  outArtwork->height = kArtworkBitmapHeight;
   outArtwork->bytes = std::move(pixels);
-  outArtwork->mimeType = "image/png";
-  outArtwork->filePath.clear();
   return true;
 }
 

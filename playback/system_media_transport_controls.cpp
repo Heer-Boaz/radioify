@@ -31,11 +31,9 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.h>
-#include <winrt/Windows.Storage.h>
 #include <winrt/Windows.Storage.Streams.h>
 
 #include "playback_media_metadata_catalog.h"
-#include "playback_track_catalog.h"
 
 namespace {
 
@@ -49,8 +47,6 @@ using winrt::Windows::Media::MediaPlaybackType;
 using winrt::Windows::Media::SystemMediaTransportControls;
 using winrt::Windows::Media::SystemMediaTransportControlsButton;
 using winrt::Windows::Media::SystemMediaTransportControlsTimelineProperties;
-using winrt::Windows::Storage::StorageFile;
-using winrt::Windows::Storage::Streams::DataWriter;
 using winrt::Windows::Storage::Streams::InMemoryRandomAccessStream;
 using winrt::Windows::Storage::Streams::RandomAccessStreamReference;
 
@@ -92,18 +88,6 @@ std::optional<PlaybackControlCommand> mapButton(
   }
 }
 
-RandomAccessStreamReference createStreamReferenceFromEncodedBytes(
-    const PlaybackMediaArtwork& artwork) {
-  InMemoryRandomAccessStream stream;
-  DataWriter writer(stream);
-  writer.WriteBytes(winrt::array_view<const uint8_t>(artwork.bytes));
-  writer.StoreAsync().get();
-  writer.FlushAsync().get();
-  writer.DetachStream();
-  stream.Seek(0);
-  return RandomAccessStreamReference::CreateFromStream(stream);
-}
-
 RandomAccessStreamReference createStreamReferenceFromBitmap(
     const PlaybackMediaArtwork& artwork) {
   InMemoryRandomAccessStream stream;
@@ -121,21 +105,6 @@ std::optional<RandomAccessStreamReference> createArtworkStreamReference(
     const PlaybackMediaArtwork& artwork) {
   try {
     switch (artwork.kind) {
-      case PlaybackMediaArtwork::Kind::FilePath: {
-        if (artwork.filePath.empty()) {
-          return std::nullopt;
-        }
-        StorageFile file =
-            StorageFile::GetFileFromPathAsync(
-                winrt::hstring{artwork.filePath.wstring()})
-                .get();
-        return RandomAccessStreamReference::CreateFromFile(file);
-      }
-      case PlaybackMediaArtwork::Kind::EncodedBytes:
-        if (artwork.bytes.empty()) {
-          return std::nullopt;
-        }
-        return createStreamReferenceFromEncodedBytes(artwork);
       case PlaybackMediaArtwork::Kind::Bgra32:
         if (artwork.bytes.empty() || artwork.width == 0 || artwork.height == 0) {
           return std::nullopt;

@@ -8,14 +8,10 @@
 struct PlaybackMediaArtwork {
   enum class Kind : uint8_t {
     None,
-    FilePath,
-    EncodedBytes,
     Bgra32,
   };
 
   Kind kind = Kind::None;
-  std::filesystem::path filePath;
-  std::string mimeType;
   std::vector<uint8_t> bytes;
   uint32_t width = 0;
   uint32_t height = 0;

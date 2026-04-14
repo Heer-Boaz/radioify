@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -682,6 +683,65 @@ struct BrailleFastScratch {
   }
 };
 
+bool copyDecoderPixels(IWICImagingFactory* factory, IWICBitmapDecoder* decoder,
+                       int& outW, int& outH, std::vector<uint8_t>& pixels,
+                       std::string* error) {
+  if (!factory || !decoder) {
+    setError(error, "Failed to open image.");
+    return false;
+  }
+  IWICBitmapFrameDecode* frame = nullptr;
+  HRESULT hr = decoder->GetFrame(0, &frame);
+  if (FAILED(hr)) {
+    setError(error, "Failed to decode image frame.");
+    return false;
+  }
+
+  UINT w = 0;
+  UINT h = 0;
+  frame->GetSize(&w, &h);
+  if (w == 0 || h == 0) {
+    safeRelease(frame);
+    setError(error, "Image has invalid dimensions.");
+    return false;
+  }
+  outW = static_cast<int>(w);
+  outH = static_cast<int>(h);
+
+  IWICFormatConverter* converter = nullptr;
+  hr = factory->CreateFormatConverter(&converter);
+  if (FAILED(hr)) {
+    safeRelease(frame);
+    setError(error, "Failed to convert image.");
+    return false;
+  }
+
+  hr = converter->Initialize(frame, GUID_WICPixelFormat32bppRGBA,
+                             WICBitmapDitherTypeNone, nullptr, 0.0,
+                             WICBitmapPaletteTypeCustom);
+  if (FAILED(hr)) {
+    safeRelease(converter);
+    safeRelease(frame);
+    setError(error, "Failed to convert image format.");
+    return false;
+  }
+
+  const UINT stride = w * 4;
+  const UINT bufferSize = stride * h;
+  pixels.assign(bufferSize, 0);
+  hr = converter->CopyPixels(nullptr, stride, bufferSize, pixels.data());
+  if (FAILED(hr)) {
+    safeRelease(converter);
+    safeRelease(frame);
+    setError(error, "Failed to read image pixels.");
+    return false;
+  }
+
+  safeRelease(converter);
+  safeRelease(frame);
+  return true;
+}
+
 bool loadImagePixels(const std::filesystem::path& path, int& outW, int& outH,
                      std::vector<uint8_t>& pixels, std::string* error) {
   ComScope com(error);
@@ -706,68 +766,66 @@ bool loadImagePixels(const std::filesystem::path& path, int& outW, int& outH,
     return false;
   }
 
-  IWICBitmapFrameDecode* frame = nullptr;
-  hr = decoder->GetFrame(0, &frame);
-  if (FAILED(hr)) {
-    safeRelease(decoder);
-    safeRelease(factory);
-    setError(error, "Failed to decode image frame.");
-    return false;
-  }
-
-  UINT w = 0;
-  UINT h = 0;
-  frame->GetSize(&w, &h);
-  if (w == 0 || h == 0) {
-    safeRelease(frame);
-    safeRelease(decoder);
-    safeRelease(factory);
-    setError(error, "Image has invalid dimensions.");
-    return false;
-  }
-  outW = static_cast<int>(w);
-  outH = static_cast<int>(h);
-
-  IWICFormatConverter* converter = nullptr;
-  hr = factory->CreateFormatConverter(&converter);
-  if (FAILED(hr)) {
-    safeRelease(frame);
-    safeRelease(decoder);
-    safeRelease(factory);
-    setError(error, "Failed to convert image.");
-    return false;
-  }
-
-  hr = converter->Initialize(frame, GUID_WICPixelFormat32bppRGBA,
-                             WICBitmapDitherTypeNone, nullptr, 0.0,
-                             WICBitmapPaletteTypeCustom);
-  if (FAILED(hr)) {
-    safeRelease(converter);
-    safeRelease(frame);
-    safeRelease(decoder);
-    safeRelease(factory);
-    setError(error, "Failed to convert image format.");
-    return false;
-  }
-
-  const UINT stride = w * 4;
-  const UINT bufferSize = stride * h;
-  pixels.assign(bufferSize, 0);
-  hr = converter->CopyPixels(nullptr, stride, bufferSize, pixels.data());
-  if (FAILED(hr)) {
-    safeRelease(converter);
-    safeRelease(frame);
-    safeRelease(decoder);
-    safeRelease(factory);
-    setError(error, "Failed to read image pixels.");
-    return false;
-  }
-
-  safeRelease(converter);
-  safeRelease(frame);
+  const bool ok = copyDecoderPixels(factory, decoder, outW, outH, pixels, error);
   safeRelease(decoder);
   safeRelease(factory);
-  return true;
+  return ok;
+}
+
+bool loadImagePixelsFromEncodedBytes(const uint8_t* bytes, size_t size, int& outW,
+                                     int& outH, std::vector<uint8_t>& pixels,
+                                     std::string* error) {
+  if (!bytes || size == 0 ||
+      size > static_cast<size_t>(std::numeric_limits<DWORD>::max())) {
+    setError(error, "Failed to open image.");
+    return false;
+  }
+
+  ComScope com(error);
+  if (!com.ok()) return false;
+
+  IWICImagingFactory* factory = nullptr;
+  HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+                                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+  if (FAILED(hr)) {
+    setError(error, "Failed to create image decoder.");
+    return false;
+  }
+
+  IWICStream* stream = nullptr;
+  hr = factory->CreateStream(&stream);
+  if (FAILED(hr)) {
+    safeRelease(factory);
+    setError(error, "Failed to create image stream.");
+    return false;
+  }
+
+  hr = stream->InitializeFromMemory(
+      const_cast<BYTE*>(reinterpret_cast<const BYTE*>(bytes)),
+      static_cast<DWORD>(size));
+  if (FAILED(hr)) {
+    safeRelease(stream);
+    safeRelease(factory);
+    setError(error, "Failed to open image.");
+    return false;
+  }
+
+  IWICBitmapDecoder* decoder = nullptr;
+  hr = factory->CreateDecoderFromStream(stream, nullptr,
+                                        WICDecodeMetadataCacheOnDemand,
+                                        &decoder);
+  if (FAILED(hr)) {
+    safeRelease(stream);
+    safeRelease(factory);
+    setError(error, "Failed to open image.");
+    return false;
+  }
+
+  const bool ok = copyDecoderPixels(factory, decoder, outW, outH, pixels, error);
+  safeRelease(decoder);
+  safeRelease(stream);
+  safeRelease(factory);
+  return ok;
 }
 
 template <bool AssumeOpaque>
@@ -1882,6 +1940,30 @@ bool renderAsciiArt(const std::filesystem::path& path, int maxWidth,
   int imgH = 0;
   std::vector<uint8_t> rgba;
   if (!loadImagePixels(path, imgW, imgH, rgba, error)) return false;
+  if (imgW <= 0 || imgH <= 0) {
+    setError(error, "Image has invalid dimensions.");
+    return false;
+  }
+
+  static thread_local BrailleFastScratch scratch;
+  if (!renderAsciiArtFromRgbaFast(rgba.data(), imgW, imgH, maxWidth, maxHeight,
+                                  out, false, scratch)) {
+    setError(error, "Failed to render image as ASCII art.");
+    return false;
+  }
+  return true;
+}
+
+bool renderAsciiArtFromEncodedImageBytes(const uint8_t* bytes, size_t size,
+                                         int maxWidth, int maxHeight,
+                                         AsciiArt& out, std::string* error) {
+  out = AsciiArt{};
+  int imgW = 0;
+  int imgH = 0;
+  std::vector<uint8_t> rgba;
+  if (!loadImagePixelsFromEncodedBytes(bytes, size, imgW, imgH, rgba, error)) {
+    return false;
+  }
   if (imgW <= 0 || imgH <= 0) {
     setError(error, "Image has invalid dimensions.");
     return false;
