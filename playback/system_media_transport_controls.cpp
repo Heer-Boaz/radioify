@@ -1,4 +1,5 @@
 #include "system_media_transport_controls.h"
+#include "system_media_transport_host_window.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -156,6 +157,7 @@ struct PlaybackSystemControls::Impl {
   bool available = false;
   bool roInitialized = false;
 
+  PlaybackSystemTransportHostWindow hostWindow;
   SystemMediaTransportControls controls{nullptr};
   SystemMediaTransportControls::ButtonPressed_revoker buttonPressedRevoker;
 
@@ -180,7 +182,13 @@ struct PlaybackSystemControls::Impl {
       return false;
     }
 
-    HWND hwnd = GetConsoleWindow();
+    HWND hwnd = nullptr;
+    if (hostWindow.initialize()) {
+      hwnd = static_cast<HWND>(hostWindow.nativeHandle());
+    }
+    if (!hwnd) {
+      hwnd = GetConsoleWindow();
+    }
     if (!hwnd) {
       return false;
     }

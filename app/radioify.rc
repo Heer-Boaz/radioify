@@ -1,0 +1,40 @@
+#define IDI_RADIOIFY_APP_ICON 101
+#define VS_FFI_FILEFLAGSMASK 0x0000003FL
+#define VS_FF_DEBUG 0x00000001L
+#define VOS__WINDOWS32 0x00040004L
+#define VFT_APP 0x00000001L
+#define VFT2_UNKNOWN 0x00000000L
+
+IDI_RADIOIFY_APP_ICON ICON "..\\radioify.ico"
+
+1 VERSIONINFO
+ FILEVERSION 0,0,0,0
+ PRODUCTVERSION 0,0,0,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+ FILEFLAGS VS_FF_DEBUG
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS VOS__WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904E4"
+    BEGIN
+      VALUE "CompanyName", "Radioify"
+      VALUE "FileDescription", "Radioify"
+      VALUE "FileVersion", "0.0.0.0"
+      VALUE "InternalName", "radioify"
+      VALUE "OriginalFilename", "radioify.exe"
+      VALUE "ProductName", "Radioify"
+      VALUE "ProductVersion", "0.0.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1252
+  END
+END

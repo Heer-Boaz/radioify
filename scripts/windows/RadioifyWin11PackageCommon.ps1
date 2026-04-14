@@ -1,12 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-function Assert-RadioifyWindowsHost {
-    $platform = [System.Environment]::OSVersion.Platform
-    if ($platform -ne [System.PlatformID]::Win32NT) {
-        throw "The Windows 11 Explorer integration scripts must be run on Windows."
-    }
-}
+. (Join-Path $PSScriptRoot "RadioifyWindowsShellCommon.ps1")
 
 function Test-RadioifyAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -379,23 +374,6 @@ from an elevated PowerShell window.
         Certificate = $cert
         CertificatePath = $certPath
     }
-}
-
-function Invoke-RadioifyShellAssociationRefresh {
-    if (-not ("Radioify.ShellNative" -as [type])) {
-        Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-namespace Radioify {
-    public static class ShellNative {
-        [DllImport("shell32.dll")]
-        public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
-    }
-}
-"@
-    }
-
-    [Radioify.ShellNative]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
 }
 
 function Restart-RadioifyExplorerShell {
