@@ -64,10 +64,12 @@ reuse the current bundle as-is.
 The packaged install:
 - copies Radioify to `%LOCALAPPDATA%\Programs\Radioify`
 - registers it as a Windows media app
+- installs the Windows 11 Explorer context menu integration
 - adds a per-user uninstall entry in Apps & Features
 
-The experimental Windows 11 Explorer integration is intentionally not part of
-the normal package lane.
+The packaged install triggers a UAC prompt because the Explorer integration is
+installed as a packaged shell extension and trusts its development certificate
+in `Cert:\LocalMachine\TrustedPeople`.
 
 ## CI Packaging
 A GitHub Actions workflow at [windows-package.yml](/mnt/b/radioify/.github/workflows/windows-package.yml)
@@ -87,15 +89,12 @@ dist/radioify.exe --no-radio <file-or-folder>
 ```
 
 ## Windows 11 Explorer Integration
-This lane is currently experimental bring-up work, not a finished or preferred
-integration path.
-
 Current intent:
 - keep `radioify.exe` as the core executable
 - keep Explorer integration in a separate `IExplorerCommand` shell extension
-- use a sparse-package lane only for testing modern Win11 integration
+- use a sparse-package lane for the modern Win11 integration
 
-The normal front-door commands are:
+The standalone maintenance commands are:
 
 ```powershell
 .\install_win11_explorer_integration.ps1
@@ -106,10 +105,9 @@ Run the install command from an elevated PowerShell window. The development
 MSIX package is self-signed, so its certificate is trusted in
 `Cert:\LocalMachine\TrustedPeople` during install.
 
-Current reality:
-- the build/install lane exists
-- end-to-end Explorer activation is still being proven
-- this should be treated as a debug path, not stable product UX
+The normal packaged installer now uses this same lane automatically. Keep these
+commands around for maintenance when you want to rebuild or re-register only
+the Explorer side without reinstalling the full app.
 
 Advanced / internal flow:
 

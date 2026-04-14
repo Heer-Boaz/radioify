@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $script:RadioifyWindowsPackageManifestName = "RadioifyPackage.json"
 $script:RadioifyWindowsUninstallKeyName = "Radioify"
 $script:RadioifyWindowsPublisher = "Radioify"
+$script:RadioifyWindowsExplorerIntegrationDirectoryName = "win11-explorer-integration"
 
 function Get-RadioifyWindowsDefaultInstallDirectory {
     $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
@@ -83,6 +84,10 @@ function Get-RadioifyWindowsPackageDefinition {
         PackageExecutablePath = $packageExecutablePath
         InstalledExecutablePath = $installedExecutablePath
         InstalledIconPath = Join-Path $resolvedInstallDir "radioify.ico"
+        PackageExplorerIntegrationDir = Join-Path $resolvedRoot $script:RadioifyWindowsExplorerIntegrationDirectoryName
+        InstalledExplorerIntegrationDir = Join-Path $resolvedInstallDir $script:RadioifyWindowsExplorerIntegrationDirectoryName
+        InstalledExplorerInstallScriptPath = Join-Path $resolvedInstallDir "scripts\windows\install_radioify_win11_context_menu.ps1"
+        InstalledExplorerUninstallScriptPath = Join-Path $resolvedInstallDir "scripts\windows\uninstall_radioify_win11_context_menu.ps1"
         InstalledUninstallScriptPath = Join-Path $resolvedInstallDir "uninstall_radioify.ps1"
         InstalledUninstallCmdPath = Join-Path $resolvedInstallDir "uninstall_radioify.cmd"
         UninstallRegistryPath = Get-RadioifyWindowsUninstallRegistryPath
@@ -103,6 +108,9 @@ function Get-RadioifyWindowsInstalledAppDefinition {
         InstallDir = $resolvedInstallDir
         InstalledExecutablePath = $installedExecutablePath
         InstalledIconPath = Join-Path $resolvedInstallDir "radioify.ico"
+        InstalledExplorerIntegrationDir = Join-Path $resolvedInstallDir $script:RadioifyWindowsExplorerIntegrationDirectoryName
+        InstalledExplorerInstallScriptPath = Join-Path $resolvedInstallDir "scripts\windows\install_radioify_win11_context_menu.ps1"
+        InstalledExplorerUninstallScriptPath = Join-Path $resolvedInstallDir "scripts\windows\uninstall_radioify_win11_context_menu.ps1"
         InstalledUninstallScriptPath = Join-Path $resolvedInstallDir "uninstall_radioify.ps1"
         InstalledUninstallCmdPath = Join-Path $resolvedInstallDir "uninstall_radioify.cmd"
         UninstallRegistryPath = Get-RadioifyWindowsUninstallRegistryPath

@@ -8,12 +8,28 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "RadioifyWindowsDesktopInstall.ps1")
+. (Join-Path $PSScriptRoot "RadioifyWindowsExplorerIntegrationHost.ps1")
 
 Assert-RadioifyWindowsHost
 
 $definition = Get-RadioifyWindowsInstalledAppDefinition -InstallDir $InstallDir
+$didUninstall = $false
 
 if ($PSCmdlet.ShouldProcess($definition.InstallDir, "Uninstall Radioify Windows bundle")) {
+    if (Test-Path -LiteralPath $definition.InstalledExplorerIntegrationDir) {
+        if (-not (Test-Path -LiteralPath $definition.InstalledExplorerUninstallScriptPath)) {
+            throw "Installed Win11 Explorer integration uninstall script not found at '$($definition.InstalledExplorerUninstallScriptPath)'."
+        }
+
+        Invoke-RadioifyWindowsExplorerIntegrationScript `
+            -ScriptPath $definition.InstalledExplorerUninstallScriptPath `
+            -Operation uninstall `
+            -Parameters @{
+                IntegrationDir = $definition.InstalledExplorerIntegrationDir
+            } `
+            -UserCommandHint ".\uninstall_radioify.ps1"
+    }
+
     Unregister-RadioifyWindowsMediaApp -ExecutablePath $definition.InstalledExecutablePath
     Unregister-RadioifyWindowsUninstallEntry -Definition $definition
 
@@ -28,9 +44,15 @@ if ($PSCmdlet.ShouldProcess($definition.InstallDir, "Uninstall Radioify Windows 
             Remove-Item -LiteralPath $definition.InstallDir -Recurse -Force
         }
     }
+
+    $didUninstall = $true
 }
 
-Write-Host "Uninstalled Radioify."
-if ($KeepFiles) {
-    Write-Host " - Installed files were left in place."
+if ($didUninstall) {
+    Write-Host "Uninstalled Radioify."
+    if ($KeepFiles) {
+        Write-Host " - Installed files were left in place."
+    }
+} elseif ($WhatIfPreference) {
+    Write-Host "What if: Radioify uninstall was not performed."
 }

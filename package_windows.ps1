@@ -63,7 +63,7 @@ try {
             -InstallDeps ([bool]$InstallDeps) `
             -VcpkgRoot $null `
             -MelodyAnalysis $false `
-            -Win11ExplorerIntegration $false `
+            -Win11ExplorerIntegration $true `
             -TimingLog $false `
             -StagingUpload $false `
             -VideoErrorLog $false `

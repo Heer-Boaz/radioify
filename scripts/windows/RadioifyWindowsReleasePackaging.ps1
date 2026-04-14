@@ -8,14 +8,24 @@ $script:RadioifyWindowsBundleFiles = @(
     @{ Source = "scripts/windows/RadioifyWindowsShellCommon.ps1"; Destination = "scripts/windows/RadioifyWindowsShellCommon.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsShortcutInterop.ps1"; Destination = "scripts/windows/RadioifyWindowsShortcutInterop.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsMediaAppRegistration.ps1"; Destination = "scripts/windows/RadioifyWindowsMediaAppRegistration.ps1" },
+    @{ Source = "scripts/windows/RadioifyWindowsExplorerIntegrationHost.ps1"; Destination = "scripts/windows/RadioifyWindowsExplorerIntegrationHost.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsDesktopInstall.ps1"; Destination = "scripts/windows/RadioifyWindowsDesktopInstall.ps1" },
+    @{ Source = "scripts/windows/RadioifyWin11PackageCommon.ps1"; Destination = "scripts/windows/RadioifyWin11PackageCommon.ps1" },
     @{ Source = "scripts/windows/install_radioify_windows_bundle.ps1"; Destination = "scripts/windows/install_radioify_windows_bundle.ps1" },
     @{ Source = "scripts/windows/uninstall_radioify_windows_bundle.ps1"; Destination = "scripts/windows/uninstall_radioify_windows_bundle.ps1" },
+    @{ Source = "scripts/windows/install_radioify_win11_context_menu.ps1"; Destination = "scripts/windows/install_radioify_win11_context_menu.ps1" },
+    @{ Source = "scripts/windows/uninstall_radioify_win11_context_menu.ps1"; Destination = "scripts/windows/uninstall_radioify_win11_context_menu.ps1" },
     @{ Source = "windows/distribution/install_radioify.ps1"; Destination = "install_radioify.ps1" },
     @{ Source = "windows/distribution/uninstall_radioify.ps1"; Destination = "uninstall_radioify.ps1" },
     @{ Source = "windows/distribution/install_radioify.cmd"; Destination = "install_radioify.cmd" },
     @{ Source = "windows/distribution/uninstall_radioify.cmd"; Destination = "uninstall_radioify.cmd" },
     @{ Source = "windows/distribution/README.txt"; Destination = "README.txt" }
+)
+
+$script:RadioifyWindowsExplorerIntegrationBundleFiles = @(
+    @{ Source = "Package.appxmanifest"; Destination = "win11-explorer-integration/Package.appxmanifest" },
+    @{ Source = "radioify_explorer.dll"; Destination = "win11-explorer-integration/radioify_explorer.dll" },
+    @{ Source = "README.txt"; Destination = "win11-explorer-integration/README.txt" }
 )
 
 function Get-RadioifyWindowsPackageVersion {
@@ -63,6 +73,33 @@ function Copy-RadioifyWindowsPackageFile {
     }
 
     Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
+}
+
+function Copy-RadioifyWindowsExplorerIntegrationBundle {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$StageDir
+    )
+
+    $integrationDir = Join-Path $RepoRoot "dist\win11-explorer-integration"
+    if (-not (Test-Path -LiteralPath $integrationDir)) {
+        throw "Win11 Explorer integration artifacts were not found at '$integrationDir'. Run .\build.ps1 -Static -Win11ExplorerIntegration or rerun .\package_windows.ps1 without -SkipBuild."
+    }
+
+    foreach ($file in $script:RadioifyWindowsExplorerIntegrationBundleFiles) {
+        $sourcePath = Join-Path $integrationDir $file.Source
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            throw "Win11 Explorer integration bundle source file not found: '$sourcePath'."
+        }
+
+        $destinationPath = Join-Path $StageDir $file.Destination
+        $destinationDir = Split-Path -Parent $destinationPath
+        if ($destinationDir -and -not (Test-Path -LiteralPath $destinationDir)) {
+            New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+        }
+
+        Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
+    }
 }
 
 function New-RadioifyWindowsPackageManifest {
@@ -126,6 +163,10 @@ function New-RadioifyWindowsDistributionBundle {
             -SourceRelativePath $file.Source `
             -DestinationRelativePath $file.Destination
     }
+
+    Copy-RadioifyWindowsExplorerIntegrationBundle `
+        -RepoRoot $resolvedRepoRoot `
+        -StageDir $stageDir
 
     $manifest = New-RadioifyWindowsPackageManifest -Version $Version -ExecutableName "radioify.exe"
     $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stageDir "RadioifyPackage.json") -Encoding UTF8

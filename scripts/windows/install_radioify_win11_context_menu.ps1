@@ -2,17 +2,23 @@
 param(
     [string]$IntegrationDir,
     [switch]$ReplaceExisting,
-    [switch]$SkipExplorerRestart
+    [switch]$SkipExplorerRestart,
+    [string]$LogPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "RadioifyWindowsExplorerIntegrationHost.ps1")
 . (Join-Path $PSScriptRoot "RadioifyWin11PackageCommon.ps1")
 
 Assert-RadioifyWindowsHost
 if (-not $WhatIfPreference -and -not (Test-RadioifyAdministrator)) {
     throw "Run this install script from an elevated PowerShell window. The MSIX signing certificate must be trusted in Cert:\\LocalMachine\\TrustedPeople."
+}
+
+if (-not $LogPath) {
+    $LogPath = Resolve-RadioifyWindowsExplorerIntegrationLogPath -LeafName "win11-explorer-install.log"
 }
 
 $resolvedIntegrationDir = Resolve-RadioifyWin11IntegrationDirectory `
@@ -31,6 +37,7 @@ $shellStopped = $false
 $didChangePackage = $false
 $alreadyInstalled = $false
 $shellRecovered = $false
+$transcriptStarted = $false
 
 function Enter-RadioifyShellMaintenance {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -73,12 +80,17 @@ function Build-RadioifyWin11Package {
     )
 }
 
-if ($WhatIfPreference) {
-    [void]$PSCmdlet.ShouldProcess($manifestInfo.PackageName, "Install Win11 Explorer integration package")
-    return
-}
-
 try {
+    if (-not $WhatIfPreference) {
+        Start-Transcript -Path $LogPath -Force | Out-Null
+        $transcriptStarted = $true
+    }
+
+    if ($WhatIfPreference) {
+        [void]$PSCmdlet.ShouldProcess($manifestInfo.PackageName, "Install Win11 Explorer integration package")
+        return
+    }
+
     $installedPackage = Get-InstalledRadioifyWin11Package -PackageName $manifestInfo.PackageName
     if ($installedPackage -and $ReplaceExisting -and $SkipExplorerRestart) {
         throw "Cannot use -SkipExplorerRestart while replacing an existing Win11 Explorer integration package. Explorer must be restarted so the packaged shell extension can be unloaded."
@@ -171,6 +183,13 @@ try {
         }
     }
 } finally {
+    if ($transcriptStarted) {
+        try {
+            Stop-Transcript | Out-Null
+        } catch {
+        }
+    }
+
     if ($shellStopped -and -not $shellRecovered -and -not $SkipExplorerRestart) {
         Write-Warning "Explorer was left stopped by the install path. Starting it again."
         Start-RadioifyExplorerShell

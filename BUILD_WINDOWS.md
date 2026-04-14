@@ -42,7 +42,9 @@ Open a Windows PowerShell prompt in the repo root.
 
 By default `.\install_radioify.ps1` repackages the current repo state before
 installing. Use `-SkipPackage` only when you intentionally want to reuse the
-existing bundle under `dist\packages\Radioify-Windows-x64`.
+existing bundle under `dist\packages\Radioify-Windows-x64`. The install now
+also installs the Win11 Explorer context menu integration, so expect a UAC
+prompt during the install/uninstall flow.
 
 Equivalent packaging entrypoints from the repo root:
 
