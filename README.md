@@ -22,6 +22,46 @@ Quick start:
 
 The binary is written to `dist/radioify.exe`.
 
+## Windows Package
+Build a distributable Windows x64 bundle and zip:
+
+```powershell
+.\package_windows.ps1
+```
+
+From WSL/Linux:
+
+```bash
+./package_windows.sh
+```
+
+From `cmd.exe`:
+
+```bat
+package_windows.cmd
+```
+
+That writes:
+- `dist\packages\Radioify-Windows-x64\`
+- `dist\packages\Radioify-Windows-x64.zip`
+
+On another Windows PC:
+- extract the zip
+- run `install_radioify.cmd` for a per-user install
+- or run `radioify.exe` directly for portable use
+
+The packaged install:
+- copies Radioify to `%LOCALAPPDATA%\Programs\Radioify`
+- registers it as a Windows media app
+- adds a per-user uninstall entry in Apps & Features
+
+The experimental Windows 11 Explorer integration is intentionally not part of
+the normal package lane.
+
+## CI Packaging
+A GitHub Actions workflow at [windows-package.yml](/mnt/b/radioify/.github/workflows/windows-package.yml)
+builds the same Windows package and uploads `Radioify-Windows-x64.zip` as an artifact.
+
 ## Run
 ```sh
 dist/radioify.exe

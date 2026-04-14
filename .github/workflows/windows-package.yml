@@ -1,0 +1,48 @@
+name: Windows Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional package version override
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build Windows package
+        shell: pwsh
+        run: |
+          $version = "${{ github.event.inputs.version }}"
+          if (-not $version -and "${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}"
+          }
+
+          $arguments = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", ".\package_windows.ps1",
+            "-InstallDeps"
+          )
+
+          if ($version) {
+            $arguments += @("-Version", $version)
+          }
+
+          & powershell.exe @arguments
+
+      - name: Upload package zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: Radioify-Windows-x64
+          path: dist/packages/Radioify-Windows-x64.zip
+          if-no-files-found: error

@@ -27,6 +27,16 @@ function Resolve-RadioifyWindowsMediaExecutablePath {
         throw "Radioify executable not found at '$fullPath'."
     }
 
+    if ($ScriptRoot) {
+        $localExecutable = Join-Path $ScriptRoot $script:RadioifyWindowsExecutableName
+        if ($AllowMissing -or (Test-Path -LiteralPath $localExecutable)) {
+            if (Test-Path -LiteralPath $localExecutable) {
+                return (Resolve-Path -LiteralPath $localExecutable).Path
+            }
+            return [System.IO.Path]::GetFullPath($localExecutable)
+        }
+    }
+
     $repoRoot = $null
     if ($ScriptRoot -and (Test-Path -LiteralPath (Join-Path $ScriptRoot "build.ps1"))) {
         $repoRoot = (Resolve-Path -LiteralPath $ScriptRoot).Path

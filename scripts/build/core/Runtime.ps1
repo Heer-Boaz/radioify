@@ -1,5 +1,13 @@
 function Enable-AnsiConsole {
-  if (-not $IsWindows) {
+  $runningOnWindows = $true
+  if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) {
+    $runningOnWindows = [bool]$IsWindows
+  }
+  else {
+    $runningOnWindows = ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)
+  }
+
+  if (-not $runningOnWindows) {
     return
   }
 

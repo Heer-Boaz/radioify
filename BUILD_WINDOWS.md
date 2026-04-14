@@ -35,6 +35,17 @@ Open a Windows PowerShell prompt in the repo root.
 .\build.ps1 -Static
 .\build.ps1 -Static -MelodyAnalysis
 .\build.ps1 -Clean
+.\package_windows.ps1
+```
+
+Equivalent packaging entrypoints from the repo root:
+
+```bash
+./package_windows.sh
+```
+
+```bat
+package_windows.cmd
 ```
 
 ## From WSL

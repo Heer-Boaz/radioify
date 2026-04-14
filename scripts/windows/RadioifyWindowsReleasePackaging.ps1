@@ -1,0 +1,141 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$script:RadioifyWindowsBundleName = "Radioify-Windows-x64"
+$script:RadioifyWindowsBundleFiles = @(
+    @{ Source = "register_windows_media_app.ps1"; Destination = "register_windows_media_app.ps1" },
+    @{ Source = "unregister_windows_media_app.ps1"; Destination = "unregister_windows_media_app.ps1" },
+    @{ Source = "scripts/windows/RadioifyWindowsShellCommon.ps1"; Destination = "scripts/windows/RadioifyWindowsShellCommon.ps1" },
+    @{ Source = "scripts/windows/RadioifyWindowsShortcutInterop.ps1"; Destination = "scripts/windows/RadioifyWindowsShortcutInterop.ps1" },
+    @{ Source = "scripts/windows/RadioifyWindowsMediaAppRegistration.ps1"; Destination = "scripts/windows/RadioifyWindowsMediaAppRegistration.ps1" },
+    @{ Source = "scripts/windows/RadioifyWindowsDesktopInstall.ps1"; Destination = "scripts/windows/RadioifyWindowsDesktopInstall.ps1" },
+    @{ Source = "scripts/windows/install_radioify_windows_bundle.ps1"; Destination = "scripts/windows/install_radioify_windows_bundle.ps1" },
+    @{ Source = "scripts/windows/uninstall_radioify_windows_bundle.ps1"; Destination = "scripts/windows/uninstall_radioify_windows_bundle.ps1" },
+    @{ Source = "windows/distribution/install_radioify.ps1"; Destination = "install_radioify.ps1" },
+    @{ Source = "windows/distribution/uninstall_radioify.ps1"; Destination = "uninstall_radioify.ps1" },
+    @{ Source = "windows/distribution/install_radioify.cmd"; Destination = "install_radioify.cmd" },
+    @{ Source = "windows/distribution/uninstall_radioify.cmd"; Destination = "uninstall_radioify.cmd" },
+    @{ Source = "windows/distribution/README.txt"; Destination = "README.txt" }
+)
+
+function Get-RadioifyWindowsPackageVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [string]$Version
+    )
+
+    if ($Version) {
+        return $Version
+    }
+
+    $stamp = Get-Date -Format "yyyy.MM.dd"
+    $gitCommit = $null
+    try {
+        $gitCommit = (& git -C $RepoRoot rev-parse --short HEAD 2>$null | Select-Object -First 1)
+    } catch {
+        $gitCommit = $null
+    }
+
+    if ($gitCommit) {
+        return "$stamp+$gitCommit"
+    }
+
+    return $stamp
+}
+
+function Copy-RadioifyWindowsPackageFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$StageDir,
+        [Parameter(Mandatory = $true)][string]$SourceRelativePath,
+        [Parameter(Mandatory = $true)][string]$DestinationRelativePath
+    )
+
+    $sourcePath = Join-Path $RepoRoot $SourceRelativePath
+    if (-not (Test-Path -LiteralPath $sourcePath)) {
+        throw "Package source file not found: '$sourcePath'."
+    }
+
+    $destinationPath = Join-Path $StageDir $DestinationRelativePath
+    $destinationDir = Split-Path -Parent $destinationPath
+    if ($destinationDir -and -not (Test-Path -LiteralPath $destinationDir)) {
+        New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+    }
+
+    Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
+}
+
+function New-RadioifyWindowsPackageManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$ExecutableName
+    )
+
+    return [ordered]@{
+        PackageFormatVersion = 1
+        DisplayName = "Radioify"
+        DisplayVersion = $Version
+        ExecutableName = $ExecutableName
+        Architecture = "x64"
+        BuiltAtUtc = [DateTime]::UtcNow.ToString("o")
+    }
+}
+
+function New-RadioifyWindowsDistributionBundle {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [Parameter(Mandatory = $true)][string]$OutputRoot,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+
+    $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+    $resolvedExecutablePath = (Resolve-Path -LiteralPath $ExecutablePath).Path
+
+    if (-not (Test-Path -LiteralPath $resolvedExecutablePath)) {
+        throw "Packaged executable not found at '$resolvedExecutablePath'."
+    }
+
+    if (-not (Test-Path -LiteralPath $OutputRoot)) {
+        New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+    }
+
+    $stageDir = Join-Path $OutputRoot $script:RadioifyWindowsBundleName
+    $zipPath = Join-Path $OutputRoot "$script:RadioifyWindowsBundleName.zip"
+
+    if (Test-Path -LiteralPath $stageDir) {
+        Remove-Item -LiteralPath $stageDir -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $zipPath) {
+        Remove-Item -LiteralPath $zipPath -Force
+    }
+
+    New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+
+    Copy-Item -LiteralPath $resolvedExecutablePath -Destination (Join-Path $stageDir "radioify.exe") -Force
+
+    $iconPath = Join-Path $resolvedRepoRoot "radioify.ico"
+    if (Test-Path -LiteralPath $iconPath) {
+        Copy-Item -LiteralPath $iconPath -Destination (Join-Path $stageDir "radioify.ico") -Force
+    }
+
+    foreach ($file in $script:RadioifyWindowsBundleFiles) {
+        Copy-RadioifyWindowsPackageFile `
+            -RepoRoot $resolvedRepoRoot `
+            -StageDir $stageDir `
+            -SourceRelativePath $file.Source `
+            -DestinationRelativePath $file.Destination
+    }
+
+    $manifest = New-RadioifyWindowsPackageManifest -Version $Version -ExecutableName "radioify.exe"
+    $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stageDir "RadioifyPackage.json") -Encoding UTF8
+
+    Compress-Archive -LiteralPath $stageDir -DestinationPath $zipPath -CompressionLevel Optimal
+
+    return [pscustomobject]@{
+        StageDir = $stageDir
+        ZipPath = $zipPath
+        Version = $Version
+        ExecutablePath = Join-Path $stageDir "radioify.exe"
+    }
+}
