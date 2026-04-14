@@ -5,6 +5,7 @@
 
 #include "consolescreen.h"
 #include "optionsbrowser.h"
+#include "playback/playback_media_keys.h"
 #include "ui_helpers.h"
 
 namespace {
@@ -898,8 +899,32 @@ bool handlePlaybackInput(const InputEvent& ev,
       if (callbacks.onQuit) callbacks.onQuit();
       return true;
     }
+    if (key.vk == kPlaybackVkMediaPlay) {
+      if (callbacks.onPlay) callbacks.onPlay();
+      return true;
+    }
+    if (key.vk == kPlaybackVkMediaPause) {
+      if (callbacks.onPause) callbacks.onPause();
+      return true;
+    }
     if (key.vk == VK_SPACE || key.ch == ' ') {
       if (callbacks.onTogglePause) callbacks.onTogglePause();
+      return true;
+    }
+    if (key.vk == VK_MEDIA_PLAY_PAUSE) {
+      if (callbacks.onTogglePause) callbacks.onTogglePause();
+      return true;
+    }
+    if (key.vk == VK_MEDIA_STOP) {
+      if (callbacks.onStopPlayback) callbacks.onStopPlayback();
+      return true;
+    }
+    if (key.vk == VK_MEDIA_PREV_TRACK) {
+      if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
+      return true;
+    }
+    if (key.vk == VK_MEDIA_NEXT_TRACK) {
+      if (callbacks.onPlayNext) callbacks.onPlayNext();
       return true;
     }
     if (key.vk == 'W' || key.ch == 'w' || key.ch == 'W') {

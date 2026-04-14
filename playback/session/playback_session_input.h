@@ -6,6 +6,7 @@
 #include <functional>
 #include <string>
 
+#include "playback/playback_transport.h"
 #include "consoleinput.h"
 #include "playback/ascii/playback_frame_output.h"
 #include "playback/overlay/playback_overlay.h"
@@ -40,6 +41,7 @@ struct PlaybackInputView {
 struct PlaybackInputSignals {
   std::atomic<int>* overlayControlHover = nullptr;
   std::function<void()> requestWindowPresent;
+  std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::atomic<int64_t>* overlayUntilMs = nullptr;
 
   PlaybackLayout* desiredLayout = nullptr;

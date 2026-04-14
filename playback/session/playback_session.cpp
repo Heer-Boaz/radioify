@@ -1,6 +1,7 @@
 #include "playback_session.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <utility>
 
@@ -24,6 +25,7 @@ struct PlaybackSession::Impl {
         progressStart(args.progressStart),
         progressEnd(args.progressEnd),
         config(args.config),
+        requestTransportCommand(std::move(args.requestTransportCommand)),
         enableAscii(config.enableAscii),
         enableAudio(config.enableAudio && audioIsEnabled()),
         host({file, input, screen, baseStyle, accentStyle, dimStyle,
@@ -72,7 +74,8 @@ struct PlaybackSession::Impl {
         enableAscii,
         enableAudio,
         hasSubtitles,
-        host.quitApplicationRequestedPtr()});
+        host.quitApplicationRequestedPtr(),
+        requestTransportCommand});
   }
 
   void shutdownLoop() {
@@ -128,6 +131,7 @@ struct PlaybackSession::Impl {
   const Color& progressStart;
   const Color& progressEnd;
   const VideoPlaybackConfig& config;
+  std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   const bool enableAscii;
   const bool enableAudio;
   PlaybackSessionHost host;

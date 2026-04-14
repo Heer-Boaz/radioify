@@ -88,7 +88,9 @@ The concrete implementation plan lives in
 - Backspace: up
 - Arrows: move selection
 - PgUp/PgDn: page
-- Space: pause/resume
+- Space or Media Play/Pause: pause/resume
+- Media Previous/Next: previous/next track
+- Media Stop: stop playback
 - Ctrl+Left/Right: seek
 - R: toggle 1938 radio filter
 - H: toggle 50Hz mode

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -60,6 +61,7 @@ struct PlaybackLoopRunner::Impl {
   std::atomic<bool>& enableSubtitlesShared;
   const std::string& windowTitle;
   bool* quitApplicationRequested = nullptr;
+  std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   const bool enableAscii;
   const bool enableAudio;
   const bool hasSubtitles;
@@ -113,6 +115,7 @@ struct PlaybackLoopRunner::Impl {
         enableSubtitlesShared(args.enableSubtitlesShared),
         windowTitle(args.windowTitle),
         quitApplicationRequested(args.quitApplicationRequested),
+        requestTransportCommand(std::move(args.requestTransportCommand)),
         enableAscii(args.enableAscii),
         enableAudio(args.enableAudio),
         hasSubtitles(args.hasSubtitles),
@@ -142,6 +145,12 @@ struct PlaybackLoopRunner::Impl {
     inputSignals.overlayControlHover = &overlayControlHover;
     inputSignals.requestWindowPresent = [this]() {
       output.requestWindowPresent();
+    };
+    inputSignals.requestTransportCommand = [this](PlaybackTransportCommand cmd) {
+      if (!requestTransportCommand) {
+        return false;
+      }
+      return requestTransportCommand(cmd);
     };
     inputSignals.overlayUntilMs = &overlayUntilMs;
     inputSignals.desiredLayout = &output.desiredLayout();

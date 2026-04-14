@@ -1,9 +1,11 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 
 #include "consoleinput.h"
 #include "consolescreen.h"
+#include "playback/playback_transport.h"
 
 struct VideoPlaybackConfig {
   bool enableAscii = true;
@@ -25,4 +27,6 @@ bool showAsciiVideo(const std::filesystem::path& file,
                     const Color& progressStart,
                     const Color& progressEnd,
                     const VideoPlaybackConfig& config,
-                    bool* quitAppRequested = nullptr);
+                    bool* quitAppRequested = nullptr,
+                    std::function<bool(PlaybackTransportCommand)>
+                        requestTransportCommand = {});

@@ -1,9 +1,11 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 
+#include "playback/playback_transport.h"
 #include "playback/ascii/playback_frame_output.h"
 #include "playback_session_log.h"
 #include "videoplayback.h"
@@ -35,6 +37,7 @@ class PlaybackLoopRunner {
     bool enableAudio = true;
     bool hasSubtitles = false;
     bool* quitApplicationRequested = nullptr;
+    std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   };
 
   explicit PlaybackLoopRunner(Args args);

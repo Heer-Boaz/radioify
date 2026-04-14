@@ -146,7 +146,11 @@ struct InputCallbacks {
   std::function<void()> onResize;
   std::function<void()> onStopPlayback;
   std::function<std::filesystem::path()> onCurrentPlaybackFile;
+  std::function<void()> onPlay;
+  std::function<void()> onPause;
   std::function<void()> onTogglePause;
+  std::function<void()> onPlayPrevious;
+  std::function<void()> onPlayNext;
   std::function<void()> onToggleWindow;
   std::function<void()> onToggleRadio;
   std::function<void()> onToggle50Hz;

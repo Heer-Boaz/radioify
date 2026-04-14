@@ -323,33 +323,70 @@ void queueSeekRequest(PlaybackInputSignals& signals,
   applySeekRequestState(signals, seekState, targetSec, false);
 }
 
+void setPlaybackPaused(const PlaybackInputView& view,
+                       PlaybackInputSignals& signals,
+                       PlaybackSeekState& seekState, bool paused) {
+  if (!view.player || !view.playbackState) return;
+
+  if (!paused && *view.playbackState == PlaybackSessionState::Ended) {
+    if (view.audioOk && *view.audioOk && audioIsPaused()) {
+      audioTogglePause();
+    } else {
+      view.player->setVideoPaused(false);
+    }
+    sendSeekRequest(view, signals, seekState, 0.0);
+    *view.playbackState = PlaybackSessionState::Active;
+    return;
+  }
+
+  if (paused && *view.playbackState == PlaybackSessionState::Ended) {
+    return;
+  }
+
+  bool pausedNow = paused;
+  if (view.audioOk && *view.audioOk) {
+    const bool audioPaused = audioIsPaused();
+    if (audioPaused != paused) {
+      audioTogglePause();
+    }
+    pausedNow = audioIsPaused();
+  } else {
+    view.player->setVideoPaused(paused);
+  }
+  *view.playbackState =
+      pausedNow ? PlaybackSessionState::Paused : PlaybackSessionState::Active;
+}
+
+bool requestPlaybackTransport(PlaybackInputSignals& signals,
+                              PlaybackTransportCommand command) {
+  if (!signals.requestTransportCommand) {
+    return false;
+  }
+  return signals.requestTransportCommand(command);
+}
+
 void handlePlaybackKeyEvent(const PlaybackInputView& view,
                             PlaybackInputSignals& signals,
                             PlaybackSeekState& seekState, const KeyEvent& key) {
   InputCallbacks cb;
   cb.onQuit = [&]() { requestPlaybackExit(view, signals, true); };
+  cb.onPlay = [&]() { setPlaybackPaused(view, signals, seekState, false); };
+  cb.onPause = [&]() { setPlaybackPaused(view, signals, seekState, true); };
   cb.onTogglePause = [&]() {
-    if (!view.player || !view.playbackState) return;
-    if (*view.playbackState == PlaybackSessionState::Ended) {
-      if (view.audioOk && *view.audioOk && audioIsPaused()) {
-        audioTogglePause();
-      } else {
-        view.player->setVideoPaused(false);
-      }
-      sendSeekRequest(view, signals, seekState, 0.0);
-      *view.playbackState = PlaybackSessionState::Active;
-      return;
+    const bool pauseNow = !view.playbackState ||
+                          *view.playbackState != PlaybackSessionState::Paused;
+    setPlaybackPaused(view, signals, seekState, pauseNow);
+  };
+  cb.onStopPlayback = [&]() { requestPlaybackExit(view, signals, false); };
+  cb.onPlayPrevious = [&]() {
+    if (requestPlaybackTransport(signals, PlaybackTransportCommand::Previous)) {
+      requestPlaybackExit(view, signals, false);
     }
-
-    bool pauseNow = *view.playbackState != PlaybackSessionState::Paused;
-    if (view.audioOk && *view.audioOk) {
-      audioTogglePause();
-      pauseNow = audioIsPaused();
-    } else {
-      view.player->setVideoPaused(pauseNow);
+  };
+  cb.onPlayNext = [&]() {
+    if (requestPlaybackTransport(signals, PlaybackTransportCommand::Next)) {
+      requestPlaybackExit(view, signals, false);
     }
-    *view.playbackState =
-        pauseNow ? PlaybackSessionState::Paused : PlaybackSessionState::Active;
   };
   cb.onToggleWindow = [&]() { toggleRequestedLayout(view, signals); };
   cb.onToggleRadio = [&]() { toggleRadio(view); };

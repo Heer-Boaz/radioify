@@ -23,6 +23,7 @@
 #include "videowindow_vs.h"
 #include "videowindow_ps.h"
 #include "videowindow_ps_ui.h"
+#include "playback/playback_media_keys.h"
 #include "subtitle_caption_style.h"
 #if RADIOIFY_HAS_LIBASS
 extern "C" {
@@ -1536,23 +1537,20 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             return 0;
         }
 
-        auto enqueueBackKey = [&]() {
+        auto enqueueKey = [&](WORD vk, char ch = 0, DWORD control = 0) {
             InputEvent ev;
             ev.type = InputEvent::Type::Key;
-            ev.key.vk = VK_BROWSER_BACK;
-            ev.key.ch = 0;
-            ev.key.control = 0;
+            ev.key.vk = vk;
+            ev.key.ch = ch;
+            ev.key.control = control;
             std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
             pThis->m_inputQueue.push_back(ev);
         };
+        auto enqueueBackKey = [&]() {
+            enqueueKey(VK_BROWSER_BACK);
+        };
         auto enqueueForwardKey = [&]() {
-            InputEvent ev;
-            ev.type = InputEvent::Type::Key;
-            ev.key.vk = VK_BROWSER_FORWARD;
-            ev.key.ch = 0;
-            ev.key.control = 0;
-            std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
-            pThis->m_inputQueue.push_back(ev);
+            enqueueKey(VK_BROWSER_FORWARD);
         };
 
         if (uMsg == WM_XBUTTONDOWN || uMsg == WM_XBUTTONUP ||
@@ -1577,6 +1575,32 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             }
             if (cmd == APPCOMMAND_BROWSER_FORWARD) {
                 enqueueForwardKey();
+                return TRUE;
+            }
+            if (cmd == APPCOMMAND_MEDIA_PLAY_PAUSE) {
+                enqueueKey(VK_MEDIA_PLAY_PAUSE);
+                return TRUE;
+            }
+            if (cmd == APPCOMMAND_MEDIA_PLAY) {
+                enqueueKey(kPlaybackVkMediaPlay);
+                return TRUE;
+            }
+            if (cmd == APPCOMMAND_MEDIA_PAUSE) {
+                enqueueKey(kPlaybackVkMediaPause);
+                return TRUE;
+            }
+            if (cmd == APPCOMMAND_MEDIA_STOP) {
+                enqueueKey(VK_MEDIA_STOP);
+                return TRUE;
+            }
+            if (cmd == APPCOMMAND_MEDIA_PREVIOUSTRACK ||
+                cmd == APPCOMMAND_MEDIA_CHANNEL_DOWN) {
+                enqueueKey(VK_MEDIA_PREV_TRACK);
+                return TRUE;
+            }
+            if (cmd == APPCOMMAND_MEDIA_NEXTTRACK ||
+                cmd == APPCOMMAND_MEDIA_CHANNEL_UP) {
+                enqueueKey(VK_MEDIA_NEXT_TRACK);
                 return TRUE;
             }
         }

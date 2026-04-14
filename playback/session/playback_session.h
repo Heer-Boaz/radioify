@@ -1,8 +1,10 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 
+#include "playback/playback_transport.h"
 #include "videoplayback.h"
 
 class PlaybackSession {
@@ -20,6 +22,7 @@ class PlaybackSession {
     const Color& progressEnd;
     const VideoPlaybackConfig& config;
     bool* quitAppRequested = nullptr;
+    std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   };
 
   explicit PlaybackSession(Args args);

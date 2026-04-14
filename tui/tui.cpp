@@ -15,6 +15,7 @@
 #include <mutex>
 #include <memory>
 #include <new>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -26,20 +27,17 @@
 #include "browsermeta.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
-#include "gmeaudio.h"
-#include "gsfaudio.h"
-#include "vgmaudio.h"
-#include "kssaudio.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
 #include "playback_dialog.h"
-#include "psfaudio.h"
 #include "calibration_report.h"
 #include "radio.h"
 #include "audiofilter/radio1938/radio_buffer_io.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
+#include "playback_transport_navigation.h"
 #include "tracklist.h"
+#include "track_browser_state.h"
 #include "loopsplit_cli.h"
 #include "loopsplit_ui.h"
 #include "tui_export.h"
@@ -58,14 +56,6 @@ static std::string toLower(std::string s) {
   });
   return s;
 }
-
-struct TrackBrowserState {
-  bool active = false;
-  std::filesystem::path file;
-  std::vector<TrackEntry> tracks;
-};
-
-static TrackBrowserState gTrackBrowser;
 
 enum class UiDirtyFlags : uint32_t {
   None = 0,
@@ -145,32 +135,6 @@ static DWORD waitForBrowserWake(ConsoleInput& input, HANDLE asyncWakeHandle,
       MWMO_INPUTAVAILABLE);
 }
 
-static std::filesystem::path normalizeTrackBrowserPath(
-    std::filesystem::path path) {
-  if (!path.has_parent_path()) {
-    path = std::filesystem::path(".") / path;
-  }
-  return path;
-}
-
-static bool isTrackBrowserActive(const BrowserState& state) {
-  return gTrackBrowser.active && state.dir == gTrackBrowser.file;
-}
-
-static const TrackEntry* findTrackEntry(int trackIndex) {
-  if (trackIndex < 0) return nullptr;
-  if (trackIndex < static_cast<int>(gTrackBrowser.tracks.size())) {
-    const auto& entry = gTrackBrowser.tracks[static_cast<size_t>(trackIndex)];
-    if (entry.index == trackIndex) {
-      return &entry;
-    }
-  }
-  for (const auto& entry : gTrackBrowser.tracks) {
-    if (entry.index == trackIndex) return &entry;
-  }
-  return nullptr;
-}
-
 static bool isSupportedImageExt(const std::filesystem::path& p) {
   std::string ext = toLower(p.extension().string());
   return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
@@ -183,27 +147,6 @@ static bool isVideoExt(const std::filesystem::path& p) {
 
 static bool isSupportedMediaExt(const std::filesystem::path& p) {
   return isSupportedAudioExt(p) || isSupportedImageExt(p) || isVideoExt(p);
-}
-
-static bool listTracksForFile(const std::filesystem::path& path,
-                              std::vector<TrackEntry>* tracks,
-                              std::string* error) {
-  if (isKssExt(path)) {
-    return kssListTracks(path, tracks, error);
-  }
-  if (isGmeExt(path)) {
-    return gmeListTracks(path, tracks, error);
-  }
-  if (isGsfExt(path)) {
-    return gsfListTracks(path, tracks, error);
-  }
-  if (isVgmExt(path)) {
-    return vgmListTracks(path, tracks, error);
-  }
-  if (isPsfExt(path)) {
-    return psfListTracks(path, tracks, error);
-  }
-  return false;
 }
 
 static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
@@ -318,8 +261,8 @@ static void refreshBrowser(BrowserState& state,
     if (state.dir.has_parent_path()) {
       state.entries.push_back(FileEntry{"..", state.dir.parent_path(), true});
     }
-    int digits = trackLabelDigits(gTrackBrowser.tracks.size());
-    for (const auto& track : gTrackBrowser.tracks) {
+    int digits = trackLabelDigits(trackBrowserTracks().size());
+    for (const auto& track : trackBrowserTracks()) {
       FileEntry entry;
       entry.name = formatTrackLabel(track, digits);
       entry.path = state.dir;
@@ -328,8 +271,8 @@ static void refreshBrowser(BrowserState& state,
       state.entries.push_back(std::move(entry));
     }
   } else if (!optionsActive) {
-    if (gTrackBrowser.active && state.dir != gTrackBrowser.file) {
-      gTrackBrowser.active = false;
+    if (trackBrowserActive() && state.dir != trackBrowserFile()) {
+      clearTrackBrowserState();
     }
     state.entries = listEntries(state.dir);
   }
@@ -472,9 +415,9 @@ static std::string buildTrackSelectionMeta(const BrowserState& browser) {
     if (track && track->lengthMs > 0) {
       metaLine += "  " + formatTime(static_cast<double>(track->lengthMs) / 1000.0);
     }
-    if (!gTrackBrowser.tracks.empty()) {
+    if (!trackBrowserTracks().empty()) {
       metaLine += "  Track " + std::to_string(entry.trackIndex + 1) + "/" +
-                  std::to_string(gTrackBrowser.tracks.size());
+                  std::to_string(trackBrowserTracks().size());
     }
   }
   return metaLine;
@@ -738,31 +681,13 @@ int runTui(Options o) {
         pendingVideo = inputPath;
         hasPendingVideo = true;
       } else {
-        if (isKssExt(inputPath) || isGmeExt(inputPath) || isVgmExt(inputPath) ||
-            isPsfExt(inputPath)) {
-          std::filesystem::path trackPath =
-              normalizeTrackBrowserPath(inputPath);
-          std::vector<TrackEntry> tracks;
-          std::string error;
-          bool listed = listTracksForFile(trackPath, &tracks, &error);
-          if (listed) {
-            gTrackBrowser.file = trackPath;
-            gTrackBrowser.tracks = tracks;
-            gTrackBrowser.active = tracks.size() > 1;
-          } else {
-            gTrackBrowser.active = false;
-            gTrackBrowser.tracks.clear();
-          }
-          if (listed && tracks.size() > 1) {
-            browser.dir = trackPath;
-            browser.selected = 0;
-            browser.scrollRow = 0;
-            browser.filter.clear();
-            setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-            refreshBrowser(browser, "");
-          } else {
-            tryStartAudioFile(inputPath);
-          }
+        if (loadTrackBrowserForFile(inputPath)) {
+          browser.dir = trackBrowserFile();
+          browser.selected = 0;
+          browser.scrollRow = 0;
+          browser.filter.clear();
+          setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
+          refreshBrowser(browser, "");
         } else {
           tryStartAudioFile(inputPath);
         }
@@ -850,24 +775,73 @@ int runTui(Options o) {
     }
   };
 
+  using playback_transport_navigation::PlaybackTarget;
+  playback_transport_navigation::Navigator::Callbacks transportCallbacks;
+  transportCallbacks.dirty = &dirty;
+  transportCallbacks.markDirty = [&]() { markDirty(); };
+  transportCallbacks.markLayoutDirty = [&]() { markLayoutDirty(); };
+  transportCallbacks.refreshBrowser = [&](const std::string& initialName) {
+    refreshBrowser(browser, initialName);
+  };
+  playback_transport_navigation::Navigator transportNavigator(
+      browser, std::move(transportCallbacks));
+
+  std::function<bool(const PlaybackTarget&)> playPlaybackTarget;
+  playPlaybackTarget = [&](const PlaybackTarget& initialTarget) {
+    PlaybackTarget target = initialTarget;
+    while (!target.file.empty()) {
+      if (!transportNavigator.syncBrowserToPlaybackTarget(target)) {
+        return false;
+      }
+      if (target.trackIndex >= 0) {
+        return tryStartAudioFile(target.file, target.trackIndex);
+      }
+      if (isSupportedImageExt(target.file)) {
+        showAsciiArt(target.file, input, screen, kStyleNormal, kStyleAccent,
+                     kStyleDim);
+        markDirty();
+        return true;
+      }
+      if (isVideoExt(target.file)) {
+        bool quitAppRequested = false;
+        std::optional<PlaybackTarget> pendingTransportTarget;
+        auto requestTransportCommand = [&](PlaybackTransportCommand command) {
+          const int direction =
+              (command == PlaybackTransportCommand::Previous) ? -1 : 1;
+          pendingTransportTarget =
+              transportNavigator.resolveAdjacentPlaybackTarget(target,
+                                                              direction);
+          return pendingTransportTarget.has_value();
+        };
+        bool handled = showAsciiVideo(
+            target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
+            kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
+            kProgressEnd, videoConfig, &quitAppRequested,
+            requestTransportCommand);
+        if (quitAppRequested) {
+          running = false;
+          return true;
+        }
+        if (pendingTransportTarget) {
+          target = *pendingTransportTarget;
+          continue;
+        }
+        if (handled) {
+          markDirty();
+          return true;
+        }
+        return tryStartAudioFile(target.file);
+      }
+      return tryStartAudioFile(target.file);
+    }
+    return false;
+  };
+
   if (hasPendingImage) {
-    showAsciiArt(pendingImage, input, screen, kStyleNormal, kStyleAccent,
-                 kStyleDim);
-    markDirty();
+    playPlaybackTarget({pendingImage, -1});
   }
   if (hasPendingVideo) {
-    bool quitAppRequested = false;
-    bool handled =
-        showAsciiVideo(pendingVideo, input, screen, kStyleNormal, kStyleAccent,
-                       kStyleDim, kStyleProgressEmpty, kStyleProgressFrame,
-                       kProgressStart, kProgressEnd, videoConfig,
-                       &quitAppRequested);
-    if (quitAppRequested) {
-      running = false;
-    } else if (!handled) {
-      tryStartAudioFile(pendingVideo);
-    }
-    markDirty();
+    playPlaybackTarget({pendingVideo, -1});
   }
 
   struct CommandEntry {
@@ -994,54 +968,16 @@ int runTui(Options o) {
                              static_cast<int>(browser.entries.size()) - 1);
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         if (entry.trackIndex >= 0) {
-          return tryStartAudioFile(file, entry.trackIndex);
+          return playPlaybackTarget({file, entry.trackIndex});
         }
       }
       return true;
     }
-    if (isSupportedImageExt(file)) {
-      showAsciiArt(file, input, screen, kStyleNormal, kStyleAccent, kStyleDim);
-      markDirty();
+    if (isSupportedImageExt(file) || isVideoExt(file)) {
+      return playPlaybackTarget({file, -1});
+    }
+    if (transportNavigator.activateTrackBrowser(file)) {
       return true;
-    }
-    if (isVideoExt(file)) {
-      bool quitAppRequested = false;
-      bool handled = showAsciiVideo(
-          file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-          kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
-          kProgressEnd, videoConfig, &quitAppRequested);
-      if (quitAppRequested) {
-        running = false;
-        return true;
-      }
-      if (handled) {
-        markDirty();
-        return true;
-      }
-    }
-    if (isKssExt(file) || isGmeExt(file) || isVgmExt(file) || isPsfExt(file)) {
-      std::filesystem::path trackPath = normalizeTrackBrowserPath(file);
-      std::vector<TrackEntry> tracks;
-      std::string error;
-      bool listed = listTracksForFile(trackPath, &tracks, &error);
-      if (listed) {
-        gTrackBrowser.file = trackPath;
-        gTrackBrowser.tracks = tracks;
-        gTrackBrowser.active = tracks.size() > 1;
-      } else {
-        gTrackBrowser.active = false;
-        gTrackBrowser.tracks.clear();
-      }
-      if (listed && tracks.size() > 1) {
-        browser.dir = trackPath;
-        browser.selected = 0;
-        browser.scrollRow = 0;
-        browser.filter.clear();
-        setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-        refreshBrowser(browser, "");
-        markLayoutDirty();
-        return true;
-      }
     }
     return tryStartAudioFile(file);
   };
@@ -1060,15 +996,65 @@ int runTui(Options o) {
     renderFile(file);
     didRender = true;
   };
+  callbacks.onPlay = [&]() {
+    const std::filesystem::path nowPlaying = audioGetNowPlaying();
+    if (nowPlaying.empty()) {
+      return;
+    }
+    if (audioIsFinished()) {
+      playPlaybackTarget({nowPlaying, audioGetTrackIndex()});
+      return;
+    }
+    if (audioIsReady() && audioIsPaused()) {
+      audioTogglePause();
+      markDirty();
+    }
+  };
+  callbacks.onPause = [&]() {
+    if (audioIsReady() && !audioIsPaused()) {
+      audioTogglePause();
+      markDirty();
+    }
+  };
   callbacks.onTogglePause = [&]() {
+    const std::filesystem::path nowPlaying = audioGetNowPlaying();
+    if (nowPlaying.empty()) {
+      return;
+    }
+    if (audioIsFinished()) {
+      playPlaybackTarget({nowPlaying, audioGetTrackIndex()});
+      return;
+    }
     audioTogglePause();
+    markDirty();
   };
   callbacks.onStopPlayback = [&]() {
     if (audioIsReady()) {
       audioStop();
+      markDirty();
     }
   };
   callbacks.onCurrentPlaybackFile = [&]() { return audioGetNowPlaying(); };
+  callbacks.onPlayPrevious = [&]() {
+    PlaybackTarget current{audioGetNowPlaying(), audioGetTrackIndex()};
+    if (current.file.empty()) {
+      return;
+    }
+    if (auto target =
+            transportNavigator.resolveAdjacentPlaybackTarget(current, -1)) {
+      playPlaybackTarget(*target);
+    }
+  };
+  callbacks.onPlayNext = [&]() {
+    PlaybackTarget current{audioGetNowPlaying(), audioGetTrackIndex()};
+    if (current.file.empty()) {
+      return;
+    }
+    if (auto target =
+            transportNavigator.resolveAdjacentPlaybackTarget(current, 1)) {
+      playPlaybackTarget(*target);
+    }
+  };
   callbacks.onToggleRadio = [&]() {
     audioToggleRadio();
     markDirty();
@@ -2081,8 +2067,8 @@ int runTui(Options o) {
         int digits = 3;
         const TrackEntry* track = nullptr;
         TrackEntry fallback{};
-        if (nowPlaying == gTrackBrowser.file && !gTrackBrowser.tracks.empty()) {
-          digits = trackLabelDigits(gTrackBrowser.tracks.size());
+        if (nowPlaying == trackBrowserFile() && !trackBrowserTracks().empty()) {
+          digits = trackLabelDigits(trackBrowserTracks().size());
           track = findTrackEntry(trackIndex);
         }
         if (!track) {
