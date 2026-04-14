@@ -142,13 +142,43 @@ function Invoke-NativeTool {
     }
 }
 
-function New-RadioifyWin11Directory {
+function Ensure-RadioifyWin11Directory {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     if (Test-Path -LiteralPath $Path) {
-        Remove-Item -LiteralPath $Path -Recurse -Force
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+        if (-not $item.PSIsContainer) {
+            throw "Expected directory path but found a file: '$Path'"
+        }
+        return
     }
+
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
+}
+
+function Reset-RadioifyWin11StagingDirectory {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    Ensure-RadioifyWin11Directory -Path $Path
+
+    Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force
+}
+
+function Clear-RadioifyWin11DeployRootArtifacts {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    Ensure-RadioifyWin11Directory -Path $Path
+
+    foreach ($artifactName in @(
+            "radioify_explorer.dll",
+            "radioify.ico"
+        )) {
+        $artifactPath = Join-Path $Path $artifactName
+        if (Test-Path -LiteralPath $artifactPath) {
+            Remove-Item -LiteralPath $artifactPath -Force
+        }
+    }
 }
 
 function New-RadioifyWin11PngAsset {
@@ -187,12 +217,42 @@ function New-RadioifyWin11PngAsset {
     $bitmap.Dispose()
 }
 
+function Export-RadioifyWin11PngAssetFromIcon {
+    param(
+        [Parameter(Mandatory = $true)][string]$IconPath,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][int]$Size
+    )
+
+    Add-Type -AssemblyName System.Drawing
+
+    $directory = Split-Path -Parent $Path
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    }
+
+    $icon = $null
+    $bitmap = $null
+    try {
+        $icon = New-Object System.Drawing.Icon($IconPath, $Size, $Size)
+        $bitmap = $icon.ToBitmap()
+        $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally {
+        if ($bitmap) {
+            $bitmap.Dispose()
+        }
+        if ($icon) {
+            $icon.Dispose()
+        }
+    }
+}
+
 function Initialize-RadioifyWin11DeployRoot {
     param([Parameter(Mandatory = $true)][string]$IntegrationDir)
 
     $distRoot = Split-Path -Parent $IntegrationDir
     $deployRoot = Join-Path $IntegrationDir "external-location"
-    New-RadioifyWin11Directory -Path $deployRoot
+    Clear-RadioifyWin11DeployRootArtifacts -Path $deployRoot
 
     # Only the DLL and icon need to be in the external location.
     # radioify.exe lives in dist/ and the DLL finds it two levels up.
@@ -217,7 +277,8 @@ function Initialize-RadioifyWin11PackageLayout {
     param([Parameter(Mandatory = $true)][string]$IntegrationDir)
 
     $layoutDir = Join-Path $IntegrationDir "package-layout"
-    New-RadioifyWin11Directory -Path $layoutDir
+    $distRoot = Split-Path -Parent $IntegrationDir
+    Reset-RadioifyWin11StagingDirectory -Path $layoutDir
 
     Copy-Item -LiteralPath (Join-Path $IntegrationDir "Package.appxmanifest") `
         -Destination (Join-Path $layoutDir "AppxManifest.xml") `
@@ -228,8 +289,20 @@ function Initialize-RadioifyWin11PackageLayout {
 
     $assetsDir = Join-Path $layoutDir "Assets"
     New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
-    New-RadioifyWin11PngAsset -Path (Join-Path $assetsDir "StoreLogo.png") -Size 150
-    New-RadioifyWin11PngAsset -Path (Join-Path $assetsDir "SmallLogo.png") -Size 44
+    $iconSource = Join-Path $distRoot "radioify.ico"
+    if (Test-Path -LiteralPath $iconSource) {
+        Export-RadioifyWin11PngAssetFromIcon `
+            -IconPath $iconSource `
+            -Path (Join-Path $assetsDir "StoreLogo.png") `
+            -Size 150
+        Export-RadioifyWin11PngAssetFromIcon `
+            -IconPath $iconSource `
+            -Path (Join-Path $assetsDir "SmallLogo.png") `
+            -Size 44
+    } else {
+        New-RadioifyWin11PngAsset -Path (Join-Path $assetsDir "StoreLogo.png") -Size 150
+        New-RadioifyWin11PngAsset -Path (Join-Path $assetsDir "SmallLogo.png") -Size 44
+    }
 
     return $layoutDir
 }

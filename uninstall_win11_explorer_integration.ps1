@@ -1,8 +1,7 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [switch]$SkipExplorerRestart,
-    [string]$LogPath,
-    [switch]$PauseOnError
+    [string]$LogPath
 )
 
 Set-StrictMode -Version Latest
@@ -30,6 +29,38 @@ function Test-Win11ExplorerIntegrationAdministrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Get-Win11ExplorerIntegrationLogExcerpt {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogPath,
+        [int]$TailLines = 60
+    )
+
+    if (-not (Test-Path -LiteralPath $LogPath)) {
+        return $null
+    }
+
+    $logFile = Get-Item -LiteralPath $LogPath -ErrorAction SilentlyContinue
+    if (-not $logFile) {
+        return $null
+    }
+
+    if ($logFile.LastWriteTime -lt (Get-Date).AddMinutes(-10)) {
+        return $null
+    }
+
+    $lines = Get-Content -LiteralPath $LogPath -Tail $TailLines -ErrorAction SilentlyContinue |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_) -and
+            $_ -notmatch '^\*{6,}$'
+        }
+
+    if (-not $lines) {
+        return $null
+    }
+
+    return ($lines -join [Environment]::NewLine)
+}
+
 function Invoke-Win11ExplorerIntegrationElevated {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
@@ -50,7 +81,7 @@ function Invoke-Win11ExplorerIntegrationElevated {
     if ($SkipExplorerRestart) {
         $argumentList += "-SkipExplorerRestart"
     }
-    $argumentList += @("-LogPath", $LogPath, "-PauseOnError")
+    $argumentList += @("-LogPath", $LogPath)
 
     try {
         $process = Start-Process -FilePath $hostPath -ArgumentList $argumentList -Verb RunAs -Wait -PassThru
@@ -58,7 +89,10 @@ function Invoke-Win11ExplorerIntegrationElevated {
         throw "Elevation was cancelled or failed. Re-run .\\uninstall_win11_explorer_integration.ps1 and accept the UAC prompt."
     }
 
-    exit ([int]$process.ExitCode)
+    $exitCode = [int]$process.ExitCode
+    if ($exitCode -ne 0) {
+        throw "Elevated uninstall failed with exit code $exitCode."
+    }
 }
 
 $repoRoot = $PSScriptRoot
@@ -73,14 +107,15 @@ if (-not (Test-Path -LiteralPath $uninstallScript)) {
     throw "Win11 Explorer integration uninstall script not found at '$uninstallScript'."
 }
 
-if (-not $WhatIfPreference -and -not (Test-Win11ExplorerIntegrationAdministrator)) {
-    Invoke-Win11ExplorerIntegrationElevated `
-        -ScriptPath $PSCommandPath `
-        -SkipExplorerRestart:$SkipExplorerRestart `
-        -LogPath $LogPath
-}
-
 try {
+    if (-not $WhatIfPreference -and -not (Test-Win11ExplorerIntegrationAdministrator)) {
+        Invoke-Win11ExplorerIntegrationElevated `
+            -ScriptPath $PSCommandPath `
+            -SkipExplorerRestart:$SkipExplorerRestart `
+            -LogPath $LogPath
+        return
+    }
+
     if (-not $WhatIfPreference) {
         Start-Transcript -Path $LogPath -Force | Out-Null
         $transcriptStarted = $true
@@ -102,10 +137,12 @@ try {
     }
 } catch {
     Write-Error $_
-    Write-Host "Log saved to: $LogPath"
-    if ($PauseOnError -and -not $WhatIfPreference) {
-        [void](Read-Host "Uninstall failed. Press Enter to close this window")
+    $excerpt = Get-Win11ExplorerIntegrationLogExcerpt -LogPath $LogPath
+    if ($excerpt) {
+        Write-Host "Recent log output:"
+        Write-Host $excerpt
     }
+    Write-Host "Log saved to: $LogPath"
     exit 1
 } finally {
     if ($transcriptStarted) {

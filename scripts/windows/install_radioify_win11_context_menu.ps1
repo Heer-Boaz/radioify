@@ -24,7 +24,6 @@ $manifestInfo = Get-RadioifyWin11ManifestInfo -IntegrationDir $resolvedIntegrati
 $makeAppxExe = Resolve-WindowsSdkExecutable -ToolName "makeappx.exe"
 $signToolExe = Resolve-WindowsSdkExecutable -ToolName "signtool.exe"
 
-$deployRoot = Get-RadioifyWin11DeployRootPath -IntegrationDir $resolvedIntegrationDir
 $packageLayout = Get-RadioifyWin11PackageLayoutPath -IntegrationDir $resolvedIntegrationDir
 $packagePath = Get-RadioifyWin11PackagePath -IntegrationDir $resolvedIntegrationDir -PackageName $manifestInfo.PackageName
 $certInfo = $null
@@ -47,39 +46,28 @@ function Enter-RadioifyShellMaintenance {
     $script:shellStopped = $true
 }
 
-if ($PSCmdlet.ShouldProcess($deployRoot, "Stage Radioify external package contents")) {
-    $deployRoot = Initialize-RadioifyWin11DeployRoot -IntegrationDir $resolvedIntegrationDir
-}
+function Build-RadioifyWin11Package {
+    $script:packageLayout = Initialize-RadioifyWin11PackageLayout -IntegrationDir $resolvedIntegrationDir
+    $script:certInfo = Ensure-RadioifyWin11Certificate -Subject $manifestInfo.Publisher -IntegrationDir $resolvedIntegrationDir
 
-if ($PSCmdlet.ShouldProcess($packageLayout, "Stage Win11 Explorer integration package layout")) {
-    $packageLayout = Initialize-RadioifyWin11PackageLayout -IntegrationDir $resolvedIntegrationDir
-}
-
-if ($PSCmdlet.ShouldProcess($manifestInfo.Publisher, "Ensure Win11 Explorer integration signing certificate")) {
-    $certInfo = Ensure-RadioifyWin11Certificate -Subject $manifestInfo.Publisher -IntegrationDir $resolvedIntegrationDir
-}
-
-if ($PSCmdlet.ShouldProcess($packagePath, "Pack Win11 Explorer integration MSIX")) {
     if (Test-Path -LiteralPath $packagePath) {
         Remove-Item -LiteralPath $packagePath -Force
     }
     Invoke-NativeTool -FilePath $makeAppxExe -Arguments @(
         "pack",
-        "/d", $packageLayout,
+        "/d", $script:packageLayout,
         "/p", $packagePath,
         "/o",
         "/nv"
     )
-}
 
-if ($PSCmdlet.ShouldProcess($packagePath, "Sign Win11 Explorer integration MSIX")) {
-    if (-not $certInfo) {
+    if (-not $script:certInfo) {
         throw "Signing certificate was not prepared before signing."
     }
     Invoke-NativeTool -FilePath $signToolExe -Arguments @(
         "sign",
         "/fd", "SHA256",
-        "/sha1", $certInfo.Certificate.Thumbprint,
+        "/sha1", $script:certInfo.Certificate.Thumbprint,
         "/s", "My",
         $packagePath
     )
@@ -92,8 +80,12 @@ if ($WhatIfPreference) {
 
 try {
     $installedPackage = Get-InstalledRadioifyWin11Package -PackageName $manifestInfo.PackageName
+    if ($installedPackage -and $ReplaceExisting -and $SkipExplorerRestart) {
+        throw "Cannot use -SkipExplorerRestart while replacing an existing Win11 Explorer integration package. Explorer must be restarted so the packaged shell extension can be unloaded."
+    }
+
     if ($installedPackage -and (Test-RadioifyWin11PackageBusy -Package $installedPackage)) {
-        if ($ReplaceExisting -and -not $SkipExplorerRestart) {
+        if ($ReplaceExisting) {
             Enter-RadioifyShellMaintenance -Message "Stopping Explorer and packaged COM host before waiting for package servicing to settle..."
         }
 
@@ -116,10 +108,11 @@ try {
         Write-Host "No package changes were made. Use -ReplaceExisting to force a reinstall."
     }
 
+    if (-not $alreadyInstalled -and $PSCmdlet.ShouldProcess($packagePath, "Build Win11 Explorer integration package")) {
+        Build-RadioifyWin11Package
+    }
+
     if ($installedPackage -and $ReplaceExisting -and $PSCmdlet.ShouldProcess($installedPackage.PackageFullName, "Remove existing Win11 Explorer integration package")) {
-        if ($SkipExplorerRestart) {
-            throw "Cannot use -SkipExplorerRestart while replacing an existing Win11 Explorer integration package. Explorer must be restarted so the packaged shell extension can be unloaded."
-        }
         Enter-RadioifyShellMaintenance -Message "Stopping Explorer and packaged COM host before package replacement..."
         Write-Host "Removing existing Win11 Explorer integration package..."
         Remove-RadioifyWin11Package -PackageFullName $installedPackage.PackageFullName
@@ -136,6 +129,8 @@ try {
         if (-not (Test-Path -LiteralPath $packagePath)) {
             throw "Package file was not created: '$packagePath'"
         }
+
+        $deployRoot = Initialize-RadioifyWin11DeployRoot -IntegrationDir $resolvedIntegrationDir
 
         if ($shellStopped) {
             Write-Host "Installing Win11 Explorer integration package while Explorer remains stopped..."
@@ -170,7 +165,7 @@ try {
             Write-Host "Radioify Windows 11 Explorer integration is already present. No package changes were made."
         }
         Write-Host "Package: $packagePath"
-        Write-Host "External location: $deployRoot"
+        Write-Host "External location: $(Get-RadioifyWin11DeployRootPath -IntegrationDir $resolvedIntegrationDir)"
         if ($SkipExplorerRestart) {
             Write-Host "Explorer was not restarted. Restart Explorer manually if the new command does not appear immediately."
         }
