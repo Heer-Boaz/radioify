@@ -50,9 +50,9 @@ inline void renderDialogBody(ConsoleScreen& screen,
 
   int contentWidth = 0;
   for (const auto& line : lines) {
-    contentWidth = std::max(contentWidth, utf8CodepointCount(line));
+    contentWidth = std::max(contentWidth, utf8DisplayWidth(line));
   }
-  int footerWidth = footer.empty() ? 0 : utf8CodepointCount(footer);
+  int footerWidth = footer.empty() ? 0 : utf8DisplayWidth(footer);
   int maxPopupWidth = std::max(7, width - 2);
   int popupWidth =
       std::clamp(std::max(contentWidth, footerWidth) + 4, 7, maxPopupWidth);

@@ -53,6 +53,7 @@
 #include "loopsplit_cli.h"
 #include "loopsplit_ui.h"
 #include "tui_export.h"
+#include "ui_footer_layout.h"
 #include "ui_helpers.h"
 #include "ui_input_pump.h"
 #include "ui_viewport.h"
@@ -715,7 +716,6 @@ int runTui(Options o) {
   int searchBarWidth = 0;
   int searchBarClearStart = -1;
   int searchBarClearEnd = -1;
-  const int footerLines = 5;
   int width = 0;
   int height = 0;
   int listHeight = 0;
@@ -739,6 +739,7 @@ int runTui(Options o) {
   bool forceFullRedraw = true;
   bool screenSizeDirty = true;
   BrowserViewport viewport;
+  BrowserFooterLayout footerLayout;
   auto markDirty = [&](UiDirtyFlags flags = UiDirtyFlags::Frame) {
     dirty = true;
     dirtyFlags |= flags;
@@ -896,18 +897,48 @@ int runTui(Options o) {
     bool valid = false;
   };
 
+  FileContextMenuState fileContextMenu;
+  FileContextMenuLayout fileContextLayout;
+  MelodyExportTaskState melodyExportTask;
+  LoopSplitTaskState loopSplitTask;
+
+  auto buildFooterLayout = [&]() {
+    bool hasAnalyzeStatus = false;
+    {
+      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
+      hasAnalyzeStatus =
+          melodyExportTask.hasResult && !melodyExportTask.status.empty();
+    }
+    bool hasLoopSplitStatus = false;
+    {
+      std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
+      hasLoopSplitStatus =
+          loopSplitTask.hasResult && !loopSplitTask.status.empty();
+    }
+    const std::filesystem::path nowPlaying = audioGetNowPlaying();
+    const bool showNowPlaying =
+        !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
+        audioIsHolding();
+    return computeBrowserFooterLayout(
+        !melodyVisualizationEnabled, !audioGetWarning().empty(),
+        hasAnalyzeStatus, hasLoopSplitStatus, o.play, showNowPlaying,
+        o.play && audioIsReady());
+  };
+
   auto rebuildLayout = [&]() {
     if (screenSizeDirty) {
       screen.updateSize();
       screenSizeDirty = false;
     }
+    footerLayout = buildFooterLayout();
     const bool browserInteractionEnabled = !melodyVisualizationEnabled;
     const bool showHeaderLabel =
         browserInteractionEnabled &&
         (optionsBrowserIsActive(browser) || isTrackBrowserActive(browser));
     viewport = computeBrowserViewport(screen.width(), screen.height(),
                                       browserInteractionEnabled,
-                                      showHeaderLabel, footerLines,
+                                      showHeaderLabel,
+                                      footerLayout.reservedLines,
                                       searchBarClearButtonWidth);
     width = viewport.width;
     height = viewport.height;
@@ -921,7 +952,7 @@ int runTui(Options o) {
     if (browserInteractionEnabled) {
       listTop = std::max(listTop, breadcrumbY + 1);
     }
-    listHeight = std::max(1, height - listTop - footerLines);
+    listHeight = std::max(1, height - listTop - footerLayout.reservedLines);
     layout = buildLayout(browser, width, listHeight);
     if (layout.totalRows <= layout.rowsVisible) {
       browser.scrollRow = 0;
@@ -937,11 +968,6 @@ int runTui(Options o) {
     }
     layoutDirty = false;
   };
-
-  FileContextMenuState fileContextMenu;
-  FileContextMenuLayout fileContextLayout;
-  MelodyExportTaskState melodyExportTask;
-  LoopSplitTaskState loopSplitTask;
 
   auto isBackgroundTaskRunning = [&]() {
     bool running = false;
@@ -1394,7 +1420,7 @@ int runTui(Options o) {
     std::vector<std::string> items = {" Play", " Analyze", " Split Loop"};
     int itemWidth = 0;
     for (const auto& item : items) {
-      itemWidth = std::max(itemWidth, utf8CodepointCount(item));
+      itemWidth = std::max(itemWidth, utf8DisplayWidth(item));
     }
     layout.width = std::max(24, itemWidth + 4);
     layout.height = static_cast<int>(items.size()) + 2;
@@ -1532,12 +1558,13 @@ int runTui(Options o) {
       if (y < graphTop || y >= bottom) continue;
       if (labelWidth > 0) {
         std::string label = midiToNoteName(midi);
-        if (utf8CodepointCount(label) < labelWidth) {
+        if (utf8DisplayWidth(label) < labelWidth) {
           label.insert(label.begin(),
-                       static_cast<size_t>(labelWidth - utf8CodepointCount(label)),
+                       static_cast<size_t>(labelWidth - utf8DisplayWidth(label)),
                        ' ');
         }
-        screen.writeText(0, y, utf8Take(label, labelWidth), kStyleDim);
+        screen.writeText(0, y, utf8TakeDisplayWidth(label, labelWidth),
+                         kStyleDim);
       }
       screen.writeRun(chartX, y, chartWidth, L'.', kStyleDim);
     }
@@ -1906,6 +1933,12 @@ int runTui(Options o) {
     processSystemPlaybackCommands();
     syncAudioSystemControls();
 
+    BrowserFooterLayout nextFooterLayout = buildFooterLayout();
+    if (nextFooterLayout != footerLayout) {
+      footerLayout = nextFooterLayout;
+      markLayoutDirty();
+    }
+
     if (browser.viewMode != preInputViewMode ||
         melodyVisualizationEnabled != preInputMelodyVisualization ||
         optionsBrowserIsActive(browser) != preInputOptionsMode ||
@@ -2042,7 +2075,8 @@ int runTui(Options o) {
         std::string shownSearchLine = fitLine(searchLine, searchTextWidth);
         screen.writeText(0, searchBarY, shownSearchLine, searchStyle);
         if (showSearchCursor && searchTextWidth > 0) {
-          int cursorX = std::min(searchTextWidth - 1, static_cast<int>(shownSearchLine.size()));
+          int cursorX =
+              std::min(searchTextWidth - 1, utf8DisplayWidth(shownSearchLine));
           screen.writeChar(cursorX, searchBarY, L'\u2588', searchStyle);
         }
         if (searchBarClearStart >= 0 && searchBarClearEnd > searchBarClearStart) {
@@ -2060,8 +2094,8 @@ int runTui(Options o) {
         if (breadcrumbHover >= 0) {
           const auto& crumb =
               breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
-          std::string hoverText = utf8Slice(breadcrumbLine.text, crumb.startX,
-                                            crumb.endX - crumb.startX);
+          std::string hoverText = utf8SliceDisplayWidth(
+              breadcrumbLine.text, crumb.startX, crumb.endX - crumb.startX);
           screen.writeText(crumb.startX, breadcrumbY, hoverText,
                            kStyleBreadcrumbHover);
         }
@@ -2112,7 +2146,7 @@ int runTui(Options o) {
 
       int footerStart = listTop + listHeight;
       int line = footerStart;
-      if (line < height && browserInteractionEnabled) {
+      if (line < height && footerLayout.showMeta) {
         std::string meta;
         if (optionsMode) {
           meta = optionsBrowserSelectionMeta(browser);
@@ -2125,7 +2159,7 @@ int runTui(Options o) {
           screen.writeText(0, line++, fitLine(meta, width), kStyleDim);
         }
       }
-      if (line < height) {
+      if (line < height && footerLayout.showWarning) {
         std::string warning = audioGetWarning();
         if (!warning.empty()) {
           screen.writeText(0, line++, fitLine("  Warning: " + warning, width),
@@ -2142,7 +2176,8 @@ int runTui(Options o) {
           exportSuccess = melodyExportTask.success;
           exportStatus = melodyExportTask.status;
         }
-        if (exportHasResult && !exportStatus.empty()) {
+        if (footerLayout.showAnalyzeStatus && exportHasResult &&
+            !exportStatus.empty()) {
           Style statusStyle = exportSuccess ? kStyleDim : kStyleAlert;
           screen.writeText(0, line++,
                            fitLine(" Analyze: " + exportStatus, width),
@@ -2157,7 +2192,8 @@ int runTui(Options o) {
           loopSplitSuccess = loopSplitTask.success;
           loopSplitStatus = loopSplitTask.status;
         }
-        if (loopSplitHasResult && !loopSplitStatus.empty()) {
+        if (footerLayout.showLoopSplitStatus && loopSplitHasResult &&
+            !loopSplitStatus.empty()) {
           Style statusStyle = loopSplitSuccess ? kStyleDim : kStyleAlert;
           screen.writeText(0, line++,
                            fitLine(" Loop Split: " + loopSplitStatus, width),
@@ -2181,12 +2217,14 @@ int runTui(Options o) {
         }
         nowLabel += "  |  " + formatTrackLabel(*track, digits);
       }
-      screen.writeText(0, line++, fitLine(std::string(" ") + nowLabel, width),
-                       kStyleAccent);
+      if (footerLayout.showNowPlaying) {
+        screen.writeText(0, line++, fitLine(std::string(" ") + nowLabel, width),
+                         kStyleAccent);
+      }
 
       actionStrip.buttons.clear();
       actionStrip.y = -1;
-      if (o.play && line + 1 < height) {
+      if (footerLayout.showActionStrip && line < height) {
         actionStrip.y = line;
         struct ActionRenderItem {
           ActionStripItem id;
@@ -2204,15 +2242,15 @@ int runTui(Options o) {
         auto radioLabels = makeLabels(radioState);
         items.push_back({ActionStripItem::Radio, radioLabels.first,
                          radioLabels.second, audioIsRadioEnabled(),
-                         std::max(utf8CodepointCount(radioLabels.first),
-                                  utf8CodepointCount(radioLabels.second))});
+                         std::max(utf8DisplayWidth(radioLabels.first),
+                                  utf8DisplayWidth(radioLabels.second))});
         auto melodyLabels =
             makeLabels(melodyVisualizationEnabled ? "Melody: On" : "Melody: Off");
         items.push_back(
             {ActionStripItem::MelodyViz, melodyLabels.first,
              melodyLabels.second, melodyVisualizationEnabled,
-             std::max(utf8CodepointCount(melodyLabels.first),
-                      utf8CodepointCount(melodyLabels.second))});
+             std::max(utf8DisplayWidth(melodyLabels.first),
+                      utf8DisplayWidth(melodyLabels.second))});
         bool show50Hz = audioSupports50HzToggle();
         if (browserInteractionEnabled) {
           const std::string gridIcon = "\xE2\x96\xA6";
@@ -2233,8 +2271,8 @@ int runTui(Options o) {
           auto viewLabels = makeLabels(viewState);
           items.push_back({ActionStripItem::View, viewLabels.first,
                            viewLabels.second, false,
-                           std::max(utf8CodepointCount(viewLabels.first),
-                                    utf8CodepointCount(viewLabels.second))});
+                           std::max(utf8DisplayWidth(viewLabels.first),
+                                    utf8DisplayWidth(viewLabels.second))});
         }
         if (show50Hz) {
           std::string hzState =
@@ -2242,30 +2280,30 @@ int runTui(Options o) {
           auto hzLabels = makeLabels(hzState);
           items.push_back({ActionStripItem::Hz50, hzLabels.first,
                            hzLabels.second, audioIs50HzEnabled(),
-                           std::max(utf8CodepointCount(hzLabels.first),
-                                    utf8CodepointCount(hzLabels.second))});
+                           std::max(utf8DisplayWidth(hzLabels.first),
+                                    utf8DisplayWidth(hzLabels.second))});
         }
         if (browserInteractionEnabled && optionsBrowserCanToggle(browser)) {
           auto optLabels = makeLabels("Options");
           bool optActive = optionsBrowserIsActive(browser);
           items.push_back({ActionStripItem::Options, optLabels.first,
                            optLabels.second, optActive,
-                           std::max(utf8CodepointCount(optLabels.first),
-                                    utf8CodepointCount(optLabels.second))});
+                           std::max(utf8DisplayWidth(optLabels.first),
+                                    utf8DisplayWidth(optLabels.second))});
         }
         const int gap = 2;
         int x = 0;
         for (const auto& item : items) {
           bool hovered = (actionHover == static_cast<int>(actionStrip.buttons.size()));
           std::string text = hovered ? item.labelHover : item.label;
-          int textWidth = utf8CodepointCount(text);
+          int textWidth = utf8DisplayWidth(text);
           if (x >= width) break;
           int avail = width - x;
           if (avail <= 0) break;
           int widthUsed = std::min(item.width, avail);
           if (textWidth > widthUsed) {
-            text = utf8Take(text, widthUsed);
-            textWidth = utf8CodepointCount(text);
+            text = utf8TakeDisplayWidth(text, widthUsed);
+            textWidth = utf8DisplayWidth(text);
           }
           if (textWidth <= 0) break;
           if (textWidth < widthUsed) {
@@ -2287,7 +2325,7 @@ int runTui(Options o) {
       }
 
       int peakMeterY = -1;
-      if (line + 1 < height) {
+      if (footerLayout.showPeakMeter && line < height) {
         peakMeterY = line;
         line++;
       }
@@ -2367,7 +2405,7 @@ int runTui(Options o) {
         int meterX = suffixBaseX;
         if (volPos != std::string::npos) {
           int prefixWidth =
-              utf8CodepointCount(rendered.substr(0, volPos + 1));
+              utf8DisplayWidth(rendered.substr(0, volPos + 1));
           meterX = suffixBaseX + prefixWidth;
         }
         if (meterX < 0) meterX = 0;
@@ -2429,15 +2467,15 @@ int runTui(Options o) {
           }
 
           std::string prompt = "> " + paletteQuery;
-          if (utf8CodepointCount(prompt) > inner) {
-            prompt = utf8Take(prompt, inner);
+          if (utf8DisplayWidth(prompt) > inner) {
+            prompt = utf8TakeDisplayWidth(prompt, inner);
           }
           screen.writeText(x0 + 1, paletteLayout.inputY, prompt, kStyleNormal);
 
           if (paletteFiltered.empty()) {
             std::string none = "(no matches)";
-            if (utf8CodepointCount(none) > inner) {
-              none = utf8Take(none, inner);
+            if (utf8DisplayWidth(none) > inner) {
+              none = utf8TakeDisplayWidth(none, inner);
             }
             screen.writeText(x0 + 1, paletteLayout.listY, none, kStyleDim);
           } else {
@@ -2451,13 +2489,13 @@ int runTui(Options o) {
                   cmds[static_cast<size_t>(paletteFiltered[static_cast<size_t>(idx)])];
               std::string left = cmd.label;
               std::string right = cmd.hotkey;
-              int rightWidth = utf8CodepointCount(right);
+              int rightWidth = utf8DisplayWidth(right);
               int gap = rightWidth > 0 ? 1 : 0;
               int maxLeft = std::max(0, inner - rightWidth - gap);
-              if (utf8CodepointCount(left) > maxLeft) {
-                left = utf8Take(left, maxLeft);
+              if (utf8DisplayWidth(left) > maxLeft) {
+                left = utf8TakeDisplayWidth(left, maxLeft);
               }
-              int leftWidth = utf8CodepointCount(left);
+              int leftWidth = utf8DisplayWidth(left);
               std::string lineText = left;
               if (leftWidth < maxLeft) {
                 lineText.append(static_cast<size_t>(maxLeft - leftWidth), ' ');
@@ -2507,10 +2545,10 @@ int runTui(Options o) {
               continue;
             }
             std::string text = items[static_cast<size_t>(i)];
-            if (utf8CodepointCount(text) > inner) {
-              text = utf8Take(text, inner);
+            if (utf8DisplayWidth(text) > inner) {
+              text = utf8TakeDisplayWidth(text, inner);
             }
-            int textWidth = utf8CodepointCount(text);
+            int textWidth = utf8DisplayWidth(text);
             if (textWidth < inner) {
               text.append(static_cast<size_t>(inner - textWidth), ' ');
             }
@@ -2550,7 +2588,7 @@ int runTui(Options o) {
           std::string sourceName =
               exportSource.empty() ? std::string("(unknown)")
                                    : toUtf8String(exportSource.filename());
-          int popupWidth = std::max(46, utf8CodepointCount(sourceName) + 8);
+          int popupWidth = std::max(46, utf8DisplayWidth(sourceName) + 8);
           popupWidth = std::min(width - 2, popupWidth);
           popupWidth = std::max(24, popupWidth);
           int availableHeight = std::max(1, height - listTop);

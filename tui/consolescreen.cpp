@@ -19,23 +19,9 @@
 #include "playback/playback_media_artwork_catalog.h"
 #include "playback/playback_media_metadata_catalog.h"
 #include "runtime_helpers.h"
+#include "ui_helpers.h"
+#include "unicode_display_width.h"
 #include "videodecoder.h"
-
-static std::wstring utf8ToWide(const std::string& text) {
-  if (text.empty()) return {};
-  int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), static_cast<int>(text.size()), nullptr, 0);
-  if (needed <= 0) {
-    std::wstring fallback;
-    fallback.reserve(text.size());
-    for (unsigned char c : text) {
-      fallback.push_back(static_cast<wchar_t>(c));
-    }
-    return fallback;
-  }
-  std::wstring out(needed, L'\0');
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), static_cast<int>(text.size()), out.data(), needed);
-  return out;
-}
 
 static bool wideToUtf8(const std::wstring& text, std::string& out) {
   if (text.empty()) {
@@ -55,41 +41,53 @@ static bool wideToUtf8(const std::wstring& text, std::string& out) {
   return true;
 }
 
-static size_t utf8Next(const std::string& s, size_t i) {
-  if (i >= s.size()) return s.size();
-  unsigned char c = static_cast<unsigned char>(s[i]);
-  if ((c & 0x80) == 0x00) return i + 1;
-  if ((c & 0xE0) == 0xC0) return std::min(s.size(), i + 2);
-  if ((c & 0xF0) == 0xE0) return std::min(s.size(), i + 3);
-  if ((c & 0xF8) == 0xF0) return std::min(s.size(), i + 4);
-  return i + 1;
-}
-
-static int utf8CodepointCount(const std::string& s) {
-  int count = 0;
-  for (size_t i = 0; i < s.size();) {
-    i = utf8Next(s, i);
-    count++;
+static bool decodeUtf8Codepoint(std::string_view text, size_t* offset,
+                                char32_t* outCodepoint, size_t* outStart,
+                                size_t* outEnd) {
+  if (!offset || *offset >= text.size()) return false;
+  size_t start = *offset;
+  unsigned char lead = static_cast<unsigned char>(text[start]);
+  char32_t codepoint = 0xFFFD;
+  size_t length = 1;
+  if (lead < 0x80) {
+    codepoint = lead;
+  } else if ((lead & 0xE0) == 0xC0 && start + 1 < text.size()) {
+    codepoint = (lead & 0x1F) << 6;
+    codepoint |= static_cast<unsigned char>(text[start + 1]) & 0x3F;
+    length = 2;
+  } else if ((lead & 0xF0) == 0xE0 && start + 2 < text.size()) {
+    codepoint = (lead & 0x0F) << 12;
+    codepoint |=
+        (static_cast<unsigned char>(text[start + 1]) & 0x3F) << 6;
+    codepoint |= static_cast<unsigned char>(text[start + 2]) & 0x3F;
+    length = 3;
+  } else if ((lead & 0xF8) == 0xF0 && start + 3 < text.size()) {
+    codepoint = (lead & 0x07) << 18;
+    codepoint |=
+        (static_cast<unsigned char>(text[start + 1]) & 0x3F) << 12;
+    codepoint |=
+        (static_cast<unsigned char>(text[start + 2]) & 0x3F) << 6;
+    codepoint |= static_cast<unsigned char>(text[start + 3]) & 0x3F;
+    length = 4;
   }
-  return count;
+  *offset = start + length;
+  if (outCodepoint) *outCodepoint = codepoint;
+  if (outStart) *outStart = start;
+  if (outEnd) *outEnd = start + length;
+  return true;
 }
 
-static std::string utf8Take(const std::string& s, int count) {
-  if (count <= 0) return "";
-  size_t i = 0;
-  int c = 0;
-  for (; i < s.size() && c < count; ++c) {
-    i = utf8Next(s, i);
+static uint8_t encodeUtf16(char32_t codepoint, wchar_t glyph[2]) {
+  if (codepoint > 0x10FFFF) codepoint = 0xFFFD;
+  if (codepoint <= 0xFFFF) {
+    glyph[0] = static_cast<wchar_t>(codepoint);
+    glyph[1] = L'\0';
+    return 1;
   }
-  return s.substr(0, i);
-}
-
-static std::string fitLine(const std::string& s, int width) {
-  if (width <= 0) return "";
-  int count = utf8CodepointCount(s);
-  if (count <= width) return s;
-  if (width <= 1) return utf8Take(s, width);
-  return utf8Take(s, width - 1) + "~";
+  codepoint -= 0x10000;
+  glyph[0] = static_cast<wchar_t>(0xD800 + (codepoint >> 10));
+  glyph[1] = static_cast<wchar_t>(0xDC00 + (codepoint & 0x3FF));
+  return 2;
 }
 
 static bool sameColor(const Color& a, const Color& b) {
@@ -288,16 +286,16 @@ static std::string thumbnailCacheKey(const FileEntry& entry) {
 
 static std::string fitName(const std::string& name, int colWidth) {
   int maxLen = colWidth - 2;
-  if (maxLen <= 1) return name.empty() ? " " : utf8Take(name, 1);
-  if (utf8CodepointCount(name) <= maxLen) return name;
-  return utf8Take(name, maxLen - 1) + "~";
+  if (maxLen <= 1) return name.empty() ? " " : utf8TakeDisplayWidth(name, 1);
+  if (utf8DisplayWidth(name) <= maxLen) return name;
+  return utf8TakeDisplayWidth(name, maxLen - 1) + "~";
 }
 
 static void drawCenteredText(ConsoleScreen& screen, int x, int y, int width,
                              int height, const std::string& text,
                              const Style& style) {
   if (width <= 0 || height <= 0 || text.empty()) return;
-  int textWidth = utf8CodepointCount(text);
+  int textWidth = utf8DisplayWidth(text);
   if (textWidth <= 0) return;
   int cx = x + std::max(0, (width - textWidth) / 2);
   int cy = y + height / 2;
@@ -562,7 +560,7 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
     std::string name = e.name;
     if (e.isDir && name != "..") name += "/";
     layout.names.push_back(name);
-    maxName = std::max(maxName, utf8CodepointCount(name) + 2);
+    maxName = std::max(maxName, utf8DisplayWidth(name) + 2);
   }
 
   constexpr int kThumbMinWidth = 20;
@@ -797,11 +795,11 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
 
         if (entry.isSectionHeader) {
           std::string cell = fitName("[" + entry.name + "]", layout.colWidth);
-          int cellWidth = utf8CodepointCount(cell);
+          int cellWidth = utf8DisplayWidth(cell);
           if (cellWidth < layout.colWidth) {
             cell.append(static_cast<size_t>(layout.colWidth - cellWidth), ' ');
           } else if (cellWidth > layout.colWidth) {
-            cell = utf8Take(cell, layout.colWidth);
+            cell = utf8TakeDisplayWidth(cell, layout.colWidth);
           }
           Style headerStyle = dimStyle;
           if (isSelected) {
@@ -814,11 +812,11 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         std::string cell = fitName(entryPrefix(entry) +
                                        layout.names[static_cast<size_t>(idx)],
                                    layout.colWidth);
-        int cellWidth = utf8CodepointCount(cell);
+        int cellWidth = utf8DisplayWidth(cell);
         if (cellWidth < layout.colWidth) {
           cell.append(static_cast<size_t>(layout.colWidth - cellWidth), ' ');
         } else if (cellWidth > layout.colWidth) {
-          cell = utf8Take(cell, layout.colWidth);
+          cell = utf8TakeDisplayWidth(cell, layout.colWidth);
         }
         Style attr =
             isSelected ? highlightStyle : (entry.isDir ? dirStyle : normalStyle);
@@ -941,7 +939,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         std::string label = fitName(entryPrefix(entry) +
                                         layout.names[static_cast<size_t>(idx)],
                                     layout.colWidth);
-        int labelWidth = utf8CodepointCount(label);
+        int labelWidth = utf8DisplayWidth(label);
         int labelX =
             cellLeft + std::max(0, (layout.colWidth - labelWidth) / 2);
         Style labelStyle =
@@ -963,7 +961,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
 BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) {
   BreadcrumbLine line;
   const std::string prefix = "  Path: ";
-  const int prefixLen = utf8CodepointCount(prefix);
+  const int prefixLen = utf8DisplayWidth(prefix);
   if (width <= 0) return line;
   if (prefixLen >= width) {
     line.text = fitLine(prefix, width);
@@ -1004,16 +1002,16 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
   }
 
   const std::string sep = " > ";
-  const int sepLen = utf8CodepointCount(sep);
+  const int sepLen = utf8DisplayWidth(sep);
   const std::string ellipsis = "... > ";
-  const int ellipsisLen = utf8CodepointCount(ellipsis);
+  const int ellipsisLen = utf8DisplayWidth(ellipsis);
 
   const int avail = width - prefixLen;
   std::vector<Item> visibleRev;
   int used = 0;
   int index = static_cast<int>(items.size()) - 1;
   for (; index >= 0; --index) {
-    int labelLen = utf8CodepointCount(items[index].label);
+    int labelLen = utf8DisplayWidth(items[index].label);
     int add = labelLen + (visibleRev.empty() ? 0 : sepLen);
     if (used + add <= avail) {
       visibleRev.push_back(items[index]);
@@ -1028,7 +1026,7 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
     Item last = items.back();
     last.label = fitLine(last.label, avail);
     visibleRev.push_back(last);
-    used = utf8CodepointCount(last.label);
+    used = utf8DisplayWidth(last.label);
     skipped = items.size() > 1;
   }
 
@@ -1045,10 +1043,10 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
     Item item = visible[i];
     int remaining = width - x;
     if (remaining <= 0) break;
-    int labelLen = utf8CodepointCount(item.label);
+    int labelLen = utf8DisplayWidth(item.label);
     if (labelLen > remaining) {
       item.label = fitLine(item.label, remaining);
-      labelLen = utf8CodepointCount(item.label);
+      labelLen = utf8DisplayWidth(item.label);
     }
     Breadcrumb crumb;
     crumb.startX = x;
@@ -1070,7 +1068,7 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
     line.text = prefix + fallback;
   }
   if (line.crumbs.empty()) {
-    int total = utf8CodepointCount(line.text);
+    int total = utf8DisplayWidth(line.text);
     if (total > prefixLen) {
       Breadcrumb crumb;
       crumb.startX = prefixLen;
@@ -1188,30 +1186,85 @@ void ConsoleScreen::applySize(int width, int height) {
 int ConsoleScreen::width() const { return width_; }
 int ConsoleScreen::height() const { return height_; }
 
-void ConsoleScreen::clear(const Style& style) {
-  Cell cell{};
-  cell.ch = ' ';
+void ConsoleScreen::setCellSpace(Cell& cell, const Style& style) {
+  cell.glyph[0] = L' ';
+  cell.glyph[1] = L'\0';
+  cell.glyphLen = 1;
+  cell.cellWidth = 1;
+  cell.continuation = false;
   cell.fg = style.fg;
   cell.bg = style.bg;
+}
+
+void ConsoleScreen::setCellGlyph(Cell& cell, const wchar_t* glyph,
+                                 uint8_t glyphLen, uint8_t cellWidth,
+                                 bool continuation, const Style& style) {
+  cell.glyph[0] = L' ';
+  cell.glyph[1] = L'\0';
+  cell.glyphLen = glyphLen;
+  cell.cellWidth = cellWidth;
+  cell.continuation = continuation;
+  if (glyph && glyphLen > 0) {
+    cell.glyph[0] = glyph[0];
+    if (glyphLen > 1) {
+      cell.glyph[1] = glyph[1];
+    }
+  }
+  cell.fg = style.fg;
+  cell.bg = style.bg;
+}
+
+bool ConsoleScreen::sameCell(const Cell& a, const Cell& b) {
+  return a.glyph[0] == b.glyph[0] && a.glyph[1] == b.glyph[1] &&
+         a.glyphLen == b.glyphLen && a.cellWidth == b.cellWidth &&
+         a.continuation == b.continuation && sameColor(a.fg, b.fg) &&
+         sameColor(a.bg, b.bg);
+}
+
+void ConsoleScreen::appendCellGlyph(std::wstring& out, const Cell& cell) {
+  if (cell.continuation) return;
+  if (cell.glyphLen == 0) {
+    out.push_back(L' ');
+    return;
+  }
+  out.push_back(cell.glyph[0] ? cell.glyph[0] : L' ');
+  if (cell.glyphLen > 1 && cell.glyph[1] != L'\0') {
+    out.push_back(cell.glyph[1]);
+  }
+}
+
+void ConsoleScreen::clear(const Style& style) {
+  Cell cell{};
+  setCellSpace(cell, style);
   std::fill(buffer_.begin(), buffer_.end(), cell);
 }
 
 void ConsoleScreen::writeText(int x, int y, const std::string& text, const Style& style) {
   if (y < 0 || y >= height_) return;
   if (x >= width_) return;
-  int pos = y * width_ + std::max(0, x);
   int start = std::max(0, x);
-  int maxLen = width_ - start;
-  std::wstring wide = utf8ToWide(text);
-  int limit = std::min(maxLen, static_cast<int>(wide.size()));
-  for (int i = 0; i < limit; ++i) {
-    wchar_t ch = wide[static_cast<size_t>(i)];
-    if (i == limit - 1 && ch >= 0xD800 && ch <= 0xDBFF) {
-      break;
+  std::string clipped =
+      (x < 0) ? utf8SliceDisplayWidth(text, -x, width_ - start) : text;
+  int col = start;
+  size_t offset = 0;
+  char32_t codepoint = 0;
+  size_t glyphStart = 0;
+  size_t glyphEnd = 0;
+  while (col < width_ &&
+         decodeUtf8Codepoint(clipped, &offset, &codepoint, &glyphStart,
+                             &glyphEnd)) {
+    int glyphWidth = unicodeDisplayWidth(codepoint);
+    if (glyphWidth <= 0) continue;
+    if (glyphWidth > width_ - col) break;
+    wchar_t glyph[2]{L' ', L'\0'};
+    uint8_t glyphLen = encodeUtf16(codepoint, glyph);
+    int pos = y * width_ + col;
+    setCellGlyph(buffer_[pos], glyph, glyphLen,
+                 static_cast<uint8_t>(glyphWidth), false, style);
+    for (int extra = 1; extra < glyphWidth; ++extra) {
+      setCellGlyph(buffer_[pos + extra], nullptr, 0, 0, true, style);
     }
-    buffer_[pos + i].ch = ch;
-    buffer_[pos + i].fg = style.fg;
-    buffer_[pos + i].bg = style.bg;
+    col += glyphWidth;
   }
 }
 
@@ -1222,19 +1275,23 @@ void ConsoleScreen::writeRun(int x, int y, int len, wchar_t ch, const Style& sty
   int maxLen = std::min(len, width_ - start);
   int pos = y * width_ + start;
   for (int i = 0; i < maxLen; ++i) {
-    buffer_[pos + i].ch = ch;
-    buffer_[pos + i].fg = style.fg;
-    buffer_[pos + i].bg = style.bg;
+    wchar_t glyph[2]{ch, L'\0'};
+    setCellGlyph(buffer_[pos + i], glyph, 1, 1, false, style);
   }
 }
 
 void ConsoleScreen::writeChar(int x, int y, wchar_t ch, const Style& style) {
   if (y < 0 || y >= height_) return;
   if (x < 0 || x >= width_) return;
+  int glyphWidth = std::max(1, unicodeDisplayWidth(static_cast<char32_t>(ch)));
+  if (glyphWidth > width_ - x) return;
   int pos = y * width_ + x;
-  buffer_[pos].ch = ch;
-  buffer_[pos].fg = style.fg;
-  buffer_[pos].bg = style.bg;
+  wchar_t glyph[2]{ch, L'\0'};
+  setCellGlyph(buffer_[pos], glyph, 1, static_cast<uint8_t>(glyphWidth), false,
+               style);
+  for (int extra = 1; extra < glyphWidth; ++extra) {
+    setCellGlyph(buffer_[pos + extra], nullptr, 0, 0, true, style);
+  }
 }
 
 void ConsoleScreen::setFastOutput(bool enabled) {
@@ -1265,7 +1322,9 @@ bool ConsoleScreen::snapshot(std::vector<ScreenCell>& outCells, int& outWidth,
   for (size_t i = 0; i < buffer_.size(); ++i) {
     const Cell& src = buffer_[i];
     ScreenCell& dst = outCells[i];
-    dst.ch = src.ch;
+    dst.ch = src.continuation
+                 ? L' '
+                 : (src.glyphLen == 1 ? src.glyph[0] : L'\uFFFD');
     dst.fg = src.fg;
     dst.bg = src.bg;
   }
@@ -1345,7 +1404,8 @@ void ConsoleScreen::drawFast() {
   for (size_t i = 0; i < needed; ++i) {
     const Cell& cell = buffer_[i];
     CHAR_INFO& outCell = fastBuffer_[i];
-    outCell.Char.UnicodeChar = cell.ch ? cell.ch : L' ';
+    outCell.Char.UnicodeChar =
+        cell.continuation ? L' ' : (cell.glyphLen == 1 ? cell.glyph[0] : L' ');
     uint8_t fg = consoleColorIndex(cell.fg);
     uint8_t bg = consoleColorIndex(cell.bg);
     outCell.Attributes = static_cast<WORD>(fg | (bg << 4));
@@ -1381,10 +1441,6 @@ void ConsoleScreen::draw() {
   out.clear();
   out.reserve(static_cast<size_t>(width_ * height_ * 2 + height_ * 32));
 
-  auto sameCell = [](const Cell& a, const Cell& b) {
-    return a.ch == b.ch && sameColor(a.fg, b.fg) && sameColor(a.bg, b.bg);
-  };
-
   if (fullRedraw) {
     if (clearOnNextFullRedraw_) {
       out.append(L"\x1b[2J");
@@ -1398,6 +1454,7 @@ void ConsoleScreen::draw() {
       int rowStart = y * width_;
       for (int x = 0; x < width_; ++x) {
         const Cell& cell = buffer_[rowStart + x];
+        if (cell.continuation) continue;
         bool fgDiff = !hasColor || !sameColor(cell.fg, curFg);
         bool bgDiff = !hasColor || !sameColor(cell.bg, curBg);
         if (fgDiff) {
@@ -1411,7 +1468,7 @@ void ConsoleScreen::draw() {
           curBg = cell.bg;
           hasColor = true;
         }
-        out.push_back(cell.ch ? cell.ch : L' ');
+        appendCellGlyph(out, cell);
       }
     }
     out.append(L"\x1b[0m");
@@ -1444,6 +1501,12 @@ void ConsoleScreen::draw() {
         ++x;
       }
       int spanEnd = x;
+      while (spanStart > 0 && buffer_[rowStart + spanStart].continuation) {
+        --spanStart;
+      }
+      while (spanEnd < width_ && buffer_[rowStart + spanEnd].continuation) {
+        ++spanEnd;
+      }
       appendCursorPos(out, spanStart + 1, y + 1);
 
       for (int i = spanStart; i < spanEnd; ++i) {
@@ -1461,7 +1524,7 @@ void ConsoleScreen::draw() {
           curBg = cell.bg;
           hasColor = true;
         }
-        out.push_back(cell.ch ? cell.ch : L' ');
+        appendCellGlyph(out, cell);
         prevBuffer_[rowStart + i] = cell;
       }
       wrote = true;

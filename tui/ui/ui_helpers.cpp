@@ -73,17 +73,17 @@ ProgressTextLayout buildProgressTextLayout(double displaySec,
   std::string volStr = " Vol: " + std::to_string(volPct) + "%";
   out.suffix = formatTime(displaySec) + " / " + formatTime(totalSec) + " " +
                status + volStr;
-  int suffixWidth = utf8CodepointCount(out.suffix);
+  int suffixWidth = utf8DisplayWidth(out.suffix);
   int barWidth = width - suffixWidth - 3;
   if (barWidth < 10) {
     out.suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " +
                  status + " V:" + std::to_string(volPct) + "%";
-    suffixWidth = utf8CodepointCount(out.suffix);
+    suffixWidth = utf8DisplayWidth(out.suffix);
     barWidth = width - suffixWidth - 3;
   }
   if (barWidth < 10) {
     out.suffix = formatTime(displaySec) + " V:" + std::to_string(volPct) + "%";
-    suffixWidth = utf8CodepointCount(out.suffix);
+    suffixWidth = utf8DisplayWidth(out.suffix);
     barWidth = width - suffixWidth - 3;
   }
   if (barWidth < 5) {
@@ -187,10 +187,10 @@ std::string utf8Slice(const std::string& s, int start, int count) {
 
 std::string fitLine(const std::string& s, int width) {
   if (width <= 0) return "";
-  int count = utf8CodepointCount(s);
+  int count = utf8DisplayWidth(s);
   if (count <= width) return s;
-  if (width <= 1) return utf8Take(s, width);
-  return utf8Take(s, width - 1) + "~";
+  if (width <= 1) return utf8TakeDisplayWidth(s, width);
+  return utf8TakeDisplayWidth(s, width - 1) + "~";
 }
 
 static int quantizeCoverage(double value) {

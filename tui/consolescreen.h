@@ -73,10 +73,20 @@ class ConsoleScreen {
   void reportWriteError(const wchar_t* context);
 
   struct Cell {
-    wchar_t ch = L' ';
+    wchar_t glyph[2]{L' ', L'\0'};
+    uint8_t glyphLen = 1;
+    uint8_t cellWidth = 1;
+    bool continuation = false;
     Color fg{255, 255, 255};
     Color bg{0, 0, 0};
   };
+
+  static void setCellSpace(Cell& cell, const Style& style);
+  static void setCellGlyph(Cell& cell, const wchar_t* glyph, uint8_t glyphLen,
+                           uint8_t cellWidth, bool continuation,
+                           const Style& style);
+  static bool sameCell(const Cell& a, const Cell& b);
+  static void appendCellGlyph(std::wstring& out, const Cell& cell);
 
   HANDLE out_ = INVALID_HANDLE_VALUE;
   DWORD originalMode_ = 0;

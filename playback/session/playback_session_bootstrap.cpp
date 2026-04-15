@@ -38,7 +38,7 @@ void renderPreparingScreen(
   screen.writeText(0, 0, fitLine(title, width), accentStyle);
   std::string message = "Preparing video playback...";
   int msgLine = std::clamp(height / 2, 1, std::max(1, height - 2));
-  int msgWidth = utf8CodepointCount(message);
+  int msgWidth = utf8DisplayWidth(message);
   if (msgWidth >= width) {
     screen.writeText(0, msgLine, fitLine(message, width), dimStyle);
   } else {

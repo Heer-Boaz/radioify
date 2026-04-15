@@ -8,6 +8,7 @@
 
 #include "runtime_helpers.h"
 #include "consolescreen.h"
+#include "unicode_display_width.h"
 
 struct BufferCell {
   wchar_t ch = L' ';
