@@ -7,6 +7,7 @@
 #include "consolescreen.h"
 #include "optionsbrowser.h"
 #include "playback/playback_media_keys.h"
+#include "runtime_helpers.h"
 #include "ui_helpers.h"
 
 namespace {
@@ -424,11 +425,11 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
           std::string rest = text.substr(2);
           std::filesystem::path homePath(home);
           homePath /= rest;
-          text = homePath.string();
+          text = toUtf8String(homePath);
         } else {
           std::filesystem::path homePath(home);
           homePath /= text.substr(1);
-          text = homePath.string();
+          text = toUtf8String(homePath);
         }
       }
     }

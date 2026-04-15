@@ -62,13 +62,14 @@ extern "C" {
 
 #include "timing_log.h"
 #include "audioplayback_internal.h"
+#include "miniaudio_file_path.h"
 
 AudioPlaybackState gAudio;
 
 void appendAudioTimingLogLine(const char* line) {
 #if RADIOIFY_ENABLE_TIMING_LOG
   if (!line || line[0] == '\0') return;
-  std::ofstream f(radioifyLogPath().string(), std::ios::app);
+  std::ofstream f(radioifyLogPath(), std::ios::app);
   if (f) f << radioifyLogTimestamp() << " " << line << "\n";
 #else
   (void)line;
@@ -1327,14 +1328,8 @@ bool initMiniaudioBackend(const std::filesystem::path& file, uint64_t, int,
                           std::string*) {
   ma_decoder_config decConfig =
       ma_decoder_config_init(ma_format_f32, gAudio.channels, gAudio.sampleRate);
-#ifdef _WIN32
-  return ma_decoder_init_file_w(file.c_str(), &decConfig,
-                                &gAudio.state.decoder) == MA_SUCCESS;
-#else
-  const std::string pathUtf8 = toUtf8String(file);
-  return ma_decoder_init_file(pathUtf8.c_str(), &decConfig,
-                              &gAudio.state.decoder) == MA_SUCCESS;
-#endif
+  return maDecoderInitFilePath(file, &decConfig, &gAudio.state.decoder) ==
+         MA_SUCCESS;
 }
 
 void uninitMiniaudioBackend() { ma_decoder_uninit(&gAudio.state.decoder); }

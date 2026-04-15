@@ -11,6 +11,8 @@ std::filesystem::path defaultRadioOutputFor(
     const std::filesystem::path& input);
 
 void renderToFile(const Options& o,
+                  const std::filesystem::path& inputPath,
+                  const std::filesystem::path& outputPath,
                   const Radio1938& radio1938Template,
                   bool useRadio1938,
                   Radio1938* renderedRadioOut = nullptr,

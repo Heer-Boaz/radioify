@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "media_formats.h"
+#include "runtime_helpers.h"
 #include "track_browser_state.h"
 #include "ui_helpers.h"
 
@@ -19,7 +20,7 @@ std::string toLower(std::string value) {
 }
 
 bool isVideoExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(path.extension().string());
+  const std::string ext = toLower(toUtf8String(path.extension()));
   return ext == ".mp4" || ext == ".webm" || ext == ".mov" ||
          ext == ".mkv";
 }

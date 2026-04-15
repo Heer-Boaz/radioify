@@ -13,6 +13,7 @@
 #include "consoleinput.h"
 #include "kssoptions.h"
 #include "nsfoptions.h"
+#include "runtime_helpers.h"
 #include "vgmoptions.h"
 #include "ui_helpers.h"
 
@@ -274,7 +275,7 @@ bool parseDeviceIdFromPath(const std::filesystem::path& path,
                            uint32_t* out) {
   if (!out) return false;
   if (path.parent_path() != devicesPath()) return false;
-  return parseHexId(path.filename().string(), out);
+  return parseHexId(toUtf8String(path.filename()), out);
 }
 
 bool isOptionsPath(const std::filesystem::path& path) {

@@ -147,12 +147,12 @@ static DWORD waitForBrowserWake(ConsoleInput& input, HANDLE asyncWakeHandle,
 }
 
 static bool isSupportedImageExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
+  std::string ext = toLower(toUtf8String(p.extension()));
   return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
 }
 
 static bool isVideoExt(const std::filesystem::path& p) {
-  std::string ext = toLower(p.extension().string());
+  std::string ext = toLower(toUtf8String(p.extension()));
   return ext == ".mp4" || ext == ".webm" || ext == ".mov" || ext == ".mkv";
 }
 
@@ -188,7 +188,7 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
   std::filesystem::path browseDir = dir;
   if (browseDir.has_root_name() && !browseDir.has_root_directory() &&
       browseDir.relative_path().empty()) {
-    std::string root = browseDir.root_name().string();
+    std::string root = toUtf8String(browseDir.root_name());
     root.push_back('\\');
     browseDir = std::filesystem::path(root);
   }
@@ -636,18 +636,22 @@ int runTui(Options o) {
 
   auto renderFile = [&](const std::filesystem::path& file) -> void {
     Options renderOpt = o;
-    renderOpt.input = file.string();
+    renderOpt.input = toUtf8String(file);
+    std::filesystem::path outputPath =
+        renderOpt.output.empty() ? defaultRadioOutputFor(file)
+                                 : std::filesystem::path(renderOpt.output);
     if (renderOpt.output.empty()) {
-      renderOpt.output = defaultRadioOutputFor(file).string();
+      renderOpt.output = toUtf8String(outputPath);
     }
     input.restore();
     screen.restore();
     logLine("Radioify");
     logLine(std::string("  Mode:   render"));
-    logLine(std::string("  Input:  ") + renderOpt.input);
-    logLine(std::string("  Output: ") + renderOpt.output);
+    logLine(std::string("  Input:  ") + toUtf8String(file));
+    logLine(std::string("  Output: ") + toUtf8String(outputPath));
     logLine("Rendering output...");
-    renderToFile(renderOpt, *radio1938Template, audioIsRadioEnabled());
+    renderToFile(renderOpt, file, outputPath, *radio1938Template,
+                 audioIsRadioEnabled());
     logLine("Done.");
   };
 
@@ -680,7 +684,7 @@ int runTui(Options o) {
     std::string title = "Playback Error";
     std::string message = error;
     std::string detail = toUtf8String(file.filename());
-    std::string ext = toLower(file.extension().string());
+    std::string ext = toLower(toUtf8String(file.extension()));
     if ((ext == ".psf2" || ext == ".minipsf2") &&
         error.find("hebios.bin") != std::string::npos) {
       title = "PSF2 BIOS Required";
@@ -1397,7 +1401,7 @@ int runTui(Options o) {
             midiOutput.replace_extension(".mid");
             melodyExportTask.status =
                 "Saved " + toUtf8String(outputFile.filename()) + " and " +
-                midiOutput.filename().string();
+                toUtf8String(midiOutput.filename());
           } else {
             melodyExportTask.status =
                 error.empty() ? "Analysis failed." : error;

@@ -22,10 +22,11 @@
 #include "miniaudio.h"
 #include "runtime_helpers.h"
 #include "vgmaudio.h"
+#include "miniaudio_file_path.h"
 
 std::filesystem::path defaultRadioOutputFor(
     const std::filesystem::path& input) {
-  return input.parent_path() / (input.stem().string() + ".radio.wav");
+  return input.parent_path() / (toUtf8String(input.stem()) + ".radio.wav");
 }
 
 static std::filesystem::path resolveRenderOutputPath(
@@ -49,9 +50,10 @@ static std::filesystem::path resolveRenderOutputPath(
   return outPath;
 }
 
-void renderToFile(const Options& o, const Radio1938& radio1938Template,
-                  bool useRadio1938, Radio1938* renderedRadioOut,
-                  bool writeOutput) {
+void renderToFile(const Options& o, const std::filesystem::path& inputPath,
+                  const std::filesystem::path& outputPath,
+                  const Radio1938& radio1938Template, bool useRadio1938,
+                  Radio1938* renderedRadioOut, bool writeOutput) {
   const uint32_t sampleRate = 48000;
   const uint32_t channels = o.mono ? 1 : 2;
   constexpr uint32_t kRadioProcessChannels = 1u;
@@ -61,10 +63,10 @@ void renderToFile(const Options& o, const Radio1938& radio1938Template,
     target->init(kRadioProcessChannels, static_cast<float>(sampleRate),
                  static_cast<float>(o.bwHz), static_cast<float>(o.noise));
   };
-  const bool useM4a = isM4aExt(o.input);
-  const bool useGme = isGmeExt(o.input);
-  const bool useVgm = isVgmExt(o.input);
-  const bool useKss = isKssExt(o.input);
+  const bool useM4a = isM4aExt(inputPath);
+  const bool useGme = isGmeExt(inputPath);
+  const bool useVgm = isVgmExt(inputPath);
+  const bool useKss = isKssExt(inputPath);
   constexpr uint32_t chunkFrames = 1024;
   ma_decoder decoder{};
   M4aDecoder m4a{};
@@ -73,29 +75,28 @@ void renderToFile(const Options& o, const Radio1938& radio1938Template,
   KssAudioDecoder kss{};
   if (useM4a) {
     std::string error;
-    if (!m4a.init(o.input, channels, sampleRate, &error)) {
+    if (!m4a.init(inputPath, channels, sampleRate, &error)) {
       die(error.empty() ? "Failed to open input for decoding." : error);
     }
   } else if (useKss) {
     std::string error;
-    if (!kss.init(o.input, channels, sampleRate, &error)) {
+    if (!kss.init(inputPath, channels, sampleRate, &error)) {
       die(error.empty() ? "Failed to open input for decoding." : error);
     }
   } else if (useVgm) {
     std::string error;
-    if (!vgm.init(o.input, channels, sampleRate, &error)) {
+    if (!vgm.init(inputPath, channels, sampleRate, &error)) {
       die(error.empty() ? "Failed to open input for decoding." : error);
     }
   } else if (useGme) {
     std::string error;
-    if (!gme.init(o.input, channels, sampleRate, &error)) {
+    if (!gme.init(inputPath, channels, sampleRate, &error)) {
       die(error.empty() ? "Failed to open input for decoding." : error);
     }
   } else {
     ma_decoder_config decConfig =
         ma_decoder_config_init(ma_format_f32, channels, sampleRate);
-    if (ma_decoder_init_file(o.input.c_str(), &decConfig, &decoder) !=
-        MA_SUCCESS) {
+    if (maDecoderInitFilePath(inputPath, &decConfig, &decoder) != MA_SUCCESS) {
       die("Failed to open input for decoding.");
     }
   }
@@ -106,8 +107,7 @@ void renderToFile(const Options& o, const Radio1938& radio1938Template,
   if (writeOutput) {
     encConfig = ma_encoder_config_init(
         ma_encoding_format_wav, ma_format_s16, channels, sampleRate);
-    if (ma_encoder_init_file(o.output.c_str(), &encConfig, &encoder) !=
-        MA_SUCCESS) {
+    if (maEncoderInitFilePath(outputPath, &encConfig, &encoder) != MA_SUCCESS) {
       if (useM4a) {
         m4a.uninit();
       } else if (useKss) {
@@ -282,8 +282,8 @@ int runRenderRadioCli(const Options& o) {
   }
 
   Options renderOpt = o;
-  renderOpt.input = inputPath.string();
-  renderOpt.output = outputPath.string();
+  renderOpt.input = toUtf8String(inputPath);
+  renderOpt.output = toUtf8String(outputPath);
 
   logLine("Radioify");
   logLine("  Mode:   render-radio");
@@ -301,7 +301,8 @@ int runRenderRadioCli(const Options& o) {
     printNodeStepSummaryHeader();
     Radio1938 baselineRadio;
     renderOpt.calibrationReport = o.calibrationReport;
-    renderToFile(renderOpt, radio1938Template, true, &baselineRadio, false);
+    renderToFile(renderOpt, inputPath, outputPath, radio1938Template, true,
+                 &baselineRadio, false);
     printNodeStepSummaryLine("baseline", baselineRadio, nullptr);
     if (renderOpt.calibrationReport) {
       printCalibrationReport(baselineRadio, "Calibration report [baseline]:");
@@ -316,7 +317,8 @@ int runRenderRadioCli(const Options& o) {
       Radio1938 stepTemplate = radio1938Template;
       stepTemplate.graph.setEnabled(passId, false);
       Radio1938 stepRadio;
-      renderToFile(renderOpt, stepTemplate, true, &stepRadio, false);
+      renderToFile(renderOpt, inputPath, outputPath, stepTemplate, true,
+                   &stepRadio, false);
       printNodeStepSummaryLine(passName, stepRadio, &baselineRadio);
       if (renderOpt.calibrationReport) {
         printCalibrationReport(stepRadio,
@@ -337,7 +339,8 @@ int runRenderRadioCli(const Options& o) {
 
   renderOpt.calibrationReport = o.calibrationReport;
   Radio1938 renderedRadio;
-  renderToFile(renderOpt, radio1938Template, true, &renderedRadio);
+  renderToFile(renderOpt, inputPath, outputPath, radio1938Template, true,
+               &renderedRadio);
   logLine("Done.");
   if (renderOpt.calibrationReport && renderedRadio.calibration.enabled &&
       renderedRadio.calibration.validationFailed) {
@@ -349,7 +352,7 @@ int runRenderRadioCli(const Options& o) {
 
 static std::filesystem::path defaultMelodyOutputFor(
     const std::filesystem::path& input) {
-  std::string base = input.stem().string();
+  std::string base = toUtf8String(input.stem());
   return input.parent_path() / (base + ".melody");
 }
 
@@ -365,7 +368,7 @@ static std::filesystem::path resolveExtractOutputPath(
   if (directoryHint ||
       (std::filesystem::exists(outPath) &&
        std::filesystem::is_directory(outPath))) {
-    return outPath / (input.stem().string() + ".melody");
+    return outPath / (toUtf8String(input.stem()) + ".melody");
   }
 
   if (!outPath.has_extension()) {
@@ -405,9 +408,10 @@ int runExtractSheetCli(const Options& o,
   }
 
   logLine("Extract complete.");
-  logLine("  Input:  " + inputPath.string());
+  logLine("  Input:  " + toUtf8String(inputPath));
   std::filesystem::path midiOutputPath = outputPath;
   midiOutputPath.replace_extension(".mid");
-  logLine("  Output: " + outputPath.string() + " + " + midiOutputPath.string());
+  logLine("  Output: " + toUtf8String(outputPath) + " + " +
+          toUtf8String(midiOutputPath));
   return 0;
 }

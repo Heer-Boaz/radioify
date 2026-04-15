@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <vector>
 
+#include "runtime_helpers.h"
+
 std::optional<std::string> getEnvString(const char* name) {
   if (!name || name[0] == '\0') return std::nullopt;
 #ifdef _WIN32
@@ -41,7 +43,8 @@ std::FILE* openFileUtf8(const std::filesystem::path& path, const char* mode) {
   }
   return file;
 #else
-  return std::fopen(path.string().c_str(), mode);
+  const std::string pathUtf8 = toUtf8String(path);
+  return std::fopen(pathUtf8.c_str(), mode);
 #endif
 }
 

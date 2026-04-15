@@ -4,6 +4,8 @@
 #include <cmath>
 #include <limits>
 
+#include "runtime_helpers.h"
+
 namespace {
 constexpr float kInt16ToFloat = 1.0f / 32768.0f;
 constexpr int kDefaultTrackLengthMs = 150000;
@@ -59,7 +61,8 @@ bool tryLoadM3u(Music_Emu* emu, const std::filesystem::path& path) {
   if (!std::filesystem::exists(m3uPath)) {
     return false;
   }
-  gme_load_m3u(emu, m3uPath.string().c_str());
+  const std::string m3uPathUtf8 = toUtf8String(m3uPath);
+  gme_load_m3u(emu, m3uPathUtf8.c_str());
   return true;
 }
 
@@ -94,8 +97,9 @@ bool GmeAudioDecoder::init(const std::filesystem::path& path,
   }
 
   Music_Emu* emu = nullptr;
+  const std::string pathUtf8 = toUtf8String(path);
   gme_err_t openErr =
-      gme_open_file(path.string().c_str(), &emu, static_cast<int>(sampleRate));
+      gme_open_file(pathUtf8.c_str(), &emu, static_cast<int>(sampleRate));
   if (openErr != nullptr) {
     setError(error, openErr);
     return false;
@@ -179,7 +183,8 @@ bool gmeListTracks(const std::filesystem::path& path,
   out->clear();
 
   Music_Emu* emu = nullptr;
-  gme_err_t openErr = gme_open_file(path.string().c_str(), &emu, gme_info_only);
+  const std::string pathUtf8 = toUtf8String(path);
+  gme_err_t openErr = gme_open_file(pathUtf8.c_str(), &emu, gme_info_only);
   if (openErr != nullptr) {
     setError(error, openErr);
     return false;

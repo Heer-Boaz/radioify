@@ -10,7 +10,7 @@
 
 std::pair<std::filesystem::path, std::filesystem::path> resolveSplitOutputPaths(
     const std::filesystem::path& input, const std::string& outArg) {
-  const std::string base = input.stem().string();
+  const std::string base = toUtf8String(input.stem());
   const std::string stingerSuffix = "_stinger.wav";
   const std::string loopSuffix = "_loop.wav";
 
@@ -32,7 +32,7 @@ std::pair<std::filesystem::path, std::filesystem::path> resolveSplitOutputPaths(
   if (outDir.empty()) {
     outDir = input.parent_path();
   }
-  std::string stem = outPath.stem().string();
+  std::string stem = toUtf8String(outPath.stem());
   if (stem.empty()) {
     stem = base;
   }
@@ -67,9 +67,9 @@ int runSplitLoopCli(const Options& o) {
   }
 
   logLine("Loop split complete.");
-  logLine("  Input:     " + inputPath.string());
-  logLine("  Stinger:   " + stingerOutput.string());
-  logLine("  Main-loop: " + loopOutput.string());
+  logLine("  Input:     " + toUtf8String(inputPath));
+  logLine("  Stinger:   " + toUtf8String(stingerOutput));
+  logLine("  Main-loop: " + toUtf8String(loopOutput));
   if (result.hasLoop) {
     logLine("  Loop start: " + std::to_string(result.loopStartFrame) +
             " frames");
@@ -85,8 +85,8 @@ int runSplitLoopCli(const Options& o) {
   }
   logLine("  Output:");
   if (result.hasStinger) {
-    logLine("    Stinger: " + stingerOutput.string());
+    logLine("    Stinger: " + toUtf8String(stingerOutput));
   }
-  logLine("    Main-loop: " + loopOutput.string());
+  logLine("    Main-loop: " + toUtf8String(loopOutput));
   return 0;
 }

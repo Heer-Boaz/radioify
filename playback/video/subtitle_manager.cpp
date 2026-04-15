@@ -1444,7 +1444,7 @@ bool loadSubtitleTrackFile(const std::filesystem::path& path,
   std::string raw = decodeSubtitleText(rawBytes);
   if (raw.empty()) return false;
 
-  std::string ext = toLowerAscii(path.extension().string());
+  std::string ext = toLowerAscii(toUtf8String(path.extension()));
   bool ok = false;
   if (ext == ".srt") {
     ok = tryParser(raw, &parseSrtCues, &outTrack->cues);
@@ -1509,7 +1509,7 @@ std::vector<std::filesystem::path> discoverSubtitleFiles(
   if (dir.empty()) {
     dir = radioifyLaunchDir();
   }
-  std::string baseStem = videoPath.stem().string();
+  std::string baseStem = toUtf8String(videoPath.stem());
   std::string baseStemLower = toLowerAscii(baseStem);
 
   auto rankForStem = [&](const std::string& stem) -> int {
@@ -1531,9 +1531,9 @@ std::vector<std::filesystem::path> discoverSubtitleFiles(
   };
   std::vector<SearchDir> searchDirs;
   auto addSearchDir = [&](const std::filesystem::path& searchDir, int maxDepth) {
-    std::string key = toLowerAscii(searchDir.lexically_normal().string());
+    std::string key = toLowerAscii(toUtf8String(searchDir.lexically_normal()));
     for (const auto& existing : searchDirs) {
-      if (toLowerAscii(existing.path.lexically_normal().string()) == key) {
+      if (toLowerAscii(toUtf8String(existing.path.lexically_normal())) == key) {
         return;
       }
     }
@@ -1551,7 +1551,7 @@ std::vector<std::filesystem::path> discoverSubtitleFiles(
       continue;
     }
     if (!isDir) continue;
-    std::string nameLower = toLowerAscii(entry.path().filename().string());
+    std::string nameLower = toLowerAscii(toUtf8String(entry.path().filename()));
     if (isSubtitleDirectoryName(nameLower)) {
       addSearchDir(entry.path(), 2);
     }
@@ -1559,9 +1559,9 @@ std::vector<std::filesystem::path> discoverSubtitleFiles(
   if (ec) ec.clear();
 
   auto maybeAddCandidate = [&](const std::filesystem::path& candidate) {
-    std::string extLower = toLowerAscii(candidate.extension().string());
+    std::string extLower = toLowerAscii(toUtf8String(candidate.extension()));
     if (!isSubtitleSidecarExtension(extLower)) return;
-    int rank = rankForStem(candidate.stem().string());
+    int rank = rankForStem(toUtf8String(candidate.stem()));
     if (rank >= 0) {
       ranked.emplace_back(rank, candidate);
     } else {
@@ -1646,14 +1646,14 @@ std::vector<std::filesystem::path> discoverSubtitleFiles(
   std::sort(ranked.begin(), ranked.end(),
             [](const auto& a, const auto& b) {
               if (a.first != b.first) return a.first < b.first;
-              return toLowerAscii(a.second.string()) <
-                     toLowerAscii(b.second.string());
+              return toLowerAscii(toUtf8String(a.second)) <
+                     toLowerAscii(toUtf8String(b.second));
             });
 
   ranked.erase(std::unique(ranked.begin(), ranked.end(),
                            [](const auto& a, const auto& b) {
-                             return toLowerAscii(a.second.string()) ==
-                                    toLowerAscii(b.second.string());
+                             return toLowerAscii(toUtf8String(a.second)) ==
+                                    toLowerAscii(toUtf8String(b.second));
                            }),
                ranked.end());
 
@@ -1667,13 +1667,13 @@ std::vector<std::filesystem::path> discoverSubtitleFiles(
 
 std::string subtitleLabelFromPath(const std::filesystem::path& path,
                                   const std::string& baseStem) {
-  std::string stem = path.stem().string();
+  std::string stem = toUtf8String(path.stem());
   std::string label;
   std::string prefix = baseStem + ".";
   if (stem.rfind(prefix, 0) == 0 && stem.size() > prefix.size()) {
     label = stem.substr(prefix.size());
   } else {
-    label = path.extension().string();
+    label = toUtf8String(path.extension());
     if (!label.empty() && label[0] == '.') {
       label.erase(0, 1);
     }
@@ -2187,7 +2187,7 @@ void SubtitleManager::loadForVideo(const std::filesystem::path& videoPath) {
   tracks_.clear();
   activeTrack_ = 0;
 
-  const std::string baseStem = videoPath.stem().string();
+  const std::string baseStem = toUtf8String(videoPath.stem());
   std::vector<std::filesystem::path> files = discoverSubtitleFiles(videoPath);
   for (const auto& subtitleFile : files) {
     SubtitleTrack track;

@@ -38,6 +38,8 @@ extern "C" {
 #include <cstring>
 #include <new>
 
+#include "runtime_helpers.h"
+
 // C-style callbacks for FFmpeg locking
 static void d3d11_lock(void* ctx) {
     if (ctx) reinterpret_cast<std::recursive_mutex*>(ctx)->lock();
@@ -99,8 +101,9 @@ bool openInputWithProbe(const std::filesystem::path& path,
   av_dict_set_int(&options, "probesize", kProbeSize, 0);
   av_dict_set_int(&options, "analyzeduration", analyzeDurationUs, 0);
 
+  const std::string pathUtf8 = toUtf8String(path);
   int openErr =
-      avformat_open_input(outFmt, path.string().c_str(), nullptr, &options);
+      avformat_open_input(outFmt, pathUtf8.c_str(), nullptr, &options);
   av_dict_free(&options);
   if (openErr < 0) {
     std::string msg = "Failed to open video: " + ffmpegError(openErr);

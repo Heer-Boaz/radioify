@@ -3,6 +3,7 @@
 #include <new>
 
 #include "miniaudio.h"
+#include "miniaudio_file_path.h"
 
 struct FlacAudioDecoder::Impl {
   ma_decoder decoder{};
@@ -34,14 +35,7 @@ bool FlacAudioDecoder::init(const std::filesystem::path& path,
 
   ma_decoder_config decConfig =
       ma_decoder_config_init(ma_format_f32, channels, sampleRate);
-  ma_result result = MA_ERROR;
-#ifdef _WIN32
-  std::wstring wpath = path.wstring();
-  result = ma_decoder_init_file_w(wpath.c_str(), &decConfig, &impl->decoder);
-#else
-  std::string spath = path.string();
-  result = ma_decoder_init_file(spath.c_str(), &decConfig, &impl->decoder);
-#endif
+  ma_result result = maDecoderInitFilePath(path, &decConfig, &impl->decoder);
   if (result != MA_SUCCESS) {
     delete impl;
     setError(error, "Failed to open FLAC file.");

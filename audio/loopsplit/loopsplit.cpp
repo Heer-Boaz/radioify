@@ -21,6 +21,7 @@
 #define MA_ENABLE_MP3
 #define MA_ENABLE_FLAC
 #include "miniaudio.h"
+#include "miniaudio_file_path.h"
 
 namespace {
 
@@ -150,8 +151,7 @@ class LoopSplitDecoder {
     if (useMiniaudio) {
       ma_decoder_config decConfig =
           ma_decoder_config_init(ma_format_f32, channels, sampleRate);
-      if (ma_decoder_init_file(file.string().c_str(), &decConfig, &decoder_) !=
-          MA_SUCCESS) {
+      if (maDecoderInitFilePath(file, &decConfig, &decoder_) != MA_SUCCESS) {
         close();
         if (error) {
           *error = "Failed to open input for decoding.";
@@ -599,9 +599,8 @@ bool writeSegment(const std::filesystem::path& outputPath,
   ma_encoder encoder{};
   ma_encoder_config encConfig =
       ma_encoder_config_init(ma_encoding_format_wav, ma_format_s16, channels,
-                            sampleRate);
-  if (ma_encoder_init_file(outputPath.string().c_str(), &encConfig, &encoder) !=
-      MA_SUCCESS) {
+                             sampleRate);
+  if (maEncoderInitFilePath(outputPath, &encConfig, &encoder) != MA_SUCCESS) {
     if (error) *error = "Failed to initialize WAV encoder.";
     return false;
   }

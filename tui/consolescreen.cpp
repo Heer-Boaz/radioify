@@ -18,6 +18,7 @@
 #include "consoleinput.h"
 #include "playback/playback_media_artwork_catalog.h"
 #include "playback/playback_media_metadata_catalog.h"
+#include "runtime_helpers.h"
 #include "videodecoder.h"
 
 static std::wstring utf8ToWide(const std::string& text) {
@@ -52,15 +53,6 @@ static bool wideToUtf8(const std::wstring& text, std::string& out) {
   if (written <= 0) return false;
   if (written != needed) out.resize(static_cast<size_t>(written));
   return true;
-}
-
-static std::string pathToUtf8(const std::filesystem::path& p) {
-#ifdef _WIN32
-  auto u8 = p.u8string();
-  return std::string(u8.begin(), u8.end());
-#else
-  return p.string();
-#endif
 }
 
 static size_t utf8Next(const std::string& s, size_t i) {
@@ -287,7 +279,7 @@ static ThumbCacheState& thumbCache() {
 }
 
 static std::string thumbnailCacheKey(const FileEntry& entry) {
-  std::string key = pathToUtf8(entry.path);
+  std::string key = toUtf8String(entry.path);
   if (entry.trackIndex >= 0) {
     key += "#track=" + std::to_string(entry.trackIndex);
   }
@@ -907,7 +899,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       bool vid = !entry.isDir && isVideo && isVideo(entry.path);
       bool aud = !entry.isDir && isAudio && isAudio(entry.path);
 
-      ThumbLookup lookup = fetchThumb(entry, thumbW, thumbH, img, vid, false);
+      ThumbLookup lookup = fetchThumb(entry, thumbW, thumbH, img, vid, aud);
       const Thumbnail* thumb = lookup.thumb.get();
       if (thumb && thumb->ok && thumb->width > 0 && thumb->height > 0) {
         int artW = std::min(thumb->width, thumbW);
@@ -935,7 +927,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         } else {
           placeholder = "\xC2\xB7";
         }
-        if ((img || vid) && lookup.pending) {
+        if ((img || vid || aud) && lookup.pending) {
           placeholder = "...";
         }
         placeholder = fitLine(placeholder, thumbW);
@@ -987,8 +979,8 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
 #ifdef _WIN32
   items.push_back(Item{"This PC", {}});
   if (!root.empty()) {
-    std::string rootLabel = pathToUtf8(dir.root_name());
-    if (rootLabel.empty()) rootLabel = pathToUtf8(root);
+    std::string rootLabel = toUtf8String(dir.root_name());
+    if (rootLabel.empty()) rootLabel = toUtf8String(root);
     if (!rootLabel.empty() && (rootLabel.back() == '\\' || rootLabel.back() == '/')) {
       rootLabel.pop_back();
     }
@@ -1004,10 +996,10 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
 #endif
   for (const auto& part : dir.relative_path()) {
     cur /= part;
-    items.push_back(Item{pathToUtf8(part), cur});
+    items.push_back(Item{toUtf8String(part), cur});
   }
   if (items.empty()) {
-    items.push_back(Item{pathToUtf8(dir), dir});
+    items.push_back(Item{toUtf8String(dir), dir});
   }
 
   const std::string sep = " > ";
@@ -1073,7 +1065,7 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
   }
   line.text = text;
   if (line.text.empty()) {
-    std::string fallback = fitLine(pathToUtf8(dir), width - prefixLen);
+    std::string fallback = fitLine(toUtf8String(dir), width - prefixLen);
     line.text = prefix + fallback;
   }
   if (line.crumbs.empty()) {

@@ -411,7 +411,8 @@ extern "C" void end_of_track(void) {
 struct GsfAudioDecoder::Impl : public GsfImpl {
   bool initCore(std::string* error) {
     if (!path.empty()) {
-      int ok = GSFRun(const_cast<char*>(path.string().c_str()));
+      std::string pathUtf8 = toUtf8String(path);
+      int ok = GSFRun(const_cast<char*>(pathUtf8.c_str()));
       if (!ok) {
         if (error) *error = "Failed to load GSF file.";
         return false;

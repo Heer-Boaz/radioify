@@ -872,9 +872,10 @@ bool openInputWithProbe(const std::filesystem::path& path,
     fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
   }
 
+  const std::string pathUtf8 = ioCache ? std::string() : toUtf8String(path);
   int openRes =
-      avformat_open_input(&fmt, ioCache ? nullptr : path.string().c_str(),
-                          nullptr, &options);
+      avformat_open_input(&fmt, ioCache ? nullptr : pathUtf8.c_str(), nullptr,
+                          &options);
   av_dict_free(&options);
   if (openRes < 0) {
     std::string msg = "Failed to open media: " + ffmpegError(openRes);
