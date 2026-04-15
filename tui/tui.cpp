@@ -54,6 +54,8 @@
 #include "loopsplit_ui.h"
 #include "tui_export.h"
 #include "ui_helpers.h"
+#include "ui_input_pump.h"
+#include "ui_viewport.h"
 #include "videoplayback.h"
 #include "videowindow.h"
 #include "media_formats.h"
@@ -88,48 +90,6 @@ inline UiDirtyFlags& operator|=(UiDirtyFlags& a, UiDirtyFlags b) {
 
 inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
   return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flag)) != 0;
-}
-
-struct BrowserViewport {
-  int width = 40;
-  int height = 10;
-  int headerLines = 1;
-  int listTop = 1;
-  int breadcrumbY = -1;
-  int searchBarY = -1;
-  int searchBarWidth = 0;
-  int searchBarClearStart = -1;
-  int searchBarClearEnd = -1;
-  int listHeight = 1;
-  bool browserInteractionEnabled = true;
-};
-
-static BrowserViewport computeBrowserViewport(ConsoleScreen& screen,
-                                              bool browserInteractionEnabled,
-                                              bool showHeaderLabel,
-                                              int footerLines,
-                                              int searchBarClearButtonWidth) {
-  BrowserViewport viewport;
-  screen.updateSize();
-  viewport.width = std::max(40, screen.width());
-  viewport.height = std::max(10, screen.height());
-  viewport.browserInteractionEnabled = browserInteractionEnabled;
-  if (browserInteractionEnabled) {
-    viewport.headerLines = 2 + (showHeaderLabel ? 1 : 0);
-    viewport.searchBarY = 1;
-    viewport.searchBarWidth = viewport.width;
-    viewport.listTop = viewport.headerLines + 1;
-    viewport.breadcrumbY = viewport.headerLines;
-    viewport.searchBarClearEnd = viewport.width;
-    viewport.searchBarClearStart =
-        std::max(0, viewport.searchBarClearEnd - searchBarClearButtonWidth);
-  } else {
-    viewport.headerLines = 1;
-    viewport.listTop = viewport.headerLines;
-  }
-  viewport.listHeight = viewport.height - viewport.listTop - footerLines;
-  if (viewport.listHeight < 1) viewport.listHeight = 1;
-  return viewport;
 }
 
 static DWORD waitForBrowserWake(ConsoleInput& input, HANDLE asyncWakeHandle,
@@ -463,7 +423,6 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
   bool ok = false;
 
   auto renderFrame = [&]() {
-    screen.updateSize();
     int width = std::max(20, screen.width());
     int height = std::max(10, screen.height());
     const int headerLines = 2;
@@ -503,12 +462,14 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
     screen.draw();
   };
 
+  screen.updateSize();
   renderFrame();
 
   InputEvent ev{};
   while (true) {
     while (input.poll(ev)) {
       if (ev.type == InputEvent::Type::Resize) {
+        screen.updateSize();
         renderFrame();
         continue;
       }
@@ -772,14 +733,18 @@ int runTui(Options o) {
   bool seekHoldActive = false;
   auto seekHoldStart = std::chrono::steady_clock::now();
   std::vector<ScreenCell> windowCells;
+  ConsoleInputPump consoleInputPump;
   UiDirtyFlags dirtyFlags = UiDirtyFlags::Frame | UiDirtyFlags::Layout;
   bool layoutDirty = true;
+  bool forceFullRedraw = true;
+  bool screenSizeDirty = true;
   BrowserViewport viewport;
   auto markDirty = [&](UiDirtyFlags flags = UiDirtyFlags::Frame) {
     dirty = true;
     dirtyFlags |= flags;
     if (hasDirtyFlag(flags, UiDirtyFlags::Layout)) {
       layoutDirty = true;
+      forceFullRedraw = true;
     }
   };
   auto markLayoutDirty = [&]() { markDirty(UiDirtyFlags::Frame | UiDirtyFlags::Layout); };
@@ -932,11 +897,16 @@ int runTui(Options o) {
   };
 
   auto rebuildLayout = [&]() {
+    if (screenSizeDirty) {
+      screen.updateSize();
+      screenSizeDirty = false;
+    }
     const bool browserInteractionEnabled = !melodyVisualizationEnabled;
     const bool showHeaderLabel =
         browserInteractionEnabled &&
         (optionsBrowserIsActive(browser) || isTrackBrowserActive(browser));
-    viewport = computeBrowserViewport(screen, browserInteractionEnabled,
+    viewport = computeBrowserViewport(screen.width(), screen.height(),
+                                      browserInteractionEnabled,
                                       showHeaderLabel, footerLines,
                                       searchBarClearButtonWidth);
     width = viewport.width;
@@ -946,9 +916,12 @@ int runTui(Options o) {
     searchBarWidth = viewport.searchBarWidth;
     searchBarClearStart = viewport.searchBarClearStart;
     searchBarClearEnd = viewport.searchBarClearEnd;
-    listTop = viewport.listTop;
     breadcrumbY = viewport.breadcrumbY;
-    listHeight = viewport.listHeight;
+    listTop = viewport.listTop;
+    if (browserInteractionEnabled) {
+      listTop = std::max(listTop, breadcrumbY + 1);
+    }
+    listHeight = std::max(1, height - listTop - footerLines);
     layout = buildLayout(browser, width, listHeight);
     if (layout.totalRows <= layout.rowsVisible) {
       browser.scrollRow = 0;
@@ -1194,7 +1167,10 @@ int runTui(Options o) {
       handleSystemPlaybackCommand(command);
     }
   };
-  callbacks.onResize = [&]() { markLayoutDirty(); };
+  callbacks.onResize = [&]() {
+    screenSizeDirty = true;
+    markLayoutDirty();
+  };
 
   bool paletteActive = false;
   std::string paletteQuery;
@@ -1291,15 +1267,19 @@ int runTui(Options o) {
     }
   };
 
-  auto computePaletteLayout = [&](int w, int h, int listRows) {
+  auto computePaletteLayout = [&](int w, int h, int topInset, int listRows) {
     PaletteLayout layout{};
+    const int minTop = std::clamp(topInset, 1, std::max(1, h - 1));
+    const int availableHeight = std::max(1, h - minTop);
     int maxWidth = std::max(30, w - 4);
     layout.width = std::min(72, maxWidth);
     layout.innerWidth = std::max(1, layout.width - 2);
     layout.listRows = std::max(1, listRows);
-    layout.height = layout.listRows + 3;
+    layout.height = std::min(layout.listRows + 3, availableHeight);
+    layout.listRows = std::max(1, layout.height - 3);
     layout.x = std::max(0, (w - layout.width) / 2);
-    layout.y = std::max(1, (h - layout.height) / 2);
+    layout.y =
+        minTop + std::max(0, (availableHeight - layout.height) / 2);
     layout.inputY = layout.y + 1;
     layout.listY = layout.y + 2;
     layout.valid = true;
@@ -1409,7 +1389,7 @@ int runTui(Options o) {
         });
   };
 
-  auto computeFileContextLayout = [&](int w, int h) {
+  auto computeFileContextLayout = [&](int w, int h, int topInset) {
     FileContextMenuLayout layout{};
     std::vector<std::string> items = {" Play", " Analyze", " Split Loop"};
     int itemWidth = 0;
@@ -1418,14 +1398,16 @@ int runTui(Options o) {
     }
     layout.width = std::max(24, itemWidth + 4);
     layout.height = static_cast<int>(items.size()) + 2;
+    const int minTop = std::clamp(topInset, 1, std::max(1, h - 1));
+    const int maxY = std::max(minTop, h - layout.height);
     int x = fileContextMenu.anchorX;
     int y = fileContextMenu.anchorY;
     if (x < 0 || y < 0) {
       x = (w - layout.width) / 2;
-      y = (h - layout.height) / 2;
+      y = minTop + std::max(0, (std::max(1, h - minTop) - layout.height) / 2);
     }
     x = std::clamp(x, 0, std::max(0, w - layout.width));
-    y = std::clamp(y, 1, std::max(1, h - layout.height));
+    y = std::clamp(y, minTop, maxY);
     layout.x = x;
     layout.y = y;
     layout.listY = y + 1;
@@ -1610,6 +1592,11 @@ int runTui(Options o) {
     }
 
     auto processInputEvent = [&](InputEvent ev) {
+      if (ev.type == InputEvent::Type::Resize) {
+        dirty = true;
+        if (callbacks.onResize) callbacks.onResize();
+        return;
+      }
       const bool browserInteractionEnabled = !melodyVisualizationEnabled;
       bool isLeftClick = (ev.type == InputEvent::Type::Mouse) &&
                         (ev.mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
@@ -1679,7 +1666,8 @@ int runTui(Options o) {
         return;
       }
       if (fileContextMenu.active) {
-        fileContextLayout = computeFileContextLayout(width, height);
+        fileContextLayout =
+            computeFileContextLayout(width, height, listTop);
         if (ev.type == InputEvent::Type::Key) {
           const KeyEvent& key = ev.key;
           if (key.vk == VK_ESCAPE) {
@@ -1827,7 +1815,8 @@ int runTui(Options o) {
             return;
           }
           if (leftPressed && mouse.eventFlags == 0) {
-            paletteLayout = computePaletteLayout(width, height, visibleRows);
+            paletteLayout =
+                computePaletteLayout(width, height, listTop, visibleRows);
             if (paletteLayout.valid) {
               if (mouse.pos.Y >= paletteLayout.listY &&
                   mouse.pos.Y < paletteLayout.listY + paletteLayout.listRows &&
@@ -1871,6 +1860,22 @@ int runTui(Options o) {
       audioShutdown();
     };
 
+    auto flushLayoutIfNeeded = [&]() {
+      if (layoutDirty && hasDirtyFlag(dirtyFlags, UiDirtyFlags::Layout)) {
+        rebuildLayout();
+      }
+    };
+
+    auto dispatchInputEvent = [&](const InputEvent& event) -> bool {
+      processSystemPlaybackCommands();
+      processInputEvent(event);
+      if (didRender) {
+        finalizeRenderedExit();
+        return false;
+      }
+      return true;
+    };
+
     const BrowserState::ViewMode preInputViewMode = browser.viewMode;
     const bool preInputMelodyVisualization = melodyVisualizationEnabled;
     const bool preInputOptionsMode = optionsBrowserIsActive(browser);
@@ -1878,23 +1883,19 @@ int runTui(Options o) {
     InputEvent ev{};
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       while (running && tuiWindow.PollInput(ev)) {
-        processSystemPlaybackCommands();
-        processInputEvent(ev);
-        if (didRender) {
-          finalizeRenderedExit();
-          return 0;
+        if (!dispatchInputEvent(ev)) return 0;
+        if (ev.type == InputEvent::Type::Resize) {
+          flushLayoutIfNeeded();
         }
+        if (!running) break;
       }
     }
 
-    while (running && input.poll(ev)) {
-      processSystemPlaybackCommands();
-      processInputEvent(ev);
-      if (didRender) {
-        finalizeRenderedExit();
-        return 0;
+    if (running && consoleInputPump.pollNext(input, ev)) {
+      if (!dispatchInputEvent(ev)) return 0;
+      if (ev.type == InputEvent::Type::Resize) {
+        flushLayoutIfNeeded();
       }
-      if (!running) break;
     }
     if (didRender) {
       finalizeRenderedExit();
@@ -1966,6 +1967,7 @@ int runTui(Options o) {
       bool browserInteractionEnabled = !melodyVisualizationEnabled;
 
       screen.clear(kStyleNormal);
+      screen.setAlwaysFullRedraw(forceFullRedraw);
 
       const std::string headerTitleRaw = "Radioify";
       std::string headerTitle = headerTitleRaw;
@@ -2395,12 +2397,13 @@ int runTui(Options o) {
       if (paletteActive) {
         auto cmds = buildCommands();
         filterCommands(cmds, &paletteFiltered);
-        int maxRows = std::max(1, height - 8);
+        int maxRows = std::max(1, height - listTop - 3);
         int visibleRows =
             std::min(maxRows, std::max(1, static_cast<int>(paletteFiltered.size())));
         ensurePaletteScroll(static_cast<int>(paletteFiltered.size()),
                             visibleRows);
-        paletteLayout = computePaletteLayout(width, height, visibleRows);
+        paletteLayout =
+            computePaletteLayout(width, height, listTop, visibleRows);
         if (paletteLayout.valid) {
           int x0 = paletteLayout.x;
           int y0 = paletteLayout.y;
@@ -2475,7 +2478,7 @@ int runTui(Options o) {
       }
 
       if (fileContextMenu.active) {
-        fileContextLayout = computeFileContextLayout(width, height);
+        fileContextLayout = computeFileContextLayout(width, height, listTop);
         if (fileContextLayout.valid) {
           int x0 = fileContextLayout.x;
           int y0 = fileContextLayout.y;
@@ -2550,9 +2553,11 @@ int runTui(Options o) {
           int popupWidth = std::max(46, utf8CodepointCount(sourceName) + 8);
           popupWidth = std::min(width - 2, popupWidth);
           popupWidth = std::max(24, popupWidth);
-          int popupHeight = 7;
+          int availableHeight = std::max(1, height - listTop);
+          int popupHeight = std::clamp(availableHeight, 5, 7);
           int x0 = std::max(0, (width - popupWidth) / 2);
-          int y0 = std::max(1, (height - popupHeight) / 2);
+          int y0 =
+              listTop + std::max(0, (availableHeight - popupHeight) / 2);
 
           for (int y = 0; y < popupHeight; ++y) {
             screen.writeRun(x0, y0 + y, popupWidth, L' ', kStyleNormal);
@@ -2595,6 +2600,7 @@ int runTui(Options o) {
       }
 
       screen.draw();
+      screen.setAlwaysFullRedraw(false);
       if (windowTuiEnabled && tuiWindow.IsOpen()) {
         int gridW = 0;
         int gridH = 0;
@@ -2605,6 +2611,7 @@ int runTui(Options o) {
       lastDraw = now;
       dirty = false;
       dirtyFlags = UiDirtyFlags::None;
+      forceFullRedraw = false;
     }
   }
   // Clear screen before exiting

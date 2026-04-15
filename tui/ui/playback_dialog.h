@@ -45,7 +45,6 @@ inline void renderDialogBody(ConsoleScreen& screen,
     lines.push_back(detail);
   }
 
-  screen.updateSize();
   int width = std::max(20, screen.width());
   int height = std::max(10, screen.height());
 
@@ -113,6 +112,7 @@ inline void showInfoDialog(ConsoleInput& input, ConsoleScreen& screen,
                           const std::string& message,
                           const std::string& detail,
                           const std::string& footer) {
+  screen.updateSize();
   renderDialogBody(screen, baseStyle, accentStyle, dimStyle, title, message,
                   detail, footer);
 
@@ -130,6 +130,7 @@ inline void showInfoDialog(ConsoleInput& input, ConsoleScreen& screen,
         if (ev.mouse.buttonState != 0) return;
       }
       if (ev.type == InputEvent::Type::Resize) {
+        screen.updateSize();
         renderDialogBody(screen, baseStyle, accentStyle, dimStyle, title,
                         message, detail, footer);
       }
@@ -146,6 +147,7 @@ inline DialogResult showConfirmDialog(ConsoleInput& input, ConsoleScreen& screen
                                     const std::string& message,
                                     const std::string& detail,
                                     const std::string& footer) {
+  screen.updateSize();
   renderDialogBody(screen, baseStyle, accentStyle, dimStyle, title, message,
                   detail, footer);
 
@@ -166,6 +168,7 @@ inline DialogResult showConfirmDialog(ConsoleInput& input, ConsoleScreen& screen
         }
       }
       if (ev.type == InputEvent::Type::Resize) {
+        screen.updateSize();
         renderDialogBody(screen, baseStyle, accentStyle, dimStyle, title,
                         message, detail, footer);
       }

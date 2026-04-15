@@ -1107,7 +1107,8 @@ bool ConsoleScreen::init() {
   originalOutputCp_ = GetConsoleOutputCP();
   useUtf8Output_ = false;
   DWORD mode = originalMode_;
-  mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT;
+  mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT |
+          DISABLE_NEWLINE_AUTO_RETURN;
   SetConsoleMode(out_, mode);
   CONSOLE_CURSOR_INFO cursor{};
   if (GetConsoleCursorInfo(out_, &cursor)) {
@@ -1152,16 +1153,20 @@ void ConsoleScreen::restore() {
 }
 
 void ConsoleScreen::updateSize() {
-  int oldW = width_;
-  int oldH = height_;
   CONSOLE_SCREEN_BUFFER_INFO info{};
   if (!GetConsoleScreenBufferInfo(out_, &info)) {
-    width_ = 80;
-    height_ = 25;
-  } else {
-    width_ = info.srWindow.Right - info.srWindow.Left + 1;
-    height_ = info.srWindow.Bottom - info.srWindow.Top + 1;
+    applySize(80, 25);
+    return;
   }
+  applySize(info.srWindow.Right - info.srWindow.Left + 1,
+            info.srWindow.Bottom - info.srWindow.Top + 1);
+}
+
+void ConsoleScreen::applySize(int width, int height) {
+  int oldW = width_;
+  int oldH = height_;
+  width_ = width;
+  height_ = height;
   if (width_ < 1) width_ = 1;
   if (height_ < 1) height_ = 1;
   size_t needed = static_cast<size_t>(width_ * height_);
@@ -1176,6 +1181,7 @@ void ConsoleScreen::updateSize() {
   if (dimsChanged) {
     outputFailed_ = false;
     outputErrorReported_ = false;
+    clearOnNextFullRedraw_ = true;
   }
 }
 
@@ -1380,12 +1386,15 @@ void ConsoleScreen::draw() {
   };
 
   if (fullRedraw) {
-    out.append(L"\x1b[H");
+    if (clearOnNextFullRedraw_) {
+      out.append(L"\x1b[2J");
+    }
     Color curFg{};
     Color curBg{};
     bool hasColor = false;
 
     for (int y = 0; y < height_; ++y) {
+      appendCursorPos(out, 1, y + 1);
       int rowStart = y * width_;
       for (int x = 0; x < width_; ++x) {
         const Cell& cell = buffer_[rowStart + x];
@@ -1404,9 +1413,6 @@ void ConsoleScreen::draw() {
         }
         out.push_back(cell.ch ? cell.ch : L' ');
       }
-      if (y < height_ - 1) {
-        out.append(L"\r\n");
-      }
     }
     out.append(L"\x1b[0m");
     if (!writeOutput(out)) {
@@ -1415,6 +1421,7 @@ void ConsoleScreen::draw() {
     }
     prevBuffer_ = buffer_;
     hasPrev_ = true;
+    clearOnNextFullRedraw_ = false;
     return;
   }
 

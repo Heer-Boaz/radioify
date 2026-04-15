@@ -67,6 +67,7 @@ class ConsoleScreen {
   void draw();
 
  private:
+  void applySize(int width, int height);
   void drawFast();
   bool writeOutput(const std::wstring& text);
   void reportWriteError(const wchar_t* context);
@@ -91,6 +92,7 @@ class ConsoleScreen {
   bool outputFailed_ = false;
   bool outputErrorReported_ = false;
   DWORD outputError_ = 0;
+  bool clearOnNextFullRedraw_ = true;
   std::vector<CHAR_INFO> fastBuffer_;
   std::vector<Cell> buffer_;
   std::vector<Cell> prevBuffer_;
