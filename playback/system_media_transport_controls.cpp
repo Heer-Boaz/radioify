@@ -214,11 +214,12 @@ struct PlaybackSystemControls::Impl {
   void updateDisplayMetadata(const State& state) {
     PlaybackMediaDisplayInfo metadata;
     PlaybackMediaDisplayRequest request;
+    PlaybackMediaDisplayResolveOptions options;
     request.isVideo = state.isVideo;
     request.file = state.file;
     request.trackIndex = state.trackIndex;
     std::string unusedError;
-    resolvePlaybackMediaDisplayInfo(request, &metadata, &unusedError);
+    resolvePlaybackMediaDisplayInfo(request, options, &metadata, &unusedError);
     auto updater = controls.DisplayUpdater();
     updater.ClearAll();
     updater.Type(state.isVideo ? MediaPlaybackType::Video
@@ -347,8 +348,11 @@ struct PlaybackSystemControls::Impl {
       clear();
     }
     buttonPressedRevoker = {};
+    controls = nullptr;
+    available = false;
     if (roInitialized) {
       RoUninitialize();
+      roInitialized = false;
     }
   }
 };

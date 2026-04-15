@@ -23,6 +23,10 @@ struct PlaybackMediaDisplayRequest {
   int trackIndex = -1;
 };
 
+struct PlaybackMediaDisplayResolveOptions {
+  bool includeArtwork = true;
+};
+
 struct PlaybackMediaDisplayInfo {
   std::string title;
   std::string subtitle;
@@ -34,5 +38,6 @@ struct PlaybackMediaDisplayInfo {
 };
 
 bool resolvePlaybackMediaDisplayInfo(const PlaybackMediaDisplayRequest& request,
+                                     const PlaybackMediaDisplayResolveOptions& options,
                                      PlaybackMediaDisplayInfo* out,
                                      std::string* error);

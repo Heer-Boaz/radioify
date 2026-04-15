@@ -13,6 +13,8 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
+#include "media_artwork_sidecar.h"
+#include "runtime_helpers.h"
 #include "ui_helpers.h"
 #include "video/ascii/asciiart.h"
 #include "video/framebuffer/text_grid_bitmap_renderer.h"
@@ -51,14 +53,6 @@ std::string ffmpegError(int err) {
   buf[0] = '\0';
   av_strerror(err, buf, sizeof(buf));
   return std::string(buf);
-}
-
-std::string lowercase(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char ch) {
-                   return static_cast<char>(std::tolower(ch));
-                 });
-  return value;
 }
 
 std::string fallbackMediaTitle(const std::filesystem::path& file) {
@@ -339,29 +333,8 @@ bool tryResolveSidecarArtwork(const std::filesystem::path& file, int maxWidth,
     return false;
   }
 
-  const std::filesystem::path dir = file.parent_path();
-  if (dir.empty()) {
-    return false;
-  }
-
-  const std::string stem = lowercase(file.stem().string());
-  static constexpr std::array<const char*, 4> exts = {
-      ".jpg", ".jpeg", ".png", ".bmp"};
-  static constexpr std::array<const char*, 4> names = {
-      "cover", "folder", "front", "album"};
-
   std::vector<std::filesystem::path> candidates;
-  candidates.reserve(exts.size() * (names.size() + 1));
-  for (const char* name : names) {
-    for (const char* ext : exts) {
-      candidates.push_back(dir / (std::string(name) + ext));
-    }
-  }
-  if (!stem.empty()) {
-    for (const char* ext : exts) {
-      candidates.push_back(dir / (stem + ext));
-    }
-  }
+  appendMediaArtworkSidecarCandidates(file, &candidates);
 
   for (const auto& candidate : candidates) {
     std::error_code ec;
@@ -384,8 +357,9 @@ bool tryResolveEmbeddedArtwork(const std::filesystem::path& file, int maxWidth,
   }
 
   AVFormatContext* fmt = nullptr;
+  const std::string pathUtf8 = toUtf8String(file);
   const int openErr =
-      avformat_open_input(&fmt, file.string().c_str(), nullptr, nullptr);
+      avformat_open_input(&fmt, pathUtf8.c_str(), nullptr, nullptr);
   if (openErr < 0) {
     setError(error, "Failed to open media artwork: " + ffmpegError(openErr));
     return false;
@@ -440,12 +414,22 @@ bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request
   }
 
   std::string artworkError;
-  if (tryResolveEmbeddedArtwork(request.file, maxWidth, maxHeight, out,
-                                &artworkError)) {
-    return true;
-  }
-  if (tryResolveSidecarArtwork(request.file, maxWidth, maxHeight, out)) {
-    return true;
+  if (!request.isVideo) {
+    if (tryResolveSidecarArtwork(request.file, maxWidth, maxHeight, out)) {
+      return true;
+    }
+    if (tryResolveEmbeddedArtwork(request.file, maxWidth, maxHeight, out,
+                                  &artworkError)) {
+      return true;
+    }
+  } else {
+    if (tryResolveEmbeddedArtwork(request.file, maxWidth, maxHeight, out,
+                                  &artworkError)) {
+      return true;
+    }
+    if (tryResolveSidecarArtwork(request.file, maxWidth, maxHeight, out)) {
+      return true;
+    }
   }
   if (buildAsciiPosterArtwork(request, info, maxWidth, maxHeight, out)) {
     return true;

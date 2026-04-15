@@ -1327,8 +1327,14 @@ bool initMiniaudioBackend(const std::filesystem::path& file, uint64_t, int,
                           std::string*) {
   ma_decoder_config decConfig =
       ma_decoder_config_init(ma_format_f32, gAudio.channels, gAudio.sampleRate);
-  return ma_decoder_init_file(file.string().c_str(), &decConfig,
+#ifdef _WIN32
+  return ma_decoder_init_file_w(file.c_str(), &decConfig,
+                                &gAudio.state.decoder) == MA_SUCCESS;
+#else
+  const std::string pathUtf8 = toUtf8String(file);
+  return ma_decoder_init_file(pathUtf8.c_str(), &decConfig,
                               &gAudio.state.decoder) == MA_SUCCESS;
+#endif
 }
 
 void uninitMiniaudioBackend() { ma_decoder_uninit(&gAudio.state.decoder); }

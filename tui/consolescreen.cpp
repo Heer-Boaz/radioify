@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cwchar>
 #include <deque>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -428,13 +429,15 @@ static bool renderAudioThumbnail(const std::filesystem::path& file,
                                  int trackIndex, int maxWidth, int maxHeight,
                                  Thumbnail& out, std::string* error) {
   PlaybackMediaDisplayRequest request;
+  PlaybackMediaDisplayResolveOptions options;
   request.file = file;
   request.trackIndex = trackIndex;
   request.isVideo = false;
+  options.includeArtwork = false;
 
   PlaybackMediaDisplayInfo info;
   std::string metadataError;
-  resolvePlaybackMediaDisplayInfo(request, &info, &metadataError);
+  resolvePlaybackMediaDisplayInfo(request, options, &info, &metadataError);
 
   AsciiArt art;
   std::string artworkError;
@@ -450,6 +453,54 @@ static bool renderAudioThumbnail(const std::filesystem::path& file,
   return true;
 }
 
+static bool executeThumbnailJob(const ThumbJob& job, Thumbnail& thumb,
+                                std::string* error) {
+  try {
+    if (job.isImage) {
+      return renderImageThumbnail(job.path, job.width, job.height, thumb, error);
+    }
+    if (job.isVideo) {
+      return renderVideoThumbnail(job.path, job.width, job.height, thumb, error);
+    }
+    if (job.isAudio) {
+      return renderAudioThumbnail(job.path, job.trackIndex, job.width,
+                                  job.height, thumb, error);
+    }
+  } catch (const std::exception& ex) {
+    if (error) {
+      *error = ex.what();
+    }
+    return false;
+  } catch (...) {
+    if (error) {
+      *error = "Thumbnail preview threw an unknown exception.";
+    }
+    return false;
+  }
+
+  return false;
+}
+
+#ifdef _WIN32
+static bool executeThumbnailJobGuarded(const ThumbJob& job, Thumbnail& thumb,
+                                       std::string* error) {
+  // Preview decode must never be able to take down the whole TUI.
+  __try {
+    return executeThumbnailJob(job, thumb, error);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    if (error) {
+      *error = "Thumbnail preview decoder faulted.";
+    }
+    return false;
+  }
+}
+#else
+static bool executeThumbnailJobGuarded(const ThumbJob& job, Thumbnail& thumb,
+                                       std::string* error) {
+  return executeThumbnailJob(job, thumb, error);
+}
+#endif
+
 static void thumbWorkerLoop() {
   ThumbCacheState& cache = thumbCache();
   for (;;) {
@@ -462,16 +513,8 @@ static void thumbWorkerLoop() {
     }
 
     Thumbnail thumb;
-    bool ok = false;
     std::string error;
-    if (job.isImage) {
-      ok = renderImageThumbnail(job.path, job.width, job.height, thumb, &error);
-    } else if (job.isVideo) {
-      ok = renderVideoThumbnail(job.path, job.width, job.height, thumb, &error);
-    } else if (job.isAudio) {
-      ok = renderAudioThumbnail(job.path, job.trackIndex, job.width,
-                                job.height, thumb, &error);
-    }
+    const bool ok = executeThumbnailJobGuarded(job, thumb, &error);
 
     {
       std::lock_guard<std::mutex> lock(cache.mutex);

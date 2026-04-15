@@ -19,6 +19,7 @@ extern "C" {
 #include "gmeaudio.h"
 #include "media_formats.h"
 #include "playback_track_catalog.h"
+#include "runtime_helpers.h"
 #include "ui_helpers.h"
 #include "vgmaudio.h"
 
@@ -155,7 +156,8 @@ void applyGmeMetadata(const std::filesystem::path& path, int trackIndex,
   }
 
   Music_Emu* emu = nullptr;
-  if (gme_open_file(path.string().c_str(), &emu, gme_info_only) != nullptr ||
+  const std::string pathUtf8 = toUtf8String(path);
+  if (gme_open_file(pathUtf8.c_str(), &emu, gme_info_only) != nullptr ||
       !emu) {
     applyTrackCatalogFallback(path, trackIndex, out);
     return;
@@ -264,8 +266,9 @@ bool tryResolveTaggedMetadata(const PlaybackMediaDisplayRequest& request,
   }
 
   AVFormatContext* fmt = nullptr;
+  const std::string pathUtf8 = toUtf8String(request.file);
   const int openErr =
-      avformat_open_input(&fmt, request.file.string().c_str(), nullptr, nullptr);
+      avformat_open_input(&fmt, pathUtf8.c_str(), nullptr, nullptr);
   if (openErr < 0) {
     setError(error, "Failed to open media metadata: " + ffmpegError(openErr));
     return false;
@@ -347,6 +350,7 @@ bool tryResolveTaggedMetadata(const PlaybackMediaDisplayRequest& request,
 }  // namespace
 
 bool resolvePlaybackMediaDisplayInfo(const PlaybackMediaDisplayRequest& request,
+                                     const PlaybackMediaDisplayResolveOptions& options,
                                      PlaybackMediaDisplayInfo* out,
                                      std::string* error) {
   if (!out) {
@@ -381,7 +385,9 @@ bool resolvePlaybackMediaDisplayInfo(const PlaybackMediaDisplayRequest& request,
     out->subtitle = out->artist;
   }
 
-  resolvePlaybackMediaArtworkBitmap(request, *out, &out->artwork, nullptr);
+  if (options.includeArtwork) {
+    resolvePlaybackMediaArtworkBitmap(request, *out, &out->artwork, nullptr);
+  }
 
   if (!metadataError.empty() && error) {
     *error = metadataError;

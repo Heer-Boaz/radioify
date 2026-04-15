@@ -1,3 +1,11 @@
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -27,6 +35,7 @@
 #include "browsermeta.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
+#include "media_artwork_sidecar.h"
 #include "core/windows_message_pump.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
@@ -151,6 +160,26 @@ static bool isSupportedMediaExt(const std::filesystem::path& p) {
   return isSupportedAudioExt(p) || isSupportedImageExt(p) || isVideoExt(p);
 }
 
+static bool shouldHideBrowserMediaMetadataFile(
+    const std::filesystem::directory_entry& entry) {
+#ifdef _WIN32
+  const std::filesystem::path& path = entry.path();
+  if (!isKnownMediaArtworkSidecarPath(path)) {
+    return false;
+  }
+
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    return false;
+  }
+
+  return (attributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0;
+#else
+  (void)entry;
+  return false;
+#endif
+}
+
 static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
   std::vector<FileEntry> entries;
   std::vector<FileEntry> items;
@@ -242,7 +271,8 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
       if (entry.is_directory(ec) && !ec) {
         items.push_back(FileEntry{toUtf8String(p.filename()), p, true});
       } else {
-        if (entry.is_regular_file(ec) && !ec && isSupportedMediaExt(p)) {
+        if (entry.is_regular_file(ec) && !ec && isSupportedMediaExt(p) &&
+            !shouldHideBrowserMediaMetadataFile(entry)) {
           items.push_back(FileEntry{toUtf8String(p.filename()), p, false});
         }
       }

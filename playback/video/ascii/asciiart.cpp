@@ -18,6 +18,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -110,6 +112,8 @@ FORCE_INLINE int scaleDelta256(int delta, int scale) {
 }
 
 constexpr int kParallelBatchRows = 8;
+constexpr int64_t kSmallImageParallelPixelBudget = 96 * 96;
+constexpr int64_t kSmallImageParallelCellBudget = 48 * 48;
 
 int hardwareThreadCount() {
   static int count = []() {
@@ -135,22 +139,49 @@ void parallelFor(int totalRows, int minBatch, int workerCount, Fn&& fn) {
     return;
   }
   std::atomic<int> next{0};
+  std::atomic<bool> failed{false};
+  std::exception_ptr failure;
+  std::mutex failureMutex;
+  auto captureFailure = [&](std::exception_ptr ep) {
+    if (!ep) return;
+    std::lock_guard<std::mutex> lock(failureMutex);
+    if (!failure) {
+      failure = std::move(ep);
+    }
+  };
   auto worker = [&](int workerId) {
-    for (;;) {
-      int start = next.fetch_add(minBatch);
-      if (start >= totalRows) break;
-      int end = std::min(totalRows, start + minBatch);
-      fn(start, end, workerId);
+    try {
+      for (;;) {
+        if (failed.load(std::memory_order_acquire)) {
+          break;
+        }
+        int start = next.fetch_add(minBatch);
+        if (start >= totalRows) break;
+        int end = std::min(totalRows, start + minBatch);
+        fn(start, end, workerId);
+      }
+    } catch (...) {
+      failed.store(true, std::memory_order_release);
+      captureFailure(std::current_exception());
     }
   };
   std::vector<std::thread> threads;
   threads.reserve(static_cast<size_t>(workerCount - 1));
   for (int i = 1; i < workerCount; ++i) {
-    threads.emplace_back(worker, i);
+    try {
+      threads.emplace_back(worker, i);
+    } catch (...) {
+      failed.store(true, std::memory_order_release);
+      captureFailure(std::current_exception());
+      break;
+    }
   }
   worker(0);
   for (auto& t : threads) {
     t.join();
+  }
+  if (failure) {
+    std::rethrow_exception(failure);
   }
 }
 
@@ -1504,6 +1535,14 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
   uint64_t lumCount = 0;
   uint32_t lumHist[256] = {};
   int workerCount = computeWorkerCount(scaledH, kParallelBatchRows);
+  const int64_t scaledPixels =
+      static_cast<int64_t>(scaledW) * static_cast<int64_t>(scaledH);
+  const int64_t outputCells =
+      static_cast<int64_t>(scratch.outW) * static_cast<int64_t>(scratch.outH);
+  if (scaledPixels <= kSmallImageParallelPixelBudget ||
+      outputCells <= kSmallImageParallelCellBudget) {
+    workerCount = 1;
+  }
   std::vector<std::array<uint32_t, 256>> localHist(workerCount);
   std::vector<uint64_t> localLumCount(workerCount, 0);
   for (auto& hist : localHist) {
