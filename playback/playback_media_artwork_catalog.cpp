@@ -415,11 +415,11 @@ bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request
 
   std::string artworkError;
   if (!request.isVideo) {
-    if (tryResolveSidecarArtwork(request.file, maxWidth, maxHeight, out)) {
-      return true;
-    }
     if (tryResolveEmbeddedArtwork(request.file, maxWidth, maxHeight, out,
                                   &artworkError)) {
+      return true;
+    }
+    if (tryResolveSidecarArtwork(request.file, maxWidth, maxHeight, out)) {
       return true;
     }
   } else {

@@ -49,6 +49,7 @@ void appendMediaArtworkSidecarCandidates(
     return;
   }
 
+  const std::string stemUtf8 = toUtf8String(mediaPath.stem());
   const std::string stemLower = lowercasePathStemUtf8(mediaPath);
   static constexpr std::array<const char*, 4> kExts = {
       ".jpg", ".jpeg", ".png", ".bmp"};
@@ -58,12 +59,17 @@ void appendMediaArtworkSidecarCandidates(
 
   outCandidates->reserve(outCandidates->size() +
                          kExts.size() * (kNames.size() + 1));
+  if (!stemUtf8.empty()) {
+    for (const char* ext : kExts) {
+      outCandidates->push_back(dir / (stemUtf8 + ext));
+    }
+  }
   for (const char* name : kNames) {
     for (const char* ext : kExts) {
       outCandidates->push_back(dir / (std::string(name) + ext));
     }
   }
-  if (!stemLower.empty()) {
+  if (!stemLower.empty() && stemLower != stemUtf8) {
     for (const char* ext : kExts) {
       outCandidates->push_back(dir / (stemLower + ext));
     }
