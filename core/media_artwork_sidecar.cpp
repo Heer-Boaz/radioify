@@ -39,6 +39,7 @@ bool isKnownMediaArtworkSidecarPath(const std::filesystem::path& path) {
 
 void appendMediaArtworkSidecarCandidates(
     const std::filesystem::path& mediaPath,
+    MediaArtworkSidecarPolicy policy,
     std::vector<std::filesystem::path>* outCandidates) {
   if (!outCandidates) {
     return;
@@ -64,9 +65,11 @@ void appendMediaArtworkSidecarCandidates(
       outCandidates->push_back(dir / (stemUtf8 + ext));
     }
   }
-  for (const char* name : kNames) {
-    for (const char* ext : kExts) {
-      outCandidates->push_back(dir / (std::string(name) + ext));
+  if (policy == MediaArtworkSidecarPolicy::IncludeGenericDirectoryFallback) {
+    for (const char* name : kNames) {
+      for (const char* ext : kExts) {
+        outCandidates->push_back(dir / (std::string(name) + ext));
+      }
     }
   }
   if (!stemLower.empty() && stemLower != stemUtf8) {

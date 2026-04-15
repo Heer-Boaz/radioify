@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "media_artwork_sidecar.h"
+
 struct PlaybackMediaArtwork {
   enum class Kind : uint8_t {
     None,
@@ -25,6 +27,8 @@ struct PlaybackMediaDisplayRequest {
 
 struct PlaybackMediaDisplayResolveOptions {
   bool includeArtwork = true;
+  MediaArtworkSidecarPolicy artworkSidecarPolicy =
+      MediaArtworkSidecarPolicy::IncludeGenericDirectoryFallback;
 };
 
 struct PlaybackMediaDisplayInfo {

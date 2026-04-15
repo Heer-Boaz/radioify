@@ -327,14 +327,15 @@ bool tryBuildAsciiArtworkFromEncodedBytes(const uint8_t* bytes, size_t size,
                                              *out, &unusedError);
 }
 
-bool tryResolveSidecarArtwork(const std::filesystem::path& file, int maxWidth,
-                              int maxHeight, AsciiArt* out) {
+bool tryResolveSidecarArtwork(const std::filesystem::path& file,
+                              MediaArtworkSidecarPolicy sidecarPolicy,
+                              int maxWidth, int maxHeight, AsciiArt* out) {
   if (!out) {
     return false;
   }
 
   std::vector<std::filesystem::path> candidates;
-  appendMediaArtworkSidecarCandidates(file, &candidates);
+  appendMediaArtworkSidecarCandidates(file, sidecarPolicy, &candidates);
 
   for (const auto& candidate : candidates) {
     std::error_code ec;
@@ -398,6 +399,7 @@ bool tryResolveEmbeddedArtwork(const std::filesystem::path& file, int maxWidth,
 
 bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request,
                                       const PlaybackMediaDisplayInfo& info,
+                                      MediaArtworkSidecarPolicy sidecarPolicy,
                                       int maxWidth,
                                       int maxHeight,
                                       AsciiArt* out,
@@ -419,7 +421,8 @@ bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request
                                   &artworkError)) {
       return true;
     }
-    if (tryResolveSidecarArtwork(request.file, maxWidth, maxHeight, out)) {
+    if (tryResolveSidecarArtwork(request.file, sidecarPolicy, maxWidth,
+                                 maxHeight, out)) {
       return true;
     }
   } else {
@@ -427,7 +430,8 @@ bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request
                                   &artworkError)) {
       return true;
     }
-    if (tryResolveSidecarArtwork(request.file, maxWidth, maxHeight, out)) {
+    if (tryResolveSidecarArtwork(request.file, sidecarPolicy, maxWidth,
+                                 maxHeight, out)) {
       return true;
     }
   }
@@ -444,6 +448,7 @@ bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request
 bool resolvePlaybackMediaArtworkBitmap(
     const PlaybackMediaDisplayRequest& request,
     const PlaybackMediaDisplayInfo& info,
+    MediaArtworkSidecarPolicy sidecarPolicy,
     PlaybackMediaArtwork* out,
     std::string* error) {
   if (!out) {
@@ -454,8 +459,9 @@ bool resolvePlaybackMediaArtworkBitmap(
   *out = PlaybackMediaArtwork{};
   AsciiArt art;
   std::string asciiError;
-  if (!resolvePlaybackMediaArtworkAscii(request, info, kArtworkMaxCols,
-                                        kArtworkMaxRows, &art, &asciiError)) {
+  if (!resolvePlaybackMediaArtworkAscii(request, info, sidecarPolicy,
+                                        kArtworkMaxCols, kArtworkMaxRows,
+                                        &art, &asciiError)) {
     if (!asciiError.empty()) {
       setError(error, asciiError);
     }

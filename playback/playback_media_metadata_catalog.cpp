@@ -386,7 +386,9 @@ bool resolvePlaybackMediaDisplayInfo(const PlaybackMediaDisplayRequest& request,
   }
 
   if (options.includeArtwork) {
-    resolvePlaybackMediaArtworkBitmap(request, *out, &out->artwork, nullptr);
+    resolvePlaybackMediaArtworkBitmap(request, *out,
+                                      options.artworkSidecarPolicy,
+                                      &out->artwork, nullptr);
   }
 
   if (!metadataError.empty() && error) {

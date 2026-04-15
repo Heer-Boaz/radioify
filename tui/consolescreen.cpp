@@ -433,8 +433,9 @@ static bool renderAudioThumbnail(const std::filesystem::path& file,
 
   AsciiArt art;
   std::string artworkError;
-  if (!resolvePlaybackMediaArtworkAscii(request, info, maxWidth, maxHeight,
-                                        &art, &artworkError)) {
+  if (!resolvePlaybackMediaArtworkAscii(
+          request, info, MediaArtworkSidecarPolicy::FileSpecificOnly, maxWidth,
+          maxHeight, &art, &artworkError)) {
     if (error) {
       *error = !artworkError.empty() ? artworkError : metadataError;
     }
