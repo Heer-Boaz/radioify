@@ -1325,6 +1325,8 @@ bool ConsoleScreen::snapshot(std::vector<ScreenCell>& outCells, int& outWidth,
     dst.ch = src.continuation
                  ? L' '
                  : (src.glyphLen == 1 ? src.glyph[0] : L'\uFFFD');
+    dst.cellWidth = src.continuation ? 0 : std::max<uint8_t>(1, src.cellWidth);
+    dst.continuation = src.continuation;
     dst.fg = src.fg;
     dst.bg = src.bg;
   }

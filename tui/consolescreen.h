@@ -38,6 +38,8 @@ struct BreadcrumbLine {
 
 struct ScreenCell {
   wchar_t ch = L' ';
+  uint8_t cellWidth = 1;
+  bool continuation = false;
   Color fg{255, 255, 255};
   Color bg{0, 0, 0};
 };

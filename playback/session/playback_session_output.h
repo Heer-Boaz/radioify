@@ -43,6 +43,7 @@ class PlaybackOutputController {
   bool windowRequested() const;
   bool windowActive() const;
   bool windowVisible() const;
+  bool consumeWindowCloseRequested();
   PlaybackRenderMode renderMode(bool enableAscii) const;
   void requestLayout(PlaybackLayout layout);
   PlaybackLayout& desiredLayout();

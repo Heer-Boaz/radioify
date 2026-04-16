@@ -80,6 +80,7 @@ struct PlaybackOverlayState {
   std::string subtitleText;
   std::string subtitleRenderError;
   std::shared_ptr<const std::string> subtitleAssScript;
+  std::shared_ptr<const SubtitleFontAttachmentList> subtitleAssFonts;
   std::vector<WindowUiState::SubtitleCue> subtitleCues;
   int screenWidth = 0;
   int screenHeight = 0;

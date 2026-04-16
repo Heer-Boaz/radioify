@@ -12,12 +12,13 @@ namespace playback_overlay {
 namespace {
 
 int countVisibleChars(const std::string& text) {
-  int count = 0;
+  std::string filtered;
+  filtered.reserve(text.size());
   for (char c : text) {
     if (c == '\r' || c == '\n') continue;
-    ++count;
+    filtered.push_back(c);
   }
-  return count;
+  return utf8DisplayWidth(filtered);
 }
 
 std::pair<std::string, std::string> makeLabels(const std::string& text) {
@@ -76,6 +77,7 @@ PlaybackOverlayState buildPlaybackOverlayState(
       if (const SubtitleTrack* activeTrack =
               inputs.subtitleManager->activeTrack()) {
         state.subtitleAssScript = activeTrack->assScript;
+        state.subtitleAssFonts = activeTrack->assFonts;
       }
     }
   }
@@ -208,8 +210,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   if (state.canCycleAudioTracks && state.audioOk) {
     std::string activeAudio = state.activeAudioTrackLabel;
     if (activeAudio.empty()) activeAudio = "N/A";
-    if (utf8CodepointCount(activeAudio) > 14) {
-      activeAudio = utf8Take(activeAudio, 14);
+    if (utf8DisplayWidth(activeAudio) > 14) {
+      activeAudio = utf8TakeDisplayWidth(activeAudio, 14);
     }
     audioLabel = "Audio: " + activeAudio;
   }
@@ -232,8 +234,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     } else {
       std::string activeSubtitle = state.activeSubtitleLabel;
       if (activeSubtitle.empty()) activeSubtitle = "N/A";
-      if (utf8CodepointCount(activeSubtitle) > 14) {
-        activeSubtitle = utf8Take(activeSubtitle, 14);
+      if (utf8DisplayWidth(activeSubtitle) > 14) {
+        activeSubtitle = utf8TakeDisplayWidth(activeSubtitle, 14);
       }
       subtitleLabel = "Subs: " + activeSubtitle;
     }
@@ -257,7 +259,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     if (textWidth < spec.width) {
       spec.renderText.append(static_cast<size_t>(spec.width - textWidth), ' ');
     } else if (textWidth > spec.width) {
-      spec.renderText = utf8Take(spec.renderText, spec.width);
+      spec.renderText = utf8TakeDisplayWidth(spec.renderText, spec.width);
     }
     cursor += spec.width;
   }
@@ -377,8 +379,8 @@ int windowOverlayControlAt(const PlaybackOverlayState& state,
 
   std::string topLine = buildWindowOverlayTopLine(state);
   std::string controlsLine = buildOverlayControlsText(state, -1);
-  int maxChars = std::max(utf8CodepointCount(topLine),
-                          utf8CodepointCount(controlsLine));
+  int maxChars = std::max(utf8DisplayWidth(topLine),
+                          utf8DisplayWidth(controlsLine));
   if (maxChars <= 0) return -1;
   std::string progressLine = buildWindowOverlayProgressSuffix(state);
   int linePxH = std::clamp(static_cast<int>(std::round(state.windowHeight * 0.045f)),
@@ -447,6 +449,7 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   }
   ui.subtitleClockUs = state.subtitleClockUs;
   ui.subtitleAssScript = state.subtitleAssScript;
+  ui.subtitleAssFonts = state.subtitleAssFonts;
   ui.subtitleRenderError = state.subtitleRenderError;
   ui.subtitleCues = state.subtitleCues;
   ui.displaySec = state.displaySec;

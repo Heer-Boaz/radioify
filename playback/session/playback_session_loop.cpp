@@ -301,7 +301,8 @@ struct PlaybackLoopRunner::Impl {
 
   void pollWindowEvents() {
     output.pollWindowEvents();
-    if (output.windowRequested() && !output.windowVisible()) {
+    if (output.consumeWindowCloseRequested() ||
+        (output.windowRequested() && !output.windowVisible())) {
       output.requestLayout(PlaybackLayout::Terminal);
       forceRefreshArt = true;
       redraw = true;

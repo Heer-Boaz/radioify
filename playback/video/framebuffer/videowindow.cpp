@@ -523,37 +523,14 @@ namespace {
 #if RADIOIFY_HAS_LIBASS
     class LibassOverlayRenderer {
     public:
-        LibassOverlayRenderer() {
-            library_ = ass_library_init();
-            if (!library_) {
-                initError_ = "libass library initialization failed";
-                return;
-            }
-            ass_set_message_cb(library_, &LibassOverlayRenderer::logCallback, this);
-            renderer_ = ass_renderer_init(library_);
-            if (!renderer_) {
-                initError_ = "libass renderer initialization failed";
-                return;
-            }
-            ass_set_fonts(renderer_, nullptr, "Arial", 1, nullptr, 1);
-        }
+        LibassOverlayRenderer() = default;
 
         ~LibassOverlayRenderer() {
-            if (track_) {
-                ass_free_track(track_);
-                track_ = nullptr;
-            }
-            if (renderer_) {
-                ass_renderer_done(renderer_);
-                renderer_ = nullptr;
-            }
-            if (library_) {
-                ass_library_done(library_);
-                library_ = nullptr;
-            }
+            resetAssState();
         }
 
         AssRenderResult render(const std::shared_ptr<const std::string>& assScript,
+                               const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
                                int64_t clockUs, int canvasW, int canvasH,
                                std::vector<uint8_t>* outCanvas) {
             if (!outCanvas || canvasW <= 0 || canvasH <= 0) {
@@ -575,16 +552,8 @@ namespace {
             }
 
             const uint64_t scriptHash = assScriptFingerprint(*assScript);
-            if (!library_ || !renderer_) {
-                if (initError_.empty()) {
-                    initError_ = "libass renderer not initialized";
-                }
-                logErrorOnce(scriptHash, initError_);
-                return {AssRenderStatus::error_init_or_parse, initError_};
-            }
-
             std::string parseError;
-            if (!ensureTrack(assScript, &parseError)) {
+            if (!ensureTrack(assScript, assFonts, &parseError)) {
                 if (parseError.empty()) {
                     parseError = "Failed to parse ASS script.";
                 }
@@ -666,10 +635,58 @@ namespace {
         }
 
     private:
+        bool ensureRenderer(
+            const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
+            std::string* outError) {
+            std::shared_ptr<const SubtitleFontAttachmentList> loadedFonts =
+                loadedFonts_.lock();
+            if (library_ && renderer_ && loadedFonts.get() == assFonts.get()) {
+                return true;
+            }
+
+            resetAssState();
+
+            library_ = ass_library_init();
+            if (!library_) {
+                initError_ = "libass library initialization failed";
+                if (outError) *outError = initError_;
+                return false;
+            }
+            ass_set_message_cb(library_, &LibassOverlayRenderer::logCallback, this);
+
+            if (assFonts) {
+                for (const SubtitleFontAttachment& attachment : *assFonts) {
+                    if (attachment.filename.empty() || attachment.data.empty() ||
+                        attachment.data.size() >
+                            static_cast<size_t>((std::numeric_limits<int>::max)())) {
+                        continue;
+                    }
+                    ass_add_font(
+                        library_, attachment.filename.c_str(),
+                        reinterpret_cast<const char*>(attachment.data.data()),
+                        static_cast<int>(attachment.data.size()));
+                }
+            }
+
+            renderer_ = ass_renderer_init(library_);
+            if (!renderer_) {
+                initError_ = "libass renderer initialization failed";
+                if (outError) *outError = initError_;
+                return false;
+            }
+            ass_set_fonts(renderer_, nullptr, nullptr, 1, nullptr, 1);
+            loadedFonts_ = assFonts;
+            return true;
+        }
+
         bool ensureTrack(const std::shared_ptr<const std::string>& assScript,
+                         const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
                          std::string* outError) {
-            if (!library_ || !assScript) {
+            if (!assScript) {
                 if (outError) *outError = "libass track input is invalid.";
+                return false;
+            }
+            if (!ensureRenderer(assFonts, outError)) {
                 return false;
             }
             if (track_) {
@@ -717,6 +734,26 @@ namespace {
             return true;
         }
 
+        void resetAssState() {
+            if (track_) {
+                ass_free_track(track_);
+                track_ = nullptr;
+            }
+            if (renderer_) {
+                ass_renderer_done(renderer_);
+                renderer_ = nullptr;
+            }
+            if (library_) {
+                ass_library_done(library_);
+                library_ = nullptr;
+            }
+            loadedScript_.reset();
+            loadedFonts_.reset();
+            scriptCache_.clear();
+            initError_.clear();
+            lastErrorMessage_.clear();
+        }
+
         void logErrorOnce(uint64_t scriptHash, const std::string& message) {
             if (message.empty()) return;
             if (loggedErrorHashes_.insert(scriptHash).second) {
@@ -753,6 +790,7 @@ namespace {
         ASS_Renderer* renderer_ = nullptr;
         ASS_Track* track_ = nullptr;
         std::weak_ptr<const std::string> loadedScript_;
+        std::weak_ptr<const SubtitleFontAttachmentList> loadedFonts_;
         std::string scriptCache_;
         std::string initError_;
         std::string lastErrorMessage_;
@@ -760,16 +798,22 @@ namespace {
     };
 
     static AssRenderResult renderAssSubtitlesToCanvas(
-        const std::shared_ptr<const std::string>& assScript, int64_t clockUs,
-        int canvasW, int canvasH, std::vector<uint8_t>* outCanvas) {
+        const std::shared_ptr<const std::string>& assScript,
+        const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
+        int64_t clockUs, int canvasW, int canvasH,
+        std::vector<uint8_t>* outCanvas) {
         static LibassOverlayRenderer renderer;
-        return renderer.render(assScript, clockUs, canvasW, canvasH, outCanvas);
+        return renderer.render(assScript, assFonts, clockUs, canvasW, canvasH,
+                               outCanvas);
     }
 #else
     static AssRenderResult renderAssSubtitlesToCanvas(
-        const std::shared_ptr<const std::string>& assScript, int64_t clockUs,
-        int canvasW, int canvasH, std::vector<uint8_t>* outCanvas) {
+        const std::shared_ptr<const std::string>& assScript,
+        const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
+        int64_t clockUs, int canvasW, int canvasH,
+        std::vector<uint8_t>* outCanvas) {
         (void)assScript;
+        (void)assFonts;
         (void)clockUs;
         (void)canvasW;
         (void)canvasH;
@@ -1508,7 +1552,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             return 0;
         }
         if (uMsg == WM_CLOSE) {
-            ::ShowWindow(pThis->m_hWnd, SW_HIDE);
+            pThis->m_closeRequested.store(true, std::memory_order_relaxed);
             return 0;
         }
         if (uMsg == WM_DESTROY) {
@@ -1665,6 +1709,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 bool VideoWindow::Open(int width, int height, const std::string& title,
                        bool startFullscreen) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    m_closeRequested.store(false, std::memory_order_relaxed);
     HINSTANCE hInstance = GetModuleHandle(NULL);
     const wchar_t* className = L"RadioifyVideoWindow";
 
@@ -1898,6 +1943,7 @@ void VideoWindow::Resize(int width, int height) {
 }
 
 void VideoWindow::Close() {
+    m_closeRequested.store(false, std::memory_order_relaxed);
     SetCursorVisible(true);
     // Hide the window first to release focus/ownership of the monitor
     if (m_hWnd) {
@@ -1949,6 +1995,10 @@ bool VideoWindow::PollInput(InputEvent& ev) {
     ev = m_inputQueue.front();
     m_inputQueue.erase(m_inputQueue.begin());
     return true;
+}
+
+bool VideoWindow::ConsumeCloseRequested() {
+    return m_closeRequested.exchange(false, std::memory_order_relaxed);
 }
 
 void VideoWindow::SetVsync(bool enabled) {
@@ -2131,8 +2181,13 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     bool showOverlay = ui.overlayAlpha > 0.01f;
     const bool hasAssScript =
         static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
+    const bool hasPlaintextSubtitleCues = std::any_of(
+        ui.subtitleCues.begin(), ui.subtitleCues.end(),
+        [](const WindowUiState::SubtitleCue& cue) {
+            return !cue.assStyled && !cue.text.empty();
+        });
     bool showSubtitle =
-        ui.subtitleAlpha > 0.01f && (!ui.subtitleCues.empty() || hasAssScript);
+        ui.subtitleAlpha > 0.01f && (hasPlaintextSubtitleCues || hasAssScript);
     if (!hasAssScript && !ui.subtitleRenderError.empty()) {
         setSubtitleRenderError({});
     }
@@ -2315,6 +2370,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             if (useAssScript) {
                 const AssRenderResult assResult =
                     renderAssSubtitlesToCanvas(ui.subtitleAssScript,
+                                               ui.subtitleAssFonts,
                                                ui.subtitleClockUs, canvasW, canvasH,
                                                &canvas);
                 if (assResult.status == AssRenderStatus::error_init_or_parse) {
@@ -2385,7 +2441,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             };
 
             for (const auto& cue : ui.subtitleCues) {
-                if (useAssScript && cue.assStyled) continue;
+                if (cue.assStyled) continue;
                 if (cue.text.empty()) continue;
 
                 CaptionStyleProfile cueStyle = baseCaptionStyle;

@@ -39,6 +39,10 @@ bool PlaybackOutputController::windowVisible() const {
   return impl_->presentation.window().IsVisible();
 }
 
+bool PlaybackOutputController::consumeWindowCloseRequested() {
+  return impl_->presentation.window().ConsumeCloseRequested();
+}
+
 PlaybackRenderMode PlaybackOutputController::renderMode(bool enableAscii) const {
   return impl_->presentation.renderMode(enableAscii);
 }

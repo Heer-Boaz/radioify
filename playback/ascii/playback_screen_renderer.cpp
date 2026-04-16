@@ -8,6 +8,7 @@
 
 #include "audioplayback.h"
 #include "ui_helpers.h"
+#include "unicode_display_width.h"
 
 namespace playback_screen_renderer {
 namespace {
@@ -315,8 +316,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         int avail = width - x;
         if (avail <= 0) break;
         std::string text = spec.renderText;
-        if (utf8CodepointCount(text) > avail) {
-          text = utf8Take(text, avail);
+        if (utf8DisplayWidth(text) > avail) {
+          text = utf8TakeDisplayWidth(text, avail);
         }
         Style style = spec.active ? accentStyle : baseStyle;
         bool hovered =
@@ -355,7 +356,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     screen.writeChar(1 + barWidth, barLine, L'|', progressFrameStyle);
     if (!suffix.empty() && suffixLine >= artTop && suffixLine >= 0) {
       std::string suffixFit = fitLine(suffix, width);
-      int suffixWidth = utf8CodepointCount(suffixFit);
+      int suffixWidth = utf8DisplayWidth(suffixFit);
       int suffixX = std::max(0, width - suffixWidth);
       screen.writeText(suffixX, suffixLine, suffixFit, baseStyle);
     }

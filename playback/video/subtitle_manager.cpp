@@ -19,6 +19,7 @@ extern "C" {
 }
 
 #include "runtime_helpers.h"
+#include "subtitle_font_attachments.h"
 #include "ui_helpers.h"
 
 namespace {
@@ -1953,7 +1954,8 @@ void appendEmbeddedAssDialogue(std::string* script, int64_t startUs, int64_t end
   script->push_back('\n');
 }
 
-bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outCue) {
+bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outCue,
+                       AssPacketEventFields* outAssEvent = nullptr) {
   if (!outCue || !pkt.data || pkt.size <= 0) return false;
   std::string payload(reinterpret_cast<const char*>(pkt.data),
                       reinterpret_cast<const char*>(pkt.data + pkt.size));
@@ -1963,6 +1965,9 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
     cue.assStyled = true;
     AssPacketEventFields event;
     if (!parseAssPacketEventLine(payload, &event)) return false;
+    if (outAssEvent) {
+      *outAssEvent = event;
+    }
     cue.layer = event.layer;
     payload = event.text;
 
@@ -2048,6 +2053,8 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     SubtitleTrack track;
   };
   std::vector<EmbeddedTrackInfo> refs;
+  const std::shared_ptr<const SubtitleFontAttachmentList> fontAttachments =
+      loadEmbeddedSubtitleFontAttachments(fmt);
 
   for (unsigned i = 0; i < fmt->nb_streams; ++i) {
     AVStream* stream = fmt->streams[i];
@@ -2090,13 +2097,10 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     for (auto& ref : refs) {
       if (pkt->stream_index != ref.streamIndex) continue;
       if (!isTextSubtitleCodec(ref.codecId)) break;
-      std::string assPacketPayload;
-      if (ref.assLike && pkt->data && pkt->size > 0) {
-        assPacketPayload.assign(reinterpret_cast<const char*>(pkt->data),
-                                reinterpret_cast<const char*>(pkt->data + pkt->size));
-      }
       SubtitleCue cue;
-      if (!packetSubtitleCue(ref.codecId, *pkt, &cue)) break;
+      AssPacketEventFields assEvent;
+      AssPacketEventFields* assEventOut = ref.assLike ? &assEvent : nullptr;
+      if (!packetSubtitleCue(ref.codecId, *pkt, &cue, assEventOut)) break;
       int64_t startUs = packetPtsUs(*pkt, ref.timeBase);
       if (startUs == AV_NOPTS_VALUE) break;
       startUs -= formatStartUs;
@@ -2107,24 +2111,8 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
       }
       cue.startUs = startUs;
       cue.endUs = endUs;
-      if (ref.assLike && !assPacketPayload.empty()) {
-        AssPacketEventFields event;
-        if (parseAssPacketEventLine(assPacketPayload, &event)) {
-          appendEmbeddedAssDialogue(&ref.assScript, startUs, endUs, event);
-        } else {
-          AssPacketEventFields fallback;
-          fallback.layer = cue.layer;
-          fallback.marginL =
-              static_cast<int>(std::lround(cue.marginLNorm * 384.0f));
-          fallback.marginR =
-              static_cast<int>(std::lround(cue.marginRNorm * 384.0f));
-          fallback.marginV =
-              static_cast<int>(std::lround(cue.marginVNorm * 288.0f));
-          fallback.text = cue.rawText.empty() ? cue.text : cue.rawText;
-          if (!fallback.text.empty()) {
-            appendEmbeddedAssDialogue(&ref.assScript, startUs, endUs, fallback);
-          }
-        }
+      if (ref.assLike) {
+        appendEmbeddedAssDialogue(&ref.assScript, startUs, endUs, assEvent);
       }
       ref.track.cues.push_back(std::move(cue));
       break;
@@ -2143,6 +2131,7 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     }
     if (ref.assLike && !ref.assScript.empty()) {
       ref.track.assScript = std::make_shared<const std::string>(ref.assScript);
+      ref.track.assFonts = fontAttachments;
     }
     ref.track.resetLookup();
     outTracks->push_back(std::move(ref.track));

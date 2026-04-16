@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "subtitle_font_attachments.h"
+
 struct SubtitleCue {
   int64_t startUs = 0;
   int64_t endUs = 0;
@@ -34,6 +36,7 @@ struct SubtitleTrack {
   std::string label;
   std::vector<SubtitleCue> cues;
   std::shared_ptr<const std::string> assScript;
+  std::shared_ptr<const SubtitleFontAttachmentList> assFonts;
   mutable size_t lastCueIndex = 0;
 
   void cuesAt(int64_t clockUs, std::vector<const SubtitleCue*>* out) const;

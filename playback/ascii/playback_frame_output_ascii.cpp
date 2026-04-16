@@ -18,6 +18,7 @@
 #include <wrl/client.h>
 
 #include "subtitle_caption_style.h"
+#include "unicode_display_width.h"
 
 namespace {
 
@@ -475,12 +476,12 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
       std::string remaining = raw;
       while (!remaining.empty() &&
              static_cast<int>(lines.size()) < maxLines) {
-        int charCount = utf8CodepointCount(remaining);
+        int charCount = utf8DisplayWidth(remaining);
         if (charCount <= maxChars) {
           lines.push_back(remaining);
           break;
         }
-        std::string chunk = utf8Take(remaining, maxChars);
+        std::string chunk = utf8TakeDisplayWidth(remaining, maxChars);
         size_t split = chunk.find_last_of(" \t");
         if (split == std::string::npos || split < chunk.size() / 3) {
           split = chunk.size();
@@ -529,10 +530,10 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
   for (const std::string& rawLine : lines) {
     if (y >= height) break;
     std::string line = rawLine;
-    if (utf8CodepointCount(line) > subtitleAreaW - 2) {
-      line = utf8Take(line, std::max(1, subtitleAreaW - 2));
+    if (utf8DisplayWidth(line) > subtitleAreaW - 2) {
+      line = utf8TakeDisplayWidth(line, std::max(1, subtitleAreaW - 2));
     }
-    int lineWidth = utf8CodepointCount(line);
+    int lineWidth = utf8DisplayWidth(line);
     int x = subtitleAreaX + std::max(0, (subtitleAreaW - lineWidth) / 2);
     if (captionStyle.backgroundAlpha > 0.01f) {
       const int pad = 1;

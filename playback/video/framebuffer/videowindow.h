@@ -12,6 +12,7 @@
 #include "videocolor.h"
 #include "consoleinput.h"
 #include "videoprocessor.h"
+#include "subtitle_font_attachments.h"
 #include <vector>
 #include <mutex>
 
@@ -56,6 +57,7 @@ struct WindowUiState {
     std::vector<SubtitleCue> subtitleCues; // active subtitle cues for current frame
     int64_t subtitleClockUs = 0;
     std::shared_ptr<const std::string> subtitleAssScript;
+    std::shared_ptr<const SubtitleFontAttachmentList> subtitleAssFonts;
     std::string subtitleRenderError;
     double displaySec = 0.0; // current time shown in overlay
     double totalSec = -1.0; // total duration (or -1 if unknown)
@@ -107,6 +109,7 @@ public:
     void ShowWindow(bool show);
     bool PollEvents();
     bool PollInput(InputEvent& ev);
+    bool ConsumeCloseRequested();
     void Cleanup();
 
 private:
@@ -175,6 +178,7 @@ private:
     bool m_waitingForRenderTarget = false;
     bool m_captureAllMouseInput = false;
     std::atomic<bool> m_cursorVisible{true};
+    std::atomic<bool> m_closeRequested{false};
     mutable std::mutex m_subtitleStateMutex;
     std::string m_subtitleRenderError;
     void setSubtitleRenderError(std::string error);
