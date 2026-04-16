@@ -24,18 +24,26 @@ struct GpuTextGridConstants {
 static_assert(sizeof(GpuTextGridConstants) == 16,
               "GPU text grid constants must be 16-byte aligned");
 
-SIZE measureTerminalCellSize(UINT dpi) {
+RadioifyTerminalFontMetrics measureTerminalFontMetrics(UINT dpi) {
     HDC memDC = CreateCompatibleDC(nullptr);
     if (!memDC) {
-        return SIZE{kGpuTextGridFallbackCellPixelWidth,
-                    kGpuTextGridFallbackCellPixelHeight};
+        RadioifyTerminalFontMetrics metrics{};
+        metrics.dpi = std::max<UINT>(1, dpi);
+        metrics.fontPixelHeight =
+            radioifyTerminalFontPixelHeightForDpi(metrics.dpi);
+        metrics.fontWeight = radioifyTerminalFontWeight();
+        metrics.cellWidth = kGpuTextGridFallbackCellPixelWidth;
+        metrics.cellHeight = kGpuTextGridFallbackCellPixelHeight;
+        return metrics;
     }
 
-    const RadioifyTerminalFontMetrics metrics =
+    RadioifyTerminalFontMetrics metrics =
         measureRadioifyTerminalFontMetrics(memDC, dpi);
     DeleteDC(memDC);
-    return SIZE{std::max(1, metrics.cellWidth),
-                std::max(1, metrics.cellHeight)};
+    metrics.cellWidth = std::max(1, metrics.cellWidth);
+    metrics.cellHeight = std::max(1, metrics.cellHeight);
+    metrics.fontWeight = std::clamp(metrics.fontWeight, 1, 1000);
+    return metrics;
 }
 
 wchar_t glyphForAtlasIndex(int index) {
@@ -84,7 +92,7 @@ wchar_t glyphForAtlasIndex(int index) {
 }
 
 bool renderGlyphAtlas(std::vector<uint8_t>& outAlpha, int cellWidth,
-                      int cellHeight, UINT dpi) {
+                      int cellHeight, UINT dpi, int fontWeight) {
     cellWidth = std::max(1, cellWidth);
     cellHeight = std::max(1, cellHeight);
     const int atlasWidth = kGlyphAtlasCols * cellWidth;
@@ -119,7 +127,8 @@ bool renderGlyphAtlas(std::vector<uint8_t>& outAlpha, int cellWidth,
     SetTextColor(memDC, RGB(255, 255, 255));
     SetTextAlign(memDC, TA_LEFT | TA_TOP | TA_NOUPDATECP);
 
-    HFONT font = createRadioifyTerminalFontForDpi(dpi);
+    HFONT font = createRadioifyTerminalFontForDpi(
+        dpi, std::clamp(fontWeight, 1, 1000));
     const bool ownsFont = font != nullptr;
     if (!font) {
         font = static_cast<HFONT>(GetStockObject(SYSTEM_FIXED_FONT));
@@ -162,7 +171,9 @@ UINT VideoWindow::TextGridDpi() const {
 }
 
 SIZE VideoWindow::TextGridCellSize() const {
-    return measureTerminalCellSize(TextGridDpi());
+    const RadioifyTerminalFontMetrics metrics =
+        measureTerminalFontMetrics(TextGridDpi());
+    return SIZE{metrics.cellWidth, metrics.cellHeight};
 }
 
 void VideoWindow::GetPictureInPictureTextCellSize(int& outCellWidth,
@@ -186,20 +197,25 @@ bool VideoWindow::EnsureGpuTextGridConstants(ID3D11Device* device) {
 }
 
 bool VideoWindow::EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,
-                                          int cellHeight, UINT dpi) {
+                                          int cellHeight, UINT dpi,
+                                          int fontWeight) {
     cellWidth = std::max(1, cellWidth);
     cellHeight = std::max(1, cellHeight);
     dpi = std::max<UINT>(1, dpi);
+    fontWeight = std::clamp(fontWeight, 1, 1000);
     if (m_gpuTextGlyphAtlasSrv &&
         m_gpuTextGlyphAtlasCellWidth == cellWidth &&
         m_gpuTextGlyphAtlasCellHeight == cellHeight &&
-        m_gpuTextGlyphAtlasDpi == dpi) {
+        m_gpuTextGlyphAtlasDpi == dpi &&
+        m_gpuTextGlyphAtlasWeight == fontWeight) {
         return true;
     }
     if (!device) return false;
 
     std::vector<uint8_t> alpha;
-    if (!renderGlyphAtlas(alpha, cellWidth, cellHeight, dpi)) return false;
+    if (!renderGlyphAtlas(alpha, cellWidth, cellHeight, dpi, fontWeight)) {
+        return false;
+    }
 
     D3D11_TEXTURE2D_DESC td{};
     td.Width = static_cast<UINT>(kGlyphAtlasCols * cellWidth);
@@ -230,6 +246,7 @@ bool VideoWindow::EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,
     m_gpuTextGlyphAtlasCellWidth = cellWidth;
     m_gpuTextGlyphAtlasCellHeight = cellHeight;
     m_gpuTextGlyphAtlasDpi = dpi;
+    m_gpuTextGlyphAtlasWeight = fontWeight;
     return true;
 }
 
@@ -255,13 +272,18 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     if (m_width <= 0 || m_height <= 0) return;
 
     const UINT dpi = TextGridDpi();
-    const SIZE cellSizeRaw = measureTerminalCellSize(dpi);
-    const int cellWidth = std::max(1, static_cast<int>(cellSizeRaw.cx));
-    const int cellHeight = std::max(1, static_cast<int>(cellSizeRaw.cy));
+    const RadioifyTerminalFontMetrics terminalFont =
+        measureTerminalFontMetrics(dpi);
+    const int cellWidth = terminalFont.cellWidth;
+    const int cellHeight = terminalFont.cellHeight;
+    const int fontWeight = terminalFont.fontWeight;
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;
-    if (!EnsureGpuTextGlyphAtlas(device, cellWidth, cellHeight, dpi)) return;
+    if (!EnsureGpuTextGlyphAtlas(device, cellWidth, cellHeight, dpi,
+                                 fontWeight)) {
+        return;
+    }
     if (!EnsureGpuTextGridConstants(device)) return;
 
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;

@@ -1421,6 +1421,7 @@ void VideoWindow::Cleanup() {
     m_gpuTextGlyphAtlasCellWidth = 0;
     m_gpuTextGlyphAtlasCellHeight = 0;
     m_gpuTextGlyphAtlasDpi = 0;
+    m_gpuTextGlyphAtlasWeight = 0;
     m_gpuTextGridCols = 0;
     m_gpuTextGridRows = 0;
 }

@@ -148,7 +148,7 @@ private:
     UINT TextGridDpi() const;
     SIZE TextGridCellSize() const;
     bool EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,
-                                 int cellHeight, UINT dpi);
+                                 int cellHeight, UINT dpi, int fontWeight);
     bool EnsureGpuTextGridConstants(ID3D11Device* device);
 
     HWND m_hWnd = nullptr;
@@ -189,6 +189,7 @@ private:
     int m_gpuTextGlyphAtlasCellWidth = 0;
     int m_gpuTextGlyphAtlasCellHeight = 0;
     UINT m_gpuTextGlyphAtlasDpi = 0;
+    int m_gpuTextGlyphAtlasWeight = 0;
     int m_gpuTextGridCols = 0;
     int m_gpuTextGridRows = 0;
     

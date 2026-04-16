@@ -16,6 +16,7 @@
 struct RadioifyTerminalFontMetrics {
   UINT dpi = USER_DEFAULT_SCREEN_DPI;
   int fontPixelHeight = 16;
+  int fontWeight = FW_NORMAL;
   int cellWidth = 9;
   int cellHeight = 21;
   int ascent = 17;
@@ -32,13 +33,17 @@ inline int radioifyTerminalFontPointSize() {
   return 12;
 }
 
+inline int radioifyTerminalFontWeight() {
+  return FW_NORMAL;
+}
+
 inline int radioifyTerminalFontPixelHeightForDpi(UINT dpi) {
   return MulDiv(radioifyTerminalFontPointSize(), std::max<UINT>(1, dpi), 72);
 }
 
 inline HFONT createRadioifyTerminalFontForDpi(
     UINT dpi,
-    int weight = FW_NORMAL,
+    int weight = radioifyTerminalFontWeight(),
     DWORD quality = ANTIALIASED_QUALITY) {
   return CreateFontW(-radioifyTerminalFontPixelHeightForDpi(dpi), 0, 0, 0,
                      weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
@@ -47,7 +52,7 @@ inline HFONT createRadioifyTerminalFontForDpi(
 }
 
 inline HFONT createRadioifyTerminalFont(int pixelHeight,
-                                        int weight = FW_NORMAL,
+                                        int weight = radioifyTerminalFontWeight(),
                                         DWORD quality = ANTIALIASED_QUALITY) {
   return CreateFontW(-std::max(1, pixelHeight), 0, 0, 0, weight, FALSE, FALSE,
                      FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
@@ -57,13 +62,15 @@ inline HFONT createRadioifyTerminalFont(int pixelHeight,
 
 inline RadioifyTerminalFontMetrics measureRadioifyTerminalFontMetrics(
     HDC hdc,
-    UINT dpi = USER_DEFAULT_SCREEN_DPI) {
+    UINT dpi = USER_DEFAULT_SCREEN_DPI,
+    int requestedWeight = radioifyTerminalFontWeight()) {
   RadioifyTerminalFontMetrics metrics{};
   metrics.dpi = std::max<UINT>(1, dpi);
   metrics.fontPixelHeight =
       radioifyTerminalFontPixelHeightForDpi(metrics.dpi);
+  metrics.fontWeight = std::clamp(requestedWeight, 1, 1000);
 
-  HFONT font = createRadioifyTerminalFontForDpi(metrics.dpi);
+  HFONT font = createRadioifyTerminalFontForDpi(metrics.dpi, metrics.fontWeight);
   if (!font) {
     return metrics;
   }
@@ -72,6 +79,8 @@ inline RadioifyTerminalFontMetrics measureRadioifyTerminalFontMetrics(
   TEXTMETRICW tm{};
   SIZE extent{};
   if (GetTextMetricsW(hdc, &tm)) {
+    metrics.fontWeight =
+        std::clamp(static_cast<int>(tm.tmWeight), 1, 1000);
     metrics.ascent = std::max(1, static_cast<int>(tm.tmAscent));
     metrics.descent = std::max(0, static_cast<int>(tm.tmDescent));
     metrics.internalLeading =
@@ -91,6 +100,13 @@ inline RadioifyTerminalFontMetrics measureRadioifyTerminalFontMetrics(
   }
   DeleteObject(font);
   return metrics;
+}
+
+inline HFONT createRadioifyTerminalFont(
+    const RadioifyTerminalFontMetrics& metrics,
+    DWORD quality = ANTIALIASED_QUALITY) {
+  return createRadioifyTerminalFontForDpi(
+      metrics.dpi, std::clamp(metrics.fontWeight, 1, 1000), quality);
 }
 
 inline int fitRadioifyTerminalFontHeightToCell(HDC hdc, int fontH, int cellW,
