@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "audioplayback.h"
+#include "gpu_text_grid.h"
 #include "player.h"
 #include "subtitle_manager.h"
 #include "videowindow.h"
@@ -291,9 +292,10 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
       (view.player && view.player->state() == PlayerState::Paused);
   inputs.audioFinished = inputs.audioOk && audioIsFinished();
   inputs.pictureInPictureAvailable =
-      view.videoWindow && view.videoWindow->IsOpen();
+      signals.togglePictureInPicture != nullptr ||
+      (view.videoWindow && view.videoWindow->IsOpen());
   inputs.pictureInPictureActive =
-      inputs.pictureInPictureAvailable &&
+      view.videoWindow && view.videoWindow->IsOpen() &&
       view.videoWindow->IsPictureInPicture();
   inputs.subtitleRenderError =
       view.videoWindow ? view.videoWindow->GetSubtitleRenderError() : "";
@@ -510,20 +512,30 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     const int winW = view.videoWindow->GetWidth();
     const int winH = view.videoWindow->GetHeight();
     if (gridCols > 0 && gridRows > 0 && winW > 0 && winH > 0) {
-      hitMouse.pos.X = static_cast<SHORT>(std::clamp(
-          (static_cast<int>(mouse.pos.X) * gridCols) / winW, 0,
-          gridCols - 1));
-      hitMouse.pos.Y = static_cast<SHORT>(std::clamp(
-          (static_cast<int>(mouse.pos.Y) * gridRows) / winH, 0,
-          gridRows - 1));
-      hitMouse.control &= ~0x80000000;
-      mouseOverlayInputs.overlayVisible = true;
-      mouseOverlayInputs.screenWidth = gridCols;
-      mouseOverlayInputs.screenHeight = gridRows;
-      mouseOverlayInputs.progressBarX = 1;
-      mouseOverlayInputs.progressBarY = gridRows - 1;
-      mouseOverlayInputs.progressBarWidth = std::max(1, gridCols - 2);
-      miniGridEvent = true;
+      const int gridPixelWidth =
+          std::min(winW, gridCols * kGpuTextGridCellPixelWidth);
+      const int gridPixelHeight =
+          std::min(winH, gridRows * kGpuTextGridCellPixelHeight);
+      if (mouse.pos.X >= 0 && mouse.pos.Y >= 0 &&
+          mouse.pos.X < gridPixelWidth && mouse.pos.Y < gridPixelHeight) {
+        hitMouse.pos.X = static_cast<SHORT>(std::clamp(
+            static_cast<int>(mouse.pos.X) / kGpuTextGridCellPixelWidth, 0,
+            gridCols - 1));
+        hitMouse.pos.Y = static_cast<SHORT>(std::clamp(
+            static_cast<int>(mouse.pos.Y) / kGpuTextGridCellPixelHeight, 0,
+            gridRows - 1));
+        hitMouse.control &= ~0x80000000;
+        mouseOverlayInputs.overlayVisible = true;
+        mouseOverlayInputs.screenWidth = gridCols;
+        mouseOverlayInputs.screenHeight = gridRows;
+        mouseOverlayInputs.progressBarX = 1;
+        mouseOverlayInputs.progressBarY = gridRows - 1;
+        mouseOverlayInputs.progressBarWidth = std::max(1, gridCols - 2);
+        miniGridEvent = true;
+      } else {
+        hitMouse.control &= ~0x80000000;
+        mouseOverlayInputs.overlayVisible = false;
+      }
     }
   }
   playback_overlay::PlaybackOverlayState mouseOverlayState =

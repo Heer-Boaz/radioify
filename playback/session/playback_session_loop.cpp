@@ -13,6 +13,7 @@
 #include "asciiart_gpu.h"
 #include "audioplayback.h"
 #include "gpu_shared.h"
+#include "gpu_text_grid.h"
 #include "player.h"
 #include "playback/ascii/playback_frame_output.h"
 #include "playback/ascii/playback_screen_renderer.h"
@@ -271,11 +272,14 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool buildPictureInPictureTextGrid(int pixelWidth, int pixelHeight,
-                               const VideoFrame* frame, bool frameChanged,
-                               std::vector<ScreenCell>& outCells,
-                               int& outCols, int& outRows) {
-    const int cols = std::clamp(pixelWidth / 10, 32, 96);
-    const int rows = std::clamp(pixelHeight / 18, 10, 32);
+                                     const VideoFrame* frame,
+                                     bool frameChanged,
+                                     std::vector<ScreenCell>& outCells,
+                                     int& outCols, int& outRows) {
+    const int cols =
+        std::max(20, pixelWidth / kGpuTextGridCellPixelWidth);
+    const int rows =
+        std::max(10, pixelHeight / kGpuTextGridCellPixelHeight);
     pictureInPictureTextScreen.setVirtualSize(cols, rows);
 
     pictureInPictureTextRenderFailed = false;

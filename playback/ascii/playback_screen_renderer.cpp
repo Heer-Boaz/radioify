@@ -242,29 +242,6 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         warningSink, &haveFrame);
   }
 
-  screen.clear(baseStyle);
-  int headerY = 0;
-  if (!debugLine1.empty()) {
-    screen.writeText(0, headerY++, fitLine(debugLine1, width), dimStyle);
-  }
-  if (!debugLine2.empty()) {
-    screen.writeText(0, headerY++, fitLine(debugLine2, width), dimStyle);
-  }
-  if (!statusLine.empty()) {
-    screen.writeText(0, headerY++, fitLine(statusLine, width), dimStyle);
-  }
-
-  if (currentMode == PlaybackRenderMode::AsciiTerminal) {
-    playback_frame_output::renderAsciiModeContent(
-        screen, art, width, height, maxHeight, artTop, waitingLabel(),
-        allowFrame, baseStyle, overlayVisibleNow, subtitleText, accentStyle,
-        dimStyle);
-  } else {
-    playback_frame_output::renderNonAsciiModeContent(
-        screen, windowActive, allowFrame, width, artTop, maxHeight, frame,
-        videoWindow.GetWidth(), videoWindow.GetHeight(), dimStyle);
-  }
-
   progressBarX = -1;
   progressBarY = -1;
   progressBarWidth = 0;
@@ -293,10 +270,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.overlayVisible = overlayVisibleNow;
   overlayInputs.paused = pausedNow;
   overlayInputs.audioFinished = audioFinishedNow;
-  overlayInputs.pictureInPictureAvailable = videoWindow.IsOpen();
+  overlayInputs.pictureInPictureAvailable = true;
   overlayInputs.pictureInPictureActive =
-      overlayInputs.pictureInPictureAvailable &&
-      videoWindow.IsPictureInPicture();
+      videoWindow.IsOpen() && videoWindow.IsPictureInPicture();
   overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
   overlayInputs.screenWidth = width;
   overlayInputs.screenHeight = height;
@@ -308,35 +284,68 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.progressBarWidth = progressBarWidth;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
+  const int hoverIndex =
+      overlayControlHover.load(std::memory_order_relaxed);
+  std::vector<playback_overlay::TerminalOverlayControlLayoutItem> controls;
+  int overlayReservedLines = overlayState.overlayVisible ? 5 : 0;
+  if (overlayState.overlayVisible) {
+    controls =
+        playback_overlay::layoutTerminalOverlayControls(overlayState,
+                                                        hoverIndex);
+    if (!controls.empty()) {
+      const int overlayTop = std::max(0, controls.front().y - 1);
+      overlayReservedLines = std::max(5, height - overlayTop);
+    }
+  }
+
+  screen.clear(baseStyle);
+  int headerY = 0;
+  if (!debugLine1.empty()) {
+    screen.writeText(0, headerY++, fitLine(debugLine1, width), dimStyle);
+  }
+  if (!debugLine2.empty()) {
+    screen.writeText(0, headerY++, fitLine(debugLine2, width), dimStyle);
+  }
+  if (!statusLine.empty()) {
+    screen.writeText(0, headerY++, fitLine(statusLine, width), dimStyle);
+  }
+
+  if (currentMode == PlaybackRenderMode::AsciiTerminal) {
+    playback_frame_output::renderAsciiModeContent(
+        screen, art, width, height, maxHeight, artTop, waitingLabel(),
+        allowFrame, baseStyle, overlayVisibleNow, overlayReservedLines,
+        subtitleText, accentStyle, dimStyle);
+  } else {
+    playback_frame_output::renderNonAsciiModeContent(
+        screen, windowActive, allowFrame, width, artTop, maxHeight, frame,
+        videoWindow.GetWidth(), videoWindow.GetHeight(), dimStyle);
+  }
+
   if (overlayState.overlayVisible) {
     int barLine = height - 1;
     int suffixLine = barLine - 1;
-    int controlsLine = suffixLine - 1;
-    int titleLine = controlsLine - 1;
-    if (controlsLine >= artTop && controlsLine >= 0) {
-      std::vector<playback_overlay::OverlayControlSpec> controls =
-          playback_overlay::buildOverlayControlSpecs(
-              overlayState, overlayControlHover.load(std::memory_order_relaxed));
-      for (size_t i = 0; i < controls.size(); ++i) {
-        const auto& spec = controls[i];
-        int x = 1 + spec.charStart;
+    int firstControlsLine = suffixLine;
+    if (!controls.empty()) {
+      firstControlsLine = controls.front().y;
+      for (const auto& item : controls) {
+        if (item.y < artTop || item.y < 0 || item.y >= height) continue;
+        int x = item.x;
         if (x >= width) break;
         int avail = width - x;
         if (avail <= 0) break;
-        std::string text = spec.renderText;
+        std::string text = item.spec.renderText;
         if (utf8DisplayWidth(text) > avail) {
           text = utf8TakeDisplayWidth(text, avail);
         }
-        Style style = spec.active ? accentStyle : baseStyle;
-        bool hovered =
-            static_cast<int>(i) ==
-            overlayControlHover.load(std::memory_order_relaxed);
+        Style style = item.spec.active ? accentStyle : baseStyle;
+        bool hovered = item.controlIndex == hoverIndex;
         if (hovered) {
           style = {style.bg, style.fg};
         }
-        screen.writeText(x, controlsLine, text, style);
+        screen.writeText(x, item.y, text, style);
       }
     }
+    int titleLine = firstControlsLine - 1;
     if (titleLine >= artTop && titleLine >= 0) {
       std::string titleLineText =
           " " + playback_overlay::buildWindowOverlayTopLine(overlayState);

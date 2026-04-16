@@ -29,6 +29,13 @@ struct OverlayControlSpec {
   int charStart = 0;
 };
 
+struct TerminalOverlayControlLayoutItem {
+  OverlayControlSpec spec;
+  int controlIndex = -1;
+  int x = 0;
+  int y = 0;
+};
+
 struct PlaybackOverlayInputs {
   std::string windowTitle;
   bool audioOk = false;
@@ -109,6 +116,9 @@ std::string buildSubtitleText(const SubtitleManager& subtitleManager,
                              int64_t clockUs, bool hasSubtitles);
 
 std::vector<OverlayControlSpec> buildOverlayControlSpecs(
+    const PlaybackOverlayState& state, int hoverIndex);
+
+std::vector<TerminalOverlayControlLayoutItem> layoutTerminalOverlayControls(
     const PlaybackOverlayState& state, int hoverIndex);
 
 std::string buildOverlayControlsText(const PlaybackOverlayState& state,

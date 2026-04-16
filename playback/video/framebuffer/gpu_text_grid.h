@@ -23,6 +23,8 @@ constexpr uint32_t gpuTextGridColorRgb(GpuTextGridColor color) {
     return static_cast<uint32_t>(color);
 }
 
+constexpr int kGpuTextGridCellPixelWidth = 10;
+constexpr int kGpuTextGridCellPixelHeight = 18;
 constexpr uint32_t kGpuTextGridCellFlagBraille = 1u;
 
 struct GpuTextGridCell {

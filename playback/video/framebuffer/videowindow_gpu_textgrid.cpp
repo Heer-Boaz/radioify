@@ -1,5 +1,7 @@
 #include "videowindow.h"
 
+#include <algorithm>
+
 #include "gpu_shared.h"
 
 void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
@@ -75,8 +77,13 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
     context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), nullptr);
 
-    D3D11_VIEWPORT viewport = {0.0f, 0.0f, static_cast<float>(m_width),
-                               static_cast<float>(m_height), 0.0f, 1.0f};
+    const int gridPixelWidth =
+        std::min(m_width, frame.cols * kGpuTextGridCellPixelWidth);
+    const int gridPixelHeight =
+        std::min(m_height, frame.rows * kGpuTextGridCellPixelHeight);
+    D3D11_VIEWPORT viewport = {
+        0.0f, 0.0f, static_cast<float>(gridPixelWidth),
+        static_cast<float>(gridPixelHeight), 0.0f, 1.0f};
     context->RSSetViewports(1, &viewport);
 
     context->IASetInputLayout(nullptr);

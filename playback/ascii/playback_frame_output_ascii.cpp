@@ -382,6 +382,7 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
                            int height, int maxHeight, int artTop,
                            const std::string& waitingLabel, bool allowFrame,
                            const Style& baseStyle, bool overlayVisible,
+                           int overlayReservedLines,
                            const std::string& subtitleText,
                            const Style& accentStyle, const Style& dimStyle) {
   const int artWidth = std::min(art.width, width);
@@ -519,7 +520,8 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
       (allowFrame && visibleArtHeight > 0)
           ? (artTop + visibleArtHeight - 1)
           : (height - 1);
-  const int overlayTopY = overlayVisible ? (height - 5) : height;
+  const int overlayTopY =
+      overlayVisible ? (height - std::max(5, overlayReservedLines)) : height;
   int subtitleBottomY = std::min(artBottomY - 1, overlayTopY - 1);
   subtitleBottomY = std::max(artTop, subtitleBottomY);
 

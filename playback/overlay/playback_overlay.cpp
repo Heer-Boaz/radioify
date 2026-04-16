@@ -293,6 +293,59 @@ std::string buildOverlayControlsText(const PlaybackOverlayState& state,
   return line;
 }
 
+std::vector<TerminalOverlayControlLayoutItem> layoutTerminalOverlayControls(
+    const PlaybackOverlayState& state, int hoverIndex) {
+  std::vector<OverlayControlSpec> specs =
+      buildOverlayControlSpecs(state, hoverIndex);
+  std::vector<TerminalOverlayControlLayoutItem> out;
+  out.reserve(specs.size());
+  if (specs.empty()) return out;
+
+  struct PendingItem {
+    OverlayControlSpec spec;
+    int controlIndex = -1;
+    int x = 0;
+    int line = 0;
+  };
+  std::vector<PendingItem> pending;
+  pending.reserve(specs.size());
+
+  const int screenWidth = std::max(1, state.screenWidth);
+  const int maxLineWidth = std::max(1, screenWidth - 2);
+  int cursor = 0;
+  int line = 0;
+  for (size_t i = 0; i < specs.size(); ++i) {
+    const int gap = cursor > 0 ? 2 : 0;
+    const int specWidth = std::max(1, specs[i].width);
+    if (cursor > 0 && cursor + gap + specWidth > maxLineWidth) {
+      ++line;
+      cursor = 0;
+    } else {
+      cursor += gap;
+    }
+
+    PendingItem item;
+    item.spec = std::move(specs[i]);
+    item.controlIndex = static_cast<int>(i);
+    item.x = 1 + cursor;
+    item.line = line;
+    pending.push_back(std::move(item));
+    cursor += specWidth;
+  }
+
+  const int lineCount = line + 1;
+  const int controlsBottom = std::max(0, state.screenHeight - 3);
+  for (PendingItem& item : pending) {
+    TerminalOverlayControlLayoutItem placed;
+    placed.spec = std::move(item.spec);
+    placed.controlIndex = item.controlIndex;
+    placed.x = item.x;
+    placed.y = controlsBottom - (lineCount - 1 - item.line);
+    out.push_back(std::move(placed));
+  }
+  return out;
+}
+
 std::string buildWindowOverlayProgressSuffix(
     const PlaybackOverlayState& state) {
   std::string status = "\xE2\x96\xB6";  // ▶
@@ -372,15 +425,14 @@ bool isProgressHit(const PlaybackOverlayState& state, const MouseEvent& mouse) {
 int terminalOverlayControlAt(const PlaybackOverlayState& state,
                             const MouseEvent& mouse) {
   if (!state.overlayVisible) return -1;
-  std::vector<OverlayControlSpec> specs = buildOverlayControlSpecs(state, -1);
-  int controlsY = std::max(0, std::max(10, state.screenHeight) - 3);
-  if (mouse.pos.Y != controlsY) return -1;
-  int relX = mouse.pos.X - 1;
-  if (relX < 0) return -1;
-  for (size_t i = 0; i < specs.size(); ++i) {
-    const auto& spec = specs[i];
-    if (relX >= spec.charStart && relX < spec.charStart + spec.width) {
-      return static_cast<int>(i);
+  std::vector<TerminalOverlayControlLayoutItem> controls =
+      layoutTerminalOverlayControls(state, -1);
+  for (const auto& item : controls) {
+    if (mouse.pos.Y != item.y) continue;
+    const int width =
+        std::min(item.spec.width, std::max(0, state.screenWidth - item.x));
+    if (mouse.pos.X >= item.x && mouse.pos.X < item.x + width) {
+      return item.controlIndex;
     }
   }
   return -1;

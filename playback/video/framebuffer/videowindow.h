@@ -138,6 +138,7 @@ private:
     RECT CalculatePictureInPictureRect() const;
     double PictureInPictureAspectRatio() const;
     SIZE PictureInPictureMinimumSize() const;
+    int PictureInPictureInteractiveTop() const;
     void AdjustPictureInPictureSizingRect(WPARAM edge, RECT* rect) const;
     bool EnterPictureInPicture();
     bool ExitPictureInPicture();

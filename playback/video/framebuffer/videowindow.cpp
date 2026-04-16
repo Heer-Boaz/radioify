@@ -1337,8 +1337,10 @@ double VideoWindow::PictureInPictureAspectRatio() const {
 
 SIZE VideoWindow::PictureInPictureMinimumSize() const {
     const double aspect = PictureInPictureAspectRatio();
-    constexpr int kMinLongEdge = 260;
-    constexpr int kMinShortEdge = 96;
+    const bool textMode =
+        m_pictureInPictureTextMode.load(std::memory_order_relaxed);
+    const int kMinLongEdge = textMode ? 320 : 260;
+    const int kMinShortEdge = textMode ? 180 : 96;
 
     SIZE size{};
     if (aspect >= 1.0) {
@@ -1360,6 +1362,27 @@ SIZE VideoWindow::PictureInPictureMinimumSize() const {
     size.cx = std::max<LONG>(1, size.cx);
     size.cy = std::max<LONG>(1, size.cy);
     return size;
+}
+
+int VideoWindow::PictureInPictureInteractiveTop() const {
+    if (m_width <= 0 || m_height <= 0) return 0;
+    const int edge = std::clamp(std::min(m_width, m_height) / 18, 8, 18);
+    int top = m_height -
+              std::max(48, static_cast<int>(std::lround(m_height * 0.22)));
+    if (m_pictureInPictureTextMode.load(std::memory_order_relaxed)) {
+        const int rows =
+            m_pictureInPictureGridRows.load(std::memory_order_relaxed);
+        const int interactiveRows = rows > 0 ? std::min(rows, 8) : 8;
+        top = rows > 0
+                  ? std::min(m_height,
+                             std::max(0, rows - interactiveRows) *
+                                 kGpuTextGridCellPixelHeight)
+                  : m_height -
+                        std::max(edge,
+                                 static_cast<int>(
+                                     std::lround(m_height * 0.42)));
+    }
+    return std::clamp(top, 0, m_height);
 }
 
 void VideoWindow::AdjustPictureInPictureSizingRect(WPARAM edge,
@@ -1488,20 +1511,9 @@ LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
     if (m_width <= 0 || m_height <= 0) return HTCAPTION;
 
     const int edge = std::clamp(std::min(m_width, m_height) / 18, 8, 18);
-    if (m_pictureInPictureTextMode.load(std::memory_order_relaxed) &&
-        x >= 0 && x < m_width && y >= 0 && y < m_height) {
-        const int rows = m_pictureInPictureGridRows.load(std::memory_order_relaxed);
-        const int controlRows = rows > 0 ? std::min(rows, 4) : 4;
-        int controlTop = m_height -
-                         std::max(edge, static_cast<int>(
-                                             std::lround(m_height * 0.22)));
-        if (rows > 0) {
-            controlTop =
-                (m_height * std::max(0, rows - controlRows)) / rows;
-        }
-        if (y >= std::clamp(controlTop, 0, m_height)) {
-            return HTCLIENT;
-        }
+    if (x >= 0 && x < m_width && y >= 0 && y < m_height &&
+        y >= PictureInPictureInteractiveTop()) {
+        return HTCLIENT;
     }
 
     const bool left = x >= 0 && x < edge;
@@ -2004,6 +2016,11 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             bool inBottomBand =
                 pThis->m_height > 0 &&
                 y > static_cast<int>(std::round(pThis->m_height * 0.84));
+            if (pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
+                inBottomBand =
+                    pThis->m_height > 0 &&
+                    y >= pThis->PictureInPictureInteractiveTop();
+            }
             if (!acceptAll && !inBottomBand) return;
             InputEvent ev;
             ev.type = InputEvent::Type::Mouse;
