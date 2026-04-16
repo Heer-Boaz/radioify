@@ -51,6 +51,8 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.overlayVisible = inputs.overlayVisible;
   state.paused = inputs.paused;
   state.audioFinished = inputs.audioFinished;
+  state.pictureInPictureAvailable = inputs.pictureInPictureAvailable;
+  state.pictureInPictureActive = inputs.pictureInPictureActive;
   state.subtitleRenderError = inputs.subtitleRenderError;
   state.screenWidth = inputs.screenWidth;
   state.screenHeight = inputs.screenHeight;
@@ -247,6 +249,20 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
       std::max(countVisibleChars(subtitles.normalText),
                countVisibleChars(subtitles.hoverText));
   addSpec(std::move(subtitles));
+
+  if (state.pictureInPictureAvailable) {
+    OverlayControlSpec pip{};
+    pip.id = OverlayControlId::PictureInPicture;
+    pip.active = state.pictureInPictureActive;
+    auto pipLabels =
+        makeLabels(pip.active ? "PiP: On" : "PiP: Off");
+    pip.normalText = pipLabels.first;
+    pip.hoverText = pipLabels.second;
+    pip.width =
+        std::max(countVisibleChars(pip.normalText),
+                 countVisibleChars(pip.hoverText));
+    addSpec(std::move(pip));
+  }
 
   int cursor = 0;
   for (size_t i = 0; i < out.size(); ++i) {

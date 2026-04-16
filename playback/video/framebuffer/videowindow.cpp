@@ -44,6 +44,9 @@ static inline std::string thread_id_str() {
 #pragma comment(lib, "dxgi.lib")
 
 namespace {
+    constexpr UINT kTogglePictureInPictureMessage = WM_APP + 0x440;
+    constexpr UINT kSetPictureInPictureMessage = WM_APP + 0x441;
+
     // Glyph font for ASCII-style overlay (5x7) -----------------------------------------------------------------
     typedef struct MenuGlyph { char c; uint8_t rows[7]; } MenuGlyph;
 
@@ -1292,10 +1295,15 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
     #endif
 }
 
-VideoWindow::VideoWindow() {}
+VideoWindow::VideoWindow()
+    : m_closeRequestedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
 
 VideoWindow::~VideoWindow() {
     Close();
+    if (m_closeRequestedEvent) {
+        CloseHandle(m_closeRequestedEvent);
+        m_closeRequestedEvent = nullptr;
+    }
 }
 
 void VideoWindow::SetCursorVisible(bool visible) {
@@ -1313,6 +1321,146 @@ void VideoWindow::SetCursorVisible(bool visible) {
     }
     ::PostMessage(m_hWnd, WM_SETCURSOR, reinterpret_cast<WPARAM>(m_hWnd),
                   MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+}
+
+RECT VideoWindow::CalculatePictureInPictureRect() const {
+    RECT work{0, 0, 1280, 720};
+    HMONITOR monitor = MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    if (monitor && GetMonitorInfo(monitor, &monitorInfo)) {
+        work = monitorInfo.rcWork;
+    }
+
+    const int workLeft = static_cast<int>(work.left);
+    const int workTop = static_cast<int>(work.top);
+    const int workRight = static_cast<int>(work.right);
+    const int workBottom = static_cast<int>(work.bottom);
+    const int workW = std::max(1, workRight - workLeft);
+    const int workH = std::max(1, workBottom - workTop);
+    const int margin = std::clamp(std::min(workW, workH) / 40, 12, 32);
+    const int usableW = std::max(160, workW - margin * 2);
+    const int usableH = std::max(120, workH - margin * 2);
+    const int minW = std::min(usableW, 320);
+    const int maxW = std::min(usableW, 720);
+
+    int targetW = std::clamp(workW * 28 / 100, minW, maxW);
+    double aspect = 16.0 / 9.0;
+    if (m_videoWidth > 0 && m_videoHeight > 0) {
+        aspect = static_cast<double>(m_videoWidth) /
+                 static_cast<double>(m_videoHeight);
+    } else if (m_width > 0 && m_height > 0) {
+        aspect = static_cast<double>(m_width) / static_cast<double>(m_height);
+    }
+    aspect = std::clamp(aspect, 0.50, 3.00);
+
+    int targetH = std::max(1, static_cast<int>(std::lround(targetW / aspect)));
+    if (targetH > usableH) {
+        targetH = usableH;
+        targetW = std::max(1, static_cast<int>(std::lround(targetH * aspect)));
+    }
+
+    const int left = std::max(workLeft + margin,
+                              workRight - margin - targetW);
+    const int top = std::max(workTop + margin,
+                             workBottom - margin - targetH);
+    return RECT{left, top, left + targetW, top + targetH};
+}
+
+bool VideoWindow::IsPictureInPictureDragArea(int x, int y) const {
+    if (!m_pictureInPicture.load(std::memory_order_relaxed)) return false;
+    if (m_width <= 0 || m_height <= 0) return true;
+    const int reservedBottom =
+        std::max(48, static_cast<int>(std::lround(m_height * 0.22)));
+    return x >= 0 && x < m_width && y >= 0 && y < m_height - reservedBottom;
+}
+
+bool VideoWindow::EnterPictureInPicture() {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (!m_hWnd || !m_swapChain) return false;
+    if (m_pictureInPicture.load(std::memory_order_relaxed)) return true;
+
+    const bool restoreFullscreen = m_isFullscreen;
+    if (restoreFullscreen && !ExitFullscreen()) {
+        return false;
+    }
+
+    m_pipRestoreFullscreen = restoreFullscreen;
+    m_pipRestoreStyle = GetWindowLong(m_hWnd, GWL_STYLE);
+    m_pipRestoreExStyle = GetWindowLong(m_hWnd, GWL_EXSTYLE);
+    GetWindowRect(m_hWnd, &m_pipRestoreRect);
+
+    RECT pipRect = CalculatePictureInPictureRect();
+    m_ignoreWindowSizeEvents = true;
+    m_pictureInPicture.store(true, std::memory_order_relaxed);
+    SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+    LONG pipExStyle =
+        (m_pipRestoreExStyle | WS_EX_TOPMOST | WS_EX_TOOLWINDOW) &
+        ~WS_EX_APPWINDOW;
+    SetWindowLong(m_hWnd, GWL_EXSTYLE, pipExStyle);
+    SetWindowPos(m_hWnd, HWND_TOPMOST, pipRect.left, pipRect.top,
+                 pipRect.right - pipRect.left, pipRect.bottom - pipRect.top,
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+    ::ShowWindow(m_hWnd, SW_SHOW);
+    BringWindowToTop(m_hWnd);
+    UpdateWindow(m_hWnd);
+
+    RECT client{};
+    if (GetClientRect(m_hWnd, &client)) {
+        Resize(client.right - client.left, client.bottom - client.top);
+    }
+    m_ignoreWindowSizeEvents = false;
+    return true;
+}
+
+bool VideoWindow::ExitPictureInPicture() {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (!m_hWnd || !m_swapChain) return false;
+    if (!m_pictureInPicture.load(std::memory_order_relaxed)) return true;
+
+    const bool restoreFullscreen = m_pipRestoreFullscreen;
+    m_ignoreWindowSizeEvents = true;
+    SetWindowLong(m_hWnd, GWL_STYLE, m_pipRestoreStyle);
+    SetWindowLong(m_hWnd, GWL_EXSTYLE, m_pipRestoreExStyle);
+    HWND zOrder =
+        (m_pipRestoreExStyle & WS_EX_TOPMOST) ? HWND_TOPMOST : HWND_NOTOPMOST;
+    SetWindowPos(m_hWnd, zOrder, m_pipRestoreRect.left, m_pipRestoreRect.top,
+                 m_pipRestoreRect.right - m_pipRestoreRect.left,
+                 m_pipRestoreRect.bottom - m_pipRestoreRect.top,
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+    ::ShowWindow(m_hWnd, SW_RESTORE);
+    UpdateWindow(m_hWnd);
+
+    RECT client{};
+    if (GetClientRect(m_hWnd, &client)) {
+        Resize(client.right - client.left, client.bottom - client.top);
+    }
+    m_pictureInPicture.store(false, std::memory_order_relaxed);
+    m_pipRestoreFullscreen = false;
+    m_ignoreWindowSizeEvents = false;
+
+    if (restoreFullscreen) {
+        return MakeFullscreen();
+    }
+    return true;
+}
+
+bool VideoWindow::SetPictureInPicture(bool enabled) {
+    if (m_hWnd && m_windowThreadId != 0 &&
+        GetCurrentThreadId() != m_windowThreadId) {
+        return PostMessage(m_hWnd, kSetPictureInPictureMessage,
+                           enabled ? TRUE : FALSE, 0) != 0;
+    }
+    return enabled ? EnterPictureInPicture() : ExitPictureInPicture();
+}
+
+bool VideoWindow::TogglePictureInPicture() {
+    if (m_hWnd && m_windowThreadId != 0 &&
+        GetCurrentThreadId() != m_windowThreadId) {
+        return PostMessage(m_hWnd, kTogglePictureInPictureMessage, 0, 0) != 0;
+    }
+    return SetPictureInPicture(
+        !m_pictureInPicture.load(std::memory_order_relaxed));
 }
 
 bool VideoWindow::MakeFullscreen() {
@@ -1537,6 +1685,23 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
     }
 
     if (pThis) {
+        if (uMsg == kTogglePictureInPictureMessage) {
+            pThis->SetPictureInPicture(!pThis->IsPictureInPicture());
+            return 0;
+        }
+        if (uMsg == kSetPictureInPictureMessage) {
+            pThis->SetPictureInPicture(wParam != 0);
+            return 0;
+        }
+        if (uMsg == WM_NCHITTEST &&
+            pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
+            LRESULT hit = DefWindowProc(hWnd, uMsg, wParam, lParam);
+            if (hit != HTCLIENT) return hit;
+            POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(hWnd, &p);
+            return pThis->IsPictureInPictureDragArea(p.x, p.y) ? HTCAPTION
+                                                               : HTCLIENT;
+        }
         if (uMsg == WM_SETCURSOR) {
             if (LOWORD(lParam) == HTCLIENT) {
                 if (pThis->m_cursorVisible.load(std::memory_order_relaxed)) {
@@ -1553,10 +1718,14 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
         }
         if (uMsg == WM_CLOSE) {
             pThis->m_closeRequested.store(true, std::memory_order_relaxed);
+            if (pThis->m_closeRequestedEvent) {
+                SetEvent(pThis->m_closeRequestedEvent);
+            }
             return 0;
         }
         if (uMsg == WM_DESTROY) {
             pThis->m_hWnd = nullptr;
+            pThis->m_windowThreadId = 0;
             return 0;
         }
 
@@ -1710,6 +1879,9 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
                        bool startFullscreen) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     m_closeRequested.store(false, std::memory_order_relaxed);
+    if (m_closeRequestedEvent) {
+        ResetEvent(m_closeRequestedEvent);
+    }
     HINSTANCE hInstance = GetModuleHandle(NULL);
     const wchar_t* className = L"RadioifyVideoWindow";
 
@@ -1734,6 +1906,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
         NULL, NULL, hInstance, this);
 
     if (!m_hWnd) return false;
+    m_windowThreadId = GetCurrentThreadId();
 
     // Remember base window title so we can temporarily update it while overlay is visible
     m_lastWindowTitle = title;
@@ -1742,6 +1915,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     if (!CreateSwapChain(width, height)) {
         ::DestroyWindow(m_hWnd);
         m_hWnd = nullptr;
+        m_windowThreadId = 0;
         return false;
     }
 
@@ -1944,6 +2118,9 @@ void VideoWindow::Resize(int width, int height) {
 
 void VideoWindow::Close() {
     m_closeRequested.store(false, std::memory_order_relaxed);
+    if (m_closeRequestedEvent) {
+        ResetEvent(m_closeRequestedEvent);
+    }
     SetCursorVisible(true);
     // Hide the window first to release focus/ownership of the monitor
     if (m_hWnd) {
@@ -1965,11 +2142,14 @@ void VideoWindow::Close() {
 
     // Release swapchain last
     ResetSwapChain();
+    m_pictureInPicture.store(false, std::memory_order_relaxed);
+    m_pipRestoreFullscreen = false;
 
     if (m_hWnd) {
         DestroyWindow(m_hWnd);
         m_hWnd = nullptr;
     }
+    m_windowThreadId = 0;
 }
 
 void VideoWindow::ShowWindow(bool show) {
@@ -1998,7 +2178,11 @@ bool VideoWindow::PollInput(InputEvent& ev) {
 }
 
 bool VideoWindow::ConsumeCloseRequested() {
-    return m_closeRequested.exchange(false, std::memory_order_relaxed);
+    const bool requested = m_closeRequested.exchange(false, std::memory_order_relaxed);
+    if (requested && m_closeRequestedEvent) {
+        ResetEvent(m_closeRequestedEvent);
+    }
+    return requested;
 }
 
 void VideoWindow::SetVsync(bool enabled) {

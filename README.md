@@ -141,6 +141,8 @@ The concrete implementation plan lives in
 - Media Previous/Next: previous/next track
 - Media Stop: stop playback
 - Ctrl+Left/Right: seek
+- W: toggle video Window mode
+- P: toggle picture-in-picture in Window mode
 - R: toggle 1938 radio filter
 - H: toggle 50Hz mode
 - O: options (KSS/NSF only)

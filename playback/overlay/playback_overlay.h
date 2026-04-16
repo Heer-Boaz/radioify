@@ -16,6 +16,7 @@ enum class OverlayControlId {
   Hz50,
   AudioTrack,
   Subtitles,
+  PictureInPicture,
 };
 
 struct OverlayControlSpec {
@@ -47,6 +48,8 @@ struct PlaybackOverlayInputs {
   bool overlayVisible = false;
   bool paused = false;
   bool audioFinished = false;
+  bool pictureInPictureAvailable = false;
+  bool pictureInPictureActive = false;
   std::string subtitleRenderError;
   int screenWidth = 0;
   int screenHeight = 0;
@@ -77,6 +80,8 @@ struct PlaybackOverlayState {
   bool overlayVisible = false;
   bool paused = false;
   bool audioFinished = false;
+  bool pictureInPictureAvailable = false;
+  bool pictureInPictureActive = false;
   std::string subtitleText;
   std::string subtitleRenderError;
   std::shared_ptr<const std::string> subtitleAssScript;

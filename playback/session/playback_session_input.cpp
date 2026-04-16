@@ -203,7 +203,18 @@ bool toggle50Hz(const PlaybackInputView& view) {
   return true;
 }
 
+bool togglePictureInPicture(const PlaybackInputView& view,
+                            const PlaybackInputSignals& signals) {
+  if (!view.videoWindow || !view.videoWindow->IsOpen() ||
+      !signals.desiredLayout ||
+      !isWindowPlaybackLayout(*signals.desiredLayout)) {
+    return false;
+  }
+  return view.videoWindow->TogglePictureInPicture();
+}
+
 bool executeOverlayControl(const PlaybackInputView& view,
+                           const PlaybackInputSignals& signals,
                            const playback_overlay::PlaybackOverlayState& state,
                            int controlIndex) {
   std::vector<playback_overlay::OverlayControlSpec> specs =
@@ -221,6 +232,8 @@ bool executeOverlayControl(const PlaybackInputView& view,
       return toggleAudioTrack(view);
     case playback_overlay::OverlayControlId::Subtitles:
       return toggleSubtitles(view);
+    case playback_overlay::OverlayControlId::PictureInPicture:
+      return togglePictureInPicture(view, signals);
   }
   return false;
 }
@@ -274,6 +287,11 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
        *view.playbackState == PlaybackSessionState::Paused) ||
       (view.player && view.player->state() == PlayerState::Paused);
   inputs.audioFinished = inputs.audioOk && audioIsFinished();
+  inputs.pictureInPictureAvailable =
+      view.videoWindow && view.videoWindow->IsOpen();
+  inputs.pictureInPictureActive =
+      inputs.pictureInPictureAvailable &&
+      view.videoWindow->IsPictureInPicture();
   inputs.subtitleRenderError =
       view.videoWindow ? view.videoWindow->GetSubtitleRenderError() : "";
   inputs.screenWidth =
@@ -404,6 +422,15 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
     requestPlaybackExit(view, signals, false);
     return;
   }
+  if (key.vk == 'P' || key.ch == 'p' || key.ch == 'P') {
+    if (togglePictureInPicture(view, signals)) {
+      triggerOverlay(view, signals);
+      if (signals.redraw) {
+        *signals.redraw = true;
+      }
+      return;
+    }
+  }
 
   InputEvent keyEvent{};
   keyEvent.type = InputEvent::Type::Key;
@@ -499,7 +526,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   bool leftPressed =
       (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
   if (leftPressed && mouse.eventFlags == 0 && controlHit >= 0) {
-    if (executeOverlayControl(view, mouseOverlayState, controlHit)) {
+    if (executeOverlayControl(view, signals, mouseOverlayState, controlHit)) {
       triggerOverlay(view, signals);
       if (signals.redraw) {
         *signals.redraw = true;

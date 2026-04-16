@@ -40,7 +40,7 @@ bool PlaybackOutputController::windowVisible() const {
 }
 
 bool PlaybackOutputController::consumeWindowCloseRequested() {
-  return impl_->presentation.window().ConsumeCloseRequested();
+  return impl_->presentation.consumeWindowCloseRequested();
 }
 
 PlaybackRenderMode PlaybackOutputController::renderMode(bool enableAscii) const {
@@ -66,19 +66,6 @@ PlaybackPresenterSyncResult PlaybackOutputController::sync(
                                   overlayControlHover);
 }
 
-void PlaybackOutputController::pollWindowEvents() {
-  if (!impl_->presentation.window().IsOpen()) {
-    return;
-  }
-  const bool wasVisible = impl_->presentation.window().IsVisible();
-  const bool handledEvents = impl_->presentation.window().PollEvents();
-  const bool isVisible = impl_->presentation.window().IsVisible();
-  if (impl_->presentation.windowActive() &&
-      ((handledEvents && isVisible) || (wasVisible != isVisible))) {
-    impl_->presentation.requestPresent();
-  }
-}
-
 bool PlaybackOutputController::pollInput(ConsoleInput& input, InputEvent& ev) {
   if (input.poll(ev)) {
     return true;
@@ -89,13 +76,18 @@ bool PlaybackOutputController::pollInput(ConsoleInput& input, InputEvent& ev) {
 
 bool PlaybackOutputController::waitForActivity(ConsoleInput& input, int timeoutMs,
                                                HANDLE extraHandle) {
-  HANDLE handles[2];
+  HANDLE handles[3];
   DWORD handleCount = 0;
   if (HANDLE inputHandle = input.waitHandle()) {
     handles[handleCount++] = inputHandle;
   }
   if (extraHandle) {
     handles[handleCount++] = extraHandle;
+  }
+  if (impl_->presentation.windowActive()) {
+    if (HANDLE closeHandle = impl_->presentation.windowCloseRequestedWaitHandle()) {
+      handles[handleCount++] = closeHandle;
+    }
   }
 
   DWORD waitMs =
@@ -128,7 +120,6 @@ void PlaybackOutputController::renderTerminal(
 
 void PlaybackOutputController::stop() {
   impl_->presentation.stop();
-  impl_->presentation.frameCache().Reset();
 }
 
 VideoWindow& PlaybackOutputController::window() {

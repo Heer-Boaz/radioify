@@ -91,6 +91,11 @@ public:
     std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
     void SetCursorVisible(bool visible);
+    bool TogglePictureInPicture();
+    bool SetPictureInPicture(bool enabled);
+    bool IsPictureInPicture() const {
+        return m_pictureInPicture.load(std::memory_order_relaxed);
+    }
     
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
@@ -110,6 +115,7 @@ public:
     bool PollEvents();
     bool PollInput(InputEvent& ev);
     bool ConsumeCloseRequested();
+    HANDLE CloseRequestedWaitHandle() const { return m_closeRequestedEvent; }
     void Cleanup();
 
 private:
@@ -119,6 +125,10 @@ private:
     bool CreateSwapChain(int width, int height);
     void ResetSwapChain();
     void Resize(int width, int height);
+    RECT CalculatePictureInPictureRect() const;
+    bool EnterPictureInPicture();
+    bool ExitPictureInPicture();
+    bool IsPictureInPictureDragArea(int x, int y) const;
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -172,6 +182,11 @@ private:
     LONG m_prevExStyle = 0; // saved extended style for restoring on exit
     RECT m_prevRect{};
     bool m_isFullscreen = false;
+    std::atomic<bool> m_pictureInPicture{false};
+    bool m_pipRestoreFullscreen = false;
+    LONG m_pipRestoreStyle = 0;
+    LONG m_pipRestoreExStyle = 0;
+    RECT m_pipRestoreRect{};
     // Guard to ignore WM_SIZE events while we're transitioning to/from fullscreen
     bool m_ignoreWindowSizeEvents = false;
     // When true, Present should skip until the render-target view and sizes are ready
@@ -179,6 +194,8 @@ private:
     bool m_captureAllMouseInput = false;
     std::atomic<bool> m_cursorVisible{true};
     std::atomic<bool> m_closeRequested{false};
+    HANDLE m_closeRequestedEvent = nullptr;
+    DWORD m_windowThreadId = 0;
     mutable std::mutex m_subtitleStateMutex;
     std::string m_subtitleRenderError;
     void setSubtitleRenderError(std::string error);

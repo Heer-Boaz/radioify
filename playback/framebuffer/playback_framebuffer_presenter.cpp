@@ -3,10 +3,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <thread>
 #include <utility>
 
 #include "audioplayback.h"
+#include "core/windows_message_pump.h"
 
 namespace playback_framebuffer_presenter {
 namespace {
@@ -15,10 +15,10 @@ constexpr auto kOverlayRefreshInterval = std::chrono::milliseconds(100);
 
 void waitForPresenterWake(HANDLE wakeEvent) {
   if (wakeEvent) {
-    WaitForSingleObject(wakeEvent, INFINITE);
+    waitForHandlesAndPumpThreadWindowMessages(1, &wakeEvent, INFINITE);
     return;
   }
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  waitForHandlesAndPumpThreadWindowMessages(0, nullptr, 50);
 }
 
 void waitForPresenterActivity(HANDLE wakeEvent, HANDLE frameEvent,
@@ -32,17 +32,15 @@ void waitForPresenterActivity(HANDLE wakeEvent, HANDLE frameEvent,
     handles[handleCount++] = frameEvent;
   }
   if (handleCount == 0) {
-    if (timeoutMs < 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      return;
-    }
-    std::this_thread::sleep_for(
-        std::chrono::milliseconds(std::max(0, timeoutMs)));
+    const DWORD waitMs = timeoutMs < 0
+                             ? INFINITE
+                             : static_cast<DWORD>(std::max(0, timeoutMs));
+    waitForHandlesAndPumpThreadWindowMessages(0, nullptr, waitMs);
     return;
   }
   const DWORD waitMs =
       timeoutMs < 0 ? INFINITE : static_cast<DWORD>(std::max(0, timeoutMs));
-  WaitForMultipleObjects(handleCount, handles, FALSE, waitMs);
+  waitForHandlesAndPumpThreadWindowMessages(handleCount, handles, waitMs);
 }
 
 }  // namespace
@@ -104,6 +102,10 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.overlayVisible = overlayVisibleNow;
   overlayInputs.paused = pausedNow;
   overlayInputs.audioFinished = audioFinishedNow;
+  overlayInputs.pictureInPictureAvailable = videoWindow.IsOpen();
+  overlayInputs.pictureInPictureActive =
+      overlayInputs.pictureInPictureAvailable &&
+      videoWindow.IsPictureInPicture();
   overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
   overlayInputs.screenWidth = 0;
   overlayInputs.screenHeight = 0;
@@ -136,6 +138,12 @@ void runFramebufferPresenterLoop(
   const HANDLE frameEvent = player.videoFrameWaitHandle();
   while (threadState.load(std::memory_order_relaxed) !=
          WindowThreadState::Stopping) {
+    videoWindow.PollEvents();
+    if (threadState.load(std::memory_order_relaxed) ==
+        WindowThreadState::Stopping) {
+      break;
+    }
+
     if (threadState.load(std::memory_order_relaxed) ==
         WindowThreadState::Disabled) {
       waitForPresenterWake(wakeEvent);
@@ -168,6 +176,7 @@ void runFramebufferPresenterLoop(
         }
       }
       waitForPresenterActivity(wakeEvent, frameEvent, waitTimeoutMs);
+      videoWindow.PollEvents();
     }
 
     if (threadState.load(std::memory_order_relaxed) ==

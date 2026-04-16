@@ -34,6 +34,8 @@ class PlaybackPresentation {
 
   bool windowRequested() const;
   bool windowActive() const;
+  bool consumeWindowCloseRequested();
+  HANDLE windowCloseRequestedWaitHandle() const;
   PlaybackRenderMode renderMode(bool enableAscii) const;
   void requestLayout(PlaybackLayout layout);
   PlaybackLayout& desiredLayout();

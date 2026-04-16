@@ -300,7 +300,6 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void pollWindowEvents() {
-    output.pollWindowEvents();
     if (output.consumeWindowCloseRequested() ||
         (output.windowRequested() && !output.windowVisible())) {
       output.requestLayout(PlaybackLayout::Terminal);

@@ -55,7 +55,6 @@ class PlaybackOutputController {
       bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
       std::atomic<int>& overlayControlHover);
 
-  void pollWindowEvents();
   bool pollInput(ConsoleInput& input, InputEvent& ev);
   bool waitForActivity(ConsoleInput& input, int timeoutMs,
                        HANDLE extraHandle = nullptr);
