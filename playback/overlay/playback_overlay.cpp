@@ -53,6 +53,8 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.audioFinished = inputs.audioFinished;
   state.pictureInPictureAvailable = inputs.pictureInPictureAvailable;
   state.pictureInPictureActive = inputs.pictureInPictureActive;
+  state.miniPlayerTuiAvailable = inputs.miniPlayerTuiAvailable;
+  state.miniPlayerTuiActive = inputs.miniPlayerTuiActive;
   state.subtitleRenderError = inputs.subtitleRenderError;
   state.screenWidth = inputs.screenWidth;
   state.screenHeight = inputs.screenHeight;
@@ -262,6 +264,20 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
         std::max(countVisibleChars(pip.normalText),
                  countVisibleChars(pip.hoverText));
     addSpec(std::move(pip));
+  }
+
+  if (state.miniPlayerTuiAvailable) {
+    OverlayControlSpec mini{};
+    mini.id = OverlayControlId::MiniPlayerTui;
+    mini.active = state.miniPlayerTuiActive;
+    auto miniLabels =
+        makeLabels(mini.active ? "Mini: On" : "Mini: Off");
+    mini.normalText = miniLabels.first;
+    mini.hoverText = miniLabels.second;
+    mini.width =
+        std::max(countVisibleChars(mini.normalText),
+                 countVisibleChars(mini.hoverText));
+    addSpec(std::move(mini));
   }
 
   int cursor = 0;

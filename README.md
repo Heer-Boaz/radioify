@@ -143,6 +143,7 @@ The concrete implementation plan lives in
 - Ctrl+Left/Right: seek
 - W: toggle video Window mode
 - P: toggle picture-in-picture in Window mode
+- T: toggle mini-player TUI in Window mode
 - R: toggle 1938 radio filter
 - H: toggle 50Hz mode
 - O: options (KSS/NSF only)

@@ -213,6 +213,16 @@ bool togglePictureInPicture(const PlaybackInputView& view,
   return view.videoWindow->TogglePictureInPicture();
 }
 
+bool toggleMiniPlayerTui(const PlaybackInputView& view,
+                         const PlaybackInputSignals& signals) {
+  if (!view.videoWindow || !view.videoWindow->IsOpen() ||
+      !signals.desiredLayout ||
+      !isWindowPlaybackLayout(*signals.desiredLayout)) {
+    return false;
+  }
+  return view.videoWindow->ToggleMiniPlayerTui();
+}
+
 bool executeOverlayControl(const PlaybackInputView& view,
                            const PlaybackInputSignals& signals,
                            const playback_overlay::PlaybackOverlayState& state,
@@ -234,6 +244,8 @@ bool executeOverlayControl(const PlaybackInputView& view,
       return toggleSubtitles(view);
     case playback_overlay::OverlayControlId::PictureInPicture:
       return togglePictureInPicture(view, signals);
+    case playback_overlay::OverlayControlId::MiniPlayerTui:
+      return toggleMiniPlayerTui(view, signals);
   }
   return false;
 }
@@ -292,6 +304,11 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   inputs.pictureInPictureActive =
       inputs.pictureInPictureAvailable &&
       view.videoWindow->IsPictureInPicture();
+  inputs.miniPlayerTuiAvailable =
+      view.videoWindow && view.videoWindow->IsOpen();
+  inputs.miniPlayerTuiActive =
+      inputs.miniPlayerTuiAvailable &&
+      view.videoWindow->IsMiniPlayerTui();
   inputs.subtitleRenderError =
       view.videoWindow ? view.videoWindow->GetSubtitleRenderError() : "";
   inputs.screenWidth =
@@ -424,6 +441,15 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   }
   if (key.vk == 'P' || key.ch == 'p' || key.ch == 'P') {
     if (togglePictureInPicture(view, signals)) {
+      triggerOverlay(view, signals);
+      if (signals.redraw) {
+        *signals.redraw = true;
+      }
+      return;
+    }
+  }
+  if (key.vk == 'T' || key.ch == 't' || key.ch == 'T') {
+    if (toggleMiniPlayerTui(view, signals)) {
       triggerOverlay(view, signals);
       if (signals.redraw) {
         *signals.redraw = true;

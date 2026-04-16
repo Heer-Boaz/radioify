@@ -23,6 +23,7 @@
 #include "videowindow_vs.h"
 #include "videowindow_ps.h"
 #include "videowindow_ps_ui.h"
+#include "videowindow_ps_gpu_text_grid.h"
 #include "playback/playback_media_keys.h"
 #include "subtitle_caption_style.h"
 #if RADIOIFY_HAS_LIBASS
@@ -46,6 +47,8 @@ static inline std::string thread_id_str() {
 namespace {
     constexpr UINT kTogglePictureInPictureMessage = WM_APP + 0x440;
     constexpr UINT kSetPictureInPictureMessage = WM_APP + 0x441;
+    constexpr UINT kToggleMiniPlayerTuiMessage = WM_APP + 0x442;
+    constexpr UINT kSetMiniPlayerTuiMessage = WM_APP + 0x443;
 
     // Glyph font for ASCII-style overlay (5x7) -----------------------------------------------------------------
     typedef struct MenuGlyph { char c; uint8_t rows[7]; } MenuGlyph;
@@ -1367,12 +1370,31 @@ RECT VideoWindow::CalculatePictureInPictureRect() const {
     return RECT{left, top, left + targetW, top + targetH};
 }
 
-bool VideoWindow::IsPictureInPictureDragArea(int x, int y) const {
-    if (!m_pictureInPicture.load(std::memory_order_relaxed)) return false;
-    if (m_width <= 0 || m_height <= 0) return true;
+LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
+    if (!m_pictureInPicture.load(std::memory_order_relaxed)) return HTCLIENT;
+    if (m_width <= 0 || m_height <= 0) return HTCAPTION;
+
+    const int edge = std::clamp(std::min(m_width, m_height) / 18, 8, 18);
+    const bool left = x >= 0 && x < edge;
+    const bool right = x >= m_width - edge && x < m_width;
+    const bool top = y >= 0 && y < edge;
+    const bool bottom = y >= m_height - edge && y < m_height;
+
+    if (top && left) return HTTOPLEFT;
+    if (top && right) return HTTOPRIGHT;
+    if (bottom && left) return HTBOTTOMLEFT;
+    if (bottom && right) return HTBOTTOMRIGHT;
+    if (left) return HTLEFT;
+    if (right) return HTRIGHT;
+    if (top) return HTTOP;
+    if (bottom) return HTBOTTOM;
+
     const int reservedBottom =
         std::max(48, static_cast<int>(std::lround(m_height * 0.22)));
-    return x >= 0 && x < m_width && y >= 0 && y < m_height - reservedBottom;
+    if (x >= 0 && x < m_width && y >= 0 && y < m_height - reservedBottom) {
+        return HTCAPTION;
+    }
+    return HTCLIENT;
 }
 
 bool VideoWindow::EnterPictureInPicture() {
@@ -1436,6 +1458,7 @@ bool VideoWindow::ExitPictureInPicture() {
         Resize(client.right - client.left, client.bottom - client.top);
     }
     m_pictureInPicture.store(false, std::memory_order_relaxed);
+    m_miniPlayerTui.store(false, std::memory_order_relaxed);
     m_pipRestoreFullscreen = false;
     m_ignoreWindowSizeEvents = false;
 
@@ -1461,6 +1484,30 @@ bool VideoWindow::TogglePictureInPicture() {
     }
     return SetPictureInPicture(
         !m_pictureInPicture.load(std::memory_order_relaxed));
+}
+
+bool VideoWindow::SetMiniPlayerTui(bool enabled) {
+    if (m_hWnd && m_windowThreadId != 0 &&
+        GetCurrentThreadId() != m_windowThreadId) {
+        return PostMessage(m_hWnd, kSetMiniPlayerTuiMessage,
+                           enabled ? TRUE : FALSE, 0) != 0;
+    }
+    if (!m_hWnd || !m_swapChain) return false;
+    if (enabled && !m_pictureInPicture.load(std::memory_order_relaxed) &&
+        !EnterPictureInPicture()) {
+        return false;
+    }
+    m_miniPlayerTui.store(enabled, std::memory_order_relaxed);
+    return true;
+}
+
+bool VideoWindow::ToggleMiniPlayerTui() {
+    if (m_hWnd && m_windowThreadId != 0 &&
+        GetCurrentThreadId() != m_windowThreadId) {
+        return PostMessage(m_hWnd, kToggleMiniPlayerTuiMessage, 0, 0) != 0;
+    }
+    return SetMiniPlayerTui(
+        !m_miniPlayerTui.load(std::memory_order_relaxed));
 }
 
 bool VideoWindow::MakeFullscreen() {
@@ -1655,6 +1702,7 @@ void VideoWindow::Cleanup() {
     m_pixelShader.Reset();
     m_vertexShader.Reset();
     m_uiShader.Reset();
+    m_gpuTextGridShader.Reset();
     m_uiBlendState.Reset();
     m_sampler.Reset();
     m_constantBuffer.Reset();
@@ -1667,6 +1715,10 @@ void VideoWindow::Cleanup() {
     m_subtitleHeight = 0;
     m_tuiTexture.Reset();
     m_tuiSrv.Reset();
+    m_gpuTextGridTexture.Reset();
+    m_gpuTextGridSrv.Reset();
+    m_gpuTextGridCols = 0;
+    m_gpuTextGridRows = 0;
 }
 
 LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -1693,14 +1745,28 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             pThis->SetPictureInPicture(wParam != 0);
             return 0;
         }
+        if (uMsg == kToggleMiniPlayerTuiMessage) {
+            pThis->SetMiniPlayerTui(!pThis->IsMiniPlayerTui());
+            return 0;
+        }
+        if (uMsg == kSetMiniPlayerTuiMessage) {
+            pThis->SetMiniPlayerTui(wParam != 0);
+            return 0;
+        }
         if (uMsg == WM_NCHITTEST &&
             pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
             LRESULT hit = DefWindowProc(hWnd, uMsg, wParam, lParam);
             if (hit != HTCLIENT) return hit;
             POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             ScreenToClient(hWnd, &p);
-            return pThis->IsPictureInPictureDragArea(p.x, p.y) ? HTCAPTION
-                                                               : HTCLIENT;
+            return pThis->HitTestPictureInPicture(p.x, p.y);
+        }
+        if (uMsg == WM_GETMINMAXINFO &&
+            pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
+            auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+            info->ptMinTrackSize.x = 260;
+            info->ptMinTrackSize.y = 146;
+            return 0;
         }
         if (uMsg == WM_SETCURSOR) {
             if (LOWORD(lParam) == HTCLIENT) {
@@ -1947,6 +2013,10 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(PS) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
     hr = device->CreatePixelShader(kVideoWindowPsUi, kVideoWindowPsUi_Size, NULL, &m_uiShader);
     if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
+    hr = device->CreatePixelShader(kVideoWindowPsGpuTextGrid,
+                                   kVideoWindowPsGpuTextGrid_Size, NULL,
+                                   &m_gpuTextGridShader);
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(GPU text grid) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
 
     D3D11_BUFFER_DESC cbDesc = {};
     cbDesc.ByteWidth = sizeof(ShaderConstants);
@@ -2143,6 +2213,7 @@ void VideoWindow::Close() {
     // Release swapchain last
     ResetSwapChain();
     m_pictureInPicture.store(false, std::memory_order_relaxed);
+    m_miniPlayerTui.store(false, std::memory_order_relaxed);
     m_pipRestoreFullscreen = false;
 
     if (m_hWnd) {

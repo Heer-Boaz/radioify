@@ -11,6 +11,7 @@
 
 #include "videocolor.h"
 #include "consoleinput.h"
+#include "gpu_text_grid.h"
 #include "videoprocessor.h"
 #include "subtitle_font_attachments.h"
 #include <vector>
@@ -85,6 +86,7 @@ public:
     // Render a full-screen text grid (TUI) into the window backbuffer.
     void PresentTextGrid(const std::vector<ScreenCell>& cells, int cols, int rows,
                          bool nonBlocking);
+    void PresentGpuTextGrid(const GpuTextGridFrame& frame, bool nonBlocking);
     void PresentBackbuffer();
     HANDLE GetFrameLatencyWaitableObject();
     void SetVsync(bool enabled);
@@ -95,6 +97,11 @@ public:
     bool SetPictureInPicture(bool enabled);
     bool IsPictureInPicture() const {
         return m_pictureInPicture.load(std::memory_order_relaxed);
+    }
+    bool ToggleMiniPlayerTui();
+    bool SetMiniPlayerTui(bool enabled);
+    bool IsMiniPlayerTui() const {
+        return m_miniPlayerTui.load(std::memory_order_relaxed);
     }
     
     bool IsOpen() const { return m_hWnd != nullptr; }
@@ -128,7 +135,7 @@ private:
     RECT CalculatePictureInPictureRect() const;
     bool EnterPictureInPicture();
     bool ExitPictureInPicture();
-    bool IsPictureInPictureDragArea(int x, int y) const;
+    LRESULT HitTestPictureInPicture(int x, int y) const;
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -137,6 +144,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_pixelShader;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_vertexShader;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_uiShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_gpuTextGridShader;
     Microsoft::WRL::ComPtr<ID3D11BlendState> m_uiBlendState;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
@@ -159,6 +167,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_tuiSrv;
     int m_tuiTexWidth = 0;
     int m_tuiTexHeight = 0;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_gpuTextGridTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_gpuTextGridSrv;
+    int m_gpuTextGridCols = 0;
+    int m_gpuTextGridRows = 0;
     
     int m_width = 0;
     int m_height = 0;
@@ -183,6 +195,7 @@ private:
     RECT m_prevRect{};
     bool m_isFullscreen = false;
     std::atomic<bool> m_pictureInPicture{false};
+    std::atomic<bool> m_miniPlayerTui{false};
     bool m_pipRestoreFullscreen = false;
     LONG m_pipRestoreStyle = 0;
     LONG m_pipRestoreExStyle = 0;
