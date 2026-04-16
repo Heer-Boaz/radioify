@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "audioplayback.h"
-#include "gpu_text_grid.h"
 #include "player.h"
 #include "subtitle_manager.h"
 #include "videowindow.h"
@@ -511,18 +510,21 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     view.videoWindow->GetPictureInPictureTextGridSize(gridCols, gridRows);
     const int winW = view.videoWindow->GetWidth();
     const int winH = view.videoWindow->GetHeight();
+    int cellW = 1;
+    int cellH = 1;
+    view.videoWindow->GetPictureInPictureTextCellSize(cellW, cellH);
     if (gridCols > 0 && gridRows > 0 && winW > 0 && winH > 0) {
       const int gridPixelWidth =
-          std::min(winW, gridCols * kGpuTextGridCellPixelWidth);
+          std::min(winW, gridCols * std::max(1, cellW));
       const int gridPixelHeight =
-          std::min(winH, gridRows * kGpuTextGridCellPixelHeight);
+          std::min(winH, gridRows * std::max(1, cellH));
       if (mouse.pos.X >= 0 && mouse.pos.Y >= 0 &&
           mouse.pos.X < gridPixelWidth && mouse.pos.Y < gridPixelHeight) {
         hitMouse.pos.X = static_cast<SHORT>(std::clamp(
-            static_cast<int>(mouse.pos.X) / kGpuTextGridCellPixelWidth, 0,
+            static_cast<int>(mouse.pos.X) / std::max(1, cellW), 0,
             gridCols - 1));
         hitMouse.pos.Y = static_cast<SHORT>(std::clamp(
-            static_cast<int>(mouse.pos.Y) / kGpuTextGridCellPixelHeight, 0,
+            static_cast<int>(mouse.pos.Y) / std::max(1, cellH), 0,
             gridRows - 1));
         hitMouse.control &= ~0x80000000;
         mouseOverlayInputs.overlayVisible = true;

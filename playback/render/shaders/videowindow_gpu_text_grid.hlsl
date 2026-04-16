@@ -6,10 +6,14 @@ struct PS_INPUT {
 Texture2D<uint4> gridTex : register(t0);
 Texture2D<float> glyphAtlasTex : register(t1);
 
+cbuffer GpuTextGridConstants : register(b0) {
+    uint glyphCellWidth;
+    uint glyphCellHeight;
+    uint glyphAtlasCols;
+    uint constantsPad;
+};
+
 static const uint CELL_FLAG_BRAILLE = 1u;
-static const uint GLYPH_ATLAS_COLS = 16u;
-static const uint GLYPH_CELL_WIDTH = 9u;
-static const uint GLYPH_CELL_HEIGHT = 21u;
 static const uint BRAILLE_GLYPH_ATLAS_START = 110u;
 
 float3 packedRgb(uint rgb) {
@@ -54,15 +58,16 @@ float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
         glyphIndex = BRAILLE_GLYPH_ATLAS_START + (cell.r & 0xFFu);
     }
 
-    uint2 glyphCell = uint2(glyphIndex % GLYPH_ATLAS_COLS,
-                            glyphIndex / GLYPH_ATLAS_COLS);
+    uint atlasCols = max(1u, glyphAtlasCols);
+    uint2 cellSize = uint2(max(1u, glyphCellWidth),
+                           max(1u, glyphCellHeight));
+    uint2 glyphCell = uint2(glyphIndex % atlasCols,
+                            glyphIndex / atlasCols);
     uint2 glyphPixel =
-        min(uint2(floor(local * float2(GLYPH_CELL_WIDTH,
-                                       GLYPH_CELL_HEIGHT))),
-            uint2(GLYPH_CELL_WIDTH - 1u, GLYPH_CELL_HEIGHT - 1u));
+        min(uint2(floor(local * float2(cellSize))),
+            cellSize - uint2(1u, 1u));
     uint2 atlasPixel =
-        glyphCell * uint2(GLYPH_CELL_WIDTH, GLYPH_CELL_HEIGHT) +
-        glyphPixel;
+        glyphCell * cellSize + glyphPixel;
     float coverage = glyphAtlasTex.Load(int3(atlasPixel, 0));
     return float4(lerp(packedRgb(cell.b), packedRgb(cell.g), coverage), 1.0);
 }

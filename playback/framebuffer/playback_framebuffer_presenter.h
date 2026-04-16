@@ -23,7 +23,8 @@
 namespace playback_framebuffer_presenter {
 
 using PictureInPictureTextGridProvider =
-    std::function<bool(int pixelWidth, int pixelHeight,
+    std::function<bool(int pixelWidth, int pixelHeight, int cellPixelWidth,
+                       int cellPixelHeight,
                        const VideoFrame* frame, bool frameChanged,
                        std::vector<ScreenCell>& outCells,
                        int& outCols, int& outRows)>;

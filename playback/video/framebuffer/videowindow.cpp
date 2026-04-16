@@ -947,7 +947,7 @@ int VideoWindow::PictureInPictureInteractiveTop() const {
         top = rows > 0
                   ? std::min(m_height,
                              std::max(0, rows - interactiveRows) *
-                                 kGpuTextGridCellPixelHeight)
+                                 static_cast<int>(TextGridCellSize().cy))
                   : m_height -
                         std::max(edge,
                                  static_cast<int>(
@@ -1417,6 +1417,10 @@ void VideoWindow::Cleanup() {
     m_gpuTextGridSrv.Reset();
     m_gpuTextGlyphAtlasTexture.Reset();
     m_gpuTextGlyphAtlasSrv.Reset();
+    m_gpuTextGridConstants.Reset();
+    m_gpuTextGlyphAtlasCellWidth = 0;
+    m_gpuTextGlyphAtlasCellHeight = 0;
+    m_gpuTextGlyphAtlasDpi = 0;
     m_gpuTextGridCols = 0;
     m_gpuTextGridRows = 0;
 }

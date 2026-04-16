@@ -147,6 +147,8 @@ void runFramebufferPresenterLoop(
       std::chrono::steady_clock::time_point::min();
   int lastPictureInPictureTextWidth = 0;
   int lastPictureInPictureTextHeight = 0;
+  int lastPictureInPictureTextCellWidth = 0;
+  int lastPictureInPictureTextCellHeight = 0;
   const HANDLE frameEvent = player.videoFrameWaitHandle();
   while (threadState.load(std::memory_order_relaxed) !=
          WindowThreadState::Stopping) {
@@ -278,6 +280,9 @@ void runFramebufferPresenterLoop(
         videoWindow.IsPictureInPictureTextMode()) {
       const int windowWidth = videoWindow.GetWidth();
       const int windowHeight = videoWindow.GetHeight();
+      int cellWidth = 1;
+      int cellHeight = 1;
+      videoWindow.GetPictureInPictureTextCellSize(cellWidth, cellHeight);
       const auto now = std::chrono::steady_clock::now();
       const bool refreshDue =
           lastPictureInPictureTextPresent ==
@@ -285,7 +290,11 @@ void runFramebufferPresenterLoop(
           (now - lastPictureInPictureTextPresent) >=
               kPictureInPictureTextRefreshInterval;
       const bool sizeChanged = windowWidth != lastPictureInPictureTextWidth ||
-                               windowHeight != lastPictureInPictureTextHeight;
+                               windowHeight != lastPictureInPictureTextHeight ||
+                               cellWidth !=
+                                   lastPictureInPictureTextCellWidth ||
+                               cellHeight !=
+                                   lastPictureInPictureTextCellHeight;
 
       if (textFrameChanged || forcePresentNow || refreshDue || sizeChanged) {
         int textCols = 0;
@@ -294,7 +303,8 @@ void runFramebufferPresenterLoop(
             (localFrame.width > 0 && localFrame.height > 0) ? &localFrame
                                                             : nullptr;
         if (buildPictureInPictureTextGrid &&
-            buildPictureInPictureTextGrid(windowWidth, windowHeight, textFrame,
+            buildPictureInPictureTextGrid(windowWidth, windowHeight, cellWidth,
+                                          cellHeight, textFrame,
                                           textFrameChanged,
                                           pictureInPictureTextCells, textCols,
                                           textRows)) {
@@ -306,6 +316,8 @@ void runFramebufferPresenterLoop(
         lastPictureInPictureTextPresent = std::chrono::steady_clock::now();
         lastPictureInPictureTextWidth = windowWidth;
         lastPictureInPictureTextHeight = windowHeight;
+        lastPictureInPictureTextCellWidth = cellWidth;
+        lastPictureInPictureTextCellHeight = cellHeight;
       }
       continue;
     }

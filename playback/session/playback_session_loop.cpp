@@ -13,7 +13,6 @@
 #include "asciiart_gpu.h"
 #include "audioplayback.h"
 #include "gpu_shared.h"
-#include "gpu_text_grid.h"
 #include "player.h"
 #include "playback/ascii/playback_frame_output.h"
 #include "playback/ascii/playback_screen_renderer.h"
@@ -272,14 +271,17 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool buildPictureInPictureTextGrid(int pixelWidth, int pixelHeight,
+                                     int cellPixelWidth, int cellPixelHeight,
                                      const VideoFrame* frame,
                                      bool frameChanged,
                                      std::vector<ScreenCell>& outCells,
                                      int& outCols, int& outRows) {
+    cellPixelWidth = std::max(1, cellPixelWidth);
+    cellPixelHeight = std::max(1, cellPixelHeight);
     const int cols =
-        std::max(20, pixelWidth / kGpuTextGridCellPixelWidth);
+        std::max(20, pixelWidth / cellPixelWidth);
     const int rows =
-        std::max(10, pixelHeight / kGpuTextGridCellPixelHeight);
+        std::max(10, pixelHeight / cellPixelHeight);
     pictureInPictureTextScreen.setVirtualSize(cols, rows);
 
     pictureInPictureTextRenderFailed = false;
@@ -327,12 +329,12 @@ struct PlaybackLoopRunner::Impl {
   PlaybackPresenterSyncResult syncPresentation() {
     auto buildUiState = [&]() { return buildWindowUiState(); };
     auto buildPictureInPictureTextGrid =
-        [&](int pixelWidth, int pixelHeight, const VideoFrame* frame,
-            bool frameChanged, std::vector<ScreenCell>& outCells,
-            int& outCols, int& outRows) {
+        [&](int pixelWidth, int pixelHeight, int cellPixelWidth,
+            int cellPixelHeight, const VideoFrame* frame, bool frameChanged,
+            std::vector<ScreenCell>& outCells, int& outCols, int& outRows) {
           return this->buildPictureInPictureTextGrid(
-              pixelWidth, pixelHeight, frame, frameChanged, outCells, outCols,
-              outRows);
+              pixelWidth, pixelHeight, cellPixelWidth, cellPixelHeight, frame,
+              frameChanged, outCells, outCols, outRows);
         };
     auto overlayVisibleFn = [&]() { return overlayVisible(); };
     PlaybackPresenterSyncResult result =

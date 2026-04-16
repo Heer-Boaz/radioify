@@ -106,6 +106,8 @@ public:
         outCols = m_pictureInPictureGridCols.load(std::memory_order_relaxed);
         outRows = m_pictureInPictureGridRows.load(std::memory_order_relaxed);
     }
+    void GetPictureInPictureTextCellSize(int& outCellWidth,
+                                         int& outCellHeight) const;
     
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
@@ -143,7 +145,11 @@ private:
     bool EnterPictureInPicture();
     bool ExitPictureInPicture();
     LRESULT HitTestPictureInPicture(int x, int y) const;
-    bool EnsureGpuTextGlyphAtlas(ID3D11Device* device);
+    UINT TextGridDpi() const;
+    SIZE TextGridCellSize() const;
+    bool EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,
+                                 int cellHeight, UINT dpi);
+    bool EnsureGpuTextGridConstants(ID3D11Device* device);
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -179,6 +185,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_gpuTextGridSrv;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_gpuTextGlyphAtlasTexture;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_gpuTextGlyphAtlasSrv;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_gpuTextGridConstants;
+    int m_gpuTextGlyphAtlasCellWidth = 0;
+    int m_gpuTextGlyphAtlasCellHeight = 0;
+    UINT m_gpuTextGlyphAtlasDpi = 0;
     int m_gpuTextGridCols = 0;
     int m_gpuTextGridRows = 0;
     
