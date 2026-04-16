@@ -1,8 +1,171 @@
 #include "videowindow.h"
 
 #include <algorithm>
+#include <cstring>
+#include <cmath>
+#include <vector>
 
 #include "gpu_shared.h"
+#include "terminal_font.h"
+
+namespace {
+constexpr int kGlyphAtlasCols = 16;
+constexpr int kGlyphAtlasRows = 23;
+constexpr int kBrailleGlyphAtlasStart = 110;
+
+wchar_t glyphForAtlasIndex(int index) {
+    if (index >= 0 && index <= 94) {
+        return static_cast<wchar_t>(32 + index);
+    }
+    switch (index) {
+        case 95:
+            return L'\u25B6';
+        case 96:
+            return L'\u23F8';
+        case 97:
+            return L'\u25A0';
+        case 98:
+            return L'\u2022';
+        case 99:
+            return L'\u2500';
+        case 100:
+            return L'\u2502';
+        case 101:
+            return L'\u250C';
+        case 102:
+            return L'\u2510';
+        case 103:
+            return L'\u2514';
+        case 104:
+            return L'\u2518';
+        case 105:
+            return L'\u251C';
+        case 106:
+            return L'\u2524';
+        case 107:
+            return L'\u252C';
+        case 108:
+            return L'\u2534';
+        case 109:
+            return L'\u253C';
+        default:
+            if (index >= kBrailleGlyphAtlasStart &&
+                index < kBrailleGlyphAtlasStart + 256) {
+                return static_cast<wchar_t>(
+                    L'\u2800' + (index - kBrailleGlyphAtlasStart));
+            }
+            return L'?';
+    }
+}
+
+bool renderGlyphAtlas(std::vector<uint8_t>& outAlpha) {
+    const int atlasWidth = kGlyphAtlasCols * kGpuTextGridCellPixelWidth;
+    const int atlasHeight = kGlyphAtlasRows * kGpuTextGridCellPixelHeight;
+    const size_t alphaBytes =
+        static_cast<size_t>(atlasWidth) * static_cast<size_t>(atlasHeight);
+    outAlpha.assign(alphaBytes, static_cast<uint8_t>(0));
+
+    HDC memDC = CreateCompatibleDC(nullptr);
+    if (!memDC) return false;
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = atlasWidth;
+    bmi.bmiHeader.biHeight = -atlasHeight;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* dibBits = nullptr;
+    HBITMAP dib =
+        CreateDIBSection(memDC, &bmi, DIB_RGB_COLORS, &dibBits, nullptr, 0);
+    if (!dib || !dibBits) {
+        if (dib) DeleteObject(dib);
+        DeleteDC(memDC);
+        return false;
+    }
+
+    HGDIOBJ oldBmp = SelectObject(memDC, dib);
+    std::memset(dibBits, 0, alphaBytes * 4u);
+    SetBkMode(memDC, TRANSPARENT);
+    SetTextColor(memDC, RGB(255, 255, 255));
+
+    const int baseFontH =
+        radioifyTerminalFontPixelHeightForDpi(USER_DEFAULT_SCREEN_DPI);
+    const int fontH = fitRadioifyTerminalFontHeightToCell(
+        memDC, baseFontH, kGpuTextGridCellPixelWidth,
+        kGpuTextGridCellPixelHeight);
+    HFONT font = createRadioifyTerminalFont(fontH);
+    const bool ownsFont = font != nullptr;
+    if (!font) {
+        font = static_cast<HFONT>(GetStockObject(SYSTEM_FIXED_FONT));
+    }
+    HGDIOBJ oldFont = SelectObject(memDC, font);
+
+    for (int index = 0; index < kGlyphAtlasCols * kGlyphAtlasRows; ++index) {
+        const wchar_t ch = glyphForAtlasIndex(index);
+        const int col = index % kGlyphAtlasCols;
+        const int row = index / kGlyphAtlasCols;
+        RECT rc{col * kGpuTextGridCellPixelWidth,
+                row * kGpuTextGridCellPixelHeight,
+                (col + 1) * kGpuTextGridCellPixelWidth,
+                (row + 1) * kGpuTextGridCellPixelHeight};
+        DrawTextW(memDC, &ch, 1, &rc,
+                  DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+    }
+
+    const uint8_t* src = static_cast<const uint8_t*>(dibBits);
+    for (size_t i = 0; i < alphaBytes; ++i) {
+        const uint8_t b = src[i * 4u + 0u];
+        const uint8_t g = src[i * 4u + 1u];
+        const uint8_t r = src[i * 4u + 2u];
+        outAlpha[i] = std::max({r, g, b});
+    }
+
+    if (oldFont) SelectObject(memDC, oldFont);
+    if (ownsFont && font) DeleteObject(font);
+    if (oldBmp) SelectObject(memDC, oldBmp);
+    DeleteObject(dib);
+    DeleteDC(memDC);
+    return true;
+}
+}  // namespace
+
+bool VideoWindow::EnsureGpuTextGlyphAtlas(ID3D11Device* device) {
+    if (m_gpuTextGlyphAtlasSrv) return true;
+    if (!device) return false;
+
+    std::vector<uint8_t> alpha;
+    if (!renderGlyphAtlas(alpha)) return false;
+
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = static_cast<UINT>(kGlyphAtlasCols * kGpuTextGridCellPixelWidth);
+    td.Height = static_cast<UINT>(kGlyphAtlasRows * kGpuTextGridCellPixelHeight);
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_R8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA init{};
+    init.pSysMem = alpha.data();
+    init.SysMemPitch = td.Width;
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    if (FAILED(device->CreateTexture2D(&td, &init, &texture)) || !texture) {
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
+    if (FAILED(device->CreateShaderResourceView(texture.Get(), nullptr, &srv)) ||
+        !srv) {
+        return false;
+    }
+
+    m_gpuTextGlyphAtlasTexture = texture;
+    m_gpuTextGlyphAtlasSrv = srv;
+    return true;
+}
 
 void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
                                      bool nonBlocking) {
@@ -27,6 +190,7 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;
+    if (!EnsureGpuTextGlyphAtlas(device)) return;
 
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
@@ -90,11 +254,13 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
     context->VSSetShader(m_vertexShader.Get(), nullptr, 0);
     context->PSSetShader(m_gpuTextGridShader.Get(), nullptr, 0);
-    context->PSSetShaderResources(0, 1, m_gpuTextGridSrv.GetAddressOf());
+    ID3D11ShaderResourceView* srvs[2] = {m_gpuTextGridSrv.Get(),
+                                         m_gpuTextGlyphAtlasSrv.Get()};
+    context->PSSetShaderResources(0, 2, srvs);
     context->Draw(4, 0);
 
-    ID3D11ShaderResourceView* nullSrv = nullptr;
-    context->PSSetShaderResources(0, 1, &nullSrv);
+    ID3D11ShaderResourceView* nullSrvs[2] = {nullptr, nullptr};
+    context->PSSetShaderResources(0, 2, nullSrvs);
 
     lock.unlock();
     if (!swapChain) return;

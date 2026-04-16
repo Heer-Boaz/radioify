@@ -19,33 +19,6 @@ uint32_t color(const Color& value) {
   return gpuTextGridRgb(value.r, value.g, value.b);
 }
 
-bool shaderGlyphSupports(char ch) {
-  if (ch >= 'A' && ch <= 'Z') return true;
-  if (ch >= '0' && ch <= '9') return true;
-  switch (ch) {
-    case ' ':
-    case '#':
-    case '%':
-    case '(':
-    case ')':
-    case '+':
-    case '-':
-    case '.':
-    case '/':
-    case ':':
-    case '?':
-    case '[':
-    case '\\':
-    case ']':
-    case '_':
-    case '|':
-    case '~':
-      return true;
-    default:
-      return false;
-  }
-}
-
 GpuTextGridCell makeScreenCell(const ScreenCell& cell) {
   const uint32_t fg = color(cell.fg);
   const uint32_t bg = color(cell.bg);
@@ -62,50 +35,36 @@ GpuTextGridCell makeScreenCell(const ScreenCell& cell) {
     return GpuTextGridCell{' ', fg, fg, 0};
   }
 
-  char out = '?';
   if (ch >= 32 && ch <= 126) {
-    out = static_cast<char>(ch);
-    if (out >= 'a' && out <= 'z') out = static_cast<char>(out - 'a' + 'A');
-    if (out == '\\') out = '/';
-    if (!shaderGlyphSupports(out)) out = '?';
-  } else {
-    switch (ch) {
-      case L'\u25B6':
-      case L'\u23F8':
-        out = 'P';
-        break;
-      case L'\u25A0':
-      case L'\u2022':
-        out = '#';
-        break;
-      case L'\u2013':
-      case L'\u2014':
-      case L'\u2212':
-        out = '-';
-        break;
-      case L'\u2502':
-      case L'\u2503':
-        out = '|';
-        break;
-      case L'\u2500':
-      case L'\u2501':
-        out = '-';
-        break;
-      case L'\u2514':
-      case L'\u2518':
-      case L'\u250C':
-      case L'\u2510':
-      case L'\u253C':
-        out = '+';
-        break;
-      default:
-        out = ' ';
-        break;
-    }
+    return GpuTextGridCell{static_cast<uint32_t>(ch), fg, bg, 0};
   }
-  return GpuTextGridCell{static_cast<uint32_t>(
-                             static_cast<unsigned char>(out)),
-                         fg, bg, 0};
+
+  switch (ch) {
+    case L'\u25B6':
+    case L'\u23F8':
+    case L'\u25A0':
+    case L'\u2022':
+    case L'\u2500':
+    case L'\u2501':
+    case L'\u2502':
+    case L'\u2503':
+    case L'\u250C':
+    case L'\u2510':
+    case L'\u2514':
+    case L'\u2518':
+    case L'\u251C':
+    case L'\u2524':
+    case L'\u252C':
+    case L'\u2534':
+    case L'\u253C':
+      return GpuTextGridCell{static_cast<uint32_t>(ch), fg, bg, 0};
+    case L'\u2013':
+    case L'\u2014':
+    case L'\u2212':
+      return GpuTextGridCell{'-', fg, bg, 0};
+    default:
+      return GpuTextGridCell{' ', fg, bg, 0};
+  }
 }
 
 }  // namespace

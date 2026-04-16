@@ -143,6 +143,7 @@ private:
     bool EnterPictureInPicture();
     bool ExitPictureInPicture();
     LRESULT HitTestPictureInPicture(int x, int y) const;
+    bool EnsureGpuTextGlyphAtlas(ID3D11Device* device);
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -176,6 +177,8 @@ private:
     int m_tuiTexHeight = 0;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_gpuTextGridTexture;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_gpuTextGridSrv;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_gpuTextGlyphAtlasTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_gpuTextGlyphAtlasSrv;
     int m_gpuTextGridCols = 0;
     int m_gpuTextGridRows = 0;
     

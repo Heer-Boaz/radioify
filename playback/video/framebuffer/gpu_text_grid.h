@@ -23,8 +23,9 @@ constexpr uint32_t gpuTextGridColorRgb(GpuTextGridColor color) {
     return static_cast<uint32_t>(color);
 }
 
-constexpr int kGpuTextGridCellPixelWidth = 10;
-constexpr int kGpuTextGridCellPixelHeight = 18;
+// Cascadia Mono 12pt at 96 DPI, matching the default terminal cell density.
+constexpr int kGpuTextGridCellPixelWidth = 9;
+constexpr int kGpuTextGridCellPixelHeight = 21;
 constexpr uint32_t kGpuTextGridCellFlagBraille = 1u;
 
 struct GpuTextGridCell {

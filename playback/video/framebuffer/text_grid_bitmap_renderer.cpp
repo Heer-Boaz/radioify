@@ -14,42 +14,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace {
-
-HFONT createGridFont(int fontH) {
-  return CreateFontW(-std::max(1, fontH), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
-                     FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                     CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                     FIXED_PITCH | FF_DONTCARE, L"Consolas");
-}
-
-int fitFontHeightToCell(HDC hdc, int fontH, int cellW, int cellH) {
-  int fitted = std::max(1, fontH);
-  HFONT font = createGridFont(fitted);
-  if (!font) return fitted;
-  HGDIOBJ oldFont = SelectObject(hdc, font);
-  TEXTMETRICW tm{};
-  SIZE extent{};
-  if (GetTextMetricsW(hdc, &tm) && GetTextExtentPoint32W(hdc, L"M", 1, &extent)) {
-    const int maxTextH = std::max(1, static_cast<int>(std::floor(cellH * 0.92f)));
-    const int maxTextW = std::max(1, static_cast<int>(std::floor(cellW * 0.92f)));
-    double scaleH =
-        tm.tmHeight > 0 ? static_cast<double>(maxTextH) / tm.tmHeight : 1.0;
-    double scaleW =
-        extent.cx > 0 ? static_cast<double>(maxTextW) / extent.cx : 1.0;
-    double scale = std::min({1.0, scaleH, scaleW});
-    if (scale < 0.98) {
-      fitted = std::max(1, static_cast<int>(std::lround(fitted * scale)));
-    }
-  }
-  if (oldFont) {
-    SelectObject(hdc, oldFont);
-  }
-  DeleteObject(font);
-  return fitted;
-}
-
-}  // namespace
+#include "terminal_font.h"
 
 bool renderScreenGridToBitmap(const ScreenCell* cells, int cols, int rows,
                               int width, int height,
@@ -122,8 +87,9 @@ bool renderScreenGridToBitmap(const ScreenCell* cells, int cols, int rows,
   const int cellW = std::max(1, width / cols);
   const int baseFontH =
       std::max(8, static_cast<int>(std::round(cellH * 0.95f)));
-  const int fontH = fitFontHeightToCell(memDC, baseFontH, cellW, cellH);
-  HFONT font = createGridFont(fontH);
+  const int fontH =
+      fitRadioifyTerminalFontHeightToCell(memDC, baseFontH, cellW, cellH);
+  HFONT font = createRadioifyTerminalFont(fontH);
   const bool ownsFont = (font != nullptr);
   if (!font) {
     font = static_cast<HFONT>(GetStockObject(SYSTEM_FIXED_FONT));
