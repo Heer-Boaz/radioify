@@ -1326,6 +1326,128 @@ void VideoWindow::SetCursorVisible(bool visible) {
                   MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
 }
 
+double VideoWindow::PictureInPictureAspectRatio() const {
+    double aspect = 16.0 / 9.0;
+    if (m_videoWidth > 0 && m_videoHeight > 0) {
+        aspect = static_cast<double>(m_videoWidth) /
+                 static_cast<double>(m_videoHeight);
+    } else if (m_width > 0 && m_height > 0) {
+        aspect = static_cast<double>(m_width) / static_cast<double>(m_height);
+    }
+    return std::clamp(aspect, 0.50, 3.00);
+}
+
+SIZE VideoWindow::PictureInPictureMinimumSize() const {
+    const double aspect = PictureInPictureAspectRatio();
+    constexpr int kMinLongEdge = 260;
+    constexpr int kMinShortEdge = 96;
+
+    SIZE size{};
+    if (aspect >= 1.0) {
+        size.cy = kMinShortEdge;
+        size.cx = static_cast<LONG>(std::lround(size.cy * aspect));
+        if (size.cx < kMinLongEdge) {
+            size.cx = kMinLongEdge;
+            size.cy = static_cast<LONG>(std::lround(size.cx / aspect));
+        }
+    } else {
+        size.cx = kMinShortEdge;
+        size.cy = static_cast<LONG>(std::lround(size.cx / aspect));
+        if (size.cy < kMinLongEdge) {
+            size.cy = kMinLongEdge;
+            size.cx = static_cast<LONG>(std::lround(size.cy * aspect));
+        }
+    }
+
+    size.cx = std::max<LONG>(1, size.cx);
+    size.cy = std::max<LONG>(1, size.cy);
+    return size;
+}
+
+void VideoWindow::AdjustPictureInPictureSizingRect(WPARAM edge,
+                                                   RECT* rect) const {
+    if (!rect) return;
+    const double aspect = PictureInPictureAspectRatio();
+    const SIZE minSize = PictureInPictureMinimumSize();
+
+    const bool leftEdge = edge == WMSZ_LEFT || edge == WMSZ_TOPLEFT ||
+                          edge == WMSZ_BOTTOMLEFT;
+    const bool rightEdge = edge == WMSZ_RIGHT || edge == WMSZ_TOPRIGHT ||
+                           edge == WMSZ_BOTTOMRIGHT;
+    const bool topEdge = edge == WMSZ_TOP || edge == WMSZ_TOPLEFT ||
+                         edge == WMSZ_TOPRIGHT;
+    const bool bottomEdge = edge == WMSZ_BOTTOM || edge == WMSZ_BOTTOMLEFT ||
+                            edge == WMSZ_BOTTOMRIGHT;
+    const bool horizontalOnly = (leftEdge || rightEdge) && !topEdge && !bottomEdge;
+    const bool verticalOnly = (topEdge || bottomEdge) && !leftEdge && !rightEdge;
+    const bool corner = (leftEdge || rightEdge) && (topEdge || bottomEdge);
+
+    int width = std::max(1, static_cast<int>(rect->right - rect->left));
+    int height = std::max(1, static_cast<int>(rect->bottom - rect->top));
+
+    bool deriveWidthFromHeight = verticalOnly;
+    if (corner) {
+        const int currentW = std::max(1, m_width);
+        const int currentH = std::max(1, m_height);
+        const double horizontalDelta = std::abs(width - currentW);
+        const double verticalDelta = std::abs(height - currentH) * aspect;
+        deriveWidthFromHeight = verticalDelta > horizontalDelta;
+    }
+
+    if (deriveWidthFromHeight) {
+        height = std::max<int>(height, minSize.cy);
+        width = static_cast<int>(std::lround(height * aspect));
+        if (width < minSize.cx) {
+            width = minSize.cx;
+            height = static_cast<int>(std::lround(width / aspect));
+        }
+    } else {
+        width = std::max<int>(width, minSize.cx);
+        height = static_cast<int>(std::lround(width / aspect));
+        if (height < minSize.cy) {
+            height = minSize.cy;
+            width = static_cast<int>(std::lround(height * aspect));
+        }
+    }
+
+    if (corner) {
+        if (leftEdge) {
+            rect->left = rect->right - width;
+        } else {
+            rect->right = rect->left + width;
+        }
+        if (topEdge) {
+            rect->top = rect->bottom - height;
+        } else {
+            rect->bottom = rect->top + height;
+        }
+        return;
+    }
+
+    if (horizontalOnly) {
+        const LONG centerY = rect->top + (rect->bottom - rect->top) / 2;
+        if (leftEdge) {
+            rect->left = rect->right - width;
+        } else {
+            rect->right = rect->left + width;
+        }
+        rect->top = centerY - height / 2;
+        rect->bottom = rect->top + height;
+        return;
+    }
+
+    if (verticalOnly) {
+        const LONG centerX = rect->left + (rect->right - rect->left) / 2;
+        if (topEdge) {
+            rect->top = rect->bottom - height;
+        } else {
+            rect->bottom = rect->top + height;
+        }
+        rect->left = centerX - width / 2;
+        rect->right = rect->left + width;
+    }
+}
+
 RECT VideoWindow::CalculatePictureInPictureRect() const {
     RECT work{0, 0, 1280, 720};
     HMONITOR monitor = MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST);
@@ -1348,14 +1470,7 @@ RECT VideoWindow::CalculatePictureInPictureRect() const {
     const int maxW = std::min(usableW, 720);
 
     int targetW = std::clamp(workW * 28 / 100, minW, maxW);
-    double aspect = 16.0 / 9.0;
-    if (m_videoWidth > 0 && m_videoHeight > 0) {
-        aspect = static_cast<double>(m_videoWidth) /
-                 static_cast<double>(m_videoHeight);
-    } else if (m_width > 0 && m_height > 0) {
-        aspect = static_cast<double>(m_width) / static_cast<double>(m_height);
-    }
-    aspect = std::clamp(aspect, 0.50, 3.00);
+    const double aspect = PictureInPictureAspectRatio();
 
     int targetH = std::max(1, static_cast<int>(std::lround(targetW / aspect)));
     if (targetH > usableH) {
@@ -1761,11 +1876,18 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             ScreenToClient(hWnd, &p);
             return pThis->HitTestPictureInPicture(p.x, p.y);
         }
+        if (uMsg == WM_SIZING &&
+            pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
+            pThis->AdjustPictureInPictureSizingRect(
+                wParam, reinterpret_cast<RECT*>(lParam));
+            return TRUE;
+        }
         if (uMsg == WM_GETMINMAXINFO &&
             pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
             auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-            info->ptMinTrackSize.x = 260;
-            info->ptMinTrackSize.y = 146;
+            const SIZE minSize = pThis->PictureInPictureMinimumSize();
+            info->ptMinTrackSize.x = minSize.cx;
+            info->ptMinTrackSize.y = minSize.cy;
             return 0;
         }
         if (uMsg == WM_SETCURSOR) {

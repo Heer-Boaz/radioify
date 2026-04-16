@@ -133,6 +133,9 @@ private:
     void ResetSwapChain();
     void Resize(int width, int height);
     RECT CalculatePictureInPictureRect() const;
+    double PictureInPictureAspectRatio() const;
+    SIZE PictureInPictureMinimumSize() const;
+    void AdjustPictureInPictureSizingRect(WPARAM edge, RECT* rect) const;
     bool EnterPictureInPicture();
     bool ExitPictureInPicture();
     LRESULT HitTestPictureInPicture(int x, int y) const;
