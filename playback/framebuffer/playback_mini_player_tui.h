@@ -1,24 +1,14 @@
 #pragma once
 
-#include <utility>
+#include <vector>
 
-#include "asciiart.h"
+#include "consolescreen.h"
 #include "gpu_text_grid.h"
-#include "videowindow.h"
 
 namespace playback_framebuffer_presenter {
 
-void buildPlaybackMiniPlayerTuiFrame(const WindowUiState& ui, int pixelWidth,
-                                     int pixelHeight,
-                                     GpuTextGridFrame& outFrame);
-
-std::pair<int, int> computePlaybackMiniPlayerAsciiSize(int pixelWidth,
-                                                       int pixelHeight,
-                                                       int srcWidth,
-                                                       int srcHeight);
-
-void buildPlaybackMiniPlayerAsciiFrame(const AsciiArt& art,
-                                       const WindowUiState& ui,
-                                       GpuTextGridFrame& outFrame);
+void buildGpuTextGridFrameFromScreenCells(const std::vector<ScreenCell>& cells,
+                                          int cols, int rows,
+                                          GpuTextGridFrame& outFrame);
 
 }  // namespace playback_framebuffer_presenter

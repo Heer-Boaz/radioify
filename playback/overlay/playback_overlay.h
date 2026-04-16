@@ -17,7 +17,6 @@ enum class OverlayControlId {
   AudioTrack,
   Subtitles,
   PictureInPicture,
-  MiniPlayerTui,
 };
 
 struct OverlayControlSpec {
@@ -51,8 +50,6 @@ struct PlaybackOverlayInputs {
   bool audioFinished = false;
   bool pictureInPictureAvailable = false;
   bool pictureInPictureActive = false;
-  bool miniPlayerTuiAvailable = false;
-  bool miniPlayerTuiActive = false;
   std::string subtitleRenderError;
   int screenWidth = 0;
   int screenHeight = 0;
@@ -85,8 +82,6 @@ struct PlaybackOverlayState {
   bool audioFinished = false;
   bool pictureInPictureAvailable = false;
   bool pictureInPictureActive = false;
-  bool miniPlayerTuiAvailable = false;
-  bool miniPlayerTuiActive = false;
   std::string subtitleText;
   std::string subtitleRenderError;
   std::shared_ptr<const std::string> subtitleAssScript;

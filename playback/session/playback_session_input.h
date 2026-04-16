@@ -42,6 +42,7 @@ struct PlaybackInputView {
 struct PlaybackInputSignals {
   std::atomic<int>* overlayControlHover = nullptr;
   std::function<void()> requestWindowPresent;
+  std::function<bool()> togglePictureInPicture;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::atomic<int64_t>* overlayUntilMs = nullptr;
 

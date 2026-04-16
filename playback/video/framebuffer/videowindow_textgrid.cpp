@@ -11,8 +11,8 @@ void VideoWindow::PresentTextGrid(const std::vector<ScreenCell>& cells, int cols
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     if (cols <= 0 || rows <= 0 || cells.empty()) return;
-    m_miniPlayerGridCols.store(cols, std::memory_order_relaxed);
-    m_miniPlayerGridRows.store(rows, std::memory_order_relaxed);
+    m_pictureInPictureGridCols.store(cols, std::memory_order_relaxed);
+    m_pictureInPictureGridRows.store(rows, std::memory_order_relaxed);
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
     UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);

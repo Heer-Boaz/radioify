@@ -71,8 +71,8 @@ struct PlaybackWindowPresenter::Impl {
 
   bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
              const std::function<bool()>& overlayVisible,
-             const playback_framebuffer_presenter::MiniPlayerTextGridProvider&
-                 buildMiniPlayerTextGrid) {
+             const playback_framebuffer_presenter::PictureInPictureTextGridProvider&
+                 buildPictureInPictureTextGrid) {
     if (thread.joinable()) {
       threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
       forcePresent.store(true, std::memory_order_relaxed);
@@ -85,7 +85,7 @@ struct PlaybackWindowPresenter::Impl {
     forcePresent.store(true, std::memory_order_relaxed);
 
     thread = std::thread(
-        [this, &player, buildUiState, overlayVisible, buildMiniPlayerTextGrid,
+        [this, &player, buildUiState, overlayVisible, buildPictureInPictureTextGrid,
          startGate]() {
           const bool opened = window.Open(1280, 720, "Radioify Output");
           {
@@ -99,7 +99,7 @@ struct PlaybackWindowPresenter::Impl {
             playback_framebuffer_presenter::runFramebufferPresenterLoop(
                 player, window, frameCache, threadState, forcePresent,
                 wakeEvent, overlayVisible, buildUiState,
-                buildMiniPlayerTextGrid);
+                buildPictureInPictureTextGrid);
             window.Close();
           }
 
@@ -164,10 +164,10 @@ PlaybackWindowPresenter::~PlaybackWindowPresenter() = default;
 bool PlaybackWindowPresenter::start(
     Player& player, const std::function<WindowUiState()>& buildUiState,
     const std::function<bool()>& overlayVisible,
-    const playback_framebuffer_presenter::MiniPlayerTextGridProvider&
-        buildMiniPlayerTextGrid) {
+    const playback_framebuffer_presenter::PictureInPictureTextGridProvider&
+        buildPictureInPictureTextGrid) {
   return impl_->start(player, buildUiState, overlayVisible,
-                      buildMiniPlayerTextGrid);
+                      buildPictureInPictureTextGrid);
 }
 
 void PlaybackWindowPresenter::stop() { impl_->stop(); }

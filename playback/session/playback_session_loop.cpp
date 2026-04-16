@@ -73,22 +73,25 @@ struct PlaybackLoopRunner::Impl {
   PlaybackSessionCore core;
   GpuAsciiRenderer& gpuRenderer;
   AsciiArt art;
-  ConsoleScreen miniPlayerScreen;
-  std::vector<ScreenCell> miniPlayerCells;
-  AsciiArt miniPlayerArt;
-  VideoFrame miniPlayerFrame;
-  GpuVideoFrameCache miniPlayerFrameCache;
-  bool miniPlayerRenderFailed = false;
-  std::string miniPlayerRenderFailMessage;
-  std::string miniPlayerRenderFailDetail;
-  bool miniPlayerHaveFrame = false;
-  int miniPlayerCachedWidth = -1;
-  int miniPlayerCachedMaxHeight = -1;
-  int miniPlayerCachedFrameWidth = -1;
-  int miniPlayerCachedFrameHeight = -1;
-  int miniPlayerProgressBarX = -1;
-  int miniPlayerProgressBarY = -1;
-  int miniPlayerProgressBarWidth = 0;
+  ConsoleScreen pictureInPictureTextScreen;
+  std::vector<ScreenCell> pictureInPictureTextCells;
+  AsciiArt pictureInPictureTextArt;
+  VideoFrame pictureInPictureTextFrame;
+  GpuVideoFrameCache pictureInPictureTextFrameCache;
+  bool pictureInPictureTextRenderFailed = false;
+  std::string pictureInPictureTextRenderFailMessage;
+  std::string pictureInPictureTextRenderFailDetail;
+  bool pictureInPictureTextHaveFrame = false;
+  int pictureInPictureTextCachedWidth = -1;
+  int pictureInPictureTextCachedMaxHeight = -1;
+  int pictureInPictureTextCachedFrameWidth = -1;
+  int pictureInPictureTextCachedFrameHeight = -1;
+  int pictureInPictureTextProgressBarX = -1;
+  int pictureInPictureTextProgressBarY = -1;
+  int pictureInPictureTextProgressBarWidth = 0;
+  bool pendingPictureInPictureOpen = false;
+  bool pendingPictureInPictureTextMode = false;
+  bool pictureInPictureStartedFromTerminal = false;
   bool redraw = true;
   bool renderFailed = false;
   std::string renderFailMessage;
@@ -167,6 +170,9 @@ struct PlaybackLoopRunner::Impl {
     inputSignals.requestWindowPresent = [this]() {
       output.requestWindowPresent();
     };
+    inputSignals.togglePictureInPicture = [this]() {
+      return this->togglePictureInPicture();
+    };
     inputSignals.requestTransportCommand = [this](PlaybackTransportCommand cmd) {
       if (!requestTransportCommand) {
         return false;
@@ -227,63 +233,121 @@ struct PlaybackLoopRunner::Impl {
         overlayVisible());
   }
 
-  bool buildMiniPlayerTextGrid(int pixelWidth, int pixelHeight,
+  bool togglePictureInPicture() {
+    VideoWindow& window = output.window();
+    if (window.IsOpen() && window.IsPictureInPicture()) {
+      pendingPictureInPictureOpen = false;
+      pendingPictureInPictureTextMode = false;
+      window.SetPictureInPictureTextMode(false);
+      if (pictureInPictureStartedFromTerminal) {
+        pictureInPictureStartedFromTerminal = false;
+        output.requestLayout(PlaybackLayout::Terminal);
+        forceRefreshArt = true;
+        redraw = true;
+        return true;
+      }
+      pictureInPictureStartedFromTerminal = false;
+      redraw = true;
+      output.requestWindowPresent();
+      return window.SetPictureInPicture(false);
+    }
+
+    const bool fromAsciiMode = !output.windowActive() && enableAscii;
+    pendingPictureInPictureOpen = true;
+    pendingPictureInPictureTextMode = fromAsciiMode;
+    pictureInPictureStartedFromTerminal = fromAsciiMode;
+    output.requestLayout(PlaybackLayout::Window);
+    forceRefreshArt = true;
+    redraw = true;
+
+    if (window.IsOpen()) {
+      window.SetPictureInPictureTextMode(fromAsciiMode);
+      if (window.SetPictureInPicture(true)) {
+        pendingPictureInPictureOpen = false;
+      }
+    }
+    output.requestWindowPresent();
+    return true;
+  }
+
+  bool buildPictureInPictureTextGrid(int pixelWidth, int pixelHeight,
+                               const VideoFrame* frame, bool frameChanged,
                                std::vector<ScreenCell>& outCells,
                                int& outCols, int& outRows) {
     const int cols = std::clamp(pixelWidth / 10, 32, 96);
     const int rows = std::clamp(pixelHeight / 18, 10, 32);
-    miniPlayerScreen.setVirtualSize(cols, rows);
+    pictureInPictureTextScreen.setVirtualSize(cols, rows);
 
-    miniPlayerRenderFailed = false;
-    miniPlayerRenderFailMessage.clear();
-    miniPlayerRenderFailDetail.clear();
-    miniPlayerHaveFrame = false;
-    miniPlayerFrame = VideoFrame{};
+    pictureInPictureTextRenderFailed = false;
+    pictureInPictureTextRenderFailMessage.clear();
+    pictureInPictureTextRenderFailDetail.clear();
+    if (frame && frame->width > 0 && frame->height > 0) {
+      pictureInPictureTextFrame = *frame;
+      pictureInPictureTextHaveFrame = true;
+    } else if (!pictureInPictureTextHaveFrame) {
+      pictureInPictureTextFrame = VideoFrame{};
+    }
 
     playback_screen_renderer::PlaybackScreenRenderInputs inputs = renderInputs;
-    inputs.screen = &miniPlayerScreen;
-    inputs.frame = &miniPlayerFrame;
-    inputs.frameCache = &miniPlayerFrameCache;
-    inputs.art = &miniPlayerArt;
+    inputs.screen = &pictureInPictureTextScreen;
+    inputs.frame = &pictureInPictureTextFrame;
+    inputs.frameCache = &pictureInPictureTextFrameCache;
+    inputs.art = &pictureInPictureTextArt;
     inputs.currentMode = PlaybackRenderMode::AsciiTerminal;
     inputs.windowActive = false;
     inputs.useWindowPresenter = false;
     inputs.overlayVisibleNow = true;
     inputs.clearHistory = false;
-    inputs.frameChanged = false;
+    inputs.frameChanged = frameChanged;
     inputs.allowAsciiCpuFallback = false;
-    inputs.renderFailed = &miniPlayerRenderFailed;
-    inputs.renderFailMessage = &miniPlayerRenderFailMessage;
-    inputs.renderFailDetail = &miniPlayerRenderFailDetail;
-    inputs.haveFrame = &miniPlayerHaveFrame;
-    inputs.cachedWidth = &miniPlayerCachedWidth;
-    inputs.cachedMaxHeight = &miniPlayerCachedMaxHeight;
-    inputs.cachedFrameWidth = &miniPlayerCachedFrameWidth;
-    inputs.cachedFrameHeight = &miniPlayerCachedFrameHeight;
-    inputs.progressBarX = &miniPlayerProgressBarX;
-    inputs.progressBarY = &miniPlayerProgressBarY;
-    inputs.progressBarWidth = &miniPlayerProgressBarWidth;
+    inputs.renderFailed = &pictureInPictureTextRenderFailed;
+    inputs.renderFailMessage = &pictureInPictureTextRenderFailMessage;
+    inputs.renderFailDetail = &pictureInPictureTextRenderFailDetail;
+    inputs.haveFrame = &pictureInPictureTextHaveFrame;
+    inputs.cachedWidth = &pictureInPictureTextCachedWidth;
+    inputs.cachedMaxHeight = &pictureInPictureTextCachedMaxHeight;
+    inputs.cachedFrameWidth = &pictureInPictureTextCachedFrameWidth;
+    inputs.cachedFrameHeight = &pictureInPictureTextCachedFrameHeight;
+    inputs.progressBarX = &pictureInPictureTextProgressBarX;
+    inputs.progressBarY = &pictureInPictureTextProgressBarY;
+    inputs.progressBarWidth = &pictureInPictureTextProgressBarWidth;
     core.updateRenderInputs(inputs);
 
     playback_screen_renderer::renderPlaybackScreen(inputs);
-    if (miniPlayerRenderFailed) {
+    if (pictureInPictureTextRenderFailed) {
       return false;
     }
-    return miniPlayerScreen.snapshot(outCells, outCols, outRows);
+    return pictureInPictureTextScreen.snapshot(outCells, outCols, outRows);
   }
 
   PlaybackPresenterSyncResult syncPresentation() {
     auto buildUiState = [&]() { return buildWindowUiState(); };
-    auto buildMiniPlayerTextGrid =
-        [&](int pixelWidth, int pixelHeight, std::vector<ScreenCell>& outCells,
+    auto buildPictureInPictureTextGrid =
+        [&](int pixelWidth, int pixelHeight, const VideoFrame* frame,
+            bool frameChanged, std::vector<ScreenCell>& outCells,
             int& outCols, int& outRows) {
-          return this->buildMiniPlayerTextGrid(pixelWidth, pixelHeight,
-                                               outCells, outCols, outRows);
+          return this->buildPictureInPictureTextGrid(
+              pixelWidth, pixelHeight, frame, frameChanged, outCells, outCols,
+              outRows);
         };
     auto overlayVisibleFn = [&]() { return overlayVisible(); };
-    return output.sync(core.player(), buildUiState, overlayVisibleFn,
-                       buildMiniPlayerTextGrid, redraw, forceRefreshArt,
-                       overlayUntilMs, overlayControlHover);
+    PlaybackPresenterSyncResult result =
+        output.sync(core.player(), buildUiState, overlayVisibleFn,
+                    buildPictureInPictureTextGrid, redraw, forceRefreshArt,
+                    overlayUntilMs, overlayControlHover);
+    if (pendingPictureInPictureOpen && output.window().IsOpen()) {
+      output.window().SetPictureInPictureTextMode(
+          pendingPictureInPictureTextMode);
+      if (output.window().SetPictureInPicture(true)) {
+        pendingPictureInPictureOpen = false;
+      }
+      output.requestWindowPresent();
+    } else if (!output.windowRequested()) {
+      pendingPictureInPictureOpen = false;
+      pendingPictureInPictureTextMode = false;
+      pictureInPictureStartedFromTerminal = false;
+    }
+    return result;
   }
 
   void applyPresenterSync(const PlaybackPresenterSyncResult& syncResult) {
@@ -370,6 +434,10 @@ struct PlaybackLoopRunner::Impl {
   void pollWindowEvents() {
     if (output.consumeWindowCloseRequested() ||
         (output.windowRequested() && !output.windowVisible())) {
+      pendingPictureInPictureOpen = false;
+      pendingPictureInPictureTextMode = false;
+      pictureInPictureStartedFromTerminal = false;
+      output.window().SetPictureInPictureTextMode(false);
       output.requestLayout(PlaybackLayout::Terminal);
       forceRefreshArt = true;
       redraw = true;

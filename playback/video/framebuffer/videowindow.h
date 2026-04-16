@@ -95,17 +95,16 @@ public:
     void SetCursorVisible(bool visible);
     bool TogglePictureInPicture();
     bool SetPictureInPicture(bool enabled);
+    void SetPictureInPictureTextMode(bool enabled);
+    bool IsPictureInPictureTextMode() const {
+        return m_pictureInPictureTextMode.load(std::memory_order_relaxed);
+    }
     bool IsPictureInPicture() const {
         return m_pictureInPicture.load(std::memory_order_relaxed);
     }
-    bool ToggleMiniPlayerTui();
-    bool SetMiniPlayerTui(bool enabled);
-    bool IsMiniPlayerTui() const {
-        return m_miniPlayerTui.load(std::memory_order_relaxed);
-    }
-    void GetMiniPlayerTextGridSize(int& outCols, int& outRows) const {
-        outCols = m_miniPlayerGridCols.load(std::memory_order_relaxed);
-        outRows = m_miniPlayerGridRows.load(std::memory_order_relaxed);
+    void GetPictureInPictureTextGridSize(int& outCols, int& outRows) const {
+        outCols = m_pictureInPictureGridCols.load(std::memory_order_relaxed);
+        outRows = m_pictureInPictureGridRows.load(std::memory_order_relaxed);
     }
     
     bool IsOpen() const { return m_hWnd != nullptr; }
@@ -202,9 +201,9 @@ private:
     RECT m_prevRect{};
     bool m_isFullscreen = false;
     std::atomic<bool> m_pictureInPicture{false};
-    std::atomic<bool> m_miniPlayerTui{false};
-    std::atomic<int> m_miniPlayerGridCols{0};
-    std::atomic<int> m_miniPlayerGridRows{0};
+    std::atomic<bool> m_pictureInPictureTextMode{false};
+    std::atomic<int> m_pictureInPictureGridCols{0};
+    std::atomic<int> m_pictureInPictureGridRows{0};
     bool m_pipRestoreFullscreen = false;
     LONG m_pipRestoreStyle = 0;
     LONG m_pipRestoreExStyle = 0;

@@ -47,8 +47,6 @@ static inline std::string thread_id_str() {
 namespace {
     constexpr UINT kTogglePictureInPictureMessage = WM_APP + 0x440;
     constexpr UINT kSetPictureInPictureMessage = WM_APP + 0x441;
-    constexpr UINT kToggleMiniPlayerTuiMessage = WM_APP + 0x442;
-    constexpr UINT kSetMiniPlayerTuiMessage = WM_APP + 0x443;
 
     // Glyph font for ASCII-style overlay (5x7) -----------------------------------------------------------------
     typedef struct MenuGlyph { char c; uint8_t rows[7]; } MenuGlyph;
@@ -1490,6 +1488,22 @@ LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
     if (m_width <= 0 || m_height <= 0) return HTCAPTION;
 
     const int edge = std::clamp(std::min(m_width, m_height) / 18, 8, 18);
+    if (m_pictureInPictureTextMode.load(std::memory_order_relaxed) &&
+        x >= 0 && x < m_width && y >= 0 && y < m_height) {
+        const int rows = m_pictureInPictureGridRows.load(std::memory_order_relaxed);
+        const int controlRows = rows > 0 ? std::min(rows, 4) : 4;
+        int controlTop = m_height -
+                         std::max(edge, static_cast<int>(
+                                             std::lround(m_height * 0.22)));
+        if (rows > 0) {
+            controlTop =
+                (m_height * std::max(0, rows - controlRows)) / rows;
+        }
+        if (y >= std::clamp(controlTop, 0, m_height)) {
+            return HTCLIENT;
+        }
+    }
+
     const bool left = x >= 0 && x < edge;
     const bool right = x >= m_width - edge && x < m_width;
     const bool top = y >= 0 && y < edge;
@@ -1573,9 +1587,9 @@ bool VideoWindow::ExitPictureInPicture() {
         Resize(client.right - client.left, client.bottom - client.top);
     }
     m_pictureInPicture.store(false, std::memory_order_relaxed);
-    m_miniPlayerTui.store(false, std::memory_order_relaxed);
-    m_miniPlayerGridCols.store(0, std::memory_order_relaxed);
-    m_miniPlayerGridRows.store(0, std::memory_order_relaxed);
+    m_pictureInPictureTextMode.store(false, std::memory_order_relaxed);
+    m_pictureInPictureGridCols.store(0, std::memory_order_relaxed);
+    m_pictureInPictureGridRows.store(0, std::memory_order_relaxed);
     m_pipRestoreFullscreen = false;
     m_ignoreWindowSizeEvents = false;
 
@@ -1594,6 +1608,14 @@ bool VideoWindow::SetPictureInPicture(bool enabled) {
     return enabled ? EnterPictureInPicture() : ExitPictureInPicture();
 }
 
+void VideoWindow::SetPictureInPictureTextMode(bool enabled) {
+    m_pictureInPictureTextMode.store(enabled, std::memory_order_relaxed);
+    if (!enabled) {
+        m_pictureInPictureGridCols.store(0, std::memory_order_relaxed);
+        m_pictureInPictureGridRows.store(0, std::memory_order_relaxed);
+    }
+}
+
 bool VideoWindow::TogglePictureInPicture() {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
@@ -1601,30 +1623,6 @@ bool VideoWindow::TogglePictureInPicture() {
     }
     return SetPictureInPicture(
         !m_pictureInPicture.load(std::memory_order_relaxed));
-}
-
-bool VideoWindow::SetMiniPlayerTui(bool enabled) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return PostMessage(m_hWnd, kSetMiniPlayerTuiMessage,
-                           enabled ? TRUE : FALSE, 0) != 0;
-    }
-    if (!m_hWnd || !m_swapChain) return false;
-    if (enabled && !m_pictureInPicture.load(std::memory_order_relaxed) &&
-        !EnterPictureInPicture()) {
-        return false;
-    }
-    m_miniPlayerTui.store(enabled, std::memory_order_relaxed);
-    return true;
-}
-
-bool VideoWindow::ToggleMiniPlayerTui() {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return PostMessage(m_hWnd, kToggleMiniPlayerTuiMessage, 0, 0) != 0;
-    }
-    return SetMiniPlayerTui(
-        !m_miniPlayerTui.load(std::memory_order_relaxed));
 }
 
 bool VideoWindow::MakeFullscreen() {
@@ -1860,14 +1858,6 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
         }
         if (uMsg == kSetPictureInPictureMessage) {
             pThis->SetPictureInPicture(wParam != 0);
-            return 0;
-        }
-        if (uMsg == kToggleMiniPlayerTuiMessage) {
-            pThis->SetMiniPlayerTui(!pThis->IsMiniPlayerTui());
-            return 0;
-        }
-        if (uMsg == kSetMiniPlayerTuiMessage) {
-            pThis->SetMiniPlayerTui(wParam != 0);
             return 0;
         }
         if (uMsg == WM_NCHITTEST &&
@@ -2337,7 +2327,9 @@ void VideoWindow::Close() {
     // Release swapchain last
     ResetSwapChain();
     m_pictureInPicture.store(false, std::memory_order_relaxed);
-    m_miniPlayerTui.store(false, std::memory_order_relaxed);
+    m_pictureInPictureTextMode.store(false, std::memory_order_relaxed);
+    m_pictureInPictureGridCols.store(0, std::memory_order_relaxed);
+    m_pictureInPictureGridRows.store(0, std::memory_order_relaxed);
     m_pipRestoreFullscreen = false;
 
     if (m_hWnd) {

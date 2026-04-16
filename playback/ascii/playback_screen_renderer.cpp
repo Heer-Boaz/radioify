@@ -293,6 +293,10 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.overlayVisible = overlayVisibleNow;
   overlayInputs.paused = pausedNow;
   overlayInputs.audioFinished = audioFinishedNow;
+  overlayInputs.pictureInPictureAvailable = videoWindow.IsOpen();
+  overlayInputs.pictureInPictureActive =
+      overlayInputs.pictureInPictureAvailable &&
+      videoWindow.IsPictureInPicture();
   overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
   overlayInputs.screenWidth = width;
   overlayInputs.screenHeight = height;

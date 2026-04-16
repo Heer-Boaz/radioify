@@ -205,22 +205,15 @@ bool toggle50Hz(const PlaybackInputView& view) {
 
 bool togglePictureInPicture(const PlaybackInputView& view,
                             const PlaybackInputSignals& signals) {
+  if (signals.togglePictureInPicture) {
+    return signals.togglePictureInPicture();
+  }
   if (!view.videoWindow || !view.videoWindow->IsOpen() ||
       !signals.desiredLayout ||
       !isWindowPlaybackLayout(*signals.desiredLayout)) {
     return false;
   }
   return view.videoWindow->TogglePictureInPicture();
-}
-
-bool toggleMiniPlayerTui(const PlaybackInputView& view,
-                         const PlaybackInputSignals& signals) {
-  if (!view.videoWindow || !view.videoWindow->IsOpen() ||
-      !signals.desiredLayout ||
-      !isWindowPlaybackLayout(*signals.desiredLayout)) {
-    return false;
-  }
-  return view.videoWindow->ToggleMiniPlayerTui();
 }
 
 bool executeOverlayControl(const PlaybackInputView& view,
@@ -244,8 +237,6 @@ bool executeOverlayControl(const PlaybackInputView& view,
       return toggleSubtitles(view);
     case playback_overlay::OverlayControlId::PictureInPicture:
       return togglePictureInPicture(view, signals);
-    case playback_overlay::OverlayControlId::MiniPlayerTui:
-      return toggleMiniPlayerTui(view, signals);
   }
   return false;
 }
@@ -304,11 +295,6 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   inputs.pictureInPictureActive =
       inputs.pictureInPictureAvailable &&
       view.videoWindow->IsPictureInPicture();
-  inputs.miniPlayerTuiAvailable =
-      view.videoWindow && view.videoWindow->IsOpen();
-  inputs.miniPlayerTuiActive =
-      inputs.miniPlayerTuiAvailable &&
-      view.videoWindow->IsMiniPlayerTui();
   inputs.subtitleRenderError =
       view.videoWindow ? view.videoWindow->GetSubtitleRenderError() : "";
   inputs.screenWidth =
@@ -449,7 +435,7 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
     }
   }
   if (key.vk == 'T' || key.ch == 't' || key.ch == 'T') {
-    if (toggleMiniPlayerTui(view, signals)) {
+    if (togglePictureInPicture(view, signals)) {
       triggerOverlay(view, signals);
       if (signals.redraw) {
         *signals.redraw = true;
@@ -515,10 +501,12 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   MouseEvent hitMouse = mouse;
   bool windowEvent = (mouse.control & 0x80000000) != 0;
   bool miniGridEvent = false;
-  if (windowEvent && view.videoWindow && view.videoWindow->IsMiniPlayerTui()) {
+  if (windowEvent && view.videoWindow &&
+      view.videoWindow->IsPictureInPicture() &&
+      view.videoWindow->IsPictureInPictureTextMode()) {
     int gridCols = 0;
     int gridRows = 0;
-    view.videoWindow->GetMiniPlayerTextGridSize(gridCols, gridRows);
+    view.videoWindow->GetPictureInPictureTextGridSize(gridCols, gridRows);
     const int winW = view.videoWindow->GetWidth();
     const int winH = view.videoWindow->GetHeight();
     if (gridCols > 0 && gridRows > 0 && winW > 0 && winH > 0) {

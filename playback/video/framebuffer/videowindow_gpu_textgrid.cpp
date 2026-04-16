@@ -7,8 +7,8 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     if (frame.cols <= 0 || frame.rows <= 0) return;
-    m_miniPlayerGridCols.store(frame.cols, std::memory_order_relaxed);
-    m_miniPlayerGridRows.store(frame.rows, std::memory_order_relaxed);
+    m_pictureInPictureGridCols.store(frame.cols, std::memory_order_relaxed);
+    m_pictureInPictureGridRows.store(frame.rows, std::memory_order_relaxed);
     const size_t cellCount =
         static_cast<size_t>(frame.cols) * static_cast<size_t>(frame.rows);
     if (frame.cells.size() < cellCount) return;
