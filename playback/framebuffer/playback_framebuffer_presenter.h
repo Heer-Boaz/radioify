@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <functional>
+#include <vector>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -11,6 +12,7 @@
 #endif
 #include <windows.h>
 
+#include "consolescreen.h"
 #include "gpu_shared.h"
 #include "playback_overlay.h"
 #include "playback_session_state.h"
@@ -18,6 +20,11 @@
 #include "videowindow.h"
 
 namespace playback_framebuffer_presenter {
+
+using MiniPlayerTextGridProvider =
+    std::function<bool(int pixelWidth, int pixelHeight,
+                       std::vector<ScreenCell>& outCells, int& outCols,
+                       int& outRows)>;
 
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
@@ -33,6 +40,7 @@ void runFramebufferPresenterLoop(
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, HANDLE wakeEvent,
     const std::function<bool()>& overlayVisible,
-    const std::function<WindowUiState()>& buildUiState);
+    const std::function<WindowUiState()>& buildUiState,
+    const MiniPlayerTextGridProvider& buildMiniPlayerTextGrid);
 
 }  // namespace playback_framebuffer_presenter

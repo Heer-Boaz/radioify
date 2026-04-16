@@ -183,9 +183,11 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
       subtitleManager, subtitlesEnabledNow, seekingOverlay, clockUs,
       hasSubtitles);
 
+  const bool hasVideoStream =
+      player.sourceWidth() > 0 && player.sourceHeight() > 0;
   bool waitingForAudio = audioOk && !audioStreamClockReady() && !audioIsFinished();
   bool audioStarved = audioOk && audioStreamStarved();
-  bool waitingForVideo = !player.hasVideoFrame();
+  bool waitingForVideo = hasVideoStream && !player.hasVideoFrame();
   bool isPaused = playbackState == PlaybackSessionState::Paused ||
                   player.state() == PlayerState::Paused;
   bool allowFrame = haveFrame && !useWindowPresenter;
@@ -197,7 +199,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     if (player.state() == PlayerState::Opening) return "Opening...";
     if (player.state() == PlayerState::Prefill) return "Prefilling...";
     if (waitingForAudio) return "Waiting for audio...";
-    if (audioStarved || waitingForVideo) return "Buffering video...";
+    if (audioStarved) return "Buffering audio...";
+    if (waitingForVideo) return "Buffering video...";
+    if (!hasVideoStream && audioOk) return "Audio playback";
     return "Waiting for video...";
   };
 

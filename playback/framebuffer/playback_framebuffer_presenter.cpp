@@ -3,10 +3,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <string>
 #include <utility>
 
 #include "audioplayback.h"
+#include "asciiart_gpu.h"
 #include "core/windows_message_pump.h"
+#include "gpu_shared.h"
 #include "playback_mini_player_tui.h"
 
 namespace playback_framebuffer_presenter {
@@ -133,18 +136,22 @@ void runFramebufferPresenterLoop(
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, HANDLE wakeEvent,
     const std::function<bool()>& overlayVisible,
-    const std::function<WindowUiState()>& buildUiState) {
+    const std::function<WindowUiState()>& buildUiState,
+    const MiniPlayerTextGridProvider& buildMiniPlayerTextGrid) {
   if (!overlayVisible || !buildUiState) {
     return;
   }
 
   VideoFrame localFrame;
+  AsciiArt miniPlayerAsciiArt;
   GpuTextGridFrame miniPlayerFrame;
+  std::vector<ScreenCell> miniPlayerTextCells;
   uint64_t lastCounter = player.videoFrameCounter();
   auto lastOverlayPresent = std::chrono::steady_clock::time_point::min();
   auto lastMiniPlayerPresent = std::chrono::steady_clock::time_point::min();
   int lastMiniPlayerWidth = 0;
   int lastMiniPlayerHeight = 0;
+  bool miniPlayerHaveAscii = false;
   const HANDLE frameEvent = player.videoFrameWaitHandle();
   while (threadState.load(std::memory_order_relaxed) !=
          WindowThreadState::Stopping) {
@@ -215,36 +222,6 @@ void runFramebufferPresenterLoop(
       break;
     }
 
-    if (videoWindow.IsMiniPlayerTui()) {
-      WindowUiState ui = buildUiState();
-      bool forcePresentNow =
-          forcePresent.exchange(false, std::memory_order_relaxed);
-      const int windowWidth = videoWindow.GetWidth();
-      const int windowHeight = videoWindow.GetHeight();
-      const auto now = std::chrono::steady_clock::now();
-      const bool refreshDue =
-          lastMiniPlayerPresent == std::chrono::steady_clock::time_point::min() ||
-          (now - lastMiniPlayerPresent) >= kMiniPlayerRefreshInterval;
-      const bool sizeChanged = windowWidth != lastMiniPlayerWidth ||
-                               windowHeight != lastMiniPlayerHeight;
-      if (forcePresentNow || refreshDue || sizeChanged) {
-        buildPlaybackMiniPlayerTuiFrame(ui, windowWidth, windowHeight,
-                                        miniPlayerFrame);
-        frameCache.WaitForFrameLatency(
-            16, videoWindow.GetFrameLatencyWaitableObject());
-        if (threadState.load(std::memory_order_relaxed) ==
-            WindowThreadState::Stopping) {
-          break;
-        }
-        videoWindow.PresentGpuTextGrid(miniPlayerFrame, true);
-        lastMiniPlayerPresent = std::chrono::steady_clock::now();
-        lastMiniPlayerWidth = windowWidth;
-        lastMiniPlayerHeight = windowHeight;
-      }
-      continue;
-    }
-    lastMiniPlayerPresent = std::chrono::steady_clock::time_point::min();
-
     uint64_t counterNow = player.videoFrameCounter();
     bool frameChanged = false;
     if (counterNow != lastCounter) {
@@ -288,6 +265,66 @@ void runFramebufferPresenterLoop(
     bool overlayVisibleNow = ui.overlayAlpha > 0.01f;
     bool seekingNow = player.isSeeking();
     bool forcePresentNow = forcePresent.exchange(false, std::memory_order_relaxed);
+    if (videoWindow.IsMiniPlayerTui()) {
+      const int windowWidth = videoWindow.GetWidth();
+      const int windowHeight = videoWindow.GetHeight();
+      const auto now = std::chrono::steady_clock::now();
+      const bool refreshDue =
+          lastMiniPlayerPresent == std::chrono::steady_clock::time_point::min() ||
+          (now - lastMiniPlayerPresent) >= kMiniPlayerRefreshInterval;
+      const bool sizeChanged = windowWidth != lastMiniPlayerWidth ||
+                               windowHeight != lastMiniPlayerHeight;
+
+      if (frameCache.HasFrame() &&
+          (frameChanged || sizeChanged || !miniPlayerHaveAscii)) {
+        const auto [asciiWidth, asciiHeight] =
+            computePlaybackMiniPlayerAsciiSize(
+                windowWidth, windowHeight, frameCache.GetDisplayWidth(),
+                frameCache.GetDisplayHeight());
+        miniPlayerAsciiArt.width = asciiWidth;
+        miniPlayerAsciiArt.height = asciiHeight;
+        std::string renderError;
+        if (sharedGpuRenderer().RenderFromCache(frameCache, miniPlayerAsciiArt,
+                                                &renderError)) {
+          miniPlayerHaveAscii = true;
+        }
+      }
+
+      if (frameChanged || forcePresentNow || refreshDue || sizeChanged) {
+        if (miniPlayerHaveAscii) {
+          buildPlaybackMiniPlayerAsciiFrame(miniPlayerAsciiArt, ui,
+                                            miniPlayerFrame);
+          frameCache.WaitForFrameLatency(
+              16, videoWindow.GetFrameLatencyWaitableObject());
+          if (threadState.load(std::memory_order_relaxed) ==
+              WindowThreadState::Stopping) {
+            break;
+          }
+          videoWindow.PresentGpuTextGrid(miniPlayerFrame, true);
+        } else {
+          int textCols = 0;
+          int textRows = 0;
+          if (buildMiniPlayerTextGrid &&
+              buildMiniPlayerTextGrid(windowWidth, windowHeight,
+                                      miniPlayerTextCells, textCols,
+                                      textRows)) {
+            videoWindow.PresentTextGrid(miniPlayerTextCells, textCols,
+                                        textRows, true);
+          } else {
+            buildPlaybackMiniPlayerTuiFrame(ui, windowWidth, windowHeight,
+                                            miniPlayerFrame);
+            videoWindow.PresentGpuTextGrid(miniPlayerFrame, true);
+          }
+        }
+        lastMiniPlayerPresent = std::chrono::steady_clock::now();
+        lastMiniPlayerWidth = windowWidth;
+        lastMiniPlayerHeight = windowHeight;
+      }
+      continue;
+    }
+    lastMiniPlayerPresent = std::chrono::steady_clock::time_point::min();
+    miniPlayerHaveAscii = false;
+
     bool overlayRefreshDue = false;
     if (overlayVisibleNow || seekingNow) {
       const auto now = std::chrono::steady_clock::now();

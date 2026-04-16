@@ -103,6 +103,10 @@ public:
     bool IsMiniPlayerTui() const {
         return m_miniPlayerTui.load(std::memory_order_relaxed);
     }
+    void GetMiniPlayerTextGridSize(int& outCols, int& outRows) const {
+        outCols = m_miniPlayerGridCols.load(std::memory_order_relaxed);
+        outRows = m_miniPlayerGridRows.load(std::memory_order_relaxed);
+    }
     
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
@@ -199,6 +203,8 @@ private:
     bool m_isFullscreen = false;
     std::atomic<bool> m_pictureInPicture{false};
     std::atomic<bool> m_miniPlayerTui{false};
+    std::atomic<int> m_miniPlayerGridCols{0};
+    std::atomic<int> m_miniPlayerGridRows{0};
     bool m_pipRestoreFullscreen = false;
     LONG m_pipRestoreStyle = 0;
     LONG m_pipRestoreExStyle = 0;

@@ -73,6 +73,22 @@ struct PlaybackLoopRunner::Impl {
   PlaybackSessionCore core;
   GpuAsciiRenderer& gpuRenderer;
   AsciiArt art;
+  ConsoleScreen miniPlayerScreen;
+  std::vector<ScreenCell> miniPlayerCells;
+  AsciiArt miniPlayerArt;
+  VideoFrame miniPlayerFrame;
+  GpuVideoFrameCache miniPlayerFrameCache;
+  bool miniPlayerRenderFailed = false;
+  std::string miniPlayerRenderFailMessage;
+  std::string miniPlayerRenderFailDetail;
+  bool miniPlayerHaveFrame = false;
+  int miniPlayerCachedWidth = -1;
+  int miniPlayerCachedMaxHeight = -1;
+  int miniPlayerCachedFrameWidth = -1;
+  int miniPlayerCachedFrameHeight = -1;
+  int miniPlayerProgressBarX = -1;
+  int miniPlayerProgressBarY = -1;
+  int miniPlayerProgressBarWidth = 0;
   bool redraw = true;
   bool renderFailed = false;
   std::string renderFailMessage;
@@ -211,11 +227,63 @@ struct PlaybackLoopRunner::Impl {
         overlayVisible());
   }
 
+  bool buildMiniPlayerTextGrid(int pixelWidth, int pixelHeight,
+                               std::vector<ScreenCell>& outCells,
+                               int& outCols, int& outRows) {
+    const int cols = std::clamp(pixelWidth / 10, 32, 96);
+    const int rows = std::clamp(pixelHeight / 18, 10, 32);
+    miniPlayerScreen.setVirtualSize(cols, rows);
+
+    miniPlayerRenderFailed = false;
+    miniPlayerRenderFailMessage.clear();
+    miniPlayerRenderFailDetail.clear();
+    miniPlayerHaveFrame = false;
+    miniPlayerFrame = VideoFrame{};
+
+    playback_screen_renderer::PlaybackScreenRenderInputs inputs = renderInputs;
+    inputs.screen = &miniPlayerScreen;
+    inputs.frame = &miniPlayerFrame;
+    inputs.frameCache = &miniPlayerFrameCache;
+    inputs.art = &miniPlayerArt;
+    inputs.currentMode = PlaybackRenderMode::AsciiTerminal;
+    inputs.windowActive = false;
+    inputs.useWindowPresenter = false;
+    inputs.overlayVisibleNow = true;
+    inputs.clearHistory = false;
+    inputs.frameChanged = false;
+    inputs.allowAsciiCpuFallback = false;
+    inputs.renderFailed = &miniPlayerRenderFailed;
+    inputs.renderFailMessage = &miniPlayerRenderFailMessage;
+    inputs.renderFailDetail = &miniPlayerRenderFailDetail;
+    inputs.haveFrame = &miniPlayerHaveFrame;
+    inputs.cachedWidth = &miniPlayerCachedWidth;
+    inputs.cachedMaxHeight = &miniPlayerCachedMaxHeight;
+    inputs.cachedFrameWidth = &miniPlayerCachedFrameWidth;
+    inputs.cachedFrameHeight = &miniPlayerCachedFrameHeight;
+    inputs.progressBarX = &miniPlayerProgressBarX;
+    inputs.progressBarY = &miniPlayerProgressBarY;
+    inputs.progressBarWidth = &miniPlayerProgressBarWidth;
+    core.updateRenderInputs(inputs);
+
+    playback_screen_renderer::renderPlaybackScreen(inputs);
+    if (miniPlayerRenderFailed) {
+      return false;
+    }
+    return miniPlayerScreen.snapshot(outCells, outCols, outRows);
+  }
+
   PlaybackPresenterSyncResult syncPresentation() {
     auto buildUiState = [&]() { return buildWindowUiState(); };
+    auto buildMiniPlayerTextGrid =
+        [&](int pixelWidth, int pixelHeight, std::vector<ScreenCell>& outCells,
+            int& outCols, int& outRows) {
+          return this->buildMiniPlayerTextGrid(pixelWidth, pixelHeight,
+                                               outCells, outCols, outRows);
+        };
     auto overlayVisibleFn = [&]() { return overlayVisible(); };
-    return output.sync(core.player(), buildUiState, overlayVisibleFn, redraw,
-                       forceRefreshArt, overlayUntilMs, overlayControlHover);
+    return output.sync(core.player(), buildUiState, overlayVisibleFn,
+                       buildMiniPlayerTextGrid, redraw, forceRefreshArt,
+                       overlayUntilMs, overlayControlHover);
   }
 
   void applyPresenterSync(const PlaybackPresenterSyncResult& syncResult) {

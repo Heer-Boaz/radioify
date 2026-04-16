@@ -55,6 +55,8 @@ class ConsoleScreen {
   bool init();
   void restore();
   void updateSize();
+  void setVirtualSize(int width, int height);
+  void clearVirtualSize();
   int width() const;
   int height() const;
   void clear(const Style& style);
@@ -97,6 +99,7 @@ class ConsoleScreen {
   int width_ = 80;
   int height_ = 25;
   bool fastOutput_ = false;
+  bool virtualSize_ = false;
   bool alwaysFullRedraw_ = false;
   bool hasPrev_ = false;
   bool altScreen_ = false;

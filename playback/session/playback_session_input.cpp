@@ -512,6 +512,32 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               const MouseEvent& mouse) {
   playback_overlay::PlaybackOverlayInputs mouseOverlayInputs =
       buildPlaybackMouseOverlayInputs(view, seekState, signals);
+  MouseEvent hitMouse = mouse;
+  bool windowEvent = (mouse.control & 0x80000000) != 0;
+  bool miniGridEvent = false;
+  if (windowEvent && view.videoWindow && view.videoWindow->IsMiniPlayerTui()) {
+    int gridCols = 0;
+    int gridRows = 0;
+    view.videoWindow->GetMiniPlayerTextGridSize(gridCols, gridRows);
+    const int winW = view.videoWindow->GetWidth();
+    const int winH = view.videoWindow->GetHeight();
+    if (gridCols > 0 && gridRows > 0 && winW > 0 && winH > 0) {
+      hitMouse.pos.X = static_cast<SHORT>(std::clamp(
+          (static_cast<int>(mouse.pos.X) * gridCols) / winW, 0,
+          gridCols - 1));
+      hitMouse.pos.Y = static_cast<SHORT>(std::clamp(
+          (static_cast<int>(mouse.pos.Y) * gridRows) / winH, 0,
+          gridRows - 1));
+      hitMouse.control &= ~0x80000000;
+      mouseOverlayInputs.overlayVisible = true;
+      mouseOverlayInputs.screenWidth = gridCols;
+      mouseOverlayInputs.screenHeight = gridRows;
+      mouseOverlayInputs.progressBarX = 1;
+      mouseOverlayInputs.progressBarY = gridRows - 1;
+      mouseOverlayInputs.progressBarWidth = std::max(1, gridCols - 2);
+      miniGridEvent = true;
+    }
+  }
   playback_overlay::PlaybackOverlayState mouseOverlayState =
       playback_overlay::buildPlaybackOverlayState(mouseOverlayInputs);
   if (playback_overlay::isBackMousePressed(mouse)) {
@@ -519,10 +545,13 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     return;
   }
 
-  bool windowEvent = (mouse.control & 0x80000000) != 0;
+  windowEvent = (hitMouse.control & 0x80000000) != 0;
   int controlHit =
-      windowEvent ? playback_overlay::windowOverlayControlAt(mouseOverlayState, mouse)
-                  : playback_overlay::terminalOverlayControlAt(mouseOverlayState, mouse);
+      windowEvent
+          ? playback_overlay::windowOverlayControlAt(mouseOverlayState,
+                                                     hitMouse)
+          : playback_overlay::terminalOverlayControlAt(mouseOverlayState,
+                                                       hitMouse);
   int previousHover = signals.overlayControlHover
                           ? signals.overlayControlHover->load(
                                 std::memory_order_relaxed)
@@ -541,7 +570,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     triggerOverlay(view, signals);
   }
 
-  bool progressHit = playback_overlay::isProgressHit(mouseOverlayState, mouse);
+  bool progressHit = playback_overlay::isProgressHit(mouseOverlayState, hitMouse);
   if (progressHit) {
     triggerOverlay(view, signals);
     if (signals.redraw) {
@@ -551,7 +580,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
 
   bool leftPressed =
       (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
-  if (leftPressed && mouse.eventFlags == 0 && controlHit >= 0) {
+  if (leftPressed && hitMouse.eventFlags == 0 && controlHit >= 0) {
     if (executeOverlayControl(view, signals, mouseOverlayState, controlHit)) {
       triggerOverlay(view, signals);
       if (signals.redraw) {
@@ -577,6 +606,26 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
         if (totalSec > 0.0 && std::isfinite(totalSec)) {
           double target = ratio * totalSec;
           queueSeekRequest(signals, seekState, target);
+        }
+      }
+    }
+    return;
+  }
+
+  if (leftPressed && miniGridEvent) {
+    if (progressHit && view.player && mouseOverlayState.progressBarWidth > 0) {
+      int rel = hitMouse.pos.X - mouseOverlayState.progressBarX;
+      if (rel >= 0 && rel < mouseOverlayState.progressBarWidth) {
+        double denom = static_cast<double>(
+            std::max(1, mouseOverlayState.progressBarWidth - 1));
+        double ratio = static_cast<double>(rel) / denom;
+        ratio = std::clamp(ratio, 0.0, 1.0);
+        double totalSec = view.player->durationUs() / 1000000.0;
+        if (totalSec <= 0.0) {
+          totalSec = audioGetTotalSec();
+        }
+        if (totalSec > 0.0 && std::isfinite(totalSec)) {
+          queueSeekRequest(signals, seekState, ratio * totalSec);
         }
       }
     }

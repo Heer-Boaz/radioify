@@ -10,12 +10,36 @@
 namespace playback_framebuffer_presenter {
 namespace {
 
-uint8_t color(GpuTextGridColor value) {
-  return gpuTextGridColorIndex(value);
+uint32_t color(GpuTextGridColor value) {
+  return gpuTextGridColorRgb(value);
 }
 
 GpuTextGridCell makeCell(char ch, GpuTextGridColor fg, GpuTextGridColor bg) {
-  return GpuTextGridCell{static_cast<uint8_t>(ch), color(fg), color(bg), 0};
+  return GpuTextGridCell{static_cast<uint32_t>(
+                             static_cast<unsigned char>(ch)),
+                         color(fg), color(bg), 0};
+}
+
+uint32_t color(const Color& value) {
+  return gpuTextGridRgb(value.r, value.g, value.b);
+}
+
+GpuTextGridCell makeAsciiCell(const AsciiArt::AsciiCell& cell) {
+  const uint32_t bg = cell.hasBg ? color(cell.bg)
+                                 : color(GpuTextGridColor::Background);
+  if (cell.ch >= 0x2800 && cell.ch <= 0x28FF) {
+    return GpuTextGridCell{
+        static_cast<uint32_t>(cell.ch - 0x2800), color(cell.fg), bg,
+        kGpuTextGridCellFlagBraille};
+  }
+  if (cell.ch >= 32 && cell.ch <= 126) {
+    char ch = static_cast<char>(cell.ch);
+    if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+    return GpuTextGridCell{static_cast<uint32_t>(
+                               static_cast<unsigned char>(ch)),
+                           color(cell.fg), bg, 0};
+  }
+  return GpuTextGridCell{'?', color(cell.fg), bg, 0};
 }
 
 size_t utf8Advance(std::string_view text, size_t offset) {
@@ -232,6 +256,68 @@ void buildPlaybackMiniPlayerTuiFrame(const WindowUiState& ui, int pixelWidth,
     drawCentered(outFrame, rows - 2, subtitle, GpuTextGridColor::Dim,
                  GpuTextGridColor::Panel);
   }
+}
+
+std::pair<int, int> computePlaybackMiniPlayerAsciiSize(int pixelWidth,
+                                                       int pixelHeight,
+                                                       int srcWidth,
+                                                       int srcHeight) {
+  const int maxCols = std::clamp(pixelWidth / 6, 24, 180);
+  const int maxRows = std::clamp(pixelHeight / 12, 10, 96);
+  AsciiArtLayout fitted =
+      fitAsciiArtLayout(srcWidth, srcHeight, maxCols, maxRows);
+  return {fitted.width, fitted.height};
+}
+
+void buildPlaybackMiniPlayerAsciiFrame(const AsciiArt& art,
+                                       const WindowUiState& ui,
+                                       GpuTextGridFrame& outFrame) {
+  const int cols = std::max(1, art.width);
+  const int rows = std::max(1, art.height);
+  outFrame.cols = cols;
+  outFrame.rows = rows;
+
+  const GpuTextGridCell background =
+      makeCell(' ', GpuTextGridColor::Text, GpuTextGridColor::Background);
+  const size_t cellCount =
+      static_cast<size_t>(cols) * static_cast<size_t>(rows);
+  if (outFrame.cells.size() != cellCount) {
+    outFrame.cells.assign(cellCount, background);
+  } else {
+    std::fill(outFrame.cells.begin(), outFrame.cells.end(), background);
+  }
+
+  const size_t artCellCount =
+      static_cast<size_t>(std::max(0, art.width)) *
+      static_cast<size_t>(std::max(0, art.height));
+  if (art.width > 0 && art.height > 0 && art.cells.size() >= artCellCount) {
+    for (int y = 0; y < rows; ++y) {
+      for (int x = 0; x < cols; ++x) {
+        outFrame.cells[static_cast<size_t>(y) *
+                           static_cast<size_t>(cols) +
+                       static_cast<size_t>(x)] =
+            makeAsciiCell(art.cells[static_cast<size_t>(y) *
+                                        static_cast<size_t>(art.width) +
+                                    static_cast<size_t>(x)]);
+      }
+    }
+  }
+
+  const bool showChrome = (ui.overlayAlpha > 0.01f) || ui.isPaused;
+  if (!showChrome || rows < 8 || cols < 24) {
+    return;
+  }
+
+  const int panelRows = rows >= 14 ? 3 : 2;
+  const int panelY = rows - panelRows;
+  fillRect(outFrame, 0, panelY, cols, rows, GpuTextGridColor::Panel);
+  drawProgress(outFrame, panelY, progressRatio(ui));
+  if (panelRows >= 3) {
+    std::string status = fitLine(buildStatusLine(ui), std::max(1, cols - 4));
+    drawCentered(outFrame, panelY + 1, status, GpuTextGridColor::Accent,
+                 GpuTextGridColor::Panel);
+  }
+  drawControls(outFrame, ui, rows - 1);
 }
 
 }  // namespace playback_framebuffer_presenter

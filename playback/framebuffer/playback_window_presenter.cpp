@@ -70,7 +70,9 @@ struct PlaybackWindowPresenter::Impl {
   }
 
   bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
-             const std::function<bool()>& overlayVisible) {
+             const std::function<bool()>& overlayVisible,
+             const playback_framebuffer_presenter::MiniPlayerTextGridProvider&
+                 buildMiniPlayerTextGrid) {
     if (thread.joinable()) {
       threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
       forcePresent.store(true, std::memory_order_relaxed);
@@ -83,7 +85,8 @@ struct PlaybackWindowPresenter::Impl {
     forcePresent.store(true, std::memory_order_relaxed);
 
     thread = std::thread(
-        [this, &player, buildUiState, overlayVisible, startGate]() {
+        [this, &player, buildUiState, overlayVisible, buildMiniPlayerTextGrid,
+         startGate]() {
           const bool opened = window.Open(1280, 720, "Radioify Output");
           {
             std::lock_guard<std::mutex> lock(startGate->mutex);
@@ -95,7 +98,8 @@ struct PlaybackWindowPresenter::Impl {
           if (opened) {
             playback_framebuffer_presenter::runFramebufferPresenterLoop(
                 player, window, frameCache, threadState, forcePresent,
-                wakeEvent, overlayVisible, buildUiState);
+                wakeEvent, overlayVisible, buildUiState,
+                buildMiniPlayerTextGrid);
             window.Close();
           }
 
@@ -159,8 +163,11 @@ PlaybackWindowPresenter::~PlaybackWindowPresenter() = default;
 
 bool PlaybackWindowPresenter::start(
     Player& player, const std::function<WindowUiState()>& buildUiState,
-    const std::function<bool()>& overlayVisible) {
-  return impl_->start(player, buildUiState, overlayVisible);
+    const std::function<bool()>& overlayVisible,
+    const playback_framebuffer_presenter::MiniPlayerTextGridProvider&
+        buildMiniPlayerTextGrid) {
+  return impl_->start(player, buildUiState, overlayVisible,
+                      buildMiniPlayerTextGrid);
 }
 
 void PlaybackWindowPresenter::stop() { impl_->stop(); }

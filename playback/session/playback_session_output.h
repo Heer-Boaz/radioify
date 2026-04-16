@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 
+#include "playback_framebuffer_presenter.h"
 #include "playback_mode.h"
 #include "playback_session_state.h"
 
@@ -51,7 +52,10 @@ class PlaybackOutputController {
   PlaybackPresenterSyncResult sync(
       Player& player,
       const std::function<WindowUiState()>& buildUiState,
-      const std::function<bool()>& overlayVisible, bool& redraw,
+      const std::function<bool()>& overlayVisible,
+      const playback_framebuffer_presenter::MiniPlayerTextGridProvider&
+          buildMiniPlayerTextGrid,
+      bool& redraw,
       bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
       std::atomic<int>& overlayControlHover);
 

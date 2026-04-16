@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "gpu_shared.h"
+#include "playback_framebuffer_presenter.h"
 #include "playback_mode.h"
 #include "videowindow.h"
 
@@ -43,7 +44,10 @@ class PlaybackPresentation {
   PlaybackPresenterSyncResult sync(
       Player& player,
       const std::function<WindowUiState()>& buildUiState,
-      const std::function<bool()>& overlayVisible, bool& redraw,
+      const std::function<bool()>& overlayVisible,
+      const playback_framebuffer_presenter::MiniPlayerTextGridProvider&
+          buildMiniPlayerTextGrid,
+      bool& redraw,
       bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
       std::atomic<int>& overlayControlHover);
 

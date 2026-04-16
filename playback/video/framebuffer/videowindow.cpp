@@ -1574,6 +1574,8 @@ bool VideoWindow::ExitPictureInPicture() {
     }
     m_pictureInPicture.store(false, std::memory_order_relaxed);
     m_miniPlayerTui.store(false, std::memory_order_relaxed);
+    m_miniPlayerGridCols.store(0, std::memory_order_relaxed);
+    m_miniPlayerGridRows.store(0, std::memory_order_relaxed);
     m_pipRestoreFullscreen = false;
     m_ignoreWindowSizeEvents = false;
 

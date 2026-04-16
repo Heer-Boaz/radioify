@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "gpu_shared.h"
+#include "playback_framebuffer_presenter.h"
 #include "playback_session_state.h"
 #include "player.h"
 #include "videowindow.h"
@@ -18,7 +19,9 @@ class PlaybackWindowPresenter {
   PlaybackWindowPresenter& operator=(const PlaybackWindowPresenter&) = delete;
 
   bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
-             const std::function<bool()>& overlayVisible);
+             const std::function<bool()>& overlayVisible,
+             const playback_framebuffer_presenter::MiniPlayerTextGridProvider&
+                 buildMiniPlayerTextGrid);
   void stop();
   void requestPresent();
 

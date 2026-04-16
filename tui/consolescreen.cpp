@@ -1151,6 +1151,9 @@ void ConsoleScreen::restore() {
 }
 
 void ConsoleScreen::updateSize() {
+  if (virtualSize_) {
+    return;
+  }
   CONSOLE_SCREEN_BUFFER_INFO info{};
   if (!GetConsoleScreenBufferInfo(out_, &info)) {
     applySize(80, 25);
@@ -1158,6 +1161,16 @@ void ConsoleScreen::updateSize() {
   }
   applySize(info.srWindow.Right - info.srWindow.Left + 1,
             info.srWindow.Bottom - info.srWindow.Top + 1);
+}
+
+void ConsoleScreen::setVirtualSize(int width, int height) {
+  virtualSize_ = true;
+  applySize(width, height);
+}
+
+void ConsoleScreen::clearVirtualSize() {
+  virtualSize_ = false;
+  updateSize();
 }
 
 void ConsoleScreen::applySize(int width, int height) {

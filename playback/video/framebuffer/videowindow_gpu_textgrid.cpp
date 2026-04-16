@@ -7,6 +7,8 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     if (frame.cols <= 0 || frame.rows <= 0) return;
+    m_miniPlayerGridCols.store(frame.cols, std::memory_order_relaxed);
+    m_miniPlayerGridRows.store(frame.rows, std::memory_order_relaxed);
     const size_t cellCount =
         static_cast<size_t>(frame.cols) * static_cast<size_t>(frame.rows);
     if (frame.cells.size() < cellCount) return;
@@ -43,7 +45,7 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
         td.Height = static_cast<UINT>(frame.rows);
         td.MipLevels = 1;
         td.ArraySize = 1;
-        td.Format = DXGI_FORMAT_R8G8B8A8_UINT;
+        td.Format = DXGI_FORMAT_R32G32B32A32_UINT;
         td.SampleDesc.Count = 1;
         td.Usage = D3D11_USAGE_DEFAULT;
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE;

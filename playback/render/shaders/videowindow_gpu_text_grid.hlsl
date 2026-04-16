@@ -5,17 +5,13 @@ struct PS_INPUT {
 
 Texture2D<uint4> gridTex : register(t0);
 
-float3 palette(uint index) {
-    switch (index) {
-        case 1u: return float3(0.075, 0.085, 0.095);
-        case 2u: return float3(0.86, 0.88, 0.90);
-        case 3u: return float3(0.44, 0.49, 0.54);
-        case 4u: return float3(0.98, 0.69, 0.20);
-        case 5u: return float3(0.94, 0.56, 0.12);
-        case 6u: return float3(0.18, 0.20, 0.22);
-        case 7u: return float3(0.92, 0.22, 0.24);
-        default: return float3(0.018, 0.022, 0.026);
-    }
+static const uint CELL_FLAG_BRAILLE = 1u;
+
+float3 packedRgb(uint rgb) {
+    return float3(
+        float(rgb & 0xFFu),
+        float((rgb >> 8) & 0xFFu),
+        float((rgb >> 16) & 0xFFu)) / 255.0;
 }
 
 uint glyphRow(uint ch, uint row) {
@@ -78,6 +74,18 @@ uint glyphRow(uint ch, uint row) {
     }
 }
 
+bool brailleInk(uint mask, float2 local) {
+    float2 dotGrid = local * float2(2.0, 4.0);
+    uint col = min((uint)floor(dotGrid.x), 1u);
+    uint row = min((uint)floor(dotGrid.y), 3u);
+    uint bit = col == 0u ? (row == 3u ? 6u : row)
+                         : (row == 3u ? 7u : row + 3u);
+    if (((mask >> bit) & 1u) == 0u) return false;
+
+    float2 p = frac(dotGrid);
+    return p.x >= 0.18 && p.x <= 0.82 && p.y >= 0.14 && p.y <= 0.86;
+}
+
 float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
     uint width = 0u;
     uint height = 0u;
@@ -88,10 +96,15 @@ float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
     uint4 cell = gridTex.Load(int3(cellPos, 0));
 
     float2 local = frac(gridPos);
-    uint glyphX = (uint)floor(local.x * 6.0);
-    uint glyphY = (uint)floor(local.y * 8.0);
-    uint rowBits = glyphRow(cell.r, glyphY);
-    bool ink = glyphX < 5u && ((rowBits >> (4u - glyphX)) & 1u) != 0u;
+    bool ink = false;
+    if ((cell.a & CELL_FLAG_BRAILLE) != 0u) {
+        ink = brailleInk(cell.r, local);
+    } else {
+        uint glyphX = (uint)floor(local.x * 6.0);
+        uint glyphY = (uint)floor(local.y * 8.0);
+        uint rowBits = glyphRow(cell.r, glyphY);
+        ink = glyphX < 5u && ((rowBits >> (4u - glyphX)) & 1u) != 0u;
+    }
 
-    return float4(palette(ink ? cell.g : cell.b), 1.0);
+    return float4(packedRgb(ink ? cell.g : cell.b), 1.0);
 }

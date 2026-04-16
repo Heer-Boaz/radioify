@@ -58,10 +58,14 @@ PlaybackLayout& PlaybackOutputController::desiredLayout() {
 PlaybackPresenterSyncResult PlaybackOutputController::sync(
     Player& player,
     const std::function<WindowUiState()>& buildUiState,
-    const std::function<bool()>& overlayVisible, bool& redraw,
+    const std::function<bool()>& overlayVisible,
+    const playback_framebuffer_presenter::MiniPlayerTextGridProvider&
+        buildMiniPlayerTextGrid,
+    bool& redraw,
     bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
     std::atomic<int>& overlayControlHover) {
-  return impl_->presentation.sync(player, buildUiState, overlayVisible, redraw,
+  return impl_->presentation.sync(player, buildUiState, overlayVisible,
+                                  buildMiniPlayerTextGrid, redraw,
                                   forceRefreshArt, overlayUntilMs,
                                   overlayControlHover);
 }

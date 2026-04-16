@@ -69,13 +69,17 @@ PlaybackLayout& PlaybackPresentation::desiredLayout() {
 PlaybackPresenterSyncResult PlaybackPresentation::sync(
     Player& player,
     const std::function<WindowUiState()>& buildUiState,
-    const std::function<bool()>& overlayVisible, bool& redraw,
+    const std::function<bool()>& overlayVisible,
+    const playback_framebuffer_presenter::MiniPlayerTextGridProvider&
+        buildMiniPlayerTextGrid,
+    bool& redraw,
     bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
     std::atomic<int>& overlayControlHover) {
   PlaybackPresenterSyncResult result;
   result.previousActiveLayout = impl_->activeLayout;
   if (impl_->windowRequested()) {
-    if (impl_->windowPresenter.start(player, buildUiState, overlayVisible)) {
+    if (impl_->windowPresenter.start(player, buildUiState, overlayVisible,
+                                    buildMiniPlayerTextGrid)) {
       impl_->activeLayout = PlaybackLayout::Window;
     } else {
       impl_->desiredLayout = PlaybackLayout::Terminal;
