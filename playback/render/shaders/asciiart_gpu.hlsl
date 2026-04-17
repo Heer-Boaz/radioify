@@ -62,6 +62,10 @@ static const float kEdgeThresholdFloor = 6.0f;
 static const float kBrightBgSwapDelta = 12.0f;
 static const int kBrightBgSwapMaxDots = 4;
 static const float kBrightBgSwapMinSignal = 0.5f;
+static const float kEdgeInkMinEdge = 28.0f;
+static const float kEdgeInkMinRange = 8.0f;
+static const float kEdgeInkMinDotEdge = 18.0f;
+static const uint kEdgeInkMaxDots = 4u;
 static const float kShadowSatStartLuma = 16.0f;
 static const float kShadowSatFullLuma = 96.0f;
 static const float kShadowMinSaturation = 24.0f / 256.0f;
@@ -599,6 +603,45 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         }
     }
 
+    bool useEdgeInkMask = false;
+    if (!useDither && cellEdgeMax >= kEdgeInkMinEdge &&
+        cellRange >= kEdgeInkMinRange) {
+        float edgeCut = max(kEdgeInkMinDotEdge, cellEdgeMax * 0.75f);
+        uint edgeMask = 0u;
+        [unroll]
+        for (int e = 0; e < 8; ++e) {
+            uint bit = (uint)bitMap[dots[e].idx];
+            if (dots[e].edge >= edgeCut) {
+                edgeMask |= (1u << bit);
+            }
+        }
+
+        uint edgeDotCount = countbits(edgeMask);
+        if (edgeDotCount > 0u && edgeDotCount <= kEdgeInkMaxDots) {
+            bitmask = edgeMask;
+            useEdgeInkMask = true;
+            sumInk = float3(0,0,0);
+            sumBg = float3(0,0,0);
+            sumInkBlueConfidence = 0.0f;
+            sumBgBlueConfidence = 0.0f;
+            inkCount = 0;
+            bgCount = 0;
+            [unroll]
+            for (int r = 0; r < 8; ++r) {
+                uint bit = (uint)bitMap[dots[r].idx];
+                if (bitmask & (1u << bit)) {
+                    sumInk += dots[r].color;
+                    sumInkBlueConfidence += dots[r].sourceBlueConfidence;
+                    inkCount++;
+                } else {
+                    sumBg += dots[r].color;
+                    sumBgBlueConfidence += dots[r].sourceBlueConfidence;
+                    bgCount++;
+                }
+            }
+        }
+    }
+
     uint dotCount = countbits(bitmask);
 
     // 7. Color Processing
@@ -636,7 +679,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float blendStrength = kSignalStrengthFloor +
                           (1.0f - kSignalStrengthFloor) * signalStrength;
 
-    if (!useDither && bgCount > 0 && inkCount > 0 &&
+    if (!useEdgeInkMask && !useDither && bgCount > 0 && inkCount > 0 &&
         bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
         signalStrength >= kBrightBgSwapMinSignal &&
         GetLuma(curBg) >= GetLuma(curFg) + kBrightBgSwapDelta) {
@@ -786,8 +829,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Fix for black backgrounds on full cells:
     // If a cell has no background dots (all FG or empty), but the calculated BG color is bright enough,
     // we force the background flag to true so the renderer draws the background color.
-    uint hasBg = (bgCount > 0) ? 1u : 0u;
-    if (hasBg == 0u && GetLuma(curBg) > 10.0f) {
+    uint hasBg = useEdgeInkMask ? 0u : ((bgCount > 0) ? 1u : 0u);
+    if (!useEdgeInkMask && hasBg == 0u && GetLuma(curBg) > 10.0f) {
         hasBg = 1u;
     }
     cell.hasBg = hasBg;

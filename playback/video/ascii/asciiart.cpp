@@ -202,6 +202,10 @@ constexpr int kEdgeThresholdFloor = 6;
 constexpr int kBrightBgSwapDelta = 12;
 constexpr int kBrightBgSwapMaxDots = 4;
 constexpr int kBrightBgSwapMinSignal = 128;
+constexpr int kEdgeInkMinEdge = 28;
+constexpr int kEdgeInkMinRange = 8;
+constexpr int kEdgeInkMinDotEdge = 18;
+constexpr int kEdgeInkMaxDots = 4;
 constexpr int kTemporalResetDelta = 48;  // Snellere scene change detectie
 constexpr int kColorSaturation = 340;    // Iets meer saturatie
 constexpr int kShadowSatStartLuma = 16;
@@ -1006,6 +1010,26 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               bitmask = ditherMask;
             }
 
+            bool useEdgeInkMask = false;
+            if (!useDither && cellEdgeMax >= kEdgeInkMinEdge &&
+                cellLumRange >= kEdgeInkMinRange) {
+              int edgeCut =
+                  std::max(kEdgeInkMinDotEdge, (cellEdgeMax * 3 + 3) / 4);
+              int edgeMask = 0;
+              int edgeDotCount = 0;
+              for (int i = 0; i < 8; ++i) {
+                if (!validVals[i]) continue;
+                if (edgeVals[i] >= edgeCut) {
+                  edgeMask |= (1 << bitIds[i]);
+                  ++edgeDotCount;
+                }
+              }
+              if (edgeDotCount > 0 && edgeDotCount <= kEdgeInkMaxDots) {
+                bitmask = edgeMask;
+                useEdgeInkMask = true;
+              }
+            }
+
             int dotCount = 0;
             int tempMask = bitmask;
             while (tempMask) {
@@ -1110,7 +1134,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
               int signalStrength = std::max(edgeSig, lumSig);
 
-              if (!useDither && bgCount > 0 && inkCount > 0 &&
+              if (!useEdgeInkMask && !useDither && bgCount > 0 && inkCount > 0 &&
                   bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
                   signalStrength >= kBrightBgSwapMinSignal) {
                 int fgY = rgbToY(curR, curG, curB);
@@ -1370,7 +1394,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   }
                 }
               }
-              hasBg = true;
+              hasBg = !useEdgeInkMask;
             } else if (cellIndex < scratch.prevFg.size() &&
                        scratch.prevFgValid[cellIndex]) {
               uint32_t p = scratch.prevFg[cellIndex];
