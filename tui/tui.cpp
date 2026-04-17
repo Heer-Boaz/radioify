@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "app_common.h"
+#include "audio_mini_player.h"
 #include "asciiart.h"
 #include "audioplayback.h"
 #include "browsermeta.h"
@@ -733,6 +734,7 @@ int runTui(Options o) {
   bool seekHoldActive = false;
   auto seekHoldStart = std::chrono::steady_clock::now();
   std::vector<ScreenCell> windowCells;
+  AudioMiniPlayer audioMiniPlayer;
   ConsoleInputPump consoleInputPump;
   UiDirtyFlags dirtyFlags = UiDirtyFlags::Frame | UiDirtyFlags::Layout;
   bool layoutDirty = true;
@@ -777,6 +779,28 @@ int runTui(Options o) {
       melodyHistoryMidi.pop_front();
       melodyHistoryConfidence.pop_front();
     }
+  };
+  auto buildAudioNowPlayingLabel = [&]() {
+    std::filesystem::path nowPlaying = audioGetNowPlaying();
+    std::string label =
+        nowPlaying.empty() ? std::string("(none)")
+                           : toUtf8String(nowPlaying.filename());
+    int trackIndex = audioGetTrackIndex();
+    if (!nowPlaying.empty() && trackIndex >= 0) {
+      int digits = 3;
+      const TrackEntry* track = nullptr;
+      TrackEntry fallback{};
+      if (nowPlaying == trackBrowserFile() && !trackBrowserTracks().empty()) {
+        digits = trackLabelDigits(trackBrowserTracks().size());
+        track = findTrackEntry(trackIndex);
+      }
+      if (!track) {
+        fallback.index = trackIndex;
+        track = &fallback;
+      }
+      label += "  |  " + formatTrackLabel(*track, digits);
+    }
+    return label;
   };
 
   using playback_transport_navigation::PlaybackTarget;
@@ -1134,6 +1158,71 @@ int runTui(Options o) {
     fileContextMenu.active = false;
     markLayoutDirty();
   };
+  callbacks.onToggleWindow = [&]() {
+    if (!audioMiniPlayer.isOpen() && audioGetNowPlaying().empty() &&
+        !audioIsReady()) {
+      return;
+    }
+    if (audioMiniPlayer.toggle()) {
+      markDirty(UiDirtyFlags::Async);
+    }
+  };
+
+  AudioMiniPlayer::Styles audioMiniStyles{kStyleNormal,
+                                          kStyleAccent,
+                                          kStyleDim,
+                                          kStyleAlert,
+                                          kStyleActionActive,
+                                          kStyleProgressEmpty,
+                                          kStyleProgressFrame,
+                                          kProgressStart,
+                                          kProgressEnd};
+  auto buildAudioMiniContext = [&]() {
+    AudioMiniPlayer::Context context;
+    context.nowPlayingLabel = buildAudioNowPlayingLabel();
+    context.melodyVisualizationEnabled = melodyVisualizationEnabled;
+    return context;
+  };
+  auto renderAudioMiniPlayer = [&]() {
+    if (!audioMiniPlayer.isOpen()) {
+      return;
+    }
+    audioMiniPlayer.render(audioMiniStyles, buildAudioMiniContext());
+  };
+  AudioMiniPlayer::Callbacks audioMiniCallbacks;
+  audioMiniCallbacks.onTogglePause = [&]() {
+    if (callbacks.onTogglePause) callbacks.onTogglePause();
+  };
+  audioMiniCallbacks.onStopPlayback = [&]() {
+    if (callbacks.onStopPlayback) callbacks.onStopPlayback();
+  };
+  audioMiniCallbacks.onPlayPrevious = [&]() {
+    if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
+  };
+  audioMiniCallbacks.onPlayNext = [&]() {
+    if (callbacks.onPlayNext) callbacks.onPlayNext();
+  };
+  audioMiniCallbacks.onToggleRadio = [&]() {
+    if (callbacks.onToggleRadio) callbacks.onToggleRadio();
+  };
+  audioMiniCallbacks.onToggle50Hz = [&]() {
+    if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
+  };
+  audioMiniCallbacks.onToggleMelodyVisualization = [&]() {
+    if (callbacks.onToggleMelodyVisualization) {
+      callbacks.onToggleMelodyVisualization();
+    }
+  };
+  audioMiniCallbacks.onSeekBy = [&](int direction) {
+    if (callbacks.onSeekBy) callbacks.onSeekBy(direction);
+  };
+  audioMiniCallbacks.onSeekToRatio = [&](double ratio) {
+    if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
+  };
+  audioMiniCallbacks.onAdjustVolume = [&](float delta) {
+    if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(delta);
+  };
+  audioMiniCallbacks.onClose = [&]() { markDirty(UiDirtyFlags::Async); };
 
   auto handleSystemPlaybackCommand = [&](PlaybackControlCommand command) {
     switch (command) {
@@ -1211,6 +1300,14 @@ int runTui(Options o) {
                       audioTogglePause();
                       markDirty();
                     }});
+    if (audioMiniPlayer.isOpen() || !audioGetNowPlaying().empty() ||
+        audioIsReady()) {
+      cmds.push_back({audioMiniPlayer.isOpen() ? "PiP Mini Player: On"
+                                               : "PiP Mini Player: Off",
+                      "W", true, [&]() {
+                        if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+                      }});
+    }
     cmds.push_back(
         {melodyVisualizationEnabled ? "Melody Viz: On" : "Melody Viz: Off",
          "M", true, [&]() {
@@ -1613,6 +1710,10 @@ int runTui(Options o) {
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
     }
+    if (audioMiniPlayer.isOpen() &&
+        audioMiniPlayer.pollEvents(audioMiniCallbacks)) {
+      markDirty(UiDirtyFlags::Async);
+    }
 
     if (consumeBrowserThumbnailWake()) {
       markDirty(UiDirtyFlags::Async);
@@ -1879,6 +1980,7 @@ int runTui(Options o) {
     };
 
     auto finalizeRenderedExit = [&]() {
+      audioMiniPlayer.close();
       if (windowTuiEnabled && tuiWindow.IsOpen()) {
         tuiWindow.Close();
       }
@@ -1972,6 +2074,9 @@ int runTui(Options o) {
       }
       if (o.play &&
           (audioIsReady() || !audioGetNowPlaying().empty() || seekHoldActive)) {
+        reduceTimeout(std::chrono::milliseconds(100));
+      }
+      if (audioMiniPlayer.isOpen()) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
       if (isBackgroundTaskRunning()) {
@@ -2200,23 +2305,7 @@ int runTui(Options o) {
                            statusStyle);
         }
       }
-      std::string nowLabel =
-          nowPlaying.empty() ? "(none)" : toUtf8String(nowPlaying.filename());
-      int trackIndex = audioGetTrackIndex();
-      if (!nowPlaying.empty() && trackIndex >= 0) {
-        int digits = 3;
-        const TrackEntry* track = nullptr;
-        TrackEntry fallback{};
-        if (nowPlaying == trackBrowserFile() && !trackBrowserTracks().empty()) {
-          digits = trackLabelDigits(trackBrowserTracks().size());
-          track = findTrackEntry(trackIndex);
-        }
-        if (!track) {
-          fallback.index = trackIndex;
-          track = &fallback;
-        }
-        nowLabel += "  |  " + formatTrackLabel(*track, digits);
-      }
+      std::string nowLabel = buildAudioNowPlayingLabel();
       if (footerLayout.showNowPlaying) {
         screen.writeText(0, line++, fitLine(std::string(" ") + nowLabel, width),
                          kStyleAccent);
@@ -2251,6 +2340,14 @@ int runTui(Options o) {
              melodyLabels.second, melodyVisualizationEnabled,
              std::max(utf8DisplayWidth(melodyLabels.first),
                       utf8DisplayWidth(melodyLabels.second))});
+        if (audioMiniPlayer.isOpen() || !nowPlaying.empty() || audioIsReady()) {
+          auto pipLabels = makeLabels(audioMiniPlayer.isOpen() ? "PiP: On"
+                                                               : "PiP: Off");
+          items.push_back({ActionStripItem::PictureInPicture, pipLabels.first,
+                           pipLabels.second, audioMiniPlayer.isOpen(),
+                           std::max(utf8DisplayWidth(pipLabels.first),
+                                    utf8DisplayWidth(pipLabels.second))});
+        }
         bool show50Hz = audioSupports50HzToggle();
         if (browserInteractionEnabled) {
           const std::string gridIcon = "\xE2\x96\xA6";
@@ -2646,6 +2743,7 @@ int runTui(Options o) {
           tuiWindow.PresentTextGrid(windowCells, gridW, gridH, true);
         }
       }
+      renderAudioMiniPlayer();
       lastDraw = now;
       dirty = false;
       dirtyFlags = UiDirtyFlags::None;
@@ -2655,6 +2753,7 @@ int runTui(Options o) {
   // Clear screen before exiting
   screen.clear(kStyleNormal);
   screen.draw();
+  audioMiniPlayer.close();
   if (windowTuiEnabled && tuiWindow.IsOpen()) {
     tuiWindow.Close();
   }

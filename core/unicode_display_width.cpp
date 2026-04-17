@@ -130,6 +130,12 @@ int unicodeDisplayWidth(char32_t codepoint) {
   return 1;
 }
 
+bool utf8DecodeCodepoint(std::string_view text, size_t* offset,
+                         char32_t* outCodepoint, size_t* outStart,
+                         size_t* outEnd) {
+  return decodeUtf8(text, offset, outCodepoint, outStart, outEnd);
+}
+
 int utf8DisplayWidth(std::string_view text) {
   int width = 0;
   size_t offset = 0;

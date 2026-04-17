@@ -252,16 +252,19 @@ struct PlaybackLoopRunner::Impl {
       return window.SetPictureInPicture(false);
     }
 
-    const bool fromAsciiMode = !output.windowActive() && enableAscii;
+    const bool fromTerminalAscii = !output.windowActive() && enableAscii;
+    const bool audioOnlyPlayback =
+        core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
+    const bool textMode = fromTerminalAscii || audioOnlyPlayback;
     pendingPictureInPictureOpen = true;
-    pendingPictureInPictureTextMode = fromAsciiMode;
-    pictureInPictureStartedFromTerminal = fromAsciiMode;
+    pendingPictureInPictureTextMode = textMode;
+    pictureInPictureStartedFromTerminal = fromTerminalAscii;
     output.requestLayout(PlaybackLayout::Window);
     forceRefreshArt = true;
     redraw = true;
 
     if (window.IsOpen()) {
-      window.SetPictureInPictureTextMode(fromAsciiMode);
+      window.SetPictureInPictureTextMode(textMode);
       if (window.SetPictureInPicture(true)) {
         pendingPictureInPictureOpen = false;
       }
@@ -302,7 +305,9 @@ struct PlaybackLoopRunner::Impl {
     inputs.currentMode = PlaybackRenderMode::AsciiTerminal;
     inputs.windowActive = false;
     inputs.useWindowPresenter = false;
-    inputs.overlayVisibleNow = overlayVisible();
+    const bool audioOnlyPlayback =
+        core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
+    inputs.overlayVisibleNow = overlayVisible() || audioOnlyPlayback;
     inputs.tightAsciiLayout = true;
     inputs.clearHistory = false;
     inputs.frameChanged = frameChanged;

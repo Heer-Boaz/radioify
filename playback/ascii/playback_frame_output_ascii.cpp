@@ -17,9 +17,6 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-#include "subtitle_caption_style.h"
-#include "unicode_display_width.h"
-
 namespace {
 
 void emitWarning(
@@ -396,8 +393,9 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
                            const std::string& waitingLabel, bool allowFrame,
                            const Style& baseStyle, bool overlayVisible,
                            int overlayReservedLines,
-                           const std::string& subtitleText,
-                           const Style& accentStyle, const Style& dimStyle) {
+                           const Style& dimStyle) {
+  (void)overlayVisible;
+  (void)overlayReservedLines;
   const int artWidth = std::min(art.width, width);
   const int artHeight = std::min(art.height, maxHeight);
   const int availableHeight = height - artTop;
@@ -419,147 +417,6 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
     }
   } else if (!allowFrame) {
     screen.writeText(0, artTop, fitLine(waitingLabel, width), dimStyle);
-  }
-
-  if (subtitleText.empty() || width <= 2 || height <= artTop + 1) {
-    return;
-  }
-
-  const CaptionStyleProfile captionStyle = getWindowsCaptionStyleProfile();
-  auto blendColor = [](const Color& src, const Color& dst, float alpha) -> Color {
-    const float a = std::clamp(alpha, 0.0f, 1.0f);
-    Color out;
-    out.r = static_cast<uint8_t>(
-        std::lround(static_cast<float>(src.r) * a +
-                    static_cast<float>(dst.r) * (1.0f - a)));
-    out.g = static_cast<uint8_t>(
-        std::lround(static_cast<float>(src.g) * a +
-                    static_cast<float>(dst.g) * (1.0f - a)));
-    out.b = static_cast<uint8_t>(
-        std::lround(static_cast<float>(src.b) * a +
-                    static_cast<float>(dst.b) * (1.0f - a)));
-    return out;
-  };
-
-  const Color targetText{
-      captionStyle.textR, captionStyle.textG, captionStyle.textB};
-  const Color targetBg{
-      captionStyle.backgroundR, captionStyle.backgroundG, captionStyle.backgroundB};
-  const Color blendedText =
-      blendColor(targetText, baseStyle.bg, captionStyle.textAlpha);
-  const Color blendedBg =
-      blendColor(targetBg, baseStyle.bg, captionStyle.backgroundAlpha);
-
-  Style subtitleTextStyle = accentStyle;
-  subtitleTextStyle.fg = blendedText;
-  subtitleTextStyle.bg = blendedBg;
-  Style subtitleBoxStyle = subtitleTextStyle;
-  subtitleBoxStyle.fg = blendedBg;
-
-  auto trimAscii = [](std::string s) {
-    size_t begin = 0;
-    while (begin < s.size() &&
-           (s[begin] == ' ' || s[begin] == '\t' || s[begin] == '\r')) {
-      ++begin;
-    }
-    size_t end = s.size();
-    while (end > begin &&
-           (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\r')) {
-      --end;
-    }
-    return s.substr(begin, end - begin);
-  };
-
-  auto wrapSubtitle = [&](const std::string& text, int maxChars,
-                          int maxLines) -> std::vector<std::string> {
-    std::vector<std::string> lines;
-    if (maxChars <= 0 || maxLines <= 0) return lines;
-    size_t start = 0;
-    while (start <= text.size() && static_cast<int>(lines.size()) < maxLines) {
-      size_t end = text.find('\n', start);
-      std::string raw =
-          (end == std::string::npos) ? text.substr(start)
-                                     : text.substr(start, end - start);
-      raw = trimAscii(raw);
-      if (raw.empty()) {
-        if (end == std::string::npos) break;
-        start = end + 1;
-        continue;
-      }
-
-      std::string remaining = raw;
-      while (!remaining.empty() &&
-             static_cast<int>(lines.size()) < maxLines) {
-        int charCount = utf8DisplayWidth(remaining);
-        if (charCount <= maxChars) {
-          lines.push_back(remaining);
-          break;
-        }
-        std::string chunk = utf8TakeDisplayWidth(remaining, maxChars);
-        size_t split = chunk.find_last_of(" \t");
-        if (split == std::string::npos || split < chunk.size() / 3) {
-          split = chunk.size();
-        }
-        std::string line = trimAscii(remaining.substr(0, split));
-        if (line.empty()) {
-          line = chunk;
-          split = chunk.size();
-        }
-        lines.push_back(line);
-        if (split >= remaining.size()) {
-          remaining.clear();
-        } else {
-          remaining = trimAscii(remaining.substr(split));
-        }
-      }
-
-      if (end == std::string::npos) break;
-      start = end + 1;
-    }
-    return lines;
-  };
-
-  const int subtitleAreaX = (allowFrame && artWidth > 0) ? artX : 0;
-  const int subtitleAreaW =
-      (allowFrame && artWidth > 0) ? artWidth : std::max(1, width);
-  // VLC-like wrapping behavior: fit to available subtitle area width.
-  const int maxSubtitleChars = std::max(8, subtitleAreaW - 4);
-  int maxSubtitleLines = overlayVisible ? 2 : 3;
-  std::vector<std::string> lines =
-      wrapSubtitle(subtitleText, maxSubtitleChars, maxSubtitleLines);
-  if (lines.empty()) return;
-
-  const int artBottomY =
-      (allowFrame && visibleArtHeight > 0)
-          ? (artTop + visibleArtHeight - 1)
-          : (height - 1);
-  const int overlayTopY =
-      overlayVisible ? (height - std::max(5, overlayReservedLines)) : height;
-  int subtitleBottomY = std::min(artBottomY - 1, overlayTopY - 1);
-  subtitleBottomY = std::max(artTop, subtitleBottomY);
-
-  int y = subtitleBottomY - static_cast<int>(lines.size()) + 1;
-  if (y < artTop) {
-    y = artTop;
-  }
-  for (const std::string& rawLine : lines) {
-    if (y >= height) break;
-    std::string line = rawLine;
-    if (utf8DisplayWidth(line) > subtitleAreaW - 2) {
-      line = utf8TakeDisplayWidth(line, std::max(1, subtitleAreaW - 2));
-    }
-    int lineWidth = utf8DisplayWidth(line);
-    int x = subtitleAreaX + std::max(0, (subtitleAreaW - lineWidth) / 2);
-    if (captionStyle.backgroundAlpha > 0.01f) {
-      const int pad = 1;
-      int bgX = std::max(0, x - pad);
-      int bgW = std::min(width - bgX, lineWidth + pad * 2);
-      if (bgW > 0) {
-        screen.writeRun(bgX, y, bgW, L' ', subtitleBoxStyle);
-      }
-    }
-    screen.writeText(x, y, line, subtitleTextStyle);
-    ++y;
   }
 }
 

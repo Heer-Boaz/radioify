@@ -36,6 +36,20 @@ bool startsWith(const std::string& value, const std::string& prefix) {
   return std::equal(prefix.begin(), prefix.end(), value.begin());
 }
 
+bool startsWithAsciiNoCase(std::string_view value, size_t offset,
+                           std::string_view prefix) {
+  if (offset > value.size() || prefix.size() > value.size() - offset) {
+    return false;
+  }
+  for (size_t i = 0; i < prefix.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(value[offset + i])) !=
+        std::tolower(static_cast<unsigned char>(prefix[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::string_view trimAsciiView(std::string_view v) {
   size_t begin = 0;
   while (begin < v.size() &&
@@ -121,6 +135,23 @@ struct AssStyleInfo {
   bool bold = false;
   bool italic = false;
   bool underline = false;
+  bool hasPrimaryColor = false;
+  uint8_t primaryR = 255;
+  uint8_t primaryG = 255;
+  uint8_t primaryB = 255;
+  float primaryAlpha = 1.0f;
+  bool hasBackColor = false;
+  uint8_t backR = 0;
+  uint8_t backG = 0;
+  uint8_t backB = 0;
+  float backAlpha = 0.55f;
+};
+
+struct AssScriptContext {
+  int playResX = 0;
+  int playResY = 0;
+  float baseFontSize = 0.0f;
+  std::unordered_map<std::string, AssStyleInfo> styles;
 };
 
 struct AssOverrideInfo {
@@ -128,6 +159,13 @@ struct AssOverrideInfo {
   bool hasPosition = false;
   float posX = 0.0f;
   float posY = 0.0f;
+  bool hasMove = false;
+  float moveStartX = 0.0f;
+  float moveStartY = 0.0f;
+  float moveEndX = 0.0f;
+  float moveEndY = 0.0f;
+  int moveStartMs = 0;
+  int moveEndMs = 0;
   float fontSize = 0.0f;
   float scaleX = 0.0f;
   float scaleY = 0.0f;
@@ -139,6 +177,16 @@ struct AssOverrideInfo {
   bool italic = false;
   bool hasUnderline = false;
   bool underline = false;
+  bool hasPrimaryColor = false;
+  uint8_t primaryR = 255;
+  uint8_t primaryG = 255;
+  uint8_t primaryB = 255;
+  float primaryAlpha = 1.0f;
+  bool hasBackColor = false;
+  uint8_t backR = 0;
+  uint8_t backG = 0;
+  uint8_t backB = 0;
+  float backAlpha = 0.55f;
 };
 
 SubtitleCue makePlainCue(int64_t startUs, int64_t endUs, std::string text,
@@ -149,6 +197,50 @@ SubtitleCue makePlainCue(int64_t startUs, int64_t endUs, std::string text,
   cue.text = std::move(text);
   cue.rawText = std::move(rawText);
   return cue;
+}
+
+bool parseAssColorValue(std::string_view token, uint8_t* outR, uint8_t* outG,
+                        uint8_t* outB, float* outAlpha) {
+  if (!outR || !outG || !outB || !outAlpha) return false;
+  token = trimAsciiView(token);
+  if (token.empty()) return false;
+
+  size_t start = 0;
+  size_t marker = token.find("&H");
+  if (marker == std::string_view::npos) marker = token.find("&h");
+  if (marker != std::string_view::npos) {
+    start = marker + 2;
+  } else if (token[0] == 'H' || token[0] == 'h') {
+    start = 1;
+  }
+
+  uint32_t value = 0;
+  bool sawHex = false;
+  for (size_t i = start; i < token.size(); ++i) {
+    char ch = token[i];
+    uint32_t digit = 0;
+    if (ch >= '0' && ch <= '9') {
+      digit = static_cast<uint32_t>(ch - '0');
+    } else if (ch >= 'a' && ch <= 'f') {
+      digit = static_cast<uint32_t>(10 + (ch - 'a'));
+    } else if (ch >= 'A' && ch <= 'F') {
+      digit = static_cast<uint32_t>(10 + (ch - 'A'));
+    } else {
+      if (sawHex) break;
+      continue;
+    }
+    sawHex = true;
+    value = (value << 4) | digit;
+  }
+  if (!sawHex) return false;
+
+  *outB = static_cast<uint8_t>((value >> 16) & 0xFFu);
+  *outG = static_cast<uint8_t>((value >> 8) & 0xFFu);
+  *outR = static_cast<uint8_t>(value & 0xFFu);
+  const uint8_t assAlpha = static_cast<uint8_t>((value >> 24) & 0xFFu);
+  *outAlpha =
+      std::clamp(static_cast<float>(255u - assAlpha) / 255.0f, 0.0f, 1.0f);
+  return true;
 }
 
 void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
@@ -162,7 +254,7 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
     ++i;
     if (i >= block.size()) break;
 
-    if (i + 2 <= block.size() && block.substr(i, 2) == "an") {
+    if (startsWithAsciiNoCase(block, i, "an")) {
       i += 2;
       size_t start = i;
       while (i < block.size() &&
@@ -176,7 +268,50 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
       continue;
     }
 
-    if (i + 3 <= block.size() && block.substr(i, 3) == "pos") {
+    auto parseColorToken = [&](size_t tagLen, bool backColor) {
+      i += tagLen;
+      size_t valueStart = i;
+      while (i < block.size() && block[i] != '\\') ++i;
+      uint8_t r = 255;
+      uint8_t g = 255;
+      uint8_t b = 255;
+      float alpha = 1.0f;
+      if (parseAssColorValue(block.substr(valueStart, i - valueStart),
+                             &r, &g, &b, &alpha)) {
+        if (backColor) {
+          out->hasBackColor = true;
+          out->backR = r;
+          out->backG = g;
+          out->backB = b;
+          out->backAlpha = alpha;
+        } else {
+          out->hasPrimaryColor = true;
+          out->primaryR = r;
+          out->primaryG = g;
+          out->primaryB = b;
+          out->primaryAlpha = alpha;
+        }
+      }
+    };
+
+    if (i + 2 <= block.size() && block[i] == '1' &&
+        (block[i + 1] == 'c' || block[i + 1] == 'C')) {
+      parseColorToken(2, false);
+      continue;
+    }
+    if (i + 2 <= block.size() && block[i] == '4' &&
+        (block[i + 1] == 'c' || block[i + 1] == 'C')) {
+      parseColorToken(2, true);
+      continue;
+    }
+    if ((block[i] == 'c' || block[i] == 'C') &&
+        !(i + 1 < block.size() &&
+          (block[i + 1] == 'l' || block[i + 1] == 'L'))) {
+      parseColorToken(1, false);
+      continue;
+    }
+
+    if (startsWithAsciiNoCase(block, i, "pos")) {
       i += 3;
       if (i >= block.size() || block[i] != '(') continue;
       ++i;
@@ -198,24 +333,51 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
       continue;
     }
 
-    if (i + 4 <= block.size() && block.substr(i, 4) == "move") {
+    if (startsWithAsciiNoCase(block, i, "move")) {
       i += 4;
       if (i >= block.size() || block[i] != '(') continue;
       ++i;
       size_t end = block.find(')', i);
       if (end == std::string_view::npos) continue;
       std::string args = std::string(block.substr(i, end - i));
-      size_t c1 = args.find(',');
-      if (c1 != std::string::npos) {
-        size_t c2 = args.find(',', c1 + 1);
-        if (c2 != std::string::npos) {
-          float x = 0.0f;
-          float y = 0.0f;
-          if (parseFloatAscii(args.substr(0, c1), &x) &&
-              parseFloatAscii(args.substr(c1 + 1, c2 - c1 - 1), &y)) {
-            out->hasPosition = true;
-            out->posX = x;
-            out->posY = y;
+      std::vector<std::string> parts;
+      size_t partStart = 0;
+      while (partStart <= args.size()) {
+        size_t comma = args.find(',', partStart);
+        parts.push_back(trimAscii(
+            comma == std::string::npos
+                ? std::string_view(args).substr(partStart)
+                : std::string_view(args).substr(partStart,
+                                                comma - partStart)));
+        if (comma == std::string::npos) break;
+        partStart = comma + 1;
+      }
+      if (parts.size() >= 4) {
+        float x1 = 0.0f;
+        float y1 = 0.0f;
+        float x2 = 0.0f;
+        float y2 = 0.0f;
+        if (parseFloatAscii(parts[0], &x1) &&
+            parseFloatAscii(parts[1], &y1) &&
+            parseFloatAscii(parts[2], &x2) &&
+            parseFloatAscii(parts[3], &y2)) {
+          out->hasPosition = true;
+          out->posX = x1;
+          out->posY = y1;
+          out->hasMove = true;
+          out->moveStartX = x1;
+          out->moveStartY = y1;
+          out->moveEndX = x2;
+          out->moveEndY = y2;
+          int t1 = 0;
+          int t2 = 0;
+          if (parts.size() >= 6 && parseNonNegativeInt(parts[4], &t1) &&
+              parseNonNegativeInt(parts[5], &t2) && t2 > t1) {
+            out->moveStartMs = t1;
+            out->moveEndMs = t2;
+          } else {
+            out->moveStartMs = 0;
+            out->moveEndMs = 0;
           }
         }
       }
@@ -223,7 +385,7 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
       continue;
     }
 
-    if (i + 4 <= block.size() && block.substr(i, 4) == "fscx") {
+    if (startsWithAsciiNoCase(block, i, "fscx")) {
       i += 4;
       size_t start = i;
       if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
@@ -240,7 +402,7 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
       continue;
     }
 
-    if (i + 4 <= block.size() && block.substr(i, 4) == "fscy") {
+    if (startsWithAsciiNoCase(block, i, "fscy")) {
       i += 4;
       size_t start = i;
       if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
@@ -257,7 +419,7 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
       continue;
     }
 
-    if (i + 2 <= block.size() && block.substr(i, 2) == "fs") {
+    if (startsWithAsciiNoCase(block, i, "fs")) {
       i += 2;
       size_t start = i;
       if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
@@ -274,7 +436,7 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
       continue;
     }
 
-    if (i + 2 <= block.size() && block.substr(i, 2) == "fn") {
+    if (startsWithAsciiNoCase(block, i, "fn")) {
       i += 2;
       size_t start = i;
       while (i < block.size() && block[i] != '\\') {
@@ -462,6 +624,258 @@ void parseAssTextOverrides(std::string_view block, int* inOutPrimaryAlpha,
       continue;
     }
   }
+}
+
+struct AssInlineTextStyle {
+  bool hasPrimaryColor = false;
+  uint8_t primaryR = 255;
+  uint8_t primaryG = 255;
+  uint8_t primaryB = 255;
+  float primaryAlpha = 1.0f;
+  bool hasBackColor = false;
+  uint8_t backR = 0;
+  uint8_t backG = 0;
+  uint8_t backB = 0;
+  float backAlpha = 0.55f;
+  int drawingMode = 0;
+};
+
+AssInlineTextStyle assInlineTextStyleFromStyle(const AssStyleInfo& style) {
+  AssInlineTextStyle out;
+  out.hasPrimaryColor = style.hasPrimaryColor;
+  out.primaryR = style.primaryR;
+  out.primaryG = style.primaryG;
+  out.primaryB = style.primaryB;
+  out.primaryAlpha = style.primaryAlpha;
+  out.hasBackColor = style.hasBackColor;
+  out.backR = style.backR;
+  out.backG = style.backG;
+  out.backB = style.backB;
+  out.backAlpha = style.backAlpha;
+  return out;
+}
+
+bool sameSubtitleTextRunStyle(const SubtitleTextRun& run,
+                              const AssInlineTextStyle& style) {
+  return run.hasPrimaryColor == style.hasPrimaryColor &&
+         run.primaryR == style.primaryR && run.primaryG == style.primaryG &&
+         run.primaryB == style.primaryB &&
+         std::abs(run.primaryAlpha - style.primaryAlpha) < 0.001f &&
+         run.hasBackColor == style.hasBackColor && run.backR == style.backR &&
+         run.backG == style.backG && run.backB == style.backB &&
+         std::abs(run.backAlpha - style.backAlpha) < 0.001f;
+}
+
+void appendAssStyledText(std::string_view text,
+                         const AssInlineTextStyle& style,
+                         std::string* outText,
+                         std::vector<SubtitleTextRun>* outRuns) {
+  if (text.empty() || !outText || !outRuns || style.drawingMode != 0 ||
+      style.primaryAlpha <= 0.001f) {
+    return;
+  }
+  outText->append(text);
+  if (!outRuns->empty() && sameSubtitleTextRunStyle(outRuns->back(), style)) {
+    outRuns->back().text.append(text);
+    return;
+  }
+  SubtitleTextRun run;
+  run.text.assign(text);
+  run.hasPrimaryColor = style.hasPrimaryColor;
+  run.primaryR = style.primaryR;
+  run.primaryG = style.primaryG;
+  run.primaryB = style.primaryB;
+  run.primaryAlpha = style.primaryAlpha;
+  run.hasBackColor = style.hasBackColor;
+  run.backR = style.backR;
+  run.backG = style.backG;
+  run.backB = style.backB;
+  run.backAlpha = style.backAlpha;
+  outRuns->push_back(std::move(run));
+}
+
+void parseAssInlineTextOverrideBlock(
+    std::string_view block, const AssStyleInfo& baseStyle,
+    const std::unordered_map<std::string, AssStyleInfo>* styles,
+    AssInlineTextStyle* style) {
+  if (!style || block.empty()) return;
+  size_t i = 0;
+  while (i < block.size()) {
+    if (block[i] != '\\') {
+      ++i;
+      continue;
+    }
+    ++i;
+    if (i >= block.size()) break;
+
+    if (block[i] == 'r' || block[i] == 'R') {
+      ++i;
+      size_t styleStart = i;
+      while (i < block.size() && block[i] != '\\') ++i;
+      const std::string resetStyleName =
+          toLowerAscii(trimAscii(block.substr(styleStart, i - styleStart)));
+      const AssStyleInfo* resetStyle = &baseStyle;
+      if (!resetStyleName.empty() && styles) {
+        auto it = styles->find(resetStyleName);
+        if (it != styles->end()) resetStyle = &it->second;
+      }
+      *style = assInlineTextStyleFromStyle(*resetStyle);
+      continue;
+    }
+
+    if ((block[i] == 'p' || block[i] == 'P') &&
+        !(i + 1 < block.size() &&
+          (block[i + 1] == 'o' || block[i + 1] == 'O' || block[i + 1] == 'b' ||
+           block[i + 1] == 'B'))) {
+      ++i;
+      size_t valueStart = i;
+      if (i < block.size() && (block[i] == '+' || block[i] == '-')) ++i;
+      while (i < block.size() &&
+             std::isdigit(static_cast<unsigned char>(block[i])) != 0) {
+        ++i;
+      }
+      int drawingMode = 0;
+      if (parseSignedInt(block.substr(valueStart, i - valueStart),
+                         &drawingMode)) {
+        style->drawingMode = std::max(0, drawingMode);
+      }
+      continue;
+    }
+
+    auto parseColorToken = [&](size_t tagLen, bool backColor) {
+      i += tagLen;
+      size_t valueStart = i;
+      while (i < block.size() && block[i] != '\\') ++i;
+      uint8_t r = 255;
+      uint8_t g = 255;
+      uint8_t b = 255;
+      float alpha = 1.0f;
+      if (parseAssColorValue(block.substr(valueStart, i - valueStart),
+                             &r, &g, &b, &alpha)) {
+        if (backColor) {
+          style->hasBackColor = true;
+          style->backR = r;
+          style->backG = g;
+          style->backB = b;
+          style->backAlpha = alpha;
+        } else {
+          style->hasPrimaryColor = true;
+          style->primaryR = r;
+          style->primaryG = g;
+          style->primaryB = b;
+          style->primaryAlpha = alpha;
+        }
+      }
+    };
+
+    if (i + 2 <= block.size() && block[i] == '1' &&
+        (block[i + 1] == 'c' || block[i + 1] == 'C')) {
+      parseColorToken(2, false);
+      continue;
+    }
+    if (i + 2 <= block.size() && block[i] == '4' &&
+        (block[i + 1] == 'c' || block[i + 1] == 'C')) {
+      parseColorToken(2, true);
+      continue;
+    }
+    if ((block[i] == 'c' || block[i] == 'C') &&
+        !(i + 1 < block.size() &&
+          (block[i + 1] == 'l' || block[i + 1] == 'L'))) {
+      parseColorToken(1, false);
+      continue;
+    }
+
+    auto parseAlphaToken = [&](size_t tagLen, bool primary, bool back) {
+      i += tagLen;
+      size_t valueStart = i;
+      while (i < block.size() && block[i] != '\\') ++i;
+      int parsedAlpha = 0;
+      if (parseAssAlphaValue(block.substr(valueStart, i - valueStart),
+                             &parsedAlpha)) {
+        const float alpha = std::clamp(
+            static_cast<float>(255 - parsedAlpha) / 255.0f, 0.0f, 1.0f);
+        if (primary) style->primaryAlpha = alpha;
+        if (back) style->backAlpha = alpha;
+      }
+    };
+
+    if (i + 5 <= block.size() &&
+        (block[i] == 'a' || block[i] == 'A') &&
+        (block[i + 1] == 'l' || block[i + 1] == 'L') &&
+        (block[i + 2] == 'p' || block[i + 2] == 'P') &&
+        (block[i + 3] == 'h' || block[i + 3] == 'H') &&
+        (block[i + 4] == 'a' || block[i + 4] == 'A')) {
+      parseAlphaToken(5, true, true);
+      continue;
+    }
+    if (i + 2 <= block.size() && block[i] == '1' &&
+        (block[i + 1] == 'a' || block[i + 1] == 'A')) {
+      parseAlphaToken(2, true, false);
+      continue;
+    }
+    if (i + 2 <= block.size() && block[i] == '4' &&
+        (block[i + 1] == 'a' || block[i + 1] == 'A')) {
+      parseAlphaToken(2, false, true);
+      continue;
+    }
+
+    while (i < block.size() && block[i] != '\\') ++i;
+  }
+}
+
+bool parseAssStyledTextRuns(
+    const std::string& rawText, const AssStyleInfo& baseStyle,
+    const std::unordered_map<std::string, AssStyleInfo>* styles,
+    std::string* outText, std::vector<SubtitleTextRun>* outRuns) {
+  if (!outText || !outRuns) return false;
+  outText->clear();
+  outRuns->clear();
+  if (rawText.empty()) return false;
+
+  AssInlineTextStyle style = assInlineTextStyleFromStyle(baseStyle);
+  size_t pos = 0;
+  while (pos < rawText.size()) {
+    if (rawText[pos] == '{') {
+      size_t close = rawText.find('}', pos + 1);
+      if (close == std::string::npos) {
+        ++pos;
+        continue;
+      }
+      parseAssInlineTextOverrideBlock(
+          std::string_view(rawText.data() + pos + 1, close - pos - 1),
+          baseStyle, styles, &style);
+      pos = close + 1;
+      continue;
+    }
+
+    if (rawText[pos] == '\\' && pos + 1 < rawText.size()) {
+      const char tag = rawText[pos + 1];
+      if (tag == 'N' || tag == 'n') {
+        appendAssStyledText("\n", style, outText, outRuns);
+        pos += 2;
+        continue;
+      }
+      if (tag == 'h') {
+        appendAssStyledText(" ", style, outText, outRuns);
+        pos += 2;
+        continue;
+      }
+    }
+
+    const size_t literalStart = pos;
+    while (pos < rawText.size() && rawText[pos] != '{' &&
+           !(rawText[pos] == '\\' && pos + 1 < rawText.size() &&
+             (rawText[pos + 1] == 'N' || rawText[pos + 1] == 'n' ||
+              rawText[pos + 1] == 'h'))) {
+      ++pos;
+    }
+    appendAssStyledText(
+        std::string_view(rawText.data() + literalStart, pos - literalStart),
+        style, outText, outRuns);
+  }
+
+  *outText = trimAscii(*outText);
+  return !outText->empty();
 }
 
 std::string stripSubtitleMarkup(const std::string& in) {
@@ -1018,7 +1432,7 @@ bool parseMicroDvdCues(const std::string& raw, std::vector<SubtitleCue>* outCues
   return !outCues->empty();
 }
 
-bool splitCsvPrefix(const std::string& text, size_t fieldCount,
+bool splitCsvPrefix(std::string_view text, size_t fieldCount,
                     std::vector<std::string>* outFields) {
   if (!outFields) return false;
   outFields->clear();
@@ -1035,32 +1449,270 @@ bool splitCsvPrefix(const std::string& text, size_t fieldCount,
   return outFields->size() == fieldCount;
 }
 
+void parseAssFormatFields(std::string_view payload,
+                          std::vector<std::string>* outFields) {
+  if (!outFields) return;
+  outFields->clear();
+  size_t start = 0;
+  while (start <= payload.size()) {
+    const size_t comma = payload.find(',', start);
+    outFields->push_back(
+        trimAscii(comma == std::string_view::npos
+                      ? payload.substr(start)
+                      : payload.substr(start, comma - start)));
+    if (comma == std::string_view::npos) break;
+    start = comma + 1;
+  }
+}
+
+int findAssFieldIndex(const std::vector<std::string>& fields,
+                      const char* wanted) {
+  if (!wanted) return -1;
+  const std::string target = toLowerAscii(std::string(wanted));
+  for (size_t i = 0; i < fields.size(); ++i) {
+    if (toLowerAscii(trimAscii(fields[i])) == target) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+enum class AssSection { Other, ScriptInfo, Styles, Events };
+
+AssSection assSectionFromLine(const std::string& line) {
+  if (line.empty() || line.front() != '[' || line.back() != ']') {
+    return AssSection::Other;
+  }
+  const std::string sectionName = toLowerAscii(line);
+  if (sectionName == "[script info]") return AssSection::ScriptInfo;
+  if (sectionName == "[v4+ styles]" || sectionName == "[v4 styles]") {
+    return AssSection::Styles;
+  }
+  if (sectionName == "[events]") return AssSection::Events;
+  return AssSection::Other;
+}
+
+struct AssStyleFormatState {
+  std::vector<std::string> fields;
+  int nameIndex = -1;
+  int alignmentIndex = -1;
+  int marginLIndex = -1;
+  int marginRIndex = -1;
+  int marginVIndex = -1;
+  int fontSizeIndex = -1;
+  int fontNameIndex = -1;
+  int boldIndex = -1;
+  int italicIndex = -1;
+  int underlineIndex = -1;
+  int scaleXIndex = -1;
+  int scaleYIndex = -1;
+  int primaryColourIndex = -1;
+  int backColourIndex = -1;
+};
+
+void parseAssStyleFormat(std::string_view payload,
+                         AssStyleFormatState* state) {
+  if (!state) return;
+  parseAssFormatFields(payload, &state->fields);
+  state->nameIndex = findAssFieldIndex(state->fields, "name");
+  state->alignmentIndex = findAssFieldIndex(state->fields, "alignment");
+  state->marginLIndex = findAssFieldIndex(state->fields, "marginl");
+  state->marginRIndex = findAssFieldIndex(state->fields, "marginr");
+  state->marginVIndex = findAssFieldIndex(state->fields, "marginv");
+  state->fontSizeIndex = findAssFieldIndex(state->fields, "fontsize");
+  state->fontNameIndex = findAssFieldIndex(state->fields, "fontname");
+  state->boldIndex = findAssFieldIndex(state->fields, "bold");
+  state->italicIndex = findAssFieldIndex(state->fields, "italic");
+  state->underlineIndex = findAssFieldIndex(state->fields, "underline");
+  state->scaleXIndex = findAssFieldIndex(state->fields, "scalex");
+  state->scaleYIndex = findAssFieldIndex(state->fields, "scaley");
+  state->primaryColourIndex =
+      findAssFieldIndex(state->fields, "primarycolour");
+  state->backColourIndex = findAssFieldIndex(state->fields, "backcolour");
+}
+
+bool parseAssStyleLine(std::string_view payload,
+                       const AssStyleFormatState& format,
+                       std::string* outName, AssStyleInfo* outStyle) {
+  if (!outName || !outStyle || format.fields.empty() || format.nameIndex < 0) {
+    return false;
+  }
+
+  std::vector<std::string> fields;
+  if (!splitCsvPrefix(payload, format.fields.size(), &fields)) return false;
+  if (format.nameIndex >= static_cast<int>(fields.size())) return false;
+
+  std::string styleName =
+      trimAscii(fields[static_cast<size_t>(format.nameIndex)]);
+  if (styleName.empty()) return false;
+
+  AssStyleInfo style;
+  int parsedInt = 0;
+  float parsedFloat = 0.0f;
+  if (format.alignmentIndex >= 0 &&
+      format.alignmentIndex < static_cast<int>(fields.size()) &&
+      parseNonNegativeInt(fields[static_cast<size_t>(format.alignmentIndex)],
+                          &parsedInt)) {
+    style.alignment = clampAssAlignment(parsedInt);
+  }
+  if (format.marginLIndex >= 0 &&
+      format.marginLIndex < static_cast<int>(fields.size()) &&
+      parseNonNegativeInt(fields[static_cast<size_t>(format.marginLIndex)],
+                          &parsedInt)) {
+    style.marginL = parsedInt;
+  }
+  if (format.marginRIndex >= 0 &&
+      format.marginRIndex < static_cast<int>(fields.size()) &&
+      parseNonNegativeInt(fields[static_cast<size_t>(format.marginRIndex)],
+                          &parsedInt)) {
+    style.marginR = parsedInt;
+  }
+  if (format.marginVIndex >= 0 &&
+      format.marginVIndex < static_cast<int>(fields.size()) &&
+      parseNonNegativeInt(fields[static_cast<size_t>(format.marginVIndex)],
+                          &parsedInt)) {
+    style.marginV = parsedInt;
+  }
+  if (format.fontSizeIndex >= 0 &&
+      format.fontSizeIndex < static_cast<int>(fields.size()) &&
+      parseFloatAscii(fields[static_cast<size_t>(format.fontSizeIndex)],
+                      &parsedFloat) &&
+      parsedFloat > 0.0f) {
+    style.fontSize = parsedFloat;
+  }
+  if (format.fontNameIndex >= 0 &&
+      format.fontNameIndex < static_cast<int>(fields.size())) {
+    style.fontName =
+        trimAscii(fields[static_cast<size_t>(format.fontNameIndex)]);
+  }
+  if (format.boldIndex >= 0 &&
+      format.boldIndex < static_cast<int>(fields.size()) &&
+      parseSignedInt(fields[static_cast<size_t>(format.boldIndex)],
+                     &parsedInt)) {
+    style.bold = parsedInt != 0;
+  }
+  if (format.italicIndex >= 0 &&
+      format.italicIndex < static_cast<int>(fields.size()) &&
+      parseSignedInt(fields[static_cast<size_t>(format.italicIndex)],
+                     &parsedInt)) {
+    style.italic = parsedInt != 0;
+  }
+  if (format.underlineIndex >= 0 &&
+      format.underlineIndex < static_cast<int>(fields.size()) &&
+      parseSignedInt(fields[static_cast<size_t>(format.underlineIndex)],
+                     &parsedInt)) {
+    style.underline = parsedInt != 0;
+  }
+  if (format.scaleXIndex >= 0 &&
+      format.scaleXIndex < static_cast<int>(fields.size()) &&
+      parseFloatAscii(fields[static_cast<size_t>(format.scaleXIndex)],
+                      &parsedFloat) &&
+      parsedFloat > 0.0f) {
+    style.scaleX = std::clamp(parsedFloat * 0.01f, 0.40f, 3.5f);
+  }
+  if (format.scaleYIndex >= 0 &&
+      format.scaleYIndex < static_cast<int>(fields.size()) &&
+      parseFloatAscii(fields[static_cast<size_t>(format.scaleYIndex)],
+                      &parsedFloat) &&
+      parsedFloat > 0.0f) {
+    style.scaleY = std::clamp(parsedFloat * 0.01f, 0.40f, 3.5f);
+  }
+  if (format.primaryColourIndex >= 0 &&
+      format.primaryColourIndex < static_cast<int>(fields.size()) &&
+      parseAssColorValue(fields[static_cast<size_t>(format.primaryColourIndex)],
+                         &style.primaryR, &style.primaryG, &style.primaryB,
+                         &style.primaryAlpha)) {
+    style.hasPrimaryColor = true;
+  }
+  if (format.backColourIndex >= 0 &&
+      format.backColourIndex < static_cast<int>(fields.size()) &&
+      parseAssColorValue(fields[static_cast<size_t>(format.backColourIndex)],
+                         &style.backR, &style.backG, &style.backB,
+                         &style.backAlpha)) {
+    style.hasBackColor = true;
+  }
+
+  *outName = std::move(styleName);
+  *outStyle = std::move(style);
+  return true;
+}
+
+void parseAssScriptContext(const std::string& raw, AssScriptContext* outContext) {
+  if (!outContext) return;
+  *outContext = AssScriptContext{};
+
+  std::vector<std::string> lines = splitLinesNormalized(raw);
+  AssSection section = AssSection::Other;
+  AssStyleFormatState styleFormat;
+
+  for (const std::string& rawLine : lines) {
+    const std::string line = trimAscii(rawLine);
+    if (line.empty()) continue;
+
+    if (line.front() == '[' && line.back() == ']') {
+      section = assSectionFromLine(line);
+      continue;
+    }
+
+    if (section == AssSection::ScriptInfo) {
+      const size_t colon = line.find(':');
+      if (colon == std::string::npos) continue;
+      const std::string key = toLowerAscii(trimAscii(line.substr(0, colon)));
+      const std::string value = trimAscii(line.substr(colon + 1));
+      float parsedFloat = 0.0f;
+      if (key == "playresx" && parseFloatAscii(value, &parsedFloat) &&
+          parsedFloat > 0.0f) {
+        outContext->playResX = static_cast<int>(std::lround(parsedFloat));
+      } else if (key == "playresy" && parseFloatAscii(value, &parsedFloat) &&
+                 parsedFloat > 0.0f) {
+        outContext->playResY = static_cast<int>(std::lround(parsedFloat));
+      }
+      continue;
+    }
+
+    if (section != AssSection::Styles) continue;
+
+    constexpr std::string_view kFormatPrefix = "Format:";
+    constexpr std::string_view kStylePrefix = "Style:";
+    if (startsWithAsciiNoCase(line, 0, kFormatPrefix)) {
+      parseAssStyleFormat(
+          std::string_view(line).substr(kFormatPrefix.size()), &styleFormat);
+      continue;
+    }
+    if (!startsWithAsciiNoCase(line, 0, kStylePrefix)) continue;
+
+    std::string styleName;
+    AssStyleInfo style;
+    if (!parseAssStyleLine(std::string_view(line).substr(kStylePrefix.size()),
+                           styleFormat, &styleName, &style)) {
+      continue;
+    }
+
+    const std::string nameLower = toLowerAscii(styleName);
+    outContext->styles[nameLower] = style;
+    if (outContext->baseFontSize <= 0.0f && style.fontSize > 0.0f) {
+      outContext->baseFontSize = style.fontSize;
+    }
+    if (nameLower == "default" && style.fontSize > 0.0f) {
+      outContext->baseFontSize = style.fontSize;
+    }
+  }
+}
+
 bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
   if (!outCues) return false;
   std::vector<std::string> lines = splitLinesNormalized(raw);
   if (lines.empty()) return false;
 
-  enum class AssSection { Other, ScriptInfo, Styles, Events };
   AssSection section = AssSection::Other;
 
-  int playResX = 0;
-  int playResY = 0;
-  float baseFontSize = 0.0f;
-  std::unordered_map<std::string, AssStyleInfo> styles;
-
-  std::vector<std::string> styleFormatFields;
-  int styleNameIndex = -1;
-  int styleAlignmentIndex = -1;
-  int styleMarginLIndex = -1;
-  int styleMarginRIndex = -1;
-  int styleMarginVIndex = -1;
-  int styleFontSizeIndex = -1;
-  int styleFontNameIndex = -1;
-  int styleBoldIndex = -1;
-  int styleItalicIndex = -1;
-  int styleUnderlineIndex = -1;
-  int styleScaleXIndex = -1;
-  int styleScaleYIndex = -1;
+  AssScriptContext assContext;
+  parseAssScriptContext(raw, &assContext);
+  const int playResX = assContext.playResX;
+  const int playResY = assContext.playResY;
+  const float baseFontSize = assContext.baseFontSize;
+  const std::unordered_map<std::string, AssStyleInfo>& styles =
+      assContext.styles;
 
   std::vector<std::string> eventFormatFields;
   int startIndex = -1;
@@ -1072,184 +1724,18 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
   int marginRIndex = -1;
   int marginVIndex = -1;
 
-  auto parseFormatFields = [](const std::string& payload,
-                              std::vector<std::string>* outFields) {
-    if (!outFields) return;
-    outFields->clear();
-    size_t start = 0;
-    while (start <= payload.size()) {
-      size_t comma = payload.find(',', start);
-      std::string field =
-          (comma == std::string::npos)
-              ? payload.substr(start)
-              : payload.substr(start, comma - start);
-      outFields->push_back(trimAscii(field));
-      if (comma == std::string::npos) break;
-      start = comma + 1;
-    }
-  };
-
-  auto findFieldIndex = [](const std::vector<std::string>& fields,
-                           const char* wanted) -> int {
-    if (!wanted) return -1;
-    std::string target = toLowerAscii(std::string(wanted));
-    for (size_t i = 0; i < fields.size(); ++i) {
-      if (toLowerAscii(trimAscii(fields[i])) == target) {
-        return static_cast<int>(i);
-      }
-    }
-    return -1;
-  };
-
   for (const std::string& rawLine : lines) {
     std::string line = trimAscii(rawLine);
     if (line.empty()) continue;
 
     if (line.front() == '[' && line.back() == ']') {
-      std::string sectionName = toLowerAscii(line);
-      if (sectionName == "[script info]") {
-        section = AssSection::ScriptInfo;
-      } else if (sectionName == "[v4+ styles]" || sectionName == "[v4 styles]") {
-        section = AssSection::Styles;
-      } else if (sectionName == "[events]") {
-        section = AssSection::Events;
-      } else {
-        section = AssSection::Other;
-      }
+      section = assSectionFromLine(line);
       continue;
     }
 
-    if (section == AssSection::ScriptInfo) {
-      size_t colon = line.find(':');
-      if (colon == std::string::npos) continue;
-      std::string key = toLowerAscii(trimAscii(line.substr(0, colon)));
-      std::string value = trimAscii(line.substr(colon + 1));
-      int parsedInt = 0;
-      if (key == "playresx" && parseNonNegativeInt(value, &parsedInt)) {
-        playResX = parsedInt;
-      } else if (key == "playresy" && parseNonNegativeInt(value, &parsedInt)) {
-        playResY = parsedInt;
-      }
+    if (section == AssSection::ScriptInfo || section == AssSection::Styles) {
       continue;
     }
-
-    if (section == AssSection::Styles) {
-      const std::string formatPrefix = "Format:";
-      const std::string stylePrefix = "Style:";
-      if (line.size() >= formatPrefix.size() &&
-          startsWith(toLowerAscii(line.substr(0, formatPrefix.size())),
-                     toLowerAscii(formatPrefix))) {
-        parseFormatFields(line.substr(formatPrefix.size()), &styleFormatFields);
-        styleNameIndex = findFieldIndex(styleFormatFields, "name");
-        styleAlignmentIndex = findFieldIndex(styleFormatFields, "alignment");
-        styleMarginLIndex = findFieldIndex(styleFormatFields, "marginl");
-        styleMarginRIndex = findFieldIndex(styleFormatFields, "marginr");
-        styleMarginVIndex = findFieldIndex(styleFormatFields, "marginv");
-        styleFontSizeIndex = findFieldIndex(styleFormatFields, "fontsize");
-        styleFontNameIndex = findFieldIndex(styleFormatFields, "fontname");
-        styleBoldIndex = findFieldIndex(styleFormatFields, "bold");
-        styleItalicIndex = findFieldIndex(styleFormatFields, "italic");
-        styleUnderlineIndex = findFieldIndex(styleFormatFields, "underline");
-        styleScaleXIndex = findFieldIndex(styleFormatFields, "scalex");
-        styleScaleYIndex = findFieldIndex(styleFormatFields, "scaley");
-        continue;
-      }
-      if (line.size() < stylePrefix.size() ||
-          !startsWith(toLowerAscii(line.substr(0, stylePrefix.size())),
-                      toLowerAscii(stylePrefix)) ||
-          styleFormatFields.empty() || styleNameIndex < 0) {
-        continue;
-      }
-
-      std::vector<std::string> fields;
-      if (!splitCsvPrefix(line.substr(stylePrefix.size()), styleFormatFields.size(),
-                          &fields)) {
-        continue;
-      }
-      if (styleNameIndex >= static_cast<int>(fields.size())) continue;
-      std::string styleName = trimAscii(fields[static_cast<size_t>(styleNameIndex)]);
-      if (styleName.empty()) continue;
-
-      AssStyleInfo style;
-      int parsedInt = 0;
-      float parsedFloat = 0.0f;
-      if (styleAlignmentIndex >= 0 &&
-          styleAlignmentIndex < static_cast<int>(fields.size()) &&
-          parseNonNegativeInt(fields[static_cast<size_t>(styleAlignmentIndex)],
-                              &parsedInt)) {
-        style.alignment = clampAssAlignment(parsedInt);
-      }
-      if (styleMarginLIndex >= 0 &&
-          styleMarginLIndex < static_cast<int>(fields.size()) &&
-          parseNonNegativeInt(fields[static_cast<size_t>(styleMarginLIndex)],
-                              &parsedInt)) {
-        style.marginL = parsedInt;
-      }
-      if (styleMarginRIndex >= 0 &&
-          styleMarginRIndex < static_cast<int>(fields.size()) &&
-          parseNonNegativeInt(fields[static_cast<size_t>(styleMarginRIndex)],
-                              &parsedInt)) {
-        style.marginR = parsedInt;
-      }
-      if (styleMarginVIndex >= 0 &&
-          styleMarginVIndex < static_cast<int>(fields.size()) &&
-          parseNonNegativeInt(fields[static_cast<size_t>(styleMarginVIndex)],
-                              &parsedInt)) {
-        style.marginV = parsedInt;
-      }
-      if (styleFontSizeIndex >= 0 &&
-          styleFontSizeIndex < static_cast<int>(fields.size()) &&
-          parseFloatAscii(fields[static_cast<size_t>(styleFontSizeIndex)],
-                          &parsedFloat) &&
-          parsedFloat > 0.0f) {
-        style.fontSize = parsedFloat;
-      }
-      if (styleFontNameIndex >= 0 &&
-          styleFontNameIndex < static_cast<int>(fields.size())) {
-        style.fontName =
-            trimAscii(fields[static_cast<size_t>(styleFontNameIndex)]);
-      }
-      if (styleBoldIndex >= 0 && styleBoldIndex < static_cast<int>(fields.size()) &&
-          parseSignedInt(fields[static_cast<size_t>(styleBoldIndex)], &parsedInt)) {
-        style.bold = parsedInt != 0;
-      }
-      if (styleItalicIndex >= 0 &&
-          styleItalicIndex < static_cast<int>(fields.size()) &&
-          parseSignedInt(fields[static_cast<size_t>(styleItalicIndex)], &parsedInt)) {
-        style.italic = parsedInt != 0;
-      }
-      if (styleUnderlineIndex >= 0 &&
-          styleUnderlineIndex < static_cast<int>(fields.size()) &&
-          parseSignedInt(fields[static_cast<size_t>(styleUnderlineIndex)],
-                         &parsedInt)) {
-        style.underline = parsedInt != 0;
-      }
-      if (styleScaleXIndex >= 0 &&
-          styleScaleXIndex < static_cast<int>(fields.size()) &&
-          parseFloatAscii(fields[static_cast<size_t>(styleScaleXIndex)],
-                          &parsedFloat) &&
-          parsedFloat > 0.0f) {
-        style.scaleX = std::clamp(parsedFloat * 0.01f, 0.40f, 3.5f);
-      }
-      if (styleScaleYIndex >= 0 &&
-          styleScaleYIndex < static_cast<int>(fields.size()) &&
-          parseFloatAscii(fields[static_cast<size_t>(styleScaleYIndex)],
-                          &parsedFloat) &&
-          parsedFloat > 0.0f) {
-        style.scaleY = std::clamp(parsedFloat * 0.01f, 0.40f, 3.5f);
-      }
-      std::string nameLower = toLowerAscii(styleName);
-      styles[nameLower] = style;
-      if (baseFontSize <= 0.0f && style.fontSize > 0.0f) {
-        if (nameLower == "default") {
-          baseFontSize = style.fontSize;
-        } else if (baseFontSize <= 0.0f) {
-          baseFontSize = style.fontSize;
-        }
-      }
-      continue;
-    }
-
     if (section != AssSection::Events) continue;
 
     const std::string formatPrefix = "Format:";
@@ -1257,15 +1743,15 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     if (line.size() >= formatPrefix.size() &&
         startsWith(toLowerAscii(line.substr(0, formatPrefix.size())),
                    toLowerAscii(formatPrefix))) {
-      parseFormatFields(line.substr(formatPrefix.size()), &eventFormatFields);
-      startIndex = findFieldIndex(eventFormatFields, "start");
-      endIndex = findFieldIndex(eventFormatFields, "end");
-      textIndex = findFieldIndex(eventFormatFields, "text");
-      styleIndex = findFieldIndex(eventFormatFields, "style");
-      layerIndex = findFieldIndex(eventFormatFields, "layer");
-      marginLIndex = findFieldIndex(eventFormatFields, "marginl");
-      marginRIndex = findFieldIndex(eventFormatFields, "marginr");
-      marginVIndex = findFieldIndex(eventFormatFields, "marginv");
+      parseAssFormatFields(line.substr(formatPrefix.size()), &eventFormatFields);
+      startIndex = findAssFieldIndex(eventFormatFields, "start");
+      endIndex = findAssFieldIndex(eventFormatFields, "end");
+      textIndex = findAssFieldIndex(eventFormatFields, "text");
+      styleIndex = findAssFieldIndex(eventFormatFields, "style");
+      layerIndex = findAssFieldIndex(eventFormatFields, "layer");
+      marginLIndex = findAssFieldIndex(eventFormatFields, "marginl");
+      marginRIndex = findAssFieldIndex(eventFormatFields, "marginr");
+      marginVIndex = findAssFieldIndex(eventFormatFields, "marginv");
       continue;
     }
 
@@ -1336,6 +1822,7 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     }
 
     std::string rawText = fields[static_cast<size_t>(textIndex)];
+    const AssStyleInfo textRunBaseStyle = styleInfo;
     AssOverrideInfo overrides;
     parseAssOverridesFromText(rawText, &overrides);
     if (overrides.alignment >= 1) {
@@ -1362,11 +1849,25 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     if (overrides.hasUnderline) {
       styleInfo.underline = overrides.underline;
     }
+    if (overrides.hasPrimaryColor) {
+      styleInfo.hasPrimaryColor = true;
+      styleInfo.primaryR = overrides.primaryR;
+      styleInfo.primaryG = overrides.primaryG;
+      styleInfo.primaryB = overrides.primaryB;
+      styleInfo.primaryAlpha = overrides.primaryAlpha;
+    }
+    if (overrides.hasBackColor) {
+      styleInfo.hasBackColor = true;
+      styleInfo.backR = overrides.backR;
+      styleInfo.backG = overrides.backG;
+      styleInfo.backB = overrides.backB;
+      styleInfo.backAlpha = overrides.backAlpha;
+    }
 
-    std::string text = rawText;
-    replaceAll(&text, "\\N", "\n");
-    replaceAll(&text, "\\n", "\n");
-    text = stripSubtitleMarkup(text);
+    std::string text;
+    std::vector<SubtitleTextRun> textRuns;
+    parseAssStyledTextRuns(rawText, textRunBaseStyle, &styles, &text,
+                           &textRuns);
     if (text.empty()) continue;
 
     const int scriptW = std::max(1, playResX > 0 ? playResX : 384);
@@ -1380,6 +1881,7 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     cue.endUs = endUs;
     cue.text = std::move(text);
     cue.rawText = rawText;
+    cue.textRuns = std::move(textRuns);
     cue.assStyled = true;
     cue.layer = cueLayer;
     cue.alignment = clampAssAlignment(styleInfo.alignment);
@@ -1400,12 +1902,38 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     cue.bold = styleInfo.bold;
     cue.italic = styleInfo.italic;
     cue.underline = styleInfo.underline;
+    cue.hasPrimaryColor = styleInfo.hasPrimaryColor;
+    cue.primaryR = styleInfo.primaryR;
+    cue.primaryG = styleInfo.primaryG;
+    cue.primaryB = styleInfo.primaryB;
+    cue.primaryAlpha = styleInfo.primaryAlpha;
+    cue.hasBackColor = styleInfo.hasBackColor;
+    cue.backR = styleInfo.backR;
+    cue.backG = styleInfo.backG;
+    cue.backB = styleInfo.backB;
+    cue.backAlpha = styleInfo.backAlpha;
     if (overrides.hasPosition) {
       cue.hasPosition = true;
       cue.posXNorm =
           std::clamp(overrides.posX / static_cast<float>(scriptW), 0.0f, 1.0f);
       cue.posYNorm =
           std::clamp(overrides.posY / static_cast<float>(scriptH), 0.0f, 1.0f);
+    }
+    if (overrides.hasMove) {
+      cue.hasMove = true;
+      cue.hasPosition = true;
+      cue.moveStartXNorm = std::clamp(
+          overrides.moveStartX / static_cast<float>(scriptW), 0.0f, 1.0f);
+      cue.moveStartYNorm = std::clamp(
+          overrides.moveStartY / static_cast<float>(scriptH), 0.0f, 1.0f);
+      cue.moveEndXNorm = std::clamp(
+          overrides.moveEndX / static_cast<float>(scriptW), 0.0f, 1.0f);
+      cue.moveEndYNorm = std::clamp(
+          overrides.moveEndY / static_cast<float>(scriptH), 0.0f, 1.0f);
+      cue.moveStartMs = std::max(0, overrides.moveStartMs);
+      cue.moveEndMs = std::max(0, overrides.moveEndMs);
+      cue.posXNorm = cue.moveStartXNorm;
+      cue.posYNorm = cue.moveStartYNorm;
     }
     outCues->push_back(std::move(cue));
   }
@@ -1955,6 +2483,7 @@ void appendEmbeddedAssDialogue(std::string* script, int64_t startUs, int64_t end
 }
 
 bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outCue,
+                       const AssScriptContext* assContext = nullptr,
                        AssPacketEventFields* outAssEvent = nullptr) {
   if (!outCue || !pkt.data || pkt.size <= 0) return false;
   std::string payload(reinterpret_cast<const char*>(pkt.data),
@@ -1971,54 +2500,149 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
     cue.layer = event.layer;
     payload = event.text;
 
-    cue.marginLNorm =
-        std::clamp(static_cast<float>((std::max)(0, event.marginL)) / 384.0f, 0.0f,
-                   0.7f);
-    cue.marginRNorm =
-        std::clamp(static_cast<float>((std::max)(0, event.marginR)) / 384.0f, 0.0f,
-                   0.7f);
-    cue.marginVNorm =
-        std::clamp(static_cast<float>((std::max)(0, event.marginV)) / 288.0f, 0.0f,
-                   0.7f);
+    AssStyleInfo styleInfo;
+    float cueFontSize = 0.0f;
+    const std::unordered_map<std::string, AssStyleInfo>* styles = nullptr;
+    if (assContext) {
+      styles = &assContext->styles;
+      const std::string styleName = toLowerAscii(trimAscii(event.style));
+      auto it = assContext->styles.find(styleName);
+      if (it != assContext->styles.end()) {
+        styleInfo = it->second;
+        cueFontSize = it->second.fontSize;
+      }
+    }
 
+    if (event.marginL > 0) styleInfo.marginL = event.marginL;
+    if (event.marginR > 0) styleInfo.marginR = event.marginR;
+    if (event.marginV > 0) styleInfo.marginV = event.marginV;
+
+    const AssStyleInfo textRunBaseStyle = styleInfo;
     AssOverrideInfo overrides;
     parseAssOverridesFromText(payload, &overrides);
     if (overrides.alignment >= 1) {
-      cue.alignment = clampAssAlignment(overrides.alignment);
-    }
-    if (overrides.hasPosition) {
-      cue.hasPosition = true;
-      cue.posXNorm = std::clamp(overrides.posX / 384.0f, 0.0f, 1.0f);
-      cue.posYNorm = std::clamp(overrides.posY / 288.0f, 0.0f, 1.0f);
+      styleInfo.alignment = clampAssAlignment(overrides.alignment);
     }
     if (overrides.fontSize > 0.0f) {
-      cue.sizeScale = std::clamp(overrides.fontSize / 48.0f, 0.45f, 2.5f);
+      cueFontSize = overrides.fontSize;
     }
     if (overrides.scaleX > 0.0f) {
-      cue.scaleX = std::clamp(overrides.scaleX, 0.40f, 3.5f);
+      styleInfo.scaleX = overrides.scaleX;
     }
     if (overrides.scaleY > 0.0f) {
-      cue.scaleY = std::clamp(overrides.scaleY, 0.40f, 3.5f);
-      cue.sizeScale = std::clamp(cue.sizeScale * cue.scaleY, 0.35f, 3.5f);
+      styleInfo.scaleY = overrides.scaleY;
     }
     if (overrides.hasFontName) {
-      cue.fontName = overrides.fontName;
+      styleInfo.fontName = overrides.fontName;
     }
     if (overrides.hasBold) {
-      cue.bold = overrides.bold;
+      styleInfo.bold = overrides.bold;
     }
     if (overrides.hasItalic) {
-      cue.italic = overrides.italic;
+      styleInfo.italic = overrides.italic;
     }
     if (overrides.hasUnderline) {
-      cue.underline = overrides.underline;
+      styleInfo.underline = overrides.underline;
     }
+    if (overrides.hasPrimaryColor) {
+      styleInfo.hasPrimaryColor = true;
+      styleInfo.primaryR = overrides.primaryR;
+      styleInfo.primaryG = overrides.primaryG;
+      styleInfo.primaryB = overrides.primaryB;
+      styleInfo.primaryAlpha = overrides.primaryAlpha;
+    }
+    if (overrides.hasBackColor) {
+      styleInfo.hasBackColor = true;
+      styleInfo.backR = overrides.backR;
+      styleInfo.backG = overrides.backG;
+      styleInfo.backB = overrides.backB;
+      styleInfo.backAlpha = overrides.backAlpha;
+    }
+
+    const int scriptW =
+        std::max(1, assContext && assContext->playResX > 0
+                        ? assContext->playResX
+                        : 384);
+    const int scriptH =
+        std::max(1, assContext && assContext->playResY > 0
+                        ? assContext->playResY
+                        : 288);
+    const float baseFontSize =
+        assContext && assContext->baseFontSize > 0.0f
+            ? assContext->baseFontSize
+            : (cueFontSize > 0.0f ? cueFontSize : 48.0f);
+
+    cue.alignment = clampAssAlignment(styleInfo.alignment);
+    cue.marginLNorm = std::clamp(
+        static_cast<float>(std::max(0, styleInfo.marginL)) /
+            static_cast<float>(scriptW),
+        0.0f, 0.7f);
+    cue.marginRNorm = std::clamp(
+        static_cast<float>(std::max(0, styleInfo.marginR)) /
+            static_cast<float>(scriptW),
+        0.0f, 0.7f);
+    cue.marginVNorm = std::clamp(
+        static_cast<float>(std::max(0, styleInfo.marginV)) /
+            static_cast<float>(scriptH),
+        0.0f, 0.7f);
+    if (cueFontSize > 0.0f && baseFontSize > 0.0f) {
+      cue.sizeScale = std::clamp(cueFontSize / baseFontSize, 0.45f, 2.5f);
+    }
+    cue.scaleX = std::clamp(styleInfo.scaleX, 0.40f, 3.5f);
+    cue.scaleY = std::clamp(styleInfo.scaleY, 0.40f, 3.5f);
+    cue.sizeScale = std::clamp(cue.sizeScale * cue.scaleY, 0.35f, 3.5f);
+    cue.fontName = styleInfo.fontName;
+    cue.bold = styleInfo.bold;
+    cue.italic = styleInfo.italic;
+    cue.underline = styleInfo.underline;
+    cue.hasPrimaryColor = styleInfo.hasPrimaryColor;
+    cue.primaryR = styleInfo.primaryR;
+    cue.primaryG = styleInfo.primaryG;
+    cue.primaryB = styleInfo.primaryB;
+    cue.primaryAlpha = styleInfo.primaryAlpha;
+    cue.hasBackColor = styleInfo.hasBackColor;
+    cue.backR = styleInfo.backR;
+    cue.backG = styleInfo.backG;
+    cue.backB = styleInfo.backB;
+    cue.backAlpha = styleInfo.backAlpha;
+    if (overrides.hasPosition) {
+      cue.hasPosition = true;
+      cue.posXNorm = std::clamp(
+          overrides.posX / static_cast<float>(scriptW), 0.0f, 1.0f);
+      cue.posYNorm = std::clamp(
+          overrides.posY / static_cast<float>(scriptH), 0.0f, 1.0f);
+    }
+    if (overrides.hasMove) {
+      cue.hasMove = true;
+      cue.hasPosition = true;
+      cue.moveStartXNorm = std::clamp(
+          overrides.moveStartX / static_cast<float>(scriptW), 0.0f, 1.0f);
+      cue.moveStartYNorm = std::clamp(
+          overrides.moveStartY / static_cast<float>(scriptH), 0.0f, 1.0f);
+      cue.moveEndXNorm = std::clamp(
+          overrides.moveEndX / static_cast<float>(scriptW), 0.0f, 1.0f);
+      cue.moveEndYNorm = std::clamp(
+          overrides.moveEndY / static_cast<float>(scriptH), 0.0f, 1.0f);
+      cue.moveStartMs = std::max(0, overrides.moveStartMs);
+      cue.moveEndMs = std::max(0, overrides.moveEndMs);
+      cue.posXNorm = cue.moveStartXNorm;
+      cue.posYNorm = cue.moveStartYNorm;
+    }
+
+    std::string styledText;
+    std::vector<SubtitleTextRun> textRuns;
+    parseAssStyledTextRuns(payload, textRunBaseStyle, styles, &styledText,
+                           &textRuns);
+    cue.textRuns = std::move(textRuns);
+    cue.text = std::move(styledText);
 
   }
   cue.rawText = payload;
-  replaceAll(&payload, "\\N", "\n");
-  replaceAll(&payload, "\\n", "\n");
-  cue.text = stripSubtitleMarkup(payload);
+  if (cue.text.empty()) {
+    replaceAll(&payload, "\\N", "\n");
+    replaceAll(&payload, "\\n", "\n");
+    cue.text = stripSubtitleMarkup(payload);
+  }
 
   if (cue.text.empty()) return false;
   *outCue = std::move(cue);
@@ -2050,6 +2674,7 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     AVCodecID codecId = AV_CODEC_ID_NONE;
     bool assLike = false;
     std::string assScript;
+    AssScriptContext assContext;
     SubtitleTrack track;
   };
   std::vector<EmbeddedTrackInfo> refs;
@@ -2075,6 +2700,7 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     }
     if (info.assLike) {
       ensureEmbeddedAssScriptPreamble(&info.assScript);
+      parseAssScriptContext(info.assScript, &info.assContext);
     }
     info.track.label = subtitleLabelFromStream(stream, refs.size());
     refs.push_back(std::move(info));
@@ -2100,7 +2726,11 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
       SubtitleCue cue;
       AssPacketEventFields assEvent;
       AssPacketEventFields* assEventOut = ref.assLike ? &assEvent : nullptr;
-      if (!packetSubtitleCue(ref.codecId, *pkt, &cue, assEventOut)) break;
+      const AssScriptContext* assContext =
+          ref.assLike ? &ref.assContext : nullptr;
+      if (!packetSubtitleCue(ref.codecId, *pkt, &cue, assContext, assEventOut)) {
+        break;
+      }
       int64_t startUs = packetPtsUs(*pkt, ref.timeBase);
       if (startUs == AV_NOPTS_VALUE) break;
       startUs -= formatStartUs;

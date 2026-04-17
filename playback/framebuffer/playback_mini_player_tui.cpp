@@ -43,6 +43,7 @@ GpuTextGridCell makeScreenCell(const ScreenCell& cell) {
     case L'\u25B6':
     case L'\u23F8':
     case L'\u25A0':
+    case L'\u25CB':
     case L'\u2022':
     case L'\u2500':
     case L'\u2501':

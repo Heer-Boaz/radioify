@@ -547,8 +547,11 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     requestPlaybackExit(view, signals, false);
     return;
   }
-  if (windowOriginEvent && mouse.eventFlags == MOUSE_MOVED) {
+  if (mouse.eventFlags == MOUSE_MOVED) {
     triggerOverlay(view, signals);
+    if (signals.redraw) {
+      *signals.redraw = true;
+    }
   }
 
   windowEvent = (hitMouse.control & 0x80000000) != 0;

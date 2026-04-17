@@ -825,6 +825,10 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
             }
             dirty = true;
             return;
+          case ActionStripItem::PictureInPicture:
+            if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+            dirty = true;
+            return;
         }
       }
       if (layout.showScrollBar && layout.scrollBarX >= 0 &&

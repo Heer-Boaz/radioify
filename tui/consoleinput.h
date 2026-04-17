@@ -181,6 +181,7 @@ enum class ActionStripItem {
   Hz50,
   View,
   MelodyViz,
+  PictureInPicture,
   Options
 };
 

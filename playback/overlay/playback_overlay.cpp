@@ -217,6 +217,19 @@ std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
     WindowUiState::SubtitleCue item;
     item.text = cue->text;
     item.rawText = cue->rawText;
+    item.textRuns.reserve(cue->textRuns.size());
+    for (const SubtitleTextRun& run : cue->textRuns) {
+      if (run.text.empty()) continue;
+      WindowUiState::SubtitleCue::TextRun itemRun;
+      itemRun.text = run.text;
+      itemRun.hasPrimaryColor = run.hasPrimaryColor;
+      itemRun.primaryColor = Color{run.primaryR, run.primaryG, run.primaryB};
+      itemRun.primaryAlpha = run.primaryAlpha;
+      itemRun.hasBackColor = run.hasBackColor;
+      itemRun.backColor = Color{run.backR, run.backG, run.backB};
+      itemRun.backAlpha = run.backAlpha;
+      item.textRuns.push_back(std::move(itemRun));
+    }
     item.sizeScale = std::clamp(cue->sizeScale, 0.40f, 3.0f);
     item.scaleX = std::clamp(cue->scaleX, 0.40f, 3.5f);
     item.scaleY = std::clamp(cue->scaleY, 0.40f, 3.5f);
@@ -225,6 +238,12 @@ std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
     item.italic = cue->italic;
     item.underline = cue->underline;
     item.assStyled = cue->assStyled;
+    item.hasPrimaryColor = cue->hasPrimaryColor;
+    item.primaryColor = Color{cue->primaryR, cue->primaryG, cue->primaryB};
+    item.primaryAlpha = cue->primaryAlpha;
+    item.hasBackColor = cue->hasBackColor;
+    item.backColor = Color{cue->backR, cue->backG, cue->backB};
+    item.backAlpha = cue->backAlpha;
     item.startUs = cue->startUs;
     item.endUs = cue->endUs;
     item.alignment = cue->alignment;
@@ -232,6 +251,26 @@ std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
     item.hasPosition = cue->hasPosition;
     item.posX = cue->posXNorm;
     item.posY = cue->posYNorm;
+    if (cue->hasMove) {
+      item.hasPosition = true;
+      const double elapsedMs =
+          static_cast<double>(std::max<int64_t>(0, clockUs - cue->startUs)) /
+          1000.0;
+      double t = 0.0;
+      if (cue->moveEndMs > cue->moveStartMs) {
+        t = (elapsedMs - static_cast<double>(cue->moveStartMs)) /
+            static_cast<double>(cue->moveEndMs - cue->moveStartMs);
+      } else if (elapsedMs >= static_cast<double>(cue->moveStartMs)) {
+        t = 1.0;
+      }
+      t = std::clamp(t, 0.0, 1.0);
+      item.posX =
+          static_cast<float>(cue->moveStartXNorm +
+                             (cue->moveEndXNorm - cue->moveStartXNorm) * t);
+      item.posY =
+          static_cast<float>(cue->moveStartYNorm +
+                             (cue->moveEndYNorm - cue->moveStartYNorm) * t);
+    }
     item.marginVNorm = cue->marginVNorm;
     item.marginLNorm = cue->marginLNorm;
     item.marginRNorm = cue->marginRNorm;

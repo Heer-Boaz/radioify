@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "audioplayback.h"
+#include "playback_ascii_subtitles.h"
 #include "ui_helpers.h"
 #include "unicode_display_width.h"
 
@@ -113,7 +114,6 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   if (!audioOk && !audioStarting) {
     statusLine = enableAudio ? "Audio unavailable" : "Audio disabled";
   }
-  std::string subtitleText;
   std::string debugLine1;
   std::string debugLine2;
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -179,10 +179,6 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   }
   const bool subtitlesEnabledNow =
       enableSubtitlesShared.load(std::memory_order_relaxed);
-  subtitleText = playback_overlay::buildSubtitleText(
-      subtitleManager, subtitlesEnabledNow, seekingOverlay, clockUs,
-      hasSubtitles);
-
   const bool hasVideoStream =
       player.sourceWidth() > 0 && player.sourceHeight() > 0;
   bool waitingForAudio = audioOk && !audioStreamClockReady() && !audioIsFinished();
@@ -315,7 +311,26 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     playback_frame_output::renderAsciiModeContent(
         screen, art, width, height, maxHeight, artTop, waitingLabel(),
         allowFrame, baseStyle, overlayVisibleNow, overlayReservedLines,
-        subtitleText, accentStyle, dimStyle);
+        dimStyle);
+    playback_ascii_subtitles::RenderInput subtitleInput;
+    subtitleInput.screen = &screen;
+    subtitleInput.art = &art;
+    subtitleInput.width = width;
+    subtitleInput.height = height;
+    subtitleInput.maxHeight = maxHeight;
+    subtitleInput.artTop = artTop;
+    subtitleInput.allowFrame = allowFrame;
+    subtitleInput.overlayVisible = overlayVisibleNow;
+    subtitleInput.overlayReservedLines = overlayReservedLines;
+    subtitleInput.subtitleText = overlayState.subtitleText;
+    subtitleInput.subtitleCues = &overlayState.subtitleCues;
+    subtitleInput.assScript = overlayState.subtitleAssScript;
+    subtitleInput.assFonts = overlayState.subtitleAssFonts;
+    subtitleInput.subtitleClockUs = overlayState.subtitleClockUs;
+    subtitleInput.baseStyle = baseStyle;
+    subtitleInput.accentStyle = accentStyle;
+    subtitleInput.dimStyle = dimStyle;
+    playback_ascii_subtitles::renderAsciiSubtitles(subtitleInput);
   } else {
     playback_frame_output::renderNonAsciiModeContent(
         screen, windowActive, allowFrame, width, artTop, maxHeight, frame,

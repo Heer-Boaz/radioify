@@ -25,8 +25,19 @@ struct WindowUiState {
     };
 
     struct SubtitleCue {
+        struct TextRun {
+            std::string text;
+            bool hasPrimaryColor = false;
+            Color primaryColor{255, 255, 255};
+            float primaryAlpha = 1.0f;
+            bool hasBackColor = false;
+            Color backColor{0, 0, 0};
+            float backAlpha = 0.55f;
+        };
+
         std::string text;
         std::string rawText;
+        std::vector<TextRun> textRuns;
         float sizeScale = 1.0f;
         float scaleX = 1.0f;
         float scaleY = 1.0f;
@@ -35,6 +46,12 @@ struct WindowUiState {
         bool italic = false;
         bool underline = false;
         bool assStyled = false;
+        bool hasPrimaryColor = false;
+        Color primaryColor{255, 255, 255};
+        float primaryAlpha = 1.0f;
+        bool hasBackColor = false;
+        Color backColor{0, 0, 0};
+        float backAlpha = 0.55f;
         int64_t startUs = 0;
         int64_t endUs = 0;
         int alignment = 2;  // ASS alignment (1..9), default bottom-center.
