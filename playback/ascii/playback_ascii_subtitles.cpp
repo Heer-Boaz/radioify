@@ -493,6 +493,7 @@ std::vector<StyledLine> wrapStyledSubtitleText(
 enum class CueVerticalAnchor { Bottom, Middle, Top };
 
 struct CueBlock {
+  std::string text;
   std::vector<StyledLine> lines;
   int alignment = 2;
   int layer = 0;
@@ -560,6 +561,7 @@ bool makeCueBlock(const WindowUiState::SubtitleCue& cue, const SubtitleArea& are
   }
 
   CueBlock block;
+  block.text = cue.text;
   block.alignment = std::clamp(cue.alignment, 1, 9);
   block.layer = cue.layer;
   block.order = order;
@@ -761,6 +763,29 @@ void positionFlowBlock(CueBlock* block, const SubtitleArea& area,
   markRows(occupied, block->y, block->height);
 }
 
+bool sameSubtitleOverlayText(const CueBlock& a, const CueBlock& b) {
+  return !a.text.empty() && a.text == b.text;
+}
+
+bool sameSubtitleOverlayPlacement(const CueBlock& a, const CueBlock& b) {
+  if (a.alignment != b.alignment || a.hasPosition != b.hasPosition) {
+    return false;
+  }
+  if (a.hasPosition) {
+    return std::abs(a.posX - b.posX) <= 0.01f &&
+           std::abs(a.posY - b.posY) <= 0.01f;
+  }
+  return std::abs(a.marginL - b.marginL) <= 1 &&
+         std::abs(a.marginR - b.marginR) <= 1 &&
+         std::abs(a.marginV - b.marginV) <= 1;
+}
+
+bool shouldOverlaySubtitleBlock(const CueBlock& previous,
+                                const CueBlock& current) {
+  return sameSubtitleOverlayText(previous, current) &&
+         sameSubtitleOverlayPlacement(previous, current);
+}
+
 Color brightenColor(Color color, float amount) {
   amount = std::clamp(amount, 0.0f, 1.0f);
   color.r = static_cast<uint8_t>(
@@ -925,13 +950,30 @@ void renderReadableCueSubtitles(const RenderInput& input) {
   const int explicitPositionBottomLimit = area.y + area.height - 1;
 
   std::vector<uint8_t> occupied(static_cast<size_t>(input.height), 0);
-  for (CueBlock& block : blocks) {
-    if (block.hasPosition) {
-      positionExplicitBlock(&block, area, explicitPositionBottomLimit);
-      markRows(&occupied, block.y, block.height);
-    } else {
-      positionFlowBlock(&block, area, bottomLimit, &occupied);
+  std::vector<size_t> positionedBlocks;
+  positionedBlocks.reserve(blocks.size());
+  for (size_t blockIndex = 0; blockIndex < blocks.size(); ++blockIndex) {
+    CueBlock& block = blocks[blockIndex];
+    bool overlaid = false;
+    for (auto it = positionedBlocks.rbegin(); it != positionedBlocks.rend();
+         ++it) {
+      const CueBlock& previous = blocks[*it];
+      if (!shouldOverlaySubtitleBlock(previous, block)) continue;
+      block.x = previous.x;
+      block.y = previous.y;
+      overlaid = true;
+      break;
     }
+
+    if (!overlaid) {
+      if (block.hasPosition) {
+        positionExplicitBlock(&block, area, explicitPositionBottomLimit);
+        markRows(&occupied, block.y, block.height);
+      } else {
+        positionFlowBlock(&block, area, bottomLimit, &occupied);
+      }
+    }
+    positionedBlocks.push_back(blockIndex);
   }
 
   const CaptionStyleProfile captionStyle = getWindowsCaptionStyleProfile();
