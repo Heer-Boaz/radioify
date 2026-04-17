@@ -35,6 +35,18 @@ RADIOIFY_ASCII_COUNT(kInkMaxScale, 1280)      // fixed 8.8 maximum ink lift
 RADIOIFY_ASCII_SIGNAL_U8(kSignalStrengthFloor, 51)  // minimum FG/BG contrast mix
 RADIOIFY_ASCII_COUNT(kColorSaturation, 340)   // saturation scale, 256 == 1.0
 RADIOIFY_ASCII_LUMA_U8(kTemporalResetDelta, 48)  // RGB delta sum snap threshold
+RADIOIFY_ASCII_COUNT(kBgDominanceMaxDots, 4)  // only mixed cells where BG covers at least half the dot slots
+RADIOIFY_ASCII_SIGNAL_U8(kBgDominanceMinSignal, 128)  // minimum edge/luma signal before compensating BG dominance
+RADIOIFY_ASCII_LUMA_U8(kBgDominanceMaxGroupRange, 24)  // max luma range inside ink/BG groups for coherent edge cells
+RADIOIFY_ASCII_LUMA_U8(kBgDominanceMinInkLuma, 20)  // darkest allowed ink after BG-dominance contrast
+RADIOIFY_ASCII_LUMA_U8(kBgDominanceMinBgLuma, 44)  // final BG luma needed before it can visually overpower ink
+RADIOIFY_ASCII_LUMA_U8(kBgDominanceMinContrast, 32)  // minimum perceived final ink/BG contrast
+RADIOIFY_ASCII_LUMA_U8(kBgDominanceCoverageBonus, 40)  // extra contrast for sparse ink against dominant BG
+RADIOIFY_ASCII_SCALE_256(kBgDominanceBrightLeadScale, 48)  // extra contrast from BG luma lead
+RADIOIFY_ASCII_COUNT(kBgDominanceChromaDivisor, 6)  // RGB delta divisor added to perceived contrast
+RADIOIFY_ASCII_LUMA_U8(kBgDominanceMaxContrast, 80)  // cap for required perceived final contrast
+RADIOIFY_ASCII_LUMA_U8(kBgDominanceMaxInkDarken, 40)  // max final per-cell ink darkening
+RADIOIFY_ASCII_LUMA_U8(kBgDominanceMaxBgDim, 12)  // max final BG dimming when BG still overpowers ink
 
 // Edge/detail classification.
 RADIOIFY_ASCII_LUMA_U8(kDitherMaxEdge, 28)       // max Sobel magnitude for dither

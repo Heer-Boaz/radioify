@@ -66,6 +66,11 @@ FORCE_INLINE uint8_t rgbToY(uint8_t r, uint8_t g, uint8_t b) {
   return static_cast<uint8_t>(y > 255 ? 255 : y);
 }
 
+FORCE_INLINE uint32_t packRgb24(uint8_t r, uint8_t g, uint8_t b) {
+  return (static_cast<uint32_t>(r) << 16) |
+         (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
+}
+
 void setError(std::string* error, const char* message) {
   if (error) *error = message;
 }
@@ -244,6 +249,22 @@ FORCE_INLINE void applySaturationAroundLuma(uint8_t& r, uint8_t& g,
   b = static_cast<uint8_t>(
       std::clamp(y + scaleDelta256(static_cast<int>(b) - y, saturation256), 0,
                  255));
+}
+
+FORCE_INLINE void scaleColorToLuma(uint8_t& r, uint8_t& g, uint8_t& b, int y,
+                                   int targetY) {
+  targetY = std::clamp(targetY, 0, 255);
+  if (y <= 0) {
+    r = g = b = 0;
+    return;
+  }
+  int scale = (targetY * 256 + y / 2) / y;
+  r = static_cast<uint8_t>(
+      std::clamp((static_cast<int>(r) * scale + 128) >> 8, 0, 255));
+  g = static_cast<uint8_t>(
+      std::clamp((static_cast<int>(g) * scale + 128) >> 8, 0, 255));
+  b = static_cast<uint8_t>(
+      std::clamp((static_cast<int>(b) * scale + 128) >> 8, 0, 255));
 }
 
 FORCE_INLINE void compressShadowChroma(uint8_t& r, uint8_t& g, uint8_t& b,
@@ -982,6 +1003,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             int sumBgB = 0;
             int sumBgSourceBlue = 0;
             int bgCount = 0;
+            int inkLumMin = 255;
+            int inkLumMax = 0;
+            int bgLumMin = 255;
+            int bgLumMax = 0;
             int sumAllSourceBlue = 0;
             for (int i = 0; i < 8; ++i) {
               if (!validVals[i]) continue;
@@ -991,12 +1016,16 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 sumInkG += gVals[i];
                 sumInkB += bVals[i];
                 sumInkSourceBlue += sourceBlueVals[i];
+                inkLumMin = std::min<int>(inkLumMin, lumVals[i]);
+                inkLumMax = std::max<int>(inkLumMax, lumVals[i]);
                 ++inkCount;
               } else {
                 sumBgR += rVals[i];
                 sumBgG += gVals[i];
                 sumBgB += bVals[i];
                 sumBgSourceBlue += sourceBlueVals[i];
+                bgLumMin = std::min<int>(bgLumMin, lumVals[i]);
+                bgLumMax = std::max<int>(bgLumMax, lumVals[i]);
                 ++bgCount;
               }
             }
@@ -1071,6 +1100,8 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   std::swap(curB, bgB);
                   std::swap(curSourceBlue, bgSourceBlue);
                   std::swap(inkCount, bgCount);
+                  std::swap(inkLumMin, bgLumMin);
+                  std::swap(inkLumMax, bgLumMax);
                   bitmask = validMask ^ bitmask;
                   dotCount = validCount - dotCount;
                 }
@@ -1357,6 +1388,61 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                         (static_cast<uint32_t>(outBgG) << 8) |
                         static_cast<uint32_t>(outBgB);
                     scratch.prevBgValid[cellIndex] = 1;
+                  }
+                }
+              }
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageBgDominanceContrast) &&
+                  !useDither && cellEdgeMax >= kDitherMaxEdge &&
+                  signalStrength >= kBgDominanceMinSignal &&
+                  cellLumRange >= 8 && bgCount >= inkCount && bgCount > 0 &&
+                  inkCount > 0 && dotCount > 0 &&
+                  (inkLumMax - inkLumMin) <= kBgDominanceMaxGroupRange &&
+                  (bgLumMax - bgLumMin) <= kBgDominanceMaxGroupRange &&
+                  dotCount <= std::min(validCount / 2, kBgDominanceMaxDots)) {
+                int finalFgY = rgbToY(outR, outG, outB);
+                int finalBgY = rgbToY(outBgR, outBgG, outBgB);
+                if (finalBgY >= kBgDominanceMinBgLuma &&
+                    finalBgY > finalFgY) {
+                  int bgLead = finalBgY - finalFgY;
+                  int chromaGap =
+                      std::abs(static_cast<int>(outBgR) - outR) +
+                      std::abs(static_cast<int>(outBgG) - outG) +
+                      std::abs(static_cast<int>(outBgB) - outB);
+                  int perceivedGap =
+                      bgLead + chromaGap / std::max(1, kBgDominanceChromaDivisor);
+                  int coverageBonus =
+                      ((bgCount - inkCount) * kBgDominanceCoverageBonus +
+                       validCount / 2) /
+                      std::max(1, validCount);
+                  int brightBonus =
+                      (bgLead * kBgDominanceBrightLeadScale + 128) >> 8;
+                  int minContrast = std::min(
+                      kBgDominanceMaxContrast,
+                      kBgDominanceMinContrast + coverageBonus + brightBonus);
+                  if (perceivedGap < minContrast) {
+                    if constexpr (DebugMode) {
+                      if (debugStats) ++debugStats->bgDominanceContrastCount;
+                    }
+                    int needed = minContrast - perceivedGap;
+                    int bgDim =
+                        std::min(kBgDominanceMaxBgDim, (needed + 2) / 3);
+                    int darken =
+                        std::min(kBgDominanceMaxInkDarken, needed + bgDim);
+                    scaleColorToLuma(outR, outG, outB, finalFgY,
+                                     std::max(kBgDominanceMinInkLuma,
+                                              finalFgY - darken));
+                    scaleColorToLuma(outBgR, outBgG, outBgB, finalBgY,
+                                     std::max(kBgMinLuma, finalBgY - bgDim));
+                    if (cellIndex < scratch.prevFg.size()) {
+                      scratch.prevFg[cellIndex] = packRgb24(outR, outG, outB);
+                      scratch.prevFgValid[cellIndex] = 1;
+                    }
+                    if (cellIndex < scratch.prevBg.size()) {
+                      scratch.prevBg[cellIndex] =
+                          packRgb24(outBgR, outBgG, outBgB);
+                      scratch.prevBgValid[cellIndex] = 1;
+                    }
                   }
                 }
               }
