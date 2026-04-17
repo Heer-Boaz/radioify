@@ -1111,11 +1111,25 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               if (!useDither && bgCount > 0 && inkCount > 0) {
                 const int fgY = rgbToY(curR, curG, curB);
                 const int bgY = rgbToY(bgR, bgG, bgB);
-                const bool bgIsMinority =
+                // Strong contours belong in braille ink; promoting them to BG
+                // paints the whole terminal cell as a blocky edge tile.
+                const bool preserveEdgeInk =
+                    renderStageEnabled<DebugMode>(
+                        stageMask, ascii_debug::kStageEdgeInkPreserve) &&
+                    cellEdgeMax >= kDitherMaxEdge && cellLumRange >= 8;
+                const bool bgIsMinorityCandidate =
                     renderStageEnabled<DebugMode>(
                         stageMask, ascii_debug::kStageMinorityBgSwap) &&
                     bgCount < inkCount && bgCount <= kMinorityBgSwapMaxDots &&
                     signalStrength >= kMinorityBgSwapMinSignal;
+                const bool bgIsMinority =
+                    bgIsMinorityCandidate && !preserveEdgeInk;
+                if constexpr (DebugMode) {
+                  if (debugStats && bgIsMinorityCandidate &&
+                      preserveEdgeInk) {
+                    ++debugStats->edgeInkPreserveCount;
+                  }
+                }
                 const bool bgIsBrightFeature =
                     renderStageEnabled<DebugMode>(
                         stageMask, ascii_debug::kStageBrightBgSwap) &&

@@ -40,6 +40,7 @@ StructuredBuffer<uint2> HistoryBufferRead : register(t3);
 StructuredBuffer<uint> MetaBufferRead : register(t4);
 
 static const uint kBrailleBase = 0x2800;
+static const uint kMetaUseDither = 0x100u;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
 static const uint kMatrixBt709 = 0;
 static const uint kMatrixBt601 = 1;
@@ -633,8 +634,13 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (!useDither && bgCount > 0 && inkCount > 0) {
         float fgY = GetLuma(curFg);
         float bgY = GetLuma(curBg);
+        // Strong contours belong in braille ink; promoting them to BG paints
+        // the whole terminal cell as a blocky edge tile.
+        bool preserveEdgeInk =
+            cellEdgeMax >= kDitherMaxEdge && cellRange >= 8.0f;
         bool bgIsMinority =
-            bgCount < inkCount && bgCount <= kMinorityBgSwapMaxDots &&
+            !preserveEdgeInk && bgCount < inkCount &&
+            bgCount <= kMinorityBgSwapMaxDots &&
             signalStrength >= kMinorityBgSwapMinSignal;
         bool bgIsBrightFeature =
             bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
@@ -786,7 +792,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     uint meta = (uint)min(255.0f, signalStrength * 255.0f + 0.5f);
     if (useDither) {
-        meta |= 0x100u;
+        meta |= kMetaUseDither;
     }
     meta |= (dotCount & 0xFu) << 9;
     MetaBuffer[cellIndex] = meta;
@@ -822,7 +828,7 @@ void CSBgClamp(uint3 DTid : SV_DispatchThreadID) {
     uint cellIndex = DTid.y * outWidth + DTid.x;
     uint meta = MetaBufferRead[cellIndex];
     uint dotCount = (meta >> 9) & 0xFu;
-    bool useDither = (meta & 0x100u) != 0u;
+    bool useDither = (meta & kMetaUseDither) != 0u;
     float signalStrength = (float)(meta & 0xFFu) / 255.0f;
 
     AsciiCell cell = OutputBuffer[cellIndex];

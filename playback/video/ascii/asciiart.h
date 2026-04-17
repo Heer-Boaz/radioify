@@ -40,6 +40,7 @@ enum StageMask : uint32_t {
   kStageFullMaskBgContrast = 1u << 12,
   kStageEdgeBgClamp = 1u << 13,
   kStageCellBackground = 1u << 14,
+  kStageEdgeInkPreserve = 1u << 15,
 };
 
 constexpr uint32_t kAllStages =
@@ -48,7 +49,7 @@ constexpr uint32_t kAllStages =
     kStageDetailBoost | kStageInkLumaFloor | kStageInkSaturation |
     kStageForegroundTemporal | kStageBgLumaFloor |
     kStageBackgroundTemporal | kStageFullMaskBgContrast |
-    kStageEdgeBgClamp | kStageCellBackground;
+    kStageEdgeBgClamp | kStageCellBackground | kStageEdgeInkPreserve;
 
 struct RenderOptions {
   uint32_t stageMask = kAllStages;
@@ -63,6 +64,7 @@ struct RenderStats {
   uint64_t minorityBgSwapCount = 0;
   uint64_t brightBgSwapCount = 0;
   uint64_t edgeBgToneCount = 0;
+  uint64_t edgeInkPreserveCount = 0;
   uint64_t signalDampenCount = 0;
   uint64_t detailBoostCount = 0;
   uint64_t inkLumaFloorCount = 0;

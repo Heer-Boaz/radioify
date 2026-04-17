@@ -67,7 +67,7 @@ void printUsage() {
       << "  --fixture <all|circle-checker|phone-edge|thin-lines>\n"
       << "  --variant <all|current|ink-only|no-dither|no-edge-detect|"
          "no-bg-swaps|no-minority-bg-swap|no-bright-bg-swap|"
-         "no-edge-bg-tone|no-signal-dampen|no-detail-boost|"
+         "no-edge-ink-preserve|no-edge-bg-tone|no-signal-dampen|no-detail-boost|"
          "no-temporal|no-bg-clamp|no-bg-luma-floor|no-bg-polish>\n"
       << "  --out-dir <path>\n"
       << "  --width <pixels>\n"
@@ -310,7 +310,7 @@ std::vector<std::string_view> selectedFixtures(const HarnessConfig& config) {
   return out;
 }
 
-std::array<Variant, 15> variants() {
+std::array<Variant, 16> variants() {
   using namespace ascii_debug;
   uint32_t all = kAllStages;
   return {{
@@ -321,6 +321,7 @@ std::array<Variant, 15> variants() {
       {"no-bg-swaps", all & ~kStageMinorityBgSwap & ~kStageBrightBgSwap},
       {"no-minority-bg-swap", all & ~kStageMinorityBgSwap},
       {"no-bright-bg-swap", all & ~kStageBrightBgSwap},
+      {"no-edge-ink-preserve", all & ~kStageEdgeInkPreserve},
       {"no-edge-bg-tone", all & ~kStageEdgeBgTone},
       {"no-signal-dampen", all & ~kStageSignalDampen},
       {"no-detail-boost", all & ~kStageDetailBoost},
@@ -331,7 +332,7 @@ std::array<Variant, 15> variants() {
       {"no-bg-polish", all & ~kStageBgLumaFloor &
                            ~kStageBackgroundTemporal &
                            ~kStageFullMaskBgContrast & ~kStageEdgeBgTone &
-                           ~kStageEdgeBgClamp},
+                           ~kStageEdgeInkPreserve & ~kStageEdgeBgClamp},
       {"structure-no-bg", all & ~kStageCellBackground & ~kStageDither},
   }};
 }
@@ -590,7 +591,8 @@ double averageDots(const ascii_debug::RenderStats& stats) {
 void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
          "dither_cells,edge_cells,minority_bg_swaps,bright_bg_swaps,"
-         "edge_bg_toned,signal_dampened,detail_boosted,ink_lifted,bg_lifted,"
+         "edge_ink_preserved,edge_bg_toned,signal_dampened,detail_boosted,"
+         "ink_lifted,bg_lifted,"
          "fg_temporal,bg_temporal,fullmask_bg_contrast,bg_clamped\n";
 }
 
@@ -604,7 +606,8 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << std::setprecision(3) << averageDots(stats) << std::setprecision(2)
       << ',' << stats.ditherCellCount << ',' << stats.edgeCellCount << ','
       << stats.minorityBgSwapCount << ',' << stats.brightBgSwapCount << ','
-      << stats.edgeBgToneCount << ',' << stats.signalDampenCount << ','
+      << stats.edgeInkPreserveCount << ',' << stats.edgeBgToneCount << ','
+      << stats.signalDampenCount << ','
       << stats.detailBoostCount << ',' << stats.inkLumaFloorCount << ','
       << stats.bgLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','
       << stats.bgTemporalBlendCount << ','
@@ -642,6 +645,7 @@ void renderVariant(const HarnessConfig& config, std::string_view fixtureName,
             << std::setprecision(2) << averageDots(stats)
             << "  swaps=" << (stats.minorityBgSwapCount +
                                stats.brightBgSwapCount)
+            << "  preserve=" << stats.edgeInkPreserveCount
             << "  clamp=" << stats.edgeBgClampCount << '\n';
 }
 
