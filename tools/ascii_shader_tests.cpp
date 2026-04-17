@@ -91,7 +91,7 @@ void printUsage() {
       << "ascii_shader_tests [options]\n"
       << "  --fixture <all|circle-checker|phone-edge|thin-lines>\n"
       << "  --variant <all|current|ink-only|no-dither|no-edge-detect|"
-         "no-bg-swaps|no-bright-bg-swap|no-edge-bg-tone|"
+         "no-bg-swaps|no-bright-bg-swap|"
          "no-signal-dampen|no-detail-boost|no-temporal|"
          "no-bg-luma-floor|no-bg-polish>\n"
       << "  --out-dir <path>\n"
@@ -335,7 +335,7 @@ std::vector<std::string_view> selectedFixtures(const HarnessConfig& config) {
   return out;
 }
 
-std::array<Variant, 13> variants() {
+std::array<Variant, 12> variants() {
   using namespace ascii_debug;
   uint32_t all = kAllStages;
   return {{
@@ -345,7 +345,6 @@ std::array<Variant, 13> variants() {
       {"no-edge-detect", all & ~kStageEdgeDetect},
       {"no-bg-swaps", all & ~kStageBrightBgSwap},
       {"no-bright-bg-swap", all & ~kStageBrightBgSwap},
-      {"no-edge-bg-tone", all & ~kStageEdgeBgTone},
       {"no-signal-dampen", all & ~kStageSignalDampen},
       {"no-detail-boost", all & ~kStageDetailBoost},
       {"no-temporal", all & ~kStageForegroundTemporal &
@@ -353,7 +352,7 @@ std::array<Variant, 13> variants() {
       {"no-bg-luma-floor", all & ~kStageBgLumaFloor},
       {"no-bg-polish", all & ~kStageBgLumaFloor &
                            ~kStageBackgroundTemporal &
-                           ~kStageFullMaskBgContrast & ~kStageEdgeBgTone},
+                           ~kStageFullMaskBgContrast},
       {"structure-no-bg", all & ~kStageCellBackground & ~kStageDither},
   }};
 }
@@ -675,7 +674,7 @@ double averageDots(const ascii_debug::RenderStats& stats) {
 void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
          "dither_cells,edge_cells,bright_bg_swaps,"
-         "edge_bg_toned,signal_dampened,detail_boosted,"
+         "signal_dampened,detail_boosted,"
          "ink_lifted,bg_lifted,"
          "fg_temporal,bg_temporal,fullmask_bg_contrast\n";
 }
@@ -689,7 +688,7 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << percent(stats.bgCellCount, stats.cellCount) << ','
       << std::setprecision(3) << averageDots(stats) << std::setprecision(2)
       << ',' << stats.ditherCellCount << ',' << stats.edgeCellCount << ','
-      << stats.brightBgSwapCount << ',' << stats.edgeBgToneCount << ','
+      << stats.brightBgSwapCount << ','
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
       << stats.inkLumaFloorCount << ','
       << stats.bgLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','

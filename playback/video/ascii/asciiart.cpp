@@ -246,35 +246,6 @@ FORCE_INLINE void applySaturationAroundLuma(uint8_t& r, uint8_t& g,
                  255));
 }
 
-FORCE_INLINE uint8_t blendByteToward(uint8_t from, uint8_t to,
-                                     int alpha256) {
-  int delta = static_cast<int>(to) - static_cast<int>(from);
-  int rounded = delta * alpha256 + (delta >= 0 ? 128 : -128);
-  return static_cast<uint8_t>(
-      std::clamp(static_cast<int>(from) + rounded / 256, 0, 255));
-}
-
-FORCE_INLINE void toneEdgeBackground(uint8_t& bgR, uint8_t& bgG,
-                                     uint8_t& bgB, uint8_t fgR, uint8_t fgG,
-                                     uint8_t fgB, int toneFactor256) {
-  int blend = kEdgeBgToneMinBlend +
-              ((kEdgeBgToneMaxBlend - kEdgeBgToneMinBlend) *
-                   toneFactor256 +
-               128) /
-                  256;
-  bgR = blendByteToward(bgR, fgR, blend);
-  bgG = blendByteToward(bgG, fgG, blend);
-  bgB = blendByteToward(bgB, fgB, blend);
-
-  int saturation =
-      kEdgeBgToneMaxSaturation -
-      ((kEdgeBgToneMaxSaturation - kEdgeBgToneMinSaturation) *
-           toneFactor256 +
-       128) /
-          256;
-  applySaturationAroundLuma(bgR, bgG, bgB, rgbToY(bgR, bgG, bgB), saturation);
-}
-
 FORCE_INLINE void compressShadowChroma(uint8_t& r, uint8_t& g, uint8_t& b,
                                        int sourceBlueConfidence = 0) {
   int y =
@@ -1000,8 +971,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t outBgR = 0;
             uint8_t outBgG = 0;
             uint8_t outBgB = 0;
-            bool toneEdgeBg = false;
-            int edgeBgToneFactor = 0;
             bool hasBg = false;
             int sumInkR = 0;
             int sumInkG = 0;
@@ -1104,25 +1073,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   std::swap(inkCount, bgCount);
                   bitmask = validMask ^ bitmask;
                   dotCount = validCount - dotCount;
-                }
-              }
-
-              // Terminal BG fills the whole cell; edge detail must stay in
-              // braille ink, so bright BG around contours is toned down.
-              if (renderStageEnabled<DebugMode>(
-                      stageMask, ascii_debug::kStageEdgeBgTone) &&
-                  !useDither && cellEdgeMax >= kDitherMaxEdge &&
-                  cellLumRange >= 8 && dotCount > 0 &&
-                  dotCount < validCount && bgCount <= inkCount) {
-                int fgY = rgbToY(curR, curG, curB);
-                int bgY = rgbToY(bgR, bgG, bgB);
-                int bgBias = 10 + ((signalStrength + 16) >> 5);
-                if (bgY >= fgY - bgBias) {
-                  toneEdgeBg = true;
-                  edgeBgToneFactor =
-                      ((inkCount - bgCount) * 256 + validCount / 2) /
-                      std::max(1, validCount);
-                  edgeBgToneFactor = std::clamp(edgeBgToneFactor, 0, 256);
                 }
               }
 
@@ -1406,22 +1356,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                         (static_cast<uint32_t>(outBgR) << 16) |
                         (static_cast<uint32_t>(outBgG) << 8) |
                         static_cast<uint32_t>(outBgB);
-                    scratch.prevBgValid[cellIndex] = 1;
-                  }
-                }
-              }
-              if (toneEdgeBg) {
-                if constexpr (DebugMode) {
-                  if (debugStats) ++debugStats->edgeBgToneCount;
-                }
-                toneEdgeBackground(outBgR, outBgG, outBgB, outR, outG, outB,
-                                   edgeBgToneFactor);
-                if (cellIndex < scratch.prevBg.size()) {
-                  scratch.prevBg[cellIndex] =
-                      (static_cast<uint32_t>(outBgR) << 16) |
-                      (static_cast<uint32_t>(outBgG) << 8) |
-                      static_cast<uint32_t>(outBgB);
-                  if (cellIndex < scratch.prevBgValid.size()) {
                     scratch.prevBgValid[cellIndex] = 1;
                   }
                 }

@@ -43,13 +43,6 @@ RADIOIFY_ASCII_LUMA_U8(kBrightBgSwapDelta, 12)   // BG luma lead needed to swap
 RADIOIFY_ASCII_COUNT(kBrightBgSwapMaxDots, 4)    // bright-feature dot count limit
 RADIOIFY_ASCII_SIGNAL_U8(kBrightBgSwapMinSignal, 128)  // signal needed to swap
 
-// Edge background attenuation. These keep BG present without letting a full
-// terminal cell rectangle overpower braille edge ink.
-RADIOIFY_ASCII_SCALE_256(kEdgeBgToneMinBlend, 80)       // BG->FG blend at weak tone
-RADIOIFY_ASCII_SCALE_256(kEdgeBgToneMaxBlend, 144)      // BG->FG blend at strong tone
-RADIOIFY_ASCII_SCALE_256(kEdgeBgToneMaxSaturation, 192) // max BG chroma keep
-RADIOIFY_ASCII_SCALE_256(kEdgeBgToneMinSaturation, 128) // min BG chroma keep
-
 // Shadow chroma protection.
 RADIOIFY_ASCII_LUMA_U8(kShadowSatStartLuma, 16)
 RADIOIFY_ASCII_LUMA_U8(kShadowSatFullLuma, 96)

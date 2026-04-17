@@ -113,15 +113,6 @@ float3 ApplySaturationAroundLuma(float3 rgb, float y255, float saturation) {
     return saturate(gray.xxx + (rgb - gray.xxx) * saturation);
 }
 
-float3 ToneEdgeBackground(float3 bg, float3 fg, float toneFactor) {
-    float blend = lerp(kEdgeBgToneMinBlend, kEdgeBgToneMaxBlend, toneFactor);
-    bg = lerp(bg, fg, blend);
-    float saturation = lerp(kEdgeBgToneMaxSaturation,
-                            kEdgeBgToneMinSaturation,
-                            toneFactor);
-    return ApplySaturationAroundLuma(bg, GetLuma(bg), saturation);
-}
-
 float3 CompressShadowChroma(float3 rgb, float sourceBlueConfidence) {
     float y = GetLuma(rgb);
     float keep = GetShadowSaturation(y);
@@ -607,8 +598,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float signalStrength = max(edgeSig, lumSig);
     float blendStrength = kSignalStrengthFloor +
                           (1.0f - kSignalStrengthFloor) * signalStrength;
-    bool toneEdgeBg = false;
-    float edgeBgToneFactor = 0.0f;
 
     if (!useDither && bgCount > 0 && inkCount > 0) {
         float fgY = GetLuma(curFg);
@@ -632,17 +621,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
             bitmask = (~bitmask) & 0xffu;
             dotCount = 8u - dotCount;
-        }
-    }
-
-    // Terminal BG fills the whole cell; edge detail must stay in braille ink,
-    // so bright BG around contours is toned down.
-    if (!useDither && cellEdgeMax >= kDitherMaxEdge && cellRange >= 8.0f &&
-        dotCount > 0u && dotCount < 8u && bgCount <= inkCount) {
-        float bgBias = 10.0f + signalStrength * 8.0f;
-        if (GetLuma(curBg) >= GetLuma(curFg) - bgBias) {
-            toneEdgeBg = true;
-            edgeBgToneFactor = saturate((float)(inkCount - bgCount) / 8.0f);
         }
     }
 
@@ -755,10 +733,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             float shift = dir * need / 255.0f;
             curBg = saturate(curBg + shift);
         }
-    }
-
-    if (toneEdgeBg) {
-        curBg = ToneEdgeBackground(curBg, curFg, edgeBgToneFactor);
     }
 
     // Write back history for the next frame
