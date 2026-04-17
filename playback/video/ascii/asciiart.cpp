@@ -197,6 +197,9 @@ constexpr uint8_t kColorLift = 0;
 constexpr uint8_t kInkMinLuma = 40;   // Reduced to allow dark details
 constexpr uint8_t kBgMinLuma = 10;    // Reduced
 constexpr int kInkMaxScale = 1280;  // Verhoogd voor meer bereik
+constexpr int kBrightBgSwapDelta = 12;
+constexpr int kBrightBgSwapMaxDots = 4;
+constexpr int kBrightBgSwapMinSignal = 128;
 constexpr int kTemporalResetDelta = 48;  // Snellere scene change detectie
 constexpr int kColorSaturation = 340;    // Iets meer saturatie
 constexpr int kShadowSatStartLuma = 16;
@@ -836,6 +839,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t sourceBlueVals[8];
             uint8_t bitIds[8];
             uint8_t validVals[8];
+            int validMask = 0;
             int dotIndex = 0;
 
             // Verzamel lokale statistieken voor adaptive thresholding
@@ -885,6 +889,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                     continue;
                   }
                 }
+                validMask |= (1 << bitIds[dotIndex]);
 
                 // Lokale statistieken voor deze cel
                 if (edgeVals[dotIndex] > cellEdgeMax)
@@ -983,6 +988,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             if (avgLumDiff > 255) avgLumDiff = 255;
 
             if (!useLocalThreshold) {
+              useDither = true;
               uint8_t coverage =
                   kInkLevelFromLum[static_cast<size_t>(rawDiff)];
               int ditherMask = 0;
@@ -1000,10 +1006,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             while (tempMask) {
               dotCount += (tempMask & 1);
               tempMask >>= 1;
-            }
-
-            if (cellIndex < scratch.prevMask.size()) {
-              scratch.prevMask[cellIndex] = static_cast<uint8_t>(bitmask);
             }
 
             uint8_t prevBgR = 0;
@@ -1102,6 +1104,23 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
               int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
               int signalStrength = std::max(edgeSig, lumSig);
+
+              if (!useDither && bgCount > 0 && inkCount > 0 &&
+                  bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
+                  signalStrength >= kBrightBgSwapMinSignal) {
+                int fgY = rgbToY(curR, curG, curB);
+                int bgY = rgbToY(bgR, bgG, bgB);
+                if (bgY >= fgY + kBrightBgSwapDelta) {
+                  std::swap(curR, bgR);
+                  std::swap(curG, bgG);
+                  std::swap(curB, bgB);
+                  std::swap(curSourceBlue, bgSourceBlue);
+                  std::swap(inkCount, bgCount);
+                  bitmask = validMask ^ bitmask;
+                  dotCount = validCount - dotCount;
+                }
+              }
+
               if (cellIndex < scratch.cellDotCount.size()) {
                 scratch.cellDotCount[cellIndex] =
                     static_cast<uint8_t>(dotCount);
@@ -1364,6 +1383,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               if (cellIndex < scratch.prevMask.size()) {
                 scratch.prevMask[cellIndex] = 0;
               }
+            }
+            if (colorCount > 0 && cellIndex < scratch.prevMask.size()) {
+              scratch.prevMask[cellIndex] = static_cast<uint8_t>(bitmask);
             }
 
             AsciiArt::AsciiCell cell{};

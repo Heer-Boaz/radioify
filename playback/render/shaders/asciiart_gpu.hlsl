@@ -57,6 +57,9 @@ static const int kTemporalResetDelta = 48;
 static const int kInkMinLuma = 40;  // Reduced from 110 to allow dark details
 static const int kBgMinLuma = 10;   // Reduced from 20
 static const int kInkMaxScale = 1280;
+static const float kBrightBgSwapDelta = 12.0f;
+static const int kBrightBgSwapMaxDots = 4;
+static const float kBrightBgSwapMinSignal = 0.5f;
 static const float kShadowSatStartLuma = 16.0f;
 static const float kShadowSatFullLuma = 96.0f;
 static const float kShadowMinSaturation = 24.0f / 256.0f;
@@ -629,6 +632,26 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float signalStrength = max(edgeSig, lumSig);
     float blendStrength = kSignalStrengthFloor +
                           (1.0f - kSignalStrengthFloor) * signalStrength;
+
+    if (!useDither && bgCount > 0 && inkCount > 0 &&
+        bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
+        signalStrength >= kBrightBgSwapMinSignal &&
+        GetLuma(curBg) >= GetLuma(curFg) + kBrightBgSwapDelta) {
+        float3 swapColor = curFg;
+        curFg = curBg;
+        curBg = swapColor;
+
+        float swapBlueConfidence = curFgBlueConfidence;
+        curFgBlueConfidence = curBgBlueConfidence;
+        curBgBlueConfidence = swapBlueConfidence;
+
+        int swapCount = inkCount;
+        inkCount = bgCount;
+        bgCount = swapCount;
+
+        bitmask = (~bitmask) & 0xffu;
+        dotCount = 8u - dotCount;
+    }
 
     // Dampening (Noise Hiding):
     // If signalStrength is low, we interpolate curFg towards curBg.
