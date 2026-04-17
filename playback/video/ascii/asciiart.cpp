@@ -592,6 +592,41 @@ FORCE_INLINE int median9(int v[9]) {
   return v[4];
 }
 
+FORCE_INLINE void sampleEdgeCarrierColor(const std::vector<uint32_t>& scaledRGBA,
+                                         int scaledW, int outW, int outH,
+                                         int cx, int cy, uint8_t* outR,
+                                         uint8_t* outG, uint8_t* outB) {
+  int sumR = 0;
+  int sumG = 0;
+  int sumB = 0;
+  int weightSum = 0;
+  for (int oy = -1; oy <= 1; ++oy) {
+    int ncy = std::clamp(cy + oy, 0, outH - 1);
+    int baseY = ncy * 4;
+    for (int ox = -1; ox <= 1; ++ox) {
+      int ncx = std::clamp(cx + ox, 0, outW - 1);
+      int baseX = ncx * 2;
+      int weight =
+          (ox == 0 && oy == 0) ? 4 : ((ox == 0 || oy == 0) ? 2 : 1);
+      for (int dy = 0; dy < 4; ++dy) {
+        const uint32_t* row =
+            scaledRGBA.data() + static_cast<size_t>(baseY + dy) * scaledW +
+            baseX;
+        for (int dx = 0; dx < 2; ++dx) {
+          uint32_t px = row[dx];
+          sumR += static_cast<int>(px & 0xFF) * weight;
+          sumG += static_cast<int>((px >> 8) & 0xFF) * weight;
+          sumB += static_cast<int>((px >> 16) & 0xFF) * weight;
+          weightSum += weight;
+        }
+      }
+    }
+  }
+  *outR = static_cast<uint8_t>((sumR + weightSum / 2) / weightSum);
+  *outG = static_cast<uint8_t>((sumG + weightSum / 2) / weightSum);
+  *outB = static_cast<uint8_t>((sumB + weightSum / 2) / weightSum);
+}
+
 struct BrailleFastScratch {
   int srcW = 0;
   int srcH = 0;
@@ -1119,6 +1154,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   (bgCount > 0 ? sumBgSourceBlue : sumAllSourceBlue) /
                   (bgCount > 0 ? bgCount : colorCount);
 
+              if (useEdgeInkMask) {
+                sampleEdgeCarrierColor(scratch.scaledRGBA, scaledW, outW, outH,
+                                       cx, cy, &bgR, &bgG, &bgB);
+                bgSourceBlue = sumAllSourceBlue / colorCount;
+              }
+
               // Intelligent Contrast Management
               // This system dynamically adjusts contrast based on the "Signal Strength" of the cell.
               // Goal:
@@ -1201,13 +1242,21 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   // push the background color below zero (black), losing context.
                   int scaleBg = 256 + (boost >> 3); // 256 to 288
                   
-                  curR = static_cast<uint8_t>(std::clamp(cR + (dR * scaleFg >> 8), 0, 255));
-                  curG = static_cast<uint8_t>(std::clamp(cG + (dG * scaleFg >> 8), 0, 255));
-                  curB = static_cast<uint8_t>(std::clamp(cB + (dB * scaleFg >> 8), 0, 255));
+                  curR = static_cast<uint8_t>(
+                      std::clamp(cR + (dR * scaleFg >> 8), 0, 255));
+                  curG = static_cast<uint8_t>(
+                      std::clamp(cG + (dG * scaleFg >> 8), 0, 255));
+                  curB = static_cast<uint8_t>(
+                      std::clamp(cB + (dB * scaleFg >> 8), 0, 255));
                   
-                  bgR = static_cast<uint8_t>(std::clamp(cR - (dR * scaleBg >> 8), 0, 255));
-                  bgG = static_cast<uint8_t>(std::clamp(cG - (dG * scaleBg >> 8), 0, 255));
-                  bgB = static_cast<uint8_t>(std::clamp(cB - (dB * scaleBg >> 8), 0, 255));
+                  if (!useEdgeInkMask) {
+                    bgR = static_cast<uint8_t>(
+                        std::clamp(cR - (dR * scaleBg >> 8), 0, 255));
+                    bgG = static_cast<uint8_t>(
+                        std::clamp(cG - (dG * scaleBg >> 8), 0, 255));
+                    bgB = static_cast<uint8_t>(
+                        std::clamp(cB - (dB * scaleBg >> 8), 0, 255));
+                  }
               }
 
               int curY =

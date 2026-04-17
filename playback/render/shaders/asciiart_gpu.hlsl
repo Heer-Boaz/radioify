@@ -355,6 +355,11 @@ struct InputSample {
     float blueSignal;
 };
 
+struct CarrierSample {
+    float3 rgb;
+    float sourceBlueConfidence;
+};
+
 InputSample SampleInput(float2 uv) {
     float2 srcUv = RotateInputUV(uv);
     InputSample sample;
@@ -403,6 +408,36 @@ InputSample SampleInput(float2 uv) {
 
     sample.rgb = rgb;
     return sample;
+}
+
+CarrierSample SampleEdgeCarrierCell(uint cellX, uint cellY) {
+    CarrierSample carrier;
+    carrier.rgb = float3(0.0f, 0.0f, 0.0f);
+    carrier.sourceBlueConfidence = 0.0f;
+    float weightSum = 0.0f;
+
+    [unroll]
+    for (int oy = -1; oy <= 1; ++oy) {
+        int y = clamp((int)cellY + oy, 0, (int)outHeight - 1);
+        [unroll]
+        for (int ox = -1; ox <= 1; ++ox) {
+            int x = clamp((int)cellX + ox, 0, (int)outWidth - 1);
+            float weight = (ox == 0 && oy == 0) ? 4.0f :
+                           ((ox == 0 || oy == 0) ? 2.0f : 1.0f);
+            float2 uv = (float2((float)x, (float)y) + 0.5f) /
+                        float2((float)outWidth, (float)outHeight);
+            InputSample sample = SampleInput(uv);
+            carrier.rgb += sample.rgb * weight;
+            carrier.sourceBlueConfidence +=
+                GetSourceBlueConfidence(sample.blueSignal,
+                                        sample.chromaSignal) * weight;
+            weightSum += weight;
+        }
+    }
+
+    carrier.rgb /= weightSum;
+    carrier.sourceBlueConfidence /= weightSum;
+    return carrier;
 }
 
 struct DotInfo {
@@ -655,6 +690,12 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float curBgBlueConfidence =
         (bgCount > 0) ? (sumBgBlueConfidence / bgCount)
                       : (sumAllBlueConfidence / 8.0f);
+
+    if (useEdgeInkMask) {
+        CarrierSample carrier = SampleEdgeCarrierCell(DTid.x, DTid.y);
+        curBg = carrier.rgb;
+        curBgBlueConfidence = carrier.sourceBlueConfidence;
+    }
 
     // Color Lift: Ensure colors aren't completely black to maintain some visibility.
     // Currently set to 0 to allow true black (zwart-zwart).
