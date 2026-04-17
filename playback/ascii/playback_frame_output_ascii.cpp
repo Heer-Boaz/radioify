@@ -157,6 +157,17 @@ bool cpuRenderFallback(const playback_frame_output::AsciiModePrepareInput& input
   return false;
 }
 
+std::pair<int, int> computeAsciiOutputSizeWithInset(int maxWidth,
+                                                    int maxHeight,
+                                                    int srcW,
+                                                    int srcH,
+                                                    int horizontalInset) {
+  int maxOutW = std::max(1, maxWidth - std::max(0, horizontalInset));
+  AsciiArtLayout fitted =
+      fitAsciiArtLayout(srcW, srcH, maxOutW, std::max(1, maxHeight));
+  return std::pair<int, int>(fitted.width, fitted.height);
+}
+
 }  // namespace
 
 namespace playback_frame_output {
@@ -201,10 +212,12 @@ std::pair<int, int> computeAsciiPlaybackTargetSize(int width, int height,
 
 std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
                                           int srcW, int srcH) {
-  int maxOutW = std::max(1, maxWidth - 8);
-  AsciiArtLayout fitted =
-      fitAsciiArtLayout(srcW, srcH, maxOutW, std::max(1, maxHeight));
-  return std::pair<int, int>(fitted.width, fitted.height);
+  return computeAsciiOutputSizeWithInset(maxWidth, maxHeight, srcW, srcH, 8);
+}
+
+std::pair<int, int> computeTightAsciiOutputSize(int maxWidth, int maxHeight,
+                                                int srcW, int srcH) {
+  return computeAsciiOutputSizeWithInset(maxWidth, maxHeight, srcW, srcH, 0);
 }
 
 bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {

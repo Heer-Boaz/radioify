@@ -219,7 +219,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     asciiInput.width = width;
     asciiInput.maxHeight = maxHeight;
     asciiInput.computeAsciiOutputSize =
-        playback_frame_output::computeAsciiOutputSize;
+        inputs.tightAsciiLayout
+            ? playback_frame_output::computeTightAsciiOutputSize
+            : playback_frame_output::computeAsciiOutputSize;
     asciiInput.frame = frame;
     asciiInput.art = &art;
     asciiInput.gpuRenderer = &gpuRenderer;

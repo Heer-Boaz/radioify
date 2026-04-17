@@ -46,6 +46,7 @@ struct PlaybackScreenRenderInputs {
   bool allowAsciiCpuFallback = false;
   bool useWindowPresenter = false;
   bool overlayVisibleNow = false;
+  bool tightAsciiLayout = false;
   bool clearHistory = false;
   bool frameChanged = false;
   bool localSeekRequested = false;

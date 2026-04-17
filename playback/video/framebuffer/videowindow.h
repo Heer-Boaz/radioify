@@ -145,6 +145,9 @@ private:
     bool EnterPictureInPicture();
     bool ExitPictureInPicture();
     LRESULT HitTestPictureInPicture(int x, int y) const;
+    int PictureInPictureResizeBorderPx() const;
+    int PictureInPictureVisualBorderPx() const;
+    void DrawPictureInPictureBorder(ID3D11DeviceContext* context);
     UINT TextGridDpi() const;
     SIZE TextGridCellSize() const;
     bool EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,

@@ -2,6 +2,7 @@
 #include "timing_log.h"
 #include "gpu_shared.h"
 #include "videowindow_internal.h"
+#include <d3d11_1.h>
 #include <dxgi1_3.h>
 #include <windowsx.h>
 #include <algorithm>
@@ -937,7 +938,7 @@ SIZE VideoWindow::PictureInPictureMinimumSize() const {
 
 int VideoWindow::PictureInPictureInteractiveTop() const {
     if (m_width <= 0 || m_height <= 0) return 0;
-    const int edge = std::clamp(std::min(m_width, m_height) / 18, 8, 18);
+    const int edge = PictureInPictureResizeBorderPx();
     int top = m_height -
               std::max(48, static_cast<int>(std::lround(m_height * 0.22)));
     if (m_pictureInPictureTextMode.load(std::memory_order_relaxed)) {
@@ -954,6 +955,51 @@ int VideoWindow::PictureInPictureInteractiveTop() const {
                                      std::lround(m_height * 0.42)));
     }
     return std::clamp(top, 0, m_height);
+}
+
+int VideoWindow::PictureInPictureResizeBorderPx() const {
+    UINT dpi = 96;
+    if (m_hWnd) {
+        dpi = GetDpiForWindow(m_hWnd);
+    }
+    return std::clamp(static_cast<int>(MulDiv(6, static_cast<int>(dpi), 96)),
+                      4, 10);
+}
+
+int VideoWindow::PictureInPictureVisualBorderPx() const {
+    UINT dpi = 96;
+    if (m_hWnd) {
+        dpi = GetDpiForWindow(m_hWnd);
+    }
+    return std::clamp(static_cast<int>(MulDiv(1, static_cast<int>(dpi), 96)),
+                      1, 2);
+}
+
+void VideoWindow::DrawPictureInPictureBorder(ID3D11DeviceContext* context) {
+    if (!m_pictureInPicture.load(std::memory_order_relaxed) || !context ||
+        !m_renderTargetView || m_width <= 1 || m_height <= 1) {
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext1> context1;
+    if (FAILED(context->QueryInterface(IID_PPV_ARGS(&context1))) ||
+        !context1) {
+        return;
+    }
+
+    const LONG border = static_cast<LONG>(PictureInPictureVisualBorderPx());
+    const D3D11_RECT rects[] = {
+        {0, 0, static_cast<LONG>(m_width), border},
+        {0, static_cast<LONG>(m_height) - border,
+         static_cast<LONG>(m_width), static_cast<LONG>(m_height)},
+        {0, border, border, static_cast<LONG>(m_height) - border},
+        {static_cast<LONG>(m_width) - border, border,
+         static_cast<LONG>(m_width), static_cast<LONG>(m_height) - border},
+    };
+    const float color[4] = {0.20f, 0.22f, 0.25f, 1.0f};
+    context1->ClearView(
+        m_renderTargetView.Get(), color, rects,
+        static_cast<UINT>(sizeof(rects) / sizeof(rects[0])));
 }
 
 void VideoWindow::AdjustPictureInPictureSizingRect(WPARAM edge,
@@ -1081,12 +1127,7 @@ LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
     if (!m_pictureInPicture.load(std::memory_order_relaxed)) return HTCLIENT;
     if (m_width <= 0 || m_height <= 0) return HTCAPTION;
 
-    const int edge = std::clamp(std::min(m_width, m_height) / 18, 8, 18);
-    if (x >= 0 && x < m_width && y >= 0 && y < m_height &&
-        y >= PictureInPictureInteractiveTop()) {
-        return HTCLIENT;
-    }
-
+    const int edge = PictureInPictureResizeBorderPx();
     const bool left = x >= 0 && x < edge;
     const bool right = x >= m_width - edge && x < m_width;
     const bool top = y >= 0 && y < edge;
@@ -1100,6 +1141,11 @@ LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
     if (right) return HTRIGHT;
     if (top) return HTTOP;
     if (bottom) return HTBOTTOM;
+
+    if (x >= 0 && x < m_width && y >= 0 && y < m_height &&
+        y >= PictureInPictureInteractiveTop()) {
+        return HTCLIENT;
+    }
 
     const int reservedBottom =
         std::max(48, static_cast<int>(std::lround(m_height * 0.22)));
@@ -2117,6 +2163,7 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     context->Draw(4, 0);
     DrawOverlay(ui);
 #endif
+    DrawPictureInPictureBorder(context.Get());
     frameCache.MarkFrameInFlight(context.Get());
 
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -2685,6 +2732,7 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
 
     context->Draw(4, 0);
     DrawOverlay(ui);
+    DrawPictureInPictureBorder(context.Get());
     frameCache.MarkFrameInFlight(context.Get());
 
 #if RADIOIFY_ENABLE_TIMING_LOG

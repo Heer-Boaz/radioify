@@ -371,6 +371,7 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     context->PSSetShaderResources(0, 2, nullSrvs);
     ID3D11Buffer* nullBuffers[1] = {nullptr};
     context->PSSetConstantBuffers(0, 1, nullBuffers);
+    DrawPictureInPictureBorder(context.Get());
 
     lock.unlock();
     if (!swapChain) return;

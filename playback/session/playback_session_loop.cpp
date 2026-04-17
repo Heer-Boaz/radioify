@@ -303,6 +303,7 @@ struct PlaybackLoopRunner::Impl {
     inputs.windowActive = false;
     inputs.useWindowPresenter = false;
     inputs.overlayVisibleNow = overlayVisible();
+    inputs.tightAsciiLayout = true;
     inputs.clearHistory = false;
     inputs.frameChanged = frameChanged;
     inputs.allowAsciiCpuFallback = false;

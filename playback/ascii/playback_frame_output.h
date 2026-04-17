@@ -50,6 +50,8 @@ std::pair<int, int> computeAsciiPlaybackTargetSize(int width, int height,
 
 std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
                                           int srcW, int srcH);
+std::pair<int, int> computeTightAsciiOutputSize(int maxWidth, int maxHeight,
+                                                int srcW, int srcH);
 
 bool prepareAsciiModeFrame(AsciiModePrepareInput& input);
 
