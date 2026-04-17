@@ -119,3 +119,6 @@ models/*.download
 **.flac
 **.pyc
 **.rmi
+
+# Test results
+**/ascii_diag**
