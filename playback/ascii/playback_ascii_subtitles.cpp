@@ -501,6 +501,12 @@ struct CueBlock {
   bool hasPosition = false;
   float posX = 0.5f;
   float posY = 0.9f;
+  bool hasClip = false;
+  bool inverseClip = false;
+  int clipLeft = 0;
+  int clipTop = 0;
+  int clipRight = 0;
+  int clipBottom = 0;
   int marginL = 0;
   int marginR = 0;
   int marginV = 0;
@@ -519,6 +525,33 @@ struct CueBlock {
   bool hasBackColor = false;
   Color backColor{0, 0, 0};
   float backAlpha = 0.55f;
+};
+
+struct SubtitleCell {
+  bool occupied = false;
+  bool continuation = false;
+  std::string text;
+  int width = 1;
+  Style style{};
+};
+
+struct SubtitleCellCanvas {
+  int width = 0;
+  int height = 0;
+  std::vector<SubtitleCell> cells;
+
+  void reset(int newWidth, int newHeight) {
+    width = std::max(0, newWidth);
+    height = std::max(0, newHeight);
+    cells.clear();
+    cells.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
+  }
+
+  SubtitleCell* cellAt(int x, int y) {
+    if (x < 0 || y < 0 || x >= width || y >= height) return nullptr;
+    return &cells[static_cast<size_t>(y) * static_cast<size_t>(width) +
+                  static_cast<size_t>(x)];
+  }
 };
 
 int cueHorizontalAnchor(int alignment) {
@@ -554,6 +587,8 @@ int lineDisplayWidth(const std::vector<StyledLine>& lines) {
   return width;
 }
 
+int normalizedPixelCoordToEdge(float value, int cellCount);
+
 bool makeCueBlock(const WindowUiState::SubtitleCue& cue, const SubtitleArea& area,
                   bool overlayVisible, int order, CueBlock* out) {
   if (!out || cue.text.empty() || area.width <= 2 || area.height <= 0) {
@@ -568,6 +603,18 @@ bool makeCueBlock(const WindowUiState::SubtitleCue& cue, const SubtitleArea& are
   block.hasPosition = cue.hasPosition;
   block.posX = std::clamp(cue.posX, 0.0f, 1.0f);
   block.posY = std::clamp(cue.posY, 0.0f, 1.0f);
+  block.hasClip = cue.hasClip;
+  block.inverseClip = cue.inverseClip;
+  if (block.hasClip) {
+    const int x1 = normalizedPixelCoordToEdge(cue.clipX1, area.width);
+    const int y1 = normalizedPixelCoordToEdge(cue.clipY1, area.height);
+    const int x2 = normalizedPixelCoordToEdge(cue.clipX2, area.width);
+    const int y2 = normalizedPixelCoordToEdge(cue.clipY2, area.height);
+    block.clipLeft = area.x + std::min(x1, x2);
+    block.clipTop = area.y + std::min(y1, y2);
+    block.clipRight = area.x + std::max(x1, x2);
+    block.clipBottom = area.y + std::max(y1, y2);
+  }
   block.marginL =
       std::clamp(static_cast<int>(std::lround(cue.marginLNorm * area.width)),
                  0, std::max(0, area.width - 1));
@@ -678,6 +725,14 @@ int normalizedPixelCoordToCell(float value, int cellCount) {
                     0, cellCount - 1);
 }
 
+int normalizedPixelCoordToEdge(float value, int cellCount) {
+  if (cellCount <= 0) return 0;
+  return std::clamp(static_cast<int>(std::lround(
+                        std::clamp(value, 0.0f, 1.0f) *
+                        static_cast<float>(cellCount))),
+                    0, cellCount);
+}
+
 int clampBlockY(int y, const SubtitleArea& area, int height, int bottomLimit) {
   const int maxY = std::max(area.y, std::min(area.y + area.height - height,
                                             bottomLimit - height + 1));
@@ -786,6 +841,57 @@ bool shouldOverlaySubtitleBlock(const CueBlock& previous,
          sameSubtitleOverlayPlacement(previous, current);
 }
 
+bool sameStyle(const Style& a, const Style& b) {
+  return a.fg.r == b.fg.r && a.fg.g == b.fg.g && a.fg.b == b.fg.b &&
+         a.bg.r == b.bg.r && a.bg.g == b.bg.g && a.bg.b == b.bg.b;
+}
+
+bool cueBlockAllowsCell(const CueBlock& block, int x, int y) {
+  if (!block.hasClip) return true;
+  const bool inside = x >= block.clipLeft && x < block.clipRight &&
+                      y >= block.clipTop && y < block.clipBottom;
+  return block.inverseClip ? !inside : inside;
+}
+
+void writeSubtitleCell(SubtitleCellCanvas* canvas, int x, int y,
+                       const CueBlock& block, std::string_view text, int width,
+                       const Style& style) {
+  if (!canvas || text.empty() || width <= 0) return;
+  if (!cueBlockAllowsCell(block, x, y)) return;
+  for (int dx = 1; dx < width; ++dx) {
+    if (!cueBlockAllowsCell(block, x + dx, y)) return;
+  }
+  SubtitleCell* cell = canvas->cellAt(x, y);
+  if (!cell) return;
+
+  cell->occupied = true;
+  cell->continuation = false;
+  cell->text.assign(text);
+  cell->width = std::min(width, std::max(1, canvas->width - x));
+  cell->style = style;
+
+  for (int dx = 1; dx < cell->width; ++dx) {
+    SubtitleCell* continuation = canvas->cellAt(x + dx, y);
+    if (!continuation) break;
+    continuation->occupied = true;
+    continuation->continuation = true;
+    continuation->text.clear();
+    continuation->width = 0;
+    continuation->style = style;
+  }
+}
+
+void writeSubtitleSpaceRun(SubtitleCellCanvas* canvas, int x, int y, int len,
+                           const CueBlock& block, const Style& style) {
+  if (!canvas || len <= 0) return;
+  const int begin = std::max(0, x);
+  const int end = std::min(canvas->width, x + len);
+  if (y < 0 || y >= canvas->height || begin >= end) return;
+  for (int cx = begin; cx < end; ++cx) {
+    writeSubtitleCell(canvas, cx, y, block, " ", 1, style);
+  }
+}
+
 Color brightenColor(Color color, float amount) {
   amount = std::clamp(amount, 0.0f, 1.0f);
   color.r = static_cast<uint8_t>(
@@ -797,9 +903,10 @@ Color brightenColor(Color color, float amount) {
   return color;
 }
 
-void renderCueBlock(const RenderInput& input, const CueBlock& block,
-                    const SubtitleArea& area, const Style& textStyle,
-                    const Style& boxStyle) {
+void composeCueBlock(const RenderInput& input, SubtitleCellCanvas* canvas,
+                     const CueBlock& block, const SubtitleArea& area,
+                     const Style& textStyle, const Style& boxStyle) {
+  if (!canvas) return;
   constexpr int kPadX = 1;
   const int contentStartX = block.x + kPadX;
   const int contentWidth = std::max(1, block.width - kPadX * 2);
@@ -814,7 +921,7 @@ void renderCueBlock(const RenderInput& input, const CueBlock& block,
     const int boxX = std::max(0, block.x);
     const int boxW = std::min(input.width - boxX, block.width);
     if (boxW > 0) {
-      input.screen->writeRun(boxX, y, boxW, L' ', boxStyle);
+      writeSubtitleSpaceRun(canvas, boxX, y, boxW, block, boxStyle);
     }
 
     const StyledLine& line = block.lines[static_cast<size_t>(lineIndex)];
@@ -857,9 +964,60 @@ void renderCueBlock(const RenderInput& input, const CueBlock& block,
       } else if (run.primaryAlpha < 0.999f) {
         runStyle.fg = blendColor(textStyle.fg, runBg, run.primaryAlpha);
       }
-      input.screen->writeText(cursorX, y, text, runStyle);
+      size_t offset = 0;
+      char32_t codepoint = 0;
+      size_t glyphStart = 0;
+      size_t glyphEnd = 0;
+      int glyphCursorX = cursorX;
+      while (utf8DecodeCodepoint(text, &offset, &codepoint, &glyphStart,
+                                 &glyphEnd)) {
+        const int glyphWidth = unicodeDisplayWidth(codepoint);
+        if (glyphWidth <= 0) continue;
+        if (glyphCursorX + glyphWidth > block.x + block.width - kPadX) break;
+        writeSubtitleCell(
+            canvas, glyphCursorX, y, block,
+            std::string_view(text.data() + glyphStart, glyphEnd - glyphStart),
+            glyphWidth, runStyle);
+        glyphCursorX += glyphWidth;
+      }
       cursorX += runWidth;
       writtenWidth += runWidth;
+    }
+  }
+}
+
+void flushSubtitleCanvas(const RenderInput& input,
+                         const SubtitleCellCanvas& canvas) {
+  if (!input.screen || canvas.width <= 0 || canvas.height <= 0) return;
+  for (int y = 0; y < canvas.height; ++y) {
+    int x = 0;
+    while (x < canvas.width) {
+      const SubtitleCell& cell =
+          canvas.cells[static_cast<size_t>(y) * static_cast<size_t>(canvas.width) +
+                       static_cast<size_t>(x)];
+      if (!cell.occupied || cell.continuation || cell.text.empty()) {
+        ++x;
+        continue;
+      }
+      if (cell.text == " " && cell.width == 1) {
+        int end = x + 1;
+        while (end < canvas.width) {
+          const SubtitleCell& next =
+              canvas.cells[static_cast<size_t>(y) *
+                               static_cast<size_t>(canvas.width) +
+                           static_cast<size_t>(end)];
+          if (!next.occupied || next.continuation || next.text != " " ||
+              next.width != 1 || !sameStyle(next.style, cell.style)) {
+            break;
+          }
+          ++end;
+        }
+        input.screen->writeRun(x, y, end - x, L' ', cell.style);
+        x = end;
+        continue;
+      }
+      input.screen->writeText(x, y, cell.text, cell.style);
+      x += std::max(1, cell.width);
     }
   }
 }
@@ -978,11 +1136,14 @@ void renderReadableCueSubtitles(const RenderInput& input) {
 
   const CaptionStyleProfile captionStyle = getWindowsCaptionStyleProfile();
 
+  SubtitleCellCanvas canvas;
+  canvas.reset(input.width, input.height);
   for (const CueBlock& block : blocks) {
     const auto [textStyle, boxStyle] =
         cueCaptionStyles(input, block, captionStyle);
-    renderCueBlock(input, block, area, textStyle, boxStyle);
+    composeCueBlock(input, &canvas, block, area, textStyle, boxStyle);
   }
+  flushSubtitleCanvas(input, canvas);
 }
 
 }  // namespace

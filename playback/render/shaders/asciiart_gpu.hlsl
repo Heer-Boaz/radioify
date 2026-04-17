@@ -57,6 +57,8 @@ static const int kTemporalResetDelta = 48;
 static const int kInkMinLuma = 40;  // Reduced from 110 to allow dark details
 static const int kBgMinLuma = 10;   // Reduced from 20
 static const int kInkMaxScale = 1280;
+static const float kDitherMaxEdge = 28.0f;
+static const float kEdgeThresholdFloor = 6.0f;
 static const float kBrightBgSwapDelta = 12.0f;
 static const int kBrightBgSwapMaxDots = 4;
 static const float kBrightBgSwapMinSignal = 0.5f;
@@ -531,7 +533,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         // In flat areas (low edge), we keep the threshold high to suppress noise.
         // Formula: threshold = max(10, base - 0.3 * edge)
         // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
-        float threshold = max(10.0f, baseThreshold - dots[j].edge * 0.3f);
+        float threshold =
+            max(kEdgeThresholdFloor, baseThreshold - dots[j].edge * 0.3f);
 
         // Check against hybrid background luminance:
         // Mix global and local background based on local detail.
@@ -539,12 +542,12 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         
         // Decision: Is this sub-pixel a dot?
         // If the luma difference exceeds the threshold, it's considered a foreground dot.
-        // Note: We use luma difference as a proxy for "color distance" for performance.
         uint bit = (uint)bitMap[dots[j].idx];
         bool wasOn = ((prevMask >> bit) & 1) != 0;
         float onThreshold = threshold;
         float offThreshold = max(6.0f, threshold - hysteresis);
-        bool isDot = wasOn ? (lumDiff >= offThreshold) : (lumDiff >= onThreshold);
+        bool isDot = wasOn ? (lumDiff >= offThreshold) :
+                              (lumDiff >= onThreshold);
 
         if (isDot) {
             bitmask |= (1 << bit);
@@ -562,7 +565,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float cellLumMean = cellLumSum / 8.0f;
     float avgLumDiff = abs(cellLumMean - effectiveBgLum);
 
-    bool useDither = (cellRange <= 20.0f);
+    bool useDither = (cellRange <= 20.0f && cellEdgeMax <= kDitherMaxEdge);
     if (useDither) {
         float coverage = GetInkLevelFromLum(avgLumDiff);
         float coverageU = coverage * 255.0f;

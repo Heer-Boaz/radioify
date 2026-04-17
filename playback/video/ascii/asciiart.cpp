@@ -197,6 +197,8 @@ constexpr uint8_t kColorLift = 0;
 constexpr uint8_t kInkMinLuma = 40;   // Reduced to allow dark details
 constexpr uint8_t kBgMinLuma = 10;    // Reduced
 constexpr int kInkMaxScale = 1280;  // Verhoogd voor meer bereik
+constexpr int kDitherMaxEdge = 28;
+constexpr int kEdgeThresholdFloor = 6;
 constexpr int kBrightBgSwapDelta = 12;
 constexpr int kBrightBgSwapMaxDots = 4;
 constexpr int kBrightBgSwapMinSignal = 128;
@@ -929,7 +931,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             int refLum =
                 (bgLum * (255 - alpha) + cellBgLum * alpha + 127) / 255;
             bool useLocalThreshold =
-                cellLumRange > 20;  // Alleen bij voldoende lokaal contrast
+                cellLumRange > 20 || cellEdgeMax > kDitherMaxEdge;
             bool useDither = false;
 
             size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
@@ -963,14 +965,17 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // In flat areas (low edge), we keep the threshold high to suppress noise.
               // Formula: threshold = max(10, base - 0.3 * edge)
               // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
-              int threshold = std::max(10, baseThreshold - (edge * 77 / 255)); // 0.3 * 255 ~= 77
+              int threshold =
+                  std::max(kEdgeThresholdFloor,
+                           baseThreshold - (edge * 77 / 255));
 
               // Check against hybrid background luminance:
               // Mix global and local background based on local detail.
               int lumDiff = std::abs(lum - refLum);
               
               // Decision: Is this sub-pixel a dot?
-              // If the luma difference exceeds the threshold, it's considered a foreground dot.
+              // If the luma difference exceeds the threshold, it's considered
+              // a foreground dot.
               bool wasOn = ((prevMask >> bitIds[i]) & 1) != 0;
               int offThreshold = std::max(6, threshold - hysteresis);
               bool isDot = wasOn ? (lumDiff >= offThreshold)

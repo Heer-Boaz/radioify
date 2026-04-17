@@ -45,6 +45,72 @@ std::pair<std::string, std::string> makeLabels(const std::string& text) {
                                              "[ " + text + " ]");
 }
 
+float assAlphaToOpacity(int alpha) {
+  return std::clamp(static_cast<float>(255 - std::clamp(alpha, 0, 255)) /
+                        255.0f,
+                    0.0f, 1.0f);
+}
+
+float subtitleFadeOpacity(const SubtitleCue& cue, int64_t clockUs) {
+  const double elapsedMs =
+      static_cast<double>(std::max<int64_t>(0, clockUs - cue.startUs)) /
+      1000.0;
+  if (cue.hasComplexFade) {
+    const int t1 = std::max(0, cue.fadeT1Ms);
+    const int t2 = std::max(t1, cue.fadeT2Ms);
+    const int t3 = std::max(t2, cue.fadeT3Ms);
+    const int t4 = std::max(t3, cue.fadeT4Ms);
+    auto lerpAlpha = [](int a, int b, double t) {
+      return static_cast<float>(static_cast<double>(a) +
+                                (static_cast<double>(b - a) *
+                                 std::clamp(t, 0.0, 1.0)));
+    };
+
+    float alpha = static_cast<float>(cue.fadeAlpha3);
+    if (elapsedMs < t1) {
+      alpha = static_cast<float>(cue.fadeAlpha1);
+    } else if (elapsedMs < t2 && t2 > t1) {
+      alpha = lerpAlpha(cue.fadeAlpha1, cue.fadeAlpha2,
+                        (elapsedMs - t1) / static_cast<double>(t2 - t1));
+    } else if (elapsedMs < t3) {
+      alpha = static_cast<float>(cue.fadeAlpha2);
+    } else if (elapsedMs < t4 && t4 > t3) {
+      alpha = lerpAlpha(cue.fadeAlpha2, cue.fadeAlpha3,
+                        (elapsedMs - t3) / static_cast<double>(t4 - t3));
+    }
+    return assAlphaToOpacity(static_cast<int>(std::lround(alpha)));
+  }
+
+  float opacity = 1.0f;
+  if (cue.hasSimpleFade && cue.fadeInMs > 0 && elapsedMs < cue.fadeInMs) {
+    opacity = std::min(opacity,
+                       static_cast<float>(elapsedMs /
+                                          static_cast<double>(cue.fadeInMs)));
+  }
+  if (cue.hasSimpleFade && cue.fadeOutMs > 0 && cue.endUs > cue.startUs) {
+    const double durationMs =
+        static_cast<double>(cue.endUs - cue.startUs) / 1000.0;
+    const double remainingMs = std::max(0.0, durationMs - elapsedMs);
+    if (remainingMs < cue.fadeOutMs) {
+      opacity = std::min(opacity,
+                         static_cast<float>(remainingMs /
+                                            static_cast<double>(cue.fadeOutMs)));
+    }
+  }
+  return std::clamp(opacity, 0.0f, 1.0f);
+}
+
+void applySubtitleOpacity(WindowUiState::SubtitleCue* cue, float opacity) {
+  if (!cue) return;
+  const float a = std::clamp(opacity, 0.0f, 1.0f);
+  cue->primaryAlpha *= a;
+  cue->backAlpha *= a;
+  for (auto& run : cue->textRuns) {
+    run.primaryAlpha *= a;
+    run.backAlpha *= a;
+  }
+}
+
 struct PendingOverlayCellControl {
   std::string text;
   int controlIndex = -1;
@@ -212,6 +278,8 @@ std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
   out.reserve(active.size());
   for (const SubtitleCue* cue : active) {
     if (!cue) continue;
+    const float fadeOpacity = subtitleFadeOpacity(*cue, clockUs);
+    if (fadeOpacity <= 0.001f) continue;
     const bool hasRenderableAss = cue->assStyled && !cue->rawText.empty();
     if (cue->text.empty() && !hasRenderableAss) continue;
     WindowUiState::SubtitleCue item;
@@ -251,6 +319,12 @@ std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
     item.hasPosition = cue->hasPosition;
     item.posX = cue->posXNorm;
     item.posY = cue->posYNorm;
+    item.hasClip = cue->hasClip;
+    item.inverseClip = cue->inverseClip;
+    item.clipX1 = cue->clipX1Norm;
+    item.clipY1 = cue->clipY1Norm;
+    item.clipX2 = cue->clipX2Norm;
+    item.clipY2 = cue->clipY2Norm;
     if (cue->hasMove) {
       item.hasPosition = true;
       const double elapsedMs =
@@ -274,6 +348,7 @@ std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
     item.marginVNorm = cue->marginVNorm;
     item.marginLNorm = cue->marginLNorm;
     item.marginRNorm = cue->marginRNorm;
+    applySubtitleOpacity(&item, fadeOpacity);
     out.push_back(std::move(item));
   }
 

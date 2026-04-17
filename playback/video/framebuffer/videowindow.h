@@ -59,6 +59,12 @@ struct WindowUiState {
         bool hasPosition = false;
         float posX = 0.5f;  // normalized in video viewport
         float posY = 0.9f;  // normalized in video viewport
+        bool hasClip = false;
+        bool inverseClip = false;
+        float clipX1 = 0.0f;
+        float clipY1 = 0.0f;
+        float clipX2 = 1.0f;
+        float clipY2 = 1.0f;
         float marginVNorm = 0.0f;
         float marginLNorm = 0.0f;
         float marginRNorm = 0.0f;

@@ -166,6 +166,23 @@ struct AssOverrideInfo {
   float moveEndY = 0.0f;
   int moveStartMs = 0;
   int moveEndMs = 0;
+  bool hasSimpleFade = false;
+  int fadeInMs = 0;
+  int fadeOutMs = 0;
+  bool hasComplexFade = false;
+  int fadeAlpha1 = 0;
+  int fadeAlpha2 = 0;
+  int fadeAlpha3 = 0;
+  int fadeT1Ms = 0;
+  int fadeT2Ms = 0;
+  int fadeT3Ms = 0;
+  int fadeT4Ms = 0;
+  bool hasClip = false;
+  bool inverseClip = false;
+  float clipX1 = 0.0f;
+  float clipY1 = 0.0f;
+  float clipX2 = 0.0f;
+  float clipY2 = 0.0f;
   float fontSize = 0.0f;
   float scaleX = 0.0f;
   float scaleY = 0.0f;
@@ -243,6 +260,20 @@ bool parseAssColorValue(std::string_view token, uint8_t* outR, uint8_t* outG,
   return true;
 }
 
+std::vector<std::string> splitAssTagArgs(std::string_view args) {
+  std::vector<std::string> parts;
+  size_t start = 0;
+  while (start <= args.size()) {
+    const size_t comma = args.find(',', start);
+    parts.push_back(trimAscii(
+        comma == std::string_view::npos ? args.substr(start)
+                                        : args.substr(start, comma - start)));
+    if (comma == std::string_view::npos) break;
+    start = comma + 1;
+  }
+  return parts;
+}
+
 void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
   if (!out || block.empty()) return;
   size_t i = 0;
@@ -309,6 +340,93 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
           (block[i + 1] == 'l' || block[i + 1] == 'L'))) {
       parseColorToken(1, false);
       continue;
+    }
+
+    if (startsWithAsciiNoCase(block, i, "fade")) {
+      i += 4;
+      if (i >= block.size() || block[i] != '(') continue;
+      ++i;
+      size_t end = block.find(')', i);
+      if (end == std::string_view::npos) continue;
+      std::vector<std::string> parts =
+          splitAssTagArgs(block.substr(i, end - i));
+      if (parts.size() >= 7) {
+        int values[7]{};
+        bool ok = true;
+        for (int part = 0; part < 7; ++part) {
+          ok = ok && parseSignedInt(parts[static_cast<size_t>(part)],
+                                    &values[part]);
+        }
+        if (ok) {
+          out->hasComplexFade = true;
+          out->hasSimpleFade = false;
+          out->fadeAlpha1 = std::clamp(values[0], 0, 255);
+          out->fadeAlpha2 = std::clamp(values[1], 0, 255);
+          out->fadeAlpha3 = std::clamp(values[2], 0, 255);
+          out->fadeT1Ms = std::max(0, values[3]);
+          out->fadeT2Ms = std::max(0, values[4]);
+          out->fadeT3Ms = std::max(0, values[5]);
+          out->fadeT4Ms = std::max(0, values[6]);
+        }
+      }
+      i = end + 1;
+      continue;
+    }
+
+    if (startsWithAsciiNoCase(block, i, "fad")) {
+      i += 3;
+      if (i >= block.size() || block[i] != '(') continue;
+      ++i;
+      size_t end = block.find(')', i);
+      if (end == std::string_view::npos) continue;
+      std::vector<std::string> parts =
+          splitAssTagArgs(block.substr(i, end - i));
+      int fadeIn = 0;
+      int fadeOut = 0;
+      if (parts.size() >= 2 && parseNonNegativeInt(parts[0], &fadeIn) &&
+          parseNonNegativeInt(parts[1], &fadeOut)) {
+        out->hasSimpleFade = true;
+        out->hasComplexFade = false;
+        out->fadeInMs = fadeIn;
+        out->fadeOutMs = fadeOut;
+      }
+      i = end + 1;
+      continue;
+    }
+
+    auto parseClipTag = [&](size_t tagLen, bool inverse) {
+      i += tagLen;
+      if (i >= block.size() || block[i] != '(') return false;
+      ++i;
+      size_t end = block.find(')', i);
+      if (end == std::string_view::npos) return false;
+      std::vector<std::string> parts =
+          splitAssTagArgs(block.substr(i, end - i));
+      float x1 = 0.0f;
+      float y1 = 0.0f;
+      float x2 = 0.0f;
+      float y2 = 0.0f;
+      if (parts.size() == 4 && parseFloatAscii(parts[0], &x1) &&
+          parseFloatAscii(parts[1], &y1) &&
+          parseFloatAscii(parts[2], &x2) &&
+          parseFloatAscii(parts[3], &y2)) {
+        out->hasClip = true;
+        out->inverseClip = inverse;
+        out->clipX1 = std::min(x1, x2);
+        out->clipY1 = std::min(y1, y2);
+        out->clipX2 = std::max(x1, x2);
+        out->clipY2 = std::max(y1, y2);
+      }
+      i = end + 1;
+      return true;
+    };
+
+    if (startsWithAsciiNoCase(block, i, "iclip")) {
+      if (parseClipTag(5, true)) continue;
+    }
+
+    if (startsWithAsciiNoCase(block, i, "clip")) {
+      if (parseClipTag(4, false)) continue;
     }
 
     if (startsWithAsciiNoCase(block, i, "pos")) {
@@ -1935,6 +2053,33 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
       cue.posXNorm = cue.moveStartXNorm;
       cue.posYNorm = cue.moveStartYNorm;
     }
+    if (overrides.hasSimpleFade) {
+      cue.hasSimpleFade = true;
+      cue.fadeInMs = overrides.fadeInMs;
+      cue.fadeOutMs = overrides.fadeOutMs;
+    }
+    if (overrides.hasComplexFade) {
+      cue.hasComplexFade = true;
+      cue.fadeAlpha1 = overrides.fadeAlpha1;
+      cue.fadeAlpha2 = overrides.fadeAlpha2;
+      cue.fadeAlpha3 = overrides.fadeAlpha3;
+      cue.fadeT1Ms = overrides.fadeT1Ms;
+      cue.fadeT2Ms = overrides.fadeT2Ms;
+      cue.fadeT3Ms = overrides.fadeT3Ms;
+      cue.fadeT4Ms = overrides.fadeT4Ms;
+    }
+    if (overrides.hasClip) {
+      cue.hasClip = true;
+      cue.inverseClip = overrides.inverseClip;
+      cue.clipX1Norm = std::clamp(overrides.clipX1 / static_cast<float>(scriptW),
+                                  0.0f, 1.0f);
+      cue.clipY1Norm = std::clamp(overrides.clipY1 / static_cast<float>(scriptH),
+                                  0.0f, 1.0f);
+      cue.clipX2Norm = std::clamp(overrides.clipX2 / static_cast<float>(scriptW),
+                                  0.0f, 1.0f);
+      cue.clipY2Norm = std::clamp(overrides.clipY2 / static_cast<float>(scriptH),
+                                  0.0f, 1.0f);
+    }
     outCues->push_back(std::move(cue));
   }
   return !outCues->empty();
@@ -2627,6 +2772,33 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
       cue.moveEndMs = std::max(0, overrides.moveEndMs);
       cue.posXNorm = cue.moveStartXNorm;
       cue.posYNorm = cue.moveStartYNorm;
+    }
+    if (overrides.hasSimpleFade) {
+      cue.hasSimpleFade = true;
+      cue.fadeInMs = overrides.fadeInMs;
+      cue.fadeOutMs = overrides.fadeOutMs;
+    }
+    if (overrides.hasComplexFade) {
+      cue.hasComplexFade = true;
+      cue.fadeAlpha1 = overrides.fadeAlpha1;
+      cue.fadeAlpha2 = overrides.fadeAlpha2;
+      cue.fadeAlpha3 = overrides.fadeAlpha3;
+      cue.fadeT1Ms = overrides.fadeT1Ms;
+      cue.fadeT2Ms = overrides.fadeT2Ms;
+      cue.fadeT3Ms = overrides.fadeT3Ms;
+      cue.fadeT4Ms = overrides.fadeT4Ms;
+    }
+    if (overrides.hasClip) {
+      cue.hasClip = true;
+      cue.inverseClip = overrides.inverseClip;
+      cue.clipX1Norm = std::clamp(overrides.clipX1 / static_cast<float>(scriptW),
+                                  0.0f, 1.0f);
+      cue.clipY1Norm = std::clamp(overrides.clipY1 / static_cast<float>(scriptH),
+                                  0.0f, 1.0f);
+      cue.clipX2Norm = std::clamp(overrides.clipX2 / static_cast<float>(scriptW),
+                                  0.0f, 1.0f);
+      cue.clipY2Norm = std::clamp(overrides.clipY2 / static_cast<float>(scriptH),
+                                  0.0f, 1.0f);
     }
 
     std::string styledText;
