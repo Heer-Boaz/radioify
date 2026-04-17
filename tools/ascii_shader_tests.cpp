@@ -48,6 +48,31 @@ struct Variant {
   uint32_t stageMask;
 };
 
+struct RenderedVariant {
+  AsciiArt art;
+  ascii_debug::RenderStats stats;
+};
+
+struct OutputDelta {
+  uint64_t cellCount = 0;
+  uint64_t changedCells = 0;
+  uint64_t glyphChanged = 0;
+  uint64_t maskChanged = 0;
+  uint64_t dotCountChanged = 0;
+  uint64_t hasBgChanged = 0;
+  uint64_t fgChanged = 0;
+  uint64_t bgChanged = 0;
+  uint64_t fgDeltaGt2 = 0;
+  uint64_t bgDeltaGt2 = 0;
+  uint64_t fgDeltaGt8 = 0;
+  uint64_t bgDeltaGt8 = 0;
+  uint64_t fgDeltaSum = 0;
+  uint64_t bgDeltaSum = 0;
+  double bgLumaDeltaSum = 0.0;
+  int fgDeltaMax = 0;
+  int bgDeltaMax = 0;
+};
+
 [[noreturn]] void fail(const std::string& message) {
   throw std::runtime_error(message);
 }
@@ -66,9 +91,9 @@ void printUsage() {
       << "ascii_shader_tests [options]\n"
       << "  --fixture <all|circle-checker|phone-edge|thin-lines>\n"
       << "  --variant <all|current|ink-only|no-dither|no-edge-detect|"
-         "no-bg-swaps|no-minority-bg-swap|no-bright-bg-swap|"
-         "no-edge-ink-preserve|no-edge-bg-tone|no-signal-dampen|no-detail-boost|"
-         "no-temporal|no-bg-clamp|no-bg-luma-floor|no-bg-polish>\n"
+         "no-bg-swaps|no-bright-bg-swap|no-edge-bg-tone|"
+         "no-signal-dampen|no-detail-boost|no-temporal|"
+         "no-bg-luma-floor|no-bg-polish>\n"
       << "  --out-dir <path>\n"
       << "  --width <pixels>\n"
       << "  --height <pixels>\n"
@@ -310,7 +335,7 @@ std::vector<std::string_view> selectedFixtures(const HarnessConfig& config) {
   return out;
 }
 
-std::array<Variant, 16> variants() {
+std::array<Variant, 13> variants() {
   using namespace ascii_debug;
   uint32_t all = kAllStages;
   return {{
@@ -318,21 +343,17 @@ std::array<Variant, 16> variants() {
       {"ink-only", all & ~kStageCellBackground},
       {"no-dither", all & ~kStageDither},
       {"no-edge-detect", all & ~kStageEdgeDetect},
-      {"no-bg-swaps", all & ~kStageMinorityBgSwap & ~kStageBrightBgSwap},
-      {"no-minority-bg-swap", all & ~kStageMinorityBgSwap},
+      {"no-bg-swaps", all & ~kStageBrightBgSwap},
       {"no-bright-bg-swap", all & ~kStageBrightBgSwap},
-      {"no-edge-ink-preserve", all & ~kStageEdgeInkPreserve},
       {"no-edge-bg-tone", all & ~kStageEdgeBgTone},
       {"no-signal-dampen", all & ~kStageSignalDampen},
       {"no-detail-boost", all & ~kStageDetailBoost},
       {"no-temporal", all & ~kStageForegroundTemporal &
                           ~kStageBackgroundTemporal},
-      {"no-bg-clamp", all & ~kStageEdgeBgClamp},
       {"no-bg-luma-floor", all & ~kStageBgLumaFloor},
       {"no-bg-polish", all & ~kStageBgLumaFloor &
                            ~kStageBackgroundTemporal &
-                           ~kStageFullMaskBgContrast & ~kStageEdgeBgTone &
-                           ~kStageEdgeInkPreserve & ~kStageEdgeBgClamp},
+                           ~kStageFullMaskBgContrast & ~kStageEdgeBgTone},
       {"structure-no-bg", all & ~kStageCellBackground & ~kStageDither},
   }};
 }
@@ -487,6 +508,69 @@ uint32_t brailleMaskForCell(const AsciiArt::AsciiCell& cell) {
   return cp - kBrailleBase;
 }
 
+int dotCount(uint32_t mask) {
+  int count = 0;
+  while (mask != 0) {
+    count += static_cast<int>(mask & 1u);
+    mask >>= 1;
+  }
+  return count;
+}
+
+int colorDeltaMax(const Color& a, const Color& b) {
+  return std::max({std::abs(static_cast<int>(a.r) - static_cast<int>(b.r)),
+                   std::abs(static_cast<int>(a.g) - static_cast<int>(b.g)),
+                   std::abs(static_cast<int>(a.b) - static_cast<int>(b.b))});
+}
+
+double colorLuma(const Color& c) {
+  return (0.2126 * static_cast<double>(c.r)) +
+         (0.7152 * static_cast<double>(c.g)) +
+         (0.0722 * static_cast<double>(c.b));
+}
+
+OutputDelta compareArt(const AsciiArt& baseline, const AsciiArt& candidate) {
+  if (baseline.width != candidate.width || baseline.height != candidate.height ||
+      baseline.cells.size() != candidate.cells.size()) {
+    fail("cannot compare ASCII art with different dimensions");
+  }
+
+  OutputDelta delta;
+  delta.cellCount = static_cast<uint64_t>(baseline.cells.size());
+  for (size_t i = 0; i < baseline.cells.size(); ++i) {
+    const auto& a = baseline.cells[i];
+    const auto& b = candidate.cells[i];
+    const uint32_t maskA = brailleMaskForCell(a);
+    const uint32_t maskB = brailleMaskForCell(b);
+    const int fgDelta = colorDeltaMax(a.fg, b.fg);
+    const int bgDelta = colorDeltaMax(a.bg, b.bg);
+    const bool glyphChanged = a.ch != b.ch;
+    const bool maskChanged = maskA != maskB;
+    const bool dotsChanged = dotCount(maskA) != dotCount(maskB);
+    const bool hasBgChanged = a.hasBg != b.hasBg;
+    const bool changed = glyphChanged || hasBgChanged || fgDelta > 0 ||
+                         bgDelta > 0;
+
+    if (changed) ++delta.changedCells;
+    if (glyphChanged) ++delta.glyphChanged;
+    if (maskChanged) ++delta.maskChanged;
+    if (dotsChanged) ++delta.dotCountChanged;
+    if (hasBgChanged) ++delta.hasBgChanged;
+    if (fgDelta > 0) ++delta.fgChanged;
+    if (bgDelta > 0) ++delta.bgChanged;
+    if (fgDelta > 2) ++delta.fgDeltaGt2;
+    if (bgDelta > 2) ++delta.bgDeltaGt2;
+    if (fgDelta > 8) ++delta.fgDeltaGt8;
+    if (bgDelta > 8) ++delta.bgDeltaGt8;
+    delta.fgDeltaSum += static_cast<uint64_t>(fgDelta);
+    delta.bgDeltaSum += static_cast<uint64_t>(bgDelta);
+    delta.bgLumaDeltaSum += std::abs(colorLuma(a.bg) - colorLuma(b.bg));
+    delta.fgDeltaMax = std::max(delta.fgDeltaMax, fgDelta);
+    delta.bgDeltaMax = std::max(delta.bgDeltaMax, bgDelta);
+  }
+  return delta;
+}
+
 void writePlainText(const std::filesystem::path& path, const AsciiArt& art) {
   std::ofstream file(path, std::ios::binary);
   if (!file) fail("failed to open " + path.string());
@@ -590,10 +674,10 @@ double averageDots(const ascii_debug::RenderStats& stats) {
 
 void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
-         "dither_cells,edge_cells,minority_bg_swaps,bright_bg_swaps,"
-         "edge_ink_preserved,edge_bg_toned,signal_dampened,detail_boosted,"
+         "dither_cells,edge_cells,bright_bg_swaps,"
+         "edge_bg_toned,signal_dampened,detail_boosted,"
          "ink_lifted,bg_lifted,"
-         "fg_temporal,bg_temporal,fullmask_bg_contrast,bg_clamped\n";
+         "fg_temporal,bg_temporal,fullmask_bg_contrast\n";
 }
 
 void writeCsvRow(std::ostream& out, std::string_view fixture,
@@ -605,48 +689,80 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << percent(stats.bgCellCount, stats.cellCount) << ','
       << std::setprecision(3) << averageDots(stats) << std::setprecision(2)
       << ',' << stats.ditherCellCount << ',' << stats.edgeCellCount << ','
-      << stats.minorityBgSwapCount << ',' << stats.brightBgSwapCount << ','
-      << stats.edgeInkPreserveCount << ',' << stats.edgeBgToneCount << ','
-      << stats.signalDampenCount << ','
-      << stats.detailBoostCount << ',' << stats.inkLumaFloorCount << ','
+      << stats.brightBgSwapCount << ',' << stats.edgeBgToneCount << ','
+      << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
+      << stats.inkLumaFloorCount << ','
       << stats.bgLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','
       << stats.bgTemporalBlendCount << ','
-      << stats.fullMaskBgContrastCount << ',' << stats.edgeBgClampCount
+      << stats.fullMaskBgContrastCount << '\n';
+}
+
+void writeAblationHeader(std::ostream& out) {
+  out << "fixture,variant,cells,changed_cells,changed_pct,glyph_changed,"
+         "mask_changed,dot_count_changed,has_bg_changed,fg_changed,bg_changed,"
+         "fg_delta_gt2,bg_delta_gt2,fg_delta_gt8,bg_delta_gt8,"
+         "mean_fg_delta,mean_bg_delta,max_fg_delta,max_bg_delta,"
+         "mean_bg_luma_delta\n";
+}
+
+void writeAblationRow(std::ostream& out, std::string_view fixture,
+                      std::string_view variant, const OutputDelta& delta) {
+  out << fixture << ',' << variant << ',' << delta.cellCount << ','
+      << delta.changedCells << ',' << std::fixed << std::setprecision(2)
+      << percent(delta.changedCells, delta.cellCount) << ','
+      << delta.glyphChanged << ',' << delta.maskChanged << ','
+      << delta.dotCountChanged << ',' << delta.hasBgChanged << ','
+      << delta.fgChanged << ',' << delta.bgChanged << ','
+      << delta.fgDeltaGt2 << ',' << delta.bgDeltaGt2 << ','
+      << delta.fgDeltaGt8 << ',' << delta.bgDeltaGt8 << ','
+      << std::setprecision(3)
+      << (delta.cellCount == 0
+              ? 0.0
+              : static_cast<double>(delta.fgDeltaSum) /
+                    static_cast<double>(delta.cellCount))
+      << ','
+      << (delta.cellCount == 0
+              ? 0.0
+              : static_cast<double>(delta.bgDeltaSum) /
+                    static_cast<double>(delta.cellCount))
+      << ',' << delta.fgDeltaMax << ',' << delta.bgDeltaMax << ','
+      << (delta.cellCount == 0
+              ? 0.0
+              : delta.bgLumaDeltaSum / static_cast<double>(delta.cellCount))
       << '\n';
 }
 
-void renderVariant(const HarnessConfig& config, std::string_view fixtureName,
-                   const Variant& variant, const RgbaImage& image,
-                   std::ostream& csv) {
-  AsciiArt art;
+RenderedVariant renderVariant(const HarnessConfig& config,
+                              std::string_view fixtureName,
+                              const Variant& variant, const RgbaImage& image,
+                              std::ostream& csv) {
+  RenderedVariant rendered;
   ascii_debug::RenderOptions options;
   options.stageMask = variant.stageMask;
   options.resetHistory = true;
-  ascii_debug::RenderStats stats;
   if (!renderAsciiArtFromRgbaDebug(image.pixels.data(), image.width,
                                    image.height, config.maxColumns,
-                                   config.maxRows, art, options, &stats,
-                                   true)) {
+                                   config.maxRows, rendered.art, options,
+                                   &rendered.stats, true)) {
     fail("ASCII render failed");
   }
 
   std::filesystem::path fixtureDir = config.outputDir / std::string(fixtureName);
   std::filesystem::create_directories(fixtureDir);
   std::string base = std::string(variant.name);
-  writeAnsi(fixtureDir / (base + ".ans"), art);
-  writePlainText(fixtureDir / (base + ".txt"), art);
-  writeAsciiRasterPng(fixtureDir / (base + ".png"), art);
-  writeCsvRow(csv, fixtureName, variant.name, art, stats);
+  writeAnsi(fixtureDir / (base + ".ans"), rendered.art);
+  writePlainText(fixtureDir / (base + ".txt"), rendered.art);
+  writeAsciiRasterPng(fixtureDir / (base + ".png"), rendered.art);
+  writeCsvRow(csv, fixtureName, variant.name, rendered.art, rendered.stats);
 
   std::cout << std::setw(16) << fixtureName << "  " << std::setw(22)
             << variant.name << "  bg="
             << std::fixed << std::setprecision(1)
-            << percent(stats.bgCellCount, stats.cellCount) << "%  dots="
-            << std::setprecision(2) << averageDots(stats)
-            << "  swaps=" << (stats.minorityBgSwapCount +
-                               stats.brightBgSwapCount)
-            << "  preserve=" << stats.edgeInkPreserveCount
-            << "  clamp=" << stats.edgeBgClampCount << '\n';
+            << percent(rendered.stats.bgCellCount, rendered.stats.cellCount)
+            << "%  dots=" << std::setprecision(2)
+            << averageDots(rendered.stats)
+            << "  swaps=" << rendered.stats.brightBgSwapCount << '\n';
+  return rendered;
 }
 
 void runHarness(const HarnessConfig& config) {
@@ -654,6 +770,9 @@ void runHarness(const HarnessConfig& config) {
   std::ofstream csv(config.outputDir / "summary.csv", std::ios::binary);
   if (!csv) fail("failed to open summary.csv");
   writeCsvHeader(csv);
+  std::ofstream ablation(config.outputDir / "ablation.csv", std::ios::binary);
+  if (!ablation) fail("failed to open ablation.csv");
+  writeAblationHeader(ablation);
 
   std::vector<Variant> variantList = selectedVariants(config);
   for (std::string_view fixtureName : selectedFixtures(config)) {
@@ -662,8 +781,19 @@ void runHarness(const HarnessConfig& config) {
         config.outputDir / std::string(fixtureName);
     std::filesystem::create_directories(fixtureDir);
     writeSourcePng(fixtureDir / "source.png", image);
+    RenderedVariant baseline =
+        renderVariant(config, fixtureName, Variant{"current", ascii_debug::kAllStages},
+                      image, csv);
     for (const Variant& variant : variantList) {
-      renderVariant(config, fixtureName, variant, image, csv);
+      if (std::string_view(variant.name) == "current") {
+        writeAblationRow(ablation, fixtureName, variant.name,
+                         compareArt(baseline.art, baseline.art));
+        continue;
+      }
+      RenderedVariant rendered =
+          renderVariant(config, fixtureName, variant, image, csv);
+      writeAblationRow(ablation, fixtureName, variant.name,
+                       compareArt(baseline.art, rendered.art));
     }
   }
 }

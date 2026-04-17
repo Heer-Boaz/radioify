@@ -9,13 +9,10 @@
 
 #pragma comment(lib, "d3d11.lib")
 
-#define BG_CLAMP_DEBUG 0
-
 namespace {
     // Precompiled shader bytecode (generated from playback/render/shaders/*.hlsl)
     #include "asciiart_gpu_cs_main.h"
     #include "asciiart_gpu_cs_main_nv12.h"
-    #include "asciiart_gpu_cs_bg_clamp.h"
     #include "asciiart_gpu_cs_sync_history.h"
     #include "asciiart_stats_cs_rgba.h"
     #include "asciiart_stats_cs_nv12.h"
@@ -48,15 +45,11 @@ void GpuAsciiRenderer::ResetSessionState() {
     m_outputUAV.Reset();
     m_outputStagingBuffers[0].Reset();
     m_outputStagingBuffers[1].Reset();
-    m_metaBuffer.Reset();
-    m_metaUAV.Reset();
-    m_metaSRV.Reset();
     m_statsBuffer.Reset();
     m_statsUAV.Reset();
     m_statsSRV.Reset();
     m_historyBuffer.Reset();
     m_historyUAV.Reset();
-    m_historySRV.Reset();
     m_constantBuffer.Reset();
     m_outputStagingIndex = 0;
     m_outputStagingPrimed = false;
@@ -210,10 +203,6 @@ bool GpuAsciiRenderer::CreateComputeShaders(std::string* error) {
                       m_computeShaderNV12, "CSMain NV12")) {
         return false;
     }
-    if (!createShader(kComputeShaderCsBgClamp, kComputeShaderCsBgClamp_Size,
-                      m_bgClampShader, "CSBgClamp")) {
-        return false;
-    }
     if (!createShader(kComputeShaderCsSyncHistory, kComputeShaderCsSyncHistory_Size,
                       m_syncHistoryShader, "CSSyncHistory")) {
         return false;
@@ -334,8 +323,8 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
     ID3D11ShaderResourceView* srvs[] = { srvY, srvUV, m_statsSRV.Get() };
     m_context->CSSetShaderResources(0, 3, srvs);
-    ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), m_metaUAV.Get() };
-    m_context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+    ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
     ID3D11SamplerState* samplers[] = { m_linearSampler.Get() };
     m_context->CSSetSamplers(0, 1, samplers);
@@ -343,31 +332,19 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
     // Unbind
-    ID3D11UnorderedAccessView* nullUAV3[] = { nullptr, nullptr, nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+    ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
     ID3D11ShaderResourceView* nullSRV5[] = { nullptr, nullptr, nullptr, nullptr, nullptr };
     m_context->CSSetShaderResources(0, 5, nullSRV5);
 
-    // 3. BG Clamp Pass
-    m_context->CSSetShader(m_bgClampShader.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* clampSrvs[] = { nullptr, nullptr, nullptr, m_historySRV.Get(), m_metaSRV.Get() };
-    m_context->CSSetShaderResources(0, 5, clampSrvs);
-    ID3D11UnorderedAccessView* clampUavs[] = { m_outputUAV.Get(), nullptr, nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, clampUavs, nullptr);
-    m_context->CSSetConstantBuffers(0, 1, cbs);
-    m_context->Dispatch(dispatchX, dispatchY, 1);
-
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
-    m_context->CSSetShaderResources(0, 5, nullSRV5);
-
-    // 4. Sync History
+    // 3. Sync History
     m_context->CSSetShader(m_syncHistoryShader.Get(), nullptr, 0);
-    ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, syncUavs, nullptr);
+    ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 2, syncUavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+    m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
     m_context->CSSetShaderResources(0, 5, nullSRV5);
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
@@ -380,9 +357,6 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     if (SUCCEEDED(m_context->Map(m_outputStagingBuffers[readIndex].Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
         GpuAsciiCell* gpuCells = (GpuAsciiCell*)mapped.pData;
         out.cells.resize(outW * outH);
-#if BG_CLAMP_DEBUG
-        uint64_t clampCount = 0;
-#endif
         for (int i = 0; i < outW * outH; ++i) {
             out.cells[i].ch = (wchar_t)gpuCells[i].ch;
             
@@ -396,24 +370,8 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
             out.cells[i].bg.g = (bg >> 8) & 0xFF;
             out.cells[i].bg.b = (bg >> 16) & 0xFF;
 
-            uint32_t hasBgRaw = gpuCells[i].hasBg;
-#if BG_CLAMP_DEBUG
-            if ((hasBgRaw & 2u) != 0) {
-                ++clampCount;
-            }
-#endif
-            out.cells[i].hasBg = (hasBgRaw & 1u) != 0;
+            out.cells[i].hasBg = (gpuCells[i].hasBg & 1u) != 0;
         }
-#if BG_CLAMP_DEBUG
-        uint64_t total = static_cast<uint64_t>(outW) * outH;
-        if (total > 0) {
-            double pct = (static_cast<double>(clampCount) * 100.0) /
-                         static_cast<double>(total);
-            std::fprintf(stderr, "bg clamp (gpu): %.2f%% (%llu/%llu)\n", pct,
-                         static_cast<unsigned long long>(clampCount),
-                         static_cast<unsigned long long>(total));
-        }
-#endif
         m_context->Unmap(m_outputStagingBuffers[readIndex].Get(), 0);
         m_outputStagingPrimed = true;
     }
@@ -432,12 +390,8 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     m_outputUAV.Reset();
     m_outputStagingBuffers[0].Reset();
     m_outputStagingBuffers[1].Reset();
-    m_metaBuffer.Reset();
-    m_metaUAV.Reset();
-    m_metaSRV.Reset();
     m_historyBuffer.Reset();
     m_historyUAV.Reset();
-    m_historySRV.Reset();
     m_constantBuffer.Reset();
     m_outputStagingIndex = 0;
     m_outputStagingPrimed = false;
@@ -465,23 +419,10 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
 
     // History Buffer
     bufDesc.ByteWidth = sizeof(uint32_t) * 2 * outW * outH; // uint2
-    bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+    bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
     bufDesc.StructureByteStride = sizeof(uint32_t) * 2;
     if (FAILED(m_device->CreateBuffer(&bufDesc, nullptr, &m_historyBuffer))) return false;
     if (FAILED(m_device->CreateUnorderedAccessView(m_historyBuffer.Get(), &uavDesc, &m_historyUAV))) return false;
-    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-    srvDesc.Buffer.NumElements = outW * outH;
-    if (FAILED(m_device->CreateShaderResourceView(m_historyBuffer.Get(), &srvDesc, &m_historySRV))) return false;
-
-    // Meta Buffer
-    bufDesc.ByteWidth = sizeof(uint32_t) * outW * outH;
-    bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-    bufDesc.StructureByteStride = sizeof(uint32_t);
-    if (FAILED(m_device->CreateBuffer(&bufDesc, nullptr, &m_metaBuffer))) return false;
-    if (FAILED(m_device->CreateUnorderedAccessView(m_metaBuffer.Get(), &uavDesc, &m_metaUAV))) return false;
-    if (FAILED(m_device->CreateShaderResourceView(m_metaBuffer.Get(), &srvDesc, &m_metaSRV))) return false;
 
     // Clear history initially
     UINT clearVals[4] = {0,0,0,0};
@@ -589,39 +530,27 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     m_context->CSSetShader(m_computeShader.Get(), nullptr, 0);
     ID3D11ShaderResourceView* srvs[] = { inputSRV, m_statsSRV.Get(), nullptr };
     m_context->CSSetShaderResources(0, 3, srvs);
-    ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), m_metaUAV.Get() };
-    m_context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+    ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
     m_context->CSSetSamplers(0, 1, samplers);
 
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
     // Unbind UAVs
-    ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr, nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV2, nullptr);
+    ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
     ID3D11ShaderResourceView* nullSRV2[] = { nullptr, nullptr, nullptr, nullptr, nullptr };
-    m_context->CSSetShaderResources(0, 5, nullSRV2);
-
-    // BG Clamp Pass
-    m_context->CSSetShader(m_bgClampShader.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* clampSrvs[] = { nullptr, nullptr, nullptr, m_historySRV.Get(), m_metaSRV.Get() };
-    m_context->CSSetShaderResources(0, 5, clampSrvs);
-    ID3D11UnorderedAccessView* clampUavs[] = { m_outputUAV.Get(), nullptr, nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, clampUavs, nullptr);
-    m_context->CSSetConstantBuffers(0, 1, cbs);
-    m_context->Dispatch(dispatchX, dispatchY, 1);
-
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV2, nullptr);
     m_context->CSSetShaderResources(0, 5, nullSRV2);
 
     // Sync History
     m_context->CSSetShader(m_syncHistoryShader.Get(), nullptr, 0);
-    ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, syncUavs, nullptr);
+    ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 2, syncUavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV2, nullptr);
+    m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
     m_context->CSSetShaderResources(0, 5, nullSRV2);
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
@@ -765,8 +694,8 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
     ID3D11ShaderResourceView* srvs[] = { srvY, srvUV, m_statsSRV.Get() };
     m_context->CSSetShaderResources(0, 3, srvs);
-    ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), m_metaUAV.Get() };
-    m_context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+    ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
     ID3D11SamplerState* samplers[] = { m_linearSampler.Get() };
     m_context->CSSetSamplers(0, 1, samplers);
@@ -774,31 +703,19 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
     // Unbind
-    ID3D11UnorderedAccessView* nullUAV3[] = { nullptr, nullptr, nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+    ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
     ID3D11ShaderResourceView* nullSRV5[] = { nullptr, nullptr, nullptr, nullptr, nullptr };
     m_context->CSSetShaderResources(0, 5, nullSRV5);
 
-    // 3. BG Clamp Pass
-    m_context->CSSetShader(m_bgClampShader.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* clampSrvs[] = { nullptr, nullptr, nullptr, m_historySRV.Get(), m_metaSRV.Get() };
-    m_context->CSSetShaderResources(0, 5, clampSrvs);
-    ID3D11UnorderedAccessView* clampUavs[] = { m_outputUAV.Get(), nullptr, nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, clampUavs, nullptr);
-    m_context->CSSetConstantBuffers(0, 1, cbs);
-    m_context->Dispatch(dispatchX, dispatchY, 1);
-
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
-    m_context->CSSetShaderResources(0, 5, nullSRV5);
-
-    // 4. Sync History
+    // 3. Sync History
     m_context->CSSetShader(m_syncHistoryShader.Get(), nullptr, 0);
-    ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), nullptr };
-    m_context->CSSetUnorderedAccessViews(0, 3, syncUavs, nullptr);
+    ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+    m_context->CSSetUnorderedAccessViews(0, 2, syncUavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
-    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+    m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
     m_context->CSSetShaderResources(0, 5, nullSRV5);
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
@@ -922,35 +839,24 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
         m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
         ID3D11ShaderResourceView* srvs[] = { srvY, srvUV, m_statsSRV.Get() };
         m_context->CSSetShaderResources(0, 3, srvs);
-        ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), m_metaUAV.Get() };
-        m_context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+        ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+        m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
         m_context->CSSetConstantBuffers(0, 1, cbs);
         m_context->CSSetSamplers(0, 1, samplers);
         m_context->Dispatch(dispatchX, dispatchY, 1);
 
-        ID3D11UnorderedAccessView* nullUAV3[] = { nullptr, nullptr, nullptr };
-        m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+        ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr };
+        m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
         ID3D11ShaderResourceView* nullSRV5[] = { nullptr, nullptr, nullptr, nullptr, nullptr };
         m_context->CSSetShaderResources(0, 5, nullSRV5);
 
-        m_context->CSSetShader(m_bgClampShader.Get(), nullptr, 0);
-        ID3D11ShaderResourceView* clampSrvs[] = { nullptr, nullptr, nullptr, m_historySRV.Get(), m_metaSRV.Get() };
-        m_context->CSSetShaderResources(0, 5, clampSrvs);
-        ID3D11UnorderedAccessView* clampUavs[] = { m_outputUAV.Get(), nullptr, nullptr };
-        m_context->CSSetUnorderedAccessViews(0, 3, clampUavs, nullptr);
-        m_context->CSSetConstantBuffers(0, 1, cbs);
-        m_context->Dispatch(dispatchX, dispatchY, 1);
-
-        m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
-        m_context->CSSetShaderResources(0, 5, nullSRV5);
-
         m_context->CSSetShader(m_syncHistoryShader.Get(), nullptr, 0);
-        ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), nullptr };
-        m_context->CSSetUnorderedAccessViews(0, 3, syncUavs, nullptr);
+        ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+        m_context->CSSetUnorderedAccessViews(0, 2, syncUavs, nullptr);
         m_context->CSSetConstantBuffers(0, 1, cbs);
         m_context->Dispatch(dispatchX, dispatchY, 1);
 
-        m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+        m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
         m_context->CSSetShaderResources(0, 5, nullSRV5);
     } else if (cache.IsRgba()) {
         ID3D11ShaderResourceView* inputSRV = cache.GetSrvRGBA();
@@ -991,35 +897,24 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
         m_context->CSSetShader(m_computeShader.Get(), nullptr, 0);
         ID3D11ShaderResourceView* srvs[] = { inputSRV, m_statsSRV.Get(), nullptr };
         m_context->CSSetShaderResources(0, 3, srvs);
-        ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), m_metaUAV.Get() };
-        m_context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+        ID3D11UnorderedAccessView* uavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+        m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
         m_context->CSSetConstantBuffers(0, 1, cbs);
         m_context->CSSetSamplers(0, 1, samplers);
         m_context->Dispatch(dispatchX, dispatchY, 1);
 
-        ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr, nullptr };
-        m_context->CSSetUnorderedAccessViews(0, 3, nullUAV2, nullptr);
+        ID3D11UnorderedAccessView* nullUAV2[] = { nullptr, nullptr };
+        m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
         ID3D11ShaderResourceView* nullSRV2[] = { nullptr, nullptr, nullptr, nullptr, nullptr };
         m_context->CSSetShaderResources(0, 5, nullSRV2);
 
-        m_context->CSSetShader(m_bgClampShader.Get(), nullptr, 0);
-        ID3D11ShaderResourceView* clampSrvs[] = { nullptr, nullptr, nullptr, m_historySRV.Get(), m_metaSRV.Get() };
-        m_context->CSSetShaderResources(0, 5, clampSrvs);
-        ID3D11UnorderedAccessView* clampUavs[] = { m_outputUAV.Get(), nullptr, nullptr };
-        m_context->CSSetUnorderedAccessViews(0, 3, clampUavs, nullptr);
-        m_context->CSSetConstantBuffers(0, 1, cbs);
-        m_context->Dispatch(dispatchX, dispatchY, 1);
-
-        m_context->CSSetUnorderedAccessViews(0, 3, nullUAV2, nullptr);
-        m_context->CSSetShaderResources(0, 5, nullSRV2);
-
         m_context->CSSetShader(m_syncHistoryShader.Get(), nullptr, 0);
-        ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get(), nullptr };
-        m_context->CSSetUnorderedAccessViews(0, 3, syncUavs, nullptr);
+        ID3D11UnorderedAccessView* syncUavs[] = { m_outputUAV.Get(), m_historyUAV.Get() };
+        m_context->CSSetUnorderedAccessViews(0, 2, syncUavs, nullptr);
         m_context->CSSetConstantBuffers(0, 1, cbs);
         m_context->Dispatch(dispatchX, dispatchY, 1);
 
-        m_context->CSSetUnorderedAccessViews(0, 3, nullUAV2, nullptr);
+        m_context->CSSetUnorderedAccessViews(0, 2, nullUAV2, nullptr);
         m_context->CSSetShaderResources(0, 5, nullSRV2);
     } else {
         if (error) *error = "Shared cache format unsupported";

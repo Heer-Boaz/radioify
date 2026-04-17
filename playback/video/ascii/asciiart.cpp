@@ -36,9 +36,6 @@
 
 namespace {
 constexpr uint32_t kBrailleBase = 0x2800;
-#define BG_CLAMP 1
-#define BG_CLAMP_DEBUG 0
-#define BG_CLAMP_DEBUG_VIS 0
 
 #define RADIOIFY_ASCII_BOOL(name, value) constexpr bool name = value;
 #define RADIOIFY_ASCII_FLOAT(name, value) constexpr float name = value;
@@ -523,19 +520,6 @@ FORCE_INLINE int fastIntSqrt(int x) {
   return r;
 }
 
-FORCE_INLINE int median9(int v[9]) {
-  for (int i = 1; i < 9; ++i) {
-    int key = v[i];
-    int j = i - 1;
-    while (j >= 0 && v[j] > key) {
-      v[j + 1] = v[j];
-      --j;
-    }
-    v[j + 1] = key;
-  }
-  return v[4];
-}
-
 struct BrailleFastScratch {
   int srcW = 0;
   int srcH = 0;
@@ -564,10 +548,6 @@ struct BrailleFastScratch {
   std::vector<uint32_t> prevBg;
   std::vector<uint8_t> prevBgValid;
   std::vector<uint8_t> prevMask;
-  std::vector<uint8_t> cellDotCount;
-  std::vector<uint8_t> cellSignalStrength;
-  std::vector<uint8_t> cellUseDither;
-  std::vector<uint8_t> bgLumaScratch;
   int prevLumLow = -1;
   int prevLumHigh = -1;
   int prevBgLum = -1;
@@ -628,10 +608,6 @@ struct BrailleFastScratch {
     prevBg.assign(static_cast<size_t>(outW) * outH, 0);
     prevBgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevMask.assign(static_cast<size_t>(outW) * outH, 0);
-    cellDotCount.assign(static_cast<size_t>(outW) * outH, 0);
-    cellSignalStrength.assign(static_cast<size_t>(outW) * outH, 0);
-    cellUseDither.assign(static_cast<size_t>(outW) * outH, 0);
-    bgLumaScratch.assign(static_cast<size_t>(outW) * outH, 0);
     hasSourceBlueConfidence = false;
     prevLumLow = -1;
     prevLumHigh = -1;
@@ -644,9 +620,6 @@ struct BrailleFastScratch {
     std::fill(prevBg.begin(), prevBg.end(), 0);
     std::fill(prevBgValid.begin(), prevBgValid.end(), 0);
     std::fill(prevMask.begin(), prevMask.end(), 0);
-    std::fill(cellDotCount.begin(), cellDotCount.end(), 0);
-    std::fill(cellSignalStrength.begin(), cellSignalStrength.end(), 0);
-    std::fill(cellUseDither.begin(), cellUseDither.end(), 0);
     prevLumLow = -1;
     prevLumHigh = -1;
     prevBgLum = -1;
@@ -677,6 +650,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
     (void)debugOptions;
     (void)debugStats;
   }
+  (void)isSdr;
 
   out.width = outW;
   out.height = outH;
@@ -1111,36 +1085,16 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               if (!useDither && bgCount > 0 && inkCount > 0) {
                 const int fgY = rgbToY(curR, curG, curB);
                 const int bgY = rgbToY(bgR, bgG, bgB);
-                // Strong contours belong in braille ink; promoting them to BG
-                // paints the whole terminal cell as a blocky edge tile.
-                const bool preserveEdgeInk =
-                    renderStageEnabled<DebugMode>(
-                        stageMask, ascii_debug::kStageEdgeInkPreserve) &&
-                    cellEdgeMax >= kDitherMaxEdge && cellLumRange >= 8;
-                const bool bgIsMinorityCandidate =
-                    renderStageEnabled<DebugMode>(
-                        stageMask, ascii_debug::kStageMinorityBgSwap) &&
-                    bgCount < inkCount && bgCount <= kMinorityBgSwapMaxDots &&
-                    signalStrength >= kMinorityBgSwapMinSignal;
-                const bool bgIsMinority =
-                    bgIsMinorityCandidate && !preserveEdgeInk;
-                if constexpr (DebugMode) {
-                  if (debugStats && bgIsMinorityCandidate &&
-                      preserveEdgeInk) {
-                    ++debugStats->edgeInkPreserveCount;
-                  }
-                }
                 const bool bgIsBrightFeature =
                     renderStageEnabled<DebugMode>(
                         stageMask, ascii_debug::kStageBrightBgSwap) &&
                     bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
                     signalStrength >= kBrightBgSwapMinSignal &&
                     bgY >= fgY + kBrightBgSwapDelta;
-                if (bgIsMinority || bgIsBrightFeature) {
+                if (bgIsBrightFeature) {
                   if constexpr (DebugMode) {
                     if (debugStats) {
-                      if (bgIsMinority) ++debugStats->minorityBgSwapCount;
-                      if (bgIsBrightFeature) ++debugStats->brightBgSwapCount;
+                      ++debugStats->brightBgSwapCount;
                     }
                   }
                   std::swap(curR, bgR);
@@ -1154,7 +1108,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               }
 
               // Terminal BG fills the whole cell; edge detail must stay in
-              // braille ink, so minority BG around edges is toned, not hidden.
+              // braille ink, so bright BG around contours is toned down.
               if (renderStageEnabled<DebugMode>(
                       stageMask, ascii_debug::kStageEdgeBgTone) &&
                   !useDither && cellEdgeMax >= kDitherMaxEdge &&
@@ -1172,13 +1126,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 }
               }
 
-              if (cellIndex < scratch.cellDotCount.size()) {
-                scratch.cellDotCount[cellIndex] =
-                    static_cast<uint8_t>(dotCount);
-                scratch.cellSignalStrength[cellIndex] =
-                    static_cast<uint8_t>(signalStrength);
-                scratch.cellUseDither[cellIndex] = useDither ? 1 : 0;
-              }
               int blendStrength =
                   kSignalStrengthFloor +
                   ((signalStrength * (255 - kSignalStrengthFloor) + 127) / 255);
@@ -1525,132 +1472,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
           }
         }
       });
-
-#if BG_CLAMP
-  if (isSdr &&
-      renderStageEnabled<DebugMode>(stageMask,
-                                    ascii_debug::kStageEdgeBgClamp)) {
-    const size_t totalCells = static_cast<size_t>(outW) * outH;
-    if (scratch.bgLumaScratch.size() < totalCells) {
-      scratch.bgLumaScratch.resize(totalCells);
-    }
-    for (size_t i = 0; i < totalCells; ++i) {
-      int bgY = 0;
-      if (i < scratch.prevBg.size() && scratch.prevBgValid[i]) {
-        uint32_t p = scratch.prevBg[i];
-        int r = static_cast<int>((p >> 16) & 0xFF);
-        int g = static_cast<int>((p >> 8) & 0xFF);
-        int b = static_cast<int>(p & 0xFF);
-        bgY = (r * 54 + g * 183 + b * 19 + 128) >> 8;
-      } else if (i < out.cells.size()) {
-        const Color& c = out.cells[i].bg;
-        bgY = (static_cast<int>(c.r) * 54 + static_cast<int>(c.g) * 183 +
-               static_cast<int>(c.b) * 19 + 128) >>
-              8;
-      }
-      scratch.bgLumaScratch[i] = static_cast<uint8_t>(std::clamp(bgY, 0, 255));
-    }
-
-    [[maybe_unused]] uint64_t clampedCount = 0;
-    for (int cy = 0; cy < outH; ++cy) {
-      for (int cx = 0; cx < outW; ++cx) {
-        size_t idx = static_cast<size_t>(cy) * outW + cx;
-        if (idx >= out.cells.size()) continue;
-        if (!out.cells[idx].hasBg) continue;
-        if (idx >= scratch.cellDotCount.size() ||
-            idx >= scratch.cellSignalStrength.size() ||
-            idx >= scratch.cellUseDither.size()) {
-          continue;
-        }
-        int curBgY = scratch.bgLumaScratch[idx];
-        const Color& fg = out.cells[idx].fg;
-        int curFgY = (static_cast<int>(fg.r) * 54 +
-                      static_cast<int>(fg.g) * 183 +
-                      static_cast<int>(fg.b) * 19 + 128) >>
-                     8;
-        if (curBgY <= curFgY + 4) continue;
-
-        float bright = std::clamp(
-            (static_cast<float>(curBgY) - 96.0f) / 64.0f, 0.0f, 1.0f);
-        int dotLimit = 2;
-        if (bright > 0.8f) {
-          dotLimit = 4;
-        } else if (bright > 0.4f) {
-          dotLimit = 3;
-        }
-        if (scratch.cellDotCount[idx] > dotLimit) continue;
-        if (scratch.cellUseDither[idx]) continue;
-        float maxSignal = 0.30f + 0.40f * bright;
-        if (scratch.cellSignalStrength[idx] >=
-            static_cast<uint8_t>(maxSignal * 255.0f + 0.5f)) {
-          continue;
-        }
-        int neighborY[9];
-        int n = 0;
-        for (int oy = -1; oy <= 1; ++oy) {
-          int ny = std::clamp(cy + oy, 0, outH - 1);
-          for (int ox = -1; ox <= 1; ++ox) {
-            int nx = std::clamp(cx + ox, 0, outW - 1);
-            size_t nIdx = static_cast<size_t>(ny) * outW + nx;
-            neighborY[n++] = scratch.bgLumaScratch[nIdx];
-          }
-        }
-        int median = median9(neighborY);
-        int delta = curBgY - median;
-        int jumpThreshold =
-            static_cast<int>(std::lround(8.0f - 3.0f * bright));
-        if (std::abs(delta) <= jumpThreshold) continue;
-
-        int maxDelta = static_cast<int>(std::lround(12.0f - 4.0f * bright));
-        int clampedDelta = std::clamp(delta, -maxDelta, maxDelta);
-        int newBgY = median + clampedDelta;
-        if (newBgY < kBgMinLuma) newBgY = kBgMinLuma;
-        if (curBgY <= 0) continue;
-
-        float scale = static_cast<float>(newBgY) / curBgY;
-        Color& bg = out.cells[idx].bg;
-        bg.r = static_cast<uint8_t>(
-            std::clamp(static_cast<int>(bg.r * scale + 0.5f), 0, 255));
-        bg.g = static_cast<uint8_t>(
-            std::clamp(static_cast<int>(bg.g * scale + 0.5f), 0, 255));
-        bg.b = static_cast<uint8_t>(
-            std::clamp(static_cast<int>(bg.b * scale + 0.5f), 0, 255));
-
-        if (idx < scratch.prevBg.size()) {
-          scratch.prevBg[idx] =
-              (static_cast<uint32_t>(bg.r) << 16) |
-              (static_cast<uint32_t>(bg.g) << 8) |
-              static_cast<uint32_t>(bg.b);
-          if (idx < scratch.prevBgValid.size()) {
-            scratch.prevBgValid[idx] = 1;
-          }
-        }
-
-#if BG_CLAMP_DEBUG_VIS
-        out.cells[idx].fg = Color{255, 255, 255};
-        out.cells[idx].bg = Color{255, 0, 255};
-        out.cells[idx].hasBg = true;
-#endif
-
-        ++clampedCount;
-        if constexpr (DebugMode) {
-          if (debugStats) ++debugStats->edgeBgClampCount;
-        }
-      }
-    }
-
-#if BG_CLAMP_DEBUG
-    uint64_t total = static_cast<uint64_t>(outW) * outH;
-    if (total > 0) {
-      double pct = (static_cast<double>(clampedCount) * 100.0) /
-                   static_cast<double>(total);
-      std::fprintf(stderr, "bg clamp: %.2f%% (%llu/%llu)\n", pct,
-                   static_cast<unsigned long long>(clampedCount),
-                   static_cast<unsigned long long>(total));
-    }
-#endif
-  }
-#endif
 
   return true;
 }

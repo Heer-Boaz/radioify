@@ -27,29 +27,25 @@ namespace ascii_debug {
 enum StageMask : uint32_t {
   kStageEdgeDetect = 1u << 0,
   kStageDither = 1u << 1,
-  kStageMinorityBgSwap = 1u << 2,
-  kStageBrightBgSwap = 1u << 3,
-  kStageEdgeBgTone = 1u << 4,
-  kStageSignalDampen = 1u << 5,
-  kStageDetailBoost = 1u << 6,
-  kStageInkLumaFloor = 1u << 7,
-  kStageInkSaturation = 1u << 8,
-  kStageForegroundTemporal = 1u << 9,
-  kStageBgLumaFloor = 1u << 10,
-  kStageBackgroundTemporal = 1u << 11,
-  kStageFullMaskBgContrast = 1u << 12,
-  kStageEdgeBgClamp = 1u << 13,
-  kStageCellBackground = 1u << 14,
-  kStageEdgeInkPreserve = 1u << 15,
+  kStageBrightBgSwap = 1u << 2,
+  kStageEdgeBgTone = 1u << 3,
+  kStageSignalDampen = 1u << 4,
+  kStageDetailBoost = 1u << 5,
+  kStageInkLumaFloor = 1u << 6,
+  kStageInkSaturation = 1u << 7,
+  kStageForegroundTemporal = 1u << 8,
+  kStageBgLumaFloor = 1u << 9,
+  kStageBackgroundTemporal = 1u << 10,
+  kStageFullMaskBgContrast = 1u << 11,
+  kStageCellBackground = 1u << 12,
 };
 
 constexpr uint32_t kAllStages =
-    kStageEdgeDetect | kStageDither | kStageMinorityBgSwap |
-    kStageBrightBgSwap | kStageEdgeBgTone | kStageSignalDampen |
-    kStageDetailBoost | kStageInkLumaFloor | kStageInkSaturation |
-    kStageForegroundTemporal | kStageBgLumaFloor |
-    kStageBackgroundTemporal | kStageFullMaskBgContrast |
-    kStageEdgeBgClamp | kStageCellBackground | kStageEdgeInkPreserve;
+    kStageEdgeDetect | kStageDither | kStageBrightBgSwap |
+    kStageEdgeBgTone | kStageSignalDampen | kStageDetailBoost |
+    kStageInkLumaFloor | kStageInkSaturation | kStageForegroundTemporal |
+    kStageBgLumaFloor | kStageBackgroundTemporal |
+    kStageFullMaskBgContrast | kStageCellBackground;
 
 struct RenderOptions {
   uint32_t stageMask = kAllStages;
@@ -61,10 +57,8 @@ struct RenderStats {
   uint64_t bgCellCount = 0;
   uint64_t ditherCellCount = 0;
   uint64_t edgeCellCount = 0;
-  uint64_t minorityBgSwapCount = 0;
   uint64_t brightBgSwapCount = 0;
   uint64_t edgeBgToneCount = 0;
-  uint64_t edgeInkPreserveCount = 0;
   uint64_t signalDampenCount = 0;
   uint64_t detailBoostCount = 0;
   uint64_t inkLumaFloorCount = 0;
@@ -72,7 +66,6 @@ struct RenderStats {
   uint64_t fgTemporalBlendCount = 0;
   uint64_t bgTemporalBlendCount = 0;
   uint64_t fullMaskBgContrastCount = 0;
-  uint64_t edgeBgClampCount = 0;
   uint64_t dotCountHistogram[9] = {};
 };
 

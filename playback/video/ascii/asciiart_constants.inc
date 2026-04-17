@@ -39,8 +39,6 @@ RADIOIFY_ASCII_LUMA_U8(kTemporalResetDelta, 48)  // RGB delta sum snap threshold
 // Edge/detail classification.
 RADIOIFY_ASCII_LUMA_U8(kDitherMaxEdge, 28)       // max Sobel magnitude for dither
 RADIOIFY_ASCII_LUMA_U8(kEdgeThresholdFloor, 6)   // minimum per-dot luma threshold
-RADIOIFY_ASCII_COUNT(kMinorityBgSwapMaxDots, 3)  // minority BG dot count limit
-RADIOIFY_ASCII_SIGNAL_U8(kMinorityBgSwapMinSignal, 64)  // signal needed to swap
 RADIOIFY_ASCII_LUMA_U8(kBrightBgSwapDelta, 12)   // BG luma lead needed to swap
 RADIOIFY_ASCII_COUNT(kBrightBgSwapMaxDots, 4)    // bright-feature dot count limit
 RADIOIFY_ASCII_SIGNAL_U8(kBrightBgSwapMinSignal, 128)  // signal needed to swap

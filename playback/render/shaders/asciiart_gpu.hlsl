@@ -34,13 +34,8 @@ struct AsciiCell {
 
 RWStructuredBuffer<AsciiCell> OutputBuffer : register(u0);
 RWStructuredBuffer<uint2> HistoryBuffer : register(u1); // x=Fg, y=Bg (packed)
-RWStructuredBuffer<uint> MetaBuffer : register(u2); // [7:0]=signalStrength, [8]=useDither, [12:9]=dotCount
-
-StructuredBuffer<uint2> HistoryBufferRead : register(t3);
-StructuredBuffer<uint> MetaBufferRead : register(t4);
 
 static const uint kBrailleBase = 0x2800;
-static const uint kMetaUseDither = 0x100u;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
 static const uint kMatrixBt709 = 0;
 static const uint kMatrixBt601 = 1;
@@ -64,9 +59,6 @@ static const uint kTransferHlg = 2;
 #undef RADIOIFY_ASCII_LUMA_U8
 #undef RADIOIFY_ASCII_SIGNAL_U8
 #undef RADIOIFY_ASCII_SCALE_256
-#define BG_CLAMP 1
-#define BG_CLAMP_DEBUG 0
-#define BG_CLAMP_DEBUG_VIS 0
 
 // Dithering thresholds (optimized for 2x4 braille)
 // Ranks: 0, 4, 2, 6, 1, 5, 3, 7
@@ -150,19 +142,6 @@ float3 CompressShadowChroma(float3 rgb, float sourceBlueConfidence) {
     }
     return ApplySaturationAroundLuma(rgb, y,
                                      lerp(1.0f, kShadowBlueGuardKeep, guard));
-}
-
-float Median9(float v[9]) {
-    for (int i = 1; i < 9; ++i) {
-        float key = v[i];
-        int j = i - 1;
-        while (j >= 0 && v[j] > key) {
-            v[j + 1] = v[j];
-            --j;
-        }
-        v[j + 1] = key;
-    }
-    return v[4];
 }
 
 float GetMaxCode() {
@@ -634,19 +613,11 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (!useDither && bgCount > 0 && inkCount > 0) {
         float fgY = GetLuma(curFg);
         float bgY = GetLuma(curBg);
-        // Strong contours belong in braille ink; promoting them to BG paints
-        // the whole terminal cell as a blocky edge tile.
-        bool preserveEdgeInk =
-            cellEdgeMax >= kDitherMaxEdge && cellRange >= 8.0f;
-        bool bgIsMinority =
-            !preserveEdgeInk && bgCount < inkCount &&
-            bgCount <= kMinorityBgSwapMaxDots &&
-            signalStrength >= kMinorityBgSwapMinSignal;
         bool bgIsBrightFeature =
             bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
             signalStrength >= kBrightBgSwapMinSignal &&
             bgY >= fgY + kBrightBgSwapDelta;
-        if (bgIsMinority || bgIsBrightFeature) {
+        if (bgIsBrightFeature) {
             float3 swapColor = curFg;
             curFg = curBg;
             curBg = swapColor;
@@ -665,7 +636,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     }
 
     // Terminal BG fills the whole cell; edge detail must stay in braille ink,
-    // so minority BG around edges is toned, not hidden.
+    // so bright BG around contours is toned down.
     if (!useDither && cellEdgeMax >= kDitherMaxEdge && cellRange >= 8.0f &&
         dotCount > 0u && dotCount < 8u && bgCount <= inkCount) {
         float bgBias = 10.0f + signalStrength * 8.0f;
@@ -790,13 +761,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         curBg = ToneEdgeBackground(curBg, curFg, edgeBgToneFactor);
     }
 
-    uint meta = (uint)min(255.0f, signalStrength * 255.0f + 0.5f);
-    if (useDither) {
-        meta |= kMetaUseDither;
-    }
-    meta |= (dotCount & 0xFu) << 9;
-    MetaBuffer[cellIndex] = meta;
-
     // Write back history for the next frame
     uint fg24 = PackColor(curFg) & 0x00FFFFFF;
     HistoryBuffer[cellIndex] = uint2(fg24 | (bitmask << 24), PackColor(curBg));
@@ -807,101 +771,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     cell.bg = PackColor(curBg);
     
     cell.hasBg = 1u;
-
-    OutputBuffer[cellIndex] = cell;
-}
-
-[numthreads(8, 8, 1)]
-void CSBgClamp(uint3 DTid : SV_DispatchThreadID) {
-    if (DTid.x >= outWidth || DTid.y >= outHeight) {
-        return;
-    }
-
-#if !BG_CLAMP
-    return;
-#endif
-
-    if (yuvTransfer != kTransferSdr) {
-        return;
-    }
-
-    uint cellIndex = DTid.y * outWidth + DTid.x;
-    uint meta = MetaBufferRead[cellIndex];
-    uint dotCount = (meta >> 9) & 0xFu;
-    bool useDither = (meta & kMetaUseDither) != 0u;
-    float signalStrength = (float)(meta & 0xFFu) / 255.0f;
-
-    AsciiCell cell = OutputBuffer[cellIndex];
-    if ((cell.hasBg & 1u) == 0u) {
-        return;
-    }
-
-    float3 curBg = UnpackColor(cell.bg);
-    float curBgY = GetLuma(curBg);
-    if (curBgY <= 0.0f) {
-        return;
-    }
-
-    float curFgY = GetLuma(UnpackColor(cell.fg));
-    if (curBgY <= curFgY + 4.0f) {
-        return;
-    }
-
-    float bright = saturate((curBgY - 96.0f) / 64.0f);
-    uint dotLimit = 2u;
-    if (bright > 0.8f) {
-        dotLimit = 4u;
-    } else if (bright > 0.4f) {
-        dotLimit = 3u;
-    }
-    float maxSignal = 0.30f + 0.40f * bright;
-    if (dotCount > dotLimit || useDither || signalStrength >= maxSignal) {
-        return;
-    }
-
-    float neighborY[9];
-    int n = 0;
-    [unroll]
-    for (int oy = -1; oy <= 1; ++oy) {
-        int ny = (int)DTid.y + oy;
-        ny = min(max(ny, 0), (int)outHeight - 1);
-        [unroll]
-        for (int ox = -1; ox <= 1; ++ox) {
-            int nx = (int)DTid.x + ox;
-            nx = min(max(nx, 0), (int)outWidth - 1);
-            uint nIndex = (uint)(ny * (int)outWidth + nx);
-            float3 nBg = UnpackColor(HistoryBufferRead[nIndex].y);
-            neighborY[n++] = GetLuma(nBg);
-        }
-    }
-
-    float median = Median9(neighborY);
-    float delta = curBgY - median;
-    float jumpThreshold = 8.0f - 3.0f * bright;
-    if (abs(delta) <= jumpThreshold) {
-        return;
-    }
-
-    float maxDelta = 12.0f - 4.0f * bright;
-    float clampedDelta = clamp(delta, -maxDelta, maxDelta);
-    float newBgY = median + clampedDelta;
-    newBgY = max(newBgY, (float)kBgMinLuma);
-    float scale = newBgY / curBgY;
-    curBg = saturate(curBg * scale);
-    float lift = (float)kColorLift / 255.0f;
-    curBg = max(curBg, lift.xxx);
-
-#if BG_CLAMP_DEBUG_VIS
-    cell.fg = PackColor(float3(1.0f, 1.0f, 1.0f));
-    cell.bg = PackColor(float3(1.0f, 0.0f, 1.0f));
-    cell.hasBg |= 1u;
-#else
-    cell.bg = PackColor(curBg);
-#endif
-
-#if BG_CLAMP_DEBUG
-    cell.hasBg |= 2u;
-#endif
 
     OutputBuffer[cellIndex] = cell;
 }
