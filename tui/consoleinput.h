@@ -190,6 +190,7 @@ struct ActionStripButton {
   ActionStripItem id = ActionStripItem::Radio;
   int x0 = 0;
   int x1 = 0;
+  int y = 0;
 };
 
 struct ActionStripLayout {

@@ -49,6 +49,16 @@ struct ProgressFooterRenderResult {
   int progressBarWidth = 0;
 };
 
+struct ProgressBarHitTestInput {
+  int x = 0;
+  int y = 0;
+  int barX = -1;
+  int barY = -1;
+  int barWidth = 0;
+  int unitWidth = 1;
+  int unitHeight = 1;
+};
+
 struct BracketButtonLabels {
   std::string normal;
   std::string hover;
@@ -80,3 +90,5 @@ std::vector<BufferCell> renderProgressBarCells(double ratio,
 ProgressFooterRenderResult renderProgressFooter(
     ConsoleScreen& screen, const ProgressFooterInput& input,
     const ProgressFooterStyles& styles);
+bool progressBarRatioAt(const ProgressBarHitTestInput& input,
+                        double* outRatio);

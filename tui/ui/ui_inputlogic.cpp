@@ -253,11 +253,11 @@ void scrollFromBar(BrowserState& browser, const GridLayout& layout, int y,
 }
 
 int actionStripIndexAt(const ActionStripLayout& layout, int x, int y) {
-  if (layout.y < 0 || y != layout.y) return -1;
+  if (layout.y < 0) return -1;
   int count = static_cast<int>(layout.buttons.size());
   for (int i = 0; i < count; ++i) {
     const auto& btn = layout.buttons[static_cast<size_t>(i)];
-    if (x >= btn.x0 && x < btn.x1) return i;
+    if (y == btn.y && x >= btn.x0 && x < btn.x1) return i;
   }
   return -1;
 }
@@ -844,15 +844,17 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         scrollFromBar(browser, layout, mouse.pos.Y, listTop, listHeight, dirty);
         return;
       }
-      if (progressBarWidth > 0 && mouse.pos.Y == progressBarY && progressBarX >= 0) {
-        int rel = mouse.pos.X - progressBarX;
-        if (rel >= 0 && rel < progressBarWidth) {
-          double denom = static_cast<double>(std::max(1, progressBarWidth - 1));
-          double ratio = static_cast<double>(rel) / denom;
-          if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
-          dirty = true;
-          return;
-        }
+      ProgressBarHitTestInput progressHit;
+      progressHit.x = mouse.pos.X;
+      progressHit.y = mouse.pos.Y;
+      progressHit.barX = progressBarX;
+      progressHit.barY = progressBarY;
+      progressHit.barWidth = progressBarWidth;
+      double ratio = 0.0;
+      if (progressBarRatioAt(progressHit, &ratio)) {
+        if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
+        dirty = true;
+        return;
       }
     }
     if (!browserInteractionEnabled) {

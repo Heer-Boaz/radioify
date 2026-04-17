@@ -927,6 +927,123 @@ int runTui(Options o) {
   MelodyExportTaskState melodyExportTask;
   LoopSplitTaskState loopSplitTask;
 
+  struct ActionRenderItem {
+    ActionStripItem id;
+    std::string label;
+    std::string labelHover;
+    bool active;
+    int width;
+  };
+
+  auto buildActionRenderItems = [&](bool browserInteractionEnabled) {
+    std::vector<ActionRenderItem> items;
+    auto addActionItem = [&](ActionStripItem id, const std::string& text,
+                             bool active) {
+      BracketButtonLabels labels = makeBracketButtonLabels(text);
+      items.push_back(
+          {id, labels.normal, labels.hover, active, labels.width});
+    };
+    auto actionStripItemForOverlayControl =
+        [](playback_overlay::OverlayControlId id)
+        -> std::optional<ActionStripItem> {
+          switch (id) {
+            case playback_overlay::OverlayControlId::Previous:
+              return ActionStripItem::Previous;
+            case playback_overlay::OverlayControlId::PlayPause:
+              return ActionStripItem::PlayPause;
+            case playback_overlay::OverlayControlId::Next:
+              return ActionStripItem::Next;
+            case playback_overlay::OverlayControlId::Radio:
+              return ActionStripItem::Radio;
+            case playback_overlay::OverlayControlId::Hz50:
+              return ActionStripItem::Hz50;
+            case playback_overlay::OverlayControlId::PictureInPicture:
+              return ActionStripItem::PictureInPicture;
+            case playback_overlay::OverlayControlId::AudioTrack:
+            case playback_overlay::OverlayControlId::Subtitles:
+              return std::nullopt;
+          }
+          return std::nullopt;
+        };
+
+    playback_overlay::PlaybackOverlayState actionOverlayState;
+    const std::filesystem::path nowPlaying = audioGetNowPlaying();
+    actionOverlayState.audioOk = audioIsReady();
+    actionOverlayState.playPauseAvailable =
+        actionOverlayState.audioOk && !audioIsFinished();
+    actionOverlayState.audioSupports50HzToggle =
+        actionOverlayState.audioOk && audioSupports50HzToggle();
+    actionOverlayState.canPlayPrevious =
+        actionOverlayState.audioOk || !nowPlaying.empty();
+    actionOverlayState.canPlayNext =
+        actionOverlayState.audioOk || !nowPlaying.empty();
+    actionOverlayState.radioEnabled = audioIsRadioEnabled();
+    actionOverlayState.hz50Enabled = audioIs50HzEnabled();
+    actionOverlayState.paused = audioIsPaused();
+    actionOverlayState.audioFinished = audioIsFinished();
+    actionOverlayState.pictureInPictureAvailable =
+        audioMiniPlayer.isOpen() || actionOverlayState.audioOk ||
+        !nowPlaying.empty();
+    actionOverlayState.pictureInPictureActive = audioMiniPlayer.isOpen();
+    playback_overlay::OverlayControlSpecOptions controlOptions;
+    controlOptions.includeAudioTrack = false;
+    controlOptions.includeSubtitles = false;
+    std::vector<playback_overlay::OverlayControlSpec> controlSpecs =
+        playback_overlay::buildOverlayControlSpecs(actionOverlayState, -1,
+                                                   controlOptions);
+    for (const playback_overlay::OverlayControlSpec& spec : controlSpecs) {
+      std::optional<ActionStripItem> actionId =
+          actionStripItemForOverlayControl(spec.id);
+      if (actionId) {
+        items.push_back({*actionId, spec.normalText, spec.hoverText,
+                         spec.active, spec.width});
+      }
+    }
+
+    if (browserInteractionEnabled) {
+      const std::string gridIcon = "\xE2\x96\xA6";
+      const std::string listIcon = "\xE2\x89\xA1";
+      const std::string previewIcon = "\xE2\x98\x90";
+      std::string viewState;
+      switch (browser.viewMode) {
+        case BrowserState::ViewMode::Thumbnails:
+          viewState = gridIcon + " Grid";
+          break;
+        case BrowserState::ViewMode::ListOnly:
+          viewState = listIcon + " List";
+          break;
+        case BrowserState::ViewMode::ListPreview:
+          viewState = previewIcon + " Preview";
+          break;
+      }
+      addActionItem(ActionStripItem::View, viewState, false);
+    }
+    if (browserInteractionEnabled && optionsBrowserCanToggle(browser)) {
+      addActionItem(ActionStripItem::Options, "Options",
+                    optionsBrowserIsActive(browser));
+    }
+    return items;
+  };
+
+  auto countWrappedActionLines =
+      [](const std::vector<ActionRenderItem>& items, int width) {
+        if (items.empty() || width <= 0) return 0;
+        const int gapWidth = 2;
+        int lines = 1;
+        int x = 0;
+        for (const auto& item : items) {
+          const int itemWidth = std::min(std::max(1, item.width), width);
+          const int gap = x > 0 ? gapWidth : 0;
+          if (x > 0 && x + gap + itemWidth > width) {
+            ++lines;
+            x = itemWidth;
+          } else {
+            x += gap + itemWidth;
+          }
+        }
+        return lines;
+      };
+
   auto buildFooterLayout = [&]() {
     bool hasAnalyzeStatus = false;
     {
@@ -944,10 +1061,17 @@ int runTui(Options o) {
     const bool showNowPlaying =
         !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
         audioIsHolding();
-    return computeBrowserFooterLayout(
+    BrowserFooterLayout layout = computeBrowserFooterLayout(
         !melodyVisualizationEnabled, !audioGetWarning().empty(),
         hasAnalyzeStatus, hasLoopSplitStatus, o.play, showNowPlaying,
         o.play && audioIsReady());
+    if (layout.showActionStrip) {
+      const bool browserInteractionEnabled = !melodyVisualizationEnabled;
+      layout.actionStripLines = countWrappedActionLines(
+          buildActionRenderItems(browserInteractionEnabled), screen.width());
+      layout.reservedLines += std::max(0, layout.actionStripLines - 1);
+    }
+    return layout;
   };
 
   auto rebuildLayout = [&]() {
@@ -2285,108 +2409,27 @@ int runTui(Options o) {
       actionStrip.y = -1;
       if (footerLayout.showActionStrip && line < height) {
         actionStrip.y = line;
-        struct ActionRenderItem {
-          ActionStripItem id;
-          std::string label;
-          std::string labelHover;
-          bool active;
-          int width;
-        };
-        std::vector<ActionRenderItem> items;
-        auto addActionItem = [&](ActionStripItem id, const std::string& text,
-                                 bool active) {
-          BracketButtonLabels labels = makeBracketButtonLabels(text);
-          items.push_back(
-              {id, labels.normal, labels.hover, active, labels.width});
-        };
-        auto actionStripItemForOverlayControl =
-            [](playback_overlay::OverlayControlId id)
-            -> std::optional<ActionStripItem> {
-              switch (id) {
-                case playback_overlay::OverlayControlId::Previous:
-                  return ActionStripItem::Previous;
-                case playback_overlay::OverlayControlId::PlayPause:
-                  return ActionStripItem::PlayPause;
-                case playback_overlay::OverlayControlId::Next:
-                  return ActionStripItem::Next;
-                case playback_overlay::OverlayControlId::Radio:
-                  return ActionStripItem::Radio;
-                case playback_overlay::OverlayControlId::Hz50:
-                  return ActionStripItem::Hz50;
-                case playback_overlay::OverlayControlId::PictureInPicture:
-                  return ActionStripItem::PictureInPicture;
-                case playback_overlay::OverlayControlId::AudioTrack:
-                case playback_overlay::OverlayControlId::Subtitles:
-                  return std::nullopt;
-              }
-              return std::nullopt;
-            };
-
-        playback_overlay::PlaybackOverlayState actionOverlayState;
-        actionOverlayState.audioOk = audioIsReady();
-        actionOverlayState.playPauseAvailable =
-            actionOverlayState.audioOk && !audioIsFinished();
-        actionOverlayState.audioSupports50HzToggle =
-            actionOverlayState.audioOk && audioSupports50HzToggle();
-        actionOverlayState.canPlayPrevious =
-            actionOverlayState.audioOk || !nowPlaying.empty();
-        actionOverlayState.canPlayNext =
-            actionOverlayState.audioOk || !nowPlaying.empty();
-        actionOverlayState.radioEnabled = audioIsRadioEnabled();
-        actionOverlayState.hz50Enabled = audioIs50HzEnabled();
-        actionOverlayState.paused = audioIsPaused();
-        actionOverlayState.audioFinished = audioIsFinished();
-        actionOverlayState.pictureInPictureAvailable =
-            audioMiniPlayer.isOpen() || actionOverlayState.audioOk ||
-            !nowPlaying.empty();
-        actionOverlayState.pictureInPictureActive = audioMiniPlayer.isOpen();
-        playback_overlay::OverlayControlSpecOptions controlOptions;
-        controlOptions.includeAudioTrack = false;
-        controlOptions.includeSubtitles = false;
-        std::vector<playback_overlay::OverlayControlSpec> controlSpecs =
-            playback_overlay::buildOverlayControlSpecs(actionOverlayState, -1,
-                                                       controlOptions);
-        for (const playback_overlay::OverlayControlSpec& spec : controlSpecs) {
-          std::optional<ActionStripItem> actionId =
-              actionStripItemForOverlayControl(spec.id);
-          if (actionId) {
-            items.push_back({*actionId, spec.normalText, spec.hoverText,
-                             spec.active, spec.width});
-          }
-        }
-
-        if (browserInteractionEnabled) {
-          const std::string gridIcon = "\xE2\x96\xA6";
-          const std::string listIcon = "\xE2\x89\xA1";
-          const std::string previewIcon = "\xE2\x98\x90";
-          std::string viewState;
-          switch (browser.viewMode) {
-            case BrowserState::ViewMode::Thumbnails:
-              viewState = gridIcon + " Grid";
-              break;
-            case BrowserState::ViewMode::ListOnly:
-              viewState = listIcon + " List";
-              break;
-            case BrowserState::ViewMode::ListPreview:
-              viewState = previewIcon + " Preview";
-              break;
-          }
-          addActionItem(ActionStripItem::View, viewState, false);
-        }
-        if (browserInteractionEnabled && optionsBrowserCanToggle(browser)) {
-          bool optActive = optionsBrowserIsActive(browser);
-          addActionItem(ActionStripItem::Options, "Options", optActive);
-        }
-        const int gap = 2;
+        std::vector<ActionRenderItem> items =
+            buildActionRenderItems(browserInteractionEnabled);
+        const int gapWidth = 2;
         int x = 0;
+        int itemLine = line;
         for (const auto& item : items) {
-          bool hovered = (actionHover == static_cast<int>(actionStrip.buttons.size()));
+          int widthUsed = std::min(std::max(1, item.width), width);
+          const int gap = x > 0 ? gapWidth : 0;
+          if (x > 0 && x + gap + widthUsed > width) {
+            ++itemLine;
+            x = 0;
+          } else {
+            x += gap;
+          }
+          if (itemLine >= height) break;
+          bool hovered =
+              (actionHover == static_cast<int>(actionStrip.buttons.size()));
           std::string text = hovered ? item.labelHover : item.label;
           int textWidth = utf8DisplayWidth(text);
-          if (x >= width) break;
-          int avail = width - x;
-          if (avail <= 0) break;
-          int widthUsed = std::min(item.width, avail);
+          widthUsed = std::min(widthUsed, width - x);
+          if (widthUsed <= 0) break;
           if (textWidth > widthUsed) {
             text = utf8TakeDisplayWidth(text, widthUsed);
             textWidth = utf8DisplayWidth(text);
@@ -2396,16 +2439,16 @@ int runTui(Options o) {
             text.append(static_cast<size_t>(widthUsed - textWidth), ' ');
             textWidth = widthUsed;
           }
-          ActionStripButton btn{item.id, x, x + widthUsed};
+          ActionStripButton btn{item.id, x, x + widthUsed, itemLine};
           actionStrip.buttons.push_back(btn);
           Style style = item.active ? kStyleActionActive : kStyleNormal;
-          screen.writeText(x, line, text, style);
-          x += widthUsed + gap;
+          screen.writeText(x, itemLine, text, style);
+          x += widthUsed;
         }
         if (actionHover >= static_cast<int>(actionStrip.buttons.size())) {
           actionHover = -1;
         }
-        line++;
+        line += std::max(1, footerLayout.actionStripLines);
       } else {
         actionHover = -1;
       }

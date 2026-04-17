@@ -58,12 +58,11 @@ class AudioMiniPlayer {
   void refreshGridSize();
   void refreshArtwork(const Context& context, int width, int height);
   void drawArtworkBackground(const Styles& styles, int width, int height);
+  void updateInteractiveRects();
   void handleInput(const InputEvent& ev, const Callbacks& callbacks);
   bool clickControl(playback_overlay::OverlayControlId control,
                     const Callbacks& callbacks);
   int controlAt(int x, int y) const;
-  bool progressHit(int x, int y) const;
-  double progressRatioAt(int x) const;
 
   VideoWindow window_;
   ConsoleScreen screen_;

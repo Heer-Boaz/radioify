@@ -65,6 +65,16 @@ int wheelDelta(const MouseEvent& mouse) {
   return static_cast<SHORT>(HIWORD(mouse.buttonState));
 }
 
+RECT cellRectToPixels(int x, int y, int width, int height, int cellWidth,
+                      int cellHeight, int maxWidth, int maxHeight) {
+  RECT rect{};
+  rect.left = std::clamp(x * cellWidth, 0, maxWidth);
+  rect.top = std::clamp(y * cellHeight, 0, maxHeight);
+  rect.right = std::clamp((x + width) * cellWidth, 0, maxWidth);
+  rect.bottom = std::clamp((y + height) * cellHeight, 0, maxHeight);
+  return rect;
+}
+
 }  // namespace
 
 bool AudioMiniPlayer::isOpen() const { return window_.IsOpen(); }
@@ -291,6 +301,7 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   progressX_ = footerResult.progressBarX;
   progressY_ = footerResult.progressBarY;
   progressWidth_ = footerResult.progressBarWidth;
+  updateInteractiveRects();
 
   int outW = 0;
   int outH = 0;
@@ -299,6 +310,29 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
       cells_, outW, outH, frame_);
   window_.PresentGpuTextGrid(frame_, true);
   return true;
+}
+
+void AudioMiniPlayer::updateInteractiveRects() {
+  std::vector<RECT> rects;
+  rects.reserve(layout_.controls.size() + 1);
+
+  const int maxWidth = window_.GetWidth();
+  const int maxHeight = window_.GetHeight();
+  auto addCellRect = [&](int x, int y, int width, int height) {
+    if (width <= 0 || height <= 0 || y < 0 || y >= rows_) return;
+    RECT rect = cellRectToPixels(x, y, width, height, cellWidth_, cellHeight_,
+                                 maxWidth, maxHeight);
+    if (rect.left < rect.right && rect.top < rect.bottom) {
+      rects.push_back(rect);
+    }
+  };
+
+  for (const auto& item : layout_.controls) {
+    addCellRect(item.x, item.y, item.width, 1);
+  }
+  addCellRect(progressX_, progressY_, progressWidth_, 1);
+
+  window_.SetPictureInPictureInteractiveRects(rects);
 }
 
 void AudioMiniPlayer::handleInput(const InputEvent& ev,
@@ -371,11 +405,13 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
   }
 
   if (ev.type != InputEvent::Type::Mouse) return;
-  MouseEvent mouse = ev.mouse;
-  if ((mouse.control & kWindowMouseFlag) != 0) {
-    const int gx = std::clamp(mouse.pos.X / std::max(1, cellWidth_), 0,
+  const MouseEvent rawMouse = ev.mouse;
+  MouseEvent mouse = rawMouse;
+  const bool windowMouse = (mouse.control & kWindowMouseFlag) != 0;
+  if (windowMouse) {
+    const int gx = std::clamp(rawMouse.pos.X / std::max(1, cellWidth_), 0,
                               std::max(0, cols_ - 1));
-    const int gy = std::clamp(mouse.pos.Y / std::max(1, cellHeight_), 0,
+    const int gy = std::clamp(rawMouse.pos.Y / std::max(1, cellHeight_), 0,
                               std::max(0, rows_ - 1));
     mouse.pos.X = static_cast<SHORT>(gx);
     mouse.pos.Y = static_cast<SHORT>(gy);
@@ -407,10 +443,17 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
     }
   }
 
-  if (progressHit(mouse.pos.X, mouse.pos.Y)) {
-    if (callbacks.onSeekToRatio) {
-      callbacks.onSeekToRatio(progressRatioAt(mouse.pos.X));
-    }
+  ProgressBarHitTestInput progressHit;
+  progressHit.x = windowMouse ? rawMouse.pos.X : mouse.pos.X;
+  progressHit.y = windowMouse ? rawMouse.pos.Y : mouse.pos.Y;
+  progressHit.barX = progressX_;
+  progressHit.barY = progressY_;
+  progressHit.barWidth = progressWidth_;
+  progressHit.unitWidth = windowMouse ? cellWidth_ : 1;
+  progressHit.unitHeight = windowMouse ? cellHeight_ : 1;
+  double ratio = 0.0;
+  if (progressBarRatioAt(progressHit, &ratio)) {
+    if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
   }
 }
 
@@ -438,15 +481,4 @@ bool AudioMiniPlayer::clickControl(playback_overlay::OverlayControlId control,
 
 int AudioMiniPlayer::controlAt(int x, int y) const {
   return playback_overlay::overlayCellControlAt(layout_, x, y);
-}
-
-bool AudioMiniPlayer::progressHit(int x, int y) const {
-  return progressWidth_ > 0 && y == progressY_ && x >= progressX_ &&
-         x < progressX_ + progressWidth_;
-}
-
-double AudioMiniPlayer::progressRatioAt(int x) const {
-  const int rel = std::clamp(x - progressX_, 0, std::max(0, progressWidth_ - 1));
-  const double denom = static_cast<double>(std::max(1, progressWidth_ - 1));
-  return std::clamp(static_cast<double>(rel) / denom, 0.0, 1.0);
 }

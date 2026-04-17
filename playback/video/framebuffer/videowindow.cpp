@@ -1029,6 +1029,12 @@ void VideoWindow::SetCursorVisible(bool visible) {
                   MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
 }
 
+void VideoWindow::SetPictureInPictureInteractiveRects(
+    const std::vector<RECT>& rects) {
+    std::lock_guard<std::mutex> lock(m_pictureInPictureInteractiveRectsMutex);
+    m_pictureInPictureInteractiveRects = rects;
+}
+
 double VideoWindow::PictureInPictureAspectRatio() const {
     double aspect = 16.0 / 9.0;
     if (m_videoWidth > 0 && m_videoHeight > 0) {
@@ -1263,6 +1269,22 @@ RECT VideoWindow::CalculatePictureInPictureRect() const {
     return RECT{left, top, left + targetW, top + targetH};
 }
 
+bool VideoWindow::PictureInPictureHasInteractiveRects() const {
+    std::lock_guard<std::mutex> lock(m_pictureInPictureInteractiveRectsMutex);
+    return !m_pictureInPictureInteractiveRects.empty();
+}
+
+bool VideoWindow::PictureInPicturePointInInteractiveRect(int x, int y) const {
+    std::lock_guard<std::mutex> lock(m_pictureInPictureInteractiveRectsMutex);
+    for (const RECT& rect : m_pictureInPictureInteractiveRects) {
+        if (x >= rect.left && x < rect.right && y >= rect.top &&
+            y < rect.bottom) {
+            return true;
+        }
+    }
+    return false;
+}
+
 LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
     if (!m_pictureInPicture.load(std::memory_order_relaxed)) return HTCLIENT;
     if (m_width <= 0 || m_height <= 0) return HTCAPTION;
@@ -1281,6 +1303,14 @@ LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
     if (right) return HTRIGHT;
     if (top) return HTTOP;
     if (bottom) return HTBOTTOM;
+
+    if (PictureInPictureHasInteractiveRects()) {
+        if (x >= 0 && x < m_width && y >= 0 && y < m_height) {
+            return PictureInPicturePointInInteractiveRect(x, y) ? HTCLIENT
+                                                               : HTCAPTION;
+        }
+        return HTCLIENT;
+    }
 
     if (x >= 0 && x < m_width && y >= 0 && y < m_height &&
         y >= PictureInPictureInteractiveTop()) {
@@ -1359,6 +1389,7 @@ bool VideoWindow::ExitPictureInPicture() {
     m_pictureInPictureTextMode.store(false, std::memory_order_relaxed);
     m_pictureInPictureGridCols.store(0, std::memory_order_relaxed);
     m_pictureInPictureGridRows.store(0, std::memory_order_relaxed);
+    SetPictureInPictureInteractiveRects({});
     m_pipRestoreFullscreen = false;
     m_ignoreWindowSizeEvents = false;
 

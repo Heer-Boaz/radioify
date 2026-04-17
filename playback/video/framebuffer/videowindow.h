@@ -115,6 +115,7 @@ public:
     void SetVsync(bool enabled);
     std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
+    void SetPictureInPictureInteractiveRects(const std::vector<RECT>& rects);
     void SetCursorVisible(bool visible);
     bool TogglePictureInPicture();
     bool SetPictureInPicture(bool enabled);
@@ -167,6 +168,8 @@ private:
     void AdjustPictureInPictureSizingRect(WPARAM edge, RECT* rect) const;
     bool EnterPictureInPicture();
     bool ExitPictureInPicture();
+    bool PictureInPictureHasInteractiveRects() const;
+    bool PictureInPicturePointInInteractiveRect(int x, int y) const;
     LRESULT HitTestPictureInPicture(int x, int y) const;
     int PictureInPictureResizeBorderPx() const;
     int PictureInPictureVisualBorderPx() const;
@@ -245,6 +248,8 @@ private:
     std::atomic<bool> m_pictureInPictureTextMode{false};
     std::atomic<int> m_pictureInPictureGridCols{0};
     std::atomic<int> m_pictureInPictureGridRows{0};
+    mutable std::mutex m_pictureInPictureInteractiveRectsMutex;
+    std::vector<RECT> m_pictureInPictureInteractiveRects;
     bool m_pipRestoreFullscreen = false;
     LONG m_pipRestoreStyle = 0;
     LONG m_pipRestoreExStyle = 0;

@@ -7,6 +7,7 @@ bool operator==(const BrowserFooterLayout& a, const BrowserFooterLayout& b) {
          a.showLoopSplitStatus == b.showLoopSplitStatus &&
          a.showNowPlaying == b.showNowPlaying &&
          a.showActionStrip == b.showActionStrip &&
+         a.actionStripLines == b.actionStripLines &&
          a.showPeakMeter == b.showPeakMeter &&
          a.showProgress == b.showProgress;
 }
@@ -29,6 +30,7 @@ BrowserFooterLayout computeBrowserFooterLayout(bool browserInteractionEnabled,
   layout.showLoopSplitStatus = showLoopSplitStatus;
   layout.showNowPlaying = showNowPlaying;
   layout.showActionStrip = enableTransportUi;
+  layout.actionStripLines = layout.showActionStrip ? 1 : 0;
   layout.showPeakMeter = showPeakMeter;
   layout.showProgress = enableTransportUi;
 
@@ -38,7 +40,7 @@ BrowserFooterLayout computeBrowserFooterLayout(bool browserInteractionEnabled,
   layout.reservedLines += layout.showAnalyzeStatus ? 1 : 0;
   layout.reservedLines += layout.showLoopSplitStatus ? 1 : 0;
   layout.reservedLines += layout.showNowPlaying ? 1 : 0;
-  layout.reservedLines += layout.showActionStrip ? 1 : 0;
+  layout.reservedLines += layout.actionStripLines;
   layout.reservedLines += layout.showPeakMeter ? 1 : 0;
   layout.reservedLines += layout.showProgress ? 1 : 0;
   return layout;

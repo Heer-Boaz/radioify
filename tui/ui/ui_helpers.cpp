@@ -299,3 +299,23 @@ ProgressFooterRenderResult renderProgressFooter(
 
   return result;
 }
+
+bool progressBarRatioAt(const ProgressBarHitTestInput& input,
+                        double* outRatio) {
+  if (input.barWidth <= 0 || input.barX < 0 || input.barY < 0) return false;
+  const int unitWidth = std::max(1, input.unitWidth);
+  const int unitHeight = std::max(1, input.unitHeight);
+  const int left = input.barX * unitWidth;
+  const int top = input.barY * unitHeight;
+  const int width = input.barWidth * unitWidth;
+  if (input.x < left || input.x >= left + width || input.y < top ||
+      input.y >= top + unitHeight) {
+    return false;
+  }
+  if (outRatio) {
+    const double denom = static_cast<double>(std::max(1, width - 1));
+    *outRatio =
+        std::clamp(static_cast<double>(input.x - left) / denom, 0.0, 1.0);
+  }
+  return true;
+}
