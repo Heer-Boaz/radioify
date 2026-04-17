@@ -40,48 +40,19 @@ constexpr uint32_t kBrailleBase = 0x2800;
 #define BG_CLAMP_DEBUG 0
 #define BG_CLAMP_DEBUG_VIS 0
 
-// === SIMPLE DENSITY-BASED ASCII RAMP ===
-// Classic ASCII art approach: characters sorted by visual density
-// This is cached as a simple lookup table indexed by density level (0-15)
-[[maybe_unused]] constexpr std::array<wchar_t, 16> kDensityRamp = {
-    L' ',  // 0 (lightest)
-    L'.',  // 1
-    L',',  // 2
-    L':',  // 3
-    L';',  // 4
-    L'-',  // 5
-    L'=',  // 6
-    L'+',  // 7
-    L'*',  // 8
-    L'#',  // 9
-    L'%',  // 10
-    L'@',  // 11
-    L'\u2591',  // 12
-    L'\u2593',  // 13
-    L'\u2592',  // 14
-    L'\u2588'   // 15 (darkest)
-};
-
-// Pre-computed: for each dot count (0-8), what density character to use
-// This is a simple O(1) lookup, no computation needed at runtime
-constexpr std::array<wchar_t, 9> kDotCountToChar = {
-    L' ',  // 0 dots
-    L'.',  // 1 dot
-    L':',  // 2 dots
-    L'-',  // 3 dots
-    L'+',  // 4 dots
-    L'*',  // 5 dots
-    L'#',  // 6 dots
-    L'%',  // 7 dots
-    L'@',  // 8 dots
-};
-
-// Configuration: when to use ASCII vs braille
-// Braille is better for detail, ASCII is better for large uniform areas
-constexpr bool kUseHybridMode = false;  // Disable hybrid - braille is better
-constexpr int kMinContrastForBraille =
-    15;  // Use braille when cell has this much contrast
-constexpr int kSignalStrengthFloor = 51;  // Keep faint details visible
+#define RADIOIFY_ASCII_BOOL(name, value) constexpr bool name = value;
+#define RADIOIFY_ASCII_FLOAT(name, value) constexpr float name = value;
+#define RADIOIFY_ASCII_COUNT(name, value) constexpr int name = value;
+#define RADIOIFY_ASCII_LUMA_U8(name, value) constexpr int name = value;
+#define RADIOIFY_ASCII_SIGNAL_U8(name, value) constexpr int name = value;
+#define RADIOIFY_ASCII_SCALE_256(name, value) constexpr int name = value;
+#include "asciiart_constants.inc"
+#undef RADIOIFY_ASCII_BOOL
+#undef RADIOIFY_ASCII_FLOAT
+#undef RADIOIFY_ASCII_COUNT
+#undef RADIOIFY_ASCII_LUMA_U8
+#undef RADIOIFY_ASCII_SIGNAL_U8
+#undef RADIOIFY_ASCII_SCALE_256
 
 // Direct YUV conversie zonder sRGB linearisering
 // Rec. 709 coefficients als integer fixed-point (<<16 voor precision)
@@ -185,61 +156,11 @@ void parallelFor(int totalRows, int minBatch, int workerCount, Fn&& fn) {
   }
 }
 
-// Verbeterde rendering parameters voor betere precisie
-constexpr bool kInkUseBright = true;
-constexpr float kInkGamma = 0.65f;      // Slightly steeper
-constexpr float kCoverageGain = 1.30f;  // Reduced to prevent early saturation
-constexpr float kCoverageBias = 0.0f;   // Removed bias
-constexpr float kCoverageZeroCutoff = 0.03f;  // Filter faint noise
-constexpr float kLumLowPercent = 0.01f;       // Preciezer dynamic range
-constexpr float kLumHighPercent = 0.99f;
-constexpr uint8_t kColorLift = 0;
-constexpr uint8_t kInkMinLuma = 40;   // Reduced to allow dark details
-constexpr uint8_t kBgMinLuma = 10;    // Reduced
-constexpr int kInkMaxScale = 1280;  // Verhoogd voor meer bereik
-constexpr int kDitherMaxEdge = 28;
-constexpr int kEdgeThresholdFloor = 6;
-constexpr int kBrightBgSwapDelta = 12;
-constexpr int kBrightBgSwapMaxDots = 4;
-constexpr int kBrightBgSwapMinSignal = 128;
-constexpr int kEdgeBgToneMinBlend = 80;
-constexpr int kEdgeBgToneMaxBlend = 144;
-constexpr int kEdgeBgToneMaxSaturation = 192;
-constexpr int kEdgeBgToneMinSaturation = 128;
-constexpr int kTemporalResetDelta = 48;  // Snellere scene change detectie
-constexpr int kColorSaturation = 340;    // Iets meer saturatie
-constexpr int kShadowSatStartLuma = 16;
-constexpr int kShadowSatFullLuma = 96;
-constexpr int kShadowMinSaturation = 24;
 constexpr int kShadowChromaBoostStart = 12;
 constexpr int kShadowChromaBoostFull = 72;
 constexpr int kShadowChromaPreserveStrength = 160;
-constexpr int kShadowBlueGuardStartLuma = 44;
-constexpr int kShadowBlueGuardRange = 36;
-constexpr int kShadowBlueDominanceStart = 15;
-constexpr int kShadowBlueDominanceFull = 51;
-constexpr int kShadowBlueGuardKeep = 115;
-constexpr int kSourceBlueSignalStart = 8;
-constexpr int kSourceBlueSignalFull = 46;
-constexpr int kSourceChromaSignalStart = 5;
-constexpr int kSourceChromaSignalFull = 36;
-constexpr int kSourceBlueGuardRelax = 77;
-constexpr int kSourceBlueInkBoost = 26;
 constexpr bool kUseEdgeBoost = true;
-constexpr uint8_t kEdgeMin = 4;      // Reverted to 4 for sensitivity
-constexpr uint8_t kEdgeBoost = 245;  // Sterker edge boost
 constexpr int kEdgeShift = 3;
-[[maybe_unused]] constexpr int kBgDelta = 6;  // Lagere threshold voor meer detail
-[[maybe_unused]] constexpr int kBgDeltaMin = 1;
-[[maybe_unused]] constexpr int kEdgeDeltaScale = 96;  // Meer edge-responsief
-[[maybe_unused]] constexpr int kDitherBias = 48;      // Verlaagd voor betere halftones
-[[maybe_unused]] constexpr bool kUseAABand = true;
-[[maybe_unused]] constexpr int kAAScoreBandMin = 12;
-[[maybe_unused]] constexpr int kAAScoreBandMax = 144;  // Soft AA band voor gladdere randen
-constexpr int kLumSmoothAlpha = 40;   // Snellere adaptatie
-constexpr int kLumResetDelta = 28;
-constexpr float kHdrReferenceNits = 100.0f;
-constexpr float kHdrScale = 10000.0f / kHdrReferenceNits;
 
 FORCE_INLINE float expandChromaNorm(int c, bool fullRange, int bitDepth);
 
@@ -418,23 +339,6 @@ const std::array<uint8_t, 8> kDitherThresholdByBit = []() {
     // Fijnere thresholds voor betere halftone gradaties
     lut[static_cast<size_t>(i)] =
         static_cast<uint8_t>((ranks[i] * 255 + 4) / 8);
-  }
-  return lut;
-}();
-
-[[maybe_unused]] const std::array<uint8_t, 256> kEdgeBoostFromMag = []() {
-  std::array<uint8_t, 256> lut{};
-  if constexpr (kUseEdgeBoost) {
-    const int range = 255 - kEdgeMin;
-    for (int i = 0; i < 256; ++i) {
-      if (i <= kEdgeMin || range <= 0) {
-        lut[static_cast<size_t>(i)] = 0;
-        continue;
-      }
-      int boost = (i - kEdgeMin) * kEdgeBoost / range;
-      if (boost > kEdgeBoost) boost = kEdgeBoost;
-      lut[static_cast<size_t>(i)] = static_cast<uint8_t>(boost);
-    }
   }
   return lut;
 }();
@@ -1145,12 +1049,17 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
               int signalStrength = std::max(edgeSig, lumSig);
 
-              if (!useDither && bgCount > 0 && inkCount > 0 &&
-                  bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
-                  signalStrength >= kBrightBgSwapMinSignal) {
-                int fgY = rgbToY(curR, curG, curB);
-                int bgY = rgbToY(bgR, bgG, bgB);
-                if (bgY >= fgY + kBrightBgSwapDelta) {
+              if (!useDither && bgCount > 0 && inkCount > 0) {
+                const int fgY = rgbToY(curR, curG, curB);
+                const int bgY = rgbToY(bgR, bgG, bgB);
+                const bool bgIsMinority =
+                    bgCount < inkCount && bgCount <= kMinorityBgSwapMaxDots &&
+                    signalStrength >= kMinorityBgSwapMinSignal;
+                const bool bgIsBrightFeature =
+                    bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
+                    signalStrength >= kBrightBgSwapMinSignal &&
+                    bgY >= fgY + kBrightBgSwapDelta;
+                if (bgIsMinority || bgIsBrightFeature) {
                   std::swap(curR, bgR);
                   std::swap(curG, bgG);
                   std::swap(curB, bgB);
@@ -1466,19 +1375,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
 
             AsciiArt::AsciiCell cell{};
 
-            // === CHARACTER SELECTION ===
-            // Braille geeft de beste resultaten voor detail - gebruik het
-            // altijd De hybrid mode is optioneel voor gebieden zonder contrast
-            wchar_t finalChar = static_cast<wchar_t>(kBrailleBase + bitmask);
-
-            if constexpr (kUseHybridMode) {
-              // Alleen voor zeer uniforme gebieden: gebruik density-based ASCII
-              if (cellLumRange < kMinContrastForBraille) {
-                finalChar = kDotCountToChar[static_cast<size_t>(dotCount)];
-              }
-            }
-
-            cell.ch = finalChar;
+            cell.ch = static_cast<wchar_t>(kBrailleBase + bitmask);
             cell.fg = Color{outR, outG, outB};
             if (hasBg) {
               cell.bg = Color{outBgR, outBgG, outBgB};
@@ -1885,17 +1782,6 @@ bool renderAsciiArtFromRgbaFast(const uint8_t* rgba, int width, int height,
                                                maxHeight, out, scratch);
 }
 }  // namespace
-
-std::string defaultAsciiRamp() { return "@%#*+=-:. "; }
-
-char rampCharFromLuma(float luma, const std::string& ramp) {
-  if (ramp.empty()) return ' ';
-  luma = clampFloat(luma, 0.0f, 1.0f);
-  float scaled = luma * static_cast<float>(ramp.size() - 1);
-  size_t idx = static_cast<size_t>(std::lround(scaled));
-  if (idx >= ramp.size()) idx = ramp.size() - 1;
-  return ramp[idx];
-}
 
 bool renderAsciiArt(const std::filesystem::path& path, int maxWidth,
                     int maxHeight, AsciiArt& out, std::string* error) {

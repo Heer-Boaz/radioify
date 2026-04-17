@@ -22,9 +22,6 @@ struct AsciiArt {
   std::vector<AsciiCell> cells;
 };
 
-std::string defaultAsciiRamp();
-char rampCharFromLuma(float luma, const std::string& ramp);
-
 bool renderAsciiArt(const std::filesystem::path& path,
                     int maxWidth,
                     int maxHeight,

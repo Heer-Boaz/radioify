@@ -41,7 +41,6 @@ StructuredBuffer<uint> MetaBufferRead : register(t4);
 
 static const uint kBrailleBase = 0x2800;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
-static const float kHdrScale = 10000.0f / 100.0f;
 static const uint kMatrixBt709 = 0;
 static const uint kMatrixBt601 = 1;
 static const uint kMatrixBt2020 = 2;
@@ -49,38 +48,21 @@ static const uint kTransferSdr = 0;
 static const uint kTransferPq = 1;
 static const uint kTransferHlg = 2;
 
-// Constants from CPU version
-static const int kEdgeShift = 3;
-static const int kColorLift = 0;
-static const int kColorSaturation = 340;
-static const int kTemporalResetDelta = 48;
-static const int kInkMinLuma = 40;  // Reduced from 110 to allow dark details
-static const int kBgMinLuma = 10;   // Reduced from 20
-static const int kInkMaxScale = 1280;
-static const float kDitherMaxEdge = 28.0f;
-static const float kEdgeThresholdFloor = 6.0f;
-static const float kBrightBgSwapDelta = 12.0f;
-static const int kBrightBgSwapMaxDots = 4;
-static const float kBrightBgSwapMinSignal = 0.5f;
-static const float kEdgeBgToneMinBlend = 80.0f / 256.0f;
-static const float kEdgeBgToneMaxBlend = 144.0f / 256.0f;
-static const float kEdgeBgToneMaxSaturation = 192.0f / 256.0f;
-static const float kEdgeBgToneMinSaturation = 128.0f / 256.0f;
-static const float kShadowSatStartLuma = 16.0f;
-static const float kShadowSatFullLuma = 96.0f;
-static const float kShadowMinSaturation = 24.0f / 256.0f;
-static const float kShadowBlueGuardStartLuma = 44.0f;
-static const float kShadowBlueGuardRange = 36.0f;
-static const float kShadowBlueDominanceStart = 0.06f;
-static const float kShadowBlueDominanceFull = 0.20f;
-static const float kShadowBlueGuardKeep = 0.45f;
-static const float kSourceBlueSignalStart = 0.030f;
-static const float kSourceBlueSignalFull = 0.180f;
-static const float kSourceChromaSignalStart = 0.020f;
-static const float kSourceChromaSignalFull = 0.140f;
-static const float kSourceBlueGuardRelax = 0.30f;
-static const float kSourceBlueInkBoost = 0.10f;
-static const float kSignalStrengthFloor = 0.2f;
+#define RADIOIFY_ASCII_BOOL(name, value) static const bool name = value;
+#define RADIOIFY_ASCII_FLOAT(name, value) static const float name = value;
+#define RADIOIFY_ASCII_COUNT(name, value) static const int name = value;
+#define RADIOIFY_ASCII_LUMA_U8(name, value) static const int name = value;
+#define RADIOIFY_ASCII_SIGNAL_U8(name, value) \
+    static const float name = (float)(value) / 255.0f;
+#define RADIOIFY_ASCII_SCALE_256(name, value) \
+    static const float name = (float)(value) / 256.0f;
+#include "../../video/ascii/asciiart_constants.inc"
+#undef RADIOIFY_ASCII_BOOL
+#undef RADIOIFY_ASCII_FLOAT
+#undef RADIOIFY_ASCII_COUNT
+#undef RADIOIFY_ASCII_LUMA_U8
+#undef RADIOIFY_ASCII_SIGNAL_U8
+#undef RADIOIFY_ASCII_SCALE_256
 #define BG_CLAMP 1
 #define BG_CLAMP_DEBUG 0
 #define BG_CLAMP_DEBUG_VIS 0
@@ -346,15 +328,12 @@ float SampleLumaArea(float2 centerUV, float2 dotSizePx) {
 
 float GetInkLevelFromLum(float lum) {
     float norm = lum / 255.0f;
-    float x = norm; // kInkUseBright = true
-    // Gamma 0.65: Slightly steeper to delay onset of dots
-    float coverage = pow(x, 0.65f); 
+    float x = kInkUseBright ? norm : (1.0f - norm);
+    float coverage = pow(x, kInkGamma);
     if (coverage > 0.001f) {
-        // Reduced gain (1.30) to prevent early saturation to 6-dots
-        coverage = coverage * 1.30f; 
+        coverage = coverage * kCoverageGain + kCoverageBias;
     }
-    // Cutoff 0.03: Filter very faint noise
-    if (coverage < 0.03f) coverage = 0.0f; 
+    if (coverage < kCoverageZeroCutoff) coverage = 0.0f;
     return saturate(coverage);
 }
 
@@ -651,24 +630,32 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     bool toneEdgeBg = false;
     float edgeBgToneFactor = 0.0f;
 
-    if (!useDither && bgCount > 0 && inkCount > 0 &&
-        bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
-        signalStrength >= kBrightBgSwapMinSignal &&
-        GetLuma(curBg) >= GetLuma(curFg) + kBrightBgSwapDelta) {
-        float3 swapColor = curFg;
-        curFg = curBg;
-        curBg = swapColor;
+    if (!useDither && bgCount > 0 && inkCount > 0) {
+        float fgY = GetLuma(curFg);
+        float bgY = GetLuma(curBg);
+        bool bgIsMinority =
+            bgCount < inkCount && bgCount <= kMinorityBgSwapMaxDots &&
+            signalStrength >= kMinorityBgSwapMinSignal;
+        bool bgIsBrightFeature =
+            bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
+            signalStrength >= kBrightBgSwapMinSignal &&
+            bgY >= fgY + kBrightBgSwapDelta;
+        if (bgIsMinority || bgIsBrightFeature) {
+            float3 swapColor = curFg;
+            curFg = curBg;
+            curBg = swapColor;
 
-        float swapBlueConfidence = curFgBlueConfidence;
-        curFgBlueConfidence = curBgBlueConfidence;
-        curBgBlueConfidence = swapBlueConfidence;
+            float swapBlueConfidence = curFgBlueConfidence;
+            curFgBlueConfidence = curBgBlueConfidence;
+            curBgBlueConfidence = swapBlueConfidence;
 
-        int swapCount = inkCount;
-        inkCount = bgCount;
-        bgCount = swapCount;
+            int swapCount = inkCount;
+            inkCount = bgCount;
+            bgCount = swapCount;
 
-        bitmask = (~bitmask) & 0xffu;
-        dotCount = 8u - dotCount;
+            bitmask = (~bitmask) & 0xffu;
+            dotCount = 8u - dotCount;
+        }
     }
 
     // Terminal BG fills the whole cell; edge detail must stay in braille ink,
