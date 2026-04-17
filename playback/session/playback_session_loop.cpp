@@ -227,7 +227,8 @@ struct PlaybackLoopRunner::Impl {
   WindowUiState buildWindowUiState() {
     return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
         windowTitle, output.window(), core.player(), subtitleManager,
-        core.playbackState(), core.audioOk(), hasSubtitles,
+        core.playbackState(), core.audioOk(), requestTransportCommand != nullptr,
+        requestTransportCommand != nullptr, hasSubtitles,
         enableSubtitlesShared, *seekState.windowLocalSeekRequested,
         *seekState.windowPendingSeekTargetSec, overlayControlHover,
         overlayVisible());
@@ -397,6 +398,8 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.debugOverlay = config.debugOverlay;
     renderInputs.currentMode = output.renderMode(enableAscii);
     renderInputs.enableAudio = enableAudio;
+    renderInputs.canPlayPrevious = requestTransportCommand != nullptr;
+    renderInputs.canPlayNext = requestTransportCommand != nullptr;
     renderInputs.windowActive = output.windowActive();
     renderInputs.hasSubtitles = hasSubtitles;
     renderInputs.allowAsciiCpuFallback = false;

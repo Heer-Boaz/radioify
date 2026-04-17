@@ -79,6 +79,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool enableAudio = inputs.enableAudio;
   bool audioOk = inputs.audioOk;
   bool audioStarting = inputs.audioStarting;
+  bool canPlayPrevious = inputs.canPlayPrevious;
+  bool canPlayNext = inputs.canPlayNext;
   bool windowActive = inputs.windowActive;
   bool hasSubtitles = inputs.hasSubtitles;
   bool allowAsciiCpuFallback = inputs.allowAsciiCpuFallback;
@@ -250,6 +252,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.windowTitle = windowTitle;
   overlayInputs.audioOk = audioOk;
   overlayInputs.audioSupports50HzToggle = audioOk && audioSupports50HzToggle();
+  overlayInputs.canPlayPrevious = canPlayPrevious;
+  overlayInputs.canPlayNext = canPlayNext;
   overlayInputs.radioEnabled = audioIsRadioEnabled();
   overlayInputs.hz50Enabled = audioIs50HzEnabled();
   overlayInputs.canCycleAudioTracks = audioOk && player.canCycleAudioTracks();

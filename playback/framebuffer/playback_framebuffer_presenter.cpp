@@ -53,7 +53,7 @@ void waitForPresenterActivity(HANDLE wakeEvent, HANDLE frameEvent,
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
     SubtitleManager& subtitleManager, PlaybackSessionState playbackState,
-    bool audioOk, bool hasSubtitles,
+    bool audioOk, bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<bool>& windowLocalSeekRequested,
     std::atomic<double>& windowPendingSeekTargetSec,
@@ -90,6 +90,8 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.windowTitle = windowTitle;
   overlayInputs.audioOk = audioOk;
   overlayInputs.audioSupports50HzToggle = audioOk && audioSupports50HzToggle();
+  overlayInputs.canPlayPrevious = canPlayPrevious;
+  overlayInputs.canPlayNext = canPlayNext;
   overlayInputs.radioEnabled = audioIsRadioEnabled();
   overlayInputs.hz50Enabled = audioIs50HzEnabled();
   overlayInputs.canCycleAudioTracks = audioOk && player.canCycleAudioTracks();

@@ -12,6 +12,14 @@
 #include "videowindow.h"
 
 namespace playback_session_input {
+
+void setPlaybackPaused(const PlaybackInputView& view,
+                       PlaybackInputSignals& signals,
+                       PlaybackSeekState& seekState, bool paused);
+
+bool requestPlaybackTransport(PlaybackInputSignals& signals,
+                              PlaybackTransportCommand command);
+
 namespace {
 
 bool hasOverlayVisibleWindow(const PlaybackInputSignals& signals) {
@@ -217,7 +225,8 @@ bool togglePictureInPicture(const PlaybackInputView& view,
 }
 
 bool executeOverlayControl(const PlaybackInputView& view,
-                           const PlaybackInputSignals& signals,
+                           PlaybackInputSignals& signals,
+                           PlaybackSeekState& seekState,
                            const playback_overlay::PlaybackOverlayState& state,
                            int controlIndex) {
   std::vector<playback_overlay::OverlayControlSpec> specs =
@@ -226,19 +235,35 @@ bool executeOverlayControl(const PlaybackInputView& view,
     return false;
   }
   const auto& spec = specs[static_cast<size_t>(controlIndex)];
-  switch (spec.id) {
-    case playback_overlay::OverlayControlId::Radio:
-      return toggleRadio(view);
-    case playback_overlay::OverlayControlId::Hz50:
-      return toggle50Hz(view);
-    case playback_overlay::OverlayControlId::AudioTrack:
-      return toggleAudioTrack(view);
-    case playback_overlay::OverlayControlId::Subtitles:
-      return toggleSubtitles(view);
-    case playback_overlay::OverlayControlId::PictureInPicture:
-      return togglePictureInPicture(view, signals);
-  }
-  return false;
+  playback_overlay::OverlayControlActions actions;
+  actions.previous = [&]() {
+    if (requestPlaybackTransport(signals, PlaybackTransportCommand::Previous)) {
+      requestPlaybackExit(view, signals, false);
+      return true;
+    }
+    return false;
+  };
+  actions.playPause = [&]() {
+    setPlaybackPaused(view, signals, seekState,
+                      !view.playbackState ||
+                          *view.playbackState != PlaybackSessionState::Paused);
+    return true;
+  };
+  actions.next = [&]() {
+    if (requestPlaybackTransport(signals, PlaybackTransportCommand::Next)) {
+      requestPlaybackExit(view, signals, false);
+      return true;
+    }
+    return false;
+  };
+  actions.radio = [&]() { return toggleRadio(view); };
+  actions.hz50 = [&]() { return toggle50Hz(view); };
+  actions.audioTrack = [&]() { return toggleAudioTrack(view); };
+  actions.subtitles = [&]() { return toggleSubtitles(view); };
+  actions.pictureInPicture = [&]() {
+    return togglePictureInPicture(view, signals);
+  };
+  return playback_overlay::dispatchOverlayControl(spec.id, actions);
 }
 
 playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
@@ -251,6 +276,8 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   inputs.audioOk = view.audioOk && *view.audioOk;
   inputs.audioSupports50HzToggle =
       inputs.audioOk && audioSupports50HzToggle();
+  inputs.canPlayPrevious = signals.requestTransportCommand != nullptr;
+  inputs.canPlayNext = signals.requestTransportCommand != nullptr;
   inputs.radioEnabled = audioIsRadioEnabled();
   inputs.hz50Enabled = audioIs50HzEnabled();
   inputs.canCycleAudioTracks =
@@ -601,7 +628,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   bool leftPressed =
       (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
   if (leftPressed && hitMouse.eventFlags == 0 && controlHit >= 0) {
-    if (executeOverlayControl(view, signals, mouseOverlayState, controlHit)) {
+    if (executeOverlayControl(view, signals, seekState, mouseOverlayState,
+                              controlHit)) {
       triggerOverlay(view, signals);
       if (signals.redraw) {
         *signals.redraw = true;

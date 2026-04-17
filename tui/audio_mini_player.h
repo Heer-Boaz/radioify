@@ -1,13 +1,16 @@
 #pragma once
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
 
+#include "asciiart.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "gpu_text_grid.h"
+#include "playback/overlay/playback_overlay.h"
 #include "videowindow.h"
 
 class AudioMiniPlayer {
@@ -26,7 +29,8 @@ class AudioMiniPlayer {
 
   struct Context {
     std::string nowPlayingLabel;
-    bool melodyVisualizationEnabled = false;
+    std::filesystem::path nowPlayingPath;
+    int trackIndex = -1;
   };
 
   struct Callbacks {
@@ -36,7 +40,6 @@ class AudioMiniPlayer {
     std::function<void()> onPlayNext;
     std::function<void()> onToggleRadio;
     std::function<void()> onToggle50Hz;
-    std::function<void()> onToggleMelodyVisualization;
     std::function<void(int)> onSeekBy;
     std::function<void(double)> onSeekToRatio;
     std::function<void(float)> onAdjustVolume;
@@ -51,35 +54,30 @@ class AudioMiniPlayer {
   bool render(const Styles& styles, const Context& context);
 
  private:
-  struct Button {
-    enum class Action {
-      Previous,
-      PlayPause,
-      Next,
-      Stop,
-      Radio,
-      Melody,
-      Hz50,
-      Close,
-    };
-
-    Action action = Action::PlayPause;
-    int x0 = 0;
-    int y = 0;
-    int x1 = 0;
-  };
-
   bool ensureOpen();
   void refreshGridSize();
+  void refreshArtwork(const Context& context, int width, int height);
+  void drawArtworkBackground(const Styles& styles, int width, int height);
   void handleInput(const InputEvent& ev, const Callbacks& callbacks);
-  bool clickButton(const Button& button, const Callbacks& callbacks);
+  bool clickControl(playback_overlay::OverlayControlId control,
+                    const Callbacks& callbacks);
+  int controlAt(int x, int y) const;
+  bool progressHit(int x, int y) const;
   double progressRatioAt(int x) const;
 
   VideoWindow window_;
   ConsoleScreen screen_;
   std::vector<ScreenCell> cells_;
   GpuTextGridFrame frame_;
-  std::vector<Button> buttons_;
+  std::vector<playback_overlay::OverlayControlSpec> controls_;
+  playback_overlay::OverlayCellLayout layout_;
+  AsciiArt artwork_;
+  std::filesystem::path artworkPath_;
+  int artworkTrackIndex_ = -2;
+  int artworkWidth_ = 0;
+  int artworkHeight_ = 0;
+  bool artworkValid_ = false;
+  int hoverIndex_ = -1;
   int cols_ = 0;
   int rows_ = 0;
   int cellWidth_ = 1;

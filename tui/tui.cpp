@@ -47,6 +47,7 @@
 #include "audiofilter/radio1938/radio_buffer_io.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "playback/playback_control_command.h"
+#include "playback/overlay/playback_overlay.h"
 #include "playback/system_media_transport_controls.h"
 #include "playback_transport_navigation.h"
 #include "tracklist.h"
@@ -1147,17 +1148,6 @@ int runTui(Options o) {
     audioAdjustVolume(delta);
     markDirty();
   };
-  callbacks.onToggleMelodyVisualization = [&]() {
-    melodyVisualizationEnabled = !melodyVisualizationEnabled;
-    if (melodyVisualizationEnabled) {
-      setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-      breadcrumbHover = -1;
-      actionHover = -1;
-      clearMelodyHistory();
-    }
-    fileContextMenu.active = false;
-    markLayoutDirty();
-  };
   callbacks.onToggleWindow = [&]() {
     if (!audioMiniPlayer.isOpen() && audioGetNowPlaying().empty() &&
         !audioIsReady()) {
@@ -1180,7 +1170,8 @@ int runTui(Options o) {
   auto buildAudioMiniContext = [&]() {
     AudioMiniPlayer::Context context;
     context.nowPlayingLabel = buildAudioNowPlayingLabel();
-    context.melodyVisualizationEnabled = melodyVisualizationEnabled;
+    context.nowPlayingPath = audioGetNowPlaying();
+    context.trackIndex = audioGetTrackIndex();
     return context;
   };
   auto renderAudioMiniPlayer = [&]() {
@@ -1207,11 +1198,6 @@ int runTui(Options o) {
   };
   audioMiniCallbacks.onToggle50Hz = [&]() {
     if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
-  };
-  audioMiniCallbacks.onToggleMelodyVisualization = [&]() {
-    if (callbacks.onToggleMelodyVisualization) {
-      callbacks.onToggleMelodyVisualization();
-    }
   };
   audioMiniCallbacks.onSeekBy = [&](int direction) {
     if (callbacks.onSeekBy) callbacks.onSeekBy(direction);
@@ -1302,34 +1288,18 @@ int runTui(Options o) {
                     }});
     if (audioMiniPlayer.isOpen() || !audioGetNowPlaying().empty() ||
         audioIsReady()) {
-      cmds.push_back({audioMiniPlayer.isOpen() ? "PiP Mini Player: On"
-                                               : "PiP Mini Player: Off",
-                      "W", true, [&]() {
+      cmds.push_back({"PiP Mini Player", "W", true, [&]() {
                         if (callbacks.onToggleWindow) callbacks.onToggleWindow();
                       }});
     }
-    cmds.push_back(
-        {melodyVisualizationEnabled ? "Melody Viz: On" : "Melody Viz: Off",
-         "M", true, [&]() {
-           melodyVisualizationEnabled = !melodyVisualizationEnabled;
-           if (melodyVisualizationEnabled) {
-              setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-            breadcrumbHover = -1;
-            actionHover = -1;
-            clearMelodyHistory();
-           }
-           fileContextMenu.active = false;
-           markLayoutDirty();
-         }});
-    cmds.push_back({audioIsRadioEnabled() ? "Radio Filter: AM"
-                                          : "Radio Filter: Dry",
+    cmds.push_back({"Radio Filter",
                     "R", true, [&]() {
                       audioToggleRadio();
                       markDirty();
                     }});
     bool show50Hz = audioSupports50HzToggle();
     if (show50Hz) {
-      cmds.push_back({audioIs50HzEnabled() ? "50Hz: 50" : "50Hz: Auto",
+      cmds.push_back({"50Hz",
                       "H", true, [&]() {
                         audioToggle50Hz();
                         markDirty();
@@ -2323,32 +2293,66 @@ int runTui(Options o) {
           int width;
         };
         std::vector<ActionRenderItem> items;
-        auto makeLabels = [](const std::string& text) {
-          return std::pair<std::string, std::string>(" [" + text + "] ",
-                                                     "[ " + text + " ]");
+        auto addActionItem = [&](ActionStripItem id, const std::string& text,
+                                 bool active) {
+          BracketButtonLabels labels = makeBracketButtonLabels(text);
+          items.push_back(
+              {id, labels.normal, labels.hover, active, labels.width});
         };
-        std::string radioState = audioIsRadioEnabled() ? "Radio: AM" : "Radio: Dry";
-        auto radioLabels = makeLabels(radioState);
-        items.push_back({ActionStripItem::Radio, radioLabels.first,
-                         radioLabels.second, audioIsRadioEnabled(),
-                         std::max(utf8DisplayWidth(radioLabels.first),
-                                  utf8DisplayWidth(radioLabels.second))});
-        auto melodyLabels =
-            makeLabels(melodyVisualizationEnabled ? "Melody: On" : "Melody: Off");
-        items.push_back(
-            {ActionStripItem::MelodyViz, melodyLabels.first,
-             melodyLabels.second, melodyVisualizationEnabled,
-             std::max(utf8DisplayWidth(melodyLabels.first),
-                      utf8DisplayWidth(melodyLabels.second))});
-        if (audioMiniPlayer.isOpen() || !nowPlaying.empty() || audioIsReady()) {
-          auto pipLabels = makeLabels(audioMiniPlayer.isOpen() ? "PiP: On"
-                                                               : "PiP: Off");
-          items.push_back({ActionStripItem::PictureInPicture, pipLabels.first,
-                           pipLabels.second, audioMiniPlayer.isOpen(),
-                           std::max(utf8DisplayWidth(pipLabels.first),
-                                    utf8DisplayWidth(pipLabels.second))});
+        auto actionStripItemForOverlayControl =
+            [](playback_overlay::OverlayControlId id)
+            -> std::optional<ActionStripItem> {
+              switch (id) {
+                case playback_overlay::OverlayControlId::Previous:
+                  return ActionStripItem::Previous;
+                case playback_overlay::OverlayControlId::PlayPause:
+                  return ActionStripItem::PlayPause;
+                case playback_overlay::OverlayControlId::Next:
+                  return ActionStripItem::Next;
+                case playback_overlay::OverlayControlId::Radio:
+                  return ActionStripItem::Radio;
+                case playback_overlay::OverlayControlId::Hz50:
+                  return ActionStripItem::Hz50;
+                case playback_overlay::OverlayControlId::PictureInPicture:
+                  return ActionStripItem::PictureInPicture;
+                case playback_overlay::OverlayControlId::AudioTrack:
+                case playback_overlay::OverlayControlId::Subtitles:
+                  return std::nullopt;
+              }
+              return std::nullopt;
+            };
+
+        playback_overlay::PlaybackOverlayState actionOverlayState;
+        actionOverlayState.audioOk = audioIsReady();
+        actionOverlayState.audioSupports50HzToggle =
+            actionOverlayState.audioOk && audioSupports50HzToggle();
+        actionOverlayState.canPlayPrevious =
+            actionOverlayState.audioOk || !nowPlaying.empty();
+        actionOverlayState.canPlayNext =
+            actionOverlayState.audioOk || !nowPlaying.empty();
+        actionOverlayState.radioEnabled = audioIsRadioEnabled();
+        actionOverlayState.hz50Enabled = audioIs50HzEnabled();
+        actionOverlayState.paused = audioIsPaused();
+        actionOverlayState.audioFinished = audioIsFinished();
+        actionOverlayState.pictureInPictureAvailable =
+            audioMiniPlayer.isOpen() || actionOverlayState.audioOk ||
+            !nowPlaying.empty();
+        actionOverlayState.pictureInPictureActive = audioMiniPlayer.isOpen();
+        playback_overlay::OverlayControlSpecOptions controlOptions;
+        controlOptions.includeAudioTrack = false;
+        controlOptions.includeSubtitles = false;
+        std::vector<playback_overlay::OverlayControlSpec> controlSpecs =
+            playback_overlay::buildOverlayControlSpecs(actionOverlayState, -1,
+                                                       controlOptions);
+        for (const playback_overlay::OverlayControlSpec& spec : controlSpecs) {
+          std::optional<ActionStripItem> actionId =
+              actionStripItemForOverlayControl(spec.id);
+          if (actionId) {
+            items.push_back({*actionId, spec.normalText, spec.hoverText,
+                             spec.active, spec.width});
+          }
         }
-        bool show50Hz = audioSupports50HzToggle();
+
         if (browserInteractionEnabled) {
           const std::string gridIcon = "\xE2\x96\xA6";
           const std::string listIcon = "\xE2\x89\xA1";
@@ -2365,28 +2369,11 @@ int runTui(Options o) {
               viewState = previewIcon + " Preview";
               break;
           }
-          auto viewLabels = makeLabels(viewState);
-          items.push_back({ActionStripItem::View, viewLabels.first,
-                           viewLabels.second, false,
-                           std::max(utf8DisplayWidth(viewLabels.first),
-                                    utf8DisplayWidth(viewLabels.second))});
-        }
-        if (show50Hz) {
-          std::string hzState =
-              audioIs50HzEnabled() ? "50Hz: 50" : "50Hz: Auto";
-          auto hzLabels = makeLabels(hzState);
-          items.push_back({ActionStripItem::Hz50, hzLabels.first,
-                           hzLabels.second, audioIs50HzEnabled(),
-                           std::max(utf8DisplayWidth(hzLabels.first),
-                                    utf8DisplayWidth(hzLabels.second))});
+          addActionItem(ActionStripItem::View, viewState, false);
         }
         if (browserInteractionEnabled && optionsBrowserCanToggle(browser)) {
-          auto optLabels = makeLabels("Options");
           bool optActive = optionsBrowserIsActive(browser);
-          items.push_back({ActionStripItem::Options, optLabels.first,
-                           optLabels.second, optActive,
-                           std::max(utf8DisplayWidth(optLabels.first),
-                                    utf8DisplayWidth(optLabels.second))});
+          addActionItem(ActionStripItem::Options, "Options", optActive);
         }
         const int gap = 2;
         int x = 0;

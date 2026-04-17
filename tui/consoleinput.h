@@ -157,7 +157,6 @@ struct InputCallbacks {
   std::function<void()> onToggleSubtitles;
   std::function<void()> onToggleAudioTrack;
   std::function<void()> onToggleOptions;
-  std::function<void()> onToggleMelodyVisualization;
   std::function<void(int)> onSeekBy;
   std::function<void(double)> onSeekToRatio;
   std::function<void(float)> onAdjustVolume;
@@ -177,10 +176,12 @@ void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
                           bool& dirty);
 
 enum class ActionStripItem {
+  Previous,
+  PlayPause,
+  Next,
   Radio,
   Hz50,
   View,
-  MelodyViz,
   PictureInPicture,
   Options
 };

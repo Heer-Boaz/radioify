@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -12,6 +13,9 @@
 namespace playback_overlay {
 
 enum class OverlayControlId {
+  Previous,
+  PlayPause,
+  Next,
   Radio,
   Hz50,
   AudioTrack,
@@ -26,6 +30,24 @@ struct OverlayControlSpec {
   std::string renderText;
   bool active = false;
   int width = 0;
+};
+
+struct OverlayControlSpecOptions {
+  bool includeRadio = true;
+  bool includeAudioTrack = true;
+  bool includeSubtitles = true;
+  bool includePictureInPicture = true;
+};
+
+struct OverlayControlActions {
+  std::function<bool()> previous;
+  std::function<bool()> playPause;
+  std::function<bool()> next;
+  std::function<bool()> radio;
+  std::function<bool()> hz50;
+  std::function<bool()> audioTrack;
+  std::function<bool()> subtitles;
+  std::function<bool()> pictureInPicture;
 };
 
 struct OverlayCellControlInput {
@@ -74,6 +96,8 @@ struct PlaybackOverlayInputs {
   std::string windowTitle;
   bool audioOk = false;
   bool audioSupports50HzToggle = false;
+  bool canPlayPrevious = false;
+  bool canPlayNext = false;
   bool radioEnabled = false;
   bool hz50Enabled = false;
   bool canCycleAudioTracks = false;
@@ -106,6 +130,8 @@ struct PlaybackOverlayState {
   std::string windowTitle;
   bool audioOk = false;
   bool audioSupports50HzToggle = false;
+  bool canPlayPrevious = false;
+  bool canPlayNext = false;
   bool radioEnabled = false;
   bool hz50Enabled = false;
   bool canCycleAudioTracks = false;
@@ -151,6 +177,17 @@ std::string buildSubtitleText(const SubtitleManager& subtitleManager,
 
 std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     const PlaybackOverlayState& state, int hoverIndex);
+std::vector<OverlayControlSpec> buildOverlayControlSpecs(
+    const PlaybackOverlayState& state, int hoverIndex,
+    const OverlayControlSpecOptions& options);
+
+OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
+                                              const std::string& label,
+                                              bool active);
+std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
+    const std::vector<OverlayControlSpec>& specs, int hoverIndex);
+bool dispatchOverlayControl(OverlayControlId id,
+                            const OverlayControlActions& actions);
 
 OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input);
 

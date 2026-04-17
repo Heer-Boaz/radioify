@@ -32,7 +32,7 @@ using PictureInPictureTextGridProvider =
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
     SubtitleManager& subtitleManager, PlaybackSessionState playbackState,
-    bool audioOk, bool hasSubtitles,
+    bool audioOk, bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<bool>& windowLocalSeekRequested,
     std::atomic<double>& windowPendingSeekTargetSec,

@@ -237,6 +237,16 @@ target_sources(radio_node_physics PRIVATE
 )
 radioify_link_repo_target(radio_node_physics)
 
+add_executable(ascii_shader_tests)
+target_sources(ascii_shader_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_ascii_shader_tests>
+  $<TARGET_OBJECTS:radioify_ascii_cpu>
+)
+radioify_link_repo_target(ascii_shader_tests)
+if (WIN32)
+  target_link_libraries(ascii_shader_tests PRIVATE ole32 windowscodecs)
+endif()
+
 if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL
     COMMAND ${CMAKE_COMMAND}

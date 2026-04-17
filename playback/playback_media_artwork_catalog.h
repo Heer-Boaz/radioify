@@ -15,6 +15,13 @@ bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request
                                       AsciiArt* out,
                                       std::string* error);
 
+bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request,
+                                      MediaArtworkSidecarPolicy sidecarPolicy,
+                                      int maxWidth,
+                                      int maxHeight,
+                                      AsciiArt* out,
+                                      std::string* error);
+
 bool resolvePlaybackMediaArtworkBitmap(
     const PlaybackMediaDisplayRequest& request,
     const PlaybackMediaDisplayInfo& info,

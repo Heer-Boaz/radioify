@@ -445,6 +445,28 @@ bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request
   return false;
 }
 
+bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request,
+                                      MediaArtworkSidecarPolicy sidecarPolicy,
+                                      int maxWidth,
+                                      int maxHeight,
+                                      AsciiArt* out,
+                                      std::string* error) {
+  PlaybackMediaDisplayResolveOptions options;
+  options.includeArtwork = false;
+
+  PlaybackMediaDisplayInfo info;
+  std::string metadataError;
+  resolvePlaybackMediaDisplayInfo(request, options, &info, &metadataError);
+
+  std::string artworkError;
+  const bool ok = resolvePlaybackMediaArtworkAscii(
+      request, info, sidecarPolicy, maxWidth, maxHeight, out, &artworkError);
+  if (!ok && error) {
+    *error = !artworkError.empty() ? artworkError : metadataError;
+  }
+  return ok;
+}
+
 bool resolvePlaybackMediaArtworkBitmap(
     const PlaybackMediaDisplayRequest& request,
     const PlaybackMediaDisplayInfo& info,

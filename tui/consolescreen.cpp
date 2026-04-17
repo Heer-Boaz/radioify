@@ -17,7 +17,6 @@
 #include "browser_grid_index.h"
 #include "consoleinput.h"
 #include "playback/playback_media_artwork_catalog.h"
-#include "playback/playback_media_metadata_catalog.h"
 #include "runtime_helpers.h"
 #include "ui_helpers.h"
 #include "unicode_display_width.h"
@@ -419,23 +418,17 @@ static bool renderAudioThumbnail(const std::filesystem::path& file,
                                  int trackIndex, int maxWidth, int maxHeight,
                                  Thumbnail& out, std::string* error) {
   PlaybackMediaDisplayRequest request;
-  PlaybackMediaDisplayResolveOptions options;
   request.file = file;
   request.trackIndex = trackIndex;
   request.isVideo = false;
-  options.includeArtwork = false;
-
-  PlaybackMediaDisplayInfo info;
-  std::string metadataError;
-  resolvePlaybackMediaDisplayInfo(request, options, &info, &metadataError);
 
   AsciiArt art;
   std::string artworkError;
   if (!resolvePlaybackMediaArtworkAscii(
-          request, info, MediaArtworkSidecarPolicy::FileSpecificOnly, maxWidth,
+          request, MediaArtworkSidecarPolicy::FileSpecificOnly, maxWidth,
           maxHeight, &art, &artworkError)) {
     if (error) {
-      *error = !artworkError.empty() ? artworkError : metadataError;
+      *error = artworkError;
     }
     return false;
   }

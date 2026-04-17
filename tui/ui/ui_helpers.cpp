@@ -95,40 +95,14 @@ ProgressTextLayout buildProgressTextLayout(double displaySec,
   return out;
 }
 
-AsciiArtLayout fitAsciiArtLayout(int srcWidth,
-                                 int srcHeight,
-                                 int maxWidthChars,
-                                 int maxHeightChars) {
-  AsciiArtLayout out;
-  if (srcWidth <= 0 || srcHeight <= 0 || maxWidthChars <= 0 ||
-      maxHeightChars <= 0) {
-    return out;
-  }
-
-  const int maxSrcW = std::max(1, srcWidth / 2);
-  const int maxSrcH = std::max(1, srcHeight / 4);
-  const int clampedMaxW = std::max(1, std::min(maxWidthChars, maxSrcW));
-  const int clampedMaxH = std::max(1, std::min(maxHeightChars, maxSrcH));
-
-  const double scaleW =
-      (2.0 * static_cast<double>(clampedMaxW)) / static_cast<double>(srcWidth);
-  const double scaleH =
-      (4.0 * static_cast<double>(clampedMaxH)) / static_cast<double>(srcHeight);
-  const double scale = std::min({scaleW, scaleH, 1.0});
-
-  int fittedW = static_cast<int>(
-      std::lround(static_cast<double>(srcWidth) * scale / 2.0));
-  int fittedH = static_cast<int>(
-      std::lround(static_cast<double>(srcHeight) * scale / 4.0));
-  fittedW = std::clamp(fittedW, 1, clampedMaxW);
-  fittedH = std::clamp(fittedH, 1, clampedMaxH);
-
-  out.width = fittedW;
-  out.height = fittedH;
-  return out;
-}
-
 float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
+
+Color scaleColor(const Color& color, float amount) {
+  float clamped = clamp01(amount);
+  return Color{static_cast<uint8_t>(std::lround(color.r * clamped)),
+               static_cast<uint8_t>(std::lround(color.g * clamped)),
+               static_cast<uint8_t>(std::lround(color.b * clamped))};
+}
 
 Color lerpColor(const Color& a, const Color& b, float t) {
   float tt = clamp01(t);
@@ -137,6 +111,15 @@ Color lerpColor(const Color& a, const Color& b, float t) {
   out.g = static_cast<uint8_t>(std::lround(a.g + (b.g - a.g) * tt));
   out.b = static_cast<uint8_t>(std::lround(a.b + (b.b - a.b) * tt));
   return out;
+}
+
+BracketButtonLabels makeBracketButtonLabels(const std::string& text) {
+  BracketButtonLabels labels;
+  labels.normal = " [" + text + "] ";
+  labels.hover = "[ " + text + " ]";
+  labels.width =
+      std::max(utf8DisplayWidth(labels.normal), utf8DisplayWidth(labels.hover));
+  return labels;
 }
 
 static size_t utf8Next(const std::string& s, size_t i) {

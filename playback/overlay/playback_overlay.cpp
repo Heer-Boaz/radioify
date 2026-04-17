@@ -40,11 +40,6 @@ std::string fitCellText(const std::string& text, int width) {
   return filtered;
 }
 
-std::pair<std::string, std::string> makeLabels(const std::string& text) {
-  return std::pair<std::string, std::string>(" [" + text + "] ",
-                                             "[ " + text + " ]");
-}
-
 struct PendingOverlayCellControl {
   std::string text;
   int controlIndex = -1;
@@ -140,6 +135,8 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.windowTitle = inputs.windowTitle;
   state.audioOk = inputs.audioOk;
   state.audioSupports50HzToggle = inputs.audioSupports50HzToggle;
+  state.canPlayPrevious = inputs.canPlayPrevious;
+  state.canPlayNext = inputs.canPlayNext;
   state.radioEnabled = inputs.radioEnabled;
   state.hz50Enabled = inputs.hz50Enabled;
   state.canCycleAudioTracks = inputs.canCycleAudioTracks;
@@ -330,93 +327,125 @@ std::string buildSubtitleText(const SubtitleManager& subtitleManager,
   return merged;
 }
 
+OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
+                                              const std::string& label,
+                                              bool active) {
+  BracketButtonLabels labels = makeBracketButtonLabels(label);
+  OverlayControlSpec spec;
+  spec.id = id;
+  spec.normalText = std::move(labels.normal);
+  spec.hoverText = std::move(labels.hover);
+  spec.width = labels.width;
+  spec.active = active;
+  return spec;
+}
+
+std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
+    const std::vector<OverlayControlSpec>& specs, int hoverIndex) {
+  std::vector<OverlayCellControlInput> controls;
+  controls.reserve(specs.size());
+  for (size_t i = 0; i < specs.size(); ++i) {
+    const bool hovered = static_cast<int>(i) == hoverIndex;
+    OverlayCellControlInput control;
+    control.text = hovered ? specs[i].hoverText : specs[i].normalText;
+    control.width = specs[i].width;
+    control.active = specs[i].active;
+    control.hovered = hovered;
+    control.controlIndex = static_cast<int>(i);
+    controls.push_back(std::move(control));
+  }
+  return controls;
+}
+
+bool dispatchOverlayControl(OverlayControlId id,
+                            const OverlayControlActions& actions) {
+  auto invoke = [](const std::function<bool()>& action) {
+    return action ? action() : false;
+  };
+  switch (id) {
+    case OverlayControlId::Previous:
+      return invoke(actions.previous);
+    case OverlayControlId::PlayPause:
+      return invoke(actions.playPause);
+    case OverlayControlId::Next:
+      return invoke(actions.next);
+    case OverlayControlId::Radio:
+      return invoke(actions.radio);
+    case OverlayControlId::Hz50:
+      return invoke(actions.hz50);
+    case OverlayControlId::AudioTrack:
+      return invoke(actions.audioTrack);
+    case OverlayControlId::Subtitles:
+      return invoke(actions.subtitles);
+    case OverlayControlId::PictureInPicture:
+      return invoke(actions.pictureInPicture);
+  }
+  return false;
+}
+
 std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverIndex) {
+    const PlaybackOverlayState& state, int hoverIndex,
+    const OverlayControlSpecOptions& options) {
   std::vector<OverlayControlSpec> out;
   auto addSpec = [&](OverlayControlSpec spec) {
     out.push_back(std::move(spec));
   };
 
-  OverlayControlSpec radio{};
-  radio.id = OverlayControlId::Radio;
-  radio.active = state.radioEnabled;
-  auto radioLabels = makeLabels(radio.active ? "Radio: AM" : "Radio: Dry");
-  radio.normalText = radioLabels.first;
-  radio.hoverText = radioLabels.second;
-  radio.width =
-      std::max(countVisibleChars(radio.normalText),
-               countVisibleChars(radio.hoverText));
-  addSpec(std::move(radio));
+  if (state.canPlayPrevious) {
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::Previous, "<<",
+                                       false));
+  }
+  addSpec(makeOverlayTextControlSpec(OverlayControlId::PlayPause, "pause",
+                                     state.paused));
+  if (state.canPlayNext) {
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::Next, ">>", false));
+  }
+
+  if (options.includeRadio) {
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::Radio, "Radio",
+                                       state.radioEnabled));
+  }
 
   if (state.audioOk && state.audioSupports50HzToggle) {
-    OverlayControlSpec hz50{};
-    hz50.id = OverlayControlId::Hz50;
-    hz50.active = state.hz50Enabled;
-    auto hzLabels = makeLabels(hz50.active ? "50Hz: 50" : "50Hz: Auto");
-    hz50.normalText = hzLabels.first;
-    hz50.hoverText = hzLabels.second;
-    hz50.width =
-        std::max(countVisibleChars(hz50.normalText),
-                 countVisibleChars(hz50.hoverText));
-    addSpec(std::move(hz50));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::Hz50, "50Hz",
+                                       state.hz50Enabled));
   }
 
-  OverlayControlSpec audioTrack{};
-  audioTrack.id = OverlayControlId::AudioTrack;
-  std::string audioLabel = "Audio: N/A";
-  if (state.canCycleAudioTracks && state.audioOk) {
-    std::string activeAudio = state.activeAudioTrackLabel;
-    if (activeAudio.empty()) activeAudio = "N/A";
-    if (utf8DisplayWidth(activeAudio) > 14) {
-      activeAudio = utf8TakeDisplayWidth(activeAudio, 14);
-    }
-    audioLabel = "Audio: " + activeAudio;
-  }
-  auto audioLabels = makeLabels(audioLabel);
-  audioTrack.normalText = audioLabels.first;
-  audioTrack.hoverText = audioLabels.second;
-  audioTrack.active = state.audioOk && state.canCycleAudioTracks;
-  audioTrack.width =
-      std::max(countVisibleChars(audioTrack.normalText),
-               countVisibleChars(audioTrack.hoverText));
-  addSpec(std::move(audioTrack));
-
-  OverlayControlSpec subtitles{};
-  subtitles.id = OverlayControlId::Subtitles;
-  subtitles.active = state.hasSubtitles;
-  std::string subtitleLabel = "Subs: N/A";
-  if (state.hasSubtitles) {
-    if (!state.subtitlesEnabled) {
-      subtitleLabel = "Subs: Off";
-    } else {
-      std::string activeSubtitle = state.activeSubtitleLabel;
-      if (activeSubtitle.empty()) activeSubtitle = "N/A";
-      if (utf8DisplayWidth(activeSubtitle) > 14) {
-        activeSubtitle = utf8TakeDisplayWidth(activeSubtitle, 14);
+  if (options.includeAudioTrack) {
+    std::string audioLabel = "Audio: N/A";
+    if (state.canCycleAudioTracks && state.audioOk) {
+      std::string activeAudio = state.activeAudioTrackLabel;
+      if (activeAudio.empty()) activeAudio = "N/A";
+      if (utf8DisplayWidth(activeAudio) > 14) {
+        activeAudio = utf8TakeDisplayWidth(activeAudio, 14);
       }
-      subtitleLabel = "Subs: " + activeSubtitle;
+      audioLabel = "Audio: " + activeAudio;
     }
+    addSpec(makeOverlayTextControlSpec(
+        OverlayControlId::AudioTrack, audioLabel,
+        state.audioOk && state.canCycleAudioTracks));
   }
-  auto subtitleLabels = makeLabels(subtitleLabel);
-  subtitles.normalText = subtitleLabels.first;
-  subtitles.hoverText = subtitleLabels.second;
-  subtitles.width =
-      std::max(countVisibleChars(subtitles.normalText),
-               countVisibleChars(subtitles.hoverText));
-  addSpec(std::move(subtitles));
 
-  if (state.pictureInPictureAvailable) {
-    OverlayControlSpec pip{};
-    pip.id = OverlayControlId::PictureInPicture;
-    pip.active = state.pictureInPictureActive;
-    auto pipLabels =
-        makeLabels(pip.active ? "PiP: On" : "PiP: Off");
-    pip.normalText = pipLabels.first;
-    pip.hoverText = pipLabels.second;
-    pip.width =
-        std::max(countVisibleChars(pip.normalText),
-                 countVisibleChars(pip.hoverText));
-    addSpec(std::move(pip));
+  if (options.includeSubtitles) {
+    const bool subtitlesActive = state.hasSubtitles && state.subtitlesEnabled;
+    std::string subtitleLabel = "Subs";
+    if (subtitlesActive) {
+      std::string activeSubtitle = state.activeSubtitleLabel;
+      if (!activeSubtitle.empty() && activeSubtitle != "N/A") {
+        if (utf8DisplayWidth(activeSubtitle) > 14) {
+          activeSubtitle = utf8TakeDisplayWidth(activeSubtitle, 14);
+        }
+        subtitleLabel += ": " + activeSubtitle;
+      }
+    }
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::Subtitles,
+                                       subtitleLabel, subtitlesActive));
+  }
+
+  if (options.includePictureInPicture && state.pictureInPictureAvailable) {
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::PictureInPicture,
+                                       "PiP",
+                                       state.pictureInPictureActive));
   }
 
   for (size_t i = 0; i < out.size(); ++i) {
@@ -431,6 +460,12 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     }
   }
   return out;
+}
+
+std::vector<OverlayControlSpec> buildOverlayControlSpecs(
+    const PlaybackOverlayState& state, int hoverIndex) {
+  return buildOverlayControlSpecs(state, hoverIndex,
+                                  OverlayControlSpecOptions{});
 }
 
 OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
@@ -533,16 +568,7 @@ OverlayCellLayout layoutPlaybackOverlayCells(
   input.height = height;
   input.title = " " + buildWindowOverlayTopLine(state);
   input.suffix = buildWindowOverlayProgressSuffix(state);
-  input.controls.reserve(specs.size());
-  for (size_t i = 0; i < specs.size(); ++i) {
-    OverlayCellControlInput control;
-    control.text = specs[i].renderText;
-    control.width = specs[i].width;
-    control.active = specs[i].active;
-    control.hovered = static_cast<int>(i) == hoverIndex;
-    control.controlIndex = static_cast<int>(i);
-    input.controls.push_back(std::move(control));
-  }
+  input.controls = buildOverlayCellControlInputs(specs, hoverIndex);
   return layoutOverlayCells(input);
 }
 

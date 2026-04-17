@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <utility>
 
 #include "audioplayback.h"
+#include "playback/playback_media_artwork_catalog.h"
 #include "playback/playback_media_keys.h"
 #include "playback_mini_player_tui.h"
 #include "runtime_helpers.h"
@@ -19,13 +21,6 @@ constexpr int kDefaultWindowHeight = 260;
 constexpr int kMinCols = 28;
 constexpr int kMinRows = 8;
 constexpr DWORD kWindowMouseFlag = 0x80000000;
-
-std::string statusIcon() {
-  if (!audioIsReady()) return "\xE2\x97\x8B";
-  if (audioIsFinished()) return "\xE2\x96\xA0";
-  if (audioIsPaused()) return "\xE2\x8F\xB8";
-  return "\xE2\x96\xB6";
-}
 
 std::string trackLabelForNowPlaying(const std::filesystem::path& nowPlaying,
                                     int trackIndex) {
@@ -116,6 +111,71 @@ void AudioMiniPlayer::refreshGridSize() {
   screen_.setVirtualSize(cols_, rows_);
 }
 
+void AudioMiniPlayer::refreshArtwork(const Context& context, int width,
+                                     int height) {
+  const bool cacheHit =
+      artworkValid_ && context.nowPlayingPath == artworkPath_ &&
+      context.trackIndex == artworkTrackIndex_ && width == artworkWidth_ &&
+      height == artworkHeight_;
+  if (cacheHit) return;
+
+  artwork_ = AsciiArt{};
+  artworkPath_ = context.nowPlayingPath;
+  artworkTrackIndex_ = context.trackIndex;
+  artworkWidth_ = width;
+  artworkHeight_ = height;
+  artworkValid_ = false;
+  if (context.nowPlayingPath.empty() || width <= 0 || height <= 0) {
+    return;
+  }
+
+  PlaybackMediaDisplayRequest request;
+  request.file = context.nowPlayingPath;
+  request.trackIndex = context.trackIndex;
+  request.isVideo = false;
+
+  std::string ignoredError;
+  if (resolvePlaybackMediaArtworkAscii(
+          request, MediaArtworkSidecarPolicy::IncludeGenericDirectoryFallback,
+          width, height, &artwork_, &ignoredError)) {
+    artworkValid_ = artwork_.width > 0 && artwork_.height > 0 &&
+                    artwork_.cells.size() >=
+                        static_cast<size_t>(artwork_.width) *
+                            static_cast<size_t>(artwork_.height);
+  }
+}
+
+void AudioMiniPlayer::drawArtworkBackground(const Styles& styles, int width,
+                                            int height) {
+  if (!artworkValid_ || artwork_.width <= 0 || artwork_.height <= 0) {
+    screen_.clear(styles.normal);
+    return;
+  }
+
+  const size_t expected =
+      static_cast<size_t>(artwork_.width) * static_cast<size_t>(artwork_.height);
+  if (artwork_.cells.size() < expected) {
+    screen_.clear(styles.normal);
+    return;
+  }
+
+  for (int y = 0; y < height; ++y) {
+    const int sy =
+        std::clamp((y * artwork_.height) / std::max(1, height), 0,
+                   artwork_.height - 1);
+    for (int x = 0; x < width; ++x) {
+      const int sx =
+          std::clamp((x * artwork_.width) / std::max(1, width), 0,
+                     artwork_.width - 1);
+      const auto& src =
+          artwork_.cells[static_cast<size_t>(sy * artwork_.width + sx)];
+      const Color bg = src.hasBg ? src.bg : styles.normal.bg;
+      Style style{scaleColor(src.fg, 0.52f), scaleColor(bg, 0.38f)};
+      screen_.writeChar(x, y, src.ch, style);
+    }
+  }
+}
+
 bool AudioMiniPlayer::pollEvents(const Callbacks& callbacks) {
   if (!window_.IsOpen()) return false;
   bool handled = window_.PollEvents();
@@ -136,24 +196,19 @@ bool AudioMiniPlayer::pollEvents(const Callbacks& callbacks) {
 bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   if (!ensureOpen()) return false;
   refreshGridSize();
-  screen_.clear(styles.normal);
-  buttons_.clear();
+  refreshArtwork(context, cols_, rows_);
+  drawArtworkBackground(styles, cols_, rows_);
+  controls_.clear();
+  layout_ = playback_overlay::OverlayCellLayout{};
   progressX_ = -1;
   progressY_ = -1;
   progressWidth_ = 0;
 
   const int width = cols_;
   const int height = rows_;
-  int row = 0;
   const std::string title = context.nowPlayingLabel.empty()
                                 ? buildDefaultNowPlayingLabel()
                                 : context.nowPlayingLabel;
-  writeFitted(screen_, 0, row++, width, " " + title, styles.accent);
-
-  const std::string warning = audioGetWarning();
-  if (!warning.empty() && row < height) {
-    writeFitted(screen_, 0, row++, width, " Warning: " + warning, styles.alert);
-  }
 
   const bool audioReady = audioIsReady();
   const double totalSec = audioReady ? audioGetTotalSec() : -1.0;
@@ -166,129 +221,94 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
     ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
   }
 
-  if (row < height) {
-    const int volPct =
-        static_cast<int>(std::round(audioGetVolume() * 100.0f));
-    ProgressTextLayout progressText =
-        buildProgressTextLayout(displaySec, totalSec, statusIcon(), volPct,
-                                width);
-    const int barWidth = std::max(1, std::min(progressText.barWidth,
-                                              std::max(1, width - 2)));
-    progressX_ = 1;
-    progressY_ = row;
-    progressWidth_ = barWidth;
-    screen_.writeChar(0, row, L'|', styles.progressFrame);
-    auto barCells = renderProgressBarCells(ratio, barWidth,
+  playback_overlay::PlaybackOverlayState overlayState;
+  overlayState.windowTitle = title;
+  overlayState.audioOk = audioReady;
+  overlayState.audioSupports50HzToggle =
+      audioReady && audioSupports50HzToggle();
+  overlayState.canPlayPrevious = true;
+  overlayState.canPlayNext = true;
+  overlayState.radioEnabled = audioIsRadioEnabled();
+  overlayState.hz50Enabled = audioIs50HzEnabled();
+  overlayState.displaySec = displaySec;
+  overlayState.totalSec = totalSec;
+  overlayState.volPct =
+      static_cast<int>(std::round(audioGetVolume() * 100.0f));
+  overlayState.paused = audioIsPaused();
+  overlayState.audioFinished = audioIsFinished();
+  overlayState.pictureInPictureAvailable = true;
+  overlayState.pictureInPictureActive = true;
+  std::string suffix =
+      playback_overlay::buildWindowOverlayProgressSuffix(overlayState);
+
+  const std::string warning = audioGetWarning();
+  if (!warning.empty()) {
+    suffix += "  ! " + warning;
+  } else {
+    const float peak = std::clamp(audioGetPeak(), 0.0f, 1.2f);
+    suffix += "  Peak " +
+              std::to_string(static_cast<int>(std::round(peak * 100.0f))) +
+              "%";
+  }
+
+  playback_overlay::OverlayCellLayoutInput layoutInput;
+  layoutInput.width = width;
+  layoutInput.height = height;
+  layoutInput.title = title;
+  layoutInput.suffix = suffix;
+
+  playback_overlay::OverlayControlSpecOptions controlOptions;
+  controlOptions.includeAudioTrack = false;
+  controlOptions.includeSubtitles = false;
+  controls_ = playback_overlay::buildOverlayControlSpecs(
+      overlayState, hoverIndex_, controlOptions);
+
+  layoutInput.controls =
+      playback_overlay::buildOverlayCellControlInputs(controls_, hoverIndex_);
+  layout_ = playback_overlay::layoutOverlayCells(layoutInput);
+  if (layout_.titleY >= 0 && layout_.titleY < height &&
+      !layout_.titleText.empty()) {
+    writeFitted(screen_, layout_.titleX, layout_.titleY,
+                width - layout_.titleX, layout_.titleText, styles.accent);
+  }
+  for (const auto& item : layout_.controls) {
+    if (item.y < 0 || item.y >= height || item.x >= width) continue;
+    Style style = item.active ? styles.actionActive : styles.normal;
+    if (item.hovered) {
+      style = {style.bg, style.fg};
+    }
+    writeFitted(screen_, item.x, item.y, width - item.x, item.text, style);
+  }
+  if (!layout_.suffixText.empty() && layout_.suffixY >= 0 &&
+      layout_.suffixY < height) {
+    Style suffixStyle = warning.empty() ? styles.normal : styles.alert;
+    writeFitted(screen_, layout_.suffixX, layout_.suffixY,
+                width - layout_.suffixX, layout_.suffixText, suffixStyle);
+  }
+
+  progressX_ = layout_.progressBarX;
+  progressY_ = layout_.progressBarY;
+  progressWidth_ = layout_.progressBarWidth;
+  if (progressY_ >= 0 && progressY_ < height && progressWidth_ > 0) {
+    const int leftFrameX = progressX_ - 1;
+    const int rightFrameX = progressX_ + progressWidth_;
+    if (leftFrameX >= 0 && leftFrameX < width) {
+      screen_.writeChar(leftFrameX, progressY_, L'|', styles.progressFrame);
+    }
+    auto barCells = renderProgressBarCells(ratio, progressWidth_,
                                            styles.progressEmpty,
                                            styles.progressStart,
                                            styles.progressEnd);
-    for (int i = 0; i < barWidth; ++i) {
+    for (int i = 0; i < progressWidth_; ++i) {
+      const int x = progressX_ + i;
+      if (x < 0 || x >= width) continue;
       const auto& cell = barCells[static_cast<size_t>(i)];
-      screen_.writeChar(progressX_ + i, row, cell.ch, cell.style);
+      screen_.writeChar(x, progressY_, cell.ch, cell.style);
     }
-    screen_.writeChar(progressX_ + barWidth, row, L'|',
-                      styles.progressFrame);
-    const int suffixX = progressX_ + barWidth + 2;
-    if (!progressText.suffix.empty() && suffixX < width) {
-      writeFitted(screen_, suffixX, row, width - suffixX,
-                  progressText.suffix, styles.normal);
+    if (rightFrameX >= 0 && rightFrameX < width) {
+      screen_.writeChar(rightFrameX, progressY_, L'|', styles.progressFrame);
     }
-    row++;
   }
-
-  if (row < height) {
-    const float peak = std::clamp(audioGetPeak(), 0.0f, 1.2f);
-    const int meterWidth = std::max(6, std::min(width - 12, 24));
-    screen_.writeText(0, row, " Peak ", styles.dim);
-    Color meterStart = styles.progressFrame.fg;
-    Color meterEnd = styles.progressFrame.fg;
-    if (audioHasClipAlert() && peak >= 0.80f) {
-      meterStart = styles.alert.fg;
-      meterEnd = styles.alert.fg;
-    } else if (peak >= 0.80f) {
-      meterStart = styles.accent.fg;
-      meterEnd = styles.progressEnd;
-    }
-    auto meterCells = renderProgressBarCells(
-        std::clamp(static_cast<double>(peak), 0.0, 1.0), meterWidth,
-        styles.progressEmpty, meterStart, meterEnd);
-    for (int i = 0; i < meterWidth; ++i) {
-      const auto& cell = meterCells[static_cast<size_t>(i)];
-      screen_.writeChar(6 + i, row, cell.ch, cell.style);
-    }
-    row++;
-  }
-
-  if (context.melodyVisualizationEnabled && row < height) {
-    const AudioMelodyInfo melody = audioGetMelodyInfo();
-    const AudioMelodyAnalysisState analysis = audioGetMelodyAnalysisState();
-    std::string melodyLine = " Melody ";
-    if (melody.midiNote >= 0) {
-      const int hz = static_cast<int>(std::round(melody.frequencyHz));
-      const int pct = static_cast<int>(
-          std::round(std::clamp(melody.confidence, 0.0f, 1.0f) * 100.0f));
-      melodyLine += std::to_string(hz) + "Hz " + std::to_string(pct) + "%";
-    } else {
-      melodyLine += "--";
-    }
-    if (analysis.running) {
-      const int pct = static_cast<int>(
-          std::round(std::clamp(analysis.progress, 0.0f, 1.0f) * 100.0f));
-      melodyLine += "  analysis " + std::to_string(pct) + "%";
-    } else if (analysis.ready) {
-      melodyLine += "  analysis ready";
-    }
-    writeFitted(screen_, 0, row++, width, melodyLine, styles.dim);
-  }
-
-  if (row < height) row++;
-
-  const int gap = 1;
-  int x = 0;
-  auto addButton = [&](Button::Action action, const std::string& label,
-                       bool active) {
-    if (row >= height) return;
-    std::string text = " [" + label + "] ";
-    int itemWidth = utf8DisplayWidth(text);
-    if (itemWidth > width && width > 0) {
-      text = utf8TakeDisplayWidth(text, width);
-      itemWidth = utf8DisplayWidth(text);
-    }
-    if (x > 0 && x + itemWidth > width) {
-      row++;
-      x = 0;
-      if (row >= height) return;
-    }
-    if (itemWidth <= 0 || x >= width) return;
-    const int drawWidth = std::min(itemWidth, width - x);
-    std::string fitted = text;
-    if (utf8DisplayWidth(fitted) > drawWidth) {
-      fitted = utf8TakeDisplayWidth(fitted, drawWidth);
-    }
-    Button button{action, x, row, x + drawWidth};
-    buttons_.push_back(button);
-    screen_.writeText(x, row, fitted,
-                      active ? styles.actionActive : styles.normal);
-    x += drawWidth + gap;
-  };
-
-  addButton(Button::Action::Previous, "<<", false);
-  addButton(Button::Action::PlayPause,
-            audioIsPaused() || audioIsFinished() ? "Play" : "Pause", false);
-  addButton(Button::Action::Next, ">>", false);
-  addButton(Button::Action::Stop, "Stop", false);
-  addButton(Button::Action::Radio,
-            audioIsRadioEnabled() ? "Radio: AM" : "Radio: Dry",
-            audioIsRadioEnabled());
-  addButton(Button::Action::Melody,
-            context.melodyVisualizationEnabled ? "Melody: On" : "Melody: Off",
-            context.melodyVisualizationEnabled);
-  if (audioSupports50HzToggle()) {
-    addButton(Button::Action::Hz50,
-              audioIs50HzEnabled() ? "50Hz: 50" : "50Hz: Auto",
-              audioIs50HzEnabled());
-  }
-  addButton(Button::Action::Close, "PiP: On", true);
 
   int outW = 0;
   int outH = 0;
@@ -349,12 +369,6 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
       if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
       return;
     }
-    if (key.vk == 'M' || key.ch == 'm' || key.ch == 'M') {
-      if (callbacks.onToggleMelodyVisualization) {
-        callbacks.onToggleMelodyVisualization();
-      }
-      return;
-    }
     if (key.vk == VK_OEM_4 || key.ch == '[') {
       if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
       return;
@@ -385,6 +399,11 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
     mouse.pos.Y = static_cast<SHORT>(gy);
   }
 
+  const int hitControl = controlAt(mouse.pos.X, mouse.pos.Y);
+  if (mouse.eventFlags == MOUSE_MOVED && hitControl != hoverIndex_) {
+    hoverIndex_ = hitControl;
+  }
+
   if (mouse.eventFlags == MOUSE_WHEELED) {
     const int delta = wheelDelta(mouse);
     if (delta != 0 && callbacks.onAdjustVolume) {
@@ -399,56 +418,49 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
   }
 
   if (mouse.eventFlags == 0) {
-    for (const Button& button : buttons_) {
-      if (mouse.pos.Y == button.y && mouse.pos.X >= button.x0 &&
-          mouse.pos.X < button.x1) {
-        clickButton(button, callbacks);
-        return;
-      }
+    if (hitControl >= 0 &&
+        hitControl < static_cast<int>(controls_.size())) {
+      clickControl(controls_[static_cast<size_t>(hitControl)].id, callbacks);
+      return;
     }
   }
 
-  if (progressWidth_ > 0 && mouse.pos.Y == progressY_ &&
-      mouse.pos.X >= progressX_ &&
-      mouse.pos.X < progressX_ + progressWidth_) {
+  if (progressHit(mouse.pos.X, mouse.pos.Y)) {
     if (callbacks.onSeekToRatio) {
       callbacks.onSeekToRatio(progressRatioAt(mouse.pos.X));
     }
   }
 }
 
-bool AudioMiniPlayer::clickButton(const Button& button,
-                                  const Callbacks& callbacks) {
-  switch (button.action) {
-    case Button::Action::Previous:
-      if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
-      return true;
-    case Button::Action::PlayPause:
-      if (callbacks.onTogglePause) callbacks.onTogglePause();
-      return true;
-    case Button::Action::Next:
-      if (callbacks.onPlayNext) callbacks.onPlayNext();
-      return true;
-    case Button::Action::Stop:
-      if (callbacks.onStopPlayback) callbacks.onStopPlayback();
-      return true;
-    case Button::Action::Radio:
-      if (callbacks.onToggleRadio) callbacks.onToggleRadio();
-      return true;
-    case Button::Action::Melody:
-      if (callbacks.onToggleMelodyVisualization) {
-        callbacks.onToggleMelodyVisualization();
-      }
-      return true;
-    case Button::Action::Hz50:
-      if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
-      return true;
-    case Button::Action::Close:
-      close();
-      if (callbacks.onClose) callbacks.onClose();
-      return true;
-  }
-  return false;
+bool AudioMiniPlayer::clickControl(playback_overlay::OverlayControlId control,
+                                   const Callbacks& callbacks) {
+  auto invoke = [](const std::function<void()>& action) {
+    if (!action) return false;
+    action();
+    return true;
+  };
+
+  playback_overlay::OverlayControlActions actions;
+  actions.previous = [&]() { return invoke(callbacks.onPlayPrevious); };
+  actions.playPause = [&]() { return invoke(callbacks.onTogglePause); };
+  actions.next = [&]() { return invoke(callbacks.onPlayNext); };
+  actions.radio = [&]() { return invoke(callbacks.onToggleRadio); };
+  actions.hz50 = [&]() { return invoke(callbacks.onToggle50Hz); };
+  actions.pictureInPicture = [&]() {
+    close();
+    if (callbacks.onClose) callbacks.onClose();
+    return true;
+  };
+  return playback_overlay::dispatchOverlayControl(control, actions);
+}
+
+int AudioMiniPlayer::controlAt(int x, int y) const {
+  return playback_overlay::overlayCellControlAt(layout_, x, y);
+}
+
+bool AudioMiniPlayer::progressHit(int x, int y) const {
+  return progressWidth_ > 0 && y == progressY_ && x >= progressX_ &&
+         x < progressX_ + progressWidth_;
 }
 
 double AudioMiniPlayer::progressRatioAt(int x) const {

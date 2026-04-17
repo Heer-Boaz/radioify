@@ -802,6 +802,18 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       if (actionIndex >= 0) {
         const auto& btn = actionStrip.buttons[static_cast<size_t>(actionIndex)];
         switch (btn.id) {
+          case ActionStripItem::Previous:
+            if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
+            dirty = true;
+            return;
+          case ActionStripItem::PlayPause:
+            if (callbacks.onTogglePause) callbacks.onTogglePause();
+            dirty = true;
+            return;
+          case ActionStripItem::Next:
+            if (callbacks.onPlayNext) callbacks.onPlayNext();
+            dirty = true;
+            return;
           case ActionStripItem::Radio:
             if (callbacks.onToggleRadio) callbacks.onToggleRadio();
             dirty = true;
@@ -817,12 +829,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
           case ActionStripItem::Options:
             clearForwardHistory();
             if (callbacks.onToggleOptions) callbacks.onToggleOptions();
-            dirty = true;
-            return;
-          case ActionStripItem::MelodyViz:
-            if (callbacks.onToggleMelodyVisualization) {
-              callbacks.onToggleMelodyVisualization();
-            }
             dirty = true;
             return;
           case ActionStripItem::PictureInPicture:
@@ -988,11 +994,6 @@ bool handlePlaybackInput(const InputEvent& ev,
     }
     if (key.vk == 'O' || key.ch == 'o' || key.ch == 'O') {
       if (callbacks.onToggleOptions) callbacks.onToggleOptions();
-      return true;
-    }
-    if (key.vk == 'M' || key.ch == 'm' || key.ch == 'M') {
-      if (callbacks.onToggleMelodyVisualization)
-        callbacks.onToggleMelodyVisualization();
       return true;
     }
 
