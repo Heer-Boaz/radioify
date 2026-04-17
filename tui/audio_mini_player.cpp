@@ -243,6 +243,7 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   layoutInput.width = width;
   layoutInput.height = height;
   layoutInput.title = title;
+  layoutInput.reservedRowsAboveProgress = audioReady ? 1 : 0;
 
   playback_overlay::OverlayControlSpecOptions controlOptions;
   controlOptions.includeAudioTrack = false;
@@ -266,48 +267,32 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
     }
     writeFitted(screen_, item.x, item.y, width - item.x, item.text, style);
   }
-  std::string status;
-  if (audioReady) {
-    if (audioIsFinished()) {
-      status = "\xE2\x96\xA0";
-    } else if (audioIsPaused()) {
-      status = "\xE2\x8F\xB8";
-    } else {
-      status = "\xE2\x96\xB6";
-    }
-  } else {
-    status = "\xE2\x97\x8B";
-  }
-  ProgressTextLayout progressText = buildProgressTextLayout(
-      displaySec, totalSec, status, overlayState.volPct, width);
-
-  progressX_ = 1;
-  progressY_ = layout_.progressBarY;
-  progressWidth_ = progressText.barWidth;
-  if (progressY_ >= 0 && progressY_ < height && progressWidth_ > 0) {
-    screen_.writeChar(0, progressY_, L'|', styles.progressFrame);
-    auto barCells = renderProgressBarCells(ratio, progressWidth_,
-                                           styles.progressEmpty,
-                                           styles.progressStart,
-                                           styles.progressEnd);
-    for (int i = 0; i < progressWidth_; ++i) {
-      const int x = progressX_ + i;
-      if (x < 0 || x >= width) continue;
-      const auto& cell = barCells[static_cast<size_t>(i)];
-      screen_.writeChar(x, progressY_, cell.ch, cell.style);
-    }
-    const int rightFrameX = 1 + progressWidth_;
-    if (rightFrameX < width) {
-      screen_.writeChar(rightFrameX, progressY_, L'|', styles.progressFrame);
-    }
-    if (!progressText.suffix.empty()) {
-      const int suffixX = 2 + progressWidth_;
-      if (suffixX < width) {
-        writeFitted(screen_, suffixX, progressY_, width - suffixX,
-                    " " + progressText.suffix, styles.normal);
-      }
-    }
-  }
+  ProgressFooterStyles footerStyles{styles.normal,
+                                    styles.progressEmpty,
+                                    styles.progressFrame,
+                                    styles.alert,
+                                    styles.accent,
+                                    styles.progressStart,
+                                    styles.progressEnd};
+  ProgressFooterInput footerInput;
+  footerInput.displaySec = displaySec;
+  footerInput.totalSec = totalSec;
+  footerInput.ratio = ratio;
+  footerInput.volPct = overlayState.volPct;
+  footerInput.width = width;
+  footerInput.progressY = layout_.progressBarY;
+  footerInput.peakY =
+      audioReady && layout_.progressBarY > 0 ? layout_.progressBarY - 1 : -1;
+  footerInput.audioReady = audioReady;
+  footerInput.paused = overlayState.paused;
+  footerInput.finished = overlayState.audioFinished;
+  footerInput.peak = audioGetPeak();
+  footerInput.clipAlert = audioHasClipAlert();
+  ProgressFooterRenderResult footerResult =
+      renderProgressFooter(screen_, footerInput, footerStyles);
+  progressX_ = footerResult.progressBarX;
+  progressY_ = footerResult.progressBarY;
+  progressWidth_ = footerResult.progressBarWidth;
 
   int outW = 0;
   int outH = 0;

@@ -217,3 +217,94 @@ std::vector<BufferCell> renderProgressBarCells(double ratio,
   }
   return cells;
 }
+
+static std::string progressStatusGlyph(const ProgressFooterInput& input) {
+  if (!input.audioReady) return "\xE2\x97\x8B";
+  if (input.finished) return "\xE2\x96\xA0";
+  if (input.paused) return "\xE2\x8F\xB8";
+  return "\xE2\x96\xB6";
+}
+
+ProgressFooterRenderResult renderProgressFooter(
+    ConsoleScreen& screen, const ProgressFooterInput& input,
+    const ProgressFooterStyles& styles) {
+  ProgressFooterRenderResult result;
+  const int width =
+      input.width > 0 ? std::min(input.width, screen.width()) : screen.width();
+  if (width <= 0 || input.progressY < 0 || input.progressY >= screen.height()) {
+    return result;
+  }
+
+  ProgressTextLayout progressText =
+      buildProgressTextLayout(input.displaySec, input.totalSec,
+                              progressStatusGlyph(input), input.volPct, width);
+  result.progressBarX = 1;
+  result.progressBarY = input.progressY;
+  result.progressBarWidth = progressText.barWidth;
+
+  screen.writeChar(0, input.progressY, L'|', styles.progressFrame);
+  auto barCells = renderProgressBarCells(
+      input.ratio, progressText.barWidth, styles.progressEmpty,
+      styles.progressStart, styles.progressEnd);
+  for (int i = 0; i < progressText.barWidth; ++i) {
+    const int x = result.progressBarX + i;
+    if (x >= width) break;
+    const auto& cell = barCells[static_cast<size_t>(i)];
+    screen.writeChar(x, input.progressY, cell.ch, cell.style);
+  }
+
+  const int rightFrameX = result.progressBarX + progressText.barWidth;
+  if (rightFrameX < width) {
+    screen.writeChar(rightFrameX, input.progressY, L'|',
+                     styles.progressFrame);
+  }
+
+  const int suffixBaseX = rightFrameX + 1;
+  std::string renderedSuffix;
+  if (!progressText.suffix.empty() && suffixBaseX < width) {
+    renderedSuffix = " " + progressText.suffix;
+    screen.writeText(suffixBaseX, input.progressY, renderedSuffix,
+                     styles.normal);
+  }
+
+  if (input.peakY < 0 || input.peakY >= screen.height() ||
+      renderedSuffix.empty()) {
+    return result;
+  }
+
+  float peak = std::clamp(input.peak, 0.0f, 1.2f);
+  size_t volPos = renderedSuffix.find(" Vol:");
+  if (volPos == std::string::npos) {
+    volPos = renderedSuffix.find(" V:");
+  }
+
+  int meterX = suffixBaseX;
+  if (volPos != std::string::npos) {
+    meterX += utf8DisplayWidth(renderedSuffix.substr(0, volPos + 1));
+  }
+  meterX = std::max(0, meterX);
+
+  int meterWidth = std::min(8, width - meterX);
+  if (meterWidth <= 0) return result;
+
+  Color meterStart = styles.progressFrame.fg;
+  Color meterEnd = styles.progressFrame.fg;
+  if (input.clipAlert && peak >= 0.80f) {
+    meterStart = styles.alert.fg;
+    meterEnd = styles.alert.fg;
+  } else if (peak >= 0.80f) {
+    meterStart = styles.accent.fg;
+    meterEnd = styles.progressEnd;
+  }
+
+  auto meterCells =
+      renderProgressBarCells(std::clamp(static_cast<double>(peak), 0.0, 1.0),
+                             meterWidth, styles.progressEmpty, meterStart,
+                             meterEnd);
+  for (int i = 0; i < meterWidth; ++i) {
+    const auto& cell = meterCells[static_cast<size_t>(i)];
+    screen.writeChar(meterX + i, input.peakY, cell.ch, cell.style);
+  }
+
+  return result;
+}

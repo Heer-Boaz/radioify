@@ -21,6 +21,37 @@ struct ProgressTextLayout {
   int barWidth = 5;
 };
 
+struct ProgressFooterStyles {
+  Style normal;
+  Style progressEmpty;
+  Style progressFrame;
+  Style alert;
+  Style accent;
+  Color progressStart;
+  Color progressEnd;
+};
+
+struct ProgressFooterInput {
+  double displaySec = 0.0;
+  double totalSec = -1.0;
+  double ratio = 0.0;
+  int volPct = 0;
+  int width = 0;
+  int progressY = -1;
+  int peakY = -1;
+  bool audioReady = false;
+  bool paused = false;
+  bool finished = false;
+  float peak = 0.0f;
+  bool clipAlert = false;
+};
+
+struct ProgressFooterRenderResult {
+  int progressBarX = -1;
+  int progressBarY = -1;
+  int progressBarWidth = 0;
+};
+
 struct BracketButtonLabels {
   std::string normal;
   std::string hover;
@@ -50,3 +81,6 @@ std::vector<BufferCell> renderProgressBarCells(double ratio,
                                                const Style& emptyStyle,
                                                const Color& startColor,
                                                const Color& endColor);
+ProgressFooterRenderResult renderProgressFooter(
+    ConsoleScreen& screen, const ProgressFooterInput& input,
+    const ProgressFooterStyles& styles);

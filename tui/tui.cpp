@@ -2440,81 +2440,36 @@ int runTui(Options o) {
       } else {
         seekHoldActive = false;
       }
-      std::string status;
-      if (audioReady) {
-        if (audioIsFinished()) {
-          status = "\xE2\x96\xA0";  // ended icon
-        } else if (audioIsPaused()) {
-          status = "\xE2\x8F\xB8";  // paused icon
-        } else {
-          status = "\xE2\x96\xB6";  // playing icon
-        }
-      } else {
-        status = "\xE2\x97\x8B";  // idle icon
-      }
       int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-      ProgressTextLayout progressText = buildProgressTextLayout(
-          displaySec, totalSec, status, volPct, width);
-      std::string suffix = progressText.suffix;
-      int barWidth = progressText.barWidth;
       double ratio = 0.0;
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
         ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
       }
-      progressBarX = 1;
-      progressBarY = line;
-      progressBarWidth = barWidth;
-
-      screen.writeChar(0, line, L'|', kStyleProgressFrame);
-      auto barCells = renderProgressBarCells(
-          ratio, barWidth, kStyleProgressEmpty, kProgressStart, kProgressEnd);
-      for (int i = 0; i < barWidth; ++i) {
-        const auto& cell = barCells[static_cast<size_t>(i)];
-        screen.writeChar(1 + i, line, cell.ch, cell.style);
-      }
-      screen.writeChar(1 + barWidth, line, L'|', kStyleProgressFrame);
-      int suffixBaseX = 2 + barWidth;
-      std::string rendered;
-      if (!suffix.empty()) {
-        rendered = " " + suffix;
-        screen.writeText(suffixBaseX, line, rendered, kStyleNormal);
-      }
-      if (peakMeterY >= 0 && !rendered.empty()) {
-        float peak = std::clamp(audioGetPeak(), 0.0f, 1.2f);
-        int meterWidth = 8;
-        size_t volPos = rendered.find(" Vol:");
-        if (volPos == std::string::npos) {
-          volPos = rendered.find(" V:");
-        }
-        int meterX = suffixBaseX;
-        if (volPos != std::string::npos) {
-          int prefixWidth =
-              utf8DisplayWidth(rendered.substr(0, volPos + 1));
-          meterX = suffixBaseX + prefixWidth;
-        }
-        if (meterX < 0) meterX = 0;
-        if (meterX + meterWidth > width) {
-          meterWidth = std::max(0, width - meterX);
-        }
-        if (meterWidth > 0) {
-          double meterRatio = std::clamp(static_cast<double>(peak), 0.0, 1.0);
-          Color meterStart = kStyleProgressFrame.fg;
-          Color meterEnd = kStyleProgressFrame.fg;
-          if (audioHasClipAlert() && peak >= 0.80f) {
-            meterStart = kStyleAlert.fg;
-            meterEnd = kStyleAlert.fg;
-          } else if (peak >= 0.80f) {
-            meterStart = kStyleAccent.fg;
-            meterEnd = kProgressEnd;
-          }
-          auto meterCells = renderProgressBarCells(
-              meterRatio, meterWidth, kStyleProgressEmpty, meterStart, meterEnd);
-          for (int i = 0; i < meterWidth; ++i) {
-            const auto& cell = meterCells[static_cast<size_t>(i)];
-            screen.writeChar(meterX + i, peakMeterY, cell.ch, cell.style);
-          }
-        }
-      }
+      ProgressFooterStyles footerStyles{kStyleNormal,
+                                        kStyleProgressEmpty,
+                                        kStyleProgressFrame,
+                                        kStyleAlert,
+                                        kStyleAccent,
+                                        kProgressStart,
+                                        kProgressEnd};
+      ProgressFooterInput footerInput;
+      footerInput.displaySec = displaySec;
+      footerInput.totalSec = totalSec;
+      footerInput.ratio = ratio;
+      footerInput.volPct = volPct;
+      footerInput.width = width;
+      footerInput.progressY = line;
+      footerInput.peakY = peakMeterY;
+      footerInput.audioReady = audioReady;
+      footerInput.paused = audioIsPaused();
+      footerInput.finished = audioIsFinished();
+      footerInput.peak = audioGetPeak();
+      footerInput.clipAlert = audioHasClipAlert();
+      ProgressFooterRenderResult footerResult =
+          renderProgressFooter(screen, footerInput, footerStyles);
+      progressBarX = footerResult.progressBarX;
+      progressBarY = footerResult.progressBarY;
+      progressBarWidth = footerResult.progressBarWidth;
 
       if (paletteActive) {
         auto cmds = buildCommands();

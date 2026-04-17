@@ -63,6 +63,7 @@ struct OverlayCellLayoutInput {
   int height = 0;
   std::string title;
   std::string suffix;
+  int reservedRowsAboveProgress = 0;
   std::vector<OverlayCellControlInput> controls;
 };
 

@@ -478,21 +478,25 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
   const bool hasSuffix = !input.suffix.empty();
   const int contentInset = layout.width > 2 ? 1 : 0;
   const int progressWidth = std::max(1, layout.width - contentInset * 2);
+  const int reservedRowsAboveProgress =
+      std::max(0, input.reservedRowsAboveProgress);
 
   if (input.height > 0) {
     layout.height = input.height;
     layout.progressBarX = contentInset;
     layout.progressBarY = layout.height - 1;
     layout.progressBarWidth = progressWidth;
+    const int firstContentYAboveFooter =
+        layout.progressBarY - reservedRowsAboveProgress;
     if (hasSuffix) {
       layout.suffixText = fitLine(input.suffix, layout.width);
-      layout.suffixY = layout.progressBarY - 1;
+      layout.suffixY = firstContentYAboveFooter - 1;
       layout.suffixX =
           std::max(0, layout.width - utf8DisplayWidth(layout.suffixText));
     }
 
     const int controlsBottom =
-        (layout.suffixY >= 0 ? layout.suffixY : layout.progressBarY) - 1;
+        (layout.suffixY >= 0 ? layout.suffixY : firstContentYAboveFooter) - 1;
     const int controlsTop =
         pending.empty() ? controlsBottom
                         : controlsBottom - (controlLineCount - 1);
@@ -510,13 +514,16 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
 
     const int titleBaseY =
         pending.empty()
-            ? ((layout.suffixY >= 0 ? layout.suffixY : layout.progressBarY) - 1)
+            ? ((layout.suffixY >= 0 ? layout.suffixY : firstContentYAboveFooter) -
+               1)
             : (controlsTop - 1);
     layout.titleText = fitLine(input.title, layout.width);
     layout.titleX = 0;
     layout.titleY = titleBaseY;
   } else {
-    layout.height = 1 + controlLineCount + (hasSuffix ? 1 : 0) + 1;
+    layout.height =
+        1 + controlLineCount + (hasSuffix ? 1 : 0) +
+        reservedRowsAboveProgress + 1;
     layout.titleText = fitLine(input.title, layout.width);
     layout.titleX = 0;
     layout.titleY = 0;
