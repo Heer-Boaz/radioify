@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "asciiart_image_decode_wic.h"
-#include "ui_helpers.h"
+#include "asciiart_layout.h"
 
 #ifdef _MSC_VER
 #define FORCE_INLINE __forceinline
@@ -153,6 +153,17 @@ void parallelFor(int totalRows, int minBatch, int workerCount, Fn&& fn) {
   }
   if (failure) {
     std::rethrow_exception(failure);
+  }
+}
+
+template <bool DebugMode>
+FORCE_INLINE bool renderStageEnabled(uint32_t stageMask, uint32_t stage) {
+  if constexpr (!DebugMode) {
+    (void)stageMask;
+    (void)stage;
+    return true;
+  } else {
+    return (stageMask & stage) != 0;
   }
 }
 
@@ -626,17 +637,46 @@ struct BrailleFastScratch {
     prevLumHigh = -1;
     prevBgLum = -1;
   }
+
+  void resetHistory() {
+    std::fill(prevFg.begin(), prevFg.end(), 0);
+    std::fill(prevFgValid.begin(), prevFgValid.end(), 0);
+    std::fill(prevBg.begin(), prevBg.end(), 0);
+    std::fill(prevBgValid.begin(), prevBgValid.end(), 0);
+    std::fill(prevMask.begin(), prevMask.end(), 0);
+    std::fill(cellDotCount.begin(), cellDotCount.end(), 0);
+    std::fill(cellSignalStrength.begin(), cellSignalStrength.end(), 0);
+    std::fill(cellUseDither.begin(), cellUseDither.end(), 0);
+    prevLumLow = -1;
+    prevLumHigh = -1;
+    prevBgLum = -1;
+  }
 };
 
-template <bool AssumeOpaque>
+template <bool AssumeOpaque, bool DebugMode = false>
 bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                uint64_t lumCount, const uint32_t* lumHist,
-                               bool isSdr) {
+                               bool isSdr,
+                               const ascii_debug::RenderOptions* debugOptions =
+                                   nullptr,
+                               ascii_debug::RenderStats* debugStats = nullptr) {
   const int outW = scratch.outW;
   const int outH = scratch.outH;
   const int scaledW = scratch.scaledW;
   const int scaledH = scratch.scaledH;
   const int padStride = scratch.padStride;
+  uint32_t stageMask = ascii_debug::kAllStages;
+  if constexpr (DebugMode) {
+    if (debugOptions) {
+      stageMask = debugOptions->stageMask;
+    }
+    if (debugStats) {
+      *debugStats = ascii_debug::RenderStats{};
+    }
+  } else {
+    (void)debugOptions;
+    (void)debugStats;
+  }
 
   out.width = outW;
   out.height = outH;
@@ -650,6 +690,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
       static_cast<size_t>(padStride));
 
   if constexpr (kUseEdgeBoost) {
+    if (!renderStageEnabled<DebugMode>(stageMask,
+                                       ascii_debug::kStageEdgeDetect)) {
+      std::fill(scratch.edgeMap.begin(), scratch.edgeMap.end(), 0);
+    } else {
     int workerCount = computeWorkerCount(scaledH, kParallelBatchRows);
     parallelFor(
         scaledH, kParallelBatchRows, workerCount,
@@ -683,6 +727,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             }
           }
         });
+    }
   }
 
   int lumLow = 0;
@@ -751,6 +796,11 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   const int brailleMap[2][4] = {{0, 1, 2, 6}, {3, 4, 5, 7}};
 
   int workerCount = computeWorkerCount(outH, kParallelBatchRows);
+  if constexpr (DebugMode) {
+    if (debugStats) {
+      workerCount = 1;
+    }
+  }
   parallelFor(
       outH, kParallelBatchRows, workerCount, [&](int cyStart, int cyEnd, int) {
         for (int cy = cyStart; cy < cyEnd; ++cy) {
@@ -929,7 +979,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                             : 0;
             if (avgLumDiff > 255) avgLumDiff = 255;
 
-            if (!useLocalThreshold) {
+            if (!useLocalThreshold &&
+                renderStageEnabled<DebugMode>(stageMask,
+                                              ascii_debug::kStageDither)) {
               useDither = true;
               uint8_t coverage =
                   kInkLevelFromLum[static_cast<size_t>(rawDiff)];
@@ -948,6 +1000,13 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             while (tempMask) {
               dotCount += (tempMask & 1);
               tempMask >>= 1;
+            }
+            if constexpr (DebugMode) {
+              if (debugStats) {
+                ++debugStats->cellCount;
+                if (useDither) ++debugStats->ditherCellCount;
+                if (cellEdgeMax >= kDitherMaxEdge) ++debugStats->edgeCellCount;
+              }
             }
 
             uint8_t prevBgR = 0;
@@ -1053,13 +1112,23 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 const int fgY = rgbToY(curR, curG, curB);
                 const int bgY = rgbToY(bgR, bgG, bgB);
                 const bool bgIsMinority =
+                    renderStageEnabled<DebugMode>(
+                        stageMask, ascii_debug::kStageMinorityBgSwap) &&
                     bgCount < inkCount && bgCount <= kMinorityBgSwapMaxDots &&
                     signalStrength >= kMinorityBgSwapMinSignal;
                 const bool bgIsBrightFeature =
+                    renderStageEnabled<DebugMode>(
+                        stageMask, ascii_debug::kStageBrightBgSwap) &&
                     bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
                     signalStrength >= kBrightBgSwapMinSignal &&
                     bgY >= fgY + kBrightBgSwapDelta;
                 if (bgIsMinority || bgIsBrightFeature) {
+                  if constexpr (DebugMode) {
+                    if (debugStats) {
+                      if (bgIsMinority) ++debugStats->minorityBgSwapCount;
+                      if (bgIsBrightFeature) ++debugStats->brightBgSwapCount;
+                    }
+                  }
                   std::swap(curR, bgR);
                   std::swap(curG, bgG);
                   std::swap(curB, bgB);
@@ -1072,7 +1141,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
 
               // Terminal BG fills the whole cell; edge detail must stay in
               // braille ink, so minority BG around edges is toned, not hidden.
-              if (!useDither && cellEdgeMax >= kDitherMaxEdge &&
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageEdgeBgTone) &&
+                  !useDither && cellEdgeMax >= kDitherMaxEdge &&
                   cellLumRange >= 8 && dotCount > 0 &&
                   dotCount < validCount && bgCount <= inkCount) {
                 int fgY = rgbToY(curR, curG, curB);
@@ -1101,19 +1172,32 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // Dampening (Noise Hiding):
               // If signalStrength is low, we interpolate curFg towards curBg.
               // This effectively "fades out" noise into the background.
-              curR =
-                  static_cast<uint8_t>(bgR +
-                                       ((curR - bgR) * blendStrength >> 8));
-              curG =
-                  static_cast<uint8_t>(bgG +
-                                       ((curG - bgG) * blendStrength >> 8));
-              curB =
-                  static_cast<uint8_t>(bgB +
-                                       ((curB - bgB) * blendStrength >> 8));
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageSignalDampen)) {
+                if constexpr (DebugMode) {
+                  if (debugStats && blendStrength < 255) {
+                    ++debugStats->signalDampenCount;
+                  }
+                }
+                curR =
+                    static_cast<uint8_t>(bgR +
+                                         ((curR - bgR) * blendStrength >> 8));
+                curG =
+                    static_cast<uint8_t>(bgG +
+                                         ((curG - bgG) * blendStrength >> 8));
+                curB =
+                    static_cast<uint8_t>(bgB +
+                                         ((curB - bgB) * blendStrength >> 8));
+              }
 
               // Boosting (Detail Pop):
               // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.
-              if (signalStrength > 204) { // > 0.8 * 255
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageDetailBoost) &&
+                  signalStrength > 204) { // > 0.8 * 255
+                  if constexpr (DebugMode) {
+                    if (debugStats) ++debugStats->detailBoostCount;
+                  }
                   int boost = (signalStrength - 204) * 5; // 0 -> 255
                   // Boost factor 1.0 -> 1.5 (approx)
                   // New = Center + (Old - Center) * (1 + boost/512)
@@ -1157,7 +1241,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   (static_cast<int>(curR) * 54 + static_cast<int>(curG) * 183 +
                    static_cast<int>(curB) * 19 + 128) >>
                   8;
-              if (curY < kInkMinLuma) {
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageInkLumaFloor) &&
+                  curY < kInkMinLuma) {
+                if constexpr (DebugMode) {
+                  if (debugStats) ++debugStats->inkLumaFloorCount;
+                }
                 if (curY <= 0) {
                   curR = kInkMinLuma;
                   curG = kInkMinLuma;
@@ -1190,11 +1279,16 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                        shadowSaturationWithChroma(y, inkMaxC - inkMinC) +
                    128) >>
                   8;
-              adaptiveSat =
-                  boostAdaptiveSatForSourceBlue(adaptiveSat, y, curSourceBlue);
-              applySaturationAroundLuma(curR, curG, curB, y, adaptiveSat);
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageInkSaturation)) {
+                adaptiveSat =
+                    boostAdaptiveSatForSourceBlue(adaptiveSat, y, curSourceBlue);
+                applySaturationAroundLuma(curR, curG, curB, y, adaptiveSat);
+              }
 
-              if (cellIndex < scratch.prevFg.size() &&
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageForegroundTemporal) &&
+                  cellIndex < scratch.prevFg.size() &&
                   scratch.prevFgValid[cellIndex]) {
                 uint32_t p = scratch.prevFg[cellIndex];
                 int pr = static_cast<int>((p >> 16) & 0xFF);
@@ -1208,6 +1302,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = curG;
                   pb = curB;
                 } else {
+                  if constexpr (DebugMode) {
+                    if (debugStats) ++debugStats->fgTemporalBlendCount;
+                  }
                   // Temporal Stability (Ghosting Reduction)
                   // We blend the current frame's color with the previous frame's color to reduce flickering.
                   // Increased alpha for faster updates (less ghosting)
@@ -1249,7 +1346,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   (static_cast<int>(bgR) * 54 + static_cast<int>(bgG) * 183 +
                    static_cast<int>(bgB) * 19 + 128) >>
                   8;
-              if (bgY < kBgMinLuma) {
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageBgLumaFloor) &&
+                  bgY < kBgMinLuma) {
+                if constexpr (DebugMode) {
+                  if (debugStats) ++debugStats->bgLumaFloorCount;
+                }
                 if (bgY <= 0) {
                   bgR = kBgMinLuma;
                   bgG = kBgMinLuma;
@@ -1264,7 +1366,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                       255, (static_cast<int>(bgB) * scale + 128) >> 8));
                 }
               }
-              if (prevBgValid) {
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageBackgroundTemporal) &&
+                  prevBgValid) {
                 int pr = static_cast<int>(prevBgR);
                 int pg = static_cast<int>(prevBgG);
                 int pb = static_cast<int>(prevBgB);
@@ -1276,6 +1380,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = bgG;
                   pb = bgB;
                 } else {
+                  if constexpr (DebugMode) {
+                    if (debugStats) ++debugStats->bgTemporalBlendCount;
+                  }
                   // Temporal Stability (Ghosting Reduction)
                   // Increased alpha for faster updates (less ghosting)
                   pr = pr + (((int)bgR - pr) * bgBlendAlpha >> 8);
@@ -1305,7 +1412,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                             static_cast<uint32_t>(outBgB);
                 scratch.prevBgValid[cellIndex] = 1;
               }
-              if (dotCount == 8 && bgCount == 0) {
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageFullMaskBgContrast) &&
+                  dotCount == 8 && bgCount == 0) {
                 int fgY =
                     (static_cast<int>(outR) * 54 +
                      static_cast<int>(outG) * 183 +
@@ -1320,6 +1429,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 int minDeltaY = 6;
                 int need = minDeltaY - dir * (bgY2 - fgY);
                 if (need > 0) {
+                  if constexpr (DebugMode) {
+                    if (debugStats) ++debugStats->fullMaskBgContrastCount;
+                  }
                   int shift = dir * need;
                   outBgR = static_cast<uint8_t>(
                       std::clamp(static_cast<int>(outBgR) + shift, 0, 255));
@@ -1338,6 +1450,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 }
               }
               if (toneEdgeBg) {
+                if constexpr (DebugMode) {
+                  if (debugStats) ++debugStats->edgeBgToneCount;
+                }
                 toneEdgeBackground(outBgR, outBgG, outBgB, outR, outG, outB,
                                    edgeBgToneFactor);
                 if (cellIndex < scratch.prevBg.size()) {
@@ -1377,9 +1492,19 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
 
             cell.ch = static_cast<wchar_t>(kBrailleBase + bitmask);
             cell.fg = Color{outR, outG, outB};
-            if (hasBg) {
+            if constexpr (DebugMode) {
+              if (debugStats) {
+                ++debugStats->dotCountHistogram[std::clamp(dotCount, 0, 8)];
+              }
+            }
+            if (hasBg &&
+                renderStageEnabled<DebugMode>(
+                    stageMask, ascii_debug::kStageCellBackground)) {
               cell.bg = Color{outBgR, outBgG, outBgB};
               cell.hasBg = true;
+              if constexpr (DebugMode) {
+                if (debugStats) ++debugStats->bgCellCount;
+              }
             }
 
             out.cells[cellIndex] = cell;
@@ -1388,7 +1513,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
       });
 
 #if BG_CLAMP
-  if (isSdr) {
+  if (isSdr &&
+      renderStageEnabled<DebugMode>(stageMask,
+                                    ascii_debug::kStageEdgeBgClamp)) {
     const size_t totalCells = static_cast<size_t>(outW) * outH;
     if (scratch.bgLumaScratch.size() < totalCells) {
       scratch.bgLumaScratch.resize(totalCells);
@@ -1492,6 +1619,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
 #endif
 
         ++clampedCount;
+        if constexpr (DebugMode) {
+          if (debugStats) ++debugStats->edgeBgClampCount;
+        }
       }
     }
 
@@ -1511,10 +1641,14 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   return true;
 }
 
-template <bool AssumeOpaque>
+template <bool AssumeOpaque, bool DebugMode = false>
 bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
                                     int maxWidth, int maxHeight, AsciiArt& out,
-                                    BrailleFastScratch& scratch) {
+                                    BrailleFastScratch& scratch,
+                                    const ascii_debug::RenderOptions*
+                                        debugOptions = nullptr,
+                                    ascii_debug::RenderStats* debugStats =
+                                        nullptr) {
   out = AsciiArt{};
   if (!rgba || width <= 0 || height <= 0) return false;
 
@@ -1537,6 +1671,11 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
   if (scaledPixels <= kSmallImageParallelPixelBudget ||
       outputCells <= kSmallImageParallelCellBudget) {
     workerCount = 1;
+  }
+  if constexpr (DebugMode) {
+    if (debugStats) {
+      workerCount = 1;
+    }
   }
   std::vector<std::array<uint32_t, 256>> localHist(workerCount);
   std::vector<uint64_t> localLumCount(workerCount, 0);
@@ -1631,8 +1770,8 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
     }
   }
 
-  return renderAsciiArtFromScratch<AssumeOpaque>(out, scratch, lumCount,
-                                                 lumHist, true);
+  return renderAsciiArtFromScratch<AssumeOpaque, DebugMode>(
+      out, scratch, lumCount, lumHist, true, debugOptions, debugStats);
 }
 
 template <bool IsP010>
@@ -1836,6 +1975,29 @@ bool renderAsciiArtFromRgba(const uint8_t* rgba, int width, int height,
   static thread_local BrailleFastScratch scratch;
   return renderAsciiArtFromRgbaFast(rgba, width, height, maxWidth, maxHeight,
                                     out, assumeOpaque, scratch);
+}
+
+bool renderAsciiArtFromRgbaDebug(const uint8_t* rgba, int width, int height,
+                                 int maxWidth, int maxHeight, AsciiArt& out,
+                                 const ascii_debug::RenderOptions& options,
+                                 ascii_debug::RenderStats* stats,
+                                 bool assumeOpaque) {
+  out = AsciiArt{};
+  if (stats) {
+    *stats = ascii_debug::RenderStats{};
+  }
+  if (!rgba || width <= 0 || height <= 0) return false;
+  static thread_local BrailleFastScratch scratch;
+  if (options.resetHistory) {
+    scratch.resetHistory();
+  }
+  if (assumeOpaque) {
+    return renderAsciiArtFromRgbaFastImpl<true, true>(
+        rgba, width, height, maxWidth, maxHeight, out, scratch, &options,
+        stats);
+  }
+  return renderAsciiArtFromRgbaFastImpl<false, true>(
+      rgba, width, height, maxWidth, maxHeight, out, scratch, &options, stats);
 }
 
 bool renderAsciiArtFromYuv(const uint8_t* data, int width, int height,
