@@ -92,7 +92,7 @@ void printUsage() {
       << "  --fixture <all|circle-checker|phone-edge|thin-lines>\n"
       << "  --variant <all|current|ink-only|no-dither|no-edge-detect|"
          "no-bg-swaps|no-bright-bg-swap|"
-         "no-signal-dampen|no-detail-boost|no-bg-dominance-contrast|"
+         "no-signal-dampen|no-detail-boost|no-ink-coverage|"
          "no-temporal|"
          "no-bg-luma-floor|no-bg-polish>\n"
       << "  --out-dir <path>\n"
@@ -348,7 +348,7 @@ std::array<Variant, 13> variants() {
       {"no-bright-bg-swap", all & ~kStageBrightBgSwap},
       {"no-signal-dampen", all & ~kStageSignalDampen},
       {"no-detail-boost", all & ~kStageDetailBoost},
-      {"no-bg-dominance-contrast", all & ~kStageBgDominanceContrast},
+      {"no-ink-coverage", all & ~kStageInkCoverageCompensation},
       {"no-temporal", all & ~kStageForegroundTemporal &
                           ~kStageBackgroundTemporal},
       {"no-bg-luma-floor", all & ~kStageBgLumaFloor},
@@ -676,7 +676,7 @@ double averageDots(const ascii_debug::RenderStats& stats) {
 void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
          "dither_cells,edge_cells,bright_bg_swaps,"
-         "signal_dampened,detail_boosted,bg_dominance_contrast,"
+         "signal_dampened,detail_boosted,ink_coverage_compensated,"
          "ink_lifted,bg_lifted,"
          "fg_temporal,bg_temporal,fullmask_bg_contrast\n";
 }
@@ -692,7 +692,7 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << ',' << stats.ditherCellCount << ',' << stats.edgeCellCount << ','
       << stats.brightBgSwapCount << ','
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
-      << stats.bgDominanceContrastCount << ','
+      << stats.inkCoverageCompensationCount << ','
       << stats.inkLumaFloorCount << ','
       << stats.bgLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','
       << stats.bgTemporalBlendCount << ','

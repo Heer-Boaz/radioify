@@ -492,10 +492,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float sumBgBlueConfidence = 0.0f;
     int inkCount = 0;
     int bgCount = 0;
-    float inkLumMin = 255.0f;
-    float inkLumMax = 0.0f;
-    float bgLumMin = 255.0f;
-    float bgLumMax = 0.0f;
 
     // Base threshold (DELTA in ts)
     // This is the minimum luma difference required for a pixel to be considered "foreground".
@@ -528,14 +524,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             bitmask |= (1 << bit);
             sumInk += dots[j].color;
             sumInkBlueConfidence += dots[j].sourceBlueConfidence;
-            inkLumMin = min(inkLumMin, dots[j].luma);
-            inkLumMax = max(inkLumMax, dots[j].luma);
             inkCount++;
         } else {
             sumBg += dots[j].color;
             sumBgBlueConfidence += dots[j].sourceBlueConfidence;
-            bgLumMin = min(bgLumMin, dots[j].luma);
-            bgLumMax = max(bgLumMax, dots[j].luma);
             bgCount++;
         }
     }
@@ -563,24 +555,16 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         sumBgBlueConfidence = 0.0f;
         inkCount = 0;
         bgCount = 0;
-        inkLumMin = 255.0f;
-        inkLumMax = 0.0f;
-        bgLumMin = 255.0f;
-        bgLumMax = 0.0f;
         [unroll]
         for (int k2 = 0; k2 < 8; ++k2) {
             uint bit = (uint)bitMap[dots[k2].idx];
             if (bitmask & (1u << bit)) {
                 sumInk += dots[k2].color;
                 sumInkBlueConfidence += dots[k2].sourceBlueConfidence;
-                inkLumMin = min(inkLumMin, dots[k2].luma);
-                inkLumMax = max(inkLumMax, dots[k2].luma);
                 inkCount++;
             } else {
                 sumBg += dots[k2].color;
                 sumBgBlueConfidence += dots[k2].sourceBlueConfidence;
-                bgLumMin = min(bgLumMin, dots[k2].luma);
-                bgLumMax = max(bgLumMax, dots[k2].luma);
                 bgCount++;
             }
         }
@@ -642,14 +626,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             int swapCount = inkCount;
             inkCount = bgCount;
             bgCount = swapCount;
-
-            float swapLumMin = inkLumMin;
-            inkLumMin = bgLumMin;
-            bgLumMin = swapLumMin;
-
-            float swapLumMax = inkLumMax;
-            inkLumMax = bgLumMax;
-            bgLumMax = swapLumMax;
 
             bitmask = (~bitmask) & 0xffu;
             dotCount = 8u - dotCount;
@@ -716,6 +692,21 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         saturate((60.0f - curY) / 60.0f);
     curFg = ApplySaturationAroundLuma(curFg, curY, adaptiveSat / 256.0f);
 
+    if (!useDither && signalStrength >= kInkCoverageMinSignal &&
+        bgCount > 0 && inkCount > 0 && dotCount > 0u && dotCount < 8u) {
+        float scale =
+            min((float)kInkCoverageMaxScale / 256.0f,
+                1.0f / max(kInkVisibleDotCoverage, 1e-5f));
+        if (scale > 1.0f) {
+            curFg = saturate(curBg + (curFg - curBg) * scale);
+            float coverageY = GetLuma(curFg);
+            if (coverageY < (float)kInkCoverageMinLuma) {
+                curFg = ScaleColorToLuma(curFg, coverageY,
+                                         (float)kInkCoverageMinLuma);
+            }
+        }
+    }
+
     // Temporal Stability (Ghosting Reduction)
     // We blend the current frame's color with the previous frame's color to reduce flickering.
     // However, too much blending causes "ghosting" (trails behind moving objects).
@@ -764,48 +755,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         if (need > 0.0f) {
             float shift = dir * need / 255.0f;
             curBg = saturate(curBg + shift);
-        }
-    }
-
-    if (!useDither && cellEdgeMax >= kDitherMaxEdge &&
-        signalStrength >= kBgDominanceMinSignal && cellRange >= 8.0f &&
-        bgCount >= inkCount && bgCount > 0 && inkCount > 0 &&
-        (inkLumMax - inkLumMin) <= (float)kBgDominanceMaxGroupRange &&
-        (bgLumMax - bgLumMin) <= (float)kBgDominanceMaxGroupRange &&
-        dotCount > 0u && dotCount <= (uint)kBgDominanceMaxDots) {
-        float finalFgY = GetLuma(curFg);
-        float finalBgY = GetLuma(curBg);
-        if (finalBgY >= (float)kBgDominanceMinBgLuma &&
-            finalBgY > finalFgY) {
-            float bgLead = finalBgY - finalFgY;
-            float chromaGap =
-                (abs(curBg.r - curFg.r) + abs(curBg.g - curFg.g) +
-                 abs(curBg.b - curFg.b)) *
-                255.0f;
-            float perceivedGap =
-                bgLead + chromaGap / max((float)kBgDominanceChromaDivisor,
-                                         1.0f);
-            float coverageBonus =
-                ((float)(bgCount - inkCount) / 8.0f) *
-                kBgDominanceCoverageBonus;
-            float brightBonus = bgLead * kBgDominanceBrightLeadScale;
-            float minContrast =
-                min((float)kBgDominanceMaxContrast,
-                    (float)kBgDominanceMinContrast + coverageBonus +
-                        brightBonus);
-            if (perceivedGap < minContrast) {
-                float needed = minContrast - perceivedGap;
-                float bgDim =
-                    min((float)kBgDominanceMaxBgDim, (needed + 2.0f) / 3.0f);
-                float darken =
-                    min((float)kBgDominanceMaxInkDarken, needed + bgDim);
-                curFg = ScaleColorToLuma(curFg, finalFgY,
-                                         max((float)kBgDominanceMinInkLuma,
-                                             finalFgY - darken));
-                curBg = ScaleColorToLuma(curBg, finalBgY,
-                                         max((float)kBgMinLuma,
-                                             finalBgY - bgDim));
-            }
         }
     }
 

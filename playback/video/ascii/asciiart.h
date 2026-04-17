@@ -30,7 +30,7 @@ enum StageMask : uint32_t {
   kStageBrightBgSwap = 1u << 2,
   kStageSignalDampen = 1u << 3,
   kStageDetailBoost = 1u << 4,
-  kStageBgDominanceContrast = 1u << 5,
+  kStageInkCoverageCompensation = 1u << 5,
   kStageInkLumaFloor = 1u << 6,
   kStageInkSaturation = 1u << 7,
   kStageForegroundTemporal = 1u << 8,
@@ -42,7 +42,7 @@ enum StageMask : uint32_t {
 
 constexpr uint32_t kAllStages =
     kStageEdgeDetect | kStageDither | kStageBrightBgSwap |
-    kStageSignalDampen | kStageDetailBoost | kStageBgDominanceContrast |
+    kStageSignalDampen | kStageDetailBoost | kStageInkCoverageCompensation |
     kStageInkLumaFloor | kStageInkSaturation | kStageForegroundTemporal |
     kStageBgLumaFloor | kStageBackgroundTemporal |
     kStageFullMaskBgContrast | kStageCellBackground;
@@ -60,7 +60,7 @@ struct RenderStats {
   uint64_t brightBgSwapCount = 0;
   uint64_t signalDampenCount = 0;
   uint64_t detailBoostCount = 0;
-  uint64_t bgDominanceContrastCount = 0;
+  uint64_t inkCoverageCompensationCount = 0;
   uint64_t inkLumaFloorCount = 0;
   uint64_t bgLumaFloorCount = 0;
   uint64_t fgTemporalBlendCount = 0;
