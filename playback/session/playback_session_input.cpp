@@ -500,7 +500,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   playback_overlay::PlaybackOverlayInputs mouseOverlayInputs =
       buildPlaybackMouseOverlayInputs(view, seekState, signals);
   MouseEvent hitMouse = mouse;
-  bool windowEvent = (mouse.control & 0x80000000) != 0;
+  const bool windowOriginEvent = (mouse.control & 0x80000000) != 0;
+  bool windowEvent = windowOriginEvent;
   bool miniGridEvent = false;
   if (windowEvent && view.videoWindow &&
       view.videoWindow->IsPictureInPicture() &&
@@ -545,6 +546,9 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   if (playback_overlay::isBackMousePressed(mouse)) {
     requestPlaybackExit(view, signals, false);
     return;
+  }
+  if (windowOriginEvent && mouse.eventFlags == MOUSE_MOVED) {
+    triggerOverlay(view, signals);
   }
 
   windowEvent = (hitMouse.control & 0x80000000) != 0;

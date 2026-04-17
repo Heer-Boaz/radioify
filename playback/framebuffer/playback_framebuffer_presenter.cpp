@@ -143,6 +143,8 @@ void runFramebufferPresenterLoop(
   GpuTextGridFrame pictureInPictureTextFrame;
   uint64_t lastCounter = player.videoFrameCounter();
   auto lastOverlayPresent = std::chrono::steady_clock::time_point::min();
+  bool lastWindowOverlayVisible = false;
+  bool lastWindowSeeking = false;
   auto lastPictureInPictureTextPresent =
       std::chrono::steady_clock::time_point::min();
   int lastPictureInPictureTextWidth = 0;
@@ -326,6 +328,8 @@ void runFramebufferPresenterLoop(
 
     WindowUiState ui = buildUiState();
     bool overlayVisibleNow = ui.overlayAlpha > 0.01f;
+    bool overlayStateChanged = overlayVisibleNow != lastWindowOverlayVisible ||
+                               seekingNow != lastWindowSeeking;
     bool overlayRefreshDue = false;
     if (overlayVisibleNow || seekingNow) {
       const auto now = std::chrono::steady_clock::now();
@@ -333,7 +337,8 @@ void runFramebufferPresenterLoop(
           lastOverlayPresent == std::chrono::steady_clock::time_point::min() ||
           (now - lastOverlayPresent) >= kOverlayRefreshInterval;
     }
-    bool needsPresent = frameChanged || forcePresentNow || overlayRefreshDue;
+    bool needsPresent = frameChanged || forcePresentNow || overlayRefreshDue ||
+                        overlayStateChanged;
 
     if (needsPresent) {
       if (threadState.load(std::memory_order_relaxed) ==
@@ -354,6 +359,8 @@ void runFramebufferPresenterLoop(
       if (overlayVisibleNow || seekingNow) {
         lastOverlayPresent = std::chrono::steady_clock::now();
       }
+      lastWindowOverlayVisible = overlayVisibleNow;
+      lastWindowSeeking = seekingNow;
     }
   }
 }
