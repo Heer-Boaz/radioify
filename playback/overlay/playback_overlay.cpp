@@ -21,9 +21,116 @@ int countVisibleChars(const std::string& text) {
   return utf8DisplayWidth(filtered);
 }
 
+std::string fitCellText(const std::string& text, int width) {
+  if (width <= 0) return {};
+  std::string filtered;
+  filtered.reserve(text.size());
+  for (char c : text) {
+    if (c == '\r' || c == '\n') continue;
+    filtered.push_back(c);
+  }
+
+  const int displayWidth = utf8DisplayWidth(filtered);
+  if (displayWidth > width) {
+    return utf8TakeDisplayWidth(filtered, width);
+  }
+  if (displayWidth < width) {
+    filtered.append(static_cast<size_t>(width - displayWidth), ' ');
+  }
+  return filtered;
+}
+
 std::pair<std::string, std::string> makeLabels(const std::string& text) {
   return std::pair<std::string, std::string>(" [" + text + "] ",
                                              "[ " + text + " ]");
+}
+
+struct PendingOverlayCellControl {
+  std::string text;
+  int controlIndex = -1;
+  int x = 0;
+  int line = 0;
+  int width = 0;
+  bool active = false;
+  bool hovered = false;
+};
+
+std::vector<PendingOverlayCellControl> wrapOverlayControls(
+    const std::vector<OverlayCellControlInput>& controls, int width,
+    int* outLineCount) {
+  const int contentInset = width > 2 ? 1 : 0;
+  const int maxLineWidth = std::max(1, width - contentInset * 2);
+  std::vector<PendingOverlayCellControl> out;
+  out.reserve(controls.size());
+
+  int cursor = 0;
+  int line = 0;
+  for (const OverlayCellControlInput& control : controls) {
+    const int controlWidth =
+        std::min(maxLineWidth,
+                 std::max(1, control.width > 0
+                                  ? control.width
+                                  : utf8DisplayWidth(control.text)));
+    const int gap = cursor > 0 ? 2 : 0;
+    if (cursor > 0 && cursor + gap + controlWidth > maxLineWidth) {
+      ++line;
+      cursor = 0;
+    } else {
+      cursor += gap;
+    }
+
+    PendingOverlayCellControl item;
+    item.text = fitCellText(control.text, controlWidth);
+    item.controlIndex = control.controlIndex;
+    item.x = contentInset + cursor;
+    item.line = line;
+    item.width = controlWidth;
+    item.active = control.active;
+    item.hovered = control.hovered;
+    out.push_back(std::move(item));
+    cursor += controlWidth;
+  }
+
+  if (outLineCount) {
+    *outLineCount = out.empty() ? 0 : line + 1;
+  }
+  return out;
+}
+
+struct WindowOverlayCellGeometry {
+  OverlayCellLayout layout;
+  int leftPx = 0;
+  int topPx = 0;
+  int cellWidth = 1;
+  int cellHeight = 1;
+};
+
+WindowOverlayCellGeometry buildWindowOverlayCellGeometry(
+    const PlaybackOverlayState& state, int cellPixelWidth,
+    int cellPixelHeight) {
+  WindowOverlayCellGeometry geometry;
+  geometry.cellWidth = std::max(1, cellPixelWidth);
+  geometry.cellHeight = std::max(1, cellPixelHeight);
+  if (state.windowWidth <= 0 || state.windowHeight <= 0) {
+    return geometry;
+  }
+
+  const int maxTextWidth =
+      std::clamp(static_cast<int>(std::lround(state.windowWidth * 0.96)), 1,
+                 state.windowWidth);
+  const int cols = std::max(1, maxTextWidth / geometry.cellWidth);
+  geometry.layout = layoutPlaybackOverlayCells(state, cols, 0, -1);
+  const int textPxW =
+      std::min(state.windowWidth, geometry.layout.width * geometry.cellWidth);
+  const int textPxH =
+      std::min(state.windowHeight, geometry.layout.height * geometry.cellHeight);
+  geometry.leftPx = std::clamp(
+      static_cast<int>(std::lround(state.windowWidth * 0.02)), 0,
+      std::max(0, state.windowWidth - textPxW));
+  geometry.topPx = std::clamp(
+      static_cast<int>(std::lround(state.windowHeight * 0.95)) - textPxH, 0,
+      std::max(0, state.windowHeight - textPxH));
+  return geometry;
 }
 }  // namespace
 
@@ -264,11 +371,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     addSpec(std::move(pip));
   }
 
-  int cursor = 0;
   for (size_t i = 0; i < out.size(); ++i) {
     auto& spec = out[i];
-    if (i > 0) cursor += 2;
-    spec.charStart = cursor;
     bool hovered = static_cast<int>(i) == hoverIndex;
     spec.renderText = hovered ? spec.hoverText : spec.normalText;
     int textWidth = countVisibleChars(spec.renderText);
@@ -277,73 +381,132 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     } else if (textWidth > spec.width) {
       spec.renderText = utf8TakeDisplayWidth(spec.renderText, spec.width);
     }
-    cursor += spec.width;
   }
   return out;
 }
 
-std::string buildOverlayControlsText(const PlaybackOverlayState& state,
-                                     int hoverIndex) {
-  std::vector<OverlayControlSpec> specs = buildOverlayControlSpecs(state, hoverIndex);
-  std::string line;
-  for (size_t i = 0; i < specs.size(); ++i) {
-    if (i > 0) line += "  ";
-    line += specs[i].renderText;
-  }
-  return line;
-}
+OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
+  OverlayCellLayout layout;
+  layout.width = std::max(1, input.width);
 
-std::vector<TerminalOverlayControlLayoutItem> layoutTerminalOverlayControls(
-    const PlaybackOverlayState& state, int hoverIndex) {
-  std::vector<OverlayControlSpec> specs =
-      buildOverlayControlSpecs(state, hoverIndex);
-  std::vector<TerminalOverlayControlLayoutItem> out;
-  out.reserve(specs.size());
-  if (specs.empty()) return out;
+  int controlLineCount = 0;
+  std::vector<PendingOverlayCellControl> pending =
+      wrapOverlayControls(input.controls, layout.width, &controlLineCount);
+  const bool hasSuffix = !input.suffix.empty();
+  const int contentInset = layout.width > 2 ? 1 : 0;
+  const int progressWidth = std::max(1, layout.width - contentInset * 2);
 
-  struct PendingItem {
-    OverlayControlSpec spec;
-    int controlIndex = -1;
-    int x = 0;
-    int line = 0;
-  };
-  std::vector<PendingItem> pending;
-  pending.reserve(specs.size());
-
-  const int screenWidth = std::max(1, state.screenWidth);
-  const int maxLineWidth = std::max(1, screenWidth - 2);
-  int cursor = 0;
-  int line = 0;
-  for (size_t i = 0; i < specs.size(); ++i) {
-    const int gap = cursor > 0 ? 2 : 0;
-    const int specWidth = std::max(1, specs[i].width);
-    if (cursor > 0 && cursor + gap + specWidth > maxLineWidth) {
-      ++line;
-      cursor = 0;
-    } else {
-      cursor += gap;
+  if (input.height > 0) {
+    layout.height = input.height;
+    layout.progressBarX = contentInset;
+    layout.progressBarY = layout.height - 1;
+    layout.progressBarWidth = progressWidth;
+    if (hasSuffix) {
+      layout.suffixText = fitLine(input.suffix, layout.width);
+      layout.suffixY = layout.progressBarY - 1;
+      layout.suffixX =
+          std::max(0, layout.width - utf8DisplayWidth(layout.suffixText));
     }
 
-    PendingItem item;
-    item.spec = std::move(specs[i]);
-    item.controlIndex = static_cast<int>(i);
-    item.x = 1 + cursor;
-    item.line = line;
-    pending.push_back(std::move(item));
-    cursor += specWidth;
+    const int controlsBottom =
+        (layout.suffixY >= 0 ? layout.suffixY : layout.progressBarY) - 1;
+    const int controlsTop =
+        pending.empty() ? controlsBottom
+                        : controlsBottom - (controlLineCount - 1);
+    for (const PendingOverlayCellControl& item : pending) {
+      OverlayCellControlLayoutItem placed;
+      placed.text = item.text;
+      placed.controlIndex = item.controlIndex;
+      placed.x = item.x;
+      placed.y = controlsTop + item.line;
+      placed.width = item.width;
+      placed.active = item.active;
+      placed.hovered = item.hovered;
+      layout.controls.push_back(std::move(placed));
+    }
+
+    const int titleBaseY =
+        pending.empty()
+            ? ((layout.suffixY >= 0 ? layout.suffixY : layout.progressBarY) - 1)
+            : (controlsTop - 1);
+    layout.titleText = fitLine(input.title, layout.width);
+    layout.titleX = 0;
+    layout.titleY = titleBaseY;
+  } else {
+    layout.height = 1 + controlLineCount + (hasSuffix ? 1 : 0) + 1;
+    layout.titleText = fitLine(input.title, layout.width);
+    layout.titleX = 0;
+    layout.titleY = 0;
+
+    const int controlsTop = 1;
+    for (const PendingOverlayCellControl& item : pending) {
+      OverlayCellControlLayoutItem placed;
+      placed.text = item.text;
+      placed.controlIndex = item.controlIndex;
+      placed.x = item.x;
+      placed.y = controlsTop + item.line;
+      placed.width = item.width;
+      placed.active = item.active;
+      placed.hovered = item.hovered;
+      layout.controls.push_back(std::move(placed));
+    }
+
+    if (hasSuffix) {
+      layout.suffixText = fitLine(input.suffix, layout.width);
+      layout.suffixY = controlsTop + controlLineCount;
+      layout.suffixX =
+          std::max(0, layout.width - utf8DisplayWidth(layout.suffixText));
+    }
+    layout.progressBarX = contentInset;
+    layout.progressBarY = layout.height - 1;
+    layout.progressBarWidth = progressWidth;
   }
 
-  const int lineCount = line + 1;
-  const int controlsBottom = std::max(0, state.screenHeight - 3);
-  for (PendingItem& item : pending) {
-    TerminalOverlayControlLayoutItem placed;
-    placed.spec = std::move(item.spec);
-    placed.controlIndex = item.controlIndex;
-    placed.x = item.x;
-    placed.y = controlsBottom - (lineCount - 1 - item.line);
-    out.push_back(std::move(placed));
+  layout.topY = layout.progressBarY;
+  auto useTop = [&](int y) {
+    if (y != -1) layout.topY = std::min(layout.topY, y);
+  };
+  useTop(layout.titleY);
+  useTop(layout.suffixY);
+  for (const auto& item : layout.controls) {
+    useTop(item.y);
   }
-  return out;
+  return layout;
+}
+
+OverlayCellLayout layoutPlaybackOverlayCells(
+    const PlaybackOverlayState& state, int width, int height,
+    int hoverIndex) {
+  std::vector<OverlayControlSpec> specs =
+      buildOverlayControlSpecs(state, hoverIndex);
+
+  OverlayCellLayoutInput input;
+  input.width = width;
+  input.height = height;
+  input.title = " " + buildWindowOverlayTopLine(state);
+  input.suffix = buildWindowOverlayProgressSuffix(state);
+  input.controls.reserve(specs.size());
+  for (size_t i = 0; i < specs.size(); ++i) {
+    OverlayCellControlInput control;
+    control.text = specs[i].renderText;
+    control.width = specs[i].width;
+    control.active = specs[i].active;
+    control.hovered = static_cast<int>(i) == hoverIndex;
+    control.controlIndex = static_cast<int>(i);
+    input.controls.push_back(std::move(control));
+  }
+  return layoutOverlayCells(input);
+}
+
+int overlayCellControlAt(const OverlayCellLayout& layout, int cellX,
+                         int cellY) {
+  for (const OverlayCellControlLayoutItem& item : layout.controls) {
+    if (cellY != item.y) continue;
+    if (cellX >= item.x && cellX < item.x + item.width) {
+      return item.controlIndex;
+    }
+  }
+  return -1;
 }
 
 std::string buildWindowOverlayProgressSuffix(
@@ -385,102 +548,85 @@ bool isBackMousePressed(const MouseEvent& mouse) {
   return (mouse.buttonState & backMask) != 0;
 }
 
-static bool isWindowProgressHit(const PlaybackOverlayState& state,
-                                const MouseEvent& mouse) {
-  if (state.windowWidth <= 0 || state.windowHeight <= 0) {
+static bool terminalOverlayProgressRatioAt(const PlaybackOverlayState& state,
+                                           const MouseEvent& mouse,
+                                           double* outRatio) {
+  if (!state.overlayVisible) return false;
+  OverlayCellLayout layout = layoutPlaybackOverlayCells(
+      state, state.screenWidth, state.screenHeight, -1);
+  if (mouse.pos.Y != layout.progressBarY || layout.progressBarWidth <= 0) {
     return false;
   }
-  float mouseWinX = static_cast<float>(mouse.pos.X) /
-                    static_cast<float>(state.windowWidth);
-  float mouseWinY = static_cast<float>(mouse.pos.Y) /
-                    static_cast<float>(state.windowHeight);
-  const float barYTop = 0.95f;
-  const float barYBot = 1.0f;
-  const float barXLeft = 0.02f;
-  const float barXRight = 0.98f;
-  return mouseWinX >= barXLeft && mouseWinX <= barXRight &&
-         mouseWinY >= barYTop && mouseWinY <= barYBot;
-}
-
-static bool isTerminalProgressHit(const PlaybackOverlayState& state,
-                                  const MouseEvent& mouse) {
-  int screenHeight = std::max(10, state.screenHeight);
-  int barY = state.progressBarY >= 0 ? state.progressBarY : (screenHeight - 1);
-  if (mouse.pos.Y != barY) {
+  const int rel = mouse.pos.X - layout.progressBarX;
+  if (rel < 0 || rel >= layout.progressBarWidth) {
     return false;
   }
-  if (state.progressBarWidth > 0 && state.progressBarX >= 0) {
-    return mouse.pos.X >= state.progressBarX &&
-           mouse.pos.X < state.progressBarX + state.progressBarWidth;
+  if (outRatio) {
+    *outRatio = std::clamp(
+        static_cast<double>(rel) /
+            static_cast<double>(std::max(1, layout.progressBarWidth - 1)),
+        0.0, 1.0);
   }
-  return mouse.pos.X >= 0;
+  return true;
 }
 
-bool isProgressHit(const PlaybackOverlayState& state, const MouseEvent& mouse) {
-  bool windowEvent = (mouse.control & 0x80000000) != 0;
-  return windowEvent ? isWindowProgressHit(state, mouse)
-                     : isTerminalProgressHit(state, mouse);
+static bool windowOverlayProgressRatioAt(const PlaybackOverlayState& state,
+                                         const MouseEvent& mouse,
+                                         int cellPixelWidth,
+                                         int cellPixelHeight,
+                                         double* outRatio) {
+  if (!state.overlayVisible) return false;
+  WindowOverlayCellGeometry geometry = buildWindowOverlayCellGeometry(
+      state, cellPixelWidth, cellPixelHeight);
+  if (geometry.layout.progressBarWidth <= 0) return false;
+
+  const int localX = mouse.pos.X - geometry.leftPx;
+  const int localY = mouse.pos.Y - geometry.topPx;
+  if (localX < 0 || localY < 0) return false;
+  const int cellX = localX / geometry.cellWidth;
+  const int cellY = localY / geometry.cellHeight;
+  if (cellY != geometry.layout.progressBarY) return false;
+  const int rel = cellX - geometry.layout.progressBarX;
+  if (rel < 0 || rel >= geometry.layout.progressBarWidth) return false;
+  if (outRatio) {
+    *outRatio = std::clamp(
+        static_cast<double>(rel) /
+            static_cast<double>(
+                std::max(1, geometry.layout.progressBarWidth - 1)),
+        0.0, 1.0);
+  }
+  return true;
+}
+
+bool overlayProgressRatioAt(const PlaybackOverlayState& state,
+                            const MouseEvent& mouse, int cellPixelWidth,
+                            int cellPixelHeight, double* outRatio) {
+  const bool windowEvent = (mouse.control & 0x80000000) != 0;
+  return windowEvent ? windowOverlayProgressRatioAt(
+                           state, mouse, cellPixelWidth, cellPixelHeight,
+                           outRatio)
+                     : terminalOverlayProgressRatioAt(state, mouse, outRatio);
 }
 
 int terminalOverlayControlAt(const PlaybackOverlayState& state,
                             const MouseEvent& mouse) {
   if (!state.overlayVisible) return -1;
-  std::vector<TerminalOverlayControlLayoutItem> controls =
-      layoutTerminalOverlayControls(state, -1);
-  for (const auto& item : controls) {
-    if (mouse.pos.Y != item.y) continue;
-    const int width =
-        std::min(item.spec.width, std::max(0, state.screenWidth - item.x));
-    if (mouse.pos.X >= item.x && mouse.pos.X < item.x + width) {
-      return item.controlIndex;
-    }
-  }
-  return -1;
+  OverlayCellLayout layout = layoutPlaybackOverlayCells(
+      state, state.screenWidth, state.screenHeight, -1);
+  return overlayCellControlAt(layout, mouse.pos.X, mouse.pos.Y);
 }
 
 int windowOverlayControlAt(const PlaybackOverlayState& state,
                           const MouseEvent& mouse, int cellPixelWidth,
                           int cellPixelHeight) {
   if (!state.overlayVisible) return -1;
-  if (state.windowWidth <= 0 || state.windowHeight <= 0) return -1;
-  std::vector<OverlayControlSpec> specs = buildOverlayControlSpecs(state, -1);
-  if (specs.empty()) return -1;
-
-  std::string controlsLine = buildOverlayControlsText(state, -1);
-  if (controlsLine.empty()) return -1;
-
-  cellPixelWidth = std::max(1, cellPixelWidth);
-  cellPixelHeight = std::max(1, cellPixelHeight);
-  const int maxTextWidth =
-      std::clamp(static_cast<int>(std::lround(state.windowWidth * 0.96)), 1,
-                 state.windowWidth);
-  const int cols = std::max(1, maxTextWidth / cellPixelWidth);
-  const int textPxW = std::min(state.windowWidth, cols * cellPixelWidth);
-
-  const bool hasProgressSuffix =
-      !buildWindowOverlayProgressSuffix(state).empty();
-  int lineCount = 1 + (controlsLine.empty() ? 0 : 1) +
-                  (hasProgressSuffix ? 1 : 0);
-  const int textPxH =
-      std::min(state.windowHeight, lineCount * cellPixelHeight);
-  const int textLeftPx = std::clamp(
-      static_cast<int>(std::lround(state.windowWidth * 0.02)), 0,
-      std::max(0, state.windowWidth - textPxW));
-  const int textTopPx = std::clamp(
-      static_cast<int>(std::lround(state.windowHeight * 0.95)) - textPxH, 0,
-      std::max(0, state.windowHeight - textPxH));
-  const int controlsY0 = textTopPx + cellPixelHeight;
-  const int controlsY1 = controlsY0 + cellPixelHeight;
-  if (mouse.pos.Y < controlsY0 || mouse.pos.Y >= controlsY1) return -1;
-  for (size_t i = 0; i < specs.size(); ++i) {
-    const auto& spec = specs[i];
-    int x0 = textLeftPx + spec.charStart * cellPixelWidth;
-    int x1 = x0 + spec.width * cellPixelWidth;
-    if (mouse.pos.X >= x0 && mouse.pos.X < x1) {
-      return static_cast<int>(i);
-    }
-  }
-  return -1;
+  WindowOverlayCellGeometry geometry = buildWindowOverlayCellGeometry(
+      state, cellPixelWidth, cellPixelHeight);
+  const int localX = mouse.pos.X - geometry.leftPx;
+  const int localY = mouse.pos.Y - geometry.topPx;
+  if (localX < 0 || localY < 0) return -1;
+  return overlayCellControlAt(geometry.layout, localX / geometry.cellWidth,
+                              localY / geometry.cellHeight);
 }
 
 WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
@@ -495,7 +641,6 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.title = state.windowTitle;
   std::vector<OverlayControlSpec> controlSpecs =
       buildOverlayControlSpecs(state, hoverIndex);
-  ui.controls = buildOverlayControlsText(state, hoverIndex);
   ui.progressSuffix = buildWindowOverlayProgressSuffix(state);
   ui.controlButtons.clear();
   ui.controlButtons.reserve(controlSpecs.size());

@@ -584,7 +584,10 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     triggerOverlay(view, signals);
   }
 
-  bool progressHit = playback_overlay::isProgressHit(mouseOverlayState, hitMouse);
+  double progressRatio = 0.0;
+  bool progressHit = playback_overlay::overlayProgressRatioAt(
+      mouseOverlayState, hitMouse, windowTextCellW, windowTextCellH,
+      &progressRatio);
   if (progressHit) {
     triggerOverlay(view, signals);
     if (signals.redraw) {
@@ -606,19 +609,13 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
 
   if (leftPressed && windowEvent) {
     if (progressHit && view.videoWindow) {
-      float winW = static_cast<float>(view.videoWindow->GetWidth());
-      float winH = static_cast<float>(view.videoWindow->GetHeight());
-      if (winW > 0.0f && winH > 0.0f && view.player) {
-        float mouseWinX = static_cast<float>(mouse.pos.X) / winW;
-        const float barXLeft = 0.02f;
-        const float barXRight = 0.98f;
-        double barWidth = static_cast<double>(barXRight - barXLeft);
-        double relX = static_cast<double>(mouseWinX - barXLeft);
-        double ratio = relX / barWidth;
-        ratio = std::clamp(ratio, 0.0, 1.0);
+      if (view.player) {
         double totalSec = view.player->durationUs() / 1000000.0;
+        if (totalSec <= 0.0) {
+          totalSec = audioGetTotalSec();
+        }
         if (totalSec > 0.0 && std::isfinite(totalSec)) {
-          double target = ratio * totalSec;
+          double target = progressRatio * totalSec;
           queueSeekRequest(signals, seekState, target);
         }
       }
@@ -627,46 +624,29 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   }
 
   if (leftPressed && miniGridEvent) {
-    if (progressHit && view.player && mouseOverlayState.progressBarWidth > 0) {
-      int rel = hitMouse.pos.X - mouseOverlayState.progressBarX;
-      if (rel >= 0 && rel < mouseOverlayState.progressBarWidth) {
-        double denom = static_cast<double>(
-            std::max(1, mouseOverlayState.progressBarWidth - 1));
-        double ratio = static_cast<double>(rel) / denom;
-        ratio = std::clamp(ratio, 0.0, 1.0);
-        double totalSec = view.player->durationUs() / 1000000.0;
-        if (totalSec <= 0.0) {
-          totalSec = audioGetTotalSec();
-        }
-        if (totalSec > 0.0 && std::isfinite(totalSec)) {
-          queueSeekRequest(signals, seekState, ratio * totalSec);
-        }
+    if (progressHit && view.player) {
+      double totalSec = view.player->durationUs() / 1000000.0;
+      if (totalSec <= 0.0) {
+        totalSec = audioGetTotalSec();
+      }
+      if (totalSec > 0.0 && std::isfinite(totalSec)) {
+        queueSeekRequest(signals, seekState, progressRatio * totalSec);
       }
     }
     return;
   }
 
   if (leftPressed && (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
-    if (view.progressBarWidth && view.progressBarY && view.progressBarX &&
-        *view.progressBarWidth > 0 && mouse.pos.Y == *view.progressBarY &&
-        *view.progressBarX >= 0) {
-      int rel = mouse.pos.X - *view.progressBarX;
-      if (rel >= 0 && rel < *view.progressBarWidth) {
-        double denom =
-            static_cast<double>(std::max(1, *view.progressBarWidth - 1));
-        double ratio = static_cast<double>(rel) / denom;
-        ratio = std::clamp(ratio, 0.0, 1.0);
-        double totalSec =
-            view.player ? view.player->durationUs() / 1000000.0 : -1.0;
-        if (totalSec <= 0.0) {
-          totalSec = audioGetTotalSec();
-        }
-        if (totalSec > 0.0 && std::isfinite(totalSec)) {
-          double targetSec = ratio * totalSec;
-          queueSeekRequest(signals, seekState, targetSec);
-        }
-        return;
+    if (progressHit) {
+      double totalSec =
+          view.player ? view.player->durationUs() / 1000000.0 : -1.0;
+      if (totalSec <= 0.0) {
+        totalSec = audioGetTotalSec();
       }
+      if (totalSec > 0.0 && std::isfinite(totalSec)) {
+        queueSeekRequest(signals, seekState, progressRatio * totalSec);
+      }
+      return;
     }
   }
 }

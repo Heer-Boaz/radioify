@@ -26,14 +26,48 @@ struct OverlayControlSpec {
   std::string renderText;
   bool active = false;
   int width = 0;
-  int charStart = 0;
 };
 
-struct TerminalOverlayControlLayoutItem {
-  OverlayControlSpec spec;
+struct OverlayCellControlInput {
+  std::string text;
+  int width = 0;
+  bool active = false;
+  bool hovered = false;
+  int controlIndex = -1;
+};
+
+struct OverlayCellLayoutInput {
+  int width = 0;
+  int height = 0;
+  std::string title;
+  std::string suffix;
+  std::vector<OverlayCellControlInput> controls;
+};
+
+struct OverlayCellControlLayoutItem {
+  std::string text;
   int controlIndex = -1;
   int x = 0;
   int y = 0;
+  int width = 0;
+  bool active = false;
+  bool hovered = false;
+};
+
+struct OverlayCellLayout {
+  int width = 0;
+  int height = 0;
+  int topY = -1;
+  int titleX = 0;
+  int titleY = -1;
+  std::string titleText;
+  int suffixX = 0;
+  int suffixY = -1;
+  std::string suffixText;
+  int progressBarX = -1;
+  int progressBarY = -1;
+  int progressBarWidth = 0;
+  std::vector<OverlayCellControlLayoutItem> controls;
 };
 
 struct PlaybackOverlayInputs {
@@ -118,11 +152,13 @@ std::string buildSubtitleText(const SubtitleManager& subtitleManager,
 std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     const PlaybackOverlayState& state, int hoverIndex);
 
-std::vector<TerminalOverlayControlLayoutItem> layoutTerminalOverlayControls(
-    const PlaybackOverlayState& state, int hoverIndex);
+OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input);
 
-std::string buildOverlayControlsText(const PlaybackOverlayState& state,
-                                     int hoverIndex);
+OverlayCellLayout layoutPlaybackOverlayCells(
+    const PlaybackOverlayState& state, int width, int height, int hoverIndex);
+
+int overlayCellControlAt(const OverlayCellLayout& layout, int cellX,
+                         int cellY);
 
 std::string buildWindowOverlayProgressSuffix(
     const PlaybackOverlayState& state);
@@ -137,7 +173,9 @@ int windowOverlayControlAt(const PlaybackOverlayState& state,
                           int cellPixelHeight);
 
 bool isBackMousePressed(const MouseEvent& mouse);
-bool isProgressHit(const PlaybackOverlayState& state, const MouseEvent& mouse);
+bool overlayProgressRatioAt(const PlaybackOverlayState& state,
+                            const MouseEvent& mouse, int cellPixelWidth,
+                            int cellPixelHeight, double* outRatio);
 
 WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
                                 int hoverIndex);

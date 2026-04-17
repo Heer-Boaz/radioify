@@ -288,14 +288,13 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
   const int hoverIndex =
       overlayControlHover.load(std::memory_order_relaxed);
-  std::vector<playback_overlay::TerminalOverlayControlLayoutItem> controls;
+  playback_overlay::OverlayCellLayout overlayLayout;
   int overlayReservedLines = overlayState.overlayVisible ? 5 : 0;
   if (overlayState.overlayVisible) {
-    controls =
-        playback_overlay::layoutTerminalOverlayControls(overlayState,
-                                                        hoverIndex);
-    if (!controls.empty()) {
-      const int overlayTop = std::max(0, controls.front().y - 1);
+    overlayLayout = playback_overlay::layoutPlaybackOverlayCells(
+        overlayState, width, height, hoverIndex);
+    if (overlayLayout.topY != -1) {
+      const int overlayTop = std::max(0, overlayLayout.topY);
       overlayReservedLines = std::max(5, height - overlayTop);
     }
   }
@@ -324,60 +323,61 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   }
 
   if (overlayState.overlayVisible) {
-    int barLine = height - 1;
-    int suffixLine = barLine - 1;
-    int firstControlsLine = suffixLine;
-    if (!controls.empty()) {
-      firstControlsLine = controls.front().y;
-      for (const auto& item : controls) {
-        if (item.y < artTop || item.y < 0 || item.y >= height) continue;
-        int x = item.x;
-        if (x >= width) break;
-        int avail = width - x;
-        if (avail <= 0) break;
-        std::string text = item.spec.renderText;
-        if (utf8DisplayWidth(text) > avail) {
-          text = utf8TakeDisplayWidth(text, avail);
-        }
-        Style style = item.spec.active ? accentStyle : baseStyle;
-        bool hovered = item.controlIndex == hoverIndex;
-        if (hovered) {
-          style = {style.bg, style.fg};
-        }
-        screen.writeText(x, item.y, text, style);
+    for (const auto& item : overlayLayout.controls) {
+      if (item.y < artTop || item.y < 0 || item.y >= height) continue;
+      const int x = item.x;
+      if (x >= width) break;
+      const int avail = width - x;
+      if (avail <= 0) break;
+      std::string text = item.text;
+      if (utf8DisplayWidth(text) > avail) {
+        text = utf8TakeDisplayWidth(text, avail);
       }
+      Style style = item.active ? accentStyle : baseStyle;
+      if (item.hovered) {
+        style = {style.bg, style.fg};
+      }
+      screen.writeText(x, item.y, text, style);
     }
-    int titleLine = firstControlsLine - 1;
-    if (titleLine >= artTop && titleLine >= 0) {
-      std::string titleLineText =
-          " " + playback_overlay::buildWindowOverlayTopLine(overlayState);
-      screen.writeText(0, titleLine, fitLine(titleLineText, width),
+
+    if (overlayLayout.titleY >= artTop && overlayLayout.titleY >= 0 &&
+        overlayLayout.titleY < height && !overlayLayout.titleText.empty()) {
+      screen.writeText(overlayLayout.titleX, overlayLayout.titleY,
+                       overlayLayout.titleText,
                        accentStyle);
     }
 
-    std::string suffix =
-        playback_overlay::buildWindowOverlayProgressSuffix(overlayState);
-    int barWidth = std::max(5, width - 2);
     double ratio = 0.0;
     if (totalSec > 0.0 && std::isfinite(totalSec)) {
       ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
     }
-    progressBarX = 1;
-    progressBarY = barLine;
-    progressBarWidth = barWidth;
-    screen.writeChar(0, barLine, L'|', progressFrameStyle);
-    auto barCells = renderProgressBarCells(ratio, barWidth, progressEmptyStyle,
-                                           progressStart, progressEnd);
-    for (int i = 0; i < barWidth; ++i) {
-      const auto& cell = barCells[static_cast<size_t>(i)];
-      screen.writeChar(1 + i, barLine, cell.ch, cell.style);
+    progressBarX = overlayLayout.progressBarX;
+    progressBarY = overlayLayout.progressBarY;
+    progressBarWidth = overlayLayout.progressBarWidth;
+    if (progressBarY >= 0 && progressBarY < height && progressBarWidth > 0) {
+      const int leftFrameX = progressBarX - 1;
+      const int rightFrameX = progressBarX + progressBarWidth;
+      if (leftFrameX >= 0 && leftFrameX < width) {
+        screen.writeChar(leftFrameX, progressBarY, L'|', progressFrameStyle);
+      }
+      auto barCells = renderProgressBarCells(
+          ratio, progressBarWidth, progressEmptyStyle, progressStart,
+          progressEnd);
+      for (int i = 0; i < progressBarWidth; ++i) {
+        const int x = progressBarX + i;
+        if (x < 0 || x >= width) continue;
+        const auto& cell = barCells[static_cast<size_t>(i)];
+        screen.writeChar(x, progressBarY, cell.ch, cell.style);
+      }
+      if (rightFrameX >= 0 && rightFrameX < width) {
+        screen.writeChar(rightFrameX, progressBarY, L'|', progressFrameStyle);
+      }
     }
-    screen.writeChar(1 + barWidth, barLine, L'|', progressFrameStyle);
-    if (!suffix.empty() && suffixLine >= artTop && suffixLine >= 0) {
-      std::string suffixFit = fitLine(suffix, width);
-      int suffixWidth = utf8DisplayWidth(suffixFit);
-      int suffixX = std::max(0, width - suffixWidth);
-      screen.writeText(suffixX, suffixLine, suffixFit, baseStyle);
+    if (!overlayLayout.suffixText.empty() &&
+        overlayLayout.suffixY >= artTop && overlayLayout.suffixY >= 0 &&
+        overlayLayout.suffixY < height) {
+      screen.writeText(overlayLayout.suffixX, overlayLayout.suffixY,
+                       overlayLayout.suffixText, baseStyle);
     }
   }
 
