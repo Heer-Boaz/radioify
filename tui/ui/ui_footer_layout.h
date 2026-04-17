@@ -7,6 +7,7 @@ struct BrowserFooterLayout {
   bool showAnalyzeStatus = false;
   bool showLoopSplitStatus = false;
   bool showNowPlaying = true;
+  int nowPlayingLines = 0;
   bool showActionStrip = false;
   int actionStripLines = 0;
   bool showPeakMeter = false;

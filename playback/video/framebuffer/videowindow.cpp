@@ -152,9 +152,11 @@ namespace {
             }
         };
 
-        writeText(layout.titleText, layout.titleY, layout.titleX,
-                  gpuTextGridRgb(235, 235, 235), 0,
-                  kGpuTextGridCellFlagTransparentBg);
+        for (const auto& titleLine : layout.titleLines) {
+            writeText(titleLine.text, titleLine.y, titleLine.x,
+                      gpuTextGridRgb(235, 235, 235), 0,
+                      kGpuTextGridCellFlagTransparentBg);
+        }
         for (const auto& item : layout.controls) {
             uint32_t fg = gpuTextGridRgb(222, 222, 222);
             uint32_t bg = gpuTextGridRgb(36, 36, 36);

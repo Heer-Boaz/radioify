@@ -362,11 +362,12 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
       screen.writeText(x, item.y, text, style);
     }
 
-    if (overlayLayout.titleY >= artTop && overlayLayout.titleY >= 0 &&
-        overlayLayout.titleY < height && !overlayLayout.titleText.empty()) {
-      screen.writeText(overlayLayout.titleX, overlayLayout.titleY,
-                       overlayLayout.titleText,
-                       accentStyle);
+    for (const auto& titleLine : overlayLayout.titleLines) {
+      if (titleLine.y < artTop || titleLine.y < 0 ||
+          titleLine.y >= height || titleLine.text.empty()) {
+        continue;
+      }
+      screen.writeText(titleLine.x, titleLine.y, titleLine.text, accentStyle);
     }
 
     double ratio = 0.0;

@@ -483,6 +483,27 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
   const int progressWidth = std::max(1, layout.width - contentInset * 2);
   const int reservedRowsAboveProgress =
       std::max(0, input.reservedRowsAboveProgress);
+  std::vector<std::string> titleLines = wrapLine(input.title, layout.width);
+  if (titleLines.empty()) titleLines.emplace_back();
+  auto placeTitleLines = [&](int topY, int firstLine, int lineCount) {
+    layout.titleLines.clear();
+    layout.titleX = 0;
+    layout.titleY = -1;
+    layout.titleText.clear();
+    if (lineCount <= 0) return;
+    layout.titleLines.reserve(static_cast<size_t>(lineCount));
+    for (int i = 0; i < lineCount; ++i) {
+      const int lineIndex = firstLine + i;
+      OverlayCellTextLine line;
+      line.x = 0;
+      line.y = topY + i;
+      line.text = titleLines[static_cast<size_t>(lineIndex)];
+      layout.titleLines.push_back(std::move(line));
+    }
+    layout.titleX = layout.titleLines.front().x;
+    layout.titleY = layout.titleLines.front().y;
+    layout.titleText = layout.titleLines.front().text;
+  };
 
   if (input.height > 0) {
     layout.height = input.height;
@@ -520,18 +541,21 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
             ? ((layout.suffixY >= 0 ? layout.suffixY : firstContentYAboveFooter) -
                1)
             : (controlsTop - 1);
-    layout.titleText = fitLine(input.title, layout.width);
-    layout.titleX = 0;
-    layout.titleY = titleBaseY;
+    const int titleSlots = std::max(0, titleBaseY + 1);
+    const int titleLineCount = std::min(
+        static_cast<int>(titleLines.size()), titleSlots);
+    const int firstTitleLine =
+        static_cast<int>(titleLines.size()) - titleLineCount;
+    placeTitleLines(titleBaseY - titleLineCount + 1, firstTitleLine,
+                    titleLineCount);
   } else {
+    const int titleLineCount = static_cast<int>(titleLines.size());
     layout.height =
-        1 + controlLineCount + (hasSuffix ? 1 : 0) +
+        titleLineCount + controlLineCount + (hasSuffix ? 1 : 0) +
         reservedRowsAboveProgress + 1;
-    layout.titleText = fitLine(input.title, layout.width);
-    layout.titleX = 0;
-    layout.titleY = 0;
+    placeTitleLines(0, 0, titleLineCount);
 
-    const int controlsTop = 1;
+    const int controlsTop = titleLineCount;
     for (const PendingOverlayCellControl& item : pending) {
       OverlayCellControlLayoutItem placed;
       placed.text = item.text;
@@ -559,7 +583,9 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
   auto useTop = [&](int y) {
     if (y != -1) layout.topY = std::min(layout.topY, y);
   };
-  useTop(layout.titleY);
+  for (const auto& line : layout.titleLines) {
+    useTop(line.y);
+  }
   useTop(layout.suffixY);
   for (const auto& item : layout.controls) {
     useTop(item.y);

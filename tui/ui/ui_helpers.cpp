@@ -174,6 +174,75 @@ std::string fitLine(const std::string& s, int width) {
   return utf8TakeDisplayWidth(s, width - 1) + "~";
 }
 
+std::vector<std::string> wrapLine(const std::string& s, int width) {
+  std::vector<std::string> lines;
+  if (width <= 0) return lines;
+  if (s.empty()) {
+    lines.emplace_back();
+    return lines;
+  }
+
+  size_t offset = 0;
+  size_t lineStart = 0;
+  size_t lineEnd = 0;
+  int lineWidth = 0;
+  while (offset < s.size()) {
+    char32_t codepoint = 0;
+    size_t startByte = 0;
+    size_t endByte = 0;
+    if (!utf8DecodeCodepoint(s, &offset, &codepoint, &startByte, &endByte)) {
+      break;
+    }
+    if (codepoint == U'\r') continue;
+    if (codepoint == U'\n') {
+      lines.emplace_back(s.substr(lineStart, lineEnd - lineStart));
+      lineStart = offset;
+      lineEnd = offset;
+      lineWidth = 0;
+      continue;
+    }
+
+    const int glyphWidth = unicodeDisplayWidth(codepoint);
+    if (glyphWidth > 0 && lineWidth > 0 && lineWidth + glyphWidth > width) {
+      lines.emplace_back(s.substr(lineStart, lineEnd - lineStart));
+      lineStart = startByte;
+      lineEnd = startByte;
+      lineWidth = 0;
+    }
+    lineEnd = endByte;
+    lineWidth += glyphWidth;
+  }
+  lines.emplace_back(s.substr(lineStart, lineEnd - lineStart));
+  return lines;
+}
+
+int wrappedLineCount(const std::string& s, int width) {
+  if (width <= 0) return 0;
+  if (s.empty()) return 1;
+  int lines = 1;
+  int lineWidth = 0;
+  size_t offset = 0;
+  while (offset < s.size()) {
+    char32_t codepoint = 0;
+    if (!utf8DecodeCodepoint(s, &offset, &codepoint, nullptr, nullptr)) {
+      break;
+    }
+    if (codepoint == U'\r') continue;
+    if (codepoint == U'\n') {
+      ++lines;
+      lineWidth = 0;
+      continue;
+    }
+    const int glyphWidth = unicodeDisplayWidth(codepoint);
+    if (glyphWidth > 0 && lineWidth > 0 && lineWidth + glyphWidth > width) {
+      ++lines;
+      lineWidth = 0;
+    }
+    lineWidth += glyphWidth;
+  }
+  return lines;
+}
+
 static int quantizeCoverage(double value) {
   int quantized = static_cast<int>(std::round(value * 8.0 + 1e-7));
   return std::clamp(quantized, 0, 8);

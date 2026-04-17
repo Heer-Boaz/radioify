@@ -77,6 +77,12 @@ struct OverlayCellControlLayoutItem {
   bool hovered = false;
 };
 
+struct OverlayCellTextLine {
+  int x = 0;
+  int y = -1;
+  std::string text;
+};
+
 struct OverlayCellLayout {
   int width = 0;
   int height = 0;
@@ -84,6 +90,7 @@ struct OverlayCellLayout {
   int titleX = 0;
   int titleY = -1;
   std::string titleText;
+  std::vector<OverlayCellTextLine> titleLines;
   int suffixX = 0;
   int suffixY = -1;
   std::string suffixText;

@@ -1065,6 +1065,13 @@ int runTui(Options o) {
         !melodyVisualizationEnabled, !audioGetWarning().empty(),
         hasAnalyzeStatus, hasLoopSplitStatus, o.play, showNowPlaying,
         o.play && audioIsReady());
+    if (layout.showNowPlaying) {
+      const int nowPlayingLines = std::max(
+          1, wrappedLineCount(" " + buildAudioNowPlayingLabel(),
+                              screen.width()));
+      layout.reservedLines += nowPlayingLines - layout.nowPlayingLines;
+      layout.nowPlayingLines = nowPlayingLines;
+    }
     if (layout.showActionStrip) {
       const bool browserInteractionEnabled = !melodyVisualizationEnabled;
       layout.actionStripLines = countWrappedActionLines(
@@ -2401,8 +2408,19 @@ int runTui(Options o) {
       }
       std::string nowLabel = buildAudioNowPlayingLabel();
       if (footerLayout.showNowPlaying) {
-        screen.writeText(0, line++, fitLine(std::string(" ") + nowLabel, width),
-                         kStyleAccent);
+        const int nowStart = line;
+        const int nowPlayingLines = std::max(1, footerLayout.nowPlayingLines);
+        std::vector<std::string> lines =
+            wrapLine(std::string(" ") + nowLabel, width);
+        for (int i = 0; i < nowPlayingLines &&
+                        i < static_cast<int>(lines.size());
+             ++i) {
+          const int y = nowStart + i;
+          if (y >= height) break;
+          screen.writeText(0, y, lines[static_cast<size_t>(i)],
+                           kStyleAccent);
+        }
+        line = nowStart + nowPlayingLines;
       }
 
       actionStrip.buttons.clear();

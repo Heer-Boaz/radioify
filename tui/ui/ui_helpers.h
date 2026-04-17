@@ -77,6 +77,8 @@ int utf8CodepointCount(const std::string& s);
 std::string utf8Take(const std::string& s, int count);
 std::string utf8Slice(const std::string& s, int start, int count);
 std::string fitLine(const std::string& s, int width);
+std::vector<std::string> wrapLine(const std::string& s, int width);
+int wrappedLineCount(const std::string& s, int width);
 std::string formatTime(double seconds);
 ProgressTextLayout buildProgressTextLayout(double displaySec,
                                            double totalSec,

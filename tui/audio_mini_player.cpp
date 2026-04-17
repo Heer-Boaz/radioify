@@ -266,10 +266,12 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   layoutInput.controls =
       playback_overlay::buildOverlayCellControlInputs(controls_, hoverIndex_);
   layout_ = playback_overlay::layoutOverlayCells(layoutInput);
-  if (layout_.titleY >= 0 && layout_.titleY < height &&
-      !layout_.titleText.empty()) {
-    writeFitted(screen_, layout_.titleX, layout_.titleY,
-                width - layout_.titleX, layout_.titleText, styles.accent);
+  for (const auto& titleLine : layout_.titleLines) {
+    if (titleLine.y < 0 || titleLine.y >= height || titleLine.x >= width) {
+      continue;
+    }
+    writeFitted(screen_, titleLine.x, titleLine.y,
+                width - titleLine.x, titleLine.text, styles.accent);
   }
   for (const auto& item : layout_.controls) {
     if (item.y < 0 || item.y >= height || item.x >= width) continue;
