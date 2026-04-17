@@ -904,6 +904,13 @@ double VideoWindow::PictureInPictureAspectRatio() const {
     } else if (m_width > 0 && m_height > 0) {
         aspect = static_cast<double>(m_width) / static_cast<double>(m_height);
     }
+    if (m_pictureInPictureTextMode.load(std::memory_order_relaxed)) {
+        const SIZE cellSize = TextGridCellSize();
+        const double cellAspect =
+            static_cast<double>(std::max<LONG>(1, cellSize.cx)) /
+            static_cast<double>(std::max<LONG>(1, cellSize.cy));
+        aspect *= 2.0 * cellAspect;
+    }
     return std::clamp(aspect, 0.50, 3.00);
 }
 
