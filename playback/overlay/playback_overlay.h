@@ -133,7 +133,8 @@ int terminalOverlayControlAt(const PlaybackOverlayState& state,
                             const MouseEvent& mouse);
 
 int windowOverlayControlAt(const PlaybackOverlayState& state,
-                          const MouseEvent& mouse);
+                          const MouseEvent& mouse, int cellPixelWidth,
+                          int cellPixelHeight);
 
 bool isBackMousePressed(const MouseEvent& mouse);
 bool isProgressHit(const PlaybackOverlayState& state, const MouseEvent& mouse);

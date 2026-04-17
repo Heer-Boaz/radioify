@@ -552,10 +552,18 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   }
 
   windowEvent = (hitMouse.control & 0x80000000) != 0;
+  int windowTextCellW = 1;
+  int windowTextCellH = 1;
+  if (windowEvent && view.videoWindow) {
+    view.videoWindow->GetPictureInPictureTextCellSize(windowTextCellW,
+                                                      windowTextCellH);
+  }
   int controlHit =
       windowEvent
           ? playback_overlay::windowOverlayControlAt(mouseOverlayState,
-                                                     hitMouse)
+                                                     hitMouse,
+                                                     windowTextCellW,
+                                                     windowTextCellH)
           : playback_overlay::terminalOverlayControlAt(mouseOverlayState,
                                                        hitMouse);
   int previousHover = signals.overlayControlHover

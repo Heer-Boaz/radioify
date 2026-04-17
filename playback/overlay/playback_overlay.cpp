@@ -439,52 +439,43 @@ int terminalOverlayControlAt(const PlaybackOverlayState& state,
 }
 
 int windowOverlayControlAt(const PlaybackOverlayState& state,
-                          const MouseEvent& mouse) {
+                          const MouseEvent& mouse, int cellPixelWidth,
+                          int cellPixelHeight) {
   if (!state.overlayVisible) return -1;
   if (state.windowWidth <= 0 || state.windowHeight <= 0) return -1;
   std::vector<OverlayControlSpec> specs = buildOverlayControlSpecs(state, -1);
   if (specs.empty()) return -1;
 
-  std::string topLine = buildWindowOverlayTopLine(state);
   std::string controlsLine = buildOverlayControlsText(state, -1);
-  int maxChars = std::max(utf8DisplayWidth(topLine),
-                          utf8DisplayWidth(controlsLine));
-  if (maxChars <= 0) return -1;
-  std::string progressLine = buildWindowOverlayProgressSuffix(state);
-  int linePxH = std::clamp(static_cast<int>(std::round(state.windowHeight * 0.045f)),
-                           12, 36);
-  int lineCount = 1 + (controlsLine.empty() ? 0 : 1) +
-                  (progressLine.empty() ? 0 : 1);
-  int textPxH =
-      std::clamp(lineCount * linePxH + std::max(0, lineCount - 1) * 2, 14, 96);
-  int textPxW =
+  if (controlsLine.empty()) return -1;
+
+  cellPixelWidth = std::max(1, cellPixelWidth);
+  cellPixelHeight = std::max(1, cellPixelHeight);
+  const int maxTextWidth =
       std::clamp(static_cast<int>(std::lround(state.windowWidth * 0.96)), 1,
                  state.windowWidth);
-  int totalGlyphH = lineCount * 7 + (lineCount - 1);
-  int maxScaleVert = std::max(1, textPxH / std::max(1, totalGlyphH));
-  int maxScaleHoriz = std::max(1, textPxW / std::max(1, maxChars * 6));
-  int maxCap = std::max(3, textPxH / 80);
-  int scale = std::min({maxScaleVert, maxScaleHoriz, maxCap});
-  if (scale < 1) scale = 1;
-  int charAdvance = 6 * scale;
-  float textHeightNorm = static_cast<float>(textPxH) / state.windowHeight;
-  float textWidthNorm = static_cast<float>(textPxW) / state.windowWidth;
-  float textLeftNorm = 0.02f;
-  if (textLeftNorm + textWidthNorm > 1.0f) {
-    textLeftNorm = std::max(0.0f, 1.0f - textWidthNorm);
-  }
-  float textTopNorm = 0.95f - textHeightNorm;
-  int textLeftPx = static_cast<int>(std::round(textLeftNorm * state.windowWidth));
-  int textTopPx = static_cast<int>(std::round(textTopNorm * state.windowHeight));
-  int controlsLineIndex = controlsLine.empty() ? -1 : 1;
-  if (controlsLineIndex < 0) return -1;
-  int controlsY0 = textTopPx + 1 + controlsLineIndex * (7 + 1) * scale;
-  int controlsY1 = controlsY0 + 7 * scale;
+  const int cols = std::max(1, maxTextWidth / cellPixelWidth);
+  const int textPxW = std::min(state.windowWidth, cols * cellPixelWidth);
+
+  const bool hasProgressSuffix =
+      !buildWindowOverlayProgressSuffix(state).empty();
+  int lineCount = 1 + (controlsLine.empty() ? 0 : 1) +
+                  (hasProgressSuffix ? 1 : 0);
+  const int textPxH =
+      std::min(state.windowHeight, lineCount * cellPixelHeight);
+  const int textLeftPx = std::clamp(
+      static_cast<int>(std::lround(state.windowWidth * 0.02)), 0,
+      std::max(0, state.windowWidth - textPxW));
+  const int textTopPx = std::clamp(
+      static_cast<int>(std::lround(state.windowHeight * 0.95)) - textPxH, 0,
+      std::max(0, state.windowHeight - textPxH));
+  const int controlsY0 = textTopPx + cellPixelHeight;
+  const int controlsY1 = controlsY0 + cellPixelHeight;
   if (mouse.pos.Y < controlsY0 || mouse.pos.Y >= controlsY1) return -1;
   for (size_t i = 0; i < specs.size(); ++i) {
     const auto& spec = specs[i];
-    int x0 = textLeftPx + 1 + spec.charStart * charAdvance;
-    int x1 = x0 + spec.width * charAdvance;
+    int x0 = textLeftPx + spec.charStart * cellPixelWidth;
+    int x1 = x0 + spec.width * cellPixelWidth;
     if (mouse.pos.X >= x0 && mouse.pos.X < x1) {
       return static_cast<int>(i);
     }
