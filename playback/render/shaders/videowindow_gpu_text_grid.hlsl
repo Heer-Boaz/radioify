@@ -15,7 +15,8 @@ cbuffer GpuTextGridConstants : register(b0) {
 
 static const uint CELL_FLAG_BRAILLE = 1u;
 static const uint CELL_FLAG_TRANSPARENT_BG = 2u;
-static const uint BRAILLE_GLYPH_ATLAS_START = 110u;
+static const uint BLOCK_GLYPH_ATLAS_START = 111u;
+static const uint BRAILLE_GLYPH_ATLAS_START = 119u;
 
 float3 packedRgb(uint rgb) {
     return float3(
@@ -41,6 +42,10 @@ uint atlasGlyphIndex(uint ch) {
     if (ch == 0x252Cu) return 107u;
     if (ch == 0x2534u) return 108u;
     if (ch == 0x253Cu) return 109u;
+    if (ch == 0x25CBu) return 110u;
+    if (ch >= 0x2588u && ch <= 0x258Fu) {
+        return BLOCK_GLYPH_ATLAS_START + (ch - 0x2588u);
+    }
     return 31u;
 }
 

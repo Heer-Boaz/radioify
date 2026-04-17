@@ -11,8 +11,9 @@
 
 namespace {
 constexpr int kGlyphAtlasCols = 16;
-constexpr int kGlyphAtlasRows = 23;
-constexpr int kBrailleGlyphAtlasStart = 110;
+constexpr int kGlyphAtlasRows = 24;
+constexpr int kBlockGlyphAtlasStart = 111;
+constexpr int kBrailleGlyphAtlasStart = 119;
 
 struct GpuTextGridConstants {
     uint32_t glyphCellWidth = 1;
@@ -81,7 +82,14 @@ wchar_t glyphForAtlasIndex(int index) {
             return L'\u2534';
         case 109:
             return L'\u253C';
+        case 110:
+            return L'\u25CB';
         default:
+            if (index >= kBlockGlyphAtlasStart &&
+                index < kBlockGlyphAtlasStart + 8) {
+                return static_cast<wchar_t>(
+                    L'\u2588' + (index - kBlockGlyphAtlasStart));
+            }
             if (index >= kBrailleGlyphAtlasStart &&
                 index < kBrailleGlyphAtlasStart + 256) {
                 return static_cast<wchar_t>(

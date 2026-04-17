@@ -31,15 +31,19 @@ GpuTextGridCell makeScreenCell(const ScreenCell& cell) {
     return GpuTextGridCell{static_cast<uint32_t>(ch - 0x2800), fg, bg,
                            kGpuTextGridCellFlagBraille};
   }
-  if (ch >= 0x2588 && ch <= 0x258F) {
-    return GpuTextGridCell{' ', fg, fg, 0};
-  }
-
   if (ch >= 32 && ch <= 126) {
     return GpuTextGridCell{static_cast<uint32_t>(ch), fg, bg, 0};
   }
 
   switch (ch) {
+    case L'\u2588':
+    case L'\u2589':
+    case L'\u258A':
+    case L'\u258B':
+    case L'\u258C':
+    case L'\u258D':
+    case L'\u258E':
+    case L'\u258F':
     case L'\u25B6':
     case L'\u23F8':
     case L'\u25A0':

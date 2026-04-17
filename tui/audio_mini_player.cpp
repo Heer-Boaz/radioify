@@ -238,24 +238,11 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   overlayState.audioFinished = audioIsFinished();
   overlayState.pictureInPictureAvailable = true;
   overlayState.pictureInPictureActive = true;
-  std::string suffix =
-      playback_overlay::buildWindowOverlayProgressSuffix(overlayState);
-
-  const std::string warning = audioGetWarning();
-  if (!warning.empty()) {
-    suffix += "  ! " + warning;
-  } else {
-    const float peak = std::clamp(audioGetPeak(), 0.0f, 1.2f);
-    suffix += "  Peak " +
-              std::to_string(static_cast<int>(std::round(peak * 100.0f))) +
-              "%";
-  }
 
   playback_overlay::OverlayCellLayoutInput layoutInput;
   layoutInput.width = width;
   layoutInput.height = height;
   layoutInput.title = title;
-  layoutInput.suffix = suffix;
 
   playback_overlay::OverlayControlSpecOptions controlOptions;
   controlOptions.includeAudioTrack = false;
@@ -279,22 +266,26 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
     }
     writeFitted(screen_, item.x, item.y, width - item.x, item.text, style);
   }
-  if (!layout_.suffixText.empty() && layout_.suffixY >= 0 &&
-      layout_.suffixY < height) {
-    Style suffixStyle = warning.empty() ? styles.normal : styles.alert;
-    writeFitted(screen_, layout_.suffixX, layout_.suffixY,
-                width - layout_.suffixX, layout_.suffixText, suffixStyle);
-  }
-
-  progressX_ = layout_.progressBarX;
-  progressY_ = layout_.progressBarY;
-  progressWidth_ = layout_.progressBarWidth;
-  if (progressY_ >= 0 && progressY_ < height && progressWidth_ > 0) {
-    const int leftFrameX = progressX_ - 1;
-    const int rightFrameX = progressX_ + progressWidth_;
-    if (leftFrameX >= 0 && leftFrameX < width) {
-      screen_.writeChar(leftFrameX, progressY_, L'|', styles.progressFrame);
+  std::string status;
+  if (audioReady) {
+    if (audioIsFinished()) {
+      status = "\xE2\x96\xA0";
+    } else if (audioIsPaused()) {
+      status = "\xE2\x8F\xB8";
+    } else {
+      status = "\xE2\x96\xB6";
     }
+  } else {
+    status = "\xE2\x97\x8B";
+  }
+  ProgressTextLayout progressText = buildProgressTextLayout(
+      displaySec, totalSec, status, overlayState.volPct, width);
+
+  progressX_ = 1;
+  progressY_ = layout_.progressBarY;
+  progressWidth_ = progressText.barWidth;
+  if (progressY_ >= 0 && progressY_ < height && progressWidth_ > 0) {
+    screen_.writeChar(0, progressY_, L'|', styles.progressFrame);
     auto barCells = renderProgressBarCells(ratio, progressWidth_,
                                            styles.progressEmpty,
                                            styles.progressStart,
@@ -305,8 +296,16 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
       const auto& cell = barCells[static_cast<size_t>(i)];
       screen_.writeChar(x, progressY_, cell.ch, cell.style);
     }
-    if (rightFrameX >= 0 && rightFrameX < width) {
+    const int rightFrameX = 1 + progressWidth_;
+    if (rightFrameX < width) {
       screen_.writeChar(rightFrameX, progressY_, L'|', styles.progressFrame);
+    }
+    if (!progressText.suffix.empty()) {
+      const int suffixX = 2 + progressWidth_;
+      if (suffixX < width) {
+        writeFitted(screen_, suffixX, progressY_, width - suffixX,
+                    " " + progressText.suffix, styles.normal);
+      }
     }
   }
 
