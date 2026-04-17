@@ -645,10 +645,33 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         uint edgeMask = 0u;
         [unroll]
         for (int e = 0; e < 8; ++e) {
-            uint bit = (uint)bitMap[dots[e].idx];
-            if (dots[e].edge >= edgeCut) {
-                edgeMask |= (1u << bit);
+            if (dots[e].edge < edgeCut) {
+                continue;
             }
+            int eCol = dots[e].idx >> 2;
+            int eRow = dots[e].idx & 3;
+            bool localMax = true;
+            [unroll]
+            for (int n = 0; n < 8; ++n) {
+                if (n == e) {
+                    continue;
+                }
+                int nCol = dots[n].idx >> 2;
+                int nRow = dots[n].idx & 3;
+                if (abs(nCol - eCol) > 1 || abs(nRow - eRow) > 1) {
+                    continue;
+                }
+                if (dots[n].edge > dots[e].edge ||
+                    (dots[n].edge == dots[e].edge && n < e)) {
+                    localMax = false;
+                    break;
+                }
+            }
+            if (!localMax) {
+                continue;
+            }
+            uint bit = (uint)bitMap[dots[e].idx];
+            edgeMask |= (1u << bit);
         }
 
         uint edgeDotCount = countbits(edgeMask);

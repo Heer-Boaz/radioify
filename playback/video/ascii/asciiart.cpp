@@ -880,6 +880,8 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t sourceBlueVals[8];
             uint8_t bitIds[8];
             uint8_t validVals[8];
+            uint8_t dotXVals[8];
+            uint8_t dotYVals[8];
             int validMask = 0;
             int dotIndex = 0;
 
@@ -923,6 +925,8 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                     sourceBlueRow ? sourceBlueRow[dx] : 0;
                 bitIds[dotIndex] = static_cast<uint8_t>(brailleMap[dx][dy]);
                 validVals[dotIndex] = static_cast<uint8_t>(a != 0);
+                dotXVals[dotIndex] = static_cast<uint8_t>(dx);
+                dotYVals[dotIndex] = static_cast<uint8_t>(dy);
 
                 if constexpr (!AssumeOpaque) {
                   if (a == 0) {
@@ -1054,7 +1058,23 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int edgeDotCount = 0;
               for (int i = 0; i < 8; ++i) {
                 if (!validVals[i]) continue;
-                if (edgeVals[i] >= edgeCut) {
+                if (edgeVals[i] < edgeCut) continue;
+                bool localMax = true;
+                for (int j = 0; j < 8; ++j) {
+                  if (i == j || !validVals[j]) continue;
+                  if (std::abs(static_cast<int>(dotXVals[i]) -
+                               static_cast<int>(dotXVals[j])) > 1 ||
+                      std::abs(static_cast<int>(dotYVals[i]) -
+                               static_cast<int>(dotYVals[j])) > 1) {
+                    continue;
+                  }
+                  if (edgeVals[j] > edgeVals[i] ||
+                      (edgeVals[j] == edgeVals[i] && j < i)) {
+                    localMax = false;
+                    break;
+                  }
+                }
+                if (localMax) {
                   edgeMask |= (1 << bitIds[i]);
                   ++edgeDotCount;
                 }
