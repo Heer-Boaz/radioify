@@ -250,26 +250,16 @@ bool VideoWindow::EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,
     return true;
 }
 
-void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
-                                     bool nonBlocking) {
-    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
-    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
-    if (frame.cols <= 0 || frame.rows <= 0) return;
-    m_pictureInPictureGridCols.store(frame.cols, std::memory_order_relaxed);
-    m_pictureInPictureGridRows.store(frame.rows, std::memory_order_relaxed);
+bool VideoWindow::DrawGpuTextGridFrame(ID3D11Device* device,
+                                       ID3D11DeviceContext* context,
+                                       const GpuTextGridFrame& frame,
+                                       const D3D11_VIEWPORT& viewport) {
+    if (!device || !context || frame.cols <= 0 || frame.rows <= 0) {
+        return false;
+    }
     const size_t cellCount =
         static_cast<size_t>(frame.cols) * static_cast<size_t>(frame.rows);
-    if (frame.cells.size() < cellCount) return;
-
-    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
-
-    RECT rect;
-    if (GetClientRect(m_hWnd, &rect)) {
-        m_width = rect.right - rect.left;
-        m_height = rect.bottom - rect.top;
-    }
-    if (m_width <= 0 || m_height <= 0) return;
+    if (frame.cells.size() < cellCount) return false;
 
     const UINT dpi = TextGridDpi();
     const RadioifyTerminalFontMetrics terminalFont =
@@ -278,19 +268,13 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     const int cellHeight = terminalFont.cellHeight;
     const int fontWeight = terminalFont.fontWeight;
 
-    ID3D11Device* device = getSharedGpuDevice();
-    if (!device) return;
     if (!EnsureGpuTextGlyphAtlas(device, cellWidth, cellHeight, dpi,
                                  fontWeight)) {
-        return;
+        return false;
     }
-    if (!EnsureGpuTextGridConstants(device)) return;
-
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    device->GetImmediateContext(&context);
-    if (!context || !m_renderTargetView || !m_vertexShader ||
-        !m_gpuTextGridShader) {
-        return;
+    if (!EnsureGpuTextGridConstants(device)) return false;
+    if (!m_renderTargetView || !m_vertexShader || !m_gpuTextGridShader) {
+        return false;
     }
 
     if (!m_gpuTextGridTexture || !m_gpuTextGridSrv ||
@@ -313,13 +297,13 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
         if (FAILED(device->CreateTexture2D(&td, nullptr,
                                            &m_gpuTextGridTexture)) ||
             !m_gpuTextGridTexture) {
-            return;
+            return false;
         }
         if (FAILED(device->CreateShaderResourceView(
                 m_gpuTextGridTexture.Get(), nullptr, &m_gpuTextGridSrv)) ||
             !m_gpuTextGridSrv) {
             m_gpuTextGridTexture.Reset();
-            return;
+            return false;
         }
         m_gpuTextGridCols = frame.cols;
         m_gpuTextGridRows = frame.rows;
@@ -343,19 +327,7 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
         context->Unmap(m_gpuTextGridConstants.Get(), 0);
     }
 
-    const float clearColor[4] = {0.018f, 0.022f, 0.026f, 1.0f};
-    context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
-    context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), nullptr);
-
-    const int gridPixelWidth =
-        std::min(m_width, frame.cols * cellWidth);
-    const int gridPixelHeight =
-        std::min(m_height, frame.rows * cellHeight);
-    D3D11_VIEWPORT viewport = {
-        0.0f, 0.0f, static_cast<float>(gridPixelWidth),
-        static_cast<float>(gridPixelHeight), 0.0f, 1.0f};
     context->RSSetViewports(1, &viewport);
-
     context->IASetInputLayout(nullptr);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
     context->VSSetShader(m_vertexShader.Get(), nullptr, 0);
@@ -371,6 +343,53 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     context->PSSetShaderResources(0, 2, nullSrvs);
     ID3D11Buffer* nullBuffers[1] = {nullptr};
     context->PSSetConstantBuffers(0, 1, nullBuffers);
+    return true;
+}
+
+void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
+                                     bool nonBlocking) {
+    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
+    if (frame.cols <= 0 || frame.rows <= 0) return;
+    m_pictureInPictureGridCols.store(frame.cols, std::memory_order_relaxed);
+    m_pictureInPictureGridRows.store(frame.rows, std::memory_order_relaxed);
+    const size_t cellCount =
+        static_cast<size_t>(frame.cols) * static_cast<size_t>(frame.rows);
+    if (frame.cells.size() < cellCount) return;
+
+    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
+    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
+
+    RECT rect;
+    if (GetClientRect(m_hWnd, &rect)) {
+        m_width = rect.right - rect.left;
+        m_height = rect.bottom - rect.top;
+    }
+    if (m_width <= 0 || m_height <= 0) return;
+
+    const SIZE cellSize = TextGridCellSize();
+    const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
+    const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
+
+    ID3D11Device* device = getSharedGpuDevice();
+    if (!device) return;
+
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(&context);
+    if (!context || !m_renderTargetView) return;
+
+    const float clearColor[4] = {0.018f, 0.022f, 0.026f, 1.0f};
+    context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
+    context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), nullptr);
+
+    const int gridPixelWidth =
+        std::min(m_width, frame.cols * cellWidth);
+    const int gridPixelHeight =
+        std::min(m_height, frame.rows * cellHeight);
+    D3D11_VIEWPORT viewport = {
+        0.0f, 0.0f, static_cast<float>(gridPixelWidth),
+        static_cast<float>(gridPixelHeight), 0.0f, 1.0f};
+    if (!DrawGpuTextGridFrame(device, context.Get(), frame, viewport)) return;
     DrawPictureInPictureBorder(context.Get());
 
     lock.unlock();

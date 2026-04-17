@@ -14,6 +14,7 @@ cbuffer GpuTextGridConstants : register(b0) {
 };
 
 static const uint CELL_FLAG_BRAILLE = 1u;
+static const uint CELL_FLAG_TRANSPARENT_BG = 2u;
 static const uint BRAILLE_GLYPH_ATLAS_START = 110u;
 
 float3 packedRgb(uint rgb) {
@@ -69,5 +70,8 @@ float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
     uint2 atlasPixel =
         glyphCell * cellSize + glyphPixel;
     float coverage = glyphAtlasTex.Load(int3(atlasPixel, 0));
+    if ((cell.a & CELL_FLAG_TRANSPARENT_BG) != 0u) {
+        return float4(packedRgb(cell.g), coverage);
+    }
     return float4(lerp(packedRgb(cell.b), packedRgb(cell.g), coverage), 1.0);
 }

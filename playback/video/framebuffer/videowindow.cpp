@@ -25,7 +25,6 @@
 #include "videowindow_ps.h"
 #include "videowindow_ps_ui.h"
 #include "videowindow_ps_gpu_text_grid.h"
-#include "videowindow_overlay_text.h"
 #include "playback/playback_media_keys.h"
 #include "subtitle_caption_style.h"
 #if RADIOIFY_HAS_LIBASS
@@ -72,6 +71,118 @@ namespace {
                                           out.data(), needed);
         if (written <= 0) return {};
         return out;
+    }
+
+    static std::wstring overlayLineToWide(const std::string& text) {
+        std::wstring wide = utf8ToWide(text);
+        wide.erase(std::remove_if(wide.begin(), wide.end(),
+                                  [](wchar_t ch) {
+                                      return ch == L'\r' || ch == L'\n';
+                                  }),
+                   wide.end());
+        return wide;
+    }
+
+    static GpuTextGridCell overlayGridCell(wchar_t ch, uint32_t fg,
+                                           uint32_t bg, uint32_t flags) {
+        return GpuTextGridCell{static_cast<uint32_t>(ch), fg, bg, flags};
+    }
+
+    static bool buildWindowOverlayTextGrid(
+        const WindowUiState& ui, int cols, GpuTextGridFrame& outFrame) {
+        cols = std::max(1, cols);
+
+        struct Segment {
+            int start = 0;
+            int width = 0;
+            bool active = false;
+            bool hovered = false;
+        };
+
+        const std::wstring title = overlayLineToWide(ui.title);
+        std::wstring controls = overlayLineToWide(ui.controls);
+        std::vector<Segment> segments;
+        if (!ui.controlButtons.empty()) {
+            controls.clear();
+            int cursor = 0;
+            for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
+                if (i > 0) {
+                    controls += L"  ";
+                    cursor += 2;
+                }
+                const std::wstring text =
+                    overlayLineToWide(ui.controlButtons[i].text);
+                const int width = static_cast<int>(text.size());
+                segments.push_back(
+                    Segment{cursor, width, ui.controlButtons[i].active,
+                            ui.controlButtons[i].hovered});
+                controls += text;
+                cursor += width;
+            }
+        }
+        const std::wstring suffix = overlayLineToWide(ui.progressSuffix);
+
+        int rows = 1;
+        const int controlsRow = controls.empty() ? -1 : rows++;
+        const int suffixRow = suffix.empty() ? -1 : rows++;
+        outFrame.cols = cols;
+        outFrame.rows = rows;
+
+        const GpuTextGridCell transparentSpace = overlayGridCell(
+            L' ', gpuTextGridRgb(235, 235, 235), 0,
+            kGpuTextGridCellFlagTransparentBg);
+        const size_t cellCount =
+            static_cast<size_t>(cols) * static_cast<size_t>(rows);
+        outFrame.cells.assign(cellCount, transparentSpace);
+
+        auto writeLine = [&](const std::wstring& text, int row, int x,
+                             uint32_t fg, uint32_t bg, uint32_t flags) {
+            if (row < 0 || row >= rows || x >= cols) return;
+            int dstX = std::max(0, x);
+            int srcX = x < 0 ? -x : 0;
+            for (int i = srcX; i < static_cast<int>(text.size()) &&
+                               dstX < cols;
+                 ++i, ++dstX) {
+                outFrame.cells[static_cast<size_t>(row * cols + dstX)] =
+                    overlayGridCell(text[static_cast<size_t>(i)], fg, bg,
+                                    flags);
+            }
+        };
+
+        writeLine(title, 0, 0, gpuTextGridRgb(235, 235, 235), 0,
+                  kGpuTextGridCellFlagTransparentBg);
+        if (controlsRow >= 0) {
+            writeLine(controls, controlsRow, 0, gpuTextGridRgb(222, 222, 222),
+                      0, kGpuTextGridCellFlagTransparentBg);
+            for (const Segment& segment : segments) {
+                uint32_t fg = gpuTextGridRgb(222, 222, 222);
+                uint32_t bg = gpuTextGridRgb(36, 36, 36);
+                if (segment.active) {
+                    fg = gpuTextGridRgb(255, 220, 135);
+                    bg = gpuTextGridRgb(64, 48, 24);
+                }
+                if (segment.hovered) {
+                    fg = gpuTextGridRgb(18, 18, 18);
+                    bg = gpuTextGridRgb(226, 226, 226);
+                }
+                const int end = std::min(cols, segment.start + segment.width);
+                for (int x = std::max(0, segment.start); x < end; ++x) {
+                    const wchar_t ch =
+                        x < static_cast<int>(controls.size())
+                            ? controls[static_cast<size_t>(x)]
+                            : L' ';
+                    outFrame.cells[static_cast<size_t>(controlsRow * cols + x)] =
+                        overlayGridCell(ch, fg, bg, 0);
+                }
+            }
+        }
+        if (suffixRow >= 0) {
+            const int suffixX =
+                std::max(0, cols - static_cast<int>(suffix.size()));
+            writeLine(suffix, suffixRow, suffixX, gpuTextGridRgb(235, 235, 235),
+                      0, kGpuTextGridCellFlagTransparentBg);
+        }
+        return true;
     }
 
     enum class AssRenderStatus {
@@ -1458,8 +1569,6 @@ void VideoWindow::Cleanup() {
     m_sampler.Reset();
     m_constantBuffer.Reset();
     // frame cache is now owned/managed externally
-    m_textTexture.Reset();
-    m_textSrv.Reset();
     m_subtitleTexture.Reset();
     m_subtitleSrv.Reset();
     m_subtitleWidth = 0;
@@ -2249,6 +2358,8 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     float subtitleHeightNorm = 0.0f;
     float subtitleLeftNorm = 0.0f;
     float subtitleWidthNorm = 0.0f;
+    bool drawOverlayTextGrid = false;
+    D3D11_VIEWPORT overlayTextGridViewport{};
     int viewportX = std::clamp(static_cast<int>(std::lround(m_viewportX)),
                                0, std::max(0, m_width - 1));
     int viewportY = std::clamp(static_cast<int>(std::lround(m_viewportY)),
@@ -2264,91 +2375,30 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         viewportH = std::max(1, m_height);
     }
 
-    // Optional: Render overlay text (metadata + control strip) to texture.
     if (showOverlay) {
-        std::string topLine = ui.title;
-
-        int lineCount = 1;
-        int maxChars = 0;
-        int topChars = 0;
-        for (char c : topLine) {
-            if (c == '\r' || c == '\n') continue;
-            ++topChars;
-        }
-        maxChars = std::max(maxChars, topChars);
-
-        std::string controlsLine = ui.controls;
-        if (!ui.controlButtons.empty()) {
-            controlsLine.clear();
-            for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
-                if (i > 0) controlsLine += "  ";
-                controlsLine += ui.controlButtons[i].text;
-            }
-        }
-        if (!controlsLine.empty()) {
-            int controlsChars = 0;
-            for (char c : controlsLine) {
-                if (c == '\r' || c == '\n') continue;
-                ++controlsChars;
-            }
-            maxChars = std::max(maxChars, controlsChars);
-            lineCount = 2;
-        }
-
-        int progressChars = 0;
-        for (char c : ui.progressSuffix) {
-            if (c == '\r' || c == '\n') continue;
-            ++progressChars;
-        }
-        if (progressChars > 0) {
-            lineCount += 1;
-        }
-
-        int linePxH = std::clamp((int)std::round(m_height * 0.045f), 12, 36);
-        int textPxH =
-            std::clamp(lineCount * linePxH + std::max(0, lineCount - 1) * 2,
-                       14, 96);
-        int textPxW =
-            std::clamp(static_cast<int>(std::lround(m_width * 0.96)), 1, m_width);
-
-        if (textPxW > 0 && textPxH > 0) {
-            if (!m_textTexture || m_textWidth != textPxW || m_textHeight != textPxH) {
-                m_textWidth = textPxW;
-                m_textHeight = textPxH;
-                m_textTexture.Reset();
-                m_textSrv.Reset();
-                
-                D3D11_TEXTURE2D_DESC texDesc = {};
-                texDesc.Width = textPxW;
-                texDesc.Height = textPxH;
-                texDesc.MipLevels = 1;
-                texDesc.ArraySize = 1;
-                texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                texDesc.SampleDesc.Count = 1;
-                texDesc.Usage = D3D11_USAGE_DEFAULT;
-                texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-                
-                if (SUCCEEDED(device->CreateTexture2D(&texDesc, NULL, &m_textTexture))) {
-                    device->CreateShaderResourceView(m_textTexture.Get(), NULL, &m_textSrv);
-                }
-            }
-            
-            std::vector<uint8_t> bmp;
-            if (m_textTexture &&
-                renderWindowOverlayTextToBitmap(topLine, ui.controlButtons,
-                                                controlsLine, ui.progressSuffix,
-                                                textPxW, textPxH, bmp, false, 1, 1)) {
-                D3D11_BOX box{0, 0, 0, (UINT)textPxW, (UINT)textPxH, 1};
-                context->UpdateSubresource(m_textTexture.Get(), 0, &box, bmp.data(), textPxW * 4, 0);
-            }
-
-            textHeightNorm = (float)textPxH / m_height;
-            textTopNorm = 0.95f - textHeightNorm;
-            textWidthNorm = (float)textPxW / m_width;
-            textLeftNorm = 0.02f;
-            if (textLeftNorm + textWidthNorm > 1.0f) {
-                textLeftNorm = std::max(0.0f, 1.0f - textWidthNorm);
-            }
+        const SIZE cellSize = TextGridCellSize();
+        const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
+        const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
+        const int maxTextWidth =
+            std::clamp(static_cast<int>(std::lround(m_width * 0.96)), 1,
+                       std::max(1, m_width));
+        const int cols = std::max(1, maxTextWidth / cellWidth);
+        if (buildWindowOverlayTextGrid(ui, cols, m_windowOverlayTextGrid)) {
+            const int textPxW =
+                std::min(m_width, m_windowOverlayTextGrid.cols * cellWidth);
+            const int textPxH =
+                std::min(m_height, m_windowOverlayTextGrid.rows * cellHeight);
+            const int leftPx = std::clamp(
+                static_cast<int>(std::lround(m_width * 0.02)), 0,
+                std::max(0, m_width - textPxW));
+            const int topPx = std::clamp(
+                static_cast<int>(std::lround(m_height * 0.95)) - textPxH,
+                0, std::max(0, m_height - textPxH));
+            overlayTextGridViewport = D3D11_VIEWPORT{
+                static_cast<float>(leftPx), static_cast<float>(topPx),
+                static_cast<float>(textPxW), static_cast<float>(textPxH),
+                0.0f, 1.0f};
+            drawOverlayTextGrid = textPxW > 0 && textPxH > 0;
         }
     }
 
@@ -2648,9 +2698,13 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     }
 
     ID3D11ShaderResourceView* srvs[5] = {
-        nullptr, nullptr, nullptr, m_textSrv.Get(), m_subtitleSrv.Get()};
+        nullptr, nullptr, nullptr, nullptr, m_subtitleSrv.Get()};
     context->PSSetShaderResources(0, 5, srvs);
     context->Draw(4, 0);
+    if (drawOverlayTextGrid) {
+        DrawGpuTextGridFrame(device, context.Get(), m_windowOverlayTextGrid,
+                             overlayTextGridViewport);
+    }
     context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
 
     ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };

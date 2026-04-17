@@ -26,6 +26,7 @@ constexpr uint32_t gpuTextGridColorRgb(GpuTextGridColor color) {
 constexpr int kGpuTextGridFallbackCellPixelWidth = 9;
 constexpr int kGpuTextGridFallbackCellPixelHeight = 21;
 constexpr uint32_t kGpuTextGridCellFlagBraille = 1u;
+constexpr uint32_t kGpuTextGridCellFlagTransparentBg = 2u;
 
 struct GpuTextGridCell {
     uint32_t ch = ' ';

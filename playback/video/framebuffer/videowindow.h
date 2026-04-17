@@ -148,6 +148,10 @@ private:
     int PictureInPictureResizeBorderPx() const;
     int PictureInPictureVisualBorderPx() const;
     void DrawPictureInPictureBorder(ID3D11DeviceContext* context);
+    bool DrawGpuTextGridFrame(ID3D11Device* device,
+                              ID3D11DeviceContext* context,
+                              const GpuTextGridFrame& frame,
+                              const D3D11_VIEWPORT& viewport);
     UINT TextGridDpi() const;
     SIZE TextGridCellSize() const;
     bool EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,
@@ -171,11 +175,6 @@ private:
 
     // frame cache is owned and managed externally by videoplayback
 
-    // Text overlay texture (CPU rasterized via GDI)
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_textTexture;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_textSrv;
-    int m_textWidth = 0;
-    int m_textHeight = 0;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_subtitleTexture;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_subtitleSrv;
     int m_subtitleWidth = 0;
@@ -195,6 +194,7 @@ private:
     int m_gpuTextGlyphAtlasWeight = 0;
     int m_gpuTextGridCols = 0;
     int m_gpuTextGridRows = 0;
+    GpuTextGridFrame m_windowOverlayTextGrid;
     
     int m_width = 0;
     int m_height = 0;
