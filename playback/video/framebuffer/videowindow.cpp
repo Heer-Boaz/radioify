@@ -1035,6 +1035,13 @@ void VideoWindow::SetPictureInPictureInteractiveRects(
     m_pictureInPictureInteractiveRects = rects;
 }
 
+void VideoWindow::SetPictureInPictureTextMinimumGridSize(int cols, int rows) {
+    m_pictureInPictureMinGridCols.store(std::max(0, cols),
+                                        std::memory_order_relaxed);
+    m_pictureInPictureMinGridRows.store(std::max(0, rows),
+                                        std::memory_order_relaxed);
+}
+
 double VideoWindow::PictureInPictureAspectRatio() const {
     double aspect = 16.0 / 9.0;
     if (m_videoWidth > 0 && m_videoHeight > 0) {
@@ -1059,26 +1066,32 @@ SIZE VideoWindow::PictureInPictureMinimumSize() const {
         m_pictureInPictureTextMode.load(std::memory_order_relaxed);
     const int kMinLongEdge = textMode ? 320 : 260;
     const int kMinShortEdge = textMode ? 180 : 96;
+    int minWidth = aspect >= 1.0 ? kMinLongEdge : kMinShortEdge;
+    int minHeight = aspect >= 1.0 ? kMinShortEdge : kMinLongEdge;
 
-    SIZE size{};
-    if (aspect >= 1.0) {
-        size.cy = kMinShortEdge;
-        size.cx = static_cast<LONG>(std::lround(size.cy * aspect));
-        if (size.cx < kMinLongEdge) {
-            size.cx = kMinLongEdge;
-            size.cy = static_cast<LONG>(std::lround(size.cx / aspect));
-        }
-    } else {
-        size.cx = kMinShortEdge;
-        size.cy = static_cast<LONG>(std::lround(size.cx / aspect));
-        if (size.cy < kMinLongEdge) {
-            size.cy = kMinLongEdge;
-            size.cx = static_cast<LONG>(std::lround(size.cy * aspect));
-        }
+    if (textMode) {
+        const SIZE cellSize = TextGridCellSize();
+        const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
+        const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
+        minWidth = std::max(
+            minWidth, m_pictureInPictureMinGridCols.load(
+                          std::memory_order_relaxed) *
+                          cellWidth);
+        minHeight = std::max(
+            minHeight, m_pictureInPictureMinGridRows.load(
+                           std::memory_order_relaxed) *
+                           cellHeight);
     }
 
-    size.cx = std::max<LONG>(1, size.cx);
-    size.cy = std::max<LONG>(1, size.cy);
+    SIZE size{};
+    size.cy = static_cast<LONG>(std::max(
+        minHeight,
+        static_cast<int>(std::ceil(static_cast<double>(minWidth) / aspect))));
+    size.cx = static_cast<LONG>(std::ceil(size.cy * aspect));
+    if (size.cx < minWidth) {
+        size.cx = minWidth;
+        size.cy = static_cast<LONG>(std::ceil(size.cx / aspect));
+    }
     return size;
 }
 
@@ -1250,8 +1263,10 @@ RECT VideoWindow::CalculatePictureInPictureRect() const {
     const int margin = std::clamp(std::min(workW, workH) / 40, 12, 32);
     const int usableW = std::max(160, workW - margin * 2);
     const int usableH = std::max(120, workH - margin * 2);
-    const int minW = std::min(usableW, 320);
-    const int maxW = std::min(usableW, 720);
+    const SIZE minSize = PictureInPictureMinimumSize();
+    const int minW =
+        std::min(usableW, std::max(160, static_cast<int>(minSize.cx)));
+    const int maxW = std::max(minW, std::min(usableW, 720));
 
     int targetW = std::clamp(workW * 28 / 100, minW, maxW);
     const double aspect = PictureInPictureAspectRatio();
@@ -1260,6 +1275,11 @@ RECT VideoWindow::CalculatePictureInPictureRect() const {
     if (targetH > usableH) {
         targetH = usableH;
         targetW = std::max(1, static_cast<int>(std::lround(targetH * aspect)));
+        if (targetW < minW && minSize.cy <= usableH) {
+            targetW = minW;
+            targetH =
+                std::max(1, static_cast<int>(std::lround(targetW / aspect)));
+        }
     }
 
     const int left = std::max(workLeft + margin,

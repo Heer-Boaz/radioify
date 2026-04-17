@@ -88,6 +88,7 @@ bool AudioMiniPlayer::open() {
   window_.SetCaptureAllMouseInput(true);
   window_.SetVsync(true);
   window_.SetPictureInPictureTextMode(true);
+  window_.SetPictureInPictureTextMinimumGridSize(kMinCols, kMinRows);
   window_.SetPictureInPicture(true);
   window_.ShowWindow(true);
   refreshGridSize();

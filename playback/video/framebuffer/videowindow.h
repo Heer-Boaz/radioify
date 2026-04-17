@@ -116,6 +116,7 @@ public:
     std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
     void SetPictureInPictureInteractiveRects(const std::vector<RECT>& rects);
+    void SetPictureInPictureTextMinimumGridSize(int cols, int rows);
     void SetCursorVisible(bool visible);
     bool TogglePictureInPicture();
     bool SetPictureInPicture(bool enabled);
@@ -248,6 +249,8 @@ private:
     std::atomic<bool> m_pictureInPictureTextMode{false};
     std::atomic<int> m_pictureInPictureGridCols{0};
     std::atomic<int> m_pictureInPictureGridRows{0};
+    std::atomic<int> m_pictureInPictureMinGridCols{0};
+    std::atomic<int> m_pictureInPictureMinGridRows{0};
     mutable std::mutex m_pictureInPictureInteractiveRectsMutex;
     std::vector<RECT> m_pictureInPictureInteractiveRects;
     bool m_pipRestoreFullscreen = false;
