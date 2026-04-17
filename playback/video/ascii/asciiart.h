@@ -30,20 +30,22 @@ enum StageMask : uint32_t {
   kStageBrightBgSwap = 1u << 2,
   kStageSignalDampen = 1u << 3,
   kStageDetailBoost = 1u << 4,
-  kStageInkCoverageCompensation = 1u << 5,
-  kStageInkLumaFloor = 1u << 6,
-  kStageInkSaturation = 1u << 7,
-  kStageForegroundTemporal = 1u << 8,
-  kStageBgLumaFloor = 1u << 9,
-  kStageBackgroundTemporal = 1u << 10,
-  kStageFullMaskBgContrast = 1u << 11,
-  kStageCellBackground = 1u << 12,
+  kStageEdgeMaskFit = 1u << 5,
+  kStageInkCoverageCompensation = 1u << 6,
+  kStageInkLumaFloor = 1u << 7,
+  kStageInkSaturation = 1u << 8,
+  kStageForegroundTemporal = 1u << 9,
+  kStageBgLumaFloor = 1u << 10,
+  kStageBackgroundTemporal = 1u << 11,
+  kStageFullMaskBgContrast = 1u << 12,
+  kStageCellBackground = 1u << 13,
 };
 
 constexpr uint32_t kAllStages =
     kStageEdgeDetect | kStageDither | kStageBrightBgSwap |
-    kStageSignalDampen | kStageDetailBoost | kStageInkCoverageCompensation |
-    kStageInkLumaFloor | kStageInkSaturation | kStageForegroundTemporal |
+    kStageSignalDampen | kStageDetailBoost | kStageEdgeMaskFit |
+    kStageInkCoverageCompensation | kStageInkLumaFloor |
+    kStageInkSaturation | kStageForegroundTemporal |
     kStageBgLumaFloor | kStageBackgroundTemporal |
     kStageFullMaskBgContrast | kStageCellBackground;
 
@@ -60,6 +62,7 @@ struct RenderStats {
   uint64_t brightBgSwapCount = 0;
   uint64_t signalDampenCount = 0;
   uint64_t detailBoostCount = 0;
+  uint64_t edgeMaskFitCount = 0;
   uint64_t inkCoverageCompensationCount = 0;
   uint64_t inkLumaFloorCount = 0;
   uint64_t bgLumaFloorCount = 0;

@@ -338,6 +338,117 @@ const std::array<uint8_t, 8> kDitherThresholdByBit = []() {
   return lut;
 }();
 
+constexpr int kEdgeMaskFitInvalidScore = 0x3fffffff;
+
+FORCE_INLINE int countMaskDots(int mask) {
+  int count = 0;
+  while (mask != 0) {
+    count += mask & 1;
+    mask >>= 1;
+  }
+  return count;
+}
+
+int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
+                     const uint8_t* gVals, const uint8_t* bVals,
+                     const uint8_t* bitIds, const uint8_t* validVals) {
+  mask &= validMask;
+  int sumOnR = 0;
+  int sumOnG = 0;
+  int sumOnB = 0;
+  int sumOffR = 0;
+  int sumOffG = 0;
+  int sumOffB = 0;
+  int onCount = 0;
+  int offCount = 0;
+
+  for (int i = 0; i < 8; ++i) {
+    if (!validVals[i]) continue;
+    if ((mask & (1 << bitIds[i])) != 0) {
+      sumOnR += rVals[i];
+      sumOnG += gVals[i];
+      sumOnB += bVals[i];
+      ++onCount;
+    } else {
+      sumOffR += rVals[i];
+      sumOffG += gVals[i];
+      sumOffB += bVals[i];
+      ++offCount;
+    }
+  }
+
+  if (onCount == 0 || offCount == 0) return kEdgeMaskFitInvalidScore;
+
+  const int bgR = (sumOffR + offCount / 2) / offCount;
+  const int bgG = (sumOffG + offCount / 2) / offCount;
+  const int bgB = (sumOffB + offCount / 2) / offCount;
+  const int meanOnR = (sumOnR + onCount / 2) / onCount;
+  const int meanOnG = (sumOnG + onCount / 2) / onCount;
+  const int meanOnB = (sumOnB + onCount / 2) / onCount;
+
+  const int coverage = std::max(1, kInkVisibleDotCoverage);
+  const int scale =
+      std::min(kInkCoverageMaxScale, (256 * 256 + coverage / 2) / coverage);
+  const int fgR =
+      std::clamp(bgR + scaleDelta256(meanOnR - bgR, scale), 0, 255);
+  const int fgG =
+      std::clamp(bgG + scaleDelta256(meanOnG - bgG, scale), 0, 255);
+  const int fgB =
+      std::clamp(bgB + scaleDelta256(meanOnB - bgB, scale), 0, 255);
+  const int predOnR = (fgR * coverage + bgR * (256 - coverage) + 128) >> 8;
+  const int predOnG = (fgG * coverage + bgG * (256 - coverage) + 128) >> 8;
+  const int predOnB = (fgB * coverage + bgB * (256 - coverage) + 128) >> 8;
+
+  int score = 0;
+  for (int i = 0; i < 8; ++i) {
+    if (!validVals[i]) continue;
+    const bool on = (mask & (1 << bitIds[i])) != 0;
+    const int pr = on ? predOnR : bgR;
+    const int pg = on ? predOnG : bgG;
+    const int pb = on ? predOnB : bgB;
+    const int dr = static_cast<int>(rVals[i]) - pr;
+    const int dg = static_cast<int>(gVals[i]) - pg;
+    const int db = static_cast<int>(bVals[i]) - pb;
+    score += dr * dr + dg * dg + db * db;
+  }
+
+  return score;
+}
+
+int fitEdgeMask(int initialMask, int validMask, const uint8_t* rVals,
+                const uint8_t* gVals, const uint8_t* bVals,
+                const uint8_t* bitIds, const uint8_t* validVals) {
+  initialMask &= validMask;
+  int bestMask = initialMask;
+  int bestScore = edgeMaskFitScore(initialMask, validMask, rVals, gVals, bVals,
+                                   bitIds, validVals);
+  const int baseScore = bestScore;
+
+  for (int candidate = validMask; candidate != 0;
+       candidate = (candidate - 1) & validMask) {
+    if (candidate == validMask) continue;
+    int score = edgeMaskFitScore(candidate, validMask, rVals, gVals, bVals,
+                                 bitIds, validVals);
+    if (score < bestScore) {
+      bestScore = score;
+      bestMask = candidate;
+    }
+  }
+
+  if (bestMask == initialMask || bestScore >= kEdgeMaskFitInvalidScore) {
+    return initialMask;
+  }
+  if (baseScore >= kEdgeMaskFitInvalidScore) {
+    return bestMask;
+  }
+  const int requiredGain = 256 - kEdgeMaskFitMinGain;
+  if (static_cast<int64_t>(bestScore) * 256 <=
+      static_cast<int64_t>(baseScore) * requiredGain) {
+    return bestMask;
+  }
+  return initialMask;
+}
+
 FORCE_INLINE uint32_t packRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
   return static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
          (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(a) << 24);
@@ -939,6 +1050,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             int avgLumDiff = validCount > 0 ? rawDiff * 255 / std::max(1, lumRange)
                                             : 0;
             if (avgLumDiff > 255) avgLumDiff = 255;
+            int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
+            int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
+            int signalStrength = std::max(edgeSig, lumSig);
 
             if (!useLocalThreshold &&
                 renderStageEnabled<DebugMode>(stageMask,
@@ -956,12 +1070,23 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               bitmask = ditherMask;
             }
 
-            int dotCount = 0;
-            int tempMask = bitmask;
-            while (tempMask) {
-              dotCount += (tempMask & 1);
-              tempMask >>= 1;
+            if (!useDither &&
+                renderStageEnabled<DebugMode>(stageMask,
+                                              ascii_debug::kStageEdgeMaskFit) &&
+                validCount >= 3 && cellLumRange >= kEdgeMaskFitMinRange &&
+                signalStrength >= kEdgeMaskFitMinSignal) {
+              int fittedMask =
+                  fitEdgeMask(bitmask, validMask, rVals, gVals, bVals, bitIds,
+                              validVals);
+              if (fittedMask != bitmask) {
+                bitmask = fittedMask;
+                if constexpr (DebugMode) {
+                  if (debugStats) ++debugStats->edgeMaskFitCount;
+                }
+              }
             }
+
+            int dotCount = countMaskDots(bitmask);
             if constexpr (DebugMode) {
               if (debugStats) {
                 ++debugStats->cellCount;
@@ -1063,10 +1188,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // We look at both Edge magnitude and Luma difference.
               // - Edge Signal: Ramps from 0 to 1 as edge strength goes from 4 to 16.
               // - Luma Signal: Ramps from 0 to 1 as luma difference goes from 4 to 28.
-              int edgeSig = std::clamp((cellEdgeMax - 4) * 255 / 12, 0, 255);
-              int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
-              int signalStrength = std::max(edgeSig, lumSig);
-
               if (!useDither && bgCount > 0 && inkCount > 0) {
                 const int fgY = rgbToY(curR, curG, curB);
                 const int bgY = rgbToY(bgR, bgG, bgB);

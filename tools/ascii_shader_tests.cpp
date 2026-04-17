@@ -92,7 +92,8 @@ void printUsage() {
       << "  --fixture <all|circle-checker|phone-edge|thin-lines>\n"
       << "  --variant <all|current|ink-only|no-dither|no-edge-detect|"
          "no-bg-swaps|no-bright-bg-swap|"
-         "no-signal-dampen|no-detail-boost|no-ink-coverage|"
+         "no-signal-dampen|no-detail-boost|no-edge-mask-fit|"
+         "no-ink-coverage|"
          "no-temporal|"
          "no-bg-luma-floor|no-bg-polish>\n"
       << "  --out-dir <path>\n"
@@ -336,7 +337,7 @@ std::vector<std::string_view> selectedFixtures(const HarnessConfig& config) {
   return out;
 }
 
-std::array<Variant, 13> variants() {
+std::array<Variant, 14> variants() {
   using namespace ascii_debug;
   uint32_t all = kAllStages;
   return {{
@@ -348,6 +349,7 @@ std::array<Variant, 13> variants() {
       {"no-bright-bg-swap", all & ~kStageBrightBgSwap},
       {"no-signal-dampen", all & ~kStageSignalDampen},
       {"no-detail-boost", all & ~kStageDetailBoost},
+      {"no-edge-mask-fit", all & ~kStageEdgeMaskFit},
       {"no-ink-coverage", all & ~kStageInkCoverageCompensation},
       {"no-temporal", all & ~kStageForegroundTemporal &
                           ~kStageBackgroundTemporal},
@@ -676,7 +678,8 @@ double averageDots(const ascii_debug::RenderStats& stats) {
 void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
          "dither_cells,edge_cells,bright_bg_swaps,"
-         "signal_dampened,detail_boosted,ink_coverage_compensated,"
+         "signal_dampened,detail_boosted,edge_mask_fit,"
+         "ink_coverage_compensated,"
          "ink_lifted,bg_lifted,"
          "fg_temporal,bg_temporal,fullmask_bg_contrast\n";
 }
@@ -692,6 +695,7 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << ',' << stats.ditherCellCount << ',' << stats.edgeCellCount << ','
       << stats.brightBgSwapCount << ','
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
+      << stats.edgeMaskFitCount << ','
       << stats.inkCoverageCompensationCount << ','
       << stats.inkLumaFloorCount << ','
       << stats.bgLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','
@@ -763,6 +767,7 @@ RenderedVariant renderVariant(const HarnessConfig& config,
             << percent(rendered.stats.bgCellCount, rendered.stats.cellCount)
             << "%  dots=" << std::setprecision(2)
             << averageDots(rendered.stats)
+            << "  edgefit=" << rendered.stats.edgeMaskFitCount
             << "  swaps=" << rendered.stats.brightBgSwapCount << '\n';
   return rendered;
 }

@@ -380,6 +380,74 @@ struct DotInfo {
     float sourceBlueConfidence;
 };
 
+float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
+    uint dotCount = countbits(mask & 0xffu);
+    if (dotCount == 0u || dotCount == 8u) {
+        return 3.402823e+38f;
+    }
+
+    float3 sumOn = float3(0.0f, 0.0f, 0.0f);
+    float3 sumOff = float3(0.0f, 0.0f, 0.0f);
+    float onCount = 0.0f;
+    float offCount = 0.0f;
+
+    [unroll]
+    for (int i = 0; i < 8; ++i) {
+        uint bit = (uint)bitMap[dots[i].idx];
+        if ((mask & (1u << bit)) != 0u) {
+            sumOn += dots[i].color;
+            onCount += 1.0f;
+        } else {
+            sumOff += dots[i].color;
+            offCount += 1.0f;
+        }
+    }
+
+    float3 bg = sumOff / offCount;
+    float3 meanOn = sumOn / onCount;
+    float scale = min((float)kInkCoverageMaxScale / 256.0f,
+                      1.0f / max(kInkVisibleDotCoverage, 1e-5f));
+    float3 fg = saturate(bg + (meanOn - bg) * scale);
+    float3 predOn = lerp(bg, fg, kInkVisibleDotCoverage);
+
+    float score = 0.0f;
+    [unroll]
+    for (int j = 0; j < 8; ++j) {
+        uint bit = (uint)bitMap[dots[j].idx];
+        float3 pred = ((mask & (1u << bit)) != 0u) ? predOn : bg;
+        float3 d = dots[j].color - pred;
+        score += dot(d, d);
+    }
+    return score;
+}
+
+uint FitEdgeMask(uint initialMask, DotInfo dots[8], int bitMap[8]) {
+    initialMask &= 0xffu;
+    uint bestMask = initialMask;
+    float baseScore = EdgeMaskFitScore(initialMask, dots, bitMap);
+    float bestScore = baseScore;
+
+    [loop]
+    for (uint candidate = 1u; candidate < 255u; ++candidate) {
+        float score = EdgeMaskFitScore(candidate, dots, bitMap);
+        if (score < bestScore) {
+            bestScore = score;
+            bestMask = candidate;
+        }
+    }
+
+    if (bestMask == initialMask || bestScore >= 3.402823e+37f) {
+        return initialMask;
+    }
+    if (baseScore >= 3.402823e+37f) {
+        return bestMask;
+    }
+    if (bestScore <= baseScore * (1.0f - kEdgeMaskFitMinGain)) {
+        return bestMask;
+    }
+    return initialMask;
+}
+
 [numthreads(8, 8, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (DTid.x >= outWidth || DTid.y >= outHeight)
@@ -522,19 +590,15 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
         if (isDot) {
             bitmask |= (1 << bit);
-            sumInk += dots[j].color;
-            sumInkBlueConfidence += dots[j].sourceBlueConfidence;
-            inkCount++;
-        } else {
-            sumBg += dots[j].color;
-            sumBgBlueConfidence += dots[j].sourceBlueConfidence;
-            bgCount++;
         }
     }
 
     // Calculate stats for contrast logic
     float cellLumMean = cellLumSum / 8.0f;
     float avgLumDiff = abs(cellLumMean - effectiveBgLum);
+    float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f);
+    float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);
+    float signalStrength = max(edgeSig, lumSig);
 
     bool useDither = (cellRange <= 20.0f && cellEdgeMax <= kDitherMaxEdge);
     if (useDither) {
@@ -549,24 +613,24 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             }
         }
         bitmask = ditherMask;
-        sumInk = float3(0,0,0);
-        sumBg = float3(0,0,0);
-        sumInkBlueConfidence = 0.0f;
-        sumBgBlueConfidence = 0.0f;
-        inkCount = 0;
-        bgCount = 0;
-        [unroll]
-        for (int k2 = 0; k2 < 8; ++k2) {
-            uint bit = (uint)bitMap[dots[k2].idx];
-            if (bitmask & (1u << bit)) {
-                sumInk += dots[k2].color;
-                sumInkBlueConfidence += dots[k2].sourceBlueConfidence;
-                inkCount++;
-            } else {
-                sumBg += dots[k2].color;
-                sumBgBlueConfidence += dots[k2].sourceBlueConfidence;
-                bgCount++;
-            }
+    }
+
+    if (!useDither && cellRange >= (float)kEdgeMaskFitMinRange &&
+        signalStrength >= kEdgeMaskFitMinSignal) {
+        bitmask = FitEdgeMask(bitmask, dots, bitMap);
+    }
+
+    [unroll]
+    for (int k2 = 0; k2 < 8; ++k2) {
+        uint bit = (uint)bitMap[dots[k2].idx];
+        if ((bitmask & (1u << bit)) != 0u) {
+            sumInk += dots[k2].color;
+            sumInkBlueConfidence += dots[k2].sourceBlueConfidence;
+            inkCount++;
+        } else {
+            sumBg += dots[k2].color;
+            sumBgBlueConfidence += dots[k2].sourceBlueConfidence;
+            bgCount++;
         }
     }
 
@@ -601,9 +665,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // We look at both Edge magnitude and Luma difference.
     // - Edge Signal: Ramps from 0 to 1 as edge strength goes from 4 to 16.
     // - Luma Signal: Ramps from 0 to 1 as luma difference goes from 4 to 28.
-    float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f); 
-    float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);   
-    float signalStrength = max(edgeSig, lumSig);
     float blendStrength = kSignalStrengthFloor +
                           (1.0f - kSignalStrengthFloor) * signalStrength;
 
