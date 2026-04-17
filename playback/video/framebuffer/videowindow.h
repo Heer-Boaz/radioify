@@ -76,7 +76,7 @@ struct WindowUiState {
     bool isPaused = false;
     // UI text/metadata to display when overlay is visible
     std::string title; // filename or label
-    std::string progressSuffix; // playback time/status/volume line
+    std::string progressSuffix; // playback time/volume line
     std::vector<ControlButton> controlButtons;
     std::vector<SubtitleCue> subtitleCues; // active subtitle cues for current frame
     int64_t subtitleClockUs = 0;

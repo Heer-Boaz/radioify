@@ -96,6 +96,7 @@ struct OverlayCellLayout {
 struct PlaybackOverlayInputs {
   std::string windowTitle;
   bool audioOk = false;
+  bool playPauseAvailable = false;
   bool audioSupports50HzToggle = false;
   bool canPlayPrevious = false;
   bool canPlayNext = false;
@@ -130,6 +131,7 @@ struct PlaybackOverlayInputs {
 struct PlaybackOverlayState {
   std::string windowTitle;
   bool audioOk = false;
+  bool playPauseAvailable = false;
   bool audioSupports50HzToggle = false;
   bool canPlayPrevious = false;
   bool canPlayNext = false;

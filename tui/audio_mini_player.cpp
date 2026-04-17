@@ -224,6 +224,7 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   playback_overlay::PlaybackOverlayState overlayState;
   overlayState.windowTitle = title;
   overlayState.audioOk = audioReady;
+  overlayState.playPauseAvailable = audioReady && !audioIsFinished();
   overlayState.audioSupports50HzToggle =
       audioReady && audioSupports50HzToggle();
   overlayState.canPlayPrevious = true;
@@ -283,9 +284,6 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   footerInput.progressY = layout_.progressBarY;
   footerInput.peakY =
       audioReady && layout_.progressBarY > 0 ? layout_.progressBarY - 1 : -1;
-  footerInput.audioReady = audioReady;
-  footerInput.paused = overlayState.paused;
-  footerInput.finished = overlayState.audioFinished;
   footerInput.peak = audioGetPeak();
   footerInput.clipAlert = audioHasClipAlert();
   ProgressFooterRenderResult footerResult =

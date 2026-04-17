@@ -66,18 +66,16 @@ std::string formatTime(double seconds) {
 
 ProgressTextLayout buildProgressTextLayout(double displaySec,
                                            double totalSec,
-                                           const std::string& status,
                                            int volPct,
                                            int width) {
   ProgressTextLayout out;
   std::string volStr = " Vol: " + std::to_string(volPct) + "%";
-  out.suffix = formatTime(displaySec) + " / " + formatTime(totalSec) + " " +
-               status + volStr;
+  out.suffix = formatTime(displaySec) + " / " + formatTime(totalSec) + volStr;
   int suffixWidth = utf8DisplayWidth(out.suffix);
   int barWidth = width - suffixWidth - 3;
   if (barWidth < 10) {
-    out.suffix = formatTime(displaySec) + "/" + formatTime(totalSec) + " " +
-                 status + " V:" + std::to_string(volPct) + "%";
+    out.suffix = formatTime(displaySec) + "/" + formatTime(totalSec) +
+                 " V:" + std::to_string(volPct) + "%";
     suffixWidth = utf8DisplayWidth(out.suffix);
     barWidth = width - suffixWidth - 3;
   }
@@ -218,13 +216,6 @@ std::vector<BufferCell> renderProgressBarCells(double ratio,
   return cells;
 }
 
-static std::string progressStatusGlyph(const ProgressFooterInput& input) {
-  if (!input.audioReady) return "\xE2\x97\x8B";
-  if (input.finished) return "\xE2\x96\xA0";
-  if (input.paused) return "\xE2\x8F\xB8";
-  return "\xE2\x96\xB6";
-}
-
 ProgressFooterRenderResult renderProgressFooter(
     ConsoleScreen& screen, const ProgressFooterInput& input,
     const ProgressFooterStyles& styles) {
@@ -236,8 +227,8 @@ ProgressFooterRenderResult renderProgressFooter(
   }
 
   ProgressTextLayout progressText =
-      buildProgressTextLayout(input.displaySec, input.totalSec,
-                              progressStatusGlyph(input), input.volPct, width);
+      buildProgressTextLayout(input.displaySec, input.totalSec, input.volPct,
+                              width);
   result.progressBarX = 1;
   result.progressBarY = input.progressY;
   result.progressBarWidth = progressText.barWidth;

@@ -134,6 +134,7 @@ PlaybackOverlayState buildPlaybackOverlayState(
   PlaybackOverlayState state;
   state.windowTitle = inputs.windowTitle;
   state.audioOk = inputs.audioOk;
+  state.playPauseAvailable = inputs.playPauseAvailable;
   state.audioSupports50HzToggle = inputs.audioSupports50HzToggle;
   state.canPlayPrevious = inputs.canPlayPrevious;
   state.canPlayNext = inputs.canPlayNext;
@@ -395,8 +396,10 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     addSpec(makeOverlayTextControlSpec(OverlayControlId::Previous, "<<",
                                        false));
   }
-  addSpec(makeOverlayTextControlSpec(OverlayControlId::PlayPause, "pause",
-                                     state.paused));
+  if (state.playPauseAvailable) {
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::PlayPause, "pause",
+                                       state.paused));
+  }
   if (state.canPlayNext) {
     addSpec(makeOverlayTextControlSpec(OverlayControlId::Next, ">>", false));
   }
@@ -592,10 +595,6 @@ int overlayCellControlAt(const OverlayCellLayout& layout, int cellX,
 
 std::string buildWindowOverlayProgressSuffix(
     const PlaybackOverlayState& state) {
-  std::string status = "\xE2\x96\xB6";  // ▶
-  if (state.audioFinished || state.paused) {
-    status = state.audioFinished ? "\xE2\x96\xA0" : "\xE2\x8F\xB8";
-  }
   auto formatTime = [](double s) -> std::string {
     if (!(s >= 0.0) || !std::isfinite(s)) return "--:--";
     int total = static_cast<int>(std::llround(s));
@@ -614,7 +613,7 @@ std::string buildWindowOverlayProgressSuffix(
                                  formatTime(state.totalSec))
                               : formatTime(state.displaySec);
   std::string volStr = " Vol: " + std::to_string(state.volPct) + "%";
-  return timeLabel + " " + status + volStr;
+  return timeLabel + volStr;
 }
 
 std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state) {

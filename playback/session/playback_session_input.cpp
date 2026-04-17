@@ -274,6 +274,10 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
     inputs.windowTitle = *view.windowTitle;
   }
   inputs.audioOk = view.audioOk && *view.audioOk;
+  inputs.playPauseAvailable =
+      view.playbackState &&
+      (*view.playbackState == PlaybackSessionState::Active ||
+       *view.playbackState == PlaybackSessionState::Paused);
   inputs.audioSupports50HzToggle =
       inputs.audioOk && audioSupports50HzToggle();
   inputs.canPlayPrevious = signals.requestTransportCommand != nullptr;

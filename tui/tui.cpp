@@ -2324,6 +2324,8 @@ int runTui(Options o) {
 
         playback_overlay::PlaybackOverlayState actionOverlayState;
         actionOverlayState.audioOk = audioIsReady();
+        actionOverlayState.playPauseAvailable =
+            actionOverlayState.audioOk && !audioIsFinished();
         actionOverlayState.audioSupports50HzToggle =
             actionOverlayState.audioOk && audioSupports50HzToggle();
         actionOverlayState.canPlayPrevious =
@@ -2460,9 +2462,6 @@ int runTui(Options o) {
       footerInput.width = width;
       footerInput.progressY = line;
       footerInput.peakY = peakMeterY;
-      footerInput.audioReady = audioReady;
-      footerInput.paused = audioIsPaused();
-      footerInput.finished = audioIsFinished();
       footerInput.peak = audioGetPeak();
       footerInput.clipAlert = audioHasClipAlert();
       ProgressFooterRenderResult footerResult =

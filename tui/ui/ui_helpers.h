@@ -39,9 +39,6 @@ struct ProgressFooterInput {
   int width = 0;
   int progressY = -1;
   int peakY = -1;
-  bool audioReady = false;
-  bool paused = false;
-  bool finished = false;
   float peak = 0.0f;
   bool clipAlert = false;
 };
@@ -73,7 +70,6 @@ std::string fitLine(const std::string& s, int width);
 std::string formatTime(double seconds);
 ProgressTextLayout buildProgressTextLayout(double displaySec,
                                            double totalSec,
-                                           const std::string& status,
                                            int volPct,
                                            int width);
 std::vector<BufferCell> renderProgressBarCells(double ratio,

@@ -89,6 +89,9 @@ WindowUiState buildPlaybackFramebufferUiState(
   playback_overlay::PlaybackOverlayInputs overlayInputs;
   overlayInputs.windowTitle = windowTitle;
   overlayInputs.audioOk = audioOk;
+  overlayInputs.playPauseAvailable =
+      playbackState == PlaybackSessionState::Active ||
+      playbackState == PlaybackSessionState::Paused;
   overlayInputs.audioSupports50HzToggle = audioOk && audioSupports50HzToggle();
   overlayInputs.canPlayPrevious = canPlayPrevious;
   overlayInputs.canPlayNext = canPlayNext;
