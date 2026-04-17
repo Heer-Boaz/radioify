@@ -62,10 +62,6 @@ static const float kEdgeThresholdFloor = 6.0f;
 static const float kBrightBgSwapDelta = 12.0f;
 static const int kBrightBgSwapMaxDots = 4;
 static const float kBrightBgSwapMinSignal = 0.5f;
-static const float kEdgeInkMinEdge = 28.0f;
-static const float kEdgeInkMinRange = 8.0f;
-static const float kEdgeInkMinDotEdge = 18.0f;
-static const uint kEdgeInkMaxDots = 4u;
 static const float kShadowSatStartLuma = 16.0f;
 static const float kShadowSatFullLuma = 96.0f;
 static const float kShadowMinSaturation = 24.0f / 256.0f;
@@ -355,11 +351,6 @@ struct InputSample {
     float blueSignal;
 };
 
-struct CarrierSample {
-    float3 rgb;
-    float sourceBlueConfidence;
-};
-
 InputSample SampleInput(float2 uv) {
     float2 srcUv = RotateInputUV(uv);
     InputSample sample;
@@ -408,36 +399,6 @@ InputSample SampleInput(float2 uv) {
 
     sample.rgb = rgb;
     return sample;
-}
-
-CarrierSample SampleEdgeCarrierCell(uint cellX, uint cellY) {
-    CarrierSample carrier;
-    carrier.rgb = float3(0.0f, 0.0f, 0.0f);
-    carrier.sourceBlueConfidence = 0.0f;
-    float weightSum = 0.0f;
-
-    [unroll]
-    for (int oy = -1; oy <= 1; ++oy) {
-        int y = clamp((int)cellY + oy, 0, (int)outHeight - 1);
-        [unroll]
-        for (int ox = -1; ox <= 1; ++ox) {
-            int x = clamp((int)cellX + ox, 0, (int)outWidth - 1);
-            float weight = (ox == 0 && oy == 0) ? 4.0f :
-                           ((ox == 0 || oy == 0) ? 2.0f : 1.0f);
-            float2 uv = (float2((float)x, (float)y) + 0.5f) /
-                        float2((float)outWidth, (float)outHeight);
-            InputSample sample = SampleInput(uv);
-            carrier.rgb += sample.rgb * weight;
-            carrier.sourceBlueConfidence +=
-                GetSourceBlueConfidence(sample.blueSignal,
-                                        sample.chromaSignal) * weight;
-            weightSum += weight;
-        }
-    }
-
-    carrier.rgb /= weightSum;
-    carrier.sourceBlueConfidence /= weightSum;
-    return carrier;
 }
 
 struct DotInfo {
@@ -638,68 +599,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         }
     }
 
-    bool useEdgeInkMask = false;
-    if (!useDither && cellEdgeMax >= kEdgeInkMinEdge &&
-        cellRange >= kEdgeInkMinRange) {
-        float edgeCut = max(kEdgeInkMinDotEdge, cellEdgeMax * 0.75f);
-        uint edgeMask = 0u;
-        [unroll]
-        for (int e = 0; e < 8; ++e) {
-            if (dots[e].edge < edgeCut) {
-                continue;
-            }
-            int eCol = dots[e].idx >> 2;
-            int eRow = dots[e].idx & 3;
-            bool localMax = true;
-            [unroll]
-            for (int n = 0; n < 8; ++n) {
-                if (n == e) {
-                    continue;
-                }
-                int nCol = dots[n].idx >> 2;
-                int nRow = dots[n].idx & 3;
-                if (abs(nCol - eCol) > 1 || abs(nRow - eRow) > 1) {
-                    continue;
-                }
-                if (dots[n].edge > dots[e].edge ||
-                    (dots[n].edge == dots[e].edge && n < e)) {
-                    localMax = false;
-                    break;
-                }
-            }
-            if (!localMax) {
-                continue;
-            }
-            uint bit = (uint)bitMap[dots[e].idx];
-            edgeMask |= (1u << bit);
-        }
-
-        uint edgeDotCount = countbits(edgeMask);
-        if (edgeDotCount > 0u && edgeDotCount <= kEdgeInkMaxDots) {
-            bitmask = edgeMask;
-            useEdgeInkMask = true;
-            sumInk = float3(0,0,0);
-            sumBg = float3(0,0,0);
-            sumInkBlueConfidence = 0.0f;
-            sumBgBlueConfidence = 0.0f;
-            inkCount = 0;
-            bgCount = 0;
-            [unroll]
-            for (int r = 0; r < 8; ++r) {
-                uint bit = (uint)bitMap[dots[r].idx];
-                if (bitmask & (1u << bit)) {
-                    sumInk += dots[r].color;
-                    sumInkBlueConfidence += dots[r].sourceBlueConfidence;
-                    inkCount++;
-                } else {
-                    sumBg += dots[r].color;
-                    sumBgBlueConfidence += dots[r].sourceBlueConfidence;
-                    bgCount++;
-                }
-            }
-        }
-    }
-
     uint dotCount = countbits(bitmask);
 
     // 7. Color Processing
@@ -713,12 +612,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float curBgBlueConfidence =
         (bgCount > 0) ? (sumBgBlueConfidence / bgCount)
                       : (sumAllBlueConfidence / 8.0f);
-
-    if (useEdgeInkMask) {
-        CarrierSample carrier = SampleEdgeCarrierCell(DTid.x, DTid.y);
-        curBg = carrier.rgb;
-        curBgBlueConfidence = carrier.sourceBlueConfidence;
-    }
 
     // Color Lift: Ensure colors aren't completely black to maintain some visibility.
     // Currently set to 0 to allow true black (zwart-zwart).
@@ -742,8 +635,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float signalStrength = max(edgeSig, lumSig);
     float blendStrength = kSignalStrengthFloor +
                           (1.0f - kSignalStrengthFloor) * signalStrength;
+    bool allowCellBg = true;
 
-    if (!useEdgeInkMask && !useDither && bgCount > 0 && inkCount > 0 &&
+    if (!useDither && bgCount > 0 && inkCount > 0 &&
         bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
         signalStrength >= kBrightBgSwapMinSignal &&
         GetLuma(curBg) >= GetLuma(curFg) + kBrightBgSwapDelta) {
@@ -761,6 +655,14 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
         bitmask = (~bitmask) & 0xffu;
         dotCount = 8u - dotCount;
+    }
+
+    if (!useDither && cellEdgeMax >= kDitherMaxEdge && cellRange >= 8.0f &&
+        dotCount > 0u && dotCount < 8u && bgCount <= inkCount) {
+        float bgBias = 10.0f + signalStrength * 8.0f;
+        if (GetLuma(curBg) >= GetLuma(curFg) - bgBias) {
+            allowCellBg = false;
+        }
     }
 
     // Dampening (Noise Hiding):
@@ -893,8 +795,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Fix for black backgrounds on full cells:
     // If a cell has no background dots (all FG or empty), but the calculated BG color is bright enough,
     // we force the background flag to true so the renderer draws the background color.
-    uint hasBg = (bgCount > 0) ? 1u : 0u;
-    if (hasBg == 0u && GetLuma(curBg) > 10.0f) {
+    uint hasBg = (allowCellBg && bgCount > 0) ? 1u : 0u;
+    if (allowCellBg && hasBg == 0u && GetLuma(curBg) > 10.0f) {
         hasBg = 1u;
     }
     cell.hasBg = hasBg;

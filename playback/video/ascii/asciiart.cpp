@@ -202,10 +202,6 @@ constexpr int kEdgeThresholdFloor = 6;
 constexpr int kBrightBgSwapDelta = 12;
 constexpr int kBrightBgSwapMaxDots = 4;
 constexpr int kBrightBgSwapMinSignal = 128;
-constexpr int kEdgeInkMinEdge = 28;
-constexpr int kEdgeInkMinRange = 8;
-constexpr int kEdgeInkMinDotEdge = 18;
-constexpr int kEdgeInkMaxDots = 4;
 constexpr int kTemporalResetDelta = 48;  // Snellere scene change detectie
 constexpr int kColorSaturation = 340;    // Iets meer saturatie
 constexpr int kShadowSatStartLuma = 16;
@@ -592,41 +588,6 @@ FORCE_INLINE int median9(int v[9]) {
   return v[4];
 }
 
-FORCE_INLINE void sampleEdgeCarrierColor(const std::vector<uint32_t>& scaledRGBA,
-                                         int scaledW, int outW, int outH,
-                                         int cx, int cy, uint8_t* outR,
-                                         uint8_t* outG, uint8_t* outB) {
-  int sumR = 0;
-  int sumG = 0;
-  int sumB = 0;
-  int weightSum = 0;
-  for (int oy = -1; oy <= 1; ++oy) {
-    int ncy = std::clamp(cy + oy, 0, outH - 1);
-    int baseY = ncy * 4;
-    for (int ox = -1; ox <= 1; ++ox) {
-      int ncx = std::clamp(cx + ox, 0, outW - 1);
-      int baseX = ncx * 2;
-      int weight =
-          (ox == 0 && oy == 0) ? 4 : ((ox == 0 || oy == 0) ? 2 : 1);
-      for (int dy = 0; dy < 4; ++dy) {
-        const uint32_t* row =
-            scaledRGBA.data() + static_cast<size_t>(baseY + dy) * scaledW +
-            baseX;
-        for (int dx = 0; dx < 2; ++dx) {
-          uint32_t px = row[dx];
-          sumR += static_cast<int>(px & 0xFF) * weight;
-          sumG += static_cast<int>((px >> 8) & 0xFF) * weight;
-          sumB += static_cast<int>((px >> 16) & 0xFF) * weight;
-          weightSum += weight;
-        }
-      }
-    }
-  }
-  *outR = static_cast<uint8_t>((sumR + weightSum / 2) / weightSum);
-  *outG = static_cast<uint8_t>((sumG + weightSum / 2) / weightSum);
-  *outB = static_cast<uint8_t>((sumB + weightSum / 2) / weightSum);
-}
-
 struct BrailleFastScratch {
   int srcW = 0;
   int srcH = 0;
@@ -880,8 +841,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t sourceBlueVals[8];
             uint8_t bitIds[8];
             uint8_t validVals[8];
-            uint8_t dotXVals[8];
-            uint8_t dotYVals[8];
             int validMask = 0;
             int dotIndex = 0;
 
@@ -925,8 +884,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                     sourceBlueRow ? sourceBlueRow[dx] : 0;
                 bitIds[dotIndex] = static_cast<uint8_t>(brailleMap[dx][dy]);
                 validVals[dotIndex] = static_cast<uint8_t>(a != 0);
-                dotXVals[dotIndex] = static_cast<uint8_t>(dx);
-                dotYVals[dotIndex] = static_cast<uint8_t>(dy);
 
                 if constexpr (!AssumeOpaque) {
                   if (a == 0) {
@@ -1049,42 +1006,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               bitmask = ditherMask;
             }
 
-            bool useEdgeInkMask = false;
-            if (!useDither && cellEdgeMax >= kEdgeInkMinEdge &&
-                cellLumRange >= kEdgeInkMinRange) {
-              int edgeCut =
-                  std::max(kEdgeInkMinDotEdge, (cellEdgeMax * 3 + 3) / 4);
-              int edgeMask = 0;
-              int edgeDotCount = 0;
-              for (int i = 0; i < 8; ++i) {
-                if (!validVals[i]) continue;
-                if (edgeVals[i] < edgeCut) continue;
-                bool localMax = true;
-                for (int j = 0; j < 8; ++j) {
-                  if (i == j || !validVals[j]) continue;
-                  if (std::abs(static_cast<int>(dotXVals[i]) -
-                               static_cast<int>(dotXVals[j])) > 1 ||
-                      std::abs(static_cast<int>(dotYVals[i]) -
-                               static_cast<int>(dotYVals[j])) > 1) {
-                    continue;
-                  }
-                  if (edgeVals[j] > edgeVals[i] ||
-                      (edgeVals[j] == edgeVals[i] && j < i)) {
-                    localMax = false;
-                    break;
-                  }
-                }
-                if (localMax) {
-                  edgeMask |= (1 << bitIds[i]);
-                  ++edgeDotCount;
-                }
-              }
-              if (edgeDotCount > 0 && edgeDotCount <= kEdgeInkMaxDots) {
-                bitmask = edgeMask;
-                useEdgeInkMask = true;
-              }
-            }
-
             int dotCount = 0;
             int tempMask = bitmask;
             while (tempMask) {
@@ -1109,6 +1030,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t outBgR = 0;
             uint8_t outBgG = 0;
             uint8_t outBgB = 0;
+            bool allowCellBg = true;
             bool hasBg = false;
             int sumInkR = 0;
             int sumInkG = 0;
@@ -1174,12 +1096,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   (bgCount > 0 ? sumBgSourceBlue : sumAllSourceBlue) /
                   (bgCount > 0 ? bgCount : colorCount);
 
-              if (useEdgeInkMask) {
-                sampleEdgeCarrierColor(scratch.scaledRGBA, scaledW, outW, outH,
-                                       cx, cy, &bgR, &bgG, &bgB);
-                bgSourceBlue = sumAllSourceBlue / colorCount;
-              }
-
               // Intelligent Contrast Management
               // This system dynamically adjusts contrast based on the "Signal Strength" of the cell.
               // Goal:
@@ -1195,7 +1111,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int lumSig = std::clamp((avgLumDiff - 4) * 255 / 24, 0, 255);
               int signalStrength = std::max(edgeSig, lumSig);
 
-              if (!useEdgeInkMask && !useDither && bgCount > 0 && inkCount > 0 &&
+              if (!useDither && bgCount > 0 && inkCount > 0 &&
                   bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
                   signalStrength >= kBrightBgSwapMinSignal) {
                 int fgY = rgbToY(curR, curG, curB);
@@ -1208,6 +1124,17 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   std::swap(inkCount, bgCount);
                   bitmask = validMask ^ bitmask;
                   dotCount = validCount - dotCount;
+                }
+              }
+
+              if (!useDither && cellEdgeMax >= kDitherMaxEdge &&
+                  cellLumRange >= 8 && dotCount > 0 &&
+                  dotCount < validCount && bgCount <= inkCount) {
+                int fgY = rgbToY(curR, curG, curB);
+                int bgY = rgbToY(bgR, bgG, bgB);
+                int bgBias = 10 + ((signalStrength + 16) >> 5);
+                if (bgY >= fgY - bgBias) {
+                  allowCellBg = false;
                 }
               }
 
@@ -1269,14 +1196,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   curB = static_cast<uint8_t>(
                       std::clamp(cB + (dB * scaleFg >> 8), 0, 255));
                   
-                  if (!useEdgeInkMask) {
-                    bgR = static_cast<uint8_t>(
-                        std::clamp(cR - (dR * scaleBg >> 8), 0, 255));
-                    bgG = static_cast<uint8_t>(
-                        std::clamp(cG - (dG * scaleBg >> 8), 0, 255));
-                    bgB = static_cast<uint8_t>(
-                        std::clamp(cB - (dB * scaleBg >> 8), 0, 255));
-                  }
+                  bgR = static_cast<uint8_t>(
+                      std::clamp(cR - (dR * scaleBg >> 8), 0, 255));
+                  bgG = static_cast<uint8_t>(
+                      std::clamp(cG - (dG * scaleBg >> 8), 0, 255));
+                  bgB = static_cast<uint8_t>(
+                      std::clamp(cB - (dB * scaleBg >> 8), 0, 255));
               }
 
               int curY =
@@ -1463,7 +1388,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   }
                 }
               }
-              hasBg = true;
+              hasBg = allowCellBg;
             } else if (cellIndex < scratch.prevFg.size() &&
                        scratch.prevFgValid[cellIndex]) {
               uint32_t p = scratch.prevFg[cellIndex];
