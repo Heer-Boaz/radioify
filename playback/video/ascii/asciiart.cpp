@@ -1394,7 +1394,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   }
                 }
               }
-              hasBg = !useEdgeInkMask;
+              hasBg = true;
             } else if (cellIndex < scratch.prevFg.size() &&
                        scratch.prevFgValid[cellIndex]) {
               uint32_t p = scratch.prevFg[cellIndex];

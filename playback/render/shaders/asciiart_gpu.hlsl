@@ -829,8 +829,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // Fix for black backgrounds on full cells:
     // If a cell has no background dots (all FG or empty), but the calculated BG color is bright enough,
     // we force the background flag to true so the renderer draws the background color.
-    uint hasBg = useEdgeInkMask ? 0u : ((bgCount > 0) ? 1u : 0u);
-    if (!useEdgeInkMask && hasBg == 0u && GetLuma(curBg) > 10.0f) {
+    uint hasBg = (bgCount > 0) ? 1u : 0u;
+    if (hasBg == 0u && GetLuma(curBg) > 10.0f) {
         hasBg = 1u;
     }
     cell.hasBg = hasBg;
