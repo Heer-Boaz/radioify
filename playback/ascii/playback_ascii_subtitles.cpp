@@ -515,6 +515,7 @@ struct CueBlock {
   int height = 0;
   int x = 0;
   int y = 0;
+  bool hasTransform = false;
   bool assStyled = false;
   bool bold = false;
   bool italic = false;
@@ -603,6 +604,7 @@ bool makeCueBlock(const WindowUiState::SubtitleCue& cue, const SubtitleArea& are
   block.hasPosition = cue.hasPosition;
   block.posX = std::clamp(cue.posX, 0.0f, 1.0f);
   block.posY = std::clamp(cue.posY, 0.0f, 1.0f);
+  block.hasTransform = cue.hasTransform;
   block.hasClip = cue.hasClip;
   block.inverseClip = cue.inverseClip;
   if (block.hasClip) {
@@ -772,9 +774,8 @@ void positionExplicitBlock(CueBlock* block, const SubtitleArea& area,
   block->y = clampBlockY(block->y, area, block->height, bottomLimit);
 }
 
-void positionFlowBlock(CueBlock* block, const SubtitleArea& area,
-                       int bottomLimit, std::vector<uint8_t>* occupied) {
-  if (!block || !occupied) return;
+void positionFlowBlockHorizontal(CueBlock* block, const SubtitleArea& area) {
+  if (!block) return;
   const int left = area.x + block->marginL;
   const int right = area.x + area.width - block->marginR;
   const int availableWidth = std::max(block->width, right - left);
@@ -790,6 +791,39 @@ void positionFlowBlock(CueBlock* block, const SubtitleArea& area,
       break;
   }
   block->x = clampBlockX(block->x, area, block->width);
+}
+
+void positionFlowBlockUnstacked(CueBlock* block, const SubtitleArea& area,
+                                int bottomLimit) {
+  if (!block) return;
+  positionFlowBlockHorizontal(block, area);
+
+  const int minY = area.y;
+  const int maxY = std::max(area.y, bottomLimit - block->height + 1);
+  switch (cueVerticalAnchor(block->alignment)) {
+    case CueVerticalAnchor::Top: {
+      block->y = std::min(maxY, area.y + block->marginV);
+      break;
+    }
+    case CueVerticalAnchor::Middle: {
+      block->y =
+          std::clamp(area.y + (area.height - block->height) / 2, minY, maxY);
+      break;
+    }
+    case CueVerticalAnchor::Bottom: {
+      block->y =
+          std::clamp(bottomLimit - block->marginV - block->height + 1, minY,
+                     maxY);
+      break;
+    }
+  }
+  block->y = clampBlockY(block->y, area, block->height, bottomLimit);
+}
+
+void positionFlowBlock(CueBlock* block, const SubtitleArea& area,
+                       int bottomLimit, std::vector<uint8_t>* occupied) {
+  if (!block || !occupied) return;
+  positionFlowBlockHorizontal(block, area);
 
   const int minY = area.y;
   const int maxY = std::max(area.y, bottomLimit - block->height + 1);
@@ -1127,6 +1161,8 @@ void renderReadableCueSubtitles(const RenderInput& input) {
       if (block.hasPosition) {
         positionExplicitBlock(&block, area, explicitPositionBottomLimit);
         markRows(&occupied, block.y, block.height);
+      } else if (block.hasTransform) {
+        positionFlowBlockUnstacked(&block, area, bottomLimit);
       } else {
         positionFlowBlock(&block, area, bottomLimit, &occupied);
       }

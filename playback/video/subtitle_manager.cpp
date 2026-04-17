@@ -154,6 +154,27 @@ struct AssScriptContext {
   std::unordered_map<std::string, AssStyleInfo> styles;
 };
 
+struct AssTransformInfo {
+  int startMs = 0;
+  int endMs = 0;
+  float accel = 1.0f;
+  float fontSize = 0.0f;
+  float scaleX = 0.0f;
+  float scaleY = 0.0f;
+  bool hasPrimaryColor = false;
+  uint8_t primaryR = 255;
+  uint8_t primaryG = 255;
+  uint8_t primaryB = 255;
+  bool hasPrimaryAlpha = false;
+  float primaryAlpha = 1.0f;
+  bool hasBackColor = false;
+  uint8_t backR = 0;
+  uint8_t backG = 0;
+  uint8_t backB = 0;
+  bool hasBackAlpha = false;
+  float backAlpha = 0.55f;
+};
+
 struct AssOverrideInfo {
   int alignment = -1;
   bool hasPosition = false;
@@ -195,15 +216,18 @@ struct AssOverrideInfo {
   bool hasUnderline = false;
   bool underline = false;
   bool hasPrimaryColor = false;
+  bool hasPrimaryAlpha = false;
   uint8_t primaryR = 255;
   uint8_t primaryG = 255;
   uint8_t primaryB = 255;
   float primaryAlpha = 1.0f;
   bool hasBackColor = false;
+  bool hasBackAlpha = false;
   uint8_t backR = 0;
   uint8_t backG = 0;
   uint8_t backB = 0;
   float backAlpha = 0.55f;
+  std::vector<AssTransformInfo> transforms;
 };
 
 SubtitleCue makePlainCue(int64_t startUs, int64_t endUs, std::string text,
@@ -260,18 +284,82 @@ bool parseAssColorValue(std::string_view token, uint8_t* outR, uint8_t* outG,
   return true;
 }
 
+bool parseAssAlphaValue(std::string_view token, int* outAlpha);
+
 std::vector<std::string> splitAssTagArgs(std::string_view args) {
   std::vector<std::string> parts;
   size_t start = 0;
-  while (start <= args.size()) {
-    const size_t comma = args.find(',', start);
-    parts.push_back(trimAscii(
-        comma == std::string_view::npos ? args.substr(start)
-                                        : args.substr(start, comma - start)));
-    if (comma == std::string_view::npos) break;
-    start = comma + 1;
+  int depth = 0;
+  for (size_t i = 0; i < args.size(); ++i) {
+    if (args[i] == '(') {
+      ++depth;
+    } else if (args[i] == ')' && depth > 0) {
+      --depth;
+    } else if (args[i] == ',' && depth == 0) {
+      parts.push_back(trimAscii(args.substr(start, i - start)));
+      start = i + 1;
+    }
   }
+  parts.push_back(trimAscii(args.substr(start)));
   return parts;
+}
+
+bool assTagArgContainsOverride(std::string_view arg) {
+  return arg.find('\\') != std::string_view::npos;
+}
+
+size_t findAssTagCloseParen(std::string_view text, size_t contentStart) {
+  int depth = 1;
+  for (size_t i = contentStart; i < text.size(); ++i) {
+    if (text[i] == '(') {
+      ++depth;
+    } else if (text[i] == ')') {
+      --depth;
+      if (depth == 0) return i;
+    }
+  }
+  return std::string_view::npos;
+}
+
+void appendSubtitleTransforms(const std::vector<AssTransformInfo>& source,
+                              float baseFontSize, SubtitleCue* cue) {
+  if (!cue || source.empty()) return;
+  cue->transforms.reserve(cue->transforms.size() + source.size());
+  for (const AssTransformInfo& src : source) {
+    SubtitleTransform transform;
+    transform.startMs = src.startMs;
+    transform.endMs = src.endMs;
+    transform.accel = src.accel;
+    if (src.fontSize > 0.0f && baseFontSize > 0.0f) {
+      transform.hasSizeScale = true;
+      transform.sizeScale = std::clamp(src.fontSize / baseFontSize, 0.45f, 2.5f);
+    }
+    if (src.scaleX > 0.0f) {
+      transform.hasScaleX = true;
+      transform.scaleX = std::clamp(src.scaleX, 0.40f, 3.5f);
+    }
+    if (src.scaleY > 0.0f) {
+      transform.hasScaleY = true;
+      transform.scaleY = std::clamp(src.scaleY, 0.40f, 3.5f);
+    }
+    transform.hasPrimaryColor = src.hasPrimaryColor;
+    transform.primaryR = src.primaryR;
+    transform.primaryG = src.primaryG;
+    transform.primaryB = src.primaryB;
+    transform.hasPrimaryAlpha = src.hasPrimaryAlpha;
+    transform.primaryAlpha = src.primaryAlpha;
+    transform.hasBackColor = src.hasBackColor;
+    transform.backR = src.backR;
+    transform.backG = src.backG;
+    transform.backB = src.backB;
+    transform.hasBackAlpha = src.hasBackAlpha;
+    transform.backAlpha = src.backAlpha;
+    if (transform.hasSizeScale || transform.hasScaleX || transform.hasScaleY ||
+        transform.hasPrimaryColor || transform.hasPrimaryAlpha ||
+        transform.hasBackColor || transform.hasBackAlpha) {
+      cue->transforms.push_back(transform);
+    }
+  }
 }
 
 void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
@@ -311,12 +399,14 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
                              &r, &g, &b, &alpha)) {
         if (backColor) {
           out->hasBackColor = true;
+          out->hasBackAlpha = true;
           out->backR = r;
           out->backG = g;
           out->backB = b;
           out->backAlpha = alpha;
         } else {
           out->hasPrimaryColor = true;
+          out->hasPrimaryAlpha = true;
           out->primaryR = r;
           out->primaryG = g;
           out->primaryB = b;
@@ -330,7 +420,8 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
       parseColorToken(2, false);
       continue;
     }
-    if (i + 2 <= block.size() && block[i] == '4' &&
+    if (i + 2 <= block.size() &&
+        (block[i] == '3' || block[i] == '4') &&
         (block[i + 1] == 'c' || block[i + 1] == 'C')) {
       parseColorToken(2, true);
       continue;
@@ -339,6 +430,42 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
         !(i + 1 < block.size() &&
           (block[i + 1] == 'l' || block[i + 1] == 'L'))) {
       parseColorToken(1, false);
+      continue;
+    }
+
+    auto parseAlphaToken = [&](size_t tagLen, bool primary, bool back) {
+      i += tagLen;
+      size_t valueStart = i;
+      while (i < block.size() && block[i] != '\\') ++i;
+      int parsedAlpha = 0;
+      if (parseAssAlphaValue(block.substr(valueStart, i - valueStart),
+                             &parsedAlpha)) {
+        const float alpha = std::clamp(
+            static_cast<float>(255 - parsedAlpha) / 255.0f, 0.0f, 1.0f);
+        if (primary) {
+          out->hasPrimaryAlpha = true;
+          out->primaryAlpha = alpha;
+        }
+        if (back) {
+          out->hasBackAlpha = true;
+          out->backAlpha = alpha;
+        }
+      }
+    };
+
+    if (i + 5 <= block.size() && startsWithAsciiNoCase(block, i, "alpha")) {
+      parseAlphaToken(5, true, true);
+      continue;
+    }
+    if (i + 2 <= block.size() && block[i] == '1' &&
+        (block[i + 1] == 'a' || block[i + 1] == 'A')) {
+      parseAlphaToken(2, true, false);
+      continue;
+    }
+    if (i + 2 <= block.size() &&
+        (block[i] == '3' || block[i] == '4') &&
+        (block[i + 1] == 'a' || block[i + 1] == 'A')) {
+      parseAlphaToken(2, false, true);
       continue;
     }
 
@@ -389,6 +516,79 @@ void parseAssOverrideBlock(std::string_view block, AssOverrideInfo* out) {
         out->hasComplexFade = false;
         out->fadeInMs = fadeIn;
         out->fadeOutMs = fadeOut;
+      }
+      i = end + 1;
+      continue;
+    }
+
+    if ((block[i] == 't' || block[i] == 'T') &&
+        i + 1 < block.size() && block[i + 1] == '(') {
+      i += 2;
+      size_t end = findAssTagCloseParen(block, i);
+      if (end == std::string_view::npos) continue;
+      std::vector<std::string> parts =
+          splitAssTagArgs(block.substr(i, end - i));
+      size_t overrideIndex = parts.size();
+      for (size_t part = 0; part < parts.size(); ++part) {
+        if (assTagArgContainsOverride(parts[part])) {
+          overrideIndex = part;
+          break;
+        }
+      }
+      if (overrideIndex < parts.size()) {
+        int startMs = 0;
+        int endMs = 0;
+        float accel = 1.0f;
+        if (overrideIndex == 1) {
+          float parsedAccel = 1.0f;
+          if (parseFloatAscii(parts[0], &parsedAccel) && parsedAccel > 0.0f) {
+            accel = parsedAccel;
+          }
+        } else if (overrideIndex == 2) {
+          parseNonNegativeInt(parts[0], &startMs);
+          parseNonNegativeInt(parts[1], &endMs);
+        } else if (overrideIndex >= 3) {
+          parseNonNegativeInt(parts[0], &startMs);
+          parseNonNegativeInt(parts[1], &endMs);
+          float parsedAccel = 1.0f;
+          if (parseFloatAscii(parts[2], &parsedAccel) && parsedAccel > 0.0f) {
+            accel = parsedAccel;
+          }
+        }
+
+        std::string nested;
+        for (size_t part = overrideIndex; part < parts.size(); ++part) {
+          if (!nested.empty()) nested.push_back(',');
+          nested.append(parts[part]);
+        }
+        AssOverrideInfo target;
+        parseAssOverrideBlock(nested, &target);
+
+        AssTransformInfo transform;
+        transform.startMs = std::max(0, startMs);
+        transform.endMs = std::max(0, endMs);
+        transform.accel = std::clamp(accel, 0.1f, 8.0f);
+        transform.fontSize = target.fontSize;
+        transform.scaleX = target.scaleX;
+        transform.scaleY = target.scaleY;
+        transform.hasPrimaryColor = target.hasPrimaryColor;
+        transform.primaryR = target.primaryR;
+        transform.primaryG = target.primaryG;
+        transform.primaryB = target.primaryB;
+        transform.hasPrimaryAlpha = target.hasPrimaryAlpha;
+        transform.primaryAlpha = target.primaryAlpha;
+        transform.hasBackColor = target.hasBackColor;
+        transform.backR = target.backR;
+        transform.backG = target.backG;
+        transform.backB = target.backB;
+        transform.hasBackAlpha = target.hasBackAlpha;
+        transform.backAlpha = target.backAlpha;
+        if (transform.fontSize > 0.0f || transform.scaleX > 0.0f ||
+            transform.scaleY > 0.0f || transform.hasPrimaryColor ||
+            transform.hasPrimaryAlpha || transform.hasBackColor ||
+            transform.hasBackAlpha) {
+          out->transforms.push_back(transform);
+        }
       }
       i = end + 1;
       continue;
@@ -891,7 +1091,8 @@ void parseAssInlineTextOverrideBlock(
       parseColorToken(2, false);
       continue;
     }
-    if (i + 2 <= block.size() && block[i] == '4' &&
+    if (i + 2 <= block.size() &&
+        (block[i] == '3' || block[i] == '4') &&
         (block[i + 1] == 'c' || block[i + 1] == 'C')) {
       parseColorToken(2, true);
       continue;
@@ -931,7 +1132,8 @@ void parseAssInlineTextOverrideBlock(
       parseAlphaToken(2, true, false);
       continue;
     }
-    if (i + 2 <= block.size() && block[i] == '4' &&
+    if (i + 2 <= block.size() &&
+        (block[i] == '3' || block[i] == '4') &&
         (block[i + 1] == 'a' || block[i + 1] == 'A')) {
       parseAlphaToken(2, false, true);
       continue;
@@ -1625,6 +1827,7 @@ struct AssStyleFormatState {
   int scaleXIndex = -1;
   int scaleYIndex = -1;
   int primaryColourIndex = -1;
+  int outlineColourIndex = -1;
   int backColourIndex = -1;
 };
 
@@ -1646,6 +1849,8 @@ void parseAssStyleFormat(std::string_view payload,
   state->scaleYIndex = findAssFieldIndex(state->fields, "scaley");
   state->primaryColourIndex =
       findAssFieldIndex(state->fields, "primarycolour");
+  state->outlineColourIndex =
+      findAssFieldIndex(state->fields, "outlinecolour");
   state->backColourIndex = findAssFieldIndex(state->fields, "backcolour");
 }
 
@@ -1742,8 +1947,16 @@ bool parseAssStyleLine(std::string_view payload,
                          &style.primaryAlpha)) {
     style.hasPrimaryColor = true;
   }
+  if (format.outlineColourIndex >= 0 &&
+      format.outlineColourIndex < static_cast<int>(fields.size()) &&
+      parseAssColorValue(fields[static_cast<size_t>(format.outlineColourIndex)],
+                         &style.backR, &style.backG, &style.backB,
+                         &style.backAlpha)) {
+    style.hasBackColor = true;
+  }
   if (format.backColourIndex >= 0 &&
       format.backColourIndex < static_cast<int>(fields.size()) &&
+      !style.hasBackColor &&
       parseAssColorValue(fields[static_cast<size_t>(format.backColourIndex)],
                          &style.backR, &style.backG, &style.backB,
                          &style.backAlpha)) {
@@ -1974,11 +2187,17 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
       styleInfo.primaryB = overrides.primaryB;
       styleInfo.primaryAlpha = overrides.primaryAlpha;
     }
+    if (overrides.hasPrimaryAlpha) {
+      styleInfo.primaryAlpha = overrides.primaryAlpha;
+    }
     if (overrides.hasBackColor) {
       styleInfo.hasBackColor = true;
       styleInfo.backR = overrides.backR;
       styleInfo.backG = overrides.backG;
       styleInfo.backB = overrides.backB;
+      styleInfo.backAlpha = overrides.backAlpha;
+    }
+    if (overrides.hasBackAlpha) {
       styleInfo.backAlpha = overrides.backAlpha;
     }
 
@@ -2080,6 +2299,7 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
       cue.clipY2Norm = std::clamp(overrides.clipY2 / static_cast<float>(scriptH),
                                   0.0f, 1.0f);
     }
+    appendSubtitleTransforms(overrides.transforms, resolvedBaseFont, &cue);
     outCues->push_back(std::move(cue));
   }
   return !outCues->empty();
@@ -2696,11 +2916,17 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
       styleInfo.primaryB = overrides.primaryB;
       styleInfo.primaryAlpha = overrides.primaryAlpha;
     }
+    if (overrides.hasPrimaryAlpha) {
+      styleInfo.primaryAlpha = overrides.primaryAlpha;
+    }
     if (overrides.hasBackColor) {
       styleInfo.hasBackColor = true;
       styleInfo.backR = overrides.backR;
       styleInfo.backG = overrides.backG;
       styleInfo.backB = overrides.backB;
+      styleInfo.backAlpha = overrides.backAlpha;
+    }
+    if (overrides.hasBackAlpha) {
       styleInfo.backAlpha = overrides.backAlpha;
     }
 
@@ -2800,6 +3026,7 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
       cue.clipY2Norm = std::clamp(overrides.clipY2 / static_cast<float>(scriptH),
                                   0.0f, 1.0f);
     }
+    appendSubtitleTransforms(overrides.transforms, baseFontSize, &cue);
 
     std::string styledText;
     std::vector<SubtitleTextRun> textRuns;

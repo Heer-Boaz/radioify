@@ -38,6 +38,7 @@ struct WindowUiState {
         std::string text;
         std::string rawText;
         std::vector<TextRun> textRuns;
+        bool hasTransform = false;
         float sizeScale = 1.0f;
         float scaleX = 1.0f;
         float scaleY = 1.0f;

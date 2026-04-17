@@ -23,12 +23,37 @@ struct SubtitleTextRun {
   float backAlpha = 0.55f;
 };
 
+struct SubtitleTransform {
+  int startMs = 0;
+  int endMs = 0;
+  float accel = 1.0f;
+  bool hasSizeScale = false;
+  float sizeScale = 1.0f;
+  bool hasScaleX = false;
+  float scaleX = 1.0f;
+  bool hasScaleY = false;
+  float scaleY = 1.0f;
+  bool hasPrimaryColor = false;
+  uint8_t primaryR = 255;
+  uint8_t primaryG = 255;
+  uint8_t primaryB = 255;
+  bool hasPrimaryAlpha = false;
+  float primaryAlpha = 1.0f;
+  bool hasBackColor = false;
+  uint8_t backR = 0;
+  uint8_t backG = 0;
+  uint8_t backB = 0;
+  bool hasBackAlpha = false;
+  float backAlpha = 0.55f;
+};
+
 struct SubtitleCue {
   int64_t startUs = 0;
   int64_t endUs = 0;
   std::string text;
   std::string rawText;
   std::vector<SubtitleTextRun> textRuns;
+  std::vector<SubtitleTransform> transforms;
   int layer = 0;
   int alignment = 2;  // ASS grid: 1..9, default bottom-center.
   float sizeScale = 1.0f;
