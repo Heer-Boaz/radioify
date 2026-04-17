@@ -62,6 +62,10 @@ static const float kEdgeThresholdFloor = 6.0f;
 static const float kBrightBgSwapDelta = 12.0f;
 static const int kBrightBgSwapMaxDots = 4;
 static const float kBrightBgSwapMinSignal = 0.5f;
+static const float kEdgeBgToneMinBlend = 80.0f / 256.0f;
+static const float kEdgeBgToneMaxBlend = 144.0f / 256.0f;
+static const float kEdgeBgToneMaxSaturation = 192.0f / 256.0f;
+static const float kEdgeBgToneMinSaturation = 128.0f / 256.0f;
 static const float kShadowSatStartLuma = 16.0f;
 static const float kShadowSatFullLuma = 96.0f;
 static const float kShadowMinSaturation = 24.0f / 256.0f;
@@ -132,6 +136,15 @@ float GetSourceBlueConfidence(float blueSignal, float chromaSignal) {
 float3 ApplySaturationAroundLuma(float3 rgb, float y255, float saturation) {
     float gray = y255 / 255.0f;
     return saturate(gray.xxx + (rgb - gray.xxx) * saturation);
+}
+
+float3 ToneEdgeBackground(float3 bg, float3 fg, float toneFactor) {
+    float blend = lerp(kEdgeBgToneMinBlend, kEdgeBgToneMaxBlend, toneFactor);
+    bg = lerp(bg, fg, blend);
+    float saturation = lerp(kEdgeBgToneMaxSaturation,
+                            kEdgeBgToneMinSaturation,
+                            toneFactor);
+    return ApplySaturationAroundLuma(bg, GetLuma(bg), saturation);
 }
 
 float3 CompressShadowChroma(float3 rgb, float sourceBlueConfidence) {
@@ -635,7 +648,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float signalStrength = max(edgeSig, lumSig);
     float blendStrength = kSignalStrengthFloor +
                           (1.0f - kSignalStrengthFloor) * signalStrength;
-    bool allowCellBg = true;
+    bool toneEdgeBg = false;
+    float edgeBgToneFactor = 0.0f;
 
     if (!useDither && bgCount > 0 && inkCount > 0 &&
         bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
@@ -657,11 +671,14 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         dotCount = 8u - dotCount;
     }
 
+    // Terminal BG fills the whole cell; edge detail must stay in braille ink,
+    // so minority BG around edges is toned, not hidden.
     if (!useDither && cellEdgeMax >= kDitherMaxEdge && cellRange >= 8.0f &&
         dotCount > 0u && dotCount < 8u && bgCount <= inkCount) {
         float bgBias = 10.0f + signalStrength * 8.0f;
         if (GetLuma(curBg) >= GetLuma(curFg) - bgBias) {
-            allowCellBg = false;
+            toneEdgeBg = true;
+            edgeBgToneFactor = saturate((float)(inkCount - bgCount) / 8.0f);
         }
     }
 
@@ -776,6 +793,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         }
     }
 
+    if (toneEdgeBg) {
+        curBg = ToneEdgeBackground(curBg, curFg, edgeBgToneFactor);
+    }
+
     uint meta = (uint)min(255.0f, signalStrength * 255.0f + 0.5f);
     if (useDither) {
         meta |= 0x100u;
@@ -792,14 +813,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     cell.fg = PackColor(curFg);
     cell.bg = PackColor(curBg);
     
-    // Fix for black backgrounds on full cells:
-    // If a cell has no background dots (all FG or empty), but the calculated BG color is bright enough,
-    // we force the background flag to true so the renderer draws the background color.
-    uint hasBg = (allowCellBg && bgCount > 0) ? 1u : 0u;
-    if (allowCellBg && hasBg == 0u && GetLuma(curBg) > 10.0f) {
-        hasBg = 1u;
-    }
-    cell.hasBg = hasBg;
+    cell.hasBg = 1u;
 
     OutputBuffer[cellIndex] = cell;
 }

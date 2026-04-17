@@ -202,6 +202,10 @@ constexpr int kEdgeThresholdFloor = 6;
 constexpr int kBrightBgSwapDelta = 12;
 constexpr int kBrightBgSwapMaxDots = 4;
 constexpr int kBrightBgSwapMinSignal = 128;
+constexpr int kEdgeBgToneMinBlend = 80;
+constexpr int kEdgeBgToneMaxBlend = 144;
+constexpr int kEdgeBgToneMaxSaturation = 192;
+constexpr int kEdgeBgToneMinSaturation = 128;
 constexpr int kTemporalResetDelta = 48;  // Snellere scene change detectie
 constexpr int kColorSaturation = 340;    // Iets meer saturatie
 constexpr int kShadowSatStartLuma = 16;
@@ -311,6 +315,35 @@ FORCE_INLINE void applySaturationAroundLuma(uint8_t& r, uint8_t& g,
   b = static_cast<uint8_t>(
       std::clamp(y + scaleDelta256(static_cast<int>(b) - y, saturation256), 0,
                  255));
+}
+
+FORCE_INLINE uint8_t blendByteToward(uint8_t from, uint8_t to,
+                                     int alpha256) {
+  int delta = static_cast<int>(to) - static_cast<int>(from);
+  int rounded = delta * alpha256 + (delta >= 0 ? 128 : -128);
+  return static_cast<uint8_t>(
+      std::clamp(static_cast<int>(from) + rounded / 256, 0, 255));
+}
+
+FORCE_INLINE void toneEdgeBackground(uint8_t& bgR, uint8_t& bgG,
+                                     uint8_t& bgB, uint8_t fgR, uint8_t fgG,
+                                     uint8_t fgB, int toneFactor256) {
+  int blend = kEdgeBgToneMinBlend +
+              ((kEdgeBgToneMaxBlend - kEdgeBgToneMinBlend) *
+                   toneFactor256 +
+               128) /
+                  256;
+  bgR = blendByteToward(bgR, fgR, blend);
+  bgG = blendByteToward(bgG, fgG, blend);
+  bgB = blendByteToward(bgB, fgB, blend);
+
+  int saturation =
+      kEdgeBgToneMaxSaturation -
+      ((kEdgeBgToneMaxSaturation - kEdgeBgToneMinSaturation) *
+           toneFactor256 +
+       128) /
+          256;
+  applySaturationAroundLuma(bgR, bgG, bgB, rgbToY(bgR, bgG, bgB), saturation);
 }
 
 FORCE_INLINE void compressShadowChroma(uint8_t& r, uint8_t& g, uint8_t& b,
@@ -1030,7 +1063,8 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t outBgR = 0;
             uint8_t outBgG = 0;
             uint8_t outBgB = 0;
-            bool allowCellBg = true;
+            bool toneEdgeBg = false;
+            int edgeBgToneFactor = 0;
             bool hasBg = false;
             int sumInkR = 0;
             int sumInkG = 0;
@@ -1127,6 +1161,8 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 }
               }
 
+              // Terminal BG fills the whole cell; edge detail must stay in
+              // braille ink, so minority BG around edges is toned, not hidden.
               if (!useDither && cellEdgeMax >= kDitherMaxEdge &&
                   cellLumRange >= 8 && dotCount > 0 &&
                   dotCount < validCount && bgCount <= inkCount) {
@@ -1134,7 +1170,11 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 int bgY = rgbToY(bgR, bgG, bgB);
                 int bgBias = 10 + ((signalStrength + 16) >> 5);
                 if (bgY >= fgY - bgBias) {
-                  allowCellBg = false;
+                  toneEdgeBg = true;
+                  edgeBgToneFactor =
+                      ((inkCount - bgCount) * 256 + validCount / 2) /
+                      std::max(1, validCount);
+                  edgeBgToneFactor = std::clamp(edgeBgToneFactor, 0, 256);
                 }
               }
 
@@ -1388,7 +1428,20 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   }
                 }
               }
-              hasBg = allowCellBg;
+              if (toneEdgeBg) {
+                toneEdgeBackground(outBgR, outBgG, outBgB, outR, outG, outB,
+                                   edgeBgToneFactor);
+                if (cellIndex < scratch.prevBg.size()) {
+                  scratch.prevBg[cellIndex] =
+                      (static_cast<uint32_t>(outBgR) << 16) |
+                      (static_cast<uint32_t>(outBgG) << 8) |
+                      static_cast<uint32_t>(outBgB);
+                  if (cellIndex < scratch.prevBgValid.size()) {
+                    scratch.prevBgValid[cellIndex] = 1;
+                  }
+                }
+              }
+              hasBg = true;
             } else if (cellIndex < scratch.prevFg.size() &&
                        scratch.prevFgValid[cellIndex]) {
               uint32_t p = scratch.prevFg[cellIndex];
