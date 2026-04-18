@@ -182,6 +182,11 @@ struct AsciiTuning {
   int perceptualBrightBgPenalty = kPerceptualBrightBgPenalty;
   int perceptualPreferredBrightBgInkContrast =
       kPerceptualPreferredBrightBgInkContrast;
+  int colorBoundarySoftMinDelta = kColorBoundarySoftMinDelta;
+  int colorBoundarySoftFullDelta = kColorBoundarySoftFullDelta;
+  int colorBoundarySoftStrength = kColorBoundarySoftStrength;
+  int colorBoundarySignalAttenuation = kColorBoundarySignalAttenuation;
+  int colorBoundaryHueSimilarity = kColorBoundaryHueSimilarity;
 };
 
 FORCE_INLINE void applyTuningOverride(int& dst, int value) {
@@ -214,6 +219,16 @@ AsciiTuning resolveAsciiTuning(
                       o.perceptualBrightBgPenalty);
   applyTuningOverride(tuning.perceptualPreferredBrightBgInkContrast,
                       o.perceptualPreferredBrightBgInkContrast);
+  applyTuningOverride(tuning.colorBoundarySoftMinDelta,
+                      o.colorBoundarySoftMinDelta);
+  applyTuningOverride(tuning.colorBoundarySoftFullDelta,
+                      o.colorBoundarySoftFullDelta);
+  applyTuningOverride(tuning.colorBoundarySoftStrength,
+                      o.colorBoundarySoftStrength);
+  applyTuningOverride(tuning.colorBoundarySignalAttenuation,
+                      o.colorBoundarySignalAttenuation);
+  applyTuningOverride(tuning.colorBoundaryHueSimilarity,
+                      o.colorBoundaryHueSimilarity);
   return tuning;
 }
 
@@ -259,6 +274,14 @@ FORCE_INLINE int signalRangeTo255(float signal, int start255, int full255) {
   if (signal255 >= full255) return 255;
   int numer = (signal255 - start255) * 255;
   int denom = std::max(1, full255 - start255);
+  return (numer + denom / 2) / denom;
+}
+
+FORCE_INLINE int byteRangeTo255(int value, int start, int full) {
+  if (value <= start) return 0;
+  if (value >= full) return 255;
+  int numer = (value - start) * 255;
+  int denom = std::max(1, full - start);
   return (numer + denom / 2) / denom;
 }
 
@@ -313,6 +336,76 @@ FORCE_INLINE void scaleColorToLuma(uint8_t& r, uint8_t& g, uint8_t& b, int y,
       std::clamp((static_cast<int>(g) * scale + 128) >> 8, 0, 255));
   b = static_cast<uint8_t>(
       std::clamp((static_cast<int>(b) * scale + 128) >> 8, 0, 255));
+}
+
+FORCE_INLINE void softenRgbTowardMean(uint8_t& r, uint8_t& g, uint8_t& b,
+                                      int meanR, int meanG, int meanB,
+                                      int amount256) {
+  r = static_cast<uint8_t>(
+      std::clamp(static_cast<int>(r) +
+                     scaleDelta256(meanR - static_cast<int>(r), amount256),
+                 0, 255));
+  g = static_cast<uint8_t>(
+      std::clamp(static_cast<int>(g) +
+                     scaleDelta256(meanG - static_cast<int>(g), amount256),
+                 0, 255));
+  b = static_cast<uint8_t>(
+      std::clamp(static_cast<int>(b) +
+                     scaleDelta256(meanB - static_cast<int>(b), amount256),
+                 0, 255));
+}
+
+FORCE_INLINE bool chromaHueSimilar(uint8_t ar, uint8_t ag, uint8_t ab,
+                                   uint8_t br, uint8_t bg, uint8_t bb,
+                                   int minSimilarity256) {
+  int ay = rgbToY(ar, ag, ab);
+  int by = rgbToY(br, bg, bb);
+  int acR = static_cast<int>(ar) - ay;
+  int acG = static_cast<int>(ag) - ay;
+  int acB = static_cast<int>(ab) - ay;
+  int bcR = static_cast<int>(br) - by;
+  int bcG = static_cast<int>(bg) - by;
+  int bcB = static_cast<int>(bb) - by;
+  int64_t dot = static_cast<int64_t>(acR) * bcR +
+                static_cast<int64_t>(acG) * bcG +
+                static_cast<int64_t>(acB) * bcB;
+  if (dot <= 0) return false;
+  int64_t a2 = static_cast<int64_t>(acR) * acR +
+               static_cast<int64_t>(acG) * acG +
+               static_cast<int64_t>(acB) * acB;
+  int64_t b2 = static_cast<int64_t>(bcR) * bcR +
+               static_cast<int64_t>(bcG) * bcG +
+               static_cast<int64_t>(bcB) * bcB;
+  if (a2 < 64 || b2 < 64) return false;
+  int64_t lhs = dot * dot * 256 * 256;
+  int64_t rhs = a2 * b2 * minSimilarity256 * minSimilarity256;
+  return lhs >= rhs;
+}
+
+FORCE_INLINE int colorBoundarySoftAmount(uint8_t fgR, uint8_t fgG, uint8_t fgB,
+                                         uint8_t bgR, uint8_t bgG, uint8_t bgB,
+                                         const AsciiTuning& tuning) {
+  if (!chromaHueSimilar(fgR, fgG, fgB, bgR, bgG, bgB,
+                        tuning.colorBoundaryHueSimilarity)) {
+    return 0;
+  }
+  const int colorDelta =
+      std::max({std::abs(static_cast<int>(fgR) - bgR),
+                std::abs(static_cast<int>(fgG) - bgG),
+                std::abs(static_cast<int>(fgB) - bgB)});
+  return byteRangeTo255(colorDelta, tuning.colorBoundarySoftMinDelta,
+                        tuning.colorBoundarySoftFullDelta);
+}
+
+FORCE_INLINE int attenuateSignalForColorBoundary(int signalStrength,
+                                                 int boundaryAmount,
+                                                 const AsciiTuning& tuning) {
+  const int attenuation =
+      std::clamp((boundaryAmount * tuning.colorBoundarySignalAttenuation +
+                  128) >>
+                     8,
+                 0, 240);
+  return std::clamp((signalStrength * (256 - attenuation) + 128) >> 8, 0, 255);
 }
 
 FORCE_INLINE void compressShadowChroma(uint8_t& r, uint8_t& g, uint8_t& b,
@@ -510,6 +603,49 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
   }
 
   return score;
+}
+
+int colorBoundarySoftAmountForMask(int mask, int validMask,
+                                   const uint8_t* rVals,
+                                   const uint8_t* gVals,
+                                   const uint8_t* bVals,
+                                   const uint8_t* bitIds,
+                                   const uint8_t* validVals,
+                                   const AsciiTuning& tuning) {
+  mask &= validMask;
+  int sumOnR = 0;
+  int sumOnG = 0;
+  int sumOnB = 0;
+  int sumOffR = 0;
+  int sumOffG = 0;
+  int sumOffB = 0;
+  int onCount = 0;
+  int offCount = 0;
+
+  for (int i = 0; i < 8; ++i) {
+    if (!validVals[i]) continue;
+    if ((mask & (1 << bitIds[i])) != 0) {
+      sumOnR += rVals[i];
+      sumOnG += gVals[i];
+      sumOnB += bVals[i];
+      ++onCount;
+    } else {
+      sumOffR += rVals[i];
+      sumOffG += gVals[i];
+      sumOffB += bVals[i];
+      ++offCount;
+    }
+  }
+
+  if (onCount == 0 || offCount == 0) return 0;
+
+  return colorBoundarySoftAmount(
+      static_cast<uint8_t>((sumOnR + onCount / 2) / onCount),
+      static_cast<uint8_t>((sumOnG + onCount / 2) / onCount),
+      static_cast<uint8_t>((sumOnB + onCount / 2) / onCount),
+      static_cast<uint8_t>((sumOffR + offCount / 2) / offCount),
+      static_cast<uint8_t>((sumOffG + offCount / 2) / offCount),
+      static_cast<uint8_t>((sumOffB + offCount / 2) / offCount), tuning);
 }
 
 int fitEdgeMask(int initialMask, int validMask, const uint8_t* rVals,
@@ -1175,10 +1311,20 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             const bool useEdgeMaskFit =
                 renderStageEnabled<DebugMode>(stageMask,
                                               ascii_debug::kStageEdgeMaskFit);
+            int edgeFitSignalStrength = signalStrength;
+            if (renderStageEnabled<DebugMode>(
+                    stageMask,
+                    ascii_debug::kStageColorBoundarySoftening)) {
+              int initialBoundaryAmount = colorBoundarySoftAmountForMask(
+                  bitmask, validMask, rVals, gVals, bVals, bitIds, validVals,
+                  tuning);
+              edgeFitSignalStrength = attenuateSignalForColorBoundary(
+                  signalStrength, initialBoundaryAmount, tuning);
+            }
             const bool edgeMaskFitEligible =
                 !useDither && useEdgeMaskFit && validCount >= 3 &&
                 cellLumRange >= tuning.edgeMaskFitMinRange &&
-                signalStrength >= tuning.edgeMaskFitMinSignal;
+                edgeFitSignalStrength >= tuning.edgeMaskFitMinSignal;
             if (edgeMaskFitEligible) {
               int fittedMask =
                   fitEdgeMask(bitmask, validMask, rVals, gVals, bVals, bitIds,
@@ -1284,6 +1430,22 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   (bgCount > 0 ? sumBgSourceBlue : sumAllSourceBlue) /
                   (bgCount > 0 ? bgCount : colorCount);
 
+              int colorBoundaryAmount = 0;
+              if (renderStageEnabled<DebugMode>(
+                      stageMask,
+                      ascii_debug::kStageColorBoundarySoftening) &&
+                  bgCount > 0 && inkCount > 0 && dotCount > 0 &&
+                  dotCount < validCount) {
+                colorBoundaryAmount =
+                    colorBoundarySoftAmount(curR, curG, curB, bgR, bgG, bgB,
+                                            tuning);
+              }
+              const int effectiveSignalStrength =
+                  colorBoundaryAmount > 0
+                      ? attenuateSignalForColorBoundary(
+                            signalStrength, colorBoundaryAmount, tuning)
+                      : signalStrength;
+
               // Intelligent Contrast Management
               // This system dynamically adjusts contrast based on the "Signal Strength" of the cell.
               // Goal:
@@ -1297,7 +1459,8 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // - Luma Signal: Ramps from 0 to 1 as luma difference goes from 4 to 28.
               int blendStrength =
                   tuning.signalStrengthFloor +
-                  ((signalStrength * (255 - tuning.signalStrengthFloor) +
+                  ((effectiveSignalStrength *
+                        (255 - tuning.signalStrengthFloor) +
                     127) /
                    255);
 
@@ -1326,11 +1489,11 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.
               if (renderStageEnabled<DebugMode>(
                       stageMask, ascii_debug::kStageDetailBoost) &&
-                  signalStrength > 204) { // > 0.8 * 255
+                  effectiveSignalStrength > 204) { // > 0.8 * 255
                   if constexpr (DebugMode) {
                     if (debugStats) ++debugStats->detailBoostCount;
                   }
-                  int boost = (signalStrength - 204) * 5; // 0 -> 255
+                  int boost = (effectiveSignalStrength - 204) * 5; // 0 -> 255
                   // Boost factor 1.0 -> 1.5 (approx)
                   // New = Center + (Old - Center) * (1 + boost/512)
                   // Simplified: Expand difference
@@ -1425,7 +1588,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                       stageMask,
                       ascii_debug::kStageInkCoverageCompensation) &&
                   !useDither &&
-                  signalStrength >= tuning.inkCoverageMinSignal &&
+                  effectiveSignalStrength >= tuning.inkCoverageMinSignal &&
                   bgCount > 0 && inkCount > 0 && dotCount > 0 &&
                   dotCount < validCount) {
                 int coverage = std::max(1, tuning.inkVisibleDotCoverage);
@@ -1457,6 +1620,41 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                     if (debugStats &&
                         (oldR != curR || oldG != curG || oldB != curB)) {
                       ++debugStats->inkCoverageCompensationCount;
+                    }
+                  }
+                }
+              }
+
+              if (renderStageEnabled<DebugMode>(
+                      stageMask,
+                      ascii_debug::kStageColorBoundarySoftening) &&
+                  colorBoundaryAmount > 0 &&
+                  tuning.colorBoundarySoftStrength > 0) {
+                int amount =
+                    (tuning.colorBoundarySoftStrength *
+                         colorBoundaryAmount +
+                     128) >>
+                    8;
+                if (amount > 0) {
+                  uint8_t oldR = curR;
+                  uint8_t oldG = curG;
+                  uint8_t oldB = curB;
+                  uint8_t oldBgR = bgR;
+                  uint8_t oldBgG = bgG;
+                  uint8_t oldBgB = bgB;
+                  int meanR = std::max(kColorLift, sumAllR / colorCount);
+                  int meanG = std::max(kColorLift, sumAllG / colorCount);
+                  int meanB = std::max(kColorLift, sumAllB / colorCount);
+                  softenRgbTowardMean(curR, curG, curB, meanR, meanG, meanB,
+                                      amount);
+                  softenRgbTowardMean(bgR, bgG, bgB, meanR, meanG, meanB,
+                                      amount);
+                  if constexpr (DebugMode) {
+                    if (debugStats &&
+                        (oldR != curR || oldG != curG || oldB != curB ||
+                         oldBgR != bgR || oldBgG != bgG ||
+                         oldBgB != bgB)) {
+                      ++debugStats->colorBoundarySofteningCount;
                     }
                   }
                 }

@@ -37,6 +37,7 @@ enum StageMask : uint32_t {
   kStageBackgroundTemporal = 1u << 9,
   kStageFullMaskBgContrast = 1u << 10,
   kStageCellBackground = 1u << 11,
+  kStageColorBoundarySoftening = 1u << 12,
 };
 
 constexpr uint32_t kAllStages =
@@ -45,7 +46,7 @@ constexpr uint32_t kAllStages =
     kStageInkCoverageCompensation | kStageInkLumaFloor |
     kStageInkSaturation | kStageForegroundTemporal |
     kStageBackgroundTemporal | kStageFullMaskBgContrast |
-    kStageCellBackground;
+    kStageCellBackground | kStageColorBoundarySoftening;
 
 struct RenderOptions {
   uint32_t stageMask = kAllStages;
@@ -68,6 +69,11 @@ struct RenderOptions {
     int perceptualLumaErrorWeight = -1;
     int perceptualBrightBgPenalty = -1;
     int perceptualPreferredBrightBgInkContrast = -1;
+    int colorBoundarySoftMinDelta = -1;
+    int colorBoundarySoftFullDelta = -1;
+    int colorBoundarySoftStrength = -1;
+    int colorBoundarySignalAttenuation = -1;
+    int colorBoundaryHueSimilarity = -1;
   } tuning;
 };
 
@@ -84,6 +90,7 @@ struct RenderStats {
   uint64_t fgTemporalBlendCount = 0;
   uint64_t bgTemporalBlendCount = 0;
   uint64_t fullMaskBgContrastCount = 0;
+  uint64_t colorBoundarySofteningCount = 0;
   uint64_t dotCountHistogram[9] = {};
 };
 

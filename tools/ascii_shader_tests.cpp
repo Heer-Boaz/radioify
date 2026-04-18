@@ -159,7 +159,7 @@ void printUsage() {
   std::cout
       << "ascii_shader_tests [options]\n"
       << "  --fixture <all|circle-checker|phone-edge|thin-lines|"
-         "fullmask-contrast>\n"
+         "fullmask-contrast|color-boundary>\n"
       << "  --variant <all|current|ink-only|no-dither|no-edge-detect|"
          "no-signal-dampen|no-detail-boost|no-edge-mask-fit|"
          "no-ink-coverage|"
@@ -173,7 +173,8 @@ void printUsage() {
       << "  --sweep <name=value,value,...>\n"
       << "  tuning names: inkcov,covmax,covsignal,covminluma,"
          "fitgain,fitrange,fitsignal,edgefloor,ditheredge,signalfloor,"
-         "inkmin,inkmaxscale,saturation,lumaw,bgpenalty,inkprio\n";
+         "inkmin,inkmaxscale,saturation,lumaw,bgpenalty,inkprio,"
+         "cbmin,cbfull,cbsoft,cbatten,cbhue\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -420,12 +421,136 @@ RgbaImage makeFullMaskContrastFixture(int width, int height) {
   return image;
 }
 
+RgbaImage makeColorBoundaryFixture(int width, int height) {
+  RgbaImage image = makeImage(width, height);
+  for (int y = 0; y < height; ++y) {
+    float sky = std::clamp(1.0f - y / (height * 0.70f), 0.0f, 1.0f);
+    for (int x = 0; x < width; ++x) {
+      float wave = 0.5f + 0.5f * std::sin(x * 0.011f + y * 0.019f);
+      Rgb top{145, 204, 238};
+      Rgb bottom{58, 128, 55};
+      Rgb base{
+          clampByte(static_cast<int>(bottom.r * (1.0f - sky) + top.r * sky +
+                                     wave * 9.0f)),
+          clampByte(static_cast<int>(bottom.g * (1.0f - sky) + top.g * sky +
+                                     wave * 7.0f)),
+          clampByte(static_cast<int>(bottom.b * (1.0f - sky) + top.b * sky +
+                                     wave * 5.0f))};
+      setPixel(image, x, y, addNoise(base, x, y, 131, 4));
+    }
+  }
+
+  auto drawSoftBox = [&](float left, float top, float right, float bottom,
+                         Rgb color, float edgeWidth) {
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        float cx = (left + right) * 0.5f;
+        float cy = (top + bottom) * 0.5f;
+        float halfW = (right - left) * 0.5f;
+        float halfH = (bottom - top) * 0.5f;
+        float d = roundedBoxSdf(x + 0.5f - cx, y + 0.5f - cy, halfW, halfH,
+                                std::min(halfW, halfH) * 0.18f);
+        float alpha = std::clamp((-d + edgeWidth) / (edgeWidth * 2.0f), 0.0f,
+                                 1.0f);
+        if (alpha > 0.0f) blendPixel(image, x, y, color, alpha);
+      }
+    }
+  };
+
+  drawSoftBox(width * 0.03f, height * 0.04f, width * 0.34f, height * 0.17f,
+              Rgb{235, 244, 244}, 4.0f);
+  drawSoftBox(width * 0.23f, height * 0.13f, width * 0.52f, height * 0.25f,
+              Rgb{232, 238, 235}, 5.0f);
+  drawSoftBox(width * 0.73f, height * 0.19f, width * 0.88f, height * 0.34f,
+              Rgb{235, 238, 234}, 4.0f);
+
+  auto drawEllipse = [&](float cx, float cy, float rx, float ry, Rgb color,
+                         float edgeWidth) {
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        float dx = (x + 0.5f - cx) / rx;
+        float dy = (y + 0.5f - cy) / ry;
+        float d = std::sqrt(dx * dx + dy * dy);
+        float alpha = std::clamp((1.0f - d) * edgeWidth + 0.5f, 0.0f, 1.0f);
+        if (alpha > 0.0f) blendPixel(image, x, y, color, alpha);
+      }
+    }
+  };
+
+  auto drawCapsule = [&](float ax, float ay, float bx, float by, float radius,
+                         Rgb color, float edgeWidth) {
+    float vx = bx - ax;
+    float vy = by - ay;
+    float vv = std::max(1.0f, vx * vx + vy * vy);
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        float px = x + 0.5f - ax;
+        float py = y + 0.5f - ay;
+        float h = std::clamp((px * vx + py * vy) / vv, 0.0f, 1.0f);
+        float dx = px - vx * h;
+        float dy = py - vy * h;
+        float d = std::sqrt(dx * dx + dy * dy) - radius;
+        float alpha = std::clamp((-d + edgeWidth) / (edgeWidth * 2.0f), 0.0f,
+                                 1.0f);
+        if (alpha > 0.0f) blendPixel(image, x, y, color, alpha);
+      }
+    }
+  };
+
+  drawCapsule(width * 0.38f, height * 0.11f, width * 0.15f, height * 0.94f,
+              width * 0.075f, Rgb{82, 26, 42}, 3.0f);
+  drawCapsule(width * 0.48f, height * 0.10f, width * 0.88f, height * 0.91f,
+              width * 0.070f, Rgb{96, 30, 48}, 3.0f);
+  drawCapsule(width * 0.36f, height * 0.18f, width * 0.10f, height * 0.76f,
+              width * 0.060f, Rgb{185, 58, 62}, 3.0f);
+  drawCapsule(width * 0.58f, height * 0.16f, width * 0.89f, height * 0.77f,
+              width * 0.058f, Rgb{168, 49, 60}, 3.0f);
+  drawCapsule(width * 0.31f, height * 0.25f, width * 0.18f, height * 0.98f,
+              width * 0.040f, Rgb{218, 74, 78}, 2.4f);
+  drawCapsule(width * 0.69f, height * 0.28f, width * 0.86f, height * 0.98f,
+              width * 0.040f, Rgb{198, 62, 68}, 2.4f);
+
+  drawEllipse(width * 0.50f, height * 0.32f, width * 0.22f, height * 0.23f,
+              Rgb{188, 54, 72}, 22.0f);
+  drawEllipse(width * 0.51f, height * 0.38f, width * 0.16f, height * 0.18f,
+              Rgb{112, 33, 54}, 24.0f);
+  drawCapsule(width * 0.46f, height * 0.20f, width * 0.39f, height * 0.54f,
+              width * 0.018f, Rgb{38, 26, 34}, 2.0f);
+  drawCapsule(width * 0.63f, height * 0.20f, width * 0.69f, height * 0.58f,
+              width * 0.018f, Rgb{42, 28, 36}, 2.0f);
+
+  drawEllipse(width * 0.52f, height * 0.43f, width * 0.092f, height * 0.145f,
+              Rgb{236, 219, 184}, 18.0f);
+  drawCapsule(width * 0.44f, height * 0.56f, width * 0.56f, height * 0.99f,
+              width * 0.035f, Rgb{242, 222, 184}, 2.2f);
+  drawCapsule(width * 0.61f, height * 0.55f, width * 0.67f, height * 0.99f,
+              width * 0.031f, Rgb{230, 205, 171}, 2.2f);
+  drawSoftBox(width * 0.49f, height * 0.58f, width * 0.66f, height * 0.98f,
+              Rgb{34, 40, 48}, 3.0f);
+
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      float ribbon = std::fabs((x - width * 0.14f) * 0.42f -
+                               (y - height * 0.83f));
+      float alpha = std::clamp((height * 0.065f - ribbon) /
+                                   (height * 0.035f),
+                               0.0f, 1.0f);
+      if (alpha > 0.0f) blendPixel(image, x, y, Rgb{215, 62, 66}, alpha);
+    }
+  }
+
+  return image;
+}
+
 RgbaImage makeFixture(std::string_view fixture, int width, int height) {
   if (fixture == "circle-checker") return makeCircleCheckerFixture(width, height);
   if (fixture == "phone-edge") return makePhoneEdgeFixture(width, height);
   if (fixture == "thin-lines") return makeThinLinesFixture(width, height);
   if (fixture == "fullmask-contrast") {
     return makeFullMaskContrastFixture(width, height);
+  }
+  if (fixture == "color-boundary") {
+    return makeColorBoundaryFixture(width, height);
   }
   fail(std::string("unknown fixture: ") + std::string(fixture));
 }
@@ -439,8 +564,9 @@ bool wants(std::string_view selected, const std::string& name) {
 }
 
 std::vector<std::string_view> selectedFixtures(const HarnessConfig& config) {
-  static constexpr std::array<std::string_view, 4> kFixtures{
-      "circle-checker", "phone-edge", "thin-lines", "fullmask-contrast"};
+  static constexpr std::array<std::string_view, 5> kFixtures{
+      "circle-checker", "phone-edge", "thin-lines", "fullmask-contrast",
+      "color-boundary"};
   std::vector<std::string_view> out;
   for (std::string_view fixture : kFixtures) {
     if (wants(config.fixture, fixture)) out.push_back(fixture);
@@ -474,6 +600,23 @@ std::string canonicalTuningName(std::string_view name) {
   if (name == "inkprio" ||
       name == "perceptualPreferredBrightBgInkContrast") {
     return "inkprio";
+  }
+  if (name == "cbmin" || name == "colorBoundarySoftMinDelta" ||
+      name == "colorBoundarySoftMinChroma") {
+    return "cbmin";
+  }
+  if (name == "cbfull" || name == "colorBoundarySoftFullDelta" ||
+      name == "colorBoundarySoftFullChroma") {
+    return "cbfull";
+  }
+  if (name == "cbsoft" || name == "colorBoundarySoftStrength") {
+    return "cbsoft";
+  }
+  if (name == "cbatten" || name == "colorBoundarySignalAttenuation") {
+    return "cbatten";
+  }
+  if (name == "cbhue" || name == "colorBoundaryHueSimilarity") {
+    return "cbhue";
   }
   if (name == "edgefloor" || name == "edgeThresholdFloor") {
     return "edgefloor";
@@ -517,6 +660,16 @@ void applyTuningAssignment(
     tuning.perceptualBrightBgPenalty = value;
   } else if (name == "inkprio") {
     tuning.perceptualPreferredBrightBgInkContrast = value;
+  } else if (name == "cbmin") {
+    tuning.colorBoundarySoftMinDelta = value;
+  } else if (name == "cbfull") {
+    tuning.colorBoundarySoftFullDelta = value;
+  } else if (name == "cbsoft") {
+    tuning.colorBoundarySoftStrength = value;
+  } else if (name == "cbatten") {
+    tuning.colorBoundarySignalAttenuation = value;
+  } else if (name == "cbhue") {
+    tuning.colorBoundaryHueSimilarity = value;
   } else if (name == "edgefloor") {
     tuning.edgeThresholdFloor = value;
   } else if (name == "ditheredge") {
@@ -572,7 +725,7 @@ std::vector<Variant> tuningVariants(const HarnessConfig& config) {
   return out;
 }
 
-std::array<Variant, 11> variants() {
+std::array<Variant, 12> variants() {
   using namespace ascii_debug;
   uint32_t all = kAllStages;
   return {{
@@ -584,6 +737,7 @@ std::array<Variant, 11> variants() {
       {"no-detail-boost", all & ~kStageDetailBoost, {}},
       {"no-edge-mask-fit", all & ~kStageEdgeMaskFit, {}},
       {"no-ink-coverage", all & ~kStageInkCoverageCompensation, {}},
+      {"no-color-boundary", all & ~kStageColorBoundarySoftening, {}},
       {"no-temporal", all & ~kStageForegroundTemporal &
                           ~kStageBackgroundTemporal, {}},
       {"no-bg-polish", all & ~kStageBackgroundTemporal &
@@ -917,7 +1071,7 @@ void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
          "dither_cells,edge_cells,"
          "signal_dampened,detail_boosted,edge_mask_fit,"
-         "ink_coverage_compensated,"
+         "ink_coverage_compensated,color_boundary_softened,"
          "ink_lifted,fg_temporal,bg_temporal,fullmask_bg_contrast\n";
 }
 
@@ -933,6 +1087,7 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
       << stats.edgeMaskFitCount << ','
       << stats.inkCoverageCompensationCount << ','
+      << stats.colorBoundarySofteningCount << ','
       << stats.inkLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','
       << stats.bgTemporalBlendCount << ','
       << stats.fullMaskBgContrastCount << '\n';

@@ -121,6 +121,42 @@ float3 ScaleColorToLuma(float3 rgb, float y255, float targetY255) {
     return saturate(rgb * (targetY255 / y255));
 }
 
+float3 SoftenRgbTowardMean(float3 rgb, float3 mean, float amount) {
+    return saturate(lerp(rgb, mean, amount));
+}
+
+float ChromaHueSimilarity(float3 a, float3 b) {
+    float ay = GetLuma(a);
+    float by = GetLuma(b);
+    float3 ac = a * 255.0f - ay.xxx;
+    float3 bc = b * 255.0f - by.xxx;
+    float a2 = dot(ac, ac);
+    float b2 = dot(bc, bc);
+    if (a2 < 64.0f || b2 < 64.0f) return -1.0f;
+    float dotv = dot(ac, bc);
+    if (dotv <= 0.0f) return -1.0f;
+    return dotv * rsqrt(max(a2 * b2, 1.0f));
+}
+
+float ColorBoundarySoftAmount(float3 fg, float3 bg) {
+    if (ChromaHueSimilarity(fg, bg) < kColorBoundaryHueSimilarity) {
+        return 0.0f;
+    }
+    float3 d = abs(fg - bg) * 255.0f;
+    float colorDelta = max(max(d.r, d.g), d.b);
+    return saturate((colorDelta - (float)kColorBoundarySoftMinDelta) /
+                    max((float)(kColorBoundarySoftFullDelta -
+                                kColorBoundarySoftMinDelta),
+                        1.0f));
+}
+
+float AttenuateSignalForColorBoundary(float signalStrength,
+                                      float boundaryAmount) {
+    float attenuation = min(boundaryAmount * kColorBoundarySignalAttenuation,
+                            240.0f / 256.0f);
+    return saturate(signalStrength * (1.0f - attenuation));
+}
+
 float3 CompressShadowChroma(float3 rgb, float sourceBlueConfidence) {
     float y = GetLuma(rgb);
     float keep = GetShadowSaturation(y);
@@ -380,6 +416,30 @@ struct DotInfo {
     float sourceBlueConfidence;
 };
 
+float MaskColorBoundarySoftAmount(uint mask, DotInfo dots[8], int bitMap[8]) {
+    float3 sumOn = float3(0.0f, 0.0f, 0.0f);
+    float3 sumOff = float3(0.0f, 0.0f, 0.0f);
+    float onCount = 0.0f;
+    float offCount = 0.0f;
+
+    [unroll]
+    for (int i = 0; i < 8; ++i) {
+        uint bit = (uint)bitMap[dots[i].idx];
+        if ((mask & (1u << bit)) != 0u) {
+            sumOn += dots[i].color;
+            onCount += 1.0f;
+        } else {
+            sumOff += dots[i].color;
+            offCount += 1.0f;
+        }
+    }
+
+    if (onCount <= 0.0f || offCount <= 0.0f) {
+        return 0.0f;
+    }
+    return ColorBoundarySoftAmount(sumOn / onCount, sumOff / offCount);
+}
+
 float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
     uint dotCount = countbits(mask & 0xffu);
     if (dotCount == 0u || dotCount == 8u) {
@@ -635,9 +695,15 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         bitmask = ditherMask;
     }
 
+    float edgeFitSignalStrength = signalStrength;
+    if (!useDither) {
+        edgeFitSignalStrength = AttenuateSignalForColorBoundary(
+            signalStrength, MaskColorBoundarySoftAmount(bitmask, dots, bitMap));
+    }
+
     bool edgeMaskFitEligible =
         !useDither && cellRange >= (float)kEdgeMaskFitMinRange &&
-        signalStrength >= kEdgeMaskFitMinSignal;
+        edgeFitSignalStrength >= kEdgeMaskFitMinSignal;
     if (edgeMaskFitEligible) {
         bitmask = FitEdgeMask(bitmask, dots, bitMap);
     }
@@ -676,6 +742,13 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     curFg = max(curFg, (float)kColorLift / 255.0f);
     curBg = max(curBg, (float)kColorLift / 255.0f);
 
+    float colorBoundaryAmount = 0.0f;
+    if (bgCount > 0 && inkCount > 0 && dotCount > 0u && dotCount < 8u) {
+        colorBoundaryAmount = ColorBoundarySoftAmount(curFg, curBg);
+    }
+    float effectiveSignalStrength = AttenuateSignalForColorBoundary(
+        signalStrength, colorBoundaryAmount);
+
     // Intelligent Contrast Management
     // This system dynamically adjusts contrast based on the "Signal Strength" of the cell.
     // Goal:
@@ -687,8 +760,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // We look at both Edge magnitude and Luma difference.
     // - Edge Signal: Ramps from 0 to 1 as edge strength goes from 4 to 16.
     // - Luma Signal: Ramps from 0 to 1 as luma difference goes from 4 to 28.
-    float blendStrength = kSignalStrengthFloor +
-                          (1.0f - kSignalStrengthFloor) * signalStrength;
+    float blendStrength =
+        kSignalStrengthFloor +
+        (1.0f - kSignalStrengthFloor) * effectiveSignalStrength;
 
     // Dampening (Noise Hiding):
     // If signalStrength is low, we interpolate curFg towards curBg.
@@ -697,9 +771,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     // Boosting (Detail Pop):
     // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.
-    if (signalStrength > 0.8f) {
+    if (effectiveSignalStrength > 0.8f) {
         // Normalize the range [0.8, 1.0] to [0.0, 1.0]
-        float boost = (signalStrength - 0.8f) * 5.0f; 
+        float boost = (effectiveSignalStrength - 0.8f) * 5.0f;
         
         // Calculate the midpoint (gray point) between FG and BG
         float3 center = (curFg + curBg) * 0.5f;
@@ -750,7 +824,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         saturate((60.0f - curY) / 60.0f);
     curFg = ApplySaturationAroundLuma(curFg, curY, adaptiveSat / 256.0f);
 
-    if (!useDither && signalStrength >= kInkCoverageMinSignal &&
+    if (!useDither && effectiveSignalStrength >= kInkCoverageMinSignal &&
         bgCount > 0 && inkCount > 0 && dotCount > 0u && dotCount < 8u) {
         float scale =
             min((float)kInkCoverageMaxScale / 256.0f,
@@ -762,6 +836,16 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
                 curFg = ScaleColorToLuma(curFg, coverageY,
                                          (float)kInkCoverageMinLuma);
             }
+        }
+    }
+
+    if (colorBoundaryAmount > 0.0f &&
+        kColorBoundarySoftStrength > 0.0f) {
+        float amount = kColorBoundarySoftStrength * colorBoundaryAmount;
+        if (amount > 0.0f) {
+            float3 mean = sumAll / 8.0f;
+            curFg = SoftenRgbTowardMean(curFg, mean, amount);
+            curBg = SoftenRgbTowardMean(curBg, mean, amount);
         }
     }
 

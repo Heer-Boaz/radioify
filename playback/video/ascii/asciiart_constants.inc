@@ -48,6 +48,11 @@ RADIOIFY_ASCII_SCALE_256(kEdgeMaskFitMinGain, 16)  // min relative reconstructio
 RADIOIFY_ASCII_SCALE_256(kPerceptualLumaErrorWeight, 256)  // extra luma reconstruction weight, 256 == 1.0
 RADIOIFY_ASCII_SCALE_256(kPerceptualBrightBgPenalty, 512)  // low-contrast bright-BG penalty strength, 256 == 1.0
 RADIOIFY_ASCII_LUMA_U8(kPerceptualPreferredBrightBgInkContrast, 36)  // preferred visible ink luma delta before bright BG may win an edge cell
+RADIOIFY_ASCII_LUMA_U8(kColorBoundarySoftMinDelta, 28)  // start treating related-hue FG/BG deltas as tonal shading
+RADIOIFY_ASCII_LUMA_U8(kColorBoundarySoftFullDelta, 112)  // RGB-channel delta where tonal-boundary handling reaches full strength
+RADIOIFY_ASCII_SCALE_256(kColorBoundarySoftStrength, 128)  // max FG/BG color pull toward the cell mean, 256 == 100%
+RADIOIFY_ASCII_SCALE_256(kColorBoundarySignalAttenuation, 224)  // max edge/detail signal reduction for related-hue tonal boundaries
+RADIOIFY_ASCII_SCALE_256(kColorBoundaryHueSimilarity, 112)  // related-hue threshold; 256 == identical chroma direction
 
 // Shadow chroma protection.
 RADIOIFY_ASCII_LUMA_U8(kShadowSatStartLuma, 16)
