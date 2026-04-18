@@ -424,9 +424,14 @@ float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
         score += dot(d, d) + dy * dy * kPerceptualLumaErrorWeight;
     }
     if (bgY > fgY && kPerceptualBrightBgPenalty > 0.0f) {
-        float visibleInkContrast = (bgY - fgY) * kInkVisibleDotCoverage;
+        float bgLead = bgY - fgY;
+        float visibleInkContrast = bgLead * kInkVisibleDotCoverage;
+        float dominanceArea = max(0.0f, 1.0f - kInkVisibleDotCoverage * 2.0f);
+        float bgDominance = bgLead * dominanceArea;
         float missing =
-            kPerceptualBrightBgMinInkContrast - visibleInkContrast;
+            max((float)kPerceptualPreferredBrightBgInkContrast -
+                    visibleInkContrast,
+                bgDominance);
         if (missing > 0.0f) {
             float missingNorm = missing / 255.0f;
             score += missingNorm * missingNorm * onCount *

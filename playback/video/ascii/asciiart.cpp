@@ -179,9 +179,9 @@ struct AsciiTuning {
   int edgeMaskFitMinSignal = kEdgeMaskFitMinSignal;
   int edgeMaskFitMinGain = kEdgeMaskFitMinGain;
   int perceptualLumaErrorWeight = kPerceptualLumaErrorWeight;
-  int perceptualBrightBgMinInkContrast =
-      kPerceptualBrightBgMinInkContrast;
   int perceptualBrightBgPenalty = kPerceptualBrightBgPenalty;
+  int perceptualPreferredBrightBgInkContrast =
+      kPerceptualPreferredBrightBgInkContrast;
 };
 
 FORCE_INLINE void applyTuningOverride(int& dst, int value) {
@@ -210,10 +210,10 @@ AsciiTuning resolveAsciiTuning(
   applyTuningOverride(tuning.edgeMaskFitMinGain, o.edgeMaskFitMinGain);
   applyTuningOverride(tuning.perceptualLumaErrorWeight,
                       o.perceptualLumaErrorWeight);
-  applyTuningOverride(tuning.perceptualBrightBgMinInkContrast,
-                      o.perceptualBrightBgMinInkContrast);
   applyTuningOverride(tuning.perceptualBrightBgPenalty,
                       o.perceptualBrightBgPenalty);
+  applyTuningOverride(tuning.perceptualPreferredBrightBgInkContrast,
+                      o.perceptualPreferredBrightBgInkContrast);
   return tuning;
 }
 
@@ -489,9 +489,14 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
   }
 
   if (bgY > fgY && tuning.perceptualBrightBgPenalty > 0) {
-    const int visibleInkContrast = ((bgY - fgY) * coverage + 128) >> 8;
+    const int bgLead = bgY - fgY;
+    const int visibleInkContrast = (bgLead * coverage + 128) >> 8;
+    const int dominanceArea = std::max(0, 256 - coverage * 2);
+    const int bgDominance = (bgLead * dominanceArea + 128) >> 8;
     const int missing =
-        tuning.perceptualBrightBgMinInkContrast - visibleInkContrast;
+        std::max(tuning.perceptualPreferredBrightBgInkContrast -
+                     visibleInkContrast,
+                 bgDominance);
     if (missing > 0) {
       int64_t displayScore = score;
       displayScore +=

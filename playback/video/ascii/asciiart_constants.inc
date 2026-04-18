@@ -46,8 +46,8 @@ RADIOIFY_ASCII_LUMA_U8(kEdgeMaskFitMinRange, 18) // min local luma span for cell
 RADIOIFY_ASCII_SIGNAL_U8(kEdgeMaskFitMinSignal, 128)  // min edge/luma signal for structural mask fitting
 RADIOIFY_ASCII_SCALE_256(kEdgeMaskFitMinGain, 16)  // min relative reconstruction-error drop, 256 == 100%
 RADIOIFY_ASCII_SCALE_256(kPerceptualLumaErrorWeight, 256)  // extra luma reconstruction weight, 256 == 1.0
-RADIOIFY_ASCII_LUMA_U8(kPerceptualBrightBgMinInkContrast, 18)  // required visible ink luma delta when BG is brighter
 RADIOIFY_ASCII_SCALE_256(kPerceptualBrightBgPenalty, 512)  // low-contrast bright-BG penalty strength, 256 == 1.0
+RADIOIFY_ASCII_LUMA_U8(kPerceptualPreferredBrightBgInkContrast, 36)  // preferred visible ink luma delta before bright BG may win an edge cell
 
 // Shadow chroma protection.
 RADIOIFY_ASCII_LUMA_U8(kShadowSatStartLuma, 16)

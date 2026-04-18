@@ -66,8 +66,8 @@ struct RenderOptions {
     int edgeMaskFitMinSignal = -1;
     int edgeMaskFitMinGain = -1;
     int perceptualLumaErrorWeight = -1;
-    int perceptualBrightBgMinInkContrast = -1;
     int perceptualBrightBgPenalty = -1;
+    int perceptualPreferredBrightBgInkContrast = -1;
   } tuning;
 };
 
