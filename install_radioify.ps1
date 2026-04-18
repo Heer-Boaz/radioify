@@ -50,13 +50,6 @@ if (-not $SkipPackage -and -not $explicitPackageDir) {
     finally {
         $WhatIfPreference = $previousWhatIfPreference
     }
-    $packageExitCode = 0
-    if (Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue) {
-        $packageExitCode = [int]$LASTEXITCODE
-    }
-    if ($packageExitCode -ne 0) {
-        throw "Packaging failed with exit code $packageExitCode."
-    }
 }
 
 if (-not (Test-Path -LiteralPath $manifestPath)) {
