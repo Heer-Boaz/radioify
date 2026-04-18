@@ -178,6 +178,10 @@ struct AsciiTuning {
   int edgeMaskFitMinRange = kEdgeMaskFitMinRange;
   int edgeMaskFitMinSignal = kEdgeMaskFitMinSignal;
   int edgeMaskFitMinGain = kEdgeMaskFitMinGain;
+  int perceptualLumaErrorWeight = kPerceptualLumaErrorWeight;
+  int perceptualBrightBgMinInkContrast =
+      kPerceptualBrightBgMinInkContrast;
+  int perceptualBrightBgPenalty = kPerceptualBrightBgPenalty;
 };
 
 FORCE_INLINE void applyTuningOverride(int& dst, int value) {
@@ -204,6 +208,12 @@ AsciiTuning resolveAsciiTuning(
   applyTuningOverride(tuning.edgeMaskFitMinRange, o.edgeMaskFitMinRange);
   applyTuningOverride(tuning.edgeMaskFitMinSignal, o.edgeMaskFitMinSignal);
   applyTuningOverride(tuning.edgeMaskFitMinGain, o.edgeMaskFitMinGain);
+  applyTuningOverride(tuning.perceptualLumaErrorWeight,
+                      o.perceptualLumaErrorWeight);
+  applyTuningOverride(tuning.perceptualBrightBgMinInkContrast,
+                      o.perceptualBrightBgMinInkContrast);
+  applyTuningOverride(tuning.perceptualBrightBgPenalty,
+                      o.perceptualBrightBgPenalty);
   return tuning;
 }
 
@@ -392,6 +402,19 @@ FORCE_INLINE int countMaskDots(int mask) {
   return count;
 }
 
+FORCE_INLINE int perceptualDisplayError(uint8_t srcR, uint8_t srcG,
+                                        uint8_t srcB, int predR, int predG,
+                                        int predB, int predY,
+                                        const AsciiTuning& tuning) {
+  const int dr = static_cast<int>(srcR) - predR;
+  const int dg = static_cast<int>(srcG) - predG;
+  const int db = static_cast<int>(srcB) - predB;
+  const int dy = static_cast<int>(rgbToY(srcR, srcG, srcB)) - predY;
+  const int lumaError =
+      (dy * dy * tuning.perceptualLumaErrorWeight + 128) >> 8;
+  return dr * dr + dg * dg + db * db + lumaError;
+}
+
 int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
                      const uint8_t* gVals, const uint8_t* bVals,
                      const uint8_t* bitIds, const uint8_t* validVals,
@@ -443,6 +466,15 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
   const int predOnR = (fgR * coverage + bgR * (256 - coverage) + 128) >> 8;
   const int predOnG = (fgG * coverage + bgG * (256 - coverage) + 128) >> 8;
   const int predOnB = (fgB * coverage + bgB * (256 - coverage) + 128) >> 8;
+  const int bgY = rgbToY(static_cast<uint8_t>(bgR),
+                         static_cast<uint8_t>(bgG),
+                         static_cast<uint8_t>(bgB));
+  const int fgY = rgbToY(static_cast<uint8_t>(fgR),
+                         static_cast<uint8_t>(fgG),
+                         static_cast<uint8_t>(fgB));
+  const int predOnY = rgbToY(static_cast<uint8_t>(predOnR),
+                             static_cast<uint8_t>(predOnG),
+                             static_cast<uint8_t>(predOnB));
 
   int score = 0;
   for (int i = 0; i < 8; ++i) {
@@ -451,10 +483,25 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
     const int pr = on ? predOnR : bgR;
     const int pg = on ? predOnG : bgG;
     const int pb = on ? predOnB : bgB;
-    const int dr = static_cast<int>(rVals[i]) - pr;
-    const int dg = static_cast<int>(gVals[i]) - pg;
-    const int db = static_cast<int>(bVals[i]) - pb;
-    score += dr * dr + dg * dg + db * db;
+    const int py = on ? predOnY : bgY;
+    score += perceptualDisplayError(rVals[i], gVals[i], bVals[i], pr, pg,
+                                    pb, py, tuning);
+  }
+
+  if (bgY > fgY && tuning.perceptualBrightBgPenalty > 0) {
+    const int visibleInkContrast = ((bgY - fgY) * coverage + 128) >> 8;
+    const int missing =
+        tuning.perceptualBrightBgMinInkContrast - visibleInkContrast;
+    if (missing > 0) {
+      int64_t displayScore = score;
+      displayScore +=
+          (static_cast<int64_t>(missing) * missing * onCount *
+               tuning.perceptualBrightBgPenalty +
+           128) >>
+          8;
+      score = static_cast<int>(
+          std::min<int64_t>(displayScore, kEdgeMaskFitInvalidScore - 1));
+    }
   }
 
   return score;

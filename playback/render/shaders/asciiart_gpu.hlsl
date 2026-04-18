@@ -409,14 +409,29 @@ float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
                       1.0f / max(kInkVisibleDotCoverage, 1e-5f));
     float3 fg = saturate(bg + (meanOn - bg) * scale);
     float3 predOn = lerp(bg, fg, kInkVisibleDotCoverage);
+    float bgY = GetLuma(bg);
+    float fgY = GetLuma(fg);
+    float predOnY = GetLuma(predOn);
 
     float score = 0.0f;
     [unroll]
     for (int j = 0; j < 8; ++j) {
         uint bit = (uint)bitMap[dots[j].idx];
-        float3 pred = ((mask & (1u << bit)) != 0u) ? predOn : bg;
+        bool on = ((mask & (1u << bit)) != 0u);
+        float3 pred = on ? predOn : bg;
         float3 d = dots[j].color - pred;
-        score += dot(d, d);
+        float dy = (dots[j].luma - (on ? predOnY : bgY)) / 255.0f;
+        score += dot(d, d) + dy * dy * kPerceptualLumaErrorWeight;
+    }
+    if (bgY > fgY && kPerceptualBrightBgPenalty > 0.0f) {
+        float visibleInkContrast = (bgY - fgY) * kInkVisibleDotCoverage;
+        float missing =
+            kPerceptualBrightBgMinInkContrast - visibleInkContrast;
+        if (missing > 0.0f) {
+            float missingNorm = missing / 255.0f;
+            score += missingNorm * missingNorm * onCount *
+                     kPerceptualBrightBgPenalty;
+        }
     }
     return score;
 }

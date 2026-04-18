@@ -173,7 +173,7 @@ void printUsage() {
       << "  --sweep <name=value,value,...>\n"
       << "  tuning names: inkcov,covmax,covsignal,covminluma,"
          "fitgain,fitrange,fitsignal,edgefloor,ditheredge,signalfloor,"
-         "inkmin,inkmaxscale,saturation\n";
+         "inkmin,inkmaxscale,saturation,lumaw,bgbias,bgpenalty\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -465,6 +465,15 @@ std::string canonicalTuningName(std::string_view name) {
   if (name == "fitsignal" || name == "edgeMaskFitMinSignal") {
     return "fitsignal";
   }
+  if (name == "lumaw" || name == "perceptualLumaErrorWeight") {
+    return "lumaw";
+  }
+  if (name == "bgbias" || name == "perceptualBrightBgMinInkContrast") {
+    return "bgbias";
+  }
+  if (name == "bgpenalty" || name == "perceptualBrightBgPenalty") {
+    return "bgpenalty";
+  }
   if (name == "edgefloor" || name == "edgeThresholdFloor") {
     return "edgefloor";
   }
@@ -501,6 +510,12 @@ void applyTuningAssignment(
     tuning.edgeMaskFitMinRange = value;
   } else if (name == "fitsignal") {
     tuning.edgeMaskFitMinSignal = value;
+  } else if (name == "lumaw") {
+    tuning.perceptualLumaErrorWeight = value;
+  } else if (name == "bgbias") {
+    tuning.perceptualBrightBgMinInkContrast = value;
+  } else if (name == "bgpenalty") {
+    tuning.perceptualBrightBgPenalty = value;
   } else if (name == "edgefloor") {
     tuning.edgeThresholdFloor = value;
   } else if (name == "ditheredge") {
