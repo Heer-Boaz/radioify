@@ -60,6 +60,7 @@ struct RenderStats {
   uint64_t ditherCellCount = 0;
   uint64_t edgeCellCount = 0;
   uint64_t brightBgSwapCount = 0;
+  uint64_t brightBgSwapRejectedByScoreCount = 0;
   uint64_t signalDampenCount = 0;
   uint64_t detailBoostCount = 0;
   uint64_t edgeMaskFitCount = 0;

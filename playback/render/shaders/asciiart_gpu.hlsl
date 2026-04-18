@@ -418,6 +418,11 @@ float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
         float3 d = dots[j].color - pred;
         score += dot(d, d);
     }
+    if (offCount < onCount) {
+        float3 surfaceDelta = meanOn - bg;
+        score += dot(surfaceDelta, surfaceDelta) *
+                 (onCount - offCount) * kEdgeMaskBgSurfaceWeight;
+    }
     return score;
 }
 
@@ -615,8 +620,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         bitmask = ditherMask;
     }
 
-    if (!useDither && cellRange >= (float)kEdgeMaskFitMinRange &&
-        signalStrength >= kEdgeMaskFitMinSignal) {
+    bool edgeMaskFitEligible =
+        !useDither && cellRange >= (float)kEdgeMaskFitMinRange &&
+        signalStrength >= kEdgeMaskFitMinSignal;
+    if (edgeMaskFitEligible) {
         bitmask = FitEdgeMask(bitmask, dots, bitMap);
     }
 
@@ -675,7 +682,18 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
             signalStrength >= kBrightBgSwapMinSignal &&
             bgY >= fgY + kBrightBgSwapDelta;
-        if (bgIsBrightFeature) {
+        bool swapBeatsEdgeFit = true;
+        if (bgIsBrightFeature && edgeMaskFitEligible) {
+            uint swappedMask = (~bitmask) & 0xffu;
+            float currentScore = EdgeMaskFitScore(bitmask, dots, bitMap);
+            float swappedScore = EdgeMaskFitScore(swappedMask, dots, bitMap);
+            swapBeatsEdgeFit =
+                swappedScore < 3.402823e+37f &&
+                (currentScore >= 3.402823e+37f ||
+                 swappedScore <=
+                     currentScore * (1.0f - kBrightBgSwapScoreMinGain));
+        }
+        if (bgIsBrightFeature && swapBeatsEdgeFit) {
             float3 swapColor = curFg;
             curFg = curBg;
             curBg = swapColor;

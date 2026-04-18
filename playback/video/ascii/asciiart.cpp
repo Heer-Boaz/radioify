@@ -412,6 +412,22 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
     score += dr * dr + dg * dg + db * db;
   }
 
+  if (offCount < onCount) {
+    const int dr = meanOnR - bgR;
+    const int dg = meanOnG - bgG;
+    const int db = meanOnB - bgB;
+    const int surfaceDist = dr * dr + dg * dg + db * db;
+    const int dominance = onCount - offCount;
+    int64_t displayScore = score;
+    displayScore +=
+        (static_cast<int64_t>(surfaceDist) * dominance *
+             kEdgeMaskBgSurfaceWeight +
+         128) >>
+        8;
+    score = static_cast<int>(
+        std::min<int64_t>(displayScore, kEdgeMaskFitInvalidScore - 1));
+  }
+
   return score;
 }
 
@@ -1070,11 +1086,14 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               bitmask = ditherMask;
             }
 
-            if (!useDither &&
+            const bool useEdgeMaskFit =
                 renderStageEnabled<DebugMode>(stageMask,
-                                              ascii_debug::kStageEdgeMaskFit) &&
-                validCount >= 3 && cellLumRange >= kEdgeMaskFitMinRange &&
-                signalStrength >= kEdgeMaskFitMinSignal) {
+                                              ascii_debug::kStageEdgeMaskFit);
+            const bool edgeMaskFitEligible =
+                !useDither && useEdgeMaskFit && validCount >= 3 &&
+                cellLumRange >= kEdgeMaskFitMinRange &&
+                signalStrength >= kEdgeMaskFitMinSignal;
+            if (edgeMaskFitEligible) {
               int fittedMask =
                   fitEdgeMask(bitmask, validMask, rVals, gVals, bVals, bitIds,
                               validVals);
@@ -1197,7 +1216,23 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                     bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
                     signalStrength >= kBrightBgSwapMinSignal &&
                     bgY >= fgY + kBrightBgSwapDelta;
-                if (bgIsBrightFeature) {
+                bool swapBeatsEdgeFit = true;
+                if (bgIsBrightFeature && edgeMaskFitEligible) {
+                  const int swappedMask = validMask ^ bitmask;
+                  const int currentScore = edgeMaskFitScore(
+                      bitmask, validMask, rVals, gVals, bVals, bitIds,
+                      validVals);
+                  const int swappedScore = edgeMaskFitScore(
+                      swappedMask, validMask, rVals, gVals, bVals, bitIds,
+                      validVals);
+                  swapBeatsEdgeFit =
+                      swappedScore < kEdgeMaskFitInvalidScore &&
+                      (currentScore >= kEdgeMaskFitInvalidScore ||
+                       static_cast<int64_t>(swappedScore) * 256 <=
+                           static_cast<int64_t>(currentScore) *
+                               (256 - kBrightBgSwapScoreMinGain));
+                }
+                if (bgIsBrightFeature && swapBeatsEdgeFit) {
                   if constexpr (DebugMode) {
                     if (debugStats) {
                       ++debugStats->brightBgSwapCount;
@@ -1210,6 +1245,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   std::swap(inkCount, bgCount);
                   bitmask = validMask ^ bitmask;
                   dotCount = validCount - dotCount;
+                } else if (bgIsBrightFeature) {
+                  if constexpr (DebugMode) {
+                    if (debugStats) {
+                      ++debugStats->brightBgSwapRejectedByScoreCount;
+                    }
+                  }
                 }
               }
 

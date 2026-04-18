@@ -678,6 +678,7 @@ double averageDots(const ascii_debug::RenderStats& stats) {
 void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
          "dither_cells,edge_cells,bright_bg_swaps,"
+         "bright_bg_swaps_rejected_by_score,"
          "signal_dampened,detail_boosted,edge_mask_fit,"
          "ink_coverage_compensated,"
          "ink_lifted,bg_lifted,"
@@ -694,6 +695,7 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << std::setprecision(3) << averageDots(stats) << std::setprecision(2)
       << ',' << stats.ditherCellCount << ',' << stats.edgeCellCount << ','
       << stats.brightBgSwapCount << ','
+      << stats.brightBgSwapRejectedByScoreCount << ','
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
       << stats.edgeMaskFitCount << ','
       << stats.inkCoverageCompensationCount << ','
@@ -768,7 +770,9 @@ RenderedVariant renderVariant(const HarnessConfig& config,
             << "%  dots=" << std::setprecision(2)
             << averageDots(rendered.stats)
             << "  edgefit=" << rendered.stats.edgeMaskFitCount
-            << "  swaps=" << rendered.stats.brightBgSwapCount << '\n';
+            << "  swaps=" << rendered.stats.brightBgSwapCount
+            << "  rejected="
+            << rendered.stats.brightBgSwapRejectedByScoreCount << '\n';
   return rendered;
 }
 
