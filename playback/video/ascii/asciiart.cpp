@@ -169,7 +169,6 @@ struct AsciiTuning {
   int edgeThresholdFloor = kEdgeThresholdFloor;
   int signalStrengthFloor = kSignalStrengthFloor;
   int inkMinLuma = kInkMinLuma;
-  int bgMinLuma = kBgMinLuma;
   int inkMaxScale = kInkMaxScale;
   int colorSaturation = kColorSaturation;
   int inkCoverageMinSignal = kInkCoverageMinSignal;
@@ -179,11 +178,6 @@ struct AsciiTuning {
   int edgeMaskFitMinRange = kEdgeMaskFitMinRange;
   int edgeMaskFitMinSignal = kEdgeMaskFitMinSignal;
   int edgeMaskFitMinGain = kEdgeMaskFitMinGain;
-  int edgeMaskBgSurfaceWeight = kEdgeMaskBgSurfaceWeight;
-  int brightBgSwapDelta = kBrightBgSwapDelta;
-  int brightBgSwapMaxDots = kBrightBgSwapMaxDots;
-  int brightBgSwapMinSignal = kBrightBgSwapMinSignal;
-  int brightBgSwapScoreMinGain = kBrightBgSwapScoreMinGain;
 };
 
 FORCE_INLINE void applyTuningOverride(int& dst, int value) {
@@ -199,7 +193,6 @@ AsciiTuning resolveAsciiTuning(
   applyTuningOverride(tuning.edgeThresholdFloor, o.edgeThresholdFloor);
   applyTuningOverride(tuning.signalStrengthFloor, o.signalStrengthFloor);
   applyTuningOverride(tuning.inkMinLuma, o.inkMinLuma);
-  applyTuningOverride(tuning.bgMinLuma, o.bgMinLuma);
   applyTuningOverride(tuning.inkMaxScale, o.inkMaxScale);
   applyTuningOverride(tuning.colorSaturation, o.colorSaturation);
   applyTuningOverride(tuning.inkCoverageMinSignal,
@@ -211,14 +204,6 @@ AsciiTuning resolveAsciiTuning(
   applyTuningOverride(tuning.edgeMaskFitMinRange, o.edgeMaskFitMinRange);
   applyTuningOverride(tuning.edgeMaskFitMinSignal, o.edgeMaskFitMinSignal);
   applyTuningOverride(tuning.edgeMaskFitMinGain, o.edgeMaskFitMinGain);
-  applyTuningOverride(tuning.edgeMaskBgSurfaceWeight,
-                      o.edgeMaskBgSurfaceWeight);
-  applyTuningOverride(tuning.brightBgSwapDelta, o.brightBgSwapDelta);
-  applyTuningOverride(tuning.brightBgSwapMaxDots, o.brightBgSwapMaxDots);
-  applyTuningOverride(tuning.brightBgSwapMinSignal,
-                      o.brightBgSwapMinSignal);
-  applyTuningOverride(tuning.brightBgSwapScoreMinGain,
-                      o.brightBgSwapScoreMinGain);
   return tuning;
 }
 
@@ -470,22 +455,6 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
     const int dg = static_cast<int>(gVals[i]) - pg;
     const int db = static_cast<int>(bVals[i]) - pb;
     score += dr * dr + dg * dg + db * db;
-  }
-
-  if (offCount < onCount) {
-    const int dr = meanOnR - bgR;
-    const int dg = meanOnG - bgG;
-    const int db = meanOnB - bgB;
-    const int surfaceDist = dr * dr + dg * dg + db * db;
-    const int dominance = onCount - offCount;
-    int64_t displayScore = score;
-    displayScore +=
-        (static_cast<int64_t>(surfaceDist) * dominance *
-             tuning.edgeMaskBgSurfaceWeight +
-         128) >>
-        8;
-    score = static_cast<int>(
-        std::min<int64_t>(displayScore, kEdgeMaskFitInvalidScore - 1));
   }
 
   return score;
@@ -1274,54 +1243,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // We look at both Edge magnitude and Luma difference.
               // - Edge Signal: Ramps from 0 to 1 as edge strength goes from 4 to 16.
               // - Luma Signal: Ramps from 0 to 1 as luma difference goes from 4 to 28.
-              if (!useDither && bgCount > 0 && inkCount > 0) {
-                const int fgY = rgbToY(curR, curG, curB);
-                const int bgY = rgbToY(bgR, bgG, bgB);
-                const bool bgIsBrightFeature =
-                    renderStageEnabled<DebugMode>(
-                        stageMask, ascii_debug::kStageBrightBgSwap) &&
-                    bgCount <= inkCount &&
-                    bgCount <= tuning.brightBgSwapMaxDots &&
-                    signalStrength >= tuning.brightBgSwapMinSignal &&
-                    bgY >= fgY + tuning.brightBgSwapDelta;
-                bool swapBeatsEdgeFit = true;
-                if (bgIsBrightFeature && edgeMaskFitEligible) {
-                  const int swappedMask = validMask ^ bitmask;
-                  const int currentScore = edgeMaskFitScore(
-                      bitmask, validMask, rVals, gVals, bVals, bitIds,
-                      validVals, tuning);
-                  const int swappedScore = edgeMaskFitScore(
-                      swappedMask, validMask, rVals, gVals, bVals, bitIds,
-                      validVals, tuning);
-                  swapBeatsEdgeFit =
-                      swappedScore < kEdgeMaskFitInvalidScore &&
-                      (currentScore >= kEdgeMaskFitInvalidScore ||
-                       static_cast<int64_t>(swappedScore) * 256 <=
-                           static_cast<int64_t>(currentScore) *
-                               (256 - tuning.brightBgSwapScoreMinGain));
-                }
-                if (bgIsBrightFeature && swapBeatsEdgeFit) {
-                  if constexpr (DebugMode) {
-                    if (debugStats) {
-                      ++debugStats->brightBgSwapCount;
-                    }
-                  }
-                  std::swap(curR, bgR);
-                  std::swap(curG, bgG);
-                  std::swap(curB, bgB);
-                  std::swap(curSourceBlue, bgSourceBlue);
-                  std::swap(inkCount, bgCount);
-                  bitmask = validMask ^ bitmask;
-                  dotCount = validCount - dotCount;
-                } else if (bgIsBrightFeature) {
-                  if constexpr (DebugMode) {
-                    if (debugStats) {
-                      ++debugStats->brightBgSwapRejectedByScoreCount;
-                    }
-                  }
-                }
-              }
-
               int blendStrength =
                   tuning.signalStrengthFloor +
                   ((signalStrength * (255 - tuning.signalStrengthFloor) +
@@ -1544,31 +1465,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
 
               int bgBlendAlpha = 230;
 
-              // bgR/G/B already calculated above for blending
-              int bgY =
-                  (static_cast<int>(bgR) * 54 + static_cast<int>(bgG) * 183 +
-                   static_cast<int>(bgB) * 19 + 128) >>
-                  8;
-              if (renderStageEnabled<DebugMode>(
-                      stageMask, ascii_debug::kStageBgLumaFloor) &&
-                  bgY < tuning.bgMinLuma) {
-                if constexpr (DebugMode) {
-                  if (debugStats) ++debugStats->bgLumaFloorCount;
-                }
-                if (bgY <= 0) {
-                  bgR = static_cast<uint8_t>(tuning.bgMinLuma);
-                  bgG = static_cast<uint8_t>(tuning.bgMinLuma);
-                  bgB = static_cast<uint8_t>(tuning.bgMinLuma);
-                } else {
-                  int scale = (static_cast<int>(tuning.bgMinLuma) * 256) / bgY;
-                  bgR = static_cast<uint8_t>(std::min(
-                      255, (static_cast<int>(bgR) * scale + 128) >> 8));
-                  bgG = static_cast<uint8_t>(std::min(
-                      255, (static_cast<int>(bgG) * scale + 128) >> 8));
-                  bgB = static_cast<uint8_t>(std::min(
-                      255, (static_cast<int>(bgB) * scale + 128) >> 8));
-                }
-              }
               if (renderStageEnabled<DebugMode>(
                       stageMask, ascii_debug::kStageBackgroundTemporal) &&
                   prevBgValid) {

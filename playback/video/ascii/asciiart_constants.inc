@@ -30,7 +30,6 @@ RADIOIFY_ASCII_FLOAT(kHdrScale, 10000.0f / kHdrReferenceNits)  // PQ/HLG nit sca
 // Pen color correction.
 RADIOIFY_ASCII_LUMA_U8(kColorLift, 0)         // minimum RGB channel value
 RADIOIFY_ASCII_LUMA_U8(kInkMinLuma, 40)       // minimum foreground luma
-RADIOIFY_ASCII_LUMA_U8(kBgMinLuma, 10)        // minimum background luma
 RADIOIFY_ASCII_COUNT(kInkMaxScale, 1280)      // fixed 8.8 maximum ink lift
 RADIOIFY_ASCII_SIGNAL_U8(kSignalStrengthFloor, 51)  // minimum FG/BG contrast mix
 RADIOIFY_ASCII_COUNT(kColorSaturation, 340)   // saturation scale, 256 == 1.0
@@ -46,11 +45,6 @@ RADIOIFY_ASCII_LUMA_U8(kEdgeThresholdFloor, 6)   // minimum per-dot luma thresho
 RADIOIFY_ASCII_LUMA_U8(kEdgeMaskFitMinRange, 18) // min local luma span for cell-level edge mask fitting
 RADIOIFY_ASCII_SIGNAL_U8(kEdgeMaskFitMinSignal, 128)  // min edge/luma signal for structural mask fitting
 RADIOIFY_ASCII_SCALE_256(kEdgeMaskFitMinGain, 16)  // min relative reconstruction-error drop, 256 == 100%
-RADIOIFY_ASCII_SCALE_256(kEdgeMaskBgSurfaceWeight, 96)  // penalty when a minority color would become the full-cell BG
-RADIOIFY_ASCII_LUMA_U8(kBrightBgSwapDelta, 12)   // BG luma lead needed to swap
-RADIOIFY_ASCII_COUNT(kBrightBgSwapMaxDots, 4)    // bright-feature dot count limit
-RADIOIFY_ASCII_SIGNAL_U8(kBrightBgSwapMinSignal, 128)  // signal needed to swap
-RADIOIFY_ASCII_SCALE_256(kBrightBgSwapScoreMinGain, 1)  // score win needed before inverting edge-fitted masks
 
 // Shadow chroma protection.
 RADIOIFY_ASCII_LUMA_U8(kShadowSatStartLuma, 16)

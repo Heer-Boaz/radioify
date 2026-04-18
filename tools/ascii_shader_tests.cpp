@@ -158,13 +158,12 @@ TuningAxis parseTuningAxis(std::string_view text) {
 void printUsage() {
   std::cout
       << "ascii_shader_tests [options]\n"
-      << "  --fixture <all|circle-checker|phone-edge|thin-lines>\n"
+      << "  --fixture <all|circle-checker|phone-edge|thin-lines|"
+         "fullmask-contrast>\n"
       << "  --variant <all|current|ink-only|no-dither|no-edge-detect|"
-         "no-bg-swaps|no-bright-bg-swap|"
          "no-signal-dampen|no-detail-boost|no-edge-mask-fit|"
          "no-ink-coverage|"
-         "no-temporal|"
-         "no-bg-luma-floor|no-bg-polish>\n"
+         "no-temporal|no-bg-polish|structure-no-bg>\n"
       << "  --out-dir <path>\n"
       << "  --width <pixels>\n"
       << "  --height <pixels>\n"
@@ -173,9 +172,8 @@ void printUsage() {
       << "  --tune <name=value[,name=value...]>\n"
       << "  --sweep <name=value,value,...>\n"
       << "  tuning names: inkcov,covmax,covsignal,covminluma,"
-         "edgebg,fitgain,fitrange,fitsignal,swapdelta,swapdots,"
-         "swapsignal,swapscore,edgefloor,ditheredge,signalfloor,"
-         "inkmin,bgmin,inkmaxscale,saturation\n";
+         "fitgain,fitrange,fitsignal,edgefloor,ditheredge,signalfloor,"
+         "inkmin,inkmaxscale,saturation\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -396,10 +394,39 @@ RgbaImage makeThinLinesFixture(int width, int height) {
   return image;
 }
 
+RgbaImage makeFullMaskContrastFixture(int width, int height) {
+  RgbaImage image = makeImage(width, height);
+  fillNoisyChecker(image, Rgb{24, 28, 32}, Rgb{34, 39, 44}, 28, 22, 71);
+
+  auto fillRect = [&](float left, float top, float right, float bottom,
+                      Rgb color, uint32_t seed) {
+    int x0 = std::clamp(static_cast<int>(std::lround(left * width)), 0, width);
+    int y0 = std::clamp(static_cast<int>(std::lround(top * height)), 0, height);
+    int x1 = std::clamp(static_cast<int>(std::lround(right * width)), 0, width);
+    int y1 =
+        std::clamp(static_cast<int>(std::lround(bottom * height)), 0, height);
+    for (int y = y0; y < y1; ++y) {
+      for (int x = x0; x < x1; ++x) {
+        setPixel(image, x, y, addNoise(color, x, y, seed, 1));
+      }
+    }
+  };
+
+  fillRect(0.10f, 0.14f, 0.38f, 0.36f, Rgb{214, 224, 232}, 83);
+  fillRect(0.45f, 0.18f, 0.88f, 0.40f, Rgb{184, 198, 212}, 89);
+  fillRect(0.16f, 0.56f, 0.68f, 0.80f, Rgb{230, 214, 170}, 97);
+  fillRect(0.72f, 0.58f, 0.92f, 0.82f, Rgb{206, 230, 202}, 101);
+
+  return image;
+}
+
 RgbaImage makeFixture(std::string_view fixture, int width, int height) {
   if (fixture == "circle-checker") return makeCircleCheckerFixture(width, height);
   if (fixture == "phone-edge") return makePhoneEdgeFixture(width, height);
   if (fixture == "thin-lines") return makeThinLinesFixture(width, height);
+  if (fixture == "fullmask-contrast") {
+    return makeFullMaskContrastFixture(width, height);
+  }
   fail(std::string("unknown fixture: ") + std::string(fixture));
 }
 
@@ -412,8 +439,8 @@ bool wants(std::string_view selected, const std::string& name) {
 }
 
 std::vector<std::string_view> selectedFixtures(const HarnessConfig& config) {
-  static constexpr std::array<std::string_view, 3> kFixtures{
-      "circle-checker", "phone-edge", "thin-lines"};
+  static constexpr std::array<std::string_view, 4> kFixtures{
+      "circle-checker", "phone-edge", "thin-lines", "fullmask-contrast"};
   std::vector<std::string_view> out;
   for (std::string_view fixture : kFixtures) {
     if (wants(config.fixture, fixture)) out.push_back(fixture);
@@ -431,27 +458,12 @@ std::string canonicalTuningName(std::string_view name) {
   if (name == "covminluma" || name == "inkCoverageMinLuma") {
     return "covminluma";
   }
-  if (name == "edgebg" || name == "edgeMaskBgSurfaceWeight") {
-    return "edgebg";
-  }
   if (name == "fitgain" || name == "edgeMaskFitMinGain") return "fitgain";
   if (name == "fitrange" || name == "edgeMaskFitMinRange") {
     return "fitrange";
   }
   if (name == "fitsignal" || name == "edgeMaskFitMinSignal") {
     return "fitsignal";
-  }
-  if (name == "swapdelta" || name == "brightBgSwapDelta") {
-    return "swapdelta";
-  }
-  if (name == "swapdots" || name == "brightBgSwapMaxDots") {
-    return "swapdots";
-  }
-  if (name == "swapsignal" || name == "brightBgSwapMinSignal") {
-    return "swapsignal";
-  }
-  if (name == "swapscore" || name == "brightBgSwapScoreMinGain") {
-    return "swapscore";
   }
   if (name == "edgefloor" || name == "edgeThresholdFloor") {
     return "edgefloor";
@@ -461,7 +473,6 @@ std::string canonicalTuningName(std::string_view name) {
     return "signalfloor";
   }
   if (name == "inkmin" || name == "inkMinLuma") return "inkmin";
-  if (name == "bgmin" || name == "bgMinLuma") return "bgmin";
   if (name == "inkmaxscale" || name == "inkMaxScale") {
     return "inkmaxscale";
   }
@@ -484,22 +495,12 @@ void applyTuningAssignment(
     tuning.inkCoverageMinSignal = value;
   } else if (name == "covminluma") {
     tuning.inkCoverageMinLuma = value;
-  } else if (name == "edgebg") {
-    tuning.edgeMaskBgSurfaceWeight = value;
   } else if (name == "fitgain") {
     tuning.edgeMaskFitMinGain = value;
   } else if (name == "fitrange") {
     tuning.edgeMaskFitMinRange = value;
   } else if (name == "fitsignal") {
     tuning.edgeMaskFitMinSignal = value;
-  } else if (name == "swapdelta") {
-    tuning.brightBgSwapDelta = value;
-  } else if (name == "swapdots") {
-    tuning.brightBgSwapMaxDots = value;
-  } else if (name == "swapsignal") {
-    tuning.brightBgSwapMinSignal = value;
-  } else if (name == "swapscore") {
-    tuning.brightBgSwapScoreMinGain = value;
   } else if (name == "edgefloor") {
     tuning.edgeThresholdFloor = value;
   } else if (name == "ditheredge") {
@@ -508,8 +509,6 @@ void applyTuningAssignment(
     tuning.signalStrengthFloor = value;
   } else if (name == "inkmin") {
     tuning.inkMinLuma = value;
-  } else if (name == "bgmin") {
-    tuning.bgMinLuma = value;
   } else if (name == "inkmaxscale") {
     tuning.inkMaxScale = value;
   } else if (name == "saturation") {
@@ -557,7 +556,7 @@ std::vector<Variant> tuningVariants(const HarnessConfig& config) {
   return out;
 }
 
-std::array<Variant, 14> variants() {
+std::array<Variant, 11> variants() {
   using namespace ascii_debug;
   uint32_t all = kAllStages;
   return {{
@@ -565,17 +564,13 @@ std::array<Variant, 14> variants() {
       {"ink-only", all & ~kStageCellBackground, {}},
       {"no-dither", all & ~kStageDither, {}},
       {"no-edge-detect", all & ~kStageEdgeDetect, {}},
-      {"no-bg-swaps", all & ~kStageBrightBgSwap, {}},
-      {"no-bright-bg-swap", all & ~kStageBrightBgSwap, {}},
       {"no-signal-dampen", all & ~kStageSignalDampen, {}},
       {"no-detail-boost", all & ~kStageDetailBoost, {}},
       {"no-edge-mask-fit", all & ~kStageEdgeMaskFit, {}},
       {"no-ink-coverage", all & ~kStageInkCoverageCompensation, {}},
       {"no-temporal", all & ~kStageForegroundTemporal &
                           ~kStageBackgroundTemporal, {}},
-      {"no-bg-luma-floor", all & ~kStageBgLumaFloor, {}},
-      {"no-bg-polish", all & ~kStageBgLumaFloor &
-                           ~kStageBackgroundTemporal &
+      {"no-bg-polish", all & ~kStageBackgroundTemporal &
                            ~kStageFullMaskBgContrast, {}},
       {"structure-no-bg", all & ~kStageCellBackground & ~kStageDither, {}},
   }};
@@ -904,12 +899,10 @@ double averageDots(const ascii_debug::RenderStats& stats) {
 
 void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
-         "dither_cells,edge_cells,bright_bg_swaps,"
-         "bright_bg_swaps_rejected_by_score,"
+         "dither_cells,edge_cells,"
          "signal_dampened,detail_boosted,edge_mask_fit,"
          "ink_coverage_compensated,"
-         "ink_lifted,bg_lifted,"
-         "fg_temporal,bg_temporal,fullmask_bg_contrast\n";
+         "ink_lifted,fg_temporal,bg_temporal,fullmask_bg_contrast\n";
 }
 
 void writeCsvRow(std::ostream& out, std::string_view fixture,
@@ -921,13 +914,10 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << percent(stats.bgCellCount, stats.cellCount) << ','
       << std::setprecision(3) << averageDots(stats) << std::setprecision(2)
       << ',' << stats.ditherCellCount << ',' << stats.edgeCellCount << ','
-      << stats.brightBgSwapCount << ','
-      << stats.brightBgSwapRejectedByScoreCount << ','
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
       << stats.edgeMaskFitCount << ','
       << stats.inkCoverageCompensationCount << ','
-      << stats.inkLumaFloorCount << ','
-      << stats.bgLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','
+      << stats.inkLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','
       << stats.bgTemporalBlendCount << ','
       << stats.fullMaskBgContrastCount << '\n';
 }
@@ -997,10 +987,7 @@ RenderedVariant renderVariant(const HarnessConfig& config,
             << percent(rendered.stats.bgCellCount, rendered.stats.cellCount)
             << "%  dots=" << std::setprecision(2)
             << averageDots(rendered.stats)
-            << "  edgefit=" << rendered.stats.edgeMaskFitCount
-            << "  swaps=" << rendered.stats.brightBgSwapCount
-            << "  rejected="
-            << rendered.stats.brightBgSwapRejectedByScoreCount << '\n';
+            << "  edgefit=" << rendered.stats.edgeMaskFitCount << '\n';
   return rendered;
 }
 

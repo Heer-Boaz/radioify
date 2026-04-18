@@ -418,11 +418,6 @@ float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
         float3 d = dots[j].color - pred;
         score += dot(d, d);
     }
-    if (offCount < onCount) {
-        float3 surfaceDelta = meanOn - bg;
-        score += dot(surfaceDelta, surfaceDelta) *
-                 (onCount - offCount) * kEdgeMaskBgSurfaceWeight;
-    }
     return score;
 }
 
@@ -675,42 +670,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float blendStrength = kSignalStrengthFloor +
                           (1.0f - kSignalStrengthFloor) * signalStrength;
 
-    if (!useDither && bgCount > 0 && inkCount > 0) {
-        float fgY = GetLuma(curFg);
-        float bgY = GetLuma(curBg);
-        bool bgIsBrightFeature =
-            bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
-            signalStrength >= kBrightBgSwapMinSignal &&
-            bgY >= fgY + kBrightBgSwapDelta;
-        bool swapBeatsEdgeFit = true;
-        if (bgIsBrightFeature && edgeMaskFitEligible) {
-            uint swappedMask = (~bitmask) & 0xffu;
-            float currentScore = EdgeMaskFitScore(bitmask, dots, bitMap);
-            float swappedScore = EdgeMaskFitScore(swappedMask, dots, bitMap);
-            swapBeatsEdgeFit =
-                swappedScore < 3.402823e+37f &&
-                (currentScore >= 3.402823e+37f ||
-                 swappedScore <=
-                     currentScore * (1.0f - kBrightBgSwapScoreMinGain));
-        }
-        if (bgIsBrightFeature && swapBeatsEdgeFit) {
-            float3 swapColor = curFg;
-            curFg = curBg;
-            curBg = swapColor;
-
-            float swapBlueConfidence = curFgBlueConfidence;
-            curFgBlueConfidence = curBgBlueConfidence;
-            curBgBlueConfidence = swapBlueConfidence;
-
-            int swapCount = inkCount;
-            inkCount = bgCount;
-            bgCount = swapCount;
-
-            bitmask = (~bitmask) & 0xffu;
-            dotCount = 8u - dotCount;
-        }
-    }
-
     // Dampening (Noise Hiding):
     // If signalStrength is low, we interpolate curFg towards curBg.
     // This effectively "fades out" noise into the background.
@@ -792,18 +751,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float3 prevFg = UnpackColor(history.x);
     float3 prevBg = UnpackColor(history.y);
 
-    // Luma Correction (Bg)
-    // Ensure background isn't too dark.
-    float bgY = GetLuma(curBg);
-    if (bgY < (float)kBgMinLuma) {
-        if (bgY <= 0.0f) {
-            curBg = (float)kBgMinLuma / 255.0f;
-        } else {
-            float scale = ((float)kBgMinLuma * 256.0f) / bgY;
-            curBg = min(1.0f, (curBg * scale) / 256.0f);
-        }
-    }
-    
     // Calculate perceptual distance to decide if we should reset (cut) or blend.
     float diffFg = dot(abs(curFg - prevFg), kLumaCoeff);
     float diffBg = dot(abs(curBg - prevBg), kLumaCoeff);
