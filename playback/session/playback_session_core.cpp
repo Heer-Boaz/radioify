@@ -95,11 +95,12 @@ struct PlaybackSessionCore::Impl {
         audioOk(player.audioOk()),
         audioStarting(player.audioStarting()) {}
 
-  bool requestTargetSize(int width, int height) {
+  bool requestTargetSize(int width, int height, int cellPixelWidth,
+                         int cellPixelHeight) {
     auto [targetW, targetH] =
         playback_frame_output::computeAsciiPlaybackTargetSize(
             width, height, player.sourceWidth(), player.sourceHeight(),
-            !player.audioOk());
+            cellPixelWidth, cellPixelHeight, !player.audioOk());
     if (targetW == requestedTargetW && targetH == requestedTargetH) {
       return false;
     }
@@ -113,7 +114,8 @@ struct PlaybackSessionCore::Impl {
     screen.updateSize();
     if (enableAscii) {
       requestTargetSize(std::max(20, screen.width()),
-                        std::max(10, screen.height()));
+                        std::max(10, screen.height()), screen.cellPixelWidth(),
+                        screen.cellPixelHeight());
     }
   }
 
@@ -201,7 +203,8 @@ struct PlaybackSessionCore::Impl {
     int width = std::max(20, screen.width());
     int height = std::max(10, screen.height());
     if (isAsciiPlaybackMode(renderMode)) {
-      requestTargetSize(width, height);
+      requestTargetSize(width, height, screen.cellPixelWidth(),
+                        screen.cellPixelHeight());
     }
     pendingResize = false;
     redraw = true;

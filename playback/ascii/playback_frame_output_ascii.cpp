@@ -18,7 +18,6 @@
 #include <wrl/client.h>
 
 namespace {
-
 void emitWarning(
     const playback_frame_output::LogLineWriter& sink,
     const std::string& message) {
@@ -154,15 +153,86 @@ bool cpuRenderFallback(const playback_frame_output::AsciiModePrepareInput& input
   return false;
 }
 
-std::pair<int, int> computeAsciiOutputSizeWithInset(int maxWidth,
-                                                    int maxHeight,
-                                                    int srcW,
-                                                    int srcH,
-                                                    int horizontalInset) {
-  int maxOutW = std::max(1, maxWidth - std::max(0, horizontalInset));
+int evenAtLeast(int value, int minimum) {
+  value = std::max(value, minimum);
+  if (value & 1) --value;
+  return std::max(minimum, value);
+}
+
+std::pair<int, int> sourceAspectTargetSize(int minTargetW, int minTargetH,
+                                          int srcW, int srcH) {
+  minTargetW = evenAtLeast(minTargetW, 2);
+  minTargetH = evenAtLeast(minTargetH, 4);
+  if (srcW <= 0 || srcH <= 0) {
+    return {minTargetW, minTargetH};
+  }
+
+  const double aspect =
+      static_cast<double>(srcW) / static_cast<double>(srcH);
+  int targetW = minTargetW;
+  int targetH = evenAtLeast(
+      static_cast<int>(std::lround(static_cast<double>(targetW) / aspect)), 4);
+  if (targetH < minTargetH) {
+    targetH = minTargetH;
+    targetW = evenAtLeast(static_cast<int>(
+                              std::lround(static_cast<double>(targetH) *
+                                          aspect)),
+                          2);
+  }
+  return {targetW, targetH};
+}
+
+void clampTargetSizeToSourceAndBudget(int& targetW, int& targetH, int srcW,
+                                      int srcH) {
+  const int kMaxDecodeWidth = 1024;
+  const int kMaxDecodeHeight = 768;
+  int maxW = kMaxDecodeWidth;
+  int maxH = kMaxDecodeHeight;
+  if (srcW > 1) maxW = std::min(maxW, srcW & ~1);
+  if (srcH > 1) maxH = std::min(maxH, srcH & ~1);
+
+  if (targetW <= maxW && targetH <= maxH) return;
+
+  const double scaleW = static_cast<double>(maxW) / targetW;
+  const double scaleH = static_cast<double>(maxH) / targetH;
+  const double scale = std::min(scaleW, scaleH);
+  targetW = evenAtLeast(static_cast<int>(
+                            std::lround(static_cast<double>(targetW) * scale)),
+                        2);
+  targetH = evenAtLeast(static_cast<int>(
+                            std::lround(static_cast<double>(targetH) * scale)),
+                        4);
+}
+
+std::pair<int, int> computeCoveringAsciiOutputSize(int maxWidth,
+                                                   int maxHeight,
+                                                   int srcW,
+                                                   int srcH,
+                                                   int cellPixelWidth,
+                                                   int cellPixelHeight) {
+  maxWidth = std::max(1, maxWidth);
+  maxHeight = std::max(1, maxHeight);
+  cellPixelWidth = std::max(1, cellPixelWidth);
+  cellPixelHeight = std::max(1, cellPixelHeight);
+
   AsciiArtLayout fitted =
-      fitAsciiArtLayout(srcW, srcH, maxOutW, std::max(1, maxHeight));
-  return std::pair<int, int>(fitted.width, fitted.height);
+      fitAsciiArtLayout(srcW, srcH, maxWidth, maxHeight, cellPixelWidth,
+                        cellPixelHeight);
+  if (srcW <= 0 || srcH <= 0) {
+    return {fitted.width, fitted.height};
+  }
+
+  const double scaleW =
+      (static_cast<double>(cellPixelWidth) * maxWidth) / srcW;
+  const double scaleH =
+      (static_cast<double>(cellPixelHeight) * maxHeight) / srcH;
+  const double scale = std::max(scaleW, scaleH);
+
+  int outW = static_cast<int>(
+      std::lround(static_cast<double>(srcW) * scale / cellPixelWidth));
+  int outH = static_cast<int>(
+      std::lround(static_cast<double>(srcH) * scale / cellPixelHeight));
+  return {std::max(1, outW), std::max(1, outH)};
 }
 
 }  // namespace
@@ -171,50 +241,30 @@ namespace playback_frame_output {
 
 std::pair<int, int> computeAsciiPlaybackTargetSize(int width, int height,
                                                   int srcW, int srcH,
+                                                  int cellPixelWidth,
+                                                  int cellPixelHeight,
                                                   bool showStatusLine) {
   int headerLines = showStatusLine ? 1 : 0;
   const int footerLines = 0;
   int maxHeight = std::max(1, height - headerLines - footerLines);
-  int maxOutW = std::max(1, width - 8);
-  AsciiArtLayout fitted =
-      fitAsciiArtLayout(srcW, srcH, maxOutW, std::max(1, maxHeight));
-  int outW = fitted.width;
-  int outH = fitted.height;
-  int targetW = std::max(2, outW * 2);
-  int targetH = std::max(4, outH * 4);
-  if (targetW & 1) ++targetW;
-  if (targetH & 1) ++targetH;
-  if (srcW > 0) targetW = std::min(targetW, srcW & ~1);
-  if (srcH > 0) targetH = std::min(targetH, srcH & ~1);
-  targetW = std::max(2, targetW);
-  targetH = std::max(4, targetH);
+  int maxOutW = std::max(1, width);
+  auto [outW, outH] = computeCoveringAsciiOutputSize(
+      maxOutW, std::max(1, maxHeight), srcW, srcH, cellPixelWidth,
+      cellPixelHeight);
 
-  const int kMaxDecodeWidth = 1024;
-  const int kMaxDecodeHeight = 768;
-  if (targetW > kMaxDecodeWidth || targetH > kMaxDecodeHeight) {
-    double scaleW = static_cast<double>(kMaxDecodeWidth) / targetW;
-    double scaleH = static_cast<double>(kMaxDecodeHeight) / targetH;
-    double scale = std::min(scaleW, scaleH);
-    targetW = static_cast<int>(std::lround(targetW * scale));
-    targetH = static_cast<int>(std::lround(targetH * scale));
-    targetW = std::min(targetW, kMaxDecodeWidth);
-    targetH = std::min(targetH, kMaxDecodeHeight);
-    targetW &= ~1;
-    targetH &= ~1;
-    targetW = std::max(2, targetW);
-    targetH = std::max(4, targetH);
-  }
+  auto [targetW, targetH] =
+      sourceAspectTargetSize(std::max(2, outW * 2), std::max(4, outH * 4),
+                             srcW, srcH);
+  clampTargetSizeToSourceAndBudget(targetW, targetH, srcW, srcH);
   return std::pair<int, int>(targetW, targetH);
 }
 
 std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
-                                          int srcW, int srcH) {
-  return computeAsciiOutputSizeWithInset(maxWidth, maxHeight, srcW, srcH, 8);
-}
-
-std::pair<int, int> computeTightAsciiOutputSize(int maxWidth, int maxHeight,
-                                                int srcW, int srcH) {
-  return computeAsciiOutputSizeWithInset(maxWidth, maxHeight, srcW, srcH, 0);
+                                          int srcW, int srcH,
+                                          int cellPixelWidth,
+                                          int cellPixelHeight) {
+  return computeCoveringAsciiOutputSize(maxWidth, maxHeight, srcW, srcH,
+                                        cellPixelWidth, cellPixelHeight);
 }
 
 bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
@@ -223,6 +273,8 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
     if (input.cachedMaxHeight) *input.cachedMaxHeight = -1;
     if (input.cachedFrameWidth) *input.cachedFrameWidth = -1;
     if (input.cachedFrameHeight) *input.cachedFrameHeight = -1;
+    if (input.cachedCellPixelWidth) *input.cachedCellPixelWidth = -1;
+    if (input.cachedCellPixelHeight) *input.cachedCellPixelHeight = -1;
     return false;
   }
   if (!(input.frameChanged || input.clearHistory || input.sizeChanged)) {
@@ -246,7 +298,8 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       ((input.frame->rotationQuarterTurns & 1) != 0) ? input.frame->height
                                                     : input.frame->width,
       ((input.frame->rotationQuarterTurns & 1) != 0) ? input.frame->width
-                                                    : input.frame->height);
+                                                    : input.frame->height,
+      input.cellPixelWidth, input.cellPixelHeight);
   const int prevArtWidth = input.art->width;
   const int prevArtHeight = input.art->height;
   input.art->width = outW;
@@ -385,6 +438,12 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
   if (input.cachedMaxHeight) *input.cachedMaxHeight = input.maxHeight;
   if (input.cachedFrameWidth) *input.cachedFrameWidth = input.frame->width;
   if (input.cachedFrameHeight) *input.cachedFrameHeight = input.frame->height;
+  if (input.cachedCellPixelWidth) {
+    *input.cachedCellPixelWidth = input.cellPixelWidth;
+  }
+  if (input.cachedCellPixelHeight) {
+    *input.cachedCellPixelHeight = input.cellPixelHeight;
+  }
   return true;
 }
 
@@ -396,21 +455,26 @@ void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int widt
                            const Style& dimStyle) {
   (void)overlayVisible;
   (void)overlayReservedLines;
-  const int artWidth = std::min(art.width, width);
-  const int artHeight = std::min(art.height, maxHeight);
+  const int visibleArtWidth = std::min(art.width, width);
+  const int visibleArtHeightLimit = std::min(art.height, maxHeight);
   const int availableHeight = height - artTop;
-  const int visibleArtHeight = std::min(artHeight, availableHeight);
-  const int artX = std::max(0, (width - artWidth) / 2);
+  const int visibleArtHeight = std::min(visibleArtHeightLimit, availableHeight);
+  const int sourceX = std::max(0, (art.width - visibleArtWidth) / 2);
+  const int sourceY = std::max(0, (art.height - visibleArtHeight) / 2);
+  const int artX = std::max(0, (width - visibleArtWidth) / 2);
   const size_t expectedCellCount = static_cast<size_t>(std::max(0, art.width)) *
                                    static_cast<size_t>(std::max(0, art.height));
   const bool canDrawArt =
-      allowFrame && artWidth > 0 && artHeight > 0 &&
+      allowFrame && visibleArtWidth > 0 && visibleArtHeightLimit > 0 &&
       art.cells.size() >= expectedCellCount;
 
   if (canDrawArt && visibleArtHeight > 0) {
     for (int y = 0; y < visibleArtHeight; ++y) {
-      for (int x = 0; x < artWidth; ++x) {
-        const auto& cell = art.cells[static_cast<size_t>(y * art.width + x)];
+      const int sourceRow = sourceY + y;
+      for (int x = 0; x < visibleArtWidth; ++x) {
+        const int sourceCol = sourceX + x;
+        const auto& cell =
+            art.cells[static_cast<size_t>(sourceRow * art.width + sourceCol)];
         Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
         screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
       }

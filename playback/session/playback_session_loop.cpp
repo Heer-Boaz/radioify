@@ -86,6 +86,8 @@ struct PlaybackLoopRunner::Impl {
   int pictureInPictureTextCachedMaxHeight = -1;
   int pictureInPictureTextCachedFrameWidth = -1;
   int pictureInPictureTextCachedFrameHeight = -1;
+  int pictureInPictureTextCachedCellPixelWidth = -1;
+  int pictureInPictureTextCachedCellPixelHeight = -1;
   int pictureInPictureTextProgressBarX = -1;
   int pictureInPictureTextProgressBarY = -1;
   int pictureInPictureTextProgressBarWidth = 0;
@@ -101,6 +103,8 @@ struct PlaybackLoopRunner::Impl {
   int cachedMaxHeight = -1;
   int cachedFrameWidth = -1;
   int cachedFrameHeight = -1;
+  int cachedCellPixelWidth = -1;
+  int cachedCellPixelHeight = -1;
   int progressBarX = -1;
   int progressBarY = -1;
   int progressBarWidth = 0;
@@ -212,6 +216,8 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.cachedMaxHeight = &cachedMaxHeight;
     renderInputs.cachedFrameWidth = &cachedFrameWidth;
     renderInputs.cachedFrameHeight = &cachedFrameHeight;
+    renderInputs.cachedCellPixelWidth = &cachedCellPixelWidth;
+    renderInputs.cachedCellPixelHeight = &cachedCellPixelHeight;
     renderInputs.progressBarX = &progressBarX;
     renderInputs.progressBarY = &progressBarY;
     renderInputs.progressBarWidth = &progressBarWidth;
@@ -309,9 +315,10 @@ struct PlaybackLoopRunner::Impl {
     const bool audioOnlyPlayback =
         core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
     inputs.overlayVisibleNow = overlayVisible() || audioOnlyPlayback;
-    inputs.tightAsciiLayout = true;
     inputs.clearHistory = false;
     inputs.frameChanged = frameChanged;
+    inputs.cellPixelWidth = cellPixelWidth;
+    inputs.cellPixelHeight = cellPixelHeight;
     inputs.allowAsciiCpuFallback = false;
     inputs.renderFailed = &pictureInPictureTextRenderFailed;
     inputs.renderFailMessage = &pictureInPictureTextRenderFailMessage;
@@ -321,6 +328,8 @@ struct PlaybackLoopRunner::Impl {
     inputs.cachedMaxHeight = &pictureInPictureTextCachedMaxHeight;
     inputs.cachedFrameWidth = &pictureInPictureTextCachedFrameWidth;
     inputs.cachedFrameHeight = &pictureInPictureTextCachedFrameHeight;
+    inputs.cachedCellPixelWidth = &pictureInPictureTextCachedCellPixelWidth;
+    inputs.cachedCellPixelHeight = &pictureInPictureTextCachedCellPixelHeight;
     inputs.progressBarX = &pictureInPictureTextProgressBarX;
     inputs.progressBarY = &pictureInPictureTextProgressBarY;
     inputs.progressBarWidth = &pictureInPictureTextProgressBarWidth;

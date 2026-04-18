@@ -48,10 +48,11 @@ struct PlaybackScreenRenderInputs {
   bool allowAsciiCpuFallback = false;
   bool useWindowPresenter = false;
   bool overlayVisibleNow = false;
-  bool tightAsciiLayout = false;
   bool clearHistory = false;
   bool frameChanged = false;
   bool localSeekRequested = false;
+  int cellPixelWidth = 0;
+  int cellPixelHeight = 0;
   double pendingSeekTargetSec = -1.0;
   std::atomic<bool>* enableSubtitlesShared = nullptr;
   std::atomic<bool>* windowLocalSeekRequested = nullptr;
@@ -64,6 +65,8 @@ struct PlaybackScreenRenderInputs {
   int* cachedMaxHeight = nullptr;
   int* cachedFrameWidth = nullptr;
   int* cachedFrameHeight = nullptr;
+  int* cachedCellPixelWidth = nullptr;
+  int* cachedCellPixelHeight = nullptr;
   int* progressBarX = nullptr;
   int* progressBarY = nullptr;
   int* progressBarWidth = nullptr;

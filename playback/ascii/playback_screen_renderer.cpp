@@ -89,6 +89,10 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool clearHistory = inputs.clearHistory;
   bool frameChanged = inputs.frameChanged;
   bool localSeekRequested = inputs.localSeekRequested;
+  int cellPixelWidth = inputs.cellPixelWidth > 0 ? inputs.cellPixelWidth
+                                                 : screen.cellPixelWidth();
+  int cellPixelHeight = inputs.cellPixelHeight > 0 ? inputs.cellPixelHeight
+                                                   : screen.cellPixelHeight();
   double pendingSeekTargetSec = inputs.pendingSeekTargetSec;
   auto& enableSubtitlesShared = *inputs.enableSubtitlesShared;
   auto& windowLocalSeekRequested = *inputs.windowLocalSeekRequested;
@@ -101,6 +105,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   int& cachedMaxHeight = *inputs.cachedMaxHeight;
   int& cachedFrameWidth = *inputs.cachedFrameWidth;
   int& cachedFrameHeight = *inputs.cachedFrameHeight;
+  int& cachedCellPixelWidth = *inputs.cachedCellPixelWidth;
+  int& cachedCellPixelHeight = *inputs.cachedCellPixelHeight;
   int& progressBarX = *inputs.progressBarX;
   int& progressBarY = *inputs.progressBarY;
   int& progressBarWidth = *inputs.progressBarWidth;
@@ -205,7 +211,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
 
   bool sizeChanged = (width != cachedWidth || maxHeight != cachedMaxHeight ||
                       frame->width != cachedFrameWidth ||
-                      frame->height != cachedFrameHeight);
+                      frame->height != cachedFrameHeight ||
+                      cellPixelWidth != cachedCellPixelWidth ||
+                      cellPixelHeight != cachedCellPixelHeight);
 
   if (currentMode == PlaybackRenderMode::AsciiTerminal) {
     playback_frame_output::AsciiModePrepareInput asciiInput;
@@ -216,10 +224,10 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     asciiInput.allowAsciiCpuFallback = allowAsciiCpuFallback;
     asciiInput.width = width;
     asciiInput.maxHeight = maxHeight;
+    asciiInput.cellPixelWidth = cellPixelWidth;
+    asciiInput.cellPixelHeight = cellPixelHeight;
     asciiInput.computeAsciiOutputSize =
-        inputs.tightAsciiLayout
-            ? playback_frame_output::computeTightAsciiOutputSize
-            : playback_frame_output::computeAsciiOutputSize;
+        playback_frame_output::computeAsciiOutputSize;
     asciiInput.frame = frame;
     asciiInput.art = &art;
     asciiInput.gpuRenderer = &gpuRenderer;
@@ -232,6 +240,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     asciiInput.cachedMaxHeight = &cachedMaxHeight;
     asciiInput.cachedFrameWidth = &cachedFrameWidth;
     asciiInput.cachedFrameHeight = &cachedFrameHeight;
+    asciiInput.cachedCellPixelWidth = &cachedCellPixelWidth;
+    asciiInput.cachedCellPixelHeight = &cachedCellPixelHeight;
     asciiInput.warningSink = warningSink;
     asciiInput.timingSink = timingSink;
     playback_frame_output::prepareAsciiModeFrame(asciiInput);

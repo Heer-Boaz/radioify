@@ -18,6 +18,7 @@
 #include "consoleinput.h"
 #include "playback/playback_media_artwork_catalog.h"
 #include "runtime_helpers.h"
+#include "terminal_font.h"
 #include "ui_helpers.h"
 #include "unicode_display_width.h"
 #include "videodecoder.h"
@@ -1100,6 +1101,7 @@ bool ConsoleScreen::init() {
   DWORD mode = originalMode_;
   mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT |
           DISABLE_NEWLINE_AUTO_RETURN;
+  mode &= ~ENABLE_WRAP_AT_EOL_OUTPUT;
   SetConsoleMode(out_, mode);
   CONSOLE_CURSOR_INFO cursor{};
   if (GetConsoleCursorInfo(out_, &cursor)) {
@@ -1110,6 +1112,7 @@ bool ConsoleScreen::init() {
   if (useUtf8Output_) {
     SetConsoleOutputCP(CP_UTF8);
   }
+  updateCellPixelSize();
   std::wstring seq = L"\x1b[?1049h\x1b[H\x1b[?25l";
   if (!writeOutput(seq)) {
     reportWriteError(L"init");
@@ -1120,6 +1123,7 @@ bool ConsoleScreen::init() {
   }
   altScreen_ = true;
   hasPrev_ = false;
+  syncScreenBufferToWindow();
   updateSize();
   return true;
 }
@@ -1147,6 +1151,9 @@ void ConsoleScreen::updateSize() {
   if (virtualSize_) {
     return;
   }
+  if (altScreen_) {
+    syncScreenBufferToWindow();
+  }
   CONSOLE_SCREEN_BUFFER_INFO info{};
   if (!GetConsoleScreenBufferInfo(out_, &info)) {
     applySize(80, 25);
@@ -1154,6 +1161,47 @@ void ConsoleScreen::updateSize() {
   }
   applySize(info.srWindow.Right - info.srWindow.Left + 1,
             info.srWindow.Bottom - info.srWindow.Top + 1);
+}
+
+void ConsoleScreen::syncScreenBufferToWindow() {
+  if (out_ == INVALID_HANDLE_VALUE) return;
+
+  CONSOLE_SCREEN_BUFFER_INFO info{};
+  if (!GetConsoleScreenBufferInfo(out_, &info)) return;
+
+  const SHORT windowWidth =
+      static_cast<SHORT>(info.srWindow.Right - info.srWindow.Left + 1);
+  const SHORT windowHeight =
+      static_cast<SHORT>(info.srWindow.Bottom - info.srWindow.Top + 1);
+  if (windowWidth <= 0 || windowHeight <= 0) return;
+
+  SMALL_RECT window{0, 0, static_cast<SHORT>(windowWidth - 1),
+                    static_cast<SHORT>(windowHeight - 1)};
+  const bool originMismatch =
+      info.srWindow.Left != window.Left || info.srWindow.Top != window.Top ||
+      info.srWindow.Right != window.Right ||
+      info.srWindow.Bottom != window.Bottom;
+  if (originMismatch) {
+    SetConsoleWindowInfo(out_, TRUE, &window);
+    GetConsoleScreenBufferInfo(out_, &info);
+  }
+
+  COORD bufferSize{windowWidth, windowHeight};
+  if (info.dwSize.X != bufferSize.X || info.dwSize.Y != bufferSize.Y) {
+    SetConsoleScreenBufferSize(out_, bufferSize);
+    SetConsoleWindowInfo(out_, TRUE, &window);
+  }
+}
+
+void ConsoleScreen::updateCellPixelSize() {
+  HDC memDC = CreateCompatibleDC(nullptr);
+  if (!memDC) return;
+
+  const RadioifyTerminalFontMetrics metrics =
+      measureRadioifyTerminalFontMetrics(memDC, USER_DEFAULT_SCREEN_DPI);
+  DeleteDC(memDC);
+  cellPixelWidth_ = std::max(1, metrics.cellWidth);
+  cellPixelHeight_ = std::max(1, metrics.cellHeight);
 }
 
 void ConsoleScreen::setVirtualSize(int width, int height) {
@@ -1191,6 +1239,8 @@ void ConsoleScreen::applySize(int width, int height) {
 
 int ConsoleScreen::width() const { return width_; }
 int ConsoleScreen::height() const { return height_; }
+int ConsoleScreen::cellPixelWidth() const { return cellPixelWidth_; }
+int ConsoleScreen::cellPixelHeight() const { return cellPixelHeight_; }
 
 void ConsoleScreen::setCellSpace(Cell& cell, const Style& style) {
   cell.glyph[0] = L' ';

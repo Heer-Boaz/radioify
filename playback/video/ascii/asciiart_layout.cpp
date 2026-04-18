@@ -6,28 +6,34 @@
 AsciiArtLayout fitAsciiArtLayout(int srcWidth,
                                  int srcHeight,
                                  int maxWidthChars,
-                                 int maxHeightChars) {
+                                 int maxHeightChars,
+                                 int cellPixelWidth,
+                                 int cellPixelHeight) {
   AsciiArtLayout out;
   if (srcWidth <= 0 || srcHeight <= 0 || maxWidthChars <= 0 ||
       maxHeightChars <= 0) {
     return out;
   }
 
-  const int maxSrcW = std::max(1, srcWidth / 2);
-  const int maxSrcH = std::max(1, srcHeight / 4);
-  const int clampedMaxW = std::max(1, std::min(maxWidthChars, maxSrcW));
-  const int clampedMaxH = std::max(1, std::min(maxHeightChars, maxSrcH));
+  const int cellW = std::max(1, cellPixelWidth);
+  const int cellH = std::max(1, cellPixelHeight);
+  const int clampedMaxW = std::max(1, maxWidthChars);
+  const int clampedMaxH = std::max(1, maxHeightChars);
 
   const double scaleW =
-      (2.0 * static_cast<double>(clampedMaxW)) / static_cast<double>(srcWidth);
+      (static_cast<double>(cellW) * static_cast<double>(clampedMaxW)) /
+      static_cast<double>(srcWidth);
   const double scaleH =
-      (4.0 * static_cast<double>(clampedMaxH)) / static_cast<double>(srcHeight);
-  const double scale = std::min({scaleW, scaleH, 1.0});
+      (static_cast<double>(cellH) * static_cast<double>(clampedMaxH)) /
+      static_cast<double>(srcHeight);
+  const double scale = std::min(scaleW, scaleH);
 
   int fittedW = static_cast<int>(
-      std::lround(static_cast<double>(srcWidth) * scale / 2.0));
+      std::lround(static_cast<double>(srcWidth) * scale /
+                  static_cast<double>(cellW)));
   int fittedH = static_cast<int>(
-      std::lround(static_cast<double>(srcHeight) * scale / 4.0));
+      std::lround(static_cast<double>(srcHeight) * scale /
+                  static_cast<double>(cellH)));
   fittedW = std::clamp(fittedW, 1, clampedMaxW);
   fittedH = std::clamp(fittedH, 1, clampedMaxH);
 

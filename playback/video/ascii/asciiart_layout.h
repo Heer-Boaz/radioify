@@ -9,6 +9,8 @@ struct AsciiArtLayout {
 AsciiArtLayout fitAsciiArtLayout(int srcWidth,
                                  int srcHeight,
                                  int maxWidthChars,
-                                 int maxHeightChars);
+                                 int maxHeightChars,
+                                 int cellPixelWidth,
+                                 int cellPixelHeight);
 
 #endif

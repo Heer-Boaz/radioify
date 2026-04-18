@@ -36,6 +36,8 @@
 
 namespace {
 constexpr uint32_t kBrailleBase = 0x2800;
+constexpr int kBrailleDotColumns = 2;
+constexpr int kBrailleDotRows = 4;
 
 #define RADIOIFY_ASCII_BOOL(name, value) constexpr bool name = value;
 #define RADIOIFY_ASCII_FLOAT(name, value) constexpr float name = value;
@@ -937,10 +939,11 @@ struct BrailleFastScratch {
 
   void ensure(int w, int h, int maxArtWidthIn, int maxHeightIn) {
     if (w <= 0 || h <= 0) return;
-    int maxOutW = std::max(1, maxArtWidthIn - 8);
+    int maxOutW = std::max(1, maxArtWidthIn);
     int maxOutH =
         (maxHeightIn > 0) ? maxHeightIn : std::max(1, h / 4);
-    AsciiArtLayout fitted = fitAsciiArtLayout(w, h, maxOutW, maxOutH);
+    AsciiArtLayout fitted = fitAsciiArtLayout(
+        w, h, maxOutW, maxOutH, kBrailleDotColumns, kBrailleDotRows);
     int newOutW = fitted.width;
     int newOutH = fitted.height;
     int newScaledW = newOutW * 2;
