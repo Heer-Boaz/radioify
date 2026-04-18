@@ -208,12 +208,12 @@ std::pair<int, int> computeCoveringAsciiOutputSize(int maxWidth,
                                                    int maxHeight,
                                                    int srcW,
                                                    int srcH,
-                                                   int cellPixelWidth,
-                                                   int cellPixelHeight) {
+                                                   double cellPixelWidth,
+                                                   double cellPixelHeight) {
   maxWidth = std::max(1, maxWidth);
   maxHeight = std::max(1, maxHeight);
-  cellPixelWidth = std::max(1, cellPixelWidth);
-  cellPixelHeight = std::max(1, cellPixelHeight);
+  cellPixelWidth = std::max(1.0, cellPixelWidth);
+  cellPixelHeight = std::max(1.0, cellPixelHeight);
 
   AsciiArtLayout fitted =
       fitAsciiArtLayout(srcW, srcH, maxWidth, maxHeight, cellPixelWidth,
@@ -241,8 +241,8 @@ namespace playback_frame_output {
 
 std::pair<int, int> computeAsciiPlaybackTargetSize(int width, int height,
                                                   int srcW, int srcH,
-                                                  int cellPixelWidth,
-                                                  int cellPixelHeight,
+                                                  double cellPixelWidth,
+                                                  double cellPixelHeight,
                                                   bool showStatusLine) {
   int headerLines = showStatusLine ? 1 : 0;
   const int footerLines = 0;
@@ -261,8 +261,8 @@ std::pair<int, int> computeAsciiPlaybackTargetSize(int width, int height,
 
 std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
                                           int srcW, int srcH,
-                                          int cellPixelWidth,
-                                          int cellPixelHeight) {
+                                          double cellPixelWidth,
+                                          double cellPixelHeight) {
   return computeCoveringAsciiOutputSize(maxWidth, maxHeight, srcW, srcH,
                                         cellPixelWidth, cellPixelHeight);
 }

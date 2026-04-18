@@ -59,8 +59,8 @@ class ConsoleScreen {
   void clearVirtualSize();
   int width() const;
   int height() const;
-  int cellPixelWidth() const;
-  int cellPixelHeight() const;
+  double cellPixelWidth() const;
+  double cellPixelHeight() const;
   void clear(const Style& style);
   void writeText(int x, int y, const std::string& text, const Style& style);
   void writeRun(int x, int y, int len, wchar_t ch, const Style& style);
@@ -102,8 +102,8 @@ class ConsoleScreen {
   UINT originalOutputCp_ = 0;
   int width_ = 80;
   int height_ = 25;
-  int cellPixelWidth_ = 0;
-  int cellPixelHeight_ = 0;
+  double cellPixelWidth_ = 0.0;
+  double cellPixelHeight_ = 0.0;
   bool fastOutput_ = false;
   bool virtualSize_ = false;
   bool alwaysFullRedraw_ = false;

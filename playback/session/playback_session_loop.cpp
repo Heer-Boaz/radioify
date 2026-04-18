@@ -86,8 +86,8 @@ struct PlaybackLoopRunner::Impl {
   int pictureInPictureTextCachedMaxHeight = -1;
   int pictureInPictureTextCachedFrameWidth = -1;
   int pictureInPictureTextCachedFrameHeight = -1;
-  int pictureInPictureTextCachedCellPixelWidth = -1;
-  int pictureInPictureTextCachedCellPixelHeight = -1;
+  double pictureInPictureTextCachedCellPixelWidth = -1.0;
+  double pictureInPictureTextCachedCellPixelHeight = -1.0;
   int pictureInPictureTextProgressBarX = -1;
   int pictureInPictureTextProgressBarY = -1;
   int pictureInPictureTextProgressBarWidth = 0;
@@ -103,8 +103,8 @@ struct PlaybackLoopRunner::Impl {
   int cachedMaxHeight = -1;
   int cachedFrameWidth = -1;
   int cachedFrameHeight = -1;
-  int cachedCellPixelWidth = -1;
-  int cachedCellPixelHeight = -1;
+  double cachedCellPixelWidth = -1.0;
+  double cachedCellPixelHeight = -1.0;
   int progressBarX = -1;
   int progressBarY = -1;
   int progressBarWidth = 0;

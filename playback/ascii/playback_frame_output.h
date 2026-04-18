@@ -17,8 +17,8 @@ namespace playback_frame_output {
 // Keep ASCII/video-frame sizing deterministic; maxHeight is already clamped by caller.
 using AsciiOutputSizeCalculator =
     std::function<std::pair<int, int>(int width, int maxHeight, int srcW,
-                                      int srcH, int cellPixelWidth,
-                                      int cellPixelHeight)>;
+                                      int srcH, double cellPixelWidth,
+                                      double cellPixelHeight)>;
 using LogLineWriter = std::function<void(const std::string&)>;
 
 struct AsciiModePrepareInput {
@@ -29,8 +29,8 @@ struct AsciiModePrepareInput {
   bool allowAsciiCpuFallback = false;
   int width = 0;
   int maxHeight = 0;
-  int cellPixelWidth = 0;
-  int cellPixelHeight = 0;
+  double cellPixelWidth = 0.0;
+  double cellPixelHeight = 0.0;
   AsciiOutputSizeCalculator computeAsciiOutputSize;
   VideoFrame* frame = nullptr;
   AsciiArt* art = nullptr;
@@ -44,22 +44,22 @@ struct AsciiModePrepareInput {
   int* cachedMaxHeight = nullptr;
   int* cachedFrameWidth = nullptr;
   int* cachedFrameHeight = nullptr;
-  int* cachedCellPixelWidth = nullptr;
-  int* cachedCellPixelHeight = nullptr;
+  double* cachedCellPixelWidth = nullptr;
+  double* cachedCellPixelHeight = nullptr;
   LogLineWriter warningSink;
   LogLineWriter timingSink;
 };
 
 std::pair<int, int> computeAsciiPlaybackTargetSize(int width, int height,
                                                   int srcW, int srcH,
-                                                  int cellPixelWidth,
-                                                  int cellPixelHeight,
+                                                  double cellPixelWidth,
+                                                  double cellPixelHeight,
                                                   bool showStatusLine);
 
 std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
                                           int srcW, int srcH,
-                                          int cellPixelWidth,
-                                          int cellPixelHeight);
+                                          double cellPixelWidth,
+                                          double cellPixelHeight);
 
 bool prepareAsciiModeFrame(AsciiModePrepareInput& input);
 

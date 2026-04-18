@@ -89,10 +89,11 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool clearHistory = inputs.clearHistory;
   bool frameChanged = inputs.frameChanged;
   bool localSeekRequested = inputs.localSeekRequested;
-  int cellPixelWidth = inputs.cellPixelWidth > 0 ? inputs.cellPixelWidth
-                                                 : screen.cellPixelWidth();
-  int cellPixelHeight = inputs.cellPixelHeight > 0 ? inputs.cellPixelHeight
-                                                   : screen.cellPixelHeight();
+  double cellPixelWidth = inputs.cellPixelWidth > 0.0 ? inputs.cellPixelWidth
+                                                      : screen.cellPixelWidth();
+  double cellPixelHeight = inputs.cellPixelHeight > 0.0
+                               ? inputs.cellPixelHeight
+                               : screen.cellPixelHeight();
   double pendingSeekTargetSec = inputs.pendingSeekTargetSec;
   auto& enableSubtitlesShared = *inputs.enableSubtitlesShared;
   auto& windowLocalSeekRequested = *inputs.windowLocalSeekRequested;
@@ -105,8 +106,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   int& cachedMaxHeight = *inputs.cachedMaxHeight;
   int& cachedFrameWidth = *inputs.cachedFrameWidth;
   int& cachedFrameHeight = *inputs.cachedFrameHeight;
-  int& cachedCellPixelWidth = *inputs.cachedCellPixelWidth;
-  int& cachedCellPixelHeight = *inputs.cachedCellPixelHeight;
+  double& cachedCellPixelWidth = *inputs.cachedCellPixelWidth;
+  double& cachedCellPixelHeight = *inputs.cachedCellPixelHeight;
   int& progressBarX = *inputs.progressBarX;
   int& progressBarY = *inputs.progressBarY;
   int& progressBarWidth = *inputs.progressBarWidth;
@@ -209,11 +210,11 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     return "Waiting for video...";
   };
 
-  bool sizeChanged = (width != cachedWidth || maxHeight != cachedMaxHeight ||
-                      frame->width != cachedFrameWidth ||
-                      frame->height != cachedFrameHeight ||
-                      cellPixelWidth != cachedCellPixelWidth ||
-                      cellPixelHeight != cachedCellPixelHeight);
+  bool sizeChanged =
+      (width != cachedWidth || maxHeight != cachedMaxHeight ||
+       frame->width != cachedFrameWidth || frame->height != cachedFrameHeight ||
+       std::abs(cellPixelWidth - cachedCellPixelWidth) > 0.01 ||
+       std::abs(cellPixelHeight - cachedCellPixelHeight) > 0.01);
 
   if (currentMode == PlaybackRenderMode::AsciiTerminal) {
     playback_frame_output::AsciiModePrepareInput asciiInput;

@@ -10,7 +10,7 @@ AsciiArtLayout fitAsciiArtLayout(int srcWidth,
                                  int srcHeight,
                                  int maxWidthChars,
                                  int maxHeightChars,
-                                 int cellPixelWidth,
-                                 int cellPixelHeight);
+                                 double cellPixelWidth,
+                                 double cellPixelHeight);
 
 #endif

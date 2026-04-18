@@ -95,8 +95,8 @@ struct PlaybackSessionCore::Impl {
         audioOk(player.audioOk()),
         audioStarting(player.audioStarting()) {}
 
-  bool requestTargetSize(int width, int height, int cellPixelWidth,
-                         int cellPixelHeight) {
+  bool requestTargetSize(int width, int height, double cellPixelWidth,
+                         double cellPixelHeight) {
     auto [targetW, targetH] =
         playback_frame_output::computeAsciiPlaybackTargetSize(
             width, height, player.sourceWidth(), player.sourceHeight(),

@@ -18,7 +18,7 @@
 #include "consoleinput.h"
 #include "playback/playback_media_artwork_catalog.h"
 #include "runtime_helpers.h"
-#include "terminal_font.h"
+#include "terminal_cell_metrics.h"
 #include "ui_helpers.h"
 #include "unicode_display_width.h"
 #include "videodecoder.h"
@@ -1112,7 +1112,6 @@ bool ConsoleScreen::init() {
   if (useUtf8Output_) {
     SetConsoleOutputCP(CP_UTF8);
   }
-  updateCellPixelSize();
   std::wstring seq = L"\x1b[?1049h\x1b[H\x1b[?25l";
   if (!writeOutput(seq)) {
     reportWriteError(L"init");
@@ -1125,6 +1124,7 @@ bool ConsoleScreen::init() {
   hasPrev_ = false;
   syncScreenBufferToWindow();
   updateSize();
+  updateCellPixelSize();
   return true;
 }
 
@@ -1159,8 +1159,13 @@ void ConsoleScreen::updateSize() {
     applySize(80, 25);
     return;
   }
+  int oldW = width_;
+  int oldH = height_;
   applySize(info.srWindow.Right - info.srWindow.Left + 1,
             info.srWindow.Bottom - info.srWindow.Top + 1);
+  if (width_ != oldW || height_ != oldH) {
+    updateCellPixelSize();
+  }
 }
 
 void ConsoleScreen::syncScreenBufferToWindow() {
@@ -1194,14 +1199,20 @@ void ConsoleScreen::syncScreenBufferToWindow() {
 }
 
 void ConsoleScreen::updateCellPixelSize() {
-  HDC memDC = CreateCompatibleDC(nullptr);
-  if (!memDC) return;
+  HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+  TerminalCellPixelSize terminalSize =
+      queryTerminalCellPixelSize(input, out_, width_, height_, 30);
+  if (terminalSize.width > 0.0 && terminalSize.height > 0.0) {
+    cellPixelWidth_ = terminalSize.width;
+    cellPixelHeight_ = terminalSize.height;
+    return;
+  }
 
-  const RadioifyTerminalFontMetrics metrics =
-      measureRadioifyTerminalFontMetrics(memDC, USER_DEFAULT_SCREEN_DPI);
-  DeleteDC(memDC);
-  cellPixelWidth_ = std::max(1, metrics.cellWidth);
-  cellPixelHeight_ = std::max(1, metrics.cellHeight);
+  terminalSize = queryConsoleFontCellPixelSize(out_);
+  if (terminalSize.width > 0.0 && terminalSize.height > 0.0) {
+    cellPixelWidth_ = terminalSize.width;
+    cellPixelHeight_ = terminalSize.height;
+  }
 }
 
 void ConsoleScreen::setVirtualSize(int width, int height) {
@@ -1239,8 +1250,8 @@ void ConsoleScreen::applySize(int width, int height) {
 
 int ConsoleScreen::width() const { return width_; }
 int ConsoleScreen::height() const { return height_; }
-int ConsoleScreen::cellPixelWidth() const { return cellPixelWidth_; }
-int ConsoleScreen::cellPixelHeight() const { return cellPixelHeight_; }
+double ConsoleScreen::cellPixelWidth() const { return cellPixelWidth_; }
+double ConsoleScreen::cellPixelHeight() const { return cellPixelHeight_; }
 
 void ConsoleScreen::setCellSpace(Cell& cell, const Style& style) {
   cell.glyph[0] = L' ';

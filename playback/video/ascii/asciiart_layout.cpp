@@ -7,16 +7,16 @@ AsciiArtLayout fitAsciiArtLayout(int srcWidth,
                                  int srcHeight,
                                  int maxWidthChars,
                                  int maxHeightChars,
-                                 int cellPixelWidth,
-                                 int cellPixelHeight) {
+                                 double cellPixelWidth,
+                                 double cellPixelHeight) {
   AsciiArtLayout out;
   if (srcWidth <= 0 || srcHeight <= 0 || maxWidthChars <= 0 ||
       maxHeightChars <= 0) {
     return out;
   }
 
-  const int cellW = std::max(1, cellPixelWidth);
-  const int cellH = std::max(1, cellPixelHeight);
+  const double cellW = std::max(1.0, cellPixelWidth);
+  const double cellH = std::max(1.0, cellPixelHeight);
   const int clampedMaxW = std::max(1, maxWidthChars);
   const int clampedMaxH = std::max(1, maxHeightChars);
 
