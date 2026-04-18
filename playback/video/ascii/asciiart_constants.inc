@@ -36,7 +36,7 @@ RADIOIFY_ASCII_SIGNAL_U8(kSignalStrengthFloor, 51)  // minimum FG/BG contrast mi
 RADIOIFY_ASCII_COUNT(kColorSaturation, 340)   // saturation scale, 256 == 1.0
 RADIOIFY_ASCII_LUMA_U8(kTemporalResetDelta, 48)  // RGB delta sum snap threshold
 RADIOIFY_ASCII_SIGNAL_U8(kInkCoverageMinSignal, 96)  // minimum edge/luma signal for dot-area compensation
-RADIOIFY_ASCII_SCALE_256(kInkVisibleDotCoverage, 160)  // visible dot area inside its 2x4 sample slot
+RADIOIFY_ASCII_SCALE_256(kInkVisibleDotCoverage, 128)  // visible dot area inside its 2x4 sample slot
 RADIOIFY_ASCII_COUNT(kInkCoverageMaxScale, 512)  // max fixed 8.8 FG/BG delta expansion
 RADIOIFY_ASCII_LUMA_U8(kInkCoverageMinLuma, 20)  // darkest allowed ink after dot-area compensation
 
