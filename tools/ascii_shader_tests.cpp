@@ -174,7 +174,7 @@ void printUsage() {
       << "  tuning names: inkcov,covmax,covsignal,covminluma,"
          "fitgain,fitrange,fitsignal,edgefloor,ditheredge,signalfloor,"
          "inkmin,inkmaxscale,saturation,lumaw,bgpenalty,inkprio,"
-         "cbmin,cbfull,cbsoft,cbatten,cbhue\n";
+         "edgebgmin,edgebgfull,edgebg,cbmin,cbfull,cbsoft,cbatten,cbhue\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -601,6 +601,16 @@ std::string canonicalTuningName(std::string_view name) {
       name == "perceptualPreferredBrightBgInkContrast") {
     return "inkprio";
   }
+  if (name == "edgebgmin" || name == "edgeBackgroundBlendMinDelta") {
+    return "edgebgmin";
+  }
+  if (name == "edgebgfull" || name == "edgeBackgroundBlendFullDelta") {
+    return "edgebgfull";
+  }
+  if (name == "edgebg" || name == "edgebgstrength" ||
+      name == "edgeBackgroundBlendStrength") {
+    return "edgebg";
+  }
   if (name == "cbmin" || name == "colorBoundarySoftMinDelta" ||
       name == "colorBoundarySoftMinChroma") {
     return "cbmin";
@@ -660,6 +670,12 @@ void applyTuningAssignment(
     tuning.perceptualBrightBgPenalty = value;
   } else if (name == "inkprio") {
     tuning.perceptualPreferredBrightBgInkContrast = value;
+  } else if (name == "edgebgmin") {
+    tuning.edgeBackgroundBlendMinDelta = value;
+  } else if (name == "edgebgfull") {
+    tuning.edgeBackgroundBlendFullDelta = value;
+  } else if (name == "edgebg") {
+    tuning.edgeBackgroundBlendStrength = value;
   } else if (name == "cbmin") {
     tuning.colorBoundarySoftMinDelta = value;
   } else if (name == "cbfull") {
@@ -725,7 +741,7 @@ std::vector<Variant> tuningVariants(const HarnessConfig& config) {
   return out;
 }
 
-std::array<Variant, 12> variants() {
+std::array<Variant, 13> variants() {
   using namespace ascii_debug;
   uint32_t all = kAllStages;
   return {{
@@ -737,6 +753,7 @@ std::array<Variant, 12> variants() {
       {"no-detail-boost", all & ~kStageDetailBoost, {}},
       {"no-edge-mask-fit", all & ~kStageEdgeMaskFit, {}},
       {"no-ink-coverage", all & ~kStageInkCoverageCompensation, {}},
+      {"no-edge-bg-blend", all & ~kStageEdgeBackgroundBlend, {}},
       {"no-color-boundary", all & ~kStageColorBoundarySoftening, {}},
       {"no-temporal", all & ~kStageForegroundTemporal &
                           ~kStageBackgroundTemporal, {}},
@@ -1071,7 +1088,7 @@ void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
          "dither_cells,edge_cells,"
          "signal_dampened,detail_boosted,edge_mask_fit,"
-         "ink_coverage_compensated,color_boundary_softened,"
+         "ink_coverage_compensated,edge_bg_blended,color_boundary_softened,"
          "ink_lifted,fg_temporal,bg_temporal,fullmask_bg_contrast\n";
 }
 
@@ -1087,6 +1104,7 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
       << stats.edgeMaskFitCount << ','
       << stats.inkCoverageCompensationCount << ','
+      << stats.edgeBackgroundBlendCount << ','
       << stats.colorBoundarySofteningCount << ','
       << stats.inkLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','
       << stats.bgTemporalBlendCount << ','

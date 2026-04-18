@@ -182,6 +182,9 @@ struct AsciiTuning {
   int perceptualBrightBgPenalty = kPerceptualBrightBgPenalty;
   int perceptualPreferredBrightBgInkContrast =
       kPerceptualPreferredBrightBgInkContrast;
+  int edgeBackgroundBlendMinDelta = kEdgeBackgroundBlendMinDelta;
+  int edgeBackgroundBlendFullDelta = kEdgeBackgroundBlendFullDelta;
+  int edgeBackgroundBlendStrength = kEdgeBackgroundBlendStrength;
   int colorBoundarySoftMinDelta = kColorBoundarySoftMinDelta;
   int colorBoundarySoftFullDelta = kColorBoundarySoftFullDelta;
   int colorBoundarySoftStrength = kColorBoundarySoftStrength;
@@ -219,6 +222,12 @@ AsciiTuning resolveAsciiTuning(
                       o.perceptualBrightBgPenalty);
   applyTuningOverride(tuning.perceptualPreferredBrightBgInkContrast,
                       o.perceptualPreferredBrightBgInkContrast);
+  applyTuningOverride(tuning.edgeBackgroundBlendMinDelta,
+                      o.edgeBackgroundBlendMinDelta);
+  applyTuningOverride(tuning.edgeBackgroundBlendFullDelta,
+                      o.edgeBackgroundBlendFullDelta);
+  applyTuningOverride(tuning.edgeBackgroundBlendStrength,
+                      o.edgeBackgroundBlendStrength);
   applyTuningOverride(tuning.colorBoundarySoftMinDelta,
                       o.colorBoundarySoftMinDelta);
   applyTuningOverride(tuning.colorBoundarySoftFullDelta,
@@ -353,6 +362,32 @@ FORCE_INLINE void softenRgbTowardMean(uint8_t& r, uint8_t& g, uint8_t& b,
       std::clamp(static_cast<int>(b) +
                      scaleDelta256(meanB - static_cast<int>(b), amount256),
                  0, 255));
+}
+
+FORCE_INLINE int maxRgbDelta(int ar, int ag, int ab, int br, int bg, int bb) {
+  return std::max({std::abs(ar - br), std::abs(ag - bg), std::abs(ab - bb)});
+}
+
+FORCE_INLINE int edgeBackgroundBlendAmount(int dotCount, int validCount,
+                                           int colorDelta,
+                                           const AsciiTuning& tuning) {
+  if (dotCount <= 0 || dotCount >= validCount ||
+      tuning.edgeBackgroundBlendStrength <= 0) {
+    return 0;
+  }
+  int deltaAmount = byteRangeTo255(colorDelta,
+                                   tuning.edgeBackgroundBlendMinDelta,
+                                   tuning.edgeBackgroundBlendFullDelta);
+  if (deltaAmount <= 0) return 0;
+  int split = std::min(dotCount, validCount - dotCount);
+  int balance = std::clamp((split * 510 + validCount / 2) / validCount, 0, 255);
+  return (deltaAmount * balance * tuning.edgeBackgroundBlendStrength +
+          255 * 128) /
+         (255 * 256);
+}
+
+FORCE_INLINE int blendChannelToMean(int value, int mean, int amount256) {
+  return std::clamp(value + scaleDelta256(mean - value, amount256), 0, 255);
 }
 
 FORCE_INLINE bool chromaHueSimilar(uint8_t ar, uint8_t ag, uint8_t ab,
@@ -511,7 +546,7 @@ FORCE_INLINE int perceptualDisplayError(uint8_t srcR, uint8_t srcG,
 int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
                      const uint8_t* gVals, const uint8_t* bVals,
                      const uint8_t* bitIds, const uint8_t* validVals,
-                     const AsciiTuning& tuning) {
+                     const AsciiTuning& tuning, bool useEdgeBackgroundBlend) {
   mask &= validMask;
   int sumOnR = 0;
   int sumOnG = 0;
@@ -539,12 +574,26 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
 
   if (onCount == 0 || offCount == 0) return kEdgeMaskFitInvalidScore;
 
-  const int bgR = (sumOffR + offCount / 2) / offCount;
-  const int bgG = (sumOffG + offCount / 2) / offCount;
-  const int bgB = (sumOffB + offCount / 2) / offCount;
+  const int rawBgR = (sumOffR + offCount / 2) / offCount;
+  const int rawBgG = (sumOffG + offCount / 2) / offCount;
+  const int rawBgB = (sumOffB + offCount / 2) / offCount;
   const int meanOnR = (sumOnR + onCount / 2) / onCount;
   const int meanOnG = (sumOnG + onCount / 2) / onCount;
   const int meanOnB = (sumOnB + onCount / 2) / onCount;
+  const int validCount = onCount + offCount;
+  const int meanAllR = (sumOnR + sumOffR + validCount / 2) / validCount;
+  const int meanAllG = (sumOnG + sumOffG + validCount / 2) / validCount;
+  const int meanAllB = (sumOnB + sumOffB + validCount / 2) / validCount;
+  const int bgBlend =
+      useEdgeBackgroundBlend
+          ? edgeBackgroundBlendAmount(
+                onCount, validCount,
+                maxRgbDelta(meanOnR, meanOnG, meanOnB, rawBgR, rawBgG, rawBgB),
+                tuning)
+          : 0;
+  const int bgR = blendChannelToMean(rawBgR, meanAllR, bgBlend);
+  const int bgG = blendChannelToMean(rawBgG, meanAllG, bgBlend);
+  const int bgB = blendChannelToMean(rawBgB, meanAllB, bgBlend);
 
   const int coverage = std::max(1, tuning.inkVisibleDotCoverage);
   const int scale =
@@ -651,18 +700,20 @@ int colorBoundarySoftAmountForMask(int mask, int validMask,
 int fitEdgeMask(int initialMask, int validMask, const uint8_t* rVals,
                 const uint8_t* gVals, const uint8_t* bVals,
                 const uint8_t* bitIds, const uint8_t* validVals,
-                const AsciiTuning& tuning) {
+                const AsciiTuning& tuning, bool useEdgeBackgroundBlend) {
   initialMask &= validMask;
   int bestMask = initialMask;
   int bestScore = edgeMaskFitScore(initialMask, validMask, rVals, gVals, bVals,
-                                   bitIds, validVals, tuning);
+                                   bitIds, validVals, tuning,
+                                   useEdgeBackgroundBlend);
   const int baseScore = bestScore;
 
   for (int candidate = validMask; candidate != 0;
        candidate = (candidate - 1) & validMask) {
     if (candidate == validMask) continue;
     int score = edgeMaskFitScore(candidate, validMask, rVals, gVals, bVals,
-                                 bitIds, validVals, tuning);
+                                 bitIds, validVals, tuning,
+                                 useEdgeBackgroundBlend);
     if (score < bestScore) {
       bestScore = score;
       bestMask = candidate;
@@ -1326,9 +1377,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 cellLumRange >= tuning.edgeMaskFitMinRange &&
                 edgeFitSignalStrength >= tuning.edgeMaskFitMinSignal;
             if (edgeMaskFitEligible) {
+              const bool useEdgeBgBlend =
+                  renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageEdgeBackgroundBlend);
               int fittedMask =
                   fitEdgeMask(bitmask, validMask, rVals, gVals, bVals, bitIds,
-                              validVals, tuning);
+                              validVals, tuning, useEdgeBgBlend);
               if (fittedMask != bitmask) {
                 bitmask = fittedMask;
                 if constexpr (DebugMode) {
@@ -1429,6 +1483,38 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int bgSourceBlue =
                   (bgCount > 0 ? sumBgSourceBlue : sumAllSourceBlue) /
                   (bgCount > 0 ? bgCount : colorCount);
+
+              if (renderStageEnabled<DebugMode>(
+                      stageMask, ascii_debug::kStageEdgeBackgroundBlend) &&
+                  bgCount > 0 && inkCount > 0 && dotCount > 0 &&
+                  dotCount < validCount) {
+                const int meanR = std::max(kColorLift, sumAllR / colorCount);
+                const int meanG = std::max(kColorLift, sumAllG / colorCount);
+                const int meanB = std::max(kColorLift, sumAllB / colorCount);
+                const int meanSourceBlue = sumAllSourceBlue / colorCount;
+                int amount = edgeBackgroundBlendAmount(
+                    dotCount, validCount,
+                    maxRgbDelta(curR, curG, curB, bgR, bgG, bgB), tuning);
+                if (amount > 0) {
+                  uint8_t oldBgR = bgR;
+                  uint8_t oldBgG = bgG;
+                  uint8_t oldBgB = bgB;
+                  bgR = static_cast<uint8_t>(
+                      blendChannelToMean(bgR, meanR, amount));
+                  bgG = static_cast<uint8_t>(
+                      blendChannelToMean(bgG, meanG, amount));
+                  bgB = static_cast<uint8_t>(
+                      blendChannelToMean(bgB, meanB, amount));
+                  bgSourceBlue =
+                      blendChannelToMean(bgSourceBlue, meanSourceBlue, amount);
+                  if constexpr (DebugMode) {
+                    if (debugStats &&
+                        (oldBgR != bgR || oldBgG != bgG || oldBgB != bgB)) {
+                      ++debugStats->edgeBackgroundBlendCount;
+                    }
+                  }
+                }
+              }
 
               int colorBoundaryAmount = 0;
               if (renderStageEnabled<DebugMode>(

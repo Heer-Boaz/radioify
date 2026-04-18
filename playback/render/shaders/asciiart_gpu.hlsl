@@ -125,6 +125,22 @@ float3 SoftenRgbTowardMean(float3 rgb, float3 mean, float amount) {
     return saturate(lerp(rgb, mean, amount));
 }
 
+float EdgeBackgroundBlendAmount(float dotCount, float validCount,
+                                float colorDelta255) {
+    if (dotCount <= 0.0f || dotCount >= validCount ||
+        kEdgeBackgroundBlendStrength <= 0.0f) {
+        return 0.0f;
+    }
+    float deltaAmount =
+        saturate((colorDelta255 - (float)kEdgeBackgroundBlendMinDelta) /
+                 max((float)(kEdgeBackgroundBlendFullDelta -
+                             kEdgeBackgroundBlendMinDelta),
+                     1.0f));
+    float split = min(dotCount, validCount - dotCount);
+    float balance = saturate((split * 2.0f) / validCount);
+    return deltaAmount * balance * kEdgeBackgroundBlendStrength;
+}
+
 float ChromaHueSimilarity(float3 a, float3 b) {
     float ay = GetLuma(a);
     float by = GetLuma(b);
@@ -408,6 +424,26 @@ InputSample SampleInput(float2 uv) {
     return sample;
 }
 
+InputSample SampleInputArea(float2 centerUV, float2 dotSizePx) {
+    float2 texSize = float2(width, height);
+    float2 offset = dotSizePx * 0.25f / texSize;
+    InputSample s00 = SampleInput(centerUV + float2(-offset.x, -offset.y));
+    InputSample s10 = SampleInput(centerUV + float2( offset.x, -offset.y));
+    InputSample s01 = SampleInput(centerUV + float2(-offset.x,  offset.y));
+    InputSample s11 = SampleInput(centerUV + float2( offset.x,  offset.y));
+
+    InputSample sample;
+    sample.rgb = (s00.rgb + s10.rgb + s01.rgb + s11.rgb) * 0.25f;
+    sample.blueSignal =
+        (s00.blueSignal + s10.blueSignal + s01.blueSignal + s11.blueSignal) *
+        0.25f;
+    sample.chromaSignal =
+        (s00.chromaSignal + s10.chromaSignal + s01.chromaSignal +
+         s11.chromaSignal) *
+        0.25f;
+    return sample;
+}
+
 struct DotInfo {
     int idx;
     float luma;
@@ -463,8 +499,14 @@ float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
         }
     }
 
-    float3 bg = sumOff / offCount;
+    float3 rawBg = sumOff / offCount;
     float3 meanOn = sumOn / onCount;
+    float validCount = onCount + offCount;
+    float3 meanAll = (sumOn + sumOff) / validCount;
+    float3 delta = abs(meanOn - rawBg) * 255.0f;
+    float bgBlend = EdgeBackgroundBlendAmount(
+        onCount, validCount, max(max(delta.r, delta.g), delta.b));
+    float3 bg = lerp(rawBg, meanAll, bgBlend);
     float scale = min((float)kInkCoverageMaxScale / 256.0f,
                       1.0f / max(kInkVisibleDotCoverage, 1e-5f));
     float3 fg = saturate(bg + (meanOn - bg) * scale);
@@ -562,9 +604,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         float2 dotSize = float2(dotW, dotH);
         float luma = SampleLumaArea(float2(u, v), dotSize);
         
-        // For color, we still use the center sample (or could implement SampleInputArea)
-        // Using center sample for color is usually fine as luma drives the structure
-        InputSample sample = SampleInput(float2(u, v)); 
+        InputSample sample = SampleInputArea(float2(u, v), dotSize);
         
         // 3x3 Sobel Edge Detection (using area samples for stability)
         // Use dot stride to match CPU behavior (detect edges between dots, not pixels)
@@ -741,6 +781,22 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // If you want to lift the shadows, increase kColorLift.
     curFg = max(curFg, (float)kColorLift / 255.0f);
     curBg = max(curBg, (float)kColorLift / 255.0f);
+
+    if (bgCount > 0 && inkCount > 0 && dotCount > 0u && dotCount < 8u) {
+        float3 mean = max(sumAll / 8.0f,
+                          float3((float)kColorLift / 255.0f,
+                                 (float)kColorLift / 255.0f,
+                                 (float)kColorLift / 255.0f));
+        float3 delta = abs(curFg - curBg) * 255.0f;
+        float bgBlend = EdgeBackgroundBlendAmount(
+            (float)dotCount, 8.0f, max(max(delta.r, delta.g), delta.b));
+        if (bgBlend > 0.0f) {
+            curBg = lerp(curBg, mean, bgBlend);
+            curBgBlueConfidence =
+                lerp(curBgBlueConfidence, sumAllBlueConfidence / 8.0f,
+                     bgBlend);
+        }
+    }
 
     float colorBoundaryAmount = 0.0f;
     if (bgCount > 0 && inkCount > 0 && dotCount > 0u && dotCount < 8u) {
