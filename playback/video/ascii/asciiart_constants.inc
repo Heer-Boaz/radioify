@@ -36,7 +36,7 @@ RADIOIFY_ASCII_SIGNAL_U8(kSignalStrengthFloor, 51)  // minimum FG/BG contrast mi
 RADIOIFY_ASCII_COUNT(kColorSaturation, 340)   // saturation scale, 256 == 1.0
 RADIOIFY_ASCII_LUMA_U8(kTemporalResetDelta, 48)  // RGB delta sum snap threshold
 RADIOIFY_ASCII_SIGNAL_U8(kInkCoverageMinSignal, 96)  // minimum edge/luma signal for dot-area compensation
-RADIOIFY_ASCII_SCALE_256(kInkVisibleDotCoverage, 128)  // visible dot area inside its 2x4 sample slot
+RADIOIFY_ASCII_SCALE_256(kInkVisibleDotCoverage, 96)   // visible dot area inside its 2x4 sample slot
 RADIOIFY_ASCII_COUNT(kInkCoverageMaxScale, 512)  // max fixed 8.8 FG/BG delta expansion
 RADIOIFY_ASCII_LUMA_U8(kInkCoverageMinLuma, 20)  // darkest allowed ink after dot-area compensation
 
@@ -45,7 +45,7 @@ RADIOIFY_ASCII_LUMA_U8(kDitherMaxEdge, 28)       // max Sobel magnitude for dith
 RADIOIFY_ASCII_LUMA_U8(kEdgeThresholdFloor, 6)   // minimum per-dot luma threshold
 RADIOIFY_ASCII_LUMA_U8(kEdgeMaskFitMinRange, 18) // min local luma span for cell-level edge mask fitting
 RADIOIFY_ASCII_SIGNAL_U8(kEdgeMaskFitMinSignal, 128)  // min edge/luma signal for structural mask fitting
-RADIOIFY_ASCII_SCALE_256(kEdgeMaskFitMinGain, 24)  // min relative reconstruction-error drop, 256 == 100%
+RADIOIFY_ASCII_SCALE_256(kEdgeMaskFitMinGain, 16)  // min relative reconstruction-error drop, 256 == 100%
 RADIOIFY_ASCII_SCALE_256(kEdgeMaskBgSurfaceWeight, 96)  // penalty when a minority color would become the full-cell BG
 RADIOIFY_ASCII_LUMA_U8(kBrightBgSwapDelta, 12)   // BG luma lead needed to swap
 RADIOIFY_ASCII_COUNT(kBrightBgSwapMaxDots, 4)    // bright-feature dot count limit
