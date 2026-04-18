@@ -52,6 +52,28 @@ constexpr uint32_t kAllStages =
 struct RenderOptions {
   uint32_t stageMask = kAllStages;
   bool resetHistory = true;
+
+  struct TuningOverrides {
+    int ditherMaxEdge = -1;
+    int edgeThresholdFloor = -1;
+    int signalStrengthFloor = -1;
+    int inkMinLuma = -1;
+    int bgMinLuma = -1;
+    int inkMaxScale = -1;
+    int colorSaturation = -1;
+    int inkCoverageMinSignal = -1;
+    int inkVisibleDotCoverage = -1;
+    int inkCoverageMaxScale = -1;
+    int inkCoverageMinLuma = -1;
+    int edgeMaskFitMinRange = -1;
+    int edgeMaskFitMinSignal = -1;
+    int edgeMaskFitMinGain = -1;
+    int edgeMaskBgSurfaceWeight = -1;
+    int brightBgSwapDelta = -1;
+    int brightBgSwapMaxDots = -1;
+    int brightBgSwapMinSignal = -1;
+    int brightBgSwapScoreMinGain = -1;
+  } tuning;
 };
 
 struct RenderStats {

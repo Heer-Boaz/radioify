@@ -21,6 +21,16 @@ namespace {
 
 constexpr uint32_t kBrailleBase = 0x2800;
 
+struct TuningAssignment {
+  std::string name;
+  int value = 0;
+};
+
+struct TuningAxis {
+  std::string name;
+  std::vector<int> values;
+};
+
 struct HarnessConfig {
   int width = 960;
   int height = 540;
@@ -29,6 +39,8 @@ struct HarnessConfig {
   std::string fixture = "all";
   std::string variant = "all";
   std::filesystem::path outputDir = "ascii_shader_tests_out";
+  std::vector<TuningAssignment> fixedTunings;
+  std::vector<TuningAxis> tuningAxes;
 };
 
 struct RgbaImage {
@@ -44,8 +56,9 @@ struct Rgb {
 };
 
 struct Variant {
-  const char* name;
+  std::string name;
   uint32_t stageMask;
+  ascii_debug::RenderOptions::TuningOverrides tuning;
 };
 
 struct RenderedVariant {
@@ -86,6 +99,62 @@ int parseIntArg(char** argv, int& index, int argc, const char* name) {
   return static_cast<int>(value);
 }
 
+int parseIntValue(std::string_view text, std::string_view context) {
+  std::string valueText(text);
+  char* end = nullptr;
+  long value = std::strtol(valueText.c_str(), &end, 10);
+  if (!end || *end != '\0' || value < 0 || value > 4096) {
+    fail("invalid tuning value for " + std::string(context));
+  }
+  return static_cast<int>(value);
+}
+
+std::vector<std::string_view> splitCsv(std::string_view text) {
+  std::vector<std::string_view> parts;
+  size_t pos = 0;
+  while (pos <= text.size()) {
+    size_t comma = text.find(',', pos);
+    if (comma == std::string_view::npos) comma = text.size();
+    std::string_view part = text.substr(pos, comma - pos);
+    if (part.empty()) fail("empty comma-separated value");
+    parts.push_back(part);
+    if (comma == text.size()) break;
+    pos = comma + 1;
+  }
+  return parts;
+}
+
+TuningAssignment parseTuningAssignment(std::string_view text) {
+  size_t eq = text.find('=');
+  if (eq == std::string_view::npos || eq == 0 || eq + 1 >= text.size()) {
+    fail("expected tuning assignment name=value");
+  }
+  TuningAssignment assignment;
+  assignment.name = std::string(text.substr(0, eq));
+  assignment.value = parseIntValue(text.substr(eq + 1), assignment.name);
+  return assignment;
+}
+
+void parseTuningAssignments(std::string_view text,
+                            std::vector<TuningAssignment>& out) {
+  for (std::string_view part : splitCsv(text)) {
+    out.push_back(parseTuningAssignment(part));
+  }
+}
+
+TuningAxis parseTuningAxis(std::string_view text) {
+  size_t eq = text.find('=');
+  if (eq == std::string_view::npos || eq == 0 || eq + 1 >= text.size()) {
+    fail("expected sweep axis name=value,value,...");
+  }
+  TuningAxis axis;
+  axis.name = std::string(text.substr(0, eq));
+  for (std::string_view value : splitCsv(text.substr(eq + 1))) {
+    axis.values.push_back(parseIntValue(value, axis.name));
+  }
+  return axis;
+}
+
 void printUsage() {
   std::cout
       << "ascii_shader_tests [options]\n"
@@ -100,7 +169,13 @@ void printUsage() {
       << "  --width <pixels>\n"
       << "  --height <pixels>\n"
       << "  --cols <terminal columns>\n"
-      << "  --rows <terminal rows>\n";
+      << "  --rows <terminal rows>\n"
+      << "  --tune <name=value[,name=value...]>\n"
+      << "  --sweep <name=value,value,...>\n"
+      << "  tuning names: inkcov,covmax,covsignal,covminluma,"
+         "edgebg,fitgain,fitrange,fitsignal,swapdelta,swapdots,"
+         "swapsignal,swapscore,edgefloor,ditheredge,signalfloor,"
+         "inkmin,bgmin,inkmaxscale,saturation\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -124,6 +199,12 @@ HarnessConfig parseArgs(int argc, char** argv) {
       config.maxColumns = parseIntArg(argv, i, argc, "--cols");
     } else if (arg == "--rows") {
       config.maxRows = parseIntArg(argv, i, argc, "--rows");
+    } else if (arg == "--tune") {
+      if (i + 1 >= argc) fail("missing value for --tune");
+      parseTuningAssignments(argv[++i], config.fixedTunings);
+    } else if (arg == "--sweep") {
+      if (i + 1 >= argc) fail("missing value for --sweep");
+      config.tuningAxes.push_back(parseTuningAxis(argv[++i]));
     } else if (arg == "--help" || arg == "-h") {
       printUsage();
       std::exit(0);
@@ -326,6 +407,10 @@ bool wants(std::string_view selected, std::string_view name) {
   return selected == "all" || selected == name;
 }
 
+bool wants(std::string_view selected, const std::string& name) {
+  return wants(selected, std::string_view(name.data(), name.size()));
+}
+
 std::vector<std::string_view> selectedFixtures(const HarnessConfig& config) {
   static constexpr std::array<std::string_view, 3> kFixtures{
       "circle-checker", "phone-edge", "thin-lines"};
@@ -337,27 +422,162 @@ std::vector<std::string_view> selectedFixtures(const HarnessConfig& config) {
   return out;
 }
 
+std::string canonicalTuningName(std::string_view name) {
+  if (name == "inkcov" || name == "inkVisibleDotCoverage") return "inkcov";
+  if (name == "covmax" || name == "inkCoverageMaxScale") return "covmax";
+  if (name == "covsignal" || name == "inkCoverageMinSignal") {
+    return "covsignal";
+  }
+  if (name == "covminluma" || name == "inkCoverageMinLuma") {
+    return "covminluma";
+  }
+  if (name == "edgebg" || name == "edgeMaskBgSurfaceWeight") {
+    return "edgebg";
+  }
+  if (name == "fitgain" || name == "edgeMaskFitMinGain") return "fitgain";
+  if (name == "fitrange" || name == "edgeMaskFitMinRange") {
+    return "fitrange";
+  }
+  if (name == "fitsignal" || name == "edgeMaskFitMinSignal") {
+    return "fitsignal";
+  }
+  if (name == "swapdelta" || name == "brightBgSwapDelta") {
+    return "swapdelta";
+  }
+  if (name == "swapdots" || name == "brightBgSwapMaxDots") {
+    return "swapdots";
+  }
+  if (name == "swapsignal" || name == "brightBgSwapMinSignal") {
+    return "swapsignal";
+  }
+  if (name == "swapscore" || name == "brightBgSwapScoreMinGain") {
+    return "swapscore";
+  }
+  if (name == "edgefloor" || name == "edgeThresholdFloor") {
+    return "edgefloor";
+  }
+  if (name == "ditheredge" || name == "ditherMaxEdge") return "ditheredge";
+  if (name == "signalfloor" || name == "signalStrengthFloor") {
+    return "signalfloor";
+  }
+  if (name == "inkmin" || name == "inkMinLuma") return "inkmin";
+  if (name == "bgmin" || name == "bgMinLuma") return "bgmin";
+  if (name == "inkmaxscale" || name == "inkMaxScale") {
+    return "inkmaxscale";
+  }
+  if (name == "saturation" || name == "colorSaturation") {
+    return "saturation";
+  }
+  fail("unknown tuning name: " + std::string(name));
+}
+
+void applyTuningAssignment(
+    ascii_debug::RenderOptions::TuningOverrides& tuning,
+    const TuningAssignment& assignment) {
+  std::string name = canonicalTuningName(assignment.name);
+  int value = assignment.value;
+  if (name == "inkcov") {
+    tuning.inkVisibleDotCoverage = value;
+  } else if (name == "covmax") {
+    tuning.inkCoverageMaxScale = value;
+  } else if (name == "covsignal") {
+    tuning.inkCoverageMinSignal = value;
+  } else if (name == "covminluma") {
+    tuning.inkCoverageMinLuma = value;
+  } else if (name == "edgebg") {
+    tuning.edgeMaskBgSurfaceWeight = value;
+  } else if (name == "fitgain") {
+    tuning.edgeMaskFitMinGain = value;
+  } else if (name == "fitrange") {
+    tuning.edgeMaskFitMinRange = value;
+  } else if (name == "fitsignal") {
+    tuning.edgeMaskFitMinSignal = value;
+  } else if (name == "swapdelta") {
+    tuning.brightBgSwapDelta = value;
+  } else if (name == "swapdots") {
+    tuning.brightBgSwapMaxDots = value;
+  } else if (name == "swapsignal") {
+    tuning.brightBgSwapMinSignal = value;
+  } else if (name == "swapscore") {
+    tuning.brightBgSwapScoreMinGain = value;
+  } else if (name == "edgefloor") {
+    tuning.edgeThresholdFloor = value;
+  } else if (name == "ditheredge") {
+    tuning.ditherMaxEdge = value;
+  } else if (name == "signalfloor") {
+    tuning.signalStrengthFloor = value;
+  } else if (name == "inkmin") {
+    tuning.inkMinLuma = value;
+  } else if (name == "bgmin") {
+    tuning.bgMinLuma = value;
+  } else if (name == "inkmaxscale") {
+    tuning.inkMaxScale = value;
+  } else if (name == "saturation") {
+    tuning.colorSaturation = value;
+  }
+}
+
+std::string tuningLabel(const std::vector<TuningAssignment>& assignments) {
+  std::string label = "tune";
+  for (const TuningAssignment& assignment : assignments) {
+    label += '-';
+    label += canonicalTuningName(assignment.name);
+    label += std::to_string(assignment.value);
+  }
+  return label;
+}
+
+void buildTuningVariantsRecursive(
+    const HarnessConfig& config, size_t axisIndex,
+    std::vector<TuningAssignment>& assignments, std::vector<Variant>& out) {
+  if (axisIndex == config.tuningAxes.size()) {
+    if (assignments.empty()) return;
+    Variant variant;
+    variant.name = tuningLabel(assignments);
+    variant.stageMask = ascii_debug::kAllStages;
+    for (const TuningAssignment& assignment : assignments) {
+      applyTuningAssignment(variant.tuning, assignment);
+    }
+    out.push_back(std::move(variant));
+    return;
+  }
+
+  const TuningAxis& axis = config.tuningAxes[axisIndex];
+  for (int value : axis.values) {
+    assignments.push_back(TuningAssignment{axis.name, value});
+    buildTuningVariantsRecursive(config, axisIndex + 1, assignments, out);
+    assignments.pop_back();
+  }
+}
+
+std::vector<Variant> tuningVariants(const HarnessConfig& config) {
+  std::vector<Variant> out;
+  std::vector<TuningAssignment> assignments = config.fixedTunings;
+  buildTuningVariantsRecursive(config, 0, assignments, out);
+  return out;
+}
+
 std::array<Variant, 14> variants() {
   using namespace ascii_debug;
   uint32_t all = kAllStages;
   return {{
-      {"current", all},
-      {"ink-only", all & ~kStageCellBackground},
-      {"no-dither", all & ~kStageDither},
-      {"no-edge-detect", all & ~kStageEdgeDetect},
-      {"no-bg-swaps", all & ~kStageBrightBgSwap},
-      {"no-bright-bg-swap", all & ~kStageBrightBgSwap},
-      {"no-signal-dampen", all & ~kStageSignalDampen},
-      {"no-detail-boost", all & ~kStageDetailBoost},
-      {"no-edge-mask-fit", all & ~kStageEdgeMaskFit},
-      {"no-ink-coverage", all & ~kStageInkCoverageCompensation},
+      {"current", all, {}},
+      {"ink-only", all & ~kStageCellBackground, {}},
+      {"no-dither", all & ~kStageDither, {}},
+      {"no-edge-detect", all & ~kStageEdgeDetect, {}},
+      {"no-bg-swaps", all & ~kStageBrightBgSwap, {}},
+      {"no-bright-bg-swap", all & ~kStageBrightBgSwap, {}},
+      {"no-signal-dampen", all & ~kStageSignalDampen, {}},
+      {"no-detail-boost", all & ~kStageDetailBoost, {}},
+      {"no-edge-mask-fit", all & ~kStageEdgeMaskFit, {}},
+      {"no-ink-coverage", all & ~kStageInkCoverageCompensation, {}},
       {"no-temporal", all & ~kStageForegroundTemporal &
-                          ~kStageBackgroundTemporal},
-      {"no-bg-luma-floor", all & ~kStageBgLumaFloor},
+                          ~kStageBackgroundTemporal, {}},
+      {"no-bg-luma-floor", all & ~kStageBgLumaFloor, {}},
       {"no-bg-polish", all & ~kStageBgLumaFloor &
                            ~kStageBackgroundTemporal &
-                           ~kStageFullMaskBgContrast},
-      {"structure-no-bg", all & ~kStageCellBackground & ~kStageDither},
+                           ~kStageFullMaskBgContrast, {}},
+      {"structure-no-bg", all & ~kStageCellBackground & ~kStageDither, {}},
   }};
 }
 
@@ -365,6 +585,13 @@ std::vector<Variant> selectedVariants(const HarnessConfig& config) {
   std::vector<Variant> out;
   for (const Variant& variant : variants()) {
     if (wants(config.variant, variant.name)) out.push_back(variant);
+  }
+  for (Variant& variant : tuningVariants(config)) {
+    if (config.variant == "all" || config.variant == "current" ||
+        config.variant == "tune" || config.variant == "tuned" ||
+        wants(config.variant, variant.name)) {
+      out.push_back(std::move(variant));
+    }
   }
   if (out.empty()) fail("no variant matched selection");
   return out;
@@ -748,6 +975,7 @@ RenderedVariant renderVariant(const HarnessConfig& config,
   ascii_debug::RenderOptions options;
   options.stageMask = variant.stageMask;
   options.resetHistory = true;
+  options.tuning = variant.tuning;
   if (!renderAsciiArtFromRgbaDebug(image.pixels.data(), image.width,
                                    image.height, config.maxColumns,
                                    config.maxRows, rendered.art, options,
@@ -793,10 +1021,11 @@ void runHarness(const HarnessConfig& config) {
     std::filesystem::create_directories(fixtureDir);
     writeSourcePng(fixtureDir / "source.png", image);
     RenderedVariant baseline =
-        renderVariant(config, fixtureName, Variant{"current", ascii_debug::kAllStages},
-                      image, csv);
+        renderVariant(
+            config, fixtureName,
+            Variant{"current", ascii_debug::kAllStages, {}}, image, csv);
     for (const Variant& variant : variantList) {
-      if (std::string_view(variant.name) == "current") {
+      if (variant.name == "current") {
         writeAblationRow(ablation, fixtureName, variant.name,
                          compareArt(baseline.art, baseline.art));
         continue;

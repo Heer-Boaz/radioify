@@ -164,6 +164,64 @@ FORCE_INLINE bool renderStageEnabled(uint32_t stageMask, uint32_t stage) {
   }
 }
 
+struct AsciiTuning {
+  int ditherMaxEdge = kDitherMaxEdge;
+  int edgeThresholdFloor = kEdgeThresholdFloor;
+  int signalStrengthFloor = kSignalStrengthFloor;
+  int inkMinLuma = kInkMinLuma;
+  int bgMinLuma = kBgMinLuma;
+  int inkMaxScale = kInkMaxScale;
+  int colorSaturation = kColorSaturation;
+  int inkCoverageMinSignal = kInkCoverageMinSignal;
+  int inkVisibleDotCoverage = kInkVisibleDotCoverage;
+  int inkCoverageMaxScale = kInkCoverageMaxScale;
+  int inkCoverageMinLuma = kInkCoverageMinLuma;
+  int edgeMaskFitMinRange = kEdgeMaskFitMinRange;
+  int edgeMaskFitMinSignal = kEdgeMaskFitMinSignal;
+  int edgeMaskFitMinGain = kEdgeMaskFitMinGain;
+  int edgeMaskBgSurfaceWeight = kEdgeMaskBgSurfaceWeight;
+  int brightBgSwapDelta = kBrightBgSwapDelta;
+  int brightBgSwapMaxDots = kBrightBgSwapMaxDots;
+  int brightBgSwapMinSignal = kBrightBgSwapMinSignal;
+  int brightBgSwapScoreMinGain = kBrightBgSwapScoreMinGain;
+};
+
+FORCE_INLINE void applyTuningOverride(int& dst, int value) {
+  if (value >= 0) dst = value;
+}
+
+AsciiTuning resolveAsciiTuning(
+    const ascii_debug::RenderOptions* debugOptions) {
+  AsciiTuning tuning;
+  if (!debugOptions) return tuning;
+  const auto& o = debugOptions->tuning;
+  applyTuningOverride(tuning.ditherMaxEdge, o.ditherMaxEdge);
+  applyTuningOverride(tuning.edgeThresholdFloor, o.edgeThresholdFloor);
+  applyTuningOverride(tuning.signalStrengthFloor, o.signalStrengthFloor);
+  applyTuningOverride(tuning.inkMinLuma, o.inkMinLuma);
+  applyTuningOverride(tuning.bgMinLuma, o.bgMinLuma);
+  applyTuningOverride(tuning.inkMaxScale, o.inkMaxScale);
+  applyTuningOverride(tuning.colorSaturation, o.colorSaturation);
+  applyTuningOverride(tuning.inkCoverageMinSignal,
+                      o.inkCoverageMinSignal);
+  applyTuningOverride(tuning.inkVisibleDotCoverage,
+                      o.inkVisibleDotCoverage);
+  applyTuningOverride(tuning.inkCoverageMaxScale, o.inkCoverageMaxScale);
+  applyTuningOverride(tuning.inkCoverageMinLuma, o.inkCoverageMinLuma);
+  applyTuningOverride(tuning.edgeMaskFitMinRange, o.edgeMaskFitMinRange);
+  applyTuningOverride(tuning.edgeMaskFitMinSignal, o.edgeMaskFitMinSignal);
+  applyTuningOverride(tuning.edgeMaskFitMinGain, o.edgeMaskFitMinGain);
+  applyTuningOverride(tuning.edgeMaskBgSurfaceWeight,
+                      o.edgeMaskBgSurfaceWeight);
+  applyTuningOverride(tuning.brightBgSwapDelta, o.brightBgSwapDelta);
+  applyTuningOverride(tuning.brightBgSwapMaxDots, o.brightBgSwapMaxDots);
+  applyTuningOverride(tuning.brightBgSwapMinSignal,
+                      o.brightBgSwapMinSignal);
+  applyTuningOverride(tuning.brightBgSwapScoreMinGain,
+                      o.brightBgSwapScoreMinGain);
+  return tuning;
+}
+
 constexpr int kShadowChromaBoostStart = 12;
 constexpr int kShadowChromaBoostFull = 72;
 constexpr int kShadowChromaPreserveStrength = 160;
@@ -351,7 +409,8 @@ FORCE_INLINE int countMaskDots(int mask) {
 
 int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
                      const uint8_t* gVals, const uint8_t* bVals,
-                     const uint8_t* bitIds, const uint8_t* validVals) {
+                     const uint8_t* bitIds, const uint8_t* validVals,
+                     const AsciiTuning& tuning) {
   mask &= validMask;
   int sumOnR = 0;
   int sumOnG = 0;
@@ -386,9 +445,10 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
   const int meanOnG = (sumOnG + onCount / 2) / onCount;
   const int meanOnB = (sumOnB + onCount / 2) / onCount;
 
-  const int coverage = std::max(1, kInkVisibleDotCoverage);
+  const int coverage = std::max(1, tuning.inkVisibleDotCoverage);
   const int scale =
-      std::min(kInkCoverageMaxScale, (256 * 256 + coverage / 2) / coverage);
+      std::min(tuning.inkCoverageMaxScale,
+               (256 * 256 + coverage / 2) / coverage);
   const int fgR =
       std::clamp(bgR + scaleDelta256(meanOnR - bgR, scale), 0, 255);
   const int fgG =
@@ -421,7 +481,7 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
     int64_t displayScore = score;
     displayScore +=
         (static_cast<int64_t>(surfaceDist) * dominance *
-             kEdgeMaskBgSurfaceWeight +
+             tuning.edgeMaskBgSurfaceWeight +
          128) >>
         8;
     score = static_cast<int>(
@@ -433,18 +493,19 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
 
 int fitEdgeMask(int initialMask, int validMask, const uint8_t* rVals,
                 const uint8_t* gVals, const uint8_t* bVals,
-                const uint8_t* bitIds, const uint8_t* validVals) {
+                const uint8_t* bitIds, const uint8_t* validVals,
+                const AsciiTuning& tuning) {
   initialMask &= validMask;
   int bestMask = initialMask;
   int bestScore = edgeMaskFitScore(initialMask, validMask, rVals, gVals, bVals,
-                                   bitIds, validVals);
+                                   bitIds, validVals, tuning);
   const int baseScore = bestScore;
 
   for (int candidate = validMask; candidate != 0;
        candidate = (candidate - 1) & validMask) {
     if (candidate == validMask) continue;
     int score = edgeMaskFitScore(candidate, validMask, rVals, gVals, bVals,
-                                 bitIds, validVals);
+                                 bitIds, validVals, tuning);
     if (score < bestScore) {
       bestScore = score;
       bestMask = candidate;
@@ -457,7 +518,7 @@ int fitEdgeMask(int initialMask, int validMask, const uint8_t* rVals,
   if (baseScore >= kEdgeMaskFitInvalidScore) {
     return bestMask;
   }
-  const int requiredGain = 256 - kEdgeMaskFitMinGain;
+  const int requiredGain = 256 - tuning.edgeMaskFitMinGain;
   if (static_cast<int64_t>(bestScore) * 256 <=
       static_cast<int64_t>(baseScore) * requiredGain) {
     return bestMask;
@@ -752,6 +813,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   const int scaledW = scratch.scaledW;
   const int scaledH = scratch.scaledH;
   const int padStride = scratch.padStride;
+  AsciiTuning tuning;
+  if constexpr (DebugMode) {
+    tuning = resolveAsciiTuning(debugOptions);
+  }
   uint32_t stageMask = ascii_debug::kAllStages;
   if constexpr (DebugMode) {
     if (debugOptions) {
@@ -1006,7 +1071,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             int refLum =
                 (bgLum * (255 - alpha) + cellBgLum * alpha + 127) / 255;
             bool useLocalThreshold =
-                cellLumRange > 20 || cellEdgeMax > kDitherMaxEdge;
+                cellLumRange > 20 || cellEdgeMax > tuning.ditherMaxEdge;
             bool useDither = false;
 
             size_t cellIndex = static_cast<size_t>(cy) * outW + cx;
@@ -1041,7 +1106,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // Formula: threshold = max(10, base - 0.3 * edge)
               // If edge is strong (e.g., 100), threshold drops to 10, making it very sensitive.
               int threshold =
-                  std::max(kEdgeThresholdFloor,
+                  std::max(tuning.edgeThresholdFloor,
                            baseThreshold - (edge * 77 / 255));
 
               // Check against hybrid background luminance:
@@ -1091,12 +1156,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                               ascii_debug::kStageEdgeMaskFit);
             const bool edgeMaskFitEligible =
                 !useDither && useEdgeMaskFit && validCount >= 3 &&
-                cellLumRange >= kEdgeMaskFitMinRange &&
-                signalStrength >= kEdgeMaskFitMinSignal;
+                cellLumRange >= tuning.edgeMaskFitMinRange &&
+                signalStrength >= tuning.edgeMaskFitMinSignal;
             if (edgeMaskFitEligible) {
               int fittedMask =
                   fitEdgeMask(bitmask, validMask, rVals, gVals, bVals, bitIds,
-                              validVals);
+                              validVals, tuning);
               if (fittedMask != bitmask) {
                 bitmask = fittedMask;
                 if constexpr (DebugMode) {
@@ -1110,7 +1175,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               if (debugStats) {
                 ++debugStats->cellCount;
                 if (useDither) ++debugStats->ditherCellCount;
-                if (cellEdgeMax >= kDitherMaxEdge) ++debugStats->edgeCellCount;
+                if (cellEdgeMax >= tuning.ditherMaxEdge) {
+                  ++debugStats->edgeCellCount;
+                }
               }
             }
 
@@ -1213,24 +1280,25 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 const bool bgIsBrightFeature =
                     renderStageEnabled<DebugMode>(
                         stageMask, ascii_debug::kStageBrightBgSwap) &&
-                    bgCount <= inkCount && bgCount <= kBrightBgSwapMaxDots &&
-                    signalStrength >= kBrightBgSwapMinSignal &&
-                    bgY >= fgY + kBrightBgSwapDelta;
+                    bgCount <= inkCount &&
+                    bgCount <= tuning.brightBgSwapMaxDots &&
+                    signalStrength >= tuning.brightBgSwapMinSignal &&
+                    bgY >= fgY + tuning.brightBgSwapDelta;
                 bool swapBeatsEdgeFit = true;
                 if (bgIsBrightFeature && edgeMaskFitEligible) {
                   const int swappedMask = validMask ^ bitmask;
                   const int currentScore = edgeMaskFitScore(
                       bitmask, validMask, rVals, gVals, bVals, bitIds,
-                      validVals);
+                      validVals, tuning);
                   const int swappedScore = edgeMaskFitScore(
                       swappedMask, validMask, rVals, gVals, bVals, bitIds,
-                      validVals);
+                      validVals, tuning);
                   swapBeatsEdgeFit =
                       swappedScore < kEdgeMaskFitInvalidScore &&
                       (currentScore >= kEdgeMaskFitInvalidScore ||
                        static_cast<int64_t>(swappedScore) * 256 <=
                            static_cast<int64_t>(currentScore) *
-                               (256 - kBrightBgSwapScoreMinGain));
+                               (256 - tuning.brightBgSwapScoreMinGain));
                 }
                 if (bgIsBrightFeature && swapBeatsEdgeFit) {
                   if constexpr (DebugMode) {
@@ -1255,8 +1323,10 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               }
 
               int blendStrength =
-                  kSignalStrengthFloor +
-                  ((signalStrength * (255 - kSignalStrengthFloor) + 127) / 255);
+                  tuning.signalStrengthFloor +
+                  ((signalStrength * (255 - tuning.signalStrengthFloor) +
+                    127) /
+                   255);
 
               // Dampening (Noise Hiding):
               // If signalStrength is low, we interpolate curFg towards curBg.
@@ -1332,17 +1402,20 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   8;
               if (renderStageEnabled<DebugMode>(
                       stageMask, ascii_debug::kStageInkLumaFloor) &&
-                  curY < kInkMinLuma) {
+                  curY < tuning.inkMinLuma) {
                 if constexpr (DebugMode) {
                   if (debugStats) ++debugStats->inkLumaFloorCount;
                 }
                 if (curY <= 0) {
-                  curR = kInkMinLuma;
-                  curG = kInkMinLuma;
-                  curB = kInkMinLuma;
+                  curR = static_cast<uint8_t>(tuning.inkMinLuma);
+                  curG = static_cast<uint8_t>(tuning.inkMinLuma);
+                  curB = static_cast<uint8_t>(tuning.inkMinLuma);
                 } else {
-                  int scale = (static_cast<int>(kInkMinLuma) * 256) / curY;
-                  if (scale > kInkMaxScale) scale = kInkMaxScale;
+                  int scale =
+                      (static_cast<int>(tuning.inkMinLuma) * 256) / curY;
+                  if (scale > tuning.inkMaxScale) {
+                    scale = tuning.inkMaxScale;
+                  }
                   curR = static_cast<uint8_t>(std::min(
                       255, (static_cast<int>(curR) * scale + 128) >> 8));
                   curG = static_cast<uint8_t>(std::min(
@@ -1364,7 +1437,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int inkMinC = std::min({static_cast<int>(curR), static_cast<int>(curG),
                                       static_cast<int>(curB)});
               int adaptiveSat =
-                  (kColorSaturation *
+                  (tuning.colorSaturation *
                        shadowSaturationWithChroma(y, inkMaxC - inkMinC) +
                    128) >>
                   8;
@@ -1378,12 +1451,13 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               if (renderStageEnabled<DebugMode>(
                       stageMask,
                       ascii_debug::kStageInkCoverageCompensation) &&
-                  !useDither && signalStrength >= kInkCoverageMinSignal &&
+                  !useDither &&
+                  signalStrength >= tuning.inkCoverageMinSignal &&
                   bgCount > 0 && inkCount > 0 && dotCount > 0 &&
                   dotCount < validCount) {
-                int coverage = std::max(1, kInkVisibleDotCoverage);
+                int coverage = std::max(1, tuning.inkVisibleDotCoverage);
                 int scale =
-                    std::min(kInkCoverageMaxScale,
+                    std::min(tuning.inkCoverageMaxScale,
                              (256 * 256 + coverage / 2) / coverage);
                 if (scale > 256) {
                   uint8_t oldR = curR;
@@ -1402,9 +1476,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                           scaleDelta256(static_cast<int>(curB) - bgB, scale),
                       0, 255));
                   int coverageY = rgbToY(curR, curG, curB);
-                  if (coverageY < kInkCoverageMinLuma) {
+                  if (coverageY < tuning.inkCoverageMinLuma) {
                     scaleColorToLuma(curR, curG, curB, coverageY,
-                                     kInkCoverageMinLuma);
+                                     tuning.inkCoverageMinLuma);
                   }
                   if constexpr (DebugMode) {
                     if (debugStats &&
@@ -1477,16 +1551,16 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   8;
               if (renderStageEnabled<DebugMode>(
                       stageMask, ascii_debug::kStageBgLumaFloor) &&
-                  bgY < kBgMinLuma) {
+                  bgY < tuning.bgMinLuma) {
                 if constexpr (DebugMode) {
                   if (debugStats) ++debugStats->bgLumaFloorCount;
                 }
                 if (bgY <= 0) {
-                  bgR = kBgMinLuma;
-                  bgG = kBgMinLuma;
-                  bgB = kBgMinLuma;
+                  bgR = static_cast<uint8_t>(tuning.bgMinLuma);
+                  bgG = static_cast<uint8_t>(tuning.bgMinLuma);
+                  bgB = static_cast<uint8_t>(tuning.bgMinLuma);
                 } else {
-                  int scale = (static_cast<int>(kBgMinLuma) * 256) / bgY;
+                  int scale = (static_cast<int>(tuning.bgMinLuma) * 256) / bgY;
                   bgR = static_cast<uint8_t>(std::min(
                       255, (static_cast<int>(bgR) * scale + 128) >> 8));
                   bgG = static_cast<uint8_t>(std::min(
