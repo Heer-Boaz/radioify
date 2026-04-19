@@ -1215,51 +1215,91 @@ void applyNeighborContinuityPass(AsciiArt& out, BrailleFastScratch& scratch,
     if (x < 0 || y < 0 || x >= outW || y >= outH) return 0;
     return scratch.continuityMasks[static_cast<size_t>(y) * outW + x];
   };
-  auto addDisplayMean = [&](int x, int y, int weight, int& sumR, int& sumG,
-                            int& sumB, int& sumWeight) {
-    if (x < 0 || y < 0 || x >= outW || y >= outH || weight <= 0) return;
-    const size_t nIdx = static_cast<size_t>(y) * outW + x;
-    const AsciiArt::AsciiCell& n = out.cells[nIdx];
-    if (!n.hasBg) return;
-    const int nMask = scratch.continuityMasks[nIdx];
-    const int coverage =
-        (countMaskDots(nMask) * std::max(1, tuning.inkVisibleDotCoverage) +
-         4) /
-        8;
-    const int r = static_cast<int>(n.bg.r) +
-                  scaleDelta256(static_cast<int>(n.fg.r) - n.bg.r, coverage);
-    const int g = static_cast<int>(n.bg.g) +
-                  scaleDelta256(static_cast<int>(n.fg.g) - n.bg.g, coverage);
-    const int b = static_cast<int>(n.bg.b) +
-                  scaleDelta256(static_cast<int>(n.fg.b) - n.bg.b, coverage);
-    sumR += r * weight;
-    sumG += g * weight;
-    sumB += b * weight;
-    sumWeight += weight;
+  struct NeighborMeanSums {
+    int bgR;
+    int bgG;
+    int bgB;
+    int bgWeight;
+    int fgR;
+    int fgG;
+    int fgB;
+    int fgWeight;
   };
-  auto addInkMean = [&](int x, int y, int weight, int& sumR, int& sumG,
-                        int& sumB, int& sumWeight) {
+  auto addNeighborMeans = [&](int x, int y, int weight, int bgAmount,
+                              int fgAmount, NeighborMeanSums& sums) {
     if (x < 0 || y < 0 || x >= outW || y >= outH || weight <= 0) return;
     const size_t nIdx = static_cast<size_t>(y) * outW + x;
     const int nMask = scratch.continuityMasks[nIdx];
-    if (nMask == 0) return;
+    if (bgAmount <= 0 && (fgAmount <= 0 || nMask == 0)) return;
     const AsciiArt::AsciiCell& n = out.cells[nIdx];
-    sumR += static_cast<int>(n.fg.r) * weight;
-    sumG += static_cast<int>(n.fg.g) * weight;
-    sumB += static_cast<int>(n.fg.b) * weight;
-    sumWeight += weight;
+    if (bgAmount > 0 && n.hasBg) {
+      const int coverage =
+          (countMaskDots(nMask) * std::max(1, tuning.inkVisibleDotCoverage) +
+           4) /
+          8;
+      const int r = static_cast<int>(n.bg.r) +
+                    scaleDelta256(static_cast<int>(n.fg.r) - n.bg.r, coverage);
+      const int g = static_cast<int>(n.bg.g) +
+                    scaleDelta256(static_cast<int>(n.fg.g) - n.bg.g, coverage);
+      const int b = static_cast<int>(n.bg.b) +
+                    scaleDelta256(static_cast<int>(n.fg.b) - n.bg.b, coverage);
+      sums.bgR += r * weight;
+      sums.bgG += g * weight;
+      sums.bgB += b * weight;
+      sums.bgWeight += weight;
+    }
+    if (fgAmount > 0 && nMask != 0) {
+      sums.fgR += static_cast<int>(n.fg.r) * weight;
+      sums.fgG += static_cast<int>(n.fg.g) * weight;
+      sums.fgB += static_cast<int>(n.fg.b) * weight;
+      sums.fgWeight += weight;
+    }
   };
 
   for (int y = 0; y < outH; ++y) {
     for (int x = 0; x < outW; ++x) {
       const size_t idx = static_cast<size_t>(y) * outW + x;
       const int baseMask = scratch.continuityMasks[idx];
+      const int baseDotCount = countMaskDots(baseMask);
       const int contrast = cellFgBgContrast(out.cells[idx]);
-      const int refinedMask = refineNeighborContinuityMask(
-          baseMask, maskAt(x - 1, y), maskAt(x + 1, y), maskAt(x, y - 1),
-          maskAt(x, y + 1), maskAt(x - 1, y - 1), maskAt(x + 1, y - 1),
-          maskAt(x - 1, y + 1), maskAt(x + 1, y + 1),
-          contrast, tuning);
+      const bool wantsTopology =
+          tuning.neighborContinuityStrength > 0 && baseMask != 0 &&
+          baseMask != 0xff &&
+          contrast >= tuning.neighborContinuityMinContrast;
+      const bool wantsColorAa =
+          out.cells[idx].hasBg && baseDotCount > 0 && baseDotCount < 8 &&
+          (tuning.neighborColorAaStrength > 0 ||
+           tuning.neighborFgColorAaStrength > 0) &&
+          contrast >= tuning.neighborColorAaMinContrast;
+      if (!wantsTopology && !wantsColorAa) {
+        continue;
+      }
+
+      int leftMask = 0;
+      int rightMask = 0;
+      int topMask = 0;
+      int bottomMask = 0;
+      int topLeftMask = 0;
+      int topRightMask = 0;
+      int bottomLeftMask = 0;
+      int bottomRightMask = 0;
+      if (wantsTopology) {
+        leftMask = maskAt(x - 1, y);
+        rightMask = maskAt(x + 1, y);
+        topMask = maskAt(x, y - 1);
+        bottomMask = maskAt(x, y + 1);
+        topLeftMask = maskAt(x - 1, y - 1);
+        topRightMask = maskAt(x + 1, y - 1);
+        bottomLeftMask = maskAt(x - 1, y + 1);
+        bottomRightMask = maskAt(x + 1, y + 1);
+      }
+      const int refinedMask =
+          wantsTopology
+              ? refineNeighborContinuityMask(
+                    baseMask, leftMask, rightMask, topMask, bottomMask,
+                    topLeftMask, topRightMask, bottomLeftMask, bottomRightMask,
+                    contrast, tuning)
+              : baseMask;
 
       if (refinedMask != baseMask) {
         out.cells[idx].ch = static_cast<wchar_t>(kBrailleBase + refinedMask);
@@ -1270,10 +1310,7 @@ void applyNeighborContinuityPass(AsciiArt& out, BrailleFastScratch& scratch,
       }
 
       const int dotCount = countMaskDots(refinedMask);
-      if (out.cells[idx].hasBg && dotCount > 0 && dotCount < 8 &&
-          (tuning.neighborColorAaStrength > 0 ||
-           tuning.neighborFgColorAaStrength > 0) &&
-          contrast >= tuning.neighborColorAaMinContrast) {
+      if (wantsColorAa && dotCount > 0 && dotCount < 8) {
         const int partialness = std::min(dotCount, 8 - dotCount) * 64;
         const int contrastAmount = byteRangeTo255(
             contrast, tuning.neighborColorAaMinContrast,
@@ -1282,22 +1319,33 @@ void applyNeighborContinuityPass(AsciiArt& out, BrailleFastScratch& scratch,
             (tuning.neighborColorAaStrength * partialness * contrastAmount +
              256 * 255 / 2) /
             (256 * 255);
+        const int fgAmount =
+            (tuning.neighborFgColorAaStrength * partialness * contrastAmount +
+             256 * 255 / 2) /
+            (256 * 255);
+        NeighborMeanSums sums = {
+            static_cast<int>(out.cells[idx].bg.r) * 4,
+            static_cast<int>(out.cells[idx].bg.g) * 4,
+            static_cast<int>(out.cells[idx].bg.b) * 4,
+            4,
+            static_cast<int>(out.cells[idx].fg.r) * 6,
+            static_cast<int>(out.cells[idx].fg.g) * 6,
+            static_cast<int>(out.cells[idx].fg.b) * 6,
+            6};
+        if (bgAmount > 0 || fgAmount > 0) {
+          addNeighborMeans(x - 1, y, 2, bgAmount, fgAmount, sums);
+          addNeighborMeans(x + 1, y, 2, bgAmount, fgAmount, sums);
+          addNeighborMeans(x, y - 1, 2, bgAmount, fgAmount, sums);
+          addNeighborMeans(x, y + 1, 2, bgAmount, fgAmount, sums);
+          addNeighborMeans(x - 1, y - 1, 1, bgAmount, fgAmount, sums);
+          addNeighborMeans(x + 1, y - 1, 1, bgAmount, fgAmount, sums);
+          addNeighborMeans(x - 1, y + 1, 1, bgAmount, fgAmount, sums);
+          addNeighborMeans(x + 1, y + 1, 1, bgAmount, fgAmount, sums);
+        }
         if (bgAmount > 0) {
-          int sumR = static_cast<int>(out.cells[idx].bg.r) * 4;
-          int sumG = static_cast<int>(out.cells[idx].bg.g) * 4;
-          int sumB = static_cast<int>(out.cells[idx].bg.b) * 4;
-          int sumWeight = 4;
-          addDisplayMean(x - 1, y, 2, sumR, sumG, sumB, sumWeight);
-          addDisplayMean(x + 1, y, 2, sumR, sumG, sumB, sumWeight);
-          addDisplayMean(x, y - 1, 2, sumR, sumG, sumB, sumWeight);
-          addDisplayMean(x, y + 1, 2, sumR, sumG, sumB, sumWeight);
-          addDisplayMean(x - 1, y - 1, 1, sumR, sumG, sumB, sumWeight);
-          addDisplayMean(x + 1, y - 1, 1, sumR, sumG, sumB, sumWeight);
-          addDisplayMean(x - 1, y + 1, 1, sumR, sumG, sumB, sumWeight);
-          addDisplayMean(x + 1, y + 1, 1, sumR, sumG, sumB, sumWeight);
-          const int targetR = (sumR + sumWeight / 2) / sumWeight;
-          const int targetG = (sumG + sumWeight / 2) / sumWeight;
-          const int targetB = (sumB + sumWeight / 2) / sumWeight;
+          const int targetR = (sums.bgR + sums.bgWeight / 2) / sums.bgWeight;
+          const int targetG = (sums.bgG + sums.bgWeight / 2) / sums.bgWeight;
+          const int targetB = (sums.bgB + sums.bgWeight / 2) / sums.bgWeight;
           Color oldBg = out.cells[idx].bg;
           out.cells[idx].bg.r = static_cast<uint8_t>(
               blendChannelToMean(out.cells[idx].bg.r, targetR, bgAmount));
@@ -1318,26 +1366,10 @@ void applyNeighborContinuityPass(AsciiArt& out, BrailleFastScratch& scratch,
             ++colorAaCount;
           }
         }
-        const int fgAmount =
-            (tuning.neighborFgColorAaStrength * partialness * contrastAmount +
-             256 * 255 / 2) /
-            (256 * 255);
         if (fgAmount > 0) {
-          int sumR = static_cast<int>(out.cells[idx].fg.r) * 6;
-          int sumG = static_cast<int>(out.cells[idx].fg.g) * 6;
-          int sumB = static_cast<int>(out.cells[idx].fg.b) * 6;
-          int sumWeight = 6;
-          addInkMean(x - 1, y, 2, sumR, sumG, sumB, sumWeight);
-          addInkMean(x + 1, y, 2, sumR, sumG, sumB, sumWeight);
-          addInkMean(x, y - 1, 2, sumR, sumG, sumB, sumWeight);
-          addInkMean(x, y + 1, 2, sumR, sumG, sumB, sumWeight);
-          addInkMean(x - 1, y - 1, 1, sumR, sumG, sumB, sumWeight);
-          addInkMean(x + 1, y - 1, 1, sumR, sumG, sumB, sumWeight);
-          addInkMean(x - 1, y + 1, 1, sumR, sumG, sumB, sumWeight);
-          addInkMean(x + 1, y + 1, 1, sumR, sumG, sumB, sumWeight);
-          const int targetR = (sumR + sumWeight / 2) / sumWeight;
-          const int targetG = (sumG + sumWeight / 2) / sumWeight;
-          const int targetB = (sumB + sumWeight / 2) / sumWeight;
+          const int targetR = (sums.fgR + sums.fgWeight / 2) / sums.fgWeight;
+          const int targetG = (sums.fgG + sums.fgWeight / 2) / sums.fgWeight;
+          const int targetB = (sums.fgB + sums.fgWeight / 2) / sums.fgWeight;
           Color oldFg = out.cells[idx].fg;
           out.cells[idx].fg.r = static_cast<uint8_t>(
               blendChannelToMean(out.cells[idx].fg.r, targetR, fgAmount));
