@@ -43,6 +43,8 @@ RWStructuredBuffer<AsciiDotSample> DotOutputBuffer : register(u2);
 StructuredBuffer<AsciiCell> RefineInput : register(t3);
 StructuredBuffer<AsciiDotSample> DotInputBuffer : register(t4);
 
+groupshared float gDotEdgeTileLuma[100];
+
 static const uint kBrailleBase = 0x2800;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
 static const uint kMatrixBt709 = 0;
@@ -702,23 +704,34 @@ void CSDotPrefilter(uint3 DTid : SV_DispatchThreadID) {
 }
 
 [numthreads(8, 8, 1)]
-void CSDotEdge(uint3 DTid : SV_DispatchThreadID) {
+void CSDotEdge(uint3 DTid : SV_DispatchThreadID,
+               uint3 GTid : SV_GroupThreadID,
+               uint3 Gid : SV_GroupID) {
     uint dotWCount = DotGridWidth();
     uint dotHCount = DotGridHeight();
+    uint localLinear = GTid.y * 8u + GTid.x;
+    for (uint tileIndex = localLinear; tileIndex < 100u; tileIndex += 64u) {
+        int tileX = (int)(tileIndex % 10u);
+        int tileY = (int)(tileIndex / 10u);
+        int srcX = (int)(Gid.x * 8u) + tileX - 1;
+        int srcY = (int)(Gid.y * 8u) + tileY - 1;
+        gDotEdgeTileLuma[tileIndex] = DotLuma(DotSampleAtClamped(srcX, srcY));
+    }
+    GroupMemoryBarrierWithGroupSync();
+
     if (DTid.x >= dotWCount || DTid.y >= dotHCount) {
         return;
     }
 
-    int x = (int)DTid.x;
-    int y = (int)DTid.y;
-    float l00 = DotLuma(DotSampleAtClamped(x - 1, y - 1));
-    float l01 = DotLuma(DotSampleAtClamped(x, y - 1));
-    float l02 = DotLuma(DotSampleAtClamped(x + 1, y - 1));
-    float l10 = DotLuma(DotSampleAtClamped(x - 1, y));
-    float l12 = DotLuma(DotSampleAtClamped(x + 1, y));
-    float l20 = DotLuma(DotSampleAtClamped(x - 1, y + 1));
-    float l21 = DotLuma(DotSampleAtClamped(x, y + 1));
-    float l22 = DotLuma(DotSampleAtClamped(x + 1, y + 1));
+    uint center = (GTid.y + 1u) * 10u + GTid.x + 1u;
+    float l00 = gDotEdgeTileLuma[center - 11u];
+    float l01 = gDotEdgeTileLuma[center - 10u];
+    float l02 = gDotEdgeTileLuma[center - 9u];
+    float l10 = gDotEdgeTileLuma[center - 1u];
+    float l12 = gDotEdgeTileLuma[center + 1u];
+    float l20 = gDotEdgeTileLuma[center + 9u];
+    float l21 = gDotEdgeTileLuma[center + 10u];
+    float l22 = gDotEdgeTileLuma[center + 11u];
 
     float gx = (l02 + 2.0f * l12 + l22) - (l00 + 2.0f * l10 + l20);
     float gy = (l20 + 2.0f * l21 + l22) - (l00 + 2.0f * l01 + l02);
@@ -1244,6 +1257,21 @@ void CSRefineContinuity(uint3 DTid : SV_DispatchThreadID) {
                        GetLuma(UnpackColor(cell.bg)));
     }
 
+    uint dotCount = countbits(baseMask);
+    bool needsTopology =
+        kNeighborContinuityStrength > 0.0f &&
+        baseMask != 0u && baseMask != 0xffu &&
+        contrast >= (float)kNeighborContinuityMinContrast;
+    bool needsColorAa =
+        cell.hasBg != 0u && dotCount > 0u && dotCount < 8u &&
+        (kNeighborColorAaStrength > 0.0f ||
+         kNeighborFgColorAaStrength > 0.0f) &&
+        contrast >= (float)kNeighborColorAaMinContrast;
+    if (!needsTopology && !needsColorAa) {
+        OutputBuffer[cellIndex] = cell;
+        return;
+    }
+
     int x = (int)DTid.x;
     int y = (int)DTid.y;
     AsciiCell leftCell = RefineInputCellAt(x - 1, y);
@@ -1262,14 +1290,17 @@ void CSRefineContinuity(uint3 DTid : SV_DispatchThreadID) {
     uint topRightMask = ExtractBrailleMask(topRightCell);
     uint bottomLeftMask = ExtractBrailleMask(bottomLeftCell);
     uint bottomRightMask = ExtractBrailleMask(bottomRightCell);
-    uint refinedMask = RefineNeighborContinuityMask(
-        baseMask, leftMask, rightMask, topMask, bottomMask, topLeftMask,
-        topRightMask, bottomLeftMask, bottomRightMask, contrast);
-    if (refinedMask != baseMask) {
-        cell.ch = kBrailleBase + refinedMask;
+    uint refinedMask = baseMask;
+    if (needsTopology) {
+        refinedMask = RefineNeighborContinuityMask(
+            baseMask, leftMask, rightMask, topMask, bottomMask, topLeftMask,
+            topRightMask, bottomLeftMask, bottomRightMask, contrast);
+        if (refinedMask != baseMask) {
+            cell.ch = kBrailleBase + refinedMask;
+        }
     }
 
-    uint dotCount = countbits(refinedMask);
+    dotCount = countbits(refinedMask);
     if (cell.hasBg != 0u && dotCount > 0u && dotCount < 8u &&
         (kNeighborColorAaStrength > 0.0f ||
          kNeighborFgColorAaStrength > 0.0f) &&
