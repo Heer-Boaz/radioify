@@ -5,12 +5,86 @@
 
 namespace {
 
+constexpr DWORD kTerminalInputSequenceWaitMs = 10;
+
 bool writeTerminalSequence(HANDLE output, const wchar_t* sequence) {
   if (output == INVALID_HANDLE_VALUE || !sequence) return false;
   DWORD written = 0;
   DWORD length = static_cast<DWORD>(wcslen(sequence));
   return WriteConsoleW(output, sequence, length, &written, nullptr) &&
          written == length;
+}
+
+void assignKeyEventFromConsoleRecord(KeyEvent& out,
+                                     const KEY_EVENT_RECORD& key) {
+  out.vk = key.wVirtualKeyCode;
+  out.ch = static_cast<char>(key.uChar.AsciiChar);
+  out.control = key.dwControlKeyState;
+
+  const wchar_t ch = key.uChar.UnicodeChar;
+  if (ch >= 1 && ch <= 26 && ch != L'\b' && ch != L'\t' && ch != L'\n' &&
+      ch != L'\r') {
+    out.vk = static_cast<WORD>('A' + ch - 1);
+    out.ch = 0;
+    out.control |= LEFT_CTRL_PRESSED;
+  }
+}
+
+void assignKeyEventFromTerminalCharacter(KeyEvent& out, wchar_t ch) {
+  out.vk = 0;
+  out.ch = ch >= 0 && ch <= 0x7f ? static_cast<char>(ch) : 0;
+  out.control = 0;
+
+  if (ch >= 1 && ch <= 26 && ch != L'\b' && ch != L'\t' && ch != L'\n' &&
+      ch != L'\r') {
+    out.vk = static_cast<WORD>('A' + ch - 1);
+    out.ch = 0;
+    out.control = LEFT_CTRL_PRESSED;
+    return;
+  }
+
+  if (ch >= L'a' && ch <= L'z') {
+    out.vk = static_cast<WORD>('A' + ch - L'a');
+    return;
+  }
+  if (ch >= L'A' && ch <= L'Z') {
+    out.vk = static_cast<WORD>(ch);
+    return;
+  }
+  if (ch >= L'0' && ch <= L'9') {
+    out.vk = static_cast<WORD>(ch);
+    return;
+  }
+
+  switch (ch) {
+    case L'\x1b':
+      out.vk = VK_ESCAPE;
+      break;
+    case L'\b':
+      out.vk = VK_BACK;
+      break;
+    case L'\t':
+      out.vk = VK_TAB;
+      break;
+    case L'\r':
+    case L'\n':
+      out.vk = VK_RETURN;
+      break;
+    case L' ':
+      out.vk = VK_SPACE;
+      break;
+    case L'[':
+      out.vk = VK_OEM_4;
+      break;
+    case L']':
+      out.vk = VK_OEM_6;
+      break;
+    case L'/':
+      out.vk = VK_DIVIDE;
+      break;
+    default:
+      break;
+  }
 }
 
 }  // namespace
@@ -56,14 +130,14 @@ void ConsoleInput::setCellPixelSize(double width, double height) {
 
 void ConsoleInput::enableTerminalMouseInput() {
   if (terminalMouseInput_) return;
-  if (writeTerminalSequence(output_, L"\x1b[?1003h\x1b[?1016h")) {
+  if (writeTerminalSequence(output_, L"\x1b[?1003h\x1b[?1006h\x1b[?1016h")) {
     terminalMouseInput_ = true;
   }
 }
 
 void ConsoleInput::disableTerminalMouseInput() {
   if (!terminalMouseInput_) return;
-  writeTerminalSequence(output_, L"\x1b[?1016l\x1b[?1003l");
+  writeTerminalSequence(output_, L"\x1b[?1016l\x1b[?1006l\x1b[?1003l");
   terminalMouseInput_ = false;
   terminalParser_.reset();
 }
@@ -80,6 +154,15 @@ void ConsoleInput::updateTerminalGridSize() {
 
 void ConsoleInput::mapPixelMousePosition(MouseEvent& mouse) const {
   if (!mouse.hasPixelPosition) return;
+  if (mouse.pixelX >= 0 && mouse.pixelX < columns_ && mouse.pixelY >= 0 &&
+      mouse.pixelY < rows_) {
+    mouse.pos.X = static_cast<SHORT>(mouse.pixelX);
+    mouse.pos.Y = static_cast<SHORT>(mouse.pixelY);
+    mouse.unitWidth = 1.0;
+    mouse.unitHeight = 1.0;
+    mouse.hasPixelPosition = false;
+    return;
+  }
   const double cellW = std::max(1.0, cellPixelWidth_);
   const double cellH = std::max(1.0, cellPixelHeight_);
   mouse.unitWidth = cellW;
@@ -90,6 +173,47 @@ void ConsoleInput::mapPixelMousePosition(MouseEvent& mouse) const {
                             std::max(0, rows_ - 1));
   mouse.pos.X = static_cast<SHORT>(gx);
   mouse.pos.Y = static_cast<SHORT>(gy);
+}
+
+bool ConsoleInput::handleTerminalInputCharacter(wchar_t ch, InputEvent& out) {
+  if (ch == 0) return false;
+
+  InputEvent parsed{};
+  TerminalInputSequenceParser::Result parsedResult =
+      terminalParser_.feed(ch, parsed);
+  if (parsedResult == TerminalInputSequenceParser::Result::Event) {
+    if (parsed.type == InputEvent::Type::Mouse) {
+      mapPixelMousePosition(parsed.mouse);
+    }
+    out = parsed;
+    return true;
+  }
+  if (parsedResult == TerminalInputSequenceParser::Result::Pending ||
+      parsedResult == TerminalInputSequenceParser::Result::Rejected) {
+    return false;
+  }
+
+  out.type = InputEvent::Type::Key;
+  assignKeyEventFromTerminalCharacter(out.key, ch);
+  return true;
+}
+
+bool ConsoleInput::pollTerminalInputStream(InputEvent& out) {
+  for (DWORD waitMs = 0;; waitMs = kTerminalInputSequenceWaitMs) {
+    if (WaitForSingleObject(handle_, waitMs) != WAIT_OBJECT_0) {
+      break;
+    }
+
+    wchar_t ch = 0;
+    DWORD read = 0;
+    if (!ReadConsoleW(handle_, &ch, 1, &read, nullptr) || read == 0) {
+      break;
+    }
+    if (handleTerminalInputCharacter(ch, out)) {
+      return true;
+    }
+  }
+  return terminalParser_.flushPendingEscape(out);
 }
 
 bool ConsoleInput::poll(InputEvent& out) {
@@ -120,8 +244,9 @@ bool ConsoleInput::poll(InputEvent& out) {
   }
 
   DWORD count = 0;
-  if (!GetNumberOfConsoleInputEvents(handle_, &count) || count == 0)
-    return false;
+  if (!GetNumberOfConsoleInputEvents(handle_, &count) || count == 0) {
+    return pollTerminalInputStream(out);
+  }
   while (count > 0) {
     INPUT_RECORD rec{};
     DWORD read = 0;
@@ -145,12 +270,21 @@ bool ConsoleInput::poll(InputEvent& out) {
         }
         if (parsedResult == TerminalInputSequenceParser::Result::Pending) {
           DWORD remaining = 0;
-          if ((!GetNumberOfConsoleInputEvents(handle_, &remaining) ||
-               remaining == 0) &&
-              terminalParser_.flushPendingEscape(out)) {
-            return true;
+          if (!GetNumberOfConsoleInputEvents(handle_, &remaining)) {
+            return false;
           }
-          count--;
+          if (remaining == 0 &&
+              WaitForSingleObject(handle_, kTerminalInputSequenceWaitMs) ==
+                  WAIT_OBJECT_0) {
+            GetNumberOfConsoleInputEvents(handle_, &remaining);
+          }
+          if (remaining == 0) {
+            if (pollTerminalInputStream(out)) {
+              return true;
+            }
+            return terminalParser_.flushPendingEscape(out);
+          }
+          count = remaining;
           continue;
         }
         if (parsedResult == TerminalInputSequenceParser::Result::Rejected) {
@@ -159,9 +293,7 @@ bool ConsoleInput::poll(InputEvent& out) {
         }
       }
       out.type = InputEvent::Type::Key;
-      out.key.vk = kev.wVirtualKeyCode;
-      out.key.ch = static_cast<char>(kev.uChar.AsciiChar);
-      out.key.control = kev.dwControlKeyState;
+      assignKeyEventFromConsoleRecord(out.key, kev);
       return true;
     }
     if (rec.EventType == MOUSE_EVENT) {

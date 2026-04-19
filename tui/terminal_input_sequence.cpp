@@ -48,6 +48,32 @@ DWORD terminalMouseModifiers(int buttonCode) {
   return control;
 }
 
+void assignTerminalMouseEvent(InputEvent& out, int buttonCode, int x, int y,
+                              bool release, bool pixelPosition) {
+  const bool wheel = (buttonCode & 0x40) != 0;
+  const bool motion = (buttonCode & 0x20) != 0;
+  out.type = InputEvent::Type::Mouse;
+  out.mouse.control = terminalMouseModifiers(buttonCode);
+  if (pixelPosition) {
+    out.mouse.pixelX = std::max(0, x - 1);
+    out.mouse.pixelY = std::max(0, y - 1);
+    out.mouse.hasPixelPosition = true;
+  } else {
+    out.mouse.pos.X = static_cast<SHORT>(std::max(0, x - 1));
+    out.mouse.pos.Y = static_cast<SHORT>(std::max(0, y - 1));
+    out.mouse.hasPixelPosition = false;
+  }
+  if (wheel) {
+    const SHORT delta = ((buttonCode & 0x01) == 0) ? WHEEL_DELTA : -WHEEL_DELTA;
+    out.mouse.buttonState =
+        static_cast<DWORD>(static_cast<WORD>(delta)) << 16;
+    out.mouse.eventFlags = MOUSE_WHEELED;
+    return;
+  }
+  out.mouse.buttonState = terminalMouseButtons(buttonCode, release);
+  out.mouse.eventFlags = motion ? MOUSE_MOVED : 0;
+}
+
 WORD csiFinalToVirtualKey(wchar_t final) {
   switch (final) {
     case L'A':
@@ -133,6 +159,9 @@ bool TerminalInputSequenceParser::parse(InputEvent& out, bool* complete) {
   if (buffer_[2] == L'<') {
     return parseMouse(out, complete);
   }
+  if (buffer_[2] == L'M') {
+    return parseLegacyMouse(out, complete);
+  }
   return parseKey(out, complete);
 }
 
@@ -169,21 +198,23 @@ bool TerminalInputSequenceParser::parseMouse(InputEvent& out,
 
   const bool wheel = (buttonCode & 0x40) != 0;
   const bool release = final == L'm' || (!wheel && (buttonCode & 0x03) == 3);
-  const bool motion = (buttonCode & 0x20) != 0;
-  out.type = InputEvent::Type::Mouse;
-  out.mouse.pixelX = std::max(0, x - 1);
-  out.mouse.pixelY = std::max(0, y - 1);
-  out.mouse.hasPixelPosition = true;
-  out.mouse.control = terminalMouseModifiers(buttonCode);
-  if (wheel) {
-    const SHORT delta = ((buttonCode & 0x01) == 0) ? WHEEL_DELTA : -WHEEL_DELTA;
-    out.mouse.buttonState =
-        static_cast<DWORD>(static_cast<WORD>(delta)) << 16;
-    out.mouse.eventFlags = MOUSE_WHEELED;
-    return true;
+  assignTerminalMouseEvent(out, buttonCode, x, y, release, true);
+  return true;
+}
+
+bool TerminalInputSequenceParser::parseLegacyMouse(InputEvent& out,
+                                                   bool* complete) const {
+  if (length_ < 6) return false;
+  if (length_ != 6) {
+    *complete = true;
+    return false;
   }
-  out.mouse.buttonState = terminalMouseButtons(buttonCode, release);
-  out.mouse.eventFlags = motion ? MOUSE_MOVED : 0;
+
+  const int buttonCode = std::max(0, static_cast<int>(buffer_[3]) - 32);
+  const int x = std::max(1, static_cast<int>(buffer_[4]) - 32);
+  const int y = std::max(1, static_cast<int>(buffer_[5]) - 32);
+  const bool release = (buttonCode & 0x03) == 3;
+  assignTerminalMouseEvent(out, buttonCode, x, y, release, false);
   return true;
 }
 

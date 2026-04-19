@@ -32,9 +32,16 @@ struct AsciiCell {
     uint hasBg;
 };
 
+struct AsciiDotSample {
+    uint color;    // packed RGB
+    uint metrics;  // luma, edge, source-blue confidence, unused
+};
+
 RWStructuredBuffer<AsciiCell> OutputBuffer : register(u0);
 RWStructuredBuffer<uint2> HistoryBuffer : register(u1); // x=Fg, y=Bg (packed)
+RWStructuredBuffer<AsciiDotSample> DotOutputBuffer : register(u2);
 StructuredBuffer<AsciiCell> RefineInput : register(t3);
+StructuredBuffer<AsciiDotSample> DotInputBuffer : register(t4);
 
 static const uint kBrailleBase = 0x2800;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
@@ -633,6 +640,95 @@ InputSample SampleInputArea(float2 centerUV, float2 dotSizePx) {
     return sample;
 }
 
+uint DotGridWidth() { return outWidth * 2u; }
+uint DotGridHeight() { return outHeight * 4u; }
+uint DotSampleIndex(uint x, uint y) { return y * DotGridWidth() + x; }
+
+uint PackByte255(float v) {
+    return (uint)(saturate(v / 255.0f) * 255.0f + 0.5f);
+}
+
+uint PackDotMetrics(float luma, float edge, float sourceBlueConfidence) {
+    return PackByte255(luma) |
+           (PackByte255(edge) << 8) |
+           ((uint)(saturate(sourceBlueConfidence) * 255.0f + 0.5f) << 16);
+}
+
+float DotLuma(AsciiDotSample sample) {
+    return (float)(sample.metrics & 0xffu);
+}
+
+float DotEdge(AsciiDotSample sample) {
+    return (float)((sample.metrics >> 8) & 0xffu);
+}
+
+float DotSourceBlueConfidence(AsciiDotSample sample) {
+    return (float)((sample.metrics >> 16) & 0xffu) * (1.0f / 255.0f);
+}
+
+AsciiDotSample DotSampleAtClamped(int x, int y) {
+    uint maxX = max(DotGridWidth(), 1u) - 1u;
+    uint maxY = max(DotGridHeight(), 1u) - 1u;
+    uint cx = (uint)clamp(x, 0, (int)maxX);
+    uint cy = (uint)clamp(y, 0, (int)maxY);
+    return DotInputBuffer[DotSampleIndex(cx, cy)];
+}
+
+[numthreads(8, 8, 1)]
+void CSDotPrefilter(uint3 DTid : SV_DispatchThreadID) {
+    uint dotWCount = DotGridWidth();
+    uint dotHCount = DotGridHeight();
+    if (DTid.x >= dotWCount || DTid.y >= dotHCount) {
+        return;
+    }
+
+    float cellW = (float)width / (float)outWidth;
+    float cellH = (float)height / (float)outHeight;
+    float dotW = cellW * 0.5f;
+    float dotH = cellH * 0.25f;
+    float2 dotSize = float2(dotW, dotH);
+    float2 uv = float2(((float)DTid.x + 0.5f) * dotW / (float)width,
+                       ((float)DTid.y + 0.5f) * dotH / (float)height);
+
+    float luma = SampleLumaArea(uv, dotSize);
+    InputSample sample = SampleInputArea(uv, dotSize);
+
+    AsciiDotSample outDot;
+    outDot.color = PackColor(sample.rgb);
+    outDot.metrics = PackDotMetrics(
+        luma, 0.0f,
+        GetSourceBlueConfidence(sample.blueSignal, sample.chromaSignal));
+    DotOutputBuffer[DotSampleIndex(DTid.x, DTid.y)] = outDot;
+}
+
+[numthreads(8, 8, 1)]
+void CSDotEdge(uint3 DTid : SV_DispatchThreadID) {
+    uint dotWCount = DotGridWidth();
+    uint dotHCount = DotGridHeight();
+    if (DTid.x >= dotWCount || DTid.y >= dotHCount) {
+        return;
+    }
+
+    int x = (int)DTid.x;
+    int y = (int)DTid.y;
+    float l00 = DotLuma(DotSampleAtClamped(x - 1, y - 1));
+    float l01 = DotLuma(DotSampleAtClamped(x, y - 1));
+    float l02 = DotLuma(DotSampleAtClamped(x + 1, y - 1));
+    float l10 = DotLuma(DotSampleAtClamped(x - 1, y));
+    float l12 = DotLuma(DotSampleAtClamped(x + 1, y));
+    float l20 = DotLuma(DotSampleAtClamped(x - 1, y + 1));
+    float l21 = DotLuma(DotSampleAtClamped(x, y + 1));
+    float l22 = DotLuma(DotSampleAtClamped(x + 1, y + 1));
+
+    float gx = (l02 + 2.0f * l12 + l22) - (l00 + 2.0f * l10 + l20);
+    float gy = (l20 + 2.0f * l21 + l22) - (l00 + 2.0f * l01 + l02);
+    float edge = sqrt(gx * gx + gy * gy) * 0.25f;
+
+    AsciiDotSample outDot = DotInputBuffer[DotSampleIndex(DTid.x, DTid.y)];
+    outDot.metrics = (outDot.metrics & 0xffff00ffu) | (PackByte255(edge) << 8);
+    DotOutputBuffer[DotSampleIndex(DTid.x, DTid.y)] = outDot;
+}
+
 struct DotInfo {
     int idx;
     float luma;
@@ -766,11 +862,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     uint cellIndex = DTid.y * outWidth + DTid.x;
     
-    float cellW = (float)width / (float)outWidth;
-    float cellH = (float)height / (float)outHeight;
-    float dotW = cellW / 2.0f;
-    float dotH = cellH / 4.0f;
-
     DotInfo dots[8];
     float cellLumMin = 255.0f;
     float cellLumMax = 0.0f;
@@ -780,54 +871,30 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float3 sumAll = float3(0,0,0);
     float sumAllBlueConfidence = 0.0f;
 
-    // 1. Gather Data
+    uint dotBaseX = DTid.x * 2u;
+    uint dotBaseY = DTid.y * 4u;
+
+    // 1. Gather prefiltered dot data
     for (int i = 0; i < 8; ++i) {
         uint ui = (uint)i;
         uint col = ui >> 2;
         uint row = ui & 3u;
-        
-        float u = (DTid.x * cellW + col * dotW + dotW * 0.5f) / width;
-        float v = (DTid.y * cellH + row * dotH + dotH * 0.5f) / height;
-
-        // Area sampling for stable luma/color
-        float2 dotSize = float2(dotW, dotH);
-        float luma = SampleLumaArea(float2(u, v), dotSize);
-        
-        InputSample sample = SampleInputArea(float2(u, v), dotSize);
-        
-        // 3x3 Sobel Edge Detection (using area samples for stability)
-        // Use dot stride to match CPU behavior (detect edges between dots, not pixels)
-        float texDx = dotW / (float)width;
-        float texDy = dotH / (float)height;
-        
-        float l00 = SampleLumaArea(float2(u - texDx, v - texDy), dotSize);
-        float l01 = SampleLumaArea(float2(u, v - texDy), dotSize);
-        float l02 = SampleLumaArea(float2(u + texDx, v - texDy), dotSize);
-        
-        float l10 = SampleLumaArea(float2(u - texDx, v), dotSize);
-        // l11 is center (luma)
-        float l12 = SampleLumaArea(float2(u + texDx, v), dotSize);
-        
-        float l20 = SampleLumaArea(float2(u - texDx, v + texDy), dotSize);
-        float l21 = SampleLumaArea(float2(u, v + texDy), dotSize);
-        float l22 = SampleLumaArea(float2(u + texDx, v + texDy), dotSize);
-
-        float gx = (l02 + 2.0f*l12 + l22) - (l00 + 2.0f*l10 + l20);
-        float gy = (l20 + 2.0f*l21 + l22) - (l00 + 2.0f*l01 + l02);
-        float edge = sqrt(gx*gx + gy*gy) / 4.0f; // Normalize to approx 0-255 range
+        AsciiDotSample sample = DotInputBuffer[DotSampleIndex(dotBaseX + col,
+                                                              dotBaseY + row)];
+        float luma = DotLuma(sample);
+        float edge = DotEdge(sample);
         
         dots[i].idx = i;
         dots[i].luma = luma;
         dots[i].edge = edge;
-        dots[i].color = sample.rgb;
-        dots[i].sourceBlueConfidence =
-            GetSourceBlueConfidence(sample.blueSignal, sample.chromaSignal);
+        dots[i].color = UnpackColor(sample.color);
+        dots[i].sourceBlueConfidence = DotSourceBlueConfidence(sample);
 
         cellLumMin = min(cellLumMin, luma);
         cellLumMax = max(cellLumMax, luma);
         cellLumSum += luma;
         cellEdgeMax = max(cellEdgeMax, edge);
-        sumAll += sample.rgb;
+        sumAll += dots[i].color;
         sumAllBlueConfidence += dots[i].sourceBlueConfidence;
     }
 
@@ -1132,10 +1199,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             curBg = saturate(curBg + shift);
         }
     }
-
-    // Write back history for the next frame
-    uint fg24 = PackColor(curFg) & 0x00FFFFFF;
-    HistoryBuffer[cellIndex] = uint2(fg24 | (bitmask << 24), PackColor(curBg));
 
     AsciiCell cell;
     cell.ch = kBrailleBase + bitmask;

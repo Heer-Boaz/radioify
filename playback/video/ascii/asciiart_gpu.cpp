@@ -14,6 +14,9 @@ namespace {
     // Precompiled shader bytecode (generated from playback/render/shaders/*.hlsl)
     #include "asciiart_gpu_cs_main.h"
     #include "asciiart_gpu_cs_main_nv12.h"
+    #include "asciiart_gpu_cs_dot_prefilter.h"
+    #include "asciiart_gpu_cs_dot_prefilter_nv12.h"
+    #include "asciiart_gpu_cs_dot_edge.h"
     #include "asciiart_gpu_cs_refine_continuity.h"
     #include "asciiart_gpu_cs_sync_history.h"
     #include "asciiart_stats_cs_rgba.h"
@@ -24,6 +27,11 @@ namespace {
         uint32_t fg;
         uint32_t bg;
         uint32_t hasBg;
+    };
+
+    struct GpuAsciiDotSample {
+        uint32_t color;
+        uint32_t metrics;
     };
 
 }
@@ -109,6 +117,12 @@ void GpuAsciiRenderer::ResetSessionState() {
     m_rawOutputBuffer.Reset();
     m_rawOutputUAV.Reset();
     m_rawOutputSRV.Reset();
+    m_dotSampleBuffer.Reset();
+    m_dotSampleUAV.Reset();
+    m_dotSampleSRV.Reset();
+    m_dotEdgeBuffer.Reset();
+    m_dotEdgeUAV.Reset();
+    m_dotEdgeSRV.Reset();
     for (int i = 0; i < kOutputStagingBufferCount; ++i) {
         m_outputStagingBuffers[i].Reset();
         m_outputStagingPending[i] = false;
@@ -272,6 +286,20 @@ bool GpuAsciiRenderer::CreateComputeShaders(std::string* error) {
                       m_computeShaderNV12, "CSMain NV12")) {
         return false;
     }
+    if (!createShader(kComputeShaderCsDotPrefilter,
+                      kComputeShaderCsDotPrefilter_Size,
+                      m_dotPrefilterShader, "CSDotPrefilter RGBA")) {
+        return false;
+    }
+    if (!createShader(kComputeShaderCsDotPrefilterNv12,
+                      kComputeShaderCsDotPrefilterNv12_Size,
+                      m_dotPrefilterShaderNV12, "CSDotPrefilter NV12")) {
+        return false;
+    }
+    if (!createShader(kComputeShaderCsDotEdge, kComputeShaderCsDotEdge_Size,
+                      m_dotEdgeShader, "CSDotEdge")) {
+        return false;
+    }
     if (!createShader(kComputeShaderCsRefineContinuity,
                       kComputeShaderCsRefineContinuity_Size,
                       m_refineContinuityShader, "CSRefineContinuity")) {
@@ -318,6 +346,51 @@ bool GpuAsciiRenderer::CreateStatsBuffer() {
     if (FAILED(m_device->CreateShaderResourceView(m_statsBuffer.Get(), &srvDesc, &m_statsSRV))) return false;
 
     return true;
+}
+
+void GpuAsciiRenderer::BuildDotGrid(ID3D11ComputeShader* prefilterShader,
+                                    ID3D11ShaderResourceView* source0,
+                                    ID3D11ShaderResourceView* source1,
+                                    UINT dotDispatchX,
+                                    UINT dotDispatchY,
+                                    ID3D11Buffer* constantBuffer) {
+    ID3D11UnorderedAccessView* nullUAV3[] = { nullptr, nullptr, nullptr };
+    ID3D11ShaderResourceView* nullSRV5[] = {
+        nullptr, nullptr, nullptr, nullptr, nullptr
+    };
+    ID3D11Buffer* cbs[] = { constantBuffer };
+    ID3D11SamplerState* samplers[] = { m_linearSampler.Get() };
+
+    m_context->CSSetShader(prefilterShader, nullptr, 0);
+    ID3D11ShaderResourceView* prefilterSRVs[] = {
+        source0, source1, nullptr, nullptr, nullptr
+    };
+    m_context->CSSetShaderResources(0, 5, prefilterSRVs);
+    ID3D11UnorderedAccessView* prefilterUAVs[] = {
+        nullptr, nullptr, m_dotSampleUAV.Get()
+    };
+    m_context->CSSetUnorderedAccessViews(0, 3, prefilterUAVs, nullptr);
+    m_context->CSSetConstantBuffers(0, 1, cbs);
+    m_context->CSSetSamplers(0, 1, samplers);
+    m_context->Dispatch(dotDispatchX, dotDispatchY, 1);
+
+    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+    m_context->CSSetShaderResources(0, 5, nullSRV5);
+
+    m_context->CSSetShader(m_dotEdgeShader.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* edgeSRVs[] = {
+        nullptr, nullptr, nullptr, nullptr, m_dotSampleSRV.Get()
+    };
+    m_context->CSSetShaderResources(0, 5, edgeSRVs);
+    ID3D11UnorderedAccessView* edgeUAVs[] = {
+        nullptr, nullptr, m_dotEdgeUAV.Get()
+    };
+    m_context->CSSetUnorderedAccessViews(0, 3, edgeUAVs, nullptr);
+    m_context->CSSetConstantBuffers(0, 1, cbs);
+    m_context->Dispatch(dotDispatchX, dotDispatchY, 1);
+
+    m_context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
+    m_context->CSSetShaderResources(0, 5, nullSRV5);
 }
 
 void GpuAsciiRenderer::RefineOutputAndSyncHistory(UINT dispatchX,
@@ -429,11 +502,18 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
 
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
+    UINT dotDispatchX = (outW * 2 + 7) / 8;
+    UINT dotDispatchY = (outH * 4 + 7) / 8;
+
+    BuildDotGrid(m_dotPrefilterShaderNV12.Get(), srvY, srvUV, dotDispatchX,
+                 dotDispatchY, m_constantBuffer.Get());
 
     // 2. Main Pass
     m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { srvY, srvUV, m_statsSRV.Get() };
-    m_context->CSSetShaderResources(0, 3, srvs);
+    ID3D11ShaderResourceView* srvs[] = {
+        nullptr, nullptr, m_statsSRV.Get(), nullptr, m_dotEdgeSRV.Get()
+    };
+    m_context->CSSetShaderResources(0, 5, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_rawOutputUAV.Get(), m_historyUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
@@ -460,6 +540,12 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     m_rawOutputBuffer.Reset();
     m_rawOutputUAV.Reset();
     m_rawOutputSRV.Reset();
+    m_dotSampleBuffer.Reset();
+    m_dotSampleUAV.Reset();
+    m_dotSampleSRV.Reset();
+    m_dotEdgeBuffer.Reset();
+    m_dotEdgeUAV.Reset();
+    m_dotEdgeSRV.Reset();
     for (int i = 0; i < kOutputStagingBufferCount; ++i) {
         m_outputStagingBuffers[i].Reset();
         m_outputStagingPending[i] = false;
@@ -504,10 +590,27 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     rawSrvDesc.Buffer.NumElements = outW * outH;
     if (FAILED(m_device->CreateShaderResourceView(m_rawOutputBuffer.Get(), &rawSrvDesc, &m_rawOutputSRV))) return false;
 
+    const UINT dotCount = static_cast<UINT>(outW * outH * 8);
+    bufDesc.ByteWidth = sizeof(GpuAsciiDotSample) * dotCount;
+    bufDesc.Usage = D3D11_USAGE_DEFAULT;
+    bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+    bufDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    bufDesc.CPUAccessFlags = 0;
+    bufDesc.StructureByteStride = sizeof(GpuAsciiDotSample);
+    uavDesc.Buffer.NumElements = dotCount;
+    if (FAILED(m_device->CreateBuffer(&bufDesc, nullptr, &m_dotSampleBuffer))) return false;
+    if (FAILED(m_device->CreateUnorderedAccessView(m_dotSampleBuffer.Get(), &uavDesc, &m_dotSampleUAV))) return false;
+    rawSrvDesc.Buffer.NumElements = dotCount;
+    if (FAILED(m_device->CreateShaderResourceView(m_dotSampleBuffer.Get(), &rawSrvDesc, &m_dotSampleSRV))) return false;
+    if (FAILED(m_device->CreateBuffer(&bufDesc, nullptr, &m_dotEdgeBuffer))) return false;
+    if (FAILED(m_device->CreateUnorderedAccessView(m_dotEdgeBuffer.Get(), &uavDesc, &m_dotEdgeUAV))) return false;
+    if (FAILED(m_device->CreateShaderResourceView(m_dotEdgeBuffer.Get(), &rawSrvDesc, &m_dotEdgeSRV))) return false;
+
     // History Buffer
     bufDesc.ByteWidth = sizeof(uint32_t) * 2 * outW * outH; // uint2
     bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
     bufDesc.StructureByteStride = sizeof(uint32_t) * 2;
+    uavDesc.Buffer.NumElements = outW * outH;
     if (FAILED(m_device->CreateBuffer(&bufDesc, nullptr, &m_historyBuffer))) return false;
     if (FAILED(m_device->CreateUnorderedAccessView(m_historyBuffer.Get(), &uavDesc, &m_historyUAV))) return false;
 
@@ -600,6 +703,8 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
 
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
+    UINT dotDispatchX = (outW * 2 + 7) / 8;
+    UINT dotDispatchY = (outH * 4 + 7) / 8;
 
     // Calculate Stats
     m_context->CSSetShader(m_statsShaderRgba.Get(), nullptr, 0);
@@ -614,10 +719,15 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
     m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
 
+    BuildDotGrid(m_dotPrefilterShader.Get(), inputSRV, nullptr, dotDispatchX,
+                 dotDispatchY, m_constantBuffer.Get());
+
     // Main Pass
     m_context->CSSetShader(m_computeShader.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { inputSRV, m_statsSRV.Get(), nullptr };
-    m_context->CSSetShaderResources(0, 3, srvs);
+    ID3D11ShaderResourceView* srvs[] = {
+        nullptr, m_statsSRV.Get(), nullptr, nullptr, m_dotEdgeSRV.Get()
+    };
+    m_context->CSSetShaderResources(0, 5, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_rawOutputUAV.Get(), m_historyUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
@@ -734,11 +844,18 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
 
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
+    UINT dotDispatchX = (outW * 2 + 7) / 8;
+    UINT dotDispatchY = (outH * 4 + 7) / 8;
+
+    BuildDotGrid(m_dotPrefilterShaderNV12.Get(), srvY, srvUV, dotDispatchX,
+                 dotDispatchY, m_constantBuffer.Get());
 
     // 2. Main Pass
     m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* srvs[] = { srvY, srvUV, m_statsSRV.Get() };
-    m_context->CSSetShaderResources(0, 3, srvs);
+    ID3D11ShaderResourceView* srvs[] = {
+        nullptr, nullptr, m_statsSRV.Get(), nullptr, m_dotEdgeSRV.Get()
+    };
+    m_context->CSSetShaderResources(0, 5, srvs);
     ID3D11UnorderedAccessView* uavs[] = { m_rawOutputUAV.Get(), m_historyUAV.Get() };
     m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     m_context->CSSetConstantBuffers(0, 1, cbs);
@@ -789,6 +906,8 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
     ID3D11SamplerState* samplers[] = { m_linearSampler.Get() };
     UINT dispatchX = (outW + 7) / 8;
     UINT dispatchY = (outH + 7) / 8;
+    UINT dotDispatchX = (outW * 2 + 7) / 8;
+    UINT dotDispatchY = (outH * 4 + 7) / 8;
 
     if (cache.IsYuv()) {
         ID3D11ShaderResourceView* srvY = cache.GetSrvY();
@@ -837,9 +956,14 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
         ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
         m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
 
+        BuildDotGrid(m_dotPrefilterShaderNV12.Get(), srvY, srvUV,
+                     dotDispatchX, dotDispatchY, m_constantBuffer.Get());
+
         m_context->CSSetShader(m_computeShaderNV12.Get(), nullptr, 0);
-        ID3D11ShaderResourceView* srvs[] = { srvY, srvUV, m_statsSRV.Get() };
-        m_context->CSSetShaderResources(0, 3, srvs);
+        ID3D11ShaderResourceView* srvs[] = {
+            nullptr, nullptr, m_statsSRV.Get(), nullptr, m_dotEdgeSRV.Get()
+        };
+        m_context->CSSetShaderResources(0, 5, srvs);
         ID3D11UnorderedAccessView* uavs[] = { m_rawOutputUAV.Get(), m_historyUAV.Get() };
         m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
         m_context->CSSetConstantBuffers(0, 1, cbs);
@@ -883,9 +1007,14 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
         ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
         m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
 
+        BuildDotGrid(m_dotPrefilterShader.Get(), inputSRV, nullptr,
+                     dotDispatchX, dotDispatchY, m_constantBuffer.Get());
+
         m_context->CSSetShader(m_computeShader.Get(), nullptr, 0);
-        ID3D11ShaderResourceView* srvs[] = { inputSRV, m_statsSRV.Get(), nullptr };
-        m_context->CSSetShaderResources(0, 3, srvs);
+        ID3D11ShaderResourceView* srvs[] = {
+            nullptr, m_statsSRV.Get(), nullptr, nullptr, m_dotEdgeSRV.Get()
+        };
+        m_context->CSSetShaderResources(0, 5, srvs);
         ID3D11UnorderedAccessView* uavs[] = { m_rawOutputUAV.Get(), m_historyUAV.Get() };
         m_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
         m_context->CSSetConstantBuffers(0, 1, cbs);

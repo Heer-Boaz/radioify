@@ -66,6 +66,8 @@ class ConsoleInput {
   void disableTerminalMouseInput();
   void updateTerminalGridSize();
   void mapPixelMousePosition(MouseEvent& mouse) const;
+  bool pollTerminalInputStream(InputEvent& out);
+  bool handleTerminalInputCharacter(wchar_t ch, InputEvent& out);
   HANDLE handle_ = INVALID_HANDLE_VALUE;
   HANDLE output_ = INVALID_HANDLE_VALUE;
   DWORD originalMode_ = 0;

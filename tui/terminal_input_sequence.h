@@ -19,6 +19,7 @@ class TerminalInputSequenceParser {
  private:
   bool parse(InputEvent& out, bool* complete);
   bool parseMouse(InputEvent& out, bool* complete) const;
+  bool parseLegacyMouse(InputEvent& out, bool* complete) const;
   bool parseKey(InputEvent& out, bool* complete) const;
 
   wchar_t buffer_[64]{};
