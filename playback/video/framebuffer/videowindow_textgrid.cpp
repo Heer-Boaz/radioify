@@ -3,6 +3,7 @@
 #include "gpu_shared.h"
 #include "text_grid_bitmap_renderer.h"
 #include "videowindow_internal.h"
+#include "videowindow_present.h"
 
 #include <vector>
 
@@ -107,6 +108,7 @@ void VideoWindow::PresentTextGrid(const std::vector<ScreenCell>& cells, int cols
 
     lock.unlock();
     if (!swapChain) return;
-    UINT flags = nonBlocking ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
-    (void)swapChain->Present(presentInterval, flags);
+    const VideoWindowPresentArgs presentArgs =
+        liveVideoWindowPresentArgs(presentInterval, nonBlocking);
+    (void)swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
 }

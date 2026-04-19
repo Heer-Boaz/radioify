@@ -52,11 +52,14 @@ public:
     void ClearHistory();
 
 private:
+    static constexpr int kOutputStagingBufferCount = 4;
+
     bool CreateDevice();
     bool CreateDeviceWithFlags(UINT flags);
     bool CreateComputeShaders(std::string* error);
     bool CreateBuffers(int width, int height, int outW, int outH);
     bool CreateStatsBuffer();
+    bool ReadOutputBuffer(AsciiArt& out, int outW, int outH);
     
     // Shared rendering logic (called after textures are set up)
     bool RenderNV12Internal(int width, int height, bool fullRange, 
@@ -76,9 +79,12 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_outputUAV;
-    Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputStagingBuffers[2];
-    int m_outputStagingIndex = 0;
-    bool m_outputStagingPrimed = false;
+    Microsoft::WRL::ComPtr<ID3D11Buffer>
+        m_outputStagingBuffers[kOutputStagingBufferCount];
+    bool m_outputStagingPending[kOutputStagingBufferCount] = {};
+    int m_outputStagingReadIndex = 0;
+    int m_outputStagingWriteIndex = 0;
+    int m_outputStagingPendingCount = 0;
 
     // Stats Buffer
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_statsBuffer;

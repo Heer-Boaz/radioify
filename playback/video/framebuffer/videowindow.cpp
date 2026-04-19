@@ -2,6 +2,7 @@
 #include "timing_log.h"
 #include "gpu_shared.h"
 #include "videowindow_internal.h"
+#include "videowindow_present.h"
 #include <d3d11_1.h>
 #include <dxgi1_3.h>
 #include <windowsx.h>
@@ -2205,9 +2206,7 @@ bool VideoWindow::ConsumeCloseRequested() {
 }
 
 void VideoWindow::SetVsync(bool enabled) {
-    (void)enabled;
-    // VSync is always enforced on.
-    m_presentInterval.store(1u, std::memory_order_relaxed);
+    m_presentInterval.store(enabled ? 1u : 0u, std::memory_order_relaxed);
 }
 
 HANDLE VideoWindow::GetFrameLatencyWaitableObject() {
@@ -2362,11 +2361,12 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 #endif
     lock.unlock();
     if (!swapChain) return;
-    UINT flags = nonBlocking ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
-    HRESULT presHr = swapChain->Present(presentInterval, flags);
+    const VideoWindowPresentArgs presentArgs =
+        liveVideoWindowPresentArgs(presentInterval, nonBlocking);
+    HRESULT presHr =
+        swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
     frameCache.SignalFrameLatencyFence(context.Get());
-    if (presHr == DXGI_STATUS_OCCLUDED ||
-        presHr == DXGI_ERROR_WAS_STILL_DRAWING) {
+    if (videoWindowPresentSkipped(presHr)) {
 #if RADIOIFY_ENABLE_TIMING_LOG
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
 #endif
@@ -2877,11 +2877,12 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
 #endif
     lock.unlock();
     if (!swapChain) return;
-    UINT flags = nonBlocking ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
-    HRESULT presHr = swapChain->Present(presentInterval, flags);
+    const VideoWindowPresentArgs presentArgs =
+        liveVideoWindowPresentArgs(presentInterval, nonBlocking);
+    HRESULT presHr =
+        swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
     frameCache.SignalFrameLatencyFence(context.Get());
-    if (presHr == DXGI_STATUS_OCCLUDED ||
-        presHr == DXGI_ERROR_WAS_STILL_DRAWING) {
+    if (videoWindowPresentSkipped(presHr)) {
 #if RADIOIFY_ENABLE_TIMING_LOG
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
 #endif
@@ -2903,5 +2904,7 @@ void VideoWindow::PresentBackbuffer() {
     UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
     lock.unlock();
     if (!swapChain) return;
-    swapChain->Present(presentInterval, 0);
+    const VideoWindowPresentArgs presentArgs =
+        liveVideoWindowPresentArgs(presentInterval, false);
+    swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
 }

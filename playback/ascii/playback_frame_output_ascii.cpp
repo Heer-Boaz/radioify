@@ -302,6 +302,12 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       input.cellPixelWidth, input.cellPixelHeight);
   const int prevArtWidth = input.art->width;
   const int prevArtHeight = input.art->height;
+  const size_t prevArtCellCount =
+      static_cast<size_t>(std::max(0, prevArtWidth)) *
+      static_cast<size_t>(std::max(0, prevArtHeight));
+  const bool hadRenderedArt =
+      prevArtWidth > 0 && prevArtHeight > 0 &&
+      input.art->cells.size() >= prevArtCellCount;
   input.art->width = outW;
   input.art->height = outH;
 
@@ -338,10 +344,10 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       if (cacheUpdated) {
         renderFromCache = input.gpuRenderer->RenderFromCache(*input.frameCache,
                                                             *input.art, &gpuErr);
-        if (!renderFromCache && hadCachedFrame) {
+        if (!renderFromCache && hadRenderedArt) {
           keepPreviousFrame = true;
         }
-      } else if (hadCachedFrame) {
+      } else if (hadRenderedArt || hadCachedFrame) {
         keepPreviousFrame = true;
       }
     }
@@ -397,6 +403,10 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       input.art->width = prevArtWidth;
       input.art->height = prevArtHeight;
       asciiOk = true;
+    } else if (cacheUpdated && gpuErr.empty()) {
+      input.art->width = prevArtWidth;
+      input.art->height = prevArtHeight;
+      return false;
     } else if (input.allowAsciiCpuFallback ||
                input.frame->format == VideoPixelFormat::NV12 ||
                input.frame->format == VideoPixelFormat::P010 ||

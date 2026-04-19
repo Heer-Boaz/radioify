@@ -2,6 +2,7 @@
 #include "gpu_shared.h"
 #include <d3d11.h>
 #include <d3d10.h>
+#include <dxgi.h>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -26,6 +27,67 @@ namespace {
 
 }
 
+bool GpuAsciiRenderer::ReadOutputBuffer(AsciiArt& out, int outW, int outH) {
+    bool readbackReady = false;
+
+    if (m_outputStagingPendingCount > 0) {
+        int readIndex = m_outputStagingReadIndex;
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        HRESULT hr = m_context->Map(m_outputStagingBuffers[readIndex].Get(), 0,
+                                    D3D11_MAP_READ,
+                                    D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+        if (SUCCEEDED(hr)) {
+            GpuAsciiCell* gpuCells = static_cast<GpuAsciiCell*>(mapped.pData);
+            out.cells.resize(outW * outH);
+
+            for (int i = 0; i < outW * outH; ++i) {
+                out.cells[i].ch = static_cast<wchar_t>(gpuCells[i].ch);
+
+                uint32_t fg = gpuCells[i].fg;
+                out.cells[i].fg.r = (fg) & 0xFF;
+                out.cells[i].fg.g = (fg >> 8) & 0xFF;
+                out.cells[i].fg.b = (fg >> 16) & 0xFF;
+
+                uint32_t bg = gpuCells[i].bg;
+                out.cells[i].bg.r = (bg) & 0xFF;
+                out.cells[i].bg.g = (bg >> 8) & 0xFF;
+                out.cells[i].bg.b = (bg >> 16) & 0xFF;
+
+                out.cells[i].hasBg = (gpuCells[i].hasBg & 1u) != 0;
+            }
+            m_context->Unmap(m_outputStagingBuffers[readIndex].Get(), 0);
+            m_outputStagingPending[readIndex] = false;
+            m_outputStagingReadIndex =
+                (readIndex + 1) % kOutputStagingBufferCount;
+            --m_outputStagingPendingCount;
+            readbackReady = true;
+        } else if (hr != DXGI_ERROR_WAS_STILL_DRAWING) {
+            m_outputStagingPending[readIndex] = false;
+            m_outputStagingReadIndex =
+                (readIndex + 1) % kOutputStagingBufferCount;
+            --m_outputStagingPendingCount;
+        }
+    }
+
+    if (m_outputStagingPendingCount < kOutputStagingBufferCount) {
+        int writeIndex = m_outputStagingWriteIndex;
+        for (int i = 0; i < kOutputStagingBufferCount; ++i) {
+            if (!m_outputStagingPending[writeIndex]) {
+                break;
+            }
+            writeIndex = (writeIndex + 1) % kOutputStagingBufferCount;
+        }
+        m_context->CopyResource(m_outputStagingBuffers[writeIndex].Get(),
+                                m_outputBuffer.Get());
+        m_context->Flush();
+        m_outputStagingPending[writeIndex] = true;
+        m_outputStagingWriteIndex =
+            (writeIndex + 1) % kOutputStagingBufferCount;
+        ++m_outputStagingPendingCount;
+    }
+    return readbackReady;
+}
+
 GpuAsciiRenderer::GpuAsciiRenderer() {}
 
 GpuAsciiRenderer::~GpuAsciiRenderer() {}
@@ -43,16 +105,19 @@ void GpuAsciiRenderer::ResetSessionState() {
     m_frameCache.Reset();
     m_outputBuffer.Reset();
     m_outputUAV.Reset();
-    m_outputStagingBuffers[0].Reset();
-    m_outputStagingBuffers[1].Reset();
+    for (int i = 0; i < kOutputStagingBufferCount; ++i) {
+        m_outputStagingBuffers[i].Reset();
+        m_outputStagingPending[i] = false;
+    }
     m_statsBuffer.Reset();
     m_statsUAV.Reset();
     m_statsSRV.Reset();
     m_historyBuffer.Reset();
     m_historyUAV.Reset();
     m_constantBuffer.Reset();
-    m_outputStagingIndex = 0;
-    m_outputStagingPrimed = false;
+    m_outputStagingReadIndex = 0;
+    m_outputStagingWriteIndex = 0;
+    m_outputStagingPendingCount = 0;
     m_currentWidth = 0;
     m_currentHeight = 0;
     m_currentOutW = 0;
@@ -349,35 +414,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
 
-    // Readback (double-buffered staging to reduce GPU stalls)
-    int writeIndex = m_outputStagingIndex;
-    int readIndex = m_outputStagingPrimed ? (1 - writeIndex) : writeIndex;
-    m_context->CopyResource(m_outputStagingBuffers[writeIndex].Get(), m_outputBuffer.Get());
-    
-    if (SUCCEEDED(m_context->Map(m_outputStagingBuffers[readIndex].Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-        GpuAsciiCell* gpuCells = (GpuAsciiCell*)mapped.pData;
-        out.cells.resize(outW * outH);
-        for (int i = 0; i < outW * outH; ++i) {
-            out.cells[i].ch = (wchar_t)gpuCells[i].ch;
-            
-            uint32_t fg = gpuCells[i].fg;
-            out.cells[i].fg.r = (fg) & 0xFF;
-            out.cells[i].fg.g = (fg >> 8) & 0xFF;
-            out.cells[i].fg.b = (fg >> 16) & 0xFF;
-
-            uint32_t bg = gpuCells[i].bg;
-            out.cells[i].bg.r = (bg) & 0xFF;
-            out.cells[i].bg.g = (bg >> 8) & 0xFF;
-            out.cells[i].bg.b = (bg >> 16) & 0xFF;
-
-            out.cells[i].hasBg = (gpuCells[i].hasBg & 1u) != 0;
-        }
-        m_context->Unmap(m_outputStagingBuffers[readIndex].Get(), 0);
-        m_outputStagingPrimed = true;
-    }
-    m_outputStagingIndex = 1 - writeIndex;
-
-    return true;
+    return ReadOutputBuffer(out, outW, outH);
 }
 
 bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) {
@@ -388,13 +425,16 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
 
     m_outputBuffer.Reset();
     m_outputUAV.Reset();
-    m_outputStagingBuffers[0].Reset();
-    m_outputStagingBuffers[1].Reset();
+    for (int i = 0; i < kOutputStagingBufferCount; ++i) {
+        m_outputStagingBuffers[i].Reset();
+        m_outputStagingPending[i] = false;
+    }
     m_historyBuffer.Reset();
     m_historyUAV.Reset();
     m_constantBuffer.Reset();
-    m_outputStagingIndex = 0;
-    m_outputStagingPrimed = false;
+    m_outputStagingReadIndex = 0;
+    m_outputStagingWriteIndex = 0;
+    m_outputStagingPendingCount = 0;
     m_currentWidth = 0;
     m_currentHeight = 0;
     m_currentOutW = 0;
@@ -428,7 +468,7 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     UINT clearVals[4] = {0,0,0,0};
     m_context->ClearUnorderedAccessViewUint(m_historyUAV.Get(), clearVals);
 
-    // Staging Buffers for Readback (double-buffered)
+    // Staging buffers for readback.
     bufDesc.Usage = D3D11_USAGE_STAGING;
     bufDesc.BindFlags = 0;
     bufDesc.MiscFlags = 0;
@@ -436,11 +476,12 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     bufDesc.StructureByteStride = 0; // Not needed for staging
     bufDesc.ByteWidth = sizeof(GpuAsciiCell) * outW * outH;
 
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < kOutputStagingBufferCount; ++i) {
         if (FAILED(m_device->CreateBuffer(&bufDesc, nullptr, &m_outputStagingBuffers[i]))) return false;
     }
-    m_outputStagingIndex = 0;
-    m_outputStagingPrimed = false;
+    m_outputStagingReadIndex = 0;
+    m_outputStagingWriteIndex = 0;
+    m_outputStagingPendingCount = 0;
 
     // Constant Buffer
     bufDesc.ByteWidth = sizeof(Constants);
@@ -555,36 +596,7 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
 
-    // Readback (double-buffered staging to reduce GPU stalls)
-    int writeIndex = m_outputStagingIndex;
-    int readIndex = m_outputStagingPrimed ? (1 - writeIndex) : writeIndex;
-    m_context->CopyResource(m_outputStagingBuffers[writeIndex].Get(), m_outputBuffer.Get());
-    
-    if (SUCCEEDED(m_context->Map(m_outputStagingBuffers[readIndex].Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-        GpuAsciiCell* gpuCells = (GpuAsciiCell*)mapped.pData;
-        out.cells.resize(outW * outH);
-        
-        for (int i = 0; i < outW * outH; ++i) {
-            out.cells[i].ch = (wchar_t)gpuCells[i].ch;
-            
-            uint32_t fg = gpuCells[i].fg;
-            out.cells[i].fg.r = (fg) & 0xFF;
-            out.cells[i].fg.g = (fg >> 8) & 0xFF;
-            out.cells[i].fg.b = (fg >> 16) & 0xFF;
-
-            uint32_t bg = gpuCells[i].bg;
-            out.cells[i].bg.r = (bg) & 0xFF;
-            out.cells[i].bg.g = (bg >> 8) & 0xFF;
-            out.cells[i].bg.b = (bg >> 16) & 0xFF;
-
-            out.cells[i].hasBg = gpuCells[i].hasBg != 0;
-        }
-        m_context->Unmap(m_outputStagingBuffers[readIndex].Get(), 0);
-        m_outputStagingPrimed = true;
-    }
-    m_outputStagingIndex = 1 - writeIndex;
-
-    return true;
+    return ReadOutputBuffer(out, outW, outH);
 }
 
 bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayIndex,
@@ -720,37 +732,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
 
-    // Readback (double-buffered staging to reduce GPU stalls)
-    int writeIndex = m_outputStagingIndex;
-    int readIndex = m_outputStagingPrimed ? (1 - writeIndex) : writeIndex;
-    m_context->CopyResource(m_outputStagingBuffers[writeIndex].Get(), m_outputBuffer.Get());
-    
-    if (SUCCEEDED(m_context->Map(m_outputStagingBuffers[readIndex].Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-        GpuAsciiCell* gpuCells = (GpuAsciiCell*)mapped.pData;
-        out.cells.resize(outW * outH);
-        
-        for (int i = 0; i < outW * outH; ++i) {
-            out.cells[i].ch = (wchar_t)gpuCells[i].ch;
-            
-            uint32_t fg = gpuCells[i].fg;
-            out.cells[i].fg.r = (fg) & 0xFF;
-            out.cells[i].fg.g = (fg >> 8) & 0xFF;
-            out.cells[i].fg.b = (fg >> 16) & 0xFF;
-
-            uint32_t bg = gpuCells[i].bg;
-            out.cells[i].bg.r = (bg) & 0xFF;
-            out.cells[i].bg.g = (bg >> 8) & 0xFF;
-            out.cells[i].bg.b = (bg >> 16) & 0xFF;
-
-            uint32_t hasBgRaw = gpuCells[i].hasBg;
-            out.cells[i].hasBg = (hasBgRaw & 1u) != 0;
-        }
-        m_context->Unmap(m_outputStagingBuffers[readIndex].Get(), 0);
-        m_outputStagingPrimed = true;
-    }
-    m_outputStagingIndex = 1 - writeIndex;
-
-    return true;
+    return ReadOutputBuffer(out, outW, outH);
 }
 
 bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
@@ -923,34 +905,5 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
 
     cache.MarkFrameInFlight(m_context.Get());
 
-    int writeIndex = m_outputStagingIndex;
-    int readIndex = m_outputStagingPrimed ? (1 - writeIndex) : writeIndex;
-    m_context->CopyResource(m_outputStagingBuffers[writeIndex].Get(), m_outputBuffer.Get());
-
-    D3D11_MAPPED_SUBRESOURCE mapped;
-    if (SUCCEEDED(m_context->Map(m_outputStagingBuffers[readIndex].Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-        GpuAsciiCell* gpuCells = (GpuAsciiCell*)mapped.pData;
-        out.cells.resize(outW * outH);
-
-        for (int i = 0; i < outW * outH; ++i) {
-            out.cells[i].ch = (wchar_t)gpuCells[i].ch;
-
-            uint32_t fg = gpuCells[i].fg;
-            out.cells[i].fg.r = (fg) & 0xFF;
-            out.cells[i].fg.g = (fg >> 8) & 0xFF;
-            out.cells[i].fg.b = (fg >> 16) & 0xFF;
-
-            uint32_t bg = gpuCells[i].bg;
-            out.cells[i].bg.r = (bg) & 0xFF;
-            out.cells[i].bg.g = (bg >> 8) & 0xFF;
-            out.cells[i].bg.b = (bg >> 16) & 0xFF;
-
-            out.cells[i].hasBg = gpuCells[i].hasBg != 0;
-        }
-        m_context->Unmap(m_outputStagingBuffers[readIndex].Get(), 0);
-        m_outputStagingPrimed = true;
-    }
-    m_outputStagingIndex = 1 - writeIndex;
-
-    return true;
+    return ReadOutputBuffer(out, outW, outH);
 }

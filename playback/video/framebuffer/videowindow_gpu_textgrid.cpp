@@ -8,6 +8,7 @@
 
 #include "gpu_shared.h"
 #include "terminal_font.h"
+#include "videowindow_present.h"
 
 namespace {
 constexpr int kGlyphAtlasCols = 16;
@@ -402,6 +403,7 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
 
     lock.unlock();
     if (!swapChain) return;
-    UINT flags = nonBlocking ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
-    (void)swapChain->Present(presentInterval, flags);
+    const VideoWindowPresentArgs presentArgs =
+        liveVideoWindowPresentArgs(presentInterval, nonBlocking);
+    (void)swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
 }

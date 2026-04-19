@@ -33,10 +33,12 @@ enum class PlaybackLoopState : uint8_t {
   Stopped,
 };
 
-bool shouldRenderPlaybackFrame(bool redraw, bool overlayRefreshDue,
+bool shouldRenderPlaybackFrame(bool redraw, bool presented,
+                               bool overlayRefreshDue,
                                bool debugRefreshDue,
                                PlaybackSessionState playbackState) {
-  return redraw || ((overlayRefreshDue || debugRefreshDue) &&
+  return redraw || presented ||
+         ((overlayRefreshDue || debugRefreshDue) &&
                     playbackState != PlaybackSessionState::Ended);
 }
 
@@ -377,18 +379,17 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void shutdown() {
-    // Stop playback threads before tearing down the shared D3D window/swapchain.
     perfLogAppendf(&perfLog, "video_shutdown begin");
-    perfLogFlush(&perfLog);
-    perfLogAppendf(&perfLog, "video_shutdown player_close_begin");
-    perfLogFlush(&perfLog);
-    core.shutdownPlayer();
-    perfLogAppendf(&perfLog, "video_shutdown player_close_end");
     perfLogFlush(&perfLog);
     perfLogAppendf(&perfLog, "video_shutdown output_stop_begin");
     perfLogFlush(&perfLog);
     output.stop();
     perfLogAppendf(&perfLog, "video_shutdown output_stop_end");
+    perfLogFlush(&perfLog);
+    perfLogAppendf(&perfLog, "video_shutdown player_close_begin");
+    perfLogFlush(&perfLog);
+    core.shutdownPlayer();
+    perfLogAppendf(&perfLog, "video_shutdown player_close_end");
     perfLogFlush(&perfLog);
     perfLogAppendf(&perfLog, "video_shutdown audio_stop_begin");
     perfLogFlush(&perfLog);
@@ -720,7 +721,8 @@ struct PlaybackLoopRunner::Impl {
       handlePendingResize();
 
       RefreshState refresh = refreshState();
-      if (shouldRenderPlaybackFrame(redraw, refresh.overlayRefreshDue,
+      if (shouldRenderPlaybackFrame(redraw, refresh.presented,
+                                    refresh.overlayRefreshDue,
                                     refresh.debugRefreshDue,
                                     core.playbackState())) {
         renderPlaybackFrame(refresh.presented, loopState);
