@@ -34,6 +34,7 @@ struct AsciiCell {
 
 RWStructuredBuffer<AsciiCell> OutputBuffer : register(u0);
 RWStructuredBuffer<uint2> HistoryBuffer : register(u1); // x=Fg, y=Bg (packed)
+StructuredBuffer<AsciiCell> RefineInput : register(t3);
 
 static const uint kBrailleBase = 0x2800;
 static const float3 kLumaCoeff = float3(0.2126f, 0.7152f, 0.0722f);
@@ -89,6 +90,194 @@ float3 UnpackColor(uint c) {
 
 float GetLuma(float3 c) {
     return dot(c, kLumaCoeff) * 255.0f;
+}
+
+uint ExtractBrailleMask(AsciiCell cell) {
+    if (cell.ch < kBrailleBase || cell.ch > (kBrailleBase + 0xFFu)) {
+        return 0u;
+    }
+    return cell.ch - kBrailleBase;
+}
+
+uint BrailleBitAt(uint col, uint row) {
+    return (col == 0u) ? ((row == 3u) ? 6u : row)
+                       : ((row == 3u) ? 7u : row + 3u);
+}
+
+bool MaskHasBit(uint mask, uint bit) {
+    return ((mask >> bit) & 1u) != 0u;
+}
+
+uint ContinuityCandidateBit(uint index) {
+    if (index == 0u) return 0u;
+    if (index == 1u) return 3u;
+    if (index == 2u) return 6u;
+    return 7u;
+}
+
+bool ContinuityCandidateHasShapeSupport(uint baseMask, uint bit,
+                                        uint leftMask, uint rightMask,
+                                        uint topMask, uint bottomMask,
+                                        uint topLeftMask, uint topRightMask,
+                                        uint bottomLeftMask,
+                                        uint bottomRightMask) {
+    if (bit == 0u) {
+        bool local = MaskHasBit(baseMask, 1u) || MaskHasBit(baseMask, 3u);
+        bool neighbor = MaskHasBit(topLeftMask, 7u) &&
+                        (MaskHasBit(topMask, 6u) ||
+                         MaskHasBit(leftMask, 3u));
+        return local && neighbor;
+    }
+    if (bit == 3u) {
+        bool local = MaskHasBit(baseMask, 0u) || MaskHasBit(baseMask, 4u);
+        bool neighbor = MaskHasBit(topRightMask, 6u) &&
+                        (MaskHasBit(topMask, 7u) ||
+                         MaskHasBit(rightMask, 0u));
+        return local && neighbor;
+    }
+    if (bit == 6u) {
+        bool local = MaskHasBit(baseMask, 2u) || MaskHasBit(baseMask, 7u);
+        bool neighbor = MaskHasBit(bottomLeftMask, 3u) &&
+                        (MaskHasBit(bottomMask, 0u) ||
+                         MaskHasBit(leftMask, 7u));
+        return local && neighbor;
+    }
+    bool local = MaskHasBit(baseMask, 5u) || MaskHasBit(baseMask, 6u);
+    bool neighbor = MaskHasBit(bottomRightMask, 0u) &&
+                    (MaskHasBit(bottomMask, 3u) ||
+                     MaskHasBit(rightMask, 6u));
+    return local && neighbor;
+}
+
+int PairContinuityScore(bool a, bool b, int matchReward,
+                        int mismatchPenalty) {
+    if (a && b) {
+        return -matchReward;
+    }
+    if (a != b) {
+        return mismatchPenalty;
+    }
+    return 0;
+}
+
+int NeighborContinuityScore(uint mask, uint baseMask, uint leftMask,
+                            uint rightMask, uint topMask, uint bottomMask,
+                            uint topLeftMask, uint topRightMask,
+                            uint bottomLeftMask, uint bottomRightMask,
+                            int strength) {
+    int matchReward = strength;
+    int mismatchPenalty = strength >> 1;
+    int diagonalReward = strength * 2;
+    int diagonalMismatch = strength;
+    int score = (int)countbits(mask & ~baseMask) * 256 +
+                (int)countbits(baseMask & ~mask) * 1024;
+
+    [unroll]
+    for (uint row = 0u; row < 4u; ++row) {
+        score += PairContinuityScore(
+            MaskHasBit(mask, BrailleBitAt(0u, row)),
+            MaskHasBit(leftMask, BrailleBitAt(1u, row)), matchReward,
+            mismatchPenalty);
+        score += PairContinuityScore(
+            MaskHasBit(mask, BrailleBitAt(1u, row)),
+            MaskHasBit(rightMask, BrailleBitAt(0u, row)), matchReward,
+            mismatchPenalty);
+    }
+    [unroll]
+    for (uint col = 0u; col < 2u; ++col) {
+        score += PairContinuityScore(
+            MaskHasBit(mask, BrailleBitAt(col, 0u)),
+            MaskHasBit(topMask, BrailleBitAt(col, 3u)), matchReward,
+            mismatchPenalty);
+        score += PairContinuityScore(
+            MaskHasBit(mask, BrailleBitAt(col, 3u)),
+            MaskHasBit(bottomMask, BrailleBitAt(col, 0u)), matchReward,
+            mismatchPenalty);
+    }
+
+    score += PairContinuityScore(MaskHasBit(mask, BrailleBitAt(0u, 0u)),
+                                 MaskHasBit(topLeftMask, BrailleBitAt(1u, 3u)),
+                                 diagonalReward, diagonalMismatch);
+    score += PairContinuityScore(MaskHasBit(mask, BrailleBitAt(1u, 0u)),
+                                 MaskHasBit(topRightMask, BrailleBitAt(0u, 3u)),
+                                 diagonalReward, diagonalMismatch);
+    score += PairContinuityScore(MaskHasBit(mask, BrailleBitAt(0u, 3u)),
+                                 MaskHasBit(bottomLeftMask, BrailleBitAt(1u, 0u)),
+                                 diagonalReward, diagonalMismatch);
+    score += PairContinuityScore(MaskHasBit(mask, BrailleBitAt(1u, 3u)),
+                                 MaskHasBit(bottomRightMask, BrailleBitAt(0u, 0u)),
+                                 diagonalReward, diagonalMismatch);
+    return score;
+}
+
+uint RefineNeighborContinuityMask(uint baseMask, uint leftMask, uint rightMask,
+                                  uint topMask, uint bottomMask,
+                                  uint topLeftMask, uint topRightMask,
+                                  uint bottomLeftMask, uint bottomRightMask,
+                                  float contrast) {
+    baseMask &= 0xffu;
+    int strength = (int)(kNeighborContinuityStrength * 256.0f + 0.5f);
+    int minGain = (int)(kNeighborContinuityMinGain * 256.0f + 0.5f);
+    if (baseMask == 0u || baseMask == 0xffu || strength <= 0 ||
+        contrast < (float)kNeighborContinuityMinContrast) {
+        return baseMask;
+    }
+
+    uint bestMask = baseMask;
+    int baseScore =
+        NeighborContinuityScore(baseMask, baseMask, leftMask, rightMask,
+                                topMask, bottomMask, topLeftMask,
+                                topRightMask, bottomLeftMask,
+                                bottomRightMask, strength);
+    int bestScore = baseScore;
+    [unroll]
+    for (uint i = 0u; i < 4u; ++i) {
+        uint bit = ContinuityCandidateBit(i);
+        uint bitFlag = 1u << bit;
+        if ((baseMask & bitFlag) != 0u) {
+            continue;
+        }
+        if (!ContinuityCandidateHasShapeSupport(
+                baseMask, bit, leftMask, rightMask, topMask, bottomMask,
+                topLeftMask, topRightMask, bottomLeftMask, bottomRightMask)) {
+            continue;
+        }
+        uint candidate = baseMask | bitFlag;
+        int score = NeighborContinuityScore(
+            candidate, baseMask, leftMask, rightMask, topMask, bottomMask,
+            topLeftMask, topRightMask, bottomLeftMask, bottomRightMask,
+            strength);
+        if (score < bestScore) {
+            bestScore = score;
+            bestMask = candidate;
+        }
+    }
+
+    return (baseScore - bestScore >= minGain) ? bestMask : baseMask;
+}
+
+float3 CellDisplayMean(AsciiCell cell, uint mask) {
+    float coverage = saturate(((float)countbits(mask) * kInkVisibleDotCoverage) *
+                              (1.0f / 8.0f));
+    return lerp(UnpackColor(cell.bg), UnpackColor(cell.fg), coverage);
+}
+
+void AccumulateDisplayMean(AsciiCell cell, uint mask, float weight,
+                           inout float3 sum, inout float sumWeight) {
+    if (cell.hasBg == 0u || weight <= 0.0f) {
+        return;
+    }
+    sum += CellDisplayMean(cell, mask) * weight;
+    sumWeight += weight;
+}
+
+void AccumulateInkMean(AsciiCell cell, uint mask, float weight,
+                       inout float3 sum, inout float sumWeight) {
+    if (mask == 0u || weight <= 0.0f) {
+        return;
+    }
+    sum += UnpackColor(cell.fg) * weight;
+    sumWeight += weight;
 }
 
 float GetShadowSaturation(float y255) {
@@ -955,6 +1144,133 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     
     cell.hasBg = 1u;
 
+    OutputBuffer[cellIndex] = cell;
+}
+
+uint RefineInputMaskAt(int x, int y) {
+    if (x < 0 || y < 0 || x >= (int)outWidth || y >= (int)outHeight) {
+        return 0u;
+    }
+    return ExtractBrailleMask(RefineInput[(uint)y * outWidth + (uint)x]);
+}
+
+AsciiCell RefineInputCellAt(int x, int y) {
+    if (x < 0 || y < 0 || x >= (int)outWidth || y >= (int)outHeight) {
+        AsciiCell emptyCell;
+        emptyCell.ch = kBrailleBase;
+        emptyCell.fg = 0u;
+        emptyCell.bg = 0u;
+        emptyCell.hasBg = 0u;
+        return emptyCell;
+    }
+    return RefineInput[(uint)y * outWidth + (uint)x];
+}
+
+[numthreads(8, 8, 1)]
+void CSRefineContinuity(uint3 DTid : SV_DispatchThreadID) {
+    if (DTid.x >= outWidth || DTid.y >= outHeight) {
+        return;
+    }
+
+    uint cellIndex = DTid.y * outWidth + DTid.x;
+    AsciiCell cell = RefineInput[cellIndex];
+    uint baseMask = ExtractBrailleMask(cell);
+    float contrast = 0.0f;
+    if (cell.hasBg != 0u) {
+        contrast = abs(GetLuma(UnpackColor(cell.fg)) -
+                       GetLuma(UnpackColor(cell.bg)));
+    }
+
+    int x = (int)DTid.x;
+    int y = (int)DTid.y;
+    AsciiCell leftCell = RefineInputCellAt(x - 1, y);
+    AsciiCell rightCell = RefineInputCellAt(x + 1, y);
+    AsciiCell topCell = RefineInputCellAt(x, y - 1);
+    AsciiCell bottomCell = RefineInputCellAt(x, y + 1);
+    AsciiCell topLeftCell = RefineInputCellAt(x - 1, y - 1);
+    AsciiCell topRightCell = RefineInputCellAt(x + 1, y - 1);
+    AsciiCell bottomLeftCell = RefineInputCellAt(x - 1, y + 1);
+    AsciiCell bottomRightCell = RefineInputCellAt(x + 1, y + 1);
+    uint leftMask = ExtractBrailleMask(leftCell);
+    uint rightMask = ExtractBrailleMask(rightCell);
+    uint topMask = ExtractBrailleMask(topCell);
+    uint bottomMask = ExtractBrailleMask(bottomCell);
+    uint topLeftMask = ExtractBrailleMask(topLeftCell);
+    uint topRightMask = ExtractBrailleMask(topRightCell);
+    uint bottomLeftMask = ExtractBrailleMask(bottomLeftCell);
+    uint bottomRightMask = ExtractBrailleMask(bottomRightCell);
+    uint refinedMask = RefineNeighborContinuityMask(
+        baseMask, leftMask, rightMask, topMask, bottomMask, topLeftMask,
+        topRightMask, bottomLeftMask, bottomRightMask, contrast);
+    if (refinedMask != baseMask) {
+        cell.ch = kBrailleBase + refinedMask;
+    }
+
+    uint dotCount = countbits(refinedMask);
+    if (cell.hasBg != 0u && dotCount > 0u && dotCount < 8u &&
+        (kNeighborColorAaStrength > 0.0f ||
+         kNeighborFgColorAaStrength > 0.0f) &&
+        contrast >= (float)kNeighborColorAaMinContrast) {
+        float3 curBg = UnpackColor(cell.bg);
+        float3 curFg = UnpackColor(cell.fg);
+
+        float partialness = (float)min(dotCount, 8u - dotCount) * 0.25f;
+        float contrastAmount =
+            saturate((contrast - (float)kNeighborColorAaMinContrast) / 48.0f);
+        float bgAmount =
+            kNeighborColorAaStrength * partialness * contrastAmount;
+        if (bgAmount > 0.0f) {
+            float3 sum = curBg * 4.0f;
+            float sumWeight = 4.0f;
+            AccumulateDisplayMean(leftCell, leftMask, 2.0f, sum, sumWeight);
+            AccumulateDisplayMean(rightCell, rightMask, 2.0f, sum, sumWeight);
+            AccumulateDisplayMean(topCell, topMask, 2.0f, sum, sumWeight);
+            AccumulateDisplayMean(bottomCell, bottomMask, 2.0f, sum, sumWeight);
+            AccumulateDisplayMean(topLeftCell, topLeftMask, 1.0f, sum,
+                                  sumWeight);
+            AccumulateDisplayMean(topRightCell, topRightMask, 1.0f, sum,
+                                  sumWeight);
+            AccumulateDisplayMean(bottomLeftCell, bottomLeftMask, 1.0f, sum,
+                                  sumWeight);
+            AccumulateDisplayMean(bottomRightCell, bottomRightMask, 1.0f, sum,
+                                  sumWeight);
+            curBg = lerp(curBg, sum / sumWeight, bgAmount);
+            cell.bg = PackColor(curBg);
+        }
+
+        float fgAmount =
+            kNeighborFgColorAaStrength * partialness * contrastAmount;
+        if (fgAmount > 0.0f) {
+            float3 sum = curFg * 6.0f;
+            float sumWeight = 6.0f;
+            AccumulateInkMean(leftCell, leftMask, 2.0f, sum, sumWeight);
+            AccumulateInkMean(rightCell, rightMask, 2.0f, sum, sumWeight);
+            AccumulateInkMean(topCell, topMask, 2.0f, sum, sumWeight);
+            AccumulateInkMean(bottomCell, bottomMask, 2.0f, sum, sumWeight);
+            AccumulateInkMean(topLeftCell, topLeftMask, 1.0f, sum, sumWeight);
+            AccumulateInkMean(topRightCell, topRightMask, 1.0f, sum,
+                              sumWeight);
+            AccumulateInkMean(bottomLeftCell, bottomLeftMask, 1.0f, sum,
+                              sumWeight);
+            AccumulateInkMean(bottomRightCell, bottomRightMask, 1.0f, sum,
+                              sumWeight);
+            float3 oldFg = curFg;
+            curFg = lerp(curFg, sum / sumWeight, fgAmount);
+
+            float bgY = GetLuma(curBg);
+            float fgY = GetLuma(curFg);
+            float oldFgY = GetLuma(oldFg);
+            float minDelta =
+                min(abs(oldFgY - bgY), (float)kNeighborColorAaMinContrast);
+            if (minDelta > 0.0f && abs(fgY - bgY) < minDelta) {
+                float targetY = clamp(bgY + ((oldFgY >= bgY) ? minDelta
+                                                             : -minDelta),
+                                      0.0f, 255.0f);
+                curFg = ScaleColorToLuma(curFg, max(fgY, 1.0f), targetY);
+            }
+            cell.fg = PackColor(curFg);
+        }
+    }
     OutputBuffer[cellIndex] = cell;
 }
 

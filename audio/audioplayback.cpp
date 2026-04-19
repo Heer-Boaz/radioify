@@ -2216,6 +2216,9 @@ void audioSeekBy(int direction) {
   if (!gAudio.decoderReady) return;
   int64_t deltaFrames = static_cast<int64_t>(direction) * 5 * gAudio.sampleRate;
   int64_t current = static_cast<int64_t>(gAudio.state.audioClockFrames.load());
+  if (gAudio.state.seekRequested.load()) {
+    current = gAudio.state.pendingSeekFrames.load();
+  }
   int64_t target = current + deltaFrames;
   if (target < 0) target = 0;
   uint64_t total = gAudio.state.totalFrames.load();

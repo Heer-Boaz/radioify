@@ -1845,6 +1845,9 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             ev.mouse.buttonState = buttonState;
             ev.mouse.eventFlags = eventFlags;
             ev.mouse.control = 0x80000000; // Custom flag for window-originated event
+            ev.mouse.hasPixelPosition = true;
+            ev.mouse.pixelX = x;
+            ev.mouse.pixelY = y;
             std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
             pThis->m_inputQueue.push_back(ev);
         };

@@ -39,6 +39,7 @@ enum StageMask : uint32_t {
   kStageCellBackground = 1u << 11,
   kStageColorBoundarySoftening = 1u << 12,
   kStageEdgeBackgroundBlend = 1u << 13,
+  kStageNeighborContinuity = 1u << 14,
 };
 
 constexpr uint32_t kAllStages =
@@ -48,7 +49,7 @@ constexpr uint32_t kAllStages =
     kStageInkSaturation | kStageForegroundTemporal |
     kStageBackgroundTemporal | kStageFullMaskBgContrast |
     kStageCellBackground | kStageColorBoundarySoftening |
-    kStageEdgeBackgroundBlend;
+    kStageEdgeBackgroundBlend | kStageNeighborContinuity;
 
 struct RenderOptions {
   uint32_t stageMask = kAllStages;
@@ -68,6 +69,12 @@ struct RenderOptions {
     int edgeMaskFitMinRange = -1;
     int edgeMaskFitMinSignal = -1;
     int edgeMaskFitMinGain = -1;
+    int neighborContinuityMinContrast = -1;
+    int neighborContinuityMinGain = -1;
+    int neighborContinuityStrength = -1;
+    int neighborColorAaMinContrast = -1;
+    int neighborColorAaStrength = -1;
+    int neighborFgColorAaStrength = -1;
     int perceptualLumaErrorWeight = -1;
     int perceptualBrightBgPenalty = -1;
     int perceptualPreferredBrightBgInkContrast = -1;
@@ -97,6 +104,9 @@ struct RenderStats {
   uint64_t fullMaskBgContrastCount = 0;
   uint64_t colorBoundarySofteningCount = 0;
   uint64_t edgeBackgroundBlendCount = 0;
+  uint64_t neighborContinuityCount = 0;
+  uint64_t neighborColorAaCount = 0;
+  uint64_t neighborFgColorAaCount = 0;
   uint64_t dotCountHistogram[9] = {};
 };
 

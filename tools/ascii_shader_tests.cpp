@@ -162,7 +162,7 @@ void printUsage() {
          "fullmask-contrast|color-boundary>\n"
       << "  --variant <all|current|ink-only|no-dither|no-edge-detect|"
          "no-signal-dampen|no-detail-boost|no-edge-mask-fit|"
-         "no-ink-coverage|"
+         "no-ink-coverage|no-neighbor-continuity|"
          "no-temporal|no-bg-polish|structure-no-bg>\n"
       << "  --out-dir <path>\n"
       << "  --width <pixels>\n"
@@ -174,7 +174,9 @@ void printUsage() {
       << "  tuning names: inkcov,covmax,covsignal,covminluma,"
          "fitgain,fitrange,fitsignal,edgefloor,ditheredge,signalfloor,"
          "inkmin,inkmaxscale,saturation,lumaw,bgpenalty,inkprio,"
-         "edgebgmin,edgebgfull,edgebg,cbmin,cbfull,cbsoft,cbatten,cbhue\n";
+         "contcontrast,contgain,cont,contaa,contfgaa,contaacontrast,"
+         "edgebgmin,edgebgfull,edgebg,"
+         "cbmin,cbfull,cbsoft,cbatten,cbhue\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -591,6 +593,30 @@ std::string canonicalTuningName(std::string_view name) {
   if (name == "fitsignal" || name == "edgeMaskFitMinSignal") {
     return "fitsignal";
   }
+  if (name == "contcontrast" || name == "diaggrad" ||
+      name == "neighborContinuityMinContrast" ||
+      name == "diagonalContinuityMinGradient") {
+    return "contcontrast";
+  }
+  if (name == "contgain" || name == "diagbalance" ||
+      name == "neighborContinuityMinGain" ||
+      name == "diagonalContinuityMinBalance") {
+    return "contgain";
+  }
+  if (name == "cont" || name == "diag" ||
+      name == "neighborContinuityStrength" ||
+      name == "diagonalContinuityStrength") {
+    return "cont";
+  }
+  if (name == "contaa" || name == "neighborColorAaStrength") {
+    return "contaa";
+  }
+  if (name == "contfgaa" || name == "neighborFgColorAaStrength") {
+    return "contfgaa";
+  }
+  if (name == "contaacontrast" || name == "neighborColorAaMinContrast") {
+    return "contaacontrast";
+  }
   if (name == "lumaw" || name == "perceptualLumaErrorWeight") {
     return "lumaw";
   }
@@ -664,6 +690,18 @@ void applyTuningAssignment(
     tuning.edgeMaskFitMinRange = value;
   } else if (name == "fitsignal") {
     tuning.edgeMaskFitMinSignal = value;
+  } else if (name == "contcontrast") {
+    tuning.neighborContinuityMinContrast = value;
+  } else if (name == "contgain") {
+    tuning.neighborContinuityMinGain = value;
+  } else if (name == "cont") {
+    tuning.neighborContinuityStrength = value;
+  } else if (name == "contaa") {
+    tuning.neighborColorAaStrength = value;
+  } else if (name == "contfgaa") {
+    tuning.neighborFgColorAaStrength = value;
+  } else if (name == "contaacontrast") {
+    tuning.neighborColorAaMinContrast = value;
   } else if (name == "lumaw") {
     tuning.perceptualLumaErrorWeight = value;
   } else if (name == "bgpenalty") {
@@ -741,7 +779,7 @@ std::vector<Variant> tuningVariants(const HarnessConfig& config) {
   return out;
 }
 
-std::array<Variant, 13> variants() {
+std::array<Variant, 14> variants() {
   using namespace ascii_debug;
   uint32_t all = kAllStages;
   return {{
@@ -752,6 +790,7 @@ std::array<Variant, 13> variants() {
       {"no-signal-dampen", all & ~kStageSignalDampen, {}},
       {"no-detail-boost", all & ~kStageDetailBoost, {}},
       {"no-edge-mask-fit", all & ~kStageEdgeMaskFit, {}},
+      {"no-neighbor-continuity", all & ~kStageNeighborContinuity, {}},
       {"no-ink-coverage", all & ~kStageInkCoverageCompensation, {}},
       {"no-edge-bg-blend", all & ~kStageEdgeBackgroundBlend, {}},
       {"no-color-boundary", all & ~kStageColorBoundarySoftening, {}},
@@ -1088,7 +1127,9 @@ void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
          "dither_cells,edge_cells,"
          "signal_dampened,detail_boosted,edge_mask_fit,"
-         "ink_coverage_compensated,edge_bg_blended,color_boundary_softened,"
+         "ink_coverage_compensated,neighbor_continuity,neighbor_color_aa,"
+         "neighbor_fg_color_aa,edge_bg_blended,"
+         "color_boundary_softened,"
          "ink_lifted,fg_temporal,bg_temporal,fullmask_bg_contrast\n";
 }
 
@@ -1104,6 +1145,9 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
       << stats.edgeMaskFitCount << ','
       << stats.inkCoverageCompensationCount << ','
+      << stats.neighborContinuityCount << ','
+      << stats.neighborColorAaCount << ','
+      << stats.neighborFgColorAaCount << ','
       << stats.edgeBackgroundBlendCount << ','
       << stats.colorBoundarySofteningCount << ','
       << stats.inkLumaFloorCount << ',' << stats.fgTemporalBlendCount << ','

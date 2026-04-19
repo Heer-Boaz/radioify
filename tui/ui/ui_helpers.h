@@ -50,13 +50,13 @@ struct ProgressFooterRenderResult {
 };
 
 struct ProgressBarHitTestInput {
-  int x = 0;
-  int y = 0;
+  double x = 0.0;
+  double y = 0.0;
   int barX = -1;
   int barY = -1;
   int barWidth = 0;
-  int unitWidth = 1;
-  int unitHeight = 1;
+  double unitWidth = 1.0;
+  double unitHeight = 1.0;
 };
 
 struct BracketButtonLabels {

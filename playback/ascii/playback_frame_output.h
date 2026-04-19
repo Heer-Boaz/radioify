@@ -21,6 +21,22 @@ using AsciiOutputSizeCalculator =
                                       double cellPixelHeight)>;
 using LogLineWriter = std::function<void(const std::string&)>;
 
+struct FrameOutputState {
+  bool renderFailed = false;
+  std::string renderFailMessage;
+  std::string renderFailDetail;
+  bool haveFrame = false;
+  int cachedWidth = -1;
+  int cachedMaxHeight = -1;
+  int cachedFrameWidth = -1;
+  int cachedFrameHeight = -1;
+  double cachedCellPixelWidth = -1.0;
+  double cachedCellPixelHeight = -1.0;
+  int progressBarX = -1;
+  int progressBarY = -1;
+  int progressBarWidth = 0;
+};
+
 struct AsciiModePrepareInput {
   bool allowFrame = false;
   bool clearHistory = false;
@@ -36,16 +52,7 @@ struct AsciiModePrepareInput {
   AsciiArt* art = nullptr;
   GpuAsciiRenderer* gpuRenderer = nullptr;
   GpuVideoFrameCache* frameCache = nullptr;
-  bool* renderFailed = nullptr;
-  std::string* renderFailMessage = nullptr;
-  std::string* renderFailDetail = nullptr;
-  bool* haveFrame = nullptr;
-  int* cachedWidth = nullptr;
-  int* cachedMaxHeight = nullptr;
-  int* cachedFrameWidth = nullptr;
-  int* cachedFrameHeight = nullptr;
-  double* cachedCellPixelWidth = nullptr;
-  double* cachedCellPixelHeight = nullptr;
+  FrameOutputState* state = nullptr;
   LogLineWriter warningSink;
   LogLineWriter timingSink;
 };
@@ -65,9 +72,8 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input);
 
 void prepareNonAsciiModeFrame(bool allowFrame, int width, int maxHeight,
                              int frameWidth, int frameHeight,
-                             int* cachedWidth, int* cachedMaxHeight,
-                             int* cachedFrameWidth, int* cachedFrameHeight,
-                             LogLineWriter warningSink, bool* haveFrame);
+                             FrameOutputState& state,
+                             LogLineWriter warningSink);
 
 void renderAsciiModeContent(ConsoleScreen& screen, const AsciiArt& art, int width,
                            int height, int maxHeight, int artTop,

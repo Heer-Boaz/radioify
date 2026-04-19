@@ -29,6 +29,11 @@ struct MouseEvent {
   DWORD buttonState = 0;
   DWORD eventFlags = 0;
   DWORD control = 0;
+  bool hasPixelPosition = false;
+  int pixelX = 0;
+  int pixelY = 0;
+  double unitWidth = 1.0;
+  double unitHeight = 1.0;
 };
 
 struct InputEvent {

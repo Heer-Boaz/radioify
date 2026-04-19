@@ -32,9 +32,9 @@ struct PlaybackInputView {
   bool* audioOk = nullptr;
   bool hasSubtitles = false;
 
-  int* progressBarX = nullptr;
-  int* progressBarY = nullptr;
-  int* progressBarWidth = nullptr;
+  playback_frame_output::FrameOutputState* frameOutputState = nullptr;
+  playback_frame_output::FrameOutputState* pictureInPictureTextOutputState =
+      nullptr;
 
   playback_frame_output::LogLineWriter timingSink;
 };

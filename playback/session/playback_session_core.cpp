@@ -141,7 +141,6 @@ struct PlaybackSessionCore::Impl {
     renderInputs.player = &player;
     renderInputs.frame = &frameBuffer;
     renderInputs.windowLocalSeekRequested = &windowLocalSeekRequested;
-    renderInputs.haveFrame = &haveFrame;
   }
 
   void updateRenderInputs(
@@ -149,6 +148,7 @@ struct PlaybackSessionCore::Impl {
     renderInputs.playbackState = playbackState;
     renderInputs.audioOk = audioOk;
     renderInputs.audioStarting = audioStarting;
+    renderInputs.frameAvailable = haveFrame;
     renderInputs.localSeekRequested = localSeekRequested;
     renderInputs.pendingSeekTargetSec = pendingSeekTargetSec;
   }

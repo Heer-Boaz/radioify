@@ -1,6 +1,7 @@
 #include "audio_mini_player.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <utility>
@@ -221,12 +222,36 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
                                 ? buildDefaultNowPlayingLabel()
                                 : context.nowPlayingLabel;
 
+  const auto now = std::chrono::steady_clock::now();
   const bool audioReady = audioIsReady();
+  const bool audioSeeking = audioIsSeeking();
   const double totalSec = audioReady ? audioGetTotalSec() : -1.0;
-  double displaySec = audioReady ? audioGetTimeSec() : 0.0;
-  if (audioReady && audioIsSeeking() && audioGetSeekTargetSec() >= 0.0) {
-    displaySec = audioGetSeekTargetSec();
+  const double currentSec = audioReady ? audioGetTimeSec() : 0.0;
+  double displaySec = currentSec;
+  if (audioReady) {
+    if (audioSeeking) {
+      const double seekSec = audioGetSeekTargetSec();
+      if (seekSec >= 0.0 && std::isfinite(seekSec)) {
+        displaySec = seekSec;
+        seekDisplaySec_ = seekSec;
+        seekHoldActive_ = true;
+        seekHoldStart_ = now;
+      }
+    } else if (seekHoldActive_) {
+      const double diff = std::abs(currentSec - seekDisplaySec_);
+      const auto holdAge = now - seekHoldStart_;
+      if ((audioIsPrimed() && diff <= 0.25) ||
+          holdAge > std::chrono::seconds(2)) {
+        seekHoldActive_ = false;
+      } else {
+        displaySec = seekDisplaySec_;
+      }
+    }
+  } else if (seekHoldActive_ &&
+             now - seekHoldStart_ > std::chrono::seconds(2)) {
+    seekHoldActive_ = false;
   }
+  const bool audioDisplayReady = audioReady || seekHoldActive_;
   double ratio = 0.0;
   if (std::isfinite(totalSec) && totalSec > 0.0) {
     ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
@@ -234,7 +259,7 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
 
   playback_overlay::PlaybackOverlayState overlayState;
   overlayState.windowTitle = title;
-  overlayState.audioOk = audioReady;
+  overlayState.audioOk = audioDisplayReady;
   overlayState.playPauseAvailable = audioReady && !audioIsFinished();
   overlayState.audioSupports50HzToggle =
       audioReady && audioSupports50HzToggle();
@@ -255,7 +280,7 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   layoutInput.width = width;
   layoutInput.height = height;
   layoutInput.title = title;
-  layoutInput.reservedRowsAboveProgress = audioReady ? 1 : 0;
+  layoutInput.reservedRowsAboveProgress = audioDisplayReady ? 1 : 0;
 
   playback_overlay::OverlayControlSpecOptions controlOptions;
   controlOptions.includeAudioTrack = false;
@@ -296,7 +321,8 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   footerInput.width = width;
   footerInput.progressY = layout_.progressBarY;
   footerInput.peakY =
-      audioReady && layout_.progressBarY > 0 ? layout_.progressBarY - 1 : -1;
+      audioDisplayReady && layout_.progressBarY > 0 ? layout_.progressBarY - 1
+                                                    : -1;
   footerInput.peak = audioGetPeak();
   footerInput.clipAlert = audioHasClipAlert();
   ProgressFooterRenderResult footerResult =
@@ -336,6 +362,13 @@ void AudioMiniPlayer::updateInteractiveRects() {
   addCellRect(progressX_, progressY_, progressWidth_, 1);
 
   window_.SetPictureInPictureInteractiveRects(rects);
+}
+
+void AudioMiniPlayer::holdSeekDisplay(double targetSec) {
+  if (!(targetSec >= 0.0) || !std::isfinite(targetSec)) return;
+  seekDisplaySec_ = targetSec;
+  seekHoldActive_ = true;
+  seekHoldStart_ = std::chrono::steady_clock::now();
 }
 
 void AudioMiniPlayer::handleInput(const InputEvent& ev,
@@ -389,11 +422,17 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
       return;
     }
     if (key.vk == VK_OEM_4 || key.ch == '[') {
-      if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
+      if (callbacks.onSeekBy) {
+        callbacks.onSeekBy(-1);
+        holdSeekDisplay(audioGetSeekTargetSec());
+      }
       return;
     }
     if (key.vk == VK_OEM_6 || key.ch == ']') {
-      if (callbacks.onSeekBy) callbacks.onSeekBy(1);
+      if (callbacks.onSeekBy) {
+        callbacks.onSeekBy(1);
+        holdSeekDisplay(audioGetSeekTargetSec());
+      }
       return;
     }
     if (key.vk == VK_UP && shift) {
@@ -447,8 +486,14 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
   }
 
   ProgressBarHitTestInput progressHit;
-  progressHit.x = windowMouse ? rawMouse.pos.X : mouse.pos.X;
-  progressHit.y = windowMouse ? rawMouse.pos.Y : mouse.pos.Y;
+  progressHit.x =
+      windowMouse
+          ? (rawMouse.hasPixelPosition ? rawMouse.pixelX : rawMouse.pos.X)
+          : mouse.pos.X;
+  progressHit.y =
+      windowMouse
+          ? (rawMouse.hasPixelPosition ? rawMouse.pixelY : rawMouse.pos.Y)
+          : mouse.pos.Y;
   progressHit.barX = progressX_;
   progressHit.barY = progressY_;
   progressHit.barWidth = progressWidth_;
@@ -456,7 +501,10 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
   progressHit.unitHeight = windowMouse ? cellHeight_ : 1;
   double ratio = 0.0;
   if (progressBarRatioAt(progressHit, &ratio)) {
-    if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
+    if (callbacks.onSeekToRatio) {
+      callbacks.onSeekToRatio(ratio);
+      holdSeekDisplay(audioGetSeekTargetSec());
+    }
   }
 }
 

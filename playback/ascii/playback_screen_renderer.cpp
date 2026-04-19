@@ -88,6 +88,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool overlayVisibleNow = inputs.overlayVisibleNow;
   bool clearHistory = inputs.clearHistory;
   bool frameChanged = inputs.frameChanged;
+  bool frameAvailable = inputs.frameAvailable;
   bool localSeekRequested = inputs.localSeekRequested;
   double cellPixelWidth = inputs.cellPixelWidth > 0.0 ? inputs.cellPixelWidth
                                                       : screen.cellPixelWidth();
@@ -98,19 +99,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   auto& enableSubtitlesShared = *inputs.enableSubtitlesShared;
   auto& windowLocalSeekRequested = *inputs.windowLocalSeekRequested;
   auto& overlayControlHover = *inputs.overlayControlHover;
-  bool& renderFailed = *inputs.renderFailed;
-  std::string& renderFailMessage = *inputs.renderFailMessage;
-  std::string& renderFailDetail = *inputs.renderFailDetail;
-  bool& haveFrame = *inputs.haveFrame;
-  int& cachedWidth = *inputs.cachedWidth;
-  int& cachedMaxHeight = *inputs.cachedMaxHeight;
-  int& cachedFrameWidth = *inputs.cachedFrameWidth;
-  int& cachedFrameHeight = *inputs.cachedFrameHeight;
-  double& cachedCellPixelWidth = *inputs.cachedCellPixelWidth;
-  double& cachedCellPixelHeight = *inputs.cachedCellPixelHeight;
-  int& progressBarX = *inputs.progressBarX;
-  int& progressBarY = *inputs.progressBarY;
-  int& progressBarWidth = *inputs.progressBarWidth;
+  playback_frame_output::FrameOutputState& frameOutput =
+      *inputs.frameOutputState;
   const auto& warningSink = inputs.warningSink;
   const auto& timingSink = inputs.timingSink;
   screen.updateSize();
@@ -195,7 +185,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool waitingForVideo = hasVideoStream && !player.hasVideoFrame();
   bool isPaused = playbackState == PlaybackSessionState::Paused ||
                   player.state() == PlayerState::Paused;
-  bool allowFrame = haveFrame && !useWindowPresenter;
+  frameOutput.haveFrame = frameAvailable;
+  bool allowFrame = frameOutput.haveFrame && !useWindowPresenter;
 
   auto waitingLabel = [&]() -> std::string {
     if (playbackState == PlaybackSessionState::Ended) return "Ended";
@@ -211,10 +202,12 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   };
 
   bool sizeChanged =
-      (width != cachedWidth || maxHeight != cachedMaxHeight ||
-       frame->width != cachedFrameWidth || frame->height != cachedFrameHeight ||
-       std::abs(cellPixelWidth - cachedCellPixelWidth) > 0.01 ||
-       std::abs(cellPixelHeight - cachedCellPixelHeight) > 0.01);
+      (width != frameOutput.cachedWidth ||
+       maxHeight != frameOutput.cachedMaxHeight ||
+       frame->width != frameOutput.cachedFrameWidth ||
+       frame->height != frameOutput.cachedFrameHeight ||
+       std::abs(cellPixelWidth - frameOutput.cachedCellPixelWidth) > 0.01 ||
+       std::abs(cellPixelHeight - frameOutput.cachedCellPixelHeight) > 0.01);
 
   if (currentMode == PlaybackRenderMode::AsciiTerminal) {
     playback_frame_output::AsciiModePrepareInput asciiInput;
@@ -233,29 +226,19 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     asciiInput.art = &art;
     asciiInput.gpuRenderer = &gpuRenderer;
     asciiInput.frameCache = &frameCache;
-    asciiInput.renderFailed = &renderFailed;
-    asciiInput.renderFailMessage = &renderFailMessage;
-    asciiInput.renderFailDetail = &renderFailDetail;
-    asciiInput.haveFrame = &haveFrame;
-    asciiInput.cachedWidth = &cachedWidth;
-    asciiInput.cachedMaxHeight = &cachedMaxHeight;
-    asciiInput.cachedFrameWidth = &cachedFrameWidth;
-    asciiInput.cachedFrameHeight = &cachedFrameHeight;
-    asciiInput.cachedCellPixelWidth = &cachedCellPixelWidth;
-    asciiInput.cachedCellPixelHeight = &cachedCellPixelHeight;
+    asciiInput.state = &frameOutput;
     asciiInput.warningSink = warningSink;
     asciiInput.timingSink = timingSink;
     playback_frame_output::prepareAsciiModeFrame(asciiInput);
   } else {
     playback_frame_output::prepareNonAsciiModeFrame(
         allowFrame, width, maxHeight, frame->width, frame->height,
-        &cachedWidth, &cachedMaxHeight, &cachedFrameWidth, &cachedFrameHeight,
-        warningSink, &haveFrame);
+        frameOutput, warningSink);
   }
 
-  progressBarX = -1;
-  progressBarY = -1;
-  progressBarWidth = 0;
+  frameOutput.progressBarX = -1;
+  frameOutput.progressBarY = -1;
+  frameOutput.progressBarWidth = 0;
   const bool audioFinishedNow = audioOk && audioIsFinished();
   const bool pausedNow = playbackState == PlaybackSessionState::Paused ||
                          player.state() == PlayerState::Paused;
@@ -295,9 +278,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.windowWidth = videoWindow.IsOpen() ? videoWindow.GetWidth() : 0;
   overlayInputs.windowHeight = videoWindow.IsOpen() ? videoWindow.GetHeight() : 0;
   overlayInputs.artTop = artTop;
-  overlayInputs.progressBarX = progressBarX;
-  overlayInputs.progressBarY = progressBarY;
-  overlayInputs.progressBarWidth = progressBarWidth;
+  overlayInputs.progressBarX = frameOutput.progressBarX;
+  overlayInputs.progressBarY = frameOutput.progressBarY;
+  overlayInputs.progressBarWidth = frameOutput.progressBarWidth;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
   const int hoverIndex =
@@ -385,26 +368,30 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     if (totalSec > 0.0 && std::isfinite(totalSec)) {
       ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
     }
-    progressBarX = overlayLayout.progressBarX;
-    progressBarY = overlayLayout.progressBarY;
-    progressBarWidth = overlayLayout.progressBarWidth;
-    if (progressBarY >= 0 && progressBarY < height && progressBarWidth > 0) {
-      const int leftFrameX = progressBarX - 1;
-      const int rightFrameX = progressBarX + progressBarWidth;
+    frameOutput.progressBarX = overlayLayout.progressBarX;
+    frameOutput.progressBarY = overlayLayout.progressBarY;
+    frameOutput.progressBarWidth = overlayLayout.progressBarWidth;
+    if (frameOutput.progressBarY >= 0 && frameOutput.progressBarY < height &&
+        frameOutput.progressBarWidth > 0) {
+      const int leftFrameX = frameOutput.progressBarX - 1;
+      const int rightFrameX =
+          frameOutput.progressBarX + frameOutput.progressBarWidth;
       if (leftFrameX >= 0 && leftFrameX < width) {
-        screen.writeChar(leftFrameX, progressBarY, L'|', progressFrameStyle);
+        screen.writeChar(leftFrameX, frameOutput.progressBarY, L'|',
+                         progressFrameStyle);
       }
       auto barCells = renderProgressBarCells(
-          ratio, progressBarWidth, progressEmptyStyle, progressStart,
+          ratio, frameOutput.progressBarWidth, progressEmptyStyle, progressStart,
           progressEnd);
-      for (int i = 0; i < progressBarWidth; ++i) {
-        const int x = progressBarX + i;
+      for (int i = 0; i < frameOutput.progressBarWidth; ++i) {
+        const int x = frameOutput.progressBarX + i;
         if (x < 0 || x >= width) continue;
         const auto& cell = barCells[static_cast<size_t>(i)];
-        screen.writeChar(x, progressBarY, cell.ch, cell.style);
+        screen.writeChar(x, frameOutput.progressBarY, cell.ch, cell.style);
       }
       if (rightFrameX >= 0 && rightFrameX < width) {
-        screen.writeChar(rightFrameX, progressBarY, L'|', progressFrameStyle);
+        screen.writeChar(rightFrameX, frameOutput.progressBarY, L'|',
+                         progressFrameStyle);
       }
     }
     if (!overlayLayout.suffixText.empty() &&

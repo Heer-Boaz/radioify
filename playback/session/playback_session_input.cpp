@@ -9,6 +9,7 @@
 #include "audioplayback.h"
 #include "player.h"
 #include "subtitle_manager.h"
+#include "ui_helpers.h"
 #include "videowindow.h"
 
 namespace playback_session_input {
@@ -42,6 +43,79 @@ void requestWindowRefresh(const PlaybackInputSignals& signals) {
     return;
   }
   signals.requestWindowPresent();
+}
+
+double playbackDurationSec(const PlaybackInputView& view) {
+  if (view.player && view.player->durationUs() > 0) {
+    return static_cast<double>(view.player->durationUs()) / 1000000.0;
+  }
+  return audioGetTotalSec();
+}
+
+double clampPlaybackSeekTarget(const PlaybackInputView& view,
+                               double targetSec) {
+  double target = std::isfinite(targetSec) ? targetSec : 0.0;
+  target = std::max(0.0, target);
+  const double totalSec = playbackDurationSec(view);
+  if (totalSec > 0.0 && std::isfinite(totalSec)) {
+    target = std::min(target, totalSec);
+  }
+  return target;
+}
+
+bool readPendingSeekTargetSec(const PlaybackSeekState& seekState,
+                              double* outTargetSec) {
+  double targetSec = -1.0;
+  if (seekState.pendingSeekTargetSec) {
+    targetSec = *seekState.pendingSeekTargetSec;
+  } else if (seekState.windowPendingSeekTargetSec) {
+    targetSec =
+        seekState.windowPendingSeekTargetSec->load(std::memory_order_relaxed);
+  }
+  if (!(targetSec >= 0.0) || !std::isfinite(targetSec)) {
+    return false;
+  }
+  if (outTargetSec) {
+    *outTargetSec = targetSec;
+  }
+  return true;
+}
+
+bool playbackSeekPending(const PlaybackInputView& view,
+                         const PlaybackSeekState& seekState) {
+  if (seekState.localSeekRequested && *seekState.localSeekRequested) {
+    return true;
+  }
+  if (seekState.windowLocalSeekRequested &&
+      seekState.windowLocalSeekRequested->load(std::memory_order_relaxed)) {
+    return true;
+  }
+  return view.player && view.player->isSeeking();
+}
+
+double playbackSeekBaseSec(const PlaybackInputView& view,
+                           const PlaybackSeekState& seekState) {
+  double targetSec = -1.0;
+  if (playbackSeekPending(view, seekState) &&
+      readPendingSeekTargetSec(seekState, &targetSec)) {
+    return clampPlaybackSeekTarget(view, targetSec);
+  }
+  if (!view.player) {
+    return 0.0;
+  }
+  return clampPlaybackSeekTarget(
+      view, static_cast<double>(view.player->currentUs()) / 1000000.0);
+}
+
+bool queuePlaybackSeekToRatio(const PlaybackInputView& view,
+                              PlaybackInputSignals& signals,
+                              PlaybackSeekState& seekState, double ratio) {
+  const double totalSec = playbackDurationSec(view);
+  if (!(totalSec > 0.0) || !std::isfinite(totalSec)) {
+    return false;
+  }
+  queueSeekRequest(signals, seekState, std::clamp(ratio, 0.0, 1.0) * totalSec);
+  return true;
 }
 
 void triggerOverlay(const PlaybackInputView& view,
@@ -342,10 +416,12 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
           ? view.videoWindow->GetHeight()
           : 0;
   inputs.artTop = 0;
-  inputs.progressBarX = view.progressBarX ? *view.progressBarX : -1;
-  inputs.progressBarY = view.progressBarY ? *view.progressBarY : -1;
+  inputs.progressBarX =
+      view.frameOutputState ? view.frameOutputState->progressBarX : -1;
+  inputs.progressBarY =
+      view.frameOutputState ? view.frameOutputState->progressBarY : -1;
   inputs.progressBarWidth =
-      view.progressBarWidth ? *view.progressBarWidth : 0;
+      view.frameOutputState ? view.frameOutputState->progressBarWidth : 0;
   return inputs;
 }
 
@@ -359,6 +435,7 @@ void sendSeekRequest(const PlaybackInputView& view,
                      PlaybackInputSignals& signals,
                      PlaybackSeekState& seekState, double targetSec) {
   if (!view.player) return;
+  targetSec = clampPlaybackSeekTarget(view, targetSec);
   int64_t targetUs =
       static_cast<int64_t>(std::llround(targetSec * 1000000.0));
   view.player->requestSeek(targetUs);
@@ -448,8 +525,8 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   cb.onToggleAudioTrack = [&]() { toggleAudioTrack(view); };
   cb.onSeekBy = [&](int dir) {
     if (!view.player) return;
-    double currentSec = view.player->currentUs() / 1000000.0;
-    sendSeekRequest(view, signals, seekState, currentSec + dir * 5.0);
+    const double baseSec = playbackSeekBaseSec(view, seekState);
+    sendSeekRequest(view, signals, seekState, baseSec + dir * 5.0);
   };
   cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
@@ -532,8 +609,9 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       buildPlaybackMouseOverlayInputs(view, seekState, signals);
   MouseEvent hitMouse = mouse;
   const bool windowOriginEvent = (mouse.control & 0x80000000) != 0;
+  const playback_frame_output::FrameOutputState* progressOutputState =
+      windowOriginEvent ? nullptr : view.frameOutputState;
   bool windowEvent = windowOriginEvent;
-  bool miniGridEvent = false;
   if (windowEvent && view.videoWindow &&
       view.videoWindow->IsPictureInPicture() &&
       view.videoWindow->IsPictureInPictureTextMode()) {
@@ -546,28 +624,51 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     int cellH = 1;
     view.videoWindow->GetPictureInPictureTextCellSize(cellW, cellH);
     if (gridCols > 0 && gridRows > 0 && winW > 0 && winH > 0) {
+      const int gridCellW = std::max(1, cellW);
+      const int gridCellH = std::max(1, cellH);
       const int gridPixelWidth =
-          std::min(winW, gridCols * std::max(1, cellW));
+          std::min(winW, gridCols * gridCellW);
       const int gridPixelHeight =
-          std::min(winH, gridRows * std::max(1, cellH));
-      if (mouse.pos.X >= 0 && mouse.pos.Y >= 0 &&
-          mouse.pos.X < gridPixelWidth && mouse.pos.Y < gridPixelHeight) {
+          std::min(winH, gridRows * gridCellH);
+      const int pixelX = mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
+      const int pixelY = mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
+      if (pixelX >= 0 && pixelY >= 0 && pixelX < gridPixelWidth &&
+          pixelY < gridPixelHeight) {
         hitMouse.pos.X = static_cast<SHORT>(std::clamp(
-            static_cast<int>(mouse.pos.X) / std::max(1, cellW), 0,
-            gridCols - 1));
+            static_cast<int>((static_cast<int64_t>(pixelX) * gridCols) /
+                             gridPixelWidth),
+            0, gridCols - 1));
         hitMouse.pos.Y = static_cast<SHORT>(std::clamp(
-            static_cast<int>(mouse.pos.Y) / std::max(1, cellH), 0,
-            gridRows - 1));
+            static_cast<int>((static_cast<int64_t>(pixelY) * gridRows) /
+                             gridPixelHeight),
+            0, gridRows - 1));
         hitMouse.control &= ~0x80000000;
+        hitMouse.hasPixelPosition = true;
+        hitMouse.pixelX = pixelX;
+        hitMouse.pixelY = pixelY;
+        hitMouse.unitWidth =
+            static_cast<double>(gridPixelWidth) / static_cast<double>(gridCols);
+        hitMouse.unitHeight =
+            static_cast<double>(gridPixelHeight) / static_cast<double>(gridRows);
+        progressOutputState = view.pictureInPictureTextOutputState;
         mouseOverlayInputs.overlayVisible = true;
         mouseOverlayInputs.screenWidth = gridCols;
         mouseOverlayInputs.screenHeight = gridRows;
-        mouseOverlayInputs.progressBarX = 1;
-        mouseOverlayInputs.progressBarY = gridRows - 1;
-        mouseOverlayInputs.progressBarWidth = std::max(1, gridCols - 2);
-        miniGridEvent = true;
+        mouseOverlayInputs.progressBarX =
+            view.pictureInPictureTextOutputState
+                ? view.pictureInPictureTextOutputState->progressBarX
+                : -1;
+        mouseOverlayInputs.progressBarY =
+            view.pictureInPictureTextOutputState
+                ? view.pictureInPictureTextOutputState->progressBarY
+                : -1;
+        mouseOverlayInputs.progressBarWidth =
+            view.pictureInPictureTextOutputState
+                ? view.pictureInPictureTextOutputState->progressBarWidth
+                : 0;
       } else {
         hitMouse.control &= ~0x80000000;
+        progressOutputState = nullptr;
         mouseOverlayInputs.overlayVisible = false;
       }
     }
@@ -619,9 +720,22 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   }
 
   double progressRatio = 0.0;
-  bool progressHit = playback_overlay::overlayProgressRatioAt(
-      mouseOverlayState, hitMouse, windowTextCellW, windowTextCellH,
-      &progressRatio);
+  bool progressHit = false;
+  if (progressOutputState) {
+    ProgressBarHitTestInput hit;
+    hit.x = hitMouse.hasPixelPosition ? hitMouse.pixelX : hitMouse.pos.X;
+    hit.y = hitMouse.hasPixelPosition ? hitMouse.pixelY : hitMouse.pos.Y;
+    hit.barX = progressOutputState->progressBarX;
+    hit.barY = progressOutputState->progressBarY;
+    hit.barWidth = progressOutputState->progressBarWidth;
+    hit.unitWidth = hitMouse.hasPixelPosition ? hitMouse.unitWidth : 1.0;
+    hit.unitHeight = hitMouse.hasPixelPosition ? hitMouse.unitHeight : 1.0;
+    progressHit = progressBarRatioAt(hit, &progressRatio);
+  } else if (windowEvent) {
+    progressHit = playback_overlay::overlayProgressRatioAt(
+        mouseOverlayState, hitMouse, windowTextCellW, windowTextCellH,
+        &progressRatio);
+  }
   if (progressHit) {
     triggerOverlay(view, signals);
     if (signals.redraw) {
@@ -644,43 +758,14 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
 
   if (leftPressed && windowEvent) {
     if (progressHit && view.videoWindow) {
-      if (view.player) {
-        double totalSec = view.player->durationUs() / 1000000.0;
-        if (totalSec <= 0.0) {
-          totalSec = audioGetTotalSec();
-        }
-        if (totalSec > 0.0 && std::isfinite(totalSec)) {
-          double target = progressRatio * totalSec;
-          queueSeekRequest(signals, seekState, target);
-        }
-      }
-    }
-    return;
-  }
-
-  if (leftPressed && miniGridEvent) {
-    if (progressHit && view.player) {
-      double totalSec = view.player->durationUs() / 1000000.0;
-      if (totalSec <= 0.0) {
-        totalSec = audioGetTotalSec();
-      }
-      if (totalSec > 0.0 && std::isfinite(totalSec)) {
-        queueSeekRequest(signals, seekState, progressRatio * totalSec);
-      }
+      queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
     }
     return;
   }
 
   if (leftPressed && (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
     if (progressHit) {
-      double totalSec =
-          view.player ? view.player->durationUs() / 1000000.0 : -1.0;
-      if (totalSec <= 0.0) {
-        totalSec = audioGetTotalSec();
-      }
-      if (totalSec > 0.0 && std::isfinite(totalSec)) {
-        queueSeekRequest(signals, seekState, progressRatio * totalSec);
-      }
+      queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
       return;
     }
   }

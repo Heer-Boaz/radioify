@@ -1826,6 +1826,30 @@ int runTui(Options o) {
         if (callbacks.onResize) callbacks.onResize();
         return;
       }
+      if (ev.type == InputEvent::Type::Mouse &&
+          (ev.mouse.control & 0x80000000) != 0) {
+        int wndW = std::max(1, tuiWindow.GetWidth());
+        int wndH = std::max(1, tuiWindow.GetHeight());
+        int gridW = std::max(1, screen.width());
+        int gridH = std::max(1, screen.height());
+        const int pixelX = ev.mouse.hasPixelPosition ? ev.mouse.pixelX
+                                                     : ev.mouse.pos.X;
+        const int pixelY = ev.mouse.hasPixelPosition ? ev.mouse.pixelY
+                                                     : ev.mouse.pos.Y;
+        ev.mouse.hasPixelPosition = true;
+        ev.mouse.pixelX = pixelX;
+        ev.mouse.pixelY = pixelY;
+        ev.mouse.unitWidth = static_cast<double>(wndW) / gridW;
+        ev.mouse.unitHeight = static_cast<double>(wndH) / gridH;
+        int gx = static_cast<int>((static_cast<int64_t>(pixelX) * gridW) /
+                                  wndW);
+        int gy = static_cast<int>((static_cast<int64_t>(pixelY) * gridH) /
+                                  wndH);
+        gx = std::clamp(gx, 0, gridW - 1);
+        gy = std::clamp(gy, 0, gridH - 1);
+        ev.mouse.pos.X = static_cast<SHORT>(gx);
+        ev.mouse.pos.Y = static_cast<SHORT>(gy);
+      }
       const bool browserInteractionEnabled = !melodyVisualizationEnabled;
       bool isLeftClick = (ev.type == InputEvent::Type::Mouse) &&
                         (ev.mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
@@ -1841,21 +1865,6 @@ int runTui(Options o) {
           searchBarClearHover = clearBtnHover;
           markDirty();
         }
-      }
-      if (ev.type == InputEvent::Type::Mouse &&
-          (ev.mouse.control & 0x80000000) != 0) {
-        int wndW = std::max(1, tuiWindow.GetWidth());
-        int wndH = std::max(1, tuiWindow.GetHeight());
-        int gridW = std::max(1, screen.width());
-        int gridH = std::max(1, screen.height());
-        int gx = static_cast<int>((static_cast<int64_t>(ev.mouse.pos.X) * gridW) /
-                                  wndW);
-        int gy = static_cast<int>((static_cast<int64_t>(ev.mouse.pos.Y) * gridH) /
-                                  wndH);
-        gx = std::clamp(gx, 0, gridW - 1);
-        gy = std::clamp(gy, 0, gridH - 1);
-        ev.mouse.pos.X = static_cast<SHORT>(gx);
-        ev.mouse.pos.Y = static_cast<SHORT>(gy);
       }
       if (ev.type == InputEvent::Type::Key) {
         const KeyEvent& key = ev.key;

@@ -660,20 +660,13 @@ static bool terminalOverlayProgressRatioAt(const PlaybackOverlayState& state,
   if (!state.overlayVisible) return false;
   OverlayCellLayout layout = layoutPlaybackOverlayCells(
       state, state.screenWidth, state.screenHeight, -1);
-  if (mouse.pos.Y != layout.progressBarY || layout.progressBarWidth <= 0) {
-    return false;
-  }
-  const int rel = mouse.pos.X - layout.progressBarX;
-  if (rel < 0 || rel >= layout.progressBarWidth) {
-    return false;
-  }
-  if (outRatio) {
-    *outRatio = std::clamp(
-        static_cast<double>(rel) /
-            static_cast<double>(std::max(1, layout.progressBarWidth - 1)),
-        0.0, 1.0);
-  }
-  return true;
+  ProgressBarHitTestInput hit;
+  hit.x = mouse.pos.X;
+  hit.y = mouse.pos.Y;
+  hit.barX = layout.progressBarX;
+  hit.barY = layout.progressBarY;
+  hit.barWidth = layout.progressBarWidth;
+  return progressBarRatioAt(hit, outRatio);
 }
 
 static bool windowOverlayProgressRatioAt(const PlaybackOverlayState& state,
@@ -689,19 +682,15 @@ static bool windowOverlayProgressRatioAt(const PlaybackOverlayState& state,
   const int localX = mouse.pos.X - geometry.leftPx;
   const int localY = mouse.pos.Y - geometry.topPx;
   if (localX < 0 || localY < 0) return false;
-  const int cellX = localX / geometry.cellWidth;
-  const int cellY = localY / geometry.cellHeight;
-  if (cellY != geometry.layout.progressBarY) return false;
-  const int rel = cellX - geometry.layout.progressBarX;
-  if (rel < 0 || rel >= geometry.layout.progressBarWidth) return false;
-  if (outRatio) {
-    *outRatio = std::clamp(
-        static_cast<double>(rel) /
-            static_cast<double>(
-                std::max(1, geometry.layout.progressBarWidth - 1)),
-        0.0, 1.0);
-  }
-  return true;
+  ProgressBarHitTestInput hit;
+  hit.x = localX;
+  hit.y = localY;
+  hit.barX = geometry.layout.progressBarX;
+  hit.barY = geometry.layout.progressBarY;
+  hit.barWidth = geometry.layout.progressBarWidth;
+  hit.unitWidth = geometry.cellWidth;
+  hit.unitHeight = geometry.cellHeight;
+  return progressBarRatioAt(hit, outRatio);
 }
 
 bool overlayProgressRatioAt(const PlaybackOverlayState& state,

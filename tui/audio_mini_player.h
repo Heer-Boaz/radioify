@@ -59,6 +59,7 @@ class AudioMiniPlayer {
   void refreshArtwork(const Context& context, int width, int height);
   void drawArtworkBackground(const Styles& styles, int width, int height);
   void updateInteractiveRects();
+  void holdSeekDisplay(double targetSec);
   void handleInput(const InputEvent& ev, const Callbacks& callbacks);
   bool clickControl(playback_overlay::OverlayControlId control,
                     const Callbacks& callbacks);
@@ -84,4 +85,7 @@ class AudioMiniPlayer {
   int progressX_ = -1;
   int progressY_ = -1;
   int progressWidth_ = 0;
+  double seekDisplaySec_ = -1.0;
+  bool seekHoldActive_ = false;
+  std::chrono::steady_clock::time_point seekHoldStart_{};
 };

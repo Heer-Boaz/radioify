@@ -45,6 +45,12 @@ RADIOIFY_ASCII_LUMA_U8(kEdgeThresholdFloor, 6)   // minimum per-dot luma thresho
 RADIOIFY_ASCII_LUMA_U8(kEdgeMaskFitMinRange, 18) // min local luma span for cell-level edge mask fitting
 RADIOIFY_ASCII_SIGNAL_U8(kEdgeMaskFitMinSignal, 128)  // min edge/luma signal for structural mask fitting
 RADIOIFY_ASCII_SCALE_256(kEdgeMaskFitMinGain, 16)  // min relative reconstruction-error drop, 256 == 100%
+RADIOIFY_ASCII_LUMA_U8(kNeighborContinuityMinContrast, 18)  // min FG/BG luma contrast before neighbor continuity may add connector dots
+RADIOIFY_ASCII_SCALE_256(kNeighborContinuityMinGain, 96)  // min topology-score improvement before changing a cell mask
+RADIOIFY_ASCII_SCALE_256(kNeighborContinuityStrength, 0)  // reward/penalty strength for matching neighbor border/corner dots; 0 keeps dot masks unchanged
+RADIOIFY_ASCII_LUMA_U8(kNeighborColorAaMinContrast, 14)  // min FG/BG luma contrast before neighbor display colors can soften a partial-cell BG
+RADIOIFY_ASCII_SCALE_256(kNeighborColorAaStrength, 96)  // max BG blend toward neighbor display mean on partial edge cells
+RADIOIFY_ASCII_SCALE_256(kNeighborFgColorAaStrength, 96)  // max FG blend toward neighboring ink colors on partial edge cells
 RADIOIFY_ASCII_SCALE_256(kPerceptualLumaErrorWeight, 256)  // extra luma reconstruction weight, 256 == 1.0
 RADIOIFY_ASCII_SCALE_256(kPerceptualBrightBgPenalty, 512)  // low-contrast bright-BG penalty strength, 256 == 1.0
 RADIOIFY_ASCII_LUMA_U8(kPerceptualPreferredBrightBgInkContrast, 36)  // preferred visible ink luma delta before bright BG may win an edge cell

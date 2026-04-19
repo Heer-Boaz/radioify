@@ -845,11 +845,13 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         return;
       }
       ProgressBarHitTestInput progressHit;
-      progressHit.x = mouse.pos.X;
-      progressHit.y = mouse.pos.Y;
+      progressHit.x = mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
+      progressHit.y = mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
       progressHit.barX = progressBarX;
       progressHit.barY = progressBarY;
       progressHit.barWidth = progressBarWidth;
+      progressHit.unitWidth = mouse.hasPixelPosition ? mouse.unitWidth : 1.0;
+      progressHit.unitHeight = mouse.hasPixelPosition ? mouse.unitHeight : 1.0;
       double ratio = 0.0;
       if (progressBarRatioAt(progressHit, &ratio)) {
         if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);

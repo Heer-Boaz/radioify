@@ -80,36 +80,13 @@ struct PlaybackLoopRunner::Impl {
   AsciiArt pictureInPictureTextArt;
   VideoFrame pictureInPictureTextFrame;
   GpuVideoFrameCache pictureInPictureTextFrameCache;
-  bool pictureInPictureTextRenderFailed = false;
-  std::string pictureInPictureTextRenderFailMessage;
-  std::string pictureInPictureTextRenderFailDetail;
-  bool pictureInPictureTextHaveFrame = false;
-  int pictureInPictureTextCachedWidth = -1;
-  int pictureInPictureTextCachedMaxHeight = -1;
-  int pictureInPictureTextCachedFrameWidth = -1;
-  int pictureInPictureTextCachedFrameHeight = -1;
-  double pictureInPictureTextCachedCellPixelWidth = -1.0;
-  double pictureInPictureTextCachedCellPixelHeight = -1.0;
-  int pictureInPictureTextProgressBarX = -1;
-  int pictureInPictureTextProgressBarY = -1;
-  int pictureInPictureTextProgressBarWidth = 0;
+  playback_frame_output::FrameOutputState pictureInPictureTextOutputState;
   bool pendingPictureInPictureOpen = false;
   bool pendingPictureInPictureTextMode = false;
   bool pictureInPictureStartedFromTerminal = false;
   bool redraw = true;
-  bool renderFailed = false;
-  std::string renderFailMessage;
-  std::string renderFailDetail;
   bool forceRefreshArt = false;
-  int cachedWidth = -1;
-  int cachedMaxHeight = -1;
-  int cachedFrameWidth = -1;
-  int cachedFrameHeight = -1;
-  double cachedCellPixelWidth = -1.0;
-  double cachedCellPixelHeight = -1.0;
-  int progressBarX = -1;
-  int progressBarY = -1;
-  int progressBarWidth = 0;
+  playback_frame_output::FrameOutputState frameOutputState;
   std::atomic<int64_t> overlayUntilMs{0};
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
@@ -166,9 +143,9 @@ struct PlaybackLoopRunner::Impl {
     inputView.windowTitle = &windowTitle;
     inputView.enableSubtitlesShared = &enableSubtitlesShared;
     inputView.hasSubtitles = hasSubtitles;
-    inputView.progressBarX = &progressBarX;
-    inputView.progressBarY = &progressBarY;
-    inputView.progressBarWidth = &progressBarWidth;
+    inputView.frameOutputState = &frameOutputState;
+    inputView.pictureInPictureTextOutputState =
+        &pictureInPictureTextOutputState;
     inputView.timingSink = timingSink;
     core.bindInputView(inputView);
 
@@ -211,18 +188,7 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.progressEnd = &progressEnd;
     renderInputs.enableSubtitlesShared = &enableSubtitlesShared;
     renderInputs.overlayControlHover = &overlayControlHover;
-    renderInputs.renderFailed = &renderFailed;
-    renderInputs.renderFailMessage = &renderFailMessage;
-    renderInputs.renderFailDetail = &renderFailDetail;
-    renderInputs.cachedWidth = &cachedWidth;
-    renderInputs.cachedMaxHeight = &cachedMaxHeight;
-    renderInputs.cachedFrameWidth = &cachedFrameWidth;
-    renderInputs.cachedFrameHeight = &cachedFrameHeight;
-    renderInputs.cachedCellPixelWidth = &cachedCellPixelWidth;
-    renderInputs.cachedCellPixelHeight = &cachedCellPixelHeight;
-    renderInputs.progressBarX = &progressBarX;
-    renderInputs.progressBarY = &progressBarY;
-    renderInputs.progressBarWidth = &progressBarWidth;
+    renderInputs.frameOutputState = &frameOutputState;
     renderInputs.warningSink = warningSink;
     renderInputs.timingSink = timingSink;
     core.bindRenderInputs(renderInputs);
@@ -296,13 +262,13 @@ struct PlaybackLoopRunner::Impl {
         std::max(10, pixelHeight / cellPixelHeight);
     pictureInPictureTextScreen.setVirtualSize(cols, rows);
 
-    pictureInPictureTextRenderFailed = false;
-    pictureInPictureTextRenderFailMessage.clear();
-    pictureInPictureTextRenderFailDetail.clear();
+    pictureInPictureTextOutputState.renderFailed = false;
+    pictureInPictureTextOutputState.renderFailMessage.clear();
+    pictureInPictureTextOutputState.renderFailDetail.clear();
     if (frame && frame->width > 0 && frame->height > 0) {
       pictureInPictureTextFrame = *frame;
-      pictureInPictureTextHaveFrame = true;
-    } else if (!pictureInPictureTextHaveFrame) {
+      pictureInPictureTextOutputState.haveFrame = true;
+    } else if (!pictureInPictureTextOutputState.haveFrame) {
       pictureInPictureTextFrame = VideoFrame{};
     }
 
@@ -322,23 +288,11 @@ struct PlaybackLoopRunner::Impl {
     inputs.cellPixelWidth = cellPixelWidth;
     inputs.cellPixelHeight = cellPixelHeight;
     inputs.allowAsciiCpuFallback = false;
-    inputs.renderFailed = &pictureInPictureTextRenderFailed;
-    inputs.renderFailMessage = &pictureInPictureTextRenderFailMessage;
-    inputs.renderFailDetail = &pictureInPictureTextRenderFailDetail;
-    inputs.haveFrame = &pictureInPictureTextHaveFrame;
-    inputs.cachedWidth = &pictureInPictureTextCachedWidth;
-    inputs.cachedMaxHeight = &pictureInPictureTextCachedMaxHeight;
-    inputs.cachedFrameWidth = &pictureInPictureTextCachedFrameWidth;
-    inputs.cachedFrameHeight = &pictureInPictureTextCachedFrameHeight;
-    inputs.cachedCellPixelWidth = &pictureInPictureTextCachedCellPixelWidth;
-    inputs.cachedCellPixelHeight = &pictureInPictureTextCachedCellPixelHeight;
-    inputs.progressBarX = &pictureInPictureTextProgressBarX;
-    inputs.progressBarY = &pictureInPictureTextProgressBarY;
-    inputs.progressBarWidth = &pictureInPictureTextProgressBarWidth;
+    inputs.frameOutputState = &pictureInPictureTextOutputState;
     core.updateRenderInputs(inputs);
 
     playback_screen_renderer::renderPlaybackScreen(inputs);
-    if (pictureInPictureTextRenderFailed) {
+    if (pictureInPictureTextOutputState.renderFailed) {
       return false;
     }
     return pictureInPictureTextScreen.snapshot(outCells, outCols, outRows);
@@ -433,7 +387,7 @@ struct PlaybackLoopRunner::Impl {
       perfLogAppendf(&perfLog, "video_ui_draw_slow dur_ms=%lld",
                      static_cast<long long>(durMs));
     }
-    if (renderFailed) {
+    if (frameOutputState.renderFailed) {
       loopState = PlaybackLoopState::Stopped;
       return;
     }
@@ -453,7 +407,7 @@ struct PlaybackLoopRunner::Impl {
       redraw = false;
       forceRefreshArt = false;
     }
-    return !renderFailed;
+    return !frameOutputState.renderFailed;
   }
 
   void pollWindowEvents() {
@@ -726,7 +680,7 @@ struct PlaybackLoopRunner::Impl {
                                     refresh.debugRefreshDue,
                                     core.playbackState())) {
         renderPlaybackFrame(refresh.presented, loopState);
-        if (renderFailed) {
+        if (frameOutputState.renderFailed) {
           break;
         }
       } else if (refresh.useWindowPresenter) {
@@ -755,12 +709,14 @@ void PlaybackLoopRunner::shutdown() { impl_->shutdown(); }
 
 void PlaybackLoopRunner::renderFailureScreen() { impl_->renderFailureScreen(); }
 
-bool PlaybackLoopRunner::hasRenderFailure() const { return impl_->renderFailed; }
+bool PlaybackLoopRunner::hasRenderFailure() const {
+  return impl_->frameOutputState.renderFailed;
+}
 
 const std::string& PlaybackLoopRunner::renderFailureMessage() const {
-  return impl_->renderFailMessage;
+  return impl_->frameOutputState.renderFailMessage;
 }
 
 const std::string& PlaybackLoopRunner::renderFailureDetail() const {
-  return impl_->renderFailDetail;
+  return impl_->frameOutputState.renderFailDetail;
 }

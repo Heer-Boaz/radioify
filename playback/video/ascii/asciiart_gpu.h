@@ -60,6 +60,8 @@ private:
     bool CreateBuffers(int width, int height, int outW, int outH);
     bool CreateStatsBuffer();
     bool ReadOutputBuffer(AsciiArt& out, int outW, int outH);
+    void RefineOutputAndSyncHistory(UINT dispatchX, UINT dispatchY,
+                                    ID3D11Buffer* constantBuffer);
     
     // Shared rendering logic (called after textures are set up)
     bool RenderNV12Internal(int width, int height, bool fullRange, 
@@ -72,6 +74,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_computeShaderNV12;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_statsShaderRgba;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_statsShaderNv12;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_refineContinuityShader;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> m_syncHistoryShader;
 
     GpuVideoFrameCache m_frameCache;
@@ -79,6 +82,9 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_outputBuffer;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_outputUAV;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_rawOutputBuffer;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> m_rawOutputUAV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_rawOutputSRV;
     Microsoft::WRL::ComPtr<ID3D11Buffer>
         m_outputStagingBuffers[kOutputStagingBufferCount];
     bool m_outputStagingPending[kOutputStagingBufferCount] = {};

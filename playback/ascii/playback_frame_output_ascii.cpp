@@ -29,18 +29,11 @@ void emitWarning(
 void setFailure(playback_frame_output::AsciiModePrepareInput& input,
                 const std::string& message,
                 const std::string& detail) {
-  if (input.renderFailed) {
-    *input.renderFailed = true;
-  }
-  if (input.renderFailMessage) {
-    *input.renderFailMessage = message;
-  }
-  if (input.renderFailDetail) {
-    *input.renderFailDetail = detail;
-  }
-  if (input.haveFrame) {
-    *input.haveFrame = false;
-  }
+  if (!input.state) return;
+  input.state->renderFailed = true;
+  input.state->renderFailMessage = message;
+  input.state->renderFailDetail = detail;
+  input.state->haveFrame = false;
 }
 
 bool logAsciiRendererStartup(const VideoFrame& frame,
@@ -268,13 +261,17 @@ std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
 }
 
 bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
+  if (!input.state) {
+    return false;
+  }
+  FrameOutputState& state = *input.state;
   if (!input.allowFrame) {
-    if (input.cachedWidth) *input.cachedWidth = -1;
-    if (input.cachedMaxHeight) *input.cachedMaxHeight = -1;
-    if (input.cachedFrameWidth) *input.cachedFrameWidth = -1;
-    if (input.cachedFrameHeight) *input.cachedFrameHeight = -1;
-    if (input.cachedCellPixelWidth) *input.cachedCellPixelWidth = -1;
-    if (input.cachedCellPixelHeight) *input.cachedCellPixelHeight = -1;
+    state.cachedWidth = -1;
+    state.cachedMaxHeight = -1;
+    state.cachedFrameWidth = -1;
+    state.cachedFrameHeight = -1;
+    state.cachedCellPixelWidth = -1.0;
+    state.cachedCellPixelHeight = -1.0;
     return false;
   }
   if (!(input.frameChanged || input.clearHistory || input.sizeChanged)) {
@@ -287,9 +284,7 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
   }
   if (input.frame->width <= 0 || input.frame->height <= 0) {
     emitWarning(input.warningSink, "Skipping video frame with invalid dimensions.");
-    if (input.haveFrame) {
-      *input.haveFrame = false;
-    }
+    state.haveFrame = false;
     return false;
   }
 
@@ -429,9 +424,7 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       emitWarning(input.warningSink,
                   gpuErr.empty() ? "GPU renderer temporarily unavailable."
                                  : gpuErr);
-      if (input.haveFrame) {
-        *input.haveFrame = false;
-      }
+      state.haveFrame = false;
       return false;
     }
 
@@ -444,16 +437,12 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
     return false;
   }
 
-  if (input.cachedWidth) *input.cachedWidth = input.width;
-  if (input.cachedMaxHeight) *input.cachedMaxHeight = input.maxHeight;
-  if (input.cachedFrameWidth) *input.cachedFrameWidth = input.frame->width;
-  if (input.cachedFrameHeight) *input.cachedFrameHeight = input.frame->height;
-  if (input.cachedCellPixelWidth) {
-    *input.cachedCellPixelWidth = input.cellPixelWidth;
-  }
-  if (input.cachedCellPixelHeight) {
-    *input.cachedCellPixelHeight = input.cellPixelHeight;
-  }
+  state.cachedWidth = input.width;
+  state.cachedMaxHeight = input.maxHeight;
+  state.cachedFrameWidth = input.frame->width;
+  state.cachedFrameHeight = input.frame->height;
+  state.cachedCellPixelWidth = input.cellPixelWidth;
+  state.cachedCellPixelHeight = input.cellPixelHeight;
   return true;
 }
 

@@ -180,6 +180,12 @@ struct AsciiTuning {
   int edgeMaskFitMinRange = kEdgeMaskFitMinRange;
   int edgeMaskFitMinSignal = kEdgeMaskFitMinSignal;
   int edgeMaskFitMinGain = kEdgeMaskFitMinGain;
+  int neighborContinuityMinContrast = kNeighborContinuityMinContrast;
+  int neighborContinuityMinGain = kNeighborContinuityMinGain;
+  int neighborContinuityStrength = kNeighborContinuityStrength;
+  int neighborColorAaMinContrast = kNeighborColorAaMinContrast;
+  int neighborColorAaStrength = kNeighborColorAaStrength;
+  int neighborFgColorAaStrength = kNeighborFgColorAaStrength;
   int perceptualLumaErrorWeight = kPerceptualLumaErrorWeight;
   int perceptualBrightBgPenalty = kPerceptualBrightBgPenalty;
   int perceptualPreferredBrightBgInkContrast =
@@ -218,6 +224,18 @@ AsciiTuning resolveAsciiTuning(
   applyTuningOverride(tuning.edgeMaskFitMinRange, o.edgeMaskFitMinRange);
   applyTuningOverride(tuning.edgeMaskFitMinSignal, o.edgeMaskFitMinSignal);
   applyTuningOverride(tuning.edgeMaskFitMinGain, o.edgeMaskFitMinGain);
+  applyTuningOverride(tuning.neighborContinuityMinContrast,
+                      o.neighborContinuityMinContrast);
+  applyTuningOverride(tuning.neighborContinuityMinGain,
+                      o.neighborContinuityMinGain);
+  applyTuningOverride(tuning.neighborContinuityStrength,
+                      o.neighborContinuityStrength);
+  applyTuningOverride(tuning.neighborColorAaMinContrast,
+                      o.neighborColorAaMinContrast);
+  applyTuningOverride(tuning.neighborColorAaStrength,
+                      o.neighborColorAaStrength);
+  applyTuningOverride(tuning.neighborFgColorAaStrength,
+                      o.neighborFgColorAaStrength);
   applyTuningOverride(tuning.perceptualLumaErrorWeight,
                       o.perceptualLumaErrorWeight);
   applyTuningOverride(tuning.perceptualBrightBgPenalty,
@@ -741,6 +759,159 @@ FORCE_INLINE uint32_t packRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
          (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(a) << 24);
 }
 
+FORCE_INLINE int brailleBitAt(int col, int row) {
+  return col == 0 ? (row == 3 ? 6 : row) : (row == 3 ? 7 : row + 3);
+}
+
+FORCE_INLINE bool maskHasBit(int mask, int bit) {
+  return (mask & (1 << bit)) != 0;
+}
+
+bool continuityCandidateHasShapeSupport(int baseMask, int bit, int leftMask,
+                                        int rightMask, int topMask,
+                                        int bottomMask, int topLeftMask,
+                                        int topRightMask,
+                                        int bottomLeftMask,
+                                        int bottomRightMask) {
+  if (bit == 0) {
+    bool local = maskHasBit(baseMask, 1) || maskHasBit(baseMask, 3);
+    bool neighbor =
+        maskHasBit(topLeftMask, 7) &&
+        (maskHasBit(topMask, 6) || maskHasBit(leftMask, 3));
+    return local && neighbor;
+  }
+  if (bit == 3) {
+    bool local = maskHasBit(baseMask, 0) || maskHasBit(baseMask, 4);
+    bool neighbor =
+        maskHasBit(topRightMask, 6) &&
+        (maskHasBit(topMask, 7) || maskHasBit(rightMask, 0));
+    return local && neighbor;
+  }
+  if (bit == 6) {
+    bool local = maskHasBit(baseMask, 2) || maskHasBit(baseMask, 7);
+    bool neighbor =
+        maskHasBit(bottomLeftMask, 3) &&
+        (maskHasBit(bottomMask, 0) || maskHasBit(leftMask, 7));
+    return local && neighbor;
+  }
+  bool local = maskHasBit(baseMask, 5) || maskHasBit(baseMask, 6);
+  bool neighbor =
+      maskHasBit(bottomRightMask, 0) &&
+      (maskHasBit(bottomMask, 3) || maskHasBit(rightMask, 6));
+  return local && neighbor;
+}
+
+FORCE_INLINE int pairContinuityScore(bool a, bool b, int matchReward,
+                                     int mismatchPenalty) {
+  if (a && b) return -matchReward;
+  if (a != b) return mismatchPenalty;
+  return 0;
+}
+
+int neighborContinuityScore(int mask, int baseMask, int leftMask,
+                            int rightMask, int topMask, int bottomMask,
+                            int topLeftMask, int topRightMask,
+                            int bottomLeftMask, int bottomRightMask,
+                            const AsciiTuning& tuning) {
+  const int strength = std::max(0, tuning.neighborContinuityStrength);
+  const int matchReward = strength;
+  const int mismatchPenalty = strength >> 1;
+  const int diagonalReward = strength * 2;
+  const int diagonalMismatch = strength;
+  int score = countMaskDots(mask & ~baseMask) * 256 +
+              countMaskDots(baseMask & ~mask) * 1024;
+
+  for (int row = 0; row < 4; ++row) {
+    score += pairContinuityScore(
+        maskHasBit(mask, brailleBitAt(0, row)),
+        maskHasBit(leftMask, brailleBitAt(1, row)), matchReward,
+        mismatchPenalty);
+    score += pairContinuityScore(
+        maskHasBit(mask, brailleBitAt(1, row)),
+        maskHasBit(rightMask, brailleBitAt(0, row)), matchReward,
+        mismatchPenalty);
+  }
+  for (int col = 0; col < 2; ++col) {
+    score += pairContinuityScore(
+        maskHasBit(mask, brailleBitAt(col, 0)),
+        maskHasBit(topMask, brailleBitAt(col, 3)), matchReward,
+        mismatchPenalty);
+    score += pairContinuityScore(
+        maskHasBit(mask, brailleBitAt(col, 3)),
+        maskHasBit(bottomMask, brailleBitAt(col, 0)), matchReward,
+        mismatchPenalty);
+  }
+
+  score += pairContinuityScore(maskHasBit(mask, brailleBitAt(0, 0)),
+                               maskHasBit(topLeftMask, brailleBitAt(1, 3)),
+                               diagonalReward, diagonalMismatch);
+  score += pairContinuityScore(maskHasBit(mask, brailleBitAt(1, 0)),
+                               maskHasBit(topRightMask, brailleBitAt(0, 3)),
+                               diagonalReward, diagonalMismatch);
+  score += pairContinuityScore(maskHasBit(mask, brailleBitAt(0, 3)),
+                               maskHasBit(bottomLeftMask, brailleBitAt(1, 0)),
+                               diagonalReward, diagonalMismatch);
+  score += pairContinuityScore(maskHasBit(mask, brailleBitAt(1, 3)),
+                               maskHasBit(bottomRightMask, brailleBitAt(0, 0)),
+                               diagonalReward, diagonalMismatch);
+  return score;
+}
+
+int refineNeighborContinuityMask(int baseMask, int leftMask, int rightMask,
+                                 int topMask, int bottomMask,
+                                 int topLeftMask, int topRightMask,
+                                 int bottomLeftMask, int bottomRightMask,
+                                 int contrast,
+                                 const AsciiTuning& tuning) {
+  baseMask &= 0xff;
+  if (baseMask == 0 || baseMask == 0xff ||
+      tuning.neighborContinuityStrength <= 0 ||
+      contrast < tuning.neighborContinuityMinContrast) {
+    return baseMask;
+  }
+
+  static constexpr int kCandidateBits[4] = {0, 3, 6, 7};
+  const int baseScore =
+      neighborContinuityScore(baseMask, baseMask, leftMask, rightMask, topMask,
+                              bottomMask, topLeftMask, topRightMask,
+                              bottomLeftMask, bottomRightMask, tuning);
+  int bestMask = baseMask;
+  int bestScore = baseScore;
+  for (int bit : kCandidateBits) {
+    const int bitFlag = 1 << bit;
+    if ((baseMask & bitFlag) != 0) continue;
+    if (!continuityCandidateHasShapeSupport(
+            baseMask, bit, leftMask, rightMask, topMask, bottomMask,
+            topLeftMask, topRightMask, bottomLeftMask, bottomRightMask)) {
+      continue;
+    }
+    const int candidate = baseMask | bitFlag;
+    const int score = neighborContinuityScore(
+        candidate, baseMask, leftMask, rightMask, topMask, bottomMask,
+        topLeftMask, topRightMask, bottomLeftMask, bottomRightMask, tuning);
+    if (score < bestScore) {
+      bestScore = score;
+      bestMask = candidate;
+    }
+  }
+
+  return (baseScore - bestScore >= tuning.neighborContinuityMinGain) ? bestMask
+                                                                     : baseMask;
+}
+
+FORCE_INLINE int cellBrailleMask(const AsciiArt::AsciiCell& cell) {
+  const uint32_t ch = static_cast<uint32_t>(cell.ch);
+  if (ch < kBrailleBase || ch > kBrailleBase + 0xffu) return 0;
+  return static_cast<int>(ch - kBrailleBase);
+}
+
+FORCE_INLINE int cellFgBgContrast(const AsciiArt::AsciiCell& cell) {
+  if (!cell.hasBg) return 0;
+  const int fgY = rgbToY(cell.fg.r, cell.fg.g, cell.fg.b);
+  const int bgY = rgbToY(cell.bg.r, cell.bg.g, cell.bg.b);
+  return std::abs(fgY - bgY);
+}
+
 FORCE_INLINE uint8_t clampToByte(float v) {
   if (v < 0.0f) return 0;
   if (v > 255.0f) return 255;
@@ -933,6 +1104,7 @@ struct BrailleFastScratch {
   std::vector<uint32_t> prevBg;
   std::vector<uint8_t> prevBgValid;
   std::vector<uint8_t> prevMask;
+  std::vector<uint8_t> continuityMasks;
   int prevLumLow = -1;
   int prevLumHigh = -1;
   int prevBgLum = -1;
@@ -994,6 +1166,7 @@ struct BrailleFastScratch {
     prevBg.assign(static_cast<size_t>(outW) * outH, 0);
     prevBgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevMask.assign(static_cast<size_t>(outW) * outH, 0);
+    continuityMasks.resize(static_cast<size_t>(outW) * outH);
     hasSourceBlueConfidence = false;
     prevLumLow = -1;
     prevLumHigh = -1;
@@ -1011,6 +1184,210 @@ struct BrailleFastScratch {
     prevBgLum = -1;
   }
 };
+
+template <bool DebugMode>
+void applyNeighborContinuityPass(AsciiArt& out, BrailleFastScratch& scratch,
+                                 const AsciiTuning& tuning,
+                                 uint32_t stageMask,
+                                 ascii_debug::RenderStats* debugStats) {
+  if (!renderStageEnabled<DebugMode>(stageMask,
+                                     ascii_debug::kStageNeighborContinuity)) {
+    return;
+  }
+
+  const int outW = scratch.outW;
+  const int outH = scratch.outH;
+  const size_t total = static_cast<size_t>(outW) * outH;
+  if (out.cells.size() < total) return;
+  if (scratch.continuityMasks.size() < total) {
+    scratch.continuityMasks.resize(total);
+  }
+
+  for (size_t i = 0; i < total; ++i) {
+    scratch.continuityMasks[i] =
+        static_cast<uint8_t>(cellBrailleMask(out.cells[i]));
+  }
+
+  uint64_t maskChangedCount = 0;
+  uint64_t colorAaCount = 0;
+  uint64_t fgColorAaCount = 0;
+  auto maskAt = [&](int x, int y) -> int {
+    if (x < 0 || y < 0 || x >= outW || y >= outH) return 0;
+    return scratch.continuityMasks[static_cast<size_t>(y) * outW + x];
+  };
+  auto addDisplayMean = [&](int x, int y, int weight, int& sumR, int& sumG,
+                            int& sumB, int& sumWeight) {
+    if (x < 0 || y < 0 || x >= outW || y >= outH || weight <= 0) return;
+    const size_t nIdx = static_cast<size_t>(y) * outW + x;
+    const AsciiArt::AsciiCell& n = out.cells[nIdx];
+    if (!n.hasBg) return;
+    const int nMask = scratch.continuityMasks[nIdx];
+    const int coverage =
+        (countMaskDots(nMask) * std::max(1, tuning.inkVisibleDotCoverage) +
+         4) /
+        8;
+    const int r = static_cast<int>(n.bg.r) +
+                  scaleDelta256(static_cast<int>(n.fg.r) - n.bg.r, coverage);
+    const int g = static_cast<int>(n.bg.g) +
+                  scaleDelta256(static_cast<int>(n.fg.g) - n.bg.g, coverage);
+    const int b = static_cast<int>(n.bg.b) +
+                  scaleDelta256(static_cast<int>(n.fg.b) - n.bg.b, coverage);
+    sumR += r * weight;
+    sumG += g * weight;
+    sumB += b * weight;
+    sumWeight += weight;
+  };
+  auto addInkMean = [&](int x, int y, int weight, int& sumR, int& sumG,
+                        int& sumB, int& sumWeight) {
+    if (x < 0 || y < 0 || x >= outW || y >= outH || weight <= 0) return;
+    const size_t nIdx = static_cast<size_t>(y) * outW + x;
+    const int nMask = scratch.continuityMasks[nIdx];
+    if (nMask == 0) return;
+    const AsciiArt::AsciiCell& n = out.cells[nIdx];
+    sumR += static_cast<int>(n.fg.r) * weight;
+    sumG += static_cast<int>(n.fg.g) * weight;
+    sumB += static_cast<int>(n.fg.b) * weight;
+    sumWeight += weight;
+  };
+
+  for (int y = 0; y < outH; ++y) {
+    for (int x = 0; x < outW; ++x) {
+      const size_t idx = static_cast<size_t>(y) * outW + x;
+      const int baseMask = scratch.continuityMasks[idx];
+      const int contrast = cellFgBgContrast(out.cells[idx]);
+      const int refinedMask = refineNeighborContinuityMask(
+          baseMask, maskAt(x - 1, y), maskAt(x + 1, y), maskAt(x, y - 1),
+          maskAt(x, y + 1), maskAt(x - 1, y - 1), maskAt(x + 1, y - 1),
+          maskAt(x - 1, y + 1), maskAt(x + 1, y + 1),
+          contrast, tuning);
+
+      if (refinedMask != baseMask) {
+        out.cells[idx].ch = static_cast<wchar_t>(kBrailleBase + refinedMask);
+        if (idx < scratch.prevMask.size()) {
+          scratch.prevMask[idx] = static_cast<uint8_t>(refinedMask);
+        }
+        ++maskChangedCount;
+      }
+
+      const int dotCount = countMaskDots(refinedMask);
+      if (out.cells[idx].hasBg && dotCount > 0 && dotCount < 8 &&
+          (tuning.neighborColorAaStrength > 0 ||
+           tuning.neighborFgColorAaStrength > 0) &&
+          contrast >= tuning.neighborColorAaMinContrast) {
+        const int partialness = std::min(dotCount, 8 - dotCount) * 64;
+        const int contrastAmount = byteRangeTo255(
+            contrast, tuning.neighborColorAaMinContrast,
+            tuning.neighborColorAaMinContrast + 48);
+        const int bgAmount =
+            (tuning.neighborColorAaStrength * partialness * contrastAmount +
+             256 * 255 / 2) /
+            (256 * 255);
+        if (bgAmount > 0) {
+          int sumR = static_cast<int>(out.cells[idx].bg.r) * 4;
+          int sumG = static_cast<int>(out.cells[idx].bg.g) * 4;
+          int sumB = static_cast<int>(out.cells[idx].bg.b) * 4;
+          int sumWeight = 4;
+          addDisplayMean(x - 1, y, 2, sumR, sumG, sumB, sumWeight);
+          addDisplayMean(x + 1, y, 2, sumR, sumG, sumB, sumWeight);
+          addDisplayMean(x, y - 1, 2, sumR, sumG, sumB, sumWeight);
+          addDisplayMean(x, y + 1, 2, sumR, sumG, sumB, sumWeight);
+          addDisplayMean(x - 1, y - 1, 1, sumR, sumG, sumB, sumWeight);
+          addDisplayMean(x + 1, y - 1, 1, sumR, sumG, sumB, sumWeight);
+          addDisplayMean(x - 1, y + 1, 1, sumR, sumG, sumB, sumWeight);
+          addDisplayMean(x + 1, y + 1, 1, sumR, sumG, sumB, sumWeight);
+          const int targetR = (sumR + sumWeight / 2) / sumWeight;
+          const int targetG = (sumG + sumWeight / 2) / sumWeight;
+          const int targetB = (sumB + sumWeight / 2) / sumWeight;
+          Color oldBg = out.cells[idx].bg;
+          out.cells[idx].bg.r = static_cast<uint8_t>(
+              blendChannelToMean(out.cells[idx].bg.r, targetR, bgAmount));
+          out.cells[idx].bg.g = static_cast<uint8_t>(
+              blendChannelToMean(out.cells[idx].bg.g, targetG, bgAmount));
+          out.cells[idx].bg.b = static_cast<uint8_t>(
+              blendChannelToMean(out.cells[idx].bg.b, targetB, bgAmount));
+          if (oldBg.r != out.cells[idx].bg.r ||
+              oldBg.g != out.cells[idx].bg.g ||
+              oldBg.b != out.cells[idx].bg.b) {
+            if (idx < scratch.prevBg.size()) {
+              scratch.prevBg[idx] =
+                  (static_cast<uint32_t>(out.cells[idx].bg.r) << 16) |
+                  (static_cast<uint32_t>(out.cells[idx].bg.g) << 8) |
+                  static_cast<uint32_t>(out.cells[idx].bg.b);
+              scratch.prevBgValid[idx] = 1;
+            }
+            ++colorAaCount;
+          }
+        }
+        const int fgAmount =
+            (tuning.neighborFgColorAaStrength * partialness * contrastAmount +
+             256 * 255 / 2) /
+            (256 * 255);
+        if (fgAmount > 0) {
+          int sumR = static_cast<int>(out.cells[idx].fg.r) * 6;
+          int sumG = static_cast<int>(out.cells[idx].fg.g) * 6;
+          int sumB = static_cast<int>(out.cells[idx].fg.b) * 6;
+          int sumWeight = 6;
+          addInkMean(x - 1, y, 2, sumR, sumG, sumB, sumWeight);
+          addInkMean(x + 1, y, 2, sumR, sumG, sumB, sumWeight);
+          addInkMean(x, y - 1, 2, sumR, sumG, sumB, sumWeight);
+          addInkMean(x, y + 1, 2, sumR, sumG, sumB, sumWeight);
+          addInkMean(x - 1, y - 1, 1, sumR, sumG, sumB, sumWeight);
+          addInkMean(x + 1, y - 1, 1, sumR, sumG, sumB, sumWeight);
+          addInkMean(x - 1, y + 1, 1, sumR, sumG, sumB, sumWeight);
+          addInkMean(x + 1, y + 1, 1, sumR, sumG, sumB, sumWeight);
+          const int targetR = (sumR + sumWeight / 2) / sumWeight;
+          const int targetG = (sumG + sumWeight / 2) / sumWeight;
+          const int targetB = (sumB + sumWeight / 2) / sumWeight;
+          Color oldFg = out.cells[idx].fg;
+          out.cells[idx].fg.r = static_cast<uint8_t>(
+              blendChannelToMean(out.cells[idx].fg.r, targetR, fgAmount));
+          out.cells[idx].fg.g = static_cast<uint8_t>(
+              blendChannelToMean(out.cells[idx].fg.g, targetG, fgAmount));
+          out.cells[idx].fg.b = static_cast<uint8_t>(
+              blendChannelToMean(out.cells[idx].fg.b, targetB, fgAmount));
+
+          const int bgY = rgbToY(out.cells[idx].bg.r, out.cells[idx].bg.g,
+                                 out.cells[idx].bg.b);
+          int fgY = rgbToY(out.cells[idx].fg.r, out.cells[idx].fg.g,
+                           out.cells[idx].fg.b);
+          const int oldFgY = rgbToY(oldFg.r, oldFg.g, oldFg.b);
+          const int minDelta = std::min(
+              std::abs(oldFgY - bgY), tuning.neighborColorAaMinContrast);
+          if (minDelta > 0 && std::abs(fgY - bgY) < minDelta) {
+            const int targetY =
+                std::clamp(bgY + (oldFgY >= bgY ? minDelta : -minDelta), 0,
+                           255);
+            scaleColorToLuma(out.cells[idx].fg.r, out.cells[idx].fg.g,
+                             out.cells[idx].fg.b, fgY, targetY);
+          }
+
+          if (oldFg.r != out.cells[idx].fg.r ||
+              oldFg.g != out.cells[idx].fg.g ||
+              oldFg.b != out.cells[idx].fg.b) {
+            if (idx < scratch.prevFg.size()) {
+              scratch.prevFg[idx] =
+                  (static_cast<uint32_t>(out.cells[idx].fg.r) << 16) |
+                  (static_cast<uint32_t>(out.cells[idx].fg.g) << 8) |
+                  static_cast<uint32_t>(out.cells[idx].fg.b);
+              scratch.prevFgValid[idx] = 1;
+            }
+            ++fgColorAaCount;
+          }
+        }
+      }
+    }
+  }
+
+  if constexpr (DebugMode) {
+    if (debugStats) {
+      debugStats->neighborContinuityCount += maskChangedCount;
+      debugStats->neighborColorAaCount += colorAaCount;
+      debugStats->neighborFgColorAaCount += fgColorAaCount;
+    }
+  } else {
+    (void)debugStats;
+  }
+}
 
 template <bool AssumeOpaque, bool DebugMode = false>
 bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
@@ -1933,6 +2310,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
           }
         }
       });
+
+  applyNeighborContinuityPass<DebugMode>(out, scratch, tuning, stageMask,
+                                         debugStats);
 
   return true;
 }

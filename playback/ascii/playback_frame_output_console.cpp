@@ -7,9 +7,8 @@ namespace playback_frame_output {
 
 void prepareNonAsciiModeFrame(bool allowFrame, int width, int maxHeight,
                              int frameWidth, int frameHeight,
-                             int* cachedWidth, int* cachedMaxHeight,
-                             int* cachedFrameWidth, int* cachedFrameHeight,
-                             LogLineWriter warningSink, bool* haveFrame) {
+                             FrameOutputState& state,
+                             LogLineWriter warningSink) {
   if (!allowFrame) {
     return;
   }
@@ -17,16 +16,14 @@ void prepareNonAsciiModeFrame(bool allowFrame, int width, int maxHeight,
     if (warningSink) {
       warningSink("Skipping video frame with invalid dimensions.");
     }
-    if (haveFrame) {
-      *haveFrame = false;
-    }
+    state.haveFrame = false;
     return;
   }
 
-  if (cachedWidth) *cachedWidth = width;
-  if (cachedMaxHeight) *cachedMaxHeight = maxHeight;
-  if (cachedFrameWidth) *cachedFrameWidth = frameWidth;
-  if (cachedFrameHeight) *cachedFrameHeight = frameHeight;
+  state.cachedWidth = width;
+  state.cachedMaxHeight = maxHeight;
+  state.cachedFrameWidth = frameWidth;
+  state.cachedFrameHeight = frameHeight;
 }
 
 void renderNonAsciiModeContent(ConsoleScreen& screen, bool windowActive,

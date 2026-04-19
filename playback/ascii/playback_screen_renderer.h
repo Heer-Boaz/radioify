@@ -50,6 +50,7 @@ struct PlaybackScreenRenderInputs {
   bool overlayVisibleNow = false;
   bool clearHistory = false;
   bool frameChanged = false;
+  bool frameAvailable = false;
   bool localSeekRequested = false;
   double cellPixelWidth = 0.0;
   double cellPixelHeight = 0.0;
@@ -57,19 +58,7 @@ struct PlaybackScreenRenderInputs {
   std::atomic<bool>* enableSubtitlesShared = nullptr;
   std::atomic<bool>* windowLocalSeekRequested = nullptr;
   std::atomic<int>* overlayControlHover = nullptr;
-  bool* renderFailed = nullptr;
-  std::string* renderFailMessage = nullptr;
-  std::string* renderFailDetail = nullptr;
-  bool* haveFrame = nullptr;
-  int* cachedWidth = nullptr;
-  int* cachedMaxHeight = nullptr;
-  int* cachedFrameWidth = nullptr;
-  int* cachedFrameHeight = nullptr;
-  double* cachedCellPixelWidth = nullptr;
-  double* cachedCellPixelHeight = nullptr;
-  int* progressBarX = nullptr;
-  int* progressBarY = nullptr;
-  int* progressBarWidth = nullptr;
+  playback_frame_output::FrameOutputState* frameOutputState = nullptr;
   playback_frame_output::LogLineWriter warningSink;
   playback_frame_output::LogLineWriter timingSink;
 };
