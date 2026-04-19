@@ -143,6 +143,7 @@ struct PlaybackLoopRunner::Impl {
     inputView.windowTitle = &windowTitle;
     inputView.enableSubtitlesShared = &enableSubtitlesShared;
     inputView.hasSubtitles = hasSubtitles;
+    inputView.currentMode = output.renderMode(enableAscii);
     inputView.frameOutputState = &frameOutputState;
     inputView.pictureInPictureTextOutputState =
         &pictureInPictureTextOutputState;
@@ -361,6 +362,7 @@ struct PlaybackLoopRunner::Impl {
   void updateRenderInputs(bool clearHistory, bool frameChanged) {
     renderInputs.debugOverlay = config.debugOverlay;
     renderInputs.currentMode = output.renderMode(enableAscii);
+    inputView.currentMode = renderInputs.currentMode;
     renderInputs.enableAudio = enableAudio;
     renderInputs.canPlayPrevious = requestTransportCommand != nullptr;
     renderInputs.canPlayNext = requestTransportCommand != nullptr;
@@ -442,6 +444,8 @@ struct PlaybackLoopRunner::Impl {
   bool pollNextEvent(InputEvent& ev) { return output.pollInput(input, ev); }
 
   void processInputEvents(PlaybackLoopState& loopState) {
+    input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
+    inputView.currentMode = output.renderMode(enableAscii);
     InputEvent ev{};
     while (pollNextEvent(ev)) {
       if (loopState == PlaybackLoopState::Stopped) {

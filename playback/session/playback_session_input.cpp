@@ -609,8 +609,10 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       buildPlaybackMouseOverlayInputs(view, seekState, signals);
   MouseEvent hitMouse = mouse;
   const bool windowOriginEvent = (mouse.control & 0x80000000) != 0;
+  const bool terminalAsciiProgress =
+      !windowOriginEvent && isAsciiPlaybackMode(view.currentMode);
   const playback_frame_output::FrameOutputState* progressOutputState =
-      windowOriginEvent ? nullptr : view.frameOutputState;
+      terminalAsciiProgress ? view.frameOutputState : nullptr;
   bool windowEvent = windowOriginEvent;
   if (windowEvent && view.videoWindow &&
       view.videoWindow->IsPictureInPicture() &&
@@ -722,14 +724,24 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   double progressRatio = 0.0;
   bool progressHit = false;
   if (progressOutputState) {
+    double unitWidth = 1.0;
+    double unitHeight = 1.0;
+    if (hitMouse.hasPixelPosition) {
+      unitWidth = hitMouse.unitWidth;
+      unitHeight = hitMouse.unitHeight;
+      if (terminalAsciiProgress && view.screen) {
+        unitWidth = view.screen->cellPixelWidth();
+        unitHeight = view.screen->cellPixelHeight();
+      }
+    }
     ProgressBarHitTestInput hit;
     hit.x = hitMouse.hasPixelPosition ? hitMouse.pixelX : hitMouse.pos.X;
     hit.y = hitMouse.hasPixelPosition ? hitMouse.pixelY : hitMouse.pos.Y;
     hit.barX = progressOutputState->progressBarX;
     hit.barY = progressOutputState->progressBarY;
     hit.barWidth = progressOutputState->progressBarWidth;
-    hit.unitWidth = hitMouse.hasPixelPosition ? hitMouse.unitWidth : 1.0;
-    hit.unitHeight = hitMouse.hasPixelPosition ? hitMouse.unitHeight : 1.0;
+    hit.unitWidth = unitWidth;
+    hit.unitHeight = unitHeight;
     progressHit = progressBarRatioAt(hit, &progressRatio);
   } else if (windowEvent) {
     progressHit = playback_overlay::overlayProgressRatioAt(

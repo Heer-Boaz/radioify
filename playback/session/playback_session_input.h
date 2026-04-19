@@ -31,6 +31,7 @@ struct PlaybackInputView {
   PlaybackSessionState* playbackState = nullptr;
   bool* audioOk = nullptr;
   bool hasSubtitles = false;
+  PlaybackRenderMode currentMode = PlaybackRenderMode::Other;
 
   playback_frame_output::FrameOutputState* frameOutputState = nullptr;
   playback_frame_output::FrameOutputState* pictureInPictureTextOutputState =

@@ -466,6 +466,7 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
   };
 
   screen.updateSize();
+  input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
   renderFrame();
 
   InputEvent ev{};
@@ -473,6 +474,7 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
     while (input.poll(ev)) {
       if (ev.type == InputEvent::Type::Resize) {
         screen.updateSize();
+        input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
         renderFrame();
         continue;
       }
@@ -567,6 +569,7 @@ int runTui(Options o) {
 
   ConsoleScreen screen;
   screen.init();
+  input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
 
   VideoWindow tuiWindow;
   bool windowTuiEnabled = o.enableWindow;
@@ -1084,6 +1087,7 @@ int runTui(Options o) {
   auto rebuildLayout = [&]() {
     if (screenSizeDirty) {
       screen.updateSize();
+      input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
       screenSizeDirty = false;
     }
     footerLayout = buildFooterLayout();

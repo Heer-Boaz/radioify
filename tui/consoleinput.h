@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "consolescreen.h"
+#include "terminal_input_sequence.h"
 
 struct BreadcrumbLine;
 
@@ -54,18 +55,30 @@ class ConsoleInput {
  public:
   void init();
   void restore();
+  void setCellPixelSize(double width, double height);
   bool poll(InputEvent& out);
   bool active() const;
   HANDLE waitHandle() const;
 
  private:
   bool hasInputFocus() const;
+  void enableTerminalMouseInput();
+  void disableTerminalMouseInput();
+  void updateTerminalGridSize();
+  void mapPixelMousePosition(MouseEvent& mouse) const;
   HANDLE handle_ = INVALID_HANDLE_VALUE;
+  HANDLE output_ = INVALID_HANDLE_VALUE;
   DWORD originalMode_ = 0;
+  int columns_ = 80;
+  int rows_ = 25;
+  double cellPixelWidth_ = 1.0;
+  double cellPixelHeight_ = 1.0;
   bool active_ = false;
+  bool terminalMouseInput_ = false;
   bool xButton1Prev_ = false;
   bool xButton2Prev_ = false;
   bool focusActive_ = true;
+  TerminalInputSequenceParser terminalParser_;
 };
 
 struct FileEntry {
