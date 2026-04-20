@@ -8,7 +8,7 @@
 
 #include "audioplayback.h"
 #include "playback/playback_media_artwork_catalog.h"
-#include "playback/playback_media_keys.h"
+#include "playback/playback_shortcuts.h"
 #include "playback_mini_player_tui.h"
 #include "runtime_helpers.h"
 #include "track_browser_state.h"
@@ -257,24 +257,27 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
     ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
   }
 
-  playback_overlay::PlaybackOverlayState overlayState;
-  overlayState.windowTitle = title;
-  overlayState.audioOk = audioDisplayReady;
-  overlayState.playPauseAvailable = audioReady && !audioIsFinished();
-  overlayState.audioSupports50HzToggle =
+  playback_overlay::PlaybackOverlayInputs overlayInputs;
+  overlayInputs.windowTitle = title;
+  overlayInputs.audioOk = audioDisplayReady;
+  overlayInputs.playPauseAvailable = audioReady && !audioIsFinished();
+  overlayInputs.audioSupports50HzToggle =
       audioReady && audioSupports50HzToggle();
-  overlayState.canPlayPrevious = true;
-  overlayState.canPlayNext = true;
-  overlayState.radioEnabled = audioIsRadioEnabled();
-  overlayState.hz50Enabled = audioIs50HzEnabled();
-  overlayState.displaySec = displaySec;
-  overlayState.totalSec = totalSec;
-  overlayState.volPct =
+  overlayInputs.canPlayPrevious = true;
+  overlayInputs.canPlayNext = true;
+  overlayInputs.radioEnabled = audioIsRadioEnabled();
+  overlayInputs.hz50Enabled = audioIs50HzEnabled();
+  overlayInputs.displaySec = displaySec;
+  overlayInputs.totalSec = totalSec;
+  overlayInputs.volPct =
       static_cast<int>(std::round(audioGetVolume() * 100.0f));
-  overlayState.paused = audioIsPaused();
-  overlayState.audioFinished = audioIsFinished();
-  overlayState.pictureInPictureAvailable = true;
-  overlayState.pictureInPictureActive = true;
+  overlayInputs.paused = audioIsPaused();
+  overlayInputs.audioFinished = audioIsFinished();
+  overlayInputs.overlayVisible = true;
+  overlayInputs.pictureInPictureAvailable = true;
+  overlayInputs.pictureInPictureActive = true;
+  playback_overlay::PlaybackOverlayState overlayState =
+      playback_overlay::buildPlaybackOverlayState(overlayInputs);
 
   playback_overlay::OverlayCellLayoutInput layoutInput;
   layoutInput.width = width;
@@ -379,70 +382,39 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
   }
 
   if (ev.type == InputEvent::Type::Key) {
-    const KeyEvent& key = ev.key;
-    const DWORD shiftMask = SHIFT_PRESSED;
-    const bool shift = (key.control & shiftMask) != 0;
-    if (key.vk == VK_ESCAPE || key.vk == 'W' || key.ch == 'w' ||
-        key.ch == 'W') {
+    InputCallbacks playbackCallbacks;
+    playbackCallbacks.onTogglePause = callbacks.onTogglePause;
+    playbackCallbacks.onStopPlayback = callbacks.onStopPlayback;
+    playbackCallbacks.onPlayPrevious = callbacks.onPlayPrevious;
+    playbackCallbacks.onPlayNext = callbacks.onPlayNext;
+    playbackCallbacks.onToggleWindow = [&]() {
       close();
       if (callbacks.onClose) callbacks.onClose();
-      return;
-    }
-    if (key.vk == kPlaybackVkMediaPlay) {
-      if (callbacks.onTogglePause) callbacks.onTogglePause();
-      return;
-    }
-    if (key.vk == kPlaybackVkMediaPause) {
-      if (callbacks.onTogglePause) callbacks.onTogglePause();
-      return;
-    }
-    if (key.vk == VK_SPACE || key.ch == ' ' ||
-        key.vk == VK_MEDIA_PLAY_PAUSE) {
-      if (callbacks.onTogglePause) callbacks.onTogglePause();
-      return;
-    }
-    if (key.vk == VK_MEDIA_STOP) {
-      if (callbacks.onStopPlayback) callbacks.onStopPlayback();
-      return;
-    }
-    if (key.vk == VK_MEDIA_PREV_TRACK) {
-      if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
-      return;
-    }
-    if (key.vk == VK_MEDIA_NEXT_TRACK) {
-      if (callbacks.onPlayNext) callbacks.onPlayNext();
-      return;
-    }
-    if (key.vk == 'R' || key.ch == 'r' || key.ch == 'R') {
-      if (callbacks.onToggleRadio) callbacks.onToggleRadio();
-      return;
-    }
-    if (key.vk == 'H' || key.ch == 'h' || key.ch == 'H') {
-      if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
-      return;
-    }
-    if (key.vk == VK_OEM_4 || key.ch == '[') {
+    };
+    playbackCallbacks.onToggleRadio = callbacks.onToggleRadio;
+    playbackCallbacks.onToggle50Hz = callbacks.onToggle50Hz;
+    playbackCallbacks.onSeekBy = [&](int direction) {
       if (callbacks.onSeekBy) {
-        callbacks.onSeekBy(-1);
+        callbacks.onSeekBy(direction);
         holdSeekDisplay(audioGetSeekTargetSec());
       }
-      return;
-    }
-    if (key.vk == VK_OEM_6 || key.ch == ']') {
-      if (callbacks.onSeekBy) {
-        callbacks.onSeekBy(1);
-        holdSeekDisplay(audioGetSeekTargetSec());
-      }
-      return;
-    }
-    if (key.vk == VK_UP && shift) {
-      if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(0.10f);
-      return;
-    }
-    if (key.vk == VK_DOWN && shift) {
-      if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-0.10f);
-      return;
-    }
+    };
+    playbackCallbacks.onAdjustVolume = callbacks.onAdjustVolume;
+    playbackCallbacks.onPlaybackContextShortcut =
+        [&](PlaybackShortcutAction action) {
+          switch (action) {
+            case PlaybackShortcutAction::DismissMiniPlayer:
+              close();
+              if (callbacks.onClose) callbacks.onClose();
+              break;
+            default:
+              break;
+          }
+        };
+
+    const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
+                                      kPlaybackShortcutContextAudioMiniPlayer;
+    handlePlaybackInput(ev, playbackCallbacks, shortcutContexts);
     return;
   }
 

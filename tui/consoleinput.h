@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "consolescreen.h"
+#include "playback/playback_shortcut_types.h"
 #include "terminal_input_sequence.h"
 
 struct BreadcrumbLine;
@@ -177,6 +178,7 @@ struct InputCallbacks {
   std::function<void()> onToggleSubtitles;
   std::function<void()> onToggleAudioTrack;
   std::function<void()> onToggleOptions;
+  std::function<void(PlaybackShortcutAction)> onPlaybackContextShortcut;
   std::function<void(int)> onSeekBy;
   std::function<void(double)> onSeekToRatio;
   std::function<void(float)> onAdjustVolume;
@@ -184,6 +186,12 @@ struct InputCallbacks {
   std::function<void(const FileEntry&, int, int)> onOpenFileContextMenu;
   std::function<void(const std::filesystem::path&)> onRenderFile;
   std::function<void(BrowserState&, const std::string&)> onRefreshBrowser;
+};
+
+enum class PlaybackInputResult : uint8_t {
+  Ignored,
+  Handled,
+  HandledWithoutOverlayRefresh,
 };
 
 enum class BrowserSearchFocus {
@@ -218,8 +226,9 @@ struct ActionStripLayout {
   std::vector<ActionStripButton> buttons;
 };
 
-bool handlePlaybackInput(const InputEvent& ev,
-                         const InputCallbacks& callbacks);
+PlaybackInputResult handlePlaybackInput(
+    const InputEvent& ev, const InputCallbacks& callbacks,
+    uint32_t shortcutContexts = kPlaybackShortcutContextShared);
 
 void handleInputEvent(
   const InputEvent& ev,

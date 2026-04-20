@@ -8,6 +8,7 @@
 
 #include "audioplayback.h"
 #include "player.h"
+#include "playback/playback_shortcuts.h"
 #include "subtitle_manager.h"
 #include "ui_helpers.h"
 #include "videowindow.h"
@@ -521,6 +522,18 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   cb.onToggle50Hz = [&]() { toggle50Hz(view); };
   cb.onToggleSubtitles = [&]() { toggleSubtitles(view); };
   cb.onToggleAudioTrack = [&]() { toggleAudioTrack(view); };
+  cb.onPlaybackContextShortcut = [&](PlaybackShortcutAction action) {
+    switch (action) {
+      case PlaybackShortcutAction::TogglePictureInPicture:
+        togglePictureInPicture(view, signals);
+        break;
+      case PlaybackShortcutAction::ExitPlaybackSession:
+        requestPlaybackExit(view, signals, false);
+        break;
+      default:
+        break;
+    }
+  };
   cb.onSeekBy = [&](int dir) {
     if (!view.player) return;
     const double baseSec = playbackSeekBaseSec(view, seekState);
@@ -528,37 +541,22 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   };
   cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
-  if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK || key.vk == VK_BACK) {
-    requestPlaybackExit(view, signals, false);
-    return;
-  }
-  if (key.vk == 'P' || key.ch == 'p' || key.ch == 'P') {
-    if (togglePictureInPicture(view, signals)) {
-      triggerOverlay(view, signals);
-      if (signals.redraw) {
-        *signals.redraw = true;
-      }
-      return;
-    }
-  }
-  if (key.vk == 'T' || key.ch == 't' || key.ch == 'T') {
-    if (togglePictureInPicture(view, signals)) {
-      triggerOverlay(view, signals);
-      if (signals.redraw) {
-        *signals.redraw = true;
-      }
-      return;
-    }
-  }
-
   InputEvent keyEvent{};
   keyEvent.type = InputEvent::Type::Key;
   keyEvent.key = key;
-  if (handlePlaybackInput(keyEvent, cb)) {
+  const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
+                                    kPlaybackShortcutContextPlaybackSession;
+  const PlaybackInputResult playbackResult =
+      handlePlaybackInput(keyEvent, cb, shortcutContexts);
+  if (playbackResult == PlaybackInputResult::Handled) {
     triggerOverlay(view, signals);
     if (signals.redraw) {
       *signals.redraw = true;
     }
+    return;
+  }
+  if (playbackResult == PlaybackInputResult::HandledWithoutOverlayRefresh) {
+    return;
   }
 }
 

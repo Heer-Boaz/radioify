@@ -6,7 +6,7 @@
 #include "browser_grid_index.h"
 #include "consolescreen.h"
 #include "optionsbrowser.h"
-#include "playback/playback_media_keys.h"
+#include "playback/playback_shortcuts.h"
 #include "runtime_helpers.h"
 #include "ui_helpers.h"
 
@@ -580,7 +580,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
 
-    if ((playMode || decoderReady) && handlePlaybackInput(ev, callbacks)) {
+    if ((playMode || decoderReady) &&
+        handlePlaybackInput(ev, callbacks, kPlaybackShortcutContextShared) !=
+            PlaybackInputResult::Ignored) {
       if (key.vk == 'O' || key.ch == 'o' || key.ch == 'O') {
         clearForwardHistory();
       }
@@ -934,99 +936,77 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
   }
 }
 
-bool handlePlaybackInput(const InputEvent& ev,
-                         const InputCallbacks& callbacks) {
+PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
+                                        const InputCallbacks& callbacks,
+                                        uint32_t shortcutContexts) {
   if (ev.type == InputEvent::Type::Key) {
     const KeyEvent& key = ev.key;
-    const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-    const DWORD shiftMask = SHIFT_PRESSED;
-    bool ctrl = (key.control & ctrlMask) != 0;
-    bool shift = (key.control & shiftMask) != 0;
-
-    if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
-      if (callbacks.onQuit) callbacks.onQuit();
-      return true;
-    }
-    if (key.vk == kPlaybackVkMediaPlay) {
-      if (callbacks.onPlay) callbacks.onPlay();
-      return true;
-    }
-    if (key.vk == kPlaybackVkMediaPause) {
-      if (callbacks.onPause) callbacks.onPause();
-      return true;
-    }
-    if (key.vk == VK_SPACE || key.ch == ' ') {
-      if (callbacks.onTogglePause) callbacks.onTogglePause();
-      return true;
-    }
-    if (key.vk == VK_MEDIA_PLAY_PAUSE) {
-      if (callbacks.onTogglePause) callbacks.onTogglePause();
-      return true;
-    }
-    if (key.vk == VK_MEDIA_STOP) {
-      if (callbacks.onStopPlayback) callbacks.onStopPlayback();
-      return true;
-    }
-    if (key.vk == VK_MEDIA_PREV_TRACK) {
-      if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
-      return true;
-    }
-    if (key.vk == VK_MEDIA_NEXT_TRACK) {
-      if (callbacks.onPlayNext) callbacks.onPlayNext();
-      return true;
-    }
-    if (key.vk == 'W' || key.ch == 'w' || key.ch == 'W') {
-      if (callbacks.onToggleWindow) callbacks.onToggleWindow();
-      return true;
-    }
-    if (key.vk == 'R' || key.ch == 'r' || key.ch == 'R') {
-      if (callbacks.onToggleRadio) callbacks.onToggleRadio();
-      return true;
-    }
-    if (key.vk == 'H' || key.ch == 'h' || key.ch == 'H') {
-      if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
-      return true;
-    }
-    if (key.vk == 'S' || key.ch == 's' || key.ch == 'S') {
-      if (callbacks.onToggleSubtitles) callbacks.onToggleSubtitles();
-      return true;
-    }
-    if (key.vk == 'A' || key.ch == 'a' || key.ch == 'A') {
-      if (callbacks.onToggleAudioTrack) callbacks.onToggleAudioTrack();
-      return true;
-    }
-    if (key.vk == 'O' || key.ch == 'o' || key.ch == 'O') {
-      if (callbacks.onToggleOptions) callbacks.onToggleOptions();
-      return true;
-    }
-
-    if (key.vk == VK_OEM_4 || key.ch == '[') {
-      if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
-      return true;
-    }
-    if (key.vk == VK_OEM_6 || key.ch == ']') {
-      if (callbacks.onSeekBy) callbacks.onSeekBy(1);
-      return true;
-    }
-    if (ctrl && (key.vk == VK_LEFT || key.vk == VK_RIGHT)) {
-      if (callbacks.onSeekBy) callbacks.onSeekBy((key.vk == VK_LEFT) ? -1 : 1);
-      return true;
-    }
-
-    if (key.vk == VK_UP) {
-      if (shift) {
-        float step = 0.10f;
-        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(step);
-        return true;
-      }
-    }
-    if (key.vk == VK_DOWN) {
-      if (shift) {
-        float step = 0.10f;
-        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-step);
-        return true;
+    if (auto action = resolvePlaybackShortcutAction(key, shortcutContexts)) {
+      switch (*action) {
+        case PlaybackShortcutAction::Quit:
+          if (callbacks.onQuit) callbacks.onQuit();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::Play:
+          if (callbacks.onPlay) callbacks.onPlay();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::Pause:
+          if (callbacks.onPause) callbacks.onPause();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::TogglePause:
+          if (callbacks.onTogglePause) callbacks.onTogglePause();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::Stop:
+          if (callbacks.onStopPlayback) callbacks.onStopPlayback();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::Previous:
+          if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::Next:
+          if (callbacks.onPlayNext) callbacks.onPlayNext();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::ToggleWindow:
+          if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::ToggleRadio:
+          if (callbacks.onToggleRadio) callbacks.onToggleRadio();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::Toggle50Hz:
+          if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::ToggleSubtitles:
+          if (callbacks.onToggleSubtitles) callbacks.onToggleSubtitles();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::ToggleAudioTrack:
+          if (callbacks.onToggleAudioTrack) callbacks.onToggleAudioTrack();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::ToggleOptions:
+          if (callbacks.onToggleOptions) callbacks.onToggleOptions();
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::SeekBackward:
+          if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::SeekForward:
+          if (callbacks.onSeekBy) callbacks.onSeekBy(1);
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::VolumeUp:
+          if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(0.10f);
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::VolumeDown:
+          if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-0.10f);
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::TogglePictureInPicture:
+          if (callbacks.onPlaybackContextShortcut) {
+            callbacks.onPlaybackContextShortcut(*action);
+          }
+          return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::ExitPlaybackSession:
+        case PlaybackShortcutAction::DismissMiniPlayer:
+          if (callbacks.onPlaybackContextShortcut) {
+            callbacks.onPlaybackContextShortcut(*action);
+          }
+          return PlaybackInputResult::HandledWithoutOverlayRefresh;
       }
     }
   }
-  return false;
+  return PlaybackInputResult::Ignored;
 }
