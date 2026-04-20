@@ -590,7 +590,7 @@ int runTui(Options o) {
   VideoPlaybackConfig videoConfig;
   videoConfig.enableAscii = o.enableAscii;
   videoConfig.enableAudio = o.enableAudio;
-  videoConfig.debugOverlay = true;
+  videoConfig.debugOverlay = o.asciiDebugOverlay;
   // If dedicated window-TUI is active, keep video playback out of the legacy
   // window path. If window-TUI could not be opened, fall back to normal
   // window playback behavior.

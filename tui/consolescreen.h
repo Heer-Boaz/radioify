@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "terminal_cell_metrics.h"
+
 struct Color {
   uint8_t r = 0;
   uint8_t g = 0;
@@ -61,6 +63,17 @@ class ConsoleScreen {
   int height() const;
   double cellPixelWidth() const;
   double cellPixelHeight() const;
+  TerminalCellMetricSource cellPixelSource() const;
+  const char* cellPixelSourceLabel() const;
+  const std::string& cellPixelDiagnostics() const;
+  double asciiCellPixelWidth() const;
+  double asciiCellPixelHeight() const;
+  TerminalCellMetricSource asciiCellPixelSource() const;
+  const char* asciiCellPixelSourceLabel() const;
+  double brailleGlyphCellPixelWidth() const;
+  double brailleGlyphCellPixelHeight() const;
+  TerminalCellMetricSource brailleGlyphCellPixelSource() const;
+  const char* brailleGlyphCellPixelSourceLabel() const;
   void clear(const Style& style);
   void writeText(int x, int y, const std::string& text, const Style& style);
   void writeRun(int x, int y, int len, wchar_t ch, const Style& style);
@@ -104,6 +117,16 @@ class ConsoleScreen {
   int height_ = 25;
   double cellPixelWidth_ = 0.0;
   double cellPixelHeight_ = 0.0;
+  TerminalCellMetricSource cellPixelSource_ = TerminalCellMetricSource::None;
+  std::string cellPixelDiagnostics_;
+  double asciiCellPixelWidth_ = 0.0;
+  double asciiCellPixelHeight_ = 0.0;
+  TerminalCellMetricSource asciiCellPixelSource_ =
+      TerminalCellMetricSource::None;
+  double brailleGlyphCellPixelWidth_ = 0.0;
+  double brailleGlyphCellPixelHeight_ = 0.0;
+  TerminalCellMetricSource brailleGlyphCellPixelSource_ =
+      TerminalCellMetricSource::None;
   bool fastOutput_ = false;
   bool virtualSize_ = false;
   bool alwaysFullRedraw_ = false;

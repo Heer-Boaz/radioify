@@ -284,6 +284,14 @@ struct PlaybackLoopRunner::Impl {
     inputs.frameChanged = frameChanged;
     inputs.cellPixelWidth = cellPixelWidth;
     inputs.cellPixelHeight = cellPixelHeight;
+    inputs.cellPixelSourceLabel = "picture-in-picture-text-grid";
+    inputs.cellPixelDiagnostics.clear();
+    inputs.terminalCellPixelWidth = cellPixelWidth;
+    inputs.terminalCellPixelHeight = cellPixelHeight;
+    inputs.terminalCellPixelSourceLabel = "picture-in-picture-text-grid";
+    inputs.brailleGlyphCellPixelWidth = 0.0;
+    inputs.brailleGlyphCellPixelHeight = 0.0;
+    inputs.brailleGlyphCellPixelSourceLabel.clear();
     inputs.allowAsciiCpuFallback = false;
     inputs.frameOutputState = &pictureInPictureTextOutputState;
     core.updateRenderInputs(inputs);
@@ -367,8 +375,19 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.allowAsciiCpuFallback = false;
     renderInputs.useWindowPresenter = output.windowActive();
     renderInputs.overlayVisibleNow = overlayVisible();
-    renderInputs.cellPixelWidth = screen.cellPixelWidth();
-    renderInputs.cellPixelHeight = screen.cellPixelHeight();
+    renderInputs.cellPixelWidth = screen.asciiCellPixelWidth();
+    renderInputs.cellPixelHeight = screen.asciiCellPixelHeight();
+    renderInputs.cellPixelSourceLabel = screen.asciiCellPixelSourceLabel();
+    renderInputs.cellPixelDiagnostics = screen.cellPixelDiagnostics();
+    renderInputs.terminalCellPixelWidth = screen.cellPixelWidth();
+    renderInputs.terminalCellPixelHeight = screen.cellPixelHeight();
+    renderInputs.terminalCellPixelSourceLabel = screen.cellPixelSourceLabel();
+    renderInputs.brailleGlyphCellPixelWidth =
+        screen.brailleGlyphCellPixelWidth();
+    renderInputs.brailleGlyphCellPixelHeight =
+        screen.brailleGlyphCellPixelHeight();
+    renderInputs.brailleGlyphCellPixelSourceLabel =
+        screen.brailleGlyphCellPixelSourceLabel();
     renderInputs.clearHistory = clearHistory;
     renderInputs.frameChanged = frameChanged;
     core.updateRenderInputs(renderInputs);

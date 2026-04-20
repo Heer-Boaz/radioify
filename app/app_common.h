@@ -26,6 +26,7 @@ struct Options {
   bool enableAudio = kDefaultAudioPlaybackEnabled;
   bool enableRadio = kDefaultRadioFilterEnabled;
   bool enableWindow = kDefaultWindowPlaybackEnabled;
+  bool asciiDebugOverlay = false;
   bool shellOpen = false;
   bool verbose = false;
 };

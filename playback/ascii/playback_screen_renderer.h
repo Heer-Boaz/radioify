@@ -54,6 +54,14 @@ struct PlaybackScreenRenderInputs {
   bool localSeekRequested = false;
   double cellPixelWidth = 0.0;
   double cellPixelHeight = 0.0;
+  std::string cellPixelSourceLabel;
+  std::string cellPixelDiagnostics;
+  double terminalCellPixelWidth = 0.0;
+  double terminalCellPixelHeight = 0.0;
+  std::string terminalCellPixelSourceLabel;
+  double brailleGlyphCellPixelWidth = 0.0;
+  double brailleGlyphCellPixelHeight = 0.0;
+  std::string brailleGlyphCellPixelSourceLabel;
   double pendingSeekTargetSec = -1.0;
   std::atomic<bool>* enableSubtitlesShared = nullptr;
   std::atomic<bool>* windowLocalSeekRequested = nullptr;

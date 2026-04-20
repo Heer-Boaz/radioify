@@ -27,6 +27,7 @@ static void showUsage(const char* exe) {
   logLine("  --no-audio   Disable audio playback");
   logLine("  --no-radio   Start with radio filter disabled");
   logLine("  --window     Open a window for video playback");
+  logLine("  --ascii-debug-overlay Show ASCII playback debug overlay");
   logLine("  -h, --help   Show this help");
 }
 
@@ -175,6 +176,10 @@ Options parseArgs(int argc, char** argv) {
     }
     if (arg == "--window") {
       o.enableWindow = true;
+      continue;
+    }
+    if (arg == "--ascii-debug-overlay") {
+      o.asciiDebugOverlay = true;
       continue;
     }
     if (arg == "--shell-open") {

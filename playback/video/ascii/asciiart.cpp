@@ -1564,7 +1564,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t sourceBlueVals[8];
             uint8_t validVals[8];
             int validMask = 0;
-            int dotIndex = 0;
 
             // Verzamel lokale statistieken voor adaptive thresholding
             int cellLumMin = 255, cellLumMax = 0;
@@ -1588,6 +1587,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                       : nullptr;
 
               for (int dx = 0; dx < 2; ++dx) {
+                const int dotIndex = dx * 4 + dy;
                 uint32_t px = rgbRow[dx];
                 uint8_t r = static_cast<uint8_t>(px & 0xFF);
                 uint8_t g = static_cast<uint8_t>((px >> 8) & 0xFF);
@@ -1608,7 +1608,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
 
                 if constexpr (!AssumeOpaque) {
                   if (a == 0) {
-                    ++dotIndex;
                     continue;
                   }
                 }
@@ -1627,7 +1626,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 sumAllG += g;
                 sumAllB += b;
                 ++colorCount;
-                ++dotIndex;
               }
             }
 

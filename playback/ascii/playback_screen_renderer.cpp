@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "audioplayback.h"
@@ -54,6 +55,16 @@ namespace {
   return "none";
 }
 
+std::pair<int, int> frameDisplaySize(const VideoFrame* frame) {
+  if (!frame) {
+    return {0, 0};
+  }
+  if ((frame->rotationQuarterTurns & 1) != 0) {
+    return {frame->height, frame->width};
+  }
+  return {frame->width, frame->height};
+}
+
 }  // namespace
 
 void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
@@ -92,6 +103,22 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool localSeekRequested = inputs.localSeekRequested;
   double cellPixelWidth = inputs.cellPixelWidth;
   double cellPixelHeight = inputs.cellPixelHeight;
+  const std::string& cellPixelSourceLabel = inputs.cellPixelSourceLabel;
+  const std::string& cellPixelDiagnostics = inputs.cellPixelDiagnostics;
+  double terminalCellPixelWidth =
+      inputs.terminalCellPixelWidth > 0.0 ? inputs.terminalCellPixelWidth
+                                          : cellPixelWidth;
+  double terminalCellPixelHeight =
+      inputs.terminalCellPixelHeight > 0.0 ? inputs.terminalCellPixelHeight
+                                           : cellPixelHeight;
+  const std::string& terminalCellPixelSourceLabel =
+      inputs.terminalCellPixelSourceLabel.empty()
+          ? inputs.cellPixelSourceLabel
+          : inputs.terminalCellPixelSourceLabel;
+  double brailleGlyphCellPixelWidth = inputs.brailleGlyphCellPixelWidth;
+  double brailleGlyphCellPixelHeight = inputs.brailleGlyphCellPixelHeight;
+  const std::string& brailleGlyphCellPixelSourceLabel =
+      inputs.brailleGlyphCellPixelSourceLabel;
   double pendingSeekTargetSec = inputs.pendingSeekTargetSec;
   auto& enableSubtitlesShared = *inputs.enableSubtitlesShared;
   auto& windowLocalSeekRequested = *inputs.windowLocalSeekRequested;
@@ -110,8 +137,70 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   if (!audioOk && !audioStarting) {
     statusLine = enableAudio ? "Audio unavailable" : "Audio disabled";
   }
-  std::string debugLine1;
-  std::string debugLine2;
+  auto [frameDisplayW, frameDisplayH] = frameDisplaySize(frame);
+  int layoutSourceW = player.sourceWidth();
+  int layoutSourceH = player.sourceHeight();
+  const char* layoutSourceKind = "player";
+  if (layoutSourceW <= 0 || layoutSourceH <= 0) {
+    layoutSourceW = frameDisplayW;
+    layoutSourceH = frameDisplayH;
+    layoutSourceKind = "frame";
+  }
+  std::vector<std::string> debugLines;
+  if (debugOverlay && currentMode == PlaybackRenderMode::AsciiTerminal) {
+    char buf[512];
+    const char* layoutSource =
+        cellPixelSourceLabel.empty() ? "unknown" : cellPixelSourceLabel.c_str();
+    const char* terminalSource = terminalCellPixelSourceLabel.empty()
+                                     ? "unknown"
+                                     : terminalCellPixelSourceLabel.c_str();
+    const char* inkSource = brailleGlyphCellPixelSourceLabel.empty()
+                                ? "none"
+                                : brailleGlyphCellPixelSourceLabel.c_str();
+    std::snprintf(buf, sizeof(buf),
+                  "DBG term=%.2fx%.2f/%s layout=%.2fx%.2f/%s ink=%.2fx%.2f/%s %dx%d %s",
+                  terminalCellPixelWidth, terminalCellPixelHeight,
+                  terminalSource, cellPixelWidth, cellPixelHeight,
+                  layoutSource, brailleGlyphCellPixelWidth,
+                  brailleGlyphCellPixelHeight, inkSource, width, height,
+                  cellPixelDiagnostics.c_str());
+    debugLines.emplace_back(buf);
+
+    int plannedDebugLineCount = 2;
+#if RADIOIFY_ENABLE_TIMING_LOG
+    plannedDebugLineCount += 2;
+#endif
+    const int plannedStatusLines = statusLine.empty() ? 0 : 1;
+    const int plannedMaxHeight =
+        height - plannedDebugLineCount - plannedStatusLines;
+    int plannedArtW = 0;
+    int plannedArtH = 0;
+    if (layoutSourceW > 0 && layoutSourceH > 0 && plannedMaxHeight > 0) {
+      auto plannedArt = playback_frame_output::computeAsciiOutputSize(
+          width, plannedMaxHeight, layoutSourceW, layoutSourceH,
+          cellPixelWidth, cellPixelHeight);
+      plannedArtW = plannedArt.first;
+      plannedArtH = plannedArt.second;
+    }
+    const double physW = plannedArtW * cellPixelWidth;
+    const double physH = plannedArtH * cellPixelHeight;
+    const double physAspect = physH > 0.0 ? physW / physH : 0.0;
+    const double sourceAspect =
+        layoutSourceH > 0
+            ? static_cast<double>(layoutSourceW) /
+                  static_cast<double>(layoutSourceH)
+            : 0.0;
+    char buf2[256];
+    std::snprintf(
+        buf2, sizeof(buf2),
+        "DBG ascii src=%dx%d(%s) frame=%dx%d r=%d art=%dx%d phys=%.0fx%.0f asp=%.3f srcasp=%.3f path=%s",
+        layoutSourceW, layoutSourceH, layoutSourceKind, frameDisplayW,
+        frameDisplayH, frame ? frame->rotationQuarterTurns : 0, plannedArtW,
+        plannedArtH, physW, physH, physAspect, sourceAspect,
+        frameOutput.lastRenderPath.empty() ? "none"
+                                           : frameOutput.lastRenderPath.c_str());
+    debugLines.emplace_back(buf2);
+  }
 #if RADIOIFY_ENABLE_TIMING_LOG
   if (debugOverlay) {
     PlayerDebugInfo dbg = player.debugInfo();
@@ -133,19 +222,11 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         dbg.audioClockFresh ? 1 : 0, dbg.audioStarved ? 1 : 0,
         dbg.audioBufferedFrames, dbg.audioSampleRate,
         static_cast<double>(dbg.audioClockUs) / 1000000.0);
-    debugLine1 = buf1;
-    debugLine2 = buf2;
+    debugLines.emplace_back(buf1);
+    debugLines.emplace_back(buf2);
   }
-#else
-  (void)debugOverlay;
 #endif
-  int headerLines = 0;
-  if (!debugLine1.empty()) {
-    headerLines += 1;
-  }
-  if (!debugLine2.empty()) {
-    headerLines += 1;
-  }
+  int headerLines = static_cast<int>(debugLines.size());
   if (!statusLine.empty()) {
     headerLines += 1;
   }
@@ -203,6 +284,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
        maxHeight != frameOutput.cachedMaxHeight ||
        frame->width != frameOutput.cachedFrameWidth ||
        frame->height != frameOutput.cachedFrameHeight ||
+       layoutSourceW != frameOutput.cachedLayoutSourceWidth ||
+       layoutSourceH != frameOutput.cachedLayoutSourceHeight ||
        std::abs(cellPixelWidth - frameOutput.cachedCellPixelWidth) > 0.01 ||
        std::abs(cellPixelHeight - frameOutput.cachedCellPixelHeight) > 0.01);
 
@@ -217,6 +300,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     asciiInput.maxHeight = maxHeight;
     asciiInput.cellPixelWidth = cellPixelWidth;
     asciiInput.cellPixelHeight = cellPixelHeight;
+    asciiInput.sourceWidth = layoutSourceW;
+    asciiInput.sourceHeight = layoutSourceH;
     asciiInput.computeAsciiOutputSize =
         playback_frame_output::computeAsciiOutputSize;
     asciiInput.frame = frame;
@@ -295,11 +380,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
 
   screen.clear(baseStyle);
   int headerY = 0;
-  if (!debugLine1.empty()) {
-    screen.writeText(0, headerY++, fitLine(debugLine1, width), dimStyle);
-  }
-  if (!debugLine2.empty()) {
-    screen.writeText(0, headerY++, fitLine(debugLine2, width), dimStyle);
+  for (const auto& debugLine : debugLines) {
+    screen.writeText(0, headerY++, fitLine(debugLine, width), dimStyle);
   }
   if (!statusLine.empty()) {
     screen.writeText(0, headerY++, fitLine(statusLine, width), dimStyle);

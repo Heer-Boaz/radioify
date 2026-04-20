@@ -217,10 +217,14 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
   }
   FrameOutputState& state = *input.state;
   if (!input.allowFrame) {
+    state.lastRenderPath.clear();
+    state.lastRenderPathDetail.clear();
     state.cachedWidth = -1;
     state.cachedMaxHeight = -1;
     state.cachedFrameWidth = -1;
     state.cachedFrameHeight = -1;
+    state.cachedLayoutSourceWidth = -1;
+    state.cachedLayoutSourceHeight = -1;
     state.cachedCellPixelWidth = -1.0;
     state.cachedCellPixelHeight = -1.0;
     return false;
@@ -239,12 +243,18 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
     return false;
   }
 
+  int layoutSrcW = input.sourceWidth;
+  int layoutSrcH = input.sourceHeight;
+  if (layoutSrcW <= 0 || layoutSrcH <= 0) {
+    layoutSrcW = ((input.frame->rotationQuarterTurns & 1) != 0)
+                     ? input.frame->height
+                     : input.frame->width;
+    layoutSrcH = ((input.frame->rotationQuarterTurns & 1) != 0)
+                     ? input.frame->width
+                     : input.frame->height;
+  }
   auto [outW, outH] = input.computeAsciiOutputSize(
-      input.width, input.maxHeight,
-      ((input.frame->rotationQuarterTurns & 1) != 0) ? input.frame->height
-                                                    : input.frame->width,
-      ((input.frame->rotationQuarterTurns & 1) != 0) ? input.frame->width
-                                                    : input.frame->height,
+      input.width, input.maxHeight, layoutSrcW, layoutSrcH,
       input.cellPixelWidth, input.cellPixelHeight);
   const int prevArtWidth = input.art->width;
   const int prevArtHeight = input.art->height;
@@ -314,6 +324,12 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
     bool asciiOk = false;
     if (renderFromCache) {
       asciiOk = true;
+      state.lastRenderPath = "gpu";
+      state.lastRenderPathDetail = input.gpuRenderer->lastNv12TextureDetail();
+      if (state.lastRenderPathDetail.empty()) {
+        state.lastRenderPathDetail =
+            std::string("path=") + input.gpuRenderer->lastNv12TexturePath();
+      }
       if (input.timingSink && logAsciiRendererStartup(*input.frame, *input.art,
                                                      input.timingSink)) {
         char buf[256];
@@ -349,6 +365,8 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       input.art->width = prevArtWidth;
       input.art->height = prevArtHeight;
       asciiOk = true;
+      state.lastRenderPath = "previous-frame";
+      state.lastRenderPathDetail.clear();
     } else if (cacheUpdated && gpuErr.empty()) {
       input.art->width = prevArtWidth;
       input.art->height = prevArtHeight;
@@ -371,6 +389,10 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
                     "GPU ASCII render failed; falling back to CPU path.");
       }
       asciiOk = cpuRenderFallback(input);
+      if (asciiOk) {
+        state.lastRenderPath = "cpu-fallback";
+        state.lastRenderPathDetail = gpuErr;
+      }
     } else {
       emitWarning(input.warningSink,
                   gpuErr.empty() ? "GPU renderer temporarily unavailable."
@@ -392,6 +414,8 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
   state.cachedMaxHeight = input.maxHeight;
   state.cachedFrameWidth = input.frame->width;
   state.cachedFrameHeight = input.frame->height;
+  state.cachedLayoutSourceWidth = layoutSrcW;
+  state.cachedLayoutSourceHeight = layoutSrcH;
   state.cachedCellPixelWidth = input.cellPixelWidth;
   state.cachedCellPixelHeight = input.cellPixelHeight;
   return true;

@@ -25,11 +25,15 @@ struct FrameOutputState {
   bool renderFailed = false;
   std::string renderFailMessage;
   std::string renderFailDetail;
+  std::string lastRenderPath;
+  std::string lastRenderPathDetail;
   bool haveFrame = false;
   int cachedWidth = -1;
   int cachedMaxHeight = -1;
   int cachedFrameWidth = -1;
   int cachedFrameHeight = -1;
+  int cachedLayoutSourceWidth = -1;
+  int cachedLayoutSourceHeight = -1;
   double cachedCellPixelWidth = -1.0;
   double cachedCellPixelHeight = -1.0;
   int progressBarX = -1;
@@ -47,6 +51,8 @@ struct AsciiModePrepareInput {
   int maxHeight = 0;
   double cellPixelWidth = 0.0;
   double cellPixelHeight = 0.0;
+  int sourceWidth = 0;
+  int sourceHeight = 0;
   AsciiOutputSizeCalculator computeAsciiOutputSize;
   VideoFrame* frame = nullptr;
   AsciiArt* art = nullptr;
