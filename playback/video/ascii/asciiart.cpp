@@ -550,6 +550,10 @@ FORCE_INLINE int countMaskDots(int mask) {
   return count;
 }
 
+FORCE_INLINE int brailleBitFromDotIndex(int index) {
+  return index < 4 ? (index == 3 ? 6 : index) : (index == 7 ? 7 : index - 1);
+}
+
 FORCE_INLINE int perceptualDisplayError(uint8_t srcR, uint8_t srcG,
                                         uint8_t srcB, int predR, int predG,
                                         int predB, int predY,
@@ -565,8 +569,8 @@ FORCE_INLINE int perceptualDisplayError(uint8_t srcR, uint8_t srcG,
 
 int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
                      const uint8_t* gVals, const uint8_t* bVals,
-                     const uint8_t* bitIds, const uint8_t* validVals,
-                     const AsciiTuning& tuning, bool useEdgeBackgroundBlend) {
+                     const uint8_t* validVals, const AsciiTuning& tuning,
+                     bool useEdgeBackgroundBlend) {
   mask &= validMask;
   int sumOnR = 0;
   int sumOnG = 0;
@@ -579,7 +583,7 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
 
   for (int i = 0; i < 8; ++i) {
     if (!validVals[i]) continue;
-    if ((mask & (1 << bitIds[i])) != 0) {
+    if ((mask & (1 << brailleBitFromDotIndex(i))) != 0) {
       sumOnR += rVals[i];
       sumOnG += gVals[i];
       sumOnB += bVals[i];
@@ -641,7 +645,7 @@ int edgeMaskFitScore(int mask, int validMask, const uint8_t* rVals,
   int score = 0;
   for (int i = 0; i < 8; ++i) {
     if (!validVals[i]) continue;
-    const bool on = (mask & (1 << bitIds[i])) != 0;
+    const bool on = (mask & (1 << brailleBitFromDotIndex(i))) != 0;
     const int pr = on ? predOnR : bgR;
     const int pg = on ? predOnG : bgG;
     const int pb = on ? predOnB : bgB;
@@ -678,7 +682,6 @@ int colorBoundarySoftAmountForMask(int mask, int validMask,
                                    const uint8_t* rVals,
                                    const uint8_t* gVals,
                                    const uint8_t* bVals,
-                                   const uint8_t* bitIds,
                                    const uint8_t* validVals,
                                    const AsciiTuning& tuning) {
   mask &= validMask;
@@ -693,7 +696,7 @@ int colorBoundarySoftAmountForMask(int mask, int validMask,
 
   for (int i = 0; i < 8; ++i) {
     if (!validVals[i]) continue;
-    if ((mask & (1 << bitIds[i])) != 0) {
+    if ((mask & (1 << brailleBitFromDotIndex(i))) != 0) {
       sumOnR += rVals[i];
       sumOnG += gVals[i];
       sumOnB += bVals[i];
@@ -719,20 +722,19 @@ int colorBoundarySoftAmountForMask(int mask, int validMask,
 
 int fitEdgeMask(int initialMask, int validMask, const uint8_t* rVals,
                 const uint8_t* gVals, const uint8_t* bVals,
-                const uint8_t* bitIds, const uint8_t* validVals,
-                const AsciiTuning& tuning, bool useEdgeBackgroundBlend) {
+                const uint8_t* validVals, const AsciiTuning& tuning,
+                bool useEdgeBackgroundBlend) {
   initialMask &= validMask;
   int bestMask = initialMask;
   int bestScore = edgeMaskFitScore(initialMask, validMask, rVals, gVals, bVals,
-                                   bitIds, validVals, tuning,
-                                   useEdgeBackgroundBlend);
+                                   validVals, tuning, useEdgeBackgroundBlend);
   const int baseScore = bestScore;
 
   for (int candidate = validMask; candidate != 0;
        candidate = (candidate - 1) & validMask) {
     if (candidate == validMask) continue;
     int score = edgeMaskFitScore(candidate, validMask, rVals, gVals, bVals,
-                                 bitIds, validVals, tuning,
+                                 validVals, tuning,
                                  useEdgeBackgroundBlend);
     if (score < bestScore) {
       bestScore = score;
@@ -1566,8 +1568,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   const int lumRange = std::max(80, lumHigh - lumLow);
   const bool useSourceBlueConfidence = scratch.hasSourceBlueConfidence;
 
-  const int brailleMap[2][4] = {{0, 1, 2, 6}, {3, 4, 5, 7}};
-
   int workerCount = computeWorkerCount(outH, kParallelBatchRows);
   if constexpr (DebugMode) {
     if (debugStats) {
@@ -1599,7 +1599,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t lumVals[8];  // Direct uint8_t
             uint8_t edgeVals[8];
             uint8_t sourceBlueVals[8];
-            uint8_t bitIds[8];
             uint8_t validVals[8];
             int validMask = 0;
             int dotIndex = 0;
@@ -1642,7 +1641,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 edgeVals[dotIndex] = edgeRow[dx];
                 sourceBlueVals[dotIndex] =
                     sourceBlueRow ? sourceBlueRow[dx] : 0;
-                bitIds[dotIndex] = static_cast<uint8_t>(brailleMap[dx][dy]);
                 validVals[dotIndex] = static_cast<uint8_t>(a != 0);
 
                 if constexpr (!AssumeOpaque) {
@@ -1651,7 +1649,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                     continue;
                   }
                 }
-                validMask |= (1 << bitIds[dotIndex]);
+                validMask |= (1 << brailleBitFromDotIndex(dotIndex));
 
                 // Lokale statistieken voor deze cel
                 if (edgeVals[dotIndex] > cellEdgeMax)
@@ -1736,13 +1734,14 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               // Decision: Is this sub-pixel a dot?
               // If the luma difference exceeds the threshold, it's considered
               // a foreground dot.
-              bool wasOn = ((prevMask >> bitIds[i]) & 1) != 0;
+              const int bitId = brailleBitFromDotIndex(i);
+              bool wasOn = ((prevMask >> bitId) & 1) != 0;
               int offThreshold = std::max(6, threshold - hysteresis);
               bool isDot = wasOn ? (lumDiff >= offThreshold)
                                  : (lumDiff >= threshold);
 
               if (isDot) {
-                bitmask |= (1 << bitIds[i]);
+                bitmask |= (1 << bitId);
               }
             }
 
@@ -1764,8 +1763,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               int ditherMask = 0;
               for (int i = 0; i < 8; ++i) {
                 if (!validVals[i]) continue;
-                if (coverage > kDitherThresholdByBit[bitIds[i]]) {
-                  ditherMask |= (1 << bitIds[i]);
+                const int bitId = brailleBitFromDotIndex(i);
+                if (coverage > kDitherThresholdByBit[bitId]) {
+                  ditherMask |= (1 << bitId);
                 }
               }
               bitmask = ditherMask;
@@ -1774,26 +1774,28 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             const bool useEdgeMaskFit =
                 renderStageEnabled<DebugMode>(stageMask,
                                               ascii_debug::kStageEdgeMaskFit);
-            int edgeFitSignalStrength = signalStrength;
-            if (renderStageEnabled<DebugMode>(
-                    stageMask,
-                    ascii_debug::kStageColorBoundarySoftening)) {
-              int initialBoundaryAmount = colorBoundarySoftAmountForMask(
-                  bitmask, validMask, rVals, gVals, bVals, bitIds, validVals,
-                  tuning);
-              edgeFitSignalStrength = attenuateSignalForColorBoundary(
-                  signalStrength, initialBoundaryAmount, tuning);
-            }
-            const bool edgeMaskFitEligible =
+            bool edgeMaskFitEligible =
                 !useDither && useEdgeMaskFit && validCount >= 3 &&
                 cellLumRange >= tuning.edgeMaskFitMinRange &&
-                edgeFitSignalStrength >= tuning.edgeMaskFitMinSignal;
+                signalStrength >= tuning.edgeMaskFitMinSignal;
+            if (edgeMaskFitEligible &&
+                renderStageEnabled<DebugMode>(
+                    stageMask, ascii_debug::kStageColorBoundarySoftening)) {
+              int initialBoundaryAmount = colorBoundarySoftAmountForMask(
+                  bitmask, validMask, rVals, gVals, bVals, validVals, tuning);
+              if (initialBoundaryAmount > 0) {
+                int edgeFitSignalStrength = attenuateSignalForColorBoundary(
+                    signalStrength, initialBoundaryAmount, tuning);
+                edgeMaskFitEligible =
+                    edgeFitSignalStrength >= tuning.edgeMaskFitMinSignal;
+              }
+            }
             if (edgeMaskFitEligible) {
               const bool useEdgeBgBlend =
                   renderStageEnabled<DebugMode>(
                       stageMask, ascii_debug::kStageEdgeBackgroundBlend);
               int fittedMask =
-                  fitEdgeMask(bitmask, validMask, rVals, gVals, bVals, bitIds,
+                  fitEdgeMask(bitmask, validMask, rVals, gVals, bVals,
                               validVals, tuning, useEdgeBgBlend);
               if (fittedMask != bitmask) {
                 bitmask = fittedMask;
@@ -1846,7 +1848,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             for (int i = 0; i < 8; ++i) {
               if (!validVals[i]) continue;
               sumAllSourceBlue += sourceBlueVals[i];
-              if (bitmask & (1 << bitIds[i])) {
+              if (bitmask & (1 << brailleBitFromDotIndex(i))) {
                 sumInkR += rVals[i];
                 sumInkG += gVals[i];
                 sumInkB += bVals[i];
