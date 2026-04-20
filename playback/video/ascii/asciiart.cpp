@@ -1656,13 +1656,13 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               cellBgLum = (cellLumSum - cellLumMin - cellLumMax) /
                           (validCount - 2);
             }
-            int alpha = 0;
+            int flatness = 0;
             if (cellLumRange < 40) {
-              alpha = 255;
+              flatness = 255;
             } else if (cellLumRange > 90) {
-              alpha = 0;
+              flatness = 0;
             } else {
-              alpha = (90 - cellLumRange) * 255 / (90 - 40);
+              flatness = (90 - cellLumRange) * 255 / (90 - 40);
             }
             int refLum = cellBgLum;
             bool useLocalThreshold =
@@ -1675,7 +1675,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               prevMask = scratch.prevMask[cellIndex];
             }
             int hysteresis =
-                (4 * (255 - alpha) + 10 * alpha + 127) / 255;
+                (4 * (255 - flatness) + 10 * flatness + 127) / 255;
 
             // 2. Adaptive Thresholding (Per-Sub-Pixel Logic)
             // This section determines which Braille dots should be active based on the input image.

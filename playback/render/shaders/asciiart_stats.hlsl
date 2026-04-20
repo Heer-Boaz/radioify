@@ -19,7 +19,7 @@ Texture2D<float> TextureY : register(t0);
 #else
 Texture2D<float4> InputTexture : register(t0);
 #endif
-RWStructuredBuffer<uint4> Stats : register(u0); // y=lumRange
+RWStructuredBuffer<uint> LumaRange : register(u0);
 
 groupshared uint histogram[256];
 
@@ -131,7 +131,7 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
     if (scaledW == 0u || scaledH == 0u || width == 0u || height == 0u) {
         GroupMemoryBarrierWithGroupSync();
         if (tid.x == 0) {
-            Stats[0] = uint4(0, 80, 0, 0);
+            LumaRange[0] = 80u;
         }
         return;
     }
@@ -174,7 +174,7 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
     GroupMemoryBarrierWithGroupSync();
     
     if (tid.x == 0) {
-        uint4 prev = Stats[0];
+        uint prevRange = LumaRange[0];
         uint totalSamples = 0;
 
         for (uint i = 0; i < 256; ++i) {
@@ -205,13 +205,13 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
         if (range < 80) range = 80;
 
         if (frameCount > 0) {
-            int rangeDelta = (int)range - (int)prev.y;
+            int rangeDelta = (int)range - (int)prevRange;
             if (abs(rangeDelta) < (int)kLumResetDelta) {
-                range = (uint)((int)prev.y + (rangeDelta * (int)kLumSmoothAlpha >> 8));
+                range = (uint)((int)prevRange + (rangeDelta * (int)kLumSmoothAlpha >> 8));
                 if (range < 80u) range = 80u;
             }
         }
 
-        Stats[0] = uint4(0, range, 0, 0);
+        LumaRange[0] = range;
     }
 }

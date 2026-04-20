@@ -108,7 +108,7 @@ void GpuAsciiRenderer::ClearHistory() {
         m_context->ClearUnorderedAccessViewUint(m_historyUAV.Get(), clearValues);
     }
     if (m_context && m_statsUAV) {
-        UINT clearValues[4] = { 0, 80, 0, 0 };
+        UINT clearValues[4] = { 80, 0, 0, 0 };
         m_context->ClearUnorderedAccessViewUint(m_statsUAV.Get(), clearValues);
     }
     m_frameCount = 0;
@@ -331,11 +331,11 @@ bool GpuAsciiRenderer::CreateStatsBuffer() {
     if (m_statsBuffer) return true;
 
     D3D11_BUFFER_DESC bufDesc = {};
-    bufDesc.ByteWidth = sizeof(uint32_t) * 4; // uint4
+    bufDesc.ByteWidth = sizeof(uint32_t);
     bufDesc.Usage = D3D11_USAGE_DEFAULT;
     bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
     bufDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-    bufDesc.StructureByteStride = sizeof(uint32_t) * 4;
+    bufDesc.StructureByteStride = sizeof(uint32_t);
 
     if (FAILED(m_device->CreateBuffer(&bufDesc, nullptr, &m_statsBuffer))) return false;
 
@@ -351,7 +351,7 @@ bool GpuAsciiRenderer::CreateStatsBuffer() {
     srvDesc.Buffer.NumElements = 1;
     if (FAILED(m_device->CreateShaderResourceView(m_statsBuffer.Get(), &srvDesc, &m_statsSRV))) return false;
     if (m_context) {
-        UINT clearValues[4] = { 0, 80, 0, 0 };
+        UINT clearValues[4] = { 80, 0, 0, 0 };
         m_context->ClearUnorderedAccessViewUint(m_statsUAV.Get(), clearValues);
     }
 

@@ -17,10 +17,10 @@ cbuffer Constants : register(b0) {
 #ifdef NV12_INPUT
 Texture2D<float> TextureY : register(t0);
 Texture2D<float2> TextureUV : register(t1);
-StructuredBuffer<uint4> StatsBuffer : register(t2); // y=lumRange
+StructuredBuffer<uint> LumaRangeBuffer : register(t2);
 #else
 Texture2D<float4> InputTexture : register(t0);
-StructuredBuffer<uint4> StatsBuffer : register(t1); // y=lumRange
+StructuredBuffer<uint> LumaRangeBuffer : register(t1);
 #endif
 
 SamplerState LinearSampler : register(s0);
@@ -961,11 +961,11 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     float cellBgLum = (cellLumSum - cellLumMin - cellLumMax) * (1.0f / 6.0f);
 
-    uint lumRange = max(StatsBuffer[0].y, 1u);
+    uint lumRange = max(LumaRangeBuffer[0], 1u);
     float cellRange = cellLumMax - cellLumMin;
-    float alpha = saturate((90.0f - cellRange) / (90.0f - 40.0f));
+    float flatness = saturate((90.0f - cellRange) / (90.0f - 40.0f));
     float refLum = cellBgLum;
-    float hysteresis = lerp(4.0f, 10.0f, alpha);
+    float hysteresis = lerp(4.0f, 10.0f, flatness);
 
     // 2. Adaptive Thresholding (Per-Sub-Pixel Logic)
     // This section determines which Braille dots should be active based on the input image.
