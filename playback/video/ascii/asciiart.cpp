@@ -517,6 +517,81 @@ const std::array<uint8_t, 8> kDitherThresholdByBit = []() {
 }();
 
 constexpr int kEdgeMaskFitInvalidScore = 0x3fffffff;
+constexpr int kEdgeFitCandidateMaxMasks = 64;
+constexpr int kEdgeFitCandidateToggleCount = 37;
+constexpr int kEdgeFitStructuralCandidateCount = 20;
+
+struct BrailleCandidateList {
+  uint8_t count = 0;
+  std::array<uint8_t, kEdgeFitCandidateMaxMasks> masks{};
+};
+
+constexpr std::array<uint8_t, kEdgeFitCandidateToggleCount>
+makeEdgeFitCandidateToggles() {
+  std::array<uint8_t, kEdgeFitCandidateToggleCount> toggles{};
+  int out = 0;
+  toggles[static_cast<size_t>(out++)] = 0;
+  for (int bit = 0; bit < 8; ++bit) {
+    toggles[static_cast<size_t>(out++)] =
+        static_cast<uint8_t>(1u << bit);
+  }
+  for (int a = 0; a < 8; ++a) {
+    for (int b = a + 1; b < 8; ++b) {
+      toggles[static_cast<size_t>(out++)] =
+          static_cast<uint8_t>((1u << a) | (1u << b));
+    }
+  }
+  return toggles;
+}
+
+constexpr auto kEdgeFitCandidateToggles = makeEdgeFitCandidateToggles();
+
+constexpr std::array<uint8_t, kEdgeFitStructuralCandidateCount>
+    kEdgeFitStructuralCandidates = {
+        0x09, 0x12, 0x24, 0xc0,  // rows
+        0x1b, 0x36, 0xe4, 0x47,  // bands and left column
+        0xb8, 0x07, 0x38, 0x70,  // right column and vertical segments
+        0x0e, 0x91, 0x4a, 0x5a,  // segments and diagonals
+        0xa5, 0x3c, 0xc3, 0x66};
+
+constexpr bool candidateListContains(const BrailleCandidateList& list,
+                                     uint8_t mask) {
+  for (int i = 0; i < list.count; ++i) {
+    if (list.masks[static_cast<size_t>(i)] == mask) return true;
+  }
+  return false;
+}
+
+constexpr void addCandidateMask(BrailleCandidateList& list, uint8_t mask) {
+  if (candidateListContains(list, mask) ||
+      list.count >= kEdgeFitCandidateMaxMasks) {
+    return;
+  }
+  list.masks[static_cast<size_t>(list.count++)] = mask;
+}
+
+constexpr BrailleCandidateList makeBrailleCandidateList(uint8_t baseMask) {
+  BrailleCandidateList list{};
+  for (uint8_t toggle : kEdgeFitCandidateToggles) {
+    addCandidateMask(list, static_cast<uint8_t>(baseMask ^ toggle));
+  }
+  for (uint8_t mask : kEdgeFitStructuralCandidates) {
+    addCandidateMask(list, mask);
+  }
+  return list;
+}
+
+constexpr std::array<BrailleCandidateList, 256>
+makeBrailleCandidateLists() {
+  std::array<BrailleCandidateList, 256> lists{};
+  for (int mask = 0; mask < 256; ++mask) {
+    lists[static_cast<size_t>(mask)] =
+        makeBrailleCandidateList(static_cast<uint8_t>(mask));
+  }
+  return lists;
+}
+
+const auto kBrailleCandidateLists = makeBrailleCandidateLists();
 
 FORCE_INLINE int countMaskDots(int mask) {
   int count = 0;
@@ -697,15 +772,32 @@ int colorBoundarySoftAmountForMask(int mask, int validMask,
       static_cast<uint8_t>((sumOffB + offCount / 2) / offCount), tuning);
 }
 
-int fitEdgeMask(int initialMask, int validMask, const uint8_t* rVals,
-                const uint8_t* gVals, const uint8_t* bVals,
-                const uint8_t* validVals, const AsciiTuning& tuning,
-                bool useEdgeBackgroundBlend) {
-  initialMask &= validMask;
-  int bestMask = initialMask;
-  int bestScore = edgeMaskFitScore(initialMask, validMask, rVals, gVals, bVals,
-                                   validVals, tuning, useEdgeBackgroundBlend);
-  const int baseScore = bestScore;
+struct EdgeMaskFitBest {
+  int mask = 0;
+  int score = kEdgeMaskFitInvalidScore;
+  int scoredCount = 0;
+};
+
+FORCE_INLINE void recordEdgeMaskCandidate(EdgeMaskFitBest& best, int mask,
+                                          int score) {
+  ++best.scoredCount;
+  if (score < best.score) {
+    best.mask = mask;
+    best.score = score;
+  }
+}
+
+EdgeMaskFitBest findBestEdgeMaskFull(int initialMask, int validMask,
+                                     const uint8_t* rVals,
+                                     const uint8_t* gVals,
+                                     const uint8_t* bVals,
+                                     const uint8_t* validVals,
+                                     const AsciiTuning& tuning,
+                                     bool useEdgeBackgroundBlend,
+                                     int baseScore) {
+  EdgeMaskFitBest best;
+  best.mask = initialMask;
+  best.score = baseScore;
 
   for (int candidate = validMask; candidate != 0;
        candidate = (candidate - 1) & validMask) {
@@ -713,24 +805,97 @@ int fitEdgeMask(int initialMask, int validMask, const uint8_t* rVals,
     int score = edgeMaskFitScore(candidate, validMask, rVals, gVals, bVals,
                                  validVals, tuning,
                                  useEdgeBackgroundBlend);
-    if (score < bestScore) {
-      bestScore = score;
-      bestMask = candidate;
-    }
+    recordEdgeMaskCandidate(best, candidate, score);
   }
+  return best;
+}
 
-  if (bestMask == initialMask || bestScore >= kEdgeMaskFitInvalidScore) {
+EdgeMaskFitBest findBestEdgeMaskCandidates(int initialMask, int previousMask,
+                                           int validMask,
+                                           const uint8_t* rVals,
+                                           const uint8_t* gVals,
+                                           const uint8_t* bVals,
+                                           const uint8_t* validVals,
+                                           const AsciiTuning& tuning,
+                                           bool useEdgeBackgroundBlend,
+                                           int baseScore) {
+  EdgeMaskFitBest best;
+  best.mask = initialMask;
+  best.score = baseScore;
+
+  uint64_t seen[4] = {};
+  auto tryCandidate = [&](int candidate) {
+    candidate &= validMask;
+    if (candidate == 0 || candidate == validMask) return;
+    const int key = candidate & 0xff;
+    const uint64_t bit = 1ull << (key & 63);
+    uint64_t& word = seen[key >> 6];
+    if ((word & bit) != 0) return;
+    word |= bit;
+
+    int score = edgeMaskFitScore(candidate, validMask, rVals, gVals, bVals,
+                                 validVals, tuning,
+                                 useEdgeBackgroundBlend);
+    recordEdgeMaskCandidate(best, candidate, score);
+  };
+
+  const BrailleCandidateList& candidates =
+      kBrailleCandidateLists[static_cast<size_t>(initialMask & 0xff)];
+  for (int i = 0; i < candidates.count; ++i) {
+    tryCandidate(candidates.masks[static_cast<size_t>(i)]);
+  }
+  tryCandidate(previousMask);
+  return best;
+}
+
+int applyEdgeMaskFitGainRule(int initialMask, const EdgeMaskFitBest& best,
+                             int baseScore, const AsciiTuning& tuning) {
+  if (best.mask == initialMask || best.score >= kEdgeMaskFitInvalidScore) {
     return initialMask;
   }
   if (baseScore >= kEdgeMaskFitInvalidScore) {
-    return bestMask;
+    return best.mask;
   }
   const int requiredGain = 256 - tuning.edgeMaskFitMinGain;
-  if (static_cast<int64_t>(bestScore) * 256 <=
+  if (static_cast<int64_t>(best.score) * 256 <=
       static_cast<int64_t>(baseScore) * requiredGain) {
-    return bestMask;
+    return best.mask;
   }
   return initialMask;
+}
+
+int fitEdgeMask(int initialMask, int previousMask, int validMask,
+                const uint8_t* rVals, const uint8_t* gVals,
+                const uint8_t* bVals, const uint8_t* validVals,
+                const AsciiTuning& tuning, bool useEdgeBackgroundBlend,
+                ascii_debug::RenderOptions::EdgeMaskFitMode mode,
+                ascii_debug::RenderStats* debugStats) {
+  initialMask &= validMask;
+  previousMask &= validMask;
+  const int baseScore =
+      edgeMaskFitScore(initialMask, validMask, rVals, gVals, bVals, validVals,
+                       tuning, useEdgeBackgroundBlend);
+  if (mode == ascii_debug::RenderOptions::EdgeMaskFitMode::BruteForceSweep) {
+    if (debugStats) {
+      ++debugStats->edgeMaskBruteForceSweepCount;
+    }
+    EdgeMaskFitBest best = findBestEdgeMaskFull(
+        initialMask, validMask, rVals, gVals, bVals, validVals, tuning,
+        useEdgeBackgroundBlend, baseScore);
+    return applyEdgeMaskFitGainRule(initialMask, best, baseScore, tuning);
+  }
+
+  EdgeMaskFitBest best = findBestEdgeMaskCandidates(
+      initialMask, previousMask, validMask, rVals, gVals, bVals, validVals,
+      tuning, useEdgeBackgroundBlend, baseScore);
+
+  if (debugStats) {
+    ++debugStats->edgeMaskCandidateFitCount;
+    debugStats->edgeMaskCandidateScoredCount +=
+        static_cast<uint64_t>(best.scoredCount);
+  }
+
+  return applyEdgeMaskFitGainRule(initialMask, best, baseScore, tuning);
 }
 
 FORCE_INLINE uint32_t packRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
@@ -1420,9 +1585,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
     tuning = resolveAsciiTuning(debugOptions);
   }
   uint32_t stageMask = ascii_debug::kAllStages;
+  auto edgeMaskFitMode =
+      ascii_debug::RenderOptions::EdgeMaskFitMode::CandidateLut;
   if constexpr (DebugMode) {
     if (debugOptions) {
       stageMask = debugOptions->stageMask;
+      edgeMaskFitMode = debugOptions->edgeMaskFitMode;
     }
     if (debugStats) {
       *debugStats = ascii_debug::RenderStats{};
@@ -1752,8 +1920,9 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   renderStageEnabled<DebugMode>(
                       stageMask, ascii_debug::kStageEdgeBackgroundBlend);
               int fittedMask =
-                  fitEdgeMask(bitmask, validMask, rVals, gVals, bVals,
-                              validVals, tuning, useEdgeBgBlend);
+                  fitEdgeMask(bitmask, prevMask, validMask, rVals, gVals,
+                              bVals, validVals, tuning, useEdgeBgBlend,
+                              edgeMaskFitMode, debugStats);
               if (fittedMask != bitmask) {
                 bitmask = fittedMask;
                 if constexpr (DebugMode) {

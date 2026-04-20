@@ -52,8 +52,14 @@ constexpr uint32_t kAllStages =
     kStageEdgeBackgroundBlend | kStageNeighborContinuity;
 
 struct RenderOptions {
+  enum class EdgeMaskFitMode {
+    CandidateLut,
+    BruteForceSweep,
+  };
+
   uint32_t stageMask = kAllStages;
   bool resetHistory = true;
+  EdgeMaskFitMode edgeMaskFitMode = EdgeMaskFitMode::CandidateLut;
 
   struct TuningOverrides {
     int ditherMaxEdge = -1;
@@ -97,6 +103,9 @@ struct RenderStats {
   uint64_t signalDampenCount = 0;
   uint64_t detailBoostCount = 0;
   uint64_t edgeMaskFitCount = 0;
+  uint64_t edgeMaskCandidateFitCount = 0;
+  uint64_t edgeMaskBruteForceSweepCount = 0;
+  uint64_t edgeMaskCandidateScoredCount = 0;
   uint64_t inkCoverageCompensationCount = 0;
   uint64_t inkLumaFloorCount = 0;
   uint64_t fgTemporalBlendCount = 0;

@@ -889,6 +889,9 @@ float EdgeMaskFitScore(uint mask, DotInfo dots[8]) {
 }
 
 uint FitEdgeMask(uint initialMask, DotInfo dots[8]) {
+    // GPU candidate pruning was measured with D3D timestamp queries and only
+    // saved about 0-5% while causing visible drift. Keep the GPU path as the
+    // simple full-sweep implementation.
     initialMask &= 0xffu;
     uint bestMask = initialMask;
     float baseScore = EdgeMaskFitScore(initialMask, dots);

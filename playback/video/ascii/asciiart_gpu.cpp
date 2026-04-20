@@ -101,6 +101,86 @@ GpuAsciiRenderer::GpuAsciiRenderer() {}
 
 GpuAsciiRenderer::~GpuAsciiRenderer() {}
 
+void GpuAsciiRenderer::SetGpuTimingEnabled(bool enabled,
+                                           bool blockUntilReady) {
+    m_gpuTimingEnabled = enabled;
+    m_gpuTimingBlockUntilReady = blockUntilReady;
+    if (!enabled) {
+        m_lastGpuTiming = GpuTimingResult{};
+    }
+}
+
+bool GpuAsciiRenderer::BeginAsciiGpuTiming(
+    Microsoft::WRL::ComPtr<ID3D11Query>& disjoint,
+    Microsoft::WRL::ComPtr<ID3D11Query>& start) {
+    m_lastGpuTiming = GpuTimingResult{};
+    if (!m_gpuTimingEnabled || !m_device || !m_context) {
+        return false;
+    }
+
+    D3D11_QUERY_DESC qd{};
+    qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+    if (FAILED(m_device->CreateQuery(&qd, disjoint.GetAddressOf()))) {
+        return false;
+    }
+    qd.Query = D3D11_QUERY_TIMESTAMP;
+    if (FAILED(m_device->CreateQuery(&qd, start.GetAddressOf()))) {
+        disjoint.Reset();
+        return false;
+    }
+
+    m_context->Begin(disjoint.Get());
+    m_context->End(start.Get());
+    return true;
+}
+
+void GpuAsciiRenderer::EndAsciiGpuTiming(
+    Microsoft::WRL::ComPtr<ID3D11Query>& disjoint,
+    Microsoft::WRL::ComPtr<ID3D11Query>& start) {
+    if (!disjoint || !start || !m_context || !m_device) {
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Query> end;
+    D3D11_QUERY_DESC qd{};
+    qd.Query = D3D11_QUERY_TIMESTAMP;
+    if (FAILED(m_device->CreateQuery(&qd, end.GetAddressOf()))) {
+        m_context->End(disjoint.Get());
+        return;
+    }
+
+    m_context->End(end.Get());
+    m_context->End(disjoint.Get());
+
+    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjointData{};
+    UINT64 startTime = 0;
+    UINT64 endTime = 0;
+    auto readTiming = [&]() -> HRESULT {
+        HRESULT hr = m_context->GetData(disjoint.Get(), &disjointData,
+                                        sizeof(disjointData), 0);
+        if (hr != S_OK) return hr;
+        hr = m_context->GetData(start.Get(), &startTime, sizeof(startTime), 0);
+        if (hr != S_OK) return hr;
+        return m_context->GetData(end.Get(), &endTime, sizeof(endTime), 0);
+    };
+
+    HRESULT hr = readTiming();
+    for (int attempts = 0; m_gpuTimingBlockUntilReady && hr == S_FALSE &&
+                           attempts < 10000; ++attempts) {
+        Sleep(0);
+        hr = readTiming();
+    }
+
+    if (hr == S_OK && !disjointData.Disjoint && endTime >= startTime &&
+        disjointData.Frequency != 0) {
+        m_lastGpuTiming.valid = true;
+        m_lastGpuTiming.asciiComputeMs =
+            (static_cast<double>(endTime - startTime) /
+             static_cast<double>(disjointData.Frequency)) *
+            1000.0;
+    }
+}
+
 void GpuAsciiRenderer::ClearHistory() {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (m_context && m_historyUAV) {
@@ -492,6 +572,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         cb->yuvMatrix = static_cast<uint32_t>(yuvMatrix);
         cb->yuvTransfer = static_cast<uint32_t>(yuvTransfer);
         cb->rotationQuarterTurns = 0;
+        cb->padding = 0;
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
@@ -515,6 +596,10 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     UINT dotDispatchX = (outW * 2 + 7) / 8;
     UINT dotDispatchY = (outH * 4 + 7) / 8;
 
+    Microsoft::WRL::ComPtr<ID3D11Query> timingDisjoint;
+    Microsoft::WRL::ComPtr<ID3D11Query> timingStart;
+    BeginAsciiGpuTiming(timingDisjoint, timingStart);
+
     BuildDotGrid(m_dotPrefilterShaderNV12.Get(), srvY, srvUV, dotDispatchX,
                  dotDispatchY, m_constantBuffer.Get());
 
@@ -533,6 +618,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
     RefineOutputAndSyncHistory(dispatchX, dispatchY, m_constantBuffer.Get());
+    EndAsciiGpuTiming(timingDisjoint, timingStart);
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
 
@@ -709,6 +795,7 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         cb->yuvMatrix = static_cast<uint32_t>(YuvMatrix::Bt709);
         cb->yuvTransfer = static_cast<uint32_t>(YuvTransfer::Sdr);
         cb->rotationQuarterTurns = 0;
+        cb->padding = 0;
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
@@ -719,6 +806,10 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     UINT dispatchY = (outH + 7) / 8;
     UINT dotDispatchX = (outW * 2 + 7) / 8;
     UINT dotDispatchY = (outH * 4 + 7) / 8;
+
+    Microsoft::WRL::ComPtr<ID3D11Query> timingDisjoint;
+    Microsoft::WRL::ComPtr<ID3D11Query> timingStart;
+    BeginAsciiGpuTiming(timingDisjoint, timingStart);
 
     // Calculate Stats
     m_context->CSSetShader(m_statsShaderRgba.Get(), nullptr, 0);
@@ -750,6 +841,7 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
     RefineOutputAndSyncHistory(dispatchX, dispatchY, m_constantBuffer.Get());
+    EndAsciiGpuTiming(timingDisjoint, timingStart);
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
 
@@ -838,6 +930,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
         cb->yuvMatrix = static_cast<uint32_t>(yuvMatrix);
         cb->yuvTransfer = static_cast<uint32_t>(yuvTransfer);
         cb->rotationQuarterTurns = 0;
+        cb->padding = 0;
         m_context->Unmap(m_constantBuffer.Get(), 0);
     }
 
@@ -861,6 +954,10 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     UINT dotDispatchX = (outW * 2 + 7) / 8;
     UINT dotDispatchY = (outH * 4 + 7) / 8;
 
+    Microsoft::WRL::ComPtr<ID3D11Query> timingDisjoint;
+    Microsoft::WRL::ComPtr<ID3D11Query> timingStart;
+    BeginAsciiGpuTiming(timingDisjoint, timingStart);
+
     BuildDotGrid(m_dotPrefilterShaderNV12.Get(), srvY, srvUV, dotDispatchX,
                  dotDispatchY, m_constantBuffer.Get());
 
@@ -879,6 +976,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
     m_context->Dispatch(dispatchX, dispatchY, 1);
 
     RefineOutputAndSyncHistory(dispatchX, dispatchY, m_constantBuffer.Get());
+    EndAsciiGpuTiming(timingDisjoint, timingStart);
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
 
@@ -923,6 +1021,9 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
     UINT dotDispatchX = (outW * 2 + 7) / 8;
     UINT dotDispatchY = (outH * 4 + 7) / 8;
 
+    Microsoft::WRL::ComPtr<ID3D11Query> timingDisjoint;
+    Microsoft::WRL::ComPtr<ID3D11Query> timingStart;
+
     if (cache.IsYuv()) {
         ID3D11ShaderResourceView* srvY = cache.GetSrvY();
         ID3D11ShaderResourceView* srvUV = cache.GetSrvUV();
@@ -930,6 +1031,7 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
             if (error) *error = "Shared cache missing YUV SRVs";
             return false;
         }
+        BeginAsciiGpuTiming(timingDisjoint, timingStart);
 
         m_lastNv12TexturePath = "shared_cache";
         {
@@ -956,6 +1058,7 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
             cb->yuvTransfer = static_cast<uint32_t>(cache.GetTransfer());
             cb->rotationQuarterTurns =
                 static_cast<uint32_t>(cache.GetRotationQuarterTurns() & 3);
+            cb->padding = 0;
             m_context->Unmap(m_constantBuffer.Get(), 0);
         }
 
@@ -991,6 +1094,7 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
             if (error) *error = "Shared cache missing RGBA SRV";
             return false;
         }
+        BeginAsciiGpuTiming(timingDisjoint, timingStart);
 
         D3D11_MAPPED_SUBRESOURCE mapped;
         if (SUCCEEDED(m_context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -1007,6 +1111,7 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
             cb->yuvTransfer = static_cast<uint32_t>(YuvTransfer::Sdr);
             cb->rotationQuarterTurns =
                 static_cast<uint32_t>(cache.GetRotationQuarterTurns() & 3);
+            cb->padding = 0;
             m_context->Unmap(m_constantBuffer.Get(), 0);
         }
 
@@ -1040,6 +1145,8 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
         if (error) *error = "Shared cache format unsupported";
         return false;
     }
+
+    EndAsciiGpuTiming(timingDisjoint, timingStart);
 
     cache.MarkFrameInFlight(m_context.Get());
 

@@ -48,6 +48,14 @@ public:
         return m_lastNv12TextureDetail;
     }
 
+    struct GpuTimingResult {
+        bool valid = false;
+        double asciiComputeMs = 0.0;
+    };
+
+    void SetGpuTimingEnabled(bool enabled, bool blockUntilReady = false);
+    GpuTimingResult lastGpuTiming() const { return m_lastGpuTiming; }
+
     void ResetSessionState();
     void ClearHistory();
 
@@ -68,6 +76,10 @@ private:
                       ID3D11Buffer* constantBuffer);
     void RefineOutputAndSyncHistory(UINT dispatchX, UINT dispatchY,
                                     ID3D11Buffer* constantBuffer);
+    bool BeginAsciiGpuTiming(Microsoft::WRL::ComPtr<ID3D11Query>& disjoint,
+                             Microsoft::WRL::ComPtr<ID3D11Query>& start);
+    void EndAsciiGpuTiming(Microsoft::WRL::ComPtr<ID3D11Query>& disjoint,
+                           Microsoft::WRL::ComPtr<ID3D11Query>& start);
     
     // Shared rendering logic (called after textures are set up)
     bool RenderNV12Internal(int width, int height, bool fullRange, 
@@ -140,6 +152,9 @@ private:
     uint32_t m_frameCount = 0;
     const char* m_lastNv12TexturePath = "unknown";
     std::string m_lastNv12TextureDetail;
+    bool m_gpuTimingEnabled = false;
+    bool m_gpuTimingBlockUntilReady = false;
+    GpuTimingResult m_lastGpuTiming;
 };
 
 #endif // ASCIIART_GPU_H

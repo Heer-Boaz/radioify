@@ -1,7 +1,10 @@
 #include "asciiart.h"
+#include "asciiart_gpu.h"
+#include "asciiart_layout.h"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <combaseapi.h>
 #include <cstdint>
@@ -36,6 +39,13 @@ struct HarnessConfig {
   int height = 540;
   int maxColumns = 156;
   int maxRows = 54;
+  int benchmarkIterations = 1;
+  int benchmarkWarmupIterations = 1;
+  // Tests default to the CPU brute-force oracle so quality comparisons do not
+  // silently drift when the production LUT path changes.
+  ascii_debug::RenderOptions::EdgeMaskFitMode edgeMaskFitMode =
+      ascii_debug::RenderOptions::EdgeMaskFitMode::BruteForceSweep;
+  std::string backend = "cpu";
   std::string fixture = "all";
   std::string variant = "all";
   std::filesystem::path outputDir = "ascii_shader_tests_out";
@@ -64,6 +74,7 @@ struct Variant {
 struct RenderedVariant {
   AsciiArt art;
   ascii_debug::RenderStats stats;
+  double renderMs = 0.0;
 };
 
 struct OutputDelta {
@@ -107,6 +118,37 @@ int parseIntValue(std::string_view text, std::string_view context) {
     fail("invalid tuning value for " + std::string(context));
   }
   return static_cast<int>(value);
+}
+
+ascii_debug::RenderOptions::EdgeMaskFitMode parseEdgeFitMode(
+    std::string_view value) {
+  if (value == "lut" || value == "candidate" || value == "candidates" ||
+      value == "candidate-lut") {
+    return ascii_debug::RenderOptions::EdgeMaskFitMode::CandidateLut;
+  }
+  if (value == "bruteforce" || value == "brute-force" ||
+      value == "full" || value == "full-sweep") {
+    return ascii_debug::RenderOptions::EdgeMaskFitMode::BruteForceSweep;
+  }
+  fail("expected lut or bruteforce for --edgefit-mode");
+}
+
+std::string_view edgeFitModeLabel(
+    ascii_debug::RenderOptions::EdgeMaskFitMode mode) {
+  switch (mode) {
+    case ascii_debug::RenderOptions::EdgeMaskFitMode::CandidateLut:
+      return "lut";
+    case ascii_debug::RenderOptions::EdgeMaskFitMode::BruteForceSweep:
+      return "bruteforce";
+  }
+  return "unknown";
+}
+
+std::string_view edgeFitModeLabel(const HarnessConfig& config) {
+  if (config.backend == "gpu") {
+    return "gpu-bruteforce";
+  }
+  return edgeFitModeLabel(config.edgeMaskFitMode);
 }
 
 std::vector<std::string_view> splitCsv(std::string_view text) {
@@ -169,6 +211,12 @@ void printUsage() {
       << "  --height <pixels>\n"
       << "  --cols <terminal columns>\n"
       << "  --rows <terminal rows>\n"
+      << "  --bench <render iterations>\n"
+      << "  --bench-warmup <render iterations>\n"
+      << "  --backend <cpu|gpu>\n"
+      << "  --edgefit-mode <lut|bruteforce>\n"
+      << "      default: bruteforce for CPU oracle comparisons; use lut only "
+         "to test the production/performance path. GPU is brute-force.\n"
       << "  --tune <name=value[,name=value...]>\n"
       << "  --sweep <name=value,value,...>\n"
       << "  tuning names: inkcov,covmax,covsignal,covminluma,"
@@ -200,6 +248,42 @@ HarnessConfig parseArgs(int argc, char** argv) {
       config.maxColumns = parseIntArg(argv, i, argc, "--cols");
     } else if (arg == "--rows") {
       config.maxRows = parseIntArg(argv, i, argc, "--rows");
+    } else if (arg == "--bench") {
+      config.benchmarkIterations = parseIntArg(argv, i, argc, "--bench");
+    } else if (arg == "--bench-warmup") {
+      config.benchmarkWarmupIterations =
+          parseIntArg(argv, i, argc, "--bench-warmup");
+    } else if (arg == "--backend") {
+      if (i + 1 >= argc) fail("missing value for --backend");
+      config.backend = argv[++i];
+      if (config.backend != "cpu" && config.backend != "gpu") {
+        fail("expected cpu or gpu for --backend");
+      }
+    } else if (arg == "--edgefit-mode") {
+      if (i + 1 >= argc) fail("missing value for --edgefit-mode");
+      config.edgeMaskFitMode = parseEdgeFitMode(argv[++i]);
+    } else if (arg == "--edgefit-candidates") {
+      if (i + 1 >= argc) fail("missing value for --edgefit-candidates");
+      std::string_view value(argv[++i]);
+      if (value == "on" || value == "true" || value == "1") {
+        config.edgeMaskFitMode =
+            ascii_debug::RenderOptions::EdgeMaskFitMode::CandidateLut;
+      } else if (value == "off" || value == "false" || value == "0") {
+        config.edgeMaskFitMode =
+            ascii_debug::RenderOptions::EdgeMaskFitMode::BruteForceSweep;
+      } else {
+        fail("expected on or off for --edgefit-candidates");
+      }
+    } else if (arg == "--edgefit-fallback") {
+      if (i + 1 >= argc) fail("missing value for --edgefit-fallback");
+      std::string_view value(argv[++i]);
+      if (value == "on" || value == "true" || value == "1") {
+        fail("--edgefit-fallback was removed; use --edgefit-mode bruteforce "
+             "for the CPU oracle path");
+      }
+      if (!(value == "off" || value == "false" || value == "0")) {
+        fail("expected on or off for --edgefit-fallback");
+      }
     } else if (arg == "--tune") {
       if (i + 1 >= argc) fail("missing value for --tune");
       parseTuningAssignments(argv[++i], config.fixedTunings);
@@ -218,6 +302,10 @@ HarnessConfig parseArgs(int argc, char** argv) {
   }
   if (config.maxColumns <= 0 || config.maxRows <= 0) {
     fail("ASCII dimensions must be positive");
+  }
+  if (config.benchmarkIterations <= 0 ||
+      config.benchmarkWarmupIterations < 0) {
+    fail("benchmark iteration counts must be positive");
   }
   return config;
 }
@@ -1123,10 +1211,28 @@ double averageDots(const ascii_debug::RenderStats& stats) {
   return static_cast<double>(dots) / static_cast<double>(cells);
 }
 
+void populateBasicStatsFromArt(const AsciiArt& art,
+                               ascii_debug::RenderStats& stats) {
+  stats.cellCount = static_cast<uint64_t>(art.cells.size());
+  stats.bgCellCount = 0;
+  for (uint64_t& bucket : stats.dotCountHistogram) {
+    bucket = 0;
+  }
+  for (const AsciiArt::AsciiCell& cell : art.cells) {
+    if (cell.hasBg) {
+      ++stats.bgCellCount;
+    }
+    int dots = std::clamp(dotCount(brailleMaskForCell(cell)), 0, 8);
+    ++stats.dotCountHistogram[dots];
+  }
+}
+
 void writeCsvHeader(std::ostream& out) {
-  out << "fixture,variant,width,height,cells,bg_cells,bg_pct,avg_dots,"
+  out << "fixture,variant,backend,width,height,edgefit_mode,render_ms,cells,bg_cells,bg_pct,avg_dots,"
          "dither_cells,edge_cells,"
          "signal_dampened,detail_boosted,edge_mask_fit,"
+         "edge_mask_candidate_fit,edge_mask_bruteforce_sweep,"
+         "edge_mask_candidate_scored,"
          "ink_coverage_compensated,neighbor_continuity,neighbor_color_aa,"
          "neighbor_fg_color_aa,edge_bg_blended,"
          "color_boundary_softened,"
@@ -1135,8 +1241,12 @@ void writeCsvHeader(std::ostream& out) {
 
 void writeCsvRow(std::ostream& out, std::string_view fixture,
                  std::string_view variant, const AsciiArt& art,
-                 const ascii_debug::RenderStats& stats) {
-  out << fixture << ',' << variant << ',' << art.width << ',' << art.height
+                 const ascii_debug::RenderStats& stats, double renderMs,
+                 std::string_view backend, std::string_view edgeFitMode) {
+  out << fixture << ',' << variant << ',' << backend << ',' << art.width << ','
+      << art.height
+      << ',' << edgeFitMode
+      << ',' << std::fixed << std::setprecision(3) << renderMs
       << ',' << stats.cellCount << ',' << stats.bgCellCount << ','
       << std::fixed << std::setprecision(2)
       << percent(stats.bgCellCount, stats.cellCount) << ','
@@ -1144,6 +1254,9 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << ',' << stats.ditherCellCount << ',' << stats.edgeCellCount << ','
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
       << stats.edgeMaskFitCount << ','
+      << stats.edgeMaskCandidateFitCount << ','
+      << stats.edgeMaskBruteForceSweepCount << ','
+      << stats.edgeMaskCandidateScoredCount << ','
       << stats.inkCoverageCompensationCount << ','
       << stats.neighborContinuityCount << ','
       << stats.neighborColorAaCount << ','
@@ -1195,15 +1308,79 @@ RenderedVariant renderVariant(const HarnessConfig& config,
                               const Variant& variant, const RgbaImage& image,
                               std::ostream& csv) {
   RenderedVariant rendered;
-  ascii_debug::RenderOptions options;
-  options.stageMask = variant.stageMask;
-  options.resetHistory = true;
-  options.tuning = variant.tuning;
-  if (!renderAsciiArtFromRgbaDebug(image.pixels.data(), image.width,
-                                   image.height, config.maxColumns,
-                                   config.maxRows, rendered.art, options,
-                                   &rendered.stats, true)) {
-    fail("ASCII render failed");
+  auto renderCpuOnce = [&]() {
+    ascii_debug::RenderOptions options;
+    options.stageMask = variant.stageMask;
+    options.resetHistory = true;
+    options.edgeMaskFitMode = config.edgeMaskFitMode;
+    options.tuning = variant.tuning;
+    if (!renderAsciiArtFromRgbaDebug(image.pixels.data(), image.width,
+                                     image.height, config.maxColumns,
+                                     config.maxRows, rendered.art, options,
+                                     &rendered.stats, true)) {
+      fail("ASCII render failed");
+    }
+  };
+
+  if (config.backend == "gpu") {
+    AsciiArtLayout layout =
+        fitAsciiArtLayout(image.width, image.height, config.maxColumns,
+                          config.maxRows, 2.0, 4.0);
+    rendered.art.width = layout.width;
+    rendered.art.height = layout.height;
+    GpuAsciiRenderer renderer;
+    std::string error;
+    if (!renderer.Initialize(image.width, image.height, &error)) {
+      fail("GPU renderer init failed: " + error);
+    }
+    renderer.SetGpuTimingEnabled(true, true);
+
+    auto renderGpuOnce = [&]() {
+      error.clear();
+      bool ready = renderer.Render(image.pixels.data(), image.width,
+                                   image.height, rendered.art, &error);
+      if (!ready && !error.empty()) {
+        fail("GPU ASCII render failed: " + error);
+      }
+      return renderer.lastGpuTiming();
+    };
+
+    for (int i = 0; i < config.benchmarkWarmupIterations; ++i) {
+      renderGpuOnce();
+    }
+    double gpuMsSum = 0.0;
+    int gpuMsCount = 0;
+    for (int i = 0; i < config.benchmarkIterations; ++i) {
+      GpuAsciiRenderer::GpuTimingResult timing = renderGpuOnce();
+      if (timing.valid) {
+        gpuMsSum += timing.asciiComputeMs;
+        ++gpuMsCount;
+      }
+    }
+    if (gpuMsCount == 0) {
+      fail("GPU timing query did not produce a valid result");
+    }
+    rendered.renderMs = gpuMsSum / static_cast<double>(gpuMsCount);
+    for (int i = 0; i < 4 && rendered.art.cells.empty(); ++i) {
+      renderGpuOnce();
+    }
+    if (rendered.art.cells.size() !=
+        static_cast<size_t>(rendered.art.width) * rendered.art.height) {
+      fail("GPU ASCII render did not produce readback cells");
+    }
+    populateBasicStatsFromArt(rendered.art, rendered.stats);
+  } else {
+    for (int i = 0; i < config.benchmarkWarmupIterations; ++i) {
+      renderCpuOnce();
+    }
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < config.benchmarkIterations; ++i) {
+      renderCpuOnce();
+    }
+    const auto end = std::chrono::steady_clock::now();
+    rendered.renderMs =
+        std::chrono::duration<double, std::milli>(end - start).count() /
+        static_cast<double>(config.benchmarkIterations);
   }
 
   std::filesystem::path fixtureDir = config.outputDir / std::string(fixtureName);
@@ -1212,15 +1389,22 @@ RenderedVariant renderVariant(const HarnessConfig& config,
   writeAnsi(fixtureDir / (base + ".ans"), rendered.art);
   writePlainText(fixtureDir / (base + ".txt"), rendered.art);
   writeAsciiRasterPng(fixtureDir / (base + ".png"), rendered.art);
-  writeCsvRow(csv, fixtureName, variant.name, rendered.art, rendered.stats);
+  writeCsvRow(csv, fixtureName, variant.name, rendered.art, rendered.stats,
+              rendered.renderMs, config.backend, edgeFitModeLabel(config));
 
-  std::cout << std::setw(16) << fixtureName << "  " << std::setw(22)
+  std::cout << std::setw(16) << fixtureName << "  " << std::setw(3)
+            << config.backend << "  " << std::setw(22)
             << variant.name << "  bg="
             << std::fixed << std::setprecision(1)
             << percent(rendered.stats.bgCellCount, rendered.stats.cellCount)
             << "%  dots=" << std::setprecision(2)
             << averageDots(rendered.stats)
-            << "  edgefit=" << rendered.stats.edgeMaskFitCount << '\n';
+            << "  ms=" << std::setprecision(3) << rendered.renderMs
+            << "  edgefit=" << rendered.stats.edgeMaskFitCount
+            << "  mode=" << edgeFitModeLabel(config)
+            << "  lut=" << rendered.stats.edgeMaskCandidateFitCount
+            << "  brute=" << rendered.stats.edgeMaskBruteForceSweepCount
+            << '\n';
   return rendered;
 }
 
@@ -1232,6 +1416,22 @@ void runHarness(const HarnessConfig& config) {
   std::ofstream ablation(config.outputDir / "ablation.csv", std::ios::binary);
   if (!ablation) fail("failed to open ablation.csv");
   writeAblationHeader(ablation);
+
+  if (config.backend == "cpu") {
+    std::cout << "edgefit-mode=" << edgeFitModeLabel(config.edgeMaskFitMode);
+    if (config.edgeMaskFitMode ==
+        ascii_debug::RenderOptions::EdgeMaskFitMode::BruteForceSweep) {
+      std::cout << " (CPU oracle default: brute-force sweep, so shader-test "
+                   "comparisons do not silently drift with LUT changes)";
+    } else {
+      std::cout << " (CPU production/performance path: LUT output may drift "
+                   "from the brute-force oracle)";
+    }
+    std::cout << '\n';
+  } else {
+    std::cout << "edgefit-mode=gpu-bruteforce (GPU LUT/fallback was removed: "
+                 "measured benefit was negligible and caused visible drift)\n";
+  }
 
   std::vector<Variant> variantList = selectedVariants(config);
   for (std::string_view fixtureName : selectedFixtures(config)) {
