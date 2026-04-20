@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <condition_variable>
-#include <cmath>
-#include <cstdio>
 #include <cwchar>
 #include <deque>
 #include <exception>
@@ -41,45 +39,6 @@ static bool wideToUtf8(const std::wstring& text, std::string& out) {
   if (written <= 0) return false;
   if (written != needed) out.resize(static_cast<size_t>(written));
   return true;
-}
-
-static bool validMetric(const TerminalCellPixelSize& size) {
-  return size.width > 0.0 && size.height > 0.0;
-}
-
-static double relativeMetricDelta(double a, double b) {
-  const double denom = std::max(std::abs(a), std::abs(b));
-  if (denom <= 0.0) {
-    return 0.0;
-  }
-  return std::abs(a - b) / denom;
-}
-
-static bool textAreaMetricDisagrees(const TerminalCellPixelSize& base,
-                                    const TerminalCellPixelSize& textArea) {
-  if (!validMetric(base) || !validMetric(textArea)) {
-    return false;
-  }
-  constexpr double kDisagreementThreshold = 0.08;
-  return relativeMetricDelta(base.width, textArea.width) >
-             kDisagreementThreshold ||
-         relativeMetricDelta(base.height, textArea.height) >
-             kDisagreementThreshold;
-}
-
-static void appendMetricSummary(std::string& out, const char* name,
-                                const TerminalCellPixelSize& size) {
-  if (!out.empty()) {
-    out.push_back(' ');
-  }
-  char buf[128];
-  if (validMetric(size)) {
-    std::snprintf(buf, sizeof(buf), "%s=%.2fx%.2f/%s", name, size.width,
-                  size.height, terminalCellMetricSourceLabel(size.source));
-  } else {
-    std::snprintf(buf, sizeof(buf), "%s=none", name);
-  }
-  out += buf;
 }
 
 static bool decodeUtf8Codepoint(std::string_view text, size_t* offset,
@@ -1241,57 +1200,16 @@ void ConsoleScreen::syncScreenBufferToWindow() {
 
 void ConsoleScreen::updateCellPixelSize() {
   HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
-  TerminalCellPixelSize directSize =
-      queryTerminalDirectCellPixelSize(input, out_, 30);
-  TerminalCellPixelSize fontSize = queryConsoleFontCellPixelSize(out_);
-  TerminalCellPixelSize textAreaSize =
-      queryTerminalTextAreaCellPixelSize(input, out_, width_, height_, 30);
-
-  cellPixelDiagnostics_.clear();
-  appendMetricSummary(cellPixelDiagnostics_, "direct", directSize);
-  appendMetricSummary(cellPixelDiagnostics_, "area", textAreaSize);
-  appendMetricSummary(cellPixelDiagnostics_, "font", fontSize);
-
-  TerminalCellPixelSize terminalSize;
-  if (validMetric(directSize)) {
-    terminalSize = directSize;
-    if (textAreaMetricDisagrees(directSize, textAreaSize)) {
-      terminalSize = textAreaSize;
-    }
-  } else if (validMetric(fontSize)) {
-    terminalSize = fontSize;
-    if (textAreaMetricDisagrees(fontSize, textAreaSize)) {
-      terminalSize = textAreaSize;
-    }
-  } else if (validMetric(textAreaSize)) {
-    terminalSize = textAreaSize;
+  TerminalCellPixelSize terminalSize =
+      queryTerminalCellPixelSize(input, out_, width_, height_, 30);
+  if (terminalSize.width <= 0.0 || terminalSize.height <= 0.0) {
+    terminalSize = queryConsoleFontCellPixelSize(out_);
   }
-
   if (terminalSize.width > 0.0 && terminalSize.height > 0.0) {
     cellPixelWidth_ = terminalSize.width;
     cellPixelHeight_ = terminalSize.height;
     cellPixelSource_ = terminalSize.source;
-    asciiCellPixelWidth_ = cellPixelWidth_;
-    asciiCellPixelHeight_ = cellPixelHeight_;
-    asciiCellPixelSource_ = cellPixelSource_;
-    brailleGlyphCellPixelWidth_ = 0.0;
-    brailleGlyphCellPixelHeight_ = 0.0;
-    brailleGlyphCellPixelSource_ = TerminalCellMetricSource::None;
-    TerminalCellPixelSize brailleSize =
-        queryBrailleGlyphCellPixelSize(out_, cellPixelWidth_, cellPixelHeight_);
-    if (brailleSize.width > 0.0 && brailleSize.height > 0.0) {
-      brailleGlyphCellPixelWidth_ = brailleSize.width;
-      brailleGlyphCellPixelHeight_ = brailleSize.height;
-      brailleGlyphCellPixelSource_ = brailleSize.source;
-    }
-    appendMetricSummary(cellPixelDiagnostics_, "ink",
-                        TerminalCellPixelSize{brailleGlyphCellPixelWidth_,
-                                              brailleGlyphCellPixelHeight_,
-                                              brailleGlyphCellPixelSource_});
-    return;
   }
-
-  appendMetricSummary(cellPixelDiagnostics_, "ink", {});
 }
 
 void ConsoleScreen::setVirtualSize(int width, int height) {
@@ -1336,33 +1254,6 @@ TerminalCellMetricSource ConsoleScreen::cellPixelSource() const {
 }
 const char* ConsoleScreen::cellPixelSourceLabel() const {
   return terminalCellMetricSourceLabel(cellPixelSource_);
-}
-const std::string& ConsoleScreen::cellPixelDiagnostics() const {
-  return cellPixelDiagnostics_;
-}
-double ConsoleScreen::asciiCellPixelWidth() const {
-  return asciiCellPixelWidth_ > 0.0 ? asciiCellPixelWidth_ : cellPixelWidth_;
-}
-double ConsoleScreen::asciiCellPixelHeight() const {
-  return asciiCellPixelHeight_ > 0.0 ? asciiCellPixelHeight_ : cellPixelHeight_;
-}
-TerminalCellMetricSource ConsoleScreen::asciiCellPixelSource() const {
-  return asciiCellPixelSource_;
-}
-const char* ConsoleScreen::asciiCellPixelSourceLabel() const {
-  return terminalCellMetricSourceLabel(asciiCellPixelSource_);
-}
-double ConsoleScreen::brailleGlyphCellPixelWidth() const {
-  return brailleGlyphCellPixelWidth_;
-}
-double ConsoleScreen::brailleGlyphCellPixelHeight() const {
-  return brailleGlyphCellPixelHeight_;
-}
-TerminalCellMetricSource ConsoleScreen::brailleGlyphCellPixelSource() const {
-  return brailleGlyphCellPixelSource_;
-}
-const char* ConsoleScreen::brailleGlyphCellPixelSourceLabel() const {
-  return terminalCellMetricSourceLabel(brailleGlyphCellPixelSource_);
 }
 
 void ConsoleScreen::setCellSpace(Cell& cell, const Style& style) {

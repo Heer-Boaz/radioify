@@ -14,7 +14,6 @@ enum class TerminalCellMetricSource {
   Csi16CellSize,
   Win32ConsoleFont,
   Csi14TextArea,
-  BrailleGlyphInk,
 };
 
 struct TerminalCellPixelSize {
@@ -24,20 +23,9 @@ struct TerminalCellPixelSize {
 };
 
 const char* terminalCellMetricSourceLabel(TerminalCellMetricSource source);
-TerminalCellPixelSize queryTerminalDirectCellPixelSize(HANDLE input,
-                                                       HANDLE output,
-                                                       DWORD timeoutMs);
-TerminalCellPixelSize queryTerminalTextAreaCellPixelSize(HANDLE input,
-                                                         HANDLE output,
-                                                         int columns,
-                                                         int rows,
-                                                         DWORD timeoutMs);
 TerminalCellPixelSize queryTerminalCellPixelSize(HANDLE input, HANDLE output,
                                                  int columns, int rows,
                                                  DWORD timeoutMs);
 TerminalCellPixelSize queryConsoleFontCellPixelSize(HANDLE output);
-TerminalCellPixelSize queryBrailleGlyphCellPixelSize(HANDLE output,
-                                                     double cellPixelWidth,
-                                                     double cellPixelHeight);
 
 #endif

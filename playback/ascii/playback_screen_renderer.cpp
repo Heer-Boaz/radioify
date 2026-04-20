@@ -104,21 +104,6 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   double cellPixelWidth = inputs.cellPixelWidth;
   double cellPixelHeight = inputs.cellPixelHeight;
   const std::string& cellPixelSourceLabel = inputs.cellPixelSourceLabel;
-  const std::string& cellPixelDiagnostics = inputs.cellPixelDiagnostics;
-  double terminalCellPixelWidth =
-      inputs.terminalCellPixelWidth > 0.0 ? inputs.terminalCellPixelWidth
-                                          : cellPixelWidth;
-  double terminalCellPixelHeight =
-      inputs.terminalCellPixelHeight > 0.0 ? inputs.terminalCellPixelHeight
-                                           : cellPixelHeight;
-  const std::string& terminalCellPixelSourceLabel =
-      inputs.terminalCellPixelSourceLabel.empty()
-          ? inputs.cellPixelSourceLabel
-          : inputs.terminalCellPixelSourceLabel;
-  double brailleGlyphCellPixelWidth = inputs.brailleGlyphCellPixelWidth;
-  double brailleGlyphCellPixelHeight = inputs.brailleGlyphCellPixelHeight;
-  const std::string& brailleGlyphCellPixelSourceLabel =
-      inputs.brailleGlyphCellPixelSourceLabel;
   double pendingSeekTargetSec = inputs.pendingSeekTargetSec;
   auto& enableSubtitlesShared = *inputs.enableSubtitlesShared;
   auto& windowLocalSeekRequested = *inputs.windowLocalSeekRequested;
@@ -149,21 +134,11 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   std::vector<std::string> debugLines;
   if (debugOverlay && currentMode == PlaybackRenderMode::AsciiTerminal) {
     char buf[512];
-    const char* layoutSource =
+    const char* cellSource =
         cellPixelSourceLabel.empty() ? "unknown" : cellPixelSourceLabel.c_str();
-    const char* terminalSource = terminalCellPixelSourceLabel.empty()
-                                     ? "unknown"
-                                     : terminalCellPixelSourceLabel.c_str();
-    const char* inkSource = brailleGlyphCellPixelSourceLabel.empty()
-                                ? "none"
-                                : brailleGlyphCellPixelSourceLabel.c_str();
     std::snprintf(buf, sizeof(buf),
-                  "DBG term=%.2fx%.2f/%s layout=%.2fx%.2f/%s ink=%.2fx%.2f/%s %dx%d %s",
-                  terminalCellPixelWidth, terminalCellPixelHeight,
-                  terminalSource, cellPixelWidth, cellPixelHeight,
-                  layoutSource, brailleGlyphCellPixelWidth,
-                  brailleGlyphCellPixelHeight, inkSource, width, height,
-                  cellPixelDiagnostics.c_str());
+                  "DBG cell=%.2fx%.2f/%s cols=%d rows=%d",
+                  cellPixelWidth, cellPixelHeight, cellSource, width, height);
     debugLines.emplace_back(buf);
 
     int plannedDebugLineCount = 2;

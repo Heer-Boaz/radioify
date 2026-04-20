@@ -26,7 +26,6 @@ struct FrameOutputState {
   std::string renderFailMessage;
   std::string renderFailDetail;
   std::string lastRenderPath;
-  std::string lastRenderPathDetail;
   bool haveFrame = false;
   int cachedWidth = -1;
   int cachedMaxHeight = -1;

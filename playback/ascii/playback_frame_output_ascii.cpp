@@ -218,7 +218,6 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
   FrameOutputState& state = *input.state;
   if (!input.allowFrame) {
     state.lastRenderPath.clear();
-    state.lastRenderPathDetail.clear();
     state.cachedWidth = -1;
     state.cachedMaxHeight = -1;
     state.cachedFrameWidth = -1;
@@ -325,11 +324,6 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
     if (renderFromCache) {
       asciiOk = true;
       state.lastRenderPath = "gpu";
-      state.lastRenderPathDetail = input.gpuRenderer->lastNv12TextureDetail();
-      if (state.lastRenderPathDetail.empty()) {
-        state.lastRenderPathDetail =
-            std::string("path=") + input.gpuRenderer->lastNv12TexturePath();
-      }
       if (input.timingSink && logAsciiRendererStartup(*input.frame, *input.art,
                                                      input.timingSink)) {
         char buf[256];
@@ -366,7 +360,6 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       input.art->height = prevArtHeight;
       asciiOk = true;
       state.lastRenderPath = "previous-frame";
-      state.lastRenderPathDetail.clear();
     } else if (cacheUpdated && gpuErr.empty()) {
       input.art->width = prevArtWidth;
       input.art->height = prevArtHeight;
@@ -391,7 +384,6 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       asciiOk = cpuRenderFallback(input);
       if (asciiOk) {
         state.lastRenderPath = "cpu-fallback";
-        state.lastRenderPathDetail = gpuErr;
       }
     } else {
       emitWarning(input.warningSink,

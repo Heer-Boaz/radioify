@@ -114,8 +114,8 @@ struct PlaybackSessionCore::Impl {
     screen.updateSize();
     if (enableAscii) {
       requestTargetSize(screen.width(),
-                        screen.height(), screen.asciiCellPixelWidth(),
-                        screen.asciiCellPixelHeight());
+                        screen.height(), screen.cellPixelWidth(),
+                        screen.cellPixelHeight());
     }
   }
 
@@ -203,8 +203,8 @@ struct PlaybackSessionCore::Impl {
     int width = screen.width();
     int height = screen.height();
     if (isAsciiPlaybackMode(renderMode)) {
-      requestTargetSize(width, height, screen.asciiCellPixelWidth(),
-                        screen.asciiCellPixelHeight());
+      requestTargetSize(width, height, screen.cellPixelWidth(),
+                        screen.cellPixelHeight());
     }
     pendingResize = false;
     redraw = true;
