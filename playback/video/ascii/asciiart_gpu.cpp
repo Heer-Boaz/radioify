@@ -107,6 +107,11 @@ void GpuAsciiRenderer::ClearHistory() {
         UINT clearValues[4] = { 0, 0, 0, 0 };
         m_context->ClearUnorderedAccessViewUint(m_historyUAV.Get(), clearValues);
     }
+    if (m_context && m_statsUAV) {
+        UINT clearValues[4] = { 0, 80, 0, 0 };
+        m_context->ClearUnorderedAccessViewUint(m_statsUAV.Get(), clearValues);
+    }
+    m_frameCount = 0;
 }
 
 void GpuAsciiRenderer::ResetSessionState() {
@@ -140,6 +145,7 @@ void GpuAsciiRenderer::ResetSessionState() {
     m_currentHeight = 0;
     m_currentOutW = 0;
     m_currentOutH = 0;
+    m_frameCount = 0;
     m_lastNv12TexturePath = "unknown";
     m_lastNv12TextureDetail.clear();
 }
@@ -344,6 +350,10 @@ bool GpuAsciiRenderer::CreateStatsBuffer() {
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
     srvDesc.Buffer.NumElements = 1;
     if (FAILED(m_device->CreateShaderResourceView(m_statsBuffer.Get(), &srvDesc, &m_statsSRV))) return false;
+    if (m_context) {
+        UINT clearValues[4] = { 0, 80, 0, 0 };
+        m_context->ClearUnorderedAccessViewUint(m_statsUAV.Get(), clearValues);
+    }
 
     return true;
 }
@@ -476,7 +486,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
         cb->outWidth = outW;
         cb->outHeight = outH;
         cb->time = 0.0f;
-        cb->frameCount++;
+        cb->frameCount = m_frameCount++;
         cb->isFullRange = fullRange ? 1 : 0;
         cb->bitDepth = is10Bit ? 10u : 8u;
         cb->yuvMatrix = static_cast<uint32_t>(yuvMatrix);
@@ -546,6 +556,9 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     m_dotEdgeBuffer.Reset();
     m_dotEdgeUAV.Reset();
     m_dotEdgeSRV.Reset();
+    m_statsBuffer.Reset();
+    m_statsUAV.Reset();
+    m_statsSRV.Reset();
     for (int i = 0; i < kOutputStagingBufferCount; ++i) {
         m_outputStagingBuffers[i].Reset();
         m_outputStagingPending[i] = false;
@@ -556,6 +569,7 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
     m_outputStagingReadIndex = 0;
     m_outputStagingWriteIndex = 0;
     m_outputStagingPendingCount = 0;
+    m_frameCount = 0;
     m_currentWidth = 0;
     m_currentHeight = 0;
     m_currentOutW = 0;
@@ -689,7 +703,7 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
         cb->outWidth = outW;
         cb->outHeight = outH;
         cb->time = 0.0f;
-        cb->frameCount++;
+        cb->frameCount = m_frameCount++;
         cb->isFullRange = 1; 
         cb->bitDepth = 8;
         cb->yuvMatrix = static_cast<uint32_t>(YuvMatrix::Bt709);
@@ -818,7 +832,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
         cb->outWidth = outW;
         cb->outHeight = outH;
         cb->time = 0.0f;
-        cb->frameCount++;
+        cb->frameCount = m_frameCount++;
         cb->isFullRange = fullRange ? 1 : 0;
         cb->bitDepth = is10Bit ? 10u : 8u;
         cb->yuvMatrix = static_cast<uint32_t>(yuvMatrix);
@@ -935,7 +949,7 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
             cb->outWidth = outW;
             cb->outHeight = outH;
             cb->time = 0.0f;
-            cb->frameCount++;
+            cb->frameCount = m_frameCount++;
             cb->isFullRange = cache.IsFullRange() ? 1 : 0;
             cb->bitDepth = static_cast<uint32_t>(cache.GetBitDepth());
             cb->yuvMatrix = static_cast<uint32_t>(cache.GetMatrix());
@@ -986,7 +1000,7 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
             cb->outWidth = outW;
             cb->outHeight = outH;
             cb->time = 0.0f;
-            cb->frameCount++;
+            cb->frameCount = m_frameCount++;
             cb->isFullRange = 1;
             cb->bitDepth = 8;
             cb->yuvMatrix = static_cast<uint32_t>(YuvMatrix::Bt709);

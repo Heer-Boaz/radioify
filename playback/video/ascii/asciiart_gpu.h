@@ -137,6 +137,7 @@ private:
     int m_currentHeight = 0;
     int m_currentOutW = 0;
     int m_currentOutH = 0;
+    uint32_t m_frameCount = 0;
     const char* m_lastNv12TexturePath = "unknown";
     std::string m_lastNv12TextureDetail;
 };
