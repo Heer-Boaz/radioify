@@ -15,76 +15,79 @@ bool writeTerminalSequence(HANDLE output, const wchar_t* sequence) {
          written == length;
 }
 
-void assignKeyEventFromConsoleRecord(KeyEvent& out,
-                                     const KEY_EVENT_RECORD& key) {
-  out.vk = key.wVirtualKeyCode;
-  out.ch = static_cast<char>(key.uChar.AsciiChar);
-  out.control = key.dwControlKeyState;
-
-  const wchar_t ch = key.uChar.UnicodeChar;
-  if (ch >= 1 && ch <= 26 && ch != L'\b' && ch != L'\t' && ch != L'\n' &&
-      ch != L'\r') {
-    out.vk = static_cast<WORD>('A' + ch - 1);
-    out.ch = 0;
-    out.control |= LEFT_CTRL_PRESSED;
-  }
+bool isPrintableAscii(wchar_t ch) {
+  return ch >= 0x20 && ch <= 0x7e;
 }
 
-void assignKeyEventFromTerminalCharacter(KeyEvent& out, wchar_t ch) {
-  out.vk = 0;
-  out.ch = ch >= 0 && ch <= 0x7f ? static_cast<char>(ch) : 0;
-  out.control = 0;
+void assignKeyEventFromCharacter(KeyEvent& out, WORD rawVk, DWORD rawControl,
+                                 wchar_t ch) {
+  out.vk = rawVk;
+  out.ch = 0;
+  out.control = rawControl;
+
+  if (ch == 0) return;
 
   if (ch >= 1 && ch <= 26 && ch != L'\b' && ch != L'\t' && ch != L'\n' &&
       ch != L'\r') {
     out.vk = static_cast<WORD>('A' + ch - 1);
-    out.ch = 0;
-    out.control = LEFT_CTRL_PRESSED;
-    return;
-  }
-
-  if (ch >= L'a' && ch <= L'z') {
-    out.vk = static_cast<WORD>('A' + ch - L'a');
-    return;
-  }
-  if (ch >= L'A' && ch <= L'Z') {
-    out.vk = static_cast<WORD>(ch);
-    return;
-  }
-  if (ch >= L'0' && ch <= L'9') {
-    out.vk = static_cast<WORD>(ch);
+    out.control |= LEFT_CTRL_PRESSED;
     return;
   }
 
   switch (ch) {
     case L'\x1b':
       out.vk = VK_ESCAPE;
-      break;
+      return;
     case L'\b':
+    case L'\x7f':
       out.vk = VK_BACK;
-      break;
+      return;
     case L'\t':
       out.vk = VK_TAB;
-      break;
+      return;
     case L'\r':
     case L'\n':
       out.vk = VK_RETURN;
-      break;
+      return;
     case L' ':
       out.vk = VK_SPACE;
-      break;
-    case L'[':
-      out.vk = VK_OEM_4;
-      break;
-    case L']':
-      out.vk = VK_OEM_6;
-      break;
-    case L'/':
-      out.vk = VK_DIVIDE;
-      break;
+      out.ch = ' ';
+      return;
     default:
       break;
   }
+
+  if (ch >= L'a' && ch <= L'z') {
+    out.vk = static_cast<WORD>('A' + ch - L'a');
+  } else if (ch >= L'A' && ch <= L'Z') {
+    out.vk = static_cast<WORD>(ch);
+  } else if (ch >= L'0' && ch <= L'9') {
+    out.vk = static_cast<WORD>(ch);
+  } else if (ch == L'[') {
+    out.vk = VK_OEM_4;
+  } else if (ch == L']') {
+    out.vk = VK_OEM_6;
+  } else if (ch == L'/') {
+    out.vk = VK_DIVIDE;
+  }
+
+  if (isPrintableAscii(ch)) {
+    out.ch = static_cast<char>(ch);
+  }
+}
+
+void assignKeyEventFromConsoleRecord(KeyEvent& out,
+                                     const KEY_EVENT_RECORD& key) {
+  wchar_t ch = key.uChar.UnicodeChar;
+  if (ch == 0) {
+    ch = static_cast<unsigned char>(key.uChar.AsciiChar);
+  }
+  assignKeyEventFromCharacter(out, key.wVirtualKeyCode, key.dwControlKeyState,
+                              ch);
+}
+
+void assignKeyEventFromTerminalCharacter(KeyEvent& out, wchar_t ch) {
+  assignKeyEventFromCharacter(out, 0, 0, ch);
 }
 
 }  // namespace

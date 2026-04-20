@@ -476,10 +476,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
 
   if (ev.type == InputEvent::Type::Key) {
     const KeyEvent& key = ev.key;
-    bool browserBackKey =
-        (key.vk == VK_BROWSER_BACK) || (key.vk == VK_BACK && key.ch == 0);
+    bool browserBackKey = key.vk == VK_BROWSER_BACK;
     bool browserForwardKey = key.vk == VK_BROWSER_FORWARD;
-    bool keyboardBackspace = key.vk == VK_BACK && key.ch != 0;
+    bool backspaceKey = key.vk == VK_BACK;
     const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
     bool ctrl = (key.control & ctrlMask) != 0;
 
@@ -504,7 +503,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         redoBrowserForward();
         return;
       }
-      if (keyboardBackspace) {
+      if (backspaceKey) {
         if (!browser.pathSearch.empty()) {
           browser.pathSearch.pop_back();
           if (browser.pathSearch.empty()) {
@@ -543,7 +542,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         redoBrowserForward();
         return;
       }
-      if (keyboardBackspace) {
+      if (backspaceKey) {
         if (!browser.filter.empty()) {
           browser.filter.pop_back();
           dirty = true;
@@ -626,7 +625,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       }
       return;
     }
-    if (keyboardBackspace) {
+    if (backspaceKey) {
       clearForwardHistory();
       if (optionsBrowserIsActive(browser)) {
         if (optionsBrowserNavigateUp(browser)) {
