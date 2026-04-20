@@ -152,6 +152,17 @@ int evenAtLeast(int value, int minimum) {
   return std::max(minimum, value);
 }
 
+constexpr int kAsciiOutputOverscanNumerator = 6;
+constexpr int kAsciiOutputOverscanDenominator = 5;
+
+int asciiOutputOverscanLimit(int visibleCells) {
+  visibleCells = std::max(1, visibleCells);
+  return static_cast<int>(
+      (static_cast<int64_t>(visibleCells) * kAsciiOutputOverscanNumerator +
+       kAsciiOutputOverscanDenominator - 1) /
+      kAsciiOutputOverscanDenominator);
+}
+
 std::pair<int, int> sourceAspectTargetSize(int minTargetW, int minTargetH,
                                           int srcW, int srcH) {
   minTargetW = evenAtLeast(minTargetW, 2);
@@ -219,13 +230,23 @@ std::pair<int, int> computeCoveringAsciiOutputSize(int maxWidth,
       (static_cast<double>(cellPixelWidth) * maxWidth) / srcW;
   const double scaleH =
       (static_cast<double>(cellPixelHeight) * maxHeight) / srcH;
-  const double scale = std::max(scaleW, scaleH);
+  const double coverScale = std::max(scaleW, scaleH);
+  const int maxOverscanW = asciiOutputOverscanLimit(maxWidth);
+  const int maxOverscanH = asciiOutputOverscanLimit(maxHeight);
+  const double maxScaleW =
+      (static_cast<double>(cellPixelWidth) * maxOverscanW) / srcW;
+  const double maxScaleH =
+      (static_cast<double>(cellPixelHeight) * maxOverscanH) / srcH;
+  const double scale =
+      std::min(coverScale, std::min(maxScaleW, maxScaleH));
 
   int outW = static_cast<int>(
       std::lround(static_cast<double>(srcW) * scale / cellPixelWidth));
   int outH = static_cast<int>(
       std::lround(static_cast<double>(srcH) * scale / cellPixelHeight));
-  return {std::max(1, outW), std::max(1, outH)};
+  outW = std::clamp(outW, fitted.width, maxOverscanW);
+  outH = std::clamp(outH, fitted.height, maxOverscanH);
+  return {outW, outH};
 }
 
 }  // namespace
