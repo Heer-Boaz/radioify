@@ -1109,7 +1109,6 @@ struct BrailleFastScratch {
   std::vector<uint8_t> continuityMasks;
   int prevLumLow = -1;
   int prevLumHigh = -1;
-  int prevBgLum = -1;
 
   void ensure(int w, int h, int maxArtWidthIn, int maxHeightIn) {
     if (w <= 0 || h <= 0) return;
@@ -1172,7 +1171,6 @@ struct BrailleFastScratch {
     hasSourceBlueConfidence = false;
     prevLumLow = -1;
     prevLumHigh = -1;
-    prevBgLum = -1;
   }
 
   void resetHistory() {
@@ -1183,7 +1181,6 @@ struct BrailleFastScratch {
     std::fill(prevMask.begin(), prevMask.end(), 0);
     prevLumLow = -1;
     prevLumHigh = -1;
-    prevBgLum = -1;
   }
 };
 
@@ -1532,19 +1529,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
       lumHigh = std::min(255, lumLow + 1);
     }
   }
-  int bgLum = 255;
-  if (lumCount > 0) {
-    uint32_t maxCount = 0;
-    for (int i = 0; i < 256; ++i) {
-      if (lumHist[i] > maxCount) {
-        maxCount = lumHist[i];
-        bgLum = i;
-      }
-    }
-  }
-
-  if (scratch.prevLumLow >= 0 && scratch.prevLumHigh >= 0 &&
-      scratch.prevBgLum >= 0) {
+  if (scratch.prevLumLow >= 0 && scratch.prevLumHigh >= 0) {
     if (std::abs(lumLow - scratch.prevLumLow) < kLumResetDelta) {
       lumLow = scratch.prevLumLow +
                ((lumLow - scratch.prevLumLow) * kLumSmoothAlpha >> 8);
@@ -1553,17 +1538,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
       lumHigh = scratch.prevLumHigh +
                 ((lumHigh - scratch.prevLumHigh) * kLumSmoothAlpha >> 8);
     }
-    if (std::abs(bgLum - scratch.prevBgLum) < kLumResetDelta) {
-      bgLum = scratch.prevBgLum +
-              ((bgLum - scratch.prevBgLum) * kLumSmoothAlpha >> 8);
-    }
   }
   if (lumHigh <= lumLow) {
     lumHigh = std::min(255, lumLow + 1);
   }
   scratch.prevLumLow = lumLow;
   scratch.prevLumHigh = lumHigh;
-  scratch.prevBgLum = bgLum;
 
   const int lumRange = std::max(80, lumHigh - lumLow);
   const bool useSourceBlueConfidence = scratch.hasSourceBlueConfidence;
@@ -1669,14 +1649,12 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             }
 
             // Adaptive thresholding: gebruik lokaal contrast indien significant
-            int cellLumRange = cellLumMax - cellLumMin;
-            int cellLumMean = validCount > 0 ? cellLumSum / validCount : bgLum;
-            int cellBgLum = bgLum;
+            int cellLumRange = validCount > 0 ? (cellLumMax - cellLumMin) : 0;
+            int cellLumMean = validCount > 0 ? cellLumSum / validCount : 0;
+            int cellBgLum = cellLumMean;
             if (validCount >= 3) {
               cellBgLum = (cellLumSum - cellLumMin - cellLumMax) /
                           (validCount - 2);
-            } else if (validCount > 0) {
-              cellBgLum = cellLumSum / validCount;
             }
             int alpha = 0;
             if (cellLumRange < 40) {
@@ -1686,8 +1664,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             } else {
               alpha = (90 - cellLumRange) * 255 / (90 - 40);
             }
-            int refLum =
-                (bgLum * (255 - alpha) + cellBgLum * alpha + 127) / 255;
+            int refLum = cellBgLum;
             bool useLocalThreshold =
                 cellLumRange > 20 || cellEdgeMax > tuning.ditherMaxEdge;
             bool useDither = false;
@@ -1727,8 +1704,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   std::max(tuning.edgeThresholdFloor,
                            baseThreshold - (edge * 77 / 255));
 
-              // Check against hybrid background luminance:
-              // Mix global and local background based on local detail.
+              // Check against local background luminance.
               int lumDiff = std::abs(lum - refLum);
               
               // Decision: Is this sub-pixel a dot?
@@ -1746,7 +1722,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             }
 
             // Calculate stats for contrast logic
-            int rawDiff = std::abs(cellLumMean - bgLum);
+            int rawDiff = std::abs(cellLumMean - cellBgLum);
             int avgLumDiff = validCount > 0 ? rawDiff * 255 / std::max(1, lumRange)
                                             : 0;
             if (avgLumDiff > 255) avgLumDiff = 255;
@@ -2274,7 +2250,7 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                      static_cast<int>(outBgG) * 183 +
                      static_cast<int>(outBgB) * 19 + 128) >>
                     8;
-                int dir = (cellLumMean < bgLum) ? 1 : -1;
+                int dir = (cellLumMean < 128) ? 1 : -1;
                 int minDeltaY = 6;
                 int need = minDeltaY - dir * (bgY2 - fgY);
                 if (need > 0) {

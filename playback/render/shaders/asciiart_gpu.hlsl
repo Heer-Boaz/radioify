@@ -17,10 +17,10 @@ cbuffer Constants : register(b0) {
 #ifdef NV12_INPUT
 Texture2D<float> TextureY : register(t0);
 Texture2D<float2> TextureUV : register(t1);
-StructuredBuffer<uint4> StatsBuffer : register(t2); // x=bgLum, y=lumRange
+StructuredBuffer<uint4> StatsBuffer : register(t2); // y=lumRange
 #else
 Texture2D<float4> InputTexture : register(t0);
-StructuredBuffer<uint4> StatsBuffer : register(t1); // x=bgLum, y=lumRange
+StructuredBuffer<uint4> StatsBuffer : register(t1); // y=lumRange
 #endif
 
 SamplerState LinearSampler : register(s0);
@@ -961,12 +961,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     float cellBgLum = (cellLumSum - cellLumMin - cellLumMax) * (1.0f / 6.0f);
 
-    uint bgLum = StatsBuffer[0].x;
     uint lumRange = max(StatsBuffer[0].y, 1u);
-    float effectiveBgLum = (float)bgLum;
     float cellRange = cellLumMax - cellLumMin;
     float alpha = saturate((90.0f - cellRange) / (90.0f - 40.0f));
-    float refLum = lerp(effectiveBgLum, cellBgLum, alpha);
+    float refLum = cellBgLum;
     float hysteresis = lerp(4.0f, 10.0f, alpha);
 
     // 2. Adaptive Thresholding (Per-Sub-Pixel Logic)
@@ -1001,8 +999,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         float threshold =
             max(kEdgeThresholdFloor, baseThreshold - dots[j].edge * 0.3f);
 
-        // Check against hybrid background luminance:
-        // Mix global and local background based on local detail.
+        // Check against local background luminance.
         float lumDiff = abs(dots[j].luma - refLum);
         
         // Decision: Is this sub-pixel a dot?
@@ -1021,7 +1018,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     // Calculate stats for contrast logic
     float cellLumMean = cellLumSum / 8.0f;
-    float rawLumDiff = abs(cellLumMean - effectiveBgLum);
+    float rawLumDiff = abs(cellLumMean - cellBgLum);
     float avgLumDiff = min(255.0f, rawLumDiff * 255.0f / (float)lumRange);
     float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f);
     float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);
@@ -1239,7 +1236,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     bool fullMask = (dotCount == 8u);
     if (fullMask && bgCount == 0) {
-        float dir = (cellLumMean < effectiveBgLum) ? 1.0f : -1.0f;
+        float dir = (cellLumMean < 128.0f) ? 1.0f : -1.0f;
         float minDeltaY = 6.0f;
         float fgY = GetLuma(curFg);
         float bgY = GetLuma(curBg);

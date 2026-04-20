@@ -19,7 +19,7 @@ Texture2D<float> TextureY : register(t0);
 #else
 Texture2D<float4> InputTexture : register(t0);
 #endif
-RWStructuredBuffer<uint4> Stats : register(u0); // x=bgLum, y=lumRange
+RWStructuredBuffer<uint4> Stats : register(u0); // y=lumRange
 
 groupshared uint histogram[256];
 
@@ -175,18 +175,10 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
     
     if (tid.x == 0) {
         uint4 prev = Stats[0];
-        // Find Mode (bgLum)
-        uint maxCount = 0;
-        uint mode = 0;
         uint totalSamples = 0;
-        
+
         for (uint i = 0; i < 256; ++i) {
-            uint count = histogram[i];
-            totalSamples += count;
-            if (count > maxCount) {
-                maxCount = count;
-                mode = i;
-            }
+            totalSamples += histogram[i];
         }
         
         // Find Range (1% - 99%)
@@ -213,10 +205,6 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
         if (range < 80) range = 80;
 
         if (frameCount > 0) {
-            int modeDelta = (int)mode - (int)prev.x;
-            if (abs(modeDelta) < (int)kLumResetDelta) {
-                mode = (uint)((int)prev.x + (modeDelta * (int)kLumSmoothAlpha >> 8));
-            }
             int rangeDelta = (int)range - (int)prev.y;
             if (abs(rangeDelta) < (int)kLumResetDelta) {
                 range = (uint)((int)prev.y + (rangeDelta * (int)kLumSmoothAlpha >> 8));
@@ -224,6 +212,6 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
             }
         }
 
-        Stats[0] = uint4(mode, range, 0, 0);
+        Stats[0] = uint4(0, range, 0, 0);
     }
 }
