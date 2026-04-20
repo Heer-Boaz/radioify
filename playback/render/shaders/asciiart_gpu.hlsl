@@ -924,6 +924,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float cellBgLum = (cellLumSum - cellLumMin - cellLumMax) * (1.0f / 6.0f);
 
     uint bgLum = StatsBuffer[0].x;
+    uint lumRange = max(StatsBuffer[0].y, 1u);
     float bgNorm = (float)bgLum / 255.0f;
     float effectiveBgLum = ExpandYNorm(bgNorm);
     if (yuvTransfer != kTransferSdr) {
@@ -987,14 +988,15 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     // Calculate stats for contrast logic
     float cellLumMean = cellLumSum / 8.0f;
-    float avgLumDiff = abs(cellLumMean - effectiveBgLum);
+    float rawLumDiff = abs(cellLumMean - effectiveBgLum);
+    float avgLumDiff = min(255.0f, rawLumDiff * 255.0f / (float)lumRange);
     float edgeSig = saturate((cellEdgeMax - 4.0f) / 12.0f);
     float lumSig = saturate((avgLumDiff - 4.0f) / 24.0f);
     float signalStrength = max(edgeSig, lumSig);
 
     bool useDither = (cellRange <= 20.0f && cellEdgeMax <= kDitherMaxEdge);
     if (useDither) {
-        float coverage = GetInkLevelFromLum(avgLumDiff);
+        float coverage = GetInkLevelFromLum(rawLumDiff);
         float coverageU = coverage * 255.0f;
         uint ditherMask = 0;
         [unroll]
@@ -1113,13 +1115,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         // We expand the distance from the center to increase contrast.
         // Formula: NewPos = Center + DirectionVector * ExpansionFactor
         
-        // 1.0f is the base scale (original position).
-        // We add 'boost * 0.5f' to push the Foreground 50% further out.
-        curFg = center + delta * (1.0f + boost * 1.5f);
-        
-        // We subtract 'delta' (add -delta) to push the Background in the opposite direction.
-        // We only push it 10% further out (boost * 0.1f) to avoid crushing it to black.
-        // curBg = center - delta * (1.0f + boost * 0.1f); 
+        // Match the CPU renderer's asymmetric boost: ink moves strongly, the
+        // background only a little so edge context stays visible.
+        curFg = center + delta * (1.0f + boost * (127.0f / 256.0f));
+        curBg = center - delta * (1.0f + boost * (31.0f / 256.0f));
         
         curFg = saturate(curFg);
         curBg = saturate(curBg);
