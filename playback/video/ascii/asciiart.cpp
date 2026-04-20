@@ -169,14 +169,8 @@ FORCE_INLINE bool renderStageEnabled(uint32_t stageMask, uint32_t stage) {
 struct AsciiTuning {
   int ditherMaxEdge = kDitherMaxEdge;
   int edgeThresholdFloor = kEdgeThresholdFloor;
-  int signalStrengthFloor = kSignalStrengthFloor;
-  int inkMinLuma = kInkMinLuma;
-  int inkMaxScale = kInkMaxScale;
-  int colorSaturation = kColorSaturation;
-  int inkCoverageMinSignal = kInkCoverageMinSignal;
   int inkVisibleDotCoverage = kInkVisibleDotCoverage;
   int inkCoverageMaxScale = kInkCoverageMaxScale;
-  int inkCoverageMinLuma = kInkCoverageMinLuma;
   int edgeMaskFitMinRange = kEdgeMaskFitMinRange;
   int edgeMaskFitMinSignal = kEdgeMaskFitMinSignal;
   int edgeMaskFitMinGain = kEdgeMaskFitMinGain;
@@ -211,16 +205,9 @@ AsciiTuning resolveAsciiTuning(
   const auto& o = debugOptions->tuning;
   applyTuningOverride(tuning.ditherMaxEdge, o.ditherMaxEdge);
   applyTuningOverride(tuning.edgeThresholdFloor, o.edgeThresholdFloor);
-  applyTuningOverride(tuning.signalStrengthFloor, o.signalStrengthFloor);
-  applyTuningOverride(tuning.inkMinLuma, o.inkMinLuma);
-  applyTuningOverride(tuning.inkMaxScale, o.inkMaxScale);
-  applyTuningOverride(tuning.colorSaturation, o.colorSaturation);
-  applyTuningOverride(tuning.inkCoverageMinSignal,
-                      o.inkCoverageMinSignal);
   applyTuningOverride(tuning.inkVisibleDotCoverage,
                       o.inkVisibleDotCoverage);
   applyTuningOverride(tuning.inkCoverageMaxScale, o.inkCoverageMaxScale);
-  applyTuningOverride(tuning.inkCoverageMinLuma, o.inkCoverageMinLuma);
   applyTuningOverride(tuning.edgeMaskFitMinRange, o.edgeMaskFitMinRange);
   applyTuningOverride(tuning.edgeMaskFitMinSignal, o.edgeMaskFitMinSignal);
   applyTuningOverride(tuning.edgeMaskFitMinGain, o.edgeMaskFitMinGain);
@@ -325,16 +312,6 @@ FORCE_INLINE int sourceBlueConfidenceFromYuv(int u, int v, bool fullRange,
   int chroma = signalRangeTo255(chromaSignal, kSourceChromaSignalStart,
                                 kSourceChromaSignalFull);
   return (blue * chroma + 127) / 255;
-}
-
-FORCE_INLINE int boostAdaptiveSatForSourceBlue(int adaptiveSat, int y,
-                                               int sourceBlueConfidence) {
-  if (sourceBlueConfidence <= 0) return adaptiveSat;
-  int darkFactor = std::clamp((60 - y) * 255 / 60, 0, 255);
-  int boost = (kSourceBlueInkBoost * sourceBlueConfidence * darkFactor +
-               (255 * 255) / 2) /
-              (255 * 255);
-  return (adaptiveSat * (256 + boost) + 128) >> 8;
 }
 
 FORCE_INLINE void applySaturationAroundLuma(uint8_t& r, uint8_t& g,
@@ -1916,190 +1893,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                     colorBoundarySoftAmount(curR, curG, curB, bgR, bgG, bgB,
                                             tuning);
               }
-              const int effectiveSignalStrength =
-                  colorBoundaryAmount > 0
-                      ? attenuateSignalForColorBoundary(
-                            signalStrength, colorBoundaryAmount, tuning)
-                      : signalStrength;
-
-              // Intelligent Contrast Management
-              // This system dynamically adjusts contrast based on the "Signal Strength" of the cell.
-              // Goal:
-              // 1. Noise Suppression: If the signal is weak (noise), blend the foreground into the background
-              //    to make it look like a subtle texture rather than hard noise.
-              // 2. Detail Enhancement: If the signal is strong (real detail), boost the contrast to make it pop.
-              
-              // Calculate Signal Strength:
-              // We look at both Edge magnitude and Luma difference.
-              // - Edge Signal: Ramps from 0 to 1 as edge strength goes from 4 to 16.
-              // - Luma Signal: Ramps from 0 to 1 as luma difference goes from 4 to 28.
-              int blendStrength =
-                  tuning.signalStrengthFloor +
-                  ((effectiveSignalStrength *
-                        (255 - tuning.signalStrengthFloor) +
-                    127) /
-                   255);
-
-              // Dampening (Noise Hiding):
-              // If signalStrength is low, we interpolate curFg towards curBg.
-              // This effectively "fades out" noise into the background.
-              if (renderStageEnabled<DebugMode>(
-                      stageMask, ascii_debug::kStageSignalDampen)) {
-                if constexpr (DebugMode) {
-                  if (debugStats && blendStrength < 255) {
-                    ++debugStats->signalDampenCount;
-                  }
-                }
-                curR =
-                    static_cast<uint8_t>(bgR +
-                                         ((curR - bgR) * blendStrength >> 8));
-                curG =
-                    static_cast<uint8_t>(bgG +
-                                         ((curG - bgG) * blendStrength >> 8));
-                curB =
-                    static_cast<uint8_t>(bgB +
-                                         ((curB - bgB) * blendStrength >> 8));
-              }
-
-              // Boosting (Detail Pop):
-              // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.
-              if (renderStageEnabled<DebugMode>(
-                      stageMask, ascii_debug::kStageDetailBoost) &&
-                  effectiveSignalStrength > 204) { // > 0.8 * 255
-                  if constexpr (DebugMode) {
-                    if (debugStats) ++debugStats->detailBoostCount;
-                  }
-                  int boost = (effectiveSignalStrength - 204) * 5; // 0 -> 255
-                  // Boost factor 1.0 -> 1.5 (approx)
-                  // New = Center + (Old - Center) * (1 + boost/512)
-                  // Simplified: Expand difference
-                  int cR = (curR + bgR) >> 1;
-                  int cG = (curG + bgG) >> 1;
-                  int cB = (curB + bgB) >> 1;
-                  
-                  int dR = curR - cR;
-                  int dG = curG - cG;
-                  int dB = curB - cB;
-                  
-                  // Asymmetrical Boost Logic:
-                  // We want the foreground (dots) to stand out sharply, but we don't want the background
-                  // to be crushed to black.
-                  
-                  // Apply boost to FG (scale delta by 1.5x at max)
-                  int scaleFg = 256 + (boost >> 1); // 256 to 384
-                  
-                  // Apply reduced boost to BG (scale delta by 1.1x at max)
-                  // This prevents the "Black Background" issue where high-contrast areas would
-                  // push the background color below zero (black), losing context.
-                  int scaleBg = 256 + (boost >> 3); // 256 to 288
-                  
-                  curR = static_cast<uint8_t>(
-                      std::clamp(cR + (dR * scaleFg >> 8), 0, 255));
-                  curG = static_cast<uint8_t>(
-                      std::clamp(cG + (dG * scaleFg >> 8), 0, 255));
-                  curB = static_cast<uint8_t>(
-                      std::clamp(cB + (dB * scaleFg >> 8), 0, 255));
-                  
-                  bgR = static_cast<uint8_t>(
-                      std::clamp(cR - (dR * scaleBg >> 8), 0, 255));
-                  bgG = static_cast<uint8_t>(
-                      std::clamp(cG - (dG * scaleBg >> 8), 0, 255));
-                  bgB = static_cast<uint8_t>(
-                      std::clamp(cB - (dB * scaleBg >> 8), 0, 255));
-              }
-
-              int curY =
-                  (static_cast<int>(curR) * 54 + static_cast<int>(curG) * 183 +
-                   static_cast<int>(curB) * 19 + 128) >>
-                  8;
-              if (renderStageEnabled<DebugMode>(
-                      stageMask, ascii_debug::kStageInkLumaFloor) &&
-                  curY < tuning.inkMinLuma) {
-                if constexpr (DebugMode) {
-                  if (debugStats) ++debugStats->inkLumaFloorCount;
-                }
-                if (curY <= 0) {
-                  curR = static_cast<uint8_t>(tuning.inkMinLuma);
-                  curG = static_cast<uint8_t>(tuning.inkMinLuma);
-                  curB = static_cast<uint8_t>(tuning.inkMinLuma);
-                } else {
-                  int scale =
-                      (static_cast<int>(tuning.inkMinLuma) * 256) / curY;
-                  if (scale > tuning.inkMaxScale) {
-                    scale = tuning.inkMaxScale;
-                  }
-                  curR = static_cast<uint8_t>(std::min(
-                      255, (static_cast<int>(curR) * scale + 128) >> 8));
-                  curG = static_cast<uint8_t>(std::min(
-                      255, (static_cast<int>(curG) * scale + 128) >> 8));
-                  curB = static_cast<uint8_t>(std::min(
-                      255, (static_cast<int>(curB) * scale + 128) >> 8));
-                }
-              }
-              // Verbeterde kleurverwerking met adaptive saturation
-              int y =
-                  (static_cast<int>(curR) * 54 + static_cast<int>(curG) * 183 +
-                   static_cast<int>(curB) * 19 + 128) >>
-                  8;
-              // Adaptive Saturation (Ink)
-              // Adjust saturation based on brightness.
-              // Dark colors get reduced saturation to prevent blue/purple artifacts in shadows.
-              int inkMaxC = std::max({static_cast<int>(curR), static_cast<int>(curG),
-                                      static_cast<int>(curB)});
-              int inkMinC = std::min({static_cast<int>(curR), static_cast<int>(curG),
-                                      static_cast<int>(curB)});
-              int adaptiveSat =
-                  (tuning.colorSaturation *
-                       shadowSaturationWithChroma(y, inkMaxC - inkMinC) +
-                   128) >>
-                  8;
-              if (renderStageEnabled<DebugMode>(
-                      stageMask, ascii_debug::kStageInkSaturation)) {
-                adaptiveSat =
-                    boostAdaptiveSatForSourceBlue(adaptiveSat, y, curSourceBlue);
-                applySaturationAroundLuma(curR, curG, curB, y, adaptiveSat);
-              }
-
-              if (renderStageEnabled<DebugMode>(
-                      stageMask,
-                      ascii_debug::kStageInkCoverageCompensation) &&
-                  !useDither &&
-                  effectiveSignalStrength >= tuning.inkCoverageMinSignal &&
-                  bgCount > 0 && inkCount > 0 && dotCount > 0 &&
-                  dotCount < validCount) {
-                int coverage = std::max(1, tuning.inkVisibleDotCoverage);
-                int scale =
-                    std::min(tuning.inkCoverageMaxScale,
-                             (256 * 256 + coverage / 2) / coverage);
-                if (scale > 256) {
-                  uint8_t oldR = curR;
-                  uint8_t oldG = curG;
-                  uint8_t oldB = curB;
-                  curR = static_cast<uint8_t>(std::clamp(
-                      static_cast<int>(bgR) +
-                          scaleDelta256(static_cast<int>(curR) - bgR, scale),
-                      0, 255));
-                  curG = static_cast<uint8_t>(std::clamp(
-                      static_cast<int>(bgG) +
-                          scaleDelta256(static_cast<int>(curG) - bgG, scale),
-                      0, 255));
-                  curB = static_cast<uint8_t>(std::clamp(
-                      static_cast<int>(bgB) +
-                          scaleDelta256(static_cast<int>(curB) - bgB, scale),
-                      0, 255));
-                  int coverageY = rgbToY(curR, curG, curB);
-                  if (coverageY < tuning.inkCoverageMinLuma) {
-                    scaleColorToLuma(curR, curG, curB, coverageY,
-                                     tuning.inkCoverageMinLuma);
-                  }
-                  if constexpr (DebugMode) {
-                    if (debugStats &&
-                        (oldR != curR || oldG != curG || oldB != curB)) {
-                      ++debugStats->inkCoverageCompensationCount;
-                    }
-                  }
-                }
-              }
 
               if (renderStageEnabled<DebugMode>(
                       stageMask,
@@ -2236,43 +2029,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                             (static_cast<uint32_t>(outBgG) << 8) |
                                             static_cast<uint32_t>(outBgB);
                 scratch.prevBgValid[cellIndex] = 1;
-              }
-              if (renderStageEnabled<DebugMode>(
-                      stageMask, ascii_debug::kStageFullMaskBgContrast) &&
-                  dotCount == 8 && bgCount == 0) {
-                int fgY =
-                    (static_cast<int>(outR) * 54 +
-                     static_cast<int>(outG) * 183 +
-                     static_cast<int>(outB) * 19 + 128) >>
-                    8;
-                int bgY2 =
-                    (static_cast<int>(outBgR) * 54 +
-                     static_cast<int>(outBgG) * 183 +
-                     static_cast<int>(outBgB) * 19 + 128) >>
-                    8;
-                int dir = (cellLumMean < 128) ? 1 : -1;
-                int minDeltaY = 6;
-                int need = minDeltaY - dir * (bgY2 - fgY);
-                if (need > 0) {
-                  if constexpr (DebugMode) {
-                    if (debugStats) ++debugStats->fullMaskBgContrastCount;
-                  }
-                  int shift = dir * need;
-                  outBgR = static_cast<uint8_t>(
-                      std::clamp(static_cast<int>(outBgR) + shift, 0, 255));
-                  outBgG = static_cast<uint8_t>(
-                      std::clamp(static_cast<int>(outBgG) + shift, 0, 255));
-                  outBgB = static_cast<uint8_t>(
-                      std::clamp(static_cast<int>(outBgB) + shift, 0, 255));
-                  compressShadowChroma(outBgR, outBgG, outBgB, bgSourceBlue);
-                  if (cellIndex < scratch.prevBg.size()) {
-                    scratch.prevBg[cellIndex] =
-                        (static_cast<uint32_t>(outBgR) << 16) |
-                        (static_cast<uint32_t>(outBgG) << 8) |
-                        static_cast<uint32_t>(outBgB);
-                    scratch.prevBgValid[cellIndex] = 1;
-                  }
-                }
               }
               hasBg = true;
             } else if (cellIndex < scratch.prevFg.size() &&

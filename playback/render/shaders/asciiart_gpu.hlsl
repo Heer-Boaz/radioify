@@ -1105,96 +1105,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (bgCount > 0 && inkCount > 0 && dotCount > 0u && dotCount < 8u) {
         colorBoundaryAmount = ColorBoundarySoftAmount(curFg, curBg);
     }
-    float effectiveSignalStrength = AttenuateSignalForColorBoundary(
-        signalStrength, colorBoundaryAmount);
-
-    // Intelligent Contrast Management
-    // This system dynamically adjusts contrast based on the "Signal Strength" of the cell.
-    // Goal:
-    // 1. Noise Suppression: If the signal is weak (noise), blend the foreground into the background
-    //    to make it look like a subtle texture rather than hard noise.
-    // 2. Detail Enhancement: If the signal is strong (real detail), boost the contrast to make it pop.
-    
-    // Calculate Signal Strength:
-    // We look at both Edge magnitude and Luma difference.
-    // - Edge Signal: Ramps from 0 to 1 as edge strength goes from 4 to 16.
-    // - Luma Signal: Ramps from 0 to 1 as luma difference goes from 4 to 28.
-    float blendStrength =
-        kSignalStrengthFloor +
-        (1.0f - kSignalStrengthFloor) * effectiveSignalStrength;
-
-    // Dampening (Noise Hiding):
-    // If signalStrength is low, we interpolate curFg towards curBg.
-    // This effectively "fades out" noise into the background.
-    curFg = lerp(curBg, curFg, blendStrength);
-
-    // Boosting (Detail Pop):
-    // If signalStrength is high (> 0.8), we apply an asymmetrical contrast boost.
-    if (effectiveSignalStrength > 0.8f) {
-        // Normalize the range [0.8, 1.0] to [0.0, 1.0]
-        float boost = (effectiveSignalStrength - 0.8f) * 5.0f;
-        
-        // Calculate the midpoint (gray point) between FG and BG
-        float3 center = (curFg + curBg) * 0.5f;
-        
-        // 'delta' is the vector from Center to Foreground.
-        // Conversely, the vector from Center to Background is -delta.
-        float3 delta = curFg - center;
-        
-        // Asymmetrical Boost Logic:
-        // We expand the distance from the center to increase contrast.
-        // Formula: NewPos = Center + DirectionVector * ExpansionFactor
-        
-        // Match the CPU renderer's asymmetric boost: ink moves strongly, the
-        // background only a little so edge context stays visible.
-        curFg = center + delta * (1.0f + boost * (127.0f / 256.0f));
-        curBg = center - delta * (1.0f + boost * (31.0f / 256.0f));
-        
-        curFg = saturate(curFg);
-        curBg = saturate(curBg);
-    }
-
-    // Luma Correction (Ink)
-    // Ensure the ink isn't too dark to be seen.
-    float curY = GetLuma(curFg);
-    if (curY < (float)kInkMinLuma) {
-        if (curY <= 0.0f) {
-            curFg = (float)kInkMinLuma / 255.0f;
-        } else {
-            float scale = ((float)kInkMinLuma * 256.0f) / curY;
-            if (scale > (float)kInkMaxScale) scale = (float)kInkMaxScale;
-            curFg = min(1.0f, (curFg * scale) / 256.0f);
-        }
-    }
-
-    // Adaptive Saturation (Ink)
-    // Adjust saturation based on brightness.
-    // Dark colors get reduced saturation to prevent blue/purple artifacts in shadows.
-    curY = GetLuma(curFg);
-    float inkChroma = (max(max(curFg.r, curFg.g), curFg.b) -
-                       min(min(curFg.r, curFg.g), curFg.b)) *
-                      255.0f;
-    float adaptiveSat =
-        (float)kColorSaturation * ShadowSaturationWithChroma(curY, inkChroma);
-    adaptiveSat *=
-        1.0f + kSourceBlueInkBoost * saturate(curFgBlueConfidence) *
-        saturate((60.0f - curY) / 60.0f);
-    curFg = ApplySaturationAroundLuma(curFg, curY, adaptiveSat / 256.0f);
-
-    if (!useDither && effectiveSignalStrength >= kInkCoverageMinSignal &&
-        bgCount > 0 && inkCount > 0 && dotCount > 0u && dotCount < 8u) {
-        float scale =
-            min((float)kInkCoverageMaxScale / 256.0f,
-                1.0f / max(kInkVisibleDotCoverage, 1e-5f));
-        if (scale > 1.0f) {
-            curFg = saturate(curBg + (curFg - curBg) * scale);
-            float coverageY = GetLuma(curFg);
-            if (coverageY < (float)kInkCoverageMinLuma) {
-                curFg = ScaleColorToLuma(curFg, coverageY,
-                                         (float)kInkCoverageMinLuma);
-            }
-        }
-    }
 
     if (colorBoundaryAmount > 0.0f &&
         kColorBoundarySoftStrength > 0.0f) {
@@ -1233,20 +1143,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     }
     curFg = CompressShadowChroma(curFg, curFgBlueConfidence);
     curBg = CompressShadowChroma(curBg, curBgBlueConfidence);
-
-    bool fullMask = (dotCount == 8u);
-    if (fullMask && bgCount == 0) {
-        float dir = (cellLumMean < 128.0f) ? 1.0f : -1.0f;
-        float minDeltaY = 6.0f;
-        float fgY = GetLuma(curFg);
-        float bgY = GetLuma(curBg);
-        float need = minDeltaY - dir * (bgY - fgY);
-        if (need > 0.0f) {
-            float shift = dir * need / 255.0f;
-            curBg = saturate(curBg + shift);
-            curBg = CompressShadowChroma(curBg, curBgBlueConfidence);
-        }
-    }
 
     AsciiCell cell;
     cell.ch = kBrailleBase + bitmask;

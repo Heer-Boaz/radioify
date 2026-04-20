@@ -27,17 +27,11 @@ RADIOIFY_ASCII_LUMA_U8(kLumResetDelta, 28)    // snap threshold for luma history
 RADIOIFY_ASCII_FLOAT(kHdrReferenceNits, 100.0f)  // SDR target for HDR tonemap
 RADIOIFY_ASCII_FLOAT(kHdrScale, 10000.0f / kHdrReferenceNits)  // PQ/HLG nit scale
 
-// Pen color correction.
+// Pen color and display model.
 RADIOIFY_ASCII_LUMA_U8(kColorLift, 0)         // minimum RGB channel value
-RADIOIFY_ASCII_LUMA_U8(kInkMinLuma, 40)       // minimum foreground luma
-RADIOIFY_ASCII_COUNT(kInkMaxScale, 1280)      // fixed 8.8 maximum ink lift
-RADIOIFY_ASCII_SIGNAL_U8(kSignalStrengthFloor, 51)  // minimum FG/BG contrast mix
-RADIOIFY_ASCII_COUNT(kColorSaturation, 340)   // saturation scale, 256 == 1.0
 RADIOIFY_ASCII_LUMA_U8(kTemporalResetDelta, 48)  // RGB delta sum snap threshold
-RADIOIFY_ASCII_SIGNAL_U8(kInkCoverageMinSignal, 96)  // minimum edge/luma signal for dot-area compensation
 RADIOIFY_ASCII_SCALE_256(kInkVisibleDotCoverage, 96)   // visible dot area inside its 2x4 sample slot
 RADIOIFY_ASCII_COUNT(kInkCoverageMaxScale, 512)  // max fixed 8.8 FG/BG delta expansion
-RADIOIFY_ASCII_LUMA_U8(kInkCoverageMinLuma, 20)  // darkest allowed ink after dot-area compensation
 
 // Edge/detail classification.
 RADIOIFY_ASCII_LUMA_U8(kDitherMaxEdge, 28)       // max Sobel magnitude for dither
@@ -77,4 +71,3 @@ RADIOIFY_ASCII_SIGNAL_U8(kSourceBlueSignalFull, 46)
 RADIOIFY_ASCII_SIGNAL_U8(kSourceChromaSignalStart, 5)
 RADIOIFY_ASCII_SIGNAL_U8(kSourceChromaSignalFull, 36)
 RADIOIFY_ASCII_SCALE_256(kSourceBlueGuardRelax, 77)
-RADIOIFY_ASCII_SCALE_256(kSourceBlueInkBoost, 26)
