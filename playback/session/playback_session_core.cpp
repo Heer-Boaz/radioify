@@ -113,8 +113,8 @@ struct PlaybackSessionCore::Impl {
   void initialize(ConsoleScreen& screen) {
     screen.updateSize();
     if (enableAscii) {
-      requestTargetSize(std::max(20, screen.width()),
-                        std::max(10, screen.height()), screen.cellPixelWidth(),
+      requestTargetSize(screen.width(),
+                        screen.height(), screen.cellPixelWidth(),
                         screen.cellPixelHeight());
     }
   }
@@ -200,8 +200,8 @@ struct PlaybackSessionCore::Impl {
       return;
     }
     screen.updateSize();
-    int width = std::max(20, screen.width());
-    int height = std::max(10, screen.height());
+    int width = screen.width();
+    int height = screen.height();
     if (isAsciiPlaybackMode(renderMode)) {
       requestTargetSize(width, height, screen.cellPixelWidth(),
                         screen.cellPixelHeight());

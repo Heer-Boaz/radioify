@@ -133,6 +133,14 @@ bool renderAsciiArtFromRgba(const uint8_t* rgba,
                             AsciiArt& out,
                             bool assumeOpaque = false);
 
+bool renderAsciiArtFromRgbaExact(const uint8_t* rgba,
+                                 int width,
+                                 int height,
+                                 int outputWidth,
+                                 int outputHeight,
+                                 AsciiArt& out,
+                                 bool assumeOpaque = false);
+
 bool renderAsciiArtFromRgbaDebug(const uint8_t* rgba,
                                  int width,
                                  int height,
@@ -160,5 +168,18 @@ bool renderAsciiArtFromYuv(const uint8_t* data,
                            int maxWidth,
                            int maxHeight,
                            AsciiArt& out);
+
+bool renderAsciiArtFromYuvExact(const uint8_t* data,
+                                int width,
+                                int height,
+                                int stride,
+                                int planeHeight,
+                                YuvFormat format,
+                                bool fullRange,
+                                YuvMatrix yuvMatrix,
+                                YuvTransfer yuvTransfer,
+                                int outputWidth,
+                                int outputHeight,
+                                AsciiArt& out);
 
 #endif

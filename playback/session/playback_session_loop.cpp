@@ -255,12 +255,8 @@ struct PlaybackLoopRunner::Impl {
                                      bool frameChanged,
                                      std::vector<ScreenCell>& outCells,
                                      int& outCols, int& outRows) {
-    cellPixelWidth = std::max(1, cellPixelWidth);
-    cellPixelHeight = std::max(1, cellPixelHeight);
-    const int cols =
-        std::max(20, pixelWidth / cellPixelWidth);
-    const int rows =
-        std::max(10, pixelHeight / cellPixelHeight);
+    const int cols = pixelWidth / cellPixelWidth;
+    const int rows = pixelHeight / cellPixelHeight;
     pictureInPictureTextScreen.setVirtualSize(cols, rows);
 
     pictureInPictureTextOutputState.renderFailed = false;
@@ -371,6 +367,8 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.allowAsciiCpuFallback = false;
     renderInputs.useWindowPresenter = output.windowActive();
     renderInputs.overlayVisibleNow = overlayVisible();
+    renderInputs.cellPixelWidth = screen.cellPixelWidth();
+    renderInputs.cellPixelHeight = screen.cellPixelHeight();
     renderInputs.clearHistory = clearHistory;
     renderInputs.frameChanged = frameChanged;
     core.updateRenderInputs(renderInputs);

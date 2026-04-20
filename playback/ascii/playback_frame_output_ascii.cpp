@@ -17,6 +17,8 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include "asciiart_layout.h"
+
 namespace {
 void emitWarning(
     const playback_frame_output::LogLineWriter& sink,
@@ -127,7 +129,7 @@ bool cpuRenderFallback(const playback_frame_output::AsciiModePrepareInput& input
   if (input.frame->format == VideoPixelFormat::NV12 ||
       input.frame->format == VideoPixelFormat::P010) {
     bool is10Bit = input.frame->format == VideoPixelFormat::P010;
-    return renderAsciiArtFromYuv(
+    return renderAsciiArtFromYuvExact(
         input.frame->yuv.data(), input.frame->width, input.frame->height,
         input.frame->stride, input.frame->planeHeight,
         is10Bit ? YuvFormat::P010 : YuvFormat::NV12, input.frame->fullRange,
@@ -137,116 +139,43 @@ bool cpuRenderFallback(const playback_frame_output::AsciiModePrepareInput& input
 
   if (input.frame->format == VideoPixelFormat::RGB32 ||
       input.frame->format == VideoPixelFormat::ARGB32) {
-    return renderAsciiArtFromRgba(input.frame->rgba.data(), input.frame->width,
-                                  input.frame->height, input.art->width,
-                                  input.art->height, *input.art,
-                                  input.frame->format == VideoPixelFormat::ARGB32);
+    return renderAsciiArtFromRgbaExact(
+        input.frame->rgba.data(), input.frame->width, input.frame->height,
+        input.art->width, input.art->height, *input.art,
+        input.frame->format == VideoPixelFormat::ARGB32);
   }
 
   return false;
 }
 
-int evenAtLeast(int value, int minimum) {
-  value = std::max(value, minimum);
-  if (value & 1) --value;
-  return std::max(minimum, value);
-}
-
-constexpr int kAsciiOutputOverscanNumerator = 6;
-constexpr int kAsciiOutputOverscanDenominator = 5;
-
-int asciiOutputOverscanLimit(int visibleCells) {
-  visibleCells = std::max(1, visibleCells);
-  return static_cast<int>(
-      (static_cast<int64_t>(visibleCells) * kAsciiOutputOverscanNumerator +
-       kAsciiOutputOverscanDenominator - 1) /
-      kAsciiOutputOverscanDenominator);
-}
-
-std::pair<int, int> sourceAspectTargetSize(int minTargetW, int minTargetH,
+std::pair<int, int> sourceAspectTargetSize(int targetPixelW, int targetPixelH,
                                           int srcW, int srcH) {
-  minTargetW = evenAtLeast(minTargetW, 2);
-  minTargetH = evenAtLeast(minTargetH, 4);
   if (srcW <= 0 || srcH <= 0) {
-    return {minTargetW, minTargetH};
+    return {targetPixelW, targetPixelH};
   }
 
   const double aspect =
       static_cast<double>(srcW) / static_cast<double>(srcH);
-  int targetW = minTargetW;
-  int targetH = evenAtLeast(
-      static_cast<int>(std::lround(static_cast<double>(targetW) / aspect)), 4);
-  if (targetH < minTargetH) {
-    targetH = minTargetH;
-    targetW = evenAtLeast(static_cast<int>(
-                              std::lround(static_cast<double>(targetH) *
-                                          aspect)),
-                          2);
+  int targetW = targetPixelW;
+  int targetH = static_cast<int>(
+      std::lround(static_cast<double>(targetW) / aspect));
+  if (targetH < targetPixelH) {
+    targetH = targetPixelH;
+    targetW = static_cast<int>(
+        std::lround(static_cast<double>(targetH) * aspect));
   }
   return {targetW, targetH};
 }
 
-void clampTargetSizeToSourceAndBudget(int& targetW, int& targetH, int srcW,
-                                      int srcH) {
-  const int kMaxDecodeWidth = 1024;
-  const int kMaxDecodeHeight = 768;
-  int maxW = kMaxDecodeWidth;
-  int maxH = kMaxDecodeHeight;
-  if (srcW > 1) maxW = std::min(maxW, srcW & ~1);
-  if (srcH > 1) maxH = std::min(maxH, srcH & ~1);
-
-  if (targetW <= maxW && targetH <= maxH) return;
-
-  const double scaleW = static_cast<double>(maxW) / targetW;
-  const double scaleH = static_cast<double>(maxH) / targetH;
-  const double scale = std::min(scaleW, scaleH);
-  targetW = evenAtLeast(static_cast<int>(
-                            std::lround(static_cast<double>(targetW) * scale)),
-                        2);
-  targetH = evenAtLeast(static_cast<int>(
-                            std::lround(static_cast<double>(targetH) * scale)),
-                        4);
-}
-
-std::pair<int, int> computeCoveringAsciiOutputSize(int maxWidth,
-                                                   int maxHeight,
-                                                   int srcW,
-                                                   int srcH,
-                                                   double cellPixelWidth,
-                                                   double cellPixelHeight) {
-  maxWidth = std::max(1, maxWidth);
-  maxHeight = std::max(1, maxHeight);
-  cellPixelWidth = std::max(1.0, cellPixelWidth);
-  cellPixelHeight = std::max(1.0, cellPixelHeight);
-
-  AsciiArtLayout fitted =
-      fitAsciiArtLayout(srcW, srcH, maxWidth, maxHeight, cellPixelWidth,
-                        cellPixelHeight);
-  if (srcW <= 0 || srcH <= 0) {
-    return {fitted.width, fitted.height};
-  }
-
-  const double scaleW =
-      (static_cast<double>(cellPixelWidth) * maxWidth) / srcW;
-  const double scaleH =
-      (static_cast<double>(cellPixelHeight) * maxHeight) / srcH;
-  const double coverScale = std::max(scaleW, scaleH);
-  const int maxOverscanW = asciiOutputOverscanLimit(maxWidth);
-  const int maxOverscanH = asciiOutputOverscanLimit(maxHeight);
-  const double maxScaleW =
-      (static_cast<double>(cellPixelWidth) * maxOverscanW) / srcW;
-  const double maxScaleH =
-      (static_cast<double>(cellPixelHeight) * maxOverscanH) / srcH;
-  const double scale =
-      std::min(coverScale, std::min(maxScaleW, maxScaleH));
-
-  int outW = static_cast<int>(
-      std::lround(static_cast<double>(srcW) * scale / cellPixelWidth));
-  int outH = static_cast<int>(
-      std::lround(static_cast<double>(srcH) * scale / cellPixelHeight));
-  outW = std::clamp(outW, fitted.width, maxOverscanW);
-  outH = std::clamp(outH, fitted.height, maxOverscanH);
-  return {outW, outH};
+std::pair<int, int> computeFittedAsciiOutputSize(int maxWidth,
+                                                 int maxHeight,
+                                                 int srcW,
+                                                 int srcH,
+                                                 double cellPixelWidth,
+                                                 double cellPixelHeight) {
+  AsciiArtLayout fitted = fitAsciiArtLayout(
+      srcW, srcH, maxWidth, maxHeight, cellPixelWidth, cellPixelHeight);
+  return {fitted.width, fitted.height};
 }
 
 }  // namespace
@@ -260,16 +189,17 @@ std::pair<int, int> computeAsciiPlaybackTargetSize(int width, int height,
                                                   bool showStatusLine) {
   int headerLines = showStatusLine ? 1 : 0;
   const int footerLines = 0;
-  int maxHeight = std::max(1, height - headerLines - footerLines);
-  int maxOutW = std::max(1, width);
-  auto [outW, outH] = computeCoveringAsciiOutputSize(
-      maxOutW, std::max(1, maxHeight), srcW, srcH, cellPixelWidth,
+  int maxHeight = height - headerLines - footerLines;
+  auto [outW, outH] = computeFittedAsciiOutputSize(
+      width, maxHeight, srcW, srcH, cellPixelWidth,
       cellPixelHeight);
 
+  const int targetPixelW =
+      static_cast<int>(std::lround(outW * cellPixelWidth));
+  const int targetPixelH =
+      static_cast<int>(std::lround(outH * cellPixelHeight));
   auto [targetW, targetH] =
-      sourceAspectTargetSize(std::max(2, outW * 2), std::max(4, outH * 4),
-                             srcW, srcH);
-  clampTargetSizeToSourceAndBudget(targetW, targetH, srcW, srcH);
+      sourceAspectTargetSize(targetPixelW, targetPixelH, srcW, srcH);
   return std::pair<int, int>(targetW, targetH);
 }
 
@@ -277,8 +207,8 @@ std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
                                           int srcW, int srcH,
                                           double cellPixelWidth,
                                           double cellPixelHeight) {
-  return computeCoveringAsciiOutputSize(maxWidth, maxHeight, srcW, srcH,
-                                        cellPixelWidth, cellPixelHeight);
+  return computeFittedAsciiOutputSize(maxWidth, maxHeight, srcW, srcH,
+                                      cellPixelWidth, cellPixelHeight);
 }
 
 bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {

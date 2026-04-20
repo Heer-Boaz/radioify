@@ -119,12 +119,8 @@ void ConsoleInput::restore() {
 }
 
 void ConsoleInput::setCellPixelSize(double width, double height) {
-  if (width > 0.0) {
-    cellPixelWidth_ = width;
-  }
-  if (height > 0.0) {
-    cellPixelHeight_ = height;
-  }
+  cellPixelWidth_ = width;
+  cellPixelHeight_ = height;
   enableTerminalMouseInput();
 }
 
@@ -146,10 +142,8 @@ void ConsoleInput::updateTerminalGridSize() {
   if (output_ == INVALID_HANDLE_VALUE) return;
   CONSOLE_SCREEN_BUFFER_INFO info{};
   if (!GetConsoleScreenBufferInfo(output_, &info)) return;
-  columns_ = std::max(1, static_cast<int>(info.srWindow.Right -
-                                          info.srWindow.Left + 1));
-  rows_ = std::max(1, static_cast<int>(info.srWindow.Bottom -
-                                       info.srWindow.Top + 1));
+  columns_ = static_cast<int>(info.srWindow.Right - info.srWindow.Left + 1);
+  rows_ = static_cast<int>(info.srWindow.Bottom - info.srWindow.Top + 1);
 }
 
 void ConsoleInput::mapPixelMousePosition(MouseEvent& mouse) const {
@@ -163,14 +157,14 @@ void ConsoleInput::mapPixelMousePosition(MouseEvent& mouse) const {
     mouse.hasPixelPosition = false;
     return;
   }
-  const double cellW = std::max(1.0, cellPixelWidth_);
-  const double cellH = std::max(1.0, cellPixelHeight_);
+  const double cellW = cellPixelWidth_;
+  const double cellH = cellPixelHeight_;
   mouse.unitWidth = cellW;
   mouse.unitHeight = cellH;
   const int gx = std::clamp(static_cast<int>(mouse.pixelX / cellW), 0,
-                            std::max(0, columns_ - 1));
+                            columns_ - 1);
   const int gy = std::clamp(static_cast<int>(mouse.pixelY / cellH), 0,
-                            std::max(0, rows_ - 1));
+                            rows_ - 1);
   mouse.pos.X = static_cast<SHORT>(gx);
   mouse.pos.Y = static_cast<SHORT>(gy);
 }

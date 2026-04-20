@@ -403,10 +403,8 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
       view.videoWindow->IsPictureInPicture();
   inputs.subtitleRenderError =
       view.videoWindow ? view.videoWindow->GetSubtitleRenderError() : "";
-  inputs.screenWidth =
-      view.screen ? std::max(20, view.screen->width()) : 20;
-  inputs.screenHeight =
-      view.screen ? std::max(10, view.screen->height()) : 10;
+  inputs.screenWidth = view.screen ? view.screen->width() : 0;
+  inputs.screenHeight = view.screen ? view.screen->height() : 0;
   inputs.windowWidth =
       view.videoWindow && view.videoWindow->IsOpen()
           ? view.videoWindow->GetWidth()
@@ -626,12 +624,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     int cellH = 1;
     view.videoWindow->GetPictureInPictureTextCellSize(cellW, cellH);
     if (gridCols > 0 && gridRows > 0 && winW > 0 && winH > 0) {
-      const int gridCellW = std::max(1, cellW);
-      const int gridCellH = std::max(1, cellH);
-      const int gridPixelWidth =
-          std::min(winW, gridCols * gridCellW);
-      const int gridPixelHeight =
-          std::min(winH, gridRows * gridCellH);
+      const int gridPixelWidth = std::min(winW, gridCols * cellW);
+      const int gridPixelHeight = std::min(winH, gridRows * cellH);
       const int pixelX = mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
       const int pixelY = mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
       if (pixelX >= 0 && pixelY >= 0 && pixelX < gridPixelWidth &&

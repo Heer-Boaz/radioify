@@ -10,34 +10,19 @@ AsciiArtLayout fitAsciiArtLayout(int srcWidth,
                                  double cellPixelWidth,
                                  double cellPixelHeight) {
   AsciiArtLayout out;
-  if (srcWidth <= 0 || srcHeight <= 0 || maxWidthChars <= 0 ||
-      maxHeightChars <= 0) {
-    return out;
-  }
-
-  const double cellW = std::max(1.0, cellPixelWidth);
-  const double cellH = std::max(1.0, cellPixelHeight);
-  const int clampedMaxW = std::max(1, maxWidthChars);
-  const int clampedMaxH = std::max(1, maxHeightChars);
-
   const double scaleW =
-      (static_cast<double>(cellW) * static_cast<double>(clampedMaxW)) /
+      (cellPixelWidth * static_cast<double>(maxWidthChars)) /
       static_cast<double>(srcWidth);
   const double scaleH =
-      (static_cast<double>(cellH) * static_cast<double>(clampedMaxH)) /
+      (cellPixelHeight * static_cast<double>(maxHeightChars)) /
       static_cast<double>(srcHeight);
   const double scale = std::min(scaleW, scaleH);
 
-  int fittedW = static_cast<int>(
+  out.width = static_cast<int>(
       std::lround(static_cast<double>(srcWidth) * scale /
-                  static_cast<double>(cellW)));
-  int fittedH = static_cast<int>(
+                  cellPixelWidth));
+  out.height = static_cast<int>(
       std::lround(static_cast<double>(srcHeight) * scale /
-                  static_cast<double>(cellH)));
-  fittedW = std::clamp(fittedW, 1, clampedMaxW);
-  fittedH = std::clamp(fittedH, 1, clampedMaxH);
-
-  out.width = fittedW;
-  out.height = fittedH;
+                  cellPixelHeight));
   return out;
 }

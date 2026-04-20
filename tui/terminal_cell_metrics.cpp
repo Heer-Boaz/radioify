@@ -144,7 +144,6 @@ TerminalCellPixelSize requestTerminalCellSize(HANDLE input, HANDLE output,
 TerminalCellPixelSize requestTerminalTextAreaSize(HANDLE input, HANDLE output,
                                                   int columns, int rows,
                                                   DWORD timeoutMs) {
-  if (columns <= 0 || rows <= 0) return {};
   if (!writeQuery(output, 14)) return {};
 
   int height = 0;
@@ -170,9 +169,9 @@ TerminalCellPixelSize queryTerminalCellPixelSize(HANDLE input, HANDLE output,
   }
 
   TerminalCellPixelSize size =
-      requestTerminalCellSize(input, output, timeoutMs);
+      requestTerminalTextAreaSize(input, output, columns, rows, timeoutMs);
   if (!validCellSize(size)) {
-    size = requestTerminalTextAreaSize(input, output, columns, rows, timeoutMs);
+    size = requestTerminalCellSize(input, output, timeoutMs);
   }
 
   if (haveInputMode) {

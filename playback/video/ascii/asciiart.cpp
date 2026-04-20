@@ -36,8 +36,8 @@
 
 namespace {
 constexpr uint32_t kBrailleBase = 0x2800;
-constexpr int kBrailleDotColumns = 2;
-constexpr int kBrailleDotRows = 4;
+constexpr int kBrailleDotColumns = kAsciiArtBrailleDotColumns;
+constexpr int kBrailleDotRows = kAsciiArtBrailleDotRows;
 
 #define RADIOIFY_ASCII_BOOL(name, value) constexpr bool name = value;
 #define RADIOIFY_ASCII_FLOAT(name, value) constexpr float name = value;
@@ -1086,29 +1086,35 @@ struct BrailleFastScratch {
   std::vector<uint8_t> continuityMasks;
   int prevLumLow = -1;
   int prevLumHigh = -1;
+  bool exactOutputSize = false;
 
-  void ensure(int w, int h, int maxArtWidthIn, int maxHeightIn) {
-    if (w <= 0 || h <= 0) return;
-    int maxOutW = std::max(1, maxArtWidthIn);
-    int maxOutH =
-        (maxHeightIn > 0) ? maxHeightIn : std::max(1, h / 4);
-    AsciiArtLayout fitted = fitAsciiArtLayout(
-        w, h, maxOutW, maxOutH, kBrailleDotColumns, kBrailleDotRows);
-    int newOutW = fitted.width;
-    int newOutH = fitted.height;
-    int newScaledW = newOutW * 2;
-    int newScaledH = newOutH * 4;
+  void ensure(int w, int h, int maxArtWidthIn, int maxHeightIn,
+              bool exactOutputSizeIn = false) {
+    int maxOutW = maxArtWidthIn;
+    int maxOutH = maxHeightIn;
+    int newOutW = maxOutW;
+    int newOutH = maxOutH;
+    if (!exactOutputSizeIn) {
+      AsciiArtLayout fitted = fitAsciiArtLayout(
+          w, h, maxOutW, maxOutH, kBrailleDotColumns, kBrailleDotRows);
+      newOutW = fitted.width;
+      newOutH = fitted.height;
+    }
+    int newScaledW = newOutW * kBrailleDotColumns;
+    int newScaledH = newOutH * kBrailleDotRows;
     int newPadStride = newScaledW + 2;
 
     bool same =
         (w == srcW && h == srcH && maxArtWidthIn == maxArtWidth &&
-         maxHeightIn == maxHeight && newOutW == outW && newOutH == outH);
+         maxHeightIn == maxHeight && newOutW == outW && newOutH == outH &&
+         exactOutputSizeIn == exactOutputSize);
     if (same) return;
 
     srcW = w;
     srcH = h;
     maxArtWidth = maxArtWidthIn;
     maxHeight = maxHeightIn;
+    exactOutputSize = exactOutputSizeIn;
     outW = newOutW;
     outH = newOutH;
     scaledW = newScaledW;
@@ -2090,12 +2096,13 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
                                     const ascii_debug::RenderOptions*
                                         debugOptions = nullptr,
                                     ascii_debug::RenderStats* debugStats =
-                                        nullptr) {
+                                        nullptr,
+                                    bool exactOutputSize = false) {
   out = AsciiArt{};
   if (!rgba || width <= 0 || height <= 0) return false;
 
-  int maxArtWidth = std::max(8, maxWidth);
-  scratch.ensure(width, height, maxArtWidth, maxHeight);
+  int maxArtWidth = maxWidth;
+  scratch.ensure(width, height, maxArtWidth, maxHeight, exactOutputSize);
   if (scratch.outW <= 0 || scratch.outH <= 0) return false;
   scratch.hasSourceBlueConfidence = false;
 
@@ -2221,14 +2228,15 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
                                int stride, int planeHeight, bool fullRange,
                                YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
                                int maxWidth, int maxHeight,
-                               AsciiArt& out, BrailleFastScratch& scratch) {
+                               AsciiArt& out, BrailleFastScratch& scratch,
+                               bool exactOutputSize = false) {
   out = AsciiArt{};
   if (!data || width <= 0 || height <= 0 || stride <= 0) return false;
 
   const int bitDepth = IsP010 ? 10 : 8;
 
-  int maxArtWidth = std::max(8, maxWidth);
-  scratch.ensure(width, height, maxArtWidth, maxHeight);
+  int maxArtWidth = maxWidth;
+  scratch.ensure(width, height, maxArtWidth, maxHeight, exactOutputSize);
   if (scratch.outW <= 0 || scratch.outH <= 0) return false;
   scratch.hasSourceBlueConfidence = true;
 
@@ -2354,13 +2362,18 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
 bool renderAsciiArtFromRgbaFast(const uint8_t* rgba, int width, int height,
                                 int maxWidth, int maxHeight, AsciiArt& out,
                                 bool assumeOpaque,
-                                BrailleFastScratch& scratch) {
+                                BrailleFastScratch& scratch,
+                                bool exactOutputSize = false) {
   if (assumeOpaque) {
     return renderAsciiArtFromRgbaFastImpl<true>(rgba, width, height, maxWidth,
-                                                maxHeight, out, scratch);
+                                                maxHeight, out, scratch,
+                                                nullptr, nullptr,
+                                                exactOutputSize);
   }
   return renderAsciiArtFromRgbaFastImpl<false>(rgba, width, height, maxWidth,
-                                               maxHeight, out, scratch);
+                                               maxHeight, out, scratch,
+                                               nullptr, nullptr,
+                                               exactOutputSize);
 }
 }  // namespace
 
@@ -2419,6 +2432,20 @@ bool renderAsciiArtFromRgba(const uint8_t* rgba, int width, int height,
                                     out, assumeOpaque, scratch);
 }
 
+bool renderAsciiArtFromRgbaExact(const uint8_t* rgba, int width, int height,
+                                 int outputWidth, int outputHeight,
+                                 AsciiArt& out, bool assumeOpaque) {
+  out = AsciiArt{};
+  if (!rgba || width <= 0 || height <= 0 ||
+      outputWidth <= 0 || outputHeight <= 0) {
+    return false;
+  }
+  static thread_local BrailleFastScratch scratch;
+  return renderAsciiArtFromRgbaFast(rgba, width, height, outputWidth,
+                                    outputHeight, out, assumeOpaque, scratch,
+                                    true);
+}
+
 bool renderAsciiArtFromRgbaDebug(const uint8_t* rgba, int width, int height,
                                  int maxWidth, int maxHeight, AsciiArt& out,
                                  const ascii_debug::RenderOptions& options,
@@ -2458,4 +2485,25 @@ bool renderAsciiArtFromYuv(const uint8_t* data, int width, int height,
                                           planeHeight, fullRange, yuvMatrix,
                                           yuvTransfer, maxWidth, maxHeight,
                                           out, scratch);
+}
+
+bool renderAsciiArtFromYuvExact(const uint8_t* data, int width, int height,
+                                int stride, int planeHeight, YuvFormat format,
+                                bool fullRange, YuvMatrix yuvMatrix,
+                                YuvTransfer yuvTransfer, int outputWidth,
+                                int outputHeight, AsciiArt& out) {
+  out = AsciiArt{};
+  if (!data || width <= 0 || height <= 0 || stride <= 0 ||
+      outputWidth <= 0 || outputHeight <= 0) {
+    return false;
+  }
+  static thread_local BrailleFastScratch scratch;
+  if (format == YuvFormat::P010) {
+    return renderAsciiArtFromYuvImpl<true>(
+        data, width, height, stride, planeHeight, fullRange, yuvMatrix,
+        yuvTransfer, outputWidth, outputHeight, out, scratch, true);
+  }
+  return renderAsciiArtFromYuvImpl<false>(
+      data, width, height, stride, planeHeight, fullRange, yuvMatrix,
+      yuvTransfer, outputWidth, outputHeight, out, scratch, true);
 }

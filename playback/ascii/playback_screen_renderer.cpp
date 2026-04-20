@@ -90,11 +90,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool frameChanged = inputs.frameChanged;
   bool frameAvailable = inputs.frameAvailable;
   bool localSeekRequested = inputs.localSeekRequested;
-  double cellPixelWidth = inputs.cellPixelWidth > 0.0 ? inputs.cellPixelWidth
-                                                      : screen.cellPixelWidth();
-  double cellPixelHeight = inputs.cellPixelHeight > 0.0
-                               ? inputs.cellPixelHeight
-                               : screen.cellPixelHeight();
+  double cellPixelWidth = inputs.cellPixelWidth;
+  double cellPixelHeight = inputs.cellPixelHeight;
   double pendingSeekTargetSec = inputs.pendingSeekTargetSec;
   auto& enableSubtitlesShared = *inputs.enableSubtitlesShared;
   auto& windowLocalSeekRequested = *inputs.windowLocalSeekRequested;
@@ -104,8 +101,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   const auto& warningSink = inputs.warningSink;
   const auto& timingSink = inputs.timingSink;
   screen.updateSize();
-  int width = std::max(20, screen.width());
-  int height = std::max(10, screen.height());
+  int width = screen.width();
+  int height = screen.height();
   if (!overlayVisibleNow) {
     overlayControlHover.store(-1, std::memory_order_relaxed);
   }
@@ -154,7 +151,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   }
   const int footerLines = 0;
   int artTop = headerLines;
-  int maxHeight = std::max(1, height - headerLines - footerLines);
+  int maxHeight = height - headerLines - footerLines;
 
   double currentSec = 0.0;
   double totalSec = -1.0;

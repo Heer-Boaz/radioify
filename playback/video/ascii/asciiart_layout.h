@@ -6,6 +6,9 @@ struct AsciiArtLayout {
   int height = 1;
 };
 
+constexpr int kAsciiArtBrailleDotColumns = 2;
+constexpr int kAsciiArtBrailleDotRows = 4;
+
 AsciiArtLayout fitAsciiArtLayout(int srcWidth,
                                  int srcHeight,
                                  int maxWidthChars,
