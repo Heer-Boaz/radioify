@@ -113,6 +113,11 @@ uint BrailleBitAt(uint col, uint row) {
                        : ((row == 3u) ? 7u : row + 3u);
 }
 
+uint BrailleBitFromDotIndex(uint index) {
+    return (index < 4u) ? ((index == 3u) ? 6u : index)
+                        : ((index == 7u) ? 7u : index - 1u);
+}
+
 bool MaskHasBit(uint mask, uint bit) {
     return ((mask >> bit) & 1u) != 0u;
 }
@@ -265,28 +270,31 @@ uint RefineNeighborContinuityMask(uint baseMask, uint leftMask, uint rightMask,
     return (baseScore - bestScore >= minGain) ? bestMask : baseMask;
 }
 
-float3 CellDisplayMean(AsciiCell cell, uint mask) {
-    float coverage = saturate(((float)countbits(mask) * kInkVisibleDotCoverage) *
-                              (1.0f / 8.0f));
-    return lerp(UnpackColor(cell.bg), UnpackColor(cell.fg), coverage);
-}
-
-void AccumulateDisplayMean(AsciiCell cell, uint mask, float weight,
-                           inout float3 sum, inout float sumWeight) {
-    if (cell.hasBg == 0u || weight <= 0.0f) {
+void AccumulateNeighborMeans(AsciiCell cell, uint mask, float weight,
+                             float bgAmount, inout float3 bgSum,
+                             inout float bgSumWeight, float fgAmount,
+                             inout float3 fgSum, inout float fgSumWeight) {
+    if (weight <= 0.0f) {
         return;
     }
-    sum += CellDisplayMean(cell, mask) * weight;
-    sumWeight += weight;
-}
-
-void AccumulateInkMean(AsciiCell cell, uint mask, float weight,
-                       inout float3 sum, inout float sumWeight) {
-    if (mask == 0u || weight <= 0.0f) {
+    bool useBg = bgAmount > 0.0f && cell.hasBg != 0u;
+    bool useFg = fgAmount > 0.0f && mask != 0u;
+    if (!useBg && !useFg) {
         return;
     }
-    sum += UnpackColor(cell.fg) * weight;
-    sumWeight += weight;
+
+    float3 fg = UnpackColor(cell.fg);
+    if (useBg) {
+        float coverage =
+            saturate(((float)countbits(mask) * kInkVisibleDotCoverage) *
+                     (1.0f / 8.0f));
+        bgSum += lerp(UnpackColor(cell.bg), fg, coverage) * weight;
+        bgSumWeight += weight;
+    }
+    if (useFg) {
+        fgSum += fg * weight;
+        fgSumWeight += weight;
+    }
 }
 
 float GetShadowSaturation(float y255) {
@@ -668,12 +676,13 @@ float DotSourceBlueConfidence(AsciiDotSample sample) {
     return (float)((sample.metrics >> 16) & 0xffu) * (1.0f / 255.0f);
 }
 
-AsciiDotSample DotSampleAtClamped(int x, int y) {
-    uint maxX = max(DotGridWidth(), 1u) - 1u;
-    uint maxY = max(DotGridHeight(), 1u) - 1u;
+AsciiDotSample DotSampleAtClamped(int x, int y, uint dotWCount,
+                                  uint dotHCount) {
+    uint maxX = max(dotWCount, 1u) - 1u;
+    uint maxY = max(dotHCount, 1u) - 1u;
     uint cx = (uint)clamp(x, 0, (int)maxX);
     uint cy = (uint)clamp(y, 0, (int)maxY);
-    return DotInputBuffer[DotSampleIndex(cx, cy)];
+    return DotInputBuffer[cy * dotWCount + cx];
 }
 
 [numthreads(8, 8, 1)]
@@ -700,7 +709,7 @@ void CSDotPrefilter(uint3 DTid : SV_DispatchThreadID) {
     outDot.metrics = PackDotMetrics(
         luma, 0.0f,
         GetSourceBlueConfidence(sample.blueSignal, sample.chromaSignal));
-    DotOutputBuffer[DotSampleIndex(DTid.x, DTid.y)] = outDot;
+    DotOutputBuffer[DTid.y * dotWCount + DTid.x] = outDot;
 }
 
 [numthreads(8, 8, 1)]
@@ -715,7 +724,8 @@ void CSDotEdge(uint3 DTid : SV_DispatchThreadID,
         int tileY = (int)(tileIndex / 10u);
         int srcX = (int)(Gid.x * 8u) + tileX - 1;
         int srcY = (int)(Gid.y * 8u) + tileY - 1;
-        gDotEdgeTileLuma[tileIndex] = DotLuma(DotSampleAtClamped(srcX, srcY));
+        gDotEdgeTileLuma[tileIndex] =
+            DotLuma(DotSampleAtClamped(srcX, srcY, dotWCount, dotHCount));
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -737,20 +747,19 @@ void CSDotEdge(uint3 DTid : SV_DispatchThreadID,
     float gy = (l20 + 2.0f * l21 + l22) - (l00 + 2.0f * l01 + l02);
     float edge = sqrt(gx * gx + gy * gy) * 0.25f;
 
-    AsciiDotSample outDot = DotInputBuffer[DotSampleIndex(DTid.x, DTid.y)];
+    AsciiDotSample outDot = DotInputBuffer[DTid.y * dotWCount + DTid.x];
     outDot.metrics = (outDot.metrics & 0xffff00ffu) | (PackByte255(edge) << 8);
-    DotOutputBuffer[DotSampleIndex(DTid.x, DTid.y)] = outDot;
+    DotOutputBuffer[DTid.y * dotWCount + DTid.x] = outDot;
 }
 
 struct DotInfo {
-    int idx;
     float luma;
     float edge;
     float3 color;
     float sourceBlueConfidence;
 };
 
-float MaskColorBoundarySoftAmount(uint mask, DotInfo dots[8], int bitMap[8]) {
+float MaskColorBoundarySoftAmount(uint mask, DotInfo dots[8]) {
     float3 sumOn = float3(0.0f, 0.0f, 0.0f);
     float3 sumOff = float3(0.0f, 0.0f, 0.0f);
     float onCount = 0.0f;
@@ -758,7 +767,7 @@ float MaskColorBoundarySoftAmount(uint mask, DotInfo dots[8], int bitMap[8]) {
 
     [unroll]
     for (int i = 0; i < 8; ++i) {
-        uint bit = (uint)bitMap[dots[i].idx];
+        uint bit = BrailleBitFromDotIndex((uint)i);
         if ((mask & (1u << bit)) != 0u) {
             sumOn += dots[i].color;
             onCount += 1.0f;
@@ -774,7 +783,7 @@ float MaskColorBoundarySoftAmount(uint mask, DotInfo dots[8], int bitMap[8]) {
     return ColorBoundarySoftAmount(sumOn / onCount, sumOff / offCount);
 }
 
-float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
+float EdgeMaskFitScore(uint mask, DotInfo dots[8]) {
     uint dotCount = countbits(mask & 0xffu);
     if (dotCount == 0u || dotCount == 8u) {
         return 3.402823e+38f;
@@ -787,7 +796,7 @@ float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
 
     [unroll]
     for (int i = 0; i < 8; ++i) {
-        uint bit = (uint)bitMap[dots[i].idx];
+        uint bit = BrailleBitFromDotIndex((uint)i);
         if ((mask & (1u << bit)) != 0u) {
             sumOn += dots[i].color;
             onCount += 1.0f;
@@ -816,7 +825,7 @@ float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
     float score = 0.0f;
     [unroll]
     for (int j = 0; j < 8; ++j) {
-        uint bit = (uint)bitMap[dots[j].idx];
+        uint bit = BrailleBitFromDotIndex((uint)j);
         bool on = ((mask & (1u << bit)) != 0u);
         float3 pred = on ? predOn : bg;
         float3 d = dots[j].color - pred;
@@ -841,15 +850,15 @@ float EdgeMaskFitScore(uint mask, DotInfo dots[8], int bitMap[8]) {
     return score;
 }
 
-uint FitEdgeMask(uint initialMask, DotInfo dots[8], int bitMap[8]) {
+uint FitEdgeMask(uint initialMask, DotInfo dots[8]) {
     initialMask &= 0xffu;
     uint bestMask = initialMask;
-    float baseScore = EdgeMaskFitScore(initialMask, dots, bitMap);
+    float baseScore = EdgeMaskFitScore(initialMask, dots);
     float bestScore = baseScore;
 
     [loop]
     for (uint candidate = 1u; candidate < 255u; ++candidate) {
-        float score = EdgeMaskFitScore(candidate, dots, bitMap);
+        float score = EdgeMaskFitScore(candidate, dots);
         if (score < bestScore) {
             bestScore = score;
             bestMask = candidate;
@@ -886,18 +895,19 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     uint dotBaseX = DTid.x * 2u;
     uint dotBaseY = DTid.y * 4u;
+    uint dotStride = DotGridWidth();
+    uint dotBaseIndex = dotBaseY * dotStride + dotBaseX;
 
     // 1. Gather prefiltered dot data
     for (int i = 0; i < 8; ++i) {
         uint ui = (uint)i;
         uint col = ui >> 2;
         uint row = ui & 3u;
-        AsciiDotSample sample = DotInputBuffer[DotSampleIndex(dotBaseX + col,
-                                                              dotBaseY + row)];
+        AsciiDotSample sample = DotInputBuffer[dotBaseIndex + row * dotStride +
+                                               col];
         float luma = DotLuma(sample);
         float edge = DotEdge(sample);
         
-        dots[i].idx = i;
         dots[i].luma = luma;
         dots[i].edge = edge;
         dots[i].color = UnpackColor(sample.color);
@@ -932,13 +942,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // independently to see if it differs significantly from the background. This preserves fine details
     // like single-pixel stars or thin lines that might otherwise be lost in noise reduction.
 
-    // Braille bit mapping:
-    // The standard Braille pattern is 2 columns x 4 rows.
-    // The bits are mapped as follows:
-    // Col 0: 0=(0,0), 1=(0,1), 2=(0,2), 6=(0,3)
-    // Col 1: 3=(1,0), 4=(1,1), 5=(1,2), 7=(1,3)
-    int bitMap[8] = {0, 1, 2, 6, 3, 4, 5, 7};
-
     uint2 history = HistoryBuffer[cellIndex];
     uint prevMask = history.x >> 24;
 
@@ -970,7 +973,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         
         // Decision: Is this sub-pixel a dot?
         // If the luma difference exceeds the threshold, it's considered a foreground dot.
-        uint bit = (uint)bitMap[dots[j].idx];
+        uint bit = BrailleBitFromDotIndex((uint)j);
         bool wasOn = ((prevMask >> bit) & 1) != 0;
         float onThreshold = threshold;
         float offThreshold = max(6.0f, threshold - hysteresis);
@@ -996,7 +999,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         uint ditherMask = 0;
         [unroll]
         for (int k = 0; k < 8; ++k) {
-            uint bit = (uint)bitMap[dots[k].idx];
+            uint bit = BrailleBitFromDotIndex((uint)k);
             if (coverageU > (float)kDitherThresholdByBit[bit]) {
                 ditherMask |= (1u << bit);
             }
@@ -1004,22 +1007,21 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         bitmask = ditherMask;
     }
 
-    float edgeFitSignalStrength = signalStrength;
-    if (!useDither) {
-        edgeFitSignalStrength = AttenuateSignalForColorBoundary(
-            signalStrength, MaskColorBoundarySoftAmount(bitmask, dots, bitMap));
-    }
-
     bool edgeMaskFitEligible =
         !useDither && cellRange >= (float)kEdgeMaskFitMinRange &&
-        edgeFitSignalStrength >= kEdgeMaskFitMinSignal;
+        signalStrength >= kEdgeMaskFitMinSignal;
     if (edgeMaskFitEligible) {
-        bitmask = FitEdgeMask(bitmask, dots, bitMap);
+        float edgeFitSignalStrength = AttenuateSignalForColorBoundary(
+            signalStrength, MaskColorBoundarySoftAmount(bitmask, dots));
+        edgeMaskFitEligible = edgeFitSignalStrength >= kEdgeMaskFitMinSignal;
+    }
+    if (edgeMaskFitEligible) {
+        bitmask = FitEdgeMask(bitmask, dots);
     }
 
     [unroll]
     for (int k2 = 0; k2 < 8; ++k2) {
-        uint bit = (uint)bitMap[dots[k2].idx];
+        uint bit = BrailleBitFromDotIndex((uint)k2);
         if ((bitmask & (1u << bit)) != 0u) {
             sumInk += dots[k2].color;
             sumInkBlueConfidence += dots[k2].sourceBlueConfidence;
@@ -1274,22 +1276,24 @@ void CSRefineContinuity(uint3 DTid : SV_DispatchThreadID) {
 
     int x = (int)DTid.x;
     int y = (int)DTid.y;
-    AsciiCell leftCell = RefineInputCellAt(x - 1, y);
-    AsciiCell rightCell = RefineInputCellAt(x + 1, y);
-    AsciiCell topCell = RefineInputCellAt(x, y - 1);
-    AsciiCell bottomCell = RefineInputCellAt(x, y + 1);
-    AsciiCell topLeftCell = RefineInputCellAt(x - 1, y - 1);
-    AsciiCell topRightCell = RefineInputCellAt(x + 1, y - 1);
-    AsciiCell bottomLeftCell = RefineInputCellAt(x - 1, y + 1);
-    AsciiCell bottomRightCell = RefineInputCellAt(x + 1, y + 1);
-    uint leftMask = ExtractBrailleMask(leftCell);
-    uint rightMask = ExtractBrailleMask(rightCell);
-    uint topMask = ExtractBrailleMask(topCell);
-    uint bottomMask = ExtractBrailleMask(bottomCell);
-    uint topLeftMask = ExtractBrailleMask(topLeftCell);
-    uint topRightMask = ExtractBrailleMask(topRightCell);
-    uint bottomLeftMask = ExtractBrailleMask(bottomLeftCell);
-    uint bottomRightMask = ExtractBrailleMask(bottomRightCell);
+    uint leftMask = 0u;
+    uint rightMask = 0u;
+    uint topMask = 0u;
+    uint bottomMask = 0u;
+    uint topLeftMask = 0u;
+    uint topRightMask = 0u;
+    uint bottomLeftMask = 0u;
+    uint bottomRightMask = 0u;
+    if (needsTopology) {
+        leftMask = RefineInputMaskAt(x - 1, y);
+        rightMask = RefineInputMaskAt(x + 1, y);
+        topMask = RefineInputMaskAt(x, y - 1);
+        bottomMask = RefineInputMaskAt(x, y + 1);
+        topLeftMask = RefineInputMaskAt(x - 1, y - 1);
+        topRightMask = RefineInputMaskAt(x + 1, y - 1);
+        bottomLeftMask = RefineInputMaskAt(x - 1, y + 1);
+        bottomRightMask = RefineInputMaskAt(x + 1, y + 1);
+    }
     uint refinedMask = baseMask;
     if (needsTopology) {
         refinedMask = RefineNeighborContinuityMask(
@@ -1301,10 +1305,7 @@ void CSRefineContinuity(uint3 DTid : SV_DispatchThreadID) {
     }
 
     dotCount = countbits(refinedMask);
-    if (cell.hasBg != 0u && dotCount > 0u && dotCount < 8u &&
-        (kNeighborColorAaStrength > 0.0f ||
-         kNeighborFgColorAaStrength > 0.0f) &&
-        contrast >= (float)kNeighborColorAaMinContrast) {
+    if (needsColorAa && dotCount > 0u && dotCount < 8u) {
         float3 curBg = UnpackColor(cell.bg);
         float3 curFg = UnpackColor(cell.fg);
 
@@ -1313,56 +1314,76 @@ void CSRefineContinuity(uint3 DTid : SV_DispatchThreadID) {
             saturate((contrast - (float)kNeighborColorAaMinContrast) / 48.0f);
         float bgAmount =
             kNeighborColorAaStrength * partialness * contrastAmount;
-        if (bgAmount > 0.0f) {
-            float3 sum = curBg * 4.0f;
-            float sumWeight = 4.0f;
-            AccumulateDisplayMean(leftCell, leftMask, 2.0f, sum, sumWeight);
-            AccumulateDisplayMean(rightCell, rightMask, 2.0f, sum, sumWeight);
-            AccumulateDisplayMean(topCell, topMask, 2.0f, sum, sumWeight);
-            AccumulateDisplayMean(bottomCell, bottomMask, 2.0f, sum, sumWeight);
-            AccumulateDisplayMean(topLeftCell, topLeftMask, 1.0f, sum,
-                                  sumWeight);
-            AccumulateDisplayMean(topRightCell, topRightMask, 1.0f, sum,
-                                  sumWeight);
-            AccumulateDisplayMean(bottomLeftCell, bottomLeftMask, 1.0f, sum,
-                                  sumWeight);
-            AccumulateDisplayMean(bottomRightCell, bottomRightMask, 1.0f, sum,
-                                  sumWeight);
-            curBg = lerp(curBg, sum / sumWeight, bgAmount);
-            cell.bg = PackColor(curBg);
-        }
-
         float fgAmount =
             kNeighborFgColorAaStrength * partialness * contrastAmount;
-        if (fgAmount > 0.0f) {
-            float3 sum = curFg * 6.0f;
-            float sumWeight = 6.0f;
-            AccumulateInkMean(leftCell, leftMask, 2.0f, sum, sumWeight);
-            AccumulateInkMean(rightCell, rightMask, 2.0f, sum, sumWeight);
-            AccumulateInkMean(topCell, topMask, 2.0f, sum, sumWeight);
-            AccumulateInkMean(bottomCell, bottomMask, 2.0f, sum, sumWeight);
-            AccumulateInkMean(topLeftCell, topLeftMask, 1.0f, sum, sumWeight);
-            AccumulateInkMean(topRightCell, topRightMask, 1.0f, sum,
-                              sumWeight);
-            AccumulateInkMean(bottomLeftCell, bottomLeftMask, 1.0f, sum,
-                              sumWeight);
-            AccumulateInkMean(bottomRightCell, bottomRightMask, 1.0f, sum,
-                              sumWeight);
-            float3 oldFg = curFg;
-            curFg = lerp(curFg, sum / sumWeight, fgAmount);
-
-            float bgY = GetLuma(curBg);
-            float fgY = GetLuma(curFg);
-            float oldFgY = GetLuma(oldFg);
-            float minDelta =
-                min(abs(oldFgY - bgY), (float)kNeighborColorAaMinContrast);
-            if (minDelta > 0.0f && abs(fgY - bgY) < minDelta) {
-                float targetY = clamp(bgY + ((oldFgY >= bgY) ? minDelta
-                                                             : -minDelta),
-                                      0.0f, 255.0f);
-                curFg = ScaleColorToLuma(curFg, max(fgY, 1.0f), targetY);
+        if (bgAmount > 0.0f || fgAmount > 0.0f) {
+            AsciiCell leftCell = RefineInputCellAt(x - 1, y);
+            AsciiCell rightCell = RefineInputCellAt(x + 1, y);
+            AsciiCell topCell = RefineInputCellAt(x, y - 1);
+            AsciiCell bottomCell = RefineInputCellAt(x, y + 1);
+            AsciiCell topLeftCell = RefineInputCellAt(x - 1, y - 1);
+            AsciiCell topRightCell = RefineInputCellAt(x + 1, y - 1);
+            AsciiCell bottomLeftCell = RefineInputCellAt(x - 1, y + 1);
+            AsciiCell bottomRightCell = RefineInputCellAt(x + 1, y + 1);
+            if (!needsTopology) {
+                leftMask = ExtractBrailleMask(leftCell);
+                rightMask = ExtractBrailleMask(rightCell);
+                topMask = ExtractBrailleMask(topCell);
+                bottomMask = ExtractBrailleMask(bottomCell);
+                topLeftMask = ExtractBrailleMask(topLeftCell);
+                topRightMask = ExtractBrailleMask(topRightCell);
+                bottomLeftMask = ExtractBrailleMask(bottomLeftCell);
+                bottomRightMask = ExtractBrailleMask(bottomRightCell);
             }
-            cell.fg = PackColor(curFg);
+
+            float3 bgSum = curBg * 4.0f;
+            float bgSumWeight = 4.0f;
+            float3 fgSum = curFg * 6.0f;
+            float fgSumWeight = 6.0f;
+            AccumulateNeighborMeans(leftCell, leftMask, 2.0f, bgAmount, bgSum,
+                                    bgSumWeight, fgAmount, fgSum, fgSumWeight);
+            AccumulateNeighborMeans(rightCell, rightMask, 2.0f, bgAmount, bgSum,
+                                    bgSumWeight, fgAmount, fgSum, fgSumWeight);
+            AccumulateNeighborMeans(topCell, topMask, 2.0f, bgAmount, bgSum,
+                                    bgSumWeight, fgAmount, fgSum, fgSumWeight);
+            AccumulateNeighborMeans(bottomCell, bottomMask, 2.0f, bgAmount,
+                                    bgSum, bgSumWeight, fgAmount, fgSum,
+                                    fgSumWeight);
+            AccumulateNeighborMeans(topLeftCell, topLeftMask, 1.0f, bgAmount,
+                                    bgSum, bgSumWeight, fgAmount, fgSum,
+                                    fgSumWeight);
+            AccumulateNeighborMeans(topRightCell, topRightMask, 1.0f, bgAmount,
+                                    bgSum, bgSumWeight, fgAmount, fgSum,
+                                    fgSumWeight);
+            AccumulateNeighborMeans(bottomLeftCell, bottomLeftMask, 1.0f,
+                                    bgAmount, bgSum, bgSumWeight, fgAmount,
+                                    fgSum, fgSumWeight);
+            AccumulateNeighborMeans(bottomRightCell, bottomRightMask, 1.0f,
+                                    bgAmount, bgSum, bgSumWeight, fgAmount,
+                                    fgSum, fgSumWeight);
+            if (bgAmount > 0.0f) {
+                curBg = lerp(curBg, bgSum / bgSumWeight, bgAmount);
+            }
+            if (fgAmount > 0.0f) {
+                float3 oldFg = curFg;
+                curFg = lerp(curFg, fgSum / fgSumWeight, fgAmount);
+
+                float bgY = GetLuma(curBg);
+                float fgY = GetLuma(curFg);
+                float oldFgY = GetLuma(oldFg);
+                float minDelta =
+                    min(abs(oldFgY - bgY), (float)kNeighborColorAaMinContrast);
+                if (minDelta > 0.0f && abs(fgY - bgY) < minDelta) {
+                    float targetY = clamp(bgY + ((oldFgY >= bgY) ? minDelta
+                                                                 : -minDelta),
+                                          0.0f, 255.0f);
+                    curFg = ScaleColorToLuma(curFg, max(fgY, 1.0f), targetY);
+                }
+                cell.fg = PackColor(curFg);
+            }
+            if (bgAmount > 0.0f) {
+                cell.bg = PackColor(curBg);
+            }
         }
     }
     OutputBuffer[cellIndex] = cell;
