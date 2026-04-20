@@ -383,6 +383,7 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
 
   if (ev.type == InputEvent::Type::Key) {
     InputCallbacks playbackCallbacks;
+    playbackCallbacks.onQuit = callbacks.onQuit;
     playbackCallbacks.onTogglePause = callbacks.onTogglePause;
     playbackCallbacks.onStopPlayback = callbacks.onStopPlayback;
     playbackCallbacks.onPlayPrevious = callbacks.onPlayPrevious;
@@ -413,6 +414,7 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
         };
 
     const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
+                                      kPlaybackShortcutContextGlobal |
                                       kPlaybackShortcutContextAudioMiniPlayer;
     handlePlaybackInput(ev, playbackCallbacks, shortcutContexts);
     return;

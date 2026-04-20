@@ -545,6 +545,7 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   keyEvent.type = InputEvent::Type::Key;
   keyEvent.key = key;
   const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
+                                    kPlaybackShortcutContextGlobal |
                                     kPlaybackShortcutContextPlaybackSession;
   const PlaybackInputResult playbackResult =
       handlePlaybackInput(keyEvent, cb, shortcutContexts);

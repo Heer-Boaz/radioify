@@ -593,6 +593,35 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
   return layout;
 }
 
+OverlayCellLayout layoutOverlayControlCells(
+    const std::vector<OverlayCellControlInput>& controls, int width) {
+  OverlayCellLayout layout;
+  layout.width = std::max(1, width);
+
+  int controlLineCount = 0;
+  std::vector<PendingOverlayCellControl> pending =
+      wrapOverlayControls(controls, layout.width, &controlLineCount);
+  layout.height = controlLineCount;
+  layout.progressBarX = -1;
+  layout.progressBarY = -1;
+  layout.progressBarWidth = 0;
+  layout.topY = pending.empty() ? -1 : 0;
+
+  layout.controls.reserve(pending.size());
+  for (const PendingOverlayCellControl& item : pending) {
+    OverlayCellControlLayoutItem placed;
+    placed.text = item.text;
+    placed.controlIndex = item.controlIndex;
+    placed.x = item.x;
+    placed.y = item.line;
+    placed.width = item.width;
+    placed.active = item.active;
+    placed.hovered = item.hovered;
+    layout.controls.push_back(std::move(placed));
+  }
+  return layout;
+}
+
 OverlayCellLayout layoutPlaybackOverlayCells(
     const PlaybackOverlayState& state, int width, int height,
     int hoverIndex) {

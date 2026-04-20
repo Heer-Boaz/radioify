@@ -483,8 +483,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     bool ctrl = (key.control & ctrlMask) != 0;
 
     if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
-      running = false;
       if (callbacks.onQuit) callbacks.onQuit();
+      else running = false;
       dirty = true;
       return;
     }
@@ -581,7 +581,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     }
 
     if ((playMode || decoderReady) &&
-        handlePlaybackInput(ev, callbacks, kPlaybackShortcutContextShared) !=
+        handlePlaybackInput(ev, callbacks,
+                            kPlaybackShortcutContextShared |
+                                kPlaybackShortcutContextGlobal) !=
             PlaybackInputResult::Ignored) {
       if (key.vk == 'O' || key.ch == 'o' || key.ch == 'O') {
         clearForwardHistory();
@@ -1001,6 +1003,7 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
           return PlaybackInputResult::Handled;
         case PlaybackShortcutAction::ExitPlaybackSession:
         case PlaybackShortcutAction::DismissMiniPlayer:
+        case PlaybackShortcutAction::CloseViewer:
           if (callbacks.onPlaybackContextShortcut) {
             callbacks.onPlaybackContextShortcut(*action);
           }

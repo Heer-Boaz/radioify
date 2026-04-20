@@ -228,7 +228,8 @@ struct ActionStripLayout {
 
 PlaybackInputResult handlePlaybackInput(
     const InputEvent& ev, const InputCallbacks& callbacks,
-    uint32_t shortcutContexts = kPlaybackShortcutContextShared);
+    uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
+                                kPlaybackShortcutContextShared);
 
 void handleInputEvent(
   const InputEvent& ev,

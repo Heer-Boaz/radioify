@@ -1738,10 +1738,10 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
         }
 
         if (uMsg == WM_KEYDOWN) {
-            InputEvent ev;
+            InputEvent ev{};
             ev.type = InputEvent::Type::Key;
             ev.key.vk = (WORD)wParam;
-            
+
             // Map VK to ASCII for common keys if possible
             if (wParam >= 'A' && wParam <= 'Z') ev.key.ch = (char)wParam;
             else if (wParam == VK_SPACE) ev.key.ch = ' ';

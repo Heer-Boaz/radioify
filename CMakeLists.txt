@@ -241,11 +241,18 @@ add_executable(ascii_shader_tests)
 target_sources(ascii_shader_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_ascii_shader_tests>
   $<TARGET_OBJECTS:radioify_ascii_cpu>
+  $<TARGET_OBJECTS:radioify_ascii_gpu>
 )
 radioify_link_repo_target(ascii_shader_tests)
 if (WIN32)
-  target_link_libraries(ascii_shader_tests PRIVATE ole32 windowscodecs)
+  target_link_libraries(ascii_shader_tests PRIVATE d3d10 d3d11 dxgi ole32 windowscodecs)
 endif()
+
+add_executable(shortcut_match_tests)
+target_sources(shortcut_match_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_shortcut_match_tests>
+)
+radioify_link_repo_target(shortcut_match_tests)
 
 if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL
@@ -651,6 +658,7 @@ if (WIN32)
 
   add_dependencies(radioify radioify_shader_blobs)
   add_dependencies(radioify_video radioify_shader_blobs)
+  add_dependencies(radioify_ascii_gpu radioify_shader_blobs)
   target_include_directories(radioify_project_options INTERFACE "${RADIOIFY_GENERATED_DIR}")
   target_sources(radioify PRIVATE ${RADIOIFY_SHADER_HEADERS})
 endif()

@@ -34,6 +34,7 @@ class AudioMiniPlayer {
   };
 
   struct Callbacks {
+    std::function<void()> onQuit;
     std::function<void()> onTogglePause;
     std::function<void()> onStopPlayback;
     std::function<void()> onPlayPrevious;

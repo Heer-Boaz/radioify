@@ -200,6 +200,8 @@ bool dispatchOverlayControl(OverlayControlId id,
                             const OverlayControlActions& actions);
 
 OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input);
+OverlayCellLayout layoutOverlayControlCells(
+    const std::vector<OverlayCellControlInput>& controls, int width);
 
 OverlayCellLayout layoutPlaybackOverlayCells(
     const PlaybackOverlayState& state, int width, int height, int hoverIndex);

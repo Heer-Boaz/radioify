@@ -47,6 +47,7 @@
 #include "audiofilter/radio1938/radio_buffer_io.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "playback/playback_control_command.h"
+#include "playback/playback_shortcuts.h"
 #include "playback/overlay/playback_overlay.h"
 #include "playback/system_media_transport_controls.h"
 #include "playback_transport_navigation.h"
@@ -418,55 +419,177 @@ static std::string buildTrackSelectionMeta(const BrowserState& browser) {
   return metaLine;
 }
 
-static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
-                         ConsoleScreen& screen, const Style& baseStyle,
-                         const Style& accentStyle, const Style& dimStyle) {
+static bool isImageViewerEntry(const FileEntry& entry) {
+  return !entry.isSectionHeader && !entry.isDir &&
+         isSupportedImageExt(entry.path);
+}
+
+static std::optional<int> findImageViewerEntryIndex(
+    const BrowserState& browser, const std::filesystem::path& currentFile) {
+  for (int i = 0; i < static_cast<int>(browser.entries.size()); ++i) {
+    const auto& entry = browser.entries[static_cast<size_t>(i)];
+    if (isImageViewerEntry(entry) && entry.path == currentFile) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+static std::optional<int> resolveAdjacentImageViewerEntryIndex(
+    const BrowserState& browser, const std::filesystem::path& currentFile,
+    int direction) {
+  if (direction == 0) return std::nullopt;
+  const std::optional<int> currentIndex =
+      findImageViewerEntryIndex(browser, currentFile);
+  if (!currentIndex) return std::nullopt;
+
+  const int count = static_cast<int>(browser.entries.size());
+  for (int idx = *currentIndex + direction; idx >= 0 && idx < count;
+       idx += direction) {
+    const auto& entry = browser.entries[static_cast<size_t>(idx)];
+    if (isImageViewerEntry(entry)) {
+      return idx;
+    }
+  }
+  return std::nullopt;
+}
+
+static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& file,
+                         ConsoleInput& input, ConsoleScreen& screen,
+                         const Style& baseStyle, const Style& accentStyle,
+                         const Style& dimStyle,
+                         bool* quitAppRequested = nullptr) {
   AsciiArt art;
   std::string error;
+  std::filesystem::path currentFile = file;
+  int currentIndex =
+      findImageViewerEntryIndex(browser, currentFile).value_or(-1);
+  int hoverIndex = -1;
   bool ok = false;
+  std::vector<playback_overlay::OverlayControlSpec> controls;
+  playback_overlay::OverlayCellLayout controlLayout;
+
+  auto syncBrowserSelection = [&]() {
+    if (currentIndex >= 0 &&
+        currentIndex < static_cast<int>(browser.entries.size())) {
+      browser.selected = currentIndex;
+    }
+  };
+
+  auto makeTitle = [&]() {
+    return std::string("Preview: ") + toUtf8String(currentFile.filename());
+  };
+
+  auto navigateImage = [&](int direction) -> bool {
+    const std::optional<int> nextIndex =
+        resolveAdjacentImageViewerEntryIndex(browser, currentFile, direction);
+    if (!nextIndex) return false;
+    currentIndex = *nextIndex;
+    currentFile = browser.entries[static_cast<size_t>(*nextIndex)].path;
+    browser.selected = *nextIndex;
+    return true;
+  };
+
+  auto rebuildOverlay = [&]() {
+    const int width = std::max(1, screen.width());
+    const std::string title = makeTitle();
+
+    playback_overlay::PlaybackOverlayInputs overlayInputs;
+    overlayInputs.windowTitle = title;
+    overlayInputs.canPlayPrevious =
+        resolveAdjacentImageViewerEntryIndex(browser, currentFile, -1)
+            .has_value();
+    overlayInputs.canPlayNext =
+        resolveAdjacentImageViewerEntryIndex(browser, currentFile, 1)
+            .has_value();
+    overlayInputs.overlayVisible = true;
+
+    const playback_overlay::PlaybackOverlayState overlayState =
+        playback_overlay::buildPlaybackOverlayState(overlayInputs);
+    playback_overlay::OverlayControlSpecOptions controlOptions;
+    controlOptions.includeRadio = false;
+    controlOptions.includeAudioTrack = false;
+    controlOptions.includeSubtitles = false;
+    controlOptions.includePictureInPicture = false;
+    const int localHoverIndex = hoverIndex >= 0 ? hoverIndex : -1;
+    controls = playback_overlay::buildOverlayControlSpecs(
+        overlayState, localHoverIndex, controlOptions);
+    controlLayout = playback_overlay::layoutOverlayControlCells(
+        playback_overlay::buildOverlayCellControlInputs(controls,
+                                                        localHoverIndex),
+        width);
+  };
 
   auto renderFrame = [&]() {
-    int width = std::max(20, screen.width());
-    int height = std::max(10, screen.height());
-    const int headerLines = 2;
-    const int footerLines = 1;
-    int artTop = headerLines;
-    int maxHeight = std::max(1, height - headerLines - footerLines);
+    const int width = std::max(1, screen.width());
+    const int height = std::max(1, screen.height());
+    const std::string title = makeTitle();
+    rebuildOverlay();
+
+    const std::vector<std::string> titleLines = wrapLine(title, width);
+    const int titleBottom = std::min(height, static_cast<int>(titleLines.size()));
+    const int controlTop = std::max(titleBottom, height - controlLayout.height);
+    const int artTop = std::clamp(titleBottom, 0, height);
+    const int artBottom = std::clamp(controlTop, artTop, height);
+    const int maxHeight = std::max(0, artBottom - artTop);
 
     error.clear();
-    ok = renderAsciiArt(file, width, maxHeight, art, &error);
-
-    screen.clear(baseStyle);
-    std::string title = "Preview: " + toUtf8String(file.filename());
-    screen.writeText(0, 0, fitLine(title, width), accentStyle);
-    screen.writeText(0, 1, fitLine("Press any key to return", width), dimStyle);
-
-    if (!ok) {
-      screen.writeText(0, artTop, fitLine("Failed to open image.", width),
-                       dimStyle);
-      if (!error.empty() && artTop + 1 < height) {
-        screen.writeText(0, artTop + 1, fitLine(error, width), dimStyle);
-      }
-      screen.draw();
-      return;
+    ok = true;
+    if (maxHeight > 0) {
+      ok = renderAsciiArt(currentFile, width, maxHeight, art, &error);
     }
 
-    int artWidth = std::min(art.width, width);
-    int artHeight = std::min(art.height, maxHeight);
-    int artX = std::max(0, (width - artWidth) / 2);
-
-    for (int y = 0; y < artHeight; ++y) {
-      for (int x = 0; x < artWidth; ++x) {
-        const auto& cell = art.cells[static_cast<size_t>(y * art.width + x)];
-        Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
-        screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
+    screen.clear(baseStyle);
+    if (ok && maxHeight > 0) {
+      const int artWidth = std::min(art.width, width);
+      const int artHeight = std::min(art.height, maxHeight);
+      const int artX = std::max(0, (width - artWidth) / 2);
+      for (int y = 0; y < artHeight; ++y) {
+        for (int x = 0; x < artWidth; ++x) {
+          const auto& cell =
+              art.cells[static_cast<size_t>(y * art.width + x)];
+          Style cellStyle{cell.fg, cell.hasBg ? cell.bg : baseStyle.bg};
+          screen.writeChar(artX + x, artTop + y, cell.ch, cellStyle);
+        }
       }
+    } else if (!error.empty()) {
+      screen.writeText(0, artTop, fitLine(error, width), dimStyle);
+    }
+
+    for (size_t i = 0; i < titleLines.size(); ++i) {
+      const int y = static_cast<int>(i);
+      if (y < 0 || y >= height) {
+        continue;
+      }
+      screen.writeText(0, y, fitLine(titleLines[i], width), accentStyle);
+    }
+    for (const auto& item : controlLayout.controls) {
+      const int y = controlTop + item.y;
+      if (y < 0 || y >= height || item.x >= width) continue;
+      Style style = item.active ? accentStyle : dimStyle;
+      if (item.hovered) {
+        style = Style{style.bg, style.fg};
+      }
+      screen.writeText(item.x, y, fitLine(item.text, width - item.x),
+                       style);
     }
     screen.draw();
   };
 
+  auto clickOverlayControl = [&](int controlIndex) -> bool {
+    if (controlIndex < 0 || controlIndex >= static_cast<int>(controls.size())) {
+      return false;
+    }
+    playback_overlay::OverlayControlActions actions;
+    actions.previous = [&]() { return navigateImage(-1); };
+    actions.next = [&]() { return navigateImage(1); };
+    return playback_overlay::dispatchOverlayControl(
+        controls[static_cast<size_t>(controlIndex)].id, actions);
+  };
+
   screen.updateSize();
   input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
+  syncBrowserSelection();
   renderFrame();
 
   InputEvent ev{};
@@ -484,14 +607,69 @@ static bool showAsciiArt(const std::filesystem::path& file, ConsoleInput& input,
                                FROM_LEFT_2ND_BUTTON_PRESSED |
                                FROM_LEFT_3RD_BUTTON_PRESSED |
                                FROM_LEFT_4TH_BUTTON_PRESSED;
-        bool backPressed = (mouse.buttonState & backMask) != 0;
-        if (backPressed) {
+        if ((mouse.buttonState & backMask) != 0) {
           return ok;
+        }
+
+        const int width = std::max(1, screen.width());
+        const int height = std::max(1, screen.height());
+        const std::string title = makeTitle();
+        const int titleBottom =
+            std::min(height, static_cast<int>(wrapLine(title, width).size()));
+        const int controlTop = std::max(titleBottom, height - controlLayout.height);
+        const int localControlY = mouse.pos.Y - controlTop;
+        const int hitControl =
+            (localControlY >= 0 && localControlY < controlLayout.height)
+                ? playback_overlay::overlayCellControlAt(
+                      controlLayout, mouse.pos.X, localControlY)
+                : -1;
+        if (mouse.eventFlags == MOUSE_MOVED) {
+          if (hoverIndex != hitControl) {
+            hoverIndex = hitControl;
+            renderFrame();
+          }
+          continue;
+        }
+
+        if ((mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 &&
+            mouse.eventFlags == 0) {
+          if (clickOverlayControl(hitControl)) {
+            renderFrame();
+            continue;
+          }
         }
         continue;
       }
       if (ev.type == InputEvent::Type::Key) {
-        return ok;
+        if (auto shortcut = resolvePlaybackShortcutAction(
+                ev.key, kPlaybackShortcutContextGlobal |
+                            kPlaybackShortcutContextShared |
+                            kPlaybackShortcutContextImageViewer)) {
+          switch (*shortcut) {
+            case PlaybackShortcutAction::Quit:
+              if (quitAppRequested) {
+                *quitAppRequested = true;
+              }
+              return ok;
+            case PlaybackShortcutAction::CloseViewer:
+              return ok;
+            case PlaybackShortcutAction::Previous:
+              if (navigateImage(-1)) {
+                renderFrame();
+              }
+              continue;
+            case PlaybackShortcutAction::Next:
+              if (navigateImage(1)) {
+                renderFrame();
+              }
+              continue;
+            case PlaybackShortcutAction::SeekBackward:
+            case PlaybackShortcutAction::SeekForward:
+              continue;
+            default:
+              break;
+          }
+        }
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -829,8 +1007,13 @@ int runTui(Options o) {
         return tryStartAudioFile(target.file, target.trackIndex);
       }
       if (isSupportedImageExt(target.file)) {
-        showAsciiArt(target.file, input, screen, kStyleNormal, kStyleAccent,
-                     kStyleDim);
+        bool quitAppRequested = false;
+        showAsciiArt(browser, target.file, input, screen, kStyleNormal,
+                     kStyleAccent, kStyleDim, &quitAppRequested);
+        if (quitAppRequested) {
+          running = false;
+          return true;
+        }
         markDirty();
         return true;
       }
@@ -1143,6 +1326,7 @@ int runTui(Options o) {
   };
 
   InputCallbacks callbacks;
+  callbacks.onQuit = [&]() { running = false; };
   callbacks.onRefreshBrowser = [&](BrowserState& nextBrowser,
                                    const std::string& initialName) {
     refreshBrowser(nextBrowser, initialName);
@@ -1316,6 +1500,9 @@ int runTui(Options o) {
     audioMiniPlayer.render(audioMiniStyles, buildAudioMiniContext());
   };
   AudioMiniPlayer::Callbacks audioMiniCallbacks;
+  audioMiniCallbacks.onQuit = [&]() {
+    if (callbacks.onQuit) callbacks.onQuit();
+  };
   audioMiniCallbacks.onTogglePause = [&]() {
     if (callbacks.onTogglePause) callbacks.onTogglePause();
   };
@@ -1462,7 +1649,7 @@ int runTui(Options o) {
       }
     }
     cmds.push_back({"Quit", "Q", true, [&]() {
-                      running = false;
+                      if (callbacks.onQuit) callbacks.onQuit();
                     }});
     return cmds;
   };
