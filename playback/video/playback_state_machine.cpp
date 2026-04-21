@@ -1,0 +1,180 @@
+#include "playback_state_machine.h"
+
+namespace playback_state_machine {
+namespace {
+
+StateProjection makeProjection(PlayerState playerState, SessionState session,
+                               TransportState transport,
+                               BufferingState buffering) {
+  StateProjection projection;
+  projection.playerState = playerState;
+  projection.session = session;
+  projection.transport = transport;
+  projection.buffering = buffering;
+
+  projection.effects.holdAudioOutput =
+      session == SessionState::Opening ||
+      buffering == BufferingState::Prefill ||
+      buffering == BufferingState::Priming ||
+      transport == TransportState::Seeking;
+  projection.effects.pauseMainClock =
+      session != SessionState::Started ||
+      buffering == BufferingState::Prefill ||
+      transport == TransportState::Paused;
+  projection.effects.mayPresentVideo =
+      transport == TransportState::Seeking ||
+      (transport == TransportState::Playing &&
+       buffering != BufferingState::Empty &&
+       buffering != BufferingState::Prefill);
+  projection.effects.uiBuffering =
+      session == SessionState::Opening ||
+      buffering == BufferingState::Prefill ||
+      buffering == BufferingState::Priming ||
+      transport == TransportState::Seeking;
+
+  return projection;
+}
+
+}  // namespace
+
+size_t requiredAudioPrefillFrames(uint32_t sampleRate) {
+  uint32_t effectiveSampleRate = sampleRate > 0 ? sampleRate : 48000;
+  return static_cast<size_t>(effectiveSampleRate / 3);
+}
+
+bool isPrefillReady(const Snapshot& snapshot, size_t videoPrefillFrames) {
+  bool videoReady =
+      snapshot.videoQueueDepth >= videoPrefillFrames || snapshot.decodeEnded;
+  bool audioHasDecoded =
+      snapshot.audioBufferedFrames >=
+          requiredAudioPrefillFrames(snapshot.audioSampleRate) &&
+      snapshot.audioSyncPointReady;
+  bool audioReady =
+      !snapshot.audioStartedOk || snapshot.audioDecodeEnded || audioHasDecoded;
+  return videoReady && audioReady;
+}
+
+StateProjection project(PlayerState state) {
+  switch (state) {
+    case PlayerState::Idle:
+      return makeProjection(state, SessionState::Stopped,
+                            TransportState::Stopped, BufferingState::Empty);
+    case PlayerState::Opening:
+      return makeProjection(state, SessionState::Opening,
+                            TransportState::Stopped, BufferingState::Empty);
+    case PlayerState::Prefill:
+      return makeProjection(state, SessionState::Started,
+                            TransportState::Playing, BufferingState::Prefill);
+    case PlayerState::Priming:
+      return makeProjection(state, SessionState::Started,
+                            TransportState::Playing, BufferingState::Priming);
+    case PlayerState::Playing:
+      return makeProjection(state, SessionState::Started,
+                            TransportState::Playing, BufferingState::Ready);
+    case PlayerState::Paused:
+      return makeProjection(state, SessionState::Started,
+                            TransportState::Paused, BufferingState::Ready);
+    case PlayerState::Seeking:
+      return makeProjection(state, SessionState::Started,
+                            TransportState::Seeking, BufferingState::Prefill);
+    case PlayerState::Draining:
+      return makeProjection(state, SessionState::Started,
+                            TransportState::Playing, BufferingState::Draining);
+    case PlayerState::Ended:
+      return makeProjection(state, SessionState::Ended, TransportState::Stopped,
+                            BufferingState::Empty);
+    case PlayerState::Error:
+      return makeProjection(state, SessionState::Error, TransportState::Stopped,
+                            BufferingState::Empty);
+    case PlayerState::Closing:
+      return makeProjection(state, SessionState::Stopping,
+                            TransportState::Stopped, BufferingState::Empty);
+  }
+
+  return makeProjection(PlayerState::Idle, SessionState::Stopped,
+                        TransportState::Stopped, BufferingState::Empty);
+}
+
+StateEffects stateEffects(PlayerState state) {
+  return project(state).effects;
+}
+
+bool isActivePlaybackState(PlayerState state) {
+  StateProjection projection = project(state);
+  return projection.session == SessionState::Started &&
+         projection.transport == TransportState::Playing;
+}
+
+bool isBufferingForUi(PlayerState state) {
+  return project(state).effects.uiBuffering;
+}
+
+bool mayPresentVideo(PlayerState state) {
+  return project(state).effects.mayPresentVideo;
+}
+
+PlayerState resolveSteadyState(Snapshot snapshot, size_t videoPrefillFrames) {
+  while (true) {
+    PlayerState nextState = snapshot.currentState;
+
+    if (snapshot.currentState == PlayerState::Opening && snapshot.initDone) {
+      nextState = snapshot.initOk
+                      ? (snapshot.audioPaused ? PlayerState::Paused
+                                              : PlayerState::Prefill)
+                      : PlayerState::Error;
+    } else if (snapshot.currentState == PlayerState::Seeking &&
+               snapshot.seekInFlightSerial == 0) {
+      if (snapshot.seekFailed) {
+        nextState =
+            snapshot.audioPaused ? PlayerState::Paused : PlayerState::Prefill;
+      } else if (snapshot.audioPaused &&
+                 snapshot.pendingSeekSerial == snapshot.currentSerial &&
+                 !(snapshot.decodeEnded && snapshot.videoQueueEmpty)) {
+        nextState = PlayerState::Seeking;
+      } else {
+        nextState =
+            snapshot.audioPaused ? PlayerState::Paused : PlayerState::Prefill;
+      }
+    } else if (isActivePlaybackState(snapshot.currentState) &&
+               snapshot.audioPaused) {
+      nextState = PlayerState::Paused;
+    } else if (snapshot.currentState == PlayerState::Paused &&
+               !snapshot.audioPaused) {
+      nextState = snapshot.lastPresentedSerial == snapshot.currentSerial
+                      ? PlayerState::Playing
+                      : PlayerState::Prefill;
+    } else if (snapshot.currentState == PlayerState::Prefill &&
+               !snapshot.audioPaused &&
+               isPrefillReady(snapshot, videoPrefillFrames)) {
+      nextState = PlayerState::Priming;
+    } else if (isActivePlaybackState(snapshot.currentState)) {
+      bool audioActive = snapshot.audioStartedOk && !snapshot.audioFinished;
+      bool ended = snapshot.decodeEnded && snapshot.videoQueueEmpty &&
+                   (!audioActive || snapshot.audioFinished);
+      if (ended) {
+        nextState = PlayerState::Ended;
+      } else if (snapshot.demuxEnded &&
+                 snapshot.currentState == PlayerState::Playing &&
+                 snapshot.videoQueueEmpty) {
+        nextState = PlayerState::Draining;
+      }
+    }
+
+    if (nextState == snapshot.currentState) {
+      return nextState;
+    }
+    snapshot.currentState = nextState;
+  }
+}
+
+Transition resolveTransition(Snapshot snapshot, size_t videoPrefillFrames) {
+  Transition transition;
+  transition.nextState = resolveSteadyState(snapshot, videoPrefillFrames);
+  transition.projection = project(transition.nextState);
+  transition.clearSeekFailure = snapshot.currentState == PlayerState::Seeking &&
+                                transition.nextState != PlayerState::Seeking &&
+                                snapshot.seekInFlightSerial == 0;
+  return transition;
+}
+
+}  // namespace playback_state_machine

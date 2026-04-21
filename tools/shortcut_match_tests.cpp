@@ -3,7 +3,7 @@
 #include "playback/overlay/playback_overlay.h"
 #include "playback/video/audio_clock_reacquire.h"
 #include "playback/video/playback_sync.h"
-#include "playback/video/playback_state_policy.h"
+#include "playback/video/playback_state_machine.h"
 #include "clock.h"
 
 #include <iostream>
@@ -94,7 +94,7 @@ int main() {
   ok &= expect(playback_frame_output::centerContentTop(2, 30, 40) == 2,
                "centerContentTop must not shift oversized content");
 
-  playback_state_policy::Snapshot pausedSeekBeforeFrame{};
+  playback_state_machine::Snapshot pausedSeekBeforeFrame{};
   pausedSeekBeforeFrame.currentState = PlayerState::Seeking;
   pausedSeekBeforeFrame.audioPaused = true;
   pausedSeekBeforeFrame.currentSerial = 2;
@@ -102,40 +102,67 @@ int main() {
   pausedSeekBeforeFrame.pendingSeekSerial = 2;
   pausedSeekBeforeFrame.seekInFlightSerial = 0;
   ok &= expect(
-      playback_state_policy::resolveSteadyState(pausedSeekBeforeFrame, 1) ==
+      playback_state_machine::resolveSteadyState(pausedSeekBeforeFrame, 1) ==
           PlayerState::Seeking,
       "Paused seek must remain Seeking while a preview frame is pending");
 
-  playback_state_policy::Snapshot pausedSeekAfterFrame = pausedSeekBeforeFrame;
+  playback_state_machine::Snapshot pausedSeekAfterFrame = pausedSeekBeforeFrame;
   pausedSeekAfterFrame.lastPresentedSerial = 2;
   pausedSeekAfterFrame.pendingSeekSerial = 0;
   ok &= expect(
-      playback_state_policy::resolveSteadyState(pausedSeekAfterFrame, 1) ==
+      playback_state_machine::resolveSteadyState(pausedSeekAfterFrame, 1) ==
           PlayerState::Paused,
       "Paused seek must settle back to Paused after the preview frame is shown");
 
-  playback_state_policy::Snapshot failedPausedSeek = pausedSeekBeforeFrame;
+  playback_state_machine::Snapshot failedPausedSeek = pausedSeekBeforeFrame;
   failedPausedSeek.seekFailed = true;
   failedPausedSeek.pendingSeekSerial = 0;
   ok &= expect(
-      playback_state_policy::resolveSteadyState(failedPausedSeek, 1) ==
+      playback_state_machine::resolveSteadyState(failedPausedSeek, 1) ==
           PlayerState::Paused,
       "Failed paused seek must fall back to Paused");
 
-  playback_state_policy::Snapshot playingSeek = pausedSeekBeforeFrame;
+  playback_state_machine::Snapshot playingSeek = pausedSeekBeforeFrame;
   playingSeek.audioPaused = false;
   ok &= expect(
-      playback_state_policy::resolveSteadyState(playingSeek, 1) ==
+      playback_state_machine::resolveSteadyState(playingSeek, 1) ==
           PlayerState::Prefill,
       "Active seeks must continue into Prefill");
-  ok &= expect(playback_state_policy::shouldHoldAudioOutput(PlayerState::Seeking),
+  ok &= expect(playback_state_machine::stateEffects(PlayerState::Seeking)
+                   .holdAudioOutput,
                "Seeking must hold audio until clocks are reacquired");
-  ok &= expect(!playback_state_policy::shouldHoldAudioOutput(PlayerState::Playing),
+  ok &= expect(!playback_state_machine::stateEffects(PlayerState::Playing)
+                    .holdAudioOutput,
                "Playing must release audio output hold");
-  ok &= expect(playback_state_policy::shouldPauseMainClock(PlayerState::Paused),
+  ok &= expect(playback_state_machine::stateEffects(PlayerState::Paused)
+                   .pauseMainClock,
                "Paused state must pause the main clock");
-  ok &= expect(!playback_state_policy::shouldPauseMainClock(PlayerState::Playing),
+  ok &= expect(!playback_state_machine::stateEffects(PlayerState::Playing)
+                    .pauseMainClock,
                "Playing state must run the main clock");
+  playback_state_machine::StateProjection playingProjection =
+      playback_state_machine::project(PlayerState::Playing);
+  ok &= expect(
+      playingProjection.session == playback_state_machine::SessionState::Started &&
+          playingProjection.transport ==
+              playback_state_machine::TransportState::Playing &&
+          playingProjection.buffering ==
+              playback_state_machine::BufferingState::Ready,
+      "Playing must project to started/playing/ready");
+  ok &= expect(playingProjection.effects.mayPresentVideo,
+               "Ready playback must allow video presentation");
+  playback_state_machine::StateProjection prefillProjection =
+      playback_state_machine::project(PlayerState::Prefill);
+  ok &= expect(prefillProjection.effects.holdAudioOutput &&
+                   prefillProjection.effects.pauseMainClock &&
+                   !prefillProjection.effects.mayPresentVideo,
+               "Prefill must hold outputs until both streams are ready");
+  playback_state_machine::Transition settledPausedSeek =
+      playback_state_machine::resolveTransition(pausedSeekAfterFrame, 1);
+  ok &= expect(settledPausedSeek.nextState == PlayerState::Paused &&
+                   settledPausedSeek.clearSeekFailure,
+               "Leaving Seeking after seek completion must clear seek failure "
+               "state centrally");
 
   playback_sync::LoopState loopState{};
   loopState.frameTimerUs = 1000;

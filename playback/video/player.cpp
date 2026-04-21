@@ -59,7 +59,7 @@ extern "C" {
 #include "gpu_shared.h"
 #include "playback_main_clock.h"
 #include "playback_serial_control.h"
-#include "playback_state_policy.h"
+#include "playback_state_machine.h"
 #include "playback_sync.h"
 #include "playback_timeline.h"
 #include "queues.h"
@@ -1690,9 +1690,10 @@ struct Player::Impl {
     state.store(next, std::memory_order_relaxed);
     appendTimingFmt("state_change from=%s to=%s",
                     playerStateName(prev), playerStateName(next));
-    audioSetHold(playback_state_policy::shouldHoldAudioOutput(next));
-    mainClock.changePause(playback_state_policy::shouldPauseMainClock(next),
-                          nowUs());
+    playback_state_machine::StateEffects effects =
+        playback_state_machine::stateEffects(next);
+    audioSetHold(effects.holdAudioOutput);
+    mainClock.changePause(effects.pauseMainClock, nowUs());
   }
 
   void clearCurrentFrame() {
@@ -1715,8 +1716,8 @@ struct Player::Impl {
     return mainClock.sample(request);
   }
 
-  playback_state_policy::Snapshot statePolicySnapshot(bool audioPaused) const {
-    playback_state_policy::Snapshot snapshot;
+  playback_state_machine::Snapshot stateSnapshot(bool audioPaused) const {
+    playback_state_machine::Snapshot snapshot;
     snapshot.currentState = state.load(std::memory_order_relaxed);
     snapshot.initDone = initDone.load(std::memory_order_relaxed);
     snapshot.initOk = initOk.load(std::memory_order_relaxed);
@@ -2025,15 +2026,15 @@ struct Player::Impl {
 
       const bool audioPaused =
           audioStartOk.load() ? audioIsPaused() : pauseRequested.load();
-      playback_state_policy::Snapshot snapshot = statePolicySnapshot(audioPaused);
-      PlayerState resolvedState = playback_state_policy::resolveSteadyState(
-          snapshot, kVideoPrefillFrames);
-      if (resolvedState != snapshot.currentState) {
-        if (snapshot.currentState == PlayerState::Seeking &&
-            snapshot.seekInFlightSerial == 0) {
+      playback_state_machine::Snapshot snapshot = stateSnapshot(audioPaused);
+      playback_state_machine::Transition transition =
+          playback_state_machine::resolveTransition(snapshot,
+                                                    kVideoPrefillFrames);
+      if (transition.nextState != snapshot.currentState) {
+        if (transition.clearSeekFailure) {
           serialControl.clearSeekFailure();
         }
-        setState(resolvedState);
+        setState(transition.nextState);
       }
     }
     setState(PlayerState::Closing);
@@ -2955,8 +2956,11 @@ struct Player::Impl {
       playback_sync::syncLoopSerial(
           syncState, static_cast<int>(serial),
           fallbackFrameDurationUs.load(std::memory_order_relaxed), nowUs());
+      playback_state_machine::StateProjection stateProjection =
+          playback_state_machine::project(st);
 
-      if (st == PlayerState::Seeking) {
+      if (stateProjection.transport ==
+          playback_state_machine::TransportState::Seeking) {
         // Seeking is a transient state. While paused, it may present exactly
         // the pending seek frame; active playback must return through Prefill.
         QueuedFrame front{};
@@ -2986,8 +2990,7 @@ struct Player::Impl {
         }
       }
 
-      if (st != PlayerState::Playing && st != PlayerState::Draining &&
-          st != PlayerState::Priming && st != PlayerState::Seeking) {
+      if (!stateProjection.effects.mayPresentVideo) {
         mainClock.changePause(true, nowUs());
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         continue;
@@ -3075,7 +3078,9 @@ struct Player::Impl {
         logVideo("sync_lost", &prepared.frame, masterUs, master.source,
                  prepared.frame.ptsUs - masterUs, plan.delayUs);
       }
-      if (st == PlayerState::Priming || plan.syncLost) {
+      if (stateProjection.buffering ==
+              playback_state_machine::BufferingState::Priming ||
+          plan.syncLost) {
         if (plan.syncLost) {
           logVideo("sync_lost_freerun", &prepared.frame, masterUs, master.source,
                    prepared.frame.ptsUs - masterUs, plan.delayUs);
@@ -3363,9 +3368,7 @@ bool Player::isSeeking() const {
 
 bool Player::isBuffering() const {
   if (!impl_) return false;
-  PlayerState st = impl_->state.load();
-  return st == PlayerState::Prefill || st == PlayerState::Priming ||
-         st == PlayerState::Seeking || st == PlayerState::Opening;
+  return playback_state_machine::isBufferingForUi(impl_->state.load());
 }
 
 bool Player::isEnded() const {

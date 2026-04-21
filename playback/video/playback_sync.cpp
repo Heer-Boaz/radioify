@@ -4,6 +4,8 @@
 #include <cmath>
 #include <limits>
 
+#include "playback_state_machine.h"
+
 namespace playback_sync {
 namespace {
 
@@ -87,8 +89,12 @@ bool shouldBackoffForEmptyQueue(const LoopState& state, PlayerState playbackStat
   if (nowUs - state.lastPresentedTimeUs <= kFrameStallThresholdUs) {
     return false;
   }
-  if (playbackState != PlayerState::Playing &&
-      playbackState != PlayerState::Draining) {
+  playback_state_machine::StateProjection projection =
+      playback_state_machine::project(playbackState);
+  if (projection.transport != playback_state_machine::TransportState::Playing ||
+      (projection.buffering != playback_state_machine::BufferingState::Ready &&
+       projection.buffering !=
+           playback_state_machine::BufferingState::Draining)) {
     return false;
   }
   if (!state.firstPresentedForSerial || seekPending) {
@@ -168,20 +174,26 @@ FramePlan planFrame(LoopState& state, PlayerState playbackState,
       master.us != 0 &&
       std::abs(prepared.frame.ptsUs - master.us) > kSyncLostThresholdUs;
 
-  if (playbackState != PlayerState::Priming &&
-      playbackState != PlayerState::Seeking &&
+  playback_state_machine::StateProjection projection =
+      playback_state_machine::project(playbackState);
+  const bool priming =
+      projection.buffering == playback_state_machine::BufferingState::Priming;
+  const bool seeking =
+      projection.transport == playback_state_machine::TransportState::Seeking;
+
+  if (!priming && !seeking &&
       master.source == PlayerClockSource::Audio && !master.audioClockReady) {
     plan.waitForAudioClock = true;
     return plan;
   }
 
-  if (playbackState == PlayerState::Seeking) {
+  if (seeking) {
     plan.delayUs = 0;
     plan.targetUs = nowUs;
     return plan;
   }
 
-  if (playbackState == PlayerState::Priming || plan.syncLost) {
+  if (priming || plan.syncLost) {
     plan.targetUs = state.frameTimerUs + plan.delayUs;
     return plan;
   }
