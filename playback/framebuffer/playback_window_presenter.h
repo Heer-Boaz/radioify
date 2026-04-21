@@ -20,8 +20,8 @@ class PlaybackWindowPresenter {
 
   bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
              const std::function<bool()>& overlayVisible,
-             const playback_framebuffer_presenter::PictureInPictureTextGridProvider&
-                 buildPictureInPictureTextGrid,
+             const playback_framebuffer_presenter::TextGridPresentationProvider&
+                 buildTextGridPresentation,
              const PlaybackSessionContinuationState* initialState = nullptr);
   void stop();
   void requestPresent();

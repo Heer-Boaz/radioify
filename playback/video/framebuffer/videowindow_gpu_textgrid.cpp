@@ -185,7 +185,7 @@ SIZE VideoWindow::TextGridCellSize() const {
     return SIZE{metrics.cellWidth, metrics.cellHeight};
 }
 
-void VideoWindow::GetPictureInPictureTextCellSize(int& outCellWidth,
+void VideoWindow::GetTextGridCellSize(int& outCellWidth,
                                                   int& outCellHeight) const {
     const SIZE cellSize = TextGridCellSize();
     outCellWidth = std::max(1, static_cast<int>(cellSize.cx));
@@ -360,8 +360,8 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     if (frame.cols <= 0 || frame.rows <= 0) return;
-    m_pictureInPictureGridCols.store(frame.cols, std::memory_order_relaxed);
-    m_pictureInPictureGridRows.store(frame.rows, std::memory_order_relaxed);
+    m_textGridCols.store(frame.cols, std::memory_order_relaxed);
+    m_textGridRows.store(frame.rows, std::memory_order_relaxed);
     const size_t cellCount =
         static_cast<size_t>(frame.cols) * static_cast<size_t>(frame.rows);
     if (frame.cells.size() < cellCount) return;

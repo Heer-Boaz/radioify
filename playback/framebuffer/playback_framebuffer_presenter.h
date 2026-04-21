@@ -22,7 +22,7 @@
 
 namespace playback_framebuffer_presenter {
 
-using PictureInPictureTextGridProvider =
+using TextGridPresentationProvider =
     std::function<bool(int pixelWidth, int pixelHeight, int cellPixelWidth,
                        int cellPixelHeight,
                        const VideoFrame* frame, bool frameChanged,
@@ -44,6 +44,6 @@ void runFramebufferPresenterLoop(
     std::atomic<bool>& forcePresent, HANDLE wakeEvent,
     const std::function<bool()>& overlayVisible,
     const std::function<WindowUiState()>& buildUiState,
-    const PictureInPictureTextGridProvider& buildPictureInPictureTextGrid);
+    const TextGridPresentationProvider& buildTextGridPresentation);
 
 }  // namespace playback_framebuffer_presenter

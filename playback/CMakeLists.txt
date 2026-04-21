@@ -15,7 +15,9 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_log.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_output.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_presentation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_presentation_controller.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_runtime.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_window_presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/overlay/playback_overlay.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/overlay/playback_subtitle_effects.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/playback_ascii_subtitles.cpp

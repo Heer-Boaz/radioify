@@ -34,7 +34,7 @@ struct PlaybackInputView {
   PlaybackRenderMode currentMode = PlaybackRenderMode::Other;
 
   playback_frame_output::FrameOutputState* frameOutputState = nullptr;
-  playback_frame_output::FrameOutputState* pictureInPictureTextOutputState =
+  playback_frame_output::FrameOutputState* textGridPresentationOutputState =
       nullptr;
 
   playback_frame_output::LogLineWriter timingSink;
@@ -43,11 +43,13 @@ struct PlaybackInputView {
 struct PlaybackInputSignals {
   std::atomic<int>* overlayControlHover = nullptr;
   std::function<void()> requestWindowPresent;
+  std::function<bool()> toggleWindowPresentation;
   std::function<bool()> togglePictureInPicture;
+  std::function<bool()> toggleFullscreen;
+  std::function<void()> closePresentation;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::atomic<int64_t>* overlayUntilMs = nullptr;
 
-  PlaybackLayout* desiredLayout = nullptr;
   bool* loopStopRequested = nullptr;
   bool* quitApplicationRequested = nullptr;
   bool* redraw = nullptr;

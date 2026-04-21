@@ -4,6 +4,8 @@
 #include "playback/video/audio_clock_reacquire.h"
 #include "playback/video/playback_sync.h"
 #include "playback/video/playback_state_machine.h"
+#include "playback/session/playback_presentation_policy.h"
+#include "playback/session/playback_window_presentation.h"
 #include "clock.h"
 
 #include <iostream>
@@ -83,6 +85,62 @@ int main() {
                        kPlaybackShortcutContextImageViewer)
                    .value() == PlaybackShortcutAction::Next,
                "Ctrl+VK_RIGHT must navigate to the next item");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey(VK_RETURN, 0, kPlaybackShortcutAltMask),
+                   kPlaybackShortcutContextGlobal |
+                       kPlaybackShortcutContextShared |
+                       kPlaybackShortcutContextPlaybackSession)
+                   .value() == PlaybackShortcutAction::ToggleFullscreen,
+               "Alt+Enter must resolve to the fullscreen toggle");
+  ok &= expect(!resolvePlaybackShortcutAction(
+                   makeKey(VK_RETURN, 0, kPlaybackShortcutAltMask),
+                   kPlaybackShortcutContextGlobal |
+                       kPlaybackShortcutContextShared |
+                       kPlaybackShortcutContextImageViewer),
+               "Alt+Enter must be playback-session scoped");
+  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Ascii,
+                                     PlaybackPresentationMode::
+                                         DefaultNonFullscreen})
+                   .target == PlaybackPresentationMode::Fullscreen,
+               "ASCII default presentation must enter fullscreen");
+  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Ascii,
+                                     PlaybackPresentationMode::Fullscreen})
+                   .target ==
+                   PlaybackPresentationMode::DefaultNonFullscreen,
+               "ASCII fullscreen must exit to the default non-fullscreen "
+               "presentation");
+  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Ascii,
+                                     PlaybackPresentationMode::PictureInPicture})
+                   .target == PlaybackPresentationMode::Fullscreen,
+               "ASCII PiP must enter fullscreen");
+  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Framebuffer,
+                                     PlaybackPresentationMode::Fullscreen})
+                   .target == PlaybackPresentationMode::PictureInPicture,
+               "Framebuffer fullscreen must exit to PiP");
+  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Framebuffer,
+                                     PlaybackPresentationMode::PictureInPicture})
+                   .target == PlaybackPresentationMode::Fullscreen,
+               "Framebuffer PiP must enter fullscreen");
+  PlaybackWindowPlacementState fullscreenPlacement{};
+  fullscreenPlacement.fullscreenActive = true;
+  ok &= expect(playback_window_presentation::shouldStartFullscreen(
+                   fullscreenPlacement),
+               "fullscreen placement must start the next window fullscreen");
+  PlaybackWindowPlacementState windowPlacement{};
+  ok &= expect(!playback_window_presentation::shouldStartFullscreen(
+                   windowPlacement),
+               "windowed placement must start the next window windowed");
+  PlaybackWindowPlacementState fullscreenRestoredPipPlacement{};
+  fullscreenRestoredPipPlacement.pictureInPictureActive = true;
+  fullscreenRestoredPipPlacement.pictureInPictureRestoreFullscreen = true;
+  ok &= expect(playback_window_presentation::shouldStartFullscreen(
+                   fullscreenRestoredPipPlacement),
+               "PiP that restores fullscreen must start from fullscreen");
+  PlaybackWindowPlacementState windowRestoredPipPlacement{};
+  windowRestoredPipPlacement.pictureInPictureActive = true;
+  ok &= expect(!playback_window_presentation::shouldStartFullscreen(
+                   windowRestoredPipPlacement),
+               "PiP without fullscreen restore must not start fullscreen");
   ok &= expect(playback_overlay::overlayCellCountForPixels(719, 21) == 35,
                "overlayCellCountForPixels must round rows up");
   ok &= expect(playback_overlay::overlayCellCountForPixels(960, 9) == 107,

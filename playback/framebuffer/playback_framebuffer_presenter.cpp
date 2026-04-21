@@ -16,7 +16,7 @@ namespace playback_framebuffer_presenter {
 namespace {
 
 constexpr auto kOverlayRefreshInterval = std::chrono::milliseconds(100);
-constexpr auto kPictureInPictureTextRefreshInterval =
+constexpr auto kTextGridPresentationRefreshInterval =
     std::chrono::milliseconds(250);
 
 void waitForPresenterWake(HANDLE wakeEvent) {
@@ -139,23 +139,23 @@ void runFramebufferPresenterLoop(
     std::atomic<bool>& forcePresent, HANDLE wakeEvent,
     const std::function<bool()>& overlayVisible,
     const std::function<WindowUiState()>& buildUiState,
-    const PictureInPictureTextGridProvider& buildPictureInPictureTextGrid) {
+    const TextGridPresentationProvider& buildTextGridPresentation) {
   if (!overlayVisible || !buildUiState) {
     return;
   }
 
   playback_frame_refresh::PlaybackFrameRefreshState frameRefresh;
-  std::vector<ScreenCell> pictureInPictureTextCells;
-  GpuTextGridFrame pictureInPictureTextFrame;
+  std::vector<ScreenCell> textGridPresentationCells;
+  GpuTextGridFrame textGridPresentationFrame;
   auto lastOverlayPresent = std::chrono::steady_clock::time_point::min();
   bool lastWindowOverlayVisible = false;
   bool lastWindowSeeking = false;
-  auto lastPictureInPictureTextPresent =
+  auto lastTextGridPresentationPresent =
       std::chrono::steady_clock::time_point::min();
-  int lastPictureInPictureTextWidth = 0;
-  int lastPictureInPictureTextHeight = 0;
-  int lastPictureInPictureTextCellWidth = 0;
-  int lastPictureInPictureTextCellHeight = 0;
+  int lastTextGridPresentationWidth = 0;
+  int lastTextGridPresentationHeight = 0;
+  int lastTextGridPresentationCellWidth = 0;
+  int lastTextGridPresentationCellHeight = 0;
   const HANDLE frameEvent = player.videoFrameWaitHandle();
   while (threadState.load(std::memory_order_relaxed) !=
          WindowThreadState::Stopping) {
@@ -180,9 +180,8 @@ void runFramebufferPresenterLoop(
         forcePresent.load(std::memory_order_relaxed);
     const bool overlayVisibleRequested = overlayVisible();
     const bool seekingRequested = player.isSeeking();
-    const bool pictureInPictureTextRequested =
-        videoWindow.IsPictureInPicture() &&
-        videoWindow.IsPictureInPictureTextMode();
+    const bool textGridPresentationRequested =
+        videoWindow.IsTextGridPresentationEnabled();
     if (!forcePresentRequested) {
       int waitTimeoutMs = -1;
       auto tightenWaitTimeout = [&](int candidateMs) {
@@ -205,17 +204,17 @@ void runFramebufferPresenterLoop(
                                        .count())));
         }
       }
-      if (pictureInPictureTextRequested) {
+      if (textGridPresentationRequested) {
         const auto now = std::chrono::steady_clock::now();
-        if (lastPictureInPictureTextPresent ==
+        if (lastTextGridPresentationPresent ==
             std::chrono::steady_clock::time_point::min()) {
           tightenWaitTimeout(0);
         } else {
           tightenWaitTimeout(std::max(
               0, static_cast<int>(std::chrono::duration_cast<
                                        std::chrono::milliseconds>(
-                                       (lastPictureInPictureTextPresent +
-                                        kPictureInPictureTextRefreshInterval) -
+                                       (lastTextGridPresentationPresent +
+                                        kTextGridPresentationRefreshInterval) -
                                        now)
                                        .count())));
         }
@@ -242,8 +241,7 @@ void runFramebufferPresenterLoop(
       break;
     }
     const bool textGridPresentationActive =
-        videoWindow.IsPictureInPicture() &&
-        videoWindow.IsPictureInPictureTextMode();
+        videoWindow.IsTextGridPresentationEnabled();
     if (textGridPresentationActive) {
       frameChanged = false;
     }
@@ -278,51 +276,50 @@ void runFramebufferPresenterLoop(
     }
 
     bool seekingNow = player.isSeeking();
-    if (videoWindow.IsPictureInPicture() &&
-        videoWindow.IsPictureInPictureTextMode()) {
+    if (videoWindow.IsTextGridPresentationEnabled()) {
       const int windowWidth = videoWindow.GetWidth();
       const int windowHeight = videoWindow.GetHeight();
       int cellWidth = 1;
       int cellHeight = 1;
-      videoWindow.GetPictureInPictureTextCellSize(cellWidth, cellHeight);
+      videoWindow.GetTextGridCellSize(cellWidth, cellHeight);
       const auto now = std::chrono::steady_clock::now();
       const bool refreshDue =
-          lastPictureInPictureTextPresent ==
+          lastTextGridPresentationPresent ==
               std::chrono::steady_clock::time_point::min() ||
-          (now - lastPictureInPictureTextPresent) >=
-              kPictureInPictureTextRefreshInterval;
-      const bool sizeChanged = windowWidth != lastPictureInPictureTextWidth ||
-                               windowHeight != lastPictureInPictureTextHeight ||
+          (now - lastTextGridPresentationPresent) >=
+              kTextGridPresentationRefreshInterval;
+      const bool sizeChanged = windowWidth != lastTextGridPresentationWidth ||
+                               windowHeight != lastTextGridPresentationHeight ||
                                cellWidth !=
-                                   lastPictureInPictureTextCellWidth ||
+                                   lastTextGridPresentationCellWidth ||
                                cellHeight !=
-                                   lastPictureInPictureTextCellHeight;
+                                   lastTextGridPresentationCellHeight;
 
       if (textFrameChanged || forcePresentNow || refreshDue || sizeChanged) {
         int textCols = 0;
         int textRows = 0;
         const VideoFrame* textFrame =
             frameResult.frameAvailable ? &frameRefresh.frame : nullptr;
-        if (buildPictureInPictureTextGrid &&
-            buildPictureInPictureTextGrid(windowWidth, windowHeight, cellWidth,
+        if (buildTextGridPresentation &&
+            buildTextGridPresentation(windowWidth, windowHeight, cellWidth,
                                           cellHeight, textFrame,
                                           textFrameChanged,
-                                          pictureInPictureTextCells, textCols,
+                                          textGridPresentationCells, textCols,
                                           textRows)) {
           buildGpuTextGridFrameFromScreenCells(
-              pictureInPictureTextCells, textCols, textRows,
-              pictureInPictureTextFrame);
-          videoWindow.PresentGpuTextGrid(pictureInPictureTextFrame, true);
+              textGridPresentationCells, textCols, textRows,
+              textGridPresentationFrame);
+          videoWindow.PresentGpuTextGrid(textGridPresentationFrame, true);
         }
-        lastPictureInPictureTextPresent = std::chrono::steady_clock::now();
-        lastPictureInPictureTextWidth = windowWidth;
-        lastPictureInPictureTextHeight = windowHeight;
-        lastPictureInPictureTextCellWidth = cellWidth;
-        lastPictureInPictureTextCellHeight = cellHeight;
+        lastTextGridPresentationPresent = std::chrono::steady_clock::now();
+        lastTextGridPresentationWidth = windowWidth;
+        lastTextGridPresentationHeight = windowHeight;
+        lastTextGridPresentationCellWidth = cellWidth;
+        lastTextGridPresentationCellHeight = cellHeight;
       }
       continue;
     }
-    lastPictureInPictureTextPresent =
+    lastTextGridPresentationPresent =
         std::chrono::steady_clock::time_point::min();
 
     WindowUiState ui = buildUiState();

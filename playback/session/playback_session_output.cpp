@@ -55,7 +55,7 @@ void PlaybackOutputController::requestLayout(PlaybackLayout layout) {
   impl_->presentation.requestLayout(layout);
 }
 
-PlaybackLayout& PlaybackOutputController::desiredLayout() {
+PlaybackLayout PlaybackOutputController::desiredLayout() const {
   return impl_->presentation.desiredLayout();
 }
 
@@ -63,13 +63,13 @@ PlaybackPresenterSyncResult PlaybackOutputController::sync(
     Player& player,
     const std::function<WindowUiState()>& buildUiState,
     const std::function<bool()>& overlayVisible,
-    const playback_framebuffer_presenter::PictureInPictureTextGridProvider&
-        buildPictureInPictureTextGrid,
+    const playback_framebuffer_presenter::TextGridPresentationProvider&
+        buildTextGridPresentation,
     bool& redraw,
     bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
     std::atomic<int>& overlayControlHover) {
   return impl_->presentation.sync(player, buildUiState, overlayVisible,
-                                  buildPictureInPictureTextGrid, redraw,
+                                  buildTextGridPresentation, redraw,
                                   forceRefreshArt, overlayUntilMs,
                                   overlayControlHover);
 }

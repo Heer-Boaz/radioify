@@ -24,6 +24,7 @@
 #include "playback_session_input.h"
 #include "playback_session_output.h"
 #include "playback_session_presentation.h"
+#include "playback_session_presentation_controller.h"
 #include "playback_session_state.h"
 #include "subtitle_manager.h"
 
@@ -85,18 +86,16 @@ struct PlaybackLoopRunner::Impl {
   const bool hasSubtitles;
 
   PlaybackOutputController output;
+  PlaybackPresentationController presentationController;
   PlaybackSessionCore core;
   GpuAsciiRenderer& gpuRenderer;
   AsciiArt art;
-  ConsoleScreen pictureInPictureTextScreen;
-  std::vector<ScreenCell> pictureInPictureTextCells;
-  AsciiArt pictureInPictureTextArt;
-  VideoFrame pictureInPictureTextFrame;
-  GpuVideoFrameCache pictureInPictureTextFrameCache;
-  playback_frame_output::FrameOutputState pictureInPictureTextOutputState;
-  bool pendingPictureInPictureOpen = false;
-  bool pendingPictureInPictureTextMode = false;
-  bool pictureInPictureStartedFromTerminal = false;
+  ConsoleScreen textGridPresentationScreen;
+  std::vector<ScreenCell> textGridPresentationCells;
+  AsciiArt textGridPresentationArt;
+  VideoFrame textGridPresentationFrame;
+  GpuVideoFrameCache textGridPresentationFrameCache;
+  playback_frame_output::FrameOutputState textGridPresentationOutputState;
   bool copiedFrameNeedsRender = false;
   bool redraw = true;
   bool forceRefreshArt = false;
@@ -146,13 +145,9 @@ struct PlaybackLoopRunner::Impl {
                    ? std::optional<PlaybackSessionContinuationState>(
                          *args.continuityState)
                    : std::nullopt),
+        presentationController(args.continuityState),
         core({args.player, args.perfLog, args.enableAudio, args.enableAscii}),
         gpuRenderer(sharedGpuRenderer()) {
-    if (args.continuityState) {
-      pictureInPictureStartedFromTerminal =
-          args.continuityState->windowPlacement
-              .pictureInPictureStartedFromTerminal;
-    }
     core.initialize(screen);
     bindInputState();
     bindRenderInputs();
@@ -168,8 +163,8 @@ struct PlaybackLoopRunner::Impl {
     inputView.hasSubtitles = hasSubtitles;
     inputView.currentMode = output.renderMode(enableAscii);
     inputView.frameOutputState = &frameOutputState;
-    inputView.pictureInPictureTextOutputState =
-        &pictureInPictureTextOutputState;
+    inputView.textGridPresentationOutputState =
+        &textGridPresentationOutputState;
     inputView.timingSink = timingSink;
     core.bindInputView(inputView);
 
@@ -177,8 +172,22 @@ struct PlaybackLoopRunner::Impl {
     inputSignals.requestWindowPresent = [this]() {
       output.requestWindowPresent();
     };
+    inputSignals.toggleWindowPresentation = [this]() {
+      return presentationController.toggleWindow(output, redraw,
+                                                 forceRefreshArt);
+    };
     inputSignals.togglePictureInPicture = [this]() {
-      return this->togglePictureInPicture();
+      const bool audioOnlyPlayback =
+          core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
+      return presentationController.togglePictureInPicture(
+          output, enableAscii, audioOnlyPlayback, redraw, forceRefreshArt);
+    };
+    inputSignals.toggleFullscreen = [this]() {
+      return presentationController.toggleFullscreen(output, enableAscii, redraw,
+                                                     forceRefreshArt);
+    };
+    inputSignals.closePresentation = [this]() {
+      presentationController.closePresentation(output, redraw, forceRefreshArt);
     };
     inputSignals.requestTransportCommand = [this](PlaybackTransportCommand cmd) {
       if (!requestTransportCommand) {
@@ -187,7 +196,6 @@ struct PlaybackLoopRunner::Impl {
       return requestTransportCommand(cmd);
     };
     inputSignals.overlayUntilMs = &overlayUntilMs;
-    inputSignals.desiredLayout = &output.desiredLayout();
     inputSignals.loopStopRequested = &loopStopRequested;
     inputSignals.quitApplicationRequested = quitApplicationRequested;
     inputSignals.redraw = &redraw;
@@ -232,47 +240,7 @@ struct PlaybackLoopRunner::Impl {
         overlayVisible());
   }
 
-  bool togglePictureInPicture() {
-    VideoWindow& window = output.window();
-    if (window.IsOpen() && window.IsPictureInPicture()) {
-      pendingPictureInPictureOpen = false;
-      pendingPictureInPictureTextMode = false;
-      window.SetPictureInPictureTextMode(false);
-      if (pictureInPictureStartedFromTerminal) {
-        pictureInPictureStartedFromTerminal = false;
-        output.requestLayout(PlaybackLayout::Terminal);
-        forceRefreshArt = true;
-        redraw = true;
-        return true;
-      }
-      pictureInPictureStartedFromTerminal = false;
-      redraw = true;
-      output.requestWindowPresent();
-      return window.SetPictureInPicture(false);
-    }
-
-    const bool fromTerminalAscii = !output.windowActive() && enableAscii;
-    const bool audioOnlyPlayback =
-        core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
-    const bool textMode = fromTerminalAscii || audioOnlyPlayback;
-    pendingPictureInPictureOpen = true;
-    pendingPictureInPictureTextMode = textMode;
-    pictureInPictureStartedFromTerminal = fromTerminalAscii;
-    output.requestLayout(PlaybackLayout::Window);
-    forceRefreshArt = true;
-    redraw = true;
-
-    if (window.IsOpen()) {
-      window.SetPictureInPictureTextMode(textMode);
-      if (window.SetPictureInPicture(true)) {
-        pendingPictureInPictureOpen = false;
-      }
-    }
-    output.requestWindowPresent();
-    return true;
-  }
-
-  bool buildPictureInPictureTextGrid(int pixelWidth, int pixelHeight,
+  bool buildTextGridPresentation(int pixelWidth, int pixelHeight,
                                      int cellPixelWidth, int cellPixelHeight,
                                      const VideoFrame* frame,
                                      bool frameChanged,
@@ -282,23 +250,23 @@ struct PlaybackLoopRunner::Impl {
         pixelWidth, cellPixelWidth);
     const int rows = playback_overlay::overlayCellCountForPixels(
         pixelHeight, cellPixelHeight);
-    pictureInPictureTextScreen.setVirtualSize(cols, rows);
+    textGridPresentationScreen.setVirtualSize(cols, rows);
 
-    pictureInPictureTextOutputState.renderFailed = false;
-    pictureInPictureTextOutputState.renderFailMessage.clear();
-    pictureInPictureTextOutputState.renderFailDetail.clear();
+    textGridPresentationOutputState.renderFailed = false;
+    textGridPresentationOutputState.renderFailMessage.clear();
+    textGridPresentationOutputState.renderFailDetail.clear();
     if (frame && frame->width > 0 && frame->height > 0) {
-      pictureInPictureTextFrame = *frame;
-      pictureInPictureTextOutputState.haveFrame = true;
-    } else if (!pictureInPictureTextOutputState.haveFrame) {
-      pictureInPictureTextFrame = VideoFrame{};
+      textGridPresentationFrame = *frame;
+      textGridPresentationOutputState.haveFrame = true;
+    } else if (!textGridPresentationOutputState.haveFrame) {
+      textGridPresentationFrame = VideoFrame{};
     }
 
     playback_screen_renderer::PlaybackScreenRenderInputs inputs = renderInputs;
-    inputs.screen = &pictureInPictureTextScreen;
-    inputs.frame = &pictureInPictureTextFrame;
-    inputs.frameCache = &pictureInPictureTextFrameCache;
-    inputs.art = &pictureInPictureTextArt;
+    inputs.screen = &textGridPresentationScreen;
+    inputs.frame = &textGridPresentationFrame;
+    inputs.frameCache = &textGridPresentationFrameCache;
+    inputs.art = &textGridPresentationArt;
     inputs.currentMode = PlaybackRenderMode::AsciiTerminal;
     inputs.windowActive = false;
     inputs.useWindowPresenter = false;
@@ -309,46 +277,35 @@ struct PlaybackLoopRunner::Impl {
     inputs.frameChanged = frameChanged;
     inputs.cellPixelWidth = cellPixelWidth;
     inputs.cellPixelHeight = cellPixelHeight;
-    inputs.cellPixelSourceLabel = "picture-in-picture-text-grid";
+    inputs.cellPixelSourceLabel = "text-grid-presentation";
     inputs.allowAsciiCpuFallback = false;
-    inputs.frameOutputState = &pictureInPictureTextOutputState;
+    inputs.frameOutputState = &textGridPresentationOutputState;
     core.updateRenderInputs(inputs);
-    inputs.frameAvailable = pictureInPictureTextOutputState.haveFrame;
+    inputs.frameAvailable = textGridPresentationOutputState.haveFrame;
 
     playback_screen_renderer::renderPlaybackScreen(inputs);
-    if (pictureInPictureTextOutputState.renderFailed) {
+    if (textGridPresentationOutputState.renderFailed) {
       return false;
     }
-    return pictureInPictureTextScreen.snapshot(outCells, outCols, outRows);
+    return textGridPresentationScreen.snapshot(outCells, outCols, outRows);
   }
 
   PlaybackPresenterSyncResult syncPresentation() {
     auto buildUiState = [&]() { return buildWindowUiState(); };
-    auto buildPictureInPictureTextGrid =
+    auto buildTextGridPresentation =
         [&](int pixelWidth, int pixelHeight, int cellPixelWidth,
             int cellPixelHeight, const VideoFrame* frame, bool frameChanged,
             std::vector<ScreenCell>& outCells, int& outCols, int& outRows) {
-          return this->buildPictureInPictureTextGrid(
+          return this->buildTextGridPresentation(
               pixelWidth, pixelHeight, cellPixelWidth, cellPixelHeight, frame,
               frameChanged, outCells, outCols, outRows);
         };
     auto overlayVisibleFn = [&]() { return overlayVisible(); };
     PlaybackPresenterSyncResult result =
         output.sync(core.player(), buildUiState, overlayVisibleFn,
-                    buildPictureInPictureTextGrid, redraw, forceRefreshArt,
+                    buildTextGridPresentation, redraw, forceRefreshArt,
                     overlayUntilMs, overlayControlHover);
-    if (pendingPictureInPictureOpen && output.window().IsOpen()) {
-      output.window().SetPictureInPictureTextMode(
-          pendingPictureInPictureTextMode);
-      if (output.window().SetPictureInPicture(true)) {
-        pendingPictureInPictureOpen = false;
-      }
-      output.requestWindowPresent();
-    } else if (!output.windowRequested()) {
-      pendingPictureInPictureOpen = false;
-      pendingPictureInPictureTextMode = false;
-      pictureInPictureStartedFromTerminal = false;
-    }
+    presentationController.reconcile(output);
     return result;
   }
 
@@ -384,29 +341,7 @@ struct PlaybackLoopRunner::Impl {
     PlaybackSessionContinuationState state;
     state.hasLayout = true;
     state.layout = output.desiredLayout();
-    state.windowPlacement.pictureInPictureStartedFromTerminal =
-        pictureInPictureStartedFromTerminal;
-    if (output.window().IsOpen()) {
-      RECT windowRect{};
-      if (output.window().GetWindowBounds(&windowRect)) {
-        state.windowPlacement.hasWindowRect = true;
-        state.windowPlacement.windowRect = windowRect;
-      }
-      state.windowPlacement.pictureInPictureActive =
-          output.window().IsPictureInPicture();
-      state.windowPlacement.pictureInPictureTextMode =
-          output.window().IsPictureInPictureTextMode();
-      if (state.windowPlacement.pictureInPictureActive) {
-        if (output.window().GetPictureInPictureRestoreBounds(
-                &state.windowPlacement.pictureInPictureRestoreRect)) {
-          state.windowPlacement.hasPictureInPictureRestoreRect = true;
-        }
-        if (output.window().GetWindowBounds(
-                &state.windowPlacement.pictureInPictureRect)) {
-          state.windowPlacement.hasPictureInPictureRect = true;
-        }
-      }
-    }
+    presentationController.captureWindowPlacement(output, state);
     return state;
   }
 
@@ -478,13 +413,8 @@ struct PlaybackLoopRunner::Impl {
   void pollWindowEvents() {
     if (output.consumeWindowCloseRequested() ||
         (output.windowRequested() && !output.windowVisible())) {
-      pendingPictureInPictureOpen = false;
-      pendingPictureInPictureTextMode = false;
-      pictureInPictureStartedFromTerminal = false;
-      output.window().SetPictureInPictureTextMode(false);
-      output.requestLayout(PlaybackLayout::Terminal);
-      forceRefreshArt = true;
-      redraw = true;
+      presentationController.handleWindowClosed(output, redraw,
+                                                forceRefreshArt);
       applyPresenterSync(syncPresentation());
     }
   }

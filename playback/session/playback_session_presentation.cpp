@@ -69,7 +69,7 @@ void PlaybackPresentation::requestLayout(PlaybackLayout layout) {
   impl_->desiredLayout = layout;
 }
 
-PlaybackLayout& PlaybackPresentation::desiredLayout() {
+PlaybackLayout PlaybackPresentation::desiredLayout() const {
   return impl_->desiredLayout;
 }
 
@@ -77,24 +77,23 @@ PlaybackPresenterSyncResult PlaybackPresentation::sync(
     Player& player,
     const std::function<WindowUiState()>& buildUiState,
     const std::function<bool()>& overlayVisible,
-    const playback_framebuffer_presenter::PictureInPictureTextGridProvider&
-        buildPictureInPictureTextGrid,
+    const playback_framebuffer_presenter::TextGridPresentationProvider&
+        buildTextGridPresentation,
     bool& redraw,
     bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
     std::atomic<int>& overlayControlHover) {
   PlaybackPresenterSyncResult result;
   result.previousActiveLayout = impl_->activeLayout;
-    if (impl_->windowRequested()) {
-      const PlaybackSessionContinuationState* initialState =
-          impl_->initialState ? &*impl_->initialState : nullptr;
-      if (impl_->windowPresenter.start(player, buildUiState, overlayVisible,
-                                       buildPictureInPictureTextGrid,
-                                       initialState)) {
-        impl_->activeLayout = PlaybackLayout::Window;
-        impl_->initialState.reset();
-      } else {
-        impl_->desiredLayout = PlaybackLayout::Terminal;
-        impl_->activeLayout = PlaybackLayout::Terminal;
+  if (impl_->windowRequested()) {
+    const PlaybackSessionContinuationState* initialState =
+        impl_->initialState ? &*impl_->initialState : nullptr;
+    if (impl_->windowPresenter.start(player, buildUiState, overlayVisible,
+                                     buildTextGridPresentation, initialState)) {
+      impl_->activeLayout = PlaybackLayout::Window;
+      impl_->initialState.reset();
+    } else {
+      impl_->desiredLayout = PlaybackLayout::Terminal;
+      impl_->activeLayout = PlaybackLayout::Terminal;
       forceRefreshArt = true;
       redraw = true;
       resetWindowOverlayState(overlayUntilMs, overlayControlHover);

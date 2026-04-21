@@ -43,14 +43,14 @@ class PlaybackPresentation {
   HANDLE windowCloseRequestedWaitHandle() const;
   PlaybackRenderMode renderMode(bool enableAscii) const;
   void requestLayout(PlaybackLayout layout);
-  PlaybackLayout& desiredLayout();
+  PlaybackLayout desiredLayout() const;
 
   PlaybackPresenterSyncResult sync(
       Player& player,
       const std::function<WindowUiState()>& buildUiState,
       const std::function<bool()>& overlayVisible,
-      const playback_framebuffer_presenter::PictureInPictureTextGridProvider&
-          buildPictureInPictureTextGrid,
+      const playback_framebuffer_presenter::TextGridPresentationProvider&
+          buildTextGridPresentation,
       bool& redraw,
       bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
       std::atomic<int>& overlayControlHover);

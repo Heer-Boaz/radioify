@@ -9,6 +9,7 @@
 #include "audioplayback.h"
 #include "playback/playback_media_artwork_catalog.h"
 #include "playback/playback_shortcuts.h"
+#include "playback_window_presentation.h"
 #include "playback_mini_player_tui.h"
 #include "runtime_helpers.h"
 #include "track_browser_state.h"
@@ -88,9 +89,11 @@ bool AudioMiniPlayer::open() {
   }
   window_.SetCaptureAllMouseInput(true);
   window_.SetVsync(true);
-  window_.SetPictureInPictureTextMode(true);
-  window_.SetPictureInPictureTextMinimumGridSize(kMinCols, kMinRows);
-  window_.SetPictureInPicture(true);
+  window_.SetTextGridMinimumSize(kMinCols, kMinRows);
+  PlaybackWindowPlacementState placement;
+  placement.pictureInPictureActive = true;
+  placement.textGridPresentationEnabled = true;
+  playback_window_presentation::applyPlacement(window_, placement);
   window_.ShowWindow(true);
   refreshGridSize();
   return true;
@@ -115,7 +118,7 @@ bool AudioMiniPlayer::ensureOpen() {
 }
 
 void AudioMiniPlayer::refreshGridSize() {
-  window_.GetPictureInPictureTextCellSize(cellWidth_, cellHeight_);
+  window_.GetTextGridCellSize(cellWidth_, cellHeight_);
   cellWidth_ = std::max(1, cellWidth_);
   cellHeight_ = std::max(1, cellHeight_);
   cols_ = std::max(kMinCols, window_.GetWidth() / cellWidth_);

@@ -40,10 +40,7 @@ bool hasOverlayVisibleWindow(const PlaybackInputSignals& signals) {
 }
 
 void requestWindowRefresh(const PlaybackInputSignals& signals) {
-  if (!signals.desiredLayout || !signals.requestWindowPresent) {
-    return;
-  }
-  if (!isWindowPlaybackLayout(*signals.desiredLayout)) {
+  if (!signals.requestWindowPresent) {
     return;
   }
   signals.requestWindowPresent();
@@ -180,8 +177,8 @@ void requestPlaybackExit(const PlaybackInputView& view,
   if (signals.loopStopRequested) {
     *signals.loopStopRequested = true;
   }
-  if (signals.desiredLayout) {
-    *signals.desiredLayout = PlaybackLayout::Terminal;
+  if (signals.closePresentation) {
+    signals.closePresentation();
   }
   if (signals.overlayUntilMs) {
     signals.overlayUntilMs->store(0, std::memory_order_relaxed);
@@ -245,37 +242,11 @@ void applySeekRequestState(PlaybackInputSignals& signals,
 
 bool toggleRequestedLayout(const PlaybackInputView& view,
                            PlaybackInputSignals& signals) {
-  // When PiP is already open, W should flip the PiP presentation mode in
-  // place instead of closing the window and rebuilding its geometry.
-  if (view.videoWindow && view.videoWindow->IsOpen() &&
-      view.videoWindow->IsPictureInPicture()) {
-    view.videoWindow->SetPictureInPictureTextMode(
-        !view.videoWindow->IsPictureInPictureTextMode());
-    if (signals.requestWindowPresent) {
-      signals.requestWindowPresent();
-    }
-    if (signals.forceRefreshArt) {
-      *signals.forceRefreshArt = true;
-    }
-    if (signals.redraw) {
-      *signals.redraw = true;
-    }
-    return true;
+  (void)view;
+  if (signals.toggleWindowPresentation) {
+    return signals.toggleWindowPresentation();
   }
-  if (!signals.desiredLayout) {
-    return false;
-  }
-  *signals.desiredLayout = togglePlaybackLayout(*signals.desiredLayout);
-  if (signals.redraw) {
-    *signals.redraw = true;
-  }
-  if (signals.forceRefreshArt) {
-    *signals.forceRefreshArt = true;
-  }
-  if (isWindowPlaybackLayout(*signals.desiredLayout)) {
-    requestWindowRefresh(signals);
-  }
-  return true;
+  return false;
 }
 
 bool toggleSubtitles(const PlaybackInputView& view) {
@@ -327,15 +298,11 @@ bool toggle50Hz(const PlaybackInputView& view) {
 
 bool togglePictureInPicture(const PlaybackInputView& view,
                             const PlaybackInputSignals& signals) {
+  (void)view;
   if (signals.togglePictureInPicture) {
     return signals.togglePictureInPicture();
   }
-  if (!view.videoWindow || !view.videoWindow->IsOpen() ||
-      !signals.desiredLayout ||
-      !isWindowPlaybackLayout(*signals.desiredLayout)) {
-    return false;
-  }
-  return view.videoWindow->TogglePictureInPicture();
+  return false;
 }
 
 bool executeOverlayControl(const PlaybackInputView& view,
@@ -571,6 +538,11 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
                                     PlaybackTransportCommand::Next);
   };
   cb.onToggleWindow = [&]() { toggleRequestedLayout(view, signals); };
+  cb.onToggleFullscreen = [&]() {
+    if (signals.toggleFullscreen) {
+      signals.toggleFullscreen();
+    }
+  };
   cb.onToggleRadio = [&]() { toggleRadio(view); };
   cb.onToggle50Hz = [&]() { toggle50Hz(view); };
   cb.onToggleSubtitles = [&]() { toggleSubtitles(view); };
@@ -670,15 +642,15 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   bool windowEvent = windowOriginEvent;
   if (windowEvent && view.videoWindow &&
       view.videoWindow->IsPictureInPicture() &&
-      view.videoWindow->IsPictureInPictureTextMode()) {
+      view.videoWindow->IsTextGridPresentationEnabled()) {
     int gridCols = 0;
     int gridRows = 0;
-    view.videoWindow->GetPictureInPictureTextGridSize(gridCols, gridRows);
+    view.videoWindow->GetTextGridSize(gridCols, gridRows);
     const int winW = view.videoWindow->GetWidth();
     const int winH = view.videoWindow->GetHeight();
     int cellW = 1;
     int cellH = 1;
-    view.videoWindow->GetPictureInPictureTextCellSize(cellW, cellH);
+    view.videoWindow->GetTextGridCellSize(cellW, cellH);
     if (gridCols > 0 && gridRows > 0 && winW > 0 && winH > 0) {
       const int gridPixelWidth = std::min(winW, gridCols * cellW);
       const int gridPixelHeight = std::min(winH, gridRows * cellH);
@@ -702,21 +674,21 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
             static_cast<double>(gridPixelWidth) / static_cast<double>(gridCols);
         hitMouse.unitHeight =
             static_cast<double>(gridPixelHeight) / static_cast<double>(gridRows);
-        progressOutputState = view.pictureInPictureTextOutputState;
+        progressOutputState = view.textGridPresentationOutputState;
         mouseOverlayInputs.overlayVisible = true;
         mouseOverlayInputs.screenWidth = gridCols;
         mouseOverlayInputs.screenHeight = gridRows;
         mouseOverlayInputs.progressBarX =
-            view.pictureInPictureTextOutputState
-                ? view.pictureInPictureTextOutputState->progressBarX
+            view.textGridPresentationOutputState
+                ? view.textGridPresentationOutputState->progressBarX
                 : -1;
         mouseOverlayInputs.progressBarY =
-            view.pictureInPictureTextOutputState
-                ? view.pictureInPictureTextOutputState->progressBarY
+            view.textGridPresentationOutputState
+                ? view.textGridPresentationOutputState->progressBarY
                 : -1;
         mouseOverlayInputs.progressBarWidth =
-            view.pictureInPictureTextOutputState
-                ? view.pictureInPictureTextOutputState->progressBarWidth
+            view.textGridPresentationOutputState
+                ? view.textGridPresentationOutputState->progressBarWidth
                 : 0;
       } else {
         hitMouse.control &= ~0x80000000;
@@ -742,8 +714,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   int windowTextCellW = 1;
   int windowTextCellH = 1;
   if (windowEvent && view.videoWindow) {
-    view.videoWindow->GetPictureInPictureTextCellSize(windowTextCellW,
-                                                      windowTextCellH);
+    view.videoWindow->GetTextGridCellSize(windowTextCellW, windowTextCellH);
   }
   int controlHit =
       windowEvent

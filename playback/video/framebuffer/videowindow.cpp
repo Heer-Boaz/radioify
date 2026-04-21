@@ -52,6 +52,8 @@ static inline std::string thread_id_str() {
 namespace {
     constexpr UINT kTogglePictureInPictureMessage = WM_APP + 0x440;
     constexpr UINT kSetPictureInPictureMessage = WM_APP + 0x441;
+    constexpr UINT kExitPictureInPictureToFullscreenMessage = WM_APP + 0x442;
+    constexpr UINT kSetFullscreenMessage = WM_APP + 0x443;
 
     static std::wstring utf8ToWide(const std::string& text) {
         if (text.empty()) return {};
@@ -1009,10 +1011,10 @@ void VideoWindow::SetPictureInPictureInteractiveRects(
     m_pictureInPictureInteractiveRects = rects;
 }
 
-void VideoWindow::SetPictureInPictureTextMinimumGridSize(int cols, int rows) {
-    m_pictureInPictureMinGridCols.store(std::max(0, cols),
+void VideoWindow::SetTextGridMinimumSize(int cols, int rows) {
+    m_textGridMinCols.store(std::max(0, cols),
                                         std::memory_order_relaxed);
-    m_pictureInPictureMinGridRows.store(std::max(0, rows),
+    m_textGridMinRows.store(std::max(0, rows),
                                         std::memory_order_relaxed);
 }
 
@@ -1024,7 +1026,7 @@ double VideoWindow::PictureInPictureAspectRatio() const {
     } else if (m_width > 0 && m_height > 0) {
         aspect = static_cast<double>(m_width) / static_cast<double>(m_height);
     }
-    if (m_pictureInPictureTextMode.load(std::memory_order_relaxed)) {
+    if (m_textGridPresentationEnabled.load(std::memory_order_relaxed)) {
         const SIZE cellSize = TextGridCellSize();
         const double cellAspect =
             static_cast<double>(std::max<LONG>(1, cellSize.cx)) /
@@ -1036,23 +1038,23 @@ double VideoWindow::PictureInPictureAspectRatio() const {
 
 SIZE VideoWindow::PictureInPictureMinimumSize() const {
     const double aspect = PictureInPictureAspectRatio();
-    const bool textMode =
-        m_pictureInPictureTextMode.load(std::memory_order_relaxed);
-    const int kMinLongEdge = textMode ? 320 : 260;
-    const int kMinShortEdge = textMode ? 180 : 96;
+    const bool textGridPresentation =
+        m_textGridPresentationEnabled.load(std::memory_order_relaxed);
+    const int kMinLongEdge = textGridPresentation ? 320 : 260;
+    const int kMinShortEdge = textGridPresentation ? 180 : 96;
     int minWidth = aspect >= 1.0 ? kMinLongEdge : kMinShortEdge;
     int minHeight = aspect >= 1.0 ? kMinShortEdge : kMinLongEdge;
 
-    if (textMode) {
+    if (textGridPresentation) {
         const SIZE cellSize = TextGridCellSize();
         const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
         const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
         minWidth = std::max(
-            minWidth, m_pictureInPictureMinGridCols.load(
+            minWidth, m_textGridMinCols.load(
                           std::memory_order_relaxed) *
                           cellWidth);
         minHeight = std::max(
-            minHeight, m_pictureInPictureMinGridRows.load(
+            minHeight, m_textGridMinRows.load(
                            std::memory_order_relaxed) *
                            cellHeight);
     }
@@ -1074,9 +1076,9 @@ int VideoWindow::PictureInPictureInteractiveTop() const {
     const int edge = PictureInPictureResizeBorderPx();
     int top = m_height -
               std::max(48, static_cast<int>(std::lround(m_height * 0.22)));
-    if (m_pictureInPictureTextMode.load(std::memory_order_relaxed)) {
+    if (m_textGridPresentationEnabled.load(std::memory_order_relaxed)) {
         const int rows =
-            m_pictureInPictureGridRows.load(std::memory_order_relaxed);
+            m_textGridRows.load(std::memory_order_relaxed);
         const int interactiveRows = rows > 0 ? std::min(rows, 8) : 8;
         top = rows > 0
                   ? std::min(m_height,
@@ -1357,12 +1359,18 @@ bool VideoWindow::EnterPictureInPicture() {
     return true;
 }
 
-bool VideoWindow::ExitPictureInPicture() {
+bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain) return false;
-    if (!m_pictureInPicture.load(std::memory_order_relaxed)) return true;
+    if (!m_pictureInPicture.load(std::memory_order_relaxed)) {
+        return target == PictureInPictureExitTarget::Fullscreen && !m_isFullscreen
+                   ? MakeFullscreen()
+                   : true;
+    }
 
-    const bool restoreFullscreen = m_pipRestoreFullscreen;
+    const bool targetFullscreen =
+        target == PictureInPictureExitTarget::Fullscreen ||
+        m_pipRestoreFullscreen;
     m_ignoreWindowSizeEvents = true;
     SetWindowLong(m_hWnd, GWL_STYLE, m_pipRestoreStyle);
     SetWindowLong(m_hWnd, GWL_EXSTYLE, m_pipRestoreExStyle);
@@ -1380,14 +1388,11 @@ bool VideoWindow::ExitPictureInPicture() {
         Resize(client.right - client.left, client.bottom - client.top);
     }
     m_pictureInPicture.store(false, std::memory_order_relaxed);
-    m_pictureInPictureTextMode.store(false, std::memory_order_relaxed);
-    m_pictureInPictureGridCols.store(0, std::memory_order_relaxed);
-    m_pictureInPictureGridRows.store(0, std::memory_order_relaxed);
     SetPictureInPictureInteractiveRects({});
     m_pipRestoreFullscreen = false;
     m_ignoreWindowSizeEvents = false;
 
-    if (restoreFullscreen) {
+    if (targetFullscreen) {
         return MakeFullscreen();
     }
     return true;
@@ -1402,11 +1407,20 @@ bool VideoWindow::SetPictureInPicture(bool enabled) {
     return enabled ? EnterPictureInPicture() : ExitPictureInPicture();
 }
 
-void VideoWindow::SetPictureInPictureTextMode(bool enabled) {
-    m_pictureInPictureTextMode.store(enabled, std::memory_order_relaxed);
+bool VideoWindow::ExitPictureInPictureToFullscreen() {
+    if (m_hWnd && m_windowThreadId != 0 &&
+        GetCurrentThreadId() != m_windowThreadId) {
+        return PostMessage(m_hWnd, kExitPictureInPictureToFullscreenMessage,
+                           0, 0) != 0;
+    }
+    return ExitPictureInPicture(PictureInPictureExitTarget::Fullscreen);
+}
+
+void VideoWindow::SetTextGridPresentationEnabled(bool enabled) {
+    m_textGridPresentationEnabled.store(enabled, std::memory_order_relaxed);
     if (!enabled) {
-        m_pictureInPictureGridCols.store(0, std::memory_order_relaxed);
-        m_pictureInPictureGridRows.store(0, std::memory_order_relaxed);
+        m_textGridCols.store(0, std::memory_order_relaxed);
+        m_textGridRows.store(0, std::memory_order_relaxed);
     }
 }
 
@@ -1460,6 +1474,15 @@ bool VideoWindow::TogglePictureInPicture() {
     }
     return SetPictureInPicture(
         !m_pictureInPicture.load(std::memory_order_relaxed));
+}
+
+bool VideoWindow::SetFullscreen(bool enabled) {
+    if (m_hWnd && m_windowThreadId != 0 &&
+        GetCurrentThreadId() != m_windowThreadId) {
+        return PostMessage(m_hWnd, kSetFullscreenMessage, enabled ? TRUE : FALSE,
+                           0) != 0;
+    }
+    return enabled ? MakeFullscreen() : ExitFullscreen();
 }
 
 bool VideoWindow::MakeFullscreen() {
@@ -1702,6 +1725,14 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             pThis->SetPictureInPicture(wParam != 0);
             return 0;
         }
+        if (uMsg == kExitPictureInPictureToFullscreenMessage) {
+            pThis->ExitPictureInPictureToFullscreen();
+            return 0;
+        }
+        if (uMsg == kSetFullscreenMessage) {
+            pThis->SetFullscreen(wParam != 0);
+            return 0;
+        }
         if (uMsg == WM_NCHITTEST &&
             pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
             LRESULT hit = DefWindowProc(hWnd, uMsg, wParam, lParam);
@@ -1751,7 +1782,8 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             return 0;
         }
 
-        if (uMsg == WM_KEYDOWN) {
+        if (uMsg == WM_KEYDOWN ||
+            (uMsg == WM_SYSKEYDOWN && wParam == VK_RETURN)) {
             InputEvent ev{};
             ev.type = InputEvent::Type::Key;
             ev.key.vk = (WORD)wParam;
@@ -1769,6 +1801,9 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 
             std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
             pThis->m_inputQueue.push_back(ev);
+            return 0;
+        }
+        if (uMsg == WM_SYSCHAR && wParam == VK_RETURN) {
             return 0;
         }
 
@@ -2177,9 +2212,9 @@ void VideoWindow::Close() {
     // Release swapchain last
     ResetSwapChain();
     m_pictureInPicture.store(false, std::memory_order_relaxed);
-    m_pictureInPictureTextMode.store(false, std::memory_order_relaxed);
-    m_pictureInPictureGridCols.store(0, std::memory_order_relaxed);
-    m_pictureInPictureGridRows.store(0, std::memory_order_relaxed);
+    m_textGridPresentationEnabled.store(false, std::memory_order_relaxed);
+    m_textGridCols.store(0, std::memory_order_relaxed);
+    m_textGridRows.store(0, std::memory_order_relaxed);
     m_pipRestoreFullscreen = false;
 
     if (m_hWnd) {

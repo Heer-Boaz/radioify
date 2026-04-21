@@ -35,6 +35,7 @@ enum class PlaybackShortcutAction : uint8_t {
   Previous,
   Next,
   ToggleWindow,
+  ToggleFullscreen,
   ToggleRadio,
   Toggle50Hz,
   ToggleSubtitles,

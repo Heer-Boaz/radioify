@@ -116,22 +116,28 @@ public:
     std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
     void SetPictureInPictureInteractiveRects(const std::vector<RECT>& rects);
-    void SetPictureInPictureTextMinimumGridSize(int cols, int rows);
+    void SetTextGridMinimumSize(int cols, int rows);
     void SetCursorVisible(bool visible);
     bool TogglePictureInPicture();
     bool SetPictureInPicture(bool enabled);
-    void SetPictureInPictureTextMode(bool enabled);
-    bool IsPictureInPictureTextMode() const {
-        return m_pictureInPictureTextMode.load(std::memory_order_relaxed);
+    bool ExitPictureInPictureToFullscreen();
+    void SetTextGridPresentationEnabled(bool enabled);
+    bool IsTextGridPresentationEnabled() const {
+        return m_textGridPresentationEnabled.load(std::memory_order_relaxed);
     }
     bool IsPictureInPicture() const {
         return m_pictureInPicture.load(std::memory_order_relaxed);
     }
-    void GetPictureInPictureTextGridSize(int& outCols, int& outRows) const {
-        outCols = m_pictureInPictureGridCols.load(std::memory_order_relaxed);
-        outRows = m_pictureInPictureGridRows.load(std::memory_order_relaxed);
+    bool IsFullscreen() const { return m_isFullscreen; }
+    bool PictureInPictureRestoresFullscreen() const {
+        return m_pipRestoreFullscreen;
     }
-    void GetPictureInPictureTextCellSize(int& outCellWidth,
+    bool SetFullscreen(bool enabled);
+    void GetTextGridSize(int& outCols, int& outRows) const {
+        outCols = m_textGridCols.load(std::memory_order_relaxed);
+        outRows = m_textGridRows.load(std::memory_order_relaxed);
+    }
+    void GetTextGridCellSize(int& outCellWidth,
                                          int& outCellHeight) const;
     bool GetWindowBounds(RECT* outRect) const;
     bool GetPictureInPictureRestoreBounds(RECT* outRect) const;
@@ -171,7 +177,12 @@ private:
     int PictureInPictureInteractiveTop() const;
     void AdjustPictureInPictureSizingRect(WPARAM edge, RECT* rect) const;
     bool EnterPictureInPicture();
-    bool ExitPictureInPicture();
+    enum class PictureInPictureExitTarget {
+        Restore,
+        Fullscreen,
+    };
+    bool ExitPictureInPicture(
+        PictureInPictureExitTarget target = PictureInPictureExitTarget::Restore);
     bool PictureInPictureHasInteractiveRects() const;
     bool PictureInPicturePointInInteractiveRect(int x, int y) const;
     LRESULT HitTestPictureInPicture(int x, int y) const;
@@ -249,11 +260,11 @@ private:
     RECT m_prevRect{};
     bool m_isFullscreen = false;
     std::atomic<bool> m_pictureInPicture{false};
-    std::atomic<bool> m_pictureInPictureTextMode{false};
-    std::atomic<int> m_pictureInPictureGridCols{0};
-    std::atomic<int> m_pictureInPictureGridRows{0};
-    std::atomic<int> m_pictureInPictureMinGridCols{0};
-    std::atomic<int> m_pictureInPictureMinGridRows{0};
+    std::atomic<bool> m_textGridPresentationEnabled{false};
+    std::atomic<int> m_textGridCols{0};
+    std::atomic<int> m_textGridRows{0};
+    std::atomic<int> m_textGridMinCols{0};
+    std::atomic<int> m_textGridMinRows{0};
     mutable std::mutex m_pictureInPictureInteractiveRectsMutex;
     std::vector<RECT> m_pictureInPictureInteractiveRects;
     bool m_pipRestoreFullscreen = false;

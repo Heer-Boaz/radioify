@@ -969,6 +969,9 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
         case PlaybackShortcutAction::ToggleWindow:
           if (callbacks.onToggleWindow) callbacks.onToggleWindow();
           return PlaybackInputResult::Handled;
+        case PlaybackShortcutAction::ToggleFullscreen:
+          if (callbacks.onToggleFullscreen) callbacks.onToggleFullscreen();
+          return PlaybackInputResult::Handled;
         case PlaybackShortcutAction::ToggleRadio:
           if (callbacks.onToggleRadio) callbacks.onToggleRadio();
           return PlaybackInputResult::Handled;

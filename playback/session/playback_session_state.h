@@ -28,8 +28,10 @@ enum class WindowThreadState : uint8_t {
 struct PlaybackWindowPlacementState {
   bool hasWindowRect = false;
   RECT windowRect{};
+  bool fullscreenActive = false;
   bool pictureInPictureActive = false;
-  bool pictureInPictureTextMode = false;
+  bool pictureInPictureRestoreFullscreen = false;
+  bool textGridPresentationEnabled = false;
   bool pictureInPictureStartedFromTerminal = false;
   bool hasPictureInPictureRect = false;
   RECT pictureInPictureRect{};
