@@ -13,6 +13,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -1555,6 +1556,8 @@ struct Player::Impl {
     std::vector<std::string> audioTrackLabels;
     std::atomic<int> activeAudioTrack{-1};
     std::atomic<int> activeAudioStream{-1};
+    std::atomic<bool> audioTrackResyncPending{false};
+    std::atomic<int64_t> audioTrackResyncTargetUs{0};
 
   std::atomic<int64_t> lastPresentedPtsUs{0};
   std::atomic<int64_t> lastPresentedDurationUs{0};
@@ -1641,6 +1644,47 @@ struct Player::Impl {
 #else
     (void)fmt;
 #endif
+  }
+
+  void clearAudioBufferedStart() {
+    audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
+    audioBufferedStartSerial.store(0, std::memory_order_relaxed);
+    audioBufferedStartValid.store(false, std::memory_order_relaxed);
+  }
+
+  int64_t seekPresentationTargetUsForSerial(uint64_t serial) const {
+    if (serial > static_cast<uint64_t>((std::numeric_limits<int>::max)())) {
+      return 0;
+    }
+    return serialControl.presentationTargetUsForSerial(static_cast<int>(serial));
+  }
+
+  void applySeekAudioDiscardForSerial(uint64_t serial) {
+    const int64_t targetUs = seekPresentationTargetUsForSerial(serial);
+    if (targetUs > 0) {
+      audioStreamDiscardUntil(targetUs);
+    }
+  }
+
+  bool shouldDropSeekPrerollFrame(uint64_t serial, int64_t ptsUs,
+                                  int64_t durationUs,
+                                  int64_t* targetUsOut) const {
+    const int64_t targetUs = seekPresentationTargetUsForSerial(serial);
+    if (targetUsOut) {
+      *targetUsOut = targetUs;
+    }
+    if (targetUs <= 0 || ptsUs < 0) {
+      return false;
+    }
+    int64_t effectiveDurationUs = durationUs;
+    if (effectiveDurationUs <= 0) {
+      effectiveDurationUs =
+          fallbackFrameDurationUs.load(std::memory_order_relaxed);
+    }
+    if (effectiveDurationUs <= 0) {
+      effectiveDurationUs = 33333;
+    }
+    return ptsUs + effectiveDurationUs <= targetUs;
   }
 
   void postEvent(const PlayerEvent& ev) {
@@ -1821,6 +1865,8 @@ struct Player::Impl {
     demuxInterrupt.commandPending = &commandPending;
     demuxInterrupt.currentSerial = serialControl.currentSerialAtomic();
     demuxInterrupt.lastSerial = serialControl.currentSerial();
+    audioTrackResyncPending.store(false, std::memory_order_relaxed);
+    audioTrackResyncTargetUs.store(0, std::memory_order_relaxed);
 
     demuxThread = std::thread([this]() { demuxMain(); });
   }
@@ -1841,9 +1887,8 @@ struct Player::Impl {
         audioPackets.flush(static_cast<uint64_t>(plan.serial));
         videoFrames.flush(static_cast<uint64_t>(plan.serial));
         audioStreamFlushSerial(plan.serial);
-        audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
-        audioBufferedStartSerial.store(0, std::memory_order_relaxed);
-        audioBufferedStartValid.store(false, std::memory_order_relaxed);
+        applySeekAudioDiscardForSerial(static_cast<uint64_t>(plan.serial));
+        clearAudioBufferedStart();
         setState(PlayerState::Seeking);
         appendTimingFmt("%s serial=%d target_us=%lld seek_target_us=%lld",
                         tag ? tag : "ctrl_seek_request", plan.serial,
@@ -1894,7 +1939,20 @@ struct Player::Impl {
               nextLabel = audioTrackLabels[static_cast<size_t>(nextTrack)];
             }
           }
-          beginSerialTransition(masterClockUs(), "ctrl_audio_track_switch");
+          int64_t targetUs = masterClockUs();
+          if (targetUs <= 0) {
+            targetUs = lastPresentedPtsUs.load(std::memory_order_relaxed);
+          }
+          targetUs = (std::max)(int64_t{0}, targetUs);
+          const int currentSerial = serialControl.currentSerial();
+          commandPending.store(true, std::memory_order_relaxed);
+          audioTrackResyncTargetUs.store(targetUs, std::memory_order_relaxed);
+          audioTrackResyncPending.store(true, std::memory_order_relaxed);
+          audioDecodeEnded.store(false, std::memory_order_relaxed);
+          audioPackets.flush(static_cast<uint64_t>(currentSerial));
+          audioStreamFlushSerial(currentSerial);
+          audioStreamDiscardUntil(targetUs);
+          clearAudioBufferedStart();
           appendTimingFmt("audio_track_switch track=%d stream=%d label=%s",
                           nextTrack, nextStream,
                           nextLabel.empty() ? "N/A" : nextLabel.c_str());
@@ -2094,6 +2152,60 @@ struct Player::Impl {
     int64_t lastQueueWarnTimeUs = nowUs();
     constexpr int64_t kQueueWarnIntervalUs = 5000000;  // 5 seconds between warnings
     constexpr size_t kMaxPacketQueueSize = 4096;  // Increased to avoid head-of-line blocking
+    auto handleAudioTrackResync = [&]() -> bool {
+      if (!audioTrackResyncPending.exchange(false, std::memory_order_relaxed)) {
+        return false;
+      }
+
+      const int currentSerial = serialControl.currentSerial();
+      serial = static_cast<uint64_t>(currentSerial);
+      demuxInterrupt.lastSerial = currentSerial;
+      commandPending.store(false, std::memory_order_relaxed);
+
+      int64_t targetUs =
+          audioTrackResyncTargetUs.load(std::memory_order_relaxed);
+      targetUs = (std::max)(int64_t{0}, targetUs);
+      int64_t demuxTargetUs = targetUs + demux.formatStartUs;
+      if (demuxTargetUs < 0) demuxTargetUs = 0;
+
+      int seekRes = AVERROR(EINVAL);
+      if (demux.fmt) {
+        seekRes = avformat_seek_file(demux.fmt, -1, demuxTargetUs,
+                                     demuxTargetUs, INT64_MAX, 0);
+        if (seekRes < 0) {
+          int selectedAudioStream =
+              activeAudioStream.load(std::memory_order_relaxed);
+          if (selectedAudioStream >= 0 &&
+              selectedAudioStream < static_cast<int>(demux.fmt->nb_streams) &&
+              demux.fmt->streams[selectedAudioStream]) {
+            int64_t streamTarget = av_rescale_q(
+                demuxTargetUs, AVRational{1, AV_TIME_BASE},
+                demux.fmt->streams[selectedAudioStream]->time_base);
+            seekRes = av_seek_frame(demux.fmt, selectedAudioStream,
+                                    streamTarget, 0);
+          }
+        }
+      }
+
+      appendTimingFmt(
+          "demux_audio_track_resync serial=%d target_us=%lld demux_target_us=%lld res=%d",
+          currentSerial, static_cast<long long>(targetUs),
+          static_cast<long long>(demuxTargetUs), seekRes);
+      if (seekRes >= 0) {
+        avformat_flush(demux.fmt);
+      }
+
+      demuxEnded.store(false, std::memory_order_relaxed);
+      demuxAtEof = false;
+      decodeEnded.store(false, std::memory_order_relaxed);
+      audioDecodeEnded.store(false, std::memory_order_relaxed);
+      videoPackets.flush(serial);
+      audioPackets.flush(serial);
+      audioStreamFlushSerial(currentSerial);
+      audioStreamDiscardUntil(targetUs);
+      clearAudioBufferedStart();
+      return true;
+    };
     
     while (running.load()) {
       bool handledSeek = false;
@@ -2112,6 +2224,7 @@ struct Player::Impl {
       playback_serial_control::PendingSeek pendingSeek =
           serialControl.claimPendingSeek();
       if (pendingSeek.valid) {
+        audioTrackResyncPending.store(false, std::memory_order_relaxed);
         int nextSerial = pendingSeek.serial;
         demuxInterrupt.lastSerial = nextSerial;
         commandPending.store(false);
@@ -2119,8 +2232,10 @@ struct Player::Impl {
         int64_t targetUs = pendingSeek.demuxTargetUs;
         targetUs += demux.formatStartUs;
         if (targetUs < 0) targetUs = 0;
-        appendTimingFmt("demux_seek serial=%d target_us=%lld", nextSerial,
-                        static_cast<long long>(targetUs));
+        appendTimingFmt(
+            "demux_seek serial=%d target_us=%lld display_target_us=%lld",
+            nextSerial, static_cast<long long>(targetUs),
+            static_cast<long long>(pendingSeek.displayTargetUs));
         int seekRes = avformat_seek_file(demux.fmt, -1, INT64_MIN, targetUs,
                                          INT64_MAX, AVSEEK_FLAG_BACKWARD);
         if (seekRes < 0 && demux.videoStreamIndex >= 0) {
@@ -2146,6 +2261,7 @@ struct Player::Impl {
         audioPackets.flush(serial);
         videoFrames.flush(serial);
         audioStreamFlushSerial(static_cast<int>(serial));
+        applySeekAudioDiscardForSerial(serial);
         videoClock.reset(static_cast<int>(serial));
         clearFrameRequested.store(true);
         PlayerEvent ev{};
@@ -2154,6 +2270,10 @@ struct Player::Impl {
         ev.arg1 = (seekRes < 0) ? 1 : 0;
         postEvent(ev);
         handledSeek = true;
+      }
+
+      if (!handledSeek && handleAudioTrackResync()) {
+        continue;
       }
 
       if (!serialControl.seekPending()) {
@@ -2433,6 +2553,19 @@ struct Player::Impl {
         lastPtsUs = ptsUs;
         lastDurationUs = frameDurationUs;
 
+        int64_t seekTargetUs = 0;
+        if (shouldDropSeekPrerollFrame(decoderSerial, ptsUs, frameDurationUs,
+                                       &seekTargetUs)) {
+          appendTimingFmt(
+              "video_drop_seek_preroll serial=%u pts_us=%lld dur_us=%lld target_us=%lld",
+              static_cast<unsigned>(decoderSerial),
+              static_cast<long long>(ptsUs),
+              static_cast<long long>(frameDurationUs),
+              static_cast<long long>(seekTargetUs));
+          videoFrames.release(poolIndex);
+          continue;
+        }
+
         videoFrames.push(QueuedFrame{poolIndex, ptsUs, frameDurationUs,
                                      static_cast<uint64_t>(decoderSerial), info,
                                      decodeMs});
@@ -2533,6 +2666,30 @@ struct Player::Impl {
     bool inputEof = false;
     uint64_t decoderSerial = 0;
     while (running.load()) {
+      if (activeAudioStream.load(std::memory_order_relaxed) !=
+          decoderStreamIndex) {
+        if (hasPendingPacket && !pendingPacket.flush && !pendingPacket.eof) {
+          av_packet_unref(&pendingPacket.pkt);
+        }
+        hasPendingPacket = false;
+        if (!reinitializeDecoderForActiveTrack()) {
+          audioStartOk.store(false, std::memory_order_relaxed);
+          break;
+        }
+        avcodec_flush_buffers(audioDec.codec);
+        audioDec.writePosFrames = 0;
+        audioDec.nextPtsUs = 0;
+        audioDec.nextPtsValid = false;
+        decoderSerial =
+            static_cast<uint64_t>(serialControl.currentSerial());
+        audioStreamFlushSerial(static_cast<int>(decoderSerial));
+        audioStreamDiscardUntil(
+            audioTrackResyncTargetUs.load(std::memory_order_relaxed));
+        clearAudioBufferedStart();
+        inputEof = false;
+        continue;
+      }
+
       if (!hasPendingPacket) {
         if (!audioPackets.pop(&pendingPacket)) {
           break;
@@ -2551,6 +2708,7 @@ struct Player::Impl {
         audioDec.nextPtsValid = false;
         decoderSerial = pendingPacket.serial;
         audioStreamFlushSerial(static_cast<int>(decoderSerial));
+        applySeekAudioDiscardForSerial(decoderSerial);
         hasPendingPacket = false;
         inputEof = false;
         continue;
@@ -2588,6 +2746,7 @@ struct Player::Impl {
           hasPendingPacket = false;
           decoderSerial = static_cast<uint64_t>(currentMasterSerial);
           audioStreamFlushSerial(static_cast<int>(decoderSerial));
+          applySeekAudioDiscardForSerial(decoderSerial);
           break;
         }
 

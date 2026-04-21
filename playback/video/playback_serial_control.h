@@ -17,6 +17,7 @@ struct PendingSeek {
   bool valid = false;
   int serial = 0;
   int64_t demuxTargetUs = 0;
+  int64_t displayTargetUs = 0;
 };
 
 class Controller {
@@ -38,6 +39,7 @@ class Controller {
   int seekInFlightSerial() const;
   bool seekFailed() const;
   int64_t seekDisplayUs() const;
+  int64_t presentationTargetUsForSerial(int serial) const;
 
  private:
   std::atomic<int64_t> seekDisplayUs_{0};
@@ -45,8 +47,10 @@ class Controller {
   std::atomic<bool> seekFailed_{false};
   std::atomic<bool> seekPending_{false};
   std::atomic<int64_t> seekTargetUs_{0};
+  std::atomic<int64_t> presentationTargetUs_{0};
   std::atomic<int> currentSerial_{1};
   std::atomic<int> pendingSeekSerial_{0};
+  std::atomic<int> presentationTargetSerial_{0};
 };
 
 }  // namespace playback_serial_control

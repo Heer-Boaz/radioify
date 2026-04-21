@@ -15,8 +15,10 @@ void Controller::reset() {
   seekFailed_.store(false, std::memory_order_relaxed);
   seekPending_.store(false, std::memory_order_relaxed);
   seekTargetUs_.store(0, std::memory_order_relaxed);
+  presentationTargetUs_.store(0, std::memory_order_relaxed);
   currentSerial_.store(1, std::memory_order_relaxed);
   pendingSeekSerial_.store(0, std::memory_order_relaxed);
+  presentationTargetSerial_.store(0, std::memory_order_relaxed);
 }
 
 void Controller::startSession(int initialSerial) {
@@ -26,7 +28,9 @@ void Controller::startSession(int initialSerial) {
   seekFailed_.store(false, std::memory_order_relaxed);
   seekPending_.store(false, std::memory_order_relaxed);
   seekTargetUs_.store(0, std::memory_order_relaxed);
+  presentationTargetUs_.store(0, std::memory_order_relaxed);
   pendingSeekSerial_.store(0, std::memory_order_relaxed);
+  presentationTargetSerial_.store(0, std::memory_order_relaxed);
 }
 
 TransitionPlan Controller::beginTransition(int64_t targetUs, bool initDone,
@@ -45,8 +49,10 @@ TransitionPlan Controller::beginTransition(int64_t targetUs, bool initDone,
   seekInFlightSerial_.store(nextSerial, std::memory_order_relaxed);
   seekFailed_.store(false, std::memory_order_relaxed);
   pendingSeekSerial_.store(nextSerial, std::memory_order_relaxed);
+  presentationTargetSerial_.store(nextSerial, std::memory_order_relaxed);
   seekDisplayUs_.store(clampedTargetUs, std::memory_order_relaxed);
   seekTargetUs_.store(demuxTargetUs, std::memory_order_relaxed);
+  presentationTargetUs_.store(clampedTargetUs, std::memory_order_relaxed);
   seekPending_.store(true, std::memory_order_relaxed);
 
   plan.valid = true;
@@ -65,6 +71,7 @@ PendingSeek Controller::claimPendingSeek() {
   pending.valid = true;
   pending.serial = currentSerial_.load(std::memory_order_relaxed);
   pending.demuxTargetUs = seekTargetUs_.load(std::memory_order_relaxed);
+  pending.displayTargetUs = seekDisplayUs_.load(std::memory_order_relaxed);
   return pending;
 }
 
@@ -77,6 +84,8 @@ bool Controller::applySeekResult(int serial, int resultCode) {
   if (resultCode != 0) {
     seekDisplayUs_.store(0, std::memory_order_relaxed);
     pendingSeekSerial_.store(0, std::memory_order_relaxed);
+    presentationTargetUs_.store(0, std::memory_order_relaxed);
+    presentationTargetSerial_.store(0, std::memory_order_relaxed);
   }
   return true;
 }
@@ -117,6 +126,16 @@ bool Controller::seekFailed() const {
 
 int64_t Controller::seekDisplayUs() const {
   return seekDisplayUs_.load(std::memory_order_relaxed);
+}
+
+int64_t Controller::presentationTargetUsForSerial(int serial) const {
+  if (serial <= 0) {
+    return 0;
+  }
+  if (presentationTargetSerial_.load(std::memory_order_relaxed) != serial) {
+    return 0;
+  }
+  return presentationTargetUs_.load(std::memory_order_relaxed);
 }
 
 }  // namespace playback_serial_control
