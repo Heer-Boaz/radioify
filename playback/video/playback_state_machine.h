@@ -32,8 +32,7 @@ enum class BufferingState {
   Draining,
 };
 
-struct Snapshot {
-  PlayerState currentState = PlayerState::Idle;
+struct PipelineSnapshot {
   bool initDone = false;
   bool initOk = false;
   bool audioPaused = false;
@@ -82,6 +81,11 @@ struct StateChange {
   bool changed = false;
 };
 
+struct Evaluation {
+  StateChange change;
+  bool clearSeekFailure = false;
+};
+
 class Controller {
  public:
   void reset();
@@ -92,17 +96,19 @@ class Controller {
   StateChange finishPriming();
   StateChange beginClosing();
   StateChange finishClosing();
-  StateChange apply(const Transition& transition);
+  Evaluation observe(const PipelineSnapshot& snapshot,
+                     size_t videoPrefillFrames);
 
  private:
   StateChange set(PlayerState next);
+  StateChange apply(const Transition& transition);
 
   std::atomic<int> state_{static_cast<int>(PlayerState::Idle)};
 };
 
 size_t requiredAudioPrefillFrames(uint32_t sampleRate);
 
-bool isPrefillReady(const Snapshot& snapshot, size_t videoPrefillFrames);
+bool isPrefillReady(const PipelineSnapshot& snapshot, size_t videoPrefillFrames);
 
 StateProjection project(PlayerState state);
 
@@ -114,8 +120,12 @@ bool isBufferingForUi(PlayerState state);
 
 bool mayPresentVideo(PlayerState state);
 
-PlayerState resolveSteadyState(Snapshot snapshot, size_t videoPrefillFrames);
+PlayerState resolveSteadyState(PlayerState currentState,
+                               PipelineSnapshot snapshot,
+                               size_t videoPrefillFrames);
 
-Transition resolveTransition(Snapshot snapshot, size_t videoPrefillFrames);
+Transition resolveTransition(PlayerState currentState,
+                             PipelineSnapshot snapshot,
+                             size_t videoPrefillFrames);
 
 }  // namespace playback_state_machine

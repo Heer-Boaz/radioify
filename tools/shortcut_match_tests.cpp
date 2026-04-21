@@ -94,38 +94,43 @@ int main() {
   ok &= expect(playback_frame_output::centerContentTop(2, 30, 40) == 2,
                "centerContentTop must not shift oversized content");
 
-  playback_state_machine::Snapshot pausedSeekBeforeFrame{};
-  pausedSeekBeforeFrame.currentState = PlayerState::Seeking;
+  playback_state_machine::PipelineSnapshot pausedSeekBeforeFrame{};
   pausedSeekBeforeFrame.audioPaused = true;
   pausedSeekBeforeFrame.currentSerial = 2;
   pausedSeekBeforeFrame.lastPresentedSerial = 1;
   pausedSeekBeforeFrame.pendingSeekSerial = 2;
   pausedSeekBeforeFrame.seekInFlightSerial = 0;
   ok &= expect(
-      playback_state_machine::resolveSteadyState(pausedSeekBeforeFrame, 1) ==
+      playback_state_machine::resolveSteadyState(
+          PlayerState::Seeking, pausedSeekBeforeFrame, 1) ==
           PlayerState::Seeking,
       "Paused seek must remain Seeking while a preview frame is pending");
 
-  playback_state_machine::Snapshot pausedSeekAfterFrame = pausedSeekBeforeFrame;
+  playback_state_machine::PipelineSnapshot pausedSeekAfterFrame =
+      pausedSeekBeforeFrame;
   pausedSeekAfterFrame.lastPresentedSerial = 2;
   pausedSeekAfterFrame.pendingSeekSerial = 0;
   ok &= expect(
-      playback_state_machine::resolveSteadyState(pausedSeekAfterFrame, 1) ==
+      playback_state_machine::resolveSteadyState(
+          PlayerState::Seeking, pausedSeekAfterFrame, 1) ==
           PlayerState::Paused,
       "Paused seek must settle back to Paused after the preview frame is shown");
 
-  playback_state_machine::Snapshot failedPausedSeek = pausedSeekBeforeFrame;
+  playback_state_machine::PipelineSnapshot failedPausedSeek =
+      pausedSeekBeforeFrame;
   failedPausedSeek.seekFailed = true;
   failedPausedSeek.pendingSeekSerial = 0;
   ok &= expect(
-      playback_state_machine::resolveSteadyState(failedPausedSeek, 1) ==
+      playback_state_machine::resolveSteadyState(
+          PlayerState::Seeking, failedPausedSeek, 1) ==
           PlayerState::Paused,
       "Failed paused seek must fall back to Paused");
 
-  playback_state_machine::Snapshot playingSeek = pausedSeekBeforeFrame;
+  playback_state_machine::PipelineSnapshot playingSeek = pausedSeekBeforeFrame;
   playingSeek.audioPaused = false;
   ok &= expect(
-      playback_state_machine::resolveSteadyState(playingSeek, 1) ==
+      playback_state_machine::resolveSteadyState(
+          PlayerState::Seeking, playingSeek, 1) ==
           PlayerState::Prefill,
       "Active seeks must continue into Prefill");
   ok &= expect(playback_state_machine::stateEffects(PlayerState::Seeking)
@@ -159,7 +164,8 @@ int main() {
                    !prefillProjection.effects.mayPresentVideo,
                "Prefill must hold outputs until both streams are ready");
   playback_state_machine::Transition settledPausedSeek =
-      playback_state_machine::resolveTransition(pausedSeekAfterFrame, 1);
+      playback_state_machine::resolveTransition(PlayerState::Seeking,
+                                                pausedSeekAfterFrame, 1);
   ok &= expect(settledPausedSeek.nextState == PlayerState::Paused &&
                    settledPausedSeek.clearSeekFailure,
                "Leaving Seeking after seek completion must clear seek failure "
@@ -177,13 +183,16 @@ int main() {
       stateController.beginSeeking();
   ok &= expect(!earlySeek.changed && earlySeek.current == PlayerState::Opening,
                "Seeking must not start before the session is started");
-  playback_state_machine::Transition startedTransition;
-  startedTransition.nextState = PlayerState::Playing;
-  playback_state_machine::StateChange startedChange =
-      stateController.apply(startedTransition);
-  ok &= expect(startedChange.changed &&
-                   startedChange.current == PlayerState::Playing,
-               "Resolved state-machine transitions must update the controller");
+  playback_state_machine::PipelineSnapshot openingReady{};
+  openingReady.initDone = true;
+  openingReady.initOk = true;
+  openingReady.videoQueueDepth = 1;
+  openingReady.videoQueueEmpty = false;
+  playback_state_machine::Evaluation observedOpening =
+      stateController.observe(openingReady, 1);
+  ok &= expect(observedOpening.change.changed &&
+                   observedOpening.change.current == PlayerState::Priming,
+               "Observed pipeline readiness must update the controller");
   playback_state_machine::StateChange seekChange =
       stateController.beginSeeking();
   ok &= expect(seekChange.changed &&
@@ -196,9 +205,16 @@ int main() {
   ok &= expect(!invalidPrimingFinish.changed &&
                    invalidPrimingFinish.current == PlayerState::Seeking,
                "Priming completion must be ignored outside Priming");
-  playback_state_machine::Transition primingTransition;
-  primingTransition.nextState = PlayerState::Priming;
-  stateController.apply(primingTransition);
+  playback_state_machine::Evaluation observedSeek =
+      stateController.observe(playingSeek, 1);
+  ok &= expect(observedSeek.change.changed &&
+                   observedSeek.change.current == PlayerState::Prefill,
+               "Observed active seek completion must enter Prefill");
+  playback_state_machine::Evaluation observedPrefill =
+      stateController.observe(openingReady, 1);
+  ok &= expect(observedPrefill.change.changed &&
+                   observedPrefill.change.current == PlayerState::Priming,
+               "Observed ready prefill must enter Priming");
   playback_state_machine::StateChange primingFinish =
       stateController.finishPriming();
   ok &= expect(primingFinish.changed &&

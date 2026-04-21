@@ -1714,9 +1714,9 @@ struct Player::Impl {
     return mainClock.sample(request);
   }
 
-  playback_state_machine::Snapshot stateSnapshot(bool audioPaused) const {
-    playback_state_machine::Snapshot snapshot;
-    snapshot.currentState = playbackState.current();
+  playback_state_machine::PipelineSnapshot pipelineSnapshot(
+      bool audioPaused) const {
+    playback_state_machine::PipelineSnapshot snapshot;
     snapshot.initDone = initDone.load(std::memory_order_relaxed);
     snapshot.initOk = initOk.load(std::memory_order_relaxed);
     snapshot.audioPaused = audioPaused;
@@ -2024,15 +2024,15 @@ struct Player::Impl {
 
       const bool audioPaused =
           audioStartOk.load() ? audioIsPaused() : pauseRequested.load();
-      playback_state_machine::Snapshot snapshot = stateSnapshot(audioPaused);
-      playback_state_machine::Transition transition =
-          playback_state_machine::resolveTransition(snapshot,
-                                                    kVideoPrefillFrames);
-      if (transition.nextState != snapshot.currentState) {
-        if (transition.clearSeekFailure) {
-          serialControl.clearSeekFailure();
-        }
-        applyStateChange(playbackState.apply(transition));
+      playback_state_machine::PipelineSnapshot snapshot =
+          pipelineSnapshot(audioPaused);
+      playback_state_machine::Evaluation evaluation =
+          playbackState.observe(snapshot, kVideoPrefillFrames);
+      if (evaluation.clearSeekFailure) {
+        serialControl.clearSeekFailure();
+      }
+      if (evaluation.change.changed) {
+        applyStateChange(evaluation.change);
       }
     }
     applyStateChange(playbackState.beginClosing());

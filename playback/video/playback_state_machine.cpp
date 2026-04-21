@@ -50,7 +50,8 @@ size_t requiredAudioPrefillFrames(uint32_t sampleRate) {
   return static_cast<size_t>(effectiveSampleRate / 3);
 }
 
-bool isPrefillReady(const Snapshot& snapshot, size_t videoPrefillFrames) {
+bool isPrefillReady(const PipelineSnapshot& snapshot,
+                    size_t videoPrefillFrames) {
   bool videoReady =
       snapshot.videoQueueDepth >= videoPrefillFrames || snapshot.decodeEnded;
   bool audioHasDecoded =
@@ -170,6 +171,21 @@ StateChange Controller::apply(const Transition& transition) {
   return set(transition.nextState);
 }
 
+Evaluation Controller::observe(const PipelineSnapshot& snapshot,
+                               size_t videoPrefillFrames) {
+  Evaluation evaluation;
+  PlayerState state = current();
+  Transition transition =
+      resolveTransition(state, snapshot, videoPrefillFrames);
+  evaluation.clearSeekFailure = transition.clearSeekFailure;
+  if (transition.nextState != state) {
+    evaluation.change = apply(transition);
+  } else {
+    evaluation.change = unchanged(state);
+  }
+  return evaluation;
+}
+
 StateEffects stateEffects(PlayerState state) {
   return project(state).effects;
 }
@@ -188,16 +204,18 @@ bool mayPresentVideo(PlayerState state) {
   return project(state).effects.mayPresentVideo;
 }
 
-PlayerState resolveSteadyState(Snapshot snapshot, size_t videoPrefillFrames) {
+PlayerState resolveSteadyState(PlayerState currentState,
+                               PipelineSnapshot snapshot,
+                               size_t videoPrefillFrames) {
   while (true) {
-    PlayerState nextState = snapshot.currentState;
+    PlayerState nextState = currentState;
 
-    if (snapshot.currentState == PlayerState::Opening && snapshot.initDone) {
+    if (currentState == PlayerState::Opening && snapshot.initDone) {
       nextState = snapshot.initOk
                       ? (snapshot.audioPaused ? PlayerState::Paused
                                               : PlayerState::Prefill)
                       : PlayerState::Error;
-    } else if (snapshot.currentState == PlayerState::Seeking &&
+    } else if (currentState == PlayerState::Seeking &&
                snapshot.seekInFlightSerial == 0) {
       if (snapshot.seekFailed) {
         nextState =
@@ -210,43 +228,44 @@ PlayerState resolveSteadyState(Snapshot snapshot, size_t videoPrefillFrames) {
         nextState =
             snapshot.audioPaused ? PlayerState::Paused : PlayerState::Prefill;
       }
-    } else if (isActivePlaybackState(snapshot.currentState) &&
-               snapshot.audioPaused) {
+    } else if (isActivePlaybackState(currentState) && snapshot.audioPaused) {
       nextState = PlayerState::Paused;
-    } else if (snapshot.currentState == PlayerState::Paused &&
-               !snapshot.audioPaused) {
+    } else if (currentState == PlayerState::Paused && !snapshot.audioPaused) {
       nextState = snapshot.lastPresentedSerial == snapshot.currentSerial
                       ? PlayerState::Playing
                       : PlayerState::Prefill;
-    } else if (snapshot.currentState == PlayerState::Prefill &&
+    } else if (currentState == PlayerState::Prefill &&
                !snapshot.audioPaused &&
                isPrefillReady(snapshot, videoPrefillFrames)) {
       nextState = PlayerState::Priming;
-    } else if (isActivePlaybackState(snapshot.currentState)) {
+    } else if (isActivePlaybackState(currentState)) {
       bool audioActive = snapshot.audioStartedOk && !snapshot.audioFinished;
       bool ended = snapshot.decodeEnded && snapshot.videoQueueEmpty &&
                    (!audioActive || snapshot.audioFinished);
       if (ended) {
         nextState = PlayerState::Ended;
       } else if (snapshot.demuxEnded &&
-                 snapshot.currentState == PlayerState::Playing &&
+                 currentState == PlayerState::Playing &&
                  snapshot.videoQueueEmpty) {
         nextState = PlayerState::Draining;
       }
     }
 
-    if (nextState == snapshot.currentState) {
+    if (nextState == currentState) {
       return nextState;
     }
-    snapshot.currentState = nextState;
+    currentState = nextState;
   }
 }
 
-Transition resolveTransition(Snapshot snapshot, size_t videoPrefillFrames) {
+Transition resolveTransition(PlayerState currentState,
+                             PipelineSnapshot snapshot,
+                             size_t videoPrefillFrames) {
   Transition transition;
-  transition.nextState = resolveSteadyState(snapshot, videoPrefillFrames);
+  transition.nextState =
+      resolveSteadyState(currentState, snapshot, videoPrefillFrames);
   transition.projection = project(transition.nextState);
-  transition.clearSeekFailure = snapshot.currentState == PlayerState::Seeking &&
+  transition.clearSeekFailure = currentState == PlayerState::Seeking &&
                                 transition.nextState != PlayerState::Seeking &&
                                 snapshot.seekInFlightSerial == 0;
   return transition;
