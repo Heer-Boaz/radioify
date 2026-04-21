@@ -834,68 +834,164 @@ float MaskColorBoundarySoftAmount(uint mask, DotInfo dots[8]) {
     return ColorBoundarySoftAmount(sumOn / onCount, sumOff / offCount);
 }
 
-float EdgeMaskFitScore(uint mask, DotInfo dots[8]) {
+int Scale256(float value) {
+    return (int)(value * 256.0f + 0.5f);
+}
+
+int ClampByteInt(int v) {
+    return clamp(v, 0, 255);
+}
+
+int ScaleDelta256(int delta, int scale) {
+    int bias = (delta >= 0) ? 128 : -128;
+    return (delta * scale + bias) / 256;
+}
+
+int ByteRangeTo255(int value, int start, int full) {
+    if (value <= start) {
+        return 0;
+    }
+    if (value >= full) {
+        return 255;
+    }
+    int denom = max(1, full - start);
+    return ((value - start) * 255 + denom / 2) / denom;
+}
+
+int EdgeBackgroundBlendAmountInt(int dotCount, int validCount,
+                                 int colorDelta255) {
+    int strength = Scale256(kEdgeBackgroundBlendStrength);
+    if (dotCount <= 0 || dotCount >= validCount || strength <= 0) {
+        return 0;
+    }
+    int deltaAmount = ByteRangeTo255(colorDelta255,
+                                     kEdgeBackgroundBlendMinDelta,
+                                     kEdgeBackgroundBlendFullDelta);
+    if (deltaAmount <= 0) {
+        return 0;
+    }
+    int split = min(dotCount, validCount - dotCount);
+    int balance = clamp((split * 510 + validCount / 2) / validCount, 0, 255);
+    return (deltaAmount * balance * strength + 255 * 128) / (255 * 256);
+}
+
+int BlendChannelToMeanInt(int value, int mean, int amount256) {
+    return ClampByteInt(value + ScaleDelta256(mean - value, amount256));
+}
+
+int MaxRgbDeltaInt(int ar, int ag, int ab, int br, int bg, int bb) {
+    return max(max(abs(ar - br), abs(ag - bg)), abs(ab - bb));
+}
+
+uint3 DotColorBytes(DotInfo dot) {
+    float3 c = saturate(dot.color);
+    return uint3((uint)(c.r * 255.0f + 0.5f),
+                 (uint)(c.g * 255.0f + 0.5f),
+                 (uint)(c.b * 255.0f + 0.5f));
+}
+
+int PerceptualDisplayErrorInt(int srcR, int srcG, int srcB, int predR,
+                              int predG, int predB, int predY) {
+    int dr = srcR - predR;
+    int dg = srcG - predG;
+    int db = srcB - predB;
+    int dy = (int)RgbToYByte((uint)srcR, (uint)srcG, (uint)srcB) - predY;
+    int lumaWeight = Scale256(kPerceptualLumaErrorWeight);
+    int lumaError = (dy * dy * lumaWeight + 128) >> 8;
+    return dr * dr + dg * dg + db * db + lumaError;
+}
+
+static const int kEdgeMaskFitInvalidScoreGpu = 0x3fffffff;
+
+int EdgeMaskFitScore(uint mask, DotInfo dots[8]) {
     uint dotCount = countbits(mask & 0xffu);
     if (dotCount == 0u || dotCount == 8u) {
-        return 3.402823e+38f;
+        return kEdgeMaskFitInvalidScoreGpu;
     }
 
-    float3 sumOn = float3(0.0f, 0.0f, 0.0f);
-    float3 sumOff = float3(0.0f, 0.0f, 0.0f);
-    float onCount = 0.0f;
-    float offCount = 0.0f;
+    int sumOnR = 0;
+    int sumOnG = 0;
+    int sumOnB = 0;
+    int sumOffR = 0;
+    int sumOffG = 0;
+    int sumOffB = 0;
+    int onCount = 0;
+    int offCount = 0;
 
     [unroll]
     for (int i = 0; i < 8; ++i) {
         uint bit = BrailleBitFromDotIndex((uint)i);
+        uint3 rgb = DotColorBytes(dots[i]);
         if ((mask & (1u << bit)) != 0u) {
-            sumOn += dots[i].color;
-            onCount += 1.0f;
+            sumOnR += (int)rgb.r;
+            sumOnG += (int)rgb.g;
+            sumOnB += (int)rgb.b;
+            ++onCount;
         } else {
-            sumOff += dots[i].color;
-            offCount += 1.0f;
+            sumOffR += (int)rgb.r;
+            sumOffG += (int)rgb.g;
+            sumOffB += (int)rgb.b;
+            ++offCount;
         }
     }
 
-    float3 rawBg = sumOff / offCount;
-    float3 meanOn = sumOn / onCount;
-    float validCount = onCount + offCount;
-    float3 meanAll = (sumOn + sumOff) / validCount;
-    float3 delta = abs(meanOn - rawBg) * 255.0f;
-    float bgBlend = EdgeBackgroundBlendAmount(
-        onCount, validCount, max(max(delta.r, delta.g), delta.b));
-    float3 bg = lerp(rawBg, meanAll, bgBlend);
-    float scale = min((float)kInkCoverageMaxScale / 256.0f,
-                      1.0f / max(kInkVisibleDotCoverage, 1e-5f));
-    float3 fg = saturate(bg + (meanOn - bg) * scale);
-    float3 predOn = lerp(bg, fg, kInkVisibleDotCoverage);
-    float bgY = GetLuma(bg);
-    float fgY = GetLuma(fg);
-    float predOnY = GetLuma(predOn);
+    if (onCount == 0 || offCount == 0) {
+        return kEdgeMaskFitInvalidScoreGpu;
+    }
 
-    float score = 0.0f;
+    int rawBgR = (sumOffR + offCount / 2) / offCount;
+    int rawBgG = (sumOffG + offCount / 2) / offCount;
+    int rawBgB = (sumOffB + offCount / 2) / offCount;
+    int meanOnR = (sumOnR + onCount / 2) / onCount;
+    int meanOnG = (sumOnG + onCount / 2) / onCount;
+    int meanOnB = (sumOnB + onCount / 2) / onCount;
+    int validCount = onCount + offCount;
+    int meanAllR = (sumOnR + sumOffR + validCount / 2) / validCount;
+    int meanAllG = (sumOnG + sumOffG + validCount / 2) / validCount;
+    int meanAllB = (sumOnB + sumOffB + validCount / 2) / validCount;
+    int bgBlend = EdgeBackgroundBlendAmountInt(
+        onCount, validCount,
+        MaxRgbDeltaInt(meanOnR, meanOnG, meanOnB, rawBgR, rawBgG, rawBgB));
+    int bgR = BlendChannelToMeanInt(rawBgR, meanAllR, bgBlend);
+    int bgG = BlendChannelToMeanInt(rawBgG, meanAllG, bgBlend);
+    int bgB = BlendChannelToMeanInt(rawBgB, meanAllB, bgBlend);
+
+    int coverage = max(1, Scale256(kInkVisibleDotCoverage));
+    int scale = min(kInkCoverageMaxScale, (256 * 256 + coverage / 2) / coverage);
+    int fgR = ClampByteInt(bgR + ScaleDelta256(meanOnR - bgR, scale));
+    int fgG = ClampByteInt(bgG + ScaleDelta256(meanOnG - bgG, scale));
+    int fgB = ClampByteInt(bgB + ScaleDelta256(meanOnB - bgB, scale));
+    int predOnR = (fgR * coverage + bgR * (256 - coverage) + 128) >> 8;
+    int predOnG = (fgG * coverage + bgG * (256 - coverage) + 128) >> 8;
+    int predOnB = (fgB * coverage + bgB * (256 - coverage) + 128) >> 8;
+    int bgY = (int)RgbToYByte((uint)bgR, (uint)bgG, (uint)bgB);
+    int fgY = (int)RgbToYByte((uint)fgR, (uint)fgG, (uint)fgB);
+    int predOnY = (int)RgbToYByte((uint)predOnR, (uint)predOnG,
+                                  (uint)predOnB);
+
+    int score = 0;
     [unroll]
     for (int j = 0; j < 8; ++j) {
         uint bit = BrailleBitFromDotIndex((uint)j);
         bool on = ((mask & (1u << bit)) != 0u);
-        float3 pred = on ? predOn : bg;
-        float3 d = dots[j].color - pred;
-        float dy = (GetLuma(dots[j].color) - (on ? predOnY : bgY)) / 255.0f;
-        score += dot(d, d) + dy * dy * kPerceptualLumaErrorWeight;
+        uint3 rgb = DotColorBytes(dots[j]);
+        score += PerceptualDisplayErrorInt(
+            (int)rgb.r, (int)rgb.g, (int)rgb.b, on ? predOnR : bgR,
+            on ? predOnG : bgG, on ? predOnB : bgB, on ? predOnY : bgY);
     }
-    if (bgY > fgY && kPerceptualBrightBgPenalty > 0.0f) {
-        float bgLead = bgY - fgY;
-        float visibleInkContrast = bgLead * kInkVisibleDotCoverage;
-        float dominanceArea = max(0.0f, 1.0f - kInkVisibleDotCoverage * 2.0f);
-        float bgDominance = bgLead * dominanceArea;
-        float missing =
-            max((float)kPerceptualPreferredBrightBgInkContrast -
-                    visibleInkContrast,
-                bgDominance);
-        if (missing > 0.0f) {
-            float missingNorm = missing / 255.0f;
-            score += missingNorm * missingNorm * onCount *
-                     kPerceptualBrightBgPenalty;
+
+    int brightBgPenalty = Scale256(kPerceptualBrightBgPenalty);
+    if (bgY > fgY && brightBgPenalty > 0) {
+        int bgLead = bgY - fgY;
+        int visibleInkContrast = (bgLead * coverage + 128) >> 8;
+        int dominanceArea = max(0, 256 - coverage * 2);
+        int bgDominance = (bgLead * dominanceArea + 128) >> 8;
+        int missing = max(kPerceptualPreferredBrightBgInkContrast -
+                              visibleInkContrast,
+                          bgDominance);
+        if (missing > 0) {
+            score += (missing * missing * onCount * brightBgPenalty + 128) >> 8;
+            score = min(score, kEdgeMaskFitInvalidScoreGpu - 1);
         }
     }
     return score;
@@ -907,25 +1003,26 @@ uint FitEdgeMask(uint initialMask, DotInfo dots[8]) {
     // simple full-sweep implementation.
     initialMask &= 0xffu;
     uint bestMask = initialMask;
-    float baseScore = EdgeMaskFitScore(initialMask, dots);
-    float bestScore = baseScore;
+    int baseScore = EdgeMaskFitScore(initialMask, dots);
+    int bestScore = baseScore;
 
     [loop]
     for (uint candidate = 1u; candidate < 255u; ++candidate) {
-        float score = EdgeMaskFitScore(candidate, dots);
+        int score = EdgeMaskFitScore(candidate, dots);
         if (score < bestScore) {
             bestScore = score;
             bestMask = candidate;
         }
     }
 
-    if (bestMask == initialMask || bestScore >= 3.402823e+37f) {
+    if (bestMask == initialMask || bestScore >= kEdgeMaskFitInvalidScoreGpu) {
         return initialMask;
     }
-    if (baseScore >= 3.402823e+37f) {
+    if (baseScore >= kEdgeMaskFitInvalidScoreGpu) {
         return bestMask;
     }
-    if (bestScore <= baseScore * (1.0f - kEdgeMaskFitMinGain)) {
+    int requiredGain = 256 - Scale256(kEdgeMaskFitMinGain);
+    if (bestScore * 256 <= baseScore * requiredGain) {
         return bestMask;
     }
     return initialMask;
