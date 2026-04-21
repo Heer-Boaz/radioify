@@ -56,18 +56,3 @@ RADIOIFY_ASCII_LUMA_U8(kColorBoundarySoftFullDelta, 112)  // RGB-channel delta w
 RADIOIFY_ASCII_SCALE_256(kColorBoundarySoftStrength, 128)  // max FG/BG color pull toward the cell mean, 256 == 100%
 RADIOIFY_ASCII_SCALE_256(kColorBoundarySignalAttenuation, 224)  // max edge/detail signal reduction for related-hue tonal boundaries
 RADIOIFY_ASCII_SCALE_256(kColorBoundaryHueSimilarity, 112)  // related-hue threshold; 256 == identical chroma direction
-
-// Shadow chroma protection.
-RADIOIFY_ASCII_LUMA_U8(kShadowSatStartLuma, 16)
-RADIOIFY_ASCII_LUMA_U8(kShadowSatFullLuma, 96)
-RADIOIFY_ASCII_SCALE_256(kShadowMinSaturation, 24)
-RADIOIFY_ASCII_LUMA_U8(kShadowBlueGuardStartLuma, 44)
-RADIOIFY_ASCII_LUMA_U8(kShadowBlueGuardRange, 36)
-RADIOIFY_ASCII_SIGNAL_U8(kShadowBlueDominanceStart, 15)
-RADIOIFY_ASCII_SIGNAL_U8(kShadowBlueDominanceFull, 51)
-RADIOIFY_ASCII_SCALE_256(kShadowBlueGuardKeep, 115)
-RADIOIFY_ASCII_SIGNAL_U8(kSourceBlueSignalStart, 8)
-RADIOIFY_ASCII_SIGNAL_U8(kSourceBlueSignalFull, 46)
-RADIOIFY_ASCII_SIGNAL_U8(kSourceChromaSignalStart, 5)
-RADIOIFY_ASCII_SIGNAL_U8(kSourceChromaSignalFull, 36)
-RADIOIFY_ASCII_SCALE_256(kSourceBlueGuardRelax, 77)

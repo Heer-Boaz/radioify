@@ -77,6 +77,19 @@ struct RenderedVariant {
   double renderMs = 0.0;
 };
 
+struct ColorMetrics {
+  uint64_t samples = 0;
+  double chromaSum = 0.0;
+  double saturationSum = 0.0;
+  double lumaSum = 0.0;
+};
+
+struct ArtColorMetrics {
+  ColorMetrics fg;
+  ColorMetrics bg;
+  ColorMetrics visual;
+};
+
 struct OutputDelta {
   uint64_t cellCount = 0;
   uint64_t changedCells = 0;
@@ -201,7 +214,7 @@ void printUsage() {
   std::cout
       << "ascii_shader_tests [options]\n"
       << "  --fixture <all|circle-checker|phone-edge|thin-lines|"
-         "fullmask-contrast|color-boundary>\n"
+         "fullmask-contrast|color-boundary|saturated-shadows>\n"
       << "  --variant <all|current|ink-only|no-dither|no-edge-detect|"
          "no-signal-dampen|no-detail-boost|no-edge-mask-fit|"
          "no-ink-coverage|no-neighbor-continuity|"
@@ -632,6 +645,49 @@ RgbaImage makeColorBoundaryFixture(int width, int height) {
   return image;
 }
 
+RgbaImage makeSaturatedShadowsFixture(int width, int height) {
+  RgbaImage image = makeImage(width, height);
+  static constexpr std::array<Rgb, 6> kHues{
+      Rgb{180, 18, 24}, Rgb{222, 92, 14}, Rgb{32, 168, 42},
+      Rgb{18, 120, 210}, Rgb{116, 48, 214}, Rgb{214, 30, 142}};
+
+  for (int y = 0; y < height; ++y) {
+    float yf = (height <= 1) ? 0.0f : static_cast<float>(y) / (height - 1);
+    float shade = 0.12f + 0.88f * yf;
+    for (int x = 0; x < width; ++x) {
+      int band = std::clamp((x * static_cast<int>(kHues.size())) /
+                                std::max(1, width),
+                            0, static_cast<int>(kHues.size()) - 1);
+      Rgb hue = kHues[static_cast<size_t>(band)];
+      float wave = 0.82f + 0.18f * std::sin(x * 0.037f + y * 0.021f);
+      Rgb c{clampByte(static_cast<int>(hue.r * shade * wave)),
+            clampByte(static_cast<int>(hue.g * shade * wave)),
+            clampByte(static_cast<int>(hue.b * shade * wave))};
+      setPixel(image, x, y, addNoise(c, x, y, 173, 3));
+    }
+  }
+
+  auto drawStripe = [&](float yNorm, Rgb color) {
+    int cy = std::clamp(static_cast<int>(std::lround(yNorm * height)), 0,
+                        std::max(0, height - 1));
+    int thickness = std::max(1, height / 48);
+    for (int y = std::max(0, cy - thickness);
+         y < std::min(height, cy + thickness + 1); ++y) {
+      for (int x = 0; x < width; ++x) {
+        float alpha =
+            0.25f + 0.45f * (0.5f + 0.5f * std::sin(x * 0.05f));
+        blendPixel(image, x, y, color, alpha);
+      }
+    }
+  };
+  drawStripe(0.22f, Rgb{255, 42, 48});
+  drawStripe(0.44f, Rgb{42, 220, 72});
+  drawStripe(0.66f, Rgb{48, 124, 255});
+  drawStripe(0.84f, Rgb{235, 44, 184});
+
+  return image;
+}
+
 RgbaImage makeFixture(std::string_view fixture, int width, int height) {
   if (fixture == "circle-checker") return makeCircleCheckerFixture(width, height);
   if (fixture == "phone-edge") return makePhoneEdgeFixture(width, height);
@@ -641,6 +697,9 @@ RgbaImage makeFixture(std::string_view fixture, int width, int height) {
   }
   if (fixture == "color-boundary") {
     return makeColorBoundaryFixture(width, height);
+  }
+  if (fixture == "saturated-shadows") {
+    return makeSaturatedShadowsFixture(width, height);
   }
   fail(std::string("unknown fixture: ") + std::string(fixture));
 }
@@ -654,9 +713,9 @@ bool wants(std::string_view selected, const std::string& name) {
 }
 
 std::vector<std::string_view> selectedFixtures(const HarnessConfig& config) {
-  static constexpr std::array<std::string_view, 5> kFixtures{
+  static constexpr std::array<std::string_view, 6> kFixtures{
       "circle-checker", "phone-edge", "thin-lines", "fullmask-contrast",
-      "color-boundary"};
+      "color-boundary", "saturated-shadows"};
   std::vector<std::string_view> out;
   for (std::string_view fixture : kFixtures) {
     if (wants(config.fixture, fixture)) out.push_back(fixture);
@@ -1068,6 +1127,61 @@ double colorLuma(const Color& c) {
          (0.0722 * static_cast<double>(c.b));
 }
 
+double colorLuma(double r, double g, double b) {
+  return (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
+}
+
+void addColorSample(ColorMetrics& metrics, double r, double g, double b) {
+  double maxC = std::max({r, g, b});
+  double minC = std::min({r, g, b});
+  double chroma = maxC - minC;
+  ++metrics.samples;
+  metrics.chromaSum += chroma;
+  metrics.saturationSum += (maxC > 0.0) ? (chroma / maxC) : 0.0;
+  metrics.lumaSum += colorLuma(r, g, b);
+}
+
+double meanColorMetric(double sum, uint64_t samples) {
+  if (samples == 0) return 0.0;
+  return sum / static_cast<double>(samples);
+}
+
+ColorMetrics measureSourceColor(const RgbaImage& image) {
+  ColorMetrics metrics;
+  for (size_t i = 0; i + 3 < image.pixels.size(); i += 4) {
+    if (image.pixels[i + 3] == 0) continue;
+    addColorSample(metrics, image.pixels[i + 0], image.pixels[i + 1],
+                   image.pixels[i + 2]);
+  }
+  return metrics;
+}
+
+ArtColorMetrics measureArtColor(const AsciiArt& art) {
+  ArtColorMetrics metrics;
+  for (const AsciiArt::AsciiCell& cell : art.cells) {
+    addColorSample(metrics.fg, cell.fg.r, cell.fg.g, cell.fg.b);
+    if (cell.hasBg) {
+      addColorSample(metrics.bg, cell.bg.r, cell.bg.g, cell.bg.b);
+    }
+
+    const uint32_t mask = brailleMaskForCell(cell);
+    const double inkCoverage = static_cast<double>(dotCount(mask)) / 8.0;
+    double r = static_cast<double>(cell.fg.r);
+    double g = static_cast<double>(cell.fg.g);
+    double b = static_cast<double>(cell.fg.b);
+    if (cell.hasBg) {
+      r = static_cast<double>(cell.bg.r) * (1.0 - inkCoverage) +
+          static_cast<double>(cell.fg.r) * inkCoverage;
+      g = static_cast<double>(cell.bg.g) * (1.0 - inkCoverage) +
+          static_cast<double>(cell.fg.g) * inkCoverage;
+      b = static_cast<double>(cell.bg.b) * (1.0 - inkCoverage) +
+          static_cast<double>(cell.fg.b) * inkCoverage;
+    }
+    addColorSample(metrics.visual, r, g, b);
+  }
+  return metrics;
+}
+
 OutputDelta compareArt(const AsciiArt& baseline, const AsciiArt& candidate) {
   if (baseline.width != candidate.width || baseline.height != candidate.height ||
       baseline.cells.size() != candidate.cells.size()) {
@@ -1229,6 +1343,9 @@ void populateBasicStatsFromArt(const AsciiArt& art,
 
 void writeCsvHeader(std::ostream& out) {
   out << "fixture,variant,backend,width,height,edgefit_mode,render_ms,cells,bg_cells,bg_pct,avg_dots,"
+         "src_chroma,src_sat,src_luma,"
+         "fg_chroma,fg_sat,fg_luma,bg_chroma,bg_sat,bg_luma,"
+         "visual_chroma,visual_sat,visual_luma,"
          "dither_cells,edge_cells,"
          "signal_dampened,detail_boosted,edge_mask_fit,"
          "edge_mask_candidate_fit,edge_mask_bruteforce_sweep,"
@@ -1242,7 +1359,9 @@ void writeCsvHeader(std::ostream& out) {
 void writeCsvRow(std::ostream& out, std::string_view fixture,
                  std::string_view variant, const AsciiArt& art,
                  const ascii_debug::RenderStats& stats, double renderMs,
-                 std::string_view backend, std::string_view edgeFitMode) {
+                 std::string_view backend, std::string_view edgeFitMode,
+                 const ColorMetrics& sourceColor,
+                 const ArtColorMetrics& artColor) {
   out << fixture << ',' << variant << ',' << backend << ',' << art.width << ','
       << art.height
       << ',' << edgeFitMode
@@ -1251,6 +1370,21 @@ void writeCsvRow(std::ostream& out, std::string_view fixture,
       << std::fixed << std::setprecision(2)
       << percent(stats.bgCellCount, stats.cellCount) << ','
       << std::setprecision(3) << averageDots(stats) << std::setprecision(2)
+      << ',' << meanColorMetric(sourceColor.chromaSum, sourceColor.samples)
+      << ',' << meanColorMetric(sourceColor.saturationSum, sourceColor.samples)
+      << ',' << meanColorMetric(sourceColor.lumaSum, sourceColor.samples)
+      << ',' << meanColorMetric(artColor.fg.chromaSum, artColor.fg.samples)
+      << ',' << meanColorMetric(artColor.fg.saturationSum, artColor.fg.samples)
+      << ',' << meanColorMetric(artColor.fg.lumaSum, artColor.fg.samples)
+      << ',' << meanColorMetric(artColor.bg.chromaSum, artColor.bg.samples)
+      << ',' << meanColorMetric(artColor.bg.saturationSum, artColor.bg.samples)
+      << ',' << meanColorMetric(artColor.bg.lumaSum, artColor.bg.samples)
+      << ',' << meanColorMetric(artColor.visual.chromaSum,
+                                 artColor.visual.samples)
+      << ',' << meanColorMetric(artColor.visual.saturationSum,
+                                 artColor.visual.samples)
+      << ',' << meanColorMetric(artColor.visual.lumaSum,
+                                 artColor.visual.samples)
       << ',' << stats.ditherCellCount << ',' << stats.edgeCellCount << ','
       << stats.signalDampenCount << ',' << stats.detailBoostCount << ','
       << stats.edgeMaskFitCount << ','
@@ -1389,8 +1523,11 @@ RenderedVariant renderVariant(const HarnessConfig& config,
   writeAnsi(fixtureDir / (base + ".ans"), rendered.art);
   writePlainText(fixtureDir / (base + ".txt"), rendered.art);
   writeAsciiRasterPng(fixtureDir / (base + ".png"), rendered.art);
+  ColorMetrics sourceColor = measureSourceColor(image);
+  ArtColorMetrics artColor = measureArtColor(rendered.art);
   writeCsvRow(csv, fixtureName, variant.name, rendered.art, rendered.stats,
-              rendered.renderMs, config.backend, edgeFitModeLabel(config));
+              rendered.renderMs, config.backend, edgeFitModeLabel(config),
+              sourceColor, artColor);
 
   std::cout << std::setw(16) << fixtureName << "  " << std::setw(3)
             << config.backend << "  " << std::setw(22)
@@ -1399,6 +1536,13 @@ RenderedVariant renderVariant(const HarnessConfig& config,
             << percent(rendered.stats.bgCellCount, rendered.stats.cellCount)
             << "%  dots=" << std::setprecision(2)
             << averageDots(rendered.stats)
+            << "  chroma(fg/bg/vis)=" << std::setprecision(1)
+            << meanColorMetric(artColor.fg.chromaSum, artColor.fg.samples)
+            << '/'
+            << meanColorMetric(artColor.bg.chromaSum, artColor.bg.samples)
+            << '/'
+            << meanColorMetric(artColor.visual.chromaSum,
+                                artColor.visual.samples)
             << "  ms=" << std::setprecision(3) << rendered.renderMs
             << "  edgefit=" << rendered.stats.edgeMaskFitCount
             << "  mode=" << edgeFitModeLabel(config)

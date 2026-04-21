@@ -9,6 +9,7 @@
 #include "audioplayback.h"
 #include "core/windows_message_pump.h"
 #include "gpu_shared.h"
+#include "playback/playback_frame_refresh.h"
 #include "playback_mini_player_tui.h"
 
 namespace playback_framebuffer_presenter {
@@ -143,10 +144,9 @@ void runFramebufferPresenterLoop(
     return;
   }
 
-  VideoFrame localFrame;
+  playback_frame_refresh::PlaybackFrameRefreshState frameRefresh;
   std::vector<ScreenCell> pictureInPictureTextCells;
   GpuTextGridFrame pictureInPictureTextFrame;
-  uint64_t lastCounter = player.videoFrameCounter();
   auto lastOverlayPresent = std::chrono::steady_clock::time_point::min();
   bool lastWindowOverlayVisible = false;
   bool lastWindowSeeking = false;
@@ -229,14 +229,14 @@ void runFramebufferPresenterLoop(
       break;
     }
 
-    uint64_t counterNow = player.videoFrameCounter();
-    bool frameChanged = false;
-    bool textFrameChanged = false;
-    if (counterNow != lastCounter) {
-      textFrameChanged = player.tryGetVideoFrame(&localFrame);
-      frameChanged = textFrameChanged;
-      lastCounter = counterNow;
-    }
+    bool forcePresentNow =
+        forcePresent.exchange(false, std::memory_order_relaxed);
+    playback_frame_refresh::PlaybackFrameRefreshRequest frameRequest;
+    frameRequest.forceRefresh = forcePresentNow;
+    playback_frame_refresh::PlaybackFrameRefreshResult frameResult =
+        playback_frame_refresh::refresh(player, frameRefresh, frameRequest);
+    bool frameChanged = frameResult.frameChanged;
+    bool textFrameChanged = frameResult.frameChanged;
     if (threadState.load(std::memory_order_relaxed) ==
         WindowThreadState::Stopping) {
       break;
@@ -244,20 +244,16 @@ void runFramebufferPresenterLoop(
     const bool textGridPresentationActive =
         videoWindow.IsPictureInPicture() &&
         videoWindow.IsPictureInPictureTextMode();
-    if (textGridPresentationActive && localFrame.width <= 0 &&
-        player.copyCurrentVideoFrame(&localFrame)) {
-      textFrameChanged = true;
-    }
-    if (frameChanged && textGridPresentationActive) {
+    if (textGridPresentationActive) {
       frameChanged = false;
     }
     if (frameChanged) {
-      if (localFrame.format != VideoPixelFormat::HWTexture ||
-          !localFrame.hwTexture) {
+      if (frameRefresh.frame.format != VideoPixelFormat::HWTexture ||
+          !frameRefresh.frame.hwTexture) {
         frameChanged = false;
       } else {
         D3D11_TEXTURE2D_DESC desc{};
-        localFrame.hwTexture->GetDesc(&desc);
+        frameRefresh.frame.hwTexture->GetDesc(&desc);
         bool is10Bit = (desc.Format == DXGI_FORMAT_P010);
 
         ID3D11Device* device = getSharedGpuDevice();
@@ -267,11 +263,12 @@ void runFramebufferPresenterLoop(
           if (context) {
             std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
             bool updated = frameCache.Update(
-                device, context.Get(), localFrame.hwTexture.Get(),
-                localFrame.hwTextureArrayIndex, localFrame.width,
-                localFrame.height, localFrame.fullRange, localFrame.yuvMatrix,
-                localFrame.yuvTransfer, is10Bit ? 10 : 8,
-                localFrame.rotationQuarterTurns);
+                device, context.Get(), frameRefresh.frame.hwTexture.Get(),
+                frameRefresh.frame.hwTextureArrayIndex,
+                frameRefresh.frame.width, frameRefresh.frame.height,
+                frameRefresh.frame.fullRange, frameRefresh.frame.yuvMatrix,
+                frameRefresh.frame.yuvTransfer, is10Bit ? 10 : 8,
+                frameRefresh.frame.rotationQuarterTurns);
             if (!updated) {
               frameChanged = false;
             }
@@ -281,8 +278,6 @@ void runFramebufferPresenterLoop(
     }
 
     bool seekingNow = player.isSeeking();
-    bool forcePresentNow =
-        forcePresent.exchange(false, std::memory_order_relaxed);
     if (videoWindow.IsPictureInPicture() &&
         videoWindow.IsPictureInPictureTextMode()) {
       const int windowWidth = videoWindow.GetWidth();
@@ -307,8 +302,7 @@ void runFramebufferPresenterLoop(
         int textCols = 0;
         int textRows = 0;
         const VideoFrame* textFrame =
-            (localFrame.width > 0 && localFrame.height > 0) ? &localFrame
-                                                            : nullptr;
+            frameResult.frameAvailable ? &frameRefresh.frame : nullptr;
         if (buildPictureInPictureTextGrid &&
             buildPictureInPictureTextGrid(windowWidth, windowHeight, cellWidth,
                                           cellHeight, textFrame,

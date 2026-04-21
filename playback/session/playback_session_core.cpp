@@ -8,6 +8,7 @@
 
 #include "audioplayback.h"
 #include "consolescreen.h"
+#include "playback/playback_frame_refresh.h"
 #include "player.h"
 #include "playback/ascii/playback_frame_output.h"
 #include "playback/ascii/playback_screen_renderer.h"
@@ -57,31 +58,6 @@ void syncPlaybackEndedState(Player& player,
   if (playbackState == PlaybackSessionState::Ended) {
     playbackState = PlaybackSessionState::Active;
   }
-}
-
-bool refreshFrameAvailability(Player& player, bool useWindowPresenter,
-                              VideoFrame& frameBuffer, bool& haveFrame,
-                              bool& redraw, bool windowActive) {
-  bool presented = false;
-  VideoFrame nextFrame;
-  if (!useWindowPresenter && player.tryGetVideoFrame(&nextFrame)) {
-    frameBuffer = std::move(nextFrame);
-    haveFrame = true;
-    presented = true;
-    if (!windowActive) {
-      redraw = true;
-    }
-  }
-  if (!player.hasVideoFrame()) {
-    if (!player.isEnded()) {
-      haveFrame = false;
-    } else if (frameBuffer.width > 0 && frameBuffer.height > 0) {
-      haveFrame = true;
-    }
-  } else if (useWindowPresenter) {
-    haveFrame = true;
-  }
-  return presented;
 }
 
 }  // namespace
@@ -139,7 +115,7 @@ struct PlaybackSessionCore::Impl {
   void bindRenderInputs(
       playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) {
     renderInputs.player = &player;
-    renderInputs.frame = &frameBuffer;
+    renderInputs.frame = &frameRefresh.frame;
     renderInputs.windowLocalSeekRequested = &windowLocalSeekRequested;
   }
 
@@ -148,7 +124,9 @@ struct PlaybackSessionCore::Impl {
     renderInputs.playbackState = playbackState;
     renderInputs.audioOk = audioOk;
     renderInputs.audioStarting = audioStarting;
-    renderInputs.frameAvailable = haveFrame;
+    renderInputs.frameAvailable =
+        frameRefresh.frameAvailable ||
+        (renderInputs.useWindowPresenter && player.hasVideoFrame());
     renderInputs.localSeekRequested = localSeekRequested;
     renderInputs.pendingSeekTargetSec = pendingSeekTargetSec;
   }
@@ -174,17 +152,25 @@ struct PlaybackSessionCore::Impl {
     return true;
   }
 
-  void applyPresenterSync(const PlaybackPresenterSyncResult& syncResult) {
-    if (syncResult.switchedAwayFromWindow() &&
-        player.copyCurrentVideoFrame(&frameBuffer)) {
-      haveFrame = true;
+  bool applyPresenterSync(const PlaybackPresenterSyncResult& syncResult) {
+    if (!syncResult.switchedAwayFromWindow()) {
+      return false;
     }
+    playback_frame_refresh::PlaybackFrameRefreshRequest request;
+    request.forceRefresh = true;
+    return playback_frame_refresh::refresh(player, frameRefresh, request)
+        .frameChanged;
   }
 
   bool refresh(bool useWindowPresenter, bool windowActive, bool& redraw) {
-    bool presented = refreshFrameAvailability(player, useWindowPresenter,
-                                              frameBuffer, haveFrame, redraw,
-                                              windowActive);
+    playback_frame_refresh::PlaybackFrameRefreshRequest request;
+    request.acceptNewFrames = !useWindowPresenter;
+    playback_frame_refresh::PlaybackFrameRefreshResult result =
+        playback_frame_refresh::refresh(player, frameRefresh, request);
+    bool presented = !useWindowPresenter && result.frameChanged;
+    if (presented && !windowActive) {
+      redraw = true;
+    }
     syncSeekState(player, localSeekRequested, windowLocalSeekRequested,
                   seekRequestTime, pendingSeekTargetSec,
                   windowPendingSeekTargetSec);
@@ -242,8 +228,7 @@ struct PlaybackSessionCore::Impl {
   bool audioOk;
   bool audioStarting;
   PlaybackSessionState playbackState = PlaybackSessionState::Active;
-  VideoFrame frameBuffer;
-  bool haveFrame = false;
+  playback_frame_refresh::PlaybackFrameRefreshState frameRefresh;
   bool pendingResize = false;
   bool localSeekRequested = false;
   std::atomic<bool> windowLocalSeekRequested{false};
@@ -300,9 +285,9 @@ bool PlaybackSessionCore::finalizeAudioStart() {
   return impl_->finalizeAudioStart();
 }
 
-void PlaybackSessionCore::applyPresenterSync(
+bool PlaybackSessionCore::applyPresenterSync(
     const PlaybackPresenterSyncResult& syncResult) {
-  impl_->applyPresenterSync(syncResult);
+  return impl_->applyPresenterSync(syncResult);
 }
 
 bool PlaybackSessionCore::refresh(bool useWindowPresenter, bool windowActive,

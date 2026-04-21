@@ -53,9 +53,6 @@ static const uint kMatrixBt2020 = 2;
 static const uint kTransferSdr = 0;
 static const uint kTransferPq = 1;
 static const uint kTransferHlg = 2;
-static const float kShadowChromaBoostStart = 12.0f;
-static const float kShadowChromaBoostFull = 72.0f;
-static const float kShadowChromaPreserveStrength = 160.0f / 256.0f;
 
 #define RADIOIFY_ASCII_BOOL(name, value) static const bool name = value;
 #define RADIOIFY_ASCII_FLOAT(name, value) static const float name = value;
@@ -309,53 +306,6 @@ float CodeFromNorm(float norm) {
     return norm * 255.0f;
 }
 
-float ShadowSaturationFromLuma(float y255) {
-    if (y255 <= (float)kShadowSatStartLuma) {
-        return kShadowMinSaturation;
-    }
-    if (y255 >= (float)kShadowSatFullLuma) {
-        return 1.0f;
-    }
-    float t = (y255 - (float)kShadowSatStartLuma) /
-              max((float)(kShadowSatFullLuma - kShadowSatStartLuma), 1.0f);
-    return lerp(kShadowMinSaturation, 1.0f, t);
-}
-
-float ShadowSaturationWithChroma(float y255, float chroma255) {
-    float keep = ShadowSaturationFromLuma(y255);
-    if (keep >= 1.0f) {
-        return 1.0f;
-    }
-    if (chroma255 <= kShadowChromaBoostStart) {
-        return keep;
-    }
-    float chromaBoost = 1.0f;
-    if (chroma255 < kShadowChromaBoostFull) {
-        chromaBoost = (chroma255 - kShadowChromaBoostStart) /
-                      (kShadowChromaBoostFull - kShadowChromaBoostStart);
-    }
-    float shadowWeight = 1.0f - keep;
-    float preserveGain =
-        shadowWeight * chromaBoost * kShadowChromaPreserveStrength;
-    return min(1.0f, keep + (1.0f - keep) * preserveGain);
-}
-
-float GetSourceBlueConfidence(float blueSignal, float chromaSignal) {
-    float blue = saturate((blueSignal - kSourceBlueSignalStart) /
-                          max(kSourceBlueSignalFull - kSourceBlueSignalStart,
-                              1e-5f));
-    float chroma = saturate((chromaSignal - kSourceChromaSignalStart) /
-                            max(kSourceChromaSignalFull -
-                                    kSourceChromaSignalStart,
-                                1e-5f));
-    return blue * chroma;
-}
-
-float3 ApplySaturationAroundLuma(float3 rgb, float y255, float saturation) {
-    float gray = y255 / 255.0f;
-    return saturate(gray.xxx + (rgb - gray.xxx) * saturation);
-}
-
 float3 ScaleColorToLuma(float3 rgb, float y255, float targetY255) {
     targetY255 = clamp(targetY255, 0.0f, 255.0f);
     if (y255 <= 0.0f) {
@@ -414,33 +364,6 @@ float AttenuateSignalForColorBoundary(float signalStrength,
     float attenuation = min(boundaryAmount * kColorBoundarySignalAttenuation,
                             240.0f / 256.0f);
     return saturate(signalStrength * (1.0f - attenuation));
-}
-
-float3 CompressShadowChroma(float3 rgb, float sourceBlueConfidence) {
-    float y = GetLuma(rgb);
-    float chroma = (max(max(rgb.r, rgb.g), rgb.b) -
-                    min(min(rgb.r, rgb.g), rgb.b)) *
-                   255.0f;
-    float keep = ShadowSaturationWithChroma(y, chroma);
-    if (keep < 1.0f) {
-        rgb = ApplySaturationAroundLuma(rgb, y, keep);
-    }
-
-    float blueDominance = rgb.b - max(rgb.r, rgb.g);
-    float dark = saturate((kShadowBlueGuardStartLuma - y) /
-                          max(kShadowBlueGuardRange, 1.0f));
-    float dominance = saturate((blueDominance - kShadowBlueDominanceStart) /
-                               max(kShadowBlueDominanceFull -
-                                       kShadowBlueDominanceStart,
-                                   1e-5f));
-    float guard =
-        dark * dominance * (1.0f - kSourceBlueGuardRelax *
-                                          saturate(sourceBlueConfidence));
-    if (guard <= 0.0f) {
-        return saturate(rgb);
-    }
-    return ApplySaturationAroundLuma(rgb, y,
-                                     lerp(1.0f, kShadowBlueGuardKeep, guard));
 }
 
 float GetMaxCode() {
@@ -620,8 +543,6 @@ float GetInkLevelFromLum(float lum) {
 
 struct InputSample {
     float3 rgb;
-    float chromaSignal;
-    float blueSignal;
 };
 
 InputSample SampleInput(float2 uv) {
@@ -630,8 +551,6 @@ InputSample SampleInput(float2 uv) {
 #ifdef NV12_INPUT
     float y = ExpandYNorm(TextureY.SampleLevel(LinearSampler, srcUv, 0));
     float2 uv_val = ExpandUV(TextureUV.SampleLevel(LinearSampler, srcUv, 0));
-    sample.chromaSignal = max(abs(uv_val.x), abs(uv_val.y));
-    sample.blueSignal = max(uv_val.x - max(uv_val.y, 0.0f) * 0.75f, 0.0f);
 
     float r = 0.0f;
     float g = 0.0f;
@@ -652,8 +571,6 @@ InputSample SampleInput(float2 uv) {
     sample.rgb = float3(r, g, b);
 #else
     sample.rgb = InputTexture.SampleLevel(LinearSampler, srcUv, 0).rgb;
-    sample.chromaSignal = 0.0f;
-    sample.blueSignal = 0.0f;
 #endif
 
     float3 rgb = sample.rgb;
@@ -678,13 +595,6 @@ InputSample SampleInputArea(float2 centerUV, float2 dotSizePx) {
 
     InputSample sample;
     sample.rgb = (s00.rgb + s10.rgb + s01.rgb + s11.rgb) * 0.25f;
-    sample.blueSignal =
-        (s00.blueSignal + s10.blueSignal + s01.blueSignal + s11.blueSignal) *
-        0.25f;
-    sample.chromaSignal =
-        (s00.chromaSignal + s10.chromaSignal + s01.chromaSignal +
-         s11.chromaSignal) *
-        0.25f;
     return sample;
 }
 
@@ -696,10 +606,8 @@ uint PackByte255(float v) {
     return (uint)(saturate(v / 255.0f) * 255.0f + 0.5f);
 }
 
-uint PackDotMetrics(float luma, float edge, float sourceBlueConfidence) {
-    return PackByte255(luma) |
-           (PackByte255(edge) << 8) |
-           ((uint)(saturate(sourceBlueConfidence) * 255.0f + 0.5f) << 16);
+uint PackDotMetrics(float luma, float edge) {
+    return PackByte255(luma) | (PackByte255(edge) << 8);
 }
 
 float DotLuma(AsciiDotSample sample) {
@@ -708,10 +616,6 @@ float DotLuma(AsciiDotSample sample) {
 
 float DotEdge(AsciiDotSample sample) {
     return (float)((sample.metrics >> 8) & 0xffu);
-}
-
-float DotSourceBlueConfidence(AsciiDotSample sample) {
-    return (float)((sample.metrics >> 16) & 0xffu) * (1.0f / 255.0f);
 }
 
 AsciiDotSample DotSampleAtClamped(int x, int y, uint dotWCount,
@@ -744,9 +648,7 @@ void CSDotPrefilter(uint3 DTid : SV_DispatchThreadID) {
 
     AsciiDotSample outDot;
     outDot.color = PackColor(sample.rgb);
-    outDot.metrics = PackDotMetrics(
-        luma, 0.0f,
-        GetSourceBlueConfidence(sample.blueSignal, sample.chromaSignal));
+    outDot.metrics = PackDotMetrics(luma, 0.0f);
     DotOutputBuffer[DTid.y * dotWCount + DTid.x] = outDot;
 }
 
@@ -794,7 +696,6 @@ struct DotInfo {
     float luma;
     float edge;
     float3 color;
-    float sourceBlueConfidence;
 };
 
 float MaskColorBoundarySoftAmount(uint mask, DotInfo dots[8]) {
@@ -932,7 +833,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     float cellEdgeMax = 0.0f;
 
     float3 sumAll = float3(0,0,0);
-    float sumAllBlueConfidence = 0.0f;
 
     uint dotBaseX = DTid.x * 2u;
     uint dotBaseY = DTid.y * 4u;
@@ -952,14 +852,12 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         dots[i].luma = luma;
         dots[i].edge = edge;
         dots[i].color = UnpackColor(sample.color);
-        dots[i].sourceBlueConfidence = DotSourceBlueConfidence(sample);
 
         cellLumMin = min(cellLumMin, luma);
         cellLumMax = max(cellLumMax, luma);
         cellLumSum += luma;
         cellEdgeMax = max(cellEdgeMax, edge);
         sumAll += dots[i].color;
-        sumAllBlueConfidence += dots[i].sourceBlueConfidence;
     }
 
     float cellBgLum = (cellLumSum - cellLumMin - cellLumMax) * (1.0f / 6.0f);
@@ -983,8 +881,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     uint bitmask = 0;
     float3 sumInk = float3(0,0,0);
     float3 sumBg = float3(0,0,0);
-    float sumInkBlueConfidence = 0.0f;
-    float sumBgBlueConfidence = 0.0f;
     int inkCount = 0;
     int bgCount = 0;
 
@@ -1059,11 +955,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
         uint bit = BrailleBitFromDotIndex((uint)k2);
         if ((bitmask & (1u << bit)) != 0u) {
             sumInk += dots[k2].color;
-            sumInkBlueConfidence += dots[k2].sourceBlueConfidence;
             inkCount++;
         } else {
             sumBg += dots[k2].color;
-            sumBgBlueConfidence += dots[k2].sourceBlueConfidence;
             bgCount++;
         }
     }
@@ -1075,12 +969,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     // If no dots are set, the cell is effectively all background.
     float3 curFg = (inkCount > 0) ? (sumInk / inkCount) : (sumAll / 8.0f);
     float3 curBg = (bgCount > 0) ? (sumBg / bgCount) : (sumAll / 8.0f);
-    float curFgBlueConfidence =
-        (inkCount > 0) ? (sumInkBlueConfidence / inkCount)
-                       : (sumAllBlueConfidence / 8.0f);
-    float curBgBlueConfidence =
-        (bgCount > 0) ? (sumBgBlueConfidence / bgCount)
-                      : (sumAllBlueConfidence / 8.0f);
 
     // Color Lift: Ensure colors aren't completely black to maintain some visibility.
     // Currently set to 0 to allow true black (zwart-zwart).
@@ -1098,9 +986,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
             (float)dotCount, 8.0f, max(max(delta.r, delta.g), delta.b));
         if (bgBlend > 0.0f) {
             curBg = lerp(curBg, mean, bgBlend);
-            curBgBlueConfidence =
-                lerp(curBgBlueConfidence, sumAllBlueConfidence / 8.0f,
-                     bgBlend);
         }
     }
 
@@ -1144,8 +1029,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     if (diffBg < resetThresh) {
         curBg = lerp(prevBg, curBg, bgBlendAlpha);
     }
-    curFg = CompressShadowChroma(curFg, curFgBlueConfidence);
-    curBg = CompressShadowChroma(curBg, curBgBlueConfidence);
 
     AsciiCell cell;
     cell.ch = kBrailleBase + bitmask;

@@ -97,6 +97,7 @@ struct PlaybackLoopRunner::Impl {
   bool pendingPictureInPictureOpen = false;
   bool pendingPictureInPictureTextMode = false;
   bool pictureInPictureStartedFromTerminal = false;
+  bool copiedFrameNeedsRender = false;
   bool redraw = true;
   bool forceRefreshArt = false;
   playback_frame_output::FrameOutputState frameOutputState;
@@ -312,6 +313,7 @@ struct PlaybackLoopRunner::Impl {
     inputs.allowAsciiCpuFallback = false;
     inputs.frameOutputState = &pictureInPictureTextOutputState;
     core.updateRenderInputs(inputs);
+    inputs.frameAvailable = pictureInPictureTextOutputState.haveFrame;
 
     playback_screen_renderer::renderPlaybackScreen(inputs);
     if (pictureInPictureTextOutputState.renderFailed) {
@@ -351,7 +353,11 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void applyPresenterSync(const PlaybackPresenterSyncResult& syncResult) {
-    core.applyPresenterSync(syncResult);
+    if (core.applyPresenterSync(syncResult)) {
+      copiedFrameNeedsRender = true;
+      forceRefreshArt = true;
+      redraw = true;
+    }
   }
 
   void shutdown() {
@@ -432,7 +438,9 @@ struct PlaybackLoopRunner::Impl {
 
   void renderPlaybackFrame(bool presented, PlaybackLoopState& loopState) {
     auto t0 = std::chrono::steady_clock::now();
-    updateRenderInputs(forceRefreshArt, presented);
+    const bool renderCopiedFrame = copiedFrameNeedsRender;
+    updateRenderInputs(forceRefreshArt || renderCopiedFrame,
+                       presented || renderCopiedFrame);
     output.renderTerminal(renderInputs);
     auto t1 = std::chrono::steady_clock::now();
     lastOverlayRefresh = t1;
@@ -449,6 +457,7 @@ struct PlaybackLoopRunner::Impl {
     }
     redraw = false;
     forceRefreshArt = false;
+    copiedFrameNeedsRender = false;
   }
 
   bool initialize() {

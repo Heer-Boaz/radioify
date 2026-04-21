@@ -54,7 +54,7 @@ class PlaybackSessionCore {
       playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) const;
 
   bool finalizeAudioStart();
-  void applyPresenterSync(const PlaybackPresenterSyncResult& syncResult);
+  bool applyPresenterSync(const PlaybackPresenterSyncResult& syncResult);
   bool refresh(bool useWindowPresenter, bool windowActive, bool& redraw);
   uint64_t videoFrameCounter() const;
   bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;

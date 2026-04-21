@@ -1534,6 +1534,7 @@ struct Player::Impl {
 
   std::atomic<bool> audioStartDone{false};
   std::atomic<bool> audioStartOk{false};
+  std::atomic<bool> audioStreamStarted{false};
 
   std::atomic<bool> decodeEnded{false};
   std::atomic<bool> demuxEnded{false};
@@ -1573,7 +1574,6 @@ struct Player::Impl {
   std::condition_variable frameCv;
   std::mutex frameCvMutex;
   std::atomic<uint64_t> frameCounter{0};
-  std::atomic<uint64_t> lastReadCounter{0};
   HANDLE frameReadyEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
   std::mutex lastInfoMutex;
   VideoReadInfo lastInfo{};
@@ -1728,6 +1728,10 @@ struct Player::Impl {
     videoPackets.abortQueue();
     audioPackets.abortQueue();
     videoFrames.abort();
+    if (audioStreamStarted.exchange(false, std::memory_order_relaxed)) {
+      audioSetHold(false);
+      audioStopStream();
+    }
     if (demuxThread.joinable()) {
       appendTimingFmt("stop_threads demux_join_begin");
       demuxThread.join();
@@ -1805,7 +1809,6 @@ struct Player::Impl {
     lastPresentedPtsUs.store(0);
     lastPresentedDurationUs.store(0);
     frameCounter.store(0);
-    lastReadCounter.store(0);
     if (frameReadyEvent) {
       ResetEvent(frameReadyEvent);
     }
@@ -1999,6 +2002,7 @@ struct Player::Impl {
       initOk.store(false);
       initDone.store(true);
       audioStartOk.store(false);
+      audioStreamStarted.store(false, std::memory_order_relaxed);
       audioStartDone.store(true);
       running.store(false);
       videoPackets.abortQueue();
@@ -2469,6 +2473,7 @@ struct Player::Impl {
                             48000));
       }
         if (audioStartStream(totalFrames)) {
+          audioStreamStarted.store(true, std::memory_order_relaxed);
           audioStreamFlushSerial(serialControl.currentSerial());
           AudioPerfStats stats = audioGetPerfStats();
           outRate = stats.sampleRate ? stats.sampleRate : 48000;
@@ -2479,8 +2484,9 @@ struct Player::Impl {
             audioReady = true;
           } else {
             appendTimingFmt("audio_init_failed msg=%s", error.c_str());
-          audioStopStream();
-        }
+            audioStopStream();
+            audioStreamStarted.store(false, std::memory_order_relaxed);
+          }
       } else {
         appendTiming("audio_start_failed");
       }
@@ -3281,25 +3287,6 @@ bool Player::waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const {
 HANDLE Player::videoFrameWaitHandle() const {
   if (!impl_) return nullptr;
   return impl_->frameReadyEvent;
-}
-
-bool Player::tryGetVideoFrame(VideoFrame* out) {
-  if (!impl_ || !out) return false;
-  if (!impl_->hasFrame.load(std::memory_order_relaxed)) {
-    return false;
-  }
-  uint64_t counter = impl_->frameCounter.load(std::memory_order_relaxed);
-  uint64_t last = impl_->lastReadCounter.load(std::memory_order_relaxed);
-  if (counter == last) {
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(impl_->currentFrameMutex);
-  if (!impl_->hasFrame.load(std::memory_order_relaxed)) {
-    return false;
-  }
-  *out = impl_->currentFrame;
-  impl_->lastReadCounter.store(counter, std::memory_order_relaxed);
-  return true;
 }
 
 bool Player::copyCurrentVideoFrame(VideoFrame* out) {

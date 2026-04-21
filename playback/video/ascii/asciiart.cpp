@@ -248,50 +248,10 @@ AsciiTuning resolveAsciiTuning(
   return tuning;
 }
 
-constexpr int kShadowChromaBoostStart = 12;
-constexpr int kShadowChromaBoostFull = 72;
-constexpr int kShadowChromaPreserveStrength = 160;
 constexpr bool kUseEdgeBoost = true;
 constexpr int kEdgeShift = 3;
 
 FORCE_INLINE float expandChromaNorm(int c, bool fullRange, int bitDepth);
-
-FORCE_INLINE int shadowSaturationFromLuma(int y) {
-  if (y <= kShadowSatStartLuma) return kShadowMinSaturation;
-  if (y >= kShadowSatFullLuma) return 256;
-  int numer =
-      (y - kShadowSatStartLuma) * (256 - kShadowMinSaturation);
-  int denom = kShadowSatFullLuma - kShadowSatStartLuma;
-  return kShadowMinSaturation + (numer + denom / 2) / denom;
-}
-
-FORCE_INLINE int shadowSaturationWithChroma(int y, int chroma) {
-  int keep = shadowSaturationFromLuma(y);
-  if (keep >= 256) return 256;
-  if (chroma <= kShadowChromaBoostStart) return keep;
-  int chromaBoost = 256;
-  if (chroma < kShadowChromaBoostFull) {
-    int numer = (chroma - kShadowChromaBoostStart) * 256;
-    int denom = kShadowChromaBoostFull - kShadowChromaBoostStart;
-    chromaBoost = (numer + denom / 2) / denom;
-  }
-  int shadowWeight = 256 - keep;
-  int preserveGain =
-      (shadowWeight * chromaBoost * kShadowChromaPreserveStrength +
-       (256 * 256) / 2) /
-      (256 * 256);
-  return std::min(256, keep + ((256 - keep) * preserveGain + 128) / 256);
-}
-
-FORCE_INLINE int signalRangeTo255(float signal, int start255, int full255) {
-  int signal255 = static_cast<int>(std::lround(
-      clampFloat(signal, 0.0f, 1.0f) * 255.0f));
-  if (signal255 <= start255) return 0;
-  if (signal255 >= full255) return 255;
-  int numer = (signal255 - start255) * 255;
-  int denom = std::max(1, full255 - start255);
-  return (numer + denom / 2) / denom;
-}
 
 FORCE_INLINE int byteRangeTo255(int value, int start, int full) {
   if (value <= start) return 0;
@@ -299,33 +259,6 @@ FORCE_INLINE int byteRangeTo255(int value, int start, int full) {
   int numer = (value - start) * 255;
   int denom = std::max(1, full - start);
   return (numer + denom / 2) / denom;
-}
-
-FORCE_INLINE int sourceBlueConfidenceFromYuv(int u, int v, bool fullRange,
-                                             int bitDepth) {
-  float uf = expandChromaNorm(u, fullRange, bitDepth);
-  float vf = expandChromaNorm(v, fullRange, bitDepth);
-  float chromaSignal = std::max(std::abs(uf), std::abs(vf));
-  float blueSignal = std::max(uf - std::max(vf, 0.0f) * 0.75f, 0.0f);
-  int blue = signalRangeTo255(blueSignal, kSourceBlueSignalStart,
-                              kSourceBlueSignalFull);
-  int chroma = signalRangeTo255(chromaSignal, kSourceChromaSignalStart,
-                                kSourceChromaSignalFull);
-  return (blue * chroma + 127) / 255;
-}
-
-FORCE_INLINE void applySaturationAroundLuma(uint8_t& r, uint8_t& g,
-                                            uint8_t& b, int y,
-                                            int saturation256) {
-  r = static_cast<uint8_t>(
-      std::clamp(y + scaleDelta256(static_cast<int>(r) - y, saturation256), 0,
-                 255));
-  g = static_cast<uint8_t>(
-      std::clamp(y + scaleDelta256(static_cast<int>(g) - y, saturation256), 0,
-                 255));
-  b = static_cast<uint8_t>(
-      std::clamp(y + scaleDelta256(static_cast<int>(b) - y, saturation256), 0,
-                 255));
 }
 
 FORCE_INLINE void scaleColorToLuma(uint8_t& r, uint8_t& g, uint8_t& b, int y,
@@ -438,44 +371,6 @@ FORCE_INLINE int attenuateSignalForColorBoundary(int signalStrength,
                      8,
                  0, 240);
   return std::clamp((signalStrength * (256 - attenuation) + 128) >> 8, 0, 255);
-}
-
-FORCE_INLINE void compressShadowChroma(uint8_t& r, uint8_t& g, uint8_t& b,
-                                       int sourceBlueConfidence = 0) {
-  int y =
-      (static_cast<int>(r) * 54 + static_cast<int>(g) * 183 +
-       static_cast<int>(b) * 19 + 128) >>
-      8;
-  int maxC = std::max({static_cast<int>(r), static_cast<int>(g),
-                       static_cast<int>(b)});
-  int minC = std::min({static_cast<int>(r), static_cast<int>(g),
-                       static_cast<int>(b)});
-  int keep = shadowSaturationWithChroma(y, maxC - minC);
-  if (keep < 256) {
-    applySaturationAroundLuma(r, g, b, y, keep);
-  }
-
-  int blueDominance =
-      static_cast<int>(b) - std::max(static_cast<int>(r), static_cast<int>(g));
-  int dark =
-      std::clamp((kShadowBlueGuardStartLuma - y) * 255 /
-                     std::max(1, kShadowBlueGuardRange),
-                 0, 255);
-  int dominance = 0;
-  if (blueDominance >= kShadowBlueDominanceFull) {
-    dominance = 255;
-  } else if (blueDominance > kShadowBlueDominanceStart) {
-    int numer = (blueDominance - kShadowBlueDominanceStart) * 255;
-    int denom = kShadowBlueDominanceFull - kShadowBlueDominanceStart;
-    dominance = (numer + denom / 2) / denom;
-  }
-  int relax =
-      256 - ((kSourceBlueGuardRelax * sourceBlueConfidence + 127) / 255);
-  int guard = ((dark * dominance + 127) / 255 * relax + 128) / 256;
-  if (guard <= 0) return;
-  int guardKeep =
-      256 - (((256 - kShadowBlueGuardKeep) * guard + 127) / 255);
-  applySaturationAroundLuma(r, g, b, y, guardKeep);
 }
 
 // Rec. 709 coefficients met hogere precisie (fixed-point 16.16)
@@ -1240,8 +1135,6 @@ struct BrailleFastScratch {
   std::vector<uint32_t> scaledRGBA;
   std::vector<uint8_t> lumaPad;  // Direct uint8_t - efficiënter
   std::vector<uint8_t> edgeMap;
-  std::vector<uint8_t> sourceBlueConfidence;
-  bool hasSourceBlueConfidence = false;
 
   std::vector<uint32_t> prevFg;
   std::vector<uint8_t> prevFgValid;
@@ -1309,14 +1202,12 @@ struct BrailleFastScratch {
     scaledRGBA.resize(static_cast<size_t>(scaledW) * scaledH);
     lumaPad.resize(static_cast<size_t>(padStride) * (scaledH + 2));
     edgeMap.resize(static_cast<size_t>(scaledW) * scaledH);
-    sourceBlueConfidence.assign(static_cast<size_t>(scaledW) * scaledH, 0);
     prevFg.assign(static_cast<size_t>(outW) * outH, 0);
     prevFgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevBg.assign(static_cast<size_t>(outW) * outH, 0);
     prevBgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevMask.assign(static_cast<size_t>(outW) * outH, 0);
     continuityMasks.resize(static_cast<size_t>(outW) * outH);
-    hasSourceBlueConfidence = false;
     prevLumLow = -1;
     prevLumHigh = -1;
   }
@@ -1697,7 +1588,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
   scratch.prevLumHigh = lumHigh;
 
   const int lumRange = std::max(80, lumHigh - lumLow);
-  const bool useSourceBlueConfidence = scratch.hasSourceBlueConfidence;
 
   int workerCount = computeWorkerCount(outH, kParallelBatchRows);
   if constexpr (DebugMode) {
@@ -1729,7 +1619,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             uint8_t bVals[8];
             uint8_t lumVals[8];  // Direct uint8_t
             uint8_t edgeVals[8];
-            uint8_t sourceBlueVals[8];
             uint8_t validVals[8];
             int validMask = 0;
 
@@ -1748,11 +1637,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                                       (baseX + 1);
               const uint8_t* edgeRow = scratch.edgeMap.data() +
                                        static_cast<size_t>(y) * scaledW + baseX;
-              const uint8_t* sourceBlueRow =
-                  useSourceBlueConfidence
-                      ? (scratch.sourceBlueConfidence.data() +
-                         static_cast<size_t>(y) * scaledW + baseX)
-                      : nullptr;
 
               for (int dx = 0; dx < 2; ++dx) {
                 const int dotIndex = dx * 4 + dy;
@@ -1770,8 +1654,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 bVals[dotIndex] = b;
                 lumVals[dotIndex] = lum;  // Direct uint8_t luma
                 edgeVals[dotIndex] = edgeRow[dx];
-                sourceBlueVals[dotIndex] =
-                    sourceBlueRow ? sourceBlueRow[dx] : 0;
                 validVals[dotIndex] = static_cast<uint8_t>(a != 0);
 
                 if constexpr (!AssumeOpaque) {
@@ -1963,28 +1845,22 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
             int sumInkR = 0;
             int sumInkG = 0;
             int sumInkB = 0;
-            int sumInkSourceBlue = 0;
             int inkCount = 0;
             int sumBgR = 0;
             int sumBgG = 0;
             int sumBgB = 0;
-            int sumBgSourceBlue = 0;
             int bgCount = 0;
-            int sumAllSourceBlue = 0;
             for (int i = 0; i < 8; ++i) {
               if (!validVals[i]) continue;
-              sumAllSourceBlue += sourceBlueVals[i];
               if (bitmask & (1 << brailleBitFromDotIndex(i))) {
                 sumInkR += rVals[i];
                 sumInkG += gVals[i];
                 sumInkB += bVals[i];
-                sumInkSourceBlue += sourceBlueVals[i];
                 ++inkCount;
               } else {
                 sumBgR += rVals[i];
                 sumBgG += gVals[i];
                 sumBgB += bVals[i];
-                sumBgSourceBlue += sourceBlueVals[i];
                 ++bgCount;
               }
             }
@@ -2001,9 +1877,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               curR = static_cast<uint8_t>(std::max<int>(curR, kColorLift));
               curG = static_cast<uint8_t>(std::max<int>(curG, kColorLift));
               curB = static_cast<uint8_t>(std::max<int>(curB, kColorLift));
-              int curSourceBlue =
-                  (inkCount > 0 ? sumInkSourceBlue : sumAllSourceBlue) /
-                  (inkCount > 0 ? inkCount : colorCount);
 
               // Calculate bg color first for blending
               uint8_t bgR =
@@ -2020,9 +1893,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
               bgR = static_cast<uint8_t>(std::max<int>(bgR, kColorLift));
               bgG = static_cast<uint8_t>(std::max<int>(bgG, kColorLift));
               bgB = static_cast<uint8_t>(std::max<int>(bgB, kColorLift));
-              int bgSourceBlue =
-                  (bgCount > 0 ? sumBgSourceBlue : sumAllSourceBlue) /
-                  (bgCount > 0 ? bgCount : colorCount);
 
               if (renderStageEnabled<DebugMode>(
                       stageMask, ascii_debug::kStageEdgeBackgroundBlend) &&
@@ -2031,7 +1901,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 const int meanR = std::max(kColorLift, sumAllR / colorCount);
                 const int meanG = std::max(kColorLift, sumAllG / colorCount);
                 const int meanB = std::max(kColorLift, sumAllB / colorCount);
-                const int meanSourceBlue = sumAllSourceBlue / colorCount;
                 int amount = edgeBackgroundBlendAmount(
                     dotCount, validCount,
                     maxRgbDelta(curR, curG, curB, bgR, bgG, bgB), tuning);
@@ -2045,8 +1914,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                       blendChannelToMean(bgG, meanG, amount));
                   bgB = static_cast<uint8_t>(
                       blendChannelToMean(bgB, meanB, amount));
-                  bgSourceBlue =
-                      blendChannelToMean(bgSourceBlue, meanSourceBlue, amount);
                   if constexpr (DebugMode) {
                     if (debugStats &&
                         (oldBgR != bgR || oldBgG != bgG || oldBgB != bgB)) {
@@ -2128,13 +1995,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = pg + (((int)curG - pg) * 230 >> 8);
                   pb = pb + (((int)curB - pb) * 230 >> 8);
                 }
-                uint8_t fgR = static_cast<uint8_t>(pr);
-                uint8_t fgG = static_cast<uint8_t>(pg);
-                uint8_t fgB = static_cast<uint8_t>(pb);
-                compressShadowChroma(fgR, fgG, fgB, curSourceBlue);
-                pr = fgR;
-                pg = fgG;
-                pb = fgB;
                 outR = static_cast<uint8_t>(pr);
                 outG = static_cast<uint8_t>(pg);
                 outB = static_cast<uint8_t>(pb);
@@ -2145,7 +2005,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 outR = curR;
                 outG = curG;
                 outB = curB;
-                compressShadowChroma(outR, outG, outB, curSourceBlue);
                 if (cellIndex < scratch.prevFg.size()) {
                   scratch.prevFg[cellIndex] =
                       (static_cast<uint32_t>(outR) << 16) |
@@ -2180,13 +2039,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                   pg = pg + (((int)bgG - pg) * bgBlendAlpha >> 8);
                   pb = pb + (((int)bgB - pb) * bgBlendAlpha >> 8);
                 }
-                uint8_t bgOutR = static_cast<uint8_t>(pr);
-                uint8_t bgOutG = static_cast<uint8_t>(pg);
-                uint8_t bgOutB = static_cast<uint8_t>(pb);
-                compressShadowChroma(bgOutR, bgOutG, bgOutB, bgSourceBlue);
-                pr = bgOutR;
-                pg = bgOutG;
-                pb = bgOutB;
                 outBgR = static_cast<uint8_t>(pr);
                 outBgG = static_cast<uint8_t>(pg);
                 outBgB = static_cast<uint8_t>(pb);
@@ -2197,7 +2049,6 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
                 outBgR = bgR;
                 outBgG = bgG;
                 outBgB = bgB;
-                compressShadowChroma(outBgR, outBgG, outBgB, bgSourceBlue);
                 scratch.prevBg[cellIndex] = (static_cast<uint32_t>(outBgR) << 16) |
                                             (static_cast<uint32_t>(outBgG) << 8) |
                                             static_cast<uint32_t>(outBgB);
@@ -2271,7 +2122,6 @@ bool renderAsciiArtFromRgbaFastImpl(const uint8_t* rgba, int width, int height,
   int maxArtWidth = maxWidth;
   scratch.ensure(width, height, maxArtWidth, maxHeight, exactOutputSize);
   if (scratch.outW <= 0 || scratch.outH <= 0) return false;
-  scratch.hasSourceBlueConfidence = false;
 
   const int scaledW = scratch.scaledW;
   const int scaledH = scratch.scaledH;
@@ -2405,7 +2255,6 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
   int maxArtWidth = maxWidth;
   scratch.ensure(width, height, maxArtWidth, maxHeight, exactOutputSize);
   if (scratch.outW <= 0 || scratch.outH <= 0) return false;
-  scratch.hasSourceBlueConfidence = true;
 
   int effectivePlaneHeight = planeHeight > 0 ? planeHeight : height;
   if (effectivePlaneHeight < height) return false;
@@ -2439,9 +2288,6 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
               scratch.scaledRGBA.data() + static_cast<size_t>(y) * scaledW;
           uint8_t* padRow =
               scratch.lumaPad.data() + static_cast<size_t>(y + 1) * padStride;
-          uint8_t* sourceBlueRow =
-              scratch.sourceBlueConfidence.data() +
-              static_cast<size_t>(y) * scaledW;
 
           for (int x = 0; x < scaledW; ++x) {
             int sxStart = scratch.xMapStart[x];
@@ -2500,12 +2346,9 @@ bool renderAsciiArtFromYuvImpl(const uint8_t* data, int width, int height,
               yuvToRgb(yAvg, uAvg, vAvg, fullRange, bitDepth, yuvMatrix,
                        yuvTransfer, r, g, b);
               dstRow[x] = packRGBA(r, g, b, 255);
-              sourceBlueRow[x] = static_cast<uint8_t>(
-                  sourceBlueConfidenceFromYuv(uAvg, vAvg, fullRange, bitDepth));
             } else {
               dstRow[x] = packRGBA(0, 0, 0, 0);
               padRow[x + 1] = 255;
-              sourceBlueRow[x] = 0;
             }
           }
           padRow[0] = padRow[1];

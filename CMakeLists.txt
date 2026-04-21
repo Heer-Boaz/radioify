@@ -251,6 +251,8 @@ endif()
 add_executable(shortcut_match_tests)
 target_sources(shortcut_match_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_shortcut_match_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/playback_state_policy.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/playback_sync.cpp
 )
 radioify_link_repo_target(shortcut_match_tests)
 
