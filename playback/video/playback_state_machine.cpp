@@ -3,6 +3,14 @@
 namespace playback_state_machine {
 namespace {
 
+StateChange unchanged(PlayerState state) {
+  StateChange change;
+  change.previous = state;
+  change.current = state;
+  change.projection = project(state);
+  return change;
+}
+
 StateProjection makeProjection(PlayerState playerState, SessionState session,
                                TransportState transport,
                                BufferingState buffering) {
@@ -93,6 +101,73 @@ StateProjection project(PlayerState state) {
 
   return makeProjection(PlayerState::Idle, SessionState::Stopped,
                         TransportState::Stopped, BufferingState::Empty);
+}
+
+void Controller::reset() {
+  state_.store(static_cast<int>(PlayerState::Idle), std::memory_order_relaxed);
+}
+
+PlayerState Controller::current() const {
+  return static_cast<PlayerState>(state_.load(std::memory_order_relaxed));
+}
+
+StateProjection Controller::projection() const {
+  return project(current());
+}
+
+StateChange Controller::set(PlayerState next) {
+  PlayerState previous = static_cast<PlayerState>(
+      state_.exchange(static_cast<int>(next), std::memory_order_relaxed));
+  StateChange change;
+  change.previous = previous;
+  change.current = next;
+  change.changed = previous != next;
+  change.projection = project(next);
+  return change;
+}
+
+StateChange Controller::beginOpening() {
+  PlayerState state = current();
+  if (state != PlayerState::Idle) {
+    return unchanged(state);
+  }
+  return set(PlayerState::Opening);
+}
+
+StateChange Controller::beginSeeking() {
+  StateProjection currentProjection = projection();
+  if (currentProjection.session != SessionState::Started) {
+    return unchanged(currentProjection.playerState);
+  }
+  return set(PlayerState::Seeking);
+}
+
+StateChange Controller::finishPriming() {
+  PlayerState state = current();
+  if (state != PlayerState::Priming) {
+    return unchanged(state);
+  }
+  return set(PlayerState::Playing);
+}
+
+StateChange Controller::beginClosing() {
+  PlayerState state = current();
+  if (state == PlayerState::Idle) {
+    return unchanged(state);
+  }
+  return set(PlayerState::Closing);
+}
+
+StateChange Controller::finishClosing() {
+  PlayerState state = current();
+  if (state != PlayerState::Closing) {
+    return unchanged(state);
+  }
+  return set(PlayerState::Idle);
+}
+
+StateChange Controller::apply(const Transition& transition) {
+  return set(transition.nextState);
 }
 
 StateEffects stateEffects(PlayerState state) {

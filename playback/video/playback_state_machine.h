@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -72,6 +73,31 @@ struct Transition {
   PlayerState nextState = PlayerState::Idle;
   StateProjection projection;
   bool clearSeekFailure = false;
+};
+
+struct StateChange {
+  PlayerState previous = PlayerState::Idle;
+  PlayerState current = PlayerState::Idle;
+  StateProjection projection;
+  bool changed = false;
+};
+
+class Controller {
+ public:
+  void reset();
+  PlayerState current() const;
+  StateProjection projection() const;
+  StateChange beginOpening();
+  StateChange beginSeeking();
+  StateChange finishPriming();
+  StateChange beginClosing();
+  StateChange finishClosing();
+  StateChange apply(const Transition& transition);
+
+ private:
+  StateChange set(PlayerState next);
+
+  std::atomic<int> state_{static_cast<int>(PlayerState::Idle)};
 };
 
 size_t requiredAudioPrefillFrames(uint32_t sampleRate);

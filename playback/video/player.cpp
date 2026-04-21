@@ -1499,7 +1499,7 @@ struct Player::Impl {
   PlayerConfig config;
   std::atomic<bool> running{false};
   std::atomic<bool> ctrlRunning{false};
-  std::atomic<PlayerState> state{PlayerState::Idle};
+  playback_state_machine::Controller playbackState;
   std::atomic<bool> pauseRequested{false};
   playback_serial_control::Controller serialControl;
   std::mutex eventMutex;
@@ -1684,14 +1684,12 @@ struct Player::Impl {
     eventCv.notify_one();
   }
 
-  void setState(PlayerState next) {
-    PlayerState prev = state.load(std::memory_order_relaxed);
-    if (prev == next) return;
-    state.store(next, std::memory_order_relaxed);
+  void applyStateChange(playback_state_machine::StateChange change) {
+    if (!change.changed) return;
     appendTimingFmt("state_change from=%s to=%s",
-                    playerStateName(prev), playerStateName(next));
-    playback_state_machine::StateEffects effects =
-        playback_state_machine::stateEffects(next);
+                    playerStateName(change.previous),
+                    playerStateName(change.current));
+    playback_state_machine::StateEffects effects = change.projection.effects;
     audioSetHold(effects.holdAudioOutput);
     mainClock.changePause(effects.pauseMainClock, nowUs());
   }
@@ -1718,7 +1716,7 @@ struct Player::Impl {
 
   playback_state_machine::Snapshot stateSnapshot(bool audioPaused) const {
     playback_state_machine::Snapshot snapshot;
-    snapshot.currentState = state.load(std::memory_order_relaxed);
+    snapshot.currentState = playbackState.current();
     snapshot.initDone = initDone.load(std::memory_order_relaxed);
     snapshot.initOk = initOk.load(std::memory_order_relaxed);
     snapshot.audioPaused = audioPaused;
@@ -1818,7 +1816,7 @@ struct Player::Impl {
   }
 
   void resetControlState() {
-    state.store(PlayerState::Idle, std::memory_order_relaxed);
+    playbackState.reset();
     pauseRequested.store(false, std::memory_order_relaxed);
     serialControl.reset();
     clearFrameRequested.store(false, std::memory_order_relaxed);
@@ -1894,7 +1892,7 @@ struct Player::Impl {
         videoFrames.flush(static_cast<uint64_t>(plan.serial));
         resetAudioOutputForSerial(static_cast<uint64_t>(plan.serial), true,
                                   "seek");
-        setState(PlayerState::Seeking);
+        applyStateChange(playbackState.beginSeeking());
         appendTimingFmt("%s serial=%d target_us=%lld seek_target_us=%lld",
                         tag ? tag : "ctrl_seek_request", plan.serial,
                         static_cast<long long>(plan.displayTargetUs),
@@ -1977,7 +1975,7 @@ struct Player::Impl {
       }
       case PlayerEventType::FirstFramePresented: {
         if (ev.serial == serialControl.currentSerial()) {
-          if (state.load(std::memory_order_relaxed) == PlayerState::Priming) {
+          if (playbackState.current() == PlayerState::Priming) {
             int64_t audioOldestPts = audioStreamOldestPtsUs();
             int64_t videoPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
 
@@ -1999,7 +1997,7 @@ struct Player::Impl {
             audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
             audioBufferedStartSerial.store(0, std::memory_order_relaxed);
             audioBufferedStartValid.store(false, std::memory_order_relaxed);
-            setState(PlayerState::Playing);
+            applyStateChange(playbackState.finishPriming());
           }
         }
         break;
@@ -2009,7 +2007,7 @@ struct Player::Impl {
 
   void controlMain() {
     resetControlState();
-    setState(PlayerState::Opening);
+    applyStateChange(playbackState.beginOpening());
     startThreads();
     while (ctrlRunning.load()) {
       std::deque<PlayerEvent> pending;
@@ -2034,14 +2032,14 @@ struct Player::Impl {
         if (transition.clearSeekFailure) {
           serialControl.clearSeekFailure();
         }
-        setState(transition.nextState);
+        applyStateChange(playbackState.apply(transition));
       }
     }
-    setState(PlayerState::Closing);
+    applyStateChange(playbackState.beginClosing());
     appendTimingFmt("control_main stop_threads_begin");
     stopThreads();
     appendTimingFmt("control_main stop_threads_end");
-    setState(PlayerState::Idle);
+    applyStateChange(playbackState.finishClosing());
   }
 
   void demuxMain() {
@@ -2850,7 +2848,6 @@ struct Player::Impl {
             break;
           }
           uint64_t written = 0;
-          [[maybe_unused]] PlayerState st = state.load(std::memory_order_relaxed);
           // Always allow blocking to ensure we don't discard audio during prefill.
           // The demuxer deadlock is now prevented by prefillReady returning true if video is full.
           bool allowBlock = true;
@@ -2896,7 +2893,7 @@ struct Player::Impl {
   }
 
   void videoOutputMain() {
-    PlayerState lastState = state.load();
+    PlayerState lastState = playbackState.current();
     constexpr double kVideoBufferHighSec = 0.75;
     playback_sync::LoopState syncState;
     playback_sync::initializeLoopState(
@@ -2905,7 +2902,7 @@ struct Player::Impl {
     auto logVideo = [&](const char* tag, const QueuedFrame* frame,
                         int64_t masterUs, PlayerClockSource source,
                         int64_t diffUs, int64_t delayUs) {
-      PlayerState st = state.load(std::memory_order_relaxed);
+      PlayerState st = playbackState.current();
       size_t q = videoFrames.size();
       playback_main_clock::Snapshot clockDebug = masterClockSnapshot(nowUs());
       int audioReady = clockDebug.audioClockReady ? 1 : 0;
@@ -2946,7 +2943,7 @@ struct Player::Impl {
         clearCurrentFrame();
       }
 
-      PlayerState st = state.load();
+      PlayerState st = playbackState.current();
       if (st != lastState) {
         lastState = st;
         playback_sync::notePlaybackStateChange(syncState, nowUs());
@@ -3363,17 +3360,17 @@ bool Player::audioFinished() const {
 
 bool Player::isSeeking() const {
   if (!impl_) return false;
-  return impl_->state.load() == PlayerState::Seeking;
+  return impl_->playbackState.current() == PlayerState::Seeking;
 }
 
 bool Player::isBuffering() const {
   if (!impl_) return false;
-  return playback_state_machine::isBufferingForUi(impl_->state.load());
+  return impl_->playbackState.projection().effects.uiBuffering;
 }
 
 bool Player::isEnded() const {
   if (!impl_) return false;
-  return impl_->state.load() == PlayerState::Ended;
+  return impl_->playbackState.current() == PlayerState::Ended;
 }
 
 int64_t Player::durationUs() const {
@@ -3445,13 +3442,13 @@ bool Player::hasVideoFrame() const {
 
 PlayerState Player::state() const {
   if (!impl_) return PlayerState::Idle;
-  return impl_->state.load(std::memory_order_relaxed);
+  return impl_->playbackState.current();
 }
 
 PlayerDebugInfo Player::debugInfo() const {
   PlayerDebugInfo info{};
   if (!impl_) return info;
-  info.state = impl_->state.load(std::memory_order_relaxed);
+  info.state = impl_->playbackState.current();
   info.currentSerial = impl_->serialControl.currentSerial();
   info.pendingSeekSerial = impl_->serialControl.pendingSeekSerial();
   info.seekInFlightSerial = impl_->serialControl.seekInFlightSerial();

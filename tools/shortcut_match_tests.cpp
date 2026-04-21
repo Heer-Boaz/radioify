@@ -143,7 +143,8 @@ int main() {
   playback_state_machine::StateProjection playingProjection =
       playback_state_machine::project(PlayerState::Playing);
   ok &= expect(
-      playingProjection.session == playback_state_machine::SessionState::Started &&
+      playingProjection.session ==
+              playback_state_machine::SessionState::Started &&
           playingProjection.transport ==
               playback_state_machine::TransportState::Playing &&
           playingProjection.buffering ==
@@ -163,6 +164,48 @@ int main() {
                    settledPausedSeek.clearSeekFailure,
                "Leaving Seeking after seek completion must clear seek failure "
                "state centrally");
+  playback_state_machine::Controller stateController;
+  playback_state_machine::StateChange openingChange =
+      stateController.beginOpening();
+  ok &= expect(openingChange.changed &&
+                   openingChange.previous == PlayerState::Idle &&
+                   openingChange.current == PlayerState::Opening &&
+                   openingChange.projection.session ==
+                       playback_state_machine::SessionState::Opening,
+               "State controller must own the Opening transition");
+  playback_state_machine::StateChange earlySeek =
+      stateController.beginSeeking();
+  ok &= expect(!earlySeek.changed && earlySeek.current == PlayerState::Opening,
+               "Seeking must not start before the session is started");
+  playback_state_machine::Transition startedTransition;
+  startedTransition.nextState = PlayerState::Playing;
+  playback_state_machine::StateChange startedChange =
+      stateController.apply(startedTransition);
+  ok &= expect(startedChange.changed &&
+                   startedChange.current == PlayerState::Playing,
+               "Resolved state-machine transitions must update the controller");
+  playback_state_machine::StateChange seekChange =
+      stateController.beginSeeking();
+  ok &= expect(seekChange.changed &&
+                   seekChange.current == PlayerState::Seeking &&
+                   seekChange.projection.transport ==
+                       playback_state_machine::TransportState::Seeking,
+               "State controller must own the Seeking transition");
+  playback_state_machine::StateChange invalidPrimingFinish =
+      stateController.finishPriming();
+  ok &= expect(!invalidPrimingFinish.changed &&
+                   invalidPrimingFinish.current == PlayerState::Seeking,
+               "Priming completion must be ignored outside Priming");
+  playback_state_machine::Transition primingTransition;
+  primingTransition.nextState = PlayerState::Priming;
+  stateController.apply(primingTransition);
+  playback_state_machine::StateChange primingFinish =
+      stateController.finishPriming();
+  ok &= expect(primingFinish.changed &&
+                   primingFinish.current == PlayerState::Playing &&
+                   primingFinish.projection.buffering ==
+                       playback_state_machine::BufferingState::Ready,
+               "State controller must own the priming-to-playing transition");
 
   playback_sync::LoopState loopState{};
   loopState.frameTimerUs = 1000;
