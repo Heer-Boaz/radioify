@@ -27,6 +27,18 @@ bool isPrefillReady(const Snapshot& snapshot, size_t videoPrefillFrames) {
   return videoReady && audioReady;
 }
 
+bool shouldHoldAudioOutput(PlayerState state) {
+  return state == PlayerState::Opening || state == PlayerState::Prefill ||
+         state == PlayerState::Priming || state == PlayerState::Seeking;
+}
+
+bool shouldPauseMainClock(PlayerState state) {
+  return state == PlayerState::Idle || state == PlayerState::Opening ||
+         state == PlayerState::Prefill || state == PlayerState::Paused ||
+         state == PlayerState::Ended || state == PlayerState::Error ||
+         state == PlayerState::Closing;
+}
+
 PlayerState resolveSteadyState(Snapshot snapshot, size_t videoPrefillFrames) {
   while (true) {
     PlayerState nextState = snapshot.currentState;

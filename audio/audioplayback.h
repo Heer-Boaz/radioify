@@ -82,12 +82,8 @@ bool audioStreamWriteSamples(const float* interleaved,
                              bool allowBlock,
                              uint64_t* writtenFrames);
 void audioStreamProcessRadio(float* interleaved, uint32_t frames);
-uint64_t audioStreamDropFrames(uint64_t frames);
 void audioStreamDiscardUntil(int64_t ptsUs);
-void audioStreamSynchronize(int serial, int64_t targetPtsUs);
 void audioStreamPrimeClock(int serial, int64_t targetPtsUs);
-void audioStreamSyncClockOnly(int serial, int64_t targetPtsUs);
-void audioStreamSetBase(int serial, int64_t ptsUs);
 void audioStreamSetEnd(bool atEnd);
 void audioStreamReset(uint64_t framePos);
 void audioStreamFlushSerial(int serial);
@@ -97,7 +93,6 @@ int64_t audioStreamClockLastUpdatedUs();
 bool audioStreamStarved();
 bool audioStreamClockReady();
 
-// Task 3: Hardware Callback Driving
 // Block until the audio hardware callback has progressed or timeout.
 // Returns the new update counter value.
 uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int timeoutMs);

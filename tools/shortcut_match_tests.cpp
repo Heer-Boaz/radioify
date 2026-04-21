@@ -1,8 +1,10 @@
 #include "playback/ascii/playback_frame_output.h"
 #include "playback/playback_shortcuts.h"
 #include "playback/overlay/playback_overlay.h"
+#include "playback/video/audio_clock_reacquire.h"
 #include "playback/video/playback_sync.h"
 #include "playback/video/playback_state_policy.h"
+#include "clock.h"
 
 #include <iostream>
 
@@ -126,18 +128,123 @@ int main() {
       playback_state_policy::resolveSteadyState(playingSeek, 1) ==
           PlayerState::Prefill,
       "Active seeks must continue into Prefill");
+  ok &= expect(playback_state_policy::shouldHoldAudioOutput(PlayerState::Seeking),
+               "Seeking must hold audio until clocks are reacquired");
+  ok &= expect(!playback_state_policy::shouldHoldAudioOutput(PlayerState::Playing),
+               "Playing must release audio output hold");
+  ok &= expect(playback_state_policy::shouldPauseMainClock(PlayerState::Paused),
+               "Paused state must pause the main clock");
+  ok &= expect(!playback_state_policy::shouldPauseMainClock(PlayerState::Playing),
+               "Playing state must run the main clock");
 
   playback_sync::LoopState loopState{};
   loopState.frameTimerUs = 1000;
   playback_sync::PreparedFrame prepared{};
   prepared.frame.ptsUs = 5000;
   prepared.frame.durationUs = 33333;
-  playback_clock::Snapshot master{};
-  Clock videoClock{};
+  playback_main_clock::Snapshot master{};
   playback_sync::FramePlan seekPlan = playback_sync::planFrame(
-      loopState, PlayerState::Seeking, prepared, master, videoClock, 8000);
+      loopState, PlayerState::Seeking, prepared, master, 8000);
   ok &= expect(seekPlan.delayUs == 0 && seekPlan.targetUs == 8000,
                "Seeking must present the next frame immediately");
+
+  playback_main_clock::Controller mainClock;
+  playback_main_clock::SampleRequest clockRequest{};
+  clockRequest.currentSerial = 4;
+  clockRequest.nowUs = 1000000;
+  clockRequest.audio.active = true;
+  clockRequest.audio.mayDriveMaster = true;
+  clockRequest.audio.ready = true;
+  clockRequest.audio.fresh = true;
+  clockRequest.audio.serial = 4;
+  clockRequest.audio.us = 10000;
+  clockRequest.video.ready = true;
+  clockRequest.video.serial = 4;
+  clockRequest.video.us = 9000;
+  playback_main_clock::Snapshot audioMaster = mainClock.sample(clockRequest);
+  ok &= expect(audioMaster.source == PlayerClockSource::Audio,
+               "Eligible audio must be selected as the main playback clock");
+  ok &= expect(playback_main_clock::convertToSystemUs(audioMaster, 20000, 0) ==
+                   1010000,
+               "Main clock must convert stream timestamps to system time");
+
+  clockRequest.audio.mayDriveMaster = false;
+  playback_main_clock::Snapshot videoFallback = mainClock.sample(clockRequest);
+  ok &= expect(videoFallback.source == PlayerClockSource::Video,
+               "Blocked audio master must fall back to the video clock");
+
+  playback_sync::LoopState convertedLoop{};
+  convertedLoop.frameTimerUs = 500000;
+  playback_sync::PreparedFrame convertedFrame{};
+  convertedFrame.frame.ptsUs = 20000;
+  convertedFrame.frame.durationUs = 33333;
+  convertedFrame.delayUs = 33333;
+  convertedFrame.actualDurationUs = 33333;
+  playback_sync::FramePlan convertedPlan = playback_sync::planFrame(
+      convertedLoop, PlayerState::Playing, convertedFrame, audioMaster, 1000000);
+  ok &= expect(convertedPlan.targetUs == 1010000,
+               "Video scheduling must use the main clock's stream-to-system "
+               "conversion");
+
+  playback_sync::LoopState driftLoop{};
+  driftLoop.frameTimerUs = 700000;
+  driftLoop.lastDelayUsValue = 33333;
+  for (int i = 1; i <= 5; ++i) {
+    playback_main_clock::Snapshot movingAudioMaster = audioMaster;
+    movingAudioMaster.us = 10000 + (i - 1) * 33333;
+    movingAudioMaster.systemUs = 1000000 + (i - 1) * 33333;
+
+    playback_sync::PreparedFrame driftFrame{};
+    driftFrame.frame.ptsUs = 10000 + i * 33333;
+    driftFrame.frame.durationUs = 33333;
+    driftFrame.delayUs = 33333;
+    driftFrame.actualDurationUs = 33333;
+    playback_sync::FramePlan driftPlan = playback_sync::planFrame(
+        driftLoop, PlayerState::Playing, driftFrame, movingAudioMaster,
+        movingAudioMaster.systemUs);
+    int64_t expectedTargetUs = 1000000 + i * 33333;
+    ok &= expect(driftPlan.targetUs == expectedTargetUs,
+                 "Audio-master scheduling must not accumulate local timer drift");
+    playback_sync::notePresentedFrame(driftLoop, driftFrame, driftPlan.delayUs,
+                                      driftPlan.targetUs,
+                                      movingAudioMaster.systemUs);
+  }
+
+  Clock pauseClock;
+  pauseClock.set(1000, 10000, 9);
+  pauseClock.set_paused(true, 20000);
+  ok &= expect(pauseClock.get(30000) == 11000,
+               "Paused clocks must not advance while paused");
+  pauseClock.set_paused(false, 30000);
+  ok &= expect(pauseClock.get(30000) == 11000,
+               "Resuming must preserve the paused clock point");
+  ok &= expect(pauseClock.get(40000) == 21000,
+               "Resumed clocks must advance from the resume time");
+
+  mainClock.startSession(5);
+  ok &= expect(!mainClock.videoStatus(5, 500000).ready,
+               "Starting a session must reset the output clock");
+  mainClock.updateVideo(5, 12000, 500000);
+  ok &= expect(mainClock.videoStatus(5, 500000).us == 12000,
+               "Main clock must own video clock updates");
+  mainClock.changePause(true, 510000);
+  ok &= expect(mainClock.videoStatus(5, 530000).us == 22000,
+               "Main clock pause must freeze the video output clock");
+
+  playback_audio_clock_reacquire::Gate audioGate;
+  ok &= expect(audioGate.snapshot(1).audioMayDriveMaster,
+               "Audio clock must drive by default");
+  audioGate.require(3, 1000);
+  ok &= expect(!audioGate.snapshot(3).audioMayDriveMaster,
+               "Audio clock must be blocked while reacquiring current serial");
+  ok &= expect(audioGate.snapshot(2).audioMayDriveMaster,
+               "Stale reacquire state must not block another serial");
+  audioGate.noteQueuedAudio(3, 999, 512);
+  ok &= expect(!audioGate.snapshot(3).audioMayDriveMaster,
+               "Pre-target audio must not release audio master");
+  audioGate.noteQueuedAudio(3, 1000, 512);
+  ok &= expect(audioGate.snapshot(3).audioMayDriveMaster,
+               "Post-target queued audio must release audio master");
 
   return ok ? 0 : 1;
 }

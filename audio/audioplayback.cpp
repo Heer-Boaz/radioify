@@ -698,8 +698,6 @@ void dataCallback(ma_device* device, void* output, const void*,
 
       {
         std::lock_guard<std::mutex> lock(state->streamMetadataMutex);
-        // Task 1: Find the most recent metadata entry that is AT or BEFORE our current read position.
-        // This ensures the clock is always tied to the exact chunk of audio being played.
         while (state->streamMetadata.size() > 1 && 
                state->streamMetadata[1].wpos <= currentRpos) {
           state->streamMetadata.pop_front();
@@ -719,10 +717,9 @@ void dataCallback(ma_device* device, void* output, const void*,
         uint64_t delay = state->deviceDelayFrames.load(std::memory_order_relaxed);
         int64_t delayUs = static_cast<int64_t>(delay * 1000000ULL / state->sampleRate);
         
-        state->audioClock.sync_to_pts(currentPts - delayUs, nowUs(), currentSerial);
+        state->audioClock.set(currentPts - delayUs, nowUs(), currentSerial);
         state->streamClockReady.store(true, std::memory_order_relaxed);
         
-        // Task 3: Signal that audio hardware has progressed (Hardware Callback Driving)
         state->streamUpdateCounter.fetch_add(1, std::memory_order_release);
         state->streamUpdateCv.notify_all();
       }
@@ -1861,45 +1858,6 @@ bool audioStreamWriteSamples(const float* interleaved, uint64_t frames,
                             allowBlock, writtenFrames);
 }
 
-uint64_t audioStreamDropFrames(uint64_t frames) {
-  if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
-    return 0;
-  }
-  if (!gAudio.state.streamQueueEnabled.load()) {
-    return 0;
-  }
-  return gAudio.state.streamRb.dropSome(frames);
-}
-
-void audioStreamSynchronize(int serial, int64_t targetPtsUs) {
-  if (!gAudio.decoderReady || !gAudio.state.externalStream.load() ||
-      !gAudio.state.streamQueueEnabled.load()) {
-    return;
-  }
-
-  // We dwingen een harde synchronisatie.
-  // Door de ringbuffer te resetten, zorgen we ervoor dat 'oude' audio direct
-  // wordt weggegooid en de klok onmiddellijk op de nieuwe tijd staat.
-  gAudio.state.streamRb.reset();
-  
-  {
-    std::lock_guard<std::mutex> lock(gAudio.state.streamMetadataMutex);
-    gAudio.state.streamMetadata.clear();
-    // We voegen de nieuwe anker-pts toe voor de EERSTE sample die nu geschreven gaat worden (wpos=0).
-    gAudio.state.streamMetadata.push_back({
-        0,
-        targetPtsUs,
-        serial
-    });
-  }
-
-  gAudio.state.streamDiscardPtsUs.store(targetPtsUs, std::memory_order_relaxed);
-  gAudio.state.streamBasePtsUs.store(targetPtsUs, std::memory_order_relaxed);
-  gAudio.state.audioClock.set(targetPtsUs, nowUs(), serial);
-  gAudio.state.streamClockReady.store(true, std::memory_order_relaxed);
-  gAudio.state.decodeCv.notify_all();
-}
-
 void audioStreamPrimeClock(int serial, int64_t targetPtsUs) {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load() ||
       !gAudio.state.streamQueueEnabled.load()) {
@@ -1915,37 +1873,6 @@ void audioStreamPrimeClock(int serial, int64_t targetPtsUs) {
   gAudio.state.audioClock.set(targetPtsUs, nowUs(), serial);
   gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
   gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
-}
-
-void audioStreamSyncClockOnly(int serial, int64_t targetPtsUs) {
-  // Soft sync: only adjust the clock, don't reset ringbuffer or drop audio
-  // Used when video PTS is repaired to prevent audio clock from becoming invalid
-  if (!gAudio.decoderReady || !gAudio.state.externalStream.load() ||
-      !gAudio.state.streamQueueEnabled.load()) {
-    return;
-  }
-  
-  // Just resync the clock without touching the ringbuffer
-  // This keeps audio playing smoothly while video catches up
-  gAudio.state.audioClock.sync_to_pts(targetPtsUs, nowUs(), serial);
-}
-
-void audioStreamSetBase(int serial, int64_t ptsUs) {
-  if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
-    return;
-  }
-  if (!gAudio.state.streamQueueEnabled.load()) {
-    return;
-  }
-  if (serial != gAudio.state.streamSerial.load(std::memory_order_relaxed)) {
-    return;
-  }
-  gAudio.state.streamBasePtsUs.store(ptsUs, std::memory_order_relaxed);
-  gAudio.state.streamBaseValid.store(true, std::memory_order_relaxed);
-  gAudio.state.streamReadFrames.store(0, std::memory_order_relaxed);
-  gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
-  gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
-  gAudio.state.audioClock.reset(serial);
 }
 
 void audioStreamDiscardUntil(int64_t ptsUs) {

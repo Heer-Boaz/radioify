@@ -1,0 +1,9 @@
+radioify_add_module_object_library(radioify_core
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_artwork_sidecar.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/queues.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/runtime_helpers.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/taskgate.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/unicode_display_width.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/windows_app_identity.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/windows_message_pump.cpp
+)

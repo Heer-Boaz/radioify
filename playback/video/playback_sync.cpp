@@ -11,23 +11,9 @@ constexpr int64_t kDefaultFrameDurationUs = 33333;
 constexpr int64_t kMaxFrameDurationUs = 500000;
 constexpr int64_t kFrameStallThresholdUs = 4000000;
 constexpr size_t kDurationHistorySize = 10;
-constexpr int64_t kPtsGlitchThresholdUs = 1000000;
+constexpr int64_t kDiscontinuityThresholdUs = 1000000;
 constexpr int64_t kSyncLostThresholdUs = 2500000;
 constexpr int64_t kSyncWindowUs = 100000;
-constexpr int64_t kLowAudioBufferUs = 100000;
-constexpr int64_t kRecoveredAudioBufferUs = 200000;
-
-int64_t audioBufferThresholdUs(size_t frames, uint32_t sampleRate,
-                               int64_t fallbackUs) {
-  if (frames == 0 || sampleRate == 0) {
-    return fallbackUs;
-  }
-  int64_t bufferUs = static_cast<int64_t>((frames * 1000000ULL) / sampleRate);
-  if (bufferUs <= 0) {
-    return fallbackUs;
-  }
-  return (std::max)(fallbackUs, bufferUs);
-}
 
 int64_t clampi64(int64_t v, int64_t lo, int64_t hi) {
   if (v < lo) return lo;
@@ -74,9 +60,6 @@ void initializeLoopState(LoopState& state, int initialSerial,
   state.lastPresentedTimeUs = nowUs;
   state.lastSerial = initialSerial;
   state.firstPresentedForSerial = false;
-  state.lastSanitizedPtsUs = -1;
-  state.ptsOffsetUs = 0;
-  state.lastSanitizedSerial = 0;
   state.recentDurations.clear();
 }
 
@@ -95,9 +78,6 @@ void syncLoopSerial(LoopState& state, int serial,
   state.lastDelayUsValue = fallbackFrameDuration(fallbackFrameDurationUs);
   state.frameTimerUs = nowUs;
   state.lastPresentedTimeUs = nowUs;
-  state.lastSanitizedPtsUs = -1;
-  state.ptsOffsetUs = 0;
-  state.lastSanitizedSerial = 0;
   state.recentDurations.clear();
 }
 
@@ -125,33 +105,16 @@ PreparedFrame prepareFrame(LoopState& state, const QueuedFrame& front,
                            const QueuedFrame* next) {
   PreparedFrame prepared;
   prepared.frame = front;
-
-  if (front.serial != state.lastSanitizedSerial) {
-    state.lastSanitizedPtsUs = -1;
-    state.ptsOffsetUs = 0;
-    state.lastSanitizedSerial = front.serial;
-  }
-
-  if (state.lastSanitizedPtsUs >= 0) {
-    int64_t predictedPtsUs = state.lastSanitizedPtsUs + front.durationUs;
-    int64_t adjustedRawPts = front.ptsUs + state.ptsOffsetUs;
-    prepared.ptsRepairErrorUs = adjustedRawPts - predictedPtsUs;
-    if (std::abs(prepared.ptsRepairErrorUs) > kPtsGlitchThresholdUs) {
-      state.ptsOffsetUs -= prepared.ptsRepairErrorUs;
-      prepared.frame.ptsUs = predictedPtsUs;
+  if (state.lastPtsUs >= 0) {
+    int64_t expectedPtsUs = state.lastPtsUs + state.lastDelayUsValue;
+    if (std::abs(front.ptsUs - expectedPtsUs) > kDiscontinuityThresholdUs) {
       prepared.discontinuity = true;
-      prepared.hadMassiveGlitch = true;
-    } else {
-      prepared.frame.ptsUs = adjustedRawPts;
     }
   }
 
-  state.lastSanitizedPtsUs = prepared.frame.ptsUs;
-
   int64_t durationFromPtsUs = 0;
   if (next && next->serial == prepared.frame.serial) {
-    int64_t nextPtsUs = next->ptsUs + state.ptsOffsetUs;
-    int64_t ptsDiffUs = nextPtsUs - prepared.frame.ptsUs;
+    int64_t ptsDiffUs = next->ptsUs - prepared.frame.ptsUs;
     if (ptsDiffUs > 0 && ptsDiffUs <= kMaxFrameDurationUs) {
       durationFromPtsUs = ptsDiffUs;
     }
@@ -196,8 +159,7 @@ PreparedFrame prepareFrame(LoopState& state, const QueuedFrame& front,
 
 FramePlan planFrame(LoopState& state, PlayerState playbackState,
                     const PreparedFrame& prepared,
-                    const playback_clock::Snapshot& master, Clock& videoClock,
-                    int64_t nowUs) {
+                    const playback_main_clock::Snapshot& master, int64_t nowUs) {
   FramePlan plan;
   plan.delayUs = prepared.delayUs;
   plan.actualDurationUs = prepared.actualDurationUs;
@@ -232,41 +194,29 @@ FramePlan planFrame(LoopState& state, PlayerState playbackState,
       return plan;
     }
 
-    uint32_t sampleRate = master.audioSampleRate > 0 ? master.audioSampleRate
-                                                     : 48000;
-    int64_t audioBufferedUs = static_cast<int64_t>(
-        (master.audioBufferedFrames * 1000000ULL) / sampleRate);
-    int64_t lowAudioBufferUs = audioBufferThresholdUs(
-        master.audioDeviceBufferFrames / 2, sampleRate, kLowAudioBufferUs);
-    int64_t recoveredAudioBufferUs = audioBufferThresholdUs(
-        master.audioDeviceBufferFrames, sampleRate, kRecoveredAudioBufferUs);
-
-    if (audioBufferedUs < lowAudioBufferUs && audioBufferedUs > 0) {
-      double currentSpeed =
-          videoClock.speed_q16.load(std::memory_order_relaxed) / 65536.0;
-      videoClock.set_speed((std::max)(0.95, currentSpeed * 0.99), nowUs);
-    } else if (audioBufferedUs > recoveredAudioBufferUs) {
-      double currentSpeed =
-          videoClock.speed_q16.load(std::memory_order_relaxed) / 65536.0;
-      if (currentSpeed < 1.0) {
-        videoClock.set_speed((std::min)(1.0, currentSpeed * 1.01), nowUs);
-      }
-    }
+    const int64_t fallbackTargetUs = state.frameTimerUs + plan.delayUs;
+    const int64_t convertedTargetUs = playback_main_clock::convertToSystemUs(
+        master, prepared.frame.ptsUs, fallbackTargetUs);
 
     if (plan.diffUs >= -kSyncWindowUs && plan.diffUs <= kSyncWindowUs) {
       if (!prepared.discontinuity) {
         plan.delayUs =
             computeTargetDelayUs(plan.delayUs, prepared.frame.ptsUs, master.us);
       }
+      plan.targetUs = convertedTargetUs;
+      return plan;
     } else if (plan.diffUs < -kSyncWindowUs) {
       if (master.source == PlayerClockSource::Audio) {
         plan.dropForBehind = true;
       } else {
         plan.delayUs = 0;
       }
+      plan.targetUs = nowUs;
+      return plan;
     } else if (plan.diffUs > kSyncWindowUs) {
-      plan.delayUs =
-          (std::min)(static_cast<int64_t>(200000), plan.delayUs + plan.diffUs);
+      plan.targetUs =
+          (std::min)(convertedTargetUs, nowUs + static_cast<int64_t>(200000));
+      return plan;
     }
   }
 

@@ -85,6 +85,8 @@ temp/
 audio/audiofilter/tmp/
 **.dmp
 **.txt
+!CMakeLists.txt
+!**/CMakeLists.txt
 **.log
 
 # Package managers and caches

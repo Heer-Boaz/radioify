@@ -1,0 +1,45 @@
+add_subdirectory(config)
+
+radioify_add_module_object_library(radioify_audiofilter
+  ${CMAKE_CURRENT_SOURCE_DIR}/models/resonant_networks.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/models/transformer_models.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/models/tube_models.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/analysis/radio_calibration.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/audio_pipeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/audio_pipeline_execution.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/radio_state.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/preview/radio_preview_pipeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/preview/radio_preview_pipeline_execution.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/preview/nodes/radio_preview_program_filter_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/preview/nodes/radio_preview_warmup_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/am_detector_runtime.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/am_detector_solver.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/am_detector_waveform.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/power_stage_solver.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/power_stage_interstage.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/power_supply.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_afc_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_am_detector_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_avc_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_cabinet_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_control_bus_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_detector_audio_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_final_limiter_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_front_end_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_if_strip_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_input_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_interference_derived_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_mixer_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_noise_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_output_clip_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_output_scale_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_power_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_receiver_circuit_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_receiver_input_network_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_speaker_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_tone_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_tuning_node.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/radio_lifecycle.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/radio_presets.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/signal_entrypoints.cpp
+)

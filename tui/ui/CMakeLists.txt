@@ -1,0 +1,12 @@
+radioify_add_module_object_library(radioify_ui
+  ${CMAKE_CURRENT_SOURCE_DIR}/browsermeta.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/optionsbrowser.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_transport_navigation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/track_browser_state.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/tracklist.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ui_footer_layout.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ui_helpers.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ui_inputlogic.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ui_input_pump.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ui_viewport.cpp
+)

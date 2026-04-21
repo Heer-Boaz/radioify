@@ -50,6 +50,7 @@ function(radioify_disable_warnings target_name)
     target_compile_options(${target_name} PRIVATE
       $<$<COMPILE_LANGUAGE:C>:/W0>
       $<$<COMPILE_LANGUAGE:CXX>:/W0>
+      $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
     )
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
       target_compile_options(${target_name} PRIVATE
@@ -186,6 +187,9 @@ target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_ENABLE_STAGING_UPLOAD=$<IF:$<BOOL:${RADIOIFY_ENABLE_STAGING_UPLOAD}>,1,0>
 )
 if (MSVC)
+  target_compile_options(radioify_project_options INTERFACE
+    $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
+  )
   target_compile_options(radioify_external_options INTERFACE
     $<$<COMPILE_LANGUAGE:C>:/external:W0>
     $<$<COMPILE_LANGUAGE:CXX>:/external:W0>
@@ -251,6 +255,8 @@ endif()
 add_executable(shortcut_match_tests)
 target_sources(shortcut_match_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_shortcut_match_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/audio_clock_reacquire.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/playback_main_clock.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/playback_state_policy.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/playback_sync.cpp
 )
@@ -967,6 +973,11 @@ target_compile_definitions(sexypsf PRIVATE SPSFVERSION="\"0.4.8\"")
 if (MSVC)
   target_compile_definitions(sexypsf PRIVATE strcasecmp=_stricmp strncasecmp=_strnicmp)
   target_compile_options(sexypsf PRIVATE /Zp1)
+  if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(sexypsf PRIVATE
+      $<$<COMPILE_LANGUAGE:C>:/clang:-fcommon>
+    )
+  endif()
 endif()
 target_link_libraries(sexypsf PUBLIC ZLIB::ZLIB)
 include(FetchContent)
@@ -1052,6 +1063,7 @@ if (DEFINED CMAKE_DISABLE_FIND_PACKAGE_SDL2)
   set(_radioify_disable_sdl2_value ${CMAKE_DISABLE_FIND_PACKAGE_SDL2})
 endif()
 set(CMAKE_DISABLE_FIND_PACKAGE_SDL2 TRUE)
+set(ENABLE_UBSAN OFF CACHE BOOL "Disable libgme UBSan in Radioify builds" FORCE)
 FetchContent_Declare(
   gme
   GIT_REPOSITORY https://github.com/ShiftMediaProject/Game-Music-Emu.git
@@ -1133,6 +1145,7 @@ set(BUILD_LIBAUDIO OFF CACHE BOOL "Build libvgm audio library" FORCE)
 set(UTIL_CHARSET_CONV ON CACHE BOOL "Enable libvgm charset conversion" FORCE)
 set(UTIL_CHARCNV_ICONV OFF CACHE BOOL "Disable iconv conversion in libvgm" FORCE)
 set(UTIL_CHARCNV_WINAPI ON CACHE BOOL "Use WinAPI conversion in libvgm" FORCE)
+set(USE_SANITIZERS OFF CACHE BOOL "Disable libvgm sanitizers in Radioify builds" FORCE)
 FetchContent_Declare(
   libvgm
   GIT_REPOSITORY https://github.com/ValleyBell/libvgm.git
@@ -1172,10 +1185,6 @@ endforeach()
 
 if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
-endif()
-
-if (MSVC)
-  target_compile_options(radioify PRIVATE /EHsc)
 endif()
 
 if (WIN32 AND RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION)

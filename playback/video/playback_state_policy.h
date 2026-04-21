@@ -33,6 +33,10 @@ size_t requiredAudioPrefillFrames(uint32_t sampleRate);
 
 bool isPrefillReady(const Snapshot& snapshot, size_t videoPrefillFrames);
 
+bool shouldHoldAudioOutput(PlayerState state);
+
+bool shouldPauseMainClock(PlayerState state);
+
 PlayerState resolveSteadyState(Snapshot snapshot, size_t videoPrefillFrames);
 
 }  // namespace playback_state_policy

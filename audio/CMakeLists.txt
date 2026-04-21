@@ -1,0 +1,19 @@
+add_subdirectory(analysis)
+add_subdirectory(audiofilter)
+add_subdirectory(loopsplit)
+
+radioify_add_module_object_library(radioify_audio
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio_format_options.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/audioplayback.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ffmpegaudio.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/flacaudio.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gmeaudio.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gsfaudio.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/kssaudio.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/m4adecoder.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_formats.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/midiaudio.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_device.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/psfaudio.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/vgmaudio.cpp
+)

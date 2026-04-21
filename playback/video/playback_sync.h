@@ -4,8 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "clock.h"
-#include "playback_clock.h"
+#include "playback_main_clock.h"
 #include "queues.h"
 
 namespace playback_sync {
@@ -22,17 +21,12 @@ struct LoopState {
   int64_t lastPresentedTimeUs = 0;
   int lastSerial = 0;
   bool firstPresentedForSerial = false;
-  int64_t lastSanitizedPtsUs = -1;
-  int64_t ptsOffsetUs = 0;
-  uint64_t lastSanitizedSerial = 0;
   std::vector<int64_t> recentDurations;
 };
 
 struct PreparedFrame {
   QueuedFrame frame;
   bool discontinuity = false;
-  bool hadMassiveGlitch = false;
-  int64_t ptsRepairErrorUs = 0;
   int64_t delayUs = 0;
   int64_t actualDurationUs = 0;
 };
@@ -67,8 +61,7 @@ PreparedFrame prepareFrame(LoopState& state, const QueuedFrame& front,
 
 FramePlan planFrame(LoopState& state, PlayerState playbackState,
                     const PreparedFrame& prepared,
-                    const playback_clock::Snapshot& master, Clock& videoClock,
-                    int64_t nowUs);
+                    const playback_main_clock::Snapshot& master, int64_t nowUs);
 
 bool shouldDropLateFrame(int64_t nowUs, int64_t targetUs, size_t queueDepth);
 

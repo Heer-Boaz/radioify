@@ -1,0 +1,40 @@
+radioify_add_module_object_library(radioify_ascii_cpu
+  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_image_decode_wic.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_layout.cpp
+)
+
+radioify_add_module_object_library(radioify_ascii_gpu
+  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_gpu.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/gpu_shared.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/videoprocessor.cpp
+)
+
+radioify_add_module_object_library(radioify_video
+  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_image_decode_wic.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_layout.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_gpu.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/gpu_shared.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/videoprocessor.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio_clock_reacquire.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio_output_clock_source.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio_output_timeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio_track_switch_timeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_main_clock.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_serial_control.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_state_policy.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_sync.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_timeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/player.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_ass_parser.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_ass_script.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_ass_bitmap_renderer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_font_attachments.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_manager.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/videodecoder.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/text_grid_bitmap_renderer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_gpu_textgrid.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_textgrid.cpp
+)
