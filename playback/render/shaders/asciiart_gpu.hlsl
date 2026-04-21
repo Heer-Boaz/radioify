@@ -493,6 +493,10 @@ float GetInkLevelFromLum(float lum) {
     return saturate(coverage);
 }
 
+uint GetInkLevelByteFromLum(float lum) {
+    return (uint)(GetInkLevelFromLum(lum) * 255.0f + 0.5f);
+}
+
 struct InputSample {
     float3 rgb;
 };
@@ -712,6 +716,26 @@ float DotEdge(AsciiDotSample sample) {
     return (float)((sample.metrics >> 8) & 0xffu);
 }
 
+uint FastIntSqrt(uint x) {
+    if (x == 0u) {
+        return 0u;
+    }
+    uint r = x;
+    uint q = 1u;
+    while (q <= r && q <= 0x40000000u) {
+        q <<= 2;
+    }
+    while (q > 1u) {
+        q >>= 2;
+        bool tNonNegative = (r >= q);
+        r >>= 1;
+        if (tNonNegative) {
+            r += q;
+        }
+    }
+    return r;
+}
+
 AsciiDotSample DotSampleAtClamped(int x, int y, uint dotWCount,
                                   uint dotHCount) {
     uint maxX = max(dotWCount, 1u) - 1u;
@@ -761,18 +785,19 @@ void CSDotEdge(uint3 DTid : SV_DispatchThreadID,
     }
 
     uint center = (GTid.y + 1u) * 10u + GTid.x + 1u;
-    float l00 = gDotEdgeTileLuma[center - 11u];
-    float l01 = gDotEdgeTileLuma[center - 10u];
-    float l02 = gDotEdgeTileLuma[center - 9u];
-    float l10 = gDotEdgeTileLuma[center - 1u];
-    float l12 = gDotEdgeTileLuma[center + 1u];
-    float l20 = gDotEdgeTileLuma[center + 9u];
-    float l21 = gDotEdgeTileLuma[center + 10u];
-    float l22 = gDotEdgeTileLuma[center + 11u];
+    int l00 = (int)gDotEdgeTileLuma[center - 11u];
+    int l01 = (int)gDotEdgeTileLuma[center - 10u];
+    int l02 = (int)gDotEdgeTileLuma[center - 9u];
+    int l10 = (int)gDotEdgeTileLuma[center - 1u];
+    int l12 = (int)gDotEdgeTileLuma[center + 1u];
+    int l20 = (int)gDotEdgeTileLuma[center + 9u];
+    int l21 = (int)gDotEdgeTileLuma[center + 10u];
+    int l22 = (int)gDotEdgeTileLuma[center + 11u];
 
-    float gx = (l02 + 2.0f * l12 + l22) - (l00 + 2.0f * l10 + l20);
-    float gy = (l20 + 2.0f * l21 + l22) - (l00 + 2.0f * l01 + l02);
-    uint edge = min(((uint)sqrt(gx * gx + gy * gy)) >> 2, 255u);
+    int gx = (l02 + 2 * l12 + l22) - (l00 + 2 * l10 + l20);
+    int gy = (l20 + 2 * l21 + l22) - (l00 + 2 * l01 + l02);
+    uint magSq = (uint)(gx * gx + gy * gy);
+    uint edge = min(FastIntSqrt(magSq) >> 2, 255u);
 
     AsciiDotSample outDot = DotInputBuffer[DTid.y * dotWCount + DTid.x];
     outDot.metrics = (outDot.metrics & 0xffff00ffu) | (edge << 8);
@@ -1012,13 +1037,15 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
 
     bool useDither = (cellRange <= 20.0f && cellEdgeMax <= kDitherMaxEdge);
     if (useDither) {
-        float coverage = GetInkLevelFromLum(rawLumDiff);
-        float coverageU = coverage * 255.0f;
+        float ditherMean = floor(cellLumSum / 8.0f);
+        float ditherBg = floor((cellLumSum - cellLumMin - cellLumMax) *
+                               (1.0f / 6.0f));
+        uint coverage = GetInkLevelByteFromLum(abs(ditherMean - ditherBg));
         uint ditherMask = 0;
         [unroll]
         for (int k = 0; k < 8; ++k) {
             uint bit = BrailleBitFromDotIndex((uint)k);
-            if (coverageU > (float)kDitherThresholdByBit[bit]) {
+            if (coverage > (uint)kDitherThresholdByBit[bit]) {
                 ditherMask |= (1u << bit);
             }
         }

@@ -1471,6 +1471,7 @@ RenderedVariant renderVariant(const HarnessConfig& config,
 
     auto renderGpuOnce = [&]() {
       error.clear();
+      renderer.ClearHistory();
       bool ready = renderer.Render(image.pixels.data(), image.width,
                                    image.height, rendered.art, &error);
       if (!ready && !error.empty()) {
