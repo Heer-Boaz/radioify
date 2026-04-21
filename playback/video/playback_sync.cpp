@@ -213,8 +213,13 @@ FramePlan planFrame(LoopState& state, PlayerState playbackState,
     return plan;
   }
 
-  if (playbackState == PlayerState::Priming ||
-      playbackState == PlayerState::Seeking || plan.syncLost) {
+  if (playbackState == PlayerState::Seeking) {
+    plan.delayUs = 0;
+    plan.targetUs = nowUs;
+    return plan;
+  }
+
+  if (playbackState == PlayerState::Priming || plan.syncLost) {
     plan.targetUs = state.frameTimerUs + plan.delayUs;
     return plan;
   }

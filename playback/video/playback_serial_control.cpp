@@ -76,6 +76,7 @@ bool Controller::applySeekResult(int serial, int resultCode) {
   seekInFlightSerial_.store(0, std::memory_order_relaxed);
   if (resultCode != 0) {
     seekDisplayUs_.store(0, std::memory_order_relaxed);
+    pendingSeekSerial_.store(0, std::memory_order_relaxed);
   }
   return true;
 }

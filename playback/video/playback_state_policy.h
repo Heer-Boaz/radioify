@@ -24,6 +24,7 @@ struct Snapshot {
   bool audioSyncPointReady = false;
   int currentSerial = 0;
   int lastPresentedSerial = 0;
+  int pendingSeekSerial = 0;
   int seekInFlightSerial = 0;
   bool seekFailed = false;
 };

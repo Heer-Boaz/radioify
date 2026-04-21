@@ -1703,6 +1703,7 @@ struct Player::Impl {
     snapshot.currentSerial = serialControl.currentSerial();
     snapshot.lastPresentedSerial =
         lastPresentedSerial.load(std::memory_order_relaxed);
+    snapshot.pendingSeekSerial = serialControl.pendingSeekSerial();
     snapshot.seekInFlightSerial = serialControl.seekInFlightSerial();
     snapshot.seekFailed = serialControl.seekFailed();
     return snapshot;
@@ -1828,8 +1829,6 @@ struct Player::Impl {
                 targetUs, initDone.load(std::memory_order_relaxed),
                 running.load(std::memory_order_relaxed));
         if (!plan.valid) return;
-        lastPresentedPtsUs.store(plan.displayTargetUs, std::memory_order_relaxed);
-        lastPresentedSerial.store(plan.serial, std::memory_order_relaxed);
         if (plan.signalCommandPending) {
           commandPending.store(true, std::memory_order_relaxed);
         }
@@ -2815,8 +2814,8 @@ struct Player::Impl {
           fallbackFrameDurationUs.load(std::memory_order_relaxed), nowUs());
 
       if (st == PlayerState::Seeking) {
-        // Keep draining stale serials, but allow the sought serial to present a
-        // frame so paused scrubbing can actually update the image.
+        // Seeking is a transient state. While paused, it may present exactly
+        // the pending seek frame; active playback must return through Prefill.
         QueuedFrame front{};
         if (!videoFrames.peek(&front)) {
           videoFrames.waitForFrame(std::chrono::milliseconds(5), &running,
@@ -2830,6 +2829,16 @@ struct Player::Impl {
             videoFrames.release(drop.poolIndex);
           }
           std::this_thread::sleep_for(std::chrono::microseconds(100));
+          continue;
+        }
+        const bool pausedForPreview =
+            audioStartOk.load(std::memory_order_relaxed)
+                ? audioIsPaused()
+                : pauseRequested.load(std::memory_order_relaxed);
+        if (!pausedForPreview ||
+            serialControl.pendingSeekSerial() != static_cast<int>(serial)) {
+          videoClock.set_paused(true, nowUs());
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
           continue;
         }
       }
@@ -3231,7 +3240,7 @@ int64_t Player::durationUs() const {
 int64_t Player::currentUs() const {
   if (!impl_) return 0;
   int64_t seekUs = impl_->serialControl.seekDisplayUs();
-  if (impl_->serialControl.pendingSeekSerial() != 0 && seekUs > 0) {
+  if (impl_->serialControl.pendingSeekSerial() != 0) {
     return seekUs;
   }
   int64_t now = nowUs();

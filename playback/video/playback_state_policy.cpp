@@ -42,8 +42,9 @@ PlayerState resolveSteadyState(Snapshot snapshot, size_t videoPrefillFrames) {
         nextState =
             snapshot.audioPaused ? PlayerState::Paused : PlayerState::Prefill;
       } else if (snapshot.audioPaused &&
-                 snapshot.lastPresentedSerial != snapshot.currentSerial) {
-        // Stay in Seeking until the new serial has actually been shown.
+                 snapshot.pendingSeekSerial == snapshot.currentSerial &&
+                 !(snapshot.decodeEnded && snapshot.videoQueueEmpty)) {
+        // A paused seek borrows Seeking only long enough to display one frame.
         nextState = PlayerState::Seeking;
       } else {
         nextState =

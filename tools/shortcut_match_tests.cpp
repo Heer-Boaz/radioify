@@ -1,6 +1,7 @@
 #include "playback/ascii/playback_frame_output.h"
 #include "playback/playback_shortcuts.h"
 #include "playback/overlay/playback_overlay.h"
+#include "playback/video/playback_sync.h"
 #include "playback/video/playback_state_policy.h"
 
 #include <iostream>
@@ -96,21 +97,24 @@ int main() {
   pausedSeekBeforeFrame.audioPaused = true;
   pausedSeekBeforeFrame.currentSerial = 2;
   pausedSeekBeforeFrame.lastPresentedSerial = 1;
+  pausedSeekBeforeFrame.pendingSeekSerial = 2;
   pausedSeekBeforeFrame.seekInFlightSerial = 0;
   ok &= expect(
       playback_state_policy::resolveSteadyState(pausedSeekBeforeFrame, 1) ==
           PlayerState::Seeking,
-      "Paused seek must remain Seeking until the new frame is presented");
+      "Paused seek must remain Seeking while a preview frame is pending");
 
   playback_state_policy::Snapshot pausedSeekAfterFrame = pausedSeekBeforeFrame;
   pausedSeekAfterFrame.lastPresentedSerial = 2;
+  pausedSeekAfterFrame.pendingSeekSerial = 0;
   ok &= expect(
       playback_state_policy::resolveSteadyState(pausedSeekAfterFrame, 1) ==
           PlayerState::Paused,
-      "Paused seek must settle back to Paused after the new frame is shown");
+      "Paused seek must settle back to Paused after the preview frame is shown");
 
   playback_state_policy::Snapshot failedPausedSeek = pausedSeekBeforeFrame;
   failedPausedSeek.seekFailed = true;
+  failedPausedSeek.pendingSeekSerial = 0;
   ok &= expect(
       playback_state_policy::resolveSteadyState(failedPausedSeek, 1) ==
           PlayerState::Paused,
@@ -122,6 +126,18 @@ int main() {
       playback_state_policy::resolveSteadyState(playingSeek, 1) ==
           PlayerState::Prefill,
       "Active seeks must continue into Prefill");
+
+  playback_sync::LoopState loopState{};
+  loopState.frameTimerUs = 1000;
+  playback_sync::PreparedFrame prepared{};
+  prepared.frame.ptsUs = 5000;
+  prepared.frame.durationUs = 33333;
+  playback_clock::Snapshot master{};
+  Clock videoClock{};
+  playback_sync::FramePlan seekPlan = playback_sync::planFrame(
+      loopState, PlayerState::Seeking, prepared, master, videoClock, 8000);
+  ok &= expect(seekPlan.delayUs == 0 && seekPlan.targetUs == 8000,
+               "Seeking must present the next frame immediately");
 
   return ok ? 0 : 1;
 }
