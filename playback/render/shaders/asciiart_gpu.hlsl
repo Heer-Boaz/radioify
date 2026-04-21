@@ -587,14 +587,19 @@ InputSample SampleInput(float2 uv) {
 
 InputSample SampleInputArea(float2 centerUV, float2 dotSizePx) {
     float2 texSize = float2(width, height);
-    float2 offset = dotSizePx * 0.25f / texSize;
-    InputSample s00 = SampleInput(centerUV + float2(-offset.x, -offset.y));
-    InputSample s10 = SampleInput(centerUV + float2( offset.x, -offset.y));
-    InputSample s01 = SampleInput(centerUV + float2(-offset.x,  offset.y));
-    InputSample s11 = SampleInput(centerUV + float2( offset.x,  offset.y));
+    float2 step = dotSizePx / 4.0f / texSize;
+    float2 start = centerUV - (dotSizePx * 0.5f / texSize) + (step * 0.5f);
 
     InputSample sample;
-    sample.rgb = (s00.rgb + s10.rgb + s01.rgb + s11.rgb) * 0.25f;
+    sample.rgb = float3(0.0f, 0.0f, 0.0f);
+    [unroll]
+    for (int dy = 0; dy < 4; ++dy) {
+        [unroll]
+        for (int dx = 0; dx < 4; ++dx) {
+            sample.rgb += SampleInput(start + float2((float)dx, (float)dy) * step).rgb;
+        }
+    }
+    sample.rgb *= 1.0f / 16.0f;
     return sample;
 }
 
