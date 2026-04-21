@@ -259,6 +259,7 @@ target_sources(shortcut_match_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/playback_main_clock.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/playback_state_machine.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/playback_sync.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/video_enhancement.cpp
 )
 radioify_link_repo_target(shortcut_match_tests)
 

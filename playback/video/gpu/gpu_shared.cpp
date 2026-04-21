@@ -25,7 +25,7 @@ ID3D11Device* getSharedGpuDevice() {
     std::lock_guard<std::mutex> lock(initMutex);
     if (!initialized) {
       std::string error;
-      if (renderer.Initialize(1920, 1080, &error)) {
+      if (renderer.Initialize(&error)) {
         initialized = true;
       }
     }

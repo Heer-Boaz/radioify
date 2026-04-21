@@ -1464,7 +1464,7 @@ RenderedVariant renderVariant(const HarnessConfig& config,
     rendered.art.height = layout.height;
     GpuAsciiRenderer renderer;
     std::string error;
-    if (!renderer.Initialize(image.width, image.height, &error)) {
+    if (!renderer.Initialize(&error)) {
       fail("GPU renderer init failed: " + error);
     }
     renderer.SetGpuTimingEnabled(true, true);

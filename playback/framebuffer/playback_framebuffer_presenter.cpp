@@ -8,8 +8,8 @@
 
 #include "audioplayback.h"
 #include "core/windows_message_pump.h"
-#include "gpu_shared.h"
 #include "playback/playback_frame_refresh.h"
+#include "playback_framebuffer_video_pipeline.h"
 #include "playback_mini_player_tui.h"
 
 namespace playback_framebuffer_presenter {
@@ -145,6 +145,7 @@ void runFramebufferPresenterLoop(
   }
 
   playback_frame_refresh::PlaybackFrameRefreshState frameRefresh;
+  playback_framebuffer_video_pipeline::Pipeline videoPipeline;
   std::vector<ScreenCell> textGridPresentationCells;
   GpuTextGridFrame textGridPresentationFrame;
   auto lastOverlayPresent = std::chrono::steady_clock::time_point::min();
@@ -234,49 +235,28 @@ void runFramebufferPresenterLoop(
     frameRequest.forceRefresh = forcePresentNow;
     playback_frame_refresh::PlaybackFrameRefreshResult frameResult =
         playback_frame_refresh::refresh(player, frameRefresh, frameRequest);
-    bool frameChanged = frameResult.frameChanged;
-    bool textFrameChanged = frameResult.frameChanged;
     if (threadState.load(std::memory_order_relaxed) ==
         WindowThreadState::Stopping) {
       break;
     }
     const bool textGridPresentationActive =
         videoWindow.IsTextGridPresentationEnabled();
-    if (textGridPresentationActive) {
-      frameChanged = false;
-    }
-    if (frameChanged) {
-      if (frameRefresh.frame.format != VideoPixelFormat::HWTexture ||
-          !frameRefresh.frame.hwTexture) {
-        frameChanged = false;
-      } else {
-        D3D11_TEXTURE2D_DESC desc{};
-        frameRefresh.frame.hwTexture->GetDesc(&desc);
-        bool is10Bit = (desc.Format == DXGI_FORMAT_P010);
+    playback_framebuffer_video_pipeline::FrameRequest videoFrameRequest;
+    videoFrameRequest.frame =
+        frameResult.frameAvailable ? &frameRefresh.frame : nullptr;
+    videoFrameRequest.frameCache = &frameCache;
+    videoFrameRequest.frameChanged = frameResult.frameChanged;
+    videoFrameRequest.forceRefresh = forcePresentNow;
+    videoFrameRequest.textGridPresentationActive = textGridPresentationActive;
+    playback_framebuffer_video_pipeline::FrameResult videoFrameResult =
+        videoPipeline.process(videoFrameRequest);
 
-        ID3D11Device* device = getSharedGpuDevice();
-        if (device) {
-          Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-          device->GetImmediateContext(&context);
-          if (context) {
-            std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-            bool updated = frameCache.Update(
-                device, context.Get(), frameRefresh.frame.hwTexture.Get(),
-                frameRefresh.frame.hwTextureArrayIndex,
-                frameRefresh.frame.width, frameRefresh.frame.height,
-                frameRefresh.frame.fullRange, frameRefresh.frame.yuvMatrix,
-                frameRefresh.frame.yuvTransfer, is10Bit ? 10 : 8,
-                frameRefresh.frame.rotationQuarterTurns);
-            if (!updated) {
-              frameChanged = false;
-            }
-          }
-        }
-      }
-    }
+    const VideoFrame* presentationFrame = videoFrameResult.frame;
+    bool frameChanged = videoFrameResult.framebufferFrameChanged;
+    bool textFrameChanged = videoFrameResult.textGridFrameChanged;
 
     bool seekingNow = player.isSeeking();
-    if (videoWindow.IsTextGridPresentationEnabled()) {
+    if (textGridPresentationActive) {
       const int windowWidth = videoWindow.GetWidth();
       const int windowHeight = videoWindow.GetHeight();
       int cellWidth = 1;
@@ -299,7 +279,7 @@ void runFramebufferPresenterLoop(
         int textCols = 0;
         int textRows = 0;
         const VideoFrame* textFrame =
-            frameResult.frameAvailable ? &frameRefresh.frame : nullptr;
+            videoFrameResult.frameAvailable ? presentationFrame : nullptr;
         if (buildTextGridPresentation &&
             buildTextGridPresentation(windowWidth, windowHeight, cellWidth,
                                           cellHeight, textFrame,

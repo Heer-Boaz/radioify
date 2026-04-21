@@ -230,9 +230,7 @@ void GpuAsciiRenderer::ResetSessionState() {
     m_lastNv12TextureDetail.clear();
 }
 
-bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* error) {
-    (void)maxWidth;
-    (void)maxHeight;
+bool GpuAsciiRenderer::Initialize(std::string* error) {
     if (!CreateDevice()) {
         if (error) *error = "Failed to create D3D11 device";
         return false;
@@ -258,10 +256,9 @@ bool GpuAsciiRenderer::Initialize(int maxWidth, int maxHeight, std::string* erro
     return true;
 }
 
-bool GpuAsciiRenderer::InitializeWithDevice(ID3D11Device* device, ID3D11DeviceContext* context,
-                                            int maxWidth, int maxHeight, std::string* error) {
-    (void)maxWidth;
-    (void)maxHeight;
+bool GpuAsciiRenderer::InitializeWithDevice(ID3D11Device* device,
+                                            ID3D11DeviceContext* context,
+                                            std::string* error) {
     if (!device || !context) {
         if (error) *error = "Invalid device or context";
         return false;
@@ -528,7 +525,7 @@ bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_device) {
         std::string initErr;
-        if (!Initialize(width, height, &initErr)) {
+        if (!Initialize(&initErr)) {
             if (error) *error = "Failed to initialize GPU renderer: " + initErr;
             return false;
         }
@@ -752,7 +749,7 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_device) {
         std::string initErr;
-        if (!Initialize(width, height, &initErr)) {
+        if (!Initialize(&initErr)) {
             if (error) *error = "Failed to initialize GPU renderer: " + initErr;
             return false;
         }

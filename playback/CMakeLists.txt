@@ -25,6 +25,7 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/playback_frame_output_console.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/playback_screen_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/playback_framebuffer_presenter.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/playback_framebuffer_video_pipeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/playback_mini_player_tui.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/playback_window_presenter.cpp
 )

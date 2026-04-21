@@ -4,11 +4,13 @@
 #include "playback/video/audio_clock_reacquire.h"
 #include "playback/video/playback_sync.h"
 #include "playback/video/playback_state_machine.h"
+#include "playback/video/video_enhancement.h"
 #include "playback/session/playback_presentation_policy.h"
 #include "playback/session/playback_window_presentation.h"
 #include "clock.h"
 
 #include <iostream>
+#include <string>
 
 namespace {
 
@@ -151,6 +153,35 @@ int main() {
                "centerContentTop must keep full-height content anchored");
   ok &= expect(playback_frame_output::centerContentTop(2, 30, 40) == 2,
                "centerContentTop must not shift oversized content");
+
+  playback_video_enhancement::VideoEnhancementPipeline enhancementPipeline;
+  VideoFrame enhancementInput{};
+  enhancementInput.format = VideoPixelFormat::HWTexture;
+  playback_video_enhancement::VideoEnhancementRequest enhancementRequest;
+  enhancementRequest.input = &enhancementInput;
+  enhancementRequest.consumer =
+      playback_video_enhancement::VideoEnhancementConsumer::FramebufferVideo;
+  enhancementRequest.frameChanged = true;
+  playback_video_enhancement::VideoEnhancementResult enhancementResult =
+      enhancementPipeline.process(enhancementRequest);
+  ok &= expect(enhancementResult.frame == &enhancementInput &&
+                   enhancementResult.frameAvailable &&
+                   enhancementResult.frameChanged &&
+                   !enhancementResult.enhanced,
+               "Video enhancement pipeline must pass frames through before an "
+               "SDK backend is configured");
+  ok &= expect(std::string(enhancementPipeline.backendName()) == "none",
+               "Video enhancement pipeline must expose the active backend");
+
+  enhancementRequest.consumer =
+      playback_video_enhancement::VideoEnhancementConsumer::TextGridInput;
+  enhancementRequest.frameChanged = false;
+  enhancementRequest.forceRefresh = true;
+  playback_video_enhancement::VideoEnhancementResult textGridEnhancement =
+      enhancementPipeline.process(enhancementRequest);
+  ok &= expect(textGridEnhancement.frame == &enhancementInput &&
+                   textGridEnhancement.frameChanged,
+               "Text-grid input must use the same enhancement pipeline");
 
   playback_state_machine::PipelineSnapshot pausedSeekBeforeFrame{};
   pausedSeekBeforeFrame.audioPaused = true;

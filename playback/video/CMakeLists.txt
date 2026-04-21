@@ -32,6 +32,8 @@ radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_ass_bitmap_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_font_attachments.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_manager.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_enhancement.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_frame_cache_update.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/videodecoder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/text_grid_bitmap_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow.cpp

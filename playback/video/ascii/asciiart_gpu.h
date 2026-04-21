@@ -14,11 +14,11 @@ public:
     GpuAsciiRenderer();
     ~GpuAsciiRenderer();
 
-    bool Initialize(int maxWidth, int maxHeight, std::string* error = nullptr);
+    bool Initialize(std::string* error = nullptr);
     
     // Initialize with an existing D3D11 device (for device sharing with video decoder)
     bool InitializeWithDevice(ID3D11Device* device, ID3D11DeviceContext* context,
-                              int maxWidth, int maxHeight, std::string* error = nullptr);
+                              std::string* error = nullptr);
     
     // Get the D3D11 device (for sharing with video decoder)
     ID3D11Device* device() const { return m_device.Get(); }

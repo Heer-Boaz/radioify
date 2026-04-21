@@ -18,6 +18,7 @@
 #include <wrl/client.h>
 
 #include "asciiart_layout.h"
+#include "video_frame_cache_update.h"
 
 namespace {
 void emitWarning(
@@ -76,53 +77,6 @@ bool logAsciiRendererStartup(const VideoFrame& frame,
                 formatName, frame.width, frame.height, art.width, art.height);
   timingSink(std::string(inputBuf));
   return true;
-}
-
-bool updateFrameCache(GpuVideoFrameCache& cache, ID3D11Device* device,
-                     ID3D11DeviceContext* context, const VideoFrame& frame) {
-  if (frame.format == VideoPixelFormat::HWTexture) {
-    if (!frame.hwTexture) {
-      return false;
-    }
-    D3D11_TEXTURE2D_DESC desc{};
-    frame.hwTexture->GetDesc(&desc);
-    const bool is10Bit = (desc.Format == DXGI_FORMAT_P010);
-    return cache.Update(device, context, frame.hwTexture.Get(),
-                        frame.hwTextureArrayIndex, frame.width, frame.height,
-                        frame.fullRange, frame.yuvMatrix, frame.yuvTransfer,
-                        is10Bit ? 10 : 8, frame.rotationQuarterTurns);
-  }
-
-  if (frame.format == VideoPixelFormat::NV12 ||
-      frame.format == VideoPixelFormat::P010) {
-    if (frame.stride <= 0 || frame.planeHeight <= 0 || frame.yuv.empty()) {
-      return false;
-    }
-    const size_t strideBytes = static_cast<size_t>(frame.stride);
-    const size_t planeHeight = static_cast<size_t>(frame.planeHeight);
-    const size_t yBytes = strideBytes * planeHeight;
-    if (planeHeight == 0 || strideBytes == 0 ||
-        yBytes / strideBytes != planeHeight) {
-      return false;
-    }
-    return cache.UpdateNV12(
-        device, context, frame.yuv.data(), frame.stride, frame.planeHeight,
-        frame.width, frame.height, frame.fullRange, frame.yuvMatrix,
-        frame.yuvTransfer, frame.format == VideoPixelFormat::P010 ? 10 : 8,
-        frame.rotationQuarterTurns);
-  }
-
-  if (frame.format == VideoPixelFormat::RGB32 ||
-      frame.format == VideoPixelFormat::ARGB32) {
-    if (frame.rgba.empty()) {
-      return false;
-    }
-    const int stride = frame.stride > 0 ? frame.stride : frame.width * 4;
-    return cache.Update(device, context, frame.rgba.data(), stride, frame.width,
-                        frame.height, frame.rotationQuarterTurns);
-  }
-
-  return false;
 }
 
 bool cpuRenderFallback(const playback_frame_output::AsciiModePrepareInput& input) {
@@ -294,8 +248,8 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       if (input.clearHistory) {
         input.gpuRenderer->ClearHistory();
       }
-      cacheUpdated = updateFrameCache(*input.frameCache, device, context.Get(),
-                                     *input.frame);
+      cacheUpdated = playback_video_frame_cache::update(
+          *input.frameCache, device, context.Get(), *input.frame);
       if (cacheUpdated || hadCachedFrame) {
         renderFromCache = input.gpuRenderer->RenderFromCache(*input.frameCache,
                                                             *input.art, &gpuErr);
