@@ -1,7 +1,6 @@
 #include "playback_transport_navigation.h"
 
 #include <algorithm>
-#include <cctype>
 #include <utility>
 #include <vector>
 
@@ -13,16 +12,8 @@
 namespace playback_transport_navigation {
 namespace {
 
-std::string toLower(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
-
 bool isVideoExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".mp4" || ext == ".webm" || ext == ".mov" ||
-         ext == ".mkv";
+  return isSupportedVideoExt(path);
 }
 
 }  // namespace

@@ -4,6 +4,7 @@
 #include <string>
 
 bool isSupportedAudioExt(const std::filesystem::path& path);
+bool isSupportedVideoExt(const std::filesystem::path& path);
 bool isMiniaudioExt(const std::filesystem::path& path);
 bool isFlacExt(const std::filesystem::path& path);
 bool isGmeExt(const std::filesystem::path& path);

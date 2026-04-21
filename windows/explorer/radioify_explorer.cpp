@@ -232,6 +232,42 @@ bool pathExists(const std::filesystem::path& path) {
   return std::filesystem::exists(path, ec) && !ec;
 }
 
+std::wstring quoteCommandLineArgument(std::wstring_view value) {
+  if (value.empty()) return L"\"\"";
+
+  bool needsQuotes = false;
+  for (wchar_t ch : value) {
+    if (ch == L' ' || ch == L'\t' || ch == L'\n' || ch == L'\v' ||
+        ch == L'"') {
+      needsQuotes = true;
+      break;
+    }
+  }
+  if (!needsQuotes) return std::wstring(value);
+
+  std::wstring quoted;
+  quoted.push_back(L'"');
+  size_t backslashes = 0;
+  for (wchar_t ch : value) {
+    if (ch == L'\\') {
+      ++backslashes;
+      continue;
+    }
+    if (ch == L'"') {
+      quoted.append(backslashes * 2 + 1, L'\\');
+      quoted.push_back(ch);
+      backslashes = 0;
+      continue;
+    }
+    quoted.append(backslashes, L'\\');
+    backslashes = 0;
+    quoted.push_back(ch);
+  }
+  quoted.append(backslashes * 2, L'\\');
+  quoted.push_back(L'"');
+  return quoted;
+}
+
 std::wstring describeSelection(IShellItemArray* items) {
   if (!items) return L"selection=null";
 
@@ -412,7 +448,8 @@ HRESULT launchRadioifyShellOpen(const std::filesystem::path& selectedPath) {
   }
 
   const std::wstring parameters =
-      L"--shell-open \"" + selectedPath.wstring() + L"\"";
+      quoteCommandLineArgument(L"--shell-open") + L" " +
+      quoteCommandLineArgument(selectedPath.wstring());
   SHELLEXECUTEINFOW executeInfo{};
   executeInfo.cbSize = sizeof(executeInfo);
   executeInfo.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;

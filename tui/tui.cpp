@@ -116,8 +116,7 @@ static bool isSupportedImageExt(const std::filesystem::path& p) {
 }
 
 static bool isVideoExt(const std::filesystem::path& p) {
-  std::string ext = toLower(toUtf8String(p.extension()));
-  return ext == ".mp4" || ext == ".webm" || ext == ".mov" || ext == ".mkv";
+  return isSupportedVideoExt(p);
 }
 
 static bool isSupportedMediaExt(const std::filesystem::path& p) {
@@ -680,7 +679,7 @@ int runTui(Options o) {
   if (o.shellOpen && !o.input.empty()) {
     std::error_code ec;
     std::filesystem::path absoluteInput =
-        std::filesystem::absolute(std::filesystem::path(o.input), ec);
+        std::filesystem::absolute(pathFromUtf8String(o.input), ec);
     if (!ec) {
       o.input = toUtf8String(absoluteInput);
     }
@@ -726,7 +725,7 @@ int runTui(Options o) {
   std::filesystem::path startDir = radioifyLaunchDir();
   std::string initialName;
   if (!o.input.empty()) {
-    std::filesystem::path inputPath(o.input);
+    std::filesystem::path inputPath = pathFromUtf8String(o.input);
     if (std::filesystem::exists(inputPath)) {
       if (std::filesystem::is_directory(inputPath)) {
         startDir = inputPath;
@@ -784,7 +783,7 @@ int runTui(Options o) {
     renderOpt.input = toUtf8String(file);
     std::filesystem::path outputPath =
         renderOpt.output.empty() ? defaultRadioOutputFor(file)
-                                 : std::filesystem::path(renderOpt.output);
+                                 : pathFromUtf8String(renderOpt.output);
     if (renderOpt.output.empty()) {
       renderOpt.output = toUtf8String(outputPath);
     }
@@ -854,25 +853,27 @@ int runTui(Options o) {
   };
 
   bool dirty = true;
-  if (!o.input.empty() && o.play && std::filesystem::exists(o.input)) {
-    std::filesystem::path inputPath(o.input);
-    if (!std::filesystem::is_directory(inputPath)) {
-      if (isSupportedImageExt(inputPath)) {
-        pendingImage = inputPath;
-        hasPendingImage = true;
-      } else if (isVideoExt(inputPath)) {
-        pendingVideo = inputPath;
-        hasPendingVideo = true;
-      } else {
-        if (loadTrackBrowserForFile(inputPath)) {
-          browser.dir = trackBrowserFile();
-          browser.selected = 0;
-          browser.scrollRow = 0;
-          browser.filter.clear();
-          setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-          refreshBrowser(browser, "");
+  if (!o.input.empty() && o.play) {
+    std::filesystem::path inputPath = pathFromUtf8String(o.input);
+    if (std::filesystem::exists(inputPath)) {
+      if (!std::filesystem::is_directory(inputPath)) {
+        if (isSupportedImageExt(inputPath)) {
+          pendingImage = inputPath;
+          hasPendingImage = true;
+        } else if (isVideoExt(inputPath)) {
+          pendingVideo = inputPath;
+          hasPendingVideo = true;
         } else {
-          tryStartAudioFile(inputPath);
+          if (loadTrackBrowserForFile(inputPath)) {
+            browser.dir = trackBrowserFile();
+            browser.selected = 0;
+            browser.scrollRow = 0;
+            browser.filter.clear();
+            setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
+            refreshBrowser(browser, "");
+          } else {
+            tryStartAudioFile(inputPath);
+          }
         }
       }
     }

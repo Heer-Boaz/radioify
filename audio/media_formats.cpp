@@ -29,6 +29,18 @@ bool isSupportedAudioExt(const std::filesystem::path& path) {
          ext == ".psf" || ext == ".minipsf" || ext == ".psf2" || ext == ".minipsf2";
 }
 
+bool isSupportedVideoExt(const std::filesystem::path& path) {
+  const std::string ext = toLower(toUtf8String(path.extension()));
+  return ext == ".mp4" || ext == ".m4v" || ext == ".webm" ||
+         ext == ".mov" || ext == ".qt" || ext == ".mkv" ||
+         ext == ".avi" || ext == ".wmv" || ext == ".asf" ||
+         ext == ".flv" || ext == ".mpg" || ext == ".mpeg" ||
+         ext == ".mpe" || ext == ".mpv" || ext == ".m2v" ||
+         ext == ".ts" || ext == ".m2ts" || ext == ".mts" ||
+         ext == ".3gp" || ext == ".3g2" || ext == ".ogv" ||
+         ext == ".vob";
+}
+
 bool isMiniaudioExt(const std::filesystem::path& path) {
   const std::string ext = toLower(toUtf8String(path.extension()));
   return ext == ".wav" || ext == ".mp3" || ext == ".flac";

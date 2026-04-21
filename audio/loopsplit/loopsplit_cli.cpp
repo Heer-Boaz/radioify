@@ -19,7 +19,7 @@ std::pair<std::filesystem::path, std::filesystem::path> resolveSplitOutputPaths(
             input.parent_path() / (base + loopSuffix)};
   }
 
-  std::filesystem::path outPath(outArg);
+  std::filesystem::path outPath = pathFromUtf8String(outArg);
   bool directoryHint =
       !outArg.empty() &&
       (outArg.back() == '/' || outArg.back() == '\\');
@@ -44,7 +44,7 @@ int runSplitLoopCli(const Options& o) {
     die("split-loop requires an input file path.");
   }
 
-  std::filesystem::path inputPath(o.input);
+  std::filesystem::path inputPath = pathFromUtf8String(o.input);
   requireSupportedAudioInputFile(inputPath);
 
   auto [stingerOutput, loopOutput] = resolveSplitOutputPaths(inputPath, o.output);

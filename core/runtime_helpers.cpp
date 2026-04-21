@@ -134,6 +134,14 @@ std::string toUtf8String(const std::filesystem::path& path) {
 #endif
 }
 
+std::filesystem::path pathFromUtf8String(const std::string& value) {
+#ifdef _WIN32
+  return std::filesystem::u8path(value);
+#else
+  return std::filesystem::path(value);
+#endif
+}
+
 int64_t nowUs() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now().time_since_epoch())

@@ -6,6 +6,7 @@
 #include <vector>
 
 std::string toUtf8String(const std::filesystem::path& path);
+std::filesystem::path pathFromUtf8String(const std::string& value);
 int64_t nowUs();
 std::filesystem::path radioifyLaunchDir();
 std::filesystem::path radioifyExecutableDir();

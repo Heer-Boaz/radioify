@@ -35,7 +35,7 @@ static std::filesystem::path resolveRenderOutputPath(
     return defaultRadioOutputFor(input);
   }
 
-  std::filesystem::path outPath(outArg);
+  std::filesystem::path outPath = pathFromUtf8String(outArg);
   bool directoryHint =
       !outArg.empty() && (outArg.back() == '/' || outArg.back() == '\\');
   if (directoryHint ||
@@ -262,7 +262,7 @@ int runRenderRadioCli(const Options& o) {
     die("render-radio requires an input file path.");
   }
 
-  std::filesystem::path inputPath(o.input);
+  std::filesystem::path inputPath = pathFromUtf8String(o.input);
   requireSupportedAudioInputFile(inputPath);
   std::filesystem::path outputPath = resolveRenderOutputPath(inputPath, o.output);
 
@@ -362,7 +362,7 @@ static std::filesystem::path resolveExtractOutputPath(
     return defaultMelodyOutputFor(input);
   }
 
-  std::filesystem::path outPath(outArg);
+  std::filesystem::path outPath = pathFromUtf8String(outArg);
   bool directoryHint =
       !outArg.empty() && (outArg.back() == '/' || outArg.back() == '\\');
   if (directoryHint ||
@@ -383,7 +383,7 @@ int runExtractSheetCli(const Options& o,
     die("extract-sheet requires an input file path.");
   }
 
-  std::filesystem::path inputPath(o.input);
+  std::filesystem::path inputPath = pathFromUtf8String(o.input);
   requireSupportedAudioInputFile(inputPath);
   std::filesystem::path outputPath = resolveExtractOutputPath(inputPath, o.output);
 
