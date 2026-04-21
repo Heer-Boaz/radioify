@@ -3,9 +3,11 @@
 
 #include <chrono>
 #include <ctime>
-#include <string>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <string>
 
 inline std::mutex& timingLogMutex() {
   static std::mutex m;
@@ -50,5 +52,25 @@ inline std::string radioifyLogTimestamp() {
 #define RADIOIFY_ENABLE_GPU_TIMING 0
 #endif
 #endif
+
+inline void radioifyAppendTimingLogLine(const std::filesystem::path& logPath,
+                                        const std::string& line) {
+#if RADIOIFY_ENABLE_TIMING_LOG
+  if (logPath.empty()) return;
+  std::lock_guard<std::mutex> lock(timingLogMutex());
+  static std::ofstream f;
+  static std::filesystem::path currentPath;
+  if (currentPath != logPath) {
+    if (f.is_open()) f.close();
+    f.open(logPath, std::ios::app);
+    currentPath = logPath;
+  }
+  if (!f) return;
+  f << radioifyLogTimestamp() << " " << line << "\n";
+#else
+  (void)logPath;
+  (void)line;
+#endif
+}
 
 #endif

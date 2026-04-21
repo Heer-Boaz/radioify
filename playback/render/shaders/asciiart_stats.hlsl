@@ -60,6 +60,15 @@ float ExpandYNorm(float yNorm) {
     return saturate((yCode - yMin) / max(yMax - yMin, 1.0f));
 }
 
+float ExpandYCode(float yCode) {
+    float maxCode = (float)((1u << bitDepth) - 1u);
+    yCode = min(max(yCode, 0.0f), maxCode);
+    uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
+    float yMin = (isFullRange != 0u) ? 0.0f : (float)(16u << shift);
+    float yMax = (isFullRange != 0u) ? maxCode : (float)(235u << shift);
+    return saturate((yCode - yMin) / max(yMax - yMin, 1.0f));
+}
+
 float PQEotf(float v) {
     const float m1 = 2610.0f / 16384.0f;
     const float m2 = 2523.0f / 32.0f;
@@ -110,15 +119,38 @@ float ApplyHdrToSdr(float v) {
     return LinearToSrgb(v);
 }
 
-float LoadLinearLuma(uint x, uint y) {
-#if defined(NV12_INPUT)
-    float yVal = TextureY.Load(int3(x, y, 0));
-    return ExpandYNorm(yVal) * 255.0f;
-#else
-    float3 rgb = InputTexture.Load(int3(x, y, 0)).rgb;
-    return saturate(dot(rgb, kLumaCoeff)) * 255.0f;
-#endif
+static const uint kYCoeffR = 13933u;
+static const uint kYCoeffG = 46871u;
+static const uint kYCoeffB = 4732u;
+
+uint RgbToYByte(uint r, uint g, uint b) {
+    uint y = (r * kYCoeffR + g * kYCoeffG + b * kYCoeffB) >> 16;
+    return min(y, 255u);
 }
+
+uint CodeFromNormRounded(float norm) {
+    uint maxCode = (1u << bitDepth) - 1u;
+    return min((uint)(CodeFromNorm(norm) + 0.5f), maxCode);
+}
+
+#if defined(NV12_INPUT)
+uint NormalizeYCodeToByte(uint yCode) {
+    float y = ExpandYCode((float)yCode);
+    if (yuvTransfer != kTransferSdr) {
+        y = ApplyHdrToSdr(y);
+    }
+    return (uint)(saturate(y) * 255.0f + 0.5f);
+}
+#else
+uint LoadRgbaLumaByte(uint x, uint y) {
+    float3 rgb = InputTexture.Load(int3(x, y, 0)).rgb;
+    rgb = saturate(rgb);
+    uint r = (uint)(rgb.r * 255.0f + 0.5f);
+    uint g = (uint)(rgb.g * 255.0f + 0.5f);
+    uint b = (uint)(rgb.b * 255.0f + 0.5f);
+    return RgbToYByte(r, g, b);
+}
+#endif
 
 [numthreads(256, 1, 1)]
 void CSStats(uint3 tid : SV_DispatchThreadID) {
@@ -148,24 +180,26 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
             if (sxEnd <= sxStart) sxEnd = sxStart + 1u;
             if (sxEnd > width) sxEnd = width;
 
-            float sum = 0.0f;
+            uint sum = 0u;
             uint count = 0u;
             for (uint sy = syStart; sy < syEnd; ++sy) {
                 for (uint sx = sxStart; sx < sxEnd; ++sx) {
-                    sum += LoadLinearLuma(sx, sy);
+#if defined(NV12_INPUT)
+                    sum += CodeFromNormRounded(TextureY.Load(int3((int)sx, (int)sy, 0)));
+#else
+                    sum += LoadRgbaLumaByte(sx, sy);
+#endif
                     ++count;
                 }
             }
             if (count == 0u) {
                 continue;
             }
-            float avg = sum / (float)count;
 #if defined(NV12_INPUT)
-            if (yuvTransfer != kTransferSdr) {
-                avg = saturate(ApplyHdrToSdr(avg / 255.0f)) * 255.0f;
-            }
+            uint bin = NormalizeYCodeToByte((sum + (count >> 1)) / count);
+#else
+            uint bin = sum / count;
 #endif
-            uint bin = (uint)(avg + 0.5f);
             bin = min(bin, 255u);
             InterlockedAdd(histogram[bin], 1);
         }

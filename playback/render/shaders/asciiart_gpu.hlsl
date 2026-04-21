@@ -482,54 +482,6 @@ float2 RotateInputUV(float2 uv) {
     return uv;
 }
 
-float SampleLumaRaw(float2 uv, SamplerState s) {
-    float2 srcUv = RotateInputUV(uv);
-#ifdef NV12_INPUT
-    float yNorm = TextureY.SampleLevel(s, srcUv, 0);
-    return ExpandYNorm(yNorm) * 255.0f;
-#else
-    return GetLuma(InputTexture.SampleLevel(s, srcUv, 0).rgb);
-#endif
-}
-
-float SampleLuma(float2 uv) { return SampleLumaRaw(uv, LinearSampler); }
-float SampleLumaArea(float2 centerUV, float2 dotSizePx) {
-    // 4x4 adaptive Gaussian filter (16 samples)
-    // Reverted to 16 samples to fix TDR/Freeze, but added Gaussian weighting for precision
-    float2 texSize = float2(width, height);
-    float2 step = dotSizePx / 4.0f / texSize;
-    // Start at top-left of the dot area
-    float2 start = centerUV - (dotSizePx * 0.5f / texSize) + (step * 0.5f);
-
-    float sum = 0;
-    float weightSum = 0;
-    
-    [unroll]
-    for (int dy = 0; dy < 4; ++dy) {
-        [unroll]
-        for (int dx = 0; dx < 4; ++dx) {
-            // Center of 4x4 grid is (1.5, 1.5)
-            float distX = abs((float)dx - 1.5f);
-            float distY = abs((float)dy - 1.5f);
-            // Max dist sq = 1.5^2 + 1.5^2 = 4.5
-            float normDist = (distX * distX + distY * distY) / 4.5f;
-            
-            // Weight: 1.0 at center, ~0.4 at corners
-            float weight = 1.0f - (normDist * 0.6f);
-            
-            sum += SampleLumaRaw(start + float2((float)dx, (float)dy) * step, LinearSampler) * weight;
-            weightSum += weight;
-        }
-    }
-    float luma = sum / weightSum;
-#ifdef NV12_INPUT
-    if (yuvTransfer != kTransferSdr) {
-        luma = ApplyHdrToSdr(luma / 255.0f) * 255.0f;
-    }
-#endif
-    return luma;
-}
-
 float GetInkLevelFromLum(float lum) {
     float norm = lum / 255.0f;
     float x = kInkUseBright ? norm : (1.0f - norm);
@@ -545,12 +497,98 @@ struct InputSample {
     float3 rgb;
 };
 
-InputSample SampleInput(float2 uv) {
-    float2 srcUv = RotateInputUV(uv);
-    InputSample sample;
-#ifdef NV12_INPUT
-    float y = ExpandYNorm(TextureY.SampleLevel(LinearSampler, srcUv, 0));
-    float2 uv_val = ExpandUV(TextureUV.SampleLevel(LinearSampler, srcUv, 0));
+static const uint kYCoeffR = 13933u;
+static const uint kYCoeffG = 46871u;
+static const uint kYCoeffB = 4732u;
+
+uint RgbToYByte(uint r, uint g, uint b) {
+    uint y = (r * kYCoeffR + g * kYCoeffG + b * kYCoeffB) >> 16;
+    return min(y, 255u);
+}
+
+#ifndef NV12_INPUT
+uint4 LoadRgba8(uint2 p) {
+    float4 c = saturate(InputTexture.Load(int3((int)p.x, (int)p.y, 0)));
+    return uint4((uint)(c.r * 255.0f + 0.5f),
+                 (uint)(c.g * 255.0f + 0.5f),
+                 (uint)(c.b * 255.0f + 0.5f),
+                 (uint)(c.a * 255.0f + 0.5f));
+}
+#endif
+
+void ClampSourceRange(inout uint start, inout uint end, uint extent) {
+    start = min(start, extent);
+    end = min(end, extent);
+    if (end <= start && extent > 0u) {
+        end = min(start + 1u, extent);
+        if (end <= start) {
+            start = end - 1u;
+        }
+    }
+}
+
+void ForwardSourceRange(uint index, uint count, uint extent,
+                        out uint start, out uint end) {
+    start = (index * extent) / count;
+    end = ((index + 1u) * extent) / count;
+    ClampSourceRange(start, end, extent);
+}
+
+void ReverseSourceRange(uint index, uint count, uint extent,
+                        out uint start, out uint end) {
+    start = ((count - index - 1u) * extent) / count;
+    end = ((count - index) * extent) / count;
+    ClampSourceRange(start, end, extent);
+}
+
+void SourceBoundsForDot(uint dotX, uint dotY, uint dotWCount, uint dotHCount,
+                        out uint2 start, out uint2 end) {
+    uint turns = rotationQuarterTurns & 3u;
+    if (turns == 1u) {
+        ForwardSourceRange(dotY, dotHCount, width, start.x, end.x);
+        ReverseSourceRange(dotX, dotWCount, height, start.y, end.y);
+    } else if (turns == 2u) {
+        ReverseSourceRange(dotX, dotWCount, width, start.x, end.x);
+        ReverseSourceRange(dotY, dotHCount, height, start.y, end.y);
+    } else if (turns == 3u) {
+        ReverseSourceRange(dotY, dotHCount, width, start.x, end.x);
+        ForwardSourceRange(dotX, dotWCount, height, start.y, end.y);
+    } else {
+        ForwardSourceRange(dotX, dotWCount, width, start.x, end.x);
+        ForwardSourceRange(dotY, dotHCount, height, start.y, end.y);
+    }
+}
+
+float ExpandYCode(float yCode) {
+    float maxCode = GetMaxCode();
+    yCode = min(max(yCode, 0.0f), maxCode);
+    uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
+    float yMin = (isFullRange != 0) ? 0.0f : (float)(16u << shift);
+    float yMax = (isFullRange != 0) ? maxCode : (float)(235u << shift);
+    float denom = max(yMax - yMin, 1.0f);
+    return saturate((yCode - yMin) / denom);
+}
+
+float2 ExpandUVCode(float2 uvCode) {
+    float maxCode = GetMaxCode();
+    uvCode = min(max(uvCode, float2(0.0f, 0.0f)),
+                 float2(maxCode, maxCode));
+    uint shift = (bitDepth > 8u) ? (bitDepth - 8u) : 0u;
+    float cMin = (isFullRange != 0) ? 0.0f : (float)(16u << shift);
+    float cMax = (isFullRange != 0) ? maxCode : (float)(240u << shift);
+    float cMid = (float)(128u << shift);
+    float denom = max(cMax - cMin, 1.0f);
+    return (uvCode - cMid) / denom;
+}
+
+uint CodeFromNormRounded(float norm) {
+    uint maxCode = (1u << bitDepth) - 1u;
+    return min((uint)(CodeFromNorm(norm) + 0.5f), maxCode);
+}
+
+float3 YuvCodeToRgb(uint yCode, uint uCode, uint vCode) {
+    float y = ExpandYCode((float)yCode);
+    float2 uv_val = ExpandUVCode(float2((float)uCode, (float)vCode));
 
     float r = 0.0f;
     float g = 0.0f;
@@ -568,38 +606,89 @@ InputSample SampleInput(float2 uv) {
         g = y - 0.1873 * uv_val.x - 0.4681 * uv_val.y;
         b = y + 1.8556 * uv_val.x;
     }
-    sample.rgb = float3(r, g, b);
-#else
-    sample.rgb = InputTexture.SampleLevel(LinearSampler, srcUv, 0).rgb;
-#endif
 
-    float3 rgb = sample.rgb;
+    float3 rgb = float3(r, g, b);
 #ifdef NV12_INPUT
     if (yuvTransfer != kTransferSdr) {
         rgb = ApplyHdrToSdr(rgb);
     }
 #endif
-    rgb = saturate(rgb);
-
-    sample.rgb = rgb;
-    return sample;
+    return saturate(rgb);
 }
 
-InputSample SampleInputArea(float2 centerUV, float2 dotSizePx) {
-    float2 texSize = float2(width, height);
-    float2 step = dotSizePx / 4.0f / texSize;
-    float2 start = centerUV - (dotSizePx * 0.5f / texSize) + (step * 0.5f);
+uint NormalizeYCodeToByte(uint yCode) {
+    float y = ExpandYCode((float)yCode);
+#ifdef NV12_INPUT
+    if (yuvTransfer != kTransferSdr) {
+        y = ApplyHdrToSdr(y);
+    }
+#endif
+    return (uint)(saturate(y) * 255.0f + 0.5f);
+}
 
+InputSample SampleSourceArea(uint dotX, uint dotY, uint dotWCount,
+                             uint dotHCount, out float luma) {
+    // Match the CPU renderer's scaled-dot prefilter: each braille dot owns a
+    // discrete source-pixel rectangle and averages all pixels in that rectangle.
+    uint2 start;
+    uint2 end;
+    SourceBoundsForDot(dotX, dotY, dotWCount, dotHCount, start, end);
+
+    uint count = 0u;
     InputSample sample;
-    sample.rgb = float3(0.0f, 0.0f, 0.0f);
-    [unroll]
-    for (int dy = 0; dy < 4; ++dy) {
-        [unroll]
-        for (int dx = 0; dx < 4; ++dx) {
-            sample.rgb += SampleInput(start + float2((float)dx, (float)dy) * step).rgb;
+#ifdef NV12_INPUT
+    uint sumY = 0u;
+    uint sumU = 0u;
+    uint sumV = 0u;
+    [loop]
+    for (uint sy = start.y; sy < end.y; ++sy) {
+        [loop]
+        for (uint sx = start.x; sx < end.x; ++sx) {
+            sumY += CodeFromNormRounded(TextureY.Load(int3((int)sx, (int)sy, 0)));
+            uint2 uvPos = uint2(sx >> 1, sy >> 1);
+            float2 uvNorm = TextureUV.Load(int3((int)uvPos.x, (int)uvPos.y, 0));
+            sumU += CodeFromNormRounded(uvNorm.x);
+            sumV += CodeFromNormRounded(uvNorm.y);
+            ++count;
         }
     }
-    sample.rgb *= 1.0f / 16.0f;
+    uint half = count >> 1;
+    uint yAvg = (sumY + half) / max(count, 1u);
+    uint uAvg = (sumU + half) / max(count, 1u);
+    uint vAvg = (sumV + half) / max(count, 1u);
+    luma = (float)NormalizeYCodeToByte(yAvg);
+    sample.rgb = YuvCodeToRgb(yAvg, uAvg, vAvg);
+#else
+    uint sumR = 0u;
+    uint sumG = 0u;
+    uint sumB = 0u;
+    uint sumA = 0u;
+    uint sumLuma = 0u;
+    [loop]
+    for (uint sy = start.y; sy < end.y; ++sy) {
+        [loop]
+        for (uint sx = start.x; sx < end.x; ++sx) {
+            uint4 rgba = LoadRgba8(uint2(sx, sy));
+            sumR += rgba.r;
+            sumG += rgba.g;
+            sumB += rgba.b;
+            sumA += rgba.a;
+            sumLuma += RgbToYByte(rgba.r, rgba.g, rgba.b);
+            ++count;
+        }
+    }
+    uint safeCount = max(count, 1u);
+    uint avgR = sumR / safeCount;
+    uint avgG = sumG / safeCount;
+    uint avgB = sumB / safeCount;
+    uint avgA = sumA / safeCount;
+    uint avgLuma = sumLuma / safeCount;
+    if (avgA == 0u) {
+        avgLuma = 255u;
+    }
+    luma = (float)avgLuma;
+    sample.rgb = float3((float)avgR, (float)avgG, (float)avgB) * (1.0f / 255.0f);
+#endif
     return sample;
 }
 
@@ -640,16 +729,9 @@ void CSDotPrefilter(uint3 DTid : SV_DispatchThreadID) {
         return;
     }
 
-    float cellW = (float)width / (float)outWidth;
-    float cellH = (float)height / (float)outHeight;
-    float dotW = cellW * 0.5f;
-    float dotH = cellH * 0.25f;
-    float2 dotSize = float2(dotW, dotH);
-    float2 uv = float2(((float)DTid.x + 0.5f) * dotW / (float)width,
-                       ((float)DTid.y + 0.5f) * dotH / (float)height);
-
-    float luma = SampleLumaArea(uv, dotSize);
-    InputSample sample = SampleInputArea(uv, dotSize);
+    float luma = 255.0f;
+    InputSample sample =
+        SampleSourceArea(DTid.x, DTid.y, dotWCount, dotHCount, luma);
 
     AsciiDotSample outDot;
     outDot.color = PackColor(sample.rgb);
@@ -690,10 +772,10 @@ void CSDotEdge(uint3 DTid : SV_DispatchThreadID,
 
     float gx = (l02 + 2.0f * l12 + l22) - (l00 + 2.0f * l10 + l20);
     float gy = (l20 + 2.0f * l21 + l22) - (l00 + 2.0f * l01 + l02);
-    float edge = sqrt(gx * gx + gy * gy) * 0.25f;
+    uint edge = min(((uint)sqrt(gx * gx + gy * gy)) >> 2, 255u);
 
     AsciiDotSample outDot = DotInputBuffer[DTid.y * dotWCount + DTid.x];
-    outDot.metrics = (outDot.metrics & 0xffff00ffu) | (PackByte255(edge) << 8);
+    outDot.metrics = (outDot.metrics & 0xffff00ffu) | (edge << 8);
     DotOutputBuffer[DTid.y * dotWCount + DTid.x] = outDot;
 }
 
