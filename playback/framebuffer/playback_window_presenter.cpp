@@ -72,7 +72,8 @@ struct PlaybackWindowPresenter::Impl {
   bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
              const std::function<bool()>& overlayVisible,
              const playback_framebuffer_presenter::PictureInPictureTextGridProvider&
-                 buildPictureInPictureTextGrid) {
+                 buildPictureInPictureTextGrid,
+             const PlaybackSessionContinuationState* initialState) {
     if (thread.joinable()) {
       threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
       forcePresent.store(true, std::memory_order_relaxed);
@@ -86,8 +87,29 @@ struct PlaybackWindowPresenter::Impl {
 
     thread = std::thread(
         [this, &player, buildUiState, overlayVisible, buildPictureInPictureTextGrid,
-         startGate]() {
+         startGate, initialState]() {
           const bool opened = window.Open(1280, 720, "Radioify Output");
+          if (opened) {
+            if (initialState &&
+                initialState->windowPlacement.pictureInPictureActive) {
+              if (initialState->windowPlacement.hasPictureInPictureRestoreRect) {
+                window.SetWindowBounds(
+                    initialState->windowPlacement.pictureInPictureRestoreRect);
+              } else if (initialState->windowPlacement.hasWindowRect) {
+                window.SetWindowBounds(initialState->windowPlacement.windowRect);
+              }
+              window.SetPictureInPictureTextMode(
+                  initialState->windowPlacement.pictureInPictureTextMode);
+              if (window.SetPictureInPicture(true) &&
+                  initialState->windowPlacement.hasPictureInPictureRect) {
+                window.SetWindowBounds(
+                    initialState->windowPlacement.pictureInPictureRect);
+              }
+            } else if (initialState &&
+                       initialState->windowPlacement.hasWindowRect) {
+              window.SetWindowBounds(initialState->windowPlacement.windowRect);
+            }
+          }
           {
             std::lock_guard<std::mutex> lock(startGate->mutex);
             startGate->opened = opened;
@@ -165,9 +187,10 @@ bool PlaybackWindowPresenter::start(
     Player& player, const std::function<WindowUiState()>& buildUiState,
     const std::function<bool()>& overlayVisible,
     const playback_framebuffer_presenter::PictureInPictureTextGridProvider&
-        buildPictureInPictureTextGrid) {
+        buildPictureInPictureTextGrid,
+    const PlaybackSessionContinuationState* initialState) {
   return impl_->start(player, buildUiState, overlayVisible,
-                      buildPictureInPictureTextGrid);
+                      buildPictureInPictureTextGrid, initialState);
 }
 
 void PlaybackWindowPresenter::stop() { impl_->stop(); }

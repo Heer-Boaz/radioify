@@ -91,42 +91,6 @@ std::vector<PendingOverlayCellControl> wrapOverlayControls(
   }
   return out;
 }
-
-struct WindowOverlayCellGeometry {
-  OverlayCellLayout layout;
-  int leftPx = 0;
-  int topPx = 0;
-  int cellWidth = 1;
-  int cellHeight = 1;
-};
-
-WindowOverlayCellGeometry buildWindowOverlayCellGeometry(
-    const PlaybackOverlayState& state, int cellPixelWidth,
-    int cellPixelHeight) {
-  WindowOverlayCellGeometry geometry;
-  geometry.cellWidth = std::max(1, cellPixelWidth);
-  geometry.cellHeight = std::max(1, cellPixelHeight);
-  if (state.windowWidth <= 0 || state.windowHeight <= 0) {
-    return geometry;
-  }
-
-  const int maxTextWidth =
-      std::clamp(static_cast<int>(std::lround(state.windowWidth * 0.96)), 1,
-                 state.windowWidth);
-  const int cols = std::max(1, maxTextWidth / geometry.cellWidth);
-  geometry.layout = layoutPlaybackOverlayCells(state, cols, 0, -1);
-  const int textPxW =
-      std::min(state.windowWidth, geometry.layout.width * geometry.cellWidth);
-  const int textPxH =
-      std::min(state.windowHeight, geometry.layout.height * geometry.cellHeight);
-  geometry.leftPx = std::clamp(
-      static_cast<int>(std::lround(state.windowWidth * 0.02)), 0,
-      std::max(0, state.windowWidth - textPxW));
-  geometry.topPx = std::clamp(
-      static_cast<int>(std::lround(state.windowHeight * 0.95)) - textPxH, 0,
-      std::max(0, state.windowHeight - textPxH));
-  return geometry;
-}
 }  // namespace
 
 PlaybackOverlayState buildPlaybackOverlayState(
@@ -622,6 +586,31 @@ OverlayCellLayout layoutOverlayControlCells(
   return layout;
 }
 
+OverlayCellViewportLayout layoutOverlayCellViewport(
+    const OverlayCellLayoutInput& input, int windowWidth, int windowHeight,
+    int cellPixelWidth, int cellPixelHeight) {
+  OverlayCellViewportLayout geometry;
+  geometry.cellWidth = std::max(1, cellPixelWidth);
+  geometry.cellHeight = std::max(1, cellPixelHeight);
+  geometry.layout = layoutOverlayCells(input);
+
+  if (windowWidth <= 0 || windowHeight <= 0) {
+    return geometry;
+  }
+
+  const int textPxW = std::min(windowWidth, geometry.layout.width *
+                                              geometry.cellWidth);
+  const int textPxH = std::min(windowHeight, geometry.layout.height *
+                                               geometry.cellHeight);
+  geometry.leftPx = std::clamp(
+      static_cast<int>(std::lround(windowWidth * 0.02)), 0,
+      std::max(0, windowWidth - textPxW));
+  geometry.topPx = std::clamp(
+      static_cast<int>(std::lround(windowHeight * 0.95)) - textPxH, 0,
+      std::max(0, windowHeight - textPxH));
+  return geometry;
+}
+
 OverlayCellLayout layoutPlaybackOverlayCells(
     const PlaybackOverlayState& state, int width, int height,
     int hoverIndex) {
@@ -704,8 +693,21 @@ static bool windowOverlayProgressRatioAt(const PlaybackOverlayState& state,
                                          int cellPixelHeight,
                                          double* outRatio) {
   if (!state.overlayVisible) return false;
-  WindowOverlayCellGeometry geometry = buildWindowOverlayCellGeometry(
-      state, cellPixelWidth, cellPixelHeight);
+  if (state.windowWidth <= 0 || state.windowHeight <= 0) return false;
+  const int maxTextWidth =
+      std::clamp(static_cast<int>(std::lround(state.windowWidth * 0.96)), 1,
+                 state.windowWidth);
+  const int cellWidth = std::max(1, cellPixelWidth);
+  const int cols = overlayCellCountForPixels(maxTextWidth, cellWidth);
+  OverlayCellLayoutInput input;
+  input.width = cols;
+  input.title = " " + buildWindowOverlayTopLine(state);
+  input.suffix = buildWindowOverlayProgressSuffix(state);
+  input.controls =
+      buildOverlayCellControlInputs(buildOverlayControlSpecs(state, -1), -1);
+  OverlayCellViewportLayout geometry =
+      layoutOverlayCellViewport(input, state.windowWidth, state.windowHeight,
+                                cellPixelWidth, cellPixelHeight);
   if (geometry.layout.progressBarWidth <= 0) return false;
 
   const int localX = mouse.pos.X - geometry.leftPx;
@@ -744,8 +746,21 @@ int windowOverlayControlAt(const PlaybackOverlayState& state,
                           const MouseEvent& mouse, int cellPixelWidth,
                           int cellPixelHeight) {
   if (!state.overlayVisible) return -1;
-  WindowOverlayCellGeometry geometry = buildWindowOverlayCellGeometry(
-      state, cellPixelWidth, cellPixelHeight);
+  if (state.windowWidth <= 0 || state.windowHeight <= 0) return -1;
+  const int maxTextWidth =
+      std::clamp(static_cast<int>(std::lround(state.windowWidth * 0.96)), 1,
+                 state.windowWidth);
+  const int cellWidth = std::max(1, cellPixelWidth);
+  const int cols = overlayCellCountForPixels(maxTextWidth, cellWidth);
+  OverlayCellLayoutInput input;
+  input.width = cols;
+  input.title = " " + buildWindowOverlayTopLine(state);
+  input.suffix = buildWindowOverlayProgressSuffix(state);
+  input.controls =
+      buildOverlayCellControlInputs(buildOverlayControlSpecs(state, -1), -1);
+  OverlayCellViewportLayout geometry =
+      layoutOverlayCellViewport(input, state.windowWidth, state.windowHeight,
+                                cellPixelWidth, cellPixelHeight);
   const int localX = mouse.pos.X - geometry.leftPx;
   const int localY = mouse.pos.Y - geometry.topPx;
   if (localX < 0 || localY < 0) return -1;

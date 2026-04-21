@@ -8,6 +8,7 @@
 #include "consolescreen.h"
 #include "playback/system_media_transport_controls.h"
 #include "playback/playback_transport.h"
+#include "playback/session/playback_session_state.h"
 
 struct VideoPlaybackConfig {
   bool enableAscii = kDefaultAsciiPlaybackEnabled;
@@ -32,4 +33,5 @@ bool showAsciiVideo(const std::filesystem::path& file,
                     bool* quitAppRequested = nullptr,
                     PlaybackSystemControls* systemControls = nullptr,
                     std::function<bool(PlaybackTransportCommand)>
-                        requestTransportCommand = {});
+                        requestTransportCommand = {},
+                    PlaybackSessionContinuationState* continuityState = nullptr);

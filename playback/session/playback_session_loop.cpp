@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -42,6 +43,16 @@ bool shouldRenderPlaybackFrame(bool redraw, bool presented,
                     playbackState != PlaybackSessionState::Ended);
 }
 
+PlaybackLayout initialPlaybackLayout(
+    const VideoPlaybackConfig& config,
+    const PlaybackSessionContinuationState* continuityState) {
+  if (continuityState && continuityState->hasLayout) {
+    return continuityState->layout;
+  }
+  return config.enableWindow ? PlaybackLayout::Window
+                             : PlaybackLayout::Terminal;
+}
+
 }  // namespace
 
 struct PlaybackLoopRunner::Impl {
@@ -67,6 +78,8 @@ struct PlaybackLoopRunner::Impl {
   bool* quitApplicationRequested = nullptr;
   PlaybackSystemControls* systemControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+  PlaybackSessionContinuationState* continuityState = nullptr;
+  PlaybackSessionContinuationState capturedContinuationState;
   const bool enableAscii;
   const bool enableAudio;
   const bool hasSubtitles;
@@ -123,13 +136,22 @@ struct PlaybackLoopRunner::Impl {
         quitApplicationRequested(args.quitApplicationRequested),
         systemControls(args.systemControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
+        continuityState(args.continuityState),
         enableAscii(args.enableAscii),
         enableAudio(args.enableAudio),
         hasSubtitles(args.hasSubtitles),
-        output(args.config.enableWindow ? PlaybackLayout::Window
-                                        : PlaybackLayout::Terminal),
+        output(initialPlaybackLayout(args.config, args.continuityState),
+               args.continuityState
+                   ? std::optional<PlaybackSessionContinuationState>(
+                         *args.continuityState)
+                   : std::nullopt),
         core({args.player, args.perfLog, args.enableAudio, args.enableAscii}),
         gpuRenderer(sharedGpuRenderer()) {
+    if (args.continuityState) {
+      pictureInPictureStartedFromTerminal =
+          args.continuityState->windowPlacement
+              .pictureInPictureStartedFromTerminal;
+    }
     core.initialize(screen);
     bindInputState();
     bindRenderInputs();
@@ -255,8 +277,10 @@ struct PlaybackLoopRunner::Impl {
                                      bool frameChanged,
                                      std::vector<ScreenCell>& outCells,
                                      int& outCols, int& outRows) {
-    const int cols = pixelWidth / cellPixelWidth;
-    const int rows = pixelHeight / cellPixelHeight;
+    const int cols = playback_overlay::overlayCellCountForPixels(
+        pixelWidth, cellPixelWidth);
+    const int rows = playback_overlay::overlayCellCountForPixels(
+        pixelHeight, cellPixelHeight);
     pictureInPictureTextScreen.setVirtualSize(cols, rows);
 
     pictureInPictureTextOutputState.renderFailed = false;
@@ -348,6 +372,36 @@ struct PlaybackLoopRunner::Impl {
     core.shutdownAudio();
     perfLogAppendf(&perfLog, "video_shutdown audio_stop_end");
     perfLogFlush(&perfLog);
+  }
+
+  PlaybackSessionContinuationState buildContinuationState() {
+    PlaybackSessionContinuationState state;
+    state.hasLayout = true;
+    state.layout = output.desiredLayout();
+    state.windowPlacement.pictureInPictureStartedFromTerminal =
+        pictureInPictureStartedFromTerminal;
+    if (output.window().IsOpen()) {
+      RECT windowRect{};
+      if (output.window().GetWindowBounds(&windowRect)) {
+        state.windowPlacement.hasWindowRect = true;
+        state.windowPlacement.windowRect = windowRect;
+      }
+      state.windowPlacement.pictureInPictureActive =
+          output.window().IsPictureInPicture();
+      state.windowPlacement.pictureInPictureTextMode =
+          output.window().IsPictureInPictureTextMode();
+      if (state.windowPlacement.pictureInPictureActive) {
+        if (output.window().GetPictureInPictureRestoreBounds(
+                &state.windowPlacement.pictureInPictureRestoreRect)) {
+          state.windowPlacement.hasPictureInPictureRestoreRect = true;
+        }
+        if (output.window().GetWindowBounds(
+                &state.windowPlacement.pictureInPictureRect)) {
+          state.windowPlacement.hasPictureInPictureRect = true;
+        }
+      }
+    }
+    return state;
   }
 
   void finalizeAudioStart() {
@@ -653,6 +707,7 @@ struct PlaybackLoopRunner::Impl {
 
   void run() {
     if (!initialize()) {
+      capturedContinuationState = buildContinuationState();
       return;
     }
 
@@ -694,6 +749,7 @@ struct PlaybackLoopRunner::Impl {
 
       waitForNextActivity(refresh);
     }
+    capturedContinuationState = buildContinuationState();
   }
 };
 
@@ -712,6 +768,10 @@ void PlaybackLoopRunner::run() { impl_->run(); }
 void PlaybackLoopRunner::shutdown() { impl_->shutdown(); }
 
 void PlaybackLoopRunner::renderFailureScreen() { impl_->renderFailureScreen(); }
+
+PlaybackSessionContinuationState PlaybackLoopRunner::continuationState() const {
+  return impl_->capturedContinuationState;
+}
 
 bool PlaybackLoopRunner::hasRenderFailure() const {
   return impl_->frameOutputState.renderFailed;

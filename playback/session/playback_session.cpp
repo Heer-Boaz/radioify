@@ -27,6 +27,7 @@ struct PlaybackSession::Impl {
         config(args.config),
         systemControls(args.systemControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
+        continuityState(args.continuityState),
         enableAscii(config.enableAscii),
         enableAudio(config.enableAudio && audioIsEnabled()),
         host({file, input, screen, baseStyle, accentStyle, dimStyle,
@@ -78,7 +79,8 @@ struct PlaybackSession::Impl {
         hasSubtitles,
         host.quitApplicationRequestedPtr(),
         systemControls,
-        requestTransportCommand});
+        requestTransportCommand,
+        continuityState});
   }
 
   void shutdownLoop() {
@@ -120,6 +122,9 @@ struct PlaybackSession::Impl {
     prepareSubtitles();
     createLoop();
     loop->run();
+    if (continuityState) {
+      *continuityState = loop->continuationState();
+    }
     return finalizeRun();
   }
 
@@ -136,6 +141,7 @@ struct PlaybackSession::Impl {
   const VideoPlaybackConfig& config;
   PlaybackSystemControls* systemControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+  PlaybackSessionContinuationState* continuityState = nullptr;
   const bool enableAscii;
   const bool enableAudio;
   PlaybackSessionHost host;

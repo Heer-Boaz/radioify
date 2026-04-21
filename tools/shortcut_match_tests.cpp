@@ -1,4 +1,6 @@
+#include "playback/ascii/playback_frame_output.h"
 #include "playback/playback_shortcuts.h"
+#include "playback/overlay/playback_overlay.h"
 
 #include <iostream>
 
@@ -77,6 +79,16 @@ int main() {
                        kPlaybackShortcutContextImageViewer)
                    .value() == PlaybackShortcutAction::Next,
                "Ctrl+VK_RIGHT must navigate to the next item");
+  ok &= expect(playback_overlay::overlayCellCountForPixels(719, 21) == 35,
+               "overlayCellCountForPixels must round rows up");
+  ok &= expect(playback_overlay::overlayCellCountForPixels(960, 9) == 107,
+               "overlayCellCountForPixels must round columns up");
+  ok &= expect(playback_frame_output::centerContentTop(0, 30, 20) == 5,
+               "centerContentTop must center smaller content vertically");
+  ok &= expect(playback_frame_output::centerContentTop(4, 30, 30) == 4,
+               "centerContentTop must keep full-height content anchored");
+  ok &= expect(playback_frame_output::centerContentTop(2, 30, 40) == 2,
+               "centerContentTop must not shift oversized content");
 
   return ok ? 0 : 1;
 }

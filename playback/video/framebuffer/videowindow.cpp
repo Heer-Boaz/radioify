@@ -1439,6 +1439,49 @@ void VideoWindow::SetPictureInPictureTextMode(bool enabled) {
     }
 }
 
+bool VideoWindow::GetWindowBounds(RECT* outRect) const {
+    if (!outRect || !m_hWnd) {
+        return false;
+    }
+    return GetWindowRect(m_hWnd, outRect) != FALSE;
+}
+
+bool VideoWindow::GetPictureInPictureRestoreBounds(RECT* outRect) const {
+    if (!outRect || !m_hWnd ||
+        !m_pictureInPicture.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    *outRect = m_pipRestoreRect;
+    return true;
+}
+
+bool VideoWindow::SetWindowBounds(const RECT& rect) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (!m_hWnd) {
+        return false;
+    }
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+    m_ignoreWindowSizeEvents = true;
+    HWND zOrder = m_pictureInPicture.load(std::memory_order_relaxed)
+                      ? HWND_TOPMOST
+                      : HWND_NOTOPMOST;
+    SetWindowPos(m_hWnd, zOrder, rect.left, rect.top, width, height,
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+    ::ShowWindow(m_hWnd, SW_SHOW);
+    UpdateWindow(m_hWnd);
+
+    RECT client{};
+    if (GetClientRect(m_hWnd, &client)) {
+        Resize(client.right - client.left, client.bottom - client.top);
+    }
+    m_ignoreWindowSizeEvents = false;
+    return true;
+}
+
 bool VideoWindow::TogglePictureInPicture() {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
@@ -2460,7 +2503,9 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         const int maxTextWidth =
             std::clamp(static_cast<int>(std::lround(m_width * 0.96)), 1,
                        std::max(1, m_width));
-        const int cols = std::max(1, maxTextWidth / cellWidth);
+        const int cols =
+            playback_overlay::overlayCellCountForPixels(maxTextWidth,
+                                                        cellWidth);
         if (buildWindowOverlayTextGrid(ui, cols, m_windowOverlayTextGrid)) {
             const int textPxW =
                 std::min(m_width, m_windowOverlayTextGrid.cols * cellWidth);

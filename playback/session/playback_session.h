@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "playback/playback_transport.h"
+#include "playback/session/playback_session_state.h"
 #include "videoplayback.h"
 
 class PlaybackSession {
@@ -24,6 +25,7 @@ class PlaybackSession {
     bool* quitAppRequested = nullptr;
     PlaybackSystemControls* systemControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+    PlaybackSessionContinuationState* continuityState = nullptr;
   };
 
   explicit PlaybackSession(Args args);

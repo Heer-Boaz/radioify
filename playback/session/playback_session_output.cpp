@@ -11,13 +11,17 @@
 #include "playback_session_presentation.h"
 
 struct PlaybackOutputController::Impl {
-  explicit Impl(PlaybackLayout initialLayout) : presentation(initialLayout) {}
+  explicit Impl(PlaybackLayout initialLayout,
+                std::optional<PlaybackSessionContinuationState> initialState)
+      : presentation(initialLayout, std::move(initialState)) {}
 
   PlaybackPresentation presentation;
 };
 
-PlaybackOutputController::PlaybackOutputController(PlaybackLayout initialLayout)
-    : impl_(std::make_unique<Impl>(initialLayout)) {}
+PlaybackOutputController::PlaybackOutputController(
+    PlaybackLayout initialLayout,
+    std::optional<PlaybackSessionContinuationState> initialState)
+    : impl_(std::make_unique<Impl>(initialLayout, std::move(initialState))) {}
 
 PlaybackOutputController::~PlaybackOutputController() = default;
 

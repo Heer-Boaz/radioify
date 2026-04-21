@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
+#include <utility>
 
 #include "player.h"
 #include "playback_window_presenter.h"
@@ -21,16 +23,21 @@ struct PlaybackPresentation::Impl {
   PlaybackWindowPresenter windowPresenter;
   PlaybackLayout desiredLayout = PlaybackLayout::Terminal;
   PlaybackLayout activeLayout = PlaybackLayout::Terminal;
+  std::optional<PlaybackSessionContinuationState> initialState;
 
-  explicit Impl(PlaybackLayout initialLayout) : desiredLayout(initialLayout) {}
+  explicit Impl(PlaybackLayout initialLayout,
+                std::optional<PlaybackSessionContinuationState> placement)
+      : desiredLayout(initialLayout), initialState(std::move(placement)) {}
 
   bool windowRequested() const { return isWindowPlaybackLayout(desiredLayout); }
 
   bool windowActive() const { return isWindowPlaybackLayout(activeLayout); }
 };
 
-PlaybackPresentation::PlaybackPresentation(PlaybackLayout initialLayout)
-    : impl_(std::make_unique<Impl>(initialLayout)) {}
+PlaybackPresentation::PlaybackPresentation(
+    PlaybackLayout initialLayout,
+    std::optional<PlaybackSessionContinuationState> initialState)
+    : impl_(std::make_unique<Impl>(initialLayout, std::move(initialState))) {}
 
 PlaybackPresentation::~PlaybackPresentation() = default;
 
@@ -77,13 +84,17 @@ PlaybackPresenterSyncResult PlaybackPresentation::sync(
     std::atomic<int>& overlayControlHover) {
   PlaybackPresenterSyncResult result;
   result.previousActiveLayout = impl_->activeLayout;
-  if (impl_->windowRequested()) {
-    if (impl_->windowPresenter.start(player, buildUiState, overlayVisible,
-                                    buildPictureInPictureTextGrid)) {
-      impl_->activeLayout = PlaybackLayout::Window;
-    } else {
-      impl_->desiredLayout = PlaybackLayout::Terminal;
-      impl_->activeLayout = PlaybackLayout::Terminal;
+    if (impl_->windowRequested()) {
+      const PlaybackSessionContinuationState* initialState =
+          impl_->initialState ? &*impl_->initialState : nullptr;
+      if (impl_->windowPresenter.start(player, buildUiState, overlayVisible,
+                                       buildPictureInPictureTextGrid,
+                                       initialState)) {
+        impl_->activeLayout = PlaybackLayout::Window;
+        impl_->initialState.reset();
+      } else {
+        impl_->desiredLayout = PlaybackLayout::Terminal;
+        impl_->activeLayout = PlaybackLayout::Terminal;
       forceRefreshArt = true;
       redraw = true;
       resetWindowOverlayState(overlayUntilMs, overlayControlHover);

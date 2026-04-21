@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -99,6 +100,20 @@ struct OverlayCellLayout {
   int progressBarWidth = 0;
   std::vector<OverlayCellControlLayoutItem> controls;
 };
+
+struct OverlayCellViewportLayout {
+  OverlayCellLayout layout;
+  int leftPx = 0;
+  int topPx = 0;
+  int cellWidth = 1;
+  int cellHeight = 1;
+};
+
+inline int overlayCellCountForPixels(int pixelExtent, int cellExtent) {
+  const int safeCellExtent = std::max(1, cellExtent);
+  const int safePixelExtent = std::max(0, pixelExtent);
+  return std::max(1, (safePixelExtent + safeCellExtent - 1) / safeCellExtent);
+}
 
 struct PlaybackOverlayInputs {
   std::string windowTitle;
@@ -202,6 +217,9 @@ bool dispatchOverlayControl(OverlayControlId id,
 OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input);
 OverlayCellLayout layoutOverlayControlCells(
     const std::vector<OverlayCellControlInput>& controls, int width);
+OverlayCellViewportLayout layoutOverlayCellViewport(
+    const OverlayCellLayoutInput& input, int windowWidth, int windowHeight,
+    int cellPixelWidth, int cellPixelHeight);
 
 OverlayCellLayout layoutPlaybackOverlayCells(
     const PlaybackOverlayState& state, int width, int height, int hoverIndex);

@@ -999,6 +999,7 @@ int runTui(Options o) {
   std::function<bool(const PlaybackTarget&)> playPlaybackTarget;
   playPlaybackTarget = [&](const PlaybackTarget& initialTarget) {
     PlaybackTarget target = initialTarget;
+    PlaybackSessionContinuationState playbackContinuationState;
     while (!target.file.empty()) {
       if (!transportNavigator.syncBrowserToPlaybackTarget(target)) {
         return false;
@@ -1032,7 +1033,7 @@ int runTui(Options o) {
             target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
             kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
             kProgressEnd, videoConfig, &quitAppRequested, &systemControls,
-            requestTransportCommand);
+            requestTransportCommand, &playbackContinuationState);
         if (quitAppRequested) {
           running = false;
           return true;

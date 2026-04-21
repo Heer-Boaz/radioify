@@ -133,6 +133,9 @@ public:
     }
     void GetPictureInPictureTextCellSize(int& outCellWidth,
                                          int& outCellHeight) const;
+    bool GetWindowBounds(RECT* outRect) const;
+    bool GetPictureInPictureRestoreBounds(RECT* outRect) const;
+    bool SetWindowBounds(const RECT& rect);
     
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }

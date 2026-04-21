@@ -73,6 +73,13 @@ std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
                                           double cellPixelWidth,
                                           double cellPixelHeight);
 
+inline int centerContentTop(int top, int containerHeight, int contentHeight) {
+  if (contentHeight <= 0 || containerHeight <= contentHeight) {
+    return top;
+  }
+  return top + (containerHeight - contentHeight) / 2;
+}
+
 bool prepareAsciiModeFrame(AsciiModePrepareInput& input);
 
 void prepareNonAsciiModeFrame(bool allowFrame, int width, int maxHeight,

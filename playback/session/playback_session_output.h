@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <memory>
 
 #include "playback_framebuffer_presenter.h"
@@ -32,7 +33,10 @@ struct PlaybackPresenterSyncResult;
 
 class PlaybackOutputController {
  public:
-  explicit PlaybackOutputController(PlaybackLayout initialLayout);
+  explicit PlaybackOutputController(
+      PlaybackLayout initialLayout,
+      std::optional<PlaybackSessionContinuationState> initialState =
+          std::nullopt);
   ~PlaybackOutputController();
 
   PlaybackOutputController(PlaybackOutputController&&) noexcept;

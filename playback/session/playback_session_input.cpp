@@ -21,6 +21,9 @@ void setPlaybackPaused(const PlaybackInputView& view,
 
 bool requestPlaybackTransport(PlaybackInputSignals& signals,
                               PlaybackTransportCommand command);
+bool requestPlaybackTransportHandoff(const PlaybackInputView& view,
+                                     PlaybackInputSignals& signals,
+                                     PlaybackTransportCommand command);
 
 namespace {
 
@@ -222,7 +225,23 @@ void applySeekRequestState(PlaybackInputSignals& signals,
 
 bool toggleRequestedLayout(const PlaybackInputView& view,
                            PlaybackInputSignals& signals) {
-  (void)view;
+  // When PiP is already open, W should flip the PiP presentation mode in
+  // place instead of closing the window and rebuilding its geometry.
+  if (view.videoWindow && view.videoWindow->IsOpen() &&
+      view.videoWindow->IsPictureInPicture()) {
+    view.videoWindow->SetPictureInPictureTextMode(
+        !view.videoWindow->IsPictureInPictureTextMode());
+    if (signals.requestWindowPresent) {
+      signals.requestWindowPresent();
+    }
+    if (signals.forceRefreshArt) {
+      *signals.forceRefreshArt = true;
+    }
+    if (signals.redraw) {
+      *signals.redraw = true;
+    }
+    return true;
+  }
   if (!signals.desiredLayout) {
     return false;
   }
@@ -312,11 +331,8 @@ bool executeOverlayControl(const PlaybackInputView& view,
   const auto& spec = specs[static_cast<size_t>(controlIndex)];
   playback_overlay::OverlayControlActions actions;
   actions.previous = [&]() {
-    if (requestPlaybackTransport(signals, PlaybackTransportCommand::Previous)) {
-      requestPlaybackExit(view, signals, false);
-      return true;
-    }
-    return false;
+    return requestPlaybackTransportHandoff(view, signals,
+                                           PlaybackTransportCommand::Previous);
   };
   actions.playPause = [&]() {
     setPlaybackPaused(view, signals, seekState,
@@ -325,11 +341,8 @@ bool executeOverlayControl(const PlaybackInputView& view,
     return true;
   };
   actions.next = [&]() {
-    if (requestPlaybackTransport(signals, PlaybackTransportCommand::Next)) {
-      requestPlaybackExit(view, signals, false);
-      return true;
-    }
-    return false;
+    return requestPlaybackTransportHandoff(view, signals,
+                                           PlaybackTransportCommand::Next);
   };
   actions.radio = [&]() { return toggleRadio(view); };
   actions.hz50 = [&]() { return toggle50Hz(view); };
@@ -494,6 +507,30 @@ bool requestPlaybackTransport(PlaybackInputSignals& signals,
   return signals.requestTransportCommand(command);
 }
 
+bool requestPlaybackTransportHandoff(const PlaybackInputView& view,
+                                     PlaybackInputSignals& signals,
+                                     PlaybackTransportCommand command) {
+  if (!requestPlaybackTransport(signals, command)) {
+    return false;
+  }
+  if (view.playbackState) {
+    *view.playbackState = PlaybackSessionState::Exiting;
+  }
+  if (signals.loopStopRequested) {
+    *signals.loopStopRequested = true;
+  }
+  if (signals.overlayUntilMs) {
+    signals.overlayUntilMs->store(0, std::memory_order_relaxed);
+  }
+  if (signals.redraw) {
+    *signals.redraw = true;
+  }
+  if (signals.forceRefreshArt) {
+    *signals.forceRefreshArt = true;
+  }
+  return true;
+}
+
 void handlePlaybackKeyEvent(const PlaybackInputView& view,
                             PlaybackInputSignals& signals,
                             PlaybackSeekState& seekState, const KeyEvent& key) {
@@ -508,14 +545,12 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   };
   cb.onStopPlayback = [&]() { requestPlaybackExit(view, signals, false); };
   cb.onPlayPrevious = [&]() {
-    if (requestPlaybackTransport(signals, PlaybackTransportCommand::Previous)) {
-      requestPlaybackExit(view, signals, false);
-    }
+    requestPlaybackTransportHandoff(view, signals,
+                                    PlaybackTransportCommand::Previous);
   };
   cb.onPlayNext = [&]() {
-    if (requestPlaybackTransport(signals, PlaybackTransportCommand::Next)) {
-      requestPlaybackExit(view, signals, false);
-    }
+    requestPlaybackTransportHandoff(view, signals,
+                                    PlaybackTransportCommand::Next);
   };
   cb.onToggleWindow = [&]() { toggleRequestedLayout(view, signals); };
   cb.onToggleRadio = [&]() { toggleRadio(view); };
@@ -550,6 +585,9 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   const PlaybackInputResult playbackResult =
       handlePlaybackInput(keyEvent, cb, shortcutContexts);
   if (playbackResult == PlaybackInputResult::Handled) {
+    if (signals.loopStopRequested && *signals.loopStopRequested) {
+      return;
+    }
     triggerOverlay(view, signals);
     if (signals.redraw) {
       *signals.redraw = true;
@@ -582,15 +620,16 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
       requestPlaybackExit(view, signals, false);
       break;
     case PlaybackControlCommand::Previous:
-      if (requestPlaybackTransport(signals, PlaybackTransportCommand::Previous)) {
-        requestPlaybackExit(view, signals, false);
-      }
+      requestPlaybackTransportHandoff(view, signals,
+                                      PlaybackTransportCommand::Previous);
       break;
     case PlaybackControlCommand::Next:
-      if (requestPlaybackTransport(signals, PlaybackTransportCommand::Next)) {
-        requestPlaybackExit(view, signals, false);
-      }
+      requestPlaybackTransportHandoff(view, signals,
+                                      PlaybackTransportCommand::Next);
       break;
+  }
+  if (signals.loopStopRequested && *signals.loopStopRequested) {
+    return;
   }
   triggerOverlay(view, signals);
   if (signals.redraw) {
@@ -753,6 +792,9 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   if (leftPressed && hitMouse.eventFlags == 0 && controlHit >= 0) {
     if (executeOverlayControl(view, signals, seekState, mouseOverlayState,
                               controlHit)) {
+      if (signals.loopStopRequested && *signals.loopStopRequested) {
+        return;
+      }
       triggerOverlay(view, signals);
       if (signals.redraw) {
         *signals.redraw = true;

@@ -4,10 +4,12 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 
 #include "gpu_shared.h"
 #include "playback_framebuffer_presenter.h"
 #include "playback_mode.h"
+#include "playback_session_state.h"
 #include "videowindow.h"
 
 class Player;
@@ -24,7 +26,9 @@ struct PlaybackPresenterSyncResult {
 
 class PlaybackPresentation {
  public:
-  explicit PlaybackPresentation(PlaybackLayout initialLayout);
+  explicit PlaybackPresentation(
+      PlaybackLayout initialLayout,
+      std::optional<PlaybackSessionContinuationState> initialState = std::nullopt);
   ~PlaybackPresentation();
 
   PlaybackPresentation(PlaybackPresentation&&) noexcept;

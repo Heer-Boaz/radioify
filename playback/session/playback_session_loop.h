@@ -8,6 +8,7 @@
 #include "playback/system_media_transport_controls.h"
 #include "playback/playback_transport.h"
 #include "playback/ascii/playback_frame_output.h"
+#include "playback/session/playback_session_state.h"
 #include "playback_session_log.h"
 #include "videoplayback.h"
 
@@ -41,6 +42,7 @@ class PlaybackLoopRunner {
     bool* quitApplicationRequested = nullptr;
     PlaybackSystemControls* systemControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+    PlaybackSessionContinuationState* continuityState = nullptr;
   };
 
   explicit PlaybackLoopRunner(Args args);
@@ -55,6 +57,7 @@ class PlaybackLoopRunner {
   void run();
   void shutdown();
   void renderFailureScreen();
+  PlaybackSessionContinuationState continuationState() const;
 
   bool hasRenderFailure() const;
   const std::string& renderFailureMessage() const;

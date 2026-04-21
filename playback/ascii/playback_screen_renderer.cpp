@@ -208,6 +208,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   const int footerLines = 0;
   int artTop = headerLines;
   int maxHeight = height - headerLines - footerLines;
+  int asciiArtTop = artTop;
 
   double currentSec = 0.0;
   double totalSec = -1.0;
@@ -293,6 +294,15 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         frameOutput, warningSink);
   }
 
+  if (currentMode == PlaybackRenderMode::AsciiTerminal &&
+      videoWindow.IsOpen() && videoWindow.IsPictureInPicture() &&
+      videoWindow.IsPictureInPictureTextMode() && allowFrame &&
+      art.width > 0 && art.height > 0) {
+    const int visibleArtHeight = std::min(art.height, maxHeight);
+    asciiArtTop = playback_frame_output::centerContentTop(
+        artTop, maxHeight, visibleArtHeight);
+  }
+
   frameOutput.progressBarX = -1;
   frameOutput.progressBarY = -1;
   frameOutput.progressBarWidth = 0;
@@ -334,7 +344,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.screenHeight = height;
   overlayInputs.windowWidth = videoWindow.IsOpen() ? videoWindow.GetWidth() : 0;
   overlayInputs.windowHeight = videoWindow.IsOpen() ? videoWindow.GetHeight() : 0;
-  overlayInputs.artTop = artTop;
+  overlayInputs.artTop = asciiArtTop;
   overlayInputs.progressBarX = frameOutput.progressBarX;
   overlayInputs.progressBarY = frameOutput.progressBarY;
   overlayInputs.progressBarWidth = frameOutput.progressBarWidth;
@@ -364,7 +374,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
 
   if (currentMode == PlaybackRenderMode::AsciiTerminal) {
     playback_frame_output::renderAsciiModeContent(
-        screen, art, width, height, maxHeight, artTop, waitingLabel(),
+        screen, art, width, height, maxHeight, asciiArtTop, waitingLabel(),
         allowFrame, baseStyle, overlayVisibleNow, overlayReservedLines,
         dimStyle);
     playback_ascii_subtitles::RenderInput subtitleInput;
@@ -373,7 +383,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     subtitleInput.width = width;
     subtitleInput.height = height;
     subtitleInput.maxHeight = maxHeight;
-    subtitleInput.artTop = artTop;
+    subtitleInput.artTop = asciiArtTop;
     subtitleInput.allowFrame = allowFrame;
     subtitleInput.overlayVisible = overlayVisibleNow;
     subtitleInput.overlayReservedLines = overlayReservedLines;
