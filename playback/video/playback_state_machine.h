@@ -68,12 +68,6 @@ struct StateProjection {
   StateEffects effects;
 };
 
-struct Transition {
-  PlayerState nextState = PlayerState::Idle;
-  StateProjection projection;
-  bool clearSeekFailure = false;
-};
-
 struct StateChange {
   PlayerState previous = PlayerState::Idle;
   PlayerState current = PlayerState::Idle;
@@ -101,7 +95,6 @@ class Controller {
 
  private:
   StateChange set(PlayerState next);
-  StateChange apply(const Transition& transition);
 
   std::atomic<int> state_{static_cast<int>(PlayerState::Idle)};
 };
@@ -119,13 +112,5 @@ bool isActivePlaybackState(PlayerState state);
 bool isBufferingForUi(PlayerState state);
 
 bool mayPresentVideo(PlayerState state);
-
-PlayerState resolveSteadyState(PlayerState currentState,
-                               PipelineSnapshot snapshot,
-                               size_t videoPrefillFrames);
-
-Transition resolveTransition(PlayerState currentState,
-                             PipelineSnapshot snapshot,
-                             size_t videoPrefillFrames);
 
 }  // namespace playback_state_machine

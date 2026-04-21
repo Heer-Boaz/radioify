@@ -3,6 +3,12 @@
 namespace playback_state_machine {
 namespace {
 
+struct Transition {
+  PlayerState nextState = PlayerState::Idle;
+  StateProjection projection;
+  bool clearSeekFailure = false;
+};
+
 StateChange unchanged(PlayerState state) {
   StateChange change;
   change.previous = state;
@@ -167,25 +173,6 @@ StateChange Controller::finishClosing() {
   return set(PlayerState::Idle);
 }
 
-StateChange Controller::apply(const Transition& transition) {
-  return set(transition.nextState);
-}
-
-Evaluation Controller::observe(const PipelineSnapshot& snapshot,
-                               size_t videoPrefillFrames) {
-  Evaluation evaluation;
-  PlayerState state = current();
-  Transition transition =
-      resolveTransition(state, snapshot, videoPrefillFrames);
-  evaluation.clearSeekFailure = transition.clearSeekFailure;
-  if (transition.nextState != state) {
-    evaluation.change = apply(transition);
-  } else {
-    evaluation.change = unchanged(state);
-  }
-  return evaluation;
-}
-
 StateEffects stateEffects(PlayerState state) {
   return project(state).effects;
 }
@@ -269,6 +256,21 @@ Transition resolveTransition(PlayerState currentState,
                                 transition.nextState != PlayerState::Seeking &&
                                 snapshot.seekInFlightSerial == 0;
   return transition;
+}
+
+Evaluation Controller::observe(const PipelineSnapshot& snapshot,
+                               size_t videoPrefillFrames) {
+  Evaluation evaluation;
+  PlayerState state = current();
+  Transition transition =
+      resolveTransition(state, snapshot, videoPrefillFrames);
+  evaluation.clearSeekFailure = transition.clearSeekFailure;
+  if (transition.nextState != state) {
+    evaluation.change = set(transition.nextState);
+  } else {
+    evaluation.change = unchanged(state);
+  }
+  return evaluation;
 }
 
 }  // namespace playback_state_machine

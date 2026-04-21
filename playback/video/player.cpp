@@ -57,6 +57,7 @@ extern "C" {
 #include "audio_output_timeline.h"
 #include "audio_track_switch_timeline.h"
 #include "gpu_shared.h"
+#include "playback_control_events.h"
 #include "playback_main_clock.h"
 #include "playback_serial_control.h"
 #include "playback_state_machine.h"
@@ -100,23 +101,6 @@ const uint8_t* streamSideData(AVStream* stream, AVPacketSideDataType type,
   if (size) *size = sideData->size;
   return sideData->data;
 }
-
-enum class PlayerEventType {
-  SeekRequest,
-  PauseRequest,
-  ResizeRequest,
-  CycleAudioTrack,
-  CloseRequest,
-  SeekApplied,
-  FirstFramePresented,
-};
-
-struct PlayerEvent {
-  PlayerEventType type = PlayerEventType::SeekRequest;
-  int64_t arg1 = 0;
-  int64_t arg2 = 0;
-  int serial = 0;
-};
 
 std::string ffmpegError(int err) {
   char buf[256];
@@ -1504,7 +1488,7 @@ struct Player::Impl {
   playback_serial_control::Controller serialControl;
   std::mutex eventMutex;
   std::condition_variable eventCv;
-  std::deque<PlayerEvent> events;
+  std::deque<playback_control::Event> events;
   std::thread controlThread;
   std::atomic<bool> initDone{false};
   std::atomic<bool> initOk{false};
@@ -1669,11 +1653,11 @@ struct Player::Impl {
         fallbackFrameDurationUs.load(std::memory_order_relaxed));
   }
 
-  void postEvent(const PlayerEvent& ev) {
+  void postEvent(const playback_control::Event& ev) {
     std::lock_guard<std::mutex> lock(eventMutex);
-    if (ev.type == PlayerEventType::SeekRequest) {
+    if (ev.type == playback_control::EventType::SeekRequest) {
       for (auto it = events.rbegin(); it != events.rend(); ++it) {
-        if (it->type == PlayerEventType::SeekRequest) {
+        if (it->type == playback_control::EventType::SeekRequest) {
           *it = ev;
           eventCv.notify_one();
           return;
@@ -1875,7 +1859,7 @@ struct Player::Impl {
     demuxThread = std::thread([this]() { demuxMain(); });
   }
 
-    void handleEvent(const PlayerEvent& ev) {
+    void handleEvent(const playback_control::Event& ev) {
       auto beginSerialTransition = [&](int64_t targetUs, const char* tag) {
         playback_serial_control::TransitionPlan plan =
             serialControl.beginTransition(
@@ -1900,17 +1884,17 @@ struct Player::Impl {
       };
 
       switch (ev.type) {
-        case PlayerEventType::SeekRequest: {
+        case playback_control::EventType::SeekRequest: {
           beginSerialTransition(ev.arg1, "ctrl_seek_request");
           break;
         }
-        case PlayerEventType::PauseRequest: {
+        case playback_control::EventType::PauseRequest: {
           pauseRequested.store(ev.arg1 != 0, std::memory_order_relaxed);
           appendTimingFmt("ctrl_pause_request paused=%d",
                           ev.arg1 != 0 ? 1 : 0);
         break;
       }
-      case PlayerEventType::ResizeRequest: {
+      case playback_control::EventType::ResizeRequest: {
         resizeTargetW.store(static_cast<int>(ev.arg1), std::memory_order_relaxed);
         resizeTargetH.store(static_cast<int>(ev.arg2), std::memory_order_relaxed);
         resizeEpoch.fetch_add(1, std::memory_order_relaxed);
@@ -1919,7 +1903,7 @@ struct Player::Impl {
                           static_cast<int>(ev.arg2));
           break;
         }
-        case PlayerEventType::CycleAudioTrack: {
+        case playback_control::EventType::CycleAudioTrack: {
           int nextTrack = -1;
           int nextStream = -1;
           std::string nextLabel;
@@ -1956,14 +1940,14 @@ struct Player::Impl {
                           nextLabel.empty() ? "N/A" : nextLabel.c_str());
           break;
         }
-        case PlayerEventType::CloseRequest: {
+        case playback_control::EventType::CloseRequest: {
           ctrlRunning.store(false, std::memory_order_relaxed);
           running.store(false, std::memory_order_relaxed);
         commandPending.store(true, std::memory_order_relaxed);
         appendTiming("ctrl_close_request");
         break;
       }
-      case PlayerEventType::SeekApplied: {
+      case playback_control::EventType::SeekApplied: {
         if (serialControl.applySeekResult(ev.serial, static_cast<int>(ev.arg1))) {
           if (ev.arg1 != 0) {
             audioOutputTimeline.cancelClockReacquire(ev.serial);
@@ -1973,7 +1957,7 @@ struct Player::Impl {
         }
         break;
       }
-      case PlayerEventType::FirstFramePresented: {
+      case playback_control::EventType::FirstFramePresented: {
         if (ev.serial == serialControl.currentSerial()) {
           if (playbackState.current() == PlayerState::Priming) {
             int64_t audioOldestPts = audioStreamOldestPtsUs();
@@ -2010,7 +1994,7 @@ struct Player::Impl {
     applyStateChange(playbackState.beginOpening());
     startThreads();
     while (ctrlRunning.load()) {
-      std::deque<PlayerEvent> pending;
+      std::deque<playback_control::Event> pending;
       {
         std::unique_lock<std::mutex> lock(eventMutex);
         eventCv.wait_for(lock, std::chrono::milliseconds(10), [&]() {
@@ -2248,8 +2232,8 @@ struct Player::Impl {
         videoFrames.flush(serial);
         mainClock.resetForSerial(static_cast<int>(serial));
         clearFrameRequested.store(true);
-        PlayerEvent ev{};
-        ev.type = PlayerEventType::SeekApplied;
+        playback_control::Event ev{};
+        ev.type = playback_control::EventType::SeekApplied;
         ev.serial = nextSerial;
         ev.arg1 = (seekRes < 0) ? 1 : 0;
         postEvent(ev);
@@ -3202,8 +3186,8 @@ struct Player::Impl {
 
       if (!syncState.firstPresentedForSerial) {
         syncState.firstPresentedForSerial = true;
-        PlayerEvent ev{};
-        ev.type = PlayerEventType::FirstFramePresented;
+        playback_control::Event ev{};
+        ev.type = playback_control::EventType::FirstFramePresented;
         ev.serial = static_cast<int>(serial);
         postEvent(ev);
       }
@@ -3257,7 +3241,8 @@ void Player::close() {
   if (impl_->controlThread.joinable()) {
     if (impl_->ctrlRunning.load()) {
       impl_->appendTimingFmt("player_close post_close_request");
-      impl_->postEvent(PlayerEvent{PlayerEventType::CloseRequest});
+      impl_->postEvent(
+          playback_control::Event{playback_control::EventType::CloseRequest});
     } else {
       impl_->appendTimingFmt("player_close notify_control_thread");
       impl_->eventCv.notify_one();
@@ -3276,16 +3261,16 @@ void Player::close() {
 
 void Player::requestSeek(int64_t targetUs) {
   if (!impl_ || !impl_->ctrlRunning.load()) return;
-  PlayerEvent ev{};
-  ev.type = PlayerEventType::SeekRequest;
+  playback_control::Event ev{};
+  ev.type = playback_control::EventType::SeekRequest;
   ev.arg1 = targetUs;
   impl_->postEvent(ev);
 }
 
 void Player::requestResize(int targetW, int targetH) {
   if (!impl_ || !impl_->ctrlRunning.load()) return;
-  PlayerEvent ev{};
-  ev.type = PlayerEventType::ResizeRequest;
+  playback_control::Event ev{};
+  ev.type = playback_control::EventType::ResizeRequest;
   ev.arg1 = targetW;
   ev.arg2 = targetH;
   impl_->postEvent(ev);
@@ -3293,8 +3278,8 @@ void Player::requestResize(int targetW, int targetH) {
 
 void Player::setVideoPaused(bool paused) {
   if (!impl_) return;
-  PlayerEvent ev{};
-  ev.type = PlayerEventType::PauseRequest;
+  playback_control::Event ev{};
+  ev.type = playback_control::EventType::PauseRequest;
   ev.arg1 = paused ? 1 : 0;
   impl_->postEvent(ev);
 }
@@ -3325,8 +3310,8 @@ bool Player::cycleAudioTrack() {
     std::lock_guard<std::mutex> lock(impl_->audioTrackMutex);
     if (impl_->audioTrackStreams.size() <= 1) return false;
   }
-  PlayerEvent ev{};
-  ev.type = PlayerEventType::CycleAudioTrack;
+  playback_control::Event ev{};
+  ev.type = playback_control::EventType::CycleAudioTrack;
   impl_->postEvent(ev);
   return true;
 }
