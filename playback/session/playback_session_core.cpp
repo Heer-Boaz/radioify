@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <utility>
 
@@ -23,24 +24,33 @@ void syncSeekState(Player& player, bool& localSeekRequested,
                    std::chrono::steady_clock::time_point& seekRequestTime,
                    double& pendingSeekTargetSec,
                    std::atomic<double>& windowPendingSeekTargetSec) {
-  if (localSeekRequested && player.isSeeking()) {
-    localSeekRequested = false;
-    windowLocalSeekRequested.store(localSeekRequested,
-                                   std::memory_order_relaxed);
+  const bool windowSeekRequested =
+      windowLocalSeekRequested.load(std::memory_order_relaxed);
+  const bool hasPendingTarget =
+      pendingSeekTargetSec >= 0.0 && std::isfinite(pendingSeekTargetSec);
+  if (player.isSeeking()) {
     return;
   }
-  if (localSeekRequested && !player.isSeeking()) {
-    auto now = std::chrono::steady_clock::now();
-    if (seekRequestTime != std::chrono::steady_clock::time_point::min() &&
-        now - seekRequestTime > std::chrono::milliseconds(500) &&
-        player.hasVideoFrame()) {
-      localSeekRequested = false;
-      windowLocalSeekRequested.store(localSeekRequested,
+
+  const PlayerDebugInfo debug = player.debugInfo();
+  if (debug.seekInFlightSerial != 0 || debug.pendingSeekSerial != 0) {
+    return;
+  }
+
+  if (!localSeekRequested && !windowSeekRequested && !hasPendingTarget) {
+    pendingSeekTargetSec = -1.0;
+    windowPendingSeekTargetSec.store(pendingSeekTargetSec,
                                      std::memory_order_relaxed);
-    }
     return;
   }
-  if (!player.isSeeking()) {
+
+  const auto now = std::chrono::steady_clock::now();
+  const bool requestAged =
+      seekRequestTime != std::chrono::steady_clock::time_point::min() &&
+      now - seekRequestTime > std::chrono::milliseconds(500);
+  if (requestAged && player.hasVideoFrame()) {
+    localSeekRequested = false;
+    windowLocalSeekRequested.store(false, std::memory_order_relaxed);
     pendingSeekTargetSec = -1.0;
     windowPendingSeekTargetSec.store(pendingSeekTargetSec,
                                      std::memory_order_relaxed);

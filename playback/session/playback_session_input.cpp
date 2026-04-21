@@ -85,8 +85,28 @@ bool readPendingSeekTargetSec(const PlaybackSeekState& seekState,
   return true;
 }
 
+bool readQueuedSeekTargetSec(const PlaybackSeekState& seekState,
+                             double* outTargetSec) {
+  if (!seekState.seekQueued || !*seekState.seekQueued ||
+      !seekState.queuedSeekTargetSec) {
+    return false;
+  }
+  const double targetSec = *seekState.queuedSeekTargetSec;
+  if (!(targetSec >= 0.0) || !std::isfinite(targetSec)) {
+    return false;
+  }
+  if (outTargetSec) {
+    *outTargetSec = targetSec;
+  }
+  return true;
+}
+
 bool playbackSeekPending(const PlaybackInputView& view,
                          const PlaybackSeekState& seekState) {
+  if (readQueuedSeekTargetSec(seekState, nullptr) ||
+      readPendingSeekTargetSec(seekState, nullptr)) {
+    return true;
+  }
   if (seekState.localSeekRequested && *seekState.localSeekRequested) {
     return true;
   }
@@ -100,7 +120,7 @@ bool playbackSeekPending(const PlaybackInputView& view,
 double playbackSeekBaseSec(const PlaybackInputView& view,
                            const PlaybackSeekState& seekState) {
   double targetSec = -1.0;
-  if (playbackSeekPending(view, seekState) &&
+  if (readQueuedSeekTargetSec(seekState, &targetSec) ||
       readPendingSeekTargetSec(seekState, &targetSec)) {
     return clampPlaybackSeekTarget(view, targetSec);
   }
@@ -383,9 +403,7 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
                             view.enableSubtitlesShared->load(
                                 std::memory_order_relaxed);
   inputs.subtitleClockUs = view.player ? view.player->currentUs() : 0;
-  inputs.seekingOverlay =
-      (view.player && view.player->isSeeking()) ||
-      (seekState.localSeekRequested && *seekState.localSeekRequested);
+  inputs.seekingOverlay = playbackSeekPending(view, seekState);
   inputs.displaySec =
       view.player ? std::max(0.0, static_cast<double>(view.player->currentUs()) /
                                       1000000.0)
