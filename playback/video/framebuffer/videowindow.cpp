@@ -30,6 +30,7 @@
 #include "playback/overlay/playback_overlay.h"
 #include "playback/playback_media_keys.h"
 #include "subtitle_caption_style.h"
+#include "ui_helpers.h"
 #if RADIOIFY_HAS_LIBASS
 extern "C" {
 #include <ass/ass.h>
@@ -86,58 +87,58 @@ namespace {
         return wide;
     }
 
-    static GpuTextGridCell overlayGridCell(wchar_t ch, uint32_t fg,
-                                           uint32_t bg, uint32_t flags) {
-        return GpuTextGridCell{static_cast<uint32_t>(ch), fg, bg, flags};
+    static uint32_t overlayGridRgb(const Color& color) {
+        return gpuTextGridRgb(color.r, color.g, color.b);
+    }
+
+    static GpuTextGridCell overlayGridCell(wchar_t ch, const Style& style,
+                                           uint32_t flags = 0) {
+        return GpuTextGridCell{static_cast<uint32_t>(ch),
+                               overlayGridRgb(style.fg),
+                               overlayGridRgb(style.bg), flags};
     }
 
     static bool buildWindowOverlayTextGrid(
-        const WindowUiState& ui, int cols, GpuTextGridFrame& outFrame) {
+        const WindowUiState& ui, int cols, int rows,
+        GpuTextGridFrame& outFrame) {
         cols = std::max(1, cols);
+        rows = std::max(1, rows);
 
-        playback_overlay::OverlayCellLayoutInput layoutInput;
-        layoutInput.width = cols;
-        layoutInput.title = " " + ui.title;
-        layoutInput.suffix = ui.progressSuffix;
-        layoutInput.controls.reserve(ui.controlButtons.size());
-        for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
-            playback_overlay::OverlayCellControlInput control;
-            control.text = ui.controlButtons[i].text;
-            control.active = ui.controlButtons[i].active;
-            control.hovered = ui.controlButtons[i].hovered;
-            control.controlIndex = static_cast<int>(i);
-            layoutInput.controls.push_back(std::move(control));
-        }
+        const Style baseStyle{{219, 224, 230}, {5, 6, 7}};
+        const Style accentStyle{{250, 176, 51}, baseStyle.bg};
+        const Style progressEmptyStyle{{32, 38, 46}, {32, 38, 46}};
+        const Style progressFrameStyle{{160, 170, 182}, baseStyle.bg};
+        const Color progressStart{110, 231, 183};
+        const Color progressEnd{255, 214, 110};
+
         const playback_overlay::OverlayCellLayout layout =
-            playback_overlay::layoutOverlayCells(layoutInput);
+            playback_overlay::layoutWindowOverlayCells(ui, cols, rows);
         outFrame.cols = layout.width;
         outFrame.rows = layout.height;
 
         const GpuTextGridCell transparentSpace = overlayGridCell(
-            L' ', gpuTextGridRgb(235, 235, 235), 0,
-            kGpuTextGridCellFlagTransparentBg);
+            L' ', baseStyle, kGpuTextGridCellFlagTransparentBg);
         const size_t cellCount =
             static_cast<size_t>(outFrame.cols) *
             static_cast<size_t>(outFrame.rows);
         outFrame.cells.assign(cellCount, transparentSpace);
 
         auto writeText = [&](const std::string& text, int row, int x,
-                             uint32_t fg, uint32_t bg, uint32_t flags) {
+                             const Style& style, uint32_t flags = 0) {
             if (row < 0 || row >= outFrame.rows || x >= outFrame.cols) return;
             const std::wstring wide = overlayLineToWide(text);
             int dstX = std::max(0, x);
             int srcX = x < 0 ? -x : 0;
             for (int i = srcX; i < static_cast<int>(wide.size()) &&
                                dstX < outFrame.cols;
-                 ++i, ++dstX) {
+                ++i, ++dstX) {
                 outFrame.cells[static_cast<size_t>(row * outFrame.cols + dstX)] =
-                    overlayGridCell(wide[static_cast<size_t>(i)], fg, bg,
-                                    flags);
+                    overlayGridCell(wide[static_cast<size_t>(i)], style, flags);
             }
         };
 
         auto writeStyledText = [&](const std::string& text, int row, int x,
-                                   int width, uint32_t fg, uint32_t bg) {
+                                   int width, const Style& style) {
             if (row < 0 || row >= outFrame.rows || width <= 0) return;
             const std::wstring wide = overlayLineToWide(text);
             const int startX = std::max(0, x);
@@ -149,31 +150,22 @@ namespace {
                         ? wide[static_cast<size_t>(srcX)]
                         : L' ';
                 outFrame.cells[static_cast<size_t>(row * outFrame.cols + dstX)] =
-                    overlayGridCell(ch, fg, bg, 0);
+                    overlayGridCell(ch, style);
             }
         };
 
         for (const auto& titleLine : layout.titleLines) {
-            writeText(titleLine.text, titleLine.y, titleLine.x,
-                      gpuTextGridRgb(235, 235, 235), 0,
-                      kGpuTextGridCellFlagTransparentBg);
+            writeText(titleLine.text, titleLine.y, titleLine.x, accentStyle);
         }
         for (const auto& item : layout.controls) {
-            uint32_t fg = gpuTextGridRgb(222, 222, 222);
-            uint32_t bg = gpuTextGridRgb(36, 36, 36);
-            if (item.active) {
-                fg = gpuTextGridRgb(255, 220, 135);
-                bg = gpuTextGridRgb(64, 48, 24);
-            }
+            Style style = item.active ? accentStyle : baseStyle;
             if (item.hovered) {
-                fg = gpuTextGridRgb(18, 18, 18);
-                bg = gpuTextGridRgb(226, 226, 226);
+                style = {style.bg, style.fg};
             }
-            writeStyledText(item.text, item.y, item.x, item.width, fg, bg);
+            writeStyledText(item.text, item.y, item.x, item.width, style);
         }
         writeText(layout.suffixText, layout.suffixY, layout.suffixX,
-                  gpuTextGridRgb(235, 235, 235), 0,
-                  kGpuTextGridCellFlagTransparentBg);
+                  baseStyle);
 
         if (layout.progressBarWidth > 0 && layout.progressBarY >= 0 &&
             layout.progressBarY < outFrame.rows) {
@@ -183,28 +175,24 @@ namespace {
             if (frameLeftX >= 0 && frameLeftX < outFrame.cols) {
                 outFrame.cells[static_cast<size_t>(
                     layout.progressBarY * outFrame.cols + frameLeftX)] =
-                    overlayGridCell(L'|', gpuTextGridRgb(235, 235, 235), 0,
-                                    kGpuTextGridCellFlagTransparentBg);
+                    overlayGridCell(L'|', progressFrameStyle);
             }
-            const double fill =
-                std::clamp(static_cast<double>(ui.progress), 0.0, 1.0) *
-                static_cast<double>(layout.progressBarWidth);
+            auto barCells = renderProgressBarCells(
+                std::clamp(static_cast<double>(ui.progress), 0.0, 1.0),
+                layout.progressBarWidth, progressEmptyStyle, progressStart,
+                progressEnd);
             for (int i = 0; i < layout.progressBarWidth; ++i) {
                 const int x = layout.progressBarX + i;
                 if (x < 0 || x >= outFrame.cols) continue;
-                const bool filled = static_cast<double>(i) < fill;
-                const uint32_t bg =
-                    filled ? gpuTextGridRgb(240, 143, 31)
-                           : gpuTextGridRgb(46, 51, 56);
+                const auto& cell = barCells[static_cast<size_t>(i)];
                 outFrame.cells[static_cast<size_t>(
                     layout.progressBarY * outFrame.cols + x)] =
-                    overlayGridCell(L' ', gpuTextGridRgb(235, 235, 235), bg, 0);
+                    overlayGridCell(cell.ch, cell.style);
             }
             if (frameRightX >= 0 && frameRightX < outFrame.cols) {
                 outFrame.cells[static_cast<size_t>(
                     layout.progressBarY * outFrame.cols + frameRightX)] =
-                    overlayGridCell(L'|', gpuTextGridRgb(235, 235, 235), 0,
-                                    kGpuTextGridCellFlagTransparentBg);
+                    overlayGridCell(L'|', progressFrameStyle);
             }
         }
         return true;
@@ -802,8 +790,8 @@ namespace {
     // Runtime shader sources retained for reference; build uses precompiled blobs.
     // Video frame rendering shader (combined from videowindow_render.hlsl)
     const char* g_shaderSource = R"(
-// Video frame rendering shader - handles YUV/RGBA to RGB conversion with color correction
-// Used for main video frame rendering with integrated overlay elements
+// Video frame rendering shader - handles YUV/RGBA to RGB conversion with color correction.
+// Playback controls/progress are rendered by the shared GPU text-grid overlay pass.
 
 struct PS_INPUT {
     float4 pos : SV_POSITION;
@@ -837,7 +825,6 @@ PS_INPUT VS(uint vid : SV_VertexID) {
 Texture2D texY : register(t0);
 Texture2D texUV : register(t1);
 Texture2D texRGBA : register(t2);
-Texture2D texText : register(t3);
 SamplerState sam : register(s0);
 
 float ExpandYNorm(float yNorm) {
@@ -921,10 +908,10 @@ float4 PS(PS_INPUT input) : SV_Target {
 }
     )";
 
-    // Overlay-only rendering shader (from videowindow_overlay.hlsl)
+    // Subtitle-only overlay shader (from videowindow_overlay.hlsl)
     const char* g_overlayShaderSource = R"(
-// Overlay-only rendering shader - updates UI without rendering video frame
-// Used for progress bar and UI updates during seeking/pausing
+// Subtitle-only overlay shader. Playback controls/progress are rendered by the
+// shared GPU text-grid overlay pass used by ASCII PiP.
 
 struct PS_INPUT {
     float4 pos : SV_POSITION;
@@ -941,11 +928,19 @@ cbuffer Constants : register(b0) {
     uint uiPaused;
     uint uiHasRGBA;
     uint uiVolPct;
-    uint uiPad0;
+    uint uiRotationQuarterTurns;
     float uiTextTop;
     float uiTextHeight;
     float uiTextLeft;
     float uiTextWidth;
+    float subtitleTop;
+    float subtitleHeight;
+    float subtitleLeft;
+    float subtitleWidth;
+    float subtitleAlpha;
+    float pad3;
+    float pad4;
+    float pad5;
 };
 
 PS_INPUT VS(uint vid : SV_VertexID) {
@@ -955,50 +950,26 @@ PS_INPUT VS(uint vid : SV_VertexID) {
     return output;
 }
 
-Texture2D texText : register(t3);
+Texture2D texSubtitle : register(t4);
 SamplerState sam : register(s0);
 
 float4 PS_UI(PS_INPUT input) : SV_Target {
-    if (uiAlpha <= 0.01) discard;
     float2 uv = input.tex;
-    float4 color = float4(0, 0, 0, 0);
-    bool hit = false;
-
-    // Progress bar at bottom (only UI element from console) - thinner
-    if (uv.y > 0.96 && uv.y < 0.985 && uv.x > 0.02 && uv.x < 0.98) {
-        float barX = (uv.x - 0.02) / 0.96;
-        if (barX < uiProgress) color = float4(1, 0.8, 0.2, 0.9);
-        else color = float4(0.3, 0.3, 0.3, 0.7);
-        hit = true;
-    }
-
-    // Central pause icon (draw two small vertical bars)
-    if (uiPaused != 0) {
-        float2 c = float2(0.5, 0.5);
-        float2 d = abs(uv - c);
-        // Two vertical bars centered horizontally
-        if (d.y < 0.06) {
-            // left bar
-            if (uv.x > 0.48 && uv.x < 0.495) { color = float4(1,1,1,0.95); hit = true; }
-            // right bar
-            if (uv.x > 0.505 && uv.x < 0.52) { color = float4(1,1,1,0.95); hit = true; }
-        }
-    }
-
-    // Text overlay sampled from a CPU-generated texture (t3)
-    if (uiTextHeight > 0.0 && uv.y >= uiTextTop && uv.y <= (uiTextTop + uiTextHeight) && uv.x >= uiTextLeft && uv.x <= (uiTextLeft + uiTextWidth)) {
-        float localY = (uv.y - uiTextTop) / uiTextHeight;
-        float localX = (uv.x - uiTextLeft) / uiTextWidth;
+    if (subtitleAlpha > 0.01 && subtitleHeight > 0.0) {
+        if (uv.y >= subtitleTop && uv.y <= (subtitleTop + subtitleHeight) &&
+            uv.x >= subtitleLeft && uv.x <= (subtitleLeft + subtitleWidth)) {
+        float localY = (uv.y - subtitleTop) / subtitleHeight;
+        float localX = (uv.x - subtitleLeft) / subtitleWidth;
         float2 textUV = float2(localX, localY);
-        float4 t = texText.Sample(sam, textUV);
+        float4 t = texSubtitle.Sample(sam, textUV);
         if (t.a > 0.01) {
-            color = t;
-            hit = true;
+                t.a *= subtitleAlpha;
+                return t;
+            }
         }
     }
-
-    if (!hit) discard;
-    return color * uiAlpha;
+    discard;
+    return float4(0, 0, 0, 0);
 }
     )";
     #endif
@@ -2471,10 +2442,6 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         context->OMSetBlendState(m_uiBlendState.Get(), blendFactor, 0xffffffffu);
     }
     
-    float textHeightNorm = 0.0f;
-    float textTopNorm = 0.0f;
-    float textLeftNorm = 0.0f;
-    float textWidthNorm = 0.0f;
     float subtitleTopNorm = 0.0f;
     float subtitleHeightNorm = 0.0f;
     float subtitleLeftNorm = 0.0f;
@@ -2500,27 +2467,21 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         const SIZE cellSize = TextGridCellSize();
         const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
         const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
-        const int maxTextWidth =
-            std::clamp(static_cast<int>(std::lround(m_width * 0.96)), 1,
-                       std::max(1, m_width));
         const int cols =
-            playback_overlay::overlayCellCountForPixels(maxTextWidth,
+            playback_overlay::overlayCellCountForPixels(std::max(1, m_width),
                                                         cellWidth);
-        if (buildWindowOverlayTextGrid(ui, cols, m_windowOverlayTextGrid)) {
+        const int rows =
+            playback_overlay::overlayCellCountForPixels(std::max(1, m_height),
+                                                        cellHeight);
+        if (buildWindowOverlayTextGrid(ui, cols, rows,
+                                       m_windowOverlayTextGrid)) {
             const int textPxW =
                 std::min(m_width, m_windowOverlayTextGrid.cols * cellWidth);
             const int textPxH =
                 std::min(m_height, m_windowOverlayTextGrid.rows * cellHeight);
-            const int leftPx = std::clamp(
-                static_cast<int>(std::lround(m_width * 0.02)), 0,
-                std::max(0, m_width - textPxW));
-            const int topPx = std::clamp(
-                static_cast<int>(std::lround(m_height * 0.95)) - textPxH,
-                0, std::max(0, m_height - textPxH));
             overlayTextGridViewport = D3D11_VIEWPORT{
-                static_cast<float>(leftPx), static_cast<float>(topPx),
-                static_cast<float>(textPxW), static_cast<float>(textPxH),
-                0.0f, 1.0f};
+                0.0f, 0.0f, static_cast<float>(textPxW),
+                static_cast<float>(textPxH), 0.0f, 1.0f};
             drawOverlayTextGrid = textPxW > 0 && textPxH > 0;
         }
     }
@@ -2802,14 +2763,13 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
             ShaderConstants sc{};
             sc.progress = ui.progress;
-            sc.overlayAlpha =
-                (showOverlay && !drawOverlayTextGrid) ? ui.overlayAlpha : 0.0f;
+            sc.overlayAlpha = 0.0f;
             sc.isPaused = ui.isPaused ? 1 : 0;
             sc.volPct = (uint32_t)std::clamp(ui.volPct, 0, 100);
-            sc.textTop = textTopNorm;
-            sc.textHeight = textHeightNorm;
-            sc.textLeft = textLeftNorm;
-            sc.textWidth = textWidthNorm;
+            sc.textTop = 0.0f;
+            sc.textHeight = 0.0f;
+            sc.textLeft = 0.0f;
+            sc.textWidth = 0.0f;
             sc.subtitleTop = subtitleTopNorm;
             sc.subtitleHeight = subtitleHeightNorm;
             sc.subtitleLeft = subtitleLeftNorm;
@@ -2821,18 +2781,22 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         }
     }
 
-    ID3D11ShaderResourceView* srvs[5] = {
-        nullptr, nullptr, nullptr, nullptr, m_subtitleSrv.Get()};
-    context->PSSetShaderResources(0, 5, srvs);
-    context->Draw(4, 0);
+    if (showSubtitle) {
+        ID3D11ShaderResourceView* srvs[5] = {
+            nullptr, nullptr, nullptr, nullptr, m_subtitleSrv.Get()};
+        context->PSSetShaderResources(0, 5, srvs);
+        context->Draw(4, 0);
+    }
     if (drawOverlayTextGrid) {
         DrawGpuTextGridFrame(device, context.Get(), m_windowOverlayTextGrid,
                              overlayTextGridViewport);
     }
     context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
 
-    ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
-    context->PSSetShaderResources(0, 5, nullSRVs);
+    if (showSubtitle) {
+        ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+        context->PSSetShaderResources(0, 5, nullSRVs);
+    }
 }
 
 void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui,

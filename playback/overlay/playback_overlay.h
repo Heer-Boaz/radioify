@@ -223,6 +223,8 @@ OverlayCellViewportLayout layoutOverlayCellViewport(
 
 OverlayCellLayout layoutPlaybackOverlayCells(
     const PlaybackOverlayState& state, int width, int height, int hoverIndex);
+OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
+                                           int height);
 
 int overlayCellControlAt(const OverlayCellLayout& layout, int cellX,
                          int cellY);

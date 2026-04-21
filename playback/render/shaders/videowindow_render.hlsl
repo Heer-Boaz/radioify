@@ -1,5 +1,5 @@
-// Video frame rendering shader - handles YUV/RGBA to RGB conversion with color correction
-// Used for main video frame rendering with integrated overlay elements
+// Video frame rendering shader - handles YUV/RGBA to RGB conversion with color correction.
+// Playback controls/progress are rendered by the shared GPU text-grid overlay pass.
 
 struct PS_INPUT {
     float4 pos : SV_POSITION;
@@ -49,7 +49,6 @@ float2 RotateInputUV(float2 uv) {
 Texture2D texY : register(t0);
 Texture2D texUV : register(t1);
 Texture2D texRGBA : register(t2);
-Texture2D texText : register(t3);
 SamplerState sam : register(s0);
 
 float ExpandYNorm(float yNorm) {

@@ -626,6 +626,25 @@ OverlayCellLayout layoutPlaybackOverlayCells(
   return layoutOverlayCells(input);
 }
 
+OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
+                                           int height) {
+  OverlayCellLayoutInput input;
+  input.width = width;
+  input.height = height;
+  input.title = " " + ui.title;
+  input.suffix = ui.progressSuffix;
+  input.controls.reserve(ui.controlButtons.size());
+  for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
+    OverlayCellControlInput control;
+    control.text = ui.controlButtons[i].text;
+    control.active = ui.controlButtons[i].active;
+    control.hovered = ui.controlButtons[i].hovered;
+    control.controlIndex = static_cast<int>(i);
+    input.controls.push_back(std::move(control));
+  }
+  return layoutOverlayCells(input);
+}
+
 int overlayCellControlAt(const OverlayCellLayout& layout, int cellX,
                          int cellY) {
   for (const OverlayCellControlLayoutItem& item : layout.controls) {
@@ -694,33 +713,28 @@ static bool windowOverlayProgressRatioAt(const PlaybackOverlayState& state,
                                          double* outRatio) {
   if (!state.overlayVisible) return false;
   if (state.windowWidth <= 0 || state.windowHeight <= 0) return false;
-  const int maxTextWidth =
-      std::clamp(static_cast<int>(std::lround(state.windowWidth * 0.96)), 1,
-                 state.windowWidth);
   const int cellWidth = std::max(1, cellPixelWidth);
-  const int cols = overlayCellCountForPixels(maxTextWidth, cellWidth);
-  OverlayCellLayoutInput input;
-  input.width = cols;
-  input.title = " " + buildWindowOverlayTopLine(state);
-  input.suffix = buildWindowOverlayProgressSuffix(state);
-  input.controls =
-      buildOverlayCellControlInputs(buildOverlayControlSpecs(state, -1), -1);
-  OverlayCellViewportLayout geometry =
-      layoutOverlayCellViewport(input, state.windowWidth, state.windowHeight,
-                                cellPixelWidth, cellPixelHeight);
-  if (geometry.layout.progressBarWidth <= 0) return false;
+  const int cellHeight = std::max(1, cellPixelHeight);
+  const int cols = overlayCellCountForPixels(state.windowWidth, cellWidth);
+  const int rows = overlayCellCountForPixels(state.windowHeight, cellHeight);
+  OverlayCellLayout layout =
+      layoutPlaybackOverlayCells(state, cols, rows, -1);
+  if (layout.progressBarWidth <= 0) return false;
+  const double unitWidth =
+      static_cast<double>(std::min(state.windowWidth, cols * cellWidth)) /
+      static_cast<double>(std::max(1, cols));
+  const double unitHeight =
+      static_cast<double>(std::min(state.windowHeight, rows * cellHeight)) /
+      static_cast<double>(std::max(1, rows));
 
-  const int localX = mouse.pos.X - geometry.leftPx;
-  const int localY = mouse.pos.Y - geometry.topPx;
-  if (localX < 0 || localY < 0) return false;
   ProgressBarHitTestInput hit;
-  hit.x = localX;
-  hit.y = localY;
-  hit.barX = geometry.layout.progressBarX;
-  hit.barY = geometry.layout.progressBarY;
-  hit.barWidth = geometry.layout.progressBarWidth;
-  hit.unitWidth = geometry.cellWidth;
-  hit.unitHeight = geometry.cellHeight;
+  hit.x = mouse.pos.X;
+  hit.y = mouse.pos.Y;
+  hit.barX = layout.progressBarX;
+  hit.barY = layout.progressBarY;
+  hit.barWidth = layout.progressBarWidth;
+  hit.unitWidth = unitWidth;
+  hit.unitHeight = unitHeight;
   return progressBarRatioAt(hit, outRatio);
 }
 
@@ -747,25 +761,27 @@ int windowOverlayControlAt(const PlaybackOverlayState& state,
                           int cellPixelHeight) {
   if (!state.overlayVisible) return -1;
   if (state.windowWidth <= 0 || state.windowHeight <= 0) return -1;
-  const int maxTextWidth =
-      std::clamp(static_cast<int>(std::lround(state.windowWidth * 0.96)), 1,
-                 state.windowWidth);
   const int cellWidth = std::max(1, cellPixelWidth);
-  const int cols = overlayCellCountForPixels(maxTextWidth, cellWidth);
-  OverlayCellLayoutInput input;
-  input.width = cols;
-  input.title = " " + buildWindowOverlayTopLine(state);
-  input.suffix = buildWindowOverlayProgressSuffix(state);
-  input.controls =
-      buildOverlayCellControlInputs(buildOverlayControlSpecs(state, -1), -1);
-  OverlayCellViewportLayout geometry =
-      layoutOverlayCellViewport(input, state.windowWidth, state.windowHeight,
-                                cellPixelWidth, cellPixelHeight);
-  const int localX = mouse.pos.X - geometry.leftPx;
-  const int localY = mouse.pos.Y - geometry.topPx;
-  if (localX < 0 || localY < 0) return -1;
-  return overlayCellControlAt(geometry.layout, localX / geometry.cellWidth,
-                              localY / geometry.cellHeight);
+  const int cellHeight = std::max(1, cellPixelHeight);
+  const int cols = overlayCellCountForPixels(state.windowWidth, cellWidth);
+  const int rows = overlayCellCountForPixels(state.windowHeight, cellHeight);
+  OverlayCellLayout layout =
+      layoutPlaybackOverlayCells(state, cols, rows, -1);
+  const int gridPixelWidth = std::min(state.windowWidth, cols * cellWidth);
+  const int gridPixelHeight = std::min(state.windowHeight, rows * cellHeight);
+  if (mouse.pos.X < 0 || mouse.pos.Y < 0 || mouse.pos.X >= gridPixelWidth ||
+      mouse.pos.Y >= gridPixelHeight) {
+    return -1;
+  }
+  const int cellX = std::clamp(
+      static_cast<int>((static_cast<int64_t>(mouse.pos.X) * cols) /
+                       std::max(1, gridPixelWidth)),
+      0, cols - 1);
+  const int cellY = std::clamp(
+      static_cast<int>((static_cast<int64_t>(mouse.pos.Y) * rows) /
+                       std::max(1, gridPixelHeight)),
+      0, rows - 1);
+  return overlayCellControlAt(layout, cellX, cellY);
 }
 
 WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
