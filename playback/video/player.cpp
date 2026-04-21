@@ -1704,6 +1704,7 @@ struct Player::Impl {
     snapshot.lastPresentedSerial =
         lastPresentedSerial.load(std::memory_order_relaxed);
     snapshot.seekInFlightSerial = serialControl.seekInFlightSerial();
+    snapshot.seekFailed = serialControl.seekFailed();
     return snapshot;
   }
 
@@ -2808,28 +2809,37 @@ struct Player::Impl {
         playback_sync::notePlaybackStateChange(syncState, nowUs());
       }
 
-      if (st == PlayerState::Seeking) {
-        QueuedFrame drop{};
-        if (videoFrames.pop(&drop)) {
-          videoFrames.release(drop.poolIndex);
-          continue;
-        }
-        videoFrames.waitForFrame(std::chrono::milliseconds(5), &running,
-                                 &commandPending);
-        continue;
-      }
-
-      if (st != PlayerState::Playing && st != PlayerState::Draining &&
-          st != PlayerState::Priming) {
-        videoClock.set_paused(true, nowUs());
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        continue;
-      }
-
       uint64_t serial = static_cast<uint64_t>(serialControl.currentSerial());
       playback_sync::syncLoopSerial(
           syncState, static_cast<int>(serial),
           fallbackFrameDurationUs.load(std::memory_order_relaxed), nowUs());
+
+      if (st == PlayerState::Seeking) {
+        // Keep draining stale serials, but allow the sought serial to present a
+        // frame so paused scrubbing can actually update the image.
+        QueuedFrame front{};
+        if (!videoFrames.peek(&front)) {
+          videoFrames.waitForFrame(std::chrono::milliseconds(5), &running,
+                                   &commandPending);
+          continue;
+        }
+        if (front.serial != serial) {
+          logVideo("drop_serial", &front, 0, PlayerClockSource::None, 0, 0);
+          QueuedFrame drop{};
+          if (videoFrames.pop(&drop)) {
+            videoFrames.release(drop.poolIndex);
+          }
+          std::this_thread::sleep_for(std::chrono::microseconds(100));
+          continue;
+        }
+      }
+
+      if (st != PlayerState::Playing && st != PlayerState::Draining &&
+          st != PlayerState::Priming && st != PlayerState::Seeking) {
+        videoClock.set_paused(true, nowUs());
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
 
       // Always update master clock and diff, even if no frames are in the queue.
       // This ensures the UI reflects current sync status during the "Draining" state.

@@ -294,9 +294,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         frameOutput, warningSink);
   }
 
-  if (currentMode == PlaybackRenderMode::AsciiTerminal &&
-      videoWindow.IsOpen() && videoWindow.IsPictureInPicture() &&
-      videoWindow.IsPictureInPictureTextMode() && allowFrame &&
+  if (currentMode == PlaybackRenderMode::AsciiTerminal && allowFrame &&
       art.width > 0 && art.height > 0) {
     const int visibleArtHeight = std::min(art.height, maxHeight);
     asciiArtTop = playback_frame_output::centerContentTop(

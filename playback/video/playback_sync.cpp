@@ -207,12 +207,14 @@ FramePlan planFrame(LoopState& state, PlayerState playbackState,
       std::abs(prepared.frame.ptsUs - master.us) > kSyncLostThresholdUs;
 
   if (playbackState != PlayerState::Priming &&
+      playbackState != PlayerState::Seeking &&
       master.source == PlayerClockSource::Audio && !master.audioClockReady) {
     plan.waitForAudioClock = true;
     return plan;
   }
 
-  if (playbackState == PlayerState::Priming || plan.syncLost) {
+  if (playbackState == PlayerState::Priming ||
+      playbackState == PlayerState::Seeking || plan.syncLost) {
     plan.targetUs = state.frameTimerUs + plan.delayUs;
     return plan;
   }

@@ -38,8 +38,17 @@ PlayerState resolveSteadyState(Snapshot snapshot, size_t videoPrefillFrames) {
                       : PlayerState::Error;
     } else if (snapshot.currentState == PlayerState::Seeking &&
                snapshot.seekInFlightSerial == 0) {
-      nextState =
-          snapshot.audioPaused ? PlayerState::Paused : PlayerState::Prefill;
+      if (snapshot.seekFailed) {
+        nextState =
+            snapshot.audioPaused ? PlayerState::Paused : PlayerState::Prefill;
+      } else if (snapshot.audioPaused &&
+                 snapshot.lastPresentedSerial != snapshot.currentSerial) {
+        // Stay in Seeking until the new serial has actually been shown.
+        nextState = PlayerState::Seeking;
+      } else {
+        nextState =
+            snapshot.audioPaused ? PlayerState::Paused : PlayerState::Prefill;
+      }
     } else if (isActivePlaybackState(snapshot.currentState) &&
                snapshot.audioPaused) {
       nextState = PlayerState::Paused;

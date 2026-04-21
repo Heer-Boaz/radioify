@@ -1,6 +1,7 @@
 #include "playback/ascii/playback_frame_output.h"
 #include "playback/playback_shortcuts.h"
 #include "playback/overlay/playback_overlay.h"
+#include "playback/video/playback_state_policy.h"
 
 #include <iostream>
 
@@ -89,6 +90,38 @@ int main() {
                "centerContentTop must keep full-height content anchored");
   ok &= expect(playback_frame_output::centerContentTop(2, 30, 40) == 2,
                "centerContentTop must not shift oversized content");
+
+  playback_state_policy::Snapshot pausedSeekBeforeFrame{};
+  pausedSeekBeforeFrame.currentState = PlayerState::Seeking;
+  pausedSeekBeforeFrame.audioPaused = true;
+  pausedSeekBeforeFrame.currentSerial = 2;
+  pausedSeekBeforeFrame.lastPresentedSerial = 1;
+  pausedSeekBeforeFrame.seekInFlightSerial = 0;
+  ok &= expect(
+      playback_state_policy::resolveSteadyState(pausedSeekBeforeFrame, 1) ==
+          PlayerState::Seeking,
+      "Paused seek must remain Seeking until the new frame is presented");
+
+  playback_state_policy::Snapshot pausedSeekAfterFrame = pausedSeekBeforeFrame;
+  pausedSeekAfterFrame.lastPresentedSerial = 2;
+  ok &= expect(
+      playback_state_policy::resolveSteadyState(pausedSeekAfterFrame, 1) ==
+          PlayerState::Paused,
+      "Paused seek must settle back to Paused after the new frame is shown");
+
+  playback_state_policy::Snapshot failedPausedSeek = pausedSeekBeforeFrame;
+  failedPausedSeek.seekFailed = true;
+  ok &= expect(
+      playback_state_policy::resolveSteadyState(failedPausedSeek, 1) ==
+          PlayerState::Paused,
+      "Failed paused seek must fall back to Paused");
+
+  playback_state_policy::Snapshot playingSeek = pausedSeekBeforeFrame;
+  playingSeek.audioPaused = false;
+  ok &= expect(
+      playback_state_policy::resolveSteadyState(playingSeek, 1) ==
+          PlayerState::Prefill,
+      "Active seeks must continue into Prefill");
 
   return ok ? 0 : 1;
 }

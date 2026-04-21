@@ -110,6 +110,10 @@ int Controller::seekInFlightSerial() const {
   return seekInFlightSerial_.load(std::memory_order_relaxed);
 }
 
+bool Controller::seekFailed() const {
+  return seekFailed_.load(std::memory_order_relaxed);
+}
+
 int64_t Controller::seekDisplayUs() const {
   return seekDisplayUs_.load(std::memory_order_relaxed);
 }

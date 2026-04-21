@@ -36,6 +36,7 @@ class Controller {
   bool seekPending() const;
   int pendingSeekSerial() const;
   int seekInFlightSerial() const;
+  bool seekFailed() const;
   int64_t seekDisplayUs() const;
 
  private:

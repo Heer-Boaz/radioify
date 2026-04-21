@@ -296,13 +296,13 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
       }
       cacheUpdated = updateFrameCache(*input.frameCache, device, context.Get(),
                                      *input.frame);
-      if (cacheUpdated) {
+      if (cacheUpdated || hadCachedFrame) {
         renderFromCache = input.gpuRenderer->RenderFromCache(*input.frameCache,
                                                             *input.art, &gpuErr);
         if (!renderFromCache && hadRenderedArt) {
           keepPreviousFrame = true;
         }
-      } else if (hadRenderedArt || hadCachedFrame) {
+      } else if (hadRenderedArt) {
         keepPreviousFrame = true;
       }
     }
