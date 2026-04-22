@@ -10,11 +10,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "scripts\windows\RadioifyWindowsExplorerIntegrationHost.ps1")
-. (Join-Path $PSScriptRoot "scripts\windows\RadioifyWin11PackageCommon.ps1")
+. (Join-Path $PSScriptRoot "scripts\windows\RadioifyWindowsMsixBuild.ps1")
 
 $repoRoot = $PSScriptRoot
 $buildScript = Join-Path $repoRoot "build.ps1"
-$installScript = Join-Path $repoRoot "scripts\windows\install_radioify_win11_context_menu.ps1"
+$installScript = Join-Path $repoRoot "scripts\windows\install_radioify_msix_package.ps1"
 $integrationDir = Join-Path $repoRoot "dist\win11-explorer-integration"
 
 if (-not (Test-Path -LiteralPath $buildScript)) {
@@ -47,7 +47,7 @@ if ($WhatIfPreference) {
 }
 
 if ($PSCmdlet.ShouldProcess($integrationDir, "Create signed Radioify Windows shell MSIX")) {
-    New-RadioifyWin11SignedPackage -IntegrationDir $integrationDir | Out-Null
+    New-RadioifySignedMsixPackage -IntegrationDir $integrationDir | Out-Null
 }
 
 $installParams = @{

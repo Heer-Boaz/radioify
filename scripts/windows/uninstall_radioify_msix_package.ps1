@@ -8,7 +8,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "RadioifyWindowsExplorerIntegrationHost.ps1")
-. (Join-Path $PSScriptRoot "RadioifyWin11PackageCommon.ps1")
+. (Join-Path $PSScriptRoot "RadioifyWindowsMsixInstall.ps1")
 
 Assert-RadioifyWindowsHost
 
@@ -20,10 +20,10 @@ if (-not $LogPath) {
     $LogPath = Resolve-RadioifyWindowsExplorerIntegrationLogPath -LeafName "win11-explorer-uninstall.log"
 }
 
-$resolvedIntegrationDir = Resolve-RadioifyWin11IntegrationDirectory `
+$resolvedIntegrationDir = Resolve-RadioifyMsixIntegrationDirectory `
     -IntegrationDir $IntegrationDir `
     -ScriptRoot $PSScriptRoot
-$manifestInfo = Get-RadioifyWin11ManifestInfo -IntegrationDir $resolvedIntegrationDir
+$manifestInfo = Get-RadioifyMsixManifestInfo -IntegrationDir $resolvedIntegrationDir
 $didRemovePackage = $false
 $transcriptStarted = $false
 
@@ -38,13 +38,13 @@ try {
         return
     }
 
-    $installedPackage = Get-InstalledRadioifyWin11Package -PackageName $manifestInfo.PackageName
+    $installedPackage = Get-InstalledRadioifyMsixPackage -PackageName $manifestInfo.PackageName
     if ($installedPackage) {
         if ($PSCmdlet.ShouldProcess($installedPackage.PackageFullName, "Remove Radioify MSIX package")) {
-            Remove-RadioifyWin11Package `
+            Remove-RadioifyMsixPackage `
                 -PackageFullName $installedPackage.PackageFullName `
                 -PackageName $manifestInfo.PackageName
-            Wait-RadioifyWin11PackageState `
+            Wait-RadioifyMsixPackageState `
                 -PackageName $manifestInfo.PackageName `
                 -DesiredState Absent `
                 -TimeoutSeconds 60

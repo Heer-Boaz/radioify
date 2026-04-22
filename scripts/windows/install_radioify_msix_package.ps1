@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "RadioifyWindowsExplorerIntegrationHost.ps1")
-. (Join-Path $PSScriptRoot "RadioifyWin11PackageCommon.ps1")
+. (Join-Path $PSScriptRoot "RadioifyWindowsMsixInstall.ps1")
 
 Assert-RadioifyWindowsHost
 if (-not $WhatIfPreference -and -not (Test-RadioifyAdministrator)) {
@@ -20,24 +20,24 @@ if (-not $LogPath) {
     $LogPath = Resolve-RadioifyWindowsExplorerIntegrationLogPath -LeafName "win11-explorer-install.log"
 }
 
-$resolvedIntegrationDir = Resolve-RadioifyWin11IntegrationDirectory `
+$resolvedIntegrationDir = Resolve-RadioifyMsixIntegrationDirectory `
     -IntegrationDir $IntegrationDir `
     -ScriptRoot $PSScriptRoot
-Assert-RadioifyWin11ArtifactsExist -IntegrationDir $resolvedIntegrationDir
-$manifestInfo = Get-RadioifyWin11ManifestInfo -IntegrationDir $resolvedIntegrationDir
-$packagePath = Get-RadioifyWin11PackagePath `
+Assert-RadioifyMsixArtifactsExist -IntegrationDir $resolvedIntegrationDir
+$manifestInfo = Get-RadioifyMsixManifestInfo -IntegrationDir $resolvedIntegrationDir
+$packagePath = Get-RadioifyMsixPackagePath `
     -IntegrationDir $resolvedIntegrationDir `
     -PackageName $manifestInfo.PackageName
 $didChangePackage = $false
 $transcriptStarted = $false
 
-function Require-RadioifyWin11InstallPackage {
+function Require-RadioifyMsixInstallPackage {
     if (-not (Test-Path -LiteralPath $packagePath)) {
         throw "Signed MSIX package not found at '$packagePath'. Build the Windows package so the .msix and .cer are produced before install."
     }
 
     Write-Host "Using packaged MSIX: $packagePath"
-    Ensure-RadioifyWin11PackagedMsixTrusted -IntegrationDir $resolvedIntegrationDir | Out-Null
+    Ensure-RadioifyPackagedMsixTrusted -IntegrationDir $resolvedIntegrationDir | Out-Null
 }
 
 try {
@@ -51,7 +51,7 @@ try {
         return
     }
 
-    $installedPackage = Get-InstalledRadioifyWin11Package -PackageName $manifestInfo.PackageName
+    $installedPackage = Get-InstalledRadioifyMsixPackage -PackageName $manifestInfo.PackageName
     if ($installedPackage -and -not $ReplaceExisting) {
         Write-Host "Radioify MSIX package is already installed:"
         Write-Host "  $($installedPackage.PackageFullName)"
@@ -60,12 +60,12 @@ try {
     }
 
     if ($PSCmdlet.ShouldProcess($packagePath, "Trust packaged Radioify MSIX certificate")) {
-        Require-RadioifyWin11InstallPackage
+        Require-RadioifyMsixInstallPackage
     }
 
     if ($PSCmdlet.ShouldProcess($packagePath, "Install Radioify MSIX package")) {
-        Install-RadioifyWin11Package -PackagePath $packagePath
-        Wait-RadioifyWin11PackageState `
+        Install-RadioifyMsixPackage -PackagePath $packagePath
+        Wait-RadioifyMsixPackageState `
             -PackageName $manifestInfo.PackageName `
             -DesiredState Ready `
             -TimeoutSeconds 60

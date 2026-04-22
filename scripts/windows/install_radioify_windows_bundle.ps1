@@ -16,7 +16,7 @@ $resolvedPackageRoot = Resolve-RadioifyWindowsBundleRoot `
     -PackageRoot $PackageRoot `
     -ScriptRoot $PSScriptRoot
 $integrationDir = Resolve-RadioifyWindowsBundleIntegrationDirectory -PackageRoot $resolvedPackageRoot
-$installScript = Join-Path $PSScriptRoot "install_radioify_win11_context_menu.ps1"
+$installScript = Join-Path $PSScriptRoot "install_radioify_msix_package.ps1"
 $didInstall = $false
 
 if ($PSCmdlet.ShouldProcess($resolvedPackageRoot, "Install Radioify full MSIX package")) {

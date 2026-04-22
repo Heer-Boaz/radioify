@@ -124,13 +124,13 @@ Advanced / internal flow:
 
 ```powershell
 .\build.ps1 -Static -Win11ExplorerIntegration
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\install_radioify_win11_context_menu.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\install_radioify_msix_package.ps1
 ```
 
 Dry-run the package actions without changing package or certificate state:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\install_radioify_win11_context_menu.ps1 -WhatIf
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\install_radioify_msix_package.ps1 -WhatIf
 ```
 
 You can skip the rebuild during repeated install testing:

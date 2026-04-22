@@ -65,15 +65,15 @@ function Test-Win11ExplorerIntegrationPackage {
     [string]$IntegrationDistDir
   )
 
-  $packageCommonScript = Join-Path $Context.Paths.Root "scripts\windows\RadioifyWin11PackageCommon.ps1"
-  if (-not (Test-Path -LiteralPath $packageCommonScript)) {
-    Fail-Build "Win11 Explorer integration package validation script is missing: $packageCommonScript"
+  $packageBuildScript = Join-Path $Context.Paths.Root "scripts\windows\RadioifyWindowsMsixBuild.ps1"
+  if (-not (Test-Path -LiteralPath $packageBuildScript)) {
+    Fail-Build "Win11 Explorer integration package validation script is missing: $packageBuildScript"
   }
 
-  . $packageCommonScript
+  . $packageBuildScript
 
   try {
-    $packageResult = New-RadioifyWin11SignedPackage -IntegrationDir $IntegrationDistDir
+    $packageResult = New-RadioifySignedMsixPackage -IntegrationDir $IntegrationDistDir
   } catch {
     Fail-Build "Win11 Explorer integration package creation failed: $($_.Exception.Message)"
   }
