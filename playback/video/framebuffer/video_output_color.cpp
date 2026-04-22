@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include <wrl/client.h>
@@ -138,10 +139,6 @@ void queryAdvancedColorForGdiDeviceName(const WCHAR* gdiDeviceName,
     }
 }
 
-bool outputIsHdrActive(const DXGI_OUTPUT_DESC1& desc) {
-    return desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
-}
-
 const char* colorSpaceName(DXGI_COLOR_SPACE_TYPE colorSpace) {
     switch (colorSpace) {
         case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
@@ -266,11 +263,8 @@ OutputSelection chooseOutputForWindow(HWND hwnd, IDXGIAdapter* adapter) {
     return selection;
 }
 
-}  // namespace
-
-VideoOutputColorState ChooseVideoOutputColorState(HWND hwnd,
-                                                  IDXGIAdapter* adapter,
-                                                  bool preferHdrOutput) {
+VideoOutputColorState probeVideoOutputDisplay(HWND hwnd,
+                                              IDXGIAdapter* adapter) {
     VideoOutputColorState state{};
     if (!hwnd || !adapter) {
         return state;
@@ -300,23 +294,68 @@ VideoOutputColorState ChooseVideoOutputColorState(HWND hwnd,
     state.monitorColorSpace = desc1.ColorSpace;
     state.maxOutputNits =
         std::max(desc1.MaxFullFrameLuminance, desc1.MaxLuminance);
-
-    if (!outputIsHdrActive(desc1) || !preferHdrOutput) {
-        return state;
-    }
-
-    state.swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
-    state.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
-    state.encoding = VideoOutputColorEncoding::Hdr10;
     return state;
 }
 
-VideoOutputColorState VideoOutputScRgbFallbackState(
+VideoOutputColorState videoOutputHdr10GenerateState(
+    const VideoOutputColorState& state) {
+    VideoOutputColorState hdr = state;
+    hdr.swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
+    hdr.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+    hdr.encoding = VideoOutputColorEncoding::Hdr10;
+    return hdr;
+}
+
+}  // namespace
+
+HdrGenerateDecision ResolveHdrGenerateOutputState(HWND hwnd,
+                                                  IDXGIAdapter* adapter) {
+    VideoOutputColorState probe = probeVideoOutputDisplay(hwnd, adapter);
+    HdrGenerateDecision decision;
+    decision.state = probe;
+
+    if (!probe.outputFound) {
+        decision.result = HdrGenerateResult::SdrFallback;
+        decision.generatingHdr = false;
+        decision.reason = "output_not_found";
+        return decision;
+    }
+    if (!probe.dxgiDescAvailable) {
+        decision.result = HdrGenerateResult::SdrFallback;
+        decision.generatingHdr = false;
+        decision.reason = "dxgi_output6_unavailable";
+        return decision;
+    }
+    if (probe.monitorColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
+        decision.result = HdrGenerateResult::Hdr10Generate;
+        decision.state = videoOutputHdr10GenerateState(probe);
+        decision.generatingHdr = true;
+        decision.reason = "hdr10_output_active";
+        return decision;
+    }
+
+    decision.result = HdrGenerateResult::ScRgbGenerate;
+    decision.state = VideoOutputScRgbGenerateState(probe);
+    decision.generatingHdr = true;
+    decision.reason = "hdr10_output_inactive_try_scrgb";
+    return decision;
+}
+
+VideoOutputColorState VideoOutputScRgbGenerateState(
     const VideoOutputColorState& state) {
     VideoOutputColorState fallback = state;
     fallback.swapChainFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     fallback.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
     fallback.encoding = VideoOutputColorEncoding::ScRgb;
+    return fallback;
+}
+
+VideoOutputColorState VideoOutputSdrFallbackState(
+    const VideoOutputColorState& state) {
+    VideoOutputColorState fallback = state;
+    fallback.swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    fallback.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    fallback.encoding = VideoOutputColorEncoding::Sdr;
     return fallback;
 }
 
@@ -364,6 +403,36 @@ const char* VideoOutputColorEncodingName(VideoOutputColorEncoding encoding) {
         default:
             return "SDR";
     }
+}
+
+const char* HdrGenerateResultName(HdrGenerateResult result) {
+    switch (result) {
+        case HdrGenerateResult::Hdr10Generate:
+            return "hdr10_generate";
+        case HdrGenerateResult::ScRgbGenerate:
+            return "scrgb_generate";
+        case HdrGenerateResult::HardFailure:
+            return "hard_failure";
+        case HdrGenerateResult::SdrFallback:
+        default:
+            return "sdr_fallback";
+    }
+}
+
+std::string VideoOutputColorAttemptStatus(
+    const HdrGenerateDecision& decision,
+    const VideoOutputColorState& selectedState,
+    const char* stage) {
+    char buf[256];
+    std::snprintf(
+        buf, sizeof(buf),
+        "policy=generate result=%s generating=%d selected=%s stage=%s reason=%s",
+        HdrGenerateResultName(decision.result),
+        decision.generatingHdr && VideoOutputUsesHdr(selectedState) ? 1 : 0,
+        VideoOutputColorEncodingName(selectedState.encoding),
+        stage ? stage : "unknown",
+        decision.reason.empty() ? "unspecified" : decision.reason.c_str());
+    return std::string(buf);
 }
 
 std::string VideoOutputColorStateDebugLine(

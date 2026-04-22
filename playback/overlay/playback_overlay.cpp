@@ -91,6 +91,68 @@ std::vector<PendingOverlayCellControl> wrapOverlayControls(
   }
   return out;
 }
+
+std::string overlayTitleWithDebugLines(const std::vector<std::string>& debugLines,
+                                       const std::string& title) {
+  std::string out;
+  for (const std::string& line : debugLines) {
+    if (line.empty()) continue;
+    if (!out.empty()) out.push_back('\n');
+    out += line;
+  }
+  if (!out.empty()) out.push_back('\n');
+  out += " " + title;
+  return out;
+}
+
+uint32_t overlayGpuRgb(const Color& color) {
+  return gpuTextGridRgb(color.r, color.g, color.b);
+}
+
+GpuTextGridCell overlayGpuCell(wchar_t ch, const Style& style,
+                               uint32_t flags = 0) {
+  return GpuTextGridCell{static_cast<uint32_t>(ch),
+                         overlayGpuRgb(style.fg),
+                         overlayGpuRgb(style.bg), flags};
+}
+
+std::wstring overlayUtf8ToWide(const std::string& text) {
+  if (text.empty()) return {};
+
+#ifdef _WIN32
+  int needed =
+      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                          static_cast<int>(text.size()), nullptr, 0);
+  if (needed <= 0) {
+    needed = MultiByteToWideChar(CP_UTF8, 0, text.data(),
+                                 static_cast<int>(text.size()), nullptr, 0);
+  }
+  if (needed > 0) {
+    std::wstring out(static_cast<size_t>(needed), L'\0');
+    const int written =
+        MultiByteToWideChar(CP_UTF8, 0, text.data(),
+                            static_cast<int>(text.size()), out.data(),
+                            needed);
+    if (written > 0) {
+      out.resize(static_cast<size_t>(written));
+      out.erase(std::remove_if(out.begin(), out.end(),
+                               [](wchar_t ch) {
+                                 return ch == L'\r' || ch == L'\n';
+                               }),
+                out.end());
+      return out;
+    }
+  }
+#endif
+
+  std::wstring out;
+  out.reserve(text.size());
+  for (unsigned char ch : text) {
+    if (ch == '\r' || ch == '\n') continue;
+    out.push_back(static_cast<wchar_t>(ch));
+  }
+  return out;
+}
 }  // namespace
 
 PlaybackOverlayState buildPlaybackOverlayState(
@@ -131,6 +193,7 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.progressBarX = inputs.progressBarX;
   state.progressBarY = inputs.progressBarY;
   state.progressBarWidth = inputs.progressBarWidth;
+  state.debugLines = inputs.debugLines;
 
   if (inputs.subtitleManager) {
     state.subtitleText = buildSubtitleText(*inputs.subtitleManager,
@@ -620,7 +683,9 @@ OverlayCellLayout layoutPlaybackOverlayCells(
   OverlayCellLayoutInput input;
   input.width = width;
   input.height = height;
-  input.title = " " + buildWindowOverlayTopLine(state);
+  input.title =
+      overlayTitleWithDebugLines(state.debugLines,
+                                 buildWindowOverlayTopLine(state));
   input.suffix = buildWindowOverlayProgressSuffix(state);
   input.controls = buildOverlayCellControlInputs(specs, hoverIndex);
   return layoutOverlayCells(input);
@@ -631,13 +696,7 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   OverlayCellLayoutInput input;
   input.width = width;
   input.height = height;
-  for (const std::string& line : ui.debugLines) {
-    if (line.empty()) continue;
-    if (!input.title.empty()) input.title.push_back('\n');
-    input.title += line;
-  }
-  if (!input.title.empty()) input.title.push_back('\n');
-  input.title += " " + ui.title;
+  input.title = overlayTitleWithDebugLines(ui.debugLines, ui.title);
   input.suffix = ui.progressSuffix;
   input.controls.reserve(ui.controlButtons.size());
   for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
@@ -824,6 +883,181 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.subtitleAlpha =
       (state.subtitleCues.empty() && !state.subtitleAssScript) ? 0.0f : 1.0f;
   return ui;
+}
+
+namespace {
+
+class ScreenOverlayTarget {
+ public:
+  ScreenOverlayTarget(ConsoleScreen& screen, int minY, int maxY)
+      : screen_(screen),
+        width_(screen.width()),
+        firstY_(std::max(0, minY)),
+        lastY_(std::min(screen.height(), maxY)) {}
+
+  bool isDrawable() const { return width_ > 0 && firstY_ < lastY_; }
+
+  bool rowVisible(int y) const { return y >= firstY_ && y < lastY_; }
+
+  void writeText(int x, int y, const std::string& text,
+                 const Style& style) {
+    if (!rowVisible(y) || text.empty() || x >= width_) return;
+    const int drawX = std::max(0, x);
+    const int available = width_ - drawX;
+    if (available <= 0) return;
+    std::string clipped =
+        x < 0 ? utf8SliceDisplayWidth(text, -x, available) : text;
+    if (utf8DisplayWidth(clipped) > available) {
+      clipped = utf8TakeDisplayWidth(clipped, available);
+    }
+    screen_.writeText(drawX, y, clipped, style);
+  }
+
+  void writeControlText(const std::string& text, int y, int x, int width,
+                        const Style& style) {
+    if (width <= 0) return;
+    writeText(x, y, text, style);
+  }
+
+  void writeChar(int x, int y, wchar_t ch, const Style& style) {
+    if (!rowVisible(y) || x < 0 || x >= width_) return;
+    screen_.writeChar(x, y, ch, style);
+  }
+
+ private:
+  ConsoleScreen& screen_;
+  int width_ = 0;
+  int firstY_ = 0;
+  int lastY_ = 0;
+};
+
+class GpuTextGridOverlayTarget {
+ public:
+  GpuTextGridOverlayTarget(GpuTextGridFrame& frame, int cols, int rows,
+                           const Style& baseStyle)
+      : frame_(frame) {
+    frame_.cols = std::max(1, cols);
+    frame_.rows = std::max(1, rows);
+    const GpuTextGridCell transparentSpace = overlayGpuCell(
+        L' ', baseStyle, kGpuTextGridCellFlagTransparentBg);
+    const size_t cellCount =
+        static_cast<size_t>(frame_.cols) * static_cast<size_t>(frame_.rows);
+    frame_.cells.assign(cellCount, transparentSpace);
+  }
+
+  bool isDrawable() const { return frame_.cols > 0 && frame_.rows > 0; }
+
+  bool rowVisible(int y) const { return y >= 0 && y < frame_.rows; }
+
+  void writeText(int x, int y, const std::string& text,
+                 const Style& style) {
+    if (!rowVisible(y) || text.empty() || x >= frame_.cols) return;
+    const int drawX = std::max(0, x);
+    const int available = frame_.cols - drawX;
+    if (available <= 0) return;
+    const std::string clipped =
+        x < 0 ? utf8SliceDisplayWidth(text, -x, available)
+              : utf8TakeDisplayWidth(text, available);
+    const std::wstring wide = overlayUtf8ToWide(clipped);
+    int dstX = drawX;
+    for (size_t i = 0; i < wide.size() && dstX < frame_.cols; ++i, ++dstX) {
+      frame_.cells[static_cast<size_t>(y * frame_.cols + dstX)] =
+          overlayGpuCell(wide[i], style);
+    }
+  }
+
+  void writeControlText(const std::string& text, int y, int x, int width,
+                        const Style& style) {
+    if (!rowVisible(y) || width <= 0 || x >= frame_.cols) return;
+    const int startX = std::max(0, x);
+    const int endX = std::min(frame_.cols, x + width);
+    if (startX >= endX) return;
+    const std::string clipped =
+        x < 0 ? utf8SliceDisplayWidth(text, -x, endX - startX)
+              : utf8TakeDisplayWidth(text, endX - startX);
+    const std::wstring wide = overlayUtf8ToWide(clipped);
+    for (int dstX = startX; dstX < endX; ++dstX) {
+      const int srcX = dstX - startX;
+      const wchar_t ch =
+          srcX >= 0 && srcX < static_cast<int>(wide.size())
+              ? wide[static_cast<size_t>(srcX)]
+              : L' ';
+      frame_.cells[static_cast<size_t>(y * frame_.cols + dstX)] =
+          overlayGpuCell(ch, style);
+    }
+  }
+
+  void writeChar(int x, int y, wchar_t ch, const Style& style) {
+    if (!rowVisible(y) || x < 0 || x >= frame_.cols) return;
+    frame_.cells[static_cast<size_t>(y * frame_.cols + x)] =
+        overlayGpuCell(ch, style);
+  }
+
+ private:
+  GpuTextGridFrame& frame_;
+};
+
+template <typename Target>
+void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
+                           const OverlayRenderStyles& styles,
+                           double progress) {
+  if (!target.isDrawable()) return;
+
+  for (const auto& item : layout.controls) {
+    Style style = item.active ? styles.accentStyle : styles.baseStyle;
+    if (item.hovered) {
+      style = {style.bg, style.fg};
+    }
+    target.writeControlText(item.text, item.y, item.x, item.width, style);
+  }
+
+  for (const auto& titleLine : layout.titleLines) {
+    target.writeText(titleLine.x, titleLine.y, titleLine.text,
+                     styles.accentStyle);
+  }
+
+  if (layout.progressBarY >= 0 && layout.progressBarWidth > 0 &&
+      target.rowVisible(layout.progressBarY)) {
+    const int leftFrameX = layout.progressBarX - 1;
+    const int rightFrameX = layout.progressBarX + layout.progressBarWidth;
+    target.writeChar(leftFrameX, layout.progressBarY, L'|',
+                     styles.progressFrameStyle);
+    auto barCells = renderProgressBarCells(
+        std::clamp(progress, 0.0, 1.0), layout.progressBarWidth,
+        styles.progressEmptyStyle, styles.progressStart, styles.progressEnd);
+    for (int i = 0; i < layout.progressBarWidth; ++i) {
+      const auto& cell = barCells[static_cast<size_t>(i)];
+      target.writeChar(layout.progressBarX + i, layout.progressBarY, cell.ch,
+                       cell.style);
+    }
+    target.writeChar(rightFrameX, layout.progressBarY, L'|',
+                     styles.progressFrameStyle);
+  }
+
+  target.writeText(layout.suffixX, layout.suffixY, layout.suffixText,
+                   styles.baseStyle);
+}
+
+}  // namespace
+
+void renderOverlayToScreen(ConsoleScreen& screen,
+                           const OverlayCellLayout& layout,
+                           const OverlayRenderStyles& styles,
+                           double progress,
+                           int minY,
+                           int maxY) {
+  ScreenOverlayTarget target(screen, minY, maxY);
+  renderOverlayToTarget(target, layout, styles, progress);
+}
+
+bool renderOverlayToGpuTextGrid(const OverlayCellLayout& layout,
+                                const OverlayRenderStyles& styles,
+                                double progress,
+                                GpuTextGridFrame& outFrame) {
+  GpuTextGridOverlayTarget target(outFrame, layout.width, layout.height,
+                                  styles.baseStyle);
+  renderOverlayToTarget(target, layout, styles, progress);
+  return true;
 }
 
 }  // namespace playback_overlay

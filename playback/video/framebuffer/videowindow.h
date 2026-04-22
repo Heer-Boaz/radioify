@@ -174,7 +174,6 @@ private:
     void UpdateViewport(int width, int height);
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     bool CreateSwapChain(int width, int height);
-    bool EnsureOutputColorForTransfer(YuvTransfer transfer);
     void ResetSwapChain();
     void Resize(int width, int height);
     RECT CalculatePictureInPictureRect() const;
@@ -223,7 +222,6 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
     VideoOutputColorState m_outputColorState;
     std::string m_outputColorAttemptStatus;
-    bool m_preferHdrOutput = true;
     std::atomic<UINT> m_presentInterval{1};
     HANDLE m_frameLatencyWaitableObject = nullptr;
     std::mutex m_frameLatencyMutex;

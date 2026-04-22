@@ -149,13 +149,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
                   cellPixelWidth, cellPixelHeight, cellSource, width, height);
     debugLines.emplace_back(buf);
 
-    int plannedDebugLineCount = 2;
-#if RADIOIFY_ENABLE_TIMING_LOG
-    plannedDebugLineCount += 2;
-#endif
     const int plannedStatusLines = statusLine.empty() ? 0 : 1;
-    const int plannedMaxHeight =
-        height - plannedDebugLineCount - plannedStatusLines;
+    const int plannedMaxHeight = height - plannedStatusLines;
     int plannedArtW = 0;
     int plannedArtH = 0;
     if (layoutSourceW > 0 && layoutSourceH > 0 && plannedMaxHeight > 0) {
@@ -209,10 +204,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     debugLines.emplace_back(buf2);
   }
 #endif
-  int headerLines = static_cast<int>(debugLines.size());
-  if (!statusLine.empty()) {
-    headerLines += 1;
-  }
+  int headerLines = statusLine.empty() ? 0 : 1;
   const int footerLines = 0;
   int artTop = headerLines;
   int maxHeight = height - headerLines - footerLines;
@@ -354,13 +346,16 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.progressBarX = frameOutput.progressBarX;
   overlayInputs.progressBarY = frameOutput.progressBarY;
   overlayInputs.progressBarWidth = frameOutput.progressBarWidth;
+  overlayInputs.debugLines = debugLines;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
   const int hoverIndex =
       overlayControlHover.load(std::memory_order_relaxed);
   playback_overlay::OverlayCellLayout overlayLayout;
-  int overlayReservedLines = overlayState.overlayVisible ? 5 : 0;
-  if (overlayState.overlayVisible) {
+  const bool showOverlay =
+      overlayState.overlayVisible || !overlayState.debugLines.empty();
+  int overlayReservedLines = showOverlay ? 5 : 0;
+  if (showOverlay) {
     overlayLayout = playback_overlay::layoutPlaybackOverlayCells(
         overlayState, width, height, hoverIndex);
     if (overlayLayout.topY != -1) {
@@ -371,9 +366,6 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
 
   screen.clear(baseStyle);
   int headerY = 0;
-  for (const auto& debugLine : debugLines) {
-    screen.writeText(0, headerY++, fitLine(debugLine, width), dimStyle);
-  }
   if (!statusLine.empty()) {
     screen.writeText(0, headerY++, fitLine(statusLine, width), dimStyle);
   }
@@ -408,32 +400,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         videoWindow.GetWidth(), videoWindow.GetHeight(), dimStyle);
   }
 
-  if (overlayState.overlayVisible) {
-    for (const auto& item : overlayLayout.controls) {
-      if (item.y < artTop || item.y < 0 || item.y >= height) continue;
-      const int x = item.x;
-      if (x >= width) break;
-      const int avail = width - x;
-      if (avail <= 0) break;
-      std::string text = item.text;
-      if (utf8DisplayWidth(text) > avail) {
-        text = utf8TakeDisplayWidth(text, avail);
-      }
-      Style style = item.active ? accentStyle : baseStyle;
-      if (item.hovered) {
-        style = {style.bg, style.fg};
-      }
-      screen.writeText(x, item.y, text, style);
-    }
-
-    for (const auto& titleLine : overlayLayout.titleLines) {
-      if (titleLine.y < artTop || titleLine.y < 0 ||
-          titleLine.y >= height || titleLine.text.empty()) {
-        continue;
-      }
-      screen.writeText(titleLine.x, titleLine.y, titleLine.text, accentStyle);
-    }
-
+  if (showOverlay) {
     double ratio = 0.0;
     if (totalSec > 0.0 && std::isfinite(totalSec)) {
       ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
@@ -441,35 +408,11 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     frameOutput.progressBarX = overlayLayout.progressBarX;
     frameOutput.progressBarY = overlayLayout.progressBarY;
     frameOutput.progressBarWidth = overlayLayout.progressBarWidth;
-    if (frameOutput.progressBarY >= 0 && frameOutput.progressBarY < height &&
-        frameOutput.progressBarWidth > 0) {
-      const int leftFrameX = frameOutput.progressBarX - 1;
-      const int rightFrameX =
-          frameOutput.progressBarX + frameOutput.progressBarWidth;
-      if (leftFrameX >= 0 && leftFrameX < width) {
-        screen.writeChar(leftFrameX, frameOutput.progressBarY, L'|',
-                         progressFrameStyle);
-      }
-      auto barCells = renderProgressBarCells(
-          ratio, frameOutput.progressBarWidth, progressEmptyStyle, progressStart,
-          progressEnd);
-      for (int i = 0; i < frameOutput.progressBarWidth; ++i) {
-        const int x = frameOutput.progressBarX + i;
-        if (x < 0 || x >= width) continue;
-        const auto& cell = barCells[static_cast<size_t>(i)];
-        screen.writeChar(x, frameOutput.progressBarY, cell.ch, cell.style);
-      }
-      if (rightFrameX >= 0 && rightFrameX < width) {
-        screen.writeChar(rightFrameX, frameOutput.progressBarY, L'|',
-                         progressFrameStyle);
-      }
-    }
-    if (!overlayLayout.suffixText.empty() &&
-        overlayLayout.suffixY >= artTop && overlayLayout.suffixY >= 0 &&
-        overlayLayout.suffixY < height) {
-      screen.writeText(overlayLayout.suffixX, overlayLayout.suffixY,
-                       overlayLayout.suffixText, baseStyle);
-    }
+    playback_overlay::OverlayRenderStyles overlayStyles{
+        baseStyle, accentStyle, progressEmptyStyle, progressFrameStyle,
+        progressStart, progressEnd};
+    playback_overlay::renderOverlayToScreen(
+        screen, overlayLayout, overlayStyles, ratio, artTop, height);
   }
 
   screen.draw();

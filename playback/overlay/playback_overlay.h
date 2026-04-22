@@ -7,7 +7,9 @@
 #include <string>
 #include <vector>
 
+#include "consolescreen.h"
 #include "consoleinput.h"
+#include "gpu_text_grid.h"
 #include "subtitle_manager.h"
 #include "videowindow.h"
 
@@ -148,6 +150,7 @@ struct PlaybackOverlayInputs {
   int progressBarX = -1;
   int progressBarY = -1;
   int progressBarWidth = 0;
+  std::vector<std::string> debugLines;
 };
 
 struct PlaybackOverlayState {
@@ -187,6 +190,7 @@ struct PlaybackOverlayState {
   int progressBarX = -1;
   int progressBarY = -1;
   int progressBarWidth = 0;
+  std::vector<std::string> debugLines;
 };
 
 PlaybackOverlayState buildPlaybackOverlayState(
@@ -248,5 +252,26 @@ bool overlayProgressRatioAt(const PlaybackOverlayState& state,
 
 WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
                                 int hoverIndex);
+
+struct OverlayRenderStyles {
+  Style baseStyle{{219, 224, 230}, {5, 6, 7}};
+  Style accentStyle{{250, 176, 51}, baseStyle.bg};
+  Style progressEmptyStyle{{32, 38, 46}, {32, 38, 46}};
+  Style progressFrameStyle{{160, 170, 182}, baseStyle.bg};
+  Color progressStart{110, 231, 183};
+  Color progressEnd{255, 214, 110};
+};
+
+void renderOverlayToScreen(ConsoleScreen& screen,
+                           const OverlayCellLayout& layout,
+                           const OverlayRenderStyles& styles,
+                           double progress,
+                           int minY,
+                           int maxY);
+
+bool renderOverlayToGpuTextGrid(const OverlayCellLayout& layout,
+                                const OverlayRenderStyles& styles,
+                                double progress,
+                                GpuTextGridFrame& outFrame);
 
 }  // namespace playback_overlay

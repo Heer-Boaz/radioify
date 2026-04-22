@@ -79,125 +79,17 @@ namespace {
         return out;
     }
 
-    static std::wstring overlayLineToWide(const std::string& text) {
-        std::wstring wide = utf8ToWide(text);
-        wide.erase(std::remove_if(wide.begin(), wide.end(),
-                                  [](wchar_t ch) {
-                                      return ch == L'\r' || ch == L'\n';
-                                  }),
-                   wide.end());
-        return wide;
-    }
-
-    static uint32_t overlayGridRgb(const Color& color) {
-        return gpuTextGridRgb(color.r, color.g, color.b);
-    }
-
-    static GpuTextGridCell overlayGridCell(wchar_t ch, const Style& style,
-                                           uint32_t flags = 0) {
-        return GpuTextGridCell{static_cast<uint32_t>(ch),
-                               overlayGridRgb(style.fg),
-                               overlayGridRgb(style.bg), flags};
-    }
-
     static bool buildWindowOverlayTextGrid(
         const WindowUiState& ui, int cols, int rows,
         GpuTextGridFrame& outFrame) {
         cols = std::max(1, cols);
         rows = std::max(1, rows);
 
-        const Style baseStyle{{219, 224, 230}, {5, 6, 7}};
-        const Style accentStyle{{250, 176, 51}, baseStyle.bg};
-        const Style progressEmptyStyle{{32, 38, 46}, {32, 38, 46}};
-        const Style progressFrameStyle{{160, 170, 182}, baseStyle.bg};
-        const Color progressStart{110, 231, 183};
-        const Color progressEnd{255, 214, 110};
-
         const playback_overlay::OverlayCellLayout layout =
             playback_overlay::layoutWindowOverlayCells(ui, cols, rows);
-        outFrame.cols = layout.width;
-        outFrame.rows = layout.height;
-
-        const GpuTextGridCell transparentSpace = overlayGridCell(
-            L' ', baseStyle, kGpuTextGridCellFlagTransparentBg);
-        const size_t cellCount =
-            static_cast<size_t>(outFrame.cols) *
-            static_cast<size_t>(outFrame.rows);
-        outFrame.cells.assign(cellCount, transparentSpace);
-
-        auto writeText = [&](const std::string& text, int row, int x,
-                             const Style& style, uint32_t flags = 0) {
-            if (row < 0 || row >= outFrame.rows || x >= outFrame.cols) return;
-            const std::wstring wide = overlayLineToWide(text);
-            int dstX = std::max(0, x);
-            int srcX = x < 0 ? -x : 0;
-            for (int i = srcX; i < static_cast<int>(wide.size()) &&
-                               dstX < outFrame.cols;
-                ++i, ++dstX) {
-                outFrame.cells[static_cast<size_t>(row * outFrame.cols + dstX)] =
-                    overlayGridCell(wide[static_cast<size_t>(i)], style, flags);
-            }
-        };
-
-        auto writeStyledText = [&](const std::string& text, int row, int x,
-                                   int width, const Style& style) {
-            if (row < 0 || row >= outFrame.rows || width <= 0) return;
-            const std::wstring wide = overlayLineToWide(text);
-            const int startX = std::max(0, x);
-            const int endX = std::min(outFrame.cols, x + width);
-            for (int dstX = startX; dstX < endX; ++dstX) {
-                const int srcX = dstX - x;
-                const wchar_t ch =
-                    srcX >= 0 && srcX < static_cast<int>(wide.size())
-                        ? wide[static_cast<size_t>(srcX)]
-                        : L' ';
-                outFrame.cells[static_cast<size_t>(row * outFrame.cols + dstX)] =
-                    overlayGridCell(ch, style);
-            }
-        };
-
-        for (const auto& titleLine : layout.titleLines) {
-            writeText(titleLine.text, titleLine.y, titleLine.x, accentStyle);
-        }
-        for (const auto& item : layout.controls) {
-            Style style = item.active ? accentStyle : baseStyle;
-            if (item.hovered) {
-                style = {style.bg, style.fg};
-            }
-            writeStyledText(item.text, item.y, item.x, item.width, style);
-        }
-        writeText(layout.suffixText, layout.suffixY, layout.suffixX,
-                  baseStyle);
-
-        if (layout.progressBarWidth > 0 && layout.progressBarY >= 0 &&
-            layout.progressBarY < outFrame.rows) {
-            const int frameLeftX = layout.progressBarX - 1;
-            const int frameRightX =
-                layout.progressBarX + layout.progressBarWidth;
-            if (frameLeftX >= 0 && frameLeftX < outFrame.cols) {
-                outFrame.cells[static_cast<size_t>(
-                    layout.progressBarY * outFrame.cols + frameLeftX)] =
-                    overlayGridCell(L'|', progressFrameStyle);
-            }
-            auto barCells = renderProgressBarCells(
-                std::clamp(static_cast<double>(ui.progress), 0.0, 1.0),
-                layout.progressBarWidth, progressEmptyStyle, progressStart,
-                progressEnd);
-            for (int i = 0; i < layout.progressBarWidth; ++i) {
-                const int x = layout.progressBarX + i;
-                if (x < 0 || x >= outFrame.cols) continue;
-                const auto& cell = barCells[static_cast<size_t>(i)];
-                outFrame.cells[static_cast<size_t>(
-                    layout.progressBarY * outFrame.cols + x)] =
-                    overlayGridCell(cell.ch, cell.style);
-            }
-            if (frameRightX >= 0 && frameRightX < outFrame.cols) {
-                outFrame.cells[static_cast<size_t>(
-                    layout.progressBarY * outFrame.cols + frameRightX)] =
-                    overlayGridCell(L'|', progressFrameStyle);
-            }
-        }
-        return true;
+        return playback_overlay::renderOverlayToGpuTextGrid(
+            layout, playback_overlay::OverlayRenderStyles{}, ui.progress,
+            outFrame);
     }
 
     enum class AssRenderStatus {
@@ -2125,18 +2017,19 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
 
     Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory2;
     HRESULT factoryHr = dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory2));
-    VideoOutputColorState desiredColorState =
-        ChooseVideoOutputColorState(m_hWnd, dxgiAdapter.Get(),
-                                    m_preferHdrOutput);
+    HdrGenerateDecision hdrDecision =
+        ResolveHdrGenerateOutputState(m_hWnd, dxgiAdapter.Get());
+    VideoOutputColorState desiredColorState = hdrDecision.state;
     SetOutputColorAttemptStatus({});
     std::vector<VideoOutputColorState> colorAttempts;
     colorAttempts.push_back(desiredColorState);
     if (desiredColorState.encoding == VideoOutputColorEncoding::Hdr10) {
-        colorAttempts.push_back(VideoOutputScRgbFallbackState(desiredColorState));
+        colorAttempts.push_back(VideoOutputScRgbGenerateState(desiredColorState));
     }
     if (VideoOutputUsesHdr(desiredColorState)) {
-        colorAttempts.push_back(VideoOutputColorState{});
+        colorAttempts.push_back(VideoOutputSdrFallbackState(desiredColorState));
     }
+    std::string lastColorAttemptFailure;
     for (const VideoOutputColorState& colorState : colorAttempts) {
 
         if (SUCCEEDED(factoryHr) && dxgiFactory2) {
@@ -2157,18 +2050,24 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
             if (SUCCEEDED(hr)) {
                 m_swapChain = swapChain1;
                 if (!ApplyVideoOutputColorSpace(m_swapChain.Get(), colorState)) {
-                    SetOutputColorAttemptStatus(
+                    lastColorAttemptFailure =
                         std::string("failed=set_") +
-                        VideoOutputColorEncodingName(colorState.encoding));
+                        VideoOutputColorEncodingName(colorState.encoding);
+                    SetOutputColorAttemptStatus(lastColorAttemptFailure);
                     ResetSwapChain();
                     continue;
                 }
                 m_outputColorState = colorState;
-                SetOutputColorAttemptStatus(
-                    std::string("active=") +
-                    VideoOutputColorEncodingName(m_outputColorState.encoding) +
-                    (m_preferHdrOutput ? " output_pref=hdr"
-                                       : " output_pref=sdr"));
+                const char* stage =
+                    colorState.encoding == desiredColorState.encoding
+                        ? "active"
+                        : "downgrade";
+                std::string status = VideoOutputColorAttemptStatus(
+                    hdrDecision, m_outputColorState, stage);
+                if (!lastColorAttemptFailure.empty()) {
+                    status += " last_failure=" + lastColorAttemptFailure;
+                }
+                SetOutputColorAttemptStatus(status);
                 swapChain1.As(&m_swapChain2);
                 if (m_swapChain2) {
                     m_swapChain2->SetMaximumFrameLatency(1);
@@ -2183,7 +2082,8 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
                 std::snprintf(status, sizeof(status), "failed=create_%s:0x%08X",
                               VideoOutputColorEncodingName(colorState.encoding),
                               static_cast<unsigned int>(hr));
-                SetOutputColorAttemptStatus(status);
+                lastColorAttemptFailure = status;
+                SetOutputColorAttemptStatus(lastColorAttemptFailure);
             }
         }
     }
@@ -2200,9 +2100,12 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
     m_outputColorState.swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     m_outputColorState.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     m_outputColorState.encoding = VideoOutputColorEncoding::Sdr;
-    SetOutputColorAttemptStatus(
-        m_preferHdrOutput ? "active=legacy_sdr output_pref=hdr"
-                          : "active=legacy_sdr output_pref=sdr");
+    std::string legacyStatus = VideoOutputColorAttemptStatus(
+        hdrDecision, m_outputColorState, "legacy_sdr");
+    if (!lastColorAttemptFailure.empty()) {
+        legacyStatus += " last_failure=" + lastColorAttemptFailure;
+    }
+    SetOutputColorAttemptStatus(legacyStatus);
     scd.BufferDesc.Format = m_outputColorState.swapChainFormat;
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     scd.OutputWindow = m_hWnd;
@@ -2232,27 +2135,6 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
 
     Resize(width, height);
     return true;
-}
-
-bool VideoWindow::EnsureOutputColorForTransfer(YuvTransfer transfer) {
-    (void)transfer;
-    const bool preferHdrOutput = true;
-    if (preferHdrOutput == m_preferHdrOutput) {
-        return true;
-    }
-    if (!m_hWnd || m_width <= 0 || m_height <= 0) {
-        return false;
-    }
-
-    const bool previousPreference = m_preferHdrOutput;
-    m_preferHdrOutput = preferHdrOutput;
-    if (CreateSwapChain(m_width, m_height)) {
-        return true;
-    }
-
-    m_preferHdrOutput = previousPreference;
-    (void)CreateSwapChain(m_width, m_height);
-    return false;
 }
 
 void VideoWindow::Resize(int width, int height) {
@@ -2412,9 +2294,6 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     if (GetClientRect(m_hWnd, &rect)) {
         m_width = rect.right - rect.left;
         m_height = rect.bottom - rect.top;
-    }
-    if (!EnsureOutputColorForTransfer(frameCache.GetTransfer())) {
-        return;
     }
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
@@ -2966,9 +2845,6 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
     if (GetClientRect(m_hWnd, &rect)) {
         m_width = rect.right - rect.left;
         m_height = rect.bottom - rect.top;
-    }
-    if (!EnsureOutputColorForTransfer(frameCache.GetTransfer())) {
-        return;
     }
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;

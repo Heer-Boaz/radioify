@@ -16,6 +16,13 @@ enum class VideoOutputColorEncoding : uint32_t {
     Hdr10 = 2,
 };
 
+enum class HdrGenerateResult : uint32_t {
+    Hdr10Generate = 0,
+    ScRgbGenerate = 1,
+    SdrFallback = 2,
+    HardFailure = 3,
+};
+
 struct VideoOutputColorState {
     DXGI_FORMAT swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     DXGI_COLOR_SPACE_TYPE colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
@@ -35,16 +42,29 @@ struct VideoOutputColorState {
     uint32_t bitsPerColorChannel = 0;
 };
 
-VideoOutputColorState ChooseVideoOutputColorState(HWND hwnd,
-                                                  IDXGIAdapter* adapter,
-                                                  bool preferHdrOutput);
-VideoOutputColorState VideoOutputScRgbFallbackState(
+struct HdrGenerateDecision {
+    HdrGenerateResult result = HdrGenerateResult::SdrFallback;
+    VideoOutputColorState state;
+    bool generatingHdr = false;
+    std::string reason;
+};
+
+HdrGenerateDecision ResolveHdrGenerateOutputState(HWND hwnd,
+                                                  IDXGIAdapter* adapter);
+VideoOutputColorState VideoOutputScRgbGenerateState(
+    const VideoOutputColorState& state);
+VideoOutputColorState VideoOutputSdrFallbackState(
     const VideoOutputColorState& state);
 bool VideoOutputUsesHdr(const VideoOutputColorState& state);
 bool ApplyVideoOutputColorSpace(IDXGISwapChain* swapChain,
                                 const VideoOutputColorState& state);
 float VideoOutputSdrWhiteScale(const VideoOutputColorState& state);
 const char* VideoOutputColorEncodingName(VideoOutputColorEncoding encoding);
+const char* HdrGenerateResultName(HdrGenerateResult result);
+std::string VideoOutputColorAttemptStatus(
+    const HdrGenerateDecision& decision,
+    const VideoOutputColorState& selectedState,
+    const char* stage);
 std::string VideoOutputColorStateDebugLine(
     const VideoOutputColorState& state,
     const std::string& attemptStatus = {});
