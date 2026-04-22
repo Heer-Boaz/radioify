@@ -6,7 +6,7 @@
 
 #include "tracklist.h"
 
-struct BrowserState;
+#include "browser_model.h"
 
 std::filesystem::path normalizeTrackBrowserPath(std::filesystem::path path);
 bool listTracksForFile(const std::filesystem::path& path,

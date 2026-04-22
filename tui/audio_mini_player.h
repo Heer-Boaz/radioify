@@ -44,6 +44,7 @@ class AudioMiniPlayer {
     std::function<void(int)> onSeekBy;
     std::function<void(double)> onSeekToRatio;
     std::function<void(float)> onAdjustVolume;
+    std::function<bool(const std::vector<std::filesystem::path>&)> onPlayFiles;
     std::function<void()> onClose;
   };
 

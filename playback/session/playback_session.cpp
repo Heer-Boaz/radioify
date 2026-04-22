@@ -27,6 +27,7 @@ struct PlaybackSession::Impl {
         config(args.config),
         systemControls(args.systemControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
+        requestOpenFiles(std::move(args.requestOpenFiles)),
         continuityState(args.continuityState),
         enableAscii(config.enableAscii),
         enableAudio(config.enableAudio && audioIsEnabled()),
@@ -80,6 +81,7 @@ struct PlaybackSession::Impl {
         host.quitApplicationRequestedPtr(),
         systemControls,
         requestTransportCommand,
+        requestOpenFiles,
         continuityState});
   }
 
@@ -141,6 +143,7 @@ struct PlaybackSession::Impl {
   const VideoPlaybackConfig& config;
   PlaybackSystemControls* systemControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+  std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   PlaybackSessionContinuationState* continuityState = nullptr;
   const bool enableAscii;
   const bool enableAudio;

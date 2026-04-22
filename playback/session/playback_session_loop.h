@@ -1,9 +1,11 @@
 #pragma once
 
 #include <atomic>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "playback/system_media_transport_controls.h"
 #include "playback/playback_transport.h"
@@ -42,6 +44,7 @@ class PlaybackLoopRunner {
     bool* quitApplicationRequested = nullptr;
     PlaybackSystemControls* systemControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+    std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
     PlaybackSessionContinuationState* continuityState = nullptr;
   };
 

@@ -2,7 +2,7 @@
 
 #include <string>
 
-struct BrowserState;
+#include "browser_model.h"
 
 enum class OptionsBrowserResult {
   NotHandled,

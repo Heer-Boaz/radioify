@@ -11,6 +11,7 @@
 
 #include "videocolor.h"
 #include "consoleinput.h"
+#include "consolescreen.h"
 #include "gpu_text_grid.h"
 #include "videoprocessor.h"
 #include "video_output_color.h"
@@ -94,6 +95,10 @@ struct WindowUiState {
 
 struct IDXGISwapChain2;
 struct ShaderConstants;
+
+namespace videowindow_file_drop {
+class DropTargetRegistration;
+}
 
 class VideoWindow {
 public:
@@ -210,6 +215,8 @@ private:
     float OutputFullFrameNits() const;
     float AsciiGlyphPeakNits() const;
     void SetOutputColorAttemptStatus(const std::string& status);
+    void EnableFileDrop();
+    void DisableFileDrop();
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -264,6 +271,8 @@ private:
 
     std::vector<InputEvent> m_inputQueue;
     std::mutex m_inputMutex;
+    std::unique_ptr<videowindow_file_drop::DropTargetRegistration>
+        m_fileDropTarget;
     // Cache last window title to avoid repeated SetWindowText calls
     std::string m_lastWindowTitle;
     std::string m_baseWindowTitle;

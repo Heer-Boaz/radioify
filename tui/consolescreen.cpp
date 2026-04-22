@@ -1,5 +1,7 @@
 #include "consolescreen.h"
 
+#include "browser_model.h"
+
 #include <algorithm>
 #include <array>
 #include <condition_variable>

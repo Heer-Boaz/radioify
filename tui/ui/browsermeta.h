@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-struct BrowserState;
+#include "browser_model.h"
 
 std::string buildSelectionMeta(const BrowserState& browser,
                                bool (*isVideo)(const std::filesystem::path&));

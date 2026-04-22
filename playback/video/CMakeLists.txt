@@ -41,6 +41,8 @@ radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/text_grid_bitmap_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/video_output_color.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_file_drop.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_file_drop_bridge.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_gpu_textgrid.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_textgrid.cpp
 )

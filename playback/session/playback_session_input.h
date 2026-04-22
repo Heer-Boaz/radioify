@@ -3,8 +3,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "playback/playback_control_command.h"
 #include "playback/playback_transport.h"
@@ -48,6 +50,7 @@ struct PlaybackInputSignals {
   std::function<bool()> toggleFullscreen;
   std::function<void()> closePresentation;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+  std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   std::atomic<int64_t>* overlayUntilMs = nullptr;
 
   bool* loopStopRequested = nullptr;

@@ -5,14 +5,10 @@
 #include <optional>
 #include <string>
 
-#include "consoleinput.h"
+#include "browser_model.h"
+#include "playback_target.h"
 
 namespace playback_transport_navigation {
-
-struct PlaybackTarget {
-  std::filesystem::path file;
-  int trackIndex = -1;
-};
 
 class Navigator {
  public:

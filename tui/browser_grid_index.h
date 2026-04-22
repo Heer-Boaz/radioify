@@ -1,6 +1,6 @@
 #pragma once
 
-#include "consoleinput.h"
+#include "browser_model.h"
 
 int browserGridEntryIndex(const GridLayout& layout,
                           BrowserState::ViewMode mode, int row, int col,

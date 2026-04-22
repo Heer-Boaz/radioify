@@ -41,6 +41,16 @@ bool isSupportedVideoExt(const std::filesystem::path& path) {
          ext == ".vob";
 }
 
+bool isSupportedImageExt(const std::filesystem::path& path) {
+  const std::string ext = toLower(toUtf8String(path.extension()));
+  return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
+}
+
+bool isSupportedMediaExt(const std::filesystem::path& path) {
+  return isSupportedAudioExt(path) || isSupportedVideoExt(path) ||
+         isSupportedImageExt(path);
+}
+
 bool isMiniaudioExt(const std::filesystem::path& path) {
   const std::string ext = toLower(toUtf8String(path.extension()));
   return ext == ".wav" || ext == ".mp3" || ext == ".flac";

@@ -1,4 +1,4 @@
-#include "consoleinput.h"
+#include "ui_inputlogic.h"
 
 #include <algorithm>
 #include <cstdlib>

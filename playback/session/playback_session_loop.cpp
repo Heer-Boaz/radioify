@@ -21,6 +21,7 @@
 #include "playback_mode.h"
 #include "playback/system_media_transport_controls.h"
 #include "playback_session_core.h"
+#include "playback_session_file_drop.h"
 #include "playback_session_input.h"
 #include "playback_session_output.h"
 #include "playback_session_presentation.h"
@@ -79,6 +80,7 @@ struct PlaybackLoopRunner::Impl {
   bool* quitApplicationRequested = nullptr;
   PlaybackSystemControls* systemControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+  std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   PlaybackSessionContinuationState* continuityState = nullptr;
   PlaybackSessionContinuationState capturedContinuationState;
   const bool enableAscii;
@@ -136,6 +138,7 @@ struct PlaybackLoopRunner::Impl {
         quitApplicationRequested(args.quitApplicationRequested),
         systemControls(args.systemControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
+        requestOpenFiles(std::move(args.requestOpenFiles)),
         continuityState(args.continuityState),
         enableAscii(args.enableAscii),
         enableAudio(args.enableAudio),
@@ -194,6 +197,13 @@ struct PlaybackLoopRunner::Impl {
         return false;
       }
       return requestTransportCommand(cmd);
+    };
+    inputSignals.requestOpenFiles =
+        [this](const std::vector<std::filesystem::path>& files) {
+      if (!requestOpenFiles) {
+        return false;
+      }
+      return requestOpenFiles(files);
     };
     inputSignals.overlayUntilMs = &overlayUntilMs;
     inputSignals.loopStopRequested = &loopStopRequested;
@@ -456,6 +466,14 @@ struct PlaybackLoopRunner::Impl {
       if (ev.type == InputEvent::Type::Resize) {
         core.markPendingResize();
         redraw = true;
+        applyPresenterSync(syncPresentation());
+        continue;
+      }
+      if (playback_session_file_drop::handleInputEvent(inputView, inputSignals,
+                                                       ev)) {
+        if (loopStopRequested) {
+          break;
+        }
         applyPresenterSync(syncPresentation());
         continue;
       }

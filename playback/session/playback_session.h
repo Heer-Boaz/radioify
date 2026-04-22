@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include "playback/playback_transport.h"
 #include "playback/session/playback_session_state.h"
@@ -25,6 +26,7 @@ class PlaybackSession {
     bool* quitAppRequested = nullptr;
     PlaybackSystemControls* systemControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+    std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
     PlaybackSessionContinuationState* continuityState = nullptr;
   };
 

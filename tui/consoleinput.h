@@ -9,14 +9,8 @@
 #endif
 #include <windows.h>
 
-#include <filesystem>
-#include <functional>
-#include <string>
-#include <vector>
-
-#include "consolescreen.h"
-#include "playback/playback_shortcut_types.h"
 #include "terminal_input_sequence.h"
+#include "file_drop_event.h"
 
 struct BreadcrumbLine;
 
@@ -44,12 +38,14 @@ struct InputEvent {
     Key,
     Mouse,
     Resize,
+    FileDrop,
   };
 
   Type type = Type::None;
   KeyEvent key{};
   MouseEvent mouse{};
   COORD size{};
+  FileDropEvent fileDrop;
 };
 
 class ConsoleInput {
@@ -83,193 +79,5 @@ class ConsoleInput {
   bool focusActive_ = true;
   TerminalInputSequenceParser terminalParser_;
 };
-
-struct FileEntry {
-  std::string name;
-  std::filesystem::path path;
-  bool isDir = false;
-  bool isSectionHeader = false;
-  int trackIndex = -1;
-  int optionId = -1;
-  int instrumentDevice = -1;
-  int instrumentChannel = -1;
-  int auditionDevice = -1;
-  int auditionChannel = -1;
-  int auditionIndex = -1;
-};
-
-struct BrowserState {
-  enum class HistoryActionType {
-    EnterDirectory,
-    PlayFile,
-  };
-  struct HistoryAction {
-    HistoryActionType type = HistoryActionType::EnterDirectory;
-    std::filesystem::path fromPath;
-    std::filesystem::path toPath;
-  };
-
-  std::filesystem::path dir;
-  std::vector<FileEntry> entries;
-  int selected = 0;
-  int scrollRow = 0;
-  enum class ViewMode {
-    Thumbnails,
-    ListPreview,
-    ListOnly,
-  };
-  enum class SortMode {
-    Name,
-    Date,
-    Size,
-  };
-  ViewMode viewMode = ViewMode::ListOnly;
-  SortMode sortMode = SortMode::Name;
-  bool sortDescending = false;
-  std::string filter;
-  bool filterActive = false;
-  std::string filterBackup;
-  std::string pathSearch;
-  bool pathSearchActive = false;
-  std::vector<HistoryAction> backHistory;
-  std::vector<HistoryAction> forwardHistory;
-};
-
-struct GridLayout {
-  int rowsVisible = 0;
-  int totalRows = 0;
-  int cols = 0;
-  int colWidth = 0;
-  int cellHeight = 1;
-  int thumbWidth = 0;
-  int thumbHeight = 0;
-  bool showThumbs = false;
-  int listWidth = 0;
-  bool showPreview = false;
-  int previewX = 0;
-  int previewWidth = 0;
-  int previewHeight = 0;
-  bool showScrollBar = false;
-  int scrollBarX = -1;
-  int scrollBarWidth = 0;
-  std::vector<std::string> names;
-};
-
-struct DriveEntry {
-  std::string label;
-  std::filesystem::path path;
-};
-
-std::vector<DriveEntry> listDriveEntries();
-
-struct InputCallbacks {
-  std::function<void()> onQuit;
-  std::function<void()> onResize;
-  std::function<void()> onStopPlayback;
-  std::function<std::filesystem::path()> onCurrentPlaybackFile;
-  std::function<void()> onPlay;
-  std::function<void()> onPause;
-  std::function<void()> onTogglePause;
-  std::function<void()> onPlayPrevious;
-  std::function<void()> onPlayNext;
-  std::function<void()> onToggleWindow;
-  std::function<void()> onToggleFullscreen;
-  std::function<void()> onToggleRadio;
-  std::function<void()> onToggle50Hz;
-  std::function<void()> onToggleSubtitles;
-  std::function<void()> onToggleAudioTrack;
-  std::function<void()> onToggleOptions;
-  std::function<void(PlaybackShortcutAction)> onPlaybackContextShortcut;
-  std::function<void(int)> onSeekBy;
-  std::function<void(double)> onSeekToRatio;
-  std::function<void(float)> onAdjustVolume;
-  std::function<bool(const std::filesystem::path&)> onPlayFile;
-  std::function<void(const FileEntry&, int, int)> onOpenFileContextMenu;
-  std::function<void(const std::filesystem::path&)> onRenderFile;
-  std::function<void(BrowserState&, const std::string&)> onRefreshBrowser;
-};
-
-enum class PlaybackInputResult : uint8_t {
-  Ignored,
-  Handled,
-  HandledWithoutOverlayRefresh,
-};
-
-enum class BrowserSearchFocus {
-  None,
-  Filter,
-  PathSearch,
-};
-
-void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
-                          bool& dirty);
-
-enum class ActionStripItem {
-  Previous,
-  PlayPause,
-  Next,
-  Radio,
-  Hz50,
-  View,
-  PictureInPicture,
-  Options
-};
-
-struct ActionStripButton {
-  ActionStripItem id = ActionStripItem::Radio;
-  int x0 = 0;
-  int x1 = 0;
-  int y = 0;
-};
-
-struct ActionStripLayout {
-  int y = -1;
-  std::vector<ActionStripButton> buttons;
-};
-
-PlaybackInputResult handlePlaybackInput(
-    const InputEvent& ev, const InputCallbacks& callbacks,
-    uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
-                                kPlaybackShortcutContextShared);
-
-void handleInputEvent(
-  const InputEvent& ev,
-  BrowserState& browser,
-  const GridLayout& layout,
-  const BreadcrumbLine& breadcrumbLine,
-  int breadcrumbY,
-  int searchBarY,
-  int searchBarWidth,
-  int listTop,
-  int listHeight,
-  int progressBarX,
-  int progressBarY,
-  int progressBarWidth,
-  const ActionStripLayout& actionStrip,
-  bool browserInteractionEnabled,
-  bool playMode,
-  bool decoderReady,
-  int& breadcrumbHover,
-  int& actionHover,
-  bool& searchBarHover,
-  bool& dirty,
-  bool& running,
-  const InputCallbacks& callbacks
-);
-
-GridLayout buildLayout(const BrowserState& state, int width, int listHeight);
-void drawBrowserEntries(ConsoleScreen& screen,
-                        const BrowserState& browser,
-                        const GridLayout& layout,
-                        int listTop,
-                        int listHeight,
-                        const Style& baseStyle,
-                        const Style& normalStyle,
-                        const Style& dirStyle,
-                        const Style& highlightStyle,
-                        const Style& dimStyle,
-                        bool (*isImage)(const std::filesystem::path&),
-                        bool (*isVideo)(const std::filesystem::path&),
-                        bool (*isAudio)(const std::filesystem::path&));
 
 #endif

@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <vector>
 
 #include "core/runtime_defaults.h"
 #include "consoleinput.h"
@@ -34,4 +35,6 @@ bool showAsciiVideo(const std::filesystem::path& file,
                     PlaybackSystemControls* systemControls = nullptr,
                     std::function<bool(PlaybackTransportCommand)>
                         requestTransportCommand = {},
+                    std::function<bool(const std::vector<std::filesystem::path>&)>
+                        requestOpenFiles = {},
                     PlaybackSessionContinuationState* continuityState = nullptr);

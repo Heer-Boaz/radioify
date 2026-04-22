@@ -4,19 +4,13 @@
 #include <utility>
 #include <vector>
 
-#include "media_formats.h"
+#include "playback_target_resolver.h"
 #include "runtime_helpers.h"
 #include "track_browser_state.h"
 #include "ui_helpers.h"
+#include "ui_inputlogic.h"
 
 namespace playback_transport_navigation {
-namespace {
-
-bool isVideoExt(const std::filesystem::path& path) {
-  return isSupportedVideoExt(path);
-}
-
-}  // namespace
 
 Navigator::Navigator(BrowserState& browser, Callbacks callbacks)
     : browser_(browser), callbacks_(std::move(callbacks)) {}
@@ -43,23 +37,7 @@ bool Navigator::activateTrackBrowser(const std::filesystem::path& file) {
 
 std::optional<PlaybackTarget> Navigator::resolveEntryTarget(
     const FileEntry& entry) const {
-  if (!isTransportPlayableEntry(entry)) {
-    return std::nullopt;
-  }
-  PlaybackTarget target;
-  target.file = entry.path;
-  target.trackIndex = entry.trackIndex;
-  if (target.trackIndex < 0 && isSupportedAudioExt(entry.path)) {
-    std::vector<TrackEntry> tracks;
-    std::string error;
-    if (listTracksForFile(normalizeTrackBrowserPath(entry.path), &tracks,
-                          &error) &&
-        tracks.size() > 1) {
-      target.file = normalizeTrackBrowserPath(entry.path);
-      target.trackIndex = tracks.front().index;
-    }
-  }
-  return target;
+  return playback_target_resolver::resolveEntryTarget(entry);
 }
 
 bool Navigator::syncBrowserToPlaybackTarget(const PlaybackTarget& target) {
@@ -147,9 +125,7 @@ std::optional<PlaybackTarget> Navigator::resolveAdjacentPlaybackTarget(
 }
 
 bool Navigator::isTransportPlayableEntry(const FileEntry& entry) const {
-  if (entry.isSectionHeader || entry.isDir) return false;
-  if (entry.trackIndex >= 0) return true;
-  return isSupportedAudioExt(entry.path) || isVideoExt(entry.path);
+  return playback_target_resolver::isPlayableEntry(entry);
 }
 
 int Navigator::findPlaybackTargetEntryIndex(const PlaybackTarget& target) const {

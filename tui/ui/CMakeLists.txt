@@ -1,6 +1,8 @@
 radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/browsermeta.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/browser_model.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/optionsbrowser.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_target_resolver.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_transport_navigation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/track_browser_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/tracklist.cpp

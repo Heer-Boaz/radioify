@@ -2,6 +2,7 @@
 #include "timing_log.h"
 #include "gpu_shared.h"
 #include "videowindow_internal.h"
+#include "videowindow_file_drop.h"
 #include "videowindow_present.h"
 #include <d3d11_1.h>
 #include <dxgi1_6.h>
@@ -2001,6 +2002,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     hr = device->CreateBlendState(&blendDesc, &m_uiBlendState);
     if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBlendState(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
 
+    EnableFileDrop();
     ::ShowWindow(m_hWnd, SW_SHOW);
     m_width = width;
     m_height = height;
@@ -2203,6 +2205,7 @@ void VideoWindow::Close() {
         ResetEvent(m_closeRequestedEvent);
     }
     SetCursorVisible(true);
+    DisableFileDrop();
     // Hide the window first to release focus/ownership of the monitor
     if (m_hWnd) {
         ::ShowWindow(m_hWnd, SW_HIDE);

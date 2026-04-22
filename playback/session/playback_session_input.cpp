@@ -9,8 +9,10 @@
 #include "audioplayback.h"
 #include "player.h"
 #include "playback/playback_shortcuts.h"
+#include "playback_session_handoff.h"
 #include "subtitle_manager.h"
 #include "ui_helpers.h"
+#include "ui_inputlogic.h"
 #include "videowindow.h"
 
 namespace playback_session_input {
@@ -18,12 +20,6 @@ namespace playback_session_input {
 void setPlaybackPaused(const PlaybackInputView& view,
                        PlaybackInputSignals& signals,
                        PlaybackSeekState& seekState, bool paused);
-
-bool requestPlaybackTransport(PlaybackInputSignals& signals,
-                              PlaybackTransportCommand command);
-bool requestPlaybackTransportHandoff(const PlaybackInputView& view,
-                                     PlaybackInputSignals& signals,
-                                     PlaybackTransportCommand command);
 
 namespace {
 
@@ -318,8 +314,8 @@ bool executeOverlayControl(const PlaybackInputView& view,
   const auto& spec = specs[static_cast<size_t>(controlIndex)];
   playback_overlay::OverlayControlActions actions;
   actions.previous = [&]() {
-    return requestPlaybackTransportHandoff(view, signals,
-                                           PlaybackTransportCommand::Previous);
+    return playback_session_handoff::requestTransportHandoff(
+        view, signals, PlaybackTransportCommand::Previous);
   };
   actions.playPause = [&]() {
     setPlaybackPaused(view, signals, seekState,
@@ -328,8 +324,8 @@ bool executeOverlayControl(const PlaybackInputView& view,
     return true;
   };
   actions.next = [&]() {
-    return requestPlaybackTransportHandoff(view, signals,
-                                           PlaybackTransportCommand::Next);
+    return playback_session_handoff::requestTransportHandoff(
+        view, signals, PlaybackTransportCommand::Next);
   };
   actions.radio = [&]() { return toggleRadio(view); };
   actions.hz50 = [&]() { return toggle50Hz(view); };
@@ -484,38 +480,6 @@ void setPlaybackPaused(const PlaybackInputView& view,
       pausedNow ? PlaybackSessionState::Paused : PlaybackSessionState::Active;
 }
 
-bool requestPlaybackTransport(PlaybackInputSignals& signals,
-                              PlaybackTransportCommand command) {
-  if (!signals.requestTransportCommand) {
-    return false;
-  }
-  return signals.requestTransportCommand(command);
-}
-
-bool requestPlaybackTransportHandoff(const PlaybackInputView& view,
-                                     PlaybackInputSignals& signals,
-                                     PlaybackTransportCommand command) {
-  if (!requestPlaybackTransport(signals, command)) {
-    return false;
-  }
-  if (view.playbackState) {
-    *view.playbackState = PlaybackSessionState::Exiting;
-  }
-  if (signals.loopStopRequested) {
-    *signals.loopStopRequested = true;
-  }
-  if (signals.overlayUntilMs) {
-    signals.overlayUntilMs->store(0, std::memory_order_relaxed);
-  }
-  if (signals.redraw) {
-    *signals.redraw = true;
-  }
-  if (signals.forceRefreshArt) {
-    *signals.forceRefreshArt = true;
-  }
-  return true;
-}
-
 void handlePlaybackKeyEvent(const PlaybackInputView& view,
                             PlaybackInputSignals& signals,
                             PlaybackSeekState& seekState, const KeyEvent& key) {
@@ -530,12 +494,12 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   };
   cb.onStopPlayback = [&]() { requestPlaybackExit(view, signals, false); };
   cb.onPlayPrevious = [&]() {
-    requestPlaybackTransportHandoff(view, signals,
-                                    PlaybackTransportCommand::Previous);
+    playback_session_handoff::requestTransportHandoff(
+        view, signals, PlaybackTransportCommand::Previous);
   };
   cb.onPlayNext = [&]() {
-    requestPlaybackTransportHandoff(view, signals,
-                                    PlaybackTransportCommand::Next);
+    playback_session_handoff::requestTransportHandoff(
+        view, signals, PlaybackTransportCommand::Next);
   };
   cb.onToggleWindow = [&]() { toggleRequestedLayout(view, signals); };
   cb.onToggleFullscreen = [&]() {
@@ -610,12 +574,12 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
       requestPlaybackExit(view, signals, false);
       break;
     case PlaybackControlCommand::Previous:
-      requestPlaybackTransportHandoff(view, signals,
-                                      PlaybackTransportCommand::Previous);
+      playback_session_handoff::requestTransportHandoff(
+          view, signals, PlaybackTransportCommand::Previous);
       break;
     case PlaybackControlCommand::Next:
-      requestPlaybackTransportHandoff(view, signals,
-                                      PlaybackTransportCommand::Next);
+      playback_session_handoff::requestTransportHandoff(
+          view, signals, PlaybackTransportCommand::Next);
       break;
   }
   if (signals.loopStopRequested && *signals.loopStopRequested) {

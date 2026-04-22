@@ -10,6 +10,8 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_bootstrap.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_core.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_host.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_file_drop.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_handoff.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_input.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_loop.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/playback_session_log.cpp

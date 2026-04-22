@@ -33,9 +33,11 @@
 #include "audio_mini_player.h"
 #include "asciiart.h"
 #include "audioplayback.h"
+#include "browser_model.h"
 #include "browsermeta.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
+#include "input_file_drop.h"
 #include "media_artwork_sidecar.h"
 #include "core/windows_message_pump.h"
 #include "m4adecoder.h"
@@ -50,6 +52,7 @@
 #include "playback/playback_shortcuts.h"
 #include "playback/overlay/playback_overlay.h"
 #include "playback/system_media_transport_controls.h"
+#include "playback_target_resolver.h"
 #include "playback_transport_navigation.h"
 #include "tracklist.h"
 #include "track_browser_state.h"
@@ -58,6 +61,7 @@
 #include "tui_export.h"
 #include "ui_footer_layout.h"
 #include "ui_helpers.h"
+#include "ui_inputlogic.h"
 #include "ui_input_pump.h"
 #include "ui_viewport.h"
 #include "videoplayback.h"
@@ -110,17 +114,8 @@ static DWORD waitForBrowserWake(ConsoleInput& input, HANDLE asyncWakeHandle,
       handles.empty() ? nullptr : handles.data(), timeoutMs);
 }
 
-static bool isSupportedImageExt(const std::filesystem::path& p) {
-  std::string ext = toLower(toUtf8String(p.extension()));
-  return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
-}
-
 static bool isVideoExt(const std::filesystem::path& p) {
   return isSupportedVideoExt(p);
-}
-
-static bool isSupportedMediaExt(const std::filesystem::path& p) {
-  return isSupportedAudioExt(p) || isSupportedImageExt(p) || isVideoExt(p);
 }
 
 static bool shouldHideBrowserMediaMetadataFile(
@@ -986,7 +981,6 @@ int runTui(Options o) {
     return label;
   };
 
-  using playback_transport_navigation::PlaybackTarget;
   playback_transport_navigation::Navigator::Callbacks transportCallbacks;
   transportCallbacks.dirty = &dirty;
   transportCallbacks.markDirty = [&]() { markDirty(); };
@@ -1030,11 +1024,21 @@ int runTui(Options o) {
                                                               direction);
           return pendingTransportTarget.has_value();
         };
+        auto requestOpenFiles =
+            [&](const std::vector<std::filesystem::path>& files) {
+          if (auto droppedTarget =
+                  playback_target_resolver::resolveDroppedTarget(files)) {
+            pendingTransportTarget = *droppedTarget;
+            return true;
+          }
+          return false;
+        };
         bool handled = showAsciiVideo(
             target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
             kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
             kProgressEnd, videoConfig, &quitAppRequested, &systemControls,
-            requestTransportCommand, &playbackContinuationState);
+            requestTransportCommand, requestOpenFiles,
+            &playbackContinuationState);
         if (quitAppRequested) {
           running = false;
           return true;
@@ -1364,6 +1368,14 @@ int runTui(Options o) {
     }
     return tryStartAudioFile(file);
   };
+  callbacks.onPlayFiles =
+      [&](const std::vector<std::filesystem::path>& files) {
+    if (auto droppedTarget =
+            playback_target_resolver::resolveDroppedTarget(files)) {
+      return playPlaybackTarget(*droppedTarget);
+    }
+    return false;
+  };
   callbacks.onOpenFileContextMenu = [&](const FileEntry& entry, int x, int y) {
     if (!o.play || entry.isDir || !isSupportedAudioExt(entry.path)) {
       return;
@@ -1531,6 +1543,13 @@ int runTui(Options o) {
   };
   audioMiniCallbacks.onAdjustVolume = [&](float delta) {
     if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(delta);
+  };
+  audioMiniCallbacks.onPlayFiles =
+      [&](const std::vector<std::filesystem::path>& files) {
+    if (!callbacks.onPlayFiles) {
+      return false;
+    }
+    return callbacks.onPlayFiles(files);
   };
   audioMiniCallbacks.onClose = [&]() { markDirty(UiDirtyFlags::Async); };
 
@@ -2017,6 +2036,10 @@ int runTui(Options o) {
       if (ev.type == InputEvent::Type::Resize) {
         dirty = true;
         if (callbacks.onResize) callbacks.onResize();
+        return;
+      }
+      if (dispatchFileDrop(ev, callbacks.onPlayFiles)) {
+        markDirty(UiDirtyFlags::Async);
         return;
       }
       if (ev.type == InputEvent::Type::Mouse &&

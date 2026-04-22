@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "audioplayback.h"
+#include "input_file_drop.h"
 #include "playback/playback_media_artwork_catalog.h"
 #include "playback/playback_shortcuts.h"
 #include "playback_window_presentation.h"
@@ -15,6 +16,7 @@
 #include "track_browser_state.h"
 #include "tracklist.h"
 #include "ui_helpers.h"
+#include "ui_inputlogic.h"
 
 namespace {
 
@@ -381,6 +383,10 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
                                   const Callbacks& callbacks) {
   if (ev.type == InputEvent::Type::Resize) {
     refreshGridSize();
+    return;
+  }
+
+  if (dispatchFileDrop(ev, callbacks.onPlayFiles)) {
     return;
   }
 
