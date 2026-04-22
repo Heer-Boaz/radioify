@@ -25,6 +25,7 @@
 
 #include "asciiart_image_decode_wic.h"
 #include "asciiart_layout.h"
+#include "video_luminance_stats.h"
 
 #ifdef _MSC_VER
 #define FORCE_INLINE __forceinline
@@ -1142,8 +1143,7 @@ struct BrailleFastScratch {
   std::vector<uint8_t> prevBgValid;
   std::vector<uint8_t> prevMask;
   std::vector<uint8_t> continuityMasks;
-  int prevLumLow = -1;
-  int prevLumHigh = -1;
+  VideoLuminanceHistory luminanceHistory;
   bool exactOutputSize = false;
 
   void ensure(int w, int h, int maxArtWidthIn, int maxHeightIn,
@@ -1208,8 +1208,7 @@ struct BrailleFastScratch {
     prevBgValid.assign(static_cast<size_t>(outW) * outH, 0);
     prevMask.assign(static_cast<size_t>(outW) * outH, 0);
     continuityMasks.resize(static_cast<size_t>(outW) * outH);
-    prevLumLow = -1;
-    prevLumHigh = -1;
+    ResetVideoLuminanceHistory(luminanceHistory);
   }
 
   void resetHistory() {
@@ -1218,8 +1217,7 @@ struct BrailleFastScratch {
     std::fill(prevBg.begin(), prevBg.end(), 0);
     std::fill(prevBgValid.begin(), prevBgValid.end(), 0);
     std::fill(prevMask.begin(), prevMask.end(), 0);
-    prevLumLow = -1;
-    prevLumHigh = -1;
+    ResetVideoLuminanceHistory(luminanceHistory);
   }
 };
 
@@ -1544,50 +1542,13 @@ bool renderAsciiArtFromScratch(AsciiArt& out, BrailleFastScratch& scratch,
     }
   }
 
-  int lumLow = 0;
-  int lumHigh = 255;
-  if (lumCount > 0) {
-    uint64_t lowTarget = static_cast<uint64_t>(std::max(
-        1.0, std::round(static_cast<double>(lumCount) * kLumLowPercent)));
-    uint64_t highTarget = static_cast<uint64_t>(std::max(
-        1.0, std::round(static_cast<double>(lumCount) * kLumHighPercent)));
-    uint64_t accum = 0;
-    for (int i = 0; i < 256; ++i) {
-      accum += lumHist[i];
-      if (accum >= lowTarget) {
-        lumLow = i;
-        break;
-      }
-    }
-    accum = 0;
-    for (int i = 0; i < 256; ++i) {
-      accum += lumHist[i];
-      if (accum >= highTarget) {
-        lumHigh = i;
-        break;
-      }
-    }
-    if (lumHigh <= lumLow) {
-      lumHigh = std::min(255, lumLow + 1);
-    }
-  }
-  if (scratch.prevLumLow >= 0 && scratch.prevLumHigh >= 0) {
-    if (std::abs(lumLow - scratch.prevLumLow) < kLumResetDelta) {
-      lumLow = scratch.prevLumLow +
-               ((lumLow - scratch.prevLumLow) * kLumSmoothAlpha >> 8);
-    }
-    if (std::abs(lumHigh - scratch.prevLumHigh) < kLumResetDelta) {
-      lumHigh = scratch.prevLumHigh +
-                ((lumHigh - scratch.prevLumHigh) * kLumSmoothAlpha >> 8);
-    }
-  }
-  if (lumHigh <= lumLow) {
-    lumHigh = std::min(255, lumLow + 1);
-  }
-  scratch.prevLumLow = lumLow;
-  scratch.prevLumHigh = lumHigh;
-
-  const int lumRange = std::max(80, lumHigh - lumLow);
+  const VideoLuminancePercentileConfig luminanceConfig{
+      kLumLowPercent, kLumHighPercent, kLumMinimumRange, kLumSmoothAlpha,
+      kLumResetDelta};
+  const VideoLuminanceStats luminanceStats =
+      ResolveVideoLuminanceStatsFromHistogram(
+          lumHist, 256, lumCount, luminanceConfig, &scratch.luminanceHistory);
+  const int lumRange = luminanceStats.range;
 
   int workerCount = computeWorkerCount(outH, kParallelBatchRows);
   if constexpr (DebugMode) {

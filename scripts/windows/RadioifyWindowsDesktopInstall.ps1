@@ -161,7 +161,7 @@ function Register-RadioifyWindowsUninstallEntry {
     Set-RadioifyWindowsRegistryStringValue -Path $keyPath -Name "DisplayVersion" -Value $manifest.DisplayVersion
     Set-RadioifyWindowsRegistryStringValue -Path $keyPath -Name "Publisher" -Value $script:RadioifyWindowsPublisher
     Set-RadioifyWindowsRegistryStringValue -Path $keyPath -Name "InstallLocation" -Value $Definition.InstallDir
-    Set-RadioifyWindowsRegistryStringValue -Path $keyPath -Name "DisplayIcon" -Value $Definition.InstalledExecutablePath
+    Set-RadioifyWindowsRegistryStringValue -Path $keyPath -Name "DisplayIcon" -Value ($Definition.InstalledIconPath + ",0")
     Set-RadioifyWindowsRegistryStringValue -Path $keyPath -Name "UninstallString" -Value $uninstallCommand
     Set-RadioifyWindowsRegistryStringValue -Path $keyPath -Name "QuietUninstallString" -Value $uninstallCommand
     Set-RadioifyWindowsRegistryStringValue -Path $keyPath -Name "InstallDate" -Value $installDate

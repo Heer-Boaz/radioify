@@ -70,6 +70,8 @@ static const uint kTransferHlg = 2;
 #undef RADIOIFY_ASCII_SIGNAL_U8
 #undef RADIOIFY_ASCII_SCALE_256
 
+#include "video_hdr_to_sdr.hlsli"
+
 // Dithering thresholds (optimized for 2x4 braille)
 // Ranks: 0, 4, 2, 6, 1, 5, 3, 7
 static const int kDitherThresholdByBit[8] = { 
@@ -393,85 +395,14 @@ float2 ExpandUV(float2 uvNorm) {
     return (uvCode - cMid) / denom;
 }
 
-float PQEotf(float v) {
-    const float m1 = 2610.0f / 16384.0f;
-    const float m2 = 2523.0f / 32.0f;
-    const float c1 = 3424.0f / 4096.0f;
-    const float c2 = 2413.0f / 128.0f;
-    const float c3 = 2392.0f / 128.0f;
-    float vp = pow(max(v, 0.0f), 1.0f / m2);
-    float num = max(vp - c1, 0.0f);
-    float den = max(c2 - c3 * vp, 1e-6f);
-    return pow(num / den, 1.0f / m1);
-}
-
-float3 PQEotf(float3 v) {
-    return float3(PQEotf(v.x), PQEotf(v.y), PQEotf(v.z));
-}
-
-float HlgEotf(float v) {
-    const float a = 0.17883277f;
-    const float b = 1.0f - 4.0f * a;
-    const float c = 0.5f - a * log(4.0f * a);
-    v = saturate(v);
-    if (v <= 0.5f) {
-        return (v * v) / 3.0f;
-    }
-    return (exp((v - c) / a) + b) / 12.0f;
-}
-
-float3 HlgEotf(float3 v) {
-    return float3(HlgEotf(v.x), HlgEotf(v.y), HlgEotf(v.z));
-}
-
-float ToneMapFilmic(float x) {
-    const float A = 0.15f;
-    const float B = 0.50f;
-    const float C = 0.10f;
-    const float D = 0.20f;
-    const float E = 0.02f;
-    const float F = 0.30f;
-    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
-}
-
-float3 ToneMapFilmic(float3 x) {
-    return float3(ToneMapFilmic(x.x), ToneMapFilmic(x.y), ToneMapFilmic(x.z));
-}
-
-float LinearToSrgb(float v) {
-    v = max(v, 0.0f);
-    if (v <= 0.0031308f) {
-        return v * 12.92f;
-    }
-    return 1.055f * pow(v, 1.0f / 2.4f) - 0.055f;
-}
-
-float3 LinearToSrgb(float3 v) {
-    return float3(LinearToSrgb(v.x), LinearToSrgb(v.y), LinearToSrgb(v.z));
-}
-
 float ApplyHdrToSdr(float v) {
-    v = saturate(v);
-    if (yuvTransfer == kTransferPq) {
-        v = PQEotf(v);
-    } else {
-        v = HlgEotf(v);
-    }
-    v = ToneMapFilmic(v * kHdrScale);
-    v = saturate(v);
-    return LinearToSrgb(v);
+    return RadioifyHdrTransferToSdr(v, yuvTransfer, kHdrScale, kTransferPq,
+                                    kTransferHlg);
 }
 
 float3 ApplyHdrToSdr(float3 v) {
-    v = saturate(v);
-    if (yuvTransfer == kTransferPq) {
-        v = PQEotf(v);
-    } else {
-        v = HlgEotf(v);
-    }
-    v = ToneMapFilmic(v * kHdrScale);
-    v = saturate(v);
-    return LinearToSrgb(v);
+    return RadioifyHdrTransferToSdr(v, yuvTransfer, kHdrScale, kTransferPq,
+                                    kTransferHlg);
 }
 
 float2 RotateInputUV(float2 uv) {
@@ -842,9 +773,14 @@ int ClampByteInt(int v) {
     return clamp(v, 0, 255);
 }
 
+int DivRoundPositiveInt(int numerator, int denominator) {
+    uint denom = (uint)max(1, denominator);
+    return (int)(((uint)max(0, numerator) + (denom >> 1)) / denom);
+}
+
 int ScaleDelta256(int delta, int scale) {
-    int bias = (delta >= 0) ? 128 : -128;
-    return (delta * scale + bias) / 256;
+    int magnitude = (abs(delta * scale) + 128) >> 8;
+    return (delta >= 0) ? magnitude : -magnitude;
 }
 
 int ByteRangeTo255(int value, int start, int full) {
@@ -854,8 +790,7 @@ int ByteRangeTo255(int value, int start, int full) {
     if (value >= full) {
         return 255;
     }
-    int denom = max(1, full - start);
-    return ((value - start) * 255 + denom / 2) / denom;
+    return DivRoundPositiveInt((value - start) * 255, full - start);
 }
 
 int EdgeBackgroundBlendAmountInt(int dotCount, int validCount,
@@ -871,8 +806,10 @@ int EdgeBackgroundBlendAmountInt(int dotCount, int validCount,
         return 0;
     }
     int split = min(dotCount, validCount - dotCount);
-    int balance = clamp((split * 510 + validCount / 2) / validCount, 0, 255);
-    return (deltaAmount * balance * strength + 255 * 128) / (255 * 256);
+    int balance = clamp(DivRoundPositiveInt(split * 510, validCount), 0, 255);
+    return (int)(((uint)deltaAmount * (uint)balance * (uint)strength +
+                  255u * 128u) /
+                 (255u * 256u));
 }
 
 int BlendChannelToMeanInt(int value, int mean, int amount256) {
@@ -939,16 +876,16 @@ int EdgeMaskFitScore(uint mask, DotInfo dots[8]) {
         return kEdgeMaskFitInvalidScoreGpu;
     }
 
-    int rawBgR = (sumOffR + offCount / 2) / offCount;
-    int rawBgG = (sumOffG + offCount / 2) / offCount;
-    int rawBgB = (sumOffB + offCount / 2) / offCount;
-    int meanOnR = (sumOnR + onCount / 2) / onCount;
-    int meanOnG = (sumOnG + onCount / 2) / onCount;
-    int meanOnB = (sumOnB + onCount / 2) / onCount;
+    int rawBgR = DivRoundPositiveInt(sumOffR, offCount);
+    int rawBgG = DivRoundPositiveInt(sumOffG, offCount);
+    int rawBgB = DivRoundPositiveInt(sumOffB, offCount);
+    int meanOnR = DivRoundPositiveInt(sumOnR, onCount);
+    int meanOnG = DivRoundPositiveInt(sumOnG, onCount);
+    int meanOnB = DivRoundPositiveInt(sumOnB, onCount);
     int validCount = onCount + offCount;
-    int meanAllR = (sumOnR + sumOffR + validCount / 2) / validCount;
-    int meanAllG = (sumOnG + sumOffG + validCount / 2) / validCount;
-    int meanAllB = (sumOnB + sumOffB + validCount / 2) / validCount;
+    int meanAllR = DivRoundPositiveInt(sumOnR + sumOffR, validCount);
+    int meanAllG = DivRoundPositiveInt(sumOnG + sumOffG, validCount);
+    int meanAllB = DivRoundPositiveInt(sumOnB + sumOffB, validCount);
     int bgBlend = EdgeBackgroundBlendAmountInt(
         onCount, validCount,
         MaxRgbDeltaInt(meanOnR, meanOnG, meanOnB, rawBgR, rawBgG, rawBgB));

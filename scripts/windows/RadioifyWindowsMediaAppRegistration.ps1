@@ -72,11 +72,13 @@ function Get-RadioifyWindowsMediaAppDefinition {
 
     $shortcutPath = Join-Path $programsDir $script:RadioifyWindowsShortcutName
     $executableDirectory = Split-Path -Parent $resolvedExecutable
-    $iconLocation = "$resolvedExecutable,0"
+    $iconPath = Join-Path $executableDirectory "radioify.ico"
+    $iconLocation = "$iconPath,0"
 
     return [pscustomobject]@{
         ExecutablePath = $resolvedExecutable
         ExecutableDirectory = $executableDirectory
+        IconPath = $iconPath
         IconLocation = $iconLocation
         ShellOpenCommand = ('"{0}" --shell-open "%1"' -f $resolvedExecutable)
         AppUserModelId = $script:RadioifyWindowsAppUserModelId
@@ -223,7 +225,7 @@ function Register-RadioifyWindowsMediaApp {
             -TargetPath $definition.ExecutablePath `
             -WorkingDirectory $definition.ExecutableDirectory `
             -Description $definition.Description `
-            -IconPath $definition.ExecutablePath `
+            -IconPath $definition.IconPath `
             -Arguments $null `
             -AppUserModelId $definition.AppUserModelId
 

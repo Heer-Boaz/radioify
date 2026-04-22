@@ -2,6 +2,7 @@ radioify_add_module_object_library(radioify_ascii_cpu
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_image_decode_wic.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_layout.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_luminance_stats.cpp
 )
 
 radioify_add_module_object_library(radioify_ascii_gpu
@@ -35,6 +36,7 @@ radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/video_enhancement.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video_enhancement_nvidia_d3d11.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video_frame_cache_update.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_luminance_stats.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/videodecoder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/text_grid_bitmap_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/video_output_color.cpp

@@ -22,6 +22,7 @@ RADIOIFY_ASCII_FLOAT(kCoverageZeroCutoff, 0.03f)  // normalized coverage floor
 // Dynamic luma range selection and temporal smoothing.
 RADIOIFY_ASCII_FLOAT(kLumLowPercent, 0.01f)   // histogram low percentile
 RADIOIFY_ASCII_FLOAT(kLumHighPercent, 0.99f)  // histogram high percentile
+RADIOIFY_ASCII_LUMA_U8(kLumMinimumRange, 80)  // minimum selected luma span
 RADIOIFY_ASCII_SIGNAL_U8(kLumSmoothAlpha, 40) // previous/current blend alpha
 RADIOIFY_ASCII_LUMA_U8(kLumResetDelta, 28)    // snap threshold for luma history
 RADIOIFY_ASCII_FLOAT(kHdrReferenceNits, 100.0f)  // SDR target for HDR tonemap

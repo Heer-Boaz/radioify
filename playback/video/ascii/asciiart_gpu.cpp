@@ -34,6 +34,20 @@ namespace {
         uint32_t metrics;
     };
 
+#define RADIOIFY_ASCII_BOOL(name, value) constexpr bool name = value;
+#define RADIOIFY_ASCII_FLOAT(name, value) constexpr float name = value;
+#define RADIOIFY_ASCII_COUNT(name, value) constexpr int name = value;
+#define RADIOIFY_ASCII_LUMA_U8(name, value) constexpr int name = value;
+#define RADIOIFY_ASCII_SIGNAL_U8(name, value) constexpr int name = value;
+#define RADIOIFY_ASCII_SCALE_256(name, value) constexpr int name = value;
+#include "asciiart_constants.inc"
+#undef RADIOIFY_ASCII_BOOL
+#undef RADIOIFY_ASCII_FLOAT
+#undef RADIOIFY_ASCII_COUNT
+#undef RADIOIFY_ASCII_LUMA_U8
+#undef RADIOIFY_ASCII_SIGNAL_U8
+#undef RADIOIFY_ASCII_SCALE_256
+
 }
 
 bool GpuAsciiRenderer::ReadOutputBuffer(AsciiArt& out, int outW, int outH) {
@@ -188,7 +202,7 @@ void GpuAsciiRenderer::ClearHistory() {
         m_context->ClearUnorderedAccessViewUint(m_historyUAV.Get(), clearValues);
     }
     if (m_context && m_statsUAV) {
-        UINT clearValues[4] = { 80, 0, 0, 0 };
+        UINT clearValues[4] = { static_cast<UINT>(kLumMinimumRange), 0, 0, 0 };
         m_context->ClearUnorderedAccessViewUint(m_statsUAV.Get(), clearValues);
     }
     m_frameCount = 0;
@@ -428,7 +442,7 @@ bool GpuAsciiRenderer::CreateStatsBuffer() {
     srvDesc.Buffer.NumElements = 1;
     if (FAILED(m_device->CreateShaderResourceView(m_statsBuffer.Get(), &srvDesc, &m_statsSRV))) return false;
     if (m_context) {
-        UINT clearValues[4] = { 80, 0, 0, 0 };
+        UINT clearValues[4] = { static_cast<UINT>(kLumMinimumRange), 0, 0, 0 };
         m_context->ClearUnorderedAccessViewUint(m_statsUAV.Get(), clearValues);
     }
 

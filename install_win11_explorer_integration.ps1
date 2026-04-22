@@ -48,6 +48,7 @@ if ($WhatIfPreference) {
 
 $installParams = @{
     IntegrationDir = $integrationDir
+    ReplaceExisting = $true
 }
 if ($ReplaceExisting) {
     $installParams.ReplaceExisting = $true

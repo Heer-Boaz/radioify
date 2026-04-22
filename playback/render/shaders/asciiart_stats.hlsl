@@ -42,6 +42,9 @@ static const uint kTransferHlg = 2u;
 #undef RADIOIFY_ASCII_SIGNAL_U8
 #undef RADIOIFY_ASCII_SCALE_256
 
+#include "video_luminance_stats.hlsli"
+#include "video_hdr_to_sdr.hlsli"
+
 float CodeFromNorm(float norm) {
     norm = saturate(norm);
     if (bitDepth > 8u) {
@@ -69,54 +72,9 @@ float ExpandYCode(float yCode) {
     return saturate((yCode - yMin) / max(yMax - yMin, 1.0f));
 }
 
-float PQEotf(float v) {
-    const float m1 = 2610.0f / 16384.0f;
-    const float m2 = 2523.0f / 32.0f;
-    const float c1 = 3424.0f / 4096.0f;
-    const float c2 = 2413.0f / 128.0f;
-    const float c3 = 2392.0f / 128.0f;
-    float vp = pow(max(v, 0.0f), 1.0f / m2);
-    return pow(max(vp - c1, 0.0f) / max(c2 - c3 * vp, 1e-6f), 1.0f / m1);
-}
-
-float HlgEotf(float v) {
-    const float a = 0.17883277f;
-    const float b = 1.0f - 4.0f * a;
-    const float c = 0.5f - a * log(4.0f * a);
-    v = saturate(v);
-    if (v <= 0.5f) {
-        return (v * v) / 3.0f;
-    }
-    return (exp((v - c) / a) + b) / 12.0f;
-}
-
-float ToneMapFilmic(float x) {
-    const float A = 0.15f;
-    const float B = 0.50f;
-    const float C = 0.10f;
-    const float D = 0.20f;
-    const float E = 0.02f;
-    const float F = 0.30f;
-    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) -
-           E / F;
-}
-
-float LinearToSrgb(float v) {
-    v = max(v, 0.0f);
-    if (v <= 0.0031308f) {
-        return v * 12.92f;
-    }
-    return 1.055f * pow(v, 1.0f / 2.4f) - 0.055f;
-}
-
 float ApplyHdrToSdr(float v) {
-    if (yuvTransfer == kTransferPq) {
-        v = PQEotf(v);
-    } else if (yuvTransfer == kTransferHlg) {
-        v = HlgEotf(v);
-    }
-    v = saturate(ToneMapFilmic(v * kHdrScale));
-    return LinearToSrgb(v);
+    return RadioifyHdrTransferToSdr(v, yuvTransfer, kHdrScale, kTransferPq,
+                                    kTransferHlg);
 }
 
 static const uint kYCoeffR = 13933u;
@@ -163,7 +121,7 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
     if (scaledW == 0u || scaledH == 0u || width == 0u || height == 0u) {
         GroupMemoryBarrierWithGroupSync();
         if (tid.x == 0) {
-            LumaRange[0] = 80u;
+            LumaRange[0] = kLumMinimumRange;
         }
         return;
     }
@@ -235,16 +193,10 @@ void CSStats(uint3 tid : SV_DispatchThreadID) {
             }
         }
         
-        uint range = max(1, high - low);
-        if (range < 80) range = 80;
-
-        if (frameCount > 0) {
-            int rangeDelta = (int)range - (int)prevRange;
-            if (abs(rangeDelta) < (int)kLumResetDelta) {
-                range = (uint)((int)prevRange + (rangeDelta * (int)kLumSmoothAlpha >> 8));
-                if (range < 80u) range = 80u;
-            }
-        }
+        uint range = RadioifyResolveLumaRange(low, high, kLumMinimumRange);
+        range = RadioifySmoothLumaRange(range, prevRange, frameCount,
+                                        kLumResetDelta, kLumSmoothAlpha,
+                                        kLumMinimumRange);
 
         LumaRange[0] = range;
     }

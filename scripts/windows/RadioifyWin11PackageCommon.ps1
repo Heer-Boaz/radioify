@@ -435,6 +435,8 @@ function Stop-RadioifyWin11IntegrationHosts {
 
     Stop-RadioifyExplorerShell
     Stop-RadioifyWin11SurrogateServer -AppId $SurrogateAppId
+    Clear-RadioifyWindowsIconCache
+    Invoke-RadioifyShellAssociationRefresh
 }
 
 function Get-InstalledRadioifyWin11Package {

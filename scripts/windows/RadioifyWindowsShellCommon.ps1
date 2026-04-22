@@ -8,6 +8,21 @@ function Assert-RadioifyWindowsHost {
     }
 }
 
+function Clear-RadioifyWindowsIconCache {
+    $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
+    if ([string]::IsNullOrWhiteSpace($localAppData)) {
+        return
+    }
+
+    $iconCacheDir = Join-Path $localAppData "Microsoft\Windows\Explorer"
+    if (Test-Path -LiteralPath $iconCacheDir) {
+        Remove-Item -Path (Join-Path $iconCacheDir "iconcache*.db") -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path (Join-Path $iconCacheDir "thumbcache*.db") -Force -ErrorAction SilentlyContinue
+    }
+
+    Remove-Item -LiteralPath (Join-Path $localAppData "IconCache.db") -Force -ErrorAction SilentlyContinue
+}
+
 function Invoke-RadioifyShellAssociationRefresh {
     if (-not ("Radioify.ShellNative" -as [type])) {
         Add-Type -TypeDefinition @"
