@@ -93,7 +93,7 @@ if (`$payload.Parameters) {
         $completed = $process.WaitForExit($TimeoutSeconds * 1000)
         if (-not $completed) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw "$OperationName did not finish within $TimeoutSeconds seconds. The Windows AppX deployment service is still busy; the installer stopped waiting instead of deadlocking."
+            throw "$OperationName did not finish within $TimeoutSeconds seconds. The installer stopped waiting instead of deadlocking."
         }
 
         $process.Refresh()
@@ -118,8 +118,11 @@ if (`$payload.Parameters) {
         }
 
         if (-not [string]::IsNullOrWhiteSpace($stdout)) {
-            Write-Host ($stdout.Trim())
+            $trimmedStdout = $stdout.Trim()
+            return $trimmedStdout
         }
+
+        return ""
     } finally {
         if ($process) {
             $process.Dispose()
@@ -130,6 +133,60 @@ if (`$payload.Parameters) {
     }
 }
 
+function Get-RadioifyMsixCertificateThumbprint {
+    param([Parameter(Mandatory = $true)][string]$CertificatePath)
+
+    if (-not (Test-Path -LiteralPath $CertificatePath)) {
+        throw "MSIX certificate not found at '$CertificatePath'."
+    }
+
+    $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CertificatePath)
+    try {
+        return $certificate.Thumbprint
+    } finally {
+        $certificate.Dispose()
+    }
+}
+
+function Test-RadioifyMsixCertificateTrusted {
+    param([Parameter(Mandatory = $true)][string]$CertificatePath)
+
+    $thumbprint = Get-RadioifyMsixCertificateThumbprint -CertificatePath $CertificatePath
+    $result = Invoke-RadioifyMsixDeploymentPowerShell `
+        -OperationName "Check Radioify MSIX certificate trust" `
+        -TimeoutSeconds 30 `
+        -ScriptBlock {
+            param([Parameter(Mandatory = $true)][string]$Thumbprint)
+
+            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPeople,
+                [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
+            try {
+                $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+                $matches = $store.Certificates.Find(
+                    [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                    $Thumbprint,
+                    $false)
+                try {
+                    if ($matches.Count -gt 0) {
+                        Write-Output "trusted"
+                    } else {
+                        Write-Output "missing"
+                    }
+                } finally {
+                    $matches.Dispose()
+                }
+            } finally {
+                $store.Close()
+            }
+        } `
+        -Parameters @{
+            Thumbprint = $thumbprint
+        }
+
+    return ($result -eq "trusted")
+}
+
 function Ensure-RadioifyMsixCertificateTrusted {
     param(
         [Parameter(Mandatory = $true)][string]$CertificatePath
@@ -138,15 +195,12 @@ function Ensure-RadioifyMsixCertificateTrusted {
     if (-not (Test-Path -LiteralPath $CertificatePath)) {
         throw "MSIX certificate not found at '$CertificatePath'."
     }
-    $certificate = Get-PfxCertificate -FilePath $CertificatePath
-    $trusted = Get-ChildItem Cert:\LocalMachine\TrustedPeople -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Thumbprint -eq $certificate.Thumbprint
-        } |
-        Select-Object -First 1
-    if (-not $trusted) {
-        if (-not (Test-RadioifyAdministrator)) {
-            throw @"
+    if (Test-RadioifyMsixCertificateTrusted -CertificatePath $CertificatePath) {
+        return
+    }
+
+    if (-not (Test-RadioifyAdministrator)) {
+        throw @"
 Installing the Radioify MSIX package requires an elevated PowerShell session.
 
 The self-signed MSIX package certificate must be trusted in:
@@ -157,10 +211,49 @@ Re-run:
 
 from an elevated PowerShell window.
 "@
-        }
-
-        Import-Certificate -FilePath $CertificatePath -CertStoreLocation "Cert:\LocalMachine\TrustedPeople" | Out-Null
     }
+
+    $thumbprint = Get-RadioifyMsixCertificateThumbprint -CertificatePath $CertificatePath
+    Write-Host "Trusting MSIX signing certificate: $thumbprint"
+    Invoke-RadioifyMsixDeploymentPowerShell `
+        -OperationName "Trust Radioify MSIX certificate" `
+        -TimeoutSeconds 30 `
+        -ScriptBlock {
+            param(
+                [Parameter(Mandatory = $true)][string]$CertificatePath,
+                [Parameter(Mandatory = $true)][string]$Thumbprint
+            )
+
+            $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CertificatePath)
+            if ($certificate.Thumbprint -ne $Thumbprint) {
+                throw "Certificate thumbprint changed while importing '$CertificatePath'."
+            }
+
+            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPeople,
+                [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
+            try {
+                $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                $matches = $store.Certificates.Find(
+                    [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                    $Thumbprint,
+                    $false)
+                try {
+                    if ($matches.Count -eq 0) {
+                        $store.Add($certificate)
+                    }
+                } finally {
+                    $matches.Dispose()
+                }
+            } finally {
+                $store.Close()
+                $certificate.Dispose()
+            }
+        } `
+        -Parameters @{
+            CertificatePath = $CertificatePath
+            Thumbprint = $thumbprint
+        }
 }
 
 function Ensure-RadioifyPackagedMsixTrusted {

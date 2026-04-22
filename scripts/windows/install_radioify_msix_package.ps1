@@ -37,7 +37,9 @@ function Require-RadioifyMsixInstallPackage {
     }
 
     Write-Host "Using packaged MSIX: $packagePath"
+    Write-Host "Checking packaged MSIX certificate trust..."
     Ensure-RadioifyPackagedMsixTrusted -IntegrationDir $resolvedIntegrationDir | Out-Null
+    Write-Host "MSIX certificate trust is ready."
 }
 
 try {
