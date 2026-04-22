@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 struct ShaderConstants {
@@ -27,11 +28,26 @@ struct ShaderConstants {
     float subtitleWidth;
     float subtitleAlpha;
     uint32_t outputColorSpace;
-    float sdrWhiteScale;
-    float outputMaxNits;
-    float pad6;
-    float pad7;
+
+    float outputSdrWhiteNits;
+    float outputPeakNits;
+    float outputFullFrameNits;
+    float asciiGlyphPeakNits;
 };
 
 static_assert((sizeof(ShaderConstants) % 16) == 0,
               "ShaderConstants size must be 16-byte aligned");
+static_assert(offsetof(ShaderConstants, outputColorSpace) % 16 == 12,
+              "outputColorSpace must occupy the final cbuffer lane");
+static_assert(offsetof(ShaderConstants, outputSdrWhiteNits) ==
+                  offsetof(ShaderConstants, outputColorSpace) + 4,
+              "outputSdrWhiteNits must follow outputColorSpace");
+static_assert(offsetof(ShaderConstants, outputPeakNits) ==
+                  offsetof(ShaderConstants, outputColorSpace) + 8,
+              "outputPeakNits must follow outputColorSpace");
+static_assert(offsetof(ShaderConstants, outputFullFrameNits) ==
+                  offsetof(ShaderConstants, outputColorSpace) + 12,
+              "outputFullFrameNits must follow outputColorSpace");
+static_assert(offsetof(ShaderConstants, asciiGlyphPeakNits) ==
+                  offsetof(ShaderConstants, outputColorSpace) + 16,
+              "asciiGlyphPeakNits must share the HDR constants cbuffer row");

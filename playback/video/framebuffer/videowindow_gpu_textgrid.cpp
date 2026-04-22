@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -15,21 +16,34 @@ constexpr int kGlyphAtlasCols = 16;
 constexpr int kGlyphAtlasRows = 24;
 constexpr int kBlockGlyphAtlasStart = 111;
 constexpr int kBrailleGlyphAtlasStart = 119;
-constexpr float kDefaultOutputMaxNits = 80.0f;
 
 struct GpuTextGridConstants {
     uint32_t glyphCellWidth = 1;
     uint32_t glyphCellHeight = 1;
     uint32_t glyphAtlasCols = kGlyphAtlasCols;
     uint32_t outputColorSpace = 0;
-    float sdrWhiteScale = 1.0f;
-    float outputMaxNits = kDefaultOutputMaxNits;
-    uint32_t pad0 = 0;
-    uint32_t pad1 = 0;
+    float outputSdrWhiteNits = kVideoOutputStandardSdrWhiteNits;
+    float outputPeakNits = kVideoOutputStandardSdrWhiteNits;
+    float outputFullFrameNits = kVideoOutputStandardSdrWhiteNits;
+    float asciiGlyphPeakNits = kVideoOutputStandardSdrWhiteNits;
 };
 
 static_assert(sizeof(GpuTextGridConstants) == 32,
               "GPU text grid constants must be 16-byte aligned");
+static_assert(offsetof(GpuTextGridConstants, outputColorSpace) % 16 == 12,
+              "GPU text outputColorSpace must occupy the final cbuffer lane");
+static_assert(offsetof(GpuTextGridConstants, outputSdrWhiteNits) ==
+                  offsetof(GpuTextGridConstants, outputColorSpace) + 4,
+              "GPU text outputSdrWhiteNits must follow outputColorSpace");
+static_assert(offsetof(GpuTextGridConstants, outputPeakNits) ==
+                  offsetof(GpuTextGridConstants, outputColorSpace) + 8,
+              "GPU text outputPeakNits must follow outputColorSpace");
+static_assert(offsetof(GpuTextGridConstants, outputFullFrameNits) ==
+                  offsetof(GpuTextGridConstants, outputColorSpace) + 12,
+              "GPU text outputFullFrameNits must follow outputColorSpace");
+static_assert(offsetof(GpuTextGridConstants, asciiGlyphPeakNits) ==
+                  offsetof(GpuTextGridConstants, outputColorSpace) + 16,
+              "GPU text asciiGlyphPeakNits must share the HDR constants row");
 
 RadioifyTerminalFontMetrics measureTerminalFontMetrics(UINT dpi) {
     HDC memDC = CreateCompatibleDC(nullptr);
@@ -338,8 +352,10 @@ bool VideoWindow::DrawGpuTextGridFrame(ID3D11Device* device,
         constants.glyphCellHeight = static_cast<uint32_t>(cellHeight);
         constants.glyphAtlasCols = kGlyphAtlasCols;
         constants.outputColorSpace = OutputColorSpaceShaderValue();
-        constants.sdrWhiteScale = OutputSdrWhiteScale();
-        constants.outputMaxNits = OutputMaxNits();
+        constants.outputSdrWhiteNits = OutputSdrWhiteNits();
+        constants.outputPeakNits = OutputPeakNits();
+        constants.outputFullFrameNits = OutputFullFrameNits();
+        constants.asciiGlyphPeakNits = AsciiGlyphPeakNits();
         std::memcpy(mappedConstants.pData, &constants, sizeof(constants));
         context->Unmap(m_gpuTextGridConstants.Get(), 0);
     }

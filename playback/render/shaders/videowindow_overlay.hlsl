@@ -27,8 +27,10 @@ cbuffer Constants : register(b0) {
     float subtitleWidth;
     float subtitleAlpha;
     uint outputColorSpace;
-    float sdrWhiteScale;
-    float outputMaxNits;
+    float outputSdrWhiteNits;
+    float outputPeakNits;
+    float outputFullFrameNits;
+    float asciiGlyphPeakNits;
 };
 
 PS_INPUT VS(uint vid : SV_VertexID) {
@@ -43,11 +45,6 @@ SamplerState sam : register(s0);
 
 #include "videowindow_hdr_generate.hlsli"
 
-float3 ConvertSdrToOutput(float3 rgb) {
-    return RadioifySdr709ToOutput(rgb, outputColorSpace, sdrWhiteScale,
-                                  outputMaxNits, 1.0);
-}
-
 float4 PS_UI(PS_INPUT input) : SV_Target {
     float2 uv = input.tex;
     float4 subtitleColor = float4(0, 0, 0, 0);
@@ -61,7 +58,13 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
             float4 t = texSubtitle.Sample(sam, textUV);
             if (t.a > 0.01) {
                 subtitleColor = t;
-                subtitleColor.rgb = ConvertSdrToOutput(subtitleColor.rgb);
+                if (outputColorSpace != RADIOIFY_OUTPUT_COLOR_SDR) {
+                    float3 nits2020 = RadioifySdrUi709ToGeneratedNits2020(
+                        subtitleColor.rgb, outputSdrWhiteNits, outputPeakNits,
+                        outputFullFrameNits);
+                    subtitleColor.rgb = RadioifyEncodeNits2020ToOutput(
+                        nits2020, outputColorSpace, outputSdrWhiteNits);
+                }
                 subtitleColor.a *= subtitleAlpha;
                 subtitleHit = true;
             }

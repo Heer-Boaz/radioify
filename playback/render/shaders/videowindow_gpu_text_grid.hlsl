@@ -11,10 +11,10 @@ cbuffer GpuTextGridConstants : register(b0) {
     uint glyphCellHeight;
     uint glyphAtlasCols;
     uint outputColorSpace;
-    float sdrWhiteScale;
-    float outputMaxNits;
-    uint constantsPad0;
-    uint constantsPad1;
+    float outputSdrWhiteNits;
+    float outputPeakNits;
+    float outputFullFrameNits;
+    float asciiGlyphPeakNits;
 };
 
 static const uint CELL_FLAG_BRAILLE = 1u;
@@ -29,11 +29,6 @@ float3 packedRgb(uint rgb) {
         float(rgb & 0xFFu),
         float((rgb >> 8) & 0xFFu),
         float((rgb >> 16) & 0xFFu)) / 255.0;
-}
-
-float3 ConvertSdrToOutput(float3 rgb, float emissiveBoost) {
-    return RadioifySdr709ToOutput(rgb, outputColorSpace, sdrWhiteScale,
-                                  outputMaxNits, emissiveBoost);
 }
 
 uint atlasGlyphIndex(uint ch) {
@@ -86,10 +81,29 @@ float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
     uint2 atlasPixel =
         glyphCell * cellSize + glyphPixel;
     float coverage = glyphAtlasTex.Load(int3(atlasPixel, 0));
-    float3 fg = ConvertSdrToOutput(packedRgb(cell.g), 1.85);
-    if ((cell.a & CELL_FLAG_TRANSPARENT_BG) != 0u) {
-        return float4(fg, coverage);
+    float3 fg = packedRgb(cell.g);
+    if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_SDR) {
+        if ((cell.a & CELL_FLAG_TRANSPARENT_BG) != 0u) {
+            return float4(fg, coverage);
+        }
+        float3 bg = packedRgb(cell.b);
+        return float4(lerp(bg, fg, coverage), 1.0);
     }
-    float3 bg = ConvertSdrToOutput(packedRgb(cell.b), 1.0);
-    return float4(lerp(bg, fg, coverage), 1.0);
+
+    float3 fgNits = RadioifySdr709ToAsciiNits709(
+        fg, outputSdrWhiteNits, asciiGlyphPeakNits, 1.85);
+    if ((cell.a & CELL_FLAG_TRANSPARENT_BG) != 0u) {
+        return float4(
+            RadioifyEncodeNits709ToOutput(fgNits, outputColorSpace,
+                                          outputSdrWhiteNits),
+            coverage);
+    }
+    float3 bg = packedRgb(cell.b);
+    float3 bgNits = RadioifySdr709ToAsciiNits709(
+        bg, outputSdrWhiteNits, asciiGlyphPeakNits, 1.0);
+    float3 composedNits = lerp(bgNits, fgNits, coverage);
+    return float4(
+        RadioifyEncodeNits709ToOutput(composedNits, outputColorSpace,
+                                      outputSdrWhiteNits),
+        1.0);
 }

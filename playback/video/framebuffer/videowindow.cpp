@@ -7,6 +7,7 @@
 #include <dxgi1_6.h>
 #include <windowsx.h>
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdarg>
 #include <iostream>
@@ -884,20 +885,45 @@ uint32_t VideoWindow::OutputColorSpaceShaderValue() const {
     return static_cast<uint32_t>(m_outputColorState.encoding);
 }
 
-float VideoWindow::OutputSdrWhiteScale() const {
-    return VideoOutputSdrWhiteScale(m_outputColorState);
+float VideoWindow::OutputSdrWhiteNits() const {
+    if (VideoOutputUsesHdr(m_outputColorState)) {
+        assert(m_outputColorState.outputSdrWhiteNitsAvailable);
+        assert(std::isfinite(m_outputColorState.outputSdrWhiteNits));
+        assert(m_outputColorState.outputSdrWhiteNits > 0.0f);
+    }
+    return m_outputColorState.outputSdrWhiteNits;
 }
 
-float VideoWindow::OutputMaxNits() const {
-    return m_outputColorState.maxOutputNits > 0.0f
-               ? m_outputColorState.maxOutputNits
-               : m_outputColorState.sdrWhiteNits;
+float VideoWindow::OutputPeakNits() const {
+    if (VideoOutputUsesHdr(m_outputColorState)) {
+        assert(std::isfinite(m_outputColorState.outputPeakNits));
+        assert(m_outputColorState.outputPeakNits > 0.0f);
+    }
+    return m_outputColorState.outputPeakNits;
+}
+
+float VideoWindow::OutputFullFrameNits() const {
+    if (VideoOutputUsesHdr(m_outputColorState)) {
+        assert(std::isfinite(m_outputColorState.outputFullFrameNits));
+        assert(m_outputColorState.outputFullFrameNits > 0.0f);
+    }
+    return m_outputColorState.outputFullFrameNits;
+}
+
+float VideoWindow::AsciiGlyphPeakNits() const {
+    if (VideoOutputUsesHdr(m_outputColorState)) {
+        assert(std::isfinite(m_outputColorState.asciiGlyphPeakNits));
+        assert(m_outputColorState.asciiGlyphPeakNits > 0.0f);
+    }
+    return m_outputColorState.asciiGlyphPeakNits;
 }
 
 void VideoWindow::FillOutputColorConstants(ShaderConstants& constants) const {
     constants.outputColorSpace = OutputColorSpaceShaderValue();
-    constants.sdrWhiteScale = OutputSdrWhiteScale();
-    constants.outputMaxNits = OutputMaxNits();
+    constants.outputSdrWhiteNits = OutputSdrWhiteNits();
+    constants.outputPeakNits = OutputPeakNits();
+    constants.outputFullFrameNits = OutputFullFrameNits();
+    constants.asciiGlyphPeakNits = AsciiGlyphPeakNits();
 }
 
 void VideoWindow::SetOutputColorAttemptStatus(const std::string& status) {
@@ -2049,7 +2075,8 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
                 device, m_hWnd, &scd1, nullptr, nullptr, &swapChain1);
             if (SUCCEEDED(hr)) {
                 m_swapChain = swapChain1;
-                if (!ApplyVideoOutputColorSpace(m_swapChain.Get(), colorState)) {
+                if (!ApplyVideoOutputColorSpace(*m_swapChain.Get(),
+                                                colorState)) {
                     lastColorAttemptFailure =
                         std::string("failed=set_") +
                         VideoOutputColorEncodingName(colorState.encoding);
@@ -2125,7 +2152,7 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
     }
 
     m_swapChain.As(&m_swapChain2);
-    (void)ApplyVideoOutputColorSpace(m_swapChain.Get(), m_outputColorState);
+    (void)ApplyVideoOutputColorSpace(*m_swapChain.Get(), m_outputColorState);
     if (m_swapChain2) {
         m_swapChain2->SetMaximumFrameLatency(1);
         std::lock_guard<std::mutex> latencyLock(m_frameLatencyMutex);
@@ -2148,7 +2175,7 @@ void VideoWindow::Resize(int width, int height) {
     HRESULT hr = m_swapChain->ResizeBuffers(
         0, width, height, m_outputColorState.swapChainFormat, flags);
     if (FAILED(hr)) return;
-    if (!ApplyVideoOutputColorSpace(m_swapChain.Get(), m_outputColorState)) {
+    if (!ApplyVideoOutputColorSpace(*m_swapChain.Get(), m_outputColorState)) {
         return;
     }
 

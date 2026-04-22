@@ -205,8 +205,10 @@ private:
     bool EnsureGpuTextGridConstants(ID3D11Device* device);
     void FillOutputColorConstants(ShaderConstants& constants) const;
     uint32_t OutputColorSpaceShaderValue() const;
-    float OutputSdrWhiteScale() const;
-    float OutputMaxNits() const;
+    float OutputSdrWhiteNits() const;
+    float OutputPeakNits() const;
+    float OutputFullFrameNits() const;
+    float AsciiGlyphPeakNits() const;
     void SetOutputColorAttemptStatus(const std::string& status);
 
     HWND m_hWnd = nullptr;

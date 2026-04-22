@@ -9,25 +9,29 @@ static const uint RADIOIFY_TRANSFER_HLG = 2u;
 static const uint RADIOIFY_MATRIX_BT2020 = 2u;
 
 static const float RADIOIFY_SCRGB_ONE_NITS = 80.0;
-static const float RADIOIFY_SDR_REFERENCE_WHITE_NITS = 100.0;
 static const float RADIOIFY_BT2408_REFERENCE_WHITE_NITS = 203.0;
 static const float RADIOIFY_PQ_REFERENCE_MAX_NITS = 10000.0;
 
-float RadioifySafeOutputMaxNits(float outputMaxNits, float diffuseWhiteNits)
+float RadioifySafeSdrWhiteNits(float outputSdrWhiteNits)
 {
-    return max(diffuseWhiteNits + 1.0, clamp(outputMaxNits, 400.0, 1200.0));
+    return max(outputSdrWhiteNits, 1.0);
 }
 
-float RadioifySystemSdrWhiteNits(float sdrWhiteScale)
-{
-    return max(RADIOIFY_SCRGB_ONE_NITS * max(sdrWhiteScale, 0.0),
-               RADIOIFY_SCRGB_ONE_NITS);
-}
-
-float RadioifyDiffuseWhiteNits(float sdrWhiteScale)
+float RadioifyDiffuseWhiteNits(float outputSdrWhiteNits)
 {
     return max(RADIOIFY_BT2408_REFERENCE_WHITE_NITS,
-               RadioifySystemSdrWhiteNits(sdrWhiteScale));
+               RadioifySafeSdrWhiteNits(outputSdrWhiteNits));
+}
+
+float RadioifyGenerateTargetPeakNits(float outputSdrWhiteNits,
+                                     float outputPeakNits,
+                                     float outputFullFrameNits)
+{
+    float white = RadioifyDiffuseWhiteNits(outputSdrWhiteNits);
+    float policyTarget =
+        max(white * 3.5,
+            max(outputFullFrameNits, white) * 1.35);
+    return max(white + 1.0, min(max(outputPeakNits, white), policyTarget));
 }
 
 float RadioifyBt1886ToLinear(float x)
@@ -45,7 +49,8 @@ float3 RadioifyBt1886ToLinear(float3 x)
 float RadioifySrgbToLinear(float v)
 {
     v = saturate(v);
-    return (v <= 0.04045) ? (v / 12.92) : pow((v + 0.055) / 1.055, 2.4);
+    return (v <= 0.04045) ? (v / 12.92)
+                          : pow((v + 0.055) / 1.055, 2.4);
 }
 
 float3 RadioifySrgbToLinear(float3 v)
@@ -57,7 +62,7 @@ float3 RadioifySrgbToLinear(float3 v)
 
 float RadioifyLinearToSrgb(float v)
 {
-    v = max(v, 0.0);
+    v = saturate(v);
     return (v <= 0.0031308) ? (v * 12.92)
                             : (1.055 * pow(v, 1.0 / 2.4) - 0.055);
 }
@@ -108,11 +113,13 @@ float RadioifyPqOetf(float v)
     return pow((c1 + c2 * vp) / (1.0 + c3 * vp), m2);
 }
 
-float3 RadioifyPqOetf(float3 v)
+float3 RadioifyPqOetfFromNits(float3 nits)
 {
-    return float3(RadioifyPqOetf(v.r),
-                  RadioifyPqOetf(v.g),
-                  RadioifyPqOetf(v.b));
+    float3 relative = max(nits, float3(0.0, 0.0, 0.0)) /
+                      RADIOIFY_PQ_REFERENCE_MAX_NITS;
+    return float3(RadioifyPqOetf(relative.r),
+                  RadioifyPqOetf(relative.g),
+                  RadioifyPqOetf(relative.b));
 }
 
 float RadioifyHlgEotf(float v)
@@ -142,19 +149,22 @@ float RadioifyLuminance2020(float3 c)
     return dot(c, float3(0.2627, 0.6780, 0.0593));
 }
 
-float3 RadioifyGenerateHdrNits2020(float3 hdrLinear2020Nits,
-                                   float sdrWhiteScale,
-                                   float outputMaxNits)
+float3 RadioifyGenerateHdrNits2020(float3 baseNits2020,
+                                   float outputSdrWhiteNits,
+                                   float outputPeakNits,
+                                   float outputFullFrameNits)
 {
-    const float diffuseWhiteNits = RadioifyDiffuseWhiteNits(sdrWhiteScale);
+    const float diffuseWhiteNits =
+        RadioifyDiffuseWhiteNits(outputSdrWhiteNits);
     const float targetPeakNits =
-        RadioifySafeOutputMaxNits(outputMaxNits, diffuseWhiteNits);
+        RadioifyGenerateTargetPeakNits(outputSdrWhiteNits, outputPeakNits,
+                                       outputFullFrameNits);
     const float midtoneGamma = 1.12;
     const float highlightGain = 2.0;
     const float shoulderStart = diffuseWhiteNits * 0.95;
     const float saturationProtect = 0.22;
 
-    float y = RadioifyLuminance2020(hdrLinear2020Nits);
+    float y = RadioifyLuminance2020(baseNits2020);
     float yMid =
         pow(max(y / diffuseWhiteNits, 0.0), 1.0 / midtoneGamma) *
         diffuseWhiteNits;
@@ -169,9 +179,7 @@ float3 RadioifyGenerateHdrNits2020(float3 hdrLinear2020Nits,
     }
 
     float3 outColor =
-        (y > 1.0e-6) ? hdrLinear2020Nits * (yHdr / y)
-                     : hdrLinear2020Nits;
-
+        (y > 1.0e-6) ? baseNits2020 * (yHdr / y) : baseNits2020;
     float satMix = saturate((yHdr - diffuseWhiteNits) /
                             max(1.0e-4,
                                 targetPeakNits - diffuseWhiteNits)) *
@@ -180,63 +188,125 @@ float3 RadioifyGenerateHdrNits2020(float3 hdrLinear2020Nits,
     return lerp(outColor, gray.xxx, satMix);
 }
 
-float3 RadioifySdr709ToHdrNits2020(float3 rgb709Code, float sdrWhiteScale,
-                                   float outputMaxNits,
-                                   float emissiveBoost)
+float3 RadioifySdrVideo709ToBaseNits709(float3 rgb709Code,
+                                        float outputSdrWhiteNits)
 {
-    float diffuseWhiteNits = RadioifyDiffuseWhiteNits(sdrWhiteScale);
-    float3 linear709 =
-        RadioifyBt1886ToLinear(rgb709Code) * max(emissiveBoost, 0.0);
-    float3 mapped2020 =
-        RadioifyLinearBt709ToBt2020(linear709) * diffuseWhiteNits;
-    return RadioifyGenerateHdrNits2020(mapped2020, sdrWhiteScale,
-                                       outputMaxNits);
+    return RadioifyBt1886ToLinear(rgb709Code) *
+           RadioifyDiffuseWhiteNits(outputSdrWhiteNits);
 }
 
-float3 RadioifyHdrNits2020ToOutput(float3 hdrNits2020, uint outputColorSpace)
+float3 RadioifySdrUi709ToBaseNits709(float3 rgb709Code,
+                                     float outputSdrWhiteNits)
 {
-    float3 outputRgb = float3(0.0, 0.0, 0.0);
+    return RadioifySrgbToLinear(rgb709Code) *
+           RadioifyDiffuseWhiteNits(outputSdrWhiteNits);
+}
+
+float3 RadioifySdrVideo709ToGeneratedNits2020(float3 rgb709Code,
+                                              float outputSdrWhiteNits,
+                                              float outputPeakNits,
+                                              float outputFullFrameNits)
+{
+    float3 baseNits2020 =
+        RadioifyLinearBt709ToBt2020(
+            RadioifySdrVideo709ToBaseNits709(rgb709Code,
+                                             outputSdrWhiteNits));
+    return RadioifyGenerateHdrNits2020(baseNits2020, outputSdrWhiteNits,
+                                       outputPeakNits,
+                                       outputFullFrameNits);
+}
+
+float3 RadioifySdrUi709ToGeneratedNits2020(float3 rgb709Code,
+                                           float outputSdrWhiteNits,
+                                           float outputPeakNits,
+                                           float outputFullFrameNits)
+{
+    float3 baseNits2020 =
+        RadioifyLinearBt709ToBt2020(
+            RadioifySdrUi709ToBaseNits709(rgb709Code,
+                                          outputSdrWhiteNits));
+    return RadioifyGenerateHdrNits2020(baseNits2020, outputSdrWhiteNits,
+                                       outputPeakNits,
+                                       outputFullFrameNits);
+}
+
+float3 RadioifySdr709ToAsciiNits709(float3 rgb709Code,
+                                    float outputSdrWhiteNits,
+                                    float asciiGlyphPeakNits,
+                                    float emissiveBoost)
+{
+    float white = RadioifyDiffuseWhiteNits(outputSdrWhiteNits);
+    float glyphPeak = max(asciiGlyphPeakNits, white);
+    float3 linearRgb = RadioifySrgbToLinear(rgb709Code);
+    float3 diffuseNits = linearRgb * white;
+    float brightness = max(linearRgb.r, max(linearRgb.g, linearRgb.b));
+    float hot = smoothstep(0.35, 1.0, brightness);
+    float emissiveAmount = saturate(emissiveBoost - 1.0);
+    float peakScale = glyphPeak / white;
+    float scale = lerp(1.0, peakScale, hot * emissiveAmount);
+    return diffuseNits * scale;
+}
+
+float3 RadioifyEncodeNits709ToScRgb(float3 nits709)
+{
+    return nits709 / RADIOIFY_SCRGB_ONE_NITS;
+}
+
+float3 RadioifyEncodeNits709ToSdr(float3 nits709,
+                                  float outputSdrWhiteNits)
+{
+    float white = RadioifySafeSdrWhiteNits(outputSdrWhiteNits);
+    float3 linearRgb = max(nits709, float3(0.0, 0.0, 0.0)) / white;
+    float mappedWhite = max(RadioifyToneMapFilmic(1.0), 1.0e-4);
+    float3 mapped = float3(RadioifyToneMapFilmic(linearRgb.r),
+                           RadioifyToneMapFilmic(linearRgb.g),
+                           RadioifyToneMapFilmic(linearRgb.b)) /
+                    mappedWhite;
+    return RadioifyLinearToSrgb(saturate(mapped));
+}
+
+float3 RadioifyEncodeNits709ToOutput(float3 nits709, uint outputColorSpace,
+                                     float outputSdrWhiteNits)
+{
+    if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_SCRGB)
+        return RadioifyEncodeNits709ToScRgb(nits709);
+
+    if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_HDR10)
+        return RadioifyPqOetfFromNits(
+            RadioifyLinearBt709ToBt2020(
+                max(nits709, float3(0.0, 0.0, 0.0))));
+
+    return RadioifyEncodeNits709ToSdr(nits709, outputSdrWhiteNits);
+}
+
+float3 RadioifyEncodeNits2020ToOutput(float3 nits2020, uint outputColorSpace,
+                                       float outputSdrWhiteNits)
+{
+    float3 encoded = float3(0.0, 0.0, 0.0);
     if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_HDR10)
     {
-        outputRgb =
-            RadioifyPqOetf(hdrNits2020 / RADIOIFY_PQ_REFERENCE_MAX_NITS);
-    }
-    else if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_SCRGB)
-    {
-        outputRgb = max(RadioifyLinearBt2020ToBt709(hdrNits2020) /
-                            RADIOIFY_SCRGB_ONE_NITS,
-                        float3(0.0, 0.0, 0.0));
+        encoded = RadioifyPqOetfFromNits(
+            max(nits2020, float3(0.0, 0.0, 0.0)));
     }
     else
     {
-        float3 linear709 = max(
-            RadioifyLinearBt2020ToBt709(
-                hdrNits2020 / RADIOIFY_SDR_REFERENCE_WHITE_NITS),
-            float3(0.0, 0.0, 0.0));
-        float3 mapped = float3(RadioifyToneMapFilmic(linear709.r),
-                               RadioifyToneMapFilmic(linear709.g),
-                               RadioifyToneMapFilmic(linear709.b));
-        outputRgb = saturate(RadioifyLinearToSrgb(mapped));
+        float3 nits709 = RadioifyLinearBt2020ToBt709(nits2020);
+        if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_SCRGB)
+        {
+            encoded = RadioifyEncodeNits709ToScRgb(nits709);
+        }
+        else
+        {
+            encoded = RadioifyEncodeNits709ToSdr(nits709,
+                                                 outputSdrWhiteNits);
+        }
     }
-    return outputRgb;
-}
-
-float3 RadioifySdr709ToOutput(float3 rgb709Code, uint outputColorSpace,
-                              float sdrWhiteScale, float outputMaxNits,
-                              float emissiveBoost)
-{
-    if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_SDR)
-    {
-        return saturate(rgb709Code);
-    }
-    return RadioifyHdrNits2020ToOutput(
-        RadioifySdr709ToHdrNits2020(rgb709Code, sdrWhiteScale,
-                                    outputMaxNits, emissiveBoost),
-        outputColorSpace);
+    return encoded;
 }
 
 float3 RadioifyHdrTransferToNits2020(float3 rgbCode, uint yuvTransfer,
-                                     uint yuvMatrix, float outputMaxNits)
+                                     uint yuvMatrix,
+                                     float outputPeakNits)
 {
     float3 linearRgb = rgbCode;
     if (yuvTransfer == RADIOIFY_TRANSFER_PQ)
@@ -251,33 +321,53 @@ float3 RadioifyHdrTransferToNits2020(float3 rgbCode, uint yuvTransfer,
         linearRgb = float3(RadioifyHlgEotf(rgbCode.r),
                            RadioifyHlgEotf(rgbCode.g),
                            RadioifyHlgEotf(rgbCode.b)) *
-                    max(outputMaxNits, RADIOIFY_BT2408_REFERENCE_WHITE_NITS);
+                    max(outputPeakNits, RADIOIFY_BT2408_REFERENCE_WHITE_NITS);
     }
 
     if (yuvMatrix != RADIOIFY_MATRIX_BT2020)
     {
         linearRgb = RadioifyLinearBt709ToBt2020(linearRgb);
     }
-    return max(linearRgb, 0.0);
+    return max(linearRgb, float3(0.0, 0.0, 0.0));
 }
 
 float3 RadioifyVideoToOutput(float3 rgbCode, uint yuvTransfer,
                              uint yuvMatrix, uint outputColorSpace,
-                             float sdrWhiteScale, float outputMaxNits)
+                             float outputSdrWhiteNits,
+                             float outputPeakNits,
+                             float outputFullFrameNits)
 {
     float3 outputRgb = float3(0.0, 0.0, 0.0);
-    if (yuvTransfer == RADIOIFY_TRANSFER_SDR)
+    if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_SDR)
     {
-        outputRgb = RadioifySdr709ToOutput(rgbCode, outputColorSpace,
-                                           sdrWhiteScale, outputMaxNits, 1.0);
+        if (yuvTransfer == RADIOIFY_TRANSFER_SDR)
+        {
+            outputRgb = saturate(rgbCode);
+        }
+        else
+        {
+            float3 hdrNits2020 = RadioifyHdrTransferToNits2020(
+                saturate(rgbCode), yuvTransfer, yuvMatrix, outputPeakNits);
+            outputRgb = RadioifyEncodeNits2020ToOutput(
+                hdrNits2020, RADIOIFY_OUTPUT_COLOR_SDR, outputSdrWhiteNits);
+        }
     }
     else
     {
-        float3 hdrNits2020 =
-            RadioifyHdrTransferToNits2020(saturate(rgbCode), yuvTransfer,
-                                          yuvMatrix, outputMaxNits);
-        outputRgb = RadioifyHdrNits2020ToOutput(hdrNits2020,
-                                                outputColorSpace);
+        float3 nits2020 = float3(0.0, 0.0, 0.0);
+        if (yuvTransfer == RADIOIFY_TRANSFER_SDR)
+        {
+            nits2020 = RadioifySdrVideo709ToGeneratedNits2020(
+                rgbCode, outputSdrWhiteNits, outputPeakNits,
+                outputFullFrameNits);
+        }
+        else
+        {
+            nits2020 = RadioifyHdrTransferToNits2020(
+                saturate(rgbCode), yuvTransfer, yuvMatrix, outputPeakNits);
+        }
+        outputRgb = RadioifyEncodeNits2020ToOutput(
+            nits2020, outputColorSpace, outputSdrWhiteNits);
     }
     return outputRgb;
 }

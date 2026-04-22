@@ -16,6 +16,10 @@ enum class VideoOutputColorEncoding : uint32_t {
     Hdr10 = 2,
 };
 
+static_assert(static_cast<uint32_t>(VideoOutputColorEncoding::Sdr) == 0);
+static_assert(static_cast<uint32_t>(VideoOutputColorEncoding::ScRgb) == 1);
+static_assert(static_cast<uint32_t>(VideoOutputColorEncoding::Hdr10) == 2);
+
 enum class HdrGenerateResult : uint32_t {
     Hdr10Generate = 0,
     ScRgbGenerate = 1,
@@ -23,12 +27,20 @@ enum class HdrGenerateResult : uint32_t {
     HardFailure = 3,
 };
 
+inline constexpr float kVideoOutputStandardSdrWhiteNits = 80.0f;
+inline constexpr float kVideoOutputBt2408ReferenceWhiteNits = 203.0f;
+inline constexpr float kVideoOutputAsciiGlyphSdrWhiteScale = 3.5f;
+inline constexpr float kVideoOutputAsciiGlyphFullFrameScale = 1.35f;
+
 struct VideoOutputColorState {
     DXGI_FORMAT swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     DXGI_COLOR_SPACE_TYPE colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     VideoOutputColorEncoding encoding = VideoOutputColorEncoding::Sdr;
-    float sdrWhiteNits = 80.0f;
-    float maxOutputNits = 0.0f;
+    float outputSdrWhiteNits = kVideoOutputStandardSdrWhiteNits;
+    float outputPeakNits = 0.0f;
+    float outputFullFrameNits = 0.0f;
+    float asciiGlyphPeakNits = kVideoOutputStandardSdrWhiteNits;
+    bool outputSdrWhiteNitsAvailable = false;
     bool outputFound = false;
     bool monitorMatched = false;
     bool dxgiDescAvailable = false;
@@ -56,9 +68,8 @@ VideoOutputColorState VideoOutputScRgbGenerateState(
 VideoOutputColorState VideoOutputSdrFallbackState(
     const VideoOutputColorState& state);
 bool VideoOutputUsesHdr(const VideoOutputColorState& state);
-bool ApplyVideoOutputColorSpace(IDXGISwapChain* swapChain,
+bool ApplyVideoOutputColorSpace(IDXGISwapChain& swapChain,
                                 const VideoOutputColorState& state);
-float VideoOutputSdrWhiteScale(const VideoOutputColorState& state);
 const char* VideoOutputColorEncodingName(VideoOutputColorEncoding encoding);
 const char* HdrGenerateResultName(HdrGenerateResult result);
 std::string VideoOutputColorAttemptStatus(

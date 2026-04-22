@@ -27,8 +27,10 @@ cbuffer Constants : register(b0) {
     float subtitleWidth;
     float subtitleAlpha;
     uint outputColorSpace;
-    float sdrWhiteScale;
-    float outputMaxNits;
+    float outputSdrWhiteNits;
+    float outputPeakNits;
+    float outputFullFrameNits;
+    float asciiGlyphPeakNits;
 };
 
 PS_INPUT VS(uint vid : SV_VertexID) {
@@ -74,8 +76,8 @@ float2 ExpandUV(float2 uvNorm) {
 
 float3 ConvertVideoToOutput(float3 rgb) {
     return RadioifyVideoToOutput(rgb, yuvTransfer, yuvMatrix,
-                                 outputColorSpace, sdrWhiteScale,
-                                 outputMaxNits);
+                                 outputColorSpace, outputSdrWhiteNits,
+                                 outputPeakNits, outputFullFrameNits);
 }
 
 float4 PS(PS_INPUT input) : SV_Target {
