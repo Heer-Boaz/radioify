@@ -66,7 +66,6 @@
 #include "ui_viewport.h"
 #include "videoplayback.h"
 #include "videowindow.h"
-#include "videowindow_file_drop_apartment.h"
 #include "media_formats.h"
 #include "runtime_helpers.h"
 
@@ -703,8 +702,6 @@ int runTui(Options o) {
     return runRenderRadioCli(o);
   }
 
-  videowindow_file_drop::FileDropOleApartment fileDropOleApartment;
-
   float lpHz = static_cast<float>(o.bwHz);
   const uint32_t sampleRate = 48000;
 
@@ -752,6 +749,7 @@ int runTui(Options o) {
     if (!tuiWindow.Open(1280, 720, "Radioify TUI", false)) {
       windowTuiEnabled = false;
     } else {
+      tuiWindow.EnableFileDrop();
       tuiWindow.SetCaptureAllMouseInput(true);
       tuiWindow.SetVsync(true);
       tuiWindow.ShowWindow(true);
@@ -2046,7 +2044,7 @@ int runTui(Options o) {
         return;
       }
       if (ev.type == InputEvent::Type::Mouse &&
-          (ev.mouse.control & 0x80000000) != 0) {
+          isWindowMouseEvent(ev.mouse)) {
         int wndW = std::max(1, tuiWindow.GetWidth());
         int wndH = std::max(1, tuiWindow.GetHeight());
         int gridW = std::max(1, screen.width());

@@ -2,11 +2,9 @@
 #include "timing_log.h"
 #include "gpu_shared.h"
 #include "videowindow_internal.h"
-#include "videowindow_file_drop.h"
 #include "videowindow_present.h"
 #include <d3d11_1.h>
 #include <dxgi1_6.h>
-#include <windowsx.h>
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -52,11 +50,6 @@ static inline std::string thread_id_str() {
 #pragma comment(lib, "dxgi.lib")
 
 namespace {
-    constexpr UINT kTogglePictureInPictureMessage = WM_APP + 0x440;
-    constexpr UINT kSetPictureInPictureMessage = WM_APP + 0x441;
-    constexpr UINT kExitPictureInPictureToFullscreenMessage = WM_APP + 0x442;
-    constexpr UINT kSetFullscreenMessage = WM_APP + 0x443;
-
     static std::wstring utf8ToWide(const std::string& text) {
         if (text.empty()) return {};
         int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
@@ -1655,248 +1648,10 @@ void VideoWindow::Cleanup() {
     m_gpuTextGridRows = 0;
 }
 
-LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    VideoWindow* pThis = nullptr;
-    if (uMsg == WM_NCCREATE) {
-        CREATESTRUCT* pCreate = (CREATESTRUCT*)lParam;
-        pThis = (VideoWindow*)pCreate->lpCreateParams;
-        SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)pThis);
-    } else {
-        pThis = (VideoWindow*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
-    }
-    // If we're in a fullscreen transition we may get WM_SIZE messages from the system
-    // that reflect the old client size; ignore WM_SIZE while m_ignoreWindowSizeEvents
-    if (pThis && uMsg == WM_SIZE && pThis->m_ignoreWindowSizeEvents) {
-        return 0;
-    }
-
-    if (pThis) {
-        if (uMsg == kTogglePictureInPictureMessage) {
-            pThis->SetPictureInPicture(!pThis->IsPictureInPicture());
-            return 0;
-        }
-        if (uMsg == kSetPictureInPictureMessage) {
-            pThis->SetPictureInPicture(wParam != 0);
-            return 0;
-        }
-        if (uMsg == kExitPictureInPictureToFullscreenMessage) {
-            pThis->ExitPictureInPictureToFullscreen();
-            return 0;
-        }
-        if (uMsg == kSetFullscreenMessage) {
-            pThis->SetFullscreen(wParam != 0);
-            return 0;
-        }
-        if (uMsg == WM_NCHITTEST &&
-            pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
-            LRESULT hit = DefWindowProc(hWnd, uMsg, wParam, lParam);
-            if (hit != HTCLIENT) return hit;
-            POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            ScreenToClient(hWnd, &p);
-            return pThis->HitTestPictureInPicture(p.x, p.y);
-        }
-        if (uMsg == WM_SIZING &&
-            pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
-            pThis->AdjustPictureInPictureSizingRect(
-                wParam, reinterpret_cast<RECT*>(lParam));
-            return TRUE;
-        }
-        if (uMsg == WM_GETMINMAXINFO &&
-            pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
-            auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-            const SIZE minSize = pThis->PictureInPictureMinimumSize();
-            info->ptMinTrackSize.x = minSize.cx;
-            info->ptMinTrackSize.y = minSize.cy;
-            return 0;
-        }
-        if (uMsg == WM_SETCURSOR) {
-            if (LOWORD(lParam) == HTCLIENT) {
-                if (pThis->m_cursorVisible.load(std::memory_order_relaxed)) {
-                    ::SetCursor(::LoadCursor(NULL, IDC_ARROW));
-                } else {
-                    ::SetCursor(nullptr);
-                }
-                return TRUE;
-            }
-        }
-        if (uMsg == WM_SIZE) {
-            pThis->Resize(LOWORD(lParam), HIWORD(lParam));
-            return 0;
-        }
-        if (uMsg == WM_CLOSE) {
-            pThis->m_closeRequested.store(true, std::memory_order_relaxed);
-            if (pThis->m_closeRequestedEvent) {
-                SetEvent(pThis->m_closeRequestedEvent);
-            }
-            return 0;
-        }
-        if (uMsg == WM_DESTROY) {
-            pThis->m_hWnd = nullptr;
-            pThis->m_windowThreadId = 0;
-            return 0;
-        }
-
-        if (uMsg == WM_KEYDOWN ||
-            (uMsg == WM_SYSKEYDOWN && wParam == VK_RETURN)) {
-            InputEvent ev{};
-            ev.type = InputEvent::Type::Key;
-            ev.key.vk = (WORD)wParam;
-
-            // Map VK to ASCII for common keys if possible
-            if (wParam >= 'A' && wParam <= 'Z') ev.key.ch = (char)wParam;
-            else if (wParam == VK_SPACE) ev.key.ch = ' ';
-            else if (wParam == VK_ESCAPE) ev.key.ch = 27;
-            else if (wParam == VK_OEM_4) ev.key.ch = '[';
-            else if (wParam == VK_OEM_6) ev.key.ch = ']';
-
-            if (GetKeyState(VK_CONTROL) & 0x8000) ev.key.control |= LEFT_CTRL_PRESSED;
-            if (GetKeyState(VK_SHIFT) & 0x8000) ev.key.control |= SHIFT_PRESSED;
-            if (GetKeyState(VK_MENU) & 0x8000) ev.key.control |= LEFT_ALT_PRESSED;
-
-            std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
-            pThis->m_inputQueue.push_back(ev);
-            return 0;
-        }
-        if (uMsg == WM_SYSCHAR && wParam == VK_RETURN) {
-            return 0;
-        }
-
-        auto enqueueKey = [&](WORD vk, char ch = 0, DWORD control = 0) {
-            InputEvent ev;
-            ev.type = InputEvent::Type::Key;
-            ev.key.vk = vk;
-            ev.key.ch = ch;
-            ev.key.control = control;
-            std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
-            pThis->m_inputQueue.push_back(ev);
-        };
-        auto enqueueBackKey = [&]() {
-            enqueueKey(VK_BROWSER_BACK);
-        };
-        auto enqueueForwardKey = [&]() {
-            enqueueKey(VK_BROWSER_FORWARD);
-        };
-
-        if (uMsg == WM_XBUTTONDOWN || uMsg == WM_XBUTTONUP ||
-            uMsg == WM_NCXBUTTONDOWN || uMsg == WM_NCXBUTTONUP) {
-            WORD xButton = HIWORD(wParam);
-            if (xButton == XBUTTON1) {
-                enqueueBackKey();
-                return TRUE;
-            }
-            if (xButton == XBUTTON2) {
-                enqueueForwardKey();
-                return TRUE;
-            }
-            return TRUE;
-        }
-
-        if (uMsg == WM_APPCOMMAND) {
-            int cmd = GET_APPCOMMAND_LPARAM(lParam);
-            if (cmd == APPCOMMAND_BROWSER_BACKWARD) {
-                enqueueBackKey();
-                return TRUE;
-            }
-            if (cmd == APPCOMMAND_BROWSER_FORWARD) {
-                enqueueForwardKey();
-                return TRUE;
-            }
-            if (cmd == APPCOMMAND_MEDIA_PLAY_PAUSE) {
-                enqueueKey(VK_MEDIA_PLAY_PAUSE);
-                return TRUE;
-            }
-            if (cmd == APPCOMMAND_MEDIA_PLAY) {
-                enqueueKey(kPlaybackVkMediaPlay);
-                return TRUE;
-            }
-            if (cmd == APPCOMMAND_MEDIA_PAUSE) {
-                enqueueKey(kPlaybackVkMediaPause);
-                return TRUE;
-            }
-            if (cmd == APPCOMMAND_MEDIA_STOP) {
-                enqueueKey(VK_MEDIA_STOP);
-                return TRUE;
-            }
-            if (cmd == APPCOMMAND_MEDIA_PREVIOUSTRACK ||
-                cmd == APPCOMMAND_MEDIA_CHANNEL_DOWN) {
-                enqueueKey(VK_MEDIA_PREV_TRACK);
-                return TRUE;
-            }
-            if (cmd == APPCOMMAND_MEDIA_NEXTTRACK ||
-                cmd == APPCOMMAND_MEDIA_CHANNEL_UP) {
-                enqueueKey(VK_MEDIA_NEXT_TRACK);
-                return TRUE;
-            }
-        }
-
-        auto queueWindowMouseEvent = [&](int x, int y, DWORD buttonState,
-                                         DWORD eventFlags) {
-            bool acceptAll = pThis->m_captureAllMouseInput;
-            bool inBottomBand =
-                pThis->m_height > 0 &&
-                y > static_cast<int>(std::round(pThis->m_height * 0.84));
-            if (pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
-                inBottomBand =
-                    pThis->m_height > 0 &&
-                    y >= pThis->PictureInPictureInteractiveTop();
-            }
-            if (!acceptAll && !inBottomBand) return;
-            InputEvent ev;
-            ev.type = InputEvent::Type::Mouse;
-            ev.mouse.pos.X = static_cast<SHORT>(x);
-            ev.mouse.pos.Y = static_cast<SHORT>(y);
-            ev.mouse.buttonState = buttonState;
-            ev.mouse.eventFlags = eventFlags;
-            ev.mouse.control = 0x80000000; // Custom flag for window-originated event
-            ev.mouse.hasPixelPosition = true;
-            ev.mouse.pixelX = x;
-            ev.mouse.pixelY = y;
-            std::lock_guard<std::mutex> lock(pThis->m_inputMutex);
-            pThis->m_inputQueue.push_back(ev);
-        };
-
-        if (uMsg == WM_LBUTTONDOWN) {
-            int x = LOWORD(lParam);
-            int y = HIWORD(lParam);
-            queueWindowMouseEvent(x, y, FROM_LEFT_1ST_BUTTON_PRESSED, 0);
-            return 0;
-        }
-
-        if (uMsg == WM_RBUTTONDOWN) {
-            int x = LOWORD(lParam);
-            int y = HIWORD(lParam);
-            queueWindowMouseEvent(x, y, RIGHTMOST_BUTTON_PRESSED, 0);
-            return 0;
-        }
-
-        if (uMsg == WM_MOUSEMOVE) {
-            int x = LOWORD(lParam);
-            int y = HIWORD(lParam);
-            DWORD buttonState = 0;
-            if ((wParam & MK_LBUTTON) != 0) buttonState |= FROM_LEFT_1ST_BUTTON_PRESSED;
-            if ((wParam & MK_RBUTTON) != 0) buttonState |= RIGHTMOST_BUTTON_PRESSED;
-            queueWindowMouseEvent(x, y, buttonState, MOUSE_MOVED);
-            return 0;
-        }
-
-        if (uMsg == WM_MOUSEWHEEL) {
-            POINT p;
-            p.x = GET_X_LPARAM(lParam);
-            p.y = GET_Y_LPARAM(lParam);
-            ScreenToClient(pThis->m_hWnd, &p);
-            SHORT delta = GET_WHEEL_DELTA_WPARAM(wParam);
-            DWORD packedDelta =
-                static_cast<DWORD>(static_cast<uint16_t>(delta)) << 16;
-            queueWindowMouseEvent(p.x, p.y, packedDelta, MOUSE_WHEELED);
-            return 0;
-        }
-    }
-    return DefWindowProc(hWnd, uMsg, wParam, lParam);
-}
-
 bool VideoWindow::Open(int width, int height, const std::string& title,
                        bool startFullscreen) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    m_input.clear();
     m_closeRequested.store(false, std::memory_order_relaxed);
     if (m_closeRequestedEvent) {
         ResetEvent(m_closeRequestedEvent);
@@ -2002,7 +1757,6 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     hr = device->CreateBlendState(&blendDesc, &m_uiBlendState);
     if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBlendState(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
 
-    EnableFileDrop();
     ::ShowWindow(m_hWnd, SW_SHOW);
     m_width = width;
     m_height = height;
@@ -2206,6 +1960,7 @@ void VideoWindow::Close() {
     }
     SetCursorVisible(true);
     DisableFileDrop();
+    m_input.clear();
     // Hide the window first to release focus/ownership of the monitor
     if (m_hWnd) {
         ::ShowWindow(m_hWnd, SW_HIDE);
@@ -2257,11 +2012,7 @@ bool VideoWindow::PollEvents() {
 }
 
 bool VideoWindow::PollInput(InputEvent& ev) {
-    std::lock_guard<std::mutex> lock(m_inputMutex);
-    if (m_inputQueue.empty()) return false;
-    ev = m_inputQueue.front();
-    m_inputQueue.erase(m_inputQueue.begin());
-    return true;
+    return m_input.poll(ev);
 }
 
 bool VideoWindow::ConsumeCloseRequested() {

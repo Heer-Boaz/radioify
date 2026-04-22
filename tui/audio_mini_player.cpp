@@ -24,7 +24,6 @@ constexpr int kDefaultWindowWidth = 560;
 constexpr int kDefaultWindowHeight = 260;
 constexpr int kMinCols = 28;
 constexpr int kMinRows = 8;
-constexpr DWORD kWindowMouseFlag = 0x80000000;
 
 std::string trackLabelForNowPlaying(const std::filesystem::path& nowPlaying,
                                     int trackIndex) {
@@ -89,6 +88,7 @@ bool AudioMiniPlayer::open() {
                     "Radioify Mini Player", false)) {
     return false;
   }
+  window_.EnableFileDrop();
   window_.SetCaptureAllMouseInput(true);
   window_.SetVsync(true);
   window_.SetTextGridMinimumSize(kMinCols, kMinRows);
@@ -432,7 +432,7 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
   if (ev.type != InputEvent::Type::Mouse) return;
   const MouseEvent rawMouse = ev.mouse;
   MouseEvent mouse = rawMouse;
-  const bool windowMouse = (mouse.control & kWindowMouseFlag) != 0;
+  const bool windowMouse = isWindowMouseEvent(mouse);
   if (windowMouse) {
     const int gx = std::clamp(rawMouse.pos.X / std::max(1, cellWidth_), 0,
                               std::max(0, cols_ - 1));

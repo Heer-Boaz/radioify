@@ -8,15 +8,15 @@
 #endif
 #include <windows.h>
 
-namespace videowindow_file_drop {
+namespace windows_file_drop {
 
-class FileDropOleApartment {
+class OleApartment {
  public:
-  FileDropOleApartment();
-  ~FileDropOleApartment();
+  OleApartment();
+  ~OleApartment();
 
-  FileDropOleApartment(const FileDropOleApartment&) = delete;
-  FileDropOleApartment& operator=(const FileDropOleApartment&) = delete;
+  OleApartment(const OleApartment&) = delete;
+  OleApartment& operator=(const OleApartment&) = delete;
 
   bool initialized() const { return initialized_; }
   HRESULT result() const { return result_; }
@@ -26,4 +26,4 @@ class FileDropOleApartment {
   bool initialized_ = false;
 };
 
-}  // namespace videowindow_file_drop
+}  // namespace windows_file_drop

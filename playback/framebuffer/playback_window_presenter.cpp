@@ -11,7 +11,6 @@
 #include "playback_window_presentation.h"
 #include "runtime_helpers.h"
 #include "timing_log.h"
-#include "videowindow_file_drop_apartment.h"
 
 namespace {
 
@@ -90,16 +89,18 @@ struct PlaybackWindowPresenter::Impl {
     thread = std::thread(
         [this, &player, buildUiState, overlayVisible, buildTextGridPresentation,
          startGate, initialState]() {
-          videowindow_file_drop::FileDropOleApartment fileDropOleApartment;
           const bool startFullscreen =
               !initialState || !initialState->hasLayout ||
               playback_window_presentation::shouldStartFullscreen(
                   initialState->windowPlacement);
           const bool opened =
               window.Open(1280, 720, "Radioify Output", startFullscreen);
-          if (opened && initialState && initialState->hasLayout) {
-            playback_window_presentation::applyPlacement(
-                window, initialState->windowPlacement);
+          if (opened) {
+            window.EnableFileDrop();
+            if (initialState && initialState->hasLayout) {
+              playback_window_presentation::applyPlacement(
+                  window, initialState->windowPlacement);
+            }
           }
           {
             std::lock_guard<std::mutex> lock(startGate->mutex);

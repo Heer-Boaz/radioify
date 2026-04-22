@@ -806,7 +806,7 @@ static bool windowOverlayProgressRatioAt(const PlaybackOverlayState& state,
 bool overlayProgressRatioAt(const PlaybackOverlayState& state,
                             const MouseEvent& mouse, int cellPixelWidth,
                             int cellPixelHeight, double* outRatio) {
-  const bool windowEvent = (mouse.control & 0x80000000) != 0;
+  const bool windowEvent = isWindowMouseEvent(mouse);
   return windowEvent ? windowOverlayProgressRatioAt(
                            state, mouse, cellPixelWidth, cellPixelHeight,
                            outRatio)

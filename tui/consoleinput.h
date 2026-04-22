@@ -32,6 +32,20 @@ struct MouseEvent {
   double unitHeight = 1.0;
 };
 
+inline constexpr DWORD kInputEventWindowMouseFlag = 0x80000000u;
+
+inline bool isWindowMouseEvent(const MouseEvent& mouse) {
+  return (mouse.control & kInputEventWindowMouseFlag) != 0;
+}
+
+inline void markWindowMouseEvent(MouseEvent& mouse) {
+  mouse.control |= kInputEventWindowMouseFlag;
+}
+
+inline void clearWindowMouseEvent(MouseEvent& mouse) {
+  mouse.control &= ~kInputEventWindowMouseFlag;
+}
+
 struct InputEvent {
   enum class Type {
     None,

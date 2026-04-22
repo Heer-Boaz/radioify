@@ -4,12 +4,9 @@
 #include <optional>
 
 #include "file_drop_event.h"
-#include "videowindow_file_drop_apartment.h"
+#include "windows_file_drop_apartment.h"
 
-struct HWND__;
-using HWND = HWND__*;
-
-namespace videowindow_file_drop {
+namespace windows_file_drop {
 
 using DropEventSink = std::function<void(FileDropEvent&&)>;
 
@@ -27,7 +24,7 @@ class DropTargetRegistration {
  private:
   HWND hwnd_ = nullptr;
   class DropTarget* target_ = nullptr;
-  std::optional<FileDropOleApartment> oleApartment_;
+  std::optional<OleApartment> oleApartment_;
 };
 
-}  // namespace videowindow_file_drop
+}  // namespace windows_file_drop

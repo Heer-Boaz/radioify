@@ -598,7 +598,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   playback_overlay::PlaybackOverlayInputs mouseOverlayInputs =
       buildPlaybackMouseOverlayInputs(view, seekState, signals);
   MouseEvent hitMouse = mouse;
-  const bool windowOriginEvent = (mouse.control & 0x80000000) != 0;
+  const bool windowOriginEvent = isWindowMouseEvent(mouse);
   const bool terminalAsciiProgress =
       !windowOriginEvent && isAsciiPlaybackMode(view.currentMode);
   const playback_frame_output::FrameOutputState* progressOutputState =
@@ -633,7 +633,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
             static_cast<int>((static_cast<int64_t>(localPixelY) * gridRows) /
                              gridViewport.height),
             0, gridRows - 1));
-        hitMouse.control &= ~0x80000000;
+        clearWindowMouseEvent(hitMouse);
         hitMouse.hasPixelPosition = true;
         hitMouse.pixelX = localPixelX;
         hitMouse.pixelY = localPixelY;
@@ -660,7 +660,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                 ? view.textGridPresentationOutputState->progressBarWidth
                 : 0;
       } else {
-        hitMouse.control &= ~0x80000000;
+        clearWindowMouseEvent(hitMouse);
         progressOutputState = nullptr;
         mouseOverlayInputs.overlayVisible = false;
       }
@@ -679,7 +679,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     }
   }
 
-  windowEvent = (hitMouse.control & 0x80000000) != 0;
+  windowEvent = isWindowMouseEvent(hitMouse);
   int windowTextCellW = 1;
   int windowTextCellH = 1;
   if (windowEvent && view.videoWindow) {

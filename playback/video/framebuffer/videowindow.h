@@ -16,6 +16,7 @@
 #include "videoprocessor.h"
 #include "video_output_color.h"
 #include "subtitle_font_attachments.h"
+#include "videowindow_input_controller.h"
 #include <vector>
 #include <mutex>
 
@@ -96,10 +97,6 @@ struct WindowUiState {
 struct IDXGISwapChain2;
 struct ShaderConstants;
 
-namespace videowindow_file_drop {
-class DropTargetRegistration;
-}
-
 class VideoWindow {
 public:
     VideoWindow();
@@ -172,9 +169,17 @@ public:
     bool PollInput(InputEvent& ev);
     bool ConsumeCloseRequested();
     HANDLE CloseRequestedWaitHandle() const { return m_closeRequestedEvent; }
+    bool EnableFileDrop();
+    void DisableFileDrop();
     void Cleanup();
 
 private:
+    static constexpr UINT kTogglePictureInPictureMessage = WM_APP + 0x440;
+    static constexpr UINT kSetPictureInPictureMessage = WM_APP + 0x441;
+    static constexpr UINT kExitPictureInPictureToFullscreenMessage =
+        WM_APP + 0x442;
+    static constexpr UINT kSetFullscreenMessage = WM_APP + 0x443;
+
     void DrawOverlay(const WindowUiState& ui);
     void UpdateViewport(int width, int height);
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -215,8 +220,7 @@ private:
     float OutputFullFrameNits() const;
     float AsciiGlyphPeakNits() const;
     void SetOutputColorAttemptStatus(const std::string& status);
-    void EnableFileDrop();
-    void DisableFileDrop();
+    bool ShouldQueueWindowMouseEvent(int y) const;
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -269,10 +273,7 @@ private:
     float m_viewportW = 0.0f;
     float m_viewportH = 0.0f;
 
-    std::vector<InputEvent> m_inputQueue;
-    std::mutex m_inputMutex;
-    std::unique_ptr<videowindow_file_drop::DropTargetRegistration>
-        m_fileDropTarget;
+    VideoWindowInputController m_input;
     // Cache last window title to avoid repeated SetWindowText calls
     std::string m_lastWindowTitle;
     std::string m_baseWindowTitle;
