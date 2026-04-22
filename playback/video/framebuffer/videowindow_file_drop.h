@@ -1,8 +1,10 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include "file_drop_event.h"
+#include "videowindow_file_drop_apartment.h"
 
 struct HWND__;
 using HWND = HWND__*;
@@ -25,7 +27,7 @@ class DropTargetRegistration {
  private:
   HWND hwnd_ = nullptr;
   class DropTarget* target_ = nullptr;
-  bool oleInitialized_ = false;
+  std::optional<FileDropOleApartment> oleApartment_;
 };
 
 }  // namespace videowindow_file_drop

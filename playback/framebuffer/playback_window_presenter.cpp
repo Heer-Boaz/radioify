@@ -11,6 +11,7 @@
 #include "playback_window_presentation.h"
 #include "runtime_helpers.h"
 #include "timing_log.h"
+#include "videowindow_file_drop_apartment.h"
 
 namespace {
 
@@ -89,6 +90,7 @@ struct PlaybackWindowPresenter::Impl {
     thread = std::thread(
         [this, &player, buildUiState, overlayVisible, buildTextGridPresentation,
          startGate, initialState]() {
+          videowindow_file_drop::FileDropOleApartment fileDropOleApartment;
           const bool startFullscreen =
               !initialState || !initialState->hasLayout ||
               playback_window_presentation::shouldStartFullscreen(

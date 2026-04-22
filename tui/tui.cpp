@@ -66,6 +66,7 @@
 #include "ui_viewport.h"
 #include "videoplayback.h"
 #include "videowindow.h"
+#include "videowindow_file_drop_apartment.h"
 #include "media_formats.h"
 #include "runtime_helpers.h"
 
@@ -701,6 +702,8 @@ int runTui(Options o) {
   if (o.renderRadio) {
     return runRenderRadioCli(o);
   }
+
+  videowindow_file_drop::FileDropOleApartment fileDropOleApartment;
 
   float lpHz = static_cast<float>(o.bwHz);
   const uint32_t sampleRate = 48000;

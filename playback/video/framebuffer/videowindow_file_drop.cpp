@@ -205,19 +205,18 @@ bool DropTargetRegistration::registerWindow(HWND hwnd, DropEventSink sink) {
     return false;
   }
 
-  const HRESULT oleResult = OleInitialize(nullptr);
-  if (FAILED(oleResult)) {
+  oleApartment_.emplace();
+  if (!oleApartment_->initialized()) {
+    oleApartment_.reset();
     return false;
   }
-  oleInitialized_ = true;
 
   target_ = new DropTarget(std::move(sink));
   const HRESULT registerResult = RegisterDragDrop(hwnd, target_);
   if (FAILED(registerResult)) {
     target_->Release();
     target_ = nullptr;
-    OleUninitialize();
-    oleInitialized_ = false;
+    oleApartment_.reset();
     return false;
   }
 
@@ -234,10 +233,7 @@ void DropTargetRegistration::revoke() {
     target_->Release();
     target_ = nullptr;
   }
-  if (oleInitialized_) {
-    OleUninitialize();
-    oleInitialized_ = false;
-  }
+  oleApartment_.reset();
 }
 
 }  // namespace videowindow_file_drop
