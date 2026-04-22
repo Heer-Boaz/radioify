@@ -21,10 +21,8 @@ static const uint CELL_FLAG_BRAILLE = 1u;
 static const uint CELL_FLAG_TRANSPARENT_BG = 2u;
 static const uint BLOCK_GLYPH_ATLAS_START = 111u;
 static const uint BRAILLE_GLYPH_ATLAS_START = 119u;
-static const float SDR_REFERENCE_WHITE_NITS = 80.0;
-static const float PQ_REFERENCE_MAX_NITS = 10000.0;
-static const uint OUTPUT_COLOR_SDR = 0u;
-static const uint OUTPUT_COLOR_HDR10 = 2u;
+
+#include "videowindow_hdr_generate.hlsli"
 
 float3 packedRgb(uint rgb) {
     return float3(
@@ -33,40 +31,9 @@ float3 packedRgb(uint rgb) {
         float((rgb >> 16) & 0xFFu)) / 255.0;
 }
 
-float SrgbToLinear(float v) {
-    v = saturate(v);
-    return (v <= 0.04045) ? (v / 12.92) : pow((v + 0.055) / 1.055, 2.4);
-}
-
-float PQOetf(float v) {
-    float m1 = 2610.0 / 16384.0;
-    float m2 = 2523.0 / 32.0;
-    float c1 = 3424.0 / 4096.0;
-    float c2 = 2413.0 / 128.0;
-    float c3 = 2392.0 / 128.0;
-    float vp = pow(max(v, 0.0), m1);
-    return pow((c1 + c2 * vp) / (1.0 + c3 * vp), m2);
-}
-
-float3 LinearBt709ToBt2020(float3 v) {
-    return float3(
-        0.6274 * v.r + 0.3293 * v.g + 0.0433 * v.b,
-        0.0691 * v.r + 0.9195 * v.g + 0.0114 * v.b,
-        0.0164 * v.r + 0.0880 * v.g + 0.8956 * v.b);
-}
-
-float3 ConvertSdrToOutput(float3 rgb) {
-    if (outputColorSpace == OUTPUT_COLOR_SDR) return saturate(rgb);
-    float3 linearRgb =
-        float3(SrgbToLinear(rgb.r), SrgbToLinear(rgb.g), SrgbToLinear(rgb.b));
-    linearRgb *= max(sdrWhiteScale, 0.0);
-    if (outputColorSpace == OUTPUT_COLOR_HDR10) {
-        float3 bt2020 = LinearBt709ToBt2020(linearRgb);
-        float3 pqInput =
-            bt2020 * (SDR_REFERENCE_WHITE_NITS / PQ_REFERENCE_MAX_NITS);
-        return float3(PQOetf(pqInput.r), PQOetf(pqInput.g), PQOetf(pqInput.b));
-    }
-    return linearRgb;
+float3 ConvertSdrToOutput(float3 rgb, float emissiveBoost) {
+    return RadioifySdr709ToOutput(rgb, outputColorSpace, sdrWhiteScale,
+                                  outputMaxNits, emissiveBoost);
 }
 
 uint atlasGlyphIndex(uint ch) {
@@ -119,8 +86,10 @@ float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
     uint2 atlasPixel =
         glyphCell * cellSize + glyphPixel;
     float coverage = glyphAtlasTex.Load(int3(atlasPixel, 0));
+    float3 fg = ConvertSdrToOutput(packedRgb(cell.g), 1.85);
     if ((cell.a & CELL_FLAG_TRANSPARENT_BG) != 0u) {
-        return float4(ConvertSdrToOutput(packedRgb(cell.g)), coverage);
+        return float4(fg, coverage);
     }
-    return float4(ConvertSdrToOutput(lerp(packedRgb(cell.b), packedRgb(cell.g), coverage)), 1.0);
+    float3 bg = ConvertSdrToOutput(packedRgb(cell.b), 1.0);
+    return float4(lerp(bg, fg, coverage), 1.0);
 }

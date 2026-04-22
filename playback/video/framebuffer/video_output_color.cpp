@@ -423,14 +423,21 @@ std::string VideoOutputColorAttemptStatus(
     const HdrGenerateDecision& decision,
     const VideoOutputColorState& selectedState,
     const char* stage) {
-    char buf[256];
+    const float diffuseWhiteNits =
+        std::max(203.0f, selectedState.sdrWhiteNits);
+    const float targetPeakNits =
+        std::max(diffuseWhiteNits + 1.0f,
+                 std::clamp(selectedState.maxOutputNits, 400.0f, 1200.0f));
+    char buf[320];
     std::snprintf(
         buf, sizeof(buf),
-        "policy=generate result=%s generating=%d selected=%s stage=%s reason=%s",
+        "policy=generate result=%s generating=%d selected=%s stage=%s diffuse=%.0f peak=%.0f reason=%s",
         HdrGenerateResultName(decision.result),
         decision.generatingHdr && VideoOutputUsesHdr(selectedState) ? 1 : 0,
         VideoOutputColorEncodingName(selectedState.encoding),
         stage ? stage : "unknown",
+        diffuseWhiteNits,
+        targetPeakNits,
         decision.reason.empty() ? "unspecified" : decision.reason.c_str());
     return std::string(buf);
 }
