@@ -565,6 +565,7 @@ struct VideoDecoder::Impl {
     out.width = outWidth;
     out.height = outHeight;
     out.timestamp100ns = ts100ns;
+    out.duration100ns = frameDuration100ns;
     out.fullRange = fullRange;
     out.yuvMatrix = frameMatrix;
     out.yuvTransfer = frameTransfer;

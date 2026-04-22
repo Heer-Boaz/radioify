@@ -14,7 +14,8 @@ function Resolve-TrailingSwitchOverrides {
     "TimingLog",
     "StagingUpload",
     "VideoErrorLog",
-    "FfmpegErrorLog"
+    "FfmpegErrorLog",
+    "DisableNvidiaRtxVideo"
   )
 
   $overrides = [ordered]@{}
@@ -64,9 +65,11 @@ function New-InitialBuildOptions {
     [bool]$TimingLog,
     [bool]$StagingUpload,
     [bool]$VideoErrorLog,
-    [bool]$FfmpegErrorLog
+    [bool]$FfmpegErrorLog,
+    [bool]$DisableNvidiaRtxVideo
   )
 
+  $nvidiaRtxVideo = -not $DisableNvidiaRtxVideo
   return [ordered]@{
     Config = $Config
     Clean = $Clean
@@ -84,6 +87,8 @@ function New-InitialBuildOptions {
     StagingUpload = $StagingUpload
     VideoErrorLog = $VideoErrorLog
     FfmpegErrorLog = $FfmpegErrorLog
+    DisableNvidiaRtxVideo = $DisableNvidiaRtxVideo
+    NvidiaRtxVideo = $nvidiaRtxVideo
   }
 }
 
@@ -103,6 +108,7 @@ function New-BuildContext {
   foreach ($entry in $overrides.GetEnumerator()) {
     $optionsData[$entry.Key] = $entry.Value
   }
+  $optionsData["NvidiaRtxVideo"] = -not [bool]$optionsData["DisableNvidiaRtxVideo"]
 
   return [pscustomobject]@{
     Options = [pscustomobject]$optionsData
@@ -122,6 +128,7 @@ function New-BuildContext {
       InstalledRoot = $null
       ConfigureInfo = $null
       FfmpegTripletDir = $null
+      NvidiaRtxVideoSdkRoot = $null
     }
   }
 }

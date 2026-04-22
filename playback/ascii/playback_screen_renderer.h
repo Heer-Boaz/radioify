@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "asciiart.h"
 #include "asciiart_gpu.h"
@@ -36,6 +37,7 @@ struct PlaybackScreenRenderInputs {
   const Color* progressStart = nullptr;
   const Color* progressEnd = nullptr;
   bool debugOverlay = false;
+  std::vector<std::string> debugLines;
   PlaybackRenderMode currentMode = PlaybackRenderMode::Other;
   PlaybackSessionState playbackState = PlaybackSessionState::Active;
   bool enableAudio = false;

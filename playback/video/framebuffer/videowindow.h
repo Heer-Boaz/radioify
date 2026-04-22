@@ -13,6 +13,7 @@
 #include "consoleinput.h"
 #include "gpu_text_grid.h"
 #include "videoprocessor.h"
+#include "video_output_color.h"
 #include "subtitle_font_attachments.h"
 #include <vector>
 #include <mutex>
@@ -88,9 +89,11 @@ struct WindowUiState {
     int volPct = 0; // volume percent for display
     std::string subtitle; // current subtitle cue text
     float subtitleAlpha = 0.0f; // subtitle opacity
+    std::vector<std::string> debugLines;
 };
 
 struct IDXGISwapChain2;
+struct ShaderConstants;
 
 class VideoWindow {
 public:
@@ -150,6 +153,8 @@ public:
     }
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
+    std::string OutputColorDebugLine() const;
+    bool OutputUsesHdr() const;
     // Get viewport geometry for mouse coordinate mapping (used for seeking in window mode)
     void GetViewportGeometry(float& outViewX, float& outViewY, float& outViewW, float& outViewH) const {
         outViewX = m_viewportX;
@@ -198,6 +203,11 @@ private:
     bool EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,
                                  int cellHeight, UINT dpi, int fontWeight);
     bool EnsureGpuTextGridConstants(ID3D11Device* device);
+    void FillOutputColorConstants(ShaderConstants& constants) const;
+    uint32_t OutputColorSpaceShaderValue() const;
+    float OutputSdrWhiteScale() const;
+    float OutputMaxNits() const;
+    void SetOutputColorAttemptStatus(const std::string& status);
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -210,6 +220,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D11BlendState> m_uiBlendState;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_constantBuffer;
+    VideoOutputColorState m_outputColorState;
+    std::string m_outputColorAttemptStatus;
     std::atomic<UINT> m_presentInterval{1};
     HANDLE m_frameLatencyWaitableObject = nullptr;
     std::mutex m_frameLatencyMutex;

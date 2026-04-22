@@ -63,6 +63,13 @@ struct PlayerDebugInfo {
   int64_t lastPresentedPtsUs = 0;
   int64_t lastPresentedDurationUs = 0;
   size_t videoQueueDepth = 0;
+  bool hasVideoFrame = false;
+  int videoFrameWidth = 0;
+  int videoFrameHeight = 0;
+  VideoPixelFormat videoFrameFormat = VideoPixelFormat::Unknown;
+  YuvMatrix videoFrameMatrix = YuvMatrix::Bt709;
+  YuvTransfer videoFrameTransfer = YuvTransfer::Sdr;
+  bool videoFrameFullRange = true;
   size_t audioBufferedFrames = 0;
   uint32_t audioSampleRate = 0;
 };

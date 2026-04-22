@@ -8,15 +8,14 @@ param(
   [switch]$ClangCl,
   [switch]$VerboseBuild,
   [switch]$InstallDeps,
-  [Alias("VCPKG_ROOT")]
   [string]$VcpkgRoot,
-  [Alias("SongAnalysis")]
   [switch]$MelodyAnalysis,
   [switch]$Win11ExplorerIntegration,
   [switch]$TimingLog,
   [switch]$StagingUpload,
   [switch]$VideoErrorLog,
-  [switch]$FfmpegErrorLog
+  [switch]$FfmpegErrorLog,
+  [switch]$DisableNvidiaRtxVideo
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +47,8 @@ try {
       -TimingLog ([bool]$TimingLog) `
       -StagingUpload ([bool]$StagingUpload) `
       -VideoErrorLog ([bool]$VideoErrorLog) `
-      -FfmpegErrorLog ([bool]$FfmpegErrorLog)) `
+      -FfmpegErrorLog ([bool]$FfmpegErrorLog) `
+      -DisableNvidiaRtxVideo ([bool]$DisableNvidiaRtxVideo)) `
     -RemainingArguments $args
 
   $buildExit = Invoke-RadioifyBuild -Context $context

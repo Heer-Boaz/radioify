@@ -33,9 +33,11 @@ radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_font_attachments.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_manager.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video_enhancement.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_enhancement_nvidia_d3d11.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video_frame_cache_update.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/videodecoder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/text_grid_bitmap_renderer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/video_output_color.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_gpu_textgrid.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_textgrid.cpp

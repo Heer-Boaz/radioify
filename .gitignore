@@ -95,6 +95,7 @@ packages/
 .vcpkg/
 .vcpkg_installed/
 __pycache__/
+third_party/nvidia/
 
 # CPack artifacts
 *.tar.gz

@@ -23,6 +23,10 @@ function New-CMakeConfigureInfo {
   $cmakeArgs += "-DRADIOIFY_ENABLE_MELODY_ANALYSIS=$([bool]$options.MelodyAnalysis)"
   $cmakeArgs += "-DRADIOIFY_ENABLE_NEURAL_PITCH=$([bool]$options.MelodyAnalysis)"
   $cmakeArgs += "-DRADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION=$([bool]$options.Win11ExplorerIntegration)"
+  $cmakeArgs += "-DRADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK=$([bool]$options.NvidiaRtxVideo)"
+  if ($Context.Build.NvidiaRtxVideoSdkRoot) {
+    $cmakeArgs += "-DRADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT=$(Convert-ToCMakePath $Context.Build.NvidiaRtxVideoSdkRoot)"
+  }
 
   $desiredManifestMode = "OFF"
 
@@ -164,6 +168,15 @@ function Ensure-BuildCacheCompatible {
   }
 }
 
+function Test-BuildArtifactPublishLock {
+  param([string]$ErrorMessage)
+
+  if (-not $ErrorMessage) {
+    return $false
+  }
+  return $ErrorMessage.IndexOf("being used by another process", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
 function Publish-BuildArtifacts {
   param([pscustomobject]$Context)
 
@@ -173,6 +186,14 @@ function Publish-BuildArtifacts {
   if (-not $Context.Options.Static -and -not $staticTriplet) {
     $ffmpegRuntimeArtifacts = Copy-FfmpegRuntime -TripletDir $Context.Build.FfmpegTripletDir -Config $Context.Options.Config -DistDir $Context.Paths.DistDir
     foreach ($artifact in $ffmpegRuntimeArtifacts) {
+      Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $artifact
+    }
+  }
+  if ($Context.Options.NvidiaRtxVideo) {
+    $nvidiaRuntimeArtifacts = Copy-NvidiaRtxVideoRuntime `
+      -SdkRoot $Context.Build.NvidiaRtxVideoSdkRoot `
+      -DistDir $Context.Paths.DistDir
+    foreach ($artifact in $nvidiaRuntimeArtifacts) {
       Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $artifact
     }
   }
@@ -200,8 +221,14 @@ function Publish-BuildArtifacts {
       }
     }
     else {
-      Write-Warning "Built executable could not be published to dist: $($publishResult.ErrorMessage)"
-      Write-Warning "Using build artifact directly: $builtExe"
+      if (Test-BuildArtifactPublishLock -ErrorMessage $publishResult.ErrorMessage) {
+        Write-Host "Dist publish skipped because the existing executable is in use: $($publishResult.ErrorMessage)"
+        Write-Host "Using build artifact directly: $builtExe"
+      }
+      else {
+        Write-Warning "Built executable could not be published to dist: $($publishResult.ErrorMessage)"
+        Write-Warning "Using build artifact directly: $builtExe"
+      }
     }
   }
 

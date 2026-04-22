@@ -132,6 +132,10 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     layoutSourceKind = "frame";
   }
   std::vector<std::string> debugLines;
+  if (debugOverlay) {
+    debugLines.insert(debugLines.end(), inputs.debugLines.begin(),
+                      inputs.debugLines.end());
+  }
   if (debugOverlay && currentMode == PlaybackRenderMode::AsciiTerminal) {
     char buf[512];
     const char* cellSource =

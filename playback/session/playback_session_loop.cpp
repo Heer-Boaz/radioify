@@ -227,7 +227,8 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool overlayVisible() const {
-    return playback_session_input::isOverlayVisible(inputSignals);
+    return config.debugOverlay ||
+           playback_session_input::isOverlayVisible(inputSignals);
   }
 
   WindowUiState buildWindowUiState() {
@@ -237,13 +238,14 @@ struct PlaybackLoopRunner::Impl {
         requestTransportCommand != nullptr, hasSubtitles,
         enableSubtitlesShared, *seekState.windowLocalSeekRequested,
         *seekState.windowPendingSeekTargetSec, overlayControlHover,
-        overlayVisible());
+        overlayVisible(), config.debugOverlay);
   }
 
   bool buildTextGridPresentation(int pixelWidth, int pixelHeight,
                                      int cellPixelWidth, int cellPixelHeight,
                                      const VideoFrame* frame,
                                      bool frameChanged,
+                                     const std::string& enhancementDebugLine,
                                      std::vector<ScreenCell>& outCells,
                                      int& outCols, int& outRows) {
     const int cols = playback_overlay::overlayCellCountForPixels(
@@ -279,6 +281,12 @@ struct PlaybackLoopRunner::Impl {
     inputs.cellPixelHeight = cellPixelHeight;
     inputs.cellPixelSourceLabel = "text-grid-presentation";
     inputs.allowAsciiCpuFallback = false;
+    if (config.debugOverlay) {
+      inputs.debugLines.push_back(output.window().OutputColorDebugLine());
+      if (!enhancementDebugLine.empty()) {
+        inputs.debugLines.push_back(enhancementDebugLine);
+      }
+    }
     inputs.frameOutputState = &textGridPresentationOutputState;
     core.updateRenderInputs(inputs);
     inputs.frameAvailable = textGridPresentationOutputState.haveFrame;
@@ -295,10 +303,11 @@ struct PlaybackLoopRunner::Impl {
     auto buildTextGridPresentation =
         [&](int pixelWidth, int pixelHeight, int cellPixelWidth,
             int cellPixelHeight, const VideoFrame* frame, bool frameChanged,
+            const std::string& enhancementDebugLine,
             std::vector<ScreenCell>& outCells, int& outCols, int& outRows) {
           return this->buildTextGridPresentation(
               pixelWidth, pixelHeight, cellPixelWidth, cellPixelHeight, frame,
-              frameChanged, outCells, outCols, outRows);
+              frameChanged, enhancementDebugLine, outCells, outCols, outRows);
         };
     auto overlayVisibleFn = [&]() { return overlayVisible(); };
     PlaybackPresenterSyncResult result =

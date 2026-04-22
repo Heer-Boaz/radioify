@@ -26,6 +26,7 @@ using TextGridPresentationProvider =
     std::function<bool(int pixelWidth, int pixelHeight, int cellPixelWidth,
                        int cellPixelHeight,
                        const VideoFrame* frame, bool frameChanged,
+                       const std::string& enhancementDebugLine,
                        std::vector<ScreenCell>& outCells,
                        int& outCols, int& outRows)>;
 
@@ -36,7 +37,8 @@ WindowUiState buildPlaybackFramebufferUiState(
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<bool>& windowLocalSeekRequested,
     std::atomic<double>& windowPendingSeekTargetSec,
-    std::atomic<int>& overlayControlHover, bool overlayVisibleNow);
+    std::atomic<int>& overlayControlHover, bool overlayVisibleNow,
+    bool debugOverlay);
 
 void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,

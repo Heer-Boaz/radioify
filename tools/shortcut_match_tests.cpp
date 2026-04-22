@@ -169,8 +169,15 @@ int main() {
                    enhancementResult.frameChanged &&
                    !enhancementResult.enhanced,
                "Video enhancement pipeline must pass frames through before an "
-               "SDK backend is configured");
-  ok &= expect(std::string(enhancementPipeline.backendName()) == "none",
+               "enhancement backend can process the frame");
+#if defined(_WIN32)
+  const std::string expectedEnhancementBackend =
+      "nvidia-d3d11-video-processor";
+#else
+  const std::string expectedEnhancementBackend = "none";
+#endif
+  ok &= expect(std::string(enhancementPipeline.backendName()) ==
+                   expectedEnhancementBackend,
                "Video enhancement pipeline must expose the active backend");
 
   enhancementRequest.consumer =

@@ -631,7 +631,13 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   OverlayCellLayoutInput input;
   input.width = width;
   input.height = height;
-  input.title = " " + ui.title;
+  for (const std::string& line : ui.debugLines) {
+    if (line.empty()) continue;
+    if (!input.title.empty()) input.title.push_back('\n');
+    input.title += line;
+  }
+  if (!input.title.empty()) input.title.push_back('\n');
+  input.title += " " + ui.title;
   input.suffix = ui.progressSuffix;
   input.controls.reserve(ui.controlButtons.size());
   for (size_t i = 0; i < ui.controlButtons.size(); ++i) {

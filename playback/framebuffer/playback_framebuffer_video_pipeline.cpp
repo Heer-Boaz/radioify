@@ -26,16 +26,25 @@ bool needsFrameProcessing(const FrameRequest& request) {
 }  // namespace
 
 FrameResult Pipeline::process(const FrameRequest& request) {
+  const bool targetChanged =
+      request.targetWidth != lastTargetWidth_ ||
+      request.targetHeight != lastTargetHeight_;
+  lastTargetWidth_ = request.targetWidth;
+  lastTargetHeight_ = request.targetHeight;
+
   playback_video_enhancement::VideoEnhancementRequest enhancementRequest;
   enhancementRequest.input = request.frame;
   enhancementRequest.consumer =
       enhancementConsumer(request.textGridPresentationActive);
+  enhancementRequest.targetWidth = request.targetWidth;
+  enhancementRequest.targetHeight = request.targetHeight;
   enhancementRequest.frameChanged = request.frameChanged;
-  enhancementRequest.forceRefresh = request.forceRefresh;
+  enhancementRequest.forceRefresh = request.forceRefresh || targetChanged;
+  enhancementRequest.targetHdrOutput = request.targetHdrOutput;
 
   ID3D11Device* device = nullptr;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-  if (needsFrameProcessing(request)) {
+  if (needsFrameProcessing(request) || (request.frame && targetChanged)) {
     device = getSharedGpuDevice();
     if (device) {
       device->GetImmediateContext(&context);
@@ -57,12 +66,16 @@ FrameResult Pipeline::process(const FrameRequest& request) {
   } else {
     enhancementResult = enhancement_.process(enhancementRequest);
   }
+  if (!enhancementResult.debugLine.empty()) {
+    lastDebugLine_ = enhancementResult.debugLine;
+  }
 
   FrameResult result;
   result.frame = enhancementResult.frame;
   result.frameAvailable = enhancementResult.frameAvailable;
   result.framebufferFrameChanged = framebufferFrameChanged;
   result.textGridFrameChanged = enhancementResult.frameChanged;
+  result.debugLine = lastDebugLine_;
   return result;
 }
 

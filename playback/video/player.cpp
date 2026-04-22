@@ -1335,6 +1335,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
   out.width = outW;
   out.height = outH;
   out.timestamp100ns = ts100ns;
+  out.duration100ns = duration100ns;
   out.fullRange = ctx->fullRange;
   out.yuvMatrix = frameMatrix;
   out.yuvTransfer = frameTransfer;
@@ -3438,6 +3439,18 @@ PlayerDebugInfo Player::debugInfo() const {
   info.pendingSeekSerial = impl_->serialControl.pendingSeekSerial();
   info.seekInFlightSerial = impl_->serialControl.seekInFlightSerial();
   info.videoQueueDepth = impl_->videoFrames.size();
+  {
+    std::lock_guard<std::mutex> lock(impl_->currentFrameMutex);
+    info.hasVideoFrame = impl_->hasFrame.load(std::memory_order_relaxed);
+    if (info.hasVideoFrame) {
+      info.videoFrameWidth = impl_->currentFrame.width;
+      info.videoFrameHeight = impl_->currentFrame.height;
+      info.videoFrameFormat = impl_->currentFrame.format;
+      info.videoFrameMatrix = impl_->currentFrame.yuvMatrix;
+      info.videoFrameTransfer = impl_->currentFrame.yuvTransfer;
+      info.videoFrameFullRange = impl_->currentFrame.fullRange;
+    }
+  }
   info.lastPresentedPtsUs =
       impl_->lastPresentedPtsUs.load(std::memory_order_relaxed);
   info.lastPresentedDurationUs =

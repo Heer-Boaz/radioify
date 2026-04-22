@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <utility>
 
@@ -18,6 +19,48 @@ namespace {
 constexpr auto kOverlayRefreshInterval = std::chrono::milliseconds(100);
 constexpr auto kTextGridPresentationRefreshInterval =
     std::chrono::milliseconds(250);
+
+const char* videoFrameFormatLabel(VideoPixelFormat format) {
+  switch (format) {
+    case VideoPixelFormat::RGB32:
+      return "RGB32";
+    case VideoPixelFormat::ARGB32:
+      return "ARGB32";
+    case VideoPixelFormat::NV12:
+      return "NV12";
+    case VideoPixelFormat::P010:
+      return "P010";
+    case VideoPixelFormat::HWTexture:
+      return "HWTexture";
+    case VideoPixelFormat::Unknown:
+    default:
+      return "unknown";
+  }
+}
+
+const char* yuvMatrixLabel(YuvMatrix matrix) {
+  switch (matrix) {
+    case YuvMatrix::Bt601:
+      return "BT601";
+    case YuvMatrix::Bt2020:
+      return "BT2020";
+    case YuvMatrix::Bt709:
+    default:
+      return "BT709";
+  }
+}
+
+const char* yuvTransferLabel(YuvTransfer transfer) {
+  switch (transfer) {
+    case YuvTransfer::Pq:
+      return "PQ";
+    case YuvTransfer::Hlg:
+      return "HLG";
+    case YuvTransfer::Sdr:
+    default:
+      return "SDR";
+  }
+}
 
 void waitForPresenterWake(HANDLE wakeEvent) {
   if (wakeEvent) {
@@ -58,7 +101,8 @@ WindowUiState buildPlaybackFramebufferUiState(
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<bool>& windowLocalSeekRequested,
     std::atomic<double>& windowPendingSeekTargetSec,
-    std::atomic<int>& overlayControlHover, bool overlayVisibleNow) {
+    std::atomic<int>& overlayControlHover, bool overlayVisibleNow,
+    bool debugOverlay) {
   int64_t clockUs = player.currentUs();
   double displaySec = 0.0;
   if (clockUs > 0) {
@@ -129,8 +173,24 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.progressBarWidth = 0;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
-  return playback_overlay::buildWindowUiState(
+  WindowUiState ui = playback_overlay::buildWindowUiState(
       overlayState, overlayControlHover.load(std::memory_order_relaxed));
+  if (debugOverlay) {
+    ui.debugLines.push_back(videoWindow.OutputColorDebugLine());
+
+    const PlayerDebugInfo debug = player.debugInfo();
+    char frameLine[256];
+    std::snprintf(frameLine, sizeof(frameLine),
+                  "DBG frame ok=%d %dx%d fmt=%s matrix=%s trc=%s full=%d",
+                  debug.hasVideoFrame ? 1 : 0, debug.videoFrameWidth,
+                  debug.videoFrameHeight,
+                  videoFrameFormatLabel(debug.videoFrameFormat),
+                  yuvMatrixLabel(debug.videoFrameMatrix),
+                  yuvTransferLabel(debug.videoFrameTransfer),
+                  debug.videoFrameFullRange ? 1 : 0);
+    ui.debugLines.emplace_back(frameLine);
+  }
+  return ui;
 }
 
 void runFramebufferPresenterLoop(
@@ -245,9 +305,12 @@ void runFramebufferPresenterLoop(
     videoFrameRequest.frame =
         frameResult.frameAvailable ? &frameRefresh.frame : nullptr;
     videoFrameRequest.frameCache = &frameCache;
+    videoFrameRequest.targetWidth = videoWindow.GetWidth();
+    videoFrameRequest.targetHeight = videoWindow.GetHeight();
     videoFrameRequest.frameChanged = frameResult.frameChanged;
     videoFrameRequest.forceRefresh = forcePresentNow;
     videoFrameRequest.textGridPresentationActive = textGridPresentationActive;
+    videoFrameRequest.targetHdrOutput = videoWindow.OutputUsesHdr();
     playback_framebuffer_video_pipeline::FrameResult videoFrameResult =
         videoPipeline.process(videoFrameRequest);
 
@@ -284,6 +347,7 @@ void runFramebufferPresenterLoop(
             buildTextGridPresentation(windowWidth, windowHeight, cellWidth,
                                           cellHeight, textFrame,
                                           textFrameChanged,
+                                          videoFrameResult.debugLine,
                                           textGridPresentationCells, textCols,
                                           textRows)) {
           buildGpuTextGridFrameFromScreenCells(
@@ -303,6 +367,9 @@ void runFramebufferPresenterLoop(
         std::chrono::steady_clock::time_point::min();
 
     WindowUiState ui = buildUiState();
+    if (!ui.debugLines.empty() && !videoFrameResult.debugLine.empty()) {
+      ui.debugLines.push_back(videoFrameResult.debugLine);
+    }
     bool overlayVisibleNow = ui.overlayAlpha > 0.01f;
     bool overlayStateChanged = overlayVisibleNow != lastWindowOverlayVisible ||
                                seekingNow != lastWindowSeeking;

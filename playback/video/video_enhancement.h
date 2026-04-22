@@ -2,6 +2,9 @@
 
 #include "videodecoder.h"
 
+#include <memory>
+#include <string>
+
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 
@@ -14,6 +17,7 @@ enum class VideoEnhancementConsumer {
 
 enum class VideoEnhancementBackend {
   None,
+  NvidiaD3D11VideoProcessor,
 };
 
 struct VideoEnhancementRequest {
@@ -21,8 +25,11 @@ struct VideoEnhancementRequest {
   VideoEnhancementConsumer consumer = VideoEnhancementConsumer::FramebufferVideo;
   ID3D11Device* device = nullptr;
   ID3D11DeviceContext* context = nullptr;
+  int targetWidth = 0;
+  int targetHeight = 0;
   bool frameChanged = false;
   bool forceRefresh = false;
+  bool targetHdrOutput = false;
 };
 
 struct VideoEnhancementResult {
@@ -31,12 +38,21 @@ struct VideoEnhancementResult {
   bool frameChanged = false;
   bool enhanced = false;
   VideoEnhancementBackend backend = VideoEnhancementBackend::None;
+  std::string debugLine;
 };
+
+class VideoEnhancementBackendState;
 
 class VideoEnhancementPipeline {
  public:
+  VideoEnhancementPipeline();
+  ~VideoEnhancementPipeline();
+
   VideoEnhancementResult process(const VideoEnhancementRequest& request);
   const char* backendName() const;
+
+ private:
+  std::unique_ptr<VideoEnhancementBackendState> backend_;
 };
 
 }  // namespace playback_video_enhancement

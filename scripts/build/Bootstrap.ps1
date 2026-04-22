@@ -17,6 +17,7 @@ function Get-BuildModuleManifest {
     "deps/VcpkgConfig.ps1",
     "deps/VcpkgInstall.ps1",
     "features/OnnxFeature.ps1",
+    "features/NvidiaRtxVideoFeature.ps1",
     "features/FfmpegFeature.ps1",
     "cmake/CMake.ps1",
     "phases/CleanPhase.ps1",

@@ -31,6 +31,7 @@ struct VideoFrame {
   int width = 0;
   int height = 0;
   int64_t timestamp100ns = 0;
+  int64_t duration100ns = 0;
   VideoPixelFormat format = VideoPixelFormat::Unknown;
   int rotationQuarterTurns = 0;
   int stride = 0;

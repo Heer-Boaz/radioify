@@ -37,6 +37,8 @@ function Initialize-BuildDependencies {
 
   Apply-BuildDependencyState -Context $Context -DependencyState $dependencyState
 
+  Configure-NvidiaRtxVideoBuild -Context $Context
+
   if ($Context.Options.InstallDeps) {
     Invoke-VcpkgInstall -Context $Context
   }

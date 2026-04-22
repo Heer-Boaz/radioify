@@ -118,8 +118,11 @@ option(RADIOIFY_ENABLE_FFMPEG_ERROR_LOG "Enable ffmpeg error log output" OFF)
 option(RADIOIFY_ENABLE_STAGING_UPLOAD "Enable staging-based texture uploads to avoid implicit GPU sync" OFF)
 option(RADIOIFY_ENABLE_MELODY_ANALYSIS "Enable offline melody analysis (ONNX backend)" OFF)
 option(RADIOIFY_ENABLE_NEURAL_PITCH "Deprecated alias for RADIOIFY_ENABLE_MELODY_ANALYSIS" OFF)
+option(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK "Enable NVIDIA RTX Video SDK/NGX integration" ON)
 option(RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION "Build the Windows 11 Explorer integration scaffold" OFF)
 option(RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL "Download neural pitch model automatically when missing" ON)
+set(RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT "" CACHE PATH
+    "NVIDIA RTX Video SDK/NGX root containing include/ and lib/x64/")
 if (WIN32)
   set(RADIOIFY_WIN11_EXPLORER_PACKAGE_NAME "Radioify.Win11Explorer")
   set(RADIOIFY_WIN11_EXPLORER_PACKAGE_PUBLISHER "CN=Radioify-Development")
@@ -180,11 +183,81 @@ add_library(radioify_external_options INTERFACE)
 target_include_directories(radioify_external_options SYSTEM INTERFACE
   ${CMAKE_SOURCE_DIR}/third_party
 )
+
+set(RADIOIFY_HAS_NVIDIA_RTX_VIDEO_SDK OFF)
+if (RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK)
+  set(_radioify_nvidia_rtx_video_sdk_hints "")
+  if (RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT)
+    list(APPEND _radioify_nvidia_rtx_video_sdk_hints
+         "${RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT}")
+  endif()
+  foreach(_radioify_nvidia_rtx_video_sdk_env IN ITEMS
+      RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT
+      NVIDIA_RTX_VIDEO_SDK_ROOT
+      RTX_VIDEO_SDK_ROOT
+      NGX_SDK_ROOT
+      NGX_SDK_DIR)
+    if (DEFINED ENV{${_radioify_nvidia_rtx_video_sdk_env}})
+      list(APPEND _radioify_nvidia_rtx_video_sdk_hints
+           "$ENV{${_radioify_nvidia_rtx_video_sdk_env}}")
+    endif()
+  endforeach()
+  list(APPEND _radioify_nvidia_rtx_video_sdk_hints
+       "C:/ProgramData/NVIDIA Corporation/NGX SDK"
+       "C:/Program Files/NVIDIA Corporation/RTX Video SDK"
+       "C:/Program Files/NVIDIA Corporation/NGX SDK"
+       "C:/Program Files (x86)/NVIDIA Corporation/NGX SDK")
+
+  set(_radioify_nvidia_rtx_video_sdk_include_hints "")
+  set(_radioify_nvidia_rtx_video_sdk_lib_hints "")
+  foreach(_radioify_nvidia_rtx_video_sdk_hint IN LISTS _radioify_nvidia_rtx_video_sdk_hints)
+    list(APPEND _radioify_nvidia_rtx_video_sdk_include_hints
+         "${_radioify_nvidia_rtx_video_sdk_hint}/include")
+    list(APPEND _radioify_nvidia_rtx_video_sdk_lib_hints
+         "${_radioify_nvidia_rtx_video_sdk_hint}/lib/x64")
+  endforeach()
+
+  find_path(RADIOIFY_NVIDIA_RTX_VIDEO_SDK_INCLUDE_DIR
+            NAMES nvsdk_ngx.h
+            PATHS ${_radioify_nvidia_rtx_video_sdk_include_hints}
+            NO_DEFAULT_PATH)
+  find_file(RADIOIFY_NVIDIA_RTX_VIDEO_SDK_DEFS_HEADER
+            NAMES nvsdk_ngx_defs.h
+            PATHS ${_radioify_nvidia_rtx_video_sdk_include_hints}
+            NO_DEFAULT_PATH)
+  find_library(RADIOIFY_NVIDIA_RTX_VIDEO_SDK_LIBRARY
+               NAMES nvsdk_ngx_s nvsdk_ngx_d
+               PATHS ${_radioify_nvidia_rtx_video_sdk_lib_hints}
+               NO_DEFAULT_PATH)
+
+  if (RADIOIFY_NVIDIA_RTX_VIDEO_SDK_INCLUDE_DIR AND
+      RADIOIFY_NVIDIA_RTX_VIDEO_SDK_DEFS_HEADER AND
+      RADIOIFY_NVIDIA_RTX_VIDEO_SDK_LIBRARY)
+    set(RADIOIFY_HAS_NVIDIA_RTX_VIDEO_SDK ON)
+    get_filename_component(RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT_RESOLVED
+      "${RADIOIFY_NVIDIA_RTX_VIDEO_SDK_INCLUDE_DIR}/.." ABSOLUTE)
+    radioify_add_external_include_dirs(
+      "${RADIOIFY_NVIDIA_RTX_VIDEO_SDK_INCLUDE_DIR}")
+    target_link_libraries(radioify_project_options INTERFACE
+      "${RADIOIFY_NVIDIA_RTX_VIDEO_SDK_LIBRARY}")
+    message(STATUS
+      "NVIDIA RTX Video SDK found: ${RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT_RESOLVED}")
+  else()
+    message(FATAL_ERROR
+      "RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK=ON, but NVIDIA RTX Video SDK/NGX was not found. "
+      "Run .\\build.ps1 -Static -InstallDeps after downloading the SDK from "
+      "https://developer.nvidia.com/rtx-video-sdk, set RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT, "
+      "or configure with RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK=OFF.")
+  endif()
+endif()
+
 target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_ENABLE_TIMING_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_TIMING_LOG}>,1,0>
   RADIOIFY_ENABLE_VIDEO_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_VIDEO_ERROR_LOG}>,1,0>
   RADIOIFY_ENABLE_FFMPEG_ERROR_LOG=$<IF:$<BOOL:${RADIOIFY_ENABLE_FFMPEG_ERROR_LOG}>,1,0>
   RADIOIFY_ENABLE_STAGING_UPLOAD=$<IF:$<BOOL:${RADIOIFY_ENABLE_STAGING_UPLOAD}>,1,0>
+  RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK=$<IF:$<BOOL:${RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK}>,1,0>
+  RADIOIFY_HAS_NVIDIA_RTX_VIDEO_SDK=$<IF:$<BOOL:${RADIOIFY_HAS_NVIDIA_RTX_VIDEO_SDK}>,1,0>
 )
 if (MSVC)
   target_compile_options(radioify_project_options INTERFACE
@@ -260,8 +333,12 @@ target_sources(shortcut_match_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/playback_state_machine.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/playback_sync.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/video_enhancement.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/video_enhancement_nvidia_d3d11.cpp
 )
 radioify_link_repo_target(shortcut_match_tests)
+if (WIN32)
+  target_link_libraries(shortcut_match_tests PRIVATE d3d11)
+endif()
 
 if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL
@@ -1070,7 +1147,18 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/ShiftMediaProject/Game-Music-Emu.git
   GIT_TAG 59e82746f6ff83df184554d17c7536e0ea609385
 )
+set(_radioify_gme_policy_default_cmp0074_defined OFF)
+if (DEFINED CMAKE_POLICY_DEFAULT_CMP0074)
+  set(_radioify_gme_policy_default_cmp0074_defined ON)
+  set(_radioify_gme_policy_default_cmp0074_value "${CMAKE_POLICY_DEFAULT_CMP0074}")
+endif()
+set(CMAKE_POLICY_DEFAULT_CMP0074 NEW)
 FetchContent_MakeAvailable(gme)
+if (_radioify_gme_policy_default_cmp0074_defined)
+  set(CMAKE_POLICY_DEFAULT_CMP0074 "${_radioify_gme_policy_default_cmp0074_value}")
+else()
+  unset(CMAKE_POLICY_DEFAULT_CMP0074)
+endif()
 foreach(_radioify_gme_target IN ITEMS gme gme_player demo demo_mem)
   if (TARGET ${_radioify_gme_target})
     radioify_configure_external_target(${_radioify_gme_target})

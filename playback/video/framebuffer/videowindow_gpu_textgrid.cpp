@@ -15,15 +15,20 @@ constexpr int kGlyphAtlasCols = 16;
 constexpr int kGlyphAtlasRows = 24;
 constexpr int kBlockGlyphAtlasStart = 111;
 constexpr int kBrailleGlyphAtlasStart = 119;
+constexpr float kDefaultOutputMaxNits = 80.0f;
 
 struct GpuTextGridConstants {
     uint32_t glyphCellWidth = 1;
     uint32_t glyphCellHeight = 1;
     uint32_t glyphAtlasCols = kGlyphAtlasCols;
-    uint32_t pad = 0;
+    uint32_t outputColorSpace = 0;
+    float sdrWhiteScale = 1.0f;
+    float outputMaxNits = kDefaultOutputMaxNits;
+    uint32_t pad0 = 0;
+    uint32_t pad1 = 0;
 };
 
-static_assert(sizeof(GpuTextGridConstants) == 16,
+static_assert(sizeof(GpuTextGridConstants) == 32,
               "GPU text grid constants must be 16-byte aligned");
 
 RadioifyTerminalFontMetrics measureTerminalFontMetrics(UINT dpi) {
@@ -332,6 +337,9 @@ bool VideoWindow::DrawGpuTextGridFrame(ID3D11Device* device,
         constants.glyphCellWidth = static_cast<uint32_t>(cellWidth);
         constants.glyphCellHeight = static_cast<uint32_t>(cellHeight);
         constants.glyphAtlasCols = kGlyphAtlasCols;
+        constants.outputColorSpace = OutputColorSpaceShaderValue();
+        constants.sdrWhiteScale = OutputSdrWhiteScale();
+        constants.outputMaxNits = OutputMaxNits();
         std::memcpy(mappedConstants.pData, &constants, sizeof(constants));
         context->Unmap(m_gpuTextGridConstants.Get(), 0);
     }

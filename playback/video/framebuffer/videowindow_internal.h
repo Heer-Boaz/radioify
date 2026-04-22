@@ -26,9 +26,9 @@ struct ShaderConstants {
     float subtitleLeft;
     float subtitleWidth;
     float subtitleAlpha;
-    float pad3;
-    float pad4;
-    float pad5;
+    uint32_t outputColorSpace;
+    float sdrWhiteScale;
+    float outputMaxNits;
     float pad6;
     float pad7;
 };

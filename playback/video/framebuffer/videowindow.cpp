@@ -4,7 +4,7 @@
 #include "videowindow_internal.h"
 #include "videowindow_present.h"
 #include <d3d11_1.h>
-#include <dxgi1_3.h>
+#include <dxgi1_6.h>
 #include <windowsx.h>
 #include <algorithm>
 #include <cstddef>
@@ -986,6 +986,41 @@ VideoWindow::~VideoWindow() {
         CloseHandle(m_closeRequestedEvent);
         m_closeRequestedEvent = nullptr;
     }
+}
+
+uint32_t VideoWindow::OutputColorSpaceShaderValue() const {
+    return static_cast<uint32_t>(m_outputColorState.encoding);
+}
+
+float VideoWindow::OutputSdrWhiteScale() const {
+    return VideoOutputSdrWhiteScale(m_outputColorState);
+}
+
+float VideoWindow::OutputMaxNits() const {
+    return m_outputColorState.maxOutputNits > 0.0f
+               ? m_outputColorState.maxOutputNits
+               : m_outputColorState.sdrWhiteNits;
+}
+
+void VideoWindow::FillOutputColorConstants(ShaderConstants& constants) const {
+    constants.outputColorSpace = OutputColorSpaceShaderValue();
+    constants.sdrWhiteScale = OutputSdrWhiteScale();
+    constants.outputMaxNits = OutputMaxNits();
+}
+
+void VideoWindow::SetOutputColorAttemptStatus(const std::string& status) {
+    m_outputColorAttemptStatus = status;
+}
+
+std::string VideoWindow::OutputColorDebugLine() const {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    return VideoOutputColorStateDebugLine(m_outputColorState,
+                                          m_outputColorAttemptStatus);
+}
+
+bool VideoWindow::OutputUsesHdr() const {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    return VideoOutputUsesHdr(m_outputColorState);
 }
 
 void VideoWindow::SetCursorVisible(bool visible) {
@@ -2063,6 +2098,7 @@ void VideoWindow::ResetSwapChain() {
             m_frameLatencyWaitableObject = nullptr;
         }
     }
+    m_renderTargetView.Reset();
     m_swapChain2.Reset();
     m_swapChain.Reset();
 }
@@ -2089,32 +2125,63 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
 
     Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory2;
     HRESULT factoryHr = dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory2));
-    if (SUCCEEDED(factoryHr) && dxgiFactory2) {
-        DXGI_SWAP_CHAIN_DESC1 scd1 = {};
-        scd1.Width = static_cast<UINT>(width);
-        scd1.Height = static_cast<UINT>(height);
-        scd1.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        scd1.SampleDesc.Count = 1;
-        scd1.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        scd1.BufferCount = 2;
-        scd1.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        scd1.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-        scd1.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    VideoOutputColorState desiredColorState =
+        ChooseVideoOutputColorState(m_hWnd, dxgiAdapter.Get());
+    SetOutputColorAttemptStatus({});
+    std::vector<VideoOutputColorState> colorAttempts;
+    colorAttempts.push_back(desiredColorState);
+    if (desiredColorState.encoding == VideoOutputColorEncoding::Hdr10) {
+        colorAttempts.push_back(VideoOutputScRgbFallbackState(desiredColorState));
+    }
+    if (VideoOutputUsesHdr(desiredColorState)) {
+        colorAttempts.push_back(VideoOutputColorState{});
+    }
+    for (const VideoOutputColorState& colorState : colorAttempts) {
 
-        Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
-        HRESULT hr = dxgiFactory2->CreateSwapChainForHwnd(
-            device, m_hWnd, &scd1, nullptr, nullptr, &swapChain1);
-        if (SUCCEEDED(hr)) {
-            m_swapChain = swapChain1;
-            swapChain1.As(&m_swapChain2);
-            if (m_swapChain2) {
-                m_swapChain2->SetMaximumFrameLatency(1);
-                std::lock_guard<std::mutex> latencyLock(m_frameLatencyMutex);
-                m_frameLatencyWaitableObject =
-                    m_swapChain2->GetFrameLatencyWaitableObject();
+        if (SUCCEEDED(factoryHr) && dxgiFactory2) {
+            DXGI_SWAP_CHAIN_DESC1 scd1 = {};
+            scd1.Width = static_cast<UINT>(width);
+            scd1.Height = static_cast<UINT>(height);
+            scd1.Format = colorState.swapChainFormat;
+            scd1.SampleDesc.Count = 1;
+            scd1.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            scd1.BufferCount = 2;
+            scd1.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+            scd1.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+            scd1.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+
+            Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
+            HRESULT hr = dxgiFactory2->CreateSwapChainForHwnd(
+                device, m_hWnd, &scd1, nullptr, nullptr, &swapChain1);
+            if (SUCCEEDED(hr)) {
+                m_swapChain = swapChain1;
+                if (!ApplyVideoOutputColorSpace(m_swapChain.Get(), colorState)) {
+                    SetOutputColorAttemptStatus(
+                        std::string("failed=set_") +
+                        VideoOutputColorEncodingName(colorState.encoding));
+                    ResetSwapChain();
+                    continue;
+                }
+                m_outputColorState = colorState;
+                SetOutputColorAttemptStatus(
+                    std::string("active=") +
+                    VideoOutputColorEncodingName(m_outputColorState.encoding));
+                swapChain1.As(&m_swapChain2);
+                if (m_swapChain2) {
+                    m_swapChain2->SetMaximumFrameLatency(1);
+                    std::lock_guard<std::mutex> latencyLock(m_frameLatencyMutex);
+                    m_frameLatencyWaitableObject =
+                        m_swapChain2->GetFrameLatencyWaitableObject();
+                }
+                Resize(width, height);
+                return true;
+            } else {
+                char status[96];
+                std::snprintf(status, sizeof(status), "failed=create_%s:0x%08X",
+                              VideoOutputColorEncodingName(colorState.encoding),
+                              static_cast<unsigned int>(hr));
+                SetOutputColorAttemptStatus(status);
             }
-            Resize(width, height);
-            return true;
         }
     }
 
@@ -2126,7 +2193,12 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
 
     DXGI_SWAP_CHAIN_DESC scd = {};
     scd.BufferCount = 2;
-    scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    m_outputColorState = desiredColorState;
+    m_outputColorState.swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    m_outputColorState.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    m_outputColorState.encoding = VideoOutputColorEncoding::Sdr;
+    SetOutputColorAttemptStatus("active=legacy_sdr");
+    scd.BufferDesc.Format = m_outputColorState.swapChainFormat;
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     scd.OutputWindow = m_hWnd;
     scd.SampleDesc.Count = 1;
@@ -2145,6 +2217,7 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
     }
 
     m_swapChain.As(&m_swapChain2);
+    (void)ApplyVideoOutputColorSpace(m_swapChain.Get(), m_outputColorState);
     if (m_swapChain2) {
         m_swapChain2->SetMaximumFrameLatency(1);
         std::lock_guard<std::mutex> latencyLock(m_frameLatencyMutex);
@@ -2164,8 +2237,12 @@ void VideoWindow::Resize(int width, int height) {
     if (m_swapChain2) {
         flags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
     }
-    HRESULT hr = m_swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, flags);
+    HRESULT hr = m_swapChain->ResizeBuffers(
+        0, width, height, m_outputColorState.swapChainFormat, flags);
     if (FAILED(hr)) return;
+    if (!ApplyVideoOutputColorSpace(m_swapChain.Get(), m_outputColorState)) {
+        return;
+    }
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
     hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
@@ -2355,6 +2432,7 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
             sc.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
             sc.rotationQuarterTurns =
                 (uint32_t)(frameCache.GetRotationQuarterTurns() & 3);
+            FillOutputColorConstants(sc);
             std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }
@@ -2434,7 +2512,7 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 }
 
 void VideoWindow::DrawOverlay(const WindowUiState& ui) {
-    bool showOverlay = ui.overlayAlpha > 0.01f;
+    bool showOverlay = ui.overlayAlpha > 0.01f || !ui.debugLines.empty();
     const bool hasAssScript =
         static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
     const bool hasPlaintextSubtitleCues = std::any_of(
@@ -2811,6 +2889,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             sc.subtitleWidth = subtitleWidthNorm;
             sc.subtitleAlpha =
                 showSubtitle ? std::clamp(ui.subtitleAlpha, 0.0f, 1.0f) : 0.0f;
+            FillOutputColorConstants(sc);
             std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }
@@ -2901,6 +2980,7 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
             sc.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
             sc.rotationQuarterTurns =
                 (uint32_t)(frameCache.GetRotationQuarterTurns() & 3);
+            FillOutputColorConstants(sc);
             std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }
