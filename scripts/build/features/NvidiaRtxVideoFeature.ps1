@@ -159,14 +159,14 @@ function Assert-NvidiaRtxVideoSdkAvailable {
   }
 
   Fail-Build @"
-NVIDIA RTX Video SDK/NGX is enabled by default, but the SDK was not found.
+NVIDIA RTX Video SDK/NGX was explicitly enabled, but the SDK was not found.
 
 Official route:
   1) Download the RTX Video SDK from:
      https://developer.nvidia.com/rtx-video-sdk
   2) Either install it normally, or rerun -InstallDeps with a downloaded SDK zip:
      `$env:RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ARCHIVE="C:\path\to\RTX-Video-SDK.zip"
-     .\build.ps1 -Static -InstallDeps
+     .\build.ps1 -Static -EnableNvidiaRtxVideoSdk -InstallDeps
 
 Alternative:
   Set RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT to the SDK root containing:
@@ -174,8 +174,8 @@ Alternative:
     include\nvsdk_ngx_defs.h
     lib\x64\nvsdk_ngx_s.lib or nvsdk_ngx_d.lib
 
-To build without RTX Video:
-  .\build.ps1 -Static -DisableNvidiaRtxVideo
+The SDK path is off by default. To enable it:
+  .\build.ps1 -Static -EnableNvidiaRtxVideoSdk
 "@
 }
 
@@ -201,10 +201,10 @@ function Install-NvidiaRtxVideoSdkDependency {
   Assert-NvidiaRtxVideoSdkAvailable -Context $Context
 }
 
-function Configure-NvidiaRtxVideoBuild {
+function Configure-NvidiaRtxVideoSdkBuild {
   param([pscustomobject]$Context)
 
-  if (-not $Context.Options.NvidiaRtxVideo) {
+  if (-not $Context.Options.NvidiaRtxVideoSdk) {
     return
   }
 

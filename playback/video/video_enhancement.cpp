@@ -39,7 +39,12 @@ const char* hdrIntentLabel(const VideoEnhancementRequest& request) {
   if (request.input->yuvTransfer != YuvTransfer::Sdr) {
     return "source_hdr";
   }
-  return "sdr_to_hdr_missing";
+#if defined(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK) && \
+    RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK
+  return "sdr_to_truehdr";
+#else
+  return "sdr_to_hdr_output";
+#endif
 }
 
 VideoEnhancementResult passthroughResult(
@@ -66,7 +71,8 @@ VideoEnhancementResult passthroughResult(
 }
 
 std::unique_ptr<VideoEnhancementBackendState> createBackend() {
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO) && \
+    RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO
   return createNvidiaD3D11VideoProcessorBackend();
 #else
   return nullptr;

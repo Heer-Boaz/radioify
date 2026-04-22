@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <d3d11.h>
 #include <d3d11_4.h>
@@ -106,6 +106,7 @@ private:
     int m_width = 0;
     int m_height = 0;
     int m_rotationQuarterTurns = 0;
+    DXGI_FORMAT m_rgbaFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     bool m_fullRange = false;
     YuvMatrix m_matrix = YuvMatrix::Bt709;
     YuvTransfer m_transfer = YuvTransfer::Sdr;
@@ -123,5 +124,6 @@ private:
     bool IsBufferReady(ID3D11DeviceContext* context, int index);
     int AcquireWriteIndex(ID3D11DeviceContext* context);
     bool EnsureNV12(ID3D11Device* device, int width, int height, int bitDepth);
-    bool EnsureRGBA(ID3D11Device* device, int width, int height);
+    bool EnsureRGBA(ID3D11Device* device, int width, int height,
+                    DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM);
 };

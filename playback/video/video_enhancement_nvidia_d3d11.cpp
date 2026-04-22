@@ -1,6 +1,7 @@
 #include "video_enhancement_backend.h"
 
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO) && \
+    RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -23,11 +24,32 @@ constexpr GUID kNvidiaPpeInterfaceGuid = {
     0x1f4b,
     0x48ac,
     {0xba, 0xee, 0xc3, 0xc2, 0x53, 0x75, 0xe6, 0xf7}};
+constexpr GUID kNvidiaTrueHdrInterfaceGuid = {
+    0xfdd62bb4,
+    0x620b,
+    0x4fd7,
+    {0x9a, 0xb3, 0x1e, 0x59, 0xd0, 0xd5, 0x44, 0xb3}};
+constexpr UINT kNvidiaPpeVersion = 1;
+constexpr UINT kNvidiaPpeMethod = 2;
+constexpr UINT kNvidiaTrueHdrVersion = 4;
+constexpr UINT kNvidiaTrueHdrMethod = 3;
 constexpr int64_t kFrameTimestampUnitsPerSecond = 10000000;
 
 struct TargetSize {
   int width = 0;
   int height = 0;
+};
+
+enum class ProcessingMode {
+  Upscale,
+  TrueHdr,
+};
+
+struct NvidiaStreamExtension {
+  UINT version;
+  UINT method;
+  UINT enable : 1;
+  UINT reserved : 31;
 };
 
 int floorEven(int value) {
@@ -68,16 +90,64 @@ bool isVideoProcessorTextureFormat(DXGI_FORMAT format) {
   return format == DXGI_FORMAT_NV12 || format == DXGI_FORMAT_P010;
 }
 
-bool supportsVideoProcessorInputOutput(ID3D11Device* device,
-                                       DXGI_FORMAT format) {
+bool supportsVideoProcessorInput(ID3D11Device* device, DXGI_FORMAT format) {
   UINT support = 0;
   if (FAILED(device->CheckFormatSupport(format, &support))) {
     return false;
   }
-  constexpr UINT requiredSupport =
-      D3D11_FORMAT_SUPPORT_VIDEO_PROCESSOR_INPUT |
-      D3D11_FORMAT_SUPPORT_VIDEO_PROCESSOR_OUTPUT;
-  return (support & requiredSupport) == requiredSupport;
+  return (support & D3D11_FORMAT_SUPPORT_VIDEO_PROCESSOR_INPUT) != 0;
+}
+
+bool supportsVideoProcessorOutput(ID3D11Device* device, DXGI_FORMAT format) {
+  UINT support = 0;
+  if (FAILED(device->CheckFormatSupport(format, &support))) {
+    return false;
+  }
+  return (support & D3D11_FORMAT_SUPPORT_VIDEO_PROCESSOR_OUTPUT) != 0;
+}
+
+TargetSize passthroughTarget(int inputWidth, int inputHeight) {
+  if (inputWidth <= 0 || inputHeight <= 0) {
+    return {};
+  }
+  return {inputWidth, inputHeight};
+}
+
+DXGI_FORMAT outputFormatForMode(ProcessingMode mode, DXGI_FORMAT inputFormat) {
+  if (mode == ProcessingMode::TrueHdr) {
+    return DXGI_FORMAT_R10G10B10A2_UNORM;
+  }
+  return inputFormat;
+}
+
+const GUID& extensionGuidForMode(ProcessingMode mode) {
+  if (mode == ProcessingMode::TrueHdr) {
+    return kNvidiaTrueHdrInterfaceGuid;
+  }
+  return kNvidiaPpeInterfaceGuid;
+}
+
+NvidiaStreamExtension streamExtensionForMode(ProcessingMode mode) {
+  if (mode == ProcessingMode::TrueHdr) {
+    return {kNvidiaTrueHdrVersion, kNvidiaTrueHdrMethod, 1u, 0u};
+  }
+  return {kNvidiaPpeVersion, kNvidiaPpeMethod, 1u, 0u};
+}
+
+const char* reasonForMode(ProcessingMode mode) {
+  if (mode == ProcessingMode::TrueHdr) {
+    return "truehdr";
+  }
+  return "upscaled";
+}
+
+bool trueHdrEnhancementEnabled() {
+#if defined(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK) && \
+    RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK
+  return true;
+#else
+  return false;
+#endif
 }
 
 DXGI_RATIONAL frameRateForFrame(const VideoFrame& frame) {
@@ -141,24 +211,44 @@ class NvidiaD3D11VideoProcessorBackend final
     if (!isVideoProcessorTextureFormat(inputDesc.Format)) {
       return fail("unsupported_texture_format");
     }
-    if (!supportsVideoProcessorInputOutput(request.device, inputDesc.Format)) {
-      return fail("video_processor_format_unsupported");
+    if (!supportsVideoProcessorInput(request.device, inputDesc.Format)) {
+      return fail("video_processor_input_unsupported");
     }
 
-    const TargetSize target = fitUpscaleTarget(
+    const bool wantsTrueHdr =
+        trueHdrEnhancementEnabled() &&
+        request.targetHdrOutput &&
+        request.input->yuvTransfer == YuvTransfer::Sdr;
+    const ProcessingMode mode =
+        wantsTrueHdr ? ProcessingMode::TrueHdr : ProcessingMode::Upscale;
+    TargetSize target = wantsTrueHdr
+                            ? passthroughTarget(request.input->width,
+                                                request.input->height)
+                            : TargetSize{};
+    const TargetSize upscaleTarget = fitUpscaleTarget(
         request.input->width, request.input->height, request.targetWidth,
         request.targetHeight);
+    if (upscaleTarget.width > 0 && upscaleTarget.height > 0) {
+      target = upscaleTarget;
+    }
     if (target.width <= 0 || target.height <= 0) {
-      return fail("no_upscale_target");
+      return fail("no_enhancement_target");
+    }
+
+    const DXGI_FORMAT outputFormat =
+        outputFormatForMode(mode, inputDesc.Format);
+    if (!supportsVideoProcessorOutput(request.device, outputFormat)) {
+      return fail("video_processor_output_unsupported");
     }
 
     if (!ensureDevice(request.device, request.context)) {
       return fail("ensure_device_failed");
     }
-    if (!ensureProcessor(*request.input, inputDesc, target)) {
+    if (!ensureProcessor(*request.input, inputDesc, target, mode,
+                         outputFormat)) {
       return fail("ensure_processor_failed");
     }
-    if (!ensureOutputTexture(inputDesc, target)) {
+    if (!ensureOutputTexture(outputFormat, target)) {
       return fail("ensure_output_texture_failed");
     }
     if (!render(*request.input)) {
@@ -174,6 +264,11 @@ class NvidiaD3D11VideoProcessorBackend final
     enhancedFrame_.hwFrameRef.reset();
     enhancedFrame_.rgba.clear();
     enhancedFrame_.yuv.clear();
+    if (mode == ProcessingMode::TrueHdr) {
+      enhancedFrame_.fullRange = true;
+      enhancedFrame_.yuvMatrix = YuvMatrix::Bt2020;
+      enhancedFrame_.yuvTransfer = YuvTransfer::Pq;
+    }
 
     result.frame = &enhancedFrame_;
     result.frameAvailable = true;
@@ -181,7 +276,8 @@ class NvidiaD3D11VideoProcessorBackend final
     result.enhanced = true;
     result.backend = backend();
     result.debugLine =
-        buildVideoEnhancementDebugLine(request, name(), true, "upscaled");
+        buildVideoEnhancementDebugLine(request, name(), true,
+                                       reasonForMode(mode));
     return true;
   }
 
@@ -211,12 +307,15 @@ class NvidiaD3D11VideoProcessorBackend final
 
   bool ensureProcessor(const VideoFrame& frame,
                        const D3D11_TEXTURE2D_DESC& inputDesc,
-                       TargetSize target) {
+                       TargetSize target, ProcessingMode mode,
+                       DXGI_FORMAT outputFormat) {
     if (videoProcessor_ && processorInputWidth_ == frame.width &&
         processorInputHeight_ == frame.height &&
         processorOutputWidth_ == target.width &&
         processorOutputHeight_ == target.height &&
-        processorFormat_ == inputDesc.Format) {
+        processorInputFormat_ == inputDesc.Format &&
+        processorOutputFormat_ == outputFormat &&
+        processorMode_ == mode) {
       return nvidiaExtensionEnabled_;
     }
 
@@ -254,6 +353,8 @@ class NvidiaD3D11VideoProcessorBackend final
                     static_cast<LONG>(target.height)};
     videoContext_->VideoProcessorSetStreamSourceRect(
         videoProcessor_.Get(), 0, TRUE, &sourceRect);
+    videoContext_->VideoProcessorSetStreamDestRect(
+        videoProcessor_.Get(), 0, TRUE, &targetRect);
     videoContext_->VideoProcessorSetOutputTargetRect(
         videoProcessor_.Get(), TRUE, &targetRect);
     videoContext_->VideoProcessorSetStreamAutoProcessingMode(
@@ -270,14 +371,22 @@ class NvidiaD3D11VideoProcessorBackend final
     videoContext_->VideoProcessorSetOutputColorSpace(videoProcessor_.Get(),
                                                      &colorSpace);
 
-    struct NvidiaExtension {
-      unsigned int version;
-      unsigned int method;
-      unsigned int enable;
-    };
-    NvidiaExtension extension{1, 2, 1};
+    if (mode == ProcessingMode::TrueHdr) {
+      UINT available = 0;
+      hr = videoContext_->VideoProcessorGetStreamExtension(
+          videoProcessor_.Get(), 0, &kNvidiaTrueHdrInterfaceGuid,
+          sizeof(available), &available);
+      if (FAILED(hr) || available == 0) {
+        videoProcessor_.Reset();
+        processorEnumerator_.Reset();
+        return false;
+      }
+    }
+
+    NvidiaStreamExtension extension = streamExtensionForMode(mode);
+    const GUID& extensionGuid = extensionGuidForMode(mode);
     hr = videoContext_->VideoProcessorSetStreamExtension(
-        videoProcessor_.Get(), 0, &kNvidiaPpeInterfaceGuid,
+        videoProcessor_.Get(), 0, &extensionGuid,
         sizeof(extension), &extension);
     if (FAILED(hr)) {
       videoProcessor_.Reset();
@@ -289,15 +398,16 @@ class NvidiaD3D11VideoProcessorBackend final
     processorInputHeight_ = frame.height;
     processorOutputWidth_ = target.width;
     processorOutputHeight_ = target.height;
-    processorFormat_ = inputDesc.Format;
+    processorInputFormat_ = inputDesc.Format;
+    processorOutputFormat_ = outputFormat;
+    processorMode_ = mode;
     nvidiaExtensionEnabled_ = true;
     return true;
   }
 
-  bool ensureOutputTexture(const D3D11_TEXTURE2D_DESC& inputDesc,
-                           TargetSize target) {
+  bool ensureOutputTexture(DXGI_FORMAT outputFormat, TargetSize target) {
     if (outputTexture_ && outputWidth_ == target.width &&
-        outputHeight_ == target.height && outputFormat_ == inputDesc.Format) {
+        outputHeight_ == target.height && outputFormat_ == outputFormat) {
       return true;
     }
 
@@ -308,7 +418,7 @@ class NvidiaD3D11VideoProcessorBackend final
     desc.Height = static_cast<UINT>(target.height);
     desc.MipLevels = 1;
     desc.ArraySize = 1;
-    desc.Format = inputDesc.Format;
+    desc.Format = outputFormat;
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -327,7 +437,7 @@ class NvidiaD3D11VideoProcessorBackend final
 
     outputWidth_ = target.width;
     outputHeight_ = target.height;
-    outputFormat_ = inputDesc.Format;
+    outputFormat_ = outputFormat;
     return true;
   }
 
@@ -381,7 +491,9 @@ class NvidiaD3D11VideoProcessorBackend final
     processorInputHeight_ = 0;
     processorOutputWidth_ = 0;
     processorOutputHeight_ = 0;
-    processorFormat_ = DXGI_FORMAT_UNKNOWN;
+    processorInputFormat_ = DXGI_FORMAT_UNKNOWN;
+    processorOutputFormat_ = DXGI_FORMAT_UNKNOWN;
+    processorMode_ = ProcessingMode::Upscale;
     outputWidth_ = 0;
     outputHeight_ = 0;
     outputFormat_ = DXGI_FORMAT_UNKNOWN;
@@ -400,7 +512,9 @@ class NvidiaD3D11VideoProcessorBackend final
   int processorInputHeight_ = 0;
   int processorOutputWidth_ = 0;
   int processorOutputHeight_ = 0;
-  DXGI_FORMAT processorFormat_ = DXGI_FORMAT_UNKNOWN;
+  DXGI_FORMAT processorInputFormat_ = DXGI_FORMAT_UNKNOWN;
+  DXGI_FORMAT processorOutputFormat_ = DXGI_FORMAT_UNKNOWN;
+  ProcessingMode processorMode_ = ProcessingMode::Upscale;
   int outputWidth_ = 0;
   int outputHeight_ = 0;
   DXGI_FORMAT outputFormat_ = DXGI_FORMAT_UNKNOWN;

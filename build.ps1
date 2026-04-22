@@ -15,7 +15,7 @@ param(
   [switch]$StagingUpload,
   [switch]$VideoErrorLog,
   [switch]$FfmpegErrorLog,
-  [switch]$DisableNvidiaRtxVideo
+  [switch]$EnableNvidiaRtxVideoSdk
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +48,7 @@ try {
       -StagingUpload ([bool]$StagingUpload) `
       -VideoErrorLog ([bool]$VideoErrorLog) `
       -FfmpegErrorLog ([bool]$FfmpegErrorLog) `
-      -DisableNvidiaRtxVideo ([bool]$DisableNvidiaRtxVideo)) `
+      -EnableNvidiaRtxVideoSdk ([bool]$EnableNvidiaRtxVideoSdk)) `
     -RemainingArguments $args
 
   $buildExit = Invoke-RadioifyBuild -Context $context

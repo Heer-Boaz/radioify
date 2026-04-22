@@ -170,7 +170,8 @@ int main() {
                    !enhancementResult.enhanced,
                "Video enhancement pipeline must pass frames through before an "
                "enhancement backend can process the frame");
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO) && \
+    RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO
   const std::string expectedEnhancementBackend =
       "nvidia-d3d11-video-processor";
 #else

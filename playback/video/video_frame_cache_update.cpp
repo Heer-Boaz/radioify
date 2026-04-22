@@ -16,7 +16,8 @@ bool update(GpuVideoFrameCache& cache, ID3D11Device* device,
     }
     D3D11_TEXTURE2D_DESC desc{};
     frame.hwTexture->GetDesc(&desc);
-    const bool is10Bit = desc.Format == DXGI_FORMAT_P010;
+    const bool is10Bit = desc.Format == DXGI_FORMAT_P010 ||
+                         desc.Format == DXGI_FORMAT_R10G10B10A2_UNORM;
     return cache.Update(device, context, frame.hwTexture.Get(),
                         frame.hwTextureArrayIndex, frame.width, frame.height,
                         frame.fullRange, frame.yuvMatrix, frame.yuvTransfer,

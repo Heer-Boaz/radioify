@@ -1,4 +1,4 @@
-﻿#include "videoprocessor.h"
+#include "videoprocessor.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -264,7 +264,7 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
     } else {
         // RGBA path
         auto t0_ensure = steady_clock::now();
-        if (!EnsureRGBA(device, width, height)) return false;
+        if (!EnsureRGBA(device, width, height, desc.Format)) return false;
         [[maybe_unused]] auto d_ensure = duration_cast<milliseconds>(steady_clock::now() - t0_ensure).count();
 
         int writeIndex = AcquireWriteIndex(context);
@@ -276,6 +276,10 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
         m_width = width;
         m_height = height;
         m_rotationQuarterTurns = normalizeQuarterTurns(rotationQuarterTurns);
+        m_bitDepth = bitDepth;
+        m_fullRange = fullRange;
+        m_matrix = matrix;
+        m_transfer = transfer;
 
         D3D11_BOX srcBox;
         srcBox.left = 0; srcBox.top = 0; srcBox.front = 0;
@@ -354,6 +358,10 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
     m_width = width;
     m_height = height;
     m_rotationQuarterTurns = normalizeQuarterTurns(rotationQuarterTurns);
+    m_bitDepth = 8;
+    m_fullRange = true;
+    m_matrix = YuvMatrix::Bt709;
+    m_transfer = YuvTransfer::Sdr;
     m_format = CacheFormat::Rgba;
     m_activeIndex = writeIndex;
     m_writeIndex = (writeIndex + 1) % kFrameBufferCount;
@@ -527,9 +535,10 @@ bool GpuVideoFrameCache::EnsureNV12(ID3D11Device* device, int width, int height,
     return true;
 }
 
-bool GpuVideoFrameCache::EnsureRGBA(ID3D11Device* device, int width, int height) {
-    RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA requested w=%d h=%d (cached w=%d h=%d)\n", now_ms().c_str(), thread_id_str().c_str(), width, height, m_width, m_height);
-    bool cacheMatch = (m_width == width && m_height == height);
+bool GpuVideoFrameCache::EnsureRGBA(ID3D11Device* device, int width, int height, DXGI_FORMAT format) {
+    RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA requested w=%d h=%d fmt=%u (cached w=%d h=%d fmt=%u)\n", now_ms().c_str(), thread_id_str().c_str(), width, height, static_cast<unsigned>(format), m_width, m_height, static_cast<unsigned>(m_rgbaFormat));
+    bool cacheMatch = (m_width == width && m_height == height &&
+                       m_rgbaFormat == format);
     if (cacheMatch) {
         for (int i = 0; i < kFrameBufferCount; ++i) {
             if (!m_texRGBA[i] || !m_srvRGBA[i]) {
@@ -558,7 +567,7 @@ bool GpuVideoFrameCache::EnsureRGBA(ID3D11Device* device, int width, int height)
     desc.Height = height;
     desc.MipLevels = 1;
     desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.Format = format;
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -582,6 +591,7 @@ bool GpuVideoFrameCache::EnsureRGBA(ID3D11Device* device, int width, int height)
     }
 
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] EnsureRGBA: success\n", now_ms().c_str(), thread_id_str().c_str());
+    m_rgbaFormat = format;
     return true;
 }
 
@@ -704,6 +714,7 @@ void GpuVideoFrameCache::Reset() {
     m_width = 0;
     m_height = 0;
     m_bitDepth = 8;
+    m_rgbaFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     m_fullRange = false;
     m_matrix = YuvMatrix::Bt709;
     m_transfer = YuvTransfer::Sdr;

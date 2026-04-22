@@ -15,7 +15,7 @@ function Resolve-TrailingSwitchOverrides {
     "StagingUpload",
     "VideoErrorLog",
     "FfmpegErrorLog",
-    "DisableNvidiaRtxVideo"
+    "EnableNvidiaRtxVideoSdk"
   )
 
   $overrides = [ordered]@{}
@@ -66,10 +66,9 @@ function New-InitialBuildOptions {
     [bool]$StagingUpload,
     [bool]$VideoErrorLog,
     [bool]$FfmpegErrorLog,
-    [bool]$DisableNvidiaRtxVideo
+    [bool]$EnableNvidiaRtxVideoSdk
   )
 
-  $nvidiaRtxVideo = -not $DisableNvidiaRtxVideo
   return [ordered]@{
     Config = $Config
     Clean = $Clean
@@ -87,8 +86,9 @@ function New-InitialBuildOptions {
     StagingUpload = $StagingUpload
     VideoErrorLog = $VideoErrorLog
     FfmpegErrorLog = $FfmpegErrorLog
-    DisableNvidiaRtxVideo = $DisableNvidiaRtxVideo
-    NvidiaRtxVideo = $nvidiaRtxVideo
+    EnableNvidiaRtxVideoSdk = $EnableNvidiaRtxVideoSdk
+    NvidiaRtxVideo = $true
+    NvidiaRtxVideoSdk = $EnableNvidiaRtxVideoSdk
   }
 }
 
@@ -108,7 +108,9 @@ function New-BuildContext {
   foreach ($entry in $overrides.GetEnumerator()) {
     $optionsData[$entry.Key] = $entry.Value
   }
-  $optionsData["NvidiaRtxVideo"] = -not [bool]$optionsData["DisableNvidiaRtxVideo"]
+  $optionsData["NvidiaRtxVideo"] = $true
+  $optionsData["NvidiaRtxVideoSdk"] =
+    [bool]$optionsData["EnableNvidiaRtxVideoSdk"]
 
   return [pscustomobject]@{
     Options = [pscustomobject]$optionsData

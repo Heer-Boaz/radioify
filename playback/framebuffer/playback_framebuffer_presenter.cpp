@@ -9,6 +9,7 @@
 
 #include "audioplayback.h"
 #include "core/windows_message_pump.h"
+#include "playback/playback_debug_lines.h"
 #include "playback/playback_frame_refresh.h"
 #include "playback_framebuffer_video_pipeline.h"
 #include "playback_mini_player_tui.h"
@@ -19,48 +20,6 @@ namespace {
 constexpr auto kOverlayRefreshInterval = std::chrono::milliseconds(100);
 constexpr auto kTextGridPresentationRefreshInterval =
     std::chrono::milliseconds(250);
-
-const char* videoFrameFormatLabel(VideoPixelFormat format) {
-  switch (format) {
-    case VideoPixelFormat::RGB32:
-      return "RGB32";
-    case VideoPixelFormat::ARGB32:
-      return "ARGB32";
-    case VideoPixelFormat::NV12:
-      return "NV12";
-    case VideoPixelFormat::P010:
-      return "P010";
-    case VideoPixelFormat::HWTexture:
-      return "HWTexture";
-    case VideoPixelFormat::Unknown:
-    default:
-      return "unknown";
-  }
-}
-
-const char* yuvMatrixLabel(YuvMatrix matrix) {
-  switch (matrix) {
-    case YuvMatrix::Bt601:
-      return "BT601";
-    case YuvMatrix::Bt2020:
-      return "BT2020";
-    case YuvMatrix::Bt709:
-    default:
-      return "BT709";
-  }
-}
-
-const char* yuvTransferLabel(YuvTransfer transfer) {
-  switch (transfer) {
-    case YuvTransfer::Pq:
-      return "PQ";
-    case YuvTransfer::Hlg:
-      return "HLG";
-    case YuvTransfer::Sdr:
-    default:
-      return "SDR";
-  }
-}
 
 void waitForPresenterWake(HANDLE wakeEvent) {
   if (wakeEvent) {
@@ -177,18 +136,8 @@ WindowUiState buildPlaybackFramebufferUiState(
       overlayState, overlayControlHover.load(std::memory_order_relaxed));
   if (debugOverlay) {
     ui.debugLines.push_back(videoWindow.OutputColorDebugLine());
-
-    const PlayerDebugInfo debug = player.debugInfo();
-    char frameLine[256];
-    std::snprintf(frameLine, sizeof(frameLine),
-                  "DBG frame ok=%d %dx%d fmt=%s matrix=%s trc=%s full=%d",
-                  debug.hasVideoFrame ? 1 : 0, debug.videoFrameWidth,
-                  debug.videoFrameHeight,
-                  videoFrameFormatLabel(debug.videoFrameFormat),
-                  yuvMatrixLabel(debug.videoFrameMatrix),
-                  yuvTransferLabel(debug.videoFrameTransfer),
-                  debug.videoFrameFullRange ? 1 : 0);
-    ui.debugLines.emplace_back(frameLine);
+    ui.debugLines.push_back(
+        playback_debug_lines::videoFrameDebugLine(player.debugInfo()));
   }
   return ui;
 }
@@ -310,7 +259,14 @@ void runFramebufferPresenterLoop(
     videoFrameRequest.frameChanged = frameResult.frameChanged;
     videoFrameRequest.forceRefresh = forcePresentNow;
     videoFrameRequest.textGridPresentationActive = textGridPresentationActive;
-    videoFrameRequest.targetHdrOutput = videoWindow.OutputUsesHdr();
+    bool targetHdrOutput = videoWindow.OutputUsesHdr();
+#if defined(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO) && RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO
+    if (frameResult.frameAvailable &&
+        frameRefresh.frame.yuvTransfer == YuvTransfer::Sdr) {
+      targetHdrOutput = true;
+    }
+#endif
+    videoFrameRequest.targetHdrOutput = targetHdrOutput;
     playback_framebuffer_video_pipeline::FrameResult videoFrameResult =
         videoPipeline.process(videoFrameRequest);
 

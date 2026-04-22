@@ -23,7 +23,8 @@ function New-CMakeConfigureInfo {
   $cmakeArgs += "-DRADIOIFY_ENABLE_MELODY_ANALYSIS=$([bool]$options.MelodyAnalysis)"
   $cmakeArgs += "-DRADIOIFY_ENABLE_NEURAL_PITCH=$([bool]$options.MelodyAnalysis)"
   $cmakeArgs += "-DRADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION=$([bool]$options.Win11ExplorerIntegration)"
-  $cmakeArgs += "-DRADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK=$([bool]$options.NvidiaRtxVideo)"
+  $cmakeArgs += "-DRADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_PROCESSOR=$([bool]$options.NvidiaRtxVideo)"
+  $cmakeArgs += "-DRADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK=$([bool]$options.NvidiaRtxVideoSdk)"
   if ($Context.Build.NvidiaRtxVideoSdkRoot) {
     $cmakeArgs += "-DRADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT=$(Convert-ToCMakePath $Context.Build.NvidiaRtxVideoSdkRoot)"
   }
@@ -189,7 +190,7 @@ function Publish-BuildArtifacts {
       Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $artifact
     }
   }
-  if ($Context.Options.NvidiaRtxVideo) {
+  if ($Context.Options.NvidiaRtxVideoSdk) {
     $nvidiaRuntimeArtifacts = Copy-NvidiaRtxVideoRuntime `
       -SdkRoot $Context.Build.NvidiaRtxVideoSdkRoot `
       -DistDir $Context.Paths.DistDir

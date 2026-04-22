@@ -399,13 +399,13 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
     context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), nullptr);
 
-    const int gridPixelWidth =
-        std::min(m_width, frame.cols * cellWidth);
-    const int gridPixelHeight =
-        std::min(m_height, frame.rows * cellHeight);
+    const GpuTextGridViewport gridViewport = fitGpuTextGridViewport(
+        m_width, m_height, frame.cols, frame.rows, cellWidth, cellHeight);
     D3D11_VIEWPORT viewport = {
-        0.0f, 0.0f, static_cast<float>(gridPixelWidth),
-        static_cast<float>(gridPixelHeight), 0.0f, 1.0f};
+        static_cast<float>(gridViewport.x),
+        static_cast<float>(gridViewport.y),
+        static_cast<float>(gridViewport.width),
+        static_cast<float>(gridViewport.height), 0.0f, 1.0f};
     if (!DrawGpuTextGridFrame(device, context.Get(), frame, viewport)) return;
     DrawPictureInPictureBorder(context.Get());
 

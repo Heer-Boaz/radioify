@@ -269,7 +269,8 @@ OutputSelection chooseOutputForWindow(HWND hwnd, IDXGIAdapter* adapter) {
 }  // namespace
 
 VideoOutputColorState ChooseVideoOutputColorState(HWND hwnd,
-                                                  IDXGIAdapter* adapter) {
+                                                  IDXGIAdapter* adapter,
+                                                  bool preferHdrOutput) {
     VideoOutputColorState state{};
     if (!hwnd || !adapter) {
         return state;
@@ -300,7 +301,7 @@ VideoOutputColorState ChooseVideoOutputColorState(HWND hwnd,
     state.maxOutputNits =
         std::max(desc1.MaxFullFrameLuminance, desc1.MaxLuminance);
 
-    if (!outputIsHdrActive(desc1)) {
+    if (!outputIsHdrActive(desc1) || !preferHdrOutput) {
         return state;
     }
 

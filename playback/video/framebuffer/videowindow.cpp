@@ -2126,7 +2126,8 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
     Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory2;
     HRESULT factoryHr = dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory2));
     VideoOutputColorState desiredColorState =
-        ChooseVideoOutputColorState(m_hWnd, dxgiAdapter.Get());
+        ChooseVideoOutputColorState(m_hWnd, dxgiAdapter.Get(),
+                                    m_preferHdrOutput);
     SetOutputColorAttemptStatus({});
     std::vector<VideoOutputColorState> colorAttempts;
     colorAttempts.push_back(desiredColorState);
@@ -2165,7 +2166,9 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
                 m_outputColorState = colorState;
                 SetOutputColorAttemptStatus(
                     std::string("active=") +
-                    VideoOutputColorEncodingName(m_outputColorState.encoding));
+                    VideoOutputColorEncodingName(m_outputColorState.encoding) +
+                    (m_preferHdrOutput ? " output_pref=hdr"
+                                       : " output_pref=sdr"));
                 swapChain1.As(&m_swapChain2);
                 if (m_swapChain2) {
                     m_swapChain2->SetMaximumFrameLatency(1);
@@ -2197,7 +2200,9 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
     m_outputColorState.swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     m_outputColorState.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     m_outputColorState.encoding = VideoOutputColorEncoding::Sdr;
-    SetOutputColorAttemptStatus("active=legacy_sdr");
+    SetOutputColorAttemptStatus(
+        m_preferHdrOutput ? "active=legacy_sdr output_pref=hdr"
+                          : "active=legacy_sdr output_pref=sdr");
     scd.BufferDesc.Format = m_outputColorState.swapChainFormat;
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     scd.OutputWindow = m_hWnd;
@@ -2227,6 +2232,27 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
 
     Resize(width, height);
     return true;
+}
+
+bool VideoWindow::EnsureOutputColorForTransfer(YuvTransfer transfer) {
+    (void)transfer;
+    const bool preferHdrOutput = true;
+    if (preferHdrOutput == m_preferHdrOutput) {
+        return true;
+    }
+    if (!m_hWnd || m_width <= 0 || m_height <= 0) {
+        return false;
+    }
+
+    const bool previousPreference = m_preferHdrOutput;
+    m_preferHdrOutput = preferHdrOutput;
+    if (CreateSwapChain(m_width, m_height)) {
+        return true;
+    }
+
+    m_preferHdrOutput = previousPreference;
+    (void)CreateSwapChain(m_width, m_height);
+    return false;
 }
 
 void VideoWindow::Resize(int width, int height) {
@@ -2381,15 +2407,18 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
         return;
     }
 
-    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
-
     // Refresh window dimensions to avoid stale size during fullscreen transitions
     RECT rect;
     if (GetClientRect(m_hWnd, &rect)) {
         m_width = rect.right - rect.left;
         m_height = rect.bottom - rect.top;
     }
+    if (!EnsureOutputColorForTransfer(frameCache.GetTransfer())) {
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
+    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;
@@ -2932,15 +2961,18 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
         return;
     }
 
-    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
-
     // Refresh window dimensions to avoid stale size during fullscreen transitions
     RECT rect;
     if (GetClientRect(m_hWnd, &rect)) {
         m_width = rect.right - rect.left;
         m_height = rect.bottom - rect.top;
     }
+    if (!EnsureOutputColorForTransfer(frameCache.GetTransfer())) {
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
+    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;

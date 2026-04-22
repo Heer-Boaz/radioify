@@ -36,7 +36,8 @@ struct VideoOutputColorState {
 };
 
 VideoOutputColorState ChooseVideoOutputColorState(HWND hwnd,
-                                                  IDXGIAdapter* adapter);
+                                                  IDXGIAdapter* adapter,
+                                                  bool preferHdrOutput);
 VideoOutputColorState VideoOutputScRgbFallbackState(
     const VideoOutputColorState& state);
 bool VideoOutputUsesHdr(const VideoOutputColorState& state);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -43,3 +44,32 @@ struct GpuTextGridFrame {
     int rows = 0;
     std::vector<GpuTextGridCell> cells;
 };
+
+struct GpuTextGridViewport {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+inline GpuTextGridViewport fitGpuTextGridViewport(int windowWidth,
+                                                  int windowHeight,
+                                                  int cols,
+                                                  int rows,
+                                                  int cellWidth,
+                                                  int cellHeight) {
+    GpuTextGridViewport viewport;
+    if (windowWidth <= 0 || windowHeight <= 0 || cols <= 0 || rows <= 0) {
+        return viewport;
+    }
+
+    const int gridPixelWidth =
+        std::min(windowWidth, cols * std::max(1, cellWidth));
+    const int gridPixelHeight =
+        std::min(windowHeight, rows * std::max(1, cellHeight));
+    viewport.width = std::max(1, gridPixelWidth);
+    viewport.height = std::max(1, gridPixelHeight);
+    viewport.x = std::max(0, (windowWidth - viewport.width) / 2);
+    viewport.y = std::max(0, (windowHeight - viewport.height) / 2);
+    return viewport;
+}

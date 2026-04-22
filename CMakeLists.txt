@@ -118,7 +118,8 @@ option(RADIOIFY_ENABLE_FFMPEG_ERROR_LOG "Enable ffmpeg error log output" OFF)
 option(RADIOIFY_ENABLE_STAGING_UPLOAD "Enable staging-based texture uploads to avoid implicit GPU sync" OFF)
 option(RADIOIFY_ENABLE_MELODY_ANALYSIS "Enable offline melody analysis (ONNX backend)" OFF)
 option(RADIOIFY_ENABLE_NEURAL_PITCH "Deprecated alias for RADIOIFY_ENABLE_MELODY_ANALYSIS" OFF)
-option(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK "Enable NVIDIA RTX Video SDK/NGX integration" ON)
+option(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_PROCESSOR "Enable NVIDIA D3D11 video processor RTX enhancement integration" ON)
+option(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK "Enable NVIDIA RTX Video SDK/NGX integration" OFF)
 option(RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION "Build the Windows 11 Explorer integration scaffold" OFF)
 option(RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL "Download neural pitch model automatically when missing" ON)
 set(RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT "" CACHE PATH
@@ -185,6 +186,13 @@ target_include_directories(radioify_external_options SYSTEM INTERFACE
 )
 
 set(RADIOIFY_HAS_NVIDIA_RTX_VIDEO_SDK OFF)
+if (RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK AND
+    NOT RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_PROCESSOR)
+  message(FATAL_ERROR
+    "RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK requires "
+    "RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_PROCESSOR=ON.")
+endif()
+
 if (RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK)
   set(_radioify_nvidia_rtx_video_sdk_hints "")
   if (RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT)
@@ -258,6 +266,7 @@ target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_ENABLE_STAGING_UPLOAD=$<IF:$<BOOL:${RADIOIFY_ENABLE_STAGING_UPLOAD}>,1,0>
   RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK=$<IF:$<BOOL:${RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK}>,1,0>
   RADIOIFY_HAS_NVIDIA_RTX_VIDEO_SDK=$<IF:$<BOOL:${RADIOIFY_HAS_NVIDIA_RTX_VIDEO_SDK}>,1,0>
+  RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO=$<IF:$<BOOL:${RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_PROCESSOR}>,1,0>
 )
 if (MSVC)
   target_compile_options(radioify_project_options INTERFACE

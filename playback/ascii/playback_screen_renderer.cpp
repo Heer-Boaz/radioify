@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "audioplayback.h"
+#include "playback/playback_debug_lines.h"
 #include "playback_ascii_subtitles.h"
 #include "ui_helpers.h"
 #include "unicode_display_width.h"
@@ -137,6 +138,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
                       inputs.debugLines.end());
   }
   if (debugOverlay && currentMode == PlaybackRenderMode::AsciiTerminal) {
+    debugLines.push_back(
+        playback_debug_lines::videoFrameDebugLine(player.debugInfo()));
+
     char buf[512];
     const char* cellSource =
         cellPixelSourceLabel.empty() ? "unknown" : cellPixelSourceLabel.c_str();

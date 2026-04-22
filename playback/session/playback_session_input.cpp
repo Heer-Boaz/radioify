@@ -652,28 +652,33 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     int cellH = 1;
     view.videoWindow->GetTextGridCellSize(cellW, cellH);
     if (gridCols > 0 && gridRows > 0 && winW > 0 && winH > 0) {
-      const int gridPixelWidth = std::min(winW, gridCols * cellW);
-      const int gridPixelHeight = std::min(winH, gridRows * cellH);
+      const GpuTextGridViewport gridViewport = fitGpuTextGridViewport(
+          winW, winH, gridCols, gridRows, cellW, cellH);
       const int pixelX = mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
       const int pixelY = mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
-      if (pixelX >= 0 && pixelY >= 0 && pixelX < gridPixelWidth &&
-          pixelY < gridPixelHeight) {
+      const int localPixelX = pixelX - gridViewport.x;
+      const int localPixelY = pixelY - gridViewport.y;
+      if (localPixelX >= 0 && localPixelY >= 0 &&
+          localPixelX < gridViewport.width &&
+          localPixelY < gridViewport.height) {
         hitMouse.pos.X = static_cast<SHORT>(std::clamp(
-            static_cast<int>((static_cast<int64_t>(pixelX) * gridCols) /
-                             gridPixelWidth),
+            static_cast<int>((static_cast<int64_t>(localPixelX) * gridCols) /
+                             gridViewport.width),
             0, gridCols - 1));
         hitMouse.pos.Y = static_cast<SHORT>(std::clamp(
-            static_cast<int>((static_cast<int64_t>(pixelY) * gridRows) /
-                             gridPixelHeight),
+            static_cast<int>((static_cast<int64_t>(localPixelY) * gridRows) /
+                             gridViewport.height),
             0, gridRows - 1));
         hitMouse.control &= ~0x80000000;
         hitMouse.hasPixelPosition = true;
-        hitMouse.pixelX = pixelX;
-        hitMouse.pixelY = pixelY;
+        hitMouse.pixelX = localPixelX;
+        hitMouse.pixelY = localPixelY;
         hitMouse.unitWidth =
-            static_cast<double>(gridPixelWidth) / static_cast<double>(gridCols);
+            static_cast<double>(gridViewport.width) /
+            static_cast<double>(gridCols);
         hitMouse.unitHeight =
-            static_cast<double>(gridPixelHeight) / static_cast<double>(gridRows);
+            static_cast<double>(gridViewport.height) /
+            static_cast<double>(gridRows);
         progressOutputState = view.textGridPresentationOutputState;
         mouseOverlayInputs.overlayVisible = true;
         mouseOverlayInputs.screenWidth = gridCols;
