@@ -1,6 +1,5 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$InstallDir,
     [string]$PackageDir,
     [switch]$SkipPackage,
     [switch]$Rebuild,
@@ -56,4 +55,6 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
     throw "Radioify package bundle not found at '$PackageDir'. Run .\package_windows.ps1 first or omit -SkipPackage."
 }
 
-& $installScript -PackageRoot $PackageDir -InstallDir $InstallDir -WhatIf:$WhatIfPreference
+& $installScript `
+    -PackageRoot $PackageDir `
+    -WhatIf:$WhatIfPreference

@@ -1,0 +1,21 @@
+Radioify for Windows
+====================
+
+This bundle contains a prebuilt Windows x64 copy of Radioify.
+
+Install on this PC:
+- Double-click install_radioify.cmd
+- Or run install_radioify.ps1 from PowerShell
+
+Portable use:
+- Run radioify.exe directly from the extracted folder
+
+What the installer does:
+- Installs the full MSIX package that owns Radioify, file associations, and
+  Explorer integration
+
+Notes:
+- Installing may trigger a UAC prompt to trust the development certificate
+- The extracted bundle contains the signed .msix and its certificate at the
+  bundle root. Manifest inputs stay under win11-explorer-integration.
+- PSF2 playback still needs hebios.bin supplied separately

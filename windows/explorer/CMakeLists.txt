@@ -6,6 +6,38 @@ set(RADIOIFY_WIN11_EXPLORER_INCLUDE_DIR "${RADIOIFY_WIN11_EXPLORER_ROOT}/include
 file(MAKE_DIRECTORY "${RADIOIFY_WIN11_EXPLORER_PACKAGE_DIR}")
 file(MAKE_DIRECTORY "${RADIOIFY_WIN11_EXPLORER_INCLUDE_DIR}")
 
+set(RADIOIFY_WIN11_EXPLORER_FILE_TYPES
+  .wav .mp3 .flac .m4a .webm .mp4 .mov .ogg .kss .nsf
+  .mid .midi .vgm .vgz .psf .minipsf .psf2 .minipsf2
+  .m4v .qt .mkv .avi .wmv .asf .flv .mpg .mpeg .mpe
+  .mpv .m2v .ts .m2ts .mts .3gp .3g2 .ogv .vob
+  .jpg .jpeg .png .bmp
+)
+if (NOT RADIOIFY_DISABLE_GSF_GPL)
+  list(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPES .gsf .minigsf)
+endif()
+list(REMOVE_DUPLICATES RADIOIFY_WIN11_EXPLORER_FILE_TYPES)
+
+set(RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
+"        <uap:Extension Category=\"windows.fileTypeAssociation\">\n"
+)
+string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
+"          <uap:FileTypeAssociation Name=\"radioifymedia\">\n"
+"            <uap:DisplayName>Radioify media</uap:DisplayName>\n"
+"            <uap:Logo>Assets\\SmallLogo.png</uap:Logo>\n"
+"            <uap:SupportedFileTypes>\n"
+)
+foreach(radioify_file_type IN LISTS RADIOIFY_WIN11_EXPLORER_FILE_TYPES)
+  string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
+"              <uap:FileType>${radioify_file_type}</uap:FileType>\n"
+)
+endforeach()
+string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
+"            </uap:SupportedFileTypes>\n"
+"          </uap:FileTypeAssociation>\n"
+"        </uap:Extension>"
+)
+
 configure_file(
   "${CMAKE_SOURCE_DIR}/windows/package/Package.appxmanifest.in"
   "${RADIOIFY_WIN11_EXPLORER_PACKAGE_DIR}/Package.appxmanifest"

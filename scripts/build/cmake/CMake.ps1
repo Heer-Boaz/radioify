@@ -72,31 +72,17 @@ function Test-Win11ExplorerIntegrationPackage {
 
   . $packageCommonScript
 
-  $packageLayout = Initialize-RadioifyWin11PackageLayout -IntegrationDir $IntegrationDistDir
-  $manifestInfo = Get-RadioifyWin11ManifestInfo -IntegrationDir $IntegrationDistDir
-  $makeAppxExe = Resolve-WindowsSdkExecutable -ToolName "makeappx.exe"
-  $validationPackagePath = Join-Path $IntegrationDistDir "$($manifestInfo.PackageName).validation.msix"
-  if (Test-Path -LiteralPath $validationPackagePath) {
-    Remove-Item -LiteralPath $validationPackagePath -Force
+  try {
+    $packageResult = New-RadioifyWin11SignedPackage -IntegrationDir $IntegrationDistDir
+  } catch {
+    Fail-Build "Win11 Explorer integration package creation failed: $($_.Exception.Message)"
   }
 
-  $makeAppxExit = Invoke-NativeProcessWithOutput -FilePath $makeAppxExe -ArgumentList @(
-    "pack",
-    "/d", $packageLayout,
-    "/p", $validationPackagePath,
-    "/o",
-    "/nv"
-  ) -WorkingDirectory $Context.Paths.Root
-
-  if ($makeAppxExit -ne 0) {
-    Fail-Build "Win11 Explorer integration package validation failed while running makeappx.exe."
+  if (-not (Test-Path -LiteralPath $packageResult.PackagePath)) {
+    Fail-Build "Win11 Explorer integration package creation did not produce $($packageResult.PackagePath)"
   }
 
-  if (-not (Test-Path -LiteralPath $validationPackagePath)) {
-    Fail-Build "Win11 Explorer integration package validation did not produce $validationPackagePath"
-  }
-
-  Remove-Item -LiteralPath $validationPackagePath -Force
+  return $packageResult
 }
 
 function Add-PublishedArtifactPath {
@@ -305,13 +291,18 @@ function Publish-BuildArtifacts {
       }
     }
 
-    Test-Win11ExplorerIntegrationPackage -Context $Context -IntegrationDistDir $integrationDistDir
+    $packageResult = Test-Win11ExplorerIntegrationPackage -Context $Context -IntegrationDistDir $integrationDistDir
     Add-PublishedArtifactsFromDirectory -Artifacts $publishedArtifacts -DirectoryPath $integrationDistDir
+    Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $packageResult.PackagePath
+    Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $packageResult.CertificatePath
 
     Write-Host "Win11 Explorer integration scaffold:"
     Get-ChildItem -Path $integrationDistDir -File | Sort-Object Name | ForEach-Object {
       Write-Host " - $($_.FullName)"
     }
+    Write-Host "Win11 Explorer MSIX package:"
+    Write-Host " - $($packageResult.PackagePath)"
+    Write-Host " - $($packageResult.CertificatePath)"
   }
 
   if ($publishSucceeded -and (Test-Path $Context.Paths.DistDir)) {

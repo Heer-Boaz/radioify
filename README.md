@@ -62,14 +62,24 @@ From the repo root on your own machine:
 reuse the current bundle as-is.
 
 The packaged install:
-- copies Radioify to `%LOCALAPPDATA%\Programs\Radioify`
-- registers it as a Windows media app
-- installs the Windows 11 Explorer context menu integration
-- adds a per-user uninstall entry in Apps & Features
+- installs the full Radioify MSIX package
+- lets the MSIX package own `radioify.exe`, file associations, and Explorer integration
+- uses Windows package servicing for install, update, and uninstall
 
-The packaged install triggers a UAC prompt because the Explorer integration is
-installed as a packaged shell extension and trusts its development certificate
-in `Cert:\LocalMachine\TrustedPeople`.
+The packaged install triggers a UAC prompt when the development certificate
+needs to be trusted in `Cert:\LocalMachine\TrustedPeople`.
+
+The distributable bundle contains the signed `.msix` and its certificate at the
+bundle root. The manifest inputs stay under `win11-explorer-integration\` for
+package metadata only.
+
+For temporary legacy portable registry integration from a repo checkout instead
+of installing the standard MSIX-owned shell package, run the legacy tools:
+
+```powershell
+.\legacy\windows_media_app\register_windows_media_app.ps1 -ExecutablePath .\dist\radioify.exe
+.\legacy\windows_media_app\unregister_windows_media_app.ps1 -ExecutablePath .\dist\radioify.exe
+```
 
 ## CI Packaging
 A GitHub Actions workflow at [windows-package.yml](/mnt/b/radioify/.github/workflows/windows-package.yml)
@@ -92,7 +102,8 @@ dist/radioify.exe --no-radio <file-or-folder>
 Current intent:
 - keep `radioify.exe` as the core executable
 - keep Explorer integration in a separate `IExplorerCommand` shell extension
-- use a sparse-package lane for the modern Win11 integration
+- use the full MSIX package as the standard Windows shell integration owner for
+  Explorer commands and file associations
 
 The standalone maintenance commands are:
 
@@ -105,9 +116,9 @@ Run the install command from an elevated PowerShell window. The development
 MSIX package is self-signed, so its certificate is trusted in
 `Cert:\LocalMachine\TrustedPeople` during install.
 
-The normal packaged installer now uses this same lane automatically. Keep these
+The normal packaged installer uses this same lane automatically. Keep these
 commands around for maintenance when you want to rebuild or re-register only
-the Explorer side without reinstalling the full app.
+the shell package without reinstalling the full app.
 
 Advanced / internal flow:
 

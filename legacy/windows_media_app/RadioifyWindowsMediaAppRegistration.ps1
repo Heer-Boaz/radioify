@@ -1,13 +1,13 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-. (Join-Path $PSScriptRoot "RadioifyWindowsShellCommon.ps1")
+$script:RadioifyWindowsLegacyRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+
+. (Join-Path $script:RadioifyWindowsLegacyRepoRoot "scripts\windows\RadioifyWindowsShellCommon.ps1")
 . (Join-Path $PSScriptRoot "RadioifyWindowsShortcutInterop.ps1")
 
 $script:RadioifyWindowsAppUserModelId = "Radioify.App"
-$script:RadioifyWindowsAppName = "Radioify"
 $script:RadioifyWindowsAppDescription = "Radioify media player"
-$script:RadioifyWindowsExecutableName = "radioify.exe"
 $script:RadioifyWindowsShortcutName = "Radioify.lnk"
 $script:RadioifyWindowsRegisteredApplicationName = "Radioify"
 $script:RadioifyWindowsMediaClientName = "Radioify"

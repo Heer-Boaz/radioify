@@ -6,7 +6,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-. (Join-Path $PSScriptRoot "scripts\windows\RadioifyWindowsMediaAppRegistration.ps1")
+. (Join-Path $PSScriptRoot "RadioifyWindowsMediaAppRegistration.ps1")
 
 $resolvedExecutable = Resolve-RadioifyWindowsMediaExecutablePath -ExecutablePath $ExecutablePath -ScriptRoot $PSScriptRoot
 $state = Register-RadioifyWindowsMediaApp -ExecutablePath $resolvedExecutable -WhatIf:$WhatIfPreference

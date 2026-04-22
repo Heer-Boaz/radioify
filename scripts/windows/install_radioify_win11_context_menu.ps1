@@ -2,7 +2,6 @@
 param(
     [string]$IntegrationDir,
     [switch]$ReplaceExisting,
-    [switch]$SkipExplorerRestart,
     [string]$LogPath
 )
 
@@ -14,7 +13,7 @@ $ErrorActionPreference = "Stop"
 
 Assert-RadioifyWindowsHost
 if (-not $WhatIfPreference -and -not (Test-RadioifyAdministrator)) {
-    throw "Run this install script from an elevated PowerShell window. The MSIX signing certificate must be trusted in Cert:\\LocalMachine\\TrustedPeople."
+    throw "Run this install script from an elevated PowerShell window. The MSIX signing certificate must be trusted in Cert:\LocalMachine\TrustedPeople."
 }
 
 if (-not $LogPath) {
@@ -26,58 +25,19 @@ $resolvedIntegrationDir = Resolve-RadioifyWin11IntegrationDirectory `
     -ScriptRoot $PSScriptRoot
 Assert-RadioifyWin11ArtifactsExist -IntegrationDir $resolvedIntegrationDir
 $manifestInfo = Get-RadioifyWin11ManifestInfo -IntegrationDir $resolvedIntegrationDir
-
-$makeAppxExe = Resolve-WindowsSdkExecutable -ToolName "makeappx.exe"
-$signToolExe = Resolve-WindowsSdkExecutable -ToolName "signtool.exe"
-
-$packageLayout = Get-RadioifyWin11PackageLayoutPath -IntegrationDir $resolvedIntegrationDir
-$packagePath = Get-RadioifyWin11PackagePath -IntegrationDir $resolvedIntegrationDir -PackageName $manifestInfo.PackageName
-$certInfo = $null
-$shellStopped = $false
+$packagePath = Get-RadioifyWin11PackagePath `
+    -IntegrationDir $resolvedIntegrationDir `
+    -PackageName $manifestInfo.PackageName
 $didChangePackage = $false
-$alreadyInstalled = $false
-$shellRecovered = $false
 $transcriptStarted = $false
 
-function Enter-RadioifyShellMaintenance {
-    param([Parameter(Mandatory = $true)][string]$Message)
-
-    if ($script:shellStopped) {
-        Stop-RadioifyWin11SurrogateServer -AppId $manifestInfo.SurrogateAppId
-        return
+function Require-RadioifyWin11InstallPackage {
+    if (-not (Test-Path -LiteralPath $packagePath)) {
+        throw "Signed MSIX package not found at '$packagePath'. Build the Windows package so the .msix and .cer are produced before install."
     }
 
-    Write-Host $Message
-    Stop-RadioifyWin11IntegrationHosts -SurrogateAppId $manifestInfo.SurrogateAppId
-    Wait-RadioifyProcessExit -Name "explorer" | Out-Null
-    $script:shellStopped = $true
-}
-
-function Build-RadioifyWin11Package {
-    $script:packageLayout = Initialize-RadioifyWin11PackageLayout -IntegrationDir $resolvedIntegrationDir
-    $script:certInfo = Ensure-RadioifyWin11Certificate -Subject $manifestInfo.Publisher -IntegrationDir $resolvedIntegrationDir
-
-    if (Test-Path -LiteralPath $packagePath) {
-        Remove-Item -LiteralPath $packagePath -Force
-    }
-    Invoke-NativeTool -FilePath $makeAppxExe -Arguments @(
-        "pack",
-        "/d", $script:packageLayout,
-        "/p", $packagePath,
-        "/o",
-        "/nv"
-    )
-
-    if (-not $script:certInfo) {
-        throw "Signing certificate was not prepared before signing."
-    }
-    Invoke-NativeTool -FilePath $signToolExe -Arguments @(
-        "sign",
-        "/fd", "SHA256",
-        "/sha1", $script:certInfo.Certificate.Thumbprint,
-        "/s", "My",
-        $packagePath
-    )
+    Write-Host "Using packaged MSIX: $packagePath"
+    Ensure-RadioifyWin11PackagedMsixTrusted -IntegrationDir $resolvedIntegrationDir | Out-Null
 }
 
 try {
@@ -87,70 +47,24 @@ try {
     }
 
     if ($WhatIfPreference) {
-        [void]$PSCmdlet.ShouldProcess($manifestInfo.PackageName, "Install Win11 Explorer integration package")
+        [void]$PSCmdlet.ShouldProcess($manifestInfo.PackageName, "Install Radioify MSIX package")
         return
     }
 
     $installedPackage = Get-InstalledRadioifyWin11Package -PackageName $manifestInfo.PackageName
-    if ($installedPackage -and $ReplaceExisting -and $SkipExplorerRestart) {
-        throw "Cannot use -SkipExplorerRestart while replacing an existing Win11 Explorer integration package. Explorer must be restarted so the packaged shell extension can be unloaded."
-    }
-
-    if ($installedPackage -and (Test-RadioifyWin11PackageBusy -Package $installedPackage)) {
-        if ($ReplaceExisting) {
-            Enter-RadioifyShellMaintenance -Message "Stopping Explorer and packaged COM host before waiting for package servicing to settle..."
-        }
-
-        Write-Host "Existing Win11 Explorer integration package is still servicing. Waiting for it to settle..."
-        $waitParams = @{
-            PackageName    = $manifestInfo.PackageName
-            TimeoutSeconds = 60
-        }
-        if ($shellStopped) {
-            $waitParams.KeepShellStopped = $true
-            $waitParams.SurrogateAppId = $manifestInfo.SurrogateAppId
-        }
-        $installedPackage = Wait-RadioifyWin11PackageSettled @waitParams
-    }
-
     if ($installedPackage -and -not $ReplaceExisting) {
-        $alreadyInstalled = $true
-        Write-Host "Win11 Explorer integration is already installed:"
+        Write-Host "Radioify MSIX package is already installed:"
         Write-Host "  $($installedPackage.PackageFullName)"
-        Write-Host "No package changes were made. Use -ReplaceExisting to force a reinstall."
+        Write-Host "No package changes were made. Use -ReplaceExisting to force an update."
+        return
     }
 
-    if (-not $alreadyInstalled -and $PSCmdlet.ShouldProcess($packagePath, "Build Win11 Explorer integration package")) {
-        Build-RadioifyWin11Package
+    if ($PSCmdlet.ShouldProcess($packagePath, "Trust packaged Radioify MSIX certificate")) {
+        Require-RadioifyWin11InstallPackage
     }
 
-    if ($installedPackage -and $ReplaceExisting -and $PSCmdlet.ShouldProcess($installedPackage.PackageFullName, "Remove existing Win11 Explorer integration package")) {
-        Enter-RadioifyShellMaintenance -Message "Stopping Explorer and packaged COM host before package replacement..."
-        Write-Host "Removing existing Win11 Explorer integration package..."
-        Remove-RadioifyWin11Package -PackageFullName $installedPackage.PackageFullName
-        Wait-RadioifyWin11PackageState `
-            -PackageName $manifestInfo.PackageName `
-            -DesiredState Absent `
-            -TimeoutSeconds 60 `
-            -KeepShellStopped `
-            -SurrogateAppId $manifestInfo.SurrogateAppId
-        $installedPackage = $null
-    }
-
-    if (-not $alreadyInstalled -and $PSCmdlet.ShouldProcess($manifestInfo.PackageName, "Install Win11 Explorer integration package")) {
-        if (-not (Test-Path -LiteralPath $packagePath)) {
-            throw "Package file was not created: '$packagePath'"
-        }
-
-        $deployRoot = Initialize-RadioifyWin11DeployRoot -IntegrationDir $resolvedIntegrationDir
-
-        if ($shellStopped) {
-            Write-Host "Installing Win11 Explorer integration package while Explorer remains stopped..."
-        }
-        Write-Host "Installing Win11 Explorer integration package..."
-        Install-RadioifyWin11Package `
-            -PackagePath $packagePath `
-            -ExternalLocation $deployRoot
+    if ($PSCmdlet.ShouldProcess($packagePath, "Install Radioify MSIX package")) {
+        Install-RadioifyWin11Package -PackagePath $packagePath
         Wait-RadioifyWin11PackageState `
             -PackageName $manifestInfo.PackageName `
             -DesiredState Ready `
@@ -158,40 +72,15 @@ try {
         $didChangePackage = $true
     }
 
-    if (-not $WhatIfPreference) {
-        if ($didChangePackage) {
-            Invoke-RadioifyShellAssociationRefresh
-            if (-not $SkipExplorerRestart) {
-                if ($shellStopped) {
-                    Write-Host "Starting Explorer after package install completed..."
-                    Start-RadioifyExplorerShell
-                } else {
-                    Write-Host "Restarting Explorer after package install completed..."
-                    Restart-RadioifyExplorerShell
-                }
-                $shellRecovered = $true
-            }
-
-            Write-Host "Radioify Windows 11 Explorer integration installed."
-        } elseif ($alreadyInstalled) {
-            Write-Host "Radioify Windows 11 Explorer integration is already present. No package changes were made."
-        }
-        Write-Host "Package: $packagePath"
-        Write-Host "External location: $(Get-RadioifyWin11DeployRootPath -IntegrationDir $resolvedIntegrationDir)"
-        if ($SkipExplorerRestart) {
-            Write-Host "Explorer was not restarted. Restart Explorer manually if the new command does not appear immediately."
-        }
+    if ($didChangePackage) {
+        Write-Host "Radioify MSIX package installed."
     }
+    Write-Host "Package: $packagePath"
 } finally {
     if ($transcriptStarted) {
         try {
             Stop-Transcript | Out-Null
         } catch {
         }
-    }
-
-    if ($shellStopped -and -not $shellRecovered -and -not $SkipExplorerRestart) {
-        Write-Warning "Explorer was left stopped by the install path. Starting it again."
-        Start-RadioifyExplorerShell
     }
 }

@@ -1,13 +1,16 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$InstallDir,
-    [switch]$KeepFiles
+    [string]$PackageDir
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-& (Join-Path $PSScriptRoot "scripts\windows\uninstall_radioify_windows_bundle.ps1") `
-    -InstallDir $InstallDir `
-    -KeepFiles:$KeepFiles `
+$uninstallScript = Join-Path $PSScriptRoot "scripts\windows\uninstall_radioify_windows_bundle.ps1"
+if (-not $PackageDir) {
+    $PackageDir = Join-Path $PSScriptRoot "dist\packages\Radioify-Windows-x64"
+}
+
+& $uninstallScript `
+    -PackageRoot $PackageDir `
     -WhatIf:$WhatIfPreference

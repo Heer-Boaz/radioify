@@ -127,6 +127,26 @@ set(RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT "" CACHE PATH
 if (WIN32)
   set(RADIOIFY_WIN11_EXPLORER_PACKAGE_NAME "Radioify.Win11Explorer")
   set(RADIOIFY_WIN11_EXPLORER_PACKAGE_PUBLISHER "CN=Radioify-Development")
+  string(TIMESTAMP _radioify_win11_package_year "%Y")
+  string(TIMESTAMP _radioify_win11_package_month "%m")
+  string(TIMESTAMP _radioify_win11_package_day "%d")
+  string(TIMESTAMP _radioify_win11_package_hour "%H")
+  string(TIMESTAMP _radioify_win11_package_minute "%M")
+  string(TIMESTAMP _radioify_win11_package_second "%S")
+  foreach(_radioify_win11_package_part IN ITEMS
+      month day hour minute second)
+    string(REGEX REPLACE "^0+" "" _radioify_win11_package_${_radioify_win11_package_part}
+      "${_radioify_win11_package_${_radioify_win11_package_part}}")
+    if ("${_radioify_win11_package_${_radioify_win11_package_part}}" STREQUAL "")
+      set(_radioify_win11_package_${_radioify_win11_package_part} "0")
+    endif()
+  endforeach()
+  math(EXPR _radioify_win11_package_mmdd
+    "${_radioify_win11_package_month} * 100 + ${_radioify_win11_package_day}")
+  math(EXPR _radioify_win11_package_hhmm
+    "${_radioify_win11_package_hour} * 100 + ${_radioify_win11_package_minute}")
+  set(RADIOIFY_WIN11_EXPLORER_PACKAGE_VERSION
+    "${_radioify_win11_package_year}.${_radioify_win11_package_mmdd}.${_radioify_win11_package_hhmm}.${_radioify_win11_package_second}")
   set(RADIOIFY_WIN11_EXPLORER_APPLICATION_ID "RadioifyExplorerStub")
   set(RADIOIFY_WIN11_EXPLORER_COMMAND_GUID "4A616892-7E56-4D0B-BD0E-6A2E4F7B0E91")
   set(RADIOIFY_WIN11_EXPLORER_COMMAND_CLSID "{${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}}")
@@ -291,6 +311,12 @@ add_subdirectory(tools)
 add_subdirectory(tui)
 
 add_executable(radioify)
+if (WIN32)
+  set_source_files_properties("${CMAKE_SOURCE_DIR}/app/radioify.rc"
+    PROPERTIES
+      OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/radioify.ico"
+  )
+endif()
 target_sources(radioify PRIVATE
   $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/app/radioify.rc>
   $<TARGET_OBJECTS:radioify_app>

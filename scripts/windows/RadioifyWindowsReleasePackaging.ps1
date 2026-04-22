@@ -1,15 +1,13 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "RadioifyWin11PackageCommon.ps1")
+
 $script:RadioifyWindowsBundleName = "Radioify-Windows-x64"
 $script:RadioifyWindowsBundleFiles = @(
-    @{ Source = "register_windows_media_app.ps1"; Destination = "register_windows_media_app.ps1" },
-    @{ Source = "unregister_windows_media_app.ps1"; Destination = "unregister_windows_media_app.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsShellCommon.ps1"; Destination = "scripts/windows/RadioifyWindowsShellCommon.ps1" },
-    @{ Source = "scripts/windows/RadioifyWindowsShortcutInterop.ps1"; Destination = "scripts/windows/RadioifyWindowsShortcutInterop.ps1" },
-    @{ Source = "scripts/windows/RadioifyWindowsMediaAppRegistration.ps1"; Destination = "scripts/windows/RadioifyWindowsMediaAppRegistration.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsExplorerIntegrationHost.ps1"; Destination = "scripts/windows/RadioifyWindowsExplorerIntegrationHost.ps1" },
-    @{ Source = "scripts/windows/RadioifyWindowsDesktopInstall.ps1"; Destination = "scripts/windows/RadioifyWindowsDesktopInstall.ps1" },
+    @{ Source = "scripts/windows/RadioifyWindowsBundleMsixInstall.ps1"; Destination = "scripts/windows/RadioifyWindowsBundleMsixInstall.ps1" },
     @{ Source = "scripts/windows/RadioifyWin11PackageCommon.ps1"; Destination = "scripts/windows/RadioifyWin11PackageCommon.ps1" },
     @{ Source = "scripts/windows/install_radioify_windows_bundle.ps1"; Destination = "scripts/windows/install_radioify_windows_bundle.ps1" },
     @{ Source = "scripts/windows/uninstall_radioify_windows_bundle.ps1"; Destination = "scripts/windows/uninstall_radioify_windows_bundle.ps1" },
@@ -19,7 +17,7 @@ $script:RadioifyWindowsBundleFiles = @(
     @{ Source = "windows/distribution/uninstall_radioify.ps1"; Destination = "uninstall_radioify.ps1" },
     @{ Source = "windows/distribution/install_radioify.cmd"; Destination = "install_radioify.cmd" },
     @{ Source = "windows/distribution/uninstall_radioify.cmd"; Destination = "uninstall_radioify.cmd" },
-    @{ Source = "windows/distribution/README.txt"; Destination = "README.txt" }
+    @{ Source = "windows/distribution/README.txt.in"; Destination = "README.txt" }
 )
 
 $script:RadioifyWindowsExplorerIntegrationBundleFiles = @(
@@ -86,6 +84,8 @@ function Copy-RadioifyWindowsExplorerIntegrationBundle {
         throw "Win11 Explorer integration artifacts were not found at '$integrationDir'. Run .\build.ps1 -Static -Win11ExplorerIntegration or rerun .\package_windows.ps1 without -SkipBuild."
     }
 
+    $packageResult = New-RadioifyWin11SignedPackage -IntegrationDir $integrationDir
+
     foreach ($file in $script:RadioifyWindowsExplorerIntegrationBundleFiles) {
         $sourcePath = Join-Path $integrationDir $file.Source
         if (-not (Test-Path -LiteralPath $sourcePath)) {
@@ -98,6 +98,15 @@ function Copy-RadioifyWindowsExplorerIntegrationBundle {
             New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
         }
 
+        Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
+    }
+
+    foreach ($sourcePath in @($packageResult.PackagePath, $packageResult.CertificatePath)) {
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            throw "Win11 Explorer integration package artifact was not created: '$sourcePath'."
+        }
+
+        $destinationPath = Join-Path $StageDir ([System.IO.Path]::GetFileName($sourcePath))
         Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
     }
 }

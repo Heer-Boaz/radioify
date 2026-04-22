@@ -1,37 +1,30 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$PackageRoot,
-    [string]$InstallDir
+    [string]$PackageRoot
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-. (Join-Path $PSScriptRoot "RadioifyWindowsDesktopInstall.ps1")
+. (Join-Path $PSScriptRoot "RadioifyWindowsShellCommon.ps1")
+. (Join-Path $PSScriptRoot "RadioifyWindowsBundleMsixInstall.ps1")
 . (Join-Path $PSScriptRoot "RadioifyWindowsExplorerIntegrationHost.ps1")
 
 Assert-RadioifyWindowsHost
 
-$definition = Get-RadioifyWindowsPackageDefinition -PackageRoot $PackageRoot -InstallDir $InstallDir
+$resolvedPackageRoot = Resolve-RadioifyWindowsBundleRoot `
+    -PackageRoot $PackageRoot `
+    -ScriptRoot $PSScriptRoot
+$integrationDir = Resolve-RadioifyWindowsBundleIntegrationDirectory -PackageRoot $resolvedPackageRoot
+$installScript = Join-Path $PSScriptRoot "install_radioify_win11_context_menu.ps1"
 $didInstall = $false
 
-if ($PSCmdlet.ShouldProcess($definition.InstallDir, "Install Radioify Windows bundle")) {
-    Copy-RadioifyWindowsPackageToInstallDirectory -Definition $definition
-    Register-RadioifyWindowsMediaApp -ExecutablePath $definition.InstalledExecutablePath | Out-Null
-    Register-RadioifyWindowsUninstallEntry -Definition $definition
-
-    if (-not (Test-Path -LiteralPath $definition.InstalledExplorerIntegrationDir)) {
-        throw "Packaged Win11 Explorer integration directory not found at '$($definition.InstalledExplorerIntegrationDir)'."
-    }
-    if (-not (Test-Path -LiteralPath $definition.InstalledExplorerInstallScriptPath)) {
-        throw "Packaged Win11 Explorer integration install script not found at '$($definition.InstalledExplorerInstallScriptPath)'."
-    }
-
+if ($PSCmdlet.ShouldProcess($resolvedPackageRoot, "Install Radioify full MSIX package")) {
     Invoke-RadioifyWindowsExplorerIntegrationScript `
-        -ScriptPath $definition.InstalledExplorerInstallScriptPath `
+        -ScriptPath $installScript `
         -Operation install `
         -Parameters @{
-            IntegrationDir = $definition.InstalledExplorerIntegrationDir
+            IntegrationDir = $integrationDir
             ReplaceExisting = $true
         } `
         -UserCommandHint ".\install_radioify.ps1"
@@ -41,10 +34,8 @@ if ($PSCmdlet.ShouldProcess($definition.InstallDir, "Install Radioify Windows bu
 
 if ($didInstall) {
     Write-Host "Installed Radioify:"
-    Write-Host " - Install dir: $($definition.InstallDir)"
-    Write-Host " - Executable: $($definition.InstalledExecutablePath)"
-    Write-Host " - Start Menu entry: $script:RadioifyWindowsAppName"
-    Write-Host " - Explorer context menu: installed"
+    Write-Host " - Package root: $resolvedPackageRoot"
+    Write-Host " - Windows app package: installed"
 } elseif ($WhatIfPreference) {
     Write-Host "What if: Radioify install was not performed."
 }

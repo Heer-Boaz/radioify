@@ -193,7 +193,6 @@ void appendExplorerLog(std::wstring_view message) {
 }
 
 std::filesystem::path currentModuleDirectory();
-std::filesystem::path packageExternalLocation();
 std::filesystem::path findRadioifyExecutable();
 const CLSID& radioifyExplorerCommandClsid();
 
@@ -203,13 +202,9 @@ void logModuleContextOnce() {
   }
 
   const std::filesystem::path moduleDir = currentModuleDirectory();
-  const std::filesystem::path externalDir = packageExternalLocation();
   const std::filesystem::path executablePath = findRadioifyExecutable();
   appendExplorerLog(L"ProcessContext process=\"" + currentProcessPath() +
                     L"\" moduleDir=\"" + moduleDir.wstring() +
-                    L"\" externalLocation=\"" +
-                    (externalDir.empty() ? std::wstring(L"<none>")
-                                         : externalDir.wstring()) +
                     L"\" radioifyExe=\"" +
                     (executablePath.empty() ? std::wstring(L"<missing>")
                                             : executablePath.wstring()) +
@@ -323,61 +318,13 @@ std::filesystem::path currentModuleDirectory() {
   }
 }
 
-std::filesystem::path packageExternalLocation() {
-  // Get the current package full name (available when running inside a
-  // sparse-package context, e.g. dllhost.exe hosting our surrogate COM class).
-  UINT32 nameLength = 0;
-  LONG rc = GetCurrentPackageFullName(&nameLength, nullptr);
-  if (rc != ERROR_INSUFFICIENT_BUFFER || nameLength == 0) return {};
-
-  std::wstring fullName(nameLength, L'\0');
-  rc = GetCurrentPackageFullName(&nameLength, fullName.data());
-  if (rc != ERROR_SUCCESS) return {};
-  fullName.resize(wcslen(fullName.c_str()));
-
-  // PackagePathType 2 = EffectiveExternal (the ExternalLocation passed to
-  // Add-AppxPackage).  GetPackagePathByFullName2 is in kernel32/kernelbase
-  // on Windows 10 1903+.
-  using GetPackagePathByFullName2_t = LONG(WINAPI*)(PCWSTR, UINT32, UINT32*, PWSTR);
-  static const auto pGetPackagePathByFullName2 = reinterpret_cast<GetPackagePathByFullName2_t>(
-      GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetPackagePathByFullName2"));
-
-  if (!pGetPackagePathByFullName2) return {};
-
-  constexpr UINT32 PackagePathType_EffectiveExternal = 2;
-  UINT32 pathLength = 0;
-  rc = pGetPackagePathByFullName2(fullName.c_str(), PackagePathType_EffectiveExternal,
-                                  &pathLength, nullptr);
-  if (rc != ERROR_INSUFFICIENT_BUFFER || pathLength == 0) return {};
-
-  std::wstring pathBuffer(pathLength, L'\0');
-  rc = pGetPackagePathByFullName2(fullName.c_str(), PackagePathType_EffectiveExternal,
-                                  &pathLength, pathBuffer.data());
-  if (rc != ERROR_SUCCESS) return {};
-  pathBuffer.resize(wcslen(pathBuffer.c_str()));
-
-  return std::filesystem::path(pathBuffer);
-}
-
 std::filesystem::path findRadioifyExecutable() {
   const std::filesystem::path moduleDir = currentModuleDirectory();
-
-  std::vector<std::filesystem::path> candidates;
-
-  // The DLL lives in dist/win11-explorer-integration/external-location/.
-  // The primary radioify.exe is in dist/, two levels up.
-  if (!moduleDir.empty()) {
-    candidates.push_back(moduleDir.parent_path().parent_path() / "radioify.exe");
-    candidates.push_back(moduleDir / "radioify.exe");
-    candidates.push_back(moduleDir.parent_path() / "radioify.exe");
+  if (moduleDir.empty()) {
+    return {};
   }
-
-  for (const auto& candidate : candidates) {
-    if (isExistingRegularFile(candidate)) {
-      return candidate;
-    }
-  }
-  return {};
+  const std::filesystem::path candidate = moduleDir / "radioify.exe";
+  return isExistingRegularFile(candidate) ? candidate : std::filesystem::path{};
 }
 
 const CLSID& radioifyExplorerCommandClsid() {
@@ -528,8 +475,6 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
     if (!icon) return E_POINTER;
     *icon = nullptr;
 
-    // Look for radioify.ico next to radioify.exe.
-    // Icon lives next to the DLL in the external location.
     const std::filesystem::path moduleDir = currentModuleDirectory();
     if (!moduleDir.empty()) {
       const std::filesystem::path icoPath = moduleDir / L"radioify.ico";

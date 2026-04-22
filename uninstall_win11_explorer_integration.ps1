@@ -1,6 +1,5 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [switch]$SkipExplorerRestart,
     [string]$LogPath
 )
 
@@ -24,9 +23,6 @@ if ($WhatIfPreference) {
 
 $uninstallParams = @{
     IntegrationDir = $integrationDir
-}
-if ($SkipExplorerRestart) {
-    $uninstallParams.SkipExplorerRestart = $true
 }
 
 Invoke-RadioifyWindowsExplorerIntegrationScript `

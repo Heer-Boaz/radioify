@@ -26,6 +26,116 @@ function Resolve-RadioifyWin11AppxCmdlet {
     throw "Required Appx cmdlet '$Name' was not found."
 }
 
+function Resolve-RadioifyWindowsPowerShellExecutable {
+    $systemRoot = [Environment]::GetEnvironmentVariable("SystemRoot")
+    if (-not [string]::IsNullOrWhiteSpace($systemRoot)) {
+        $candidate = Join-Path $systemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    $command = Get-Command powershell.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command -and $command.Source) {
+        return $command.Source
+    }
+
+    throw "Windows PowerShell was not found. MSIX deployment requires the Windows Appx PowerShell module."
+}
+
+function Invoke-RadioifyWin11DeploymentPowerShell {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
+        [hashtable]$Parameters,
+        [Parameter(Mandatory = $true)][string]$OperationName,
+        [int]$TimeoutSeconds = 180
+    )
+
+    $tempRoot = [System.IO.Path]::GetTempPath()
+    $operationId = [guid]::NewGuid().ToString("N")
+    $payloadPath = Join-Path $tempRoot "radioify-appx-$operationId.json"
+    $stdoutPath = Join-Path $tempRoot "radioify-appx-$operationId.out"
+    $stderrPath = Join-Path $tempRoot "radioify-appx-$operationId.err"
+    $payloadLiteral = $payloadPath.Replace("'", "''")
+
+    $payload = [ordered]@{
+        Script = $ScriptBlock.ToString()
+        Parameters = if ($Parameters) { $Parameters } else { @{} }
+    }
+    $payload | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $payloadPath -Encoding UTF8
+
+    $bootstrap = @"
+`$ErrorActionPreference = "Stop"
+`$ProgressPreference = "SilentlyContinue"
+`$payload = Get-Content -LiteralPath '$payloadLiteral' -Raw | ConvertFrom-Json
+`$params = @{}
+if (`$payload.Parameters) {
+    foreach (`$entry in `$payload.Parameters.PSObject.Properties) {
+        `$params[`$entry.Name] = `$entry.Value
+    }
+}
+`$scriptBlock = [ScriptBlock]::Create([string]`$payload.Script)
+& `$scriptBlock @params
+"@
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+    $powershellExe = Resolve-RadioifyWindowsPowerShellExecutable
+    $argumentList = @(
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        $encodedCommand
+    )
+
+    $process = $null
+    try {
+        $process = Start-Process `
+            -FilePath $powershellExe `
+            -ArgumentList $argumentList `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -WindowStyle Hidden `
+            -PassThru
+        $completed = $process.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $completed) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "$OperationName did not finish within $TimeoutSeconds seconds. The Windows AppX deployment service is still busy; the installer stopped waiting instead of deadlocking."
+        }
+
+        $process.Refresh()
+        $stdout = if (Test-Path -LiteralPath $stdoutPath) {
+            Get-Content -LiteralPath $stdoutPath -Raw
+        } else {
+            ""
+        }
+        $stderr = if (Test-Path -LiteralPath $stderrPath) {
+            Get-Content -LiteralPath $stderrPath -Raw
+        } else {
+            ""
+        }
+
+        if ($process.ExitCode -ne 0) {
+            $details = (($stderr, $stdout) |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
+            if ($details) {
+                throw "$OperationName failed with exit code $($process.ExitCode).`n$details"
+            }
+            throw "$OperationName failed with exit code $($process.ExitCode)."
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            Write-Host ($stdout.Trim())
+        }
+    } finally {
+        if ($process) {
+            $process.Dispose()
+        }
+        foreach ($path in @($payloadPath, $stdoutPath, $stderrPath)) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Resolve-RadioifyWin11IntegrationDirectory {
     param(
         [string]$IntegrationDir,
@@ -59,17 +169,64 @@ function Get-RadioifyWin11ManifestInfo {
     }
 
     [xml]$manifestXml = Get-Content -LiteralPath $manifestPath
-    $manifestText = Get-Content -LiteralPath $manifestPath -Raw
-    $surrogateAppId = $null
-    $surrogateMatch = [regex]::Match($manifestText, 'SurrogateServer\s+AppId="([^"]+)"')
-    if ($surrogateMatch.Success) {
-        $surrogateAppId = $surrogateMatch.Groups[1].Value
-    }
     return [pscustomobject]@{
         ManifestPath = $manifestPath
         PackageName = [string]$manifestXml.Package.Identity.Name
         Publisher = [string]$manifestXml.Package.Identity.Publisher
-        SurrogateAppId = $surrogateAppId
+        Version = [string]$manifestXml.Package.Identity.Version
+    }
+}
+
+function New-RadioifyWin11PackageIdentityVersion {
+    $now = Get-Date
+    return "{0}.{1}.{2}.{3}" -f `
+        $now.Year,
+        (($now.Month * 100) + $now.Day),
+        (($now.Hour * 100) + $now.Minute),
+        $now.Second
+}
+
+function Resolve-RadioifyWin11PackageIdentityVersion {
+    param([string]$Version)
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        $Version = New-RadioifyWin11PackageIdentityVersion
+    }
+
+    $parts = $Version -split '\.'
+    if ($parts.Count -ne 4) {
+        throw "MSIX package identity version must have four numeric parts: '$Version'."
+    }
+
+    foreach ($part in $parts) {
+        $value = 0
+        if (-not [int]::TryParse($part, [ref]$value) -or $value -lt 0 -or $value -gt 65535) {
+            throw "MSIX package identity version part '$part' is invalid in '$Version'. Expected 0..65535."
+        }
+    }
+
+    return ($parts -join ".")
+}
+
+function Set-RadioifyWin11ManifestIdentityVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$ManifestPath,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+
+    $resolvedVersion = Resolve-RadioifyWin11PackageIdentityVersion -Version $Version
+    [xml]$manifestXml = Get-Content -LiteralPath $ManifestPath
+    $manifestXml.Package.Identity.Version = $resolvedVersion
+
+    $settings = New-Object System.Xml.XmlWriterSettings
+    $settings.Indent = $true
+    $settings.Encoding = New-Object System.Text.UTF8Encoding($false)
+
+    $writer = [System.Xml.XmlWriter]::Create($ManifestPath, $settings)
+    try {
+        $manifestXml.Save($writer)
+    } finally {
+        $writer.Close()
     }
 }
 
@@ -160,22 +317,6 @@ function Reset-RadioifyWin11StagingDirectory {
         Remove-Item -Recurse -Force
 }
 
-function Clear-RadioifyWin11DeployRootArtifacts {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    Ensure-RadioifyWin11Directory -Path $Path
-
-    foreach ($artifactName in @(
-            "radioify_explorer.dll",
-            "radioify.ico"
-        )) {
-        $artifactPath = Join-Path $Path $artifactName
-        if (Test-Path -LiteralPath $artifactPath) {
-            Remove-Item -LiteralPath $artifactPath -Force
-        }
-    }
-}
-
 function New-RadioifyWin11PngAsset {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -242,37 +383,18 @@ function Export-RadioifyWin11PngAssetFromIcon {
     }
 }
 
-function Initialize-RadioifyWin11DeployRoot {
-    param([Parameter(Mandatory = $true)][string]$IntegrationDir)
-
-    $distRoot = Split-Path -Parent $IntegrationDir
-    $deployRoot = Join-Path $IntegrationDir "external-location"
-    Clear-RadioifyWin11DeployRootArtifacts -Path $deployRoot
-
-    # Only the DLL and icon need to be in the external location.
-    # radioify.exe lives in dist/ and the DLL finds it two levels up.
-    $dllSource = Join-Path $IntegrationDir "radioify_explorer.dll"
-    if (Test-Path -LiteralPath $dllSource) {
-        Copy-Item -LiteralPath $dllSource `
-            -Destination (Join-Path $deployRoot "radioify_explorer.dll") `
-            -Force
-    }
-
-    $icoSource = Join-Path $distRoot "radioify.ico"
-    if (Test-Path -LiteralPath $icoSource) {
-        Copy-Item -LiteralPath $icoSource `
-            -Destination (Join-Path $deployRoot "radioify.ico") `
-            -Force
-    }
-
-    return $deployRoot
-}
-
 function Initialize-RadioifyWin11PackageLayout {
-    param([Parameter(Mandatory = $true)][string]$IntegrationDir)
+    param(
+        [Parameter(Mandatory = $true)][string]$IntegrationDir,
+        [string]$PackageVersion
+    )
 
     $layoutDir = Join-Path $IntegrationDir "package-layout"
     $distRoot = Split-Path -Parent $IntegrationDir
+    $resolvedPackageVersion = Resolve-RadioifyWin11PackageIdentityVersion -Version $PackageVersion
+    Set-RadioifyWin11ManifestIdentityVersion `
+        -ManifestPath (Join-Path $IntegrationDir "Package.appxmanifest") `
+        -Version $resolvedPackageVersion
     Reset-RadioifyWin11StagingDirectory -Path $layoutDir
 
     Copy-Item -LiteralPath (Join-Path $IntegrationDir "Package.appxmanifest") `
@@ -281,10 +403,20 @@ function Initialize-RadioifyWin11PackageLayout {
     Copy-Item -LiteralPath (Join-Path $IntegrationDir "radioify_explorer.dll") `
         -Destination (Join-Path $layoutDir "radioify_explorer.dll") `
         -Force
+    Copy-Item -LiteralPath (Join-Path $distRoot "radioify.exe") `
+        -Destination (Join-Path $layoutDir "radioify.exe") `
+        -Force
+
+    $icoSource = Join-Path $distRoot "radioify.ico"
+    if (Test-Path -LiteralPath $icoSource) {
+        Copy-Item -LiteralPath $icoSource `
+            -Destination (Join-Path $layoutDir "radioify.ico") `
+            -Force
+    }
 
     $assetsDir = Join-Path $layoutDir "Assets"
     New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
-    $iconSource = Join-Path $distRoot "radioify.ico"
+    $iconSource = Join-Path $layoutDir "radioify.ico"
     if (Test-Path -LiteralPath $iconSource) {
         Export-RadioifyWin11PngAssetFromIcon `
             -IconPath $iconSource `
@@ -302,14 +434,14 @@ function Initialize-RadioifyWin11PackageLayout {
     return $layoutDir
 }
 
-function Get-RadioifyWin11DeployRootPath {
-    param([Parameter(Mandatory = $true)][string]$IntegrationDir)
-    return (Join-Path $IntegrationDir "external-location")
-}
-
 function Get-RadioifyWin11PackageLayoutPath {
     param([Parameter(Mandatory = $true)][string]$IntegrationDir)
     return (Join-Path $IntegrationDir "package-layout")
+}
+
+function Get-RadioifyWin11PackageArtifactDirectory {
+    param([Parameter(Mandatory = $true)][string]$IntegrationDir)
+    return (Split-Path -Parent $IntegrationDir)
 }
 
 function Get-RadioifyWin11PackagePath {
@@ -318,15 +450,45 @@ function Get-RadioifyWin11PackagePath {
         [Parameter(Mandatory = $true)][string]$PackageName
     )
 
-    return (Join-Path $IntegrationDir "$PackageName.msix")
+    return (Join-Path (Get-RadioifyWin11PackageArtifactDirectory -IntegrationDir $IntegrationDir) "$PackageName.msix")
 }
 
-function Ensure-RadioifyWin11Certificate {
+function Get-RadioifyWin11CertificatePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$IntegrationDir,
+        [Parameter(Mandatory = $true)][string]$PackageName
+    )
+
+    return (Join-Path (Get-RadioifyWin11PackageArtifactDirectory -IntegrationDir $IntegrationDir) "$PackageName.cer")
+}
+
+function Clear-RadioifyWin11LegacyPackageArtifacts {
+    param(
+        [Parameter(Mandatory = $true)][string]$IntegrationDir,
+        [Parameter(Mandatory = $true)][string]$PackageName
+    )
+
+    foreach ($legacyPath in @(
+            (Join-Path $IntegrationDir "$PackageName.msix"),
+            (Join-Path $IntegrationDir "$PackageName.cer"),
+            (Join-Path $IntegrationDir "external-location")
+        )) {
+        if (Test-Path -LiteralPath $legacyPath) {
+            Remove-Item -LiteralPath $legacyPath -Recurse -Force
+        }
+    }
+}
+
+function Ensure-RadioifyWin11SigningCertificate {
     param(
         [Parameter(Mandatory = $true)][string]$Subject,
         [Parameter(Mandatory = $true)][string]$IntegrationDir
     )
 
+    $manifestInfo = Get-RadioifyWin11ManifestInfo -IntegrationDir $IntegrationDir
+    Clear-RadioifyWin11LegacyPackageArtifacts `
+        -IntegrationDir $IntegrationDir `
+        -PackageName $manifestInfo.PackageName
     $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue |
         Where-Object { $_.Subject -eq $Subject -and $_.HasPrivateKey } |
         Sort-Object NotAfter -Descending |
@@ -346,11 +508,30 @@ function Ensure-RadioifyWin11Certificate {
             -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
     }
 
-    $certPath = Join-Path $IntegrationDir "Radioify.Win11Explorer.cer"
+    $certPath = Get-RadioifyWin11CertificatePath `
+        -IntegrationDir $IntegrationDir `
+        -PackageName $manifestInfo.PackageName
     Export-Certificate -Cert $cert -FilePath $certPath -Force | Out-Null
 
+    return [pscustomobject]@{
+        Certificate = $cert
+        CertificatePath = $certPath
+    }
+}
+
+function Ensure-RadioifyWin11CertificateTrusted {
+    param(
+        [Parameter(Mandatory = $true)][string]$CertificatePath
+    )
+
+    if (-not (Test-Path -LiteralPath $CertificatePath)) {
+        throw "MSIX certificate not found at '$CertificatePath'."
+    }
+    $certificate = Get-PfxCertificate -FilePath $CertificatePath
     $trusted = Get-ChildItem Cert:\LocalMachine\TrustedPeople -ErrorAction SilentlyContinue |
-        Where-Object { $_.Thumbprint -eq $cert.Thumbprint } |
+        Where-Object {
+            $_.Thumbprint -eq $certificate.Thumbprint
+        } |
         Select-Object -First 1
     if (-not $trusted) {
         if (-not (Test-RadioifyAdministrator)) {
@@ -367,76 +548,100 @@ from an elevated PowerShell window.
 "@
         }
 
-        Import-Certificate -FilePath $certPath -CertStoreLocation "Cert:\LocalMachine\TrustedPeople" | Out-Null
+        Import-Certificate -FilePath $CertificatePath -CertStoreLocation "Cert:\LocalMachine\TrustedPeople" | Out-Null
+    }
+}
+
+function Ensure-RadioifyWin11Certificate {
+    param(
+        [Parameter(Mandatory = $true)][string]$Subject,
+        [Parameter(Mandatory = $true)][string]$IntegrationDir
+    )
+
+    $certInfo = Ensure-RadioifyWin11SigningCertificate `
+        -Subject $Subject `
+        -IntegrationDir $IntegrationDir
+    Ensure-RadioifyWin11CertificateTrusted -CertificatePath $certInfo.CertificatePath
+
+    return [pscustomobject]@{
+        Certificate = $certInfo.Certificate
+        CertificatePath = $certInfo.CertificatePath
+    }
+}
+
+function New-RadioifyWin11SignedPackage {
+    param(
+        [Parameter(Mandatory = $true)][string]$IntegrationDir,
+        [string]$PackageVersion,
+        [switch]$TrustCertificate
+    )
+
+    Assert-RadioifyWin11ArtifactsExist -IntegrationDir $IntegrationDir
+
+    $resolvedPackageVersion = Resolve-RadioifyWin11PackageIdentityVersion -Version $PackageVersion
+    Set-RadioifyWin11ManifestIdentityVersion `
+        -ManifestPath (Join-Path $IntegrationDir "Package.appxmanifest") `
+        -Version $resolvedPackageVersion
+
+    $manifestInfo = Get-RadioifyWin11ManifestInfo -IntegrationDir $IntegrationDir
+    Clear-RadioifyWin11LegacyPackageArtifacts `
+        -IntegrationDir $IntegrationDir `
+        -PackageName $manifestInfo.PackageName
+    $makeAppxExe = Resolve-WindowsSdkExecutable -ToolName "makeappx.exe"
+    $signToolExe = Resolve-WindowsSdkExecutable -ToolName "signtool.exe"
+    $packageLayout = Initialize-RadioifyWin11PackageLayout `
+        -IntegrationDir $IntegrationDir `
+        -PackageVersion $resolvedPackageVersion
+    $packagePath = Get-RadioifyWin11PackagePath `
+        -IntegrationDir $IntegrationDir `
+        -PackageName $manifestInfo.PackageName
+    $certInfo = Ensure-RadioifyWin11SigningCertificate `
+        -Subject $manifestInfo.Publisher `
+        -IntegrationDir $IntegrationDir
+
+    if (Test-Path -LiteralPath $packagePath) {
+        Remove-Item -LiteralPath $packagePath -Force
+    }
+    Invoke-NativeTool -FilePath $makeAppxExe -Arguments @(
+        "pack",
+        "/d", $packageLayout,
+        "/p", $packagePath,
+        "/o"
+    ) | Out-Host
+    Invoke-NativeTool -FilePath $signToolExe -Arguments @(
+        "sign",
+        "/fd", "SHA256",
+        "/sha1", $certInfo.Certificate.Thumbprint,
+        "/s", "My",
+        $packagePath
+    ) | Out-Host
+
+    if ($TrustCertificate) {
+        Ensure-RadioifyWin11CertificateTrusted -CertificatePath $certInfo.CertificatePath
     }
 
     return [pscustomobject]@{
-        Certificate = $cert
-        CertificatePath = $certPath
+        PackagePath = $packagePath
+        CertificatePath = $certInfo.CertificatePath
+        LayoutPath = $packageLayout
+        ManifestInfo = $manifestInfo
+        PackageVersion = $resolvedPackageVersion
     }
 }
 
-function Restart-RadioifyExplorerShell {
-    $explorerProcesses = Get-Process explorer -ErrorAction SilentlyContinue
-    if ($explorerProcesses) {
-        $explorerProcesses | Stop-Process -Force
-        Wait-RadioifyProcessExit -Name "explorer" | Out-Null
-    }
-    Start-Process explorer.exe
-}
+function Ensure-RadioifyWin11PackagedMsixTrusted {
+    param([Parameter(Mandatory = $true)][string]$IntegrationDir)
 
-function Start-RadioifyExplorerShell {
-    if (-not (Get-Process explorer -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-        Start-Process explorer.exe
-    }
-}
-
-function Stop-RadioifyExplorerShell {
-    Get-Process explorer -ErrorAction SilentlyContinue | Stop-Process -Force
-}
-
-function Wait-RadioifyProcessExit {
-    param(
-        [Parameter(Mandatory = $true)][string]$Name,
-        [int]$TimeoutSeconds = 10
-    )
-
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    do {
-        $processes = Get-Process -Name $Name -ErrorAction SilentlyContinue
-        if (-not $processes) {
-            return $true
-        }
-        Start-Sleep -Milliseconds 200
-    } while ((Get-Date) -lt $deadline)
-
-    return $false
-}
-
-function Stop-RadioifyWin11SurrogateServer {
-    param([string]$AppId)
-
-    if ([string]::IsNullOrWhiteSpace($AppId)) {
-        return
+    $manifestInfo = Get-RadioifyWin11ManifestInfo -IntegrationDir $IntegrationDir
+    $certificatePath = Get-RadioifyWin11CertificatePath `
+        -IntegrationDir $IntegrationDir `
+        -PackageName $manifestInfo.PackageName
+    if (-not (Test-Path -LiteralPath $certificatePath)) {
+        throw "MSIX certificate not found at '$certificatePath'. Repackage Radioify so the signed .msix and .cer are bundled together."
     }
 
-    $needle = "/Processid:{$AppId}".ToLowerInvariant()
-    Get-CimInstance Win32_Process -Filter "Name = 'dllhost.exe'" -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($needle)
-        } |
-        ForEach-Object {
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-        }
-}
-
-function Stop-RadioifyWin11IntegrationHosts {
-    param([string]$SurrogateAppId)
-
-    Stop-RadioifyExplorerShell
-    Stop-RadioifyWin11SurrogateServer -AppId $SurrogateAppId
-    Clear-RadioifyWindowsIconCache
-    Invoke-RadioifyShellAssociationRefresh
+    Ensure-RadioifyWin11CertificateTrusted -CertificatePath $certificatePath
+    return $certificatePath
 }
 
 function Get-InstalledRadioifyWin11Package {
@@ -461,17 +666,11 @@ function Wait-RadioifyWin11PackageState {
     param(
         [Parameter(Mandatory = $true)][string]$PackageName,
         [Parameter(Mandatory = $true)][ValidateSet("Absent", "Ready")][string]$DesiredState,
-        [int]$TimeoutSeconds = 30,
-        [switch]$KeepShellStopped,
-        [string]$SurrogateAppId
+        [int]$TimeoutSeconds = 30
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
-        if ($KeepShellStopped) {
-            Stop-RadioifyWin11IntegrationHosts -SurrogateAppId $SurrogateAppId
-        }
-
         $package = Get-InstalledRadioifyWin11Package -PackageName $PackageName
         if ($DesiredState -eq "Absent") {
             if (-not $package) {
@@ -496,50 +695,58 @@ function Wait-RadioifyWin11PackageState {
     throw "Timed out waiting for package '$PackageName' to become ready. Current status: $statusText"
 }
 
-function Wait-RadioifyWin11PackageSettled {
-    param(
-        [Parameter(Mandatory = $true)][string]$PackageName,
-        [int]$TimeoutSeconds = 30,
-        [switch]$KeepShellStopped,
-        [string]$SurrogateAppId
-    )
-
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    do {
-        if ($KeepShellStopped) {
-            Stop-RadioifyWin11IntegrationHosts -SurrogateAppId $SurrogateAppId
-        }
-
-        $package = Get-InstalledRadioifyWin11Package -PackageName $PackageName
-        if (-not $package) {
-            return $null
-        }
-
-        if (-not (Test-RadioifyWin11PackageBusy -Package $package)) {
-            return $package
-        }
-
-        Start-Sleep -Milliseconds 500
-    } while ((Get-Date) -lt $deadline)
-
-    $package = Get-InstalledRadioifyWin11Package -PackageName $PackageName
-    $statusText = if ($package) { [string]$package.Status } else { "not installed" }
-    throw "Timed out waiting for package '$PackageName' to settle. Current status: $statusText"
-}
-
 function Install-RadioifyWin11Package {
     param(
-        [Parameter(Mandatory = $true)][string]$PackagePath,
-        [Parameter(Mandatory = $true)][string]$ExternalLocation
+        [Parameter(Mandatory = $true)][string]$PackagePath
     )
 
-    $cmdlet = Resolve-RadioifyWin11AppxCmdlet -Name "Add-AppxPackage"
-    & $cmdlet -ForceApplicationShutdown -ForceUpdateFromAnyVersion -Path $PackagePath -ExternalLocation $ExternalLocation
+    Invoke-RadioifyWin11DeploymentPowerShell `
+        -OperationName "Install Radioify MSIX package" `
+        -TimeoutSeconds 180 `
+        -ScriptBlock {
+            param([Parameter(Mandatory = $true)][string]$PackagePath)
+
+            Add-AppxPackage `
+                -Path $PackagePath `
+                -ForceTargetApplicationShutdown `
+                -ForceUpdateFromAnyVersion `
+                -DeferRegistrationWhenPackagesAreInUse `
+                -ErrorAction Stop
+        } `
+        -Parameters @{
+            PackagePath = $PackagePath
+        }
 }
 
 function Remove-RadioifyWin11Package {
-    param([Parameter(Mandatory = $true)][string]$PackageFullName)
+    param(
+        [Parameter(Mandatory = $true)][string]$PackageFullName,
+        [string]$PackageName
+    )
 
-    $cmdlet = Resolve-RadioifyWin11AppxCmdlet -Name "Remove-AppxPackage"
-    & $cmdlet -Package $PackageFullName
+    try {
+        Invoke-RadioifyWin11DeploymentPowerShell `
+            -OperationName "Remove Radioify MSIX package" `
+            -TimeoutSeconds 180 `
+            -ScriptBlock {
+                param([Parameter(Mandatory = $true)][string]$PackageFullName)
+
+                Remove-AppxPackage `
+                    -Package $PackageFullName `
+                    -ErrorAction Stop
+            } `
+            -Parameters @{
+                PackageFullName = $PackageFullName
+            }
+    } catch {
+        if (-not [string]::IsNullOrWhiteSpace($PackageName)) {
+            $remainingPackage = Get-InstalledRadioifyWin11Package -PackageName $PackageName
+            if (-not $remainingPackage) {
+                Write-Warning "Remove-AppxPackage reported an error after '$PackageFullName' was already removed. Continuing."
+                return
+            }
+        }
+
+        throw
+    }
 }

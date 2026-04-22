@@ -3,7 +3,6 @@ param(
     [switch]$Rebuild,
     [switch]$SkipBuild,
     [switch]$ReplaceExisting,
-    [switch]$SkipExplorerRestart,
     [string]$LogPath
 )
 
@@ -11,6 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "scripts\windows\RadioifyWindowsExplorerIntegrationHost.ps1")
+. (Join-Path $PSScriptRoot "scripts\windows\RadioifyWin11PackageCommon.ps1")
 
 $repoRoot = $PSScriptRoot
 $buildScript = Join-Path $repoRoot "build.ps1"
@@ -46,15 +46,16 @@ if ($WhatIfPreference) {
     return
 }
 
+if ($PSCmdlet.ShouldProcess($integrationDir, "Create signed Radioify Windows shell MSIX")) {
+    New-RadioifyWin11SignedPackage -IntegrationDir $integrationDir | Out-Null
+}
+
 $installParams = @{
     IntegrationDir = $integrationDir
     ReplaceExisting = $true
 }
 if ($ReplaceExisting) {
     $installParams.ReplaceExisting = $true
-}
-if ($SkipExplorerRestart) {
-    $installParams.SkipExplorerRestart = $true
 }
 
 Invoke-RadioifyWindowsExplorerIntegrationScript `
