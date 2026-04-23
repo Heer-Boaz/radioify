@@ -66,6 +66,7 @@
 #include "ui_viewport.h"
 #include "videoplayback.h"
 #include "videowindow.h"
+#include "windows_file_drop_apartment.h"
 #include "media_formats.h"
 #include "runtime_helpers.h"
 
@@ -701,6 +702,8 @@ int runTui(Options o) {
   if (o.renderRadio) {
     return runRenderRadioCli(o);
   }
+
+  windows_file_drop::OleApartment tuiWindowThreadApartment;
 
   float lpHz = static_cast<float>(o.bwHz);
   const uint32_t sampleRate = 48000;
@@ -1489,7 +1492,16 @@ int runTui(Options o) {
     }
     if (audioMiniPlayer.toggle()) {
       markDirty(UiDirtyFlags::Async);
+      return;
     }
+    const std::string detail = audioMiniPlayer.lastError().empty()
+                                   ? "The mini-player did not open."
+                                   : audioMiniPlayer.lastError();
+    playback_dialog::showInfoDialog(
+        input, screen, kStyleNormal, kStyleAccent, kStyleDim,
+        "Mini Player Error", "Radioify could not open the mini-player.",
+        detail, "Enter/Space/Esc: close");
+    markDirty();
   };
 
   AudioMiniPlayer::Styles audioMiniStyles{kStyleNormal,

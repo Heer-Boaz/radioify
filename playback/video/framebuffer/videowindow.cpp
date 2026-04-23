@@ -1651,9 +1651,7 @@ void VideoWindow::Cleanup() {
 bool VideoWindow::Open(int width, int height, const std::string& title,
                        bool startFullscreen) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-    if (!m_input.beginWindowThread()) {
-        return false;
-    }
+    m_input.beginWindowThread();
     m_closeRequested.store(false, std::memory_order_relaxed);
     if (m_closeRequestedEvent) {
         ResetEvent(m_closeRequestedEvent);

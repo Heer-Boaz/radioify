@@ -49,6 +49,7 @@ class AudioMiniPlayer {
   };
 
   bool isOpen() const;
+  const std::string& lastError() const { return lastError_; }
   bool open();
   void close();
   bool toggle();
@@ -90,4 +91,5 @@ class AudioMiniPlayer {
   double seekDisplaySec_ = -1.0;
   bool seekHoldActive_ = false;
   std::chrono::steady_clock::time_point seekHoldStart_{};
+  std::string lastError_;
 };

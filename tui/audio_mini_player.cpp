@@ -83,12 +83,19 @@ RECT cellRectToPixels(int x, int y, int width, int height, int cellWidth,
 bool AudioMiniPlayer::isOpen() const { return window_.IsOpen(); }
 
 bool AudioMiniPlayer::open() {
+  lastError_.clear();
   if (window_.IsOpen()) return true;
   if (!window_.Open(kDefaultWindowWidth, kDefaultWindowHeight,
                     "Radioify Mini Player", false)) {
+    lastError_ = "The mini-player window could not be created.";
     return false;
   }
-  window_.EnableFileDrop();
+  if (!window_.EnableFileDrop()) {
+    lastError_ =
+        "Windows refused the mini-player drag/drop registration.";
+    window_.Close();
+    return false;
+  }
   window_.SetCaptureAllMouseInput(true);
   window_.SetVsync(true);
   window_.SetTextGridMinimumSize(kMinCols, kMinRows);
