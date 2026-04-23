@@ -52,7 +52,7 @@
 #include "playback/playback_shortcuts.h"
 #include "playback/overlay/playback_overlay.h"
 #include "playback/system_media_transport_controls.h"
-#include "playback_target_resolver.h"
+#include "playback_drop_route.h"
 #include "playback_transport_navigation.h"
 #include "tracklist.h"
 #include "track_browser_state.h"
@@ -984,6 +984,26 @@ int runTui(Options o) {
     }
     return label;
   };
+  auto showAudioMiniPlayerOpenError = [&]() {
+    const std::string detail = audioMiniPlayer.lastError().empty()
+                                   ? "The mini-player did not open."
+                                   : audioMiniPlayer.lastError();
+    playback_dialog::showInfoDialog(
+        input, screen, kStyleNormal, kStyleAccent, kStyleDim,
+        "Mini Player Error", "Radioify could not open the mini-player.",
+        detail, "Enter/Space/Esc: close");
+  };
+  auto openAudioMiniPlayerWithPlacement =
+      [&](const PlaybackWindowPlacementState* placement) {
+    const bool opened =
+        placement ? audioMiniPlayer.openWithPlacement(*placement)
+                  : audioMiniPlayer.open();
+    if (!opened) {
+      showAudioMiniPlayerOpenError();
+    }
+    markDirty(UiDirtyFlags::Async);
+    return opened;
+  };
 
   playback_transport_navigation::Navigator::Callbacks transportCallbacks;
   transportCallbacks.dirty = &dirty;
@@ -995,16 +1015,34 @@ int runTui(Options o) {
   playback_transport_navigation::Navigator transportNavigator(
       browser, std::move(transportCallbacks));
 
+  std::function<bool(const PlaybackTarget&,
+                     const PlaybackSessionContinuationState*)>
+      playPlaybackTargetWithState;
   std::function<bool(const PlaybackTarget&)> playPlaybackTarget;
-  playPlaybackTarget = [&](const PlaybackTarget& initialTarget) {
+  playPlaybackTargetWithState =
+      [&](const PlaybackTarget& initialTarget,
+          const PlaybackSessionContinuationState* initialContinuation) {
     PlaybackTarget target = initialTarget;
     PlaybackSessionContinuationState playbackContinuationState;
+    if (initialContinuation) {
+      playbackContinuationState = *initialContinuation;
+    }
+    bool openAudioMiniPlayerAfterTarget = false;
+    auto finalizeAudioTarget = [&](bool started) {
+      if (started && openAudioMiniPlayerAfterTarget) {
+        openAudioMiniPlayerWithPlacement(
+            &playbackContinuationState.windowPlacement);
+      }
+      openAudioMiniPlayerAfterTarget = false;
+      return started;
+    };
     while (!target.file.empty()) {
       if (!transportNavigator.syncBrowserToPlaybackTarget(target)) {
         return false;
       }
       if (target.trackIndex >= 0) {
-        return tryStartAudioFile(target.file, target.trackIndex);
+        return finalizeAudioTarget(
+            tryStartAudioFile(target.file, target.trackIndex));
       }
       if (isSupportedImageExt(target.file)) {
         bool quitAppRequested = false;
@@ -1020,19 +1058,23 @@ int runTui(Options o) {
       if (isVideoExt(target.file)) {
         bool quitAppRequested = false;
         std::optional<PlaybackTarget> pendingTransportTarget;
+        bool openAudioMiniPlayerForPendingTarget = false;
         auto requestTransportCommand = [&](PlaybackTransportCommand command) {
           const int direction =
               (command == PlaybackTransportCommand::Previous) ? -1 : 1;
           pendingTransportTarget =
               transportNavigator.resolveAdjacentPlaybackTarget(target,
                                                               direction);
+          openAudioMiniPlayerForPendingTarget = false;
           return pendingTransportTarget.has_value();
         };
         auto requestOpenFiles =
             [&](const std::vector<std::filesystem::path>& files) {
-          if (auto droppedTarget =
-                  playback_target_resolver::resolveDroppedTarget(files)) {
-            pendingTransportTarget = *droppedTarget;
+          if (auto route = playback_drop_route::resolve(
+                  files, playback_drop_route::DropSurface::VideoPresentation)) {
+            pendingTransportTarget = route->target;
+            openAudioMiniPlayerForPendingTarget =
+                route->openAudioMiniPlayer;
             return true;
           }
           return false;
@@ -1049,17 +1091,22 @@ int runTui(Options o) {
         }
         if (pendingTransportTarget) {
           target = *pendingTransportTarget;
+          openAudioMiniPlayerAfterTarget =
+              openAudioMiniPlayerForPendingTarget;
           continue;
         }
         if (handled) {
           markDirty();
           return true;
         }
-        return tryStartAudioFile(target.file);
+        return finalizeAudioTarget(tryStartAudioFile(target.file));
       }
-      return tryStartAudioFile(target.file);
+      return finalizeAudioTarget(tryStartAudioFile(target.file));
     }
     return false;
+  };
+  playPlaybackTarget = [&](const PlaybackTarget& initialTarget) {
+    return playPlaybackTargetWithState(initialTarget, nullptr);
   };
 
   if (hasPendingImage) {
@@ -1374,9 +1421,9 @@ int runTui(Options o) {
   };
   callbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
-    if (auto droppedTarget =
-            playback_target_resolver::resolveDroppedTarget(files)) {
-      return playPlaybackTarget(*droppedTarget);
+    if (auto route = playback_drop_route::resolve(
+            files, playback_drop_route::DropSurface::Browser)) {
+      return playPlaybackTarget(route->target);
     }
     return false;
   };
@@ -1494,13 +1541,7 @@ int runTui(Options o) {
       markDirty(UiDirtyFlags::Async);
       return;
     }
-    const std::string detail = audioMiniPlayer.lastError().empty()
-                                   ? "The mini-player did not open."
-                                   : audioMiniPlayer.lastError();
-    playback_dialog::showInfoDialog(
-        input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-        "Mini Player Error", "Radioify could not open the mini-player.",
-        detail, "Enter/Space/Esc: close");
+    showAudioMiniPlayerOpenError();
     markDirty();
   };
 
@@ -1559,10 +1600,23 @@ int runTui(Options o) {
   };
   audioMiniCallbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
-    if (!callbacks.onPlayFiles) {
+    PlaybackWindowPlacementState sourcePlacement =
+        audioMiniPlayer.capturePlacement();
+    auto route = playback_drop_route::resolve(
+        files, playback_drop_route::DropSurface::AudioMiniPlayer,
+        &sourcePlacement, videoConfig.enableAscii);
+    if (!route) {
       return false;
     }
-    return callbacks.onPlayFiles(files);
+    if (route->closeAudioMiniPlayer) {
+      audioMiniPlayer.close();
+      markDirty(UiDirtyFlags::Async);
+    }
+    if (route->videoContinuation) {
+      return playPlaybackTargetWithState(route->target,
+                                         &*route->videoContinuation);
+    }
+    return playPlaybackTarget(route->target);
   };
   audioMiniCallbacks.onClose = [&]() { markDirty(UiDirtyFlags::Async); };
 

@@ -11,6 +11,7 @@
 #include "consolescreen.h"
 #include "gpu_text_grid.h"
 #include "playback/overlay/playback_overlay.h"
+#include "playback/session/playback_session_state.h"
 #include "videowindow.h"
 
 class AudioMiniPlayer {
@@ -51,12 +52,15 @@ class AudioMiniPlayer {
   bool isOpen() const;
   const std::string& lastError() const { return lastError_; }
   bool open();
+  bool openWithPlacement(const PlaybackWindowPlacementState& placement);
   void close();
   bool toggle();
   bool pollEvents(const Callbacks& callbacks);
   bool render(const Styles& styles, const Context& context);
+  PlaybackWindowPlacementState capturePlacement() const;
 
  private:
+  bool open(const PlaybackWindowPlacementState* initialPlacement);
   bool ensureOpen();
   void refreshGridSize();
   void refreshArtwork(const Context& context, int width, int height);

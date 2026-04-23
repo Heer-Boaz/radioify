@@ -82,7 +82,14 @@ RECT cellRectToPixels(int x, int y, int width, int height, int cellWidth,
 
 bool AudioMiniPlayer::isOpen() const { return window_.IsOpen(); }
 
-bool AudioMiniPlayer::open() {
+bool AudioMiniPlayer::open() { return open(nullptr); }
+
+bool AudioMiniPlayer::openWithPlacement(
+    const PlaybackWindowPlacementState& placement) {
+  return open(&placement);
+}
+
+bool AudioMiniPlayer::open(const PlaybackWindowPlacementState* initialPlacement) {
   lastError_.clear();
   if (window_.IsOpen()) return true;
   if (!window_.Open(kDefaultWindowWidth, kDefaultWindowHeight,
@@ -100,8 +107,14 @@ bool AudioMiniPlayer::open() {
   window_.SetVsync(true);
   window_.SetTextGridMinimumSize(kMinCols, kMinRows);
   PlaybackWindowPlacementState placement;
+  if (initialPlacement) {
+    placement = *initialPlacement;
+  }
+  placement.fullscreenActive = false;
   placement.pictureInPictureActive = true;
+  placement.pictureInPictureRestoreFullscreen = false;
   placement.textGridPresentationEnabled = true;
+  placement.pictureInPictureStartedFromTerminal = false;
   playback_window_presentation::applyPlacement(window_, placement);
   window_.ShowWindow(true);
   refreshGridSize();
@@ -124,6 +137,12 @@ bool AudioMiniPlayer::toggle() {
 
 bool AudioMiniPlayer::ensureOpen() {
   return window_.IsOpen() || open();
+}
+
+PlaybackWindowPlacementState AudioMiniPlayer::capturePlacement() const {
+  PlaybackWindowPlacementState placement;
+  playback_window_presentation::capturePlacement(window_, placement, false);
+  return placement;
 }
 
 void AudioMiniPlayer::refreshGridSize() {
