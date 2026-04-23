@@ -20,9 +20,25 @@ bool VideoWindowInputController::poll(InputEvent& ev) {
   return events_.poll(ev);
 }
 
+bool VideoWindowInputController::beginWindowThread() {
+  endWindowThread();
+  fileDropApartment_.emplace();
+  if (!fileDropApartment_->initialized()) {
+    fileDropApartment_.reset();
+    return false;
+  }
+  return true;
+}
+
+void VideoWindowInputController::endWindowThread() {
+  disableFileDrop();
+  events_.clear();
+  fileDropApartment_.reset();
+}
+
 bool VideoWindowInputController::enableFileDrop(HWND hwnd) {
   disableFileDrop();
-  if (!hwnd) {
+  if (!hwnd || !fileDropApartment_) {
     return false;
   }
 

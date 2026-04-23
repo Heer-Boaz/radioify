@@ -1,10 +1,11 @@
 #pragma once
 
 #include <functional>
-#include <optional>
 
 #include "file_drop_event.h"
-#include "windows_file_drop_apartment.h"
+
+struct HWND__;
+using HWND = HWND__*;
 
 namespace windows_file_drop {
 
@@ -24,7 +25,6 @@ class DropTargetRegistration {
  private:
   HWND hwnd_ = nullptr;
   class DropTarget* target_ = nullptr;
-  std::optional<OleApartment> oleApartment_;
 };
 
 }  // namespace windows_file_drop

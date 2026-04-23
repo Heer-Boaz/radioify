@@ -90,10 +90,28 @@ if (`$payload.Parameters) {
             -RedirectStandardError $stderrPath `
             -WindowStyle Hidden `
             -PassThru
-        $completed = $process.WaitForExit($TimeoutSeconds * 1000)
-        if (-not $completed) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw "$OperationName did not finish within $TimeoutSeconds seconds. The installer stopped waiting instead of deadlocking."
+
+        $startedAt = Get-Date
+        $deadline = $startedAt.AddSeconds($TimeoutSeconds)
+        $lastStatusAt = $startedAt
+        $completed = $false
+        while (-not $completed) {
+            $completed = $process.WaitForExit(1000)
+            if ($completed) {
+                break
+            }
+
+            $now = Get-Date
+            if ($now -ge $deadline) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                throw "$OperationName did not finish within $TimeoutSeconds seconds. The installer stopped waiting instead of deadlocking."
+            }
+
+            if (($now - $lastStatusAt).TotalSeconds -ge 10) {
+                $elapsedSeconds = [int][Math]::Floor(($now - $startedAt).TotalSeconds)
+                Write-Host "$OperationName is still running... ${elapsedSeconds}s elapsed"
+                $lastStatusAt = $now
+            }
         }
 
         $process.Refresh()
@@ -337,7 +355,6 @@ function Install-RadioifyMsixPackage {
                 -Path $PackagePath `
                 -ForceTargetApplicationShutdown `
                 -ForceUpdateFromAnyVersion `
-                -DeferRegistrationWhenPackagesAreInUse `
                 -ErrorAction Stop
         } `
         -Parameters @{

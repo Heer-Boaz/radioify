@@ -60,13 +60,19 @@ try {
         Write-Host "No package changes were made. Use -ReplaceExisting to force an update."
         return
     }
+    if ($installedPackage -and $ReplaceExisting) {
+        Write-Host "Replacing installed Radioify MSIX package:"
+        Write-Host "  $($installedPackage.PackageFullName)"
+    }
 
     if ($PSCmdlet.ShouldProcess($packagePath, "Trust packaged Radioify MSIX certificate")) {
         Require-RadioifyMsixInstallPackage
     }
 
     if ($PSCmdlet.ShouldProcess($packagePath, "Install Radioify MSIX package")) {
+        Write-Host "Installing Radioify MSIX package..."
         Install-RadioifyMsixPackage -PackagePath $packagePath
+        Write-Host "Waiting for Radioify MSIX package registration..."
         Wait-RadioifyMsixPackageState `
             -PackageName $manifestInfo.PackageName `
             -DesiredState Ready `

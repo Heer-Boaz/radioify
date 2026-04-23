@@ -2,6 +2,8 @@
 
 #include <atomic>
 
+#include "audioplayback.h"
+#include "player.h"
 #include "playback_session_state.h"
 
 namespace playback_session_handoff {
@@ -23,6 +25,26 @@ void finishHandoff(const playback_session_input::PlaybackInputView& view,
   }
   if (signals.forceRefreshArt) {
     *signals.forceRefreshArt = true;
+  }
+}
+
+void cancelPauseForOpenHandoff(
+    const playback_session_input::PlaybackInputView& view) {
+  const bool sessionPaused =
+      view.playbackState &&
+      *view.playbackState == PlaybackSessionState::Paused;
+  const bool audioPaused = view.audioOk && *view.audioOk && audioIsPaused();
+  if (!sessionPaused && !audioPaused) {
+    return;
+  }
+
+  if (audioPaused) {
+    audioTogglePause();
+  } else if (view.player) {
+    view.player->setVideoPaused(false);
+  }
+  if (view.playbackState) {
+    *view.playbackState = PlaybackSessionState::Active;
   }
 }
 
@@ -48,6 +70,7 @@ bool requestOpenFilesHandoff(
       !signals.requestOpenFiles(files)) {
     return false;
   }
+  cancelPauseForOpenHandoff(view);
   finishHandoff(view, signals);
   return true;
 }

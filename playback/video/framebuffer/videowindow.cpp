@@ -1651,7 +1651,9 @@ void VideoWindow::Cleanup() {
 bool VideoWindow::Open(int width, int height, const std::string& title,
                        bool startFullscreen) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-    m_input.clear();
+    if (!m_input.beginWindowThread()) {
+        return false;
+    }
     m_closeRequested.store(false, std::memory_order_relaxed);
     if (m_closeRequestedEvent) {
         ResetEvent(m_closeRequestedEvent);
@@ -1679,7 +1681,10 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
         wr.right - wr.left, wr.bottom - wr.top,
         NULL, NULL, hInstance, this);
 
-    if (!m_hWnd) return false;
+    if (!m_hWnd) {
+        m_input.endWindowThread();
+        return false;
+    }
     m_windowThreadId = GetCurrentThreadId();
 
     // Remember base window title so we can temporarily update it while overlay is visible
@@ -1690,6 +1695,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
         ::DestroyWindow(m_hWnd);
         m_hWnd = nullptr;
         m_windowThreadId = 0;
+        m_input.endWindowThread();
         return false;
     }
 
@@ -1959,8 +1965,7 @@ void VideoWindow::Close() {
         ResetEvent(m_closeRequestedEvent);
     }
     SetCursorVisible(true);
-    DisableFileDrop();
-    m_input.clear();
+    m_input.endWindowThread();
     // Hide the window first to release focus/ownership of the monitor
     if (m_hWnd) {
         ::ShowWindow(m_hWnd, SW_HIDE);
