@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 
-#include "playback_timeline.h"
+#include "timeline.h"
 
 namespace playback_audio_track_switch_timeline {
 

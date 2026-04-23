@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "playback_main_clock.h"
+#include "main_clock.h"
 
 namespace playback_audio_output_clock_source {
 

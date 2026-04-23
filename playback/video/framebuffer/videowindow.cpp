@@ -27,8 +27,8 @@
 #include "videowindow_ps.h"
 #include "videowindow_ps_ui.h"
 #include "videowindow_ps_gpu_text_grid.h"
-#include "playback/overlay/playback_overlay.h"
-#include "playback/playback_media_keys.h"
+#include "playback/overlay/overlay.h"
+#include "playback/input/media_keys.h"
 #include "subtitle_caption_style.h"
 #include "ui_helpers.h"
 #if RADIOIFY_HAS_LIBASS

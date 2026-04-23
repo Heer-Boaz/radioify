@@ -1,6 +1,6 @@
 #include "videowindow_input_events.h"
 
-#include "playback/playback_media_keys.h"
+#include "playback/input/media_keys.h"
 
 namespace videowindow_input_events {
 namespace {

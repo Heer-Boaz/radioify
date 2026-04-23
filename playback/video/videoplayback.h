@@ -7,9 +7,9 @@
 #include "core/runtime_defaults.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
-#include "playback/system_media_transport_controls.h"
-#include "playback/playback_transport.h"
-#include "playback/session/playback_session_state.h"
+#include "playback/system_media_transport/controls.h"
+#include "playback/control/transport.h"
+#include "playback/session/state.h"
 
 struct VideoPlaybackConfig {
   bool enableAscii = kDefaultAsciiPlaybackEnabled;
