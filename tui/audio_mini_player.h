@@ -12,7 +12,7 @@
 #include "gpu_text_grid.h"
 #include "playback/overlay/overlay.h"
 #include "playback/session/state.h"
-#include "videowindow.h"
+#include "playback/video/framebuffer/window/window.h"
 
 class AudioMiniPlayer {
  public:
@@ -52,15 +52,15 @@ class AudioMiniPlayer {
   bool isOpen() const;
   const std::string& lastError() const { return lastError_; }
   bool open();
-  bool openWithPlacement(const PlaybackWindowPlacementState& placement);
+  bool openWithPlacement(const WindowPlacementState& placement);
   void close();
   bool toggle();
   bool pollEvents(const Callbacks& callbacks);
   bool render(const Styles& styles, const Context& context);
-  PlaybackWindowPlacementState capturePlacement() const;
+  WindowPlacementState capturePlacement() const;
 
  private:
-  bool open(const PlaybackWindowPlacementState* initialPlacement);
+  bool open(const WindowPlacementState* initialPlacement);
   bool ensureOpen();
   void refreshGridSize();
   void refreshArtwork(const Context& context, int width, int height);

@@ -46,7 +46,7 @@ struct WindowStartGate {
 
 }  // namespace
 
-struct PlaybackWindowPresenter::Impl {
+struct WindowPresenter::Impl {
   VideoWindow window;
   GpuVideoFrameCache frameCache;
   std::atomic<WindowThreadState> threadState{WindowThreadState::Disabled};
@@ -91,14 +91,14 @@ struct PlaybackWindowPresenter::Impl {
          startGate, initialState]() {
           const bool startFullscreen =
               !initialState || !initialState->hasLayout ||
-              playback_window_presentation::shouldStartFullscreen(
+              playback_session_window::shouldStartFullscreen(
                   initialState->windowPlacement);
           const bool opened =
               window.Open(1280, 720, "Radioify Output", startFullscreen);
           if (opened) {
             window.EnableFileDrop();
             if (initialState && initialState->hasLayout) {
-              playback_window_presentation::applyPlacement(
+              playback_session_window::applyPlacement(
                   window, initialState->windowPlacement);
             }
           }
@@ -170,12 +170,12 @@ struct PlaybackWindowPresenter::Impl {
   }
 };
 
-PlaybackWindowPresenter::PlaybackWindowPresenter()
+WindowPresenter::WindowPresenter()
     : impl_(std::make_unique<Impl>()) {}
 
-PlaybackWindowPresenter::~PlaybackWindowPresenter() = default;
+WindowPresenter::~WindowPresenter() = default;
 
-bool PlaybackWindowPresenter::start(
+bool WindowPresenter::start(
     Player& player, const std::function<WindowUiState()>& buildUiState,
     const std::function<bool()>& overlayVisible,
     const playback_framebuffer_presenter::TextGridPresentationProvider&
@@ -185,30 +185,30 @@ bool PlaybackWindowPresenter::start(
                       buildTextGridPresentation, initialState);
 }
 
-void PlaybackWindowPresenter::stop() { impl_->stop(); }
+void WindowPresenter::stop() { impl_->stop(); }
 
-void PlaybackWindowPresenter::requestPresent() { impl_->requestPresent(); }
+void WindowPresenter::requestPresent() { impl_->requestPresent(); }
 
-bool PlaybackWindowPresenter::isOpen() const { return impl_->window.IsOpen(); }
+bool WindowPresenter::isOpen() const { return impl_->window.IsOpen(); }
 
-bool PlaybackWindowPresenter::isVisible() const {
+bool WindowPresenter::isVisible() const {
   return impl_->window.IsVisible();
 }
 
-bool PlaybackWindowPresenter::consumeCloseRequested() {
+bool WindowPresenter::consumeCloseRequested() {
   return impl_->window.ConsumeCloseRequested();
 }
 
-HANDLE PlaybackWindowPresenter::closeRequestedWaitHandle() const {
+HANDLE WindowPresenter::closeRequestedWaitHandle() const {
   return impl_->window.CloseRequestedWaitHandle();
 }
 
-VideoWindow& PlaybackWindowPresenter::window() { return impl_->window; }
+VideoWindow& WindowPresenter::window() { return impl_->window; }
 
-const VideoWindow& PlaybackWindowPresenter::window() const {
+const VideoWindow& WindowPresenter::window() const {
   return impl_->window;
 }
 
-GpuVideoFrameCache& PlaybackWindowPresenter::frameCache() {
+GpuVideoFrameCache& WindowPresenter::frameCache() {
   return impl_->frameCache;
 }

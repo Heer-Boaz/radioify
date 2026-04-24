@@ -3,7 +3,7 @@
 #include "playback_mode.h"
 #include "output.h"
 #include "window_presentation.h"
-#include "videowindow.h"
+#include "playback/video/framebuffer/window/window.h"
 
 namespace {
 
@@ -60,7 +60,7 @@ bool PlaybackPresentationController::toggleWindow(
   VideoWindow& window = output.window();
   if (window.IsOpen() && window.IsPictureInPicture()) {
     clearPendingWindowPresentation();
-    playback_window_presentation::setTextGrid(
+    playback_session_window::setTextGrid(
         window,
         !window.IsTextGridPresentationEnabled());
     output.requestWindowPresent();
@@ -85,7 +85,7 @@ bool PlaybackPresentationController::togglePictureInPicture(
     clearPendingWindowPresentation();
     if (pictureInPictureStartedFromTerminal) {
       pictureInPictureStartedFromTerminal = false;
-      playback_window_presentation::setTextGrid(window, false);
+      playback_session_window::setTextGrid(window, false);
       output.requestLayout(PlaybackLayout::Terminal);
       markPresentationChanged(redraw, forceRefreshArt);
       return true;
@@ -95,10 +95,10 @@ bool PlaybackPresentationController::togglePictureInPicture(
     markPresentationChanged(redraw, forceRefreshArt);
     output.requestWindowPresent();
     if (textGrid) {
-      return playback_window_presentation::exitPictureInPicture(
+      return playback_session_window::exitPictureInPicture(
           window, {PlaybackPresentationMode::Fullscreen, true});
     }
-    return playback_window_presentation::exitPictureInPicture(
+    return playback_session_window::exitPictureInPicture(
         window, {PlaybackPresentationMode::DefaultNonFullscreen, false});
   }
 
@@ -114,7 +114,7 @@ bool PlaybackPresentationController::togglePictureInPicture(
   markPresentationChanged(redraw, forceRefreshArt);
 
   if (window.IsOpen()) {
-    if (playback_window_presentation::apply(
+    if (playback_session_window::apply(
             window, {PlaybackPresentationMode::PictureInPicture, textGrid})) {
       clearPendingWindowPresentation();
     }
@@ -142,7 +142,7 @@ bool PlaybackPresentationController::toggleFullscreen(
                                   PlaybackPresentationFamily::Ascii);
     if (request.family == PlaybackPresentationFamily::Ascii) {
       if (window.IsOpen()) {
-        if (playback_window_presentation::apply(
+        if (playback_session_window::apply(
                 window, {PlaybackPresentationMode::Fullscreen, true})) {
           clearPendingWindowPresentation();
         }
@@ -152,7 +152,7 @@ bool PlaybackPresentationController::toggleFullscreen(
     }
 
     if (window.IsOpen()) {
-      if (playback_window_presentation::apply(
+      if (playback_session_window::apply(
               window, {PlaybackPresentationMode::Fullscreen, false})) {
         clearPendingWindowPresentation();
       }
@@ -163,7 +163,7 @@ bool PlaybackPresentationController::toggleFullscreen(
 
   if (request.family == PlaybackPresentationFamily::Ascii) {
     if (window.IsOpen()) {
-      playback_window_presentation::setTextGrid(window, false);
+      playback_session_window::setTextGrid(window, false);
     }
     output.requestLayout(PlaybackLayout::Terminal);
     markPresentationChanged(redraw, forceRefreshArt);
@@ -174,7 +174,7 @@ bool PlaybackPresentationController::toggleFullscreen(
   output.requestLayout(PlaybackLayout::Window);
   markPresentationChanged(redraw, forceRefreshArt);
   if (window.IsOpen()) {
-    if (playback_window_presentation::apply(
+    if (playback_session_window::apply(
             window, {PlaybackPresentationMode::PictureInPicture, false})) {
       clearPendingWindowPresentation();
     }
@@ -195,7 +195,7 @@ void PlaybackPresentationController::reconcile(
     return;
   }
 
-  const bool applied = playback_window_presentation::apply(
+  const bool applied = playback_session_window::apply(
       output.window(), {pendingWindowPresentation.target,
                         pendingWindowPresentation.textGrid});
   if (applied) {
@@ -208,7 +208,7 @@ void PlaybackPresentationController::closePresentation(
     PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
   clearPendingWindowPresentation();
   pictureInPictureStartedFromTerminal = false;
-  playback_window_presentation::setTextGrid(output.window(), false);
+  playback_session_window::setTextGrid(output.window(), false);
   output.requestLayout(PlaybackLayout::Terminal);
   markPresentationChanged(redraw, forceRefreshArt);
 }
@@ -221,7 +221,7 @@ void PlaybackPresentationController::handleWindowClosed(
 void PlaybackPresentationController::captureWindowPlacement(
     PlaybackOutputController& output,
     PlaybackSessionContinuationState& state) const {
-  playback_window_presentation::capturePlacement(
+  playback_session_window::capturePlacement(
       output.window(), state.windowPlacement,
       pictureInPictureStartedFromTerminal);
 }

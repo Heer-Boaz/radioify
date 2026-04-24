@@ -31,7 +31,7 @@ struct DropRoute {
 
 std::optional<DropRoute> resolve(
     const std::vector<std::filesystem::path>& files, DropSurface surface,
-    const PlaybackWindowPlacementState* sourcePlacement = nullptr,
+    const WindowPlacementState* sourcePlacement = nullptr,
     bool preferTextGridVideoMiniPlayer = true);
 
 }  // namespace playback_drop_route

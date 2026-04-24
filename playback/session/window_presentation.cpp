@@ -1,8 +1,8 @@
 #include "window_presentation.h"
 
-#include "videowindow.h"
+#include "playback/video/framebuffer/window/window.h"
 
-namespace playback_window_presentation {
+namespace playback_session_window {
 
 void setTextGrid(VideoWindow& window, bool enabled) {
   window.SetTextGridPresentationEnabled(enabled);
@@ -38,7 +38,7 @@ bool apply(VideoWindow& window, WindowPresentationRequest request) {
 }
 
 void applyPlacement(VideoWindow& window,
-                    const PlaybackWindowPlacementState& state) {
+                    const WindowPlacementState& state) {
   setTextGrid(window, state.textGridPresentationEnabled);
 
   if (state.pictureInPictureActive) {
@@ -69,7 +69,7 @@ void applyPlacement(VideoWindow& window,
 }
 
 void capturePlacement(const VideoWindow& window,
-                      PlaybackWindowPlacementState& state,
+                      WindowPlacementState& state,
                       bool pictureInPictureStartedFromTerminal) {
   state.pictureInPictureStartedFromTerminal =
       pictureInPictureStartedFromTerminal;
@@ -101,4 +101,4 @@ void capturePlacement(const VideoWindow& window,
   }
 }
 
-}  // namespace playback_window_presentation
+}  // namespace playback_session_window

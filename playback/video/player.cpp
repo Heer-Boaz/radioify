@@ -53,16 +53,16 @@ extern "C" {
 }
 
 #include "audioplayback.h"
-#include "audio_output_clock_source.h"
-#include "audio_output_timeline.h"
-#include "audio_track_switch_timeline.h"
-#include "gpu_shared.h"
-#include "control_events.h"
-#include "main_clock.h"
-#include "serial_control.h"
-#include "state_machine.h"
-#include "sync.h"
-#include "timeline.h"
+#include "playback/video/audio/output_clock_source.h"
+#include "playback/video/audio/output_timeline.h"
+#include "playback/video/audio/track_switch_timeline.h"
+#include "playback/video/control/events.h"
+#include "playback/video/control/serial.h"
+#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/state/machine.h"
+#include "playback/video/timing/main_clock.h"
+#include "playback/video/timing/sync.h"
+#include "playback/video/timing/timeline.h"
 #include "queues.h"
 #include "runtime_helpers.h"
 #include "timing_log.h"
@@ -1484,12 +1484,12 @@ struct Player::Impl {
   PlayerConfig config;
   std::atomic<bool> running{false};
   std::atomic<bool> ctrlRunning{false};
-  playback_state_machine::Controller playbackState;
+  playback_video_state_machine::Controller playbackState;
   std::atomic<bool> pauseRequested{false};
-  playback_serial_control::Controller serialControl;
+  playback_video_serial_control::Controller serialControl;
   std::mutex eventMutex;
   std::condition_variable eventCv;
-  std::deque<playback_control::Event> events;
+  std::deque<playback_video_control::Event> events;
   std::thread controlThread;
   std::atomic<bool> initDone{false};
   std::atomic<bool> initOk{false};
@@ -1521,7 +1521,7 @@ struct Player::Impl {
     std::atomic<int> activeAudioStream{-1};
     playback_audio_track_switch_timeline::Controller audioTrackSwitch;
     playback_audio_output_timeline::Controller audioOutputTimeline;
-    mutable playback_main_clock::Controller mainClock;
+    mutable playback_video_main_clock::Controller mainClock;
 
   std::atomic<int64_t> lastPresentedPtsUs{0};
   std::atomic<int64_t> lastPresentedDurationUs{0};
@@ -1649,16 +1649,16 @@ struct Player::Impl {
     if (targetUsOut) {
       *targetUsOut = targetUs;
     }
-    return playback_timeline::shouldDropPrerollFrame(
+    return playback_video_timeline::shouldDropPrerollFrame(
         targetUs, ptsUs, durationUs,
         fallbackFrameDurationUs.load(std::memory_order_relaxed));
   }
 
-  void postEvent(const playback_control::Event& ev) {
+  void postEvent(const playback_video_control::Event& ev) {
     std::lock_guard<std::mutex> lock(eventMutex);
-    if (ev.type == playback_control::EventType::SeekRequest) {
+    if (ev.type == playback_video_control::EventType::SeekRequest) {
       for (auto it = events.rbegin(); it != events.rend(); ++it) {
-        if (it->type == playback_control::EventType::SeekRequest) {
+        if (it->type == playback_video_control::EventType::SeekRequest) {
           *it = ev;
           eventCv.notify_one();
           return;
@@ -1669,12 +1669,12 @@ struct Player::Impl {
     eventCv.notify_one();
   }
 
-  void applyStateChange(playback_state_machine::StateChange change) {
+  void applyStateChange(playback_video_state_machine::StateChange change) {
     if (!change.changed) return;
     appendTimingFmt("state_change from=%s to=%s",
                     playerStateName(change.previous),
                     playerStateName(change.current));
-    playback_state_machine::StateEffects effects = change.projection.effects;
+    playback_video_state_machine::StateEffects effects = change.projection.effects;
     audioSetHold(effects.holdAudioOutput);
     mainClock.changePause(effects.pauseMainClock, nowUs());
   }
@@ -1685,11 +1685,11 @@ struct Player::Impl {
     hasFrame.store(false, std::memory_order_relaxed);
   }
 
-  playback_main_clock::Snapshot masterClockSnapshot(int64_t nowUs) const {
+  playback_video_main_clock::Snapshot masterClockSnapshot(int64_t nowUs) const {
     const int currentSerial = serialControl.currentSerial();
     playback_audio_clock_reacquire::Snapshot reacquire =
         audioOutputTimeline.clockGateSnapshot(currentSerial);
-    playback_main_clock::SampleRequest request;
+    playback_video_main_clock::SampleRequest request;
     request.currentSerial = currentSerial;
     request.nowUs = nowUs;
     request.audio = playback_audio_output_clock_source::sample(
@@ -1699,9 +1699,9 @@ struct Player::Impl {
     return mainClock.sample(request);
   }
 
-  playback_state_machine::PipelineSnapshot pipelineSnapshot(
+  playback_video_state_machine::PipelineSnapshot pipelineSnapshot(
       bool audioPaused) const {
-    playback_state_machine::PipelineSnapshot snapshot;
+    playback_video_state_machine::PipelineSnapshot snapshot;
     snapshot.initDone = initDone.load(std::memory_order_relaxed);
     snapshot.initOk = initOk.load(std::memory_order_relaxed);
     snapshot.audioPaused = audioPaused;
@@ -1860,9 +1860,9 @@ struct Player::Impl {
     demuxThread = std::thread([this]() { demuxMain(); });
   }
 
-    void handleEvent(const playback_control::Event& ev) {
+    void handleEvent(const playback_video_control::Event& ev) {
       auto beginSerialTransition = [&](int64_t targetUs, const char* tag) {
-        playback_serial_control::TransitionPlan plan =
+        playback_video_serial_control::TransitionPlan plan =
             serialControl.beginTransition(
                 targetUs, initDone.load(std::memory_order_relaxed),
                 running.load(std::memory_order_relaxed));
@@ -1885,17 +1885,17 @@ struct Player::Impl {
       };
 
       switch (ev.type) {
-        case playback_control::EventType::SeekRequest: {
+        case playback_video_control::EventType::SeekRequest: {
           beginSerialTransition(ev.arg1, "ctrl_seek_request");
           break;
         }
-        case playback_control::EventType::PauseRequest: {
+        case playback_video_control::EventType::PauseRequest: {
           pauseRequested.store(ev.arg1 != 0, std::memory_order_relaxed);
           appendTimingFmt("ctrl_pause_request paused=%d",
                           ev.arg1 != 0 ? 1 : 0);
         break;
       }
-      case playback_control::EventType::ResizeRequest: {
+      case playback_video_control::EventType::ResizeRequest: {
         resizeTargetW.store(static_cast<int>(ev.arg1), std::memory_order_relaxed);
         resizeTargetH.store(static_cast<int>(ev.arg2), std::memory_order_relaxed);
         resizeEpoch.fetch_add(1, std::memory_order_relaxed);
@@ -1904,7 +1904,7 @@ struct Player::Impl {
                           static_cast<int>(ev.arg2));
           break;
         }
-        case playback_control::EventType::CycleAudioTrack: {
+        case playback_video_control::EventType::CycleAudioTrack: {
           int nextTrack = -1;
           int nextStream = -1;
           std::string nextLabel;
@@ -1941,14 +1941,14 @@ struct Player::Impl {
                           nextLabel.empty() ? "N/A" : nextLabel.c_str());
           break;
         }
-        case playback_control::EventType::CloseRequest: {
+        case playback_video_control::EventType::CloseRequest: {
           ctrlRunning.store(false, std::memory_order_relaxed);
           running.store(false, std::memory_order_relaxed);
         commandPending.store(true, std::memory_order_relaxed);
         appendTiming("ctrl_close_request");
         break;
       }
-      case playback_control::EventType::SeekApplied: {
+      case playback_video_control::EventType::SeekApplied: {
         if (serialControl.applySeekResult(ev.serial, static_cast<int>(ev.arg1))) {
           if (ev.arg1 != 0) {
             audioOutputTimeline.cancelClockReacquire(ev.serial);
@@ -1958,14 +1958,14 @@ struct Player::Impl {
         }
         break;
       }
-      case playback_control::EventType::FirstFramePresented: {
+      case playback_video_control::EventType::FirstFramePresented: {
         if (ev.serial == serialControl.currentSerial()) {
           if (playbackState.current() == PlayerState::Priming) {
             int64_t audioOldestPts = audioStreamOldestPtsUs();
             int64_t videoPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
 
-            playback_sync::PrimingAnchor anchor =
-                playback_sync::choosePrimingAnchor(audioOldestPts, videoPts);
+            playback_video_sync::PrimingAnchor anchor =
+                playback_video_sync::choosePrimingAnchor(audioOldestPts, videoPts);
             if (anchor.valid) {
               int64_t now = nowUs();
 
@@ -1995,7 +1995,7 @@ struct Player::Impl {
     applyStateChange(playbackState.beginOpening());
     startThreads();
     while (ctrlRunning.load()) {
-      std::deque<playback_control::Event> pending;
+      std::deque<playback_video_control::Event> pending;
       {
         std::unique_lock<std::mutex> lock(eventMutex);
         eventCv.wait_for(lock, std::chrono::milliseconds(10), [&]() {
@@ -2009,9 +2009,9 @@ struct Player::Impl {
 
       const bool audioPaused =
           audioStartOk.load() ? audioIsPaused() : pauseRequested.load();
-      playback_state_machine::PipelineSnapshot snapshot =
+      playback_video_state_machine::PipelineSnapshot snapshot =
           pipelineSnapshot(audioPaused);
-      playback_state_machine::Evaluation evaluation =
+      playback_video_state_machine::Evaluation evaluation =
           playbackState.observe(snapshot, kVideoPrefillFrames);
       if (evaluation.clearSeekFailure) {
         serialControl.clearSeekFailure();
@@ -2194,7 +2194,7 @@ struct Player::Impl {
         appendTimingFmt("demux_external_serial_sync serial=%d", nextSerialValue);
       }
 
-      playback_serial_control::PendingSeek pendingSeek =
+      playback_video_serial_control::PendingSeek pendingSeek =
           serialControl.claimPendingSeek();
       if (pendingSeek.valid) {
         audioTrackSwitch.reset();
@@ -2206,7 +2206,7 @@ struct Player::Impl {
             "demux_seek serial=%d seek_us=%lld display_target_us=%lld",
             nextSerial, static_cast<long long>(pendingSeek.demuxTargetUs),
             static_cast<long long>(pendingSeek.displayTargetUs));
-        playback_timeline::DemuxSeekRequest seekRequest;
+        playback_video_timeline::DemuxSeekRequest seekRequest;
         seekRequest.format = demux.fmt;
         seekRequest.videoStreamIndex = demux.videoStreamIndex;
         seekRequest.videoTimeBase = demux.videoTimeBase;
@@ -2215,8 +2215,8 @@ struct Player::Impl {
         seekRequest.seekUs = pendingSeek.demuxTargetUs;
         seekRequest.logTag = "demux_seek_primary";
         seekRequest.logPath = logPath;
-        playback_timeline::DemuxSeekResult seekResult =
-            playback_timeline::seekPrimaryDemux(seekRequest);
+        playback_video_timeline::DemuxSeekResult seekResult =
+            playback_video_timeline::seekPrimaryDemux(seekRequest);
         int seekRes = seekResult.result;
         appendTimingFmt("demux_seek_result serial=%d res=%d", nextSerial,
                         seekRes);
@@ -2233,8 +2233,8 @@ struct Player::Impl {
         videoFrames.flush(serial);
         mainClock.resetForSerial(static_cast<int>(serial));
         clearFrameRequested.store(true);
-        playback_control::Event ev{};
-        ev.type = playback_control::EventType::SeekApplied;
+        playback_video_control::Event ev{};
+        ev.type = playback_video_control::EventType::SeekApplied;
         ev.serial = nextSerial;
         ev.arg1 = (seekRes < 0) ? 1 : 0;
         postEvent(ev);
@@ -2880,8 +2880,8 @@ struct Player::Impl {
   void videoOutputMain() {
     PlayerState lastState = playbackState.current();
     constexpr double kVideoBufferHighSec = 0.75;
-    playback_sync::LoopState syncState;
-    playback_sync::initializeLoopState(
+    playback_video_sync::LoopState syncState;
+    playback_video_sync::initializeLoopState(
         syncState, serialControl.currentSerial(),
         fallbackFrameDurationUs.load(std::memory_order_relaxed), nowUs());
     auto logVideo = [&](const char* tag, const QueuedFrame* frame,
@@ -2889,7 +2889,7 @@ struct Player::Impl {
                         int64_t diffUs, int64_t delayUs) {
       PlayerState st = playbackState.current();
       size_t q = videoFrames.size();
-      playback_main_clock::Snapshot clockDebug = masterClockSnapshot(nowUs());
+      playback_video_main_clock::Snapshot clockDebug = masterClockSnapshot(nowUs());
       int audioReady = clockDebug.audioClockReady ? 1 : 0;
       int audioFresh = clockDebug.audioClockFresh ? 1 : 0;
       int audioStarved = clockDebug.audioStarved ? 1 : 0;
@@ -2931,18 +2931,18 @@ struct Player::Impl {
       PlayerState st = playbackState.current();
       if (st != lastState) {
         lastState = st;
-        playback_sync::notePlaybackStateChange(syncState, nowUs());
+        playback_video_sync::notePlaybackStateChange(syncState, nowUs());
       }
 
       uint64_t serial = static_cast<uint64_t>(serialControl.currentSerial());
-      playback_sync::syncLoopSerial(
+      playback_video_sync::syncLoopSerial(
           syncState, static_cast<int>(serial),
           fallbackFrameDurationUs.load(std::memory_order_relaxed), nowUs());
-      playback_state_machine::StateProjection stateProjection =
-          playback_state_machine::project(st);
+      playback_video_state_machine::StateProjection stateProjection =
+          playback_video_state_machine::project(st);
 
       if (stateProjection.transport ==
-          playback_state_machine::TransportState::Seeking) {
+          playback_video_state_machine::TransportState::Seeking) {
         // Seeking is a transient state. While paused, it may present exactly
         // the pending seek frame; active playback must return through Prefill.
         QueuedFrame front{};
@@ -2981,7 +2981,7 @@ struct Player::Impl {
       // Always update master clock and diff, even if no frames are in the queue.
       // This ensures the UI reflects current sync status during the "Draining" state.
       int64_t now = nowUs();
-      playback_main_clock::Snapshot master = masterClockSnapshot(now);
+      playback_video_main_clock::Snapshot master = masterClockSnapshot(now);
       int64_t masterUs = master.us;
 
       static int64_t lastHeartbeatUs = 0;
@@ -3004,7 +3004,7 @@ struct Player::Impl {
 
       QueuedFrame front{};
       if (!videoFrames.peek(&front)) {
-        if (playback_sync::shouldBackoffForEmptyQueue(
+        if (playback_video_sync::shouldBackoffForEmptyQueue(
                 syncState, st, serialControl.seekPending(),
                 durationUs.load(std::memory_order_relaxed),
                 lastPresentedPtsUs.load(std::memory_order_relaxed), now)) {
@@ -3030,7 +3030,7 @@ struct Player::Impl {
         continue;
       }
 
-      if (playback_sync::isFrameBackwards(syncState, front)) {
+      if (playback_video_sync::isFrameBackwards(syncState, front)) {
         logVideo("drop_backwards", &front, 0, PlayerClockSource::None, 0, 0);
         QueuedFrame drop{};
         if (videoFrames.pop(&drop)) {
@@ -3042,8 +3042,8 @@ struct Player::Impl {
 
       QueuedFrame next{};
       bool hasNext = videoFrames.peekNext(&next);
-      playback_sync::PreparedFrame prepared =
-          playback_sync::prepareFrame(syncState, front,
+      playback_video_sync::PreparedFrame prepared =
+          playback_video_sync::prepareFrame(syncState, front,
                                       hasNext ? &next : nullptr);
       if (front.durationUs > 500000) {
         logVideo("duration_outlier", &front, 0, PlayerClockSource::None, 0,
@@ -3054,14 +3054,14 @@ struct Player::Impl {
                  PlayerClockSource::None, 0, prepared.frame.durationUs);
       }
 
-      playback_sync::FramePlan plan = playback_sync::planFrame(
+      playback_video_sync::FramePlan plan = playback_video_sync::planFrame(
           syncState, st, prepared, master, now);
       if (plan.syncLost) {
         logVideo("sync_lost", &prepared.frame, masterUs, master.source,
                  prepared.frame.ptsUs - masterUs, plan.delayUs);
       }
       if (stateProjection.buffering ==
-              playback_state_machine::BufferingState::Priming ||
+              playback_video_state_machine::BufferingState::Priming ||
           plan.syncLost) {
         if (plan.syncLost) {
           logVideo("sync_lost_freerun", &prepared.frame, masterUs, master.source,
@@ -3122,14 +3122,14 @@ struct Player::Impl {
         }
         continue;
       }
-      if (playback_sync::shouldDropLateFrame(now, targetUs, videoFrames.size())) {
+      if (playback_video_sync::shouldDropLateFrame(now, targetUs, videoFrames.size())) {
         {
           logVideo("drop_late", &prepared.frame, masterUs, master.source,
                    plan.diffUs, plan.delayUs);
           QueuedFrame drop{};
           if (videoFrames.pop(&drop)) {
             videoFrames.release(drop.poolIndex);
-            playback_sync::noteLateDrop(syncState, prepared, targetUs, now);
+            playback_video_sync::noteLateDrop(syncState, prepared, targetUs, now);
           }
           std::this_thread::sleep_for(std::chrono::microseconds(100));
           continue;
@@ -3187,12 +3187,12 @@ struct Player::Impl {
 
       if (!syncState.firstPresentedForSerial) {
         syncState.firstPresentedForSerial = true;
-        playback_control::Event ev{};
-        ev.type = playback_control::EventType::FirstFramePresented;
+        playback_video_control::Event ev{};
+        ev.type = playback_video_control::EventType::FirstFramePresented;
         ev.serial = static_cast<int>(serial);
         postEvent(ev);
       }
-      playback_sync::notePresentedFrame(syncState, prepared, plan.delayUs,
+      playback_video_sync::notePresentedFrame(syncState, prepared, plan.delayUs,
                                         targetUs, presentedNowUs);
       if (plan.delayUs > 0) {
         double frameDurSec = static_cast<double>(plan.delayUs) / 1000000.0;
@@ -3243,7 +3243,7 @@ void Player::close() {
     if (impl_->ctrlRunning.load()) {
       impl_->appendTimingFmt("player_close post_close_request");
       impl_->postEvent(
-          playback_control::Event{playback_control::EventType::CloseRequest});
+          playback_video_control::Event{playback_video_control::EventType::CloseRequest});
     } else {
       impl_->appendTimingFmt("player_close notify_control_thread");
       impl_->eventCv.notify_one();
@@ -3262,16 +3262,16 @@ void Player::close() {
 
 void Player::requestSeek(int64_t targetUs) {
   if (!impl_ || !impl_->ctrlRunning.load()) return;
-  playback_control::Event ev{};
-  ev.type = playback_control::EventType::SeekRequest;
+  playback_video_control::Event ev{};
+  ev.type = playback_video_control::EventType::SeekRequest;
   ev.arg1 = targetUs;
   impl_->postEvent(ev);
 }
 
 void Player::requestResize(int targetW, int targetH) {
   if (!impl_ || !impl_->ctrlRunning.load()) return;
-  playback_control::Event ev{};
-  ev.type = playback_control::EventType::ResizeRequest;
+  playback_video_control::Event ev{};
+  ev.type = playback_video_control::EventType::ResizeRequest;
   ev.arg1 = targetW;
   ev.arg2 = targetH;
   impl_->postEvent(ev);
@@ -3279,8 +3279,8 @@ void Player::requestResize(int targetW, int targetH) {
 
 void Player::setVideoPaused(bool paused) {
   if (!impl_) return;
-  playback_control::Event ev{};
-  ev.type = playback_control::EventType::PauseRequest;
+  playback_video_control::Event ev{};
+  ev.type = playback_video_control::EventType::PauseRequest;
   ev.arg1 = paused ? 1 : 0;
   impl_->postEvent(ev);
 }
@@ -3311,8 +3311,8 @@ bool Player::cycleAudioTrack() {
     std::lock_guard<std::mutex> lock(impl_->audioTrackMutex);
     if (impl_->audioTrackStreams.size() <= 1) return false;
   }
-  playback_control::Event ev{};
-  ev.type = playback_control::EventType::CycleAudioTrack;
+  playback_video_control::Event ev{};
+  ev.type = playback_video_control::EventType::CycleAudioTrack;
   impl_->postEvent(ev);
   return true;
 }
@@ -3373,8 +3373,8 @@ int64_t Player::currentUs() const {
     return seekUs;
   }
   int64_t now = nowUs();
-  playback_main_clock::Snapshot snapshot = impl_->masterClockSnapshot(now);
-  return playback_main_clock::resolveCurrentPlaybackUs(
+  playback_video_main_clock::Snapshot snapshot = impl_->masterClockSnapshot(now);
+  return playback_video_main_clock::resolveCurrentPlaybackUs(
       snapshot, impl_->lastPresentedPtsUs.load(std::memory_order_relaxed));
 }
 
@@ -3463,7 +3463,7 @@ PlayerDebugInfo Player::debugInfo() const {
           std::memory_order_relaxed));
   info.audioOk = impl_->audioStartOk.load(std::memory_order_relaxed);
   int64_t now = nowUs();
-  playback_main_clock::Snapshot snapshot = impl_->masterClockSnapshot(now);
+  playback_video_main_clock::Snapshot snapshot = impl_->masterClockSnapshot(now);
   info.audioStarved = snapshot.audioStarved;
   info.audioClockReady = snapshot.audioClockReady;
   info.audioClockFresh = snapshot.audioClockFresh;

@@ -6,7 +6,7 @@
 
 #include "consoleinput.h"
 #include "ui_helpers.h"
-#include "videodecoder.h"
+#include "playback/video/decoder.h"
 
 namespace {
 std::string formatBytes(uintmax_t bytes) {

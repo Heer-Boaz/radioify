@@ -6,7 +6,7 @@
 
 #include "consoleinput.h"
 #include "core/windows_message_pump.h"
-#include "player.h"
+#include "playback/video/player.h"
 #include "playback/ascii/screen_renderer.h"
 #include "presentation.h"
 

@@ -8,9 +8,9 @@
 #include "asciiart.h"
 #include "asciiart_gpu.h"
 #include "consolescreen.h"
-#include "gpu_shared.h"
+#include "playback/video/gpu/gpu_shared.h"
 #include "ui_helpers.h"
-#include "videodecoder.h"
+#include "playback/video/decoder.h"
 
 namespace playback_frame_output {
 

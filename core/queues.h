@@ -13,7 +13,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 }
 
-#include "videodecoder.h"
+#include "playback/video/decoder.h"
 
 struct QueuedPacket {
   AVPacket pkt{};

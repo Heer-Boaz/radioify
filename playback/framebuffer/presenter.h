@@ -14,11 +14,11 @@
 #include <windows.h>
 
 #include "consolescreen.h"
-#include "gpu_shared.h"
+#include "playback/video/gpu/gpu_shared.h"
 #include "playback/overlay/overlay.h"
 #include "playback/session/state.h"
-#include "player.h"
-#include "videowindow.h"
+#include "playback/video/player.h"
+#include "playback/video/framebuffer/window/window.h"
 
 namespace playback_framebuffer_presenter {
 

@@ -64,8 +64,8 @@
 #include "ui_inputlogic.h"
 #include "ui_input_pump.h"
 #include "ui_viewport.h"
-#include "videoplayback.h"
-#include "videowindow.h"
+#include "playback/video/playback.h"
+#include "playback/video/framebuffer/window/window.h"
 #include "windows_file_drop_apartment.h"
 #include "media_formats.h"
 #include "runtime_helpers.h"
@@ -994,7 +994,7 @@ int runTui(Options o) {
         detail, "Enter/Space/Esc: close");
   };
   auto openAudioMiniPlayerWithPlacement =
-      [&](const PlaybackWindowPlacementState* placement) {
+      [&](const WindowPlacementState* placement) {
     const bool opened =
         placement ? audioMiniPlayer.openWithPlacement(*placement)
                   : audioMiniPlayer.open();
@@ -1600,7 +1600,7 @@ int runTui(Options o) {
   };
   audioMiniCallbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
-    PlaybackWindowPlacementState sourcePlacement =
+    WindowPlacementState sourcePlacement =
         audioMiniPlayer.capturePlacement();
     auto route = playback_drop_route::resolve(
         files, playback_drop_route::DropSurface::AudioMiniPlayer,

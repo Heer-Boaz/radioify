@@ -6,13 +6,13 @@
 
 #include "consoleinput.h"
 #include "consolescreen.h"
-#include "gpu_shared.h"
+#include "playback/video/gpu/gpu_shared.h"
 #include "playback_dialog.h"
 #include "runtime_helpers.h"
-#include "subtitle_manager.h"
+#include "playback/video/subtitle/manager.h"
 #include "timing_log.h"
 #include "ui_helpers.h"
-#include "videoplayback.h"
+#include "playback/video/playback.h"
 
 PlaybackSessionHost::PlaybackSessionHost(const Args& args)
     : input_(args.input),

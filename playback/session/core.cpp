@@ -10,7 +10,7 @@
 #include "audioplayback.h"
 #include "consolescreen.h"
 #include "playback/frame/refresh.h"
-#include "player.h"
+#include "playback/video/player.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
 #include "input.h"

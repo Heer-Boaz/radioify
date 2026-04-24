@@ -5,14 +5,14 @@
 
 class VideoWindow;
 
-namespace playback_window_presentation {
+namespace playback_session_window {
 
 struct WindowPresentationRequest {
   PlaybackPresentationMode target = PlaybackPresentationMode::Fullscreen;
   bool textGrid = false;
 };
 
-inline bool shouldStartFullscreen(const PlaybackWindowPlacementState& state) {
+inline bool shouldStartFullscreen(const WindowPlacementState& state) {
   return state.pictureInPictureActive
              ? state.pictureInPictureRestoreFullscreen
              : state.fullscreenActive;
@@ -26,10 +26,10 @@ bool exitPictureInPicture(VideoWindow& window,
                           WindowPresentationRequest request);
 
 void applyPlacement(VideoWindow& window,
-                    const PlaybackWindowPlacementState& state);
+                    const WindowPlacementState& state);
 
 void capturePlacement(const VideoWindow& window,
-                      PlaybackWindowPlacementState& state,
+                      WindowPlacementState& state,
                       bool pictureInPictureStartedFromTerminal);
 
-}  // namespace playback_window_presentation
+}  // namespace playback_session_window

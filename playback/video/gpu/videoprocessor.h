@@ -7,7 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <mutex>
-#include "videocolor.h"
+#include "playback/video/color.h"
 
 // Shared viewport calculation logic
 struct VideoViewport {

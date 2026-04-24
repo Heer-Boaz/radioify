@@ -4,8 +4,8 @@
 
 #include <wrl/client.h>
 
-#include "gpu_shared.h"
-#include "video_frame_cache_update.h"
+#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/frame_cache/update.h"
 
 namespace playback_framebuffer_video_pipeline {
 namespace {

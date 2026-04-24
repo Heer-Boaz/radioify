@@ -13,8 +13,8 @@
 #include "asciiart.h"
 #include "asciiart_gpu.h"
 #include "audioplayback.h"
-#include "gpu_shared.h"
-#include "player.h"
+#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/player.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
@@ -27,7 +27,7 @@
 #include "presentation.h"
 #include "presentation_controller.h"
 #include "state.h"
-#include "subtitle_manager.h"
+#include "playback/video/subtitle/manager.h"
 
 namespace {
 

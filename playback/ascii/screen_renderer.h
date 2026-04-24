@@ -8,14 +8,14 @@
 #include "asciiart.h"
 #include "asciiart_gpu.h"
 #include "consolescreen.h"
-#include "gpu_shared.h"
-#include "player.h"
+#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/player.h"
 #include "frame_output.h"
 #include "playback_mode.h"
 #include "playback/overlay/overlay.h"
 #include "playback/session/state.h"
-#include "subtitle_manager.h"
-#include "videowindow.h"
+#include "playback/video/subtitle/manager.h"
+#include "playback/video/framebuffer/window/window.h"
 
 namespace playback_screen_renderer {
 

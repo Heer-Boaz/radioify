@@ -25,7 +25,7 @@ enum class WindowThreadState : uint8_t {
   Stopping,
 };
 
-struct PlaybackWindowPlacementState {
+struct WindowPlacementState {
   bool hasWindowRect = false;
   RECT windowRect{};
   bool fullscreenActive = false;
@@ -42,5 +42,5 @@ struct PlaybackWindowPlacementState {
 struct PlaybackSessionContinuationState {
   bool hasLayout = false;
   PlaybackLayout layout = PlaybackLayout::Terminal;
-  PlaybackWindowPlacementState windowPlacement;
+  WindowPlacementState windowPlacement;
 };

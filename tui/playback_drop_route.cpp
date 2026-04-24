@@ -20,7 +20,7 @@ DroppedMediaKind classify(const PlaybackTarget& target) {
 }
 
 PlaybackSessionContinuationState videoMiniPlayerContinuation(
-    const PlaybackWindowPlacementState* sourcePlacement, bool textGrid) {
+    const WindowPlacementState* sourcePlacement, bool textGrid) {
   PlaybackSessionContinuationState state;
   state.hasLayout = true;
   state.layout = PlaybackLayout::Window;
@@ -39,7 +39,7 @@ PlaybackSessionContinuationState videoMiniPlayerContinuation(
 
 std::optional<DropRoute> resolve(
     const std::vector<std::filesystem::path>& files, DropSurface surface,
-    const PlaybackWindowPlacementState* sourcePlacement,
+    const WindowPlacementState* sourcePlacement,
     bool preferTextGridVideoMiniPlayer) {
   std::optional<PlaybackTarget> target =
       playback_target_resolver::resolveDroppedTarget(files);

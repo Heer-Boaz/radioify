@@ -5,7 +5,7 @@
 #include <optional>
 #include <utility>
 
-#include "player.h"
+#include "playback/video/player.h"
 #include "playback/framebuffer/window_presenter.h"
 #include "state.h"
 
@@ -20,7 +20,7 @@ void resetWindowOverlayState(std::atomic<int64_t>& overlayUntilMs,
 }  // namespace
 
 struct PlaybackPresentation::Impl {
-  PlaybackWindowPresenter windowPresenter;
+  WindowPresenter windowPresenter;
   PlaybackLayout desiredLayout = PlaybackLayout::Terminal;
   PlaybackLayout activeLayout = PlaybackLayout::Terminal;
   std::optional<PlaybackSessionContinuationState> initialState;

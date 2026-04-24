@@ -6,7 +6,7 @@
 #include <string>
 #include <memory>
 #include <d3d11.h>
-#include "videoprocessor.h"
+#include "playback/video/gpu/videoprocessor.h"
 #include "asciiart.h"
 
 class GpuAsciiRenderer {

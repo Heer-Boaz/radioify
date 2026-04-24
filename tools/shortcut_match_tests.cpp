@@ -1,10 +1,10 @@
 #include "playback/ascii/frame_output.h"
 #include "playback/input/shortcuts.h"
 #include "playback/overlay/overlay.h"
-#include "playback/video/audio_clock_reacquire.h"
-#include "playback/video/sync.h"
-#include "playback/video/state_machine.h"
-#include "playback/video/video_enhancement.h"
+#include "playback/video/audio/clock_reacquire.h"
+#include "playback/video/timing/sync.h"
+#include "playback/video/state/machine.h"
+#include "playback/video/enhancement/pipeline.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/window_presentation.h"
 #include "clock.h"
@@ -123,24 +123,24 @@ int main() {
                                      PlaybackPresentationMode::PictureInPicture})
                    .target == PlaybackPresentationMode::Fullscreen,
                "Framebuffer PiP must enter fullscreen");
-  PlaybackWindowPlacementState fullscreenPlacement{};
+  WindowPlacementState fullscreenPlacement{};
   fullscreenPlacement.fullscreenActive = true;
-  ok &= expect(playback_window_presentation::shouldStartFullscreen(
+  ok &= expect(playback_session_window::shouldStartFullscreen(
                    fullscreenPlacement),
                "fullscreen placement must start the next window fullscreen");
-  PlaybackWindowPlacementState windowPlacement{};
-  ok &= expect(!playback_window_presentation::shouldStartFullscreen(
+  WindowPlacementState windowPlacement{};
+  ok &= expect(!playback_session_window::shouldStartFullscreen(
                    windowPlacement),
                "windowed placement must start the next window windowed");
-  PlaybackWindowPlacementState fullscreenRestoredPipPlacement{};
+  WindowPlacementState fullscreenRestoredPipPlacement{};
   fullscreenRestoredPipPlacement.pictureInPictureActive = true;
   fullscreenRestoredPipPlacement.pictureInPictureRestoreFullscreen = true;
-  ok &= expect(playback_window_presentation::shouldStartFullscreen(
+  ok &= expect(playback_session_window::shouldStartFullscreen(
                    fullscreenRestoredPipPlacement),
                "PiP that restores fullscreen must start from fullscreen");
-  PlaybackWindowPlacementState windowRestoredPipPlacement{};
+  WindowPlacementState windowRestoredPipPlacement{};
   windowRestoredPipPlacement.pictureInPictureActive = true;
-  ok &= expect(!playback_window_presentation::shouldStartFullscreen(
+  ok &= expect(!playback_session_window::shouldStartFullscreen(
                    windowRestoredPipPlacement),
                "PiP without fullscreen restore must not start fullscreen");
   ok &= expect(playback_overlay::overlayCellCountForPixels(719, 21) == 35,
@@ -191,97 +191,97 @@ int main() {
                    textGridEnhancement.frameChanged,
                "Text-grid input must use the same enhancement pipeline");
 
-  playback_state_machine::PipelineSnapshot pausedSeekBeforeFrame{};
+  playback_video_state_machine::PipelineSnapshot pausedSeekBeforeFrame{};
   pausedSeekBeforeFrame.audioPaused = true;
   pausedSeekBeforeFrame.currentSerial = 2;
   pausedSeekBeforeFrame.lastPresentedSerial = 1;
   pausedSeekBeforeFrame.pendingSeekSerial = 2;
   pausedSeekBeforeFrame.seekInFlightSerial = 0;
 
-  playback_state_machine::PipelineSnapshot pausedSeekAfterFrame =
+  playback_video_state_machine::PipelineSnapshot pausedSeekAfterFrame =
       pausedSeekBeforeFrame;
   pausedSeekAfterFrame.lastPresentedSerial = 2;
   pausedSeekAfterFrame.pendingSeekSerial = 0;
 
-  playback_state_machine::PipelineSnapshot failedPausedSeek =
+  playback_video_state_machine::PipelineSnapshot failedPausedSeek =
       pausedSeekBeforeFrame;
   failedPausedSeek.seekFailed = true;
   failedPausedSeek.pendingSeekSerial = 0;
 
-  playback_state_machine::PipelineSnapshot playingSeek = pausedSeekBeforeFrame;
+  playback_video_state_machine::PipelineSnapshot playingSeek = pausedSeekBeforeFrame;
   playingSeek.audioPaused = false;
 
-  playback_state_machine::PipelineSnapshot openingReady{};
+  playback_video_state_machine::PipelineSnapshot openingReady{};
   openingReady.initDone = true;
   openingReady.initOk = true;
   openingReady.videoQueueDepth = 1;
   openingReady.videoQueueEmpty = false;
-  auto putControllerInSeeking = [&](playback_state_machine::Controller& c) {
+  auto putControllerInSeeking = [&](playback_video_state_machine::Controller& c) {
     c.beginOpening();
     c.observe(openingReady, 1);
     c.finishPriming();
     c.beginSeeking();
   };
 
-  playback_state_machine::Controller pausedSeekPendingController;
+  playback_video_state_machine::Controller pausedSeekPendingController;
   putControllerInSeeking(pausedSeekPendingController);
-  playback_state_machine::Evaluation pausedSeekPending =
+  playback_video_state_machine::Evaluation pausedSeekPending =
       pausedSeekPendingController.observe(pausedSeekBeforeFrame, 1);
   ok &= expect(!pausedSeekPending.change.changed &&
                    pausedSeekPending.change.current == PlayerState::Seeking,
                "Paused seek must remain Seeking while a preview frame is "
                "pending");
 
-  playback_state_machine::Controller pausedSeekDoneController;
+  playback_video_state_machine::Controller pausedSeekDoneController;
   putControllerInSeeking(pausedSeekDoneController);
-  playback_state_machine::Evaluation pausedSeekDone =
+  playback_video_state_machine::Evaluation pausedSeekDone =
       pausedSeekDoneController.observe(pausedSeekAfterFrame, 1);
   ok &= expect(pausedSeekDone.change.changed &&
                    pausedSeekDone.change.current == PlayerState::Paused,
                "Paused seek must settle back to Paused after the preview frame "
                "is shown");
 
-  playback_state_machine::Controller failedSeekController;
+  playback_video_state_machine::Controller failedSeekController;
   putControllerInSeeking(failedSeekController);
-  playback_state_machine::Evaluation failedSeek =
+  playback_video_state_machine::Evaluation failedSeek =
       failedSeekController.observe(failedPausedSeek, 1);
   ok &= expect(failedSeek.change.changed &&
                    failedSeek.change.current == PlayerState::Paused,
                "Failed paused seek must fall back to Paused");
 
-  playback_state_machine::Controller playingSeekController;
+  playback_video_state_machine::Controller playingSeekController;
   putControllerInSeeking(playingSeekController);
-  playback_state_machine::Evaluation playingSeekDone =
+  playback_video_state_machine::Evaluation playingSeekDone =
       playingSeekController.observe(playingSeek, 1);
   ok &= expect(playingSeekDone.change.changed &&
                    playingSeekDone.change.current == PlayerState::Prefill,
                "Active seeks must continue into Prefill");
-  ok &= expect(playback_state_machine::stateEffects(PlayerState::Seeking)
+  ok &= expect(playback_video_state_machine::stateEffects(PlayerState::Seeking)
                    .holdAudioOutput,
                "Seeking must hold audio until clocks are reacquired");
-  ok &= expect(!playback_state_machine::stateEffects(PlayerState::Playing)
+  ok &= expect(!playback_video_state_machine::stateEffects(PlayerState::Playing)
                     .holdAudioOutput,
                "Playing must release audio output hold");
-  ok &= expect(playback_state_machine::stateEffects(PlayerState::Paused)
+  ok &= expect(playback_video_state_machine::stateEffects(PlayerState::Paused)
                    .pauseMainClock,
                "Paused state must pause the main clock");
-  ok &= expect(!playback_state_machine::stateEffects(PlayerState::Playing)
+  ok &= expect(!playback_video_state_machine::stateEffects(PlayerState::Playing)
                     .pauseMainClock,
                "Playing state must run the main clock");
-  playback_state_machine::StateProjection playingProjection =
-      playback_state_machine::project(PlayerState::Playing);
+  playback_video_state_machine::StateProjection playingProjection =
+      playback_video_state_machine::project(PlayerState::Playing);
   ok &= expect(
       playingProjection.session ==
-              playback_state_machine::SessionState::Started &&
+              playback_video_state_machine::SessionState::Started &&
           playingProjection.transport ==
-              playback_state_machine::TransportState::Playing &&
+              playback_video_state_machine::TransportState::Playing &&
           playingProjection.buffering ==
-              playback_state_machine::BufferingState::Ready,
+              playback_video_state_machine::BufferingState::Ready,
       "Playing must project to started/playing/ready");
   ok &= expect(playingProjection.effects.mayPresentVideo,
                "Ready playback must allow video presentation");
-  playback_state_machine::StateProjection prefillProjection =
-      playback_state_machine::project(PlayerState::Prefill);
+  playback_video_state_machine::StateProjection prefillProjection =
+      playback_video_state_machine::project(PlayerState::Prefill);
   ok &= expect(prefillProjection.effects.holdAudioOutput &&
                    prefillProjection.effects.pauseMainClock &&
                    !prefillProjection.effects.mayPresentVideo,
@@ -290,67 +290,67 @@ int main() {
                    pausedSeekDone.clearSeekFailure,
                "Leaving Seeking after seek completion must clear seek failure "
                "state centrally");
-  playback_state_machine::Controller stateController;
-  playback_state_machine::StateChange openingChange =
+  playback_video_state_machine::Controller stateController;
+  playback_video_state_machine::StateChange openingChange =
       stateController.beginOpening();
   ok &= expect(openingChange.changed &&
                    openingChange.previous == PlayerState::Idle &&
                    openingChange.current == PlayerState::Opening &&
                    openingChange.projection.session ==
-                       playback_state_machine::SessionState::Opening,
+                       playback_video_state_machine::SessionState::Opening,
                "State controller must own the Opening transition");
-  playback_state_machine::StateChange earlySeek =
+  playback_video_state_machine::StateChange earlySeek =
       stateController.beginSeeking();
   ok &= expect(!earlySeek.changed && earlySeek.current == PlayerState::Opening,
                "Seeking must not start before the session is started");
-  playback_state_machine::Evaluation observedOpening =
+  playback_video_state_machine::Evaluation observedOpening =
       stateController.observe(openingReady, 1);
   ok &= expect(observedOpening.change.changed &&
                    observedOpening.change.current == PlayerState::Priming,
                "Observed pipeline readiness must update the controller");
-  playback_state_machine::StateChange seekChange =
+  playback_video_state_machine::StateChange seekChange =
       stateController.beginSeeking();
   ok &= expect(seekChange.changed &&
                    seekChange.current == PlayerState::Seeking &&
                    seekChange.projection.transport ==
-                       playback_state_machine::TransportState::Seeking,
+                       playback_video_state_machine::TransportState::Seeking,
                "State controller must own the Seeking transition");
-  playback_state_machine::StateChange invalidPrimingFinish =
+  playback_video_state_machine::StateChange invalidPrimingFinish =
       stateController.finishPriming();
   ok &= expect(!invalidPrimingFinish.changed &&
                    invalidPrimingFinish.current == PlayerState::Seeking,
                "Priming completion must be ignored outside Priming");
-  playback_state_machine::Evaluation observedSeek =
+  playback_video_state_machine::Evaluation observedSeek =
       stateController.observe(playingSeek, 1);
   ok &= expect(observedSeek.change.changed &&
                    observedSeek.change.current == PlayerState::Prefill,
                "Observed active seek completion must enter Prefill");
-  playback_state_machine::Evaluation observedPrefill =
+  playback_video_state_machine::Evaluation observedPrefill =
       stateController.observe(openingReady, 1);
   ok &= expect(observedPrefill.change.changed &&
                    observedPrefill.change.current == PlayerState::Priming,
                "Observed ready prefill must enter Priming");
-  playback_state_machine::StateChange primingFinish =
+  playback_video_state_machine::StateChange primingFinish =
       stateController.finishPriming();
   ok &= expect(primingFinish.changed &&
                    primingFinish.current == PlayerState::Playing &&
                    primingFinish.projection.buffering ==
-                       playback_state_machine::BufferingState::Ready,
+                       playback_video_state_machine::BufferingState::Ready,
                "State controller must own the priming-to-playing transition");
 
-  playback_sync::LoopState loopState{};
+  playback_video_sync::LoopState loopState{};
   loopState.frameTimerUs = 1000;
-  playback_sync::PreparedFrame prepared{};
+  playback_video_sync::PreparedFrame prepared{};
   prepared.frame.ptsUs = 5000;
   prepared.frame.durationUs = 33333;
-  playback_main_clock::Snapshot master{};
-  playback_sync::FramePlan seekPlan = playback_sync::planFrame(
+  playback_video_main_clock::Snapshot master{};
+  playback_video_sync::FramePlan seekPlan = playback_video_sync::planFrame(
       loopState, PlayerState::Seeking, prepared, master, 8000);
   ok &= expect(seekPlan.delayUs == 0 && seekPlan.targetUs == 8000,
                "Seeking must present the next frame immediately");
 
-  playback_main_clock::Controller mainClock;
-  playback_main_clock::SampleRequest clockRequest{};
+  playback_video_main_clock::Controller mainClock;
+  playback_video_main_clock::SampleRequest clockRequest{};
   clockRequest.currentSerial = 4;
   clockRequest.nowUs = 1000000;
   clockRequest.audio.active = true;
@@ -362,51 +362,51 @@ int main() {
   clockRequest.video.ready = true;
   clockRequest.video.serial = 4;
   clockRequest.video.us = 9000;
-  playback_main_clock::Snapshot audioMaster = mainClock.sample(clockRequest);
+  playback_video_main_clock::Snapshot audioMaster = mainClock.sample(clockRequest);
   ok &= expect(audioMaster.source == PlayerClockSource::Audio,
                "Eligible audio must be selected as the main playback clock");
-  ok &= expect(playback_main_clock::convertToSystemUs(audioMaster, 20000, 0) ==
+  ok &= expect(playback_video_main_clock::convertToSystemUs(audioMaster, 20000, 0) ==
                    1010000,
                "Main clock must convert stream timestamps to system time");
 
   clockRequest.audio.mayDriveMaster = false;
-  playback_main_clock::Snapshot videoFallback = mainClock.sample(clockRequest);
+  playback_video_main_clock::Snapshot videoFallback = mainClock.sample(clockRequest);
   ok &= expect(videoFallback.source == PlayerClockSource::Video,
                "Blocked audio master must fall back to the video clock");
 
-  playback_sync::LoopState convertedLoop{};
+  playback_video_sync::LoopState convertedLoop{};
   convertedLoop.frameTimerUs = 500000;
-  playback_sync::PreparedFrame convertedFrame{};
+  playback_video_sync::PreparedFrame convertedFrame{};
   convertedFrame.frame.ptsUs = 20000;
   convertedFrame.frame.durationUs = 33333;
   convertedFrame.delayUs = 33333;
   convertedFrame.actualDurationUs = 33333;
-  playback_sync::FramePlan convertedPlan = playback_sync::planFrame(
+  playback_video_sync::FramePlan convertedPlan = playback_video_sync::planFrame(
       convertedLoop, PlayerState::Playing, convertedFrame, audioMaster, 1000000);
   ok &= expect(convertedPlan.targetUs == 1010000,
                "Video scheduling must use the main clock's stream-to-system "
                "conversion");
 
-  playback_sync::LoopState driftLoop{};
+  playback_video_sync::LoopState driftLoop{};
   driftLoop.frameTimerUs = 700000;
   driftLoop.lastDelayUsValue = 33333;
   for (int i = 1; i <= 5; ++i) {
-    playback_main_clock::Snapshot movingAudioMaster = audioMaster;
+    playback_video_main_clock::Snapshot movingAudioMaster = audioMaster;
     movingAudioMaster.us = 10000 + (i - 1) * 33333;
     movingAudioMaster.systemUs = 1000000 + (i - 1) * 33333;
 
-    playback_sync::PreparedFrame driftFrame{};
+    playback_video_sync::PreparedFrame driftFrame{};
     driftFrame.frame.ptsUs = 10000 + i * 33333;
     driftFrame.frame.durationUs = 33333;
     driftFrame.delayUs = 33333;
     driftFrame.actualDurationUs = 33333;
-    playback_sync::FramePlan driftPlan = playback_sync::planFrame(
+    playback_video_sync::FramePlan driftPlan = playback_video_sync::planFrame(
         driftLoop, PlayerState::Playing, driftFrame, movingAudioMaster,
         movingAudioMaster.systemUs);
     int64_t expectedTargetUs = 1000000 + i * 33333;
     ok &= expect(driftPlan.targetUs == expectedTargetUs,
                  "Audio-master scheduling must not accumulate local timer drift");
-    playback_sync::notePresentedFrame(driftLoop, driftFrame, driftPlan.delayUs,
+    playback_video_sync::notePresentedFrame(driftLoop, driftFrame, driftPlan.delayUs,
                                       driftPlan.targetUs,
                                       movingAudioMaster.systemUs);
   }

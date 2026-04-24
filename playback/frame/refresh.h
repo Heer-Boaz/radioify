@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "player.h"
+#include "playback/video/player.h"
 
 namespace playback_frame_refresh {
 

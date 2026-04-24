@@ -23,7 +23,7 @@
 #include "terminal_cell_metrics.h"
 #include "ui_helpers.h"
 #include "unicode_display_width.h"
-#include "videodecoder.h"
+#include "playback/video/decoder.h"
 
 static bool wideToUtf8(const std::wstring& text, std::string& out) {
   if (text.empty()) {

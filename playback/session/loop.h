@@ -12,7 +12,7 @@
 #include "playback/ascii/frame_output.h"
 #include "playback/session/state.h"
 #include "log.h"
-#include "videoplayback.h"
+#include "playback/video/playback.h"
 
 class Player;
 class SubtitleManager;

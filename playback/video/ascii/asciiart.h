@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "consolescreen.h"
-#include "videocolor.h"
+#include "playback/video/color.h"
 
 struct AsciiArt {
   int width = 0;

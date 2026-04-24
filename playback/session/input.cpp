@@ -7,13 +7,13 @@
 #include <vector>
 
 #include "audioplayback.h"
-#include "player.h"
+#include "playback/video/player.h"
 #include "playback/input/shortcuts.h"
 #include "handoff.h"
-#include "subtitle_manager.h"
+#include "playback/video/subtitle/manager.h"
 #include "ui_helpers.h"
 #include "ui_inputlogic.h"
-#include "videowindow.h"
+#include "playback/video/framebuffer/window/window.h"
 
 namespace playback_session_input {
 

@@ -4,19 +4,19 @@
 #include <functional>
 #include <memory>
 
-#include "gpu_shared.h"
+#include "playback/video/gpu/gpu_shared.h"
 #include "presenter.h"
 #include "playback/session/state.h"
-#include "player.h"
-#include "videowindow.h"
+#include "playback/video/player.h"
+#include "playback/video/framebuffer/window/window.h"
 
-class PlaybackWindowPresenter {
+class WindowPresenter {
  public:
-  PlaybackWindowPresenter();
-  ~PlaybackWindowPresenter();
+  WindowPresenter();
+  ~WindowPresenter();
 
-  PlaybackWindowPresenter(const PlaybackWindowPresenter&) = delete;
-  PlaybackWindowPresenter& operator=(const PlaybackWindowPresenter&) = delete;
+  WindowPresenter(const WindowPresenter&) = delete;
+  WindowPresenter& operator=(const WindowPresenter&) = delete;
 
   bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
              const std::function<bool()>& overlayVisible,

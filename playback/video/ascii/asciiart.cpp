@@ -25,7 +25,7 @@
 
 #include "asciiart_image_decode_wic.h"
 #include "asciiart_layout.h"
-#include "video_luminance_stats.h"
+#include "playback/video/luminance_stats.h"
 
 #ifdef _MSC_VER
 #define FORCE_INLINE __forceinline

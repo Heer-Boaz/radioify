@@ -14,7 +14,7 @@
 #endif
 #include <windows.h>
 
-#include "videodecoder.h"
+#include "playback/video/decoder.h"
 
 struct PlayerConfig {
   std::filesystem::path file;

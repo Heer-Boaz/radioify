@@ -1,5 +1,5 @@
 #include "asciiart_gpu.h"
-#include "gpu_shared.h"
+#include "playback/video/gpu/gpu_shared.h"
 #include <d3d11.h>
 #include <d3d10.h>
 #include <dxgi.h>

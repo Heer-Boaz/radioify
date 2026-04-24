@@ -2,7 +2,7 @@ radioify_add_module_object_library(radioify_ascii_cpu
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_image_decode_wic.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_layout.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/video_luminance_stats.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/luminance_stats.cpp
 )
 
 radioify_add_module_object_library(radioify_ascii_gpu
@@ -18,34 +18,34 @@ radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_gpu.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/gpu_shared.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/videoprocessor.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/audio_clock_reacquire.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/audio_output_clock_source.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/audio_output_timeline.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/audio_track_switch_timeline.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/main_clock.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/serial_control.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/state_machine.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/sync.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/timeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio/clock_reacquire.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio/output_clock_source.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio/output_timeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio/track_switch_timeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/timing/main_clock.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/control/serial.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/state/machine.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/timing/sync.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/timing/timeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/player.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_ass_parser.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_ass_script.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_ass_bitmap_renderer.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_font_attachments.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_manager.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/video_enhancement.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/video_enhancement_nvidia_d3d11.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/video_frame_cache_update.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/video_luminance_stats.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/videodecoder.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/ass/parser.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/ass/script.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/ass/bitmap_renderer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/font_attachments.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/manager.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/enhancement/pipeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/enhancement/nvidia_d3d11.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/frame_cache/update.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/luminance_stats.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/decoder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/text_grid_bitmap_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/video_output_color.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_file_drop.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_gpu_textgrid.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_input_controller.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_input_events.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_input_queue.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_messages.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/videowindow_textgrid.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/window.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/file_drop.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/gpu_textgrid.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/input_controller.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/input_events.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/input_queue.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/messages.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/textgrid.cpp
 )

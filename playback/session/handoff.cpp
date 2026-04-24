@@ -3,7 +3,7 @@
 #include <atomic>
 
 #include "audioplayback.h"
-#include "player.h"
+#include "playback/video/player.h"
 #include "state.h"
 
 namespace playback_session_handoff {

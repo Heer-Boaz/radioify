@@ -7,8 +7,8 @@
 
 #include "asciiart.h"
 #include "consolescreen.h"
-#include "subtitle_font_attachments.h"
-#include "videowindow.h"
+#include "playback/video/subtitle/font_attachments.h"
+#include "playback/video/framebuffer/window/window.h"
 
 namespace playback_ascii_subtitles {
 

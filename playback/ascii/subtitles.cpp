@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include "subtitle_ass_bitmap_renderer.h"
-#include "subtitle_caption_style.h"
+#include "playback/video/subtitle/ass/bitmap_renderer.h"
+#include "playback/video/subtitle/caption_style.h"
 #include "ui_helpers.h"
 #include "unicode_display_width.h"
 

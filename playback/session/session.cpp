@@ -6,11 +6,11 @@
 #include <utility>
 
 #include "audioplayback.h"
-#include "player.h"
+#include "playback/video/player.h"
 #include "bootstrap.h"
 #include "host.h"
 #include "loop.h"
-#include "subtitle_manager.h"
+#include "playback/video/subtitle/manager.h"
 
 struct PlaybackSession::Impl {
   explicit Impl(Args args)

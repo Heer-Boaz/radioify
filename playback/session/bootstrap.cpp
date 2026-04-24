@@ -10,7 +10,7 @@
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "playback_dialog.h"
-#include "player.h"
+#include "playback/video/player.h"
 #include "ui_helpers.h"
 
 namespace {

@@ -10,8 +10,8 @@
 #include "consolescreen.h"
 #include "consoleinput.h"
 #include "gpu_text_grid.h"
-#include "subtitle_manager.h"
-#include "videowindow.h"
+#include "playback/video/subtitle/manager.h"
+#include "playback/video/framebuffer/window/window.h"
 
 namespace playback_overlay {
 

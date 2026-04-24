@@ -18,7 +18,7 @@
 #include <wrl/client.h>
 
 #include "asciiart_layout.h"
-#include "video_frame_cache_update.h"
+#include "playback/video/frame_cache/update.h"
 
 namespace {
 void emitWarning(

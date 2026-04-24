@@ -1,8 +1,8 @@
 #pragma once
 
 #include "gpu/videoprocessor.h"
-#include "videodecoder.h"
-#include "video_enhancement.h"
+#include "playback/video/decoder.h"
+#include "playback/video/enhancement/pipeline.h"
 
 #include <string>
 

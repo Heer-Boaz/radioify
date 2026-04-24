@@ -7,7 +7,7 @@
 
 #include "playback/control/transport.h"
 #include "playback/session/state.h"
-#include "videoplayback.h"
+#include "playback/video/playback.h"
 
 class PlaybackSession {
  public:

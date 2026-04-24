@@ -16,8 +16,8 @@ extern "C" {
 #include "media_artwork_sidecar.h"
 #include "runtime_helpers.h"
 #include "ui_helpers.h"
-#include "video/ascii/asciiart.h"
-#include "video/framebuffer/text_grid_bitmap_renderer.h"
+#include "playback/video/ascii/asciiart.h"
+#include "playback/video/framebuffer/text_grid_bitmap_renderer.h"
 
 namespace {
 

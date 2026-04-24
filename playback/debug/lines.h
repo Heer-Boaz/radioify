@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <string>
 
-#include "player.h"
+#include "playback/video/player.h"
 
 namespace playback_debug_lines {
 

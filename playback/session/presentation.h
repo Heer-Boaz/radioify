@@ -6,11 +6,11 @@
 #include <memory>
 #include <optional>
 
-#include "gpu_shared.h"
+#include "playback/video/gpu/gpu_shared.h"
 #include "playback/framebuffer/presenter.h"
 #include "playback_mode.h"
 #include "state.h"
-#include "videowindow.h"
+#include "playback/video/framebuffer/window/window.h"
 
 class Player;
 
