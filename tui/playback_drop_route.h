@@ -4,7 +4,7 @@
 #include <optional>
 #include <vector>
 
-#include "playback/session/playback_session_state.h"
+#include "playback/session/state.h"
 #include "playback_target.h"
 
 namespace playback_drop_route {

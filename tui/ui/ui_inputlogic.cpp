@@ -6,7 +6,7 @@
 #include "browser_grid_index.h"
 #include "consolescreen.h"
 #include "optionsbrowser.h"
-#include "playback/playback_shortcuts.h"
+#include "playback/input/shortcuts.h"
 #include "runtime_helpers.h"
 #include "ui_helpers.h"
 

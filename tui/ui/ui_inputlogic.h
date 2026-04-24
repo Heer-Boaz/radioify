@@ -7,7 +7,7 @@
 
 #include "browser_model.h"
 #include "consoleinput.h"
-#include "playback/playback_shortcut_types.h"
+#include "playback/input/shortcut_types.h"
 
 struct InputCallbacks {
   std::function<void()> onQuit;

@@ -364,9 +364,9 @@ add_executable(shortcut_match_tests)
 target_sources(shortcut_match_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_shortcut_match_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/audio_clock_reacquire.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/playback_main_clock.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/playback_state_machine.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/playback_sync.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/main_clock.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/state_machine.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/sync.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/video_enhancement.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/video_enhancement_nvidia_d3d11.cpp
 )

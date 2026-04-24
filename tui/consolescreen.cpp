@@ -18,7 +18,7 @@
 #include "asciiart.h"
 #include "browser_grid_index.h"
 #include "consoleinput.h"
-#include "playback/playback_media_artwork_catalog.h"
+#include "playback/media/artwork_catalog.h"
 #include "runtime_helpers.h"
 #include "terminal_cell_metrics.h"
 #include "ui_helpers.h"

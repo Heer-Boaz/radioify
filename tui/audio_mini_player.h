@@ -10,8 +10,8 @@
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "gpu_text_grid.h"
-#include "playback/overlay/playback_overlay.h"
-#include "playback/session/playback_session_state.h"
+#include "playback/overlay/overlay.h"
+#include "playback/session/state.h"
 #include "videowindow.h"
 
 class AudioMiniPlayer {

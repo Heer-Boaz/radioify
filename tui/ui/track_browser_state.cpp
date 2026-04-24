@@ -3,7 +3,7 @@
 #include <utility>
 
 #include "consoleinput.h"
-#include "playback/playback_track_catalog.h"
+#include "playback/media/track_catalog.h"
 
 namespace {
 
