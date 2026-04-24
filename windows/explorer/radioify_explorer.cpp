@@ -202,8 +202,8 @@ bool isDesktopDirectory(const std::wstring& path) {
          isKnownFolderPath(path, FOLDERID_PublicDesktop);
 }
 
-HRESULT resolveSingleDirectorySelection(IShellItemArray* items,
-                                        std::wstring* outPath) noexcept {
+HRESULT resolveSinglePathSelection(IShellItemArray* items,
+                                   std::wstring* outPath) noexcept {
   if (!items || !outPath) return E_POINTER;
   outPath->clear();
 
@@ -226,14 +226,9 @@ HRESULT resolveSingleDirectorySelection(IShellItemArray* items,
   outPath->assign(fileSystemPath);
   CoTaskMemFree(fileSystemPath);
 
-  const DWORD attributes = GetFileAttributesW(outPath->c_str());
-  if (attributes == INVALID_FILE_ATTRIBUTES) {
+  if (!isExistingFile(*outPath) && !isExistingDirectory(*outPath)) {
     outPath->clear();
     return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
-  }
-  if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-    outPath->clear();
-    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
   }
   return S_OK;
 }
@@ -428,7 +423,7 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
       if (!commandState) return E_POINTER;
       std::wstring selectedPath;
       const HRESULT hr =
-          resolveDirectory(items, &selectedPath);
+          resolveTarget(items, &selectedPath);
       *commandState = SUCCEEDED(hr) ? ECS_ENABLED : ECS_HIDDEN;
       return S_OK;
     } catch (...) {
@@ -440,7 +435,7 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
   STDMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) override {
     try {
       std::wstring selectedPath;
-      HRESULT hr = resolveDirectory(items, &selectedPath);
+      HRESULT hr = resolveTarget(items, &selectedPath);
       if (FAILED(hr)) return hr;
       return launchRadioify(selectedPath);
     } catch (...) {
@@ -467,8 +462,8 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
     return items ? items : selection_.get();
   }
 
-  HRESULT resolveDirectory(IShellItemArray* items, std::wstring* outPath) const noexcept {
-    HRESULT hr = resolveSingleDirectorySelection(resolveSelection(items), outPath);
+  HRESULT resolveTarget(IShellItemArray* items, std::wstring* outPath) const noexcept {
+    HRESULT hr = resolveSinglePathSelection(resolveSelection(items), outPath);
     if (SUCCEEDED(hr)) return hr;
 
     hr = resolveFolderViewDirectory(site_.get(), outPath);

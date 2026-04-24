@@ -44,6 +44,15 @@ string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
 set(RADIOIFY_WIN11_EXPLORER_CONTEXT_MENU_XML
 "        <desktop4:Extension Category=\"windows.fileExplorerContextMenus\">\n          <desktop4:FileExplorerContextMenus>\n"
 )
+foreach(radioify_file_type IN LISTS RADIOIFY_WIN11_EXPLORER_FILE_TYPES)
+  string(SUBSTRING "${radioify_file_type}" 1 -1 radioify_file_type_id)
+  string(REGEX REPLACE "[^A-Za-z0-9]" "" radioify_file_type_id "${radioify_file_type_id}")
+  string(APPEND RADIOIFY_WIN11_EXPLORER_CONTEXT_MENU_XML
+"            <desktop5:ItemType Type=\"${radioify_file_type}\">\n"
+"              <desktop5:Verb Id=\"RadioifyOpen${radioify_file_type_id}\" Clsid=\"${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}\" />\n"
+"            </desktop5:ItemType>\n"
+)
+endforeach()
 string(APPEND RADIOIFY_WIN11_EXPLORER_CONTEXT_MENU_XML
 "            <desktop5:ItemType Type=\"Directory\">\n"
 "              <desktop5:Verb Id=\"RadioifyOpen\" Clsid=\"${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}\" />\n"

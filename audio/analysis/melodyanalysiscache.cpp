@@ -1,6 +1,7 @@
 #include "melodyanalysiscache.h"
 
 #include "ffmpegaudio.h"
+#include "flacaudio.h"
 #include "gmeaudio.h"
 #include "gsfaudio.h"
 #include "kssaudio.h"
@@ -425,6 +426,7 @@ class DecoderContext {
   enum class Type {
     Unknown,
     Ffmpeg,
+    Flac,
     Gme,
     Midi,
     Gsf,
@@ -444,6 +446,14 @@ class DecoderContext {
     channels_ = std::max<uint32_t>(1u, job.channels);
     sampleRate_ = std::max<uint32_t>(1u, job.sourceSampleRate);
     type_ = Type::Unknown;
+
+    if (isFlacExt(job.file)) {
+      type_ = Type::Flac;
+      if (!flac_.init(job.file, channels_, sampleRate_, error)) {
+        return false;
+      }
+      return true;
+    }
 
     if (isM4aExt(job.file) || isMiniaudioExt(job.file) || isOggExt(job.file)) {
       type_ = Type::Ffmpeg;
@@ -515,6 +525,7 @@ class DecoderContext {
 
   void uninit() {
     if (type_ == Type::Ffmpeg) ffmpeg_.uninit();
+    if (type_ == Type::Flac) flac_.uninit();
     if (type_ == Type::Gme) gme_.uninit();
     if (type_ == Type::Midi) midi_.uninit();
     if (type_ == Type::Gsf) gsf_.uninit();
@@ -533,6 +544,8 @@ class DecoderContext {
     switch (type_) {
       case Type::Ffmpeg:
         return ffmpeg_.readFrames(out, frameCount, outFrames);
+      case Type::Flac:
+        return flac_.readFrames(out, frameCount, outFrames);
       case Type::Gme:
         return gme_.readFrames(out, frameCount, outFrames);
       case Type::Midi:
@@ -555,6 +568,9 @@ class DecoderContext {
     switch (type_) {
       case Type::Ffmpeg:
         ffmpeg_.getTotalFrames(&total);
+        return total;
+      case Type::Flac:
+        flac_.getTotalFrames(&total);
         return total;
       case Type::Gme:
         gme_.getTotalFrames(&total);
@@ -584,6 +600,7 @@ class DecoderContext {
   uint32_t sampleRate_ = 0;
   uint32_t channels_ = 0;
   FfmpegAudioDecoder ffmpeg_;
+  FlacAudioDecoder flac_;
   GmeAudioDecoder gme_;
   MidiAudioDecoder midi_;
   GsfAudioDecoder gsf_;
