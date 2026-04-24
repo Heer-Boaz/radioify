@@ -100,6 +100,11 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return 0;
     }
 
+    if (uMsg == WM_DISPLAYCHANGE) {
+        pThis->RecreateSwapChainForCurrentDisplay("display_change");
+        return DefWindowProc(hWnd, uMsg, wParam, lParam);
+    }
+
     if (uMsg == WM_CLOSE) {
         pThis->m_closeRequested.store(true, std::memory_order_relaxed);
         if (pThis->m_closeRequestedEvent) {

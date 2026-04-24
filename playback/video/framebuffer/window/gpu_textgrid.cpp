@@ -429,5 +429,5 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     if (!swapChain) return;
     const VideoWindowPresentArgs presentArgs =
         liveVideoWindowPresentArgs(presentInterval, nonBlocking);
-    (void)swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
+    (void)PresentSwapChain(swapChain.Get(), presentArgs, "gpu_text_grid");
 }

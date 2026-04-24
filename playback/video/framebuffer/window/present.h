@@ -25,3 +25,8 @@ inline VideoWindowPresentArgs liveVideoWindowPresentArgs(
 inline bool videoWindowPresentSkipped(HRESULT hr) {
   return hr == DXGI_STATUS_OCCLUDED || hr == DXGI_ERROR_WAS_STILL_DRAWING;
 }
+
+inline bool videoWindowPresentRequiresDeviceRecovery(HRESULT hr) {
+  return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET ||
+         hr == DXGI_ERROR_DEVICE_HUNG;
+}

@@ -13,3 +13,7 @@ radioify_add_module_object_library(radioify_tool_ascii_shader_tests
 radioify_add_module_object_library(radioify_tool_shortcut_match_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/shortcut_match_tests.cpp
 )
+
+radioify_add_module_object_library(radioify_tool_video_output_color_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_output_color_tests.cpp
+)

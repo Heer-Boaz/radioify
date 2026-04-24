@@ -881,7 +881,6 @@ uint32_t VideoWindow::OutputColorSpaceShaderValue() const {
 
 float VideoWindow::OutputSdrWhiteNits() const {
     if (VideoOutputUsesHdr(m_outputColorState)) {
-        assert(m_outputColorState.outputSdrWhiteNitsAvailable);
         assert(std::isfinite(m_outputColorState.outputSdrWhiteNits));
         assert(m_outputColorState.outputSdrWhiteNits > 0.0f);
     }
@@ -1439,10 +1438,6 @@ bool VideoWindow::MakeFullscreen() {
     m_prevStyle = GetWindowLong(m_hWnd, GWL_STYLE);
     GetWindowRect(m_hWnd, &m_prevRect);
 
-    // Feature toggle: when false we DO NOT attempt any fallback (exclusive fullscreen)
-    static constexpr bool kAllowFullscreenFallback = false; // TEMP: user requested no fallback
-
-    // Prefer borderless fullscreen (WS_POPUP) as the only allowed method when fallback is disabled
     HMONITOR hm = MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi; mi.cbSize = sizeof(mi);
 
@@ -1454,110 +1449,35 @@ bool VideoWindow::MakeFullscreen() {
         UINT monW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
         UINT monH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
 
-        // Diagnostic: print current swapchain desc before attempting ResizeBuffers
-        {
-            DXGI_SWAP_CHAIN_DESC desc = {};
-            HRESULT g = m_swapChain->GetDesc(&desc);
-            if (SUCCEEDED(g)) {
-                // swapchain desc diagnostic removed
-            } else {
-                std::fprintf(stderr, "VideoWindow: GetDesc failed (0x%08X)\n", static_cast<unsigned int>(g));
-            }
-        }
-
-        // Prepare window for borderless fullscreen first: set style/exstyle/position so the window is ready
-        // Prevent WM_SIZE messages from racing and resetting our freshly-applied fullscreen size
         m_ignoreWindowSizeEvents = true;
         SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
         LONG newEx = m_prevExStyle & ~(WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
         SetWindowLong(m_hWnd, GWL_EXSTYLE, newEx);
-    // SetWindowLong diagnostic removed
 
         SetWindowPos(m_hWnd, HWND_TOPMOST, mi.rcMonitor.left, mi.rcMonitor.top, monW, monH, SWP_SHOWWINDOW | SWP_FRAMECHANGED);
         ::ShowWindow(m_hWnd, SW_SHOW);
-        // Force a layout/update before resizing buffers
         UpdateWindow(m_hWnd);
 
-        // Prepare to recreate the swapchain at monitor resolution.
-        // Unbind and clear context to release any references to the swapchain buffers.
-        {
-            ID3D11Device* dev = getSharedGpuDevice();
-            if (dev) {
-                ID3D11DeviceContext* ctx = nullptr;
-                dev->GetImmediateContext(&ctx);
-                if (ctx) {
-                    ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
-                    ctx->PSSetShaderResources(0, 5, nullSRVs);
-                    ID3D11RenderTargetView* nullRTV = nullptr;
-                    ctx->OMSetRenderTargets(0, &nullRTV, nullptr);
-                    ctx->VSSetShader(nullptr, nullptr, 0);
-                    ctx->PSSetShader(nullptr, nullptr, 0);
-                    ctx->ClearState();
-                    ctx->Flush();
-                    ctx->Release();
-                    // Unbound RTVs/SRVs diagnostic removed
-                }
-            }
-            if (m_renderTargetView) { m_renderTargetView.Reset(); }
-            ResetSwapChain();
-        }
+        ReleaseSwapChainBackBufferReferences();
 
-        // Recreate the swapchain sized to the monitor (borderless windowed fullscreen)
-        // Indicate that Present must wait for the new RTV/backbuffer to be ready
         m_waitingForRenderTarget = true;
         if (!CreateSwapChain(static_cast<int>(monW), static_cast<int>(monH))) {
             std::fprintf(stderr, "VideoWindow: CreateSwapChain(borderless) failed\n");
-            if (!kAllowFullscreenFallback) {
-                std::fprintf(stderr, "VideoWindow: fullscreen fallback disabled; aborting (create swapchain failed)\n");
-                m_ignoreWindowSizeEvents = false;
-                return false;
-            }
-        } else {
-            // Success: ensure focus and topmost ordering
-            SetForegroundWindow(m_hWnd);
-            SetActiveWindow(m_hWnd);
-            SetFocus(m_hWnd);
-            BringWindowToTop(m_hWnd);
-            // Defensive: explicitly call Resize to ensure internal size/state is updated
-            Resize(static_cast<int>(monW), static_cast<int>(monH));
-            // after CreateSwapChain diagnostic removed
-            // entered borderless fullscreen (diagnostic removed)
-            m_isFullscreen = true;
-            // Allow WM_SIZE processing again now that we've updated internal state
             m_ignoreWindowSizeEvents = false;
-            return true;
+            return false;
         }
-    }
 
-    // If we reach here and fallback is disabled, do not try other methods
-    if (!kAllowFullscreenFallback) {
-        std::fprintf(stderr, "VideoWindow: borderless fullscreen could not be started and fallback is disabled\n");
+        SetForegroundWindow(m_hWnd);
+        SetActiveWindow(m_hWnd);
+        SetFocus(m_hWnd);
+        BringWindowToTop(m_hWnd);
+        Resize(static_cast<int>(monW), static_cast<int>(monH));
+        m_isFullscreen = true;
         m_ignoreWindowSizeEvents = false;
-        return false;
+        return true;
     }
 
-    // Fallback (disabled by default): try exclusive fullscreen as last resort
-    HRESULT hr = m_swapChain->SetFullscreenState(TRUE, NULL);
-    if (SUCCEEDED(hr)) {
-        // exclusive fullscreen success message removed
-        // Attempt to resize buffers to monitor resolution
-        if (GetMonitorInfo(hm, &mi)) {
-            UINT monW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
-            UINT monH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
-            HRESULT r3 = m_swapChain->ResizeBuffers(0, monW, monH, DXGI_FORMAT_UNKNOWN, 0);
-            if (SUCCEEDED(r3)) {
-                Resize(static_cast<int>(monW), static_cast<int>(monH));
-                m_isFullscreen = true;
-                // exclusive fullscreen buffers resized message removed
-                return true;
-            }
-            std::fprintf(stderr, "VideoWindow: ResizeBuffers(exclusive) failed (0x%08X)\n", static_cast<unsigned int>(r3));
-        }
-    } else {
-        std::fprintf(stderr, "VideoWindow: SetFullscreenState(TRUE) failed (0x%08X)\n", static_cast<unsigned int>(hr));
-    }
-
-    std::fprintf(stderr, "VideoWindow: all fullscreen methods failed\n");
+    std::fprintf(stderr, "VideoWindow: failed to resolve monitor for fullscreen\n");
     return false;
 }
 
@@ -1781,6 +1701,69 @@ void VideoWindow::ResetSwapChain() {
     m_swapChain.Reset();
 }
 
+void VideoWindow::ReleaseSwapChainBackBufferReferences() {
+    ID3D11Device* device = getSharedGpuDevice();
+    if (!device) {
+        m_renderTargetView.Reset();
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(&context);
+    if (context) {
+        ID3D11ShaderResourceView* nullSrvs[5] = {};
+        context->PSSetShaderResources(0, 5, nullSrvs);
+        context->OMSetRenderTargets(0, nullptr, nullptr);
+        context->VSSetShader(nullptr, nullptr, 0);
+        context->PSSetShader(nullptr, nullptr, 0);
+        context->ClearState();
+        context->Flush();
+    }
+    m_renderTargetView.Reset();
+}
+
+bool VideoWindow::RecreateSwapChainForCurrentDisplay(const char* reason) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    if (!m_hWnd) return false;
+    RECT rect{};
+    if (!GetClientRect(m_hWnd, &rect)) return false;
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) return false;
+
+    ReleaseSwapChainBackBufferReferences();
+    m_width = width;
+    m_height = height;
+    m_waitingForRenderTarget = true;
+    if (!CreateSwapChain(width, height)) {
+        std::fprintf(stderr,
+                     "VideoWindow: recreate swapchain failed after %s\n",
+                     reason ? reason : "display change");
+        return false;
+    }
+    m_waitingForRenderTarget = false;
+    return true;
+}
+
+void VideoWindow::HandlePresentResult(HRESULT hr, const char* stage) {
+    if (SUCCEEDED(hr) || videoWindowPresentSkipped(hr)) return;
+    std::fprintf(stderr, "VideoWindow: %s Present failed (0x%08X)\n",
+                 stage ? stage : "window", static_cast<unsigned int>(hr));
+    if (videoWindowPresentRequiresDeviceRecovery(hr)) {
+        (void)RecreateSwapChainForCurrentDisplay(
+            stage ? stage : "present_device_recovery");
+    }
+}
+
+HRESULT VideoWindow::PresentSwapChain(IDXGISwapChain* swapChain,
+                                      const VideoWindowPresentArgs& presentArgs,
+                                      const char* stage) {
+    if (!swapChain) return E_POINTER;
+    HRESULT hr = swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
+    HandlePresentResult(hr, stage);
+    return hr;
+}
+
 bool VideoWindow::CreateSwapChain(int width, int height) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     ID3D11Device* device = getSharedGpuDevice();
@@ -1803,58 +1786,30 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
 
     Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory2;
     HRESULT factoryHr = dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory2));
-    HdrGenerateDecision hdrDecision =
-        ResolveHdrGenerateOutputState(m_hWnd, dxgiAdapter.Get());
-    VideoOutputColorState desiredColorState = hdrDecision.state;
     SetOutputColorAttemptStatus({});
-    std::vector<VideoOutputColorState> colorAttempts;
-    colorAttempts.push_back(desiredColorState);
-    if (desiredColorState.encoding == VideoOutputColorEncoding::Hdr10) {
-        colorAttempts.push_back(VideoOutputScRgbGenerateState(desiredColorState));
-    }
-    if (VideoOutputUsesHdr(desiredColorState)) {
-        colorAttempts.push_back(VideoOutputSdrFallbackState(desiredColorState));
-    }
-    std::string lastColorAttemptFailure;
-    for (const VideoOutputColorState& colorState : colorAttempts) {
+    std::string colorAttemptStatus;
+    if (SUCCEEDED(factoryHr) && dxgiFactory2) {
+        DXGI_SWAP_CHAIN_DESC1 scd1 = {};
+        scd1.Width = static_cast<UINT>(width);
+        scd1.Height = static_cast<UINT>(height);
+        scd1.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        scd1.SampleDesc.Count = 1;
+        scd1.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        scd1.BufferCount = 2;
+        scd1.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        scd1.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        scd1.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
-        if (SUCCEEDED(factoryHr) && dxgiFactory2) {
-            DXGI_SWAP_CHAIN_DESC1 scd1 = {};
-            scd1.Width = static_cast<UINT>(width);
-            scd1.Height = static_cast<UINT>(height);
-            scd1.Format = colorState.swapChainFormat;
-            scd1.SampleDesc.Count = 1;
-            scd1.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            scd1.BufferCount = 2;
-            scd1.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-            scd1.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-            scd1.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-
-            Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
-            HRESULT hr = dxgiFactory2->CreateSwapChainForHwnd(
-                device, m_hWnd, &scd1, nullptr, nullptr, &swapChain1);
-            if (SUCCEEDED(hr)) {
-                m_swapChain = swapChain1;
-                if (!ApplyVideoOutputColorSpace(*m_swapChain.Get(),
-                                                colorState)) {
-                    lastColorAttemptFailure =
-                        std::string("failed=set_") +
-                        VideoOutputColorEncodingName(colorState.encoding);
-                    SetOutputColorAttemptStatus(lastColorAttemptFailure);
-                    ResetSwapChain();
-                    continue;
-                }
-                m_outputColorState = colorState;
-                const char* stage =
-                    colorState.encoding == desiredColorState.encoding
-                        ? "active"
-                        : "downgrade";
-                std::string status = VideoOutputColorAttemptStatus(
-                    hdrDecision, m_outputColorState, stage);
-                if (!lastColorAttemptFailure.empty()) {
-                    status += " last_failure=" + lastColorAttemptFailure;
-                }
-                SetOutputColorAttemptStatus(status);
+        Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
+        HRESULT hr = dxgiFactory2->CreateSwapChainForHwnd(
+            device, m_hWnd, &scd1, nullptr, nullptr, &swapChain1);
+        if (SUCCEEDED(hr)) {
+            m_swapChain = swapChain1;
+            if (ConfigureVideoOutputSwapChain(
+                    *m_swapChain.Get(), width, height,
+                    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+                    &m_outputColorState, &colorAttemptStatus)) {
+                SetOutputColorAttemptStatus(colorAttemptStatus);
                 swapChain1.As(&m_swapChain2);
                 if (m_swapChain2) {
                     m_swapChain2->SetMaximumFrameLatency(1);
@@ -1864,64 +1819,27 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
                 }
                 Resize(width, height);
                 return true;
-            } else {
-                char status[96];
-                std::snprintf(status, sizeof(status), "failed=create_%s:0x%08X",
-                              VideoOutputColorEncodingName(colorState.encoding),
-                              static_cast<unsigned int>(hr));
-                lastColorAttemptFailure = status;
-                SetOutputColorAttemptStatus(lastColorAttemptFailure);
             }
+            SetOutputColorAttemptStatus(colorAttemptStatus);
+            ResetSwapChain();
+        } else {
+            char status[96];
+            std::snprintf(status, sizeof(status), "failed=create_sdr:0x%08X",
+                          static_cast<unsigned int>(hr));
+            colorAttemptStatus = status;
+            SetOutputColorAttemptStatus(colorAttemptStatus);
         }
+    } else {
+        colorAttemptStatus = "failed=dxgi_factory2_unavailable";
+        SetOutputColorAttemptStatus(colorAttemptStatus);
     }
 
-    Microsoft::WRL::ComPtr<IDXGIFactory> dxgiFactory;
-    if (FAILED(dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory))) || !dxgiFactory) {
-        std::fprintf(stderr, "VideoWindow: failed to get DXGI factory\n");
-        return false;
+    std::fprintf(stderr, "VideoWindow: CreateSwapChain failed");
+    if (!colorAttemptStatus.empty()) {
+        std::fprintf(stderr, " (%s)", colorAttemptStatus.c_str());
     }
-
-    DXGI_SWAP_CHAIN_DESC scd = {};
-    scd.BufferCount = 2;
-    m_outputColorState = desiredColorState;
-    m_outputColorState.swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-    m_outputColorState.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-    m_outputColorState.encoding = VideoOutputColorEncoding::Sdr;
-    std::string legacyStatus = VideoOutputColorAttemptStatus(
-        hdrDecision, m_outputColorState, "legacy_sdr");
-    if (!lastColorAttemptFailure.empty()) {
-        legacyStatus += " last_failure=" + lastColorAttemptFailure;
-    }
-    SetOutputColorAttemptStatus(legacyStatus);
-    scd.BufferDesc.Format = m_outputColorState.swapChainFormat;
-    scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    scd.OutputWindow = m_hWnd;
-    scd.SampleDesc.Count = 1;
-    scd.Windowed = TRUE;
-    scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    scd.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-
-    HRESULT scHr = dxgiFactory->CreateSwapChain(device, &scd, &m_swapChain);
-    if (FAILED(scHr)) {
-        scd.Flags = 0;
-        scHr = dxgiFactory->CreateSwapChain(device, &scd, &m_swapChain);
-    }
-    if (FAILED(scHr)) {
-        std::fprintf(stderr, "VideoWindow: CreateSwapChain failed\n");
-        return false;
-    }
-
-    m_swapChain.As(&m_swapChain2);
-    (void)ApplyVideoOutputColorSpace(*m_swapChain.Get(), m_outputColorState);
-    if (m_swapChain2) {
-        m_swapChain2->SetMaximumFrameLatency(1);
-        std::lock_guard<std::mutex> latencyLock(m_frameLatencyMutex);
-        m_frameLatencyWaitableObject =
-            m_swapChain2->GetFrameLatencyWaitableObject();
-    }
-
-    Resize(width, height);
-    return true;
+    std::fprintf(stderr, "\n");
+    return false;
 }
 
 void VideoWindow::Resize(int width, int height) {
@@ -2185,8 +2103,7 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     if (!swapChain) return;
     const VideoWindowPresentArgs presentArgs =
         liveVideoWindowPresentArgs(presentInterval, nonBlocking);
-    HRESULT presHr =
-        swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
+    HRESULT presHr = PresentSwapChain(swapChain.Get(), presentArgs, "video");
     frameCache.SignalFrameLatencyFence(context.Get());
     if (videoWindowPresentSkipped(presHr)) {
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -2698,8 +2615,7 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
     if (!swapChain) return;
     const VideoWindowPresentArgs presentArgs =
         liveVideoWindowPresentArgs(presentInterval, nonBlocking);
-    HRESULT presHr =
-        swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
+    HRESULT presHr = PresentSwapChain(swapChain.Get(), presentArgs, "overlay");
     frameCache.SignalFrameLatencyFence(context.Get());
     if (videoWindowPresentSkipped(presHr)) {
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -2725,5 +2641,5 @@ void VideoWindow::PresentBackbuffer() {
     if (!swapChain) return;
     const VideoWindowPresentArgs presentArgs =
         liveVideoWindowPresentArgs(presentInterval, false);
-    swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
+    (void)PresentSwapChain(swapChain.Get(), presentArgs, "backbuffer");
 }

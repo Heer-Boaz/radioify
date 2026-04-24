@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 #include <dxgi1_6.h>
@@ -20,13 +21,6 @@ static_assert(static_cast<uint32_t>(VideoOutputColorEncoding::Sdr) == 0);
 static_assert(static_cast<uint32_t>(VideoOutputColorEncoding::ScRgb) == 1);
 static_assert(static_cast<uint32_t>(VideoOutputColorEncoding::Hdr10) == 2);
 
-enum class HdrGenerateResult : uint32_t {
-    Hdr10Generate = 0,
-    ScRgbGenerate = 1,
-    SdrFallback = 2,
-    HardFailure = 3,
-};
-
 inline constexpr float kVideoOutputStandardSdrWhiteNits = 80.0f;
 inline constexpr float kVideoOutputBt2408ReferenceWhiteNits = 203.0f;
 inline constexpr float kVideoOutputAsciiGlyphSdrWhiteScale = 3.5f;
@@ -40,40 +34,50 @@ struct VideoOutputColorState {
     float outputPeakNits = 0.0f;
     float outputFullFrameNits = 0.0f;
     float asciiGlyphPeakNits = kVideoOutputStandardSdrWhiteNits;
+};
+
+struct VideoOutputDisplayInfo {
+    float outputSdrWhiteNits = kVideoOutputStandardSdrWhiteNits;
+    float outputPeakNits = 0.0f;
+    float outputFullFrameNits = 0.0f;
     bool outputSdrWhiteNitsAvailable = false;
     bool outputFound = false;
     bool monitorMatched = false;
     bool dxgiDescAvailable = false;
     DXGI_COLOR_SPACE_TYPE monitorColorSpace =
         DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-    bool advancedColorInfoAvailable = false;
-    bool advancedColorSupported = false;
-    bool advancedColorEnabled = false;
-    bool advancedColorForceDisabled = false;
-    uint32_t colorEncoding = 0;
-    uint32_t bitsPerColorChannel = 0;
 };
 
-struct HdrGenerateDecision {
-    HdrGenerateResult result = HdrGenerateResult::SdrFallback;
-    VideoOutputColorState state;
-    bool generatingHdr = false;
+struct VideoOutputColorPlan {
+    VideoOutputDisplayInfo display;
+    std::vector<VideoOutputColorState> candidates;
     std::string reason;
 };
 
-HdrGenerateDecision ResolveHdrGenerateOutputState(HWND hwnd,
-                                                  IDXGIAdapter* adapter);
-VideoOutputColorState VideoOutputScRgbGenerateState(
-    const VideoOutputColorState& state);
-VideoOutputColorState VideoOutputSdrFallbackState(
-    const VideoOutputColorState& state);
+VideoOutputColorPlan PlanVideoOutputColorsForSwapChain(
+    IDXGISwapChain& swapChain);
+std::vector<VideoOutputColorState> VideoOutputColorCandidatesForDisplay(
+    const VideoOutputDisplayInfo& display,
+    std::string* reason);
+VideoOutputColorState VideoOutputHdr10ColorState(
+    const VideoOutputDisplayInfo& display);
+VideoOutputColorState VideoOutputScRgbColorState(
+    const VideoOutputDisplayInfo& display);
+VideoOutputColorState VideoOutputSdrColorState(
+    const VideoOutputDisplayInfo& display);
 bool VideoOutputUsesHdr(const VideoOutputColorState& state);
+bool VideoOutputDisplayUsesHdr(const VideoOutputDisplayInfo& display);
 bool ApplyVideoOutputColorSpace(IDXGISwapChain& swapChain,
                                 const VideoOutputColorState& state);
+bool ConfigureVideoOutputSwapChain(IDXGISwapChain& swapChain,
+                                   int width,
+                                   int height,
+                                   UINT bufferFlags,
+                                   VideoOutputColorState* selectedState,
+                                   std::string* attemptStatus);
 const char* VideoOutputColorEncodingName(VideoOutputColorEncoding encoding);
-const char* HdrGenerateResultName(HdrGenerateResult result);
 std::string VideoOutputColorAttemptStatus(
-    const HdrGenerateDecision& decision,
+    const VideoOutputColorPlan& plan,
     const VideoOutputColorState& selectedState,
     const char* stage);
 std::string VideoOutputColorStateDebugLine(

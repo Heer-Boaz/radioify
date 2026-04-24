@@ -111,5 +111,5 @@ void VideoWindow::PresentTextGrid(const std::vector<ScreenCell>& cells, int cols
     if (!swapChain) return;
     const VideoWindowPresentArgs presentArgs =
         liveVideoWindowPresentArgs(presentInterval, nonBlocking);
-    (void)swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
+    (void)PresentSwapChain(swapChain.Get(), presentArgs, "text_grid");
 }

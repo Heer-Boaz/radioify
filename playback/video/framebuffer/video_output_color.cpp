@@ -14,18 +14,6 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-LONG64 intersectionArea(const RECT& a, const RECT& b) {
-    const LONG left = std::max(a.left, b.left);
-    const LONG top = std::max(a.top, b.top);
-    const LONG right = std::min(a.right, b.right);
-    const LONG bottom = std::min(a.bottom, b.bottom);
-    if (right <= left || bottom <= top) {
-        return 0;
-    }
-    return static_cast<LONG64>(right - left) *
-           static_cast<LONG64>(bottom - top);
-}
-
 bool sameGdiDeviceName(const WCHAR* lhs, const WCHAR* rhs) {
     return lhs && rhs && _wcsicmp(lhs, rhs) == 0;
 }
@@ -87,62 +75,6 @@ bool querySdrWhiteNitsForGdiDeviceName(const WCHAR* gdiDeviceName,
     return false;
 }
 
-void queryAdvancedColorForGdiDeviceName(const WCHAR* gdiDeviceName,
-                                        VideoOutputColorState& state) {
-    if (!gdiDeviceName || gdiDeviceName[0] == L'\0') {
-        return;
-    }
-
-    UINT32 pathCount = 0;
-    UINT32 modeCount = 0;
-    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount,
-                                    &modeCount) != ERROR_SUCCESS ||
-        pathCount == 0 || modeCount == 0) {
-        return;
-    }
-
-    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
-    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
-    LONG queryResult = QueryDisplayConfig(
-        QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount,
-        modes.data(), nullptr);
-    if (queryResult != ERROR_SUCCESS) {
-        return;
-    }
-
-    paths.resize(pathCount);
-    for (const DISPLAYCONFIG_PATH_INFO& path : paths) {
-        DISPLAYCONFIG_SOURCE_DEVICE_NAME sourceName{};
-        sourceName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
-        sourceName.header.size = sizeof(sourceName);
-        sourceName.header.adapterId = path.sourceInfo.adapterId;
-        sourceName.header.id = path.sourceInfo.id;
-        if (DisplayConfigGetDeviceInfo(&sourceName.header) != ERROR_SUCCESS) {
-            continue;
-        }
-        if (!sameGdiDeviceName(sourceName.viewGdiDeviceName, gdiDeviceName)) {
-            continue;
-        }
-
-        DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO colorInfo{};
-        colorInfo.header.type =
-            DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
-        colorInfo.header.size = sizeof(colorInfo);
-        colorInfo.header.adapterId = path.targetInfo.adapterId;
-        colorInfo.header.id = path.targetInfo.id;
-        if (DisplayConfigGetDeviceInfo(&colorInfo.header) == ERROR_SUCCESS) {
-            state.advancedColorInfoAvailable = true;
-            state.advancedColorSupported = colorInfo.advancedColorSupported != 0;
-            state.advancedColorEnabled = colorInfo.advancedColorEnabled != 0;
-            state.advancedColorForceDisabled =
-                colorInfo.advancedColorForceDisabled != 0;
-            state.colorEncoding = static_cast<uint32_t>(colorInfo.colorEncoding);
-            state.bitsPerColorChannel = colorInfo.bitsPerColorChannel;
-        }
-        return;
-    }
-}
-
 const char* colorSpaceName(DXGI_COLOR_SPACE_TYPE colorSpace) {
     switch (colorSpace) {
         case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
@@ -169,243 +101,174 @@ const char* dxgiFormatName(DXGI_FORMAT format) {
     }
 }
 
-struct OutputSelection {
+VideoOutputDisplayInfo probeVideoOutputSwapChain(IDXGISwapChain& swapChain) {
+    VideoOutputDisplayInfo info{};
+
     ComPtr<IDXGIOutput> output;
-    DXGI_OUTPUT_DESC desc{};
-    LONG64 area = -1;
-    bool monitorMatch = false;
-};
-
-void considerOutputForWindow(IDXGIOutput* output, HMONITOR targetMonitor,
-                             const RECT& windowRect,
-                             OutputSelection& selection) {
-    if (!output) {
-        return;
+    if (FAILED(swapChain.GetContainingOutput(&output)) || !output) {
+        return info;
     }
 
-    DXGI_OUTPUT_DESC desc{};
-    if (FAILED(output->GetDesc(&desc))) {
-        return;
-    }
-
-    const bool monitorMatch =
-        targetMonitor != nullptr && desc.Monitor == targetMonitor;
-    const LONG64 area = intersectionArea(windowRect, desc.DesktopCoordinates);
-    const bool better =
-        !selection.output ||
-        (monitorMatch && !selection.monitorMatch) ||
-        (monitorMatch == selection.monitorMatch && area > selection.area);
-    if (!better) {
-        return;
-    }
-
-    selection.output = output;
-    selection.desc = desc;
-    selection.area = area;
-    selection.monitorMatch = monitorMatch;
-}
-
-void enumerateAdapterOutputsForWindow(IDXGIAdapter* adapter,
-                                      HMONITOR targetMonitor,
-                                      const RECT& windowRect,
-                                      OutputSelection& selection) {
-    if (!adapter) {
-        return;
-    }
-
-    for (UINT index = 0;; ++index) {
-        ComPtr<IDXGIOutput> output;
-        const HRESULT hr = adapter->EnumOutputs(index, &output);
-        if (hr == DXGI_ERROR_NOT_FOUND) {
-            break;
-        }
-        if (FAILED(hr)) {
-            continue;
-        }
-        considerOutputForWindow(output.Get(), targetMonitor, windowRect,
-                                selection);
-    }
-}
-
-OutputSelection chooseOutputForWindow(HWND hwnd, IDXGIAdapter* adapter) {
-    OutputSelection selection{};
-    HMONITOR targetMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-    RECT windowRect{};
-    if (!GetWindowRect(hwnd, &windowRect)) {
-        MONITORINFO monitorInfo{};
-        monitorInfo.cbSize = sizeof(monitorInfo);
-        if (targetMonitor &&
-            GetMonitorInfoW(targetMonitor, &monitorInfo)) {
-            windowRect = monitorInfo.rcMonitor;
+    DXGI_OUTPUT_DESC outputDesc{};
+    if (SUCCEEDED(output->GetDesc(&outputDesc))) {
+        info.outputFound = true;
+        float sdrWhiteNits = 0.0f;
+        info.outputSdrWhiteNitsAvailable =
+            querySdrWhiteNitsForGdiDeviceName(outputDesc.DeviceName,
+                                              &sdrWhiteNits);
+        if (info.outputSdrWhiteNitsAvailable) {
+            info.outputSdrWhiteNits = sdrWhiteNits;
         }
     }
-
-    ComPtr<IDXGIFactory> factory;
-    if (adapter &&
-        SUCCEEDED(adapter->GetParent(IID_PPV_ARGS(&factory))) && factory) {
-        for (UINT adapterIndex = 0;; ++adapterIndex) {
-            ComPtr<IDXGIAdapter> candidateAdapter;
-            const HRESULT hr =
-                factory->EnumAdapters(adapterIndex, &candidateAdapter);
-            if (hr == DXGI_ERROR_NOT_FOUND) {
-                break;
-            }
-            if (FAILED(hr)) {
-                continue;
-            }
-            enumerateAdapterOutputsForWindow(candidateAdapter.Get(),
-                                             targetMonitor, windowRect,
-                                             selection);
-        }
-    }
-
-    if (!selection.output) {
-        enumerateAdapterOutputsForWindow(adapter, targetMonitor, windowRect,
-                                         selection);
-    }
-
-    return selection;
-}
-
-VideoOutputColorState probeVideoOutputDisplay(HWND hwnd,
-                                              IDXGIAdapter* adapter) {
-    VideoOutputColorState state{};
-    if (!hwnd || !adapter) {
-        return state;
-    }
-
-    const OutputSelection outputSelection =
-        chooseOutputForWindow(hwnd, adapter);
-    if (!outputSelection.output) {
-        return state;
-    }
-    state.outputFound = true;
-    state.monitorMatched = outputSelection.monitorMatch;
-    float sdrWhiteNits = 0.0f;
-    state.outputSdrWhiteNitsAvailable =
-        querySdrWhiteNitsForGdiDeviceName(outputSelection.desc.DeviceName,
-                                          &sdrWhiteNits);
-    if (state.outputSdrWhiteNitsAvailable) {
-        state.outputSdrWhiteNits = sdrWhiteNits;
-    }
-    queryAdvancedColorForGdiDeviceName(outputSelection.desc.DeviceName, state);
 
     ComPtr<IDXGIOutput6> output6;
-    if (FAILED(outputSelection.output.As(&output6)) || !output6) {
-        return state;
+    if (FAILED(output.As(&output6)) || !output6) {
+        return info;
     }
 
     DXGI_OUTPUT_DESC1 desc1{};
     if (FAILED(output6->GetDesc1(&desc1))) {
-        return state;
+        return info;
     }
-    state.dxgiDescAvailable = true;
-    state.monitorColorSpace = desc1.ColorSpace;
-    state.outputPeakNits = desc1.MaxLuminance;
-    state.outputFullFrameNits = desc1.MaxFullFrameLuminance;
-    return state;
+    info.outputFound = true;
+    info.dxgiDescAvailable = true;
+    info.monitorColorSpace = desc1.ColorSpace;
+    info.outputPeakNits = desc1.MaxLuminance;
+    info.outputFullFrameNits = desc1.MaxFullFrameLuminance;
+    return info;
 }
 
-bool hasMeasuredHdrGenerateInputs(const VideoOutputColorState& state) {
-    return state.outputSdrWhiteNitsAvailable &&
-           std::isfinite(state.outputSdrWhiteNits) &&
-           state.outputSdrWhiteNits > 0.0f &&
-           std::isfinite(state.outputPeakNits) &&
-           state.outputPeakNits > 0.0f &&
-           std::isfinite(state.outputFullFrameNits) &&
-           state.outputFullFrameNits > 0.0f;
+float resolvedSdrWhiteNits(const VideoOutputDisplayInfo& display) {
+    if (display.outputSdrWhiteNitsAvailable &&
+        std::isfinite(display.outputSdrWhiteNits) &&
+        display.outputSdrWhiteNits > 0.0f) {
+        return display.outputSdrWhiteNits;
+    }
+    return kVideoOutputStandardSdrWhiteNits;
 }
 
-float resolveAsciiGlyphPeakNits(const VideoOutputColorState& state) {
-    assert(hasMeasuredHdrGenerateInputs(state));
-    const float diffuseWhite =
-        std::max(kVideoOutputBt2408ReferenceWhiteNits,
-                 state.outputSdrWhiteNits);
+float resolvedOutputPeakNits(const VideoOutputDisplayInfo& display) {
+    if (std::isfinite(display.outputPeakNits) &&
+        display.outputPeakNits > 0.0f) {
+        return display.outputPeakNits;
+    }
+    return resolvedSdrWhiteNits(display);
+}
+
+float resolvedOutputFullFrameNits(const VideoOutputDisplayInfo& display) {
+    if (std::isfinite(display.outputFullFrameNits) &&
+        display.outputFullFrameNits > 0.0f) {
+        return display.outputFullFrameNits;
+    }
+    return resolvedOutputPeakNits(display);
+}
+
+float resolveAsciiGlyphPeakNits(const VideoOutputDisplayInfo& display) {
+    const float sdrWhiteNits = resolvedSdrWhiteNits(display);
+    const float outputPeakNits = resolvedOutputPeakNits(display);
+    const float outputFullFrameNits = resolvedOutputFullFrameNits(display);
+    const float diffuseWhite = std::max(kVideoOutputBt2408ReferenceWhiteNits,
+                                        sdrWhiteNits);
     const float policyTarget =
         std::max(diffuseWhite *
                      kVideoOutputAsciiGlyphSdrWhiteScale,
-                 state.outputFullFrameNits *
+                 outputFullFrameNits *
                      kVideoOutputAsciiGlyphFullFrameScale);
-    return std::min(state.outputPeakNits,
+    return std::min(outputPeakNits,
                     std::max(diffuseWhite + 1.0f, policyTarget));
+}
+
+VideoOutputColorState videoOutputColorStateFromDisplay(
+    const VideoOutputDisplayInfo& display) {
+    VideoOutputColorState output{};
+    output.outputSdrWhiteNits = resolvedSdrWhiteNits(display);
+    output.outputPeakNits = resolvedOutputPeakNits(display);
+    output.outputFullFrameNits = resolvedOutputFullFrameNits(display);
+    output.asciiGlyphPeakNits = resolveAsciiGlyphPeakNits(display);
+    return output;
 }
 
 }  // namespace
 
-HdrGenerateDecision ResolveHdrGenerateOutputState(HWND hwnd,
-                                                  IDXGIAdapter* adapter) {
-    VideoOutputColorState probe = probeVideoOutputDisplay(hwnd, adapter);
-    HdrGenerateDecision decision;
-    decision.state = probe;
-
-    if (!probe.outputFound) {
-        decision.result = HdrGenerateResult::SdrFallback;
-        decision.state = VideoOutputSdrFallbackState(probe);
-        decision.generatingHdr = false;
-        decision.reason = "output_not_found";
-        return decision;
+bool VideoOutputDisplayUsesHdr(const VideoOutputDisplayInfo& display) {
+    switch (display.monitorColorSpace) {
+        case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
+        case DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709:
+            return true;
+        default:
+            return false;
     }
-    if (!probe.dxgiDescAvailable) {
-        decision.result = HdrGenerateResult::SdrFallback;
-        decision.state = VideoOutputSdrFallbackState(probe);
-        decision.generatingHdr = false;
-        decision.reason = "dxgi_output6_unavailable";
-        return decision;
-    }
-    if (!hasMeasuredHdrGenerateInputs(probe)) {
-        decision.result = HdrGenerateResult::SdrFallback;
-        decision.state = VideoOutputSdrFallbackState(probe);
-        decision.generatingHdr = false;
-        if (!probe.outputSdrWhiteNitsAvailable ||
-            probe.outputSdrWhiteNits <= 0.0f) {
-            decision.reason = "missing_sdr_white_nits";
-        } else {
-            decision.reason = "missing_peak_or_fullframe_nits";
-        }
-        return decision;
-    }
-
-    probe.asciiGlyphPeakNits = resolveAsciiGlyphPeakNits(probe);
-    if (probe.monitorColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
-        decision.result = HdrGenerateResult::ScRgbGenerate;
-        decision.state = VideoOutputScRgbGenerateState(probe);
-        decision.generatingHdr = true;
-        decision.reason = "hdr10_output_active_scrgb_for_blending";
-        return decision;
-    }
-
-    decision.result = HdrGenerateResult::ScRgbGenerate;
-    decision.state = VideoOutputScRgbGenerateState(probe);
-    decision.generatingHdr = true;
-    decision.reason = "hdr10_output_inactive_try_scrgb";
-    return decision;
 }
 
-VideoOutputColorState VideoOutputScRgbGenerateState(
-    const VideoOutputColorState& state) {
-    assert(hasMeasuredHdrGenerateInputs(state));
-    VideoOutputColorState fallback = state;
-    fallback.swapChainFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    fallback.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
-    fallback.encoding = VideoOutputColorEncoding::ScRgb;
-    return fallback;
+VideoOutputColorPlan PlanVideoOutputColorsForSwapChain(
+    IDXGISwapChain& swapChain) {
+    VideoOutputDisplayInfo display = probeVideoOutputSwapChain(swapChain);
+    VideoOutputColorPlan plan;
+    plan.display = display;
+    plan.candidates =
+        VideoOutputColorCandidatesForDisplay(display, &plan.reason);
+    return plan;
 }
 
-VideoOutputColorState VideoOutputSdrFallbackState(
-    const VideoOutputColorState& state) {
-    VideoOutputColorState fallback = state;
+std::vector<VideoOutputColorState> VideoOutputColorCandidatesForDisplay(
+    const VideoOutputDisplayInfo& display,
+    std::string* reason) {
+    VideoOutputDisplayInfo measured = display;
+    std::vector<VideoOutputColorState> candidates;
+    if (!measured.outputFound) {
+        candidates.push_back(VideoOutputSdrColorState(measured));
+        if (reason) *reason = "output_not_found";
+        return candidates;
+    }
+    if (!measured.dxgiDescAvailable) {
+        candidates.push_back(VideoOutputSdrColorState(measured));
+        if (reason) *reason = "dxgi_output6_unavailable";
+        return candidates;
+    }
+    if (!VideoOutputDisplayUsesHdr(measured)) {
+        candidates.push_back(VideoOutputSdrColorState(measured));
+        if (reason) *reason = "output_color_space_sdr";
+        return candidates;
+    }
+
+    if (measured.monitorColorSpace ==
+        DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
+        candidates.push_back(VideoOutputHdr10ColorState(measured));
+        candidates.push_back(VideoOutputSdrColorState(measured));
+        if (reason) *reason = "hdr10_output_active";
+        return candidates;
+    }
+
+    candidates.push_back(VideoOutputScRgbColorState(measured));
+    candidates.push_back(VideoOutputSdrColorState(measured));
+    if (reason) *reason = "scrgb_output_active";
+    return candidates;
+}
+
+VideoOutputColorState VideoOutputHdr10ColorState(
+    const VideoOutputDisplayInfo& display) {
+    VideoOutputColorState output = videoOutputColorStateFromDisplay(display);
+    output.swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
+    output.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+    output.encoding = VideoOutputColorEncoding::Hdr10;
+    return output;
+}
+
+VideoOutputColorState VideoOutputScRgbColorState(
+    const VideoOutputDisplayInfo& display) {
+    VideoOutputColorState output = videoOutputColorStateFromDisplay(display);
+    output.swapChainFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    output.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+    output.encoding = VideoOutputColorEncoding::ScRgb;
+    return output;
+}
+
+VideoOutputColorState VideoOutputSdrColorState(
+    const VideoOutputDisplayInfo& display) {
+    VideoOutputColorState fallback = videoOutputColorStateFromDisplay(display);
     fallback.swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     fallback.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     fallback.encoding = VideoOutputColorEncoding::Sdr;
-    if (!std::isfinite(fallback.outputSdrWhiteNits) ||
-        fallback.outputSdrWhiteNits <= 0.0f) {
-        fallback.outputSdrWhiteNits = kVideoOutputStandardSdrWhiteNits;
-        fallback.outputSdrWhiteNitsAvailable = false;
-    }
-    if (!std::isfinite(fallback.asciiGlyphPeakNits) ||
-        fallback.asciiGlyphPeakNits <= 0.0f) {
-        fallback.asciiGlyphPeakNits = fallback.outputSdrWhiteNits;
-    }
     return fallback;
 }
 
@@ -431,6 +294,53 @@ bool ApplyVideoOutputColorSpace(IDXGISwapChain& swapChain,
     return SUCCEEDED(swapChain3->SetColorSpace1(state.colorSpace));
 }
 
+bool ConfigureVideoOutputSwapChain(IDXGISwapChain& swapChain,
+                                   int width,
+                                   int height,
+                                   UINT bufferFlags,
+                                   VideoOutputColorState* selectedState,
+                                   std::string* attemptStatus) {
+    VideoOutputColorPlan plan = PlanVideoOutputColorsForSwapChain(swapChain);
+    std::string lastFailure;
+    for (size_t index = 0; index < plan.candidates.size(); ++index) {
+        const VideoOutputColorState& candidate = plan.candidates[index];
+        HRESULT hr = swapChain.ResizeBuffers(
+            0, static_cast<UINT>(width), static_cast<UINT>(height),
+            candidate.swapChainFormat, bufferFlags);
+        if (FAILED(hr)) {
+            char status[96];
+            std::snprintf(status, sizeof(status), "failed=resize_%s:0x%08X",
+                          VideoOutputColorEncodingName(candidate.encoding),
+                          static_cast<unsigned int>(hr));
+            lastFailure = status;
+            if (attemptStatus) *attemptStatus = lastFailure;
+            continue;
+        }
+        if (!ApplyVideoOutputColorSpace(swapChain, candidate)) {
+            lastFailure =
+                std::string("failed=set_") +
+                VideoOutputColorEncodingName(candidate.encoding);
+            if (attemptStatus) *attemptStatus = lastFailure;
+            continue;
+        }
+
+        if (selectedState) *selectedState = candidate;
+        const char* stage = index == 0 ? "active" : "fallback";
+        std::string status =
+            VideoOutputColorAttemptStatus(plan, candidate, stage);
+        if (!lastFailure.empty()) {
+            status += " last_failure=" + lastFailure;
+        }
+        if (attemptStatus) *attemptStatus = status;
+        return true;
+    }
+
+    if (attemptStatus && !lastFailure.empty()) {
+        *attemptStatus = lastFailure;
+    }
+    return false;
+}
+
 const char* VideoOutputColorEncodingName(VideoOutputColorEncoding encoding) {
     switch (encoding) {
         case VideoOutputColorEncoding::Hdr10:
@@ -443,22 +353,8 @@ const char* VideoOutputColorEncodingName(VideoOutputColorEncoding encoding) {
     }
 }
 
-const char* HdrGenerateResultName(HdrGenerateResult result) {
-    switch (result) {
-        case HdrGenerateResult::Hdr10Generate:
-            return "hdr10_generate";
-        case HdrGenerateResult::ScRgbGenerate:
-            return "scrgb_generate";
-        case HdrGenerateResult::HardFailure:
-            return "hard_failure";
-        case HdrGenerateResult::SdrFallback:
-        default:
-            return "sdr_fallback";
-    }
-}
-
 std::string VideoOutputColorAttemptStatus(
-    const HdrGenerateDecision& decision,
+    const VideoOutputColorPlan& plan,
     const VideoOutputColorState& selectedState,
     const char* stage) {
     const float diffuseWhiteNits =
@@ -467,17 +363,19 @@ std::string VideoOutputColorAttemptStatus(
     char buf[384];
     std::snprintf(
         buf, sizeof(buf),
-        "policy=generate result=%s generating=%d selected=%s stage=%s paper=%.0f peak=%.0f fullframe=%.0f glyphPeak=%.0f diffuse=%.0f reason=%s",
-        HdrGenerateResultName(decision.result),
-        decision.generatingHdr && VideoOutputUsesHdr(selectedState) ? 1 : 0,
+        "policy=output_color selected=%s hdr=%d stage=%s monitor=%s paper=%.0f peak=%.0f fullframe=%.0f glyphPeak=%.0f diffuse=%.0f reason=%s",
         VideoOutputColorEncodingName(selectedState.encoding),
+        VideoOutputUsesHdr(selectedState) ? 1 : 0,
         stage ? stage : "unknown",
+        plan.display.dxgiDescAvailable
+            ? colorSpaceName(plan.display.monitorColorSpace)
+            : "unknown",
         selectedState.outputSdrWhiteNits,
         selectedState.outputPeakNits,
         selectedState.outputFullFrameNits,
         selectedState.asciiGlyphPeakNits,
         diffuseWhiteNits,
-        decision.reason.empty() ? "unspecified" : decision.reason.c_str());
+        plan.reason.empty() ? "unspecified" : plan.reason.c_str());
     return std::string(buf);
 }
 
@@ -487,19 +385,10 @@ std::string VideoOutputColorStateDebugLine(
     char buf[512];
     std::snprintf(
         buf, sizeof(buf),
-        "DBG hdr out=%s fmt=%s set=%s mon=%s found=%d match=%d dxgi=%d aci=%d ac=%d/%d force=%d bpc=%u white=%.0f/%d peak=%.0f full=%.0f glyph=%.0f",
+        "DBG hdr out=%s fmt=%s set=%s white=%.0f peak=%.0f full=%.0f glyph=%.0f",
         VideoOutputColorEncodingName(state.encoding),
         dxgiFormatName(state.swapChainFormat), colorSpaceName(state.colorSpace),
-        state.dxgiDescAvailable ? colorSpaceName(state.monitorColorSpace)
-                                : "unknown",
-        state.outputFound ? 1 : 0, state.monitorMatched ? 1 : 0,
-        state.dxgiDescAvailable ? 1 : 0,
-        state.advancedColorInfoAvailable ? 1 : 0,
-        state.advancedColorSupported ? 1 : 0,
-        state.advancedColorEnabled ? 1 : 0,
-        state.advancedColorForceDisabled ? 1 : 0,
-        state.bitsPerColorChannel, state.outputSdrWhiteNits,
-        state.outputSdrWhiteNitsAvailable ? 1 : 0,
+        state.outputSdrWhiteNits,
         state.outputPeakNits, state.outputFullFrameNits,
         state.asciiGlyphPeakNits);
     if (attemptStatus.empty()) {

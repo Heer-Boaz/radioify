@@ -375,6 +375,16 @@ if (WIN32)
   target_link_libraries(shortcut_match_tests PRIVATE d3d11)
 endif()
 
+add_executable(video_output_color_tests)
+target_sources(video_output_color_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_video_output_color_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/framebuffer/video_output_color.cpp
+)
+radioify_link_repo_target(video_output_color_tests)
+if (WIN32)
+  target_link_libraries(video_output_color_tests PRIVATE dxgi user32)
+endif()
+
 if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL
     COMMAND ${CMAKE_COMMAND}

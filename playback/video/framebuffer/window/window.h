@@ -17,6 +17,7 @@
 #include "playback/video/framebuffer/video_output_color.h"
 #include "playback/video/subtitle/font_attachments.h"
 #include "input_controller.h"
+#include "present.h"
 #include <vector>
 #include <mutex>
 
@@ -183,7 +184,13 @@ private:
     void DrawOverlay(const WindowUiState& ui);
     void UpdateViewport(int width, int height);
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    void ReleaseSwapChainBackBufferReferences();
     bool CreateSwapChain(int width, int height);
+    bool RecreateSwapChainForCurrentDisplay(const char* reason);
+    void HandlePresentResult(HRESULT hr, const char* stage);
+    HRESULT PresentSwapChain(IDXGISwapChain* swapChain,
+                             const VideoWindowPresentArgs& presentArgs,
+                             const char* stage);
     void ResetSwapChain();
     void Resize(int width, int height);
     RECT CalculatePictureInPictureRect() const;
