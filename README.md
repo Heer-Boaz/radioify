@@ -101,9 +101,10 @@ dist/radioify.exe --no-radio <file-or-folder>
 ## Windows 11 Explorer Integration
 Current intent:
 - keep `radioify.exe` as the core executable
-- keep Explorer integration in a separate `IExplorerCommand` shell extension
-- use the full MSIX package as the standard Windows shell integration owner for
-  Explorer commands and file associations
+- keep Windows shell ownership in the MSIX package manifest
+- register file context-menu commands declaratively through file associations
+- use a small packaged `IExplorerCommand` adapter only for folders
+- do not register Desktop/background null-selection menus
 
 The standalone maintenance commands are:
 

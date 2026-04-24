@@ -19,7 +19,7 @@ endif()
 list(REMOVE_DUPLICATES RADIOIFY_WIN11_EXPLORER_FILE_TYPES)
 
 set(RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
-"        <uap:Extension Category=\"windows.fileTypeAssociation\">\n"
+"        <uap:Extension Category=\"windows.fileTypeAssociation\" EntryPoint=\"Windows.FullTrustApplication\">\n"
 )
 string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
 "          <uap:FileTypeAssociation Name=\"radioifymedia\">\n"
@@ -34,8 +34,25 @@ foreach(radioify_file_type IN LISTS RADIOIFY_WIN11_EXPLORER_FILE_TYPES)
 endforeach()
 string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
 "            </uap:SupportedFileTypes>\n"
+"            <uap2:SupportedVerbs>\n"
+"              <uap3:Verb Id=\"RadioifyOpenFile\" Parameters=\"--shell-open &quot;%1&quot;\">Open with Radioify</uap3:Verb>\n"
+"            </uap2:SupportedVerbs>\n"
 "          </uap:FileTypeAssociation>\n"
 "        </uap:Extension>"
+)
+
+set(RADIOIFY_WIN11_EXPLORER_CONTEXT_MENU_XML
+"        <desktop4:Extension Category=\"windows.fileExplorerContextMenus\">\n          <desktop4:FileExplorerContextMenus>\n"
+)
+string(APPEND RADIOIFY_WIN11_EXPLORER_CONTEXT_MENU_XML
+"            <desktop5:ItemType Type=\"Directory\">\n"
+"              <desktop5:Verb Id=\"RadioifyOpen\" Clsid=\"${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}\" />\n"
+"            </desktop5:ItemType>\n"
+"            <desktop5:ItemType Type=\"Directory\\Background\">\n"
+"              <desktop5:Verb Id=\"RadioifyOpenBackground\" Clsid=\"${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}\" />\n"
+"            </desktop5:ItemType>\n"
+"          </desktop4:FileExplorerContextMenus>\n"
+"        </desktop4:Extension>"
 )
 
 configure_file(

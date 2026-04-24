@@ -6,21 +6,17 @@
 #endif
 
 #include <windows.h>
-#include <appmodel.h>
+#include <knownfolders.h>
 #include <objbase.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl.h>
-#include <shlwapi.h>
 #include <strsafe.h>
-#include <wchar.h>
 
-#include <algorithm>
-#include <array>
-#include <filesystem>
-#include <string_view>
+#include <cwctype>
 #include <new>
 #include <string>
-#include <vector>
+#include <string_view>
 
 #include "radioify_explorer_config.h"
 
@@ -29,7 +25,6 @@ namespace {
 HMODULE g_module = nullptr;
 LONG g_objectCount = 0;
 LONG g_serverLockCount = 0;
-LONG g_contextLogged = 0;
 
 template <typename T>
 class ComPtr {
@@ -56,17 +51,11 @@ class ComPtr {
     ptr_ = ptr;
   }
 
-  T* detach() {
-    T* ptr = ptr_;
-    ptr_ = nullptr;
-    return ptr;
-  }
-
  private:
   T* ptr_ = nullptr;
 };
 
-HRESULT duplicateString(const std::wstring& text, LPWSTR* out) {
+HRESULT duplicateString(std::wstring_view text, LPWSTR* out) noexcept {
   if (!out) return E_POINTER;
   *out = nullptr;
 
@@ -75,7 +64,7 @@ HRESULT duplicateString(const std::wstring& text, LPWSTR* out) {
       static_cast<wchar_t*>(CoTaskMemAlloc(length * sizeof(wchar_t)));
   if (!buffer) return E_OUTOFMEMORY;
 
-  const HRESULT hr = StringCchCopyW(buffer, length, text.c_str());
+  const HRESULT hr = StringCchCopyNW(buffer, length, text.data(), text.size());
   if (FAILED(hr)) {
     CoTaskMemFree(buffer);
     return hr;
@@ -85,146 +74,62 @@ HRESULT duplicateString(const std::wstring& text, LPWSTR* out) {
   return S_OK;
 }
 
-std::wstring formatHresult(HRESULT hr) {
-  wchar_t buffer[16] = {};
-  if (SUCCEEDED(StringCchPrintfW(buffer, std::size(buffer), L"0x%08X",
-                                 static_cast<unsigned int>(hr)))) {
-    return buffer;
-  }
-  return L"0x????????";
+const CLSID& radioifyExplorerCommandClsid() noexcept {
+  static const CLSID clsid = [] {
+    CLSID parsed{};
+    const HRESULT hr = CLSIDFromString(
+        const_cast<LPWSTR>(RADIOIFY_WIN11_EXPLORER_COMMAND_CLSID_W), &parsed);
+    return SUCCEEDED(hr) ? parsed : CLSID{};
+  }();
+  return clsid;
 }
 
-std::wstring formatGuid(REFGUID guid) {
-  wchar_t buffer[64] = {};
-  const int length = StringFromGUID2(guid, buffer, static_cast<int>(std::size(buffer)));
-  return length > 0 ? std::wstring(buffer, static_cast<size_t>(length - 1))
-                    : L"{guid-format-failed}";
-}
-
-std::wstring currentProcessPath() {
-  std::wstring buffer;
-  DWORD size = MAX_PATH;
+std::wstring getModulePath() {
+  std::wstring buffer(MAX_PATH, L'\0');
   for (;;) {
-    buffer.resize(size);
-    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), size);
+    const DWORD length = GetModuleFileNameW(g_module, buffer.data(),
+                                            static_cast<DWORD>(buffer.size()));
     if (length == 0) return {};
-    if (length < size) {
+    if (length < buffer.size()) {
       buffer.resize(length);
       return buffer;
     }
-    size *= 2;
-    if (size > 32768) return {};
+    if (buffer.size() >= 32768) return {};
+    buffer.resize(buffer.size() * 2);
   }
 }
 
-std::filesystem::path radioifyExplorerLogPath() {
-  wchar_t localAppData[MAX_PATH] = {};
-  const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData,
-                                               static_cast<DWORD>(std::size(localAppData)));
-  if (length > 0 && length < std::size(localAppData)) {
-    return std::filesystem::path(localAppData) / "Radioify" / "win11-explorer.log";
-  }
-
-  wchar_t tempPath[MAX_PATH] = {};
-  const DWORD tempLength =
-      GetTempPathW(static_cast<DWORD>(std::size(tempPath)), tempPath);
-  if (tempLength > 0 && tempLength < std::size(tempPath)) {
-    return std::filesystem::path(tempPath) / "radioify-win11-explorer.log";
-  }
-
-  const std::filesystem::path moduleDir = std::filesystem::path(currentProcessPath()).parent_path();
-  return moduleDir.empty() ? std::filesystem::path(L"radioify-win11-explorer.log")
-                           : moduleDir / "radioify-win11-explorer.log";
+std::wstring parentPathOf(std::wstring_view path) {
+  const size_t slash = path.find_last_of(L"\\/");
+  if (slash == std::wstring_view::npos) return {};
+  return std::wstring(path.substr(0, slash));
 }
 
-std::string wideToUtf8(const std::wstring& text) {
-  if (text.empty()) return {};
-  const int length = WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
-                                         static_cast<int>(text.size()), nullptr, 0,
-                                         nullptr, nullptr);
-  if (length <= 0) return {};
-
-  std::string utf8(static_cast<size_t>(length), '\0');
-  const int written =
-      WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
-                          utf8.data(), length, nullptr, nullptr);
-  if (written != length) return {};
-  return utf8;
+std::wstring joinPath(std::wstring_view parent, std::wstring_view child) {
+  if (parent.empty()) return std::wstring(child);
+  std::wstring result(parent);
+  if (result.back() != L'\\' && result.back() != L'/') result.push_back(L'\\');
+  result.append(child);
+  return result;
 }
 
-void appendExplorerLog(std::wstring_view message) {
-  SYSTEMTIME now{};
-  GetLocalTime(&now);
-
-  wchar_t prefix[160] = {};
-  if (FAILED(StringCchPrintfW(
-          prefix, std::size(prefix),
-          L"%04u-%02u-%02u %02u:%02u:%02u.%03u pid=%lu tid=%lu ",
-          static_cast<unsigned int>(now.wYear),
-          static_cast<unsigned int>(now.wMonth),
-          static_cast<unsigned int>(now.wDay),
-          static_cast<unsigned int>(now.wHour),
-          static_cast<unsigned int>(now.wMinute),
-          static_cast<unsigned int>(now.wSecond),
-          static_cast<unsigned int>(now.wMilliseconds),
-          static_cast<unsigned long>(GetCurrentProcessId()),
-          static_cast<unsigned long>(GetCurrentThreadId())))) {
-    return;
-  }
-
-  const std::wstring line = std::wstring(prefix) + std::wstring(message) + L"\r\n";
-  OutputDebugStringW((L"[radioify_explorer] " + std::wstring(message) + L"\n").c_str());
-
-  const std::filesystem::path logPath = radioifyExplorerLogPath();
-  std::error_code ec;
-  std::filesystem::create_directories(logPath.parent_path(), ec);
-
-  const HANDLE file = CreateFileW(logPath.c_str(), FILE_APPEND_DATA,
-                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                  nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) return;
-
-  const std::string utf8 = wideToUtf8(line);
-  if (!utf8.empty()) {
-    DWORD written = 0;
-    WriteFile(file, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
-  }
-  CloseHandle(file);
+bool isExistingFile(const std::wstring& path) noexcept {
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES &&
+         (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
-std::filesystem::path currentModuleDirectory();
-std::filesystem::path findRadioifyExecutable();
-const CLSID& radioifyExplorerCommandClsid();
-
-void logModuleContextOnce() {
-  if (InterlockedCompareExchange(&g_contextLogged, 1, 0) != 0) {
-    return;
-  }
-
-  const std::filesystem::path moduleDir = currentModuleDirectory();
-  const std::filesystem::path executablePath = findRadioifyExecutable();
-  appendExplorerLog(L"ProcessContext process=\"" + currentProcessPath() +
-                    L"\" moduleDir=\"" + moduleDir.wstring() +
-                    L"\" radioifyExe=\"" +
-                    (executablePath.empty() ? std::wstring(L"<missing>")
-                                            : executablePath.wstring()) +
-                    L"\" clsid=" + formatGuid(radioifyExplorerCommandClsid()) +
-                    L" pointerSize=" + std::to_wstring(sizeof(void*)));
+bool isExistingDirectory(const std::wstring& path) noexcept {
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES &&
+         (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
-bool isExistingDirectory(const std::filesystem::path& path) {
-  std::error_code ec;
-  return std::filesystem::is_directory(path, ec) && !ec;
-}
-
-bool isExistingRegularFile(const std::filesystem::path& path) {
-  std::error_code ec;
-  return std::filesystem::is_regular_file(path, ec) && !ec;
-}
-
-bool pathExists(const std::filesystem::path& path) {
-  std::error_code ec;
-  return std::filesystem::exists(path, ec) && !ec;
+std::wstring findRadioifyExecutable() {
+  const std::wstring modulePath = getModulePath();
+  if (modulePath.empty()) return {};
+  const std::wstring candidate = joinPath(parentPathOf(modulePath), L"radioify.exe");
+  return isExistingFile(candidate) ? candidate : std::wstring{};
 }
 
 std::wstring quoteCommandLineArgument(std::wstring_view value) {
@@ -263,88 +168,44 @@ std::wstring quoteCommandLineArgument(std::wstring_view value) {
   return quoted;
 }
 
-std::wstring describeSelection(IShellItemArray* items) {
-  if (!items) return L"selection=null";
-
-  DWORD count = 0;
-  HRESULT hr = items->GetCount(&count);
-  if (FAILED(hr)) {
-    return L"selection.countHr=" + formatHresult(hr);
+std::wstring trimTrailingSlashes(std::wstring path) {
+  while (path.size() > 3 && (path.back() == L'\\' || path.back() == L'/')) {
+    path.pop_back();
   }
-
-  std::wstring description = L"selection.count=" + std::to_wstring(count);
-  if (count != 1) return description;
-
-  ComPtr<IShellItem> item;
-  hr = items->GetItemAt(0, item.put());
-  if (FAILED(hr)) {
-    return description + L" itemHr=" + formatHresult(hr);
-  }
-
-  PWSTR fileSystemPath = nullptr;
-  hr = item->GetDisplayName(SIGDN_FILESYSPATH, &fileSystemPath);
-  if (SUCCEEDED(hr) && fileSystemPath && fileSystemPath[0] != L'\0') {
-    description += L" path=\"" + std::wstring(fileSystemPath) + L"\"";
-  } else {
-    description += L" pathHr=" + formatHresult(hr);
-  }
-  CoTaskMemFree(fileSystemPath);
-
-  SFGAOF attributes = SFGAO_FOLDER;
-  hr = item->GetAttributes(SFGAO_FOLDER, &attributes);
-  if (SUCCEEDED(hr)) {
-    description += (attributes & SFGAO_FOLDER) != 0 ? L" kind=directory" : L" kind=file";
-  } else {
-    description += L" attrHr=" + formatHresult(hr);
-  }
-  return description;
+  return path;
 }
 
-std::filesystem::path currentModuleDirectory() {
-  if (!g_module) return {};
-
-  std::wstring buffer;
-  DWORD size = MAX_PATH;
-  for (;;) {
-    buffer.resize(size);
-    const DWORD length = GetModuleFileNameW(g_module, buffer.data(), size);
-    if (length == 0) return {};
-    if (length < size) {
-      buffer.resize(length);
-      return std::filesystem::path(buffer).parent_path();
-    }
-    size *= 2;
-    if (size > 32768) return {};
+bool equalPathInsensitive(std::wstring_view left, std::wstring_view right) noexcept {
+  const std::wstring lhs = trimTrailingSlashes(std::wstring(left));
+  const std::wstring rhs = trimTrailingSlashes(std::wstring(right));
+  if (lhs.size() != rhs.size()) return false;
+  for (size_t index = 0; index < lhs.size(); ++index) {
+    if (std::towlower(lhs[index]) != std::towlower(rhs[index])) return false;
   }
+  return true;
 }
 
-std::filesystem::path findRadioifyExecutable() {
-  const std::filesystem::path moduleDir = currentModuleDirectory();
-  if (moduleDir.empty()) {
-    return {};
+bool isKnownFolderPath(const std::wstring& path, REFKNOWNFOLDERID folderId) {
+  PWSTR knownPath = nullptr;
+  const HRESULT hr = SHGetKnownFolderPath(folderId, KF_FLAG_DEFAULT, nullptr, &knownPath);
+  if (FAILED(hr) || !knownPath || knownPath[0] == L'\0') {
+    CoTaskMemFree(knownPath);
+    return false;
   }
-  const std::filesystem::path candidate = moduleDir / "radioify.exe";
-  return isExistingRegularFile(candidate) ? candidate : std::filesystem::path{};
+  const bool matches = equalPathInsensitive(path, knownPath);
+  CoTaskMemFree(knownPath);
+  return matches;
 }
 
-const CLSID& radioifyExplorerCommandClsid() {
-  static const CLSID clsid = [] {
-    CLSID parsed{};
-    const HRESULT hr = CLSIDFromString(
-        const_cast<LPWSTR>(RADIOIFY_WIN11_EXPLORER_COMMAND_CLSID_W), &parsed);
-    if (FAILED(hr)) {
-      return CLSID{};
-    }
-    return parsed;
-  }();
-  return clsid;
+bool isDesktopDirectory(const std::wstring& path) {
+  return isKnownFolderPath(path, FOLDERID_Desktop) ||
+         isKnownFolderPath(path, FOLDERID_PublicDesktop);
 }
 
-HRESULT getSelectionPath(IShellItemArray* items, std::filesystem::path* outPath,
-                         bool* outIsDirectory) {
-  if (!items || !outPath || !outIsDirectory) return E_POINTER;
+HRESULT resolveSingleDirectorySelection(IShellItemArray* items,
+                                        std::wstring* outPath) noexcept {
+  if (!items || !outPath) return E_POINTER;
   outPath->clear();
-  *outIsDirectory = false;
 
   DWORD count = 0;
   HRESULT hr = items->GetCount(&count);
@@ -362,49 +223,98 @@ HRESULT getSelectionPath(IShellItemArray* items, std::filesystem::path* outPath,
     return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
   }
 
-  std::filesystem::path selectedPath(fileSystemPath);
+  outPath->assign(fileSystemPath);
   CoTaskMemFree(fileSystemPath);
 
-  SFGAOF attributes = SFGAO_FOLDER;
-  hr = item->GetAttributes(SFGAO_FOLDER, &attributes);
-  if (FAILED(hr)) return hr;
-
-  const bool isDirectory = (attributes & SFGAO_FOLDER) != 0;
-  if (isDirectory) {
-    if (!isExistingDirectory(selectedPath)) {
-      return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
-    }
-  } else {
-    if (!isExistingRegularFile(selectedPath)) {
-      return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
-    }
+  const DWORD attributes = GetFileAttributesW(outPath->c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    outPath->clear();
+    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
   }
-
-  *outPath = selectedPath;
-  *outIsDirectory = isDirectory;
+  if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    outPath->clear();
+    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+  }
   return S_OK;
 }
 
-HRESULT launchRadioifyShellOpen(const std::filesystem::path& selectedPath) {
-  const std::filesystem::path radioifyExe = findRadioifyExecutable();
-  if (!isExistingRegularFile(radioifyExe)) {
-    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
-  }
-  if (!pathExists(selectedPath)) {
-    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+HRESULT resolveShellItemDirectory(IShellItem* item, std::wstring* outPath) noexcept {
+  if (!item || !outPath) return E_POINTER;
+  outPath->clear();
+
+  PWSTR fileSystemPath = nullptr;
+  HRESULT hr = item->GetDisplayName(SIGDN_FILESYSPATH, &fileSystemPath);
+  if (FAILED(hr) || !fileSystemPath || fileSystemPath[0] == L'\0') {
+    CoTaskMemFree(fileSystemPath);
+    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
   }
 
-  const std::wstring parameters =
+  outPath->assign(fileSystemPath);
+  CoTaskMemFree(fileSystemPath);
+  if (!isExistingDirectory(*outPath)) {
+    outPath->clear();
+    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+  }
+  return S_OK;
+}
+
+HRESULT resolveFolderViewDirectory(IUnknown* site, std::wstring* outPath) noexcept {
+  if (!site || !outPath) return E_POINTER;
+  outPath->clear();
+
+  ComPtr<IServiceProvider> serviceProvider;
+  HRESULT hr = site->QueryInterface(IID_PPV_ARGS(serviceProvider.put()));
+  if (FAILED(hr)) return hr;
+
+  ComPtr<IShellBrowser> shellBrowser;
+  hr = serviceProvider->QueryService(SID_STopLevelBrowser,
+                                     IID_PPV_ARGS(shellBrowser.put()));
+  if (FAILED(hr)) return hr;
+
+  ComPtr<IShellView> shellView;
+  hr = shellBrowser->QueryActiveShellView(shellView.put());
+  if (FAILED(hr)) return hr;
+
+  ComPtr<IFolderView> folderView;
+  hr = shellView->QueryInterface(IID_PPV_ARGS(folderView.put()));
+  if (FAILED(hr)) return hr;
+
+  ComPtr<IPersistFolder2> persistFolder;
+  hr = folderView->GetFolder(IID_PPV_ARGS(persistFolder.put()));
+  if (FAILED(hr)) return hr;
+
+  PIDLIST_ABSOLUTE folderIdList = nullptr;
+  hr = persistFolder->GetCurFolder(&folderIdList);
+  if (FAILED(hr) || !folderIdList) {
+    CoTaskMemFree(folderIdList);
+    return FAILED(hr) ? hr : HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+  }
+
+  ComPtr<IShellItem> folderItem;
+  hr = SHCreateItemFromIDList(folderIdList, IID_PPV_ARGS(folderItem.put()));
+  CoTaskMemFree(folderIdList);
+  if (FAILED(hr)) return hr;
+
+  return resolveShellItemDirectory(folderItem.get(), outPath);
+}
+
+HRESULT launchRadioify(const std::wstring& selectedPath) {
+  const std::wstring radioifyExe = findRadioifyExecutable();
+  if (radioifyExe.empty()) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+
+  const std::wstring arguments =
       quoteCommandLineArgument(L"--shell-open") + L" " +
-      quoteCommandLineArgument(selectedPath.wstring());
+      quoteCommandLineArgument(selectedPath);
+  const std::wstring workingDirectory = parentPathOf(radioifyExe);
+
   SHELLEXECUTEINFOW executeInfo{};
   executeInfo.cbSize = sizeof(executeInfo);
   executeInfo.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
   executeInfo.lpVerb = L"open";
   executeInfo.lpFile = radioifyExe.c_str();
-  executeInfo.lpParameters = parameters.c_str();
-  const std::wstring workingDirectory = radioifyExe.parent_path().wstring();
-  executeInfo.lpDirectory = workingDirectory.empty() ? nullptr : workingDirectory.c_str();
+  executeInfo.lpParameters = arguments.c_str();
+  executeInfo.lpDirectory =
+      workingDirectory.empty() ? nullptr : workingDirectory.c_str();
   executeInfo.nShow = SW_SHOWNORMAL;
 
   if (!ShellExecuteExW(&executeInfo)) {
@@ -413,8 +323,19 @@ HRESULT launchRadioifyShellOpen(const std::filesystem::path& selectedPath) {
   return S_OK;
 }
 
+HRESULT exceptionToHresult() noexcept {
+  try {
+    throw;
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    return E_FAIL;
+  }
+}
+
 class RadioifyExplorerCommand final : public IExplorerCommand,
-                                      public IObjectWithSelection {
+                                      public IObjectWithSelection,
+                                      public IObjectWithSite {
  public:
   RadioifyExplorerCommand() { InterlockedIncrement(&g_objectCount); }
 
@@ -426,6 +347,8 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
       *object = static_cast<IExplorerCommand*>(this);
     } else if (riid == IID_IObjectWithSelection) {
       *object = static_cast<IObjectWithSelection*>(this);
+    } else if (riid == IID_IObjectWithSite) {
+      *object = static_cast<IObjectWithSite*>(this);
     } else {
       return E_NOINTERFACE;
     }
@@ -440,19 +363,13 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
 
   STDMETHODIMP_(ULONG) Release() override {
     const ULONG count = static_cast<ULONG>(InterlockedDecrement(&refCount_));
-    if (count == 0) {
-      delete this;
-    }
+    if (count == 0) delete this;
     return count;
   }
 
   STDMETHODIMP SetSelection(IShellItemArray* items) override {
-    logModuleContextOnce();
     selection_.reset(items);
-    if (items) {
-      items->AddRef();
-    }
-    appendExplorerLog(L"SetSelection " + describeSelection(items));
+    if (items) items->AddRef();
     return S_OK;
   }
 
@@ -463,94 +380,77 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
     return selection_->QueryInterface(riid, object);
   }
 
-  STDMETHODIMP GetTitle(IShellItemArray* items, LPWSTR* title) override {
-    logModuleContextOnce();
-    const HRESULT hr = duplicateString(L"Open with Radioify", title);
-    appendExplorerLog(L"GetTitle hr=" + formatHresult(hr) + L" " + describeSelection(items));
-    return hr;
+  STDMETHODIMP SetSite(IUnknown* site) override {
+    site_.reset(site);
+    if (site) site->AddRef();
+    return S_OK;
   }
 
-  STDMETHODIMP GetIcon(IShellItemArray* items, LPWSTR* icon) override {
-    logModuleContextOnce();
-    if (!icon) return E_POINTER;
-    *icon = nullptr;
+  STDMETHODIMP GetSite(REFIID riid, void** object) override {
+    if (!object) return E_POINTER;
+    *object = nullptr;
+    if (!site_) return E_FAIL;
+    return site_->QueryInterface(riid, object);
+  }
 
-    const std::filesystem::path moduleDir = currentModuleDirectory();
-    if (!moduleDir.empty()) {
-      const std::filesystem::path icoPath = moduleDir / L"radioify.ico";
-      if (isExistingRegularFile(icoPath)) {
-        const std::wstring iconResource = icoPath.wstring() + L",0";
-        const HRESULT hr = duplicateString(iconResource, icon);
-        appendExplorerLog(L"GetIcon hr=" + formatHresult(hr) + L" icon=" +
-                          iconResource + L" " + describeSelection(items));
-        return hr;
-      }
+  STDMETHODIMP GetTitle(IShellItemArray*, LPWSTR* title) override {
+    return duplicateString(L"Open with Radioify", title);
+  }
+
+  STDMETHODIMP GetIcon(IShellItemArray*, LPWSTR* icon) override {
+    try {
+      if (!icon) return E_POINTER;
+      *icon = nullptr;
+
+      const std::wstring iconPath = joinPath(parentPathOf(getModulePath()), L"radioify.ico");
+      if (iconPath.empty() || !isExistingFile(iconPath)) return E_NOTIMPL;
+      return duplicateString(iconPath + L",0", icon);
+    } catch (...) {
+      return exceptionToHresult();
     }
-
-    appendExplorerLog(L"GetIcon hr=" + formatHresult(E_NOTIMPL) + L" ico-not-found " +
-                      describeSelection(items));
-    return E_NOTIMPL;
   }
 
-  STDMETHODIMP GetToolTip(IShellItemArray* items, LPWSTR* tooltip) override {
-    logModuleContextOnce();
+  STDMETHODIMP GetToolTip(IShellItemArray*, LPWSTR* tooltip) override {
     if (!tooltip) return E_POINTER;
     *tooltip = nullptr;
-    appendExplorerLog(L"GetToolTip hr=" + formatHresult(E_NOTIMPL) + L" " +
-                      describeSelection(items));
     return E_NOTIMPL;
   }
 
   STDMETHODIMP GetCanonicalName(GUID* commandName) override {
-    logModuleContextOnce();
     if (!commandName) return E_POINTER;
     *commandName = radioifyExplorerCommandClsid();
-    const HRESULT hr = S_OK;
-    appendExplorerLog(L"GetCanonicalName hr=" + formatHresult(hr) +
-                      L" clsid=" + formatGuid(*commandName));
-    return hr;
-  }
-
-  STDMETHODIMP GetState(IShellItemArray* items, BOOL okToBeSlow,
-                        EXPCMDSTATE* commandState) override {
-    logModuleContextOnce();
-    if (!commandState) return E_POINTER;
-
-    IShellItemArray* selection = resolveSelection(items);
-    *commandState = ECS_ENABLED;
-    appendExplorerLog(L"GetState okToBeSlow=" +
-                      std::to_wstring(static_cast<unsigned long>(okToBeSlow)) +
-                      L" state=" + std::to_wstring(static_cast<unsigned long>(*commandState)) +
-                      L" " + describeSelection(selection));
     return S_OK;
   }
 
-  STDMETHODIMP Invoke(IShellItemArray* items, IBindCtx* bindContext) override {
-    logModuleContextOnce();
-    (void)bindContext;
-
-    std::filesystem::path selectedPath;
-    bool isDirectory = false;
-    HRESULT hr = getSelectionPath(resolveSelection(items), &selectedPath,
-                                  &isDirectory);
-    if (FAILED(hr)) {
-      appendExplorerLog(L"Invoke resolveHr=" + formatHresult(hr) + L" " +
-                        describeSelection(resolveSelection(items)));
-      return hr;
+  STDMETHODIMP GetState(IShellItemArray* items, BOOL,
+                        EXPCMDSTATE* commandState) override {
+    try {
+      if (!commandState) return E_POINTER;
+      std::wstring selectedPath;
+      const HRESULT hr =
+          resolveDirectory(items, &selectedPath);
+      *commandState = SUCCEEDED(hr) ? ECS_ENABLED : ECS_HIDDEN;
+      return S_OK;
+    } catch (...) {
+      if (commandState) *commandState = ECS_HIDDEN;
+      return S_OK;
     }
+  }
 
-    hr = launchRadioifyShellOpen(selectedPath);
-    appendExplorerLog(L"Invoke launchHr=" + formatHresult(hr) + L" path=\"" +
-                      selectedPath.wstring() + L"\" isDirectory=" +
-                      (isDirectory ? L"true" : L"false"));
-    return hr;
+  STDMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) override {
+    try {
+      std::wstring selectedPath;
+      HRESULT hr = resolveDirectory(items, &selectedPath);
+      if (FAILED(hr)) return hr;
+      return launchRadioify(selectedPath);
+    } catch (...) {
+      return exceptionToHresult();
+    }
   }
 
   STDMETHODIMP GetFlags(EXPCMDFLAGS* flags) override {
-    logModuleContextOnce();
     if (!flags) return E_POINTER;
     *flags = ECF_DEFAULT;
-    appendExplorerLog(L"GetFlags flags=" + std::to_wstring(static_cast<unsigned long>(*flags)));
     return S_OK;
   }
 
@@ -563,12 +463,26 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
  private:
   ~RadioifyExplorerCommand() { InterlockedDecrement(&g_objectCount); }
 
-  IShellItemArray* resolveSelection(IShellItemArray* items) const {
+  IShellItemArray* resolveSelection(IShellItemArray* items) const noexcept {
     return items ? items : selection_.get();
+  }
+
+  HRESULT resolveDirectory(IShellItemArray* items, std::wstring* outPath) const noexcept {
+    HRESULT hr = resolveSingleDirectorySelection(resolveSelection(items), outPath);
+    if (SUCCEEDED(hr)) return hr;
+
+    hr = resolveFolderViewDirectory(site_.get(), outPath);
+    if (FAILED(hr)) return hr;
+    if (isDesktopDirectory(*outPath)) {
+      outPath->clear();
+      return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+    }
+    return S_OK;
   }
 
   LONG refCount_ = 1;
   ComPtr<IShellItemArray> selection_;
+  ComPtr<IUnknown> site_;
 };
 
 class RadioifyExplorerCommandFactory final : public IClassFactory {
@@ -594,35 +508,22 @@ class RadioifyExplorerCommandFactory final : public IClassFactory {
 
   STDMETHODIMP_(ULONG) Release() override {
     const ULONG count = static_cast<ULONG>(InterlockedDecrement(&refCount_));
-    if (count == 0) {
-      delete this;
-    }
+    if (count == 0) delete this;
     return count;
   }
 
   STDMETHODIMP CreateInstance(IUnknown* outer, REFIID riid,
                               void** object) override {
-    logModuleContextOnce();
     if (!object) return E_POINTER;
     *object = nullptr;
-    if (outer) {
-      appendExplorerLog(L"Factory.CreateInstance hr=" + formatHresult(CLASS_E_NOAGGREGATION) +
-                        L" riid=" + formatGuid(riid) + L" outer=true");
-      return CLASS_E_NOAGGREGATION;
-    }
+    if (outer) return CLASS_E_NOAGGREGATION;
 
     RadioifyExplorerCommand* command =
         new (std::nothrow) RadioifyExplorerCommand();
-    if (!command) {
-      appendExplorerLog(L"Factory.CreateInstance hr=" + formatHresult(E_OUTOFMEMORY) +
-                        L" riid=" + formatGuid(riid) + L" outer=false");
-      return E_OUTOFMEMORY;
-    }
+    if (!command) return E_OUTOFMEMORY;
 
     const HRESULT hr = command->QueryInterface(riid, object);
     command->Release();
-    appendExplorerLog(L"Factory.CreateInstance hr=" + formatHresult(hr) +
-                      L" riid=" + formatGuid(riid) + L" outer=false");
     return hr;
   }
 
@@ -654,25 +555,15 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason,
 }
 
 extern "C" HRESULT __stdcall DllCanUnloadNow(void) {
-  logModuleContextOnce();
-  const HRESULT hr = (g_objectCount == 0 && g_serverLockCount == 0) ? S_OK : S_FALSE;
-  appendExplorerLog(L"DllCanUnloadNow hr=" + formatHresult(hr) + L" objectCount=" +
-                    std::to_wstring(static_cast<unsigned long>(g_objectCount)) +
-                    L" serverLockCount=" +
-                    std::to_wstring(static_cast<unsigned long>(g_serverLockCount)));
-  return hr;
+  return (g_objectCount == 0 && g_serverLockCount == 0) ? S_OK : S_FALSE;
 }
 
 extern "C" HRESULT __stdcall DllGetClassObject(REFCLSID classId,
                                                REFIID interfaceId,
                                                void** object) {
-  logModuleContextOnce();
   if (!object) return E_POINTER;
   *object = nullptr;
   if (!InlineIsEqualGUID(classId, radioifyExplorerCommandClsid())) {
-    appendExplorerLog(L"DllGetClassObject hr=" + formatHresult(CLASS_E_CLASSNOTAVAILABLE) +
-                      L" classId=" + formatGuid(classId) + L" interfaceId=" +
-                      formatGuid(interfaceId));
     return CLASS_E_CLASSNOTAVAILABLE;
   }
 
@@ -682,12 +573,5 @@ extern "C" HRESULT __stdcall DllGetClassObject(REFCLSID classId,
 
   const HRESULT hr = factory->QueryInterface(interfaceId, object);
   factory->Release();
-  appendExplorerLog(L"DllGetClassObject hr=" + formatHresult(hr) +
-                    L" classId=" + formatGuid(classId) + L" interfaceId=" +
-                    formatGuid(interfaceId));
   return hr;
 }
-
-extern "C" HRESULT __stdcall DllRegisterServer(void) { return E_NOTIMPL; }
-
-extern "C" HRESULT __stdcall DllUnregisterServer(void) { return E_NOTIMPL; }
