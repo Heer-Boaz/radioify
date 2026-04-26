@@ -635,11 +635,12 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
         }
         continue;
       }
-      if (ev.type == InputEvent::Type::Key) {
+      if (ev.type == InputEvent::Type::Key ||
+          ev.type == InputEvent::Type::Action) {
         if (auto shortcut = resolvePlaybackShortcutAction(
-                ev.key, kPlaybackShortcutContextGlobal |
-                            kPlaybackShortcutContextShared |
-                            kPlaybackShortcutContextImageViewer)) {
+                ev, kPlaybackShortcutContextGlobal |
+                        kPlaybackShortcutContextShared |
+                        kPlaybackShortcutContextImageViewer)) {
           switch (*shortcut) {
             case PlaybackShortcutAction::Quit:
               if (quitAppRequested) {
@@ -2185,6 +2186,19 @@ int runTui(Options o) {
         }
         markDirty();
         return;
+      }
+      if (ev.type == InputEvent::Type::Action &&
+          ev.action == InputAction::Back) {
+        if (fileContextMenu.active) {
+          fileContextMenu.active = false;
+          dirty = true;
+          return;
+        }
+        if (paletteActive) {
+          paletteActive = false;
+          dirty = true;
+          return;
+        }
       }
       if (fileContextMenu.active) {
         fileContextLayout =

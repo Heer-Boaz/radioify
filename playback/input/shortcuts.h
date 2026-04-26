@@ -32,7 +32,7 @@ inline constexpr DWORD kPlaybackShortcutSeekForbiddenMask =
 
 // One shared shortcut table. Context masks let modes layer additional keys on
 // top of the shared map without owning separate per-mode tables.
-inline constexpr std::array<PlaybackShortcutBinding, 34>
+inline constexpr std::array<PlaybackShortcutBinding, 31>
     kPlaybackShortcutBindings = {{
         {PlaybackShortcutAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal},
@@ -45,16 +45,10 @@ inline constexpr std::array<PlaybackShortcutBinding, 34>
         {PlaybackShortcutAction::ExitPlaybackSession, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextPlaybackSession},
-        {PlaybackShortcutAction::ExitPlaybackSession, VK_BROWSER_BACK, 0, 0, 0,
-         kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextPlaybackSession},
         {PlaybackShortcutAction::DismissMiniPlayer, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextAudioMiniPlayer},
         {PlaybackShortcutAction::DismissMiniPlayer, VK_BACK, 0, 0, 0,
-         kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextAudioMiniPlayer},
-        {PlaybackShortcutAction::DismissMiniPlayer, VK_BROWSER_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextAudioMiniPlayer},
         {PlaybackShortcutAction::DismissMiniPlayer, 'P', 'p', 'P', 0,
@@ -64,9 +58,6 @@ inline constexpr std::array<PlaybackShortcutBinding, 34>
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextImageViewer},
         {PlaybackShortcutAction::CloseViewer, VK_BACK, 0, 0, 0,
-         kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextImageViewer},
-        {PlaybackShortcutAction::CloseViewer, VK_BROWSER_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextImageViewer},
         {PlaybackShortcutAction::Play, kPlaybackVkMediaPlay, 0, 0, 0, 0,
@@ -150,4 +141,38 @@ inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
     }
   }
   return std::nullopt;
+}
+
+inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
+    InputAction action, uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
+                                                    kPlaybackShortcutContextShared) {
+  switch (action) {
+    case InputAction::Back:
+      if ((shortcutContexts & kPlaybackShortcutContextPlaybackSession) != 0) {
+        return PlaybackShortcutAction::ExitPlaybackSession;
+      }
+      if ((shortcutContexts & kPlaybackShortcutContextAudioMiniPlayer) != 0) {
+        return PlaybackShortcutAction::DismissMiniPlayer;
+      }
+      if ((shortcutContexts & kPlaybackShortcutContextImageViewer) != 0) {
+        return PlaybackShortcutAction::CloseViewer;
+      }
+      return std::nullopt;
+    case InputAction::Forward:
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
+    const InputEvent& ev,
+    uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
+                                kPlaybackShortcutContextShared) {
+  if (ev.type == InputEvent::Type::Action) {
+    return resolvePlaybackShortcutAction(ev.action, shortcutContexts);
+  }
+  if (ev.type != InputEvent::Type::Key) {
+    return std::nullopt;
+  }
+  return resolvePlaybackShortcutAction(ev.key, shortcutContexts);
 }

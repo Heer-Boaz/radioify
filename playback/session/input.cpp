@@ -480,9 +480,10 @@ void setPlaybackPaused(const PlaybackInputView& view,
       pausedNow ? PlaybackSessionState::Paused : PlaybackSessionState::Active;
 }
 
-void handlePlaybackKeyEvent(const PlaybackInputView& view,
-                            PlaybackInputSignals& signals,
-                            PlaybackSeekState& seekState, const KeyEvent& key) {
+void handlePlaybackInputEvent(const PlaybackInputView& view,
+                              PlaybackInputSignals& signals,
+                              PlaybackSeekState& seekState,
+                              const InputEvent& ev) {
   InputCallbacks cb;
   cb.onQuit = [&]() { requestPlaybackExit(view, signals, true); };
   cb.onPlay = [&]() { setPlaybackPaused(view, signals, seekState, false); };
@@ -530,14 +531,11 @@ void handlePlaybackKeyEvent(const PlaybackInputView& view,
   };
   cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
-  InputEvent keyEvent{};
-  keyEvent.type = InputEvent::Type::Key;
-  keyEvent.key = key;
   const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
                                     kPlaybackShortcutContextGlobal |
                                     kPlaybackShortcutContextPlaybackSession;
   const PlaybackInputResult playbackResult =
-      handlePlaybackInput(keyEvent, cb, shortcutContexts);
+      handlePlaybackInput(ev, cb, shortcutContexts);
   if (playbackResult == PlaybackInputResult::Handled) {
     if (signals.loopStopRequested && *signals.loopStopRequested) {
       return;

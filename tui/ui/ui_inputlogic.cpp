@@ -474,10 +474,36 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     return;
   }
 
+  const bool browserBackAction =
+      ev.type == InputEvent::Type::Action && ev.action == InputAction::Back;
+  const bool browserForwardAction =
+      ev.type == InputEvent::Type::Action &&
+      ev.action == InputAction::Forward;
+
+  if (ev.type == InputEvent::Type::Action) {
+    if ((playMode || decoderReady) &&
+        handlePlaybackInput(ev, callbacks,
+                            kPlaybackShortcutContextShared |
+                                kPlaybackShortcutContextGlobal) !=
+            PlaybackInputResult::Ignored) {
+      dirty = true;
+      return;
+    }
+    if (browserInteractionEnabled) {
+      if (browserBackAction) {
+        undoBrowserBack();
+        return;
+      }
+      if (browserForwardAction) {
+        redoBrowserForward();
+        return;
+      }
+    }
+    return;
+  }
+
   if (ev.type == InputEvent::Type::Key) {
     const KeyEvent& key = ev.key;
-    bool browserBackKey = key.vk == VK_BROWSER_BACK;
-    bool browserForwardKey = key.vk == VK_BROWSER_FORWARD;
     bool backspaceKey = key.vk == VK_BACK;
     const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
     bool ctrl = (key.control & ctrlMask) != 0;
@@ -493,14 +519,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       if (key.vk == VK_ESCAPE || key.vk == VK_RETURN) {
         setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
         dirty = true;
-        return;
-      }
-      if (browserBackKey) {
-        undoBrowserBack();
-        return;
-      }
-      if (browserForwardKey) {
-        redoBrowserForward();
         return;
       }
       if (backspaceKey) {
@@ -532,14 +550,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       if (key.vk == VK_RETURN) {
         setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
         if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
-        return;
-      }
-      if (browserBackKey) {
-        undoBrowserBack();
-        return;
-      }
-      if (browserForwardKey) {
-        redoBrowserForward();
         return;
       }
       if (backspaceKey) {
@@ -589,14 +599,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         clearForwardHistory();
       }
       dirty = true;
-      return;
-    }
-    if (browserBackKey) {
-      undoBrowserBack();
-      return;
-    }
-    if (browserForwardKey) {
-      redoBrowserForward();
       return;
     }
     if (!browserInteractionEnabled) {
@@ -941,77 +943,74 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
 PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
                                         const InputCallbacks& callbacks,
                                         uint32_t shortcutContexts) {
-  if (ev.type == InputEvent::Type::Key) {
-    const KeyEvent& key = ev.key;
-    if (auto action = resolvePlaybackShortcutAction(key, shortcutContexts)) {
-      switch (*action) {
-        case PlaybackShortcutAction::Quit:
-          if (callbacks.onQuit) callbacks.onQuit();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::Play:
-          if (callbacks.onPlay) callbacks.onPlay();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::Pause:
-          if (callbacks.onPause) callbacks.onPause();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::TogglePause:
-          if (callbacks.onTogglePause) callbacks.onTogglePause();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::Stop:
-          if (callbacks.onStopPlayback) callbacks.onStopPlayback();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::Previous:
-          if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::Next:
-          if (callbacks.onPlayNext) callbacks.onPlayNext();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::ToggleWindow:
-          if (callbacks.onToggleWindow) callbacks.onToggleWindow();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::ToggleFullscreen:
-          if (callbacks.onToggleFullscreen) callbacks.onToggleFullscreen();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::ToggleRadio:
-          if (callbacks.onToggleRadio) callbacks.onToggleRadio();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::Toggle50Hz:
-          if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::ToggleSubtitles:
-          if (callbacks.onToggleSubtitles) callbacks.onToggleSubtitles();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::ToggleAudioTrack:
-          if (callbacks.onToggleAudioTrack) callbacks.onToggleAudioTrack();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::ToggleOptions:
-          if (callbacks.onToggleOptions) callbacks.onToggleOptions();
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::SeekBackward:
-          if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::SeekForward:
-          if (callbacks.onSeekBy) callbacks.onSeekBy(1);
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::VolumeUp:
-          if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(0.10f);
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::VolumeDown:
-          if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-0.10f);
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::TogglePictureInPicture:
-          if (callbacks.onPlaybackContextShortcut) {
-            callbacks.onPlaybackContextShortcut(*action);
-          }
-          return PlaybackInputResult::Handled;
-        case PlaybackShortcutAction::ExitPlaybackSession:
-        case PlaybackShortcutAction::DismissMiniPlayer:
-        case PlaybackShortcutAction::CloseViewer:
-          if (callbacks.onPlaybackContextShortcut) {
-            callbacks.onPlaybackContextShortcut(*action);
-          }
-          return PlaybackInputResult::HandledWithoutOverlayRefresh;
-      }
+  if (auto action = resolvePlaybackShortcutAction(ev, shortcutContexts)) {
+    switch (*action) {
+      case PlaybackShortcutAction::Quit:
+        if (callbacks.onQuit) callbacks.onQuit();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::Play:
+        if (callbacks.onPlay) callbacks.onPlay();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::Pause:
+        if (callbacks.onPause) callbacks.onPause();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::TogglePause:
+        if (callbacks.onTogglePause) callbacks.onTogglePause();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::Stop:
+        if (callbacks.onStopPlayback) callbacks.onStopPlayback();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::Previous:
+        if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::Next:
+        if (callbacks.onPlayNext) callbacks.onPlayNext();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::ToggleWindow:
+        if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::ToggleFullscreen:
+        if (callbacks.onToggleFullscreen) callbacks.onToggleFullscreen();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::ToggleRadio:
+        if (callbacks.onToggleRadio) callbacks.onToggleRadio();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::Toggle50Hz:
+        if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::ToggleSubtitles:
+        if (callbacks.onToggleSubtitles) callbacks.onToggleSubtitles();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::ToggleAudioTrack:
+        if (callbacks.onToggleAudioTrack) callbacks.onToggleAudioTrack();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::ToggleOptions:
+        if (callbacks.onToggleOptions) callbacks.onToggleOptions();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::SeekBackward:
+        if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::SeekForward:
+        if (callbacks.onSeekBy) callbacks.onSeekBy(1);
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::VolumeUp:
+        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(0.10f);
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::VolumeDown:
+        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-0.10f);
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::TogglePictureInPicture:
+        if (callbacks.onPlaybackContextShortcut) {
+          callbacks.onPlaybackContextShortcut(*action);
+        }
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::ExitPlaybackSession:
+      case PlaybackShortcutAction::DismissMiniPlayer:
+      case PlaybackShortcutAction::CloseViewer:
+        if (callbacks.onPlaybackContextShortcut) {
+          callbacks.onPlaybackContextShortcut(*action);
+        }
+        return PlaybackInputResult::HandledWithoutOverlayRefresh;
     }
   }
   return PlaybackInputResult::Ignored;

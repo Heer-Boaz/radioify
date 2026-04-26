@@ -119,10 +119,14 @@ inline void showInfoDialog(ConsoleInput& input, ConsoleScreen& screen,
   InputEvent ev{};
   while (true) {
     while (input.poll(ev)) {
+      if (ev.type == InputEvent::Type::Action &&
+          ev.action == InputAction::Back) {
+        return;
+      }
       if (ev.type == InputEvent::Type::Key) {
         const KeyEvent& key = ev.key;
         if (key.vk == VK_RETURN || key.vk == VK_SPACE || key.vk == VK_ESCAPE ||
-            key.vk == VK_BROWSER_BACK || key.vk == VK_BACK) {
+            key.vk == VK_BACK) {
           return;
         }
       }
@@ -154,6 +158,10 @@ inline DialogResult showConfirmDialog(ConsoleInput& input, ConsoleScreen& screen
   InputEvent ev{};
   while (true) {
     while (input.poll(ev)) {
+      if (ev.type == InputEvent::Type::Action &&
+          ev.action == InputAction::Back) {
+        return DialogResult::Cancelled;
+      }
       if (ev.type == InputEvent::Type::Mouse) {
         if (ev.mouse.buttonState != 0) return DialogResult::Confirmed;
       }
@@ -162,8 +170,7 @@ inline DialogResult showConfirmDialog(ConsoleInput& input, ConsoleScreen& screen
         if (key.vk == VK_RETURN || key.vk == VK_SPACE) {
           return DialogResult::Confirmed;
         }
-        if (key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
-            key.vk == VK_BACK) {
+        if (key.vk == VK_ESCAPE || key.vk == VK_BACK) {
           return DialogResult::Cancelled;
         }
       }

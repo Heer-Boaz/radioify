@@ -77,9 +77,10 @@ void sendSeekRequest(const PlaybackInputView& view,
                      PlaybackInputSignals& signals,
                      PlaybackSeekState& seekState, double targetSec);
 
-void handlePlaybackKeyEvent(const PlaybackInputView& view,
-                            PlaybackInputSignals& signals,
-                            PlaybackSeekState& seekState, const KeyEvent& key);
+void handlePlaybackInputEvent(const PlaybackInputView& view,
+                              PlaybackInputSignals& signals,
+                              PlaybackSeekState& seekState,
+                              const InputEvent& ev);
 void handlePlaybackControlCommand(const PlaybackInputView& view,
                                   PlaybackInputSignals& signals,
                                   PlaybackSeekState& seekState,

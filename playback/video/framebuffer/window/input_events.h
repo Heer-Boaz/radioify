@@ -19,10 +19,7 @@ bool isSuppressedSystemCharacter(UINT message, WPARAM key);
 
 InputEvent keyFromVirtualKey(WORD key);
 
-bool isXButtonMessage(UINT message);
-std::optional<InputEvent> keyFromXButtonMessage(WPARAM wParam);
-
-std::optional<InputEvent> keyFromAppCommand(LPARAM lParam);
+std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam);
 
 DWORD mouseButtonsFromWParam(WPARAM wParam);
 DWORD wheelButtonState(SHORT delta);

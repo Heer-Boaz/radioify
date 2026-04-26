@@ -477,9 +477,10 @@ struct PlaybackLoopRunner::Impl {
         applyPresenterSync(syncPresentation());
         continue;
       }
-      if (ev.type == InputEvent::Type::Key) {
-        playback_session_input::handlePlaybackKeyEvent(inputView, inputSignals,
-                                                       seekState, ev.key);
+      if (ev.type == InputEvent::Type::Key ||
+          ev.type == InputEvent::Type::Action) {
+        playback_session_input::handlePlaybackInputEvent(
+            inputView, inputSignals, seekState, ev);
         if (loopStopRequested) {
           break;
         }

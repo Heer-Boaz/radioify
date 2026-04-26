@@ -143,8 +143,7 @@ struct PlaybackSessionBootstrap::Impl {
     if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
       return true;
     }
-    return key.vk == VK_ESCAPE || key.vk == VK_BROWSER_BACK ||
-           key.vk == VK_BACK;
+    return key.vk == VK_ESCAPE || key.vk == VK_BACK;
   }
 
   bool handleMouseCancel(const MouseEvent& mouse) const {
@@ -168,6 +167,10 @@ struct PlaybackSessionBootstrap::Impl {
 
       InputEvent ev{};
       while (input.poll(ev)) {
+        if (ev.type == InputEvent::Type::Action &&
+            ev.action == InputAction::Back) {
+          return false;
+        }
         if (ev.type == InputEvent::Type::Key && handleKeyCancel(ev.key)) {
           return false;
         }

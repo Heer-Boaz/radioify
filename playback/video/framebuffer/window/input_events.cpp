@@ -58,32 +58,22 @@ bool isSuppressedSystemCharacter(UINT message, WPARAM key) {
 }
 
 InputEvent keyFromVirtualKey(WORD key) {
+  if (key == VK_BROWSER_BACK) {
+    return inputActionEvent(InputAction::Back);
+  }
+  if (key == VK_BROWSER_FORWARD) {
+    return inputActionEvent(InputAction::Forward);
+  }
   return keyEvent(key, characterForVirtualKey(key), currentModifierState());
 }
 
-bool isXButtonMessage(UINT message) {
-  return message == WM_XBUTTONDOWN || message == WM_XBUTTONUP ||
-         message == WM_NCXBUTTONDOWN || message == WM_NCXBUTTONUP;
-}
-
-std::optional<InputEvent> keyFromXButtonMessage(WPARAM wParam) {
-  const WORD button = HIWORD(wParam);
-  if (button == XBUTTON1) {
-    return keyEvent(VK_BROWSER_BACK);
-  }
-  if (button == XBUTTON2) {
-    return keyEvent(VK_BROWSER_FORWARD);
-  }
-  return std::nullopt;
-}
-
-std::optional<InputEvent> keyFromAppCommand(LPARAM lParam) {
+std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam) {
   const int command = GET_APPCOMMAND_LPARAM(lParam);
   switch (command) {
     case APPCOMMAND_BROWSER_BACKWARD:
-      return keyEvent(VK_BROWSER_BACK);
+      return inputActionEvent(InputAction::Back);
     case APPCOMMAND_BROWSER_FORWARD:
-      return keyEvent(VK_BROWSER_FORWARD);
+      return inputActionEvent(InputAction::Forward);
     case APPCOMMAND_MEDIA_PLAY_PAUSE:
       return keyEvent(VK_MEDIA_PLAY_PAUSE);
     case APPCOMMAND_MEDIA_PLAY:

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cwchar>
+#include <optional>
 
 namespace {
 
@@ -90,13 +91,17 @@ void assignKeyEventFromTerminalCharacter(KeyEvent& out, wchar_t ch) {
   assignKeyEventFromCharacter(out, 0, 0, ch);
 }
 
-}  // namespace
-
-bool ConsoleInput::hasInputFocus() const {
-  // Trust console focus events for pseudoconsole hosts (Windows Terminal,
-  // ConPTY, etc.) where foreground-window ownership checks are unreliable.
-  return focusActive_;
+std::optional<InputAction> inputActionFromVirtualKey(WORD vk) {
+  if (vk == VK_BROWSER_BACK) {
+    return InputAction::Back;
+  }
+  if (vk == VK_BROWSER_FORWARD) {
+    return InputAction::Forward;
+  }
+  return std::nullopt;
 }
+
+}  // namespace
 
 void ConsoleInput::init() {
   handle_ = GetStdHandle(STD_INPUT_HANDLE);
@@ -110,7 +115,6 @@ void ConsoleInput::init() {
   mode |= ENABLE_EXTENDED_FLAGS;
   if (!SetConsoleMode(handle_, mode)) return;
   updateTerminalGridSize();
-  focusActive_ = true;
   active_ = true;
 }
 
@@ -216,30 +220,6 @@ bool ConsoleInput::pollTerminalInputStream(InputEvent& out) {
 bool ConsoleInput::poll(InputEvent& out) {
   if (!active_) return false;
 
-  // Fallback for terminal hosts that don't forward XBUTTON mouse events
-  // through ReadConsoleInput. Detect side-button edges via async key state.
-  bool focused = hasInputFocus();
-  bool x1Down = (GetAsyncKeyState(VK_XBUTTON1) & 0x8000) != 0;
-  bool x2Down = (GetAsyncKeyState(VK_XBUTTON2) & 0x8000) != 0;
-  bool x1Pressed = focused && x1Down && !xButton1Prev_;
-  bool x2Pressed = focused && x2Down && !xButton2Prev_;
-  xButton1Prev_ = x1Down;
-  xButton2Prev_ = x2Down;
-  if (x1Pressed) {
-    out.type = InputEvent::Type::Key;
-    out.key.vk = VK_BROWSER_BACK;
-    out.key.ch = 0;
-    out.key.control = 0;
-    return true;
-  }
-  if (x2Pressed) {
-    out.type = InputEvent::Type::Key;
-    out.key.vk = VK_BROWSER_FORWARD;
-    out.key.ch = 0;
-    out.key.control = 0;
-    return true;
-  }
-
   DWORD count = 0;
   if (!GetNumberOfConsoleInputEvents(handle_, &count) || count == 0) {
     return pollTerminalInputStream(out);
@@ -253,6 +233,10 @@ bool ConsoleInput::poll(InputEvent& out) {
       if (!kev.bKeyDown) {
         count--;
         continue;
+      }
+      if (auto action = inputActionFromVirtualKey(kev.wVirtualKeyCode)) {
+        out = inputActionEvent(*action);
+        return true;
       }
       if (kev.uChar.UnicodeChar != 0) {
         InputEvent parsed{};
@@ -300,14 +284,12 @@ bool ConsoleInput::poll(InputEvent& out) {
                          FROM_LEFT_3RD_BUTTON_PRESSED |
                          FROM_LEFT_4TH_BUTTON_PRESSED;
         if ((mev.dwButtonState & sideMask) != 0) {
-          out.type = InputEvent::Type::Key;
+          out.type = InputEvent::Type::Action;
           if ((mev.dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) != 0) {
-            out.key.vk = VK_BROWSER_BACK;
+            out.action = InputAction::Back;
           } else {
-            out.key.vk = VK_BROWSER_FORWARD;
+            out.action = InputAction::Forward;
           }
-          out.key.ch = 0;
-          out.key.control = mev.dwControlKeyState;
           return true;
         }
       }
@@ -325,7 +307,6 @@ bool ConsoleInput::poll(InputEvent& out) {
       return true;
     }
     if (rec.EventType == FOCUS_EVENT) {
-      focusActive_ = rec.Event.FocusEvent.bSetFocus != FALSE;
       count--;
       continue;
     }

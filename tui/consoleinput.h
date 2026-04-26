@@ -9,6 +9,7 @@
 #endif
 #include <windows.h>
 
+#include "playback/input/input_action.h"
 #include "terminal_input_sequence.h"
 #include "file_drop_event.h"
 
@@ -50,6 +51,7 @@ struct InputEvent {
   enum class Type {
     None,
     Key,
+    Action,
     Mouse,
     Resize,
     FileDrop,
@@ -57,10 +59,18 @@ struct InputEvent {
 
   Type type = Type::None;
   KeyEvent key{};
+  InputAction action = InputAction::Back;
   MouseEvent mouse{};
   COORD size{};
   FileDropEvent fileDrop;
 };
+
+inline InputEvent inputActionEvent(InputAction action) {
+  InputEvent ev{};
+  ev.type = InputEvent::Type::Action;
+  ev.action = action;
+  return ev;
+}
 
 class ConsoleInput {
  public:
@@ -72,7 +82,6 @@ class ConsoleInput {
   HANDLE waitHandle() const;
 
  private:
-  bool hasInputFocus() const;
   void enableTerminalMouseInput();
   void disableTerminalMouseInput();
   void updateTerminalGridSize();
@@ -88,9 +97,6 @@ class ConsoleInput {
   double cellPixelHeight_ = 1.0;
   bool active_ = false;
   bool terminalMouseInput_ = false;
-  bool xButton1Prev_ = false;
-  bool xButton2Prev_ = false;
-  bool focusActive_ = true;
   TerminalInputSequenceParser terminalParser_;
 };
 
