@@ -330,48 +330,41 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     dirty = true;
   };
   auto undoBrowserBack = [&]() -> bool {
-    if (decoderReady) {
-      BrowserState::HistoryAction action;
-      bool haveAction = false;
-      if (!browser.backHistory.empty() &&
-          browser.backHistory.back().type ==
-              BrowserState::HistoryActionType::PlayFile) {
-        action = browser.backHistory.back();
-        browser.backHistory.pop_back();
-        haveAction = true;
-      } else if (callbacks.onCurrentPlaybackFile) {
-        std::filesystem::path current = callbacks.onCurrentPlaybackFile();
-        if (!current.empty()) {
-          action.type = BrowserState::HistoryActionType::PlayFile;
-          action.fromPath = browser.dir;
-          action.toPath = current;
-          haveAction = true;
-        }
+    // Prefer navigating back to the most recent EnterDirectory action
+    // (if any) regardless of whether playback is currently active.
+    // Pop play-file actions and move them to forwardHistory while searching
+    // for an EnterDirectory to navigate to. If none is found and playback is
+    // active, stop playback and push the current playback as a PlayFile
+    // action onto forwardHistory.
+    std::vector<BrowserState::HistoryAction> popped;
+    BrowserState::HistoryAction enterAction;
+    bool foundEnter = false;
+    while (!browser.backHistory.empty()) {
+      BrowserState::HistoryAction action = browser.backHistory.back();
+      browser.backHistory.pop_back();
+      if (action.type == BrowserState::HistoryActionType::EnterDirectory &&
+          !action.fromPath.empty()) {
+        enterAction = action;
+        foundEnter = true;
+        break;
       }
-      if (callbacks.onStopPlayback) {
-        callbacks.onStopPlayback();
-      }
-      if (haveAction) {
-        browser.forwardHistory.push_back(action);
-      }
+      // collect other actions (PlayFile) to move to forwardHistory
+      popped.push_back(action);
+    }
+
+    // Move popped actions onto forward history in the order they were popped.
+    for (const auto& a : popped) browser.forwardHistory.push_back(a);
+
+    if (foundEnter) {
+      navigateToDir(enterAction.fromPath);
+      browser.forwardHistory.push_back(enterAction);
       dirty = true;
       return true;
     }
 
-    while (!browser.backHistory.empty()) {
-      BrowserState::HistoryAction action = browser.backHistory.back();
-      browser.backHistory.pop_back();
-      if (action.type == BrowserState::HistoryActionType::PlayFile) {
-        browser.forwardHistory.push_back(action);
-        continue;
-      }
-      if (action.type == BrowserState::HistoryActionType::EnterDirectory &&
-          !action.fromPath.empty()) {
-        navigateToDir(action.fromPath);
-        browser.forwardHistory.push_back(action);
-        return true;
-      }
-    }
+    // No EnterDirectory found in backHistory: prefer to leave playback
+    // unaffected. Do not stop playback or add the current playback file to
+    // forward history when the back action cannot navigate the browser.
     return false;
   };
   auto redoBrowserForward = [&]() -> bool {
@@ -481,14 +474,9 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       ev.action == InputAction::Forward;
 
   if (ev.type == InputEvent::Type::Action) {
-    if ((playMode || decoderReady) &&
-        handlePlaybackInput(ev, callbacks,
-                            kPlaybackShortcutContextShared |
-                                kPlaybackShortcutContextGlobal) !=
-            PlaybackInputResult::Ignored) {
-      dirty = true;
-      return;
-    }
+    // Prefer browser navigation when the browser UI is active so that
+    // mouse/browser back/forward buttons always control the browser and do
+    // not inadvertently trigger playback shortcuts (ExitPlaybackSession, etc.).
     if (browserInteractionEnabled) {
       if (browserBackAction) {
         undoBrowserBack();
@@ -498,6 +486,17 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         redoBrowserForward();
         return;
       }
+    }
+
+    // If browser interaction isn't active (or action wasn't handled by the
+    // browser), fall back to handling playback shortcuts as before.
+    if ((playMode || decoderReady) &&
+        handlePlaybackInput(ev, callbacks,
+                            kPlaybackShortcutContextShared |
+                                kPlaybackShortcutContextGlobal) !=
+            PlaybackInputResult::Ignored) {
+      dirty = true;
+      return;
     }
     return;
   }
