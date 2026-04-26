@@ -67,6 +67,17 @@ InputEvent keyFromVirtualKey(WORD key) {
   return keyEvent(key, characterForVirtualKey(key), currentModifierState());
 }
 
+std::optional<InputEvent> inputEventFromXButton(WPARAM wParam) {
+  switch (GET_XBUTTON_WPARAM(wParam)) {
+    case XBUTTON1:
+      return inputActionEvent(InputAction::Back);
+    case XBUTTON2:
+      return inputActionEvent(InputAction::Forward);
+    default:
+      return std::nullopt;
+  }
+}
+
 std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam) {
   const int command = GET_APPCOMMAND_LPARAM(lParam);
   switch (command) {

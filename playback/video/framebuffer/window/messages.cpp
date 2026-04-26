@@ -130,6 +130,18 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return 0;
     }
 
+    if (uMsg == WM_XBUTTONDOWN || uMsg == WM_NCXBUTTONDOWN) {
+        if (auto event = window_input_events::inputEventFromXButton(wParam)) {
+            pThis->m_input.push(std::move(*event));
+            return TRUE;
+        }
+    }
+
+    if (uMsg == WM_XBUTTONUP || uMsg == WM_NCXBUTTONUP ||
+        uMsg == WM_XBUTTONDBLCLK || uMsg == WM_NCXBUTTONDBLCLK) {
+        return TRUE;
+    }
+
     if (uMsg == WM_APPCOMMAND) {
         if (auto event =
                 window_input_events::inputEventFromAppCommand(lParam)) {

@@ -9,6 +9,8 @@
 #endif
 #include <windows.h>
 
+#include <string>
+
 #include "playback/input/input_action.h"
 #include "terminal_input_sequence.h"
 #include "file_drop_event.h"
@@ -86,8 +88,10 @@ class ConsoleInput {
   void disableTerminalMouseInput();
   void updateTerminalGridSize();
   void mapPixelMousePosition(MouseEvent& mouse) const;
+  bool ownsForegroundConsoleWindow() const;
   bool pollTerminalInputStream(InputEvent& out);
   bool handleTerminalInputCharacter(wchar_t ch, InputEvent& out);
+  bool pollBrowserButtonFallback(InputEvent& out);
   HANDLE handle_ = INVALID_HANDLE_VALUE;
   HANDLE output_ = INVALID_HANDLE_VALUE;
   DWORD originalMode_ = 0;
@@ -96,7 +100,12 @@ class ConsoleInput {
   double cellPixelWidth_ = 1.0;
   double cellPixelHeight_ = 1.0;
   bool active_ = false;
+  bool focusActive_ = true;
+  bool xButton1Down_ = false;
+  bool xButton2Down_ = false;
   bool terminalMouseInput_ = false;
+  std::wstring originalConsoleTitle_;
+  std::wstring activeConsoleTitle_;
   TerminalInputSequenceParser terminalParser_;
 };
 

@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <cwchar>
 #include <optional>
+#include <string>
 
 namespace {
 
 constexpr DWORD kTerminalInputSequenceWaitMs = 10;
+constexpr DWORD kConsoleTitleBufferChars = 512;
 
 bool writeTerminalSequence(HANDLE output, const wchar_t* sequence) {
   if (output == INVALID_HANDLE_VALUE || !sequence) return false;
@@ -114,6 +116,14 @@ void ConsoleInput::init() {
   mode &= ~(ENABLE_QUICK_EDIT_MODE | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
   mode |= ENABLE_EXTENDED_FLAGS;
   if (!SetConsoleMode(handle_, mode)) return;
+  wchar_t title[kConsoleTitleBufferChars]{};
+  const DWORD titleLength = GetConsoleTitleW(title, kConsoleTitleBufferChars);
+  if (titleLength > 0) {
+    originalConsoleTitle_.assign(title, titleLength);
+  }
+  activeConsoleTitle_ =
+      L"Radioify [" + std::to_wstring(GetCurrentProcessId()) + L"]";
+  SetConsoleTitleW(activeConsoleTitle_.c_str());
   updateTerminalGridSize();
   active_ = true;
 }
@@ -122,6 +132,9 @@ void ConsoleInput::restore() {
   disableTerminalMouseInput();
   if (active_) {
     SetConsoleMode(handle_, originalMode_);
+  }
+  if (!originalConsoleTitle_.empty()) {
+    SetConsoleTitleW(originalConsoleTitle_.c_str());
   }
 }
 
@@ -176,6 +189,27 @@ void ConsoleInput::mapPixelMousePosition(MouseEvent& mouse) const {
   mouse.pos.Y = static_cast<SHORT>(gy);
 }
 
+bool ConsoleInput::ownsForegroundConsoleWindow() const {
+  if (!focusActive_) return false;
+
+  HWND foreground = GetForegroundWindow();
+  if (!foreground) return false;
+
+  if (HWND console = GetConsoleWindow()) {
+    if (foreground == console) return true;
+  }
+
+  if (activeConsoleTitle_.empty()) return false;
+
+  wchar_t foregroundTitle[kConsoleTitleBufferChars]{};
+  const int length =
+      GetWindowTextW(foreground, foregroundTitle, kConsoleTitleBufferChars);
+  if (length <= 0) return false;
+
+  std::wstring title(foregroundTitle, static_cast<size_t>(length));
+  return title.find(activeConsoleTitle_) != std::wstring::npos;
+}
+
 bool ConsoleInput::handleTerminalInputCharacter(wchar_t ch, InputEvent& out) {
   if (ch == 0) return false;
 
@@ -217,12 +251,37 @@ bool ConsoleInput::pollTerminalInputStream(InputEvent& out) {
   return terminalParser_.flushPendingEscape(out);
 }
 
+bool ConsoleInput::pollBrowserButtonFallback(InputEvent& out) {
+  if (!ownsForegroundConsoleWindow()) {
+    xButton1Down_ = false;
+    xButton2Down_ = false;
+    return false;
+  }
+
+  const bool xButton1Down = (GetAsyncKeyState(VK_XBUTTON1) & 0x8000) != 0;
+  const bool xButton2Down = (GetAsyncKeyState(VK_XBUTTON2) & 0x8000) != 0;
+  const bool xButton1Pressed = xButton1Down && !xButton1Down_;
+  const bool xButton2Pressed = xButton2Down && !xButton2Down_;
+  xButton1Down_ = xButton1Down;
+  xButton2Down_ = xButton2Down;
+
+  if (xButton1Pressed) {
+    out = inputActionEvent(InputAction::Back);
+    return true;
+  }
+  if (xButton2Pressed) {
+    out = inputActionEvent(InputAction::Forward);
+    return true;
+  }
+  return false;
+}
+
 bool ConsoleInput::poll(InputEvent& out) {
   if (!active_) return false;
 
   DWORD count = 0;
   if (!GetNumberOfConsoleInputEvents(handle_, &count) || count == 0) {
-    return pollTerminalInputStream(out);
+    return pollTerminalInputStream(out) || pollBrowserButtonFallback(out);
   }
   while (count > 0) {
     INPUT_RECORD rec{};
@@ -307,12 +366,17 @@ bool ConsoleInput::poll(InputEvent& out) {
       return true;
     }
     if (rec.EventType == FOCUS_EVENT) {
+      focusActive_ = rec.Event.FocusEvent.bSetFocus != FALSE;
+      if (!focusActive_) {
+        xButton1Down_ = false;
+        xButton2Down_ = false;
+      }
       count--;
       continue;
     }
     count--;
   }
-  return false;
+  return pollBrowserButtonFallback(out);
 }
 
 bool ConsoleInput::active() const { return active_; }

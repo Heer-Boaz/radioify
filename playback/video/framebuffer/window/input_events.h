@@ -19,6 +19,7 @@ bool isSuppressedSystemCharacter(UINT message, WPARAM key);
 
 InputEvent keyFromVirtualKey(WORD key);
 
+std::optional<InputEvent> inputEventFromXButton(WPARAM wParam);
 std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam);
 
 DWORD mouseButtonsFromWParam(WPARAM wParam);
