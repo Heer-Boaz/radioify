@@ -83,7 +83,7 @@ inline constexpr std::array<PlaybackShortcutBinding, 31>
          kPlaybackShortcutContextShared},
         {PlaybackShortcutAction::Next, VK_RIGHT, 0, 0, kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::ToggleWindow, 'P', 'p', 'P',
+        {PlaybackShortcutAction::ToggleWindow, 'W', 'w', 'W',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextShared},
         {PlaybackShortcutAction::ToggleFullscreen, VK_RETURN, 0, 0,

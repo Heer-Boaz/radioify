@@ -154,7 +154,7 @@ The concrete implementation plan lives in
 - Media Stop: stop playback
 - Ctrl+Left/Right: seek
  - F1: open command menu / command palette
-- W: toggle video Window mode
+- Ctrl+W: toggle video Window mode (framebuffer-mode)
 - Ctrl+P: toggle picture-in-picture in Window mode
 - T: toggle picture-in-picture TUI in Window mode
 - R: toggle 1938 radio filter

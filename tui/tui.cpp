@@ -1698,6 +1698,11 @@ int runTui(Options o) {
                     }});
     if (pictureInPicture.isOpen() || !audioGetNowPlaying().empty() ||
         audioIsReady()) {
+      // Toggle the video/window mode (framebuffer) via Ctrl+W.
+      cmds.push_back({"Window mode (framebuffer)", "Ctrl+W", true, [&]() {
+                        if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+                      }});
+      // Picture-in-Picture remains available via Ctrl+P in window mode.
       cmds.push_back({"Picture-in-Picture", "Ctrl+P", true, [&]() {
                         if (callbacks.onToggleWindow) callbacks.onToggleWindow();
                       }});
