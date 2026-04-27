@@ -150,7 +150,9 @@ bool TerminalInputSequenceParser::parse(InputEvent& out, bool* complete) {
     return false;
   }
   if (length_ == 1) return false;
-  if (buffer_[1] != L'[') {
+  // Accept both CSI (ESC[...) and SS3 (ESC O ...) sequences. Many terminals
+  // emit SS3 style function-key sequences (ESC O P..S) for F1..F4.
+  if (buffer_[1] != L'[' && buffer_[1] != L'O') {
     *complete = true;
     return false;
   }
@@ -162,6 +164,39 @@ bool TerminalInputSequenceParser::parse(InputEvent& out, bool* complete) {
   if (buffer_[2] == L'M') {
     return parseLegacyMouse(out, complete);
   }
+  // If the sequence is SS3 (ESC O final), parse as SS3 function key.
+  if (buffer_[1] == L'O') {
+    // SS3 sequences are typically three chars: ESC O <final>
+    if (length_ != 3) {
+      *complete = length_ > 3;
+      return false;
+    }
+    const wchar_t final = buffer_[2];
+    WORD vk = 0;
+    switch (final) {
+      case L'P':
+        vk = VK_F1;
+        break;
+      case L'Q':
+        vk = VK_F2;
+        break;
+      case L'R':
+        vk = VK_F3;
+        break;
+      case L'S':
+        vk = VK_F4;
+        break;
+      default:
+        *complete = true;
+        return false;
+    }
+    out.type = InputEvent::Type::Key;
+    out.key.vk = vk;
+    out.key.ch = 0;
+    out.key.control = 0;
+    return true;
+  }
+
   return parseKey(out, complete);
 }
 
@@ -288,6 +323,44 @@ bool TerminalInputSequenceParser::parseKey(InputEvent& out,
         break;
       case 2:
         vk = VK_INSERT;
+        break;
+      // Common CSI function key codes (xterm/VT): 11..14 = F1..F4, 15 = F5, 17 = F6, 18 = F7, 19 = F8,
+      // 20 = F9, 21 = F10, 23 = F11, 24 = F12
+      case 11:
+        vk = VK_F1;
+        break;
+      case 12:
+        vk = VK_F2;
+        break;
+      case 13:
+        vk = VK_F3;
+        break;
+      case 14:
+        vk = VK_F4;
+        break;
+      case 15:
+        vk = VK_F5;
+        break;
+      case 17:
+        vk = VK_F6;
+        break;
+      case 18:
+        vk = VK_F7;
+        break;
+      case 19:
+        vk = VK_F8;
+        break;
+      case 20:
+        vk = VK_F9;
+        break;
+      case 21:
+        vk = VK_F10;
+        break;
+      case 23:
+        vk = VK_F11;
+        break;
+      case 24:
+        vk = VK_F12;
         break;
       default:
         *complete = true;

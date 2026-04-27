@@ -1,4 +1,4 @@
-#include "audio_mini_player.h"
+#include "picture_in_picture_window.h"
 
 #include <algorithm>
 #include <chrono>
@@ -80,26 +80,26 @@ RECT cellRectToPixels(int x, int y, int width, int height, int cellWidth,
 
 }  // namespace
 
-bool AudioMiniPlayer::isOpen() const { return window_.IsOpen(); }
+bool PictureInPictureWindow::isOpen() const { return window_.IsOpen(); }
 
-bool AudioMiniPlayer::open() { return open(nullptr); }
+bool PictureInPictureWindow::open() { return open(nullptr); }
 
-bool AudioMiniPlayer::openWithPlacement(
+bool PictureInPictureWindow::openWithPlacement(
     const WindowPlacementState& placement) {
   return open(&placement);
 }
 
-bool AudioMiniPlayer::open(const WindowPlacementState* initialPlacement) {
+bool PictureInPictureWindow::open(const WindowPlacementState* initialPlacement) {
   lastError_.clear();
   if (window_.IsOpen()) return true;
   if (!window_.Open(kDefaultWindowWidth, kDefaultWindowHeight,
-                    "Radioify Mini Player", false)) {
-    lastError_ = "The mini-player window could not be created.";
+                    "Radioify Picture-in-Picture", false)) {
+    lastError_ = "The picture-in-picture window could not be created.";
     return false;
   }
   if (!window_.EnableFileDrop()) {
     lastError_ =
-        "Windows refused the mini-player drag/drop registration.";
+        "Windows refused the picture-in-picture drag/drop registration.";
     window_.Close();
     return false;
   }
@@ -121,13 +121,13 @@ bool AudioMiniPlayer::open(const WindowPlacementState* initialPlacement) {
   return true;
 }
 
-void AudioMiniPlayer::close() {
+void PictureInPictureWindow::close() {
   if (window_.IsOpen()) {
     window_.Close();
   }
 }
 
-bool AudioMiniPlayer::toggle() {
+bool PictureInPictureWindow::toggle() {
   if (window_.IsOpen()) {
     close();
     return true;
@@ -135,17 +135,17 @@ bool AudioMiniPlayer::toggle() {
   return open();
 }
 
-bool AudioMiniPlayer::ensureOpen() {
+bool PictureInPictureWindow::ensureOpen() {
   return window_.IsOpen() || open();
 }
 
-WindowPlacementState AudioMiniPlayer::capturePlacement() const {
+WindowPlacementState PictureInPictureWindow::capturePlacement() const {
   WindowPlacementState placement;
   playback_session_window::capturePlacement(window_, placement, false);
   return placement;
 }
 
-void AudioMiniPlayer::refreshGridSize() {
+void PictureInPictureWindow::refreshGridSize() {
   window_.GetTextGridCellSize(cellWidth_, cellHeight_);
   cellWidth_ = std::max(1, cellWidth_);
   cellHeight_ = std::max(1, cellHeight_);
@@ -154,7 +154,7 @@ void AudioMiniPlayer::refreshGridSize() {
   screen_.setVirtualSize(cols_, rows_);
 }
 
-void AudioMiniPlayer::refreshArtwork(const Context& context, int width,
+void PictureInPictureWindow::refreshArtwork(const Context& context, int width,
                                      int height) {
   const bool cacheHit =
       artworkValid_ && context.nowPlayingPath == artworkPath_ &&
@@ -188,7 +188,7 @@ void AudioMiniPlayer::refreshArtwork(const Context& context, int width,
   }
 }
 
-void AudioMiniPlayer::drawArtworkBackground(const Styles& styles, int width,
+void PictureInPictureWindow::drawArtworkBackground(const Styles& styles, int width,
                                             int height) {
   if (!artworkValid_ || artwork_.width <= 0 || artwork_.height <= 0) {
     screen_.clear(styles.normal);
@@ -219,7 +219,7 @@ void AudioMiniPlayer::drawArtworkBackground(const Styles& styles, int width,
   }
 }
 
-bool AudioMiniPlayer::pollEvents(const Callbacks& callbacks) {
+bool PictureInPictureWindow::pollEvents(const Callbacks& callbacks) {
   if (!window_.IsOpen()) return false;
   bool handled = window_.PollEvents();
   if (window_.ConsumeCloseRequested()) {
@@ -236,7 +236,7 @@ bool AudioMiniPlayer::pollEvents(const Callbacks& callbacks) {
   return handled;
 }
 
-bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
+bool PictureInPictureWindow::render(const Styles& styles, const Context& context) {
   if (!ensureOpen()) return false;
   refreshGridSize();
   refreshArtwork(context, cols_, rows_);
@@ -375,7 +375,7 @@ bool AudioMiniPlayer::render(const Styles& styles, const Context& context) {
   return true;
 }
 
-void AudioMiniPlayer::updateInteractiveRects() {
+void PictureInPictureWindow::updateInteractiveRects() {
   std::vector<RECT> rects;
   rects.reserve(layout_.controls.size() + 1);
 
@@ -398,14 +398,14 @@ void AudioMiniPlayer::updateInteractiveRects() {
   window_.SetPictureInPictureInteractiveRects(rects);
 }
 
-void AudioMiniPlayer::holdSeekDisplay(double targetSec) {
+void PictureInPictureWindow::holdSeekDisplay(double targetSec) {
   if (!(targetSec >= 0.0) || !std::isfinite(targetSec)) return;
   seekDisplaySec_ = targetSec;
   seekHoldActive_ = true;
   seekHoldStart_ = std::chrono::steady_clock::now();
 }
 
-void AudioMiniPlayer::handleInput(const InputEvent& ev,
+void PictureInPictureWindow::handleInput(const InputEvent& ev,
                                   const Callbacks& callbacks) {
   if (ev.type == InputEvent::Type::Resize) {
     refreshGridSize();
@@ -439,7 +439,7 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
     playbackCallbacks.onPlaybackContextShortcut =
         [&](PlaybackShortcutAction action) {
           switch (action) {
-            case PlaybackShortcutAction::DismissMiniPlayer:
+            case PlaybackShortcutAction::DismissPictureInPicture:
               close();
               if (callbacks.onClose) callbacks.onClose();
               break;
@@ -449,8 +449,8 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
         };
 
     const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
-                                      kPlaybackShortcutContextGlobal |
-                                      kPlaybackShortcutContextAudioMiniPlayer;
+                      kPlaybackShortcutContextGlobal |
+                      kPlaybackShortcutContextPictureInPicture;
     handlePlaybackInput(ev, playbackCallbacks, shortcutContexts);
     return;
   }
@@ -517,8 +517,8 @@ void AudioMiniPlayer::handleInput(const InputEvent& ev,
   }
 }
 
-bool AudioMiniPlayer::clickControl(playback_overlay::OverlayControlId control,
-                                   const Callbacks& callbacks) {
+bool PictureInPictureWindow::clickControl(playback_overlay::OverlayControlId control,
+                    const Callbacks& callbacks) {
   auto invoke = [](const std::function<void()>& action) {
     if (!action) return false;
     action();
@@ -539,6 +539,6 @@ bool AudioMiniPlayer::clickControl(playback_overlay::OverlayControlId control,
   return playback_overlay::dispatchOverlayControl(control, actions);
 }
 
-int AudioMiniPlayer::controlAt(int x, int y) const {
+int PictureInPictureWindow::controlAt(int x, int y) const {
   return playback_overlay::overlayCellControlAt(layout_, x, y);
 }

@@ -11,7 +11,7 @@ namespace playback_drop_route {
 
 enum class DropSurface {
   Browser,
-  AudioMiniPlayer,
+  PictureInPicture,
   VideoPresentation,
 };
 
@@ -24,14 +24,14 @@ enum class DroppedMediaKind {
 struct DropRoute {
   PlaybackTarget target;
   DroppedMediaKind kind = DroppedMediaKind::Audio;
-  bool closeAudioMiniPlayer = false;
-  bool openAudioMiniPlayer = false;
+  bool closePictureInPicture = false;
+  bool openPictureInPicture = false;
   std::optional<PlaybackSessionContinuationState> videoContinuation;
 };
 
 std::optional<DropRoute> resolve(
     const std::vector<std::filesystem::path>& files, DropSurface surface,
     const WindowPlacementState* sourcePlacement = nullptr,
-    bool preferTextGridVideoMiniPlayer = true);
+    bool preferTextGridVideoPictureInPicture = true);
 
 }  // namespace playback_drop_route

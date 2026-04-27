@@ -1004,7 +1004,7 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
         }
         return PlaybackInputResult::Handled;
       case PlaybackShortcutAction::ExitPlaybackSession:
-      case PlaybackShortcutAction::DismissMiniPlayer:
+      case PlaybackShortcutAction::DismissPictureInPicture:
       case PlaybackShortcutAction::CloseViewer:
         if (callbacks.onPlaybackContextShortcut) {
           callbacks.onPlaybackContextShortcut(*action);

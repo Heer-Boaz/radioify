@@ -14,7 +14,7 @@
 #include "playback/session/state.h"
 #include "playback/video/framebuffer/window/window.h"
 
-class AudioMiniPlayer {
+class PictureInPictureWindow {
  public:
   struct Styles {
     Style normal;

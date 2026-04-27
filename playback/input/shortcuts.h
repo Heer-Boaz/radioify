@@ -45,15 +45,15 @@ inline constexpr std::array<PlaybackShortcutBinding, 31>
         {PlaybackShortcutAction::ExitPlaybackSession, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextPlaybackSession},
-        {PlaybackShortcutAction::DismissMiniPlayer, VK_ESCAPE, 0, 0, 0,
+        {PlaybackShortcutAction::DismissPictureInPicture, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextAudioMiniPlayer},
-        {PlaybackShortcutAction::DismissMiniPlayer, VK_BACK, 0, 0, 0,
+         kPlaybackShortcutContextPictureInPicture},
+        {PlaybackShortcutAction::DismissPictureInPicture, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextAudioMiniPlayer},
-        {PlaybackShortcutAction::DismissMiniPlayer, 'P', 'p', 'P', 0,
+         kPlaybackShortcutContextPictureInPicture},
+        {PlaybackShortcutAction::DismissPictureInPicture, 'P', 'p', 'P', 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextAudioMiniPlayer},
+         kPlaybackShortcutContextPictureInPicture},
         {PlaybackShortcutAction::CloseViewer, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextImageViewer},
@@ -151,8 +151,8 @@ inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
       if ((shortcutContexts & kPlaybackShortcutContextPlaybackSession) != 0) {
         return PlaybackShortcutAction::ExitPlaybackSession;
       }
-      if ((shortcutContexts & kPlaybackShortcutContextAudioMiniPlayer) != 0) {
-        return PlaybackShortcutAction::DismissMiniPlayer;
+      if ((shortcutContexts & kPlaybackShortcutContextPictureInPicture) != 0) {
+        return PlaybackShortcutAction::DismissPictureInPicture;
       }
       if ((shortcutContexts & kPlaybackShortcutContextImageViewer) != 0) {
         return PlaybackShortcutAction::CloseViewer;

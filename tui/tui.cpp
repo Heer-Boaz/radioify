@@ -30,7 +30,7 @@
 #include <vector>
 
 #include "app_common.h"
-#include "audio_mini_player.h"
+#include "picture_in_picture_window.h"
 #include "asciiart.h"
 #include "audioplayback.h"
 #include "browser_model.h"
@@ -917,7 +917,7 @@ int runTui(Options o) {
   bool seekHoldActive = false;
   auto seekHoldStart = std::chrono::steady_clock::now();
   std::vector<ScreenCell> windowCells;
-  AudioMiniPlayer audioMiniPlayer;
+  PictureInPictureWindow pictureInPicture;
   ConsoleInputPump consoleInputPump;
   UiDirtyFlags dirtyFlags = UiDirtyFlags::Frame | UiDirtyFlags::Layout;
   bool layoutDirty = true;
@@ -985,22 +985,22 @@ int runTui(Options o) {
     }
     return label;
   };
-  auto showAudioMiniPlayerOpenError = [&]() {
-    const std::string detail = audioMiniPlayer.lastError().empty()
-                                   ? "The mini-player did not open."
-                                   : audioMiniPlayer.lastError();
+  auto showPictureInPictureOpenError = [&]() {
+    const std::string detail = pictureInPicture.lastError().empty()
+                                   ? "The picture-in-picture window did not open."
+                                   : pictureInPicture.lastError();
     playback_dialog::showInfoDialog(
         input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-        "Mini Player Error", "Radioify could not open the mini-player.",
+        "Picture-in-Picture Error", "Radioify could not open picture-in-picture.",
         detail, "Enter/Space/Esc: close");
   };
-  auto openAudioMiniPlayerWithPlacement =
+  auto openPictureInPictureWithPlacement =
       [&](const WindowPlacementState* placement) {
     const bool opened =
-        placement ? audioMiniPlayer.openWithPlacement(*placement)
-                  : audioMiniPlayer.open();
+        placement ? pictureInPicture.openWithPlacement(*placement)
+                  : pictureInPicture.open();
     if (!opened) {
-      showAudioMiniPlayerOpenError();
+      showPictureInPictureOpenError();
     }
     markDirty(UiDirtyFlags::Async);
     return opened;
@@ -1028,13 +1028,13 @@ int runTui(Options o) {
     if (initialContinuation) {
       playbackContinuationState = *initialContinuation;
     }
-    bool openAudioMiniPlayerAfterTarget = false;
+    bool openPictureInPictureAfterTarget = false;
     auto finalizeAudioTarget = [&](bool started) {
-      if (started && openAudioMiniPlayerAfterTarget) {
-        openAudioMiniPlayerWithPlacement(
+      if (started && openPictureInPictureAfterTarget) {
+        openPictureInPictureWithPlacement(
             &playbackContinuationState.windowPlacement);
       }
-      openAudioMiniPlayerAfterTarget = false;
+      openPictureInPictureAfterTarget = false;
       return started;
     };
     while (!target.file.empty()) {
@@ -1059,14 +1059,14 @@ int runTui(Options o) {
       if (isVideoExt(target.file)) {
         bool quitAppRequested = false;
         std::optional<PlaybackTarget> pendingTransportTarget;
-        bool openAudioMiniPlayerForPendingTarget = false;
+        bool openPictureInPictureForPendingTarget = false;
         auto requestTransportCommand = [&](PlaybackTransportCommand command) {
           const int direction =
               (command == PlaybackTransportCommand::Previous) ? -1 : 1;
           pendingTransportTarget =
               transportNavigator.resolveAdjacentPlaybackTarget(target,
                                                               direction);
-          openAudioMiniPlayerForPendingTarget = false;
+          openPictureInPictureForPendingTarget = false;
           return pendingTransportTarget.has_value();
         };
         auto requestOpenFiles =
@@ -1074,8 +1074,8 @@ int runTui(Options o) {
           if (auto route = playback_drop_route::resolve(
                   files, playback_drop_route::DropSurface::VideoPresentation)) {
             pendingTransportTarget = route->target;
-            openAudioMiniPlayerForPendingTarget =
-                route->openAudioMiniPlayer;
+            openPictureInPictureForPendingTarget =
+                route->openPictureInPicture;
             return true;
           }
           return false;
@@ -1092,8 +1092,8 @@ int runTui(Options o) {
         }
         if (pendingTransportTarget) {
           target = *pendingTransportTarget;
-          openAudioMiniPlayerAfterTarget =
-              openAudioMiniPlayerForPendingTarget;
+            openPictureInPictureAfterTarget =
+              openPictureInPictureForPendingTarget;
           continue;
         }
         if (handled) {
@@ -1226,9 +1226,9 @@ int runTui(Options o) {
     actionOverlayState.paused = audioIsPaused();
     actionOverlayState.audioFinished = audioIsFinished();
     actionOverlayState.pictureInPictureAvailable =
-        audioMiniPlayer.isOpen() || actionOverlayState.audioOk ||
-        !nowPlaying.empty();
-    actionOverlayState.pictureInPictureActive = audioMiniPlayer.isOpen();
+      pictureInPicture.isOpen() || actionOverlayState.audioOk ||
+      !nowPlaying.empty();
+    actionOverlayState.pictureInPictureActive = pictureInPicture.isOpen();
     playback_overlay::OverlayControlSpecOptions controlOptions;
     controlOptions.includeAudioTrack = false;
     controlOptions.includeSubtitles = false;
@@ -1534,19 +1534,19 @@ int runTui(Options o) {
     markDirty();
   };
   callbacks.onToggleWindow = [&]() {
-    if (!audioMiniPlayer.isOpen() && audioGetNowPlaying().empty() &&
+    if (!pictureInPicture.isOpen() && audioGetNowPlaying().empty() &&
         !audioIsReady()) {
       return;
     }
-    if (audioMiniPlayer.toggle()) {
+    if (pictureInPicture.toggle()) {
       markDirty(UiDirtyFlags::Async);
       return;
     }
-    showAudioMiniPlayerOpenError();
+    showPictureInPictureOpenError();
     markDirty();
   };
 
-  AudioMiniPlayer::Styles audioMiniStyles{kStyleNormal,
+  PictureInPictureWindow::Styles pictureInPictureStyles{kStyleNormal,
                                           kStyleAccent,
                                           kStyleDim,
                                           kStyleAlert,
@@ -1555,62 +1555,61 @@ int runTui(Options o) {
                                           kStyleProgressFrame,
                                           kProgressStart,
                                           kProgressEnd};
-  auto buildAudioMiniContext = [&]() {
-    AudioMiniPlayer::Context context;
+  auto buildPictureInPictureContext = [&]() {
+    PictureInPictureWindow::Context context;
     context.nowPlayingLabel = buildAudioNowPlayingLabel();
     context.nowPlayingPath = audioGetNowPlaying();
     context.trackIndex = audioGetTrackIndex();
     return context;
   };
-  auto renderAudioMiniPlayer = [&]() {
-    if (!audioMiniPlayer.isOpen()) {
+  auto renderPictureInPicture = [&]() {
+    if (!pictureInPicture.isOpen()) {
       return;
     }
-    audioMiniPlayer.render(audioMiniStyles, buildAudioMiniContext());
+    pictureInPicture.render(pictureInPictureStyles, buildPictureInPictureContext());
   };
-  AudioMiniPlayer::Callbacks audioMiniCallbacks;
-  audioMiniCallbacks.onQuit = [&]() {
+  PictureInPictureWindow::Callbacks pictureInPictureCallbacks;
+  pictureInPictureCallbacks.onQuit = [&]() {
     if (callbacks.onQuit) callbacks.onQuit();
   };
-  audioMiniCallbacks.onTogglePause = [&]() {
+  pictureInPictureCallbacks.onTogglePause = [&]() {
     if (callbacks.onTogglePause) callbacks.onTogglePause();
   };
-  audioMiniCallbacks.onStopPlayback = [&]() {
+  pictureInPictureCallbacks.onStopPlayback = [&]() {
     if (callbacks.onStopPlayback) callbacks.onStopPlayback();
   };
-  audioMiniCallbacks.onPlayPrevious = [&]() {
+  pictureInPictureCallbacks.onPlayPrevious = [&]() {
     if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
   };
-  audioMiniCallbacks.onPlayNext = [&]() {
+  pictureInPictureCallbacks.onPlayNext = [&]() {
     if (callbacks.onPlayNext) callbacks.onPlayNext();
   };
-  audioMiniCallbacks.onToggleRadio = [&]() {
+  pictureInPictureCallbacks.onToggleRadio = [&]() {
     if (callbacks.onToggleRadio) callbacks.onToggleRadio();
   };
-  audioMiniCallbacks.onToggle50Hz = [&]() {
+  pictureInPictureCallbacks.onToggle50Hz = [&]() {
     if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
   };
-  audioMiniCallbacks.onSeekBy = [&](int direction) {
+  pictureInPictureCallbacks.onSeekBy = [&](int direction) {
     if (callbacks.onSeekBy) callbacks.onSeekBy(direction);
   };
-  audioMiniCallbacks.onSeekToRatio = [&](double ratio) {
+  pictureInPictureCallbacks.onSeekToRatio = [&](double ratio) {
     if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
   };
-  audioMiniCallbacks.onAdjustVolume = [&](float delta) {
+  pictureInPictureCallbacks.onAdjustVolume = [&](float delta) {
     if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(delta);
   };
-  audioMiniCallbacks.onPlayFiles =
+  pictureInPictureCallbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
-    WindowPlacementState sourcePlacement =
-        audioMiniPlayer.capturePlacement();
+    WindowPlacementState sourcePlacement = pictureInPicture.capturePlacement();
     auto route = playback_drop_route::resolve(
-        files, playback_drop_route::DropSurface::AudioMiniPlayer,
+        files, playback_drop_route::DropSurface::PictureInPicture,
         &sourcePlacement, videoConfig.enableAscii);
     if (!route) {
       return false;
     }
-    if (route->closeAudioMiniPlayer) {
-      audioMiniPlayer.close();
+    if (route->closePictureInPicture) {
+      pictureInPicture.close();
       markDirty(UiDirtyFlags::Async);
     }
     if (route->videoContinuation) {
@@ -1619,7 +1618,7 @@ int runTui(Options o) {
     }
     return playPlaybackTarget(route->target);
   };
-  audioMiniCallbacks.onClose = [&]() { markDirty(UiDirtyFlags::Async); };
+  pictureInPictureCallbacks.onClose = [&]() { markDirty(UiDirtyFlags::Async); };
 
   auto handleSystemPlaybackCommand = [&](PlaybackControlCommand command) {
     switch (command) {
@@ -1697,9 +1696,9 @@ int runTui(Options o) {
                       audioTogglePause();
                       markDirty();
                     }});
-    if (audioMiniPlayer.isOpen() || !audioGetNowPlaying().empty() ||
+    if (pictureInPicture.isOpen() || !audioGetNowPlaying().empty() ||
         audioIsReady()) {
-      cmds.push_back({"PiP Mini Player", "W", true, [&]() {
+      cmds.push_back({"Picture-in-Picture", "Ctrl+P", true, [&]() {
                         if (callbacks.onToggleWindow) callbacks.onToggleWindow();
                       }});
     }
@@ -2091,8 +2090,8 @@ int runTui(Options o) {
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
     }
-    if (audioMiniPlayer.isOpen() &&
-        audioMiniPlayer.pollEvents(audioMiniCallbacks)) {
+    if (pictureInPicture.isOpen() &&
+        pictureInPicture.pollEvents(pictureInPictureCallbacks)) {
       markDirty(UiDirtyFlags::Async);
     }
 
@@ -2152,10 +2151,9 @@ int runTui(Options o) {
       }
       if (ev.type == InputEvent::Type::Key) {
         const KeyEvent& key = ev.key;
-        const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-        bool ctrl = (key.control & ctrlMask) != 0;
-        bool paletteToggle =
-            ctrl && (key.vk == 'P' || key.ch == 'p' || key.ch == 'P');
+        // Open command palette with F1 (no modifier). Previously Ctrl+P
+        // conflicted with the playback Ctrl+P PiP binding.
+        bool paletteToggle = (key.vk == VK_F1);
         if (paletteToggle) {
           paletteActive = !paletteActive;
           if (paletteActive) {
@@ -2387,7 +2385,7 @@ int runTui(Options o) {
     };
 
     auto finalizeRenderedExit = [&]() {
-      audioMiniPlayer.close();
+      pictureInPicture.close();
       if (windowTuiEnabled && tuiWindow.IsOpen()) {
         tuiWindow.Close();
       }
@@ -2483,7 +2481,7 @@ int runTui(Options o) {
           (audioIsReady() || !audioGetNowPlaying().empty() || seekHoldActive)) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
-      if (audioMiniPlayer.isOpen()) {
+      if (pictureInPicture.isOpen()) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
       if (isBackgroundTaskRunning()) {
@@ -3051,7 +3049,7 @@ int runTui(Options o) {
           tuiWindow.PresentTextGrid(windowCells, gridW, gridH, true);
         }
       }
-      renderAudioMiniPlayer();
+      renderPictureInPicture();
       lastDraw = now;
       dirty = false;
       dirtyFlags = UiDirtyFlags::None;
@@ -3061,7 +3059,7 @@ int runTui(Options o) {
   // Clear screen before exiting
   screen.clear(kStyleNormal);
   screen.draw();
-  audioMiniPlayer.close();
+  pictureInPicture.close();
   if (windowTuiEnabled && tuiWindow.IsOpen()) {
     tuiWindow.Close();
   }

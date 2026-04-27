@@ -19,8 +19,8 @@ DroppedMediaKind classify(const PlaybackTarget& target) {
   return DroppedMediaKind::Audio;
 }
 
-PlaybackSessionContinuationState videoMiniPlayerContinuation(
-    const WindowPlacementState* sourcePlacement, bool textGrid) {
+PlaybackSessionContinuationState videoPictureInPictureContinuation(
+  const WindowPlacementState* sourcePlacement, bool textGrid) {
   PlaybackSessionContinuationState state;
   state.hasLayout = true;
   state.layout = PlaybackLayout::Window;
@@ -38,9 +38,9 @@ PlaybackSessionContinuationState videoMiniPlayerContinuation(
 }  // namespace
 
 std::optional<DropRoute> resolve(
-    const std::vector<std::filesystem::path>& files, DropSurface surface,
-    const WindowPlacementState* sourcePlacement,
-    bool preferTextGridVideoMiniPlayer) {
+  const std::vector<std::filesystem::path>& files, DropSurface surface,
+  const WindowPlacementState* sourcePlacement,
+  bool preferTextGridVideoPictureInPicture) {
   std::optional<PlaybackTarget> target =
       playback_target_resolver::resolveDroppedTarget(files);
   if (!target) {
@@ -52,16 +52,16 @@ std::optional<DropRoute> resolve(
   route.kind = classify(route.target);
 
   switch (surface) {
-    case DropSurface::AudioMiniPlayer:
+    case DropSurface::PictureInPicture:
       if (route.kind == DroppedMediaKind::Video) {
-        route.closeAudioMiniPlayer = true;
-        route.videoContinuation = videoMiniPlayerContinuation(
-            sourcePlacement, preferTextGridVideoMiniPlayer);
+        route.closePictureInPicture = true;
+        route.videoContinuation = videoPictureInPictureContinuation(
+          sourcePlacement, preferTextGridVideoPictureInPicture);
       }
       break;
     case DropSurface::VideoPresentation:
       if (route.kind == DroppedMediaKind::Audio) {
-        route.openAudioMiniPlayer = true;
+        route.openPictureInPicture = true;
       }
       break;
     case DropSurface::Browser:
