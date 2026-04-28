@@ -340,23 +340,6 @@ function Wait-RadioifyMsixPackageState {
     throw "Timed out waiting for package '$PackageName' to become ready. Current status: $statusText"
 }
 
-function Stop-RadioifyExplorerIntegrationSurrogates {
-    param([string]$ComServerAppId)
-
-    if ([string]::IsNullOrWhiteSpace($ComServerAppId)) {
-        return
-    }
-
-    $normalizedAppId = $ComServerAppId.Trim("{}")
-    $escapedAppId = [regex]::Escape($normalizedAppId)
-    Get-CimInstance Win32_Process -Filter "Name = 'dllhost.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match $escapedAppId } |
-        ForEach-Object {
-            Write-Host "Stopping Radioify Explorer COM surrogate: $($_.ProcessId)"
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-        }
-}
-
 function Install-RadioifyMsixPackage {
     param(
         [Parameter(Mandatory = $true)][string]$PackagePath

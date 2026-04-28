@@ -82,8 +82,11 @@ configure_file(
 )
 
 add_library(radioify_explorer SHARED
+  "${CMAKE_CURRENT_SOURCE_DIR}/radioify_explorer_module.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/radioify_explorer_paths.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/radioify_explorer.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/radioify_explorer.def"
+  "${CMAKE_CURRENT_SOURCE_DIR}/radioify_thumbnail_provider.cpp"
 )
 radioify_configure_repo_target(radioify_explorer)
 target_include_directories(radioify_explorer PRIVATE "${RADIOIFY_WIN11_EXPLORER_INCLUDE_DIR}")

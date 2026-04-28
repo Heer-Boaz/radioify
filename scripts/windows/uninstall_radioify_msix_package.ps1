@@ -41,8 +41,6 @@ try {
     $installedPackage = Get-InstalledRadioifyMsixPackage -PackageName $manifestInfo.PackageName
     if ($installedPackage) {
         if ($PSCmdlet.ShouldProcess($installedPackage.PackageFullName, "Remove Radioify MSIX package")) {
-            Stop-RadioifyExplorerIntegrationSurrogates `
-                -ComServerAppId $manifestInfo.ComServerAppId
             Remove-RadioifyMsixPackage `
                 -PackageFullName $installedPackage.PackageFullName `
                 -PackageName $manifestInfo.PackageName

@@ -47,13 +47,6 @@ function Get-RadioifyMsixManifestInfo {
         PackageName = [string]$manifestXml.Package.Identity.Name
         Publisher = [string]$manifestXml.Package.Identity.Publisher
         Version = [string]$manifestXml.Package.Identity.Version
-        ComServerAppId = [string](
-            $manifestXml.Package.Applications.Application.Extensions.Extension |
-                Where-Object { $_.Category -eq "windows.comServer" } |
-                Select-Object -ExpandProperty ComServer -First 1 |
-                Select-Object -ExpandProperty SurrogateServer -First 1 |
-                Select-Object -ExpandProperty AppId -First 1
-        )
     }
 }
 
