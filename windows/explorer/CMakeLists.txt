@@ -34,6 +34,7 @@ foreach(radioify_file_type IN LISTS RADIOIFY_WIN11_EXPLORER_FILE_TYPES)
 endforeach()
 string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
 "            </uap:SupportedFileTypes>\n"
+"            <desktop2:ThumbnailHandler Clsid=\"${RADIOIFY_WIN11_EXPLORER_THUMBNAIL_GUID}\" />\n"
 "            <uap2:SupportedVerbs>\n"
 "              <uap3:Verb Id=\"RadioifyOpenFile\" Parameters=\"--shell-open &quot;%1&quot;\">Open with Radioify</uap3:Verb>\n"
 "            </uap2:SupportedVerbs>\n"
@@ -86,7 +87,10 @@ add_library(radioify_explorer SHARED
 )
 radioify_configure_repo_target(radioify_explorer)
 target_include_directories(radioify_explorer PRIVATE "${RADIOIFY_WIN11_EXPLORER_INCLUDE_DIR}")
-target_link_libraries(radioify_explorer PRIVATE ole32 shell32 shlwapi)
+if (FFMPEG_LIBRARY_DIRS)
+  target_link_directories(radioify_explorer PRIVATE ${FFMPEG_LIBRARY_DIRS})
+endif()
+target_link_libraries(radioify_explorer PRIVATE gdi32 ole32 shell32 shlwapi windowscodecs ${FFMPEG_LIBRARIES})
 target_compile_definitions(radioify_explorer PRIVATE UNICODE _UNICODE)
 set_target_properties(radioify_explorer PROPERTIES
   OUTPUT_NAME "radioify_explorer"

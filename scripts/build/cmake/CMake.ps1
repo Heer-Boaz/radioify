@@ -78,7 +78,16 @@ function Test-Win11ExplorerIntegrationPackage {
     Fail-Build "Win11 Explorer integration package creation failed: $($_.Exception.Message)"
   }
 
-  if (-not (Test-Path -LiteralPath $packageResult.PackagePath)) {
+  $packageAvailable = $false
+  foreach ($attempt in 1..20) {
+    if (Test-Path -LiteralPath $packageResult.PackagePath) {
+      $packageAvailable = $true
+      break
+    }
+    Start-Sleep -Milliseconds 250
+  }
+
+  if (-not $packageAvailable) {
     Fail-Build "Win11 Explorer integration package creation did not produce $($packageResult.PackagePath)"
   }
 

@@ -37,17 +37,95 @@ function Resolve-RadioifyWindowsSdkExecutable {
     throw "Windows SDK tool '$ToolName' was not found."
 }
 
+function ConvertTo-RadioifyNativeCommandLineArgument {
+    param([AllowEmptyString()][string]$Argument)
+
+    if ($null -eq $Argument) {
+        return '""'
+    }
+    if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $escaped = $Argument -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
+    return '"' + $escaped + '"'
+}
+
+function Join-RadioifyNativeCommandLineArguments {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    return (($Arguments | ForEach-Object {
+        ConvertTo-RadioifyNativeCommandLineArgument -Argument $_
+    }) -join " ")
+}
+
 function Invoke-RadioifyNativeTool {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $global:LASTEXITCODE = 0
-    & $FilePath @Arguments
-    $exitCode = $global:LASTEXITCODE
-    if ($exitCode -ne 0) {
-        throw "Command failed: $FilePath $($Arguments -join ' ')"
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.Arguments = Join-RadioifyNativeCommandLineArguments -Arguments $Arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    try {
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+
+        $stdoutText = $stdout.Result
+        $stderrText = $stderr.Result
+        if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
+            Write-Host $stdoutText.TrimEnd()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host $stderrText.TrimEnd()
+        }
+
+        if ($process.ExitCode -ne 0) {
+            throw "Command failed with exit code $($process.ExitCode): $FilePath $($startInfo.Arguments)"
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Wait-RadioifyMsixPackageFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    foreach ($attempt in 1..40) {
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+            if ($item.Length -gt 0) {
+                return
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+
+    throw "MSIX package was not produced: '$Path'"
+}
+
+function Assert-RadioifyMsixPackageSigned {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedThumbprint
+    )
+
+    Wait-RadioifyMsixPackageFile -Path $Path
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if (-not $signature.SignerCertificate) {
+        throw "MSIX package is not signed: '$Path'"
+    }
+
+    if ($signature.SignerCertificate.Thumbprint -ne $ExpectedThumbprint) {
+        throw "MSIX package signer thumbprint '$($signature.SignerCertificate.Thumbprint)' does not match expected '$ExpectedThumbprint'."
     }
 }
 
@@ -274,6 +352,7 @@ function New-RadioifySignedMsixPackage {
         "/p", $packagePath,
         "/o"
     ) | Out-Host
+    Wait-RadioifyMsixPackageFile -Path $packagePath
     Invoke-RadioifyNativeTool -FilePath $signToolExe -Arguments @(
         "sign",
         "/fd", "SHA256",
@@ -281,6 +360,9 @@ function New-RadioifySignedMsixPackage {
         "/s", "My",
         $packagePath
     ) | Out-Host
+    Assert-RadioifyMsixPackageSigned `
+        -Path $packagePath `
+        -ExpectedThumbprint $certInfo.Certificate.Thumbprint
 
     return [pscustomobject]@{
         PackagePath = $packagePath

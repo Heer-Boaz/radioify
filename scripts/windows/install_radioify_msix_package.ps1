@@ -70,6 +70,8 @@ try {
     }
 
     if ($PSCmdlet.ShouldProcess($packagePath, "Install Radioify MSIX package")) {
+        Stop-RadioifyExplorerIntegrationSurrogates `
+            -ComServerAppId $manifestInfo.ComServerAppId
         Write-Host "Installing Radioify MSIX package..."
         Install-RadioifyMsixPackage -PackagePath $packagePath
         Write-Host "Waiting for Radioify MSIX package registration..."
