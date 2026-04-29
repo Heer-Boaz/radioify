@@ -748,14 +748,6 @@ std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state) {
   return state.windowTitle;
 }
 
-bool isBackMousePressed(const MouseEvent& mouse) {
-  const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
-                         FROM_LEFT_2ND_BUTTON_PRESSED |
-                         FROM_LEFT_3RD_BUTTON_PRESSED |
-                         FROM_LEFT_4TH_BUTTON_PRESSED;
-  return (mouse.buttonState & backMask) != 0;
-}
-
 static bool terminalOverlayProgressRatioAt(const PlaybackOverlayState& state,
                                            const MouseEvent& mouse,
                                            double* outRatio) {

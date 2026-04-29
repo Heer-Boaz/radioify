@@ -22,6 +22,12 @@ KeyEvent makeKey(WORD vk, char ch = 0, DWORD control = 0) {
   return key;
 }
 
+MouseEvent makeMouse(DWORD buttonState) {
+  MouseEvent mouse{};
+  mouse.buttonState = buttonState;
+  return mouse;
+}
+
 bool expect(bool condition, const char* message) {
   if (!condition) {
     std::cerr << "shortcut_match_tests: " << message << '\n';
@@ -147,6 +153,12 @@ int main() {
                "overlayCellCountForPixels must round rows up");
   ok &= expect(playback_overlay::overlayCellCountForPixels(960, 9) == 107,
                "overlayCellCountForPixels must round columns up");
+  ok &= expect(!playback_overlay::isBackMousePressed(
+                   makeMouse(RIGHTMOST_BUTTON_PRESSED)),
+               "Right mouse button must not act as playback back/exit");
+  ok &= expect(playback_overlay::isBackMousePressed(
+                   makeMouse(FROM_LEFT_2ND_BUTTON_PRESSED)),
+               "Side/back mouse button must still act as playback back/exit");
   ok &= expect(playback_frame_output::centerContentTop(0, 30, 20) == 5,
                "centerContentTop must center smaller content vertically");
   ok &= expect(playback_frame_output::centerContentTop(4, 30, 30) == 4,
