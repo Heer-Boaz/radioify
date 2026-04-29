@@ -38,7 +38,9 @@ inline constexpr std::array<PlaybackShortcutBinding, 31>
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal},
         {PlaybackShortcutAction::TogglePictureInPicture, 'P', 'p', 'P',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
-         kPlaybackShortcutContextPlaybackSession},
+         kPlaybackShortcutContextShared |
+             kPlaybackShortcutContextPlaybackSession |
+             kPlaybackShortcutContextPictureInPicture},
         {PlaybackShortcutAction::ExitPlaybackSession, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextPlaybackSession},

@@ -1545,6 +1545,15 @@ int runTui(Options o) {
     showPictureInPictureOpenError();
     markDirty();
   };
+  callbacks.onPlaybackContextShortcut = [&](PlaybackShortcutAction action) {
+    switch (action) {
+      case PlaybackShortcutAction::TogglePictureInPicture:
+        if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+        break;
+      default:
+        break;
+    }
+  };
 
   PictureInPictureWindow::Styles pictureInPictureStyles{kStyleNormal,
                                           kStyleAccent,

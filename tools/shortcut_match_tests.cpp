@@ -58,6 +58,20 @@ int main() {
                    .value() == PlaybackShortcutAction::CloseViewer,
                "VK_ESCAPE must still close the image viewer");
   ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('P', 0, kPlaybackShortcutCtrlMask),
+                   kPlaybackShortcutContextShared)
+                   .value() == PlaybackShortcutAction::TogglePictureInPicture,
+               "Ctrl+P must toggle PiP from shared playback controls");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('P', 0, kPlaybackShortcutCtrlMask),
+                   kPlaybackShortcutContextPictureInPicture)
+                   .value() == PlaybackShortcutAction::TogglePictureInPicture,
+               "Ctrl+P must toggle PiP while the PiP window has focus");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('P'), kPlaybackShortcutContextPictureInPicture)
+                   .value() == PlaybackShortcutAction::DismissPictureInPicture,
+               "Bare P must still dismiss the PiP window");
+  ok &= expect(resolvePlaybackShortcutAction(
                    makeKey(VK_LEFT), kPlaybackShortcutContextShared)
                    .value() == PlaybackShortcutAction::SeekBackward,
                "VK_LEFT must seek backward");

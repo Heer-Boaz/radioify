@@ -439,6 +439,7 @@ void PictureInPictureWindow::handleInput(const InputEvent& ev,
     playbackCallbacks.onPlaybackContextShortcut =
         [&](PlaybackShortcutAction action) {
           switch (action) {
+            case PlaybackShortcutAction::TogglePictureInPicture:
             case PlaybackShortcutAction::DismissPictureInPicture:
               close();
               if (callbacks.onClose) callbacks.onClose();
