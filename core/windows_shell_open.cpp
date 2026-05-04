@@ -8,14 +8,33 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include "open_file_requests.h"
 #include "runtime_helpers.h"
 #include "shell_open_mode.h"
+#include "windows_handle.h"
 
 namespace {
 
 constexpr uint32_t kMaxShellOpenPayloadBytes = 64u * 1024u;
+
+class ShellOpenSingleInstanceLock {
+ public:
+  ShellOpenSingleInstanceLock() = default;
+  ~ShellOpenSingleInstanceLock() { reset(); }
+
+  ShellOpenSingleInstanceLock(const ShellOpenSingleInstanceLock&) = delete;
+  ShellOpenSingleInstanceLock& operator=(const ShellOpenSingleInstanceLock&) =
+      delete;
+
+  bool acquire();
+  void reset();
+
+ private:
+  UniqueWindowsHandle mutex_;
+  bool ownsMutex_ = false;
+};
 
 std::string trimAscii(std::string_view value) {
   size_t first = 0;
@@ -84,7 +103,34 @@ std::wstring shellOpenPipeName() {
   return L"\\\\.\\pipe\\" + shellOpenObjectSuffix();
 }
 
-bool writeShellOpenPayload(std::string_view payload, DWORD timeoutMs) {
+bool ShellOpenSingleInstanceLock::acquire() {
+  reset();
+
+  UniqueWindowsHandle mutex(
+      CreateMutexW(nullptr, FALSE, shellOpenMutexName().c_str()));
+  if (!mutex) {
+    return false;
+  }
+
+  const DWORD waitResult = WaitForSingleObject(mutex.get(), 0);
+  if (waitResult != WAIT_OBJECT_0 && waitResult != WAIT_ABANDONED) {
+    return false;
+  }
+
+  mutex_ = std::move(mutex);
+  ownsMutex_ = true;
+  return true;
+}
+
+void ShellOpenSingleInstanceLock::reset() {
+  if (ownsMutex_ && mutex_) {
+    ReleaseMutex(mutex_.get());
+    ownsMutex_ = false;
+  }
+  mutex_.reset();
+}
+
+bool writeShellOpenPayload(std::string_view payload, uint32_t timeoutMs) {
   if (payload.size() > kMaxShellOpenPayloadBytes) {
     return false;
   }
@@ -94,20 +140,21 @@ bool writeShellOpenPayload(std::string_view payload, DWORD timeoutMs) {
       GetTickCount64() + static_cast<ULONGLONG>(timeoutMs);
 
   for (;;) {
-    HANDLE pipe = CreateFileW(pipeName.c_str(), GENERIC_WRITE, 0, nullptr,
-                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (pipe != INVALID_HANDLE_VALUE) {
+    UniqueWindowsHandle pipe(CreateFileW(pipeName.c_str(), GENERIC_WRITE, 0,
+                                         nullptr, OPEN_EXISTING,
+                                         FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (pipe) {
       const uint32_t length = static_cast<uint32_t>(payload.size());
       DWORD written = 0;
-      bool ok = WriteFile(pipe, &length, sizeof(length), &written, nullptr) &&
+      bool ok = WriteFile(pipe.get(), &length, sizeof(length), &written,
+                          nullptr) &&
                 written == sizeof(length);
       if (ok && length > 0) {
         written = 0;
-        ok = WriteFile(pipe, payload.data(), length, &written, nullptr) &&
+        ok = WriteFile(pipe.get(), payload.data(), length, &written, nullptr) &&
              written == length;
       }
-      FlushFileBuffers(pipe);
-      CloseHandle(pipe);
+      FlushFileBuffers(pipe.get());
       return ok;
     }
 
@@ -126,20 +173,6 @@ bool writeShellOpenPayload(std::string_view payload, DWORD timeoutMs) {
       Sleep(waitMs);
     }
   }
-}
-
-bool readExact(HANDLE handle, void* data, DWORD size) {
-  auto* cursor = static_cast<char*>(data);
-  DWORD remaining = size;
-  while (remaining > 0) {
-    DWORD read = 0;
-    if (!ReadFile(handle, cursor, remaining, &read, nullptr) || read == 0) {
-      return false;
-    }
-    cursor += read;
-    remaining -= read;
-  }
-  return true;
 }
 
 std::filesystem::path shellOpenConfigPath() {
@@ -191,7 +224,7 @@ ShellOpenMode configuredWindowsShellOpenMode() {
 }
 
 bool forwardWindowsShellOpenFile(const std::filesystem::path& file,
-                                 DWORD timeoutMs) {
+                                 uint32_t timeoutMs) {
   if (file.empty()) {
     return false;
   }
@@ -199,77 +232,152 @@ bool forwardWindowsShellOpenFile(const std::filesystem::path& file,
 }
 
 struct WindowsShellOpenServer::Impl {
-  explicit Impl(OpenFileRequests& requests) : requests(requests) {}
+  explicit Impl(OpenFileRequests& requests) : requests(requests) { start(); }
 
   ~Impl() { stop(); }
 
-  bool start() {
-    if (running.load(std::memory_order_acquire)) {
-      return true;
+  bool isAcceptingHandoffs() const { return started; }
+
+ private:
+  void start() {
+    if (started) {
+      return;
     }
 
-    mutex = CreateMutexW(nullptr, FALSE, shellOpenMutexName().c_str());
-    if (!mutex) {
-      return false;
+    if (!singleInstanceLock.acquire()) {
+      return;
     }
 
-    const DWORD mutexWait = WaitForSingleObject(mutex, 0);
-    if (mutexWait != WAIT_OBJECT_0 && mutexWait != WAIT_ABANDONED) {
-      CloseHandle(mutex);
-      mutex = nullptr;
-      return false;
+    stopEvent =
+        UniqueWindowsHandle(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!stopEvent) {
+      singleInstanceLock.reset();
+      return;
     }
-    ownsMutex = true;
 
     stopRequested.store(false, std::memory_order_release);
     try {
       worker = std::thread([this]() { run(); });
     } catch (...) {
       stopRequested.store(true, std::memory_order_release);
-      releaseMutex();
-      return false;
-    }
-
-    running.store(true, std::memory_order_release);
-    return true;
-  }
-
-  void stop() {
-    if (!running.exchange(false, std::memory_order_acq_rel)) {
-      releaseMutex();
+      stopEvent.reset();
+      singleInstanceLock.reset();
       return;
     }
 
+    started = true;
+  }
+
+  void stop() {
+    if (!started) {
+      return;
+    }
+
+    started = false;
     stopRequested.store(true, std::memory_order_release);
-    writeShellOpenPayload({}, 500);
+    SetEvent(stopEvent.get());
     if (worker.joinable()) {
       worker.join();
     }
 
-    releaseMutex();
+    stopEvent.reset();
+    singleInstanceLock.reset();
   }
 
   void run() {
     const std::wstring pipeName = shellOpenPipeName();
     while (!stopRequested.load(std::memory_order_acquire)) {
-      HANDLE pipe = CreateNamedPipeW(
-          pipeName.c_str(), PIPE_ACCESS_INBOUND,
+      UniqueWindowsHandle pipe(CreateNamedPipeW(
+          pipeName.c_str(), PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
-          kMaxShellOpenPayloadBytes, kMaxShellOpenPayloadBytes, 0, nullptr);
-      if (pipe == INVALID_HANDLE_VALUE) {
-        Sleep(100);
+          kMaxShellOpenPayloadBytes, kMaxShellOpenPayloadBytes, 0, nullptr));
+      if (!pipe) {
+        waitBeforeRetry();
         continue;
       }
 
-      const BOOL connected = ConnectNamedPipe(pipe, nullptr)
-                                 ? TRUE
-                                 : (GetLastError() == ERROR_PIPE_CONNECTED);
-      if (connected) {
-        readRequest(pipe);
+      if (connectPipe(pipe.get())) {
+        readRequest(pipe.get());
+        DisconnectNamedPipe(pipe.get());
       }
-      DisconnectNamedPipe(pipe);
-      CloseHandle(pipe);
     }
+  }
+
+  void waitBeforeRetry() {
+    WaitForSingleObject(stopEvent.get(), 100);
+  }
+
+  bool waitForPipeIo(HANDLE pipe, OVERLAPPED& overlapped,
+                     DWORD& transferred) {
+    HANDLE handles[] = {overlapped.hEvent, stopEvent.get()};
+    const DWORD waitResult =
+        WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+    if (waitResult == WAIT_OBJECT_0) {
+      return GetOverlappedResult(pipe, &overlapped, &transferred, FALSE) !=
+             FALSE;
+    }
+    if (waitResult == WAIT_OBJECT_0 + 1) {
+      DWORD ignored = 0;
+      CancelIoEx(pipe, &overlapped);
+      GetOverlappedResult(pipe, &overlapped, &ignored, TRUE);
+      return false;
+    }
+    CancelIoEx(pipe, &overlapped);
+    return false;
+  }
+
+  bool connectPipe(HANDLE pipe) {
+    UniqueWindowsHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!event) {
+      return false;
+    }
+
+    OVERLAPPED overlapped{};
+    overlapped.hEvent = event.get();
+    bool connected = false;
+    if (ConnectNamedPipe(pipe, &overlapped)) {
+      connected = true;
+    } else {
+      const DWORD error = GetLastError();
+      if (error == ERROR_IO_PENDING) {
+        DWORD transferred = 0;
+        connected = waitForPipeIo(pipe, overlapped, transferred);
+      } else {
+        connected = error == ERROR_PIPE_CONNECTED;
+      }
+    }
+
+    return connected && !stopRequested.load(std::memory_order_acquire);
+  }
+
+  bool readExact(HANDLE pipe, void* data, DWORD size) {
+    UniqueWindowsHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!event) {
+      return false;
+    }
+
+    auto* cursor = static_cast<char*>(data);
+    DWORD remaining = size;
+    while (remaining > 0 && !stopRequested.load(std::memory_order_acquire)) {
+      ResetEvent(event.get());
+      OVERLAPPED overlapped{};
+      overlapped.hEvent = event.get();
+      DWORD transferred = 0;
+      bool ok = false;
+      if (ReadFile(pipe, cursor, remaining, nullptr, &overlapped)) {
+        ok = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE) !=
+             FALSE;
+      } else if (GetLastError() == ERROR_IO_PENDING) {
+        ok = waitForPipeIo(pipe, overlapped, transferred);
+      }
+
+      if (!ok || transferred == 0) {
+        return false;
+      }
+      cursor += transferred;
+      remaining -= transferred;
+    }
+    return remaining == 0;
   }
 
   void readRequest(HANDLE pipe) {
@@ -292,20 +400,9 @@ struct WindowsShellOpenServer::Impl {
     requests.post(std::move(file));
   }
 
-  void releaseMutex() {
-    if (ownsMutex && mutex) {
-      ReleaseMutex(mutex);
-      ownsMutex = false;
-    }
-    if (mutex) {
-      CloseHandle(mutex);
-      mutex = nullptr;
-    }
-  }
-
-  HANDLE mutex = nullptr;
-  bool ownsMutex = false;
-  std::atomic<bool> running{false};
+  ShellOpenSingleInstanceLock singleInstanceLock;
+  UniqueWindowsHandle stopEvent;
+  bool started = false;
   std::atomic<bool> stopRequested{false};
   std::thread worker;
   OpenFileRequests& requests;
@@ -316,10 +413,6 @@ WindowsShellOpenServer::WindowsShellOpenServer(OpenFileRequests& requests)
 
 WindowsShellOpenServer::~WindowsShellOpenServer() = default;
 
-bool WindowsShellOpenServer::start() {
-  return impl_->start();
-}
-
-void WindowsShellOpenServer::stop() {
-  impl_->stop();
+bool WindowsShellOpenServer::isAcceptingHandoffs() const {
+  return impl_->isAcceptingHandoffs();
 }

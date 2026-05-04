@@ -7,15 +7,13 @@
 #include <stdexcept>
 #include <utility>
 
+#include "windows_handle.h"
+
 struct OpenFileRequests::Impl {
   Impl() : wakeEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
     if (!wakeEvent) {
       throw std::runtime_error("Failed to create open-file request wake event");
     }
-  }
-
-  ~Impl() {
-    CloseHandle(wakeEvent);
   }
 
   void post(std::vector<std::filesystem::path> files) {
@@ -27,7 +25,7 @@ struct OpenFileRequests::Impl {
       pending.push_back(std::move(files));
       ready.store(true, std::memory_order_release);
     }
-    SetEvent(wakeEvent);
+    SetEvent(wakeEvent.get());
   }
 
   bool poll(std::vector<std::filesystem::path>& out) {
@@ -38,7 +36,7 @@ struct OpenFileRequests::Impl {
     std::lock_guard<std::mutex> lock(mutex);
     if (pending.empty()) {
       ready.store(false, std::memory_order_release);
-      ResetEvent(wakeEvent);
+      ResetEvent(wakeEvent.get());
       return false;
     }
 
@@ -46,12 +44,12 @@ struct OpenFileRequests::Impl {
     pending.pop_front();
     if (pending.empty()) {
       ready.store(false, std::memory_order_release);
-      ResetEvent(wakeEvent);
+      ResetEvent(wakeEvent.get());
     }
     return true;
   }
 
-  HANDLE wakeEvent = nullptr;
+  UniqueWindowsHandle wakeEvent;
   std::atomic<bool> ready{false};
   std::mutex mutex;
   std::deque<std::vector<std::filesystem::path>> pending;
@@ -78,6 +76,6 @@ bool OpenFileRequests::poll(std::vector<std::filesystem::path>& out) {
   return impl_->poll(out);
 }
 
-HANDLE OpenFileRequests::waitHandle() const {
-  return impl_->wakeEvent;
+NativeWaitHandle OpenFileRequests::nativeWaitHandle() const {
+  return NativeWaitHandle(impl_->wakeEvent.get());
 }

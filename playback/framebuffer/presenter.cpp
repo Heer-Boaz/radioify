@@ -23,7 +23,8 @@ constexpr auto kTextGridPresentationRefreshInterval =
 
 void waitForPresenterWake(HANDLE wakeEvent) {
   if (wakeEvent) {
-    waitForHandlesAndPumpThreadWindowMessages(1, &wakeEvent, INFINITE);
+    const NativeWaitHandle waitHandle(wakeEvent);
+    waitForHandlesAndPumpThreadWindowMessages(1, &waitHandle, INFINITE);
     return;
   }
   waitForHandlesAndPumpThreadWindowMessages(0, nullptr, 50);
@@ -31,13 +32,13 @@ void waitForPresenterWake(HANDLE wakeEvent) {
 
 void waitForPresenterActivity(HANDLE wakeEvent, HANDLE frameEvent,
                               int timeoutMs) {
-  HANDLE handles[2];
+  NativeWaitHandle handles[2];
   DWORD handleCount = 0;
   if (wakeEvent) {
-    handles[handleCount++] = wakeEvent;
+    handles[handleCount++] = NativeWaitHandle(wakeEvent);
   }
   if (frameEvent) {
-    handles[handleCount++] = frameEvent;
+    handles[handleCount++] = NativeWaitHandle(frameEvent);
   }
   if (handleCount == 0) {
     const DWORD waitMs = timeoutMs < 0

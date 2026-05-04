@@ -1,4 +1,4 @@
-#include "picture_in_picture_window.h"
+#include "audio_picture_in_picture_window.h"
 
 #include <algorithm>
 #include <chrono>
@@ -79,16 +79,9 @@ RECT cellRectToPixels(int x, int y, int width, int height, int cellWidth,
 
 }  // namespace
 
-bool PictureInPictureWindow::isOpen() const { return window_.IsOpen(); }
+bool AudioPictureInPictureWindow::isOpen() const { return window_.IsOpen(); }
 
-bool PictureInPictureWindow::open() { return open(nullptr); }
-
-bool PictureInPictureWindow::openWithPlacement(
-    const WindowPlacementState& placement) {
-  return open(&placement);
-}
-
-bool PictureInPictureWindow::open(const WindowPlacementState* initialPlacement) {
+bool AudioPictureInPictureWindow::open() {
   lastError_.clear();
   if (window_.IsOpen()) return true;
   if (!window_.Open(kDefaultWindowWidth, kDefaultWindowHeight,
@@ -99,16 +92,13 @@ bool PictureInPictureWindow::open(const WindowPlacementState* initialPlacement) 
   if (!window_.EnableFileDrop()) {
     lastError_ =
         "Windows refused the picture-in-picture drag/drop registration.";
-    window_.Close();
+    close();
     return false;
   }
   window_.SetCaptureAllMouseInput(true);
   window_.SetVsync(true);
   window_.SetTextGridMinimumSize(kMinCols, kMinRows);
   WindowPlacementState placement;
-  if (initialPlacement) {
-    placement = *initialPlacement;
-  }
   placement.fullscreenActive = false;
   placement.pictureInPictureActive = true;
   placement.pictureInPictureRestoreFullscreen = false;
@@ -120,13 +110,14 @@ bool PictureInPictureWindow::open(const WindowPlacementState* initialPlacement) 
   return true;
 }
 
-void PictureInPictureWindow::close() {
-  if (window_.IsOpen()) {
-    window_.Close();
-  }
+void AudioPictureInPictureWindow::close() {
+  window_.Close();
+  hoverIndex_ = -1;
+  controls_.clear();
+  layout_ = playback_overlay::OverlayCellLayout{};
 }
 
-bool PictureInPictureWindow::toggle() {
+bool AudioPictureInPictureWindow::toggle() {
   if (window_.IsOpen()) {
     close();
     return true;
@@ -134,17 +125,17 @@ bool PictureInPictureWindow::toggle() {
   return open();
 }
 
-bool PictureInPictureWindow::ensureOpen() {
+bool AudioPictureInPictureWindow::ensureOpen() {
   return window_.IsOpen() || open();
 }
 
-WindowPlacementState PictureInPictureWindow::capturePlacement() const {
+WindowPlacementState AudioPictureInPictureWindow::capturePlacement() const {
   WindowPlacementState placement;
   playback_session_window::capturePlacement(window_, placement, false);
   return placement;
 }
 
-void PictureInPictureWindow::refreshGridSize() {
+void AudioPictureInPictureWindow::refreshGridSize() {
   window_.GetTextGridCellSize(cellWidth_, cellHeight_);
   cellWidth_ = std::max(1, cellWidth_);
   cellHeight_ = std::max(1, cellHeight_);
@@ -153,8 +144,8 @@ void PictureInPictureWindow::refreshGridSize() {
   screen_.setVirtualSize(cols_, rows_);
 }
 
-void PictureInPictureWindow::refreshArtwork(const Context& context, int width,
-                                     int height) {
+void AudioPictureInPictureWindow::refreshArtwork(const Context& context,
+                                                 int width, int height) {
   const bool cacheHit =
       artworkValid_ && context.nowPlayingPath == artworkPath_ &&
       context.trackIndex == artworkTrackIndex_ && width == artworkWidth_ &&
@@ -187,8 +178,8 @@ void PictureInPictureWindow::refreshArtwork(const Context& context, int width,
   }
 }
 
-void PictureInPictureWindow::drawArtworkBackground(const Styles& styles, int width,
-                                            int height) {
+void AudioPictureInPictureWindow::drawArtworkBackground(const Styles& styles,
+                                                        int width, int height) {
   if (!artworkValid_ || artwork_.width <= 0 || artwork_.height <= 0) {
     screen_.clear(styles.normal);
     return;
@@ -218,7 +209,7 @@ void PictureInPictureWindow::drawArtworkBackground(const Styles& styles, int wid
   }
 }
 
-bool PictureInPictureWindow::pollEvents(const Callbacks& callbacks) {
+bool AudioPictureInPictureWindow::pollEvents(const Callbacks& callbacks) {
   if (!window_.IsOpen()) return false;
   bool handled = window_.PollEvents();
   if (window_.ConsumeCloseRequested()) {
@@ -235,7 +226,8 @@ bool PictureInPictureWindow::pollEvents(const Callbacks& callbacks) {
   return handled;
 }
 
-bool PictureInPictureWindow::render(const Styles& styles, const Context& context) {
+bool AudioPictureInPictureWindow::render(const Styles& styles,
+                                         const Context& context) {
   if (!ensureOpen()) return false;
   refreshGridSize();
   refreshArtwork(context, cols_, rows_);
@@ -374,7 +366,7 @@ bool PictureInPictureWindow::render(const Styles& styles, const Context& context
   return true;
 }
 
-void PictureInPictureWindow::updateInteractiveRects() {
+void AudioPictureInPictureWindow::updateInteractiveRects() {
   std::vector<RECT> rects;
   rects.reserve(layout_.controls.size() + 1);
 
@@ -397,14 +389,14 @@ void PictureInPictureWindow::updateInteractiveRects() {
   window_.SetPictureInPictureInteractiveRects(rects);
 }
 
-void PictureInPictureWindow::holdSeekDisplay(double targetSec) {
+void AudioPictureInPictureWindow::holdSeekDisplay(double targetSec) {
   if (!(targetSec >= 0.0) || !std::isfinite(targetSec)) return;
   seekDisplaySec_ = targetSec;
   seekHoldActive_ = true;
   seekHoldStart_ = std::chrono::steady_clock::now();
 }
 
-void PictureInPictureWindow::handleInput(const InputEvent& ev,
+void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
                                   const Callbacks& callbacks) {
   if (ev.type == InputEvent::Type::Resize) {
     refreshGridSize();
@@ -519,8 +511,8 @@ void PictureInPictureWindow::handleInput(const InputEvent& ev,
   }
 }
 
-bool PictureInPictureWindow::clickControl(playback_overlay::OverlayControlId control,
-                    const Callbacks& callbacks) {
+bool AudioPictureInPictureWindow::clickControl(
+    playback_overlay::OverlayControlId control, const Callbacks& callbacks) {
   auto invoke = [](const std::function<void()>& action) {
     if (!action) return false;
     action();
@@ -541,6 +533,6 @@ bool PictureInPictureWindow::clickControl(playback_overlay::OverlayControlId con
   return playback_overlay::dispatchOverlayControl(control, actions);
 }
 
-int PictureInPictureWindow::controlAt(int x, int y) const {
+int AudioPictureInPictureWindow::controlAt(int x, int y) const {
   return playback_overlay::overlayCellControlAt(layout_, x, y);
 }

@@ -8,8 +8,10 @@
 #endif
 #include <windows.h>
 
+#include "native_wait_handle.h"
+
 bool pumpPendingThreadWindowMessages();
 
 DWORD waitForHandlesAndPumpThreadWindowMessages(DWORD handleCount,
-                                                const HANDLE* handles,
+                                                const NativeWaitHandle* handles,
                                                 DWORD timeoutMs);

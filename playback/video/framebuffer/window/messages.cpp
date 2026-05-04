@@ -114,6 +114,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == WM_DESTROY) {
+        pThis->m_input.endWindowThread();
         pThis->m_hWnd = nullptr;
         pThis->m_windowThreadId = 0;
         return 0;

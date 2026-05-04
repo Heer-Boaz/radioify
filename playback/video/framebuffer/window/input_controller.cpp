@@ -6,7 +6,9 @@
 
 WindowInputController::WindowInputController() = default;
 
-WindowInputController::~WindowInputController() = default;
+WindowInputController::~WindowInputController() {
+  endWindowThread();
+}
 
 void WindowInputController::clear() {
   events_.clear();
@@ -21,7 +23,9 @@ bool WindowInputController::poll(InputEvent& ev) {
 }
 
 bool WindowInputController::beginWindowThread() {
-  endWindowThread();
+  if (fileDropApartment_ || fileDropTarget_) {
+    return false;
+  }
   fileDropApartment_.emplace();
   if (!fileDropApartment_->initialized()) {
     fileDropApartment_.reset();
@@ -37,8 +41,7 @@ void WindowInputController::endWindowThread() {
 }
 
 bool WindowInputController::enableFileDrop(HWND hwnd) {
-  disableFileDrop();
-  if (!hwnd || !fileDropApartment_) {
+  if (!hwnd || !fileDropApartment_ || fileDropTarget_) {
     return false;
   }
 

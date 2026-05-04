@@ -1571,7 +1571,12 @@ void VideoWindow::Cleanup() {
 bool VideoWindow::Open(int width, int height, const std::string& title,
                        bool startFullscreen) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-    m_input.beginWindowThread();
+    if (m_hWnd) {
+        return false;
+    }
+    if (!m_input.beginWindowThread()) {
+        return false;
+    }
     m_closeRequested.store(false, std::memory_order_relaxed);
     if (m_closeRequestedEvent) {
         ResetEvent(m_closeRequestedEvent);
@@ -1610,10 +1615,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     m_baseWindowTitle = title;
 
     if (!CreateSwapChain(width, height)) {
-        ::DestroyWindow(m_hWnd);
-        m_hWnd = nullptr;
-        m_windowThreadId = 0;
-        m_input.endWindowThread();
+        Close();
         return false;
     }
 
@@ -1627,7 +1629,6 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     if (!device) {
         std::fprintf(stderr, "VideoWindow: no device in Open()\n");
         Close();
-        if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; }
         return false;
     }
 
@@ -1640,15 +1641,15 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     }
 
     HRESULT hr = device->CreateVertexShader(kWindowVs, kWindowVs_Size, NULL, &m_vertexShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateVertexShader failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateVertexShader failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
     hr = device->CreatePixelShader(kWindowPs, kWindowPs_Size, NULL, &m_pixelShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(PS) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(PS) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
     hr = device->CreatePixelShader(kWindowPsUi, kWindowPsUi_Size, NULL, &m_uiShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
     hr = device->CreatePixelShader(kWindowPsGpuTextGrid,
                                    kWindowPsGpuTextGrid_Size, NULL,
                                    &m_gpuTextGridShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(GPU text grid) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(GPU text grid) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
 
     D3D11_BUFFER_DESC cbDesc = {};
     cbDesc.ByteWidth = sizeof(ShaderConstants);
@@ -1656,7 +1657,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     hr = device->CreateBuffer(&cbDesc, NULL, &m_constantBuffer);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBuffer(constant) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBuffer(constant) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
 
     D3D11_SAMPLER_DESC sampDesc = {};
     sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1667,7 +1668,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     sampDesc.MinLOD = 0;
     sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
     hr = device->CreateSamplerState(&sampDesc, &m_sampler);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateSamplerState failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateSamplerState failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
 
     D3D11_BLEND_DESC blendDesc = {};
     blendDesc.RenderTarget[0].BlendEnable = TRUE;
@@ -1679,7 +1680,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
     blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     hr = device->CreateBlendState(&blendDesc, &m_uiBlendState);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBlendState(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); if (m_hWnd) { ::DestroyWindow(m_hWnd); m_hWnd = nullptr; } return false; }
+    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBlendState(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
 
     ::ShowWindow(m_hWnd, SW_SHOW);
     m_width = width;

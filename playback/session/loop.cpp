@@ -661,12 +661,13 @@ struct PlaybackLoopRunner::Impl {
     if (!refresh.useWindowPresenter &&
         core.playbackState() == PlaybackSessionState::Active) {
       output.waitForActivity(
-          input, timeoutMs, core.videoFrameWaitHandle(),
-          openFileRequests.waitHandle());
+          input, timeoutMs, NativeWaitHandle(core.videoFrameWaitHandle()),
+          openFileRequests.nativeWaitHandle());
       return;
     }
 
-    output.waitForActivity(input, timeoutMs, openFileRequests.waitHandle());
+    output.waitForActivity(input, timeoutMs,
+                           openFileRequests.nativeWaitHandle());
   }
 
   RefreshState refreshState() {

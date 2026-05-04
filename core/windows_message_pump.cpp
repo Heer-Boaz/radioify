@@ -15,9 +15,17 @@ bool pumpPendingThreadWindowMessages() {
   return handledMessages;
 }
 
-DWORD waitForHandlesAndPumpThreadWindowMessages(DWORD handleCount,
-                                                const HANDLE* handles,
-                                                DWORD timeoutMs) {
+DWORD waitForHandlesAndPumpThreadWindowMessages(
+    DWORD handleCount, const NativeWaitHandle* handles, DWORD timeoutMs) {
+  HANDLE waitHandles[MAXIMUM_WAIT_OBJECTS];
+  DWORD waitHandleCount = 0;
+  for (DWORD i = 0; i < handleCount && waitHandleCount < MAXIMUM_WAIT_OBJECTS;
+       ++i) {
+    if (handles[i]) {
+      waitHandles[waitHandleCount++] = static_cast<HANDLE>(handles[i].get());
+    }
+  }
+
   const bool infiniteTimeout = timeoutMs == INFINITE;
   const ULONGLONG deadlineTick =
       infiniteTimeout ? 0 : (GetTickCount64() + static_cast<ULONGLONG>(timeoutMs));
@@ -33,9 +41,10 @@ DWORD waitForHandlesAndPumpThreadWindowMessages(DWORD handleCount,
     }
 
     const DWORD result =
-        MsgWaitForMultipleObjectsEx(handleCount, handleCount > 0 ? handles : nullptr,
-                                    waitMs, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-    if (result == WAIT_OBJECT_0 + handleCount) {
+        MsgWaitForMultipleObjectsEx(
+            waitHandleCount, waitHandleCount > 0 ? waitHandles : nullptr,
+            waitMs, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    if (result == WAIT_OBJECT_0 + waitHandleCount) {
       pumpPendingThreadWindowMessages();
       continue;
     }

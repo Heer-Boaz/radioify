@@ -31,7 +31,7 @@
 #include <vector>
 
 #include "app_common.h"
-#include "picture_in_picture_window.h"
+#include "audio_picture_in_picture_window.h"
 #include "asciiart.h"
 #include "audioplayback.h"
 #include "browser_model.h"
@@ -54,7 +54,7 @@
 #include "playback/input/shortcuts.h"
 #include "playback/overlay/overlay.h"
 #include "playback/system_media_transport/controls.h"
-#include "playback_drop_route.h"
+#include "playback_route.h"
 #include "playback_transport_navigation.h"
 #include "tracklist.h"
 #include "track_browser_state.h"
@@ -106,15 +106,15 @@ inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
 static DWORD waitForBrowserWake(ConsoleInput& input,
                                 const OpenFileRequests& openFileRequests,
                                 HANDLE asyncWakeHandle, DWORD timeoutMs) {
-  std::vector<HANDLE> handles;
+  std::vector<NativeWaitHandle> handles;
   if (HANDLE inputHandle = input.waitHandle()) {
-    handles.push_back(inputHandle);
+    handles.push_back(NativeWaitHandle(inputHandle));
   }
-  if (HANDLE openFilesHandle = openFileRequests.waitHandle()) {
+  if (NativeWaitHandle openFilesHandle = openFileRequests.nativeWaitHandle()) {
     handles.push_back(openFilesHandle);
   }
   if (asyncWakeHandle) {
-    handles.push_back(asyncWakeHandle);
+    handles.push_back(NativeWaitHandle(asyncWakeHandle));
   }
   return waitForHandlesAndPumpThreadWindowMessages(
       static_cast<DWORD>(handles.size()),
@@ -706,12 +706,12 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
         }
       }
     }
-    HANDLE handles[2];
+    NativeWaitHandle handles[2];
     DWORD handleCount = 0;
     if (HANDLE inputHandle = input.waitHandle()) {
-      handles[handleCount++] = inputHandle;
+      handles[handleCount++] = NativeWaitHandle(inputHandle);
     }
-    if (HANDLE openFilesHandle = openFileRequests.waitHandle()) {
+    if (NativeWaitHandle openFilesHandle = openFileRequests.nativeWaitHandle()) {
       handles[handleCount++] = openFilesHandle;
     }
     waitForHandlesAndPumpThreadWindowMessages(
@@ -759,9 +759,11 @@ int runTui(Options o) {
 
   ConsoleInput input;
   OpenFileRequests openFileRequests;
-  WindowsShellOpenServer shellOpenServer(openFileRequests);
+  std::optional<WindowsShellOpenServer> shellOpenServer;
   if (acceptShellOpenHandoffs) {
-    const bool acceptingShellOpenHandoffs = shellOpenServer.start();
+    shellOpenServer.emplace(openFileRequests);
+    const bool acceptingShellOpenHandoffs =
+        shellOpenServer->isAcceptingHandoffs();
     if (!acceptingShellOpenHandoffs && forwardInputToExistingInstance &&
         !o.input.empty()) {
       if (forwardWindowsShellOpenFile(pathFromUtf8String(o.input))) {
@@ -982,7 +984,7 @@ int runTui(Options o) {
   bool seekHoldActive = false;
   auto seekHoldStart = std::chrono::steady_clock::now();
   std::vector<ScreenCell> windowCells;
-  PictureInPictureWindow pictureInPicture;
+  AudioPictureInPictureWindow audioPictureInPicture;
   ConsoleInputPump consoleInputPump;
   UiDirtyFlags dirtyFlags = UiDirtyFlags::Frame | UiDirtyFlags::Layout;
   bool layoutDirty = true;
@@ -1050,25 +1052,27 @@ int runTui(Options o) {
     }
     return label;
   };
-  auto showPictureInPictureOpenError = [&]() {
-    const std::string detail = pictureInPicture.lastError().empty()
+  auto showAudioPictureInPictureOpenError = [&]() {
+    const std::string detail = audioPictureInPicture.lastError().empty()
                                    ? "The picture-in-picture window did not open."
-                                   : pictureInPicture.lastError();
+                                   : audioPictureInPicture.lastError();
     playback_dialog::showInfoDialog(
         input, screen, kStyleNormal, kStyleAccent, kStyleDim,
         "Picture-in-Picture Error", "Radioify could not open picture-in-picture.",
         detail, "Enter/Space/Esc: close");
   };
-  auto openPictureInPictureWithPlacement =
-      [&](const WindowPlacementState* placement) {
-    const bool opened =
-        placement ? pictureInPicture.openWithPlacement(*placement)
-                  : pictureInPicture.open();
-    if (!opened) {
-      showPictureInPictureOpenError();
+  auto applyAudioPictureInPicturePlan =
+      [&](playback_route::AudioPictureInPicturePlan plan) {
+    switch (plan) {
+      case playback_route::AudioPictureInPicturePlan::Keep:
+        break;
+      case playback_route::AudioPictureInPicturePlan::Close:
+        if (audioPictureInPicture.isOpen()) {
+          audioPictureInPicture.close();
+          markDirty(UiDirtyFlags::Async);
+        }
+        break;
     }
-    markDirty(UiDirtyFlags::Async);
-    return opened;
   };
 
   playback_transport_navigation::Navigator::Callbacks transportCallbacks;
@@ -1104,38 +1108,24 @@ int runTui(Options o) {
     return std::nullopt;
   };
 
-  std::function<bool(const PlaybackTarget&,
-                     const PlaybackSessionContinuationState*)>
-      playPlaybackTargetWithState;
-  std::function<bool(const PlaybackTarget&)> playPlaybackTarget;
-  playPlaybackTargetWithState =
-      [&](const PlaybackTarget& initialTarget,
-          const PlaybackSessionContinuationState* initialContinuation) {
-    PlaybackTarget target = initialTarget;
+  auto playPlaybackRoute = [&](const playback_route::Route& initialRoute) {
+    playback_route::Route route = initialRoute;
     PlaybackSessionContinuationState playbackContinuationState;
-    if (initialContinuation) {
-      playbackContinuationState = *initialContinuation;
-    }
-    bool openPictureInPictureAfterTarget = false;
-    auto finalizeAudioTarget = [&](bool started) {
-      if (started && openPictureInPictureAfterTarget) {
-        openPictureInPictureWithPlacement(
-            &playbackContinuationState.windowPlacement);
+    while (!route.target.file.empty()) {
+      if (route.videoContinuation) {
+        playbackContinuationState = *route.videoContinuation;
       }
-      openPictureInPictureAfterTarget = false;
-      return started;
-    };
-    while (!target.file.empty()) {
+      applyAudioPictureInPicturePlan(route.audioPictureInPicture);
+      const PlaybackTarget& target = route.target;
       if (!transportNavigator.syncBrowserToPlaybackTarget(target)) {
         return false;
       }
       if (target.trackIndex >= 0) {
-        return finalizeAudioTarget(
-            tryStartAudioFile(target.file, target.trackIndex));
+        return tryStartAudioFile(target.file, target.trackIndex);
       }
       if (isSupportedImageExt(target.file)) {
         bool quitAppRequested = false;
-        std::optional<PlaybackTarget> pendingOpenTarget;
+        std::optional<playback_route::Route> pendingOpenRoute;
         std::optional<std::filesystem::path> pendingOpenDirectory;
         auto requestImageViewerOpenFiles =
             [&](const std::vector<std::filesystem::path>& files) {
@@ -1143,9 +1133,9 @@ int runTui(Options o) {
                 pendingOpenDirectory = *dir;
                 return true;
               }
-              if (auto route = playback_drop_route::resolve(
-                      files, playback_drop_route::DropSurface::Browser)) {
-                pendingOpenTarget = route->target;
+              if (auto resolvedRoute = playback_route::resolveDroppedTarget(
+                      files, playback_route::Surface::Browser)) {
+                pendingOpenRoute = *resolvedRoute;
                 return true;
               }
               return false;
@@ -1162,8 +1152,8 @@ int runTui(Options o) {
           openBrowserDirectory(*pendingOpenDirectory);
           return true;
         }
-        if (pendingOpenTarget) {
-          target = *pendingOpenTarget;
+        if (pendingOpenRoute) {
+          route = *pendingOpenRoute;
           continue;
         }
         markDirty();
@@ -1171,17 +1161,19 @@ int runTui(Options o) {
       }
       if (isVideoExt(target.file)) {
         bool quitAppRequested = false;
-        std::optional<PlaybackTarget> pendingTransportTarget;
+        std::optional<playback_route::Route> pendingTransportRoute;
         std::optional<std::filesystem::path> pendingOpenDirectory;
-        bool openPictureInPictureForPendingTarget = false;
         auto requestTransportCommand = [&](PlaybackTransportCommand command) {
           const int direction =
               (command == PlaybackTransportCommand::Previous) ? -1 : 1;
-          pendingTransportTarget =
+          std::optional<PlaybackTarget> adjacentTarget =
               transportNavigator.resolveAdjacentPlaybackTarget(target,
-                                                              direction);
-          openPictureInPictureForPendingTarget = false;
-          return pendingTransportTarget.has_value();
+                                                               direction);
+          if (adjacentTarget) {
+            pendingTransportRoute = playback_route::resolveTarget(
+                *adjacentTarget, playback_route::Surface::Browser);
+          }
+          return pendingTransportRoute.has_value();
         };
         auto requestOpenFiles =
             [&](const std::vector<std::filesystem::path>& files) {
@@ -1189,12 +1181,10 @@ int runTui(Options o) {
                 pendingOpenDirectory = *dir;
                 return true;
               }
-              if (auto route = playback_drop_route::resolve(
+              if (auto resolvedRoute = playback_route::resolveDroppedTarget(
                       files,
-                      playback_drop_route::DropSurface::VideoPresentation)) {
-                pendingTransportTarget = route->target;
-                openPictureInPictureForPendingTarget =
-                    route->openPictureInPicture;
+                      playback_route::Surface::VideoPresentation)) {
+                pendingTransportRoute = *resolvedRoute;
                 return true;
               }
               return false;
@@ -1214,24 +1204,24 @@ int runTui(Options o) {
           openBrowserDirectory(*pendingOpenDirectory);
           return true;
         }
-        if (pendingTransportTarget) {
-          target = *pendingTransportTarget;
-          openPictureInPictureAfterTarget =
-              openPictureInPictureForPendingTarget;
+        if (pendingTransportRoute) {
+          route = *pendingTransportRoute;
           continue;
         }
         if (handled) {
           markDirty();
           return true;
         }
-        return finalizeAudioTarget(tryStartAudioFile(target.file));
+        return tryStartAudioFile(target.file);
       }
-      return finalizeAudioTarget(tryStartAudioFile(target.file));
+      return tryStartAudioFile(target.file);
     }
     return false;
   };
-  playPlaybackTarget = [&](const PlaybackTarget& initialTarget) {
-    return playPlaybackTargetWithState(initialTarget, nullptr);
+  auto playPlaybackTarget = [&](const PlaybackTarget& initialTarget) {
+    return playPlaybackRoute(
+        playback_route::resolveTarget(initialTarget,
+                                      playback_route::Surface::Browser));
   };
 
   if (hasPendingImage) {
@@ -1350,9 +1340,9 @@ int runTui(Options o) {
     actionOverlayState.paused = audioIsPaused();
     actionOverlayState.audioFinished = audioIsFinished();
     actionOverlayState.pictureInPictureAvailable =
-      pictureInPicture.isOpen() || actionOverlayState.audioOk ||
+      audioPictureInPicture.isOpen() || actionOverlayState.audioOk ||
       !nowPlaying.empty();
-    actionOverlayState.pictureInPictureActive = pictureInPicture.isOpen();
+    actionOverlayState.pictureInPictureActive = audioPictureInPicture.isOpen();
     playback_overlay::OverlayControlSpecOptions controlOptions;
     controlOptions.includeAudioTrack = false;
     controlOptions.includeSubtitles = false;
@@ -1550,9 +1540,9 @@ int runTui(Options o) {
           openBrowserDirectory(*dir);
           return true;
         }
-        if (auto route = playback_drop_route::resolve(
-                files, playback_drop_route::DropSurface::Browser)) {
-          return playPlaybackTarget(route->target);
+        if (auto route = playback_route::resolveDroppedTarget(
+                files, playback_route::Surface::Browser)) {
+          return playPlaybackRoute(*route);
         }
         return false;
       };
@@ -1662,15 +1652,15 @@ int runTui(Options o) {
     markDirty();
   };
   callbacks.onToggleWindow = [&]() {
-    if (!pictureInPicture.isOpen() && audioGetNowPlaying().empty() &&
+    if (!audioPictureInPicture.isOpen() && audioGetNowPlaying().empty() &&
         !audioIsReady()) {
       return;
     }
-    if (pictureInPicture.toggle()) {
+    if (audioPictureInPicture.toggle()) {
       markDirty(UiDirtyFlags::Async);
       return;
     }
-    showPictureInPictureOpenError();
+    showAudioPictureInPictureOpenError();
     markDirty();
   };
   callbacks.onPlaybackContextShortcut = [&](PlaybackShortcutAction action) {
@@ -1683,7 +1673,7 @@ int runTui(Options o) {
     }
   };
 
-  PictureInPictureWindow::Styles pictureInPictureStyles{kStyleNormal,
+  AudioPictureInPictureWindow::Styles audioPictureInPictureStyles{kStyleNormal,
                                           kStyleAccent,
                                           kStyleDim,
                                           kStyleAlert,
@@ -1692,70 +1682,65 @@ int runTui(Options o) {
                                           kStyleProgressFrame,
                                           kProgressStart,
                                           kProgressEnd};
-  auto buildPictureInPictureContext = [&]() {
-    PictureInPictureWindow::Context context;
+  auto buildAudioPictureInPictureContext = [&]() {
+    AudioPictureInPictureWindow::Context context;
     context.nowPlayingLabel = buildAudioNowPlayingLabel();
     context.nowPlayingPath = audioGetNowPlaying();
     context.trackIndex = audioGetTrackIndex();
     return context;
   };
-  auto renderPictureInPicture = [&]() {
-    if (!pictureInPicture.isOpen()) {
+  auto renderAudioPictureInPicture = [&]() {
+    if (!audioPictureInPicture.isOpen()) {
       return;
     }
-    pictureInPicture.render(pictureInPictureStyles, buildPictureInPictureContext());
+    audioPictureInPicture.render(audioPictureInPictureStyles,
+                                 buildAudioPictureInPictureContext());
   };
-  PictureInPictureWindow::Callbacks pictureInPictureCallbacks;
-  pictureInPictureCallbacks.onQuit = [&]() {
+  AudioPictureInPictureWindow::Callbacks audioPictureInPictureCallbacks;
+  audioPictureInPictureCallbacks.onQuit = [&]() {
     if (callbacks.onQuit) callbacks.onQuit();
   };
-  pictureInPictureCallbacks.onTogglePause = [&]() {
+  audioPictureInPictureCallbacks.onTogglePause = [&]() {
     if (callbacks.onTogglePause) callbacks.onTogglePause();
   };
-  pictureInPictureCallbacks.onStopPlayback = [&]() {
+  audioPictureInPictureCallbacks.onStopPlayback = [&]() {
     if (callbacks.onStopPlayback) callbacks.onStopPlayback();
   };
-  pictureInPictureCallbacks.onPlayPrevious = [&]() {
+  audioPictureInPictureCallbacks.onPlayPrevious = [&]() {
     if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
   };
-  pictureInPictureCallbacks.onPlayNext = [&]() {
+  audioPictureInPictureCallbacks.onPlayNext = [&]() {
     if (callbacks.onPlayNext) callbacks.onPlayNext();
   };
-  pictureInPictureCallbacks.onToggleRadio = [&]() {
+  audioPictureInPictureCallbacks.onToggleRadio = [&]() {
     if (callbacks.onToggleRadio) callbacks.onToggleRadio();
   };
-  pictureInPictureCallbacks.onToggle50Hz = [&]() {
+  audioPictureInPictureCallbacks.onToggle50Hz = [&]() {
     if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
   };
-  pictureInPictureCallbacks.onSeekBy = [&](int direction) {
+  audioPictureInPictureCallbacks.onSeekBy = [&](int direction) {
     if (callbacks.onSeekBy) callbacks.onSeekBy(direction);
   };
-  pictureInPictureCallbacks.onSeekToRatio = [&](double ratio) {
+  audioPictureInPictureCallbacks.onSeekToRatio = [&](double ratio) {
     if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
   };
-  pictureInPictureCallbacks.onAdjustVolume = [&](float delta) {
+  audioPictureInPictureCallbacks.onAdjustVolume = [&](float delta) {
     if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(delta);
   };
-  pictureInPictureCallbacks.onPlayFiles =
+  audioPictureInPictureCallbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
-    WindowPlacementState sourcePlacement = pictureInPicture.capturePlacement();
-    auto route = playback_drop_route::resolve(
-        files, playback_drop_route::DropSurface::PictureInPicture,
+    WindowPlacementState sourcePlacement =
+        audioPictureInPicture.capturePlacement();
+    auto route = playback_route::resolveDroppedTarget(
+        files, playback_route::Surface::AudioPictureInPicture,
         &sourcePlacement, videoConfig.enableAscii);
     if (!route) {
       return false;
     }
-    if (route->closePictureInPicture) {
-      pictureInPicture.close();
-      markDirty(UiDirtyFlags::Async);
-    }
-    if (route->videoContinuation) {
-      return playPlaybackTargetWithState(route->target,
-                                         &*route->videoContinuation);
-    }
-    return playPlaybackTarget(route->target);
+    return playPlaybackRoute(*route);
   };
-  pictureInPictureCallbacks.onClose = [&]() { markDirty(UiDirtyFlags::Async); };
+  audioPictureInPictureCallbacks.onClose =
+      [&]() { markDirty(UiDirtyFlags::Async); };
 
   auto handleSystemPlaybackCommand = [&](PlaybackControlCommand command) {
     switch (command) {
@@ -1833,7 +1818,7 @@ int runTui(Options o) {
                       audioTogglePause();
                       markDirty();
                     }});
-    if (pictureInPicture.isOpen() || !audioGetNowPlaying().empty() ||
+    if (audioPictureInPicture.isOpen() || !audioGetNowPlaying().empty() ||
         audioIsReady()) {
       // Toggle the video/window mode (framebuffer) via Ctrl+W.
       cmds.push_back({"Window mode (framebuffer)", "Ctrl+W", true, [&]() {
@@ -2232,8 +2217,8 @@ int runTui(Options o) {
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
     }
-    if (pictureInPicture.isOpen() &&
-        pictureInPicture.pollEvents(pictureInPictureCallbacks)) {
+    if (audioPictureInPicture.isOpen() &&
+        audioPictureInPicture.pollEvents(audioPictureInPictureCallbacks)) {
       markDirty(UiDirtyFlags::Async);
     }
 
@@ -2537,7 +2522,7 @@ int runTui(Options o) {
     };
 
     auto finalizeRenderedExit = [&]() {
-      pictureInPicture.close();
+      audioPictureInPicture.close();
       if (windowTuiEnabled && tuiWindow.IsOpen()) {
         tuiWindow.Close();
       }
@@ -2633,7 +2618,7 @@ int runTui(Options o) {
           (audioIsReady() || !audioGetNowPlaying().empty() || seekHoldActive)) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
-      if (pictureInPicture.isOpen()) {
+      if (audioPictureInPicture.isOpen()) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
       if (isBackgroundTaskRunning()) {
@@ -3201,7 +3186,7 @@ int runTui(Options o) {
           tuiWindow.PresentTextGrid(windowCells, gridW, gridH, true);
         }
       }
-      renderPictureInPicture();
+      renderAudioPictureInPicture();
       lastDraw = now;
       dirty = false;
       dirtyFlags = UiDirtyFlags::None;
@@ -3211,7 +3196,7 @@ int runTui(Options o) {
   // Clear screen before exiting
   screen.clear(kStyleNormal);
   screen.draw();
-  pictureInPicture.close();
+  audioPictureInPicture.close();
   if (windowTuiEnabled && tuiWindow.IsOpen()) {
     tuiWindow.Close();
   }

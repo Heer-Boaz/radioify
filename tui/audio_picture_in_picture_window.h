@@ -14,7 +14,7 @@
 #include "playback/session/state.h"
 #include "playback/video/framebuffer/window/window.h"
 
-class PictureInPictureWindow {
+class AudioPictureInPictureWindow {
  public:
   struct Styles {
     Style normal;
@@ -52,7 +52,6 @@ class PictureInPictureWindow {
   bool isOpen() const;
   const std::string& lastError() const { return lastError_; }
   bool open();
-  bool openWithPlacement(const WindowPlacementState& placement);
   void close();
   bool toggle();
   bool pollEvents(const Callbacks& callbacks);
@@ -60,7 +59,6 @@ class PictureInPictureWindow {
   WindowPlacementState capturePlacement() const;
 
  private:
-  bool open(const WindowPlacementState* initialPlacement);
   bool ensureOpen();
   void refreshGridSize();
   void refreshArtwork(const Context& context, int width, int height);

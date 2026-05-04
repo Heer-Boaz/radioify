@@ -200,8 +200,7 @@ DropTargetRegistration::~DropTargetRegistration() {
 }
 
 bool DropTargetRegistration::registerWindow(HWND hwnd, DropEventSink sink) {
-  revoke();
-  if (!hwnd || !sink) {
+  if (hwnd_ || target_ || !hwnd || !sink) {
     return false;
   }
 

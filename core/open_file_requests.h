@@ -4,13 +4,7 @@
 #include <memory>
 #include <vector>
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
+#include "native_wait_handle.h"
 
 class OpenFileRequests {
  public:
@@ -23,7 +17,7 @@ class OpenFileRequests {
   void post(std::filesystem::path file);
   void post(std::vector<std::filesystem::path> files);
   bool poll(std::vector<std::filesystem::path>& out);
-  HANDLE waitHandle() const;
+  NativeWaitHandle nativeWaitHandle() const;
 
  private:
   struct Impl;
