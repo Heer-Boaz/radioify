@@ -19,6 +19,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <memory>
@@ -37,9 +38,10 @@
 #include "browsermeta.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
-#include "input_file_drop.h"
 #include "media_artwork_sidecar.h"
+#include "core/open_file_requests.h"
 #include "core/windows_message_pump.h"
+#include "core/windows_shell_open.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -101,11 +103,15 @@ inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
   return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flag)) != 0;
 }
 
-static DWORD waitForBrowserWake(ConsoleInput& input, HANDLE asyncWakeHandle,
-                                DWORD timeoutMs) {
+static DWORD waitForBrowserWake(ConsoleInput& input,
+                                const OpenFileRequests& openFileRequests,
+                                HANDLE asyncWakeHandle, DWORD timeoutMs) {
   std::vector<HANDLE> handles;
   if (HANDLE inputHandle = input.waitHandle()) {
     handles.push_back(inputHandle);
+  }
+  if (HANDLE openFilesHandle = openFileRequests.waitHandle()) {
+    handles.push_back(openFilesHandle);
   }
   if (asyncWakeHandle) {
     handles.push_back(asyncWakeHandle);
@@ -113,6 +119,22 @@ static DWORD waitForBrowserWake(ConsoleInput& input, HANDLE asyncWakeHandle,
   return waitForHandlesAndPumpThreadWindowMessages(
       static_cast<DWORD>(handles.size()),
       handles.empty() ? nullptr : handles.data(), timeoutMs);
+}
+
+static ShellOpenMode resolveWindowsShellOpenMode(const Options& options) {
+  return resolveShellOpenModeSelection(options.shellOpenMode,
+                                       configuredWindowsShellOpenMode());
+}
+
+static bool shouldForwardInputToExistingInstance(const Options& options,
+                                                 ShellOpenMode mode) {
+  if (mode != ShellOpenMode::SameInstance || options.input.empty()) {
+    return false;
+  }
+  if (options.extractSheet || options.splitLoop || options.renderRadio) {
+    return false;
+  }
+  return true;
 }
 
 static bool isVideoExt(const std::filesystem::path& p) {
@@ -453,7 +475,11 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
                          ConsoleInput& input, ConsoleScreen& screen,
                          const Style& baseStyle, const Style& accentStyle,
                          const Style& dimStyle,
-                         bool* quitAppRequested = nullptr) {
+                         OpenFileRequests& openFileRequests,
+                         bool* quitAppRequested,
+                         std::function<bool(
+                             const std::vector<std::filesystem::path>&)>
+                             requestOpenFiles) {
   AsciiArt art;
   std::string error;
   std::filesystem::path currentFile = file;
@@ -588,7 +614,14 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
   renderFrame();
 
   InputEvent ev{};
+  std::vector<std::filesystem::path> requestedFiles;
   while (true) {
+    while (openFileRequests.poll(requestedFiles)) {
+      if (requestOpenFiles(requestedFiles)) {
+        return ok;
+      }
+      requestedFiles.clear();
+    }
     while (input.poll(ev)) {
       if (ev.type == InputEvent::Type::Resize) {
         screen.updateSize();
@@ -635,6 +668,11 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
         }
         continue;
       }
+      if (ev.type == InputEvent::Type::FileDrop &&
+          isCommittedFileDropEvent(ev.fileDrop) &&
+          requestOpenFiles(ev.fileDrop.files)) {
+        return ok;
+      }
       if (ev.type == InputEvent::Type::Key ||
           ev.type == InputEvent::Type::Action) {
         if (auto shortcut = resolvePlaybackShortcutAction(
@@ -668,12 +706,27 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
         }
       }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    HANDLE handles[2];
+    DWORD handleCount = 0;
+    if (HANDLE inputHandle = input.waitHandle()) {
+      handles[handleCount++] = inputHandle;
+    }
+    if (HANDLE openFilesHandle = openFileRequests.waitHandle()) {
+      handles[handleCount++] = openFilesHandle;
+    }
+    waitForHandlesAndPumpThreadWindowMessages(
+        handleCount, handleCount > 0 ? handles : nullptr, 10);
   }
 }
 
 int runTui(Options o) {
-  if (o.shellOpen && !o.input.empty()) {
+  const ShellOpenMode shellOpenMode = resolveWindowsShellOpenMode(o);
+  const bool acceptShellOpenHandoffs =
+      shellOpenMode == ShellOpenMode::SameInstance;
+  const bool forwardInputToExistingInstance =
+      shouldForwardInputToExistingInstance(o, shellOpenMode);
+
+  if ((o.shellOpen || forwardInputToExistingInstance) && !o.input.empty()) {
     std::error_code ec;
     std::filesystem::path absoluteInput =
         std::filesystem::absolute(pathFromUtf8String(o.input), ec);
@@ -702,6 +755,19 @@ int runTui(Options o) {
   }
   if (o.renderRadio) {
     return runRenderRadioCli(o);
+  }
+
+  ConsoleInput input;
+  OpenFileRequests openFileRequests;
+  WindowsShellOpenServer shellOpenServer(openFileRequests);
+  if (acceptShellOpenHandoffs) {
+    const bool acceptingShellOpenHandoffs = shellOpenServer.start();
+    if (!acceptingShellOpenHandoffs && forwardInputToExistingInstance &&
+        !o.input.empty()) {
+      if (forwardWindowsShellOpenFile(pathFromUtf8String(o.input))) {
+        return 0;
+      }
+    }
   }
 
   windows_file_drop::OleApartment tuiWindowThreadApartment;
@@ -740,7 +806,6 @@ int runTui(Options o) {
   browser.dir = startDir;
   refreshBrowser(browser, initialName);
 
-  ConsoleInput input;
   input.init();
 
   ConsoleScreen screen;
@@ -1016,6 +1081,29 @@ int runTui(Options o) {
   playback_transport_navigation::Navigator transportNavigator(
       browser, std::move(transportCallbacks));
 
+  auto openBrowserDirectory = [&](const std::filesystem::path& dir) {
+    browser.dir = dir;
+    browser.selected = 0;
+    browser.scrollRow = 0;
+    browser.filter.clear();
+    browser.filterActive = false;
+    setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
+    refreshBrowser(browser, "");
+    markLayoutDirty();
+  };
+
+  auto resolveOpenDirectory =
+      [](const std::vector<std::filesystem::path>& files)
+      -> std::optional<std::filesystem::path> {
+    for (const auto& file : files) {
+      std::error_code ec;
+      if (std::filesystem::is_directory(file, ec) && !ec) {
+        return file;
+      }
+    }
+    return std::nullopt;
+  };
+
   std::function<bool(const PlaybackTarget&,
                      const PlaybackSessionContinuationState*)>
       playPlaybackTargetWithState;
@@ -1047,11 +1135,36 @@ int runTui(Options o) {
       }
       if (isSupportedImageExt(target.file)) {
         bool quitAppRequested = false;
+        std::optional<PlaybackTarget> pendingOpenTarget;
+        std::optional<std::filesystem::path> pendingOpenDirectory;
+        auto requestImageViewerOpenFiles =
+            [&](const std::vector<std::filesystem::path>& files) {
+              if (auto dir = resolveOpenDirectory(files)) {
+                pendingOpenDirectory = *dir;
+                return true;
+              }
+              if (auto route = playback_drop_route::resolve(
+                      files, playback_drop_route::DropSurface::Browser)) {
+                pendingOpenTarget = route->target;
+                return true;
+              }
+              return false;
+            };
         showAsciiArt(browser, target.file, input, screen, kStyleNormal,
-                     kStyleAccent, kStyleDim, &quitAppRequested);
+                     kStyleAccent, kStyleDim, openFileRequests,
+                     &quitAppRequested,
+                     requestImageViewerOpenFiles);
         if (quitAppRequested) {
           running = false;
           return true;
+        }
+        if (pendingOpenDirectory) {
+          openBrowserDirectory(*pendingOpenDirectory);
+          return true;
+        }
+        if (pendingOpenTarget) {
+          target = *pendingOpenTarget;
+          continue;
         }
         markDirty();
         return true;
@@ -1059,6 +1172,7 @@ int runTui(Options o) {
       if (isVideoExt(target.file)) {
         bool quitAppRequested = false;
         std::optional<PlaybackTarget> pendingTransportTarget;
+        std::optional<std::filesystem::path> pendingOpenDirectory;
         bool openPictureInPictureForPendingTarget = false;
         auto requestTransportCommand = [&](PlaybackTransportCommand command) {
           const int direction =
@@ -1071,28 +1185,38 @@ int runTui(Options o) {
         };
         auto requestOpenFiles =
             [&](const std::vector<std::filesystem::path>& files) {
-          if (auto route = playback_drop_route::resolve(
-                  files, playback_drop_route::DropSurface::VideoPresentation)) {
-            pendingTransportTarget = route->target;
-            openPictureInPictureForPendingTarget =
-                route->openPictureInPicture;
-            return true;
-          }
-          return false;
-        };
+              if (auto dir = resolveOpenDirectory(files)) {
+                pendingOpenDirectory = *dir;
+                return true;
+              }
+              if (auto route = playback_drop_route::resolve(
+                      files,
+                      playback_drop_route::DropSurface::VideoPresentation)) {
+                pendingTransportTarget = route->target;
+                openPictureInPictureForPendingTarget =
+                    route->openPictureInPicture;
+                return true;
+              }
+              return false;
+            };
         bool handled = showAsciiVideo(
             target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
             kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
-            kProgressEnd, videoConfig, &quitAppRequested, &systemControls,
+            kProgressEnd, videoConfig, openFileRequests, &quitAppRequested,
+            &systemControls,
             requestTransportCommand, requestOpenFiles,
             &playbackContinuationState);
         if (quitAppRequested) {
           running = false;
           return true;
         }
+        if (pendingOpenDirectory) {
+          openBrowserDirectory(*pendingOpenDirectory);
+          return true;
+        }
         if (pendingTransportTarget) {
           target = *pendingTransportTarget;
-            openPictureInPictureAfterTarget =
+          openPictureInPictureAfterTarget =
               openPictureInPictureForPendingTarget;
           continue;
         }
@@ -1422,12 +1546,16 @@ int runTui(Options o) {
   };
   callbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
-    if (auto route = playback_drop_route::resolve(
-            files, playback_drop_route::DropSurface::Browser)) {
-      return playPlaybackTarget(route->target);
-    }
-    return false;
-  };
+        if (auto dir = resolveOpenDirectory(files)) {
+          openBrowserDirectory(*dir);
+          return true;
+        }
+        if (auto route = playback_drop_route::resolve(
+                files, playback_drop_route::DropSurface::Browser)) {
+          return playPlaybackTarget(route->target);
+        }
+        return false;
+      };
   callbacks.onOpenFileContextMenu = [&](const FileEntry& entry, int x, int y) {
     if (!o.play || entry.isDir || !isSupportedAudioExt(entry.path)) {
       return;
@@ -2113,13 +2241,23 @@ int runTui(Options o) {
       markDirty(UiDirtyFlags::Async);
     }
 
+    std::vector<std::filesystem::path> requestedFiles;
+    while (openFileRequests.poll(requestedFiles)) {
+      if (callbacks.onPlayFiles && callbacks.onPlayFiles(requestedFiles)) {
+        markDirty(UiDirtyFlags::Async);
+      }
+      requestedFiles.clear();
+    }
+
     auto processInputEvent = [&](InputEvent ev) {
       if (ev.type == InputEvent::Type::Resize) {
         dirty = true;
         if (callbacks.onResize) callbacks.onResize();
         return;
       }
-      if (dispatchFileDrop(ev, callbacks.onPlayFiles)) {
+      if (ev.type == InputEvent::Type::FileDrop &&
+          isCommittedFileDropEvent(ev.fileDrop) && callbacks.onPlayFiles &&
+          callbacks.onPlayFiles(ev.fileDrop.files)) {
         markDirty(UiDirtyFlags::Async);
         return;
       }
@@ -2506,8 +2644,8 @@ int runTui(Options o) {
 
     if (!dirty) {
       DWORD waitTimeout = computeWakeTimeout(now);
-      DWORD waitResult =
-          waitForBrowserWake(input, browserThumbnailWakeHandle(), waitTimeout);
+      DWORD waitResult = waitForBrowserWake(
+          input, openFileRequests, browserThumbnailWakeHandle(), waitTimeout);
       if (consumeBrowserThumbnailWake()) {
         markDirty(UiDirtyFlags::Async);
       } else if (waitResult == WAIT_TIMEOUT) {

@@ -4,6 +4,7 @@
 #include <string>
 
 #include "core/runtime_defaults.h"
+#include "core/shell_open_mode.h"
 
 struct Options {
   std::string input;
@@ -28,6 +29,7 @@ struct Options {
   bool enableWindow = kDefaultWindowPlaybackEnabled;
   bool asciiDebugOverlay = false;
   bool shellOpen = false;
+  ShellOpenModeSelection shellOpenMode = ShellOpenModeSelection::Configured;
   bool verbose = false;
 };
 

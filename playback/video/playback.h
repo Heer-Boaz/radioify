@@ -11,6 +11,8 @@
 #include "playback/control/transport.h"
 #include "playback/session/state.h"
 
+class OpenFileRequests;
+
 struct VideoPlaybackConfig {
   bool enableAscii = kDefaultAsciiPlaybackEnabled;
   bool enableAudio = kDefaultAudioPlaybackEnabled;
@@ -31,6 +33,7 @@ bool showAsciiVideo(const std::filesystem::path& file,
                     const Color& progressStart,
                     const Color& progressEnd,
                     const VideoPlaybackConfig& config,
+                    OpenFileRequests& openFileRequests,
                     bool* quitAppRequested = nullptr,
                     PlaybackSystemControls* systemControls = nullptr,
                     std::function<bool(PlaybackTransportCommand)>

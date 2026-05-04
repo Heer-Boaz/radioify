@@ -20,8 +20,9 @@
 #include "playback/framebuffer/presenter.h"
 #include "playback_mode.h"
 #include "playback/system_media_transport/controls.h"
+#include "core/open_file_requests.h"
 #include "core.h"
-#include "file_drop.h"
+#include "handoff.h"
 #include "input.h"
 #include "output.h"
 #include "presentation.h"
@@ -77,6 +78,7 @@ struct PlaybackLoopRunner::Impl {
   std::atomic<bool>& enableSubtitlesShared;
   const std::string& windowTitle;
   const std::filesystem::path& file;
+  OpenFileRequests& openFileRequests;
   bool* quitApplicationRequested = nullptr;
   PlaybackSystemControls* systemControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
@@ -135,6 +137,7 @@ struct PlaybackLoopRunner::Impl {
         enableSubtitlesShared(args.enableSubtitlesShared),
         windowTitle(args.windowTitle),
         file(args.file),
+        openFileRequests(args.openFileRequests),
         quitApplicationRequested(args.quitApplicationRequested),
         systemControls(args.systemControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
@@ -455,6 +458,19 @@ struct PlaybackLoopRunner::Impl {
 
   bool pollNextEvent(InputEvent& ev) { return output.pollInput(input, ev); }
 
+  void processOpenFileRequests(PlaybackLoopState& loopState) {
+    std::vector<std::filesystem::path> files;
+    while (openFileRequests.poll(files)) {
+      playback_session_handoff::requestOpenFilesHandoff(inputView,
+                                                        inputSignals, files);
+      files.clear();
+      if (loopStopRequested) {
+        loopState = PlaybackLoopState::Stopped;
+        return;
+      }
+    }
+  }
+
   void processInputEvents(PlaybackLoopState& loopState) {
     input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
     inputView.currentMode = output.renderMode(enableAscii);
@@ -469,8 +485,10 @@ struct PlaybackLoopRunner::Impl {
         applyPresenterSync(syncPresentation());
         continue;
       }
-      if (playback_session_file_drop::handleInputEvent(inputView, inputSignals,
-                                                       ev)) {
+      if (ev.type == InputEvent::Type::FileDrop &&
+          isCommittedFileDropEvent(ev.fileDrop)) {
+        playback_session_handoff::requestOpenFilesHandoff(
+            inputView, inputSignals, ev.fileDrop.files);
         if (loopStopRequested) {
           break;
         }
@@ -642,11 +660,13 @@ struct PlaybackLoopRunner::Impl {
 
     if (!refresh.useWindowPresenter &&
         core.playbackState() == PlaybackSessionState::Active) {
-      output.waitForActivity(input, timeoutMs, core.videoFrameWaitHandle());
+      output.waitForActivity(
+          input, timeoutMs, core.videoFrameWaitHandle(),
+          openFileRequests.waitHandle());
       return;
     }
 
-    output.waitForActivity(input, timeoutMs);
+    output.waitForActivity(input, timeoutMs, openFileRequests.waitHandle());
   }
 
   RefreshState refreshState() {
@@ -686,6 +706,10 @@ struct PlaybackLoopRunner::Impl {
 
       emitHeartbeat();
       processSystemCommands(loopState);
+      if (loopState == PlaybackLoopState::Stopped) {
+        break;
+      }
+      processOpenFileRequests(loopState);
       if (loopState == PlaybackLoopState::Stopped) {
         break;
       }

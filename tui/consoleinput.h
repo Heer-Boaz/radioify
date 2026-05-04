@@ -76,6 +76,11 @@ inline InputEvent inputActionEvent(InputAction action) {
 
 class ConsoleInput {
  public:
+  ConsoleInput() = default;
+
+  ConsoleInput(const ConsoleInput&) = delete;
+  ConsoleInput& operator=(const ConsoleInput&) = delete;
+
   void init();
   void restore();
   void setCellPixelSize(double width, double height);

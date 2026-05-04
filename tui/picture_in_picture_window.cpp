@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "audioplayback.h"
-#include "input_file_drop.h"
 #include "playback/framebuffer/mini_player_tui.h"
 #include "playback/media/artwork_catalog.h"
 #include "playback/input/shortcuts.h"
@@ -412,7 +411,9 @@ void PictureInPictureWindow::handleInput(const InputEvent& ev,
     return;
   }
 
-  if (dispatchFileDrop(ev, callbacks.onPlayFiles)) {
+  if (ev.type == InputEvent::Type::FileDrop &&
+      isCommittedFileDropEvent(ev.fileDrop) && callbacks.onPlayFiles &&
+      callbacks.onPlayFiles(ev.fileDrop.files)) {
     return;
   }
 

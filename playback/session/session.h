@@ -23,6 +23,7 @@ class PlaybackSession {
     const Color& progressStart;
     const Color& progressEnd;
     const VideoPlaybackConfig& config;
+    OpenFileRequests& openFileRequests;
     bool* quitAppRequested = nullptr;
     PlaybackSystemControls* systemControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;

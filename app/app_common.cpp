@@ -28,6 +28,10 @@ static void showUsage(const char* exe) {
   logLine("  --no-radio   Start with radio filter disabled");
   logLine("  --window     Open a window for video playback");
   logLine("  --ascii-debug-overlay Show ASCII playback debug overlay");
+  logLine("  --shell-open-mode <same-instance|new-instance>");
+  logLine("               Choose how Windows shell opens are handled");
+  logLine("  --single-instance Forward this input to the running Radioify instance");
+  logLine("  --new-instance     Open this launch in its own instance");
   logLine("  -h, --help   Show this help");
 }
 
@@ -38,6 +42,16 @@ void die(const std::string& message) {
 
 void logLine(const std::string& message) {
   std::cout << message << "\n";
+}
+
+static ShellOpenModeSelection parseShellOpenModeSelectionOrDie(
+    const std::string& value) {
+  ShellOpenModeSelection mode = ShellOpenModeSelection::Configured;
+  if (parseShellOpenModeSelection(value, mode)) {
+    return mode;
+  }
+  die("--shell-open-mode expects same-instance or new-instance.");
+  return ShellOpenModeSelection::NewInstance;
 }
 
 Options parseArgs(int argc, char** argv) {
@@ -180,6 +194,22 @@ Options parseArgs(int argc, char** argv) {
     }
     if (arg == "--ascii-debug-overlay") {
       o.asciiDebugOverlay = true;
+      continue;
+    }
+    if (arg == "--shell-open-mode") {
+      std::string value = requireValue(arg, &i);
+      if (value.empty()) {
+        die("--shell-open-mode requires a non-empty value.");
+      }
+      o.shellOpenMode = parseShellOpenModeSelectionOrDie(value);
+      continue;
+    }
+    if (arg == "--single-instance") {
+      o.shellOpenMode = ShellOpenModeSelection::SameInstance;
+      continue;
+    }
+    if (arg == "--new-instance") {
+      o.shellOpenMode = ShellOpenModeSelection::NewInstance;
       continue;
     }
     if (arg == "--shell-open") {

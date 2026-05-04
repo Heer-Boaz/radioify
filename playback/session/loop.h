@@ -41,6 +41,7 @@ class PlaybackLoopRunner {
     bool enableAscii;
     bool enableAudio;
     bool hasSubtitles = false;
+    OpenFileRequests& openFileRequests;
     bool* quitApplicationRequested = nullptr;
     PlaybackSystemControls* systemControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;

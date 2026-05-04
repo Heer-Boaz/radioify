@@ -83,14 +83,18 @@ bool PlaybackOutputController::pollInput(ConsoleInput& input, InputEvent& ev) {
 }
 
 bool PlaybackOutputController::waitForActivity(ConsoleInput& input, int timeoutMs,
-                                               HANDLE extraHandle) {
-  HANDLE handles[3];
+                                               HANDLE extraHandle,
+                                               HANDLE secondExtraHandle) {
+  HANDLE handles[4];
   DWORD handleCount = 0;
   if (HANDLE inputHandle = input.waitHandle()) {
     handles[handleCount++] = inputHandle;
   }
   if (extraHandle) {
     handles[handleCount++] = extraHandle;
+  }
+  if (secondExtraHandle) {
+    handles[handleCount++] = secondExtraHandle;
   }
   if (impl_->presentation.windowActive()) {
     if (HANDLE closeHandle = impl_->presentation.windowCloseRequestedWaitHandle()) {

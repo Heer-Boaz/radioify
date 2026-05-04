@@ -96,7 +96,25 @@ Optional flags:
 dist/radioify.exe --no-ascii <file-or-folder>
 dist/radioify.exe --no-audio <file-or-folder>
 dist/radioify.exe --no-radio <file-or-folder>
+dist/radioify.exe --single-instance <file>
+dist/radioify.exe --new-instance <file>
 ```
+
+Windows shell opens default to `same-instance`: opening media from Explorer
+forwards the file to the running Radioify instance when one is available. The
+incoming file uses the same open route as drag/drop, so active playback is
+replaced by the new target. To make Explorer opens always launch separately,
+create
+`%LOCALAPPDATA%\Radioify\radioify.ini` with:
+
+```ini
+shell_open_mode = new-instance
+```
+
+Accepted values are `same-instance` and `new-instance`. The environment
+variable `RADIOIFY_SHELL_OPEN_MODE` uses the same values, and command-line
+`--shell-open-mode`, `--single-instance`, and `--new-instance` override the
+configured default for that launch.
 
 ## Windows 11 Explorer Integration
 Current intent:
