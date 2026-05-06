@@ -865,8 +865,7 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
     #endif
 }
 
-VideoWindow::VideoWindow()
-    : m_closeRequestedEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
+VideoWindow::VideoWindow() = default;
 
 VideoWindow::~VideoWindow() {
     Close();
@@ -1380,6 +1379,15 @@ bool VideoWindow::GetPictureInPictureRestoreBounds(RECT* outRect) const {
 }
 
 bool VideoWindow::SetWindowBounds(const RECT& rect) {
+    if (m_hWnd && m_windowThreadId != 0 &&
+        GetCurrentThreadId() != m_windowThreadId) {
+        return ::SendMessageW(m_hWnd, kSetWindowBoundsMessage, 0,
+                              reinterpret_cast<LPARAM>(&rect)) != 0;
+    }
+    return ApplyWindowBounds(rect);
+}
+
+bool VideoWindow::ApplyWindowBounds(const RECT& rect) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd) {
         return false;
@@ -1555,10 +1563,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
         return false;
     }
     m_displayLifecycle.clear();
-    m_closeRequested.store(false, std::memory_order_relaxed);
-    if (m_closeRequestedEvent) {
-        ResetEvent(m_closeRequestedEvent.get());
-    }
+    m_closeRequest.clear();
     HINSTANCE hInstance = GetModuleHandle(NULL);
     const wchar_t* className = L"RadioifyVideoWindow";
 
@@ -1728,10 +1733,7 @@ void VideoWindow::OnDisplayChangedByWindow(int width, int height) {
 }
 
 void VideoWindow::RequestCloseFromWindow() {
-    m_closeRequested.store(true, std::memory_order_relaxed);
-    if (m_closeRequestedEvent) {
-        SetEvent(m_closeRequestedEvent.get());
-    }
+    m_closeRequest.signal();
 }
 
 void VideoWindow::ApplyPendingDisplayChange() {
@@ -1864,6 +1866,9 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
 void VideoWindow::Resize(int width, int height) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_swapChain) return;
+    if (width == m_width && height == m_height && m_renderTargetView) {
+        return;
+    }
     m_renderTargetView.Reset();
     UINT flags = 0;
     if (m_swapChain2) {
@@ -1893,10 +1898,7 @@ void VideoWindow::Resize(int width, int height) {
 }
 
 void VideoWindow::Close() {
-    m_closeRequested.store(false, std::memory_order_relaxed);
-    if (m_closeRequestedEvent) {
-        ResetEvent(m_closeRequestedEvent.get());
-    }
+    m_closeRequest.clear();
     SetCursorVisible(true);
     m_input.endWindowThread();
     // Hide the window first to release focus/ownership of the monitor
@@ -1952,11 +1954,11 @@ bool VideoWindow::PollInput(InputEvent& ev) {
 }
 
 bool VideoWindow::ConsumeCloseRequested() {
-    const bool requested = m_closeRequested.exchange(false, std::memory_order_relaxed);
-    if (requested && m_closeRequestedEvent) {
-        ResetEvent(m_closeRequestedEvent.get());
-    }
-    return requested;
+    return m_closeRequest.consume();
+}
+
+NativeWaitHandle VideoWindow::CloseRequestedWaitHandle() const {
+    return m_closeRequest.nativeWaitHandle();
 }
 
 void VideoWindow::SetVsync(bool enabled) {

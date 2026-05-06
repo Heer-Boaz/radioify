@@ -62,9 +62,15 @@ int main() {
                  "owner transition must supersede older pending work");
     display.clientResized(300, 200);
     display.displayChanged(300, 200);
+    ok &= expect(!display.consume(work),
+                 "owner transition must defer pending display work");
   }
-  ok &= expect(!display.consume(work),
-               "owner transition must suppress its own display noise");
+  ok &= expect(display.consume(work),
+               "owner transition must preserve deferred display work");
+  ok &= expect(work.kind == WindowDisplayLifecycle::WorkKind::DisplayChange,
+               "deferred display work must keep display-change priority");
+  ok &= expect(work.width == 300 && work.height == 200,
+               "deferred display work must keep latest dimensions");
 
   display.clientResized(500, 400);
   ok &= expect(display.consume(work),

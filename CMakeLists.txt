@@ -397,6 +397,15 @@ radioify_link_repo_target(window_display_lifecycle_tests)
 add_test(NAME window_display_lifecycle_tests
          COMMAND $<TARGET_FILE:window_display_lifecycle_tests>)
 
+add_executable(waitable_signal_tests)
+target_sources(waitable_signal_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_waitable_signal_tests>
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+)
+radioify_link_repo_target(waitable_signal_tests)
+add_test(NAME waitable_signal_tests
+         COMMAND $<TARGET_FILE:waitable_signal_tests>)
+
 if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL
     COMMAND ${CMAKE_COMMAND}

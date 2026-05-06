@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "core/native_wait_handle.h"
+#include "core/waitable_signal.h"
 #include "core/windows_handle.h"
 #include "playback/video/color.h"
 #include "consoleinput.h"
@@ -170,9 +171,7 @@ public:
     bool PollEvents();
     bool PollInput(InputEvent& ev);
     bool ConsumeCloseRequested();
-    NativeWaitHandle CloseRequestedWaitHandle() const {
-        return NativeWaitHandle(m_closeRequestedEvent.get());
-    }
+    NativeWaitHandle CloseRequestedWaitHandle() const;
     bool EnableFileDrop();
     void DisableFileDrop();
     void Cleanup();
@@ -183,6 +182,7 @@ private:
     static constexpr UINT kExitPictureInPictureToFullscreenMessage =
         WM_APP + 0x442;
     static constexpr UINT kSetFullscreenMessage = WM_APP + 0x443;
+    static constexpr UINT kSetWindowBoundsMessage = WM_APP + 0x444;
 
     void DrawOverlay(const WindowUiState& ui);
     void UpdateViewport(int width, int height);
@@ -235,6 +235,7 @@ private:
     void OnDisplayChangedByWindow(int width, int height);
     void RequestCloseFromWindow();
     void ApplyPendingDisplayChange();
+    bool ApplyWindowBounds(const RECT& rect);
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -312,8 +313,7 @@ private:
     WindowDisplayLifecycle m_displayLifecycle;
     bool m_captureAllMouseInput = false;
     std::atomic<bool> m_cursorVisible{true};
-    std::atomic<bool> m_closeRequested{false};
-    UniqueWindowsHandle m_closeRequestedEvent;
+    WaitableSignal m_closeRequest;
     DWORD m_windowThreadId = 0;
     mutable std::mutex m_subtitleStateMutex;
     std::string m_subtitleRenderError;

@@ -37,7 +37,7 @@ WindowDisplayLifecycle::ownerTransition() {
 }
 
 void WindowDisplayLifecycle::clientResized(int width, int height) {
-  if (!acceptsExternalWork() || width <= 0 || height <= 0) {
+  if (width <= 0 || height <= 0) {
     return;
   }
   pending_.width = width;
@@ -48,7 +48,7 @@ void WindowDisplayLifecycle::clientResized(int width, int height) {
 }
 
 void WindowDisplayLifecycle::displayChanged(int width, int height) {
-  if (!acceptsExternalWork() || width <= 0 || height <= 0) {
+  if (width <= 0 || height <= 0) {
     return;
   }
   pending_.kind = WorkKind::DisplayChange;
@@ -57,7 +57,7 @@ void WindowDisplayLifecycle::displayChanged(int width, int height) {
 }
 
 bool WindowDisplayLifecycle::consume(Work& out) {
-  if (pending_.kind == WorkKind::None) {
+  if (ownerTransitionDepth_ > 0 || pending_.kind == WorkKind::None) {
     return false;
   }
   out = pending_;
@@ -77,8 +77,4 @@ void WindowDisplayLifecycle::beginOwnerTransition() {
 void WindowDisplayLifecycle::endOwnerTransition() {
   assert(ownerTransitionDepth_ > 0);
   --ownerTransitionDepth_;
-}
-
-bool WindowDisplayLifecycle::acceptsExternalWork() const {
-  return ownerTransitionDepth_ == 0;
 }

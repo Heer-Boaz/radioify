@@ -37,7 +37,6 @@ class WindowDisplayLifecycle {
  private:
   void beginOwnerTransition();
   void endOwnerTransition();
-  bool acceptsExternalWork() const;
 
   int ownerTransitionDepth_ = 0;
   Work pending_;

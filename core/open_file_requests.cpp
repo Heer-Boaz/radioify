@@ -1,21 +1,13 @@
 #include "open_file_requests.h"
 
-#include <atomic>
 #include <deque>
 #include <memory>
 #include <mutex>
-#include <stdexcept>
 #include <utility>
 
-#include "windows_handle.h"
+#include "waitable_signal.h"
 
 struct OpenFileRequests::Impl {
-  Impl() : wakeEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
-    if (!wakeEvent) {
-      throw std::runtime_error("Failed to create open-file request wake event");
-    }
-  }
-
   void post(std::vector<std::filesystem::path> files) {
     if (files.empty()) {
       return;
@@ -23,34 +15,26 @@ struct OpenFileRequests::Impl {
     {
       std::lock_guard<std::mutex> lock(mutex);
       pending.push_back(std::move(files));
-      ready.store(true, std::memory_order_release);
+      ready.signal();
     }
-    SetEvent(wakeEvent.get());
   }
 
   bool poll(std::vector<std::filesystem::path>& out) {
-    if (!ready.load(std::memory_order_acquire)) {
-      return false;
-    }
-
     std::lock_guard<std::mutex> lock(mutex);
     if (pending.empty()) {
-      ready.store(false, std::memory_order_release);
-      ResetEvent(wakeEvent.get());
+      ready.clear();
       return false;
     }
 
     out = std::move(pending.front());
     pending.pop_front();
     if (pending.empty()) {
-      ready.store(false, std::memory_order_release);
-      ResetEvent(wakeEvent.get());
+      ready.clear();
     }
     return true;
   }
 
-  UniqueWindowsHandle wakeEvent;
-  std::atomic<bool> ready{false};
+  WaitableSignal ready;
   std::mutex mutex;
   std::deque<std::vector<std::filesystem::path>> pending;
 };
@@ -77,5 +61,5 @@ bool OpenFileRequests::poll(std::vector<std::filesystem::path>& out) {
 }
 
 NativeWaitHandle OpenFileRequests::nativeWaitHandle() const {
-  return NativeWaitHandle(impl_->wakeEvent.get());
+  return impl_->ready.nativeWaitHandle();
 }

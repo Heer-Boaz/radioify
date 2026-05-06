@@ -54,6 +54,10 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         pThis->SetFullscreen(wParam != 0);
         return 0;
     }
+    if (uMsg == kSetWindowBoundsMessage) {
+        const auto* rect = reinterpret_cast<const RECT*>(lParam);
+        return rect && pThis->ApplyWindowBounds(*rect) ? TRUE : FALSE;
+    }
 
     if (uMsg == WM_NCHITTEST &&
         pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
