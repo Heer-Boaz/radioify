@@ -53,6 +53,7 @@ extern "C" {
 }
 
 #include "audioplayback.h"
+#include "core/windows_handle.h"
 #include "playback/video/audio/output_clock_source.h"
 #include "playback/video/audio/output_timeline.h"
 #include "playback/video/audio/track_switch_timeline.h"
@@ -1541,7 +1542,8 @@ struct Player::Impl {
   std::condition_variable frameCv;
   std::mutex frameCvMutex;
   std::atomic<uint64_t> frameCounter{0};
-  HANDLE frameReadyEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  UniqueWindowsHandle frameReadyEvent{CreateEventW(nullptr, FALSE, FALSE,
+                                                   nullptr)};
   std::mutex lastInfoMutex;
   VideoReadInfo lastInfo{};
   std::atomic<bool> lastInfoValid{false};
@@ -1750,7 +1752,7 @@ struct Player::Impl {
     appendTimingFmt("stop_threads begin");
     running.store(false);
     if (frameReadyEvent) {
-      SetEvent(frameReadyEvent);
+      SetEvent(frameReadyEvent.get());
     }
     frameCv.notify_all();
     commandPending.store(false);
@@ -1842,7 +1844,7 @@ struct Player::Impl {
     lastPresentedDurationUs.store(0);
     frameCounter.store(0);
     if (frameReadyEvent) {
-      ResetEvent(frameReadyEvent);
+      ResetEvent(frameReadyEvent.get());
     }
     clearCurrentFrame();
     videoPackets.init(32 * 1024 * 1024);
@@ -3150,7 +3152,7 @@ struct Player::Impl {
       }
       frameCounter.fetch_add(1, std::memory_order_relaxed);
       if (frameReadyEvent) {
-        SetEvent(frameReadyEvent);
+        SetEvent(frameReadyEvent.get());
       }
       frameCv.notify_all();
       
@@ -3208,12 +3210,7 @@ struct Player::Impl {
     }
   }
 
-  ~Impl() {
-    if (frameReadyEvent) {
-      CloseHandle(frameReadyEvent);
-      frameReadyEvent = nullptr;
-    }
-  }
+  ~Impl() = default;
 };
 
 Player::Player() : impl_(std::make_unique<Impl>()) {}
@@ -3392,7 +3389,7 @@ bool Player::waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const {
     return false;
   }
   if (impl_->frameReadyEvent) {
-    WaitForSingleObject(impl_->frameReadyEvent,
+    WaitForSingleObject(impl_->frameReadyEvent.get(),
                         static_cast<DWORD>(std::max(0, timeoutMs)));
     return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter;
   }
@@ -3404,9 +3401,9 @@ bool Player::waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const {
   return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter;
 }
 
-HANDLE Player::videoFrameWaitHandle() const {
-  if (!impl_) return nullptr;
-  return impl_->frameReadyEvent;
+NativeWaitHandle Player::videoFrameWaitHandle() const {
+  if (!impl_) return {};
+  return NativeWaitHandle(impl_->frameReadyEvent.get());
 }
 
 bool Player::copyCurrentVideoFrame(VideoFrame* out) {

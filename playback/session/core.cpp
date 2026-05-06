@@ -314,7 +314,7 @@ bool PlaybackSessionCore::waitForVideoFrame(uint64_t lastCounter,
   return impl_->player.waitForVideoFrame(lastCounter, timeoutMs);
 }
 
-HANDLE PlaybackSessionCore::videoFrameWaitHandle() const {
+NativeWaitHandle PlaybackSessionCore::videoFrameWaitHandle() const {
   return impl_->player.videoFrameWaitHandle();
 }
 

@@ -11,6 +11,7 @@
 
 #include <string>
 
+#include "core/native_wait_handle.h"
 #include "playback/input/input_action.h"
 #include "terminal_input_sequence.h"
 #include "file_drop_event.h"
@@ -86,7 +87,7 @@ class ConsoleInput {
   void setCellPixelSize(double width, double height);
   bool poll(InputEvent& out);
   bool active() const;
-  HANDLE waitHandle() const;
+  NativeWaitHandle waitHandle() const;
 
  private:
   void enableTerminalMouseInput();

@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 
+#include "core/native_wait_handle.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "presenter.h"
 #include "playback/session/state.h"
@@ -29,7 +30,7 @@ class WindowPresenter {
   bool isOpen() const;
   bool isVisible() const;
   bool consumeCloseRequested();
-  HANDLE closeRequestedWaitHandle() const;
+  NativeWaitHandle closeRequestedWaitHandle() const;
 
   VideoWindow& window();
   const VideoWindow& window() const;

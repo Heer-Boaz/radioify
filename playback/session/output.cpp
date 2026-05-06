@@ -87,8 +87,8 @@ bool PlaybackOutputController::waitForActivity(
     NativeWaitHandle secondExtraHandle) {
   NativeWaitHandle handles[4];
   DWORD handleCount = 0;
-  if (HANDLE inputHandle = input.waitHandle()) {
-    handles[handleCount++] = NativeWaitHandle(inputHandle);
+  if (NativeWaitHandle inputHandle = input.waitHandle()) {
+    handles[handleCount++] = inputHandle;
   }
   if (extraHandle) {
     handles[handleCount++] = extraHandle;
@@ -97,9 +97,9 @@ bool PlaybackOutputController::waitForActivity(
     handles[handleCount++] = secondExtraHandle;
   }
   if (impl_->presentation.windowActive()) {
-    if (HANDLE closeHandle =
+    if (NativeWaitHandle closeHandle =
             impl_->presentation.windowCloseRequestedWaitHandle()) {
-      handles[handleCount++] = NativeWaitHandle(closeHandle);
+      handles[handleCount++] = closeHandle;
     }
   }
 

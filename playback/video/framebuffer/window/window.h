@@ -5,10 +5,13 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <memory>
 
+#include "core/native_wait_handle.h"
+#include "core/windows_handle.h"
 #include "playback/video/color.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
@@ -16,6 +19,7 @@
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/video/framebuffer/video_output_color.h"
 #include "playback/video/subtitle/font_attachments.h"
+#include "display_lifecycle.h"
 #include "input_controller.h"
 #include "present.h"
 #include <vector>
@@ -107,17 +111,14 @@ public:
               bool startFullscreen = true);
     void Close();
 
-    void Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
-                 bool nonBlocking);
+    void Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     // Render the UI overlay using the last cached video frame as background
-    void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
-                        bool nonBlocking);
+    void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     // Render a full-screen text grid (TUI) into the window backbuffer.
-    void PresentTextGrid(const std::vector<ScreenCell>& cells, int cols, int rows,
-                         bool nonBlocking);
-    void PresentGpuTextGrid(const GpuTextGridFrame& frame, bool nonBlocking);
+    void PresentTextGrid(const std::vector<ScreenCell>& cells, int cols, int rows);
+    void PresentGpuTextGrid(const GpuTextGridFrame& frame);
     void PresentBackbuffer();
-    HANDLE GetFrameLatencyWaitableObject();
+    void WaitForFramePacing(std::chrono::milliseconds timeout) const;
     void SetVsync(bool enabled);
     std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
@@ -169,7 +170,9 @@ public:
     bool PollEvents();
     bool PollInput(InputEvent& ev);
     bool ConsumeCloseRequested();
-    HANDLE CloseRequestedWaitHandle() const { return m_closeRequestedEvent; }
+    NativeWaitHandle CloseRequestedWaitHandle() const {
+        return NativeWaitHandle(m_closeRequestedEvent.get());
+    }
     bool EnableFileDrop();
     void DisableFileDrop();
     void Cleanup();
@@ -228,6 +231,10 @@ private:
     float AsciiGlyphPeakNits() const;
     void SetOutputColorAttemptStatus(const std::string& status);
     bool ShouldQueueWindowMouseEvent(int y) const;
+    void OnClientResizedByWindow(int width, int height);
+    void OnDisplayChangedByWindow(int width, int height);
+    void RequestCloseFromWindow();
+    void ApplyPendingDisplayChange();
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -243,8 +250,8 @@ private:
     VideoOutputColorState m_outputColorState;
     std::string m_outputColorAttemptStatus;
     std::atomic<UINT> m_presentInterval{1};
-    HANDLE m_frameLatencyWaitableObject = nullptr;
-    std::mutex m_frameLatencyMutex;
+    UniqueWindowsHandle m_frameLatencyWaitableObject;
+    mutable std::mutex m_frameLatencyMutex;
 
     // frame cache is owned and managed externally by video playback
 
@@ -302,14 +309,11 @@ private:
     LONG m_pipRestoreStyle = 0;
     LONG m_pipRestoreExStyle = 0;
     RECT m_pipRestoreRect{};
-    // Guard to ignore WM_SIZE events while we're transitioning to/from fullscreen
-    bool m_ignoreWindowSizeEvents = false;
-    // When true, Present should skip until the render-target view and sizes are ready
-    bool m_waitingForRenderTarget = false;
+    WindowDisplayLifecycle m_displayLifecycle;
     bool m_captureAllMouseInput = false;
     std::atomic<bool> m_cursorVisible{true};
     std::atomic<bool> m_closeRequested{false};
-    HANDLE m_closeRequestedEvent = nullptr;
+    UniqueWindowsHandle m_closeRequestedEvent;
     DWORD m_windowThreadId = 0;
     mutable std::mutex m_subtitleStateMutex;
     std::string m_subtitleRenderError;

@@ -5,14 +5,7 @@
 #include <string>
 #include <vector>
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-
+#include "core/native_wait_handle.h"
 #include "consolescreen.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/overlay/overlay.h"
@@ -43,7 +36,7 @@ WindowUiState buildPlaybackFramebufferUiState(
 void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
-    std::atomic<bool>& forcePresent, HANDLE wakeEvent,
+    std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
     const std::function<bool()>& overlayVisible,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation);

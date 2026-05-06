@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 
+#include "core/native_wait_handle.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/framebuffer/presenter.h"
 #include "playback_mode.h"
@@ -40,7 +41,7 @@ class PlaybackPresentation {
   bool windowRequested() const;
   bool windowActive() const;
   bool consumeWindowCloseRequested();
-  HANDLE windowCloseRequestedWaitHandle() const;
+  NativeWaitHandle windowCloseRequestedWaitHandle() const;
   PlaybackRenderMode renderMode(bool enableAscii) const;
   void requestLayout(PlaybackLayout layout);
   PlaybackLayout desiredLayout() const;

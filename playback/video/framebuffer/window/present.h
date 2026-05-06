@@ -14,11 +14,12 @@ struct VideoWindowPresentArgs {
   UINT flags = 0;
 };
 
-inline VideoWindowPresentArgs liveVideoWindowPresentArgs(
-    UINT configuredSyncInterval, bool nonBlocking) {
-  if (nonBlocking) {
-    return VideoWindowPresentArgs{0u, DXGI_PRESENT_DO_NOT_WAIT};
-  }
+inline VideoWindowPresentArgs liveVideoWindowPresentArgs() {
+  return VideoWindowPresentArgs{0u, DXGI_PRESENT_DO_NOT_WAIT};
+}
+
+inline VideoWindowPresentArgs synchronizedVideoWindowPresentArgs(
+    UINT configuredSyncInterval) {
   return VideoWindowPresentArgs{configuredSyncInterval, 0u};
 }
 

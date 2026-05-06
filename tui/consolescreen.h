@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "core/native_wait_handle.h"
 #include "terminal_cell_metrics.h"
 
 struct Color {
@@ -49,7 +50,7 @@ struct ScreenCell {
 BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width);
 int breadcrumbIndexAt(const BreadcrumbLine& line, int x, int y, int lineY);
 bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY, std::filesystem::path* outPath);
-HANDLE browserThumbnailWakeHandle();
+NativeWaitHandle browserThumbnailWakeHandle();
 bool consumeBrowserThumbnailWake();
 
 class ConsoleScreen {

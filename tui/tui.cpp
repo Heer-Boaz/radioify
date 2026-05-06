@@ -105,16 +105,17 @@ inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
 
 static DWORD waitForBrowserWake(ConsoleInput& input,
                                 const OpenFileRequests& openFileRequests,
-                                HANDLE asyncWakeHandle, DWORD timeoutMs) {
+                                NativeWaitHandle asyncWakeHandle,
+                                DWORD timeoutMs) {
   std::vector<NativeWaitHandle> handles;
-  if (HANDLE inputHandle = input.waitHandle()) {
-    handles.push_back(NativeWaitHandle(inputHandle));
+  if (NativeWaitHandle inputHandle = input.waitHandle()) {
+    handles.push_back(inputHandle);
   }
   if (NativeWaitHandle openFilesHandle = openFileRequests.nativeWaitHandle()) {
     handles.push_back(openFilesHandle);
   }
   if (asyncWakeHandle) {
-    handles.push_back(NativeWaitHandle(asyncWakeHandle));
+    handles.push_back(asyncWakeHandle);
   }
   return waitForHandlesAndPumpThreadWindowMessages(
       static_cast<DWORD>(handles.size()),
@@ -708,8 +709,8 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
     }
     NativeWaitHandle handles[2];
     DWORD handleCount = 0;
-    if (HANDLE inputHandle = input.waitHandle()) {
-      handles[handleCount++] = NativeWaitHandle(inputHandle);
+    if (NativeWaitHandle inputHandle = input.waitHandle()) {
+      handles[handleCount++] = inputHandle;
     }
     if (NativeWaitHandle openFilesHandle = openFileRequests.nativeWaitHandle()) {
       handles[handleCount++] = openFilesHandle;
@@ -3183,7 +3184,7 @@ int runTui(Options o) {
         int gridW = 0;
         int gridH = 0;
         if (screen.snapshot(windowCells, gridW, gridH)) {
-          tuiWindow.PresentTextGrid(windowCells, gridW, gridH, true);
+          tuiWindow.PresentTextGrid(windowCells, gridW, gridH);
         }
       }
       renderAudioPictureInPicture();

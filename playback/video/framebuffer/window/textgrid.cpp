@@ -8,7 +8,7 @@
 #include <vector>
 
 void VideoWindow::PresentTextGrid(const std::vector<ScreenCell>& cells, int cols,
-                                  int rows, bool nonBlocking) {
+                                  int rows) {
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     if (cols <= 0 || rows <= 0 || cells.empty()) return;
@@ -16,7 +16,6 @@ void VideoWindow::PresentTextGrid(const std::vector<ScreenCell>& cells, int cols
     m_textGridRows.store(rows, std::memory_order_relaxed);
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
 
     RECT rect;
     if (GetClientRect(m_hWnd, &rect)) {
@@ -109,7 +108,6 @@ void VideoWindow::PresentTextGrid(const std::vector<ScreenCell>& cells, int cols
 
     lock.unlock();
     if (!swapChain) return;
-    const VideoWindowPresentArgs presentArgs =
-        liveVideoWindowPresentArgs(presentInterval, nonBlocking);
+    const VideoWindowPresentArgs presentArgs = liveVideoWindowPresentArgs();
     (void)PresentSwapChain(swapChain.Get(), presentArgs, "text_grid");
 }

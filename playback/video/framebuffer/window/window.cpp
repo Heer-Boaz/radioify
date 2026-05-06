@@ -1,5 +1,6 @@
 #include "window.h"
 #include "timing_log.h"
+#include "core/windows_message_pump.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "internal.h"
 #include "present.h"
@@ -869,10 +870,6 @@ VideoWindow::VideoWindow()
 
 VideoWindow::~VideoWindow() {
     Close();
-    if (m_closeRequestedEvent) {
-        CloseHandle(m_closeRequestedEvent);
-        m_closeRequestedEvent = nullptr;
-    }
 }
 
 uint32_t VideoWindow::OutputColorSpaceShaderValue() const {
@@ -1283,25 +1280,23 @@ bool VideoWindow::EnterPictureInPicture() {
     GetWindowRect(m_hWnd, &m_pipRestoreRect);
 
     RECT pipRect = CalculatePictureInPictureRect();
-    m_ignoreWindowSizeEvents = true;
+    auto displayTransition = m_displayLifecycle.ownerTransition();
     m_pictureInPicture.store(true, std::memory_order_relaxed);
     SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
     LONG pipExStyle =
-        (m_pipRestoreExStyle | WS_EX_TOPMOST | WS_EX_TOOLWINDOW) &
-        ~WS_EX_APPWINDOW;
+        (m_pipRestoreExStyle | WS_EX_TOOLWINDOW) &
+        ~(WS_EX_APPWINDOW | WS_EX_TOPMOST);
     SetWindowLong(m_hWnd, GWL_EXSTYLE, pipExStyle);
-    SetWindowPos(m_hWnd, HWND_TOPMOST, pipRect.left, pipRect.top,
+    SetWindowPos(m_hWnd, HWND_NOTOPMOST, pipRect.left, pipRect.top,
                  pipRect.right - pipRect.left, pipRect.bottom - pipRect.top,
-                 SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-    ::ShowWindow(m_hWnd, SW_SHOW);
-    BringWindowToTop(m_hWnd);
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+    ::ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
     UpdateWindow(m_hWnd);
 
     RECT client{};
     if (GetClientRect(m_hWnd, &client)) {
         Resize(client.right - client.left, client.bottom - client.top);
     }
-    m_ignoreWindowSizeEvents = false;
     return true;
 }
 
@@ -1317,16 +1312,15 @@ bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target) {
     const bool targetFullscreen =
         target == PictureInPictureExitTarget::Fullscreen ||
         m_pipRestoreFullscreen;
-    m_ignoreWindowSizeEvents = true;
+    auto displayTransition = m_displayLifecycle.ownerTransition();
     SetWindowLong(m_hWnd, GWL_STYLE, m_pipRestoreStyle);
-    SetWindowLong(m_hWnd, GWL_EXSTYLE, m_pipRestoreExStyle);
-    HWND zOrder =
-        (m_pipRestoreExStyle & WS_EX_TOPMOST) ? HWND_TOPMOST : HWND_NOTOPMOST;
-    SetWindowPos(m_hWnd, zOrder, m_pipRestoreRect.left, m_pipRestoreRect.top,
+    SetWindowLong(m_hWnd, GWL_EXSTYLE, m_pipRestoreExStyle & ~WS_EX_TOPMOST);
+    SetWindowPos(m_hWnd, HWND_NOTOPMOST, m_pipRestoreRect.left,
+                 m_pipRestoreRect.top,
                  m_pipRestoreRect.right - m_pipRestoreRect.left,
                  m_pipRestoreRect.bottom - m_pipRestoreRect.top,
-                 SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-    ::ShowWindow(m_hWnd, SW_RESTORE);
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+    ::ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
     UpdateWindow(m_hWnd);
 
     RECT client{};
@@ -1336,7 +1330,6 @@ bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target) {
     m_pictureInPicture.store(false, std::memory_order_relaxed);
     SetPictureInPictureInteractiveRects({});
     m_pipRestoreFullscreen = false;
-    m_ignoreWindowSizeEvents = false;
 
     if (targetFullscreen) {
         return MakeFullscreen();
@@ -1396,20 +1389,17 @@ bool VideoWindow::SetWindowBounds(const RECT& rect) {
     if (width <= 0 || height <= 0) {
         return false;
     }
-    m_ignoreWindowSizeEvents = true;
-    HWND zOrder = m_pictureInPicture.load(std::memory_order_relaxed)
-                      ? HWND_TOPMOST
-                      : HWND_NOTOPMOST;
-    SetWindowPos(m_hWnd, zOrder, rect.left, rect.top, width, height,
-                 SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-    ::ShowWindow(m_hWnd, SW_SHOW);
+    auto displayTransition = m_displayLifecycle.ownerTransition();
+    SetWindowPos(m_hWnd, nullptr, rect.left, rect.top, width, height,
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOZORDER |
+                     SWP_NOACTIVATE);
+    ::ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
     UpdateWindow(m_hWnd);
 
     RECT client{};
     if (GetClientRect(m_hWnd, &client)) {
         Resize(client.right - client.left, client.bottom - client.top);
     }
-    m_ignoreWindowSizeEvents = false;
     return true;
 }
 
@@ -1443,37 +1433,31 @@ bool VideoWindow::MakeFullscreen() {
 
     // Save extended style so we can restore it on exit
     m_prevExStyle = GetWindowLong(m_hWnd, GWL_EXSTYLE);
-    // diagnostic: entering fullscreen (log removed)
-
     if (GetMonitorInfo(hm, &mi)) {
         UINT monW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
         UINT monH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
 
-        m_ignoreWindowSizeEvents = true;
+        auto displayTransition = m_displayLifecycle.ownerTransition();
         SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-        LONG newEx = m_prevExStyle & ~(WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+        LONG newEx = m_prevExStyle & ~(WS_EX_LAYERED | WS_EX_NOACTIVATE |
+                                        WS_EX_TOOLWINDOW | WS_EX_TOPMOST);
         SetWindowLong(m_hWnd, GWL_EXSTYLE, newEx);
 
-        SetWindowPos(m_hWnd, HWND_TOPMOST, mi.rcMonitor.left, mi.rcMonitor.top, monW, monH, SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-        ::ShowWindow(m_hWnd, SW_SHOW);
+        SetWindowPos(m_hWnd, HWND_NOTOPMOST, mi.rcMonitor.left,
+                     mi.rcMonitor.top, monW, monH,
+                     SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+        ::ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
         UpdateWindow(m_hWnd);
 
         ReleaseSwapChainBackBufferReferences();
 
-        m_waitingForRenderTarget = true;
         if (!CreateSwapChain(static_cast<int>(monW), static_cast<int>(monH))) {
             std::fprintf(stderr, "VideoWindow: CreateSwapChain(borderless) failed\n");
-            m_ignoreWindowSizeEvents = false;
             return false;
         }
 
-        SetForegroundWindow(m_hWnd);
-        SetActiveWindow(m_hWnd);
-        SetFocus(m_hWnd);
-        BringWindowToTop(m_hWnd);
         Resize(static_cast<int>(monW), static_cast<int>(monH));
         m_isFullscreen = true;
-        m_ignoreWindowSizeEvents = false;
         return true;
     }
 
@@ -1484,30 +1468,23 @@ bool VideoWindow::MakeFullscreen() {
 bool VideoWindow::ExitFullscreen() {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain) return false;
-    HRESULT hr = m_swapChain->SetFullscreenState(FALSE, NULL);
-    if (FAILED(hr)) {
-        std::fprintf(stderr, "VideoWindow: SetFullscreenState(FALSE) failed (0x%08X)\n", static_cast<unsigned int>(hr));
-        // even if DXGI failed, try to restore window style
-    }
+    auto displayTransition = m_displayLifecycle.ownerTransition();
     // Restore style and position
     SetWindowLong(m_hWnd, GWL_STYLE, m_prevStyle);
     // Restore extended style as well
     SetWindowLong(m_hWnd, GWL_EXSTYLE, m_prevExStyle);
 
-    // Remove topmost if we set it earlier and restore z-order
-    SetWindowPos(m_hWnd, HWND_NOTOPMOST, m_prevRect.left, m_prevRect.top, m_prevRect.right - m_prevRect.left, m_prevRect.bottom - m_prevRect.top, SWP_NOZORDER | SWP_FRAMECHANGED);
+    // Make sure fullscreen leaves the window in the normal z-order group.
+    SetWindowPos(m_hWnd, HWND_NOTOPMOST, m_prevRect.left, m_prevRect.top,
+                 m_prevRect.right - m_prevRect.left,
+                 m_prevRect.bottom - m_prevRect.top, SWP_FRAMECHANGED);
 
     // Resize back to previous logical size
     Resize(m_prevRect.right - m_prevRect.left, m_prevRect.bottom - m_prevRect.top);
 
-    // Restore keyboard focus so shortcuts keep working
     ::ShowWindow(m_hWnd, SW_RESTORE);
-    SetForegroundWindow(m_hWnd);
-    SetActiveWindow(m_hWnd);
-    SetFocus(m_hWnd);
 
     m_isFullscreen = false;
-    // exited fullscreen message removed
     return true;
 }
 
@@ -1577,9 +1554,10 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     if (!m_input.beginWindowThread()) {
         return false;
     }
+    m_displayLifecycle.clear();
     m_closeRequested.store(false, std::memory_order_relaxed);
     if (m_closeRequestedEvent) {
-        ResetEvent(m_closeRequestedEvent);
+        ResetEvent(m_closeRequestedEvent.get());
     }
     HINSTANCE hInstance = GetModuleHandle(NULL);
     const wchar_t* className = L"RadioifyVideoWindow";
@@ -1692,10 +1670,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
 void VideoWindow::ResetSwapChain() {
     {
         std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
-        if (m_frameLatencyWaitableObject) {
-            CloseHandle(m_frameLatencyWaitableObject);
-            m_frameLatencyWaitableObject = nullptr;
-        }
+        m_frameLatencyWaitableObject.reset();
     }
     m_renderTargetView.Reset();
     m_swapChain2.Reset();
@@ -1735,15 +1710,46 @@ bool VideoWindow::RecreateSwapChainForCurrentDisplay(const char* reason) {
     ReleaseSwapChainBackBufferReferences();
     m_width = width;
     m_height = height;
-    m_waitingForRenderTarget = true;
     if (!CreateSwapChain(width, height)) {
         std::fprintf(stderr,
                      "VideoWindow: recreate swapchain failed after %s\n",
                      reason ? reason : "display change");
         return false;
     }
-    m_waitingForRenderTarget = false;
     return true;
+}
+
+void VideoWindow::OnClientResizedByWindow(int width, int height) {
+    m_displayLifecycle.clientResized(width, height);
+}
+
+void VideoWindow::OnDisplayChangedByWindow(int width, int height) {
+    m_displayLifecycle.displayChanged(width, height);
+}
+
+void VideoWindow::RequestCloseFromWindow() {
+    m_closeRequested.store(true, std::memory_order_relaxed);
+    if (m_closeRequestedEvent) {
+        SetEvent(m_closeRequestedEvent.get());
+    }
+}
+
+void VideoWindow::ApplyPendingDisplayChange() {
+    WindowDisplayLifecycle::Work work;
+    if (!m_displayLifecycle.consume(work)) {
+        return;
+    }
+
+    switch (work.kind) {
+        case WindowDisplayLifecycle::WorkKind::ClientResize:
+            Resize(work.width, work.height);
+            break;
+        case WindowDisplayLifecycle::WorkKind::DisplayChange:
+            (void)RecreateSwapChainForCurrentDisplay("display_change");
+            break;
+        case WindowDisplayLifecycle::WorkKind::None:
+            break;
+    }
 }
 
 void VideoWindow::HandlePresentResult(HRESULT hr, const char* stage) {
@@ -1790,6 +1796,8 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
     SetOutputColorAttemptStatus({});
     std::string colorAttemptStatus;
     if (SUCCEEDED(factoryHr) && dxgiFactory2) {
+        (void)dxgiFactory2->MakeWindowAssociation(m_hWnd,
+                                                  DXGI_MWA_NO_ALT_ENTER);
         DXGI_SWAP_CHAIN_DESC1 scd1 = {};
         scd1.Width = static_cast<UINT>(width);
         scd1.Height = static_cast<UINT>(height);
@@ -1811,15 +1819,25 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
                     DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
                     &m_outputColorState, &colorAttemptStatus)) {
                 SetOutputColorAttemptStatus(colorAttemptStatus);
-                swapChain1.As(&m_swapChain2);
-                if (m_swapChain2) {
-                    m_swapChain2->SetMaximumFrameLatency(1);
-                    std::lock_guard<std::mutex> latencyLock(m_frameLatencyMutex);
-                    m_frameLatencyWaitableObject =
-                        m_swapChain2->GetFrameLatencyWaitableObject();
+                HRESULT swapChain2Hr = swapChain1.As(&m_swapChain2);
+                if (SUCCEEDED(swapChain2Hr) && m_swapChain2) {
+                    HRESULT latencyHr = m_swapChain2->SetMaximumFrameLatency(1);
+                    HANDLE latencyHandle =
+                        SUCCEEDED(latencyHr)
+                            ? m_swapChain2->GetFrameLatencyWaitableObject()
+                            : nullptr;
+                    if (latencyHandle) {
+                        std::lock_guard<std::mutex> latencyLock(
+                            m_frameLatencyMutex);
+                        m_frameLatencyWaitableObject.reset(latencyHandle);
+                        Resize(width, height);
+                        return true;
+                    }
                 }
-                Resize(width, height);
-                return true;
+                colorAttemptStatus = "failed=frame_latency_waitable_unavailable";
+                SetOutputColorAttemptStatus(colorAttemptStatus);
+                ResetSwapChain();
+                return false;
             }
             SetOutputColorAttemptStatus(colorAttemptStatus);
             ResetSwapChain();
@@ -1872,14 +1890,12 @@ void VideoWindow::Resize(int width, int height) {
 
     m_width = width;
     m_height = height;
-    // Mark that the render target is ready so Present can proceed
-    m_waitingForRenderTarget = false;
 }
 
 void VideoWindow::Close() {
     m_closeRequested.store(false, std::memory_order_relaxed);
     if (m_closeRequestedEvent) {
-        ResetEvent(m_closeRequestedEvent);
+        ResetEvent(m_closeRequestedEvent.get());
     }
     SetCursorVisible(true);
     m_input.endWindowThread();
@@ -1890,10 +1906,6 @@ void VideoWindow::Close() {
     // Perform centralized cleanup (unbind, ClearState, flush, reset local resources)
     Cleanup();
 
-    // If swapchain is in full-screen exclusive, revert to windowed first and restore style
-    if (m_swapChain && m_isFullscreen) {
-        (void)m_swapChain->SetFullscreenState(FALSE, NULL);
-    }
     // Restore windowed style if we changed it
     if (m_hWnd && m_isFullscreen) {
         SetWindowLong(m_hWnd, GWL_STYLE, m_prevStyle);
@@ -1908,6 +1920,7 @@ void VideoWindow::Close() {
     m_textGridCols.store(0, std::memory_order_relaxed);
     m_textGridRows.store(0, std::memory_order_relaxed);
     m_pipRestoreFullscreen = false;
+    m_displayLifecycle.clear();
 
     if (m_hWnd) {
         DestroyWindow(m_hWnd);
@@ -1930,6 +1943,7 @@ bool VideoWindow::PollEvents() {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+    ApplyPendingDisplayChange();
     return handled;
 }
 
@@ -1940,7 +1954,7 @@ bool VideoWindow::PollInput(InputEvent& ev) {
 bool VideoWindow::ConsumeCloseRequested() {
     const bool requested = m_closeRequested.exchange(false, std::memory_order_relaxed);
     if (requested && m_closeRequestedEvent) {
-        ResetEvent(m_closeRequestedEvent);
+        ResetEvent(m_closeRequestedEvent.get());
     }
     return requested;
 }
@@ -1949,9 +1963,21 @@ void VideoWindow::SetVsync(bool enabled) {
     m_presentInterval.store(enabled ? 1u : 0u, std::memory_order_relaxed);
 }
 
-HANDLE VideoWindow::GetFrameLatencyWaitableObject() {
-    std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
-    return m_frameLatencyWaitableObject;
+void VideoWindow::WaitForFramePacing(std::chrono::milliseconds timeout) const {
+    NativeWaitHandle waitHandle;
+    {
+        std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+        waitHandle = NativeWaitHandle(m_frameLatencyWaitableObject.get());
+    }
+    if (waitHandle) {
+        const auto timeoutCount = timeout.count();
+        const DWORD timeoutMs =
+            timeoutCount < 0
+                ? INFINITE
+                : static_cast<DWORD>(std::min<int64_t>(
+                      timeoutCount, static_cast<int64_t>(INFINITE - 1)));
+        waitForHandlesAndPumpThreadWindowMessages(1, &waitHandle, timeoutMs);
+    }
 }
 
 std::string VideoWindow::GetSubtitleRenderError() const {
@@ -1973,8 +1999,7 @@ void VideoWindow::UpdateViewport(int width, int height) {
     m_viewportH = vp.h;
 }
 
-void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
-                          bool nonBlocking) {
+void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
@@ -2000,7 +2025,6 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
     }
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;
@@ -2102,10 +2126,8 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 #endif
     lock.unlock();
     if (!swapChain) return;
-    const VideoWindowPresentArgs presentArgs =
-        liveVideoWindowPresentArgs(presentInterval, nonBlocking);
+    const VideoWindowPresentArgs presentArgs = liveVideoWindowPresentArgs();
     HRESULT presHr = PresentSwapChain(swapChain.Get(), presentArgs, "video");
-    frameCache.SignalFrameLatencyFence(context.Get());
     if (videoWindowPresentSkipped(presHr)) {
 #if RADIOIFY_ENABLE_TIMING_LOG
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
@@ -2523,8 +2545,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     }
 }
 
-void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui,
-                                 bool nonBlocking) {
+void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
@@ -2550,7 +2571,6 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
     }
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
 
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;
@@ -2614,10 +2634,8 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
 #endif
     lock.unlock();
     if (!swapChain) return;
-    const VideoWindowPresentArgs presentArgs =
-        liveVideoWindowPresentArgs(presentInterval, nonBlocking);
+    const VideoWindowPresentArgs presentArgs = liveVideoWindowPresentArgs();
     HRESULT presHr = PresentSwapChain(swapChain.Get(), presentArgs, "overlay");
-    frameCache.SignalFrameLatencyFence(context.Get());
     if (videoWindowPresentSkipped(presHr)) {
 #if RADIOIFY_ENABLE_TIMING_LOG
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
@@ -2641,6 +2659,6 @@ void VideoWindow::PresentBackbuffer() {
     lock.unlock();
     if (!swapChain) return;
     const VideoWindowPresentArgs presentArgs =
-        liveVideoWindowPresentArgs(presentInterval, false);
+        synchronizedVideoWindowPresentArgs(presentInterval);
     (void)PresentSwapChain(swapChain.Get(), presentArgs, "backbuffer");
 }

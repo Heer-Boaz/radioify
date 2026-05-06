@@ -57,7 +57,7 @@ bool PlaybackPresentation::consumeWindowCloseRequested() {
   return impl_->windowPresenter.consumeCloseRequested();
 }
 
-HANDLE PlaybackPresentation::windowCloseRequestedWaitHandle() const {
+NativeWaitHandle PlaybackPresentation::windowCloseRequestedWaitHandle() const {
   return impl_->windowPresenter.closeRequestedWaitHandle();
 }
 

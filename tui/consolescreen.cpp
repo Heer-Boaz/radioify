@@ -18,6 +18,7 @@
 #include "asciiart.h"
 #include "browser_grid_index.h"
 #include "consoleinput.h"
+#include "core/windows_handle.h"
 #include "playback/media/artwork_catalog.h"
 #include "runtime_helpers.h"
 #include "terminal_cell_metrics.h"
@@ -251,17 +252,6 @@ struct ThumbJob {
 };
 
 struct ThumbCacheState {
-  ThumbCacheState() {
-    thumbnailReadyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  }
-
-  ~ThumbCacheState() {
-    if (thumbnailReadyEvent) {
-      CloseHandle(thumbnailReadyEvent);
-      thumbnailReadyEvent = nullptr;
-    }
-  }
-
   int thumbW = 0;
   int thumbH = 0;
   uint64_t generation = 1;
@@ -270,7 +260,8 @@ struct ThumbCacheState {
   std::mutex mutex;
   std::condition_variable cv;
   bool workerStarted = false;
-  HANDLE thumbnailReadyEvent = nullptr;
+  UniqueWindowsHandle thumbnailReadyEvent{CreateEventW(nullptr, TRUE, FALSE,
+                                                       nullptr)};
 };
 
 static ThumbCacheState& thumbCache() {
@@ -520,7 +511,7 @@ static void thumbWorkerLoop() {
       }
     }
     if (cache.thumbnailReadyEvent) {
-      SetEvent(cache.thumbnailReadyEvent);
+      SetEvent(cache.thumbnailReadyEvent.get());
     }
   }
 }
@@ -531,16 +522,16 @@ static void startThumbWorkerLocked(ThumbCacheState& cache) {
   std::thread(thumbWorkerLoop).detach();
 }
 
-HANDLE browserThumbnailWakeHandle() {
-  return thumbCache().thumbnailReadyEvent;
+NativeWaitHandle browserThumbnailWakeHandle() {
+  return NativeWaitHandle(thumbCache().thumbnailReadyEvent.get());
 }
 
 bool consumeBrowserThumbnailWake() {
   ThumbCacheState& cache = thumbCache();
   if (!cache.thumbnailReadyEvent) return false;
-  DWORD state = WaitForSingleObject(cache.thumbnailReadyEvent, 0);
+  DWORD state = WaitForSingleObject(cache.thumbnailReadyEvent.get(), 0);
   if (state != WAIT_OBJECT_0) return false;
-  ResetEvent(cache.thumbnailReadyEvent);
+  ResetEvent(cache.thumbnailReadyEvent.get());
   return true;
 }
 

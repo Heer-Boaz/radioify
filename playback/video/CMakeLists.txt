@@ -47,5 +47,6 @@ radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/input_events.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/input_queue.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/messages.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/display_lifecycle.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/textgrid.cpp
 )

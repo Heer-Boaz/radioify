@@ -1,7 +1,6 @@
 #pragma once
 
 #include <d3d11.h>
-#include <d3d11_4.h>
 #include <wrl/client.h>
 #include <array>
 #include <vector>
@@ -22,8 +21,6 @@ public:
     GpuVideoFrameCache() = default;
     ~GpuVideoFrameCache() = default;
 
-    using FrameLatencyWaitHandle = void*;
-
     // Update from an existing GPU texture
     bool Update(ID3D11Device* device, ID3D11DeviceContext* context,
                 ID3D11Texture2D* texture, int arrayIndex, int width, int height,
@@ -43,11 +40,6 @@ public:
 
     void Reset();
     void MarkFrameInFlight(ID3D11DeviceContext* context);
-
-    void InitFrameLatencyFence(ID3D11Device* device);
-    void ResetFrameLatencyFence();
-    void WaitForFrameLatency(uint32_t timeoutMs, FrameLatencyWaitHandle waitableHandle);
-    void SignalFrameLatencyFence(ID3D11DeviceContext* context);
 
     bool HasFrame() const { return m_format != CacheFormat::None; }
 
@@ -114,11 +106,6 @@ private:
     int m_activeIndex = 0;
     int m_writeIndex = 0;
     CacheFormat m_format = CacheFormat::None;
-
-    std::mutex m_frameLatencyMutex;
-    Microsoft::WRL::ComPtr<ID3D11Fence> m_frameLatencyFence;
-    FrameLatencyWaitHandle m_frameLatencyFenceEvent = nullptr;
-    uint64_t m_frameLatencyFenceValue = 0;
 
     bool EnsureGpuQueries(ID3D11Device* device);
     bool IsBufferReady(ID3D11DeviceContext* context, int index);

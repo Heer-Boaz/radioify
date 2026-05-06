@@ -21,24 +21,23 @@ constexpr auto kOverlayRefreshInterval = std::chrono::milliseconds(100);
 constexpr auto kTextGridPresentationRefreshInterval =
     std::chrono::milliseconds(250);
 
-void waitForPresenterWake(HANDLE wakeEvent) {
+void waitForPresenterWake(NativeWaitHandle wakeEvent) {
   if (wakeEvent) {
-    const NativeWaitHandle waitHandle(wakeEvent);
-    waitForHandlesAndPumpThreadWindowMessages(1, &waitHandle, INFINITE);
+    waitForHandlesAndPumpThreadWindowMessages(1, &wakeEvent, INFINITE);
     return;
   }
   waitForHandlesAndPumpThreadWindowMessages(0, nullptr, 50);
 }
 
-void waitForPresenterActivity(HANDLE wakeEvent, HANDLE frameEvent,
-                              int timeoutMs) {
+void waitForPresenterActivity(NativeWaitHandle wakeEvent,
+                              NativeWaitHandle frameEvent, int timeoutMs) {
   NativeWaitHandle handles[2];
   DWORD handleCount = 0;
   if (wakeEvent) {
-    handles[handleCount++] = NativeWaitHandle(wakeEvent);
+    handles[handleCount++] = wakeEvent;
   }
   if (frameEvent) {
-    handles[handleCount++] = NativeWaitHandle(frameEvent);
+    handles[handleCount++] = frameEvent;
   }
   if (handleCount == 0) {
     const DWORD waitMs = timeoutMs < 0
@@ -146,7 +145,7 @@ WindowUiState buildPlaybackFramebufferUiState(
 void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
-    std::atomic<bool>& forcePresent, HANDLE wakeEvent,
+    std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
     const std::function<bool()>& overlayVisible,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation) {
@@ -167,7 +166,7 @@ void runFramebufferPresenterLoop(
   int lastTextGridPresentationHeight = 0;
   int lastTextGridPresentationCellWidth = 0;
   int lastTextGridPresentationCellHeight = 0;
-  const HANDLE frameEvent = player.videoFrameWaitHandle();
+  const NativeWaitHandle frameEvent = player.videoFrameWaitHandle();
   while (threadState.load(std::memory_order_relaxed) !=
          WindowThreadState::Stopping) {
     videoWindow.PollEvents();
@@ -310,7 +309,7 @@ void runFramebufferPresenterLoop(
           buildGpuTextGridFrameFromScreenCells(
               textGridPresentationCells, textCols, textRows,
               textGridPresentationFrame);
-          videoWindow.PresentGpuTextGrid(textGridPresentationFrame, true);
+          videoWindow.PresentGpuTextGrid(textGridPresentationFrame);
         }
         lastTextGridPresentationPresent = std::chrono::steady_clock::now();
         lastTextGridPresentationWidth = windowWidth;
@@ -345,16 +344,15 @@ void runFramebufferPresenterLoop(
           WindowThreadState::Stopping) {
         break;
       }
-      frameCache.WaitForFrameLatency(
-          16, videoWindow.GetFrameLatencyWaitableObject());
+      videoWindow.WaitForFramePacing(std::chrono::milliseconds(16));
       if (threadState.load(std::memory_order_relaxed) ==
           WindowThreadState::Stopping) {
         break;
       }
       if (frameChanged) {
-        videoWindow.Present(frameCache, ui, true);
+        videoWindow.Present(frameCache, ui);
       } else {
-        videoWindow.PresentOverlay(frameCache, ui, true);
+        videoWindow.PresentOverlay(frameCache, ui);
       }
       if (overlayVisibleNow || seekingNow) {
         lastOverlayPresent = std::chrono::steady_clock::now();

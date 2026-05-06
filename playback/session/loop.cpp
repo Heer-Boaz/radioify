@@ -661,7 +661,7 @@ struct PlaybackLoopRunner::Impl {
     if (!refresh.useWindowPresenter &&
         core.playbackState() == PlaybackSessionState::Active) {
       output.waitForActivity(
-          input, timeoutMs, NativeWaitHandle(core.videoFrameWaitHandle()),
+          input, timeoutMs, core.videoFrameWaitHandle(),
           openFileRequests.nativeWaitHandle());
       return;
     }

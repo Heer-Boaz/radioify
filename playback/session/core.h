@@ -1,15 +1,8 @@
 #pragma once
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-
 #include <memory>
 
+#include "core/native_wait_handle.h"
 #include "playback_mode.h"
 #include "state.h"
 
@@ -58,7 +51,7 @@ class PlaybackSessionCore {
   bool refresh(bool useWindowPresenter, bool windowActive, bool& redraw);
   uint64_t videoFrameCounter() const;
   bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;
-  HANDLE videoFrameWaitHandle() const;
+  NativeWaitHandle videoFrameWaitHandle() const;
   void markPendingResize();
   void handlePendingResize(ConsoleScreen& screen, PlaybackRenderMode renderMode,
                            bool& redraw);

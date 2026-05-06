@@ -7,6 +7,8 @@
 #include <mutex>
 #include <thread>
 
+#include "core/native_wait_handle.h"
+#include "core/windows_handle.h"
 #include "presenter.h"
 #include "playback/session/window_presentation.h"
 #include "runtime_helpers.h"
@@ -51,22 +53,18 @@ struct WindowPresenter::Impl {
   GpuVideoFrameCache frameCache;
   std::atomic<WindowThreadState> threadState{WindowThreadState::Disabled};
   std::atomic<bool> forcePresent{false};
-  HANDLE wakeEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  UniqueWindowsHandle wakeEvent{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
   std::thread thread;
 
   Impl() { window.SetVsync(true); }
 
   ~Impl() {
     stop();
-    if (wakeEvent) {
-      CloseHandle(wakeEvent);
-      wakeEvent = nullptr;
-    }
   }
 
   void notify() {
     if (wakeEvent) {
-      SetEvent(wakeEvent);
+      SetEvent(wakeEvent.get());
     }
   }
 
@@ -112,7 +110,7 @@ struct WindowPresenter::Impl {
           if (opened) {
             playback_framebuffer_presenter::runFramebufferPresenterLoop(
                 player, window, frameCache, threadState, forcePresent,
-                wakeEvent, overlayVisible, buildUiState,
+                NativeWaitHandle(wakeEvent.get()), overlayVisible, buildUiState,
                 buildTextGridPresentation);
             window.Close();
           }
@@ -199,7 +197,7 @@ bool WindowPresenter::consumeCloseRequested() {
   return impl_->window.ConsumeCloseRequested();
 }
 
-HANDLE WindowPresenter::closeRequestedWaitHandle() const {
+NativeWaitHandle WindowPresenter::closeRequestedWaitHandle() const {
   return impl_->window.CloseRequestedWaitHandle();
 }
 

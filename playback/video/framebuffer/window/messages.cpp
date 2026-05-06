@@ -34,10 +34,6 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             reinterpret_cast<VideoWindow*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
     }
 
-    if (pThis && uMsg == WM_SIZE && pThis->m_ignoreWindowSizeEvents) {
-        return 0;
-    }
-
     if (!pThis) {
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
@@ -96,20 +92,23 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == WM_SIZE) {
-        pThis->Resize(LOWORD(lParam), HIWORD(lParam));
+        if (wParam != SIZE_MINIMIZED) {
+            pThis->OnClientResizedByWindow(LOWORD(lParam), HIWORD(lParam));
+        }
         return 0;
     }
 
     if (uMsg == WM_DISPLAYCHANGE) {
-        pThis->RecreateSwapChainForCurrentDisplay("display_change");
+        RECT rect{};
+        if (GetClientRect(hWnd, &rect)) {
+            pThis->OnDisplayChangedByWindow(
+                rect.right - rect.left, rect.bottom - rect.top);
+        }
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
 
     if (uMsg == WM_CLOSE) {
-        pThis->m_closeRequested.store(true, std::memory_order_relaxed);
-        if (pThis->m_closeRequestedEvent) {
-            SetEvent(pThis->m_closeRequestedEvent);
-        }
+        pThis->RequestCloseFromWindow();
         return 0;
     }
 

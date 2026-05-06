@@ -379,8 +379,7 @@ bool VideoWindow::DrawGpuTextGridFrame(ID3D11Device* device,
     return true;
 }
 
-void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
-                                     bool nonBlocking) {
+void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame) {
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     if (frame.cols <= 0 || frame.rows <= 0) return;
@@ -391,7 +390,6 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
     if (frame.cells.size() < cellCount) return;
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
 
     RECT rect;
     if (GetClientRect(m_hWnd, &rect)) {
@@ -427,7 +425,6 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame,
 
     lock.unlock();
     if (!swapChain) return;
-    const VideoWindowPresentArgs presentArgs =
-        liveVideoWindowPresentArgs(presentInterval, nonBlocking);
+    const VideoWindowPresentArgs presentArgs = liveVideoWindowPresentArgs();
     (void)PresentSwapChain(swapChain.Get(), presentArgs, "gpu_text_grid");
 }

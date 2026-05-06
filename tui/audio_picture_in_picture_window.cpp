@@ -362,7 +362,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   if (!screen_.snapshot(cells_, outW, outH)) return false;
   playback_framebuffer_presenter::buildGpuTextGridFrameFromScreenCells(
       cells_, outW, outH, frame_);
-  window_.PresentGpuTextGrid(frame_, true);
+  window_.PresentGpuTextGrid(frame_);
   return true;
 }
 

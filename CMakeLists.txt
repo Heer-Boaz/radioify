@@ -3,6 +3,7 @@ if (POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
 project(radioify LANGUAGES C CXX)
+enable_testing()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -386,6 +387,15 @@ radioify_link_repo_target(video_output_color_tests)
 if (WIN32)
   target_link_libraries(video_output_color_tests PRIVATE dxgi user32)
 endif()
+
+add_executable(window_display_lifecycle_tests)
+target_sources(window_display_lifecycle_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_window_display_lifecycle_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/framebuffer/window/display_lifecycle.cpp
+)
+radioify_link_repo_target(window_display_lifecycle_tests)
+add_test(NAME window_display_lifecycle_tests
+         COMMAND $<TARGET_FILE:window_display_lifecycle_tests>)
 
 if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL
