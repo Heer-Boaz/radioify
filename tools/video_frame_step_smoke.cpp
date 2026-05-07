@@ -243,8 +243,10 @@ int64_t chooseSeekUs(const Player& player, int64_t requestedSeekUs) {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::cerr
-        << "Usage: video_frame_step_smoke <video> [seek_us] [previous_count]\n";
+    std::cerr << "Usage: video_frame_step_smoke <video> [seek_us] "
+                 "[step_count] [mode]\n"
+                 "Modes: resume, forward-resume, mixed-resume, "
+                 "rapid-resume, resume-during-step\n";
     return 2;
   }
 
@@ -257,11 +259,31 @@ int main(int argc, char** argv) {
   if (requestedSeekUs < 1000000) {
     requestedSeekUs = 1000000;
   }
-  size_t previousCount = 1;
-  if (argc >= 4 && !parsePositiveSize(argv[3], &previousCount)) {
-    std::cerr << "video_frame_step_smoke: invalid previous_count: " << argv[3]
+  size_t stepCount = 1;
+  if (argc >= 4 && !parsePositiveSize(argv[3], &stepCount)) {
+    std::cerr << "video_frame_step_smoke: invalid step_count: " << argv[3]
               << '\n';
     return 2;
+  }
+  bool resumeAfterPrevious = false;
+  bool resumeAfterForward = false;
+  bool resumeAfterMixed = false;
+  bool rapidResume = false;
+  bool resumeDuringStep = false;
+  if (argc >= 5) {
+    const std::string mode = argv[4];
+    resumeAfterPrevious = mode == "resume";
+    resumeAfterForward = mode == "forward-resume";
+    resumeAfterMixed = mode == "mixed-resume";
+    rapidResume = mode == "rapid-resume";
+    resumeDuringStep = mode == "resume-during-step";
+    if (!resumeAfterPrevious && !resumeAfterForward && !resumeAfterMixed &&
+        !rapidResume && !resumeDuringStep) {
+      std::cerr << "video_frame_step_smoke: invalid mode: " << argv[4]
+                << " (expected 'resume', 'forward-resume', 'mixed-resume', "
+                   "'rapid-resume', or 'resume-during-step')\n";
+      return 2;
+    }
   }
 
   Player player;
@@ -318,13 +340,107 @@ int main(int argc, char** argv) {
   }
 
   const int64_t boundaryPtsUs = boundary.lastPresentedPtsUs;
+  if (rapidResume) {
+    const uint64_t beforeRapidCounter = player.videoFrameCounter();
+    for (size_t i = 0; i < stepCount; ++i) {
+      if (!player.requestFrameStep(
+              playback_video_frame_step::Direction::Previous)) {
+        std::cerr
+            << "video_frame_step_smoke: rapid previous-frame request rejected "
+            << "at step " << (i + 1) << '\n';
+        player.close();
+        return 1;
+      }
+    }
+    player.setVideoPaused(false);
+    PlayerDebugInfo resumed{};
+    if (!waitFor(player, kDefaultTimeoutMs, "rapid_resume",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > beforeRapidCounter &&
+                          info.seekInFlightSerial == 0 &&
+                          info.pendingSeekSerial == 0 &&
+                          info.state == PlayerState::Playing;
+                 },
+                 &resumed)) {
+      std::cerr << "video_frame_step_smoke: rapid resume did not return to "
+                   "playing after "
+                << stepCount << " queued previous-frame requests\n";
+      player.close();
+      return 1;
+    }
+    std::cout << "video_frame_step_smoke: PASS boundary_pts_us="
+              << boundaryPtsUs << " resumed_pts_us="
+              << resumed.lastPresentedPtsUs << " step_count=" << stepCount
+              << '\n';
+    player.close();
+    return 0;
+  }
+
+  if (resumeAfterForward) {
+    int64_t lastPtsUs = boundaryPtsUs;
+    uint64_t lastCounter = player.videoFrameCounter();
+    for (size_t i = 0; i < stepCount; ++i) {
+      if (!player.requestFrameStep(playback_video_frame_step::Direction::Next)) {
+        std::cerr << "video_frame_step_smoke: next-frame request rejected at "
+                  << "step " << (i + 1) << '\n';
+        player.close();
+        return 1;
+      }
+
+      PlayerDebugInfo next{};
+      std::string label = "forward_" + std::to_string(i + 1);
+      if (!waitFor(player, kDefaultTimeoutMs, label.c_str(),
+                   [&](const PlayerDebugInfo& info) {
+                     return info.hasVideoFrame &&
+                            player.videoFrameCounter() > lastCounter &&
+                            info.seekInFlightSerial == 0 &&
+                            info.pendingSeekSerial == 0 &&
+                            info.lastPresentedPtsUs > lastPtsUs;
+                   },
+                   &next)) {
+        std::cerr << "video_frame_step_smoke: next-frame step " << (i + 1)
+                  << " did not move after pts_us=" << lastPtsUs << '\n';
+        player.close();
+        return 1;
+      }
+      lastPtsUs = next.lastPresentedPtsUs;
+      lastCounter = player.videoFrameCounter();
+    }
+
+    player.setVideoPaused(false);
+    PlayerDebugInfo resumed{};
+    if (!waitFor(player, kDefaultTimeoutMs, "resume_after_forward",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > lastCounter &&
+                          info.seekInFlightSerial == 0 &&
+                          info.pendingSeekSerial == 0 &&
+                          info.state == PlayerState::Playing &&
+                          info.lastPresentedPtsUs > lastPtsUs;
+                 },
+                 &resumed)) {
+      std::cerr << "video_frame_step_smoke: resume did not advance after "
+                << stepCount << " next-frame steps from pts_us=" << lastPtsUs
+                << '\n';
+      player.close();
+      return 1;
+    }
+    std::cout << "video_frame_step_smoke: PASS boundary_pts_us="
+              << boundaryPtsUs << " resumed_from_pts_us=" << lastPtsUs
+              << " resumed_pts_us=" << resumed.lastPresentedPtsUs
+              << " step_count=" << stepCount << '\n';
+    player.close();
+    return 0;
+  }
+
   std::vector<int64_t> steppedPts;
-  steppedPts.reserve(previousCount + 1);
+  steppedPts.reserve(stepCount + 1);
   steppedPts.push_back(boundaryPtsUs);
 
   int64_t lastPtsUs = boundaryPtsUs;
   uint64_t lastCounter = player.videoFrameCounter();
-  for (size_t i = 0; i < previousCount; ++i) {
+  for (size_t i = 0; i < stepCount; ++i) {
     if (!player.requestFrameStep(
             playback_video_frame_step::Direction::Previous)) {
       std::cerr << "video_frame_step_smoke: previous-frame request rejected at "
@@ -355,8 +471,67 @@ int main(int argc, char** argv) {
     steppedPts.push_back(lastPtsUs);
   }
 
-  for (size_t i = 0; i < previousCount; ++i) {
-    const size_t targetIndex = previousCount - i - 1;
+  if (resumeDuringStep) {
+    if (!player.requestFrameStep(
+            playback_video_frame_step::Direction::Previous)) {
+      std::cerr << "video_frame_step_smoke: resume-during-step previous-frame "
+                   "request rejected\n";
+      player.close();
+      return 1;
+    }
+    player.setVideoPaused(false);
+    PlayerDebugInfo resumed{};
+    if (!waitFor(player, kDefaultTimeoutMs, "resume_during_step",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > lastCounter &&
+                          info.seekInFlightSerial == 0 &&
+                          info.pendingSeekSerial == 0 &&
+                          info.state == PlayerState::Playing;
+                 },
+                 &resumed)) {
+      std::cerr << "video_frame_step_smoke: resume did not recover while a "
+                   "frame-step request was pending after pts_us="
+                << lastPtsUs << '\n';
+      player.close();
+      return 1;
+    }
+    std::cout << "video_frame_step_smoke: PASS boundary_pts_us="
+              << boundaryPtsUs << " resumed_from_pts_us=" << lastPtsUs
+              << " resumed_pts_us=" << resumed.lastPresentedPtsUs
+              << " step_count=" << stepCount << '\n';
+    player.close();
+    return 0;
+  }
+
+  if (resumeAfterPrevious) {
+    player.setVideoPaused(false);
+    PlayerDebugInfo resumed{};
+    if (!waitFor(player, kDefaultTimeoutMs, "resume_after_previous",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > lastCounter &&
+                          info.seekInFlightSerial == 0 &&
+                          info.pendingSeekSerial == 0 &&
+                          info.lastPresentedPtsUs > lastPtsUs;
+                 },
+                 &resumed)) {
+      std::cerr << "video_frame_step_smoke: resume did not advance after "
+                << stepCount << " previous-frame steps from pts_us="
+                << lastPtsUs << '\n';
+      player.close();
+      return 1;
+    }
+    std::cout << "video_frame_step_smoke: PASS boundary_pts_us="
+              << boundaryPtsUs << " resumed_from_pts_us=" << lastPtsUs
+              << " resumed_pts_us=" << resumed.lastPresentedPtsUs
+              << " step_count=" << stepCount << '\n';
+    player.close();
+    return 0;
+  }
+
+  for (size_t i = 0; i < stepCount; ++i) {
+    const size_t targetIndex = stepCount - i - 1;
     const int64_t expectedPtsUs = steppedPts[targetIndex];
     if (!player.requestFrameStep(playback_video_frame_step::Direction::Next)) {
       std::cerr << "video_frame_step_smoke: next-frame request rejected at step "
@@ -386,9 +561,36 @@ int main(int argc, char** argv) {
     lastCounter = player.videoFrameCounter();
   }
 
+  if (resumeAfterMixed) {
+    player.setVideoPaused(false);
+    PlayerDebugInfo resumed{};
+    if (!waitFor(player, kDefaultTimeoutMs, "resume_after_mixed",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > lastCounter &&
+                          info.seekInFlightSerial == 0 &&
+                          info.pendingSeekSerial == 0 &&
+                          info.state == PlayerState::Playing &&
+                          info.lastPresentedPtsUs > lastPtsUs;
+                 },
+                 &resumed)) {
+      std::cerr << "video_frame_step_smoke: resume did not advance after "
+                << stepCount << " previous-frame and next-frame steps from "
+                << "pts_us=" << lastPtsUs << '\n';
+      player.close();
+      return 1;
+    }
+    std::cout << "video_frame_step_smoke: PASS boundary_pts_us="
+              << boundaryPtsUs << " resumed_from_pts_us=" << lastPtsUs
+              << " resumed_pts_us=" << resumed.lastPresentedPtsUs
+              << " step_count=" << stepCount << '\n';
+    player.close();
+    return 0;
+  }
+
   std::cout << "video_frame_step_smoke: PASS boundary_pts_us=" << boundaryPtsUs
             << " earliest_previous_pts_us=" << steppedPts.back()
-            << " previous_count=" << previousCount << '\n';
+            << " step_count=" << stepCount << '\n';
   player.close();
   return 0;
 }

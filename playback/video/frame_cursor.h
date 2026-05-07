@@ -71,6 +71,7 @@ class Controller {
   bool atNewestFrame() const;
   bool frameStepSeekPendingForSerial(int serial) const;
   bool cancelPendingFrameStepSeekForSerial(int serial);
+  bool exitFrameStepModeForPlaybackResume(int serial);
   std::optional<playback_video_frame_step::Request>
   pendingFrameStepRequestForSerial(int serial) const;
   bool replayPendingForSerial(int serial) const;

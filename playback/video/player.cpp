@@ -1996,6 +1996,26 @@ struct Player::Impl {
         VideoPresentationNotification::FrameStep, &*frameStepPresentation);
   }
 
+  bool abortFrameStepSeekForSerial(int serial) {
+    if (!frameCursor.cancelPendingFrameStepSeekForSerial(serial)) {
+      return false;
+    }
+    playbackState.resumePlaybackFrameSteps();
+    serialControl.clearPendingPresentation(serial);
+    observePlaybackPipeline();
+    return true;
+  }
+
+  bool exitFrameStepModeForPlaybackResume() {
+    bool exited = playbackState.resumePlaybackFrameSteps();
+    const int serial = serialControl.currentSerial();
+    if (frameCursor.exitFrameStepModeForPlaybackResume(serial)) {
+      serialControl.clearPendingPresentation(serial);
+      exited = true;
+    }
+    return exited;
+  }
+
   bool handlePendingFrameStepSeekFrame(
       playback_video_sync::LoopState& syncState, const QueuedFrame& front) {
     playback_video_frame_cursor::PendingSeekFrameDecision decision =
@@ -2025,12 +2045,7 @@ struct Player::Impl {
             static_cast<long long>(front.ptsUs),
             static_cast<unsigned long long>(decision.target.logicalIndex),
             static_cast<long long>(decision.target.ptsUs));
-        if (frameCursor.cancelPendingFrameStepSeekForSerial(
-                static_cast<int>(front.serial))) {
-          playbackState.resumePlaybackFrameSteps();
-          serialControl.clearPendingPresentation(static_cast<int>(front.serial));
-          observePlaybackPipeline();
-        }
+        abortFrameStepSeekForSerial(static_cast<int>(front.serial));
         return true;
       case playback_video_frame_cursor::PendingSeekFrameAction::MissedTarget:
         appendTimingFmt(
@@ -2041,12 +2056,7 @@ struct Player::Impl {
             static_cast<long long>(decision.target.ptsUs));
         discardFrontVideoFrame(front, "frame_step_seek_missed", 0,
                                PlayerClockSource::None, 0, 0);
-        if (frameCursor.cancelPendingFrameStepSeekForSerial(
-                static_cast<int>(front.serial))) {
-          playbackState.resumePlaybackFrameSteps();
-          serialControl.clearPendingPresentation(static_cast<int>(front.serial));
-          observePlaybackPipeline();
-        }
+        abortFrameStepSeekForSerial(static_cast<int>(front.serial));
         return true;
     }
     return false;
@@ -2371,8 +2381,10 @@ struct Player::Impl {
         case playback_video_control::EventType::PauseRequest: {
           const bool paused = ev.arg1 != 0;
           pauseRequested.store(paused, std::memory_order_relaxed);
+          const bool resumedFrameStepWork =
+              !paused && exitFrameStepModeForPlaybackResume();
           observePlaybackPipeline();
-          if (!paused && playbackState.resumePlaybackFrameSteps()) {
+          if (resumedFrameStepWork) {
             videoFrames.notify();
           }
           appendTimingFmt("ctrl_pause_request paused=%d",
