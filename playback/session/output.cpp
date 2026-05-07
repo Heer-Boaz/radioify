@@ -7,6 +7,7 @@
 #include "consoleinput.h"
 #include "core/windows_message_pump.h"
 #include "playback/video/player.h"
+#include "playback/video/gpu/videoprocessor.h"
 #include "playback/ascii/screen_renderer.h"
 #include "presentation.h"
 
@@ -16,6 +17,7 @@ struct PlaybackOutputController::Impl {
       : presentation(initialLayout, std::move(initialState)) {}
 
   PlaybackPresentation presentation;
+  GpuVideoFrameCache terminalFrameCache;
 };
 
 PlaybackOutputController::PlaybackOutputController(
@@ -144,7 +146,7 @@ const VideoWindow& PlaybackOutputController::window() const {
 }
 
 GpuVideoFrameCache& PlaybackOutputController::frameCache() {
-  return impl_->presentation.frameCache();
+  return impl_->terminalFrameCache;
 }
 
 void PlaybackOutputController::requestWindowPresent() {

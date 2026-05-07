@@ -8,6 +8,9 @@
 
 #include "core/native_wait_handle.h"
 #include "playback/video/decoder.h"
+#include "playback/video/frame_step.h"
+#include "playback/video/state/types.h"
+#include "playback/video/timing/clock_source.h"
 
 struct PlayerConfig {
   std::filesystem::path file;
@@ -16,26 +19,6 @@ struct PlayerConfig {
   bool allowDecoderScale = true;
   int targetWidth = 0;
   int targetHeight = 0;
-};
-
-enum class PlayerState {
-  Idle,
-  Opening,
-  Prefill,
-  Priming,
-  Playing,
-  Paused,
-  Seeking,
-  Draining,
-  Ended,
-  Error,
-  Closing,
-};
-
-enum class PlayerClockSource {
-  None,
-  Audio,
-  Video,
 };
 
 struct PlayerDebugInfo {
@@ -55,6 +38,7 @@ struct PlayerDebugInfo {
   int64_t lastDelayUs = 0;
   int64_t lastPresentedPtsUs = 0;
   int64_t lastPresentedDurationUs = 0;
+  uint64_t lastPresentedDisplayIndex = 0;
   size_t videoQueueDepth = 0;
   bool hasVideoFrame = false;
   int videoFrameWidth = 0;
@@ -76,6 +60,7 @@ class Player {
   void close();
 
   void requestSeek(int64_t targetUs);
+  bool requestFrameStep(playback_video_frame_step::Direction direction);
   void requestResize(int targetW, int targetH);
   void setVideoPaused(bool paused);
   size_t audioTrackCount() const;

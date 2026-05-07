@@ -6,8 +6,9 @@ enum class PlaybackShortcutContext : uint32_t {
   Global = 1u << 0,
   Shared = 1u << 1,
   PlaybackSession = 1u << 2,
-    PictureInPicture = 1u << 3,
+  PictureInPicture = 1u << 3,
   ImageViewer = 1u << 4,
+  VideoPlayback = 1u << 5,
 };
 
 inline constexpr uint32_t kPlaybackShortcutContextGlobal =
@@ -20,11 +21,14 @@ inline constexpr uint32_t kPlaybackShortcutContextPictureInPicture =
     static_cast<uint32_t>(PlaybackShortcutContext::PictureInPicture);
 inline constexpr uint32_t kPlaybackShortcutContextImageViewer =
     static_cast<uint32_t>(PlaybackShortcutContext::ImageViewer);
+inline constexpr uint32_t kPlaybackShortcutContextVideoPlayback =
+    static_cast<uint32_t>(PlaybackShortcutContext::VideoPlayback);
 inline constexpr uint32_t kPlaybackShortcutContextAll =
     kPlaybackShortcutContextGlobal | kPlaybackShortcutContextShared |
     kPlaybackShortcutContextPlaybackSession |
     kPlaybackShortcutContextPictureInPicture |
-    kPlaybackShortcutContextImageViewer;
+    kPlaybackShortcutContextImageViewer |
+    kPlaybackShortcutContextVideoPlayback;
 
 enum class PlaybackShortcutAction : uint8_t {
   Quit,
@@ -43,10 +47,12 @@ enum class PlaybackShortcutAction : uint8_t {
   ToggleOptions,
   SeekBackward,
   SeekForward,
+  PreviousFrame,
+  NextFrame,
   VolumeUp,
   VolumeDown,
-    TogglePictureInPicture,
+  TogglePictureInPicture,
   ExitPlaybackSession,
-    DismissPictureInPicture,
+  DismissPictureInPicture,
   CloseViewer,
 };

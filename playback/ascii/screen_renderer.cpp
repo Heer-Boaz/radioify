@@ -227,7 +227,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   }
   double displaySec = currentSec;
   bool seekingOverlay = player.isSeeking() || localSeekRequested;
-  if (seekingOverlay && totalSec > 0.0 && std::isfinite(totalSec)) {
+  if (localSeekRequested && totalSec > 0.0 && std::isfinite(totalSec) &&
+      pendingSeekTargetSec >= 0.0 && std::isfinite(pendingSeekTargetSec)) {
     displaySec = std::clamp(pendingSeekTargetSec, 0.0, totalSec);
   }
   const bool subtitlesEnabledNow =

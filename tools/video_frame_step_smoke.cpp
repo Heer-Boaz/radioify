@@ -1,0 +1,394 @@
+#include "playback/video/player.h"
+
+#include <chrono>
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <iterator>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "audio/audioplayback.h"
+#include "playback/video/gpu/gpu_shared.h"
+
+#if defined(_WIN32)
+#include <cwchar>
+#include <d3d11.h>
+#include <windows.h>
+#include <wrl/client.h>
+#endif
+
+int64_t nowUs() {
+  using namespace std::chrono;
+  return duration_cast<microseconds>(
+             steady_clock::now().time_since_epoch())
+      .count();
+}
+
+std::string toUtf8String(const std::filesystem::path& path) {
+#if defined(_WIN32)
+  const std::wstring wide = path.wstring();
+  if (wide.empty()) {
+    return {};
+  }
+  int size = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(),
+                                 static_cast<int>(wide.size()), nullptr, 0,
+                                 nullptr, nullptr);
+  if (size <= 0) {
+    return {};
+  }
+  std::string result(static_cast<size_t>(size), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.c_str(),
+                      static_cast<int>(wide.size()), result.data(), size,
+                      nullptr, nullptr);
+  return result;
+#else
+  return path.string();
+#endif
+}
+
+std::recursive_mutex& getSharedGpuMutex() {
+  static std::recursive_mutex mutex;
+  return mutex;
+}
+
+ID3D11Device* getSharedGpuDevice() {
+#if defined(_WIN32)
+  static Microsoft::WRL::ComPtr<ID3D11Device> device;
+  static std::once_flag once;
+  std::call_once(once, [] {
+    D3D_FEATURE_LEVEL levels[] = {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+    };
+    D3D_FEATURE_LEVEL selectedLevel{};
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    HRESULT hr = D3D11CreateDevice(
+        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels,
+        static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION, &device,
+        &selectedLevel, &context);
+    if (FAILED(hr)) {
+      D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr,
+                        D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels,
+                        static_cast<UINT>(std::size(levels)),
+                        D3D11_SDK_VERSION, &device, &selectedLevel, &context);
+    }
+  });
+  return device.Get();
+#else
+  return nullptr;
+#endif
+}
+
+std::FILE* openFileUtf8(const std::filesystem::path& path, const char* mode) {
+#if defined(_WIN32)
+  std::wstring wideMode;
+  for (const char* p = mode; p && *p; ++p) {
+    wideMode.push_back(static_cast<wchar_t>(*p));
+  }
+  std::FILE* file = nullptr;
+  if (_wfopen_s(&file, path.wstring().c_str(), wideMode.c_str()) != 0) {
+    return nullptr;
+  }
+  return file;
+#else
+  return std::fopen(path.string().c_str(), mode);
+#endif
+}
+
+bool audioStartStream(uint64_t) { return false; }
+void audioStopStream() {}
+size_t audioStreamBufferedFrames() { return 0; }
+int64_t audioStreamOldestPtsUs() { return 0; }
+bool audioStreamWriteSamples(const float*, uint64_t, int64_t, int, bool,
+                             uint64_t*) {
+  return false;
+}
+void audioStreamProcessRadio(float*, uint32_t) {}
+void audioStreamDiscardUntil(int64_t) {}
+void audioStreamPrimeClock(int, int64_t) {}
+void audioStreamSetEnd(bool) {}
+void audioStreamFlushSerial(int) {}
+int audioStreamSerial() { return 0; }
+int64_t audioStreamClockUs(int64_t) { return 0; }
+int64_t audioStreamClockLastUpdatedUs() { return 0; }
+bool audioStreamStarved() { return false; }
+bool audioStreamClockReady() { return false; }
+uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int) {
+  return lastCounter;
+}
+uint64_t audioStreamUpdateCounter() { return 0; }
+bool audioIsPaused() { return true; }
+bool audioIsFinished() { return true; }
+void audioTogglePause() {}
+void audioSetHold(bool) {}
+AudioPerfStats audioGetPerfStats() { return {}; }
+
+namespace {
+
+constexpr int64_t kDefaultSeekUs = 60000000;
+constexpr int kDefaultTimeoutMs = 120000;
+
+const char* stateName(PlayerState state) {
+  switch (state) {
+    case PlayerState::Idle:
+      return "Idle";
+    case PlayerState::Opening:
+      return "Opening";
+    case PlayerState::Prefill:
+      return "Prefill";
+    case PlayerState::Priming:
+      return "Priming";
+    case PlayerState::Playing:
+      return "Playing";
+    case PlayerState::Paused:
+      return "Paused";
+    case PlayerState::Seeking:
+      return "Seeking";
+    case PlayerState::Draining:
+      return "Draining";
+    case PlayerState::Ended:
+      return "Ended";
+    case PlayerState::Error:
+      return "Error";
+    case PlayerState::Closing:
+      return "Closing";
+  }
+  return "Unknown";
+}
+
+void printDebug(const char* label, const Player& player,
+                const PlayerDebugInfo& info) {
+  std::cout << label << " state=" << stateName(info.state)
+            << " serial=" << info.currentSerial
+            << " pending_seek=" << info.pendingSeekSerial
+            << " inflight_seek=" << info.seekInFlightSerial
+            << " frame_counter=" << player.videoFrameCounter()
+            << " pts_us=" << info.lastPresentedPtsUs
+            << " dur_us=" << info.lastPresentedDurationUs
+            << " display_index=" << info.lastPresentedDisplayIndex
+            << " queue=" << info.videoQueueDepth
+            << " has_frame=" << (info.hasVideoFrame ? 1 : 0) << '\n';
+}
+
+bool parseInt64(const char* value, int64_t* out) {
+  if (!value || !out) {
+    return false;
+  }
+  char* end = nullptr;
+  long long parsed = std::strtoll(value, &end, 10);
+  if (!end || *end != '\0') {
+    return false;
+  }
+  *out = static_cast<int64_t>(parsed);
+  return true;
+}
+
+bool parsePositiveSize(const char* value, size_t* out) {
+  if (!value || !out) {
+    return false;
+  }
+  char* end = nullptr;
+  unsigned long long parsed = std::strtoull(value, &end, 10);
+  if (!end || *end != '\0' || parsed == 0) {
+    return false;
+  }
+  *out = static_cast<size_t>(parsed);
+  return true;
+}
+
+template <typename Predicate>
+bool waitFor(Player& player, int timeoutMs, const char* label,
+             Predicate predicate, PlayerDebugInfo* out = nullptr) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  PlayerDebugInfo last{};
+  while (std::chrono::steady_clock::now() < deadline) {
+    last = player.debugInfo();
+    if (predicate(last)) {
+      if (out) {
+        *out = last;
+      }
+      printDebug(label, player, last);
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  std::cerr << "video_frame_step_smoke: timeout waiting for " << label << '\n';
+  printDebug("last", player, last);
+  return false;
+}
+
+int64_t chooseSeekUs(const Player& player, int64_t requestedSeekUs) {
+  int64_t durationUs = player.durationUs();
+  if (durationUs <= 0) {
+    return requestedSeekUs;
+  }
+  if (durationUs <= 3000000) {
+    return durationUs / 2;
+  }
+  int64_t latestSafeSeekUs = durationUs - 2000000;
+  if (requestedSeekUs <= latestSafeSeekUs) {
+    return requestedSeekUs;
+  }
+  return latestSafeSeekUs > 1000000 ? latestSafeSeekUs : durationUs / 2;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc < 2) {
+    std::cerr
+        << "Usage: video_frame_step_smoke <video> [seek_us] [previous_count]\n";
+    return 2;
+  }
+
+  int64_t requestedSeekUs = kDefaultSeekUs;
+  if (argc >= 3 && !parseInt64(argv[2], &requestedSeekUs)) {
+    std::cerr << "video_frame_step_smoke: invalid seek_us: " << argv[2]
+              << '\n';
+    return 2;
+  }
+  if (requestedSeekUs < 1000000) {
+    requestedSeekUs = 1000000;
+  }
+  size_t previousCount = 1;
+  if (argc >= 4 && !parsePositiveSize(argv[3], &previousCount)) {
+    std::cerr << "video_frame_step_smoke: invalid previous_count: " << argv[3]
+              << '\n';
+    return 2;
+  }
+
+  Player player;
+  PlayerConfig config;
+  config.file = std::filesystem::path(argv[1]);
+  config.logPath =
+      std::filesystem::current_path() / "video_frame_step_smoke.timing.log";
+  config.enableAudio = false;
+
+  std::string error;
+  if (!player.open(config, &error)) {
+    std::cerr << "video_frame_step_smoke: open failed: " << error << '\n';
+    return 1;
+  }
+  player.setVideoPaused(true);
+
+  if (!waitFor(player, kDefaultTimeoutMs, "init", [](const PlayerDebugInfo&) {
+        return true;
+      })) {
+    player.close();
+    return 1;
+  }
+
+  if (!waitFor(player, kDefaultTimeoutMs, "init_done",
+               [&](const PlayerDebugInfo&) { return player.initDone(); })) {
+    player.close();
+    return 1;
+  }
+  if (!player.initOk()) {
+    std::cerr << "video_frame_step_smoke: init failed: "
+              << player.initError() << '\n';
+    player.close();
+    return 1;
+  }
+
+  const int64_t seekUs = chooseSeekUs(player, requestedSeekUs);
+  std::cout << "video_frame_step_smoke: duration_us=" << player.durationUs()
+            << " seek_us=" << seekUs << '\n';
+
+  const uint64_t beforeSeekCounter = player.videoFrameCounter();
+  player.requestSeek(seekUs);
+
+  PlayerDebugInfo boundary{};
+  if (!waitFor(player, kDefaultTimeoutMs, "seek_presented",
+               [&](const PlayerDebugInfo& info) {
+                 return info.hasVideoFrame && info.seekInFlightSerial == 0 &&
+                        info.pendingSeekSerial == 0 &&
+                        player.videoFrameCounter() > beforeSeekCounter &&
+                        info.lastPresentedPtsUs > 0;
+               },
+               &boundary)) {
+    player.close();
+    return 1;
+  }
+
+  const int64_t boundaryPtsUs = boundary.lastPresentedPtsUs;
+  std::vector<int64_t> steppedPts;
+  steppedPts.reserve(previousCount + 1);
+  steppedPts.push_back(boundaryPtsUs);
+
+  int64_t lastPtsUs = boundaryPtsUs;
+  uint64_t lastCounter = player.videoFrameCounter();
+  for (size_t i = 0; i < previousCount; ++i) {
+    if (!player.requestFrameStep(
+            playback_video_frame_step::Direction::Previous)) {
+      std::cerr << "video_frame_step_smoke: previous-frame request rejected at "
+                << "step " << (i + 1) << '\n';
+      player.close();
+      return 1;
+    }
+
+    PlayerDebugInfo previous{};
+    std::string label = "previous_" + std::to_string(i + 1);
+    if (!waitFor(player, kDefaultTimeoutMs, label.c_str(),
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > lastCounter &&
+                          info.seekInFlightSerial == 0 &&
+                          info.pendingSeekSerial == 0 &&
+                          info.lastPresentedPtsUs > 0 &&
+                          info.lastPresentedPtsUs < lastPtsUs;
+                 },
+                 &previous)) {
+      std::cerr << "video_frame_step_smoke: previous-frame step " << (i + 1)
+                << " did not move before pts_us=" << lastPtsUs << '\n';
+      player.close();
+      return 1;
+    }
+    lastPtsUs = previous.lastPresentedPtsUs;
+    lastCounter = player.videoFrameCounter();
+    steppedPts.push_back(lastPtsUs);
+  }
+
+  for (size_t i = 0; i < previousCount; ++i) {
+    const size_t targetIndex = previousCount - i - 1;
+    const int64_t expectedPtsUs = steppedPts[targetIndex];
+    if (!player.requestFrameStep(playback_video_frame_step::Direction::Next)) {
+      std::cerr << "video_frame_step_smoke: next-frame request rejected at step "
+                << (i + 1) << '\n';
+      player.close();
+      return 1;
+    }
+
+    PlayerDebugInfo next{};
+    std::string label = "next_" + std::to_string(i + 1);
+    if (!waitFor(player, kDefaultTimeoutMs, label.c_str(),
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > lastCounter &&
+                          info.seekInFlightSerial == 0 &&
+                          info.pendingSeekSerial == 0 &&
+                          info.lastPresentedPtsUs == expectedPtsUs;
+                 },
+                 &next)) {
+      std::cerr << "video_frame_step_smoke: next-frame step " << (i + 1)
+                << " did not return to expected pts_us=" << expectedPtsUs
+                << '\n';
+      player.close();
+      return 1;
+    }
+    lastPtsUs = next.lastPresentedPtsUs;
+    lastCounter = player.videoFrameCounter();
+  }
+
+  std::cout << "video_frame_step_smoke: PASS boundary_pts_us=" << boundaryPtsUs
+            << " earliest_previous_pts_us=" << steppedPts.back()
+            << " previous_count=" << previousCount << '\n';
+  player.close();
+  return 0;
+}

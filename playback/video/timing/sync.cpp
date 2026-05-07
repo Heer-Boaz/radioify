@@ -1,6 +1,7 @@
 #include "sync.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <limits>
 
@@ -47,19 +48,45 @@ int64_t computeTargetDelayUs(int64_t delayUs, int64_t videoPtsUs,
   return delayUs;
 }
 
-int64_t fallbackFrameDuration(int64_t fallbackFrameDurationUs) {
-  return fallbackFrameDurationUs > 0 ? fallbackFrameDurationUs
-                                     : kDefaultFrameDurationUs;
+int64_t frameDurationEstimateOrDefault(int64_t estimatedFrameDurationUs) {
+  return estimatedFrameDurationUs > 0 ? estimatedFrameDurationUs
+                                      : kDefaultFrameDurationUs;
+}
+
+int64_t measuredFrameDurationUs(const QueuedFrame& frame,
+                                const QueuedFrame* next, bool* measured) {
+  if (measured) {
+    *measured = false;
+  }
+  if (next && next->serial == frame.serial) {
+    assert(next->displayIndex > frame.displayIndex);
+    const int64_t ptsDiffUs = next->ptsUs - frame.ptsUs;
+    if (ptsDiffUs > 0 && ptsDiffUs <= kMaxFrameDurationUs) {
+      if (measured) {
+        *measured = true;
+      }
+      return ptsDiffUs;
+    }
+  }
+  if (frame.durationUs > 0 && frame.durationUs <= kMaxFrameDurationUs) {
+    if (measured) {
+      *measured = true;
+    }
+    return frame.durationUs;
+  }
+  return 0;
 }
 
 }  // namespace
 
 void initializeLoopState(LoopState& state, int initialSerial,
-                         int64_t fallbackFrameDurationUs, int64_t nowUs) {
+                         int64_t estimatedFrameDurationUs, int64_t nowUs) {
   state.frameTimerUs = nowUs;
   state.lastPtsUs = -1;
-  state.lastDelayUsValue = fallbackFrameDuration(fallbackFrameDurationUs);
+  state.lastFrameDurationUs =
+      frameDurationEstimateOrDefault(estimatedFrameDurationUs);
   state.lastPresentedTimeUs = nowUs;
+  state.lastDisplayIndex = 0;
   state.lastSerial = initialSerial;
   state.firstPresentedForSerial = false;
   state.recentDurations.clear();
@@ -69,18 +96,21 @@ void notePlaybackStateChange(LoopState& state, int64_t nowUs) {
   state.frameTimerUs = nowUs;
 }
 
-void syncLoopSerial(LoopState& state, int serial,
-                    int64_t fallbackFrameDurationUs, int64_t nowUs) {
+bool syncLoopSerial(LoopState& state, int serial,
+                    int64_t estimatedFrameDurationUs, int64_t nowUs) {
   if (state.lastSerial == serial) {
-    return;
+    return false;
   }
   state.lastSerial = serial;
   state.firstPresentedForSerial = false;
   state.lastPtsUs = -1;
-  state.lastDelayUsValue = fallbackFrameDuration(fallbackFrameDurationUs);
+  state.lastDisplayIndex = 0;
+  state.lastFrameDurationUs =
+      frameDurationEstimateOrDefault(estimatedFrameDurationUs);
   state.frameTimerUs = nowUs;
   state.lastPresentedTimeUs = nowUs;
   state.recentDurations.clear();
+  return true;
 }
 
 bool shouldBackoffForEmptyQueue(const LoopState& state, PlayerState playbackState,
@@ -104,43 +134,41 @@ bool shouldBackoffForEmptyQueue(const LoopState& state, PlayerState playbackStat
 }
 
 bool isFrameBackwards(const LoopState& state, const QueuedFrame& frame) {
-  return state.lastPtsUs >= 0 && frame.ptsUs < state.lastPtsUs;
+  if (state.lastDisplayIndex == 0) {
+    return false;
+  }
+  assert(frame.displayIndex > 0);
+  return frame.displayIndex <= state.lastDisplayIndex;
 }
 
 PreparedFrame prepareFrame(LoopState& state, const QueuedFrame& front,
                            const QueuedFrame* next) {
+  assert(front.displayIndex > 0);
   PreparedFrame prepared;
   prepared.frame = front;
   if (state.lastPtsUs >= 0) {
-    int64_t expectedPtsUs = state.lastPtsUs + state.lastDelayUsValue;
+    int64_t expectedPtsUs = state.lastPtsUs + state.lastFrameDurationUs;
     if (std::abs(front.ptsUs - expectedPtsUs) > kDiscontinuityThresholdUs) {
       prepared.discontinuity = true;
     }
   }
 
-  int64_t durationFromPtsUs = 0;
-  if (next && next->serial == prepared.frame.serial) {
-    int64_t ptsDiffUs = next->ptsUs - prepared.frame.ptsUs;
-    if (ptsDiffUs > 0 && ptsDiffUs <= kMaxFrameDurationUs) {
-      durationFromPtsUs = ptsDiffUs;
-    }
+  bool measuredDuration = false;
+  prepared.frameDurationUs =
+      measuredFrameDurationUs(prepared.frame, next, &measuredDuration);
+  if (prepared.frameDurationUs <= 0) {
+    prepared.frameDurationUs = state.lastFrameDurationUs;
   }
+  prepared.delayUs = prepared.frameDurationUs;
 
-  int64_t baseDurationUs =
-      durationFromPtsUs > 0 ? durationFromPtsUs : prepared.frame.durationUs;
-  prepared.delayUs =
-      baseDurationUs > 0 ? baseDurationUs : state.lastDelayUsValue;
-  prepared.actualDurationUs = prepared.delayUs;
-
-  if (prepared.frame.durationUs > 0 &&
-      prepared.frame.durationUs <= kMaxFrameDurationUs) {
-    state.recentDurations.push_back(prepared.frame.durationUs);
+  if (measuredDuration) {
+    state.recentDurations.push_back(prepared.frameDurationUs);
     if (state.recentDurations.size() > kDurationHistorySize) {
       state.recentDurations.erase(state.recentDurations.begin());
     }
   }
 
-  int64_t smoothedDurationUs = state.lastDelayUsValue;
+  int64_t smoothedDurationUs = state.lastFrameDurationUs;
   if (!state.recentDurations.empty()) {
     auto sorted = state.recentDurations;
     std::sort(sorted.begin(), sorted.end());
@@ -149,17 +177,16 @@ PreparedFrame prepareFrame(LoopState& state, const QueuedFrame& front,
 
   if (prepared.delayUs <= 0 || prepared.delayUs > kMaxFrameDurationUs) {
     prepared.delayUs = smoothedDurationUs > 0 ? smoothedDurationUs
-                                              : state.lastDelayUsValue;
+                                              : state.lastFrameDurationUs;
   } else if (!state.recentDurations.empty()) {
     prepared.delayUs =
         (prepared.delayUs * 40 + smoothedDurationUs * 60) / 100;
   }
 
   if (prepared.delayUs <= 0) {
-    prepared.delayUs = state.lastDelayUsValue;
+    prepared.delayUs = state.lastFrameDurationUs;
   }
 
-  prepared.actualDurationUs = prepared.delayUs;
   return prepared;
 }
 
@@ -168,7 +195,6 @@ FramePlan planFrame(LoopState& state, PlayerState playbackState,
                     const playback_video_main_clock::Snapshot& master, int64_t nowUs) {
   FramePlan plan;
   plan.delayUs = prepared.delayUs;
-  plan.actualDurationUs = prepared.actualDurationUs;
 
   plan.syncLost =
       master.us != 0 &&
@@ -201,7 +227,8 @@ FramePlan planFrame(LoopState& state, PlayerState playbackState,
   if (master.source != PlayerClockSource::None) {
     plan.diffUs = prepared.frame.ptsUs - master.us;
 
-    if (master.audioStarved && master.audioClockReady) {
+    if (!master.audioMasterBlocked && master.audioStarved &&
+        master.audioClockReady) {
       plan.waitForAudioRecovery = true;
       return plan;
     }
@@ -242,15 +269,21 @@ bool shouldDropLateFrame(int64_t nowUs, int64_t targetUs, size_t queueDepth) {
 
 void noteLateDrop(LoopState& state, const PreparedFrame& prepared,
                   int64_t targetUs, int64_t nowUs) {
+  assert(prepared.frame.displayIndex > 0);
   state.lastPtsUs = prepared.frame.ptsUs;
+  state.lastDisplayIndex = prepared.frame.displayIndex;
   state.frameTimerUs = targetUs;
   state.lastPresentedTimeUs = nowUs;
 }
 
 void notePresentedFrame(LoopState& state, const PreparedFrame& prepared,
-                        int64_t delayUs, int64_t targetUs, int64_t nowUs) {
+                        int64_t targetUs, int64_t nowUs) {
+  assert(prepared.frame.displayIndex > 0);
   state.lastPtsUs = prepared.frame.ptsUs;
-  state.lastDelayUsValue = delayUs;
+  state.lastDisplayIndex = prepared.frame.displayIndex;
+  if (prepared.frameDurationUs > 0) {
+    state.lastFrameDurationUs = prepared.frameDurationUs;
+  }
   state.lastPresentedTimeUs = nowUs;
   state.frameTimerUs = std::max(targetUs, nowUs);
 }

@@ -5,11 +5,20 @@
 
 namespace playback_video_serial_control {
 
+enum class DemuxSeekMode {
+  Timeline,
+  VideoAtOrBefore,
+  VideoBeforeTarget,
+};
+
 struct TransitionPlan {
   bool valid = false;
   int serial = 0;
   int64_t displayTargetUs = 0;
   int64_t demuxTargetUs = 0;
+  int64_t demuxWindowEndUs = 0;
+  int64_t decoderPrerollTargetUs = 0;
+  DemuxSeekMode demuxSeekMode = DemuxSeekMode::Timeline;
   bool signalCommandPending = false;
 };
 
@@ -17,7 +26,10 @@ struct PendingSeek {
   bool valid = false;
   int serial = 0;
   int64_t demuxTargetUs = 0;
+  int64_t demuxWindowEndUs = 0;
   int64_t displayTargetUs = 0;
+  int64_t decoderPrerollTargetUs = 0;
+  DemuxSeekMode demuxSeekMode = DemuxSeekMode::Timeline;
 };
 
 class Controller {
@@ -27,6 +39,24 @@ class Controller {
 
   TransitionPlan beginTransition(int64_t targetUs, bool initDone,
                                  bool running);
+  TransitionPlan beginTransition(int64_t displayTargetUs,
+                                 int64_t demuxTargetUs, bool initDone,
+                                 bool running);
+  TransitionPlan beginTransition(int64_t displayTargetUs,
+                                 int64_t demuxTargetUs,
+                                 int64_t decoderPrerollTargetUs,
+                                 bool initDone, bool running);
+  TransitionPlan beginTransition(int64_t displayTargetUs,
+                                 int64_t demuxTargetUs,
+                                 int64_t demuxWindowEndUs,
+                                 int64_t decoderPrerollTargetUs,
+                                 bool initDone, bool running);
+  TransitionPlan beginTransition(int64_t displayTargetUs,
+                                 int64_t demuxTargetUs,
+                                 int64_t demuxWindowEndUs,
+                                 int64_t decoderPrerollTargetUs,
+                                 DemuxSeekMode demuxSeekMode,
+                                 bool initDone, bool running);
   PendingSeek claimPendingSeek();
   bool applySeekResult(int serial, int resultCode);
   void clearSeekFailure();
@@ -40,6 +70,7 @@ class Controller {
   bool seekFailed() const;
   int64_t seekDisplayUs() const;
   int64_t presentationTargetUsForSerial(int serial) const;
+  int64_t decoderPrerollTargetUsForSerial(int serial) const;
 
  private:
   std::atomic<int64_t> seekDisplayUs_{0};
@@ -47,10 +78,14 @@ class Controller {
   std::atomic<bool> seekFailed_{false};
   std::atomic<bool> seekPending_{false};
   std::atomic<int64_t> seekTargetUs_{0};
+  std::atomic<int64_t> demuxWindowEndUs_{0};
   std::atomic<int64_t> presentationTargetUs_{0};
+  std::atomic<int64_t> decoderPrerollTargetUs_{0};
+  std::atomic<int> demuxSeekMode_{static_cast<int>(DemuxSeekMode::Timeline)};
   std::atomic<int> currentSerial_{1};
   std::atomic<int> pendingSeekSerial_{0};
   std::atomic<int> presentationTargetSerial_{0};
+  std::atomic<int> decoderPrerollTargetSerial_{0};
 };
 
 }  // namespace playback_video_serial_control

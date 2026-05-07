@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "clock.h"
-#include "playback/video/player.h"
+#include "playback/video/timing/clock_source.h"
 
 namespace playback_video_main_clock {
 

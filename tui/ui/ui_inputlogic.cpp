@@ -992,6 +992,12 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
       case PlaybackShortcutAction::SeekForward:
         if (callbacks.onSeekBy) callbacks.onSeekBy(1);
         return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::PreviousFrame:
+        if (callbacks.onPreviousFrame) callbacks.onPreviousFrame();
+        return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::NextFrame:
+        if (callbacks.onNextFrame) callbacks.onNextFrame();
+        return PlaybackInputResult::Handled;
       case PlaybackShortcutAction::VolumeUp:
         if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(0.10f);
         return PlaybackInputResult::Handled;

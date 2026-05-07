@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -51,6 +50,7 @@ struct QueuedFrame {
   uint64_t serial = 0;
   VideoReadInfo info{};
   double decodeMs = 0.0;
+  uint64_t displayIndex = 0;
 };
 
 class FrameQueue {
@@ -65,6 +65,7 @@ class FrameQueue {
   bool peekNext(QueuedFrame* out) const;
   bool pop(QueuedFrame* out);
   void release(size_t poolIndex);
+  void notify();
   bool waitForFrame(std::chrono::milliseconds timeout,
                     const std::atomic<bool>* running,
                     const std::atomic<bool>* wake);
@@ -82,5 +83,6 @@ class FrameQueue {
   std::vector<VideoFrame> pool_;
   size_t maxFrames_ = 0;
   uint64_t serial_ = 0;
+  uint64_t wakeGeneration_ = 0;
   bool aborted_ = false;
 };

@@ -122,10 +122,6 @@ const VideoWindow& PlaybackPresentation::window() const {
   return impl_->windowPresenter.window();
 }
 
-GpuVideoFrameCache& PlaybackPresentation::frameCache() {
-  return impl_->windowPresenter.frameCache();
-}
-
 void PlaybackPresentation::requestPresent() {
   impl_->windowPresenter.requestPresent();
 }

@@ -77,12 +77,15 @@ WindowUiState buildPlaybackFramebufferUiState(
   if (totalSec > 0.0) {
     displaySec = std::clamp(displaySec, 0.0, totalSec);
   }
-  bool seekingOverlay = player.isSeeking() ||
-                        windowLocalSeekRequested.load(std::memory_order_relaxed);
-  if (seekingOverlay && totalSec > 0.0 && std::isfinite(totalSec)) {
-    displaySec = std::clamp(
-        windowPendingSeekTargetSec.load(std::memory_order_relaxed), 0.0,
-        totalSec);
+  const bool windowSeekRequested =
+      windowLocalSeekRequested.load(std::memory_order_relaxed);
+  bool seekingOverlay = player.isSeeking() || windowSeekRequested;
+  const double windowPendingTargetSec =
+      windowPendingSeekTargetSec.load(std::memory_order_relaxed);
+  if (windowSeekRequested && totalSec > 0.0 && std::isfinite(totalSec) &&
+      windowPendingTargetSec >= 0.0 &&
+      std::isfinite(windowPendingTargetSec)) {
+    displaySec = std::clamp(windowPendingTargetSec, 0.0, totalSec);
   }
   const bool subtitlesEnabledNow =
       enableSubtitlesShared.load(std::memory_order_relaxed);
@@ -108,8 +111,7 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.hasSubtitles = hasSubtitles;
   overlayInputs.subtitlesEnabled = subtitlesEnabledNow;
   overlayInputs.subtitleClockUs = clockUs;
-  overlayInputs.seekingOverlay =
-      player.isSeeking() || windowLocalSeekRequested.load(std::memory_order_relaxed);
+  overlayInputs.seekingOverlay = seekingOverlay;
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
   overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));

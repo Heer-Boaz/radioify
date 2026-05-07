@@ -158,7 +158,10 @@ struct WindowPresenter::Impl {
 
     threadState.store(WindowThreadState::Disabled, std::memory_order_relaxed);
     forcePresent.store(false, std::memory_order_relaxed);
-    frameCache.Reset();
+    {
+      std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+      frameCache.Reset();
+    }
     appendWindowPresenterTimingLog("window_presenter_stop end");
   }
 
@@ -205,8 +208,4 @@ VideoWindow& WindowPresenter::window() { return impl_->window; }
 
 const VideoWindow& WindowPresenter::window() const {
   return impl_->window;
-}
-
-GpuVideoFrameCache& WindowPresenter::frameCache() {
-  return impl_->frameCache;
 }

@@ -18,6 +18,10 @@ radioify_add_module_object_library(radioify_tool_video_output_color_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/video_output_color_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_video_frame_step_smoke
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_frame_step_smoke.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_window_display_lifecycle_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/window_display_lifecycle_tests.cpp
 )

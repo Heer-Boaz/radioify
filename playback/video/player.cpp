@@ -1,6 +1,7 @@
 #include "player.h"
 
 #include <algorithm>
+#include <cassert>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -59,6 +61,8 @@ extern "C" {
 #include "playback/video/audio/track_switch_timeline.h"
 #include "playback/video/control/events.h"
 #include "playback/video/control/serial.h"
+#include "playback/video/frame_cursor.h"
+#include "playback/video/frame_step_seek.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/video/state/machine.h"
 #include "playback/video/timing/main_clock.h"
@@ -406,6 +410,33 @@ const char* clockSourceName(PlayerClockSource source) {
       return "video";
   }
   return "none";
+}
+
+enum class VideoCursorPublication {
+  Preserve,
+  Append,
+};
+
+enum class VideoPresentationNotification {
+  None,
+  FrameStep,
+};
+
+playback_video_sync::PreparedFrame preparedFrameFromPresentedFrame(
+    const playback_video_frame_cursor::PresentedFrame& entry) {
+  assert(entry.serial > 0);
+  assert(entry.durationUs > 0);
+  assert(entry.displayIndex > 0);
+  playback_video_sync::PreparedFrame prepared{};
+  prepared.frame.ptsUs = entry.ptsUs;
+  prepared.frame.durationUs = entry.durationUs;
+  prepared.frame.serial = entry.serial;
+  prepared.frame.displayIndex = entry.displayIndex;
+  prepared.frame.info = entry.info;
+  prepared.frame.decodeMs = entry.decodeMs;
+  prepared.frameDurationUs = entry.durationUs;
+  prepared.delayUs = entry.durationUs;
+  return prepared;
 }
 
 static enum AVPixelFormat get_hw_format(AVCodecContext* ctx,
@@ -1504,29 +1535,32 @@ struct Player::Impl {
   std::atomic<bool> decodeEnded{false};
   std::atomic<bool> demuxEnded{false};
   std::atomic<bool> audioDecodeEnded{false};
+  playback_video_frame_cursor::Controller frameCursor;
+  playback_video_frame_step_seek::Controller frameStepSeek;
 
   std::atomic<bool> commandPending{false};
   std::atomic<uint64_t> resizeEpoch{0};
   std::atomic<int> resizeTargetW{0};
   std::atomic<int> resizeTargetH{0};
 
-    std::atomic<size_t> maxQueue{3};
-    std::atomic<int64_t> fallbackFrameDurationUs{33333};
-    std::atomic<int64_t> durationUs{0};
-    std::atomic<int> sourceWidth{0};
-    std::atomic<int> sourceHeight{0};
-    std::mutex audioTrackMutex;
-    std::vector<int> audioTrackStreams;
-    std::vector<std::string> audioTrackLabels;
-    std::atomic<int> activeAudioTrack{-1};
-    std::atomic<int> activeAudioStream{-1};
-    playback_audio_track_switch_timeline::Controller audioTrackSwitch;
-    playback_audio_output_timeline::Controller audioOutputTimeline;
-    mutable playback_video_main_clock::Controller mainClock;
+  std::atomic<size_t> maxQueue{3};
+  std::atomic<int64_t> estimatedFrameDurationUs{33333};
+  std::atomic<int64_t> durationUs{0};
+  std::atomic<int> sourceWidth{0};
+  std::atomic<int> sourceHeight{0};
+  std::mutex audioTrackMutex;
+  std::vector<int> audioTrackStreams;
+  std::vector<std::string> audioTrackLabels;
+  std::atomic<int> activeAudioTrack{-1};
+  std::atomic<int> activeAudioStream{-1};
+  playback_audio_track_switch_timeline::Controller audioTrackSwitch;
+  playback_audio_output_timeline::Controller audioOutputTimeline;
+  mutable playback_video_main_clock::Controller mainClock;
 
   std::atomic<int64_t> lastPresentedPtsUs{0};
   std::atomic<int64_t> lastPresentedDurationUs{0};
   std::atomic<int> lastPresentedSerial{0};
+  std::atomic<uint64_t> lastPresentedDisplayIndex{0};
   std::atomic<int64_t> lastMasterUs{0};
   std::atomic<int> lastMasterSource{0};
   std::atomic<int64_t> lastDiffUs{0};
@@ -1598,6 +1632,14 @@ struct Player::Impl {
     return serialControl.presentationTargetUsForSerial(static_cast<int>(serial));
   }
 
+  int64_t decoderPrerollTargetUsForSerial(uint64_t serial) const {
+    if (serial > static_cast<uint64_t>((std::numeric_limits<int>::max)())) {
+      return 0;
+    }
+    return serialControl.decoderPrerollTargetUsForSerial(
+        static_cast<int>(serial));
+  }
+
   int64_t audioDiscardTargetUsForSerial(uint64_t serial) const {
     int64_t targetUs = seekPresentationTargetUsForSerial(serial);
     if (targetUs <= 0 &&
@@ -1609,14 +1651,20 @@ struct Player::Impl {
 
   void resetAudioOutputForSerial(uint64_t serial, bool reacquireClock,
                                  const char* reason) {
+    resetAudioOutputForSerialAt(serial, audioDiscardTargetUsForSerial(serial),
+                                reacquireClock, reason);
+  }
+
+  void resetAudioOutputForSerialAt(uint64_t serial, int64_t targetUs,
+                                   bool reacquireClock, const char* reason) {
     if (serial == 0 ||
         serial > static_cast<uint64_t>((std::numeric_limits<int>::max)())) {
       return;
     }
     int s = static_cast<int>(serial);
-    int64_t targetUs = audioDiscardTargetUsForSerial(serial);
     playback_audio_output_timeline::ResetResult result =
-        audioOutputTimeline.resetForSerial(s, targetUs, reacquireClock);
+        audioOutputTimeline.resetForSerial(s, (std::max)(int64_t{0}, targetUs),
+                                           reacquireClock);
     if (result.reacquireStarted) {
       appendTimingFmt("audio_clock_reacquire_begin serial=%d target_us=%lld reason=%s",
                       result.serial, static_cast<long long>(result.targetUs),
@@ -1647,28 +1695,39 @@ struct Player::Impl {
   bool shouldDropSeekPrerollFrame(uint64_t serial, int64_t ptsUs,
                                   int64_t durationUs,
                                   int64_t* targetUsOut) const {
-    const int64_t targetUs = seekPresentationTargetUsForSerial(serial);
+    const int64_t targetUs = decoderPrerollTargetUsForSerial(serial);
     if (targetUsOut) {
       *targetUsOut = targetUs;
     }
     return playback_video_timeline::shouldDropPrerollFrame(
         targetUs, ptsUs, durationUs,
-        fallbackFrameDurationUs.load(std::memory_order_relaxed));
+        estimatedFrameDurationUs.load(std::memory_order_relaxed));
   }
 
   void postEvent(const playback_video_control::Event& ev) {
     std::lock_guard<std::mutex> lock(eventMutex);
-    if (ev.type == playback_video_control::EventType::SeekRequest) {
-      for (auto it = events.rbegin(); it != events.rend(); ++it) {
-        if (it->type == playback_video_control::EventType::SeekRequest) {
-          *it = ev;
-          eventCv.notify_one();
-          return;
-        }
-      }
+    if (!events.empty() &&
+        playback_video_control::shouldCoalesceQueuedEvent(events.back().type,
+                                                          ev.type)) {
+      events.back() = ev;
+      eventCv.notify_one();
+      return;
     }
     events.push_back(ev);
     eventCv.notify_one();
+  }
+
+  void requestFrameStepSeek(
+      const playback_video_frame_step::Request& request,
+      const playback_video_frame_cursor::StepTarget& target) {
+    playback_video_control::Event ev{};
+    ev.type = playback_video_control::EventType::FrameStepSeekRequest;
+    ev.serial = request.serial;
+    ev.frameStepGeneration = request.generation;
+    ev.frameStepDirection = request.direction;
+    ev.frameStepSeek = target.seek;
+    ev.frameStepSeek.generation = request.generation;
+    postEvent(ev);
   }
 
   void applyStateChange(playback_video_state_machine::StateChange change) {
@@ -1679,6 +1738,318 @@ struct Player::Impl {
     playback_video_state_machine::StateEffects effects = change.projection.effects;
     audioSetHold(effects.holdAudioOutput);
     mainClock.changePause(effects.pauseMainClock, nowUs());
+  }
+
+  void logVideo(const char* tag, const QueuedFrame* frame, int64_t masterUs,
+                PlayerClockSource source, int64_t diffUs, int64_t delayUs) {
+    PlayerState st = playbackState.current();
+    size_t q = videoFrames.size();
+    playback_video_main_clock::Snapshot clockDebug =
+        masterClockSnapshot(nowUs());
+    int audioReady = clockDebug.audioClockReady ? 1 : 0;
+    int audioFresh = clockDebug.audioClockFresh ? 1 : 0;
+    int audioStarved = clockDebug.audioStarved ? 1 : 0;
+
+    if (std::strcmp(tag, "present") == 0 ||
+        std::strcmp(tag, "queue_high") == 0 ||
+        std::strcmp(tag, "queue_low") == 0 ||
+        std::strcmp(tag, "drop_serial") == 0 ||
+        std::strcmp(tag, "drop_backwards") == 0) {
+      static int eventCounter = 0;
+      bool heartbeat = (++eventCounter % 30 == 0);
+      bool syncIssue = std::abs(diffUs) > 100000;
+      if (!heartbeat && !syncIssue &&
+          (std::strcmp(tag, "present") == 0 ||
+           std::strcmp(tag, "drop_serial") == 0 ||
+           std::strcmp(tag, "drop_backwards") == 0)) {
+        return;
+      }
+      if (!heartbeat && std::strcmp(tag, "present") != 0 &&
+          std::strcmp(tag, "drop_serial") != 0 &&
+          std::strcmp(tag, "drop_backwards") != 0) {
+        return;
+      }
+    }
+
+    if (frame) {
+      appendTimingFmt(
+          "video_%s state=%s serial=%d pts_us=%lld dur_us=%lld master=%lld master_src=%s diff_us=%lld delay_us=%lld q=%zu dec_ms=%.1f audio_ready=%d audio_fresh=%d audio_starved=%d",
+          tag, playerStateName(st), static_cast<int>(frame->serial),
+          static_cast<long long>(frame->ptsUs),
+          static_cast<long long>(frame->durationUs),
+          static_cast<long long>(masterUs), clockSourceName(source),
+          static_cast<long long>(diffUs), static_cast<long long>(delayUs), q,
+          frame->decodeMs, audioReady, audioFresh, audioStarved);
+    } else {
+      appendTimingFmt(
+          "video_%s state=%s q=%zu master=%lld audio_ready=%d audio_fresh=%d audio_starved=%d",
+          tag, playerStateName(st), q, static_cast<long long>(masterUs),
+          audioReady, audioFresh, audioStarved);
+    }
+  }
+
+  void publishPresentedFrame(
+      playback_video_sync::LoopState& syncState, VideoFrame frame,
+      QueuedFrame item, const playback_video_sync::PreparedFrame& prepared,
+      const char* tag, int64_t targetUs, int64_t masterUs,
+      PlayerClockSource source, int64_t diffUs, int64_t delayUs,
+      VideoCursorPublication cursorPublication,
+      VideoPresentationNotification notification,
+      const playback_video_frame_step::Request* frameStepRequest = nullptr) {
+    item.ptsUs = prepared.frame.ptsUs;
+    item.durationUs = prepared.frameDurationUs;
+    const int serialForFrame = static_cast<int>(item.serial);
+    if (cursorPublication == VideoCursorPublication::Append) {
+      frameCursor.appendPresented(item, frame);
+    }
+    {
+      std::lock_guard<std::mutex> lock(currentFrameMutex);
+      currentFrame = std::move(frame);
+      hasFrame.store(true, std::memory_order_relaxed);
+    }
+    frameCounter.fetch_add(1, std::memory_order_relaxed);
+    if (frameReadyEvent) {
+      SetEvent(frameReadyEvent.get());
+    }
+    frameCv.notify_all();
+
+    lastPresentedPtsUs.store(item.ptsUs, std::memory_order_relaxed);
+    lastPresentedDurationUs.store(prepared.frameDurationUs,
+                                  std::memory_order_relaxed);
+    lastPresentedSerial.store(serialForFrame, std::memory_order_relaxed);
+    lastPresentedDisplayIndex.store(item.displayIndex,
+                                    std::memory_order_relaxed);
+    lastMasterUs.store(masterUs, std::memory_order_relaxed);
+    lastMasterSource.store(static_cast<int>(source),
+                           std::memory_order_relaxed);
+    lastDiffUs.store(diffUs, std::memory_order_relaxed);
+    lastDelayUs.store(delayUs, std::memory_order_relaxed);
+    {
+      std::lock_guard<std::mutex> lock(lastInfoMutex);
+      lastInfo = item.info;
+      lastInfoValid.store(true, std::memory_order_relaxed);
+    }
+
+    int64_t presentedNowUs = nowUs();
+    mainClock.updateVideo(serialForFrame, item.ptsUs, presentedNowUs);
+    bool pauseClockAfterPresent =
+        playback_video_state_machine::project(playbackState.current())
+            .effects.pauseMainClock;
+    if (pauseClockAfterPresent) {
+      mainClock.changePause(true, presentedNowUs);
+    }
+    if (notification == VideoPresentationNotification::FrameStep) {
+      assert(frameStepRequest);
+      playback_video_control::Event ev{};
+      ev.type = playback_video_control::EventType::FrameStepPresented;
+      ev.serial = serialForFrame;
+      ev.presentedPtsUs = item.ptsUs;
+      ev.displayIndex = item.displayIndex;
+      ev.frameStepGeneration = frameStepRequest->generation;
+      postEvent(ev);
+    }
+    serialControl.clearPendingPresentation(serialForFrame);
+    logVideo(tag, &item, masterUs, source, diffUs, delayUs);
+
+    if (cursorPublication == VideoCursorPublication::Append) {
+      size_t qDepth = videoFrames.size();
+      if (qDepth <= 2) {
+        logVideo("queue_low", &item, masterUs, source, diffUs, delayUs);
+      } else if (qDepth >= 30) {
+        logVideo("queue_high", &item, masterUs, source, diffUs, delayUs);
+      }
+    }
+
+    if (!syncState.firstPresentedForSerial) {
+      syncState.firstPresentedForSerial = true;
+      playback_video_control::Event ev{};
+      ev.type = playback_video_control::EventType::FirstFramePresented;
+      ev.serial = serialForFrame;
+      postEvent(ev);
+    }
+    playback_video_sync::notePresentedFrame(syncState, prepared, targetUs,
+                                            presentedNowUs);
+  }
+
+  void publishPresentedCursorFrame(
+      playback_video_sync::LoopState& syncState,
+      const playback_video_frame_cursor::PresentedFrame& entry,
+      const char* tag, int64_t targetUs, int64_t masterUs,
+      PlayerClockSource source, int64_t diffUs, int64_t delayUs,
+      VideoPresentationNotification notification,
+      const playback_video_frame_step::Request* frameStepRequest = nullptr) {
+    playback_video_sync::PreparedFrame prepared =
+        preparedFrameFromPresentedFrame(entry);
+    publishPresentedFrame(syncState, entry.frame, prepared.frame, prepared, tag,
+                          targetUs, masterUs, source, diffUs, delayUs,
+                          VideoCursorPublication::Preserve, notification,
+                          frameStepRequest);
+  }
+
+  bool dispatchCursorFrameStep(
+      playback_video_sync::LoopState& syncState,
+      const playback_video_frame_step::Request& request, const char* presentTag,
+      const char* seekTag, int64_t stepNow,
+      const playback_video_main_clock::Snapshot& stepMaster) {
+    playback_video_frame_cursor::StepTarget target =
+        frameCursor.target(request.direction);
+    switch (target.kind) {
+      case playback_video_frame_cursor::StepTargetKind::None:
+        return false;
+      case playback_video_frame_cursor::StepTargetKind::Present: {
+        if (!playbackState.publishFrameStepPresentation(request)) {
+          return true;
+        }
+        const playback_video_frame_cursor::PresentedFrame* entry =
+            frameCursor.step(request.direction);
+        if (!entry) {
+          assert(false && "Frame cursor present target must be step-able");
+          std::abort();
+        }
+        publishPresentedCursorFrame(
+            syncState, *entry, presentTag, stepNow, stepMaster.us,
+            stepMaster.source, 0, 0, VideoPresentationNotification::FrameStep,
+            &request);
+        return true;
+      }
+      case playback_video_frame_cursor::StepTargetKind::Seek:
+        if (!playbackState.publishFrameStepSeek(request)) {
+          return true;
+        }
+        requestFrameStepSeek(request, target);
+        videoFrames.notify();
+        appendTimingFmt(
+            "%s direction=%d target_logical=%llu anchor_logical=%llu target_us=%lld anchor_us=%lld",
+            seekTag,
+            request.direction == playback_video_frame_step::Direction::Previous
+                ? -1
+                : 1,
+            static_cast<unsigned long long>(target.seek.target.logicalIndex),
+            static_cast<unsigned long long>(target.seek.anchor.logicalIndex),
+            static_cast<long long>(target.seek.target.ptsUs),
+            static_cast<long long>(target.seek.anchor.ptsUs));
+        return true;
+    }
+    return false;
+  }
+
+  void discardFrontVideoFrame(const QueuedFrame& front, const char* tag,
+                              int64_t masterUs, PlayerClockSource source,
+                              int64_t diffUs, int64_t delayUs) {
+    logVideo(tag, &front, masterUs, source, diffUs, delayUs);
+    QueuedFrame drop{};
+    if (videoFrames.pop(&drop)) {
+      assert(drop.poolIndex == front.poolIndex);
+      assert(drop.serial == front.serial);
+      assert(drop.displayIndex == front.displayIndex);
+      videoFrames.release(drop.poolIndex);
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+  }
+
+  void saveFrameStepBackstepCandidate(const QueuedFrame& front) {
+    QueuedFrame item{};
+    if (!videoFrames.pop(&item)) {
+      assert(false && "Frame-step backstep candidate must be queue-front");
+      std::abort();
+    }
+    assert(item.poolIndex == front.poolIndex);
+    assert(item.serial == front.serial);
+    assert(item.displayIndex == front.displayIndex);
+    videoFrames.release(item.poolIndex);
+    logVideo("frame_step_backstep_save", &item, 0, PlayerClockSource::None, 0,
+             0);
+  }
+
+  void presentSavedFrameStepBackstep(
+      playback_video_sync::LoopState& syncState,
+      const playback_video_frame_cursor::PendingSeekFrameDecision& decision,
+      const QueuedFrame& boundary) {
+    if (!decision.frame || decision.frame->serial != boundary.serial) {
+      assert(false && "Frame-step backstep reached boundary without candidate");
+      std::abort();
+    }
+    std::optional<playback_video_frame_step::Request> frameStepPresentation =
+        frameCursor.pendingFrameStepRequestForSerial(
+            static_cast<int>(boundary.serial));
+    if (!frameStepPresentation) {
+      assert(false && "Frame-step backstep target must publish presentation");
+      std::abort();
+    }
+
+    QueuedFrame item{};
+    item.ptsUs = decision.frame->ptsUs;
+    item.durationUs = decision.frame->durationUs;
+    item.serial = decision.frame->serial;
+    item.displayIndex = decision.frame->displayIndex;
+    item.info = decision.frame->info;
+    item.decodeMs = decision.frame->decodeMs;
+    playback_video_sync::PreparedFrame prepared =
+        playback_video_sync::prepareFrame(syncState, item, &boundary);
+    const int64_t presentNow = nowUs();
+    playback_video_main_clock::Snapshot master =
+        masterClockSnapshot(presentNow);
+    publishPresentedFrame(
+        syncState, decision.frame->frame, item, prepared,
+        "frame_step_backstep", presentNow, master.us, master.source, 0, 0,
+        VideoCursorPublication::Append,
+        VideoPresentationNotification::FrameStep, &*frameStepPresentation);
+  }
+
+  bool handlePendingFrameStepSeekFrame(
+      playback_video_sync::LoopState& syncState, const QueuedFrame& front) {
+    playback_video_frame_cursor::PendingSeekFrameDecision decision =
+        frameCursor.inspectPendingSeekFrame(front,
+                                           &videoFrames.frame(front.poolIndex));
+    switch (decision.action) {
+      case playback_video_frame_cursor::PendingSeekFrameAction::None:
+      case playback_video_frame_cursor::PendingSeekFrameAction::PresentTarget:
+        return false;
+      case playback_video_frame_cursor::PendingSeekFrameAction::
+          SaveBackstepCandidate:
+        saveFrameStepBackstepCandidate(front);
+        return true;
+      case playback_video_frame_cursor::PendingSeekFrameAction::
+          PresentBackstepCandidate:
+        presentSavedFrameStepBackstep(syncState, decision, front);
+        return true;
+      case playback_video_frame_cursor::PendingSeekFrameAction::DropPreroll:
+        discardFrontVideoFrame(front, "frame_step_seek_preroll", 0,
+                               PlayerClockSource::None, 0, 0);
+        return true;
+      case playback_video_frame_cursor::PendingSeekFrameAction::
+          CancelWithoutDropping:
+        appendTimingFmt(
+            "frame_step_seek_cancel serial=%llu actual_us=%lld target_logical=%llu target_us=%lld",
+            static_cast<unsigned long long>(front.serial),
+            static_cast<long long>(front.ptsUs),
+            static_cast<unsigned long long>(decision.target.logicalIndex),
+            static_cast<long long>(decision.target.ptsUs));
+        if (frameCursor.cancelPendingFrameStepSeekForSerial(
+                static_cast<int>(front.serial))) {
+          playbackState.resumePlaybackFrameSteps();
+          serialControl.clearPendingPresentation(static_cast<int>(front.serial));
+          observePlaybackPipeline();
+        }
+        return true;
+      case playback_video_frame_cursor::PendingSeekFrameAction::MissedTarget:
+        appendTimingFmt(
+            "frame_step_seek_missed serial=%llu actual_us=%lld target_logical=%llu target_us=%lld",
+            static_cast<unsigned long long>(front.serial),
+            static_cast<long long>(front.ptsUs),
+            static_cast<unsigned long long>(decision.target.logicalIndex),
+            static_cast<long long>(decision.target.ptsUs));
+        discardFrontVideoFrame(front, "frame_step_seek_missed", 0,
+                               PlayerClockSource::None, 0, 0);
+        if (frameCursor.cancelPendingFrameStepSeekForSerial(
+                static_cast<int>(front.serial))) {
+          playbackState.resumePlaybackFrameSteps();
+          serialControl.clearPendingPresentation(static_cast<int>(front.serial));
+          observePlaybackPipeline();
+        }
+        return true;
+    }
+    return false;
   }
 
   void clearCurrentFrame() {
@@ -1714,11 +2085,13 @@ struct Player::Impl {
     snapshot.demuxEnded = demuxEnded.load(std::memory_order_relaxed);
     snapshot.videoQueueDepth = videoFrames.size();
     snapshot.videoQueueEmpty = snapshot.videoQueueDepth == 0;
+    snapshot.currentSerial = serialControl.currentSerial();
+    snapshot.videoReplayPending =
+        frameCursor.replayPendingForSerial(snapshot.currentSerial);
     snapshot.audioBufferedFrames = audioStreamBufferedFrames();
     AudioPerfStats audioStats = audioGetPerfStats();
     snapshot.audioSampleRate = audioStats.sampleRate;
     snapshot.audioSyncPointReady = audioStreamOldestPtsUs() != AV_NOPTS_VALUE;
-    snapshot.currentSerial = serialControl.currentSerial();
     snapshot.lastPresentedSerial =
         lastPresentedSerial.load(std::memory_order_relaxed);
     snapshot.pendingSeekSerial = serialControl.pendingSeekSerial();
@@ -1727,10 +2100,22 @@ struct Player::Impl {
     return snapshot;
   }
 
+  void observePlaybackPipeline() {
+    const bool audioPaused =
+        audioStartOk.load() ? audioIsPaused() : pauseRequested.load();
+    playback_video_state_machine::Evaluation evaluation =
+        playbackState.observe(pipelineSnapshot(audioPaused), kVideoPrefillFrames);
+    if (evaluation.clearSeekFailure) {
+      serialControl.clearSeekFailure();
+    }
+    if (evaluation.change.changed) {
+      applyStateChange(evaluation.change);
+    }
+  }
+
   int64_t videoTimelineUs() const {
     const int64_t seekUs = serialControl.seekDisplayUs();
-    if ((serialControl.seekPending() || serialControl.pendingSeekSerial() != 0) &&
-        seekUs > 0) {
+    if (serialControl.seekPending() || serialControl.pendingSeekSerial() != 0) {
       return seekUs;
     }
 
@@ -1751,6 +2136,7 @@ struct Player::Impl {
   void stopThreads() {
     appendTimingFmt("stop_threads begin");
     running.store(false);
+    playbackState.resetFrameSteps();
     if (frameReadyEvent) {
       SetEvent(frameReadyEvent.get());
     }
@@ -1824,6 +2210,7 @@ struct Player::Impl {
       std::lock_guard<std::mutex> lock(eventMutex);
       events.clear();
     }
+    frameStepSeek.reset();
   }
 
   void startThreads() {
@@ -1833,14 +2220,17 @@ struct Player::Impl {
     audioDecodeEnded.store(false);
     initDone.store(false);
     initOk.store(false);
+    playbackState.resetForSerial(1);
     {
       std::lock_guard<std::mutex> lock(initMutex);
       initError.clear();
     }
     serialControl.startSession(1);
+    frameCursor.resetForSerial(1);
     mainClock.startSession(1);
     lastPresentedSerial.store(0);
     lastPresentedPtsUs.store(0);
+    lastPresentedDisplayIndex.store(0);
     lastPresentedDurationUs.store(0);
     frameCounter.store(0);
     if (frameReadyEvent) {
@@ -1863,15 +2253,14 @@ struct Player::Impl {
   }
 
     void handleEvent(const playback_video_control::Event& ev) {
-      auto beginSerialTransition = [&](int64_t targetUs, const char* tag) {
-        playback_video_serial_control::TransitionPlan plan =
-            serialControl.beginTransition(
-                targetUs, initDone.load(std::memory_order_relaxed),
-                running.load(std::memory_order_relaxed));
-        if (!plan.valid) return;
+      auto applySerialTransition =
+          [&](playback_video_serial_control::TransitionPlan plan,
+              const char* tag) -> int {
+        if (!plan.valid) return 0;
         if (plan.signalCommandPending) {
           commandPending.store(true, std::memory_order_relaxed);
         }
+        playbackState.resetForSerial(plan.serial);
         clearFrameRequested.store(true, std::memory_order_relaxed);
         mainClock.resetForSerial(plan.serial);
         videoPackets.flush(static_cast<uint64_t>(plan.serial));
@@ -1880,21 +2269,114 @@ struct Player::Impl {
         resetAudioOutputForSerial(static_cast<uint64_t>(plan.serial), true,
                                   "seek");
         applyStateChange(playbackState.beginSeeking());
-        appendTimingFmt("%s serial=%d target_us=%lld seek_target_us=%lld",
+        appendTimingFmt(
+            "%s serial=%d target_us=%lld seek_target_us=%lld demux_window_end_us=%lld decoder_preroll_us=%lld",
                         tag ? tag : "ctrl_seek_request", plan.serial,
                         static_cast<long long>(plan.displayTargetUs),
-                        static_cast<long long>(plan.demuxTargetUs));
+                        static_cast<long long>(plan.demuxTargetUs),
+                        static_cast<long long>(plan.demuxWindowEndUs),
+                        static_cast<long long>(
+                            plan.decoderPrerollTargetUs));
+        return plan.serial;
       };
-
+      auto beginSerialTransition = [&](int64_t targetUs,
+                                       const char* tag) -> int {
+        return applySerialTransition(
+            serialControl.beginTransition(
+                targetUs, initDone.load(std::memory_order_relaxed),
+                running.load(std::memory_order_relaxed)),
+            tag);
+      };
+      auto beginFrameStepSeekTransition =
+          [&](const playback_video_frame_step_seek::Plan& plan,
+              uint64_t generation, const char* tag) {
+        assert(plan.valid());
+        int expectedSeekSerial = serialControl.currentSerial() + 1;
+        frameStepSeek.publishForSerial(expectedSeekSerial, plan);
+        playback_video_serial_control::DemuxSeekMode demuxSeekMode =
+            plan.mode ==
+                    playback_video_frame_step_seek::PlanMode::
+                        PreviousBeforeTarget
+                ? playback_video_serial_control::DemuxSeekMode::
+                      VideoBeforeTarget
+                : playback_video_serial_control::DemuxSeekMode::
+                      VideoAtOrBefore;
+        int seekSerial = applySerialTransition(
+            serialControl.beginTransition(
+                plan.seekTargetUs(), plan.demuxTargetUs(),
+                plan.demuxWindowEndUs(),
+                plan.decoderPrerollTargetUs(),
+                demuxSeekMode,
+                initDone.load(std::memory_order_relaxed),
+                running.load(std::memory_order_relaxed)),
+            tag);
+        if (seekSerial != expectedSeekSerial) {
+          frameStepSeek.reset();
+          return;
+        }
+        playbackState.publishFrameStepSeekPresentation(seekSerial, generation);
+        appendTimingFmt(
+            "%s_request direction=%d mode=%d target_logical=%llu anchor_logical=%llu target_us=%lld anchor_us=%lld demux_window_end_us=%lld decoder_preroll_us=%lld demux_seek_mode=%d",
+            tag,
+            plan.direction == playback_video_frame_step::Direction::Previous
+                ? -1
+                : 1,
+            static_cast<int>(plan.mode),
+            static_cast<unsigned long long>(plan.target.logicalIndex),
+            static_cast<unsigned long long>(plan.anchor.logicalIndex),
+            static_cast<long long>(plan.target.ptsUs),
+            static_cast<long long>(plan.anchor.ptsUs),
+            static_cast<long long>(plan.demuxWindowEndUs()),
+            static_cast<long long>(plan.decoderPrerollTargetUs()),
+            static_cast<int>(demuxSeekMode));
+      };
       switch (ev.type) {
         case playback_video_control::EventType::SeekRequest: {
           beginSerialTransition(ev.arg1, "ctrl_seek_request");
           break;
         }
+        case playback_video_control::EventType::FrameStepSeekRequest: {
+          if (!playbackState.consumeFrameStepSeek(
+                  ev.serial, ev.frameStepGeneration)) {
+            appendTimingFmt(
+                "ctrl_frame_step_seek_stale serial=%d generation=%llu current_serial=%d",
+                ev.serial,
+                static_cast<unsigned long long>(ev.frameStepGeneration),
+                serialControl.currentSerial());
+            break;
+          }
+          const playback_video_frame_step_seek::Plan& plan =
+              ev.frameStepSeek;
+          beginFrameStepSeekTransition(plan, ev.frameStepGeneration,
+                                       "ctrl_frame_step_seek");
+          break;
+        }
+        case playback_video_control::EventType::FrameStepRequest: {
+          pauseRequested.store(true, std::memory_order_relaxed);
+          if (audioStartOk.load(std::memory_order_relaxed) &&
+              !audioIsPaused()) {
+            audioTogglePause();
+          }
+          applyStateChange(playbackState.requestFrameStep(
+              ev.frameStepDirection, serialControl.currentSerial()));
+          videoFrames.notify();
+          appendTimingFmt("ctrl_frame_step_request direction=%d",
+                          ev.frameStepDirection ==
+                                  playback_video_frame_step::Direction::
+                                      Previous
+                              ? -1
+                              : 1);
+          break;
+        }
         case playback_video_control::EventType::PauseRequest: {
-          pauseRequested.store(ev.arg1 != 0, std::memory_order_relaxed);
+          const bool paused = ev.arg1 != 0;
+          pauseRequested.store(paused, std::memory_order_relaxed);
+          observePlaybackPipeline();
+          if (!paused && playbackState.resumePlaybackFrameSteps()) {
+            videoFrames.notify();
+          }
           appendTimingFmt("ctrl_pause_request paused=%d",
-                          ev.arg1 != 0 ? 1 : 0);
+                          paused ? 1 : 0);
         break;
       }
       case playback_video_control::EventType::ResizeRequest: {
@@ -1989,6 +2471,22 @@ struct Player::Impl {
         }
         break;
       }
+      case playback_video_control::EventType::FrameStepPresented: {
+        bool validStepPresentation =
+            playbackState.consumeFrameStepPresentation(
+                ev.serial, ev.frameStepGeneration);
+        if (validStepPresentation && ev.serial == serialControl.currentSerial() &&
+            ev.displayIndex ==
+                lastPresentedDisplayIndex.load(std::memory_order_relaxed)) {
+          resetAudioOutputForSerialAt(static_cast<uint64_t>(ev.serial),
+                                      ev.presentedPtsUs, true, "frame_step");
+          appendTimingFmt("ctrl_frame_step_presented serial=%d frame=%llu pts_us=%lld",
+                          ev.serial,
+                          static_cast<unsigned long long>(ev.displayIndex),
+                          static_cast<long long>(ev.presentedPtsUs));
+        }
+        break;
+      }
     }
   }
 
@@ -2009,18 +2507,7 @@ struct Player::Impl {
         handleEvent(ev);
       }
 
-      const bool audioPaused =
-          audioStartOk.load() ? audioIsPaused() : pauseRequested.load();
-      playback_video_state_machine::PipelineSnapshot snapshot =
-          pipelineSnapshot(audioPaused);
-      playback_video_state_machine::Evaluation evaluation =
-          playbackState.observe(snapshot, kVideoPrefillFrames);
-      if (evaluation.clearSeekFailure) {
-        serialControl.clearSeekFailure();
-      }
-      if (evaluation.change.changed) {
-        applyStateChange(evaluation.change);
-      }
+      observePlaybackPipeline();
     }
     applyStateChange(playbackState.beginClosing());
     appendTimingFmt("control_main stop_threads_begin");
@@ -2116,7 +2603,7 @@ struct Player::Impl {
     if (estimatedFrameDurationSec <= 0.0) {
       estimatedFrameDurationSec = 1.0 / 30.0;
     }
-    fallbackFrameDurationUs.store(
+    estimatedFrameDurationUs.store(
         static_cast<int64_t>(estimatedFrameDurationSec * 1000000.0));
 
     initOk.store(true);
@@ -2205,16 +2692,22 @@ struct Player::Impl {
         commandPending.store(false);
 
         appendTimingFmt(
-            "demux_seek serial=%d seek_us=%lld display_target_us=%lld",
+            "demux_seek serial=%d seek_us=%lld demux_window_end_us=%lld display_target_us=%lld decoder_preroll_us=%lld demux_seek_mode=%d",
             nextSerial, static_cast<long long>(pendingSeek.demuxTargetUs),
-            static_cast<long long>(pendingSeek.displayTargetUs));
+            static_cast<long long>(pendingSeek.demuxWindowEndUs),
+            static_cast<long long>(pendingSeek.displayTargetUs),
+            static_cast<long long>(pendingSeek.decoderPrerollTargetUs),
+            static_cast<int>(pendingSeek.demuxSeekMode));
         playback_video_timeline::DemuxSeekRequest seekRequest;
         seekRequest.format = demux.fmt;
         seekRequest.videoStreamIndex = demux.videoStreamIndex;
         seekRequest.videoTimeBase = demux.videoTimeBase;
         seekRequest.formatStartUs = demux.formatStartUs;
-        seekRequest.targetUs = pendingSeek.displayTargetUs;
+        seekRequest.targetUs = pendingSeek.demuxWindowEndUs;
         seekRequest.seekUs = pendingSeek.demuxTargetUs;
+        seekRequest.preferVideoStream =
+            pendingSeek.demuxSeekMode !=
+            playback_video_serial_control::DemuxSeekMode::Timeline;
         seekRequest.logTag = "demux_seek_primary";
         seekRequest.logPath = logPath;
         playback_video_timeline::DemuxSeekResult seekResult =
@@ -2373,8 +2866,9 @@ struct Player::Impl {
     bool inputEof = false;
     int64_t lastPtsUs = 0;
     int64_t lastDurationUs =
-        (fallbackFrameDurationUs.load() > 0) ? fallbackFrameDurationUs.load()
-                                             : 33333;
+        (estimatedFrameDurationUs.load() > 0) ? estimatedFrameDurationUs.load()
+                                              : 33333;
+    uint64_t nextFrameIndex = 1;
     QueuedPacket pendingPacket{};
     bool hasPendingPacket = false;
 
@@ -2411,8 +2905,10 @@ struct Player::Impl {
         videoFrames.flush(decoderSerial);
         lastPtsUs = 0;
         lastDurationUs =
-            (fallbackFrameDurationUs.load() > 0) ? fallbackFrameDurationUs.load()
-                                                 : 33333;
+            (estimatedFrameDurationUs.load() > 0)
+                ? estimatedFrameDurationUs.load()
+                : 33333;
+        nextFrameIndex = 1;
         continue;
       }
 
@@ -2441,13 +2937,24 @@ struct Player::Impl {
       }
 
       while (running.load()) {
-        // Break out and flush if the master serial has changed (e.g., requested by output thread stall recovery)
+        // Break out and flush if the master serial has changed.
         int currentMasterSerial = serialControl.currentSerial();
-        if (decoderSerial != 0 && decoderSerial != static_cast<uint64_t>(currentMasterSerial)) {
+        if (decoderSerial != 0 &&
+            decoderSerial != static_cast<uint64_t>(currentMasterSerial)) {
           avcodec_flush_buffers(videoDec.codec);
+          if (hasPendingPacket && !pendingPacket.flush && !pendingPacket.eof) {
+            av_packet_unref(&pendingPacket.pkt);
+          }
           hasPendingPacket = false;
-          decoderSerial = static_cast<uint64_t>(currentMasterSerial); // Sync to new serial
+          decoderSerial = static_cast<uint64_t>(currentMasterSerial);
           videoFrames.flush(decoderSerial);
+          inputEof = false;
+          lastPtsUs = 0;
+          lastDurationUs =
+              (estimatedFrameDurationUs.load() > 0)
+                  ? estimatedFrameDurationUs.load()
+                  : 33333;
+          nextFrameIndex = 1;
           break;
         }
 
@@ -2524,13 +3031,12 @@ struct Player::Impl {
           frameDurationUs = lastDurationUs;
         }
         if (frameDurationUs <= 0) {
-          frameDurationUs = (fallbackFrameDurationUs.load() > 0)
-                                ? fallbackFrameDurationUs.load()
+          frameDurationUs = (estimatedFrameDurationUs.load() > 0)
+                                ? estimatedFrameDurationUs.load()
                                 : 33333;
         }
         lastPtsUs = ptsUs;
         lastDurationUs = frameDurationUs;
-
         int64_t seekTargetUs = 0;
         if (shouldDropSeekPrerollFrame(decoderSerial, ptsUs, frameDurationUs,
                                        &seekTargetUs)) {
@@ -2544,9 +3050,12 @@ struct Player::Impl {
           continue;
         }
 
-        videoFrames.push(QueuedFrame{poolIndex, ptsUs, frameDurationUs,
-                                     static_cast<uint64_t>(decoderSerial), info,
-                                     decodeMs});
+        QueuedFrame queued{poolIndex, ptsUs, frameDurationUs,
+                           static_cast<uint64_t>(decoderSerial), info,
+                           decodeMs};
+        queued.displayIndex = nextFrameIndex;
+        ++nextFrameIndex;
+        videoFrames.push(queued);
       }
     }
 
@@ -2885,45 +3394,7 @@ struct Player::Impl {
     playback_video_sync::LoopState syncState;
     playback_video_sync::initializeLoopState(
         syncState, serialControl.currentSerial(),
-        fallbackFrameDurationUs.load(std::memory_order_relaxed), nowUs());
-    auto logVideo = [&](const char* tag, const QueuedFrame* frame,
-                        int64_t masterUs, PlayerClockSource source,
-                        int64_t diffUs, int64_t delayUs) {
-      PlayerState st = playbackState.current();
-      size_t q = videoFrames.size();
-      playback_video_main_clock::Snapshot clockDebug = masterClockSnapshot(nowUs());
-      int audioReady = clockDebug.audioClockReady ? 1 : 0;
-      int audioFresh = clockDebug.audioClockFresh ? 1 : 0;
-      int audioStarved = clockDebug.audioStarved ? 1 : 0;
-
-      // Filter out high-frequency logs to keep log file clean
-      if (std::strcmp(tag, "present") == 0 || std::strcmp(tag, "queue_high") == 0 || 
-          std::strcmp(tag, "queue_low") == 0 || std::strcmp(tag, "drop_serial") == 0 || 
-          std::strcmp(tag, "drop_backwards") == 0) {
-        // Heartbeat: Log every 30th event (approx 1s) regardless of sync/state
-        static int eventCounter = 0;
-        bool heartbeat = (++eventCounter % 30 == 0);
-        bool syncIssue = std::abs(diffUs) > 100000; // >100ms sync gap
-        if (!heartbeat && !syncIssue && (std::strcmp(tag, "present") == 0 || std::strcmp(tag, "drop_serial") == 0 || std::strcmp(tag, "drop_backwards") == 0)) return;
-        if (!heartbeat && std::strcmp(tag, "present") != 0 && std::strcmp(tag, "drop_serial") != 0 && std::strcmp(tag, "drop_backwards") != 0) return;
-      }
-      
-      if (frame) {
-        appendTimingFmt(
-            "video_%s state=%s serial=%d pts_us=%lld dur_us=%lld master=%lld master_src=%s diff_us=%lld delay_us=%lld q=%zu dec_ms=%.1f audio_ready=%d audio_fresh=%d audio_starved=%d",
-            tag, playerStateName(st), static_cast<int>(frame->serial),
-            static_cast<long long>(frame->ptsUs),
-            static_cast<long long>(frame->durationUs),
-            static_cast<long long>(masterUs), clockSourceName(source),
-            static_cast<long long>(diffUs),
-            static_cast<long long>(delayUs), q, frame->decodeMs, audioReady,
-            audioFresh, audioStarved);
-      } else {
-        appendTimingFmt(
-            "video_%s state=%s q=%zu master=%lld audio_ready=%d audio_fresh=%d audio_starved=%d",
-            tag, playerStateName(st), q, static_cast<long long>(masterUs), audioReady, audioFresh, audioStarved);
-      }
-    };
+        estimatedFrameDurationUs.load(std::memory_order_relaxed), nowUs());
 
     while (running.load()) {
       if (clearFrameRequested.exchange(false)) {
@@ -2937,11 +3408,124 @@ struct Player::Impl {
       }
 
       uint64_t serial = static_cast<uint64_t>(serialControl.currentSerial());
-      playback_video_sync::syncLoopSerial(
+      const bool outputSerialChanged = playback_video_sync::syncLoopSerial(
           syncState, static_cast<int>(serial),
-          fallbackFrameDurationUs.load(std::memory_order_relaxed), nowUs());
+          estimatedFrameDurationUs.load(std::memory_order_relaxed), nowUs());
+      if (outputSerialChanged) {
+        auto seekPlan = frameStepSeek.consumeForSerial(static_cast<int>(serial));
+        if (seekPlan) {
+          frameCursor.resetForSerial(static_cast<int>(serial), &*seekPlan);
+        } else {
+          frameCursor.resetForSerial(static_cast<int>(serial));
+        }
+      }
       playback_video_state_machine::StateProjection stateProjection =
           playback_video_state_machine::project(st);
+
+      playback_video_frame_step::Request pendingFrameStep;
+      if (playbackState.peekFrameStep(
+              &pendingFrameStep, static_cast<int>(serial),
+              frameCursor.frameStepSeekPendingForSerial(
+                  static_cast<int>(serial)))) {
+        bool pendingFrameStepDeferred = false;
+        const bool currentFrameIsCurrentSerial =
+            lastPresentedSerial.load(std::memory_order_relaxed) ==
+            static_cast<int>(serial);
+        const int64_t stepNow = nowUs();
+        playback_video_main_clock::Snapshot stepMaster =
+            masterClockSnapshot(stepNow);
+
+        if (pendingFrameStep.direction ==
+            playback_video_frame_step::Direction::Previous) {
+          if (!currentFrameIsCurrentSerial) {
+            if (stateProjection.transport ==
+                playback_video_state_machine::TransportState::Seeking) {
+              pendingFrameStepDeferred = true;
+            } else {
+              playbackState.discardFrameStep(pendingFrameStep);
+              logVideo("frame_step_previous_boundary", nullptr, stepMaster.us,
+                       stepMaster.source, 0, 0);
+              continue;
+            }
+          } else if (dispatchCursorFrameStep(
+                         syncState, pendingFrameStep, "frame_step_previous",
+                         "frame_step_previous_seek", stepNow, stepMaster)) {
+            continue;
+          } else {
+            playbackState.discardFrameStep(pendingFrameStep);
+            logVideo("frame_step_previous_boundary", nullptr, stepMaster.us,
+                     stepMaster.source, 0, 0);
+            continue;
+          }
+        }
+
+        if (!pendingFrameStepDeferred &&
+            pendingFrameStep.direction ==
+                playback_video_frame_step::Direction::Next) {
+          if (dispatchCursorFrameStep(
+                  syncState, pendingFrameStep, "frame_step_next_history",
+                  "frame_step_next_seek", stepNow, stepMaster)) {
+            continue;
+          }
+        }
+
+        if (!pendingFrameStepDeferred) {
+          QueuedFrame front{};
+          if (!videoFrames.peek(&front)) {
+            if (decodeEnded.load(std::memory_order_relaxed)) {
+              playbackState.discardFrameStep(pendingFrameStep);
+              logVideo("frame_step_next_eof", nullptr, stepMaster.us,
+                       stepMaster.source, 0, 0);
+              continue;
+            }
+            videoFrames.waitForFrame(std::chrono::milliseconds(10), &running,
+                                     &commandPending);
+            continue;
+          }
+
+          if (front.serial != serial) {
+            discardFrontVideoFrame(front, "drop_serial", 0,
+                                   PlayerClockSource::None, 0, 0);
+            continue;
+          }
+          if (handlePendingFrameStepSeekFrame(syncState, front)) {
+            continue;
+          }
+
+          if (currentFrameIsCurrentSerial &&
+              playback_video_sync::isFrameBackwards(syncState, front)) {
+            discardFrontVideoFrame(front, "drop_backwards", 0,
+                                   PlayerClockSource::None, 0, 0);
+            continue;
+          }
+
+          QueuedFrame next{};
+          bool hasNext = videoFrames.peekNext(&next);
+          playback_video_sync::PreparedFrame prepared =
+              playback_video_sync::prepareFrame(syncState, front,
+                                                hasNext ? &next : nullptr);
+          if (!playbackState.publishFrameStepPresentation(pendingFrameStep)) {
+            continue;
+          }
+          QueuedFrame decodedForCursor = front;
+          decodedForCursor.ptsUs = prepared.frame.ptsUs;
+          decodedForCursor.durationUs = prepared.frameDurationUs;
+          frameCursor.noteDecoded(decodedForCursor);
+          QueuedFrame item{};
+          if (!videoFrames.pop(&item)) {
+            continue;
+          }
+          item.ptsUs = prepared.frame.ptsUs;
+          VideoFrame local = videoFrames.frame(item.poolIndex);
+          videoFrames.release(item.poolIndex);
+          publishPresentedFrame(
+              syncState, std::move(local), item, prepared,
+              "frame_step_next", stepNow, stepMaster.us, stepMaster.source, 0,
+              0, VideoCursorPublication::Append,
+              VideoPresentationNotification::FrameStep, &pendingFrameStep);
+          continue;
+        }
+      }
 
       if (stateProjection.transport ==
           playback_video_state_machine::TransportState::Seeking) {
@@ -2954,12 +3538,11 @@ struct Player::Impl {
           continue;
         }
         if (front.serial != serial) {
-          logVideo("drop_serial", &front, 0, PlayerClockSource::None, 0, 0);
-          QueuedFrame drop{};
-          if (videoFrames.pop(&drop)) {
-            videoFrames.release(drop.poolIndex);
-          }
-          std::this_thread::sleep_for(std::chrono::microseconds(100));
+          discardFrontVideoFrame(front, "drop_serial", 0,
+                                 PlayerClockSource::None, 0, 0);
+          continue;
+        }
+        if (handlePendingFrameStepSeekFrame(syncState, front)) {
           continue;
         }
         const bool pausedForPreview =
@@ -3004,6 +3587,42 @@ struct Player::Impl {
         lastDiffUs.store(0, std::memory_order_relaxed);
       }
 
+      if (!frameCursor.atNewestFrame()) {
+        const playback_video_frame_cursor::PresentedFrame* nextEntry =
+            frameCursor.peekNext();
+        if (nextEntry) {
+          playback_video_sync::PreparedFrame prepared =
+              preparedFrameFromPresentedFrame(*nextEntry);
+          playback_video_sync::FramePlan plan = playback_video_sync::planFrame(
+              syncState, st, prepared, master, now);
+          if (plan.waitForAudioClock || plan.waitForAudioRecovery) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            syncState.lastPresentedTimeUs = nowUs();
+            continue;
+          }
+          int64_t targetUs = plan.targetUs;
+          if (now < targetUs) {
+            int64_t sleepUs = targetUs - now;
+            if (sleepUs > 0) {
+              int64_t actualSleep =
+                  (std::min)(sleepUs, static_cast<int64_t>(10000));
+              std::this_thread::sleep_for(
+                  std::chrono::microseconds(actualSleep));
+            }
+            continue;
+          }
+          const playback_video_frame_cursor::PresentedFrame* steppedEntry =
+              frameCursor.step(playback_video_frame_step::Direction::Next);
+          if (steppedEntry) {
+            publishPresentedCursorFrame(
+                syncState, *steppedEntry, "present_history", targetUs,
+                masterUs, master.source, plan.diffUs, plan.delayUs,
+                VideoPresentationNotification::None);
+          }
+          continue;
+        }
+      }
+
       QueuedFrame front{};
       if (!videoFrames.peek(&front)) {
         if (playback_video_sync::shouldBackoffForEmptyQueue(
@@ -3022,23 +3641,17 @@ struct Player::Impl {
       }
 
       if (front.serial != serial) {
-        logVideo("drop_serial", &front, 0, PlayerClockSource::None, 0, 0);
-        QueuedFrame drop{};
-        if (videoFrames.pop(&drop)) {
-          videoFrames.release(drop.poolIndex);
-        }
-        // Small sleep to avoid tight-looping while flushing old serials
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        discardFrontVideoFrame(front, "drop_serial", 0, PlayerClockSource::None,
+                               0, 0);
+        continue;
+      }
+      if (handlePendingFrameStepSeekFrame(syncState, front)) {
         continue;
       }
 
       if (playback_video_sync::isFrameBackwards(syncState, front)) {
-        logVideo("drop_backwards", &front, 0, PlayerClockSource::None, 0, 0);
-        QueuedFrame drop{};
-        if (videoFrames.pop(&drop)) {
-          videoFrames.release(drop.poolIndex);
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        discardFrontVideoFrame(front, "drop_backwards", 0,
+                               PlayerClockSource::None, 0, 0);
         continue;
       }
 
@@ -3055,6 +3668,10 @@ struct Player::Impl {
         logVideo("pts_discontinuity", &prepared.frame, prepared.frame.ptsUs,
                  PlayerClockSource::None, 0, prepared.frame.durationUs);
       }
+      QueuedFrame decodedForCursor = front;
+      decodedForCursor.ptsUs = prepared.frame.ptsUs;
+      decodedForCursor.durationUs = prepared.frameDurationUs;
+      frameCursor.noteDecoded(decodedForCursor);
 
       playback_video_sync::FramePlan plan = playback_video_sync::planFrame(
           syncState, st, prepared, master, now);
@@ -3145,57 +3762,16 @@ struct Player::Impl {
       item.ptsUs = prepared.frame.ptsUs;
       VideoFrame local = videoFrames.frame(item.poolIndex);
       videoFrames.release(item.poolIndex);
-      {
-        std::lock_guard<std::mutex> lock(currentFrameMutex);
-        currentFrame = std::move(local);
-        hasFrame.store(true, std::memory_order_relaxed);
-      }
-      frameCounter.fetch_add(1, std::memory_order_relaxed);
-      if (frameReadyEvent) {
-        SetEvent(frameReadyEvent.get());
-      }
-      frameCv.notify_all();
-      
-      // Ensure we yield to other threads (decoder, audio, etc.)
+      std::optional<playback_video_frame_step::Request> frameStepPresentation =
+          frameCursor.pendingFrameStepRequestForSerial(static_cast<int>(serial));
+      publishPresentedFrame(
+          syncState, std::move(local), item, prepared, "present",
+          targetUs, masterUs, master.source, plan.diffUs, plan.delayUs,
+          VideoCursorPublication::Append,
+          frameStepPresentation ? VideoPresentationNotification::FrameStep
+                                : VideoPresentationNotification::None,
+          frameStepPresentation ? &*frameStepPresentation : nullptr);
       std::this_thread::yield();
-      
-      lastPresentedPtsUs.store(item.ptsUs, std::memory_order_relaxed);
-      lastPresentedDurationUs.store(plan.delayUs, std::memory_order_relaxed);
-      lastPresentedSerial.store(static_cast<int>(serial),
-                                std::memory_order_relaxed);
-      {
-        std::lock_guard<std::mutex> lock(lastInfoMutex);
-        lastInfo = item.info;
-        lastInfoValid.store(true, std::memory_order_relaxed);
-      }
-      int64_t presentedNowUs = nowUs();
-      mainClock.updateVideo(static_cast<int>(serial), item.ptsUs,
-                            presentedNowUs);
-      serialControl.clearPendingPresentation(static_cast<int>(serial));
-      logVideo("present", &item, masterUs, master.source, plan.diffUs,
-               plan.delayUs);
-      
-      // Monitor queue depth for resource bottlenecks
-      size_t qDepth = videoFrames.size();
-      if (qDepth <= 2) {
-        // Queue critically low - potential decode stall
-        logVideo("queue_low", &item, masterUs, master.source, plan.diffUs,
-                 plan.delayUs);
-      } else if (qDepth >= 30) {
-        // Queue critically high - potential render bottleneck
-        logVideo("queue_high", &item, masterUs, master.source, plan.diffUs,
-                 plan.delayUs);
-      }
-
-      if (!syncState.firstPresentedForSerial) {
-        syncState.firstPresentedForSerial = true;
-        playback_video_control::Event ev{};
-        ev.type = playback_video_control::EventType::FirstFramePresented;
-        ev.serial = static_cast<int>(serial);
-        postEvent(ev);
-      }
-      playback_video_sync::notePresentedFrame(syncState, prepared, plan.delayUs,
-                                        targetUs, presentedNowUs);
       if (plan.delayUs > 0) {
         double frameDurSec = static_cast<double>(plan.delayUs) / 1000000.0;
         size_t needed =
@@ -3239,8 +3815,9 @@ void Player::close() {
   if (impl_->controlThread.joinable()) {
     if (impl_->ctrlRunning.load()) {
       impl_->appendTimingFmt("player_close post_close_request");
-      impl_->postEvent(
-          playback_video_control::Event{playback_video_control::EventType::CloseRequest});
+      playback_video_control::Event ev{};
+      ev.type = playback_video_control::EventType::CloseRequest;
+      impl_->postEvent(ev);
     } else {
       impl_->appendTimingFmt("player_close notify_control_thread");
       impl_->eventCv.notify_one();
@@ -3263,6 +3840,18 @@ void Player::requestSeek(int64_t targetUs) {
   ev.type = playback_video_control::EventType::SeekRequest;
   ev.arg1 = targetUs;
   impl_->postEvent(ev);
+}
+
+bool Player::requestFrameStep(playback_video_frame_step::Direction direction) {
+  if (!impl_ || !impl_->ctrlRunning.load(std::memory_order_relaxed)) {
+    return false;
+  }
+
+  playback_video_control::Event ev{};
+  ev.type = playback_video_control::EventType::FrameStepRequest;
+  ev.frameStepDirection = direction;
+  impl_->postEvent(ev);
+  return true;
 }
 
 void Player::requestResize(int targetW, int targetH) {
@@ -3452,6 +4041,8 @@ PlayerDebugInfo Player::debugInfo() const {
       impl_->lastPresentedPtsUs.load(std::memory_order_relaxed);
   info.lastPresentedDurationUs =
       impl_->lastPresentedDurationUs.load(std::memory_order_relaxed);
+  info.lastPresentedDisplayIndex =
+      impl_->lastPresentedDisplayIndex.load(std::memory_order_relaxed);
   info.lastDiffUs = impl_->lastDiffUs.load(std::memory_order_relaxed);
   info.lastDelayUs = impl_->lastDelayUs.load(std::memory_order_relaxed);
   info.masterClockUs = impl_->lastMasterUs.load(std::memory_order_relaxed);

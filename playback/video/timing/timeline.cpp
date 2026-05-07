@@ -38,6 +38,20 @@ void logFmt(const std::filesystem::path& logPath, const char* fmt, ...) {
                               std::string(buf, static_cast<size_t>(written)));
 }
 
+bool hasUsableVideoStream(const DemuxSeekRequest& request) {
+  return request.videoStreamIndex >= 0 &&
+         request.videoStreamIndex <
+             static_cast<int>(request.format->nb_streams) &&
+         request.videoTimeBase.num > 0 && request.videoTimeBase.den > 0;
+}
+
+int seekVideoStream(const DemuxSeekRequest& request, int64_t seekAbsUs) {
+  int64_t streamTarget =
+      videoStreamTimestampFloorForUs(seekAbsUs, request.videoTimeBase);
+  return av_seek_frame(request.format, request.videoStreamIndex, streamTarget,
+                       AVSEEK_FLAG_BACKWARD);
+}
+
 }  // namespace
 
 int64_t prerollSeekUs(int64_t targetUs, int64_t prerollUs) {
@@ -153,16 +167,20 @@ DemuxSeekResult seekPrimaryDemux(const DemuxSeekRequest& request) {
     seekAbsUs = 0;
   }
 
-  result.result = avformat_seek_file(request.format, -1, INT64_MIN, seekAbsUs,
-                                     targetAbsUs, AVSEEK_FLAG_BACKWARD);
-  if (result.result < 0 && request.videoStreamIndex >= 0 &&
-      request.videoStreamIndex < static_cast<int>(request.format->nb_streams) &&
-      request.videoTimeBase.num > 0 && request.videoTimeBase.den > 0) {
-    int64_t streamTarget =
-        av_rescale_q(seekAbsUs, AVRational{1, AV_TIME_BASE},
-                     request.videoTimeBase);
-    result.result = av_seek_frame(request.format, request.videoStreamIndex,
-                                  streamTarget, AVSEEK_FLAG_BACKWARD);
+  if (request.preferVideoStream && hasUsableVideoStream(request)) {
+    result.result = seekVideoStream(request, seekAbsUs);
+  } else {
+    result.result = avformat_seek_file(request.format, -1, INT64_MIN, seekAbsUs,
+                                       targetAbsUs, AVSEEK_FLAG_BACKWARD);
+  }
+  if (result.result < 0) {
+    if (request.preferVideoStream) {
+      result.result = avformat_seek_file(request.format, -1, INT64_MIN,
+                                         seekAbsUs, targetAbsUs,
+                                         AVSEEK_FLAG_BACKWARD);
+    } else if (hasUsableVideoStream(request)) {
+      result.result = seekVideoStream(request, seekAbsUs);
+    }
   }
 
   result.seeked = result.result >= 0;
@@ -170,10 +188,11 @@ DemuxSeekResult seekPrimaryDemux(const DemuxSeekRequest& request) {
     avformat_flush(request.format);
   }
   logFmt(request.logPath,
-         "%s target_us=%lld seek_us=%lld abs_us=%lld res=%d", tag,
-         static_cast<long long>(result.targetUs),
+         "%s target_us=%lld seek_us=%lld abs_us=%lld video_stream=%d res=%d",
+         tag, static_cast<long long>(result.targetUs),
          static_cast<long long>(result.seekUs),
-         static_cast<long long>(seekAbsUs), result.result);
+         static_cast<long long>(seekAbsUs), request.preferVideoStream ? 1 : 0,
+         result.result);
   return result;
 }
 

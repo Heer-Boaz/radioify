@@ -239,14 +239,24 @@ void FrameQueue::release(size_t poolIndex) {
   cv_.notify_all();
 }
 
+void FrameQueue::notify() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++wakeGeneration_;
+  }
+  cv_.notify_all();
+}
+
 bool FrameQueue::waitForFrame(std::chrono::milliseconds timeout,
                               const std::atomic<bool>* running,
                               const std::atomic<bool>* wake) {
   std::unique_lock<std::mutex> lock(mutex_);
+  uint64_t observedWakeGeneration = wakeGeneration_;
   cv_.wait_for(lock, timeout, [&]() {
     bool run = running ? running->load() : true;
-    bool wakeNow = wake ? wake->load() : false;
-    return aborted_ || !run || wakeNow || !queue_.empty();
+    bool wakeNow = wake && wake->load();
+    return aborted_ || !run || wakeNow ||
+           wakeGeneration_ != observedWakeGeneration || !queue_.empty();
   });
   return !queue_.empty();
 }

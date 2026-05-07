@@ -60,7 +60,6 @@ class PlaybackPresentation {
 
   VideoWindow& window();
   const VideoWindow& window() const;
-  GpuVideoFrameCache& frameCache();
   void requestPresent();
 
  private:

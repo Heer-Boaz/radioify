@@ -170,8 +170,10 @@ The concrete implementation plan lives in
 - Space or Media Play/Pause: pause/resume
 - Media Previous/Next: previous/next track
 - Media Stop: stop playback
-- Ctrl+Left/Right: seek
- - F1: open command menu / command palette
+- Left/Right or [ ]: seek +/-5s
+- Ctrl+Left/Right: previous/next track
+- , / .: previous/next video frame
+- F1: open command menu / command palette
 - Ctrl+W: toggle video Window mode (framebuffer-mode)
 - Ctrl+P: toggle picture-in-picture in Window mode
 - T: toggle picture-in-picture TUI in Window mode

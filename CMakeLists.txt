@@ -367,6 +367,9 @@ add_executable(shortcut_match_tests)
 target_sources(shortcut_match_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_shortcut_match_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/audio/clock_reacquire.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/control/serial.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_cursor.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_step_seek.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/main_clock.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/state/machine.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/sync.cpp
@@ -387,6 +390,25 @@ radioify_link_repo_target(video_output_color_tests)
 if (WIN32)
   target_link_libraries(video_output_color_tests PRIVATE dxgi user32)
 endif()
+
+add_executable(video_frame_step_smoke)
+target_sources(video_frame_step_smoke PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_video_frame_step_smoke>
+  ${CMAKE_SOURCE_DIR}/core/queues.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/audio/clock_reacquire.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/audio/output_clock_source.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/audio/output_timeline.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/audio/track_switch_timeline.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/control/serial.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_cursor.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_step_seek.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/player.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/state/machine.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/timing/main_clock.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/timing/sync.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
+)
+radioify_link_repo_target(video_frame_step_smoke)
 
 add_executable(window_display_lifecycle_tests)
 target_sources(window_display_lifecycle_tests PRIVATE
@@ -985,8 +1007,12 @@ endif()
 radioify_add_external_include_dirs(${FFMPEG_INCLUDE_DIRS})
 if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
 
 set(RADIOIFY_HAS_LIBASS OFF)
 set(_radioify_libass_include_dirs "")
@@ -1069,8 +1095,10 @@ endif()
 radioify_add_external_include_dirs(${_radioify_libass_include_dirs})
 if (RADIOIFY_LIBASS_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
+  target_link_directories(video_frame_step_smoke PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${_radioify_libass_libraries})
+target_link_libraries(video_frame_step_smoke PRIVATE ${_radioify_libass_libraries})
 message(STATUS "libass found: ASS advanced renderer enabled")
 
 target_compile_definitions(radioify_project_options INTERFACE
@@ -1368,6 +1396,7 @@ endforeach()
 
 if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
+  target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
 endif()
 
 if (WIN32 AND RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION)

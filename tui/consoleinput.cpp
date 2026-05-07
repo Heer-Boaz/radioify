@@ -70,6 +70,10 @@ void assignKeyEventFromCharacter(KeyEvent& out, WORD rawVk, DWORD rawControl,
     out.vk = VK_OEM_4;
   } else if (ch == L']') {
     out.vk = VK_OEM_6;
+  } else if (ch == L',') {
+    out.vk = VK_OEM_COMMA;
+  } else if (ch == L'.') {
+    out.vk = VK_OEM_PERIOD;
   } else if (ch == L'/') {
     out.vk = VK_DIVIDE;
   }

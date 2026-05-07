@@ -190,49 +190,78 @@ void requestPlaybackExit(const PlaybackInputView& view,
   }
 }
 
+std::chrono::steady_clock::time_point markSeekIntentStarted(
+    PlaybackSeekState& seekState) {
+  auto now = std::chrono::steady_clock::now();
+  if (seekState.localSeekRequested) *seekState.localSeekRequested = true;
+  if (seekState.windowLocalSeekRequested) {
+    seekState.windowLocalSeekRequested->store(true, std::memory_order_relaxed);
+  }
+  if (seekState.seekRequestTime) {
+    *seekState.seekRequestTime = now;
+  }
+  return now;
+}
+
+void refreshPlaybackInputDisplay(PlaybackInputSignals& signals) {
+  if (signals.forceRefreshArt) {
+    *signals.forceRefreshArt = true;
+  }
+  if (signals.redraw) {
+    *signals.redraw = true;
+  }
+}
+
+void markImmediateSeekActivity(PlaybackInputSignals& signals,
+                               PlaybackSeekState& seekState) {
+  auto now = markSeekIntentStarted(seekState);
+  if (seekState.lastSeekSentTime) {
+    *seekState.lastSeekSentTime = now;
+  }
+  if (seekState.queuedSeekTargetSec) {
+    *seekState.queuedSeekTargetSec = -1.0;
+  }
+  if (seekState.seekQueued) {
+    *seekState.seekQueued = false;
+  }
+  refreshPlaybackInputDisplay(signals);
+}
+
 void applySeekRequestState(PlaybackInputSignals& signals,
                            PlaybackSeekState& seekState, double targetSec,
                            bool immediate) {
   if (seekState.pendingSeekTargetSec) {
     *seekState.pendingSeekTargetSec = targetSec;
   }
-  if (seekState.localSeekRequested) {
-    *seekState.localSeekRequested = true;
-  }
   if (seekState.windowPendingSeekTargetSec) {
     seekState.windowPendingSeekTargetSec->store(targetSec,
                                                 std::memory_order_relaxed);
   }
-  if (seekState.windowLocalSeekRequested) {
-    seekState.windowLocalSeekRequested->store(true, std::memory_order_relaxed);
-  }
-  auto now = std::chrono::steady_clock::now();
-  if (seekState.seekRequestTime) {
-    *seekState.seekRequestTime = now;
-  }
   if (immediate) {
-    if (seekState.lastSeekSentTime) {
-      *seekState.lastSeekSentTime = now;
-    }
-    if (seekState.queuedSeekTargetSec) {
-      *seekState.queuedSeekTargetSec = -1.0;
-    }
-    if (seekState.seekQueued) {
-      *seekState.seekQueued = false;
-    }
-  } else {
-    if (seekState.queuedSeekTargetSec) {
-      *seekState.queuedSeekTargetSec = targetSec;
-    }
-    if (seekState.seekQueued) {
-      *seekState.seekQueued = true;
-    }
+    markImmediateSeekActivity(signals, seekState);
+    return;
   }
-  if (signals.forceRefreshArt) {
-    *signals.forceRefreshArt = true;
+  markSeekIntentStarted(seekState);
+  if (seekState.queuedSeekTargetSec) {
+    *seekState.queuedSeekTargetSec = targetSec;
   }
-  if (signals.redraw) {
-    *signals.redraw = true;
+  if (seekState.seekQueued) {
+    *seekState.seekQueued = true;
+  }
+  refreshPlaybackInputDisplay(signals);
+}
+
+void refreshFrameStepRequestDisplay(PlaybackInputSignals& signals) {
+  refreshPlaybackInputDisplay(signals);
+  requestWindowRefresh(signals);
+}
+
+void commitQueuedSeekBeforeFrameStep(const PlaybackInputView& view,
+                                     PlaybackInputSignals& signals,
+                                     PlaybackSeekState& seekState) {
+  double queuedTargetSec = 0.0;
+  if (readQueuedSeekTargetSec(seekState, &queuedTargetSec)) {
+    sendSeekRequest(view, signals, seekState, queuedTargetSec);
   }
 }
 
@@ -299,6 +328,27 @@ bool togglePictureInPicture(const PlaybackInputView& view,
     return signals.togglePictureInPicture();
   }
   return false;
+}
+
+bool requestFrameStep(const PlaybackInputView& view,
+                      PlaybackInputSignals& signals,
+                      PlaybackSeekState& seekState,
+                      playback_video_frame_step::Direction direction) {
+  if (!view.player) {
+    return false;
+  }
+  setPlaybackPaused(view, signals, seekState, true);
+  commitQueuedSeekBeforeFrameStep(view, signals, seekState);
+
+  if (!view.player->requestFrameStep(direction)) {
+    return false;
+  }
+  if (view.playbackState &&
+      *view.playbackState == PlaybackSessionState::Ended) {
+    *view.playbackState = PlaybackSessionState::Paused;
+  }
+  refreshFrameStepRequestDisplay(signals);
+  return true;
 }
 
 bool executeOverlayControl(const PlaybackInputView& view,
@@ -378,10 +428,11 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   if (inputs.totalSec > 0.0) {
     inputs.displaySec = std::clamp(inputs.displaySec, 0.0, inputs.totalSec);
   }
-  if (inputs.seekingOverlay && inputs.totalSec > 0.0 &&
-      std::isfinite(inputs.totalSec) && seekState.pendingSeekTargetSec) {
-    inputs.displaySec = std::clamp(*seekState.pendingSeekTargetSec, 0.0,
-                                   inputs.totalSec);
+  double pendingSeekTargetSec = 0.0;
+  if (inputs.totalSec > 0.0 && std::isfinite(inputs.totalSec) &&
+      readPendingSeekTargetSec(seekState, &pendingSeekTargetSec)) {
+    inputs.displaySec =
+        std::clamp(pendingSeekTargetSec, 0.0, inputs.totalSec);
   }
   inputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
   inputs.overlayVisible = isOverlayVisible(signals);
@@ -454,15 +505,20 @@ void setPlaybackPaused(const PlaybackInputView& view,
   if (!paused && *view.playbackState == PlaybackSessionState::Ended) {
     if (view.audioOk && *view.audioOk && audioIsPaused()) {
       audioTogglePause();
-    } else {
-      view.player->setVideoPaused(false);
     }
+    view.player->setVideoPaused(false);
     sendSeekRequest(view, signals, seekState, 0.0);
     *view.playbackState = PlaybackSessionState::Active;
     return;
   }
 
   if (paused && *view.playbackState == PlaybackSessionState::Ended) {
+    if (view.audioOk && *view.audioOk) {
+      if (!audioIsPaused()) {
+        audioTogglePause();
+      }
+    }
+    view.player->setVideoPaused(true);
     return;
   }
 
@@ -473,6 +529,7 @@ void setPlaybackPaused(const PlaybackInputView& view,
       audioTogglePause();
     }
     pausedNow = audioIsPaused();
+    view.player->setVideoPaused(pausedNow);
   } else {
     view.player->setVideoPaused(paused);
   }
@@ -529,11 +586,20 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     const double baseSec = playbackSeekBaseSec(view, seekState);
     sendSeekRequest(view, signals, seekState, baseSec + dir * 5.0);
   };
+  cb.onPreviousFrame = [&]() {
+    requestFrameStep(view, signals, seekState,
+                     playback_video_frame_step::Direction::Previous);
+  };
+  cb.onNextFrame = [&]() {
+    requestFrameStep(view, signals, seekState,
+                     playback_video_frame_step::Direction::Next);
+  };
   cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
   const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
                                     kPlaybackShortcutContextGlobal |
-                                    kPlaybackShortcutContextPlaybackSession;
+                                    kPlaybackShortcutContextPlaybackSession |
+                                    kPlaybackShortcutContextVideoPlayback;
   const PlaybackInputResult playbackResult =
       handlePlaybackInput(ev, cb, shortcutContexts);
   if (playbackResult == PlaybackInputResult::Handled) {

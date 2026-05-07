@@ -18,6 +18,10 @@ char characterForVirtualKey(WORD key) {
       return '[';
     case VK_OEM_6:
       return ']';
+    case VK_OEM_COMMA:
+      return ',';
+    case VK_OEM_PERIOD:
+      return '.';
     default:
       return 0;
   }

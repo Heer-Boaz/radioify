@@ -69,6 +69,16 @@ bool isPrefillReady(const PipelineSnapshot& snapshot,
   return videoReady && audioReady;
 }
 
+bool canBeginSeekingFrom(SessionState session) {
+  return session == SessionState::Started || session == SessionState::Ended;
+}
+
+bool canClaimFrameStep(PlayerState state) {
+  TransportState transport = project(state).transport;
+  return transport == TransportState::Paused ||
+         transport == TransportState::Seeking;
+}
+
 StateProjection project(PlayerState state) {
   switch (state) {
     case PlayerState::Idle:
@@ -112,6 +122,7 @@ StateProjection project(PlayerState state) {
 
 void Controller::reset() {
   state_.store(static_cast<int>(PlayerState::Idle), std::memory_order_relaxed);
+  resetFrameSteps();
 }
 
 PlayerState Controller::current() const {
@@ -143,7 +154,7 @@ StateChange Controller::beginOpening() {
 
 StateChange Controller::beginSeeking() {
   StateProjection currentProjection = projection();
-  if (currentProjection.session != SessionState::Started) {
+  if (!canBeginSeekingFrom(currentProjection.session)) {
     return unchanged(currentProjection.playerState);
   }
   return set(PlayerState::Seeking);
@@ -228,12 +239,13 @@ PlayerState resolveSteadyState(PlayerState currentState,
     } else if (isActivePlaybackState(currentState)) {
       bool audioActive = snapshot.audioStartedOk && !snapshot.audioFinished;
       bool ended = snapshot.decodeEnded && snapshot.videoQueueEmpty &&
+                   !snapshot.videoReplayPending &&
                    (!audioActive || snapshot.audioFinished);
       if (ended) {
         nextState = PlayerState::Ended;
       } else if (snapshot.demuxEnded &&
                  currentState == PlayerState::Playing &&
-                 snapshot.videoQueueEmpty) {
+                 snapshot.videoQueueEmpty && !snapshot.videoReplayPending) {
         nextState = PlayerState::Draining;
       }
     }
@@ -249,8 +261,8 @@ Transition resolveTransition(PlayerState currentState,
                              PipelineSnapshot snapshot,
                              size_t videoPrefillFrames) {
   Transition transition;
-  transition.nextState =
-      resolveSteadyState(currentState, snapshot, videoPrefillFrames);
+  transition.nextState = resolveSteadyState(
+      currentState, snapshot, videoPrefillFrames);
   transition.projection = project(transition.nextState);
   transition.clearSeekFailure = currentState == PlayerState::Seeking &&
                                 transition.nextState != PlayerState::Seeking &&
@@ -271,6 +283,146 @@ Evaluation Controller::observe(const PipelineSnapshot& snapshot,
     evaluation.change = unchanged(state);
   }
   return evaluation;
+}
+
+void Controller::resetFrameSteps() {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  frameStepSerial_ = 0;
+  clearFrameStepsLocked();
+}
+
+void Controller::resetForSerial(int serial) {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  frameStepSerial_ = serial;
+  clearFrameStepsLocked();
+}
+
+StateChange Controller::requestFrameStep(
+    playback_video_frame_step::Direction direction, int serial) {
+  StateChange change = unchanged(current());
+  if (change.current == PlayerState::Ended ||
+      isActivePlaybackState(change.current)) {
+    change = set(PlayerState::Paused);
+  }
+  if (!canClaimFrameStep(change.current)) {
+    return change;
+  }
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  if (frameStepSerial_ != serial) {
+    frameStepSerial_ = serial;
+    clearFrameStepsLocked();
+  }
+  playback_video_frame_step::Request request;
+  request.direction = direction;
+  request.serial = serial;
+  request.generation = nextFrameStepGeneration_++;
+  frameStepRequests_.push_back(request);
+  return change;
+}
+
+bool Controller::peekFrameStep(
+    playback_video_frame_step::Request* request, int serial,
+    bool frameStepSeekPending) {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  if (!canClaimFrameStep(current()) || frameStepSerial_ != serial) {
+    frameStepSerial_ = serial;
+    clearFrameStepsLocked();
+    return false;
+  }
+  if (frameStepSeekPending || pendingSeekFrameStep_.active() ||
+      frameStepRequests_.empty()) {
+    return false;
+  }
+  *request = frameStepRequests_.front();
+  return true;
+}
+
+bool Controller::discardFrameStep(
+    const playback_video_frame_step::Request& request) {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  if (requestMatchesFrontLocked(request)) {
+    frameStepRequests_.pop_front();
+    return true;
+  }
+  return false;
+}
+
+bool Controller::publishFrameStepPresentation(
+    const playback_video_frame_step::Request& request) {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  if (!requestMatchesFrontLocked(request)) {
+    return false;
+  }
+  frameStepRequests_.pop_front();
+  pendingPresentedFrameStep_.publish(request.serial, request.generation);
+  return true;
+}
+
+bool Controller::consumeFrameStepPresentation(int serial,
+                                              uint64_t generation) {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  if (!pendingPresentedFrameStep_.matches(serial, generation)) {
+    return false;
+  }
+  pendingPresentedFrameStep_.clear();
+  return canClaimFrameStep(current());
+}
+
+bool Controller::publishFrameStepSeek(
+    const playback_video_frame_step::Request& request) {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  if (!requestMatchesFrontLocked(request)) {
+    return false;
+  }
+  frameStepRequests_.pop_front();
+  pendingSeekFrameStep_.publish(request.serial, request.generation);
+  return true;
+}
+
+bool Controller::consumeFrameStepSeek(int serial, uint64_t generation) {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  if (!pendingSeekFrameStep_.matches(serial, generation)) {
+    return false;
+  }
+  pendingSeekFrameStep_.clear();
+  return canClaimFrameStep(current());
+}
+
+bool Controller::publishFrameStepSeekPresentation(int serial,
+                                                  uint64_t generation) {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  if (frameStepSerial_ != serial || !canClaimFrameStep(current())) {
+    return false;
+  }
+  pendingPresentedFrameStep_.publish(serial, generation);
+  return true;
+}
+
+bool Controller::resumePlaybackFrameSteps() {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  bool hadRequests = !frameStepRequests_.empty() ||
+                     pendingPresentedFrameStep_.active() ||
+                     pendingSeekFrameStep_.active();
+  clearFrameStepsLocked();
+  return hadRequests;
+}
+
+void Controller::clearFrameStepsLocked() {
+  frameStepRequests_.clear();
+  pendingPresentedFrameStep_.clear();
+  pendingSeekFrameStep_.clear();
+}
+
+bool Controller::requestMatchesFrontLocked(
+    const playback_video_frame_step::Request& request) const {
+  if (frameStepRequests_.empty()) {
+    return false;
+  }
+  const playback_video_frame_step::Request& front =
+      frameStepRequests_.front();
+  return request.serial == frameStepSerial_ && front.serial == request.serial &&
+         front.generation == request.generation &&
+         front.direction == request.direction;
 }
 
 }  // namespace playback_video_state_machine

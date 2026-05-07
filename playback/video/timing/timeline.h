@@ -6,6 +6,7 @@
 extern "C" {
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
+#include <libavutil/mathematics.h>
 }
 
 namespace playback_video_timeline {
@@ -19,6 +20,7 @@ struct DemuxSeekRequest {
   int64_t formatStartUs = 0;
   int64_t targetUs = 0;
   int64_t seekUs = 0;
+  bool preferVideoStream = false;
   bool flushOnSuccess = true;
   const char* logTag = "timeline_seek";
   std::filesystem::path logPath;
@@ -35,6 +37,16 @@ struct PrerollDiscard {
   bool active = false;
   int64_t targetUs = 0;
 };
+
+inline int64_t videoStreamTimestampFloorForUs(int64_t absoluteUs,
+                                              AVRational videoTimeBase) {
+  if (absoluteUs < 0) {
+    absoluteUs = 0;
+  }
+  return av_rescale_q_rnd(
+      absoluteUs, AVRational{1, AV_TIME_BASE}, videoTimeBase,
+      static_cast<AVRounding>(AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX));
+}
 
 int64_t prerollSeekUs(int64_t targetUs,
                       int64_t prerollUs = kDefaultPrerollUs);

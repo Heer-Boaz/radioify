@@ -34,7 +34,6 @@ class WindowPresenter {
 
   VideoWindow& window();
   const VideoWindow& window() const;
-  GpuVideoFrameCache& frameCache();
 
  private:
   struct Impl;
