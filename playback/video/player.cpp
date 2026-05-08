@@ -1807,12 +1807,6 @@ struct Player::Impl {
       currentFrame = std::move(frame);
       hasFrame.store(true, std::memory_order_relaxed);
     }
-    frameCounter.fetch_add(1, std::memory_order_relaxed);
-    if (frameReadyEvent) {
-      SetEvent(frameReadyEvent.get());
-    }
-    frameCv.notify_all();
-
     lastPresentedPtsUs.store(item.ptsUs, std::memory_order_relaxed);
     lastPresentedDurationUs.store(prepared.frameDurationUs,
                                   std::memory_order_relaxed);
@@ -1840,15 +1834,28 @@ struct Player::Impl {
     }
     if (notification == VideoPresentationNotification::FrameStep) {
       assert(frameStepRequest);
-      playback_video_control::Event ev{};
-      ev.type = playback_video_control::EventType::FrameStepPresented;
-      ev.serial = serialForFrame;
-      ev.presentedPtsUs = item.ptsUs;
-      ev.displayIndex = item.displayIndex;
-      ev.frameStepGeneration = frameStepRequest->generation;
-      postEvent(ev);
+      bool validStepPresentation =
+          playbackState.consumeFrameStepPresentation(
+              serialForFrame, frameStepRequest->generation);
+      if (serialForFrame == serialControl.currentSerial()) {
+        resetAudioOutputForSerialAt(static_cast<uint64_t>(serialForFrame),
+                                    item.ptsUs, true, "frame_step");
+        appendTimingFmt(
+            "frame_step_presented serial=%d frame=%llu pts_us=%lld state_ack=%d",
+            serialForFrame,
+            static_cast<unsigned long long>(item.displayIndex),
+            static_cast<long long>(item.ptsUs),
+            validStepPresentation ? 1 : 0);
+      }
     }
     serialControl.clearPendingPresentation(serialForFrame);
+    playback_video_sync::notePresentedFrame(syncState, prepared, targetUs,
+                                            presentedNowUs);
+    frameCounter.fetch_add(1, std::memory_order_relaxed);
+    if (frameReadyEvent) {
+      SetEvent(frameReadyEvent.get());
+    }
+    frameCv.notify_all();
     logVideo(tag, &item, masterUs, source, diffUs, delayUs);
 
     if (cursorPublication == VideoCursorPublication::Append) {
@@ -1867,8 +1874,6 @@ struct Player::Impl {
       ev.serial = serialForFrame;
       postEvent(ev);
     }
-    playback_video_sync::notePresentedFrame(syncState, prepared, targetUs,
-                                            presentedNowUs);
   }
 
   void publishPresentedCursorFrame(
@@ -2480,22 +2485,6 @@ struct Player::Impl {
             audioBufferedStartValid.store(false, std::memory_order_relaxed);
             applyStateChange(playbackState.finishPriming());
           }
-        }
-        break;
-      }
-      case playback_video_control::EventType::FrameStepPresented: {
-        bool validStepPresentation =
-            playbackState.consumeFrameStepPresentation(
-                ev.serial, ev.frameStepGeneration);
-        if (validStepPresentation && ev.serial == serialControl.currentSerial() &&
-            ev.displayIndex ==
-                lastPresentedDisplayIndex.load(std::memory_order_relaxed)) {
-          resetAudioOutputForSerialAt(static_cast<uint64_t>(ev.serial),
-                                      ev.presentedPtsUs, true, "frame_step");
-          appendTimingFmt("ctrl_frame_step_presented serial=%d frame=%llu pts_us=%lld",
-                          ev.serial,
-                          static_cast<unsigned long long>(ev.displayIndex),
-                          static_cast<long long>(ev.presentedPtsUs));
         }
         break;
       }

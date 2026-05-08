@@ -17,7 +17,6 @@ enum class EventType {
   CloseRequest,
   SeekApplied,
   FirstFramePresented,
-  FrameStepPresented,
 };
 
 struct Event {
@@ -25,8 +24,6 @@ struct Event {
   int64_t arg1 = 0;
   int64_t arg2 = 0;
   int serial = 0;
-  int64_t presentedPtsUs = 0;
-  uint64_t displayIndex = 0;
   uint64_t frameStepGeneration = 0;
   playback_video_frame_step_seek::Plan frameStepSeek;
   playback_video_frame_step::Direction frameStepDirection =
