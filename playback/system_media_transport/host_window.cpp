@@ -15,11 +15,12 @@
 #include <utility>
 
 #include "core/windows_app_identity.h"
+#include "core/windows_app_resources.h"
 
 namespace {
 
 constexpr wchar_t kHostWindowClassName[] =
-    L"Radioify.SystemMediaTransportHostWindow";
+    RADIOIFY_APP_NAME_W L".SystemMediaTransportHostWindow";
 
 LRESULT CALLBACK hostWindowProc(HWND hwnd, UINT msg, WPARAM wParam,
                                 LPARAM lParam) {
@@ -69,7 +70,7 @@ struct PlaybackSystemTransportHostWindow::Impl {
     }
 
     hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                           kHostWindowClassName, L"Radioify",
+                           kHostWindowClassName, RADIOIFY_APP_NAME_W,
                            WS_POPUP | WS_DISABLED, 0, 0, 0, 0, nullptr,
                            nullptr, instance, nullptr);
     if (!hwnd) {

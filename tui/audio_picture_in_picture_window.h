@@ -53,6 +53,7 @@ class AudioPictureInPictureWindow {
   const std::string& lastError() const { return lastError_; }
   bool open();
   void close();
+  void activate();
   bool toggle();
   bool pollEvents(const Callbacks& callbacks);
   bool render(const Styles& styles, const Context& context);

@@ -21,6 +21,7 @@
 #include "radioify_explorer_module.h"
 #include "radioify_explorer_paths.h"
 #include "radioify_thumbnail_provider.h"
+#include "core/windows_app_resources.h"
 
 namespace {
 
@@ -304,7 +305,7 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
   }
 
   STDMETHODIMP GetTitle(IShellItemArray*, LPWSTR* title) override {
-    return duplicateString(L"Open with Radioify", title);
+    return duplicateString(L"Open with " RADIOIFY_APP_NAME_W, title);
   }
 
   STDMETHODIMP GetIcon(IShellItemArray*, LPWSTR* icon) override {

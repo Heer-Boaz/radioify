@@ -14,6 +14,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                     OpenFileRequests& openFileRequests,
                     bool* quitAppRequested,
                     PlaybackSystemControls* systemControls,
+                    PlaybackNotificationAreaControls* notificationAreaControls,
                     std::function<bool(PlaybackTransportCommand)>
                         requestTransportCommand,
                     std::function<bool(const std::vector<std::filesystem::path>&)>
@@ -33,6 +34,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                            openFileRequests,
                            quitAppRequested,
                            systemControls,
+                           notificationAreaControls,
                            std::move(requestTransportCommand),
                            std::move(requestOpenFiles),
                            continuityState});

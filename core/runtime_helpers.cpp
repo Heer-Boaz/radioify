@@ -16,6 +16,7 @@
 
 #include "app_common.h"
 #include "media_formats.h"
+#include "windows_app_resources.h"
 
 namespace {
 
@@ -110,11 +111,13 @@ std::vector<std::filesystem::path> defaultWritableDataDirCandidates() {
 #ifdef _WIN32
   const std::string localAppData = getEnvStringSafe("LOCALAPPDATA");
   if (!localAppData.empty()) {
-    appendUniquePath(&candidates, std::filesystem::path(localAppData) / "Radioify");
+    appendUniquePath(&candidates,
+                     std::filesystem::path(localAppData) / RADIOIFY_APP_NAME);
   }
   const std::string appData = getEnvStringSafe("APPDATA");
   if (!appData.empty()) {
-    appendUniquePath(&candidates, std::filesystem::path(appData) / "Radioify");
+    appendUniquePath(&candidates,
+                     std::filesystem::path(appData) / RADIOIFY_APP_NAME);
   }
 #endif
   const std::filesystem::path exeDir = executableDirOrEmpty();

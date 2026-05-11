@@ -15,6 +15,7 @@
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "audiofilter/radio1938/radio_buffer_io.h"
 #include "calibration_report.h"
+#include "core/windows_app_resources.h"
 #include "gmeaudio.h"
 #include "kssaudio.h"
 #include "m4adecoder.h"
@@ -285,7 +286,7 @@ int runRenderRadioCli(const Options& o) {
   renderOpt.input = toUtf8String(inputPath);
   renderOpt.output = toUtf8String(outputPath);
 
-  logLine("Radioify");
+  logLine(RADIOIFY_APP_NAME);
   logLine("  Mode:   render-radio");
   logLine("  Input:  " + renderOpt.input);
   logLine("  Output: " + renderOpt.output);

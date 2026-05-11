@@ -321,6 +321,7 @@ if (WIN32)
   )
 endif()
 target_sources(radioify PRIVATE
+  $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/app/radioify.exe.manifest>
   $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/app/radioify.rc>
   $<TARGET_OBJECTS:radioify_app>
   $<TARGET_OBJECTS:radioify_tui>
@@ -1395,7 +1396,7 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if (WIN32)
-  target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
+  target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
 endif()
 

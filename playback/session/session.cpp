@@ -27,6 +27,7 @@ struct PlaybackSession::Impl {
         config(args.config),
         openFileRequests(args.openFileRequests),
         systemControls(args.systemControls),
+        notificationAreaControls(args.notificationAreaControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
         continuityState(args.continuityState),
@@ -82,6 +83,7 @@ struct PlaybackSession::Impl {
         openFileRequests,
         host.quitApplicationRequestedPtr(),
         systemControls,
+        notificationAreaControls,
         requestTransportCommand,
         requestOpenFiles,
         continuityState});
@@ -145,6 +147,7 @@ struct PlaybackSession::Impl {
   const VideoPlaybackConfig& config;
   OpenFileRequests& openFileRequests;
   PlaybackSystemControls* systemControls = nullptr;
+  PlaybackNotificationAreaControls* notificationAreaControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   PlaybackSessionContinuationState* continuityState = nullptr;

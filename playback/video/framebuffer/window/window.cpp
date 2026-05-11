@@ -1,5 +1,6 @@
 #include "window.h"
 #include "timing_log.h"
+#include "core/windows_app_resources.h"
 #include "core/windows_message_pump.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "internal.h"
@@ -1164,7 +1165,7 @@ void VideoWindow::AdjustPictureInPictureSizingRect(WPARAM edge,
 }
 
 RECT VideoWindow::CalculatePictureInPictureRect() const {
-    RECT work{0, 0, 1280, 720};
+    RECT work{0, 0, kDefaultVideoClientWidth, kDefaultVideoClientHeight};
     HMONITOR monitor = MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST);
     MONITORINFO monitorInfo{};
     monitorInfo.cbSize = sizeof(monitorInfo);
@@ -1565,7 +1566,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     m_displayLifecycle.clear();
     m_closeRequest.clear();
     HINSTANCE hInstance = GetModuleHandle(NULL);
-    const wchar_t* className = L"RadioifyVideoWindow";
+    const wchar_t* className = RADIOIFY_APP_NAME_W L"VideoWindow";
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(WNDCLASSEXW);
@@ -1935,6 +1936,14 @@ void VideoWindow::ShowWindow(bool show) {
     if (m_hWnd) {
         ::ShowWindow(m_hWnd, show ? SW_SHOW : SW_HIDE);
     }
+}
+
+void VideoWindow::Activate() {
+    if (!m_hWnd) {
+        return;
+    }
+    ::ShowWindow(m_hWnd, SW_RESTORE);
+    ::SetForegroundWindow(m_hWnd);
 }
 
 bool VideoWindow::PollEvents() {

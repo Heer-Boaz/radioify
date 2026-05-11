@@ -19,7 +19,9 @@
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
 #include "playback_mode.h"
+#include "playback/notification_area/controls.h"
 #include "playback/system_media_transport/controls.h"
+#include "core/windows_console_window.h"
 #include "core/open_file_requests.h"
 #include "core.h"
 #include "handoff.h"
@@ -81,6 +83,7 @@ struct PlaybackLoopRunner::Impl {
   OpenFileRequests& openFileRequests;
   bool* quitApplicationRequested = nullptr;
   PlaybackSystemControls* systemControls = nullptr;
+  PlaybackNotificationAreaControls* notificationAreaControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   PlaybackSessionContinuationState* continuityState = nullptr;
@@ -140,6 +143,7 @@ struct PlaybackLoopRunner::Impl {
         openFileRequests(args.openFileRequests),
         quitApplicationRequested(args.quitApplicationRequested),
         systemControls(args.systemControls),
+        notificationAreaControls(args.notificationAreaControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
         continuityState(args.continuityState),
@@ -537,12 +541,47 @@ struct PlaybackLoopRunner::Impl {
     }
   }
 
-  void updateSystemControls() {
-    if (!systemControls) {
+  void processNotificationAreaCommands(PlaybackLoopState& loopState) {
+    if (!notificationAreaControls) {
       return;
     }
 
-    PlaybackSystemControls::State state;
+    PlaybackNotificationAreaCommand command;
+    while (notificationAreaControls->pollCommand(&command)) {
+      switch (command.kind) {
+        case PlaybackNotificationAreaCommand::Kind::Activate:
+          if (output.windowActive() && output.window().IsOpen()) {
+            output.window().Activate();
+          } else {
+            activateWindowsConsoleWindow();
+          }
+          break;
+        case PlaybackNotificationAreaCommand::Kind::Playback:
+          playback_session_input::handlePlaybackControlCommand(
+              inputView, inputSignals, seekState, command.playbackCommand);
+          if (loopStopRequested) {
+            break;
+          }
+          applyPresenterSync(syncPresentation());
+          break;
+        case PlaybackNotificationAreaCommand::Kind::Quit:
+          if (quitApplicationRequested) {
+            *quitApplicationRequested = true;
+          }
+          loopStopRequested = true;
+          break;
+      }
+      if (loopStopRequested) {
+        break;
+      }
+    }
+    if (loopStopRequested) {
+      loopState = PlaybackLoopState::Stopped;
+    }
+  }
+
+  PlaybackControlState buildVideoControlState() const {
+    PlaybackControlState state;
     state.active = true;
     state.isVideo = true;
     state.file = file;
@@ -555,12 +594,12 @@ struct PlaybackLoopRunner::Impl {
 
     const PlaybackSessionState playbackState = core.playbackState();
     if (playbackState == PlaybackSessionState::Ended) {
-      state.status = PlaybackSystemControls::Status::Stopped;
+      state.status = PlaybackControlStatus::Stopped;
     } else if (playbackState == PlaybackSessionState::Paused ||
                core.player().state() == PlayerState::Paused) {
-      state.status = PlaybackSystemControls::Status::Paused;
+      state.status = PlaybackControlStatus::Paused;
     } else {
-      state.status = PlaybackSystemControls::Status::Playing;
+      state.status = PlaybackControlStatus::Playing;
     }
 
     if (core.player().currentUs() > 0) {
@@ -572,7 +611,23 @@ struct PlaybackLoopRunner::Impl {
           static_cast<double>(core.player().durationUs()) / 1000000.0;
     }
 
-    systemControls->update(state);
+    return state;
+  }
+
+  void updateSystemControls() {
+    if (!systemControls) {
+      return;
+    }
+
+    systemControls->update(buildVideoControlState());
+  }
+
+  void updateNotificationAreaControls() {
+    if (!notificationAreaControls) {
+      return;
+    }
+
+    notificationAreaControls->update(buildVideoControlState());
   }
 
   void updateWindowCursor() {
@@ -662,12 +717,17 @@ struct PlaybackLoopRunner::Impl {
         core.playbackState() == PlaybackSessionState::Active) {
       output.waitForActivity(
           input, timeoutMs, core.videoFrameWaitHandle(),
-          openFileRequests.nativeWaitHandle());
+          openFileRequests.nativeWaitHandle(),
+          notificationAreaControls
+              ? notificationAreaControls->nativeWaitHandle()
+              : NativeWaitHandle());
       return;
     }
 
-    output.waitForActivity(input, timeoutMs,
-                           openFileRequests.nativeWaitHandle());
+    output.waitForActivity(
+        input, timeoutMs, openFileRequests.nativeWaitHandle(),
+        notificationAreaControls ? notificationAreaControls->nativeWaitHandle()
+                                 : NativeWaitHandle());
   }
 
   RefreshState refreshState() {
@@ -703,10 +763,15 @@ struct PlaybackLoopRunner::Impl {
     while (loopState == PlaybackLoopState::Running) {
       finalizeAudioStart();
       updateSystemControls();
+      updateNotificationAreaControls();
       pollWindowEvents();
 
       emitHeartbeat();
       processSystemCommands(loopState);
+      if (loopState == PlaybackLoopState::Stopped) {
+        break;
+      }
+      processNotificationAreaCommands(loopState);
       if (loopState == PlaybackLoopState::Stopped) {
         break;
       }

@@ -5,6 +5,8 @@
 #include <optional>
 #include <string>
 
+#include "core/windows_app_resources.h"
+
 namespace {
 
 constexpr DWORD kTerminalInputSequenceWaitMs = 10;
@@ -126,7 +128,8 @@ void ConsoleInput::init() {
     originalConsoleTitle_.assign(title, titleLength);
   }
   activeConsoleTitle_ =
-      L"Radioify [" + std::to_wstring(GetCurrentProcessId()) + L"]";
+      RADIOIFY_APP_NAME_W L" [" + std::to_wstring(GetCurrentProcessId()) +
+      L"]";
   SetConsoleTitleW(activeConsoleTitle_.c_str());
   updateTerminalGridSize();
   active_ = true;

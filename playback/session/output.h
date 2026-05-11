@@ -59,7 +59,8 @@ class PlaybackOutputController {
   bool pollInput(ConsoleInput& input, InputEvent& ev);
   bool waitForActivity(ConsoleInput& input, int timeoutMs,
                        NativeWaitHandle extraHandle = NativeWaitHandle(),
-                       NativeWaitHandle secondExtraHandle = NativeWaitHandle());
+                       NativeWaitHandle secondExtraHandle = NativeWaitHandle(),
+                       NativeWaitHandle thirdExtraHandle = NativeWaitHandle());
   void updateWindowCursor(Player& player, PlaybackSessionState playbackState,
                           bool overlayVisible);
   void renderTerminal(

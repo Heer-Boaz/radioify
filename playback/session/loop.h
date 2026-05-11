@@ -15,6 +15,7 @@
 #include "playback/video/playback.h"
 
 class Player;
+class PlaybackNotificationAreaControls;
 class SubtitleManager;
 
 class PlaybackLoopRunner {
@@ -44,6 +45,7 @@ class PlaybackLoopRunner {
     OpenFileRequests& openFileRequests;
     bool* quitApplicationRequested = nullptr;
     PlaybackSystemControls* systemControls = nullptr;
+    PlaybackNotificationAreaControls* notificationAreaControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
     PlaybackSessionContinuationState* continuityState = nullptr;

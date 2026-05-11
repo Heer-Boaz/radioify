@@ -4,6 +4,7 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/media/artwork_catalog.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media/metadata_catalog.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media/track_catalog.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/notification_area/controls.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/system_media_transport/host_window.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/system_media_transport/controls.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/session.cpp

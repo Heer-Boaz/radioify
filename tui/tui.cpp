@@ -40,7 +40,9 @@
 #include "consolescreen.h"
 #include "media_artwork_sidecar.h"
 #include "core/open_file_requests.h"
+#include "core/windows_app_resources.h"
 #include "core/windows_message_pump.h"
+#include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
@@ -52,6 +54,7 @@
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "playback/control/command.h"
 #include "playback/input/shortcuts.h"
+#include "playback/notification_area/controls.h"
 #include "playback/overlay/overlay.h"
 #include "playback/system_media_transport/controls.h"
 #include "playback_route.h"
@@ -106,6 +109,7 @@ inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
 static DWORD waitForBrowserWake(ConsoleInput& input,
                                 const OpenFileRequests& openFileRequests,
                                 NativeWaitHandle asyncWakeHandle,
+                                NativeWaitHandle notificationAreaHandle,
                                 DWORD timeoutMs) {
   std::vector<NativeWaitHandle> handles;
   if (NativeWaitHandle inputHandle = input.waitHandle()) {
@@ -117,9 +121,38 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
   if (asyncWakeHandle) {
     handles.push_back(asyncWakeHandle);
   }
+  if (notificationAreaHandle) {
+    handles.push_back(notificationAreaHandle);
+  }
   return waitForHandlesAndPumpThreadWindowMessages(
       static_cast<DWORD>(handles.size()),
       handles.empty() ? nullptr : handles.data(), timeoutMs);
+}
+
+struct WindowClientSize {
+  int width = 1;
+  int height = 1;
+};
+
+static int gridPixelExtent(int cells, double pixelsPerCell,
+                           int fallbackPixelsPerCell) {
+  const int resolvedCells = std::max(1, cells);
+  const double resolvedPixelsPerCell =
+      pixelsPerCell > 0.0 ? pixelsPerCell
+                          : static_cast<double>(fallbackPixelsPerCell);
+  return std::max(
+      1, static_cast<int>(std::lround(resolvedCells * resolvedPixelsPerCell)));
+}
+
+static WindowClientSize initialWindowTuiClientSize(const ConsoleScreen& screen) {
+  constexpr int kFallbackCellPixelWidth = 10;
+  constexpr int kFallbackCellPixelHeight = 20;
+  return {
+      gridPixelExtent(screen.width(), screen.cellPixelWidth(),
+                      kFallbackCellPixelWidth),
+      gridPixelExtent(screen.height(), screen.cellPixelHeight(),
+                      kFallbackCellPixelHeight),
+  };
 }
 
 static ShellOpenMode resolveWindowsShellOpenMode(const Options& options) {
@@ -818,7 +851,9 @@ int runTui(Options o) {
   VideoWindow tuiWindow;
   bool windowTuiEnabled = o.enableWindow;
   if (windowTuiEnabled) {
-    if (!tuiWindow.Open(1280, 720, "Radioify TUI", false)) {
+    const WindowClientSize clientSize = initialWindowTuiClientSize(screen);
+    if (!tuiWindow.Open(clientSize.width, clientSize.height, RADIOIFY_APP_NAME,
+                        false)) {
       windowTuiEnabled = false;
     } else {
       tuiWindow.EnableFileDrop();
@@ -831,6 +866,8 @@ int runTui(Options o) {
   audioInit(audioConfig);
   PlaybackSystemControls systemControls;
   systemControls.initialize();
+  PlaybackNotificationAreaControls notificationAreaControls;
+  notificationAreaControls.initialize();
 
   VideoPlaybackConfig videoConfig;
   videoConfig.enableAscii = o.enableAscii;
@@ -857,7 +894,7 @@ int runTui(Options o) {
     }
     input.restore();
     screen.restore();
-    logLine("Radioify");
+    logLine(RADIOIFY_APP_NAME);
     logLine(std::string("  Mode:   render"));
     logLine(std::string("  Input:  ") + toUtf8String(file));
     logLine(std::string("  Output: ") + toUtf8String(outputPath));
@@ -903,7 +940,7 @@ int runTui(Options o) {
       message = "Missing hebios.bin for PSF2 playback.";
       detail =
           "Set RADIOIFY_PSF_BIOS or place hebios.bin next to the file, next "
-          "to radioify.exe, or in Radioify's launch directory.";
+          "to radioify.exe, or in " RADIOIFY_APP_NAME "'s launch directory.";
     }
 
     playback_dialog::showInfoDialog(
@@ -1059,7 +1096,8 @@ int runTui(Options o) {
                                    : audioPictureInPicture.lastError();
     playback_dialog::showInfoDialog(
         input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-        "Picture-in-Picture Error", "Radioify could not open picture-in-picture.",
+        "Picture-in-Picture Error",
+        RADIOIFY_APP_NAME " could not open picture-in-picture.",
         detail, "Enter/Space/Esc: close");
   };
   auto applyAudioPictureInPicturePlan =
@@ -1195,6 +1233,7 @@ int runTui(Options o) {
             kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
             kProgressEnd, videoConfig, openFileRequests, &quitAppRequested,
             &systemControls,
+            &notificationAreaControls,
             requestTransportCommand, requestOpenFiles,
             &playbackContinuationState);
         if (quitAppRequested) {
@@ -1766,14 +1805,25 @@ int runTui(Options o) {
     }
   };
 
-  auto syncAudioSystemControls = [&]() {
-    std::filesystem::path nowPlaying = audioGetNowPlaying();
-    if (nowPlaying.empty()) {
-      systemControls.clear();
+  auto activateRadioifySurface = [&]() {
+    if (windowTuiEnabled && tuiWindow.IsOpen()) {
+      tuiWindow.Activate();
       return;
     }
+    if (audioPictureInPicture.isOpen()) {
+      audioPictureInPicture.activate();
+      return;
+    }
+    activateWindowsConsoleWindow();
+  };
 
-    PlaybackSystemControls::State state;
+  auto buildAudioControlState = [&]() {
+    std::filesystem::path nowPlaying = audioGetNowPlaying();
+    PlaybackControlState state;
+    if (nowPlaying.empty()) {
+      return state;
+    }
+
     state.active = true;
     state.isVideo = false;
     state.file = nowPlaying;
@@ -1786,19 +1836,49 @@ int runTui(Options o) {
     state.canPrevious = true;
     state.canNext = true;
     if (audioIsFinished()) {
-      state.status = PlaybackSystemControls::Status::Stopped;
+      state.status = PlaybackControlStatus::Stopped;
     } else if (audioIsPaused()) {
-      state.status = PlaybackSystemControls::Status::Paused;
+      state.status = PlaybackControlStatus::Paused;
     } else {
-      state.status = PlaybackSystemControls::Status::Playing;
+      state.status = PlaybackControlStatus::Playing;
     }
-    systemControls.update(state);
+    return state;
   };
 
-  auto processSystemPlaybackCommands = [&]() {
+  auto syncShellControls = [&]() {
+    const PlaybackControlState state = buildAudioControlState();
+    if (!state.active || state.file.empty()) {
+      systemControls.clear();
+      notificationAreaControls.clear();
+      return;
+    }
+    systemControls.update(state);
+    notificationAreaControls.update(state);
+  };
+
+  auto handleNotificationAreaCommand =
+      [&](const PlaybackNotificationAreaCommand& command) {
+    switch (command.kind) {
+      case PlaybackNotificationAreaCommand::Kind::Activate:
+        activateRadioifySurface();
+        break;
+      case PlaybackNotificationAreaCommand::Kind::Playback:
+        handleSystemPlaybackCommand(command.playbackCommand);
+        break;
+      case PlaybackNotificationAreaCommand::Kind::Quit:
+        running = false;
+        break;
+    }
+  };
+
+  auto processShellPlaybackCommands = [&]() {
     PlaybackControlCommand command;
     while (systemControls.pollCommand(&command)) {
       handleSystemPlaybackCommand(command);
+    }
+    PlaybackNotificationAreaCommand notificationCommand;
+    while (notificationAreaControls.pollCommand(&notificationCommand)) {
+      handleNotificationAreaCommand(notificationCommand);
     }
   };
   callbacks.onResize = [&]() {
@@ -2222,6 +2302,8 @@ int runTui(Options o) {
         audioPictureInPicture.pollEvents(audioPictureInPictureCallbacks)) {
       markDirty(UiDirtyFlags::Async);
     }
+    processShellPlaybackCommands();
+    if (!running) break;
 
     if (consumeBrowserThumbnailWake()) {
       markDirty(UiDirtyFlags::Async);
@@ -2539,7 +2621,8 @@ int runTui(Options o) {
     };
 
     auto dispatchInputEvent = [&](const InputEvent& event) -> bool {
-      processSystemPlaybackCommands();
+      processShellPlaybackCommands();
+      if (!running) return true;
       processInputEvent(event);
       if (didRender) {
         finalizeRenderedExit();
@@ -2575,8 +2658,9 @@ int runTui(Options o) {
     }
     if (!running) break;
 
-    processSystemPlaybackCommands();
-    syncAudioSystemControls();
+    processShellPlaybackCommands();
+    if (!running) break;
+    syncShellControls();
 
     BrowserFooterLayout nextFooterLayout = buildFooterLayout();
     if (nextFooterLayout != footerLayout) {
@@ -2631,7 +2715,8 @@ int runTui(Options o) {
     if (!dirty) {
       DWORD waitTimeout = computeWakeTimeout(now);
       DWORD waitResult = waitForBrowserWake(
-          input, openFileRequests, browserThumbnailWakeHandle(), waitTimeout);
+          input, openFileRequests, browserThumbnailWakeHandle(),
+          notificationAreaControls.nativeWaitHandle(), waitTimeout);
       if (consumeBrowserThumbnailWake()) {
         markDirty(UiDirtyFlags::Async);
       } else if (waitResult == WAIT_TIMEOUT) {
@@ -2650,7 +2735,7 @@ int runTui(Options o) {
       screen.clear(kStyleNormal);
       screen.setAlwaysFullRedraw(forceFullRedraw);
 
-      const std::string headerTitleRaw = "Radioify";
+      const std::string headerTitleRaw = RADIOIFY_APP_NAME;
       std::string headerTitle = headerTitleRaw;
       if (static_cast<int>(headerTitle.size()) > width) {
         headerTitle = fitLine(headerTitleRaw, width);

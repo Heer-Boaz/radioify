@@ -19,6 +19,7 @@
 
 #include "runtime_helpers.h"
 #include "ui_helpers.h"
+#include "windows_app_resources.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -451,7 +452,7 @@ bool ensureBiosLoaded(const std::filesystem::path& psfPath,
   if (biosPath.empty() || !std::filesystem::exists(biosPath)) {
     if (error) {
       *error = "Missing hebios.bin (set RADIOIFY_PSF_BIOS or place it next to "
-               "the file, next to radioify.exe, or in Radioify's launch "
+               "the file, next to radioify.exe, or in " RADIOIFY_APP_NAME "'s launch "
                "directory).";
     }
     return false;

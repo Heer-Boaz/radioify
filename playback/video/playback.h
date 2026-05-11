@@ -12,6 +12,7 @@
 #include "playback/session/state.h"
 
 class OpenFileRequests;
+class PlaybackNotificationAreaControls;
 
 struct VideoPlaybackConfig {
   bool enableAscii = kDefaultAsciiPlaybackEnabled;
@@ -36,6 +37,8 @@ bool showAsciiVideo(const std::filesystem::path& file,
                     OpenFileRequests& openFileRequests,
                     bool* quitAppRequested = nullptr,
                     PlaybackSystemControls* systemControls = nullptr,
+                    PlaybackNotificationAreaControls* notificationAreaControls =
+                        nullptr,
                     std::function<bool(PlaybackTransportCommand)>
                         requestTransportCommand = {},
                     std::function<bool(const std::vector<std::filesystem::path>&)>

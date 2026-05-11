@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "audioplayback.h"
+#include "core/windows_app_resources.h"
 #include "playback/framebuffer/mini_player_tui.h"
 #include "playback/media/artwork_catalog.h"
 #include "playback/input/shortcuts.h"
@@ -85,7 +86,7 @@ bool AudioPictureInPictureWindow::open() {
   lastError_.clear();
   if (window_.IsOpen()) return true;
   if (!window_.Open(kDefaultWindowWidth, kDefaultWindowHeight,
-                    "Radioify Picture-in-Picture", false)) {
+                    RADIOIFY_APP_NAME " Picture-in-Picture", false)) {
     lastError_ = "The picture-in-picture window could not be created.";
     return false;
   }
@@ -115,6 +116,12 @@ void AudioPictureInPictureWindow::close() {
   hoverIndex_ = -1;
   controls_.clear();
   layout_ = playback_overlay::OverlayCellLayout{};
+}
+
+void AudioPictureInPictureWindow::activate() {
+  if (window_.IsOpen()) {
+    window_.Activate();
+  }
 }
 
 bool AudioPictureInPictureWindow::toggle() {

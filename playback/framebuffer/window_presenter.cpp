@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "core/native_wait_handle.h"
+#include "core/windows_app_resources.h"
 #include "core/windows_handle.h"
 #include "presenter.h"
 #include "playback/session/window_presentation.h"
@@ -92,7 +93,9 @@ struct WindowPresenter::Impl {
               playback_session_window::shouldStartFullscreen(
                   initialState->windowPlacement);
           const bool opened =
-              window.Open(1280, 720, "Radioify Output", startFullscreen);
+              window.Open(VideoWindow::kDefaultVideoClientWidth,
+                          VideoWindow::kDefaultVideoClientHeight,
+                          RADIOIFY_APP_NAME " Output", startFullscreen);
           if (opened) {
             window.EnableFileDrop();
             if (initialState && initialState->hasLayout) {

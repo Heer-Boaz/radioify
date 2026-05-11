@@ -13,6 +13,7 @@
 #include "open_file_requests.h"
 #include "runtime_helpers.h"
 #include "shell_open_mode.h"
+#include "windows_app_resources.h"
 #include "windows_handle.h"
 
 namespace {
@@ -92,7 +93,7 @@ std::wstring shellOpenObjectSuffix() {
   if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId)) {
     sessionId = 0;
   }
-  return L"Radioify.ShellOpen." + std::to_wstring(sessionId);
+  return RADIOIFY_APP_NAME_W L".ShellOpen." + std::to_wstring(sessionId);
 }
 
 std::wstring shellOpenMutexName() {

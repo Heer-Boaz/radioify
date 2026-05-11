@@ -1,4 +1,4 @@
-#define IDI_RADIOIFY_APP_ICON 101
+#include "..\\core\\windows_app_resources.h"
 #define VS_FFI_FILEFLAGSMASK 0x0000003FL
 #define VS_FF_DEBUG 0x00000001L
 #define VOS__WINDOWS32 0x00040004L
@@ -24,12 +24,12 @@ BEGIN
   BEGIN
     BLOCK "040904E4"
     BEGIN
-      VALUE "CompanyName", "Radioify"
-      VALUE "FileDescription", "Radioify"
+      VALUE "CompanyName", RADIOIFY_APP_NAME
+      VALUE "FileDescription", RADIOIFY_APP_NAME
       VALUE "FileVersion", "0.0.0.0"
       VALUE "InternalName", "radioify"
       VALUE "OriginalFilename", "radioify.exe"
-      VALUE "ProductName", "Radioify"
+      VALUE "ProductName", RADIOIFY_APP_NAME
       VALUE "ProductVersion", "0.0.0.0"
     END
   END

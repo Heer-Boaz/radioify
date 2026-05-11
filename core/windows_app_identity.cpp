@@ -22,13 +22,11 @@
 #include <wrl/client.h>
 
 #include "runtime_helpers.h"
+#include "windows_app_resources.h"
 
 namespace {
 
 using Microsoft::WRL::ComPtr;
-
-constexpr wchar_t kRadioifyAppUserModelId[] = L"Radioify.App";
-constexpr wchar_t kRadioifyDisplayName[] = L"Radioify";
 
 std::wstring executablePathOrEmpty() {
   std::wstring buffer;
@@ -127,10 +125,10 @@ void applyWindowAppIdentity(HWND hwnd) {
 
   bool changed = false;
   changed |= setWindowPropertyString(propertyStore.Get(), PKEY_AppUserModel_ID,
-                                     kRadioifyAppUserModelId);
+                                     RADIOIFY_APP_NAME_W L".App");
   changed |= setWindowPropertyString(
       propertyStore.Get(), PKEY_AppUserModel_RelaunchDisplayNameResource,
-      kRadioifyDisplayName);
+      RADIOIFY_APP_NAME_W);
   changed |= setWindowPropertyString(
       propertyStore.Get(), PKEY_AppUserModel_RelaunchCommand, relaunchCommand);
   if (!relaunchIconResource.empty()) {
@@ -148,7 +146,7 @@ void applyWindowAppIdentity(HWND hwnd) {
 
 void initializeWindowsAppIdentity() {
   const HRESULT hr =
-      SetCurrentProcessExplicitAppUserModelID(kRadioifyAppUserModelId);
+      SetCurrentProcessExplicitAppUserModelID(RADIOIFY_APP_NAME_W L".App");
   if (FAILED(hr)) {
     return;
   }

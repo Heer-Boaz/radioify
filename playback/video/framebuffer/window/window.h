@@ -105,6 +105,9 @@ struct ShaderConstants;
 
 class VideoWindow {
 public:
+    static constexpr int kDefaultVideoClientWidth = 1280;
+    static constexpr int kDefaultVideoClientHeight = 720;
+
     VideoWindow();
     ~VideoWindow();
 
@@ -167,6 +170,7 @@ public:
         outViewW = m_viewportW;
         outViewH = m_viewportH;
     }
+    void Activate();
     void ShowWindow(bool show);
     bool PollEvents();
     bool PollInput(InputEvent& ev);
@@ -279,8 +283,8 @@ private:
     
     int m_width = 0;
     int m_height = 0;
-    int m_videoWidth = 1280;
-    int m_videoHeight = 720;
+    int m_videoWidth = kDefaultVideoClientWidth;
+    int m_videoHeight = kDefaultVideoClientHeight;
     
     // Viewport geometry (for mouse coordinate mapping)
     float m_viewportX = 0.0f;

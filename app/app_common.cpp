@@ -4,6 +4,8 @@
 #include <iostream>
 #include <limits>
 
+#include "core/windows_app_resources.h"
+
 static void showUsage(const char* exe) {
   std::string name = exe ? std::string(exe) : "radioify";
   logLine("Usage: " + name + " [options] [file_or_folder]");
@@ -30,7 +32,8 @@ static void showUsage(const char* exe) {
   logLine("  --ascii-debug-overlay Show ASCII playback debug overlay");
   logLine("  --shell-open-mode <same-instance|new-instance>");
   logLine("               Choose how Windows shell opens are handled");
-  logLine("  --single-instance Forward this input to the running Radioify instance");
+  logLine("  --single-instance Forward this input to the running "
+          RADIOIFY_APP_NAME " instance");
   logLine("  --new-instance     Open this launch in its own instance");
   logLine("  -h, --help   Show this help");
 }

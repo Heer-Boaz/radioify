@@ -58,6 +58,7 @@ CPackSourceConfig.cmake
 *.dll
 *.exe
 *.manifest
+!app/radioify.exe.manifest
 *.exp
 
 # Other
