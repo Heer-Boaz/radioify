@@ -849,7 +849,8 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
 
   state->audioClockFrames.fetch_add(frameCount, std::memory_order_relaxed);
-  if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
+  if (mode != AudioMode::M4a && !state->dry && framesRead > 0 &&
+      state->useRadio1938.load()) {
     float* audioStart =
         out + silentLeadFrames * static_cast<uint64_t>(state->channels);
     processRadioBlock(state, audioStart, static_cast<uint32_t>(framesRead));
@@ -1082,6 +1083,10 @@ bool startM4aWorker(const std::filesystem::path& file, uint64_t startFrame,
           appendAudioTimingLogLine(buf);
         }
 #endif
+      }
+      if (!gAudio.state.dry && gAudio.state.useRadio1938.load()) {
+        processRadioBlock(&gAudio.state, buffer.data(),
+                          static_cast<uint32_t>(framesRead));
       }
       {
         std::lock_guard<std::mutex> lock(gAudio.state.m4aMutex);

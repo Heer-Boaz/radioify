@@ -146,7 +146,8 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
 
   const bool usePreviewRender = !o.dry && useRadio1938 && writeOutput;
   const bool useCalibrationRender =
-      !o.dry && useRadio1938 && (renderedRadioOut || o.calibrationReport);
+      !o.dry && useRadio1938 &&
+      (o.calibrationReport || (renderedRadioOut && !writeOutput));
   RadioAmIngressConfig radioAmIngress;
   RadioPreviewConfig radioPreviewConfig;
   radioPreviewConfig.programBandwidthHz = 0.48f * static_cast<float>(o.bwHz);

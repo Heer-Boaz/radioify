@@ -353,6 +353,16 @@ target_sources(radio_node_physics PRIVATE
 )
 radioify_link_repo_target(radio_node_physics)
 
+add_executable(radio_am_ingress_tests)
+target_sources(radio_am_ingress_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_radio_am_ingress_tests>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+)
+radioify_link_repo_target(radio_am_ingress_tests)
+add_test(NAME radio_am_ingress_tests
+         COMMAND $<TARGET_FILE:radio_am_ingress_tests>)
+
 add_executable(ascii_shader_tests)
 target_sources(ascii_shader_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_ascii_shader_tests>

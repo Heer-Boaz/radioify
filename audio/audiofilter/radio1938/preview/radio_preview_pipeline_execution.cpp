@@ -50,6 +50,12 @@ size_t resolveFirstProgramIndex(RadioPreviewPipeline& preview,
   return orderIndex;
 }
 
+void applyPreviewRuntimeBudget(Radio1938& radioRef,
+                               const RadioPreviewConfig& previewConfig) {
+  radioRef.demod.am.waveformMaxSubsteps =
+      std::max(1, previewConfig.detectorMaxSubsteps);
+}
+
 }  // namespace
 
 void beginRadioPreviewPipelineBlock(RadioPreviewPipeline& preview,
@@ -77,6 +83,7 @@ void RadioPreviewPipeline::initialize(Radio1938& radioRef,
   ingress = &ingressConfig;
   config = &previewConfig;
   sampleRate = newSampleRate;
+  applyPreviewRuntimeBudget(radioRef, previewConfig);
   RadioPreviewInitContext initCtx{};
   lifecycle.initialize(*this, initCtx);
   graph.compile();
