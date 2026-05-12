@@ -9,6 +9,10 @@ inline float sampleInterleavedToMono(const float* samples,
                                      int channels) {
   if (!samples) return 0.0f;
   if (channels <= 1) return samples[frame];
+  if (channels == 2) {
+    const size_t base = static_cast<size_t>(frame) * 2u;
+    return 0.5f * (samples[base] + samples[base + 1u]);
+  }
   float sum = 0.0f;
   const size_t base =
       static_cast<size_t>(frame) * static_cast<size_t>(channels);
@@ -25,6 +29,12 @@ inline void writeMonoToInterleaved(float* samples,
   if (!samples) return;
   if (channels <= 1) {
     samples[frame] = y;
+    return;
+  }
+  if (channels == 2) {
+    const size_t base = static_cast<size_t>(frame) * 2u;
+    samples[base] = y;
+    samples[base + 1u] = y;
     return;
   }
   const size_t base =

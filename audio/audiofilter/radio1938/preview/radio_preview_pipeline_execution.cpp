@@ -105,13 +105,15 @@ void RadioPreviewPipeline::runBlock(Radio1938& radioRef,
   beginRadioPreviewPipelineBlock(*this, frames, block);
 
   filteredScratch.resize(frames);
+  RadioPreviewSampleContext ctx{};
+  ctx.block = &block;
+  const size_t programStartIndex =
+      resolveFirstProgramIndex(*this, ctx, RadioPreviewPassId::ProgramFilter);
   for (uint32_t frame = 0; frame < frames; ++frame) {
-    RadioPreviewSampleContext ctx{};
-    ctx.block = &block;
     const float mono = sampleInterleavedToMono(samples, frame,
                                                static_cast<int>(channels));
-    filteredScratch[frame] = runRadioPreviewPipelineSample(
-        *this, mono, ctx, RadioPreviewPassId::ProgramFilter);
+    filteredScratch[frame] = runProgramPasses(*this, mono, ctx,
+                                              programStartIndex);
   }
 
   radioRef.processAmAudio(filteredScratch.data(), filteredScratch.data(), frames,

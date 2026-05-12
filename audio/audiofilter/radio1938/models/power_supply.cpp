@@ -22,12 +22,17 @@ float computeRectifierRippleHz(const Radio1938& radio) {
   return rectifierHz;
 }
 
-float computeRectifierRippleWave(const Radio1938::PowerNodeState& power) {
-  float rectified = std::fabs(std::sin(power.rectifierPhase));
+float computeRectifierRippleWaveFromOsc(
+    const Radio1938::PowerNodeState& power) {
+  float rectified = std::fabs(power.rectifierOscSin);
   float centered = rectified - (2.0f / kRadioPi);
-  centered +=
-      power.rippleSecondHarmonicMix * std::sin(2.0f * power.rectifierPhase);
+  centered += power.rippleSecondHarmonicMix * 2.0f * power.rectifierOscSin *
+              power.rectifierOscCos;
   return centered;
+}
+
+void refreshRectifierRippleWave(Radio1938::PowerNodeState& power) {
+  power.rectifierRippleWave = computeRectifierRippleWaveFromOsc(power);
 }
 
 float clampPowerSupplyScale(const Radio1938::PowerNodeState& power,
@@ -52,18 +57,40 @@ float computePowerBranchSupplyScale(const Radio1938& radio, float branchDepth) {
     float rippleGain =
         power.rippleDepth * branchDepth *
         (power.rippleGainBase + power.rippleGainDepth * powerT);
-    scale *= 1.0f + computeRectifierRippleWave(power) * rippleGain;
+    scale *= 1.0f + power.rectifierRippleWave * rippleGain;
   }
   return clampPowerSupplyScale(power, scale);
 }
 
-void advanceRectifierRipplePhase(Radio1938& radio) {
+void configureRectifierRipple(Radio1938& radio) {
+  auto& power = radio.power;
   float rectifierHz = computeRectifierRippleHz(radio);
-  if (rectifierHz <= 0.0f) return;
   float sampleRate = (radio.power.internalSampleRate > 0.0f)
                          ? radio.power.internalSampleRate
                          : radio.sampleRate;
-  radio.power.rectifierPhase = wrapPhase(
-      radio.power.rectifierPhase +
-      kRadioTwoPi * (rectifierHz / std::max(sampleRate, 1.0f)));
+  power.rectifierStepRadians =
+      (rectifierHz > 0.0f)
+          ? kRadioTwoPi * (rectifierHz / std::max(sampleRate, 1.0f))
+          : 0.0f;
+  power.rectifierStepCos = std::cos(power.rectifierStepRadians);
+  power.rectifierStepSin = std::sin(power.rectifierStepRadians);
+  refreshRectifierRippleWave(power);
+}
+
+void resetRectifierRipple(Radio1938& radio) {
+  auto& power = radio.power;
+  power.rectifierPhase = 0.0f;
+  power.rectifierOscCos = 1.0f;
+  power.rectifierOscSin = 0.0f;
+  refreshRectifierRippleWave(power);
+}
+
+void advanceRectifierRipplePhase(Radio1938& radio) {
+  auto& power = radio.power;
+  if (power.rectifierStepRadians == 0.0f) return;
+  advanceNormalizedOscillator(power.rectifierStepCos, power.rectifierStepSin,
+                              power.rectifierOscCos, power.rectifierOscSin);
+  power.rectifierPhase =
+      wrapPhase(power.rectifierPhase + power.rectifierStepRadians);
+  refreshRectifierRippleWave(power);
 }

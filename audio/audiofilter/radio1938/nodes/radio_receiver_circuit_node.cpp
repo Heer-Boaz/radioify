@@ -77,20 +77,19 @@ float RadioReceiverCircuitNode::run(Radio1938& radio,
     radio.calibration.receiverGridVolts.accumulate(receiver.gridVoltage);
   }
   float out = 0.0f;
-  float plateCurrent = 0.0f;
   out = processOversampled2x(receiver.gridVoltage, receiver.osPrevGridVolts,
                              receiver.osLpIn, receiver.osLpOut,
                              [&](float gridVoltage) {
                                return runReceiverTriodeStage(radio, gridVoltage);
                              });
-  plateCurrent = static_cast<float>(
-      evaluateKorenTriodePlateRuntime(receiver.tubeBiasVolts +
-                                          receiver.gridVoltage,
-                                      receiver.tubePlateVoltage,
-                                      receiver.tubeTriodeModel,
-                                      receiver.tubeTriodeLut)
-          .currentAmps);
   if (radio.calibration.enabled) {
+    float plateCurrent = static_cast<float>(
+        evaluateKorenTriodePlateRuntime(receiver.tubeBiasVolts +
+                                            receiver.gridVoltage,
+                                        receiver.tubePlateVoltage,
+                                        receiver.tubeTriodeModel,
+                                        receiver.tubeTriodeLut)
+            .currentAmps);
     radio.calibration.receiverPlateSwingVolts.accumulate(out);
     radio.calibration.maxReceiverPlateCurrentAmps =
         std::max(radio.calibration.maxReceiverPlateCurrentAmps, plateCurrent);

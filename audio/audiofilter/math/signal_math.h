@@ -35,6 +35,18 @@ inline float wrapPhase(float phase) {
   return phase;
 }
 
+inline void advanceNormalizedOscillator(float stepCos,
+                                        float stepSin,
+                                        float& oscCos,
+                                        float& oscSin) {
+  const float nextCos = oscCos * stepCos - oscSin * stepSin;
+  const float nextSin = oscSin * stepCos + oscCos * stepSin;
+  const float magnitudeSq = nextCos * nextCos + nextSin * nextSin;
+  const float renorm = 1.5f - 0.5f * magnitudeSq;
+  oscCos = nextCos * renorm;
+  oscSin = nextSin * renorm;
+}
+
 inline float db2lin(float db) { return std::pow(10.0f, db / 20.0f); }
 
 inline float lin2db(float x) {

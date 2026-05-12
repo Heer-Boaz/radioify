@@ -20,18 +20,6 @@ float detectorWaveformCarrierHz(const AMDetector& detector,
   return std::fabs(radio.ifStrip.ifCenterHz + detector.tuneOffsetHz);
 }
 
-void advanceProbeOscillator(float stepCos,
-                            float stepSin,
-                            float& oscCos,
-                            float& oscSin) {
-  float nextCos = oscCos * stepCos - oscSin * stepSin;
-  float nextSin = oscSin * stepCos + oscCos * stepSin;
-  float magnitudeSq = nextCos * nextCos + nextSin * nextSin;
-  float renorm = 1.5f - 0.5f * magnitudeSq;
-  oscCos = nextCos * renorm;
-  oscSin = nextSin * renorm;
-}
-
 }  // namespace
 
 void AMDetector::init(float newFs, float newBw, float newTuneHz) {
@@ -179,7 +167,7 @@ float AMDetector::run(float signalI,
     float mixedQ = ifQ * oscCos - ifI * oscSin;
     auto filtered = probe.process(mixedI, mixedQ);
     phase = wrapPhase(phase + step);
-    advanceProbeOscillator(stepCos, stepSin, oscCos, oscSin);
+    advanceNormalizedOscillator(stepCos, stepSin, oscCos, oscSin);
     return std::sqrt(filtered[0] * filtered[0] + filtered[1] * filtered[1]);
   };
 

@@ -282,6 +282,7 @@ struct Radio1938 {
 
   struct IqInputState {
     float iqPhase = 0.0f;
+    std::vector<float> rfScratch;
 
     void resetRuntime() { iqPhase = 0.0f; }
   } iqInput;
@@ -294,6 +295,7 @@ struct Radio1938 {
     float afcMaxCorrectionHz = 0.0f;
     float afcDeadband = 0.0f;
     float afcResponseMs = 0.0f;
+    float afcTick = 0.0f;
     float tunedBw = 0.0f;
     float tuneAppliedHz = 0.0f;
     float bwAppliedHz = 0.0f;
@@ -371,6 +373,10 @@ struct Radio1938 {
     float gridSoftnessVolts = 0.0f;
     float plateResistanceOhms = 0.0f;
     float operatingPointToleranceVolts = 35.0f;
+    FixedPlatePentodeEvaluator plateCurrentForGrid;
+    float effectiveLoGridBiasVolts = 0.0f;
+    float conversionGainScale = 0.0f;
+    float inputDriveEnvCoeff = 0.0f;
     float mixedBaseGridVolts = 0.0f;
     float conversionGain = 1.0f;
     float inputDriveEnv = 0.0f;
@@ -393,10 +399,20 @@ struct Radio1938 {
     // Phase used only to strip the real RF source carrier down to a complex
     // source envelope. This is not the IF tuning phase.
     float sourceDownmixPhase = 0.0f;
+    float sourceDownmixStepRadians = 0.0f;
+    float sourceDownmixStepCos = 1.0f;
+    float sourceDownmixStepSin = 0.0f;
+    float sourceDownmixOscCos = 1.0f;
+    float sourceDownmixOscSin = 0.0f;
     // Phase used only for the residual tuning offset between the source
     // envelope and the IF tuned center. Do not fold the full LO phase into
     // this baseband state or the detector feed will collapse.
     float ifEnvelopePhase = 0.0f;
+    float ifEnvelopeStepRadians = 0.0f;
+    float ifEnvelopeStepCos = 1.0f;
+    float ifEnvelopeStepSin = 0.0f;
+    float ifEnvelopeOscCos = 1.0f;
+    float ifEnvelopeOscSin = 0.0f;
     SourceInputMode prevSourceMode = SourceInputMode::ComplexEnvelope;
     float senseLowHz = 0.0f;
     float senseHighHz = 0.0f;
@@ -494,6 +510,12 @@ struct Radio1938 {
     float sagStart = 0.0f;
     float sagEnd = 0.0f;
     float rectifierPhase = 0.0f;
+    float rectifierStepRadians = 0.0f;
+    float rectifierStepCos = 1.0f;
+    float rectifierStepSin = 0.0f;
+    float rectifierOscCos = 1.0f;
+    float rectifierOscSin = 0.0f;
+    float rectifierRippleWave = 0.0f;
     float rippleDepth = 0.0f;
     float sagAttackMs = 0.0f;
     float sagReleaseMs = 0.0f;

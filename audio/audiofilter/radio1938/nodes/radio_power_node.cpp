@@ -30,7 +30,8 @@ bool powerUsesInternalOversampling(const Radio1938& radio) {
 float runPowerStageSample(Radio1938& radio, float y) {
   auto& power = radio.power;
   auto& controlSense = radio.controlSense;
-  if (radio.calibration.enabled) {
+  const bool calibrationEnabled = radio.calibration.enabled;
+  if (calibrationEnabled) {
     radio.calibration.validationSampleCount++;
   }
   float driverSupplyScale =
@@ -51,10 +52,10 @@ float runPowerStageSample(Radio1938& radio, float y) {
   power.gridCouplingCapVoltage +=
       dt * (seriesCurrent / requirePositiveFinite(power.gridCouplingCapFarads));
   float controlGridVolts = power.tubeBiasVolts + power.gridVoltage;
-  if (radio.calibration.enabled) {
+  if (calibrationEnabled) {
     radio.calibration.driverGridVolts.accumulate(power.gridVoltage);
   }
-  if (radio.calibration.enabled && controlGridVolts > 0.0f) {
+  if (calibrationEnabled && controlGridVolts > 0.0f) {
     radio.calibration.driverGridPositiveSamples++;
   }
   assert(power.tubeTriodeConnected &&
@@ -67,31 +68,31 @@ float runPowerStageSample(Radio1938& radio, float y) {
                                       power.tubeTriodeModel,
                                       power.tubeTriodeLut)
           .currentAmps);
-  uint64_t interstageStartNs = radio.calibration.enabled ? monotonicNowNs() : 0;
+  uint64_t interstageStartNs = calibrationEnabled ? monotonicNowNs() : 0;
   auto interstageSolved = solveDriverInterstageCenterTappedNoCap(
       power.interstageTransformer, power, controlGridVolts,
-      driverPlateQuiescent, driverQuiescentCurrent, radio.calibration.enabled);
-  if (radio.calibration.enabled) {
+      driverPlateQuiescent, driverQuiescentCurrent, calibrationEnabled);
+  if (calibrationEnabled) {
     power.interstageSolveTimeNs += monotonicNowNs() - interstageStartNs;
+    power.interstageSubstepCount +=
+        static_cast<uint64_t>(std::max(interstageSolved.substeps, 0));
+    power.interstageIterationCount +=
+        static_cast<uint64_t>(std::max(interstageSolved.totalIterations, 0));
+    power.interstageMaxIterations = std::max(
+        power.interstageMaxIterations,
+        static_cast<uint32_t>(std::max(interstageSolved.maxIterations, 0)));
+    power.interstageDriverEvalCount += interstageSolved.driverEvalCount;
+    power.interstageDriverEvalTimeNs += interstageSolved.driverEvalTimeNs;
+    power.interstageAdaptiveValidationAttemptCount +=
+        interstageSolved.adaptiveValidationAttempts;
+    power.interstageAdaptiveAcceptedDownshiftCount +=
+        interstageSolved.adaptiveAcceptedDownshifts;
+    power.interstageAdaptiveBoundaryErrorSumVolts +=
+        static_cast<double>(interstageSolved.adaptiveBoundaryErrorVolts);
+    power.interstageAdaptiveBoundaryErrorMaxVolts =
+        std::max(power.interstageAdaptiveBoundaryErrorMaxVolts,
+                 interstageSolved.adaptiveBoundaryErrorVolts);
   }
-  power.interstageSubstepCount +=
-      static_cast<uint64_t>(std::max(interstageSolved.substeps, 0));
-  power.interstageIterationCount +=
-      static_cast<uint64_t>(std::max(interstageSolved.totalIterations, 0));
-  power.interstageMaxIterations = std::max(
-      power.interstageMaxIterations,
-      static_cast<uint32_t>(std::max(interstageSolved.maxIterations, 0)));
-  power.interstageDriverEvalCount += interstageSolved.driverEvalCount;
-  power.interstageDriverEvalTimeNs += interstageSolved.driverEvalTimeNs;
-  power.interstageAdaptiveValidationAttemptCount +=
-      interstageSolved.adaptiveValidationAttempts;
-  power.interstageAdaptiveAcceptedDownshiftCount +=
-      interstageSolved.adaptiveAcceptedDownshifts;
-  power.interstageAdaptiveBoundaryErrorSumVolts +=
-      static_cast<double>(interstageSolved.adaptiveBoundaryErrorVolts);
-  power.interstageAdaptiveBoundaryErrorMaxVolts =
-      std::max(power.interstageAdaptiveBoundaryErrorMaxVolts,
-               interstageSolved.adaptiveBoundaryErrorVolts);
   power.interstageAdaptiveSubsteps =
       std::max(interstageSolved.suggestedSubsteps, 1);
   power.interstageAdaptiveValidationCountdown =
@@ -112,7 +113,7 @@ float runPowerStageSample(Radio1938& radio, float y) {
 
   float actualDriverCurrent = interstageSolved.driverPlateCurrentAbs;
 
-  if (radio.calibration.enabled) {
+  if (calibrationEnabled) {
     radio.calibration.driverPlateSwingVolts.accumulate(
         interstageSolved.primaryVoltage);
     radio.calibration.outputGridAVolts.accumulate(power.outputGridAVolts);
@@ -128,7 +129,7 @@ float runPowerStageSample(Radio1938& radio, float y) {
         static_cast<double>(interstageDifferentialVolts) *
         static_cast<double>(interstageDifferentialVolts);
   }
-  if (radio.calibration.enabled) {
+  if (calibrationEnabled) {
     bool outputGridAPositive =
         (power.outputTubeBiasVolts + power.outputGridAVolts) > 0.0f;
     bool outputGridBPositive =
@@ -143,20 +144,20 @@ float runPowerStageSample(Radio1938& radio, float y) {
       requirePositiveFinite(power.outputTubeQuiescentPlateVolts *
                             outputSupplyScale);
   const float outputPrimaryLoadResistance = 0.0f;
-  uint64_t outputStartNs = radio.calibration.enabled ? monotonicNowNs() : 0;
+  uint64_t outputStartNs = calibrationEnabled ? monotonicNowNs() : 0;
   OutputStageSubstepResult outputSolved = runOutputStageSubsteps(
       power.outputTransformer, radio.speakerStage.speaker, power,
       outputPlateQuiescent, outputPrimaryLoadResistance);
-  if (radio.calibration.enabled) {
+  if (calibrationEnabled) {
     power.outputSolveTimeNs += monotonicNowNs() - outputStartNs;
+    power.outputTransformerSubstepCount +=
+        static_cast<uint64_t>(std::max(outputSolved.transformerSubsteps, 0));
+    power.outputNewtonIterationCount +=
+        static_cast<uint64_t>(std::max(outputSolved.totalNewtonIterations, 0));
+    power.outputNewtonMaxIterations = std::max(
+        power.outputNewtonMaxIterations,
+        static_cast<uint32_t>(std::max(outputSolved.maxNewtonIterations, 0)));
   }
-  power.outputTransformerSubstepCount +=
-      static_cast<uint64_t>(std::max(outputSolved.transformerSubsteps, 0));
-  power.outputNewtonIterationCount +=
-      static_cast<uint64_t>(std::max(outputSolved.totalNewtonIterations, 0));
-  power.outputNewtonMaxIterations = std::max(
-      power.outputNewtonMaxIterations,
-      static_cast<uint32_t>(std::max(outputSolved.maxNewtonIterations, 0)));
   power.outputTransformer = outputSolved.transformer;
   float averagePrimaryVoltage = outputSolved.averagePrimaryVoltage;
   float averageSecondaryVoltage = outputSolved.averageSecondaryVoltage;
@@ -167,7 +168,7 @@ float runPowerStageSample(Radio1938& radio, float y) {
     y = power.postLpf.process(y);
   }
   radio.speakerStage.physicalDriveVolts = y;
-  if (radio.calibration.enabled) {
+  if (calibrationEnabled) {
     radio.calibration.outputPrimaryVolts.accumulate(averagePrimaryVoltage);
     radio.calibration.speakerSecondaryVolts.accumulate(y);
     radio.calibration.maxDriverPlateCurrentAmps = std::max(
@@ -230,6 +231,7 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   power.sagRel =
       std::exp(-1.0f /
                (power.internalSampleRate * (power.sagReleaseMs / 1000.0f)));
+  configureRectifierRipple(radio);
   if (power.postLpHz > 0.0f) {
     power.postLpf.setLowpass(power.internalSampleRate, power.postLpHz,
                              kRadioBiquadQ);
@@ -323,7 +325,7 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
 void RadioPowerNode::reset(Radio1938& radio) {
   auto& power = radio.power;
   power.sagEnv = 0.0f;
-  power.rectifierPhase = 0.0f;
+  resetRectifierRipple(radio);
   power.osPrevInput = 0.0f;
   power.gridCouplingCapVoltage = 0.0f;
   power.gridVoltage = 0.0f;

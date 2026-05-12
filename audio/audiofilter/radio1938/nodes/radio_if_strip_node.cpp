@@ -9,17 +9,15 @@ namespace {
 
 std::array<float, 2> rotateComplexEnvelope(float inI,
                                            float inQ,
-                                           float phase) {
-  float c = std::cos(phase);
-  float s = std::sin(phase);
+                                           float c,
+                                           float s) {
   return {inI * c + inQ * s, inQ * c - inI * s};
 }
 
 std::array<float, 2> unrotateComplexEnvelope(float inI,
                                              float inQ,
-                                             float phase) {
-  float c = std::cos(phase);
-  float s = std::sin(phase);
+                                             float c,
+                                             float s) {
   return {inI * c - inQ * s, inQ * c + inI * s};
 }
 
@@ -51,7 +49,11 @@ float downmixImageHz(float sampleRate, float carrierHz) {
 
 void resetIfStripRuntimeEnvelopeState(Radio1938::IFStripNodeState& ifStrip) {
   ifStrip.sourceDownmixPhase = 0.0f;
+  ifStrip.sourceDownmixOscCos = 1.0f;
+  ifStrip.sourceDownmixOscSin = 0.0f;
   ifStrip.ifEnvelopePhase = 0.0f;
+  ifStrip.ifEnvelopeOscCos = 1.0f;
+  ifStrip.ifEnvelopeOscSin = 0.0f;
   ifStrip.sourceEnvelope.reset();
   ifStrip.loadedCanEnvelope.reset();
 }
@@ -69,14 +71,16 @@ std::array<float, 2> extractSourceEnvelope(Radio1938& radio,
     return {rfGain * signal.i, rfGain * signal.q};
   }
 
-  float sourceStep =
-      kRadioTwoPi * (ifStrip.sourceCarrierHz / std::max(radio.sampleRate, 1.0f));
-  float sourcePhase = ifStrip.sourceDownmixPhase;
-  float c = std::cos(sourcePhase);
-  float s = std::sin(sourcePhase);
+  float c = ifStrip.sourceDownmixOscCos;
+  float s = ifStrip.sourceDownmixOscSin;
   auto sourceEnv = ifStrip.sourceEnvelope.process(2.0f * rfSample * rfGain * c,
                                                   -2.0f * rfSample * rfGain * s);
-  ifStrip.sourceDownmixPhase = wrapPhase(sourcePhase + sourceStep);
+  advanceNormalizedOscillator(ifStrip.sourceDownmixStepCos,
+                              ifStrip.sourceDownmixStepSin,
+                              ifStrip.sourceDownmixOscCos,
+                              ifStrip.sourceDownmixOscSin);
+  ifStrip.sourceDownmixPhase =
+      wrapPhase(ifStrip.sourceDownmixPhase + ifStrip.sourceDownmixStepRadians);
   return sourceEnv;
 }
 
@@ -86,12 +90,16 @@ std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
                                               float mixerConversionGain,
                                               float ifGain) {
   auto& ifStrip = radio.ifStrip;
-  float tuneOffsetHz = computeIfTuneOffsetHz(ifStrip);
-  float sampleRate = std::max(radio.sampleRate, 1.0f);
-  float tuneStep = kRadioTwoPi * (tuneOffsetHz / sampleRate);
-  float tunePhase = ifStrip.ifEnvelopePhase;
-  auto rotatedEnv = rotateComplexEnvelope(sourceEnvI, sourceEnvQ, tunePhase);
-  ifStrip.ifEnvelopePhase = wrapPhase(tunePhase + tuneStep);
+  float tuneCos = ifStrip.ifEnvelopeOscCos;
+  float tuneSin = ifStrip.ifEnvelopeOscSin;
+  auto rotatedEnv =
+      rotateComplexEnvelope(sourceEnvI, sourceEnvQ, tuneCos, tuneSin);
+  advanceNormalizedOscillator(ifStrip.ifEnvelopeStepCos,
+                              ifStrip.ifEnvelopeStepSin,
+                              ifStrip.ifEnvelopeOscCos,
+                              ifStrip.ifEnvelopeOscSin);
+  ifStrip.ifEnvelopePhase =
+      wrapPhase(ifStrip.ifEnvelopePhase + ifStrip.ifEnvelopeStepRadians);
 
   float ifEnvI = rotatedEnv[0] * mixerConversionGain * ifGain;
   float ifEnvQ = rotatedEnv[1] * mixerConversionGain * ifGain;
@@ -100,7 +108,8 @@ std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
   // The detector must see the loaded IF can mapped back into the original
   // source-envelope frame. Unrotate only the residual tuning offset here;
   // source carrier removal was already handled by sourceDownmixPhase.
-  return unrotateComplexEnvelope(loadedCanEnv[0], loadedCanEnv[1], tunePhase);
+  return unrotateComplexEnvelope(loadedCanEnv[0], loadedCanEnv[1], tuneCos,
+                                 tuneSin);
 }
 
 void ensureIfStripConfigured(Radio1938& radio) {
@@ -114,6 +123,14 @@ void ensureIfStripConfigured(Radio1938& radio) {
   ifStrip.sourceCarrierHz = tuning.sourceCarrierHz;
   ifStrip.loFrequencyHz =
       ifStrip.sourceCarrierHz + ifStrip.ifCenterHz + tuning.tuneAppliedHz;
+  ifStrip.sourceDownmixStepRadians =
+      kRadioTwoPi * (ifStrip.sourceCarrierHz / sampleRate);
+  ifStrip.sourceDownmixStepCos = std::cos(ifStrip.sourceDownmixStepRadians);
+  ifStrip.sourceDownmixStepSin = std::sin(ifStrip.sourceDownmixStepRadians);
+  ifStrip.ifEnvelopeStepRadians =
+      kRadioTwoPi * (computeIfTuneOffsetHz(ifStrip) / sampleRate);
+  ifStrip.ifEnvelopeStepCos = std::cos(ifStrip.ifEnvelopeStepRadians);
+  ifStrip.ifEnvelopeStepSin = std::sin(ifStrip.ifEnvelopeStepRadians);
 
   float primaryDrift = std::max(radio.identity.ifPrimaryDrift, 0.65f);
   float secondaryDrift = std::max(radio.identity.ifSecondaryDrift, 0.65f);

@@ -22,10 +22,15 @@ void configureNoiseRuntime(NoiseHum& hum, float sampleRate, float noiseBwHz) {
   hum.scAtk = std::exp(-1.0f / (hum.fs * (hum.scAttackMs / 1000.0f)));
   hum.scRel = std::exp(-1.0f / (hum.fs * (hum.scReleaseMs / 1000.0f)));
   hum.crackleDecay = std::exp(-1.0f / (hum.fs * (hum.crackleDecayMs / 1000.0f)));
+  hum.humStepRadians = kRadioTwoPi * (hum.humHz / std::max(hum.fs, 1.0f));
+  hum.humStepCos = std::cos(hum.humStepRadians);
+  hum.humStepSin = std::sin(hum.humStepRadians);
 }
 
 void resetNoiseRuntime(NoiseHum& hum) {
   hum.humPhase = 0.0f;
+  hum.humOscCos = 1.0f;
+  hum.humOscSin = 0.0f;
   hum.scEnv = 0.0f;
   hum.crackleEnv = 0.0f;
   hum.cracklePulse = 0.0f;
@@ -97,10 +102,12 @@ float processNoiseRuntime(NoiseHum& hum, const NoiseInput& in) {
 
   float toneHum = 0.0f;
   if (in.humToneEnabled && in.humAmp > 0.0f && hum.fs > 0.0f) {
-    hum.humPhase += kRadioTwoPi * (hum.humHz / hum.fs);
-    if (hum.humPhase > kRadioTwoPi) hum.humPhase -= kRadioTwoPi;
-    toneHum = std::sin(hum.humPhase) +
-              hum.humSecondHarmonicMix * std::sin(2.0f * hum.humPhase);
+    advanceNormalizedOscillator(hum.humStepCos, hum.humStepSin, hum.humOscCos,
+                                hum.humOscSin);
+    hum.humPhase = wrapPhase(hum.humPhase + hum.humStepRadians);
+    toneHum =
+        hum.humOscSin +
+        hum.humSecondHarmonicMix * 2.0f * hum.humOscSin * hum.humOscCos;
     toneHum *= in.humAmp * hissMask;
   }
 
@@ -112,8 +119,8 @@ float processNoiseRuntime(NoiseHum& hum, const NoiseInput& in) {
 void RadioNoiseNode::init(Radio1938& radio, RadioInitContext& initCtx) {
   auto& noiseConfig = radio.noiseConfig;
   auto& noiseRuntime = radio.noiseRuntime;
-  configureNoiseRuntime(noiseRuntime.hum, radio.sampleRate, initCtx.tunedBw);
   noiseRuntime.hum.humHz = noiseConfig.humHzDefault;
+  configureNoiseRuntime(noiseRuntime.hum, radio.sampleRate, initCtx.tunedBw);
 }
 
 void RadioNoiseNode::reset(Radio1938& radio) {

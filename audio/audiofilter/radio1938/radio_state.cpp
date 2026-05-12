@@ -1,8 +1,8 @@
 #include "../../radio.h"
+#include "../math/signal_math.h"
 
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 float Radio1938::resolvedInputCarrierHz() const {
   const float safeSampleRate = std::max(sampleRate, 1.0f);
@@ -16,20 +16,28 @@ void Radio1938::warmInputCarrier(float receivedCarrierRmsVolts,
     return;
   }
 
-  std::vector<float> warmup(std::min<uint32_t>(warmupFrames, 4096u), 0.0f);
+  const uint32_t batchFrames = std::min<uint32_t>(warmupFrames, 4096u);
+  auto& warmup = iqInput.rfScratch;
+  if (warmup.size() < batchFrames) warmup.resize(batchFrames);
   const float carrierPeak =
       std::sqrt(2.0f) * std::max(receivedCarrierRmsVolts, 0.0f);
   const float carrierHz = resolvedInputCarrierHz();
   const float safeSampleRate = std::max(sampleRate, 1.0f);
   const float carrierStep = kRadioTwoPi * (carrierHz / safeSampleRate);
+  const float carrierStepCos = std::cos(carrierStep);
+  const float carrierStepSin = std::sin(carrierStep);
   float phase = iqInput.iqPhase;
+  float carrierCos = std::cos(phase);
+  float carrierSin = std::sin(phase);
   uint32_t remaining = warmupFrames;
 
   while (remaining > 0u) {
     const uint32_t batch =
-        std::min<uint32_t>(remaining, static_cast<uint32_t>(warmup.size()));
+        std::min<uint32_t>(remaining, batchFrames);
     for (uint32_t frame = 0; frame < batch; ++frame) {
-      warmup[frame] = carrierPeak * std::cos(phase);
+      warmup[frame] = carrierPeak * carrierCos;
+      advanceNormalizedOscillator(carrierStepCos, carrierStepSin, carrierCos,
+                                  carrierSin);
       phase += carrierStep;
       if (phase >= kRadioTwoPi) phase -= kRadioTwoPi;
     }

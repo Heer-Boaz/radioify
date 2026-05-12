@@ -90,18 +90,19 @@ KorenTriodePlateEval evaluateTriodePlateFast(float vgk,
 
 OutputTubePairEval evaluateOutputTubePair(
     const Radio1938::PowerNodeState& power,
+    const TriodeLutView& outputTriodeLut,
     float outputPlateQuiescent,
     float gridA,
     float gridB,
     float primaryVoltage) {
   float plateA = outputPlateQuiescent - 0.5f * primaryVoltage;
   float plateB = outputPlateQuiescent + 0.5f * primaryVoltage;
-  KorenTriodePlateEval evalA = evaluateKorenTriodePlateRuntime(
+  KorenTriodePlateEval evalA = evaluateTriodePlateFast(
       power.outputTubeBiasVolts + gridA, plateA, power.outputTubeTriodeModel,
-      power.outputTubeTriodeLut);
-  KorenTriodePlateEval evalB = evaluateKorenTriodePlateRuntime(
+      power.outputTubeTriodeLut, outputTriodeLut);
+  KorenTriodePlateEval evalB = evaluateTriodePlateFast(
       power.outputTubeBiasVolts + gridB, plateB, power.outputTubeTriodeModel,
-      power.outputTubeTriodeLut);
+      power.outputTubeTriodeLut, outputTriodeLut);
 
   OutputTubePairEval result{};
   result.plateCurrentA = static_cast<float>(evalA.currentAmps);
@@ -114,9 +115,12 @@ OutputTubePairEval evaluateOutputTubePair(
 
 }  // namespace power_stage_internal
 
-OutputPrimarySolveResult solveOutputPrimaryAffine(
+namespace {
+
+OutputPrimarySolveResult solveOutputPrimaryAffineWithLut(
     const AffineTransformerProjection& projection,
     const Radio1938::PowerNodeState& power,
+    const power_stage_internal::TriodeLutView& outputTriodeLut,
     float outputPlateQuiescent,
     float gridA,
     float gridB,
@@ -129,7 +133,8 @@ OutputPrimarySolveResult solveOutputPrimaryAffine(
     iterations = iter + 1;
     power_stage_internal::OutputTubePairEval pair =
         power_stage_internal::evaluateOutputTubePair(
-        power, outputPlateQuiescent, gridA, gridB, primaryVoltage);
+            power, outputTriodeLut, outputPlateQuiescent, gridA, gridB,
+            primaryVoltage);
 
     float f = projection.base.primaryVoltage +
               projection.slope.primaryVoltage * pair.driveCurrent -
@@ -145,7 +150,8 @@ OutputPrimarySolveResult solveOutputPrimaryAffine(
 
   power_stage_internal::OutputTubePairEval finalPair =
       power_stage_internal::evaluateOutputTubePair(
-          power, outputPlateQuiescent, gridA, gridB, primaryVoltage);
+          power, outputTriodeLut, outputPlateQuiescent, gridA, gridB,
+          primaryVoltage);
   OutputPrimarySolveResult result{};
   result.primaryVoltage = primaryVoltage;
   result.driveCurrent = finalPair.driveCurrent;
@@ -153,6 +159,22 @@ OutputPrimarySolveResult solveOutputPrimaryAffine(
   result.plateCurrentB = finalPair.plateCurrentB;
   result.iterations = iterations;
   return result;
+}
+
+}  // namespace
+
+OutputPrimarySolveResult solveOutputPrimaryAffine(
+    const AffineTransformerProjection& projection,
+    const Radio1938::PowerNodeState& power,
+    float outputPlateQuiescent,
+    float gridA,
+    float gridB,
+    float initialPrimaryVoltage) {
+  const power_stage_internal::TriodeLutView outputTriodeLut =
+      power_stage_internal::makeTriodeLutView(power.outputTubeTriodeLut);
+  return solveOutputPrimaryAffineWithLut(projection, power, outputTriodeLut,
+                                         outputPlateQuiescent, gridA, gridB,
+                                         initialPrimaryVoltage);
 }
 
 SpeakerElectricalLinearization linearizeSpeakerElectricalLoad(
@@ -241,6 +263,8 @@ OutputStageSubstepResult runOutputStageSubsteps(
   float actualPlateCurrentBSum = 0.0f;
   int totalNewtonIterations = 0;
   int maxNewtonIterations = 0;
+  const power_stage_internal::TriodeLutView outputTriodeLut =
+      power_stage_internal::makeTriodeLutView(power.outputTubeTriodeLut);
 
   for (int step = 0; step < transformerSubsteps; ++step) {
     SpeakerElectricalLinearization speakerLoad =
@@ -248,9 +272,10 @@ OutputStageSubstepResult runOutputStageSubsteps(
                                        transformer.dtSub);
     AffineTransformerProjection affineOut = buildAffineProjection(
         transformer, speakerLoad.load, outputPrimaryLoadResistance);
-    OutputPrimarySolveResult outputSolve = solveOutputPrimaryAffine(
-        affineOut, power, outputPlateQuiescent, power.outputGridAVolts,
-        power.outputGridBVolts, transformer.primaryVoltage);
+    OutputPrimarySolveResult outputSolve = solveOutputPrimaryAffineWithLut(
+        affineOut, power, outputTriodeLut, outputPlateQuiescent,
+        power.outputGridAVolts, power.outputGridBVolts,
+        transformer.primaryVoltage);
     totalNewtonIterations += outputSolve.iterations;
     maxNewtonIterations =
         std::max(maxNewtonIterations, outputSolve.iterations);
@@ -261,16 +286,16 @@ OutputStageSubstepResult runOutputStageSubsteps(
     float actualOutputPlateB =
         outputPlateQuiescent + 0.5f * outputSample.primaryVoltage;
     float actualPlateCurrentA = static_cast<float>(
-        evaluateKorenTriodePlateRuntime(
+        power_stage_internal::evaluateTriodePlateFast(
             power.outputTubeBiasVolts + power.outputGridAVolts,
             actualOutputPlateA, power.outputTubeTriodeModel,
-            power.outputTubeTriodeLut)
+            power.outputTubeTriodeLut, outputTriodeLut)
             .currentAmps);
     float actualPlateCurrentB = static_cast<float>(
-        evaluateKorenTriodePlateRuntime(
+        power_stage_internal::evaluateTriodePlateFast(
             power.outputTubeBiasVolts + power.outputGridBVolts,
             actualOutputPlateB, power.outputTubeTriodeModel,
-            power.outputTubeTriodeLut)
+            power.outputTubeTriodeLut, outputTriodeLut)
             .currentAmps);
     commitSpeakerElectricalLoad(speaker, speakerLoad,
                                 outputSample.secondaryVoltage);
@@ -308,6 +333,8 @@ float estimateOutputStageNominalPowerWatts(
   constexpr int kSettleCycles = 6;
   constexpr int kMeasureCycles = 2;
   float bestSecondaryRms = 0.0f;
+  const power_stage_internal::TriodeLutView outputTriodeLut =
+      power_stage_internal::makeTriodeLutView(power.outputTubeTriodeLut);
 
   for (int step = 1; step <= kAmplitudeSteps; ++step) {
     float gridPeak =
@@ -325,9 +352,9 @@ float estimateOutputStageNominalPowerWatts(
         float gridB = -gridA;
         AffineTransformerProjection projection =
             buildAffineProjection(transformer, loadResistance, 0.0f);
-        OutputPrimarySolveResult outputSolve = solveOutputPrimaryAffine(
-            projection, power, outputPlateQuiescent, gridA, gridB,
-            transformer.primaryVoltage);
+        OutputPrimarySolveResult outputSolve = solveOutputPrimaryAffineWithLut(
+            projection, power, outputTriodeLut, outputPlateQuiescent, gridA,
+            gridB, transformer.primaryVoltage);
         auto outputSample =
             transformer.step(outputSolve.driveCurrent, loadResistance, 0.0f);
         if (cycle >= kSettleCycles) {

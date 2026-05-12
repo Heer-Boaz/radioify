@@ -63,6 +63,11 @@ void RadioTuningNode::init(Radio1938& radio, RadioInitContext& initCtx) {
   auto& tuning = radio.tuning;
   tuning.afcCorrectionHz = 0.0f;
   tuning.configRevision = 0;
+  const float rate = std::max(radio.sampleRate, 1.0f);
+  const float afcSeconds = tuning.afcResponseMs * 0.001f;
+  tuning.afcTick =
+      (afcSeconds > 0.0f) ? 1.0f - std::exp(-1.0f / (rate * afcSeconds))
+                          : 0.0f;
   tuning.tuneSmoothedHz = tuning.tuneOffsetHz;
   tuning.bwSmoothedHz = clampPublishedBandwidth(radio, radio.bwHz);
   initCtx.tunedBw =

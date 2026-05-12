@@ -27,6 +27,11 @@ struct NoiseHum {
   float noiseLpHz = 0.0f;
   float humHz = 0.0f;
   float humPhase = 0.0f;
+  float humStepRadians = 0.0f;
+  float humStepCos = 1.0f;
+  float humStepSin = 0.0f;
+  float humOscCos = 1.0f;
+  float humOscSin = 0.0f;
   float scEnv = 0.0f;
   float scAtk = 0.0f;
   float scRel = 0.0f;

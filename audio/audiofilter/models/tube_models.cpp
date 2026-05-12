@@ -72,6 +72,85 @@ KorenTriodePlateEval evaluateKorenTriodePlate(double vgk,
                                               double vpk,
                                               const KorenTriodeModel& m);
 
+struct KorenTriodeLutRuntimeView {
+  const float* currentAmps = nullptr;
+  const float* conductanceSiemens = nullptr;
+  float vgkMin = 0.0f;
+  float vgkMax = 0.0f;
+  float vpkMin = 0.0f;
+  float vpkMax = 0.0f;
+  float vgkInvStep = 0.0f;
+  float vpkInvStep = 0.0f;
+  int vgkBins = 0;
+  int vpkBins = 0;
+  bool valid = false;
+};
+
+KorenTriodeLutRuntimeView makeKorenTriodeLutRuntimeView(
+    const KorenTriodeLut* lut) {
+  KorenTriodeLutRuntimeView view{};
+  if (lut == nullptr || !lut->valid()) {
+    return view;
+  }
+  view.currentAmps = lut->currentAmps.data();
+  view.conductanceSiemens = lut->conductanceSiemens.data();
+  view.vgkMin = lut->vgkMin;
+  view.vgkMax = lut->vgkMax;
+  view.vpkMin = lut->vpkMin;
+  view.vpkMax = lut->vpkMax;
+  view.vgkInvStep = lut->vgkInvStep;
+  view.vpkInvStep = lut->vpkInvStep;
+  view.vgkBins = lut->vgkBins;
+  view.vpkBins = lut->vpkBins;
+  view.valid = true;
+  return view;
+}
+
+KorenTriodePlateEval evaluateKorenTriodePlateLutRuntimeView(
+    double vgk,
+    double vpk,
+    const KorenTriodeLutRuntimeView& view) {
+  if (!view.valid) {
+    return {};
+  }
+
+  float clampedVgk =
+      std::clamp(static_cast<float>(vgk), view.vgkMin, view.vgkMax);
+  float clampedVpk =
+      std::clamp(static_cast<float>(vpk), view.vpkMin, view.vpkMax);
+  float x = (clampedVgk - view.vgkMin) * view.vgkInvStep;
+  float y = (clampedVpk - view.vpkMin) * view.vpkInvStep;
+  int x0 = std::clamp(static_cast<int>(x), 0, view.vgkBins - 2);
+  int y0 = std::clamp(static_cast<int>(y), 0, view.vpkBins - 2);
+  float tx = x - static_cast<float>(x0);
+  float ty = y - static_cast<float>(y0);
+  int x1 = x0 + 1;
+  int y1 = y0 + 1;
+
+  const size_t row0 = static_cast<size_t>(y0) * static_cast<size_t>(view.vgkBins);
+  const size_t row1 = static_cast<size_t>(y1) * static_cast<size_t>(view.vgkBins);
+  const size_t x0Index = static_cast<size_t>(x0);
+  const size_t x1Index = static_cast<size_t>(x1);
+  float i00 = view.currentAmps[row0 + x0Index];
+  float i10 = view.currentAmps[row0 + x1Index];
+  float i01 = view.currentAmps[row1 + x0Index];
+  float i11 = view.currentAmps[row1 + x1Index];
+  float g00 = view.conductanceSiemens[row0 + x0Index];
+  float g10 = view.conductanceSiemens[row0 + x1Index];
+  float g01 = view.conductanceSiemens[row1 + x0Index];
+  float g11 = view.conductanceSiemens[row1 + x1Index];
+
+  float i0 = i00 + (i10 - i00) * tx;
+  float i1 = i01 + (i11 - i01) * tx;
+  float g0 = g00 + (g10 - g00) * tx;
+  float g1 = g01 + (g11 - g01) * tx;
+
+  KorenTriodePlateEval eval{};
+  eval.currentAmps = i0 + (i1 - i0) * ty;
+  eval.conductanceSiemens = g0 + (g1 - g0) * ty;
+  return eval;
+}
+
 float deviceTubePlateCurrent(float gridVolts,
                              float plateVolts,
                              float screenVolts,
@@ -520,44 +599,12 @@ void configureKorenTriodeLut(KorenTriodeLut& lut,
 KorenTriodePlateEval evaluateKorenTriodePlateLut(double vgk,
                                                  double vpk,
                                                  const KorenTriodeLut& lut) {
-  if (!lut.valid()) {
+  const KorenTriodeLutRuntimeView view =
+      makeKorenTriodeLutRuntimeView(&lut);
+  if (!view.valid) {
     return {};
   }
-
-  float clampedVgk =
-      std::clamp(static_cast<float>(vgk), lut.vgkMin, lut.vgkMax);
-  float clampedVpk =
-      std::clamp(static_cast<float>(vpk), lut.vpkMin, lut.vpkMax);
-  float x = (clampedVgk - lut.vgkMin) * lut.vgkInvStep;
-  float y = (clampedVpk - lut.vpkMin) * lut.vpkInvStep;
-  int x0 = std::clamp(static_cast<int>(x), 0, lut.vgkBins - 2);
-  int y0 = std::clamp(static_cast<int>(y), 0, lut.vpkBins - 2);
-  float tx = x - static_cast<float>(x0);
-  float ty = y - static_cast<float>(y0);
-  int x1 = x0 + 1;
-  int y1 = y0 + 1;
-
-  auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
-  auto sampleAt = [&](const std::vector<float>& values, int xi, int yi) {
-    size_t index =
-        static_cast<size_t>(yi) * static_cast<size_t>(lut.vgkBins) +
-        static_cast<size_t>(xi);
-    return values[index];
-  };
-
-  float i00 = sampleAt(lut.currentAmps, x0, y0);
-  float i10 = sampleAt(lut.currentAmps, x1, y0);
-  float i01 = sampleAt(lut.currentAmps, x0, y1);
-  float i11 = sampleAt(lut.currentAmps, x1, y1);
-  float g00 = sampleAt(lut.conductanceSiemens, x0, y0);
-  float g10 = sampleAt(lut.conductanceSiemens, x1, y0);
-  float g01 = sampleAt(lut.conductanceSiemens, x0, y1);
-  float g11 = sampleAt(lut.conductanceSiemens, x1, y1);
-
-  KorenTriodePlateEval eval{};
-  eval.currentAmps = lerp(lerp(i00, i10, tx), lerp(i01, i11, tx), ty);
-  eval.conductanceSiemens = lerp(lerp(g00, g10, tx), lerp(g01, g11, tx), ty);
-  return eval;
+  return evaluateKorenTriodePlateLutRuntimeView(vgk, vpk, view);
 }
 
 }  // namespace
@@ -767,12 +814,14 @@ float processResistorLoadedTriodeStage(float gridVolts,
       (plateVoltageState > 0.0f)
           ? plateVoltageState
           : std::clamp(quiescentPlateVolts * supplyScale, 0.0f, supply);
+  const KorenTriodeLutRuntimeView lutView =
+      makeKorenTriodeLutRuntimeView(lut);
   float plateVoltage = solveLoadLinePlateVoltage(
       supply, safeLoadResistance, initialPlateVoltage, [&](float plateVolts) {
         KorenTriodePlateEval eval =
-            (lut != nullptr)
-                ? evaluateKorenTriodePlateRuntime(gridVolts, plateVolts, model,
-                                                  *lut)
+            lutView.valid
+                ? evaluateKorenTriodePlateLutRuntimeView(gridVolts, plateVolts,
+                                                         lutView)
                 : evaluateKorenTriodePlate(gridVolts, plateVolts, model);
         return static_cast<float>(eval.currentAmps);
       });

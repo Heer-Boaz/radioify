@@ -11,16 +11,17 @@ static float estimateMixerEnvelopeConversionGain(
     float mixedBaseGridVolts,
     float loGridDriveVolts) {
   constexpr int kMixerHarmonicSamples = 8;
+  constexpr float kMixerHarmonicCos[kMixerHarmonicSamples] = {
+      0.923879504f, 0.382683426f, -0.382683426f, -0.923879504f,
+      -0.923879504f, -0.382683426f, 0.382683426f, 0.923879504f};
   float baseDerivative = plateCurrentForGrid.evalDerivative(mixedBaseGridVolts);
   float harmonicSum = 0.0f;
   for (int i = 0; i < kMixerHarmonicSamples; ++i) {
-    float phase =
-        kRadioTwoPi * (static_cast<float>(i) + 0.5f) /
-        static_cast<float>(kMixerHarmonicSamples);
-    float loGridVolts = loGridDriveVolts * std::cos(phase);
+    float phaseCos = kMixerHarmonicCos[i];
+    float loGridVolts = loGridDriveVolts * phaseCos;
     float drivenDerivative = plateCurrentForGrid.evalDerivative(
         mixedBaseGridVolts + loGridVolts);
-    harmonicSum += (drivenDerivative - baseDerivative) * std::cos(phase);
+    harmonicSum += (drivenDerivative - baseDerivative) * phaseCos;
   }
   return harmonicSum / static_cast<float>(kMixerHarmonicSamples);
 }
@@ -41,6 +42,18 @@ void RadioMixerNode::init(Radio1938& radio, RadioInitContext&) {
   mixer.plateQuiescentVolts = op.plateVolts;
   mixer.plateQuiescentCurrentAmps = op.plateCurrentAmps;
   mixer.plateResistanceOhms = op.rpOhms;
+  mixer.plateCurrentForGrid = prepareFixedPlatePentodeEvaluator(
+      mixer.plateQuiescentVolts, mixer.screenVolts, mixer.biasVolts,
+      mixer.modelCutoffVolts, mixer.plateQuiescentVolts, mixer.screenVolts,
+      mixer.plateQuiescentCurrentAmps, mixer.mutualConductanceSiemens,
+      mixer.plateKneeVolts, mixer.gridSoftnessVolts);
+  const float rfGridDrive =
+      mixer.rfGridDriveVolts * std::max(radio.identity.mixerDriveDrift, 0.65f);
+  mixer.effectiveLoGridBiasVolts =
+      mixer.loGridBiasVolts * std::max(radio.identity.mixerBiasDrift, 0.65f);
+  mixer.conversionGainScale = rfGridDrive * mixer.acLoadResistanceOhms;
+  const float sampleRate = std::max(radio.sampleRate, 1.0f);
+  mixer.inputDriveEnvCoeff = std::exp(-1.0f / (sampleRate * 0.0015f));
   assert((std::fabs(mixer.plateQuiescentVolts - mixer.plateDcVolts) <=
           mixer.operatingPointToleranceVolts) &&
          "Mixer operating point diverged from the preset target");
@@ -55,31 +68,20 @@ void RadioMixerNode::reset(Radio1938& radio) {
 float RadioMixerNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) {
   auto& mixer = radio.mixer;
   float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
-  float rfGridDrive =
-      mixer.rfGridDriveVolts * std::max(radio.identity.mixerDriveDrift, 0.65f);
-  float loGridBias =
-      mixer.loGridBiasVolts * std::max(radio.identity.mixerBiasDrift, 0.65f);
   float baseGridVolts = mixer.biasVolts - mixer.avcGridDriveVolts * avcT;
-  mixer.mixedBaseGridVolts = baseGridVolts + loGridBias;
-  FixedPlatePentodeEvaluator mixerPlateCurrentForGrid =
-      prepareFixedPlatePentodeEvaluator(
-          mixer.plateQuiescentVolts, mixer.screenVolts, mixer.biasVolts,
-          mixer.modelCutoffVolts, mixer.plateQuiescentVolts, mixer.screenVolts,
-          mixer.plateQuiescentCurrentAmps, mixer.mutualConductanceSiemens,
-          mixer.plateKneeVolts, mixer.gridSoftnessVolts);
+  mixer.mixedBaseGridVolts = baseGridVolts + mixer.effectiveLoGridBiasVolts;
   mixer.conversionGain =
-      estimateMixerEnvelopeConversionGain(mixerPlateCurrentForGrid,
+      estimateMixerEnvelopeConversionGain(mixer.plateCurrentForGrid,
                                           mixer.mixedBaseGridVolts,
                                           mixer.loGridDriveVolts) *
-      rfGridDrive * mixer.acLoadResistanceOhms;
+      mixer.conversionGainScale;
 
   float signalMagnitude = std::fabs(y);
   if (ctx.signal.mode == SourceInputMode::ComplexEnvelope) {
     signalMagnitude = std::sqrt(ctx.signal.i * ctx.signal.i +
                                 ctx.signal.q * ctx.signal.q);
   }
-  float sampleRate = std::max(radio.sampleRate, 1.0f);
-  float envCoeff = std::exp(-1.0f / (sampleRate * 0.0015f));
+  float envCoeff = mixer.inputDriveEnvCoeff;
   mixer.inputDriveEnv =
       envCoeff * mixer.inputDriveEnv + (1.0f - envCoeff) * signalMagnitude;
 

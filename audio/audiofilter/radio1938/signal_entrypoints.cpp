@@ -1,10 +1,10 @@
 #include "../../radio.h"
+#include "../math/signal_math.h"
 #include "audio_pipeline_execution.h"
 #include "radio_buffer_io.h"
 
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 void Radio1938::processIfReal(float* samples, uint32_t frames) {
   if (!samples || frames == 0 || graph.bypass) return;
@@ -29,20 +29,28 @@ void Radio1938::processAmAudio(const float* audioSamples,
                                float modulationIndex) {
   if (!audioSamples || !outSamples || frames == 0 || graph.bypass) return;
 
-  std::vector<float> rfScratch(frames);
+  auto& rfScratch = iqInput.rfScratch;
+  if (rfScratch.size() < frames) rfScratch.resize(frames);
+  float* rf = rfScratch.data();
   const float safeSampleRate = std::max(sampleRate, 1.0f);
   const float carrierHz = resolvedInputCarrierHz();
   const float carrierStep = kRadioTwoPi * (carrierHz / safeSampleRate);
+  const float carrierStepCos = std::cos(carrierStep);
+  const float carrierStepSin = std::sin(carrierStep);
   const float carrierPeak =
       std::sqrt(2.0f) * std::max(receivedCarrierRmsVolts, 0.0f);
   float phase = iqInput.iqPhase;
+  float carrierCos = std::cos(phase);
+  float carrierSin = std::sin(phase);
 
   for (uint32_t frame = 0; frame < frames; ++frame) {
     const float sampleVal = audioSamples[frame];
     const float envelopeFactor =
         std::max(0.0f, 1.0f + modulationIndex * sampleVal);
     const float envelope = carrierPeak * envelopeFactor;
-    rfScratch[frame] = envelope * std::cos(phase);
+    rf[frame] = envelope * carrierCos;
+    advanceNormalizedOscillator(carrierStepCos, carrierStepSin, carrierCos,
+                                carrierSin);
     phase += carrierStep;
     if (phase >= kRadioTwoPi) phase -= kRadioTwoPi;
   }
@@ -53,7 +61,7 @@ void Radio1938::processAmAudio(const float* audioSamples,
   for (uint32_t frame = 0; frame < frames; ++frame) {
     RadioSampleContext ctx{};
     ctx.block = &block;
-    float x = rfScratch[frame];
+    float x = rf[frame];
     ctx.signal.setRealRf(x);
     float y = runRadioPipelineSample(*this, x, ctx, PassId::Input);
     writeMonoToInterleaved(outSamples, frame, channels, y);

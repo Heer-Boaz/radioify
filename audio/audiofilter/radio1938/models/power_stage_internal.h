@@ -55,6 +55,7 @@ KorenTriodePlateEval evaluateTriodePlateFast(float vgk,
 
 OutputTubePairEval evaluateOutputTubePair(
     const Radio1938::PowerNodeState& power,
+    const TriodeLutView& outputTriodeLut,
     float outputPlateQuiescent,
     float gridA,
     float gridB,
