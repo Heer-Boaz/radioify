@@ -116,9 +116,18 @@ float RadioCabinetNode::run(Radio1938& radio, float y, RadioSampleContext&) {
     return -std::fabs(coupling) * clarifier.process(signal);
   };
 
-  float out = cabinet.panel.process(y);
-  out = cabinet.chassis.process(out);
-  out = cabinet.cavityDip.process(out);
+  float out = y;
+  // Cabinet panel, chassis, and cavity responses are parallel acoustic paths
+  // around the same speaker pressure, not cascaded electrical stages.
+  if (cabinet.panelHz > 0.0f && cabinet.panelQ > 0.0f) {
+    out += cabinet.panel.process(y) - y;
+  }
+  if (cabinet.chassisHz > 0.0f && cabinet.chassisQ > 0.0f) {
+    out += cabinet.chassis.process(y) - y;
+  }
+  if (cabinet.cavityDipHz > 0.0f && cabinet.cavityDipQ > 0.0f) {
+    out += cabinet.cavityDip.process(y) - y;
+  }
   if (!cabinet.buf.empty()) {
     float rear = cabinet.buf[static_cast<size_t>(cabinet.index)];
     cabinet.buf[static_cast<size_t>(cabinet.index)] = y;

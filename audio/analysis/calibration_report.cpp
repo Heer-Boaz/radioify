@@ -1,5 +1,6 @@
 #include "calibration_report.h"
 
+#include <cmath>
 #include <iomanip>
 #include <iostream>
 
@@ -95,6 +96,58 @@ void printCalibrationReport(const Radio1938& radio1938,
             << " digital_clip="
             << (radio1938.calibration.validationDigitalClip ? 1 : 0)
             << "\n";
+  std::cout.flags(oldFlags);
+  std::cout.precision(oldPrecision);
+}
+
+void printClickTraceReport(const Radio1938& radio1938,
+                           const std::string& label) {
+  const auto& trace = radio1938.calibration.clickTrace;
+  if (!radio1938.calibration.enabled || !trace.enabled) return;
+
+  auto oldFlags = std::cout.flags();
+  auto oldPrecision = std::cout.precision();
+  std::cout << std::fixed << std::setprecision(6);
+  std::cout << label << "\n";
+  std::cout << "  threshold=" << trace.threshold
+            << " retained_events=" << trace.events.size()
+            << " scanned_samples=" << trace.sampleIndex << "\n";
+  for (size_t eventIndex = 0; eventIndex < trace.events.size(); ++eventIndex) {
+    const auto& event = trace.events[eventIndex];
+    const double timeSeconds =
+        radio1938.sampleRate > 0.0f
+            ? static_cast<double>(event.sampleIndex) /
+                  static_cast<double>(radio1938.sampleRate)
+            : 0.0;
+    size_t dominantPass = static_cast<size_t>(PassId::OutputClip);
+    float dominantDelta = 0.0f;
+    for (size_t passIndex = 0; passIndex < event.passDelta.size();
+         ++passIndex) {
+      if (!event.passValid[passIndex]) continue;
+      if (std::fabs(event.passDelta[passIndex]) > std::fabs(dominantDelta)) {
+        dominantPass = passIndex;
+        dominantDelta = event.passDelta[passIndex];
+      }
+    }
+    std::cout << "  event rank=" << (eventIndex + 1)
+              << " sample=" << event.sampleIndex
+              << " time_s=" << timeSeconds
+              << " final_prev=" << event.previousOutput
+              << " final_out=" << event.output
+              << " final_delta=" << event.delta
+              << " dominant_stage="
+              << Radio1938::passName(static_cast<PassId>(dominantPass))
+              << " dominant_delta=" << dominantDelta << "\n";
+    for (size_t passIndex = 0; passIndex < event.passDelta.size();
+         ++passIndex) {
+      if (!event.passValid[passIndex]) continue;
+      const PassId id = static_cast<PassId>(passIndex);
+      std::cout << "    stage=" << Radio1938::passName(id)
+                << " prev=" << event.previousPassOutput[passIndex]
+                << " out=" << event.passOutput[passIndex]
+                << " delta=" << event.passDelta[passIndex] << "\n";
+    }
+  }
   std::cout.flags(oldFlags);
   std::cout.precision(oldPrecision);
 }

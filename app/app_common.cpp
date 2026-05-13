@@ -21,6 +21,9 @@ static void showUsage(const char* exe) {
   logLine("  --50hz                 Force 50Hz playback mode where supported");
   logLine("  --calibration-report   Dump per-stage radio metrics after render-radio");
   logLine("  --measure-node-steps   Render and report every disabled-node variant for render-radio");
+  logLine("  --click-trace-report   Dump largest radio output jumps with per-stage deltas");
+  logLine("  --click-threshold <v>  Minimum output jump for --click-trace-report");
+  logLine("  --click-events <n>     Number of click trace events to retain");
   logLine("  --out <path>           Same as out");
   logLine("  --radio-settings <path> Override audio-filter settings from a .toml file");
   logLine("  --radio-preset <name>   Select named audio-filter preset from the settings file");
@@ -173,6 +176,39 @@ Options parseArgs(int argc, char** argv) {
     }
     if (arg == "--measure-node-steps") {
       o.measureNodeSteps = true;
+      continue;
+    }
+    if (arg == "--click-trace-report") {
+      o.clickTraceReport = true;
+      continue;
+    }
+    if (arg == "--click-threshold") {
+      std::string value = requireValue(arg, &i);
+      if (value.empty()) {
+        die("--click-threshold requires a non-empty number.");
+      }
+      char* end = nullptr;
+      double parsed = std::strtod(value.c_str(), &end);
+      if (*end != '\0' || parsed <= 0.0) {
+        die("--click-threshold expects a positive number.");
+      }
+      o.clickTraceThreshold = parsed;
+      continue;
+    }
+    if (arg == "--click-events") {
+      std::string value = requireValue(arg, &i);
+      if (value.empty()) {
+        die("--click-events requires a non-empty integer.");
+      }
+      char* end = nullptr;
+      long parsed = std::strtol(value.c_str(), &end, 10);
+      if (*end != '\0' || parsed <= 0) {
+        die("--click-events expects a positive integer.");
+      }
+      if (parsed > 64) {
+        die("--click-events supports at most 64 events.");
+      }
+      o.clickTraceEvents = static_cast<int>(parsed);
       continue;
     }
     if (arg == "--dry") {

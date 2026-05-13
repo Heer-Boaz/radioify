@@ -183,13 +183,13 @@ SpeakerElectricalLinearization linearizeSpeakerElectricalLoad(
     float dt) {
   SpeakerElectricalLinearization linearization{};
   float nominalLoad = requirePositiveFinite(nominalLoadOhms);
-  float re = std::max(speaker.voiceCoilResistanceOhms, 1e-4f);
-  float le = std::max(speaker.voiceCoilInductanceHenries, 1e-7f);
-  float mass = std::max(speaker.movingMassKg, 1e-6f);
+  float re = std::max(speaker.effectiveVoiceCoilResistanceOhms, 1e-4f);
+  float le = std::max(speaker.effectiveVoiceCoilInductanceHenries, 1e-7f);
+  float mass = std::max(speaker.effectiveMovingMassKg, 1e-6f);
   float compliance =
-      std::max(speaker.suspensionComplianceMetersPerNewton, 1e-8f);
-  float damping = std::max(speaker.mechanicalDampingNsPerMeter, 1e-5f);
-  float bl = std::max(speaker.forceFactorBl, 1e-4f);
+      std::max(speaker.effectiveSuspensionComplianceMetersPerNewton, 1e-8f);
+  float damping = std::max(speaker.effectiveMechanicalDampingNsPerMeter, 1e-5f);
+  float bl = std::max(speaker.effectiveForceFactorBl, 1e-4f);
   float safeDt = std::max(dt, 1e-9f);
   float a = le / safeDt + re;
   float d = mass / safeDt + damping + safeDt / compliance;

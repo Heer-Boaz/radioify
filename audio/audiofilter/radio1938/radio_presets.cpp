@@ -62,10 +62,11 @@ void applyPhilco37116Preset(Radio1938& radio) {
   // 470 kHz strip. Keep enough detector drive for the 6J5/6F6/6B4 chain so the
   // physical speaker-reference scaling is not forced to make the whole radio
   // sound abnormally quiet.
-  // Keep detector drive healthy, but back off the reduced-order IF gain a bit:
-  // measurements show this cuts nominal and overdrive distortion without
-  // pushing the Philco out of its expected output range.
-  radio.ifStrip.stageGain = 3.6f;
+  // Keep detector drive healthy without slamming the first-audio stage on
+  // dense masters. Output makeup below restores listening level after the IF
+  // drive and force-coupled speaker radiation are set by the analog chain
+  // rather than by a post-render clamp.
+  radio.ifStrip.stageGain = 3.0f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.interstageCouplingCoeff = 0.15f;
@@ -196,7 +197,7 @@ void applyPhilco37116Preset(Radio1938& radio) {
                    radio.power.outputTubePlateCurrentAmps *
                        (0.5f * radio.power.outputTransformerPrimaryResistanceOhms) -
                    radio.power.outputTubePlateDcVolts) < 1.0f);
-  radio.output.digitalMakeupGain = 1.0f;
+  radio.output.digitalMakeupGain = 1.28f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -251,9 +252,9 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.speaker.coneDipHz = 1850.0f;
   radio.speakerStage.speaker.coneDipQ = 0.85f;
   radio.speakerStage.speaker.coneDipGainDb = -0.35f;
-  radio.speakerStage.speaker.topLpHz = 3400.0f;
-  radio.speakerStage.speaker.hfLossLpHz = 2700.0f;
-  radio.speakerStage.speaker.hfLossDepth = 0.18f;
+  radio.speakerStage.speaker.topLpHz = 3000.0f;
+  radio.speakerStage.speaker.hfLossLpHz = 2400.0f;
+  radio.speakerStage.speaker.hfLossDepth = 0.24f;
   radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
   radio.speakerStage.speaker.drive = 1.0f;
   radio.speakerStage.speaker.limit = 0.0f;

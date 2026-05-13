@@ -63,39 +63,47 @@ void configureSpeakerElectromechanics(SpeakerSim& speaker,
                                       float nominalLoadOhms) {
   speaker.electricalSampleRate = fs;
   speaker.nominalLoadOhms = std::max(nominalLoadOhms, 1e-3f);
-  if (speaker.voiceCoilResistanceOhms <= 0.0f) {
-    speaker.voiceCoilResistanceOhms = 0.82f * speaker.nominalLoadOhms;
+  speaker.effectiveVoiceCoilResistanceOhms =
+      speaker.voiceCoilResistanceOhms > 0.0f
+          ? speaker.voiceCoilResistanceOhms
+          : 0.82f * speaker.nominalLoadOhms;
+  speaker.effectiveMovingMassKg =
+      speaker.movingMassKg > 0.0f ? speaker.movingMassKg : 0.014f;
+  speaker.effectiveSuspensionComplianceMetersPerNewton =
+      speaker.suspensionComplianceMetersPerNewton > 0.0f
+          ? speaker.suspensionComplianceMetersPerNewton
+          : deriveSpeakerCompliance(speaker.effectiveMovingMassKg,
+                                    speaker.suspensionHz);
+  if (speaker.mechanicalDampingNsPerMeter > 0.0f) {
+    speaker.effectiveMechanicalDampingNsPerMeter =
+        speaker.mechanicalDampingNsPerMeter;
+  } else if (speaker.mechanicalQ > 0.0f) {
+    speaker.effectiveMechanicalDampingNsPerMeter =
+        deriveSpeakerMechanicalDampingFromQ(speaker.effectiveMovingMassKg,
+                                            speaker.suspensionHz,
+                                            speaker.mechanicalQ);
+  } else {
+    speaker.effectiveMechanicalDampingNsPerMeter =
+        deriveSpeakerMechanicalDamping(speaker.effectiveMovingMassKg,
+                                       speaker.suspensionHz,
+                                       speaker.suspensionQ);
   }
-  if (speaker.movingMassKg <= 0.0f) {
-    speaker.movingMassKg = 0.014f;
-  }
-  if (speaker.suspensionComplianceMetersPerNewton <= 0.0f) {
-    speaker.suspensionComplianceMetersPerNewton =
-        deriveSpeakerCompliance(speaker.movingMassKg, speaker.suspensionHz);
-  }
-  if (speaker.mechanicalDampingNsPerMeter <= 0.0f) {
-    if (speaker.mechanicalQ > 0.0f) {
-      speaker.mechanicalDampingNsPerMeter = deriveSpeakerMechanicalDampingFromQ(
-          speaker.movingMassKg, speaker.suspensionHz, speaker.mechanicalQ);
-    } else {
-      speaker.mechanicalDampingNsPerMeter = deriveSpeakerMechanicalDamping(
-          speaker.movingMassKg, speaker.suspensionHz, speaker.suspensionQ);
-    }
-  }
-  if (speaker.voiceCoilInductanceHenries <= 0.0f) {
-    speaker.voiceCoilInductanceHenries = deriveSpeakerVoiceCoilInductance(
-        speaker.voiceCoilResistanceOhms, speaker.topLpHz);
-  }
-  if (speaker.forceFactorBl <= 0.0f) {
-    if (speaker.electricalQ > 0.0f) {
-      speaker.forceFactorBl = deriveSpeakerForceFactorFromQ(
-          speaker.movingMassKg, speaker.suspensionHz,
-          speaker.voiceCoilResistanceOhms, speaker.electricalQ);
-    } else {
-      speaker.forceFactorBl =
-          deriveSpeakerForceFactor(speaker.movingMassKg, speaker.suspensionHz,
-                                   speaker.voiceCoilResistanceOhms);
-    }
+  speaker.effectiveVoiceCoilInductanceHenries =
+      speaker.voiceCoilInductanceHenries > 0.0f
+          ? speaker.voiceCoilInductanceHenries
+          : deriveSpeakerVoiceCoilInductance(
+                speaker.effectiveVoiceCoilResistanceOhms, speaker.topLpHz);
+  if (speaker.forceFactorBl > 0.0f) {
+    speaker.effectiveForceFactorBl = speaker.forceFactorBl;
+  } else if (speaker.electricalQ > 0.0f) {
+    speaker.effectiveForceFactorBl = deriveSpeakerForceFactorFromQ(
+        speaker.effectiveMovingMassKg, speaker.suspensionHz,
+        speaker.effectiveVoiceCoilResistanceOhms, speaker.electricalQ);
+  } else {
+    speaker.effectiveForceFactorBl =
+        deriveSpeakerForceFactor(speaker.effectiveMovingMassKg,
+                                 speaker.suspensionHz,
+                                 speaker.effectiveVoiceCoilResistanceOhms);
   }
   float loadSenseMs = 1.0f;
   speaker.loadSenseCoeff =
@@ -194,7 +202,19 @@ void resetSpeakerModel(SpeakerSim& speaker) {
 }
 
 float runSpeakerModel(SpeakerSim& speaker, float x, bool& clipped) {
-  float y = x * std::max(speaker.drive, 0.0f);
+  float motorForceNewtons =
+      speaker.effectiveForceFactorBl * speaker.electricalCurrentAmps;
+  float forceToEquivalentVolts =
+      speaker.effectiveVoiceCoilResistanceOhms /
+      std::max(speaker.effectiveForceFactorBl, 1e-4f);
+  // Cone radiation follows motor force/current. The equivalent-volts scale
+  // preserves the existing power-stage reference without treating leakage,
+  // inductive voltage, or back-EMF as direct acoustic pressure.
+  float acousticMotorDrive =
+      std::isfinite(motorForceNewtons)
+          ? motorForceNewtons * forceToEquivalentVolts
+          : x;
+  float y = acousticMotorDrive * std::max(speaker.drive, 0.0f);
   y = speaker.suspensionRes.process(y);
   y = speaker.coneBody.process(y);
   y = speaker.upperBreakup.process(y);

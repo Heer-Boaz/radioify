@@ -952,19 +952,6 @@ double measureImdSummaryDb(const HarnessConfig& config) {
   return dbFromRatio(std::sqrt(imdPower / std::max(fundamentalPower, 1e-20)));
 }
 
-ToneMetrics measureNominalSinad(const HarnessConfig& config) {
-  HarnessConfig nominalConfig = config;
-  nominalConfig.carrierRmsVolts = kDefaultCarrierRmsVolts;
-  auto input =
-      makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f,
-               kNominalProgramPeak);
-  RunResult run =
-      runAmProgram(nominalConfig, input, nominalHarnessModulationIndex(config),
-                   std::max(config.noiseWeight, config.noiseOnlyWeight));
-  return measureToneMetrics(run.output, config.sampleRate, 1000.0f,
-                            static_cast<size_t>(config.sampleRate * 0.20f));
-}
-
 ReferenceAnchorSummary measureReferenceAnchorSummary(const HarnessConfig& config) {
   HarnessConfig nominalConfig = config;
   nominalConfig.carrierRmsVolts = kDefaultCarrierRmsVolts;

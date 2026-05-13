@@ -20,6 +20,9 @@ struct Options {
   double noise = kDefaultRadioNoiseAmount;
   bool calibrationReport = false;
   bool measureNodeSteps = false;
+  bool clickTraceReport = false;
+  double clickTraceThreshold = 0.05;
+  int clickTraceEvents = 12;
   bool mono = kDefaultMonoAudioEnabled;
   bool play = true;
   bool dry = kDefaultDryAudioEnabled;

@@ -133,11 +133,40 @@ void expectPreviewCapsDetectorWork() {
   }
 }
 
+void expectSpeakerDerivedPhysicsRefreshesFromConfig() {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+
+  auto& speaker = radio.speakerStage.speaker;
+  const float originalDamping = speaker.effectiveMechanicalDampingNsPerMeter;
+  const float originalBl = speaker.effectiveForceFactorBl;
+  if (speaker.mechanicalDampingNsPerMeter != 0.0f ||
+      speaker.forceFactorBl != 0.0f) {
+    fail("Speaker init overwrote derived electromechanical config fields.");
+  }
+
+  speaker.mechanicalQ *= 0.5f;
+  speaker.electricalQ *= 0.5f;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+
+  if (speaker.effectiveMechanicalDampingNsPerMeter <= originalDamping) {
+    fail("Speaker mechanicalQ change did not increase effective damping.");
+  }
+  if (speaker.effectiveForceFactorBl <= originalBl) {
+    fail("Speaker electricalQ change did not increase effective BL.");
+  }
+  if (speaker.mechanicalDampingNsPerMeter != 0.0f ||
+      speaker.forceFactorBl != 0.0f) {
+    fail("Speaker derived electromechanical values leaked into config.");
+  }
+}
+
 }  // namespace
 
 int main() {
   expectBlockInvariantAmIngress();
   expectHotProgramLevelReachesAmIngress();
   expectPreviewCapsDetectorWork();
+  expectSpeakerDerivedPhysicsRefreshesFromConfig();
   return 0;
 }

@@ -263,6 +263,33 @@ struct Radio1938 {
     bool validationDigitalClip = false;
     std::array<CalibrationPassMetrics, kPassCount> passes{};
 
+    struct ClickTraceEvent {
+      uint64_t sampleIndex = 0;
+      float previousOutput = 0.0f;
+      float output = 0.0f;
+      float delta = 0.0f;
+      std::array<float, kPassCount> previousPassOutput{};
+      std::array<float, kPassCount> passOutput{};
+      std::array<float, kPassCount> passDelta{};
+      std::array<bool, kPassCount> passValid{};
+    };
+
+    struct ClickTraceState {
+      bool enabled = false;
+      float threshold = 0.05f;
+      size_t maxEvents = 12;
+      uint64_t sampleIndex = 0;
+      bool hasPreviousSample = false;
+      float previousOutput = 0.0f;
+      std::array<float, kPassCount> previousPassOutput{};
+      std::array<float, kPassCount> currentPassOutput{};
+      std::array<bool, kPassCount> previousPassValid{};
+      std::array<bool, kPassCount> currentPassValid{};
+      std::vector<ClickTraceEvent> events;
+
+      void resetRuntime();
+    } clickTrace;
+
     void resetMeasurementState();
     void reset();
   } calibration;

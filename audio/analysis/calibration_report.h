@@ -7,6 +7,7 @@
 struct Radio1938;
 
 void printCalibrationReport(const Radio1938& radio1938, const std::string& label);
+void printClickTraceReport(const Radio1938& radio1938, const std::string& label);
 
 void printNodeStepSummaryHeader();
 

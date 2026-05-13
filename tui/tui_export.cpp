@@ -249,6 +249,13 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
       calibrationRadio->calibration.enabled) {
     printCalibrationReport(*calibrationRadio, "Calibration report:");
   }
+  if (o.clickTraceReport) {
+    const Radio1938* tracedRadio =
+        usePreviewRender ? renderRadio.get() : calibrationRadio.get();
+    if (tracedRadio && tracedRadio->calibration.enabled) {
+      printClickTraceReport(*tracedRadio, "Click trace report:");
+    }
+  }
 
   if (renderedRadioOut) {
     if (calibrationRadio) {
@@ -279,8 +286,15 @@ int runRenderRadioCli(const Options& o) {
           "': " + radioIniError);
     }
   }
-  if (o.calibrationReport || o.measureNodeSteps) {
+  if (o.calibrationReport || o.measureNodeSteps || o.clickTraceReport) {
     radio1938Template.setCalibrationEnabled(true);
+  }
+  if (o.clickTraceReport) {
+    radio1938Template.calibration.clickTrace.enabled = true;
+    radio1938Template.calibration.clickTrace.threshold =
+        static_cast<float>(o.clickTraceThreshold);
+    radio1938Template.calibration.clickTrace.maxEvents =
+        static_cast<size_t>(o.clickTraceEvents);
   }
 
   Options renderOpt = o;
@@ -296,8 +310,9 @@ int runRenderRadioCli(const Options& o) {
     logLine("  Measure: Node-step sweep (enabled)");
   }
   logLine(std::string("  Report: ") +
-          ((o.calibrationReport || o.measureNodeSteps) ? "calibration"
-                                                       : "off"));
+          ((o.calibrationReport || o.measureNodeSteps || o.clickTraceReport)
+               ? "calibration"
+               : "off"));
   if (o.measureNodeSteps) {
     logLine("Measuring node-step variants...");
     printNodeStepSummaryHeader();

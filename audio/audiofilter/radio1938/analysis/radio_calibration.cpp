@@ -24,6 +24,17 @@ void Radio1938::CalibrationRmsMetric::updateSnapshot() {
       std::sqrt(sumSq / static_cast<double>(sampleCount)));
 }
 
+void Radio1938::CalibrationState::ClickTraceState::resetRuntime() {
+  sampleIndex = 0;
+  hasPreviousSample = false;
+  previousOutput = 0.0f;
+  previousPassOutput.fill(0.0f);
+  currentPassOutput.fill(0.0f);
+  previousPassValid.fill(false);
+  currentPassValid.fill(false);
+  events.clear();
+}
+
 static void fftInPlace(
     std::array<std::complex<float>, kRadioCalibrationFftSize>& bins) {
   const size_t n = bins.size();
@@ -208,6 +219,7 @@ void Radio1938::CalibrationState::reset() {
   validationInterstageSecondary = false;
   validationDcShift = false;
   validationDigitalClip = false;
+  clickTrace.resetRuntime();
   for (auto& pass : passes) {
     pass.clearAccumulators();
   }
@@ -288,6 +300,79 @@ void updatePassCalibration(Radio1938& radio,
   if (pass.fftFill == pass.fftTimeBuffer.size()) {
     accumulateCalibrationSpectrum(pass, radio.sampleRate, false);
   }
+}
+
+static void retainClickTraceEvent(
+    Radio1938::CalibrationState::ClickTraceState& trace,
+    const Radio1938::CalibrationState::ClickTraceEvent& event) {
+  if (trace.maxEvents == 0) return;
+  if (trace.events.size() < trace.maxEvents) {
+    trace.events.push_back(event);
+  } else {
+    auto weakest = std::min_element(
+        trace.events.begin(), trace.events.end(),
+        [](const auto& a, const auto& b) {
+          return std::fabs(a.delta) < std::fabs(b.delta);
+        });
+    if (weakest == trace.events.end() ||
+        std::fabs(event.delta) <= std::fabs(weakest->delta)) {
+      return;
+    }
+    *weakest = event;
+  }
+  std::sort(trace.events.begin(), trace.events.end(),
+            [](const auto& a, const auto& b) {
+              return std::fabs(a.delta) > std::fabs(b.delta);
+            });
+}
+
+void beginClickTraceSample(Radio1938& radio) {
+  auto& trace = radio.calibration.clickTrace;
+  if (!radio.calibration.enabled || !trace.enabled) return;
+  trace.currentPassOutput.fill(0.0f);
+  trace.currentPassValid.fill(false);
+}
+
+void recordClickTracePassOutput(Radio1938& radio, PassId id, float out) {
+  auto& trace = radio.calibration.clickTrace;
+  if (!radio.calibration.enabled || !trace.enabled) return;
+  const size_t index = static_cast<size_t>(id);
+  if (index >= trace.currentPassOutput.size()) return;
+  trace.currentPassOutput[index] = out;
+  trace.currentPassValid[index] = true;
+}
+
+void finishClickTraceSample(Radio1938& radio, float out) {
+  auto& trace = radio.calibration.clickTrace;
+  if (!radio.calibration.enabled || !trace.enabled) return;
+
+  if (trace.hasPreviousSample) {
+    const float delta = out - trace.previousOutput;
+    if (std::fabs(delta) >= trace.threshold) {
+      Radio1938::CalibrationState::ClickTraceEvent event{};
+      event.sampleIndex = trace.sampleIndex;
+      event.previousOutput = trace.previousOutput;
+      event.output = out;
+      event.delta = delta;
+      for (size_t i = 0; i < event.passOutput.size(); ++i) {
+        event.passValid[i] =
+            trace.currentPassValid[i] && trace.previousPassValid[i];
+        event.previousPassOutput[i] = trace.previousPassOutput[i];
+        event.passOutput[i] = trace.currentPassOutput[i];
+        event.passDelta[i] = event.passValid[i]
+                                 ? trace.currentPassOutput[i] -
+                                       trace.previousPassOutput[i]
+                                 : 0.0f;
+      }
+      retainClickTraceEvent(trace, event);
+    }
+  }
+
+  trace.previousOutput = out;
+  trace.previousPassOutput = trace.currentPassOutput;
+  trace.previousPassValid = trace.currentPassValid;
+  trace.hasPreviousSample = true;
+  trace.sampleIndex++;
 }
 
 void updateCalibrationSnapshot(Radio1938& radio) {

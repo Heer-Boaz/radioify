@@ -49,11 +49,16 @@ float runProgramPasses(Radio1938& radio,
   const auto& order = radio.graph.order(AudioPassDomain::Program);
   const size_t begin = std::min(firstProgramIndex, order.size());
   const bool calibrationEnabled = radio.calibration.enabled;
+  const bool clickTraceEnabled =
+      calibrationEnabled && radio.calibration.clickTrace.enabled;
   for (size_t orderIndex = begin; orderIndex < order.size(); ++orderIndex) {
     const auto& pass = radio.graph.pass(order[orderIndex]);
     if (!pass.runSample) continue;
     const float in = y;
     y = pass.runSample(radio, y, ctx);
+    if (clickTraceEnabled) {
+      recordClickTracePassOutput(radio, pass.id, y);
+    }
     if (calibrationEnabled && !pass.stateOnly) {
       updatePassCalibration(radio, pass.id, in, y);
     }
@@ -76,6 +81,9 @@ float runRadioPipelineSample(Radio1938& radio,
                              float x,
                              RadioSampleContext& ctx,
                              PassId firstProgramPass) {
+  if (radio.calibration.enabled && radio.calibration.clickTrace.enabled) {
+    beginClickTraceSample(radio);
+  }
   runControlPasses(radio, ctx);
   const size_t firstProgramIndex =
       resolveFirstProgramIndex(radio, ctx, firstProgramPass);
@@ -83,6 +91,9 @@ float runRadioPipelineSample(Radio1938& radio,
   if (radio.calibration.enabled) {
     radio.calibration.maxDigitalOutput =
         std::max(radio.calibration.maxDigitalOutput, std::fabs(y));
+  }
+  if (radio.calibration.enabled && radio.calibration.clickTrace.enabled) {
+    finishClickTraceSample(radio, y);
   }
   return y;
 }
