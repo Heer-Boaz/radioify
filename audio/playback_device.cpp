@@ -24,12 +24,25 @@ static uint64_t rescalePlaybackDeviceFrames(uint64_t frames,
   return static_cast<uint64_t>(std::llround(scaled));
 }
 
+static void requestPlaybackDeviceDeclickRampUnlocked() {
+  const uint32_t requestedFrames =
+      outputVolumeSafetyDefaultRampFrames(gAudio.state.sampleRate);
+  uint32_t current = gAudio.state.outputRampRequestFrames.load(
+      std::memory_order_relaxed);
+  while (current < requestedFrames &&
+         !gAudio.state.outputRampRequestFrames.compare_exchange_weak(
+             current, requestedFrames, std::memory_order_relaxed,
+             std::memory_order_relaxed)) {
+  }
+}
+
 static void invalidatePlaybackDeviceRuntimeState() {
   gAudio.state.audioPrimed.store(false, std::memory_order_relaxed);
   gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
   gAudio.state.streamStarved.store(true, std::memory_order_relaxed);
   gAudio.state.audioClock.invalidate();
   gAudio.state.deviceDelayFrames.store(0, std::memory_order_relaxed);
+  requestPlaybackDeviceDeclickRampUnlocked();
 }
 
 static uint64_t calculatePlaybackDeviceLatencyFramesUnlocked() {
@@ -119,6 +132,7 @@ static bool initPlaybackDeviceUnlocked() {
     invalidatePlaybackDeviceRuntimeState();
     return false;
   }
+  requestPlaybackDeviceDeclickRampUnlocked();
   if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
     ma_device_uninit(&gAudio.state.device);
     gAudio.lastInitError = "Failed to start audio output device.";
@@ -182,6 +196,7 @@ static bool ensurePlaybackDeviceRunningInternalUnlocked() {
     return true;
   }
 
+  requestPlaybackDeviceDeclickRampUnlocked();
   if (ma_device_start(&gAudio.state.device) != MA_SUCCESS) {
     uninitPlaybackDeviceUnlocked();
     return initPlaybackDeviceUnlocked();

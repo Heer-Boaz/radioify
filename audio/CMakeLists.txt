@@ -13,6 +13,7 @@ radioify_add_module_object_library(radioify_audio
   ${CMAKE_CURRENT_SOURCE_DIR}/m4adecoder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_formats.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/midiaudio.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/output_volume_safety.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_device.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/psfaudio.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/vgmaudio.cpp

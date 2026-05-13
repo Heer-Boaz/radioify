@@ -10,6 +10,10 @@ radioify_add_module_object_library(radioify_tool_radio_am_ingress_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/radio_am_ingress_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_audio_output_safety_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio_output_safety_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_ascii_shader_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii_shader_tests.cpp
 )
