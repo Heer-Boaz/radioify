@@ -113,11 +113,10 @@ bool audioStartStream(uint64_t) { return false; }
 void audioStopStream() {}
 size_t audioStreamBufferedFrames() { return 0; }
 int64_t audioStreamOldestPtsUs() { return 0; }
-bool audioStreamWriteSamples(const float*, uint64_t, int64_t, int, bool,
+bool audioStreamWriteSamples(float*, uint64_t, int64_t, int, bool,
                              uint64_t*) {
   return false;
 }
-void audioStreamProcessRadio(float*, uint32_t) {}
 void audioStreamDiscardUntil(int64_t ptsUs) {
   gLastAudioDiscardUntilUs.store(ptsUs, std::memory_order_relaxed);
 }

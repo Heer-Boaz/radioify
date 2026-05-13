@@ -75,13 +75,12 @@ void audioStopStream();
 size_t audioStreamBufferedFrames();
 size_t audioStreamCapacityFrames();
 int64_t audioStreamOldestPtsUs();
-bool audioStreamWriteSamples(const float* interleaved,
+bool audioStreamWriteSamples(float* interleaved,
                              uint64_t frames,
                              int64_t ptsUs,
                              int serial,
                              bool allowBlock,
                              uint64_t* writtenFrames);
-void audioStreamProcessRadio(float* interleaved, uint32_t frames);
 void audioStreamDiscardUntil(int64_t ptsUs);
 void audioStreamPrimeClock(int serial, int64_t targetPtsUs);
 void audioStreamSetEnd(bool atEnd);

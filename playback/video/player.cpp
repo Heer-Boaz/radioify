@@ -1952,7 +1952,8 @@ struct Player::Impl {
     std::this_thread::sleep_for(std::chrono::microseconds(100));
   }
 
-  void saveFrameStepBackstepCandidate(const QueuedFrame& front) {
+  void saveFrameStepBackstepCandidate(
+      [[maybe_unused]] const QueuedFrame& front) {
     QueuedFrame item{};
     if (!videoFrames.pop(&item)) {
       assert(false && "Frame-step backstep candidate must be queue-front");
@@ -3336,9 +3337,6 @@ struct Player::Impl {
         audioDec.nextPtsUs = ptsUs + audioDurationUs;
         audioDec.nextPtsValid = true;
         audioDec.writePosFrames += static_cast<int64_t>(converted);
-        audioStreamProcessRadio(audioDec.convertBuffer.data(),
-                                static_cast<uint32_t>(converted));
-        
         uint64_t totalWritten = 0;
         while (running.load() && totalWritten < static_cast<uint64_t>(converted)) {
           if (static_cast<int>(decoderSerial) != serialControl.currentSerial()) {

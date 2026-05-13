@@ -26,6 +26,7 @@
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "nsfoptions.h"
+#include "output_transition.h"
 #include "output_volume_safety.h"
 #include "psfaudio.h"
 #include "radio.h"
@@ -219,8 +220,6 @@ struct AudioState {
   std::atomic<AudioMode> mode{AudioMode::None};
   const AudioBackendHandlers* backend = nullptr;
   std::atomic<bool> seekRequested{false};
-  std::atomic<bool> seekFadePending{false};
-  std::atomic<bool> seekCommitRequested{false};
   std::atomic<int64_t> pendingSeekFrames{0};
   std::atomic<uint64_t> framesPlayed{0};
   std::atomic<uint64_t> callbackCount{0};
@@ -242,10 +241,12 @@ struct AudioState {
   std::atomic<int64_t> clipAlertUntilUs{0};
   std::atomic<bool> radioResetPending{false};
   OutputVolumeSafetyState outputSafety;
-  std::atomic<uint32_t> outputRampRequestFrames{0};
+  AudioOutputTransition outputTransition;
   AudioSampleRing streamRb;
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};
+  std::atomic<int> pendingStreamSerial{0};
+  std::atomic<bool> streamSerialFlushPending{false};
   std::atomic<bool> streamBaseValid{false};
   std::atomic<int64_t> streamBasePtsUs{0};
   std::atomic<uint64_t> streamReadFrames{0};

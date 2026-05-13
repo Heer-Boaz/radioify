@@ -25,15 +25,8 @@ static uint64_t rescalePlaybackDeviceFrames(uint64_t frames,
 }
 
 static void requestPlaybackDeviceDeclickRampUnlocked() {
-  const uint32_t requestedFrames =
-      outputVolumeSafetyDefaultRampFrames(gAudio.state.sampleRate);
-  uint32_t current = gAudio.state.outputRampRequestFrames.load(
-      std::memory_order_relaxed);
-  while (current < requestedFrames &&
-         !gAudio.state.outputRampRequestFrames.compare_exchange_weak(
-             current, requestedFrames, std::memory_order_relaxed,
-             std::memory_order_relaxed)) {
-  }
+  audioOutputTransitionRequestFadeIn(gAudio.state.outputTransition,
+                                     gAudio.state.sampleRate);
 }
 
 static void invalidatePlaybackDeviceRuntimeState() {
