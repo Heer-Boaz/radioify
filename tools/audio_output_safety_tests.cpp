@@ -1,5 +1,7 @@
 #include "audio/output_volume_safety.h"
 #include "audio/pipeline_transition.h"
+#include "audio/playback_source_buffer.h"
+#include "audio/playback_source_priming.h"
 
 #include <algorithm>
 #include <cmath>
@@ -208,6 +210,9 @@ void expectDiscontinuityTransitionPhases() {
   if (!audioPipelineTransitionBeginCommit(transition)) {
     fail("Discontinuity transition did not begin commit.");
   }
+  if (!audioPipelineTransitionWaitingForCommit(transition)) {
+    fail("Discontinuity transition did not hold output during commit.");
+  }
   if (!audioPipelineTransitionFinishCommit(transition, 48000)) {
     fail("Discontinuity transition refused to finish the current request.");
   }
@@ -248,6 +253,57 @@ void expectSupersededDiscontinuityDoesNotClearNewRequest() {
   }
 }
 
+void expectPlaybackSourcePrimingBudget() {
+  const PlaybackSourcePriming priming = playbackSourcePrimingForRate(48000);
+  if (priming.capacityFrames != 24000) {
+    fail("Playback source capacity is not 500 ms at 48 kHz.");
+  }
+  if (priming.targetFrames != 12000) {
+    fail("Playback source target is not 250 ms at 48 kHz.");
+  }
+  if (priming.primeFrames != 4800) {
+    fail("Playback source prime is not 100 ms at 48 kHz.");
+  }
+  if (playbackSourceIsPrimed(priming.primeFrames - 1, priming.primeFrames,
+                             false)) {
+    fail("Playback source primed before the configured threshold.");
+  }
+  if (!playbackSourceIsPrimed(0, priming.primeFrames, true)) {
+    fail("Playback source end did not satisfy priming.");
+  }
+}
+
+void expectPlaybackSourceBufferWrapsCleanly() {
+  PlaybackSourceBuffer buffer;
+  buffer.init(4, 2);
+  const float first[] = {1.0f, 1.1f, 2.0f, 2.1f, 3.0f, 3.1f};
+  if (buffer.write(first, 3) != 3 || buffer.size() != 3 ||
+      buffer.space() != 1) {
+    fail("Playback source buffer did not accept the initial write.");
+  }
+
+  float out[8] = {};
+  if (buffer.read(out, 2) != 2) {
+    fail("Playback source buffer did not read the initial frames.");
+  }
+  expectNear(out[0], 1.0f, 1e-6f, "buffer read frame 0 left");
+  expectNear(out[3], 2.1f, 1e-6f, "buffer read frame 1 right");
+
+  const float second[] = {4.0f, 4.1f, 5.0f, 5.1f, 6.0f, 6.1f};
+  if (buffer.write(second, 3) != 3 || buffer.size() != 4) {
+    fail("Playback source buffer did not wrap on write.");
+  }
+
+  std::fill(out, out + 8, 0.0f);
+  if (buffer.read(out, 4) != 4) {
+    fail("Playback source buffer did not read wrapped frames.");
+  }
+  expectNear(out[0], 3.0f, 1e-6f, "buffer wrapped frame 0 left");
+  expectNear(out[1], 3.1f, 1e-6f, "buffer wrapped frame 0 right");
+  expectNear(out[2], 4.0f, 1e-6f, "buffer wrapped frame 1 left");
+  expectNear(out[7], 6.1f, 1e-6f, "buffer wrapped frame 3 right");
+}
+
 }  // namespace
 
 int main() {
@@ -262,5 +318,7 @@ int main() {
   expectTailFadeBoundsStopStep();
   expectDiscontinuityTransitionPhases();
   expectSupersededDiscontinuityDoesNotClearNewRequest();
+  expectPlaybackSourcePrimingBudget();
+  expectPlaybackSourceBufferWrapsCleanly();
   return 0;
 }

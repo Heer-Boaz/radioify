@@ -27,6 +27,7 @@
 #include "miniaudio.h"
 #include "nsfoptions.h"
 #include "pipeline_transition.h"
+#include "playback_source_buffer.h"
 #include "output_volume_safety.h"
 #include "psfaudio.h"
 #include "radio.h"
@@ -81,14 +82,6 @@ struct AudioBackendHandlers {
   BackendSeekProc seek = nullptr;
   BackendTotalFramesProc totalFrames = nullptr;
   BackendWarningProc warning = nullptr;
-};
-
-struct AudioRingBuffer {
-  std::vector<float> data;
-  size_t capacityFrames = 0;
-  size_t readPos = 0;
-  size_t writePos = 0;
-  size_t bufferedFrames = 0;
 };
 
 struct AudioSampleRing {
@@ -197,7 +190,7 @@ struct AudioState {
   MidiAudioDecoder midi{};
   ma_device device{};
   Radio1938 radio1938{};
-  AudioRingBuffer m4aBuffer;
+  PlaybackSourceBuffer m4aBuffer;
   std::mutex m4aMutex;
   std::condition_variable m4aCv;
   std::thread m4aThread;
@@ -206,7 +199,8 @@ struct AudioState {
   std::string m4aInitError;
   std::atomic<bool> m4aThreadRunning{false};
   std::atomic<bool> m4aStop{false};
-  std::atomic<bool> m4aAtEnd{false};
+  std::atomic<bool> sourcePreparing{false};
+  std::atomic<bool> sourceAtEnd{false};
   std::thread decodeThread;
   std::atomic<bool> decodeThreadRunning{false};
   std::atomic<bool> decodeStop{false};
@@ -340,6 +334,8 @@ bool isAudioMode(AudioMode mode);
 void startAuditionWorker(AuditionTone tone);
 void stopAuditionWorker();
 void appendAudioTimingLogLine(const char* line);
+bool audioPlaybackFinishSeekPipelineTransition(AudioState* state,
+                                               bool resetRadio = true);
 void dataCallback(ma_device* device, void* output, const void* input,
                   ma_uint32 frameCount);
 void audioStreamReset(uint64_t framePos);
