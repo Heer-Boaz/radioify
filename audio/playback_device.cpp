@@ -25,8 +25,8 @@ static uint64_t rescalePlaybackDeviceFrames(uint64_t frames,
 }
 
 static void requestPlaybackDeviceDeclickRampUnlocked() {
-  audioOutputTransitionRequestFadeIn(gAudio.state.outputTransition,
-                                     gAudio.state.sampleRate);
+  audioPipelineTransitionRequestOutputFadeIn(gAudio.state.pipelineTransition,
+                                             gAudio.state.sampleRate);
 }
 
 static void invalidatePlaybackDeviceRuntimeState() {

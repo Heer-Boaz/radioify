@@ -26,7 +26,7 @@
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "nsfoptions.h"
-#include "output_transition.h"
+#include "pipeline_transition.h"
 #include "output_volume_safety.h"
 #include "psfaudio.h"
 #include "radio.h"
@@ -241,7 +241,7 @@ struct AudioState {
   std::atomic<int64_t> clipAlertUntilUs{0};
   std::atomic<bool> radioResetPending{false};
   OutputVolumeSafetyState outputSafety;
-  AudioOutputTransition outputTransition;
+  AudioPipelineTransition pipelineTransition;
   AudioSampleRing streamRb;
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};

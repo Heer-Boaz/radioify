@@ -1,5 +1,5 @@
 #include "audio/output_volume_safety.h"
-#include "audio/output_transition.h"
+#include "audio/pipeline_transition.h"
 
 #include <algorithm>
 #include <cmath>
@@ -69,8 +69,8 @@ void expectSlowReleaseAfterLimiting() {
 }
 
 void expectDeclickRampIsLinearPerFrame() {
-  AudioOutputTransition transition;
-  transition.fadeInRequestFrames.store(4, std::memory_order_relaxed);
+  AudioPipelineTransition transition;
+  audioPipelineTransitionRequestOutputFadeIn(transition, 400);
 
   float samples[] = {
       1.0f, 0.5f,
@@ -78,7 +78,7 @@ void expectDeclickRampIsLinearPerFrame() {
       1.0f, 0.5f,
       1.0f, 0.5f,
   };
-  audioOutputTransitionApplyFadeIn(transition, samples, 4, 2);
+  audioPipelineTransitionApplyFadeIn(transition, samples, 4, 2);
   expectNear(samples[0], 0.250f, 1e-6f, "ramp frame 0 left");
   expectNear(samples[1], 0.125f, 1e-6f, "ramp frame 0 right");
   expectNear(samples[2], 0.500f, 1e-6f, "ramp frame 1 left");
@@ -87,18 +87,47 @@ void expectDeclickRampIsLinearPerFrame() {
   expectNear(samples[5], 0.375f, 1e-6f, "ramp frame 2 right");
   expectNear(samples[6], 1.000f, 1e-6f, "ramp frame 3 left");
   expectNear(samples[7], 0.500f, 1e-6f, "ramp frame 3 right");
-  if (transition.fadeInFramesRemaining != 0 ||
-      transition.fadeInFramesTotal != 0) {
+  if (transition.outputFadeInFramesRemaining != 0 ||
+      transition.outputFadeInFramesTotal != 0) {
     fail("Declick ramp did not finish cleanly.");
   }
 }
 
+void expectSignalFadeArmsInputAndOutputBoundaries() {
+  AudioPipelineTransition transition;
+  audioPipelineTransitionRequestSignalFadeIn(transition, 400);
+
+  float input[] = {
+      1.0f, 1.0f,
+      1.0f, 1.0f,
+      1.0f, 1.0f,
+      1.0f, 1.0f,
+  };
+  audioPipelineTransitionApplyInputFadeIn(transition, input, 4, 2);
+  expectNear(input[0], 0.250f, 1e-6f, "input ramp frame 0 left");
+  expectNear(input[2], 0.500f, 1e-6f, "input ramp frame 1 left");
+  expectNear(input[4], 0.750f, 1e-6f, "input ramp frame 2 left");
+  expectNear(input[6], 1.000f, 1e-6f, "input ramp frame 3 left");
+
+  float output[] = {
+      1.0f, 1.0f,
+      1.0f, 1.0f,
+      1.0f, 1.0f,
+      1.0f, 1.0f,
+  };
+  audioPipelineTransitionApplyFadeIn(transition, output, 4, 2);
+  expectNear(output[0], 0.250f, 1e-6f, "output ramp frame 0 left");
+  expectNear(output[2], 0.500f, 1e-6f, "output ramp frame 1 left");
+  expectNear(output[4], 0.750f, 1e-6f, "output ramp frame 2 left");
+  expectNear(output[6], 1.000f, 1e-6f, "output ramp frame 3 left");
+}
+
 void expectDefaultDeclickRampFollowsSampleRate() {
-  if (audioOutputTransitionFrames(48000) != 480) {
-    fail("Default output ramp is not 10 ms at 48 kHz.");
+  if (audioPipelineTransitionFrames(48000) != 480) {
+    fail("Default pipeline transition ramp is not 10 ms at 48 kHz.");
   }
-  if (audioOutputTransitionFrames(0) != 1) {
-    fail("Default output ramp did not handle zero sample rate.");
+  if (audioPipelineTransitionFrames(0) != 1) {
+    fail("Default pipeline transition ramp did not handle zero sample rate.");
   }
 }
 
@@ -110,7 +139,7 @@ void expectTailFadeOnlyTouchesAudioTail() {
       0.4f, 0.20f,
       0.0f, 0.00f,
   };
-  audioOutputTransitionFadeTailToSilence(samples, 4, 2, 200);
+  audioPipelineTransitionFadeTailToSilence(samples, 4, 2, 200);
   expectNear(samples[0], 1.0f, 1e-6f, "tail fade frame 0 left");
   expectNear(samples[1], 0.5f, 1e-6f, "tail fade frame 0 right");
   expectNear(samples[2], 0.8f, 1e-6f, "tail fade frame 1 left");
@@ -125,11 +154,11 @@ void expectTailFadeOnlyTouchesAudioTail() {
 
 void expectRampBoundsStartStep() {
   constexpr uint32_t kSampleRate = 48000;
-  const uint32_t rampFrames = audioOutputTransitionFrames(kSampleRate);
-  AudioOutputTransition transition;
-  audioOutputTransitionRequestFadeIn(transition, kSampleRate);
+  const uint32_t rampFrames = audioPipelineTransitionFrames(kSampleRate);
+  AudioPipelineTransition transition;
+  audioPipelineTransitionRequestOutputFadeIn(transition, kSampleRate);
   std::vector<float> samples(static_cast<size_t>(rampFrames) + 16, 0.5f);
-  audioOutputTransitionApplyFadeIn(
+  audioPipelineTransitionApplyFadeIn(
       transition, samples.data(), static_cast<uint32_t>(samples.size()), 1);
 
   float previous = 0.0f;
@@ -146,9 +175,9 @@ void expectRampBoundsStartStep() {
 
 void expectTailFadeBoundsStopStep() {
   constexpr uint32_t kSampleRate = 48000;
-  const uint32_t rampFrames = audioOutputTransitionFrames(kSampleRate);
+  const uint32_t rampFrames = audioPipelineTransitionFrames(kSampleRate);
   std::vector<float> samples(static_cast<size_t>(rampFrames) + 16, 0.5f);
-  audioOutputTransitionFadeTailToSilence(
+  audioPipelineTransitionFadeTailToSilence(
       samples.data(), static_cast<uint32_t>(samples.size()), 1, kSampleRate);
 
   float previous = 0.5f;
@@ -165,50 +194,56 @@ void expectTailFadeBoundsStopStep() {
 }
 
 void expectDiscontinuityTransitionPhases() {
-  AudioOutputTransition transition;
-  audioOutputTransitionRequestDiscontinuity(transition, 48000);
-  if (!audioOutputTransitionActive(transition)) {
+  AudioPipelineTransition transition;
+  audioPipelineTransitionRequestDiscontinuity(transition, 48000);
+  if (!audioPipelineTransitionActive(transition)) {
     fail("Discontinuity transition was not active after request.");
   }
-  if (!audioOutputTransitionBeginFadeOut(transition)) {
+  if (!audioPipelineTransitionBeginFadeOut(transition)) {
     fail("Discontinuity transition did not begin fade-out.");
   }
-  if (!audioOutputTransitionWaitingForCommit(transition)) {
+  if (!audioPipelineTransitionWaitingForCommit(transition)) {
     fail("Discontinuity transition was not ready to commit after fade-out.");
   }
-  if (!audioOutputTransitionBeginCommit(transition)) {
+  if (!audioPipelineTransitionBeginCommit(transition)) {
     fail("Discontinuity transition did not begin commit.");
   }
-  if (!audioOutputTransitionFinishCommit(transition, 48000)) {
+  if (!audioPipelineTransitionFinishCommit(transition, 48000)) {
     fail("Discontinuity transition refused to finish the current request.");
   }
   if (transition.phase.load(std::memory_order_relaxed) !=
-      AudioOutputTransitionPhase::Idle) {
+      AudioPipelineTransitionPhase::Idle) {
     fail("Discontinuity transition did not return to idle.");
   }
   std::vector<float> samples(4, 1.0f);
-  audioOutputTransitionApplyFadeIn(transition, samples.data(), 4, 1);
+  audioPipelineTransitionApplyInputFadeIn(transition, samples.data(), 4, 1);
   if (!(samples[0] > 0.0f && samples[0] < samples[1] &&
         samples[1] < samples[2])) {
-    fail("Discontinuity transition did not arm fade-in after commit.");
+    fail("Discontinuity transition did not arm input fade-in after commit.");
+  }
+  std::fill(samples.begin(), samples.end(), 1.0f);
+  audioPipelineTransitionApplyFadeIn(transition, samples.data(), 4, 1);
+  if (!(samples[0] > 0.0f && samples[0] < samples[1] &&
+        samples[1] < samples[2])) {
+    fail("Discontinuity transition did not arm output fade-in after commit.");
   }
 }
 
 void expectSupersededDiscontinuityDoesNotClearNewRequest() {
-  AudioOutputTransition transition;
-  audioOutputTransitionRequestDiscontinuity(transition, 48000);
-  if (!audioOutputTransitionBeginFadeOut(transition)) {
+  AudioPipelineTransition transition;
+  audioPipelineTransitionRequestDiscontinuity(transition, 48000);
+  if (!audioPipelineTransitionBeginFadeOut(transition)) {
     fail("First discontinuity did not begin fade-out.");
   }
-  if (!audioOutputTransitionBeginCommit(transition)) {
+  if (!audioPipelineTransitionBeginCommit(transition)) {
     fail("First discontinuity did not begin commit.");
   }
-  audioOutputTransitionRequestDiscontinuity(transition, 48000);
-  if (audioOutputTransitionFinishCommit(transition, 48000)) {
+  audioPipelineTransitionRequestDiscontinuity(transition, 48000);
+  if (audioPipelineTransitionFinishCommit(transition, 48000)) {
     fail("Superseded discontinuity incorrectly returned to idle.");
   }
   if (transition.phase.load(std::memory_order_relaxed) !=
-      AudioOutputTransitionPhase::FadeOutRequested) {
+      AudioPipelineTransitionPhase::FadeOutRequested) {
     fail("Superseded discontinuity did not leave the newer request pending.");
   }
 }
@@ -220,6 +255,7 @@ int main() {
   expectLinearAttenuationAboveCeiling();
   expectSlowReleaseAfterLimiting();
   expectDeclickRampIsLinearPerFrame();
+  expectSignalFadeArmsInputAndOutputBoundaries();
   expectDefaultDeclickRampFollowsSampleRate();
   expectTailFadeOnlyTouchesAudioTail();
   expectRampBoundsStartStep();
