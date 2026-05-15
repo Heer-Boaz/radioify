@@ -1896,6 +1896,15 @@ int runTui(Options o) {
   auto buildCommands = [&]() {
     std::vector<CommandEntry> cmds;
     cmds.push_back({"Play/Pause", "Space", true, [&]() {
+                      if (audioIsFinished()) {
+                        const std::filesystem::path nowPlaying =
+                            audioGetNowPlaying();
+                        if (!nowPlaying.empty()) {
+                          playPlaybackTarget(
+                              {nowPlaying, audioGetTrackIndex()});
+                          return;
+                        }
+                      }
                       audioTogglePause();
                       markDirty();
                     }});

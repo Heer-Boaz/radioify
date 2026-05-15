@@ -507,7 +507,9 @@ void setPlaybackPaused(const PlaybackInputView& view,
       audioTogglePause();
     }
     view.player->setVideoPaused(false);
-    sendSeekRequest(view, signals, seekState, 0.0);
+    double targetSec = 0.0;
+    readPendingSeekTargetSec(seekState, &targetSec);
+    sendSeekRequest(view, signals, seekState, targetSec);
     *view.playbackState = PlaybackSessionState::Active;
     return;
   }

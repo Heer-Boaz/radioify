@@ -1965,6 +1965,23 @@ uint64_t audioStreamUpdateCounter() {
   return gAudio.state.streamUpdateCounter.load(std::memory_order_acquire);
 }
 
+static void requestAudioSeekFrame(int64_t target) {
+  if (target < 0) target = 0;
+  const uint64_t total = gAudio.state.totalFrames.load();
+  if (total > 0 && target > static_cast<int64_t>(total)) {
+    target = static_cast<int64_t>(total);
+  }
+  gAudio.state.pendingSeekFrames.store(target);
+  gAudio.state.seekRequested.store(true);
+  gAudio.state.finished.store(false);
+  gAudio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
+  gAudio.state.audioPrimed.store(false);
+  audioPipelineTransitionRequestDiscontinuity(gAudio.state.pipelineTransition,
+                                              gAudio.state.sampleRate);
+  gAudio.state.m4aCv.notify_all();
+  gAudio.state.decodeCv.notify_all();
+}
+
 std::filesystem::path audioGetNowPlaying() { return gAudio.nowPlaying; }
 
 int audioGetTrackIndex() {
@@ -2072,13 +2089,6 @@ AudioPerfStats audioGetPerfStats() {
 
 void audioTogglePause() {
   if (!gAudio.decoderReady) return;
-  const bool finished = gAudio.state.finished.load(std::memory_order_relaxed);
-  const bool externalStream =
-      gAudio.state.externalStream.load(std::memory_order_relaxed);
-  if (finished && !externalStream && !gAudio.nowPlaying.empty()) {
-    loadFileAt(gAudio.nowPlaying, 0, gAudio.trackIndex);
-    return;
-  }
   const bool wasPaused = gAudio.state.paused.load(std::memory_order_relaxed);
   if (!wasPaused) {
     gAudio.state.paused.store(true, std::memory_order_relaxed);
@@ -2114,20 +2124,7 @@ void audioSeekBy(int direction) {
   if (gAudio.state.seekRequested.load()) {
     current = gAudio.state.pendingSeekFrames.load();
   }
-  int64_t target = current + deltaFrames;
-  if (target < 0) target = 0;
-  uint64_t total = gAudio.state.totalFrames.load();
-  if (total > 0 && target > static_cast<int64_t>(total)) {
-    target = static_cast<int64_t>(total);
-  }
-  gAudio.state.pendingSeekFrames.store(target);
-  gAudio.state.seekRequested.store(true);
-  gAudio.state.finished.store(false);
-  gAudio.state.audioPrimed.store(false);
-  audioPipelineTransitionRequestDiscontinuity(gAudio.state.pipelineTransition,
-                                              gAudio.state.sampleRate);
-  gAudio.state.m4aCv.notify_all();
-  gAudio.state.decodeCv.notify_all();
+  requestAudioSeekFrame(current + deltaFrames);
 }
 
 void audioSeekToRatio(double ratio) {
@@ -2136,14 +2133,7 @@ void audioSeekToRatio(double ratio) {
   if (total == 0) return;
   ratio = std::clamp(ratio, 0.0, 1.0);
   int64_t target = static_cast<int64_t>(ratio * static_cast<double>(total));
-  gAudio.state.pendingSeekFrames.store(target);
-  gAudio.state.seekRequested.store(true);
-  gAudio.state.finished.store(false);
-  gAudio.state.audioPrimed.store(false);
-  audioPipelineTransitionRequestDiscontinuity(gAudio.state.pipelineTransition,
-                                              gAudio.state.sampleRate);
-  gAudio.state.m4aCv.notify_all();
-  gAudio.state.decodeCv.notify_all();
+  requestAudioSeekFrame(target);
 }
 
 void audioSeekToSec(double sec) {
@@ -2151,19 +2141,7 @@ void audioSeekToSec(double sec) {
   if (!std::isfinite(sec)) return;
   int64_t target =
       static_cast<int64_t>(std::llround(sec * gAudio.sampleRate));
-  if (target < 0) target = 0;
-  uint64_t total = gAudio.state.totalFrames.load();
-  if (total > 0 && static_cast<uint64_t>(target) > total) {
-    target = static_cast<int64_t>(total);
-  }
-  gAudio.state.pendingSeekFrames.store(target);
-  gAudio.state.seekRequested.store(true);
-  gAudio.state.finished.store(false);
-  gAudio.state.audioPrimed.store(false);
-  audioPipelineTransitionRequestDiscontinuity(gAudio.state.pipelineTransition,
-                                              gAudio.state.sampleRate);
-  gAudio.state.m4aCv.notify_all();
-  gAudio.state.decodeCv.notify_all();
+  requestAudioSeekFrame(target);
 }
 
 void audioToggleRadio() {
