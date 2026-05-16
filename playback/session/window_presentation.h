@@ -12,12 +12,6 @@ struct WindowPresentationRequest {
   bool textGrid = false;
 };
 
-inline bool shouldStartFullscreen(const WindowPlacementState& state) {
-  return state.pictureInPictureActive
-             ? state.pictureInPictureRestoreFullscreen
-             : state.fullscreenActive;
-}
-
 bool apply(VideoWindow& window, WindowPresentationRequest request);
 
 void setTextGrid(VideoWindow& window, bool enabled);

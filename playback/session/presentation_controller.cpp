@@ -68,6 +68,14 @@ bool PlaybackPresentationController::toggleWindow(
     return true;
   }
 
+  const bool enteringWindow = !isWindowPlaybackLayout(output.desiredLayout());
+  if (enteringWindow) {
+    requestWindowPresentation(
+        defaultNonFullscreenPresentation(PlaybackPresentationFamily::Framebuffer),
+        false);
+  } else {
+    clearPendingWindowPresentation();
+  }
   output.requestLayout(togglePlaybackLayout(output.desiredLayout()));
   markPresentationChanged(redraw, forceRefreshArt);
   if (isWindowPlaybackLayout(output.desiredLayout())) {

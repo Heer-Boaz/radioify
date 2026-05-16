@@ -11,7 +11,6 @@
 #include "playback/video/state/machine.h"
 #include "playback/video/enhancement/pipeline.h"
 #include "playback/session/presentation_policy.h"
-#include "playback/session/window_presentation.h"
 #include "clock.h"
 #include "queues.h"
 
@@ -162,9 +161,9 @@ int main() {
                    playback_video_control::EventType::FrameStepRequest),
                "Frame steps must remain explicit events after seeks");
   ok &= expect(!playback_video_control::shouldCoalesceQueuedEvent(
-                   playback_video_control::EventType::FrameStepPresented,
+                   playback_video_control::EventType::FirstFramePresented,
                    playback_video_control::EventType::PauseRequest),
-               "Frame-step presentation events must not be folded into "
+               "First-frame presentation events must not be folded into "
                "transport commands");
 
   playback_video_state_machine::PipelineSnapshot stepOpeningReady{};
@@ -988,26 +987,10 @@ int main() {
                                      PlaybackPresentationMode::PictureInPicture})
                    .target == PlaybackPresentationMode::Fullscreen,
                "Framebuffer PiP must enter fullscreen");
-  WindowPlacementState fullscreenPlacement{};
-  fullscreenPlacement.fullscreenActive = true;
-  ok &= expect(playback_session_window::shouldStartFullscreen(
-                   fullscreenPlacement),
-               "fullscreen placement must start the next window fullscreen");
-  WindowPlacementState windowPlacement{};
-  ok &= expect(!playback_session_window::shouldStartFullscreen(
-                   windowPlacement),
-               "windowed placement must start the next window windowed");
-  WindowPlacementState fullscreenRestoredPipPlacement{};
-  fullscreenRestoredPipPlacement.pictureInPictureActive = true;
-  fullscreenRestoredPipPlacement.pictureInPictureRestoreFullscreen = true;
-  ok &= expect(playback_session_window::shouldStartFullscreen(
-                   fullscreenRestoredPipPlacement),
-               "PiP that restores fullscreen must start from fullscreen");
-  WindowPlacementState windowRestoredPipPlacement{};
-  windowRestoredPipPlacement.pictureInPictureActive = true;
-  ok &= expect(!playback_session_window::shouldStartFullscreen(
-                   windowRestoredPipPlacement),
-               "PiP without fullscreen restore must not start fullscreen");
+  ok &= expect(defaultNonFullscreenPresentation(
+                   PlaybackPresentationFamily::Framebuffer) ==
+                   PlaybackPresentationMode::PictureInPicture,
+               "Framebuffer non-fullscreen default must be PiP");
   ok &= expect(playback_overlay::overlayCellCountForPixels(719, 21) == 35,
                "overlayCellCountForPixels must round rows up");
   ok &= expect(playback_overlay::overlayCellCountForPixels(960, 9) == 107,

@@ -88,14 +88,10 @@ struct WindowPresenter::Impl {
     thread = std::thread(
         [this, &player, buildUiState, overlayVisible, buildTextGridPresentation,
          startGate, initialState]() {
-          const bool startFullscreen =
-              !initialState || !initialState->hasLayout ||
-              playback_session_window::shouldStartFullscreen(
-                  initialState->windowPlacement);
           const bool opened =
               window.Open(VideoWindow::kDefaultVideoClientWidth,
                           VideoWindow::kDefaultVideoClientHeight,
-                          RADIOIFY_APP_NAME " Output", startFullscreen);
+                          RADIOIFY_APP_NAME " Output", false);
           if (opened) {
             window.EnableFileDrop();
             if (initialState && initialState->hasLayout) {
