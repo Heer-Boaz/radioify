@@ -93,6 +93,7 @@ static bool writeQueuedSamples(AudioState* state,
                                int64_t ptsUs,
                                int serial,
                                bool allowBlock,
+                               bool allowCommitInProgressWrite,
                                uint64_t* writtenFrames);
 static bool startDecodeWorker(const AudioBackendHandlers* backend,
                               uint64_t startFrame);
@@ -448,12 +449,25 @@ static bool waitForQueuedPlaybackSourcePrimed(AudioState* state,
       state->sourceAtEnd.load(std::memory_order_relaxed));
 }
 
+static bool queuedSourceWriteBlockedByTransition(const AudioState* state,
+                                                 bool allowCommitInProgressWrite) {
+  if (!state || state->externalStream.load(std::memory_order_relaxed)) {
+    return false;
+  }
+  if (!audioPipelineTransitionActive(state->pipelineTransition)) {
+    return false;
+  }
+  return !allowCommitInProgressWrite ||
+         !audioPipelineTransitionCommitInProgress(state->pipelineTransition);
+}
+
 static bool writeQueuedSamples(AudioState* state,
                                float* interleaved,
                                uint64_t frames,
                                int64_t ptsUs,
                                int serial,
                                bool allowBlock,
+                               bool allowCommitInProgressWrite,
                                uint64_t* writtenFrames) {
   if (writtenFrames) {
     *writtenFrames = 0;
@@ -496,8 +510,8 @@ static bool writeQueuedSamples(AudioState* state,
   float* cursor = interleaved;
   uint64_t totalWritten = 0;
   while (remaining > 0) {
-    if (!state->externalStream.load(std::memory_order_relaxed) &&
-        audioPipelineTransitionActive(state->pipelineTransition)) {
+    if (queuedSourceWriteBlockedByTransition(state,
+                                             allowCommitInProgressWrite)) {
       return false;
     }
     if (serial != state->streamSerial.load(std::memory_order_relaxed)) {
@@ -514,7 +528,8 @@ static bool writeQueuedSamples(AudioState* state,
       std::unique_lock<std::mutex> lock(state->decodeMutex);
       state->decodeCv.wait_for(lock, std::chrono::milliseconds(5), [&]() {
         return state->decodeStop.load(std::memory_order_relaxed) ||
-               audioPipelineTransitionActive(state->pipelineTransition) ||
+               queuedSourceWriteBlockedByTransition(
+                   state, allowCommitInProgressWrite) ||
                !state->streamQueueEnabled.load(std::memory_order_relaxed) ||
                serial != state->streamSerial.load(std::memory_order_relaxed) ||
                state->streamRb.writableFrames() > 0;
@@ -586,6 +601,12 @@ static bool startDecodeWorker(const AudioBackendHandlers* backend,
           seekCommitPending = false;
         };
         while (!gAudio.state.decodeStop.load(std::memory_order_relaxed)) {
+          if (seekCommitPending &&
+              !audioPipelineTransitionCommitInProgress(
+                  gAudio.state.pipelineTransition)) {
+            seekCommitPending = false;
+          }
+
           if (!seekCommitPending && backend->seek &&
               gAudio.state.seekRequested.load(std::memory_order_relaxed) &&
               audioPipelineTransitionBeginCommit(
@@ -678,7 +699,7 @@ static bool startDecodeWorker(const AudioBackendHandlers* backend,
                       &gAudio.state,
                       buffer.data() +
                           static_cast<size_t>(offset) * workerChannels,
-                      remaining, ptsUs, 0, true, &written)) {
+                      remaining, ptsUs, 0, true, seekCommitPending, &written)) {
                 remaining = 0;
                 break;
               }
@@ -1827,7 +1848,7 @@ bool audioStreamWriteSamples(float* interleaved, uint64_t frames,
     return false;
   }
   return writeQueuedSamples(&gAudio.state, interleaved, frames, ptsUs, serial,
-                            allowBlock, writtenFrames);
+                            allowBlock, false, writtenFrames);
 }
 
 void audioStreamPrimeClock(int serial, int64_t targetPtsUs) {

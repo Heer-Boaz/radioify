@@ -89,6 +89,12 @@ bool audioPipelineTransitionWaitingForCommit(
          phase == AudioPipelineTransitionPhase::CommitInProgress;
 }
 
+bool audioPipelineTransitionCommitInProgress(
+    const AudioPipelineTransition& transition) {
+  return transition.phase.load(std::memory_order_relaxed) ==
+         AudioPipelineTransitionPhase::CommitInProgress;
+}
+
 bool audioPipelineTransitionActive(const AudioPipelineTransition& transition) {
   return transition.phase.load(std::memory_order_relaxed) !=
          AudioPipelineTransitionPhase::Idle;

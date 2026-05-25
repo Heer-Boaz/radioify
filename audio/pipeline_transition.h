@@ -47,6 +47,9 @@ bool audioPipelineTransitionBeginCommit(AudioPipelineTransition& transition);
 bool audioPipelineTransitionWaitingForCommit(
     const AudioPipelineTransition& transition);
 
+bool audioPipelineTransitionCommitInProgress(
+    const AudioPipelineTransition& transition);
+
 bool audioPipelineTransitionActive(const AudioPipelineTransition& transition);
 
 bool audioPipelineTransitionFinishCommit(AudioPipelineTransition& transition,

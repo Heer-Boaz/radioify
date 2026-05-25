@@ -213,6 +213,9 @@ void expectDiscontinuityTransitionPhases() {
   if (!audioPipelineTransitionWaitingForCommit(transition)) {
     fail("Discontinuity transition did not hold output during commit.");
   }
+  if (!audioPipelineTransitionCommitInProgress(transition)) {
+    fail("Discontinuity transition did not expose commit-in-progress state.");
+  }
   if (!audioPipelineTransitionFinishCommit(transition, 48000)) {
     fail("Discontinuity transition refused to finish the current request.");
   }
@@ -231,6 +234,21 @@ void expectDiscontinuityTransitionPhases() {
   if (!(samples[0] > 0.0f && samples[0] < samples[1] &&
         samples[1] < samples[2])) {
     fail("Discontinuity transition did not arm output fade-in after commit.");
+  }
+}
+
+void expectSupersededDiscontinuityLeavesCommitInProgress() {
+  AudioPipelineTransition transition;
+  audioPipelineTransitionRequestDiscontinuity(transition, 48000);
+  if (!audioPipelineTransitionBeginFadeOut(transition)) {
+    fail("Superseded commit test did not begin fade-out.");
+  }
+  if (!audioPipelineTransitionBeginCommit(transition)) {
+    fail("Superseded commit test did not begin commit.");
+  }
+  audioPipelineTransitionRequestDiscontinuity(transition, 48000);
+  if (audioPipelineTransitionCommitInProgress(transition)) {
+    fail("Superseded discontinuity left the old commit writable.");
   }
 }
 
@@ -317,6 +335,7 @@ int main() {
   expectRampBoundsStartStep();
   expectTailFadeBoundsStopStep();
   expectDiscontinuityTransitionPhases();
+  expectSupersededDiscontinuityLeavesCommitInProgress();
   expectSupersededDiscontinuityDoesNotClearNewRequest();
   expectPlaybackSourcePrimingBudget();
   expectPlaybackSourceBufferWrapsCleanly();
