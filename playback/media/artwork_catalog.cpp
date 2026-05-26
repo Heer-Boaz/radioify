@@ -25,10 +25,6 @@ constexpr int kArtworkBitmapWidth = 680;
 constexpr int kArtworkBitmapHeight = 680;
 constexpr int kArtworkMaxCols = 48;
 constexpr int kArtworkMaxRows = 48;
-constexpr int kPosterMinCols = 16;
-constexpr int kPosterMaxCols = 34;
-constexpr int kPosterMinRows = 10;
-constexpr int kPosterMaxRows = 18;
 
 std::string trimAscii(std::string value) {
   while (!value.empty() &&
@@ -196,8 +192,8 @@ bool buildAsciiPosterArtwork(const PlaybackMediaDisplayRequest& request,
     return false;
   }
 
-  const int cols = std::clamp(maxWidth, kPosterMinCols, kPosterMaxCols);
-  const int rows = std::clamp(maxHeight, kPosterMinRows, kPosterMaxRows);
+  const int cols = std::max(1, maxWidth);
+  const int rows = std::max(1, maxHeight);
   out->width = cols;
   out->height = rows;
   out->cells.assign(static_cast<size_t>(cols) * static_cast<size_t>(rows), {});

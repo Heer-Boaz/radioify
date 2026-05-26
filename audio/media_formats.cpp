@@ -53,7 +53,7 @@ bool isSupportedMediaExt(const std::filesystem::path& path) {
 
 bool isMiniaudioExt(const std::filesystem::path& path) {
   const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac";
+  return ext == ".wav" || ext == ".mp3";
 }
 
 bool isFlacExt(const std::filesystem::path& path) {

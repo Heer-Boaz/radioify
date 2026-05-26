@@ -18,7 +18,6 @@
 #include "audition_worker.h"
 #include "clock.h"
 #include "ffmpegaudio.h"
-#include "flacaudio.h"
 #include "gmeaudio.h"
 #include "gsfaudio.h"
 #include "kssaudio.h"
@@ -43,7 +42,6 @@ constexpr uint32_t kRadioProcessChannels = 1u;
 struct AudioState {
   ma_decoder decoder{};
   FfmpegAudioDecoder ffmpeg{};
-  FlacAudioDecoder flac{};
   GmeAudioDecoder gme{};
   GsfAudioDecoder gsf{};
   VgmAudioDecoder vgm{};

@@ -375,6 +375,16 @@ radioify_link_repo_target(audio_output_safety_tests)
 add_test(NAME audio_output_safety_tests
          COMMAND $<TARGET_FILE:audio_output_safety_tests>)
 
+add_executable(audio_media_format_tests)
+target_sources(audio_media_format_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_audio_media_format_tests>
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+)
+radioify_link_repo_target(audio_media_format_tests)
+add_test(NAME audio_media_format_tests
+         COMMAND $<TARGET_FILE:audio_media_format_tests>)
+
 add_executable(ascii_shader_tests)
 target_sources(ascii_shader_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_ascii_shader_tests>

@@ -8,7 +8,6 @@ radioify_add_module_object_library(radioify_audio
   ${CMAKE_CURRENT_SOURCE_DIR}/audition_worker.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/audioplayback.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ffmpegaudio.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/flacaudio.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gmeaudio.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gsfaudio.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/kssaudio.cpp

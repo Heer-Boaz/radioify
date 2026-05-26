@@ -11,7 +11,6 @@ enum class AudioMode : int {
   Stream,
   M4a,
   Ffmpeg,
-  Flac,
   Miniaudio,
   Gme,
   Midi,

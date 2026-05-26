@@ -42,26 +42,6 @@ bool totalFfmpegBackend(uint64_t* outFrames) {
   return gAudio.state.ffmpeg.getTotalFrames(outFrames);
 }
 
-bool initFlacBackend(const std::filesystem::path& file, uint64_t, int,
-                     std::string* error) {
-  return gAudio.state.flac.init(file, gAudio.channels, gAudio.sampleRate,
-                                error);
-}
-
-void uninitFlacBackend() { gAudio.state.flac.uninit(); }
-
-bool readFlacBackend(float* out, uint32_t frameCount, uint64_t* framesRead) {
-  return gAudio.state.flac.readFrames(out, frameCount, framesRead);
-}
-
-bool seekFlacBackend(uint64_t frame) {
-  return gAudio.state.flac.seekToFrame(frame);
-}
-
-bool totalFlacBackend(uint64_t* outFrames) {
-  return gAudio.state.flac.getTotalFrames(outFrames);
-}
-
 bool initKssBackend(const std::filesystem::path& file, uint64_t, int trackIndex,
                     std::string* error) {
   return gAudio.state.kss.init(file, gAudio.channels, gAudio.sampleRate, error,
@@ -240,10 +220,6 @@ const AudioBackendHandlers kBackendFfmpeg{
     AudioMode::Ffmpeg, false, true, true, true, initFfmpegBackend,
     uninitFfmpegBackend, readFfmpegBackend, seekFfmpegBackend,
     totalFfmpegBackend, nullptr};
-const AudioBackendHandlers kBackendFlac{
-    AudioMode::Flac, false, true, true, true, initFlacBackend,
-    uninitFlacBackend, readFlacBackend, seekFlacBackend, totalFlacBackend,
-    nullptr};
 const AudioBackendHandlers kBackendKss{
     AudioMode::Kss, true, true, true, true, initKssBackend,
     uninitKssBackend, readKssBackend, seekKssBackend, totalKssBackend,
@@ -280,7 +256,7 @@ struct BackendSelector {
 
 const BackendSelector kBackends[] = {
     {isM4aExt, &kBackendM4a},            {isOggExt, &kBackendFfmpeg},
-    {isFlacExt, &kBackendFlac},          {isMiniaudioExt, &kBackendMiniaudio},
+    {isFlacExt, &kBackendFfmpeg},        {isMiniaudioExt, &kBackendMiniaudio},
     {isGmeExt, &kBackendGme},            {isMidiExt, &kBackendMidi},
     {isGsfExt, &kBackendGsf},            {isVgmExt, &kBackendVgm},
     {isKssExt, &kBackendKss},            {isPsfExt, &kBackendPsf},
