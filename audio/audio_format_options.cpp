@@ -2,8 +2,38 @@
 #include "audioplayback.h"
 
 #include "media_formats.h"
+#include "playback_backend.h"
 
 #include <cmath>
+
+constexpr int kVgmSpeedStepCount = 6;
+constexpr int kVgmVolumeStepCount = 6;
+constexpr int kVgmLoopSteps[] = {0, 1, 2, 3, 4, 6, 8, 12, 16};
+constexpr int kVgmFadeStepsMs[] = {0, 1000, 2000, 3000, 5000, 8000, 10000,
+                                   15000};
+constexpr int kVgmEndSilenceStepsMs[] = {0, 250, 500, 1000, 2000, 3000, 5000};
+constexpr uint32_t kVgmSampleRateSteps[] = {
+    0, 11025, 22050, 32000, 44100, 48000, 88200, 96000};
+
+template <typename T>
+int findIndex(const T* values, size_t count, T value) {
+  for (size_t i = 0; i < count; ++i) {
+    if (values[i] == value) return static_cast<int>(i);
+  }
+  return 0;
+}
+
+int advanceIndex(int idx, int count, int direction) {
+  if (count <= 0) return 0;
+  if (direction > 0) {
+    ++idx;
+    if (idx >= count) idx = 0;
+  } else {
+    --idx;
+    if (idx < 0) idx = count - 1;
+  }
+  return idx;
+}
 
 float clampHz(float hz, uint32_t sampleRate) {
   float maxHz = static_cast<float>(sampleRate) * 0.45f;
@@ -147,17 +177,6 @@ bool buildSccAuditionTone(const KssInstrumentProfile& profile,
   out->scc = scc;
   out->gain = kAuditionGain;
   return true;
-}
-
-float renderAuditionSample(AuditionTone& tone) {
-  if (tone.kind == AuditionKind::Psg) {
-    if (!tone.psg) return 0.0f;
-    int16_t sample = PSG_calc(tone.psg);
-    return (static_cast<float>(sample) / 32768.0f) * tone.gain;
-  }
-  if (!tone.scc) return 0.0f;
-  int16_t sample = SCC_calc(tone.scc);
-  return (static_cast<float>(sample) / 32768.0f) * tone.gain;
 }
 
 static void reloadKssWithOptions() {
