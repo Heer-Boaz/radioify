@@ -1,5 +1,6 @@
 #include "radioify_thumbnail_provider.h"
 
+#include "radioify_explorer_config.h"
 #include "radioify_explorer_module.h"
 
 #include <shlguid.h>
@@ -25,6 +26,19 @@ extern "C" {
 namespace {
 
 constexpr AVRational kAvTimeBaseQ{1, AV_TIME_BASE};
+constexpr ULONGLONG kFfmpegThumbnailBudgetMs =
+    RADIOIFY_WIN11_EXPLORER_THUMBNAIL_BUDGET_MS;
+static_assert(kFfmpegThumbnailBudgetMs > 0);
+constexpr int64_t kThumbnailProbeBytes = 256 * 1024;
+constexpr int64_t kThumbnailAnalyzeDurationUs = 250 * 1000;
+constexpr int kMaxThumbnailPackets = 512;
+constexpr int kMaxThumbnailVideoPackets = 48;
+constexpr HRESULT kThumbnailTimeoutHresult =
+    HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+
+bool thumbnailDeadlineExpired(ULONGLONG deadlineTick) {
+  return deadlineTick != 0 && GetTickCount64() >= deadlineTick;
+}
 
 struct AvCodecContextHandle {
   ~AvCodecContextHandle() {
@@ -81,6 +95,7 @@ struct SwsContextHandle {
 struct AvInputSource {
   ComPtr<IStream> stream;
   int64_t size = 0;
+  ULONGLONG deadlineTick = 0;
 };
 
 struct AvIoContextHandle {
@@ -330,15 +345,27 @@ HRESULT streamSize(IStream* stream, int64_t* outSize) {
   return hr;
 }
 
-HRESULT openStreamAvSource(IStream* mediaStream, AvInputSource* source) {
+HRESULT openStreamAvSource(IStream* mediaStream,
+                           ULONGLONG deadlineTick,
+                           AvInputSource* source) {
   if (!mediaStream || !source) return E_POINTER;
+  source->deadlineTick = deadlineTick;
+  if (thumbnailDeadlineExpired(source->deadlineTick)) {
+    return kThumbnailTimeoutHresult;
+  }
 
   HRESULT hr = mediaStream->QueryInterface(IID_PPV_ARGS(source->stream.put()));
   if (FAILED(hr)) return hr;
+  if (thumbnailDeadlineExpired(source->deadlineTick)) {
+    return kThumbnailTimeoutHresult;
+  }
 
   hr = streamSize(source->stream.get(), &source->size);
   if (FAILED(hr)) return hr;
   if (source->size <= 0) return HRESULT_FROM_WIN32(ERROR_HANDLE_EOF);
+  if (thumbnailDeadlineExpired(source->deadlineTick)) {
+    return kThumbnailTimeoutHresult;
+  }
 
   hr = seekStreamStart(source->stream.get());
   if (FAILED(hr)) return hr;
@@ -351,6 +378,8 @@ int readAvSource(void* opaque, uint8_t* buffer, int bufferSize) {
   if (bufferSize == 0) return 0;
 
   AvInputSource* source = static_cast<AvInputSource*>(opaque);
+  if (thumbnailDeadlineExpired(source->deadlineTick)) return AVERROR_EXIT;
+
   ULONG bytesRead = 0;
   const HRESULT hr = source->stream->Read(buffer,
                                          static_cast<ULONG>(bufferSize),
@@ -364,6 +393,7 @@ int64_t seekAvSource(void* opaque, int64_t offset, int whence) {
   if (!opaque) return AVERROR(EINVAL);
 
   AvInputSource* source = static_cast<AvInputSource*>(opaque);
+  if (thumbnailDeadlineExpired(source->deadlineTick)) return AVERROR_EXIT;
   if (whence == AVSEEK_SIZE) return source->size;
 
   DWORD streamOrigin = STREAM_SEEK_SET;
@@ -389,14 +419,25 @@ int64_t seekAvSource(void* opaque, int64_t offset, int whence) {
   return static_cast<int64_t>(position.QuadPart);
 }
 
-HRESULT openMediaInput(IStream* mediaStream, AvFormatInput* input) {
+int interruptAvSource(void* opaque) {
+  const AvInputSource* source = static_cast<const AvInputSource*>(opaque);
+  return source && thumbnailDeadlineExpired(source->deadlineTick) ? 1 : 0;
+}
+
+HRESULT openMediaInput(IStream* mediaStream,
+                       ULONGLONG deadlineTick,
+                       AvFormatInput* input) {
   if (!input) return E_POINTER;
 
-  HRESULT hr = openStreamAvSource(mediaStream, &input->source);
+  HRESULT hr = openStreamAvSource(mediaStream, deadlineTick, &input->source);
   if (FAILED(hr)) return hr;
 
   input->ptr = avformat_alloc_context();
   if (!input->ptr) return E_OUTOFMEMORY;
+  input->ptr->interrupt_callback.callback = interruptAvSource;
+  input->ptr->interrupt_callback.opaque = &input->source;
+  input->ptr->probesize = kThumbnailProbeBytes;
+  input->ptr->max_analyze_duration = kThumbnailAnalyzeDurationUs;
 
   constexpr int kAvIoBufferSize = 64 * 1024;
   unsigned char* ioBuffer =
@@ -417,27 +458,32 @@ HRESULT openMediaInput(IStream* mediaStream, AvFormatInput* input) {
   AVFormatContext* format = input->ptr;
   const int openErr = avformat_open_input(&format, nullptr, nullptr, nullptr);
   input->ptr = format;
-  if (openErr < 0) return HRESULT_FROM_WIN32(ERROR_FILE_INVALID);
+  if (openErr < 0) {
+    return thumbnailDeadlineExpired(input->source.deadlineTick)
+               ? kThumbnailTimeoutHresult
+               : HRESULT_FROM_WIN32(ERROR_FILE_INVALID);
+  }
 
   const int infoErr = avformat_find_stream_info(input->get(), nullptr);
-  if (infoErr < 0) return HRESULT_FROM_WIN32(ERROR_FILE_INVALID);
+  if (infoErr < 0) {
+    return thumbnailDeadlineExpired(input->source.deadlineTick)
+               ? kThumbnailTimeoutHresult
+               : HRESULT_FROM_WIN32(ERROR_FILE_INVALID);
+  }
   return S_OK;
 }
 
-HRESULT loadEmbeddedArtworkBitmap(IStream* mediaStream,
-                                  UINT requestedSize,
-                                  HBITMAP* outBitmap,
-                                  WTS_ALPHATYPE* outAlpha) {
+HRESULT loadEmbeddedArtworkBitmapFromInput(AVFormatContext* format,
+                                           UINT requestedSize,
+                                           HBITMAP* outBitmap,
+                                           WTS_ALPHATYPE* outAlpha) {
   if (!outBitmap || !outAlpha) return E_POINTER;
   *outBitmap = nullptr;
   *outAlpha = WTSAT_UNKNOWN;
+  if (!format) return E_POINTER;
 
-  AvFormatInput input;
-  HRESULT hr = openMediaInput(mediaStream, &input);
-  if (FAILED(hr)) return hr;
-
-  for (unsigned int i = 0; i < input->nb_streams; ++i) {
-    AVStream* stream = input->streams[i];
+  for (unsigned int i = 0; i < format->nb_streams; ++i) {
+    AVStream* stream = format->streams[i];
     if (!stream || !(stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) {
       continue;
     }
@@ -445,7 +491,7 @@ HRESULT loadEmbeddedArtworkBitmap(IStream* mediaStream,
     if (!pic.data || pic.size <= 0) {
       continue;
     }
-    hr = loadWicThumbnailBitmapFromMemory(
+    const HRESULT hr = loadWicThumbnailBitmapFromMemory(
         pic.data, static_cast<size_t>(pic.size), requestedSize, outBitmap,
         outAlpha);
     if (SUCCEEDED(hr)) return hr;
@@ -559,10 +605,13 @@ HRESULT copyVideoFrameToBitmap(const AVFrame* frame,
 
 HRESULT sendPacketAndReceiveThumbnail(AVCodecContext* codec,
                                       const AVPacket* packet,
+                                      ULONGLONG deadlineTick,
                                       UINT requestedSize,
                                       HBITMAP* outBitmap,
                                       WTS_ALPHATYPE* outAlpha) {
   if (!codec || !outBitmap || !outAlpha) return E_POINTER;
+  if (thumbnailDeadlineExpired(deadlineTick)) return kThumbnailTimeoutHresult;
+
   const int sendErr = avcodec_send_packet(codec, packet);
   if (sendErr < 0 && sendErr != AVERROR_EOF && sendErr != AVERROR(EAGAIN)) {
     return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
@@ -572,6 +621,8 @@ HRESULT sendPacketAndReceiveThumbnail(AVCodecContext* codec,
   if (!frame.get()) return E_OUTOFMEMORY;
 
   for (;;) {
+    if (thumbnailDeadlineExpired(deadlineTick)) return kThumbnailTimeoutHresult;
+
     const int receiveErr = avcodec_receive_frame(codec, frame.get());
     if (receiveErr == AVERROR(EAGAIN) || receiveErr == AVERROR_EOF) {
       return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
@@ -588,6 +639,7 @@ HRESULT sendPacketAndReceiveThumbnail(AVCodecContext* codec,
 HRESULT decodeVideoThumbnailFromCurrentPosition(AVFormatContext* format,
                                                 AVCodecContext* codec,
                                                 int streamIndex,
+                                                ULONGLONG deadlineTick,
                                                 UINT requestedSize,
                                                 HBITMAP* outBitmap,
                                                 WTS_ALPHATYPE* outAlpha) {
@@ -598,73 +650,33 @@ HRESULT decodeVideoThumbnailFromCurrentPosition(AVFormatContext* format,
   AvPacketHandle packet;
   if (!packet.get()) return E_OUTOFMEMORY;
 
-  constexpr int kMaxThumbnailPackets = 4096;
-  constexpr int kMaxThumbnailVideoPackets = 192;
   int videoPacketCount = 0;
   for (int packetCount = 0; packetCount < kMaxThumbnailPackets; ++packetCount) {
+    if (thumbnailDeadlineExpired(deadlineTick)) return kThumbnailTimeoutHresult;
+
     const int readErr = av_read_frame(format, packet.get());
-    if (readErr < 0) break;
+    if (readErr < 0) {
+      if (readErr == AVERROR_EXIT ||
+          thumbnailDeadlineExpired(deadlineTick)) {
+        return kThumbnailTimeoutHresult;
+      }
+      break;
+    }
 
     HRESULT hr = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
     if (packet->stream_index == streamIndex) {
       ++videoPacketCount;
-      hr = sendPacketAndReceiveThumbnail(codec, packet.get(), requestedSize,
-                                         outBitmap, outAlpha);
+      hr = sendPacketAndReceiveThumbnail(codec, packet.get(), deadlineTick,
+                                         requestedSize, outBitmap, outAlpha);
     }
     av_packet_unref(packet.get());
     if (SUCCEEDED(hr)) return hr;
+    if (hr == kThumbnailTimeoutHresult) return hr;
     if (videoPacketCount >= kMaxThumbnailVideoPackets) break;
   }
 
-  return sendPacketAndReceiveThumbnail(codec, nullptr, requestedSize, outBitmap,
-                                       outAlpha);
-}
-
-HRESULT primeVideoDecoderFromCurrentPosition(AVFormatContext* format,
-                                             AVCodecContext* codec,
-                                             int streamIndex) {
-  if (!format || !codec || streamIndex < 0) return E_POINTER;
-
-  AvPacketHandle packet;
-  AvFrameHandle frame;
-  if (!packet.get() || !frame.get()) return E_OUTOFMEMORY;
-
-  constexpr int kMaxThumbnailPackets = 4096;
-  constexpr int kMaxThumbnailVideoPackets = 192;
-  int videoPacketCount = 0;
-  for (int packetCount = 0; packetCount < kMaxThumbnailPackets; ++packetCount) {
-    const int readErr = av_read_frame(format, packet.get());
-    if (readErr < 0) break;
-
-    if (packet->stream_index == streamIndex) {
-      ++videoPacketCount;
-      const int sendErr = avcodec_send_packet(codec, packet.get());
-      if (sendErr < 0 && sendErr != AVERROR(EAGAIN) &&
-          sendErr != AVERROR_EOF) {
-        av_packet_unref(packet.get());
-        return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
-      }
-
-      for (;;) {
-        const int receiveErr = avcodec_receive_frame(codec, frame.get());
-        if (receiveErr == 0) {
-          av_frame_unref(frame.get());
-          av_packet_unref(packet.get());
-          return S_OK;
-        }
-        if (receiveErr == AVERROR(EAGAIN) || receiveErr == AVERROR_EOF) {
-          break;
-        }
-        av_packet_unref(packet.get());
-        return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
-      }
-    }
-
-    av_packet_unref(packet.get());
-    if (videoPacketCount >= kMaxThumbnailVideoPackets) break;
-  }
-
-  return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+  return sendPacketAndReceiveThumbnail(codec, nullptr, deadlineTick,
+                                       requestedSize, outBitmap, outAlpha);
 }
 
 int64_t thumbnailSeekTimestamp(AVFormatContext* format, AVStream* stream) {
@@ -687,34 +699,38 @@ int64_t thumbnailSeekTimestamp(AVFormatContext* format, AVStream* stream) {
 HRESULT seekVideoThumbnailPosition(AVFormatContext* format,
                                    AVCodecContext* codec,
                                    int streamIndex,
+                                   ULONGLONG deadlineTick,
                                    int64_t timestamp) {
   if (!format || !codec || streamIndex < 0) return E_POINTER;
   if (timestamp == AV_NOPTS_VALUE) return S_FALSE;
+  if (thumbnailDeadlineExpired(deadlineTick)) return kThumbnailTimeoutHresult;
 
   const int seekErr =
       av_seek_frame(format, streamIndex, timestamp, AVSEEK_FLAG_BACKWARD);
-  if (seekErr < 0) return S_FALSE;
+  if (seekErr < 0) {
+    return thumbnailDeadlineExpired(deadlineTick) ? kThumbnailTimeoutHresult
+                                                 : S_FALSE;
+  }
   avcodec_flush_buffers(codec);
   return S_OK;
 }
 
-HRESULT loadVideoFrameThumbnailBitmap(IStream* mediaStream,
-                                      UINT requestedSize,
-                                      HBITMAP* outBitmap,
-                                      WTS_ALPHATYPE* outAlpha) {
+HRESULT loadVideoFrameThumbnailBitmapFromInput(AvFormatInput* input,
+                                               ULONGLONG deadlineTick,
+                                               UINT requestedSize,
+                                               HBITMAP* outBitmap,
+                                               WTS_ALPHATYPE* outAlpha) {
   if (!outBitmap || !outAlpha) return E_POINTER;
   *outBitmap = nullptr;
   *outAlpha = WTSAT_UNKNOWN;
-
-  AvFormatInput input;
-  HRESULT hr = openMediaInput(mediaStream, &input);
-  if (FAILED(hr)) return hr;
+  if (!input || !input->get()) return E_POINTER;
+  if (thumbnailDeadlineExpired(deadlineTick)) return kThumbnailTimeoutHresult;
 
   const AVCodec* codec = nullptr;
-  const int streamIndex = selectThumbnailVideoStream(input.get(), &codec);
+  const int streamIndex = selectThumbnailVideoStream(input->get(), &codec);
   if (streamIndex < 0 || !codec) return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
 
-  AVStream* stream = input->streams[streamIndex];
+  AVStream* stream = input->get()->streams[streamIndex];
   AvCodecContextHandle codecContext;
   codecContext.ptr = avcodec_alloc_context3(codec);
   if (!codecContext.get()) return E_OUTOFMEMORY;
@@ -724,27 +740,53 @@ HRESULT loadVideoFrameThumbnailBitmap(IStream* mediaStream,
 
   ffErr = avcodec_open2(codecContext.get(), codec, nullptr);
   if (ffErr < 0) return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
+  if (thumbnailDeadlineExpired(deadlineTick)) return kThumbnailTimeoutHresult;
 
-  primeVideoDecoderFromCurrentPosition(input.get(), codecContext.get(),
-                                       streamIndex);
+  const int64_t seekTimestamp = thumbnailSeekTimestamp(input->get(), stream);
+  HRESULT hr = seekVideoThumbnailPosition(input->get(), codecContext.get(),
+                                          streamIndex, deadlineTick,
+                                          seekTimestamp);
+  if (hr == kThumbnailTimeoutHresult) return hr;
 
-  const int64_t seekTimestamp = thumbnailSeekTimestamp(input.get(), stream);
-  seekVideoThumbnailPosition(input.get(), codecContext.get(), streamIndex,
-                             seekTimestamp);
-
-  hr = decodeVideoThumbnailFromCurrentPosition(input.get(), codecContext.get(),
-                                               streamIndex, requestedSize,
-                                               outBitmap, outAlpha);
+  hr = decodeVideoThumbnailFromCurrentPosition(input->get(), codecContext.get(),
+                                               streamIndex, deadlineTick,
+                                               requestedSize, outBitmap,
+                                               outAlpha);
   if (SUCCEEDED(hr)) return hr;
+  if (hr == kThumbnailTimeoutHresult) return hr;
   if (seekTimestamp == AV_NOPTS_VALUE) return hr;
 
   const int64_t startTimestamp =
       stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
-  seekVideoThumbnailPosition(input.get(), codecContext.get(), streamIndex,
-                             startTimestamp);
-  return decodeVideoThumbnailFromCurrentPosition(input.get(), codecContext.get(),
-                                                 streamIndex, requestedSize,
-                                                 outBitmap, outAlpha);
+  hr = seekVideoThumbnailPosition(input->get(), codecContext.get(), streamIndex,
+                                  deadlineTick, startTimestamp);
+  if (hr == kThumbnailTimeoutHresult) return hr;
+  return decodeVideoThumbnailFromCurrentPosition(
+      input->get(), codecContext.get(), streamIndex, deadlineTick,
+      requestedSize, outBitmap, outAlpha);
+}
+
+HRESULT loadMediaThumbnailBitmap(IStream* mediaStream,
+                                 UINT requestedSize,
+                                 HBITMAP* outBitmap,
+                                 WTS_ALPHATYPE* outAlpha) {
+  if (!outBitmap || !outAlpha) return E_POINTER;
+  *outBitmap = nullptr;
+  *outAlpha = WTSAT_UNKNOWN;
+
+  const ULONGLONG deadlineTick = GetTickCount64() + kFfmpegThumbnailBudgetMs;
+  AvFormatInput input;
+  HRESULT hr = openMediaInput(mediaStream, deadlineTick, &input);
+  if (FAILED(hr)) return hr;
+
+  hr = loadEmbeddedArtworkBitmapFromInput(input.get(), requestedSize,
+                                          outBitmap, outAlpha);
+  if (SUCCEEDED(hr)) return hr;
+  if (thumbnailDeadlineExpired(deadlineTick)) return kThumbnailTimeoutHresult;
+
+  return loadVideoFrameThumbnailBitmapFromInput(&input, deadlineTick,
+                                                requestedSize, outBitmap,
+                                                outAlpha);
 }
 
 class RadioifyThumbnailProvider final : public IThumbnailProvider,
@@ -851,12 +893,8 @@ class RadioifyThumbnailProvider final : public IThumbnailProvider,
                                            alphaType);
       if (SUCCEEDED(imageHr)) return imageHr;
 
-      const HRESULT embeddedHr =
-          loadEmbeddedArtworkBitmap(mediaStream_.get(), cx, bitmap, alphaType);
-      if (SUCCEEDED(embeddedHr)) return embeddedHr;
-
-      return loadVideoFrameThumbnailBitmap(mediaStream_.get(), cx, bitmap,
-                                           alphaType);
+      return loadMediaThumbnailBitmap(mediaStream_.get(), cx, bitmap,
+                                      alphaType);
     } catch (...) {
       return exceptionToHresult();
     }

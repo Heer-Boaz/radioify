@@ -6,6 +6,13 @@ set(RADIOIFY_WIN11_EXPLORER_INCLUDE_DIR "${RADIOIFY_WIN11_EXPLORER_ROOT}/include
 file(MAKE_DIRECTORY "${RADIOIFY_WIN11_EXPLORER_PACKAGE_DIR}")
 file(MAKE_DIRECTORY "${RADIOIFY_WIN11_EXPLORER_INCLUDE_DIR}")
 
+set(RADIOIFY_WIN11_EXPLORER_THUMBNAIL_BUDGET_MS "750" CACHE STRING
+    "Maximum wall-clock time for one Explorer media thumbnail request")
+if (NOT RADIOIFY_WIN11_EXPLORER_THUMBNAIL_BUDGET_MS MATCHES "^[1-9][0-9]*$")
+  message(FATAL_ERROR
+      "RADIOIFY_WIN11_EXPLORER_THUMBNAIL_BUDGET_MS must be a positive integer")
+endif()
+
 set(RADIOIFY_WIN11_EXPLORER_FILE_TYPES
   .wav .mp3 .flac .m4a .webm .mp4 .mov .ogg .kss .nsf
   .mid .midi .vgm .vgz .psf .minipsf .psf2 .minipsf2
