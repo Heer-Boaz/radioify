@@ -50,6 +50,91 @@ function Get-RadioifyMsixManifestInfo {
     }
 }
 
+function Get-RadioifyMsixManifestFileTypes {
+    param([Parameter(Mandatory = $true)][string]$IntegrationDir)
+
+    $manifestPath = Join-Path $IntegrationDir "Package.appxmanifest"
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        throw "Package manifest not found at '$manifestPath'. Build first with .\build.ps1 -Static -Win11ExplorerIntegration."
+    }
+
+    [xml]$manifestXml = Get-Content -LiteralPath $manifestPath -Raw
+    $namespaceManager = New-Object System.Xml.XmlNamespaceManager($manifestXml.NameTable)
+    $namespaceManager.AddNamespace("uap", "http://schemas.microsoft.com/appx/manifest/uap/windows10")
+
+    $manifestXml.SelectNodes("//uap:FileType", $namespaceManager) |
+        ForEach-Object { [string]$_.InnerText } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Sort-Object -Unique
+}
+
+function Remove-RadioifyLegacyOpenWithListEntry {
+    param([Parameter(Mandatory = $true)][string]$FileType)
+
+    $normalizedFileType = $FileType.Trim()
+    if (-not $normalizedFileType.StartsWith(".", [StringComparison]::Ordinal)) {
+        $normalizedFileType = ".$normalizedFileType"
+    }
+
+    $openWithListPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$normalizedFileType\OpenWithList"
+    if (-not (Test-Path -LiteralPath $openWithListPath)) {
+        return 0
+    }
+
+    $openWithList = Get-ItemProperty -LiteralPath $openWithListPath
+    $removedNames = @()
+    foreach ($property in $openWithList.PSObject.Properties) {
+        if ($property.Name -in @("PSPath", "PSParentPath", "PSChildName", "PSDrive", "PSProvider", "MRUList")) {
+            continue
+        }
+        if ($property.Value -is [string] -and
+            [string]::Equals($property.Value, $script:RadioifyWindowsExecutableName, [StringComparison]::OrdinalIgnoreCase)) {
+            Remove-ItemProperty -LiteralPath $openWithListPath -Name $property.Name -Force
+            $removedNames += $property.Name
+        }
+    }
+
+    if ($removedNames.Count -eq 0) {
+        return 0
+    }
+
+    $mruListProperty = $openWithList.PSObject.Properties["MRUList"]
+    $mruList = if ($mruListProperty) { [string]$mruListProperty.Value } else { "" }
+    if (-not [string]::IsNullOrEmpty($mruList)) {
+        $updatedMru = -join ($mruList.ToCharArray() | Where-Object {
+                $removedNames -notcontains [string]$_
+            })
+        if ($updatedMru.Length -gt 0) {
+            Set-ItemProperty -LiteralPath $openWithListPath -Name "MRUList" -Value $updatedMru
+        } else {
+            Remove-ItemProperty -LiteralPath $openWithListPath -Name "MRUList" -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    return $removedNames.Count
+}
+
+function Clear-RadioifyLegacyOpenWithEntries {
+    param([Parameter(Mandatory = $true)][string]$IntegrationDir)
+
+    $removedCount = 0
+    foreach ($fileType in Get-RadioifyMsixManifestFileTypes -IntegrationDir $IntegrationDir) {
+        $removedCount += Remove-RadioifyLegacyOpenWithListEntry -FileType $fileType
+    }
+
+    $applicationKey = "HKCU:\Software\Classes\Applications\$script:RadioifyWindowsExecutableName"
+    if (Test-Path -LiteralPath $applicationKey) {
+        Remove-Item -LiteralPath $applicationKey -Recurse -Force
+        ++$removedCount
+    }
+
+    if ($removedCount -gt 0) {
+        Invoke-RadioifyShellAssociationRefresh
+    }
+
+    return $removedCount
+}
+
 function New-RadioifyMsixPackageIdentityVersion {
     $now = Get-Date
     return "{0}.{1}.{2}.{3}" -f `

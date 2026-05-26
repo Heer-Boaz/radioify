@@ -57,6 +57,10 @@ try {
     if ($installedPackage -and -not $ReplaceExisting) {
         Write-Host "Radioify MSIX package is already installed:"
         Write-Host "  $($installedPackage.PackageFullName)"
+        $removedLegacyEntries = Clear-RadioifyLegacyOpenWithEntries -IntegrationDir $resolvedIntegrationDir
+        if ($removedLegacyEntries -gt 0) {
+            Write-Host "Removed stale Radioify open-with entries: $removedLegacyEntries"
+        }
         Write-Host "No package changes were made. Use -ReplaceExisting to force an update."
         return
     }
@@ -82,6 +86,10 @@ try {
 
     if ($didChangePackage) {
         Write-Host "Radioify MSIX package installed."
+    }
+    $removedLegacyEntries = Clear-RadioifyLegacyOpenWithEntries -IntegrationDir $resolvedIntegrationDir
+    if ($removedLegacyEntries -gt 0) {
+        Write-Host "Removed stale Radioify open-with entries: $removedLegacyEntries"
     }
     Write-Host "Package: $packagePath"
 } finally {
