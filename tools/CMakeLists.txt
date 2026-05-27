@@ -18,6 +18,10 @@ radioify_add_module_object_library(radioify_tool_audio_media_format_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/audio_media_format_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_ffmpeg_audio_decoder_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg_audio_decoder_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_ascii_shader_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii_shader_tests.cpp
 )

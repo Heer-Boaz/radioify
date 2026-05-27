@@ -917,6 +917,7 @@ int runTui(Options o) {
   const Style kStyleAlert{{255, 92, 92}, kBgBase};
   const Style kStyleDir{{110, 231, 183}, kBgBase};
   const Style kStyleHighlight{{15, 20, 28}, {230, 238, 248}};
+  const Style kStyleMutedHighlight{{138, 144, 153}, {36, 42, 52}};
   const Style kStyleBreadcrumbHover{{15, 20, 28}, {255, 214, 120}};
   const Style kStyleActionActive{{15, 20, 28}, {255, 214, 120}};
   const Color kProgressStart{110, 231, 183};
@@ -1284,6 +1285,7 @@ int runTui(Options o) {
     int selected = 0;
     int anchorX = -1;
     int anchorY = -1;
+    bool analyzeSupported = false;
   };
 
   struct FileContextMenuLayout {
@@ -1295,6 +1297,10 @@ int runTui(Options o) {
     int rows = 0;
     bool valid = false;
   };
+
+  constexpr int kFileContextActionPlay = 0;
+  constexpr int kFileContextActionAnalyze = 1;
+  constexpr int kFileContextActionSplitLoop = 2;
 
   struct MelodyExportTaskState {
     std::mutex mutex;
@@ -1595,6 +1601,8 @@ int runTui(Options o) {
     fileContextMenu.selected = 0;
     fileContextMenu.anchorX = x;
     fileContextMenu.anchorY = y;
+    fileContextMenu.analyzeSupported =
+        audioCanAnalyzeFileToMelodyFile(entry.path);
     markDirty();
   };
   callbacks.onRenderFile = [&](const std::filesystem::path& file) {
@@ -2139,7 +2147,7 @@ int runTui(Options o) {
   auto runFileContextAction = [&](int actionIndex) {
     if (!fileContextMenu.active) return;
     const FileEntry entry = fileContextMenu.entry;
-    if (actionIndex == 0) {
+    if (actionIndex == kFileContextActionPlay) {
       bool played = false;
       if (entry.trackIndex >= 0) {
         played = tryStartAudioFile(entry.path, entry.trackIndex);
@@ -2147,9 +2155,9 @@ int runTui(Options o) {
         played = callbacks.onPlayFile(entry.path);
       }
       (void)played;
-    } else if (actionIndex == 1) {
+    } else if (actionIndex == kFileContextActionAnalyze) {
       startMelodyExport(entry);
-    } else if (actionIndex == 2) {
+    } else if (actionIndex == kFileContextActionSplitLoop) {
       if (!entry.isDir && isSupportedAudioExt(entry.path) &&
           !isBackgroundTaskRunning()) {
         LoopSplitConfig splitConfig;
@@ -2472,6 +2480,21 @@ int runTui(Options o) {
                     (fileContextMenu.selected + 1) % fileContextLayout.rows;
               }
               dirty = true;
+            }
+            return;
+          }
+          if (mouse.eventFlags == MOUSE_MOVED) {
+            if (fileContextLayout.valid &&
+                mouse.pos.X >= fileContextLayout.x &&
+                mouse.pos.X < fileContextLayout.x + fileContextLayout.width &&
+                mouse.pos.Y >= fileContextLayout.listY &&
+                mouse.pos.Y < fileContextLayout.listY + fileContextLayout.rows) {
+              int action = mouse.pos.Y - fileContextLayout.listY;
+              if (action >= 0 && action < fileContextLayout.rows &&
+                  fileContextMenu.selected != action) {
+                fileContextMenu.selected = action;
+                dirty = true;
+              }
             }
             return;
           }
@@ -3187,8 +3210,13 @@ int runTui(Options o) {
             if (textWidth < inner) {
               text.append(static_cast<size_t>(inner - textWidth), ' ');
             }
-            Style rowStyle =
-                (i == fileContextMenu.selected) ? kStyleHighlight : kStyleNormal;
+            const bool muted =
+                i == kFileContextActionAnalyze &&
+                !fileContextMenu.analyzeSupported;
+            Style rowStyle = muted ? kStyleDim : kStyleNormal;
+            if (i == fileContextMenu.selected) {
+              rowStyle = muted ? kStyleMutedHighlight : kStyleHighlight;
+            }
             screen.writeText(x0 + 1, fileContextLayout.listY + i, text, rowStyle);
           }
         }

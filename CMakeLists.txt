@@ -385,6 +385,15 @@ radioify_link_repo_target(audio_media_format_tests)
 add_test(NAME audio_media_format_tests
          COMMAND $<TARGET_FILE:audio_media_format_tests>)
 
+add_executable(ffmpeg_audio_decoder_tests)
+target_sources(ffmpeg_audio_decoder_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_ffmpeg_audio_decoder_tests>
+  ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+)
+radioify_link_repo_target(ffmpeg_audio_decoder_tests)
+
 add_executable(ascii_shader_tests)
 target_sources(ascii_shader_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_ascii_shader_tests>
@@ -1040,10 +1049,12 @@ endif()
 radioify_add_external_include_dirs(${FFMPEG_INCLUDE_DIRS})
 if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(ffmpeg_audio_decoder_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(ffmpeg_audio_decoder_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
 

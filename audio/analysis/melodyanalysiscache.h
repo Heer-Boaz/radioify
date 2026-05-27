@@ -36,6 +36,7 @@ void melodyOfflineStart(const std::filesystem::path& file, int trackIndex,
 void melodyOfflineStop();
 MelodyOfflineFrame melodyOfflineGetFrame(double timeSec);
 MelodyOfflineAnalysisState melodyOfflineGetState();
+bool melodyOfflineCanAnalyzeFile(const std::filesystem::path& file);
 
 bool melodyOfflineAnalyzeToFile(
     const std::filesystem::path& file, int trackIndex, uint32_t sourceSampleRate,

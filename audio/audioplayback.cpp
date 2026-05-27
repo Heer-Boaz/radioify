@@ -679,6 +679,10 @@ bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
       gAudio.vgmDeviceOverrides, outputFile, progressCallback, error);
 }
 
+bool audioCanAnalyzeFileToMelodyFile(const std::filesystem::path& file) {
+  return melodyOfflineCanAnalyzeFile(file);
+}
+
 std::string audioGetWarning() {
   std::string warning = warningForBackend(gAudio.state.backend);
   if (!warning.empty()) return warning;

@@ -131,6 +131,7 @@ bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
                                   const std::filesystem::path& outputFile,
                                   const std::function<void(float)>& progressCallback,
                                   std::string* error);
+bool audioCanAnalyzeFileToMelodyFile(const std::filesystem::path& file);
 std::string audioGetWarning();
 bool audioIs50HzEnabled();
 bool audioSupports50HzToggle();

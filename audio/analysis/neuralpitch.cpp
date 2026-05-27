@@ -511,6 +511,14 @@ void neuralPitchReset(NeuralPitchState* state) {
   state->latest = {};
 }
 
+bool neuralPitchAvailable() {
+#if !RADIOIFY_HAS_ONNXRUNTIME
+  return false;
+#else
+  return !resolveModelPath().empty();
+#endif
+}
+
 bool neuralPitchInit(NeuralPitchState* state, uint32_t sourceSampleRate,
                      uint32_t channels, std::string* error) {
   if (!state || sourceSampleRate == 0 || channels == 0) {

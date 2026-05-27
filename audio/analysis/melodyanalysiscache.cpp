@@ -99,6 +99,13 @@ void makeUnvoiced(MelodyOfflineFrame* frame, float confidenceCap = 0.12f) {
   frame->confidence = std::clamp(baseConfidence, 0.0f, confidenceCap);
 }
 
+bool melodyOfflineDecodeSupported(const std::filesystem::path& file) {
+  return isFlacExt(file) || isM4aExt(file) || isMiniaudioExt(file) ||
+         isOggExt(file) || isGmeExt(file) || isMidiExt(file) ||
+         isGsfExt(file) || isVgmExt(file) || isPsfExt(file) ||
+         isKssExt(file);
+}
+
 std::vector<float> buildVoicedTransitionPenalties() {
   constexpr int kVoicedStateCount = kOfflineStateCount - 1;
   std::vector<float> penalties(
@@ -1189,6 +1196,11 @@ MelodyOfflineAnalysisState melodyOfflineGetState() {
   state.frameCount = gCache.frameCount;
   state.error = gCache.error;
   return state;
+}
+
+bool melodyOfflineCanAnalyzeFile(const std::filesystem::path& file) {
+  return !file.empty() && std::filesystem::exists(file) &&
+         melodyOfflineDecodeSupported(file) && neuralPitchAvailable();
 }
 
 bool melodyOfflineAnalyzeToFile(

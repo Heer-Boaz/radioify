@@ -38,6 +38,7 @@ struct NeuralPitchState {
 };
 
 void neuralPitchReset(NeuralPitchState* state);
+bool neuralPitchAvailable();
 bool neuralPitchInit(NeuralPitchState* state, uint32_t sourceSampleRate,
                      uint32_t channels, std::string* error);
 void neuralPitchUninit(NeuralPitchState* state);

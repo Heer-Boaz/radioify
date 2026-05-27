@@ -10,6 +10,7 @@ extern "C" {
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include "runtime_helpers.h"
@@ -75,6 +76,48 @@ int64_t rescaleUsToFrames(int64_t value, uint32_t sampleRate) {
   AVRational src{1, AV_TIME_BASE};
   AVRational dst{1, static_cast<int>(sampleRate)};
   return av_rescale_q(value, src, dst);
+}
+
+uint64_t scanPacketDurationFrames(const std::filesystem::path& path,
+                                  int streamIndex,
+                                  uint32_t sampleRate) {
+  if (streamIndex < 0 || sampleRate == 0) return 0;
+
+  AVFormatContext* fmt = nullptr;
+  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, nullptr)) {
+    return 0;
+  }
+
+  if (avformat_find_stream_info(fmt, nullptr) < 0 ||
+      streamIndex >= static_cast<int>(fmt->nb_streams)) {
+    avformat_close_input(&fmt);
+    return 0;
+  }
+
+  AVPacket* packet = av_packet_alloc();
+  if (!packet) {
+    avformat_close_input(&fmt);
+    return 0;
+  }
+
+  int64_t packetDuration = 0;
+  while (av_read_frame(fmt, packet) >= 0) {
+    if (packet->stream_index == streamIndex && packet->duration > 0) {
+      if (packetDuration >
+          std::numeric_limits<int64_t>::max() - packet->duration) {
+        packetDuration = std::numeric_limits<int64_t>::max();
+      } else {
+        packetDuration += packet->duration;
+      }
+    }
+    av_packet_unref(packet);
+  }
+
+  av_packet_free(&packet);
+  const int64_t frames = rescaleToFrames(
+      packetDuration, fmt->streams[streamIndex]->time_base, sampleRate);
+  avformat_close_input(&fmt);
+  return frames > 0 ? static_cast<uint64_t>(frames) : 0;
 }
 }  // namespace
 
@@ -261,6 +304,10 @@ bool FfmpegAudioDecoder::init(const std::filesystem::path& path,
     AVRational tb{1, AV_TIME_BASE};
     impl->rawTotalFrames =
         static_cast<uint64_t>(rescaleToFrames(fmt->duration, tb, sampleRate));
+  }
+  if (impl->rawTotalFrames == 0) {
+    impl->rawTotalFrames =
+        scanPacketDurationFrames(path, streamIndex, sampleRate);
   }
   if (impl->rawTotalFrames > 0) {
     uint64_t pad = impl->initialPaddingFrames + impl->trailingPaddingFrames;
