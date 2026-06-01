@@ -9,6 +9,7 @@
 
 #include "audioplayback.h"
 #include "playback/debug/lines.h"
+#include "playback/video/state/machine.h"
 #include "subtitles.h"
 #include "ui_helpers.h"
 #include "unicode_display_width.h"
@@ -30,6 +31,8 @@ namespace {
       return "Playing";
     case PlayerState::Paused:
       return "Paused";
+    case PlayerState::FrameStep:
+      return "FrameStep";
     case PlayerState::Seeking:
       return "Seeking";
     case PlayerState::Draining:
@@ -238,8 +241,11 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool waitingForAudio = audioOk && !audioStreamClockReady() && !audioIsFinished();
   bool audioStarved = audioOk && audioStreamStarved();
   bool waitingForVideo = hasVideoStream && !player.hasVideoFrame();
-  bool isPaused = playbackState == PlaybackSessionState::Paused ||
-                  player.state() == PlayerState::Paused;
+  const bool playerTransportPaused =
+      playback_video_state_machine::project(player.state()).transport ==
+      playback_video_state_machine::TransportState::Paused;
+  bool isPaused =
+      playbackState == PlaybackSessionState::Paused || playerTransportPaused;
   frameOutput.haveFrame = frameAvailable;
   bool allowFrame = frameOutput.haveFrame && !useWindowPresenter;
 
@@ -306,8 +312,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   frameOutput.progressBarY = -1;
   frameOutput.progressBarWidth = 0;
   const bool audioFinishedNow = audioOk && audioIsFinished();
-  const bool pausedNow = playbackState == PlaybackSessionState::Paused ||
-                         player.state() == PlayerState::Paused;
+  const bool pausedNow =
+      playbackState == PlaybackSessionState::Paused || playerTransportPaused;
   playback_overlay::PlaybackOverlayInputs overlayInputs;
   overlayInputs.windowTitle = windowTitle;
   overlayInputs.audioOk = audioOk;

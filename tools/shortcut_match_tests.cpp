@@ -263,9 +263,11 @@ int main() {
                        playback_video_frame_step::Direction::Next,
                "Finishing an old serial frame-step must not pop a new serial "
                "request");
-  ok &= expect(stepControl.resumePlaybackFrameSteps() &&
-                   !stepControl.peekFrameStep(&claimedStep, 8, false),
-                "Frame-step requests must not survive playback resume");
+  ok &= expect(!stepControl.resumePlaybackFrameSteps().positionChanged,
+               "Queued frame-step without a presented position must not "
+               "request a resume transition");
+  ok &= expect(!stepControl.peekFrameStep(&claimedStep, 8, false),
+               "Frame-step requests must not survive playback resume");
   stepControl.requestFrameStep(playback_video_frame_step::Direction::Previous,
                                8);
   ok &= expect(!stepControl.peekFrameStep(&claimedStep, 8, true),
@@ -286,19 +288,30 @@ int main() {
   ok &= expect(stepAckControl.peekFrameStep(&claimedStep, 9, false),
                "Frame-step presentation test must claim a request");
   stepAckControl.publishFrameStepPresentation(claimedStep);
-  ok &= expect(stepAckControl.consumeFrameStepPresentation(
-                   claimedStep.serial, claimedStep.generation),
+  playback_video_state_machine::FrameStepPresentationResult
+      stepAckPresentation = stepAckControl.consumeFrameStepPresentation(
+          claimedStep.serial, claimedStep.generation);
+  ok &= expect(stepAckPresentation.accepted &&
+                   stepAckPresentation.change.changed &&
+                   stepAckPresentation.change.current ==
+                       PlayerState::FrameStep,
                "Presented frame-step must be consumable while transport is "
-               "still paused");
+               "still paused and must enter explicit frame-step state");
   stepAckControl.requestFrameStep(playback_video_frame_step::Direction::Next,
                                   9);
   ok &= expect(stepAckControl.peekFrameStep(&claimedStep, 9, false),
                "Frame-step resume invalidation test must claim a request");
   stepAckControl.publishFrameStepPresentation(claimedStep);
-  ok &= expect(stepAckControl.resumePlaybackFrameSteps(),
+  playback_video_state_machine::FrameStepExitResult stepAckResume =
+      stepAckControl.resumePlaybackFrameSteps();
+  ok &= expect(stepAckResume.positionChanged &&
+                   stepAckResume.change.changed &&
+                   stepAckResume.change.current == PlayerState::Paused,
                "Resume must invalidate pending frame-step presentation acks");
-  ok &= expect(!stepAckControl.consumeFrameStepPresentation(
-                   claimedStep.serial, claimedStep.generation),
+  ok &= expect(!stepAckControl
+                    .consumeFrameStepPresentation(claimedStep.serial,
+                                                  claimedStep.generation)
+                    .accepted,
                "Frame-step presentation acks must not survive playback resume");
 
   playback_video_state_machine::Controller newestStepAckControl;
@@ -316,15 +329,43 @@ int main() {
                "Latest presentation test must claim the second request");
   playback_video_frame_step::Request secondPresentedStep = claimedStep;
   newestStepAckControl.publishFrameStepPresentation(secondPresentedStep);
-  ok &= expect(!newestStepAckControl.consumeFrameStepPresentation(
-                   firstPresentedStep.serial, firstPresentedStep.generation),
+  ok &= expect(!newestStepAckControl
+                    .consumeFrameStepPresentation(firstPresentedStep.serial,
+                                                  firstPresentedStep.generation)
+                    .accepted,
                "Older frame-step presentation acks must be superseded by the "
                "newer presented frame");
-  ok &= expect(newestStepAckControl.consumeFrameStepPresentation(
-                   secondPresentedStep.serial,
-                   secondPresentedStep.generation),
-               "Only the newest frame-step presentation ack should update the "
-               "paused audio anchor");
+  playback_video_state_machine::FrameStepPresentationResult
+      newestStepPresentation =
+          newestStepAckControl.consumeFrameStepPresentation(
+              secondPresentedStep.serial, secondPresentedStep.generation);
+  ok &= expect(newestStepPresentation.accepted &&
+                   newestStepPresentation.change.current ==
+                       PlayerState::FrameStep,
+               "Only the newest frame-step presentation ack should be "
+               "accepted and enter frame-step state");
+
+  playback_video_state_machine::Controller frameStepModeControl;
+  putStepControllerInPaused(frameStepModeControl);
+  frameStepModeControl.resetForSerial(31);
+  frameStepModeControl.requestFrameStep(
+      playback_video_frame_step::Direction::Next, 31);
+  ok &= expect(frameStepModeControl.peekFrameStep(&claimedStep, 31, false),
+               "Frame-step mode test must claim a request");
+  frameStepModeControl.publishFrameStepPresentation(claimedStep);
+  playback_video_state_machine::FrameStepPresentationResult
+      frameStepModePresentation =
+          frameStepModeControl.consumeFrameStepPresentation(
+              claimedStep.serial, claimedStep.generation);
+  ok &= expect(frameStepModePresentation.accepted &&
+                   frameStepModePresentation.change.current ==
+                       PlayerState::FrameStep,
+               "Frame-step mode test must consume presentation ack");
+  playback_video_state_machine::FrameStepExitResult frameStepModeResume =
+      frameStepModeControl.resumePlaybackFrameSteps();
+  ok &= expect(frameStepModeResume.positionChanged &&
+                   frameStepModeResume.change.current == PlayerState::Paused,
+               "Frame-step mode must stay active until playback resume");
 
   playback_video_state_machine::Controller stepSeekTokenControl;
   putStepControllerInPaused(stepSeekTokenControl);
@@ -346,8 +387,12 @@ int main() {
                    12, claimedStep.generation),
                "Frame-step seek must transfer presentation acknowledgement to "
                "the redecode serial");
-  ok &= expect(stepSeekTokenControl.consumeFrameStepPresentation(
-                   12, claimedStep.generation),
+  playback_video_state_machine::FrameStepPresentationResult
+      stepSeekPresentation = stepSeekTokenControl.consumeFrameStepPresentation(
+          12, claimedStep.generation);
+  ok &= expect(stepSeekPresentation.accepted &&
+                   stepSeekPresentation.change.current ==
+                       PlayerState::FrameStep,
                "Frame-step seek presentation must be acknowledged on the "
                "redecode serial");
   stepSeekTokenControl.requestFrameStep(
@@ -356,7 +401,7 @@ int main() {
                "Frame-step seek resume invalidation test must claim a request");
   ok &= expect(stepSeekTokenControl.publishFrameStepSeek(claimedStep),
                "Frame-step seek resume invalidation test must publish token");
-  ok &= expect(stepSeekTokenControl.resumePlaybackFrameSteps(),
+  ok &= expect(stepSeekTokenControl.resumePlaybackFrameSteps().positionChanged,
                "Resume must invalidate pending frame-step seek tokens");
   ok &= expect(!stepSeekTokenControl.consumeFrameStepSeek(
                    claimedStep.serial, claimedStep.generation),
@@ -1152,6 +1197,18 @@ int main() {
   ok &= expect(playback_video_state_machine::stateEffects(PlayerState::Paused)
                    .pauseMainClock,
                "Paused state must pause the main clock");
+  playback_video_state_machine::StateProjection frameStepProjection =
+      playback_video_state_machine::project(PlayerState::FrameStep);
+  ok &= expect(frameStepProjection.session ==
+                       playback_video_state_machine::SessionState::Started &&
+                   frameStepProjection.transport ==
+                       playback_video_state_machine::TransportState::Paused &&
+                   frameStepProjection.buffering ==
+                       playback_video_state_machine::BufferingState::Ready &&
+                   frameStepProjection.effects.pauseMainClock &&
+                   !frameStepProjection.effects.holdAudioOutput,
+               "Frame-step must be an explicit paused transport state without "
+               "audio-output hold");
   ok &= expect(!playback_video_state_machine::stateEffects(PlayerState::Playing)
                     .pauseMainClock,
                "Playing state must run the main clock");

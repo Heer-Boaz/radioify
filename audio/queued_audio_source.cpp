@@ -241,6 +241,7 @@ void queuedAudioSourceReset(AudioState* state, uint64_t framePos, int serial) {
   state->streamReadFrames.store(0, std::memory_order_relaxed);
   state->streamClockReady.store(false, std::memory_order_relaxed);
   state->streamStarved.store(false, std::memory_order_relaxed);
+  state->pendingStreamDiscardPtsUs.store(0, std::memory_order_relaxed);
   state->streamDiscardPtsUs.store(0, std::memory_order_relaxed);
   state->audioClock.reset(serial);
   audioPipelineTransitionRequestSignalFadeIn(state->pipelineTransition,
@@ -286,12 +287,15 @@ bool queuedAudioSourceCommitPendingSerialFlush(AudioState* state) {
 
   const int serial =
       state->pendingStreamSerial.exchange(0, std::memory_order_relaxed);
+  const int64_t discardUntilUs =
+      state->pendingStreamDiscardPtsUs.exchange(0, std::memory_order_relaxed);
   state->streamSerial.store(serial, std::memory_order_relaxed);
   state->streamRb.reset();
   state->streamBaseValid.store(false, std::memory_order_relaxed);
   state->streamBasePtsUs.store(0, std::memory_order_relaxed);
   state->streamReadFrames.store(0, std::memory_order_relaxed);
-  state->streamDiscardPtsUs.store(0, std::memory_order_relaxed);
+  state->streamDiscardPtsUs.store((std::max)(int64_t{0}, discardUntilUs),
+                                  std::memory_order_relaxed);
   state->sourceAtEnd.store(false, std::memory_order_relaxed);
   state->finished.store(false, std::memory_order_relaxed);
   state->streamClockReady.store(false, std::memory_order_relaxed);

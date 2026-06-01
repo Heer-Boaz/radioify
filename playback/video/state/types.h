@@ -7,6 +7,7 @@ enum class PlayerState {
   Priming,
   Playing,
   Paused,
+  FrameStep,
   Seeking,
   Draining,
   Ended,

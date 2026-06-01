@@ -8,6 +8,7 @@
 
 #include "audioplayback.h"
 #include "playback/video/player.h"
+#include "playback/video/state/machine.h"
 #include "playback/input/shortcuts.h"
 #include "handoff.h"
 #include "playback/video/subtitle/manager.h"
@@ -439,7 +440,9 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   inputs.paused =
       (view.playbackState &&
        *view.playbackState == PlaybackSessionState::Paused) ||
-      (view.player && view.player->state() == PlayerState::Paused);
+      (view.player &&
+       playback_video_state_machine::project(view.player->state()).transport ==
+           playback_video_state_machine::TransportState::Paused);
   inputs.audioFinished = inputs.audioOk && audioIsFinished();
   inputs.pictureInPictureAvailable =
       signals.togglePictureInPicture != nullptr ||
@@ -503,38 +506,21 @@ void setPlaybackPaused(const PlaybackInputView& view,
   if (!view.player || !view.playbackState) return;
 
   if (!paused && *view.playbackState == PlaybackSessionState::Ended) {
-    if (view.audioOk && *view.audioOk && audioIsPaused()) {
-      audioTogglePause();
-    }
-    view.player->setVideoPaused(false);
     double targetSec = 0.0;
     readPendingSeekTargetSec(seekState, &targetSec);
     sendSeekRequest(view, signals, seekState, targetSec);
+    view.player->setVideoPaused(false);
     *view.playbackState = PlaybackSessionState::Active;
     return;
   }
 
   if (paused && *view.playbackState == PlaybackSessionState::Ended) {
-    if (view.audioOk && *view.audioOk) {
-      if (!audioIsPaused()) {
-        audioTogglePause();
-      }
-    }
     view.player->setVideoPaused(true);
     return;
   }
 
   bool pausedNow = paused;
-  if (view.audioOk && *view.audioOk) {
-    const bool audioPaused = audioIsPaused();
-    if (audioPaused != paused) {
-      audioTogglePause();
-    }
-    pausedNow = audioIsPaused();
-    view.player->setVideoPaused(pausedNow);
-  } else {
-    view.player->setVideoPaused(paused);
-  }
+  view.player->setVideoPaused(pausedNow);
   *view.playbackState =
       pausedNow ? PlaybackSessionState::Paused : PlaybackSessionState::Active;
 }

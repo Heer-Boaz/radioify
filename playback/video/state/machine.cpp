@@ -97,6 +97,7 @@ StateProjection project(PlayerState state) {
       return makeProjection(state, SessionState::Started,
                             TransportState::Playing, BufferingState::Ready);
     case PlayerState::Paused:
+    case PlayerState::FrameStep:
       return makeProjection(state, SessionState::Started,
                             TransportState::Paused, BufferingState::Ready);
     case PlayerState::Seeking:
@@ -228,7 +229,9 @@ PlayerState resolveSteadyState(PlayerState currentState,
       }
     } else if (isActivePlaybackState(currentState) && snapshot.audioPaused) {
       nextState = PlayerState::Paused;
-    } else if (currentState == PlayerState::Paused && !snapshot.audioPaused) {
+    } else if ((currentState == PlayerState::Paused ||
+                currentState == PlayerState::FrameStep) &&
+               !snapshot.audioPaused) {
       nextState = snapshot.lastPresentedSerial == snapshot.currentSerial
                       ? PlayerState::Playing
                       : PlayerState::Prefill;
@@ -358,14 +361,20 @@ bool Controller::publishFrameStepPresentation(
   return true;
 }
 
-bool Controller::consumeFrameStepPresentation(int serial,
-                                              uint64_t generation) {
+FrameStepPresentationResult Controller::consumeFrameStepPresentation(
+    int serial, uint64_t generation) {
+  FrameStepPresentationResult result;
   std::lock_guard<std::mutex> lock(frameStepMutex_);
   if (!pendingPresentedFrameStep_.matches(serial, generation)) {
-    return false;
+    result.change = unchanged(current());
+    return result;
   }
   pendingPresentedFrameStep_.clear();
-  return canClaimFrameStep(current());
+  PlayerState state = current();
+  result.accepted = canClaimFrameStep(state);
+  result.change = result.accepted ? set(PlayerState::FrameStep)
+                                  : unchanged(state);
+  return result;
 }
 
 bool Controller::publishFrameStepSeek(
@@ -398,13 +407,14 @@ bool Controller::publishFrameStepSeekPresentation(int serial,
   return true;
 }
 
-bool Controller::resumePlaybackFrameSteps() {
+FrameStepExitResult Controller::resumePlaybackFrameSteps() {
+  FrameStepExitResult result;
   std::lock_guard<std::mutex> lock(frameStepMutex_);
-  bool hadRequests = !frameStepRequests_.empty() ||
-                     pendingPresentedFrameStep_.active() ||
-                     pendingSeekFrameStep_.active();
+  result.positionChanged = current() == PlayerState::FrameStep;
   clearFrameStepsLocked();
-  return hadRequests;
+  result.change =
+      result.positionChanged ? set(PlayerState::Paused) : unchanged(current());
+  return result;
 }
 
 void Controller::clearFrameStepsLocked() {

@@ -1,7 +1,8 @@
 #include "playback/video/player.h"
 
-#include <chrono>
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
@@ -20,6 +21,7 @@ namespace {
 
 std::atomic<int64_t> gLastAudioDiscardUntilUs{0};
 std::atomic<int> gLastAudioFlushSerial{0};
+std::atomic<uint64_t> gAudioFlushCount{0};
 
 }  // namespace
 
@@ -117,13 +119,13 @@ bool audioStreamWriteSamples(float*, uint64_t, int64_t, int, bool,
                              uint64_t*) {
   return false;
 }
-void audioStreamDiscardUntil(int64_t ptsUs) {
-  gLastAudioDiscardUntilUs.store(ptsUs, std::memory_order_relaxed);
-}
 void audioStreamPrimeClock(int, int64_t) {}
 void audioStreamSetEnd(bool) {}
-void audioStreamFlushSerial(int serial) {
+void audioStreamFlushSerial(int serial, int64_t discardUntilUs) {
+  int64_t ptsUs = (std::max)(int64_t{0}, discardUntilUs);
+  gLastAudioDiscardUntilUs.store(ptsUs, std::memory_order_relaxed);
   gLastAudioFlushSerial.store(serial, std::memory_order_relaxed);
+  gAudioFlushCount.fetch_add(1, std::memory_order_relaxed);
 }
 int audioStreamSerial() { return 0; }
 int64_t audioStreamClockUs(int64_t) { return 0; }
@@ -159,6 +161,8 @@ const char* stateName(PlayerState state) {
       return "Playing";
     case PlayerState::Paused:
       return "Paused";
+    case PlayerState::FrameStep:
+      return "FrameStep";
     case PlayerState::Seeking:
       return "Seeking";
     case PlayerState::Draining:
@@ -236,11 +240,15 @@ bool waitFor(Player& player, int timeoutMs, const char* label,
 }
 
 bool expectAudioFrameStepAnchor(int64_t expectedPtsUs, int expectedSerial,
+                                uint64_t previousFlushCount,
                                 const char* label) {
   const int64_t actual =
       gLastAudioDiscardUntilUs.load(std::memory_order_relaxed);
   const int actualSerial = gLastAudioFlushSerial.load(std::memory_order_relaxed);
-  if (actual == expectedPtsUs && actualSerial == expectedSerial) {
+  const uint64_t actualFlushCount =
+      gAudioFlushCount.load(std::memory_order_relaxed);
+  if (actual == expectedPtsUs && actualSerial == expectedSerial &&
+      actualFlushCount > previousFlushCount) {
     return true;
   }
   std::cerr << "video_frame_step_smoke: " << label
@@ -248,7 +256,32 @@ bool expectAudioFrameStepAnchor(int64_t expectedPtsUs, int expectedSerial,
             << expectedPtsUs << " actual_discard_until_us=" << actual
             << " expected_serial=" << expectedSerial
             << " actual_flush_serial=" << actualSerial
+            << " previous_flush_count=" << previousFlushCount
+            << " actual_flush_count=" << actualFlushCount
             << '\n';
+  return false;
+}
+
+bool expectAudioResumeSeekAnchor(int64_t expectedPtsUs, int expectedSerial,
+                                 uint64_t previousFlushCount,
+                                 const char* label) {
+  const int64_t actual =
+      gLastAudioDiscardUntilUs.load(std::memory_order_relaxed);
+  const int actualSerial = gLastAudioFlushSerial.load(std::memory_order_relaxed);
+  const uint64_t actualFlushCount =
+      gAudioFlushCount.load(std::memory_order_relaxed);
+  if (actual == expectedPtsUs && actualSerial == expectedSerial &&
+      actualFlushCount > previousFlushCount) {
+    return true;
+  }
+  std::cerr << "video_frame_step_smoke: " << label
+            << " audio resume seek anchor mismatch expected_pts_us="
+            << expectedPtsUs << " actual_discard_until_us=" << actual
+            << " expected_serial=" << expectedSerial
+            << " actual_flush_serial=" << actualSerial
+            << " previous_flush_count=" << previousFlushCount
+            << " actual_flush_count="
+            << actualFlushCount << '\n';
   return false;
 }
 
@@ -315,6 +348,7 @@ int main(int argc, char** argv) {
   }
   gLastAudioDiscardUntilUs.store(0, std::memory_order_relaxed);
   gLastAudioFlushSerial.store(0, std::memory_order_relaxed);
+  gAudioFlushCount.store(0, std::memory_order_relaxed);
 
   Player player;
   PlayerConfig config;
@@ -412,6 +446,8 @@ int main(int argc, char** argv) {
     int lastSerial = boundary.currentSerial;
     uint64_t lastCounter = player.videoFrameCounter();
     for (size_t i = 0; i < stepCount; ++i) {
+      const uint64_t beforeStepAudioFlushCount =
+          gAudioFlushCount.load(std::memory_order_relaxed);
       if (!player.requestFrameStep(playback_video_frame_step::Direction::Next)) {
         std::cerr << "video_frame_step_smoke: next-frame request rejected at "
                   << "step " << (i + 1) << '\n';
@@ -438,12 +474,16 @@ int main(int argc, char** argv) {
       lastPtsUs = next.lastPresentedPtsUs;
       lastSerial = next.currentSerial;
       lastCounter = player.videoFrameCounter();
-      if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial, label.c_str())) {
+      if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
+                                      beforeStepAudioFlushCount,
+                                      label.c_str())) {
         player.close();
         return 1;
       }
     }
 
+    const uint64_t beforeResumeAudioFlushCount =
+        gAudioFlushCount.load(std::memory_order_relaxed);
     player.setVideoPaused(false);
     PlayerDebugInfo resumed{};
     if (!waitFor(player, kDefaultTimeoutMs, "resume_after_forward",
@@ -462,8 +502,9 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
-                                    "resume_after_forward")) {
+    if (!expectAudioResumeSeekAnchor(lastPtsUs, resumed.currentSerial,
+                                     beforeResumeAudioFlushCount,
+                                     "resume_after_forward")) {
       player.close();
       return 1;
     }
@@ -483,6 +524,8 @@ int main(int argc, char** argv) {
   int lastSerial = boundary.currentSerial;
   uint64_t lastCounter = player.videoFrameCounter();
   for (size_t i = 0; i < stepCount; ++i) {
+    const uint64_t beforeStepAudioFlushCount =
+        gAudioFlushCount.load(std::memory_order_relaxed);
     if (!player.requestFrameStep(
             playback_video_frame_step::Direction::Previous)) {
       std::cerr << "video_frame_step_smoke: previous-frame request rejected at "
@@ -511,7 +554,9 @@ int main(int argc, char** argv) {
     lastPtsUs = previous.lastPresentedPtsUs;
     lastSerial = previous.currentSerial;
     lastCounter = player.videoFrameCounter();
-    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial, label.c_str())) {
+    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
+                                    beforeStepAudioFlushCount,
+                                    label.c_str())) {
       player.close();
       return 1;
     }
@@ -526,6 +571,8 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
+    const uint64_t beforeResumeAudioFlushCount =
+        gAudioFlushCount.load(std::memory_order_relaxed);
     player.setVideoPaused(false);
     PlayerDebugInfo resumed{};
     if (!waitFor(player, kDefaultTimeoutMs, "resume_during_step",
@@ -543,8 +590,9 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
-                                    "resume_during_step")) {
+    if (!expectAudioResumeSeekAnchor(lastPtsUs, resumed.currentSerial,
+                                     beforeResumeAudioFlushCount,
+                                     "resume_during_step")) {
       player.close();
       return 1;
     }
@@ -557,6 +605,8 @@ int main(int argc, char** argv) {
   }
 
   if (resumeAfterPrevious) {
+    const uint64_t beforeResumeAudioFlushCount =
+        gAudioFlushCount.load(std::memory_order_relaxed);
     player.setVideoPaused(false);
     PlayerDebugInfo resumed{};
     if (!waitFor(player, kDefaultTimeoutMs, "resume_after_previous",
@@ -574,8 +624,9 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
-                                    "resume_after_previous")) {
+    if (!expectAudioResumeSeekAnchor(lastPtsUs, resumed.currentSerial,
+                                     beforeResumeAudioFlushCount,
+                                     "resume_after_previous")) {
       player.close();
       return 1;
     }
@@ -590,6 +641,8 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < stepCount; ++i) {
     const size_t targetIndex = stepCount - i - 1;
     const int64_t expectedPtsUs = steppedPts[targetIndex];
+    const uint64_t beforeStepAudioFlushCount =
+        gAudioFlushCount.load(std::memory_order_relaxed);
     if (!player.requestFrameStep(playback_video_frame_step::Direction::Next)) {
       std::cerr << "video_frame_step_smoke: next-frame request rejected at step "
                 << (i + 1) << '\n';
@@ -617,13 +670,17 @@ int main(int argc, char** argv) {
     lastPtsUs = next.lastPresentedPtsUs;
     lastSerial = next.currentSerial;
     lastCounter = player.videoFrameCounter();
-    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial, label.c_str())) {
+    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
+                                    beforeStepAudioFlushCount,
+                                    label.c_str())) {
       player.close();
       return 1;
     }
   }
 
   if (resumeAfterMixed) {
+    const uint64_t beforeResumeAudioFlushCount =
+        gAudioFlushCount.load(std::memory_order_relaxed);
     player.setVideoPaused(false);
     PlayerDebugInfo resumed{};
     if (!waitFor(player, kDefaultTimeoutMs, "resume_after_mixed",
@@ -642,8 +699,9 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
-                                    "resume_after_mixed")) {
+    if (!expectAudioResumeSeekAnchor(lastPtsUs, resumed.currentSerial,
+                                     beforeResumeAudioFlushCount,
+                                     "resume_after_mixed")) {
       player.close();
       return 1;
     }

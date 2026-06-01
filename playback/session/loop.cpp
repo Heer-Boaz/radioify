@@ -15,6 +15,7 @@
 #include "audioplayback.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/video/player.h"
+#include "playback/video/state/machine.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
@@ -596,7 +597,9 @@ struct PlaybackLoopRunner::Impl {
     if (playbackState == PlaybackSessionState::Ended) {
       state.status = PlaybackControlStatus::Stopped;
     } else if (playbackState == PlaybackSessionState::Paused ||
-               core.player().state() == PlayerState::Paused) {
+               playback_video_state_machine::project(core.player().state())
+                       .transport ==
+                   playback_video_state_machine::TransportState::Paused) {
       state.status = PlaybackControlStatus::Paused;
     } else {
       state.status = PlaybackControlStatus::Playing;

@@ -100,6 +100,7 @@ struct AudioState {
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};
   std::atomic<int> pendingStreamSerial{0};
+  std::atomic<int64_t> pendingStreamDiscardPtsUs{0};
   std::atomic<bool> streamSerialFlushPending{false};
   std::atomic<bool> streamBaseValid{false};
   std::atomic<int64_t> streamBasePtsUs{0};

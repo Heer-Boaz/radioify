@@ -84,6 +84,16 @@ struct Evaluation {
   bool clearSeekFailure = false;
 };
 
+struct FrameStepPresentationResult {
+  StateChange change;
+  bool accepted = false;
+};
+
+struct FrameStepExitResult {
+  StateChange change;
+  bool positionChanged = false;
+};
+
 class Controller {
  public:
   void reset();
@@ -105,11 +115,12 @@ class Controller {
   bool discardFrameStep(const playback_video_frame_step::Request& request);
   bool publishFrameStepPresentation(
       const playback_video_frame_step::Request& request);
-  bool consumeFrameStepPresentation(int serial, uint64_t generation);
+  FrameStepPresentationResult consumeFrameStepPresentation(int serial,
+                                                           uint64_t generation);
   bool publishFrameStepSeek(const playback_video_frame_step::Request& request);
   bool consumeFrameStepSeek(int serial, uint64_t generation);
   bool publishFrameStepSeekPresentation(int serial, uint64_t generation);
-  bool resumePlaybackFrameSteps();
+  FrameStepExitResult resumePlaybackFrameSteps();
 
  private:
   struct FrameStepToken {

@@ -81,11 +81,10 @@ bool audioStreamWriteSamples(float* interleaved,
                              int serial,
                              bool allowBlock,
                              uint64_t* writtenFrames);
-void audioStreamDiscardUntil(int64_t ptsUs);
 void audioStreamPrimeClock(int serial, int64_t targetPtsUs);
 void audioStreamSetEnd(bool atEnd);
 void audioStreamReset(uint64_t framePos);
-void audioStreamFlushSerial(int serial);
+void audioStreamFlushSerial(int serial, int64_t discardUntilUs);
 int audioStreamSerial();
 int64_t audioStreamClockUs(int64_t nowUs);
 int64_t audioStreamClockLastUpdatedUs();

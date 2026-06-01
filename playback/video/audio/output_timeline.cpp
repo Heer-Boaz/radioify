@@ -18,10 +18,7 @@ ResetResult Controller::resetForSerial(int serial, int64_t targetUs,
   result.applied = true;
   result.serial = serial;
   result.targetUs = (std::max)(int64_t{0}, targetUs);
-  audioStreamFlushSerial(serial);
-  if (result.targetUs > 0) {
-    audioStreamDiscardUntil(result.targetUs);
-  }
+  audioStreamFlushSerial(serial, result.targetUs);
 
   if (reacquireClock) {
     clockReacquire_.require(serial, result.targetUs);

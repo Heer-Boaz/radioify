@@ -32,6 +32,7 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.state.streamQueueEnabled.store(true);
   gAudio.state.streamSerial.store(0);
   gAudio.state.pendingStreamSerial.store(0);
+  gAudio.state.pendingStreamDiscardPtsUs.store(0);
   gAudio.state.streamSerialFlushPending.store(false);
   gAudio.state.streamBaseValid.store(false);
   gAudio.state.streamBasePtsUs.store(0);
@@ -167,10 +168,6 @@ void audioStreamPrimeClock(int serial, int64_t targetPtsUs) {
   gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
 }
 
-void audioStreamDiscardUntil(int64_t ptsUs) {
-  gAudio.state.streamDiscardPtsUs.store(ptsUs, std::memory_order_relaxed);
-}
-
 void audioStreamSetEnd(bool atEnd) {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
     return;
@@ -189,6 +186,7 @@ void audioStreamReset(uint64_t framePos) {
   gAudio.state.sourceAtEnd.store(false);
   gAudio.state.seekRequested.store(false);
   gAudio.state.pendingStreamSerial.store(0, std::memory_order_relaxed);
+  gAudio.state.pendingStreamDiscardPtsUs.store(0, std::memory_order_relaxed);
   gAudio.state.streamSerialFlushPending.store(false, std::memory_order_relaxed);
   gAudio.state.pendingSeekFrames.store(static_cast<int64_t>(framePos));
   gAudio.state.audioPrimed.store(false);
@@ -204,11 +202,15 @@ void audioStreamReset(uint64_t framePos) {
   gAudio.state.decodeCv.notify_all();
 }
 
-void audioStreamFlushSerial(int serial) {
+void audioStreamFlushSerial(int serial, int64_t discardUntilUs) {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
     return;
   }
+  int64_t targetUs = (std::max)(int64_t{0}, discardUntilUs);
   gAudio.state.pendingStreamSerial.store(serial, std::memory_order_relaxed);
+  gAudio.state.pendingStreamDiscardPtsUs.store(targetUs,
+                                               std::memory_order_relaxed);
+  gAudio.state.streamDiscardPtsUs.store(targetUs, std::memory_order_relaxed);
   gAudio.state.streamSerialFlushPending.store(true, std::memory_order_relaxed);
   audioPipelineTransitionRequestDiscontinuity(gAudio.state.pipelineTransition,
                                               gAudio.state.sampleRate);

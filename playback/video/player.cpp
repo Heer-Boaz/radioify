@@ -386,6 +386,8 @@ const char* playerStateName(PlayerState state) {
       return "Playing";
     case PlayerState::Paused:
       return "Paused";
+    case PlayerState::FrameStep:
+      return "FrameStep";
     case PlayerState::Seeking:
       return "Seeking";
     case PlayerState::Draining:
@@ -1834,19 +1836,21 @@ struct Player::Impl {
     }
     if (notification == VideoPresentationNotification::FrameStep) {
       assert(frameStepRequest);
-      bool validStepPresentation =
+      playback_video_state_machine::FrameStepPresentationResult
+          stepPresentation =
           playbackState.consumeFrameStepPresentation(
               serialForFrame, frameStepRequest->generation);
-      if (serialForFrame == serialControl.currentSerial()) {
+      applyStateChange(stepPresentation.change);
+      if (stepPresentation.accepted &&
+          serialForFrame == serialControl.currentSerial()) {
         resetAudioOutputForSerialAt(static_cast<uint64_t>(serialForFrame),
                                     item.ptsUs, true, "frame_step");
-        appendTimingFmt(
-            "frame_step_presented serial=%d frame=%llu pts_us=%lld state_ack=%d",
-            serialForFrame,
-            static_cast<unsigned long long>(item.displayIndex),
-            static_cast<long long>(item.ptsUs),
-            validStepPresentation ? 1 : 0);
       }
+      appendTimingFmt(
+          "frame_step_presented serial=%d frame=%llu pts_us=%lld state_ack=%d",
+          serialForFrame, static_cast<unsigned long long>(item.displayIndex),
+          static_cast<long long>(item.ptsUs),
+          stepPresentation.accepted ? 1 : 0);
     }
     serialControl.clearPendingPresentation(serialForFrame);
     playback_video_sync::notePresentedFrame(syncState, prepared, targetUs,
@@ -2006,14 +2010,19 @@ struct Player::Impl {
     if (!frameCursor.cancelPendingFrameStepSeekForSerial(serial)) {
       return false;
     }
-    playbackState.resumePlaybackFrameSteps();
+    playback_video_state_machine::FrameStepExitResult frameStepExit =
+        playbackState.resumePlaybackFrameSteps();
+    applyStateChange(frameStepExit.change);
     serialControl.clearPendingPresentation(serial);
     observePlaybackPipeline();
     return true;
   }
 
   bool exitFrameStepModeForPlaybackResume() {
-    bool exited = playbackState.resumePlaybackFrameSteps();
+    playback_video_state_machine::FrameStepExitResult frameStepExit =
+        playbackState.resumePlaybackFrameSteps();
+    applyStateChange(frameStepExit.change);
+    bool exited = frameStepExit.positionChanged;
     const int serial = serialControl.currentSerial();
     if (frameCursor.exitFrameStepModeForPlaybackResume(serial)) {
       serialControl.clearPendingPresentation(serial);
@@ -2268,190 +2277,201 @@ struct Player::Impl {
     demuxThread = std::thread([this]() { demuxMain(); });
   }
 
-    void handleEvent(const playback_video_control::Event& ev) {
-      auto applySerialTransition =
-          [&](playback_video_serial_control::TransitionPlan plan,
-              const char* tag) -> int {
-        if (!plan.valid) return 0;
-        if (plan.signalCommandPending) {
-          commandPending.store(true, std::memory_order_relaxed);
-        }
-        playbackState.resetForSerial(plan.serial);
-        clearFrameRequested.store(true, std::memory_order_relaxed);
-        mainClock.resetForSerial(plan.serial);
-        videoPackets.flush(static_cast<uint64_t>(plan.serial));
-        audioPackets.flush(static_cast<uint64_t>(plan.serial));
-        videoFrames.flush(static_cast<uint64_t>(plan.serial));
-        resetAudioOutputForSerial(static_cast<uint64_t>(plan.serial), true,
-                                  "seek");
-        applyStateChange(playbackState.beginSeeking());
-        appendTimingFmt(
-            "%s serial=%d target_us=%lld seek_target_us=%lld demux_window_end_us=%lld decoder_preroll_us=%lld",
-                        tag ? tag : "ctrl_seek_request", plan.serial,
-                        static_cast<long long>(plan.displayTargetUs),
-                        static_cast<long long>(plan.demuxTargetUs),
-                        static_cast<long long>(plan.demuxWindowEndUs),
-                        static_cast<long long>(
-                            plan.decoderPrerollTargetUs));
-        return plan.serial;
-      };
-      auto beginSerialTransition = [&](int64_t targetUs,
-                                       const char* tag) -> int {
-        return applySerialTransition(
-            serialControl.beginTransition(
-                targetUs, initDone.load(std::memory_order_relaxed),
-                running.load(std::memory_order_relaxed)),
-            tag);
-      };
-      auto beginFrameStepSeekTransition =
-          [&](const playback_video_frame_step_seek::Plan& plan,
-              uint64_t generation, const char* tag) {
-        assert(plan.valid());
-        int expectedSeekSerial = serialControl.currentSerial() + 1;
-        frameStepSeek.publishForSerial(expectedSeekSerial, plan);
-        playback_video_serial_control::DemuxSeekMode demuxSeekMode =
-            plan.mode ==
-                    playback_video_frame_step_seek::PlanMode::
-                        PreviousBeforeTarget
-                ? playback_video_serial_control::DemuxSeekMode::
-                      VideoBeforeTarget
-                : playback_video_serial_control::DemuxSeekMode::
-                      VideoAtOrBefore;
-        int seekSerial = applySerialTransition(
-            serialControl.beginTransition(
-                plan.seekTargetUs(), plan.demuxTargetUs(),
-                plan.demuxWindowEndUs(),
-                plan.decoderPrerollTargetUs(),
-                demuxSeekMode,
-                initDone.load(std::memory_order_relaxed),
-                running.load(std::memory_order_relaxed)),
-            tag);
-        if (seekSerial != expectedSeekSerial) {
-          frameStepSeek.reset();
-          return;
-        }
-        playbackState.publishFrameStepSeekPresentation(seekSerial, generation);
-        appendTimingFmt(
-            "%s_request direction=%d mode=%d target_logical=%llu anchor_logical=%llu target_us=%lld anchor_us=%lld demux_window_end_us=%lld decoder_preroll_us=%lld demux_seek_mode=%d",
-            tag,
-            plan.direction == playback_video_frame_step::Direction::Previous
-                ? -1
-                : 1,
-            static_cast<int>(plan.mode),
-            static_cast<unsigned long long>(plan.target.logicalIndex),
-            static_cast<unsigned long long>(plan.anchor.logicalIndex),
-            static_cast<long long>(plan.target.ptsUs),
-            static_cast<long long>(plan.anchor.ptsUs),
-            static_cast<long long>(plan.demuxWindowEndUs()),
-            static_cast<long long>(plan.decoderPrerollTargetUs()),
-            static_cast<int>(demuxSeekMode));
-      };
-      switch (ev.type) {
-        case playback_video_control::EventType::SeekRequest: {
-          beginSerialTransition(ev.arg1, "ctrl_seek_request");
-          break;
-        }
-        case playback_video_control::EventType::FrameStepSeekRequest: {
-          if (!playbackState.consumeFrameStepSeek(
-                  ev.serial, ev.frameStepGeneration)) {
-            appendTimingFmt(
-                "ctrl_frame_step_seek_stale serial=%d generation=%llu current_serial=%d",
-                ev.serial,
-                static_cast<unsigned long long>(ev.frameStepGeneration),
-                serialControl.currentSerial());
-            break;
+  void handleEvent(const playback_video_control::Event& ev) {
+    auto applySerialTransition =
+        [&](playback_video_serial_control::TransitionPlan plan,
+            const char* tag) -> int {
+          if (!plan.valid) return 0;
+          if (plan.signalCommandPending) {
+            commandPending.store(true, std::memory_order_relaxed);
           }
-          const playback_video_frame_step_seek::Plan& plan =
-              ev.frameStepSeek;
-          beginFrameStepSeekTransition(plan, ev.frameStepGeneration,
-                                       "ctrl_frame_step_seek");
-          break;
-        }
-        case playback_video_control::EventType::FrameStepRequest: {
-          pauseRequested.store(true, std::memory_order_relaxed);
-          if (audioStartOk.load(std::memory_order_relaxed) &&
-              !audioIsPaused()) {
-            audioTogglePause();
+          playbackState.resetForSerial(plan.serial);
+          clearFrameRequested.store(true, std::memory_order_relaxed);
+          mainClock.resetForSerial(plan.serial);
+          videoPackets.flush(static_cast<uint64_t>(plan.serial));
+          audioPackets.flush(static_cast<uint64_t>(plan.serial));
+          videoFrames.flush(static_cast<uint64_t>(plan.serial));
+          resetAudioOutputForSerial(static_cast<uint64_t>(plan.serial), true,
+                                    "seek");
+          applyStateChange(playbackState.beginSeeking());
+          appendTimingFmt(
+              "%s serial=%d target_us=%lld seek_target_us=%lld demux_window_end_us=%lld decoder_preroll_us=%lld",
+              tag ? tag : "ctrl_seek_request", plan.serial,
+              static_cast<long long>(plan.displayTargetUs),
+              static_cast<long long>(plan.demuxTargetUs),
+              static_cast<long long>(plan.demuxWindowEndUs),
+              static_cast<long long>(plan.decoderPrerollTargetUs));
+          return plan.serial;
+        };
+    auto beginSerialTransition = [&](int64_t targetUs,
+                                     const char* tag) -> int {
+      return applySerialTransition(
+          serialControl.beginTransition(
+              targetUs, initDone.load(std::memory_order_relaxed),
+              running.load(std::memory_order_relaxed)),
+          tag);
+    };
+    auto beginFrameStepSeekTransition =
+        [&](const playback_video_frame_step_seek::Plan& plan,
+            uint64_t generation, const char* tag) {
+          assert(plan.valid());
+          int expectedSeekSerial = serialControl.currentSerial() + 1;
+          frameStepSeek.publishForSerial(expectedSeekSerial, plan);
+          playback_video_serial_control::DemuxSeekMode demuxSeekMode =
+              plan.mode ==
+                      playback_video_frame_step_seek::PlanMode::
+                          PreviousBeforeTarget
+                  ? playback_video_serial_control::DemuxSeekMode::
+                        VideoBeforeTarget
+                  : playback_video_serial_control::DemuxSeekMode::
+                        VideoAtOrBefore;
+          int seekSerial = applySerialTransition(
+              serialControl.beginTransition(
+                  plan.seekTargetUs(), plan.demuxTargetUs(),
+                  plan.demuxWindowEndUs(), plan.decoderPrerollTargetUs(),
+                  demuxSeekMode, initDone.load(std::memory_order_relaxed),
+                  running.load(std::memory_order_relaxed)),
+              tag);
+          if (seekSerial != expectedSeekSerial) {
+            frameStepSeek.reset();
+            return;
           }
-          applyStateChange(playbackState.requestFrameStep(
-              ev.frameStepDirection, serialControl.currentSerial()));
-          videoFrames.notify();
-          appendTimingFmt("ctrl_frame_step_request direction=%d",
-                          ev.frameStepDirection ==
-                                  playback_video_frame_step::Direction::
-                                      Previous
-                              ? -1
-                              : 1);
+          playbackState.publishFrameStepSeekPresentation(seekSerial,
+                                                         generation);
+          appendTimingFmt(
+              "%s_request direction=%d mode=%d target_logical=%llu anchor_logical=%llu target_us=%lld anchor_us=%lld demux_window_end_us=%lld decoder_preroll_us=%lld demux_seek_mode=%d",
+              tag,
+              plan.direction == playback_video_frame_step::Direction::Previous
+                  ? -1
+                  : 1,
+              static_cast<int>(plan.mode),
+              static_cast<unsigned long long>(plan.target.logicalIndex),
+              static_cast<unsigned long long>(plan.anchor.logicalIndex),
+              static_cast<long long>(plan.target.ptsUs),
+              static_cast<long long>(plan.anchor.ptsUs),
+              static_cast<long long>(plan.demuxWindowEndUs()),
+              static_cast<long long>(plan.decoderPrerollTargetUs()),
+              static_cast<int>(demuxSeekMode));
+        };
+    switch (ev.type) {
+      case playback_video_control::EventType::SeekRequest: {
+        beginSerialTransition(ev.arg1, "ctrl_seek_request");
+        break;
+      }
+      case playback_video_control::EventType::FrameStepSeekRequest: {
+        if (!playbackState.consumeFrameStepSeek(ev.serial,
+                                                ev.frameStepGeneration)) {
+          appendTimingFmt(
+              "ctrl_frame_step_seek_stale serial=%d generation=%llu current_serial=%d",
+              ev.serial,
+              static_cast<unsigned long long>(ev.frameStepGeneration),
+              serialControl.currentSerial());
           break;
         }
-        case playback_video_control::EventType::PauseRequest: {
-          const bool paused = ev.arg1 != 0;
-          pauseRequested.store(paused, std::memory_order_relaxed);
-          const bool resumedFrameStepWork =
-              !paused && exitFrameStepModeForPlaybackResume();
-          observePlaybackPipeline();
+        const playback_video_frame_step_seek::Plan& plan = ev.frameStepSeek;
+        beginFrameStepSeekTransition(plan, ev.frameStepGeneration,
+                                     "ctrl_frame_step_seek");
+        break;
+      }
+      case playback_video_control::EventType::FrameStepRequest: {
+        pauseRequested.store(true, std::memory_order_relaxed);
+        if (audioStartOk.load(std::memory_order_relaxed) && !audioIsPaused()) {
+          audioTogglePause();
+        }
+        applyStateChange(playbackState.requestFrameStep(
+            ev.frameStepDirection, serialControl.currentSerial()));
+        videoFrames.notify();
+        appendTimingFmt("ctrl_frame_step_request direction=%d",
+                        ev.frameStepDirection ==
+                                playback_video_frame_step::Direction::Previous
+                            ? -1
+                            : 1);
+        break;
+      }
+      case playback_video_control::EventType::PauseRequest: {
+        const bool paused = ev.arg1 != 0;
+        pauseRequested.store(paused, std::memory_order_relaxed);
+        if (paused && audioStartOk.load(std::memory_order_relaxed) &&
+            !audioIsPaused()) {
+          audioTogglePause();
+        }
+        bool resumedFrameStepWork = false;
+        if (!paused) {
+          const int64_t resumeTargetUs = videoTimelineUs();
+          resumedFrameStepWork = exitFrameStepModeForPlaybackResume();
           if (resumedFrameStepWork) {
-            videoFrames.notify();
+            beginSerialTransition(resumeTargetUs, "ctrl_resume_position_seek");
           }
-          appendTimingFmt("ctrl_pause_request paused=%d",
-                          paused ? 1 : 0);
+        }
+        if (!paused && audioStartOk.load(std::memory_order_relaxed) &&
+            audioIsPaused()) {
+          audioTogglePause();
+        }
+        observePlaybackPipeline();
+        if (resumedFrameStepWork) {
+          videoFrames.notify();
+        }
+        appendTimingFmt("ctrl_pause_request paused=%d", paused ? 1 : 0);
         break;
       }
       case playback_video_control::EventType::ResizeRequest: {
-        resizeTargetW.store(static_cast<int>(ev.arg1), std::memory_order_relaxed);
-        resizeTargetH.store(static_cast<int>(ev.arg2), std::memory_order_relaxed);
+        resizeTargetW.store(static_cast<int>(ev.arg1),
+                            std::memory_order_relaxed);
+        resizeTargetH.store(static_cast<int>(ev.arg2),
+                            std::memory_order_relaxed);
         resizeEpoch.fetch_add(1, std::memory_order_relaxed);
-          appendTimingFmt("ctrl_resize_request w=%d h=%d",
-                          static_cast<int>(ev.arg1),
-                          static_cast<int>(ev.arg2));
-          break;
-        }
-        case playback_video_control::EventType::CycleAudioTrack: {
-          int nextTrack = -1;
-          int nextStream = -1;
-          std::string nextLabel;
-          {
-            std::lock_guard<std::mutex> lock(audioTrackMutex);
-            if (audioTrackStreams.size() <= 1) break;
-            int currentTrack = activeAudioTrack.load(std::memory_order_relaxed);
-            if (currentTrack < 0 ||
-                currentTrack >= static_cast<int>(audioTrackStreams.size())) {
-              currentTrack = 0;
-            }
-            nextTrack = (currentTrack + 1) %
-                        static_cast<int>(audioTrackStreams.size());
-            nextStream = audioTrackStreams[static_cast<size_t>(nextTrack)];
-            if (nextStream < 0) break;
-            activeAudioTrack.store(nextTrack, std::memory_order_relaxed);
-            activeAudioStream.store(nextStream, std::memory_order_relaxed);
-            if (nextTrack >= 0 &&
-                nextTrack < static_cast<int>(audioTrackLabels.size())) {
-              nextLabel = audioTrackLabels[static_cast<size_t>(nextTrack)];
-            }
+        appendTimingFmt("ctrl_resize_request w=%d h=%d",
+                        static_cast<int>(ev.arg1),
+                        static_cast<int>(ev.arg2));
+        break;
+      }
+      case playback_video_control::EventType::CycleAudioTrack: {
+        int nextTrack = -1;
+        int nextStream = -1;
+        std::string nextLabel;
+        {
+          std::lock_guard<std::mutex> lock(audioTrackMutex);
+          if (audioTrackStreams.size() <= 1) break;
+          int currentTrack = activeAudioTrack.load(std::memory_order_relaxed);
+          if (currentTrack < 0 ||
+              currentTrack >= static_cast<int>(audioTrackStreams.size())) {
+            currentTrack = 0;
           }
-          int64_t targetUs = videoTimelineUs();
-          targetUs = (std::max)(int64_t{0}, targetUs);
-          const int currentSerial = serialControl.currentSerial();
-          commandPending.store(true, std::memory_order_relaxed);
-          audioTrackSwitch.request(currentSerial, targetUs);
-          audioDecodeEnded.store(false, std::memory_order_relaxed);
-          audioPackets.flush(static_cast<uint64_t>(currentSerial));
-          resetAudioOutputForSerial(static_cast<uint64_t>(currentSerial), true,
-                                    "audio_track_switch");
-          appendTimingFmt("audio_track_switch track=%d stream=%d label=%s",
-                          nextTrack, nextStream,
-                          nextLabel.empty() ? "N/A" : nextLabel.c_str());
-          break;
+          nextTrack =
+              (currentTrack + 1) % static_cast<int>(audioTrackStreams.size());
+          nextStream = audioTrackStreams[static_cast<size_t>(nextTrack)];
+          if (nextStream < 0) break;
+          activeAudioTrack.store(nextTrack, std::memory_order_relaxed);
+          activeAudioStream.store(nextStream, std::memory_order_relaxed);
+          if (nextTrack >= 0 &&
+              nextTrack < static_cast<int>(audioTrackLabels.size())) {
+            nextLabel = audioTrackLabels[static_cast<size_t>(nextTrack)];
+          }
         }
-        case playback_video_control::EventType::CloseRequest: {
-          ctrlRunning.store(false, std::memory_order_relaxed);
-          running.store(false, std::memory_order_relaxed);
+        int64_t targetUs = videoTimelineUs();
+        targetUs = (std::max)(int64_t{0}, targetUs);
+        const int currentSerial = serialControl.currentSerial();
+        commandPending.store(true, std::memory_order_relaxed);
+        audioTrackSwitch.request(currentSerial, targetUs);
+        audioDecodeEnded.store(false, std::memory_order_relaxed);
+        audioPackets.flush(static_cast<uint64_t>(currentSerial));
+        resetAudioOutputForSerial(static_cast<uint64_t>(currentSerial), true,
+                                  "audio_track_switch");
+        appendTimingFmt("audio_track_switch track=%d stream=%d label=%s",
+                        nextTrack, nextStream,
+                        nextLabel.empty() ? "N/A" : nextLabel.c_str());
+        break;
+      }
+      case playback_video_control::EventType::CloseRequest: {
+        ctrlRunning.store(false, std::memory_order_relaxed);
+        running.store(false, std::memory_order_relaxed);
         commandPending.store(true, std::memory_order_relaxed);
         appendTiming("ctrl_close_request");
         break;
       }
       case playback_video_control::EventType::SeekApplied: {
-        if (serialControl.applySeekResult(ev.serial, static_cast<int>(ev.arg1))) {
+        if (serialControl.applySeekResult(ev.serial,
+                                          static_cast<int>(ev.arg1))) {
           if (ev.arg1 != 0) {
             audioOutputTimeline.cancelClockReacquire(ev.serial);
           }
@@ -2464,14 +2484,17 @@ struct Player::Impl {
         if (ev.serial == serialControl.currentSerial()) {
           if (playbackState.current() == PlayerState::Priming) {
             int64_t audioOldestPts = audioStreamOldestPtsUs();
-            int64_t videoPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
+            int64_t videoPts =
+                lastPresentedPtsUs.load(std::memory_order_relaxed);
 
             playback_video_sync::PrimingAnchor anchor =
-                playback_video_sync::choosePrimingAnchor(audioOldestPts, videoPts);
+                playback_video_sync::choosePrimingAnchor(audioOldestPts,
+                                                         videoPts);
             if (anchor.valid) {
               int64_t now = nowUs();
 
-              playback_audio_output_clock_source::prime(ev.serial, anchor.ptsUs);
+              playback_audio_output_clock_source::prime(ev.serial,
+                                                        anchor.ptsUs);
               mainClock.updateVideo(ev.serial, anchor.ptsUs, now);
 
               appendTimingFmt(

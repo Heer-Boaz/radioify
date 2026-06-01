@@ -11,6 +11,7 @@
 #include "core/windows_message_pump.h"
 #include "playback/debug/lines.h"
 #include "playback/frame/refresh.h"
+#include "playback/video/state/machine.h"
 #include "video_pipeline.h"
 #include "mini_player_tui.h"
 
@@ -89,8 +90,11 @@ WindowUiState buildPlaybackFramebufferUiState(
   }
   const bool subtitlesEnabledNow =
       enableSubtitlesShared.load(std::memory_order_relaxed);
-  bool pausedNow = playbackState == PlaybackSessionState::Paused ||
-                   player.state() == PlayerState::Paused;
+  const bool playerTransportPaused =
+      playback_video_state_machine::project(player.state()).transport ==
+      playback_video_state_machine::TransportState::Paused;
+  bool pausedNow =
+      playbackState == PlaybackSessionState::Paused || playerTransportPaused;
   bool audioFinishedNow = audioOk && audioIsFinished();
 
   playback_overlay::PlaybackOverlayInputs overlayInputs;
