@@ -1284,10 +1284,10 @@ bool VideoWindow::EnterPictureInPicture() {
     m_pictureInPicture.store(true, std::memory_order_relaxed);
     SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
     LONG pipExStyle =
-        (m_pipRestoreExStyle | WS_EX_TOOLWINDOW) &
-        ~(WS_EX_APPWINDOW | WS_EX_TOPMOST);
+        (m_pipRestoreExStyle | WS_EX_TOOLWINDOW | WS_EX_TOPMOST) &
+        ~WS_EX_APPWINDOW;
     SetWindowLong(m_hWnd, GWL_EXSTYLE, pipExStyle);
-    SetWindowPos(m_hWnd, HWND_NOTOPMOST, pipRect.left, pipRect.top,
+    SetWindowPos(m_hWnd, HWND_TOPMOST, pipRect.left, pipRect.top,
                  pipRect.right - pipRect.left, pipRect.bottom - pipRect.top,
                  SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOACTIVATE);
     ::ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
