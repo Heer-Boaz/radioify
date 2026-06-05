@@ -48,8 +48,6 @@ function Invoke-RadioifyMsixDeploymentPowerShell {
     $tempRoot = [System.IO.Path]::GetTempPath()
     $operationId = [guid]::NewGuid().ToString("N")
     $payloadPath = Join-Path $tempRoot "radioify-appx-$operationId.json"
-    $stdoutPath = Join-Path $tempRoot "radioify-appx-$operationId.out"
-    $stderrPath = Join-Path $tempRoot "radioify-appx-$operationId.err"
     $payloadLiteral = $payloadPath.Replace("'", "''")
 
     $payload = [ordered]@{
@@ -73,23 +71,20 @@ if (`$payload.Parameters) {
 "@
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
     $powershellExe = Resolve-RadioifyWindowsPowerShellExecutable
-    $argumentList = @(
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        $encodedCommand
-    )
 
     $process = $null
     try {
-        $process = Start-Process `
-            -FilePath $powershellExe `
-            -ArgumentList $argumentList `
-            -RedirectStandardOutput $stdoutPath `
-            -RedirectStandardError $stderrPath `
-            -WindowStyle Hidden `
-            -PassThru
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $powershellExe
+        $startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.CreateNoWindow = $true
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
 
         $startedAt = Get-Date
         $deadline = $startedAt.AddSeconds($TimeoutSeconds)
@@ -114,17 +109,9 @@ if (`$payload.Parameters) {
             }
         }
 
-        $process.Refresh()
-        $stdout = if (Test-Path -LiteralPath $stdoutPath) {
-            Get-Content -LiteralPath $stdoutPath -Raw
-        } else {
-            ""
-        }
-        $stderr = if (Test-Path -LiteralPath $stderrPath) {
-            Get-Content -LiteralPath $stderrPath -Raw
-        } else {
-            ""
-        }
+        $process.WaitForExit()
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
 
         if ($process.ExitCode -ne 0) {
             $details = (($stderr, $stdout) |
@@ -145,9 +132,7 @@ if (`$payload.Parameters) {
         if ($process) {
             $process.Dispose()
         }
-        foreach ($path in @($payloadPath, $stdoutPath, $stderrPath)) {
-            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-        }
+        Remove-Item -LiteralPath $payloadPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -185,14 +170,10 @@ function Test-RadioifyMsixCertificateTrusted {
                     [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
                     $Thumbprint,
                     $false)
-                try {
-                    if ($matches.Count -gt 0) {
-                        Write-Output "trusted"
-                    } else {
-                        Write-Output "missing"
-                    }
-                } finally {
-                    $matches.Dispose()
+                if ($matches.Count -gt 0) {
+                    Write-Output "trusted"
+                } else {
+                    Write-Output "missing"
                 }
             } finally {
                 $store.Close()
@@ -256,12 +237,8 @@ from an elevated PowerShell window.
                     [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
                     $Thumbprint,
                     $false)
-                try {
-                    if ($matches.Count -eq 0) {
-                        $store.Add($certificate)
-                    }
-                } finally {
-                    $matches.Dispose()
+                if ($matches.Count -eq 0) {
+                    $store.Add($certificate)
                 }
             } finally {
                 $store.Close()

@@ -7,9 +7,73 @@ function New-CMakeConfigureInfo {
   $triplets = $Context.Build.TripletInfo
 
   $cmakeArgs = @("--preset", $toolchain.ConfigurePreset, "-Wno-deprecated")
+  $desiredCCompilerForCache = $null
+  $desiredCxxCompilerForCache = $null
+  $desiredBuildTypeForCache = $null
+  $desiredRcCompilerForCache = $null
+  $desiredMtForCache = $null
+
+  if ($toolchain.ClangCl -and $toolchain.ClangClExe) {
+    $desiredCCompilerForCache = Convert-ToCMakePath $toolchain.ClangClExe
+    $desiredCxxCompilerForCache = $desiredCCompilerForCache
+    $cmakeArgs += "-DCMAKE_C_COMPILER=$desiredCCompilerForCache"
+    $cmakeArgs += "-DCMAKE_CXX_COMPILER=$desiredCxxCompilerForCache"
+    if ($toolchain.ClangRcExe) {
+      $desiredRcCompilerForCache = Convert-ToCMakePath $toolchain.ClangRcExe
+      $cmakeArgs += "-DCMAKE_RC_COMPILER=$desiredRcCompilerForCache"
+    }
+    if ($toolchain.ClangMtExe) {
+      $desiredMtForCache = Convert-ToCMakePath $toolchain.ClangMtExe
+      $cmakeArgs += "-DCMAKE_MT=$desiredMtForCache"
+    }
+  }
+
+  # If the user explicitly requested to disable clang-cl, force CMake to use
+  # MSVC's cl.exe by setting the CMAKE_C_COMPILER/CMAKE_CXX_COMPILER cache
+  # variables. This helps when clang is auto-detected on the system but the
+  # caller wants an MSVC build (e.g., Developer Prompt).
+  try {
+    if ($options.PSObject.Properties.Name -contains 'ClangCl' -and -not $options.ClangCl -and ($options.PSObject.Properties.Name -contains 'ClangClExplicitlySet' -and $options.ClangClExplicitlySet)) {
+      # User explicitly requested MSVC (disabled clang-cl). Resolve full path to cl.exe
+      $clPath = $null
+      try {
+        if (Get-Command Resolve-Cl -ErrorAction SilentlyContinue) {
+          $clPath = Resolve-Cl
+        }
+      } catch {
+        # ignore
+      }
+
+      if (-not $clPath) {
+        try {
+          $clPath = Resolve-ExecutablePath -CommandName "cl.exe" -WherePattern "cl.exe" -VisualStudioRelativePaths @(
+            "VC\Tools\MSVC\bin\Hostx64\x64\cl.exe",
+            "VC\Tools\MSVC\bin\Hostx64\x86\cl.exe",
+            "VC\bin\cl.exe"
+          )
+        } catch {
+          # ignore
+        }
+      }
+
+      if ($clPath) {
+        $desiredCCompilerForCache = Convert-ToCMakePath $clPath
+        $desiredCxxCompilerForCache = $desiredCCompilerForCache
+        $cmakeArgs += "-DCMAKE_C_COMPILER=$desiredCCompilerForCache"
+        $cmakeArgs += "-DCMAKE_CXX_COMPILER=$desiredCxxCompilerForCache"
+      }
+      else {
+        Fail-Build "MSVC cl.exe requested but cl.exe could not be found. Open a Developer Command Prompt or install Visual Studio Build Tools."
+      }
+    }
+  }
+  catch {
+    # Ignore; best-effort only
+  }
 
   if ($toolchain.Generator -eq "Ninja" -or -not $toolchain.Generator) {
-    $cmakeArgs += "-DCMAKE_BUILD_TYPE=$($options.Config)"
+    $desiredBuildTypeForCache = $options.Config
+    $cmakeArgs += "-DCMAKE_BUILD_TYPE=$desiredBuildTypeForCache"
   }
 
   if ($toolchain.WindowsFxcExe) {
@@ -54,6 +118,11 @@ function New-CMakeConfigureInfo {
     Arguments = $cmakeArgs
     DesiredManifestMode = $desiredManifestMode
     DesiredToolchainForCache = $desiredToolchainForCache
+    DesiredCCompilerForCache = $desiredCCompilerForCache
+    DesiredCxxCompilerForCache = $desiredCxxCompilerForCache
+    DesiredBuildTypeForCache = $desiredBuildTypeForCache
+    DesiredRcCompilerForCache = $desiredRcCompilerForCache
+    DesiredMtForCache = $desiredMtForCache
   }
 }
 
@@ -135,6 +204,11 @@ function Ensure-BuildCacheCompatible {
   $cachedManifestMode = Get-CMakeCacheValue -CachePath $cachePath -Variable "VCPKG_MANIFEST_MODE"
   $initialManifestMode = Get-CMakeCacheValue -CachePath $cachePath -Variable "Z_VCPKG_CHECK_MANIFEST_MODE"
   $cachedToolchainFile = Get-CMakeCacheValue -CachePath $cachePath -Variable "CMAKE_TOOLCHAIN_FILE"
+  $cachedCCompiler = Get-CMakeCacheValue -CachePath $cachePath -Variable "CMAKE_C_COMPILER"
+  $cachedCxxCompiler = Get-CMakeCacheValue -CachePath $cachePath -Variable "CMAKE_CXX_COMPILER"
+  $cachedBuildType = Get-CMakeCacheValue -CachePath $cachePath -Variable "CMAKE_BUILD_TYPE"
+  $cachedRcCompiler = Get-CMakeCacheValue -CachePath $cachePath -Variable "CMAKE_RC_COMPILER"
+  $cachedMt = Get-CMakeCacheValue -CachePath $cachePath -Variable "CMAKE_MT"
 
   $effectiveCachedManifestMode = $null
   if ($initialManifestMode) {
@@ -161,6 +235,62 @@ function Ensure-BuildCacheCompatible {
     if (Test-Path $buildDir) {
       Remove-PathWithRetry -Path $buildDir
     }
+    return
+  }
+
+  if ($Context.Build.ConfigureInfo.DesiredCCompilerForCache -and $cachedCCompiler -and ($cachedCCompiler -ne $Context.Build.ConfigureInfo.DesiredCCompilerForCache)) {
+    Write-Host "Detected CMAKE_C_COMPILER mismatch in build cache:"
+    Write-Host "  cached : $cachedCCompiler"
+    Write-Host "  desired: $($Context.Build.ConfigureInfo.DesiredCCompilerForCache)"
+    Write-Host "Recreating build directory to clear stale broken CMake cache."
+    if (Test-Path $buildDir) {
+      Remove-PathWithRetry -Path $buildDir
+    }
+    return
+  }
+
+  if ($Context.Build.ConfigureInfo.DesiredCxxCompilerForCache -and $cachedCxxCompiler -and ($cachedCxxCompiler -ne $Context.Build.ConfigureInfo.DesiredCxxCompilerForCache)) {
+    Write-Host "Detected CMAKE_CXX_COMPILER mismatch in build cache:"
+    Write-Host "  cached : $cachedCxxCompiler"
+    Write-Host "  desired: $($Context.Build.ConfigureInfo.DesiredCxxCompilerForCache)"
+    Write-Host "Recreating build directory to clear stale broken CMake cache."
+    if (Test-Path $buildDir) {
+      Remove-PathWithRetry -Path $buildDir
+    }
+    return
+  }
+
+  if ($Context.Build.ConfigureInfo.DesiredBuildTypeForCache -and $cachedBuildType -and ($cachedBuildType -ne $Context.Build.ConfigureInfo.DesiredBuildTypeForCache)) {
+    Write-Host "Detected CMAKE_BUILD_TYPE mismatch in build cache:"
+    Write-Host "  cached : $cachedBuildType"
+    Write-Host "  desired: $($Context.Build.ConfigureInfo.DesiredBuildTypeForCache)"
+    Write-Host "Recreating build directory to clear stale broken CMake cache."
+    if (Test-Path $buildDir) {
+      Remove-PathWithRetry -Path $buildDir
+    }
+    return
+  }
+
+  if ($Context.Build.ConfigureInfo.DesiredRcCompilerForCache -and $cachedRcCompiler -and ($cachedRcCompiler -ne $Context.Build.ConfigureInfo.DesiredRcCompilerForCache)) {
+    Write-Host "Detected CMAKE_RC_COMPILER mismatch in build cache:"
+    Write-Host "  cached : $cachedRcCompiler"
+    Write-Host "  desired: $($Context.Build.ConfigureInfo.DesiredRcCompilerForCache)"
+    Write-Host "Recreating build directory to clear stale broken CMake cache."
+    if (Test-Path $buildDir) {
+      Remove-PathWithRetry -Path $buildDir
+    }
+    return
+  }
+
+  if ($Context.Build.ConfigureInfo.DesiredMtForCache -and $cachedMt -and ($cachedMt -ne $Context.Build.ConfigureInfo.DesiredMtForCache)) {
+    Write-Host "Detected CMAKE_MT mismatch in build cache:"
+    Write-Host "  cached : $cachedMt"
+    Write-Host "  desired: $($Context.Build.ConfigureInfo.DesiredMtForCache)"
+    Write-Host "Recreating build directory to clear stale broken CMake cache."
+    if (Test-Path $buildDir) {
+      Remove-PathWithRetry -Path $buildDir
+    }
+    return
   }
 }
 

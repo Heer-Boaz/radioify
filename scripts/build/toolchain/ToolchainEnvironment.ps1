@@ -13,6 +13,39 @@ function Apply-BuildToolchainEnvironment {
     Prepend-PathDirectory (Split-Path -Parent $Toolchain.ClangClExe)
   }
 
+  # If using MSVC (not clang-cl), ensure MSVC and Windows SDK tools are on PATH so
+  # CMake can invoke rc.exe/mt.exe/link.exe correctly when not running from a
+  # Developer Prompt.
+  if (-not $Toolchain.ClangCl) {
+    try {
+      if (Get-Command Resolve-Cl -ErrorAction SilentlyContinue) {
+        $msvcCl = Resolve-Cl
+      }
+      else {
+        $msvcCl = Resolve-ExecutablePath -CommandName "cl.exe" -WherePattern "cl.exe" -VisualStudioRelativePaths @(
+          "VC\Tools\MSVC\bin\Hostx64\x64\cl.exe",
+          "VC\Tools\MSVC\bin\Hostx64\x86\cl.exe",
+          "VC\bin\cl.exe"
+        )
+      }
+      if ($msvcCl) {
+        Prepend-PathDirectory (Split-Path -Parent $msvcCl)
+        $rc = Resolve-WindowsSdkTool -ToolName "rc.exe"
+        if ($rc) { Prepend-PathDirectory (Split-Path -Parent $rc) }
+        $mt = Resolve-WindowsSdkTool -ToolName "mt.exe"
+        if ($mt) { Prepend-PathDirectory (Split-Path -Parent $mt) }
+        $link = Resolve-ExecutablePath -CommandName "link.exe" -WherePattern "link.exe" -VisualStudioRelativePaths @(
+          "VC\Tools\MSVC\bin\Hostx64\x64\link.exe",
+          "VC\Tools\MSVC\bin\Hostx64\x86\link.exe"
+        )
+        if ($link) { Prepend-PathDirectory (Split-Path -Parent $link) }
+      }
+    }
+    catch {
+      # best-effort only
+    }
+  }
+
   if ($Toolchain.Ninja -and -not (Get-ProcessEnvironmentVariable -Name "NINJA_STATUS")) {
     Set-ProcessEnvironmentVariable -Name "NINJA_STATUS" -Value "[%p %f/%t | %w elapsed | ETA %W] "
   }

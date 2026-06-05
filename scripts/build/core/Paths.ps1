@@ -26,7 +26,7 @@ function Get-CMakeCacheValue {
   if (-not $CachePath -or -not (Test-Path $CachePath)) { return $null }
   if (-not $Variable) { return $null }
 
-  $pattern = "^{0}:(?:BOOL|STRING|PATH|FILEPATH|INTERNAL)=([^\r\n]*)$" -f [regex]::Escape($Variable)
+  $pattern = "^{0}:(?:BOOL|STRING|PATH|FILEPATH|INTERNAL|UNINITIALIZED)=([^\r\n]*)$" -f [regex]::Escape($Variable)
   $match = Select-String -Path $CachePath -Pattern $pattern -CaseSensitive |
     Select-Object -First 1
   if (-not $match) { return $null }

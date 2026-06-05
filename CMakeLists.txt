@@ -317,11 +317,10 @@ add_executable(radioify)
 if (WIN32)
   set_source_files_properties("${CMAKE_SOURCE_DIR}/app/radioify.rc"
     PROPERTIES
-      OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/radioify.ico"
+      OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/radioify.ico;${CMAKE_SOURCE_DIR}/app/radioify.exe.manifest"
   )
 endif()
 target_sources(radioify PRIVATE
-  $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/app/radioify.exe.manifest>
   $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/app/radioify.rc>
   $<TARGET_OBJECTS:radioify_app>
   $<TARGET_OBJECTS:radioify_tui>
@@ -335,6 +334,9 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_audiofilter>
   $<TARGET_OBJECTS:radioify_loopsplit>
 )
+if (MSVC)
+  target_link_options(radioify PRIVATE /MANIFEST:NO)
+endif()
 radioify_link_repo_target(radioify)
 
 add_executable(radio_measurements)
@@ -1063,6 +1065,33 @@ set(_radioify_libass_include_dirs "")
 set(_radioify_libass_libraries "")
 set(_radioify_libass_hints "")
 
+function(radioify_find_library_pair output_var release_var debug_var)
+  find_library(${release_var}
+    NAMES ${ARGN}
+    HINTS ENV LIBASS_DIR ENV LIBASS_ROOT ${_radioify_libass_hints}
+    PATH_SUFFIXES lib
+  )
+  find_library(${debug_var}
+    NAMES ${ARGN}
+    HINTS ENV LIBASS_DIR ENV LIBASS_ROOT ${_radioify_libass_hints}
+    PATH_SUFFIXES debug/lib
+  )
+
+  set(_radioify_library_pair "")
+  if (${release_var} AND ${debug_var})
+    set(_radioify_library_pair
+      optimized ${${release_var}}
+      debug ${${debug_var}}
+    )
+  elseif (${release_var})
+    set(_radioify_library_pair ${${release_var}})
+  elseif (${debug_var})
+    set(_radioify_library_pair ${${debug_var}})
+  endif()
+
+  set(${output_var} ${_radioify_library_pair} PARENT_SCOPE)
+endfunction()
+
 if (DEFINED VCPKG_INSTALLED_DIR)
   if (DEFINED VCPKG_TARGET_TRIPLET)
     list(APPEND _radioify_libass_hints "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
@@ -1103,28 +1132,37 @@ elseif (NOT RADIOIFY_HAS_LIBASS)
     HINTS ENV LIBASS_DIR ENV LIBASS_ROOT ${_radioify_libass_hints}
     PATH_SUFFIXES include
   )
-  find_library(RADIOIFY_LIBASS_LIBRARY
-    NAMES ass libass
-    HINTS ENV LIBASS_DIR ENV LIBASS_ROOT ${_radioify_libass_hints}
-    PATH_SUFFIXES lib
+  radioify_find_library_pair(_radioify_libass_library
+    RADIOIFY_LIBASS_LIBRARY_RELEASE
+    RADIOIFY_LIBASS_LIBRARY_DEBUG
+    ass libass
   )
-  if (RADIOIFY_LIBASS_INCLUDE_DIR AND RADIOIFY_LIBASS_LIBRARY)
+  if (RADIOIFY_LIBASS_INCLUDE_DIR AND _radioify_libass_library)
     set(RADIOIFY_HAS_LIBASS ON)
     set(_radioify_libass_include_dirs ${RADIOIFY_LIBASS_INCLUDE_DIR})
-    set(_radioify_libass_libraries ${RADIOIFY_LIBASS_LIBRARY})
+    set(_radioify_libass_libraries ${_radioify_libass_library})
 
     if (DEFINED VCPKG_TARGET_TRIPLET AND VCPKG_TARGET_TRIPLET MATCHES "-static")
       set(_radioify_libass_dep_libraries "")
-      foreach(_radioify_ass_dep freetype harfbuzz fribidi brotlidec brotlicommon bz2 libpng16 png16 zlib)
+      foreach(_radioify_ass_dep IN ITEMS
+          freetype
+          harfbuzz
+          fribidi
+          brotlidec
+          brotlicommon
+          bz2
+          libpng16
+          png16
+          zlib)
         string(TOUPPER "${_radioify_ass_dep}" _radioify_ass_dep_upper)
-        set(_radioify_ass_dep_var "RADIOIFY_LIBASS_DEP_${_radioify_ass_dep_upper}")
-        find_library(${_radioify_ass_dep_var}
-          NAMES ${_radioify_ass_dep}
-          HINTS ${_radioify_libass_hints}
-          PATH_SUFFIXES lib
+        radioify_find_library_pair(_radioify_ass_dep_libraries
+          "RADIOIFY_LIBASS_DEP_${_radioify_ass_dep_upper}_RELEASE"
+          "RADIOIFY_LIBASS_DEP_${_radioify_ass_dep_upper}_DEBUG"
+          ${_radioify_ass_dep} ${_radioify_ass_dep}d
         )
-        if (${_radioify_ass_dep_var})
-          list(APPEND _radioify_libass_dep_libraries ${${_radioify_ass_dep_var}})
+        if (_radioify_ass_dep_libraries)
+          list(APPEND _radioify_libass_dep_libraries
+            ${_radioify_ass_dep_libraries})
         endif()
       endforeach()
       list(APPEND _radioify_libass_libraries ${_radioify_libass_dep_libraries})
@@ -1271,13 +1309,35 @@ if (DEFINED CMAKE_WARN_DEPRECATED)
 endif()
 set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "Suppress third-party CMake deprecation warnings" FORCE)
 set(CMAKE_WARN_DEPRECATED OFF)
+# Allow older third-party projects with cmake_minimum_required < 3.5 to be
+# configured by setting a minimum policy version. This mirrors passing
+# -DCMAKE_POLICY_VERSION_MINIMUM=3.5 on the command line.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version for third-party projects" FORCE)
 FetchContent_Declare(
   libkss
   GIT_REPOSITORY https://github.com/digital-sound-antiques/libkss.git
   GIT_TAG 1.2.1
   GIT_SUBMODULES_RECURSE TRUE
 )
-FetchContent_MakeAvailable(libkss)
+# Populate libkss so we can apply a tiny compatibility patch before configuring it.
+# Newer CMake releases remove compatibility for <3.5; libkss declares 3.0 which
+# causes configuration to fail. We populate, patch its CMakeLists to require 3.5,
+# then add it via add_subdirectory so the patched file is used.
+FetchContent_Populate(libkss)
+# Replace any cmake_minimum_required(VERSION x.y) in the downloaded libkss CMakeLists
+# files with a minimum of 3.5 so newer CMake can configure it.
+if(EXISTS "${libkss_SOURCE_DIR}")
+  file(GLOB_RECURSE _radioify_libkss_cmake_files "${libkss_SOURCE_DIR}/**/CMakeLists.txt")
+  foreach(_radioify_libkss_file IN LISTS _radioify_libkss_cmake_files)
+    file(READ "${_radioify_libkss_file}" _radioify_libkss_contents)
+    string(REGEX REPLACE "cmake_minimum_required\\(VERSION[ \\t]*[0-9]+\\.[0-9]+\\)" "cmake_minimum_required(VERSION 3.5)" _radioify_libkss_patched "${_radioify_libkss_contents}")
+    if(NOT _radioify_libkss_patched STREQUAL _radioify_libkss_contents)
+      file(WRITE "${_radioify_libkss_file}" "${_radioify_libkss_patched}")
+    endif()
+  endforeach()
+endif()
+
+add_subdirectory(${libkss_SOURCE_DIR} ${libkss_BINARY_DIR})
 set(_radioify_libkss_kssplay_c "${libkss_SOURCE_DIR}/src/kssplay.c")
 if (EXISTS "${_radioify_libkss_kssplay_c}")
   file(READ "${_radioify_libkss_kssplay_c}" _radioify_libkss_kssplay_c_contents)
