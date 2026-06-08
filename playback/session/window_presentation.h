@@ -7,10 +7,7 @@ class VideoWindow;
 
 namespace playback_session_window {
 
-struct WindowPresentationRequest {
-  PlaybackPresentationMode target = PlaybackPresentationMode::Fullscreen;
-  bool textGrid = false;
-};
+using WindowPresentationRequest = PlaybackWindowPresentationRequest;
 
 bool apply(VideoWindow& window, WindowPresentationRequest request);
 

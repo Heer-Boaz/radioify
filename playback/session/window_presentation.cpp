@@ -2,6 +2,23 @@
 
 #include "playback/video/framebuffer/window/window.h"
 
+#include <cassert>
+
+namespace {
+
+VideoWindowFocus toVideoWindowFocus(PlaybackPresentationFocus focus) {
+  switch (focus) {
+    case PlaybackPresentationFocus::KeepCurrentSurface:
+      return VideoWindowFocus::KeepCurrentFocus;
+    case PlaybackPresentationFocus::FocusTargetSurface:
+      return VideoWindowFocus::TakeForegroundFocus;
+  }
+  assert(false && "Unhandled playback presentation focus mode");
+  return VideoWindowFocus::KeepCurrentFocus;
+}
+
+}  // namespace
+
 namespace playback_session_window {
 
 void setTextGrid(VideoWindow& window, bool enabled) {
@@ -11,11 +28,12 @@ void setTextGrid(VideoWindow& window, bool enabled) {
 bool exitPictureInPicture(VideoWindow& window,
                           WindowPresentationRequest request) {
   setTextGrid(window, request.textGrid);
+  const VideoWindowFocus focus = toVideoWindowFocus(request.focus);
   switch (request.target) {
     case PlaybackPresentationMode::Fullscreen:
-      return window.ExitPictureInPictureToFullscreen();
+      return window.ExitPictureInPictureToFullscreen(focus);
     case PlaybackPresentationMode::DefaultNonFullscreen:
-      return window.SetPictureInPicture(false);
+      return window.SetPictureInPicture(false, focus);
     case PlaybackPresentationMode::PictureInPicture:
       return true;
   }
@@ -24,13 +42,14 @@ bool exitPictureInPicture(VideoWindow& window,
 
 bool apply(VideoWindow& window, WindowPresentationRequest request) {
   setTextGrid(window, request.textGrid);
+  const VideoWindowFocus focus = toVideoWindowFocus(request.focus);
   switch (request.target) {
     case PlaybackPresentationMode::Fullscreen:
       return window.IsPictureInPicture()
                  ? exitPictureInPicture(window, request)
-                 : window.SetFullscreen(true);
+                 : window.SetFullscreen(true, focus);
     case PlaybackPresentationMode::PictureInPicture:
-      return window.SetPictureInPicture(true);
+      return window.SetPictureInPicture(true, focus);
     case PlaybackPresentationMode::DefaultNonFullscreen:
       return true;
   }
@@ -43,23 +62,26 @@ void applyPlacement(VideoWindow& window,
 
   if (state.pictureInPictureActive) {
     if (state.pictureInPictureRestoreFullscreen) {
-      apply(window, {PlaybackPresentationMode::Fullscreen,
-                     state.textGridPresentationEnabled});
+      apply(window, restoredWindowPresentation(
+                        PlaybackPresentationMode::Fullscreen,
+                        state.textGridPresentationEnabled));
     } else if (state.hasPictureInPictureRestoreRect) {
       window.SetWindowBounds(state.pictureInPictureRestoreRect);
     } else if (state.hasWindowRect) {
       window.SetWindowBounds(state.windowRect);
     }
 
-    if (window.SetPictureInPicture(true) && state.hasPictureInPictureRect) {
+    if (window.SetPictureInPicture(true, VideoWindowFocus::KeepCurrentFocus) &&
+        state.hasPictureInPictureRect) {
       window.SetWindowBounds(state.pictureInPictureRect);
     }
     return;
   }
 
   if (state.fullscreenActive) {
-    apply(window, {PlaybackPresentationMode::Fullscreen,
-                   state.textGridPresentationEnabled});
+    apply(window, restoredWindowPresentation(
+                      PlaybackPresentationMode::Fullscreen,
+                      state.textGridPresentationEnabled));
     return;
   }
 

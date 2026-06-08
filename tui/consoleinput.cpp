@@ -6,6 +6,7 @@
 #include <string>
 
 #include "core/windows_app_resources.h"
+#include "core/windows_console_window.h"
 
 namespace {
 
@@ -197,24 +198,7 @@ void ConsoleInput::mapPixelMousePosition(MouseEvent& mouse) const {
 }
 
 bool ConsoleInput::ownsForegroundConsoleWindow() const {
-  if (!focusActive_) return false;
-
-  HWND foreground = GetForegroundWindow();
-  if (!foreground) return false;
-
-  if (HWND console = GetConsoleWindow()) {
-    if (foreground == console) return true;
-  }
-
-  if (activeConsoleTitle_.empty()) return false;
-
-  wchar_t foregroundTitle[kConsoleTitleBufferChars]{};
-  const int length =
-      GetWindowTextW(foreground, foregroundTitle, kConsoleTitleBufferChars);
-  if (length <= 0) return false;
-
-  std::wstring title(foregroundTitle, static_cast<size_t>(length));
-  return title.find(activeConsoleTitle_) != std::wstring::npos;
+  return focusActive_ && isRadioifyConsoleForegroundWindow();
 }
 
 bool ConsoleInput::handleTerminalInputCharacter(wchar_t ch, InputEvent& out) {

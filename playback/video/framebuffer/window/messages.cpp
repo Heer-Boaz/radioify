@@ -5,8 +5,31 @@
 #include <windowsx.h>
 
 #include <atomic>
+#include <cassert>
 #include <cmath>
 #include <utility>
+
+LPARAM VideoWindow::EncodeFocusMessageParam(VideoWindowFocus focus) {
+    switch (focus) {
+        case VideoWindowFocus::KeepCurrentFocus:
+            return kKeepCurrentFocusMessageParam;
+        case VideoWindowFocus::TakeForegroundFocus:
+            return kTakeForegroundFocusMessageParam;
+    }
+    assert(false && "Unhandled video window focus mode");
+    return kKeepCurrentFocusMessageParam;
+}
+
+VideoWindowFocus VideoWindow::DecodeFocusMessageParam(LPARAM param) {
+    switch (param) {
+        case kKeepCurrentFocusMessageParam:
+            return VideoWindowFocus::KeepCurrentFocus;
+        case kTakeForegroundFocusMessageParam:
+            return VideoWindowFocus::TakeForegroundFocus;
+    }
+    assert(false && "Unexpected video window focus message parameter");
+    return VideoWindowFocus::KeepCurrentFocus;
+}
 
 bool VideoWindow::ShouldQueueWindowMouseEvent(int y) const {
     if (m_captureAllMouseInput) {
@@ -39,19 +62,28 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == kTogglePictureInPictureMessage) {
-        pThis->SetPictureInPicture(!pThis->IsPictureInPicture());
+        const VideoWindowFocus focus = DecodeFocusMessageParam(lParam);
+        pThis->SetPictureInPicture(
+            !pThis->IsPictureInPicture(), focus);
         return 0;
     }
     if (uMsg == kSetPictureInPictureMessage) {
-        pThis->SetPictureInPicture(wParam != 0);
+        const VideoWindowFocus focus = DecodeFocusMessageParam(lParam);
+        pThis->SetPictureInPicture(wParam != 0, focus);
         return 0;
     }
     if (uMsg == kExitPictureInPictureToFullscreenMessage) {
-        pThis->ExitPictureInPictureToFullscreen();
+        const VideoWindowFocus focus = DecodeFocusMessageParam(lParam);
+        pThis->ExitPictureInPictureToFullscreen(focus);
         return 0;
     }
     if (uMsg == kSetFullscreenMessage) {
-        pThis->SetFullscreen(wParam != 0);
+        const VideoWindowFocus focus = DecodeFocusMessageParam(lParam);
+        pThis->SetFullscreen(wParam != 0, focus);
+        return 0;
+    }
+    if (uMsg == kActivateWindowMessage) {
+        pThis->Activate();
         return 0;
     }
     if (uMsg == kSetWindowBoundsMessage) {

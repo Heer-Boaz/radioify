@@ -11,6 +11,28 @@ enum class PlaybackPresentationMode {
   PictureInPicture,
 };
 
+enum class PlaybackPresentationFocus {
+  KeepCurrentSurface,
+  FocusTargetSurface,
+};
+
+struct PlaybackWindowPresentationRequest {
+  PlaybackPresentationMode target = PlaybackPresentationMode::Fullscreen;
+  bool textGrid = false;
+  PlaybackPresentationFocus focus =
+      PlaybackPresentationFocus::KeepCurrentSurface;
+};
+
+inline PlaybackWindowPresentationRequest userRequestedWindowPresentation(
+    PlaybackPresentationMode target, bool textGrid) {
+  return {target, textGrid, PlaybackPresentationFocus::FocusTargetSurface};
+}
+
+inline PlaybackWindowPresentationRequest restoredWindowPresentation(
+    PlaybackPresentationMode target, bool textGrid) {
+  return {target, textGrid, PlaybackPresentationFocus::KeepCurrentSurface};
+}
+
 struct PlaybackFullscreenToggleRequest {
   PlaybackPresentationFamily family = PlaybackPresentationFamily::Ascii;
   PlaybackPresentationMode current =

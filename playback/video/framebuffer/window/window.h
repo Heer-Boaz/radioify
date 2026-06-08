@@ -103,6 +103,11 @@ struct WindowUiState {
 struct IDXGISwapChain2;
 struct ShaderConstants;
 
+enum class VideoWindowFocus {
+    KeepCurrentFocus,
+    TakeForegroundFocus,
+};
+
 class VideoWindow {
 public:
     static constexpr int kDefaultVideoClientWidth = 1280;
@@ -129,9 +134,9 @@ public:
     void SetPictureInPictureInteractiveRects(const std::vector<RECT>& rects);
     void SetTextGridMinimumSize(int cols, int rows);
     void SetCursorVisible(bool visible);
-    bool TogglePictureInPicture();
-    bool SetPictureInPicture(bool enabled);
-    bool ExitPictureInPictureToFullscreen();
+    bool TogglePictureInPicture(VideoWindowFocus focus);
+    bool SetPictureInPicture(bool enabled, VideoWindowFocus focus);
+    bool ExitPictureInPictureToFullscreen(VideoWindowFocus focus);
     void SetTextGridPresentationEnabled(bool enabled);
     bool IsTextGridPresentationEnabled() const {
         return m_textGridPresentationEnabled.load(std::memory_order_relaxed);
@@ -143,7 +148,7 @@ public:
     bool PictureInPictureRestoresFullscreen() const {
         return m_pipRestoreFullscreen;
     }
-    bool SetFullscreen(bool enabled);
+    bool SetFullscreen(bool enabled, VideoWindowFocus focus);
     void GetTextGridSize(int& outCols, int& outRows) const {
         outCols = m_textGridCols.load(std::memory_order_relaxed);
         outRows = m_textGridRows.load(std::memory_order_relaxed);
@@ -187,10 +192,15 @@ private:
         WM_APP + 0x442;
     static constexpr UINT kSetFullscreenMessage = WM_APP + 0x443;
     static constexpr UINT kSetWindowBoundsMessage = WM_APP + 0x444;
+    static constexpr UINT kActivateWindowMessage = WM_APP + 0x445;
+    static constexpr LPARAM kKeepCurrentFocusMessageParam = 0;
+    static constexpr LPARAM kTakeForegroundFocusMessageParam = 1;
 
     void DrawOverlay(const WindowUiState& ui);
     void UpdateViewport(int width, int height);
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    static LPARAM EncodeFocusMessageParam(VideoWindowFocus focus);
+    static VideoWindowFocus DecodeFocusMessageParam(LPARAM param);
     void ReleaseSwapChainBackBufferReferences();
     bool CreateSwapChain(int width, int height);
     bool RecreateSwapChainForCurrentDisplay(const char* reason);
@@ -205,13 +215,13 @@ private:
     SIZE PictureInPictureMinimumSize() const;
     int PictureInPictureInteractiveTop() const;
     void AdjustPictureInPictureSizingRect(WPARAM edge, RECT* rect) const;
-    bool EnterPictureInPicture();
+    bool EnterPictureInPicture(VideoWindowFocus focus);
     enum class PictureInPictureExitTarget {
         Restore,
         Fullscreen,
     };
-    bool ExitPictureInPicture(
-        PictureInPictureExitTarget target = PictureInPictureExitTarget::Restore);
+    bool ExitPictureInPicture(PictureInPictureExitTarget target,
+                              VideoWindowFocus focus);
     bool PictureInPictureHasInteractiveRects() const;
     bool PictureInPicturePointInInteractiveRect(int x, int y) const;
     LRESULT HitTestPictureInPicture(int x, int y) const;
@@ -240,6 +250,7 @@ private:
     void RequestCloseFromWindow();
     void ApplyPendingDisplayChange();
     bool ApplyWindowBounds(const RECT& rect);
+    bool ActivateForegroundSurface();
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -322,6 +333,6 @@ private:
     mutable std::mutex m_subtitleStateMutex;
     std::string m_subtitleRenderError;
     void setSubtitleRenderError(std::string error);
-    bool MakeFullscreen();
+    bool MakeFullscreen(VideoWindowFocus focus);
     bool ExitFullscreen();
 };

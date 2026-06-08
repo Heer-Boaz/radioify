@@ -29,13 +29,11 @@ class PlaybackPresentationController {
  private:
   struct PendingWindowPresentation {
     bool active = false;
-    PlaybackPresentationMode target = PlaybackPresentationMode::Fullscreen;
-    bool textGrid = false;
+    PlaybackWindowPresentationRequest request;
   };
 
   void clearPendingWindowPresentation();
-  void requestWindowPresentation(PlaybackPresentationMode target,
-                                 bool textGrid);
+  void requestWindowPresentation(PlaybackWindowPresentationRequest request);
 
   PendingWindowPresentation pendingWindowPresentation;
   bool pictureInPictureStartedFromTerminal = false;

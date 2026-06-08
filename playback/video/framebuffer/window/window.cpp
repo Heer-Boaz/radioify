@@ -1,6 +1,7 @@
 #include "window.h"
 #include "timing_log.h"
 #include "core/windows_app_resources.h"
+#include "core/windows_console_window.h"
 #include "core/windows_message_pump.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "internal.h"
@@ -1264,10 +1265,50 @@ LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
     return HTCLIENT;
 }
 
-bool VideoWindow::EnterPictureInPicture() {
+bool VideoWindow::ActivateForegroundSurface() {
+    if (!m_hWnd) return false;
+
+    if (::GetForegroundWindow() == m_hWnd) {
+        ::SetActiveWindow(m_hWnd);
+        ::SetFocus(m_hWnd);
+        return true;
+    }
+
+    HWND foreground = ::GetForegroundWindow();
+    const bool bridgeRadioifyConsole =
+        foreground && isRadioifyConsoleForegroundWindow();
+    const DWORD currentThread = ::GetCurrentThreadId();
+    const DWORD foregroundThread =
+        foreground ? ::GetWindowThreadProcessId(foreground, nullptr)
+                   : 0;
+    const bool attachForegroundInput =
+        bridgeRadioifyConsole && foregroundThread != 0 &&
+        foregroundThread != currentThread;
+
+    const BOOL attached =
+        attachForegroundInput
+            ? ::AttachThreadInput(currentThread, foregroundThread, TRUE)
+            : FALSE;
+
+    ::BringWindowToTop(m_hWnd);
+    ::SetForegroundWindow(m_hWnd);
+    ::SetActiveWindow(m_hWnd);
+    ::SetFocus(m_hWnd);
+
+    if (attached) {
+        ::AttachThreadInput(currentThread, foregroundThread, FALSE);
+    }
+
+    return ::GetForegroundWindow() == m_hWnd;
+}
+
+bool VideoWindow::EnterPictureInPicture(VideoWindowFocus focus) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain) return false;
-    if (m_pictureInPicture.load(std::memory_order_relaxed)) return true;
+    if (m_pictureInPicture.load(std::memory_order_relaxed)) {
+        return focus == VideoWindowFocus::KeepCurrentFocus ||
+               ActivateForegroundSurface();
+    }
 
     const bool restoreFullscreen = m_isFullscreen;
     if (restoreFullscreen && !ExitFullscreen()) {
@@ -1287,25 +1328,29 @@ bool VideoWindow::EnterPictureInPicture() {
         (m_pipRestoreExStyle | WS_EX_TOOLWINDOW | WS_EX_TOPMOST) &
         ~WS_EX_APPWINDOW;
     SetWindowLong(m_hWnd, GWL_EXSTYLE, pipExStyle);
+    const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
     SetWindowPos(m_hWnd, HWND_TOPMOST, pipRect.left, pipRect.top,
                  pipRect.right - pipRect.left, pipRect.bottom - pipRect.top,
-                 SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOACTIVATE);
-    ::ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED |
+                     (takeFocus ? 0 : SWP_NOACTIVATE));
+    ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
+    const bool focusReady = !takeFocus || ActivateForegroundSurface();
     UpdateWindow(m_hWnd);
 
     RECT client{};
     if (GetClientRect(m_hWnd, &client)) {
         Resize(client.right - client.left, client.bottom - client.top);
     }
-    return true;
+    return focusReady;
 }
 
-bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target) {
+bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target,
+                                       VideoWindowFocus focus) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain) return false;
     if (!m_pictureInPicture.load(std::memory_order_relaxed)) {
         return target == PictureInPictureExitTarget::Fullscreen && !m_isFullscreen
-                   ? MakeFullscreen()
+                   ? MakeFullscreen(focus)
                    : true;
     }
 
@@ -1315,12 +1360,16 @@ bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target) {
     auto displayTransition = m_displayLifecycle.ownerTransition();
     SetWindowLong(m_hWnd, GWL_STYLE, m_pipRestoreStyle);
     SetWindowLong(m_hWnd, GWL_EXSTYLE, m_pipRestoreExStyle & ~WS_EX_TOPMOST);
+    const bool takeFocus =
+        focus == VideoWindowFocus::TakeForegroundFocus && !targetFullscreen;
     SetWindowPos(m_hWnd, HWND_NOTOPMOST, m_pipRestoreRect.left,
                  m_pipRestoreRect.top,
                  m_pipRestoreRect.right - m_pipRestoreRect.left,
                  m_pipRestoreRect.bottom - m_pipRestoreRect.top,
-                 SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOACTIVATE);
-    ::ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED |
+                     (takeFocus ? 0 : SWP_NOACTIVATE));
+    ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
+    const bool focusReady = !takeFocus || ActivateForegroundSurface();
     UpdateWindow(m_hWnd);
 
     RECT client{};
@@ -1332,27 +1381,34 @@ bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target) {
     m_pipRestoreFullscreen = false;
 
     if (targetFullscreen) {
-        return MakeFullscreen();
+        return MakeFullscreen(focus);
     }
-    return true;
+    return focusReady;
 }
 
-bool VideoWindow::SetPictureInPicture(bool enabled) {
+bool VideoWindow::SetPictureInPicture(bool enabled,
+                                      VideoWindowFocus focus) {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
         return PostMessage(m_hWnd, kSetPictureInPictureMessage,
-                           enabled ? TRUE : FALSE, 0) != 0;
+                           enabled ? TRUE : FALSE,
+                           EncodeFocusMessageParam(focus)) != 0;
     }
-    return enabled ? EnterPictureInPicture() : ExitPictureInPicture();
+    return enabled
+               ? EnterPictureInPicture(focus)
+               : ExitPictureInPicture(PictureInPictureExitTarget::Restore,
+                                      focus);
 }
 
-bool VideoWindow::ExitPictureInPictureToFullscreen() {
+bool VideoWindow::ExitPictureInPictureToFullscreen(
+    VideoWindowFocus focus) {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
         return PostMessage(m_hWnd, kExitPictureInPictureToFullscreenMessage,
-                           0, 0) != 0;
+                           0, EncodeFocusMessageParam(focus)) != 0;
     }
-    return ExitPictureInPicture(PictureInPictureExitTarget::Fullscreen);
+    return ExitPictureInPicture(PictureInPictureExitTarget::Fullscreen,
+                                focus);
 }
 
 void VideoWindow::SetTextGridPresentationEnabled(bool enabled) {
@@ -1412,27 +1468,33 @@ bool VideoWindow::ApplyWindowBounds(const RECT& rect) {
     return true;
 }
 
-bool VideoWindow::TogglePictureInPicture() {
+bool VideoWindow::TogglePictureInPicture(VideoWindowFocus focus) {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
-        return PostMessage(m_hWnd, kTogglePictureInPictureMessage, 0, 0) != 0;
+        return PostMessage(m_hWnd, kTogglePictureInPictureMessage, 0,
+                           EncodeFocusMessageParam(focus)) != 0;
     }
     return SetPictureInPicture(
-        !m_pictureInPicture.load(std::memory_order_relaxed));
+        !m_pictureInPicture.load(std::memory_order_relaxed),
+        focus);
 }
 
-bool VideoWindow::SetFullscreen(bool enabled) {
+bool VideoWindow::SetFullscreen(bool enabled, VideoWindowFocus focus) {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
         return PostMessage(m_hWnd, kSetFullscreenMessage, enabled ? TRUE : FALSE,
-                           0) != 0;
+                           EncodeFocusMessageParam(focus)) != 0;
     }
-    return enabled ? MakeFullscreen() : ExitFullscreen();
+    return enabled ? MakeFullscreen(focus) : ExitFullscreen();
 }
 
-bool VideoWindow::MakeFullscreen() {
+bool VideoWindow::MakeFullscreen(VideoWindowFocus focus) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain) return false;
+    if (m_isFullscreen) {
+        return focus == VideoWindowFocus::KeepCurrentFocus ||
+               ActivateForegroundSurface();
+    }
     // Save current style and rect
     m_prevStyle = GetWindowLong(m_hWnd, GWL_STYLE);
     GetWindowRect(m_hWnd, &m_prevRect);
@@ -1452,10 +1514,13 @@ bool VideoWindow::MakeFullscreen() {
                                         WS_EX_TOOLWINDOW | WS_EX_TOPMOST);
         SetWindowLong(m_hWnd, GWL_EXSTYLE, newEx);
 
+        const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
         SetWindowPos(m_hWnd, HWND_NOTOPMOST, mi.rcMonitor.left,
                      mi.rcMonitor.top, monW, monH,
-                     SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOACTIVATE);
-        ::ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
+                     SWP_SHOWWINDOW | SWP_FRAMECHANGED |
+                         (takeFocus ? 0 : SWP_NOACTIVATE));
+        ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
+        const bool focusReady = !takeFocus || ActivateForegroundSurface();
         UpdateWindow(m_hWnd);
 
         ReleaseSwapChainBackBufferReferences();
@@ -1467,7 +1532,7 @@ bool VideoWindow::MakeFullscreen() {
 
         Resize(static_cast<int>(monW), static_cast<int>(monH));
         m_isFullscreen = true;
-        return true;
+        return focusReady;
     }
 
     std::fprintf(stderr, "VideoWindow: failed to resolve monitor for fullscreen\n");
@@ -1606,7 +1671,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     // Video playback uses fullscreen by default, but callers can opt out
     // (used by windowed TUI mode).
     if (startFullscreen) {
-        MakeFullscreen();
+        MakeFullscreen(VideoWindowFocus::KeepCurrentFocus);
     }
 
     ID3D11Device* device = getSharedGpuDevice();
@@ -1942,8 +2007,12 @@ void VideoWindow::Activate() {
     if (!m_hWnd) {
         return;
     }
+    if (m_windowThreadId != 0 && GetCurrentThreadId() != m_windowThreadId) {
+        PostMessage(m_hWnd, kActivateWindowMessage, 0, 0);
+        return;
+    }
     ::ShowWindow(m_hWnd, SW_RESTORE);
-    ::SetForegroundWindow(m_hWnd);
+    (void)ActivateForegroundSurface();
 }
 
 bool VideoWindow::PollEvents() {

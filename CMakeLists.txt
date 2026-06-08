@@ -425,6 +425,14 @@ if (WIN32)
   target_link_libraries(shortcut_match_tests PRIVATE d3d11)
 endif()
 
+add_executable(presentation_policy_tests)
+target_sources(presentation_policy_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_presentation_policy_tests>
+)
+radioify_link_repo_target(presentation_policy_tests)
+add_test(NAME presentation_policy_tests
+         COMMAND $<TARGET_FILE:presentation_policy_tests>)
+
 add_executable(video_output_color_tests)
 target_sources(video_output_color_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_video_output_color_tests>
@@ -471,6 +479,15 @@ target_sources(waitable_signal_tests PRIVATE
 radioify_link_repo_target(waitable_signal_tests)
 add_test(NAME waitable_signal_tests
          COMMAND $<TARGET_FILE:waitable_signal_tests>)
+
+add_executable(windows_console_window_tests)
+target_sources(windows_console_window_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_windows_console_window_tests>
+  ${CMAKE_SOURCE_DIR}/core/windows_console_window.cpp
+)
+radioify_link_repo_target(windows_console_window_tests)
+add_test(NAME windows_console_window_tests
+         COMMAND $<TARGET_FILE:windows_console_window_tests>)
 
 if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL)
   add_custom_target(radioify_neural_pitch_model ALL

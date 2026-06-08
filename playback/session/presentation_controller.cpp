@@ -49,10 +49,9 @@ void PlaybackPresentationController::clearPendingWindowPresentation() {
 }
 
 void PlaybackPresentationController::requestWindowPresentation(
-    PlaybackPresentationMode target, bool textGrid) {
+    PlaybackWindowPresentationRequest request) {
   pendingWindowPresentation.active = true;
-  pendingWindowPresentation.target = target;
-  pendingWindowPresentation.textGrid = textGrid;
+  pendingWindowPresentation.request = request;
 }
 
 bool PlaybackPresentationController::toggleWindow(
@@ -70,9 +69,9 @@ bool PlaybackPresentationController::toggleWindow(
 
   const bool enteringWindow = !isWindowPlaybackLayout(output.desiredLayout());
   if (enteringWindow) {
-    requestWindowPresentation(
-        defaultNonFullscreenPresentation(PlaybackPresentationFamily::Framebuffer),
-        false);
+    const PlaybackPresentationMode target =
+        defaultNonFullscreenPresentation(PlaybackPresentationFamily::Framebuffer);
+    requestWindowPresentation(userRequestedWindowPresentation(target, false));
   } else {
     clearPendingWindowPresentation();
   }
@@ -104,10 +103,12 @@ bool PlaybackPresentationController::togglePictureInPicture(
     output.requestWindowPresent();
     if (textGrid) {
       return playback_session_window::exitPictureInPicture(
-          window, {PlaybackPresentationMode::Fullscreen, true});
+          window, userRequestedWindowPresentation(
+                      PlaybackPresentationMode::Fullscreen, true));
     }
     return playback_session_window::exitPictureInPicture(
-        window, {PlaybackPresentationMode::DefaultNonFullscreen, false});
+        window, userRequestedWindowPresentation(
+                    PlaybackPresentationMode::DefaultNonFullscreen, false));
   }
 
   const bool fromTerminalAscii = !output.windowActive() && enableAscii;
@@ -115,15 +116,17 @@ bool PlaybackPresentationController::togglePictureInPicture(
       window.IsOpen() && window.IsTextGridPresentationEnabled();
   const bool textGrid =
       fromTerminalAscii || fromAsciiWindow || audioOnlyPlayback;
-  requestWindowPresentation(PlaybackPresentationMode::PictureInPicture,
-                            textGrid);
+  requestWindowPresentation(userRequestedWindowPresentation(
+      PlaybackPresentationMode::PictureInPicture, textGrid));
   pictureInPictureStartedFromTerminal = fromTerminalAscii;
   output.requestLayout(PlaybackLayout::Window);
   markPresentationChanged(redraw, forceRefreshArt);
 
   if (window.IsOpen()) {
     if (playback_session_window::apply(
-            window, {PlaybackPresentationMode::PictureInPicture, textGrid})) {
+            window,
+            userRequestedWindowPresentation(
+                PlaybackPresentationMode::PictureInPicture, textGrid))) {
       clearPendingWindowPresentation();
     }
   }
@@ -145,13 +148,14 @@ bool PlaybackPresentationController::toggleFullscreen(
   if (plan.target == PlaybackPresentationMode::Fullscreen) {
     output.requestLayout(PlaybackLayout::Window);
     markPresentationChanged(redraw, forceRefreshArt);
-    requestWindowPresentation(PlaybackPresentationMode::Fullscreen,
-                              request.family ==
-                                  PlaybackPresentationFamily::Ascii);
+    requestWindowPresentation(userRequestedWindowPresentation(
+        PlaybackPresentationMode::Fullscreen,
+        request.family == PlaybackPresentationFamily::Ascii));
     if (request.family == PlaybackPresentationFamily::Ascii) {
       if (window.IsOpen()) {
         if (playback_session_window::apply(
-                window, {PlaybackPresentationMode::Fullscreen, true})) {
+                window, userRequestedWindowPresentation(
+                            PlaybackPresentationMode::Fullscreen, true))) {
           clearPendingWindowPresentation();
         }
         output.requestWindowPresent();
@@ -161,7 +165,8 @@ bool PlaybackPresentationController::toggleFullscreen(
 
     if (window.IsOpen()) {
       if (playback_session_window::apply(
-              window, {PlaybackPresentationMode::Fullscreen, false})) {
+              window, userRequestedWindowPresentation(
+                          PlaybackPresentationMode::Fullscreen, false))) {
         clearPendingWindowPresentation();
       }
       output.requestWindowPresent();
@@ -178,12 +183,15 @@ bool PlaybackPresentationController::toggleFullscreen(
     return true;
   }
 
-  requestWindowPresentation(PlaybackPresentationMode::PictureInPicture, false);
+  requestWindowPresentation(userRequestedWindowPresentation(
+      PlaybackPresentationMode::PictureInPicture, false));
   output.requestLayout(PlaybackLayout::Window);
   markPresentationChanged(redraw, forceRefreshArt);
   if (window.IsOpen()) {
     if (playback_session_window::apply(
-            window, {PlaybackPresentationMode::PictureInPicture, false})) {
+            window,
+            userRequestedWindowPresentation(
+                PlaybackPresentationMode::PictureInPicture, false))) {
       clearPendingWindowPresentation();
     }
     output.requestWindowPresent();
@@ -204,8 +212,7 @@ void PlaybackPresentationController::reconcile(
   }
 
   const bool applied = playback_session_window::apply(
-      output.window(), {pendingWindowPresentation.target,
-                        pendingWindowPresentation.textGrid});
+      output.window(), pendingWindowPresentation.request);
   if (applied) {
     clearPendingWindowPresentation();
   }

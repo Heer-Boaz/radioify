@@ -30,6 +30,10 @@ radioify_add_module_object_library(radioify_tool_shortcut_match_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/shortcut_match_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_presentation_policy_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/presentation_policy_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_video_output_color_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/video_output_color_tests.cpp
 )
@@ -44,4 +48,8 @@ radioify_add_module_object_library(radioify_tool_window_display_lifecycle_tests
 
 radioify_add_module_object_library(radioify_tool_waitable_signal_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/waitable_signal_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_windows_console_window_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/windows_console_window_tests.cpp
 )
