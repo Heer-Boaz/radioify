@@ -274,9 +274,7 @@ class LoopSplitDecoder {
 
  private:
   bool useFfmpeg(const std::filesystem::path& file) const {
-    return isSupportedAudioExt(file) && !isM4aExt(file) && !isMiniaudioExt(file) &&
-           !isGmeExt(file) && !isMidiExt(file) && !isGsfExt(file) &&
-           !isVgmExt(file) && !isKssExt(file) && !isPsfExt(file);
+    return isFfmpegAudioExt(file);
   }
 
   Type type_ = Type::Unknown;

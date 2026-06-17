@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 #include <string>
+#include <string_view>
 
 #include "runtime_helpers.h"
 
@@ -14,23 +16,82 @@ std::string toLower(std::string value) {
   return value;
 }
 
+std::string lowerExtension(const std::filesystem::path& path) {
+  return toLower(toUtf8String(path.extension()));
+}
+
+bool hasExtension(std::string_view ext,
+                  std::initializer_list<std::string_view> candidates) {
+  for (std::string_view candidate : candidates) {
+    if (ext == candidate) return true;
+  }
+  return false;
+}
+
+bool isMiniaudioExtValue(std::string_view ext) {
+  return hasExtension(ext, {".wav", ".mp3"});
+}
+
+bool isFfmpegAudioExtValue(std::string_view ext) {
+  return hasExtension(ext, {".flac", ".ogg", ".wma", ".aac", ".ac3",
+                            ".eac3", ".aif", ".aiff", ".aifc", ".opus",
+                            ".oga", ".mka", ".wv", ".tta", ".caf", ".au",
+                            ".mp2", ".ape", ".tak", ".amr", ".ra", ".dts",
+                            ".dsf", ".qcp", ".spx", ".mpc", ".xwma",
+                            ".w64", ".voc", ".awb", ".gsm", ".oma",
+                            ".aa", ".aax", ".mlp", ".truehd", ".ac4",
+                            ".loas", ".latm"});
+}
+
+bool isM4aExtValue(std::string_view ext) {
+  return hasExtension(ext, {".m4a", ".m4b", ".m4r", ".m4p", ".mp4",
+                            ".webm", ".mov", ".mkv"});
+}
+
+bool isGmeExtValue(std::string_view ext) {
+  return ext == ".nsf";
+}
+
+bool isMidiExtValue(std::string_view ext) {
+  return hasExtension(ext, {".mid", ".midi"});
+}
+
+bool isGsfExtValue(std::string_view ext) {
+#if !RADIOIFY_DISABLE_GSF_GPL
+  return hasExtension(ext, {".gsf", ".minigsf"});
+#else
+  (void)ext;
+  return false;
+#endif
+}
+
+bool isVgmExtValue(std::string_view ext) {
+  return hasExtension(ext, {".vgm", ".vgz"});
+}
+
+bool isKssExtValue(std::string_view ext) {
+  return ext == ".kss";
+}
+
+bool isPsfExtValue(std::string_view ext) {
+  return hasExtension(ext, {".psf", ".minipsf", ".psf2", ".minipsf2"});
+}
+
+bool isSupportedAudioExtValue(std::string_view ext) {
+  return isMiniaudioExtValue(ext) || isFfmpegAudioExtValue(ext) ||
+         isM4aExtValue(ext) || isGmeExtValue(ext) || isMidiExtValue(ext) ||
+         isGsfExtValue(ext) || isVgmExtValue(ext) || isKssExtValue(ext) ||
+         isPsfExtValue(ext);
+}
+
 }
 
 bool isSupportedAudioExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".m4a" ||
-         ext == ".webm" || ext == ".mp4" || ext == ".mov" || ext == ".ogg" ||
-         ext == ".kss" || ext == ".nsf" ||
-#if !RADIOIFY_DISABLE_GSF_GPL
-         ext == ".gsf" || ext == ".minigsf" ||
-#endif
-         ext == ".mid" || ext == ".midi" ||
-         ext == ".vgm" || ext == ".vgz" ||
-         ext == ".psf" || ext == ".minipsf" || ext == ".psf2" || ext == ".minipsf2";
+  return isSupportedAudioExtValue(lowerExtension(path));
 }
 
 bool isSupportedVideoExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(toUtf8String(path.extension()));
+  const std::string ext = lowerExtension(path);
   return ext == ".mp4" || ext == ".m4v" || ext == ".webm" ||
          ext == ".mov" || ext == ".qt" || ext == ".mkv" ||
          ext == ".avi" || ext == ".wmv" || ext == ".asf" ||
@@ -38,12 +99,23 @@ bool isSupportedVideoExt(const std::filesystem::path& path) {
          ext == ".mpe" || ext == ".mpv" || ext == ".m2v" ||
          ext == ".ts" || ext == ".m2ts" || ext == ".mts" ||
          ext == ".3gp" || ext == ".3g2" || ext == ".ogv" ||
-         ext == ".vob";
+         ext == ".vob" || ext == ".mxf" || ext == ".f4v" ||
+         ext == ".dv" || ext == ".ogm" || ext == ".ivf" ||
+         ext == ".nut" || ext == ".rm" || ext == ".rmvb" ||
+         ext == ".bik" || ext == ".smk" || ext == ".wtv" ||
+         ext == ".nsv" || ext == ".pmp" || ext == ".divx" ||
+         ext == ".mjpg" || ext == ".mjpeg" || ext == ".mj2" ||
+         ext == ".y4m" || ext == ".roq" || ext == ".mod" ||
+         ext == ".tod";
 }
 
 bool isSupportedImageExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
+  const std::string ext = lowerExtension(path);
+  return ext == ".jpg" || ext == ".jpeg" || ext == ".jpe" ||
+         ext == ".jfif" || ext == ".png" || ext == ".bmp" ||
+         ext == ".gif" || ext == ".tif" || ext == ".tiff" ||
+         ext == ".webp" || ext == ".heic" || ext == ".heif" ||
+         ext == ".avif" || ext == ".ico";
 }
 
 bool isSupportedMediaExt(const std::filesystem::path& path) {
@@ -52,58 +124,57 @@ bool isSupportedMediaExt(const std::filesystem::path& path) {
 }
 
 bool isMiniaudioExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".wav" || ext == ".mp3";
+  return isMiniaudioExtValue(lowerExtension(path));
+}
+
+bool isFfmpegAudioExt(const std::filesystem::path& path) {
+  return isFfmpegAudioExtValue(lowerExtension(path));
 }
 
 bool isFlacExt(const std::filesystem::path& path) {
-  return toLower(toUtf8String(path.extension())) == ".flac";
+  return lowerExtension(path) == ".flac";
 }
 
 bool isGmeExt(const std::filesystem::path& path) {
-  return toLower(toUtf8String(path.extension())) == ".nsf";
+  return isGmeExtValue(lowerExtension(path));
 }
 
 bool isMidiExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".mid" || ext == ".midi";
+  return isMidiExtValue(lowerExtension(path));
 }
 
 bool isGsfExt(const std::filesystem::path& path) {
-#if !RADIOIFY_DISABLE_GSF_GPL
-  const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".gsf" || ext == ".minigsf";
-#else
-  (void)path;
-  return false;
-#endif
+  return isGsfExtValue(lowerExtension(path));
 }
 
 bool isVgmExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".vgm" || ext == ".vgz";
+  return isVgmExtValue(lowerExtension(path));
 }
 
 bool isM4aExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".m4a" || ext == ".mp4" || ext == ".webm" || ext == ".mov";
+  return isM4aExtValue(lowerExtension(path));
 }
 
 bool isKssExt(const std::filesystem::path& path) {
-  return toLower(toUtf8String(path.extension())) == ".kss";
+  return isKssExtValue(lowerExtension(path));
 }
 
 bool isPsfExt(const std::filesystem::path& path) {
-  const std::string ext = toLower(toUtf8String(path.extension()));
-  return ext == ".psf" || ext == ".minipsf" || ext == ".psf2" || ext == ".minipsf2";
+  return isPsfExtValue(lowerExtension(path));
 }
 
 bool isOggExt(const std::filesystem::path& path) {
-  return toLower(toUtf8String(path.extension())) == ".ogg";
+  return lowerExtension(path) == ".ogg";
 }
 
 std::string supportedAudioExtensionsText() {
-  std::string list = ".wav, .mp3, .flac, .m4a, .webm, .mp4, .mov, .ogg, .kss, .nsf, ";
+  std::string list =
+      ".wav, .mp3, .flac, .m4a, .m4b, .m4r, .m4p, .webm, .mp4, .mov, "
+      ".mkv, .ogg, .wma, .aac, .ac3, .eac3, .aif, .aiff, .aifc, "
+      ".opus, .oga, .mka, .wv, .tta, .caf, .au, .mp2, .ape, .tak, "
+      ".amr, .ra, .dts, .dsf, .qcp, .spx, .mpc, .xwma, .w64, .voc, "
+      ".awb, .gsm, .oma, .aa, .aax, .mlp, .truehd, .ac4, .loas, "
+      ".latm, .kss, .nsf, ";
 #if !RADIOIFY_DISABLE_GSF_GPL
   list += ".gsf, .minigsf, ";
 #endif

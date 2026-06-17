@@ -100,8 +100,8 @@ void makeUnvoiced(MelodyOfflineFrame* frame, float confidenceCap = 0.12f) {
 }
 
 bool melodyOfflineDecodeSupported(const std::filesystem::path& file) {
-  return isFlacExt(file) || isM4aExt(file) || isMiniaudioExt(file) ||
-         isOggExt(file) || isGmeExt(file) || isMidiExt(file) ||
+  return isFfmpegAudioExt(file) || isM4aExt(file) || isMiniaudioExt(file) ||
+         isGmeExt(file) || isMidiExt(file) ||
          isGsfExt(file) || isVgmExt(file) || isPsfExt(file) ||
          isKssExt(file);
 }
@@ -452,8 +452,8 @@ class DecoderContext {
     sampleRate_ = std::max<uint32_t>(1u, job.sourceSampleRate);
     type_ = Type::Unknown;
 
-    if (isFlacExt(job.file) || isM4aExt(job.file) ||
-        isMiniaudioExt(job.file) || isOggExt(job.file)) {
+    if (isFfmpegAudioExt(job.file) || isM4aExt(job.file) ||
+        isMiniaudioExt(job.file)) {
       type_ = Type::Ffmpeg;
       if (!ffmpeg_.init(job.file, channels_, sampleRate_, error)) {
         return false;

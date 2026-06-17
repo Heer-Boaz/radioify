@@ -16,6 +16,7 @@
 #include "audiofilter/radio1938/radio_buffer_io.h"
 #include "calibration_report.h"
 #include "core/windows_app_resources.h"
+#include "ffmpegaudio.h"
 #include "gmeaudio.h"
 #include "kssaudio.h"
 #include "m4adecoder.h"
@@ -65,11 +66,13 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
                  static_cast<float>(o.bwHz), static_cast<float>(o.noise));
   };
   const bool useM4a = isM4aExt(inputPath);
+  const bool useFfmpeg = isFfmpegAudioExt(inputPath);
   const bool useGme = isGmeExt(inputPath);
   const bool useVgm = isVgmExt(inputPath);
   const bool useKss = isKssExt(inputPath);
   constexpr uint32_t chunkFrames = 1024;
   ma_decoder decoder{};
+  FfmpegAudioDecoder ffmpeg{};
   M4aDecoder m4a{};
   GmeAudioDecoder gme{};
   VgmAudioDecoder vgm{};
@@ -77,6 +80,11 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
   if (useM4a) {
     std::string error;
     if (!m4a.init(inputPath, channels, sampleRate, &error)) {
+      die(error.empty() ? "Failed to open input for decoding." : error);
+    }
+  } else if (useFfmpeg) {
+    std::string error;
+    if (!ffmpeg.init(inputPath, channels, sampleRate, &error)) {
       die(error.empty() ? "Failed to open input for decoding." : error);
     }
   } else if (useKss) {
@@ -111,6 +119,8 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
     if (maEncoderInitFilePath(outputPath, &encConfig, &encoder) != MA_SUCCESS) {
       if (useM4a) {
         m4a.uninit();
+      } else if (useFfmpeg) {
+        ffmpeg.uninit();
       } else if (useKss) {
         kss.uninit();
       } else if (useVgm) {
@@ -133,6 +143,8 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
   auto uninitDecoder = [&]() {
     if (useM4a) {
       m4a.uninit();
+    } else if (useFfmpeg) {
+      ffmpeg.uninit();
     } else if (useKss) {
       kss.uninit();
     } else if (useVgm) {
@@ -179,6 +191,13 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
       if (!m4a.readFrames(buffer.data(), chunkFrames, &framesRead)) {
         uninitEncoder();
         m4a.uninit();
+        die("Failed to decode input.");
+      }
+      if (framesRead == 0) break;
+    } else if (useFfmpeg) {
+      if (!ffmpeg.readFrames(buffer.data(), chunkFrames, &framesRead)) {
+        uninitEncoder();
+        ffmpeg.uninit();
         die("Failed to decode input.");
       }
       if (framesRead == 0) break;

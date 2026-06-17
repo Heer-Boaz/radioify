@@ -186,12 +186,12 @@ The concrete implementation plan lives in
 - Q or Ctrl+C: quit
 
 ## Supported files
-- Audio: .wav, .mp3, .flac, .ogg, .kss, .nsf, .psf, .minipsf, .psf2, .minipsf2
+- Audio: .wav, .mp3, .flac, .ogg, .wma, .aac, .ac3, .eac3, .aif, .aiff, .aifc, .opus, .oga, .mka, .wv, .tta, .caf, .au, .mp2, .ape, .tak, .amr, .ra, .dts, .dsf, .qcp, .spx, .mpc, .xwma, .w64, .voc, .awb, .gsm, .oma, .aa, .aax, .mlp, .truehd, .ac4, .loas, .latm, .kss, .nsf, .mid, .midi, .vgm, .vgz, .psf, .minipsf, .psf2, .minipsf2
 - GSF (GPL, enabled by default; disable with `-DRADIOIFY_DISABLE_GSF_GPL=ON`): .gsf, .minigsf
-- Audio (media containers): .m4a, .webm, .mp4, .mov, .mkv, .ogg (audio stream only)
-- Video (ASCII preview): .mp4, .webm, .mov, .mkv (audio + video)
+- Audio (media containers): .m4a, .m4b, .m4r, .m4p, .webm, .mp4, .mov, .mkv, .ogg (audio stream only)
+- Video (ASCII preview): .mp4, .m4v, .webm, .mov, .qt, .mkv, .avi, .wmv, .asf, .flv, .mpg, .mpeg, .mpe, .mpv, .m2v, .ts, .m2ts, .mts, .3gp, .3g2, .ogv, .vob, .mxf, .f4v, .dv, .ogm, .ivf, .nut, .rm, .rmvb, .bik, .smk, .wtv, .nsv, .pmp, .divx, .mjpg, .mjpeg, .mj2, .y4m, .roq, .mod, .tod (audio + video)
 - Subtitles: .srt and .vtt sidecar files (same basename, e.g. `video.mkv` + `video.srt`)
-- Images (ASCII art preview): .jpg, .jpeg, .png, .bmp
+- Images (ASCII art preview): .jpg, .jpeg, .jpe, .jfif, .png, .bmp, .gif, .tif, .tiff, .webp, .heic, .heif, .avif, .ico
 
 PSF2 playback needs `hebios.bin`. Set `RADIOIFY_PSF_BIOS` to the file path or
 place `hebios.bin` next to the PSF2 file, next to `radioify.exe`, or in the

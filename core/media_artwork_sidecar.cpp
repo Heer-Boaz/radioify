@@ -52,8 +52,9 @@ void appendMediaArtworkSidecarCandidates(
 
   const std::string stemUtf8 = toUtf8String(mediaPath.stem());
   const std::string stemLower = lowercasePathStemUtf8(mediaPath);
-  static constexpr std::array<const char*, 4> kExts = {
-      ".jpg", ".jpeg", ".png", ".bmp"};
+  static constexpr std::array<const char*, 14> kExts = {
+      ".jpg",  ".jpeg", ".jpe",  ".jfif", ".png",  ".bmp", ".gif",
+      ".tif",  ".tiff", ".webp", ".heic", ".heif", ".avif", ".ico"};
   static constexpr std::array<const char*, 7> kNames = {
       "cover",      "folder",     "front",      "album",
       "albumart",   "albumartsmall", "albumartlarge"};

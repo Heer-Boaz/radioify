@@ -255,8 +255,8 @@ struct BackendSelector {
 };
 
 const BackendSelector kBackends[] = {
-    {isM4aExt, &kBackendM4a},            {isOggExt, &kBackendFfmpeg},
-    {isFlacExt, &kBackendFfmpeg},        {isMiniaudioExt, &kBackendMiniaudio},
+    {isM4aExt, &kBackendM4a},            {isFfmpegAudioExt, &kBackendFfmpeg},
+    {isMiniaudioExt, &kBackendMiniaudio},
     {isGmeExt, &kBackendGme},            {isMidiExt, &kBackendMidi},
     {isGsfExt, &kBackendGsf},            {isVgmExt, &kBackendVgm},
     {isKssExt, &kBackendKss},            {isPsfExt, &kBackendPsf},

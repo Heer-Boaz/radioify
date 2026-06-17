@@ -14,11 +14,18 @@ if (NOT RADIOIFY_WIN11_EXPLORER_THUMBNAIL_BUDGET_MS MATCHES "^[1-9][0-9]*$")
 endif()
 
 set(RADIOIFY_WIN11_EXPLORER_FILE_TYPES
-  .wav .mp3 .flac .m4a .webm .mp4 .mov .ogg .kss .nsf
+  .wav .mp3 .flac .m4a .m4b .m4r .m4p .webm .mp4 .mov .mkv
+  .ogg .wma .aac .ac3 .eac3 .aif .aiff .aifc .opus .oga
+  .mka .wv .tta .caf .au .mp2 .ape .tak .amr .ra .dts .dsf .qcp
+  .spx .mpc .xwma .w64 .voc .awb .gsm .oma .aa .aax
+  .mlp .truehd .ac4 .loas .latm
+  .kss .nsf
   .mid .midi .vgm .vgz .psf .minipsf .psf2 .minipsf2
   .m4v .qt .mkv .avi .wmv .asf .flv .mpg .mpeg .mpe
   .mpv .m2v .ts .m2ts .mts .3gp .3g2 .ogv .vob
-  .jpg .jpeg .png .bmp
+  .mxf .f4v .dv .ogm .ivf .nut .rm .rmvb
+  .bik .smk .wtv .nsv .pmp .divx .mjpg .mjpeg .mj2 .y4m .roq .mod .tod
+  .jpg .jpeg .jpe .jfif .png .bmp .gif .tif .tiff .webp .heic .heif .avif .ico
 )
 if (NOT RADIOIFY_DISABLE_GSF_GPL)
   list(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPES .gsf .minigsf)

@@ -26,8 +26,21 @@ int main() {
   const std::filesystem::path flac = "chapter3-1.flac";
   ok &= expect(isSupportedAudioExt(flac), "FLAC must remain supported audio");
   ok &= expect(isFlacExt(flac), "FLAC must keep its explicit format marker");
+  ok &= expect(isFfmpegAudioExt(flac),
+               "FLAC must keep the FFmpeg backend route");
   ok &= expect(!isMiniaudioExt(flac),
                "FLAC playback must not use the miniaudio backend route");
+
+  const std::filesystem::path wma = "broadcast.WMA";
+  ok &= expect(isSupportedAudioExt(wma), "WMA must be supported audio");
+  ok &= expect(isFfmpegAudioExt(wma),
+               "WMA must use the FFmpeg audio backend route");
+  ok &= expect(!isMiniaudioExt(wma),
+               "WMA must not use the miniaudio backend route");
+  ok &= expect(!isSupportedAudioExt("camera.wmv"),
+               "WMV must remain a video extension, not an audio alias");
+  ok &= expect(supportedAudioExtensionsText().find(".wma") != std::string::npos,
+               "Supported audio extension text must mention WMA");
 
   ok &= expect(isMiniaudioExt("track.wav"),
                "WAV must keep the miniaudio backend route");
