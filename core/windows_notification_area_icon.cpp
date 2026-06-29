@@ -218,12 +218,16 @@ struct WindowsNotificationAreaIcon::Impl {
     return data;
   }
 
-  void fillPresentationData(NOTIFYICONDATAW* data) const {
-    data->uFlags |= NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+  void fillTooltipData(NOTIFYICONDATAW* data, const std::wstring& tip) const {
+    data->uFlags |= NIF_TIP | NIF_SHOWTIP;
+    StringCchCopyW(data->szTip, ARRAYSIZE(data->szTip), tip.c_str());
+  }
+
+  void fillAddData(NOTIFYICONDATAW* data, const std::wstring& tip) const {
+    data->uFlags |= NIF_MESSAGE | NIF_ICON;
     data->uCallbackMessage = kNotificationAreaCallbackMessage;
     data->hIcon = icon.get();
-    const std::wstring tip = tooltipText(state.tooltip);
-    StringCchCopyW(data->szTip, ARRAYSIZE(data->szTip), tip.c_str());
+    fillTooltipData(data, tip);
   }
 
   bool addIcon() {
@@ -233,7 +237,8 @@ struct WindowsNotificationAreaIcon::Impl {
     NOTIFYICONDATAW data = notifyData(0);
     {
       std::lock_guard<std::mutex> lock(stateMutex);
-      fillPresentationData(&data);
+      const std::wstring tip = tooltipText(state.tooltip);
+      fillAddData(&data, tip);
     }
     if (!Shell_NotifyIconW(NIM_ADD, &data)) {
       iconAdded = false;
@@ -251,16 +256,13 @@ struct WindowsNotificationAreaIcon::Impl {
     return true;
   }
 
-  void modifyIcon() {
+  void modifyTooltip(const std::wstring& tip) {
     if (!iconAdded) {
       (void)addIcon();
       return;
     }
     NOTIFYICONDATAW data = notifyData(0);
-    {
-      std::lock_guard<std::mutex> lock(stateMutex);
-      fillPresentationData(&data);
-    }
+    fillTooltipData(&data, tip);
     if (!Shell_NotifyIconW(NIM_MODIFY, &data)) {
       iconAdded = false;
     }
@@ -297,12 +299,23 @@ struct WindowsNotificationAreaIcon::Impl {
   }
 
   void update(State nextState) {
+    std::wstring nextTooltip;
+    bool tooltipChanged = false;
     {
       std::lock_guard<std::mutex> lock(stateMutex);
+      nextTooltip = tooltipText(nextState.tooltip);
+      tooltipChanged = tooltipText(state.tooltip) != nextTooltip;
       state = std::move(nextState);
     }
-    if (initialized) {
-      modifyIcon();
+    if (!initialized) {
+      return;
+    }
+    if (!iconAdded) {
+      (void)addIcon();
+      return;
+    }
+    if (tooltipChanged) {
+      modifyTooltip(nextTooltip);
     }
   }
 
@@ -337,6 +350,8 @@ struct WindowsNotificationAreaIcon::Impl {
   NativeWaitHandle nativeWaitHandle() const {
     return commandReady.nativeWaitHandle();
   }
+
+  bool available() const { return iconAdded; }
 
   UniqueMenu buildContextMenu() {
     State snapshot;
@@ -485,11 +500,7 @@ bool WindowsNotificationAreaIcon::initialize(State state) {
 }
 
 bool WindowsNotificationAreaIcon::available() const {
-#ifdef _WIN32
-  return impl_->iconAdded;
-#else
   return impl_->available();
-#endif
 }
 
 void WindowsNotificationAreaIcon::update(State state) {
