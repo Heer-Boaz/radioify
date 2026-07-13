@@ -111,7 +111,7 @@ void RadioPreviewPipeline::runBlock(Radio1938& radioRef,
   RadioPreviewSampleContext ctx{};
   ctx.block = &block;
   const size_t programStartIndex =
-      resolveFirstProgramIndex(*this, ctx, RadioPreviewPassId::ProgramFilter);
+      resolveFirstProgramIndex(*this, ctx, RadioPreviewPassId::BroadcastSource);
   for (uint32_t frame = 0; frame < frames; ++frame) {
     const float mono = sampleInterleavedToMono(samples, frame,
                                                static_cast<int>(channels));

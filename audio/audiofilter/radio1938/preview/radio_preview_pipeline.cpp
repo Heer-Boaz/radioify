@@ -24,9 +24,15 @@ const RadioPreviewPipelineDefinition& radioPreviewPipelineDefinition() {
         .reset(&RadioPreviewWarmupNode::reset)
         .prepare(&RadioPreviewWarmupNode::prepare);
 
+    builder.program(RadioPreviewPassId::BroadcastSource, "BroadcastSource")
+        .init(&RadioPreviewBroadcastSourceNode::init)
+        .reset(&RadioPreviewBroadcastSourceNode::reset)
+        .run(&RadioPreviewBroadcastSourceNode::run);
+
     builder.program(RadioPreviewPassId::ProgramFilter, "ProgramFilter")
         .init(&RadioPreviewProgramFilterNode::init)
         .reset(&RadioPreviewProgramFilterNode::reset)
+        .dependsOn(RadioPreviewPassId::BroadcastSource)
         .run(&RadioPreviewProgramFilterNode::run);
 
     return builder.build(static_cast<size_t>(RadioPreviewPassId::ProgramFilter) +

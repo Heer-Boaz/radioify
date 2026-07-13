@@ -15,13 +15,14 @@ struct Radio1938;
 
 enum class RadioPreviewPassId : uint8_t {
   Warmup,
+  BroadcastSource,
   ProgramFilter,
 };
 
 struct RadioPreviewBlockControl {
   mutable bool programStartCached = false;
   mutable RadioPreviewPassId cachedProgramStartPass =
-      RadioPreviewPassId::ProgramFilter;
+      RadioPreviewPassId::BroadcastSource;
   mutable size_t cachedProgramStartIndex = 0;
 };
 
@@ -42,6 +43,14 @@ struct RadioPreviewWarmupNode {
 };
 
 struct RadioPreviewProgramFilterNode {
+  static void init(RadioPreviewPipeline& preview, RadioPreviewInitContext&);
+  static void reset(RadioPreviewPipeline& preview);
+  static float run(RadioPreviewPipeline& preview,
+                   float y,
+                   RadioPreviewSampleContext& ctx);
+};
+
+struct RadioPreviewBroadcastSourceNode {
   static void init(RadioPreviewPipeline& preview, RadioPreviewInitContext&);
   static void reset(RadioPreviewPipeline& preview);
   static float run(RadioPreviewPipeline& preview,
@@ -80,6 +89,13 @@ struct RadioPreviewPipeline {
   std::vector<float> filteredScratch;
   Biquad programHp;
   Biquad programLp;
+  float broadcastCompressionThreshold = 0.0f;
+  float broadcastEnvelope = 0.0f;
+  float broadcastGain = 1.0f;
+  float broadcastAttackCoefficient = 0.0f;
+  float broadcastReleaseCoefficient = 0.0f;
+  float broadcastNoiseAmplitude = 0.0f;
+  uint32_t broadcastNoiseState = 0;
 
   using Graph = RadioPreviewGraph;
   using Lifecycle = RadioPreviewLifecycle;

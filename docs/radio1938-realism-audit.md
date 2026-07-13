@@ -43,6 +43,17 @@ Philco's acoustic-development evidence additionally establishes that:
 - the measured clarifier system reduces the cabinet peak by about 10 dB and is
   effectively inert outside the resonance band.
 
+Period broadcast-chain evidence establishes a separate source-side envelope:
+
+- Western Electric's 630A moving-coil microphone covered 40-10,000 Hz;
+- the Western Electric 110A program amplifier was specified flat within 1 dB
+  from 30-10,000 Hz with less than 1% distortion;
+- its compressor inserted in 20 ms, recovered in 250 ms, and converted an
+  input 5 dB above threshold into only 2 dB above threshold, a 2.5:1 ratio;
+- an RCA 5-D transmitter installation at WBNS reported output noise 62-66 dB
+  below full modulation and approximately 0.65-1.9% audio distortion across
+  its tabulated frequency and modulation points.
+
 Sources:
 
 - [Philco Service Bulletin 258](https://philcoradio.com/library/download/service%20info/service%20bulletins/Philco%20Service%20Bulletin%20258.pdf)
@@ -50,6 +61,9 @@ Sources:
 - [Philco acoustic-clarifier patent US2059929A](https://patents.google.com/patent/US2059929A/en)
 - [Philco Model 116 instructions](https://philcoradio.com/library/wp-content/uploads/2019/12/Philco-116X-Instructions.pdf)
 - [Radio-Craft, January 1937 service data](https://www.rsp-italy.it/Electronics/Magazines/Radio-Craft/_contents/Radio-Craft%201937%2001.pdf)
+- [Western Electric 630A microphone bulletin](https://www.worldradiohistory.com/Archive-Catalogs/Western-Electric/WE-630A_Mic_promo.pdf)
+- [Western Electric 110A program-amplifier bulletin](https://www.worldradiohistory.com/Archive-Catalogs/Western-Electric/Western-Electric-110A-Program-Amp-1937.pdf)
+- [RCA Broadcast News, July 1938, WBNS 5-D installation](https://www.worldradiohistory.com/Archive-All-BC-Engineering/RCA-Broadcast-News/RCA-28.pdf)
 
 ## Model classification
 
@@ -79,7 +93,10 @@ It is not copied as an exact full-range 37-116 curve.
   literally at audio sample rates;
 - the live detector uses a bounded real-time solve budget;
 - tube and transformer stages use compact numerical models suitable for the
-  playback hot path.
+  playback hot path;
+- the broadcast program limiter and transmitter transfer use a peak-envelope
+  compressor and calibrated cubic term instead of a component-level studio and
+  transmitter circuit simulation.
 
 ### Fitted sound design
 
@@ -87,7 +104,9 @@ It is not copied as an exact full-range 37-116 curve.
 - cone breakup, dip, top roll-off, and compliance asymmetry;
 - grille and listener-dependent open-back rear-radiation parameters;
 - seeded component drift;
-- procedural hiss, crackle, and hum levels.
+- procedural hiss, crackle, and hum levels;
+- deterministic broadband transmitter noise inside the documented period
+  output-noise range.
 
 Fitted values are acceptable when they are labelled as estimates and validated
 against an explicit response target. They are not evidence of historical
@@ -168,6 +187,20 @@ clarifier effect. The separate 180, 650, and 900 Hz cabinet sections were also
 an unconstrained generic fit rather than a reconstruction of the published
 response.
 
+### 6. The transmitted program is unrealistically ideal
+
+The live preview previously converted the modern input directly into ideal AM
+after mono conversion and the channel high/low-pass. It had no program limiting,
+transmitter transfer nonlinearity, or source-side noise. That made the receiver
+model do all of the ageing while the station feeding it remained mathematically
+perfect.
+
+This omission was separate from the former false-whistle bug. That whistle was
+a real-RF downmix image leaking into the source envelope of an unmodulated
+carrier. It is already rejected in the IF-strip owner and locked by pure-carrier
+quiet tests. A natural heterodyne whistle requires a second RF carrier; it must
+not be manufactured as a permanent audio oscillator in the program source.
+
 ## Acceptance criteria
 
 The remediation is complete only when all of the following hold:
@@ -188,6 +221,10 @@ The remediation is complete only when all of the following hold:
 9. The untreated cabinet has a 95 Hz resonance and the Type-K clarifiers reduce
    the 95-108 Hz region by approximately 6-10 dB while leaving 500 Hz within
    0.6 dB.
+10. The live broadcast source preserves the 110A timing and 2.5:1 compression
+    slope, stays near 1% full-level THD, produces approximately 64 dB
+    full-modulation signal-to-noise, remains block invariant, and contains no
+    coherent whistle.
 
 ## Remediation record
 
@@ -222,6 +259,14 @@ The remediation is complete only when all of the following hold:
   sections rather than inverted secondary radiators, so they also shorten the
   resonance tail. The mild grille and open-back paths remain explicitly fitted
   because they depend on cloth, wall, and listener geometry.
+- A `BroadcastSource` preview pass now owns retained limiter envelope, gain, and
+  deterministic noise state before the existing program-band filter. Its
+  defaults place the threshold at 80% AM modulation and reproduce the 110A's
+  20 ms insertion, 250 ms removal, and 2.5:1 compression slope. A 0.04 cubic
+  term gives about 1% full-level third-harmonic distortion. Broadband noise is
+  normalized to 64 dB below a full-modulation sine after the channel filter.
+  The raw AM entry point remains ideal so receiver calibration and source
+  conditioning stay independently testable.
 
 ### Post-fix measurements
 
@@ -258,9 +303,25 @@ from the untreated fixture, measured:
 | Treated 70-150 Hz response span | 3.90 dB | at most 4.5 dB | pass |
 | Reduction of 95 Hz burst hang-over | 9.27 dB | 6-12 dB | pass |
 
+The dedicated broadcast-source regression measured:
+
+| Broadcast-source metric | Measured | Required | Result |
+| --- | ---: | ---: | --- |
+| Output for an input 5 dB over threshold | +2.01 dB | +2 dB, within 0.27 dB | pass |
+| Full-level cubic THD | 1.031% | 0.9-1.2% | pass |
+| Noise below full modulation | 63.994 dB | 63-65 dB | pass |
+| Strongest scanned coherent tone / noise RMS | 0.0197 | at most 0.03 | pass |
+| Disabled-source sample error | 0 | exactly 0 | pass |
+| One-block versus split-block error | 0 | at most 0.00001 | pass |
+
+No oscillator was added to the broadcast source. Its only generated signal is
+seeded broadband noise, which then passes through the same 45 Hz high-pass and
+requested channel low-pass as the program. Existing IF and full-RF regressions
+continue to require an unmodulated carrier to remain quiet through detection.
+
 ### Acceptance status
 
-All nine acceptance criteria above pass in the implemented validation paths.
+All ten acceptance criteria above pass in the implemented validation paths.
 The low-frequency cabinet/clarifier behavior is now tested against a Philco
 measurement proxy. The exact full-range 37-116 speaker curve remains explicitly
 classified as reconstructed until a calibrated original 36-1219 unit is

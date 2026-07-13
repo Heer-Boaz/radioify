@@ -1,4 +1,5 @@
 #include "radio.h"
+#include "audiofilter/math/signal_math.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 
 #include <algorithm>
@@ -15,6 +16,7 @@ constexpr float kBandwidthHz = 5000.0f;
 constexpr float kCarrierRmsVolts = 0.12f;
 constexpr float kModulationIndex = 0.85f;
 constexpr float kTolerance = 1e-5f;
+constexpr float kFullScaleSineRms = 0.70710678118654752440f;
 
 constexpr PassId kAllPasses[] = {
     PassId::Tuning,
@@ -168,6 +170,286 @@ void expectPreviewUsesRequestedAudioBandwidthOnce() {
   }
 }
 
+RadioAmIngressConfig makeIsolatedBroadcastSourceConfig() {
+  RadioAmIngressConfig ingress;
+  ingress.broadcastSource.noiseEnabled = false;
+  ingress.broadcastSource.nonlinearityEnabled = false;
+  return ingress;
+}
+
+void expectBroadcastSourceBypassIsTransparent() {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress;
+  ingress.broadcastSource.enabled = false;
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  RadioPreviewSampleContext ctx{};
+  for (uint32_t i = 0; i < 1024u; ++i) {
+    const float input = 1.4f * std::sin(static_cast<float>(i) * 0.173f);
+    const float output =
+        RadioPreviewBroadcastSourceNode::run(preview, input, ctx);
+    if (output != input) {
+      fail("Disabled broadcast source is not sample-transparent.");
+    }
+  }
+}
+
+void expectBroadcastCompressionTiming() {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress = makeIsolatedBroadcastSourceConfig();
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  RadioPreviewSampleContext ctx{};
+  const auto& source = ingress.broadcastSource;
+  const float compressionThreshold =
+      source.compressionThresholdModulation / ingress.modulationIndex;
+  const uint32_t attackFrames = static_cast<uint32_t>(
+      kSampleRate * source.compressionAttackMs * 0.001f);
+  for (uint32_t i = 0; i < attackFrames; ++i) {
+    RadioPreviewBroadcastSourceNode::run(preview, 1.0f, ctx);
+  }
+  const float targetGain = std::pow(
+      1.0f / compressionThreshold,
+      1.0f / source.compressionRatio - 1.0f);
+  const float expectedAttackGain =
+      targetGain + (1.0f - targetGain) * std::exp(-1.0f);
+  if (std::fabs(preview.broadcastGain - expectedAttackGain) > 0.002f) {
+    fail("Broadcast compressor does not have the configured 20 ms attack; "
+         "gain=" +
+         std::to_string(preview.broadcastGain));
+  }
+
+  for (uint32_t i = 0; i < attackFrames * 9u; ++i) {
+    RadioPreviewBroadcastSourceNode::run(preview, 1.0f, ctx);
+  }
+  const float envelopeBeforeRelease = preview.broadcastEnvelope;
+  const uint32_t releaseFrames = static_cast<uint32_t>(
+      kSampleRate * source.compressionReleaseMs * 0.001f);
+  for (uint32_t i = 0; i < releaseFrames; ++i) {
+    RadioPreviewBroadcastSourceNode::run(preview, 0.0f, ctx);
+  }
+  const float expectedRelease = envelopeBeforeRelease * std::exp(-1.0f);
+  if (std::fabs(preview.broadcastEnvelope - expectedRelease) > 0.002f) {
+    fail("Broadcast compressor does not have the configured 250 ms release; "
+         "envelope=" +
+         std::to_string(preview.broadcastEnvelope));
+  }
+}
+
+void expectBroadcastCompressionSlope() {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress = makeIsolatedBroadcastSourceConfig();
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  const auto& source = ingress.broadcastSource;
+  const float compressionThreshold =
+      source.compressionThresholdModulation / ingress.modulationIndex;
+  const float inputPeak =
+      compressionThreshold * db2lin(5.0f);
+  const float expectedOutputPeak =
+      compressionThreshold * db2lin(5.0f / source.compressionRatio);
+  RadioPreviewSampleContext ctx{};
+  constexpr uint32_t kFrames = 3u * 48000u;
+  constexpr uint32_t kAnalysisStart = 2u * 48000u;
+  double sumSq = 0.0;
+  for (uint32_t i = 0; i < kFrames; ++i) {
+    const float phase = kRadioTwoPi * 1000.0f *
+                        (static_cast<float>(i) / kSampleRate);
+    const float output = RadioPreviewBroadcastSourceNode::run(
+        preview, inputPeak * std::sin(phase), ctx);
+    if (i >= kAnalysisStart) {
+      sumSq += static_cast<double>(output) * static_cast<double>(output);
+    }
+  }
+  const float outputPeak = static_cast<float>(
+      std::sqrt(2.0 * sumSq /
+                static_cast<double>(kFrames - kAnalysisStart)));
+  if (std::fabs(outputPeak - expectedOutputPeak) > 0.025f) {
+    fail("Broadcast compression is not 2.5:1 above threshold; expected peak=" +
+         std::to_string(expectedOutputPeak) + " actual=" +
+         std::to_string(outputPeak));
+  }
+}
+
+void expectBroadcastNonlinearityNearOnePercentThd() {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress;
+  ingress.broadcastSource.compressionEnabled = false;
+  ingress.broadcastSource.noiseEnabled = false;
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  RadioPreviewSampleContext ctx{};
+  constexpr uint32_t kFrames = 48000u;
+  double fundamentalSin = 0.0;
+  double fundamentalCos = 0.0;
+  double thirdSin = 0.0;
+  double thirdCos = 0.0;
+  for (uint32_t i = 0; i < kFrames; ++i) {
+    const double phase = static_cast<double>(kRadioTwoPi) * 1000.0 *
+                         (static_cast<double>(i) / kSampleRate);
+    const float output = RadioPreviewBroadcastSourceNode::run(
+        preview, static_cast<float>(std::sin(phase)), ctx);
+    fundamentalSin += output * std::sin(phase);
+    fundamentalCos += output * std::cos(phase);
+    thirdSin += output * std::sin(3.0 * phase);
+    thirdCos += output * std::cos(3.0 * phase);
+  }
+  const double fundamental =
+      std::hypot(fundamentalSin, fundamentalCos);
+  const double third = std::hypot(thirdSin, thirdCos);
+  const float thd = static_cast<float>(third / fundamental);
+  if (thd < 0.009f || thd > 0.012f) {
+    fail("Broadcast nonlinearity is outside its period-transmitter target; "
+         "THD=" +
+         std::to_string(thd));
+  }
+}
+
+void expectBroadcastNoiseIsBroadbandWithoutWhistle() {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress;
+  ingress.broadcastSource.compressionEnabled = false;
+  ingress.broadcastSource.nonlinearityEnabled = false;
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  constexpr uint32_t kWarmupFrames = 48000u;
+  constexpr uint32_t kAnalysisFrames = 3u * 48000u;
+  constexpr size_t kToneCount = 24u;
+  std::vector<double> oscillatorSin(kToneCount, 0.0);
+  std::vector<double> oscillatorCos(kToneCount, 1.0);
+  std::vector<double> stepSin(kToneCount, 0.0);
+  std::vector<double> stepCos(kToneCount, 0.0);
+  std::vector<double> projectionSin(kToneCount, 0.0);
+  std::vector<double> projectionCos(kToneCount, 0.0);
+  for (size_t tone = 0; tone < kToneCount; ++tone) {
+    const double frequencyHz = 250.0 + 200.0 * static_cast<double>(tone);
+    const double step = static_cast<double>(kRadioTwoPi) * frequencyHz /
+                        static_cast<double>(kSampleRate);
+    stepSin[tone] = std::sin(step);
+    stepCos[tone] = std::cos(step);
+  }
+
+  RadioPreviewSampleContext ctx{};
+  double sum = 0.0;
+  double sumSq = 0.0;
+  for (uint32_t i = 0; i < kWarmupFrames + kAnalysisFrames; ++i) {
+    const float output = runRadioPreviewPipelineSample(
+        preview, 0.0f, ctx, RadioPreviewPassId::BroadcastSource);
+    if (i >= kWarmupFrames) {
+      sum += output;
+      sumSq += static_cast<double>(output) * static_cast<double>(output);
+      for (size_t tone = 0; tone < kToneCount; ++tone) {
+        projectionSin[tone] += output * oscillatorSin[tone];
+        projectionCos[tone] += output * oscillatorCos[tone];
+      }
+    }
+    for (size_t tone = 0; tone < kToneCount; ++tone) {
+      const double nextCos = oscillatorCos[tone] * stepCos[tone] -
+                             oscillatorSin[tone] * stepSin[tone];
+      const double nextSin = oscillatorSin[tone] * stepCos[tone] +
+                             oscillatorCos[tone] * stepSin[tone];
+      oscillatorCos[tone] = nextCos;
+      oscillatorSin[tone] = nextSin;
+    }
+  }
+
+  const double noiseRms =
+      std::sqrt(sumSq / static_cast<double>(kAnalysisFrames));
+  const float noiseBelowFullModulationDb = static_cast<float>(
+      20.0 * std::log10(kFullScaleSineRms / std::max(noiseRms, 1e-12)));
+  if (noiseBelowFullModulationDb < 63.0f ||
+      noiseBelowFullModulationDb > 65.0f) {
+    fail("Broadcast noise misses its -64 dB full-modulation reference; dB=" +
+         std::to_string(noiseBelowFullModulationDb));
+  }
+
+  const double mean = sum / static_cast<double>(kAnalysisFrames);
+  if (std::fabs(mean) > noiseRms * 0.02) {
+    fail("Broadcast noise has a DC bias.");
+  }
+  double strongestTone = 0.0;
+  for (size_t tone = 0; tone < kToneCount; ++tone) {
+    const double amplitude =
+        2.0 * std::hypot(projectionSin[tone], projectionCos[tone]) /
+        static_cast<double>(kAnalysisFrames);
+    strongestTone = std::max(strongestTone, amplitude);
+  }
+  if (strongestTone > noiseRms * 0.03) {
+    fail("Broadcast source contains a coherent whistle; tone/noise ratio=" +
+         std::to_string(strongestTone / noiseRms));
+  }
+}
+
+std::vector<float> processPreviewProgramBlocks(
+    const std::vector<float>& program,
+    size_t splitFrame) {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress;
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+  preview.warmedUp = true;
+
+  std::vector<float> output(program.size(), 0.0f);
+  auto processRange = [&](size_t first, size_t count) {
+    RadioPreviewBlockControl block{};
+    beginRadioPreviewPipelineBlock(preview, static_cast<uint32_t>(count),
+                                   block);
+    RadioPreviewSampleContext ctx{};
+    ctx.block = &block;
+    for (size_t i = first; i < first + count; ++i) {
+      output[i] = runRadioPreviewPipelineSample(
+          preview, program[i], ctx, RadioPreviewPassId::BroadcastSource);
+    }
+  };
+
+  if (splitFrame == 0u) {
+    processRange(0u, program.size());
+  } else {
+    processRange(0u, splitFrame);
+    processRange(splitFrame, program.size() - splitFrame);
+  }
+  return output;
+}
+
+void expectBroadcastSourceIsBlockInvariant() {
+  std::vector<float> program(4096u, 0.0f);
+  for (size_t i = 0; i < program.size(); ++i) {
+    program[i] = 0.9f * std::sin(static_cast<float>(i) * 0.071f);
+  }
+  program[701] = 1.4f;
+  program[2703] = -1.3f;
+
+  const std::vector<float> oneBlock = processPreviewProgramBlocks(program, 0u);
+  const std::vector<float> splitBlocks =
+      processPreviewProgramBlocks(program, 1237u);
+  float maxDiff = 0.0f;
+  for (size_t i = 0; i < program.size(); ++i) {
+    maxDiff = std::max(maxDiff,
+                       std::fabs(oneBlock[i] - splitBlocks[i]));
+  }
+  if (maxDiff > kTolerance) {
+    fail("Broadcast source state depends on block boundaries; max diff=" +
+         std::to_string(maxDiff));
+  }
+}
+
 void expectSpeakerDerivedPhysicsRefreshesFromConfig() {
   Radio1938 radio;
   radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
@@ -203,6 +485,12 @@ int main() {
   expectHotProgramLevelReachesAmIngress();
   expectPreviewCapsDetectorWork();
   expectPreviewUsesRequestedAudioBandwidthOnce();
+  expectBroadcastSourceBypassIsTransparent();
+  expectBroadcastCompressionTiming();
+  expectBroadcastCompressionSlope();
+  expectBroadcastNonlinearityNearOnePercentThd();
+  expectBroadcastNoiseIsBroadbandWithoutWhistle();
+  expectBroadcastSourceIsBlockInvariant();
   expectSpeakerDerivedPhysicsRefreshesFromConfig();
   return 0;
 }
