@@ -402,8 +402,7 @@ void configurePowerOnlyGraph(Radio1938& radio) {
 
 PowerOnlyTraceResult runPowerOnlyProgram(const HarnessConfig& config,
                                          const std::vector<float>& input) {
-  PowerOnlyTraceResult result{
-      makeRadio(config, 0.0f, false), {}, {}, {}, {}};
+  PowerOnlyTraceResult result{makeRadio(config, 0.0f, false), {}, {}, {}, {}};
   configurePowerOnlyGraph(result.radio);
   result.radio.resetCalibration();
   result.radio.diagnostics.reset();
@@ -417,8 +416,8 @@ PowerOnlyTraceResult runPowerOnlyProgram(const HarnessConfig& config,
   for (size_t i = 0; i < input.size(); ++i) {
     RadioSampleContext ctx{};
     ctx.block = &block;
-    float y = runRadioPipelineSample(result.radio, input[i], ctx, PassId::Power);
-    result.output[i] = y;
+    runRadioPipelineSample(result.radio, input[i], ctx, PassId::Power);
+    result.output[i] = result.radio.power.outputTransformer.secondaryVoltage;
     result.speakerCurrent[i] = result.radio.speakerStage.speaker.electricalCurrentAmps;
     result.outputGridA[i] = result.radio.power.outputGridAVolts;
     result.outputGridB[i] = result.radio.power.outputGridBVolts;
@@ -1442,8 +1441,13 @@ void runTransient(const HarnessConfig& config) {
   float effectiveNoiseWeight =
       std::max(config.noiseWeight, 0.5f * config.noiseOnlyWeight);
   float carrierHz = selectHarnessCarrierHz(config, effectiveNoiseWeight);
-  constexpr float kBurstHz = 10.0f;
-  auto rf = makeCarrierBurstRf(config.sampleRate, kSteadyTestFrames, carrierHz,
+  // Each carrier-on or carrier-off plateau must be long enough for the 75 ms
+  // AVC network to cross both 10% and 90%. Four 2 Hz cycles also leave the
+  // edge finder the six settling half-periods it deliberately skips.
+  constexpr float kBurstHz = 2.0f;
+  const uint32_t transientFrames =
+      static_cast<uint32_t>(std::ceil(2.0f * config.sampleRate));
+  auto rf = makeCarrierBurstRf(config.sampleRate, transientFrames, carrierHz,
                                config.carrierRmsVolts, kBurstHz);
   EnvelopeTraceResult run =
       runRfInputWithTrace(config, rf, effectiveNoiseWeight);
@@ -1464,16 +1468,17 @@ void runTransient(const HarnessConfig& config) {
   std::cout << "avc_dc_shift," << avcMetrics.dcShift << "\n\n";
 }
 
-void printReferenceRow(const char* metric,
+bool printReferenceRow(const char* metric,
                        double measured,
                        double low,
                        double high) {
   bool inBand = (measured >= low && measured <= high);
   std::cout << metric << "," << measured << "," << low << "," << high << ","
             << (inBand ? 1 : 0) << "\n";
+  return inBand;
 }
 
-void runReference(const HarnessConfig& config) {
+bool runReference(const HarnessConfig& config) {
   std::cout << "[reference]\n";
   std::cout << "metric,measured,low,high,in_band\n";
   SweepSummary sweep = summarizeSweep(measureSweepPoints(config));
@@ -1503,48 +1508,59 @@ void runReference(const HarnessConfig& config) {
   // Working bands only. The frequency-domain limits are still coarse. The
   // detector / AVC timing rows below are based on named RC state and service
   // sideband constraints, not on arbitrary output-envelope taste metrics.
-  printReferenceRow("audio_low_3db_hz", sweep.low3dBHz,
-                    kTargetAudioLow3dBMin, kTargetAudioLow3dBMax);
-  printReferenceRow("audio_high_3db_hz", sweep.high3dBHz,
-                    kTargetAudioHigh3dBMin, kTargetAudioHigh3dBMax);
-  printReferenceRow("imd_db", imdDb, kTargetImdDbMin, kTargetImdDbMax);
-  printReferenceRow("detector_tau_us", detectorTauUs,
-                    kTargetDetectorTauUsMin, kTargetDetectorTauUsMax);
-  printReferenceRow("avc_tau_ms", avcTauMs, kTargetAvcTauMsMin,
-                    kTargetAvcTauMsMax);
-  printReferenceRow("avc_to_detector_tau_ratio",
-                    avcTauMs / std::max(detectorTauUs * 1e-3, 1e-9), 50.0,
-                    1e9);
-  printReferenceRow("envelope_rise_ms_observed", envelope.rise10To90Ms, 0.0,
-                    10.0);
-  printReferenceRow("envelope_fall_ms_observed", envelope.fall90To10Ms, 0.0,
-                    10.0);
-  printReferenceRow("sinad_nominal_db", anchors.sinadNominalDb,
-                    kTargetSinadNominalDbMin, kTargetSinadNominalDbMax);
+  bool allInBand = true;
+  allInBand &= printReferenceRow("audio_low_3db_hz", sweep.low3dBHz,
+                                 kTargetAudioLow3dBMin, kTargetAudioLow3dBMax);
+  allInBand &= printReferenceRow("audio_high_3db_hz", sweep.high3dBHz,
+                                 kTargetAudioHigh3dBMin,
+                                 kTargetAudioHigh3dBMax);
+  allInBand &=
+      printReferenceRow("imd_db", imdDb, kTargetImdDbMin, kTargetImdDbMax);
+  allInBand &= printReferenceRow("detector_tau_us", detectorTauUs,
+                                 kTargetDetectorTauUsMin,
+                                 kTargetDetectorTauUsMax);
+  allInBand &= printReferenceRow("avc_tau_ms", avcTauMs,
+                                 kTargetAvcTauMsMin, kTargetAvcTauMsMax);
+  allInBand &= printReferenceRow(
+      "avc_to_detector_tau_ratio",
+      avcTauMs / std::max(detectorTauUs * 1e-3, 1e-9), 50.0, 1e9);
+  allInBand &= printReferenceRow("envelope_rise_ms_observed",
+                                 envelope.rise10To90Ms, 0.0, 10.0);
+  allInBand &= printReferenceRow("envelope_fall_ms_observed",
+                                 envelope.fall90To10Ms, 0.0, 10.0);
+  allInBand &= printReferenceRow("sinad_nominal_db", anchors.sinadNominalDb,
+                                 kTargetSinadNominalDbMin,
+                                 kTargetSinadNominalDbMax);
   // Speaker/reference and digital output targets (measured from nominal run)
-  printReferenceRow("speaker_reference_ratio", anchors.speakerReferenceRatio,
-                    kTargetSpeakerReferenceRatioMin,
-                    kTargetSpeakerReferenceRatioMax);
-  printReferenceRow("max_digital_output", anchors.maxDigitalOutput,
-                    kTargetMaxDigitalOutputMin, kTargetMaxDigitalOutputMax);
+  allInBand &= printReferenceRow(
+      "speaker_reference_ratio", anchors.speakerReferenceRatio,
+      kTargetSpeakerReferenceRatioMin, kTargetSpeakerReferenceRatioMax);
+  allInBand &= printReferenceRow("max_digital_output", anchors.maxDigitalOutput,
+                                 kTargetMaxDigitalOutputMin,
+                                 kTargetMaxDigitalOutputMax);
   // Diagnostic flags expected to be zero in nominal bench
-  printReferenceRow("power_clip", nominalRun.radio.diagnostics.powerClip ? 1 : 0,
-                    kTargetFlagZero, kTargetFlagZero);
-  printReferenceRow("speaker_clip", nominalRun.radio.diagnostics.speakerClip ? 1 : 0,
-                    kTargetFlagZero, kTargetFlagZero);
-  printReferenceRow("output_clip", nominalRun.radio.diagnostics.outputClip ? 1 : 0,
-                    kTargetFlagZero, kTargetFlagZero);
-  printReferenceRow("final_limiter_active",
-                    nominalRun.radio.diagnostics.finalLimiterActive ? 1 : 0,
-                    kTargetFlagZero, kTargetFlagZero);
+  allInBand &= printReferenceRow(
+      "power_clip", nominalRun.radio.diagnostics.powerClip ? 1 : 0,
+      kTargetFlagZero, kTargetFlagZero);
+  allInBand &= printReferenceRow(
+      "speaker_clip", nominalRun.radio.diagnostics.speakerClip ? 1 : 0,
+      kTargetFlagZero, kTargetFlagZero);
+  allInBand &= printReferenceRow(
+      "output_clip", nominalRun.radio.diagnostics.outputClip ? 1 : 0,
+      kTargetFlagZero, kTargetFlagZero);
+  allInBand &= printReferenceRow(
+      "final_limiter_active",
+      nominalRun.radio.diagnostics.finalLimiterActive ? 1 : 0, kTargetFlagZero,
+      kTargetFlagZero);
   // IF center and nominal output power anchor
-  printReferenceRow("if_center_hz", radio.ifStrip.ifCenterHz,
-                    kTargetIfCenterMinHz, kTargetIfCenterMaxHz);
-  printReferenceRow("nominal_output_power_watts",
-                    radio.power.nominalOutputPowerWatts,
-                    kTargetNominalOutputPowerMinW,
-                    kTargetNominalOutputPowerMaxW);
+  allInBand &= printReferenceRow("if_center_hz", radio.ifStrip.ifCenterHz,
+                                 kTargetIfCenterMinHz,
+                                 kTargetIfCenterMaxHz);
+  allInBand &= printReferenceRow(
+      "nominal_output_power_watts", radio.power.nominalOutputPowerWatts,
+      kTargetNominalOutputPowerMinW, kTargetNominalOutputPowerMaxW);
   std::cout << "\n";
+  return allInBand;
 }
 
 void runNoise(const HarnessConfig& config) {
@@ -1668,13 +1684,16 @@ int main(int argc, char** argv) {
     if (wantsSection(config, "sinad")) runSinad(config);
     if (wantsSection(config, "weak")) runWeakSignal(config);
     if (wantsSection(config, "transient")) runTransient(config);
-    if (wantsSection(config, "reference")) runReference(config);
+    bool referencePassed = true;
+    if (wantsSection(config, "reference")) {
+      referencePassed = runReference(config);
+    }
     if (wantsSection(config, "noise")) runNoise(config);
     if (wantsSection(config, "spectrum")) runSpectrum(config);
     if (wantsSection(config, "am_validate")) runAmValidate(config);
     if (wantsSection(config, "am_convergence")) runAmConvergence(config);
     if (wantsSection(config, "power_bench")) runPowerBench(config);
-    return 0;
+    return referencePassed ? 0 : 2;
   } catch (const std::exception& ex) {
     std::cerr << "radio_measurements: " << ex.what() << "\n";
     return 1;

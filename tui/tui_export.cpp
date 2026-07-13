@@ -162,7 +162,6 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
       (o.calibrationReport || (renderedRadioOut && !writeOutput));
   RadioAmIngressConfig radioAmIngress;
   RadioPreviewConfig radioPreviewConfig;
-  radioPreviewConfig.programBandwidthHz = 0.48f * static_cast<float>(o.bwHz);
 
   auto renderRadio = std::make_unique<Radio1938>();
   rebuildRadioFromTemplate(renderRadio.get());

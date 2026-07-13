@@ -38,7 +38,6 @@ void rebuildRadioPreviewChain(AudioState* state) {
   rebuildRadioFromTemplate(&state->radio1938, gAudio.radio1938Template,
                            static_cast<float>(gAudio.sampleRate), gAudio.lpHz,
                            gAudio.noise);
-  state->radioPreviewConfig.programBandwidthHz = 0.48f * gAudio.lpHz;
   state->radioPreview.initialize(state->radio1938,
                                  state->radioAmIngress,
                                  state->radioPreviewConfig,

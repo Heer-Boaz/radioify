@@ -2,9 +2,11 @@
 
 #include "audiofilter/math/signal_math.h"
 #include "audiofilter/radio1938/audio_pipeline.h"
+#include "audiofilter/radio1938/models/power_stage_solver.h"
 #include "audiofilter/radio1938/radio_pipeline_types.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -426,9 +428,8 @@ double runIfDetectorMagnitudeRms(Radio1938& radio, float detuneHz) {
   radio.frontEnd.rfGain = 1.0f;
   radio.controlBus.controlVoltage = 0.0f;
   radio.mixer.conversionGain = 1.0f;
-  radio.ifStrip.appliedConfigRevision = radio.tuning.configRevision;
-  radio.ifStrip.loFrequencyHz =
-      radio.ifStrip.sourceCarrierHz + radio.ifStrip.ifCenterHz + detuneHz;
+  radio.tuning.tuneAppliedHz = detuneHz;
+  radio.tuning.configRevision++;
   std::vector<float> detectorMagnitude(kNodeTestFrames, 0.0f);
   for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
     RadioSampleContext ctx{};
@@ -455,6 +456,80 @@ std::vector<float> runSpeakerTone(Radio1938& radio,
     output[i] = RadioSpeakerNode::run(radio, x, ctx);
   }
   return output;
+}
+
+double runCabinetToneRms(Radio1938& radio, float frequencyHz) {
+  RadioCabinetNode::reset(radio);
+  double sumSquares = 0.0;
+  constexpr float kPeakAmplitude = 0.2f;
+  for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
+    float t = static_cast<float>(i) / std::max(radio.sampleRate, 1.0f);
+    float input = kPeakAmplitude * std::sin(kRadioTwoPi * frequencyHz * t);
+    RadioSampleContext ctx{};
+    float output = RadioCabinetNode::run(radio, input, ctx);
+    if (i >= kNodeTestFrames / 2u) {
+      sumSquares += static_cast<double>(output) * output;
+    }
+  }
+  return std::sqrt(sumSquares / static_cast<double>(kNodeTestFrames / 2u));
+}
+
+double runCabinetBurstTailRms(Radio1938& radio, float frequencyHz) {
+  RadioCabinetNode::reset(radio);
+  const uint32_t burstFrames =
+      static_cast<uint32_t>(std::round(0.10f * radio.sampleRate));
+  const uint32_t tailFrames =
+      static_cast<uint32_t>(std::round(0.15f * radio.sampleRate));
+  double tailSumSquares = 0.0;
+  for (uint32_t i = 0; i < burstFrames + tailFrames; ++i) {
+    float input = 0.0f;
+    if (i < burstFrames) {
+      float t = static_cast<float>(i) / std::max(radio.sampleRate, 1.0f);
+      input = 0.2f * std::sin(kRadioTwoPi * frequencyHz * t);
+    }
+    RadioSampleContext ctx{};
+    float output = RadioCabinetNode::run(radio, input, ctx);
+    if (i >= burstFrames) {
+      tailSumSquares += static_cast<double>(output) * output;
+    }
+  }
+  return std::sqrt(
+      tailSumSquares / static_cast<double>(std::max(tailFrames, 1u)));
+}
+
+double ratioDb(double numerator, double denominator) {
+  return 20.0 * std::log10(std::max(numerator, 1e-12) /
+                           std::max(denominator, 1e-12));
+}
+
+double measureSpeakerElectricalImpedanceMagnitude(Radio1938& radio,
+                                                  float frequencyHz) {
+  RadioSpeakerNode::reset(radio);
+  auto& speaker = radio.speakerStage.speaker;
+  const int substeps =
+      std::max(radio.power.outputTransformer.integrationSubsteps, 1);
+  const float sampleRate =
+      speaker.electricalSampleRate * static_cast<float>(substeps);
+  const float dt = 1.0f / sampleRate;
+  double voltageSumSq = 0.0;
+  double currentSumSq = 0.0;
+  const uint32_t analysisStart =
+      static_cast<uint32_t>(substeps) * kNodeTestFrames;
+  for (uint32_t i = 0; i < 2u * analysisStart; ++i) {
+    const float phase =
+        kRadioTwoPi * frequencyHz * (static_cast<float>(i) / sampleRate);
+    const float voltage = std::sin(phase);
+    const SpeakerElectricalLinearization load =
+        linearizeSpeakerElectricalLoad(speaker,
+                                       radio.power.outputLoadResistanceOhms, dt);
+    commitSpeakerElectricalLoad(speaker, load, voltage);
+    if (i >= analysisStart) {
+      voltageSumSq += static_cast<double>(voltage) * voltage;
+      currentSumSq += static_cast<double>(speaker.electricalCurrentAmps) *
+                      speaker.electricalCurrentAmps;
+    }
+  }
+  return std::sqrt(voltageSumSq / std::max(currentSumSq, 1e-18));
 }
 
 struct EnvelopeMetrics {
@@ -748,7 +823,8 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
                      std::max<double>(serviceEdgeHz, 1e-12),
                  "carrier must remain meaningfully above the published service edge");
     addRange(rows, "IFStrip", "philco_if_center_470kc", radio.ifStrip.ifCenterHz,
-             469000.0, 471000.0, "Service Bulletin 258");
+             kPhilcoIfCenterHz - 1000.0f, kPhilcoIfCenterHz + 1000.0f,
+             "Service Bulletin 258");
   }
 
   {
@@ -812,10 +888,12 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
   {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::AFC});
     RadioSampleContext dummy{};
-    radio.tuning.magneticTuningEnabled = true;
-    radio.tuning.afcResponseMs = 10.0f;
-    radio.tuning.afcMaxCorrectionHz = 2500.0f;
-    radio.tuning.afcCaptureHz = 5000.0f;
+    addRange(rows, "AFC", "preset_capture_matches_5khz_service_spec",
+             radio.tuning.afcCaptureHz, 4990.0, 5010.0,
+             "Philco magnetic-tuning acquisition range");
+    addRange(rows, "AFC", "preset_has_full_capture_range_authority",
+             radio.tuning.afcMaxCorrectionHz, 4990.0, 5010.0,
+             "available pull covers the documented acquisition range");
     radio.tuning.afcDeadband = 0.0f;
     radio.tuning.tuneOffsetHz = 400.0f;
     radio.controlSense.controlVoltageSense = 1.0f;
@@ -828,10 +906,6 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
                  "correction opposes detector error");
 
     Radio1938 radio2 = makeNodeFixture(config, 0.0f, {PassId::AFC});
-    radio2.tuning.magneticTuningEnabled = true;
-    radio2.tuning.afcResponseMs = 10.0f;
-    radio2.tuning.afcMaxCorrectionHz = 2500.0f;
-    radio2.tuning.afcCaptureHz = 5000.0f;
     radio2.tuning.afcDeadband = 0.0f;
     radio2.tuning.tuneOffsetHz = -400.0f;
     radio2.controlSense.controlVoltageSense = 1.0f;
@@ -843,6 +917,33 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
                  radio2.tuning.afcCorrectionHz > 0.0f,
                  radio2.tuning.afcCorrectionHz,
                  "correction opposes detector error");
+
+    Radio1938 captured = makeNodeFixture(config, 0.0f, {PassId::AFC});
+    captured.tuning.afcDeadband = 0.0f;
+    captured.tuning.tuneOffsetHz = 4000.0f;
+    captured.controlSense.controlVoltageSense = 1.0f;
+    captured.controlSense.tuningErrorSense = 0.8f;
+    int settleSamples =
+        static_cast<int>(std::ceil(1.5f * captured.sampleRate));
+    for (int i = 0; i < settleSamples; ++i) {
+      RadioAFCNode::run(captured, dummy);
+    }
+    addRange(rows, "AFC", "four_khz_error_is_pulled_to_center",
+             std::fabs(captured.tuning.tuneOffsetHz +
+                       captured.tuning.afcCorrectionHz),
+             0.0, 100.0, "constant discriminator error settles near center");
+
+    Radio1938 outside = makeNodeFixture(config, 0.0f, {PassId::AFC});
+    outside.tuning.afcDeadband = 0.0f;
+    outside.tuning.tuneOffsetHz = 5100.0f;
+    outside.controlSense.controlVoltageSense = 1.0f;
+    outside.controlSense.tuningErrorSense = 1.0f;
+    for (int i = 0; i < settleSamples; ++i) {
+      RadioAFCNode::run(outside, dummy);
+    }
+    addRange(rows, "AFC", "outside_capture_does_not_acquire",
+             outside.tuning.afcCorrectionHz, 0.0, 0.0,
+             "capture gate rejects stations beyond 5 kHz");
 
     Radio1938 radio3 = makeNodeFixture(config, 0.0f, {PassId::AFC});
     radio3.tuning.magneticTuningEnabled = false;
@@ -1389,16 +1490,22 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::ReceiverInputNetwork});
     RadioReceiverInputNetworkNode::reset(radio);
     addRange(rows, "ReceiverInputNetwork", "philco_volume_total_2meg",
-             radio.receiverCircuit.volumeControlResistanceOhms, 1.9e6, 2.1e6,
-             "Service Bulletin 258");
+             radio.receiverCircuit.volumeControlResistanceOhms,
+             0.95f * kPhilcoVolumeControlOhms,
+             1.05f * kPhilcoVolumeControlOhms, "Service Bulletin 258");
     addRange(rows, "ReceiverInputNetwork", "philco_volume_tap_1meg",
-             radio.receiverCircuit.volumeControlTapResistanceOhms, 0.95e6, 1.05e6,
+             radio.receiverCircuit.volumeControlTapResistanceOhms,
+             0.95f * kPhilcoVolumeTapOhms, 1.05f * kPhilcoVolumeTapOhms,
              "Service Bulletin 258");
     addRange(rows, "ReceiverInputNetwork", "philco_loudness_resistor_490k",
-             radio.receiverCircuit.volumeControlLoudnessResistanceOhms, 0.46e6,
-             0.52e6, "Service Bulletin 258");
+             radio.receiverCircuit.volumeControlLoudnessResistanceOhms,
+             kPhilcoLoudnessResistanceOhms - 30000.0f,
+             kPhilcoLoudnessResistanceOhms + 30000.0f,
+             "Service Bulletin 258");
     addRange(rows, "ReceiverInputNetwork", "philco_first_audio_coupling_0p01uf",
-             radio.receiverCircuit.couplingCapFarads, 9e-9, 11e-9,
+             radio.receiverCircuit.couplingCapFarads,
+             0.9f * kPhilcoFirstAudioCouplingCapFarads,
+             1.1f * kPhilcoFirstAudioCouplingCapFarads,
              "Service Bulletin 258");
     addPredicate(rows, "ReceiverInputNetwork", "detector_load_positive_finite",
                  std::isfinite(radio.receiverCircuit.detectorLoadConductance) &&
@@ -1477,10 +1584,14 @@ std::vector<TestRow> runAudioPhysics(const HarnessConfig& config) {
                  radio.output.digitalReferenceSpeakerVoltsPeak,
                  "derived from output stage");
     addRange(rows, "Power", "philco_undistorted_output_near_15w",
-             radio.power.nominalOutputPowerWatts, 12.0, 18.0,
+             radio.power.nominalOutputPowerWatts,
+             kPhilcoUndistortedOutputWatts - 3.0f,
+             kPhilcoUndistortedOutputWatts + 3.0f,
              "Service Bulletin 258");
 
     RadioPowerNode::reset(radio);
+    const int configuredOutputSubsteps =
+        radio.power.outputTransformer.integrationSubsteps;
     std::vector<float> secondaryZero(kNodeTestFrames, 0.0f);
     RadioSampleContext ctx{};
     for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
@@ -1489,6 +1600,10 @@ std::vector<TestRow> runAudioPhysics(const HarnessConfig& config) {
     addRange(rows, "Power", "zero_drive_has_near_zero_secondary",
              rmsOf(secondaryZero, kNodeTestFrames / 2u), 0.0, 1e-3,
              "secondary RMS at zero drive");
+    addRange(rows, "Power", "output_transformer_preserves_substep_config",
+             radio.power.outputTransformer.integrationSubsteps,
+             configuredOutputSubsteps, configuredOutputSubsteps,
+             "runtime stepping must not overwrite model configuration");
 
     Radio1938 radioDc = makeNodeFixture(config, 0.0f, {PassId::Power});
     RadioPowerNode::reset(radioDc);
@@ -1572,11 +1687,13 @@ std::vector<TestRow> runAudioPhysics(const HarnessConfig& config) {
 
     Radio1938 bypass = makeNodeFixture(config, 0.0f, {PassId::Tone});
     bypass.tone.presenceHz = 0.0f;
+    bypass.tone.tiltDepthDb = 0.0f;
     RadioToneNode::init(bypass, initCtx);
     RadioToneNode::reset(bypass);
     float bypassOut = RadioToneNode::run(bypass, 0.18f, ctx);
-    addRange(rows, "Tone", "disabled_presence_is_passthrough", bypassOut,
-             0.18f - 1e-6, 0.18f + 1e-6, "presence stage off means identity map");
+    addRange(rows, "Tone", "disabled_tone_is_passthrough", bypassOut,
+             0.18f - 1e-6, 0.18f + 1e-6,
+             "presence and tilt stages off mean identity map");
   }
 
   {
@@ -1646,6 +1763,12 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     addPredicate(rows, "Speaker", "finite_over_drive_sweep", finiteSpeakerSweep,
                  finiteSpeakerSweep ? 1.0 : 0.0,
                  "no NaN/Inf over speaker operating sweep");
+
+    const double impedanceMagnitude =
+        measureSpeakerElectricalImpedanceMagnitude(radio, 1000.0f);
+    addRange(rows, "Speaker", "one_khz_load_near_nominal",
+             impedanceMagnitude, 3.0, 5.0,
+             "direct electromechanical load magnitude");
   }
 
   {
@@ -1715,33 +1838,69 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     addRange(rows, "Cabinet", "disabled_cabinet_is_passthrough", bypassOut,
              0.22f - 1e-6, 0.22f + 1e-6, "cabinet bypass must preserve signal");
 
-    Radio1938 flat = makeNodeFixture(config, 0.0f, {PassId::Cabinet});
-    Radio1938 resonant = makeNodeFixture(config, 0.0f, {PassId::Cabinet});
-    resonant.cabinet.panelHz = 180.0f;
-    resonant.cabinet.panelGainDb = 5.0f;
+    Radio1938 untreated = makeNodeFixture(config, 0.0f, {PassId::Cabinet});
+    Radio1938 treated = makeNodeFixture(config, 0.0f, {PassId::Cabinet});
+    untreated.cabinet.clarifier1AttenuationDb = 0.0f;
+    untreated.cabinet.clarifier2AttenuationDb = 0.0f;
+    untreated.cabinet.clarifier3AttenuationDb = 0.0f;
     RadioInitContext initCtx{};
-    RadioCabinetNode::init(flat, initCtx);
-    RadioCabinetNode::reset(flat);
-    RadioCabinetNode::init(resonant, initCtx);
-    RadioCabinetNode::reset(resonant);
-    std::vector<float> flatOut(kNodeTestFrames, 0.0f);
-    std::vector<float> resonantOut(kNodeTestFrames, 0.0f);
-    for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
-      float t = static_cast<float>(i) / std::max(flat.sampleRate, 1.0f);
-      float x = 0.2f * std::sin(kRadioTwoPi * 180.0f * t);
-      flatOut[i] = RadioCabinetNode::run(flat, x, ctx);
-      resonantOut[i] = RadioCabinetNode::run(resonant, x, ctx);
+    RadioCabinetNode::init(untreated, initCtx);
+    RadioCabinetNode::init(treated, initCtx);
+
+    addRange(rows, "Cabinet", "philco_cabinet_resonance_near_95hz",
+             treated.cabinet.panelHz, 90.0, 100.0,
+             "US2059929 family cabinet response curve");
+    addRange(rows, "Cabinet", "type_k_proxy_center_near_108hz",
+             (treated.cabinet.clarifier1Hz + treated.cabinet.clarifier2Hz +
+              treated.cabinet.clarifier3Hz) /
+                 3.0f,
+             105.0, 111.0,
+             "three identical 36-1155 units; patent six-inch absorber proxy");
+
+    const double untreated95 = runCabinetToneRms(untreated, 95.0f);
+    const double treated95 = runCabinetToneRms(treated, 95.0f);
+    const double untreated108 = runCabinetToneRms(untreated, 108.0f);
+    const double treated108 = runCabinetToneRms(treated, 108.0f);
+    const double untreated500 = runCabinetToneRms(untreated, 500.0f);
+    const double treated500 = runCabinetToneRms(treated, 500.0f);
+    const double bypass95 = runCabinetToneRms(bypass, 95.0f);
+    addRange(rows, "Cabinet", "untreated_95hz_cabinet_boom_db",
+             ratioDb(untreated95, bypass95), 6.5, 9.5,
+             "published untreated response rises in the resonance band");
+    addRange(rows, "Cabinet", "clarifiers_reduce_95hz_cabinet_peak_db",
+             ratioDb(untreated95, treated95), 6.0, 9.0,
+             "absorption overlaps the documented cabinet peak");
+    addRange(rows, "Cabinet", "clarifiers_max_reduction_near_108hz_db",
+             ratioDb(untreated108, treated108), 8.0, 10.5,
+             "patent trace shows approximately 10 dB maximum reduction");
+    addRange(rows, "Cabinet", "clarifiers_leave_500hz_nearly_unchanged_db",
+             std::fabs(ratioDb(untreated500, treated500)), 0.0, 0.6,
+             "tuned absorbers must remain inert outside the boom band");
+
+    constexpr std::array<float, 4> kCabinetBandHz = {70.0f, 95.0f, 108.0f,
+                                                      150.0f};
+    double minimumTreatedGainDb = std::numeric_limits<double>::infinity();
+    double maximumTreatedGainDb = -std::numeric_limits<double>::infinity();
+    for (float frequencyHz : kCabinetBandHz) {
+      const double treatedRms = runCabinetToneRms(treated, frequencyHz);
+      const double bypassRms = runCabinetToneRms(bypass, frequencyHz);
+      const double gainDb = ratioDb(treatedRms, bypassRms);
+      minimumTreatedGainDb = std::min(minimumTreatedGainDb, gainDb);
+      maximumTreatedGainDb = std::max(maximumTreatedGainDb, gainDb);
     }
-    addPredicate(rows, "Cabinet", "panel_resonance_changes_180hz_gain",
-                 rmsOf(resonantOut, kNodeTestFrames / 2u) >
-                     1.10 * std::max(rmsOf(flatOut, kNodeTestFrames / 2u), 1e-12),
-                 rmsOf(resonantOut, kNodeTestFrames / 2u) /
-                     std::max(rmsOf(flatOut, kNodeTestFrames / 2u), 1e-12),
-                 "resonant / flat cabinet RMS");
+    addRange(rows, "Cabinet", "treated_70_150hz_response_span_db",
+             maximumTreatedGainDb - minimumTreatedGainDb, 0.0, 4.5,
+             "clarifiers flatten rather than move the cabinet boom");
+    const double untreatedTail = runCabinetBurstTailRms(untreated, 95.0f);
+    const double treatedTail = runCabinetBurstTailRms(treated, 95.0f);
+    addRange(rows, "Cabinet", "clarifiers_reduce_95hz_hangover_db",
+             ratioDb(untreatedTail, treatedTail), 6.0, 12.0,
+             "patent reports faster decay as well as lower steady response");
   }
 
   {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::OutputScale});
+    radio.output.digitalMakeupGain = 1.0f;
     RadioSampleContext ctx{};
     float scaled = RadioOutputScaleNode::run(
         radio, radio.output.digitalReferenceSpeakerVoltsPeak, ctx);

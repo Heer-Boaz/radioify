@@ -133,6 +133,41 @@ void expectPreviewCapsDetectorWork() {
   }
 }
 
+float measurePreviewProgramFilterRms(float frequencyHz) {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress;
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  RadioPreviewSampleContext ctx{};
+  double sumSq = 0.0;
+  constexpr uint32_t kFrames = 48000u;
+  constexpr uint32_t kAnalysisStart = kFrames / 2u;
+  for (uint32_t i = 0; i < kFrames; ++i) {
+    const float phase = kRadioTwoPi * frequencyHz *
+                        (static_cast<float>(i) / kSampleRate);
+    const float out =
+        RadioPreviewProgramFilterNode::run(preview, std::sin(phase), ctx);
+    if (i >= kAnalysisStart) {
+      sumSq += static_cast<double>(out) * static_cast<double>(out);
+    }
+  }
+  return static_cast<float>(
+      std::sqrt(sumSq / static_cast<double>(kFrames - kAnalysisStart)));
+}
+
+void expectPreviewUsesRequestedAudioBandwidthOnce() {
+  const float passbandRms = measurePreviewProgramFilterRms(500.0f);
+  const float edgeRms = measurePreviewProgramFilterRms(kBandwidthHz);
+  const float edgeRatio = edgeRms / std::max(passbandRms, 1e-9f);
+  if (edgeRatio < 0.68f || edgeRatio > 0.74f) {
+    fail("Preview audio-bandwidth edge is not a single -3 dB low-pass; ratio=" +
+         std::to_string(edgeRatio));
+  }
+}
+
 void expectSpeakerDerivedPhysicsRefreshesFromConfig() {
   Radio1938 radio;
   radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
@@ -167,6 +202,7 @@ int main() {
   expectBlockInvariantAmIngress();
   expectHotProgramLevelReachesAmIngress();
   expectPreviewCapsDetectorWork();
+  expectPreviewUsesRequestedAudioBandwidthOnce();
   expectSpeakerDerivedPhysicsRefreshesFromConfig();
   return 0;
 }

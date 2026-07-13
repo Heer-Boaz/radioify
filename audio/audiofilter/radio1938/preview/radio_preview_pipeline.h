@@ -73,14 +73,13 @@ float runRadioPreviewPipelineSample(RadioPreviewPipeline& preview,
 struct RadioPreviewPipeline {
   Radio1938* radio = nullptr;
   const RadioAmIngressConfig* ingress = nullptr;
-  const RadioPreviewConfig* config = nullptr;
   float sampleRate = 0.0f;
+  float audioBandwidthHz = 0.0f;
   bool warmedUp = false;
   std::vector<float> warmupScratch;
   std::vector<float> filteredScratch;
   Biquad programHp;
-  Biquad programLp1;
-  Biquad programLp2;
+  Biquad programLp;
 
   using Graph = RadioPreviewGraph;
   using Lifecycle = RadioPreviewLifecycle;

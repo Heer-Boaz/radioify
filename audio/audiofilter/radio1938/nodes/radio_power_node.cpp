@@ -198,7 +198,10 @@ float runPowerStageSample(Radio1938& radio, float y) {
   }
   controlSense.powerSagSense = power.sagEnv;
   advanceRectifierRipplePhase(radio);
-  return y;
+  // Publish an explicit motor-equivalent drive to the acoustic speaker node;
+  // the electrical load remains owned and advanced by this power-stage solve.
+  return radio.speakerStage.speaker.electricalCurrentAmps *
+         radio.speakerStage.speaker.effectiveVoiceCoilResistanceOhms;
 }
 
 }  // namespace
@@ -303,6 +306,9 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
       power.outputTransformerSecondaryResistanceOhms,
       power.outputTransformerSecondaryShuntCapFarads,
       power.outputTransformerIntegrationSubsteps);
+  configureSpeakerElectromechanics(radio.speakerStage.speaker,
+                                   power.internalSampleRate,
+                                   power.outputLoadResistanceOhms);
   {
     FixedLoadAffineTransformerProjection outputAffine =
         buildFixedLoadAffineProjection(power.outputTransformer,
@@ -355,6 +361,7 @@ void RadioPowerNode::reset(Radio1938& radio) {
   power.interstageAdaptiveSubsteps = 0;
   power.interstageAdaptiveValidationCountdown = 0;
   power.outputTransformer.clearState();
+  resetSpeakerElectromechanics(radio.speakerStage.speaker);
   power.osLpIn.reset();
   power.osLpOut.reset();
   power.postLpf.reset();

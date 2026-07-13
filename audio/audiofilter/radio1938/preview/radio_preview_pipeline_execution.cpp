@@ -4,6 +4,7 @@
 #include "../radio_buffer_io.h"
 
 #include <algorithm>
+#include <cassert>
 
 namespace {
 
@@ -81,8 +82,10 @@ void RadioPreviewPipeline::initialize(Radio1938& radioRef,
                                       float newSampleRate) {
   radio = &radioRef;
   ingress = &ingressConfig;
-  config = &previewConfig;
   sampleRate = newSampleRate;
+  assert(radioRef.tuning.tunedBw > 0.0f &&
+         "Preview requires an initialized Radio1938 bandwidth");
+  audioBandwidthHz = radioRef.tuning.tunedBw;
   applyPreviewRuntimeBudget(radioRef, previewConfig);
   RadioPreviewInitContext initCtx{};
   lifecycle.initialize(*this, initCtx);

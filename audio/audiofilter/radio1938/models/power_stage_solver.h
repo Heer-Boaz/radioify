@@ -68,6 +68,12 @@ SpeakerElectricalLinearization linearizeSpeakerElectricalLoad(
     float nominalLoadOhms,
     float dt);
 
+void configureSpeakerElectromechanics(SpeakerSim& speaker,
+                                      float sampleRate,
+                                      float nominalLoadOhms);
+
+void resetSpeakerElectromechanics(SpeakerSim& speaker);
+
 void commitSpeakerElectricalLoad(SpeakerSim& speaker,
                                  const SpeakerElectricalLinearization& l,
                                  float appliedVolts);

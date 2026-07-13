@@ -22,8 +22,11 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.tuning.smoothTau = 0.05f;
   radio.tuning.updateEps = 0.25f;
   radio.tuning.magneticTuningEnabled = true;
-  radio.tuning.afcCaptureHz = 420.0f;
-  radio.tuning.afcMaxCorrectionHz = 110.0f;
+  // Philco's service data specifies magnetic-tuning capture within roughly
+  // 5 kHz of station center. The discriminator remains the proportional
+  // element; these values define its acquisition window and available pull.
+  radio.tuning.afcCaptureHz = 5000.0f;
+  radio.tuning.afcMaxCorrectionHz = 5000.0f;
   radio.tuning.afcDeadband = 0.015f;
   radio.tuning.afcResponseMs = 240.0f;
 
@@ -62,11 +65,9 @@ void applyPhilco37116Preset(Radio1938& radio) {
   // 470 kHz strip. Keep enough detector drive for the 6J5/6F6/6B4 chain so the
   // physical speaker-reference scaling is not forced to make the whole radio
   // sound abnormally quiet.
-  // Keep detector drive healthy without slamming the first-audio stage on
-  // dense masters. Output makeup below restores listening level after the IF
-  // drive and force-coupled speaker radiation are set by the analog chain
-  // rather than by a post-render clamp.
-  radio.ifStrip.stageGain = 3.0f;
+  // This is calibrated against the physical speaker reference, nominal SINAD,
+  // and the measured audio passband rather than against listening loudness.
+  radio.ifStrip.stageGain = 4.6f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.interstageCouplingCoeff = 0.15f;
@@ -197,7 +198,11 @@ void applyPhilco37116Preset(Radio1938& radio) {
                    radio.power.outputTubePlateCurrentAmps *
                        (0.5f * radio.power.outputTransformerPrimaryResistanceOhms) -
                    radio.power.outputTubePlateDcVolts) < 1.0f);
-  radio.output.digitalMakeupGain = 1.28f;
+  // Downstream listening-level calibration only. The patent-anchored cabinet
+  // response has more low-frequency transient gain than the former flat fit;
+  // keep nominal program peaks below the digital safety clip without changing
+  // the physical speaker reference used by the power-stage calibration.
+  radio.output.digitalMakeupGain = 1.03f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -242,7 +247,7 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.drive = 1.0f;
   radio.speakerStage.speaker.suspensionHz = 65.0f;
   radio.speakerStage.speaker.suspensionQ = 0.90f;
-  radio.speakerStage.speaker.suspensionGainDb = 2.2f;
+  radio.speakerStage.speaker.suspensionGainDb = 1.5f;
   radio.speakerStage.speaker.coneBodyHz = 1200.0f;
   radio.speakerStage.speaker.coneBodyQ = 0.50f;
   radio.speakerStage.speaker.coneBodyGainDb = 0.25f;
@@ -252,16 +257,17 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.speaker.coneDipHz = 1850.0f;
   radio.speakerStage.speaker.coneDipQ = 0.85f;
   radio.speakerStage.speaker.coneDipGainDb = -0.35f;
-  radio.speakerStage.speaker.topLpHz = 3000.0f;
-  radio.speakerStage.speaker.hfLossLpHz = 2400.0f;
-  radio.speakerStage.speaker.hfLossDepth = 0.24f;
+  radio.speakerStage.speaker.topLpHz = 5000.0f;
+  radio.speakerStage.speaker.hfLossLpHz = 4000.0f;
+  radio.speakerStage.speaker.hfLossDepth = 0.12f;
   radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
   radio.speakerStage.speaker.drive = 1.0f;
   radio.speakerStage.speaker.limit = 0.0f;
   // Philco 37-116 uses a 14-inch type-W electrodynamic speaker with a 3.9 ohm
-  // voice-coil load. Exact T/S data is not published, so keep the motor close
-  // to the documented load while fitting the remaining parameters to a large,
-  // lightly damped prewar field-coil cone rather than a modern PM speaker.
+  // voice-coil load. Philco described its two-section cone as a stiff treble
+  // center with a flexible bass rim. Exact T/S data is not published, so keep
+  // the motor close to the documented load while fitting the remaining
+  // parameters to that large prewar field-coil construction.
   radio.speakerStage.speaker.voiceCoilResistanceOhms = 3.2f;
   radio.speakerStage.speaker.voiceCoilInductanceHenries = 0.12e-3f;
   radio.speakerStage.speaker.movingMassKg = 0.0153f;
@@ -275,32 +281,46 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.speaker.asymBias = 0.06f;
 
   radio.cabinet.enabled = true;
-  radio.cabinet.panelHz = 180.0f;
-  radio.cabinet.panelQ = 1.25f;
-  radio.cabinet.panelGainDb = 1.0f;
-  radio.cabinet.chassisHz = 650.0f;
-  radio.cabinet.chassisQ = 0.80f;
-  radio.cabinet.chassisGainDb = -0.8f;
-  radio.cabinet.cavityDipHz = 900.0f;
-  radio.cabinet.cavityDipQ = 1.6f;
-  radio.cabinet.cavityDipGainDb = -1.6f;
-  radio.cabinet.grilleLpHz = 5000.0f;
-  radio.cabinet.rearDelayMs = 0.90f;
+  // Philco patent US2059929 measures the family cabinet resonance from 70 to
+  // 150 Hz, peaking at 95 Hz. The untreated response rises by roughly 8-10 dB
+  // there. This peaking section is the resonance before the absorbers below.
+  radio.cabinet.panelHz = 95.0f;
+  radio.cabinet.panelQ = 1.10f;
+  radio.cabinet.panelGainDb = 8.0f;
+  // Do not invent unrelated mid-band cabinet modes: no model-specific
+  // measurement supports the old 650 Hz and 900 Hz fitted sections.
+  radio.cabinet.chassisHz = 0.0f;
+  radio.cabinet.chassisQ = 0.0f;
+  radio.cabinet.chassisGainDb = 0.0f;
+  radio.cabinet.cavityDipHz = 0.0f;
+  radio.cabinet.cavityDipQ = 0.0f;
+  radio.cabinet.cavityDipGainDb = 0.0f;
+  // The sound diffuser and cloth should not duplicate the Type-W cone's
+  // 5 kHz roll-off. Keep only a mild upper-octave loss here.
+  radio.cabinet.grilleLpHz = 8000.0f;
+  // The patent cabinet is open-backed and approximately 12 inches deep. A
+  // 1.8 ms rear path represents one depth out and back; its deliberately low
+  // mix avoids pretending that one fixed listener/wall placement is exact.
+  radio.cabinet.rearDelayMs = 1.80f;
   radio.cabinet.rearMix = 0.08f;
-  radio.cabinet.rearHpHz = 200.0f;
-  radio.cabinet.rearLpHz = 2600.0f;
-  // Philco's acoustic clarifiers are low-frequency cabinet absorbers. Keep
-  // them near the cabinet boom region instead of using them as upper-mid
-  // brighteners.
-  radio.cabinet.clarifier1Hz = 165.0f;
-  radio.cabinet.clarifier1Q = 0.95f;
-  radio.cabinet.clarifier1Coupling = 0.042f;
-  radio.cabinet.clarifier2Hz = 205.0f;
-  radio.cabinet.clarifier2Q = 0.90f;
-  radio.cabinet.clarifier2Coupling = 0.036f;
-  radio.cabinet.clarifier3Hz = 255.0f;
-  radio.cabinet.clarifier3Q = 0.85f;
-  radio.cabinet.clarifier3Coupling = 0.028f;
+  radio.cabinet.rearHpHz = 0.0f;
+  radio.cabinet.rearLpHz = 1200.0f;
+  // Service Bulletin 258 specifies three identical Type-K clarifiers (part
+  // 36-1155). Philco's patent measures its damped six-inch absorber at
+  // approximately 108 Hz and shows that clarifiers absorb rather than radiate.
+  // Three 3 dB damping sections flatten the modeled 95 Hz boom and produce
+  // 9 dB maximum reduction, close to the patent's approximately 10 dB trace.
+  // Q=1.5 follows the second-order width implied by the patent's roughly
+  // 8 dB one-octave diaphragm-response drop; attenuation is fitted separately.
+  radio.cabinet.clarifier1Hz = 108.0f;
+  radio.cabinet.clarifier1Q = 1.50f;
+  radio.cabinet.clarifier1AttenuationDb = 3.0f;
+  radio.cabinet.clarifier2Hz = 108.0f;
+  radio.cabinet.clarifier2Q = 1.50f;
+  radio.cabinet.clarifier2AttenuationDb = 3.0f;
+  radio.cabinet.clarifier3Hz = 108.0f;
+  radio.cabinet.clarifier3Q = 1.50f;
+  radio.cabinet.clarifier3AttenuationDb = 3.0f;
 
   radio.finalLimiter.enabled = false;
   radio.finalLimiter.threshold = 1.0f;

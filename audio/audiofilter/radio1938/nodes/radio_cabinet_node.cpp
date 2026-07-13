@@ -7,9 +7,10 @@
 void RadioCabinetNode::init(Radio1938& radio, RadioInitContext&) {
   auto& cabinet = radio.cabinet;
   auto initClarifier = [&](Biquad& clarifier, float hz, float q,
-                           float coupling) {
-    if (hz > 0.0f && q > 0.0f && std::fabs(coupling) > 1e-4f) {
-      clarifier.setBandpass(radio.sampleRate, hz, q);
+                           float attenuationDb) {
+    if (hz > 0.0f && q > 0.0f && std::fabs(attenuationDb) > 1e-4f) {
+      clarifier.setPeaking(radio.sampleRate, hz, q,
+                           -std::fabs(attenuationDb));
     } else {
       clarifier = Biquad{};
     }
@@ -83,11 +84,11 @@ void RadioCabinetNode::init(Radio1938& radio, RadioInitContext&) {
     cabinet.buf.clear();
   }
   initClarifier(cabinet.clarifier1, cabinet.clarifier1Hz, cabinet.clarifier1Q,
-                cabinet.clarifier1Coupling);
+                cabinet.clarifier1AttenuationDb);
   initClarifier(cabinet.clarifier2, cabinet.clarifier2Hz, cabinet.clarifier2Q,
-                cabinet.clarifier2Coupling);
+                cabinet.clarifier2AttenuationDb);
   initClarifier(cabinet.clarifier3, cabinet.clarifier3Hz, cabinet.clarifier3Q,
-                cabinet.clarifier3Coupling);
+                cabinet.clarifier3AttenuationDb);
   cabinet.index = 0;
 }
 
@@ -109,12 +110,6 @@ void RadioCabinetNode::reset(Radio1938& radio) {
 float RadioCabinetNode::run(Radio1938& radio, float y, RadioSampleContext&) {
   auto& cabinet = radio.cabinet;
   if (!cabinet.enabled) return y;
-  auto applyClarifier = [&](Biquad& clarifier, float coupling, float signal) {
-    if (std::fabs(coupling) <= 1e-4f) return 0.0f;
-    // Philco's acoustic clarifiers are passive dampers for cabinet boom, not
-    // extra radiators. Positive coupling therefore means stronger absorption.
-    return -std::fabs(coupling) * clarifier.process(signal);
-  };
 
   float out = y;
   // Cabinet panel, chassis, and cavity responses are parallel acoustic paths
@@ -136,10 +131,18 @@ float RadioCabinetNode::run(Radio1938& radio, float y, RadioSampleContext&) {
     rear = cabinet.rearLp.process(rear);
     out -= rear * cabinet.rearMixApplied;
   }
-  float dry = out;
-  out += applyClarifier(cabinet.clarifier1, cabinet.clarifier1Coupling, dry);
-  out += applyClarifier(cabinet.clarifier2, cabinet.clarifier2Coupling, dry);
-  out += applyClarifier(cabinet.clarifier3, cabinet.clarifier3Coupling, dry);
+  // A clarifier dissipates acoustic energy and damps the cabinet system; it
+  // does not radiate an inverted copy. Minimum-phase attenuation sections
+  // model that changed acoustic load without adding a second audible source.
+  if (cabinet.clarifier1AttenuationDb > 0.0f) {
+    out = cabinet.clarifier1.process(out);
+  }
+  if (cabinet.clarifier2AttenuationDb > 0.0f) {
+    out = cabinet.clarifier2.process(out);
+  }
+  if (cabinet.clarifier3AttenuationDb > 0.0f) {
+    out = cabinet.clarifier3.process(out);
+  }
   if (cabinet.grilleLpHz > 0.0f) {
     out = cabinet.grilleLp.process(out);
   }

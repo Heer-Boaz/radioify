@@ -117,6 +117,53 @@ OutputTubePairEval evaluateOutputTubePair(
 
 namespace {
 
+float deriveSpeakerCompliance(float movingMassKg, float suspensionHz) {
+  float w0 = kRadioTwoPi * std::max(suspensionHz, 1.0f);
+  return 1.0f / std::max(movingMassKg * w0 * w0, 1e-9f);
+}
+
+float deriveSpeakerMechanicalDamping(float movingMassKg,
+                                     float suspensionHz,
+                                     float suspensionQ) {
+  float q = std::max(suspensionQ, 0.35f);
+  float w0 = kRadioTwoPi * std::max(suspensionHz, 1.0f);
+  return (movingMassKg * w0) / q;
+}
+
+float deriveSpeakerVoiceCoilInductance(float voiceCoilResistanceOhms,
+                                       float topLpHz) {
+  float lpHz = std::max(topLpHz, 2500.0f);
+  return voiceCoilResistanceOhms / (kRadioTwoPi * lpHz);
+}
+
+float deriveSpeakerForceFactor(float movingMassKg,
+                               float suspensionHz,
+                               float voiceCoilResistanceOhms) {
+  constexpr float kElectricalQ = 0.95f;
+  float w0 = kRadioTwoPi * std::max(suspensionHz, 1.0f);
+  return std::sqrt(std::max(w0 * movingMassKg * voiceCoilResistanceOhms /
+                                kElectricalQ,
+                            1e-9f));
+}
+
+float deriveSpeakerMechanicalDampingFromQ(float movingMassKg,
+                                          float suspensionHz,
+                                          float mechanicalQ) {
+  float q = std::max(mechanicalQ, 0.35f);
+  float w0 = kRadioTwoPi * std::max(suspensionHz, 1.0f);
+  return (movingMassKg * w0) / q;
+}
+
+float deriveSpeakerForceFactorFromQ(float movingMassKg,
+                                    float suspensionHz,
+                                    float voiceCoilResistanceOhms,
+                                    float electricalQ) {
+  float q = std::max(electricalQ, 0.35f);
+  float w0 = kRadioTwoPi * std::max(suspensionHz, 1.0f);
+  return std::sqrt(std::max(w0 * movingMassKg * voiceCoilResistanceOhms / q,
+                            1e-9f));
+}
+
 OutputPrimarySolveResult solveOutputPrimaryAffineWithLut(
     const AffineTransformerProjection& projection,
     const Radio1938::PowerNodeState& power,
@@ -175,6 +222,70 @@ OutputPrimarySolveResult solveOutputPrimaryAffine(
   return solveOutputPrimaryAffineWithLut(projection, power, outputTriodeLut,
                                          outputPlateQuiescent, gridA, gridB,
                                          initialPrimaryVoltage);
+}
+
+void configureSpeakerElectromechanics(SpeakerSim& speaker,
+                                      float sampleRate,
+                                      float nominalLoadOhms) {
+  speaker.electricalSampleRate = sampleRate;
+  speaker.nominalLoadOhms = std::max(nominalLoadOhms, 1e-3f);
+  speaker.effectiveVoiceCoilResistanceOhms =
+      speaker.voiceCoilResistanceOhms > 0.0f
+          ? speaker.voiceCoilResistanceOhms
+          : 0.82f * speaker.nominalLoadOhms;
+  speaker.effectiveMovingMassKg =
+      speaker.movingMassKg > 0.0f ? speaker.movingMassKg : 0.014f;
+  speaker.effectiveSuspensionComplianceMetersPerNewton =
+      speaker.suspensionComplianceMetersPerNewton > 0.0f
+          ? speaker.suspensionComplianceMetersPerNewton
+          : deriveSpeakerCompliance(speaker.effectiveMovingMassKg,
+                                    speaker.suspensionHz);
+  if (speaker.mechanicalDampingNsPerMeter > 0.0f) {
+    speaker.effectiveMechanicalDampingNsPerMeter =
+        speaker.mechanicalDampingNsPerMeter;
+  } else if (speaker.mechanicalQ > 0.0f) {
+    speaker.effectiveMechanicalDampingNsPerMeter =
+        deriveSpeakerMechanicalDampingFromQ(speaker.effectiveMovingMassKg,
+                                            speaker.suspensionHz,
+                                            speaker.mechanicalQ);
+  } else {
+    speaker.effectiveMechanicalDampingNsPerMeter =
+        deriveSpeakerMechanicalDamping(speaker.effectiveMovingMassKg,
+                                       speaker.suspensionHz,
+                                       speaker.suspensionQ);
+  }
+  speaker.effectiveVoiceCoilInductanceHenries =
+      speaker.voiceCoilInductanceHenries > 0.0f
+          ? speaker.voiceCoilInductanceHenries
+          : deriveSpeakerVoiceCoilInductance(
+                speaker.effectiveVoiceCoilResistanceOhms, speaker.topLpHz);
+  if (speaker.forceFactorBl > 0.0f) {
+    speaker.effectiveForceFactorBl = speaker.forceFactorBl;
+  } else if (speaker.electricalQ > 0.0f) {
+    speaker.effectiveForceFactorBl = deriveSpeakerForceFactorFromQ(
+        speaker.effectiveMovingMassKg, speaker.suspensionHz,
+        speaker.effectiveVoiceCoilResistanceOhms, speaker.electricalQ);
+  } else {
+    speaker.effectiveForceFactorBl =
+        deriveSpeakerForceFactor(speaker.effectiveMovingMassKg,
+                                 speaker.suspensionHz,
+                                 speaker.effectiveVoiceCoilResistanceOhms);
+  }
+  constexpr float kLoadSenseMs = 1.0f;
+  speaker.loadSenseCoeff =
+      std::exp(-1.0f /
+               (std::max(sampleRate, 1.0f) * (kLoadSenseMs / 1000.0f)));
+  speaker.effectiveLoadOhms = speaker.nominalLoadOhms;
+}
+
+void resetSpeakerElectromechanics(SpeakerSim& speaker) {
+  speaker.electricalCurrentAmps = 0.0f;
+  speaker.coneVelocityMetersPerSecond = 0.0f;
+  speaker.coneDisplacementMeters = 0.0f;
+  speaker.backEmfVolts = 0.0f;
+  speaker.loadSenseVoltage = 0.0f;
+  speaker.loadSenseCurrent = 0.0f;
+  speaker.effectiveLoadOhms = std::max(speaker.nominalLoadOhms, 1e-3f);
 }
 
 SpeakerElectricalLinearization linearizeSpeakerElectricalLoad(
@@ -305,6 +416,9 @@ OutputStageSubstepResult runOutputStageSubsteps(
     actualPlateCurrentBSum += actualPlateCurrentB;
   }
 
+  // The loop above expands the configured substeps explicitly. Preserve that
+  // configuration for the next audio sample after the one-step inner solves.
+  transformer.integrationSubsteps = transformerSubsteps;
   OutputStageSubstepResult result{};
   result.transformer = transformer;
   result.averagePrimaryVoltage =

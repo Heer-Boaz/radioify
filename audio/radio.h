@@ -261,7 +261,8 @@ struct Radio1938 {
     bool validationInterstageSecondary = false;
     bool validationDcShift = false;
     bool validationDigitalClip = false;
-    std::array<CalibrationPassMetrics, kPassCount> passes{};
+    std::vector<CalibrationPassMetrics> passes =
+        std::vector<CalibrationPassMetrics>(kPassCount);
 
     struct ClickTraceEvent {
       uint64_t sampleIndex = 0;
@@ -717,13 +718,13 @@ struct Radio1938 {
     Biquad clarifier3;
     float clarifier1Hz = 0.0f;
     float clarifier1Q = 0.0f;
-    float clarifier1Coupling = 0.0f;
+    float clarifier1AttenuationDb = 0.0f;
     float clarifier2Hz = 0.0f;
     float clarifier2Q = 0.0f;
-    float clarifier2Coupling = 0.0f;
+    float clarifier2AttenuationDb = 0.0f;
     float clarifier3Hz = 0.0f;
     float clarifier3Q = 0.0f;
-    float clarifier3Coupling = 0.0f;
+    float clarifier3AttenuationDb = 0.0f;
   } cabinet;
 
   struct FinalLimiterNodeState {

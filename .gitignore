@@ -114,6 +114,7 @@ models/*.download
 **.md
 !README.md
 !BUILD_WINDOWS.md
+!docs/radio1938-realism-audit.md
 
 # Output files
 **.melody

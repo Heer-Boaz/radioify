@@ -19,14 +19,15 @@ void RadioAFCNode::run(Radio1938& radio, RadioSampleContext&) {
 
   float error = controlSense.tuningErrorSense;
   if (std::fabs(error) < tuning.afcDeadband) error = 0.0f;
-  float captureT =
-      1.0f - clampf(std::fabs(tuning.tuneOffsetHz) /
-                        std::max(tuning.afcCaptureHz, 1e-6f),
-                    0.0f, 1.0f);
+  float captureGate =
+      (tuning.afcCaptureHz > 0.0f &&
+       std::fabs(tuning.tuneOffsetHz) <= tuning.afcCaptureHz)
+          ? 1.0f
+          : 0.0f;
   float signalT =
       clampf(controlSense.controlVoltageSense / 0.85f, 0.0f, 1.0f);
   float afcTarget =
-      -error * tuning.afcMaxCorrectionHz * captureT * signalT;
+      -error * tuning.afcMaxCorrectionHz * captureGate * signalT;
   tuning.afcCorrectionHz +=
       tuning.afcTick * (afcTarget - tuning.afcCorrectionHz);
   tuning.afcCorrectionHz =
