@@ -20,6 +20,31 @@ speaker-only response remains a clearly labelled reconstruction. The defensible
 claim is therefore "historically anchored and physically modelled," not
 "measurement-identical."
 
+Reception is now modelled separately from the receiver and is deliberately
+described as a representative condition, not an attribute every radio had in
+1938. The default `everyday-1938` profile adds conservative medium-wave
+propagation and rare co-channel interference. `strong-local` retains the
+former ideal received carrier and is also historically plausible when a strong
+local groundwave station dominates. Neither profile turns one recording into a
+unique reconstruction of one place, station, antenna, weather condition, and
+time of day.
+
+## Live radio is not an archival recording
+
+The familiar cultural shorthand for "old radio" often combines three separate
+signal histories: the original live broadcast/receiver chain, later damage or
+generation loss in a disc, optical soundtrack, tape, or transfer, and
+deliberate film/game exaggeration that makes the period instantly legible. Crackle,
+extreme bandwidth loss, wow, and heavy distortion in a surviving recording are
+therefore not automatically properties of the radio that originally played the
+broadcast.
+
+Radioify models the live chain. It does not add a half-degraded archive medium
+after the cabinet, and it does not intentionally caricature age. A good 1938
+console receiving a strong local station may consequently sound much better
+than a period clip copied through several later media. The subtle
+`everyday-1938` reception profile is consistent with that distinction.
+
 ## Historical anchors
 
 The following values are traceable to period documentation:
@@ -54,6 +79,19 @@ Period broadcast-chain evidence establishes a separate source-side envelope:
   below full modulation and approximately 0.65-1.9% audio distortion across
   its tabulated frequency and modulation points.
 
+Modern ITU medium-wave propagation guidance supplies environmental rather than
+receiver-specific anchors:
+
+- groundwave may be treated as non-fading over these short listening periods;
+- an individual skywave mode varies, with approximately 3 dB typical
+  within-hour standard deviation and 10-30 fades per hour;
+- a groundwave-plus-skywave composite is milder than skywave alone: the ITU's
+  example with skywave 6 dB below groundwave has approximately 0.72 dB
+  composite standard deviation;
+- selective fading is a genuine envelope-detector impairment, while an
+  audible heterodyne requires another RF carrier rather than a tone inserted
+  after detection.
+
 Sources:
 
 - [Philco Service Bulletin 258](https://philcoradio.com/library/download/service%20info/service%20bulletins/Philco%20Service%20Bulletin%20258.pdf)
@@ -64,6 +102,9 @@ Sources:
 - [Western Electric 630A microphone bulletin](https://www.worldradiohistory.com/Archive-Catalogs/Western-Electric/WE-630A_Mic_promo.pdf)
 - [Western Electric 110A program-amplifier bulletin](https://www.worldradiohistory.com/Archive-Catalogs/Western-Electric/Western-Electric-110A-Program-Amp-1937.pdf)
 - [RCA Broadcast News, July 1938, WBNS 5-D installation](https://www.worldradiohistory.com/Archive-All-BC-Engineering/RCA-Broadcast-News/RCA-28.pdf)
+- [ITU-R P.1321, propagation factors affecting systems using digital modulation below 30 MHz](https://www.itu.int/dms_pubrec/itu-r/rec/p/R-REC-P.1321-0-199708-S%21%21PDF-E.pdf)
+- [ITU-R BS.2482, digital sound broadcasting in the LF/MF bands](https://www.itu.int/dms_pub/itu-r/opb/rep/R-REP-BS.2482-2020-PDF-E.pdf)
+- [ITU envelope-detector and selective-fading study](https://search.itu.int/history/HistoryDigitalCollectionDocLibrary/4.279.43.en.1010.pdf)
 
 ## Model classification
 
@@ -97,6 +138,14 @@ It is not copied as an exact full-range 37-116 curve.
 - the broadcast program limiter and transmitter transfer use a peak-envelope
   compressor and calibrated cubic term instead of a component-level studio and
   transmitter circuit simulation.
+- reception uses one stable groundwave phasor and one slowly rotating,
+  stochastic skywave phasor rather than a geographic ionosphere, antenna, and
+  multipath field solver; the current weak-skywave profile applies flat
+  composite fading and does not claim to reproduce frequency-selective
+  sideband fading;
+- a rare interferer is synthesized as a second real RF carrier before the
+  receiver front end, so any heterodyne is created by the existing physical
+  tuning, IF, and envelope-detector path.
 
 ### Fitted sound design
 
@@ -107,6 +156,8 @@ It is not copied as an exact full-range 37-116 curve.
 - procedural hiss, crackle, and hum levels;
 - deterministic broadband transmitter noise inside the documented period
   output-noise range.
+- the representative groundwave/skywave ratio and the intermittent
+  co-channel carrier's level, offset, and occurrence envelope.
 
 Fitted values are acceptable when they are labelled as estimates and validated
 against an explicit response target. They are not evidence of historical
@@ -201,6 +252,17 @@ carrier. It is already rejected in the IF-strip owner and locked by pure-carrier
 quiet tests. A natural heterodyne whistle requires a second RF carrier; it must
 not be manufactured as a permanent audio oscillator in the program source.
 
+### 7. The reception environment is unrealistically perfect
+
+Even after source conditioning, the preview still delivered one perfectly
+stable AM carrier directly to the antenna input. That was a credible strong
+local-station case, but too clean as the only listening condition. There was no
+groundwave/skywave vector combination, slow propagation fading, or real
+co-channel carrier capable of producing an occasional detector heterodyne.
+Adding those effects after the detector would have repeated the former false
+whistle problem, so reception needed its own RF-domain owner before the
+receiver pipeline.
+
 ## Acceptance criteria
 
 The remediation is complete only when all of the following hold:
@@ -225,6 +287,12 @@ The remediation is complete only when all of the following hold:
     slope, stays near 1% full-level THD, produces approximately 64 dB
     full-modulation signal-to-noise, remains block invariant, and contains no
     coherent whistle.
+11. `everyday-1938` is the default for playback and rendered output, combines
+    the desired carrier as coherent groundwave and skywave RF paths, and
+    remains independent of audio block boundaries.
+12. `strong-local` is exactly transparent to ideal AM ingress, and no profile
+    adds a permanent audio or RF whistle; the optional interferer has an
+    explicit quiet interval and enters only as a second RF carrier.
 
 ## Remediation record
 
@@ -267,6 +335,19 @@ The remediation is complete only when all of the following hold:
   normalized to 64 dB below a full-modulation sine after the channel filter.
   The raw AM entry point remains ideal so receiver calibration and source
   conditioning stay independently testable.
+- A following `ReceptionEnvironment` pass now owns propagation state. Its
+  `everyday-1938` default combines a 0.92 groundwave phasor with a nominal 0.10
+  skywave phasor. The skywave rotates at 0.003-0.008 Hz (10.8-28.8 fades per
+  hour), with slow amplitude and Doppler wander. This deliberately produces a
+  mild approximately 1.9 dB nominal peak-to-trough carrier span rather than
+  theatrical drop-outs. A second -50 to -42 dBc carrier can fade in only after
+  a 60-180 second event-free wait, remains for 4-10 seconds, and is 320-900 Hz
+  from the desired carrier. Its 750 ms attack and 1.8 s release avoid a switched
+  tone. It is injected as real RF before all receiver stages.
+- The selectable `strong-local` profile disables that reception sidecar. The
+  preview then calls the original ideal AM path directly; this is an explicit
+  contract, not a set of neutral multipliers hidden in the hot loop. Playback,
+  export, and CLI option ownership all resolve the same profile factory.
 
 ### Post-fix measurements
 
@@ -319,9 +400,25 @@ seeded broadband noise, which then passes through the same 45 Hz high-pass and
 requested channel low-pass as the program. Existing IF and full-RF regressions
 continue to require an unmodulated carrier to remain quiet through detection.
 
+The dedicated reception regressions measured:
+
+| Reception metric | Measured | Required | Result |
+| --- | ---: | ---: | --- |
+| Accelerated coherent two-path minimum | 0.820 | 0.817-0.823 | pass |
+| Accelerated coherent two-path maximum | 1.020 | 1.017-1.023 | pass |
+| `strong-local` identity error | 0 | exactly 0 | pass |
+| One-block versus split-block reception error | 0 | at most 0.00001 | pass |
+| Default first-second unwanted carrier samples | 0 | exactly 0 | pass |
+| Accelerated intermittent fixture | quiet and active frames | both required | pass |
+
+The 0.5 Hz accelerated fixture tests vector-combination geometry without a
+multi-minute test runtime; production keeps the ITU-scale 0.003-0.008 Hz rate.
+The interferer is deterministic for repeatable exports, but its presence is
+not continuous and it is never represented as a program-band oscillator.
+
 ### Acceptance status
 
-All ten acceptance criteria above pass in the implemented validation paths.
+All twelve acceptance criteria above pass in the implemented validation paths.
 The low-frequency cabinet/clarifier behavior is now tested against a Philco
 measurement proxy. The exact full-range 37-116 speaker curve remains explicitly
 classified as reconstructed until a calibrated original 36-1219 unit is

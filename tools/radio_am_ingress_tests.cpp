@@ -122,6 +122,207 @@ void expectHotProgramLevelReachesAmIngress() {
   }
 }
 
+void expectReceptionProfileContract() {
+  if (kDefaultRadioReceptionProfile !=
+      RadioReceptionProfile::Everyday1938) {
+    fail("The default radio reception profile is not everyday-1938.");
+  }
+
+  RadioAmIngressConfig defaultIngress;
+  if (!defaultIngress.reception.enabled ||
+      defaultIngress.reception.profile !=
+          RadioReceptionProfile::Everyday1938) {
+    fail("Default AM ingress does not enable everyday-1938 reception.");
+  }
+
+  RadioReceptionProfile parsed = RadioReceptionProfile::StrongLocal;
+  if (!parseRadioReceptionProfile("everyday-1938", parsed) ||
+      parsed != RadioReceptionProfile::Everyday1938 ||
+      radioReceptionProfileName(parsed) != "everyday-1938") {
+    fail("everyday-1938 reception profile does not round-trip.");
+  }
+  if (!parseRadioReceptionProfile("strong-local", parsed) ||
+      parsed != RadioReceptionProfile::StrongLocal ||
+      radioReceptionProfileName(parsed) != "strong-local") {
+    fail("strong-local reception profile does not round-trip.");
+  }
+  if (parseRadioReceptionProfile("weak", parsed) ||
+      parseRadioReceptionProfile("Everyday1938", parsed)) {
+    fail("Reception profile parser accepted an undocumented name.");
+  }
+
+  const RadioReceptionConfig everyday = radioReceptionConfigForProfile(
+      RadioReceptionProfile::Everyday1938);
+  if (!everyday.enabled || everyday.skywaveGain <= 0.0f ||
+      everyday.skywaveDopplerMinHz < 0.003f ||
+      everyday.skywaveDopplerMaxHz > 0.008f ||
+      !everyday.intermittentCarrierEnabled ||
+      everyday.intermittentWaitMinSeconds < 60.0f) {
+    fail("everyday-1938 is not the conservative slow-fading profile.");
+  }
+
+  const RadioReceptionConfig strongLocal = radioReceptionConfigForProfile(
+      RadioReceptionProfile::StrongLocal);
+  if (strongLocal.enabled) {
+    fail("strong-local does not preserve ideal reception.");
+  }
+}
+
+void expectReceptionSidecarShapesRf() {
+  Radio1938 radio = makeIngressOnlyRadio();
+  radio.iqInput.iqPhase = 0.5f * kRadioPi;
+  const float program = 0.0f;
+  float output = 0.0f;
+  RadioAmReceptionSample reception;
+  reception.desiredCarrierI = 0.0f;
+  reception.desiredCarrierQ = 0.5f;
+  reception.additiveRf = 0.007f;
+  radio.processAmAudio(&program, &output, 1u, kCarrierRmsVolts,
+                       kModulationIndex, &reception);
+
+  const float carrierPeak = std::sqrt(2.0f) * kCarrierRmsVolts;
+  const float expected = -0.5f * carrierPeak + reception.additiveRf;
+  if (std::fabs(output - expected) > kTolerance) {
+    fail("AM reception sidecar did not rotate and add RF correctly; expected=" +
+         std::to_string(expected) + " actual=" + std::to_string(output));
+  }
+}
+
+void expectStrongLocalReceptionIsTransparent() {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress;
+  ingress.reception = radioReceptionConfigForProfile(
+      RadioReceptionProfile::StrongLocal);
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  RadioPreviewSampleContext ctx{};
+  RadioAmReceptionSample reception;
+  ctx.reception = &reception;
+  for (uint32_t i = 0; i < 4096u; ++i) {
+    const float input = std::sin(static_cast<float>(i) * 0.071f);
+    const float output = RadioPreviewReceptionNode::run(preview, input, ctx);
+    if (output != input || reception.desiredCarrierI != 1.0f ||
+        reception.desiredCarrierQ != 0.0f || reception.additiveRf != 0.0f) {
+      fail("strong-local reception is not sample-transparent.");
+    }
+  }
+
+  const std::vector<float> program = makeHotProgram();
+  std::vector<RadioAmReceptionSample> identity(program.size());
+  Radio1938 ideal = makeIngressOnlyRadio();
+  Radio1938 sidecar = makeIngressOnlyRadio();
+  std::vector<float> idealOutput(program.size(), 0.0f);
+  std::vector<float> sidecarOutput(program.size(), 0.0f);
+  ideal.processAmAudio(program.data(), idealOutput.data(),
+                       static_cast<uint32_t>(program.size()),
+                       kCarrierRmsVolts, kModulationIndex);
+  sidecar.processAmAudio(program.data(), sidecarOutput.data(),
+                         static_cast<uint32_t>(program.size()),
+                         kCarrierRmsVolts, kModulationIndex,
+                         identity.data());
+  for (size_t i = 0; i < program.size(); ++i) {
+    if (idealOutput[i] != sidecarOutput[i]) {
+      fail("Identity reception sidecar changed ideal AM ingress.");
+    }
+  }
+}
+
+void expectEverydayReceptionProducesSlowCoherentFading() {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress;
+  auto& receptionConfig = ingress.reception;
+  receptionConfig.skywaveAmplitudeVariationRms = 0.0f;
+  receptionConfig.skywaveDopplerMinHz = 0.5f;
+  receptionConfig.skywaveDopplerMaxHz = 0.5f;
+  receptionConfig.skywaveDopplerWanderRmsHz = 0.0f;
+  receptionConfig.intermittentCarrierEnabled = false;
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  RadioPreviewSampleContext ctx{};
+  RadioAmReceptionSample reception;
+  ctx.reception = &reception;
+  float minimumMagnitude = 100.0f;
+  float maximumMagnitude = 0.0f;
+  constexpr uint32_t kFrames = 2u * 48000u;
+  for (uint32_t i = 0; i < kFrames; ++i) {
+    RadioPreviewReceptionNode::run(preview, 0.0f, ctx);
+    const float magnitude = std::hypot(reception.desiredCarrierI,
+                                       reception.desiredCarrierQ);
+    minimumMagnitude = std::min(minimumMagnitude, magnitude);
+    maximumMagnitude = std::max(maximumMagnitude, magnitude);
+    if (reception.additiveRf != 0.0f) {
+      fail("Disabled intermittent carrier still injected RF.");
+    }
+  }
+
+  const float expectedMinimum = receptionConfig.groundwaveGain -
+                                receptionConfig.skywaveGain;
+  const float expectedMaximum = receptionConfig.groundwaveGain +
+                                receptionConfig.skywaveGain;
+  if (std::fabs(minimumMagnitude - expectedMinimum) > 0.003f ||
+      std::fabs(maximumMagnitude - expectedMaximum) > 0.003f) {
+    fail("Groundwave and skywave do not combine as coherent RF paths; min=" +
+         std::to_string(minimumMagnitude) + " max=" +
+         std::to_string(maximumMagnitude));
+  }
+}
+
+void expectIntermittentCarrierIsRareRfInsteadOfPermanentWhistle() {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioAmIngressConfig ingress;
+  RadioPreviewConfig config;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  RadioPreviewSampleContext ctx{};
+  RadioAmReceptionSample reception;
+  ctx.reception = &reception;
+  for (uint32_t i = 0; i < 48000u; ++i) {
+    RadioPreviewReceptionNode::run(preview, 0.0f, ctx);
+    if (reception.additiveRf != 0.0f) {
+      fail("Default reception injects a permanent RF carrier during its "
+           "minimum quiet interval.");
+    }
+  }
+
+  auto& receptionConfig = ingress.reception;
+  receptionConfig.groundwaveGain = 1.0f;
+  receptionConfig.skywaveGain = 0.0f;
+  receptionConfig.intermittentWaitMinSeconds = 0.002f;
+  receptionConfig.intermittentWaitMaxSeconds = 0.002f;
+  receptionConfig.intermittentDurationMinSeconds = 0.010f;
+  receptionConfig.intermittentDurationMaxSeconds = 0.010f;
+  receptionConfig.intermittentLevelMinDb = -30.0f;
+  receptionConfig.intermittentLevelMaxDb = -30.0f;
+  receptionConfig.intermittentOffsetMinHz = 500.0f;
+  receptionConfig.intermittentOffsetMaxHz = 500.0f;
+  receptionConfig.intermittentAttackMs = 0.1f;
+  receptionConfig.intermittentReleaseMs = 0.1f;
+  preview.initialize(radio, ingress, config, kSampleRate);
+
+  uint32_t zeroFrames = 0u;
+  uint32_t carrierFrames = 0u;
+  for (uint32_t i = 0; i < 4800u; ++i) {
+    RadioPreviewReceptionNode::run(preview, 0.0f, ctx);
+    if (reception.additiveRf == 0.0f) {
+      ++zeroFrames;
+    } else {
+      ++carrierFrames;
+    }
+  }
+  if (zeroFrames == 0u || carrierFrames == 0u) {
+    fail("Intermittent RF carrier did not alternate between quiet and active "
+         "reception.");
+  }
+}
+
 void expectPreviewCapsDetectorWork() {
   Radio1938 radio;
   radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
@@ -345,6 +546,8 @@ void expectBroadcastNoiseIsBroadbandWithoutWhistle() {
   }
 
   RadioPreviewSampleContext ctx{};
+  RadioAmReceptionSample reception;
+  ctx.reception = &reception;
   double sum = 0.0;
   double sumSq = 0.0;
   for (uint32_t i = 0; i < kWarmupFrames + kAnalysisFrames; ++i) {
@@ -395,7 +598,12 @@ void expectBroadcastNoiseIsBroadbandWithoutWhistle() {
   }
 }
 
-std::vector<float> processPreviewProgramBlocks(
+struct PreviewProgramResult {
+  std::vector<float> output;
+  std::vector<RadioAmReceptionSample> reception;
+};
+
+PreviewProgramResult processPreviewProgramBlocks(
     const std::vector<float>& program,
     size_t splitFrame) {
   Radio1938 radio;
@@ -406,7 +614,9 @@ std::vector<float> processPreviewProgramBlocks(
   preview.initialize(radio, ingress, config, kSampleRate);
   preview.warmedUp = true;
 
-  std::vector<float> output(program.size(), 0.0f);
+  PreviewProgramResult result;
+  result.output.resize(program.size(), 0.0f);
+  result.reception.resize(program.size());
   auto processRange = [&](size_t first, size_t count) {
     RadioPreviewBlockControl block{};
     beginRadioPreviewPipelineBlock(preview, static_cast<uint32_t>(count),
@@ -414,7 +624,8 @@ std::vector<float> processPreviewProgramBlocks(
     RadioPreviewSampleContext ctx{};
     ctx.block = &block;
     for (size_t i = first; i < first + count; ++i) {
-      output[i] = runRadioPreviewPipelineSample(
+      ctx.reception = &result.reception[i];
+      result.output[i] = runRadioPreviewPipelineSample(
           preview, program[i], ctx, RadioPreviewPassId::BroadcastSource);
     }
   };
@@ -425,10 +636,10 @@ std::vector<float> processPreviewProgramBlocks(
     processRange(0u, splitFrame);
     processRange(splitFrame, program.size() - splitFrame);
   }
-  return output;
+  return result;
 }
 
-void expectBroadcastSourceIsBlockInvariant() {
+void expectPreviewSourceAndReceptionAreBlockInvariant() {
   std::vector<float> program(4096u, 0.0f);
   for (size_t i = 0; i < program.size(); ++i) {
     program[i] = 0.9f * std::sin(static_cast<float>(i) * 0.071f);
@@ -436,17 +647,36 @@ void expectBroadcastSourceIsBlockInvariant() {
   program[701] = 1.4f;
   program[2703] = -1.3f;
 
-  const std::vector<float> oneBlock = processPreviewProgramBlocks(program, 0u);
-  const std::vector<float> splitBlocks =
+  const PreviewProgramResult oneBlock =
+      processPreviewProgramBlocks(program, 0u);
+  const PreviewProgramResult splitBlocks =
       processPreviewProgramBlocks(program, 1237u);
   float maxDiff = 0.0f;
+  float maxReceptionDiff = 0.0f;
   for (size_t i = 0; i < program.size(); ++i) {
     maxDiff = std::max(maxDiff,
-                       std::fabs(oneBlock[i] - splitBlocks[i]));
+                       std::fabs(oneBlock.output[i] -
+                                 splitBlocks.output[i]));
+    maxReceptionDiff = std::max(
+        maxReceptionDiff,
+        std::fabs(oneBlock.reception[i].desiredCarrierI -
+                  splitBlocks.reception[i].desiredCarrierI));
+    maxReceptionDiff = std::max(
+        maxReceptionDiff,
+        std::fabs(oneBlock.reception[i].desiredCarrierQ -
+                  splitBlocks.reception[i].desiredCarrierQ));
+    maxReceptionDiff = std::max(
+        maxReceptionDiff,
+        std::fabs(oneBlock.reception[i].additiveRf -
+                  splitBlocks.reception[i].additiveRf));
   }
   if (maxDiff > kTolerance) {
     fail("Broadcast source state depends on block boundaries; max diff=" +
          std::to_string(maxDiff));
+  }
+  if (maxReceptionDiff > kTolerance) {
+    fail("Reception state depends on block boundaries; max diff=" +
+         std::to_string(maxReceptionDiff));
   }
 }
 
@@ -483,6 +713,11 @@ void expectSpeakerDerivedPhysicsRefreshesFromConfig() {
 int main() {
   expectBlockInvariantAmIngress();
   expectHotProgramLevelReachesAmIngress();
+  expectReceptionProfileContract();
+  expectReceptionSidecarShapesRf();
+  expectStrongLocalReceptionIsTransparent();
+  expectEverydayReceptionProducesSlowCoherentFading();
+  expectIntermittentCarrierIsRareRfInsteadOfPermanentWhistle();
   expectPreviewCapsDetectorWork();
   expectPreviewUsesRequestedAudioBandwidthOnce();
   expectBroadcastSourceBypassIsTransparent();
@@ -490,7 +725,7 @@ int main() {
   expectBroadcastCompressionSlope();
   expectBroadcastNonlinearityNearOnePercentThd();
   expectBroadcastNoiseIsBroadbandWithoutWhistle();
-  expectBroadcastSourceIsBlockInvariant();
+  expectPreviewSourceAndReceptionAreBlockInvariant();
   expectSpeakerDerivedPhysicsRefreshesFromConfig();
   return 0;
 }

@@ -778,6 +778,7 @@ int runTui(Options o) {
   audioConfig.dry = o.dry;
   audioConfig.radioSettingsPath = o.radioSettingsPath;
   audioConfig.radioPresetName = o.radioPresetName;
+  audioConfig.radioReceptionProfile = o.radioReceptionProfile;
   audioConfig.bwHz = o.bwHz;
   audioConfig.noise = o.noise;
 

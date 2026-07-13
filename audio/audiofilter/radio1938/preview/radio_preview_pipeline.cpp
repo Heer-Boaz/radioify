@@ -35,8 +35,16 @@ const RadioPreviewPipelineDefinition& radioPreviewPipelineDefinition() {
         .dependsOn(RadioPreviewPassId::BroadcastSource)
         .run(&RadioPreviewProgramFilterNode::run);
 
-    return builder.build(static_cast<size_t>(RadioPreviewPassId::ProgramFilter) +
-                         1u);
+    builder.program(RadioPreviewPassId::ReceptionEnvironment,
+                    "ReceptionEnvironment")
+        .init(&RadioPreviewReceptionNode::init)
+        .reset(&RadioPreviewReceptionNode::reset)
+        .stateOnly()
+        .dependsOn(RadioPreviewPassId::ProgramFilter)
+        .run(&RadioPreviewReceptionNode::run);
+
+    return builder.build(
+        static_cast<size_t>(RadioPreviewPassId::ReceptionEnvironment) + 1u);
   }();
   return pipeline;
 }

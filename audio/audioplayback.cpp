@@ -365,6 +365,8 @@ void audioInit(const AudioPlaybackConfig& config) {
   gAudio.state.sampleRate = gAudio.sampleRate;
   gAudio.state.dry = config.dry;
   gAudio.state.useRadio1938.store(config.enableRadio);
+  gAudio.state.radioAmIngress.reception =
+      radioReceptionConfigForProfile(config.radioReceptionProfile);
   gAudio.radioSettingsPath = config.radioSettingsPath;
 
   gAudio.radio1938Template.init(kRadioProcessChannels,

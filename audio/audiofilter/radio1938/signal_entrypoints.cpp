@@ -1,6 +1,7 @@
 #include "../../radio.h"
 #include "../math/signal_math.h"
 #include "audio_pipeline_execution.h"
+#include "radio_am_ingress.h"
 #include "radio_buffer_io.h"
 
 #include <algorithm>
@@ -26,7 +27,8 @@ void Radio1938::processAmAudio(const float* audioSamples,
                                float* outSamples,
                                uint32_t frames,
                                float receivedCarrierRmsVolts,
-                               float modulationIndex) {
+                               float modulationIndex,
+                               const RadioAmReceptionSample* receptionSamples) {
   if (!audioSamples || !outSamples || frames == 0 || graph.bypass) return;
 
   auto& rfScratch = iqInput.rfScratch;
@@ -48,7 +50,15 @@ void Radio1938::processAmAudio(const float* audioSamples,
     const float envelopeFactor =
         std::max(0.0f, 1.0f + modulationIndex * sampleVal);
     const float envelope = carrierPeak * envelopeFactor;
-    rf[frame] = envelope * carrierCos;
+    if (receptionSamples) {
+      const auto& reception = receptionSamples[frame];
+      rf[frame] =
+          envelope * (reception.desiredCarrierI * carrierCos -
+                      reception.desiredCarrierQ * carrierSin) +
+          reception.additiveRf;
+    } else {
+      rf[frame] = envelope * carrierCos;
+    }
     advanceNormalizedOscillator(carrierStepCos, carrierStepSin, carrierCos,
                                 carrierSin);
     phase += carrierStep;

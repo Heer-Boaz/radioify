@@ -198,6 +198,14 @@ place `hebios.bin` next to the PSF2 file, next to `radioify.exe`, or in the
 directory from which Radioify was launched.
 
 ## Options
+
+Radio reception:
+
+- `--radio-reception everyday-1938` (default): stable groundwave plus a weak,
+  slowly fading skywave path and a rare weak co-channel RF carrier.
+- `--radio-reception strong-local`: preserve the former clean, ideal AM
+  reception for a strong local station.
+
 KSS options:
 - 50Hz (auto/forced)
 - SCC type (auto/standard/enhanced)

@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "audiofilter/radio1938/radio_reception_profile.h"
 #include "core/runtime_defaults.h"
 #include "kssoptions.h"
 #include "nsfoptions.h"
@@ -49,6 +50,8 @@ struct AudioPlaybackConfig {
   bool dry = kDefaultDryAudioEnabled;
   std::string radioSettingsPath;
   std::string radioPresetName;
+  RadioReceptionProfile radioReceptionProfile =
+      kDefaultRadioReceptionProfile;
   int bwHz = kDefaultRadioBandwidthHz;
   double noise = kDefaultRadioNoiseAmount;
 };

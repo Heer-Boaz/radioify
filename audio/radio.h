@@ -18,6 +18,8 @@
 #include <string_view>
 #include <vector>
 
+struct RadioAmReceptionSample;
+
 struct Radio1938 {
   enum class Preset {
     Philco37116,
@@ -774,7 +776,8 @@ struct Radio1938 {
                       float* outSamples,
                       uint32_t frames,
                       float receivedCarrierRmsVolts,
-                      float modulationIndex);
+                      float modulationIndex,
+                      const RadioAmReceptionSample* receptionSamples = nullptr);
   void processIqBaseband(const float* iqInterleaved,
                          float* outSamples,
                          uint32_t frames);

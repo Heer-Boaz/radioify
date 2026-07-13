@@ -27,6 +27,8 @@ static void showUsage(const char* exe) {
   logLine("  --out <path>           Same as out");
   logLine("  --radio-settings <path> Override audio-filter settings from a .toml file");
   logLine("  --radio-preset <name>   Select named audio-filter preset from the settings file");
+  logLine("  --radio-reception <everyday-1938|strong-local>");
+  logLine("               Select the AM reception environment");
   logLine("  --dry        Bypass radio processing for render/playback");
   logLine("  --no-ascii   Disable ASCII video rendering");
   logLine("  --no-audio   Disable audio playback");
@@ -145,6 +147,13 @@ Options parseArgs(int argc, char** argv) {
         die("--radio-preset requires a non-empty preset name.");
       }
       o.radioPresetName = value;
+      continue;
+    }
+    if (arg == "--radio-reception") {
+      std::string value = requireValue(arg, &i);
+      if (!parseRadioReceptionProfile(value, o.radioReceptionProfile)) {
+        die("--radio-reception expects everyday-1938 or strong-local.");
+      }
       continue;
     }
     if (arg == "--track") {

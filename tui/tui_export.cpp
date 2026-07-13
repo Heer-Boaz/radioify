@@ -161,6 +161,8 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
       !o.dry && useRadio1938 &&
       (o.calibrationReport || (renderedRadioOut && !writeOutput));
   RadioAmIngressConfig radioAmIngress;
+  radioAmIngress.reception =
+      radioReceptionConfigForProfile(o.radioReceptionProfile);
   RadioPreviewConfig radioPreviewConfig;
 
   auto renderRadio = std::make_unique<Radio1938>();

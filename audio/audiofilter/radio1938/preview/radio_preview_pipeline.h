@@ -17,6 +17,7 @@ enum class RadioPreviewPassId : uint8_t {
   Warmup,
   BroadcastSource,
   ProgramFilter,
+  ReceptionEnvironment,
 };
 
 struct RadioPreviewBlockControl {
@@ -28,6 +29,7 @@ struct RadioPreviewBlockControl {
 
 struct RadioPreviewSampleContext {
   const RadioPreviewBlockControl* block = nullptr;
+  RadioAmReceptionSample* reception = nullptr;
 };
 
 struct RadioPreviewInitContext {};
@@ -58,6 +60,14 @@ struct RadioPreviewBroadcastSourceNode {
                    RadioPreviewSampleContext& ctx);
 };
 
+struct RadioPreviewReceptionNode {
+  static void init(RadioPreviewPipeline& preview, RadioPreviewInitContext&);
+  static void reset(RadioPreviewPipeline& preview);
+  static float run(RadioPreviewPipeline& preview,
+                   float y,
+                   RadioPreviewSampleContext& ctx);
+};
+
 using RadioPreviewGraph =
     AudioGraphRuntime<RadioPreviewPipeline,
                       RadioPreviewBlockControl,
@@ -80,6 +90,33 @@ float runRadioPreviewPipelineSample(RadioPreviewPipeline& preview,
                                     RadioPreviewPassId firstProgramPass);
 
 struct RadioPreviewPipeline {
+  struct RadioReceptionRuntime {
+    uint32_t randomState = 0;
+    float sampleRate = 0.0f;
+    float sourceCarrierHz = 0.0f;
+    float carrierPeak = 0.0f;
+    double skyAmplitudeState = 0.0;
+    double skyAmplitudePole = 0.0;
+    double skyAmplitudeExcitation = 0.0;
+    double skyDopplerState = 0.0;
+    double skyDopplerPole = 0.0;
+    double skyDopplerExcitation = 0.0;
+    double skyDopplerBaseHz = 0.0;
+    double skyOscCos = 1.0;
+    double skyOscSin = 0.0;
+    uint64_t intermittentWaitFrames = 0;
+    uint64_t intermittentActiveFrames = 0;
+    float intermittentEnvelope = 0.0f;
+    float intermittentTarget = 0.0f;
+    float intermittentAttackCoefficient = 0.0f;
+    float intermittentReleaseCoefficient = 0.0f;
+    float intermittentOffsetHz = 0.0f;
+    float intermittentOscCos = 1.0f;
+    float intermittentOscSin = 0.0f;
+    float intermittentStepCos = 1.0f;
+    float intermittentStepSin = 0.0f;
+  } receptionRuntime;
+
   Radio1938* radio = nullptr;
   const RadioAmIngressConfig* ingress = nullptr;
   float sampleRate = 0.0f;
@@ -87,6 +124,7 @@ struct RadioPreviewPipeline {
   bool warmedUp = false;
   std::vector<float> warmupScratch;
   std::vector<float> filteredScratch;
+  std::vector<RadioAmReceptionSample> receptionScratch;
   Biquad programHp;
   Biquad programLp;
   float broadcastCompressionThreshold = 0.0f;
