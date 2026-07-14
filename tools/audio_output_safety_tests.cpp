@@ -2,11 +2,13 @@
 #include "audio/pipeline_transition.h"
 #include "audio/playback_source_buffer.h"
 #include "audio/playback_source_priming.h"
+#include "audio/radio_bypass_transition.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <iterator>
 #include <vector>
 
 namespace {
@@ -216,13 +218,19 @@ void expectDiscontinuityTransitionPhases() {
   if (!audioPipelineTransitionCommitInProgress(transition)) {
     fail("Discontinuity transition did not expose commit-in-progress state.");
   }
-  if (!audioPipelineTransitionFinishCommit(transition, 48000)) {
+  if (!audioPipelineTransitionFinishCommit(transition)) {
     fail("Discontinuity transition refused to finish the current request.");
   }
   if (transition.phase.load(std::memory_order_relaxed) !=
       AudioPipelineTransitionPhase::Idle) {
     fail("Discontinuity transition did not return to idle.");
   }
+  if (transition.inputFadeInRequestFrames.load(std::memory_order_relaxed) != 0 ||
+      transition.outputFadeInRequestFrames.load(std::memory_order_relaxed) !=
+          0) {
+    fail("Commit completion armed a fade outside the signal owner.");
+  }
+  audioPipelineTransitionRequestSignalFadeIn(transition, 48000);
   std::vector<float> samples(4, 1.0f);
   audioPipelineTransitionApplyInputFadeIn(transition, samples.data(), 4, 1);
   if (!(samples[0] > 0.0f && samples[0] < samples[1] &&
@@ -262,13 +270,31 @@ void expectSupersededDiscontinuityDoesNotClearNewRequest() {
     fail("First discontinuity did not begin commit.");
   }
   audioPipelineTransitionRequestDiscontinuity(transition, 48000);
-  if (audioPipelineTransitionFinishCommit(transition, 48000)) {
+  if (audioPipelineTransitionFinishCommit(transition)) {
     fail("Superseded discontinuity incorrectly returned to idle.");
   }
   if (transition.phase.load(std::memory_order_relaxed) !=
       AudioPipelineTransitionPhase::FadeOutRequested) {
     fail("Superseded discontinuity did not leave the newer request pending.");
   }
+}
+
+void expectDryProducerClearsPendingInputFade() {
+  AudioPipelineTransition transition;
+  audioPipelineTransitionReset(transition);
+  audioPipelineTransitionRequestSignalFadeIn(transition, 400);
+
+  float first = 1.0f;
+  audioPipelineTransitionApplyInputFadeIn(transition, &first, 1, 1);
+  if (!(first > 0.0f && first < 1.0f)) {
+    fail("Input fade did not start before dry-producer release.");
+  }
+
+  audioPipelineTransitionClearInputFadeIn(transition);
+  float later[] = {1.0f, 1.0f};
+  audioPipelineTransitionApplyInputFadeIn(transition, later, 2, 1);
+  expectNear(later[0], 1.0f, 1e-6f, "cleared input fade frame 0");
+  expectNear(later[1], 1.0f, 1e-6f, "cleared input fade frame 1");
 }
 
 void expectPlaybackSourcePrimingBudget() {
@@ -322,6 +348,69 @@ void expectPlaybackSourceBufferWrapsCleanly() {
   expectNear(out[7], 6.1f, 1e-6f, "buffer wrapped frame 3 right");
 }
 
+void expectRadioBypassCrossfadesAtProducerBoundary() {
+  RadioBypassTransition transition;
+  transition.reset(false, 400);
+  if (transition.needsWetSignal(false)) {
+    fail("Dry radio bypass unexpectedly required a wet signal.");
+  }
+  if (!transition.activateWetSignal(true)) {
+    fail("Radio enable did not activate the wet signal.");
+  }
+
+  float wet[] = {1.0f, 1.0f, 1.0f, 1.0f};
+  const float dry[] = {0.0f, 0.0f, 0.0f, 0.0f};
+  transition.blend(wet, dry, 4, 1, true, 400);
+  expectNear(wet[0], 0.00f, 1e-6f, "radio enable frame 0");
+  expectNear(wet[1], 0.25f, 1e-6f, "radio enable frame 1");
+  expectNear(wet[2], 0.50f, 1e-6f, "radio enable frame 2");
+  expectNear(wet[3], 0.75f, 1e-6f, "radio enable frame 3");
+  if (transition.blendFramesRemaining(true, 400) != 0) {
+    fail("Radio enable crossfade did not reach the wet signal.");
+  }
+
+  std::fill(std::begin(wet), std::end(wet), 1.0f);
+  transition.blend(wet, dry, 4, 1, false, 400);
+  expectNear(wet[0], 1.00f, 1e-6f, "radio disable frame 0");
+  expectNear(wet[1], 0.75f, 1e-6f, "radio disable frame 1");
+  expectNear(wet[2], 0.50f, 1e-6f, "radio disable frame 2");
+  expectNear(wet[3], 0.25f, 1e-6f, "radio disable frame 3");
+  if (transition.needsWetSignal(false)) {
+    fail("Radio disable crossfade did not release the wet signal.");
+  }
+}
+
+void expectRadioBypassCrossfadeIsBlockInvariant() {
+  RadioBypassTransition whole;
+  RadioBypassTransition split;
+  whole.reset(false, 400);
+  split.reset(false, 400);
+  whole.activateWetSignal(true);
+  split.activateWetSignal(true);
+
+  float wholeWet[] = {0.9f, 0.8f, 0.7f, 0.6f,
+                      0.5f, 0.4f, 0.3f, 0.2f};
+  float splitWet[] = {0.9f, 0.8f, 0.7f, 0.6f,
+                      0.5f, 0.4f, 0.3f, 0.2f};
+  const float dry[] = {-0.2f, -0.1f, 0.0f, 0.1f,
+                       0.2f, 0.3f, 0.4f, 0.5f};
+  whole.blend(wholeWet, dry, 8, 1, true, 400);
+  split.blend(splitWet, dry, 3, 1, true, 400);
+  split.blend(splitWet + 3, dry + 3, 5, 1, true, 400);
+
+  for (size_t i = 0; i < std::size(wholeWet); ++i) {
+    expectNear(splitWet[i], wholeWet[i], 1e-6f,
+               "radio bypass block invariance");
+  }
+  float wholeNext = 0.75f;
+  float splitNext = wholeNext;
+  const float dryNext = -0.25f;
+  whole.blend(&wholeNext, &dryNext, 1, 1, false, 400);
+  split.blend(&splitNext, &dryNext, 1, 1, false, 400);
+  expectNear(splitNext, wholeNext, 1e-6f,
+             "radio bypass continuation after split blocks");
+}
+
 }  // namespace
 
 int main() {
@@ -337,7 +426,10 @@ int main() {
   expectDiscontinuityTransitionPhases();
   expectSupersededDiscontinuityLeavesCommitInProgress();
   expectSupersededDiscontinuityDoesNotClearNewRequest();
+  expectDryProducerClearsPendingInputFade();
   expectPlaybackSourcePrimingBudget();
   expectPlaybackSourceBufferWrapsCleanly();
+  expectRadioBypassCrossfadesAtProducerBoundary();
+  expectRadioBypassCrossfadeIsBlockInvariant();
   return 0;
 }

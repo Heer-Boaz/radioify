@@ -79,6 +79,7 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.state.channels = gAudio.channels;
   gAudio.state.sampleRate = gAudio.sampleRate;
   rebuildRadioPreviewChain(&gAudio.state);
+  prepareRadioPlaybackSource(&gAudio.state);
 
   if (!audioPlaybackDeviceEnsureRunning()) {
     stopAndUninitActiveDecoder();

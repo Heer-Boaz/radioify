@@ -157,7 +157,7 @@ bool startM4aWorker(const std::filesystem::path& file,
       if (!playbackSourceIsPrimed(bufferedFrames, primeFrames, atEnd)) {
         return;
       }
-      audioPlaybackFinishSeekPipelineTransition(&state);
+      audioPlaybackFinishSeekPipelineTransition(&state, false);
       seekCommitPending = false;
       state.m4aCv.notify_all();
     };
@@ -187,6 +187,9 @@ bool startM4aWorker(const std::filesystem::path& file,
           std::lock_guard<std::mutex> lock(state.m4aMutex);
           state.m4aBuffer.reset();
         }
+        state.radioResetPending.store(true, std::memory_order_relaxed);
+        audioPipelineTransitionRequestSignalFadeIn(state.pipelineTransition,
+                                                   state.sampleRate);
         seekCommitPending = true;
         state.m4aCv.notify_all();
         continue;
@@ -266,6 +269,10 @@ bool startM4aWorker(const std::filesystem::path& file,
 #endif
       }
 
+      if (!state.dry) {
+        audioPlaybackProcessRadioBlock(&state, buffer.data(),
+                                       static_cast<uint32_t>(framesRead));
+      }
       {
         std::lock_guard<std::mutex> lock(state.m4aMutex);
         state.m4aBuffer.write(buffer.data(), static_cast<size_t>(framesRead));

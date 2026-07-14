@@ -52,14 +52,16 @@ bool audioPipelineTransitionCommitInProgress(
 
 bool audioPipelineTransitionActive(const AudioPipelineTransition& transition);
 
-bool audioPipelineTransitionFinishCommit(AudioPipelineTransition& transition,
-                                         uint32_t sampleRate);
+bool audioPipelineTransitionFinishCommit(AudioPipelineTransition& transition);
 
 void audioPipelineTransitionApplyInputFadeIn(
     AudioPipelineTransition& transition,
     float* samples,
     uint32_t frames,
     uint32_t channels);
+
+void audioPipelineTransitionClearInputFadeIn(
+    AudioPipelineTransition& transition);
 
 void audioPipelineTransitionApplyFadeIn(AudioPipelineTransition& transition,
                                         float* samples,

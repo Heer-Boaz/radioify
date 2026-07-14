@@ -100,8 +100,7 @@ bool audioPipelineTransitionActive(const AudioPipelineTransition& transition) {
          AudioPipelineTransitionPhase::Idle;
 }
 
-bool audioPipelineTransitionFinishCommit(AudioPipelineTransition& transition,
-                                         uint32_t sampleRate) {
+bool audioPipelineTransitionFinishCommit(AudioPipelineTransition& transition) {
   const uint32_t committed =
       transition.commitSerial.load(std::memory_order_relaxed);
   const uint32_t requested =
@@ -124,7 +123,6 @@ bool audioPipelineTransitionFinishCommit(AudioPipelineTransition& transition,
   }
 
   transition.commitSerial.store(0, std::memory_order_relaxed);
-  audioPipelineTransitionRequestSignalFadeIn(transition, sampleRate);
   return true;
 }
 
@@ -184,6 +182,13 @@ void audioPipelineTransitionApplyInputFadeIn(
   applyFadeIn(transition.inputFadeInRequestFrames,
               transition.inputFadeInFramesRemaining,
               transition.inputFadeInFramesTotal, samples, frames, channels);
+}
+
+void audioPipelineTransitionClearInputFadeIn(
+    AudioPipelineTransition& transition) {
+  transition.inputFadeInRequestFrames.store(0, std::memory_order_relaxed);
+  transition.inputFadeInFramesRemaining = 0;
+  transition.inputFadeInFramesTotal = 0;
 }
 
 void audioPipelineTransitionApplyFadeIn(AudioPipelineTransition& transition,

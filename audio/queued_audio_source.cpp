@@ -185,7 +185,7 @@ bool queuedAudioSourceWriteInternal(AudioState* state,
     }
 
     uint64_t framesToWrite = std::min(remaining, writable);
-    if (!state->dry && state->useRadio1938.load()) {
+    if (!state->dry) {
       uint64_t radioOffset = 0;
       while (radioOffset < framesToWrite) {
         const uint32_t radioFrames = static_cast<uint32_t>(
@@ -303,8 +303,9 @@ bool queuedAudioSourceCommitPendingSerialFlush(AudioState* state) {
   state->audioClock.reset(serial);
   queuedAudioSourceClearMetadata(state);
   state->radioResetPending.store(true, std::memory_order_relaxed);
-  audioPipelineTransitionFinishCommit(state->pipelineTransition,
-                                      state->sampleRate);
+  audioPipelineTransitionRequestSignalFadeIn(state->pipelineTransition,
+                                             state->sampleRate);
+  audioPipelineTransitionFinishCommit(state->pipelineTransition);
   state->decodeCv.notify_all();
   return true;
 }

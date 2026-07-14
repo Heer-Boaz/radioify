@@ -61,8 +61,7 @@ void appendAudioTimingLogLine(const char* line) {
 bool audioPlaybackFinishSeekPipelineTransition(AudioState* state,
                                                bool resetRadio) {
   if (!state) return false;
-  if (audioPipelineTransitionFinishCommit(state->pipelineTransition,
-                                          state->sampleRate)) {
+  if (audioPipelineTransitionFinishCommit(state->pipelineTransition)) {
     state->seekRequested.store(false, std::memory_order_relaxed);
     if (resetRadio) {
       state->radioResetPending.store(true, std::memory_order_relaxed);
@@ -192,6 +191,7 @@ void resetPlaybackStateForLoad(uint64_t startFrame,
 
   gAudio.state.channels = gAudio.channels;
   rebuildRadioPreviewChain(&gAudio.state);
+  prepareRadioPlaybackSource(&gAudio.state);
 }
 
 bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
@@ -253,7 +253,8 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
     }
     activateBackend(backend, trackIndex);
     gAudio.state.sourcePreparing.store(false, std::memory_order_release);
-    releasePlaybackPipelineForNewSignal();
+    audioPipelineTransitionRequestOutputFadeIn(
+        gAudio.state.pipelineTransition, gAudio.state.sampleRate);
   } else {
     if (backend->seek) {
       resetPlaybackStateForLoad(startFrame, true);
@@ -302,6 +303,7 @@ bool ensureChannels(uint32_t newChannels) {
                                 gAudio.lpHz,
                                 gAudio.noise);
   rebuildRadioPreviewChain(&gAudio.state);
+  prepareRadioPlaybackSource(&gAudio.state);
 
   if (hadTrack) {
     return loadFileAt(gAudio.nowPlaying, resumeFrame, trackIndex);
@@ -373,11 +375,9 @@ void audioInit(const AudioPlaybackConfig& config) {
                                 static_cast<float>(gAudio.sampleRate),
                                 gAudio.lpHz,
                                 gAudio.noise);
-  if (config.enableRadio) {
-    applyRadioTogglePreset();
-  } else {
-    rebuildRadioPreviewChain(&gAudio.state);
-  }
+  configureRadioPlaybackTemplate();
+  rebuildRadioPreviewChain(&gAudio.state);
+  prepareRadioPlaybackSource(&gAudio.state);
 }
 
 void audioShutdown() {
@@ -589,18 +589,8 @@ void audioSeekToSec(double sec) {
 }
 
 void audioToggleRadio() {
-  bool next = !gAudio.state.useRadio1938.load();
-  gAudio.state.useRadio1938.store(next);
-  if (next) {
-    applyRadioTogglePreset();
-  }
-  if (next) {
-    audioPipelineTransitionRequestSignalFadeIn(gAudio.state.pipelineTransition,
-                                               gAudio.state.sampleRate);
-  } else {
-    audioPipelineTransitionRequestOutputFadeIn(gAudio.state.pipelineTransition,
-                                               gAudio.state.sampleRate);
-  }
+  const bool next = !gAudio.state.useRadio1938.load(std::memory_order_relaxed);
+  gAudio.state.useRadio1938.store(next, std::memory_order_relaxed);
 }
 
 void audioSetHold(bool hold) {

@@ -22,6 +22,7 @@ radioify_add_module_object_library(radioify_audio
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_source_buffer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_source_priming.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/queued_audio_source.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio_bypass_transition.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio_playback.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_sources/m4a_playback_source.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/psfaudio.cpp

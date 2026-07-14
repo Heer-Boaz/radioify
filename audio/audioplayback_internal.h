@@ -29,6 +29,7 @@
 #include "pipeline_transition.h"
 #include "playback_backend.h"
 #include "queued_audio_source.h"
+#include "radio_bypass_transition.h"
 #include "playback_source_buffer.h"
 #include "output_volume_safety.h"
 #include "psfaudio.h"
@@ -38,6 +39,7 @@
 #include "vgmoptions.h"
 
 constexpr uint32_t kRadioProcessChannels = 1u;
+constexpr uint32_t kRadioBypassScratchFrames = 2048u;
 
 struct AudioState {
   ma_decoder decoder{};
@@ -50,6 +52,8 @@ struct AudioState {
   MidiAudioDecoder midi{};
   ma_device device{};
   Radio1938 radio1938{};
+  RadioBypassTransition radioBypass;
+  std::vector<float> radioDryScratch;
   PlaybackSourceBuffer m4aBuffer;
   std::mutex m4aMutex;
   std::condition_variable m4aCv;
@@ -160,7 +164,8 @@ extern AudioPlaybackState gAudio;
 void appendAudioTimingLogLine(const char* line);
 void drainPlaybackPipelineForReplacement(AudioState* state);
 void rebuildRadioPreviewChain(AudioState* state);
-void applyRadioTogglePreset();
+void configureRadioPlaybackTemplate();
+void prepareRadioPlaybackSource(AudioState* state);
 void audioPlaybackHoldClipAlert(AudioState* state);
 bool audioPlaybackFinishSeekPipelineTransition(AudioState* state,
                                                bool resetRadio = true);

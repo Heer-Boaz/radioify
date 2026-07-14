@@ -167,7 +167,7 @@ void dataCallback(ma_device* device, void* output, const void*,
         state->streamStarved.exchange(starved, std::memory_order_relaxed);
 
     if (starved) {
-      audioPipelineTransitionRequestSignalFadeIn(state->pipelineTransition,
+      audioPipelineTransitionRequestOutputFadeIn(state->pipelineTransition,
                                                  state->sampleRate);
       int64_t now = nowUs();
       int64_t last =
@@ -345,14 +345,8 @@ void dataCallback(ma_device* device, void* output, const void*,
       framesRead > 0 &&
       (seekDeclick || previousFramesRead == 0 || previousShortRead);
   if (signalFadeIn) {
-    audioPipelineTransitionRequestSignalFadeIn(state->pipelineTransition,
+    audioPipelineTransitionRequestOutputFadeIn(state->pipelineTransition,
                                                state->sampleRate);
-  }
-  if (!state->dry && framesRead > 0 && state->useRadio1938.load()) {
-    float* audioStart =
-        out + silentLeadFrames * static_cast<uint64_t>(state->channels);
-    audioPlaybackProcessRadioBlock(state, audioStart,
-                                   static_cast<uint32_t>(framesRead));
   }
   state->framesPlayed.fetch_add(framesRead);
   state->framesReadTotal.fetch_add(framesRead, std::memory_order_relaxed);
