@@ -125,6 +125,7 @@ struct PlaybackOverlayInputs {
   bool canPlayPrevious = false;
   bool canPlayNext = false;
   bool radioEnabled = false;
+  std::string radioLabel = "Radio: Off";
   bool hz50Enabled = false;
   bool canCycleAudioTracks = false;
   std::string activeAudioTrackLabel;
@@ -161,6 +162,7 @@ struct PlaybackOverlayState {
   bool canPlayPrevious = false;
   bool canPlayNext = false;
   bool radioEnabled = false;
+  std::string radioLabel = "Radio: Off";
   bool hz50Enabled = false;
   bool canCycleAudioTracks = false;
   std::string activeAudioTrackLabel;

@@ -778,6 +778,7 @@ int runTui(Options o) {
   audioConfig.dry = o.dry;
   audioConfig.radioSettingsPath = o.radioSettingsPath;
   audioConfig.radioPresetName = o.radioPresetName;
+  audioConfig.radioReceiverProfile = o.radioReceiverProfile;
   audioConfig.radioReceptionProfile = o.radioReceptionProfile;
   audioConfig.bwHz = o.bwHz;
   audioConfig.noise = o.noise;
@@ -813,6 +814,7 @@ int runTui(Options o) {
   const uint32_t sampleRate = 48000;
 
   auto radio1938Template = std::make_unique<Radio1938>();
+  radio1938Template->applyReceiverProfile(o.radioReceiverProfile);
   radio1938Template->init(1, static_cast<float>(sampleRate), lpHz,
                           static_cast<float>(o.noise));
   if (!o.radioSettingsPath.empty()) {
@@ -900,7 +902,21 @@ int runTui(Options o) {
     logLine(std::string("  Input:  ") + toUtf8String(file));
     logLine(std::string("  Output: ") + toUtf8String(outputPath));
     logLine("Rendering output...");
-    renderToFile(renderOpt, file, outputPath, *radio1938Template,
+    Radio1938 activeRadioTemplate = *radio1938Template;
+    const RadioReceiverProfile activeProfile =
+        audioGetRadioReceiverProfile();
+    if (activeRadioTemplate.receiverProfile != activeProfile) {
+      activeRadioTemplate.applyReceiverProfile(activeProfile);
+      if (!o.radioSettingsPath.empty()) {
+        std::string radioIniError;
+        if (!applyRadioSettingsIni(activeRadioTemplate, o.radioSettingsPath,
+                                   o.radioPresetName, &radioIniError)) {
+          die("Failed to apply radio settings from '" +
+              o.radioSettingsPath + "': " + radioIniError);
+        }
+      }
+    }
+    renderToFile(renderOpt, file, outputPath, activeRadioTemplate,
                  audioIsRadioEnabled());
     logLine("Done.");
   };
@@ -1383,6 +1399,7 @@ int runTui(Options o) {
     actionOverlayState.canPlayNext =
         actionOverlayState.audioOk || !nowPlaying.empty();
     actionOverlayState.radioEnabled = audioIsRadioEnabled();
+    actionOverlayState.radioLabel = std::string(audioGetRadioFilterLabel());
     actionOverlayState.hz50Enabled = audioIs50HzEnabled();
     actionOverlayState.paused = audioIsPaused();
     actionOverlayState.audioFinished = audioIsFinished();
@@ -1670,7 +1687,7 @@ int runTui(Options o) {
     }
   };
   callbacks.onToggleRadio = [&]() {
-    audioToggleRadio();
+    audioCycleRadioFilter();
     markDirty();
   };
   callbacks.onToggle50Hz = [&]() {
@@ -1928,9 +1945,9 @@ int runTui(Options o) {
                         if (callbacks.onToggleWindow) callbacks.onToggleWindow();
                       }});
     }
-    cmds.push_back({"Radio Filter",
+    cmds.push_back({"Cycle Radio Filter",
                     "R", true, [&]() {
-                      audioToggleRadio();
+                      audioCycleRadioFilter();
                       markDirty();
                     }});
     bool show50Hz = audioSupports50HzToggle();

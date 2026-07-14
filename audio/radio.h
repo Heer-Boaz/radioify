@@ -10,6 +10,7 @@
 #include "audiofilter/radio1938/models/speaker_sim.h"
 #include "audiofilter/radio1938/radio1938_constants.h"
 #include "audiofilter/radio1938/radio_pipeline_types.h"
+#include "audiofilter/radio1938/radio_receiver_profile.h"
 
 #include <array>
 #include <cstddef>
@@ -21,16 +22,11 @@
 struct RadioAmReceptionSample;
 
 struct Radio1938 {
-  enum class Preset {
-    Philco37116,
-    Philco37116X = Philco37116,
-  };
-
   float sampleRate = 0.0f;
   int channels = 1;
   float bwHz = 0.0f;
   float noiseWeight = 0.0f;
-  Preset preset = Preset::Philco37116;
+  RadioReceiverProfile receiverProfile = kDefaultRadioReceiverProfile;
   bool initialized = false;
   Radio1938();
 
@@ -360,6 +356,7 @@ struct Radio1938 {
   } input;
 
   struct FrontEndNodeState {
+    bool secondTunedCircuitEnabled = true;
     uint32_t appliedConfigRevision = 0;
     float inputHpHz = 0.0f;
     float rfGain = 0.0f;
@@ -525,6 +522,11 @@ struct Radio1938 {
   } tone;
 
   struct PowerNodeState {
+    enum class Topology : uint8_t {
+      TransformerCoupledPushPull,
+      CapCoupledSingleEnded,
+    };
+
     struct CenterTappedInterstageState {
       float primaryCurrent = 0.0f;
       float primaryVoltage = 0.0f;
@@ -534,6 +536,7 @@ struct Radio1938 {
       float secondaryBVoltage = 0.0f;
     };
 
+    Topology topology = Topology::TransformerCoupledPushPull;
     float sagEnv = 0.0f;
     float sagAtk = 0.0f;
     float sagRel = 0.0f;
@@ -598,7 +601,9 @@ struct Radio1938 {
     float outputTubePlateSupplyVolts = 0.0f;
     float outputTubePlateDcVolts = 0.0f;
     float outputTubeQuiescentPlateVolts = 0.0f;
+    float outputTubeScreenVolts = 0.0f;
     float outputTubeBiasVolts = 0.0f;
+    float outputTubeCutoffVolts = 0.0f;
     float outputTubePlateCurrentAmps = 0.0f;
     float outputTubeQuiescentPlateCurrentAmps = 0.0f;
     float outputTubeMutualConductanceSiemens = 0.0f;
@@ -608,6 +613,7 @@ struct Radio1938 {
     float outputTubeGridSoftnessVolts = 0.0f;
     KorenTriodeModel outputTubeTriodeModel{};
     KorenTriodeLut outputTubeTriodeLut;
+    FixedPlatePentodeEvaluator outputTubePentodeCurrentForGrid;
     float outputTubePlateResistanceOhms = 0.0f;
     float outputGridAVolts = 0.0f;
     float outputGridBVolts = 0.0f;
@@ -758,10 +764,9 @@ struct Radio1938 {
     Biquad clipOsLpOut;
   } output;
 
-  static std::string_view presetName(Preset preset);
   static std::string_view passName(PassId id);
-  bool applyPreset(std::string_view presetName);
-  void applyPreset(Preset preset);
+  bool applyReceiverProfile(std::string_view profileName);
+  void applyReceiverProfile(RadioReceiverProfile profile);
   void setIdentitySeed(uint32_t seed);
   void setCalibrationEnabled(bool enabled);
   void resetCalibration();

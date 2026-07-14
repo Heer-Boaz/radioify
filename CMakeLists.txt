@@ -346,6 +346,12 @@ target_sources(radio_measurements PRIVATE
   $<TARGET_OBJECTS:radioify_audiofilter>
 )
 radioify_link_repo_target(radio_measurements)
+add_test(NAME radio_measurements_philco_reference
+         COMMAND $<TARGET_FILE:radio_measurements>
+                 --preset philco-37-116 --section reference)
+add_test(NAME radio_measurements_typical_reference
+         COMMAND $<TARGET_FILE:radio_measurements>
+                 --preset typical-1930s --section reference)
 
 add_executable(radio_node_physics)
 target_sources(radio_node_physics PRIVATE
@@ -354,6 +360,22 @@ target_sources(radio_node_physics PRIVATE
   $<TARGET_OBJECTS:radioify_audiofilter>
 )
 radioify_link_repo_target(radio_node_physics)
+add_test(NAME radio_node_physics_philco
+         COMMAND $<TARGET_FILE:radio_node_physics>
+                 --preset philco-37-116)
+add_test(NAME radio_node_physics_typical
+         COMMAND $<TARGET_FILE:radio_node_physics>
+                 --preset typical-1930s)
+
+add_executable(radio_receiver_profile_tests)
+target_sources(radio_receiver_profile_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_radio_receiver_profile_tests>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+)
+radioify_link_repo_target(radio_receiver_profile_tests)
+add_test(NAME radio_receiver_profile_tests
+         COMMAND $<TARGET_FILE:radio_receiver_profile_tests>)
 
 add_executable(radio_am_ingress_tests)
 target_sources(radio_am_ingress_tests PRIVATE
@@ -373,6 +395,7 @@ target_sources(audio_output_safety_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/playback_source_buffer.cpp
   ${CMAKE_SOURCE_DIR}/audio/playback_source_priming.cpp
   ${CMAKE_SOURCE_DIR}/audio/radio_bypass_transition.cpp
+  ${CMAKE_SOURCE_DIR}/audio/radio_filter_mode.cpp
 )
 radioify_link_repo_target(audio_output_safety_tests)
 add_test(NAME audio_output_safety_tests

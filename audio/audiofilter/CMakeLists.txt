@@ -7,6 +7,7 @@ radioify_add_module_object_library(radioify_audiofilter
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/analysis/radio_calibration.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/audio_pipeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/audio_pipeline_execution.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/radio_receiver_profile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/radio_reception_profile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/radio_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/preview/radio_preview_pipeline.cpp

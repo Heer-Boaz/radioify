@@ -10,6 +10,16 @@
 
 namespace {
 
+size_t receiverTemplateIndex(RadioReceiverProfile profile) {
+  switch (profile) {
+    case RadioReceiverProfile::Typical1930s:
+      return 0u;
+    case RadioReceiverProfile::Philco37116:
+      return 1u;
+  }
+  return 0u;
+}
+
 void rebuildRadioFromTemplate(Radio1938* target,
                               const Radio1938& source,
                               float sampleRate,
@@ -37,27 +47,40 @@ void applyRadioSettingsToTemplate(Radio1938& target,
 
 void rebuildRadioPreviewChain(AudioState* state) {
   if (!state) return;
-  rebuildRadioFromTemplate(&state->radio1938, gAudio.radio1938Template,
+  const RadioReceiverProfile requestedProfile =
+      radioFilterModeReceiverProfile(
+          state->radioFilterMode.load(std::memory_order_relaxed));
+  const Radio1938& sourceTemplate =
+      gAudio.radio1938Templates[receiverTemplateIndex(requestedProfile)];
+  rebuildRadioFromTemplate(&state->radio1938, sourceTemplate,
                            static_cast<float>(gAudio.sampleRate), gAudio.lpHz,
                            gAudio.noise);
   state->radioPreview.initialize(state->radio1938,
                                  state->radioAmIngress,
                                  state->radioPreviewConfig,
                                  static_cast<float>(gAudio.sampleRate));
+  state->activeRadioReceiverProfile = requestedProfile;
 }
 
-void configureRadioPlaybackTemplate() {
-  gAudio.radio1938Template.applyPreset(Radio1938::Preset::Philco37116X);
-  applyRadioSettingsToTemplate(gAudio.radio1938Template,
-                               gAudio.radioPresetName,
-                               gAudio.radioSettingsPath);
+void configureRadioPlaybackTemplates() {
+  for (RadioReceiverProfile profile : {RadioReceiverProfile::Typical1930s,
+                                       RadioReceiverProfile::Philco37116}) {
+    Radio1938& target =
+        gAudio.radio1938Templates[receiverTemplateIndex(profile)];
+    target.applyReceiverProfile(profile);
+    target.init(kRadioProcessChannels, static_cast<float>(gAudio.sampleRate),
+                gAudio.lpHz, gAudio.noise);
+    applyRadioSettingsToTemplate(target, gAudio.radioPresetName,
+                                 gAudio.radioSettingsPath);
+  }
 }
 
 void prepareRadioPlaybackSource(AudioState* state) {
   if (!state) return;
   const uint32_t channels = std::max(1u, state->channels);
-  state->radioBypass.reset(
-      state->useRadio1938.load(std::memory_order_relaxed), state->sampleRate);
+  const bool radioEnabled = radioFilterModeEnabled(
+      state->radioFilterMode.load(std::memory_order_relaxed));
+  state->radioBypass.reset(radioEnabled, state->sampleRate);
   state->radioDryScratch.resize(
       static_cast<size_t>(kRadioBypassScratchFrames) * channels);
 }
@@ -66,13 +89,26 @@ void audioPlaybackProcessRadioBlock(AudioState* state,
                                     float* samples,
                                     uint32_t frames) {
   if (!state || !samples || frames == 0) return;
-  const bool radioEnabled =
-      state->useRadio1938.load(std::memory_order_relaxed);
+  const RadioFilterMode requestedMode =
+      state->radioFilterMode.load(std::memory_order_relaxed);
+  const bool radioEnabled = radioFilterModeEnabled(requestedMode);
+  const RadioReceiverProfile requestedProfile =
+      radioFilterModeReceiverProfile(requestedMode);
+  if (!radioEnabled) {
+    state->radioBypass.cancelWetReplacement();
+  } else if (requestedProfile != state->activeRadioReceiverProfile &&
+             !state->radioBypass.wetReplacementActive()) {
+    state->radioBypass.requestWetReplacement();
+  }
   if (!state->radioBypass.needsWetSignal(radioEnabled)) {
     audioPipelineTransitionClearInputFadeIn(state->pipelineTransition);
     return;
   }
 
+  if (state->radioBypass.wetReplacementReadyToCommit()) {
+    rebuildRadioPreviewChain(state);
+    state->radioBypass.commitWetReplacement();
+  }
   const bool wetSignalStarted =
       state->radioBypass.activateWetSignal(radioEnabled);
   const bool resetRequested =
@@ -85,6 +121,10 @@ void audioPlaybackProcessRadioBlock(AudioState* state,
   uint32_t frameOffset = 0;
   while (frameOffset < frames &&
          state->radioBypass.needsWetSignal(radioEnabled)) {
+    if (state->radioBypass.wetReplacementReadyToCommit()) {
+      rebuildRadioPreviewChain(state);
+      state->radioBypass.commitWetReplacement();
+    }
     const uint32_t blendFrames = state->radioBypass.blendFramesRemaining(
         radioEnabled, state->sampleRate);
     const bool needsDry = blendFrames > 0;

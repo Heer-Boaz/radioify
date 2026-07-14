@@ -295,6 +295,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   overlayInputs.canPlayPrevious = true;
   overlayInputs.canPlayNext = true;
   overlayInputs.radioEnabled = audioIsRadioEnabled();
+  overlayInputs.radioLabel = std::string(audioGetRadioFilterLabel());
   overlayInputs.hz50Enabled = audioIs50HzEnabled();
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;

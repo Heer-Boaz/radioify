@@ -165,6 +165,7 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.canPlayPrevious = inputs.canPlayPrevious;
   state.canPlayNext = inputs.canPlayNext;
   state.radioEnabled = inputs.radioEnabled;
+  state.radioLabel = inputs.radioLabel;
   state.hz50Enabled = inputs.hz50Enabled;
   state.canCycleAudioTracks = inputs.canCycleAudioTracks;
   state.activeAudioTrackLabel = inputs.activeAudioTrackLabel;
@@ -432,7 +433,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   }
 
   if (options.includeRadio) {
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::Radio, "Radio",
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::Radio,
+                                       state.radioLabel,
                                        state.radioEnabled));
   }
 

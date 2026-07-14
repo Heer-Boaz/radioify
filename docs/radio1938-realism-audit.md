@@ -1,23 +1,24 @@
 # Radio1938 realism audit
 
-Date: 2026-07-13
+Date: 2026-07-15
 
 ## Verdict
 
 The Radio1938 filter is not a simple equalizer-and-noise effect. It contains a
 reduced-order AM receiver, detector, control loops, tube stages, transformers,
 an electrodynamic speaker load, and a cabinet model. After the remediation in
-this audit, its documented electrical anchors and all explicit validation bands
-pass. It is a technically credible reduced-order period-radio simulation.
+this audit, the documented electrical anchors and explicit validation bands of
+both receiver profiles pass. It is a technically credible reduced-order
+period-radio simulation.
 
-It is still not an exact historical reproduction of one measured Philco
-37-116. No calibrated response or Thiele/Small measurement of an original
-36-1219 Type-W speaker was located. There is, however, much stronger acoustic
-evidence than the initial audit assumed: Philco's own clarifier patent contains
-a measured whole-cabinet response with and without the absorbers. The cabinet
-boom and clarifier response are now constrained by that trace, while the
-speaker-only response remains a clearly labelled reconstruction. The defensible
-claim is therefore "historically anchored and physically modelled," not
+Neither profile is an exact, measurement-identical reproduction. No calibrated
+response or Thiele/Small measurement was located for either original speaker.
+For the 37-116 there is nevertheless strong acoustic evidence: Philco's own
+clarifier patent contains a measured whole-cabinet response with and without
+the absorbers. The high-end cabinet boom and clarifier response are constrained
+by that trace. The smaller receiver's speaker and cabinet curves remain clearly
+labelled reduced-order inferences from its documented construction and size.
+The defensible claim is "historically anchored and physically modelled," not
 "measurement-identical."
 
 Reception is now modelled separately from the receiver and is deliberately
@@ -45,7 +46,41 @@ console receiving a strong local station may consequently sound much better
 than a period clip copied through several later media. The subtle
 `everyday-1938` reception profile is consistent with that distinction.
 
-## Historical anchors
+## Physical receiver profiles
+
+Playback starts with the radio filter off. The `R` control cycles through three
+states in a fixed order: unfiltered audio, `typical-1930s`,
+`philco-37-116`, then unfiltered audio again. Receiver choice remains separate
+from the default `everyday-1938` reception environment.
+
+`typical-1930s` is not claimed to be a statistical average of every radio sold
+during the decade. It is a representative mass-market reconstruction anchored
+to the Philco 38-12C, a modest second-or-third household set. The period service
+and parts data establish:
+
+- five tubes and a 470 kHz IF, without a separate RF-amplifier tube;
+- one type 41 output pentode rather than a push-pull pair;
+- 2 W rated audio output;
+- a BO-1 five-inch field-coil speaker with a 3.5-ohm voice-coil impedance;
+- 450 ohms DC resistance in the output-transformer primary;
+- a 500 kohm volume control, 4 Mohm first-audio grid leak, 190 kohm plate load,
+  and 0.01 uF audio coupling capacitors.
+
+The RCA 1937 tube manual brackets that receiver rating with published
+single-ended type 41 operating points: 1.5 W into 9 kohm at 180 V and 3.4 W
+into 7.6 kohm at 250 V, both specified at 10% total harmonic distortion. The
+model therefore derives approximately 2 W maximum output but calibrates normal
+programme listening well below that distortion-rated limit. Post-reference
+digital makeup restores listening level without pretending the physical output
+stage is continuously delivering its maximum power.
+
+The concrete receiver dimensions, five-inch cone, electrical load, circuit
+values, and output topology are documented. The 115 Hz speaker suspension
+proxy, cone breakup, broad 155 Hz cabinet panel rise, and short open-back path
+are explicit reduced-order estimates because no surviving anechoic or
+whole-cabinet curve was found for the BO-1/38-12C combination.
+
+## Philco 37-116 historical anchors
 
 The following values are traceable to period documentation:
 
@@ -95,7 +130,12 @@ receiver-specific anchors:
 Sources:
 
 - [Philco Service Bulletin 258](https://philcoradio.com/library/download/service%20info/service%20bulletins/Philco%20Service%20Bulletin%20258.pdf)
+- [Philco Service Bulletin 284, Model 38-12](https://philcoradio.com/library/download/service%20info/service%20bulletins/Philco%20Service%20Bulletin%20284.pdf)
 - [Philco 1937 Parts Catalog](https://philcoradio.com/library/download/parts/catalogs/1937/Philco%20Parts%20Catalog%201937.pdf)
+- [Philco speaker table](https://philcoradio.com/library/index.php/parts/speakers/)
+- [Philco volume-control table](https://philcoradio.com/library/index.php/parts/volume-controls/)
+- [Philco 1938 Radio Gallery](https://philcoradio.com/gallery2/1938a/)
+- [RCA Receiving Tube Manual RC-13, 1937](https://www.worldradiohistory.com/Archive-Catalogs/RCA/RCA-Receiving-Tube-Manual-1937.pdf)
 - [Philco acoustic-clarifier patent US2059929A](https://patents.google.com/patent/US2059929A/en)
 - [Philco Model 116 instructions](https://philcoradio.com/library/wp-content/uploads/2019/12/Philco-116X-Instructions.pdf)
 - [Radio-Craft, January 1937 service data](https://www.rsp-italy.it/Electronics/Magazines/Radio-Craft/_contents/Radio-Craft%201937%2001.pdf)
@@ -268,12 +308,11 @@ receiver pipeline.
 The remediation is complete only when all of the following hold:
 
 1. The live and calibration paths share one explicit audio-bandwidth contract.
-2. The full-chain high -3 dB edge is between 2.5 and 5.5 kHz in the wide/default
-   fidelity setting.
-3. Speaker reference RMS ratio is between 0.85 and 1.10 without digital,
+2. The 37-116 full-chain high -3 dB edge is between 2.5 and 5.5 kHz.
+3. Its speaker reference RMS ratio is between 0.85 and 1.10 without digital,
    speaker, or power clipping at nominal input.
 4. IF center, detector time constant, AVC time constant, nominal SINAD, and
-   nominal power remain within their existing reference bands.
+   nominal power remain within each receiver's explicit reference bands.
 5. Magnetic tuning measurably reduces offsets across its documented capture
    range and never reinforces the error.
 6. Every requested node-physics section runs without stack overflow.
@@ -293,6 +332,12 @@ The remediation is complete only when all of the following hold:
 12. `strong-local` is exactly transparent to ideal AM ingress, and no profile
     adds a permanent audio or RF whistle; the optional interferer has an
     explicit quiet interval and enters only as a second RF carrier.
+13. `typical-1930s` uses a single-ended output topology, no separate RF stage or
+    magnetic tuning, approximately 2 W nominal output, and profile-specific
+    reference bands rather than inheriting the 37-116's high-fidelity targets.
+14. Playback starts unfiltered and cycles unfiltered -> typical -> Philco ->
+    unfiltered. Receiver replacement fades to dry, rebuilds at the dry boundary,
+    and fades in so a live model change cannot introduce a hard discontinuity.
 
 ## Remediation record
 
@@ -348,10 +393,25 @@ The remediation is complete only when all of the following hold:
   preview then calls the original ideal AM path directly; this is an explicit
   contract, not a set of neutral multipliers hidden in the hot loop. Playback,
   export, and CLI option ownership all resolve the same profile factory.
+- A second physical receiver factory now owns the `typical-1930s` model. It
+  removes the 37-116's RF stage, magnetic tuning, interstage transformer,
+  push-pull pair, large Type-W speaker, and clarifiers. Its single 41 pentode
+  drives a 9 kohm-to-3.5 ohm transformer model with the documented 450 ohm
+  primary resistance, followed by a distinct five-inch speaker and compact
+  open-back cabinet reconstruction.
+- Full receiver reinitialization now invalidates the front-end and IF loaded-can
+  revision caches. Before this fix, switching profiles could retain the former
+  receiver's tuned networks when both happened to reach the same revision
+  number even though the visible configuration had changed.
+- Radio playback state is a three-value mode rather than an enabled boolean.
+  The producer-owned bypass transition fades an active receiver to dry before
+  committing a replacement profile and then fades the new wet signal in. This
+  reuses the block-invariant click protection and keeps DSP rebuilds off the
+  hardware callback.
 
 ### Post-fix measurements
 
-Measured with the production preset at 48 kHz, 5.5 kHz requested audio
+Measured with the Philco 37-116 profile at 48 kHz, 5 kHz requested audio
 bandwidth, and noise setting 0.012.
 
 | Metric | Measured | Required | Result |
@@ -360,9 +420,9 @@ bandwidth, and noise setting 0.012.
 | High -3 dB edge | 2.5 kHz | 2.5-5.5 kHz | pass |
 | Detector time constant | 45.16 us | 35-55 us | pass |
 | AVC time constant | 75.0 ms | 60-90 ms | pass |
-| Nominal SINAD | 37.30 dB | at least 35 dB | pass |
-| Speaker reference ratio | 0.866 | 0.85-1.10 | pass |
-| Maximum digital output | 0.893 | at most 0.95 | pass |
+| Nominal SINAD | 37.11 dB | at least 35 dB | pass |
+| Speaker reference ratio | 0.889 | 0.85-1.10 | pass |
+| Maximum digital output | 0.910 | at most 0.95 | pass |
 | IF center | 470 kHz | 469-471 kHz | pass |
 | Nominal output power | 14.52 W | 12-18 W | pass |
 | Speaker load at 1 kHz | 3.27 ohm | 3-5 ohm | pass |
@@ -371,6 +431,25 @@ bandwidth, and noise setting 0.012.
 Nominal power, speaker, output-clip, and final-limiter flags all remained zero.
 The longer carrier-burst diagnostic measured non-zero AVC edges of 59.64 ms
 rise and 120.57 ms fall; the previous all-zero result was a test-fixture error.
+
+The representative mass-market profile, measured with the same 48 kHz harness
+at 5 kHz requested audio bandwidth, produced:
+
+| Metric | Measured | Profile band | Result |
+| --- | ---: | ---: | --- |
+| Low -3 dB edge | 150 Hz | 100-250 Hz | pass |
+| High -3 dB edge | 2.5 kHz | 2.2-3.5 kHz | pass |
+| Intermodulation distortion | -25.51 dB | at most -25 dB | pass |
+| Detector time constant | 41.18 us | 35-55 us | pass |
+| AVC time constant | 75.0 ms | 60-90 ms | pass |
+| Nominal SINAD | 21.20 dB | at least 20 dB | pass |
+| Speaker reference ratio | 0.315 | 0.18-0.40 | pass |
+| Maximum digital output | 0.903 | at most 0.95 | pass |
+| IF center | 470 kHz | 469-471 kHz | pass |
+| Nominal output power | 2.083 W | 1.5-2.5 W | pass |
+
+Power, speaker, output-clip, and final-limiter flags all remained zero for this
+profile as well.
 
 The dedicated cabinet comparison, which removes only the clarifier damping
 from the untreated fixture, measured:

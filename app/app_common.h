@@ -3,6 +3,7 @@
 
 #include <string>
 
+#include "audio/audiofilter/radio1938/radio_receiver_profile.h"
 #include "audio/audiofilter/radio1938/radio_reception_profile.h"
 #include "core/runtime_defaults.h"
 #include "core/shell_open_mode.h"
@@ -12,6 +13,7 @@ struct Options {
   std::string output;
   std::string radioSettingsPath;
   std::string radioPresetName;
+  RadioReceiverProfile radioReceiverProfile = kDefaultRadioReceiverProfile;
   RadioReceptionProfile radioReceptionProfile =
       kDefaultRadioReceptionProfile;
   int trackIndex = 0;

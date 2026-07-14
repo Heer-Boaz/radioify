@@ -3,6 +3,7 @@
 
 #include "../../radio.h"
 
-void applyRadioPreset(Radio1938& radio, Radio1938::Preset preset);
+void applyRadioReceiverProfile(Radio1938& radio,
+                               RadioReceiverProfile profile);
 
 #endif  // RADIOIFY_AUDIOFILTER_RADIO_PRESETS_H

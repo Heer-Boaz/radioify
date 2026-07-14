@@ -27,7 +27,110 @@ bool powerUsesInternalOversampling(const Radio1938& radio) {
   return powerInternalOversampleFactor(radio) > 1.0f;
 }
 
+bool powerUsesSingleEndedOutput(const Radio1938& radio) {
+  return radio.power.topology ==
+         Radio1938::PowerNodeState::Topology::CapCoupledSingleEnded;
+}
+
+float runSingleEndedPowerStageSample(Radio1938& radio, float y) {
+  auto& power = radio.power;
+  auto& controlSense = radio.controlSense;
+  const bool calibrationEnabled = radio.calibration.enabled;
+  if (calibrationEnabled) {
+    radio.calibration.validationSampleCount++;
+  }
+
+  float outputSupplyScale = computePowerBranchSupplyScale(radio, 1.0f);
+  float sampleRate = (power.internalSampleRate > 0.0f) ? power.internalSampleRate
+                                                        : radio.sampleRate;
+  float dt = 1.0f / requirePositiveFinite(sampleRate);
+  float previousCapVoltage = power.gridCouplingCapVoltage;
+  power.gridVoltage = solveCapCoupledGridVoltage(
+      y, previousCapVoltage, dt, power.gridCouplingCapFarads,
+      power.driverSourceResistanceOhms, power.outputGridLeakResistanceOhms,
+      power.outputTubeBiasVolts, power.outputGridCurrentResistanceOhms);
+  float seriesCurrent =
+      (y - previousCapVoltage - power.gridVoltage) /
+      (power.driverSourceResistanceOhms +
+       dt / requirePositiveFinite(power.gridCouplingCapFarads));
+  power.gridCouplingCapVoltage +=
+      dt * (seriesCurrent / requirePositiveFinite(power.gridCouplingCapFarads));
+  power.outputGridAVolts = power.gridVoltage;
+  power.outputGridBVolts = 0.0f;
+
+  if (calibrationEnabled) {
+    radio.calibration.outputGridAVolts.accumulate(power.outputGridAVolts);
+    radio.calibration.outputGridBVolts.accumulate(0.0f);
+    bool outputGridPositive =
+        (power.outputTubeBiasVolts + power.outputGridAVolts) > 0.0f;
+    if (outputGridPositive) {
+      radio.calibration.outputGridAPositiveSamples++;
+      radio.calibration.outputGridPositiveSamples++;
+    }
+  }
+
+  float outputPlateQuiescent =
+      requirePositiveFinite(power.outputTubeQuiescentPlateVolts *
+                            outputSupplyScale);
+  constexpr float kOutputPrimaryLoadResistance = 0.0f;
+  uint64_t outputStartNs = calibrationEnabled ? monotonicNowNs() : 0;
+  OutputStageSubstepResult outputSolved = runSingleEndedOutputStageSubsteps(
+      power.outputTransformer, radio.speakerStage.speaker, power,
+      outputPlateQuiescent, power.outputGridAVolts,
+      kOutputPrimaryLoadResistance);
+  if (calibrationEnabled) {
+    power.outputSolveTimeNs += monotonicNowNs() - outputStartNs;
+    power.outputTransformerSubstepCount +=
+        static_cast<uint64_t>(std::max(outputSolved.transformerSubsteps, 0));
+    power.outputNewtonIterationCount +=
+        static_cast<uint64_t>(std::max(outputSolved.totalNewtonIterations, 0));
+    power.outputNewtonMaxIterations = std::max(
+        power.outputNewtonMaxIterations,
+        static_cast<uint32_t>(std::max(outputSolved.maxNewtonIterations, 0)));
+  }
+
+  power.outputTransformer = outputSolved.transformer;
+  float averagePrimaryVoltage = outputSolved.averagePrimaryVoltage;
+  float actualPlateCurrent = outputSolved.averagePlateCurrentA;
+  y = outputSolved.averageSecondaryVoltage;
+  if (power.postLpHz > 0.0f) {
+    y = power.postLpf.process(y);
+  }
+  radio.speakerStage.physicalDriveVolts = y;
+
+  if (calibrationEnabled) {
+    radio.calibration.outputPrimaryVolts.accumulate(averagePrimaryVoltage);
+    radio.calibration.speakerSecondaryVolts.accumulate(y);
+    radio.calibration.maxOutputPlateCurrentAAmps = std::max(
+        radio.calibration.maxOutputPlateCurrentAAmps, actualPlateCurrent);
+    radio.calibration.maxSpeakerSecondaryVolts =
+        std::max(radio.calibration.maxSpeakerSecondaryVolts, std::fabs(y));
+    radio.calibration.maxSpeakerReferenceRatio = std::max(
+        radio.calibration.maxSpeakerReferenceRatio,
+        std::fabs(y) /
+            std::max(radio.output.digitalReferenceSpeakerVoltsPeak, 1e-3f));
+  }
+
+  float quiescentSupplyCurrent =
+      requirePositiveFinite(power.outputTubeQuiescentPlateCurrentAmps);
+  float load = std::max(
+      0.0f, (actualPlateCurrent - quiescentSupplyCurrent) /
+                quiescentSupplyCurrent);
+  if (load > power.sagEnv) {
+    power.sagEnv = power.sagAtk * power.sagEnv + (1.0f - power.sagAtk) * load;
+  } else {
+    power.sagEnv = power.sagRel * power.sagEnv + (1.0f - power.sagRel) * load;
+  }
+  controlSense.powerSagSense = power.sagEnv;
+  advanceRectifierRipplePhase(radio);
+  return radio.speakerStage.speaker.electricalCurrentAmps *
+         radio.speakerStage.speaker.effectiveVoiceCoilResistanceOhms;
+}
+
 float runPowerStageSample(Radio1938& radio, float y) {
+  if (powerUsesSingleEndedOutput(radio)) {
+    return runSingleEndedPowerStageSample(radio, y);
+  }
   auto& power = radio.power;
   auto& controlSense = radio.controlSense;
   const bool calibrationEnabled = radio.calibration.enabled;
@@ -210,20 +313,16 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
   auto& power = radio.power;
   power.internalSampleRate =
       radio.sampleRate * powerInternalOversampleFactor(radio);
-  power.tubePlateDcVolts =
-      power.tubePlateSupplyVolts -
-      power.tubePlateCurrentAmps * power.interstagePrimaryResistanceOhms;
+  const bool singleEnded = powerUsesSingleEndedOutput(radio);
+  float outputPrimaryDcResistance =
+      power.outputTransformerPrimaryResistanceOhms *
+      (singleEnded ? 1.0f : 0.5f);
   power.outputTubePlateDcVolts =
       power.outputTubePlateSupplyVolts -
-      power.outputTubePlateCurrentAmps *
-          (0.5f * power.outputTransformerPrimaryResistanceOhms);
-  assert(std::fabs(power.tubePlateSupplyVolts -
-                   power.tubePlateCurrentAmps *
-                       power.interstagePrimaryResistanceOhms -
-                   power.tubePlateDcVolts) < 1.0f);
+      power.outputTubePlateCurrentAmps * outputPrimaryDcResistance;
   assert(std::fabs(power.outputTubePlateSupplyVolts -
                    power.outputTubePlateCurrentAmps *
-                       (0.5f * power.outputTransformerPrimaryResistanceOhms) -
+                       outputPrimaryDcResistance -
                    power.outputTubePlateDcVolts) < 1.0f);
   float osCut = radio.sampleRate * radio.globals.oversampleCutoffFraction;
   power.osLpIn.setLowpass(power.internalSampleRate, osCut, kRadioBiquadQ);
@@ -246,54 +345,91 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
       radio.receiverCircuit.tubePlateResistanceOhms);
   assert(std::isfinite(power.driverSourceResistanceOhms) &&
          power.driverSourceResistanceOhms > 0.0f);
-  TriodeOperatingPoint driverOp = solveTriodeOperatingPoint(
-      power.tubePlateSupplyVolts, power.interstagePrimaryResistanceOhms,
-      power.tubeBiasVolts, power.tubePlateDcVolts, power.tubePlateCurrentAmps,
-      power.tubeMutualConductanceSiemens, power.tubeMu);
-  power.tubeQuiescentPlateVolts = driverOp.plateVolts;
-  power.tubeQuiescentPlateCurrentAmps = driverOp.plateCurrentAmps;
-  power.tubePlateResistanceOhms = driverOp.rpOhms;
-  power.tubeTriodeModel = driverOp.model;
-  configureRuntimeTriodeLut(power.tubeTriodeLut, power.tubeTriodeModel,
-                            power.tubeBiasVolts, power.tubePlateSupplyVolts,
-                            96.0f, 18.0f);
-  assert((std::fabs(power.tubeQuiescentPlateVolts - power.tubePlateDcVolts) <=
-          power.operatingPointToleranceVolts) &&
-         "6F6 driver operating point diverged from the preset target");
+  if (singleEnded) {
+    PentodeOperatingPoint outputOp = solvePentodeOperatingPoint(
+        power.outputTubePlateSupplyVolts, power.outputTubeScreenVolts,
+        outputPrimaryDcResistance, power.outputTubeBiasVolts,
+        power.outputTubePlateDcVolts, power.outputTubePlateCurrentAmps,
+        power.outputTubeMutualConductanceSiemens,
+        power.outputTubePlateKneeVolts, power.outputTubeGridSoftnessVolts,
+        power.outputTubeCutoffVolts);
+    power.outputTubeQuiescentPlateVolts = outputOp.plateVolts;
+    power.outputTubeQuiescentPlateCurrentAmps = outputOp.plateCurrentAmps;
+    power.outputTubePlateResistanceOhms = outputOp.rpOhms;
+    power.outputTubePentodeCurrentForGrid =
+        prepareFixedPlatePentodeEvaluator(
+            outputOp.plateVolts, power.outputTubeScreenVolts,
+            power.outputTubeBiasVolts, power.outputTubeCutoffVolts,
+            outputOp.plateVolts, power.outputTubeScreenVolts,
+            outputOp.plateCurrentAmps,
+            power.outputTubeMutualConductanceSiemens,
+            power.outputTubePlateKneeVolts,
+            power.outputTubeGridSoftnessVolts);
+    assert((std::fabs(power.outputTubeQuiescentPlateVolts -
+                      power.outputTubePlateDcVolts) <=
+            power.outputOperatingPointToleranceVolts) &&
+           "41 output operating point diverged from the preset target");
+    power.tubePlateVoltage = 0.0f;
+    power.interstageTransformer.clearState();
+  } else {
+    power.tubePlateDcVolts =
+        power.tubePlateSupplyVolts -
+        power.tubePlateCurrentAmps * power.interstagePrimaryResistanceOhms;
+    assert(std::fabs(power.tubePlateSupplyVolts -
+                     power.tubePlateCurrentAmps *
+                         power.interstagePrimaryResistanceOhms -
+                     power.tubePlateDcVolts) < 1.0f);
+    TriodeOperatingPoint driverOp = solveTriodeOperatingPoint(
+        power.tubePlateSupplyVolts, power.interstagePrimaryResistanceOhms,
+        power.tubeBiasVolts, power.tubePlateDcVolts,
+        power.tubePlateCurrentAmps, power.tubeMutualConductanceSiemens,
+        power.tubeMu);
+    power.tubeQuiescentPlateVolts = driverOp.plateVolts;
+    power.tubeQuiescentPlateCurrentAmps = driverOp.plateCurrentAmps;
+    power.tubePlateResistanceOhms = driverOp.rpOhms;
+    power.tubeTriodeModel = driverOp.model;
+    configureRuntimeTriodeLut(power.tubeTriodeLut, power.tubeTriodeModel,
+                              power.tubeBiasVolts,
+                              power.tubePlateSupplyVolts, 96.0f, 18.0f);
+    assert((std::fabs(power.tubeQuiescentPlateVolts -
+                      power.tubePlateDcVolts) <=
+            power.operatingPointToleranceVolts) &&
+           "6F6 driver operating point diverged from the preset target");
 
-  TriodeOperatingPoint outputOp = solveTriodeOperatingPoint(
-      power.outputTubePlateSupplyVolts,
-      0.5f * power.outputTransformerPrimaryResistanceOhms,
-      power.outputTubeBiasVolts, power.outputTubePlateDcVolts,
-      power.outputTubePlateCurrentAmps,
-      power.outputTubeMutualConductanceSiemens, power.outputTubeMu);
-  power.outputTubeQuiescentPlateVolts = outputOp.plateVolts;
-  power.outputTubeQuiescentPlateCurrentAmps = outputOp.plateCurrentAmps;
-  power.outputTubePlateResistanceOhms = outputOp.rpOhms;
-  power.outputTubeTriodeModel = outputOp.model;
-  configureRuntimeTriodeLut(power.outputTubeTriodeLut,
-                            power.outputTubeTriodeModel,
-                            power.outputTubeBiasVolts,
-                            power.outputTubePlateSupplyVolts, 120.0f, 24.0f);
-  assert((std::fabs(power.outputTubeQuiescentPlateVolts -
-                    power.outputTubePlateDcVolts) <=
-          power.outputOperatingPointToleranceVolts) &&
-         "6B4 output operating point diverged from the preset target");
+    TriodeOperatingPoint outputOp = solveTriodeOperatingPoint(
+        power.outputTubePlateSupplyVolts, outputPrimaryDcResistance,
+        power.outputTubeBiasVolts, power.outputTubePlateDcVolts,
+        power.outputTubePlateCurrentAmps,
+        power.outputTubeMutualConductanceSiemens, power.outputTubeMu);
+    power.outputTubeQuiescentPlateVolts = outputOp.plateVolts;
+    power.outputTubeQuiescentPlateCurrentAmps = outputOp.plateCurrentAmps;
+    power.outputTubePlateResistanceOhms = outputOp.rpOhms;
+    power.outputTubeTriodeModel = outputOp.model;
+    configureRuntimeTriodeLut(power.outputTubeTriodeLut,
+                              power.outputTubeTriodeModel,
+                              power.outputTubeBiasVolts,
+                              power.outputTubePlateSupplyVolts, 120.0f, 24.0f);
+    assert((std::fabs(power.outputTubeQuiescentPlateVolts -
+                      power.outputTubePlateDcVolts) <=
+            power.outputOperatingPointToleranceVolts) &&
+           "6B4 output operating point diverged from the preset target");
 
-  power.tubePlateVoltage = power.tubeQuiescentPlateVolts;
+    power.tubePlateVoltage = power.tubeQuiescentPlateVolts;
+    power.interstageTransformer.setModel(
+        power.internalSampleRate,
+        power.interstagePrimaryLeakageInductanceHenries,
+        power.interstageMagnetizingInductanceHenries,
+        power.interstageTurnsRatioPrimaryToSecondary,
+        power.interstagePrimaryResistanceOhms,
+        power.interstagePrimaryCoreLossResistanceOhms,
+        power.interstagePrimaryShuntCapFarads,
+        power.interstageSecondaryLeakageInductanceHenries,
+        power.interstageSecondaryResistanceOhms,
+        power.interstageSecondaryShuntCapFarads,
+        power.interstageIntegrationSubsteps);
+  }
   power.outputGridAVolts = 0.0f;
   power.outputGridBVolts = 0.0f;
-  power.interstageTransformer.setModel(
-      power.internalSampleRate, power.interstagePrimaryLeakageInductanceHenries,
-      power.interstageMagnetizingInductanceHenries,
-      power.interstageTurnsRatioPrimaryToSecondary,
-      power.interstagePrimaryResistanceOhms,
-      power.interstagePrimaryCoreLossResistanceOhms,
-      power.interstagePrimaryShuntCapFarads,
-      power.interstageSecondaryLeakageInductanceHenries,
-      power.interstageSecondaryResistanceOhms,
-      power.interstageSecondaryShuntCapFarads,
-      power.interstageIntegrationSubsteps);
   power.outputTransformer.setModel(
       power.internalSampleRate,
       power.outputTransformerPrimaryLeakageInductanceHenries,
@@ -317,11 +453,11 @@ void RadioPowerNode::init(Radio1938& radio, RadioInitContext&) {
     power.outputTransformerAffineStateA = outputAffine.stateA;
     power.outputTransformerAffineSlope = outputAffine.slope;
   }
-  // Derive the digital speaker reference from the modeled 6B4/output-transformer
-  // combination instead of a hand-tuned watt scalar. This keeps the digital
-  // scale anchored to the clean power the current tube/load model can actually
-  // produce.
-  power.nominalOutputPowerWatts = estimateOutputStageNominalPowerWatts(power);
+  // Derive the digital speaker reference from the active tube/transformer
+  // topology instead of a hand-tuned gain scalar.
+  power.nominalOutputPowerWatts =
+      singleEnded ? estimateSingleEndedOutputStageNominalPowerWatts(power)
+                  : estimateOutputStageNominalPowerWatts(power);
   assert(std::isfinite(power.nominalOutputPowerWatts) &&
          power.nominalOutputPowerWatts > 0.0f);
   radio.output.digitalReferenceSpeakerVoltsPeak = std::sqrt(

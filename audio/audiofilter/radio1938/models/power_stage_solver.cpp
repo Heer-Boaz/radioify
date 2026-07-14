@@ -224,6 +224,76 @@ OutputPrimarySolveResult solveOutputPrimaryAffine(
                                          initialPrimaryVoltage);
 }
 
+namespace {
+
+struct SingleEndedPrimarySolveResult {
+  float primaryVoltage = 0.0f;
+  float driveCurrent = 0.0f;
+  float plateCurrent = 0.0f;
+  int iterations = 0;
+};
+
+float evaluateSingleEndedPlateCurrent(
+    const Radio1938::PowerNodeState& power,
+    float outputPlateQuiescent,
+    float outputGridVolts,
+    float primaryVoltage) {
+  float gridControlledCurrent =
+      power.outputTubePentodeCurrentForGrid.eval(
+          power.outputTubeBiasVolts + outputGridVolts);
+  float plateVoltage = std::max(outputPlateQuiescent - primaryVoltage, 0.0f);
+  float plateFeedbackCurrent =
+      (plateVoltage - power.outputTubeQuiescentPlateVolts) /
+      requirePositiveFinite(power.outputTubePlateResistanceOhms);
+  return std::max(gridControlledCurrent + plateFeedbackCurrent, 0.0f);
+}
+
+SingleEndedPrimarySolveResult solveSingleEndedPrimaryAffine(
+    const AffineTransformerProjection& projection,
+    const Radio1938::PowerNodeState& power,
+    float outputPlateQuiescent,
+    float outputGridVolts,
+    float initialPrimaryVoltage) {
+  float primaryVoltage = initialPrimaryVoltage;
+  constexpr float kPrimaryVoltageTolerance = 5e-5f;
+  int iterations = 0;
+
+  for (int iter = 0; iter < 4; ++iter) {
+    iterations = iter + 1;
+    float plateCurrent = evaluateSingleEndedPlateCurrent(
+        power, outputPlateQuiescent, outputGridVolts, primaryVoltage);
+    float driveCurrent =
+        plateCurrent - power.outputTubeQuiescentPlateCurrentAmps;
+    float f = projection.base.primaryVoltage +
+              projection.slope.primaryVoltage * driveCurrent - primaryVoltage;
+    bool plateConducting = plateCurrent > 0.0f &&
+                           outputPlateQuiescent - primaryVoltage > 0.0f;
+    float driveSlope =
+        plateConducting
+            ? -1.0f /
+                  requirePositiveFinite(power.outputTubePlateResistanceOhms)
+            : 0.0f;
+    float df = projection.slope.primaryVoltage * driveSlope - 1.0f;
+    assert(std::isfinite(df) && std::fabs(df) >= 1e-9f);
+    float deltaPrimaryVoltage = f / df;
+    primaryVoltage -= deltaPrimaryVoltage;
+    assert(std::isfinite(primaryVoltage));
+    if (std::fabs(deltaPrimaryVoltage) < kPrimaryVoltageTolerance) break;
+  }
+
+  float plateCurrent = evaluateSingleEndedPlateCurrent(
+      power, outputPlateQuiescent, outputGridVolts, primaryVoltage);
+  SingleEndedPrimarySolveResult result{};
+  result.primaryVoltage = primaryVoltage;
+  result.driveCurrent =
+      plateCurrent - power.outputTubeQuiescentPlateCurrentAmps;
+  result.plateCurrent = plateCurrent;
+  result.iterations = iterations;
+  return result;
+}
+
+}  // namespace
+
 void configureSpeakerElectromechanics(SpeakerSim& speaker,
                                       float sampleRate,
                                       float nominalLoadOhms) {
@@ -435,6 +505,58 @@ OutputStageSubstepResult runOutputStageSubsteps(
   return result;
 }
 
+OutputStageSubstepResult runSingleEndedOutputStageSubsteps(
+    CurrentDrivenTransformer transformer,
+    SpeakerSim& speaker,
+    const Radio1938::PowerNodeState& power,
+    float outputPlateQuiescent,
+    float outputGridVolts,
+    float outputPrimaryLoadResistance) {
+  const int transformerSubsteps = std::max(transformer.integrationSubsteps, 1);
+  transformer.integrationSubsteps = 1;
+
+  float primaryVoltageSum = 0.0f;
+  float secondaryVoltageSum = 0.0f;
+  float actualPlateCurrentSum = 0.0f;
+  int totalIterations = 0;
+  int maxIterations = 0;
+
+  for (int step = 0; step < transformerSubsteps; ++step) {
+    SpeakerElectricalLinearization speakerLoad =
+        linearizeSpeakerElectricalLoad(speaker, power.outputLoadResistanceOhms,
+                                       transformer.dtSub);
+    AffineTransformerProjection affineOut = buildAffineProjection(
+        transformer, speakerLoad.load, outputPrimaryLoadResistance);
+    SingleEndedPrimarySolveResult outputSolve = solveSingleEndedPrimaryAffine(
+        affineOut, power, outputPlateQuiescent, outputGridVolts,
+        transformer.primaryVoltage);
+    CurrentDrivenTransformerSample outputSample = transformer.step(
+        outputSolve.driveCurrent, speakerLoad.load, outputPrimaryLoadResistance);
+    commitSpeakerElectricalLoad(speaker, speakerLoad,
+                                outputSample.secondaryVoltage);
+    primaryVoltageSum += outputSample.primaryVoltage;
+    secondaryVoltageSum += outputSample.secondaryVoltage;
+    actualPlateCurrentSum += outputSolve.plateCurrent;
+    totalIterations += outputSolve.iterations;
+    maxIterations = std::max(maxIterations, outputSolve.iterations);
+  }
+
+  transformer.integrationSubsteps = transformerSubsteps;
+  OutputStageSubstepResult result{};
+  result.transformer = transformer;
+  result.averagePrimaryVoltage =
+      primaryVoltageSum / static_cast<float>(transformerSubsteps);
+  result.averageSecondaryVoltage =
+      secondaryVoltageSum / static_cast<float>(transformerSubsteps);
+  result.averagePlateCurrentA =
+      actualPlateCurrentSum / static_cast<float>(transformerSubsteps);
+  result.averagePlateCurrentB = 0.0f;
+  result.transformerSubsteps = transformerSubsteps;
+  result.totalNewtonIterations = totalIterations;
+  result.maxNewtonIterations = maxIterations;
+  return result;
+}
+
 float estimateOutputStageNominalPowerWatts(
     const Radio1938::PowerNodeState& power) {
   float loadResistance = requirePositiveFinite(power.outputLoadResistanceOhms);
@@ -471,6 +593,56 @@ float estimateOutputStageNominalPowerWatts(
             gridB, transformer.primaryVoltage);
         auto outputSample =
             transformer.step(outputSolve.driveCurrent, loadResistance, 0.0f);
+        if (cycle >= kSettleCycles) {
+          sumSq += static_cast<double>(outputSample.secondaryVoltage) *
+                   static_cast<double>(outputSample.secondaryVoltage);
+          sampleCount++;
+        }
+      }
+    }
+
+    float secondaryRms =
+        static_cast<float>(std::sqrt(sumSq / std::max(sampleCount, 1)));
+    bestSecondaryRms = std::max(bestSecondaryRms, secondaryRms);
+  }
+
+  return (bestSecondaryRms * bestSecondaryRms) / loadResistance;
+}
+
+float estimateSingleEndedOutputStageNominalPowerWatts(
+    const Radio1938::PowerNodeState& power) {
+  float loadResistance = requirePositiveFinite(power.outputLoadResistanceOhms);
+  float outputPlateQuiescent =
+      requirePositiveFinite(power.outputTubeQuiescentPlateVolts);
+  float maxGridPeak =
+      0.92f * std::max(std::fabs(power.outputTubeBiasVolts), 1.0f);
+  constexpr int kAmplitudeSteps = 40;
+  constexpr int kSamplesPerCycle = 96;
+  constexpr int kSettleCycles = 6;
+  constexpr int kMeasureCycles = 2;
+  float bestSecondaryRms = 0.0f;
+
+  for (int step = 1; step <= kAmplitudeSteps; ++step) {
+    float gridPeak =
+        maxGridPeak * static_cast<float>(step) / static_cast<float>(kAmplitudeSteps);
+    CurrentDrivenTransformer transformer = power.outputTransformer;
+    transformer.clearState();
+    double sumSq = 0.0;
+    int sampleCount = 0;
+
+    for (int cycle = 0; cycle < (kSettleCycles + kMeasureCycles); ++cycle) {
+      for (int i = 0; i < kSamplesPerCycle; ++i) {
+        float phase = kRadioTwoPi * static_cast<float>(i) /
+                      static_cast<float>(kSamplesPerCycle);
+        float grid = gridPeak * std::sin(phase);
+        AffineTransformerProjection projection =
+            buildAffineProjection(transformer, loadResistance, 0.0f);
+        SingleEndedPrimarySolveResult outputSolve =
+            solveSingleEndedPrimaryAffine(projection, power,
+                                           outputPlateQuiescent, grid,
+                                           transformer.primaryVoltage);
+        CurrentDrivenTransformerSample outputSample = transformer.step(
+            outputSolve.driveCurrent, loadResistance, 0.0f);
         if (cycle >= kSettleCycles) {
           sumSq += static_cast<double>(outputSample.secondaryVoltage) *
                    static_cast<double>(outputSample.secondaryVoltage);

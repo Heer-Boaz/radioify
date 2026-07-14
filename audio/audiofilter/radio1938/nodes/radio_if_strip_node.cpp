@@ -204,6 +204,10 @@ void ensureIfStripConfigured(Radio1938& radio) {
 }  // namespace
 
 void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
+  // Profile switches restart tuning revisions from zero. Invalidate the old
+  // loaded-can configuration even if the next revision number happens to
+  // match the previous receiver.
+  radio.ifStrip.appliedConfigRevision = 0;
   ensureIfStripConfigured(radio);
 }
 

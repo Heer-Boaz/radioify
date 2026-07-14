@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -30,6 +31,7 @@
 #include "playback_backend.h"
 #include "queued_audio_source.h"
 #include "radio_bypass_transition.h"
+#include "radio_filter_mode.h"
 #include "playback_source_buffer.h"
 #include "output_volume_safety.h"
 #include "psfaudio.h"
@@ -74,7 +76,9 @@ struct AudioState {
   std::atomic<bool> paused{false};
   std::atomic<bool> hold{false};
   std::atomic<bool> finished{false};
-  std::atomic<bool> useRadio1938{true};
+  std::atomic<RadioFilterMode> radioFilterMode{kDefaultRadioFilterMode};
+  RadioReceiverProfile activeRadioReceiverProfile =
+      kDefaultRadioReceiverProfile;
   std::atomic<AudioMode> mode{AudioMode::None};
   const AudioBackendHandlers* backend = nullptr;
   std::atomic<bool> seekRequested{false};
@@ -130,7 +134,7 @@ struct AudioState {
 
 struct AudioPlaybackState {
   AudioState state{};
-  Radio1938 radio1938Template{};
+  std::array<Radio1938, 2> radio1938Templates{};
   bool deviceReady = false;
   bool decoderReady = false;
   bool enableAudio = false;
@@ -164,7 +168,7 @@ extern AudioPlaybackState gAudio;
 void appendAudioTimingLogLine(const char* line);
 void drainPlaybackPipelineForReplacement(AudioState* state);
 void rebuildRadioPreviewChain(AudioState* state);
-void configureRadioPlaybackTemplate();
+void configureRadioPlaybackTemplates();
 void prepareRadioPlaybackSource(AudioState* state);
 void audioPlaybackHoldClipAlert(AudioState* state);
 bool audioPlaybackFinishSeekPipelineTransition(AudioState* state,

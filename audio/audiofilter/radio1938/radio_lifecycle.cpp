@@ -62,16 +62,8 @@ void refreshIdentityDependentStages(Radio1938& radio) {
 
 }  // namespace
 
-std::string_view Radio1938::presetName(Preset preset) {
-  switch (preset) {
-    case Preset::Philco37116:
-      return "philco_37_116";
-  }
-  return "philco_37_116";
-}
-
 Radio1938::Radio1938() {
-  applyPreset(preset);
+  applyReceiverProfile(receiverProfile);
 }
 
 std::string_view Radio1938::passName(PassId id) {
@@ -79,21 +71,16 @@ std::string_view Radio1938::passName(PassId id) {
   return name.empty() ? "Unknown" : name;
 }
 
-bool Radio1938::applyPreset(std::string_view presetNameValue) {
-  if (presetNameValue == "philco_37_116") {
-    applyPreset(Preset::Philco37116);
-    return true;
-  }
-  if (presetNameValue == "philco_37_116x") {
-    applyPreset(Preset::Philco37116);
-    return true;
-  }
-  return false;
+bool Radio1938::applyReceiverProfile(std::string_view profileName) {
+  RadioReceiverProfile parsed = receiverProfile;
+  if (!parseRadioReceiverProfile(profileName, parsed)) return false;
+  applyReceiverProfile(parsed);
+  return true;
 }
 
-void Radio1938::applyPreset(Preset presetValue) {
-  preset = presetValue;
-  applyRadioPreset(*this, presetValue);
+void Radio1938::applyReceiverProfile(RadioReceiverProfile profile) {
+  receiverProfile = profile;
+  applyRadioReceiverProfile(*this, profile);
   if (!initialized) return;
   init(channels, sampleRate, bwHz, noiseWeight);
 }

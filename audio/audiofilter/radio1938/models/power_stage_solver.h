@@ -85,7 +85,18 @@ OutputStageSubstepResult runOutputStageSubsteps(
     float outputPlateQuiescent,
     float outputPrimaryLoadResistance);
 
+OutputStageSubstepResult runSingleEndedOutputStageSubsteps(
+    CurrentDrivenTransformer transformer,
+    SpeakerSim& speaker,
+    const Radio1938::PowerNodeState& power,
+    float outputPlateQuiescent,
+    float outputGridVolts,
+    float outputPrimaryLoadResistance);
+
 float estimateOutputStageNominalPowerWatts(
+    const Radio1938::PowerNodeState& power);
+
+float estimateSingleEndedOutputStageNominalPowerWatts(
     const Radio1938::PowerNodeState& power);
 
 DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(

@@ -296,6 +296,7 @@ int runRenderRadioCli(const Options& o) {
   std::filesystem::path outputPath = resolveRenderOutputPath(inputPath, o.output);
 
   Radio1938 radio1938Template;
+  radio1938Template.applyReceiverProfile(o.radioReceiverProfile);
   radio1938Template.init(1, 48000.0f, static_cast<float>(o.bwHz),
                          static_cast<float>(o.noise));
   if (!o.radioSettingsPath.empty()) {

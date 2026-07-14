@@ -27,12 +27,15 @@ static void showUsage(const char* exe) {
   logLine("  --out <path>           Same as out");
   logLine("  --radio-settings <path> Override audio-filter settings from a .toml file");
   logLine("  --radio-preset <name>   Select named audio-filter preset from the settings file");
+  logLine("  --radio-model <philco-37-116|typical-1930s>");
+  logLine("               Select the physical receiver, amplifier, speaker and cabinet");
   logLine("  --radio-reception <everyday-1938|strong-local>");
   logLine("               Select the AM reception environment");
   logLine("  --dry        Bypass radio processing for render/playback");
   logLine("  --no-ascii   Disable ASCII video rendering");
   logLine("  --no-audio   Disable audio playback");
-  logLine("  --no-radio   Start with radio filter disabled");
+  logLine("  --radio      Start with the selected radio model enabled");
+  logLine("  --no-radio   Start with radio filter disabled (default)");
   logLine("  --window     Open a window for video playback");
   logLine("  --ascii-debug-overlay Show ASCII playback debug overlay");
   logLine("  --shell-open-mode <same-instance|new-instance>");
@@ -149,6 +152,13 @@ Options parseArgs(int argc, char** argv) {
       o.radioPresetName = value;
       continue;
     }
+    if (arg == "--radio-model") {
+      std::string value = requireValue(arg, &i);
+      if (!parseRadioReceiverProfile(value, o.radioReceiverProfile)) {
+        die("--radio-model expects philco-37-116 or typical-1930s.");
+      }
+      continue;
+    }
     if (arg == "--radio-reception") {
       std::string value = requireValue(arg, &i);
       if (!parseRadioReceptionProfile(value, o.radioReceptionProfile)) {
@@ -230,6 +240,10 @@ Options parseArgs(int argc, char** argv) {
     }
     if (arg == "--no-audio") {
       o.enableAudio = false;
+      continue;
+    }
+    if (arg == "--radio") {
+      o.enableRadio = true;
       continue;
     }
     if (arg == "--no-radio") {

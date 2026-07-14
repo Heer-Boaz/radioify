@@ -3,6 +3,7 @@
 #include "audio/playback_source_buffer.h"
 #include "audio/playback_source_priming.h"
 #include "audio/radio_bypass_transition.h"
+#include "audio/radio_filter_mode.h"
 
 #include <algorithm>
 #include <cmath>
@@ -411,6 +412,69 @@ void expectRadioBypassCrossfadeIsBlockInvariant() {
              "radio bypass continuation after split blocks");
 }
 
+void expectRadioFilterCycleContract() {
+  if (kDefaultRadioFilterMode != RadioFilterMode::Off) {
+    fail("Radio filter must start dry by default.");
+  }
+  if (kDefaultRadioReceiverProfile != RadioReceiverProfile::Typical1930s) {
+    fail("The first receiver in the radio cycle must be typical-1930s.");
+  }
+
+  RadioFilterMode mode = kDefaultRadioFilterMode;
+  mode = nextRadioFilterMode(mode);
+  if (mode != RadioFilterMode::Typical1930s ||
+      !radioFilterModeEnabled(mode) ||
+      radioFilterModeReceiverProfile(mode) !=
+          RadioReceiverProfile::Typical1930s ||
+      radioFilterModeLabel(mode) != "Radio: Typical") {
+    fail("First radio-cycle step is not the typical-1930s receiver.");
+  }
+
+  mode = nextRadioFilterMode(mode);
+  if (mode != RadioFilterMode::Philco37116 ||
+      radioFilterModeReceiverProfile(mode) !=
+          RadioReceiverProfile::Philco37116 ||
+      radioFilterModeLabel(mode) != "Radio: Philco") {
+    fail("Second radio-cycle step is not the Philco 37-116.");
+  }
+
+  mode = nextRadioFilterMode(mode);
+  if (mode != RadioFilterMode::Off || radioFilterModeEnabled(mode) ||
+      radioFilterModeLabel(mode) != "Radio: Off") {
+    fail("Third radio-cycle step does not return to dry playback.");
+  }
+}
+
+void expectWetReceiverReplacementCrossfadesThroughDry() {
+  RadioBypassTransition transition;
+  transition.reset(true, 400);
+  if (!transition.requestWetReplacement()) {
+    fail("Wet receiver replacement did not start.");
+  }
+
+  float oldWet[] = {1.0f, 1.0f, 1.0f, 1.0f};
+  const float dry[] = {0.0f, 0.0f, 0.0f, 0.0f};
+  transition.blend(oldWet, dry, 4, 1, true, 400);
+  expectNear(oldWet[0], 1.00f, 1e-6f, "receiver fade-out frame 0");
+  expectNear(oldWet[1], 0.75f, 1e-6f, "receiver fade-out frame 1");
+  expectNear(oldWet[2], 0.50f, 1e-6f, "receiver fade-out frame 2");
+  expectNear(oldWet[3], 0.25f, 1e-6f, "receiver fade-out frame 3");
+  if (!transition.wetReplacementReadyToCommit() ||
+      !transition.commitWetReplacement()) {
+    fail("Receiver replacement did not reach its dry commit point.");
+  }
+
+  float newWet[] = {1.0f, 1.0f, 1.0f, 1.0f};
+  transition.blend(newWet, dry, 4, 1, true, 400);
+  expectNear(newWet[0], 0.00f, 1e-6f, "receiver fade-in frame 0");
+  expectNear(newWet[1], 0.25f, 1e-6f, "receiver fade-in frame 1");
+  expectNear(newWet[2], 0.50f, 1e-6f, "receiver fade-in frame 2");
+  expectNear(newWet[3], 0.75f, 1e-6f, "receiver fade-in frame 3");
+  if (transition.wetReplacementActive()) {
+    fail("Receiver replacement did not finish after the wet fade-in.");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -431,5 +495,7 @@ int main() {
   expectPlaybackSourceBufferWrapsCleanly();
   expectRadioBypassCrossfadesAtProducerBoundary();
   expectRadioBypassCrossfadeIsBlockInvariant();
+  expectRadioFilterCycleContract();
+  expectWetReceiverReplacementCrossfadesThroughDry();
   return 0;
 }

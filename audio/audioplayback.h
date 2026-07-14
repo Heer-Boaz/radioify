@@ -11,6 +11,7 @@
 #include "core/runtime_defaults.h"
 #include "kssoptions.h"
 #include "nsfoptions.h"
+#include "radio_filter_mode.h"
 #include "vgmoptions.h"
 
 struct AudioPerfStats {
@@ -50,6 +51,7 @@ struct AudioPlaybackConfig {
   bool dry = kDefaultDryAudioEnabled;
   std::string radioSettingsPath;
   std::string radioPresetName;
+  RadioReceiverProfile radioReceiverProfile = kDefaultRadioReceiverProfile;
   RadioReceptionProfile radioReceptionProfile =
       kDefaultRadioReceptionProfile;
   int bwHz = kDefaultRadioBandwidthHz;
@@ -111,6 +113,9 @@ bool audioIsPrimed();
 bool audioIsPaused();
 bool audioIsFinished();
 bool audioIsRadioEnabled();
+RadioFilterMode audioGetRadioFilterMode();
+RadioReceiverProfile audioGetRadioReceiverProfile();
+std::string_view audioGetRadioFilterLabel();
 bool audioIsHolding();
 
 AudioPerfStats audioGetPerfStats();
@@ -119,7 +124,7 @@ void audioTogglePause();
 void audioSeekBy(int direction);
 void audioSeekToRatio(double ratio);
 void audioSeekToSec(double sec);
-void audioToggleRadio();
+void audioCycleRadioFilter();
 void audioToggle50Hz();
 void audioSetHold(bool hold);
 void audioAdjustVolume(float delta);

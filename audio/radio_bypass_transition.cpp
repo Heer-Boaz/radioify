@@ -7,10 +7,11 @@
 void RadioBypassTransition::reset(bool radioEnabled, uint32_t sampleRate) {
   wetFrames_ = radioEnabled ? audioPipelineTransitionFrames(sampleRate) : 0;
   wetSignalActive_ = radioEnabled;
+  wetReplacementPhase_ = WetReplacementPhase::None;
 }
 
 bool RadioBypassTransition::needsWetSignal(bool radioEnabled) const {
-  return radioEnabled || wetFrames_ > 0;
+  return radioEnabled || wetFrames_ > 0 || wetReplacementActive();
 }
 
 uint32_t RadioBypassTransition::blendFramesRemaining(
@@ -18,11 +19,43 @@ uint32_t RadioBypassTransition::blendFramesRemaining(
     uint32_t sampleRate) const {
   const uint32_t transitionFrames =
       audioPipelineTransitionFrames(sampleRate);
+  if (wetReplacementPhase_ == WetReplacementPhase::FadeOut) {
+    return wetFrames_;
+  }
+  if (wetReplacementPhase_ == WetReplacementPhase::FadeIn) {
+    return transitionFrames - wetFrames_;
+  }
   return radioEnabled ? transitionFrames - wetFrames_ : wetFrames_;
 }
 
 bool RadioBypassTransition::activateWetSignal(bool radioEnabled) {
   if (!needsWetSignal(radioEnabled) || wetSignalActive_) return false;
+  wetSignalActive_ = true;
+  return true;
+}
+
+bool RadioBypassTransition::requestWetReplacement() {
+  if (!wetSignalActive_ || wetReplacementActive()) return false;
+  wetReplacementPhase_ = WetReplacementPhase::FadeOut;
+  return true;
+}
+
+void RadioBypassTransition::cancelWetReplacement() {
+  wetReplacementPhase_ = WetReplacementPhase::None;
+}
+
+bool RadioBypassTransition::wetReplacementActive() const {
+  return wetReplacementPhase_ != WetReplacementPhase::None;
+}
+
+bool RadioBypassTransition::wetReplacementReadyToCommit() const {
+  return wetReplacementPhase_ == WetReplacementPhase::FadeOut &&
+         wetFrames_ == 0;
+}
+
+bool RadioBypassTransition::commitWetReplacement() {
+  if (!wetReplacementReadyToCommit()) return false;
+  wetReplacementPhase_ = WetReplacementPhase::FadeIn;
   wetSignalActive_ = true;
   return true;
 }
@@ -35,6 +68,9 @@ void RadioBypassTransition::blend(float* wetSamples,
                                   uint32_t sampleRate) {
   const uint32_t transitionFrames =
       audioPipelineTransitionFrames(sampleRate);
+  const bool targetWet =
+      wetReplacementPhase_ == WetReplacementPhase::FadeOut ? false
+                                                            : radioEnabled;
   for (uint32_t frame = 0; frame < frames; ++frame) {
     const float wetMix = static_cast<float>(wetFrames_) /
                          static_cast<float>(transitionFrames);
@@ -45,14 +81,18 @@ void RadioBypassTransition::blend(float* wetSamples,
                            wetSamples[sample] * wetMix;
     }
 
-    if (radioEnabled) {
+    if (targetWet) {
       if (wetFrames_ < transitionFrames) ++wetFrames_;
     } else if (wetFrames_ > 0) {
       --wetFrames_;
     }
   }
 
-  if (!radioEnabled && wetFrames_ == 0) {
+  if (wetReplacementPhase_ == WetReplacementPhase::FadeIn &&
+      wetFrames_ == transitionFrames) {
+    wetReplacementPhase_ = WetReplacementPhase::None;
+  }
+  if (!radioEnabled && !wetReplacementActive() && wetFrames_ == 0) {
     wetSignalActive_ = false;
   }
 }

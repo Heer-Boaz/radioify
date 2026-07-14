@@ -298,10 +298,7 @@ bool ensureChannels(uint32_t newChannels) {
 
   gAudio.channels = newChannels;
   gAudio.state.channels = gAudio.channels;
-  gAudio.radio1938Template.init(kRadioProcessChannels,
-                                static_cast<float>(gAudio.sampleRate),
-                                gAudio.lpHz,
-                                gAudio.noise);
+  configureRadioPlaybackTemplates();
   rebuildRadioPreviewChain(&gAudio.state);
   prepareRadioPlaybackSource(&gAudio.state);
 
@@ -362,20 +359,19 @@ void audioInit(const AudioPlaybackConfig& config) {
   gAudio.lpHz = static_cast<float>(config.bwHz);
   gAudio.noise = static_cast<float>(config.noise);
   gAudio.radioPresetName = config.radioPresetName;
-
   gAudio.state.channels = gAudio.channels;
   gAudio.state.sampleRate = gAudio.sampleRate;
   gAudio.state.dry = config.dry;
-  gAudio.state.useRadio1938.store(config.enableRadio);
+  const RadioFilterMode initialRadioMode =
+      config.enableRadio
+          ? radioFilterModeForReceiverProfile(config.radioReceiverProfile)
+          : RadioFilterMode::Off;
+  gAudio.state.radioFilterMode.store(initialRadioMode);
   gAudio.state.radioAmIngress.reception =
       radioReceptionConfigForProfile(config.radioReceptionProfile);
   gAudio.radioSettingsPath = config.radioSettingsPath;
 
-  gAudio.radio1938Template.init(kRadioProcessChannels,
-                                static_cast<float>(gAudio.sampleRate),
-                                gAudio.lpHz,
-                                gAudio.noise);
-  configureRadioPlaybackTemplate();
+  configureRadioPlaybackTemplates();
   rebuildRadioPreviewChain(&gAudio.state);
   prepareRadioPlaybackSource(&gAudio.state);
 }
@@ -504,7 +500,21 @@ bool audioIsFinished() {
   return gAudio.state.finished.load();
 }
 
-bool audioIsRadioEnabled() { return gAudio.state.useRadio1938.load(); }
+bool audioIsRadioEnabled() {
+  return radioFilterModeEnabled(gAudio.state.radioFilterMode.load());
+}
+
+RadioFilterMode audioGetRadioFilterMode() {
+  return gAudio.state.radioFilterMode.load();
+}
+
+RadioReceiverProfile audioGetRadioReceiverProfile() {
+  return radioFilterModeReceiverProfile(audioGetRadioFilterMode());
+}
+
+std::string_view audioGetRadioFilterLabel() {
+  return radioFilterModeLabel(audioGetRadioFilterMode());
+}
 
 bool audioIsHolding() { return gAudio.state.hold.load(); }
 
@@ -588,9 +598,11 @@ void audioSeekToSec(double sec) {
   requestAudioSeekFrame(target);
 }
 
-void audioToggleRadio() {
-  const bool next = !gAudio.state.useRadio1938.load(std::memory_order_relaxed);
-  gAudio.state.useRadio1938.store(next, std::memory_order_relaxed);
+void audioCycleRadioFilter() {
+  const RadioFilterMode current =
+      gAudio.state.radioFilterMode.load(std::memory_order_relaxed);
+  gAudio.state.radioFilterMode.store(nextRadioFilterMode(current),
+                                     std::memory_order_relaxed);
 }
 
 void audioSetHold(bool hold) {

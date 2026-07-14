@@ -59,30 +59,54 @@ struct HarnessConfig {
   std::string section = "all";
 };
 
-// --- Target ranges for harness validation (user-specified anchors) ---
-constexpr float kTargetAudioLow3dBMin = 60.0f;
-constexpr float kTargetAudioLow3dBMax = 200.0f;
-constexpr float kTargetAudioHigh3dBMin = 2500.0f;
-constexpr float kTargetAudioHigh3dBMax = 5500.0f;
+// --- Target ranges for harness validation (historical/model anchors) ---
+struct ReceiverReferenceBands {
+  float audioLow3dBMin;
+  float audioLow3dBMax;
+  float audioHigh3dBMin;
+  float audioHigh3dBMax;
+  float imdDbMin;
+  float imdDbMax;
+  float sinadNominalDbMin;
+  float sinadNominalDbMax;
+  float speakerReferenceRatioMin;
+  float speakerReferenceRatioMax;
+  float nominalOutputPowerMinWatts;
+  float nominalOutputPowerMaxWatts;
+};
+
+constexpr ReceiverReferenceBands kPhilco37116ReferenceBands{
+    60.0f, 200.0f, 2500.0f, 5500.0f, -100.0f, -25.0f,
+    35.0f, 100.0f, 0.85f, 1.10f, 12.0f, 18.0f};
+
+// The mass-market profile deliberately validates against its own 2 W,
+// single-ended receiver class. Reusing the 37-116's 15 W / high-fidelity
+// bands would turn the test into a demand that both physical models converge.
+constexpr ReceiverReferenceBands kTypical1930sReferenceBands{
+    100.0f, 250.0f, 2200.0f, 3500.0f, -100.0f, -25.0f,
+    20.0f, 100.0f, 0.18f, 0.40f, 1.5f, 2.5f};
+
+constexpr const ReceiverReferenceBands& referenceBandsForProfile(
+    RadioReceiverProfile profile) {
+  switch (profile) {
+    case RadioReceiverProfile::Philco37116:
+      return kPhilco37116ReferenceBands;
+    case RadioReceiverProfile::Typical1930s:
+      return kTypical1930sReferenceBands;
+  }
+  return kPhilco37116ReferenceBands;
+}
+
 constexpr float kTargetDetectorTauUsMin = 35.0f;
 constexpr float kTargetDetectorTauUsMax = 55.0f;
 constexpr float kTargetAvcTauMsMin = 60.0f;
 constexpr float kTargetAvcTauMsMax = 90.0f;
-// IMD: lower is better. Expect <= -25 dB (prefer ~-30 dB)
-constexpr float kTargetImdDbMin = -100.0f;
-constexpr float kTargetImdDbMax = -25.0f;
-constexpr float kTargetSinadNominalDbMin = 35.0f;
-constexpr float kTargetSinadNominalDbMax = 100.0f;
-constexpr float kTargetSpeakerReferenceRatioMin = 0.85f;
-constexpr float kTargetSpeakerReferenceRatioMax = 1.10f;
 // Prefer max digital output < ~0.95
 constexpr float kTargetMaxDigitalOutputMin = 0.0f;
 constexpr float kTargetMaxDigitalOutputMax = 0.95f;
 // IF center and nominal output power
 constexpr float kTargetIfCenterMinHz = 469000.0f;
 constexpr float kTargetIfCenterMaxHz = 471000.0f;
-constexpr float kTargetNominalOutputPowerMinW = 12.0f;
-constexpr float kTargetNominalOutputPowerMaxW = 18.0f;
 // Clip/flag targets: expect zero in nominal bench
 constexpr int kTargetFlagZero = 0;
 
@@ -335,7 +359,7 @@ Radio1938 makeRadio(const HarnessConfig& config, float noiseWeight,
       fail("failed to apply radio settings: " + error);
     }
   } else if (!config.presetName.empty()) {
-    if (!radio.applyPreset(config.presetName)) {
+    if (!radio.applyReceiverProfile(config.presetName)) {
       fail("unknown preset: " + config.presetName);
     }
   }
@@ -1502,6 +1526,8 @@ bool runReference(const HarnessConfig& config) {
                    nominalHarnessModulationIndex(config),
                    std::max(config.noiseWeight, config.noiseOnlyWeight));
   Radio1938& radio = nominalRun.radio;
+  const ReceiverReferenceBands& bands =
+      referenceBandsForProfile(radio.receiverProfile);
   double detectorTauUs = 1e6 * effectiveDetectorAudioTauSeconds(radio);
   double avcTauMs = 1e3 * avcTauSeconds(radio);
 
@@ -1510,12 +1536,12 @@ bool runReference(const HarnessConfig& config) {
   // sideband constraints, not on arbitrary output-envelope taste metrics.
   bool allInBand = true;
   allInBand &= printReferenceRow("audio_low_3db_hz", sweep.low3dBHz,
-                                 kTargetAudioLow3dBMin, kTargetAudioLow3dBMax);
+                                 bands.audioLow3dBMin, bands.audioLow3dBMax);
   allInBand &= printReferenceRow("audio_high_3db_hz", sweep.high3dBHz,
-                                 kTargetAudioHigh3dBMin,
-                                 kTargetAudioHigh3dBMax);
+                                 bands.audioHigh3dBMin,
+                                 bands.audioHigh3dBMax);
   allInBand &=
-      printReferenceRow("imd_db", imdDb, kTargetImdDbMin, kTargetImdDbMax);
+      printReferenceRow("imd_db", imdDb, bands.imdDbMin, bands.imdDbMax);
   allInBand &= printReferenceRow("detector_tau_us", detectorTauUs,
                                  kTargetDetectorTauUsMin,
                                  kTargetDetectorTauUsMax);
@@ -1529,12 +1555,12 @@ bool runReference(const HarnessConfig& config) {
   allInBand &= printReferenceRow("envelope_fall_ms_observed",
                                  envelope.fall90To10Ms, 0.0, 10.0);
   allInBand &= printReferenceRow("sinad_nominal_db", anchors.sinadNominalDb,
-                                 kTargetSinadNominalDbMin,
-                                 kTargetSinadNominalDbMax);
+                                 bands.sinadNominalDbMin,
+                                 bands.sinadNominalDbMax);
   // Speaker/reference and digital output targets (measured from nominal run)
   allInBand &= printReferenceRow(
       "speaker_reference_ratio", anchors.speakerReferenceRatio,
-      kTargetSpeakerReferenceRatioMin, kTargetSpeakerReferenceRatioMax);
+      bands.speakerReferenceRatioMin, bands.speakerReferenceRatioMax);
   allInBand &= printReferenceRow("max_digital_output", anchors.maxDigitalOutput,
                                  kTargetMaxDigitalOutputMin,
                                  kTargetMaxDigitalOutputMax);
@@ -1558,7 +1584,7 @@ bool runReference(const HarnessConfig& config) {
                                  kTargetIfCenterMaxHz);
   allInBand &= printReferenceRow(
       "nominal_output_power_watts", radio.power.nominalOutputPowerWatts,
-      kTargetNominalOutputPowerMinW, kTargetNominalOutputPowerMaxW);
+      bands.nominalOutputPowerMinWatts, bands.nominalOutputPowerMaxWatts);
   std::cout << "\n";
   return allInBand;
 }

@@ -306,11 +306,11 @@ bool toggleAudioTrack(const PlaybackInputView& view) {
   return view.player->cycleAudioTrack();
 }
 
-bool toggleRadio(const PlaybackInputView& view) {
+bool cycleRadioFilter(const PlaybackInputView& view) {
   if (!view.audioOk || !*view.audioOk) {
     return false;
   }
-  audioToggleRadio();
+  audioCycleRadioFilter();
   return true;
 }
 
@@ -378,7 +378,7 @@ bool executeOverlayControl(const PlaybackInputView& view,
     return playback_session_handoff::requestTransportHandoff(
         view, signals, PlaybackTransportCommand::Next);
   };
-  actions.radio = [&]() { return toggleRadio(view); };
+  actions.radio = [&]() { return cycleRadioFilter(view); };
   actions.hz50 = [&]() { return toggle50Hz(view); };
   actions.audioTrack = [&]() { return toggleAudioTrack(view); };
   actions.subtitles = [&]() { return toggleSubtitles(view); };
@@ -405,6 +405,7 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   inputs.canPlayPrevious = signals.requestTransportCommand != nullptr;
   inputs.canPlayNext = signals.requestTransportCommand != nullptr;
   inputs.radioEnabled = audioIsRadioEnabled();
+  inputs.radioLabel = std::string(audioGetRadioFilterLabel());
   inputs.hz50Enabled = audioIs50HzEnabled();
   inputs.canCycleAudioTracks =
       inputs.audioOk && view.player && view.player->canCycleAudioTracks();
@@ -553,7 +554,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       signals.toggleFullscreen();
     }
   };
-  cb.onToggleRadio = [&]() { toggleRadio(view); };
+  cb.onToggleRadio = [&]() { cycleRadioFilter(view); };
   cb.onToggle50Hz = [&]() { toggle50Hz(view); };
   cb.onToggleSubtitles = [&]() { toggleSubtitles(view); };
   cb.onToggleAudioTrack = [&]() { toggleAudioTrack(view); };

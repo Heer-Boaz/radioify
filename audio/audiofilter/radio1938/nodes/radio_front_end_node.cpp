@@ -31,15 +31,18 @@ void ensureFrontEndConfigured(Radio1938& radio) {
   // passes the published AM channel while the IF strip remains the dominant
   // selectivity element.
   constexpr float kRfStageCascadeCompensation = 2.35f;
+  float cascadeCompensation = frontEnd.secondTunedCircuitEnabled
+                                  ? kRfStageCascadeCompensation
+                                  : 1.0f;
   // The pre/post biquad bandpasses are numerical helpers around the explicit RF
   // tanks; they must stay wider than the physical channel so they do not become
   // hidden selectivity bottlenecks.
   constexpr float kRfHelperBandpassCompensation = 5.0f;
   float preBw = std::max(physicalChannelBw * tuning.preBwScale *
-                             kRfStageCascadeCompensation,
+                             cascadeCompensation,
                          1.0f);
   float rfBw = std::max(physicalChannelBw * tuning.postBwScale *
-                            kRfStageCascadeCompensation,
+                            cascadeCompensation,
                         1.0f);
   float preHelperBw =
       std::max(physicalChannelBw * kRfHelperBandpassCompensation, preBw);
@@ -67,10 +70,12 @@ void ensureFrontEndConfigured(Radio1938& radio) {
       frontEnd.antennaCapacitanceFarads,
       frontEnd.antennaSeriesResistanceOhms + antennaLoadResistance,
       antennaLoadResistance, 8);
-  frontEnd.rfTank.setModel(radio.sampleRate, rfInductance,
-                           frontEnd.rfCapacitanceFarads,
-                           frontEnd.rfSeriesResistanceOhms + rfLoadResistance,
-                           rfLoadResistance, 8);
+  if (frontEnd.secondTunedCircuitEnabled) {
+    frontEnd.rfTank.setModel(
+        radio.sampleRate, rfInductance, frontEnd.rfCapacitanceFarads,
+        frontEnd.rfSeriesResistanceOhms + rfLoadResistance, rfLoadResistance,
+        8);
+  }
   frontEnd.preLpfIn.setBandpass(
       radio.sampleRate, rfCenterHz,
       std::max(0.35f, rfCenterHz / std::max(preHelperBw, 1.0f)));
@@ -83,6 +88,10 @@ void ensureFrontEndConfigured(Radio1938& radio) {
 }  // namespace
 
 void RadioFrontEndNode::init(Radio1938& radio, RadioInitContext&) {
+  // A full receiver reinitialization may keep the same numeric tuning
+  // revision while changing the physical profile. Force the tuned networks
+  // to be rebuilt instead of retaining the previous receiver's tanks.
+  radio.frontEnd.appliedConfigRevision = 0;
   radio.frontEnd.hpf.setHighpass(radio.sampleRate, radio.frontEnd.inputHpHz,
                                  kRadioBiquadQ);
   radio.frontEnd.selectivityPeak.setPeaking(radio.sampleRate,
@@ -112,7 +121,9 @@ float RadioFrontEndNode::run(Radio1938& radio, float x, RadioSampleContext& ctx)
   }
   y = frontEnd.antennaTank.step(y);
   y *= frontEnd.rfGain * std::max(0.35f, 1.0f - frontEnd.avcGainDepth * rfHold);
-  y = frontEnd.rfTank.step(y);
+  if (frontEnd.secondTunedCircuitEnabled) {
+    y = frontEnd.rfTank.step(y);
+  }
   if (ctx.signal.mode == SourceInputMode::RealRf) {
     y = frontEnd.preLpfOut.process(y);
   }

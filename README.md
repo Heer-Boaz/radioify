@@ -1,6 +1,6 @@
 # Radioify
 
-Console media browser/player with a vintage radio filter toggle.
+Console media browser/player with selectable period-radio receiver models.
 
 ## Requirements
 - Windows 10+ (uses console APIs and Media Foundation)
@@ -92,9 +92,11 @@ dist/radioify.exe <file-or-folder>
 ```
 
 Optional flags:
+
 ```sh
 dist/radioify.exe --no-ascii <file-or-folder>
 dist/radioify.exe --no-audio <file-or-folder>
+dist/radioify.exe --radio <file-or-folder>
 dist/radioify.exe --no-radio <file-or-folder>
 dist/radioify.exe --single-instance <file>
 dist/radioify.exe --new-instance <file>
@@ -177,7 +179,7 @@ The concrete implementation plan lives in
 - Ctrl+W: toggle video Window mode (framebuffer-mode)
 - Ctrl+P: toggle picture-in-picture in Window mode
 - T: toggle picture-in-picture TUI in Window mode
-- R: toggle 1938 radio filter
+- R: cycle dry -> typical 1930s radio -> Philco 37-116 -> dry
 - H: toggle 50Hz mode
 - O: options (KSS/NSF only)
 - V: toggle window vsync
@@ -198,6 +200,25 @@ place `hebios.bin` next to the PSF2 file, next to `radioify.exe`, or in the
 directory from which Radioify was launched.
 
 ## Options
+
+Radio filter:
+
+- Playback starts unfiltered. Press `R` to select the representative
+  mass-market receiver, press it again for the high-end Philco, and press it a
+  third time to return to the original audio.
+- `--radio` starts playback with a radio model enabled. `--no-radio` explicitly
+  selects the normal unfiltered default.
+- `--radio-model typical-1930s` (default model): representative mass-market
+  1938 table set, anchored to the five-tube Philco 38-12C with a single-ended
+  41 output pentode, approximately 2 W output, and a five-inch speaker.
+- `--radio-model philco-37-116`: Philco's high-end 1937/1938 console with a
+  push-pull output stage, approximately 15 W output, a 14-inch Type-W speaker,
+  and three acoustic clarifiers.
+
+The receiver model and reception environment are independent. The former
+selects the radio, amplifier, speaker, and cabinet; the latter selects what
+arrives at its antenna. A custom `--radio-settings` / `--radio-preset` overlay
+is applied after the selected physical model.
 
 Radio reception:
 

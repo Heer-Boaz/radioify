@@ -25,12 +25,14 @@ constexpr float kDefaultSampleRate = 48000.0f;
 constexpr float kDefaultBandwidthHz = 5000.0f;
 constexpr float kDefaultCarrierRmsVolts = 0.12f;
 constexpr uint32_t kNodeTestFrames = 4096u;
-constexpr float kPhilcoIfCenterHz = 470000.0f;
+constexpr float kReceiverIfCenterHz = 470000.0f;
 constexpr float kPhilcoUndistortedOutputWatts = 15.0f;
 constexpr float kPhilcoVolumeControlOhms = 2000000.0f;
 constexpr float kPhilcoVolumeTapOhms = 1000000.0f;
 constexpr float kPhilcoLoudnessResistanceOhms = 490000.0f;
 constexpr float kPhilcoFirstAudioCouplingCapFarads = 0.01e-6f;
+constexpr float kTypicalOutputWatts = 2.0f;
+constexpr float kTypicalVolumeControlOhms = 500000.0f;
 
 struct HarnessConfig {
   float sampleRate = kDefaultSampleRate;
@@ -312,7 +314,7 @@ Radio1938 makeUninitializedFixture(const HarnessConfig& config, float noiseWeigh
       fail("failed to apply radio settings: " + error);
     }
   } else if (!config.presetName.empty()) {
-    if (!radio.applyPreset(config.presetName)) {
+    if (!radio.applyReceiverProfile(config.presetName)) {
       fail("unknown preset: " + config.presetName);
     }
   }
@@ -822,9 +824,10 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
                  radio.tuning.sourceCarrierHz /
                      std::max<double>(serviceEdgeHz, 1e-12),
                  "carrier must remain meaningfully above the published service edge");
-    addRange(rows, "IFStrip", "philco_if_center_470kc", radio.ifStrip.ifCenterHz,
-             kPhilcoIfCenterHz - 1000.0f, kPhilcoIfCenterHz + 1000.0f,
-             "Service Bulletin 258");
+    addRange(rows, "IFStrip", "receiver_if_center_470kc",
+             radio.ifStrip.ifCenterHz, kReceiverIfCenterHz - 1000.0f,
+             kReceiverIfCenterHz + 1000.0f,
+             "Philco Service Bulletins 258 and 284");
   }
 
   {
@@ -888,62 +891,81 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
   {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::AFC});
     RadioSampleContext dummy{};
-    addRange(rows, "AFC", "preset_capture_matches_5khz_service_spec",
-             radio.tuning.afcCaptureHz, 4990.0, 5010.0,
-             "Philco magnetic-tuning acquisition range");
-    addRange(rows, "AFC", "preset_has_full_capture_range_authority",
-             radio.tuning.afcMaxCorrectionHz, 4990.0, 5010.0,
-             "available pull covers the documented acquisition range");
-    radio.tuning.afcDeadband = 0.0f;
-    radio.tuning.tuneOffsetHz = 400.0f;
-    radio.controlSense.controlVoltageSense = 1.0f;
-    radio.controlSense.tuningErrorSense = 0.5f;
-    for (int i = 0; i < 512; ++i) {
+    if (radio.tuning.magneticTuningEnabled) {
+      addRange(rows, "AFC", "preset_capture_matches_5khz_service_spec",
+               radio.tuning.afcCaptureHz, 4990.0, 5010.0,
+               "Philco magnetic-tuning acquisition range");
+      addRange(rows, "AFC", "preset_has_full_capture_range_authority",
+               radio.tuning.afcMaxCorrectionHz, 4990.0, 5010.0,
+               "available pull covers the documented acquisition range");
+      radio.tuning.afcDeadband = 0.0f;
+      radio.tuning.tuneOffsetHz = 400.0f;
+      radio.controlSense.controlVoltageSense = 1.0f;
+      radio.controlSense.tuningErrorSense = 0.5f;
+      for (int i = 0; i < 512; ++i) {
+        RadioAFCNode::run(radio, dummy);
+      }
+      addPredicate(rows, "AFC", "positive_error_pulls_negative",
+                   radio.tuning.afcCorrectionHz < 0.0f,
+                   radio.tuning.afcCorrectionHz,
+                   "correction opposes detector error");
+
+      Radio1938 radio2 = makeNodeFixture(config, 0.0f, {PassId::AFC});
+      radio2.tuning.afcDeadband = 0.0f;
+      radio2.tuning.tuneOffsetHz = -400.0f;
+      radio2.controlSense.controlVoltageSense = 1.0f;
+      radio2.controlSense.tuningErrorSense = -0.5f;
+      for (int i = 0; i < 512; ++i) {
+        RadioAFCNode::run(radio2, dummy);
+      }
+      addPredicate(rows, "AFC", "negative_error_pulls_positive",
+                   radio2.tuning.afcCorrectionHz > 0.0f,
+                   radio2.tuning.afcCorrectionHz,
+                   "correction opposes detector error");
+
+      Radio1938 captured = makeNodeFixture(config, 0.0f, {PassId::AFC});
+      captured.tuning.afcDeadband = 0.0f;
+      captured.tuning.tuneOffsetHz = 4000.0f;
+      captured.controlSense.controlVoltageSense = 1.0f;
+      captured.controlSense.tuningErrorSense = 0.8f;
+      int settleSamples =
+          static_cast<int>(std::ceil(1.5f * captured.sampleRate));
+      for (int i = 0; i < settleSamples; ++i) {
+        RadioAFCNode::run(captured, dummy);
+      }
+      addRange(rows, "AFC", "four_khz_error_is_pulled_to_center",
+               std::fabs(captured.tuning.tuneOffsetHz +
+                         captured.tuning.afcCorrectionHz),
+               0.0, 100.0,
+               "constant discriminator error settles near center");
+
+      Radio1938 outside = makeNodeFixture(config, 0.0f, {PassId::AFC});
+      outside.tuning.afcDeadband = 0.0f;
+      outside.tuning.tuneOffsetHz = 5100.0f;
+      outside.controlSense.controlVoltageSense = 1.0f;
+      outside.controlSense.tuningErrorSense = 1.0f;
+      for (int i = 0; i < settleSamples; ++i) {
+        RadioAFCNode::run(outside, dummy);
+      }
+      addRange(rows, "AFC", "outside_capture_does_not_acquire",
+               outside.tuning.afcCorrectionHz, 0.0, 0.0,
+               "capture gate rejects stations beyond 5 kHz");
+    } else {
+      addRange(rows, "AFC", "typical_has_no_magnetic_tuning",
+               radio.tuning.magneticTuningEnabled ? 1.0 : 0.0, 0.0, 0.0,
+               "38-12 has no magnetic-tuning circuit");
+      addRange(rows, "AFC", "disabled_preset_has_zero_capture",
+               radio.tuning.afcCaptureHz, 0.0, 0.0,
+               "no AFC acquisition range");
+      addRange(rows, "AFC", "disabled_preset_has_zero_authority",
+               radio.tuning.afcMaxCorrectionHz, 0.0, 0.0,
+               "no AFC correction authority");
+      radio.controlSense.tuningErrorSense = 0.8f;
       RadioAFCNode::run(radio, dummy);
+      addRange(rows, "AFC", "disabled_preset_ignores_tuning_error",
+               radio.tuning.afcCorrectionHz, 0.0, 0.0,
+               "detector error cannot drive an absent AFC circuit");
     }
-    addPredicate(rows, "AFC", "positive_error_pulls_negative",
-                 radio.tuning.afcCorrectionHz < 0.0f, radio.tuning.afcCorrectionHz,
-                 "correction opposes detector error");
-
-    Radio1938 radio2 = makeNodeFixture(config, 0.0f, {PassId::AFC});
-    radio2.tuning.afcDeadband = 0.0f;
-    radio2.tuning.tuneOffsetHz = -400.0f;
-    radio2.controlSense.controlVoltageSense = 1.0f;
-    radio2.controlSense.tuningErrorSense = -0.5f;
-    for (int i = 0; i < 512; ++i) {
-      RadioAFCNode::run(radio2, dummy);
-    }
-    addPredicate(rows, "AFC", "negative_error_pulls_positive",
-                 radio2.tuning.afcCorrectionHz > 0.0f,
-                 radio2.tuning.afcCorrectionHz,
-                 "correction opposes detector error");
-
-    Radio1938 captured = makeNodeFixture(config, 0.0f, {PassId::AFC});
-    captured.tuning.afcDeadband = 0.0f;
-    captured.tuning.tuneOffsetHz = 4000.0f;
-    captured.controlSense.controlVoltageSense = 1.0f;
-    captured.controlSense.tuningErrorSense = 0.8f;
-    int settleSamples =
-        static_cast<int>(std::ceil(1.5f * captured.sampleRate));
-    for (int i = 0; i < settleSamples; ++i) {
-      RadioAFCNode::run(captured, dummy);
-    }
-    addRange(rows, "AFC", "four_khz_error_is_pulled_to_center",
-             std::fabs(captured.tuning.tuneOffsetHz +
-                       captured.tuning.afcCorrectionHz),
-             0.0, 100.0, "constant discriminator error settles near center");
-
-    Radio1938 outside = makeNodeFixture(config, 0.0f, {PassId::AFC});
-    outside.tuning.afcDeadband = 0.0f;
-    outside.tuning.tuneOffsetHz = 5100.0f;
-    outside.controlSense.controlVoltageSense = 1.0f;
-    outside.controlSense.tuningErrorSense = 1.0f;
-    for (int i = 0; i < settleSamples; ++i) {
-      RadioAFCNode::run(outside, dummy);
-    }
-    addRange(rows, "AFC", "outside_capture_does_not_acquire",
-             outside.tuning.afcCorrectionHz, 0.0, 0.0,
-             "capture gate rejects stations beyond 5 kHz");
 
     Radio1938 radio3 = makeNodeFixture(config, 0.0f, {PassId::AFC});
     radio3.tuning.magneticTuningEnabled = false;
@@ -1489,19 +1511,32 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
   {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::ReceiverInputNetwork});
     RadioReceiverInputNetworkNode::reset(radio);
-    addRange(rows, "ReceiverInputNetwork", "philco_volume_total_2meg",
-             radio.receiverCircuit.volumeControlResistanceOhms,
-             0.95f * kPhilcoVolumeControlOhms,
-             1.05f * kPhilcoVolumeControlOhms, "Service Bulletin 258");
-    addRange(rows, "ReceiverInputNetwork", "philco_volume_tap_1meg",
-             radio.receiverCircuit.volumeControlTapResistanceOhms,
-             0.95f * kPhilcoVolumeTapOhms, 1.05f * kPhilcoVolumeTapOhms,
-             "Service Bulletin 258");
-    addRange(rows, "ReceiverInputNetwork", "philco_loudness_resistor_490k",
-             radio.receiverCircuit.volumeControlLoudnessResistanceOhms,
-             kPhilcoLoudnessResistanceOhms - 30000.0f,
-             kPhilcoLoudnessResistanceOhms + 30000.0f,
-             "Service Bulletin 258");
+    if (radio.receiverProfile == RadioReceiverProfile::Philco37116) {
+      addRange(rows, "ReceiverInputNetwork", "philco_volume_total_2meg",
+               radio.receiverCircuit.volumeControlResistanceOhms,
+               0.95f * kPhilcoVolumeControlOhms,
+               1.05f * kPhilcoVolumeControlOhms, "Service Bulletin 258");
+      addRange(rows, "ReceiverInputNetwork", "philco_volume_tap_1meg",
+               radio.receiverCircuit.volumeControlTapResistanceOhms,
+               0.95f * kPhilcoVolumeTapOhms, 1.05f * kPhilcoVolumeTapOhms,
+               "Service Bulletin 258");
+      addRange(rows, "ReceiverInputNetwork", "philco_loudness_resistor_490k",
+               radio.receiverCircuit.volumeControlLoudnessResistanceOhms,
+               kPhilcoLoudnessResistanceOhms - 30000.0f,
+               kPhilcoLoudnessResistanceOhms + 30000.0f,
+               "Service Bulletin 258");
+    } else {
+      addRange(rows, "ReceiverInputNetwork", "typical_volume_total_500k",
+               radio.receiverCircuit.volumeControlResistanceOhms,
+               0.95f * kTypicalVolumeControlOhms,
+               1.05f * kTypicalVolumeControlOhms, "Service Bulletin 284");
+      addRange(rows, "ReceiverInputNetwork", "typical_volume_has_no_tap",
+               radio.receiverCircuit.volumeControlTapResistanceOhms, 0.0, 0.0,
+               "38-12 has no loudness tap");
+      addRange(rows, "ReceiverInputNetwork", "typical_has_no_loudness_branch",
+               radio.receiverCircuit.volumeControlLoudnessResistanceOhms,
+               0.0, 0.0, "38-12 has no loudness network");
+    }
     addRange(rows, "ReceiverInputNetwork", "philco_first_audio_coupling_0p01uf",
              radio.receiverCircuit.couplingCapFarads,
              0.9f * kPhilcoFirstAudioCouplingCapFarads,
@@ -1583,11 +1618,18 @@ std::vector<TestRow> runAudioPhysics(const HarnessConfig& config) {
                      radio.output.digitalReferenceSpeakerVoltsPeak > 0.0f,
                  radio.output.digitalReferenceSpeakerVoltsPeak,
                  "derived from output stage");
-    addRange(rows, "Power", "philco_undistorted_output_near_15w",
-             radio.power.nominalOutputPowerWatts,
-             kPhilcoUndistortedOutputWatts - 3.0f,
-             kPhilcoUndistortedOutputWatts + 3.0f,
-             "Service Bulletin 258");
+    if (radio.receiverProfile == RadioReceiverProfile::Philco37116) {
+      addRange(rows, "Power", "philco_undistorted_output_near_15w",
+               radio.power.nominalOutputPowerWatts,
+               kPhilcoUndistortedOutputWatts - 3.0f,
+               kPhilcoUndistortedOutputWatts + 3.0f,
+               "Service Bulletin 258");
+    } else {
+      addRange(rows, "Power", "typical_output_near_2w",
+               radio.power.nominalOutputPowerWatts,
+               kTypicalOutputWatts - 0.5f, kTypicalOutputWatts + 0.5f,
+               "Service Bulletin 284");
+    }
 
     RadioPowerNode::reset(radio);
     const int configuredOutputSubsteps =
@@ -1627,8 +1669,15 @@ std::vector<TestRow> runAudioPhysics(const HarnessConfig& config) {
       gridA.push_back(radioDrive.power.outputGridAVolts);
       gridB.push_back(radioDrive.power.outputGridBVolts);
     }
-    addRange(rows, "Power", "output_grids_are_antiphase", correlation(gridA, gridB),
-             -1.0, -0.30, "A/B grid correlation");
+    if (radioDrive.receiverProfile == RadioReceiverProfile::Philco37116) {
+      addRange(rows, "Power", "output_grids_are_antiphase",
+               correlation(gridA, gridB), -1.0, -0.30,
+               "push-pull A/B grid correlation");
+    } else {
+      addPredicate(rows, "Power", "single_ended_uses_only_output_grid_a",
+                   rmsOf(gridA) > 0.01 && rmsOf(gridB) < 1e-7,
+                   rmsOf(gridB), "single 41 output pentode");
+    }
 
     bool finitePowerSweep = true;
     for (float drivePeak : {1.0f, 10.0f, 25.0f, 40.0f}) {
@@ -1766,8 +1815,10 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
 
     const double impedanceMagnitude =
         measureSpeakerElectricalImpedanceMagnitude(radio, 1000.0f);
+    const bool typical =
+        radio.receiverProfile == RadioReceiverProfile::Typical1930s;
     addRange(rows, "Speaker", "one_khz_load_near_nominal",
-             impedanceMagnitude, 3.0, 5.0,
+             impedanceMagnitude, typical ? 2.5 : 3.0, typical ? 4.0 : 5.0,
              "direct electromechanical load magnitude");
   }
 
@@ -1847,15 +1898,29 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     RadioCabinetNode::init(untreated, initCtx);
     RadioCabinetNode::init(treated, initCtx);
 
-    addRange(rows, "Cabinet", "philco_cabinet_resonance_near_95hz",
-             treated.cabinet.panelHz, 90.0, 100.0,
-             "US2059929 family cabinet response curve");
-    addRange(rows, "Cabinet", "type_k_proxy_center_near_108hz",
-             (treated.cabinet.clarifier1Hz + treated.cabinet.clarifier2Hz +
-              treated.cabinet.clarifier3Hz) /
-                 3.0f,
-             105.0, 111.0,
-             "three identical 36-1155 units; patent six-inch absorber proxy");
+    if (radio.receiverProfile == RadioReceiverProfile::Typical1930s) {
+      addRange(rows, "Cabinet", "typical_compact_panel_near_155hz",
+               treated.cabinet.panelHz, 145.0, 165.0,
+               "reduced-order 38-12C cabinet proxy");
+      addRange(rows, "Cabinet", "typical_has_no_acoustic_clarifiers",
+               std::fabs(treated.cabinet.clarifier1Hz) +
+                   std::fabs(treated.cabinet.clarifier2Hz) +
+                   std::fabs(treated.cabinet.clarifier3Hz),
+               0.0, 0.0, "compact table set has no Type-K clarifiers");
+      addRange(rows, "Cabinet", "typical_open_back_delay_is_submillisecond",
+               treated.cabinet.rearDelayMs, 0.8, 1.1,
+               "six-and-a-quarter-inch cabinet depth proxy");
+    } else {
+      addRange(rows, "Cabinet", "philco_cabinet_resonance_near_95hz",
+               treated.cabinet.panelHz, 90.0, 100.0,
+               "US2059929 family cabinet response curve");
+      addRange(rows, "Cabinet", "type_k_proxy_center_near_108hz",
+               (treated.cabinet.clarifier1Hz + treated.cabinet.clarifier2Hz +
+                treated.cabinet.clarifier3Hz) /
+                   3.0f,
+               105.0, 111.0,
+               "three identical 36-1155 units; patent six-inch absorber proxy");
+    }
 
     const double untreated95 = runCabinetToneRms(untreated, 95.0f);
     const double treated95 = runCabinetToneRms(treated, 95.0f);
@@ -1864,18 +1929,20 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     const double untreated500 = runCabinetToneRms(untreated, 500.0f);
     const double treated500 = runCabinetToneRms(treated, 500.0f);
     const double bypass95 = runCabinetToneRms(bypass, 95.0f);
-    addRange(rows, "Cabinet", "untreated_95hz_cabinet_boom_db",
-             ratioDb(untreated95, bypass95), 6.5, 9.5,
-             "published untreated response rises in the resonance band");
-    addRange(rows, "Cabinet", "clarifiers_reduce_95hz_cabinet_peak_db",
-             ratioDb(untreated95, treated95), 6.0, 9.0,
-             "absorption overlaps the documented cabinet peak");
-    addRange(rows, "Cabinet", "clarifiers_max_reduction_near_108hz_db",
-             ratioDb(untreated108, treated108), 8.0, 10.5,
-             "patent trace shows approximately 10 dB maximum reduction");
-    addRange(rows, "Cabinet", "clarifiers_leave_500hz_nearly_unchanged_db",
-             std::fabs(ratioDb(untreated500, treated500)), 0.0, 0.6,
-             "tuned absorbers must remain inert outside the boom band");
+    if (radio.receiverProfile == RadioReceiverProfile::Philco37116) {
+      addRange(rows, "Cabinet", "untreated_95hz_cabinet_boom_db",
+               ratioDb(untreated95, bypass95), 6.5, 9.5,
+               "published untreated response rises in the resonance band");
+      addRange(rows, "Cabinet", "clarifiers_reduce_95hz_cabinet_peak_db",
+               ratioDb(untreated95, treated95), 6.0, 9.0,
+               "absorption overlaps the documented cabinet peak");
+      addRange(rows, "Cabinet", "clarifiers_max_reduction_near_108hz_db",
+               ratioDb(untreated108, treated108), 8.0, 10.5,
+               "patent trace shows approximately 10 dB maximum reduction");
+      addRange(rows, "Cabinet", "clarifiers_leave_500hz_nearly_unchanged_db",
+               std::fabs(ratioDb(untreated500, treated500)), 0.0, 0.6,
+               "tuned absorbers must remain inert outside the boom band");
+    }
 
     constexpr std::array<float, 4> kCabinetBandHz = {70.0f, 95.0f, 108.0f,
                                                       150.0f};
@@ -1888,14 +1955,18 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
       minimumTreatedGainDb = std::min(minimumTreatedGainDb, gainDb);
       maximumTreatedGainDb = std::max(maximumTreatedGainDb, gainDb);
     }
-    addRange(rows, "Cabinet", "treated_70_150hz_response_span_db",
-             maximumTreatedGainDb - minimumTreatedGainDb, 0.0, 4.5,
-             "clarifiers flatten rather than move the cabinet boom");
+    if (radio.receiverProfile == RadioReceiverProfile::Philco37116) {
+      addRange(rows, "Cabinet", "treated_70_150hz_response_span_db",
+               maximumTreatedGainDb - minimumTreatedGainDb, 0.0, 4.5,
+               "clarifiers flatten rather than move the cabinet boom");
+    }
     const double untreatedTail = runCabinetBurstTailRms(untreated, 95.0f);
     const double treatedTail = runCabinetBurstTailRms(treated, 95.0f);
-    addRange(rows, "Cabinet", "clarifiers_reduce_95hz_hangover_db",
-             ratioDb(untreatedTail, treatedTail), 6.0, 12.0,
-             "patent reports faster decay as well as lower steady response");
+    if (radio.receiverProfile == RadioReceiverProfile::Philco37116) {
+      addRange(rows, "Cabinet", "clarifiers_reduce_95hz_hangover_db",
+               ratioDb(untreatedTail, treatedTail), 6.0, 12.0,
+               "patent reports faster decay as well as lower steady response");
+    }
   }
 
   {

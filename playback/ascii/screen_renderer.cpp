@@ -324,6 +324,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.canPlayPrevious = canPlayPrevious;
   overlayInputs.canPlayNext = canPlayNext;
   overlayInputs.radioEnabled = audioIsRadioEnabled();
+  overlayInputs.radioLabel = std::string(audioGetRadioFilterLabel());
   overlayInputs.hz50Enabled = audioIs50HzEnabled();
   overlayInputs.canCycleAudioTracks = audioOk && player.canCycleAudioTracks();
   overlayInputs.activeAudioTrackLabel =
