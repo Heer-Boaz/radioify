@@ -91,7 +91,7 @@ struct FrameStepPresentationResult {
 
 struct FrameStepExitResult {
   StateChange change;
-  bool positionChanged = false;
+  bool requiresTimelineReanchor = false;
 };
 
 class Controller {
@@ -108,6 +108,7 @@ class Controller {
                      size_t videoPrefillFrames);
   void resetFrameSteps();
   void resetForSerial(int serial);
+  void resetForFrameStepSeekSerial(int serial);
   StateChange requestFrameStep(
       playback_video_frame_step::Direction direction, int serial);
   bool peekFrameStep(playback_video_frame_step::Request* request,
@@ -120,6 +121,7 @@ class Controller {
   bool publishFrameStepSeek(const playback_video_frame_step::Request& request);
   bool consumeFrameStepSeek(int serial, uint64_t generation);
   bool publishFrameStepSeekPresentation(int serial, uint64_t generation);
+  void cancelFrameStepSeek();
   FrameStepExitResult resumePlaybackFrameSteps();
 
  private:
@@ -153,6 +155,7 @@ class Controller {
   FrameStepToken pendingPresentedFrameStep_;
   FrameStepToken pendingSeekFrameStep_;
   int frameStepSerial_ = 0;
+  bool frameStepResumeReanchorRequired_ = false;
 };
 
 size_t requiredAudioPrefillFrames(uint32_t sampleRate);

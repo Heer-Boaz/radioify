@@ -239,30 +239,40 @@ bool waitFor(Player& player, int timeoutMs, const char* label,
   return false;
 }
 
-bool expectAudioFrameStepAnchor(int64_t expectedPtsUs, int expectedSerial,
-                                uint64_t previousFlushCount,
-                                const char* label) {
+bool expectAudioFrameStepTransition(int64_t expectedPtsUs,
+                                    int previousSerial, int expectedSerial,
+                                    uint64_t previousFlushCount,
+                                    const char* label) {
   const int64_t actual =
       gLastAudioDiscardUntilUs.load(std::memory_order_relaxed);
   const int actualSerial = gLastAudioFlushSerial.load(std::memory_order_relaxed);
   const uint64_t actualFlushCount =
       gAudioFlushCount.load(std::memory_order_relaxed);
-  if (actual == expectedPtsUs && actualSerial == expectedSerial &&
-      actualFlushCount > previousFlushCount) {
+  const bool seekBackedStep = expectedSerial != previousSerial;
+  const uint64_t expectedFlushCount =
+      previousFlushCount + (seekBackedStep ? 1 : 0);
+  const bool serialTransitionValid =
+      !seekBackedStep || expectedSerial == previousSerial + 1;
+  const bool anchorValid = !seekBackedStep || actualSerial == expectedSerial;
+  if (serialTransitionValid && anchorValid &&
+      actualFlushCount == expectedFlushCount) {
     return true;
   }
   std::cerr << "video_frame_step_smoke: " << label
-            << " audio frame-step anchor mismatch expected_pts_us="
+            << " audio frame-step transition mismatch expected_pts_us="
             << expectedPtsUs << " actual_discard_until_us=" << actual
+            << " previous_serial=" << previousSerial
             << " expected_serial=" << expectedSerial
             << " actual_flush_serial=" << actualSerial
             << " previous_flush_count=" << previousFlushCount
+            << " expected_flush_count=" << expectedFlushCount
             << " actual_flush_count=" << actualFlushCount
             << '\n';
   return false;
 }
 
-bool expectAudioResumeSeekAnchor(int64_t expectedPtsUs, int expectedSerial,
+bool expectAudioResumeSeekAnchor(int64_t expectedPtsUs, int previousSerial,
+                                 int expectedSerial,
                                  uint64_t previousFlushCount,
                                  const char* label) {
   const int64_t actual =
@@ -270,18 +280,44 @@ bool expectAudioResumeSeekAnchor(int64_t expectedPtsUs, int expectedSerial,
   const int actualSerial = gLastAudioFlushSerial.load(std::memory_order_relaxed);
   const uint64_t actualFlushCount =
       gAudioFlushCount.load(std::memory_order_relaxed);
-  if (actual == expectedPtsUs && actualSerial == expectedSerial &&
-      actualFlushCount > previousFlushCount) {
+  const uint64_t expectedFlushCount = previousFlushCount + 1;
+  if (expectedSerial == previousSerial + 1 && actual == expectedPtsUs &&
+      actualSerial == expectedSerial &&
+      actualFlushCount == expectedFlushCount) {
     return true;
   }
   std::cerr << "video_frame_step_smoke: " << label
             << " audio resume seek anchor mismatch expected_pts_us="
             << expectedPtsUs << " actual_discard_until_us=" << actual
+            << " previous_serial=" << previousSerial
             << " expected_serial=" << expectedSerial
             << " actual_flush_serial=" << actualSerial
             << " previous_flush_count=" << previousFlushCount
-            << " actual_flush_count="
-            << actualFlushCount << '\n';
+            << " expected_flush_count=" << expectedFlushCount
+            << " actual_flush_count=" << actualFlushCount << '\n';
+  return false;
+}
+
+bool expectAudioConcurrentResumeSeekAnchor(int64_t expectedPtsUs,
+                                           int expectedSerial,
+                                           uint64_t previousFlushCount,
+                                           const char* label) {
+  const int64_t actual =
+      gLastAudioDiscardUntilUs.load(std::memory_order_relaxed);
+  const int actualSerial = gLastAudioFlushSerial.load(std::memory_order_relaxed);
+  const uint64_t actualFlushCount =
+      gAudioFlushCount.load(std::memory_order_relaxed);
+  if (actual == expectedPtsUs && actualSerial == expectedSerial &&
+      actualFlushCount > previousFlushCount) {
+    return true;
+  }
+  std::cerr << "video_frame_step_smoke: " << label
+            << " concurrent audio resume seek anchor mismatch expected_pts_us="
+            << expectedPtsUs << " actual_discard_until_us=" << actual
+            << " expected_serial=" << expectedSerial
+            << " actual_flush_serial=" << actualSerial
+            << " previous_flush_count=" << previousFlushCount
+            << " actual_flush_count=" << actualFlushCount << '\n';
   return false;
 }
 
@@ -446,6 +482,7 @@ int main(int argc, char** argv) {
     int lastSerial = boundary.currentSerial;
     uint64_t lastCounter = player.videoFrameCounter();
     for (size_t i = 0; i < stepCount; ++i) {
+      const int beforeStepSerial = lastSerial;
       const uint64_t beforeStepAudioFlushCount =
           gAudioFlushCount.load(std::memory_order_relaxed);
       if (!player.requestFrameStep(playback_video_frame_step::Direction::Next)) {
@@ -472,14 +509,14 @@ int main(int argc, char** argv) {
         return 1;
       }
       lastPtsUs = next.lastPresentedPtsUs;
-      lastSerial = next.currentSerial;
       lastCounter = player.videoFrameCounter();
-      if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
-                                      beforeStepAudioFlushCount,
-                                      label.c_str())) {
+      if (!expectAudioFrameStepTransition(
+              lastPtsUs, beforeStepSerial, next.currentSerial,
+              beforeStepAudioFlushCount, label.c_str())) {
         player.close();
         return 1;
       }
+      lastSerial = next.currentSerial;
     }
 
     const uint64_t beforeResumeAudioFlushCount =
@@ -502,9 +539,9 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectAudioResumeSeekAnchor(lastPtsUs, resumed.currentSerial,
-                                     beforeResumeAudioFlushCount,
-                                     "resume_after_forward")) {
+    if (!expectAudioResumeSeekAnchor(
+            lastPtsUs, lastSerial, resumed.currentSerial,
+            beforeResumeAudioFlushCount, "resume_after_forward")) {
       player.close();
       return 1;
     }
@@ -524,6 +561,7 @@ int main(int argc, char** argv) {
   int lastSerial = boundary.currentSerial;
   uint64_t lastCounter = player.videoFrameCounter();
   for (size_t i = 0; i < stepCount; ++i) {
+    const int beforeStepSerial = lastSerial;
     const uint64_t beforeStepAudioFlushCount =
         gAudioFlushCount.load(std::memory_order_relaxed);
     if (!player.requestFrameStep(
@@ -552,14 +590,14 @@ int main(int argc, char** argv) {
       return 1;
     }
     lastPtsUs = previous.lastPresentedPtsUs;
-    lastSerial = previous.currentSerial;
     lastCounter = player.videoFrameCounter();
-    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
-                                    beforeStepAudioFlushCount,
-                                    label.c_str())) {
+    if (!expectAudioFrameStepTransition(
+            lastPtsUs, beforeStepSerial, previous.currentSerial,
+            beforeStepAudioFlushCount, label.c_str())) {
       player.close();
       return 1;
     }
+    lastSerial = previous.currentSerial;
     steppedPts.push_back(lastPtsUs);
   }
 
@@ -590,9 +628,9 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectAudioResumeSeekAnchor(lastPtsUs, resumed.currentSerial,
-                                     beforeResumeAudioFlushCount,
-                                     "resume_during_step")) {
+    if (!expectAudioConcurrentResumeSeekAnchor(
+            lastPtsUs, resumed.currentSerial, beforeResumeAudioFlushCount,
+            "resume_during_step")) {
       player.close();
       return 1;
     }
@@ -624,9 +662,9 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectAudioResumeSeekAnchor(lastPtsUs, resumed.currentSerial,
-                                     beforeResumeAudioFlushCount,
-                                     "resume_after_previous")) {
+    if (!expectAudioResumeSeekAnchor(
+            lastPtsUs, lastSerial, resumed.currentSerial,
+            beforeResumeAudioFlushCount, "resume_after_previous")) {
       player.close();
       return 1;
     }
@@ -641,6 +679,7 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < stepCount; ++i) {
     const size_t targetIndex = stepCount - i - 1;
     const int64_t expectedPtsUs = steppedPts[targetIndex];
+    const int beforeStepSerial = lastSerial;
     const uint64_t beforeStepAudioFlushCount =
         gAudioFlushCount.load(std::memory_order_relaxed);
     if (!player.requestFrameStep(playback_video_frame_step::Direction::Next)) {
@@ -668,14 +707,14 @@ int main(int argc, char** argv) {
       return 1;
     }
     lastPtsUs = next.lastPresentedPtsUs;
-    lastSerial = next.currentSerial;
     lastCounter = player.videoFrameCounter();
-    if (!expectAudioFrameStepAnchor(lastPtsUs, lastSerial,
-                                    beforeStepAudioFlushCount,
-                                    label.c_str())) {
+    if (!expectAudioFrameStepTransition(
+            lastPtsUs, beforeStepSerial, next.currentSerial,
+            beforeStepAudioFlushCount, label.c_str())) {
       player.close();
       return 1;
     }
+    lastSerial = next.currentSerial;
   }
 
   if (resumeAfterMixed) {
@@ -699,9 +738,9 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectAudioResumeSeekAnchor(lastPtsUs, resumed.currentSerial,
-                                     beforeResumeAudioFlushCount,
-                                     "resume_after_mixed")) {
+    if (!expectAudioResumeSeekAnchor(
+            lastPtsUs, lastSerial, resumed.currentSerial,
+            beforeResumeAudioFlushCount, "resume_after_mixed")) {
       player.close();
       return 1;
     }

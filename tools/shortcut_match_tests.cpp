@@ -263,7 +263,8 @@ int main() {
                        playback_video_frame_step::Direction::Next,
                "Finishing an old serial frame-step must not pop a new serial "
                "request");
-  ok &= expect(!stepControl.resumePlaybackFrameSteps().positionChanged,
+  ok &= expect(
+      !stepControl.resumePlaybackFrameSteps().requiresTimelineReanchor,
                "Queued frame-step without a presented position must not "
                "request a resume transition");
   ok &= expect(!stepControl.peekFrameStep(&claimedStep, 8, false),
@@ -304,10 +305,11 @@ int main() {
   stepAckControl.publishFrameStepPresentation(claimedStep);
   playback_video_state_machine::FrameStepExitResult stepAckResume =
       stepAckControl.resumePlaybackFrameSteps();
-  ok &= expect(stepAckResume.positionChanged &&
+  ok &= expect(stepAckResume.requiresTimelineReanchor &&
                    stepAckResume.change.changed &&
                    stepAckResume.change.current == PlayerState::Paused,
-               "Resume must invalidate pending frame-step presentation acks");
+               "Resume must invalidate pending frame-step presentation acks "
+               "and require a timeline re-anchor");
   ok &= expect(!stepAckControl
                     .consumeFrameStepPresentation(claimedStep.serial,
                                                   claimedStep.generation)
@@ -363,7 +365,7 @@ int main() {
                "Frame-step mode test must consume presentation ack");
   playback_video_state_machine::FrameStepExitResult frameStepModeResume =
       frameStepModeControl.resumePlaybackFrameSteps();
-  ok &= expect(frameStepModeResume.positionChanged &&
+  ok &= expect(frameStepModeResume.requiresTimelineReanchor &&
                    frameStepModeResume.change.current == PlayerState::Paused,
                "Frame-step mode must stay active until playback resume");
 
@@ -382,7 +384,7 @@ int main() {
   ok &= expect(stepSeekTokenControl.consumeFrameStepSeek(
                    claimedStep.serial, claimedStep.generation),
                 "Frame-step seek token must be consumable while still paused");
-  stepSeekTokenControl.resetForSerial(12);
+  stepSeekTokenControl.resetForFrameStepSeekSerial(12);
   ok &= expect(stepSeekTokenControl.publishFrameStepSeekPresentation(
                    12, claimedStep.generation),
                "Frame-step seek must transfer presentation acknowledgement to "
@@ -396,16 +398,52 @@ int main() {
                "Frame-step seek presentation must be acknowledged on the "
                "redecode serial");
   stepSeekTokenControl.requestFrameStep(
-      playback_video_frame_step::Direction::Previous, 11);
-  ok &= expect(stepSeekTokenControl.peekFrameStep(&claimedStep, 11, false),
+      playback_video_frame_step::Direction::Previous, 12);
+  ok &= expect(stepSeekTokenControl.peekFrameStep(&claimedStep, 12, false),
                "Frame-step seek resume invalidation test must claim a request");
   ok &= expect(stepSeekTokenControl.publishFrameStepSeek(claimedStep),
                "Frame-step seek resume invalidation test must publish token");
-  ok &= expect(stepSeekTokenControl.resumePlaybackFrameSteps().positionChanged,
-               "Resume must invalidate pending frame-step seek tokens");
+  ok &= expect(stepSeekTokenControl.resumePlaybackFrameSteps()
+                   .requiresTimelineReanchor,
+               "Resume must invalidate pending frame-step seek tokens and "
+               "retain the timeline re-anchor requirement");
   ok &= expect(!stepSeekTokenControl.consumeFrameStepSeek(
                    claimedStep.serial, claimedStep.generation),
                 "Frame-step seek tokens must not survive playback resume");
+
+  playback_video_state_machine::Controller abortedStepSeekControl;
+  putStepControllerInPaused(abortedStepSeekControl);
+  abortedStepSeekControl.resetForSerial(20);
+  abortedStepSeekControl.requestFrameStep(
+      playback_video_frame_step::Direction::Previous, 20);
+  ok &= expect(abortedStepSeekControl.peekFrameStep(&claimedStep, 20, false) &&
+                   abortedStepSeekControl.publishFrameStepSeek(claimedStep) &&
+                   abortedStepSeekControl.consumeFrameStepSeek(
+                       claimedStep.serial, claimedStep.generation),
+               "Aborted frame-step seek test must hand off one seek request");
+  abortedStepSeekControl.resetForFrameStepSeekSerial(21);
+  abortedStepSeekControl.beginSeeking();
+  ok &= expect(abortedStepSeekControl.publishFrameStepSeekPresentation(
+                   21, claimedStep.generation),
+               "Aborted frame-step seek test must publish the redecode "
+               "presentation token");
+  abortedStepSeekControl.cancelFrameStepSeek();
+  playback_video_state_machine::FrameStepExitResult abortedStepSeekResume =
+      abortedStepSeekControl.resumePlaybackFrameSteps();
+  ok &= expect(abortedStepSeekResume.requiresTimelineReanchor &&
+                   !abortedStepSeekResume.change.changed &&
+                   abortedStepSeekResume.change.current == PlayerState::Seeking,
+               "An aborted frame-step seek must preserve the resume "
+               "re-anchor requirement after its presentation token is gone");
+
+  playback_video_state_machine::Controller replacedStepSeekControl;
+  putStepControllerInPaused(replacedStepSeekControl);
+  replacedStepSeekControl.resetForFrameStepSeekSerial(30);
+  replacedStepSeekControl.resetForSerial(31);
+  ok &= expect(!replacedStepSeekControl.resumePlaybackFrameSteps()
+                    .requiresTimelineReanchor,
+               "A normal serial transition must replace a pending frame-step "
+               "resume re-anchor");
 
   playback_video_state_machine::Controller replayResumeControl;
   putStepControllerInPaused(replayResumeControl);

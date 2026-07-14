@@ -425,6 +425,8 @@ radioify_link_repo_target(shortcut_match_tests)
 if (WIN32)
   target_link_libraries(shortcut_match_tests PRIVATE d3d11)
 endif()
+add_test(NAME shortcut_match_tests
+         COMMAND $<TARGET_FILE:shortcut_match_tests>)
 
 add_executable(presentation_policy_tests)
 target_sources(presentation_policy_tests PRIVATE

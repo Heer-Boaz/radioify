@@ -292,12 +292,21 @@ void Controller::resetFrameSteps() {
   std::lock_guard<std::mutex> lock(frameStepMutex_);
   frameStepSerial_ = 0;
   clearFrameStepsLocked();
+  frameStepResumeReanchorRequired_ = false;
 }
 
 void Controller::resetForSerial(int serial) {
   std::lock_guard<std::mutex> lock(frameStepMutex_);
   frameStepSerial_ = serial;
   clearFrameStepsLocked();
+  frameStepResumeReanchorRequired_ = false;
+}
+
+void Controller::resetForFrameStepSeekSerial(int serial) {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  frameStepSerial_ = serial;
+  clearFrameStepsLocked();
+  frameStepResumeReanchorRequired_ = true;
 }
 
 StateChange Controller::requestFrameStep(
@@ -372,6 +381,9 @@ FrameStepPresentationResult Controller::consumeFrameStepPresentation(
   pendingPresentedFrameStep_.clear();
   PlayerState state = current();
   result.accepted = canClaimFrameStep(state);
+  if (result.accepted) {
+    frameStepResumeReanchorRequired_ = true;
+  }
   result.change = result.accepted ? set(PlayerState::FrameStep)
                                   : unchanged(state);
   return result;
@@ -407,13 +419,20 @@ bool Controller::publishFrameStepSeekPresentation(int serial,
   return true;
 }
 
+void Controller::cancelFrameStepSeek() {
+  std::lock_guard<std::mutex> lock(frameStepMutex_);
+  clearFrameStepsLocked();
+}
+
 FrameStepExitResult Controller::resumePlaybackFrameSteps() {
   FrameStepExitResult result;
   std::lock_guard<std::mutex> lock(frameStepMutex_);
-  result.positionChanged = current() == PlayerState::FrameStep;
+  PlayerState state = current();
+  result.requiresTimelineReanchor = frameStepResumeReanchorRequired_;
+  frameStepResumeReanchorRequired_ = false;
   clearFrameStepsLocked();
-  result.change =
-      result.positionChanged ? set(PlayerState::Paused) : unchanged(current());
+  result.change = state == PlayerState::FrameStep ? set(PlayerState::Paused)
+                                                   : unchanged(state);
   return result;
 }
 

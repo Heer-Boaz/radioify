@@ -424,6 +424,11 @@ enum class VideoPresentationNotification {
   FrameStep,
 };
 
+enum class SerialTransitionPurpose {
+  Timeline,
+  FrameStepSeek,
+};
+
 playback_video_sync::PreparedFrame preparedFrameFromPresentedFrame(
     const playback_video_frame_cursor::PresentedFrame& entry) {
   assert(entry.serial > 0);
@@ -1653,17 +1658,12 @@ struct Player::Impl {
 
   void resetAudioOutputForSerial(uint64_t serial, bool reacquireClock,
                                  const char* reason) {
-    resetAudioOutputForSerialAt(serial, audioDiscardTargetUsForSerial(serial),
-                                reacquireClock, reason);
-  }
-
-  void resetAudioOutputForSerialAt(uint64_t serial, int64_t targetUs,
-                                   bool reacquireClock, const char* reason) {
     if (serial == 0 ||
         serial > static_cast<uint64_t>((std::numeric_limits<int>::max)())) {
       return;
     }
     int s = static_cast<int>(serial);
+    int64_t targetUs = audioDiscardTargetUsForSerial(serial);
     playback_audio_output_timeline::ResetResult result =
         audioOutputTimeline.resetForSerial(s, (std::max)(int64_t{0}, targetUs),
                                            reacquireClock);
@@ -1841,11 +1841,6 @@ struct Player::Impl {
           playbackState.consumeFrameStepPresentation(
               serialForFrame, frameStepRequest->generation);
       applyStateChange(stepPresentation.change);
-      if (stepPresentation.accepted &&
-          serialForFrame == serialControl.currentSerial()) {
-        resetAudioOutputForSerialAt(static_cast<uint64_t>(serialForFrame),
-                                    item.ptsUs, true, "frame_step");
-      }
       appendTimingFmt(
           "frame_step_presented serial=%d frame=%llu pts_us=%lld state_ack=%d",
           serialForFrame, static_cast<unsigned long long>(item.displayIndex),
@@ -2010,9 +2005,7 @@ struct Player::Impl {
     if (!frameCursor.cancelPendingFrameStepSeekForSerial(serial)) {
       return false;
     }
-    playback_video_state_machine::FrameStepExitResult frameStepExit =
-        playbackState.resumePlaybackFrameSteps();
-    applyStateChange(frameStepExit.change);
+    playbackState.cancelFrameStepSeek();
     serialControl.clearPendingPresentation(serial);
     observePlaybackPipeline();
     return true;
@@ -2022,7 +2015,7 @@ struct Player::Impl {
     playback_video_state_machine::FrameStepExitResult frameStepExit =
         playbackState.resumePlaybackFrameSteps();
     applyStateChange(frameStepExit.change);
-    bool exited = frameStepExit.positionChanged;
+    bool exited = frameStepExit.requiresTimelineReanchor;
     const int serial = serialControl.currentSerial();
     if (frameCursor.exitFrameStepModeForPlaybackResume(serial)) {
       serialControl.clearPendingPresentation(serial);
@@ -2280,12 +2273,16 @@ struct Player::Impl {
   void handleEvent(const playback_video_control::Event& ev) {
     auto applySerialTransition =
         [&](playback_video_serial_control::TransitionPlan plan,
-            const char* tag) -> int {
+            const char* tag, SerialTransitionPurpose purpose) -> int {
           if (!plan.valid) return 0;
           if (plan.signalCommandPending) {
             commandPending.store(true, std::memory_order_relaxed);
           }
-          playbackState.resetForSerial(plan.serial);
+          if (purpose == SerialTransitionPurpose::FrameStepSeek) {
+            playbackState.resetForFrameStepSeekSerial(plan.serial);
+          } else {
+            playbackState.resetForSerial(plan.serial);
+          }
           clearFrameRequested.store(true, std::memory_order_relaxed);
           mainClock.resetForSerial(plan.serial);
           videoPackets.flush(static_cast<uint64_t>(plan.serial));
@@ -2309,7 +2306,7 @@ struct Player::Impl {
           serialControl.beginTransition(
               targetUs, initDone.load(std::memory_order_relaxed),
               running.load(std::memory_order_relaxed)),
-          tag);
+          tag, SerialTransitionPurpose::Timeline);
     };
     auto beginFrameStepSeekTransition =
         [&](const playback_video_frame_step_seek::Plan& plan,
@@ -2331,7 +2328,7 @@ struct Player::Impl {
                   plan.demuxWindowEndUs(), plan.decoderPrerollTargetUs(),
                   demuxSeekMode, initDone.load(std::memory_order_relaxed),
                   running.load(std::memory_order_relaxed)),
-              tag);
+              tag, SerialTransitionPurpose::FrameStepSeek);
           if (seekSerial != expectedSeekSerial) {
             frameStepSeek.reset();
             return;
