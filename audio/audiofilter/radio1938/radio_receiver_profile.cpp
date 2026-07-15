@@ -1,5 +1,7 @@
 #include "radio_receiver_profile.h"
 
+#include <cstdlib>
+
 std::string_view radioReceiverProfileName(RadioReceiverProfile profile) {
   switch (profile) {
     case RadioReceiverProfile::Philco37116:
@@ -7,18 +9,16 @@ std::string_view radioReceiverProfileName(RadioReceiverProfile profile) {
     case RadioReceiverProfile::Typical1930s:
       return "typical-1930s";
   }
-  return "typical-1930s";
+  std::abort();
 }
 
 bool parseRadioReceiverProfile(std::string_view name,
                                RadioReceiverProfile& profile) {
-  if (name == "philco-37-116" || name == "philco_37_116" ||
-      name == "philco_37_116x") {
+  if (name == "philco-37-116") {
     profile = RadioReceiverProfile::Philco37116;
     return true;
   }
-  if (name == "typical-1930s" || name == "philco-38-12" ||
-      name == "philco_38_12") {
+  if (name == "typical-1930s") {
     profile = RadioReceiverProfile::Typical1930s;
     return true;
   }

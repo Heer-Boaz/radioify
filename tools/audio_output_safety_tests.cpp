@@ -2,8 +2,8 @@
 #include "audio/pipeline_transition.h"
 #include "audio/playback_source_buffer.h"
 #include "audio/playback_source_priming.h"
-#include "audio/radio_bypass_transition.h"
 #include "audio/radio_filter_mode.h"
+#include "audio/radio_filter_transition.h"
 
 #include <algorithm>
 #include <cmath>
@@ -349,55 +349,54 @@ void expectPlaybackSourceBufferWrapsCleanly() {
   expectNear(out[7], 6.1f, 1e-6f, "buffer wrapped frame 3 right");
 }
 
-void expectRadioBypassCrossfadesAtProducerBoundary() {
-  RadioBypassTransition transition;
-  transition.reset(false, 400);
-  if (transition.needsWetSignal(false)) {
-    fail("Dry radio bypass unexpectedly required a wet signal.");
+void expectRadioFilterCrossfadesAtProducerBoundary() {
+  RadioFilterTransition transition;
+  transition.reset(RadioFilterMode::Off, 400);
+  if (transition.needsWetSignal()) {
+    fail("Dry radio mode unexpectedly required a wet signal.");
   }
-  if (!transition.activateWetSignal(true)) {
-    fail("Radio enable did not activate the wet signal.");
+  if (!transition.retarget(RadioFilterMode::Typical1930s) ||
+      transition.activeMode() != RadioFilterMode::Typical1930s) {
+    fail("Enabling the radio did not select the typical receiver.");
   }
 
   float wet[] = {1.0f, 1.0f, 1.0f, 1.0f};
   const float dry[] = {0.0f, 0.0f, 0.0f, 0.0f};
-  transition.blend(wet, dry, 4, 1, true, 400);
+  transition.blend(wet, dry, 4, 1, 400);
   expectNear(wet[0], 0.00f, 1e-6f, "radio enable frame 0");
   expectNear(wet[1], 0.25f, 1e-6f, "radio enable frame 1");
   expectNear(wet[2], 0.50f, 1e-6f, "radio enable frame 2");
   expectNear(wet[3], 0.75f, 1e-6f, "radio enable frame 3");
-  if (transition.blendFramesRemaining(true, 400) != 0) {
+  if (transition.blending() || transition.framesUntilBoundary(400) != 0) {
     fail("Radio enable crossfade did not reach the wet signal.");
   }
 
+  transition.retarget(RadioFilterMode::Off);
   std::fill(std::begin(wet), std::end(wet), 1.0f);
-  transition.blend(wet, dry, 4, 1, false, 400);
+  transition.blend(wet, dry, 4, 1, 400);
   expectNear(wet[0], 1.00f, 1e-6f, "radio disable frame 0");
   expectNear(wet[1], 0.75f, 1e-6f, "radio disable frame 1");
   expectNear(wet[2], 0.50f, 1e-6f, "radio disable frame 2");
   expectNear(wet[3], 0.25f, 1e-6f, "radio disable frame 3");
-  if (transition.needsWetSignal(false)) {
+  if (transition.commitAtDryBoundary() || transition.needsWetSignal()) {
     fail("Radio disable crossfade did not release the wet signal.");
   }
 }
 
-void expectRadioBypassCrossfadeIsBlockInvariant() {
-  RadioBypassTransition whole;
-  RadioBypassTransition split;
-  whole.reset(false, 400);
-  split.reset(false, 400);
-  whole.activateWetSignal(true);
-  split.activateWetSignal(true);
+void expectRadioFilterCrossfadeIsBlockInvariant() {
+  RadioFilterTransition whole;
+  RadioFilterTransition split;
+  whole.reset(RadioFilterMode::Off, 400);
+  split.reset(RadioFilterMode::Off, 400);
+  whole.retarget(RadioFilterMode::Typical1930s);
+  split.retarget(RadioFilterMode::Typical1930s);
 
-  float wholeWet[] = {0.9f, 0.8f, 0.7f, 0.6f,
-                      0.5f, 0.4f, 0.3f, 0.2f};
-  float splitWet[] = {0.9f, 0.8f, 0.7f, 0.6f,
-                      0.5f, 0.4f, 0.3f, 0.2f};
-  const float dry[] = {-0.2f, -0.1f, 0.0f, 0.1f,
-                       0.2f, 0.3f, 0.4f, 0.5f};
-  whole.blend(wholeWet, dry, 8, 1, true, 400);
-  split.blend(splitWet, dry, 3, 1, true, 400);
-  split.blend(splitWet + 3, dry + 3, 5, 1, true, 400);
+  float wholeWet[] = {0.9f, 0.8f, 0.7f, 0.6f};
+  float splitWet[] = {0.9f, 0.8f, 0.7f, 0.6f};
+  const float dry[] = {-0.2f, -0.1f, 0.0f, 0.1f};
+  whole.blend(wholeWet, dry, 4, 1, 400);
+  split.blend(splitWet, dry, 1, 1, 400);
+  split.blend(splitWet + 1, dry + 1, 3, 1, 400);
 
   for (size_t i = 0; i < std::size(wholeWet); ++i) {
     expectNear(splitWet[i], wholeWet[i], 1e-6f,
@@ -406,8 +405,10 @@ void expectRadioBypassCrossfadeIsBlockInvariant() {
   float wholeNext = 0.75f;
   float splitNext = wholeNext;
   const float dryNext = -0.25f;
-  whole.blend(&wholeNext, &dryNext, 1, 1, false, 400);
-  split.blend(&splitNext, &dryNext, 1, 1, false, 400);
+  whole.retarget(RadioFilterMode::Off);
+  split.retarget(RadioFilterMode::Off);
+  whole.blend(&wholeNext, &dryNext, 1, 1, 400);
+  split.blend(&splitNext, &dryNext, 1, 1, 400);
   expectNear(splitNext, wholeNext, 1e-6f,
              "radio bypass continuation after split blocks");
 }
@@ -446,32 +447,50 @@ void expectRadioFilterCycleContract() {
 }
 
 void expectWetReceiverReplacementCrossfadesThroughDry() {
-  RadioBypassTransition transition;
-  transition.reset(true, 400);
-  if (!transition.requestWetReplacement()) {
-    fail("Wet receiver replacement did not start.");
+  RadioFilterTransition transition;
+  transition.reset(RadioFilterMode::Typical1930s, 400);
+  if (transition.retarget(RadioFilterMode::Philco37116)) {
+    fail("Receiver changed before the dry transition boundary.");
   }
 
   float oldWet[] = {1.0f, 1.0f, 1.0f, 1.0f};
   const float dry[] = {0.0f, 0.0f, 0.0f, 0.0f};
-  transition.blend(oldWet, dry, 4, 1, true, 400);
+  transition.blend(oldWet, dry, 4, 1, 400);
   expectNear(oldWet[0], 1.00f, 1e-6f, "receiver fade-out frame 0");
   expectNear(oldWet[1], 0.75f, 1e-6f, "receiver fade-out frame 1");
   expectNear(oldWet[2], 0.50f, 1e-6f, "receiver fade-out frame 2");
   expectNear(oldWet[3], 0.25f, 1e-6f, "receiver fade-out frame 3");
-  if (!transition.wetReplacementReadyToCommit() ||
-      !transition.commitWetReplacement()) {
+  if (!transition.commitAtDryBoundary() ||
+      transition.activeMode() != RadioFilterMode::Philco37116) {
     fail("Receiver replacement did not reach its dry commit point.");
   }
 
   float newWet[] = {1.0f, 1.0f, 1.0f, 1.0f};
-  transition.blend(newWet, dry, 4, 1, true, 400);
+  transition.blend(newWet, dry, 4, 1, 400);
   expectNear(newWet[0], 0.00f, 1e-6f, "receiver fade-in frame 0");
   expectNear(newWet[1], 0.25f, 1e-6f, "receiver fade-in frame 1");
   expectNear(newWet[2], 0.50f, 1e-6f, "receiver fade-in frame 2");
   expectNear(newWet[3], 0.75f, 1e-6f, "receiver fade-in frame 3");
-  if (transition.wetReplacementActive()) {
+  if (transition.blending()) {
     fail("Receiver replacement did not finish after the wet fade-in.");
+  }
+}
+
+void expectSupersededReceiverChangeReversesWithoutCommit() {
+  RadioFilterTransition transition;
+  transition.reset(RadioFilterMode::Typical1930s, 400);
+  transition.retarget(RadioFilterMode::Philco37116);
+
+  float wet[] = {1.0f, 1.0f};
+  const float dry[] = {0.0f, 0.0f};
+  transition.blend(wet, dry, 2, 1, 400);
+  transition.retarget(RadioFilterMode::Typical1930s);
+  transition.blend(wet, dry, 2, 1, 400);
+
+  if (transition.blending() ||
+      transition.activeMode() != RadioFilterMode::Typical1930s ||
+      transition.commitAtDryBoundary()) {
+    fail("Superseded receiver change did not reverse to the active model.");
   }
 }
 
@@ -493,9 +512,10 @@ int main() {
   expectDryProducerClearsPendingInputFade();
   expectPlaybackSourcePrimingBudget();
   expectPlaybackSourceBufferWrapsCleanly();
-  expectRadioBypassCrossfadesAtProducerBoundary();
-  expectRadioBypassCrossfadeIsBlockInvariant();
+  expectRadioFilterCrossfadesAtProducerBoundary();
+  expectRadioFilterCrossfadeIsBlockInvariant();
   expectRadioFilterCycleContract();
   expectWetReceiverReplacementCrossfadesThroughDry();
+  expectSupersededReceiverChangeReversesWithoutCommit();
   return 0;
 }

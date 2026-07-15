@@ -1,9 +1,12 @@
 #include "radio.h"
+#include "audio/pipeline_transition.h"
+#include "audio/radio_playback.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -31,10 +34,6 @@ void expectProfileParserContract() {
       parsed != RadioReceiverProfile::Typical1930s ||
       radioReceiverProfileName(parsed) != "typical-1930s") {
     fail("typical-1930s does not round-trip");
-  }
-  if (!parseRadioReceiverProfile("philco-38-12", parsed) ||
-      parsed != RadioReceiverProfile::Typical1930s) {
-    fail("Philco 38-12 concrete alias does not select typical-1930s");
   }
   if (!parseRadioReceiverProfile("philco-37-116", parsed) ||
       parsed != RadioReceiverProfile::Philco37116 ||
@@ -98,11 +97,52 @@ void expectInitializedProfileSwitchRebuildsPhysicalModel() {
   }
 }
 
+void expectPlaybackFilterOwnsReceiverSwitching() {
+  RadioPlaybackFilter filter;
+  RadioPlaybackFilterConfig config;
+  config.sampleRate = 48000;
+  config.outputChannels = 2;
+  config.initialMode = RadioFilterMode::Off;
+  filter.initialize(config);
+
+  filter.cycleMode();
+  filter.cycleMode();
+  if (filter.mode() != RadioFilterMode::Philco37116) {
+    fail("paused mode changes did not retain the latest receiver request");
+  }
+
+  AudioPipelineTransition pipelineTransition;
+  audioPipelineTransitionReset(pipelineTransition);
+  std::vector<float> samples(128, 0.05f);
+  filter.process(samples.data(), 64, 2, pipelineTransition);
+  for (float sample : samples) {
+    if (!std::isfinite(sample)) {
+      fail("playback owner produced a non-finite receiver transition");
+    }
+  }
+
+  filter.requestReset();
+  filter.requestReset();
+  filter.process(samples.data(), 64, 2, pipelineTransition);
+
+  filter.cycleMode();
+  const uint32_t transitionFrames = audioPipelineTransitionFrames(48000);
+  samples.assign(static_cast<size_t>(transitionFrames) * 2u, 0.05f);
+  filter.process(samples.data(), transitionFrames, 2, pipelineTransition);
+  samples.assign(128, 0.05f);
+  filter.process(samples.data(), 64, 2, pipelineTransition);
+  for (float sample : samples) {
+    expectNear(sample, 0.05f, 1e-6f,
+               "disabled playback owner must preserve dry audio");
+  }
+}
+
 }  // namespace
 
 int main() {
   expectProfileParserContract();
   expectTypicalReceiverTopology();
   expectInitializedProfileSwitchRebuildsPhysicalModel();
+  expectPlaybackFilterOwnsReceiverSwitching();
   return 0;
 }

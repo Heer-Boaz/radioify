@@ -112,10 +112,9 @@ std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
                                  tuneSin);
 }
 
-void ensureIfStripConfigured(Radio1938& radio) {
+void configureIfStrip(Radio1938& radio) {
   auto& ifStrip = radio.ifStrip;
   const auto& tuning = radio.tuning;
-  if (ifStrip.appliedConfigRevision == tuning.configRevision) return;
 
   float sampleRate = std::max(radio.sampleRate, 1.0f);
   float safeAudioBw = std::max(tuning.tunedBw, ifStrip.ifMinBwHz);
@@ -201,14 +200,16 @@ void ensureIfStripConfigured(Radio1938& radio) {
   ifStrip.appliedConfigRevision = tuning.configRevision;
 }
 
+void ensureIfStripConfigured(Radio1938& radio) {
+  if (radio.ifStrip.appliedConfigRevision != radio.tuning.configRevision) {
+    configureIfStrip(radio);
+  }
+}
+
 }  // namespace
 
 void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
-  // Profile switches restart tuning revisions from zero. Invalidate the old
-  // loaded-can configuration even if the next revision number happens to
-  // match the previous receiver.
-  radio.ifStrip.appliedConfigRevision = 0;
-  ensureIfStripConfigured(radio);
+  configureIfStrip(radio);
 }
 
 void RadioIFStripNode::reset(Radio1938& radio) {

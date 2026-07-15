@@ -145,6 +145,7 @@ struct RadioPreviewPipeline {
                   const RadioAmIngressConfig& ingressConfig,
                   const RadioPreviewConfig& previewConfig,
                   float newSampleRate);
+  void reserveBlockFrames(uint32_t frames);
   void reset();
   void runBlock(Radio1938& radioRef,
                 float* samples,

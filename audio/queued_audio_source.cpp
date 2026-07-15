@@ -190,9 +190,11 @@ bool queuedAudioSourceWriteInternal(AudioState* state,
       while (radioOffset < framesToWrite) {
         const uint32_t radioFrames = static_cast<uint32_t>(
             std::min<uint64_t>(framesToWrite - radioOffset, UINT32_MAX));
-        audioPlaybackProcessRadioBlock(
-            state, cursor + static_cast<size_t>(radioOffset) * state->channels,
-            radioFrames);
+        if (state->radioFilter.process(
+                cursor + static_cast<size_t>(radioOffset) * state->channels,
+                radioFrames, state->channels, state->pipelineTransition)) {
+          audioPlaybackHoldClipAlert(state);
+        }
         radioOffset += radioFrames;
       }
     }
@@ -302,7 +304,7 @@ bool queuedAudioSourceCommitPendingSerialFlush(AudioState* state) {
   state->streamStarved.store(false, std::memory_order_relaxed);
   state->audioClock.reset(serial);
   queuedAudioSourceClearMetadata(state);
-  state->radioResetPending.store(true, std::memory_order_relaxed);
+  state->radioFilter.requestReset();
   audioPipelineTransitionRequestSignalFadeIn(state->pipelineTransition,
                                              state->sampleRate);
   audioPipelineTransitionFinishCommit(state->pipelineTransition);
@@ -411,8 +413,7 @@ bool queuedAudioSourceStartWorker(const AudioBackendHandlers* backend,
             framePos = targetFrame;
             consecutiveEmptyReads = 0;
             queuedAudioSourceReset(&gAudio.state, targetFrame, 0);
-            gAudio.state.radioResetPending.store(true,
-                                                 std::memory_order_relaxed);
+            gAudio.state.radioFilter.requestReset();
             seekCommitPending = true;
             continue;
           }

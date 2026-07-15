@@ -1,18 +1,28 @@
 #include "radio_filter_mode.h"
 
+#include <cstdlib>
+
 bool radioFilterModeEnabled(RadioFilterMode mode) {
-  return mode != RadioFilterMode::Off;
+  switch (mode) {
+    case RadioFilterMode::Off:
+      return false;
+    case RadioFilterMode::Typical1930s:
+    case RadioFilterMode::Philco37116:
+      return true;
+  }
+  std::abort();
 }
 
 RadioReceiverProfile radioFilterModeReceiverProfile(RadioFilterMode mode) {
   switch (mode) {
-    case RadioFilterMode::Off:
     case RadioFilterMode::Typical1930s:
       return RadioReceiverProfile::Typical1930s;
     case RadioFilterMode::Philco37116:
       return RadioReceiverProfile::Philco37116;
+    case RadioFilterMode::Off:
+      std::abort();
   }
-  return RadioReceiverProfile::Typical1930s;
+  std::abort();
 }
 
 RadioFilterMode radioFilterModeForReceiverProfile(
@@ -23,7 +33,7 @@ RadioFilterMode radioFilterModeForReceiverProfile(
     case RadioReceiverProfile::Typical1930s:
       return RadioFilterMode::Typical1930s;
   }
-  return RadioFilterMode::Typical1930s;
+  std::abort();
 }
 
 RadioFilterMode nextRadioFilterMode(RadioFilterMode mode) {
@@ -35,7 +45,7 @@ RadioFilterMode nextRadioFilterMode(RadioFilterMode mode) {
     case RadioFilterMode::Philco37116:
       return RadioFilterMode::Off;
   }
-  return RadioFilterMode::Off;
+  std::abort();
 }
 
 std::string_view radioFilterModeLabel(RadioFilterMode mode) {
@@ -47,5 +57,5 @@ std::string_view radioFilterModeLabel(RadioFilterMode mode) {
     case RadioFilterMode::Philco37116:
       return "Radio: Philco";
   }
-  return "Radio: Off";
+  std::abort();
 }

@@ -64,7 +64,7 @@ bool audioPlaybackFinishSeekPipelineTransition(AudioState* state,
   if (audioPipelineTransitionFinishCommit(state->pipelineTransition)) {
     state->seekRequested.store(false, std::memory_order_relaxed);
     if (resetRadio) {
-      state->radioResetPending.store(true, std::memory_order_relaxed);
+      state->radioFilter.requestReset();
     }
     return true;
   }
@@ -183,15 +183,13 @@ void resetPlaybackStateForLoad(uint64_t startFrame,
   gAudio.state.streamDiscardPtsUs.store(0, std::memory_order_relaxed);
   gAudio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
   gAudio.state.deviceDelayFrames.store(0, std::memory_order_relaxed);
-  gAudio.state.radioResetPending.store(false, std::memory_order_relaxed);
   gAudio.state.outputSafety = {};
   if (releasePipelineTransition) {
     releasePlaybackPipelineForNewSignal();
   }
 
   gAudio.state.channels = gAudio.channels;
-  rebuildRadioPreviewChain(&gAudio.state);
-  prepareRadioPlaybackSource(&gAudio.state);
+  gAudio.state.radioFilter.resetSource(gAudio.channels);
 }
 
 bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
@@ -298,9 +296,7 @@ bool ensureChannels(uint32_t newChannels) {
 
   gAudio.channels = newChannels;
   gAudio.state.channels = gAudio.channels;
-  configureRadioPlaybackTemplates();
-  rebuildRadioPreviewChain(&gAudio.state);
-  prepareRadioPlaybackSource(&gAudio.state);
+  gAudio.state.radioFilter.resetSource(gAudio.channels);
 
   if (hadTrack) {
     return loadFileAt(gAudio.nowPlaying, resumeFrame, trackIndex);
@@ -323,7 +319,6 @@ void stopPlayback() {
   gAudio.state.finished.store(false);
   gAudio.state.seekRequested.store(false);
   gAudio.state.pendingSeekFrames.store(0);
-  gAudio.state.radioResetPending.store(false, std::memory_order_relaxed);
   gAudio.state.sourcePreparing.store(false, std::memory_order_release);
   audioPipelineTransitionReset(gAudio.state.pipelineTransition);
   gAudio.state.audioPrimed.store(false);
@@ -351,29 +346,26 @@ void stopPlayback() {
 }
 void audioInit(const AudioPlaybackConfig& config) {
   gAudio.enableAudio = config.enableAudio;
-  gAudio.enableRadio = config.enableRadio;
-  gAudio.dry = config.dry;
   gAudio.sampleRate = 48000;
   gAudio.baseChannels = config.mono ? 1u : 2u;
   gAudio.channels = gAudio.baseChannels;
-  gAudio.lpHz = static_cast<float>(config.bwHz);
-  gAudio.noise = static_cast<float>(config.noise);
-  gAudio.radioPresetName = config.radioPresetName;
   gAudio.state.channels = gAudio.channels;
   gAudio.state.sampleRate = gAudio.sampleRate;
   gAudio.state.dry = config.dry;
-  const RadioFilterMode initialRadioMode =
+  RadioPlaybackFilterConfig radioFilterConfig;
+  radioFilterConfig.sampleRate = gAudio.sampleRate;
+  radioFilterConfig.outputChannels = gAudio.channels;
+  radioFilterConfig.bandwidthHz = static_cast<float>(config.bwHz);
+  radioFilterConfig.noise = static_cast<float>(config.noise);
+  radioFilterConfig.initialMode =
       config.enableRadio
           ? radioFilterModeForReceiverProfile(config.radioReceiverProfile)
           : RadioFilterMode::Off;
-  gAudio.state.radioFilterMode.store(initialRadioMode);
-  gAudio.state.radioAmIngress.reception =
+  radioFilterConfig.reception =
       radioReceptionConfigForProfile(config.radioReceptionProfile);
-  gAudio.radioSettingsPath = config.radioSettingsPath;
-
-  configureRadioPlaybackTemplates();
-  rebuildRadioPreviewChain(&gAudio.state);
-  prepareRadioPlaybackSource(&gAudio.state);
+  radioFilterConfig.settingsPath = config.radioSettingsPath;
+  radioFilterConfig.presetName = config.radioPresetName;
+  gAudio.state.radioFilter.initialize(radioFilterConfig);
 }
 
 void audioShutdown() {
@@ -501,15 +493,11 @@ bool audioIsFinished() {
 }
 
 bool audioIsRadioEnabled() {
-  return radioFilterModeEnabled(gAudio.state.radioFilterMode.load());
+  return radioFilterModeEnabled(gAudio.state.radioFilter.mode());
 }
 
 RadioFilterMode audioGetRadioFilterMode() {
-  return gAudio.state.radioFilterMode.load();
-}
-
-RadioReceiverProfile audioGetRadioReceiverProfile() {
-  return radioFilterModeReceiverProfile(audioGetRadioFilterMode());
+  return gAudio.state.radioFilter.mode();
 }
 
 std::string_view audioGetRadioFilterLabel() {
@@ -599,10 +587,7 @@ void audioSeekToSec(double sec) {
 }
 
 void audioCycleRadioFilter() {
-  const RadioFilterMode current =
-      gAudio.state.radioFilterMode.load(std::memory_order_relaxed);
-  gAudio.state.radioFilterMode.store(nextRadioFilterMode(current),
-                                     std::memory_order_relaxed);
+  gAudio.state.radioFilter.cycleMode();
 }
 
 void audioSetHold(bool hold) {

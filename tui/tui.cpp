@@ -903,9 +903,12 @@ int runTui(Options o) {
     logLine(std::string("  Output: ") + toUtf8String(outputPath));
     logLine("Rendering output...");
     Radio1938 activeRadioTemplate = *radio1938Template;
-    const RadioReceiverProfile activeProfile =
-        audioGetRadioReceiverProfile();
-    if (activeRadioTemplate.receiverProfile != activeProfile) {
+    const RadioFilterMode activeMode = audioGetRadioFilterMode();
+    if (radioFilterModeEnabled(activeMode) &&
+        activeRadioTemplate.receiverProfile !=
+            radioFilterModeReceiverProfile(activeMode)) {
+      const RadioReceiverProfile activeProfile =
+          radioFilterModeReceiverProfile(activeMode);
       activeRadioTemplate.applyReceiverProfile(activeProfile);
       if (!o.radioSettingsPath.empty()) {
         std::string radioIniError;

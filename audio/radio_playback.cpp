@@ -1,160 +1,165 @@
-#include "audioplayback_internal.h"
+#include "radio_playback.h"
 
 #include <algorithm>
 #include <cassert>
-#include <cstring>
+#include <cstdlib>
 #include <cstdio>
-#include <string>
+#include <cstring>
 
 #include "pipeline_transition.h"
 
 namespace {
 
-size_t receiverTemplateIndex(RadioReceiverProfile profile) {
-  switch (profile) {
-    case RadioReceiverProfile::Typical1930s:
-      return 0u;
-    case RadioReceiverProfile::Philco37116:
-      return 1u;
-  }
-  return 0u;
-}
-
-void rebuildRadioFromTemplate(Radio1938* target,
-                              const Radio1938& source,
-                              float sampleRate,
-                              float bwHz,
-                              float noise) {
-  if (!target) return;
-  *target = source;
-  target->init(kRadioProcessChannels, sampleRate, bwHz, noise);
-}
-
-void applyRadioSettingsToTemplate(Radio1938& target,
-                                  const std::string& presetName,
-                                  const std::string& settingsPath) {
-  if (settingsPath.empty()) return;
-  std::string error;
-  if (!applyRadioSettingsIni(target, settingsPath, presetName, &error)) {
-    std::fprintf(stderr,
-                 "WARNING: Failed to apply radio settings from %s: %s\n",
-                 settingsPath.c_str(),
-                 error.c_str());
-  }
-}
+constexpr uint32_t kRadioProcessChannels = 1u;
+constexpr uint32_t kRadioTransitionScratchFrames = 2048u;
 
 }  // namespace
 
-void rebuildRadioPreviewChain(AudioState* state) {
-  if (!state) return;
-  const RadioReceiverProfile requestedProfile =
-      radioFilterModeReceiverProfile(
-          state->radioFilterMode.load(std::memory_order_relaxed));
-  const Radio1938& sourceTemplate =
-      gAudio.radio1938Templates[receiverTemplateIndex(requestedProfile)];
-  rebuildRadioFromTemplate(&state->radio1938, sourceTemplate,
-                           static_cast<float>(gAudio.sampleRate), gAudio.lpHz,
-                           gAudio.noise);
-  state->radioPreview.initialize(state->radio1938,
-                                 state->radioAmIngress,
-                                 state->radioPreviewConfig,
-                                 static_cast<float>(gAudio.sampleRate));
-  state->activeRadioReceiverProfile = requestedProfile;
+void RadioPlaybackFilter::initialize(
+    const RadioPlaybackFilterConfig& config) {
+  assert(sampleRate_ == 0 && config.sampleRate > 0 &&
+         config.outputChannels > 0);
+  sampleRate_ = config.sampleRate;
+  ingress_.reception = config.reception;
+  initializeReceiver(typical_, RadioReceiverProfile::Typical1930s, config);
+  initializeReceiver(philco_, RadioReceiverProfile::Philco37116, config);
+  requestedMode_.store(config.initialMode, std::memory_order_relaxed);
+  resetGeneration_.store(0, std::memory_order_relaxed);
+  appliedResetGeneration_ = 0;
+  resetSource(config.outputChannels);
 }
 
-void configureRadioPlaybackTemplates() {
-  for (RadioReceiverProfile profile : {RadioReceiverProfile::Typical1930s,
-                                       RadioReceiverProfile::Philco37116}) {
-    Radio1938& target =
-        gAudio.radio1938Templates[receiverTemplateIndex(profile)];
-    target.applyReceiverProfile(profile);
-    target.init(kRadioProcessChannels, static_cast<float>(gAudio.sampleRate),
-                gAudio.lpHz, gAudio.noise);
-    applyRadioSettingsToTemplate(target, gAudio.radioPresetName,
-                                 gAudio.radioSettingsPath);
-  }
-}
-
-void prepareRadioPlaybackSource(AudioState* state) {
-  if (!state) return;
-  const uint32_t channels = std::max(1u, state->channels);
-  const bool radioEnabled = radioFilterModeEnabled(
-      state->radioFilterMode.load(std::memory_order_relaxed));
-  state->radioBypass.reset(radioEnabled, state->sampleRate);
-  state->radioDryScratch.resize(
-      static_cast<size_t>(kRadioBypassScratchFrames) * channels);
-}
-
-void audioPlaybackProcessRadioBlock(AudioState* state,
-                                    float* samples,
-                                    uint32_t frames) {
-  if (!state || !samples || frames == 0) return;
-  const RadioFilterMode requestedMode =
-      state->radioFilterMode.load(std::memory_order_relaxed);
-  const bool radioEnabled = radioFilterModeEnabled(requestedMode);
-  const RadioReceiverProfile requestedProfile =
-      radioFilterModeReceiverProfile(requestedMode);
-  if (!radioEnabled) {
-    state->radioBypass.cancelWetReplacement();
-  } else if (requestedProfile != state->activeRadioReceiverProfile &&
-             !state->radioBypass.wetReplacementActive()) {
-    state->radioBypass.requestWetReplacement();
-  }
-  if (!state->radioBypass.needsWetSignal(radioEnabled)) {
-    audioPipelineTransitionClearInputFadeIn(state->pipelineTransition);
-    return;
-  }
-
-  if (state->radioBypass.wetReplacementReadyToCommit()) {
-    rebuildRadioPreviewChain(state);
-    state->radioBypass.commitWetReplacement();
-  }
-  const bool wetSignalStarted =
-      state->radioBypass.activateWetSignal(radioEnabled);
-  const bool resetRequested =
-      state->radioResetPending.exchange(false, std::memory_order_relaxed);
-  if (wetSignalStarted || resetRequested) {
-    rebuildRadioPreviewChain(state);
-  }
-
-  const uint32_t channels = std::max(1u, state->channels);
-  uint32_t frameOffset = 0;
-  while (frameOffset < frames &&
-         state->radioBypass.needsWetSignal(radioEnabled)) {
-    if (state->radioBypass.wetReplacementReadyToCommit()) {
-      rebuildRadioPreviewChain(state);
-      state->radioBypass.commitWetReplacement();
+void RadioPlaybackFilter::initializeReceiver(
+    Receiver& receiver,
+    RadioReceiverProfile profile,
+    const RadioPlaybackFilterConfig& config) {
+  receiver.radio.applyReceiverProfile(profile);
+  if (!config.settingsPath.empty()) {
+    std::string error;
+    if (!applyRadioSettingsIni(receiver.radio, config.settingsPath,
+                               config.presetName, &error)) {
+      std::fprintf(stderr,
+                   "WARNING: Failed to apply radio settings from %s: %s\n",
+                   config.settingsPath.c_str(), error.c_str());
     }
-    const uint32_t blendFrames = state->radioBypass.blendFramesRemaining(
-        radioEnabled, state->sampleRate);
-    const bool needsDry = blendFrames > 0;
-    const uint32_t blockFrames =
-        needsDry ? std::min({kRadioBypassScratchFrames, blendFrames,
-                             frames - frameOffset})
-                 : frames - frameOffset;
-    float* block = samples + static_cast<size_t>(frameOffset) * channels;
-    audioPipelineTransitionApplyInputFadeIn(
-        state->pipelineTransition, block, blockFrames, channels);
+  }
+  receiver.radio.init(kRadioProcessChannels,
+                      static_cast<float>(config.sampleRate),
+                      config.bandwidthHz, config.noise);
+  receiver.preview.initialize(receiver.radio, ingress_, previewConfig_,
+                              static_cast<float>(config.sampleRate));
+  receiver.preview.reserveBlockFrames(kRadioTransitionScratchFrames);
+}
 
-    if (needsDry) {
+void RadioPlaybackFilter::resetSource(uint32_t outputChannels) {
+  assert(sampleRate_ > 0 && outputChannels > 0);
+  typical_.radio.reset();
+  typical_.preview.reset();
+  philco_.radio.reset();
+  philco_.preview.reset();
+  transition_.reset(requestedMode_.load(std::memory_order_acquire),
+                    sampleRate_);
+  appliedResetGeneration_ =
+      resetGeneration_.load(std::memory_order_acquire);
+  dryScratch_.resize(static_cast<size_t>(kRadioTransitionScratchFrames) *
+                     outputChannels);
+}
+
+void RadioPlaybackFilter::requestReset() {
+  resetGeneration_.fetch_add(1, std::memory_order_release);
+}
+
+RadioFilterMode RadioPlaybackFilter::mode() const {
+  return requestedMode_.load(std::memory_order_acquire);
+}
+
+void RadioPlaybackFilter::cycleMode() {
+  RadioFilterMode current = requestedMode_.load(std::memory_order_relaxed);
+  while (!requestedMode_.compare_exchange_weak(
+      current, nextRadioFilterMode(current), std::memory_order_release,
+      std::memory_order_relaxed)) {
+  }
+}
+
+RadioPlaybackFilter::Receiver& RadioPlaybackFilter::receiverFor(
+    RadioFilterMode mode) {
+  switch (mode) {
+    case RadioFilterMode::Typical1930s:
+      return typical_;
+    case RadioFilterMode::Philco37116:
+      return philco_;
+    case RadioFilterMode::Off:
+      std::abort();
+  }
+  std::abort();
+}
+
+void RadioPlaybackFilter::resetReceiver(RadioFilterMode mode) {
+  Receiver& receiver = receiverFor(mode);
+  receiver.radio.reset();
+  receiver.preview.reset();
+}
+
+bool RadioPlaybackFilter::process(
+    float* samples,
+    uint32_t frames,
+    uint32_t channels,
+    AudioPipelineTransition& pipelineTransition) {
+  assert(sampleRate_ > 0 && samples && frames > 0 && channels > 0);
+  bool receiverChanged = transition_.retarget(mode());
+  receiverChanged = transition_.commitAtDryBoundary() || receiverChanged;
+
+  const uint64_t resetGeneration =
+      resetGeneration_.load(std::memory_order_acquire);
+  if (!transition_.needsWetSignal()) {
+    appliedResetGeneration_ = resetGeneration;
+    audioPipelineTransitionClearInputFadeIn(pipelineTransition);
+    return false;
+  }
+  if (receiverChanged || resetGeneration != appliedResetGeneration_) {
+    resetReceiver(transition_.activeMode());
+    appliedResetGeneration_ = resetGeneration;
+  }
+
+  bool clipped = false;
+  uint32_t frameOffset = 0;
+  while (frameOffset < frames) {
+    if (transition_.commitAtDryBoundary()) {
+      resetReceiver(transition_.activeMode());
+    }
+    if (!transition_.needsWetSignal()) {
+      audioPipelineTransitionClearInputFadeIn(pipelineTransition);
+      break;
+    }
+
+    const bool blending = transition_.blending();
+    const uint32_t boundaryFrames =
+        transition_.framesUntilBoundary(sampleRate_);
+    const uint32_t blockFrames =
+        blending ? std::min({kRadioTransitionScratchFrames, boundaryFrames,
+                             frames - frameOffset})
+                 : std::min(kRadioTransitionScratchFrames,
+                            frames - frameOffset);
+    assert(blockFrames > 0);
+    float* block = samples + static_cast<size_t>(frameOffset) * channels;
+    audioPipelineTransitionApplyInputFadeIn(pipelineTransition, block,
+                                            blockFrames, channels);
+
+    if (blending) {
       const size_t blockSamples =
           static_cast<size_t>(blockFrames) * channels;
-      assert(state->radioDryScratch.size() >= blockSamples);
-      std::memcpy(state->radioDryScratch.data(), block,
-                  blockSamples * sizeof(float));
+      assert(dryScratch_.size() >= blockSamples);
+      std::memcpy(dryScratch_.data(), block, blockSamples * sizeof(float));
     }
 
-    state->radioPreview.runBlock(state->radio1938, block, blockFrames,
-                                 channels);
-    if (needsDry) {
-      state->radioBypass.blend(
-          block, state->radioDryScratch.data(), blockFrames, channels,
-          radioEnabled, state->sampleRate);
+    Receiver& receiver = receiverFor(transition_.activeMode());
+    receiver.preview.runBlock(receiver.radio, block, blockFrames, channels);
+    clipped = clipped || receiver.radio.diagnostics.anyClip;
+    if (blending) {
+      transition_.blend(block, dryScratch_.data(), blockFrames, channels,
+                        sampleRate_);
     }
     frameOffset += blockFrames;
   }
-
-  if (state->radio1938.diagnostics.anyClip) {
-    audioPlaybackHoldClipAlert(state);
-  }
+  return clipped;
 }

@@ -70,7 +70,6 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.state.audioTrailingPaddingFrames.store(0);
   gAudio.state.audioLeadSilenceFrames.store(0);
   gAudio.state.totalFrames.store(totalFrames);
-  gAudio.state.radioResetPending.store(false, std::memory_order_relaxed);
   gAudio.state.outputSafety = {};
   audioPipelineTransitionReset(gAudio.state.pipelineTransition);
   audioPipelineTransitionRequestSignalFadeIn(gAudio.state.pipelineTransition,
@@ -78,8 +77,7 @@ bool audioStartStream(uint64_t totalFrames) {
 
   gAudio.state.channels = gAudio.channels;
   gAudio.state.sampleRate = gAudio.sampleRate;
-  rebuildRadioPreviewChain(&gAudio.state);
-  prepareRadioPlaybackSource(&gAudio.state);
+  gAudio.state.radioFilter.resetSource(gAudio.channels);
 
   if (!audioPlaybackDeviceEnsureRunning()) {
     stopAndUninitActiveDecoder();
@@ -197,7 +195,7 @@ void audioStreamReset(uint64_t framePos) {
   gAudio.state.audioClock.reset(
       gAudio.state.streamSerial.load(std::memory_order_relaxed));
   queuedAudioSourceClearMetadata(&gAudio.state);
-  gAudio.state.radioResetPending.store(true, std::memory_order_relaxed);
+  gAudio.state.radioFilter.requestReset();
   audioPipelineTransitionRequestSignalFadeIn(gAudio.state.pipelineTransition,
                                              gAudio.state.sampleRate);
   gAudio.state.decodeCv.notify_all();

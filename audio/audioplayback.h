@@ -114,7 +114,6 @@ bool audioIsPaused();
 bool audioIsFinished();
 bool audioIsRadioEnabled();
 RadioFilterMode audioGetRadioFilterMode();
-RadioReceiverProfile audioGetRadioReceiverProfile();
 std::string_view audioGetRadioFilterLabel();
 bool audioIsHolding();
 

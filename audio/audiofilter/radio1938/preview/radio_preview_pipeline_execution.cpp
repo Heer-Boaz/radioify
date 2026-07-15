@@ -97,6 +97,11 @@ void RadioPreviewPipeline::reset() {
   lifecycle.reset(*this);
 }
 
+void RadioPreviewPipeline::reserveBlockFrames(uint32_t frames) {
+  filteredScratch.reserve(frames);
+  receptionScratch.reserve(frames);
+}
+
 void RadioPreviewPipeline::runBlock(Radio1938& radioRef,
                                     float* samples,
                                     uint32_t frames,

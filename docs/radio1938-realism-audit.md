@@ -336,8 +336,9 @@ The remediation is complete only when all of the following hold:
     magnetic tuning, approximately 2 W nominal output, and profile-specific
     reference bands rather than inheriting the 37-116's high-fidelity targets.
 14. Playback starts unfiltered and cycles unfiltered -> typical -> Philco ->
-    unfiltered. Receiver replacement fades to dry, rebuilds at the dry boundary,
-    and fades in so a live model change cannot introduce a hard discontinuity.
+    unfiltered. Receiver replacement fades to dry, switches the active
+    pre-initialized chain at the dry boundary, and fades in so a live model
+    change cannot introduce a hard discontinuity.
 
 ## Remediation record
 
@@ -399,15 +400,17 @@ The remediation is complete only when all of the following hold:
   drives a 9 kohm-to-3.5 ohm transformer model with the documented 450 ohm
   primary resistance, followed by a distinct five-inch speaker and compact
   open-back cabinet reconstruction.
-- Full receiver reinitialization now invalidates the front-end and IF loaded-can
-  revision caches. Before this fix, switching profiles could retain the former
-  receiver's tuned networks when both happened to reach the same revision
-  number even though the visible configuration had changed.
-- Radio playback state is a three-value mode rather than an enabled boolean.
-  The producer-owned bypass transition fades an active receiver to dry before
-  committing a replacement profile and then fades the new wet signal in. This
-  reuses the block-invariant click protection and keeps DSP rebuilds off the
-  hardware callback.
+- Front-end and IF nodes now configure their tuned networks directly during
+  lifecycle initialization. Runtime revision checks remain only for actual
+  retuning; profile changes no longer rely on forcing a synthetic cache miss.
+- `RadioPlaybackFilter` is the single playback owner for requested mode,
+  receiver lifecycle, reset generations, transition state, and scratch memory.
+  It initializes the typical and Philco chains once before playback. The
+  producer-side state machine fades the active receiver to dry, selects and
+  resets the already-initialized destination chain, and fades it in. There are
+  no global receiver templates, shadow active-profile fields, profile copies,
+  settings reads, or receiver `init()` calls in the steady-state processing
+  path.
 
 ### Post-fix measurements
 

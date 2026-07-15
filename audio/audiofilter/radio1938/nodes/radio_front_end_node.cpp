@@ -18,10 +18,9 @@ float seriesResistanceForBandwidth(float inductanceHenries, float bandwidthHz) {
                   1e-4f);
 }
 
-void ensureFrontEndConfigured(Radio1938& radio) {
+void configureFrontEnd(Radio1938& radio) {
   auto& tuning = radio.tuning;
   auto& frontEnd = radio.frontEnd;
-  if (frontEnd.appliedConfigRevision == tuning.configRevision) return;
 
   float safeAudioBw = std::max(tuning.tunedBw, 1.0f);
   float physicalChannelBw = 2.0f * safeAudioBw;
@@ -85,20 +84,22 @@ void ensureFrontEndConfigured(Radio1938& radio) {
   frontEnd.appliedConfigRevision = tuning.configRevision;
 }
 
+void ensureFrontEndConfigured(Radio1938& radio) {
+  if (radio.frontEnd.appliedConfigRevision != radio.tuning.configRevision) {
+    configureFrontEnd(radio);
+  }
+}
+
 }  // namespace
 
 void RadioFrontEndNode::init(Radio1938& radio, RadioInitContext&) {
-  // A full receiver reinitialization may keep the same numeric tuning
-  // revision while changing the physical profile. Force the tuned networks
-  // to be rebuilt instead of retaining the previous receiver's tanks.
-  radio.frontEnd.appliedConfigRevision = 0;
   radio.frontEnd.hpf.setHighpass(radio.sampleRate, radio.frontEnd.inputHpHz,
                                  kRadioBiquadQ);
   radio.frontEnd.selectivityPeak.setPeaking(radio.sampleRate,
                                             radio.frontEnd.selectivityPeakHz,
                                             radio.frontEnd.selectivityPeakQ,
                                             radio.frontEnd.selectivityPeakGainDb);
-  ensureFrontEndConfigured(radio);
+  configureFrontEnd(radio);
 }
 
 void RadioFrontEndNode::reset(Radio1938& radio) {

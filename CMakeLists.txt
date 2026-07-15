@@ -372,6 +372,10 @@ target_sources(radio_receiver_profile_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_radio_receiver_profile_tests>
   $<TARGET_OBJECTS:radioify_config>
   $<TARGET_OBJECTS:radioify_audiofilter>
+  ${CMAKE_SOURCE_DIR}/audio/pipeline_transition.cpp
+  ${CMAKE_SOURCE_DIR}/audio/radio_filter_mode.cpp
+  ${CMAKE_SOURCE_DIR}/audio/radio_filter_transition.cpp
+  ${CMAKE_SOURCE_DIR}/audio/radio_playback.cpp
 )
 radioify_link_repo_target(radio_receiver_profile_tests)
 add_test(NAME radio_receiver_profile_tests
@@ -394,8 +398,8 @@ target_sources(audio_output_safety_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/output_volume_safety.cpp
   ${CMAKE_SOURCE_DIR}/audio/playback_source_buffer.cpp
   ${CMAKE_SOURCE_DIR}/audio/playback_source_priming.cpp
-  ${CMAKE_SOURCE_DIR}/audio/radio_bypass_transition.cpp
   ${CMAKE_SOURCE_DIR}/audio/radio_filter_mode.cpp
+  ${CMAKE_SOURCE_DIR}/audio/radio_filter_transition.cpp
 )
 radioify_link_repo_target(audio_output_safety_tests)
 add_test(NAME audio_output_safety_tests
