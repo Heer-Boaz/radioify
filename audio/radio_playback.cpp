@@ -154,7 +154,7 @@ bool RadioPlaybackFilter::process(
 
     Receiver& receiver = receiverFor(transition_.activeMode());
     receiver.preview.runBlock(receiver.radio, block, blockFrames, channels);
-    clipped = clipped || receiver.radio.diagnostics.anyClip;
+    clipped = clipped || receiver.radio.diagnostics.outputClip;
     if (blending) {
       transition_.blend(block, dryScratch_.data(), blockFrames, channels,
                         sampleRate_);

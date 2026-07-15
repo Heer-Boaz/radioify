@@ -7,11 +7,17 @@ struct OutputVolumeSafetyState {
   float gain = 1.0f;
 };
 
-bool applyOutputVolumeSafety(float* samples,
-                             uint32_t frames,
-                             uint32_t channels,
-                             float volume,
-                             uint32_t sampleRate,
-                             OutputVolumeSafetyState& state);
+struct OutputVolumeSafetyResult {
+  bool gainReductionActive = false;
+  bool inputOverrange = false;
+};
+
+OutputVolumeSafetyResult applyOutputVolumeSafety(
+    float* samples,
+    uint32_t frames,
+    uint32_t channels,
+    float volume,
+    uint32_t sampleRate,
+    OutputVolumeSafetyState& state);
 
 #endif  // RADIOIFY_AUDIO_OUTPUT_VOLUME_SAFETY_H

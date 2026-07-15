@@ -526,8 +526,11 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.power.nominalOutputPowerWatts = 0.0f;
   // Normal programme listening is below the 41's 2 W / roughly 10% distortion
   // rating. Restore playback level only after the physical speaker reference,
-  // rather than driving the small output stage continuously at its limit.
-  radio.output.digitalMakeupGain = 2.7f;
+  // rather than driving the small output stage continuously at its limit. The
+  // compact speaker/cabinet response peaks in the 150-400 Hz passband, so the
+  // listening-level calibration is anchored to that strongest band instead
+  // of the 1 kHz reference alone.
+  radio.output.digitalMakeupGain = 1.95f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;

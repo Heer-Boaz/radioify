@@ -5,13 +5,15 @@
 #include <cmath>
 #include <limits>
 
-bool applyOutputVolumeSafety(float* samples,
-                             uint32_t frames,
-                             uint32_t channels,
-                             float volume,
-                             uint32_t sampleRate,
-                             OutputVolumeSafetyState& state) {
-  if (!samples || frames == 0 || channels == 0) return false;
+OutputVolumeSafetyResult applyOutputVolumeSafety(
+    float* samples,
+    uint32_t frames,
+    uint32_t channels,
+    float volume,
+    uint32_t sampleRate,
+    OutputVolumeSafetyState& state) {
+  OutputVolumeSafetyResult result;
+  if (!samples || frames == 0 || channels == 0) return result;
 
   constexpr float kOutputCeiling = 0.980f;
   constexpr float kDeviceClamp = 0.999f;
@@ -23,6 +25,7 @@ bool applyOutputVolumeSafety(float* samples,
   for (size_t i = 0; i < count; ++i) {
     const float x = samples[i] * safeVolume;
     if (!std::isfinite(x)) {
+      result.inputOverrange = true;
       rawPeak = std::numeric_limits<float>::infinity();
       break;
     }
@@ -48,16 +51,18 @@ bool applyOutputVolumeSafety(float* samples,
   }
 
   const float outputGain = safeVolume * state.gain;
-  bool limited = rawPeak > kOutputCeiling || state.gain < 0.999f;
+  result.gainReductionActive =
+      rawPeak > kOutputCeiling || state.gain < 0.999f;
+  result.inputOverrange = result.inputOverrange || rawPeak > 1.0f;
   for (size_t i = 0; i < count; ++i) {
     float y = samples[i] * outputGain;
     if (!std::isfinite(y)) {
       y = 0.0f;
-      limited = true;
+      result.inputOverrange = true;
     }
     const float clamped = std::clamp(y, -kDeviceClamp, kDeviceClamp);
-    if (clamped != y) limited = true;
+    if (clamped != y) result.inputOverrange = true;
     samples[i] = clamped;
   }
-  return limited;
+  return result;
 }

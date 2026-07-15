@@ -217,8 +217,10 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
 
   const float volume = state->volume.load(std::memory_order_relaxed);
-  if (applyOutputVolumeSafety(out, frameCount, channels, volume,
-                              state->sampleRate, state->outputSafety)) {
+  const OutputVolumeSafetyResult safety = applyOutputVolumeSafety(
+      out, frameCount, channels, volume, state->sampleRate,
+      state->outputSafety);
+  if (safety.inputOverrange) {
     audioPlaybackHoldClipAlert(state);
   }
   updatePeakMeter(state, out, frameCount);

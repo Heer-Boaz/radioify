@@ -31,8 +31,11 @@ void expectNear(float actual, float expected, float tolerance, const char* what)
 void expectTransparentBelowCeiling() {
   OutputVolumeSafetyState state;
   float samples[] = {0.10f, -0.25f, 0.40f, -0.30f};
-  bool limited = applyOutputVolumeSafety(samples, 2, 2, 1.5f, 48000, state);
-  if (limited) fail("Output safety limited a below-ceiling block.");
+  const OutputVolumeSafetyResult result =
+      applyOutputVolumeSafety(samples, 2, 2, 1.5f, 48000, state);
+  if (result.gainReductionActive || result.inputOverrange) {
+    fail("Output safety changed a below-ceiling block.");
+  }
   expectNear(state.gain, 1.0f, 1e-6f, "transparent gain");
   expectNear(samples[0], 0.15f, 1e-6f, "sample 0");
   expectNear(samples[1], -0.375f, 1e-6f, "sample 1");
@@ -43,8 +46,11 @@ void expectTransparentBelowCeiling() {
 void expectLinearAttenuationAboveCeiling() {
   OutputVolumeSafetyState state;
   float samples[] = {0.25f, 0.50f, -0.90f, 0.40f};
-  bool limited = applyOutputVolumeSafety(samples, 2, 2, 2.0f, 48000, state);
-  if (!limited) fail("Output safety failed to report limiting.");
+  const OutputVolumeSafetyResult result =
+      applyOutputVolumeSafety(samples, 2, 2, 2.0f, 48000, state);
+  if (!result.gainReductionActive || !result.inputOverrange) {
+    fail("Output safety failed to report limiting and input overrange.");
+  }
   float expectedGain = 0.98f / 1.80f;
   expectNear(state.gain, expectedGain, 1e-6f, "limited gain");
   for (float sample : samples) {
@@ -60,6 +66,21 @@ void expectLinearAttenuationAboveCeiling() {
              "linear ratio 2");
 }
 
+void expectFullScalePcmUsesCeilingWithoutClipAlert() {
+  OutputVolumeSafetyState state;
+  float samples[] = {1.0f, -1.0f};
+  const OutputVolumeSafetyResult result =
+      applyOutputVolumeSafety(samples, 1, 2, 1.0f, 48000, state);
+  if (!result.gainReductionActive) {
+    fail("Output safety did not reserve device headroom at full scale.");
+  }
+  if (result.inputOverrange) {
+    fail("Valid full-scale PCM was reported as clipping.");
+  }
+  expectNear(samples[0], 0.98f, 1e-6f, "full-scale positive ceiling");
+  expectNear(samples[1], -0.98f, 1e-6f, "full-scale negative ceiling");
+}
+
 void expectSlowReleaseAfterLimiting() {
   OutputVolumeSafetyState state;
   float hot[] = {1.0f, -1.0f};
@@ -67,8 +88,14 @@ void expectSlowReleaseAfterLimiting() {
   float limitedGain = state.gain;
 
   float quiet[] = {0.10f, -0.10f};
-  bool limited = applyOutputVolumeSafety(quiet, 1, 2, 1.0f, 48000, state);
-  if (!limited) fail("Output safety did not hold release state.");
+  const OutputVolumeSafetyResult result =
+      applyOutputVolumeSafety(quiet, 1, 2, 1.0f, 48000, state);
+  if (!result.gainReductionActive) {
+    fail("Output safety did not hold release state.");
+  }
+  if (result.inputOverrange) {
+    fail("Output safety release was reported as clipping.");
+  }
   if (!(state.gain > limitedGain && state.gain < 1.0f)) {
     fail("Output safety release did not move gradually toward unity.");
   }
@@ -546,6 +573,7 @@ void expectSupersededReceiverChangeReversesWithoutCommit() {
 int main() {
   expectTransparentBelowCeiling();
   expectLinearAttenuationAboveCeiling();
+  expectFullScalePcmUsesCeilingWithoutClipAlert();
   expectSlowReleaseAfterLimiting();
   expectDeclickRampIsLinearPerFrame();
   expectSignalFadeArmsInputAndOutputBoundaries();

@@ -2,6 +2,7 @@
 #include "audio/pipeline_transition.h"
 #include "audio/radio_playback.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -137,6 +138,68 @@ void expectPlaybackFilterOwnsReceiverSwitching() {
   }
 }
 
+void expectTypicalPlaybackKeepsPassbandHeadroom() {
+  constexpr uint32_t kSampleRate = 48000u;
+  constexpr uint32_t kFrames = kSampleRate / 2u;
+  constexpr float kProgramFrequencyHz = 200.0f;
+  constexpr float kProgramPeak = 0.98f;
+  constexpr float kPi = 3.14159265358979323846f;
+
+  RadioPlaybackFilter filter;
+  RadioPlaybackFilterConfig config;
+  config.sampleRate = kSampleRate;
+  config.outputChannels = 1u;
+  config.bandwidthHz = 5500.0f;
+  config.noise = 0.012f;
+  config.initialMode = RadioFilterMode::Typical1930s;
+  filter.initialize(config);
+
+  std::vector<float> samples(kFrames);
+  for (uint32_t frame = 0; frame < kFrames; ++frame) {
+    const float seconds = static_cast<float>(frame) / kSampleRate;
+    const float phase =
+        2.0f * kPi * kProgramFrequencyHz * seconds + 0.5f * kPi;
+    samples[frame] = kProgramPeak * std::sin(phase);
+  }
+
+  AudioPipelineTransition pipelineTransition;
+  audioPipelineTransitionReset(pipelineTransition);
+  bool clipped = false;
+  uint32_t firstClippedFrame = kFrames;
+  uint32_t lastClippedFrame = 0u;
+  uint32_t clippedBlocks = 0u;
+  constexpr uint32_t kBlockFrames = 2048u;
+  for (uint32_t frame = 0; frame < kFrames; frame += kBlockFrames) {
+    const uint32_t frames = std::min(kBlockFrames, kFrames - frame);
+    if (filter.process(samples.data() + frame, frames, 1u,
+                       pipelineTransition)) {
+      clipped = true;
+      firstClippedFrame = std::min(firstClippedFrame, frame);
+      lastClippedFrame = frame;
+      ++clippedBlocks;
+    }
+  }
+  float peak = 0.0f;
+  for (float sample : samples) {
+    peak = std::max(peak, std::fabs(sample));
+  }
+  if (clipped || peak > 0.95f) {
+    std::cerr << "radio_receiver_profile_tests: typical playback exhausted "
+                 "digital passband headroom; clipped="
+              << clipped << " peak=" << peak << '\n';
+    if (clipped) {
+      std::cerr << "radio_receiver_profile_tests: first clipped frame="
+                << firstClippedFrame << " last clipped frame="
+                << lastClippedFrame << " clipped blocks=" << clippedBlocks
+                << '\n';
+    }
+    std::exit(1);
+  }
+  if (peak < 0.70f) {
+    fail("typical playback headroom fix attenuated the profile excessively");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -144,5 +207,6 @@ int main() {
   expectTypicalReceiverTopology();
   expectInitializedProfileSwitchRebuildsPhysicalModel();
   expectPlaybackFilterOwnsReceiverSwitching();
+  expectTypicalPlaybackKeepsPassbandHeadroom();
   return 0;
 }
