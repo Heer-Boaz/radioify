@@ -214,38 +214,38 @@ std::string warningGsfBackend() { return gAudio.gsfWarning; }
 std::string warningVgmBackend() { return gAudio.vgmWarning; }
 
 const AudioBackendHandlers kBackendM4a{
-    AudioMode::M4a, false, false, false, true, initM4aBackend,
-    uninitM4aBackend, readM4aBackend, nullptr, totalM4aBackend, nullptr};
+    AudioMode::M4a, false, false, true, initM4aBackend,
+    uninitM4aBackend, nullptr, nullptr, totalM4aBackend, nullptr};
 const AudioBackendHandlers kBackendFfmpeg{
-    AudioMode::Ffmpeg, false, true, true, true, initFfmpegBackend,
+    AudioMode::Ffmpeg, false, true, true, initFfmpegBackend,
     uninitFfmpegBackend, readFfmpegBackend, seekFfmpegBackend,
     totalFfmpegBackend, nullptr};
 const AudioBackendHandlers kBackendKss{
-    AudioMode::Kss, true, true, true, true, initKssBackend,
+    AudioMode::Kss, true, true, true, initKssBackend,
     uninitKssBackend, readKssBackend, seekKssBackend, totalKssBackend,
     nullptr};
 const AudioBackendHandlers kBackendPsf{
-    AudioMode::Psf, true, true, true, false, initPsfBackend,
+    AudioMode::Psf, true, true, false, initPsfBackend,
     uninitPsfBackend, readPsfBackend, seekPsfBackend, totalPsfBackend,
     nullptr};
 const AudioBackendHandlers kBackendGsf{
-    AudioMode::Gsf, true, true, true, false, initGsfBackend,
+    AudioMode::Gsf, true, true, false, initGsfBackend,
     uninitGsfBackend, readGsfBackend, seekGsfBackend, totalGsfBackend,
     warningGsfBackend};
 const AudioBackendHandlers kBackendVgm{
-    AudioMode::Vgm, true, true, true, true, initVgmBackend,
+    AudioMode::Vgm, true, true, true, initVgmBackend,
     uninitVgmBackend, readVgmBackend, seekVgmBackend, totalVgmBackend,
     warningVgmBackend};
 const AudioBackendHandlers kBackendGme{
-    AudioMode::Gme, true, true, true, true, initGmeBackend,
+    AudioMode::Gme, true, true, true, initGmeBackend,
     uninitGmeBackend, readGmeBackend, seekGmeBackend, totalGmeBackend,
     warningGmeBackend};
 const AudioBackendHandlers kBackendMidi{
-    AudioMode::Midi, false, true, true, true, initMidiBackend,
+    AudioMode::Midi, false, true, true, initMidiBackend,
     uninitMidiBackend, readMidiBackend, seekMidiBackend, totalMidiBackend,
     nullptr};
 const AudioBackendHandlers kBackendMiniaudio{
-    AudioMode::Miniaudio, false, true, true, true, initMiniaudioBackend,
+    AudioMode::Miniaudio, false, true, true, initMiniaudioBackend,
     uninitMiniaudioBackend, readMiniaudioBackend, seekMiniaudioBackend,
     totalMiniaudioBackend, nullptr};
 

@@ -1,9 +1,10 @@
 #include "audio/output_volume_safety.h"
 #include "audio/pipeline_transition.h"
-#include "audio/playback_source_buffer.h"
 #include "audio/playback_source_priming.h"
 #include "audio/radio_filter_mode.h"
 #include "audio/radio_filter_transition.h"
+#include "audio/spsc_audio_ring.h"
+#include "audio/spsc_audio_timeline.h"
 
 #include <algorithm>
 #include <cmath>
@@ -280,7 +281,7 @@ void expectSupersededDiscontinuityDoesNotClearNewRequest() {
   }
 }
 
-void expectDryProducerClearsPendingInputFade() {
+void expectDryWorkerClearsPendingInputFade() {
   AudioPipelineTransition transition;
   audioPipelineTransitionReset(transition);
   audioPipelineTransitionRequestSignalFadeIn(transition, 400);
@@ -288,7 +289,7 @@ void expectDryProducerClearsPendingInputFade() {
   float first = 1.0f;
   audioPipelineTransitionApplyInputFadeIn(transition, &first, 1, 1);
   if (!(first > 0.0f && first < 1.0f)) {
-    fail("Input fade did not start before dry-producer release.");
+    fail("Input fade did not start before dry-worker release.");
   }
 
   audioPipelineTransitionClearInputFadeIn(transition);
@@ -318,38 +319,84 @@ void expectPlaybackSourcePrimingBudget() {
   }
 }
 
-void expectPlaybackSourceBufferWrapsCleanly() {
-  PlaybackSourceBuffer buffer;
-  buffer.init(4, 2);
+void expectSpscAudioRingWrapsCleanly() {
+  SpscAudioRing buffer;
+  buffer.initialize(4, 2);
   const float first[] = {1.0f, 1.1f, 2.0f, 2.1f, 3.0f, 3.1f};
-  if (buffer.write(first, 3) != 3 || buffer.size() != 3 ||
-      buffer.space() != 1) {
-    fail("Playback source buffer did not accept the initial write.");
+  if (buffer.writeSome(first, 3) != 3 || buffer.bufferedFrames() != 3 ||
+      buffer.writableFrames() != 1) {
+    fail("SPSC audio ring did not accept the initial write.");
   }
 
   float out[8] = {};
-  if (buffer.read(out, 2) != 2) {
-    fail("Playback source buffer did not read the initial frames.");
+  if (buffer.readSome(out, 2) != 2) {
+    fail("SPSC audio ring did not read the initial frames.");
   }
   expectNear(out[0], 1.0f, 1e-6f, "buffer read frame 0 left");
   expectNear(out[3], 2.1f, 1e-6f, "buffer read frame 1 right");
 
   const float second[] = {4.0f, 4.1f, 5.0f, 5.1f, 6.0f, 6.1f};
-  if (buffer.write(second, 3) != 3 || buffer.size() != 4) {
-    fail("Playback source buffer did not wrap on write.");
+  if (buffer.writeSome(second, 3) != 3 || buffer.bufferedFrames() != 4) {
+    fail("SPSC audio ring did not wrap on write.");
   }
 
   std::fill(out, out + 8, 0.0f);
-  if (buffer.read(out, 4) != 4) {
-    fail("Playback source buffer did not read wrapped frames.");
+  if (buffer.readSome(out, 4) != 4) {
+    fail("SPSC audio ring did not read wrapped frames.");
   }
   expectNear(out[0], 3.0f, 1e-6f, "buffer wrapped frame 0 left");
   expectNear(out[1], 3.1f, 1e-6f, "buffer wrapped frame 0 right");
   expectNear(out[2], 4.0f, 1e-6f, "buffer wrapped frame 1 left");
   expectNear(out[7], 6.1f, 1e-6f, "buffer wrapped frame 3 right");
+
+  if (buffer.writeSome(first, 2) != 2) {
+    fail("SPSC audio ring did not accept data before discard.");
+  }
+  const uint64_t writePosition = buffer.writePosition();
+  buffer.discardBufferedFrames();
+  if (buffer.bufferedFrames() != 0 ||
+      buffer.readPosition() != writePosition ||
+      buffer.writePosition() != writePosition) {
+    fail("SPSC audio ring discard did not preserve monotonic positions.");
+  }
 }
 
-void expectRadioFilterCrossfadesAtProducerBoundary() {
+void expectSpscAudioTimelineWrapsCleanly() {
+  SpscAudioTimeline timeline;
+  timeline.initialize(4);
+  for (uint64_t index = 0; index < 4; ++index) {
+    if (!timeline.append(
+            {index * 2, static_cast<int64_t>(index * 1000), 7})) {
+      fail("SPSC audio timeline did not accept an in-capacity anchor.");
+    }
+  }
+  if (timeline.append({8, 4000, 7})) {
+    fail("SPSC audio timeline accepted an anchor beyond capacity.");
+  }
+
+  AudioTimelineAnchor anchor;
+  if (!timeline.peek(1, &anchor) || anchor.framePosition != 2 ||
+      anchor.ptsUs != 1000 || anchor.serial != 7) {
+    fail("SPSC audio timeline did not preserve an indexed anchor.");
+  }
+  if (!timeline.popFront() || !timeline.popFront() ||
+      !timeline.append({8, 4000, 8}) ||
+      !timeline.append({10, 5000, 8})) {
+    fail("SPSC audio timeline did not wrap cleanly.");
+  }
+  if (!timeline.findAnchorForFramePosition(9, &anchor) ||
+      anchor.framePosition != 8 || anchor.ptsUs != 4000 ||
+      anchor.serial != 8) {
+    fail("SPSC audio timeline did not find the active wrapped anchor.");
+  }
+
+  timeline.discardAnchors();
+  if (timeline.bufferedAnchors() != 0 || timeline.peek(0, &anchor)) {
+    fail("SPSC audio timeline discard left published anchors behind.");
+  }
+}
+
+void expectRadioFilterCrossfadesAtWorkerBoundary() {
   RadioFilterTransition transition;
   transition.reset(RadioFilterMode::Off, 400);
   if (transition.needsWetSignal()) {
@@ -509,10 +556,11 @@ int main() {
   expectDiscontinuityTransitionPhases();
   expectSupersededDiscontinuityLeavesCommitInProgress();
   expectSupersededDiscontinuityDoesNotClearNewRequest();
-  expectDryProducerClearsPendingInputFade();
+  expectDryWorkerClearsPendingInputFade();
   expectPlaybackSourcePrimingBudget();
-  expectPlaybackSourceBufferWrapsCleanly();
-  expectRadioFilterCrossfadesAtProducerBoundary();
+  expectSpscAudioRingWrapsCleanly();
+  expectSpscAudioTimelineWrapsCleanly();
+  expectRadioFilterCrossfadesAtWorkerBoundary();
   expectRadioFilterCrossfadeIsBlockInvariant();
   expectRadioFilterCycleContract();
   expectWetReceiverReplacementCrossfadesThroughDry();

@@ -1,13 +1,10 @@
 #pragma once
 
-#include <algorithm>
 #include <atomic>
 #include <condition_variable>
-#include <cstdint>
 #include <cstddef>
-#include <deque>
+#include <cstdint>
 #include <filesystem>
-#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -23,16 +20,16 @@
 #include "kssaudio.h"
 #include "kssoptions.h"
 #include "midiaudio.h"
-#include "m4adecoder.h"
 #include "miniaudio.h"
 #include "nsfoptions.h"
 #include "pipeline_transition.h"
 #include "playback_backend.h"
-#include "queued_audio_source.h"
-#include "radio_playback.h"
-#include "playback_source_buffer.h"
 #include "output_volume_safety.h"
 #include "psfaudio.h"
+#include "queued_audio_source.h"
+#include "radio_playback.h"
+#include "spsc_audio_ring.h"
+#include "spsc_audio_timeline.h"
 #include "vgmaudio.h"
 #include "vgmoptions.h"
 
@@ -47,9 +44,6 @@ struct AudioState {
   MidiAudioDecoder midi{};
   ma_device device{};
   RadioPlaybackFilter radioFilter;
-  PlaybackSourceBuffer m4aBuffer;
-  std::mutex m4aMutex;
-  std::condition_variable m4aCv;
   std::thread m4aThread;
   bool m4aInitDone = false;
   bool m4aInitOk = false;
@@ -58,11 +52,13 @@ struct AudioState {
   std::atomic<bool> m4aStop{false};
   std::atomic<bool> sourcePreparing{false};
   std::atomic<bool> sourceAtEnd{false};
+  std::atomic<bool> processedAtEnd{false};
   std::thread decodeThread;
   std::atomic<bool> decodeThreadRunning{false};
   std::atomic<bool> decodeStop{false};
-  std::mutex decodeMutex;
-  std::condition_variable decodeCv;
+  std::mutex audioQueueMutex;
+  std::condition_variable audioQueueCv;
+  std::condition_variable radioDspCv;
   std::atomic<bool> externalStream{false};
   std::atomic<bool> paused{false};
   std::atomic<bool> hold{false};
@@ -91,20 +87,26 @@ struct AudioState {
   std::atomic<int64_t> clipAlertUntilUs{0};
   OutputVolumeSafetyState outputSafety;
   AudioPipelineTransition pipelineTransition;
-  AudioSampleRing streamRb;
+  SpscAudioRing decodedAudio;
+  SpscAudioRing processedAudio;
+  std::thread radioDspThread;
+  std::atomic<bool> radioDspThreadRunning{false};
+  std::atomic<bool> radioDspStop{false};
+  std::atomic<uint64_t> sourceResetRequestGeneration{0};
+  std::atomic<uint64_t> sourceResetAppliedGeneration{0};
+  std::atomic<uint64_t> sourceResetFramePosition{0};
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};
-  std::atomic<int> pendingStreamSerial{0};
-  std::atomic<int64_t> pendingStreamDiscardPtsUs{0};
-  std::atomic<bool> streamSerialFlushPending{false};
-  std::atomic<bool> streamBaseValid{false};
-  std::atomic<int64_t> streamBasePtsUs{0};
-  std::atomic<uint64_t> streamReadFrames{0};
+  std::mutex streamResetMutex;
+  AudioStreamResetRequest pendingStreamReset;
+  std::atomic<uint64_t> streamResetRequestedGeneration{0};
+  std::atomic<uint64_t> streamResetAppliedGeneration{0};
   std::atomic<bool> streamClockReady{false};
   std::atomic<bool> deviceRecoveryPending{false};
   std::atomic<bool> deviceStopExpected{false};
-  std::deque<AudioMetadata> streamMetadata;
-  std::mutex streamMetadataMutex;
+  SpscAudioTimeline decodedTimeline;
+  SpscAudioTimeline processedTimeline;
+  std::mutex streamUpdateMutex;
   std::condition_variable streamUpdateCv;
   std::atomic<uint64_t> streamUpdateCounter{0};
   std::atomic<bool> streamStarved{false};
@@ -145,8 +147,7 @@ extern AudioPlaybackState gAudio;
 void appendAudioTimingLogLine(const char* line);
 void drainPlaybackPipelineForReplacement(AudioState* state);
 void audioPlaybackHoldClipAlert(AudioState* state);
-bool audioPlaybackFinishSeekPipelineTransition(AudioState* state,
-                                               bool resetRadio = true);
+bool audioPlaybackFinishSeekPipelineTransition(AudioState* state);
 void dataCallback(ma_device* device, void* output, const void* input,
                   ma_uint32 frameCount);
 void stopAndUninitActiveDecoder();

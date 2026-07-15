@@ -115,7 +115,7 @@ bool audioStartStream(uint64_t) { return false; }
 void audioStopStream() {}
 size_t audioStreamBufferedFrames() { return 0; }
 int64_t audioStreamOldestPtsUs() { return 0; }
-bool audioStreamWriteSamples(float*, uint64_t, int64_t, int, bool,
+bool audioStreamWriteSamples(const float*, uint64_t, int64_t, int, bool,
                              uint64_t*) {
   return false;
 }

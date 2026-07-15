@@ -406,11 +406,18 @@ The remediation is complete only when all of the following hold:
 - `RadioPlaybackFilter` is the single playback owner for requested mode,
   receiver lifecycle, reset generations, transition state, and scratch memory.
   It initializes the typical and Philco chains once before playback. The
-  producer-side state machine fades the active receiver to dry, selects and
-  resets the already-initialized destination chain, and fades it in. There are
+  dedicated radio-DSP worker is the only thread that processes those chains.
+  Decoders publish raw frames to an SPSC handoff ring; the worker publishes
+  processed frames to a second SPSC ring; and the hardware callback only drains
+  that processed output. PTS anchors travel through matching lock-free SPSC
+  timelines, so the callback neither runs DSP nor waits on a producer mutex. The
+  worker-side state machine fades the active receiver to dry, selects and resets
+  the already-initialized destination chain, and fades it in. Seek and frame-step
+  serial changes reset both rings and their PTS timelines at that same worker
+  boundary before playback is re-primed. There are
   no global receiver templates, shadow active-profile fields, profile copies,
-  settings reads, or receiver `init()` calls in the steady-state processing
-  path.
+  settings reads, receiver `init()` calls in steady state, or decoder-side DSP
+  paths.
 
 ### Post-fix measurements
 

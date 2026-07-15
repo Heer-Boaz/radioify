@@ -80,7 +80,7 @@ void audioStopStream();
 size_t audioStreamBufferedFrames();
 size_t audioStreamCapacityFrames();
 int64_t audioStreamOldestPtsUs();
-bool audioStreamWriteSamples(float* interleaved,
+bool audioStreamWriteSamples(const float* interleaved,
                              uint64_t frames,
                              int64_t ptsUs,
                              int serial,

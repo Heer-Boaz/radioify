@@ -396,10 +396,11 @@ target_sources(audio_output_safety_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_audio_output_safety_tests>
   ${CMAKE_SOURCE_DIR}/audio/pipeline_transition.cpp
   ${CMAKE_SOURCE_DIR}/audio/output_volume_safety.cpp
-  ${CMAKE_SOURCE_DIR}/audio/playback_source_buffer.cpp
   ${CMAKE_SOURCE_DIR}/audio/playback_source_priming.cpp
   ${CMAKE_SOURCE_DIR}/audio/radio_filter_mode.cpp
   ${CMAKE_SOURCE_DIR}/audio/radio_filter_transition.cpp
+  ${CMAKE_SOURCE_DIR}/audio/spsc_audio_ring.cpp
+  ${CMAKE_SOURCE_DIR}/audio/spsc_audio_timeline.cpp
 )
 radioify_link_repo_target(audio_output_safety_tests)
 add_test(NAME audio_output_safety_tests

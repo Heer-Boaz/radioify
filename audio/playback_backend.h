@@ -33,7 +33,6 @@ using BackendWarningProc = std::string (*)();
 struct AudioBackendHandlers {
   AudioMode mode = AudioMode::None;
   bool supportsTrackIndex = false;
-  bool allowSeekInCallback = true;
   bool finishOnShortRead = true;
   bool allowConcurrentOfflineAnalysis = true;
   BackendInitProc init = nullptr;
