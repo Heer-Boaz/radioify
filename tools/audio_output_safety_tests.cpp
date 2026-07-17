@@ -32,11 +32,7 @@ void expectNear(float actual, float expected, float tolerance, const char* what)
 void expectTransparentBelowCeiling() {
   OutputVolumeSafetyState state;
   float samples[] = {0.10f, -0.25f, 0.40f, -0.30f};
-  const OutputVolumeSafetyResult result =
-      applyOutputVolumeSafety(samples, 2, 2, 1.5f, 48000, state);
-  if (result.gainReductionActive || result.sampleRepairApplied) {
-    fail("Output safety changed a below-ceiling block.");
-  }
+  applyOutputVolumeSafety(samples, 2, 2, 1.5f, 48000, state);
   expectNear(state.gain, 1.0f, 1e-6f, "transparent gain");
   expectNear(samples[0], 0.15f, 1e-6f, "sample 0");
   expectNear(samples[1], -0.375f, 1e-6f, "sample 1");
@@ -47,14 +43,7 @@ void expectTransparentBelowCeiling() {
 void expectLinearAttenuationAboveCeiling() {
   OutputVolumeSafetyState state;
   float samples[] = {0.25f, 0.50f, -0.90f, 0.40f};
-  const OutputVolumeSafetyResult result =
-      applyOutputVolumeSafety(samples, 2, 2, 2.0f, 48000, state);
-  if (!result.gainReductionActive) {
-    fail("Output safety failed to report gain reduction.");
-  }
-  if (result.sampleRepairApplied) {
-    fail("Finite overrange was reported as a repaired output sample.");
-  }
+  applyOutputVolumeSafety(samples, 2, 2, 2.0f, 48000, state);
   float expectedGain = 0.98f / 1.80f;
   expectNear(state.gain, expectedGain, 1e-6f, "limited gain");
   for (float sample : samples) {
@@ -70,17 +59,11 @@ void expectLinearAttenuationAboveCeiling() {
              "linear ratio 2");
 }
 
-void expectFullScalePcmUsesCeilingWithoutSafetyAlert() {
+void expectFullScalePcmUsesCeiling() {
   OutputVolumeSafetyState state;
   float samples[] = {1.0f, -1.0f};
-  const OutputVolumeSafetyResult result =
-      applyOutputVolumeSafety(samples, 1, 2, 1.0f, 48000, state);
-  if (!result.gainReductionActive) {
-    fail("Output safety did not reserve device headroom at full scale.");
-  }
-  if (result.sampleRepairApplied) {
-    fail("Valid full-scale PCM required output-safety repair.");
-  }
+  applyOutputVolumeSafety(samples, 1, 2, 1.0f, 48000, state);
+  expectNear(state.gain, 0.98f, 1e-6f, "full-scale safety gain");
   expectNear(samples[0], 0.98f, 1e-6f, "full-scale positive ceiling");
   expectNear(samples[1], -0.98f, 1e-6f, "full-scale negative ceiling");
 }
@@ -92,14 +75,7 @@ void expectSlowReleaseAfterLimiting() {
   float limitedGain = state.gain;
 
   float quiet[] = {0.10f, -0.10f};
-  const OutputVolumeSafetyResult result =
-      applyOutputVolumeSafety(quiet, 1, 2, 1.0f, 48000, state);
-  if (!result.gainReductionActive) {
-    fail("Output safety did not hold release state.");
-  }
-  if (result.sampleRepairApplied) {
-    fail("Output safety release required sample repair.");
-  }
+  applyOutputVolumeSafety(quiet, 1, 2, 1.0f, 48000, state);
   if (!(state.gain > limitedGain && state.gain < 1.0f)) {
     fail("Output safety release did not move gradually toward unity.");
   }
@@ -108,11 +84,9 @@ void expectSlowReleaseAfterLimiting() {
 void expectInvalidSampleIsRepaired() {
   OutputVolumeSafetyState state;
   float samples[] = {std::numeric_limits<float>::quiet_NaN(), 0.25f};
-  const OutputVolumeSafetyResult result =
-      applyOutputVolumeSafety(samples, 1, 2, 1.0f, 48000, state);
-  if (!result.sampleRepairApplied || samples[0] != 0.0f ||
-      !std::isfinite(samples[1])) {
-    fail("Output safety did not report and repair an invalid sample.");
+  applyOutputVolumeSafety(samples, 1, 2, 1.0f, 48000, state);
+  if (samples[0] != 0.0f || !std::isfinite(samples[1])) {
+    fail("Output safety did not repair an invalid sample.");
   }
 }
 
@@ -588,7 +562,7 @@ void expectSupersededReceiverChangeReversesWithoutCommit() {
 int main() {
   expectTransparentBelowCeiling();
   expectLinearAttenuationAboveCeiling();
-  expectFullScalePcmUsesCeilingWithoutSafetyAlert();
+  expectFullScalePcmUsesCeiling();
   expectSlowReleaseAfterLimiting();
   expectInvalidSampleIsRepaired();
   expectDeclickRampIsLinearPerFrame();

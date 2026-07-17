@@ -84,7 +84,6 @@ struct AudioState {
   std::atomic<bool> audioPrimed{false};
   std::atomic<float> volume{1.0f};
   std::atomic<float> peak{0.0f};
-  std::atomic<int64_t> outputSafetyAlertUntilUs{0};
   OutputVolumeSafetyState outputSafety;
   AudioPipelineTransition pipelineTransition;
   SpscAudioRing decodedAudio;

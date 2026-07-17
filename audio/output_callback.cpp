@@ -211,13 +211,7 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
 
   const float volume = state->volume.load(std::memory_order_relaxed);
-  const OutputVolumeSafetyResult safety = applyOutputVolumeSafety(
-      out, frameCount, channels, volume, state->sampleRate,
-      state->outputSafety);
-  if (safety.sampleRepairApplied) {
-    constexpr int64_t kOutputSafetyAlertHoldUs = 900000;
-    state->outputSafetyAlertUntilUs.store(
-        nowUs() + kOutputSafetyAlertHoldUs, std::memory_order_relaxed);
-  }
+  applyOutputVolumeSafety(out, frameCount, channels, volume,
+                          state->sampleRate, state->outputSafety);
   updatePeakMeter(state, out, frameCount);
 }

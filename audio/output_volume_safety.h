@@ -7,12 +7,7 @@ struct OutputVolumeSafetyState {
   float gain = 1.0f;
 };
 
-struct OutputVolumeSafetyResult {
-  bool gainReductionActive = false;
-  bool sampleRepairApplied = false;
-};
-
-OutputVolumeSafetyResult applyOutputVolumeSafety(
+void applyOutputVolumeSafety(
     float* samples,
     uint32_t frames,
     uint32_t channels,

@@ -5,15 +5,14 @@
 #include <cmath>
 #include <limits>
 
-OutputVolumeSafetyResult applyOutputVolumeSafety(
+void applyOutputVolumeSafety(
     float* samples,
     uint32_t frames,
     uint32_t channels,
     float volume,
     uint32_t sampleRate,
     OutputVolumeSafetyState& state) {
-  OutputVolumeSafetyResult result;
-  if (!samples || frames == 0 || channels == 0) return result;
+  if (!samples || frames == 0 || channels == 0) return;
 
   constexpr float kOutputCeiling = 0.980f;
   constexpr float kDeviceClamp = 0.999f;
@@ -25,7 +24,6 @@ OutputVolumeSafetyResult applyOutputVolumeSafety(
   for (size_t i = 0; i < count; ++i) {
     const float x = samples[i] * safeVolume;
     if (!std::isfinite(x)) {
-      result.sampleRepairApplied = true;
       rawPeak = std::numeric_limits<float>::infinity();
       break;
     }
@@ -51,17 +49,11 @@ OutputVolumeSafetyResult applyOutputVolumeSafety(
   }
 
   const float outputGain = safeVolume * state.gain;
-  result.gainReductionActive =
-      rawPeak > kOutputCeiling || state.gain < 0.999f;
   for (size_t i = 0; i < count; ++i) {
     float y = samples[i] * outputGain;
     if (!std::isfinite(y)) {
       y = 0.0f;
-      result.sampleRepairApplied = true;
     }
-    const float clamped = std::clamp(y, -kDeviceClamp, kDeviceClamp);
-    if (clamped != y) result.sampleRepairApplied = true;
-    samples[i] = clamped;
+    samples[i] = std::clamp(y, -kDeviceClamp, kDeviceClamp);
   }
-  return result;
 }

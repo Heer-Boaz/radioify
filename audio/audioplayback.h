@@ -129,7 +129,6 @@ void audioSetHold(bool hold);
 void audioAdjustVolume(float delta);
 float audioGetVolume();
 float audioGetPeak();
-bool audioHasOutputSafetyAlert();
 AudioMelodyInfo audioGetMelodyInfo();
 AudioMelodyAnalysisState audioGetMelodyAnalysisState();
 bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,

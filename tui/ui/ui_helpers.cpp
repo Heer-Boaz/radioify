@@ -349,7 +349,7 @@ ProgressFooterRenderResult renderProgressFooter(
 
   Color meterStart = styles.progressFrame.fg;
   Color meterEnd = styles.progressFrame.fg;
-  if (input.outputSafetyAlert && peak >= 0.80f) {
+  if (peak >= 1.0f) {
     meterStart = styles.alert.fg;
     meterEnd = styles.alert.fg;
   } else if (peak >= 0.80f) {
