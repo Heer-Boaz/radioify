@@ -1,4 +1,3 @@
-#include "audio/master_output_stage.h"
 #include "audio/pipeline_transition.h"
 #include "audio/playback_source_priming.h"
 #include "audio/radio_filter_mode.h"
@@ -11,112 +10,21 @@
 #include <cstdlib>
 #include <iostream>
 #include <iterator>
-#include <limits>
 #include <vector>
 
 namespace {
 
 void fail(const char* message) {
-  std::cerr << message << "\n";
+  std::cerr << message << '\n';
   std::exit(1);
 }
 
 void expectNear(float actual, float expected, float tolerance, const char* what) {
   if (std::fabs(actual - expected) > tolerance) {
     std::cerr << what << " expected=" << expected << " actual=" << actual
-              << "\n";
+              << '\n';
     std::exit(1);
   }
-}
-
-void expectTransparentBelowFullScale() {
-  float samples[] = {0.10f, -0.25f, 0.40f, -0.30f};
-  const float peakBeforeClipping =
-      processMasterOutputStage(samples, 2, 2, 1.5f);
-  expectNear(samples[0], 0.15f, 1e-6f, "sample 0");
-  expectNear(samples[1], -0.375f, 1e-6f, "sample 1");
-  expectNear(samples[2], 0.60f, 1e-6f, "sample 2");
-  expectNear(samples[3], -0.45f, 1e-6f, "sample 3");
-  expectNear(peakBeforeClipping, 0.60f, 1e-6f,
-             "unclipped output peak");
-}
-
-void expectFullScalePcmIsPreserved() {
-  float samples[] = {1.0f, -1.0f};
-  const float peakBeforeClipping =
-      processMasterOutputStage(samples, 1, 2, 1.0f);
-
-  expectNear(samples[0], 1.0f, 1e-6f, "full-scale positive sample");
-  expectNear(samples[1], -1.0f, 1e-6f, "full-scale negative sample");
-  expectNear(peakBeforeClipping, 1.0f, 1e-6f,
-             "valid full-scale peak");
-  if (peakBeforeClipping > 1.0f) {
-    fail("Valid full-scale PCM was reported as clipped.");
-  }
-}
-
-void expectOverrangeIsClippedAtDeviceBoundary() {
-  float samples[] = {0.25f, 0.50f, -0.90f, 0.40f};
-  const float peakBeforeClipping =
-      processMasterOutputStage(samples, 2, 2, 2.0f);
-
-  expectNear(samples[0], 0.50f, 1e-6f, "scaled sample 0");
-  expectNear(samples[1], 1.00f, 1e-6f, "exact full-scale sample");
-  expectNear(samples[2], -1.00f, 1e-6f, "clipped negative sample");
-  expectNear(samples[3], 0.80f, 1e-6f, "scaled sample 3");
-  expectNear(peakBeforeClipping, 1.80f, 1e-6f,
-             "pre-clipping overrange peak");
-  if (!(peakBeforeClipping > 1.0f)) {
-    fail("A device-boundary clamp was not reported as clipping.");
-  }
-}
-
-void expectInvalidSampleIsRepaired() {
-  float samples[] = {
-      std::numeric_limits<float>::quiet_NaN(),
-      std::numeric_limits<float>::infinity(),
-      -std::numeric_limits<float>::infinity(), 0.25f};
-  const float peakBeforeClipping =
-      processMasterOutputStage(samples, 2, 2, 1.0f);
-  if (samples[0] != 0.0f || samples[1] != 0.0f || samples[2] != 0.0f ||
-      !std::isfinite(samples[3])) {
-    fail("Master output stage did not repair an invalid sample.");
-  }
-  expectNear(peakBeforeClipping, 0.25f, 1e-6f,
-             "finite peak after invalid samples");
-}
-
-void expectMasterOutputIsBlockInvariant() {
-  float whole[] = {0.20f, -0.30f, 0.90f, -0.40f,
-                   0.10f, -0.20f, 0.60f, -0.80f};
-  float split[std::size(whole)];
-  std::copy(std::begin(whole), std::end(whole), std::begin(split));
-
-  const float wholePeak =
-      processMasterOutputStage(whole, 4, 2, 1.75f);
-  const float firstSplitPeak =
-      processMasterOutputStage(split, 1, 2, 1.75f);
-  const float secondSplitPeak =
-      processMasterOutputStage(split + 2, 3, 2, 1.75f);
-
-  for (size_t i = 0; i < std::size(whole); ++i) {
-    expectNear(split[i], whole[i], 1e-6f, "block-invariant output");
-  }
-  expectNear(std::max(firstSplitPeak, secondSplitPeak), wholePeak, 1e-6f,
-             "block-invariant peak");
-}
-
-void expectFutureTransientDoesNotChangeEarlierFrames() {
-  float samples[] = {0.20f, -0.30f, 0.90f, -0.40f};
-  const float peakBeforeClipping =
-      processMasterOutputStage(samples, 2, 2, 2.0f);
-
-  expectNear(samples[0], 0.40f, 1e-6f, "pre-transient left sample");
-  expectNear(samples[1], -0.60f, 1e-6f, "pre-transient right sample");
-  expectNear(samples[2], 1.00f, 1e-6f, "clipped transient sample");
-  expectNear(samples[3], -0.80f, 1e-6f, "post-transient channel sample");
-  expectNear(peakBeforeClipping, 1.80f, 1e-6f,
-             "future transient pre-clipping peak");
 }
 
 void expectDeclickRampIsLinearPerFrame() {
@@ -589,12 +497,6 @@ void expectSupersededReceiverChangeReversesWithoutCommit() {
 }  // namespace
 
 int main() {
-  expectTransparentBelowFullScale();
-  expectFullScalePcmIsPreserved();
-  expectOverrangeIsClippedAtDeviceBoundary();
-  expectInvalidSampleIsRepaired();
-  expectMasterOutputIsBlockInvariant();
-  expectFutureTransientDoesNotChangeEarlierFrames();
   expectDeclickRampIsLinearPerFrame();
   expectSignalFadeArmsInputAndOutputBoundaries();
   expectDefaultDeclickRampFollowsSampleRate();

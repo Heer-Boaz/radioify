@@ -12,7 +12,6 @@ radioify_add_module_object_library(radioify_audio
   ${CMAKE_CURRENT_SOURCE_DIR}/gsfaudio.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/kssaudio.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/m4adecoder.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/master_output_stage.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_formats.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/midiaudio.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/output_callback.cpp

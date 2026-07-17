@@ -391,10 +391,9 @@ radioify_link_repo_target(radio_am_ingress_tests)
 add_test(NAME radio_am_ingress_tests
          COMMAND $<TARGET_FILE:radio_am_ingress_tests>)
 
-add_executable(audio_output_safety_tests)
-target_sources(audio_output_safety_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_audio_output_safety_tests>
-  ${CMAKE_SOURCE_DIR}/audio/master_output_stage.cpp
+add_executable(audio_playback_pipeline_tests)
+target_sources(audio_playback_pipeline_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_audio_playback_pipeline_tests>
   ${CMAKE_SOURCE_DIR}/audio/pipeline_transition.cpp
   ${CMAKE_SOURCE_DIR}/audio/playback_source_priming.cpp
   ${CMAKE_SOURCE_DIR}/audio/radio_filter_mode.cpp
@@ -402,9 +401,9 @@ target_sources(audio_output_safety_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/spsc_audio_ring.cpp
   ${CMAKE_SOURCE_DIR}/audio/spsc_audio_timeline.cpp
 )
-radioify_link_repo_target(audio_output_safety_tests)
-add_test(NAME audio_output_safety_tests
-         COMMAND $<TARGET_FILE:audio_output_safety_tests>)
+radioify_link_repo_target(audio_playback_pipeline_tests)
+add_test(NAME audio_playback_pipeline_tests
+         COMMAND $<TARGET_FILE:audio_playback_pipeline_tests>)
 
 add_executable(audio_media_format_tests)
 target_sources(audio_media_format_tests PRIVATE

@@ -10,7 +10,6 @@ extern "C" {
 #include <cstddef>
 #include <cstdint>
 
-#include "master_output_stage.h"
 #include "pipeline_transition.h"
 #include "queued_audio_source.h"
 #include "runtime_helpers.h"
@@ -209,7 +208,17 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
 
   const float volume = state->volume.load(std::memory_order_relaxed);
-  const float peakBeforeClipping = processMasterOutputStage(
-      out, frameCount, channels, volume);
+  assert(std::isfinite(volume));
+  assert(volume >= 0.0f && volume <= 4.0f);
+
+  float peakBeforeClipping = 0.0f;
+  const size_t sampleCount = static_cast<size_t>(frameCount) * channels;
+  for (size_t index = 0; index < sampleCount; ++index) {
+    float sample = out[index] * volume;
+    if (!std::isfinite(sample)) sample = 0.0f;
+    out[index] = sample;
+    peakBeforeClipping =
+        std::max(peakBeforeClipping, std::fabs(sample));
+  }
   updatePeakMeter(state, peakBeforeClipping, frameCount);
 }
