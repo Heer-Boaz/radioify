@@ -9,7 +9,7 @@ struct OutputVolumeSafetyState {
 
 struct OutputVolumeSafetyResult {
   bool gainReductionActive = false;
-  bool inputOverrange = false;
+  bool sampleRepairApplied = false;
 };
 
 OutputVolumeSafetyResult applyOutputVolumeSafety(

@@ -25,7 +25,7 @@ OutputVolumeSafetyResult applyOutputVolumeSafety(
   for (size_t i = 0; i < count; ++i) {
     const float x = samples[i] * safeVolume;
     if (!std::isfinite(x)) {
-      result.inputOverrange = true;
+      result.sampleRepairApplied = true;
       rawPeak = std::numeric_limits<float>::infinity();
       break;
     }
@@ -53,15 +53,14 @@ OutputVolumeSafetyResult applyOutputVolumeSafety(
   const float outputGain = safeVolume * state.gain;
   result.gainReductionActive =
       rawPeak > kOutputCeiling || state.gain < 0.999f;
-  result.inputOverrange = result.inputOverrange || rawPeak > 1.0f;
   for (size_t i = 0; i < count; ++i) {
     float y = samples[i] * outputGain;
     if (!std::isfinite(y)) {
       y = 0.0f;
-      result.inputOverrange = true;
+      result.sampleRepairApplied = true;
     }
     const float clamped = std::clamp(y, -kDeviceClamp, kDeviceClamp);
-    if (clamped != y) result.inputOverrange = true;
+    if (clamped != y) result.sampleRepairApplied = true;
     samples[i] = clamped;
   }
   return result;

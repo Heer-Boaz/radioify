@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -138,13 +139,15 @@ void expectPlaybackFilterOwnsReceiverSwitching() {
   }
 }
 
-void expectTypicalPlaybackKeepsPassbandHeadroom() {
-  constexpr uint32_t kSampleRate = 48000u;
-  constexpr uint32_t kFrames = kSampleRate / 2u;
-  constexpr float kProgramFrequencyHz = 200.0f;
-  constexpr float kProgramPeak = 0.98f;
-  constexpr float kPi = 3.14159265358979323846f;
+struct TypicalPlaybackProbe {
+  bool clipped = false;
+  float peak = 0.0f;
+  uint32_t clippedBlocks = 0u;
+};
 
+TypicalPlaybackProbe runTypicalPlayback(std::vector<float> samples) {
+  constexpr uint32_t kSampleRate = 48000u;
+  constexpr uint32_t kBlockFrames = 2048u;
   RadioPlaybackFilter filter;
   RadioPlaybackFilterConfig config;
   config.sampleRate = kSampleRate;
@@ -154,50 +157,62 @@ void expectTypicalPlaybackKeepsPassbandHeadroom() {
   config.initialMode = RadioFilterMode::Typical1930s;
   filter.initialize(config);
 
-  std::vector<float> samples(kFrames);
-  for (uint32_t frame = 0; frame < kFrames; ++frame) {
-    const float seconds = static_cast<float>(frame) / kSampleRate;
-    const float phase =
-        2.0f * kPi * kProgramFrequencyHz * seconds + 0.5f * kPi;
-    samples[frame] = kProgramPeak * std::sin(phase);
-  }
-
   AudioPipelineTransition pipelineTransition;
   audioPipelineTransitionReset(pipelineTransition);
-  bool clipped = false;
-  uint32_t firstClippedFrame = kFrames;
-  uint32_t lastClippedFrame = 0u;
-  uint32_t clippedBlocks = 0u;
-  constexpr uint32_t kBlockFrames = 2048u;
-  for (uint32_t frame = 0; frame < kFrames; frame += kBlockFrames) {
-    const uint32_t frames = std::min(kBlockFrames, kFrames - frame);
+  TypicalPlaybackProbe probe;
+  const uint32_t totalFrames = static_cast<uint32_t>(samples.size());
+  for (uint32_t frame = 0; frame < totalFrames; frame += kBlockFrames) {
+    const uint32_t frames = std::min(kBlockFrames, totalFrames - frame);
     if (filter.process(samples.data() + frame, frames, 1u,
                        pipelineTransition)) {
-      clipped = true;
-      firstClippedFrame = std::min(firstClippedFrame, frame);
-      lastClippedFrame = frame;
-      ++clippedBlocks;
+      probe.clipped = true;
+      ++probe.clippedBlocks;
     }
   }
-  float peak = 0.0f;
   for (float sample : samples) {
-    peak = std::max(peak, std::fabs(sample));
+    probe.peak = std::max(probe.peak, std::fabs(sample));
   }
-  if (clipped || peak > 0.95f) {
-    std::cerr << "radio_receiver_profile_tests: typical playback exhausted "
-                 "digital passband headroom; clipped="
-              << clipped << " peak=" << peak << '\n';
-    if (clipped) {
-      std::cerr << "radio_receiver_profile_tests: first clipped frame="
-                << firstClippedFrame << " last clipped frame="
-                << lastClippedFrame << " clipped blocks=" << clippedBlocks
-                << '\n';
-    }
+  return probe;
+}
+
+void expectTypicalProgramHeadroom(const char* name,
+                                  std::vector<float> program,
+                                  float minimumPeak) {
+  const TypicalPlaybackProbe probe = runTypicalPlayback(std::move(program));
+  if (probe.clipped || probe.peak > 0.95f) {
+    std::cerr << "radio_receiver_profile_tests: typical " << name
+              << " exhausted digital headroom; clipped=" << probe.clipped
+              << " clipped blocks=" << probe.clippedBlocks
+              << " peak=" << probe.peak << '\n';
     std::exit(1);
   }
-  if (peak < 0.70f) {
+  if (probe.peak < minimumPeak) {
     fail("typical playback headroom fix attenuated the profile excessively");
   }
+}
+
+void expectTypicalPlaybackKeepsPassbandHeadroom() {
+  constexpr uint32_t kSampleRate = 48000u;
+  constexpr uint32_t kFrames = kSampleRate / 2u;
+  constexpr float kPi = 3.14159265358979323846f;
+
+  std::vector<float> passbandSine(kFrames);
+  std::vector<float> denseProgram(kFrames);
+  for (uint32_t frame = 0; frame < kFrames; ++frame) {
+    const float seconds = static_cast<float>(frame) / kSampleRate;
+    passbandSine[frame] =
+        0.98f * std::sin(2.0f * kPi * 200.0f * seconds + 0.5f * kPi);
+    const float program =
+        0.56f * std::sin(2.0f * kPi * 180.0f * seconds) +
+        0.29f * std::sin(2.0f * kPi * 830.0f * seconds + 0.7f) +
+        0.15f * std::sin(2.0f * kPi * 2700.0f * seconds + 1.1f);
+    denseProgram[frame] = std::clamp(program, -0.98f, 0.98f);
+  }
+
+  expectTypicalProgramHeadroom("passband sine", std::move(passbandSine),
+                               0.70f);
+  expectTypicalProgramHeadroom("dense programme", std::move(denseProgram),
+                               0.40f);
 }
 
 }  // namespace

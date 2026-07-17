@@ -220,7 +220,7 @@ void dataCallback(ma_device* device, void* output, const void*,
   const OutputVolumeSafetyResult safety = applyOutputVolumeSafety(
       out, frameCount, channels, volume, state->sampleRate,
       state->outputSafety);
-  if (safety.inputOverrange) {
+  if (safety.sampleRepairApplied) {
     audioPlaybackHoldClipAlert(state);
   }
   updatePeakMeter(state, out, frameCount);
