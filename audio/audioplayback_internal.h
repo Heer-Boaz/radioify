@@ -106,6 +106,7 @@ struct AudioState {
   std::atomic<bool> deviceStopExpected{false};
   SpscAudioTimeline decodedTimeline;
   SpscAudioTimeline processedTimeline;
+  SpscAudioEventTimeline processedEvents;
   std::mutex streamUpdateMutex;
   std::condition_variable streamUpdateCv;
   std::atomic<uint64_t> streamUpdateCounter{0};
@@ -146,7 +147,6 @@ extern AudioPlaybackState gAudio;
 
 void appendAudioTimingLogLine(const char* line);
 void drainPlaybackPipelineForReplacement(AudioState* state);
-void audioPlaybackHoldClipAlert(AudioState* state);
 bool audioPlaybackFinishSeekPipelineTransition(AudioState* state);
 void dataCallback(ma_device* device, void* output, const void* input,
                   ma_uint32 frameCount);

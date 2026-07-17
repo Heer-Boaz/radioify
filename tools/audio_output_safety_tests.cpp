@@ -438,6 +438,35 @@ void expectSpscAudioTimelineWrapsCleanly() {
   }
 }
 
+void expectSpscAudioEventsStayFrameOrdered() {
+  SpscAudioEventTimeline events;
+  events.initialize(2);
+  if (!events.append({4, AudioPlaybackEvent::RadioOutputClip}) ||
+      !events.append({9, AudioPlaybackEvent::RadioOutputClip}) ||
+      events.append({12, AudioPlaybackEvent::RadioOutputClip})) {
+    fail("SPSC audio event timeline did not enforce its capacity.");
+  }
+
+  AudioPlaybackEventAnchor anchor;
+  if (events.popBefore(4, &anchor) ||
+      !events.popBefore(5, &anchor) || anchor.framePosition != 4 ||
+      anchor.event != AudioPlaybackEvent::RadioOutputClip ||
+      !events.append({12, AudioPlaybackEvent::RadioOutputClip})) {
+    fail("SPSC audio event timeline did not wrap in frame order.");
+  }
+  if (events.popBefore(9, &anchor) ||
+      !events.popBefore(10, &anchor) || anchor.framePosition != 9 ||
+      events.bufferedEvents() != 1) {
+    fail("SPSC audio event timeline crossed a playback boundary.");
+  }
+
+  events.discardEvents();
+  if (events.bufferedEvents() != 0 ||
+      events.popBefore(13, &anchor)) {
+    fail("SPSC audio event discard left a playback event behind.");
+  }
+}
+
 void expectRadioFilterCrossfadesAtWorkerBoundary() {
   RadioFilterTransition transition;
   transition.reset(RadioFilterMode::Off, 400);
@@ -604,6 +633,7 @@ int main() {
   expectPlaybackSourcePrimingBudget();
   expectSpscAudioRingWrapsCleanly();
   expectSpscAudioTimelineWrapsCleanly();
+  expectSpscAudioEventsStayFrameOrdered();
   expectRadioFilterCrossfadesAtWorkerBoundary();
   expectRadioFilterCrossfadeIsBlockInvariant();
   expectRadioFilterCycleContract();

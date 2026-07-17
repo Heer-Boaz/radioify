@@ -60,6 +60,7 @@ void appendTimelineAnchor(SpscAudioTimeline* timeline,
 void clearAudioTimelines(AudioState* state) {
   state->decodedTimeline.discardAnchors();
   state->processedTimeline.discardAnchors();
+  state->processedEvents.discardEvents();
 }
 
 void resetQueuedTransport(AudioState* state,
@@ -192,7 +193,8 @@ void finishProcessingCommitWhenPrimed(AudioState* state,
 void publishProcessedAudio(AudioState* state,
                            const float* samples,
                            uint64_t inputPosition,
-                           uint64_t frames) {
+                           uint64_t frames,
+                           bool radioOutputClipped) {
   const uint64_t outputPosition = state->processedAudio.writePosition();
   const uint64_t inputEnd = inputPosition + frames;
 
@@ -219,6 +221,14 @@ void publishProcessedAudio(AudioState* state,
           anchor.ptsUs, anchor.serial);
     }
     ++anchorOffset;
+  }
+
+  // Publish metadata first. The audio ring's release-store then makes both the
+  // samples and their event visible to the callback as one ordered handoff.
+  if (radioOutputClipped &&
+      !state->processedEvents.append(
+          {outputPosition, AudioPlaybackEvent::RadioOutputClip})) {
+    std::abort();
   }
 
   if (state->processedAudio.writeSome(samples, frames) != frames) {
@@ -317,19 +327,19 @@ void radioDspMain(AudioState* state,
       continue;
     }
 
-    if (!state->dry &&
+    const bool radioOutputClipped =
+        !state->dry &&
         state->radioFilter.process(scratch.data(),
                                    static_cast<uint32_t>(read),
                                    state->channels,
-                                   state->pipelineTransition)) {
-      audioPlaybackHoldClipAlert(state);
-    }
+                                   state->pipelineTransition);
     if (sourceResetIsPending(state) || streamResetCanBegin(state) ||
         state->radioDspStop.load(std::memory_order_relaxed)) {
       continue;
     }
 
-    publishProcessedAudio(state, scratch.data(), inputPosition, read);
+    publishProcessedAudio(state, scratch.data(), inputPosition, read,
+                          radioOutputClipped);
     state->processedAtEnd.store(false, std::memory_order_relaxed);
     state->audioQueueCv.notify_all();
     finishProcessingCommitWhenPrimed(state, primeFrames, &processingCommit);
@@ -495,6 +505,7 @@ void queuedAudioSourceStartProcessing(AudioState* state,
       state->decodedAudio.capacityFrames() * 2 + 1);
   state->processedTimeline.initialize(
       state->processedAudio.capacityFrames() * 2 + 1);
+  state->processedEvents.initialize(outputCapacityFrames);
   state->sourceResetRequestGeneration.store(0, std::memory_order_relaxed);
   state->sourceResetAppliedGeneration.store(0, std::memory_order_relaxed);
   state->sourceResetFramePosition.store(framePosition,
