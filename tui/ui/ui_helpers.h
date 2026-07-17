@@ -39,7 +39,7 @@ struct ProgressFooterInput {
   int width = 0;
   int progressY = -1;
   int peakY = -1;
-  float outputPeak = 0.0f;
+  float unclippedOutputPeak = 0.0f;
 };
 
 struct ProgressFooterRenderResult {

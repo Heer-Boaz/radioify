@@ -5,6 +5,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -19,17 +20,18 @@ namespace {
 void updatePeakMeter(AudioState* state, float blockPeak,
                      ma_uint32 frameCount) {
   if (frameCount == 0) {
-    state->outputPeak.store(0.0f, std::memory_order_relaxed);
+    state->unclippedOutputPeak.store(0.0f, std::memory_order_relaxed);
     return;
   }
-  const float peak = std::isfinite(blockPeak) ? std::max(blockPeak, 0.0f)
-                                              : 0.0f;
-  const float previous = state->outputPeak.load(std::memory_order_relaxed);
+  assert(std::isfinite(blockPeak));
+  assert(blockPeak >= 0.0f);
+  const float previous =
+      state->unclippedOutputPeak.load(std::memory_order_relaxed);
   const float rate = static_cast<float>(std::max(1u, state->sampleRate));
   const float decay =
       std::exp(-static_cast<float>(frameCount) / (rate * 0.30f));
-  state->outputPeak.store(std::max(peak, previous * decay),
-                          std::memory_order_relaxed);
+  state->unclippedOutputPeak.store(std::max(blockPeak, previous * decay),
+                                   std::memory_order_relaxed);
 }
 
 void outputSilence(AudioState* state,
@@ -207,10 +209,7 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
 
   const float volume = state->volume.load(std::memory_order_relaxed);
-  const uint64_t resetGeneration =
-      state->masterOutputResetGeneration.load(std::memory_order_acquire);
-  const MasterOutputStageResult outputResult = processMasterOutputStage(
-      out, frameCount, channels, volume, state->sampleRate, resetGeneration,
-      state->masterOutput);
-  updatePeakMeter(state, outputResult.outputPeak, frameCount);
+  const float peakBeforeClipping = processMasterOutputStage(
+      out, frameCount, channels, volume);
+  updatePeakMeter(state, peakBeforeClipping, frameCount);
 }

@@ -70,8 +70,6 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.state.audioTrailingPaddingFrames.store(0);
   gAudio.state.audioLeadSilenceFrames.store(0);
   gAudio.state.totalFrames.store(totalFrames);
-  gAudio.state.masterOutputResetGeneration.fetch_add(
-      1, std::memory_order_release);
   audioPipelineTransitionReset(gAudio.state.pipelineTransition);
   audioPipelineTransitionRequestSignalFadeIn(gAudio.state.pipelineTransition,
                                              gAudio.state.sampleRate);

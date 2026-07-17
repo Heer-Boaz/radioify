@@ -3103,7 +3103,7 @@ int runTui(Options o) {
       footerInput.width = width;
       footerInput.progressY = line;
       footerInput.peakY = peakMeterY;
-      footerInput.outputPeak = audioGetOutputPeak();
+      footerInput.unclippedOutputPeak = audioGetUnclippedOutputPeak();
       ProgressFooterRenderResult footerResult =
           renderProgressFooter(screen, footerInput, footerStyles);
       progressBarX = footerResult.progressBarX;
