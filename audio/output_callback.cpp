@@ -9,31 +9,27 @@ extern "C" {
 #include <cstddef>
 #include <cstdint>
 
-#include "output_volume_safety.h"
+#include "master_output_stage.h"
 #include "pipeline_transition.h"
 #include "queued_audio_source.h"
 #include "runtime_helpers.h"
 
 namespace {
 
-void updatePeakMeter(AudioState* state, const float* samples,
+void updatePeakMeter(AudioState* state, float blockPeak,
                      ma_uint32 frameCount) {
-  if (!samples || frameCount == 0) {
-    state->peak.store(0.0f, std::memory_order_relaxed);
+  if (frameCount == 0) {
+    state->outputPeak.store(0.0f, std::memory_order_relaxed);
     return;
   }
-  const uint32_t channels = std::max(1u, state->channels);
-  const size_t count = static_cast<size_t>(frameCount) * channels;
-  float peak = 0.0f;
-  for (size_t i = 0; i < count; ++i) {
-    peak = std::max(peak, std::fabs(samples[i]));
-  }
-  const float previous = state->peak.load(std::memory_order_relaxed);
+  const float peak = std::isfinite(blockPeak) ? std::max(blockPeak, 0.0f)
+                                              : 0.0f;
+  const float previous = state->outputPeak.load(std::memory_order_relaxed);
   const float rate = static_cast<float>(std::max(1u, state->sampleRate));
   const float decay =
       std::exp(-static_cast<float>(frameCount) / (rate * 0.30f));
-  state->peak.store(std::max(peak, previous * decay),
-                    std::memory_order_relaxed);
+  state->outputPeak.store(std::max(peak, previous * decay),
+                          std::memory_order_relaxed);
 }
 
 void outputSilence(AudioState* state,
@@ -44,7 +40,7 @@ void outputSilence(AudioState* state,
   std::fill(output,
             output + static_cast<size_t>(frameCount) * state->channels,
             0.0f);
-  updatePeakMeter(state, output, frameCount);
+  updatePeakMeter(state, 0.0f, frameCount);
 }
 
 void updateStreamClock(AudioState* state) {
@@ -211,7 +207,10 @@ void dataCallback(ma_device* device, void* output, const void*,
   }
 
   const float volume = state->volume.load(std::memory_order_relaxed);
-  applyOutputVolumeSafety(out, frameCount, channels, volume,
-                          state->sampleRate, state->outputSafety);
-  updatePeakMeter(state, out, frameCount);
+  const uint64_t resetGeneration =
+      state->masterOutputResetGeneration.load(std::memory_order_acquire);
+  const MasterOutputStageResult outputResult = processMasterOutputStage(
+      out, frameCount, channels, volume, state->sampleRate, resetGeneration,
+      state->masterOutput);
+  updatePeakMeter(state, outputResult.outputPeak, frameCount);
 }

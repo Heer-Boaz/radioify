@@ -116,6 +116,8 @@ static bool initPlaybackDeviceUnlocked() {
   devConfig.playback.format = ma_format_f32;
   devConfig.playback.channels = gAudio.channels;
   devConfig.sampleRate = gAudio.sampleRate;
+  // The master output stage owns the finite full-scale boundary.
+  devConfig.noClip = MA_TRUE;
   devConfig.dataCallback = dataCallback;
   devConfig.notificationCallback = deviceNotificationCallback;
   devConfig.pUserData = &gAudio.state;

@@ -394,8 +394,8 @@ add_test(NAME radio_am_ingress_tests
 add_executable(audio_output_safety_tests)
 target_sources(audio_output_safety_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_audio_output_safety_tests>
+  ${CMAKE_SOURCE_DIR}/audio/master_output_stage.cpp
   ${CMAKE_SOURCE_DIR}/audio/pipeline_transition.cpp
-  ${CMAKE_SOURCE_DIR}/audio/output_volume_safety.cpp
   ${CMAKE_SOURCE_DIR}/audio/playback_source_priming.cpp
   ${CMAKE_SOURCE_DIR}/audio/radio_filter_mode.cpp
   ${CMAKE_SOURCE_DIR}/audio/radio_filter_transition.cpp

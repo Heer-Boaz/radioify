@@ -19,12 +19,12 @@
 #include "gsfaudio.h"
 #include "kssaudio.h"
 #include "kssoptions.h"
+#include "master_output_stage.h"
 #include "midiaudio.h"
 #include "miniaudio.h"
 #include "nsfoptions.h"
 #include "pipeline_transition.h"
 #include "playback_backend.h"
-#include "output_volume_safety.h"
 #include "psfaudio.h"
 #include "queued_audio_source.h"
 #include "radio_playback.h"
@@ -83,8 +83,9 @@ struct AudioState {
   std::atomic<uint64_t> audioLeadSilenceFrames{0};
   std::atomic<bool> audioPrimed{false};
   std::atomic<float> volume{1.0f};
-  std::atomic<float> peak{0.0f};
-  OutputVolumeSafetyState outputSafety;
+  std::atomic<float> outputPeak{0.0f};
+  std::atomic<uint64_t> masterOutputResetGeneration{0};
+  MasterOutputStageState masterOutput;
   AudioPipelineTransition pipelineTransition;
   SpscAudioRing decodedAudio;
   SpscAudioRing processedAudio;

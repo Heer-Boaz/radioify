@@ -14,7 +14,6 @@
 #include "clock.h"
 #include "melodyanalysiscache.h"
 #include "pipeline_transition.h"
-#include "output_volume_safety.h"
 #include "playback_backend.h"
 #include "playback_device.h"
 #include "playback_source_priming.h"
@@ -170,7 +169,8 @@ void resetPlaybackStateForLoad(uint64_t startFrame,
   gAudio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
   gAudio.state.processedAtEnd.store(false, std::memory_order_relaxed);
   gAudio.state.deviceDelayFrames.store(0, std::memory_order_relaxed);
-  gAudio.state.outputSafety = {};
+  gAudio.state.masterOutputResetGeneration.fetch_add(
+      1, std::memory_order_release);
   if (releasePipelineTransition) {
     releasePlaybackPipelineForNewSignal();
   }
@@ -595,8 +595,8 @@ float audioGetVolume() {
   return gAudio.state.volume.load(std::memory_order_relaxed);
 }
 
-float audioGetPeak() {
-  return gAudio.state.peak.load(std::memory_order_relaxed);
+float audioGetOutputPeak() {
+  return gAudio.state.outputPeak.load(std::memory_order_relaxed);
 }
 
 AudioMelodyInfo audioGetMelodyInfo() {

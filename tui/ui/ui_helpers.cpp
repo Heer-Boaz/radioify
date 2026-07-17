@@ -332,7 +332,7 @@ ProgressFooterRenderResult renderProgressFooter(
     return result;
   }
 
-  float peak = std::clamp(input.peak, 0.0f, 1.2f);
+  const float outputPeak = std::clamp(input.outputPeak, 0.0f, 1.2f);
   size_t volPos = renderedSuffix.find(" Vol:");
   if (volPos == std::string::npos) {
     volPos = renderedSuffix.find(" V:");
@@ -349,18 +349,17 @@ ProgressFooterRenderResult renderProgressFooter(
 
   Color meterStart = styles.progressFrame.fg;
   Color meterEnd = styles.progressFrame.fg;
-  if (peak >= 1.0f) {
+  if (outputPeak >= 1.0f) {
     meterStart = styles.alert.fg;
     meterEnd = styles.alert.fg;
-  } else if (peak >= 0.80f) {
+  } else if (outputPeak >= 0.80f) {
     meterStart = styles.accent.fg;
     meterEnd = styles.progressEnd;
   }
 
-  auto meterCells =
-      renderProgressBarCells(std::clamp(static_cast<double>(peak), 0.0, 1.0),
-                             meterWidth, styles.progressEmpty, meterStart,
-                             meterEnd);
+  auto meterCells = renderProgressBarCells(
+      std::clamp(static_cast<double>(outputPeak), 0.0, 1.0), meterWidth,
+      styles.progressEmpty, meterStart, meterEnd);
   for (int i = 0; i < meterWidth; ++i) {
     const auto& cell = meterCells[static_cast<size_t>(i)];
     screen.writeChar(meterX + i, input.peakY, cell.ch, cell.style);

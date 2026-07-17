@@ -1,4 +1,4 @@
-#include "audio/output_volume_safety.h"
+#include "audio/master_output_stage.h"
 #include "audio/pipeline_transition.h"
 #include "audio/playback_source_priming.h"
 #include "audio/radio_filter_mode.h"
@@ -30,63 +30,111 @@ void expectNear(float actual, float expected, float tolerance, const char* what)
 }
 
 void expectTransparentBelowCeiling() {
-  OutputVolumeSafetyState state;
+  MasterOutputStageState state;
   float samples[] = {0.10f, -0.25f, 0.40f, -0.30f};
-  applyOutputVolumeSafety(samples, 2, 2, 1.5f, 48000, state);
-  expectNear(state.gain, 1.0f, 1e-6f, "transparent gain");
+  const MasterOutputStageResult result =
+      processMasterOutputStage(samples, 2, 2, 1.5f, 48000, 0, state);
+  expectNear(state.limiterGain, 1.0f, 1e-6f, "transparent gain");
   expectNear(samples[0], 0.15f, 1e-6f, "sample 0");
   expectNear(samples[1], -0.375f, 1e-6f, "sample 1");
   expectNear(samples[2], 0.60f, 1e-6f, "sample 2");
   expectNear(samples[3], -0.45f, 1e-6f, "sample 3");
+  expectNear(result.outputPeak, 0.60f, 1e-6f, "post-stage peak");
 }
 
-void expectLinearAttenuationAboveCeiling() {
-  OutputVolumeSafetyState state;
+void expectChannelsShareLimiterGain() {
+  MasterOutputStageState state;
   float samples[] = {0.25f, 0.50f, -0.90f, 0.40f};
-  applyOutputVolumeSafety(samples, 2, 2, 2.0f, 48000, state);
-  float expectedGain = 0.98f / 1.80f;
-  expectNear(state.gain, expectedGain, 1e-6f, "limited gain");
+  const MasterOutputStageResult result =
+      processMasterOutputStage(samples, 2, 2, 2.0f, 48000, 0, state);
+  const float expectedGain = 0.98f / 1.80f;
+  expectNear(state.limiterGain, expectedGain, 1e-6f, "limited gain");
   for (float sample : samples) {
     if (std::fabs(sample) > 0.98001f) {
-      fail("Output safety exceeded the analog ceiling.");
+      fail("Master output exceeded its ceiling.");
     }
   }
-  expectNear(samples[0] / 0.25f, 2.0f * expectedGain, 1e-6f,
-             "linear ratio 0");
-  expectNear(samples[1] / 0.50f, 2.0f * expectedGain, 1e-6f,
-             "linear ratio 1");
   expectNear(samples[2] / -0.90f, 2.0f * expectedGain, 1e-6f,
-             "linear ratio 2");
+             "linked left gain");
+  expectNear(samples[3] / 0.40f, 2.0f * expectedGain, 1e-6f,
+             "linked right gain");
+  expectNear(result.outputPeak, 0.98f, 1e-6f, "limited output peak");
 }
 
 void expectFullScalePcmUsesCeiling() {
-  OutputVolumeSafetyState state;
+  MasterOutputStageState state;
   float samples[] = {1.0f, -1.0f};
-  applyOutputVolumeSafety(samples, 1, 2, 1.0f, 48000, state);
-  expectNear(state.gain, 0.98f, 1e-6f, "full-scale safety gain");
+  processMasterOutputStage(samples, 1, 2, 1.0f, 48000, 0, state);
+  expectNear(state.limiterGain, 0.98f, 1e-6f, "full-scale limiter gain");
   expectNear(samples[0], 0.98f, 1e-6f, "full-scale positive ceiling");
   expectNear(samples[1], -0.98f, 1e-6f, "full-scale negative ceiling");
 }
 
 void expectSlowReleaseAfterLimiting() {
-  OutputVolumeSafetyState state;
+  MasterOutputStageState state;
   float hot[] = {1.0f, -1.0f};
-  applyOutputVolumeSafety(hot, 1, 2, 2.0f, 48000, state);
-  float limitedGain = state.gain;
+  processMasterOutputStage(hot, 1, 2, 2.0f, 48000, 0, state);
+  const float limitedGain = state.limiterGain;
 
   float quiet[] = {0.10f, -0.10f};
-  applyOutputVolumeSafety(quiet, 1, 2, 1.0f, 48000, state);
-  if (!(state.gain > limitedGain && state.gain < 1.0f)) {
-    fail("Output safety release did not move gradually toward unity.");
+  processMasterOutputStage(quiet, 1, 2, 1.0f, 48000, 0, state);
+  if (!(state.limiterGain > limitedGain && state.limiterGain < 1.0f)) {
+    fail("Master limiter release did not move gradually toward unity.");
   }
 }
 
 void expectInvalidSampleIsRepaired() {
-  OutputVolumeSafetyState state;
+  MasterOutputStageState state;
   float samples[] = {std::numeric_limits<float>::quiet_NaN(), 0.25f};
-  applyOutputVolumeSafety(samples, 1, 2, 1.0f, 48000, state);
+  processMasterOutputStage(samples, 1, 2, 1.0f, 48000, 0, state);
   if (samples[0] != 0.0f || !std::isfinite(samples[1])) {
-    fail("Output safety did not repair an invalid sample.");
+    fail("Master output stage did not repair an invalid sample.");
+  }
+}
+
+void expectMasterLimiterIsBlockInvariant() {
+  MasterOutputStageState wholeState;
+  MasterOutputStageState splitState;
+  float whole[] = {0.20f, -0.30f, 0.90f, -0.40f,
+                   0.10f, -0.20f, 0.60f, -0.80f};
+  float split[std::size(whole)];
+  std::copy(std::begin(whole), std::end(whole), std::begin(split));
+
+  processMasterOutputStage(whole, 4, 2, 1.75f, 48000, 0, wholeState);
+  processMasterOutputStage(split, 1, 2, 1.75f, 48000, 0, splitState);
+  processMasterOutputStage(split + 2, 3, 2, 1.75f, 48000, 0, splitState);
+
+  for (size_t i = 0; i < std::size(whole); ++i) {
+    expectNear(split[i], whole[i], 1e-6f, "block-invariant output");
+  }
+  expectNear(splitState.limiterGain, wholeState.limiterGain, 1e-6f,
+             "block-invariant limiter state");
+}
+
+void expectFutureTransientDoesNotChangeEarlierFrames() {
+  MasterOutputStageState state;
+  float samples[] = {0.20f, -0.30f, 0.90f, -0.40f};
+  processMasterOutputStage(samples, 2, 2, 2.0f, 48000, 0, state);
+
+  expectNear(samples[0], 0.40f, 1e-6f, "pre-transient left sample");
+  expectNear(samples[1], -0.60f, 1e-6f, "pre-transient right sample");
+  expectNear(samples[2], 0.98f, 1e-6f, "limited transient sample");
+}
+
+void expectResetGenerationIsConsumedByAudioOwner() {
+  MasterOutputStageState state;
+  float hot[] = {1.0f, -1.0f};
+  processMasterOutputStage(hot, 1, 2, 2.0f, 48000, 4, state);
+  if (!(state.limiterGain < 1.0f)) {
+    fail("Reset-generation test did not engage the limiter.");
+  }
+
+  float quiet[] = {0.10f, -0.10f};
+  processMasterOutputStage(quiet, 1, 2, 1.0f, 48000, 5, state);
+  expectNear(state.limiterGain, 1.0f, 1e-6f,
+             "callback-owned limiter reset");
+  if (state.appliedResetGeneration != 5) {
+    fail("Master output stage did not consume the latest reset generation.");
   }
 }
 
@@ -561,10 +609,13 @@ void expectSupersededReceiverChangeReversesWithoutCommit() {
 
 int main() {
   expectTransparentBelowCeiling();
-  expectLinearAttenuationAboveCeiling();
+  expectChannelsShareLimiterGain();
   expectFullScalePcmUsesCeiling();
   expectSlowReleaseAfterLimiting();
   expectInvalidSampleIsRepaired();
+  expectMasterLimiterIsBlockInvariant();
+  expectFutureTransientDoesNotChangeEarlierFrames();
+  expectResetGenerationIsConsumedByAudioOwner();
   expectDeclickRampIsLinearPerFrame();
   expectSignalFadeArmsInputAndOutputBoundaries();
   expectDefaultDeclickRampFollowsSampleRate();
