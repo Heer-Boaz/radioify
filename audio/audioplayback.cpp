@@ -599,9 +599,9 @@ float audioGetPeak() {
   return gAudio.state.peak.load(std::memory_order_relaxed);
 }
 
-bool audioHasClipAlert() {
-  return gAudio.state.clipAlertUntilUs.load(std::memory_order_relaxed) >
-         nowUs();
+bool audioHasOutputSafetyAlert() {
+  return nowUs() < gAudio.state.outputSafetyAlertUntilUs.load(
+                       std::memory_order_relaxed);
 }
 
 AudioMelodyInfo audioGetMelodyInfo() {

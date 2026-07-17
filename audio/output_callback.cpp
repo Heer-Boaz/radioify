@@ -77,24 +77,6 @@ void updateStreamClock(AudioState* state) {
   state->streamUpdateCv.notify_all();
 }
 
-void holdClipAlert(AudioState* state) {
-  constexpr int64_t kClipAlertHoldUs = 900000;
-  state->clipAlertUntilUs.store(nowUs() + kClipAlertHoldUs,
-                                std::memory_order_relaxed);
-}
-
-bool consumeRadioOutputClipEvents(AudioState* state,
-                                  uint64_t playedThroughFrame) {
-  bool clipped = false;
-  AudioPlaybackEventAnchor anchor;
-  while (state->processedEvents.popBefore(playedThroughFrame, &anchor)) {
-    if (anchor.event == AudioPlaybackEvent::RadioOutputClip) {
-      clipped = true;
-    }
-  }
-  return clipped;
-}
-
 }  // namespace
 
 void dataCallback(ma_device* device, void* output, const void*,
@@ -158,10 +140,6 @@ void dataCallback(ma_device* device, void* output, const void*,
       requestedAudioFrames > 0
           ? state->processedAudio.readSome(audioOutput, requestedAudioFrames)
           : 0;
-  const bool radioOutputClipped =
-      framesRead > 0 &&
-      consumeRadioOutputClipEvents(
-          state, state->processedAudio.readPosition());
   if (framesRead < requestedAudioFrames) {
     std::fill(audioOutput + framesRead * channels,
               audioOutput +
@@ -236,9 +214,10 @@ void dataCallback(ma_device* device, void* output, const void*,
   const OutputVolumeSafetyResult safety = applyOutputVolumeSafety(
       out, frameCount, channels, volume, state->sampleRate,
       state->outputSafety);
-  if (!fadeOut &&
-      (radioOutputClipped || safety.sampleRepairApplied)) {
-    holdClipAlert(state);
+  if (safety.sampleRepairApplied) {
+    constexpr int64_t kOutputSafetyAlertHoldUs = 900000;
+    state->outputSafetyAlertUntilUs.store(
+        nowUs() + kOutputSafetyAlertHoldUs, std::memory_order_relaxed);
   }
   updatePeakMeter(state, out, frameCount);
 }

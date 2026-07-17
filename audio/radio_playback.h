@@ -33,7 +33,7 @@ class RadioPlaybackFilter {
   RadioFilterMode mode() const;
   void cycleMode();
 
-  bool process(float* samples,
+  void process(float* samples,
                uint32_t frames,
                uint32_t channels,
                AudioPipelineTransition& pipelineTransition);

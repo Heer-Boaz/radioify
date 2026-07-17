@@ -139,13 +139,7 @@ void expectPlaybackFilterOwnsReceiverSwitching() {
   }
 }
 
-struct TypicalPlaybackProbe {
-  bool clipped = false;
-  float peak = 0.0f;
-  uint32_t clippedBlocks = 0u;
-};
-
-TypicalPlaybackProbe runTypicalPlayback(std::vector<float> samples) {
+float runTypicalPlaybackPeak(std::vector<float> samples) {
   constexpr uint32_t kSampleRate = 48000u;
   constexpr uint32_t kBlockFrames = 2048u;
   RadioPlaybackFilter filter;
@@ -159,34 +153,29 @@ TypicalPlaybackProbe runTypicalPlayback(std::vector<float> samples) {
 
   AudioPipelineTransition pipelineTransition;
   audioPipelineTransitionReset(pipelineTransition);
-  TypicalPlaybackProbe probe;
   const uint32_t totalFrames = static_cast<uint32_t>(samples.size());
   for (uint32_t frame = 0; frame < totalFrames; frame += kBlockFrames) {
     const uint32_t frames = std::min(kBlockFrames, totalFrames - frame);
-    if (filter.process(samples.data() + frame, frames, 1u,
-                       pipelineTransition)) {
-      probe.clipped = true;
-      ++probe.clippedBlocks;
-    }
+    filter.process(samples.data() + frame, frames, 1u,
+                   pipelineTransition);
   }
+  float peak = 0.0f;
   for (float sample : samples) {
-    probe.peak = std::max(probe.peak, std::fabs(sample));
+    peak = std::max(peak, std::fabs(sample));
   }
-  return probe;
+  return peak;
 }
 
 void expectTypicalProgramHeadroom(const char* name,
                                   std::vector<float> program,
                                   float minimumPeak) {
-  const TypicalPlaybackProbe probe = runTypicalPlayback(std::move(program));
-  if (probe.clipped || probe.peak > 0.95f) {
+  const float peak = runTypicalPlaybackPeak(std::move(program));
+  if (peak > 0.95f) {
     std::cerr << "radio_receiver_profile_tests: typical " << name
-              << " exhausted digital headroom; clipped=" << probe.clipped
-              << " clipped blocks=" << probe.clippedBlocks
-              << " peak=" << probe.peak << '\n';
+              << " exhausted digital headroom; peak=" << peak << '\n';
     std::exit(1);
   }
-  if (probe.peak < minimumPeak) {
+  if (peak < minimumPeak) {
     fail("typical playback headroom fix attenuated the profile excessively");
   }
 }

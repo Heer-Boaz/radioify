@@ -70,7 +70,7 @@ void expectLinearAttenuationAboveCeiling() {
              "linear ratio 2");
 }
 
-void expectFullScalePcmUsesCeilingWithoutClipAlert() {
+void expectFullScalePcmUsesCeilingWithoutSafetyAlert() {
   OutputVolumeSafetyState state;
   float samples[] = {1.0f, -1.0f};
   const OutputVolumeSafetyResult result =
@@ -79,7 +79,7 @@ void expectFullScalePcmUsesCeilingWithoutClipAlert() {
     fail("Output safety did not reserve device headroom at full scale.");
   }
   if (result.sampleRepairApplied) {
-    fail("Valid full-scale PCM was reported as clipping.");
+    fail("Valid full-scale PCM required output-safety repair.");
   }
   expectNear(samples[0], 0.98f, 1e-6f, "full-scale positive ceiling");
   expectNear(samples[1], -0.98f, 1e-6f, "full-scale negative ceiling");
@@ -98,7 +98,7 @@ void expectSlowReleaseAfterLimiting() {
     fail("Output safety did not hold release state.");
   }
   if (result.sampleRepairApplied) {
-    fail("Output safety release was reported as clipping.");
+    fail("Output safety release required sample repair.");
   }
   if (!(state.gain > limitedGain && state.gain < 1.0f)) {
     fail("Output safety release did not move gradually toward unity.");
@@ -438,35 +438,6 @@ void expectSpscAudioTimelineWrapsCleanly() {
   }
 }
 
-void expectSpscAudioEventsStayFrameOrdered() {
-  SpscAudioEventTimeline events;
-  events.initialize(2);
-  if (!events.append({4, AudioPlaybackEvent::RadioOutputClip}) ||
-      !events.append({9, AudioPlaybackEvent::RadioOutputClip}) ||
-      events.append({12, AudioPlaybackEvent::RadioOutputClip})) {
-    fail("SPSC audio event timeline did not enforce its capacity.");
-  }
-
-  AudioPlaybackEventAnchor anchor;
-  if (events.popBefore(4, &anchor) ||
-      !events.popBefore(5, &anchor) || anchor.framePosition != 4 ||
-      anchor.event != AudioPlaybackEvent::RadioOutputClip ||
-      !events.append({12, AudioPlaybackEvent::RadioOutputClip})) {
-    fail("SPSC audio event timeline did not wrap in frame order.");
-  }
-  if (events.popBefore(9, &anchor) ||
-      !events.popBefore(10, &anchor) || anchor.framePosition != 9 ||
-      events.bufferedEvents() != 1) {
-    fail("SPSC audio event timeline crossed a playback boundary.");
-  }
-
-  events.discardEvents();
-  if (events.bufferedEvents() != 0 ||
-      events.popBefore(13, &anchor)) {
-    fail("SPSC audio event discard left a playback event behind.");
-  }
-}
-
 void expectRadioFilterCrossfadesAtWorkerBoundary() {
   RadioFilterTransition transition;
   transition.reset(RadioFilterMode::Off, 400);
@@ -617,7 +588,7 @@ void expectSupersededReceiverChangeReversesWithoutCommit() {
 int main() {
   expectTransparentBelowCeiling();
   expectLinearAttenuationAboveCeiling();
-  expectFullScalePcmUsesCeilingWithoutClipAlert();
+  expectFullScalePcmUsesCeilingWithoutSafetyAlert();
   expectSlowReleaseAfterLimiting();
   expectInvalidSampleIsRepaired();
   expectDeclickRampIsLinearPerFrame();
@@ -633,7 +604,6 @@ int main() {
   expectPlaybackSourcePrimingBudget();
   expectSpscAudioRingWrapsCleanly();
   expectSpscAudioTimelineWrapsCleanly();
-  expectSpscAudioEventsStayFrameOrdered();
   expectRadioFilterCrossfadesAtWorkerBoundary();
   expectRadioFilterCrossfadeIsBlockInvariant();
   expectRadioFilterCycleContract();

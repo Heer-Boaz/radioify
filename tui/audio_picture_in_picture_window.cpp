@@ -357,7 +357,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
       audioDisplayReady && layout_.progressBarY > 0 ? layout_.progressBarY - 1
                                                     : -1;
   footerInput.peak = audioGetPeak();
-  footerInput.clipAlert = audioHasClipAlert();
+  footerInput.outputSafetyAlert = audioHasOutputSafetyAlert();
   ProgressFooterRenderResult footerResult =
       renderProgressFooter(screen_, footerInput, footerStyles);
   progressX_ = footerResult.progressBarX;

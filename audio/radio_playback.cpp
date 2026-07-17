@@ -100,7 +100,7 @@ void RadioPlaybackFilter::resetReceiver(RadioFilterMode mode) {
   receiver.preview.reset();
 }
 
-bool RadioPlaybackFilter::process(
+void RadioPlaybackFilter::process(
     float* samples,
     uint32_t frames,
     uint32_t channels,
@@ -114,14 +114,13 @@ bool RadioPlaybackFilter::process(
   if (!transition_.needsWetSignal()) {
     appliedResetGeneration_ = resetGeneration;
     audioPipelineTransitionClearInputFadeIn(pipelineTransition);
-    return false;
+    return;
   }
   if (receiverChanged || resetGeneration != appliedResetGeneration_) {
     resetReceiver(transition_.activeMode());
     appliedResetGeneration_ = resetGeneration;
   }
 
-  bool clipped = false;
   uint32_t frameOffset = 0;
   while (frameOffset < frames) {
     if (transition_.commitAtDryBoundary()) {
@@ -154,12 +153,10 @@ bool RadioPlaybackFilter::process(
 
     Receiver& receiver = receiverFor(transition_.activeMode());
     receiver.preview.runBlock(receiver.radio, block, blockFrames, channels);
-    clipped = clipped || receiver.radio.diagnostics.outputClip;
     if (blending) {
       transition_.blend(block, dryScratch_.data(), blockFrames, channels,
                         sampleRate_);
     }
     frameOffset += blockFrames;
   }
-  return clipped;
 }

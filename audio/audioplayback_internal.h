@@ -84,7 +84,7 @@ struct AudioState {
   std::atomic<bool> audioPrimed{false};
   std::atomic<float> volume{1.0f};
   std::atomic<float> peak{0.0f};
-  std::atomic<int64_t> clipAlertUntilUs{0};
+  std::atomic<int64_t> outputSafetyAlertUntilUs{0};
   OutputVolumeSafetyState outputSafety;
   AudioPipelineTransition pipelineTransition;
   SpscAudioRing decodedAudio;
@@ -106,7 +106,6 @@ struct AudioState {
   std::atomic<bool> deviceStopExpected{false};
   SpscAudioTimeline decodedTimeline;
   SpscAudioTimeline processedTimeline;
-  SpscAudioEventTimeline processedEvents;
   std::mutex streamUpdateMutex;
   std::condition_variable streamUpdateCv;
   std::atomic<uint64_t> streamUpdateCounter{0};

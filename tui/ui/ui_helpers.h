@@ -40,7 +40,7 @@ struct ProgressFooterInput {
   int progressY = -1;
   int peakY = -1;
   float peak = 0.0f;
-  bool clipAlert = false;
+  bool outputSafetyAlert = false;
 };
 
 struct ProgressFooterRenderResult {

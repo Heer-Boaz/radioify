@@ -10,15 +10,6 @@ struct AudioTimelineAnchor {
   int serial = 0;
 };
 
-enum class AudioPlaybackEvent : uint8_t {
-  RadioOutputClip,
-};
-
-struct AudioPlaybackEventAnchor {
-  uint64_t framePosition = 0;
-  AudioPlaybackEvent event = AudioPlaybackEvent::RadioOutputClip;
-};
-
 class SpscAudioTimeline {
  public:
   void initialize(uint64_t capacityAnchors);
@@ -43,33 +34,6 @@ class SpscAudioTimeline {
 
   std::unique_ptr<Slot[]> anchors_;
   uint64_t capacityAnchors_ = 0;
-  std::atomic<uint64_t> readPosition_{0};
-  std::atomic<uint64_t> writePosition_{0};
-};
-
-class SpscAudioEventTimeline {
- public:
-  // Events are published before their corresponding audio frames and consumed
-  // only after the audio ring's read position has passed their frame position.
-  void initialize(uint64_t capacityEvents);
-  void discardEvents();
-
-  uint64_t bufferedEvents() const;
-  bool append(const AudioPlaybackEventAnchor& anchor);
-  bool popBefore(uint64_t framePosition, AudioPlaybackEventAnchor* anchor);
-
- private:
-  struct Slot {
-    std::atomic<uint64_t> sequence{0};
-    std::atomic<uint64_t> framePosition{0};
-    std::atomic<uint8_t> event{0};
-  };
-
-  bool readSlot(uint64_t position,
-                AudioPlaybackEventAnchor* anchor) const;
-
-  std::unique_ptr<Slot[]> events_;
-  uint64_t capacityEvents_ = 0;
   std::atomic<uint64_t> readPosition_{0};
   std::atomic<uint64_t> writePosition_{0};
 };
