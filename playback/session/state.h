@@ -42,5 +42,6 @@ struct WindowPlacementState {
 struct PlaybackSessionContinuationState {
   bool hasLayout = false;
   PlaybackLayout layout = PlaybackLayout::Terminal;
+  bool asciiRenderingEnabled = true;
   WindowPlacementState windowPlacement;
 };

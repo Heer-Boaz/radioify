@@ -16,6 +16,7 @@ PlaybackSessionContinuationState videoContinuation(
   PlaybackSessionContinuationState state;
   state.hasLayout = true;
   state.layout = PlaybackLayout::Window;
+  state.asciiRenderingEnabled = presentation.textGrid;
   if (sourcePlacement) {
     state.windowPlacement = *sourcePlacement;
   }

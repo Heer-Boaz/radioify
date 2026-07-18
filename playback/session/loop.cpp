@@ -365,6 +365,7 @@ struct PlaybackLoopRunner::Impl {
     PlaybackSessionContinuationState state;
     state.hasLayout = true;
     state.layout = output.desiredLayout();
+    state.asciiRenderingEnabled = enableAscii;
     presentationController.captureWindowPlacement(output, state);
     return state;
   }

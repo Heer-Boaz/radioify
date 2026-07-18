@@ -193,6 +193,7 @@ static std::optional<playback_route::Route> resolveOpenFilesPlaybackRoute(
     PlaybackSessionContinuationState asciiContinuation;
     asciiContinuation.hasLayout = true;
     asciiContinuation.layout = PlaybackLayout::Terminal;
+    asciiContinuation.asciiRenderingEnabled = true;
     route->videoContinuation = asciiContinuation;
   }
   return route;
@@ -1268,10 +1269,16 @@ int runTui(Options o) {
               }
               return false;
             };
+        VideoPlaybackConfig sessionVideoConfig = videoConfig;
+        if (videoContinuationState.hasLayout) {
+          sessionVideoConfig.enableAscii =
+              videoContinuationState.asciiRenderingEnabled;
+        }
         bool handled = showAsciiVideo(
             target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
             kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
-            kProgressEnd, videoConfig, openFileRequests, &quitAppRequested,
+            kProgressEnd, sessionVideoConfig, openFileRequests,
+            &quitAppRequested,
             &systemControls,
             &notificationAreaControls,
             requestTransportCommand, requestOpenFiles,
