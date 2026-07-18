@@ -11,6 +11,7 @@ class OpenFileRequests;
 ShellOpenMode configuredWindowsShellOpenMode();
 
 bool forwardWindowsShellOpenFile(const std::filesystem::path& file,
+                                 bool nonAsciiVideo,
                                  uint32_t timeoutMs = 4000);
 
 class WindowsShellOpenServer {

@@ -8,18 +8,23 @@
 #include "waitable_signal.h"
 
 struct OpenFileRequests::Impl {
-  void post(std::vector<std::filesystem::path> files) {
-    if (files.empty()) {
+  void post(OpenFilesRequest request) {
+    if (request.files.empty()) {
       return;
     }
     {
       std::lock_guard<std::mutex> lock(mutex);
-      pending.push_back(std::move(files));
+      pending.push_back(std::move(request));
       ready.signal();
     }
   }
 
-  bool poll(std::vector<std::filesystem::path>& out) {
+  bool hasPending() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return !pending.empty();
+  }
+
+  bool poll(OpenFilesRequest& out) {
     std::lock_guard<std::mutex> lock(mutex);
     if (pending.empty()) {
       ready.clear();
@@ -35,28 +40,23 @@ struct OpenFileRequests::Impl {
   }
 
   WaitableSignal ready;
-  std::mutex mutex;
-  std::deque<std::vector<std::filesystem::path>> pending;
+  mutable std::mutex mutex;
+  std::deque<OpenFilesRequest> pending;
 };
 
 OpenFileRequests::OpenFileRequests() : impl_(std::make_unique<Impl>()) {}
 
 OpenFileRequests::~OpenFileRequests() = default;
 
-void OpenFileRequests::post(std::filesystem::path file) {
-  if (file.empty()) {
-    return;
-  }
-  std::vector<std::filesystem::path> files;
-  files.push_back(std::move(file));
-  impl_->post(std::move(files));
+void OpenFileRequests::post(OpenFilesRequest request) {
+  impl_->post(std::move(request));
 }
 
-void OpenFileRequests::post(std::vector<std::filesystem::path> files) {
-  impl_->post(std::move(files));
+bool OpenFileRequests::hasPending() const {
+  return impl_->hasPending();
 }
 
-bool OpenFileRequests::poll(std::vector<std::filesystem::path>& out) {
+bool OpenFileRequests::poll(OpenFilesRequest& out) {
   return impl_->poll(out);
 }
 

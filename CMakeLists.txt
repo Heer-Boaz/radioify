@@ -151,6 +151,8 @@ if (WIN32)
   set(RADIOIFY_WIN11_EXPLORER_APPLICATION_ID "RadioifyExplorerStub")
   set(RADIOIFY_WIN11_EXPLORER_COMMAND_GUID "4A616892-7E56-4D0B-BD0E-6A2E4F7B0E91")
   set(RADIOIFY_WIN11_EXPLORER_COMMAND_CLSID "{${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}}")
+  set(RADIOIFY_WIN11_EXPLORER_NON_ASCII_COMMAND_GUID "99A29345-98F4-4435-BF03-E68187F76EFF")
+  set(RADIOIFY_WIN11_EXPLORER_NON_ASCII_COMMAND_CLSID "{${RADIOIFY_WIN11_EXPLORER_NON_ASCII_COMMAND_GUID}}")
   set(RADIOIFY_WIN11_EXPLORER_THUMBNAIL_GUID "A1082EA3-4A99-451F-89FE-1C72011133B8")
   set(RADIOIFY_WIN11_EXPLORER_THUMBNAIL_CLSID "{${RADIOIFY_WIN11_EXPLORER_THUMBNAIL_GUID}}")
   set(RADIOIFY_WIN11_EXPLORER_APPID "${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}")
@@ -509,6 +511,16 @@ target_sources(waitable_signal_tests PRIVATE
 radioify_link_repo_target(waitable_signal_tests)
 add_test(NAME waitable_signal_tests
          COMMAND $<TARGET_FILE:waitable_signal_tests>)
+
+add_executable(open_file_requests_tests)
+target_sources(open_file_requests_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_open_file_requests_tests>
+  ${CMAKE_SOURCE_DIR}/core/open_file_requests.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+)
+radioify_link_repo_target(open_file_requests_tests)
+add_test(NAME open_file_requests_tests
+         COMMAND $<TARGET_FILE:open_file_requests_tests>)
 
 add_executable(windows_console_window_tests)
 target_sources(windows_console_window_tests PRIVATE

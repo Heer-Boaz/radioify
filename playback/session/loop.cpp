@@ -197,9 +197,6 @@ struct PlaybackLoopRunner::Impl {
       return presentationController.toggleFullscreen(output, enableAscii, redraw,
                                                      forceRefreshArt);
     };
-    inputSignals.closePresentation = [this]() {
-      presentationController.closePresentation(output, redraw, forceRefreshArt);
-    };
     inputSignals.requestTransportCommand = [this](PlaybackTransportCommand cmd) {
       if (!requestTransportCommand) {
         return false;
@@ -464,15 +461,9 @@ struct PlaybackLoopRunner::Impl {
   bool pollNextEvent(InputEvent& ev) { return output.pollInput(input, ev); }
 
   void processOpenFileRequests(PlaybackLoopState& loopState) {
-    std::vector<std::filesystem::path> files;
-    while (openFileRequests.poll(files)) {
-      playback_session_handoff::requestOpenFilesHandoff(inputView,
-                                                        inputSignals, files);
-      files.clear();
-      if (loopStopRequested) {
-        loopState = PlaybackLoopState::Stopped;
-        return;
-      }
+    if (openFileRequests.hasPending()) {
+      loopStopRequested = true;
+      loopState = PlaybackLoopState::Stopped;
     }
   }
 

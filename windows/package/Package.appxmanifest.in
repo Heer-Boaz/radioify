@@ -59,6 +59,10 @@
                 Path="radioify_explorer.dll"
                 ThreadingModel="STA" />
               <com:Class
+                Id="@RADIOIFY_WIN11_EXPLORER_NON_ASCII_COMMAND_GUID@"
+                Path="radioify_explorer.dll"
+                ThreadingModel="STA" />
+              <com:Class
                 Id="@RADIOIFY_WIN11_EXPLORER_THUMBNAIL_GUID@"
                 Path="radioify_explorer.dll"
                 ThreadingModel="STA" />

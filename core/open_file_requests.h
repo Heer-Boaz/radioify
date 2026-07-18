@@ -6,6 +6,17 @@
 
 #include "native_wait_handle.h"
 
+enum class OpenVideoMode {
+  Inherit,
+  Ascii,
+  Framebuffer,
+};
+
+struct OpenFilesRequest {
+  std::vector<std::filesystem::path> files;
+  OpenVideoMode videoMode = OpenVideoMode::Inherit;
+};
+
 class OpenFileRequests {
  public:
   OpenFileRequests();
@@ -14,9 +25,9 @@ class OpenFileRequests {
   OpenFileRequests(const OpenFileRequests&) = delete;
   OpenFileRequests& operator=(const OpenFileRequests&) = delete;
 
-  void post(std::filesystem::path file);
-  void post(std::vector<std::filesystem::path> files);
-  bool poll(std::vector<std::filesystem::path>& out);
+  void post(OpenFilesRequest request);
+  bool hasPending() const;
+  bool poll(OpenFilesRequest& out);
   NativeWaitHandle nativeWaitHandle() const;
 
  private:

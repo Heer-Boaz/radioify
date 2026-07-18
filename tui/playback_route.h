@@ -4,16 +4,11 @@
 #include <optional>
 #include <vector>
 
+#include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
 #include "playback_target.h"
 
 namespace playback_route {
-
-enum class Surface {
-  Browser,
-  AudioPictureInPicture,
-  VideoPresentation,
-};
 
 enum class AudioPictureInPicturePlan {
   Keep,
@@ -28,13 +23,15 @@ struct Route {
 };
 
 Route resolveTarget(
-    const PlaybackTarget& target, Surface surface,
+    const PlaybackTarget& target,
     const WindowPlacementState* sourcePlacement = nullptr,
-    bool preferTextGridVideoPictureInPicture = true);
+    std::optional<PlaybackWindowPresentationRequest> videoPresentation =
+        std::nullopt);
 
 std::optional<Route> resolveDroppedTarget(
-    const std::vector<std::filesystem::path>& files, Surface surface,
+    const std::vector<std::filesystem::path>& files,
     const WindowPlacementState* sourcePlacement = nullptr,
-    bool preferTextGridVideoPictureInPicture = true);
+    std::optional<PlaybackWindowPresentationRequest> videoPresentation =
+        std::nullopt);
 
 }  // namespace playback_route

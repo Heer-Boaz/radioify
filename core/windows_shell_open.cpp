@@ -19,6 +19,8 @@
 namespace {
 
 constexpr uint32_t kMaxShellOpenPayloadBytes = 64u * 1024u;
+constexpr uint32_t kShellOpenNonAsciiVideo = 1u << 0;
+constexpr uint32_t kKnownShellOpenFlags = kShellOpenNonAsciiVideo;
 
 class ShellOpenSingleInstanceLock {
  public:
@@ -93,7 +95,7 @@ std::wstring shellOpenObjectSuffix() {
   if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId)) {
     sessionId = 0;
   }
-  return RADIOIFY_APP_NAME_W L".ShellOpen." + std::to_wstring(sessionId);
+  return RADIOIFY_APP_NAME_W L".ShellOpen.2." + std::to_wstring(sessionId);
 }
 
 std::wstring shellOpenMutexName() {
@@ -131,7 +133,9 @@ void ShellOpenSingleInstanceLock::reset() {
   mutex_.reset();
 }
 
-bool writeShellOpenPayload(std::string_view payload, uint32_t timeoutMs) {
+bool writeShellOpenRequest(std::string_view payload,
+                           bool nonAsciiVideo,
+                           uint32_t timeoutMs) {
   if (payload.size() > kMaxShellOpenPayloadBytes) {
     return false;
   }
@@ -145,11 +149,18 @@ bool writeShellOpenPayload(std::string_view payload, uint32_t timeoutMs) {
                                          nullptr, OPEN_EXISTING,
                                          FILE_ATTRIBUTE_NORMAL, nullptr));
     if (pipe) {
+      const uint32_t flags = nonAsciiVideo ? kShellOpenNonAsciiVideo : 0;
       const uint32_t length = static_cast<uint32_t>(payload.size());
       DWORD written = 0;
-      bool ok = WriteFile(pipe.get(), &length, sizeof(length), &written,
+      bool ok = WriteFile(pipe.get(), &flags, sizeof(flags), &written,
                           nullptr) &&
+                written == sizeof(flags);
+      if (ok) {
+        written = 0;
+        ok = WriteFile(pipe.get(), &length, sizeof(length), &written,
+                       nullptr) &&
                 written == sizeof(length);
+      }
       if (ok && length > 0) {
         written = 0;
         ok = WriteFile(pipe.get(), payload.data(), length, &written, nullptr) &&
@@ -225,11 +236,12 @@ ShellOpenMode configuredWindowsShellOpenMode() {
 }
 
 bool forwardWindowsShellOpenFile(const std::filesystem::path& file,
+                                 bool nonAsciiVideo,
                                  uint32_t timeoutMs) {
   if (file.empty()) {
     return false;
   }
-  return writeShellOpenPayload(toUtf8String(file), timeoutMs);
+  return writeShellOpenRequest(toUtf8String(file), nonAsciiVideo, timeoutMs);
 }
 
 struct WindowsShellOpenServer::Impl {
@@ -382,6 +394,12 @@ struct WindowsShellOpenServer::Impl {
   }
 
   void readRequest(HANDLE pipe) {
+    uint32_t flags = 0;
+    if (!readExact(pipe, &flags, sizeof(flags)) ||
+        (flags & ~kKnownShellOpenFlags) != 0) {
+      return;
+    }
+
     uint32_t length = 0;
     if (!readExact(pipe, &length, sizeof(length)) || length == 0 ||
         length > kMaxShellOpenPayloadBytes) {
@@ -398,7 +416,12 @@ struct WindowsShellOpenServer::Impl {
       return;
     }
 
-    requests.post(std::move(file));
+    OpenFilesRequest request;
+    request.files.push_back(std::move(file));
+    request.videoMode = (flags & kShellOpenNonAsciiVideo) != 0
+                            ? OpenVideoMode::Framebuffer
+                            : OpenVideoMode::Ascii;
+    requests.post(std::move(request));
   }
 
   ShellOpenSingleInstanceLock singleInstanceLock;

@@ -174,9 +174,6 @@ void requestPlaybackExit(const PlaybackInputView& view,
   if (signals.loopStopRequested) {
     *signals.loopStopRequested = true;
   }
-  if (signals.closePresentation) {
-    signals.closePresentation();
-  }
   if (signals.overlayUntilMs) {
     signals.overlayUntilMs->store(0, std::memory_order_relaxed);
   }

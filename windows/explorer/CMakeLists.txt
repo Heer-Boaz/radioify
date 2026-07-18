@@ -13,24 +13,32 @@ if (NOT RADIOIFY_WIN11_EXPLORER_THUMBNAIL_BUDGET_MS MATCHES "^[1-9][0-9]*$")
       "RADIOIFY_WIN11_EXPLORER_THUMBNAIL_BUDGET_MS must be a positive integer")
 endif()
 
+set(RADIOIFY_WIN11_EXPLORER_VIDEO_FILE_TYPES
+  .webm .mp4 .mov .m4v .qt .mkv .avi .wmv .asf .flv .mpg .mpeg .mpe
+  .mpv .m2v .ts .m2ts .mts .3gp .3g2 .ogv .vob .mxf .f4v .dv .ogm
+  .ivf .nut .rm .rmvb .bik .smk .wtv .nsv .pmp .divx .mjpg .mjpeg
+  .mj2 .y4m .roq .mod .tod
+)
+
 set(RADIOIFY_WIN11_EXPLORER_FILE_TYPES
-  .wav .mp3 .flac .m4a .m4b .m4r .m4p .webm .mp4 .mov .mkv
+  .wav .mp3 .flac .m4a .m4b .m4r .m4p
   .ogg .wma .aac .ac3 .eac3 .aif .aiff .aifc .opus .oga
   .mka .wv .tta .caf .au .mp2 .ape .tak .amr .ra .dts .dsf .qcp
   .spx .mpc .xwma .w64 .voc .awb .gsm .oma .aa .aax
   .mlp .truehd .ac4 .loas .latm
   .kss .nsf
   .mid .midi .vgm .vgz .psf .minipsf .psf2 .minipsf2
-  .m4v .qt .mkv .avi .wmv .asf .flv .mpg .mpeg .mpe
-  .mpv .m2v .ts .m2ts .mts .3gp .3g2 .ogv .vob
-  .mxf .f4v .dv .ogm .ivf .nut .rm .rmvb
-  .bik .smk .wtv .nsv .pmp .divx .mjpg .mjpeg .mj2 .y4m .roq .mod .tod
+  ${RADIOIFY_WIN11_EXPLORER_VIDEO_FILE_TYPES}
   .jpg .jpeg .jpe .jfif .png .bmp .gif .tif .tiff .webp .heic .heif .avif .ico
 )
 if (NOT RADIOIFY_DISABLE_GSF_GPL)
   list(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPES .gsf .minigsf)
 endif()
 list(REMOVE_DUPLICATES RADIOIFY_WIN11_EXPLORER_FILE_TYPES)
+set(RADIOIFY_WIN11_EXPLORER_NON_VIDEO_FILE_TYPES
+    ${RADIOIFY_WIN11_EXPLORER_FILE_TYPES})
+list(REMOVE_ITEM RADIOIFY_WIN11_EXPLORER_NON_VIDEO_FILE_TYPES
+     ${RADIOIFY_WIN11_EXPLORER_VIDEO_FILE_TYPES})
 
 set(RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
 "        <uap:Extension Category=\"windows.fileTypeAssociation\" EntryPoint=\"Windows.FullTrustApplication\">\n"
@@ -41,7 +49,7 @@ string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
 "            <uap:Logo>Assets\\SmallLogo.png</uap:Logo>\n"
 "            <uap:SupportedFileTypes>\n"
 )
-foreach(radioify_file_type IN LISTS RADIOIFY_WIN11_EXPLORER_FILE_TYPES)
+foreach(radioify_file_type IN LISTS RADIOIFY_WIN11_EXPLORER_NON_VIDEO_FILE_TYPES)
   string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
 "              <uap:FileType>${radioify_file_type}</uap:FileType>\n"
 )
@@ -56,6 +64,29 @@ string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
 "        </uap:Extension>"
 )
 
+string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
+"        <uap:Extension Category=\"windows.fileTypeAssociation\" EntryPoint=\"Windows.FullTrustApplication\">\n"
+"          <uap:FileTypeAssociation Name=\"radioifyvideo\">\n"
+"            <uap:DisplayName>Radioify video</uap:DisplayName>\n"
+"            <uap:Logo>Assets\\SmallLogo.png</uap:Logo>\n"
+"            <uap:SupportedFileTypes>\n"
+)
+foreach(radioify_file_type IN LISTS RADIOIFY_WIN11_EXPLORER_VIDEO_FILE_TYPES)
+  string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
+"              <uap:FileType>${radioify_file_type}</uap:FileType>\n"
+)
+endforeach()
+string(APPEND RADIOIFY_WIN11_EXPLORER_FILE_TYPE_ASSOCIATION_XML
+"            </uap:SupportedFileTypes>\n"
+"            <desktop2:ThumbnailHandler Clsid=\"${RADIOIFY_WIN11_EXPLORER_THUMBNAIL_GUID}\" />\n"
+"            <uap2:SupportedVerbs>\n"
+"              <uap3:Verb Id=\"RadioifyOpenFile\" Parameters=\"--shell-open &quot;%1&quot;\">Open with Radioify</uap3:Verb>\n"
+"              <uap3:Verb Id=\"RadioifyOpenFileNonAscii\" Parameters=\"--no-ascii --shell-open &quot;%1&quot;\">Open in Radioify non-ASCII</uap3:Verb>\n"
+"            </uap2:SupportedVerbs>\n"
+"          </uap:FileTypeAssociation>\n"
+"        </uap:Extension>"
+)
+
 set(RADIOIFY_WIN11_EXPLORER_CONTEXT_MENU_XML
 "        <desktop4:Extension Category=\"windows.fileExplorerContextMenus\">\n          <desktop4:FileExplorerContextMenus>\n"
 )
@@ -65,6 +96,13 @@ foreach(radioify_file_type IN LISTS RADIOIFY_WIN11_EXPLORER_FILE_TYPES)
   string(APPEND RADIOIFY_WIN11_EXPLORER_CONTEXT_MENU_XML
 "            <desktop5:ItemType Type=\"${radioify_file_type}\">\n"
 "              <desktop5:Verb Id=\"RadioifyOpen${radioify_file_type_id}\" Clsid=\"${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}\" />\n"
+)
+  if (radioify_file_type IN_LIST RADIOIFY_WIN11_EXPLORER_VIDEO_FILE_TYPES)
+    string(APPEND RADIOIFY_WIN11_EXPLORER_CONTEXT_MENU_XML
+"              <desktop5:Verb Id=\"RadioifyOpenNonAscii${radioify_file_type_id}\" Clsid=\"${RADIOIFY_WIN11_EXPLORER_NON_ASCII_COMMAND_GUID}\" />\n"
+)
+  endif()
+  string(APPEND RADIOIFY_WIN11_EXPLORER_CONTEXT_MENU_XML
 "            </desktop5:ItemType>\n"
 )
 endforeach()

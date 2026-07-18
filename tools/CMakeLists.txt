@@ -54,6 +54,10 @@ radioify_add_module_object_library(radioify_tool_waitable_signal_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/waitable_signal_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_open_file_requests_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/open_file_requests_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_windows_console_window_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/windows_console_window_tests.cpp
 )

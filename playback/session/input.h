@@ -48,7 +48,6 @@ struct PlaybackInputSignals {
   std::function<bool()> toggleWindowPresentation;
   std::function<bool()> togglePictureInPicture;
   std::function<bool()> toggleFullscreen;
-  std::function<void()> closePresentation;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   std::atomic<int64_t>* overlayUntilMs = nullptr;

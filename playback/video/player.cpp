@@ -918,7 +918,7 @@ bool initDemuxer(const std::filesystem::path& path, DemuxContext* out,
                           ioCache.get(), error)) {
     return false;
   }
-  fmt->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_GENPTS | AVFMT_FLAG_DISCARD_CORRUPT;
+  fmt->flags |= AVFMT_FLAG_GENPTS | AVFMT_FLAG_DISCARD_CORRUPT;
   int infoErr = avformat_find_stream_info(fmt, nullptr);
   if (infoErr < 0) {
     avformat_close_input(&fmt);
@@ -931,7 +931,7 @@ bool initDemuxer(const std::filesystem::path& path, DemuxContext* out,
                             ioCache.get(), error)) {
       return false;
     }
-    fmt->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_GENPTS | AVFMT_FLAG_DISCARD_CORRUPT;
+    fmt->flags |= AVFMT_FLAG_GENPTS | AVFMT_FLAG_DISCARD_CORRUPT;
     infoErr = avformat_find_stream_info(fmt, nullptr);
     if (infoErr < 0) {
       std::string msg = "Failed to read stream info: " + ffmpegError(infoErr);
@@ -944,6 +944,10 @@ bool initDemuxer(const std::filesystem::path& path, DemuxContext* out,
       return false;
     }
   }
+
+  // Stream probing must retain the packets it reads so playback starts with
+  // the first keyframe. Low-latency demuxing applies only after probing.
+  fmt->flags |= AVFMT_FLAG_NOBUFFER;
 
   out->fmt = fmt;
   out->avio = avio;

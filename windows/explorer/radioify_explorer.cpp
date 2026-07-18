@@ -35,6 +35,17 @@ const CLSID& radioifyExplorerCommandClsid() noexcept {
   return clsid;
 }
 
+const CLSID& radioifyExplorerNonAsciiCommandClsid() noexcept {
+  static const CLSID clsid = [] {
+    CLSID parsed{};
+    const HRESULT hr = CLSIDFromString(
+        const_cast<LPWSTR>(RADIOIFY_WIN11_EXPLORER_NON_ASCII_COMMAND_CLSID_W),
+        &parsed);
+    return SUCCEEDED(hr) ? parsed : CLSID{};
+  }();
+  return clsid;
+}
+
 const CLSID& radioifyExplorerThumbnailClsid() noexcept {
   static const CLSID clsid = [] {
     CLSID parsed{};
@@ -219,13 +230,22 @@ HRESULT resolveFolderViewDirectory(IUnknown* site, std::wstring* outPath) noexce
   return resolveShellItemDirectory(folderItem.get(), outPath);
 }
 
-HRESULT launchRadioify(const std::wstring& selectedPath) {
+enum class RadioifyExplorerCommandMode {
+  Default,
+  NonAscii,
+};
+
+HRESULT launchRadioify(const std::wstring& selectedPath,
+                       RadioifyExplorerCommandMode mode) {
   const std::wstring radioifyExe = findRadioifyExecutable();
   if (radioifyExe.empty()) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 
-  const std::wstring arguments =
-      quoteCommandLineArgument(L"--shell-open") + L" " +
-      quoteCommandLineArgument(selectedPath);
+  std::wstring arguments;
+  if (mode == RadioifyExplorerCommandMode::NonAscii) {
+    arguments = quoteCommandLineArgument(L"--no-ascii") + L" ";
+  }
+  arguments += quoteCommandLineArgument(L"--shell-open") + L" " +
+               quoteCommandLineArgument(selectedPath);
   const std::wstring workingDirectory = parentPathOf(radioifyExe);
 
   SHELLEXECUTEINFOW executeInfo{};
@@ -248,7 +268,10 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
                                       public IObjectWithSelection,
                                       public IObjectWithSite {
  public:
-  RadioifyExplorerCommand() { radioifyExplorerObjectCreated(); }
+  explicit RadioifyExplorerCommand(RadioifyExplorerCommandMode mode)
+      : mode_(mode) {
+    radioifyExplorerObjectCreated();
+  }
 
   STDMETHODIMP QueryInterface(REFIID riid, void** object) override {
     if (!object) return E_POINTER;
@@ -305,6 +328,10 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
   }
 
   STDMETHODIMP GetTitle(IShellItemArray*, LPWSTR* title) override {
+    if (mode_ == RadioifyExplorerCommandMode::NonAscii) {
+      return duplicateString(L"Open in " RADIOIFY_APP_NAME_W L" non-ASCII",
+                             title);
+    }
     return duplicateString(L"Open with " RADIOIFY_APP_NAME_W, title);
   }
 
@@ -329,7 +356,9 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
 
   STDMETHODIMP GetCanonicalName(GUID* commandName) override {
     if (!commandName) return E_POINTER;
-    *commandName = radioifyExplorerCommandClsid();
+    *commandName = mode_ == RadioifyExplorerCommandMode::NonAscii
+                       ? radioifyExplorerNonAsciiCommandClsid()
+                       : radioifyExplorerCommandClsid();
     return S_OK;
   }
 
@@ -353,7 +382,7 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
       std::wstring selectedPath;
       HRESULT hr = resolveTarget(items, &selectedPath);
       if (FAILED(hr)) return hr;
-      return launchRadioify(selectedPath);
+      return launchRadioify(selectedPath, mode_);
     } catch (...) {
       return exceptionToHresult();
     }
@@ -392,13 +421,17 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
   }
 
   LONG refCount_ = 1;
+  const RadioifyExplorerCommandMode mode_;
   ComPtr<IShellItemArray> selection_;
   ComPtr<IUnknown> site_;
 };
 
 class RadioifyExplorerCommandFactory final : public IClassFactory {
  public:
-  RadioifyExplorerCommandFactory() { radioifyExplorerObjectCreated(); }
+  explicit RadioifyExplorerCommandFactory(RadioifyExplorerCommandMode mode)
+      : mode_(mode) {
+    radioifyExplorerObjectCreated();
+  }
 
   STDMETHODIMP QueryInterface(REFIID riid, void** object) override {
     if (!object) return E_POINTER;
@@ -430,7 +463,7 @@ class RadioifyExplorerCommandFactory final : public IClassFactory {
     if (outer) return CLASS_E_NOAGGREGATION;
 
     RadioifyExplorerCommand* command =
-        new (std::nothrow) RadioifyExplorerCommand();
+        new (std::nothrow) RadioifyExplorerCommand(mode_);
     if (!command) return E_OUTOFMEMORY;
 
     const HRESULT hr = command->QueryInterface(riid, object);
@@ -447,6 +480,7 @@ class RadioifyExplorerCommandFactory final : public IClassFactory {
   ~RadioifyExplorerCommandFactory() { radioifyExplorerObjectDestroyed(); }
 
   LONG refCount_ = 1;
+  const RadioifyExplorerCommandMode mode_;
 };
 
 }  // namespace
@@ -472,9 +506,11 @@ extern "C" HRESULT __stdcall DllGetClassObject(REFCLSID classId,
   *object = nullptr;
   const bool isCommand =
       InlineIsEqualGUID(classId, radioifyExplorerCommandClsid());
+  const bool isNonAsciiCommand =
+      InlineIsEqualGUID(classId, radioifyExplorerNonAsciiCommandClsid());
   const bool isThumbnail =
       InlineIsEqualGUID(classId, radioifyExplorerThumbnailClsid());
-  if (!isCommand && !isThumbnail) {
+  if (!isCommand && !isNonAsciiCommand && !isThumbnail) {
     return CLASS_E_CLASSNOTAVAILABLE;
   }
 
@@ -483,7 +519,9 @@ extern "C" HRESULT __stdcall DllGetClassObject(REFCLSID classId,
   }
 
   IClassFactory* factory =
-      new (std::nothrow) RadioifyExplorerCommandFactory();
+      new (std::nothrow) RadioifyExplorerCommandFactory(
+          isNonAsciiCommand ? RadioifyExplorerCommandMode::NonAscii
+                            : RadioifyExplorerCommandMode::Default);
   if (!factory) return E_OUTOFMEMORY;
 
   const HRESULT hr = factory->QueryInterface(interfaceId, object);

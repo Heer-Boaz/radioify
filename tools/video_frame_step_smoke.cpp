@@ -342,7 +342,7 @@ int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: video_frame_step_smoke <video> [seek_us] "
                  "[step_count] [mode]\n"
-                 "Modes: resume, forward-resume, mixed-resume, "
+                 "Modes: startup, resume, forward-resume, mixed-resume, "
                  "rapid-resume, resume-during-step\n";
     return 2;
   }
@@ -367,18 +367,21 @@ int main(int argc, char** argv) {
   bool resumeAfterMixed = false;
   bool rapidResume = false;
   bool resumeDuringStep = false;
+  bool verifyStartup = false;
   if (argc >= 5) {
     const std::string mode = argv[4];
+    verifyStartup = mode == "startup";
     resumeAfterPrevious = mode == "resume";
     resumeAfterForward = mode == "forward-resume";
     resumeAfterMixed = mode == "mixed-resume";
     rapidResume = mode == "rapid-resume";
     resumeDuringStep = mode == "resume-during-step";
-    if (!resumeAfterPrevious && !resumeAfterForward && !resumeAfterMixed &&
-        !rapidResume && !resumeDuringStep) {
+    if (!verifyStartup && !resumeAfterPrevious && !resumeAfterForward &&
+        !resumeAfterMixed && !rapidResume && !resumeDuringStep) {
       std::cerr << "video_frame_step_smoke: invalid mode: " << argv[4]
-                << " (expected 'resume', 'forward-resume', 'mixed-resume', "
-                   "'rapid-resume', or 'resume-during-step')\n";
+                << " (expected 'startup', 'resume', 'forward-resume', "
+                   "'mixed-resume', 'rapid-resume', or "
+                   "'resume-during-step')\n";
       return 2;
     }
   }
@@ -417,6 +420,29 @@ int main(int argc, char** argv) {
               << player.initError() << '\n';
     player.close();
     return 1;
+  }
+
+  if (verifyStartup) {
+    PlayerDebugInfo startup{};
+    if (!waitFor(player, kDefaultTimeoutMs, "startup_presented",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > 0;
+                 },
+                 &startup)) {
+      player.close();
+      return 1;
+    }
+    if (startup.lastPresentedPtsUs != 0) {
+      std::cerr << "video_frame_step_smoke: startup skipped timeline origin; "
+                   "first_pts_us="
+                << startup.lastPresentedPtsUs << '\n';
+      player.close();
+      return 1;
+    }
+    std::cout << "video_frame_step_smoke: PASS startup_pts_us=0\n";
+    player.close();
+    return 0;
   }
 
   const int64_t seekUs = chooseSeekUs(player, requestedSeekUs);
