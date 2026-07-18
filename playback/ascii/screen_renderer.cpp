@@ -124,7 +124,11 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   }
   std::string statusLine;
   if (!audioOk && !audioStarting) {
-    statusLine = enableAudio ? "Audio unavailable" : "Audio disabled";
+    if (!enableAudio) {
+      statusLine = "Audio disabled";
+    } else if (player.audioTrackCount() > 0) {
+      statusLine = "Audio unavailable";
+    }
   }
   auto [frameDisplayW, frameDisplayH] = frameDisplaySize(frame);
   int layoutSourceW = player.sourceWidth();
