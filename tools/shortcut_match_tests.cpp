@@ -11,6 +11,7 @@
 #include "playback/video/state/machine.h"
 #include "playback/video/enhancement/pipeline.h"
 #include "playback/session/presentation_policy.h"
+#include "playback/session/state.h"
 #include "clock.h"
 #include "queues.h"
 
@@ -46,6 +47,19 @@ bool expect(bool condition, const char* message) {
 
 int main() {
   bool ok = true;
+
+  ok &= expect(playback_session_state::toggleRequestsPause(
+                   PlaybackSessionState::Active, false),
+               "Active playback must toggle to pause");
+  ok &= expect(!playback_session_state::toggleRequestsPause(
+                   PlaybackSessionState::Paused, false),
+               "Paused playback must toggle to play");
+  ok &= expect(!playback_session_state::toggleRequestsPause(
+                   PlaybackSessionState::Ended, false),
+               "Ended playback must toggle to replay");
+  ok &= expect(!playback_session_state::toggleRequestsPause(
+                   PlaybackSessionState::Active, true),
+               "A player that ended before session sync must toggle to replay");
 
   ok &= expect(!matchesShortcut(makeKey(VK_F1), VK_ESCAPE, 0, 0),
                "VK_F1 must not match VK_ESCAPE when no ASCII fallback exists");
@@ -1033,6 +1047,15 @@ int main() {
                "Claimed previous-frame discovery seeks must carry the demux "
                "window, decoder preroll, and video-stream seek contract across "
                "the demux boundary");
+  ok &= expect(!serialSeekControl.clearPendingPresentation(
+                   frameStepPendingSeek.serial - 1),
+               "A stale frame must not acknowledge seek presentation");
+  ok &= expect(serialSeekControl.clearPendingPresentation(
+                   frameStepPendingSeek.serial),
+               "The current seek frame must acknowledge presentation");
+  ok &= expect(!serialSeekControl.clearPendingPresentation(
+                   frameStepPendingSeek.serial),
+               "Seek presentation acknowledgement must be single-shot");
 
   ok &= expect(resolvePlaybackShortcutAction(
                    makeKey(VK_RETURN, 0, kPlaybackShortcutAltMask),

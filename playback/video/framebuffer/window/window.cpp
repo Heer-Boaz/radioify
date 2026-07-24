@@ -2031,6 +2031,10 @@ bool VideoWindow::PollInput(InputEvent& ev) {
     return m_input.poll(ev);
 }
 
+NativeWaitHandle VideoWindow::InputWaitHandle() const {
+    return m_input.nativeWaitHandle();
+}
+
 bool VideoWindow::ConsumeCloseRequested() {
     return m_closeRequest.consume();
 }

@@ -60,7 +60,7 @@ class Controller {
   PendingSeek claimPendingSeek();
   bool applySeekResult(int serial, int resultCode);
   void clearSeekFailure();
-  void clearPendingPresentation(int serial);
+  bool clearPendingPresentation(int serial);
 
   int currentSerial() const;
   std::atomic<int>* currentSerialAtomic();

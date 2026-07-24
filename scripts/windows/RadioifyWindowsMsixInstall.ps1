@@ -273,6 +273,94 @@ function Get-InstalledRadioifyMsixPackage {
     return (& $cmdlet -Name $PackageName -ErrorAction SilentlyContinue | Select-Object -First 1)
 }
 
+function Get-RadioifyMsixPackageProcesses {
+    param([Parameter(Mandatory = $true)]$Package)
+
+    $installLocation = [string]$Package.InstallLocation
+    if ([string]::IsNullOrWhiteSpace($installLocation)) {
+        throw "Installed Radioify package '$($Package.PackageFullName)' has no install location."
+    }
+
+    $radioifyExePath = Join-Path $installLocation "radioify.exe"
+    $explorerDllPath = Join-Path $installLocation "radioify_explorer.dll"
+    $matches = @{}
+
+    foreach ($process in Get-CimInstance Win32_Process -Filter "Name='radioify.exe'" -ErrorAction SilentlyContinue) {
+        if ([string]::Equals(
+                [string]$process.ExecutablePath,
+                $radioifyExePath,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            $matches[[int]$process.ProcessId] = [pscustomobject]@{
+                ProcessId = [int]$process.ProcessId
+                Name = [string]$process.Name
+                Role = "application"
+                ImagePath = [string]$process.ExecutablePath
+            }
+        }
+    }
+
+    foreach ($process in Get-Process -Name "dllhost" -ErrorAction SilentlyContinue) {
+        try {
+            $module = $process.Modules |
+                Where-Object {
+                    [string]::Equals(
+                        $_.FileName,
+                        $explorerDllPath,
+                        [StringComparison]::OrdinalIgnoreCase)
+                } |
+                Select-Object -First 1
+            if ($module) {
+                $matches[[int]$process.Id] = [pscustomobject]@{
+                    ProcessId = [int]$process.Id
+                    Name = [string]$process.ProcessName
+                    Role = "Explorer COM surrogate"
+                    ImagePath = [string]$module.FileName
+                }
+            }
+        } catch {
+            Write-Verbose "Could not inspect modules for dllhost PID $($process.Id): $($_.Exception.Message)"
+        }
+    }
+
+    return @($matches.Values | Sort-Object ProcessId)
+}
+
+function Stop-RadioifyMsixPackageProcesses {
+    param(
+        [Parameter(Mandatory = $true)]$Package,
+        [int]$TimeoutSeconds = 10
+    )
+
+    $processes = @(Get-RadioifyMsixPackageProcesses -Package $Package)
+    if ($processes.Count -eq 0) {
+        return
+    }
+
+    foreach ($process in $processes) {
+        Write-Host "Stopping installed Radioify $($process.Role) process PID $($process.ProcessId)..."
+        try {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+        } catch {
+            if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) {
+                throw
+            }
+        }
+    }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $remaining = @(Get-RadioifyMsixPackageProcesses -Package $Package)
+        if ($remaining.Count -eq 0) {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    } while ((Get-Date) -lt $deadline)
+
+    $descriptions = $remaining |
+        ForEach-Object { "$($_.Name) PID $($_.ProcessId) ($($_.Role))" }
+    throw "Timed out stopping installed Radioify package processes: $($descriptions -join ', ')"
+}
+
 function Test-RadioifyMsixPackageBusy {
     param([Parameter(Mandatory = $true)]$Package)
 

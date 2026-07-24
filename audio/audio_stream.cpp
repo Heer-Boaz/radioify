@@ -25,7 +25,7 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.gsfWarning.clear();
   gAudio.vgmWarning.clear();
   gAudio.trackIndex = 0;
-  drainPlaybackPipelineForReplacement(&gAudio.state);
+  drainPlaybackPipelineForReplacement(gAudio.state);
   gAudio.state.sourcePreparing.store(true, std::memory_order_release);
   stopAndUninitActiveDecoder();
 
@@ -63,6 +63,7 @@ bool audioStartStream(uint64_t totalFrames) {
   gAudio.state.audioPrimed.store(false);
   gAudio.state.seekRequested.store(false);
   gAudio.state.pendingSeekFrames.store(0);
+  gAudio.state.seekPresentation.reset();
   gAudio.state.finished.store(false);
   gAudio.state.paused.store(false);
   gAudio.state.hold.store(false);

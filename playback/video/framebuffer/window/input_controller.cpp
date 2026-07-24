@@ -22,6 +22,10 @@ bool WindowInputController::poll(InputEvent& ev) {
   return events_.poll(ev);
 }
 
+NativeWaitHandle WindowInputController::nativeWaitHandle() const {
+  return events_.nativeWaitHandle();
+}
+
 bool WindowInputController::beginWindowThread() {
   if (fileDropApartment_ || fileDropTarget_) {
     return false;

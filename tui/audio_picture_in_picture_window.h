@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -55,6 +54,8 @@ class AudioPictureInPictureWindow {
   void close();
   void activate();
   bool toggle();
+  NativeWaitHandle inputWaitHandle() const;
+  NativeWaitHandle closeRequestedWaitHandle() const;
   bool pollEvents(const Callbacks& callbacks);
   bool render(const Styles& styles, const Context& context);
   WindowPlacementState capturePlacement() const;
@@ -65,7 +66,6 @@ class AudioPictureInPictureWindow {
   void refreshArtwork(const Context& context, int width, int height);
   void drawArtworkBackground(const Styles& styles, int width, int height);
   void updateInteractiveRects();
-  void holdSeekDisplay(double targetSec);
   void handleInput(const InputEvent& ev, const Callbacks& callbacks);
   bool clickControl(playback_overlay::OverlayControlId control,
                     const Callbacks& callbacks);
@@ -91,8 +91,5 @@ class AudioPictureInPictureWindow {
   int progressX_ = -1;
   int progressY_ = -1;
   int progressWidth_ = 0;
-  double seekDisplaySec_ = -1.0;
-  bool seekHoldActive_ = false;
-  std::chrono::steady_clock::time_point seekHoldStart_{};
   std::string lastError_;
 };

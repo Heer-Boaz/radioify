@@ -155,7 +155,10 @@ if (WIN32)
   set(RADIOIFY_WIN11_EXPLORER_NON_ASCII_COMMAND_CLSID "{${RADIOIFY_WIN11_EXPLORER_NON_ASCII_COMMAND_GUID}}")
   set(RADIOIFY_WIN11_EXPLORER_THUMBNAIL_GUID "A1082EA3-4A99-451F-89FE-1C72011133B8")
   set(RADIOIFY_WIN11_EXPLORER_THUMBNAIL_CLSID "{${RADIOIFY_WIN11_EXPLORER_THUMBNAIL_GUID}}")
-  set(RADIOIFY_WIN11_EXPLORER_APPID "${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}")
+  set(RADIOIFY_WIN11_EXPLORER_COMMAND_APPID
+    "${RADIOIFY_WIN11_EXPLORER_COMMAND_GUID}")
+  set(RADIOIFY_WIN11_EXPLORER_THUMBNAIL_APPID
+    "${RADIOIFY_WIN11_EXPLORER_THUMBNAIL_GUID}")
   if (CMAKE_SYSTEM_PROCESSOR MATCHES "^[Aa][Rr][Mm]64$|^[Aa][Aa][Rr][Cc][Hh]64$")
     set(RADIOIFY_WIN11_EXPLORER_PACKAGE_ARCH "arm64")
   elseif (CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -400,6 +403,7 @@ target_sources(audio_playback_pipeline_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/playback_source_priming.cpp
   ${CMAKE_SOURCE_DIR}/audio/radio_filter_mode.cpp
   ${CMAKE_SOURCE_DIR}/audio/radio_filter_transition.cpp
+  ${CMAKE_SOURCE_DIR}/audio/seek_presentation.cpp
   ${CMAKE_SOURCE_DIR}/audio/spsc_audio_ring.cpp
   ${CMAKE_SOURCE_DIR}/audio/spsc_audio_timeline.cpp
 )
@@ -511,6 +515,16 @@ target_sources(waitable_signal_tests PRIVATE
 radioify_link_repo_target(waitable_signal_tests)
 add_test(NAME waitable_signal_tests
          COMMAND $<TARGET_FILE:waitable_signal_tests>)
+
+add_executable(window_input_queue_tests)
+target_sources(window_input_queue_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_window_input_queue_tests>
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/framebuffer/window/input_queue.cpp
+)
+radioify_link_repo_target(window_input_queue_tests)
+add_test(NAME window_input_queue_tests
+         COMMAND $<TARGET_FILE:window_input_queue_tests>)
 
 add_executable(open_file_requests_tests)
 target_sources(open_file_requests_tests PRIVATE

@@ -21,19 +21,14 @@ namespace {
 
 void syncSeekState(Player& player, bool& localSeekRequested,
                    std::atomic<bool>& windowLocalSeekRequested,
-                   std::chrono::steady_clock::time_point& seekRequestTime,
+                   bool seekQueued,
                    double& pendingSeekTargetSec,
                    std::atomic<double>& windowPendingSeekTargetSec) {
   const bool windowSeekRequested =
       windowLocalSeekRequested.load(std::memory_order_relaxed);
   const bool hasPendingTarget =
       pendingSeekTargetSec >= 0.0 && std::isfinite(pendingSeekTargetSec);
-  if (player.isSeeking()) {
-    return;
-  }
-
-  const PlayerDebugInfo debug = player.debugInfo();
-  if (debug.seekInFlightSerial != 0 || debug.pendingSeekSerial != 0) {
+  if (seekQueued || player.seekPending()) {
     return;
   }
 
@@ -44,11 +39,7 @@ void syncSeekState(Player& player, bool& localSeekRequested,
     return;
   }
 
-  const auto now = std::chrono::steady_clock::now();
-  const bool requestAged =
-      seekRequestTime != std::chrono::steady_clock::time_point::min() &&
-      now - seekRequestTime > std::chrono::milliseconds(500);
-  if (requestAged && player.hasVideoFrame()) {
+  if (player.hasVideoFrame()) {
     localSeekRequested = false;
     windowLocalSeekRequested.store(false, std::memory_order_relaxed);
     pendingSeekTargetSec = -1.0;
@@ -116,7 +107,6 @@ struct PlaybackSessionCore::Impl {
     seekState.windowLocalSeekRequested = &windowLocalSeekRequested;
     seekState.pendingSeekTargetSec = &pendingSeekTargetSec;
     seekState.windowPendingSeekTargetSec = &windowPendingSeekTargetSec;
-    seekState.seekRequestTime = &seekRequestTime;
     seekState.lastSeekSentTime = &lastSeekSentTime;
     seekState.queuedSeekTargetSec = &queuedSeekTargetSec;
     seekState.seekQueued = &seekQueued;
@@ -182,7 +172,7 @@ struct PlaybackSessionCore::Impl {
       redraw = true;
     }
     syncSeekState(player, localSeekRequested, windowLocalSeekRequested,
-                  seekRequestTime, pendingSeekTargetSec,
+                  seekQueued, pendingSeekTargetSec,
                   windowPendingSeekTargetSec);
     syncPlaybackEndedState(player, playbackState);
     return presented;
@@ -242,8 +232,6 @@ struct PlaybackSessionCore::Impl {
   bool pendingResize = false;
   bool localSeekRequested = false;
   std::atomic<bool> windowLocalSeekRequested{false};
-  std::chrono::steady_clock::time_point seekRequestTime =
-      std::chrono::steady_clock::time_point::min();
   double pendingSeekTargetSec = -1.0;
   std::atomic<double> windowPendingSeekTargetSec{-1.0};
   std::chrono::steady_clock::time_point lastSeekSentTime =

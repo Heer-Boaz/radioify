@@ -25,7 +25,6 @@ void setPlaybackPaused(const PlaybackInputView& view,
 namespace {
 
 bool hasOverlayVisibleWindow(const PlaybackInputSignals& signals) {
-  if (!signals.overlayUntilMs) return false;
   int64_t until = signals.overlayUntilMs->load(std::memory_order_relaxed);
   if (until <= 0) {
     return false;
@@ -37,15 +36,23 @@ bool hasOverlayVisibleWindow(const PlaybackInputSignals& signals) {
 }
 
 void requestWindowRefresh(const PlaybackInputSignals& signals) {
-  if (!signals.requestWindowPresent) {
-    return;
-  }
   signals.requestWindowPresent();
 }
 
+void updateOverlayControlHover(PlaybackInputSignals& signals, int nextHover) {
+  const int previousHover = signals.overlayControlHover->exchange(
+      nextHover, std::memory_order_relaxed);
+  if (nextHover == previousHover) {
+    return;
+  }
+  *signals.redraw = true;
+  requestWindowRefresh(signals);
+}
+
 double playbackDurationSec(const PlaybackInputView& view) {
-  if (view.player && view.player->durationUs() > 0) {
-    return static_cast<double>(view.player->durationUs()) / 1000000.0;
+  const int64_t durationUs = view.player->durationUs();
+  if (durationUs > 0) {
+    return static_cast<double>(durationUs) / 1000000.0;
   }
   return audioGetTotalSec();
 }
@@ -63,13 +70,7 @@ double clampPlaybackSeekTarget(const PlaybackInputView& view,
 
 bool readPendingSeekTargetSec(const PlaybackSeekState& seekState,
                               double* outTargetSec) {
-  double targetSec = -1.0;
-  if (seekState.pendingSeekTargetSec) {
-    targetSec = *seekState.pendingSeekTargetSec;
-  } else if (seekState.windowPendingSeekTargetSec) {
-    targetSec =
-        seekState.windowPendingSeekTargetSec->load(std::memory_order_relaxed);
-  }
+  const double targetSec = *seekState.pendingSeekTargetSec;
   if (!(targetSec >= 0.0) || !std::isfinite(targetSec)) {
     return false;
   }
@@ -81,8 +82,7 @@ bool readPendingSeekTargetSec(const PlaybackSeekState& seekState,
 
 bool readQueuedSeekTargetSec(const PlaybackSeekState& seekState,
                              double* outTargetSec) {
-  if (!seekState.seekQueued || !*seekState.seekQueued ||
-      !seekState.queuedSeekTargetSec) {
+  if (!*seekState.seekQueued) {
     return false;
   }
   const double targetSec = *seekState.queuedSeekTargetSec;
@@ -101,14 +101,18 @@ bool playbackSeekPending(const PlaybackInputView& view,
       readPendingSeekTargetSec(seekState, nullptr)) {
     return true;
   }
-  if (seekState.localSeekRequested && *seekState.localSeekRequested) {
+  if (*seekState.localSeekRequested) {
     return true;
   }
-  if (seekState.windowLocalSeekRequested &&
-      seekState.windowLocalSeekRequested->load(std::memory_order_relaxed)) {
+  if (seekState.windowLocalSeekRequested->load(std::memory_order_relaxed)) {
     return true;
   }
-  return view.player && view.player->isSeeking();
+  return view.player->seekPending();
+}
+
+bool pauseRequestedByToggle(const PlaybackInputView& view) {
+  return playback_session_state::toggleRequestsPause(*view.playbackState,
+                                                      view.player->isEnded());
 }
 
 double playbackSeekBaseSec(const PlaybackInputView& view,
@@ -117,9 +121,6 @@ double playbackSeekBaseSec(const PlaybackInputView& view,
   if (readQueuedSeekTargetSec(seekState, &targetSec) ||
       readPendingSeekTargetSec(seekState, &targetSec)) {
     return clampPlaybackSeekTarget(view, targetSec);
-  }
-  if (!view.player) {
-    return 0.0;
   }
   return clampPlaybackSeekTarget(
       view, static_cast<double>(view.player->currentUs()) / 1000000.0);
@@ -138,20 +139,17 @@ bool queuePlaybackSeekToRatio(const PlaybackInputView& view,
 
 void triggerOverlay(const PlaybackInputView& view,
                     const PlaybackInputSignals& signals) {
-  if (!signals.overlayUntilMs) return;
   int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count();
   bool extended = false;
-  if (view.playbackState &&
-      *view.playbackState == PlaybackSessionState::Paused) {
+  if (*view.playbackState == PlaybackSessionState::Paused) {
     extended = true;
   }
-  if (view.playbackState &&
-      *view.playbackState == PlaybackSessionState::Ended) {
+  if (*view.playbackState == PlaybackSessionState::Ended) {
     extended = true;
   }
-  if (view.player && view.player->isSeeking()) {
+  if (view.player->seekPending()) {
     extended = true;
   }
   constexpr auto kProgressOverlayTimeout = std::chrono::milliseconds(1750);
@@ -168,21 +166,11 @@ void triggerOverlay(const PlaybackInputView& view,
 
 void requestPlaybackExit(const PlaybackInputView& view,
                          PlaybackInputSignals& signals, bool quitApp) {
-  if (view.playbackState) {
-    *view.playbackState = PlaybackSessionState::Exiting;
-  }
-  if (signals.loopStopRequested) {
-    *signals.loopStopRequested = true;
-  }
-  if (signals.overlayUntilMs) {
-    signals.overlayUntilMs->store(0, std::memory_order_relaxed);
-  }
-  if (signals.redraw) {
-    *signals.redraw = true;
-  }
-  if (signals.forceRefreshArt) {
-    *signals.forceRefreshArt = true;
-  }
+  *view.playbackState = PlaybackSessionState::Exiting;
+  *signals.loopStopRequested = true;
+  signals.overlayUntilMs->store(0, std::memory_order_relaxed);
+  *signals.redraw = true;
+  *signals.forceRefreshArt = true;
   if (quitApp && signals.quitApplicationRequested) {
     *signals.quitApplicationRequested = true;
   }
@@ -191,61 +179,38 @@ void requestPlaybackExit(const PlaybackInputView& view,
 std::chrono::steady_clock::time_point markSeekIntentStarted(
     PlaybackSeekState& seekState) {
   auto now = std::chrono::steady_clock::now();
-  if (seekState.localSeekRequested) *seekState.localSeekRequested = true;
-  if (seekState.windowLocalSeekRequested) {
-    seekState.windowLocalSeekRequested->store(true, std::memory_order_relaxed);
-  }
-  if (seekState.seekRequestTime) {
-    *seekState.seekRequestTime = now;
-  }
+  *seekState.localSeekRequested = true;
+  seekState.windowLocalSeekRequested->store(true, std::memory_order_relaxed);
   return now;
 }
 
 void refreshPlaybackInputDisplay(PlaybackInputSignals& signals) {
-  if (signals.forceRefreshArt) {
-    *signals.forceRefreshArt = true;
-  }
-  if (signals.redraw) {
-    *signals.redraw = true;
-  }
+  *signals.forceRefreshArt = true;
+  *signals.redraw = true;
 }
 
 void markImmediateSeekActivity(PlaybackInputSignals& signals,
                                PlaybackSeekState& seekState) {
   auto now = markSeekIntentStarted(seekState);
-  if (seekState.lastSeekSentTime) {
-    *seekState.lastSeekSentTime = now;
-  }
-  if (seekState.queuedSeekTargetSec) {
-    *seekState.queuedSeekTargetSec = -1.0;
-  }
-  if (seekState.seekQueued) {
-    *seekState.seekQueued = false;
-  }
+  *seekState.lastSeekSentTime = now;
+  *seekState.queuedSeekTargetSec = -1.0;
+  *seekState.seekQueued = false;
   refreshPlaybackInputDisplay(signals);
 }
 
 void applySeekRequestState(PlaybackInputSignals& signals,
                            PlaybackSeekState& seekState, double targetSec,
                            bool immediate) {
-  if (seekState.pendingSeekTargetSec) {
-    *seekState.pendingSeekTargetSec = targetSec;
-  }
-  if (seekState.windowPendingSeekTargetSec) {
-    seekState.windowPendingSeekTargetSec->store(targetSec,
-                                                std::memory_order_relaxed);
-  }
+  *seekState.pendingSeekTargetSec = targetSec;
+  seekState.windowPendingSeekTargetSec->store(targetSec,
+                                              std::memory_order_relaxed);
   if (immediate) {
     markImmediateSeekActivity(signals, seekState);
     return;
   }
   markSeekIntentStarted(seekState);
-  if (seekState.queuedSeekTargetSec) {
-    *seekState.queuedSeekTargetSec = targetSec;
-  }
-  if (seekState.seekQueued) {
-    *seekState.seekQueued = true;
-  }
+  *seekState.queuedSeekTargetSec = targetSec;
+  *seekState.seekQueued = true;
   refreshPlaybackInputDisplay(signals);
 }
 
@@ -266,15 +231,11 @@ void commitQueuedSeekBeforeFrameStep(const PlaybackInputView& view,
 bool toggleRequestedLayout(const PlaybackInputView& view,
                            PlaybackInputSignals& signals) {
   (void)view;
-  if (signals.toggleWindowPresentation) {
-    return signals.toggleWindowPresentation();
-  }
-  return false;
+  return signals.toggleWindowPresentation();
 }
 
 bool toggleSubtitles(const PlaybackInputView& view) {
-  if (!view.hasSubtitles || !view.subtitleManager ||
-      !view.enableSubtitlesShared) {
+  if (!view.hasSubtitles) {
     return false;
   }
   const bool enabled =
@@ -297,14 +258,14 @@ bool toggleSubtitles(const PlaybackInputView& view) {
 }
 
 bool toggleAudioTrack(const PlaybackInputView& view) {
-  if (!view.player || !view.audioOk || !*view.audioOk) {
+  if (!*view.audioOk) {
     return false;
   }
   return view.player->cycleAudioTrack();
 }
 
 bool cycleRadioFilter(const PlaybackInputView& view) {
-  if (!view.audioOk || !*view.audioOk) {
+  if (!*view.audioOk) {
     return false;
   }
   audioCycleRadioFilter();
@@ -312,7 +273,7 @@ bool cycleRadioFilter(const PlaybackInputView& view) {
 }
 
 bool toggle50Hz(const PlaybackInputView& view) {
-  if (!view.audioOk || !*view.audioOk || !audioSupports50HzToggle()) {
+  if (!*view.audioOk || !audioSupports50HzToggle()) {
     return false;
   }
   audioToggle50Hz();
@@ -322,27 +283,20 @@ bool toggle50Hz(const PlaybackInputView& view) {
 bool togglePictureInPicture(const PlaybackInputView& view,
                             const PlaybackInputSignals& signals) {
   (void)view;
-  if (signals.togglePictureInPicture) {
-    return signals.togglePictureInPicture();
-  }
-  return false;
+  return signals.togglePictureInPicture();
 }
 
 bool requestFrameStep(const PlaybackInputView& view,
                       PlaybackInputSignals& signals,
                       PlaybackSeekState& seekState,
                       playback_video_frame_step::Direction direction) {
-  if (!view.player) {
-    return false;
-  }
   setPlaybackPaused(view, signals, seekState, true);
   commitQueuedSeekBeforeFrameStep(view, signals, seekState);
 
   if (!view.player->requestFrameStep(direction)) {
     return false;
   }
-  if (view.playbackState &&
-      *view.playbackState == PlaybackSessionState::Ended) {
+  if (*view.playbackState == PlaybackSessionState::Ended) {
     *view.playbackState = PlaybackSessionState::Paused;
   }
   refreshFrameStepRequestDisplay(signals);
@@ -366,9 +320,7 @@ bool executeOverlayControl(const PlaybackInputView& view,
         view, signals, PlaybackTransportCommand::Previous);
   };
   actions.playPause = [&]() {
-    setPlaybackPaused(view, signals, seekState,
-                      !view.playbackState ||
-                          *view.playbackState != PlaybackSessionState::Paused);
+    setPlaybackPaused(view, signals, seekState, pauseRequestedByToggle(view));
     return true;
   };
   actions.next = [&]() {
@@ -389,14 +341,12 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
     const PlaybackInputView& view, const PlaybackSeekState& seekState,
     const PlaybackInputSignals& signals) {
   playback_overlay::PlaybackOverlayInputs inputs;
-  if (view.windowTitle) {
-    inputs.windowTitle = *view.windowTitle;
-  }
-  inputs.audioOk = view.audioOk && *view.audioOk;
+  inputs.windowTitle = *view.windowTitle;
+  inputs.audioOk = *view.audioOk;
   inputs.playPauseAvailable =
-      view.playbackState &&
-      (*view.playbackState == PlaybackSessionState::Active ||
-       *view.playbackState == PlaybackSessionState::Paused);
+      *view.playbackState == PlaybackSessionState::Active ||
+      *view.playbackState == PlaybackSessionState::Paused ||
+      *view.playbackState == PlaybackSessionState::Ended;
   inputs.audioSupports50HzToggle =
       inputs.audioOk && audioSupports50HzToggle();
   inputs.canPlayPrevious = signals.requestTransportCommand != nullptr;
@@ -405,25 +355,22 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   inputs.radioLabel = std::string(audioGetRadioFilterLabel());
   inputs.hz50Enabled = audioIs50HzEnabled();
   inputs.canCycleAudioTracks =
-      inputs.audioOk && view.player && view.player->canCycleAudioTracks();
+      inputs.audioOk && view.player->canCycleAudioTracks();
   inputs.activeAudioTrackLabel =
-      inputs.audioOk && view.player ? view.player->activeAudioTrackLabel()
-                                    : "N/A";
+      inputs.audioOk ? view.player->activeAudioTrackLabel() : "N/A";
   inputs.subtitleManager = view.subtitleManager;
   inputs.hasSubtitles = view.hasSubtitles;
-  inputs.subtitlesEnabled = view.enableSubtitlesShared &&
-                            view.enableSubtitlesShared->load(
-                                std::memory_order_relaxed);
-  inputs.subtitleClockUs = view.player ? view.player->currentUs() : 0;
+  inputs.subtitlesEnabled =
+      view.enableSubtitlesShared->load(std::memory_order_relaxed);
+  const int64_t currentUs = view.player->currentUs();
+  inputs.subtitleClockUs = currentUs;
   inputs.seekingOverlay = playbackSeekPending(view, seekState);
-  inputs.displaySec =
-      view.player ? std::max(0.0, static_cast<double>(view.player->currentUs()) /
-                                      1000000.0)
-                  : 0.0;
-  inputs.totalSec =
-      (view.player && view.player->durationUs() > 0)
-          ? static_cast<double>(view.player->durationUs()) / 1000000.0
-          : (inputs.audioOk ? audioGetTotalSec() : -1.0);
+  inputs.displaySec = std::max(
+      0.0, static_cast<double>(currentUs) / 1000000.0);
+  const int64_t durationUs = view.player->durationUs();
+  inputs.totalSec = durationUs > 0
+                        ? static_cast<double>(durationUs) / 1000000.0
+                        : (inputs.audioOk ? audioGetTotalSec() : -1.0);
   if (inputs.totalSec > 0.0) {
     inputs.displaySec = std::clamp(inputs.displaySec, 0.0, inputs.totalSec);
   }
@@ -436,37 +383,28 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   inputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
   inputs.overlayVisible = isOverlayVisible(signals);
   inputs.paused =
-      (view.playbackState &&
-       *view.playbackState == PlaybackSessionState::Paused) ||
-      (view.player &&
-       playback_video_state_machine::project(view.player->state()).transport ==
-           playback_video_state_machine::TransportState::Paused);
+      *view.playbackState == PlaybackSessionState::Paused ||
+      *view.playbackState == PlaybackSessionState::Ended ||
+      view.player->isEnded() ||
+      playback_video_state_machine::project(view.player->state()).transport ==
+          playback_video_state_machine::TransportState::Paused;
   inputs.audioFinished = inputs.audioOk && audioIsFinished();
   inputs.pictureInPictureAvailable =
-      signals.togglePictureInPicture != nullptr ||
-      (view.videoWindow && view.videoWindow->IsOpen());
+      signals.togglePictureInPicture != nullptr || view.videoWindow->IsOpen();
   inputs.pictureInPictureActive =
-      view.videoWindow && view.videoWindow->IsOpen() &&
+      view.videoWindow->IsOpen() &&
       view.videoWindow->IsPictureInPicture();
-  inputs.subtitleRenderError =
-      view.videoWindow ? view.videoWindow->GetSubtitleRenderError() : "";
-  inputs.screenWidth = view.screen ? view.screen->width() : 0;
-  inputs.screenHeight = view.screen ? view.screen->height() : 0;
+  inputs.subtitleRenderError = view.videoWindow->GetSubtitleRenderError();
+  inputs.screenWidth = view.screen->width();
+  inputs.screenHeight = view.screen->height();
   inputs.windowWidth =
-      view.videoWindow && view.videoWindow->IsOpen()
-          ? view.videoWindow->GetWidth()
-          : 0;
+      view.videoWindow->IsOpen() ? view.videoWindow->GetWidth() : 0;
   inputs.windowHeight =
-      view.videoWindow && view.videoWindow->IsOpen()
-          ? view.videoWindow->GetHeight()
-          : 0;
+      view.videoWindow->IsOpen() ? view.videoWindow->GetHeight() : 0;
   inputs.artTop = 0;
-  inputs.progressBarX =
-      view.frameOutputState ? view.frameOutputState->progressBarX : -1;
-  inputs.progressBarY =
-      view.frameOutputState ? view.frameOutputState->progressBarY : -1;
-  inputs.progressBarWidth =
-      view.frameOutputState ? view.frameOutputState->progressBarWidth : 0;
+  inputs.progressBarX = view.frameOutputState->progressBarX;
+  inputs.progressBarY = view.frameOutputState->progressBarY;
+  inputs.progressBarWidth = view.frameOutputState->progressBarWidth;
   return inputs;
 }
 
@@ -479,7 +417,6 @@ bool isOverlayVisible(const PlaybackInputSignals& signals) {
 void sendSeekRequest(const PlaybackInputView& view,
                      PlaybackInputSignals& signals,
                      PlaybackSeekState& seekState, double targetSec) {
-  if (!view.player) return;
   targetSec = clampPlaybackSeekTarget(view, targetSec);
   int64_t targetUs =
       static_cast<int64_t>(std::llround(targetSec * 1000000.0));
@@ -501,18 +438,24 @@ void queueSeekRequest(PlaybackInputSignals& signals,
 void setPlaybackPaused(const PlaybackInputView& view,
                        PlaybackInputSignals& signals,
                        PlaybackSeekState& seekState, bool paused) {
-  if (!view.player || !view.playbackState) return;
-
-  if (!paused && *view.playbackState == PlaybackSessionState::Ended) {
+  const bool ended = *view.playbackState == PlaybackSessionState::Ended ||
+                     view.player->isEnded();
+  if (!paused && ended) {
     double targetSec = 0.0;
-    readPendingSeekTargetSec(seekState, &targetSec);
+    double pendingTargetSec = 0.0;
+    if (readPendingSeekTargetSec(seekState, &pendingTargetSec)) {
+      const double durationSec = playbackDurationSec(view);
+      if (!(durationSec > 0.0) || pendingTargetSec < durationSec) {
+        targetSec = pendingTargetSec;
+      }
+    }
     sendSeekRequest(view, signals, seekState, targetSec);
     view.player->setVideoPaused(false);
     *view.playbackState = PlaybackSessionState::Active;
     return;
   }
 
-  if (paused && *view.playbackState == PlaybackSessionState::Ended) {
+  if (paused && ended) {
     view.player->setVideoPaused(true);
     return;
   }
@@ -532,9 +475,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
   cb.onPlay = [&]() { setPlaybackPaused(view, signals, seekState, false); };
   cb.onPause = [&]() { setPlaybackPaused(view, signals, seekState, true); };
   cb.onTogglePause = [&]() {
-    const bool pauseNow = !view.playbackState ||
-                          *view.playbackState != PlaybackSessionState::Paused;
-    setPlaybackPaused(view, signals, seekState, pauseNow);
+    setPlaybackPaused(view, signals, seekState, pauseRequestedByToggle(view));
   };
   cb.onStopPlayback = [&]() { requestPlaybackExit(view, signals, false); };
   cb.onPlayPrevious = [&]() {
@@ -546,11 +487,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
         view, signals, PlaybackTransportCommand::Next);
   };
   cb.onToggleWindow = [&]() { toggleRequestedLayout(view, signals); };
-  cb.onToggleFullscreen = [&]() {
-    if (signals.toggleFullscreen) {
-      signals.toggleFullscreen();
-    }
-  };
+  cb.onToggleFullscreen = [&]() { signals.toggleFullscreen(); };
   cb.onToggleRadio = [&]() { cycleRadioFilter(view); };
   cb.onToggle50Hz = [&]() { toggle50Hz(view); };
   cb.onToggleSubtitles = [&]() { toggleSubtitles(view); };
@@ -568,7 +505,6 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     }
   };
   cb.onSeekBy = [&](int dir) {
-    if (!view.player) return;
     const double baseSec = playbackSeekBaseSec(view, seekState);
     sendSeekRequest(view, signals, seekState, baseSec + dir * 5.0);
   };
@@ -589,13 +525,11 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
   const PlaybackInputResult playbackResult =
       handlePlaybackInput(ev, cb, shortcutContexts);
   if (playbackResult == PlaybackInputResult::Handled) {
-    if (signals.loopStopRequested && *signals.loopStopRequested) {
+    if (*signals.loopStopRequested) {
       return;
     }
     triggerOverlay(view, signals);
-    if (signals.redraw) {
-      *signals.redraw = true;
-    }
+    *signals.redraw = true;
     return;
   }
   if (playbackResult == PlaybackInputResult::HandledWithoutOverlayRefresh) {
@@ -615,9 +549,7 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
       setPlaybackPaused(view, signals, seekState, true);
       break;
     case PlaybackControlCommand::TogglePause: {
-      const bool pauseNow = !view.playbackState ||
-                            *view.playbackState != PlaybackSessionState::Paused;
-      setPlaybackPaused(view, signals, seekState, pauseNow);
+      setPlaybackPaused(view, signals, seekState, pauseRequestedByToggle(view));
       break;
     }
     case PlaybackControlCommand::Stop:
@@ -632,30 +564,28 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
           view, signals, PlaybackTransportCommand::Next);
       break;
   }
-  if (signals.loopStopRequested && *signals.loopStopRequested) {
+  if (*signals.loopStopRequested) {
     return;
   }
   triggerOverlay(view, signals);
-  if (signals.redraw) {
-    *signals.redraw = true;
-  }
+  *signals.redraw = true;
 }
 
 void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
                               PlaybackSeekState& seekState,
                               const MouseEvent& mouse) {
-  playback_overlay::PlaybackOverlayInputs mouseOverlayInputs =
-      buildPlaybackMouseOverlayInputs(view, seekState, signals);
   MouseEvent hitMouse = mouse;
+  bool overlayVisibleForHitTest = isOverlayVisible(signals);
   const bool windowOriginEvent = isWindowMouseEvent(mouse);
   const bool terminalAsciiProgress =
       !windowOriginEvent && isAsciiPlaybackMode(view.currentMode);
   const playback_frame_output::FrameOutputState* progressOutputState =
       terminalAsciiProgress ? view.frameOutputState : nullptr;
+  int textGridHitTestCols = 0;
+  int textGridHitTestRows = 0;
   bool windowEvent = windowOriginEvent;
-  if (windowEvent && view.videoWindow &&
-      view.videoWindow->IsPictureInPicture() &&
+  if (windowEvent && view.videoWindow->IsPictureInPicture() &&
       view.videoWindow->IsTextGridPresentationEnabled()) {
     int gridCols = 0;
     int gridRows = 0;
@@ -694,71 +624,31 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
             static_cast<double>(gridViewport.height) /
             static_cast<double>(gridRows);
         progressOutputState = view.textGridPresentationOutputState;
-        mouseOverlayInputs.overlayVisible = true;
-        mouseOverlayInputs.screenWidth = gridCols;
-        mouseOverlayInputs.screenHeight = gridRows;
-        mouseOverlayInputs.progressBarX =
-            view.textGridPresentationOutputState
-                ? view.textGridPresentationOutputState->progressBarX
-                : -1;
-        mouseOverlayInputs.progressBarY =
-            view.textGridPresentationOutputState
-                ? view.textGridPresentationOutputState->progressBarY
-                : -1;
-        mouseOverlayInputs.progressBarWidth =
-            view.textGridPresentationOutputState
-                ? view.textGridPresentationOutputState->progressBarWidth
-                : 0;
+        overlayVisibleForHitTest = true;
+        textGridHitTestCols = gridCols;
+        textGridHitTestRows = gridRows;
       } else {
         clearWindowMouseEvent(hitMouse);
         progressOutputState = nullptr;
-        mouseOverlayInputs.overlayVisible = false;
+        overlayVisibleForHitTest = false;
       }
     }
   }
-  playback_overlay::PlaybackOverlayState mouseOverlayState =
-      playback_overlay::buildPlaybackOverlayState(mouseOverlayInputs);
+
   if (playback_overlay::isBackMousePressed(mouse)) {
     requestPlaybackExit(view, signals, false);
     return;
   }
   if (mouse.eventFlags == MOUSE_MOVED) {
     triggerOverlay(view, signals);
-    if (signals.redraw) {
-      *signals.redraw = true;
-    }
+    *signals.redraw = true;
   }
 
   windowEvent = isWindowMouseEvent(hitMouse);
   int windowTextCellW = 1;
   int windowTextCellH = 1;
-  if (windowEvent && view.videoWindow) {
+  if (windowEvent) {
     view.videoWindow->GetTextGridCellSize(windowTextCellW, windowTextCellH);
-  }
-  int controlHit =
-      windowEvent
-          ? playback_overlay::windowOverlayControlAt(mouseOverlayState,
-                                                     hitMouse,
-                                                     windowTextCellW,
-                                                     windowTextCellH)
-          : playback_overlay::terminalOverlayControlAt(mouseOverlayState,
-                                                       hitMouse);
-  int previousHover = signals.overlayControlHover
-                          ? signals.overlayControlHover->load(
-                                std::memory_order_relaxed)
-                          : -1;
-  int nextHover = mouseOverlayState.overlayVisible ? controlHit : -1;
-  if (nextHover != previousHover) {
-    if (signals.overlayControlHover) {
-      signals.overlayControlHover->store(nextHover, std::memory_order_relaxed);
-    }
-    if (signals.redraw) {
-      *signals.redraw = true;
-    }
-    requestWindowRefresh(signals);
-  }
-  if (controlHit >= 0) {
-    triggerOverlay(view, signals);
   }
 
   double progressRatio = 0.0;
@@ -769,7 +659,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     if (hitMouse.hasPixelPosition) {
       unitWidth = hitMouse.unitWidth;
       unitHeight = hitMouse.unitHeight;
-      if (terminalAsciiProgress && view.screen) {
+      if (terminalAsciiProgress) {
         unitWidth = view.screen->cellPixelWidth();
         unitHeight = view.screen->cellPixelHeight();
       }
@@ -784,45 +674,77 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     hit.unitHeight = unitHeight;
     progressHit = progressBarRatioAt(hit, &progressRatio);
   } else if (windowEvent) {
-    progressHit = playback_overlay::overlayProgressRatioAt(
-        mouseOverlayState, hitMouse, windowTextCellW, windowTextCellH,
-        &progressRatio);
+    progressHit = playback_overlay::windowOverlayProgressRatioAt(
+        overlayVisibleForHitTest, view.videoWindow->GetWidth(),
+        view.videoWindow->GetHeight(), hitMouse, windowTextCellW,
+        windowTextCellH, &progressRatio);
   }
   if (progressHit) {
     triggerOverlay(view, signals);
-    if (signals.redraw) {
-      *signals.redraw = true;
-    }
+    *signals.redraw = true;
   }
 
-  bool leftPressed =
+  const bool leftPressed =
       (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+  const bool seekGesture =
+      leftPressed && progressHit &&
+      (windowEvent || hitMouse.eventFlags == 0 ||
+       hitMouse.eventFlags == MOUSE_MOVED);
+  if (progressHit) {
+    updateOverlayControlHover(signals, -1);
+    if (seekGesture) {
+      queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
+    }
+    return;
+  }
+  if (!overlayVisibleForHitTest) {
+    updateOverlayControlHover(signals, -1);
+    return;
+  }
+
+  playback_overlay::PlaybackOverlayInputs mouseOverlayInputs =
+      buildPlaybackMouseOverlayInputs(view, seekState, signals);
+  mouseOverlayInputs.overlayVisible = overlayVisibleForHitTest;
+  if (textGridHitTestCols > 0 && textGridHitTestRows > 0) {
+    mouseOverlayInputs.screenWidth = textGridHitTestCols;
+    mouseOverlayInputs.screenHeight = textGridHitTestRows;
+    mouseOverlayInputs.progressBarX =
+        view.textGridPresentationOutputState->progressBarX;
+    mouseOverlayInputs.progressBarY =
+        view.textGridPresentationOutputState->progressBarY;
+    mouseOverlayInputs.progressBarWidth =
+        view.textGridPresentationOutputState->progressBarWidth;
+  }
+  playback_overlay::PlaybackOverlayState mouseOverlayState =
+      playback_overlay::buildPlaybackOverlayState(mouseOverlayInputs);
+  const int controlHit =
+      windowEvent
+          ? playback_overlay::windowOverlayControlAt(mouseOverlayState,
+                                                     hitMouse,
+                                                     windowTextCellW,
+                                                     windowTextCellH)
+          : playback_overlay::terminalOverlayControlAt(mouseOverlayState,
+                                                       hitMouse);
+  updateOverlayControlHover(
+      signals, mouseOverlayState.overlayVisible ? controlHit : -1);
+  if (controlHit >= 0) {
+    triggerOverlay(view, signals);
+  }
+
   if (leftPressed && hitMouse.eventFlags == 0 && controlHit >= 0) {
     if (executeOverlayControl(view, signals, seekState, mouseOverlayState,
                               controlHit)) {
-      if (signals.loopStopRequested && *signals.loopStopRequested) {
+      if (*signals.loopStopRequested) {
         return;
       }
       triggerOverlay(view, signals);
-      if (signals.redraw) {
-        *signals.redraw = true;
-      }
+      *signals.redraw = true;
     }
     return;
   }
 
   if (leftPressed && windowEvent) {
-    if (progressHit && view.videoWindow) {
-      queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
-    }
     return;
-  }
-
-  if (leftPressed && (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
-    if (progressHit) {
-      queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
-      return;
-    }
   }
 }
 

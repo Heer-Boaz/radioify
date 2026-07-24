@@ -94,7 +94,9 @@ WindowUiState buildPlaybackFramebufferUiState(
       playback_video_state_machine::project(player.state()).transport ==
       playback_video_state_machine::TransportState::Paused;
   bool pausedNow =
-      playbackState == PlaybackSessionState::Paused || playerTransportPaused;
+      playbackState == PlaybackSessionState::Paused ||
+      playbackState == PlaybackSessionState::Ended || player.isEnded() ||
+      playerTransportPaused;
   bool audioFinishedNow = audioOk && audioIsFinished();
 
   playback_overlay::PlaybackOverlayInputs overlayInputs;
@@ -102,7 +104,8 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.audioOk = audioOk;
   overlayInputs.playPauseAvailable =
       playbackState == PlaybackSessionState::Active ||
-      playbackState == PlaybackSessionState::Paused;
+      playbackState == PlaybackSessionState::Paused ||
+      playbackState == PlaybackSessionState::Ended;
   overlayInputs.audioSupports50HzToggle = audioOk && audioSupports50HzToggle();
   overlayInputs.canPlayPrevious = canPlayPrevious;
   overlayInputs.canPlayNext = canPlayNext;

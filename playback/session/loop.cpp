@@ -451,8 +451,7 @@ struct PlaybackLoopRunner::Impl {
     }
     const bool isPaused =
         core.playbackState() == PlaybackSessionState::Paused || audioIsPaused();
-    const bool seeking =
-        seekState.localSeekRequested && *seekState.localSeekRequested;
+    const bool seeking = *seekState.localSeekRequested;
     perfLogAppendf(&perfLog,
                    "video_heartbeat_ui redraw=%d seeker=%d paused=%d",
                    redraw ? 1 : 0, seeking ? 1 : 0, isPaused ? 1 : 0);
@@ -631,7 +630,7 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void flushQueuedSeek() {
-    if (!seekState.seekQueued || !*seekState.seekQueued) {
+    if (!*seekState.seekQueued) {
       return;
     }
     auto now = std::chrono::steady_clock::now();
@@ -680,8 +679,7 @@ struct PlaybackLoopRunner::Impl {
                                                                   now)
                                        .count())));
     }
-    if (seekState.seekQueued && *seekState.seekQueued &&
-        seekState.lastSeekSentTime) {
+    if (*seekState.seekQueued) {
       auto seekDue = *seekState.lastSeekSentTime + kSeekThrottleInterval;
       timeoutMs = std::min(
           timeoutMs,
@@ -720,7 +718,8 @@ struct PlaybackLoopRunner::Impl {
     }
 
     output.waitForActivity(
-        input, timeoutMs, openFileRequests.nativeWaitHandle(),
+        input, timeoutMs, core.player().statusChangeWaitHandle(),
+        openFileRequests.nativeWaitHandle(),
         notificationAreaControls ? notificationAreaControls->nativeWaitHandle()
                                  : NativeWaitHandle());
   }

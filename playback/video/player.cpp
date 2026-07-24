@@ -16,6 +16,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1533,6 +1534,8 @@ struct Player::Impl {
   std::mutex eventMutex;
   std::condition_variable eventCv;
   std::deque<playback_video_control::Event> events;
+  std::atomic<uint64_t> latestSeekRequestGeneration{0};
+  std::atomic<uint64_t> handledSeekRequestGeneration{0};
   std::thread controlThread;
   std::atomic<bool> initDone{false};
   std::atomic<bool> initOk{false};
@@ -1584,11 +1587,9 @@ struct Player::Impl {
   std::atomic<bool> hasFrame{false};
   std::mutex currentFrameMutex;
   VideoFrame currentFrame;
-  std::condition_variable frameCv;
-  std::mutex frameCvMutex;
   std::atomic<uint64_t> frameCounter{0};
-  UniqueWindowsHandle frameReadyEvent{CreateEventW(nullptr, FALSE, FALSE,
-                                                   nullptr)};
+  UniqueWindowsHandle frameReadyEvent;
+  UniqueWindowsHandle statusChangedEvent;
   std::mutex lastInfoMutex;
   VideoReadInfo lastInfo{};
   std::atomic<bool> lastInfoValid{false};
@@ -1607,6 +1608,14 @@ struct Player::Impl {
   std::thread videoOutputThread;
 
   std::filesystem::path logPath;
+
+  Impl()
+      : frameReadyEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)),
+        statusChangedEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {
+    if (!frameReadyEvent || !statusChangedEvent) {
+      throw std::runtime_error("Failed to create Player wait events");
+    }
+  }
 
   void appendTiming(const std::string& line) {
     radioifyAppendTimingLogLine(logPath, line);
@@ -1710,16 +1719,22 @@ struct Player::Impl {
         estimatedFrameDurationUs.load(std::memory_order_relaxed));
   }
 
-  void postEvent(const playback_video_control::Event& ev) {
+  void postEvent(playback_video_control::Event ev) {
     std::lock_guard<std::mutex> lock(eventMutex);
+    if (ev.type == playback_video_control::EventType::SeekRequest) {
+      ev.seekRequestGeneration =
+          latestSeekRequestGeneration.fetch_add(1, std::memory_order_relaxed) +
+          1;
+      SetEvent(statusChangedEvent.get());
+    }
     if (!events.empty() &&
         playback_video_control::shouldCoalesceQueuedEvent(events.back().type,
                                                           ev.type)) {
-      events.back() = ev;
+      events.back() = std::move(ev);
       eventCv.notify_one();
       return;
     }
-    events.push_back(ev);
+    events.push_back(std::move(ev));
     eventCv.notify_one();
   }
 
@@ -1733,7 +1748,7 @@ struct Player::Impl {
     ev.frameStepDirection = request.direction;
     ev.frameStepSeek = target.seek;
     ev.frameStepSeek.generation = request.generation;
-    postEvent(ev);
+    postEvent(std::move(ev));
   }
 
   void applyStateChange(playback_video_state_machine::StateChange change) {
@@ -1744,6 +1759,7 @@ struct Player::Impl {
     playback_video_state_machine::StateEffects effects = change.projection.effects;
     audioSetHold(effects.holdAudioOutput);
     mainClock.changePause(effects.pauseMainClock, nowUs());
+    SetEvent(statusChangedEvent.get());
   }
 
   void logVideo(const char* tag, const QueuedFrame* frame, int64_t masterUs,
@@ -1851,14 +1867,15 @@ struct Player::Impl {
           static_cast<long long>(item.ptsUs),
           stepPresentation.accepted ? 1 : 0);
     }
-    serialControl.clearPendingPresentation(serialForFrame);
+    const bool seekPresentationCompleted =
+        serialControl.clearPendingPresentation(serialForFrame);
     playback_video_sync::notePresentedFrame(syncState, prepared, targetUs,
                                             presentedNowUs);
     frameCounter.fetch_add(1, std::memory_order_relaxed);
-    if (frameReadyEvent) {
-      SetEvent(frameReadyEvent.get());
+    SetEvent(frameReadyEvent.get());
+    if (seekPresentationCompleted) {
+      SetEvent(statusChangedEvent.get());
     }
-    frameCv.notify_all();
     logVideo(tag, &item, masterUs, source, diffUs, delayUs);
 
     if (cursorPublication == VideoCursorPublication::Append) {
@@ -1875,7 +1892,7 @@ struct Player::Impl {
       playback_video_control::Event ev{};
       ev.type = playback_video_control::EventType::FirstFramePresented;
       ev.serial = serialForFrame;
-      postEvent(ev);
+      postEvent(std::move(ev));
     }
   }
 
@@ -2159,10 +2176,7 @@ struct Player::Impl {
     appendTimingFmt("stop_threads begin");
     running.store(false);
     playbackState.resetFrameSteps();
-    if (frameReadyEvent) {
-      SetEvent(frameReadyEvent.get());
-    }
-    frameCv.notify_all();
+    SetEvent(frameReadyEvent.get());
     commandPending.store(false);
     videoPackets.abortQueue();
     audioPackets.abortQueue();
@@ -2231,6 +2245,9 @@ struct Player::Impl {
     {
       std::lock_guard<std::mutex> lock(eventMutex);
       events.clear();
+      handledSeekRequestGeneration.store(
+          latestSeekRequestGeneration.load(std::memory_order_relaxed),
+          std::memory_order_relaxed);
     }
     frameStepSeek.reset();
   }
@@ -2255,9 +2272,8 @@ struct Player::Impl {
     lastPresentedDisplayIndex.store(0);
     lastPresentedDurationUs.store(0);
     frameCounter.store(0);
-    if (frameReadyEvent) {
-      ResetEvent(frameReadyEvent.get());
-    }
+    ResetEvent(frameReadyEvent.get());
+    ResetEvent(statusChangedEvent.get());
     clearCurrentFrame();
     videoPackets.init(32 * 1024 * 1024);
     audioPackets.init(8 * 1024 * 1024);
@@ -2357,6 +2373,9 @@ struct Player::Impl {
     switch (ev.type) {
       case playback_video_control::EventType::SeekRequest: {
         beginSerialTransition(ev.arg1, "ctrl_seek_request");
+        handledSeekRequestGeneration.store(ev.seekRequestGeneration,
+                                           std::memory_order_relaxed);
+        SetEvent(statusChangedEvent.get());
         break;
       }
       case playback_video_control::EventType::FrameStepSeekRequest: {
@@ -2376,8 +2395,8 @@ struct Player::Impl {
       }
       case playback_video_control::EventType::FrameStepRequest: {
         pauseRequested.store(true, std::memory_order_relaxed);
-        if (audioStartOk.load(std::memory_order_relaxed) && !audioIsPaused()) {
-          audioTogglePause();
+        if (audioStartOk.load(std::memory_order_relaxed)) {
+          audioPause();
         }
         applyStateChange(playbackState.requestFrameStep(
             ev.frameStepDirection, serialControl.currentSerial()));
@@ -2392,9 +2411,8 @@ struct Player::Impl {
       case playback_video_control::EventType::PauseRequest: {
         const bool paused = ev.arg1 != 0;
         pauseRequested.store(paused, std::memory_order_relaxed);
-        if (paused && audioStartOk.load(std::memory_order_relaxed) &&
-            !audioIsPaused()) {
-          audioTogglePause();
+        if (paused && audioStartOk.load(std::memory_order_relaxed)) {
+          audioPause();
         }
         bool resumedFrameStepWork = false;
         if (!paused) {
@@ -2404,9 +2422,8 @@ struct Player::Impl {
             beginSerialTransition(resumeTargetUs, "ctrl_resume_position_seek");
           }
         }
-        if (!paused && audioStartOk.load(std::memory_order_relaxed) &&
-            audioIsPaused()) {
-          audioTogglePause();
+        if (!paused && audioStartOk.load(std::memory_order_relaxed)) {
+          audioPlay();
         }
         observePlaybackPipeline();
         if (resumedFrameStepWork) {
@@ -2758,7 +2775,7 @@ struct Player::Impl {
         ev.type = playback_video_control::EventType::SeekApplied;
         ev.serial = nextSerial;
         ev.arg1 = (seekRes < 0) ? 1 : 0;
-        postEvent(ev);
+        postEvent(std::move(ev));
         handledSeek = true;
       }
 
@@ -3817,7 +3834,6 @@ Player::Player() : impl_(std::make_unique<Impl>()) {}
 Player::~Player() { close(); }
 
 bool Player::open(const PlayerConfig& config, std::string* error) {
-  if (!impl_) return false;
   (void)error;
   if (impl_->ctrlRunning.load()) {
     close();
@@ -3830,7 +3846,6 @@ bool Player::open(const PlayerConfig& config, std::string* error) {
 }
 
 void Player::close() {
-  if (!impl_) return;
   impl_->appendTimingFmt("player_close begin ctrl_running=%d control_joinable=%d",
                          impl_->ctrlRunning.load(std::memory_order_relaxed) ? 1
                                                                              : 0,
@@ -3840,7 +3855,7 @@ void Player::close() {
       impl_->appendTimingFmt("player_close post_close_request");
       playback_video_control::Event ev{};
       ev.type = playback_video_control::EventType::CloseRequest;
-      impl_->postEvent(ev);
+      impl_->postEvent(std::move(ev));
     } else {
       impl_->appendTimingFmt("player_close notify_control_thread");
       impl_->eventCv.notify_one();
@@ -3858,50 +3873,48 @@ void Player::close() {
 }
 
 void Player::requestSeek(int64_t targetUs) {
-  if (!impl_ || !impl_->ctrlRunning.load()) return;
+  if (!impl_->ctrlRunning.load()) return;
   playback_video_control::Event ev{};
   ev.type = playback_video_control::EventType::SeekRequest;
   ev.arg1 = targetUs;
-  impl_->postEvent(ev);
+  impl_->postEvent(std::move(ev));
 }
 
 bool Player::requestFrameStep(playback_video_frame_step::Direction direction) {
-  if (!impl_ || !impl_->ctrlRunning.load(std::memory_order_relaxed)) {
+  if (!impl_->ctrlRunning.load(std::memory_order_relaxed)) {
     return false;
   }
 
   playback_video_control::Event ev{};
   ev.type = playback_video_control::EventType::FrameStepRequest;
   ev.frameStepDirection = direction;
-  impl_->postEvent(ev);
+  impl_->postEvent(std::move(ev));
   return true;
 }
 
 void Player::requestResize(int targetW, int targetH) {
-  if (!impl_ || !impl_->ctrlRunning.load()) return;
+  if (!impl_->ctrlRunning.load()) return;
   playback_video_control::Event ev{};
   ev.type = playback_video_control::EventType::ResizeRequest;
   ev.arg1 = targetW;
   ev.arg2 = targetH;
-  impl_->postEvent(ev);
+  impl_->postEvent(std::move(ev));
 }
 
 void Player::setVideoPaused(bool paused) {
-  if (!impl_) return;
+  if (!impl_->ctrlRunning.load(std::memory_order_relaxed)) return;
   playback_video_control::Event ev{};
   ev.type = playback_video_control::EventType::PauseRequest;
   ev.arg1 = paused ? 1 : 0;
-  impl_->postEvent(ev);
+  impl_->postEvent(std::move(ev));
 }
 
 size_t Player::audioTrackCount() const {
-  if (!impl_) return 0;
   std::lock_guard<std::mutex> lock(impl_->audioTrackMutex);
   return impl_->audioTrackStreams.size();
 }
 
 std::string Player::activeAudioTrackLabel() const {
-  if (!impl_) return "N/A";
   std::lock_guard<std::mutex> lock(impl_->audioTrackMutex);
   int active = impl_->activeAudioTrack.load(std::memory_order_relaxed);
   if (active < 0 ||
@@ -3915,68 +3928,71 @@ std::string Player::activeAudioTrackLabel() const {
 bool Player::canCycleAudioTracks() const { return audioTrackCount() > 1; }
 
 bool Player::cycleAudioTrack() {
-  if (!impl_ || !impl_->ctrlRunning.load(std::memory_order_relaxed)) return false;
+  if (!impl_->ctrlRunning.load(std::memory_order_relaxed)) return false;
   {
     std::lock_guard<std::mutex> lock(impl_->audioTrackMutex);
     if (impl_->audioTrackStreams.size() <= 1) return false;
   }
   playback_video_control::Event ev{};
   ev.type = playback_video_control::EventType::CycleAudioTrack;
-  impl_->postEvent(ev);
+  impl_->postEvent(std::move(ev));
   return true;
 }
 
 bool Player::initDone() const {
-  return impl_ && impl_->initDone.load();
+  return impl_->initDone.load();
 }
 
 bool Player::initOk() const {
-  return impl_ && impl_->initOk.load();
+  return impl_->initOk.load();
 }
 
 std::string Player::initError() const {
-  if (!impl_) return std::string();
   std::lock_guard<std::mutex> lock(impl_->initMutex);
   return impl_->initError;
 }
 
 bool Player::audioStarting() const {
-  return impl_ && !impl_->audioStartDone.load();
+  return !impl_->audioStartDone.load();
 }
 
 bool Player::audioOk() const {
-  return impl_ && impl_->audioStartOk.load();
+  return impl_->audioStartOk.load();
 }
 
 bool Player::audioFinished() const {
-  if (!impl_) return false;
   return impl_->audioStartOk.load() && audioIsFinished();
 }
 
+bool Player::seekPending() const {
+  const bool requestQueued =
+      impl_->handledSeekRequestGeneration.load(std::memory_order_relaxed) !=
+      impl_->latestSeekRequestGeneration.load(std::memory_order_relaxed);
+  return requestQueued || impl_->serialControl.seekPending() ||
+         impl_->serialControl.seekInFlightSerial() != 0 ||
+         impl_->serialControl.pendingSeekSerial() != 0 ||
+         impl_->playbackState.current() == PlayerState::Seeking;
+}
+
 bool Player::isSeeking() const {
-  if (!impl_) return false;
   return impl_->playbackState.current() == PlayerState::Seeking;
 }
 
 bool Player::isBuffering() const {
-  if (!impl_) return false;
   return impl_->playbackState.projection().effects.uiBuffering;
 }
 
 bool Player::isEnded() const {
-  if (!impl_) return false;
   return impl_->playbackState.current() == PlayerState::Ended;
 }
 
 int64_t Player::durationUs() const {
-  if (!impl_) return 0;
   int64_t dur = impl_->durationUs.load();
   if (dur <= 0) return 0;
   return dur;
 }
 
 int64_t Player::currentUs() const {
-  if (!impl_) return 0;
   int64_t seekUs = impl_->serialControl.seekDisplayUs();
   if (impl_->serialControl.pendingSeekSerial() != 0) {
     return seekUs;
@@ -3988,38 +4004,31 @@ int64_t Player::currentUs() const {
 }
 
 uint64_t Player::videoFrameCounter() const {
-  if (!impl_) return 0;
   return impl_->frameCounter.load(std::memory_order_relaxed);
 }
 
 bool Player::waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const {
-  if (!impl_) return false;
   if (impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter) {
     return true;
   }
   if (timeoutMs <= 0) {
     return false;
   }
-  if (impl_->frameReadyEvent) {
-    WaitForSingleObject(impl_->frameReadyEvent.get(),
-                        static_cast<DWORD>(std::max(0, timeoutMs)));
-    return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter;
-  }
-  std::unique_lock<std::mutex> lock(impl_->frameCvMutex);
-  impl_->frameCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&]() {
-    return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter ||
-           !impl_->running.load(std::memory_order_relaxed);
-  });
+  WaitForSingleObject(impl_->frameReadyEvent.get(),
+                      static_cast<DWORD>(std::max(0, timeoutMs)));
   return impl_->frameCounter.load(std::memory_order_relaxed) != lastCounter;
 }
 
 NativeWaitHandle Player::videoFrameWaitHandle() const {
-  if (!impl_) return {};
   return NativeWaitHandle(impl_->frameReadyEvent.get());
 }
 
+NativeWaitHandle Player::statusChangeWaitHandle() const {
+  return NativeWaitHandle(impl_->statusChangedEvent.get());
+}
+
 bool Player::copyCurrentVideoFrame(VideoFrame* out) {
-  if (!impl_ || !out) return false;
+  if (!out) return false;
   if (!impl_->hasFrame.load(std::memory_order_relaxed)) {
     return false;
   }
@@ -4032,17 +4041,15 @@ bool Player::copyCurrentVideoFrame(VideoFrame* out) {
 }
 
 bool Player::hasVideoFrame() const {
-  return impl_ && impl_->hasFrame.load(std::memory_order_relaxed);
+  return impl_->hasFrame.load(std::memory_order_relaxed);
 }
 
 PlayerState Player::state() const {
-  if (!impl_) return PlayerState::Idle;
   return impl_->playbackState.current();
 }
 
 PlayerDebugInfo Player::debugInfo() const {
   PlayerDebugInfo info{};
-  if (!impl_) return info;
   info.state = impl_->playbackState.current();
   info.currentSerial = impl_->serialControl.currentSerial();
   info.pendingSeekSerial = impl_->serialControl.pendingSeekSerial();
@@ -4086,11 +4093,9 @@ PlayerDebugInfo Player::debugInfo() const {
 }
 
 int Player::sourceWidth() const {
-  if (!impl_) return 0;
   return impl_->sourceWidth.load(std::memory_order_relaxed);
 }
 
 int Player::sourceHeight() const {
-  if (!impl_) return 0;
   return impl_->sourceHeight.load(std::memory_order_relaxed);
 }

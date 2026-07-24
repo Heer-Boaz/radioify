@@ -254,9 +254,10 @@ inline bool isBackMousePressed(const MouseEvent& mouse) {
   return (mouse.buttonState & backMask) != 0;
 }
 
-bool overlayProgressRatioAt(const PlaybackOverlayState& state,
-                            const MouseEvent& mouse, int cellPixelWidth,
-                            int cellPixelHeight, double* outRatio);
+bool windowOverlayProgressRatioAt(bool overlayVisible, int windowWidth,
+                                  int windowHeight, const MouseEvent& mouse,
+                                  int cellPixelWidth, int cellPixelHeight,
+                                  double* outRatio);
 
 WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
                                 int hoverIndex);

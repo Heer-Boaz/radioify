@@ -110,23 +110,35 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
                                 const OpenFileRequests& openFileRequests,
                                 NativeWaitHandle asyncWakeHandle,
                                 NativeWaitHandle notificationAreaHandle,
+                                const VideoWindow& browserWindow,
+                                const AudioPictureInPictureWindow&
+                                    audioPictureInPicture,
                                 DWORD timeoutMs) {
-  std::vector<NativeWaitHandle> handles;
+  NativeWaitHandle handles[8];
+  DWORD handleCount = 0;
   if (NativeWaitHandle inputHandle = input.waitHandle()) {
-    handles.push_back(inputHandle);
+    handles[handleCount++] = inputHandle;
   }
   if (NativeWaitHandle openFilesHandle = openFileRequests.nativeWaitHandle()) {
-    handles.push_back(openFilesHandle);
+    handles[handleCount++] = openFilesHandle;
   }
   if (asyncWakeHandle) {
-    handles.push_back(asyncWakeHandle);
+    handles[handleCount++] = asyncWakeHandle;
   }
   if (notificationAreaHandle) {
-    handles.push_back(notificationAreaHandle);
+    handles[handleCount++] = notificationAreaHandle;
+  }
+  if (browserWindow.IsOpen()) {
+    handles[handleCount++] = browserWindow.InputWaitHandle();
+    handles[handleCount++] = browserWindow.CloseRequestedWaitHandle();
+  }
+  if (audioPictureInPicture.isOpen()) {
+    handles[handleCount++] = audioPictureInPicture.inputWaitHandle();
+    handles[handleCount++] =
+        audioPictureInPicture.closeRequestedWaitHandle();
   }
   return waitForHandlesAndPumpThreadWindowMessages(
-      static_cast<DWORD>(handles.size()),
-      handles.empty() ? nullptr : handles.data(), timeoutMs);
+      handleCount, handleCount > 0 ? handles : nullptr, timeoutMs);
 }
 
 struct WindowClientSize {
@@ -1062,9 +1074,6 @@ int runTui(Options o) {
   std::filesystem::path lastMelodyTrack;
   int lastMelodyTrackIndex = -1;
   bool lastMelodyAnalysisRunning = false;
-  double seekDisplaySec = -1.0;
-  bool seekHoldActive = false;
-  auto seekHoldStart = std::chrono::steady_clock::now();
   std::vector<ScreenCell> windowCells;
   AudioPictureInPictureWindow audioPictureInPicture;
   ConsoleInputPump consoleInputPump;
@@ -1083,12 +1092,6 @@ int runTui(Options o) {
     }
   };
   auto markLayoutDirty = [&]() { markDirty(UiDirtyFlags::Frame | UiDirtyFlags::Layout); };
-  auto markSeekHold = [&](double targetSec) {
-    if (!std::isfinite(targetSec) || targetSec < 0.0) return;
-    seekDisplaySec = targetSec;
-    seekHoldActive = true;
-    seekHoldStart = std::chrono::steady_clock::now();
-  };
   auto midiToNoteName = [](int midi) {
     if (midi < 0 || midi > 127) return std::string("??");
     static const char* kNoteNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
@@ -1442,9 +1445,9 @@ int runTui(Options o) {
 
     playback_overlay::PlaybackOverlayState actionOverlayState;
     const std::filesystem::path nowPlaying = audioGetNowPlaying();
+    const bool audioFinished = audioIsFinished();
     actionOverlayState.audioOk = audioIsReady();
-    actionOverlayState.playPauseAvailable =
-        actionOverlayState.audioOk && !audioIsFinished();
+    actionOverlayState.playPauseAvailable = actionOverlayState.audioOk;
     actionOverlayState.audioSupports50HzToggle =
         actionOverlayState.audioOk && audioSupports50HzToggle();
     actionOverlayState.canPlayPrevious =
@@ -1454,8 +1457,8 @@ int runTui(Options o) {
     actionOverlayState.radioEnabled = audioIsRadioEnabled();
     actionOverlayState.radioLabel = std::string(audioGetRadioFilterLabel());
     actionOverlayState.hz50Enabled = audioIs50HzEnabled();
-    actionOverlayState.paused = audioIsPaused();
-    actionOverlayState.audioFinished = audioIsFinished();
+    actionOverlayState.paused = audioIsPaused() || audioFinished;
+    actionOverlayState.audioFinished = audioFinished;
     actionOverlayState.pictureInPictureAvailable =
       audioPictureInPicture.isOpen() || actionOverlayState.audioOk ||
       !nowPlaying.empty();
@@ -1673,34 +1676,14 @@ int runTui(Options o) {
     didRender = true;
   };
   callbacks.onPlay = [&]() {
-    const std::filesystem::path nowPlaying = audioGetNowPlaying();
-    if (nowPlaying.empty()) {
-      return;
-    }
-    if (audioIsFinished()) {
-      playPlaybackTarget({nowPlaying, audioGetTrackIndex()});
-      return;
-    }
-    if (audioIsReady() && audioIsPaused()) {
-      audioTogglePause();
-      markDirty();
-    }
+    audioPlay();
+    markDirty();
   };
   callbacks.onPause = [&]() {
-    if (audioIsReady() && !audioIsPaused()) {
-      audioTogglePause();
-      markDirty();
-    }
+    audioPause();
+    markDirty();
   };
   callbacks.onTogglePause = [&]() {
-    const std::filesystem::path nowPlaying = audioGetNowPlaying();
-    if (nowPlaying.empty()) {
-      return;
-    }
-    if (audioIsFinished()) {
-      playPlaybackTarget({nowPlaying, audioGetTrackIndex()});
-      return;
-    }
     audioTogglePause();
     markDirty();
   };
@@ -1750,12 +1733,10 @@ int runTui(Options o) {
   };
   callbacks.onSeekBy = [&](int direction) {
     audioSeekBy(direction);
-    markSeekHold(audioGetSeekTargetSec());
     markDirty();
   };
   callbacks.onSeekToRatio = [&](double ratio) {
     audioSeekToRatio(ratio);
-    markSeekHold(audioGetSeekTargetSec());
     markDirty();
   };
   callbacks.onAdjustVolume = [&](float delta) {
@@ -1968,17 +1949,9 @@ int runTui(Options o) {
   auto buildCommands = [&]() {
     std::vector<CommandEntry> cmds;
     cmds.push_back({"Play/Pause", "Space", true, [&]() {
-                      if (audioIsFinished()) {
-                        const std::filesystem::path nowPlaying =
-                            audioGetNowPlaying();
-                        if (!nowPlaying.empty()) {
-                          playPlaybackTarget(
-                              {nowPlaying, audioGetTrackIndex()});
-                          return;
-                        }
+                      if (callbacks.onTogglePause) {
+                        callbacks.onTogglePause();
                       }
-                      audioTogglePause();
-                      markDirty();
                     }});
     if (audioPictureInPicture.isOpen() || !audioGetNowPlaying().empty() ||
         audioIsReady()) {
@@ -2795,7 +2768,7 @@ int runTui(Options o) {
         reduceTimeout(std::chrono::milliseconds(50));
       }
       if (o.play &&
-          (audioIsReady() || !audioGetNowPlaying().empty() || seekHoldActive)) {
+          (audioIsReady() || !audioGetNowPlaying().empty())) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
       if (audioPictureInPicture.isOpen()) {
@@ -2811,7 +2784,8 @@ int runTui(Options o) {
       DWORD waitTimeout = computeWakeTimeout(now);
       DWORD waitResult = waitForBrowserWake(
           input, openFileRequests, browserThumbnailWakeHandle(),
-          notificationAreaControls.nativeWaitHandle(), waitTimeout);
+          notificationAreaControls.nativeWaitHandle(), tuiWindow,
+          audioPictureInPicture, waitTimeout);
       if (consumeBrowserThumbnailWake()) {
         markDirty(UiDirtyFlags::Async);
       } else if (waitResult == WAIT_TIMEOUT) {
@@ -3103,27 +3077,11 @@ int runTui(Options o) {
       double currentSec = audioReady ? audioGetTimeSec() : 0.0;
       double totalSec = audioReady ? audioGetTotalSec() : -1.0;
       double displaySec = currentSec;
-      if (audioReady) {
-        if (audioIsSeeking()) {
-          double seekSec = audioGetSeekTargetSec();
-          if (seekSec >= 0.0) {
-            displaySec = seekSec;
-            seekDisplaySec = seekSec;
-            seekHoldActive = true;
-            seekHoldStart = now;
-          }
-        } else if (seekHoldActive) {
-          double diff = std::abs(currentSec - seekDisplaySec);
-          auto holdAge = now - seekHoldStart;
-          if ((audioIsPrimed() && diff <= 0.25) ||
-              holdAge > std::chrono::seconds(2)) {
-            seekHoldActive = false;
-          } else {
-            displaySec = seekDisplaySec;
-          }
+      if (audioReady && audioIsSeeking()) {
+        double seekSec = audioGetSeekTargetSec();
+        if (seekSec >= 0.0 && std::isfinite(seekSec)) {
+          displaySec = seekSec;
         }
-      } else {
-        seekHoldActive = false;
       }
       int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
       double ratio = 0.0;

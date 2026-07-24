@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 
+#include "core/native_wait_handle.h"
 #include "consoleinput.h"
 #include "windows_file_drop_apartment.h"
 #include "input_queue.h"
@@ -31,6 +32,7 @@ class WindowInputController {
   void clear();
   void push(InputEvent ev);
   bool poll(InputEvent& ev);
+  NativeWaitHandle nativeWaitHandle() const;
 
   bool beginWindowThread();
   void endWindowThread();

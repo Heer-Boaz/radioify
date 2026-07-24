@@ -208,12 +208,6 @@ bool audioPlaybackDeviceEnsureRunning() {
   return ensurePlaybackDeviceRunningInternalUnlocked();
 }
 
-bool audioPlaybackDeviceRecreate() {
-  std::lock_guard<std::mutex> lock(gPlaybackDeviceMutex);
-  uninitPlaybackDeviceUnlocked();
-  return initPlaybackDeviceUnlocked();
-}
-
 void audioPlaybackDeviceUninit() {
   std::lock_guard<std::mutex> lock(gPlaybackDeviceMutex);
   uninitPlaybackDeviceUnlocked();

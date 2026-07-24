@@ -87,7 +87,7 @@ bool PlaybackOutputController::pollInput(ConsoleInput& input, InputEvent& ev) {
 bool PlaybackOutputController::waitForActivity(
     ConsoleInput& input, int timeoutMs, NativeWaitHandle extraHandle,
     NativeWaitHandle secondExtraHandle, NativeWaitHandle thirdExtraHandle) {
-  NativeWaitHandle handles[5];
+  NativeWaitHandle handles[6];
   DWORD handleCount = 0;
   if (NativeWaitHandle inputHandle = input.waitHandle()) {
     handles[handleCount++] = inputHandle;
@@ -100,6 +100,12 @@ bool PlaybackOutputController::waitForActivity(
   }
   if (thirdExtraHandle) {
     handles[handleCount++] = thirdExtraHandle;
+  }
+  if (impl_->presentation.window().IsOpen()) {
+    if (NativeWaitHandle windowInputHandle =
+            impl_->presentation.window().InputWaitHandle()) {
+      handles[handleCount++] = windowInputHandle;
+    }
   }
   if (impl_->presentation.windowActive()) {
     if (NativeWaitHandle closeHandle =

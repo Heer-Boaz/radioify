@@ -19,6 +19,15 @@ enum class PlaybackSessionState : uint8_t {
   Exiting,
 };
 
+namespace playback_session_state {
+
+inline bool toggleRequestsPause(PlaybackSessionState sessionState,
+                                bool playerEnded) {
+  return sessionState == PlaybackSessionState::Active && !playerEnded;
+}
+
+}  // namespace playback_session_state
+
 enum class WindowThreadState : uint8_t {
   Disabled,
   Enabled,

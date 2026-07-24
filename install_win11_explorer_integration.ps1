@@ -3,6 +3,7 @@ param(
     [switch]$Rebuild,
     [switch]$SkipBuild,
     [switch]$ReplaceExisting,
+    [switch]$RestartExplorer,
     [string]$LogPath
 )
 
@@ -43,6 +44,9 @@ if ($SkipBuild) {
 
 if ($WhatIfPreference) {
     [void]$PSCmdlet.ShouldProcess($integrationDir, "Install Radioify Windows 11 Explorer integration")
+    if ($RestartExplorer) {
+        [void]$PSCmdlet.ShouldProcess("Windows Explorer", "Restart after installing Radioify shell integration")
+    }
     return
 }
 
@@ -64,3 +68,10 @@ Invoke-RadioifyWindowsExplorerIntegrationScript `
     -Parameters $installParams `
     -LogPath $LogPath `
     -UserCommandHint ".\install_win11_explorer_integration.ps1"
+
+if ($RestartExplorer -and
+    $PSCmdlet.ShouldProcess("Windows Explorer", "Restart after installing Radioify shell integration")) {
+    Write-Host "Restarting Windows Explorer so it reloads the updated shell extension..."
+    $restartedExplorer = Restart-RadioifyExplorerShell
+    Write-Host "Windows Explorer restarted as PID $($restartedExplorer.ProcessId)."
+}

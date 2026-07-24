@@ -44,7 +44,10 @@ void radioifyExplorerLockServer(bool lock) noexcept {
 }
 
 bool radioifyExplorerCanUnload() noexcept {
-  return g_objectCount == 0 && g_serverLockCount == 0;
+  const LONG objectCount = InterlockedCompareExchange(&g_objectCount, 0, 0);
+  const LONG serverLockCount =
+      InterlockedCompareExchange(&g_serverLockCount, 0, 0);
+  return objectCount == 0 && serverLockCount == 0;
 }
 
 HRESULT duplicateString(std::wstring_view text, LPWSTR* out) noexcept {

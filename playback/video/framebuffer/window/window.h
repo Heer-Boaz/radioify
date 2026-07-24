@@ -179,6 +179,7 @@ public:
     void ShowWindow(bool show);
     bool PollEvents();
     bool PollInput(InputEvent& ev);
+    NativeWaitHandle InputWaitHandle() const;
     bool ConsumeCloseRequested();
     NativeWaitHandle CloseRequestedWaitHandle() const;
     bool EnableFileDrop();

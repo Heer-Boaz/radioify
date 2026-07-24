@@ -56,12 +56,6 @@ const CLSID& radioifyExplorerThumbnailClsid() noexcept {
   return clsid;
 }
 
-bool isExistingDirectory(const std::wstring& path) noexcept {
-  const DWORD attributes = GetFileAttributesW(path.c_str());
-  return attributes != INVALID_FILE_ATTRIBUTES &&
-         (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-}
-
 std::wstring findRadioifyExecutable() {
   const std::wstring modulePath = radioifyExplorerModulePath();
   if (modulePath.empty()) return {};
@@ -163,10 +157,6 @@ HRESULT resolveSinglePathSelection(IShellItemArray* items,
   outPath->assign(fileSystemPath);
   CoTaskMemFree(fileSystemPath);
 
-  if (!isExistingFile(*outPath) && !isExistingDirectory(*outPath)) {
-    outPath->clear();
-    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
-  }
   return S_OK;
 }
 
@@ -183,10 +173,6 @@ HRESULT resolveShellItemDirectory(IShellItem* item, std::wstring* outPath) noexc
 
   outPath->assign(fileSystemPath);
   CoTaskMemFree(fileSystemPath);
-  if (!isExistingDirectory(*outPath)) {
-    outPath->clear();
-    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
-  }
   return S_OK;
 }
 
@@ -250,7 +236,7 @@ HRESULT launchRadioify(const std::wstring& selectedPath,
 
   SHELLEXECUTEINFOW executeInfo{};
   executeInfo.cbSize = sizeof(executeInfo);
-  executeInfo.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+  executeInfo.fMask = SEE_MASK_ASYNCOK | SEE_MASK_FLAG_NO_UI;
   executeInfo.lpVerb = L"open";
   executeInfo.lpFile = radioifyExe.c_str();
   executeInfo.lpParameters = arguments.c_str();
@@ -302,8 +288,8 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
   }
 
   STDMETHODIMP SetSelection(IShellItemArray* items) override {
-    selection_.reset(items);
     if (items) items->AddRef();
+    selection_.reset(items);
     return S_OK;
   }
 
@@ -315,8 +301,8 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
   }
 
   STDMETHODIMP SetSite(IUnknown* site) override {
-    site_.reset(site);
     if (site) site->AddRef();
+    site_.reset(site);
     return S_OK;
   }
 
@@ -362,19 +348,13 @@ class RadioifyExplorerCommand final : public IExplorerCommand,
     return S_OK;
   }
 
-  STDMETHODIMP GetState(IShellItemArray* items, BOOL,
+  STDMETHODIMP GetState(IShellItemArray*, BOOL,
                         EXPCMDSTATE* commandState) override {
-    try {
-      if (!commandState) return E_POINTER;
-      std::wstring selectedPath;
-      const HRESULT hr =
-          resolveTarget(items, &selectedPath);
-      *commandState = SUCCEEDED(hr) ? ECS_ENABLED : ECS_HIDDEN;
-      return S_OK;
-    } catch (...) {
-      if (commandState) *commandState = ECS_HIDDEN;
-      return S_OK;
-    }
+    if (!commandState) return E_POINTER;
+    // Applicability is already constrained by the package manifest, so state
+    // queries require no item inspection or deferred background work.
+    *commandState = ECS_ENABLED;
+    return S_OK;
   }
 
   STDMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) override {

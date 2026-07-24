@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -57,21 +58,21 @@ void appendAudioTimingLogLine(const char* line) {
 #endif
 }
 
-bool audioPlaybackFinishSeekPipelineTransition(AudioState* state) {
-  if (!state) return false;
-  if (audioPipelineTransitionFinishCommit(state->pipelineTransition)) {
-    state->seekRequested.store(false, std::memory_order_relaxed);
+bool audioPlaybackFinishSeekPipelineTransition(AudioState& state) {
+  if (audioPipelineTransitionFinishCommit(state.pipelineTransition)) {
+    state.seekRequested.store(false, std::memory_order_release);
     return true;
   }
   return false;
 }
 
 static std::chrono::steady_clock::duration playbackPipelineDrainBudget(
-    const AudioState* state) {
-  const uint32_t sampleRate = std::max(1u, state ? state->sampleRate : 48000u);
+    const AudioState& state) {
+  const uint32_t sampleRate = state.sampleRate;
+  assert(sampleRate > 0);
   const uint32_t transitionFrames = audioPipelineTransitionFrames(sampleRate);
   const uint32_t callbackFrames =
-      state ? state->lastCallbackFrames.load(std::memory_order_relaxed) : 0;
+      state.lastCallbackFrames.load(std::memory_order_relaxed);
   const uint64_t observedCallbackFrames =
       callbackFrames > 0 ? callbackFrames : transitionFrames;
   const uint64_t waitFrames =
@@ -81,35 +82,35 @@ static std::chrono::steady_clock::duration playbackPipelineDrainBudget(
   return std::chrono::microseconds(waitUs);
 }
 
-void drainPlaybackPipelineForReplacement(AudioState* state) {
-  if (!state || !gAudio.deviceReady ||
-      !state->audioPrimed.load(std::memory_order_relaxed)) {
+void drainPlaybackPipelineForReplacement(AudioState& state) {
+  if (!gAudio.deviceReady ||
+      !state.audioPrimed.load(std::memory_order_relaxed)) {
     return;
   }
-  if (state->paused.load(std::memory_order_relaxed) ||
-      state->hold.load(std::memory_order_relaxed)) {
+  if (state.paused.load(std::memory_order_relaxed) ||
+      state.hold.load(std::memory_order_relaxed)) {
     return;
   }
 
-  queuedAudioSourceCancelStreamResets(state);
-  audioPipelineTransitionRequestDiscontinuity(state->pipelineTransition,
-                                              state->sampleRate);
-  state->audioQueueCv.notify_all();
-  state->radioDspCv.notify_all();
+  queuedAudioSourceCancelStreamResets(&state);
+  audioPipelineTransitionRequestDiscontinuity(state.pipelineTransition,
+                                              state.sampleRate);
+  state.audioQueueCv.notify_all();
+  state.radioDspCv.notify_all();
 
   const auto deadline =
       std::chrono::steady_clock::now() + playbackPipelineDrainBudget(state);
   while (std::chrono::steady_clock::now() < deadline) {
-    if (audioPipelineTransitionBeginCommit(state->pipelineTransition)) {
+    if (audioPipelineTransitionBeginCommit(state.pipelineTransition)) {
       return;
     }
-    if (!audioPipelineTransitionActive(state->pipelineTransition)) {
+    if (!audioPipelineTransitionActive(state.pipelineTransition)) {
       return;
     }
-    std::unique_lock<std::mutex> lock(state->audioQueueMutex);
-    state->audioQueueCv.wait_until(lock, deadline);
+    std::unique_lock<std::mutex> lock(state.audioQueueMutex);
+    state.audioQueueCv.wait_until(lock, deadline);
   }
-  audioPipelineTransitionBeginCommit(state->pipelineTransition);
+  audioPipelineTransitionBeginCommit(state.pipelineTransition);
 }
 
 void stopAndUninitActiveDecoder() {
@@ -156,6 +157,7 @@ void resetPlaybackStateForLoad(uint64_t startFrame,
   gAudio.state.audioPrimed.store(false);
   gAudio.state.seekRequested.store(false);
   gAudio.state.pendingSeekFrames.store(0);
+  gAudio.state.seekPresentation.reset();
   gAudio.state.finished.store(false);
   gAudio.state.paused.store(false);
   gAudio.state.audioPaddingFrames.store(0);
@@ -199,7 +201,7 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
     return false;
   }
 
-  drainPlaybackPipelineForReplacement(&gAudio.state);
+  drainPlaybackPipelineForReplacement(gAudio.state);
   gAudio.state.sourcePreparing.store(true, std::memory_order_release);
   stopAndUninitActiveDecoder();
   resetPlaybackStateForLoad(startFrame, true);
@@ -278,7 +280,7 @@ bool ensureChannels(uint32_t newChannels) {
   bool hadTrack = gAudio.decoderReady && !gAudio.nowPlaying.empty();
   int trackIndex = gAudio.trackIndex;
 
-  drainPlaybackPipelineForReplacement(&gAudio.state);
+  drainPlaybackPipelineForReplacement(gAudio.state);
   audioPlaybackDeviceUninit();
   if (gAudio.decoderReady) {
     stopAndUninitActiveDecoder();
@@ -298,7 +300,7 @@ void stopPlayback() {
     stopAuditionWorker();
     gAudio.audition.resumeValid = false;
   }
-  drainPlaybackPipelineForReplacement(&gAudio.state);
+  drainPlaybackPipelineForReplacement(gAudio.state);
   audioPlaybackDeviceUninit();
   if (gAudio.decoderReady) {
     stopAndUninitActiveDecoder();
@@ -308,6 +310,7 @@ void stopPlayback() {
   gAudio.state.finished.store(false);
   gAudio.state.seekRequested.store(false);
   gAudio.state.pendingSeekFrames.store(0);
+  gAudio.state.seekPresentation.reset();
   gAudio.state.sourcePreparing.store(false, std::memory_order_release);
   audioPipelineTransitionReset(gAudio.state.pipelineTransition);
   gAudio.state.audioPrimed.store(false);
@@ -388,9 +391,11 @@ static void requestAudioSeekFrame(int64_t target) {
     target = static_cast<int64_t>(total);
   }
   gAudio.state.pendingSeekFrames.store(target);
-  gAudio.state.seekRequested.store(true);
+  gAudio.state.seekRequested.store(true, std::memory_order_release);
+  gAudio.state.seekPresentation.request();
   gAudio.state.finished.store(false);
   gAudio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
+  gAudio.state.processedAtEnd.store(false, std::memory_order_relaxed);
   gAudio.state.audioPrimed.store(false);
   audioPipelineTransitionRequestDiscontinuity(gAudio.state.pipelineTransition,
                                               gAudio.state.sampleRate);
@@ -444,7 +449,8 @@ bool audioIsSeeking() {
   if (!gAudio.decoderReady) {
     return false;
   }
-  return gAudio.state.seekRequested.load();
+  return gAudio.state.seekRequested.load(std::memory_order_acquire) ||
+         gAudio.state.seekPresentation.pending();
 }
 
 double audioGetSeekTargetSec() {
@@ -459,11 +465,6 @@ double audioGetSeekTargetSec() {
     target = static_cast<int64_t>(total);
   }
   return static_cast<double>(target) / gAudio.sampleRate;
-}
-
-bool audioIsPrimed() {
-  if (!gAudio.decoderReady) return false;
-  return gAudio.state.audioPrimed.load();
 }
 
 bool audioIsPaused() {
@@ -513,26 +514,39 @@ AudioPerfStats audioGetPerfStats() {
   return stats;
 }
 
-void audioTogglePause() {
+void audioPause() {
   if (!gAudio.decoderReady) return;
-  const bool wasPaused = gAudio.state.paused.load(std::memory_order_relaxed);
-  if (!wasPaused) {
-    gAudio.state.paused.store(true, std::memory_order_relaxed);
-    return;
-  }
+  if (gAudio.state.finished.load(std::memory_order_relaxed)) return;
+  gAudio.state.paused.store(true, std::memory_order_relaxed);
+}
 
-  // Resume should reacquire the current output endpoint even when the backend
-  // stayed logically started during a Windows default-device switch.
-  if (!audioPlaybackDeviceRecreate()) {
+void audioPlay() {
+  if (!gAudio.decoderReady) return;
+  const bool wasPaused =
+      gAudio.state.paused.load(std::memory_order_relaxed);
+  const bool wasFinished =
+      gAudio.state.finished.load(std::memory_order_relaxed);
+  if (!wasPaused && !wasFinished) return;
+
+  // The device owner recreates only when Windows reported a stopped, rerouted,
+  // interrupted, or otherwise invalid endpoint.
+  if (!audioPlaybackDeviceEnsureRunning()) {
     gAudio.lastInitError = "Failed to restore audio output device.";
     return;
   }
 
   gAudio.lastInitError.clear();
-  gAudio.state.audioPrimed.store(false, std::memory_order_relaxed);
+  gAudio.state.paused.store(false, std::memory_order_relaxed);
+  const bool externalStream =
+      gAudio.state.externalStream.load(std::memory_order_relaxed);
+  if (wasFinished && !externalStream) {
+    requestAudioSeekFrame(0);
+    return;
+  }
+
   gAudio.state.finished.store(false, std::memory_order_relaxed);
   gAudio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
-  if (gAudio.state.externalStream.load(std::memory_order_relaxed)) {
+  if (externalStream) {
     gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
     gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
     gAudio.state.audioClock.reset(
@@ -540,7 +554,16 @@ void audioTogglePause() {
   }
   audioPipelineTransitionRequestOutputFadeIn(gAudio.state.pipelineTransition,
                                              gAudio.state.sampleRate);
-  gAudio.state.paused.store(false, std::memory_order_relaxed);
+}
+
+void audioTogglePause() {
+  if (!gAudio.decoderReady) return;
+  if (gAudio.state.paused.load(std::memory_order_relaxed) ||
+      gAudio.state.finished.load(std::memory_order_relaxed)) {
+    audioPlay();
+  } else {
+    audioPause();
+  }
 }
 
 void audioSeekBy(int direction) {

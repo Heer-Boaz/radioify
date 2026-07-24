@@ -23,6 +23,7 @@ radioify_add_module_object_library(radioify_audio
   ${CMAKE_CURRENT_SOURCE_DIR}/radio_filter_mode.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio_filter_transition.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio_playback.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/seek_presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/spsc_audio_ring.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/spsc_audio_timeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_sources/m4a_playback_source.cpp

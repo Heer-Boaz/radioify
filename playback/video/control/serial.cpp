@@ -172,12 +172,14 @@ void Controller::clearSeekFailure() {
   seekFailed_.store(false, std::memory_order_relaxed);
 }
 
-void Controller::clearPendingPresentation(int serial) {
-  if (pendingSeekSerial_.load(std::memory_order_relaxed) != serial) {
-    return;
+bool Controller::clearPendingPresentation(int serial) {
+  int expected = serial;
+  if (!pendingSeekSerial_.compare_exchange_strong(
+          expected, 0, std::memory_order_relaxed)) {
+    return false;
   }
-  pendingSeekSerial_.store(0, std::memory_order_relaxed);
   seekDisplayUs_.store(0, std::memory_order_relaxed);
+  return true;
 }
 
 int Controller::currentSerial() const {

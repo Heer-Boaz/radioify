@@ -115,7 +115,7 @@ playback_frame_output::LogLineWriter PlaybackSessionHost::timingSink() const {
     }
   };
 #else
-  return [](const std::string& line) { (void)line; };
+  return {};
 #endif
 }
 

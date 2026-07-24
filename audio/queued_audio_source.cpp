@@ -178,7 +178,7 @@ void finishProcessingCommitWhenPrimed(AudioState* state,
 
   bool finished = false;
   if (*processingCommit == ProcessingCommit::SourceSeek) {
-    finished = audioPlaybackFinishSeekPipelineTransition(state);
+    finished = audioPlaybackFinishSeekPipelineTransition(*state);
   } else {
     finished =
         audioPipelineTransitionFinishCommit(state->pipelineTransition);

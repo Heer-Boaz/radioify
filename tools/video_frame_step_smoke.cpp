@@ -138,7 +138,8 @@ uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int) {
 uint64_t audioStreamUpdateCounter() { return 0; }
 bool audioIsPaused() { return true; }
 bool audioIsFinished() { return true; }
-void audioTogglePause() {}
+void audioPlay() {}
+void audioPause() {}
 void audioSetHold(bool) {}
 AudioPerfStats audioGetPerfStats() { return {}; }
 
@@ -343,7 +344,7 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: video_frame_step_smoke <video> [seek_us] "
                  "[step_count] [mode]\n"
                  "Modes: startup, resume, forward-resume, mixed-resume, "
-                 "rapid-resume, resume-during-step\n";
+                 "rapid-resume, resume-during-step, ended-replay\n";
     return 2;
   }
 
@@ -367,6 +368,7 @@ int main(int argc, char** argv) {
   bool resumeAfterMixed = false;
   bool rapidResume = false;
   bool resumeDuringStep = false;
+  bool replayAfterEnd = false;
   bool verifyStartup = false;
   if (argc >= 5) {
     const std::string mode = argv[4];
@@ -376,12 +378,14 @@ int main(int argc, char** argv) {
     resumeAfterMixed = mode == "mixed-resume";
     rapidResume = mode == "rapid-resume";
     resumeDuringStep = mode == "resume-during-step";
+    replayAfterEnd = mode == "ended-replay";
     if (!verifyStartup && !resumeAfterPrevious && !resumeAfterForward &&
-        !resumeAfterMixed && !rapidResume && !resumeDuringStep) {
+        !resumeAfterMixed && !rapidResume && !resumeDuringStep &&
+        !replayAfterEnd) {
       std::cerr << "video_frame_step_smoke: invalid mode: " << argv[4]
-                << " (expected 'startup', 'resume', 'forward-resume', "
-                   "'mixed-resume', 'rapid-resume', or "
-                   "'resume-during-step')\n";
+                 << " (expected 'startup', 'resume', 'forward-resume', "
+                    "'mixed-resume', 'rapid-resume', or "
+                    "'resume-during-step', or 'ended-replay')\n";
       return 2;
     }
   }
@@ -445,7 +449,10 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  const int64_t seekUs = chooseSeekUs(player, requestedSeekUs);
+  const int64_t seekUs =
+      replayAfterEnd && player.durationUs() > 500000
+          ? player.durationUs() - 500000
+          : chooseSeekUs(player, requestedSeekUs);
   std::cout << "video_frame_step_smoke: duration_us=" << player.durationUs()
             << " seek_us=" << seekUs << '\n';
 
@@ -456,7 +463,8 @@ int main(int argc, char** argv) {
   if (!waitFor(player, kDefaultTimeoutMs, "seek_presented",
                [&](const PlayerDebugInfo& info) {
                  return info.hasVideoFrame && info.seekInFlightSerial == 0 &&
-                        info.pendingSeekSerial == 0 &&
+                         info.pendingSeekSerial == 0 &&
+                         !player.seekPending() &&
                         player.videoFrameCounter() > beforeSeekCounter &&
                         info.lastPresentedPtsUs > 0;
                },
@@ -466,6 +474,42 @@ int main(int argc, char** argv) {
   }
 
   const int64_t boundaryPtsUs = boundary.lastPresentedPtsUs;
+  if (replayAfterEnd) {
+    player.setVideoPaused(false);
+    if (!waitFor(player, kDefaultTimeoutMs, "ended",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.state == PlayerState::Ended &&
+                          info.seekInFlightSerial == 0 &&
+                          !player.seekPending();
+                 })) {
+      player.close();
+      return 1;
+    }
+
+    const uint64_t beforeReplayCounter = player.videoFrameCounter();
+    player.requestSeek(0);
+    player.setVideoPaused(false);
+    PlayerDebugInfo replayed{};
+    if (!waitFor(player, kDefaultTimeoutMs, "ended_replay",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.state == PlayerState::Playing &&
+                          info.seekInFlightSerial == 0 &&
+                          info.pendingSeekSerial == 0 &&
+                          !player.seekPending() &&
+                          player.videoFrameCounter() > beforeReplayCounter &&
+                          info.lastPresentedPtsUs < 500000;
+                 },
+                 &replayed)) {
+      player.close();
+      return 1;
+    }
+    std::cout << "video_frame_step_smoke: PASS ended_pts_us="
+              << boundaryPtsUs
+              << " replayed_pts_us=" << replayed.lastPresentedPtsUs << '\n';
+    player.close();
+    return 0;
+  }
+
   if (rapidResume) {
     const uint64_t beforeRapidCounter = player.videoFrameCounter();
     for (size_t i = 0; i < stepCount; ++i) {

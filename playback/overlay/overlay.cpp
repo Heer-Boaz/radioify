@@ -750,61 +750,32 @@ std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state) {
   return state.windowTitle;
 }
 
-static bool terminalOverlayProgressRatioAt(const PlaybackOverlayState& state,
-                                           const MouseEvent& mouse,
-                                           double* outRatio) {
-  if (!state.overlayVisible) return false;
-  OverlayCellLayout layout = layoutPlaybackOverlayCells(
-      state, state.screenWidth, state.screenHeight, -1);
-  ProgressBarHitTestInput hit;
-  hit.x = mouse.pos.X;
-  hit.y = mouse.pos.Y;
-  hit.barX = layout.progressBarX;
-  hit.barY = layout.progressBarY;
-  hit.barWidth = layout.progressBarWidth;
-  return progressBarRatioAt(hit, outRatio);
-}
-
-static bool windowOverlayProgressRatioAt(const PlaybackOverlayState& state,
-                                         const MouseEvent& mouse,
-                                         int cellPixelWidth,
-                                         int cellPixelHeight,
-                                         double* outRatio) {
-  if (!state.overlayVisible) return false;
-  if (state.windowWidth <= 0 || state.windowHeight <= 0) return false;
+bool windowOverlayProgressRatioAt(bool overlayVisible, int windowWidth,
+                                  int windowHeight, const MouseEvent& mouse,
+                                  int cellPixelWidth, int cellPixelHeight,
+                                  double* outRatio) {
+  if (!overlayVisible || windowWidth <= 0 || windowHeight <= 0) return false;
   const int cellWidth = std::max(1, cellPixelWidth);
   const int cellHeight = std::max(1, cellPixelHeight);
-  const int cols = overlayCellCountForPixels(state.windowWidth, cellWidth);
-  const int rows = overlayCellCountForPixels(state.windowHeight, cellHeight);
-  OverlayCellLayout layout =
-      layoutPlaybackOverlayCells(state, cols, rows, -1);
-  if (layout.progressBarWidth <= 0) return false;
+  const int cols = overlayCellCountForPixels(windowWidth, cellWidth);
+  const int rows = overlayCellCountForPixels(windowHeight, cellHeight);
+  const int contentInset = cols > 2 ? 1 : 0;
   const double unitWidth =
-      static_cast<double>(std::min(state.windowWidth, cols * cellWidth)) /
+      static_cast<double>(std::min(windowWidth, cols * cellWidth)) /
       static_cast<double>(std::max(1, cols));
   const double unitHeight =
-      static_cast<double>(std::min(state.windowHeight, rows * cellHeight)) /
+      static_cast<double>(std::min(windowHeight, rows * cellHeight)) /
       static_cast<double>(std::max(1, rows));
 
   ProgressBarHitTestInput hit;
   hit.x = mouse.pos.X;
   hit.y = mouse.pos.Y;
-  hit.barX = layout.progressBarX;
-  hit.barY = layout.progressBarY;
-  hit.barWidth = layout.progressBarWidth;
+  hit.barX = contentInset;
+  hit.barY = rows - 1;
+  hit.barWidth = std::max(1, cols - contentInset * 2);
   hit.unitWidth = unitWidth;
   hit.unitHeight = unitHeight;
   return progressBarRatioAt(hit, outRatio);
-}
-
-bool overlayProgressRatioAt(const PlaybackOverlayState& state,
-                            const MouseEvent& mouse, int cellPixelWidth,
-                            int cellPixelHeight, double* outRatio) {
-  const bool windowEvent = isWindowMouseEvent(mouse);
-  return windowEvent ? windowOverlayProgressRatioAt(
-                           state, mouse, cellPixelWidth, cellPixelHeight,
-                           outRatio)
-                     : terminalOverlayProgressRatioAt(state, mouse, outRatio);
 }
 
 int terminalOverlayControlAt(const PlaybackOverlayState& state,

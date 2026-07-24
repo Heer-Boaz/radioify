@@ -39,7 +39,7 @@ void cancelPauseForOpenHandoff(
   }
 
   if (audioPaused) {
-    audioTogglePause();
+    audioPlay();
   } else if (view.player) {
     view.player->setVideoPaused(false);
   }

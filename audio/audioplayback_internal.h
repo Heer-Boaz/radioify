@@ -27,6 +27,7 @@
 #include "psfaudio.h"
 #include "queued_audio_source.h"
 #include "radio_playback.h"
+#include "seek_presentation.h"
 #include "spsc_audio_ring.h"
 #include "spsc_audio_timeline.h"
 #include "vgmaudio.h"
@@ -66,6 +67,7 @@ struct AudioState {
   const AudioBackendHandlers* backend = nullptr;
   std::atomic<bool> seekRequested{false};
   std::atomic<int64_t> pendingSeekFrames{0};
+  AudioSeekPresentation seekPresentation;
   std::atomic<uint64_t> framesPlayed{0};
   std::atomic<uint64_t> callbackCount{0};
   std::atomic<uint64_t> framesRequested{0};
@@ -142,8 +144,8 @@ struct AudioPlaybackState {
 extern AudioPlaybackState gAudio;
 
 void appendAudioTimingLogLine(const char* line);
-void drainPlaybackPipelineForReplacement(AudioState* state);
-bool audioPlaybackFinishSeekPipelineTransition(AudioState* state);
+void drainPlaybackPipelineForReplacement(AudioState& state);
+bool audioPlaybackFinishSeekPipelineTransition(AudioState& state);
 void dataCallback(ma_device* device, void* output, const void* input,
                   ma_uint32 frameCount);
 void stopAndUninitActiveDecoder();

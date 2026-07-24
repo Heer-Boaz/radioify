@@ -109,7 +109,6 @@ double audioGetTotalSec();
 bool audioIsSeeking();
 double audioGetSeekTargetSec();
 
-bool audioIsPrimed();
 bool audioIsPaused();
 bool audioIsFinished();
 bool audioIsRadioEnabled();
@@ -119,6 +118,8 @@ bool audioIsHolding();
 
 AudioPerfStats audioGetPerfStats();
 
+void audioPlay();
+void audioPause();
 void audioTogglePause();
 void audioSeekBy(int direction);
 void audioSeekToRatio(double ratio);

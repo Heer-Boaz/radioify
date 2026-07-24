@@ -76,6 +76,7 @@ class Player {
   bool audioOk() const;
   bool audioFinished() const;
 
+  bool seekPending() const;
   bool isSeeking() const;
   bool isBuffering() const;
   bool isEnded() const;
@@ -88,6 +89,7 @@ class Player {
   uint64_t videoFrameCounter() const;
   bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;
   NativeWaitHandle videoFrameWaitHandle() const;
+  NativeWaitHandle statusChangeWaitHandle() const;
 
   bool copyCurrentVideoFrame(VideoFrame* out);
   bool hasVideoFrame() const;

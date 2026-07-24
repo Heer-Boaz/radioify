@@ -52,8 +52,8 @@
         <com:Extension Category="windows.comServer">
           <com:ComServer>
             <com:SurrogateServer
-              AppId="@RADIOIFY_WIN11_EXPLORER_APPID@"
-              DisplayName="Radioify Explorer Command">
+              AppId="@RADIOIFY_WIN11_EXPLORER_COMMAND_APPID@"
+              DisplayName="Radioify Explorer Commands">
               <com:Class
                 Id="@RADIOIFY_WIN11_EXPLORER_COMMAND_GUID@"
                 Path="radioify_explorer.dll"
@@ -62,6 +62,10 @@
                 Id="@RADIOIFY_WIN11_EXPLORER_NON_ASCII_COMMAND_GUID@"
                 Path="radioify_explorer.dll"
                 ThreadingModel="STA" />
+            </com:SurrogateServer>
+            <com:SurrogateServer
+              AppId="@RADIOIFY_WIN11_EXPLORER_THUMBNAIL_APPID@"
+              DisplayName="Radioify Explorer Thumbnail Provider">
               <com:Class
                 Id="@RADIOIFY_WIN11_EXPLORER_THUMBNAIL_GUID@"
                 Path="radioify_explorer.dll"

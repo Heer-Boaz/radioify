@@ -1,7 +1,6 @@
 #include "audio_picture_in_picture_window.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <utility>
@@ -81,6 +80,14 @@ RECT cellRectToPixels(int x, int y, int width, int height, int cellWidth,
 }  // namespace
 
 bool AudioPictureInPictureWindow::isOpen() const { return window_.IsOpen(); }
+
+NativeWaitHandle AudioPictureInPictureWindow::inputWaitHandle() const {
+  return window_.InputWaitHandle();
+}
+
+NativeWaitHandle AudioPictureInPictureWindow::closeRequestedWaitHandle() const {
+  return window_.CloseRequestedWaitHandle();
+}
 
 bool AudioPictureInPictureWindow::open() {
   lastError_.clear();
@@ -251,36 +258,18 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
                                 ? buildDefaultNowPlayingLabel()
                                 : context.nowPlayingLabel;
 
-  const auto now = std::chrono::steady_clock::now();
   const bool audioReady = audioIsReady();
   const bool audioSeeking = audioIsSeeking();
+  const bool audioFinished = audioIsFinished();
   const double totalSec = audioReady ? audioGetTotalSec() : -1.0;
   const double currentSec = audioReady ? audioGetTimeSec() : 0.0;
   double displaySec = currentSec;
-  if (audioReady) {
-    if (audioSeeking) {
-      const double seekSec = audioGetSeekTargetSec();
-      if (seekSec >= 0.0 && std::isfinite(seekSec)) {
-        displaySec = seekSec;
-        seekDisplaySec_ = seekSec;
-        seekHoldActive_ = true;
-        seekHoldStart_ = now;
-      }
-    } else if (seekHoldActive_) {
-      const double diff = std::abs(currentSec - seekDisplaySec_);
-      const auto holdAge = now - seekHoldStart_;
-      if ((audioIsPrimed() && diff <= 0.25) ||
-          holdAge > std::chrono::seconds(2)) {
-        seekHoldActive_ = false;
-      } else {
-        displaySec = seekDisplaySec_;
-      }
+  if (audioReady && audioSeeking) {
+    const double seekSec = audioGetSeekTargetSec();
+    if (seekSec >= 0.0 && std::isfinite(seekSec)) {
+      displaySec = seekSec;
     }
-  } else if (seekHoldActive_ &&
-             now - seekHoldStart_ > std::chrono::seconds(2)) {
-    seekHoldActive_ = false;
   }
-  const bool audioDisplayReady = audioReady || seekHoldActive_;
   double ratio = 0.0;
   if (std::isfinite(totalSec) && totalSec > 0.0) {
     ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
@@ -288,8 +277,8 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
 
   playback_overlay::PlaybackOverlayInputs overlayInputs;
   overlayInputs.windowTitle = title;
-  overlayInputs.audioOk = audioDisplayReady;
-  overlayInputs.playPauseAvailable = audioReady && !audioIsFinished();
+  overlayInputs.audioOk = audioReady;
+  overlayInputs.playPauseAvailable = audioReady;
   overlayInputs.audioSupports50HzToggle =
       audioReady && audioSupports50HzToggle();
   overlayInputs.canPlayPrevious = true;
@@ -301,8 +290,8 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   overlayInputs.totalSec = totalSec;
   overlayInputs.volPct =
       static_cast<int>(std::round(audioGetVolume() * 100.0f));
-  overlayInputs.paused = audioIsPaused();
-  overlayInputs.audioFinished = audioIsFinished();
+  overlayInputs.paused = audioIsPaused() || audioFinished;
+  overlayInputs.audioFinished = audioFinished;
   overlayInputs.overlayVisible = true;
   overlayInputs.pictureInPictureAvailable = true;
   overlayInputs.pictureInPictureActive = true;
@@ -313,7 +302,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   layoutInput.width = width;
   layoutInput.height = height;
   layoutInput.title = title;
-  layoutInput.reservedRowsAboveProgress = audioDisplayReady ? 1 : 0;
+  layoutInput.reservedRowsAboveProgress = audioReady ? 1 : 0;
 
   playback_overlay::OverlayControlSpecOptions controlOptions;
   controlOptions.includeAudioTrack = false;
@@ -354,8 +343,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   footerInput.width = width;
   footerInput.progressY = layout_.progressBarY;
   footerInput.peakY =
-      audioDisplayReady && layout_.progressBarY > 0 ? layout_.progressBarY - 1
-                                                    : -1;
+      audioReady && layout_.progressBarY > 0 ? layout_.progressBarY - 1 : -1;
   footerInput.unclippedOutputPeak = audioGetUnclippedOutputPeak();
   ProgressFooterRenderResult footerResult =
       renderProgressFooter(screen_, footerInput, footerStyles);
@@ -396,13 +384,6 @@ void AudioPictureInPictureWindow::updateInteractiveRects() {
   window_.SetPictureInPictureInteractiveRects(rects);
 }
 
-void AudioPictureInPictureWindow::holdSeekDisplay(double targetSec) {
-  if (!(targetSec >= 0.0) || !std::isfinite(targetSec)) return;
-  seekDisplaySec_ = targetSec;
-  seekHoldActive_ = true;
-  seekHoldStart_ = std::chrono::steady_clock::now();
-}
-
 void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
                                   const Callbacks& callbacks) {
   if (ev.type == InputEvent::Type::Resize) {
@@ -432,7 +413,6 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
     playbackCallbacks.onSeekBy = [&](int direction) {
       if (callbacks.onSeekBy) {
         callbacks.onSeekBy(direction);
-        holdSeekDisplay(audioGetSeekTargetSec());
       }
     };
     playbackCallbacks.onAdjustVolume = callbacks.onAdjustVolume;
@@ -513,7 +493,6 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
   if (progressBarRatioAt(progressHit, &ratio)) {
     if (callbacks.onSeekToRatio) {
       callbacks.onSeekToRatio(ratio);
-      holdSeekDisplay(audioGetSeekTargetSec());
     }
   }
 }

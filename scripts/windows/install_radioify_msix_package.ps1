@@ -74,6 +74,9 @@ try {
     }
 
     if ($PSCmdlet.ShouldProcess($packagePath, "Install Radioify MSIX package")) {
+        if ($installedPackage) {
+            Stop-RadioifyMsixPackageProcesses -Package $installedPackage
+        }
         Write-Host "Installing Radioify MSIX package..."
         Install-RadioifyMsixPackage -PackagePath $packagePath
         Write-Host "Waiting for Radioify MSIX package registration..."
@@ -90,6 +93,10 @@ try {
     $removedLegacyEntries = Clear-RadioifyLegacyOpenWithEntries -IntegrationDir $resolvedIntegrationDir
     if ($removedLegacyEntries -gt 0) {
         Write-Host "Removed stale Radioify open-with entries: $removedLegacyEntries"
+    }
+    if ($didChangePackage) {
+        Invoke-RadioifyShellAssociationRefresh
+        Write-Host "Refreshed Windows shell associations."
     }
     Write-Host "Package: $packagePath"
 } finally {

@@ -63,7 +63,6 @@ struct PlaybackSeekState {
   std::atomic<bool>* windowLocalSeekRequested = nullptr;
   double* pendingSeekTargetSec = nullptr;
   std::atomic<double>* windowPendingSeekTargetSec = nullptr;
-  std::chrono::steady_clock::time_point* seekRequestTime = nullptr;
   std::chrono::steady_clock::time_point* lastSeekSentTime = nullptr;
   double* queuedSeekTargetSec = nullptr;
   bool* seekQueued = nullptr;

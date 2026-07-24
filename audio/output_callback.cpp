@@ -158,7 +158,10 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->silentFrames.fetch_add(requestedAudioFrames - framesRead,
                                   std::memory_order_relaxed);
   }
-  if (framesRead > 0) updateStreamClock(state);
+  if (framesRead > 0) {
+    updateStreamClock(state);
+    state->seekPresentation.publishIfSettled(state->seekRequested);
+  }
   state->radioDspCv.notify_one();
 
   const bool starved = framesRead < requestedAudioFrames;
@@ -177,12 +180,14 @@ void dataCallback(ma_device* device, void* output, const void*,
     }
   }
   if (starved &&
-      state->processedAtEnd.load(std::memory_order_relaxed)) {
+      state->processedAtEnd.load(std::memory_order_relaxed) &&
+      !state->seekRequested.load(std::memory_order_acquire)) {
     state->finished.store(true, std::memory_order_relaxed);
     const uint64_t total = state->totalFrames.load(std::memory_order_relaxed);
     if (total > 0) {
       state->framesPlayed.store(total, std::memory_order_relaxed);
     }
+    state->seekPresentation.publishIfSettled(state->seekRequested);
   }
 
   const bool fadeOut =

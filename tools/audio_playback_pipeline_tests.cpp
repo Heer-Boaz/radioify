@@ -2,10 +2,12 @@
 #include "audio/playback_source_priming.h"
 #include "audio/radio_filter_mode.h"
 #include "audio/radio_filter_transition.h"
+#include "audio/seek_presentation.h"
 #include "audio/spsc_audio_ring.h"
 #include "audio/spsc_audio_timeline.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -272,6 +274,38 @@ void expectPlaybackSourcePrimingBudget() {
   }
 }
 
+void expectSeekPresentationTracksTheLatestRequest() {
+  AudioSeekPresentation presentation;
+  std::atomic<bool> backendRequestPending{false};
+  if (presentation.pending()) {
+    fail("Fresh seek presentation state was pending.");
+  }
+
+  presentation.request();
+  if (!presentation.pending()) {
+    fail("Seek request did not become presentation-pending.");
+  }
+
+  backendRequestPending.store(true, std::memory_order_relaxed);
+  presentation.publishIfSettled(backendRequestPending);
+  if (!presentation.pending()) {
+    fail("Backend-pending seek was presented before it settled.");
+  }
+
+  presentation.request();
+  backendRequestPending.store(false, std::memory_order_relaxed);
+  presentation.publishIfSettled(backendRequestPending);
+  if (presentation.pending()) {
+    fail("Presenting the latest seek did not complete its UI state.");
+  }
+
+  presentation.request();
+  presentation.reset();
+  if (presentation.pending()) {
+    fail("Seek presentation reset left stale request state.");
+  }
+}
+
 void expectSpscAudioRingWrapsCleanly() {
   SpscAudioRing buffer;
   buffer.initialize(4, 2);
@@ -508,6 +542,7 @@ int main() {
   expectSupersededDiscontinuityDoesNotClearNewRequest();
   expectDryWorkerClearsPendingInputFade();
   expectPlaybackSourcePrimingBudget();
+  expectSeekPresentationTracksTheLatestRequest();
   expectSpscAudioRingWrapsCleanly();
   expectSpscAudioTimelineWrapsCleanly();
   expectRadioFilterCrossfadesAtWorkerBoundary();
