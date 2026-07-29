@@ -852,7 +852,7 @@ void Controller::trimFrameStepWindow(
     if (entries_.size() <=
             playback_video_frame_step_prefetch::kMaxCachedFrameCount &&
         windowDurationUs <=
-            playback_video_frame_step_prefetch::kWindowDurationUs &&
+            playback_video_frame_step_prefetch::kSegmentDurationUs &&
         decoderBackedFrameCount <= kRetainedFrameCount) {
       break;
     }

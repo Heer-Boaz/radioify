@@ -970,8 +970,9 @@ int main() {
       playback_video_frame_step_prefetch::kWindowDurationUs == 1000000,
       "Frame-step prefetch must keep a one-second decoded working set");
   static_assert(
-      playback_video_frame_step_prefetch::kBoundaryGuardFrameCount == 5,
-      "Frame-step prefetch must refill before either cache edge is reached");
+      playback_video_frame_step_prefetch::kSegmentDurationUs * 2 ==
+          playback_video_frame_step_prefetch::kWindowDurationUs,
+      "Frame-step prefetch must double-buffer two equal segments");
   playback_video_frame_cursor::Controller prefetchedCursor;
   prefetchedCursor.resetForSerial(1);
   QueuedFrame prefetchedCurrent{};
@@ -1040,8 +1041,8 @@ int main() {
   ok &= expect(previousRefillCursor.mergePrefetchedBatch(
                    std::move(previousExtension)) &&
                    previousRefillCursor.prefetchWindow().beforeFrameCount ==
-                       50,
-               "Previous low-water refill must extend the decoded cache");
+                       49,
+               "Previous staged refill must extend the active cache segment");
   const playback_video_frame_cursor::PresentedFrame* previousCachedStep =
       previousRefillCursor.step(playback_video_frame_step::Direction::Previous);
   ok &= expect(previousCachedStep && previousCachedStep->ptsUs == 990000,
@@ -1153,8 +1154,8 @@ int main() {
       boundedPrefetchWindow.beforeDurationUs +
               boundedPrefetchWindow.current.durationUs +
               boundedPrefetchWindow.afterDurationUs <=
-          playback_video_frame_step_prefetch::kWindowDurationUs,
-      "Frame-step prefetch must evict an edge when its one-second window is "
+          playback_video_frame_step_prefetch::kSegmentDurationUs,
+      "Frame-step prefetch must evict an edge when its active segment is "
       "exceeded");
 
   playback_video_frame_step_seek::Controller stepSeekHandoff;

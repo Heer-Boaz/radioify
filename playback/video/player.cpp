@@ -437,11 +437,15 @@ struct FrameStepPrefetchState {
       lastBeforeBoundary;
   std::optional<playback_video_frame_step_prefetch::FrameIdentity>
       lastAfterBoundary;
+  std::optional<playback_video_frame_step_prefetch::Batch> stagedBefore;
+  std::optional<playback_video_frame_step_prefetch::Batch> stagedAfter;
 
   void reset() {
     initializedSerial = 0;
     lastBeforeBoundary.reset();
     lastAfterBoundary.reset();
+    stagedBefore.reset();
+    stagedAfter.reset();
   }
 };
 
@@ -1935,7 +1939,8 @@ struct Player::Impl {
                           frameStepRequest);
   }
 
-  void drainFrameStepPrefetch(int serial) {
+  void drainFrameStepPrefetch(int serial, FrameStepPrefetchState* state) {
+    assert(state);
     for (playback_video_frame_step_prefetch::Batch& batch :
          frameStepPrefetch.takeBatches(serial)) {
       const size_t frameCount = batch.frames.size();
@@ -1943,12 +1948,53 @@ struct Player::Impl {
           batch.side == playback_video_frame_step_prefetch::BatchSide::Before
               ? -1
               : 1;
-      if (frameCursor.mergePrefetchedBatch(std::move(batch))) {
-        appendTimingFmt(
-            "frame_step_prefetch_adopt serial=%d side=%d frames=%zu", serial,
-            side, frameCount);
+      if (batch.requestKind ==
+          playback_video_frame_step_prefetch::RequestKind::Around) {
+        if (frameCursor.mergePrefetchedBatch(std::move(batch))) {
+          appendTimingFmt(
+              "frame_step_prefetch_adopt serial=%d side=%d frames=%zu",
+              serial, side, frameCount);
+        }
+        continue;
       }
+
+      std::optional<playback_video_frame_step_prefetch::Batch>& staged =
+          batch.side ==
+                  playback_video_frame_step_prefetch::BatchSide::Before
+              ? state->stagedBefore
+              : state->stagedAfter;
+      assert(!staged);
+      staged = std::move(batch);
+      appendTimingFmt(
+          "frame_step_prefetch_ready serial=%d side=%d frames=%zu", serial,
+          side, frameCount);
     }
+  }
+
+  bool adoptStagedFrameStepPrefetch(
+      int serial, playback_video_frame_step::Direction direction,
+      FrameStepPrefetchState* state) {
+    assert(state);
+    std::optional<playback_video_frame_step_prefetch::Batch>& staged =
+        direction == playback_video_frame_step::Direction::Previous
+            ? state->stagedBefore
+            : state->stagedAfter;
+    if (!staged) {
+      return false;
+    }
+
+    const size_t frameCount = staged->frames.size();
+    const int side =
+        direction == playback_video_frame_step::Direction::Previous ? -1 : 1;
+    playback_video_frame_step_prefetch::Batch batch = std::move(*staged);
+    staged.reset();
+    if (frameCursor.mergePrefetchedBatch(std::move(batch))) {
+      appendTimingFmt(
+          "frame_step_prefetch_adopt serial=%d side=%d frames=%zu", serial,
+          side, frameCount);
+      return true;
+    }
+    return false;
   }
 
   bool frameStepPrefetchBusy(int serial) const {
@@ -1964,9 +2010,17 @@ struct Player::Impl {
     if (!state || !frameStepPrefetchStarted) {
       return;
     }
-    drainFrameStepPrefetch(serial);
+    drainFrameStepPrefetch(serial, state);
     if (frameStepPrefetch.takeFailure(serial)) {
       appendTimingFmt("frame_step_prefetch_failed serial=%d", serial);
+    }
+
+    if (direction == playback_video_frame_step::Direction::Previous) {
+      state->stagedAfter.reset();
+      state->lastAfterBoundary.reset();
+    } else {
+      state->stagedBefore.reset();
+      state->lastBeforeBoundary.reset();
     }
 
     playback_video_frame_cursor::PrefetchWindow window =
@@ -1997,13 +2051,21 @@ struct Player::Impl {
       request.serial = serial;
       request.kind = playback_video_frame_step_prefetch::RequestKind::Around;
       request.boundary = window.current;
-      request.rangeStartUs =
-          (std::max)(int64_t{0},
-                     window.current.ptsUs -
-                         playback_video_frame_step_prefetch::kInitialRadiusUs);
-      request.rangeEndUs = boundedEndUs(
-          window.current.ptsUs,
-          playback_video_frame_step_prefetch::kInitialRadiusUs);
+      if (direction == playback_video_frame_step::Direction::Previous) {
+        request.rangeStartUs = (std::max)(
+            int64_t{0},
+            window.current.ptsUs -
+                playback_video_frame_step_prefetch::kSegmentDurationUs);
+        request.rangeEndUs = window.current.ptsUs;
+      } else {
+        request.rangeStartUs = window.current.ptsUs;
+        request.rangeEndUs = boundedEndUs(
+            window.current.ptsUs,
+            playback_video_frame_step_prefetch::kSegmentDurationUs);
+      }
+      if (request.rangeEndUs <= request.rangeStartUs) {
+        return;
+      }
       if (frameStepPrefetch.request(request)) {
         state->initializedSerial = serial;
         appendTimingFmt(
@@ -2014,18 +2076,32 @@ struct Player::Impl {
       return;
     }
 
-    if (frameStepPrefetchBusy(serial)) {
+    const bool stagedAtBoundary =
+        direction == playback_video_frame_step::Direction::Previous
+            ? state->stagedBefore.has_value() &&
+                  window.beforeFrameCount == 0
+            : state->stagedAfter.has_value() &&
+                  window.afterFrameCount == 0;
+    if (stagedAtBoundary) {
+      adoptStagedFrameStepPrefetch(serial, direction, state);
+      window = frameCursor.prefetchWindow();
+      if (!window.valid()) {
+        return;
+      }
+    }
+
+    const bool hasStagedSegment =
+        direction == playback_video_frame_step::Direction::Previous
+            ? state->stagedBefore.has_value()
+            : state->stagedAfter.has_value();
+    if (hasStagedSegment || frameStepPrefetchBusy(serial)) {
       return;
     }
 
     playback_video_frame_step_prefetch::Request request;
     request.serial = serial;
     if (direction == playback_video_frame_step::Direction::Previous) {
-      if (window.beforeEdge.ptsUs <= 0 ||
-          (window.beforeFrameCount >
-               playback_video_frame_step_prefetch::kBoundaryGuardFrameCount &&
-           window.beforeDurationUs >
-               playback_video_frame_step_prefetch::kLowWaterDurationUs)) {
+      if (window.beforeEdge.ptsUs <= 0) {
         return;
       }
       if (state->lastBeforeBoundary &&
@@ -2043,7 +2119,8 @@ struct Player::Impl {
       request.rangeStartUs =
           (std::max)(int64_t{0},
                      window.beforeEdge.ptsUs -
-                         playback_video_frame_step_prefetch::kRefillDurationUs);
+                         playback_video_frame_step_prefetch::
+                             kSegmentDurationUs);
       request.rangeEndUs = window.beforeEdge.ptsUs;
     } else {
       const bool atMediaEnd =
@@ -2052,11 +2129,7 @@ struct Player::Impl {
            (window.afterEdge.durationUs > 0 &&
             window.afterEdge.ptsUs >=
                 mediaDurationUs - window.afterEdge.durationUs));
-      if (atMediaEnd ||
-          (window.afterFrameCount >
-               playback_video_frame_step_prefetch::kBoundaryGuardFrameCount &&
-           window.afterDurationUs >
-               playback_video_frame_step_prefetch::kLowWaterDurationUs)) {
+      if (atMediaEnd) {
         return;
       }
       if (state->lastAfterBoundary &&
@@ -2074,7 +2147,7 @@ struct Player::Impl {
       request.rangeStartUs = window.afterEdge.ptsUs;
       request.rangeEndUs = boundedEndUs(
           window.afterEdge.ptsUs,
-          playback_video_frame_step_prefetch::kRefillDurationUs);
+          playback_video_frame_step_prefetch::kSegmentDurationUs);
     }
 
     if (request.rangeEndUs <= request.rangeStartUs) {
@@ -3671,6 +3744,8 @@ struct Player::Impl {
       if (frameCursor.frameStepModeActive()) {
         maintainFrameStepPrefetch(static_cast<int>(serial), prefetchDirection,
                                   &prefetchState);
+      } else if (prefetchState.initializedSerial != 0) {
+        prefetchState.reset();
       }
 
       playback_video_frame_step::Request pendingFrameStep;

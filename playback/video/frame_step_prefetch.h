@@ -15,15 +15,14 @@
 
 namespace playback_video_frame_step_prefetch {
 
-// A one-second decoded working set is large enough for responsive stepping
-// while remaining predictable. Refills begin before the cursor reaches either
-// edge. Independent frame and one-GiB logical-byte ceilings prevent malformed
-// timing or very large surfaces from turning the cache into unbounded storage.
+// Keep one decoded second as two half-second segments: the cursor owns the
+// active segment while the worker prepares the next segment. Swapping an
+// already-decoded segment near the cursor edge keeps reverse seek/decode work
+// off the presentation path. Independent frame and one-GiB logical-byte
+// ceilings prevent malformed timing or very large surfaces from turning the
+// cache into unbounded storage.
 inline constexpr int64_t kWindowDurationUs = 1000000;
-inline constexpr int64_t kInitialRadiusUs = kWindowDurationUs / 2;
-inline constexpr int64_t kRefillDurationUs = kWindowDurationUs / 2;
-inline constexpr int64_t kLowWaterDurationUs = 250000;
-inline constexpr size_t kBoundaryGuardFrameCount = 5;
+inline constexpr int64_t kSegmentDurationUs = kWindowDurationUs / 2;
 inline constexpr size_t kMaxCachedFrameCount = 240;
 inline constexpr size_t kMaxCachedBytes =
     size_t{1} * 1024u * 1024u * 1024u;

@@ -344,7 +344,8 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: video_frame_step_smoke <video> [seek_us] "
                  "[step_count] [mode]\n"
                  "Modes: startup, resume, forward-resume, mixed-resume, "
-                 "rapid-resume, resume-during-step, ended-replay\n";
+                 "rapid-resume, resume-during-step, burst-previous, "
+                 "burst-forward, ended-replay\n";
     return 2;
   }
 
@@ -368,6 +369,9 @@ int main(int argc, char** argv) {
   bool resumeAfterMixed = false;
   bool rapidResume = false;
   bool resumeDuringStep = false;
+  bool burstSteps = false;
+  playback_video_frame_step::Direction burstDirection =
+      playback_video_frame_step::Direction::Previous;
   bool replayAfterEnd = false;
   bool verifyStartup = false;
   if (argc >= 5) {
@@ -378,14 +382,19 @@ int main(int argc, char** argv) {
     resumeAfterMixed = mode == "mixed-resume";
     rapidResume = mode == "rapid-resume";
     resumeDuringStep = mode == "resume-during-step";
+    burstSteps = mode == "burst-previous" || mode == "burst-forward";
+    if (mode == "burst-forward") {
+      burstDirection = playback_video_frame_step::Direction::Next;
+    }
     replayAfterEnd = mode == "ended-replay";
     if (!verifyStartup && !resumeAfterPrevious && !resumeAfterForward &&
-        !resumeAfterMixed && !rapidResume && !resumeDuringStep &&
+        !resumeAfterMixed && !rapidResume && !resumeDuringStep && !burstSteps &&
         !replayAfterEnd) {
       std::cerr << "video_frame_step_smoke: invalid mode: " << argv[4]
                  << " (expected 'startup', 'resume', 'forward-resume', "
                     "'mixed-resume', 'rapid-resume', or "
-                    "'resume-during-step', or 'ended-replay')\n";
+                    "'resume-during-step', 'burst-previous', "
+                    "'burst-forward', or 'ended-replay')\n";
       return 2;
     }
   }
@@ -543,6 +552,66 @@ int main(int argc, char** argv) {
               << boundaryPtsUs << " resumed_pts_us="
               << resumed.lastPresentedPtsUs << " step_count=" << stepCount
               << '\n';
+    player.close();
+    return 0;
+  }
+
+  if (burstSteps) {
+    const uint64_t beforeBurstCounter = player.videoFrameCounter();
+    const auto burstStart = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < stepCount; ++i) {
+      if (!player.requestFrameStep(burstDirection)) {
+        std::cerr << "video_frame_step_smoke: burst frame-step request "
+                     "rejected at step "
+                  << (i + 1) << '\n';
+        player.close();
+        return 1;
+      }
+    }
+
+    PlayerDebugInfo burst{};
+    if (!waitFor(player, kDefaultTimeoutMs, "burst_steps",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() >=
+                              beforeBurstCounter + stepCount &&
+                          info.seekInFlightSerial == 0 &&
+                          info.pendingSeekSerial == 0 &&
+                          info.state == PlayerState::FrameStep;
+                 },
+                 &burst)) {
+      std::cerr << "video_frame_step_smoke: burst did not present all "
+                << stepCount << " requested frames\n";
+      player.close();
+      return 1;
+    }
+    const auto burstElapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - burstStart)
+            .count();
+    const bool movedInDirection =
+        burstDirection == playback_video_frame_step::Direction::Previous
+            ? burst.lastPresentedPtsUs < boundaryPtsUs
+            : burst.lastPresentedPtsUs > boundaryPtsUs;
+    if (!movedInDirection || burst.currentSerial != boundary.currentSerial) {
+      std::cerr << "video_frame_step_smoke: burst left the cached frame-step "
+                   "timeline; boundary_pts_us="
+                << boundaryPtsUs
+                << " actual_pts_us=" << burst.lastPresentedPtsUs
+                << " boundary_serial=" << boundary.currentSerial
+                << " actual_serial=" << burst.currentSerial << '\n';
+      player.close();
+      return 1;
+    }
+    std::cout << "video_frame_step_smoke: PASS burst_direction="
+              << (burstDirection ==
+                          playback_video_frame_step::Direction::Previous
+                      ? "previous"
+                      : "forward")
+              << " boundary_pts_us=" << boundaryPtsUs
+              << " final_pts_us=" << burst.lastPresentedPtsUs
+              << " step_count=" << stepCount
+              << " elapsed_ms=" << burstElapsedMs << '\n';
     player.close();
     return 0;
   }

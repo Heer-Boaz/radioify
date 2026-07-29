@@ -357,7 +357,8 @@ struct Prefetcher::Impl {
             return false;
           }
         }
-        if (request.kind == RequestKind::Before) {
+        if (request.kind == RequestKind::Before ||
+            sourceRangeEndUs <= sourceBoundaryUs) {
           return true;
         }
         continue;
