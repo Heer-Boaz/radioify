@@ -262,6 +262,8 @@ class NvidiaD3D11VideoProcessorBackend final
     enhancedFrame_.hwTexture = outputTexture_;
     enhancedFrame_.hwTextureArrayIndex = 0;
     enhancedFrame_.hwFrameRef.reset();
+    enhancedFrame_.storageBytes = 0;
+    enhancedFrame_.cacheLease.reset();
     enhancedFrame_.rgba.clear();
     enhancedFrame_.yuv.clear();
     if (mode == ProcessingMode::TrueHdr) {

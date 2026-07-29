@@ -43,7 +43,6 @@ extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_d3d11va.h>
-#include <libavutil/imgutils.h>
 #include <libavutil/log.h>
 #include <libavutil/mem.h>
 #include <libavutil/opt.h>
@@ -63,6 +62,7 @@ extern "C" {
 #include "playback/video/control/events.h"
 #include "playback/video/control/serial.h"
 #include "playback/video/frame_cursor.h"
+#include "playback/video/frame_step_prefetch.h"
 #include "playback/video/frame_step_seek.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/video/state/machine.h"
@@ -423,6 +423,26 @@ enum class VideoCursorPublication {
 enum class VideoPresentationNotification {
   None,
   FrameStep,
+};
+
+enum class FrameStepDispatchResult {
+  Unavailable,
+  Handled,
+  AwaitingPrefetch,
+};
+
+struct FrameStepPrefetchState {
+  int initializedSerial = 0;
+  std::optional<playback_video_frame_step_prefetch::FrameIdentity>
+      lastBeforeBoundary;
+  std::optional<playback_video_frame_step_prefetch::FrameIdentity>
+      lastAfterBoundary;
+
+  void reset() {
+    initializedSerial = 0;
+    lastBeforeBoundary.reset();
+    lastAfterBoundary.reset();
+  }
 };
 
 enum class SerialTransitionPurpose {
@@ -1329,6 +1349,10 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
 
   int64_t ts100ns = frameTimestamp100ns(*ctx, src);
   int64_t duration100ns = frameDuration100ns(*ctx, src);
+  int64_t sourcePtsTicks = src->best_effort_timestamp;
+  if (sourcePtsTicks == AV_NOPTS_VALUE) {
+    sourcePtsTicks = src->pts;
+  }
   AVColorSpace frameSpace = src->colorspace;
   if (frameSpace == AVCOL_SPC_UNSPECIFIED ||
       frameSpace == AVCOL_SPC_RESERVED) {
@@ -1360,6 +1384,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
   }
 
   out.hwFrameRef.reset();
+  out.cacheLease.reset();
   out.hwTexture.Reset();
   out.hwTextureArrayIndex = 0;
 
@@ -1380,10 +1405,17 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
   out.height = outH;
   out.timestamp100ns = ts100ns;
   out.duration100ns = duration100ns;
+  out.storageBytes = 0;
   out.fullRange = ctx->fullRange;
   out.yuvMatrix = frameMatrix;
   out.yuvTransfer = frameTransfer;
   out.rotationQuarterTurns = 0;
+  if (info) {
+    info->timestamp100ns = ts100ns;
+    info->duration100ns = duration100ns;
+    info->sourcePtsTicks = sourcePtsTicks;
+    info->sourceDtsTicks = src->pkt_dts;
+  }
 
   if (!decodePixels) {
     out.format = VideoPixelFormat::Unknown;
@@ -1391,10 +1423,6 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
     out.planeHeight = 0;
     out.rgba.clear();
     out.yuv.clear();
-    if (info) {
-      info->timestamp100ns = ts100ns;
-      info->duration100ns = duration100ns;
-    }
     return true;
   }
 
@@ -1403,6 +1431,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
     if (!texture) return false;
     intptr_t arrayIndex = reinterpret_cast<intptr_t>(src->data[1]);
     out.format = VideoPixelFormat::HWTexture;
+    out.storageBytes = decodedVideoFrameStorageBytes(src);
     out.hwTexture = texture;
     out.hwTextureArrayIndex = static_cast<int>(arrayIndex);
     out.hwFrameRef = std::move(gpuFrameRef);
@@ -1411,10 +1440,6 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
     out.planeHeight = 0;
     out.yuv.clear();
     out.rgba.clear();
-    if (info) {
-      info->timestamp100ns = ts100ns;
-      info->duration100ns = duration100ns;
-    }
     return true;
   }
 
@@ -1516,10 +1541,7 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
     }
   }
 
-  if (info) {
-    info->timestamp100ns = ts100ns;
-    info->duration100ns = duration100ns;
-  }
+  out.storageBytes = out.yuv.size();
   return true;
 }
 }  // namespace
@@ -1551,6 +1573,8 @@ struct Player::Impl {
   std::atomic<bool> audioDecodeEnded{false};
   playback_video_frame_cursor::Controller frameCursor;
   playback_video_frame_step_seek::Controller frameStepSeek;
+  playback_video_frame_step_prefetch::Prefetcher frameStepPrefetch;
+  bool frameStepPrefetchStarted = false;
 
   std::atomic<bool> commandPending{false};
   std::atomic<uint64_t> resizeEpoch{0};
@@ -1911,7 +1935,171 @@ struct Player::Impl {
                           frameStepRequest);
   }
 
-  bool dispatchCursorFrameStep(
+  void drainFrameStepPrefetch(int serial) {
+    for (playback_video_frame_step_prefetch::Batch& batch :
+         frameStepPrefetch.takeBatches(serial)) {
+      const size_t frameCount = batch.frames.size();
+      const int side =
+          batch.side == playback_video_frame_step_prefetch::BatchSide::Before
+              ? -1
+              : 1;
+      if (frameCursor.mergePrefetchedBatch(std::move(batch))) {
+        appendTimingFmt(
+            "frame_step_prefetch_adopt serial=%d side=%d frames=%zu", serial,
+            side, frameCount);
+      }
+    }
+  }
+
+  bool frameStepPrefetchBusy(int serial) const {
+    return frameStepPrefetch.busyFor(
+               serial, playback_video_frame_step::Direction::Previous) ||
+           frameStepPrefetch.busyFor(
+               serial, playback_video_frame_step::Direction::Next);
+  }
+
+  void maintainFrameStepPrefetch(
+      int serial, playback_video_frame_step::Direction direction,
+      FrameStepPrefetchState* state) {
+    if (!state || !frameStepPrefetchStarted) {
+      return;
+    }
+    drainFrameStepPrefetch(serial);
+    if (frameStepPrefetch.takeFailure(serial)) {
+      appendTimingFmt("frame_step_prefetch_failed serial=%d", serial);
+    }
+
+    playback_video_frame_cursor::PrefetchWindow window =
+        frameCursor.prefetchWindow();
+    if (!window.valid()) {
+      return;
+    }
+
+    const int64_t mediaDurationUs =
+        durationUs.load(std::memory_order_relaxed);
+    auto boundedEndUs = [&](int64_t startUs, int64_t extensionUs) {
+      int64_t endUs = (std::numeric_limits<int64_t>::max)();
+      if (extensionUs >= 0 &&
+          startUs <= (std::numeric_limits<int64_t>::max)() - extensionUs) {
+        endUs = startUs + extensionUs;
+      }
+      if (mediaDurationUs > 0) {
+        endUs = (std::min)(endUs, mediaDurationUs);
+      }
+      return endUs;
+    };
+
+    if (state->initializedSerial != serial) {
+      if (frameStepPrefetchBusy(serial)) {
+        return;
+      }
+      playback_video_frame_step_prefetch::Request request;
+      request.serial = serial;
+      request.kind = playback_video_frame_step_prefetch::RequestKind::Around;
+      request.boundary = window.current;
+      request.rangeStartUs =
+          (std::max)(int64_t{0},
+                     window.current.ptsUs -
+                         playback_video_frame_step_prefetch::kInitialRadiusUs);
+      request.rangeEndUs = boundedEndUs(
+          window.current.ptsUs,
+          playback_video_frame_step_prefetch::kInitialRadiusUs);
+      if (frameStepPrefetch.request(request)) {
+        state->initializedSerial = serial;
+        appendTimingFmt(
+            "frame_step_prefetch_request serial=%d kind=around start_us=%lld end_us=%lld",
+            serial, static_cast<long long>(request.rangeStartUs),
+            static_cast<long long>(request.rangeEndUs));
+      }
+      return;
+    }
+
+    if (frameStepPrefetchBusy(serial)) {
+      return;
+    }
+
+    playback_video_frame_step_prefetch::Request request;
+    request.serial = serial;
+    if (direction == playback_video_frame_step::Direction::Previous) {
+      if (window.beforeEdge.ptsUs <= 0 ||
+          (window.beforeFrameCount >
+               playback_video_frame_step_prefetch::kBoundaryGuardFrameCount &&
+           window.beforeDurationUs >
+               playback_video_frame_step_prefetch::kLowWaterDurationUs)) {
+        return;
+      }
+      if (state->lastBeforeBoundary &&
+          playback_video_frame_step_prefetch::sameIdentity(
+              *state->lastBeforeBoundary, window.beforeEdge.identity)) {
+        return;
+      }
+      frameCursor.prepareForPrefetchRefill(direction);
+      window = frameCursor.prefetchWindow();
+      if (!window.valid()) {
+        return;
+      }
+      request.kind = playback_video_frame_step_prefetch::RequestKind::Before;
+      request.boundary = window.beforeEdge;
+      request.rangeStartUs =
+          (std::max)(int64_t{0},
+                     window.beforeEdge.ptsUs -
+                         playback_video_frame_step_prefetch::kRefillDurationUs);
+      request.rangeEndUs = window.beforeEdge.ptsUs;
+    } else {
+      const bool atMediaEnd =
+          mediaDurationUs > 0 &&
+          (window.afterEdge.ptsUs >= mediaDurationUs ||
+           (window.afterEdge.durationUs > 0 &&
+            window.afterEdge.ptsUs >=
+                mediaDurationUs - window.afterEdge.durationUs));
+      if (atMediaEnd ||
+          (window.afterFrameCount >
+               playback_video_frame_step_prefetch::kBoundaryGuardFrameCount &&
+           window.afterDurationUs >
+               playback_video_frame_step_prefetch::kLowWaterDurationUs)) {
+        return;
+      }
+      if (state->lastAfterBoundary &&
+          playback_video_frame_step_prefetch::sameIdentity(
+              *state->lastAfterBoundary, window.afterEdge.identity)) {
+        return;
+      }
+      frameCursor.prepareForPrefetchRefill(direction);
+      window = frameCursor.prefetchWindow();
+      if (!window.valid()) {
+        return;
+      }
+      request.kind = playback_video_frame_step_prefetch::RequestKind::After;
+      request.boundary = window.afterEdge;
+      request.rangeStartUs = window.afterEdge.ptsUs;
+      request.rangeEndUs = boundedEndUs(
+          window.afterEdge.ptsUs,
+          playback_video_frame_step_prefetch::kRefillDurationUs);
+    }
+
+    if (request.rangeEndUs <= request.rangeStartUs) {
+      return;
+    }
+    if (frameStepPrefetch.request(request)) {
+      if (request.kind ==
+          playback_video_frame_step_prefetch::RequestKind::Before) {
+        state->lastBeforeBoundary = request.boundary.identity;
+      } else {
+        state->lastAfterBoundary = request.boundary.identity;
+      }
+      appendTimingFmt(
+          "frame_step_prefetch_request serial=%d kind=%s start_us=%lld end_us=%lld",
+          serial,
+          request.kind ==
+                  playback_video_frame_step_prefetch::RequestKind::Before
+              ? "before"
+              : "after",
+          static_cast<long long>(request.rangeStartUs),
+          static_cast<long long>(request.rangeEndUs));
+    }
+  }
+
+  FrameStepDispatchResult dispatchCursorFrameStep(
       playback_video_sync::LoopState& syncState,
       const playback_video_frame_step::Request& request, const char* presentTag,
       const char* seekTag, int64_t stepNow,
@@ -1920,10 +2108,10 @@ struct Player::Impl {
         frameCursor.target(request.direction);
     switch (target.kind) {
       case playback_video_frame_cursor::StepTargetKind::None:
-        return false;
+        return FrameStepDispatchResult::Unavailable;
       case playback_video_frame_cursor::StepTargetKind::Present: {
         if (!playbackState.publishFrameStepPresentation(request)) {
-          return true;
+          return FrameStepDispatchResult::Handled;
         }
         const playback_video_frame_cursor::PresentedFrame* entry =
             frameCursor.step(request.direction);
@@ -1935,11 +2123,14 @@ struct Player::Impl {
             syncState, *entry, presentTag, stepNow, stepMaster.us,
             stepMaster.source, 0, 0, VideoPresentationNotification::FrameStep,
             &request);
-        return true;
+        return FrameStepDispatchResult::Handled;
       }
       case playback_video_frame_cursor::StepTargetKind::Seek:
+        if (frameStepPrefetch.busyFor(request.serial, request.direction)) {
+          return FrameStepDispatchResult::AwaitingPrefetch;
+        }
         if (!playbackState.publishFrameStepSeek(request)) {
-          return true;
+          return FrameStepDispatchResult::Handled;
         }
         requestFrameStepSeek(request, target);
         videoFrames.notify();
@@ -1953,9 +2144,9 @@ struct Player::Impl {
             static_cast<unsigned long long>(target.seek.anchor.logicalIndex),
             static_cast<long long>(target.seek.target.ptsUs),
             static_cast<long long>(target.seek.anchor.ptsUs));
-        return true;
+        return FrameStepDispatchResult::Handled;
     }
-    return false;
+    return FrameStepDispatchResult::Unavailable;
   }
 
   void discardFrontVideoFrame(const QueuedFrame& front, const char* tag,
@@ -2039,6 +2230,7 @@ struct Player::Impl {
     bool exited = frameStepExit.requiresTimelineReanchor;
     const int serial = serialControl.currentSerial();
     if (frameCursor.exitFrameStepModeForPlaybackResume(serial)) {
+      frameStepPrefetch.invalidate();
       serialControl.clearPendingPresentation(serial);
       exited = true;
     }
@@ -2205,6 +2397,8 @@ struct Player::Impl {
       videoOutputThread.join();
       appendTimingFmt("stop_threads video_output_join_end");
     }
+    frameStepPrefetch.stop();
+    frameStepPrefetchStarted = false;
     videoPackets.flush();
     audioPackets.flush();
     videoFrames.flush(static_cast<uint64_t>(serialControl.currentSerial()));
@@ -2295,6 +2489,7 @@ struct Player::Impl {
         [&](playback_video_serial_control::TransitionPlan plan,
             const char* tag, SerialTransitionPurpose purpose) -> int {
           if (!plan.valid) return 0;
+          frameStepPrefetch.invalidate();
           if (plan.signalCommandPending) {
             commandPending.store(true, std::memory_order_relaxed);
           }
@@ -2648,6 +2843,13 @@ struct Player::Impl {
     }
     estimatedFrameDurationUs.store(
         static_cast<int64_t>(estimatedFrameDurationSec * 1000000.0));
+
+    frameStepPrefetchStarted =
+        frameStepPrefetch.start(config.file, demux.videoStreamIndex,
+                                getSharedGpuDevice(),
+                                &getSharedGpuMutex());
+    appendTimingFmt("frame_step_prefetch_start ok=%d",
+                    frameStepPrefetchStarted ? 1 : 0);
 
     initOk.store(true);
     initDone.store(true);
@@ -3031,7 +3233,7 @@ struct Player::Impl {
         if (queueLimit < 1) queueLimit = 1;
         if (queueLimit > 32) queueLimit = 32;
         if (!videoFrames.acquireFrame(&poolIndex, decoderSerial, queueLimit,
-                                      &running)) {
+                                       &running)) {
           av_frame_unref(videoDec.frame);
           break;
         }
@@ -3435,6 +3637,9 @@ struct Player::Impl {
     playback_video_sync::initializeLoopState(
         syncState, serialControl.currentSerial(),
         estimatedFrameDurationUs.load(std::memory_order_relaxed), nowUs());
+    FrameStepPrefetchState prefetchState;
+    playback_video_frame_step::Direction prefetchDirection =
+        playback_video_frame_step::Direction::Next;
 
     while (running.load()) {
       if (clearFrameRequested.exchange(false)) {
@@ -3452,6 +3657,7 @@ struct Player::Impl {
           syncState, static_cast<int>(serial),
           estimatedFrameDurationUs.load(std::memory_order_relaxed), nowUs());
       if (outputSerialChanged) {
+        prefetchState.reset();
         auto seekPlan = frameStepSeek.consumeForSerial(static_cast<int>(serial));
         if (seekPlan) {
           frameCursor.resetForSerial(static_cast<int>(serial), &*seekPlan);
@@ -3462,11 +3668,22 @@ struct Player::Impl {
       playback_video_state_machine::StateProjection stateProjection =
           playback_video_state_machine::project(st);
 
+      if (frameCursor.frameStepModeActive()) {
+        maintainFrameStepPrefetch(static_cast<int>(serial), prefetchDirection,
+                                  &prefetchState);
+      }
+
       playback_video_frame_step::Request pendingFrameStep;
       if (playbackState.peekFrameStep(
               &pendingFrameStep, static_cast<int>(serial),
               frameCursor.frameStepSeekPendingForSerial(
                   static_cast<int>(serial)))) {
+        prefetchDirection = pendingFrameStep.direction;
+        if (frameCursor.enterFrameStepMode(pendingFrameStep.direction)) {
+          prefetchState.reset();
+        }
+        maintainFrameStepPrefetch(static_cast<int>(serial), prefetchDirection,
+                                  &prefetchState);
         bool pendingFrameStepDeferred = false;
         const bool currentFrameIsCurrentSerial =
             lastPresentedSerial.load(std::memory_order_relaxed) ==
@@ -3487,11 +3704,17 @@ struct Player::Impl {
                        stepMaster.source, 0, 0);
               continue;
             }
-          } else if (dispatchCursorFrameStep(
-                         syncState, pendingFrameStep, "frame_step_previous",
-                         "frame_step_previous_seek", stepNow, stepMaster)) {
-            continue;
           } else {
+            const FrameStepDispatchResult dispatch = dispatchCursorFrameStep(
+                syncState, pendingFrameStep, "frame_step_previous",
+                "frame_step_previous_seek", stepNow, stepMaster);
+            if (dispatch == FrameStepDispatchResult::Handled) {
+              continue;
+            }
+            if (dispatch == FrameStepDispatchResult::AwaitingPrefetch) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(2));
+              continue;
+            }
             playbackState.discardFrameStep(pendingFrameStep);
             logVideo("frame_step_previous_boundary", nullptr, stepMaster.us,
                      stepMaster.source, 0, 0);
@@ -3502,9 +3725,14 @@ struct Player::Impl {
         if (!pendingFrameStepDeferred &&
             pendingFrameStep.direction ==
                 playback_video_frame_step::Direction::Next) {
-          if (dispatchCursorFrameStep(
-                  syncState, pendingFrameStep, "frame_step_next_history",
-                  "frame_step_next_seek", stepNow, stepMaster)) {
+          const FrameStepDispatchResult dispatch = dispatchCursorFrameStep(
+              syncState, pendingFrameStep, "frame_step_next_history",
+              "frame_step_next_seek", stepNow, stepMaster);
+          if (dispatch == FrameStepDispatchResult::Handled) {
+            continue;
+          }
+          if (dispatch == FrameStepDispatchResult::AwaitingPrefetch) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
           }
         }

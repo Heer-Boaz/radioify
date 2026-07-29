@@ -49,6 +49,30 @@ static void d3d11_unlock(void* ctx) {
     if (ctx) reinterpret_cast<std::recursive_mutex*>(ctx)->unlock();
 }
 
+size_t decodedVideoFrameStorageBytes(const AVFrame* frame) {
+  if (!frame || frame->width <= 0 || frame->height <= 0) {
+    return 0;
+  }
+  int width = frame->width;
+  int height = frame->height;
+  AVPixelFormat format = static_cast<AVPixelFormat>(frame->format);
+  if (format == AV_PIX_FMT_D3D11) {
+    if (!frame->hw_frames_ctx || !frame->hw_frames_ctx->data) {
+      return 0;
+    }
+    const AVHWFramesContext* frames = reinterpret_cast<const AVHWFramesContext*>(
+        frame->hw_frames_ctx->data);
+    format = frames->sw_format;
+    width = frames->width;
+    height = frames->height;
+    if (width <= 0 || height <= 0) {
+      return 0;
+    }
+  }
+  const int bytes = av_image_get_buffer_size(format, width, height, 1);
+  return bytes > 0 ? static_cast<size_t>(bytes) : 0;
+}
+
 namespace {
 void setError(std::string* error, const char* message) {
   if (error) *error = message;
@@ -375,10 +399,9 @@ struct StreamSelectionResult {
   const AVCodec* codec = nullptr;
 };
 
-bool selectHighestResolutionStream(AVFormatContext* fmt,
-                                   StreamSelectionResult* out,
-                                   VideoStreamSelection* selection,
-                                   std::string* error) {
+bool selectVideoStream(AVFormatContext* fmt, StreamSelectionResult* out,
+                       VideoStreamSelection* selection,
+                       int requestedStreamIndex, std::string* error) {
   if (!fmt || !out) {
     setError(error, "Invalid stream selection state.");
     return false;
@@ -444,6 +467,28 @@ bool selectHighestResolutionStream(AVFormatContext* fmt,
     }
   }
 
+  if (requestedStreamIndex >= 0) {
+    if (requestedStreamIndex >= static_cast<int>(fmt->nb_streams)) {
+      setError(error, "Requested video stream is out of range.");
+      return false;
+    }
+    AVStream* requested = fmt->streams[requestedStreamIndex];
+    if (!requested || !requested->codecpar ||
+        requested->codecpar->codec_type != AVMEDIA_TYPE_VIDEO ||
+        (requested->disposition & AV_DISPOSITION_ATTACHED_PIC) != 0) {
+      setError(error, "Requested video stream is not playable video.");
+      return false;
+    }
+    const AVCodec* requestedCodec =
+        avcodec_find_decoder(requested->codecpar->codec_id);
+    if (!requestedCodec) {
+      setError(error, "Requested video stream has no decoder.");
+      return false;
+    }
+    bestIndex = requestedStreamIndex;
+    bestCodec = requestedCodec;
+  }
+
   if (bestIndex < 0 || !bestCodec) {
     const AVCodec* fallbackCodec = nullptr;
     int fallbackIndex =
@@ -501,9 +546,6 @@ struct VideoDecoder::Impl {
   int consecutiveTransferErrors = 0;
   bool hasPendingPacket = false;
   bool useSharedDevice = false;  // When true, keep frames on GPU without transfer
-  uint64_t seekEpoch = 0;  // Incremented on seek to invalidate stale frames
-  int framesAfterSeek = 0;  // Count frames since last seek for stabilization
-  bool droppingNonKeyframes = false; // Drop frames until a keyframe is found
 
   bool emitFrame(VideoFrame& out, VideoReadInfo* info, bool decodePixels,
                  AVFrame* src, bool keepOnGpu = false) {
@@ -566,6 +608,7 @@ struct VideoDecoder::Impl {
     out.height = outHeight;
     out.timestamp100ns = ts100ns;
     out.duration100ns = frameDuration100ns;
+    out.storageBytes = 0;
     out.fullRange = fullRange;
     out.yuvMatrix = frameMatrix;
     out.yuvTransfer = frameTransfer;
@@ -573,6 +616,13 @@ struct VideoDecoder::Impl {
     out.hwTexture.Reset();
     out.hwTextureArrayIndex = 0;
     out.hwFrameRef.reset();
+    out.cacheLease.reset();
+    if (info) {
+      info->timestamp100ns = ts100ns;
+      info->duration100ns = frameDuration100ns;
+      info->sourcePtsTicks = bestPts;
+      info->sourceDtsTicks = src->pkt_dts;
+    }
 
     if (!decodePixels) {
       out.format = VideoPixelFormat::Unknown;
@@ -580,10 +630,6 @@ struct VideoDecoder::Impl {
       out.planeHeight = 0;
       out.rgba.clear();
       out.yuv.clear();
-      if (info) {
-        info->timestamp100ns = ts100ns;
-        info->duration100ns = frameDuration100ns;
-      }
       return true;
     }
     // Zero-copy GPU path: pass the texture directly without CPU transfer.
@@ -600,6 +646,7 @@ struct VideoDecoder::Impl {
       }
 
       out.format = VideoPixelFormat::HWTexture;
+      out.storageBytes = decodedVideoFrameStorageBytes(src);
       out.hwTexture = texture; // ComPtr assignment calls AddRef
       out.hwTextureArrayIndex = static_cast<int>(arrayIndex);
       out.hwFrameRef =
@@ -610,10 +657,6 @@ struct VideoDecoder::Impl {
       out.yuv.clear();
       out.rgba.clear();
       
-      if (info) {
-        info->timestamp100ns = ts100ns;
-        info->duration100ns = frameDuration100ns;
-      }
       return true;
     }
 
@@ -707,10 +750,7 @@ struct VideoDecoder::Impl {
       }
     }
 
-    if (info) {
-      info->timestamp100ns = ts100ns;
-      info->duration100ns = frameDuration100ns;
-    }
+    out.storageBytes = out.yuv.size();
     return true;
   }
 };
@@ -743,8 +783,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   }
 
   StreamSelectionResult selectionResult;
-  if (!selectHighestResolutionStream(fmt, &selectionResult, streamSelection,
-                                     error)) {
+  if (!selectVideoStream(fmt, &selectionResult, streamSelection, -1, error)) {
     avformat_close_input(&fmt);
     return false;
   }
@@ -853,7 +892,8 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
                                   ID3D11Device* device,
                                   std::string* error,
                                   VideoStreamSelection* streamSelection,
-                                  std::recursive_mutex* contextMutex) {
+                                  std::recursive_mutex* contextMutex,
+                                  int requestedStreamIndex) {
   uninit();
 
   if (!device) {
@@ -882,8 +922,8 @@ bool VideoDecoder::initWithDevice(const std::filesystem::path& path,
   }
 
   StreamSelectionResult selectionResult;
-  if (!selectHighestResolutionStream(fmt, &selectionResult, streamSelection,
-                                     error)) {
+  if (!selectVideoStream(fmt, &selectionResult, streamSelection,
+                         requestedStreamIndex, error)) {
     avformat_close_input(&fmt);
     return false;
   }
@@ -1110,15 +1150,6 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
   while (true) {
     int recv = avcodec_receive_frame(impl_->codec, impl_->frame);
     if (recv == 0) {
-      // After seek, skip a small number of potentially corrupt frames.
-      // Don't rely on keyframe detection since HW decoders often don't set flags
-      // correctly.
-      if (impl_->framesAfterSeek < 3) {
-        impl_->framesAfterSeek++;
-        av_frame_unref(impl_->frame);
-        continue;
-      }
-
       // Keep a reference to the last decoded frame so redecodeLastFrame() works
       // even when readFrame() is called with decodePixels=false.
       av_frame_unref(impl_->lastFrame);
@@ -1279,10 +1310,6 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   impl_->atEnd = false;
   impl_->eof = false;
   impl_->consecutiveTransferErrors = 0;
-  impl_->seekEpoch++;
-  // Reset frame skipping logic - we trust the seek found a keyframe
-  impl_->framesAfterSeek = 0;
-  impl_->droppingNonKeyframes = true; 
   return true;
 }
 

@@ -153,6 +153,7 @@ void FrameQueue::flush(uint64_t serial) {
   for (const auto& item : queue_) {
     if (item.poolIndex < pool_.size()) {
       pool_[item.poolIndex].hwFrameRef.reset();
+      pool_[item.poolIndex].cacheLease.reset();
       pool_[item.poolIndex].hwTexture.Reset();
       pool_[item.poolIndex].hwTextureArrayIndex = 0;
     }
@@ -191,6 +192,7 @@ bool FrameQueue::push(const QueuedFrame& frame) {
   if (queue_.size() >= maxFrames_) {
     if (frame.poolIndex < pool_.size()) {
       pool_[frame.poolIndex].hwFrameRef.reset();
+      pool_[frame.poolIndex].cacheLease.reset();
       pool_[frame.poolIndex].hwTexture.Reset();
       pool_[frame.poolIndex].hwTextureArrayIndex = 0;
     }
@@ -232,6 +234,7 @@ void FrameQueue::release(size_t poolIndex) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (poolIndex < pool_.size()) {
     pool_[poolIndex].hwFrameRef.reset();
+    pool_[poolIndex].cacheLease.reset();
     pool_[poolIndex].hwTexture.Reset();
     pool_[poolIndex].hwTextureArrayIndex = 0;
   }

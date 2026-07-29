@@ -9,6 +9,7 @@
 
 #include "playback/video/decoder.h"
 #include "playback/video/frame_step.h"
+#include "playback/video/frame_step_prefetch.h"
 #include "playback/video/frame_step_seek_plan.h"
 
 struct QueuedFrame;
@@ -40,6 +41,20 @@ struct StepTarget {
   playback_video_frame_step_seek::Plan seek;
 };
 
+struct PrefetchWindow {
+  playback_video_frame_step_prefetch::Boundary current;
+  playback_video_frame_step_prefetch::Boundary beforeEdge;
+  playback_video_frame_step_prefetch::Boundary afterEdge;
+  size_t beforeFrameCount = 0;
+  size_t afterFrameCount = 0;
+  int64_t beforeDurationUs = 0;
+  int64_t afterDurationUs = 0;
+
+  bool valid() const {
+    return current.valid() && beforeEdge.valid() && afterEdge.valid();
+  }
+};
+
 enum class PendingSeekFrameAction {
   None,
   SaveBackstepCandidate,
@@ -61,6 +76,13 @@ class Controller {
   void resetForSerial(int serial,
                       const playback_video_frame_step_seek::Plan* seekPlan =
                           nullptr);
+  bool enterFrameStepMode(playback_video_frame_step::Direction direction);
+  bool frameStepModeActive() const { return frameStepMode_; }
+  bool mergePrefetchedBatch(
+      playback_video_frame_step_prefetch::Batch batch);
+  void prepareForPrefetchRefill(
+      playback_video_frame_step::Direction direction);
+  PrefetchWindow prefetchWindow() const;
   void noteDecoded(const QueuedFrame& item);
   void appendPresented(const QueuedFrame& item, const VideoFrame& frame);
   const PresentedFrame* peekNext() const;
@@ -111,6 +133,20 @@ class Controller {
   PendingSeekFrameDecision inspectPreviousDiscoveryFrame(
       const QueuedFrame& item, const VideoFrame* frame);
   void shiftKnownRecordsForward();
+  static playback_video_frame_step_prefetch::Boundary boundaryFor(
+      const PresentedFrame& frame);
+  static playback_video_frame_step_prefetch::FrameIdentity identityFor(
+      const PresentedFrame& frame);
+  std::optional<size_t> entryIndexForIdentity(
+      const playback_video_frame_step_prefetch::FrameIdentity& identity) const;
+  void rebuildFrameStepRecords(
+      const playback_video_frame_step_prefetch::FrameIdentity&
+          currentIdentity);
+  void trimFrameStepWindow(
+      const playback_video_frame_step_prefetch::FrameIdentity&
+          currentIdentity);
+  void appendPresentedInFrameStepMode(const QueuedFrame& item,
+                                      const VideoFrame& frame);
   playback_video_frame_step_seek::FrameRecord recordForPresented(
       const QueuedFrame& item);
   void publishReplayPending(bool pending);
@@ -123,6 +159,9 @@ class Controller {
   size_t cursorIndex_ = 0;
   uint64_t currentLogicalIndex_ = 0;
   int serial_ = 0;
+  bool frameStepMode_ = false;
+  playback_video_frame_step::Direction lastFrameStepDirection_ =
+      playback_video_frame_step::Direction::Next;
 };
 
 }  // namespace playback_video_frame_cursor

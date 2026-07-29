@@ -1,8 +1,10 @@
 #ifndef VIDEODECODER_H
 #define VIDEODECODER_H
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,6 +19,11 @@
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct AVFrame;
+
+// Returns FFmpeg's authoritative packed image size for a decoded software
+// frame, or for the software format backing a D3D11 hardware frame.
+// Zero means the format cannot be sized and must not enter a bounded cache.
+size_t decodedVideoFrameStorageBytes(const AVFrame* frame);
 
 enum class VideoPixelFormat {
   Unknown,
@@ -47,11 +54,20 @@ struct VideoFrame {
   Microsoft::WRL::ComPtr<ID3D11Texture2D> hwTexture;
   int hwTextureArrayIndex = 0;  // Index into texture array (for D3D11VA pools)
   std::shared_ptr<AVFrame> hwFrameRef;
+  size_t storageBytes = 0;
+  // Optional ownership token for independently cached GPU/CPU frame storage.
+  // Decoder-backed frames leave this empty; frame-step snapshots use it to
+  // release their bounded cache budget when the last copy disappears.
+  std::shared_ptr<void> cacheLease;
 };
 
 struct VideoReadInfo {
   int64_t timestamp100ns = 0;
   int64_t duration100ns = 0;
+  // Stream-time-base identities survive independent decoder instances and let
+  // the frame-step cache distinguish repeated presentation timestamps.
+  int64_t sourcePtsTicks = (std::numeric_limits<int64_t>::min)();
+  int64_t sourceDtsTicks = (std::numeric_limits<int64_t>::min)();
   uint32_t flags = 0;
   int streamTicks = 0;
   int typeChanges = 0;
@@ -98,7 +114,8 @@ class VideoDecoder {
                       ID3D11Device* device,
                       std::string* error,
                       VideoStreamSelection* streamSelection = nullptr,
-                      std::recursive_mutex* contextMutex = nullptr);
+                      std::recursive_mutex* contextMutex = nullptr,
+                      int requestedStreamIndex = -1);
   
   void uninit();
   bool readFrame(VideoFrame& out, VideoReadInfo* info = nullptr,

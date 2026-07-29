@@ -488,7 +488,9 @@ target_sources(video_frame_step_smoke PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/audio/output_timeline.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/audio/track_switch_timeline.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/control/serial.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/frame_cursor.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_step_prefetch.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/frame_step_seek.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/player.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/state/machine.cpp

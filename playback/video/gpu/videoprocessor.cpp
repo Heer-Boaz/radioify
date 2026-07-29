@@ -149,8 +149,8 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
         m_matrix = matrix;
         m_transfer = transfer;
 
-        // Copy the planar texture planes. NV12/P010 have 2 planes (Y and UV).
-        // In DX11, these are represented as separate subresources.
+        // An FFmpeg D3D11VA frame is one texture-array subresource. Copying
+        // that subresource copies the complete planar NV12/P010 surface.
         auto t0_copy = steady_clock::now();
     #if defined(RADIOIFY_ENABLE_GPU_TIMING)
         {
@@ -164,7 +164,6 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
             context->Begin(qDisjoint.Get());
             context->End(qStart.Get());
             context->CopySubresourceRegion(m_texYuv[writeIndex].Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), nullptr);
-            context->CopySubresourceRegion(m_texYuv[writeIndex].Get(), 1, 0, 0, 0, texture, D3D11CalcSubresource(1, arrayIndex, desc.MipLevels), nullptr);
             context->End(qEnd.Get());
             context->End(qDisjoint.Get());
 
@@ -181,7 +180,6 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
         }
     #else
         context->CopySubresourceRegion(m_texYuv[writeIndex].Get(), 0, 0, 0, 0, texture, D3D11CalcSubresource(0, arrayIndex, desc.MipLevels), nullptr);
-        context->CopySubresourceRegion(m_texYuv[writeIndex].Get(), 1, 0, 0, 0, texture, D3D11CalcSubresource(1, arrayIndex, desc.MipLevels), nullptr);
     #endif
         [[maybe_unused]] auto d_copy = duration_cast<milliseconds>(steady_clock::now() - t0_copy).count();
 
