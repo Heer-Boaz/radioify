@@ -90,16 +90,6 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         const auto* rect = reinterpret_cast<const RECT*>(lParam);
         return rect && pThis->ApplyWindowBounds(*rect) ? TRUE : FALSE;
     }
-    if (uMsg == kCaptureCurrentFrameMessage) {
-        auto* command = reinterpret_cast<FrameCaptureCommand*>(lParam);
-        if (!command) {
-            return FALSE;
-        }
-        command->result = pThis->CaptureCurrentFrameOnWindowThread(
-            command->frameCache, command->ui);
-        return TRUE;
-    }
-
     if (uMsg == WM_NCHITTEST &&
         pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
         LRESULT hit = DefWindowProc(hWnd, uMsg, wParam, lParam);

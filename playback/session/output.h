@@ -69,8 +69,7 @@ class PlaybackOutputController {
   const VideoWindow& window() const;
   GpuVideoFrameCache& frameCache();
   void requestWindowPresent();
-  bool copyCurrentVideoFrameToClipboard(const WindowUiState& ui,
-                                        std::string* error);
+  bool copyCurrentVideoFrameToClipboard(std::string* error);
 
  private:
   struct Impl;

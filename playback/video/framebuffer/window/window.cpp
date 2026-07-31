@@ -2258,21 +2258,6 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache,
 
 VideoFrameSnapshotResult VideoWindow::CaptureCurrentFrame(
     GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
-    VideoFrameSnapshotResult unavailable;
-    if (!m_hWnd) {
-        unavailable.error = "The video window is unavailable for frame capture.";
-        return unavailable;
-    }
-    FrameCaptureCommand command{frameCache, ui, {}};
-    command.result.error =
-        "The video window did not process the frame capture command.";
-    ::SendMessageW(m_hWnd, kCaptureCurrentFrameMessage, 0,
-                   reinterpret_cast<LPARAM>(&command));
-    return std::move(command.result);
-}
-
-VideoFrameSnapshotResult VideoWindow::CaptureCurrentFrameOnWindowThread(
-    GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
     assert(m_windowThreadId != 0 && GetCurrentThreadId() == m_windowThreadId);
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     VideoFrameSnapshotResult result;

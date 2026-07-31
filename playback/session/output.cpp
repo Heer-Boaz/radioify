@@ -160,9 +160,9 @@ void PlaybackOutputController::requestWindowPresent() {
 }
 
 bool PlaybackOutputController::copyCurrentVideoFrameToClipboard(
-    const WindowUiState& ui, std::string* error) {
+    std::string* error) {
   VideoFrameSnapshotResult result =
-      impl_->presentation.captureCurrentFrame(ui);
+      impl_->presentation.captureCurrentFrame();
   if (!result.succeeded()) {
     if (error) {
       *error = std::move(result.error);

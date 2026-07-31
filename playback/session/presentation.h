@@ -60,7 +60,7 @@ class PlaybackPresentation {
   VideoWindow& window();
   const VideoWindow& window() const;
   void requestPresent();
-  VideoFrameSnapshotResult captureCurrentFrame(const WindowUiState& ui);
+  VideoFrameSnapshotResult captureCurrentFrame();
 
  private:
   struct Impl;

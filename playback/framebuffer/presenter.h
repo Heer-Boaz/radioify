@@ -13,6 +13,8 @@
 #include "playback/video/player.h"
 #include "playback/video/framebuffer/window/window.h"
 
+class ThreadDispatchQueue;
+
 namespace playback_framebuffer_presenter {
 
 using TextGridPresentationProvider =
@@ -37,6 +39,7 @@ void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
+    ThreadDispatchQueue& dispatch,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation);
 

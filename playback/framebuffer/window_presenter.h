@@ -25,7 +25,7 @@ class WindowPresenter {
              const PlaybackSessionContinuationState* initialState = nullptr);
   void stop();
   void requestPresent();
-  VideoFrameSnapshotResult captureCurrentFrame(const WindowUiState& ui);
+  VideoFrameSnapshotResult captureCurrentFrame();
 
   bool isOpen() const;
   bool isVisible() const;

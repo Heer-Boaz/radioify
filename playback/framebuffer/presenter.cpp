@@ -7,6 +7,7 @@
 #include <string>
 
 #include "audioplayback.h"
+#include "core/thread_dispatch_queue.h"
 #include "core/windows_message_pump.h"
 #include "playback/debug/lines.h"
 #include "playback/frame/refresh.h"
@@ -21,23 +22,34 @@ constexpr auto kSeekingRefreshInterval = std::chrono::milliseconds(100);
 constexpr auto kTextGridPresentationRefreshInterval =
     std::chrono::milliseconds(250);
 
-void waitForPresenterWake(NativeWaitHandle wakeEvent) {
+void waitForPresenterWake(NativeWaitHandle wakeEvent,
+                          NativeWaitHandle dispatchEvent) {
+  NativeWaitHandle handles[2];
+  DWORD handleCount = 0;
   if (wakeEvent) {
-    waitForHandlesAndPumpThreadWindowMessages(1, &wakeEvent, INFINITE);
-    return;
+    handles[handleCount++] = wakeEvent;
   }
-  waitForHandlesAndPumpThreadWindowMessages(0, nullptr, 50);
+  if (dispatchEvent) {
+    handles[handleCount++] = dispatchEvent;
+  }
+  waitForHandlesAndPumpThreadWindowMessages(
+      handleCount, handleCount > 0 ? handles : nullptr,
+      handleCount > 0 ? INFINITE : 50);
 }
 
 void waitForPresenterActivity(NativeWaitHandle wakeEvent,
-                              NativeWaitHandle frameEvent, int timeoutMs) {
-  NativeWaitHandle handles[2];
+                              NativeWaitHandle frameEvent,
+                              NativeWaitHandle dispatchEvent, int timeoutMs) {
+  NativeWaitHandle handles[3];
   DWORD handleCount = 0;
   if (wakeEvent) {
     handles[handleCount++] = wakeEvent;
   }
   if (frameEvent) {
     handles[handleCount++] = frameEvent;
+  }
+  if (dispatchEvent) {
+    handles[handleCount++] = dispatchEvent;
   }
   if (handleCount == 0) {
     const DWORD waitMs = timeoutMs < 0
@@ -155,6 +167,7 @@ void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
+    ThreadDispatchQueue& dispatch,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation) {
   if (!buildUiState) {
@@ -174,9 +187,11 @@ void runFramebufferPresenterLoop(
   int lastTextGridPresentationCellWidth = 0;
   int lastTextGridPresentationCellHeight = 0;
   const NativeWaitHandle frameEvent = player.videoFrameWaitHandle();
+  const NativeWaitHandle dispatchEvent = dispatch.nativeWaitHandle();
   while (threadState.load(std::memory_order_relaxed) !=
          WindowThreadState::Stopping) {
     videoWindow.PollEvents();
+    dispatch.processPending();
     if (threadState.load(std::memory_order_relaxed) ==
         WindowThreadState::Stopping) {
       break;
@@ -184,12 +199,12 @@ void runFramebufferPresenterLoop(
 
     if (threadState.load(std::memory_order_relaxed) ==
         WindowThreadState::Disabled) {
-      waitForPresenterWake(wakeEvent);
+      waitForPresenterWake(wakeEvent, dispatchEvent);
       continue;
     }
 
     if (!videoWindow.IsOpen() || !videoWindow.IsVisible()) {
-      waitForPresenterWake(wakeEvent);
+      waitForPresenterWake(wakeEvent, dispatchEvent);
       continue;
     }
 
@@ -236,8 +251,10 @@ void runFramebufferPresenterLoop(
                                        .count())));
         }
       }
-      waitForPresenterActivity(wakeEvent, frameEvent, waitTimeoutMs);
+      waitForPresenterActivity(wakeEvent, frameEvent, dispatchEvent,
+                               waitTimeoutMs);
       videoWindow.PollEvents();
+      dispatch.processPending();
     }
 
     if (threadState.load(std::memory_order_relaxed) ==

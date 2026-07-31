@@ -125,6 +125,7 @@ public:
     void Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     // Render the UI overlay using the last cached video frame as background
     void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
+    // Must be called on the window/presenter thread.
     VideoFrameSnapshotResult CaptureCurrentFrame(
         GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     // Render a full-screen text grid (TUI) into the window backbuffer.
@@ -199,7 +200,6 @@ private:
     static constexpr UINT kSetFullscreenMessage = WM_APP + 0x443;
     static constexpr UINT kSetWindowBoundsMessage = WM_APP + 0x444;
     static constexpr UINT kActivateWindowMessage = WM_APP + 0x445;
-    static constexpr UINT kCaptureCurrentFrameMessage = WM_APP + 0x446;
     static constexpr LPARAM kKeepCurrentFocusMessageParam = 0;
     static constexpr LPARAM kTakeForegroundFocusMessageParam = 1;
 
@@ -209,14 +209,6 @@ private:
         VideoViewport viewport{};
     };
 
-    struct FrameCaptureCommand {
-        GpuVideoFrameCache& frameCache;
-        const WindowUiState& ui;
-        VideoFrameSnapshotResult result;
-    };
-
-    VideoFrameSnapshotResult CaptureCurrentFrameOnWindowThread(
-        GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     bool DrawVideoFrame(GpuVideoFrameCache& frameCache,
                         ID3D11Device* device,
                         ID3D11DeviceContext* context,

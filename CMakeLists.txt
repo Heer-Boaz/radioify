@@ -539,6 +539,16 @@ radioify_link_repo_target(waitable_signal_tests)
 add_test(NAME waitable_signal_tests
          COMMAND $<TARGET_FILE:waitable_signal_tests>)
 
+add_executable(thread_dispatch_queue_tests)
+target_sources(thread_dispatch_queue_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_thread_dispatch_queue_tests>
+  ${CMAKE_SOURCE_DIR}/core/thread_dispatch_queue.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+)
+radioify_link_repo_target(thread_dispatch_queue_tests)
+add_test(NAME thread_dispatch_queue_tests
+         COMMAND $<TARGET_FILE:thread_dispatch_queue_tests>)
+
 add_executable(window_input_queue_tests)
 target_sources(window_input_queue_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_window_input_queue_tests>

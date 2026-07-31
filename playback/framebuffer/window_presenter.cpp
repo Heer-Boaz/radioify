@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "core/native_wait_handle.h"
+#include "core/thread_dispatch_queue.h"
 #include "core/windows_app_resources.h"
 #include "core/windows_handle.h"
 #include "presenter.h"
@@ -52,11 +53,13 @@ struct WindowStartGate {
 struct WindowPresenter::Impl {
   VideoWindow window;
   GpuVideoFrameCache frameCache;
+  ThreadDispatchQueue dispatch;
   std::atomic<WindowThreadState> threadState{WindowThreadState::Disabled};
   std::atomic<bool> forcePresent{false};
   std::atomic<HWND> windowHandle{nullptr};
   UniqueWindowsHandle wakeEvent{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
   std::thread thread;
+  std::function<WindowUiState()> uiStateBuilder;
 
   Impl() { window.SetVsync(true); }
 
@@ -82,13 +85,14 @@ struct WindowPresenter::Impl {
     }
 
     auto startGate = std::make_shared<WindowStartGate>();
+    uiStateBuilder = buildUiState;
     windowHandle.store(nullptr, std::memory_order_release);
     threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
     forcePresent.store(true, std::memory_order_relaxed);
 
     thread = std::thread(
-        [this, &player, buildUiState, buildTextGridPresentation, startGate,
-         initialState]() {
+        [this, &player, buildTextGridPresentation, startGate, initialState]() {
+          dispatch.openOnCurrentThread();
           const bool opened =
               window.Open(VideoWindow::kDefaultVideoClientWidth,
                           VideoWindow::kDefaultVideoClientHeight,
@@ -112,10 +116,13 @@ struct WindowPresenter::Impl {
           if (opened) {
             playback_framebuffer_presenter::runFramebufferPresenterLoop(
                 player, window, frameCache, threadState, forcePresent,
-                NativeWaitHandle(wakeEvent.get()), buildUiState,
+                NativeWaitHandle(wakeEvent.get()), dispatch, uiStateBuilder,
                 buildTextGridPresentation);
+            dispatch.close();
             window.Close();
             windowHandle.store(nullptr, std::memory_order_release);
+          } else {
+            dispatch.close();
           }
 
           threadState.store(WindowThreadState::Disabled,
@@ -137,6 +144,7 @@ struct WindowPresenter::Impl {
       if (thread.joinable()) {
         thread.join();
       }
+      uiStateBuilder = {};
       return false;
     }
 
@@ -155,6 +163,7 @@ struct WindowPresenter::Impl {
       appendWindowPresenterTimingLog("window_presenter_stop join_begin");
       threadState.store(WindowThreadState::Stopping, std::memory_order_relaxed);
       forcePresent.store(false, std::memory_order_relaxed);
+      dispatch.close();
       notify();
       thread.join();
       appendWindowPresenterTimingLog("window_presenter_stop join_end");
@@ -163,6 +172,7 @@ struct WindowPresenter::Impl {
     threadState.store(WindowThreadState::Disabled, std::memory_order_relaxed);
     forcePresent.store(false, std::memory_order_relaxed);
     windowHandle.store(nullptr, std::memory_order_release);
+    uiStateBuilder = {};
     {
       std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
       frameCache.Reset();
@@ -175,7 +185,7 @@ struct WindowPresenter::Impl {
     notify();
   }
 
-  VideoFrameSnapshotResult captureCurrentFrame(const WindowUiState& ui) {
+  VideoFrameSnapshotResult captureCurrentFrame() {
     VideoFrameSnapshotResult unavailable;
     HWND hwnd = nativeWindowHandle();
     if (!hwnd || !IsWindow(hwnd) || !IsWindowVisible(hwnd)) {
@@ -183,7 +193,20 @@ struct WindowPresenter::Impl {
           "Frame capture is available while the video window is visible.";
       return unavailable;
     }
-    return window.CaptureCurrentFrame(frameCache, ui);
+    VideoFrameSnapshotResult result;
+    const bool executed = dispatch.invoke([this, &result]() {
+      if (!window.IsOpen() || !window.IsVisible() || !uiStateBuilder) {
+        result.error =
+            "Frame capture is available while the video window is visible.";
+        return;
+      }
+      result = window.CaptureCurrentFrame(frameCache, uiStateBuilder());
+    });
+    if (!executed) {
+      unavailable.error = "The video presenter stopped before frame capture.";
+      return unavailable;
+    }
+    return result;
   }
 
   HWND nativeWindowHandle() const {
@@ -209,9 +232,8 @@ void WindowPresenter::stop() { impl_->stop(); }
 
 void WindowPresenter::requestPresent() { impl_->requestPresent(); }
 
-VideoFrameSnapshotResult WindowPresenter::captureCurrentFrame(
-    const WindowUiState& ui) {
-  return impl_->captureCurrentFrame(ui);
+VideoFrameSnapshotResult WindowPresenter::captureCurrentFrame() {
+  return impl_->captureCurrentFrame();
 }
 
 bool WindowPresenter::isOpen() const {
