@@ -1072,6 +1072,70 @@ int main() {
   ok &= expect(previousCachedStep && previousCachedStep->ptsUs == 990000,
                "Previous-frame must consume a directionally refilled frame");
 
+  playback_video_frame_cursor::Controller reversibleTrimCursor;
+  reversibleTrimCursor.resetForSerial(3);
+  QueuedFrame reversibleTrimCurrent{};
+  reversibleTrimCurrent.ptsUs = 500000;
+  reversibleTrimCurrent.durationUs = 10000;
+  reversibleTrimCurrent.serial = 3;
+  reversibleTrimCurrent.displayIndex = 1;
+  reversibleTrimCurrent.info.sourcePtsTicks = 50;
+  reversibleTrimCurrent.info.sourceDtsTicks = 50;
+  reversibleTrimCurrent.info.timestamp100ns =
+      reversibleTrimCurrent.ptsUs * 10;
+  VideoFrame reversibleTrimCurrentFrame{};
+  reversibleTrimCurrentFrame.timestamp100ns =
+      reversibleTrimCurrent.ptsUs * 10;
+  reversibleTrimCurrentFrame.duration100ns =
+      reversibleTrimCurrent.durationUs * 10;
+  reversibleTrimCursor.noteDecoded(reversibleTrimCurrent);
+  reversibleTrimCursor.appendPresented(reversibleTrimCurrent,
+                                        reversibleTrimCurrentFrame);
+  reversibleTrimCursor.enterFrameStepMode(
+      playback_video_frame_step::Direction::Previous);
+
+  playback_video_frame_step_prefetch::Batch reversibleAfter;
+  reversibleAfter.serial = 3;
+  reversibleAfter.requestKind =
+      playback_video_frame_step_prefetch::RequestKind::Around;
+  reversibleAfter.side =
+      playback_video_frame_step_prefetch::BatchSide::After;
+  reversibleAfter.boundary = reversibleTrimCursor.prefetchWindow().current;
+  reversibleAfter.frames.push_back(
+      makeCachedFrame(510000, 10000, 51, 51));
+  reversibleAfter.frames.push_back(
+      makeCachedFrame(520000, 10000, 52, 52));
+  ok &= expect(
+      reversibleTrimCursor.mergePrefetchedBatch(std::move(reversibleAfter)),
+      "Direction-switch regression setup must retain forward neighbors");
+
+  playback_video_frame_step_prefetch::Batch reversibleBefore;
+  reversibleBefore.serial = 3;
+  reversibleBefore.requestKind =
+      playback_video_frame_step_prefetch::RequestKind::Before;
+  reversibleBefore.side =
+      playback_video_frame_step_prefetch::BatchSide::Before;
+  reversibleBefore.boundary =
+      reversibleTrimCursor.prefetchWindow().beforeEdge;
+  for (int64_t tick = 1; tick < 50; ++tick) {
+    reversibleBefore.frames.push_back(
+        makeCachedFrame(tick * 10000, 10000, tick, tick));
+  }
+  ok &= expect(
+      reversibleTrimCursor.mergePrefetchedBatch(std::move(reversibleBefore)),
+      "Previous refill must merge without invalidating inverse-step history");
+  const playback_video_frame_cursor::PresentedFrame* reversibleNext =
+      reversibleTrimCursor.step(playback_video_frame_step::Direction::Next);
+  ok &= expect(reversibleNext && reversibleNext->ptsUs == 510000,
+               "Cache trimming must preserve the immediate next frame when "
+               "a previous segment is adopted");
+  const playback_video_frame_cursor::PresentedFrame* reversiblePrevious =
+      reversibleTrimCursor.step(
+          playback_video_frame_step::Direction::Previous);
+  ok &= expect(reversiblePrevious && reversiblePrevious->ptsUs == 500000,
+               "The preserved inverse neighbor must step back to the exact "
+               "segment boundary frame");
+
   playback_video_frame_cursor::PrefetchWindow initialPrefetchWindow =
       prefetchedCursor.prefetchWindow();
   ok &= expect(

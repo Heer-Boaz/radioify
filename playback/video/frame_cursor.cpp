@@ -859,8 +859,12 @@ void Controller::trimFrameStepWindow(
 
     const size_t beforeCount = *currentIndex;
     const size_t afterCount = entries_.size() - *currentIndex - 1;
-    const bool mayEvictBefore = beforeCount > 0;
-    const bool mayEvictAfter = afterCount > 0;
+    // A cached neighbor is an exact inverse-step contract, not expendable
+    // lookahead. Keep the immediately adjacent frame on both sides and trim
+    // only farther frames; otherwise adopting a new directional segment can
+    // make the first step after a direction change skip a frame.
+    const bool mayEvictBefore = beforeCount > 1;
+    const bool mayEvictAfter = afterCount > 1;
     if (!mayEvictBefore && !mayEvictAfter) {
       break;
     }
