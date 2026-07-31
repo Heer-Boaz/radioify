@@ -4,7 +4,7 @@
 
 #include "loopsplit.h"
 #include "loopsplit_cli.h"
-#include "ui_helpers.h"
+#include "runtime_helpers.h"
 
 void cleanupLoopSplitExportWorker(LoopSplitTaskState& state) {
   bool shouldJoin = false;

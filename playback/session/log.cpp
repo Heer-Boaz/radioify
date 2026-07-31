@@ -13,6 +13,7 @@ extern "C" {
 }
 
 #include "consolescreen.h"
+#include "runtime_helpers.h"
 #include "timing_log.h"
 #include "ui_helpers.h"
 

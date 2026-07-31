@@ -11,6 +11,7 @@
 #include "consolescreen.h"
 #include "playback_dialog.h"
 #include "playback/video/player.h"
+#include "runtime_helpers.h"
 #include "ui_helpers.h"
 
 namespace {
