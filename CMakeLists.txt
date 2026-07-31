@@ -476,6 +476,7 @@ add_test(NAME frame_clipboard_tests
 add_executable(presentation_policy_tests)
 target_sources(presentation_policy_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_presentation_policy_tests>
+  ${CMAKE_SOURCE_DIR}/playback/overlay/transient_message.cpp
 )
 radioify_link_repo_target(presentation_policy_tests)
 add_test(NAME presentation_policy_tests

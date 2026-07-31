@@ -212,10 +212,10 @@ void runFramebufferPresenterLoop(
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
     FrameSnapshotRequest& frameSnapshotRequest,
-    const std::function<bool()>& overlayVisible,
+    const std::function<bool()>& uiRefreshActive,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation) {
-  if (!overlayVisible || !buildUiState) {
+  if (!uiRefreshActive || !buildUiState) {
     return;
   }
 
@@ -225,6 +225,7 @@ void runFramebufferPresenterLoop(
   GpuTextGridFrame textGridPresentationFrame;
   auto lastOverlayPresent = std::chrono::steady_clock::time_point::min();
   bool lastWindowOverlayVisible = false;
+  bool lastWindowTransientMessageVisible = false;
   bool lastWindowSeeking = false;
   auto lastTextGridPresentationPresent =
       std::chrono::steady_clock::time_point::min();
@@ -260,7 +261,7 @@ void runFramebufferPresenterLoop(
 
     const bool forcePresentRequested =
         forcePresent.load(std::memory_order_relaxed);
-    const bool overlayVisibleRequested = overlayVisible();
+    const bool uiRefreshRequested = uiRefreshActive();
     const bool seekingRequested = player.isSeeking();
     const bool textGridPresentationRequested =
         videoWindow.IsTextGridPresentationEnabled();
@@ -272,7 +273,9 @@ void runFramebufferPresenterLoop(
                             ? candidateMs
                             : std::min(waitTimeoutMs, candidateMs);
       };
-      if (overlayVisibleRequested || seekingRequested) {
+      if (uiRefreshRequested || seekingRequested ||
+          lastWindowOverlayVisible || lastWindowTransientMessageVisible ||
+          lastWindowSeeking) {
         const auto now = std::chrono::steady_clock::now();
         if (lastOverlayPresent == std::chrono::steady_clock::time_point::min()) {
           tightenWaitTimeout(0);
@@ -400,6 +403,10 @@ void runFramebufferPresenterLoop(
         lastTextGridPresentationCellWidth = cellWidth;
         lastTextGridPresentationCellHeight = cellHeight;
       }
+      lastOverlayPresent = std::chrono::steady_clock::time_point::min();
+      lastWindowOverlayVisible = false;
+      lastWindowTransientMessageVisible = false;
+      lastWindowSeeking = false;
       continue;
     }
     lastTextGridPresentationPresent =
@@ -409,10 +416,15 @@ void runFramebufferPresenterLoop(
       ui.debugLines.push_back(videoFrameResult.debugLine);
     }
     bool overlayVisibleNow = ui.overlayAlpha > 0.01f;
+    const bool transientMessageVisibleNow = ui.transientMessage.has_value();
     bool overlayStateChanged = overlayVisibleNow != lastWindowOverlayVisible ||
+                               transientMessageVisibleNow !=
+                                   lastWindowTransientMessageVisible ||
                                seekingNow != lastWindowSeeking;
     bool overlayRefreshDue = false;
-    if (overlayVisibleNow || seekingNow) {
+    if (overlayVisibleNow || transientMessageVisibleNow || seekingNow ||
+        lastWindowOverlayVisible || lastWindowTransientMessageVisible ||
+        lastWindowSeeking) {
       const auto now = std::chrono::steady_clock::now();
       overlayRefreshDue =
           lastOverlayPresent == std::chrono::steady_clock::time_point::min() ||
@@ -436,10 +448,11 @@ void runFramebufferPresenterLoop(
       } else {
         videoWindow.PresentOverlay(frameCache, ui);
       }
-      if (overlayVisibleNow || seekingNow) {
+      if (overlayVisibleNow || transientMessageVisibleNow || seekingNow) {
         lastOverlayPresent = std::chrono::steady_clock::now();
       }
       lastWindowOverlayVisible = overlayVisibleNow;
+      lastWindowTransientMessageVisible = transientMessageVisibleNow;
       lastWindowSeeking = seekingNow;
     }
   }

@@ -162,26 +162,30 @@ int main() {
                        kPlaybackShortcutContextVideoPlayback)
                    .value() == PlaybackShortcutAction::NextFrame,
                "Terminal text input must also resolve period as next-frame");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('S', 's'), kPlaybackShortcutContextShared)
+                   .value() == PlaybackShortcutAction::ToggleSubtitles,
+               "Bare S must continue to toggle subtitles");
   ok &= expect(!resolvePlaybackShortcutAction(
-                   makeKey(VK_F12),
+                   makeKey('S', 'S', SHIFT_PRESSED),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared),
                "Frame-copy must stay scoped to video playback");
   ok &= expect(resolvePlaybackShortcutAction(
-                   makeKey(VK_F12),
+                   makeKey('S', 'S', SHIFT_PRESSED),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPlaybackSession |
                        kPlaybackShortcutContextVideoPlayback)
                    .value() == PlaybackShortcutAction::CopyVideoFrame,
-               "F12 must copy the current rendered video frame");
+               "Shift+S must copy the current rendered video frame");
   ok &= expect(!resolvePlaybackShortcutAction(
-                   makeKey(VK_F12, 0, SHIFT_PRESSED),
+                   makeKey('S', 'S', SHIFT_PRESSED | LEFT_CTRL_PRESSED),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPlaybackSession |
                        kPlaybackShortcutContextVideoPlayback),
-               "Modified F12 must remain available for future shortcut layers");
+               "Ctrl+Shift+S must remain available for future shortcut layers");
   ok &= expect(playback_video_control::shouldCoalesceQueuedEvent(
                    playback_video_control::EventType::SeekRequest,
                    playback_video_control::EventType::SeekRequest),

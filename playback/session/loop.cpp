@@ -20,6 +20,7 @@
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
+#include "playback/overlay/transient_message.h"
 #include "playback_mode.h"
 #include "playback/notification_area/controls.h"
 #include "playback/system_media_transport/controls.h"
@@ -44,10 +45,11 @@ enum class PlaybackLoopState : uint8_t {
 bool shouldRenderPlaybackFrame(bool redraw, bool presented,
                                bool overlayRefreshDue,
                                bool debugRefreshDue,
+                               bool transientMessageRefreshDue,
                                PlaybackSessionState playbackState) {
-  return redraw || presented ||
+  return redraw || presented || transientMessageRefreshDue ||
          ((overlayRefreshDue || debugRefreshDue) &&
-                    playbackState != PlaybackSessionState::Ended);
+          playbackState != PlaybackSessionState::Ended);
 }
 
 PlaybackLayout initialPlaybackLayout(
@@ -64,6 +66,8 @@ PlaybackLayout initialPlaybackLayout(
 
 struct PlaybackLoopRunner::Impl {
   static constexpr auto kSeekThrottleInterval = std::chrono::milliseconds(50);
+  static constexpr auto kTransientMessageDuration =
+      std::chrono::milliseconds(1500);
 
   ConsoleInput& input;
   ConsoleScreen& screen;
@@ -109,6 +113,8 @@ struct PlaybackLoopRunner::Impl {
   bool redraw = true;
   bool forceRefreshArt = false;
   playback_frame_output::FrameOutputState frameOutputState;
+  playback_overlay::TransientMessage transientMessage;
+  bool lastTerminalTransientMessageVisible = false;
   std::atomic<int64_t> overlayUntilMs{0};
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
@@ -188,7 +194,17 @@ struct PlaybackLoopRunner::Impl {
       std::string error;
       if (!output.copyCurrentVideoFrameToClipboard(&error)) {
         std::fprintf(stderr, "Copy frame failed: %s\n", error.c_str());
+        transientMessage.show("Frame copy failed",
+                              playback_overlay::TransientMessage::Clock::now(),
+                              kTransientMessageDuration);
+      } else {
+        transientMessage.show(
+            "Frame copied to clipboard",
+            playback_overlay::TransientMessage::Clock::now(),
+            kTransientMessageDuration);
       }
+      redraw = true;
+      output.requestWindowPresent();
     };
     inputSignals.toggleWindowPresentation = [this]() {
       return presentationController.toggleWindow(output, redraw,
@@ -254,13 +270,18 @@ struct PlaybackLoopRunner::Impl {
   }
 
   WindowUiState buildWindowUiState() {
-    return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
-        windowTitle, output.window(), core.player(), subtitleManager,
-        core.playbackState(), core.audioOk(), requestTransportCommand != nullptr,
-        requestTransportCommand != nullptr, hasSubtitles,
-        enableSubtitlesShared, *seekState.windowLocalSeekRequested,
-        *seekState.windowPendingSeekTargetSec, overlayControlHover,
-        overlayVisible(), config.debugOverlay);
+    WindowUiState ui =
+        playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
+            windowTitle, output.window(), core.player(), subtitleManager,
+            core.playbackState(), core.audioOk(),
+            requestTransportCommand != nullptr,
+            requestTransportCommand != nullptr, hasSubtitles,
+            enableSubtitlesShared, *seekState.windowLocalSeekRequested,
+            *seekState.windowPendingSeekTargetSec, overlayControlHover,
+            overlayVisible(), config.debugOverlay);
+    ui.transientMessage = transientMessage.textAt(
+        playback_overlay::TransientMessage::Clock::now());
+    return ui;
   }
 
   bool buildTextGridPresentation(int pixelWidth, int pixelHeight,
@@ -297,6 +318,8 @@ struct PlaybackLoopRunner::Impl {
     const bool audioOnlyPlayback =
         core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
     inputs.overlayVisibleNow = overlayVisible() || audioOnlyPlayback;
+    inputs.transientMessage = transientMessage.textAt(
+        playback_overlay::TransientMessage::Clock::now());
     inputs.clearHistory = false;
     inputs.frameChanged = frameChanged;
     inputs.cellPixelWidth = cellPixelWidth;
@@ -331,9 +354,13 @@ struct PlaybackLoopRunner::Impl {
               pixelWidth, pixelHeight, cellPixelWidth, cellPixelHeight, frame,
               frameChanged, enhancementDebugLine, outCells, outCols, outRows);
         };
-    auto overlayVisibleFn = [&]() { return overlayVisible(); };
+    auto uiRefreshActive = [&]() {
+      return overlayVisible() ||
+             transientMessage.visibleAt(
+                 playback_overlay::TransientMessage::Clock::now());
+    };
     PlaybackPresenterSyncResult result =
-        output.sync(core.player(), buildUiState, overlayVisibleFn,
+        output.sync(core.player(), buildUiState, uiRefreshActive,
                     buildTextGridPresentation, redraw, forceRefreshArt,
                     overlayUntilMs, overlayControlHover);
     presentationController.reconcile(output);
@@ -395,6 +422,8 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.allowAsciiCpuFallback = false;
     renderInputs.useWindowPresenter = output.windowActive();
     renderInputs.overlayVisibleNow = overlayVisible();
+    renderInputs.transientMessage = transientMessage.textAt(
+        playback_overlay::TransientMessage::Clock::now());
     renderInputs.cellPixelWidth = screen.cellPixelWidth();
     renderInputs.cellPixelHeight = screen.cellPixelHeight();
     renderInputs.cellPixelSourceLabel = screen.cellPixelSourceLabel();
@@ -409,6 +438,8 @@ struct PlaybackLoopRunner::Impl {
     updateRenderInputs(forceRefreshArt || renderCopiedFrame,
                        presented || renderCopiedFrame);
     output.renderTerminal(renderInputs);
+    lastTerminalTransientMessageVisible =
+        renderInputs.transientMessage.has_value();
     auto t1 = std::chrono::steady_clock::now();
     lastOverlayRefresh = t1;
     lastDebugRefresh = t1;
@@ -435,6 +466,8 @@ struct PlaybackLoopRunner::Impl {
     if (!useWindowPresenter) {
       updateRenderInputs(true, true);
       output.renderTerminal(renderInputs);
+      lastTerminalTransientMessageVisible =
+          renderInputs.transientMessage.has_value();
     } else {
       redraw = false;
       forceRefreshArt = false;
@@ -660,6 +693,7 @@ struct PlaybackLoopRunner::Impl {
     bool presented = false;
     bool overlayRefreshDue = false;
     bool debugRefreshDue = false;
+    bool transientMessageRefreshDue = false;
   };
 
   int computeWaitTimeoutMs(const RefreshState& refresh) const {
@@ -704,7 +738,7 @@ struct PlaybackLoopRunner::Impl {
 
   void waitForNextActivity(const RefreshState& refresh) {
     if (loopStopRequested || redraw || refresh.overlayRefreshDue ||
-        refresh.debugRefreshDue) {
+        refresh.debugRefreshDue || refresh.transientMessageRefreshDue) {
       return;
     }
 
@@ -738,6 +772,8 @@ struct PlaybackLoopRunner::Impl {
         core.refresh(state.useWindowPresenter, output.windowActive(), redraw);
     const bool overlayVisibleNow = overlayVisible();
     const auto nowForRefresh = std::chrono::steady_clock::now();
+    const bool transientMessageVisibleNow =
+        transientMessage.visibleAt(nowForRefresh);
     state.overlayRefreshDue =
         !state.useWindowPresenter && overlayVisibleNow &&
         (lastOverlayRefresh == std::chrono::steady_clock::time_point::min() ||
@@ -746,6 +782,9 @@ struct PlaybackLoopRunner::Impl {
         !state.useWindowPresenter && config.debugOverlay &&
         (lastDebugRefresh == std::chrono::steady_clock::time_point::min() ||
          nowForRefresh - lastDebugRefresh >= std::chrono::milliseconds(250));
+    state.transientMessageRefreshDue =
+        !state.useWindowPresenter &&
+        transientMessageVisibleNow != lastTerminalTransientMessageVisible;
     return state;
   }
 
@@ -795,6 +834,7 @@ struct PlaybackLoopRunner::Impl {
       if (shouldRenderPlaybackFrame(redraw, refresh.presented,
                                     refresh.overlayRefreshDue,
                                     refresh.debugRefreshDue,
+                                    refresh.transientMessageRefreshDue,
                                     core.playbackState())) {
         renderPlaybackFrame(refresh.presented, loopState);
         if (frameOutputState.renderFailed) {

@@ -63,7 +63,7 @@ void runFramebufferPresenterLoop(
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
     FrameSnapshotRequest& frameSnapshotRequest,
-    const std::function<bool()>& overlayVisible,
+    const std::function<bool()>& uiRefreshActive,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation);
 

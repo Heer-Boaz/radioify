@@ -278,9 +278,12 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            int minY,
                            int maxY);
 
-bool renderOverlayToGpuTextGrid(const OverlayCellLayout& layout,
-                                const OverlayRenderStyles& styles,
-                                double progress,
-                                GpuTextGridFrame& outFrame);
+void renderTransientMessageToScreen(ConsoleScreen& screen,
+                                    const std::string& message,
+                                    const Style& style);
+
+bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
+                                 const OverlayRenderStyles& styles,
+                                 GpuTextGridFrame& outFrame);
 
 }  // namespace playback_overlay

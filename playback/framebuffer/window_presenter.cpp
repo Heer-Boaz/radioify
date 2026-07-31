@@ -72,7 +72,7 @@ struct WindowPresenter::Impl {
   }
 
   bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
-             const std::function<bool()>& overlayVisible,
+             const std::function<bool()>& uiRefreshActive,
              const playback_framebuffer_presenter::TextGridPresentationProvider&
                  buildTextGridPresentation,
              const PlaybackSessionContinuationState* initialState) {
@@ -90,7 +90,7 @@ struct WindowPresenter::Impl {
     forcePresent.store(true, std::memory_order_relaxed);
 
     thread = std::thread(
-        [this, &player, buildUiState, overlayVisible, buildTextGridPresentation,
+        [this, &player, buildUiState, uiRefreshActive, buildTextGridPresentation,
          startGate, initialState]() {
           const bool opened =
               window.Open(VideoWindow::kDefaultVideoClientWidth,
@@ -116,7 +116,7 @@ struct WindowPresenter::Impl {
             playback_framebuffer_presenter::runFramebufferPresenterLoop(
                 player, window, frameCache, threadState, forcePresent,
                 NativeWaitHandle(wakeEvent.get()), frameSnapshotRequest,
-                overlayVisible, buildUiState, buildTextGridPresentation);
+                uiRefreshActive, buildUiState, buildTextGridPresentation);
             window.Close();
             windowHandle.store(nullptr, std::memory_order_release);
           }
@@ -210,11 +210,11 @@ WindowPresenter::~WindowPresenter() = default;
 
 bool WindowPresenter::start(
     Player& player, const std::function<WindowUiState()>& buildUiState,
-    const std::function<bool()>& overlayVisible,
+    const std::function<bool()>& uiRefreshActive,
     const playback_framebuffer_presenter::TextGridPresentationProvider&
         buildTextGridPresentation,
     const PlaybackSessionContinuationState* initialState) {
-  return impl_->start(player, buildUiState, overlayVisible,
+  return impl_->start(player, buildUiState, uiRefreshActive,
                       buildTextGridPresentation, initialState);
 }
 

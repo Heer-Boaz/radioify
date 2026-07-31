@@ -88,7 +88,7 @@ PlaybackLayout PlaybackPresentation::desiredLayout() const {
 PlaybackPresenterSyncResult PlaybackPresentation::sync(
     Player& player,
     const std::function<WindowUiState()>& buildUiState,
-    const std::function<bool()>& overlayVisible,
+    const std::function<bool()>& uiRefreshActive,
     const playback_framebuffer_presenter::TextGridPresentationProvider&
         buildTextGridPresentation,
     bool& redraw,
@@ -99,7 +99,7 @@ PlaybackPresenterSyncResult PlaybackPresentation::sync(
   if (impl_->windowRequested()) {
     const PlaybackSessionContinuationState* initialState =
         impl_->initialState ? &*impl_->initialState : nullptr;
-    if (impl_->windowPresenter.start(player, buildUiState, overlayVisible,
+    if (impl_->windowPresenter.start(player, buildUiState, uiRefreshActive,
                                      buildTextGridPresentation, initialState)) {
       impl_->activeLayout = PlaybackLayout::Window;
       impl_->initialState.reset();

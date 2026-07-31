@@ -427,6 +427,11 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         screen, overlayLayout, overlayStyles, ratio, artTop, height);
   }
 
+  if (inputs.transientMessage.has_value()) {
+    playback_overlay::renderTransientMessageToScreen(
+        screen, *inputs.transientMessage, accentStyle);
+  }
+
   screen.draw();
 }
 

@@ -861,6 +861,8 @@ class ScreenOverlayTarget {
         lastY_(std::min(screen.height(), maxY)) {}
 
   bool isDrawable() const { return width_ > 0 && firstY_ < lastY_; }
+  int width() const { return width_; }
+  int height() const { return lastY_; }
 
   bool rowVisible(int y) const { return y >= firstY_ && y < lastY_; }
 
@@ -911,6 +913,8 @@ class GpuTextGridOverlayTarget {
   }
 
   bool isDrawable() const { return frame_.cols > 0 && frame_.rows > 0; }
+  int width() const { return frame_.cols; }
+  int height() const { return frame_.rows; }
 
   bool rowVisible(int y) const { return y >= 0 && y < frame_.rows; }
 
@@ -961,6 +965,34 @@ class GpuTextGridOverlayTarget {
  private:
   GpuTextGridFrame& frame_;
 };
+
+OverlayCellTextLine layoutTransientMessageLine(const std::string& message,
+                                               int width, int height) {
+  OverlayCellTextLine line;
+  const int safeWidth = std::max(1, width);
+  const int horizontalInset = safeWidth > 2 ? 1 : 0;
+  const int availableWidth =
+      std::max(1, safeWidth - horizontalInset * 2);
+  line.text = " " + message + " ";
+  if (utf8DisplayWidth(line.text) > availableWidth) {
+    line.text = utf8TakeDisplayWidth(line.text, availableWidth);
+  }
+  line.x = std::max(horizontalInset,
+                    safeWidth - horizontalInset -
+                        utf8DisplayWidth(line.text));
+  line.y = std::min(1, std::max(0, height - 1));
+  return line;
+}
+
+template <typename Target>
+void renderTransientMessageToTarget(Target& target,
+                                    const std::string& message,
+                                    const Style& style) {
+  if (!target.isDrawable()) return;
+  const OverlayCellTextLine line = layoutTransientMessageLine(
+      message, target.width(), target.height());
+  target.writeText(line.x, line.y, line.text, style);
+}
 
 template <typename Target>
 void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
@@ -1015,14 +1047,29 @@ void renderOverlayToScreen(ConsoleScreen& screen,
   renderOverlayToTarget(target, layout, styles, progress);
 }
 
-bool renderOverlayToGpuTextGrid(const OverlayCellLayout& layout,
-                                const OverlayRenderStyles& styles,
-                                double progress,
-                                GpuTextGridFrame& outFrame) {
-  GpuTextGridOverlayTarget target(outFrame, layout.width, layout.height,
-                                  styles.baseStyle);
-  renderOverlayToTarget(target, layout, styles, progress);
-  return true;
+void renderTransientMessageToScreen(ConsoleScreen& screen,
+                                    const std::string& message,
+                                    const Style& style) {
+  ScreenOverlayTarget target(screen, 0, screen.height());
+  renderTransientMessageToTarget(target, message, style);
+}
+
+bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
+                                 const OverlayRenderStyles& styles,
+                                 GpuTextGridFrame& outFrame) {
+  GpuTextGridOverlayTarget target(outFrame, width, height, styles.baseStyle);
+  bool rendered = false;
+  if (ui.overlayAlpha > 0.01f || !ui.debugLines.empty()) {
+    const OverlayCellLayout layout = layoutWindowOverlayCells(ui, width, height);
+    renderOverlayToTarget(target, layout, styles, ui.progress);
+    rendered = true;
+  }
+  if (ui.transientMessage.has_value()) {
+    renderTransientMessageToTarget(target, *ui.transientMessage,
+                                   styles.accentStyle);
+    rendered = true;
+  }
+  return rendered;
 }
 
 }  // namespace playback_overlay

@@ -77,19 +77,6 @@ namespace {
         return out;
     }
 
-    static bool buildWindowOverlayTextGrid(
-        const WindowUiState& ui, int cols, int rows,
-        GpuTextGridFrame& outFrame) {
-        cols = std::max(1, cols);
-        rows = std::max(1, rows);
-
-        const playback_overlay::OverlayCellLayout layout =
-            playback_overlay::layoutWindowOverlayCells(ui, cols, rows);
-        return playback_overlay::renderOverlayToGpuTextGrid(
-            layout, playback_overlay::OverlayRenderStyles{}, ui.progress,
-            outFrame);
-    }
-
     enum class AssRenderStatus {
         ok_no_glyph,
         ok_with_glyph,
@@ -2402,7 +2389,8 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                               bool includePlaybackOverlay) {
     bool showOverlay =
         includePlaybackOverlay &&
-        (ui.overlayAlpha > 0.01f || !ui.debugLines.empty());
+        (ui.overlayAlpha > 0.01f || !ui.debugLines.empty() ||
+         ui.transientMessage.has_value());
     const bool hasAssScript =
         static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
     const bool hasPlaintextSubtitleCues = std::any_of(
@@ -2475,8 +2463,9 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
         const int rows =
             playback_overlay::overlayCellCountForPixels(
                 std::max(1, geometry.height), cellHeight);
-        if (buildWindowOverlayTextGrid(ui, cols, rows,
-                                       m_windowOverlayTextGrid)) {
+        if (playback_overlay::renderWindowUiToGpuTextGrid(
+                ui, cols, rows, playback_overlay::OverlayRenderStyles{},
+                m_windowOverlayTextGrid)) {
             const int textPxW =
                 std::min(geometry.width,
                          m_windowOverlayTextGrid.cols * cellWidth);
