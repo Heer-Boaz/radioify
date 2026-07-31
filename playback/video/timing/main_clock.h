@@ -61,6 +61,11 @@ struct Snapshot {
   int64_t videoClockUs = 0;
 };
 
+enum class CurrentPositionPolicy {
+  PlaybackClock,
+  PresentedVideo,
+};
+
 class Controller {
  public:
   void reset();
@@ -84,7 +89,8 @@ class Controller {
 };
 
 int64_t resolveCurrentPlaybackUs(const Snapshot& snapshot,
-                                 int64_t lastPresentedPtsUs);
+                                 int64_t lastPresentedPtsUs,
+                                 CurrentPositionPolicy policy);
 
 int64_t convertToSystemUs(const Snapshot& snapshot, int64_t streamUs,
                           int64_t fallbackSystemUs);

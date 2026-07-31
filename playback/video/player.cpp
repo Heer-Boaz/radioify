@@ -72,7 +72,6 @@ extern "C" {
 #include "queues.h"
 #include "runtime_helpers.h"
 #include "timing_log.h"
-#include "ui_helpers.h"
 
 namespace {
 constexpr int64_t kProbeSize = 64 * 1024;
@@ -4300,10 +4299,21 @@ int64_t Player::currentUs() const {
   if (impl_->serialControl.pendingSeekSerial() != 0) {
     return seekUs;
   }
+  const int currentSerial = impl_->serialControl.currentSerial();
+  const int lastPresentedSerial =
+      impl_->lastPresentedSerial.load(std::memory_order_relaxed);
+  const auto positionPolicy =
+      impl_->playbackState.projection().transport ==
+                  playback_video_state_machine::TransportState::Paused &&
+              lastPresentedSerial == currentSerial
+          ? playback_video_main_clock::CurrentPositionPolicy::PresentedVideo
+          : playback_video_main_clock::CurrentPositionPolicy::PlaybackClock;
+  const int64_t lastPresentedPtsUs =
+      impl_->lastPresentedPtsUs.load(std::memory_order_relaxed);
   int64_t now = nowUs();
   playback_video_main_clock::Snapshot snapshot = impl_->masterClockSnapshot(now);
   return playback_video_main_clock::resolveCurrentPlaybackUs(
-      snapshot, impl_->lastPresentedPtsUs.load(std::memory_order_relaxed));
+      snapshot, lastPresentedPtsUs, positionPolicy);
 }
 
 uint64_t Player::videoFrameCounter() const {

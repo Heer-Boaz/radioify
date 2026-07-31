@@ -1,5 +1,6 @@
 #include "main_clock.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 
@@ -130,7 +131,11 @@ Snapshot Controller::sample(const SampleRequest& request) {
 }
 
 int64_t resolveCurrentPlaybackUs(const Snapshot& snapshot,
-                                 int64_t lastPresentedPtsUs) {
+                                 int64_t lastPresentedPtsUs,
+                                 CurrentPositionPolicy policy) {
+  if (policy == CurrentPositionPolicy::PresentedVideo) {
+    return (std::max)(int64_t{0}, lastPresentedPtsUs);
+  }
   if (snapshot.source != PlayerClockSource::None && snapshot.us > 0) {
     return snapshot.us;
   }
