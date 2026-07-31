@@ -15,7 +15,6 @@
 #include <windows.h>
 #endif
 
-#include "app_common.h"
 #include "media_formats.h"
 #include "windows_app_resources.h"
 
@@ -231,11 +230,4 @@ bool validateSupportedAudioInputFile(const std::filesystem::path& path,
   if (validationError.empty()) return true;
   if (error) *error = validationError;
   return false;
-}
-
-void requireSupportedAudioInputFile(const std::filesystem::path& path) {
-  std::string error;
-  if (!validateSupportedAudioInputFile(path, &error)) {
-    die(error);
-  }
 }

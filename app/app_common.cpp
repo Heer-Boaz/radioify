@@ -4,6 +4,7 @@
 #include <iostream>
 #include <limits>
 
+#include "core/runtime_helpers.h"
 #include "core/windows_app_resources.h"
 
 static void showUsage(const char* exe) {
@@ -53,6 +54,13 @@ void die(const std::string& message) {
 
 void logLine(const std::string& message) {
   std::cout << message << "\n";
+}
+
+void requireSupportedAudioInputFile(const std::filesystem::path& path) {
+  std::string error;
+  if (!validateSupportedAudioInputFile(path, &error)) {
+    die(error);
+  }
 }
 
 static ShellOpenModeSelection parseShellOpenModeSelectionOrDie(

@@ -21,4 +21,3 @@ std::vector<std::filesystem::path> radioifyResourceSearchRoots();
 
 bool validateSupportedAudioInputFile(const std::filesystem::path& path,
                                      std::string* error);
-void requireSupportedAudioInputFile(const std::filesystem::path& path);

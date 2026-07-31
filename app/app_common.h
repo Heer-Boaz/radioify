@@ -1,6 +1,7 @@
 #ifndef APP_COMMON_H
 #define APP_COMMON_H
 
+#include <filesystem>
 #include <string>
 
 #include "audio/audiofilter/radio1938/radio_receiver_profile.h"
@@ -43,6 +44,7 @@ struct Options {
 
 void die(const std::string& message);
 void logLine(const std::string& message);
+void requireSupportedAudioInputFile(const std::filesystem::path& path);
 Options parseArgs(int argc, char** argv);
 
 #endif  // APP_COMMON_H
