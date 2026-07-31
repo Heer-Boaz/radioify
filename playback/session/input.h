@@ -50,6 +50,7 @@ struct PlaybackInputSignals {
   std::function<bool()> toggleFullscreen;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
+  std::function<void()> copyCurrentVideoFrameToClipboard;
   std::atomic<int64_t>* overlayUntilMs = nullptr;
 
   bool* loopStopRequested = nullptr;

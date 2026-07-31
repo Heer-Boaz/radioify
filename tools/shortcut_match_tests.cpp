@@ -162,6 +162,26 @@ int main() {
                        kPlaybackShortcutContextVideoPlayback)
                    .value() == PlaybackShortcutAction::NextFrame,
                "Terminal text input must also resolve period as next-frame");
+  ok &= expect(!resolvePlaybackShortcutAction(
+                   makeKey(VK_F12),
+                   kPlaybackShortcutContextGlobal |
+                       kPlaybackShortcutContextShared),
+               "Frame-copy must stay scoped to video playback");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey(VK_F12),
+                   kPlaybackShortcutContextGlobal |
+                       kPlaybackShortcutContextShared |
+                       kPlaybackShortcutContextPlaybackSession |
+                       kPlaybackShortcutContextVideoPlayback)
+                   .value() == PlaybackShortcutAction::CopyVideoFrame,
+               "F12 must copy the current rendered video frame");
+  ok &= expect(!resolvePlaybackShortcutAction(
+                   makeKey(VK_F12, 0, SHIFT_PRESSED),
+                   kPlaybackShortcutContextGlobal |
+                       kPlaybackShortcutContextShared |
+                       kPlaybackShortcutContextPlaybackSession |
+                       kPlaybackShortcutContextVideoPlayback),
+               "Modified F12 must remain available for future shortcut layers");
   ok &= expect(playback_video_control::shouldCoalesceQueuedEvent(
                    playback_video_control::EventType::SeekRequest,
                    playback_video_control::EventType::SeekRequest),

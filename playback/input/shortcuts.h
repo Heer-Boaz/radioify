@@ -34,7 +34,7 @@ inline constexpr DWORD kPlaybackShortcutFrameStepForbiddenMask =
 
 // One shared shortcut table. Context masks let modes layer additional keys on
 // top of the shared map without owning separate per-mode tables.
-inline constexpr std::array<PlaybackShortcutBinding, 33>
+inline constexpr std::array<PlaybackShortcutBinding, 34>
     kPlaybackShortcutBindings = {{
         {PlaybackShortcutAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal},
@@ -125,6 +125,9 @@ inline constexpr std::array<PlaybackShortcutBinding, 33>
          kPlaybackShortcutFrameStepForbiddenMask,
          kPlaybackShortcutContextVideoPlayback},
         {PlaybackShortcutAction::NextFrame, VK_OEM_PERIOD, '.', '.', 0,
+         kPlaybackShortcutFrameStepForbiddenMask,
+         kPlaybackShortcutContextVideoPlayback},
+        {PlaybackShortcutAction::CopyVideoFrame, VK_F12, 0, 0, 0,
          kPlaybackShortcutFrameStepForbiddenMask,
          kPlaybackShortcutContextVideoPlayback},
         {PlaybackShortcutAction::VolumeUp, VK_UP, 0, 0, kPlaybackShortcutShiftMask,

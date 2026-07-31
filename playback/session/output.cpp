@@ -7,6 +7,7 @@
 #include "consoleinput.h"
 #include "core/windows_message_pump.h"
 #include "playback/video/player.h"
+#include "playback/video/framebuffer/frame_clipboard.h"
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/ascii/screen_renderer.h"
 #include "presentation.h"
@@ -41,8 +42,12 @@ bool PlaybackOutputController::windowActive() const {
   return impl_->presentation.windowActive();
 }
 
+bool PlaybackOutputController::windowOpen() const {
+  return impl_->presentation.windowOpen();
+}
+
 bool PlaybackOutputController::windowVisible() const {
-  return impl_->presentation.window().IsVisible();
+  return impl_->presentation.windowVisible();
 }
 
 bool PlaybackOutputController::consumeWindowCloseRequested() {
@@ -80,8 +85,7 @@ bool PlaybackOutputController::pollInput(ConsoleInput& input, InputEvent& ev) {
   if (input.poll(ev)) {
     return true;
   }
-  return impl_->presentation.window().IsOpen() &&
-         impl_->presentation.window().PollInput(ev);
+  return impl_->presentation.window().PollInput(ev);
 }
 
 bool PlaybackOutputController::waitForActivity(
@@ -101,11 +105,9 @@ bool PlaybackOutputController::waitForActivity(
   if (thirdExtraHandle) {
     handles[handleCount++] = thirdExtraHandle;
   }
-  if (impl_->presentation.window().IsOpen()) {
-    if (NativeWaitHandle windowInputHandle =
-            impl_->presentation.window().InputWaitHandle()) {
-      handles[handleCount++] = windowInputHandle;
-    }
+  if (NativeWaitHandle windowInputHandle =
+          impl_->presentation.window().InputWaitHandle()) {
+    handles[handleCount++] = windowInputHandle;
   }
   if (impl_->presentation.windowActive()) {
     if (NativeWaitHandle closeHandle =
@@ -124,8 +126,7 @@ bool PlaybackOutputController::waitForActivity(
 void PlaybackOutputController::updateWindowCursor(
     Player& player, PlaybackSessionState playbackState, bool overlayVisible) {
   if (impl_->presentation.windowActive() &&
-      impl_->presentation.window().IsOpen() &&
-      impl_->presentation.window().IsVisible()) {
+      impl_->presentation.windowVisible()) {
     const PlayerState state = player.state();
     const bool isActivelyPlaying =
         state == PlayerState::Playing || state == PlayerState::Draining;
@@ -160,4 +161,18 @@ GpuVideoFrameCache& PlaybackOutputController::frameCache() {
 
 void PlaybackOutputController::requestWindowPresent() {
   impl_->presentation.requestPresent();
+}
+
+bool PlaybackOutputController::copyCurrentVideoFrameToClipboard(
+    std::string* error) {
+  VideoFrameSnapshotResult result =
+      impl_->presentation.captureCurrentFrame();
+  if (!result.succeeded()) {
+    if (error) {
+      *error = std::move(result.error);
+    }
+    return false;
+  }
+  return playback_video_frame_clipboard::copyToClipboard(
+      impl_->presentation.nativeWindowHandle(), result.snapshot, error);
 }

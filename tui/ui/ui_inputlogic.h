@@ -30,6 +30,7 @@ struct InputCallbacks {
   std::function<void(int)> onSeekBy;
   std::function<void()> onPreviousFrame;
   std::function<void()> onNextFrame;
+  std::function<void()> onCopyVideoFrame;
   std::function<void(double)> onSeekToRatio;
   std::function<void(float)> onAdjustVolume;
   std::function<bool(const std::filesystem::path&)> onPlayFile;

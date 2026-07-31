@@ -998,6 +998,9 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
       case PlaybackShortcutAction::NextFrame:
         if (callbacks.onNextFrame) callbacks.onNextFrame();
         return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::CopyVideoFrame:
+        if (callbacks.onCopyVideoFrame) callbacks.onCopyVideoFrame();
+        return PlaybackInputResult::HandledWithoutOverlayRefresh;
       case PlaybackShortcutAction::VolumeUp:
         if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(0.10f);
         return PlaybackInputResult::Handled;

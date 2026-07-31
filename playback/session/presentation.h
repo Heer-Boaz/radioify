@@ -40,6 +40,9 @@ class PlaybackPresentation {
 
   bool windowRequested() const;
   bool windowActive() const;
+  bool windowOpen() const;
+  bool windowVisible() const;
+  HWND nativeWindowHandle() const;
   bool consumeWindowCloseRequested();
   NativeWaitHandle windowCloseRequestedWaitHandle() const;
   PlaybackRenderMode renderMode(bool enableAscii) const;
@@ -61,6 +64,7 @@ class PlaybackPresentation {
   VideoWindow& window();
   const VideoWindow& window() const;
   void requestPresent();
+  VideoFrameSnapshotResult captureCurrentFrame();
 
  private:
   struct Impl;

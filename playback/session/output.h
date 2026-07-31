@@ -5,6 +5,7 @@
 #include <functional>
 #include <optional>
 #include <memory>
+#include <string>
 
 #include "core/native_wait_handle.h"
 #include "playback/framebuffer/presenter.h"
@@ -40,6 +41,7 @@ class PlaybackOutputController {
 
   bool windowRequested() const;
   bool windowActive() const;
+  bool windowOpen() const;
   bool windowVisible() const;
   bool consumeWindowCloseRequested();
   PlaybackRenderMode renderMode(bool enableAscii) const;
@@ -72,6 +74,7 @@ class PlaybackOutputController {
   const VideoWindow& window() const;
   GpuVideoFrameCache& frameCache();
   void requestWindowPresent();
+  bool copyCurrentVideoFrameToClipboard(std::string* error);
 
  private:
   struct Impl;

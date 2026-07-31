@@ -94,7 +94,7 @@ void VideoWindow::PresentTextGrid(const std::vector<ScreenCell>& cells, int cols
             ShaderConstants sc{};
             sc.hasRGBA = 1u;
             sc.rotationQuarterTurns = 0u;
-            FillOutputColorConstants(sc);
+            FillOutputColorConstants(sc, m_outputColorState);
             std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }

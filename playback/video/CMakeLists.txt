@@ -42,6 +42,7 @@ radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/luminance_stats.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/decoder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/text_grid_bitmap_renderer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/frame_clipboard.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/video_output_color.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/window.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window/file_drop.cpp

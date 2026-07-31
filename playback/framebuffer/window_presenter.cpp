@@ -52,8 +52,10 @@ struct WindowStartGate {
 struct WindowPresenter::Impl {
   VideoWindow window;
   GpuVideoFrameCache frameCache;
+  playback_framebuffer_presenter::FrameSnapshotRequest frameSnapshotRequest;
   std::atomic<WindowThreadState> threadState{WindowThreadState::Disabled};
   std::atomic<bool> forcePresent{false};
+  std::atomic<HWND> windowHandle{nullptr};
   UniqueWindowsHandle wakeEvent{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
   std::thread thread;
 
@@ -82,6 +84,8 @@ struct WindowPresenter::Impl {
     }
 
     auto startGate = std::make_shared<WindowStartGate>();
+    frameSnapshotRequest.reset();
+    windowHandle.store(nullptr, std::memory_order_release);
     threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
     forcePresent.store(true, std::memory_order_relaxed);
 
@@ -93,6 +97,8 @@ struct WindowPresenter::Impl {
                           VideoWindow::kDefaultVideoClientHeight,
                           RADIOIFY_APP_NAME " Output", false);
           if (opened) {
+            windowHandle.store(window.NativeWindowHandle(),
+                               std::memory_order_release);
             window.EnableFileDrop();
             if (initialState && initialState->hasLayout) {
               playback_session_window::applyPlacement(
@@ -109,9 +115,10 @@ struct WindowPresenter::Impl {
           if (opened) {
             playback_framebuffer_presenter::runFramebufferPresenterLoop(
                 player, window, frameCache, threadState, forcePresent,
-                NativeWaitHandle(wakeEvent.get()), overlayVisible, buildUiState,
-                buildTextGridPresentation);
+                NativeWaitHandle(wakeEvent.get()), frameSnapshotRequest,
+                overlayVisible, buildUiState, buildTextGridPresentation);
             window.Close();
+            windowHandle.store(nullptr, std::memory_order_release);
           }
 
           threadState.store(WindowThreadState::Disabled,
@@ -141,15 +148,18 @@ struct WindowPresenter::Impl {
   }
 
   void stop() {
+    HWND hwnd = nativeWindowHandle();
     appendWindowPresenterTimingLog(
         "window_presenter_stop begin joinable=%d open=%d visible=%d",
-        thread.joinable() ? 1 : 0, window.IsOpen() ? 1 : 0,
-        window.IsVisible() ? 1 : 0);
+        thread.joinable() ? 1 : 0, hwnd && IsWindow(hwnd) ? 1 : 0,
+        hwnd && IsWindowVisible(hwnd) ? 1 : 0);
 
     if (thread.joinable()) {
       appendWindowPresenterTimingLog("window_presenter_stop join_begin");
       threadState.store(WindowThreadState::Stopping, std::memory_order_relaxed);
       forcePresent.store(false, std::memory_order_relaxed);
+      frameSnapshotRequest.cancel(
+          "Frame capture was cancelled because the video window stopped.");
       notify();
       thread.join();
       appendWindowPresenterTimingLog("window_presenter_stop join_end");
@@ -157,6 +167,7 @@ struct WindowPresenter::Impl {
 
     threadState.store(WindowThreadState::Disabled, std::memory_order_relaxed);
     forcePresent.store(false, std::memory_order_relaxed);
+    windowHandle.store(nullptr, std::memory_order_release);
     {
       std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
       frameCache.Reset();
@@ -167,6 +178,28 @@ struct WindowPresenter::Impl {
   void requestPresent() {
     forcePresent.store(true, std::memory_order_relaxed);
     notify();
+  }
+
+  VideoFrameSnapshotResult captureCurrentFrame() {
+    VideoFrameSnapshotResult unavailable;
+    if (!thread.joinable() ||
+        threadState.load(std::memory_order_relaxed) !=
+            WindowThreadState::Enabled) {
+      unavailable.error =
+          "Frame capture is available while the video window is visible.";
+      return unavailable;
+    }
+    if (!frameSnapshotRequest.begin()) {
+      unavailable.error = "Another frame capture is already in progress.";
+      return unavailable;
+    }
+    forcePresent.store(true, std::memory_order_relaxed);
+    notify();
+    return frameSnapshotRequest.wait();
+  }
+
+  HWND nativeWindowHandle() const {
+    return windowHandle.load(std::memory_order_acquire);
   }
 };
 
@@ -189,10 +222,22 @@ void WindowPresenter::stop() { impl_->stop(); }
 
 void WindowPresenter::requestPresent() { impl_->requestPresent(); }
 
-bool WindowPresenter::isOpen() const { return impl_->window.IsOpen(); }
+VideoFrameSnapshotResult WindowPresenter::captureCurrentFrame() {
+  return impl_->captureCurrentFrame();
+}
+
+bool WindowPresenter::isOpen() const {
+  HWND hwnd = impl_->nativeWindowHandle();
+  return hwnd && IsWindow(hwnd);
+}
 
 bool WindowPresenter::isVisible() const {
-  return impl_->window.IsVisible();
+  HWND hwnd = impl_->nativeWindowHandle();
+  return hwnd && IsWindowVisible(hwnd);
+}
+
+HWND WindowPresenter::nativeWindowHandle() const {
+  return impl_->nativeWindowHandle();
 }
 
 bool WindowPresenter::consumeCloseRequested() {

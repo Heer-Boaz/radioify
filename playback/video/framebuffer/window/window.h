@@ -17,6 +17,7 @@
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "playback/video/framebuffer/gpu_text_grid.h"
+#include "playback/video/framebuffer/frame_snapshot.h"
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/video/framebuffer/video_output_color.h"
 #include "playback/video/subtitle/font_attachments.h"
@@ -123,6 +124,8 @@ public:
     void Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     // Render the UI overlay using the last cached video frame as background
     void PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
+    VideoFrameSnapshotResult CaptureCurrentFrame(
+        GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     // Render a full-screen text grid (TUI) into the window backbuffer.
     void PresentTextGrid(const std::vector<ScreenCell>& cells, int cols, int rows);
     void PresentGpuTextGrid(const GpuTextGridFrame& frame);
@@ -161,6 +164,7 @@ public:
     
     bool IsOpen() const { return m_hWnd != nullptr; }
     bool IsVisible() const { return m_hWnd && IsWindowVisible(m_hWnd); }
+    HWND NativeWindowHandle() const { return m_hWnd; }
     bool IsVsyncEnabled() const {
         return m_presentInterval.load(std::memory_order_relaxed) != 0;
     }
@@ -197,7 +201,27 @@ private:
     static constexpr LPARAM kKeepCurrentFocusMessageParam = 0;
     static constexpr LPARAM kTakeForegroundFocusMessageParam = 1;
 
-    void DrawOverlay(const WindowUiState& ui);
+    struct FrameRenderGeometry {
+        int width = 0;
+        int height = 0;
+        VideoViewport viewport{};
+    };
+
+    bool DrawVideoFrame(GpuVideoFrameCache& frameCache,
+                        ID3D11Device* device,
+                        ID3D11DeviceContext* context,
+                        ID3D11RenderTargetView* renderTarget,
+                        const FrameRenderGeometry& geometry,
+                        const VideoOutputColorState& outputColor,
+                        const WindowUiState& ui,
+                        bool includePlaybackOverlay,
+                        const char* timingStage);
+    void DrawOverlay(ID3D11Device* device,
+                     ID3D11DeviceContext* context,
+                     const WindowUiState& ui,
+                     const FrameRenderGeometry& geometry,
+                     const VideoOutputColorState& outputColor,
+                     bool includePlaybackOverlay);
     void UpdateViewport(int width, int height);
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     static LPARAM EncodeFocusMessageParam(VideoWindowFocus focus);
@@ -238,7 +262,9 @@ private:
     bool EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,
                                  int cellHeight, UINT dpi, int fontWeight);
     bool EnsureGpuTextGridConstants(ID3D11Device* device);
-    void FillOutputColorConstants(ShaderConstants& constants) const;
+    void FillOutputColorConstants(
+        ShaderConstants& constants,
+        const VideoOutputColorState& outputColor) const;
     uint32_t OutputColorSpaceShaderValue() const;
     float OutputSdrWhiteNits() const;
     float OutputPeakNits() const;

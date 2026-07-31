@@ -516,6 +516,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     requestFrameStep(view, signals, seekState,
                      playback_video_frame_step::Direction::Next);
   };
+  cb.onCopyVideoFrame = signals.copyCurrentVideoFrameToClipboard;
   cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
   const uint32_t shortcutContexts = kPlaybackShortcutContextShared |

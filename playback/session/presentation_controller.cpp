@@ -207,7 +207,7 @@ void PlaybackPresentationController::reconcile(
     return;
   }
 
-  if (!pendingWindowPresentation.active || !output.window().IsOpen()) {
+  if (!pendingWindowPresentation.active || !output.windowOpen()) {
     return;
   }
 

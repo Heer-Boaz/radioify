@@ -54,6 +54,61 @@ void waitForPresenterActivity(NativeWaitHandle wakeEvent,
 
 }  // namespace
 
+bool FrameSnapshotRequest::begin() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (state_ != State::Idle) {
+    return false;
+  }
+  result_ = {};
+  state_ = State::Pending;
+  return true;
+}
+
+bool FrameSnapshotRequest::pending() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return state_ == State::Pending;
+}
+
+VideoFrameSnapshotResult FrameSnapshotRequest::wait() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  completed_.wait(lock, [this]() { return state_ == State::Completed; });
+  VideoFrameSnapshotResult result = std::move(result_);
+  result_ = {};
+  state_ = State::Idle;
+  return result;
+}
+
+void FrameSnapshotRequest::complete(VideoFrameSnapshotResult result) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ != State::Pending) {
+      return;
+    }
+    result_ = std::move(result);
+    state_ = State::Completed;
+  }
+  completed_.notify_one();
+}
+
+void FrameSnapshotRequest::cancel(std::string error) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ != State::Pending) {
+      return;
+    }
+    result_ = {};
+    result_.error = std::move(error);
+    state_ = State::Completed;
+  }
+  completed_.notify_one();
+}
+
+void FrameSnapshotRequest::reset() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  result_ = {};
+  state_ = State::Idle;
+}
+
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
     SubtitleManager& subtitleManager, PlaybackSessionState playbackState,
@@ -156,6 +211,7 @@ void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
+    FrameSnapshotRequest& frameSnapshotRequest,
     const std::function<bool()>& overlayVisible,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation) {
@@ -192,6 +248,12 @@ void runFramebufferPresenterLoop(
     }
 
     if (!videoWindow.IsOpen() || !videoWindow.IsVisible()) {
+      if (frameSnapshotRequest.pending()) {
+        VideoFrameSnapshotResult unavailable;
+        unavailable.error =
+            "Frame capture is available while the video window is visible.";
+        frameSnapshotRequest.complete(std::move(unavailable));
+      }
       waitForPresenterWake(wakeEvent);
       continue;
     }
@@ -258,6 +320,7 @@ void runFramebufferPresenterLoop(
         WindowThreadState::Stopping) {
       break;
     }
+    const bool frameSnapshotPending = frameSnapshotRequest.pending();
     const bool textGridPresentationActive =
         videoWindow.IsTextGridPresentationEnabled();
     playback_framebuffer_video_pipeline::FrameRequest videoFrameRequest;
@@ -268,7 +331,8 @@ void runFramebufferPresenterLoop(
     videoFrameRequest.targetHeight = videoWindow.GetHeight();
     videoFrameRequest.frameChanged = frameResult.frameChanged;
     videoFrameRequest.forceRefresh = forcePresentNow;
-    videoFrameRequest.textGridPresentationActive = textGridPresentationActive;
+    videoFrameRequest.textGridPresentationActive =
+        textGridPresentationActive && !frameSnapshotPending;
     bool targetHdrOutput = videoWindow.OutputUsesHdr();
 #if defined(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO) && RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO
     if (frameResult.frameAvailable &&
@@ -285,6 +349,15 @@ void runFramebufferPresenterLoop(
     bool textFrameChanged = videoFrameResult.textGridFrameChanged;
 
     bool seekingNow = player.isSeeking();
+    WindowUiState ui;
+    if (frameSnapshotPending || !textGridPresentationActive) {
+      ui = buildUiState();
+    }
+    if (frameSnapshotPending) {
+      VideoFrameSnapshotResult result =
+          videoWindow.CaptureCurrentFrame(frameCache, ui);
+      frameSnapshotRequest.complete(std::move(result));
+    }
     if (textGridPresentationActive) {
       const int windowWidth = videoWindow.GetWidth();
       const int windowHeight = videoWindow.GetHeight();
@@ -332,7 +405,6 @@ void runFramebufferPresenterLoop(
     lastTextGridPresentationPresent =
         std::chrono::steady_clock::time_point::min();
 
-    WindowUiState ui = buildUiState();
     if (!ui.debugLines.empty() && !videoFrameResult.debugLine.empty()) {
       ui.debugLines.push_back(videoFrameResult.debugLine);
     }

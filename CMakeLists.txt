@@ -461,6 +461,18 @@ endif()
 add_test(NAME shortcut_match_tests
          COMMAND $<TARGET_FILE:shortcut_match_tests>)
 
+add_executable(frame_clipboard_tests)
+target_sources(frame_clipboard_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_frame_clipboard_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/framebuffer/frame_clipboard.cpp
+)
+radioify_link_repo_target(frame_clipboard_tests)
+if (WIN32)
+  target_link_libraries(frame_clipboard_tests PRIVATE ole32 windowscodecs user32)
+endif()
+add_test(NAME frame_clipboard_tests
+         COMMAND $<TARGET_FILE:frame_clipboard_tests>)
+
 add_executable(presentation_policy_tests)
 target_sources(presentation_policy_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_presentation_policy_tests>

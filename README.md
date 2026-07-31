@@ -176,6 +176,7 @@ The concrete implementation plan lives in
 - Ctrl+Left/Right: previous/next track
 - , / .: previous/next video frame
 - F1: open command menu / command palette
+- F12: copy the current rendered video frame (including subtitles) to the clipboard
 - Ctrl+W: toggle video Window mode (framebuffer-mode)
 - Ctrl+P: toggle picture-in-picture in Window mode
 - T: toggle picture-in-picture TUI in Window mode

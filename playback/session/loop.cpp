@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -182,6 +183,12 @@ struct PlaybackLoopRunner::Impl {
     inputSignals.overlayControlHover = &overlayControlHover;
     inputSignals.requestWindowPresent = [this]() {
       output.requestWindowPresent();
+    };
+    inputSignals.copyCurrentVideoFrameToClipboard = [this]() {
+      std::string error;
+      if (!output.copyCurrentVideoFrameToClipboard(&error)) {
+        std::fprintf(stderr, "Copy frame failed: %s\n", error.c_str());
+      }
     };
     inputSignals.toggleWindowPresentation = [this]() {
       return presentationController.toggleWindow(output, redraw,
@@ -542,7 +549,7 @@ struct PlaybackLoopRunner::Impl {
     while (notificationAreaControls->pollCommand(&command)) {
       switch (command.kind) {
         case PlaybackNotificationAreaCommand::Kind::Activate:
-          if (output.windowActive() && output.window().IsOpen()) {
+          if (output.windowActive() && output.windowOpen()) {
             output.window().Activate();
           } else {
             activateWindowsConsoleWindow();

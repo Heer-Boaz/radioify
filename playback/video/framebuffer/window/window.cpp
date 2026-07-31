@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdarg>
 #include <iostream>
+#include <limits>
 #include <vector>
 #include <mutex>
 #include <string>
@@ -48,7 +49,6 @@ static inline std::string now_ms() {
 static inline std::string thread_id_str() {
     std::ostringstream ss; ss << std::this_thread::get_id(); return ss.str();
 }
-
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
@@ -909,12 +909,15 @@ float VideoWindow::AsciiGlyphPeakNits() const {
     return m_outputColorState.asciiGlyphPeakNits;
 }
 
-void VideoWindow::FillOutputColorConstants(ShaderConstants& constants) const {
-    constants.outputColorSpace = OutputColorSpaceShaderValue();
-    constants.outputSdrWhiteNits = OutputSdrWhiteNits();
-    constants.outputPeakNits = OutputPeakNits();
-    constants.outputFullFrameNits = OutputFullFrameNits();
-    constants.asciiGlyphPeakNits = AsciiGlyphPeakNits();
+void VideoWindow::FillOutputColorConstants(
+    ShaderConstants& constants,
+    const VideoOutputColorState& outputColor) const {
+    constants.outputColorSpace =
+        static_cast<uint32_t>(outputColor.encoding);
+    constants.outputSdrWhiteNits = outputColor.outputSdrWhiteNits;
+    constants.outputPeakNits = outputColor.outputPeakNits;
+    constants.outputFullFrameNits = outputColor.outputFullFrameNits;
+    constants.asciiGlyphPeakNits = outputColor.asciiGlyphPeakNits;
 }
 
 void VideoWindow::SetOutputColorAttemptStatus(const std::string& status) {
@@ -2083,7 +2086,117 @@ void VideoWindow::UpdateViewport(int width, int height) {
     m_viewportH = vp.h;
 }
 
-void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
+bool VideoWindow::DrawVideoFrame(
+    GpuVideoFrameCache& frameCache, ID3D11Device* device,
+    ID3D11DeviceContext* context, ID3D11RenderTargetView* renderTarget,
+    const FrameRenderGeometry& geometry,
+    const VideoOutputColorState& outputColor, const WindowUiState& ui,
+    bool includePlaybackOverlay, const char* timingStage) {
+    if (!device || !context || !renderTarget || !m_constantBuffer ||
+        !frameCache.HasFrame() || geometry.width <= 0 || geometry.height <= 0 ||
+        geometry.viewport.w <= 0.0f || geometry.viewport.h <= 0.0f) {
+        return false;
+    }
+
+    const float clearColor[4] = {0, 0, 0, 1};
+    context->ClearRenderTargetView(renderTarget, clearColor);
+    context->OMSetRenderTargets(1, &renderTarget, nullptr);
+
+    const D3D11_VIEWPORT viewport = {
+        geometry.viewport.x, geometry.viewport.y, geometry.viewport.w,
+        geometry.viewport.h, 0.0f, 1.0f};
+    context->RSSetViewports(1, &viewport);
+    context->IASetInputLayout(nullptr);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    context->VSSetShader(m_vertexShader.Get(), nullptr, 0);
+    context->PSSetShader(m_pixelShader.Get(), nullptr, 0);
+    context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
+    context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(context->Map(m_constantBuffer.Get(), 0,
+                            D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        return false;
+    }
+    ShaderConstants constants{};
+    constants.isFullRange = frameCache.IsFullRange() ? 1u : 0u;
+    constants.yuvMatrix = static_cast<uint32_t>(frameCache.GetMatrix());
+    constants.yuvTransfer = static_cast<uint32_t>(frameCache.GetTransfer());
+    constants.bitDepth = static_cast<uint32_t>(frameCache.GetBitDepth());
+    constants.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
+    constants.rotationQuarterTurns =
+        static_cast<uint32_t>(frameCache.GetRotationQuarterTurns() & 3);
+    FillOutputColorConstants(constants, outputColor);
+    std::memcpy(mapped.pData, &constants, sizeof(constants));
+    context->Unmap(m_constantBuffer.Get(), 0);
+
+    ID3D11ShaderResourceView* frameResources[3] = {
+        frameCache.IsRgba() ? nullptr : frameCache.GetSrvY(),
+        frameCache.IsRgba() ? nullptr : frameCache.GetSrvUV(),
+        frameCache.IsRgba() ? frameCache.GetSrvRGBA() : nullptr};
+    context->PSSetShaderResources(0, 3, frameResources);
+
+#if defined(RADIOIFY_ENABLE_GPU_TIMING)
+    Microsoft::WRL::ComPtr<ID3D11Query> disjointQuery;
+    Microsoft::WRL::ComPtr<ID3D11Query> startQuery;
+    Microsoft::WRL::ComPtr<ID3D11Query> endQuery;
+    D3D11_QUERY_DESC queryDesc{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+    bool timingAvailable = SUCCEEDED(
+        device->CreateQuery(&queryDesc, disjointQuery.GetAddressOf()));
+    queryDesc.Query = D3D11_QUERY_TIMESTAMP;
+    timingAvailable =
+        timingAvailable &&
+        SUCCEEDED(device->CreateQuery(&queryDesc,
+                                      startQuery.GetAddressOf()));
+    timingAvailable =
+        timingAvailable &&
+        SUCCEEDED(device->CreateQuery(&queryDesc, endQuery.GetAddressOf()));
+    if (timingAvailable) {
+        context->Begin(disjointQuery.Get());
+        context->End(startQuery.Get());
+    }
+#else
+    (void)timingStage;
+#endif
+
+    context->Draw(4, 0);
+    DrawOverlay(device, context, ui, geometry, outputColor,
+                includePlaybackOverlay);
+
+#if defined(RADIOIFY_ENABLE_GPU_TIMING)
+    if (timingAvailable) {
+        context->End(endQuery.Get());
+        context->End(disjointQuery.Get());
+
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+        UINT64 start = 0;
+        UINT64 end = 0;
+        if (context->GetData(disjointQuery.Get(), &disjoint, sizeof(disjoint),
+                             D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+            context->GetData(startQuery.Get(), &start, sizeof(start),
+                             D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+            context->GetData(endQuery.Get(), &end, sizeof(end),
+                             D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+            !disjoint.Disjoint) {
+            const double gpuMs =
+                static_cast<double>(end - start) /
+                static_cast<double>(disjoint.Frequency) * 1000.0;
+            std::fprintf(stderr,
+                         "[%s] [tid=%s] VideoWindow::%s GPU "
+                         "draw+overlay time %.3f ms\n",
+                         now_ms().c_str(), thread_id_str().c_str(),
+                         timingStage, gpuMs);
+        }
+    }
+#endif
+
+    ID3D11ShaderResourceView* nullResources[3] = {nullptr, nullptr, nullptr};
+    context->PSSetShaderResources(0, 3, nullResources);
+    return true;
+}
+
+void VideoWindow::Present(GpuVideoFrameCache& frameCache,
+                          const WindowUiState& ui) {
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
@@ -2101,107 +2214,36 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
         return;
     }
 
-    // Refresh window dimensions to avoid stale size during fullscreen transitions
-    RECT rect;
+    RECT rect{};
     if (GetClientRect(m_hWnd, &rect)) {
         m_width = rect.right - rect.left;
         m_height = rect.bottom - rect.top;
     }
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-
     ID3D11Device* device = getSharedGpuDevice();
     if (!device) return;
 
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
-    if (!context || !m_constantBuffer || !m_renderTargetView) return;
+    if (!context || !m_renderTargetView) return;
 
     m_videoWidth = frameCache.GetDisplayWidth();
     m_videoHeight = frameCache.GetDisplayHeight();
+    UpdateViewport(m_width, m_height);
+    const FrameRenderGeometry geometry{
+        m_width, m_height,
+        VideoViewport{m_viewportX, m_viewportY, m_viewportW, m_viewportH}};
 
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present frame w=%d h=%d ui.displaySec=%.3f\n", now_ms().c_str(), thread_id_str().c_str(), m_videoWidth, m_videoHeight, ui.displaySec);
 #endif
 
-    // Render
-    float clearColor[4] = { 0, 0, 0, 1 };
-    context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
-    context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
-
-    UpdateViewport(m_width, m_height);
-    D3D11_VIEWPORT viewport = { m_viewportX, m_viewportY, m_viewportW, m_viewportH, 0.0f, 1.0f };
-    context->RSSetViewports(1, &viewport);
-
-    context->IASetInputLayout(NULL);
-    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-    context->VSSetShader(m_vertexShader.Get(), NULL, 0);
-    context->PSSetShader(m_pixelShader.Get(), NULL, 0);
-    context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
-    context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
-
-    {
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-            ShaderConstants sc{};
-            sc.isFullRange = frameCache.IsFullRange() ? 1 : 0;
-            sc.yuvMatrix = (uint32_t)frameCache.GetMatrix();
-            sc.yuvTransfer = (uint32_t)frameCache.GetTransfer();
-            sc.bitDepth = (uint32_t)frameCache.GetBitDepth();
-            sc.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
-            sc.rotationQuarterTurns =
-                (uint32_t)(frameCache.GetRotationQuarterTurns() & 3);
-            FillOutputColorConstants(sc);
-            std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
-            context->Unmap(m_constantBuffer.Get(), 0);
-        }
+    if (!DrawVideoFrame(frameCache, device, context.Get(),
+                        m_renderTargetView.Get(), geometry,
+                        m_outputColorState, ui, true, "Present")) {
+        return;
     }
-
-    if (frameCache.IsRgba()) {
-        ID3D11ShaderResourceView* srvs[3] = { nullptr, nullptr, frameCache.GetSrvRGBA() };
-        context->PSSetShaderResources(0, 3, srvs);
-    } else {
-        ID3D11ShaderResourceView* srvs[2] = { frameCache.GetSrvY(), frameCache.GetSrvUV() };
-        context->PSSetShaderResources(0, 2, srvs);
-    }
-
-#if defined(RADIOIFY_ENABLE_GPU_TIMING)
-    {
-        Microsoft::WRL::ComPtr<ID3D11Query> qDisjoint, qStart, qEnd;
-        D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
-        ID3D11Device* gpuDevice = getSharedGpuDevice();
-        if (gpuDevice) {
-            gpuDevice->CreateQuery(&qd, qDisjoint.GetAddressOf());
-            qd.Query = D3D11_QUERY_TIMESTAMP;
-            gpuDevice->CreateQuery(&qd, qStart.GetAddressOf());
-            gpuDevice->CreateQuery(&qd, qEnd.GetAddressOf());
-
-            context->Begin(qDisjoint.Get());
-            context->End(qStart.Get());
-            context->Draw(4, 0);
-            DrawOverlay(ui);
-            context->End(qEnd.Get());
-            context->End(qDisjoint.Get());
-
-            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
-            UINT64 t1 = 0;
-            UINT64 t2 = 0;
-            if (context->GetData(qDisjoint.Get(), &disjoint, sizeof(disjoint), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
-                context->GetData(qStart.Get(), &t1, sizeof(t1), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
-                context->GetData(qEnd.Get(), &t2, sizeof(t2), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
-                !disjoint.Disjoint) {
-                double gpu_ms = (double)(t2 - t1) / (double)disjoint.Frequency * 1000.0;
-                fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present GPU draw+overlay time %.3f ms\n", now_ms().c_str(), thread_id_str().c_str(), gpu_ms);
-            }
-        } else {
-            context->Draw(4, 0);
-            DrawOverlay(ui);
-        }
-    }
-#else
-    context->Draw(4, 0);
-    DrawOverlay(ui);
-#endif
     DrawPictureInPictureBorder(context.Get());
     frameCache.MarkFrameInFlight(context.Get());
 
@@ -2227,8 +2269,140 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache, const WindowUiState& u
 #endif
 }
 
-void VideoWindow::DrawOverlay(const WindowUiState& ui) {
-    bool showOverlay = ui.overlayAlpha > 0.01f || !ui.debugLines.empty();
+VideoFrameSnapshotResult VideoWindow::CaptureCurrentFrame(
+    GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
+    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    VideoFrameSnapshotResult result;
+    if (!m_hWnd || !frameCache.HasFrame()) {
+        result.error = "No rendered video frame is available.";
+        return result;
+    }
+
+    ID3D11Device* device = getSharedGpuDevice();
+    if (!device) {
+        result.error = "The shared D3D11 device is unavailable.";
+        return result;
+    }
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(&context);
+    if (!context || !m_constantBuffer || !m_vertexShader || !m_pixelShader) {
+        result.error = "The video renderer is not ready for frame capture.";
+        return result;
+    }
+
+    const int width = frameCache.GetDisplayWidth();
+    const int height = frameCache.GetDisplayHeight();
+    if (width <= 0 || height <= 0) {
+        result.error = "The rendered video frame has invalid dimensions.";
+        return result;
+    }
+    const size_t widthPixels = static_cast<size_t>(width);
+    const size_t heightPixels = static_cast<size_t>(height);
+    if (widthPixels > std::numeric_limits<size_t>::max() / 4u) {
+        result.error = "The rendered video frame row size overflows.";
+        return result;
+    }
+    const size_t rowBytes = widthPixels * 4u;
+    if (rowBytes > std::numeric_limits<uint32_t>::max() ||
+        heightPixels > std::numeric_limits<size_t>::max() / rowBytes) {
+        result.error = "The rendered video frame pixel size overflows.";
+        return result;
+    }
+    const size_t pixelBytes = rowBytes * heightPixels;
+    std::vector<uint8_t> pixels(pixelBytes);
+
+    D3D11_TEXTURE2D_DESC targetDesc{};
+    targetDesc.Width = static_cast<UINT>(width);
+    targetDesc.Height = static_cast<UINT>(height);
+    targetDesc.MipLevels = 1;
+    targetDesc.ArraySize = 1;
+    targetDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    targetDesc.SampleDesc.Count = 1;
+    targetDesc.Usage = D3D11_USAGE_DEFAULT;
+    targetDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> target;
+    if (FAILED(device->CreateTexture2D(&targetDesc, nullptr, &target))) {
+        result.error = "Failed to create the frame capture render target.";
+        return result;
+    }
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> targetView;
+    if (FAILED(device->CreateRenderTargetView(target.Get(), nullptr,
+                                              &targetView))) {
+        result.error = "Failed to create the frame capture render view.";
+        return result;
+    }
+
+    D3D11_TEXTURE2D_DESC stagingDesc = targetDesc;
+    stagingDesc.Usage = D3D11_USAGE_STAGING;
+    stagingDesc.BindFlags = 0;
+    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+    if (FAILED(device->CreateTexture2D(&stagingDesc, nullptr, &staging))) {
+        result.error = "Failed to create the frame capture readback texture.";
+        return result;
+    }
+    VideoOutputColorState snapshotColor = m_outputColorState;
+    snapshotColor.swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    snapshotColor.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    snapshotColor.encoding = VideoOutputColorEncoding::Sdr;
+    const FrameRenderGeometry geometry{
+        width, height,
+        VideoViewport{0.0f, 0.0f, static_cast<float>(width),
+                      static_cast<float>(height)}};
+    const auto restoreSwapChainTarget = [&]() {
+        if (m_renderTargetView) {
+            context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(),
+                                        nullptr);
+        } else {
+            context->OMSetRenderTargets(0, nullptr, nullptr);
+        }
+    };
+    if (!DrawVideoFrame(frameCache, device, context.Get(), targetView.Get(),
+                        geometry, snapshotColor, ui, false,
+                        "CaptureCurrentFrame")) {
+        restoreSwapChainTarget();
+        result.error = "Failed to render the current frame for capture.";
+        return result;
+    }
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    context->CopyResource(staging.Get(), target.Get());
+    restoreSwapChainTarget();
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+        result.error = "Failed to read back the rendered video frame.";
+        return result;
+    }
+    if (!mapped.pData || static_cast<size_t>(mapped.RowPitch) < rowBytes) {
+        context->Unmap(staging.Get(), 0);
+        result.error = "The frame capture readback row is incomplete.";
+        return result;
+    }
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(
+            pixels.data() + rowBytes * static_cast<size_t>(y),
+            static_cast<const uint8_t*>(mapped.pData) +
+                static_cast<size_t>(mapped.RowPitch) * static_cast<size_t>(y),
+            rowBytes);
+    }
+    context->Unmap(staging.Get(), 0);
+    result.snapshot.width = static_cast<uint32_t>(width);
+    result.snapshot.height = static_cast<uint32_t>(height);
+    result.snapshot.strideBytes = static_cast<uint32_t>(rowBytes);
+    result.snapshot.rgba = std::move(pixels);
+    return result;
+}
+
+void VideoWindow::DrawOverlay(ID3D11Device* device,
+                              ID3D11DeviceContext* context,
+                              const WindowUiState& ui,
+                              const FrameRenderGeometry& geometry,
+                              const VideoOutputColorState& outputColor,
+                              bool includePlaybackOverlay) {
+    bool showOverlay =
+        includePlaybackOverlay &&
+        (ui.overlayAlpha > 0.01f || !ui.debugLines.empty());
     const bool hasAssScript =
         static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
     const bool hasPlaintextSubtitleCues = std::any_of(
@@ -2243,20 +2417,15 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     }
     if (!showOverlay && !showSubtitle) return;
 
-    ID3D11Device* device = getSharedGpuDevice();
-    if (!device) return;
-
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    device->GetImmediateContext(&context);
-    if (!context || !m_constantBuffer) return;
+    if (!device || !context || !m_constantBuffer) return;
 
     // UI overlay is window-space: render it on the full client viewport,
     // not the letterboxed video viewport.
     D3D11_VIEWPORT overlayViewport = {
         0.0f,
         0.0f,
-        static_cast<float>(std::max(1, m_width)),
-        static_cast<float>(std::max(1, m_height)),
+        static_cast<float>(std::max(1, geometry.width)),
+        static_cast<float>(std::max(1, geometry.height)),
         0.0f,
         1.0f
     };
@@ -2277,19 +2446,23 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
     float subtitleWidthNorm = 0.0f;
     bool drawOverlayTextGrid = false;
     D3D11_VIEWPORT overlayTextGridViewport{};
-    int viewportX = std::clamp(static_cast<int>(std::lround(m_viewportX)),
-                               0, std::max(0, m_width - 1));
-    int viewportY = std::clamp(static_cast<int>(std::lround(m_viewportY)),
-                               0, std::max(0, m_height - 1));
-    int viewportW = std::clamp(static_cast<int>(std::lround(m_viewportW)),
-                               1, std::max(1, m_width - viewportX));
-    int viewportH = std::clamp(static_cast<int>(std::lround(m_viewportH)),
-                               1, std::max(1, m_height - viewportY));
+    int viewportX =
+        std::clamp(static_cast<int>(std::lround(geometry.viewport.x)), 0,
+                   std::max(0, geometry.width - 1));
+    int viewportY =
+        std::clamp(static_cast<int>(std::lround(geometry.viewport.y)), 0,
+                   std::max(0, geometry.height - 1));
+    int viewportW =
+        std::clamp(static_cast<int>(std::lround(geometry.viewport.w)), 1,
+                   std::max(1, geometry.width - viewportX));
+    int viewportH =
+        std::clamp(static_cast<int>(std::lround(geometry.viewport.h)), 1,
+                   std::max(1, geometry.height - viewportY));
     if (viewportW <= 1 || viewportH <= 1) {
         viewportX = 0;
         viewportY = 0;
-        viewportW = std::max(1, m_width);
-        viewportH = std::max(1, m_height);
+        viewportW = std::max(1, geometry.width);
+        viewportH = std::max(1, geometry.height);
     }
 
     if (showOverlay) {
@@ -2297,17 +2470,19 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
         const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
         const int cols =
-            playback_overlay::overlayCellCountForPixels(std::max(1, m_width),
-                                                        cellWidth);
+            playback_overlay::overlayCellCountForPixels(
+                std::max(1, geometry.width), cellWidth);
         const int rows =
-            playback_overlay::overlayCellCountForPixels(std::max(1, m_height),
-                                                        cellHeight);
+            playback_overlay::overlayCellCountForPixels(
+                std::max(1, geometry.height), cellHeight);
         if (buildWindowOverlayTextGrid(ui, cols, rows,
                                        m_windowOverlayTextGrid)) {
             const int textPxW =
-                std::min(m_width, m_windowOverlayTextGrid.cols * cellWidth);
+                std::min(geometry.width,
+                         m_windowOverlayTextGrid.cols * cellWidth);
             const int textPxH =
-                std::min(m_height, m_windowOverlayTextGrid.rows * cellHeight);
+                std::min(geometry.height,
+                         m_windowOverlayTextGrid.rows * cellHeight);
             overlayTextGridViewport = D3D11_VIEWPORT{
                 0.0f, 0.0f, static_cast<float>(textPxW),
                 static_cast<float>(textPxH), 0.0f, 1.0f};
@@ -2577,13 +2752,17 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
                                        canvas.data(), canvasW * 4, 0);
 
             subtitleHeightNorm =
-                static_cast<float>(canvasH) / std::max(1, m_height);
+                static_cast<float>(canvasH) /
+                std::max(1, geometry.height);
             subtitleWidthNorm =
-                static_cast<float>(canvasW) / std::max(1, m_width);
+                static_cast<float>(canvasW) /
+                std::max(1, geometry.width);
             subtitleLeftNorm =
-                static_cast<float>(viewportX) / std::max(1, m_width);
+                static_cast<float>(viewportX) /
+                std::max(1, geometry.width);
             subtitleTopNorm =
-                static_cast<float>(viewportY) / std::max(1, m_height);
+                static_cast<float>(viewportY) /
+                std::max(1, geometry.height);
         }
     }
 
@@ -2605,7 +2784,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
             sc.subtitleWidth = subtitleWidthNorm;
             sc.subtitleAlpha =
                 showSubtitle ? std::clamp(ui.subtitleAlpha, 0.0f, 1.0f) : 0.0f;
-            FillOutputColorConstants(sc);
+            FillOutputColorConstants(sc, outputColor);
             std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
             context->Unmap(m_constantBuffer.Get(), 0);
         }
@@ -2618,7 +2797,7 @@ void VideoWindow::DrawOverlay(const WindowUiState& ui) {
         context->Draw(4, 0);
     }
     if (drawOverlayTextGrid) {
-        DrawGpuTextGridFrame(device, context.Get(), m_windowOverlayTextGrid,
+        DrawGpuTextGridFrame(device, context, m_windowOverlayTextGrid,
                              overlayTextGridViewport);
     }
     context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
@@ -2647,8 +2826,7 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
         return;
     }
 
-    // Refresh window dimensions to avoid stale size during fullscreen transitions
-    RECT rect;
+    RECT rect{};
     if (GetClientRect(m_hWnd, &rect)) {
         m_width = rect.right - rect.left;
         m_height = rect.bottom - rect.top;
@@ -2661,55 +2839,19 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
 
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
-    if (!context || !m_renderTargetView || !m_constantBuffer) return;
+    if (!context || !m_renderTargetView) return;
 
     m_videoWidth = frameCache.GetDisplayWidth();
     m_videoHeight = frameCache.GetDisplayHeight();
-
-    float clearColor[4] = { 0, 0, 0, 1 };
-    context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
-    context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
-
     UpdateViewport(m_width, m_height);
-    D3D11_VIEWPORT viewport = { m_viewportX, m_viewportY, m_viewportW, m_viewportH, 0.0f, 1.0f };
-    context->RSSetViewports(1, &viewport);
-
-    context->IASetInputLayout(NULL);
-    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-    context->VSSetShader(m_vertexShader.Get(), NULL, 0);
-    context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
-
-    // Video path
-    context->PSSetShader(m_pixelShader.Get(), NULL, 0);
-    context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
-
-    {
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-            ShaderConstants sc{};
-            sc.isFullRange = frameCache.IsFullRange() ? 1 : 0;
-            sc.yuvMatrix = (uint32_t)frameCache.GetMatrix();
-            sc.yuvTransfer = (uint32_t)frameCache.GetTransfer();
-            sc.bitDepth = (uint32_t)frameCache.GetBitDepth();
-            sc.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
-            sc.rotationQuarterTurns =
-                (uint32_t)(frameCache.GetRotationQuarterTurns() & 3);
-            FillOutputColorConstants(sc);
-            std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
-            context->Unmap(m_constantBuffer.Get(), 0);
-        }
+    const FrameRenderGeometry geometry{
+        m_width, m_height,
+        VideoViewport{m_viewportX, m_viewportY, m_viewportW, m_viewportH}};
+    if (!DrawVideoFrame(frameCache, device, context.Get(),
+                        m_renderTargetView.Get(), geometry,
+                        m_outputColorState, ui, true, "PresentOverlay")) {
+        return;
     }
-
-    if (frameCache.IsRgba()) {
-        ID3D11ShaderResourceView* srvs[3] = { nullptr, nullptr, frameCache.GetSrvRGBA() };
-        context->PSSetShaderResources(0, 3, srvs);
-    } else {
-        ID3D11ShaderResourceView* srvs[2] = { frameCache.GetSrvY(), frameCache.GetSrvUV() };
-        context->PSSetShaderResources(0, 2, srvs);
-    }
-
-    context->Draw(4, 0);
-    DrawOverlay(ui);
     DrawPictureInPictureBorder(context.Get());
     frameCache.MarkFrameInFlight(context.Get());
 

@@ -53,6 +53,18 @@ bool PlaybackPresentation::windowRequested() const {
 
 bool PlaybackPresentation::windowActive() const { return impl_->windowActive(); }
 
+bool PlaybackPresentation::windowOpen() const {
+  return impl_->windowPresenter.isOpen();
+}
+
+bool PlaybackPresentation::windowVisible() const {
+  return impl_->windowPresenter.isVisible();
+}
+
+HWND PlaybackPresentation::nativeWindowHandle() const {
+  return impl_->windowPresenter.nativeWindowHandle();
+}
+
 bool PlaybackPresentation::consumeWindowCloseRequested() {
   return impl_->windowPresenter.consumeCloseRequested();
 }
@@ -124,4 +136,8 @@ const VideoWindow& PlaybackPresentation::window() const {
 
 void PlaybackPresentation::requestPresent() {
   impl_->windowPresenter.requestPresent();
+}
+
+VideoFrameSnapshotResult PlaybackPresentation::captureCurrentFrame() {
+  return impl_->windowPresenter.captureCurrentFrame();
 }

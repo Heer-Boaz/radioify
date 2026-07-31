@@ -49,6 +49,7 @@ enum class PlaybackShortcutAction : uint8_t {
   SeekForward,
   PreviousFrame,
   NextFrame,
+  CopyVideoFrame,
   VolumeUp,
   VolumeDown,
   TogglePictureInPicture,
