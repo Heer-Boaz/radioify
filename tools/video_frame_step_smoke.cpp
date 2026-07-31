@@ -32,6 +32,7 @@ std::atomic<uint64_t> gAudioFlushCount{0};
 #include <wrl/client.h>
 #endif
 
+#if !defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
 int64_t nowUs() {
   using namespace std::chrono;
   return duration_cast<microseconds>(
@@ -60,6 +61,14 @@ std::string toUtf8String(const std::filesystem::path& path) {
   return path.string();
 #endif
 }
+#else
+int64_t nowUs();
+std::string toUtf8String(const std::filesystem::path& path);
+void die(const std::string& message) {
+  std::cerr << "video_frame_step_smoke: " << message << '\n';
+  std::exit(1);
+}
+#endif
 
 std::recursive_mutex& getSharedGpuMutex() {
   static std::recursive_mutex mutex;
@@ -95,6 +104,7 @@ ID3D11Device* getSharedGpuDevice() {
 #endif
 }
 
+#if !defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
 std::FILE* openFileUtf8(const std::filesystem::path& path, const char* mode) {
 #if defined(_WIN32)
   std::wstring wideMode;
@@ -110,7 +120,9 @@ std::FILE* openFileUtf8(const std::filesystem::path& path, const char* mode) {
   return std::fopen(path.string().c_str(), mode);
 #endif
 }
+#endif
 
+#if !defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
 bool audioStartStream(uint64_t) { return false; }
 void audioStopStream() {}
 size_t audioStreamBufferedFrames() { return 0; }
@@ -142,6 +154,7 @@ void audioPlay() {}
 void audioPause() {}
 void audioSetHold(bool) {}
 AudioPerfStats audioGetPerfStats() { return {}; }
+#endif
 
 namespace {
 
@@ -244,6 +257,21 @@ bool expectAudioFrameStepTransition(int64_t expectedPtsUs,
                                     int previousSerial, int expectedSerial,
                                     uint64_t previousFlushCount,
                                     const char* label) {
+#if defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
+  (void)expectedPtsUs;
+  (void)previousFlushCount;
+  const bool seekBackedStep = expectedSerial != previousSerial;
+  const int actualSerial = audioStreamSerial();
+  if ((!seekBackedStep || expectedSerial == previousSerial + 1) &&
+      actualSerial == expectedSerial) {
+    return true;
+  }
+  std::cerr << "video_frame_step_smoke: " << label
+            << " real-audio serial mismatch previous_serial="
+            << previousSerial << " expected_serial=" << expectedSerial
+            << " actual_serial=" << actualSerial << '\n';
+  return false;
+#else
   const int64_t actual =
       gLastAudioDiscardUntilUs.load(std::memory_order_relaxed);
   const int actualSerial = gLastAudioFlushSerial.load(std::memory_order_relaxed);
@@ -270,12 +298,27 @@ bool expectAudioFrameStepTransition(int64_t expectedPtsUs,
             << " actual_flush_count=" << actualFlushCount
             << '\n';
   return false;
+#endif
 }
 
 bool expectAudioResumeSeekAnchor(int64_t expectedPtsUs, int previousSerial,
                                  int expectedSerial,
                                  uint64_t previousFlushCount,
                                  const char* label) {
+#if defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
+  (void)expectedPtsUs;
+  (void)previousFlushCount;
+  const int actualSerial = audioStreamSerial();
+  if (expectedSerial == previousSerial + 1 &&
+      actualSerial == expectedSerial) {
+    return true;
+  }
+  std::cerr << "video_frame_step_smoke: " << label
+            << " real-audio resume serial mismatch previous_serial="
+            << previousSerial << " expected_serial=" << expectedSerial
+            << " actual_serial=" << actualSerial << '\n';
+  return false;
+#else
   const int64_t actual =
       gLastAudioDiscardUntilUs.load(std::memory_order_relaxed);
   const int actualSerial = gLastAudioFlushSerial.load(std::memory_order_relaxed);
@@ -297,12 +340,25 @@ bool expectAudioResumeSeekAnchor(int64_t expectedPtsUs, int previousSerial,
             << " expected_flush_count=" << expectedFlushCount
             << " actual_flush_count=" << actualFlushCount << '\n';
   return false;
+#endif
 }
 
 bool expectAudioConcurrentResumeSeekAnchor(int64_t expectedPtsUs,
                                            int expectedSerial,
                                            uint64_t previousFlushCount,
                                            const char* label) {
+#if defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
+  (void)expectedPtsUs;
+  (void)previousFlushCount;
+  const int actualSerial = audioStreamSerial();
+  if (actualSerial == expectedSerial) {
+    return true;
+  }
+  std::cerr << "video_frame_step_smoke: " << label
+            << " concurrent real-audio serial mismatch expected_serial="
+            << expectedSerial << " actual_serial=" << actualSerial << '\n';
+  return false;
+#else
   const int64_t actual =
       gLastAudioDiscardUntilUs.load(std::memory_order_relaxed);
   const int actualSerial = gLastAudioFlushSerial.load(std::memory_order_relaxed);
@@ -320,6 +376,7 @@ bool expectAudioConcurrentResumeSeekAnchor(int64_t expectedPtsUs,
             << " previous_flush_count=" << previousFlushCount
             << " actual_flush_count=" << actualFlushCount << '\n';
   return false;
+#endif
 }
 
 int64_t chooseSeekUs(const Player& player, int64_t requestedSeekUs) {
@@ -337,6 +394,108 @@ int64_t chooseSeekUs(const Player& player, int64_t requestedSeekUs) {
   return latestSafeSeekUs > 1000000 ? latestSafeSeekUs : durationUs / 2;
 }
 
+struct ObservedFrameStep {
+  int64_t ptsUs = 0;
+  int serial = 0;
+  uint64_t frameCounter = 0;
+};
+
+#if defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
+class SilentAudioRuntime {
+ public:
+  SilentAudioRuntime() {
+    AudioPlaybackConfig config;
+    config.enableAudio = true;
+    config.enableRadio = false;
+    config.dry = true;
+    audioInit(config);
+    audioAdjustVolume(-audioGetVolume());
+  }
+
+  ~SilentAudioRuntime() { audioShutdown(); }
+
+  SilentAudioRuntime(const SilentAudioRuntime&) = delete;
+  SilentAudioRuntime& operator=(const SilentAudioRuntime&) = delete;
+};
+#endif
+
+bool requestAndObserveFrameStep(
+    Player& player, playback_video_frame_step::Direction direction,
+    const std::string& label, const int64_t* expectedPtsUs,
+    ObservedFrameStep* current) {
+  if (!current) {
+    return false;
+  }
+
+  const int64_t beforePtsUs = current->ptsUs;
+  const int beforeSerial = current->serial;
+  const uint64_t beforeCounter = current->frameCounter;
+  const uint64_t beforeAudioFlushCount =
+      gAudioFlushCount.load(std::memory_order_relaxed);
+
+  // PlaybackSession sends this before every comma/period request, even when
+  // the transport is already paused or in frame-step mode.
+  player.setVideoPaused(true);
+  if (!player.requestFrameStep(direction)) {
+    std::cerr << "video_frame_step_smoke: " << label
+              << " frame-step request rejected\n";
+    return false;
+  }
+
+  PlayerDebugInfo observed{};
+  if (!waitFor(player, kDefaultTimeoutMs, label.c_str(),
+               [&](const PlayerDebugInfo& info) {
+                 return info.hasVideoFrame &&
+                        player.videoFrameCounter() > beforeCounter &&
+                        info.seekInFlightSerial == 0 &&
+                        info.pendingSeekSerial == 0 &&
+                        info.state == PlayerState::FrameStep;
+               },
+               &observed)) {
+    return false;
+  }
+
+  const bool movedInDirection =
+      direction == playback_video_frame_step::Direction::Previous
+          ? observed.lastPresentedPtsUs < beforePtsUs
+          : observed.lastPresentedPtsUs > beforePtsUs;
+  if (!movedInDirection) {
+    std::cerr << "video_frame_step_smoke: " << label
+              << " moved in the wrong direction; before_pts_us="
+              << beforePtsUs
+              << " actual_pts_us=" << observed.lastPresentedPtsUs
+              << " before_serial=" << beforeSerial
+              << " actual_serial=" << observed.currentSerial << '\n';
+    return false;
+  }
+  if (expectedPtsUs && observed.lastPresentedPtsUs != *expectedPtsUs) {
+    std::cerr << "video_frame_step_smoke: " << label
+              << " did not return to the inverse-step frame; expected_pts_us="
+              << *expectedPtsUs
+              << " actual_pts_us=" << observed.lastPresentedPtsUs << '\n';
+    return false;
+  }
+  if (!expectAudioFrameStepTransition(
+          observed.lastPresentedPtsUs, beforeSerial, observed.currentSerial,
+          beforeAudioFlushCount, label.c_str())) {
+    return false;
+  }
+  const int64_t currentUs = player.currentUs();
+  if (currentUs != observed.lastPresentedPtsUs) {
+    std::cerr << "video_frame_step_smoke: " << label
+              << " control position does not match the presented frame; "
+                 "current_us="
+              << currentUs
+              << " presented_pts_us=" << observed.lastPresentedPtsUs << '\n';
+    return false;
+  }
+
+  current->ptsUs = observed.lastPresentedPtsUs;
+  current->serial = observed.currentSerial;
+  current->frameCounter = player.videoFrameCounter();
+  return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -345,7 +504,8 @@ int main(int argc, char** argv) {
                  "[step_count] [mode]\n"
                  "Modes: startup, resume, forward-resume, mixed-resume, "
                  "rapid-resume, resume-during-step, burst-previous, "
-                 "burst-forward, ended-replay\n";
+                 "burst-forward, alternating, seek-alternating, "
+                 "ended-replay\n";
     return 2;
   }
 
@@ -370,6 +530,8 @@ int main(int argc, char** argv) {
   bool rapidResume = false;
   bool resumeDuringStep = false;
   bool burstSteps = false;
+  bool alternatingSteps = false;
+  bool seekAlternatingSteps = false;
   playback_video_frame_step::Direction burstDirection =
       playback_video_frame_step::Direction::Previous;
   bool replayAfterEnd = false;
@@ -383,18 +545,21 @@ int main(int argc, char** argv) {
     rapidResume = mode == "rapid-resume";
     resumeDuringStep = mode == "resume-during-step";
     burstSteps = mode == "burst-previous" || mode == "burst-forward";
+    alternatingSteps = mode == "alternating";
+    seekAlternatingSteps = mode == "seek-alternating";
     if (mode == "burst-forward") {
       burstDirection = playback_video_frame_step::Direction::Next;
     }
     replayAfterEnd = mode == "ended-replay";
     if (!verifyStartup && !resumeAfterPrevious && !resumeAfterForward &&
         !resumeAfterMixed && !rapidResume && !resumeDuringStep && !burstSteps &&
-        !replayAfterEnd) {
+        !alternatingSteps && !seekAlternatingSteps && !replayAfterEnd) {
       std::cerr << "video_frame_step_smoke: invalid mode: " << argv[4]
                  << " (expected 'startup', 'resume', 'forward-resume', "
                     "'mixed-resume', 'rapid-resume', or "
                     "'resume-during-step', 'burst-previous', "
-                    "'burst-forward', or 'ended-replay')\n";
+                    "'burst-forward', 'alternating', 'seek-alternating', "
+                    "or 'ended-replay')\n";
       return 2;
     }
   }
@@ -402,19 +567,32 @@ int main(int argc, char** argv) {
   gLastAudioFlushSerial.store(0, std::memory_order_relaxed);
   gAudioFlushCount.store(0, std::memory_order_relaxed);
 
+#if defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
+  SilentAudioRuntime silentAudioRuntime;
+  if (audioGetVolume() != 0.0f) {
+    std::cerr << "video_frame_step_smoke: failed to mute real audio output\n";
+    return 1;
+  }
+#endif
   Player player;
   PlayerConfig config;
   config.file = std::filesystem::path(argv[1]);
   config.logPath =
       std::filesystem::current_path() / "video_frame_step_smoke.timing.log";
+#if defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
+  config.enableAudio = true;
+#else
   config.enableAudio = false;
+#endif
 
   std::string error;
   if (!player.open(config, &error)) {
     std::cerr << "video_frame_step_smoke: open failed: " << error << '\n';
     return 1;
   }
+#if !defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
   player.setVideoPaused(true);
+#endif
 
   if (!waitFor(player, kDefaultTimeoutMs, "init", [](const PlayerDebugInfo&) {
         return true;
@@ -482,6 +660,28 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+#if defined(RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO)
+  if (!waitFor(player, kDefaultTimeoutMs, "real_audio_clock_ready",
+               [](const PlayerDebugInfo& info) {
+                 return info.state == PlayerState::Playing && info.audioOk &&
+                        info.audioClockReady && info.audioClockFresh &&
+                        info.masterSource == PlayerClockSource::Audio;
+               },
+               &boundary)) {
+    player.close();
+    return 1;
+  }
+  player.setVideoPaused(true);
+  if (!waitFor(player, kDefaultTimeoutMs, "real_audio_paused",
+               [](const PlayerDebugInfo& info) {
+                 return info.state == PlayerState::Paused &&
+                        info.audioClockReady && info.audioClockFresh;
+               },
+               &boundary)) {
+    player.close();
+    return 1;
+  }
+#endif
   const int64_t boundaryPtsUs = boundary.lastPresentedPtsUs;
   if (replayAfterEnd) {
     player.setVideoPaused(false);
@@ -515,6 +715,117 @@ int main(int argc, char** argv) {
     std::cout << "video_frame_step_smoke: PASS ended_pts_us="
               << boundaryPtsUs
               << " replayed_pts_us=" << replayed.lastPresentedPtsUs << '\n';
+    player.close();
+    return 0;
+  }
+
+  if (alternatingSteps || seekAlternatingSteps) {
+    ObservedFrameStep current{boundaryPtsUs, boundary.currentSerial,
+                              player.videoFrameCounter()};
+    constexpr size_t kDirectionCycles = 4;
+    const size_t reverseCount = (std::max)(size_t{1}, stepCount / 2);
+
+    auto runReversibleLeg = [&](playback_video_frame_step::Direction direction,
+                                size_t cycle) {
+      std::vector<int64_t> visitedPts;
+      visitedPts.reserve(stepCount + 1);
+      visitedPts.push_back(current.ptsUs);
+      const char* directionName =
+          direction == playback_video_frame_step::Direction::Next ? "next"
+                                                                   : "previous";
+      for (size_t i = 0; i < stepCount; ++i) {
+        const std::string label =
+            "alternating_" + std::to_string(cycle + 1) + "_" +
+            directionName + "_" + std::to_string(i + 1);
+        if (!requestAndObserveFrameStep(player, direction, label, nullptr,
+                                        &current)) {
+          return false;
+        }
+        visitedPts.push_back(current.ptsUs);
+      }
+
+      const playback_video_frame_step::Direction inverse =
+          direction == playback_video_frame_step::Direction::Next
+              ? playback_video_frame_step::Direction::Previous
+              : playback_video_frame_step::Direction::Next;
+      for (size_t i = 0; i < reverseCount; ++i) {
+        const int64_t expectedPtsUs =
+            visitedPts[stepCount - i - 1];
+        const std::string label =
+            "alternating_" + std::to_string(cycle + 1) + "_" +
+            directionName + "_inverse_" + std::to_string(i + 1);
+        if (!requestAndObserveFrameStep(player, inverse, label,
+                                        &expectedPtsUs, &current)) {
+          return false;
+        }
+      }
+      for (size_t i = 0; i < reverseCount; ++i) {
+        const int64_t expectedPtsUs =
+            visitedPts[stepCount - reverseCount + i + 1];
+        const std::string label =
+            "alternating_" + std::to_string(cycle + 1) + "_" +
+            directionName + "_return_" + std::to_string(i + 1);
+        if (!requestAndObserveFrameStep(player, direction, label,
+                                        &expectedPtsUs, &current)) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    for (size_t cycle = 0; cycle < kDirectionCycles; ++cycle) {
+      if (seekAlternatingSteps) {
+        const int64_t seekDeltaUs = cycle % 2 == 0 ? 5000000 : -5000000;
+        const int64_t controlPositionUs = player.currentUs();
+        if (controlPositionUs != current.ptsUs) {
+          std::cerr << "video_frame_step_smoke: alternating seek base does not "
+                       "match the presented frame; current_us="
+                    << controlPositionUs
+                    << " presented_pts_us=" << current.ptsUs << '\n';
+          player.close();
+          return 1;
+        }
+        const int64_t seekTargetUs = chooseSeekUs(
+            player,
+            (std::max)(int64_t{1000000}, controlPositionUs + seekDeltaUs));
+        const uint64_t beforeSeekCounter = current.frameCounter;
+        player.requestSeek(seekTargetUs);
+        PlayerDebugInfo seeked{};
+        const std::string label =
+            "alternating_seek_" + std::to_string(cycle + 1);
+        if (!waitFor(player, kDefaultTimeoutMs, label.c_str(),
+                     [&](const PlayerDebugInfo& info) {
+                       return info.hasVideoFrame &&
+                              player.videoFrameCounter() > beforeSeekCounter &&
+                              info.seekInFlightSerial == 0 &&
+                              info.pendingSeekSerial == 0 &&
+                              !player.seekPending() &&
+                              info.currentSerial > current.serial;
+                     },
+                     &seeked)) {
+          player.close();
+          return 1;
+        }
+        current.ptsUs = seeked.lastPresentedPtsUs;
+        current.serial = seeked.currentSerial;
+        current.frameCounter = player.videoFrameCounter();
+      }
+
+      if (!runReversibleLeg(playback_video_frame_step::Direction::Next,
+                            cycle) ||
+          !runReversibleLeg(playback_video_frame_step::Direction::Previous,
+                            cycle)) {
+        player.close();
+        return 1;
+      }
+    }
+
+    std::cout << "video_frame_step_smoke: PASS mode="
+              << (seekAlternatingSteps ? "seek-alternating" : "alternating")
+              << " final_pts_us=" << current.ptsUs
+              << " final_serial=" << current.serial
+              << " steps_per_leg=" << stepCount
+              << " cycles=" << kDirectionCycles << '\n';
     player.close();
     return 0;
   }
