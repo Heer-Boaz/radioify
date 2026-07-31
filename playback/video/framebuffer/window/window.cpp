@@ -2390,7 +2390,7 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
     bool showOverlay =
         includePlaybackOverlay &&
         (ui.overlayAlpha > 0.01f || !ui.debugLines.empty() ||
-         ui.transientMessage.has_value());
+         ui.transientMessage);
     const bool hasAssScript =
         static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
     const bool hasPlaintextSubtitleCues = std::any_of(

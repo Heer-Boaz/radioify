@@ -10,6 +10,7 @@
 #include "consolescreen.h"
 #include "consoleinput.h"
 #include "gpu_text_grid.h"
+#include "playback/overlay/osd_state.h"
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/framebuffer/window/window.h"
 
@@ -137,7 +138,7 @@ struct PlaybackOverlayInputs {
   double displaySec = 0.0;
   double totalSec = -1.0;
   int volPct = 0;
-  bool overlayVisible = false;
+  PlaybackOsdSnapshot osd;
   bool paused = false;
   bool audioFinished = false;
   bool pictureInPictureAvailable = false;
@@ -175,6 +176,7 @@ struct PlaybackOverlayState {
   double totalSec = -1.0;
   int volPct = 0;
   bool overlayVisible = false;
+  std::shared_ptr<const std::string> transientMessage;
   bool paused = false;
   bool audioFinished = false;
   bool pictureInPictureAvailable = false;

@@ -8,7 +8,6 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 
 #include "core/native_wait_handle.h"
@@ -88,7 +87,7 @@ struct WindowUiState {
     // UI text/metadata to display when overlay is visible
     std::string title; // filename or label
     std::string progressSuffix; // playback time/volume line
-    std::optional<std::string> transientMessage;
+    std::shared_ptr<const std::string> transientMessage;
     std::vector<ControlButton> controlButtons;
     std::vector<SubtitleCue> subtitleCues; // active subtitle cues for current frame
     int64_t subtitleClockUs = 0;

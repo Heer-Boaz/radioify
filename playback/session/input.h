@@ -19,6 +19,9 @@
 class Player;
 class SubtitleManager;
 class VideoWindow;
+namespace playback_session {
+class PlaybackOsdTimeline;
+}
 
 namespace playback_session_input {
 
@@ -51,7 +54,7 @@ struct PlaybackInputSignals {
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   std::function<void()> copyCurrentVideoFrameToClipboard;
-  std::atomic<int64_t>* overlayUntilMs = nullptr;
+  playback_session::PlaybackOsdTimeline* osd = nullptr;
 
   bool* loopStopRequested = nullptr;
   bool* quitApplicationRequested = nullptr;

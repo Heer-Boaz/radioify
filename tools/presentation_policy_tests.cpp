@@ -1,7 +1,5 @@
 #include "playback/session/presentation_policy.h"
-#include "playback/overlay/transient_message.h"
 
-#include <chrono>
 #include <iostream>
 
 namespace {
@@ -63,25 +61,6 @@ int main() {
   ok &= expect(restoredFullscreen.focus ==
                    PlaybackPresentationFocus::KeepCurrentSurface,
                "restored presentation must not steal foreground focus");
-
-  using namespace std::chrono_literals;
-  playback_overlay::TransientMessage transientMessage;
-  const playback_overlay::TransientMessage::TimePoint shownAt{100ms};
-  transientMessage.show("Frame copied to clipboard", shownAt, 1500ms);
-  ok &= expect(transientMessage.visibleAt(shownAt),
-               "a transient message must be visible when published");
-  ok &= expect(transientMessage.textAt(shownAt + 1499ms) ==
-                   "Frame copied to clipboard",
-               "a transient message must retain its text before expiry");
-  ok &= expect(!transientMessage.visibleAt(shownAt + 1500ms),
-               "a transient message must expire at its deadline");
-  ok &= expect(!transientMessage.textAt(shownAt + 1500ms).has_value(),
-               "expired transient text must not enter presentation state");
-
-  transientMessage.show("Frame copy failed", shownAt + 250ms, 1500ms);
-  ok &= expect(transientMessage.textAt(shownAt + 1500ms) ==
-                   "Frame copy failed",
-               "a newer transient message must replace and extend the slot");
 
   return ok ? 0 : 1;
 }

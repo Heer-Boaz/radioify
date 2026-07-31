@@ -1,7 +1,5 @@
 #pragma once
 
-#include <atomic>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -18,6 +16,7 @@ class Player;
 struct PlaybackPresenterSyncResult {
   PlaybackLayout previousActiveLayout = PlaybackLayout::Terminal;
   PlaybackLayout activeLayout = PlaybackLayout::Terminal;
+  bool windowStartFailed = false;
 
   bool switchedAwayFromWindow() const {
     return previousActiveLayout == PlaybackLayout::Window &&
@@ -52,12 +51,9 @@ class PlaybackPresentation {
   PlaybackPresenterSyncResult sync(
       Player& player,
       const std::function<WindowUiState()>& buildUiState,
-      const std::function<bool()>& uiRefreshActive,
       const playback_framebuffer_presenter::TextGridPresentationProvider&
           buildTextGridPresentation,
-      bool& redraw,
-      bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
-      std::atomic<int>& overlayControlHover);
+      bool& redraw, bool& forceRefreshArt);
 
   void stop();
 

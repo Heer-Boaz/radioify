@@ -18,7 +18,7 @@
 namespace playback_framebuffer_presenter {
 namespace {
 
-constexpr auto kOverlayRefreshInterval = std::chrono::milliseconds(100);
+constexpr auto kSeekingRefreshInterval = std::chrono::milliseconds(100);
 constexpr auto kTextGridPresentationRefreshInterval =
     std::chrono::milliseconds(250);
 
@@ -116,8 +116,8 @@ WindowUiState buildPlaybackFramebufferUiState(
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<bool>& windowLocalSeekRequested,
     std::atomic<double>& windowPendingSeekTargetSec,
-    std::atomic<int>& overlayControlHover, bool overlayVisibleNow,
-    bool debugOverlay) {
+    std::atomic<int>& overlayControlHover,
+    const playback_overlay::PlaybackOsdSnapshot& osd, bool debugOverlay) {
   int64_t clockUs = player.currentUs();
   double displaySec = 0.0;
   if (clockUs > 0) {
@@ -178,7 +178,7 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
   overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-  overlayInputs.overlayVisible = overlayVisibleNow;
+  overlayInputs.osd = osd;
   overlayInputs.paused = pausedNow;
   overlayInputs.audioFinished = audioFinishedNow;
   overlayInputs.pictureInPictureAvailable = videoWindow.IsOpen();
@@ -212,10 +212,9 @@ void runFramebufferPresenterLoop(
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
     FrameSnapshotRequest& frameSnapshotRequest,
-    const std::function<bool()>& uiRefreshActive,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation) {
-  if (!uiRefreshActive || !buildUiState) {
+  if (!buildUiState) {
     return;
   }
 
@@ -223,9 +222,7 @@ void runFramebufferPresenterLoop(
   playback_framebuffer_video_pipeline::Pipeline videoPipeline;
   std::vector<ScreenCell> textGridPresentationCells;
   GpuTextGridFrame textGridPresentationFrame;
-  auto lastOverlayPresent = std::chrono::steady_clock::time_point::min();
-  bool lastWindowOverlayVisible = false;
-  bool lastWindowTransientMessageVisible = false;
+  auto lastSeekingPresent = std::chrono::steady_clock::time_point::min();
   bool lastWindowSeeking = false;
   auto lastTextGridPresentationPresent =
       std::chrono::steady_clock::time_point::min();
@@ -261,7 +258,6 @@ void runFramebufferPresenterLoop(
 
     const bool forcePresentRequested =
         forcePresent.load(std::memory_order_relaxed);
-    const bool uiRefreshRequested = uiRefreshActive();
     const bool seekingRequested = player.isSeeking();
     const bool textGridPresentationRequested =
         videoWindow.IsTextGridPresentationEnabled();
@@ -273,18 +269,17 @@ void runFramebufferPresenterLoop(
                             ? candidateMs
                             : std::min(waitTimeoutMs, candidateMs);
       };
-      if (uiRefreshRequested || seekingRequested ||
-          lastWindowOverlayVisible || lastWindowTransientMessageVisible ||
-          lastWindowSeeking) {
+      if (seekingRequested || lastWindowSeeking) {
         const auto now = std::chrono::steady_clock::now();
-        if (lastOverlayPresent == std::chrono::steady_clock::time_point::min()) {
+        if (lastSeekingPresent ==
+            std::chrono::steady_clock::time_point::min()) {
           tightenWaitTimeout(0);
         } else {
           tightenWaitTimeout(std::max(
               0, static_cast<int>(std::chrono::duration_cast<
                                        std::chrono::milliseconds>(
-                                       (lastOverlayPresent +
-                                        kOverlayRefreshInterval) -
+                                       (lastSeekingPresent +
+                                        kSeekingRefreshInterval) -
                                        now)
                                        .count())));
         }
@@ -403,9 +398,7 @@ void runFramebufferPresenterLoop(
         lastTextGridPresentationCellWidth = cellWidth;
         lastTextGridPresentationCellHeight = cellHeight;
       }
-      lastOverlayPresent = std::chrono::steady_clock::time_point::min();
-      lastWindowOverlayVisible = false;
-      lastWindowTransientMessageVisible = false;
+      lastSeekingPresent = std::chrono::steady_clock::time_point::min();
       lastWindowSeeking = false;
       continue;
     }
@@ -415,23 +408,16 @@ void runFramebufferPresenterLoop(
     if (!ui.debugLines.empty() && !videoFrameResult.debugLine.empty()) {
       ui.debugLines.push_back(videoFrameResult.debugLine);
     }
-    bool overlayVisibleNow = ui.overlayAlpha > 0.01f;
-    const bool transientMessageVisibleNow = ui.transientMessage.has_value();
-    bool overlayStateChanged = overlayVisibleNow != lastWindowOverlayVisible ||
-                               transientMessageVisibleNow !=
-                                   lastWindowTransientMessageVisible ||
-                               seekingNow != lastWindowSeeking;
-    bool overlayRefreshDue = false;
-    if (overlayVisibleNow || transientMessageVisibleNow || seekingNow ||
-        lastWindowOverlayVisible || lastWindowTransientMessageVisible ||
-        lastWindowSeeking) {
+    const bool seekingStateChanged = seekingNow != lastWindowSeeking;
+    bool seekingRefreshDue = false;
+    if (seekingNow || lastWindowSeeking) {
       const auto now = std::chrono::steady_clock::now();
-      overlayRefreshDue =
-          lastOverlayPresent == std::chrono::steady_clock::time_point::min() ||
-          (now - lastOverlayPresent) >= kOverlayRefreshInterval;
+      seekingRefreshDue =
+          lastSeekingPresent == std::chrono::steady_clock::time_point::min() ||
+          (now - lastSeekingPresent) >= kSeekingRefreshInterval;
     }
-    bool needsPresent = frameChanged || forcePresentNow || overlayRefreshDue ||
-                        overlayStateChanged;
+    const bool needsPresent = frameChanged || forcePresentNow ||
+                              seekingRefreshDue || seekingStateChanged;
 
     if (needsPresent) {
       if (threadState.load(std::memory_order_relaxed) ==
@@ -448,11 +434,11 @@ void runFramebufferPresenterLoop(
       } else {
         videoWindow.PresentOverlay(frameCache, ui);
       }
-      if (overlayVisibleNow || transientMessageVisibleNow || seekingNow) {
-        lastOverlayPresent = std::chrono::steady_clock::now();
+      if (seekingNow) {
+        lastSeekingPresent = std::chrono::steady_clock::now();
+      } else {
+        lastSeekingPresent = std::chrono::steady_clock::time_point::min();
       }
-      lastWindowOverlayVisible = overlayVisibleNow;
-      lastWindowTransientMessageVisible = transientMessageVisibleNow;
       lastWindowSeeking = seekingNow;
     }
   }

@@ -1,6 +1,5 @@
 #include "presentation.h"
 
-#include <atomic>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -8,16 +7,6 @@
 #include "playback/video/player.h"
 #include "playback/framebuffer/window_presenter.h"
 #include "state.h"
-
-namespace {
-
-void resetWindowOverlayState(std::atomic<int64_t>& overlayUntilMs,
-                             std::atomic<int>& overlayControlHover) {
-  overlayUntilMs.store(0, std::memory_order_relaxed);
-  overlayControlHover.store(-1, std::memory_order_relaxed);
-}
-
-}  // namespace
 
 struct PlaybackPresentation::Impl {
   WindowPresenter windowPresenter;
@@ -88,31 +77,27 @@ PlaybackLayout PlaybackPresentation::desiredLayout() const {
 PlaybackPresenterSyncResult PlaybackPresentation::sync(
     Player& player,
     const std::function<WindowUiState()>& buildUiState,
-    const std::function<bool()>& uiRefreshActive,
     const playback_framebuffer_presenter::TextGridPresentationProvider&
         buildTextGridPresentation,
-    bool& redraw,
-    bool& forceRefreshArt, std::atomic<int64_t>& overlayUntilMs,
-    std::atomic<int>& overlayControlHover) {
+    bool& redraw, bool& forceRefreshArt) {
   PlaybackPresenterSyncResult result;
   result.previousActiveLayout = impl_->activeLayout;
   if (impl_->windowRequested()) {
     const PlaybackSessionContinuationState* initialState =
         impl_->initialState ? &*impl_->initialState : nullptr;
-    if (impl_->windowPresenter.start(player, buildUiState, uiRefreshActive,
+    if (impl_->windowPresenter.start(player, buildUiState,
                                      buildTextGridPresentation, initialState)) {
       impl_->activeLayout = PlaybackLayout::Window;
       impl_->initialState.reset();
     } else {
       impl_->desiredLayout = PlaybackLayout::Terminal;
       impl_->activeLayout = PlaybackLayout::Terminal;
+      result.windowStartFailed = true;
       forceRefreshArt = true;
       redraw = true;
-      resetWindowOverlayState(overlayUntilMs, overlayControlHover);
     }
   } else {
     if (impl_->windowActive() || impl_->windowPresenter.isOpen()) {
-      resetWindowOverlayState(overlayUntilMs, overlayControlHover);
       impl_->windowPresenter.stop();
     }
     impl_->activeLayout = PlaybackLayout::Terminal;

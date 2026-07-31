@@ -592,7 +592,7 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
     overlayInputs.canPlayNext =
         resolveAdjacentImageViewerEntryIndex(browser, currentFile, 1)
             .has_value();
-    overlayInputs.overlayVisible = true;
+    overlayInputs.osd.controlsVisible = true;
 
     const playback_overlay::PlaybackOverlayState overlayState =
         playback_overlay::buildPlaybackOverlayState(overlayInputs);

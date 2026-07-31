@@ -100,7 +100,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool hasSubtitles = inputs.hasSubtitles;
   bool allowAsciiCpuFallback = inputs.allowAsciiCpuFallback;
   bool useWindowPresenter = inputs.useWindowPresenter;
-  bool overlayVisibleNow = inputs.overlayVisibleNow;
+  const bool overlayVisibleNow = inputs.osd.controlsVisible;
   bool clearHistory = inputs.clearHistory;
   bool frameChanged = inputs.frameChanged;
   bool frameAvailable = inputs.frameAvailable;
@@ -343,7 +343,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
   overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-  overlayInputs.overlayVisible = overlayVisibleNow;
+  overlayInputs.osd = inputs.osd;
   overlayInputs.paused = pausedNow;
   overlayInputs.audioFinished = audioFinishedNow;
   overlayInputs.pictureInPictureAvailable = true;
@@ -427,9 +427,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         screen, overlayLayout, overlayStyles, ratio, artTop, height);
   }
 
-  if (inputs.transientMessage.has_value()) {
+  if (overlayState.transientMessage) {
     playback_overlay::renderTransientMessageToScreen(
-        screen, *inputs.transientMessage, accentStyle);
+        screen, *overlayState.transientMessage, accentStyle);
   }
 
   screen.draw();

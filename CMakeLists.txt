@@ -473,10 +473,18 @@ endif()
 add_test(NAME frame_clipboard_tests
          COMMAND $<TARGET_FILE:frame_clipboard_tests>)
 
+add_executable(osd_timeline_tests)
+target_sources(osd_timeline_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_osd_timeline_tests>
+  ${CMAKE_SOURCE_DIR}/playback/session/osd_timeline.cpp
+)
+radioify_link_repo_target(osd_timeline_tests)
+add_test(NAME osd_timeline_tests
+         COMMAND $<TARGET_FILE:osd_timeline_tests>)
+
 add_executable(presentation_policy_tests)
 target_sources(presentation_policy_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_presentation_policy_tests>
-  ${CMAKE_SOURCE_DIR}/playback/overlay/transient_message.cpp
 )
 radioify_link_repo_target(presentation_policy_tests)
 add_test(NAME presentation_policy_tests

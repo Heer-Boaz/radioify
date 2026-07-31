@@ -1,8 +1,7 @@
 #include "handoff.h"
 
-#include <atomic>
-
 #include "audioplayback.h"
+#include "playback/session/osd_timeline.h"
 #include "playback/video/player.h"
 #include "state.h"
 
@@ -17,9 +16,7 @@ void finishHandoff(const playback_session_input::PlaybackInputView& view,
   if (signals.loopStopRequested) {
     *signals.loopStopRequested = true;
   }
-  if (signals.overlayUntilMs) {
-    signals.overlayUntilMs->store(0, std::memory_order_relaxed);
-  }
+  signals.osd->clear();
   if (signals.redraw) {
     *signals.redraw = true;
   }

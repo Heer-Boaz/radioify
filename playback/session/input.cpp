@@ -10,6 +10,7 @@
 #include "playback/video/player.h"
 #include "playback/video/state/machine.h"
 #include "playback/input/shortcuts.h"
+#include "playback/session/osd_timeline.h"
 #include "handoff.h"
 #include "playback/video/subtitle/manager.h"
 #include "ui_helpers.h"
@@ -25,14 +26,7 @@ void setPlaybackPaused(const PlaybackInputView& view,
 namespace {
 
 bool hasOverlayVisibleWindow(const PlaybackInputSignals& signals) {
-  int64_t until = signals.overlayUntilMs->load(std::memory_order_relaxed);
-  if (until <= 0) {
-    return false;
-  }
-  int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      std::chrono::steady_clock::now().time_since_epoch())
-                      .count();
-  return nowMs <= until;
+  return signals.osd->controlsVisible();
 }
 
 void requestWindowRefresh(const PlaybackInputSignals& signals) {
@@ -139,9 +133,6 @@ bool queuePlaybackSeekToRatio(const PlaybackInputView& view,
 
 void triggerOverlay(const PlaybackInputView& view,
                     const PlaybackInputSignals& signals) {
-  int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      std::chrono::steady_clock::now().time_since_epoch())
-                      .count();
   bool extended = false;
   if (*view.playbackState == PlaybackSessionState::Paused) {
     extended = true;
@@ -155,12 +146,10 @@ void triggerOverlay(const PlaybackInputView& view,
   constexpr auto kProgressOverlayTimeout = std::chrono::milliseconds(1750);
   constexpr auto kProgressOverlayExtendedTimeout =
       std::chrono::milliseconds(2500);
-  int64_t timeoutMs = extended
-                          ? static_cast<int64_t>(
-                                kProgressOverlayExtendedTimeout.count())
-                          : static_cast<int64_t>(
-                                kProgressOverlayTimeout.count());
-  signals.overlayUntilMs->store(nowMs + timeoutMs, std::memory_order_relaxed);
+  const auto timeout = extended ? kProgressOverlayExtendedTimeout
+                                : kProgressOverlayTimeout;
+  signals.osd->showControls(playback_session::PlaybackOsdTimeline::Clock::now(),
+                            timeout);
   requestWindowRefresh(signals);
 }
 
@@ -168,7 +157,7 @@ void requestPlaybackExit(const PlaybackInputView& view,
                          PlaybackInputSignals& signals, bool quitApp) {
   *view.playbackState = PlaybackSessionState::Exiting;
   *signals.loopStopRequested = true;
-  signals.overlayUntilMs->store(0, std::memory_order_relaxed);
+  signals.osd->clear();
   *signals.redraw = true;
   *signals.forceRefreshArt = true;
   if (quitApp && signals.quitApplicationRequested) {
@@ -381,7 +370,7 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
         std::clamp(pendingSeekTargetSec, 0.0, inputs.totalSec);
   }
   inputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-  inputs.overlayVisible = isOverlayVisible(signals);
+  inputs.osd.controlsVisible = isOverlayVisible(signals);
   inputs.paused =
       *view.playbackState == PlaybackSessionState::Paused ||
       *view.playbackState == PlaybackSessionState::Ended ||
@@ -705,7 +694,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
 
   playback_overlay::PlaybackOverlayInputs mouseOverlayInputs =
       buildPlaybackMouseOverlayInputs(view, seekState, signals);
-  mouseOverlayInputs.overlayVisible = overlayVisibleForHitTest;
+  mouseOverlayInputs.osd.controlsVisible = overlayVisibleForHitTest;
   if (textGridHitTestCols > 0 && textGridHitTestRows > 0) {
     mouseOverlayInputs.screenWidth = textGridHitTestCols;
     mouseOverlayInputs.screenHeight = textGridHitTestRows;

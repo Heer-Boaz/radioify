@@ -180,7 +180,8 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.displaySec = inputs.displaySec;
   state.totalSec = inputs.totalSec;
   state.volPct = inputs.volPct;
-  state.overlayVisible = inputs.overlayVisible;
+  state.overlayVisible = inputs.osd.controlsVisible;
+  state.transientMessage = inputs.osd.message;
   state.paused = inputs.paused;
   state.audioFinished = inputs.audioFinished;
   state.pictureInPictureAvailable = inputs.pictureInPictureAvailable;
@@ -824,6 +825,7 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.overlayAlpha = state.overlayVisible ? 1.0f : 0.0f;
   ui.isPaused = state.paused;
   ui.title = state.windowTitle;
+  ui.transientMessage = state.transientMessage;
   std::vector<OverlayControlSpec> controlSpecs =
       buildOverlayControlSpecs(state, hoverIndex);
   ui.progressSuffix = buildWindowOverlayProgressSuffix(state);
@@ -1064,7 +1066,7 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
     renderOverlayToTarget(target, layout, styles, ui.progress);
     rendered = true;
   }
-  if (ui.transientMessage.has_value()) {
+  if (ui.transientMessage) {
     renderTransientMessageToTarget(target, *ui.transientMessage,
                                    styles.accentStyle);
     rendered = true;

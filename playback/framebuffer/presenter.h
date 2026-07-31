@@ -55,15 +55,14 @@ WindowUiState buildPlaybackFramebufferUiState(
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<bool>& windowLocalSeekRequested,
     std::atomic<double>& windowPendingSeekTargetSec,
-    std::atomic<int>& overlayControlHover, bool overlayVisibleNow,
-    bool debugOverlay);
+    std::atomic<int>& overlayControlHover,
+    const playback_overlay::PlaybackOsdSnapshot& osd, bool debugOverlay);
 
 void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
     FrameSnapshotRequest& frameSnapshotRequest,
-    const std::function<bool()>& uiRefreshActive,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation);
 

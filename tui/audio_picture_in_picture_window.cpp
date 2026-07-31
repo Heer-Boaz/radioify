@@ -292,7 +292,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
       static_cast<int>(std::round(audioGetVolume() * 100.0f));
   overlayInputs.paused = audioIsPaused() || audioFinished;
   overlayInputs.audioFinished = audioFinished;
-  overlayInputs.overlayVisible = true;
+  overlayInputs.osd.controlsVisible = true;
   overlayInputs.pictureInPictureAvailable = true;
   overlayInputs.pictureInPictureActive = true;
   playback_overlay::PlaybackOverlayState overlayState =

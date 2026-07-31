@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <functional>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -50,8 +49,7 @@ struct PlaybackScreenRenderInputs {
   bool hasSubtitles = false;
   bool allowAsciiCpuFallback = false;
   bool useWindowPresenter = false;
-  bool overlayVisibleNow = false;
-  std::optional<std::string> transientMessage;
+  playback_overlay::PlaybackOsdSnapshot osd;
   bool clearHistory = false;
   bool frameChanged = false;
   bool frameAvailable = false;
