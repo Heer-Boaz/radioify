@@ -83,7 +83,6 @@ struct WindowPresenter::Impl {
     }
 
     auto startGate = std::make_shared<WindowStartGate>();
-    frameSnapshotRequest.reset();
     windowHandle.store(nullptr, std::memory_order_release);
     threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
     forcePresent.store(true, std::memory_order_relaxed);
@@ -192,7 +191,6 @@ struct WindowPresenter::Impl {
       unavailable.error = "Another frame capture is already in progress.";
       return unavailable;
     }
-    forcePresent.store(true, std::memory_order_relaxed);
     notify();
     return frameSnapshotRequest.wait();
   }

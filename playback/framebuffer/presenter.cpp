@@ -54,61 +54,6 @@ void waitForPresenterActivity(NativeWaitHandle wakeEvent,
 
 }  // namespace
 
-bool FrameSnapshotRequest::begin() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (state_ != State::Idle) {
-    return false;
-  }
-  result_ = {};
-  state_ = State::Pending;
-  return true;
-}
-
-bool FrameSnapshotRequest::pending() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return state_ == State::Pending;
-}
-
-VideoFrameSnapshotResult FrameSnapshotRequest::wait() {
-  std::unique_lock<std::mutex> lock(mutex_);
-  completed_.wait(lock, [this]() { return state_ == State::Completed; });
-  VideoFrameSnapshotResult result = std::move(result_);
-  result_ = {};
-  state_ = State::Idle;
-  return result;
-}
-
-void FrameSnapshotRequest::complete(VideoFrameSnapshotResult result) {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (state_ != State::Pending) {
-      return;
-    }
-    result_ = std::move(result);
-    state_ = State::Completed;
-  }
-  completed_.notify_one();
-}
-
-void FrameSnapshotRequest::cancel(std::string error) {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (state_ != State::Pending) {
-      return;
-    }
-    result_ = {};
-    result_.error = std::move(error);
-    state_ = State::Completed;
-  }
-  completed_.notify_one();
-}
-
-void FrameSnapshotRequest::reset() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  result_ = {};
-  state_ = State::Idle;
-}
-
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
     SubtitleManager& subtitleManager, PlaybackSessionState playbackState,
@@ -258,10 +203,11 @@ void runFramebufferPresenterLoop(
 
     const bool forcePresentRequested =
         forcePresent.load(std::memory_order_relaxed);
+    const bool frameSnapshotRequested = frameSnapshotRequest.pending();
     const bool seekingRequested = player.isSeeking();
     const bool textGridPresentationRequested =
         videoWindow.IsTextGridPresentationEnabled();
-    if (!forcePresentRequested) {
+    if (!forcePresentRequested && !frameSnapshotRequested) {
       int waitTimeoutMs = -1;
       auto tightenWaitTimeout = [&](int candidateMs) {
         if (candidateMs < 0) return;
@@ -308,17 +254,18 @@ void runFramebufferPresenterLoop(
       break;
     }
 
-    bool forcePresentNow =
+    const bool forcePresentNow =
         forcePresent.exchange(false, std::memory_order_relaxed);
+    const bool frameSnapshotPending = frameSnapshotRequest.pending();
+    const bool forceFrameRefresh = forcePresentNow || frameSnapshotPending;
     playback_frame_refresh::PlaybackFrameRefreshRequest frameRequest;
-    frameRequest.forceRefresh = forcePresentNow;
+    frameRequest.forceRefresh = forceFrameRefresh;
     playback_frame_refresh::PlaybackFrameRefreshResult frameResult =
         playback_frame_refresh::refresh(player, frameRefresh, frameRequest);
     if (threadState.load(std::memory_order_relaxed) ==
         WindowThreadState::Stopping) {
       break;
     }
-    const bool frameSnapshotPending = frameSnapshotRequest.pending();
     const bool textGridPresentationActive =
         videoWindow.IsTextGridPresentationEnabled();
     playback_framebuffer_video_pipeline::FrameRequest videoFrameRequest;
@@ -328,7 +275,7 @@ void runFramebufferPresenterLoop(
     videoFrameRequest.targetWidth = videoWindow.GetWidth();
     videoFrameRequest.targetHeight = videoWindow.GetHeight();
     videoFrameRequest.frameChanged = frameResult.frameChanged;
-    videoFrameRequest.forceRefresh = forcePresentNow;
+    videoFrameRequest.forceRefresh = forceFrameRefresh;
     videoFrameRequest.textGridPresentationActive =
         textGridPresentationActive && !frameSnapshotPending;
     bool targetHdrOutput = videoWindow.OutputUsesHdr();
