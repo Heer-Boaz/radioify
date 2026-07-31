@@ -522,25 +522,13 @@ add_executable(video_frame_step_smoke)
 target_sources(video_frame_step_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_tool_video_frame_step_smoke>
   ${RADIOIFY_VIDEO_FRAME_STEP_SMOKE_PLAYER_SOURCES}
-)
-radioify_link_repo_target(video_frame_step_smoke)
-
-# Manual integration smoke: unlike video_frame_step_smoke, this variant uses
-# the production audio queue, timeline, clock, and hardware callback. The tool
-# mutes the stream before the playback device is opened.
-add_executable(video_frame_step_audio_smoke
-  ${CMAKE_SOURCE_DIR}/tools/video_frame_step_smoke.cpp
-  ${RADIOIFY_VIDEO_FRAME_STEP_SMOKE_PLAYER_SOURCES}
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   $<TARGET_OBJECTS:radioify_audio>
   $<TARGET_OBJECTS:radioify_analysis>
   $<TARGET_OBJECTS:radioify_audiofilter>
   $<TARGET_OBJECTS:radioify_config>
 )
-target_compile_definitions(video_frame_step_audio_smoke PRIVATE
-  RADIOIFY_FRAME_STEP_SMOKE_REAL_AUDIO=1
-)
-radioify_configure_repo_target(video_frame_step_audio_smoke)
+radioify_configure_repo_target(video_frame_step_smoke)
 
 add_executable(window_display_lifecycle_tests)
 target_sources(window_display_lifecycle_tests PRIVATE
@@ -1181,13 +1169,11 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(ffmpeg_audio_decoder_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
-  target_link_directories(video_frame_step_audio_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(ffmpeg_audio_decoder_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
-target_link_libraries(video_frame_step_audio_smoke PRIVATE ${FFMPEG_LIBRARIES})
 
 set(RADIOIFY_HAS_LIBASS OFF)
 set(_radioify_libass_include_dirs "")
@@ -1307,11 +1293,9 @@ radioify_add_external_include_dirs(${_radioify_libass_include_dirs})
 if (RADIOIFY_LIBASS_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
   target_link_directories(video_frame_step_smoke PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
-  target_link_directories(video_frame_step_audio_smoke PRIVATE ${RADIOIFY_LIBASS_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${_radioify_libass_libraries})
 target_link_libraries(video_frame_step_smoke PRIVATE ${_radioify_libass_libraries})
-target_link_libraries(video_frame_step_audio_smoke PRIVATE ${_radioify_libass_libraries})
 message(STATUS "libass found: ASS advanced renderer enabled")
 
 target_compile_definitions(radioify_project_options INTERFACE
@@ -1432,7 +1416,7 @@ target_link_libraries(psfcore PUBLIC ZLIB::ZLIB)
 target_link_libraries(radioify_audio PRIVATE psfcore)
 target_link_libraries(radioify PRIVATE psfcore)
 target_link_libraries(radioify PRIVATE sexypsf)
-target_link_libraries(video_frame_step_audio_smoke PRIVATE psfcore sexypsf)
+target_link_libraries(video_frame_step_smoke PRIVATE psfcore sexypsf)
 
 set(_radioify_warn_deprecated_defined OFF)
 if (DEFINED CMAKE_WARN_DEPRECATED)
@@ -1492,7 +1476,7 @@ radioify_add_external_include_dirs(
   ${libkss_SOURCE_DIR}/modules
 )
 target_link_libraries(radioify PRIVATE kss)
-target_link_libraries(video_frame_step_audio_smoke PRIVATE kss)
+target_link_libraries(video_frame_step_smoke PRIVATE kss)
 
 set(_radioify_disable_sdl2_defined OFF)
 if (DEFINED CMAKE_DISABLE_FIND_PACKAGE_SDL2)
@@ -1525,7 +1509,7 @@ foreach(_radioify_gme_target IN ITEMS gme gme_player demo demo_mem)
 endforeach()
 radioify_add_external_include_dirs(${gme_SOURCE_DIR})
 target_link_libraries(radioify PRIVATE gme)
-target_link_libraries(video_frame_step_audio_smoke PRIVATE gme)
+target_link_libraries(video_frame_step_smoke PRIVATE gme)
 if (_radioify_disable_sdl2_defined)
   set(CMAKE_DISABLE_FIND_PACKAGE_SDL2 ${_radioify_disable_sdl2_value})
 else()
@@ -1577,7 +1561,7 @@ if (NOT RADIOIFY_DISABLE_GSF_GPL)
   endif()
   radioify_configure_external_target(playgsf)
   target_link_libraries(radioify PRIVATE playgsf)
-  target_link_libraries(video_frame_step_audio_smoke PRIVATE playgsf)
+  target_link_libraries(video_frame_step_smoke PRIVATE playgsf)
 endif()
 
 set(LIBVGM_BUILD_PLAYER OFF CACHE BOOL "Build libvgm player app" FORCE)
@@ -1620,7 +1604,7 @@ if (NOT _radioify_libvgm_target)
   message(FATAL_ERROR "libvgm target not found; check libvgm build options.")
 endif()
 target_link_libraries(radioify PRIVATE ${_radioify_libvgm_target})
-target_link_libraries(video_frame_step_audio_smoke PRIVATE ${_radioify_libvgm_target})
+target_link_libraries(video_frame_step_smoke PRIVATE ${_radioify_libvgm_target})
 
 set_target_properties(radioify PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${RADIOIFY_BUILD_RUNTIME_OUTPUT_DIRECTORY}"
@@ -1637,7 +1621,6 @@ endforeach()
 if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
-  target_link_libraries(video_frame_step_audio_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
 endif()
 
 if (WIN32 AND RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION)
