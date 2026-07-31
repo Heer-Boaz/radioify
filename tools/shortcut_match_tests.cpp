@@ -1314,6 +1314,15 @@ int main() {
                            VideoBeforeTarget,
                "Previous-frame discovery must carry its demux window separately "
                "from the display target and force a strict video-stream seek");
+  playback_video_serial_control::PositionSnapshot pendingPosition =
+      serialSeekControl.positionSnapshot();
+  ok &= expect(pendingPosition.currentSerial == previousDiscoverySeek.serial &&
+                   pendingPosition.seekPending &&
+                   pendingPosition.pendingSeekSerial ==
+                       previousDiscoverySeek.serial &&
+                   pendingPosition.seekDisplayUs == 40000,
+               "Published playback position must expose one coherent serial, "
+               "seek-pending state, and display target");
   playback_video_serial_control::PendingSeek frameStepPendingSeek =
       serialSeekControl.claimPendingSeek();
   ok &= expect(frameStepPendingSeek.valid &&
@@ -1327,12 +1336,27 @@ int main() {
                "Claimed previous-frame discovery seeks must carry the demux "
                "window, decoder preroll, and video-stream seek contract across "
                "the demux boundary");
+  playback_video_serial_control::PositionSnapshot claimedPosition =
+      serialSeekControl.positionSnapshot();
+  ok &= expect(!claimedPosition.seekPending &&
+                   claimedPosition.pendingSeekSerial ==
+                       frameStepPendingSeek.serial &&
+                   claimedPosition.seekDisplayUs == 40000,
+               "Claiming demux work must retain the published seek position "
+               "until a frame acknowledges presentation");
   ok &= expect(!serialSeekControl.clearPendingPresentation(
                    frameStepPendingSeek.serial - 1),
                "A stale frame must not acknowledge seek presentation");
   ok &= expect(serialSeekControl.clearPendingPresentation(
                    frameStepPendingSeek.serial),
                "The current seek frame must acknowledge presentation");
+  playback_video_serial_control::PositionSnapshot presentedPosition =
+      serialSeekControl.positionSnapshot();
+  ok &= expect(!presentedPosition.seekPending &&
+                   presentedPosition.pendingSeekSerial == 0 &&
+                   presentedPosition.seekDisplayUs == 0,
+               "Presentation acknowledgement must atomically retire the seek "
+               "display position");
   ok &= expect(!serialSeekControl.clearPendingPresentation(
                    frameStepPendingSeek.serial),
                "Seek presentation acknowledgement must be single-shot");

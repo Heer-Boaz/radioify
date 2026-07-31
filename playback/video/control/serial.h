@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 
 namespace playback_video_serial_control {
 
@@ -30,6 +31,13 @@ struct PendingSeek {
   int64_t displayTargetUs = 0;
   int64_t decoderPrerollTargetUs = 0;
   DemuxSeekMode demuxSeekMode = DemuxSeekMode::Timeline;
+};
+
+struct PositionSnapshot {
+  int currentSerial = 0;
+  bool seekPending = false;
+  int pendingSeekSerial = 0;
+  int64_t seekDisplayUs = 0;
 };
 
 class Controller {
@@ -69,10 +77,12 @@ class Controller {
   int seekInFlightSerial() const;
   bool seekFailed() const;
   int64_t seekDisplayUs() const;
+  PositionSnapshot positionSnapshot() const;
   int64_t presentationTargetUsForSerial(int serial) const;
   int64_t decoderPrerollTargetUsForSerial(int serial) const;
 
  private:
+  mutable std::mutex transitionMutex_;
   std::atomic<int64_t> seekDisplayUs_{0};
   std::atomic<int> seekInFlightSerial_{0};
   std::atomic<bool> seekFailed_{false};

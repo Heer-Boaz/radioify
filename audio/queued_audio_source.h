@@ -3,16 +3,9 @@
 #include <cstdint>
 
 #include "playback_backend.h"
+#include "stream_reset.h"
 
 struct AudioState;
-
-struct AudioStreamResetRequest {
-  uint64_t generation = 0;
-  int serial = 0;
-  int64_t discardUntilUs = 0;
-  uint64_t framePosition = 0;
-  bool resetPlaybackPosition = false;
-};
 
 bool queuedAudioSourceUsesDecoderWorker(const AudioBackendHandlers* backend);
 void queuedAudioSourceStartProcessing(AudioState* state,
@@ -37,6 +30,7 @@ uint64_t queuedAudioSourceRequestStreamReset(AudioState* state,
                                              bool resetPlaybackPosition);
 bool queuedAudioSourceWaitForStreamReset(AudioState* state,
                                          uint64_t generation);
+AudioStreamReset queuedAudioSourceLastAppliedStreamReset(AudioState* state);
 void queuedAudioSourceCancelStreamResets(AudioState* state);
 int64_t queuedAudioSourceClockStarvationGraceUs(const AudioState* state,
                                                 uint32_t frameCount);

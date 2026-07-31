@@ -329,10 +329,12 @@ target_sources(radioify PRIVATE
   $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/app/radioify.rc>
   $<TARGET_OBJECTS:radioify_app>
   $<TARGET_OBJECTS:radioify_tui>
+  $<TARGET_OBJECTS:radioify_video_playback>
   $<TARGET_OBJECTS:radioify_video>
   $<TARGET_OBJECTS:radioify_audio>
   $<TARGET_OBJECTS:radioify_analysis>
   $<TARGET_OBJECTS:radioify_ui>
+  $<TARGET_OBJECTS:radioify_core_runtime>
   $<TARGET_OBJECTS:radioify_core>
   $<TARGET_OBJECTS:radioify_playback>
   $<TARGET_OBJECTS:radioify_config>
@@ -500,29 +502,12 @@ if (WIN32)
   target_link_libraries(video_output_color_tests PRIVATE dxgi user32)
 endif()
 
-set(RADIOIFY_VIDEO_FRAME_STEP_SMOKE_PLAYER_SOURCES
-  ${CMAKE_SOURCE_DIR}/core/queues.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/audio/clock_reacquire.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/audio/output_clock_source.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/audio/output_timeline.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/audio/track_switch_timeline.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/control/serial.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/frame_cursor.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/frame_step_prefetch.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/frame_step_seek.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/player.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/state/machine.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/timing/main_clock.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/timing/sync.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
-)
-
 add_executable(video_frame_step_smoke)
 target_sources(video_frame_step_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_tool_video_frame_step_smoke>
-  ${RADIOIFY_VIDEO_FRAME_STEP_SMOKE_PLAYER_SOURCES}
-  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  $<TARGET_OBJECTS:radioify_video_playback>
+  $<TARGET_OBJECTS:radioify_ascii_gpu>
+  $<TARGET_OBJECTS:radioify_core_runtime>
   $<TARGET_OBJECTS:radioify_audio>
   $<TARGET_OBJECTS:radioify_analysis>
   $<TARGET_OBJECTS:radioify_audiofilter>

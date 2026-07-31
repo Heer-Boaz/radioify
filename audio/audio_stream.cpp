@@ -199,6 +199,16 @@ void audioStreamFlushSerial(int serial, int64_t discardUntilUs) {
       gAudio.state.framesPlayed.load(std::memory_order_relaxed), false);
 }
 
+AudioStreamReset audioStreamLastAppliedReset() {
+  if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
+    return {};
+  }
+  if (!gAudio.state.streamQueueEnabled.load()) {
+    return {};
+  }
+  return queuedAudioSourceLastAppliedStreamReset(&gAudio.state);
+}
+
 int audioStreamSerial() {
   if (!gAudio.decoderReady || !gAudio.state.externalStream.load()) {
     return 0;

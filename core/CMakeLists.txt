@@ -1,8 +1,11 @@
+radioify_add_module_object_library(radioify_core_runtime
+  ${CMAKE_CURRENT_SOURCE_DIR}/queues.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/runtime_helpers.cpp
+)
+
 radioify_add_module_object_library(radioify_core
   ${CMAKE_CURRENT_SOURCE_DIR}/media_artwork_sidecar.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/open_file_requests.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/queues.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime_helpers.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/shell_open_mode.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/taskgate.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/thread_dispatch_queue.cpp

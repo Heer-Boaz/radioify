@@ -11,6 +11,7 @@ constexpr int64_t kSeekPrerollUs = 1000000;
 }  // namespace
 
 void Controller::reset() {
+  std::lock_guard<std::mutex> lock(transitionMutex_);
   seekDisplayUs_.store(0, std::memory_order_relaxed);
   seekInFlightSerial_.store(0, std::memory_order_relaxed);
   seekFailed_.store(false, std::memory_order_relaxed);
@@ -21,14 +22,14 @@ void Controller::reset() {
   decoderPrerollTargetUs_.store(0, std::memory_order_relaxed);
   demuxSeekMode_.store(static_cast<int>(DemuxSeekMode::Timeline),
                        std::memory_order_relaxed);
-  currentSerial_.store(1, std::memory_order_relaxed);
   pendingSeekSerial_.store(0, std::memory_order_relaxed);
   presentationTargetSerial_.store(0, std::memory_order_relaxed);
   decoderPrerollTargetSerial_.store(0, std::memory_order_relaxed);
+  currentSerial_.store(1, std::memory_order_release);
 }
 
 void Controller::startSession(int initialSerial) {
-  currentSerial_.store(initialSerial, std::memory_order_relaxed);
+  std::lock_guard<std::mutex> lock(transitionMutex_);
   seekDisplayUs_.store(0, std::memory_order_relaxed);
   seekInFlightSerial_.store(0, std::memory_order_relaxed);
   seekFailed_.store(false, std::memory_order_relaxed);
@@ -42,6 +43,7 @@ void Controller::startSession(int initialSerial) {
   pendingSeekSerial_.store(0, std::memory_order_relaxed);
   presentationTargetSerial_.store(0, std::memory_order_relaxed);
   decoderPrerollTargetSerial_.store(0, std::memory_order_relaxed);
+  currentSerial_.store(initialSerial, std::memory_order_release);
 }
 
 TransitionPlan Controller::beginTransition(int64_t targetUs, bool initDone,
@@ -90,6 +92,8 @@ TransitionPlan Controller::beginTransition(int64_t displayTargetUs,
     return plan;
   }
 
+  std::lock_guard<std::mutex> lock(transitionMutex_);
+
   int nextSerial = currentSerial_.load(std::memory_order_relaxed) + 1;
   int64_t clampedDisplayTargetUs = (std::max)(int64_t{0}, displayTargetUs);
   int64_t clampedDemuxTargetUs = (std::max)(int64_t{0}, demuxTargetUs);
@@ -102,7 +106,6 @@ TransitionPlan Controller::beginTransition(int64_t displayTargetUs,
   assert(clampedDemuxWindowEndUs <= clampedDisplayTargetUs);
   assert(clampedDecoderPrerollTargetUs <= clampedDisplayTargetUs);
 
-  currentSerial_.store(nextSerial, std::memory_order_relaxed);
   seekInFlightSerial_.store(nextSerial, std::memory_order_relaxed);
   seekFailed_.store(false, std::memory_order_relaxed);
   pendingSeekSerial_.store(nextSerial, std::memory_order_relaxed);
@@ -118,6 +121,7 @@ TransitionPlan Controller::beginTransition(int64_t displayTargetUs,
   demuxSeekMode_.store(static_cast<int>(demuxSeekMode),
                        std::memory_order_relaxed);
   seekPending_.store(true, std::memory_order_relaxed);
+  currentSerial_.store(nextSerial, std::memory_order_release);
 
   plan.valid = true;
   plan.serial = nextSerial;
@@ -131,6 +135,7 @@ TransitionPlan Controller::beginTransition(int64_t displayTargetUs,
 }
 
 PendingSeek Controller::claimPendingSeek() {
+  std::lock_guard<std::mutex> lock(transitionMutex_);
   PendingSeek pending;
   if (!seekPending_.exchange(false, std::memory_order_relaxed)) {
     return pending;
@@ -149,6 +154,7 @@ PendingSeek Controller::claimPendingSeek() {
 }
 
 bool Controller::applySeekResult(int serial, int resultCode) {
+  std::lock_guard<std::mutex> lock(transitionMutex_);
   if (serial != currentSerial_.load(std::memory_order_relaxed)) {
     return false;
   }
@@ -169,10 +175,12 @@ bool Controller::applySeekResult(int serial, int resultCode) {
 }
 
 void Controller::clearSeekFailure() {
+  std::lock_guard<std::mutex> lock(transitionMutex_);
   seekFailed_.store(false, std::memory_order_relaxed);
 }
 
 bool Controller::clearPendingPresentation(int serial) {
+  std::lock_guard<std::mutex> lock(transitionMutex_);
   int expected = serial;
   if (!pendingSeekSerial_.compare_exchange_strong(
           expected, 0, std::memory_order_relaxed)) {
@@ -183,7 +191,7 @@ bool Controller::clearPendingPresentation(int serial) {
 }
 
 int Controller::currentSerial() const {
-  return currentSerial_.load(std::memory_order_relaxed);
+  return currentSerial_.load(std::memory_order_acquire);
 }
 
 std::atomic<int>* Controller::currentSerialAtomic() { return &currentSerial_; }
@@ -208,10 +216,22 @@ int64_t Controller::seekDisplayUs() const {
   return seekDisplayUs_.load(std::memory_order_relaxed);
 }
 
+PositionSnapshot Controller::positionSnapshot() const {
+  std::lock_guard<std::mutex> lock(transitionMutex_);
+  PositionSnapshot snapshot;
+  snapshot.currentSerial = currentSerial_.load(std::memory_order_relaxed);
+  snapshot.seekPending = seekPending_.load(std::memory_order_relaxed);
+  snapshot.pendingSeekSerial =
+      pendingSeekSerial_.load(std::memory_order_relaxed);
+  snapshot.seekDisplayUs = seekDisplayUs_.load(std::memory_order_relaxed);
+  return snapshot;
+}
+
 int64_t Controller::presentationTargetUsForSerial(int serial) const {
   if (serial <= 0) {
     return 0;
   }
+  std::lock_guard<std::mutex> lock(transitionMutex_);
   if (presentationTargetSerial_.load(std::memory_order_relaxed) != serial) {
     return 0;
   }
@@ -222,6 +242,7 @@ int64_t Controller::decoderPrerollTargetUsForSerial(int serial) const {
   if (serial <= 0) {
     return 0;
   }
+  std::lock_guard<std::mutex> lock(transitionMutex_);
   if (decoderPrerollTargetSerial_.load(std::memory_order_relaxed) != serial) {
     return 0;
   }

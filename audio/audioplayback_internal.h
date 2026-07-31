@@ -97,7 +97,8 @@ struct AudioState {
   std::atomic<bool> streamQueueEnabled{false};
   std::atomic<int> streamSerial{0};
   std::mutex streamResetMutex;
-  AudioStreamResetRequest pendingStreamReset;
+  AudioStreamReset pendingStreamReset;
+  AudioStreamReset appliedStreamReset;
   std::atomic<uint64_t> streamResetRequestedGeneration{0};
   std::atomic<uint64_t> streamResetAppliedGeneration{0};
   std::atomic<bool> streamClockReady{false};

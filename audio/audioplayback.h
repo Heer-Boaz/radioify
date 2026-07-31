@@ -12,6 +12,7 @@
 #include "kssoptions.h"
 #include "nsfoptions.h"
 #include "radio_filter_mode.h"
+#include "stream_reset.h"
 #include "vgmoptions.h"
 
 struct AudioPerfStats {
@@ -90,6 +91,7 @@ void audioStreamPrimeClock(int serial, int64_t targetPtsUs);
 void audioStreamSetEnd(bool atEnd);
 void audioStreamReset(uint64_t framePos);
 void audioStreamFlushSerial(int serial, int64_t discardUntilUs);
+AudioStreamReset audioStreamLastAppliedReset();
 int audioStreamSerial();
 int64_t audioStreamClockUs(int64_t nowUs);
 int64_t audioStreamClockLastUpdatedUs();

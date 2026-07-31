@@ -1550,6 +1550,14 @@ bool emitVideoFrame(VideoDecodeContext* ctx, VideoFrame& out,
 }  // namespace
 
 struct Player::Impl {
+  struct PresentedFrameState {
+    bool valid = false;
+    int serial = 0;
+    int64_t ptsUs = 0;
+    int64_t durationUs = 0;
+    uint64_t displayIndex = 0;
+  };
+
   PlayerConfig config;
   std::atomic<bool> running{false};
   std::atomic<bool> ctrlRunning{false};
@@ -1598,10 +1606,6 @@ struct Player::Impl {
   playback_audio_output_timeline::Controller audioOutputTimeline;
   mutable playback_video_main_clock::Controller mainClock;
 
-  std::atomic<int64_t> lastPresentedPtsUs{0};
-  std::atomic<int64_t> lastPresentedDurationUs{0};
-  std::atomic<int> lastPresentedSerial{0};
-  std::atomic<uint64_t> lastPresentedDisplayIndex{0};
   std::atomic<int64_t> lastMasterUs{0};
   std::atomic<int> lastMasterSource{0};
   std::atomic<int64_t> lastDiffUs{0};
@@ -1612,8 +1616,9 @@ struct Player::Impl {
 
   std::atomic<bool> clearFrameRequested{false};
   std::atomic<bool> hasFrame{false};
-  std::mutex currentFrameMutex;
+  mutable std::mutex currentFrameMutex;
   VideoFrame currentFrame;
+  PresentedFrameState presentedFrame;
   std::atomic<uint64_t> frameCounter{0};
   UniqueWindowsHandle frameReadyEvent;
   UniqueWindowsHandle statusChangedEvent;
@@ -1854,14 +1859,13 @@ struct Player::Impl {
     {
       std::lock_guard<std::mutex> lock(currentFrameMutex);
       currentFrame = std::move(frame);
+      presentedFrame.valid = true;
+      presentedFrame.serial = serialForFrame;
+      presentedFrame.ptsUs = item.ptsUs;
+      presentedFrame.durationUs = prepared.frameDurationUs;
+      presentedFrame.displayIndex = item.displayIndex;
       hasFrame.store(true, std::memory_order_relaxed);
     }
-    lastPresentedPtsUs.store(item.ptsUs, std::memory_order_relaxed);
-    lastPresentedDurationUs.store(prepared.frameDurationUs,
-                                  std::memory_order_relaxed);
-    lastPresentedSerial.store(serialForFrame, std::memory_order_relaxed);
-    lastPresentedDisplayIndex.store(item.displayIndex,
-                                    std::memory_order_relaxed);
     lastMasterUs.store(masterUs, std::memory_order_relaxed);
     lastMasterSource.store(static_cast<int>(source),
                            std::memory_order_relaxed);
@@ -2358,7 +2362,13 @@ struct Player::Impl {
   void clearCurrentFrame() {
     std::lock_guard<std::mutex> lock(currentFrameMutex);
     currentFrame = VideoFrame{};
+    presentedFrame = {};
     hasFrame.store(false, std::memory_order_relaxed);
+  }
+
+  PresentedFrameState presentedFrameSnapshot() const {
+    std::lock_guard<std::mutex> lock(currentFrameMutex);
+    return presentedFrame;
   }
 
   playback_video_main_clock::Snapshot masterClockSnapshot(int64_t nowUs) const {
@@ -2395,8 +2405,7 @@ struct Player::Impl {
     AudioPerfStats audioStats = audioGetPerfStats();
     snapshot.audioSampleRate = audioStats.sampleRate;
     snapshot.audioSyncPointReady = audioStreamOldestPtsUs() != AV_NOPTS_VALUE;
-    snapshot.lastPresentedSerial =
-        lastPresentedSerial.load(std::memory_order_relaxed);
+    snapshot.lastPresentedSerial = presentedFrameSnapshot().serial;
     snapshot.pendingSeekSerial = serialControl.pendingSeekSerial();
     snapshot.seekInFlightSerial = serialControl.seekInFlightSerial();
     snapshot.seekFailed = serialControl.seekFailed();
@@ -2417,15 +2426,15 @@ struct Player::Impl {
   }
 
   int64_t videoTimelineUs() const {
-    const int64_t seekUs = serialControl.seekDisplayUs();
-    if (serialControl.seekPending() || serialControl.pendingSeekSerial() != 0) {
-      return seekUs;
+    const playback_video_serial_control::PositionSnapshot position =
+        serialControl.positionSnapshot();
+    if (position.seekPending || position.pendingSeekSerial != 0) {
+      return position.seekDisplayUs;
     }
 
-    const int currentSerial = serialControl.currentSerial();
-    if (lastPresentedSerial.load(std::memory_order_relaxed) == currentSerial) {
-      return (std::max)(
-          int64_t{0}, lastPresentedPtsUs.load(std::memory_order_relaxed));
+    const PresentedFrameState presented = presentedFrameSnapshot();
+    if (presented.valid && presented.serial == position.currentSerial) {
+      return (std::max)(int64_t{0}, presented.ptsUs);
     }
 
     return 0;
@@ -2531,10 +2540,6 @@ struct Player::Impl {
     serialControl.startSession(1);
     frameCursor.resetForSerial(1);
     mainClock.startSession(1);
-    lastPresentedSerial.store(0);
-    lastPresentedPtsUs.store(0);
-    lastPresentedDisplayIndex.store(0);
-    lastPresentedDurationUs.store(0);
     frameCounter.store(0);
     ResetEvent(frameReadyEvent.get());
     ResetEvent(statusChangedEvent.get());
@@ -2767,8 +2772,7 @@ struct Player::Impl {
         if (ev.serial == serialControl.currentSerial()) {
           if (playbackState.current() == PlayerState::Priming) {
             int64_t audioOldestPts = audioStreamOldestPtsUs();
-            int64_t videoPts =
-                lastPresentedPtsUs.load(std::memory_order_relaxed);
+            int64_t videoPts = presentedFrameSnapshot().ptsUs;
 
             playback_video_sync::PrimingAnchor anchor =
                 playback_video_sync::choosePrimingAnchor(audioOldestPts,
@@ -3758,8 +3762,7 @@ struct Player::Impl {
                                   &prefetchState);
         bool pendingFrameStepDeferred = false;
         const bool currentFrameIsCurrentSerial =
-            lastPresentedSerial.load(std::memory_order_relaxed) ==
-            static_cast<int>(serial);
+            presentedFrameSnapshot().serial == static_cast<int>(serial);
         const int64_t stepNow = nowUs();
         playback_video_main_clock::Snapshot stepMaster =
             masterClockSnapshot(stepNow);
@@ -3919,8 +3922,9 @@ struct Player::Impl {
       lastMasterSource.store(static_cast<int>(master.source),
                              std::memory_order_relaxed);
       
-      int64_t lpPts = lastPresentedPtsUs.load(std::memory_order_relaxed);
-      int lpSerial = lastPresentedSerial.load(std::memory_order_relaxed);
+      const PresentedFrameState lastPresented = presentedFrameSnapshot();
+      int64_t lpPts = lastPresented.ptsUs;
+      int lpSerial = lastPresented.serial;
       if (masterUs > 0 && lpPts > 0 && lpSerial == static_cast<int>(serial)) {
         lastDiffUs.store(lpPts - masterUs, std::memory_order_relaxed);
       } else {
@@ -3965,10 +3969,11 @@ struct Player::Impl {
 
       QueuedFrame front{};
       if (!videoFrames.peek(&front)) {
+        const int64_t lastPresentedPtsUs = presentedFrameSnapshot().ptsUs;
         if (playback_video_sync::shouldBackoffForEmptyQueue(
                 syncState, st, serialControl.seekPending(),
                 durationUs.load(std::memory_order_relaxed),
-                lastPresentedPtsUs.load(std::memory_order_relaxed), now)) {
+                lastPresentedPtsUs, now)) {
           logVideo("stall_detected_wait", nullptr, 0, PlayerClockSource::None,
                    0, 0);
           std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -4351,6 +4356,9 @@ PlayerDebugInfo Player::debugInfo() const {
   {
     std::lock_guard<std::mutex> lock(impl_->currentFrameMutex);
     info.hasVideoFrame = impl_->hasFrame.load(std::memory_order_relaxed);
+    info.lastPresentedPtsUs = impl_->presentedFrame.ptsUs;
+    info.lastPresentedDurationUs = impl_->presentedFrame.durationUs;
+    info.lastPresentedDisplayIndex = impl_->presentedFrame.displayIndex;
     if (info.hasVideoFrame) {
       info.videoFrameWidth = impl_->currentFrame.width;
       info.videoFrameHeight = impl_->currentFrame.height;
@@ -4360,12 +4368,6 @@ PlayerDebugInfo Player::debugInfo() const {
       info.videoFrameFullRange = impl_->currentFrame.fullRange;
     }
   }
-  info.lastPresentedPtsUs =
-      impl_->lastPresentedPtsUs.load(std::memory_order_relaxed);
-  info.lastPresentedDurationUs =
-      impl_->lastPresentedDurationUs.load(std::memory_order_relaxed);
-  info.lastPresentedDisplayIndex =
-      impl_->lastPresentedDisplayIndex.load(std::memory_order_relaxed);
   info.lastDiffUs = impl_->lastDiffUs.load(std::memory_order_relaxed);
   info.lastDelayUs = impl_->lastDelayUs.load(std::memory_order_relaxed);
   info.masterClockUs = impl_->lastMasterUs.load(std::memory_order_relaxed);

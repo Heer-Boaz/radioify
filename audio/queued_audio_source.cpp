@@ -151,10 +151,11 @@ bool applyPendingStreamReset(AudioState* state,
     return true;
   }
 
-  const AudioStreamResetRequest request = state->pendingStreamReset;
+  const AudioStreamReset request = state->pendingStreamReset;
   resetQueuedTransport(state, request.framePosition, request.serial,
                        request.discardUntilUs,
                        request.resetPlaybackPosition);
+  state->appliedStreamReset = request;
   state->streamResetAppliedGeneration.store(request.generation,
                                             std::memory_order_release);
   *processingCommit = ProcessingCommit::StreamReset;
@@ -501,6 +502,7 @@ void queuedAudioSourceStartProcessing(AudioState* state,
   {
     std::lock_guard<std::mutex> resetLock(state->streamResetMutex);
     state->pendingStreamReset = {};
+    state->appliedStreamReset = {};
     state->streamResetRequestedGeneration.store(0,
                                                 std::memory_order_relaxed);
     state->streamResetAppliedGeneration.store(0,
@@ -620,6 +622,14 @@ bool queuedAudioSourceWaitForStreamReset(AudioState* state,
   });
   return state->streamResetAppliedGeneration.load(
              std::memory_order_acquire) >= generation;
+}
+
+AudioStreamReset queuedAudioSourceLastAppliedStreamReset(AudioState* state) {
+  if (!state) {
+    return {};
+  }
+  std::lock_guard<std::mutex> resetLock(state->streamResetMutex);
+  return state->appliedStreamReset;
 }
 
 void queuedAudioSourceCancelStreamResets(AudioState* state) {
