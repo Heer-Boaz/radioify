@@ -3,50 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <vector>
-
-#include "runtime_helpers.h"
-
-std::optional<std::string> getEnvString(const char* name) {
-  if (!name || name[0] == '\0') return std::nullopt;
-#ifdef _WIN32
-  size_t required = 0;
-  if (getenv_s(&required, nullptr, 0, name) != 0 || required == 0) {
-    return std::nullopt;
-  }
-  std::vector<char> buffer(required);
-  if (getenv_s(&required, buffer.data(), buffer.size(), name) != 0 ||
-      required == 0) {
-    return std::nullopt;
-  }
-  if (buffer.empty() || buffer[0] == '\0') return std::nullopt;
-  return std::string(buffer.data());
-#else
-  const char* value = std::getenv(name);
-  if (!value || value[0] == '\0') return std::nullopt;
-  return std::string(value);
-#endif
-}
-
-std::FILE* openFileUtf8(const std::filesystem::path& path, const char* mode) {
-  if (path.empty() || !mode || mode[0] == '\0') return nullptr;
-#ifdef _WIN32
-  std::wstring wpath = path.wstring();
-  std::wstring wmode;
-  for (const char* p = mode; *p != '\0'; ++p) {
-    wmode.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*p)));
-  }
-  std::FILE* file = nullptr;
-  if (_wfopen_s(&file, wpath.c_str(), wmode.c_str()) != 0) {
-    return nullptr;
-  }
-  return file;
-#else
-  const std::string pathUtf8 = toUtf8String(path);
-  return std::fopen(pathUtf8.c_str(), mode);
-#endif
-}
 
 std::string formatTime(double seconds) {
   if (!std::isfinite(seconds) || seconds < 0) return "--:--";

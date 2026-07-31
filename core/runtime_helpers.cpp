@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -142,6 +143,28 @@ std::filesystem::path pathFromUtf8String(const std::string& value) {
   return std::filesystem::u8path(value);
 #else
   return std::filesystem::path(value);
+#endif
+}
+
+std::optional<std::string> getEnvString(const char* name) {
+  std::string value = getEnvStringSafe(name);
+  return value.empty() ? std::nullopt
+                       : std::optional<std::string>(std::move(value));
+}
+
+std::FILE* openFileUtf8(const std::filesystem::path& path, const char* mode) {
+  if (path.empty() || !mode || mode[0] == '\0') return nullptr;
+#ifdef _WIN32
+  std::wstring wideMode;
+  for (const char* p = mode; *p != '\0'; ++p) {
+    wideMode.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*p)));
+  }
+  std::FILE* file = nullptr;
+  return _wfopen_s(&file, path.wstring().c_str(), wideMode.c_str()) == 0
+             ? file
+             : nullptr;
+#else
+  return std::fopen(path.string().c_str(), mode);
 #endif
 }
 

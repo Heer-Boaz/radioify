@@ -1,12 +1,8 @@
 #pragma once
 
-#include <cstdio>
-#include <filesystem>
-#include <optional>
 #include <string>
 #include <vector>
 
-#include "runtime_helpers.h"
 #include "asciiart_layout.h"
 #include "consolescreen.h"
 #include "unicode_display_width.h"
@@ -63,9 +59,6 @@ struct BracketButtonLabels {
   std::string hover;
   int width = 0;
 };
-
-std::optional<std::string> getEnvString(const char* name);
-std::FILE* openFileUtf8(const std::filesystem::path& path, const char* mode);
 
 float clamp01(float v);
 Color scaleColor(const Color& color, float amount);

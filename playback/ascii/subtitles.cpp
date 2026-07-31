@@ -13,7 +13,7 @@
 
 #include "playback/video/subtitle/ass/bitmap_renderer.h"
 #include "playback/video/subtitle/caption_style.h"
-#include "ui_helpers.h"
+#include "runtime_helpers.h"
 #include "unicode_display_width.h"
 
 namespace playback_ascii_subtitles {

@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "runtime_helpers.h"
-#include "ui_helpers.h"
 
 #ifndef RADIOIFY_HAS_ONNXRUNTIME
 #define RADIOIFY_HAS_ONNXRUNTIME 0

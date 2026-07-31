@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "runtime_helpers.h"
-#include "ui_helpers.h"
 #include "windows_app_resources.h"
 
 #ifdef _WIN32
