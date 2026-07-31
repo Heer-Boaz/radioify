@@ -473,15 +473,6 @@ endif()
 add_test(NAME frame_clipboard_tests
          COMMAND $<TARGET_FILE:frame_clipboard_tests>)
 
-add_executable(frame_snapshot_request_tests)
-target_sources(frame_snapshot_request_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_frame_snapshot_request_tests>
-  ${CMAKE_SOURCE_DIR}/playback/framebuffer/frame_snapshot_request.cpp
-)
-radioify_link_repo_target(frame_snapshot_request_tests)
-add_test(NAME frame_snapshot_request_tests
-         COMMAND $<TARGET_FILE:frame_snapshot_request_tests>)
-
 add_executable(osd_timeline_tests)
 target_sources(osd_timeline_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_osd_timeline_tests>

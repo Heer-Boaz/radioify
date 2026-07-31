@@ -7,7 +7,6 @@
 
 #include "core/native_wait_handle.h"
 #include "consolescreen.h"
-#include "playback/framebuffer/frame_snapshot_request.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/overlay/overlay.h"
 #include "playback/session/state.h"
@@ -38,7 +37,6 @@ void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
-    FrameSnapshotRequest& frameSnapshotRequest,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation);
 

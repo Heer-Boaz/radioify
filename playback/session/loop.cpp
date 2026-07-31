@@ -185,7 +185,8 @@ struct PlaybackLoopRunner::Impl {
     };
     inputSignals.copyCurrentVideoFrameToClipboard = [this]() {
       std::string error;
-      if (!output.copyCurrentVideoFrameToClipboard(&error)) {
+      const WindowUiState ui = buildWindowUiState();
+      if (!output.copyCurrentVideoFrameToClipboard(ui, &error)) {
         std::fprintf(stderr, "Copy frame failed: %s\n", error.c_str());
         osd.showMessage("Frame copy failed",
                         playback_session::PlaybackOsdTimeline::Clock::now(),

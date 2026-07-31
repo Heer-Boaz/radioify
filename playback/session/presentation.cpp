@@ -123,6 +123,7 @@ void PlaybackPresentation::requestPresent() {
   impl_->windowPresenter.requestPresent();
 }
 
-VideoFrameSnapshotResult PlaybackPresentation::captureCurrentFrame() {
-  return impl_->windowPresenter.captureCurrentFrame();
+VideoFrameSnapshotResult PlaybackPresentation::captureCurrentFrame(
+    const WindowUiState& ui) {
+  return impl_->windowPresenter.captureCurrentFrame(ui);
 }

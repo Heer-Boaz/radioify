@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
-#include <utility>
 
 #include "audioplayback.h"
 #include "core/windows_message_pump.h"
@@ -156,7 +155,6 @@ void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
-    FrameSnapshotRequest& frameSnapshotRequest,
     const std::function<WindowUiState()>& buildUiState,
     const TextGridPresentationProvider& buildTextGridPresentation) {
   if (!buildUiState) {
@@ -191,23 +189,16 @@ void runFramebufferPresenterLoop(
     }
 
     if (!videoWindow.IsOpen() || !videoWindow.IsVisible()) {
-      if (frameSnapshotRequest.pending()) {
-        VideoFrameSnapshotResult unavailable;
-        unavailable.error =
-            "Frame capture is available while the video window is visible.";
-        frameSnapshotRequest.complete(std::move(unavailable));
-      }
       waitForPresenterWake(wakeEvent);
       continue;
     }
 
     const bool forcePresentRequested =
         forcePresent.load(std::memory_order_relaxed);
-    const bool frameSnapshotRequested = frameSnapshotRequest.pending();
     const bool seekingRequested = player.isSeeking();
     const bool textGridPresentationRequested =
         videoWindow.IsTextGridPresentationEnabled();
-    if (!forcePresentRequested && !frameSnapshotRequested) {
+    if (!forcePresentRequested) {
       int waitTimeoutMs = -1;
       auto tightenWaitTimeout = [&](int candidateMs) {
         if (candidateMs < 0) return;
@@ -256,10 +247,8 @@ void runFramebufferPresenterLoop(
 
     const bool forcePresentNow =
         forcePresent.exchange(false, std::memory_order_relaxed);
-    const bool frameSnapshotPending = frameSnapshotRequest.pending();
-    const bool forceFrameRefresh = forcePresentNow || frameSnapshotPending;
     playback_frame_refresh::PlaybackFrameRefreshRequest frameRequest;
-    frameRequest.forceRefresh = forceFrameRefresh;
+    frameRequest.forceRefresh = forcePresentNow;
     playback_frame_refresh::PlaybackFrameRefreshResult frameResult =
         playback_frame_refresh::refresh(player, frameRefresh, frameRequest);
     if (threadState.load(std::memory_order_relaxed) ==
@@ -275,9 +264,8 @@ void runFramebufferPresenterLoop(
     videoFrameRequest.targetWidth = videoWindow.GetWidth();
     videoFrameRequest.targetHeight = videoWindow.GetHeight();
     videoFrameRequest.frameChanged = frameResult.frameChanged;
-    videoFrameRequest.forceRefresh = forceFrameRefresh;
-    videoFrameRequest.textGridPresentationActive =
-        textGridPresentationActive && !frameSnapshotPending;
+    videoFrameRequest.forceRefresh = forcePresentNow;
+    videoFrameRequest.textGridPresentationActive = textGridPresentationActive;
     bool targetHdrOutput = videoWindow.OutputUsesHdr();
 #if defined(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO) && RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO
     if (frameResult.frameAvailable &&
@@ -295,13 +283,8 @@ void runFramebufferPresenterLoop(
 
     bool seekingNow = player.isSeeking();
     WindowUiState ui;
-    if (frameSnapshotPending || !textGridPresentationActive) {
+    if (!textGridPresentationActive) {
       ui = buildUiState();
-    }
-    if (frameSnapshotPending) {
-      VideoFrameSnapshotResult result =
-          videoWindow.CaptureCurrentFrame(frameCache, ui);
-      frameSnapshotRequest.complete(std::move(result));
     }
     if (textGridPresentationActive) {
       const int windowWidth = videoWindow.GetWidth();

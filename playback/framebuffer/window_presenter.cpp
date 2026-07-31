@@ -52,7 +52,6 @@ struct WindowStartGate {
 struct WindowPresenter::Impl {
   VideoWindow window;
   GpuVideoFrameCache frameCache;
-  playback_framebuffer_presenter::FrameSnapshotRequest frameSnapshotRequest;
   std::atomic<WindowThreadState> threadState{WindowThreadState::Disabled};
   std::atomic<bool> forcePresent{false};
   std::atomic<HWND> windowHandle{nullptr};
@@ -113,8 +112,8 @@ struct WindowPresenter::Impl {
           if (opened) {
             playback_framebuffer_presenter::runFramebufferPresenterLoop(
                 player, window, frameCache, threadState, forcePresent,
-                NativeWaitHandle(wakeEvent.get()), frameSnapshotRequest,
-                buildUiState, buildTextGridPresentation);
+                NativeWaitHandle(wakeEvent.get()), buildUiState,
+                buildTextGridPresentation);
             window.Close();
             windowHandle.store(nullptr, std::memory_order_release);
           }
@@ -156,8 +155,6 @@ struct WindowPresenter::Impl {
       appendWindowPresenterTimingLog("window_presenter_stop join_begin");
       threadState.store(WindowThreadState::Stopping, std::memory_order_relaxed);
       forcePresent.store(false, std::memory_order_relaxed);
-      frameSnapshotRequest.cancel(
-          "Frame capture was cancelled because the video window stopped.");
       notify();
       thread.join();
       appendWindowPresenterTimingLog("window_presenter_stop join_end");
@@ -178,21 +175,15 @@ struct WindowPresenter::Impl {
     notify();
   }
 
-  VideoFrameSnapshotResult captureCurrentFrame() {
+  VideoFrameSnapshotResult captureCurrentFrame(const WindowUiState& ui) {
     VideoFrameSnapshotResult unavailable;
-    if (!thread.joinable() ||
-        threadState.load(std::memory_order_relaxed) !=
-            WindowThreadState::Enabled) {
+    HWND hwnd = nativeWindowHandle();
+    if (!hwnd || !IsWindow(hwnd) || !IsWindowVisible(hwnd)) {
       unavailable.error =
           "Frame capture is available while the video window is visible.";
       return unavailable;
     }
-    if (!frameSnapshotRequest.begin()) {
-      unavailable.error = "Another frame capture is already in progress.";
-      return unavailable;
-    }
-    notify();
-    return frameSnapshotRequest.wait();
+    return window.CaptureCurrentFrame(frameCache, ui);
   }
 
   HWND nativeWindowHandle() const {
@@ -218,8 +209,9 @@ void WindowPresenter::stop() { impl_->stop(); }
 
 void WindowPresenter::requestPresent() { impl_->requestPresent(); }
 
-VideoFrameSnapshotResult WindowPresenter::captureCurrentFrame() {
-  return impl_->captureCurrentFrame();
+VideoFrameSnapshotResult WindowPresenter::captureCurrentFrame(
+    const WindowUiState& ui) {
+  return impl_->captureCurrentFrame(ui);
 }
 
 bool WindowPresenter::isOpen() const {
