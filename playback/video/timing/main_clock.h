@@ -61,11 +61,6 @@ struct Snapshot {
   int64_t videoClockUs = 0;
 };
 
-enum class CurrentPositionPolicy {
-  PlaybackClock,
-  PresentedVideo,
-};
-
 class Controller {
  public:
   void reset();
@@ -76,8 +71,6 @@ class Controller {
   void changePause(bool paused, int64_t nowUs);
   void updateVideo(int serial, int64_t ptsUs, int64_t systemUs);
   TrackClockStatus videoStatus(int currentSerial, int64_t nowUs) const;
-  int64_t currentVideoUs(int currentSerial, int64_t lastPresentedPtsUs,
-                         int64_t nowUs) const;
   Snapshot sample(const SampleRequest& request);
 
  private:
@@ -87,10 +80,6 @@ class Controller {
   std::atomic<int> lastSerial_{0};
   std::atomic<bool> paused_{true};
 };
-
-int64_t resolveCurrentPlaybackUs(const Snapshot& snapshot,
-                                 int64_t lastPresentedPtsUs,
-                                 CurrentPositionPolicy policy);
 
 int64_t convertToSystemUs(const Snapshot& snapshot, int64_t streamUs,
                           int64_t fallbackSystemUs);

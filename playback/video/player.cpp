@@ -2423,14 +2423,12 @@ struct Player::Impl {
     }
 
     const int currentSerial = serialControl.currentSerial();
-    const int64_t now = nowUs();
     if (lastPresentedSerial.load(std::memory_order_relaxed) == currentSerial) {
-      int64_t presentedUs =
-          lastPresentedPtsUs.load(std::memory_order_relaxed);
-      return mainClock.currentVideoUs(currentSerial, presentedUs, now);
+      return (std::max)(
+          int64_t{0}, lastPresentedPtsUs.load(std::memory_order_relaxed));
     }
 
-    return mainClock.currentVideoUs(currentSerial, 0, now);
+    return 0;
   }
 
   bool isAudioOk() const { return audioStartOk.load(); }
@@ -4295,25 +4293,7 @@ int64_t Player::durationUs() const {
 }
 
 int64_t Player::currentUs() const {
-  int64_t seekUs = impl_->serialControl.seekDisplayUs();
-  if (impl_->serialControl.pendingSeekSerial() != 0) {
-    return seekUs;
-  }
-  const int currentSerial = impl_->serialControl.currentSerial();
-  const int lastPresentedSerial =
-      impl_->lastPresentedSerial.load(std::memory_order_relaxed);
-  const auto positionPolicy =
-      impl_->playbackState.projection().transport ==
-                  playback_video_state_machine::TransportState::Paused &&
-              lastPresentedSerial == currentSerial
-          ? playback_video_main_clock::CurrentPositionPolicy::PresentedVideo
-          : playback_video_main_clock::CurrentPositionPolicy::PlaybackClock;
-  const int64_t lastPresentedPtsUs =
-      impl_->lastPresentedPtsUs.load(std::memory_order_relaxed);
-  int64_t now = nowUs();
-  playback_video_main_clock::Snapshot snapshot = impl_->masterClockSnapshot(now);
-  return playback_video_main_clock::resolveCurrentPlaybackUs(
-      snapshot, lastPresentedPtsUs, positionPolicy);
+  return impl_->videoTimelineUs();
 }
 
 uint64_t Player::videoFrameCounter() const {

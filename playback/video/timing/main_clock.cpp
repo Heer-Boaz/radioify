@@ -1,6 +1,5 @@
 #include "main_clock.h"
 
-#include <algorithm>
 #include <atomic>
 #include <cmath>
 
@@ -82,16 +81,6 @@ TrackClockStatus Controller::videoStatus(int currentSerial,
   return readVideoClock(videoClock_, currentSerial, nowUs);
 }
 
-int64_t Controller::currentVideoUs(int currentSerial,
-                                   int64_t lastPresentedPtsUs,
-                                   int64_t nowUs) const {
-  TrackClockStatus status = videoStatus(currentSerial, nowUs);
-  if (status.ready && status.us > 0) {
-    return status.us;
-  }
-  return lastPresentedPtsUs > 0 ? lastPresentedPtsUs : 0;
-}
-
 Snapshot Controller::sample(const SampleRequest& request) {
   Snapshot snapshot;
   MasterPolicy policy = masterPolicy();
@@ -128,21 +117,6 @@ Snapshot Controller::sample(const SampleRequest& request) {
                     std::memory_order_relaxed);
   lastSerial_.store(request.currentSerial, std::memory_order_relaxed);
   return snapshot;
-}
-
-int64_t resolveCurrentPlaybackUs(const Snapshot& snapshot,
-                                 int64_t lastPresentedPtsUs,
-                                 CurrentPositionPolicy policy) {
-  if (policy == CurrentPositionPolicy::PresentedVideo) {
-    return (std::max)(int64_t{0}, lastPresentedPtsUs);
-  }
-  if (snapshot.source != PlayerClockSource::None && snapshot.us > 0) {
-    return snapshot.us;
-  }
-  if (snapshot.videoClockReady && snapshot.videoClockUs > 0) {
-    return snapshot.videoClockUs;
-  }
-  return lastPresentedPtsUs > 0 ? lastPresentedPtsUs : 0;
 }
 
 int64_t convertToSystemUs(const Snapshot& snapshot, int64_t streamUs,

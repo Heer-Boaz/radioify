@@ -1690,19 +1690,6 @@ int main() {
   playback_video_main_clock::Snapshot audioMaster = mainClock.sample(clockRequest);
   ok &= expect(audioMaster.source == PlayerClockSource::Audio,
                "Eligible audio must be selected as the main playback clock");
-  ok &= expect(
-      playback_video_main_clock::resolveCurrentPlaybackUs(
-          audioMaster, 1010000,
-          playback_video_main_clock::CurrentPositionPolicy::PlaybackClock) ==
-          10000,
-      "Playing position must continue to follow the eligible audio master");
-  ok &= expect(
-      playback_video_main_clock::resolveCurrentPlaybackUs(
-          audioMaster, 1010000,
-          playback_video_main_clock::CurrentPositionPolicy::PresentedVideo) ==
-          1010000,
-      "Paused frame-step position must follow the presented video frame even "
-      "when the audio clock is still eligible");
   ok &= expect(playback_video_main_clock::convertToSystemUs(audioMaster, 20000, 0) ==
                    1010000,
                "Main clock must convert stream timestamps to system time");
