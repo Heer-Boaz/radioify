@@ -16,6 +16,7 @@
 #include "queues.h"
 
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -1360,6 +1361,97 @@ int main() {
   ok &= expect(!serialSeekControl.clearPendingPresentation(
                    frameStepPendingSeek.serial),
                "Seek presentation acknowledgement must be single-shot");
+
+  playback_video_serial_control::Controller timelineControl;
+  timelineControl.startSession(4);
+  timelineControl.notePresentedPosition(4, 60000000);
+  playback_video_serial_control::PositionSnapshot initialTimeline =
+      timelineControl.positionSnapshot();
+  ok &= expect(initialTimeline.positionUs == 60000000 &&
+                   !initialTimeline.requestPending &&
+                   !initialTimeline.transitionPending,
+               "The transport timeline must begin at the presented frame");
+
+  const playback_video_serial_control::SeekRequest firstRequest =
+      timelineControl.publishSeekRequest(65000000, 120000000);
+  playback_video_serial_control::PositionSnapshot firstRequestedTimeline =
+      timelineControl.positionSnapshot();
+  ok &= expect(firstRequest.generation == 1 &&
+                   firstRequest.targetUs == 65000000 &&
+                   firstRequestedTimeline.requestPending &&
+                   firstRequestedTimeline.positionUs == firstRequest.targetUs,
+               "Publishing a seek must synchronously make its target the "
+               "authoritative transport position");
+
+  const playback_video_serial_control::SeekRequest secondRequest =
+      timelineControl.publishRelativeSeekRequest(5000000, 120000000);
+  playback_video_serial_control::PositionSnapshot secondRequestedTimeline =
+      timelineControl.positionSnapshot();
+  ok &= expect(secondRequest.generation == firstRequest.generation + 1 &&
+                   secondRequest.targetUs == 70000000 &&
+                   secondRequestedTimeline.positionUs ==
+                       secondRequest.targetUs,
+               "Consecutive relative seeks must accumulate from the latest "
+               "published target, not from a stale presented frame");
+
+  timelineControl.acknowledgeSeekRequest(firstRequest.generation);
+  playback_video_serial_control::PositionSnapshot staleAcknowledgement =
+      timelineControl.positionSnapshot();
+  ok &= expect(staleAcknowledgement.requestPending &&
+                   staleAcknowledgement.positionUs == secondRequest.targetUs,
+               "Acknowledging an older coalesced seek must not retire a newer "
+               "transport request");
+
+  const playback_video_serial_control::TransitionPlan requestedTransition =
+      timelineControl.beginTransition(secondRequest.targetUs, true, true);
+  timelineControl.acknowledgeSeekRequest(secondRequest.generation);
+  playback_video_serial_control::PositionSnapshot transitioningTimeline =
+      timelineControl.positionSnapshot();
+  ok &= expect(requestedTransition.valid &&
+                   requestedTransition.serial == 5 &&
+                   !transitioningTimeline.requestPending &&
+                   transitioningTimeline.transitionPending &&
+                   transitioningTimeline.positionUs == secondRequest.targetUs,
+               "The accepted seek target must remain authoritative throughout "
+               "its serial transition");
+
+  const playback_video_serial_control::PendingSeek requestedPendingSeek =
+      timelineControl.claimPendingSeek();
+  ok &= expect(requestedPendingSeek.valid &&
+                   requestedPendingSeek.serial == requestedTransition.serial &&
+                   timelineControl.applySeekResult(requestedPendingSeek.serial,
+                                                   0),
+               "The authoritative request must cross the demux handoff on its "
+               "assigned serial");
+  timelineControl.notePresentedPosition(4, 61000000);
+  playback_video_serial_control::PositionSnapshot stalePresentation =
+      timelineControl.positionSnapshot();
+  ok &= expect(stalePresentation.positionUs == secondRequest.targetUs &&
+                   stalePresentation.presentedPositionSerial == 4,
+               "A stale serial must not replace the position of an active "
+               "transport transition");
+
+  constexpr int64_t kAcceptedFramePtsUs = 70033333;
+  timelineControl.notePresentedPosition(requestedTransition.serial,
+                                        kAcceptedFramePtsUs);
+  ok &= expect(timelineControl.clearPendingPresentation(
+                   requestedTransition.serial),
+               "The accepted serial must retire its presentation boundary");
+  playback_video_serial_control::PositionSnapshot completedTimeline =
+      timelineControl.positionSnapshot();
+  ok &= expect(!completedTimeline.requestPending &&
+                   !completedTimeline.transitionPending &&
+                   completedTimeline.positionUs == kAcceptedFramePtsUs &&
+                   completedTimeline.presentedPositionSerial ==
+                       requestedTransition.serial,
+               "After presentation, the decoded frame must become the sole "
+               "authoritative transport position");
+
+  const playback_video_serial_control::SeekRequest clampedRequest =
+      timelineControl.publishRelativeSeekRequest(
+          (std::numeric_limits<int64_t>::min)(), 120000000);
+  ok &= expect(clampedRequest.targetUs == 0,
+               "Relative transport seeks must clamp safely at timeline zero");
 
   ok &= expect(resolvePlaybackShortcutAction(
                    makeKey(VK_RETURN, 0, kPlaybackShortcutAltMask),

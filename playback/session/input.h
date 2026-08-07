@@ -62,34 +62,31 @@ struct PlaybackInputSignals {
   bool* forceRefreshArt = nullptr;
 };
 
-struct PlaybackSeekState {
-  bool* localSeekRequested = nullptr;
-  std::atomic<bool>* windowLocalSeekRequested = nullptr;
-  double* pendingSeekTargetSec = nullptr;
-  std::atomic<double>* windowPendingSeekTargetSec = nullptr;
-  std::chrono::steady_clock::time_point* lastSeekSentTime = nullptr;
-  double* queuedSeekTargetSec = nullptr;
-  bool* seekQueued = nullptr;
+struct PlaybackSeekGestureState {
+  std::chrono::steady_clock::time_point lastSeekSentTime =
+      std::chrono::steady_clock::time_point::min();
+  double queuedSeekTargetSec = -1.0;
+  bool seekQueued = false;
 };
 
 bool isOverlayVisible(const PlaybackInputSignals& signals);
 void queueSeekRequest(PlaybackInputSignals& signals,
-                      PlaybackSeekState& seekState, double targetSec);
+                      PlaybackSeekGestureState& seekState, double targetSec);
 void sendSeekRequest(const PlaybackInputView& view,
                      PlaybackInputSignals& signals,
-                     PlaybackSeekState& seekState, double targetSec);
+                     PlaybackSeekGestureState& seekState, double targetSec);
 
 void handlePlaybackInputEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
-                              PlaybackSeekState& seekState,
+                              PlaybackSeekGestureState& seekState,
                               const InputEvent& ev);
 void handlePlaybackControlCommand(const PlaybackInputView& view,
                                   PlaybackInputSignals& signals,
-                                  PlaybackSeekState& seekState,
+                                  PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command);
 void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
-                              PlaybackSeekState& seekState,
+                              PlaybackSeekGestureState& seekState,
                               const MouseEvent& mouse);
 
 }  // namespace playback_session_input

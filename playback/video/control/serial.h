@@ -33,17 +33,38 @@ struct PendingSeek {
   DemuxSeekMode demuxSeekMode = DemuxSeekMode::Timeline;
 };
 
+struct SeekRequest {
+  uint64_t generation = 0;
+  int64_t targetUs = 0;
+};
+
 struct PositionSnapshot {
   int currentSerial = 0;
+  uint64_t latestSeekRequestGeneration = 0;
+  uint64_t handledSeekRequestGeneration = 0;
+  bool requestPending = false;
   bool seekPending = false;
+  bool transitionPending = false;
   int pendingSeekSerial = 0;
+  int seekInFlightSerial = 0;
   int64_t seekDisplayUs = 0;
+  int64_t requestedSeekUs = 0;
+  bool presentedPositionValid = false;
+  int presentedPositionSerial = 0;
+  int64_t presentedPositionUs = 0;
+  int64_t positionUs = 0;
 };
 
 class Controller {
  public:
   void reset();
   void startSession(int initialSerial);
+
+  SeekRequest publishSeekRequest(int64_t targetUs, int64_t maximumUs);
+  SeekRequest publishRelativeSeekRequest(int64_t deltaUs,
+                                         int64_t maximumUs);
+  void acknowledgeSeekRequest(uint64_t generation);
+  void notePresentedPosition(int serial, int64_t ptsUs);
 
   TransitionPlan beginTransition(int64_t targetUs, bool initDone,
                                  bool running);
@@ -96,6 +117,12 @@ class Controller {
   std::atomic<int> pendingSeekSerial_{0};
   std::atomic<int> presentationTargetSerial_{0};
   std::atomic<int> decoderPrerollTargetSerial_{0};
+  uint64_t latestSeekRequestGeneration_ = 0;
+  uint64_t handledSeekRequestGeneration_ = 0;
+  int64_t requestedSeekUs_ = 0;
+  bool presentedPositionValid_ = false;
+  int presentedPositionSerial_ = 0;
+  int64_t presentedPositionUs_ = 0;
 };
 
 }  // namespace playback_video_serial_control

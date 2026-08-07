@@ -120,7 +120,7 @@ struct PlaybackLoopRunner::Impl {
 
   playback_session_input::PlaybackInputView inputView;
   playback_session_input::PlaybackInputSignals inputSignals;
-  playback_session_input::PlaybackSeekState seekState;
+  playback_session_input::PlaybackSeekGestureState seekState;
   playback_screen_renderer::PlaybackScreenRenderInputs renderInputs;
 
   explicit Impl(PlaybackLoopRunner::Args args)
@@ -231,7 +231,6 @@ struct PlaybackLoopRunner::Impl {
     inputSignals.quitApplicationRequested = quitApplicationRequested;
     inputSignals.redraw = &redraw;
     inputSignals.forceRefreshArt = &forceRefreshArt;
-    core.bindSeekState(seekState);
   }
 
   void bindRenderInputs() {
@@ -273,9 +272,8 @@ struct PlaybackLoopRunner::Impl {
         core.playbackState(), core.audioOk(),
         requestTransportCommand != nullptr,
         requestTransportCommand != nullptr, hasSubtitles,
-        enableSubtitlesShared, *seekState.windowLocalSeekRequested,
-        *seekState.windowPendingSeekTargetSec, overlayControlHover,
-        osdSnapshot(), config.debugOverlay);
+        enableSubtitlesShared, overlayControlHover, osdSnapshot(),
+        config.debugOverlay);
   }
 
   bool buildTextGridPresentation(int pixelWidth, int pixelHeight,
@@ -474,7 +472,8 @@ struct PlaybackLoopRunner::Impl {
     }
     const bool isPaused =
         core.playbackState() == PlaybackSessionState::Paused || audioIsPaused();
-    const bool seeking = *seekState.localSeekRequested;
+    const bool seeking =
+        seekState.seekQueued || core.player().timelineSnapshot().seekPending();
     perfLogAppendf(&perfLog,
                    "video_heartbeat_ui redraw=%d seeker=%d paused=%d",
                    redraw ? 1 : 0, seeking ? 1 : 0, isPaused ? 1 : 0);
@@ -619,9 +618,10 @@ struct PlaybackLoopRunner::Impl {
       state.status = PlaybackControlStatus::Playing;
     }
 
-    if (core.player().currentUs() > 0) {
+    const PlayerTimelineSnapshot timeline = core.player().timelineSnapshot();
+    if (timeline.positionUs > 0) {
       state.positionSec =
-          static_cast<double>(core.player().currentUs()) / 1000000.0;
+          static_cast<double>(timeline.positionUs) / 1000000.0;
     }
     if (core.player().durationUs() > 0) {
       state.durationSec =
@@ -653,17 +653,17 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void flushQueuedSeek() {
-    if (!*seekState.seekQueued) {
+    if (!seekState.seekQueued) {
       return;
     }
     auto now = std::chrono::steady_clock::now();
     bool canSend =
-        (*seekState.lastSeekSentTime ==
+        (seekState.lastSeekSentTime ==
              std::chrono::steady_clock::time_point::min()) ||
-        (now - *seekState.lastSeekSentTime >= kSeekThrottleInterval);
+        (now - seekState.lastSeekSentTime >= kSeekThrottleInterval);
     if (canSend) {
       playback_session_input::sendSeekRequest(inputView, inputSignals, seekState,
-                                              *seekState.queuedSeekTargetSec);
+                                              seekState.queuedSeekTargetSec);
     }
   }
 
@@ -698,8 +698,8 @@ struct PlaybackLoopRunner::Impl {
     if (!refresh.useWindowPresenter && config.debugOverlay) {
       tightenToDeadline(lastDebugRefresh + std::chrono::milliseconds(250));
     }
-    if (*seekState.seekQueued) {
-      tightenToDeadline(*seekState.lastSeekSentTime + kSeekThrottleInterval);
+    if (seekState.seekQueued) {
+      tightenToDeadline(seekState.lastSeekSentTime + kSeekThrottleInterval);
     }
     if (!refresh.useWindowPresenter &&
         core.playbackState() == PlaybackSessionState::Active) {

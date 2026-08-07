@@ -51,6 +51,19 @@ struct PlayerDebugInfo {
   uint32_t audioSampleRate = 0;
 };
 
+struct PlayerTimelineSnapshot {
+  int64_t positionUs = 0;
+  int serial = 0;
+  uint64_t latestSeekRequestGeneration = 0;
+  uint64_t handledSeekRequestGeneration = 0;
+  bool seekRequestPending = false;
+  bool seekTransitionPending = false;
+
+  bool seekPending() const {
+    return seekRequestPending || seekTransitionPending;
+  }
+};
+
 class Player {
  public:
   Player();
@@ -59,7 +72,8 @@ class Player {
   bool open(const PlayerConfig& config, std::string* error);
   void close();
 
-  void requestSeek(int64_t targetUs);
+  bool requestSeek(int64_t targetUs);
+  bool requestRelativeSeek(int64_t deltaUs);
   bool requestFrameStep(playback_video_frame_step::Direction direction);
   void requestResize(int targetW, int targetH);
   void setVideoPaused(bool paused);
@@ -85,6 +99,7 @@ class Player {
 
   int64_t durationUs() const;
   int64_t currentUs() const;
+  PlayerTimelineSnapshot timelineSnapshot() const;
 
   uint64_t videoFrameCounter() const;
   bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;

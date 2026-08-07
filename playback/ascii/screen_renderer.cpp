@@ -104,13 +104,10 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool clearHistory = inputs.clearHistory;
   bool frameChanged = inputs.frameChanged;
   bool frameAvailable = inputs.frameAvailable;
-  bool localSeekRequested = inputs.localSeekRequested;
   double cellPixelWidth = inputs.cellPixelWidth;
   double cellPixelHeight = inputs.cellPixelHeight;
   const std::string& cellPixelSourceLabel = inputs.cellPixelSourceLabel;
-  double pendingSeekTargetSec = inputs.pendingSeekTargetSec;
   auto& enableSubtitlesShared = *inputs.enableSubtitlesShared;
-  auto& windowLocalSeekRequested = *inputs.windowLocalSeekRequested;
   auto& overlayControlHover = *inputs.overlayControlHover;
   playback_frame_output::FrameOutputState& frameOutput =
       *inputs.frameOutputState;
@@ -219,7 +216,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
 
   double currentSec = 0.0;
   double totalSec = -1.0;
-  int64_t clockUs = player.currentUs();
+  const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+  const int64_t clockUs = timeline.positionUs;
   if (clockUs > 0) {
     currentSec = static_cast<double>(clockUs) / 1000000.0;
   }
@@ -233,11 +231,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     currentSec = std::clamp(currentSec, 0.0, totalSec);
   }
   double displaySec = currentSec;
-  bool seekingOverlay = player.isSeeking() || localSeekRequested;
-  if (localSeekRequested && totalSec > 0.0 && std::isfinite(totalSec) &&
-      pendingSeekTargetSec >= 0.0 && std::isfinite(pendingSeekTargetSec)) {
-    displaySec = std::clamp(pendingSeekTargetSec, 0.0, totalSec);
-  }
+  const bool seekingOverlay = timeline.seekPending();
   const bool subtitlesEnabledNow =
       enableSubtitlesShared.load(std::memory_order_relaxed);
   const bool hasVideoStream =
@@ -337,9 +331,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.hasSubtitles = hasSubtitles;
   overlayInputs.subtitlesEnabled = subtitlesEnabledNow;
   overlayInputs.subtitleClockUs = clockUs;
-  overlayInputs.seekingOverlay =
-      player.isSeeking() ||
-      windowLocalSeekRequested.load(std::memory_order_relaxed);
+  overlayInputs.seekingOverlay = seekingOverlay;
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
   overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));

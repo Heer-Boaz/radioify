@@ -1567,8 +1567,6 @@ struct Player::Impl {
   std::mutex eventMutex;
   std::condition_variable eventCv;
   std::deque<playback_video_control::Event> events;
-  std::atomic<uint64_t> latestSeekRequestGeneration{0};
-  std::atomic<uint64_t> handledSeekRequestGeneration{0};
   std::thread controlThread;
   std::atomic<bool> initDone{false};
   std::atomic<bool> initOk{false};
@@ -1751,14 +1749,7 @@ struct Player::Impl {
         estimatedFrameDurationUs.load(std::memory_order_relaxed));
   }
 
-  void postEvent(playback_video_control::Event ev) {
-    std::lock_guard<std::mutex> lock(eventMutex);
-    if (ev.type == playback_video_control::EventType::SeekRequest) {
-      ev.seekRequestGeneration =
-          latestSeekRequestGeneration.fetch_add(1, std::memory_order_relaxed) +
-          1;
-      SetEvent(statusChangedEvent.get());
-    }
+  void enqueueEventLocked(playback_video_control::Event ev) {
     if (!events.empty() &&
         playback_video_control::shouldCoalesceQueuedEvent(events.back().type,
                                                           ev.type)) {
@@ -1768,6 +1759,30 @@ struct Player::Impl {
     }
     events.push_back(std::move(ev));
     eventCv.notify_one();
+  }
+
+  void postEvent(playback_video_control::Event ev) {
+    std::lock_guard<std::mutex> lock(eventMutex);
+    enqueueEventLocked(std::move(ev));
+  }
+
+  bool postSeekRequest(int64_t valueUs, bool relative) {
+    std::lock_guard<std::mutex> lock(eventMutex);
+    if (!ctrlRunning.load(std::memory_order_relaxed)) {
+      return false;
+    }
+    const int64_t maximumUs = durationUs.load(std::memory_order_relaxed);
+    const playback_video_serial_control::SeekRequest request =
+        relative
+            ? serialControl.publishRelativeSeekRequest(valueUs, maximumUs)
+            : serialControl.publishSeekRequest(valueUs, maximumUs);
+    playback_video_control::Event ev{};
+    ev.type = playback_video_control::EventType::SeekRequest;
+    ev.arg1 = request.targetUs;
+    ev.seekRequestGeneration = request.generation;
+    enqueueEventLocked(std::move(ev));
+    SetEvent(statusChangedEvent.get());
+    return true;
   }
 
   void requestFrameStepSeek(
@@ -1866,6 +1881,7 @@ struct Player::Impl {
       presentedFrame.displayIndex = item.displayIndex;
       hasFrame.store(true, std::memory_order_relaxed);
     }
+    serialControl.notePresentedPosition(serialForFrame, item.ptsUs);
     lastMasterUs.store(masterUs, std::memory_order_relaxed);
     lastMasterSource.store(static_cast<int>(source),
                            std::memory_order_relaxed);
@@ -2425,19 +2441,23 @@ struct Player::Impl {
     }
   }
 
-  int64_t videoTimelineUs() const {
+  PlayerTimelineSnapshot timelineSnapshot() const {
     const playback_video_serial_control::PositionSnapshot position =
         serialControl.positionSnapshot();
-    if (position.seekPending || position.pendingSeekSerial != 0) {
-      return position.seekDisplayUs;
-    }
+    PlayerTimelineSnapshot snapshot;
+    snapshot.positionUs = position.positionUs;
+    snapshot.serial = position.currentSerial;
+    snapshot.latestSeekRequestGeneration =
+        position.latestSeekRequestGeneration;
+    snapshot.handledSeekRequestGeneration =
+        position.handledSeekRequestGeneration;
+    snapshot.seekRequestPending = position.requestPending;
+    snapshot.seekTransitionPending = position.transitionPending;
+    return snapshot;
+  }
 
-    const PresentedFrameState presented = presentedFrameSnapshot();
-    if (presented.valid && presented.serial == position.currentSerial) {
-      return (std::max)(int64_t{0}, presented.ptsUs);
-    }
-
-    return 0;
+  int64_t videoTimelineUs() const {
+    return timelineSnapshot().positionUs;
   }
 
   bool isAudioOk() const { return audioStartOk.load(); }
@@ -2518,9 +2538,6 @@ struct Player::Impl {
     {
       std::lock_guard<std::mutex> lock(eventMutex);
       events.clear();
-      handledSeekRequestGeneration.store(
-          latestSeekRequestGeneration.load(std::memory_order_relaxed),
-          std::memory_order_relaxed);
     }
     frameStepSeek.reset();
   }
@@ -2643,8 +2660,7 @@ struct Player::Impl {
     switch (ev.type) {
       case playback_video_control::EventType::SeekRequest: {
         beginSerialTransition(ev.arg1, "ctrl_seek_request");
-        handledSeekRequestGeneration.store(ev.seekRequestGeneration,
-                                           std::memory_order_relaxed);
+        serialControl.acknowledgeSeekRequest(ev.seekRequestGeneration);
         SetEvent(statusChangedEvent.get());
         break;
       }
@@ -4177,12 +4193,12 @@ void Player::close() {
   impl_->appendTimingFmt("player_close end");
 }
 
-void Player::requestSeek(int64_t targetUs) {
-  if (!impl_->ctrlRunning.load()) return;
-  playback_video_control::Event ev{};
-  ev.type = playback_video_control::EventType::SeekRequest;
-  ev.arg1 = targetUs;
-  impl_->postEvent(std::move(ev));
+bool Player::requestSeek(int64_t targetUs) {
+  return impl_->postSeekRequest(targetUs, false);
+}
+
+bool Player::requestRelativeSeek(int64_t deltaUs) {
+  return impl_->postSeekRequest(deltaUs, true);
 }
 
 bool Player::requestFrameStep(playback_video_frame_step::Direction direction) {
@@ -4270,13 +4286,7 @@ bool Player::audioFinished() const {
 }
 
 bool Player::seekPending() const {
-  const bool requestQueued =
-      impl_->handledSeekRequestGeneration.load(std::memory_order_relaxed) !=
-      impl_->latestSeekRequestGeneration.load(std::memory_order_relaxed);
-  return requestQueued || impl_->serialControl.seekPending() ||
-         impl_->serialControl.seekInFlightSerial() != 0 ||
-         impl_->serialControl.pendingSeekSerial() != 0 ||
-         impl_->playbackState.current() == PlayerState::Seeking;
+  return timelineSnapshot().seekPending();
 }
 
 bool Player::isSeeking() const {
@@ -4298,7 +4308,11 @@ int64_t Player::durationUs() const {
 }
 
 int64_t Player::currentUs() const {
-  return impl_->videoTimelineUs();
+  return timelineSnapshot().positionUs;
+}
+
+PlayerTimelineSnapshot Player::timelineSnapshot() const {
+  return impl_->timelineSnapshot();
 }
 
 uint64_t Player::videoFrameCounter() const {

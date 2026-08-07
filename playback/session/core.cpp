@@ -1,9 +1,6 @@
 #include "core.h"
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cmath>
 #include <memory>
 #include <utility>
 
@@ -18,35 +15,6 @@
 #include "presentation.h"
 
 namespace {
-
-void syncSeekState(Player& player, bool& localSeekRequested,
-                   std::atomic<bool>& windowLocalSeekRequested,
-                   bool seekQueued,
-                   double& pendingSeekTargetSec,
-                   std::atomic<double>& windowPendingSeekTargetSec) {
-  const bool windowSeekRequested =
-      windowLocalSeekRequested.load(std::memory_order_relaxed);
-  const bool hasPendingTarget =
-      pendingSeekTargetSec >= 0.0 && std::isfinite(pendingSeekTargetSec);
-  if (seekQueued || player.seekPending()) {
-    return;
-  }
-
-  if (!localSeekRequested && !windowSeekRequested && !hasPendingTarget) {
-    pendingSeekTargetSec = -1.0;
-    windowPendingSeekTargetSec.store(pendingSeekTargetSec,
-                                     std::memory_order_relaxed);
-    return;
-  }
-
-  if (player.hasVideoFrame()) {
-    localSeekRequested = false;
-    windowLocalSeekRequested.store(false, std::memory_order_relaxed);
-    pendingSeekTargetSec = -1.0;
-    windowPendingSeekTargetSec.store(pendingSeekTargetSec,
-                                     std::memory_order_relaxed);
-  }
-}
 
 void syncPlaybackEndedState(Player& player,
                             PlaybackSessionState& playbackState) {
@@ -102,21 +70,10 @@ struct PlaybackSessionCore::Impl {
     inputView.audioOk = &audioOk;
   }
 
-  void bindSeekState(playback_session_input::PlaybackSeekState& seekState) {
-    seekState.localSeekRequested = &localSeekRequested;
-    seekState.windowLocalSeekRequested = &windowLocalSeekRequested;
-    seekState.pendingSeekTargetSec = &pendingSeekTargetSec;
-    seekState.windowPendingSeekTargetSec = &windowPendingSeekTargetSec;
-    seekState.lastSeekSentTime = &lastSeekSentTime;
-    seekState.queuedSeekTargetSec = &queuedSeekTargetSec;
-    seekState.seekQueued = &seekQueued;
-  }
-
   void bindRenderInputs(
       playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) {
     renderInputs.player = &player;
     renderInputs.frame = &frameRefresh.frame;
-    renderInputs.windowLocalSeekRequested = &windowLocalSeekRequested;
   }
 
   void updateRenderInputs(
@@ -127,8 +84,6 @@ struct PlaybackSessionCore::Impl {
     renderInputs.frameAvailable =
         frameRefresh.frameAvailable ||
         (renderInputs.useWindowPresenter && player.hasVideoFrame());
-    renderInputs.localSeekRequested = localSeekRequested;
-    renderInputs.pendingSeekTargetSec = pendingSeekTargetSec;
   }
 
   bool finalizeAudioStart() {
@@ -171,9 +126,6 @@ struct PlaybackSessionCore::Impl {
     if (presented && !windowActive) {
       redraw = true;
     }
-    syncSeekState(player, localSeekRequested, windowLocalSeekRequested,
-                  seekQueued, pendingSeekTargetSec,
-                  windowPendingSeekTargetSec);
     syncPlaybackEndedState(player, playbackState);
     return presented;
   }
@@ -230,14 +182,6 @@ struct PlaybackSessionCore::Impl {
   PlaybackSessionState playbackState = PlaybackSessionState::Active;
   playback_frame_refresh::PlaybackFrameRefreshState frameRefresh;
   bool pendingResize = false;
-  bool localSeekRequested = false;
-  std::atomic<bool> windowLocalSeekRequested{false};
-  double pendingSeekTargetSec = -1.0;
-  std::atomic<double> windowPendingSeekTargetSec{-1.0};
-  std::chrono::steady_clock::time_point lastSeekSentTime =
-      std::chrono::steady_clock::time_point::min();
-  double queuedSeekTargetSec = -1.0;
-  bool seekQueued = false;
   int requestedTargetW = 0;
   int requestedTargetH = 0;
   bool playerShutdown = false;
@@ -262,11 +206,6 @@ void PlaybackSessionCore::initialize(ConsoleScreen& screen) {
 void PlaybackSessionCore::bindInputView(
     playback_session_input::PlaybackInputView& inputView) {
   impl_->bindInputView(inputView);
-}
-
-void PlaybackSessionCore::bindSeekState(
-    playback_session_input::PlaybackSeekState& seekState) {
-  impl_->bindSeekState(seekState);
 }
 
 void PlaybackSessionCore::bindRenderInputs(

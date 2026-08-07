@@ -21,7 +21,7 @@ namespace playback_session_input {
 
 void setPlaybackPaused(const PlaybackInputView& view,
                        PlaybackInputSignals& signals,
-                       PlaybackSeekState& seekState, bool paused);
+                       PlaybackSeekGestureState& seekState, bool paused);
 
 namespace {
 
@@ -62,24 +62,12 @@ double clampPlaybackSeekTarget(const PlaybackInputView& view,
   return target;
 }
 
-bool readPendingSeekTargetSec(const PlaybackSeekState& seekState,
-                              double* outTargetSec) {
-  const double targetSec = *seekState.pendingSeekTargetSec;
-  if (!(targetSec >= 0.0) || !std::isfinite(targetSec)) {
-    return false;
-  }
-  if (outTargetSec) {
-    *outTargetSec = targetSec;
-  }
-  return true;
-}
-
-bool readQueuedSeekTargetSec(const PlaybackSeekState& seekState,
+bool readQueuedSeekTargetSec(const PlaybackSeekGestureState& seekState,
                              double* outTargetSec) {
-  if (!*seekState.seekQueued) {
+  if (!seekState.seekQueued) {
     return false;
   }
-  const double targetSec = *seekState.queuedSeekTargetSec;
+  const double targetSec = seekState.queuedSeekTargetSec;
   if (!(targetSec >= 0.0) || !std::isfinite(targetSec)) {
     return false;
   }
@@ -87,21 +75,6 @@ bool readQueuedSeekTargetSec(const PlaybackSeekState& seekState,
     *outTargetSec = targetSec;
   }
   return true;
-}
-
-bool playbackSeekPending(const PlaybackInputView& view,
-                         const PlaybackSeekState& seekState) {
-  if (readQueuedSeekTargetSec(seekState, nullptr) ||
-      readPendingSeekTargetSec(seekState, nullptr)) {
-    return true;
-  }
-  if (*seekState.localSeekRequested) {
-    return true;
-  }
-  if (seekState.windowLocalSeekRequested->load(std::memory_order_relaxed)) {
-    return true;
-  }
-  return view.player->seekPending();
 }
 
 bool pauseRequestedByToggle(const PlaybackInputView& view) {
@@ -109,20 +82,10 @@ bool pauseRequestedByToggle(const PlaybackInputView& view) {
                                                       view.player->isEnded());
 }
 
-double playbackSeekBaseSec(const PlaybackInputView& view,
-                           const PlaybackSeekState& seekState) {
-  double targetSec = -1.0;
-  if (readQueuedSeekTargetSec(seekState, &targetSec) ||
-      readPendingSeekTargetSec(seekState, &targetSec)) {
-    return clampPlaybackSeekTarget(view, targetSec);
-  }
-  return clampPlaybackSeekTarget(
-      view, static_cast<double>(view.player->currentUs()) / 1000000.0);
-}
-
 bool queuePlaybackSeekToRatio(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
-                              PlaybackSeekState& seekState, double ratio) {
+                              PlaybackSeekGestureState& seekState,
+                              double ratio) {
   const double totalSec = playbackDurationSec(view);
   if (!(totalSec > 0.0) || !std::isfinite(totalSec)) {
     return false;
@@ -165,41 +128,20 @@ void requestPlaybackExit(const PlaybackInputView& view,
   }
 }
 
-std::chrono::steady_clock::time_point markSeekIntentStarted(
-    PlaybackSeekState& seekState) {
-  auto now = std::chrono::steady_clock::now();
-  *seekState.localSeekRequested = true;
-  seekState.windowLocalSeekRequested->store(true, std::memory_order_relaxed);
-  return now;
-}
-
 void refreshPlaybackInputDisplay(PlaybackInputSignals& signals) {
   *signals.forceRefreshArt = true;
   *signals.redraw = true;
 }
 
-void markImmediateSeekActivity(PlaybackInputSignals& signals,
-                               PlaybackSeekState& seekState) {
-  auto now = markSeekIntentStarted(seekState);
-  *seekState.lastSeekSentTime = now;
-  *seekState.queuedSeekTargetSec = -1.0;
-  *seekState.seekQueued = false;
-  refreshPlaybackInputDisplay(signals);
+void clearQueuedSeek(PlaybackSeekGestureState& seekState) {
+  seekState.queuedSeekTargetSec = -1.0;
+  seekState.seekQueued = false;
 }
 
-void applySeekRequestState(PlaybackInputSignals& signals,
-                           PlaybackSeekState& seekState, double targetSec,
-                           bool immediate) {
-  *seekState.pendingSeekTargetSec = targetSec;
-  seekState.windowPendingSeekTargetSec->store(targetSec,
-                                              std::memory_order_relaxed);
-  if (immediate) {
-    markImmediateSeekActivity(signals, seekState);
-    return;
-  }
-  markSeekIntentStarted(seekState);
-  *seekState.queuedSeekTargetSec = targetSec;
-  *seekState.seekQueued = true;
+void markSeekSent(PlaybackInputSignals& signals,
+                  PlaybackSeekGestureState& seekState) {
+  seekState.lastSeekSentTime = std::chrono::steady_clock::now();
+  clearQueuedSeek(seekState);
   refreshPlaybackInputDisplay(signals);
 }
 
@@ -208,12 +150,35 @@ void refreshFrameStepRequestDisplay(PlaybackInputSignals& signals) {
   requestWindowRefresh(signals);
 }
 
-void commitQueuedSeekBeforeFrameStep(const PlaybackInputView& view,
-                                     PlaybackInputSignals& signals,
-                                     PlaybackSeekState& seekState) {
+void commitQueuedSeek(const PlaybackInputView& view,
+                      PlaybackInputSignals& signals,
+                      PlaybackSeekGestureState& seekState) {
   double queuedTargetSec = 0.0;
   if (readQueuedSeekTargetSec(seekState, &queuedTargetSec)) {
     sendSeekRequest(view, signals, seekState, queuedTargetSec);
+  }
+}
+
+void sendRelativeSeekRequest(const PlaybackInputView& view,
+                             PlaybackInputSignals& signals,
+                             PlaybackSeekGestureState& seekState,
+                             int64_t deltaUs) {
+  commitQueuedSeek(view, signals, seekState);
+  if (!view.player->requestRelativeSeek(deltaUs)) {
+    return;
+  }
+  markSeekSent(signals, seekState);
+  if (view.timingSink) {
+    const PlayerTimelineSnapshot timeline = view.player->timelineSnapshot();
+    char buf[256];
+    std::snprintf(
+        buf, sizeof(buf),
+        "seek_relative_request delta_us=%lld target_us=%lld generation=%llu",
+        static_cast<long long>(deltaUs),
+        static_cast<long long>(timeline.positionUs),
+        static_cast<unsigned long long>(
+            timeline.latestSeekRequestGeneration));
+    view.timingSink(std::string(buf));
   }
 }
 
@@ -277,24 +242,21 @@ bool togglePictureInPicture(const PlaybackInputView& view,
 
 bool requestFrameStep(const PlaybackInputView& view,
                       PlaybackInputSignals& signals,
-                      PlaybackSeekState& seekState,
+                      PlaybackSeekGestureState& seekState,
                       playback_video_frame_step::Direction direction) {
-  setPlaybackPaused(view, signals, seekState, true);
-  commitQueuedSeekBeforeFrameStep(view, signals, seekState);
+  commitQueuedSeek(view, signals, seekState);
 
   if (!view.player->requestFrameStep(direction)) {
     return false;
   }
-  if (*view.playbackState == PlaybackSessionState::Ended) {
-    *view.playbackState = PlaybackSessionState::Paused;
-  }
+  *view.playbackState = PlaybackSessionState::Paused;
   refreshFrameStepRequestDisplay(signals);
   return true;
 }
 
 bool executeOverlayControl(const PlaybackInputView& view,
                            PlaybackInputSignals& signals,
-                           PlaybackSeekState& seekState,
+                           PlaybackSeekGestureState& seekState,
                            const playback_overlay::PlaybackOverlayState& state,
                            int controlIndex) {
   std::vector<playback_overlay::OverlayControlSpec> specs =
@@ -327,7 +289,8 @@ bool executeOverlayControl(const PlaybackInputView& view,
 }
 
 playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
-    const PlaybackInputView& view, const PlaybackSeekState& seekState,
+    const PlaybackInputView& view,
+    const PlaybackSeekGestureState& seekState,
     const PlaybackInputSignals& signals) {
   playback_overlay::PlaybackOverlayInputs inputs;
   inputs.windowTitle = *view.windowTitle;
@@ -351,9 +314,11 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   inputs.hasSubtitles = view.hasSubtitles;
   inputs.subtitlesEnabled =
       view.enableSubtitlesShared->load(std::memory_order_relaxed);
-  const int64_t currentUs = view.player->currentUs();
+  const PlayerTimelineSnapshot timeline = view.player->timelineSnapshot();
+  const int64_t currentUs = timeline.positionUs;
   inputs.subtitleClockUs = currentUs;
-  inputs.seekingOverlay = playbackSeekPending(view, seekState);
+  inputs.seekingOverlay =
+      readQueuedSeekTargetSec(seekState, nullptr) || timeline.seekPending();
   inputs.displaySec = std::max(
       0.0, static_cast<double>(currentUs) / 1000000.0);
   const int64_t durationUs = view.player->durationUs();
@@ -363,11 +328,11 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   if (inputs.totalSec > 0.0) {
     inputs.displaySec = std::clamp(inputs.displaySec, 0.0, inputs.totalSec);
   }
-  double pendingSeekTargetSec = 0.0;
+  double queuedSeekTargetSec = 0.0;
   if (inputs.totalSec > 0.0 && std::isfinite(inputs.totalSec) &&
-      readPendingSeekTargetSec(seekState, &pendingSeekTargetSec)) {
+      readQueuedSeekTargetSec(seekState, &queuedSeekTargetSec)) {
     inputs.displaySec =
-        std::clamp(pendingSeekTargetSec, 0.0, inputs.totalSec);
+        std::clamp(queuedSeekTargetSec, 0.0, inputs.totalSec);
   }
   inputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
   inputs.osd.controlsVisible = isOverlayVisible(signals);
@@ -405,12 +370,14 @@ bool isOverlayVisible(const PlaybackInputSignals& signals) {
 
 void sendSeekRequest(const PlaybackInputView& view,
                      PlaybackInputSignals& signals,
-                     PlaybackSeekState& seekState, double targetSec) {
+                     PlaybackSeekGestureState& seekState, double targetSec) {
   targetSec = clampPlaybackSeekTarget(view, targetSec);
   int64_t targetUs =
       static_cast<int64_t>(std::llround(targetSec * 1000000.0));
-  view.player->requestSeek(targetUs);
-  applySeekRequestState(signals, seekState, targetSec, true);
+  if (!view.player->requestSeek(targetUs)) {
+    return;
+  }
+  markSeekSent(signals, seekState);
   if (view.timingSink) {
     char buf[256];
     std::snprintf(buf, sizeof(buf), "seek_request target_sec=%.3f target_us=%lld",
@@ -420,25 +387,27 @@ void sendSeekRequest(const PlaybackInputView& view,
 }
 
 void queueSeekRequest(PlaybackInputSignals& signals,
-                      PlaybackSeekState& seekState, double targetSec) {
-  applySeekRequestState(signals, seekState, targetSec, false);
+                      PlaybackSeekGestureState& seekState, double targetSec) {
+  seekState.queuedSeekTargetSec = targetSec;
+  seekState.seekQueued = true;
+  refreshPlaybackInputDisplay(signals);
 }
 
 void setPlaybackPaused(const PlaybackInputView& view,
                        PlaybackInputSignals& signals,
-                       PlaybackSeekState& seekState, bool paused) {
+                       PlaybackSeekGestureState& seekState, bool paused) {
+  commitQueuedSeek(view, signals, seekState);
   const bool ended = *view.playbackState == PlaybackSessionState::Ended ||
                      view.player->isEnded();
   if (!paused && ended) {
-    double targetSec = 0.0;
-    double pendingTargetSec = 0.0;
-    if (readPendingSeekTargetSec(seekState, &pendingTargetSec)) {
-      const double durationSec = playbackDurationSec(view);
-      if (!(durationSec > 0.0) || pendingTargetSec < durationSec) {
-        targetSec = pendingTargetSec;
-      }
+    const PlayerTimelineSnapshot timeline = view.player->timelineSnapshot();
+    const int64_t durationUs = view.player->durationUs();
+    const bool pendingAwayFromEnd =
+        timeline.seekPending() &&
+        (durationUs <= 0 || timeline.positionUs < durationUs);
+    if (!pendingAwayFromEnd) {
+      view.player->requestSeek(0);
     }
-    sendSeekRequest(view, signals, seekState, targetSec);
     view.player->setVideoPaused(false);
     *view.playbackState = PlaybackSessionState::Active;
     return;
@@ -457,7 +426,7 @@ void setPlaybackPaused(const PlaybackInputView& view,
 
 void handlePlaybackInputEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
-                              PlaybackSeekState& seekState,
+                              PlaybackSeekGestureState& seekState,
                               const InputEvent& ev) {
   InputCallbacks cb;
   cb.onQuit = [&]() { requestPlaybackExit(view, signals, true); };
@@ -494,8 +463,8 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     }
   };
   cb.onSeekBy = [&](int dir) {
-    const double baseSec = playbackSeekBaseSec(view, seekState);
-    sendSeekRequest(view, signals, seekState, baseSec + dir * 5.0);
+    sendRelativeSeekRequest(view, signals, seekState,
+                            static_cast<int64_t>(dir) * 5000000);
   };
   cb.onPreviousFrame = [&]() {
     requestFrameStep(view, signals, seekState,
@@ -529,7 +498,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
 
 void handlePlaybackControlCommand(const PlaybackInputView& view,
                                   PlaybackInputSignals& signals,
-                                  PlaybackSeekState& seekState,
+                                  PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command) {
   switch (command) {
     case PlaybackControlCommand::Play:
@@ -563,7 +532,7 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
 
 void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
-                              PlaybackSeekState& seekState,
+                              PlaybackSeekGestureState& seekState,
                               const MouseEvent& mouse) {
   MouseEvent hitMouse = mouse;
   bool overlayVisibleForHitTest = isOverlayVisible(signals);

@@ -53,13 +53,10 @@ struct PlaybackScreenRenderInputs {
   bool clearHistory = false;
   bool frameChanged = false;
   bool frameAvailable = false;
-  bool localSeekRequested = false;
   double cellPixelWidth = 0.0;
   double cellPixelHeight = 0.0;
   std::string cellPixelSourceLabel;
-  double pendingSeekTargetSec = -1.0;
   std::atomic<bool>* enableSubtitlesShared = nullptr;
-  std::atomic<bool>* windowLocalSeekRequested = nullptr;
   std::atomic<int>* overlayControlHover = nullptr;
   playback_frame_output::FrameOutputState* frameOutputState = nullptr;
   playback_frame_output::LogLineWriter warningSink;

@@ -70,11 +70,10 @@ WindowUiState buildPlaybackFramebufferUiState(
     SubtitleManager& subtitleManager, PlaybackSessionState playbackState,
     bool audioOk, bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
     std::atomic<bool>& enableSubtitlesShared,
-    std::atomic<bool>& windowLocalSeekRequested,
-    std::atomic<double>& windowPendingSeekTargetSec,
     std::atomic<int>& overlayControlHover,
     const playback_overlay::PlaybackOsdSnapshot& osd, bool debugOverlay) {
-  int64_t clockUs = player.currentUs();
+  const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+  const int64_t clockUs = timeline.positionUs;
   double displaySec = 0.0;
   if (clockUs > 0) {
     displaySec = static_cast<double>(clockUs) / 1000000.0;
@@ -89,16 +88,7 @@ WindowUiState buildPlaybackFramebufferUiState(
   if (totalSec > 0.0) {
     displaySec = std::clamp(displaySec, 0.0, totalSec);
   }
-  const bool windowSeekRequested =
-      windowLocalSeekRequested.load(std::memory_order_relaxed);
-  bool seekingOverlay = player.isSeeking() || windowSeekRequested;
-  const double windowPendingTargetSec =
-      windowPendingSeekTargetSec.load(std::memory_order_relaxed);
-  if (windowSeekRequested && totalSec > 0.0 && std::isfinite(totalSec) &&
-      windowPendingTargetSec >= 0.0 &&
-      std::isfinite(windowPendingTargetSec)) {
-    displaySec = std::clamp(windowPendingTargetSec, 0.0, totalSec);
-  }
+  const bool seekingOverlay = timeline.seekPending();
   const bool subtitlesEnabledNow =
       enableSubtitlesShared.load(std::memory_order_relaxed);
   const bool playerTransportPaused =
@@ -210,7 +200,7 @@ void runFramebufferPresenterLoop(
 
     const bool forcePresentRequested =
         forcePresent.load(std::memory_order_relaxed);
-    const bool seekingRequested = player.isSeeking();
+    const bool seekingRequested = player.timelineSnapshot().seekPending();
     const bool textGridPresentationRequested =
         videoWindow.IsTextGridPresentationEnabled();
     if (!forcePresentRequested) {
@@ -298,7 +288,7 @@ void runFramebufferPresenterLoop(
     bool frameChanged = videoFrameResult.framebufferFrameChanged;
     bool textFrameChanged = videoFrameResult.textGridFrameChanged;
 
-    bool seekingNow = player.isSeeking();
+    const bool seekingNow = player.timelineSnapshot().seekPending();
     WindowUiState ui;
     if (!textGridPresentationActive) {
       ui = buildUiState();

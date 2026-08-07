@@ -30,8 +30,6 @@ WindowUiState buildPlaybackFramebufferUiState(
     SubtitleManager& subtitleManager, PlaybackSessionState playbackState,
     bool audioOk, bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
     std::atomic<bool>& enableSubtitlesShared,
-    std::atomic<bool>& windowLocalSeekRequested,
-    std::atomic<double>& windowPendingSeekTargetSec,
     std::atomic<int>& overlayControlHover,
     const playback_overlay::PlaybackOsdSnapshot& osd, bool debugOverlay);
 

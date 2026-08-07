@@ -13,7 +13,6 @@ struct PlaybackPresenterSyncResult;
 
 namespace playback_session_input {
 struct PlaybackInputView;
-struct PlaybackSeekState;
 }
 
 namespace playback_screen_renderer {
@@ -40,7 +39,6 @@ class PlaybackSessionCore {
 
   void initialize(ConsoleScreen& screen);
   void bindInputView(playback_session_input::PlaybackInputView& inputView);
-  void bindSeekState(playback_session_input::PlaybackSeekState& seekState);
   void bindRenderInputs(
       playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs);
   void updateRenderInputs(

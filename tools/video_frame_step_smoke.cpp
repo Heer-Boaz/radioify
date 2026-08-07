@@ -1,6 +1,7 @@
 #include "playback/video/player.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -226,6 +227,55 @@ bool expectSerialTransition(bool audioEnabled, int64_t expectedPtsUs,
   return true;
 }
 
+bool expectSeekStepOverlapTransition(
+    bool audioEnabled, int64_t requestedSeekUs, int64_t presentedPtsUs,
+    int previousSerial, int expectedSerial,
+    const AudioStreamReset& previousReset, const char* label) {
+  if (expectedSerial <= previousSerial) {
+    std::cerr << "video_frame_step_smoke: " << label
+              << " did not advance the transport serial"
+              << " previous_serial=" << previousSerial
+              << " expected_serial=" << expectedSerial << '\n';
+    return false;
+  }
+  if (!audioEnabled) {
+    return true;
+  }
+
+  AudioStreamReset applied{};
+  const uint64_t expectedGeneration =
+      previousReset.generation +
+      static_cast<uint64_t>(expectedSerial - previousSerial);
+  const bool resetObserved = waitForAppliedAudioReset(
+      previousReset.generation, expectedSerial, &applied);
+  const bool discardMatchesTransportAnchor =
+      applied.discardUntilUs == requestedSeekUs ||
+      applied.discardUntilUs == presentedPtsUs;
+  if (!resetObserved ||
+      applied.generation != expectedGeneration ||
+      !discardMatchesTransportAnchor ||
+      applied.framePosition < previousReset.framePosition ||
+      applied.resetPlaybackPosition ||
+      audioStreamSerial() != expectedSerial) {
+    std::cerr << "video_frame_step_smoke: " << label
+              << " combined seek/frame-step audio reset mismatch"
+              << " expected_generation=" << expectedGeneration
+              << " actual_generation=" << applied.generation
+              << " requested_seek_us=" << requestedSeekUs
+              << " presented_pts_us=" << presentedPtsUs
+              << " actual_discard_until_us=" << applied.discardUntilUs
+              << " minimum_frame_position=" << previousReset.framePosition
+              << " actual_frame_position=" << applied.framePosition
+              << " reset_playback_position="
+              << (applied.resetPlaybackPosition ? 1 : 0)
+              << " expected_serial=" << expectedSerial
+              << " actual_serial=" << applied.serial
+              << " stream_serial=" << audioStreamSerial() << '\n';
+    return false;
+  }
+  return true;
+}
+
 bool expectConcurrentResumeTransition(
     bool audioEnabled, int64_t expectedPtsUs, int expectedSerial,
     const AudioStreamReset& previousReset, const char* label) {
@@ -307,9 +357,6 @@ bool requestAndObserveFrameStep(
   const AudioStreamReset beforeAudioReset =
       audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
 
-  // PlaybackSession sends this before every comma/period request, even when
-  // the transport is already paused or in frame-step mode.
-  player.setVideoPaused(true);
   if (!player.requestFrameStep(direction)) {
     std::cerr << "video_frame_step_smoke: " << label
               << " frame-step request rejected\n";
@@ -379,6 +426,7 @@ int main(int argc, char** argv) {
                  "Modes: startup, resume, forward-resume, mixed-resume, "
                  "rapid-resume, resume-during-step, burst-previous, "
                  "burst-forward, alternating, seek-alternating, "
+                 "seek-step-overlap, "
                  "ended-replay\n";
     return 2;
   }
@@ -406,6 +454,7 @@ int main(int argc, char** argv) {
   bool burstSteps = false;
   bool alternatingSteps = false;
   bool seekAlternatingSteps = false;
+  bool seekStepOverlap = false;
   playback_video_frame_step::Direction burstDirection =
       playback_video_frame_step::Direction::Previous;
   bool replayAfterEnd = false;
@@ -421,19 +470,21 @@ int main(int argc, char** argv) {
     burstSteps = mode == "burst-previous" || mode == "burst-forward";
     alternatingSteps = mode == "alternating";
     seekAlternatingSteps = mode == "seek-alternating";
+    seekStepOverlap = mode == "seek-step-overlap";
     if (mode == "burst-forward") {
       burstDirection = playback_video_frame_step::Direction::Next;
     }
     replayAfterEnd = mode == "ended-replay";
     if (!verifyStartup && !resumeAfterPrevious && !resumeAfterForward &&
         !resumeAfterMixed && !rapidResume && !resumeDuringStep && !burstSteps &&
-        !alternatingSteps && !seekAlternatingSteps && !replayAfterEnd) {
+        !alternatingSteps && !seekAlternatingSteps && !seekStepOverlap &&
+        !replayAfterEnd) {
       std::cerr << "video_frame_step_smoke: invalid mode: " << argv[4]
-                 << " (expected 'startup', 'resume', 'forward-resume', "
-                    "'mixed-resume', 'rapid-resume', or "
-                    "'resume-during-step', 'burst-previous', "
-                    "'burst-forward', 'alternating', 'seek-alternating', "
-                    "or 'ended-replay')\n";
+                << " (expected 'startup', 'resume', 'forward-resume', "
+                << "'mixed-resume', 'rapid-resume', or "
+                << "'resume-during-step', 'burst-previous', "
+                << "'burst-forward', 'alternating', 'seek-alternating', "
+                << "'seek-step-overlap', or 'ended-replay')\n";
       return 2;
     }
   }
@@ -590,6 +641,143 @@ int main(int argc, char** argv) {
     std::cout << "video_frame_step_smoke: PASS ended_pts_us="
               << boundaryPtsUs
               << " replayed_pts_us=" << replayed.lastPresentedPtsUs << '\n';
+    player.close();
+    return 0;
+  }
+
+  if (seekStepOverlap) {
+    ObservedFrameStep current{boundaryPtsUs, boundary.currentSerial,
+                              player.videoFrameCounter()};
+    for (size_t cycle = 0; cycle < stepCount; ++cycle) {
+      const int64_t deltaUs = cycle % 2 == 0 ? 5000000 : -5000000;
+      int64_t expectedSeekTargetUs =
+          (std::max)(int64_t{0}, current.ptsUs + deltaUs * 2);
+      if (player.durationUs() > 0) {
+        expectedSeekTargetUs =
+            (std::min)(expectedSeekTargetUs, player.durationUs());
+      }
+      const playback_video_frame_step::Direction direction =
+          cycle % 2 == 0 ? playback_video_frame_step::Direction::Previous
+                         : playback_video_frame_step::Direction::Next;
+      const uint64_t beforeCounter = player.videoFrameCounter();
+      const int beforeSerial = current.serial;
+      const PlayerTimelineSnapshot beforeTimeline = player.timelineSnapshot();
+      const AudioStreamReset beforeAudioReset =
+          audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+
+      // Submit two simultaneous relative seeks before the frame step. This is
+      // stricter than keyboard input: publication order and event-queue order
+      // must remain one atomic transport sequence even across calling threads.
+      std::atomic<int> readySubmitters{0};
+      std::atomic<bool> releaseSubmitters{false};
+      bool seekAccepted[2] = {false, false};
+      auto submitSeek = [&](size_t index) {
+        readySubmitters.fetch_add(1, std::memory_order_release);
+        while (!releaseSubmitters.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+        seekAccepted[index] = player.requestRelativeSeek(deltaUs);
+      };
+      std::thread firstSubmitter(submitSeek, size_t{0});
+      std::thread secondSubmitter(submitSeek, size_t{1});
+      while (readySubmitters.load(std::memory_order_acquire) != 2) {
+        std::this_thread::yield();
+      }
+      releaseSubmitters.store(true, std::memory_order_release);
+      firstSubmitter.join();
+      secondSubmitter.join();
+      if (!seekAccepted[0] || !seekAccepted[1]) {
+        std::cerr << "video_frame_step_smoke: concurrent relative seek "
+                     "request rejected at cycle "
+                  << (cycle + 1) << '\n';
+        player.close();
+        return 1;
+      }
+      const PlayerTimelineSnapshot requestedTimeline =
+          player.timelineSnapshot();
+      const int64_t seekTargetUs = requestedTimeline.positionUs;
+      if (!requestedTimeline.seekPending() ||
+          seekTargetUs != expectedSeekTargetUs ||
+          requestedTimeline.latestSeekRequestGeneration !=
+              beforeTimeline.latestSeekRequestGeneration + 2) {
+        std::cerr << "video_frame_step_smoke: Player did not publish the "
+                     "queued seek as its authoritative timeline position; "
+                     "cycle="
+                  << (cycle + 1)
+                  << " expected_target_us=" << expectedSeekTargetUs
+                  << " target_us=" << seekTargetUs
+                  << " current_us=" << requestedTimeline.positionUs
+                  << " seek_pending="
+                  << (requestedTimeline.seekPending() ? 1 : 0)
+                  << " previous_generation="
+                  << beforeTimeline.latestSeekRequestGeneration
+                  << " request_generation="
+                  << requestedTimeline.latestSeekRequestGeneration
+                  << '\n';
+        player.close();
+        return 1;
+      }
+      if (!player.requestFrameStep(direction)) {
+        std::cerr << "video_frame_step_smoke: overlap frame-step request "
+                     "rejected at cycle "
+                  << (cycle + 1) << '\n';
+        player.close();
+        return 1;
+      }
+
+      PlayerDebugInfo observed{};
+      const std::string label =
+          "seek_step_overlap_" + std::to_string(cycle + 1);
+      if (!waitFor(player, kDefaultTimeoutMs, label.c_str(),
+                   [&](const PlayerDebugInfo& info) {
+                     return info.hasVideoFrame &&
+                            player.videoFrameCounter() > beforeCounter &&
+                            info.seekInFlightSerial == 0 &&
+                            info.pendingSeekSerial == 0 &&
+                            !player.seekPending() &&
+                            info.state == PlayerState::FrameStep;
+                   },
+                   &observed)) {
+        player.close();
+        return 1;
+      }
+
+      constexpr int64_t kMaximumTargetErrorUs = 500000;
+      const int64_t targetErrorUs =
+          std::llabs(observed.lastPresentedPtsUs - seekTargetUs);
+      const PlayerTimelineSnapshot completedTimeline =
+          player.timelineSnapshot();
+      if (targetErrorUs > kMaximumTargetErrorUs ||
+          completedTimeline.positionUs != observed.lastPresentedPtsUs ||
+          completedTimeline.seekPending()) {
+        std::cerr << "video_frame_step_smoke: overlap left the requested "
+                     "timeline; cycle="
+                  << (cycle + 1) << " target_us=" << seekTargetUs
+                  << " actual_pts_us=" << observed.lastPresentedPtsUs
+                  << " target_error_us=" << targetErrorUs
+                  << " current_us=" << completedTimeline.positionUs
+                  << " seek_pending="
+                  << (completedTimeline.seekPending() ? 1 : 0) << '\n';
+        player.close();
+        return 1;
+      }
+      if (!expectSeekStepOverlapTransition(
+              audioEnabled, seekTargetUs, observed.lastPresentedPtsUs,
+              beforeSerial, observed.currentSerial, beforeAudioReset,
+              label.c_str())) {
+        player.close();
+        return 1;
+      }
+
+      current.ptsUs = observed.lastPresentedPtsUs;
+      current.serial = observed.currentSerial;
+      current.frameCounter = player.videoFrameCounter();
+    }
+
+    std::cout << "video_frame_step_smoke: PASS mode=seek-step-overlap"
+              << " final_pts_us=" << current.ptsUs
+              << " final_serial=" << current.serial
+              << " cycles=" << stepCount << '\n';
     player.close();
     return 0;
   }
