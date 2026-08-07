@@ -995,9 +995,31 @@ int main() {
       playback_video_frame_step_prefetch::kWindowDurationUs == 1000000,
       "Frame-step prefetch must keep a one-second decoded working set");
   static_assert(
-      playback_video_frame_step_prefetch::kSegmentDurationUs * 2 ==
+      playback_video_frame_step_prefetch::kRefillSpanUs * 2 ==
           playback_video_frame_step_prefetch::kWindowDurationUs,
-      "Frame-step prefetch must double-buffer two equal segments");
+      "Frame-step prefetch must refill a symmetric activation window");
+  static_assert(
+      playback_video_frame_step_prefetch::kDirectionChangeReserveFrameCount >=
+          5,
+      "Frame-step cache must keep a useful inverse-direction reserve");
+  ok &= expect(
+      playback_video_frame_step_prefetch::refillNeeded(
+          playback_video_frame_step_prefetch::kRefillLeadFrameCount,
+          playback_video_frame_step_prefetch::kRefillLeadDurationUs + 1) &&
+          playback_video_frame_step_prefetch::refillNeeded(
+              playback_video_frame_step_prefetch::
+                      kRefillLeadFrameCount +
+                  1,
+              playback_video_frame_step_prefetch::kRefillLeadDurationUs) &&
+          !playback_video_frame_step_prefetch::refillNeeded(
+              playback_video_frame_step_prefetch::
+                      kRefillLeadFrameCount +
+                  1,
+              playback_video_frame_step_prefetch::
+                      kRefillLeadDurationUs +
+                  1),
+      "Frame-step refill must start before either the frame or time lead is "
+      "exhausted");
   playback_video_frame_cursor::Controller prefetchedCursor;
   prefetchedCursor.resetForSerial(1);
   QueuedFrame prefetchedCurrent{};
@@ -1066,8 +1088,8 @@ int main() {
   ok &= expect(previousRefillCursor.mergePrefetchedBatch(
                    std::move(previousExtension)) &&
                    previousRefillCursor.prefetchWindow().beforeFrameCount ==
-                       49,
-               "Previous staged refill must extend the active cache segment");
+                       50,
+               "Previous refill must extend the active decoded cache");
   const playback_video_frame_cursor::PresentedFrame* previousCachedStep =
       previousRefillCursor.step(playback_video_frame_step::Direction::Previous);
   ok &= expect(previousCachedStep && previousCachedStep->ptsUs == 990000,
@@ -1076,12 +1098,12 @@ int main() {
   playback_video_frame_cursor::Controller reversibleTrimCursor;
   reversibleTrimCursor.resetForSerial(3);
   QueuedFrame reversibleTrimCurrent{};
-  reversibleTrimCurrent.ptsUs = 500000;
+  reversibleTrimCurrent.ptsUs = 1500000;
   reversibleTrimCurrent.durationUs = 10000;
   reversibleTrimCurrent.serial = 3;
   reversibleTrimCurrent.displayIndex = 1;
-  reversibleTrimCurrent.info.sourcePtsTicks = 50;
-  reversibleTrimCurrent.info.sourceDtsTicks = 50;
+  reversibleTrimCurrent.info.sourcePtsTicks = 150;
+  reversibleTrimCurrent.info.sourceDtsTicks = 150;
   reversibleTrimCurrent.info.timestamp100ns =
       reversibleTrimCurrent.ptsUs * 10;
   VideoFrame reversibleTrimCurrentFrame{};
@@ -1102,10 +1124,10 @@ int main() {
   reversibleAfter.side =
       playback_video_frame_step_prefetch::BatchSide::After;
   reversibleAfter.boundary = reversibleTrimCursor.prefetchWindow().current;
-  reversibleAfter.frames.push_back(
-      makeCachedFrame(510000, 10000, 51, 51));
-  reversibleAfter.frames.push_back(
-      makeCachedFrame(520000, 10000, 52, 52));
+  for (int64_t tick = 151; tick <= 160; ++tick) {
+    reversibleAfter.frames.push_back(
+        makeCachedFrame(tick * 10000, 10000, tick, tick));
+  }
   ok &= expect(
       reversibleTrimCursor.mergePrefetchedBatch(std::move(reversibleAfter)),
       "Direction-switch regression setup must retain forward neighbors");
@@ -1118,22 +1140,27 @@ int main() {
       playback_video_frame_step_prefetch::BatchSide::Before;
   reversibleBefore.boundary =
       reversibleTrimCursor.prefetchWindow().beforeEdge;
-  for (int64_t tick = 1; tick < 50; ++tick) {
+  for (int64_t tick = 1; tick < 150; ++tick) {
     reversibleBefore.frames.push_back(
         makeCachedFrame(tick * 10000, 10000, tick, tick));
   }
   ok &= expect(
       reversibleTrimCursor.mergePrefetchedBatch(std::move(reversibleBefore)),
       "Previous refill must merge without invalidating inverse-step history");
+  ok &= expect(
+      reversibleTrimCursor.prefetchWindow().afterFrameCount ==
+          playback_video_frame_step_prefetch::
+              kDirectionChangeReserveFrameCount,
+      "A previous refill must preserve a useful run of exact next frames");
   const playback_video_frame_cursor::PresentedFrame* reversibleNext =
       reversibleTrimCursor.step(playback_video_frame_step::Direction::Next);
-  ok &= expect(reversibleNext && reversibleNext->ptsUs == 510000,
+  ok &= expect(reversibleNext && reversibleNext->ptsUs == 1510000,
                "Cache trimming must preserve the immediate next frame when "
-               "a previous segment is adopted");
+               "a previous refill is adopted");
   const playback_video_frame_cursor::PresentedFrame* reversiblePrevious =
       reversibleTrimCursor.step(
           playback_video_frame_step::Direction::Previous);
-  ok &= expect(reversiblePrevious && reversiblePrevious->ptsUs == 500000,
+  ok &= expect(reversiblePrevious && reversiblePrevious->ptsUs == 1500000,
                "The preserved inverse neighbor must step back to the exact "
                "segment boundary frame");
 
@@ -1243,8 +1270,8 @@ int main() {
       boundedPrefetchWindow.beforeDurationUs +
               boundedPrefetchWindow.current.durationUs +
               boundedPrefetchWindow.afterDurationUs <=
-          playback_video_frame_step_prefetch::kSegmentDurationUs,
-      "Frame-step prefetch must evict an edge when its active segment is "
+          playback_video_frame_step_prefetch::kWindowDurationUs,
+      "Frame-step prefetch must evict an edge when its decoded window is "
       "exceeded");
 
   playback_video_frame_step_seek::Controller stepSeekHandoff;

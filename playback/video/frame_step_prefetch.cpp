@@ -160,12 +160,14 @@ SnapshotResult snapshotFrame(
   snapshotDesc.MiscFlags = 0;
 
   Microsoft::WRL::ComPtr<ID3D11Texture2D> snapshot;
+  // ID3D11Device resource creation is free-threaded on the shared device. Keep
+  // the explicit cross-pipeline lock scoped to the immediate-context command;
+  // otherwise allocation latency unnecessarily blocks presentation.
+  if (FAILED(device->CreateTexture2D(&snapshotDesc, nullptr, &snapshot))) {
+    return SnapshotResult::Failed;
+  }
   {
     std::lock_guard<std::recursive_mutex> lock(*contextMutex);
-    if (FAILED(
-            device->CreateTexture2D(&snapshotDesc, nullptr, &snapshot))) {
-      return SnapshotResult::Failed;
-    }
     // FFmpeg represents a D3D11VA frame as one array subresource. A single
     // region copy therefore snapshots the complete NV12/P010 surface.
     context->CopySubresourceRegion(
@@ -197,6 +199,8 @@ struct Prefetcher::Impl {
   std::shared_ptr<CacheBudget> budget;
   VideoDecoder decoder;
   bool decoderReady = false;
+  std::optional<FrameIdentity> decoderTailIdentity;
+  int decoderTailSerial = 0;
 
   mutable std::mutex mutex;
   std::condition_variable cv;
@@ -222,6 +226,8 @@ struct Prefetcher::Impl {
     std::string error;
     decoderReady = decoder.initWithDevice(path, device.Get(), &error, nullptr,
                                           contextMutex, videoStreamIndex);
+    decoderTailIdentity.reset();
+    decoderTailSerial = 0;
     return decoderReady;
   }
 
@@ -296,21 +302,42 @@ struct Prefetcher::Impl {
         sourceRangeEndUs <= sourceRangeStartUs) {
       return false;
     }
-    // The demuxer performs a backward keyframe seek itself. Starting at the
-    // requested cache edge avoids decoding an extra arbitrary lead-in GOP.
-    int64_t sourceRangeStart100ns = 0;
-    if (!microsecondsTo100ns(sourceRangeStartUs, &sourceRangeStart100ns) ||
-        !decoder.seekToTimestamp100ns(sourceRangeStart100ns)) {
-      decoder.uninit();
-      decoderReady = false;
-      return false;
+    // Sequential forward refills continue from the decoder tail. Reverse
+    // refills still seek to an earlier keyframe and decode forward, as required
+    // by inter-frame codecs, but the useful preroll from that GOP is retained
+    // below instead of being thrown away and decoded again on the next refill.
+    const bool continueFromDecoderTail =
+        request.kind == RequestKind::After &&
+        decoderTailSerial == request.serial && decoderTailIdentity &&
+        sameIdentity(*decoderTailIdentity, request.boundary.identity);
+    if (!continueFromDecoderTail) {
+      int64_t sourceRangeStart100ns = 0;
+      if (!microsecondsTo100ns(sourceRangeStartUs,
+                               &sourceRangeStart100ns) ||
+          !decoder.seekToTimestamp100ns(sourceRangeStart100ns)) {
+        decoder.uninit();
+        decoderReady = false;
+        decoderTailIdentity.reset();
+        decoderTailSerial = 0;
+        return false;
+      }
+      decoderTailIdentity.reset();
+      decoderTailSerial = 0;
     }
 
     std::vector<CachedFrame> before;
     std::vector<CachedFrame> after;
-    before.reserve(32);
-    after.reserve(32);
-    bool boundaryFound = false;
+    before.reserve(64);
+    after.reserve(64);
+    bool boundaryFound = continueFromDecoderTail;
+    size_t decodedFrameCount = 0;
+    int64_t sourceCacheStartUs = sourceRangeStartUs;
+    if (request.kind == RequestKind::Before) {
+      sourceCacheStartUs =
+          sourceBoundaryUs > kWindowDurationUs
+              ? sourceBoundaryUs - kWindowDurationUs
+              : int64_t{0};
+    }
 
     while (current(work.generation)) {
       VideoFrame decoded;
@@ -319,6 +346,7 @@ struct Prefetcher::Impl {
       if (!decoder.readFrame(decoded, &info, true)) {
         break;
       }
+      ++decodedFrameCount;
       const double decodeMs =
           std::chrono::duration<double, std::milli>(
               std::chrono::steady_clock::now() - decodeStart)
@@ -331,6 +359,8 @@ struct Prefetcher::Impl {
                          : kFallbackFrameDurationUs;
       }
       const FrameIdentity identity = identityFrom(info, ptsUs, durationUs);
+      decoderTailIdentity = identity;
+      decoderTailSerial = request.serial;
       int64_t timelinePtsUs = 0;
       if (!translateFromAnchor(ptsUs, sourceBoundaryUs, request.boundary.ptsUs,
                                &timelinePtsUs)) {
@@ -352,6 +382,8 @@ struct Prefetcher::Impl {
           batch.requestKind = request.kind;
           batch.side = BatchSide::Before;
           batch.boundary = request.boundary;
+          batch.decoderSeeked = !continueFromDecoderTail;
+          batch.decodedFrameCount = decodedFrameCount;
           batch.frames = std::move(before);
           if (!publish(std::move(batch), work.generation)) {
             return false;
@@ -369,7 +401,7 @@ struct Prefetcher::Impl {
           return false;
         }
         if (request.kind != RequestKind::After &&
-            frameEndUs(ptsUs, durationUs) > sourceRangeStartUs &&
+            frameEndUs(ptsUs, durationUs) > sourceCacheStartUs &&
             ptsUs <= sourceBoundaryUs) {
           if (!retainBeforeFrame(decoded, info, timelinePtsUs, durationUs,
                                  decodeMs, &before)) {
@@ -379,9 +411,6 @@ struct Prefetcher::Impl {
         continue;
       }
 
-      if (ptsUs >= sourceRangeEndUs) {
-        break;
-      }
       if (frameEndUs(ptsUs, durationUs) <= sourceBoundaryUs) {
         continue;
       }
@@ -396,6 +425,13 @@ struct Prefetcher::Impl {
         return false;
       }
       after.push_back(std::move(retained));
+      // Retain the frame covering (or immediately crossing) the requested
+      // edge. It becomes the exact decoder tail/boundary for a seek-free next
+      // refill and avoids consuming an uncacheable lookahead frame.
+      if (ptsUs >= sourceRangeEndUs ||
+          frameEndUs(ptsUs, durationUs) >= sourceRangeEndUs) {
+        break;
+      }
     }
 
     if (!boundaryFound || !current(work.generation)) {
@@ -408,6 +444,8 @@ struct Prefetcher::Impl {
       batch.requestKind = request.kind;
       batch.side = BatchSide::After;
       batch.boundary = request.boundary;
+      batch.decoderSeeked = !continueFromDecoderTail;
+      batch.decodedFrameCount = decodedFrameCount;
       batch.frames = std::move(after);
       if (!publish(std::move(batch), work.generation)) {
         return false;
@@ -453,6 +491,8 @@ struct Prefetcher::Impl {
     }
     decoder.uninit();
     decoderReady = false;
+    decoderTailIdentity.reset();
+    decoderTailSerial = 0;
   }
 };
 
@@ -525,6 +565,8 @@ void Prefetcher::stop() {
   }
   impl_->decoder.uninit();
   impl_->decoderReady = false;
+  impl_->decoderTailIdentity.reset();
+  impl_->decoderTailSerial = 0;
   impl_->working = false;
   impl_->contextMutex = nullptr;
   impl_->budget.reset();

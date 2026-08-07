@@ -436,15 +436,13 @@ struct FrameStepPrefetchState {
       lastBeforeBoundary;
   std::optional<playback_video_frame_step_prefetch::FrameIdentity>
       lastAfterBoundary;
-  std::optional<playback_video_frame_step_prefetch::Batch> stagedBefore;
-  std::optional<playback_video_frame_step_prefetch::Batch> stagedAfter;
+  std::optional<playback_video_frame_step::Direction> lastDirection;
 
   void reset() {
     initializedSerial = 0;
     lastBeforeBoundary.reset();
     lastAfterBoundary.reset();
-    stagedBefore.reset();
-    stagedAfter.reset();
+    lastDirection.reset();
   }
 };
 
@@ -1958,8 +1956,7 @@ struct Player::Impl {
                           frameStepRequest);
   }
 
-  void drainFrameStepPrefetch(int serial, FrameStepPrefetchState* state) {
-    assert(state);
+  void drainFrameStepPrefetch(int serial) {
     for (playback_video_frame_step_prefetch::Batch& batch :
          frameStepPrefetch.takeBatches(serial)) {
       const size_t frameCount = batch.frames.size();
@@ -1967,53 +1964,15 @@ struct Player::Impl {
           batch.side == playback_video_frame_step_prefetch::BatchSide::Before
               ? -1
               : 1;
-      if (batch.requestKind ==
-          playback_video_frame_step_prefetch::RequestKind::Around) {
-        if (frameCursor.mergePrefetchedBatch(std::move(batch))) {
-          appendTimingFmt(
-              "frame_step_prefetch_adopt serial=%d side=%d frames=%zu",
-              serial, side, frameCount);
-        }
-        continue;
+      const bool decoderSeeked = batch.decoderSeeked;
+      const size_t decodedFrameCount = batch.decodedFrameCount;
+      if (frameCursor.mergePrefetchedBatch(std::move(batch))) {
+        appendTimingFmt(
+            "frame_step_prefetch_adopt serial=%d side=%d frames=%zu decoder_seek=%d decoded=%zu",
+            serial, side, frameCount, decoderSeeked ? 1 : 0,
+            decodedFrameCount);
       }
-
-      std::optional<playback_video_frame_step_prefetch::Batch>& staged =
-          batch.side ==
-                  playback_video_frame_step_prefetch::BatchSide::Before
-              ? state->stagedBefore
-              : state->stagedAfter;
-      assert(!staged);
-      staged = std::move(batch);
-      appendTimingFmt(
-          "frame_step_prefetch_ready serial=%d side=%d frames=%zu", serial,
-          side, frameCount);
     }
-  }
-
-  bool adoptStagedFrameStepPrefetch(
-      int serial, playback_video_frame_step::Direction direction,
-      FrameStepPrefetchState* state) {
-    assert(state);
-    std::optional<playback_video_frame_step_prefetch::Batch>& staged =
-        direction == playback_video_frame_step::Direction::Previous
-            ? state->stagedBefore
-            : state->stagedAfter;
-    if (!staged) {
-      return false;
-    }
-
-    const size_t frameCount = staged->frames.size();
-    const int side =
-        direction == playback_video_frame_step::Direction::Previous ? -1 : 1;
-    playback_video_frame_step_prefetch::Batch batch = std::move(*staged);
-    staged.reset();
-    if (frameCursor.mergePrefetchedBatch(std::move(batch))) {
-      appendTimingFmt(
-          "frame_step_prefetch_adopt serial=%d side=%d frames=%zu", serial,
-          side, frameCount);
-      return true;
-    }
-    return false;
   }
 
   bool frameStepPrefetchBusy(int serial) const {
@@ -2029,17 +1988,18 @@ struct Player::Impl {
     if (!state || !frameStepPrefetchStarted) {
       return;
     }
-    drainFrameStepPrefetch(serial, state);
+    drainFrameStepPrefetch(serial);
     if (frameStepPrefetch.takeFailure(serial)) {
       appendTimingFmt("frame_step_prefetch_failed serial=%d", serial);
     }
 
-    if (direction == playback_video_frame_step::Direction::Previous) {
-      state->stagedAfter.reset();
-      state->lastAfterBoundary.reset();
-    } else {
-      state->stagedBefore.reset();
-      state->lastBeforeBoundary.reset();
+    if (!state->lastDirection || *state->lastDirection != direction) {
+      if (direction == playback_video_frame_step::Direction::Previous) {
+        state->lastBeforeBoundary.reset();
+      } else {
+        state->lastAfterBoundary.reset();
+      }
+      state->lastDirection = direction;
     }
 
     playback_video_frame_cursor::PrefetchWindow window =
@@ -2070,18 +2030,13 @@ struct Player::Impl {
       request.serial = serial;
       request.kind = playback_video_frame_step_prefetch::RequestKind::Around;
       request.boundary = window.current;
-      if (direction == playback_video_frame_step::Direction::Previous) {
-        request.rangeStartUs = (std::max)(
-            int64_t{0},
-            window.current.ptsUs -
-                playback_video_frame_step_prefetch::kSegmentDurationUs);
-        request.rangeEndUs = window.current.ptsUs;
-      } else {
-        request.rangeStartUs = window.current.ptsUs;
-        request.rangeEndUs = boundedEndUs(
-            window.current.ptsUs,
-            playback_video_frame_step_prefetch::kSegmentDurationUs);
-      }
+      request.rangeStartUs = (std::max)(
+          int64_t{0},
+          window.current.ptsUs -
+              playback_video_frame_step_prefetch::kRefillSpanUs);
+      request.rangeEndUs = boundedEndUs(
+          window.current.ptsUs,
+          playback_video_frame_step_prefetch::kRefillSpanUs);
       if (request.rangeEndUs <= request.rangeStartUs) {
         return;
       }
@@ -2095,25 +2050,13 @@ struct Player::Impl {
       return;
     }
 
-    const bool stagedAtBoundary =
+    const bool needsRefill =
         direction == playback_video_frame_step::Direction::Previous
-            ? state->stagedBefore.has_value() &&
-                  window.beforeFrameCount == 0
-            : state->stagedAfter.has_value() &&
-                  window.afterFrameCount == 0;
-    if (stagedAtBoundary) {
-      adoptStagedFrameStepPrefetch(serial, direction, state);
-      window = frameCursor.prefetchWindow();
-      if (!window.valid()) {
-        return;
-      }
-    }
-
-    const bool hasStagedSegment =
-        direction == playback_video_frame_step::Direction::Previous
-            ? state->stagedBefore.has_value()
-            : state->stagedAfter.has_value();
-    if (hasStagedSegment || frameStepPrefetchBusy(serial)) {
+            ? playback_video_frame_step_prefetch::refillNeeded(
+                  window.beforeFrameCount, window.beforeDurationUs)
+            : playback_video_frame_step_prefetch::refillNeeded(
+                  window.afterFrameCount, window.afterDurationUs);
+    if (!needsRefill || frameStepPrefetchBusy(serial)) {
       return;
     }
 
@@ -2139,7 +2082,7 @@ struct Player::Impl {
           (std::max)(int64_t{0},
                      window.beforeEdge.ptsUs -
                          playback_video_frame_step_prefetch::
-                             kSegmentDurationUs);
+                             kRefillSpanUs);
       request.rangeEndUs = window.beforeEdge.ptsUs;
     } else {
       const bool atMediaEnd =
@@ -2166,7 +2109,7 @@ struct Player::Impl {
       request.rangeStartUs = window.afterEdge.ptsUs;
       request.rangeEndUs = boundedEndUs(
           window.afterEdge.ptsUs,
-          playback_video_frame_step_prefetch::kSegmentDurationUs);
+          playback_video_frame_step_prefetch::kRefillSpanUs);
     }
 
     if (request.rangeEndUs <= request.rangeStartUs) {

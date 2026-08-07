@@ -15,17 +15,25 @@
 
 namespace playback_video_frame_step_prefetch {
 
-// Keep one decoded second as two half-second segments: the cursor owns the
-// active segment while the worker prepares the next segment. Swapping an
-// already-decoded segment near the cursor edge keeps reverse seek/decode work
-// off the presentation path. Independent frame and one-GiB logical-byte
-// ceilings prevent malformed timing or very large surfaces from turning the
-// cache into unbounded storage.
+// Keep one direction-neutral decoded second around the cursor. Refill half a
+// second at a time once only a small presentation lead remains; decoded
+// batches are merged as soon as they are ready rather than swapped at an exact
+// frame boundary. Independent frame and one-GiB logical-byte ceilings prevent
+// malformed timing or very large surfaces from turning the cache into
+// unbounded storage.
 inline constexpr int64_t kWindowDurationUs = 1000000;
-inline constexpr int64_t kSegmentDurationUs = kWindowDurationUs / 2;
+inline constexpr int64_t kRefillSpanUs = kWindowDurationUs / 2;
+inline constexpr int64_t kRefillLeadDurationUs = 250000;
+inline constexpr size_t kRefillLeadFrameCount = 8;
+inline constexpr size_t kDirectionChangeReserveFrameCount = 5;
 inline constexpr size_t kMaxCachedFrameCount = 240;
 inline constexpr size_t kMaxCachedBytes =
     size_t{1} * 1024u * 1024u * 1024u;
+
+inline bool refillNeeded(size_t frameCount, int64_t durationUs) {
+  return frameCount <= kRefillLeadFrameCount ||
+         durationUs <= kRefillLeadDurationUs;
+}
 
 enum class RequestKind {
   Around,
@@ -96,6 +104,8 @@ struct Batch {
   RequestKind requestKind = RequestKind::Around;
   BatchSide side = BatchSide::Before;
   Boundary boundary;
+  bool decoderSeeked = false;
+  size_t decodedFrameCount = 0;
   std::vector<CachedFrame> frames;
 };
 

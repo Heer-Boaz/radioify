@@ -852,19 +852,30 @@ void Controller::trimFrameStepWindow(
     if (entries_.size() <=
             playback_video_frame_step_prefetch::kMaxCachedFrameCount &&
         windowDurationUs <=
-            playback_video_frame_step_prefetch::kSegmentDurationUs &&
+            playback_video_frame_step_prefetch::kWindowDurationUs &&
         decoderBackedFrameCount <= kRetainedFrameCount) {
       break;
     }
 
     const size_t beforeCount = *currentIndex;
     const size_t afterCount = entries_.size() - *currentIndex - 1;
-    // A cached neighbor is an exact inverse-step contract, not expendable
-    // lookahead. Keep the immediately adjacent frame on both sides and trim
-    // only farther frames; otherwise adopting a new directional segment can
-    // make the first step after a direction change skip a frame.
-    const bool mayEvictBefore = beforeCount > 1;
-    const bool mayEvictAfter = afterCount > 1;
+    // Cached inverse neighbors are part of the frame-step contract, not
+    // expendable lookahead. Keep enough of them to absorb a direction change
+    // while the worker replans; trim the inactive edge beyond that reserve
+    // before sacrificing useful frames in the active direction.
+    const size_t minimumBefore =
+        lastFrameStepDirection_ == playback_video_frame_step::Direction::Next
+            ? playback_video_frame_step_prefetch::
+                  kDirectionChangeReserveFrameCount
+            : 0;
+    const size_t minimumAfter =
+        lastFrameStepDirection_ ==
+                playback_video_frame_step::Direction::Previous
+            ? playback_video_frame_step_prefetch::
+                  kDirectionChangeReserveFrameCount
+            : 0;
+    const bool mayEvictBefore = beforeCount > minimumBefore;
+    const bool mayEvictAfter = afterCount > minimumAfter;
     if (!mayEvictBefore && !mayEvictAfter) {
       break;
     }
