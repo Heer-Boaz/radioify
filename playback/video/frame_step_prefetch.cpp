@@ -441,7 +441,7 @@ struct Prefetcher::Impl {
       }
     }
 
-    if (!decodeComplete && joined && decoder.atEnd()) {
+    if (!decodeComplete && joined && decoder.reachedEndOfStream()) {
       reachedMediaBoundary = true;
       decodeComplete = true;
     }

@@ -2,15 +2,17 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "playback/video/decoder.h"
 
 namespace playback_video_timeline_preview {
 
-// Hover previews intentionally use a bounded, sparse storyboard cache.  It is
+// Hover previews intentionally use a bounded, sparse exact-frame cache. It is
 // separate from the contiguous frame-step cache because the two caches have
 // opposite locality and eviction requirements.
 inline constexpr size_t kMaxCacheBytes = 32u * 1024u * 1024u;
@@ -23,6 +25,34 @@ struct Image {
   int64_t requestedUs = 0;
   int64_t frameUs = 0;
   VideoFrame frame;
+};
+
+struct Source {
+  std::filesystem::path path;
+  int videoStreamIndex = -1;
+  int64_t durationUs = 0;
+  int sourceWidth = 0;
+  int sourceHeight = 0;
+};
+
+struct Request {
+  uint64_t id = 0;
+  int64_t targetUs = 0;
+  std::vector<int64_t> prefetchTargetsUs;
+};
+
+enum class ResultOrigin : uint8_t {
+  Decoded,
+  MemoryCache,
+  PersistentCache,
+};
+
+struct Result {
+  uint64_t requestId = 0;
+  int64_t targetUs = 0;
+  bool failed = false;
+  ResultOrigin origin = ResultOrigin::Decoded;
+  std::shared_ptr<const Image> image;
 };
 
 struct Snapshot {
@@ -62,6 +92,8 @@ std::pair<int, int> fitDecodeSize(int sourceWidth, int sourceHeight,
                                   int maxWidth = kDecodeMaxWidth,
                                   int maxHeight = kDecodeMaxHeight);
 std::string formatTimestamp(int64_t timestampUs);
+std::vector<int64_t> prefetchTargets(int64_t targetUs, int64_t bucketUs,
+                                     int64_t durationUs, int direction);
 
 CellLayout layoutCells(int columns, int rows, int footerTopRow,
                        int progressBarX, int progressBarWidth,

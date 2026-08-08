@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 namespace playback_video_timeline_preview {
 namespace {
@@ -79,6 +80,46 @@ std::string formatTimestamp(int64_t timestampUs) {
                   static_cast<long long>(seconds));
   }
   return buffer;
+}
+
+std::vector<int64_t> prefetchTargets(int64_t targetUs, int64_t bucketUs,
+                                     int64_t durationUs, int direction) {
+  std::vector<int64_t> targets;
+  if (durationUs <= 0) return targets;
+  const int64_t lastUs = durationUs - 1;
+  targetUs = std::clamp(targetUs, int64_t{0}, lastUs);
+  bucketUs = std::max<int64_t>(1, bucketUs);
+
+  const auto offsetTarget = [&](int sign, int distance) {
+    const int safeDistance = std::max(1, distance);
+    const int64_t distanceUs =
+        bucketUs > (std::numeric_limits<int64_t>::max)() / safeDistance
+            ? (std::numeric_limits<int64_t>::max)()
+            : bucketUs * safeDistance;
+    if (sign < 0) {
+      return targetUs < distanceUs ? int64_t{0} : targetUs - distanceUs;
+    }
+    return targetUs > lastUs - std::min(lastUs, distanceUs)
+               ? lastUs
+               : targetUs + distanceUs;
+  };
+  const auto append = [&](int sign, int distance) {
+    const int64_t candidate = offsetTarget(sign, distance);
+    if (candidate != targetUs &&
+        std::find(targets.begin(), targets.end(), candidate) == targets.end()) {
+      targets.push_back(candidate);
+    }
+  };
+
+  if (direction != 0) {
+    append(direction, 1);
+    append(direction, 2);
+    append(-direction, 1);
+  } else {
+    append(1, 1);
+    append(-1, 1);
+  }
+  return targets;
 }
 
 CellLayout layoutCells(int columns, int rows, int footerTopRow,

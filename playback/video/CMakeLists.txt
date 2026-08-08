@@ -31,6 +31,9 @@ radioify_add_module_object_library(radioify_video_playback
 
 radioify_add_module_object_library(radioify_timeline_preview
   ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_cache.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_decoder.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_model.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_policy.cpp
 )
 

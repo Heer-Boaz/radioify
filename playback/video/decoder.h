@@ -135,6 +135,9 @@ class VideoDecoder {
   void flush();
   bool seekToTimestamp100ns(int64_t timestamp100ns);
   bool atEnd() const;
+  // True only after FFmpeg reported normal demux EOF and the decoder drained.
+  // Unlike atEnd(), decode, transfer, and interrupt failures do not satisfy it.
+  bool reachedEndOfStream() const;
   int width() const;
   int height() const;
   int64_t duration100ns() const;

@@ -18,6 +18,7 @@
 #include "playback/video/player.h"
 #include "playback/video/state/machine.h"
 #include "playback/video/timeline_preview.h"
+#include "playback/video/timeline_preview_model.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
@@ -115,7 +116,8 @@ struct PlaybackLoopRunner::Impl {
   bool forceRefreshArt = false;
   playback_frame_output::FrameOutputState frameOutputState;
   playback_session::PlaybackOsdTimeline osd;
-  playback_video_timeline_preview::Service timelinePreview;
+  playback_video_timeline_preview::HoverModel timelinePreviewModel;
+  playback_video_timeline_preview::Provider timelinePreviewProvider;
   bool timelinePreviewStarted = false;
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
@@ -166,9 +168,12 @@ struct PlaybackLoopRunner::Impl {
         core({args.player, args.perfLog, args.enableAudio, args.enableAscii}),
         gpuRenderer(sharedGpuRenderer()) {
     core.initialize(screen);
-    timelinePreviewStarted = timelinePreview.start(
+    const playback_video_timeline_preview::Source previewSource{
         file, core.player().videoStreamIndex(), core.player().durationUs(),
-        core.player().sourceWidth(), core.player().sourceHeight());
+        core.player().sourceWidth(), core.player().sourceHeight()};
+    timelinePreviewModel.start(previewSource.durationUs);
+    timelinePreviewStarted = timelinePreviewProvider.start(previewSource);
+    if (!timelinePreviewStarted) timelinePreviewModel.stop();
     bindInputState();
     bindRenderInputs();
     applyPresenterSync(syncPresentation());
@@ -210,13 +215,23 @@ struct PlaybackLoopRunner::Impl {
     };
     inputSignals.requestTimelinePreview =
         [this](double ratio, int progressUnits) {
-          if (timelinePreview.request(ratio, progressUnits)) {
+          auto update = timelinePreviewModel.hover(ratio, progressUnits);
+          if (update.request &&
+              !timelinePreviewProvider.submit(*update.request)) {
+            playback_video_timeline_preview::Result failure;
+            failure.requestId = update.request->id;
+            failure.targetUs = update.request->targetUs;
+            failure.failed = true;
+            timelinePreviewModel.apply(failure);
+          }
+          if (update.changed) {
             redraw = true;
             output.requestWindowPresent();
           }
         };
     inputSignals.clearTimelinePreview = [this]() {
-      if (timelinePreview.hide()) {
+      if (timelinePreviewModel.hide()) {
+        timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
         redraw = true;
         output.requestWindowPresent();
       }
@@ -298,7 +313,7 @@ struct PlaybackLoopRunner::Impl {
             requestTransportCommand != nullptr, hasSubtitles,
             enableSubtitlesShared, overlayControlHover, osdSnapshot(),
             config.debugOverlay);
-    ui.timelinePreview = timelinePreview.snapshot();
+    ui.timelinePreview = timelinePreviewModel.snapshot();
     return ui;
   }
 
@@ -336,7 +351,7 @@ struct PlaybackLoopRunner::Impl {
     const bool audioOnlyPlayback =
         core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
     inputs.osd = osdSnapshot();
-    inputs.timelinePreview = timelinePreview.snapshot();
+    inputs.timelinePreview = timelinePreviewModel.snapshot();
     inputs.osd.controlsVisible =
         inputs.osd.controlsVisible || audioOnlyPlayback;
     inputs.clearHistory = false;
@@ -395,7 +410,8 @@ struct PlaybackLoopRunner::Impl {
   void shutdown() {
     perfLogAppendf(&perfLog, "video_shutdown begin");
     perfLogFlush(&perfLog);
-    timelinePreview.stop();
+    timelinePreviewProvider.stop();
+    timelinePreviewModel.stop();
     timelinePreviewStarted = false;
     perfLogAppendf(&perfLog, "video_shutdown output_stop_begin");
     perfLogFlush(&perfLog);
@@ -441,7 +457,7 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.allowAsciiCpuFallback = false;
     renderInputs.useWindowPresenter = output.windowActive();
     renderInputs.osd = osdSnapshot();
-    renderInputs.timelinePreview = timelinePreview.snapshot();
+    renderInputs.timelinePreview = timelinePreviewModel.snapshot();
     renderInputs.cellPixelWidth = screen.cellPixelWidth();
     renderInputs.cellPixelHeight = screen.cellPixelHeight();
     renderInputs.cellPixelSourceLabel = screen.cellPixelSourceLabel();
@@ -757,7 +773,7 @@ struct PlaybackLoopRunner::Impl {
           notificationAreaControls
               ? notificationAreaControls->nativeWaitHandle()
               : NativeWaitHandle(),
-          timelinePreviewStarted ? timelinePreview.changedWaitHandle()
+          timelinePreviewStarted ? timelinePreviewProvider.changedWaitHandle()
                                  : NativeWaitHandle());
       return;
     }
@@ -767,7 +783,7 @@ struct PlaybackLoopRunner::Impl {
         openFileRequests.nativeWaitHandle(),
         notificationAreaControls ? notificationAreaControls->nativeWaitHandle()
                                  : NativeWaitHandle(),
-        timelinePreviewStarted ? timelinePreview.changedWaitHandle()
+        timelinePreviewStarted ? timelinePreviewProvider.changedWaitHandle()
                                : NativeWaitHandle());
   }
 
@@ -797,9 +813,12 @@ struct PlaybackLoopRunner::Impl {
 
     PlaybackLoopState loopState = PlaybackLoopState::Running;
     while (loopState == PlaybackLoopState::Running) {
-      if (timelinePreview.consumeChanged()) {
-        redraw = true;
-        output.requestWindowPresent();
+      if (std::optional<playback_video_timeline_preview::Result> result =
+              timelinePreviewProvider.takeResult()) {
+        if (timelinePreviewModel.apply(*result)) {
+          redraw = true;
+          output.requestWindowPresent();
+        }
       }
       if (osd.expire(playback_session::PlaybackOsdTimeline::Clock::now())) {
         redraw = true;

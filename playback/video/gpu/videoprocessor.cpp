@@ -11,9 +11,12 @@
 #include "timing_log.h"
 #include <algorithm>
 #include <chrono>
-#include <thread>
-#include <sstream>
 #include <cstdio>
+#include <cstring>
+#include <limits>
+#include <new>
+#include <sstream>
+#include <thread>
 
 #if RADIOIFY_ENABLE_TIMING_LOG
 #define RADIOIFY_TIMING_LOG(...) fprintf(stderr, __VA_ARGS__)
@@ -268,7 +271,7 @@ bool GpuVideoFrameCache::Update(ID3D11Device* device, ID3D11DeviceContext* conte
         return false;
     }
     auto t0_upd = steady_clock::now();
-#if defined(RADIOIFY_ENABLE_STAGING_UPLOAD)
+#if RADIOIFY_ENABLE_STAGING_UPLOAD
     if (!EnsureStagingRGBA(device, width, height)) {
         RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] GpuVideoFrameCache::Update(rgba) EnsureStagingRGBA failed\n", now_ms().c_str(), thread_id_str().c_str());
         return false;
@@ -301,7 +304,51 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
                                     const uint8_t* yuv, int stride, int planeHeight, int width, int height,
                                     bool fullRange, YuvMatrix matrix, YuvTransfer transfer,
                                     int bitDepth, int rotationQuarterTurns) {
-    if (!device || !context || !yuv) return false;
+    const size_t bytesPerSample = bitDepth > 8 ? 2u : 1u;
+    if (!device || !context || !yuv || width <= 0 || height <= 0 ||
+        (width & 1) != 0 || (height & 1) != 0 || stride <= 0 ||
+        planeHeight < height ||
+        static_cast<size_t>(width) >
+            (std::numeric_limits<size_t>::max)() / bytesPerSample ||
+        static_cast<size_t>(stride) <
+            static_cast<size_t>(width) * bytesPerSample ||
+        static_cast<size_t>(planeHeight) >
+            (std::numeric_limits<size_t>::max)() /
+                static_cast<size_t>(stride)) {
+        return false;
+    }
+
+#if !RADIOIFY_ENABLE_STAGING_UPLOAD
+    const uint8_t* uploadYuv = yuv;
+    if (planeHeight != height) {
+        const size_t rowCount = static_cast<size_t>(height) * 3u / 2u;
+        const size_t strideBytes = static_cast<size_t>(stride);
+        if (rowCount > (std::numeric_limits<size_t>::max)() / strideBytes) {
+            return false;
+        }
+        try {
+            m_yuvUploadScratch.resize(rowCount * strideBytes);
+        } catch (const std::bad_alloc&) {
+            return false;
+        }
+        for (int row = 0; row < height; ++row) {
+            memcpy(m_yuvUploadScratch.data() +
+                       static_cast<size_t>(row) * strideBytes,
+                   yuv + static_cast<size_t>(row) * strideBytes, strideBytes);
+        }
+        const uint8_t* sourceUv =
+            yuv + static_cast<size_t>(planeHeight) * strideBytes;
+        uint8_t* destinationUv =
+            m_yuvUploadScratch.data() +
+            static_cast<size_t>(height) * strideBytes;
+        for (int row = 0; row < height / 2; ++row) {
+            memcpy(destinationUv + static_cast<size_t>(row) * strideBytes,
+                   sourceUv + static_cast<size_t>(row) * strideBytes,
+                   strideBytes);
+        }
+        uploadYuv = m_yuvUploadScratch.data();
+    }
+#endif
     using namespace std::chrono;
     auto t0_total = steady_clock::now();
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::UpdateNV12 w=%d h=%d bd=%d\n", now_ms().c_str(), thread_id_str().c_str(), width, height, bitDepth);
@@ -320,14 +367,14 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
     }
     auto t0_upd = steady_clock::now();
     using namespace std::chrono;
-#if defined(RADIOIFY_ENABLE_STAGING_UPLOAD)
+#if RADIOIFY_ENABLE_STAGING_UPLOAD
     {
         auto t0_staging = steady_clock::now();
         if (!EnsureStagingNV12(device, width, height, bitDepth)) {
             RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] GpuVideoFrameCache::UpdateNV12 EnsureStagingNV12 failed\n", now_ms().c_str(), thread_id_str().c_str());
             return false;
         }
-        if (!UploadNV12ToDefaultViaStaging(context, writeIndex, yuv, stride, planeHeight, width, height)) {
+        if (!UploadNV12ToDefaultViaStaging(context, writeIndex, yuv, stride, planeHeight, width, height, bitDepth)) {
             RADIOIFY_VIDEO_ERROR_LOG("[%s] [tid=%s] GpuVideoFrameCache::UpdateNV12 staging upload failed\n", now_ms().c_str(), thread_id_str().c_str());
             return false;
         }
@@ -345,8 +392,7 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
 
         context->Begin(qDisjoint.Get());
         context->End(qStart.Get());
-        context->UpdateSubresource(m_texYuv[writeIndex].Get(), 0, nullptr, yuv, stride, 0);
-        context->UpdateSubresource(m_texYuv[writeIndex].Get(), 1, nullptr, yuv + (stride * planeHeight), stride, 0);
+        context->UpdateSubresource(m_texYuv[writeIndex].Get(), 0, nullptr, uploadYuv, stride, 0);
         context->End(qEnd.Get());
         context->End(qDisjoint.Get());
 
@@ -362,8 +408,7 @@ bool GpuVideoFrameCache::UpdateNV12(ID3D11Device* device, ID3D11DeviceContext* c
         }
     }
 #else
-    context->UpdateSubresource(m_texYuv[writeIndex].Get(), 0, nullptr, yuv, stride, 0);
-    context->UpdateSubresource(m_texYuv[writeIndex].Get(), 1, nullptr, yuv + (stride * planeHeight), stride, 0);
+    context->UpdateSubresource(m_texYuv[writeIndex].Get(), 0, nullptr, uploadYuv, stride, 0);
 #endif
     [[maybe_unused]] auto d_upd = duration_cast<milliseconds>(steady_clock::now() - t0_upd).count();
     RADIOIFY_TIMING_LOG("[%s] [tid=%s] GpuVideoFrameCache::UpdateNV12 -> UpdateSubresource done (ensure %lld ms update %lld ms)\n", now_ms().c_str(), thread_id_str().c_str(), (long long)d_ensure, (long long)d_upd);
@@ -522,7 +567,7 @@ bool GpuVideoFrameCache::EnsureRGBA(ID3D11Device* device, int width, int height,
     return true;
 }
 
-#if defined(RADIOIFY_ENABLE_STAGING_UPLOAD)
+#if RADIOIFY_ENABLE_STAGING_UPLOAD
 
 bool GpuVideoFrameCache::EnsureStagingNV12(ID3D11Device* device, int width, int height, int bitDepth) {
     DXGI_FORMAT yuvFormat = (bitDepth > 8) ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
@@ -583,39 +628,47 @@ bool GpuVideoFrameCache::EnsureStagingRGBA(ID3D11Device* device, int width, int 
     return true;
 }
 
-bool GpuVideoFrameCache::UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* yuv, int stride, int planeHeight, int width, int height) {
-    // writes Y plane then UV plane to staging and issues CopySubresourceRegion into default texture
+bool GpuVideoFrameCache::UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* yuv, int stride, int planeHeight, int width, int height, int bitDepth) {
+    // D3D11 exposes planar NV12/P010 storage as one subresource. Map it once
+    // and copy the contiguous Y and UV rows using the runtime-owned pitch.
     if (!m_stagingYuv) return false;
 
     D3D11_MAPPED_SUBRESOURCE mapped;
-    // Y plane
     if (FAILED(context->Map(m_stagingYuv.Get(), 0, D3D11_MAP_WRITE, 0, &mapped))) return false;
+    const size_t rowBytes = static_cast<size_t>(width) * (bitDepth > 8 ? 2u : 1u);
+    if (mapped.RowPitch < rowBytes) {
+        context->Unmap(m_stagingYuv.Get(), 0);
+        return false;
+    }
     for (int r = 0; r < height; ++r) {
-        memcpy((uint8_t*)mapped.pData + (size_t)r * mapped.RowPitch, yuv + (size_t)r * stride, (size_t)width);
+        memcpy((uint8_t*)mapped.pData + (size_t)r * mapped.RowPitch,
+               yuv + (size_t)r * stride, rowBytes);
+    }
+    const uint8_t* uvSrc = yuv + (size_t)stride * planeHeight;
+    uint8_t* uvDst = static_cast<uint8_t*>(mapped.pData) +
+                     static_cast<size_t>(mapped.RowPitch) * height;
+    for (int r = 0; r < height / 2; ++r) {
+        memcpy(uvDst + (size_t)r * mapped.RowPitch,
+               uvSrc + (size_t)r * stride, rowBytes);
     }
     context->Unmap(m_stagingYuv.Get(), 0);
 
-    // UV plane (subresource 1)
-    if (FAILED(context->Map(m_stagingYuv.Get(), 1, D3D11_MAP_WRITE, 0, &mapped))) return false;
-    const uint8_t* uvSrc = yuv + (size_t)stride * planeHeight;
-    for (int r = 0; r < planeHeight; ++r) {
-        memcpy((uint8_t*)mapped.pData + (size_t)r * mapped.RowPitch, uvSrc + (size_t)r * stride, (size_t)stride);
-    }
-    context->Unmap(m_stagingYuv.Get(), 1);
-
-    // Copy into the default texture planes
     context->CopySubresourceRegion(m_texYuv[dstIndex].Get(), 0, 0, 0, 0, m_stagingYuv.Get(), 0, nullptr);
-    context->CopySubresourceRegion(m_texYuv[dstIndex].Get(), 1, 0, 0, 0, m_stagingYuv.Get(), 1, nullptr);
     return true;
 }
 
 bool GpuVideoFrameCache::UploadRGBAToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* rgba, int stride, int width, int height) {
     if (!m_stagingRGBA) return false;
-    (void)width;
     D3D11_MAPPED_SUBRESOURCE mapped;
     if (FAILED(context->Map(m_stagingRGBA.Get(), 0, D3D11_MAP_WRITE, 0, &mapped))) return false;
+    const size_t rowBytes = static_cast<size_t>(width) * 4u;
+    if (mapped.RowPitch < rowBytes) {
+        context->Unmap(m_stagingRGBA.Get(), 0);
+        return false;
+    }
     for (int r = 0; r < height; ++r) {
-        memcpy((uint8_t*)mapped.pData + (size_t)r * mapped.RowPitch, rgba + (size_t)r * stride, (size_t)stride);
+        memcpy((uint8_t*)mapped.pData + (size_t)r * mapped.RowPitch,
+               rgba + (size_t)r * stride, rowBytes);
     }
     context->Unmap(m_stagingRGBA.Get(), 0);
 
@@ -636,6 +689,10 @@ void GpuVideoFrameCache::Reset() {
         m_gpuDone[i].Reset();
         m_gpuInFlight[i] = false;
     }
+#if RADIOIFY_ENABLE_STAGING_UPLOAD
+    m_stagingYuv.Reset();
+    m_stagingRGBA.Reset();
+#endif
     m_activeIndex = 0;
     m_writeIndex = 0;
     m_width = 0;
@@ -647,4 +704,5 @@ void GpuVideoFrameCache::Reset() {
     m_transfer = YuvTransfer::Sdr;
     m_rotationQuarterTurns = 0;
     m_format = CacheFormat::None;
+    m_yuvUploadScratch.clear();
 }

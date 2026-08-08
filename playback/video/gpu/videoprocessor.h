@@ -84,14 +84,17 @@ private:
     std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, kFrameBufferCount> m_srvRGBA;
     std::array<Microsoft::WRL::ComPtr<ID3D11Query>, kFrameBufferCount> m_gpuDone;
     std::array<bool, kFrameBufferCount> m_gpuInFlight{};
+    // D3D11 uploads planar formats as one contiguous subresource. This buffer
+    // compacts CPU frames whose UV plane follows padded Y rows.
+    std::vector<uint8_t> m_yuvUploadScratch;
 
-#if defined(RADIOIFY_ENABLE_STAGING_UPLOAD)
+#if RADIOIFY_ENABLE_STAGING_UPLOAD
     // Staging resources used by the upload path to avoid driver implicit syncs
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_stagingYuv; // same format as m_texYuv (NV12/P010), usage=STAGING
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_stagingRGBA;
     bool EnsureStagingNV12(ID3D11Device* device, int width, int height, int bitDepth);
     bool EnsureStagingRGBA(ID3D11Device* device, int width, int height);
-    bool UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* yuv, int stride, int planeHeight, int width, int height);
+    bool UploadNV12ToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* yuv, int stride, int planeHeight, int width, int height, int bitDepth);
     bool UploadRGBAToDefaultViaStaging(ID3D11DeviceContext* context, int dstIndex, const uint8_t* rgba, int stride, int width, int height);
 #endif
 

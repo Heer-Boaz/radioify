@@ -553,6 +553,8 @@ struct VideoDecoder::Impl {
   int rotationQuarterTurns = 0;
   bool atEnd = false;
   bool eof = false;
+  bool inputEndedNaturally = false;
+  bool decoderDrainedNaturally = false;
   int64_t duration100ns = 0;
   int64_t formatStartUs = 0;
   int64_t streamStartUs = 0;
@@ -1157,6 +1159,8 @@ void VideoDecoder::flush() {
   }
   impl_->atEnd = false;
   impl_->eof = false;
+  impl_->inputEndedNaturally = false;
+  impl_->decoderDrainedNaturally = false;
   impl_->consecutiveTransferErrors = 0;
 }
 
@@ -1213,6 +1217,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
     }
     if (recv == AVERROR_EOF) {
       impl_->atEnd = true;
+      impl_->decoderDrainedNaturally = impl_->inputEndedNaturally;
       return false;
     }
     if (recv != AVERROR(EAGAIN)) {
@@ -1222,6 +1227,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
 
     if (impl_->eof) {
       impl_->atEnd = true;
+      impl_->decoderDrainedNaturally = impl_->inputEndedNaturally;
       return false;
     }
 
@@ -1229,6 +1235,7 @@ bool VideoDecoder::readFrame(VideoFrame& out, VideoReadInfo* info,
       int read = av_read_frame(impl_->fmt, impl_->packet);
       if (read < 0) {
         impl_->eof = true;
+        impl_->inputEndedNaturally = read == AVERROR_EOF;
         avcodec_send_packet(impl_->codec, nullptr);
         continue;
       }
@@ -1328,11 +1335,16 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   }
   impl_->atEnd = false;
   impl_->eof = false;
+  impl_->inputEndedNaturally = false;
+  impl_->decoderDrainedNaturally = false;
   impl_->consecutiveTransferErrors = 0;
   return true;
 }
 
 bool VideoDecoder::atEnd() const { return impl_ ? impl_->atEnd : true; }
+bool VideoDecoder::reachedEndOfStream() const {
+  return impl_ && impl_->atEnd && impl_->decoderDrainedNaturally;
+}
 int VideoDecoder::width() const { return impl_ ? impl_->width : 0; }
 int VideoDecoder::height() const { return impl_ ? impl_->height : 0; }
 int64_t VideoDecoder::duration100ns() const {
