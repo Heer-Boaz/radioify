@@ -39,6 +39,7 @@ extern "C" {
 #include <new>
 
 #include "runtime_helpers.h"
+#include "playback/video/timing/timeline.h"
 
 // C-style callbacks for FFmpeg locking
 static void d3d11_lock(void* ctx) {
@@ -120,7 +121,21 @@ std::string ffmpegError(int err) {
 bool openInputWithProbe(const std::filesystem::path& path,
                         int64_t analyzeDurationUs,
                         AVFormatContext** outFmt,
-                        std::string* error) {
+                        std::string* error,
+                        VideoDecoderInterruptCallback interruptCallback = nullptr,
+                        void* interruptOpaque = nullptr) {
+  if (!outFmt) {
+    setError(error, "Invalid video input destination.");
+    return false;
+  }
+  *outFmt = avformat_alloc_context();
+  if (!*outFmt) {
+    setError(error, "Failed to allocate video input context.");
+    return false;
+  }
+  (*outFmt)->interrupt_callback.callback = interruptCallback;
+  (*outFmt)->interrupt_callback.opaque = interruptOpaque;
+
   AVDictionary* options = nullptr;
   av_dict_set_int(&options, "probesize", kProbeSize, 0);
   av_dict_set_int(&options, "analyzeduration", analyzeDurationUs, 0);
@@ -130,6 +145,7 @@ bool openInputWithProbe(const std::filesystem::path& path,
       avformat_open_input(outFmt, pathUtf8.c_str(), nullptr, &options);
   av_dict_free(&options);
   if (openErr < 0) {
+    avformat_close_input(outFmt);
     std::string msg = "Failed to open video: " + ffmpegError(openErr);
     setError(error, msg.c_str());
     return false;
@@ -759,18 +775,23 @@ VideoDecoder::~VideoDecoder() { uninit(); }
 
 bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
                         bool preferHardware, [[maybe_unused]] bool allowRgbOutput,
-                        VideoStreamSelection* streamSelection) {
+                        VideoStreamSelection* streamSelection,
+                        int requestedStreamIndex,
+                        VideoDecoderInterruptCallback interruptCallback,
+                        void* interruptOpaque) {
   uninit();
 
   AVFormatContext* fmt = nullptr;
-  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, error)) {
+  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, error,
+                          interruptCallback, interruptOpaque)) {
     return false;
   }
 
   int infoErr = avformat_find_stream_info(fmt, nullptr);
   if (infoErr < 0) {
     avformat_close_input(&fmt);
-    if (!openInputWithProbe(path, kAnalyzeDurationFallbackUs, &fmt, error)) {
+    if (!openInputWithProbe(path, kAnalyzeDurationFallbackUs, &fmt, error,
+                            interruptCallback, interruptOpaque)) {
       return false;
     }
     infoErr = avformat_find_stream_info(fmt, nullptr);
@@ -783,7 +804,8 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   }
 
   StreamSelectionResult selectionResult;
-  if (!selectVideoStream(fmt, &selectionResult, streamSelection, -1, error)) {
+  if (!selectVideoStream(fmt, &selectionResult, streamSelection,
+                         requestedStreamIndex, error)) {
     avformat_close_input(&fmt);
     return false;
   }
@@ -1280,23 +1302,20 @@ bool VideoDecoder::seekToTimestamp100ns(int64_t timestamp100ns) {
   }
   impl_->hasPendingPacket = false;
 
-  int64_t targetUs = timestamp100ns / 10;
-  targetUs += impl_->formatStartUs;
-  if (targetUs < 0) targetUs = 0;
+  const int64_t targetUs = (std::max)(int64_t{0}, timestamp100ns / 10);
+  playback_video_timeline::DemuxSeekRequest seekRequest;
+  seekRequest.format = impl_->fmt;
+  seekRequest.videoStreamIndex = impl_->streamIndex;
+  seekRequest.videoTimeBase = impl_->timeBase;
+  seekRequest.formatStartUs = impl_->formatStartUs;
+  seekRequest.targetUs = targetUs;
+  seekRequest.seekUs = targetUs;
+  seekRequest.preferVideoStream = true;
+  seekRequest.logTag = "video_decoder_seek";
+  const playback_video_timeline::DemuxSeekResult seekResult =
+      playback_video_timeline::seekPrimaryDemux(seekRequest);
+  if (!seekResult.seeked) return false;
 
-  // Use standard backward seek to find the nearest previous keyframe.
-  // This is generally reliable for standard file formats.
-  int seekRes = avformat_seek_file(impl_->fmt, -1, INT64_MIN, targetUs, INT64_MAX, AVSEEK_FLAG_BACKWARD);
-
-  if (seekRes < 0) {
-    // Fallback: try legacy seek
-    int64_t targetStream = av_rescale_q(targetUs, AVRational{1, AV_TIME_BASE}, impl_->timeBase);
-    seekRes = av_seek_frame(impl_->fmt, impl_->streamIndex, targetStream, AVSEEK_FLAG_BACKWARD);
-  }
-
-  if (seekRes < 0) return false;
-
-  avformat_flush(impl_->fmt);
   avcodec_flush_buffers(impl_->codec);
   if (impl_->frame) {
     av_frame_unref(impl_->frame);

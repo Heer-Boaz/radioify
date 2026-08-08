@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -163,6 +164,35 @@ bool renderAsciiArtFromRgbaDebug(const uint8_t* rgba,
 enum class YuvFormat {
   NV12,
   P010,
+};
+
+// Caller-owned render state for independent image streams.  Use this when two
+// streams (for example the main picture and a timeline preview) are rendered
+// on the same thread so their temporal histories cannot contaminate each
+// other.  The legacy free functions retain their thread-local convenience
+// state.
+class AsciiArtRenderer {
+ public:
+  AsciiArtRenderer();
+  ~AsciiArtRenderer();
+
+  AsciiArtRenderer(AsciiArtRenderer&&) noexcept;
+  AsciiArtRenderer& operator=(AsciiArtRenderer&&) noexcept;
+  AsciiArtRenderer(const AsciiArtRenderer&) = delete;
+  AsciiArtRenderer& operator=(const AsciiArtRenderer&) = delete;
+
+  void resetHistory();
+  bool renderRgbaExact(const uint8_t* rgba, int width, int height,
+                       int outputWidth, int outputHeight, AsciiArt& out,
+                       bool assumeOpaque = false);
+  bool renderYuvExact(const uint8_t* data, int width, int height, int stride,
+                      int planeHeight, YuvFormat format, bool fullRange,
+                      YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
+                      int outputWidth, int outputHeight, AsciiArt& out);
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 bool renderAsciiArtFromYuv(const uint8_t* data,

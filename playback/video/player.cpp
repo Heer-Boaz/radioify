@@ -1577,6 +1577,7 @@ struct Player::Impl {
   std::atomic<int64_t> durationUs{0};
   std::atomic<int> sourceWidth{0};
   std::atomic<int> sourceHeight{0};
+  std::atomic<int> videoStreamIndex{-1};
   std::mutex audioTrackMutex;
   std::vector<int> audioTrackStreams;
   std::vector<std::string> audioTrackLabels;
@@ -2723,6 +2724,8 @@ struct Player::Impl {
 
       sourceWidth.store(videoDec.width);
       sourceHeight.store(videoDec.height);
+      videoStreamIndex.store(demux.videoStreamIndex,
+                             std::memory_order_relaxed);
       durationUs.store(demux.durationUs > 0 ? demux.durationUs : 0);
       {
         std::lock_guard<std::mutex> lock(audioTrackMutex);
@@ -3985,6 +3988,7 @@ bool Player::open(const PlayerConfig& config, std::string* error) {
     close();
   }
   impl_->config = config;
+  impl_->videoStreamIndex.store(-1, std::memory_order_relaxed);
   impl_->logPath = config.logPath;
   impl_->ctrlRunning.store(true, std::memory_order_relaxed);
   impl_->controlThread = std::thread([this]() { impl_->controlMain(); });
@@ -4232,4 +4236,8 @@ int Player::sourceWidth() const {
 
 int Player::sourceHeight() const {
   return impl_->sourceHeight.load(std::memory_order_relaxed);
+}
+
+int Player::videoStreamIndex() const {
+  return impl_->videoStreamIndex.load(std::memory_order_relaxed);
 }

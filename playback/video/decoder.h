@@ -101,12 +101,21 @@ struct VideoMetadata {
   std::string codecName;
 };
 
+// Return non-zero to interrupt a blocking FFmpeg demux operation.  The opaque
+// context must outlive the decoder.  This is intentionally a C-style callback:
+// FFmpeg invokes it from inside avformat and must not depend on UI/session
+// objects or exception-capable callables.
+using VideoDecoderInterruptCallback = int (*)(void* opaque);
+
 class VideoDecoder {
  public:
   ~VideoDecoder();
   bool init(const std::filesystem::path& path, std::string* error,
             bool preferHardware = true, bool allowRgbOutput = true,
-            VideoStreamSelection* streamSelection = nullptr);
+            VideoStreamSelection* streamSelection = nullptr,
+            int requestedStreamIndex = -1,
+            VideoDecoderInterruptCallback interruptCallback = nullptr,
+            void* interruptOpaque = nullptr);
   
   // Initialize with an external D3D11 device (for device sharing / zero-copy)
   // key: An optional mutex for synchronizing access to the device context

@@ -2348,6 +2348,54 @@ bool renderAsciiArtFromRgbaFast(const uint8_t* rgba, int width, int height,
 }
 }  // namespace
 
+struct AsciiArtRenderer::Impl {
+  BrailleFastScratch scratch;
+};
+
+AsciiArtRenderer::AsciiArtRenderer() : impl_(std::make_unique<Impl>()) {}
+
+AsciiArtRenderer::~AsciiArtRenderer() = default;
+
+AsciiArtRenderer::AsciiArtRenderer(AsciiArtRenderer&&) noexcept = default;
+
+AsciiArtRenderer& AsciiArtRenderer::operator=(
+    AsciiArtRenderer&&) noexcept = default;
+
+void AsciiArtRenderer::resetHistory() { impl_->scratch.resetHistory(); }
+
+bool AsciiArtRenderer::renderRgbaExact(
+    const uint8_t* rgba, int width, int height, int outputWidth,
+    int outputHeight, AsciiArt& out, bool assumeOpaque) {
+  out = AsciiArt{};
+  if (!rgba || width <= 0 || height <= 0 || outputWidth <= 0 ||
+      outputHeight <= 0) {
+    return false;
+  }
+  return renderAsciiArtFromRgbaFast(
+      rgba, width, height, outputWidth, outputHeight, out, assumeOpaque,
+      impl_->scratch, true);
+}
+
+bool AsciiArtRenderer::renderYuvExact(
+    const uint8_t* data, int width, int height, int stride, int planeHeight,
+    YuvFormat format, bool fullRange, YuvMatrix yuvMatrix,
+    YuvTransfer yuvTransfer, int outputWidth, int outputHeight,
+    AsciiArt& out) {
+  out = AsciiArt{};
+  if (!data || width <= 0 || height <= 0 || stride <= 0 ||
+      planeHeight <= 0 || outputWidth <= 0 || outputHeight <= 0) {
+    return false;
+  }
+  if (format == YuvFormat::P010) {
+    return renderAsciiArtFromYuvImpl<true>(
+        data, width, height, stride, planeHeight, fullRange, yuvMatrix,
+        yuvTransfer, outputWidth, outputHeight, out, impl_->scratch, true);
+  }
+  return renderAsciiArtFromYuvImpl<false>(
+      data, width, height, stride, planeHeight, fullRange, yuvMatrix,
+      yuvTransfer, outputWidth, outputHeight, out, impl_->scratch, true);
+}
+
 bool renderAsciiArt(const std::filesystem::path& path, int maxWidth,
                     int maxHeight, AsciiArt& out, std::string* error) {
   out = AsciiArt{};

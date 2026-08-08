@@ -188,7 +188,16 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     auto queueWindowMouseEvent = [&](int x, int y, DWORD buttonState,
                                      DWORD eventFlags) {
         if (!pThis->ShouldQueueWindowMouseEvent(y)) {
+            if (eventFlags == MOUSE_MOVED &&
+                pThis->m_windowMouseInputActive) {
+                pThis->m_windowMouseInputActive = false;
+                pThis->m_input.push(window_input_events::mouseEvent(
+                    x, y, buttonState, eventFlags));
+            }
             return;
+        }
+        if (eventFlags == MOUSE_MOVED) {
+            pThis->m_windowMouseInputActive = true;
         }
         pThis->m_input.push(window_input_events::mouseEvent(
             x, y, buttonState, eventFlags));
@@ -207,10 +216,27 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == WM_MOUSEMOVE) {
+        if (!pThis->m_trackingMouseLeave) {
+            TRACKMOUSEEVENT tracking{};
+            tracking.cbSize = sizeof(tracking);
+            tracking.dwFlags = TME_LEAVE;
+            tracking.hwndTrack = hWnd;
+            pThis->m_trackingMouseLeave = TrackMouseEvent(&tracking) != FALSE;
+        }
         queueWindowMouseEvent(
             LOWORD(lParam), HIWORD(lParam),
             window_input_events::mouseButtonsFromWParam(wParam),
             MOUSE_MOVED);
+        return 0;
+    }
+
+    if (uMsg == WM_MOUSELEAVE) {
+        pThis->m_trackingMouseLeave = false;
+        if (pThis->m_windowMouseInputActive) {
+            pThis->m_windowMouseInputActive = false;
+            pThis->m_input.push(
+                window_input_events::mouseEvent(-1, -1, 0, MOUSE_MOVED));
+        }
         return 0;
     }
 

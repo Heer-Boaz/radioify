@@ -17,6 +17,7 @@
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/video/player.h"
 #include "playback/video/state/machine.h"
+#include "playback/video/timeline_preview.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
@@ -100,9 +101,12 @@ struct PlaybackLoopRunner::Impl {
   PlaybackSessionCore core;
   GpuAsciiRenderer& gpuRenderer;
   AsciiArt art;
+  playback_screen_renderer::TimelinePreviewAsciiCache timelinePreviewArt;
   ConsoleScreen textGridPresentationScreen;
   std::vector<ScreenCell> textGridPresentationCells;
   AsciiArt textGridPresentationArt;
+  playback_screen_renderer::TimelinePreviewAsciiCache
+      textGridTimelinePreviewArt;
   VideoFrame textGridPresentationFrame;
   GpuVideoFrameCache textGridPresentationFrameCache;
   playback_frame_output::FrameOutputState textGridPresentationOutputState;
@@ -111,6 +115,8 @@ struct PlaybackLoopRunner::Impl {
   bool forceRefreshArt = false;
   playback_frame_output::FrameOutputState frameOutputState;
   playback_session::PlaybackOsdTimeline osd;
+  playback_video_timeline_preview::Service timelinePreview;
+  bool timelinePreviewStarted = false;
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
   std::chrono::steady_clock::time_point lastDebugRefresh =
@@ -160,6 +166,9 @@ struct PlaybackLoopRunner::Impl {
         core({args.player, args.perfLog, args.enableAudio, args.enableAscii}),
         gpuRenderer(sharedGpuRenderer()) {
     core.initialize(screen);
+    timelinePreviewStarted = timelinePreview.start(
+        file, core.player().videoStreamIndex(), core.player().durationUs(),
+        core.player().sourceWidth(), core.player().sourceHeight());
     bindInputState();
     bindRenderInputs();
     applyPresenterSync(syncPresentation());
@@ -198,6 +207,19 @@ struct PlaybackLoopRunner::Impl {
       }
       redraw = true;
       output.requestWindowPresent();
+    };
+    inputSignals.requestTimelinePreview =
+        [this](double ratio, int progressUnits) {
+          if (timelinePreview.request(ratio, progressUnits)) {
+            redraw = true;
+            output.requestWindowPresent();
+          }
+        };
+    inputSignals.clearTimelinePreview = [this]() {
+      if (timelinePreview.hide()) {
+        redraw = true;
+        output.requestWindowPresent();
+      }
     };
     inputSignals.toggleWindowPresentation = [this]() {
       return presentationController.toggleWindow(output, redraw,
@@ -240,6 +262,7 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.gpuRenderer = &gpuRenderer;
     renderInputs.frameCache = &output.frameCache();
     renderInputs.art = &art;
+    renderInputs.timelinePreviewCache = &timelinePreviewArt;
     renderInputs.windowTitle = &windowTitle;
     renderInputs.baseStyle = &baseStyle;
     renderInputs.accentStyle = &accentStyle;
@@ -267,13 +290,16 @@ struct PlaybackLoopRunner::Impl {
   }
 
   WindowUiState buildWindowUiState() {
-    return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
-        windowTitle, output.window(), core.player(), subtitleManager,
-        core.playbackState(), core.audioOk(),
-        requestTransportCommand != nullptr,
-        requestTransportCommand != nullptr, hasSubtitles,
-        enableSubtitlesShared, overlayControlHover, osdSnapshot(),
-        config.debugOverlay);
+    WindowUiState ui =
+        playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
+            windowTitle, output.window(), core.player(), subtitleManager,
+            core.playbackState(), core.audioOk(),
+            requestTransportCommand != nullptr,
+            requestTransportCommand != nullptr, hasSubtitles,
+            enableSubtitlesShared, overlayControlHover, osdSnapshot(),
+            config.debugOverlay);
+    ui.timelinePreview = timelinePreview.snapshot();
+    return ui;
   }
 
   bool buildTextGridPresentation(int pixelWidth, int pixelHeight,
@@ -303,12 +329,14 @@ struct PlaybackLoopRunner::Impl {
     inputs.frame = &textGridPresentationFrame;
     inputs.frameCache = &textGridPresentationFrameCache;
     inputs.art = &textGridPresentationArt;
+    inputs.timelinePreviewCache = &textGridTimelinePreviewArt;
     inputs.currentMode = PlaybackRenderMode::AsciiTerminal;
     inputs.windowActive = false;
     inputs.useWindowPresenter = false;
     const bool audioOnlyPlayback =
         core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
     inputs.osd = osdSnapshot();
+    inputs.timelinePreview = timelinePreview.snapshot();
     inputs.osd.controlsVisible =
         inputs.osd.controlsVisible || audioOnlyPlayback;
     inputs.clearHistory = false;
@@ -367,6 +395,8 @@ struct PlaybackLoopRunner::Impl {
   void shutdown() {
     perfLogAppendf(&perfLog, "video_shutdown begin");
     perfLogFlush(&perfLog);
+    timelinePreview.stop();
+    timelinePreviewStarted = false;
     perfLogAppendf(&perfLog, "video_shutdown output_stop_begin");
     perfLogFlush(&perfLog);
     output.stop();
@@ -411,6 +441,7 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.allowAsciiCpuFallback = false;
     renderInputs.useWindowPresenter = output.windowActive();
     renderInputs.osd = osdSnapshot();
+    renderInputs.timelinePreview = timelinePreview.snapshot();
     renderInputs.cellPixelWidth = screen.cellPixelWidth();
     renderInputs.cellPixelHeight = screen.cellPixelHeight();
     renderInputs.cellPixelSourceLabel = screen.cellPixelSourceLabel();
@@ -725,7 +756,9 @@ struct PlaybackLoopRunner::Impl {
           openFileRequests.nativeWaitHandle(),
           notificationAreaControls
               ? notificationAreaControls->nativeWaitHandle()
-              : NativeWaitHandle());
+              : NativeWaitHandle(),
+          timelinePreviewStarted ? timelinePreview.changedWaitHandle()
+                                 : NativeWaitHandle());
       return;
     }
 
@@ -733,7 +766,9 @@ struct PlaybackLoopRunner::Impl {
         input, timeoutMs, core.player().statusChangeWaitHandle(),
         openFileRequests.nativeWaitHandle(),
         notificationAreaControls ? notificationAreaControls->nativeWaitHandle()
-                                 : NativeWaitHandle());
+                                 : NativeWaitHandle(),
+        timelinePreviewStarted ? timelinePreview.changedWaitHandle()
+                               : NativeWaitHandle());
   }
 
   RefreshState refreshState() {
@@ -762,6 +797,10 @@ struct PlaybackLoopRunner::Impl {
 
     PlaybackLoopState loopState = PlaybackLoopState::Running;
     while (loopState == PlaybackLoopState::Running) {
+      if (timelinePreview.consumeChanged()) {
+        redraw = true;
+        output.requestWindowPresent();
+      }
       if (osd.expire(playback_session::PlaybackOsdTimeline::Clock::now())) {
         redraw = true;
         output.requestWindowPresent();

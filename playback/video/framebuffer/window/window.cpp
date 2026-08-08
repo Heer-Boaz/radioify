@@ -4,6 +4,7 @@
 #include "core/windows_console_window.h"
 #include "core/windows_message_pump.h"
 #include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/frame_cache/update.h"
 #include "internal.h"
 #include "present.h"
 #include <d3d11_1.h>
@@ -1607,6 +1608,10 @@ void VideoWindow::Cleanup() {
     m_gpuTextGlyphAtlasWeight = 0;
     m_gpuTextGridCols = 0;
     m_gpuTextGridRows = 0;
+    m_timelinePreviewFrameCache.Reset();
+    m_timelinePreviewImageId = 0;
+    m_windowMouseInputActive = false;
+    m_trackingMouseLeave = false;
 }
 
 bool VideoWindow::Open(int width, int height, const std::string& title,
@@ -2073,25 +2078,15 @@ void VideoWindow::UpdateViewport(int width, int height) {
     m_viewportH = vp.h;
 }
 
-bool VideoWindow::DrawVideoFrame(
-    GpuVideoFrameCache& frameCache, ID3D11Device* device,
-    ID3D11DeviceContext* context, ID3D11RenderTargetView* renderTarget,
-    const FrameRenderGeometry& geometry,
-    const VideoOutputColorState& outputColor, const WindowUiState& ui,
-    bool includePlaybackOverlay, const char* timingStage) {
-    if (!device || !context || !renderTarget || !m_constantBuffer ||
-        !frameCache.HasFrame() || geometry.width <= 0 || geometry.height <= 0 ||
-        geometry.viewport.w <= 0.0f || geometry.viewport.h <= 0.0f) {
+bool VideoWindow::BindVideoFrame(
+    GpuVideoFrameCache& frameCache, ID3D11DeviceContext* context,
+    const D3D11_VIEWPORT& viewport,
+    const VideoOutputColorState& outputColor) {
+    if (!context || !m_constantBuffer || !frameCache.HasFrame() ||
+        viewport.Width <= 0.0f || viewport.Height <= 0.0f) {
         return false;
     }
 
-    const float clearColor[4] = {0, 0, 0, 1};
-    context->ClearRenderTargetView(renderTarget, clearColor);
-    context->OMSetRenderTargets(1, &renderTarget, nullptr);
-
-    const D3D11_VIEWPORT viewport = {
-        geometry.viewport.x, geometry.viewport.y, geometry.viewport.w,
-        geometry.viewport.h, 0.0f, 1.0f};
     context->RSSetViewports(1, &viewport);
     context->IASetInputLayout(nullptr);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
@@ -2099,6 +2094,7 @@ bool VideoWindow::DrawVideoFrame(
     context->PSSetShader(m_pixelShader.Get(), nullptr, 0);
     context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
     context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
+    context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(m_constantBuffer.Get(), 0,
@@ -2122,6 +2118,37 @@ bool VideoWindow::DrawVideoFrame(
         frameCache.IsRgba() ? nullptr : frameCache.GetSrvUV(),
         frameCache.IsRgba() ? frameCache.GetSrvRGBA() : nullptr};
     context->PSSetShaderResources(0, 3, frameResources);
+    return true;
+}
+
+void VideoWindow::UnbindVideoFrame(ID3D11DeviceContext* context) {
+    if (!context) return;
+    ID3D11ShaderResourceView* nullResources[3] = {nullptr, nullptr, nullptr};
+    context->PSSetShaderResources(0, 3, nullResources);
+}
+
+bool VideoWindow::DrawVideoFrame(
+    GpuVideoFrameCache& frameCache, ID3D11Device* device,
+    ID3D11DeviceContext* context, ID3D11RenderTargetView* renderTarget,
+    const FrameRenderGeometry& geometry,
+    const VideoOutputColorState& outputColor, const WindowUiState& ui,
+    bool includePlaybackOverlay, const char* timingStage) {
+    if (!device || !context || !renderTarget || !m_constantBuffer ||
+        !frameCache.HasFrame() || geometry.width <= 0 || geometry.height <= 0 ||
+        geometry.viewport.w <= 0.0f || geometry.viewport.h <= 0.0f) {
+        return false;
+    }
+
+    const float clearColor[4] = {0, 0, 0, 1};
+    context->ClearRenderTargetView(renderTarget, clearColor);
+    context->OMSetRenderTargets(1, &renderTarget, nullptr);
+
+    const D3D11_VIEWPORT viewport = {
+        geometry.viewport.x, geometry.viewport.y, geometry.viewport.w,
+        geometry.viewport.h, 0.0f, 1.0f};
+    if (!BindVideoFrame(frameCache, context, viewport, outputColor)) {
+        return false;
+    }
 
 #if defined(RADIOIFY_ENABLE_GPU_TIMING)
     Microsoft::WRL::ComPtr<ID3D11Query> disjointQuery;
@@ -2177,8 +2204,7 @@ bool VideoWindow::DrawVideoFrame(
     }
 #endif
 
-    ID3D11ShaderResourceView* nullResources[3] = {nullptr, nullptr, nullptr};
-    context->PSSetShaderResources(0, 3, nullResources);
+    UnbindVideoFrame(context);
     return true;
 }
 
@@ -2388,10 +2414,12 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                               const FrameRenderGeometry& geometry,
                               const VideoOutputColorState& outputColor,
                               bool includePlaybackOverlay) {
+    const bool showTimelinePreview =
+        includePlaybackOverlay && ui.timelinePreview.visible;
     bool showOverlay =
         includePlaybackOverlay &&
         (ui.overlayAlpha > 0.01f || !ui.debugLines.empty() ||
-         ui.transientMessage);
+         ui.transientMessage || showTimelinePreview);
     const bool hasAssScript =
         static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
     const bool hasPlaintextSubtitleCues = std::any_of(
@@ -2404,9 +2432,68 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
     if (!hasAssScript && !ui.subtitleRenderError.empty()) {
         setSubtitleRenderError({});
     }
-    if (!showOverlay && !showSubtitle) return;
+    if (!showOverlay && !showSubtitle && !showTimelinePreview) return;
 
     if (!device || !context || !m_constantBuffer) return;
+
+    const SIZE cellSize = TextGridCellSize();
+    const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
+    const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
+    const int cols = playback_overlay::overlayCellCountForPixels(
+        std::max(1, geometry.width), cellWidth);
+    const int rows = playback_overlay::overlayCellCountForPixels(
+        std::max(1, geometry.height), cellHeight);
+    const playback_overlay::OverlayCellLayout windowOverlayLayout =
+        playback_overlay::layoutWindowOverlayCells(ui, cols, rows);
+    bool drawTimelinePreview = false;
+    D3D11_VIEWPORT timelinePreviewViewport{};
+
+    if (showTimelinePreview) {
+        const VideoFrame* previewFrame = ui.timelinePreview.image
+                                             ? &ui.timelinePreview.image->frame
+                                             : nullptr;
+        const int sourceWidth = previewFrame ? previewFrame->width : 16;
+        const int sourceHeight = previewFrame ? previewFrame->height : 9;
+        const int footerTop = windowOverlayLayout.topY >= 0
+                                  ? windowOverlayLayout.topY
+                                  : rows;
+        const auto previewLayout =
+            playback_video_timeline_preview::layoutCells(
+                cols, rows, footerTop, windowOverlayLayout.progressBarX,
+                windowOverlayLayout.progressBarWidth,
+                ui.timelinePreview.anchorRatio, sourceWidth, sourceHeight,
+                cellWidth, cellHeight,
+                playback_video_timeline_preview::formatTimestamp(
+                    ui.timelinePreview.targetUs));
+        if (previewFrame && previewLayout.drawable()) {
+            if (m_timelinePreviewImageId != ui.timelinePreview.image->id &&
+                playback_video_frame_cache::update(
+                    m_timelinePreviewFrameCache, device, context,
+                    *previewFrame)) {
+                m_timelinePreviewImageId = ui.timelinePreview.image->id;
+            }
+            if (m_timelinePreviewImageId == ui.timelinePreview.image->id &&
+                m_timelinePreviewFrameCache.HasFrame()) {
+                const int previewLeft = std::clamp(
+                    previewLayout.imageX * cellWidth, 0,
+                    std::max(0, geometry.width - 1));
+                const int previewTop = std::clamp(
+                    previewLayout.imageY * cellHeight, 0,
+                    std::max(0, geometry.height - 1));
+                const float previewX = static_cast<float>(previewLeft);
+                const float previewY = static_cast<float>(previewTop);
+                const float previewWidth = static_cast<float>(std::max(
+                    1, std::min(geometry.width - previewLeft,
+                                previewLayout.imageWidth * cellWidth)));
+                const float previewHeight = static_cast<float>(std::max(
+                    1, std::min(geometry.height - previewTop,
+                                previewLayout.imageHeight * cellHeight)));
+                timelinePreviewViewport = D3D11_VIEWPORT{
+                    previewX, previewY, previewWidth, previewHeight, 0.0f, 1.0f};
+                drawTimelinePreview = true;
+            }
+        }
+    }
 
     // UI overlay is window-space: render it on the full client viewport,
     // not the letterboxed video viewport.
@@ -2455,17 +2542,9 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
     }
 
     if (showOverlay) {
-        const SIZE cellSize = TextGridCellSize();
-        const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
-        const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
-        const int cols =
-            playback_overlay::overlayCellCountForPixels(
-                std::max(1, geometry.width), cellWidth);
-        const int rows =
-            playback_overlay::overlayCellCountForPixels(
-                std::max(1, geometry.height), cellHeight);
         if (playback_overlay::renderWindowUiToGpuTextGrid(
-                ui, cols, rows, playback_overlay::OverlayRenderStyles{},
+                ui, cols, rows, cellWidth, cellHeight,
+                playback_overlay::OverlayRenderStyles{},
                 m_windowOverlayTextGrid)) {
             const int textPxW =
                 std::min(geometry.width,
@@ -2785,6 +2864,13 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
             nullptr, nullptr, nullptr, nullptr, m_subtitleSrv.Get()};
         context->PSSetShaderResources(0, 5, srvs);
         context->Draw(4, 0);
+    }
+    if (drawTimelinePreview &&
+        BindVideoFrame(m_timelinePreviewFrameCache, context,
+                       timelinePreviewViewport, outputColor)) {
+        context->Draw(4, 0);
+        UnbindVideoFrame(context);
+        m_timelinePreviewFrameCache.MarkFrameInFlight(context);
     }
     if (drawOverlayTextGrid) {
         DrawGpuTextGridFrame(device, context, m_windowOverlayTextGrid,

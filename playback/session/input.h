@@ -54,6 +54,9 @@ struct PlaybackInputSignals {
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   std::function<void()> copyCurrentVideoFrameToClipboard;
+  std::function<void(double ratio, int progressUnits)>
+      requestTimelinePreview;
+  std::function<void()> clearTimelinePreview;
   playback_session::PlaybackOsdTimeline* osd = nullptr;
 
   bool* loopStopRequested = nullptr;

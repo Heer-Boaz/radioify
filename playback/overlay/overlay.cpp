@@ -1037,6 +1037,48 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                    styles.baseStyle);
 }
 
+template <typename Target>
+void renderTimelinePreviewChromeToTarget(
+    Target& target,
+    const playback_video_timeline_preview::CellLayout& layout,
+    const OverlayRenderStyles& styles, bool loading, bool failed) {
+  if (!target.isDrawable() || !layout.drawable()) return;
+
+  const int left = layout.outerX;
+  const int right = layout.outerX + layout.outerWidth - 1;
+  const int top = layout.outerY;
+  const int bottom = layout.outerY + layout.outerHeight - 1;
+  for (int x = left + 1; x < right; ++x) {
+    target.writeChar(x, top, L'─', styles.accentStyle);
+    target.writeChar(x, bottom, L'─', styles.accentStyle);
+  }
+  for (int y = top + 1; y < bottom; ++y) {
+    target.writeChar(left, y, L'│', styles.accentStyle);
+    target.writeChar(right, y, L'│', styles.accentStyle);
+  }
+  target.writeChar(left, top, L'┌', styles.accentStyle);
+  target.writeChar(right, top, L'┐', styles.accentStyle);
+  target.writeChar(left, bottom, L'└', styles.accentStyle);
+  target.writeChar(right, bottom, L'┘', styles.accentStyle);
+
+  const int availableLabelWidth = std::max(0, layout.outerWidth - 4);
+  const std::string label =
+      utf8TakeDisplayWidth(layout.label, availableLabelWidth);
+  const int labelWidth = utf8DisplayWidth(label);
+  const int labelX =
+      left + std::max(2, (layout.outerWidth - labelWidth) / 2);
+  target.writeText(labelX, top, label, styles.accentStyle);
+
+  if (loading || failed) {
+    const std::string status = failed ? "Unavailable" : "Loading...";
+    const int statusWidth = utf8DisplayWidth(status);
+    const int statusX = layout.imageX +
+                        std::max(0, (layout.imageWidth - statusWidth) / 2);
+    const int statusY = layout.imageY + layout.imageHeight / 2;
+    target.writeText(statusX, statusY, status, styles.baseStyle);
+  }
+}
+
 }  // namespace
 
 void renderOverlayToScreen(ConsoleScreen& screen,
@@ -1056,15 +1098,48 @@ void renderTransientMessageToScreen(ConsoleScreen& screen,
   renderTransientMessageToTarget(target, message, style);
 }
 
+void renderTimelinePreviewChromeToScreen(
+    ConsoleScreen& screen,
+    const playback_video_timeline_preview::CellLayout& layout,
+    const OverlayRenderStyles& styles, bool loading, bool failed) {
+  ScreenOverlayTarget target(screen, 0, screen.height());
+  renderTimelinePreviewChromeToTarget(target, layout, styles, loading, failed);
+}
+
 bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
+                                 int cellPixelWidth, int cellPixelHeight,
                                  const OverlayRenderStyles& styles,
                                  GpuTextGridFrame& outFrame) {
   GpuTextGridOverlayTarget target(outFrame, width, height, styles.baseStyle);
   bool rendered = false;
+  OverlayCellLayout overlayLayout;
+  bool haveOverlayLayout = false;
   if (ui.overlayAlpha > 0.01f || !ui.debugLines.empty()) {
-    const OverlayCellLayout layout = layoutWindowOverlayCells(ui, width, height);
-    renderOverlayToTarget(target, layout, styles, ui.progress);
+    overlayLayout = layoutWindowOverlayCells(ui, width, height);
+    haveOverlayLayout = true;
+    renderOverlayToTarget(target, overlayLayout, styles, ui.progress);
     rendered = true;
+  }
+  if (ui.timelinePreview.visible) {
+    if (!haveOverlayLayout) {
+      overlayLayout = layoutWindowOverlayCells(ui, width, height);
+      haveOverlayLayout = true;
+    }
+    const VideoFrame* previewFrame =
+        ui.timelinePreview.image ? &ui.timelinePreview.image->frame : nullptr;
+    const int sourceWidth = previewFrame ? previewFrame->width : 16;
+    const int sourceHeight = previewFrame ? previewFrame->height : 9;
+    const int footerTop = overlayLayout.topY >= 0 ? overlayLayout.topY : height;
+    const auto previewLayout = playback_video_timeline_preview::layoutCells(
+        width, height, footerTop, overlayLayout.progressBarX,
+        overlayLayout.progressBarWidth, ui.timelinePreview.anchorRatio,
+        sourceWidth, sourceHeight, cellPixelWidth, cellPixelHeight,
+        playback_video_timeline_preview::formatTimestamp(
+            ui.timelinePreview.targetUs));
+    renderTimelinePreviewChromeToTarget(
+        target, previewLayout, styles, ui.timelinePreview.loading,
+        ui.timelinePreview.failed);
+    rendered = rendered || previewLayout.drawable();
   }
   if (ui.transientMessage) {
     renderTransientMessageToTarget(target, *ui.transientMessage,

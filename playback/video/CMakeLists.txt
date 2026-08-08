@@ -29,6 +29,11 @@ radioify_add_module_object_library(radioify_video_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/player.cpp
 )
 
+radioify_add_module_object_library(radioify_timeline_preview
+  ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_policy.cpp
+)
+
 radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_image_decode_wic.cpp

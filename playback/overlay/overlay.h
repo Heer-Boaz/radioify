@@ -284,7 +284,13 @@ void renderTransientMessageToScreen(ConsoleScreen& screen,
                                     const std::string& message,
                                     const Style& style);
 
+void renderTimelinePreviewChromeToScreen(
+    ConsoleScreen& screen,
+    const playback_video_timeline_preview::CellLayout& layout,
+    const OverlayRenderStyles& styles, bool loading, bool failed);
+
 bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
+                                 int cellPixelWidth, int cellPixelHeight,
                                  const OverlayRenderStyles& styles,
                                  GpuTextGridFrame& outFrame);
 

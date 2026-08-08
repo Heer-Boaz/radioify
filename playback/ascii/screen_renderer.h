@@ -19,6 +19,14 @@
 
 namespace playback_screen_renderer {
 
+struct TimelinePreviewAsciiCache {
+  uint64_t imageId = 0;
+  int width = 0;
+  int height = 0;
+  AsciiArt art;
+  AsciiArtRenderer renderer;
+};
+
 struct PlaybackScreenRenderInputs {
   ConsoleScreen* screen = nullptr;
   VideoWindow* videoWindow = nullptr;
@@ -27,6 +35,7 @@ struct PlaybackScreenRenderInputs {
   GpuAsciiRenderer* gpuRenderer = nullptr;
   GpuVideoFrameCache* frameCache = nullptr;
   AsciiArt* art = nullptr;
+  TimelinePreviewAsciiCache* timelinePreviewCache = nullptr;
   VideoFrame* frame = nullptr;
   const std::string* windowTitle = nullptr;
   const Style* baseStyle = nullptr;
@@ -50,6 +59,7 @@ struct PlaybackScreenRenderInputs {
   bool allowAsciiCpuFallback = false;
   bool useWindowPresenter = false;
   playback_overlay::PlaybackOsdSnapshot osd;
+  playback_video_timeline_preview::Snapshot timelinePreview;
   bool clearHistory = false;
   bool frameChanged = false;
   bool frameAvailable = false;

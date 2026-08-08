@@ -110,6 +110,7 @@ class Player {
   bool hasVideoFrame() const;
   int sourceWidth() const;
   int sourceHeight() const;
+  int videoStreamIndex() const;
 
  private:
   struct Impl;

@@ -21,6 +21,7 @@
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/video/framebuffer/video_output_color.h"
 #include "playback/video/subtitle/font_attachments.h"
+#include "playback/video/timeline_preview_types.h"
 #include "display_lifecycle.h"
 #include "input_controller.h"
 #include "present.h"
@@ -100,6 +101,7 @@ struct WindowUiState {
     std::string subtitle; // current subtitle cue text
     float subtitleAlpha = 0.0f; // subtitle opacity
     std::vector<std::string> debugLines;
+    playback_video_timeline_preview::Snapshot timelinePreview;
 };
 
 struct IDXGISwapChain2;
@@ -218,6 +220,11 @@ private:
                         const WindowUiState& ui,
                         bool includePlaybackOverlay,
                         const char* timingStage);
+    bool BindVideoFrame(GpuVideoFrameCache& frameCache,
+                        ID3D11DeviceContext* context,
+                        const D3D11_VIEWPORT& viewport,
+                        const VideoOutputColorState& outputColor);
+    void UnbindVideoFrame(ID3D11DeviceContext* context);
     void DrawOverlay(ID3D11Device* device,
                      ID3D11DeviceContext* context,
                      const WindowUiState& ui,
@@ -320,6 +327,8 @@ private:
     int m_gpuTextGridCols = 0;
     int m_gpuTextGridRows = 0;
     GpuTextGridFrame m_windowOverlayTextGrid;
+    GpuVideoFrameCache m_timelinePreviewFrameCache;
+    uint64_t m_timelinePreviewImageId = 0;
     
     int m_width = 0;
     int m_height = 0;
@@ -333,6 +342,8 @@ private:
     float m_viewportH = 0.0f;
 
     WindowInputController m_input;
+    bool m_windowMouseInputActive = false;
+    bool m_trackingMouseLeave = false;
     // Cache last window title to avoid repeated SetWindowText calls
     std::string m_lastWindowTitle;
     std::string m_baseWindowTitle;

@@ -651,10 +651,25 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
        hitMouse.eventFlags == MOUSE_MOVED);
   if (progressHit) {
     updateOverlayControlHover(signals, -1);
+    if (signals.requestTimelinePreview) {
+      int progressUnits = 0;
+      if (progressOutputState) {
+        progressUnits = progressOutputState->progressBarWidth;
+      } else if (windowEvent) {
+        progressUnits = std::max(
+            1, playback_overlay::overlayCellCountForPixels(
+                   view.videoWindow->GetWidth(), windowTextCellW) -
+                   2);
+      }
+      signals.requestTimelinePreview(progressRatio, progressUnits);
+    }
     if (seekGesture) {
       queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
     }
     return;
+  }
+  if (signals.clearTimelinePreview) {
+    signals.clearTimelinePreview();
   }
   if (!overlayVisibleForHitTest) {
     updateOverlayControlHover(signals, -1);
