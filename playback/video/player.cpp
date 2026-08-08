@@ -430,22 +430,6 @@ enum class FrameStepDispatchResult {
   AwaitingPrefetch,
 };
 
-struct FrameStepPrefetchState {
-  int initializedSerial = 0;
-  std::optional<playback_video_frame_step_prefetch::FrameIdentity>
-      lastBeforeBoundary;
-  std::optional<playback_video_frame_step_prefetch::FrameIdentity>
-      lastAfterBoundary;
-  std::optional<playback_video_frame_step::Direction> lastDirection;
-
-  void reset() {
-    initializedSerial = 0;
-    lastBeforeBoundary.reset();
-    lastAfterBoundary.reset();
-    lastDirection.reset();
-  }
-};
-
 enum class SerialTransitionPurpose {
   Timeline,
   FrameStepSeek,
@@ -1950,27 +1934,27 @@ struct Player::Impl {
       const playback_video_frame_step::Request* frameStepRequest = nullptr) {
     playback_video_sync::PreparedFrame prepared =
         preparedFrameFromPresentedFrame(entry);
-    publishPresentedFrame(syncState, entry.frame, prepared.frame, prepared, tag,
-                          targetUs, masterUs, source, diffUs, delayUs,
-                          VideoCursorPublication::Preserve, notification,
-                          frameStepRequest);
+    publishPresentedFrame(syncState, entry.videoFrame(), prepared.frame,
+                          prepared, tag, targetUs, masterUs, source, diffUs,
+                          delayUs, VideoCursorPublication::Preserve,
+                          notification, frameStepRequest);
   }
 
   void drainFrameStepPrefetch(int serial) {
-    for (playback_video_frame_step_prefetch::Batch& batch :
-         frameStepPrefetch.takeBatches(serial)) {
-      const size_t frameCount = batch.frames.size();
-      const int side =
-          batch.side == playback_video_frame_step_prefetch::BatchSide::Before
-              ? -1
-              : 1;
-      const bool decoderSeeked = batch.decoderSeeked;
-      const size_t decodedFrameCount = batch.decodedFrameCount;
-      if (frameCursor.mergePrefetchedBatch(std::move(batch))) {
+    for (playback_video_frame_step_prefetch::Result& result :
+         frameStepPrefetch.takeResults(serial)) {
+      const size_t frameCount = result.frames.size();
+      const bool decoderSeeked = result.decoderSeeked;
+      const bool cacheHit = result.cacheHit;
+      const size_t decodedFrameCount = result.decodedFrameCount;
+      const int64_t rangeStartUs = result.rangeStartUs;
+      const int64_t rangeEndUs = result.rangeEndUs;
+      if (frameCursor.adoptPrefetchedResult(std::move(result))) {
         appendTimingFmt(
-            "frame_step_prefetch_adopt serial=%d side=%d frames=%zu decoder_seek=%d decoded=%zu",
-            serial, side, frameCount, decoderSeeked ? 1 : 0,
-            decodedFrameCount);
+            "frame_step_prefetch_adopt serial=%d start_us=%lld end_us=%lld frames=%zu cache_hit=%d decoder_seek=%d decoded=%zu",
+            serial, static_cast<long long>(rangeStartUs),
+            static_cast<long long>(rangeEndUs), frameCount,
+            cacheHit ? 1 : 0, decoderSeeked ? 1 : 0, decodedFrameCount);
       }
     }
   }
@@ -1983,155 +1967,32 @@ struct Player::Impl {
   }
 
   void maintainFrameStepPrefetch(
-      int serial, playback_video_frame_step::Direction direction,
-      FrameStepPrefetchState* state) {
-    if (!state || !frameStepPrefetchStarted) {
+      int serial, playback_video_frame_step::Direction direction) {
+    if (!frameStepPrefetchStarted) {
       return;
     }
     drainFrameStepPrefetch(serial);
-    if (frameStepPrefetch.takeFailure(serial)) {
-      appendTimingFmt("frame_step_prefetch_failed serial=%d", serial);
-    }
-
-    if (!state->lastDirection || *state->lastDirection != direction) {
-      if (direction == playback_video_frame_step::Direction::Previous) {
-        state->lastBeforeBoundary.reset();
-      } else {
-        state->lastAfterBoundary.reset();
-      }
-      state->lastDirection = direction;
-    }
-
-    playback_video_frame_cursor::PrefetchWindow window =
-        frameCursor.prefetchWindow();
-    if (!window.valid()) {
-      return;
-    }
-
-    const int64_t mediaDurationUs =
-        durationUs.load(std::memory_order_relaxed);
-    auto boundedEndUs = [&](int64_t startUs, int64_t extensionUs) {
-      int64_t endUs = (std::numeric_limits<int64_t>::max)();
-      if (extensionUs >= 0 &&
-          startUs <= (std::numeric_limits<int64_t>::max)() - extensionUs) {
-        endUs = startUs + extensionUs;
-      }
-      if (mediaDurationUs > 0) {
-        endUs = (std::min)(endUs, mediaDurationUs);
-      }
-      return endUs;
-    };
-
-    if (state->initializedSerial != serial) {
-      if (frameStepPrefetchBusy(serial)) {
-        return;
-      }
-      playback_video_frame_step_prefetch::Request request;
-      request.serial = serial;
-      request.kind = playback_video_frame_step_prefetch::RequestKind::Around;
-      request.boundary = window.current;
-      request.rangeStartUs = (std::max)(
-          int64_t{0},
-          window.current.ptsUs -
-              playback_video_frame_step_prefetch::kRefillSpanUs);
-      request.rangeEndUs = boundedEndUs(
-          window.current.ptsUs,
-          playback_video_frame_step_prefetch::kRefillSpanUs);
-      if (request.rangeEndUs <= request.rangeStartUs) {
-        return;
-      }
-      if (frameStepPrefetch.request(request)) {
-        state->initializedSerial = serial;
-        appendTimingFmt(
-            "frame_step_prefetch_request serial=%d kind=around start_us=%lld end_us=%lld",
-            serial, static_cast<long long>(request.rangeStartUs),
-            static_cast<long long>(request.rangeEndUs));
-      }
-      return;
-    }
-
-    const bool needsRefill =
-        direction == playback_video_frame_step::Direction::Previous
-            ? playback_video_frame_step_prefetch::refillNeeded(
-                  window.beforeFrameCount, window.beforeDurationUs)
-            : playback_video_frame_step_prefetch::refillNeeded(
-                  window.afterFrameCount, window.afterDurationUs);
-    if (!needsRefill || frameStepPrefetchBusy(serial)) {
-      return;
-    }
-
-    playback_video_frame_step_prefetch::Request request;
-    request.serial = serial;
-    if (direction == playback_video_frame_step::Direction::Previous) {
-      if (window.beforeEdge.ptsUs <= 0) {
-        return;
-      }
-      if (state->lastBeforeBoundary &&
-          playback_video_frame_step_prefetch::sameIdentity(
-              *state->lastBeforeBoundary, window.beforeEdge.identity)) {
-        return;
-      }
-      frameCursor.prepareForPrefetchRefill(direction);
-      window = frameCursor.prefetchWindow();
-      if (!window.valid()) {
-        return;
-      }
-      request.kind = playback_video_frame_step_prefetch::RequestKind::Before;
-      request.boundary = window.beforeEdge;
-      request.rangeStartUs =
-          (std::max)(int64_t{0},
-                     window.beforeEdge.ptsUs -
-                         playback_video_frame_step_prefetch::
-                             kRefillSpanUs);
-      request.rangeEndUs = window.beforeEdge.ptsUs;
-    } else {
-      const bool atMediaEnd =
-          mediaDurationUs > 0 &&
-          (window.afterEdge.ptsUs >= mediaDurationUs ||
-           (window.afterEdge.durationUs > 0 &&
-            window.afterEdge.ptsUs >=
-                mediaDurationUs - window.afterEdge.durationUs));
-      if (atMediaEnd) {
-        return;
-      }
-      if (state->lastAfterBoundary &&
-          playback_video_frame_step_prefetch::sameIdentity(
-              *state->lastAfterBoundary, window.afterEdge.identity)) {
-        return;
-      }
-      frameCursor.prepareForPrefetchRefill(direction);
-      window = frameCursor.prefetchWindow();
-      if (!window.valid()) {
-        return;
-      }
-      request.kind = playback_video_frame_step_prefetch::RequestKind::After;
-      request.boundary = window.afterEdge;
-      request.rangeStartUs = window.afterEdge.ptsUs;
-      request.rangeEndUs = boundedEndUs(
-          window.afterEdge.ptsUs,
-          playback_video_frame_step_prefetch::kRefillSpanUs);
-    }
-
-    if (request.rangeEndUs <= request.rangeStartUs) {
-      return;
-    }
-    if (frameStepPrefetch.request(request)) {
-      if (request.kind ==
-          playback_video_frame_step_prefetch::RequestKind::Before) {
-        state->lastBeforeBoundary = request.boundary.identity;
-      } else {
-        state->lastAfterBoundary = request.boundary.identity;
-      }
+    if (std::optional<playback_video_frame_step_prefetch::Request> failed =
+            frameStepPrefetch.takeFailure(serial)) {
+      frameCursor.notePrefetchFailure(*failed);
       appendTimingFmt(
-          "frame_step_prefetch_request serial=%d kind=%s start_us=%lld end_us=%lld",
-          serial,
-          request.kind ==
-                  playback_video_frame_step_prefetch::RequestKind::Before
-              ? "before"
-              : "after",
-          static_cast<long long>(request.rangeStartUs),
-          static_cast<long long>(request.rangeEndUs));
+          "frame_step_prefetch_failed serial=%d start_us=%lld end_us=%lld",
+          serial, static_cast<long long>(failed->rangeStartUs),
+          static_cast<long long>(failed->rangeEndUs));
     }
+    std::optional<playback_video_frame_step_prefetch::Request> request =
+        frameCursor.prefetchRequest(
+            direction, durationUs.load(std::memory_order_relaxed));
+    if (!request || frameStepPrefetchBusy(serial) ||
+        !frameStepPrefetch.request(*request)) {
+      return;
+    }
+    appendTimingFmt(
+        "frame_step_prefetch_request serial=%d direction=%d start_us=%lld end_us=%lld",
+        serial,
+        direction == playback_video_frame_step::Direction::Previous ? -1 : 1,
+        static_cast<long long>(request->rangeStartUs),
+        static_cast<long long>(request->rangeEndUs));
   }
 
   FrameStepDispatchResult dispatchCursorFrameStep(
@@ -2242,7 +2103,7 @@ struct Player::Impl {
     playback_video_main_clock::Snapshot master =
         masterClockSnapshot(presentNow);
     publishPresentedFrame(
-        syncState, decision.frame->frame, item, prepared,
+        syncState, decision.frame->videoFrame(), item, prepared,
         "frame_step_backstep", presentNow, master.us, master.source, 0, 0,
         VideoCursorPublication::Append,
         VideoPresentationNotification::FrameStep, &*frameStepPresentation);
@@ -3670,7 +3531,6 @@ struct Player::Impl {
     playback_video_sync::initializeLoopState(
         syncState, serialControl.currentSerial(),
         estimatedFrameDurationUs.load(std::memory_order_relaxed), nowUs());
-    FrameStepPrefetchState prefetchState;
     playback_video_frame_step::Direction prefetchDirection =
         playback_video_frame_step::Direction::Next;
 
@@ -3690,7 +3550,6 @@ struct Player::Impl {
           syncState, static_cast<int>(serial),
           estimatedFrameDurationUs.load(std::memory_order_relaxed), nowUs());
       if (outputSerialChanged) {
-        prefetchState.reset();
         auto seekPlan = frameStepSeek.consumeForSerial(static_cast<int>(serial));
         if (seekPlan) {
           frameCursor.resetForSerial(static_cast<int>(serial), &*seekPlan);
@@ -3701,24 +3560,19 @@ struct Player::Impl {
       playback_video_state_machine::StateProjection stateProjection =
           playback_video_state_machine::project(st);
 
+      playback_video_frame_step::Request pendingFrameStep;
+      const bool hasPendingFrameStep = playbackState.peekFrameStep(
+          &pendingFrameStep, static_cast<int>(serial),
+          frameCursor.frameStepSeekPendingForSerial(static_cast<int>(serial)));
+      if (hasPendingFrameStep) {
+        prefetchDirection = pendingFrameStep.direction;
+        frameCursor.enterFrameStepMode();
+      }
       if (frameCursor.frameStepModeActive()) {
-        maintainFrameStepPrefetch(static_cast<int>(serial), prefetchDirection,
-                                  &prefetchState);
-      } else if (prefetchState.initializedSerial != 0) {
-        prefetchState.reset();
+        maintainFrameStepPrefetch(static_cast<int>(serial), prefetchDirection);
       }
 
-      playback_video_frame_step::Request pendingFrameStep;
-      if (playbackState.peekFrameStep(
-              &pendingFrameStep, static_cast<int>(serial),
-              frameCursor.frameStepSeekPendingForSerial(
-                  static_cast<int>(serial)))) {
-        prefetchDirection = pendingFrameStep.direction;
-        if (frameCursor.enterFrameStepMode(pendingFrameStep.direction)) {
-          prefetchState.reset();
-        }
-        maintainFrameStepPrefetch(static_cast<int>(serial), prefetchDirection,
-                                  &prefetchState);
+      if (hasPendingFrameStep) {
         bool pendingFrameStepDeferred = false;
         const bool currentFrameIsCurrentSerial =
             presentedFrameSnapshot().serial == static_cast<int>(serial);

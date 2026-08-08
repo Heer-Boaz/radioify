@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -20,6 +21,8 @@ inline constexpr size_t kRetainedFrameCount = 2;
 
 struct PresentedFrame {
   VideoFrame frame;
+  std::shared_ptr<const playback_video_frame_step_prefetch::SourceFrame>
+      sourceFrame;
   VideoReadInfo info{};
   int64_t ptsUs = 0;
   int64_t durationUs = 0;
@@ -27,6 +30,10 @@ struct PresentedFrame {
   uint64_t displayIndex = 0;
   uint64_t logicalIndex = 0;
   double decodeMs = 0.0;
+
+  const VideoFrame& videoFrame() const {
+    return sourceFrame ? sourceFrame->frame : frame;
+  }
 };
 
 enum class StepTargetKind {
@@ -76,13 +83,16 @@ class Controller {
   void resetForSerial(int serial,
                       const playback_video_frame_step_seek::Plan* seekPlan =
                           nullptr);
-  bool enterFrameStepMode(playback_video_frame_step::Direction direction);
+  bool enterFrameStepMode();
   bool frameStepModeActive() const { return frameStepMode_; }
-  bool mergePrefetchedBatch(
-      playback_video_frame_step_prefetch::Batch batch);
-  void prepareForPrefetchRefill(
-      playback_video_frame_step::Direction direction);
+  bool adoptPrefetchedResult(
+      playback_video_frame_step_prefetch::Result result);
   PrefetchWindow prefetchWindow() const;
+  std::optional<playback_video_frame_step_prefetch::Request> prefetchRequest(
+      playback_video_frame_step::Direction direction,
+      int64_t mediaDurationUs) const;
+  void notePrefetchFailure(
+      const playback_video_frame_step_prefetch::Request& request);
   void noteDecoded(const QueuedFrame& item);
   void appendPresented(const QueuedFrame& item, const VideoFrame& frame);
   const PresentedFrame* peekNext() const;
@@ -160,8 +170,11 @@ class Controller {
   uint64_t currentLogicalIndex_ = 0;
   int serial_ = 0;
   bool frameStepMode_ = false;
-  playback_video_frame_step::Direction lastFrameStepDirection_ =
-      playback_video_frame_step::Direction::Next;
+  bool prefetchCoverageValid_ = false;
+  int64_t prefetchCoverageStartUs_ = 0;
+  int64_t prefetchCoverageEndUs_ = 0;
+  std::optional<playback_video_frame_step_prefetch::Request>
+      failedPrefetchRequest_;
 };
 
 }  // namespace playback_video_frame_cursor

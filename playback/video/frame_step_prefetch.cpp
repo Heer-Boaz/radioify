@@ -1,5 +1,7 @@
 #include "playback/video/frame_step_prefetch.h"
 
+#include "playback/video/frame_step_source_cache.h"
+
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -24,6 +26,16 @@ int64_t frameEndUs(int64_t ptsUs, int64_t durationUs) {
     return ptsUs;
   }
   return ptsUs + durationUs;
+}
+
+bool requestCoversDirection(
+    const Request& request,
+    playback_video_frame_step::Direction direction) {
+  if (direction == playback_video_frame_step::Direction::Previous) {
+    return request.rangeStartUs < request.boundary.ptsUs;
+  }
+  return request.rangeEndUs >
+         frameEndUs(request.boundary.ptsUs, request.boundary.durationUs);
 }
 
 bool translateFromAnchor(int64_t value, int64_t fromAnchor, int64_t toAnchor,
@@ -113,11 +125,82 @@ enum class SnapshotResult {
   Failed,
 };
 
+class SnapshotCommandBatch {
+ public:
+  SnapshotCommandBatch(ID3D11DeviceContext* deferredContext,
+                       ID3D11DeviceContext* immediateContext,
+                       std::recursive_mutex* immediateContextMutex)
+      : deferredContext_(deferredContext),
+        immediateContext_(immediateContext),
+        immediateContextMutex_(immediateContextMutex) {}
+
+  ~SnapshotCommandBatch() { discard(); }
+
+  bool copy(ID3D11Texture2D* destination, ID3D11Texture2D* source,
+            UINT sourceSubresource) {
+    if (!destination || !source || !immediateContext_ ||
+        !immediateContextMutex_) {
+      return false;
+    }
+    if (!deferredContext_) {
+      std::lock_guard<std::recursive_mutex> lock(*immediateContextMutex_);
+      immediateContext_->CopySubresourceRegion(
+          destination, 0, 0, 0, 0, source, sourceSubresource, nullptr);
+      return true;
+    }
+
+    deferredContext_->CopySubresourceRegion(
+        destination, 0, 0, 0, 0, source, sourceSubresource, nullptr);
+    sourceTextures_.emplace_back(source);
+    hasCommands_ = true;
+    return true;
+  }
+
+  bool submit() {
+    if (!hasCommands_) {
+      return true;
+    }
+    Microsoft::WRL::ComPtr<ID3D11CommandList> commandList;
+    if (!deferredContext_ ||
+        FAILED(deferredContext_->FinishCommandList(FALSE, &commandList)) ||
+        !commandList) {
+      reset();
+      return false;
+    }
+    {
+      std::lock_guard<std::recursive_mutex> lock(*immediateContextMutex_);
+      immediateContext_->ExecuteCommandList(commandList.Get(), FALSE);
+    }
+    hasCommands_ = false;
+    sourceTextures_.clear();
+    return true;
+  }
+
+ private:
+  void discard() {
+    if (hasCommands_ && deferredContext_) {
+      Microsoft::WRL::ComPtr<ID3D11CommandList> discarded;
+      deferredContext_->FinishCommandList(FALSE, &discarded);
+    }
+    reset();
+  }
+
+  void reset() {
+    hasCommands_ = false;
+    sourceTextures_.clear();
+  }
+
+  ID3D11DeviceContext* deferredContext_ = nullptr;
+  ID3D11DeviceContext* immediateContext_ = nullptr;
+  std::recursive_mutex* immediateContextMutex_ = nullptr;
+  bool hasCommands_ = false;
+  std::vector<Microsoft::WRL::ComPtr<ID3D11Texture2D>> sourceTextures_;
+};
+
 SnapshotResult snapshotFrame(
     const VideoFrame& decoded, const std::shared_ptr<CacheBudget>& budget,
-    ID3D11Device* device, ID3D11DeviceContext* context,
-    std::recursive_mutex* contextMutex, VideoFrame* out) {
-  if (!out || !budget) {
+    ID3D11Device* device, SnapshotCommandBatch* commands, VideoFrame* out) {
+  if (!out || !budget || !commands) {
     return SnapshotResult::Failed;
   }
 
@@ -132,7 +215,7 @@ SnapshotResult snapshotFrame(
     return SnapshotResult::Ok;
   }
 
-  if (!decoded.hwTexture || !device || !context || !contextMutex) {
+  if (!decoded.hwTexture || !device) {
     return SnapshotResult::Failed;
   }
 
@@ -166,13 +249,13 @@ SnapshotResult snapshotFrame(
   if (FAILED(device->CreateTexture2D(&snapshotDesc, nullptr, &snapshot))) {
     return SnapshotResult::Failed;
   }
-  {
-    std::lock_guard<std::recursive_mutex> lock(*contextMutex);
-    // FFmpeg represents a D3D11VA frame as one array subresource. A single
-    // region copy therefore snapshots the complete NV12/P010 surface.
-    context->CopySubresourceRegion(
-        snapshot.Get(), 0, 0, 0, 0, decoded.hwTexture.Get(),
-        static_cast<UINT>(decoded.hwTextureArrayIndex), nullptr);
+  // FFmpeg represents a D3D11VA frame as one array subresource. Record all
+  // snapshots on the worker-owned deferred context and submit them as one
+  // command list so presentation only takes the shared immediate-context lock
+  // once per completed cache transaction.
+  if (!commands->copy(snapshot.Get(), decoded.hwTexture.Get(),
+                      static_cast<UINT>(decoded.hwTextureArrayIndex))) {
+    return SnapshotResult::Failed;
   }
 
   *out = decoded;
@@ -195,18 +278,19 @@ struct Prefetcher::Impl {
   int videoStreamIndex = -1;
   Microsoft::WRL::ComPtr<ID3D11Device> device;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> deferredContext;
   std::recursive_mutex* contextMutex = nullptr;
   std::shared_ptr<CacheBudget> budget;
   VideoDecoder decoder;
   bool decoderReady = false;
+  SourceFrameCache sourceCache;
   std::optional<FrameIdentity> decoderTailIdentity;
-  int decoderTailSerial = 0;
 
   mutable std::mutex mutex;
   std::condition_variable cv;
   std::optional<Work> queued;
   std::optional<Work> failed;
-  std::vector<Batch> batches;
+  std::vector<Result> results;
   std::thread worker;
   bool started = false;
   bool stopping = false;
@@ -227,59 +311,40 @@ struct Prefetcher::Impl {
     decoderReady = decoder.initWithDevice(path, device.Get(), &error, nullptr,
                                           contextMutex, videoStreamIndex);
     decoderTailIdentity.reset();
-    decoderTailSerial = 0;
     return decoderReady;
   }
 
-  bool publish(Batch batch, uint64_t candidateGeneration) {
+  bool publish(Result result, uint64_t candidateGeneration) {
     std::lock_guard<std::mutex> lock(mutex);
     if (stopping || candidateGeneration != generation) {
       return false;
     }
-    batches.push_back(std::move(batch));
+    results.push_back(std::move(result));
     cv.notify_all();
     return true;
   }
 
   SnapshotResult retain(const VideoFrame& decoded, const VideoReadInfo& info,
-                        int64_t ptsUs, int64_t durationUs, double decodeMs,
-                        CachedFrame* out) {
+                        int64_t sourcePtsUs, int64_t durationUs,
+                        double decodeMs, SnapshotCommandBatch* commands,
+                        std::shared_ptr<const SourceFrame>* out) {
     if (!out) {
       return SnapshotResult::Failed;
     }
-    CachedFrame retained;
+    auto retained = std::make_shared<SourceFrame>();
     SnapshotResult result =
-        snapshotFrame(decoded, budget, device.Get(), context.Get(),
-                      contextMutex, &retained.frame);
+        snapshotFrame(decoded, budget, device.Get(), commands,
+                      &retained->frame);
     if (result != SnapshotResult::Ok) {
       return result;
     }
-    retained.info = info;
-    retained.ptsUs = ptsUs;
-    retained.durationUs = durationUs;
-    retained.decodeMs = decodeMs;
+    retained->info = info;
+    retained->sourcePtsUs = sourcePtsUs;
+    retained->durationUs = durationUs;
+    retained->decodeMs = decodeMs;
+    retained->identity = identityFrom(info, sourcePtsUs, durationUs);
     *out = std::move(retained);
     return SnapshotResult::Ok;
-  }
-
-  bool retainBeforeFrame(const VideoFrame& decoded, const VideoReadInfo& info,
-                         int64_t ptsUs, int64_t durationUs, double decodeMs,
-                         std::vector<CachedFrame>* frames) {
-    if (!frames) {
-      return false;
-    }
-    CachedFrame retained;
-    SnapshotResult result =
-        retain(decoded, info, ptsUs, durationUs, decodeMs, &retained);
-    while (result == SnapshotResult::BudgetFull && !frames->empty()) {
-      frames->erase(frames->begin());
-      result = retain(decoded, info, ptsUs, durationUs, decodeMs, &retained);
-    }
-    if (result != SnapshotResult::Ok) {
-      return false;
-    }
-    frames->push_back(std::move(retained));
-    return true;
   }
 
   bool process(const Work& work) {
@@ -302,44 +367,39 @@ struct Prefetcher::Impl {
         sourceRangeEndUs <= sourceRangeStartUs) {
       return false;
     }
-    // Sequential forward refills continue from the decoder tail. Reverse
-    // refills still seek to an earlier keyframe and decode forward, as required
-    // by inter-frame codecs, but the useful preroll from that GOP is retained
-    // below instead of being thrown away and decoded again on the next refill.
-    const bool continueFromDecoderTail =
-        request.kind == RequestKind::After &&
-        decoderTailSerial == request.serial && decoderTailIdentity &&
-        sameIdentity(*decoderTailIdentity, request.boundary.identity);
-    if (!continueFromDecoderTail) {
+    // The source cache owns decoded coverage independently of transport serial
+    // and presentation direction. Decode planning therefore operates on cache
+    // gaps: cache hits do no work, forward gaps continue from the decoder tail,
+    // and all other gaps seek once and decode forward to a known join/end.
+    DecodePlan plan = planDecode(sourceCache, sourceRangeStartUs,
+                                 sourceRangeEndUs, decoderTailIdentity);
+    if (plan.kind == DecodePlanKind::CacheHit &&
+        !sourceCache.find(request.boundary.identity)) {
+      plan.kind = DecodePlanKind::SeekForward;
+      plan.decodeStartUs = sourceRangeStartUs;
+      plan.decodeEndUs = sourceRangeEndUs;
+    }
+
+    const bool decoderSeeked = plan.kind == DecodePlanKind::SeekForward;
+    if (decoderSeeked) {
       int64_t sourceRangeStart100ns = 0;
-      if (!microsecondsTo100ns(sourceRangeStartUs,
+      if (!microsecondsTo100ns(plan.decodeStartUs,
                                &sourceRangeStart100ns) ||
           !decoder.seekToTimestamp100ns(sourceRangeStart100ns)) {
         decoder.uninit();
         decoderReady = false;
         decoderTailIdentity.reset();
-        decoderTailSerial = 0;
         return false;
       }
       decoderTailIdentity.reset();
-      decoderTailSerial = 0;
     }
 
-    std::vector<CachedFrame> before;
-    std::vector<CachedFrame> after;
-    before.reserve(64);
-    after.reserve(64);
-    bool boundaryFound = continueFromDecoderTail;
+    SnapshotCommandBatch snapshotCommands(
+        deferredContext.Get(), context.Get(), contextMutex);
+    std::vector<std::shared_ptr<const SourceFrame>> stagedFrames;
     size_t decodedFrameCount = 0;
-    int64_t sourceCacheStartUs = sourceRangeStartUs;
-    if (request.kind == RequestKind::Before) {
-      sourceCacheStartUs =
-          sourceBoundaryUs > kWindowDurationUs
-              ? sourceBoundaryUs - kWindowDurationUs
-              : int64_t{0};
-    }
-
-    while (current(work.generation)) {
+    bool decodeComplete = plan.kind == DecodePlanKind::CacheHit;
+    while (!decodeComplete && current(work.generation)) {
       VideoFrame decoded;
       VideoReadInfo info{};
       const auto decodeStart = std::chrono::steady_clock::now();
@@ -360,98 +420,73 @@ struct Prefetcher::Impl {
       }
       const FrameIdentity identity = identityFrom(info, ptsUs, durationUs);
       decoderTailIdentity = identity;
-      decoderTailSerial = request.serial;
-      int64_t timelinePtsUs = 0;
-      if (!translateFromAnchor(ptsUs, sourceBoundaryUs, request.boundary.ptsUs,
-                               &timelinePtsUs)) {
-        return false;
-      }
-
-      if (!boundaryFound &&
-          sameIdentity(identity, request.boundary.identity)) {
-        boundaryFound = true;
-        if (request.kind == RequestKind::Around &&
-            !retainBeforeFrame(decoded, info, timelinePtsUs, durationUs,
-                               decodeMs, &before)) {
+      const bool alreadyStaged = std::any_of(
+          stagedFrames.begin(), stagedFrames.end(),
+          [&](const std::shared_ptr<const SourceFrame>& candidate) {
+            return sameIdentity(candidate->identity, identity);
+          });
+      if (!sourceCache.find(identity) && !alreadyStaged &&
+          frameEndUs(ptsUs, durationUs) > sourceRangeStartUs &&
+          ptsUs < sourceRangeEndUs) {
+        std::shared_ptr<const SourceFrame> retained;
+        const SnapshotResult retainResult =
+            retain(decoded, info, ptsUs, durationUs, decodeMs,
+                   &snapshotCommands, &retained);
+        if (retainResult != SnapshotResult::Ok) {
           return false;
         }
-        if (request.kind != RequestKind::After && !before.empty()) {
-          Batch batch;
-          batch.serial = request.serial;
-          batch.generation = work.generation;
-          batch.requestKind = request.kind;
-          batch.side = BatchSide::Before;
-          batch.boundary = request.boundary;
-          batch.decoderSeeked = !continueFromDecoderTail;
-          batch.decodedFrameCount = decodedFrameCount;
-          batch.frames = std::move(before);
-          if (!publish(std::move(batch), work.generation)) {
-            return false;
-          }
-        }
-        if (request.kind == RequestKind::Before ||
-            sourceRangeEndUs <= sourceBoundaryUs) {
-          return true;
-        }
-        continue;
+        stagedFrames.push_back(std::move(retained));
       }
 
-      if (!boundaryFound) {
-        if (ptsUs > sourceBoundaryUs) {
-          return false;
-        }
-        if (request.kind != RequestKind::After &&
-            frameEndUs(ptsUs, durationUs) > sourceCacheStartUs &&
-            ptsUs <= sourceBoundaryUs) {
-          if (!retainBeforeFrame(decoded, info, timelinePtsUs, durationUs,
-                                 decodeMs, &before)) {
-            return false;
-          }
-        }
-        continue;
-      }
-
-      if (frameEndUs(ptsUs, durationUs) <= sourceBoundaryUs) {
-        continue;
-      }
-
-      CachedFrame retained;
-      SnapshotResult result =
-          retain(decoded, info, timelinePtsUs, durationUs, decodeMs, &retained);
-      if (result == SnapshotResult::BudgetFull) {
-        break;
-      }
-      if (result == SnapshotResult::Failed) {
-        return false;
-      }
-      after.push_back(std::move(retained));
-      // Retain the frame covering (or immediately crossing) the requested
-      // edge. It becomes the exact decoder tail/boundary for a seek-free next
-      // refill and avoids consuming an uncacheable lookahead frame.
-      if (ptsUs >= sourceRangeEndUs ||
-          frameEndUs(ptsUs, durationUs) >= sourceRangeEndUs) {
-        break;
+      if (plan.stopAtIdentity &&
+          sameIdentity(identity, *plan.stopAtIdentity)) {
+        decodeComplete = true;
+      } else if (ptsUs >= plan.decodeEndUs ||
+                 frameEndUs(ptsUs, durationUs) >= plan.decodeEndUs) {
+        decodeComplete = true;
       }
     }
 
-    if (!boundaryFound || !current(work.generation)) {
+    if (!decodeComplete || !current(work.generation)) {
       return false;
     }
-    if (request.kind != RequestKind::Before && !after.empty()) {
-      Batch batch;
-      batch.serial = request.serial;
-      batch.generation = work.generation;
-      batch.requestKind = request.kind;
-      batch.side = BatchSide::After;
-      batch.boundary = request.boundary;
-      batch.decoderSeeked = !continueFromDecoderTail;
-      batch.decodedFrameCount = decodedFrameCount;
-      batch.frames = std::move(after);
-      if (!publish(std::move(batch), work.generation)) {
+    if (!snapshotCommands.submit()) {
+      return false;
+    }
+    SourceFrameCache committedCache = sourceCache;
+    if (!committedCache.insertBatch(stagedFrames)) {
+      return false;
+    }
+    if (plan.kind != DecodePlanKind::CacheHit) {
+      committedCache.addCoverage(plan.decodeStartUs, plan.decodeEndUs);
+    }
+    committedCache.retainRange(sourceRangeStartUs, sourceRangeEndUs);
+    if (!committedCache.covers(sourceRangeStartUs, sourceRangeEndUs) ||
+        !committedCache.find(request.boundary.identity)) {
+      return false;
+    }
+    sourceCache = std::move(committedCache);
+
+    Result result;
+    result.serial = request.serial;
+    result.generation = work.generation;
+    result.boundary = request.boundary;
+    result.rangeStartUs = request.rangeStartUs;
+    result.rangeEndUs = request.rangeEndUs;
+    result.decoderSeeked = decoderSeeked;
+    result.cacheHit = plan.kind == DecodePlanKind::CacheHit;
+    result.decodedFrameCount = decodedFrameCount;
+    for (const auto& source :
+         sourceCache.framesInRange(sourceRangeStartUs, sourceRangeEndUs)) {
+      int64_t timelinePtsUs = 0;
+      if (!translateFromAnchor(source->sourcePtsUs, sourceBoundaryUs,
+                               request.boundary.ptsUs, &timelinePtsUs)) {
         return false;
       }
+      result.frames.push_back(FrameView{source, timelinePtsUs});
     }
-    return true;
+    return !result.frames.empty() &&
+           publish(std::move(result), work.generation);
   }
 
   void run() {
@@ -482,6 +517,8 @@ struct Prefetcher::Impl {
         std::lock_guard<std::mutex> lock(mutex);
         if (!succeeded && work.generation == generation && !stopping) {
           failed = work;
+        } else if (succeeded && work.generation == generation) {
+          failed.reset();
         }
         if (working && workingRequest.generation == work.generation) {
           working = false;
@@ -491,8 +528,8 @@ struct Prefetcher::Impl {
     }
     decoder.uninit();
     decoderReady = false;
+    sourceCache.clear();
     decoderTailIdentity.reset();
-    decoderTailSerial = 0;
   }
 };
 
@@ -517,6 +554,13 @@ bool Prefetcher::start(const std::filesystem::path& path, int videoStreamIndex,
     impl_->device.Reset();
     return false;
   }
+  // Deferred contexts are the D3D11 mechanism for recording GPU work on a
+  // worker thread. Failure is non-fatal: the snapshot batch retains a correct
+  // immediate-context fallback for devices that do not expose one.
+  if (FAILED(impl_->device->CreateDeferredContext(
+          0, &impl_->deferredContext))) {
+    impl_->deferredContext.Reset();
+  }
   impl_->contextMutex = contextMutex;
   impl_->budget = CacheBudget::create();
   {
@@ -526,7 +570,9 @@ bool Prefetcher::start(const std::filesystem::path& path, int videoStreamIndex,
     impl_->working = false;
     impl_->queued.reset();
     impl_->failed.reset();
-    impl_->batches.clear();
+    impl_->results.clear();
+    impl_->sourceCache.clear();
+    impl_->decoderTailIdentity.reset();
     ++impl_->generation;
   }
   try {
@@ -536,6 +582,7 @@ bool Prefetcher::start(const std::filesystem::path& path, int videoStreamIndex,
     impl_->started = false;
     impl_->stopping = true;
     impl_->budget.reset();
+    impl_->deferredContext.Reset();
     impl_->context.Reset();
     impl_->device.Reset();
     return false;
@@ -557,7 +604,7 @@ void Prefetcher::stop() {
     ++impl_->generation;
     impl_->queued.reset();
     impl_->failed.reset();
-    impl_->batches.clear();
+    impl_->results.clear();
     impl_->cv.notify_all();
   }
   if (impl_->worker.joinable()) {
@@ -566,10 +613,11 @@ void Prefetcher::stop() {
   impl_->decoder.uninit();
   impl_->decoderReady = false;
   impl_->decoderTailIdentity.reset();
-  impl_->decoderTailSerial = 0;
+  impl_->sourceCache.clear();
   impl_->working = false;
   impl_->contextMutex = nullptr;
   impl_->budget.reset();
+  impl_->deferredContext.Reset();
   impl_->context.Reset();
   impl_->device.Reset();
 }
@@ -582,7 +630,7 @@ void Prefetcher::invalidate() {
   ++impl_->generation;
   impl_->queued.reset();
   impl_->failed.reset();
-  impl_->batches.clear();
+  impl_->results.clear();
   impl_->cv.notify_all();
 }
 
@@ -594,9 +642,9 @@ bool Prefetcher::request(const Request& request) {
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
   const bool completionPending =
-      std::any_of(impl_->batches.begin(), impl_->batches.end(),
-                  [&](const Batch& batch) {
-                    return batch.generation == impl_->generation;
+      std::any_of(impl_->results.begin(), impl_->results.end(),
+                  [&](const Result& result) {
+                    return result.generation == impl_->generation;
                   }) ||
       (impl_->failed && impl_->failed->generation == impl_->generation);
   if (!impl_->started || impl_->stopping || impl_->queued.has_value() ||
@@ -621,48 +669,44 @@ bool Prefetcher::busyFor(
     return false;
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  auto kindCovers = [&](RequestKind kind) {
-    return kind == RequestKind::Around ||
-           (direction == playback_video_frame_step::Direction::Previous &&
-            kind == RequestKind::Before) ||
-           (direction == playback_video_frame_step::Direction::Next &&
-            kind == RequestKind::After);
-  };
   auto covers = [&](const Impl::Work& work) {
     if (work.generation != impl_->generation ||
         work.request.serial != serial) {
       return false;
     }
-    return kindCovers(work.request.kind);
+    return requestCoversDirection(work.request, direction);
   };
-  auto completedBatchCovers = [&](const Batch& batch) {
-    return batch.generation == impl_->generation && batch.serial == serial &&
-           kindCovers(batch.requestKind);
+  auto completedResultCovers = [&](const Result& result) {
+    return result.generation == impl_->generation && result.serial == serial &&
+           requestCoversDirection(
+               Request{result.serial, result.boundary, result.rangeStartUs,
+                       result.rangeEndUs},
+               direction);
   };
 
   // A completed result remains busy until the output thread adopts or observes
   // it. Otherwise a refill request can advance the generation in the narrow
-  // interval between takeBatches() and this check, discarding valid work.
+  // interval between takeResults() and this check, discarding valid work.
   return (impl_->queued && covers(*impl_->queued)) ||
          (impl_->working && covers(impl_->workingRequest)) ||
-         std::any_of(impl_->batches.begin(), impl_->batches.end(),
-                     completedBatchCovers) ||
+         std::any_of(impl_->results.begin(), impl_->results.end(),
+                     completedResultCovers) ||
          (impl_->failed && covers(*impl_->failed));
 }
 
-std::vector<Batch> Prefetcher::takeBatches(int serial) {
-  std::vector<Batch> out;
+std::vector<Result> Prefetcher::takeResults(int serial) {
+  std::vector<Result> out;
   if (!impl_ || serial <= 0) {
     return out;
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  auto it = impl_->batches.begin();
-  while (it != impl_->batches.end()) {
+  auto it = impl_->results.begin();
+  while (it != impl_->results.end()) {
     if (it->generation != impl_->generation) {
-      it = impl_->batches.erase(it);
+      it = impl_->results.erase(it);
     } else if (it->serial == serial) {
       out.push_back(std::move(*it));
-      it = impl_->batches.erase(it);
+      it = impl_->results.erase(it);
     } else {
       ++it;
     }
@@ -670,18 +714,19 @@ std::vector<Batch> Prefetcher::takeBatches(int serial) {
   return out;
 }
 
-bool Prefetcher::takeFailure(int serial) {
+std::optional<Request> Prefetcher::takeFailure(int serial) {
   if (!impl_ || serial <= 0) {
-    return false;
+    return std::nullopt;
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (!impl_->failed ||
       impl_->failed->generation != impl_->generation ||
       impl_->failed->request.serial != serial) {
-    return false;
+    return std::nullopt;
   }
+  Request failedRequest = impl_->failed->request;
   impl_->failed.reset();
-  return true;
+  return failedRequest;
 }
 
 }  // namespace playback_video_frame_step_prefetch

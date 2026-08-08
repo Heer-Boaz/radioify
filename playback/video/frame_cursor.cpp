@@ -22,6 +22,16 @@ int64_t frameEndUs(const PresentedFrame& frame) {
   return frame.ptsUs + frame.durationUs;
 }
 
+bool samePrefetchRequest(
+    const playback_video_frame_step_prefetch::Request& left,
+    const playback_video_frame_step_prefetch::Request& right) {
+  return left.serial == right.serial &&
+         left.rangeStartUs == right.rangeStartUs &&
+         left.rangeEndUs == right.rangeEndUs &&
+         playback_video_frame_step_prefetch::sameIdentity(
+             left.boundary.identity, right.boundary.identity);
+}
+
 }  // namespace
 
 void Controller::PendingFrameStepSeek::begin(
@@ -52,9 +62,12 @@ void Controller::resetForSerial(
   entries_.clear();
   cursorIndex_ = 0;
   serial_ = serial;
+  prefetchCoverageValid_ = false;
+  prefetchCoverageStartUs_ = 0;
+  prefetchCoverageEndUs_ = 0;
+  failedPrefetchRequest_.reset();
   if (seekPlan) {
     frameStepMode_ = true;
-    lastFrameStepDirection_ = seekPlan->direction;
     pendingFrameStepSeek_.begin(*seekPlan);
     publishReplayPending(true);
     return;
@@ -67,37 +80,53 @@ void Controller::resetForSerial(
   publishReplayPending(false);
 }
 
-bool Controller::enterFrameStepMode(
-    playback_video_frame_step::Direction direction) {
+bool Controller::enterFrameStepMode() {
   const bool activated = !frameStepMode_;
   frameStepMode_ = true;
-  lastFrameStepDirection_ = direction;
+  if (activated) {
+    prefetchCoverageValid_ = false;
+  }
   return activated;
 }
 
-bool Controller::mergePrefetchedBatch(
-    playback_video_frame_step_prefetch::Batch batch) {
+bool Controller::adoptPrefetchedResult(
+    playback_video_frame_step_prefetch::Result result) {
+  int64_t maximumRangeDurationUs =
+      playback_video_frame_step_prefetch::kWindowDurationUs +
+      playback_video_frame_step_prefetch::kRefillLeadDurationUs;
+  if (result.boundary.durationUs > 0) {
+    if (result.boundary.durationUs >
+        (std::numeric_limits<int64_t>::max)() - maximumRangeDurationUs) {
+      maximumRangeDurationUs = (std::numeric_limits<int64_t>::max)();
+    } else {
+      maximumRangeDurationUs += result.boundary.durationUs;
+    }
+  }
   if (!frameStepMode_ || pendingFrameStepSeek_.active() ||
-      batch.serial != serial_ || entries_.empty() || batch.frames.empty()) {
+      result.serial != serial_ || entries_.empty() || result.frames.empty() ||
+      result.rangeStartUs < 0 || result.rangeEndUs <= result.rangeStartUs ||
+      result.rangeEndUs - result.rangeStartUs > maximumRangeDurationUs ||
+      result.frames.size() >
+          playback_video_frame_step_prefetch::kMaxCachedFrameCount) {
     return false;
   }
 
   std::vector<PresentedFrame> incoming;
-  incoming.reserve(batch.frames.size());
-  const bool replaceBoundary =
-      batch.requestKind ==
-          playback_video_frame_step_prefetch::RequestKind::Around &&
-      batch.side == playback_video_frame_step_prefetch::BatchSide::Before;
-  for (playback_video_frame_step_prefetch::CachedFrame& cached :
-       batch.frames) {
-    const playback_video_frame_step_prefetch::FrameIdentity identity =
-        playback_video_frame_step_prefetch::identityFrom(
-            cached.info, cached.ptsUs, cached.durationUs);
-    if (!replaceBoundary &&
-        playback_video_frame_step_prefetch::sameIdentity(
-            identity, batch.boundary.identity)) {
-      continue;
+  incoming.reserve(result.frames.size());
+  for (const playback_video_frame_step_prefetch::FrameView& view :
+       result.frames) {
+    if (!view.valid() || view.ptsUs < 0 || view.source->durationUs <= 0) {
+      return false;
     }
+    PresentedFrame rangeFrame;
+    rangeFrame.ptsUs = view.ptsUs;
+    rangeFrame.durationUs = view.source->durationUs;
+    if (frameEndUs(rangeFrame) <= result.rangeStartUs ||
+        view.ptsUs >= result.rangeEndUs) {
+      return false;
+    }
+    const playback_video_frame_step_prefetch::FrameIdentity& identity =
+        view.source->identity;
     const bool duplicate = std::any_of(
         incoming.begin(), incoming.end(), [&](const PresentedFrame& entry) {
           return playback_video_frame_step_prefetch::sameIdentity(
@@ -108,12 +137,12 @@ bool Controller::mergePrefetchedBatch(
     }
 
     PresentedFrame entry;
-    entry.frame = std::move(cached.frame);
-    entry.info = cached.info;
-    entry.ptsUs = cached.ptsUs;
-    entry.durationUs = cached.durationUs;
+    entry.sourceFrame = view.source;
+    entry.info = view.source->info;
+    entry.ptsUs = view.ptsUs;
+    entry.durationUs = view.source->durationUs;
     entry.serial = static_cast<uint64_t>(serial_);
-    entry.decodeMs = cached.decodeMs;
+    entry.decodeMs = view.source->decodeMs;
     if (!incoming.empty() && entry.ptsUs < incoming.back().ptsUs) {
       return false;
     }
@@ -125,11 +154,6 @@ bool Controller::mergePrefetchedBatch(
 
   const playback_video_frame_step_prefetch::FrameIdentity currentIdentity =
       identityFor(entries_[cursorIndex_]);
-  std::optional<size_t> boundaryIndex =
-      entryIndexForIdentity(batch.boundary.identity);
-  if (!boundaryIndex) {
-    return false;
-  }
   const bool incomingContainsCurrent = std::any_of(
       incoming.begin(), incoming.end(), [&](const PresentedFrame& entry) {
         return playback_video_frame_step_prefetch::sameIdentity(
@@ -138,110 +162,21 @@ bool Controller::mergePrefetchedBatch(
   const bool incomingContainsBoundary = std::any_of(
       incoming.begin(), incoming.end(), [&](const PresentedFrame& entry) {
         return playback_video_frame_step_prefetch::sameIdentity(
-            identityFor(entry), batch.boundary.identity);
+            identityFor(entry), result.boundary.identity);
       });
-
-  if (batch.side == playback_video_frame_step_prefetch::BatchSide::Before) {
-    if (batch.requestKind ==
-        playback_video_frame_step_prefetch::RequestKind::Around) {
-      if (!incomingContainsBoundary ||
-          (cursorIndex_ < *boundaryIndex && !incomingContainsCurrent)) {
-        return false;
-      }
-      entries_.erase(entries_.begin(),
-                     entries_.begin() +
-                         static_cast<std::ptrdiff_t>(*boundaryIndex + 1));
-    } else if (*boundaryIndex != 0) {
-      return false;
-    }
-  } else {
-    if (batch.requestKind ==
-        playback_video_frame_step_prefetch::RequestKind::Around) {
-      if (cursorIndex_ > *boundaryIndex && !incomingContainsCurrent) {
-        return false;
-      }
-      entries_.erase(
-          entries_.begin() + static_cast<std::ptrdiff_t>(*boundaryIndex + 1),
-          entries_.end());
-    } else if (*boundaryIndex + 1 != entries_.size()) {
-      return false;
-    }
+  if (!incomingContainsCurrent || !incomingContainsBoundary) {
+    return false;
   }
 
-  if (batch.side == playback_video_frame_step_prefetch::BatchSide::Before) {
-    entries_.insert(entries_.begin(), std::make_move_iterator(incoming.begin()),
-                    std::make_move_iterator(incoming.end()));
-  } else {
-    entries_.insert(entries_.end(), std::make_move_iterator(incoming.begin()),
-                    std::make_move_iterator(incoming.end()));
-  }
-
-  trimFrameStepWindow(currentIdentity);
+  entries_.assign(std::make_move_iterator(incoming.begin()),
+                  std::make_move_iterator(incoming.end()));
+  prefetchCoverageValid_ = true;
+  prefetchCoverageStartUs_ = result.rangeStartUs;
+  prefetchCoverageEndUs_ = result.rangeEndUs;
+  failedPrefetchRequest_.reset();
   rebuildFrameStepRecords(currentIdentity);
   publishReplayPending(!atNewestFrame());
   return true;
-}
-
-void Controller::prepareForPrefetchRefill(
-    playback_video_frame_step::Direction direction) {
-  if (!frameStepMode_ || pendingFrameStepSeek_.active() || entries_.empty() ||
-      cursorIndex_ >= entries_.size()) {
-    return;
-  }
-
-  const playback_video_frame_step_prefetch::FrameIdentity currentIdentity =
-      identityFor(entries_[cursorIndex_]);
-  auto leasedUsage = [&]() {
-    std::pair<size_t, size_t> usage;
-    for (const PresentedFrame& entry : entries_) {
-      if (!entry.frame.cacheLease) {
-        continue;
-      }
-      ++usage.first;
-      if (usage.second >
-          (std::numeric_limits<size_t>::max)() - entry.frame.storageBytes) {
-        usage.second = (std::numeric_limits<size_t>::max)();
-      } else {
-        usage.second += entry.frame.storageBytes;
-      }
-    }
-    return usage;
-  };
-
-  bool changed = false;
-  while (entries_.size() > 1) {
-    const std::pair<size_t, size_t> usage = leasedUsage();
-    if (usage.first <=
-            playback_video_frame_step_prefetch::kMaxCachedFrameCount / 2 &&
-        usage.second <=
-            playback_video_frame_step_prefetch::kMaxCachedBytes / 2) {
-      break;
-    }
-    const std::optional<size_t> currentIndex =
-        entryIndexForIdentity(currentIdentity);
-    if (!currentIndex) {
-      assert(false && "Frame-step refill must retain its current frame");
-      std::abort();
-    }
-
-    if (direction == playback_video_frame_step::Direction::Previous) {
-      if (*currentIndex + 1 >= entries_.size()) {
-        break;
-      }
-      entries_.pop_back();
-    } else {
-      if (*currentIndex == 0) {
-        break;
-      }
-      entries_.pop_front();
-    }
-    changed = true;
-  }
-
-  if (changed) {
-    rebuildFrameStepRecords(currentIdentity);
-    publishReplayPending(!atNewestFrame());
-  }
 }
 
 PrefetchWindow Controller::prefetchWindow() const {
@@ -261,6 +196,113 @@ PrefetchWindow Controller::prefetchWindow() const {
   window.afterDurationUs = (std::max)(
       int64_t{0}, frameEndUs(entries_.back()) - frameEndUs(current));
   return window;
+}
+
+std::optional<playback_video_frame_step_prefetch::Request>
+Controller::prefetchRequest(
+    playback_video_frame_step::Direction direction,
+    int64_t mediaDurationUs) const {
+  if (!frameStepMode_ || pendingFrameStepSeek_.active() || entries_.empty() ||
+      cursorIndex_ >= entries_.size()) {
+    return std::nullopt;
+  }
+
+  const PresentedFrame& current = entries_[cursorIndex_];
+  const int64_t currentEndUs = frameEndUs(current);
+  if ((direction == playback_video_frame_step::Direction::Previous &&
+       current.ptsUs <= 0) ||
+      (direction == playback_video_frame_step::Direction::Next &&
+       mediaDurationUs > 0 && currentEndUs >= mediaDurationUs)) {
+    return std::nullopt;
+  }
+
+  const size_t activeFrameCount =
+      direction == playback_video_frame_step::Direction::Previous
+          ? cursorIndex_
+          : entries_.size() - cursorIndex_ - 1;
+  const int64_t activeDurationUs =
+      direction == playback_video_frame_step::Direction::Previous
+          ? (std::max)(int64_t{0},
+                       current.ptsUs - entries_.front().ptsUs)
+          : (std::max)(int64_t{0},
+                       frameEndUs(entries_.back()) - currentEndUs);
+  if (prefetchCoverageValid_ &&
+      !playback_video_frame_step_prefetch::refillNeeded(
+          activeFrameCount, activeDurationUs)) {
+    return std::nullopt;
+  }
+
+  const int64_t frameDurationUs =
+      (std::max)(int64_t{1}, current.durationUs);
+  const int64_t inverseReserveUs =
+      (std::min)(playback_video_frame_step_prefetch::
+                     kRefillLeadDurationUs,
+                 frameDurationUs <=
+                         (std::numeric_limits<int64_t>::max)() /
+                             static_cast<int64_t>(
+                                 playback_video_frame_step_prefetch::
+                                     kDirectionChangeReserveFrameCount)
+                     ? frameDurationUs *
+                           static_cast<int64_t>(
+                               playback_video_frame_step_prefetch::
+                                   kDirectionChangeReserveFrameCount)
+                     : playback_video_frame_step_prefetch::
+                           kRefillLeadDurationUs);
+  auto boundedAdd = [](int64_t value, int64_t extension) {
+    return value <= (std::numeric_limits<int64_t>::max)() - extension
+               ? value + extension
+               : (std::numeric_limits<int64_t>::max)();
+  };
+
+  int64_t rangeStartUs = 0;
+  int64_t rangeEndUs = 0;
+  if (direction == playback_video_frame_step::Direction::Previous) {
+    rangeStartUs =
+        current.ptsUs >
+                playback_video_frame_step_prefetch::kWindowDurationUs
+            ? current.ptsUs -
+                  playback_video_frame_step_prefetch::kWindowDurationUs
+            : int64_t{0};
+    rangeEndUs = boundedAdd(currentEndUs, inverseReserveUs);
+    if (mediaDurationUs > 0) {
+      rangeEndUs = (std::min)(rangeEndUs, mediaDurationUs);
+    }
+  } else {
+    rangeStartUs = current.ptsUs > inverseReserveUs
+                       ? current.ptsUs - inverseReserveUs
+                       : int64_t{0};
+    rangeEndUs = boundedAdd(
+        currentEndUs,
+        playback_video_frame_step_prefetch::kWindowDurationUs);
+    if (mediaDurationUs > 0) {
+      rangeEndUs = (std::min)(rangeEndUs, mediaDurationUs);
+    }
+  }
+
+  if (rangeEndUs <= rangeStartUs ||
+      (prefetchCoverageValid_ &&
+       prefetchCoverageStartUs_ <= rangeStartUs &&
+       prefetchCoverageEndUs_ >= rangeEndUs)) {
+    return std::nullopt;
+  }
+
+  playback_video_frame_step_prefetch::Request request;
+  request.serial = serial_;
+  request.boundary = boundaryFor(current);
+  request.rangeStartUs = rangeStartUs;
+  request.rangeEndUs = rangeEndUs;
+  if (failedPrefetchRequest_ &&
+      samePrefetchRequest(*failedPrefetchRequest_, request)) {
+    return std::nullopt;
+  }
+  return request;
+}
+
+void Controller::notePrefetchFailure(
+    const playback_video_frame_step_prefetch::Request& request) {
+  if (frameStepMode_ && request.serial == serial_) {
+    failedPrefetchRequest_ = request;
+  }
 }
 
 void Controller::noteDecoded(const QueuedFrame& item) {
@@ -339,6 +381,7 @@ void Controller::appendPresented(const QueuedFrame& item,
 
   PresentedFrame entry;
   entry.frame = frame;
+  entry.sourceFrame.reset();
   entry.info = item.info;
   entry.ptsUs = item.ptsUs;
   entry.durationUs = item.durationUs;
@@ -442,7 +485,6 @@ const PresentedFrame* Controller::step(
     ++cursorIndex_;
   }
   currentLogicalIndex_ = entries_[cursorIndex_].logicalIndex;
-  lastFrameStepDirection_ = direction;
   publishReplayPending(!atNewestFrame());
   return &entries_[cursorIndex_];
 }
@@ -543,6 +585,10 @@ bool Controller::exitFrameStepModeForPlaybackResume(int serial) {
   cursorIndex_ = 0;
   frameStepMode_ = false;
   currentLogicalIndex_ = 0;
+  prefetchCoverageValid_ = false;
+  prefetchCoverageStartUs_ = 0;
+  prefetchCoverageEndUs_ = 0;
+  failedPrefetchRequest_.reset();
   publishReplayPending(false);
   return true;
 }
@@ -775,15 +821,19 @@ playback_video_frame_step_prefetch::Boundary Controller::boundaryFor(
   boundary.identity = identityFor(frame);
   boundary.ptsUs = frame.ptsUs;
   boundary.durationUs = frame.durationUs;
-  boundary.sourcePtsUs =
-      frame.info.sourcePtsTicks != kUnknown
-          ? frame.info.timestamp100ns / 10
-          : frame.ptsUs;
+  boundary.sourcePtsUs = frame.sourceFrame
+                             ? frame.sourceFrame->sourcePtsUs
+                             : frame.info.sourcePtsTicks != kUnknown
+                                   ? frame.info.timestamp100ns / 10
+                                   : frame.ptsUs;
   return boundary;
 }
 
 playback_video_frame_step_prefetch::FrameIdentity Controller::identityFor(
     const PresentedFrame& frame) {
+  if (frame.sourceFrame) {
+    return frame.sourceFrame->identity;
+  }
   return playback_video_frame_step_prefetch::identityFrom(
       frame.info, frame.ptsUs, frame.durationUs);
 }
@@ -807,6 +857,7 @@ void Controller::appendPresentedInFrameStepMode(const QueuedFrame& item,
   if (std::optional<size_t> existing = entryIndexForIdentity(identity)) {
     PresentedFrame& entry = entries_[*existing];
     entry.frame = frame;
+    entry.sourceFrame.reset();
     entry.info = item.info;
     entry.ptsUs = item.ptsUs;
     entry.durationUs = item.durationUs;
@@ -820,6 +871,7 @@ void Controller::appendPresentedInFrameStepMode(const QueuedFrame& item,
     }
     PresentedFrame entry;
     entry.frame = frame;
+    entry.sourceFrame.reset();
     entry.info = item.info;
     entry.ptsUs = item.ptsUs;
     entry.durationUs = item.durationUs;
@@ -828,6 +880,8 @@ void Controller::appendPresentedInFrameStepMode(const QueuedFrame& item,
     entries_.push_back(std::move(entry));
   }
 
+  prefetchCoverageValid_ = false;
+  failedPrefetchRequest_.reset();
   trimFrameStepWindow(identity);
   rebuildFrameStepRecords(identity);
   publishReplayPending(!atNewestFrame());
@@ -847,7 +901,7 @@ void Controller::trimFrameStepWindow(
                    frameEndUs(entries_.back()) - entries_.front().ptsUs);
     const size_t decoderBackedFrameCount = static_cast<size_t>(std::count_if(
         entries_.begin(), entries_.end(), [](const PresentedFrame& entry) {
-          return static_cast<bool>(entry.frame.hwFrameRef);
+          return static_cast<bool>(entry.videoFrame().hwFrameRef);
         }));
     if (entries_.size() <=
             playback_video_frame_step_prefetch::kMaxCachedFrameCount &&
@@ -857,35 +911,16 @@ void Controller::trimFrameStepWindow(
       break;
     }
 
-    const size_t beforeCount = *currentIndex;
-    const size_t afterCount = entries_.size() - *currentIndex - 1;
-    // Cached inverse neighbors are part of the frame-step contract, not
-    // expendable lookahead. Keep enough of them to absorb a direction change
-    // while the worker replans; trim the inactive edge beyond that reserve
-    // before sacrificing useful frames in the active direction.
-    const size_t minimumBefore =
-        lastFrameStepDirection_ == playback_video_frame_step::Direction::Next
-            ? playback_video_frame_step_prefetch::
-                  kDirectionChangeReserveFrameCount
-            : 0;
-    const size_t minimumAfter =
-        lastFrameStepDirection_ ==
-                playback_video_frame_step::Direction::Previous
-            ? playback_video_frame_step_prefetch::
-                  kDirectionChangeReserveFrameCount
-            : 0;
-    const bool mayEvictBefore = beforeCount > minimumBefore;
-    const bool mayEvictAfter = afterCount > minimumAfter;
-    if (!mayEvictBefore && !mayEvictAfter) {
-      break;
-    }
-
-    const bool preferEvictBefore =
-        lastFrameStepDirection_ == playback_video_frame_step::Direction::Next;
-    const bool evictBefore =
-        (preferEvictBefore && mayEvictBefore) || !mayEvictAfter;
-
-    if (evictBefore) {
+    const int64_t beforeDistanceUs =
+        (std::max)(int64_t{0},
+                   entries_[*currentIndex].ptsUs - entries_.front().ptsUs);
+    const int64_t afterDistanceUs =
+        (std::max)(int64_t{0},
+                   frameEndUs(entries_.back()) -
+                       frameEndUs(entries_[*currentIndex]));
+    if (*currentIndex > 0 &&
+        (*currentIndex + 1 == entries_.size() ||
+         beforeDistanceUs >= afterDistanceUs)) {
       entries_.pop_front();
     } else {
       entries_.pop_back();

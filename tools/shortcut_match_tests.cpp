@@ -5,6 +5,7 @@
 #include "playback/video/control/events.h"
 #include "playback/video/control/serial.h"
 #include "playback/video/frame_cursor.h"
+#include "playback/video/frame_step_source_cache.h"
 #include "playback/video/frame_step_seek.h"
 #include "playback/video/timing/sync.h"
 #include "playback/video/timing/timeline.h"
@@ -993,11 +994,7 @@ int main() {
 
   static_assert(
       playback_video_frame_step_prefetch::kWindowDurationUs == 1000000,
-      "Frame-step prefetch must keep a one-second decoded working set");
-  static_assert(
-      playback_video_frame_step_prefetch::kRefillSpanUs * 2 ==
-          playback_video_frame_step_prefetch::kWindowDurationUs,
-      "Frame-step prefetch must refill a symmetric activation window");
+      "Frame-step prefetch must keep a one-second active horizon");
   static_assert(
       playback_video_frame_step_prefetch::kDirectionChangeReserveFrameCount >=
           5,
@@ -1020,6 +1017,93 @@ int main() {
                   1),
       "Frame-step refill must start before either the frame or time lead is "
       "exhausted");
+
+  auto makeSourceFrame = [](int64_t tick) {
+    auto frame = std::make_shared<
+        playback_video_frame_step_prefetch::SourceFrame>();
+    frame->sourcePtsUs = tick * 10000;
+    frame->durationUs = 10000;
+    frame->info.sourcePtsTicks = tick;
+    frame->info.sourceDtsTicks = tick;
+    frame->identity = playback_video_frame_step_prefetch::identityFrom(
+        frame->info, frame->sourcePtsUs, frame->durationUs);
+    frame->frame.timestamp100ns = frame->sourcePtsUs * 10;
+    frame->frame.duration100ns = frame->durationUs * 10;
+    return frame;
+  };
+  playback_video_frame_step_prefetch::SourceFrameCache sourceCache;
+  for (int64_t tick = 0; tick < 10; ++tick) {
+    ok &= expect(sourceCache.insert(makeSourceFrame(tick)),
+                 "Source frame cache must accept each stable source frame");
+  }
+  ok &= expect(!sourceCache.insert(makeSourceFrame(5)) &&
+                   sourceCache.size() == 10,
+               "Source frame cache must deduplicate stable source identity");
+  std::vector<std::shared_ptr<
+      const playback_video_frame_step_prefetch::SourceFrame>> rejectedBatch{
+      makeSourceFrame(10), makeSourceFrame(5)};
+  ok &= expect(!sourceCache.insertBatch(rejectedBatch) &&
+                   sourceCache.size() == 10 &&
+                   !sourceCache.find(makeSourceFrame(10)->identity),
+               "Source frame cache batch insertion must be transactional");
+  sourceCache.addCoverage(0, 100000);
+  playback_video_frame_step_prefetch::DecodePlan cacheHitPlan =
+      playback_video_frame_step_prefetch::planDecode(sourceCache, 0, 100000,
+                                                     std::nullopt);
+  ok &= expect(cacheHitPlan.kind ==
+                   playback_video_frame_step_prefetch::DecodePlanKind::
+                       CacheHit,
+               "A fully covered source range must not touch the decoder");
+  const std::optional<playback_video_frame_step_prefetch::FrameIdentity>
+      sourceTail = sourceCache.last()->identity;
+  playback_video_frame_step_prefetch::DecodePlan continuePlan =
+      playback_video_frame_step_prefetch::planDecode(sourceCache, 0, 150000,
+                                                     sourceTail);
+  ok &= expect(
+      continuePlan.kind ==
+              playback_video_frame_step_prefetch::DecodePlanKind::
+                  ContinueForward &&
+          continuePlan.decodeStartUs == 100000 &&
+          continuePlan.decodeEndUs == 150000,
+      "A forward cache extension must continue from the decoder tail");
+  playback_video_frame_step_prefetch::DecodePlan cachedTailPlan =
+      playback_video_frame_step_prefetch::planDecode(
+          sourceCache, 0, 150000, makeSourceFrame(5)->identity);
+  ok &= expect(
+      cachedTailPlan.kind ==
+          playback_video_frame_step_prefetch::DecodePlanKind::ContinueForward,
+      "A decoder parked inside covered source frames must decode through the "
+      "cache instead of seeking again after a direction change");
+  playback_video_frame_step_prefetch::FrameIdentity unrelatedTail =
+      sourceCache.last()->identity;
+  unrelatedTail.sourcePtsTicks = 999;
+  playback_video_frame_step_prefetch::DecodePlan discontinuousPlan =
+      playback_video_frame_step_prefetch::planDecode(
+          sourceCache, 0, 150000, unrelatedTail);
+  ok &= expect(
+      discontinuousPlan.kind ==
+              playback_video_frame_step_prefetch::DecodePlanKind::
+                  SeekForward &&
+          discontinuousPlan.decodeStartUs == 90000,
+      "A discontinuous decoder must seek from the last cached source frame");
+
+  playback_video_frame_step_prefetch::SourceFrameCache prefixCache;
+  for (int64_t tick = 5; tick < 10; ++tick) {
+    prefixCache.insert(makeSourceFrame(tick));
+  }
+  prefixCache.addCoverage(50000, 100000);
+  playback_video_frame_step_prefetch::DecodePlan prefixPlan =
+      playback_video_frame_step_prefetch::planDecode(prefixCache, 0, 100000,
+                                                     std::nullopt);
+  ok &= expect(
+      prefixPlan.kind ==
+              playback_video_frame_step_prefetch::DecodePlanKind::
+                  SeekForward &&
+          prefixPlan.decodeStartUs == 0 && prefixPlan.decodeEndUs == 50000 &&
+          prefixPlan.stopAtIdentity &&
+          playback_video_frame_step_prefetch::sameIdentity(
+              *prefixPlan.stopAtIdentity, prefixCache.first()->identity),
+      "A reverse cache extension must decode forward only to its cached join");
   playback_video_frame_cursor::Controller prefetchedCursor;
   prefetchedCursor.resetForSerial(1);
   QueuedFrame prefetchedCurrent{};
@@ -1036,21 +1120,25 @@ int main() {
   prefetchedCursor.noteDecoded(prefetchedCurrent);
   prefetchedCursor.appendPresented(prefetchedCurrent, prefetchedCurrentFrame);
   ok &= expect(
-      prefetchedCursor.enterFrameStepMode(
-          playback_video_frame_step::Direction::Previous),
+      prefetchedCursor.enterFrameStepMode(),
       "The first frame-step request must activate proactive prefetch");
 
-  auto makeCachedFrame = [](int64_t ptsUs, int64_t durationUs,
-                            int64_t sourcePtsTicks, int64_t sourceDtsTicks) {
-    playback_video_frame_step_prefetch::CachedFrame cached;
-    cached.ptsUs = ptsUs;
-    cached.durationUs = durationUs;
-    cached.info.sourcePtsTicks = sourcePtsTicks;
-    cached.info.sourceDtsTicks = sourceDtsTicks;
-    cached.info.timestamp100ns = ptsUs * 10;
-    cached.frame.timestamp100ns = ptsUs * 10;
-    cached.frame.duration100ns = durationUs * 10;
-    return cached;
+  auto makeFrameView = [](int64_t ptsUs, int64_t durationUs,
+                          int64_t sourcePtsTicks, int64_t sourceDtsTicks,
+                          int width = 0) {
+    auto source = std::make_shared<
+        playback_video_frame_step_prefetch::SourceFrame>();
+    source->sourcePtsUs = ptsUs;
+    source->durationUs = durationUs;
+    source->info.sourcePtsTicks = sourcePtsTicks;
+    source->info.sourceDtsTicks = sourceDtsTicks;
+    source->info.timestamp100ns = ptsUs * 10;
+    source->identity = playback_video_frame_step_prefetch::identityFrom(
+        source->info, source->sourcePtsUs, source->durationUs);
+    source->frame.timestamp100ns = ptsUs * 10;
+    source->frame.duration100ns = durationUs * 10;
+    source->frame.width = width;
+    return playback_video_frame_step_prefetch::FrameView{source, ptsUs};
   };
 
   playback_video_frame_cursor::Controller previousRefillCursor;
@@ -1072,97 +1160,73 @@ int main() {
   previousRefillCursor.noteDecoded(previousRefillCurrent);
   previousRefillCursor.appendPresented(previousRefillCurrent,
                                        previousRefillCurrentFrame);
-  previousRefillCursor.enterFrameStepMode(
-      playback_video_frame_step::Direction::Previous);
-  playback_video_frame_step_prefetch::Batch previousExtension;
-  previousExtension.serial = 2;
-  previousExtension.requestKind =
-      playback_video_frame_step_prefetch::RequestKind::Before;
-  previousExtension.side =
-      playback_video_frame_step_prefetch::BatchSide::Before;
-  previousExtension.boundary = previousRefillCursor.prefetchWindow().beforeEdge;
-  for (int64_t tick = 50; tick < 100; ++tick) {
-    previousExtension.frames.push_back(
-        makeCachedFrame(tick * 10000, 10000, tick, tick));
+  previousRefillCursor.enterFrameStepMode();
+  std::optional<playback_video_frame_step_prefetch::Request> previousRequest =
+      previousRefillCursor.prefetchRequest(
+          playback_video_frame_step::Direction::Previous, 5000000);
+  ok &= expect(previousRequest &&
+                   previousRequest->boundary.ptsUs -
+                           previousRequest->rangeStartUs ==
+                       playback_video_frame_step_prefetch::kWindowDurationUs &&
+                   previousRequest->rangeEndUs >
+                       previousRequest->boundary.ptsUs,
+               "Previous-frame activation must plan one complete decoded "
+               "source horizon plus inverse guards");
+  playback_video_frame_step_prefetch::Result previousResult;
+  previousResult.serial = 2;
+  if (previousRequest) {
+    previousResult.boundary = previousRequest->boundary;
+    previousResult.rangeStartUs = previousRequest->rangeStartUs;
+    previousResult.rangeEndUs = previousRequest->rangeEndUs;
   }
-  ok &= expect(previousRefillCursor.mergePrefetchedBatch(
-                   std::move(previousExtension)) &&
+  for (int64_t tick = 0; tick <= 105; ++tick) {
+    previousResult.frames.push_back(
+        makeFrameView(tick * 10000, 10000, tick, tick));
+  }
+  ok &= expect(previousRefillCursor.adoptPrefetchedResult(
+                   std::move(previousResult)) &&
                    previousRefillCursor.prefetchWindow().beforeFrameCount ==
-                       50,
-               "Previous refill must extend the active decoded cache");
+                       100 &&
+                   previousRefillCursor.prefetchWindow().afterFrameCount == 5,
+               "A previous snapshot must provide look-behind and exact "
+               "inverse neighbors as one cache transaction");
   const playback_video_frame_cursor::PresentedFrame* previousCachedStep =
       previousRefillCursor.step(playback_video_frame_step::Direction::Previous);
   ok &= expect(previousCachedStep && previousCachedStep->ptsUs == 990000,
                "Previous-frame must consume a directionally refilled frame");
 
-  playback_video_frame_cursor::Controller reversibleTrimCursor;
-  reversibleTrimCursor.resetForSerial(3);
-  QueuedFrame reversibleTrimCurrent{};
-  reversibleTrimCurrent.ptsUs = 1500000;
-  reversibleTrimCurrent.durationUs = 10000;
-  reversibleTrimCurrent.serial = 3;
-  reversibleTrimCurrent.displayIndex = 1;
-  reversibleTrimCurrent.info.sourcePtsTicks = 150;
-  reversibleTrimCurrent.info.sourceDtsTicks = 150;
-  reversibleTrimCurrent.info.timestamp100ns =
-      reversibleTrimCurrent.ptsUs * 10;
-  VideoFrame reversibleTrimCurrentFrame{};
-  reversibleTrimCurrentFrame.timestamp100ns =
-      reversibleTrimCurrent.ptsUs * 10;
-  reversibleTrimCurrentFrame.duration100ns =
-      reversibleTrimCurrent.durationUs * 10;
-  reversibleTrimCursor.noteDecoded(reversibleTrimCurrent);
-  reversibleTrimCursor.appendPresented(reversibleTrimCurrent,
-                                        reversibleTrimCurrentFrame);
-  reversibleTrimCursor.enterFrameStepMode(
-      playback_video_frame_step::Direction::Previous);
-
-  playback_video_frame_step_prefetch::Batch reversibleAfter;
-  reversibleAfter.serial = 3;
-  reversibleAfter.requestKind =
-      playback_video_frame_step_prefetch::RequestKind::Around;
-  reversibleAfter.side =
-      playback_video_frame_step_prefetch::BatchSide::After;
-  reversibleAfter.boundary = reversibleTrimCursor.prefetchWindow().current;
-  for (int64_t tick = 151; tick <= 160; ++tick) {
-    reversibleAfter.frames.push_back(
-        makeCachedFrame(tick * 10000, 10000, tick, tick));
+  std::optional<playback_video_frame_step_prefetch::Request> reverseRequest =
+      previousRefillCursor.prefetchRequest(
+          playback_video_frame_step::Direction::Next, 5000000);
+  ok &= expect(reverseRequest.has_value(),
+               "Changing frame-step direction must immediately replan the "
+               "decoded source window");
+  playback_video_frame_step_prefetch::Result reverseResult;
+  reverseResult.serial = 2;
+  if (reverseRequest) {
+    reverseResult.boundary = reverseRequest->boundary;
+    reverseResult.rangeStartUs = reverseRequest->rangeStartUs;
+    reverseResult.rangeEndUs = reverseRequest->rangeEndUs;
   }
-  ok &= expect(
-      reversibleTrimCursor.mergePrefetchedBatch(std::move(reversibleAfter)),
-      "Direction-switch regression setup must retain forward neighbors");
-
-  playback_video_frame_step_prefetch::Batch reversibleBefore;
-  reversibleBefore.serial = 3;
-  reversibleBefore.requestKind =
-      playback_video_frame_step_prefetch::RequestKind::Before;
-  reversibleBefore.side =
-      playback_video_frame_step_prefetch::BatchSide::Before;
-  reversibleBefore.boundary =
-      reversibleTrimCursor.prefetchWindow().beforeEdge;
-  for (int64_t tick = 1; tick < 150; ++tick) {
-    reversibleBefore.frames.push_back(
-        makeCachedFrame(tick * 10000, 10000, tick, tick));
+  for (int64_t tick = 94; tick <= 199; ++tick) {
+    reverseResult.frames.push_back(
+        makeFrameView(tick * 10000, 10000, tick, tick));
   }
-  ok &= expect(
-      reversibleTrimCursor.mergePrefetchedBatch(std::move(reversibleBefore)),
-      "Previous refill must merge without invalidating inverse-step history");
-  ok &= expect(
-      reversibleTrimCursor.prefetchWindow().afterFrameCount ==
-          playback_video_frame_step_prefetch::
-              kDirectionChangeReserveFrameCount,
-      "A previous refill must preserve a useful run of exact next frames");
+  ok &= expect(previousRefillCursor.adoptPrefetchedResult(
+                   std::move(reverseResult)),
+               "Direction changes must atomically replace the cursor window "
+               "while retaining its current source identity");
   const playback_video_frame_cursor::PresentedFrame* reversibleNext =
-      reversibleTrimCursor.step(playback_video_frame_step::Direction::Next);
-  ok &= expect(reversibleNext && reversibleNext->ptsUs == 1510000,
-               "Cache trimming must preserve the immediate next frame when "
-               "a previous refill is adopted");
+      previousRefillCursor.step(playback_video_frame_step::Direction::Next);
+  ok &= expect(reversibleNext && reversibleNext->ptsUs == 1000000,
+               "A direction change must preserve the exact immediate next "
+               "frame");
   const playback_video_frame_cursor::PresentedFrame* reversiblePrevious =
-      reversibleTrimCursor.step(
+      previousRefillCursor.step(
           playback_video_frame_step::Direction::Previous);
-  ok &= expect(reversiblePrevious && reversiblePrevious->ptsUs == 1500000,
+  ok &= expect(reversiblePrevious && reversiblePrevious->ptsUs == 990000,
                "The preserved inverse neighbor must step back to the exact "
-               "segment boundary frame");
+               "current frame");
 
   playback_video_frame_cursor::PrefetchWindow initialPrefetchWindow =
       prefetchedCursor.prefetchWindow();
@@ -1173,42 +1237,58 @@ int main() {
               initialPrefetchWindow.current.ptsUs,
       "Prefetch seeks must use the decoder source timestamp while cached "
       "presentation stays on the visible timeline");
-  playback_video_frame_step_prefetch::Batch prefetchedBefore;
-  prefetchedBefore.serial = 1;
-  prefetchedBefore.requestKind =
-      playback_video_frame_step_prefetch::RequestKind::Around;
-  prefetchedBefore.side =
-      playback_video_frame_step_prefetch::BatchSide::Before;
-  prefetchedBefore.boundary = initialPrefetchWindow.current;
-  for (int64_t tick = 5; tick < 10; ++tick) {
-    prefetchedBefore.frames.push_back(
-        makeCachedFrame(tick * 10000, 10000, tick, tick));
+  std::optional<playback_video_frame_step_prefetch::Request> failedRequest =
+      prefetchedCursor.prefetchRequest(
+          playback_video_frame_step::Direction::Previous, 5000000);
+  ok &= expect(failedRequest.has_value(),
+               "The cursor must plan its initial source prefetch request");
+  if (failedRequest) {
+    prefetchedCursor.notePrefetchFailure(*failedRequest);
   }
-  playback_video_frame_step_prefetch::CachedFrame cachedBoundary =
-      makeCachedFrame(100000, 10000, 10, 10);
-  cachedBoundary.frame.width = 42;
-  prefetchedBefore.frames.push_back(std::move(cachedBoundary));
-  ok &= expect(prefetchedCursor.mergePrefetchedBatch(
-                   std::move(prefetchedBefore)),
-               "Initial frame-step prefetch must adopt decoded frames before "
-               "the current frame");
-
-  playback_video_frame_step_prefetch::Batch prefetchedAfter;
-  prefetchedAfter.serial = 1;
-  prefetchedAfter.requestKind =
-      playback_video_frame_step_prefetch::RequestKind::Around;
-  prefetchedAfter.side =
-      playback_video_frame_step_prefetch::BatchSide::After;
-  prefetchedAfter.boundary = initialPrefetchWindow.current;
-  prefetchedAfter.frames.push_back(
-      makeCachedFrame(110000, 10000, 11, 101));
-  prefetchedAfter.frames.push_back(
-      makeCachedFrame(110000, 10000, 11, 102));
-  prefetchedAfter.frames.push_back(
-      makeCachedFrame(120000, 10000, 12, 103));
-  ok &= expect(prefetchedCursor.mergePrefetchedBatch(std::move(prefetchedAfter)),
-               "Initial frame-step prefetch must adopt decoded frames after "
-               "the current frame");
+  ok &= expect(
+      !prefetchedCursor
+           .prefetchRequest(playback_video_frame_step::Direction::Previous,
+                            5000000)
+           .has_value() &&
+          prefetchedCursor
+              .prefetchRequest(playback_video_frame_step::Direction::Next,
+                               5000000)
+              .has_value(),
+      "A failed source range must fall back without retrying forever while a "
+      "different direction remains schedulable");
+  playback_video_frame_step_prefetch::Result prefetchedResult;
+  prefetchedResult.serial = 1;
+  prefetchedResult.boundary = initialPrefetchWindow.current;
+  prefetchedResult.rangeStartUs = 50000;
+  prefetchedResult.rangeEndUs = 130000;
+  playback_video_frame_step_prefetch::Result missingCurrentResult =
+      prefetchedResult;
+  for (int64_t tick = 5; tick < 10; ++tick) {
+    missingCurrentResult.frames.push_back(
+        makeFrameView(tick * 10000, 10000, tick, tick));
+  }
+  ok &= expect(
+      !prefetchedCursor.adoptPrefetchedResult(
+          std::move(missingCurrentResult)) &&
+          prefetchedCursor.prefetchWindow().current.ptsUs == 100000,
+      "A cache snapshot missing the current source identity must be rejected "
+      "without changing the cursor");
+  for (int64_t tick = 5; tick < 10; ++tick) {
+    prefetchedResult.frames.push_back(
+        makeFrameView(tick * 10000, 10000, tick, tick));
+  }
+  prefetchedResult.frames.push_back(
+      makeFrameView(100000, 10000, 10, 10, 42));
+  prefetchedResult.frames.push_back(
+      makeFrameView(110000, 10000, 11, 101));
+  prefetchedResult.frames.push_back(
+      makeFrameView(110000, 10000, 11, 102));
+  prefetchedResult.frames.push_back(
+      makeFrameView(120000, 10000, 12, 103));
+  ok &= expect(prefetchedCursor.adoptPrefetchedResult(
+                   std::move(prefetchedResult)),
+               "Initial frame-step prefetch must atomically adopt both sides "
+               "of the current frame");
 
   playback_video_frame_cursor::PrefetchWindow adoptedPrefetchWindow =
       prefetchedCursor.prefetchWindow();
@@ -1229,7 +1309,7 @@ int main() {
   prefetchedCursor.step(playback_video_frame_step::Direction::Next);
   cachedStep =
       prefetchedCursor.step(playback_video_frame_step::Direction::Next);
-  ok &= expect(cachedStep && cachedStep->frame.width == 42,
+  ok &= expect(cachedStep && cachedStep->videoFrame().width == 42,
                "Initial prefetch must detach the current frame from the "
                "primary decoder surface pool");
   const playback_video_frame_cursor::PresentedFrame* firstDuplicate =
@@ -1243,22 +1323,26 @@ int main() {
                "Prefetch identities must preserve distinct decoded frames "
                "that share a presentation timestamp");
 
-  playback_video_frame_cursor::PrefetchWindow extensionWindow =
-      prefetchedCursor.prefetchWindow();
-  playback_video_frame_step_prefetch::Batch forwardExtension;
-  forwardExtension.serial = 1;
-  forwardExtension.requestKind =
-      playback_video_frame_step_prefetch::RequestKind::After;
-  forwardExtension.side =
-      playback_video_frame_step_prefetch::BatchSide::After;
-  forwardExtension.boundary = extensionWindow.afterEdge;
-  for (int64_t tick = 13; tick <= 132; ++tick) {
-    forwardExtension.frames.push_back(
-        makeCachedFrame(tick * 10000, 10000, tick, tick + 100));
+  playback_video_frame_step_prefetch::Result fullWindowResult;
+  fullWindowResult.serial = 1;
+  fullWindowResult.boundary = prefetchedCursor.prefetchWindow().current;
+  fullWindowResult.rangeStartUs = 0;
+  fullWindowResult.rangeEndUs =
+      playback_video_frame_step_prefetch::kWindowDurationUs;
+  for (int64_t tick = 0; tick < 100; ++tick) {
+    if (tick == 11) {
+      fullWindowResult.frames.push_back(
+          makeFrameView(110000, 10000, 11, 101));
+      fullWindowResult.frames.push_back(
+          makeFrameView(110000, 10000, 11, 102));
+    } else {
+      fullWindowResult.frames.push_back(
+          makeFrameView(tick * 10000, 10000, tick, tick));
+    }
   }
-  ok &= expect(prefetchedCursor.mergePrefetchedBatch(
-                   std::move(forwardExtension)),
-               "Forward low-water refill must extend the decoded cache");
+  ok &= expect(prefetchedCursor.adoptPrefetchedResult(
+                   std::move(fullWindowResult)),
+               "A refill must replace the complete decoded cache snapshot");
   playback_video_frame_cursor::PrefetchWindow boundedPrefetchWindow =
       prefetchedCursor.prefetchWindow();
   ok &= expect(
@@ -1271,8 +1355,19 @@ int main() {
               boundedPrefetchWindow.current.durationUs +
               boundedPrefetchWindow.afterDurationUs <=
           playback_video_frame_step_prefetch::kWindowDurationUs,
-      "Frame-step prefetch must evict an edge when its decoded window is "
-      "exceeded");
+      "An adopted one-second snapshot must not expose a larger presentation "
+      "span");
+  while (prefetchedCursor.prefetchWindow().afterFrameCount >
+         playback_video_frame_step_prefetch::kRefillLeadFrameCount) {
+    prefetchedCursor.step(playback_video_frame_step::Direction::Next);
+  }
+  ok &= expect(
+      prefetchedCursor
+          .prefetchRequest(playback_video_frame_step::Direction::Next,
+                           5000000)
+          .has_value(),
+      "The cursor cache owner must schedule a forward refill before its "
+      "decoded lead is exhausted");
 
   playback_video_frame_step_seek::Controller stepSeekHandoff;
   playback_video_frame_step_seek::Plan handoffSeekPlan;

@@ -449,6 +449,7 @@ target_sources(shortcut_match_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/audio/clock_reacquire.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/control/serial.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/frame_cursor.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_step_source_cache.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/frame_step_seek.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/main_clock.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/state/machine.cpp
