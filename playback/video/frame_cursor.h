@@ -90,11 +90,14 @@ class Controller {
   PrefetchWindow prefetchWindow() const;
   std::optional<playback_video_frame_step_prefetch::Request> prefetchRequest(
       playback_video_frame_step::Direction direction,
-      int64_t mediaDurationUs) const;
+      int64_t mediaDurationUs,
+      int64_t horizonUs =
+          playback_video_frame_step_prefetch::kWindowDurationUs);
   void notePrefetchFailure(
       const playback_video_frame_step_prefetch::Request& request);
   void noteDecoded(const QueuedFrame& item);
   void appendPresented(const QueuedFrame& item, const VideoFrame& frame);
+  bool decodedNextIsStale(const QueuedFrame& item) const;
   const PresentedFrame* peekNext() const;
   StepTarget target(playback_video_frame_step::Direction direction) const;
   const PresentedFrame* step(playback_video_frame_step::Direction direction);
@@ -149,6 +152,9 @@ class Controller {
       const PresentedFrame& frame);
   std::optional<size_t> entryIndexForIdentity(
       const playback_video_frame_step_prefetch::FrameIdentity& identity) const;
+  bool refreshFrameStepView(
+      const playback_video_frame_step_prefetch::FrameIdentity&
+          currentIdentity);
   void rebuildFrameStepRecords(
       const playback_video_frame_step_prefetch::FrameIdentity&
           currentIdentity);
@@ -163,6 +169,7 @@ class Controller {
 
   std::deque<PresentedFrame> entries_;
   std::vector<playback_video_frame_step_seek::FrameRecord> records_;
+  playback_video_frame_step_prefetch::SourceFrameCache sourceCache_;
   PendingFrameStepSeek pendingFrameStepSeek_;
   std::atomic<int> replaySerial_{0};
   std::atomic<bool> replayPending_{false};
@@ -170,9 +177,10 @@ class Controller {
   uint64_t currentLogicalIndex_ = 0;
   int serial_ = 0;
   bool frameStepMode_ = false;
-  bool prefetchCoverageValid_ = false;
-  int64_t prefetchCoverageStartUs_ = 0;
-  int64_t prefetchCoverageEndUs_ = 0;
+  std::optional<playback_video_frame_step_prefetch::FrameIdentity>
+      sourceStartIdentity_;
+  std::optional<playback_video_frame_step_prefetch::FrameIdentity>
+      sourceEndIdentity_;
   std::optional<playback_video_frame_step_prefetch::Request>
       failedPrefetchRequest_;
 };

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "playback/video/decoder.h"
+#include "playback/video/frame_step.h"
 
 namespace playback_video_frame_step_prefetch {
 
@@ -55,63 +56,46 @@ struct SourceFrame {
   double decodeMs = 0.0;
 };
 
-struct CoverageSpan {
-  int64_t startUs = 0;
-  int64_t endUs = 0;
+struct FrameWindow {
+  std::vector<std::shared_ptr<const SourceFrame>> frames;
+  size_t anchorIndex = 0;
 
-  bool valid() const { return startUs >= 0 && endUs > startUs; }
-  bool covers(int64_t start, int64_t end) const {
-    return valid() && startUs <= start && endUs >= end;
-  }
+  bool valid() const { return !frames.empty() && anchorIndex < frames.size(); }
 };
 
+// The output thread is the sole owner of this cache. Decoder workers publish
+// immutable, forward-decoded runs; a run is committed only when its exact join
+// identity agrees with the existing chain. Consequently adjacency, rather than
+// a separately maintained timestamp interval, is the cache's source of truth.
 class SourceFrameCache {
  public:
-  bool insert(std::shared_ptr<const SourceFrame> frame);
-  bool insertBatch(
-      const std::vector<std::shared_ptr<const SourceFrame>>& frames);
+  bool commitDecodedRun(
+      playback_video_frame_step::Direction direction,
+      const FrameIdentity& joinIdentity,
+      std::shared_ptr<const SourceFrame> joinFrame,
+      const std::vector<std::shared_ptr<const SourceFrame>>& decodedFrames);
+
   std::shared_ptr<const SourceFrame> find(
       const FrameIdentity& identity) const;
-  std::vector<std::shared_ptr<const SourceFrame>> framesInRange(
-      int64_t startUs, int64_t endUs) const;
-
-  void addCoverage(int64_t startUs, int64_t endUs);
-  bool covers(int64_t startUs, int64_t endUs) const;
-  std::optional<CoverageSpan> bestCoverageFor(int64_t startUs,
-                                               int64_t endUs) const;
-  void retainRange(int64_t startUs, int64_t endUs);
+  FrameWindow windowAround(const FrameIdentity& anchorIdentity,
+                           int64_t beforeDurationUs, int64_t afterDurationUs,
+                           size_t maximumFrameCount) const;
+  bool retainWindow(const FrameIdentity& anchorIdentity,
+                    int64_t beforeDurationUs, int64_t afterDurationUs,
+                    size_t maximumFrameCount);
   void clear();
 
-  const std::shared_ptr<const SourceFrame>& first() const;
-  const std::shared_ptr<const SourceFrame>& last() const;
-  size_t size() const { return frames_.size(); }
-  bool empty() const { return frames_.empty(); }
+  size_t size() const { return nodes_.size(); }
+  bool empty() const { return nodes_.empty(); }
 
  private:
-  std::vector<std::shared_ptr<const SourceFrame>> frames_;
-  std::vector<CoverageSpan> coverage_;
+  struct Node {
+    std::shared_ptr<const SourceFrame> frame;
+    std::optional<FrameIdentity> previous;
+    std::optional<FrameIdentity> next;
+  };
+
+  std::vector<Node> nodes_;
 };
-
-enum class DecodePlanKind {
-  CacheHit,
-  ContinueForward,
-  SeekForward,
-};
-
-struct DecodePlan {
-  DecodePlanKind kind = DecodePlanKind::SeekForward;
-  int64_t decodeStartUs = 0;
-  int64_t decodeEndUs = 0;
-  std::optional<FrameIdentity> stopAtIdentity;
-
-  bool valid() const {
-    return kind == DecodePlanKind::CacheHit ||
-           (decodeStartUs >= 0 && decodeEndUs > decodeStartUs);
-  }
-};
-
-DecodePlan planDecode(const SourceFrameCache& cache, int64_t rangeStartUs,
-                      int64_t rangeEndUs,
-                      const std::optional<FrameIdentity>& decoderTail);
 
 }  // namespace playback_video_frame_step_prefetch

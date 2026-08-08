@@ -1,8 +1,8 @@
 #include "playback/video/frame_step_source_cache.h"
 
 #include <algorithm>
-#include <cassert>
 #include <limits>
+#include <utility>
 
 namespace playback_video_frame_step_prefetch {
 namespace {
@@ -16,221 +16,213 @@ int64_t frameEndUs(const SourceFrame& frame) {
   return frame.sourcePtsUs + frame.durationUs;
 }
 
-bool frameLess(const std::shared_ptr<const SourceFrame>& left,
-               const std::shared_ptr<const SourceFrame>& right) {
-  if (left->sourcePtsUs != right->sourcePtsUs) {
-    return left->sourcePtsUs < right->sourcePtsUs;
-  }
-  if (left->identity.sourcePtsTicks != right->identity.sourcePtsTicks) {
-    return left->identity.sourcePtsTicks < right->identity.sourcePtsTicks;
-  }
-  return left->identity.sourceDtsTicks < right->identity.sourceDtsTicks;
+bool validFrame(const std::shared_ptr<const SourceFrame>& frame) {
+  return frame && frame->sourcePtsUs >= 0 && frame->durationUs > 0 &&
+         frame->identity.ptsUs == frame->sourcePtsUs &&
+         frame->identity.durationUs == frame->durationUs;
+}
+
+template <typename Nodes>
+auto findNode(Nodes& nodes, const FrameIdentity& identity) {
+  return std::find_if(nodes.begin(), nodes.end(), [&](const auto& node) {
+    return node.frame && sameIdentity(node.frame->identity, identity);
+  });
+}
+
+bool containsIdentity(const std::vector<FrameIdentity>& identities,
+                      const FrameIdentity& candidate) {
+  return std::any_of(identities.begin(), identities.end(),
+                     [&](const FrameIdentity& identity) {
+                       return sameIdentity(identity, candidate);
+                     });
 }
 
 }  // namespace
 
-bool SourceFrameCache::insert(std::shared_ptr<const SourceFrame> frame) {
-  return insertBatch({std::move(frame)});
-}
+bool SourceFrameCache::commitDecodedRun(
+    playback_video_frame_step::Direction direction,
+    const FrameIdentity& joinIdentity,
+    std::shared_ptr<const SourceFrame> joinFrame,
+    const std::vector<std::shared_ptr<const SourceFrame>>& decodedFrames) {
+  std::vector<std::shared_ptr<const SourceFrame>> run;
+  run.reserve(decodedFrames.size() + 1);
+  if (direction == playback_video_frame_step::Direction::Previous) {
+    run.insert(run.end(), decodedFrames.begin(), decodedFrames.end());
+    if (joinFrame) {
+      run.push_back(joinFrame);
+    }
+  } else {
+    if (joinFrame) {
+      run.push_back(joinFrame);
+    }
+    run.insert(run.end(), decodedFrames.begin(), decodedFrames.end());
+  }
 
-bool SourceFrameCache::insertBatch(
-    const std::vector<std::shared_ptr<const SourceFrame>>& frames) {
-  if (frames.empty()) {
+  std::vector<Node> committed = nodes_;
+  auto join = findNode(committed, joinIdentity);
+  if (join == committed.end()) {
+    if (!validFrame(joinFrame) ||
+        !sameIdentity(joinFrame->identity, joinIdentity)) {
+      return false;
+    }
+    committed.push_back(Node{std::move(joinFrame), std::nullopt, std::nullopt});
+  } else if (joinFrame &&
+             !sameIdentity(join->frame->identity, joinFrame->identity)) {
+    return false;
+  }
+
+  if (run.empty()) {
+    // The join was already cached and this refill reached a media boundary.
+    nodes_.swap(committed);
     return true;
   }
 
-  std::vector<std::shared_ptr<const SourceFrame>> committed = frames_;
-  committed.reserve(committed.size() + frames.size());
-  for (const auto& frame : frames) {
-    if (!frame || frame->sourcePtsUs < 0 || frame->durationUs <= 0 ||
-        std::any_of(committed.begin(), committed.end(),
-                    [&](const auto& candidate) {
-                      return sameIdentity(candidate->identity,
-                                          frame->identity);
-                    })) {
+  std::vector<FrameIdentity> runIdentities;
+  runIdentities.reserve(run.size());
+  for (const auto& frame : run) {
+    if (!validFrame(frame) ||
+        containsIdentity(runIdentities, frame->identity)) {
       return false;
     }
-    auto position =
-        std::lower_bound(committed.begin(), committed.end(), frame, frameLess);
-    committed.insert(position, frame);
+    if (!runIdentities.empty()) {
+      const auto& previous = run[runIdentities.size() - 1];
+      if (frame->sourcePtsUs < previous->sourcePtsUs) {
+        return false;
+      }
+    }
+    runIdentities.push_back(frame->identity);
+    if (findNode(committed, frame->identity) == committed.end()) {
+      committed.push_back(Node{frame, std::nullopt, std::nullopt});
+    }
   }
-  frames_.swap(committed);
+
+  const bool joinsRun =
+      direction == playback_video_frame_step::Direction::Previous
+          ? sameIdentity(runIdentities.back(), joinIdentity)
+          : sameIdentity(runIdentities.front(), joinIdentity);
+  if (!joinsRun) {
+    // When the join was already cached it is intentionally omitted from the
+    // payload. Add it to the local sequence solely for link validation.
+    if (direction == playback_video_frame_step::Direction::Previous) {
+      runIdentities.push_back(joinIdentity);
+    } else {
+      runIdentities.insert(runIdentities.begin(), joinIdentity);
+    }
+  }
+
+  for (size_t index = 1; index < runIdentities.size(); ++index) {
+    auto left = findNode(committed, runIdentities[index - 1]);
+    auto right = findNode(committed, runIdentities[index]);
+    if (left == committed.end() || right == committed.end()) {
+      return false;
+    }
+    if (right->frame->sourcePtsUs < left->frame->sourcePtsUs) {
+      return false;
+    }
+    if ((left->next && !sameIdentity(*left->next, right->frame->identity)) ||
+        (right->previous &&
+         !sameIdentity(*right->previous, left->frame->identity))) {
+      return false;
+    }
+    left->next = right->frame->identity;
+    right->previous = left->frame->identity;
+  }
+
+  nodes_.swap(committed);
   return true;
 }
 
 std::shared_ptr<const SourceFrame> SourceFrameCache::find(
     const FrameIdentity& identity) const {
-  auto found = std::find_if(
-      frames_.begin(), frames_.end(), [&](const auto& candidate) {
-        return sameIdentity(candidate->identity, identity);
-      });
-  return found == frames_.end() ? std::shared_ptr<const SourceFrame>{}
-                                : *found;
+  auto found = findNode(nodes_, identity);
+  return found == nodes_.end() ? std::shared_ptr<const SourceFrame>{}
+                               : found->frame;
 }
 
-std::vector<std::shared_ptr<const SourceFrame>>
-SourceFrameCache::framesInRange(int64_t startUs, int64_t endUs) const {
-  std::vector<std::shared_ptr<const SourceFrame>> result;
-  if (startUs < 0 || endUs <= startUs) {
-    return result;
+FrameWindow SourceFrameCache::windowAround(const FrameIdentity& anchorIdentity,
+                                           int64_t beforeDurationUs,
+                                           int64_t afterDurationUs,
+                                           size_t maximumFrameCount) const {
+  FrameWindow window;
+  if (beforeDurationUs < 0 || afterDurationUs < 0 || maximumFrameCount == 0) {
+    return window;
   }
-  for (const auto& frame : frames_) {
-    if (frame->sourcePtsUs >= endUs) {
+  auto anchor = findNode(nodes_, anchorIdentity);
+  if (anchor == nodes_.end()) {
+    return window;
+  }
+
+  std::vector<std::shared_ptr<const SourceFrame>> before;
+  const Node* cursor = &*anchor;
+  while (beforeDurationUs > 0 && cursor->previous &&
+         before.size() + 1 < maximumFrameCount) {
+    auto previous = findNode(nodes_, *cursor->previous);
+    if (previous == nodes_.end()) {
+      return {};
+    }
+    before.push_back(previous->frame);
+    cursor = &*previous;
+    if (anchor->frame->sourcePtsUs - cursor->frame->sourcePtsUs >=
+        beforeDurationUs) {
       break;
     }
-    if (frameEndUs(*frame) > startUs) {
-      result.push_back(frame);
+  }
+  std::reverse(before.begin(), before.end());
+
+  window.frames = before;
+  window.anchorIndex = window.frames.size();
+  window.frames.push_back(anchor->frame);
+  cursor = &*anchor;
+  while (afterDurationUs > 0 && cursor->next &&
+         window.frames.size() < maximumFrameCount) {
+    auto next = findNode(nodes_, *cursor->next);
+    if (next == nodes_.end()) {
+      return {};
+    }
+    window.frames.push_back(next->frame);
+    cursor = &*next;
+    if (frameEndUs(*cursor->frame) - frameEndUs(*anchor->frame) >=
+        afterDurationUs) {
+      break;
     }
   }
-  return result;
+  return window;
 }
 
-void SourceFrameCache::addCoverage(int64_t startUs, int64_t endUs) {
-  CoverageSpan incoming{startUs, endUs};
-  if (!incoming.valid()) {
-    return;
+bool SourceFrameCache::retainWindow(const FrameIdentity& anchorIdentity,
+                                    int64_t beforeDurationUs,
+                                    int64_t afterDurationUs,
+                                    size_t maximumFrameCount) {
+  FrameWindow retained = windowAround(anchorIdentity, beforeDurationUs,
+                                      afterDurationUs, maximumFrameCount);
+  if (!retained.valid()) {
+    return false;
   }
-  std::vector<CoverageSpan> merged;
-  merged.reserve(coverage_.size() + 1);
-  bool inserted = false;
-  for (const CoverageSpan& span : coverage_) {
-    if (span.endUs < incoming.startUs) {
-      merged.push_back(span);
-    } else if (incoming.endUs < span.startUs) {
-      if (!inserted) {
-        merged.push_back(incoming);
-        inserted = true;
-      }
-      merged.push_back(span);
-    } else {
-      incoming.startUs = (std::min)(incoming.startUs, span.startUs);
-      incoming.endUs = (std::max)(incoming.endUs, span.endUs);
+  const auto retainedIdentity = [&](const FrameIdentity& identity) {
+    return std::any_of(retained.frames.begin(), retained.frames.end(),
+                       [&](const std::shared_ptr<const SourceFrame>& frame) {
+                         return sameIdentity(frame->identity, identity);
+                       });
+  };
+  for (Node& node : nodes_) {
+    if (!retainedIdentity(node.frame->identity)) {
+      continue;
+    }
+    if (node.previous && !retainedIdentity(*node.previous)) {
+      node.previous.reset();
+    }
+    if (node.next && !retainedIdentity(*node.next)) {
+      node.next.reset();
     }
   }
-  if (!inserted) {
-    merged.push_back(incoming);
-  }
-  coverage_ = std::move(merged);
+  nodes_.erase(std::remove_if(nodes_.begin(), nodes_.end(),
+                              [&](const Node& node) {
+                                return !retainedIdentity(node.frame->identity);
+                              }),
+               nodes_.end());
+  return true;
 }
 
-bool SourceFrameCache::covers(int64_t startUs, int64_t endUs) const {
-  return std::any_of(coverage_.begin(), coverage_.end(),
-                     [&](const CoverageSpan& span) {
-                       return span.covers(startUs, endUs);
-                     });
-}
-
-std::optional<CoverageSpan> SourceFrameCache::bestCoverageFor(
-    int64_t startUs, int64_t endUs) const {
-  std::optional<CoverageSpan> best;
-  int64_t bestOverlap = 0;
-  for (const CoverageSpan& span : coverage_) {
-    const int64_t overlapStart = (std::max)(startUs, span.startUs);
-    const int64_t overlapEnd = (std::min)(endUs, span.endUs);
-    const int64_t overlap = (std::max)(int64_t{0}, overlapEnd - overlapStart);
-    if (overlap > bestOverlap) {
-      best = span;
-      bestOverlap = overlap;
-    }
-  }
-  return best;
-}
-
-void SourceFrameCache::retainRange(int64_t startUs, int64_t endUs) {
-  if (startUs < 0 || endUs <= startUs) {
-    clear();
-    return;
-  }
-  frames_.erase(
-      std::remove_if(frames_.begin(), frames_.end(), [&](const auto& frame) {
-        return frameEndUs(*frame) <= startUs || frame->sourcePtsUs >= endUs;
-      }),
-      frames_.end());
-
-  std::vector<CoverageSpan> retainedCoverage;
-  retainedCoverage.reserve(coverage_.size());
-  for (const CoverageSpan& span : coverage_) {
-    CoverageSpan retained{(std::max)(startUs, span.startUs),
-                          (std::min)(endUs, span.endUs)};
-    if (retained.valid()) {
-      retainedCoverage.push_back(retained);
-    }
-  }
-  coverage_ = std::move(retainedCoverage);
-}
-
-void SourceFrameCache::clear() {
-  frames_.clear();
-  coverage_.clear();
-}
-
-const std::shared_ptr<const SourceFrame>& SourceFrameCache::first() const {
-  assert(!frames_.empty());
-  return frames_.front();
-}
-
-const std::shared_ptr<const SourceFrame>& SourceFrameCache::last() const {
-  assert(!frames_.empty());
-  return frames_.back();
-}
-
-DecodePlan planDecode(const SourceFrameCache& cache, int64_t rangeStartUs,
-                      int64_t rangeEndUs,
-                      const std::optional<FrameIdentity>& decoderTail) {
-  DecodePlan plan;
-  plan.decodeStartUs = rangeStartUs;
-  plan.decodeEndUs = rangeEndUs;
-  if (rangeStartUs < 0 || rangeEndUs <= rangeStartUs) {
-    return plan;
-  }
-  if (cache.covers(rangeStartUs, rangeEndUs)) {
-    plan.kind = DecodePlanKind::CacheHit;
-    return plan;
-  }
-
-  const std::optional<CoverageSpan> coverage =
-      cache.bestCoverageFor(rangeStartUs, rangeEndUs);
-  if (!coverage || cache.empty()) {
-    plan.kind = DecodePlanKind::SeekForward;
-    return plan;
-  }
-
-  if (coverage->startUs > rangeStartUs &&
-      coverage->endUs >= rangeEndUs) {
-    plan.kind = DecodePlanKind::SeekForward;
-    plan.decodeEndUs = coverage->startUs;
-    const auto joinFrames =
-        cache.framesInRange(coverage->startUs, coverage->endUs);
-    if (!joinFrames.empty()) {
-      plan.stopAtIdentity = joinFrames.front()->identity;
-    }
-    return plan;
-  }
-
-  if (coverage->startUs <= rangeStartUs &&
-      coverage->endUs < rangeEndUs) {
-    const auto coveredFrames =
-        cache.framesInRange(rangeStartUs, coverage->endUs);
-    const std::shared_ptr<const SourceFrame> tailFrame =
-        decoderTail ? cache.find(*decoderTail)
-                    : std::shared_ptr<const SourceFrame>{};
-    if (tailFrame && tailFrame->sourcePtsUs < coverage->endUs &&
-        frameEndUs(*tailFrame) > coverage->startUs) {
-      plan.kind = DecodePlanKind::ContinueForward;
-      plan.decodeStartUs = coverage->endUs;
-      return plan;
-    }
-    plan.kind = DecodePlanKind::SeekForward;
-    if (!coveredFrames.empty()) {
-      plan.decodeStartUs = coveredFrames.back()->sourcePtsUs;
-    } else {
-      plan.decodeStartUs = coverage->endUs;
-    }
-    return plan;
-  }
-
-  plan.kind = DecodePlanKind::SeekForward;
-  return plan;
-}
+void SourceFrameCache::clear() { nodes_.clear(); }
 
 }  // namespace playback_video_frame_step_prefetch

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -16,11 +17,11 @@
 
 namespace playback_video_frame_step_prefetch {
 
-// Keep one direction-neutral decoded source cache with a one-second active
-// prefetch horizon plus exact inverse neighbors as a guard. The source cache
-// fills only uncovered ranges. Independent frame and one-GiB logical-byte
-// ceilings prevent malformed timing or very large surfaces from becoming
-// unbounded.
+// Keep a one-second active prefetch horizon plus exact inverse neighbors as a
+// direction-change guard. Decoder workers publish only the missing, contiguous
+// run at one cache edge; the output-thread cache remains the sole cache owner.
+// Independent frame and one-GiB logical-byte ceilings keep malformed timing or
+// very large surfaces bounded.
 inline constexpr int64_t kWindowDurationUs = 1000000;
 inline constexpr int64_t kRefillLeadDurationUs = 250000;
 inline constexpr size_t kRefillLeadFrameCount = 8;
@@ -43,30 +44,30 @@ struct Boundary {
   bool valid() const { return ptsUs >= 0 && durationUs > 0; }
 };
 
-struct FrameView {
-  std::shared_ptr<const SourceFrame> source;
-  int64_t ptsUs = 0;
+struct Request {
+  int serial = 0;
+  playback_video_frame_step::Direction direction =
+      playback_video_frame_step::Direction::Next;
+  Boundary boundary;
+  Boundary join;
+  int64_t rangeStartUs = 0;
+  int64_t rangeEndUs = 0;
+  bool joinCached = false;
 
-  bool valid() const { return source != nullptr; }
+  bool valid() const {
+    return serial > 0 && boundary.valid() && join.valid() &&
+           rangeStartUs >= 0 && rangeEndUs > rangeStartUs;
+  }
 };
 
 struct Result {
-  int serial = 0;
+  Request request;
   uint64_t generation = 0;
-  Boundary boundary;
-  int64_t rangeStartUs = 0;
-  int64_t rangeEndUs = 0;
   bool decoderSeeked = false;
-  bool cacheHit = false;
+  bool reachedMediaBoundary = false;
   size_t decodedFrameCount = 0;
-  std::vector<FrameView> frames;
-};
-
-struct Request {
-  int serial = 0;
-  Boundary boundary;
-  int64_t rangeStartUs = 0;
-  int64_t rangeEndUs = 0;
+  std::shared_ptr<const SourceFrame> joinFrame;
+  std::vector<std::shared_ptr<const SourceFrame>> frames;
 };
 
 class Prefetcher {
@@ -85,6 +86,9 @@ class Prefetcher {
   bool request(const Request& request);
   bool busyFor(int serial,
                playback_video_frame_step::Direction direction) const;
+  bool waitUntilIdleOrCompleted(int serial,
+                                playback_video_frame_step::Direction direction,
+                                std::chrono::milliseconds timeout) const;
   std::vector<Result> takeResults(int serial);
   std::optional<Request> takeFailure(int serial);
 

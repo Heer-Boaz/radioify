@@ -28,33 +28,9 @@ int64_t frameEndUs(int64_t ptsUs, int64_t durationUs) {
   return ptsUs + durationUs;
 }
 
-bool requestCoversDirection(
-    const Request& request,
-    playback_video_frame_step::Direction direction) {
-  if (direction == playback_video_frame_step::Direction::Previous) {
-    return request.rangeStartUs < request.boundary.ptsUs;
-  }
-  return request.rangeEndUs >
-         frameEndUs(request.boundary.ptsUs, request.boundary.durationUs);
-}
-
-bool translateFromAnchor(int64_t value, int64_t fromAnchor, int64_t toAnchor,
-                         int64_t* translated) {
-  if (!translated || value < 0 || fromAnchor < 0 || toAnchor < 0) {
-    return false;
-  }
-  if (value >= fromAnchor) {
-    const int64_t delta = value - fromAnchor;
-    if (toAnchor > (std::numeric_limits<int64_t>::max)() - delta) {
-      return false;
-    }
-    *translated = toAnchor + delta;
-    return true;
-  }
-
-  const int64_t delta = fromAnchor - value;
-  *translated = toAnchor >= delta ? toAnchor - delta : int64_t{0};
-  return true;
+bool requestCoversDirection(const Request& request,
+                            playback_video_frame_step::Direction direction) {
+  return request.direction == direction;
 }
 
 bool microsecondsTo100ns(int64_t valueUs, int64_t* value100ns) {
@@ -283,7 +259,6 @@ struct Prefetcher::Impl {
   std::shared_ptr<CacheBudget> budget;
   VideoDecoder decoder;
   bool decoderReady = false;
-  SourceFrameCache sourceCache;
   std::optional<FrameIdentity> decoderTailIdentity;
 
   mutable std::mutex mutex;
@@ -332,9 +307,8 @@ struct Prefetcher::Impl {
       return SnapshotResult::Failed;
     }
     auto retained = std::make_shared<SourceFrame>();
-    SnapshotResult result =
-        snapshotFrame(decoded, budget, device.Get(), commands,
-                      &retained->frame);
+    SnapshotResult result = snapshotFrame(decoded, budget, device.Get(),
+                                          commands, &retained->frame);
     if (result != SnapshotResult::Ok) {
       return result;
     }
@@ -354,38 +328,22 @@ struct Prefetcher::Impl {
 
     const Request& request = work.request;
     constexpr int64_t kUnknown = (std::numeric_limits<int64_t>::min)();
-    const int64_t sourceBoundaryUs =
-        request.boundary.sourcePtsUs != kUnknown
-            ? request.boundary.sourcePtsUs
-            : request.boundary.ptsUs;
-    int64_t sourceRangeStartUs = 0;
-    int64_t sourceRangeEndUs = 0;
-    if (!translateFromAnchor(request.rangeStartUs, request.boundary.ptsUs,
-                             sourceBoundaryUs, &sourceRangeStartUs) ||
-        !translateFromAnchor(request.rangeEndUs, request.boundary.ptsUs,
-                             sourceBoundaryUs, &sourceRangeEndUs) ||
-        sourceRangeEndUs <= sourceRangeStartUs) {
+    if (!request.valid() || request.boundary.sourcePtsUs == kUnknown ||
+        request.join.sourcePtsUs == kUnknown) {
       return false;
     }
-    // The source cache owns decoded coverage independently of transport serial
-    // and presentation direction. Decode planning therefore operates on cache
-    // gaps: cache hits do no work, forward gaps continue from the decoder tail,
-    // and all other gaps seek once and decode forward to a known join/end.
-    DecodePlan plan = planDecode(sourceCache, sourceRangeStartUs,
-                                 sourceRangeEndUs, decoderTailIdentity);
-    if (plan.kind == DecodePlanKind::CacheHit &&
-        !sourceCache.find(request.boundary.identity)) {
-      plan.kind = DecodePlanKind::SeekForward;
-      plan.decodeStartUs = sourceRangeStartUs;
-      plan.decodeEndUs = sourceRangeEndUs;
-    }
 
-    const bool decoderSeeked = plan.kind == DecodePlanKind::SeekForward;
+    const bool previous =
+        request.direction == playback_video_frame_step::Direction::Previous;
+    bool joined = !previous && request.joinCached && decoderTailIdentity &&
+                  sameIdentity(*decoderTailIdentity, request.join.identity);
+    const bool decoderSeeked = !joined;
     if (decoderSeeked) {
-      int64_t sourceRangeStart100ns = 0;
-      if (!microsecondsTo100ns(plan.decodeStartUs,
-                               &sourceRangeStart100ns) ||
-          !decoder.seekToTimestamp100ns(sourceRangeStart100ns)) {
+      const int64_t seekUs =
+          previous ? request.rangeStartUs : request.join.sourcePtsUs;
+      int64_t seek100ns = 0;
+      if (!microsecondsTo100ns(seekUs, &seek100ns) ||
+          !decoder.seekToTimestamp100ns(seek100ns)) {
         decoder.uninit();
         decoderReady = false;
         decoderTailIdentity.reset();
@@ -394,11 +352,13 @@ struct Prefetcher::Impl {
       decoderTailIdentity.reset();
     }
 
-    SnapshotCommandBatch snapshotCommands(
-        deferredContext.Get(), context.Get(), contextMutex);
+    SnapshotCommandBatch snapshotCommands(deferredContext.Get(), context.Get(),
+                                          contextMutex);
     std::vector<std::shared_ptr<const SourceFrame>> stagedFrames;
+    std::shared_ptr<const SourceFrame> stagedJoinFrame;
     size_t decodedFrameCount = 0;
-    bool decodeComplete = plan.kind == DecodePlanKind::CacheHit;
+    bool reachedMediaBoundary = false;
+    bool decodeComplete = false;
     while (!decodeComplete && current(work.generation)) {
       VideoFrame decoded;
       VideoReadInfo info{};
@@ -420,14 +380,51 @@ struct Prefetcher::Impl {
       }
       const FrameIdentity identity = identityFrom(info, ptsUs, durationUs);
       decoderTailIdentity = identity;
-      const bool alreadyStaged = std::any_of(
-          stagedFrames.begin(), stagedFrames.end(),
-          [&](const std::shared_ptr<const SourceFrame>& candidate) {
-            return sameIdentity(candidate->identity, identity);
-          });
-      if (!sourceCache.find(identity) && !alreadyStaged &&
-          frameEndUs(ptsUs, durationUs) > sourceRangeStartUs &&
-          ptsUs < sourceRangeEndUs) {
+
+      if (!joined) {
+        if (sameIdentity(identity, request.join.identity)) {
+          joined = true;
+          if (!request.joinCached) {
+            const SnapshotResult retainResult =
+                retain(decoded, info, ptsUs, durationUs, decodeMs,
+                       &snapshotCommands, &stagedJoinFrame);
+            if (retainResult != SnapshotResult::Ok) {
+              return false;
+            }
+          }
+          if (previous) {
+            decodeComplete = true;
+          }
+          continue;
+        }
+
+        // A seek must reproduce the exact cached edge before its timestamp is
+        // crossed. Accepting a merely nearby PTS would manufacture adjacency
+        // and is the source of frame skips around keyframe boundaries.
+        if (ptsUs > request.join.sourcePtsUs) {
+          return false;
+        }
+
+        if (!previous ||
+            frameEndUs(ptsUs, durationUs) <= request.rangeStartUs) {
+          continue;
+        }
+      }
+
+      if (joined && previous) {
+        decodeComplete = true;
+        continue;
+      }
+
+      if (joined || previous) {
+        const bool alreadyStaged = std::any_of(
+            stagedFrames.begin(), stagedFrames.end(),
+            [&](const std::shared_ptr<const SourceFrame>& candidate) {
+              return sameIdentity(candidate->identity, identity);
+            });
+        if (alreadyStaged) {
+          return false;
+        }
         std::shared_ptr<const SourceFrame> retained;
         const SnapshotResult retainResult =
             retain(decoded, info, ptsUs, durationUs, decodeMs,
@@ -438,55 +435,36 @@ struct Prefetcher::Impl {
         stagedFrames.push_back(std::move(retained));
       }
 
-      if (plan.stopAtIdentity &&
-          sameIdentity(identity, *plan.stopAtIdentity)) {
-        decodeComplete = true;
-      } else if (ptsUs >= plan.decodeEndUs ||
-                 frameEndUs(ptsUs, durationUs) >= plan.decodeEndUs) {
+      if (!previous && joined &&
+          frameEndUs(ptsUs, durationUs) >= request.rangeEndUs) {
         decodeComplete = true;
       }
     }
 
-    if (!decodeComplete || !current(work.generation)) {
+    if (!decodeComplete && joined && decoder.atEnd()) {
+      reachedMediaBoundary = true;
+      decodeComplete = true;
+    }
+    if (previous && joined && request.rangeStartUs == 0) {
+      reachedMediaBoundary = true;
+    }
+
+    if (!decodeComplete || !joined || !current(work.generation)) {
       return false;
     }
     if (!snapshotCommands.submit()) {
       return false;
     }
-    SourceFrameCache committedCache = sourceCache;
-    if (!committedCache.insertBatch(stagedFrames)) {
-      return false;
-    }
-    if (plan.kind != DecodePlanKind::CacheHit) {
-      committedCache.addCoverage(plan.decodeStartUs, plan.decodeEndUs);
-    }
-    committedCache.retainRange(sourceRangeStartUs, sourceRangeEndUs);
-    if (!committedCache.covers(sourceRangeStartUs, sourceRangeEndUs) ||
-        !committedCache.find(request.boundary.identity)) {
-      return false;
-    }
-    sourceCache = std::move(committedCache);
 
     Result result;
-    result.serial = request.serial;
+    result.request = request;
     result.generation = work.generation;
-    result.boundary = request.boundary;
-    result.rangeStartUs = request.rangeStartUs;
-    result.rangeEndUs = request.rangeEndUs;
     result.decoderSeeked = decoderSeeked;
-    result.cacheHit = plan.kind == DecodePlanKind::CacheHit;
+    result.reachedMediaBoundary = reachedMediaBoundary;
     result.decodedFrameCount = decodedFrameCount;
-    for (const auto& source :
-         sourceCache.framesInRange(sourceRangeStartUs, sourceRangeEndUs)) {
-      int64_t timelinePtsUs = 0;
-      if (!translateFromAnchor(source->sourcePtsUs, sourceBoundaryUs,
-                               request.boundary.ptsUs, &timelinePtsUs)) {
-        return false;
-      }
-      result.frames.push_back(FrameView{source, timelinePtsUs});
-    }
-    return !result.frames.empty() &&
-           publish(std::move(result), work.generation);
+    result.joinFrame = std::move(stagedJoinFrame);
+    result.frames = std::move(stagedFrames);
+    return publish(std::move(result), work.generation);
   }
 
   void run() {
@@ -528,7 +506,6 @@ struct Prefetcher::Impl {
     }
     decoder.uninit();
     decoderReady = false;
-    sourceCache.clear();
     decoderTailIdentity.reset();
   }
 };
@@ -557,8 +534,8 @@ bool Prefetcher::start(const std::filesystem::path& path, int videoStreamIndex,
   // Deferred contexts are the D3D11 mechanism for recording GPU work on a
   // worker thread. Failure is non-fatal: the snapshot batch retains a correct
   // immediate-context fallback for devices that do not expose one.
-  if (FAILED(impl_->device->CreateDeferredContext(
-          0, &impl_->deferredContext))) {
+  if (FAILED(
+          impl_->device->CreateDeferredContext(0, &impl_->deferredContext))) {
     impl_->deferredContext.Reset();
   }
   impl_->contextMutex = contextMutex;
@@ -571,7 +548,6 @@ bool Prefetcher::start(const std::filesystem::path& path, int videoStreamIndex,
     impl_->queued.reset();
     impl_->failed.reset();
     impl_->results.clear();
-    impl_->sourceCache.clear();
     impl_->decoderTailIdentity.reset();
     ++impl_->generation;
   }
@@ -613,7 +589,6 @@ void Prefetcher::stop() {
   impl_->decoder.uninit();
   impl_->decoderReady = false;
   impl_->decoderTailIdentity.reset();
-  impl_->sourceCache.clear();
   impl_->working = false;
   impl_->contextMutex = nullptr;
   impl_->budget.reset();
@@ -635,9 +610,7 @@ void Prefetcher::invalidate() {
 }
 
 bool Prefetcher::request(const Request& request) {
-  if (!impl_ || request.serial <= 0 || !request.boundary.valid() ||
-      request.rangeStartUs < 0 ||
-      request.rangeEndUs <= request.rangeStartUs) {
+  if (!impl_ || !request.valid()) {
     return false;
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
@@ -647,14 +620,26 @@ bool Prefetcher::request(const Request& request) {
                     return result.generation == impl_->generation;
                   }) ||
       (impl_->failed && impl_->failed->generation == impl_->generation);
-  if (!impl_->started || impl_->stopping || impl_->queued.has_value() ||
-      completionPending ||
-      (impl_->working &&
-       impl_->workingRequest.generation == impl_->generation)) {
+  if (!impl_->started || impl_->stopping || completionPending) {
     return false;
   }
+
+  const auto sameDirectionWork = [&](const Impl::Work& work) {
+    return work.generation == impl_->generation &&
+           work.request.serial == request.serial &&
+           work.request.direction == request.direction;
+  };
+  if ((impl_->queued && sameDirectionWork(*impl_->queued)) ||
+      (impl_->working && sameDirectionWork(impl_->workingRequest))) {
+    return false;
+  }
+
+  // A direction change is a priority change. Supersede queued/in-flight work;
+  // the worker observes the generation mismatch and discards its unsubmitted
+  // decoder/GPU transaction before taking this request.
   ++impl_->generation;
   impl_->failed.reset();
+  impl_->results.clear();
   Impl::Work work;
   work.request = request;
   work.generation = impl_->generation;
@@ -663,25 +648,22 @@ bool Prefetcher::request(const Request& request) {
   return true;
 }
 
-bool Prefetcher::busyFor(
-    int serial, playback_video_frame_step::Direction direction) const {
+bool Prefetcher::busyFor(int serial,
+                         playback_video_frame_step::Direction direction) const {
   if (!impl_ || serial <= 0) {
     return false;
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
   auto covers = [&](const Impl::Work& work) {
-    if (work.generation != impl_->generation ||
-        work.request.serial != serial) {
+    if (work.generation != impl_->generation || work.request.serial != serial) {
       return false;
     }
     return requestCoversDirection(work.request, direction);
   };
   auto completedResultCovers = [&](const Result& result) {
-    return result.generation == impl_->generation && result.serial == serial &&
-           requestCoversDirection(
-               Request{result.serial, result.boundary, result.rangeStartUs,
-                       result.rangeEndUs},
-               direction);
+    return result.generation == impl_->generation &&
+           result.request.serial == serial &&
+           requestCoversDirection(result.request, direction);
   };
 
   // A completed result remains busy until the output thread adopts or observes
@@ -694,6 +676,36 @@ bool Prefetcher::busyFor(
          (impl_->failed && covers(*impl_->failed));
 }
 
+bool Prefetcher::waitUntilIdleOrCompleted(
+    int serial, playback_video_frame_step::Direction direction,
+    std::chrono::milliseconds timeout) const {
+  if (!impl_ || serial <= 0 || timeout < std::chrono::milliseconds::zero()) {
+    return false;
+  }
+
+  std::unique_lock<std::mutex> lock(impl_->mutex);
+  const auto idleOrCompleted = [&]() {
+    const auto covers = [&](const Impl::Work& work) {
+      return work.generation == impl_->generation &&
+             work.request.serial == serial &&
+             requestCoversDirection(work.request, direction);
+    };
+    const bool workPending = (impl_->queued && covers(*impl_->queued)) ||
+                             (impl_->working && covers(impl_->workingRequest));
+    const bool resultReady =
+        std::any_of(impl_->results.begin(), impl_->results.end(),
+                    [&](const Result& result) {
+                      return result.generation == impl_->generation &&
+                             result.request.serial == serial &&
+                             requestCoversDirection(result.request, direction);
+                    });
+    const bool failureReady = impl_->failed && covers(*impl_->failed);
+    return impl_->stopping || !impl_->started || resultReady || failureReady ||
+           !workPending;
+  };
+  return impl_->cv.wait_for(lock, timeout, idleOrCompleted);
+}
+
 std::vector<Result> Prefetcher::takeResults(int serial) {
   std::vector<Result> out;
   if (!impl_ || serial <= 0) {
@@ -704,7 +716,7 @@ std::vector<Result> Prefetcher::takeResults(int serial) {
   while (it != impl_->results.end()) {
     if (it->generation != impl_->generation) {
       it = impl_->results.erase(it);
-    } else if (it->serial == serial) {
+    } else if (it->request.serial == serial) {
       out.push_back(std::move(*it));
       it = impl_->results.erase(it);
     } else {
@@ -719,8 +731,7 @@ std::optional<Request> Prefetcher::takeFailure(int serial) {
     return std::nullopt;
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  if (!impl_->failed ||
-      impl_->failed->generation != impl_->generation ||
+  if (!impl_->failed || impl_->failed->generation != impl_->generation ||
       impl_->failed->request.serial != serial) {
     return std::nullopt;
   }
