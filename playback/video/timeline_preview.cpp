@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "core/waitable_signal.h"
+#include "playback/video/image.h"
 #include "playback/video/timeline_preview_decoder.h"
 
 namespace playback_video_timeline_preview {
@@ -66,12 +67,15 @@ struct Provider::Impl {
 
   std::shared_ptr<const Image> decode(const Work& work) {
     DecodeResult decoded = decoder.decode(work.targetUs, work.requestId);
-    if (decoded.status != DecodeStatus::Ready) return {};
+    if (decoded.status != DecodeStatus::Ready ||
+        !playback_video_image::validate(decoded.surface)) {
+      return {};
+    }
     auto image = std::make_shared<Image>();
     image->id = nextImageId.fetch_add(1, std::memory_order_relaxed);
     image->requestedUs = work.targetUs;
-    image->frameUs = decoded.frameUs;
-    image->frame = std::move(decoded.frame);
+    image->decodedFrameUs = decoded.decodedFrameUs;
+    image->surface = std::move(decoded.surface);
     return image;
   }
 
@@ -81,7 +85,7 @@ struct Provider::Impl {
     {
       std::lock_guard<std::mutex> lock(mutex);
       if (!isCurrent(work.requestId)) return;
-      result = Result{work.requestId, work.targetUs, !image, origin, image};
+      result = Result{work.requestId, work.targetUs, origin, image};
     }
     changed.signal();
   }
@@ -139,7 +143,6 @@ struct Provider::Impl {
   }
 
   void runWorker() {
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     const bool cacheReady = cache.open(source);
     const bool decoderReady =
         decoder.configure(source, &stopping, &latestRequestId);
@@ -161,6 +164,9 @@ struct Provider::Impl {
           prefetch.pop_front();
         }
       }
+      SetThreadPriority(GetCurrentThread(),
+                        work.interactive ? THREAD_PRIORITY_NORMAL
+                                         : THREAD_PRIORITY_BELOW_NORMAL);
       if (!isCurrent(work.requestId)) continue;
 
       CacheLookup lookup;

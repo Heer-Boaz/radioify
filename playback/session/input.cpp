@@ -722,4 +722,9 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   }
 }
 
+void handlePlaybackPointerLeave(PlaybackInputSignals& signals) {
+  if (signals.clearTimelinePreview) signals.clearTimelinePreview();
+  updateOverlayControlHover(signals, -1);
+}
+
 }  // namespace playback_session_input

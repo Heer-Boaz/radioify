@@ -9,6 +9,7 @@
 
 #include "audioplayback.h"
 #include "playback/debug/lines.h"
+#include "playback/video/image.h"
 #include "playback/video/state/machine.h"
 #include "subtitles.h"
 #include "ui_helpers.h"
@@ -79,26 +80,12 @@ bool updateTimelinePreviewArt(
     return true;
   }
 
-  const VideoFrame& frame = image.frame;
+  const auto& surface = image.surface;
   cache->renderer.resetHistory();
-  bool rendered = false;
-  if ((frame.format == VideoPixelFormat::NV12 ||
-       frame.format == VideoPixelFormat::P010) &&
-      !frame.yuv.empty() && frame.stride > 0 && frame.planeHeight > 0) {
-    rendered = cache->renderer.renderYuvExact(
-        frame.yuv.data(), frame.width, frame.height, frame.stride,
-        frame.planeHeight,
-        frame.format == VideoPixelFormat::P010 ? YuvFormat::P010
-                                                : YuvFormat::NV12,
-        frame.fullRange, frame.yuvMatrix, frame.yuvTransfer, width, height,
-        cache->art);
-  } else if ((frame.format == VideoPixelFormat::RGB32 ||
-              frame.format == VideoPixelFormat::ARGB32) &&
-             !frame.rgba.empty()) {
-    rendered = cache->renderer.renderRgbaExact(
-        frame.rgba.data(), frame.width, frame.height, width, height,
-        cache->art, frame.format == VideoPixelFormat::RGB32);
-  }
+  const bool rendered = playback_video_image::validate(surface) &&
+                        cache->renderer.renderRgbaExact(
+                            surface.pixels.data(), surface.width,
+                            surface.height, width, height, cache->art, true);
   if (!rendered) return false;
   cache->imageId = image.id;
   cache->width = width;
@@ -471,13 +458,16 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   }
 
   if (inputs.timelinePreview.visible) {
-    const VideoFrame* previewFrame = inputs.timelinePreview.image
-                                         ? &inputs.timelinePreview.image->frame
-                                         : nullptr;
+    const playback_video_image::RgbaImage* previewSurface =
+        inputs.timelinePreview.image
+            ? &inputs.timelinePreview.image->surface
+            : nullptr;
     const int previewSourceWidth =
-        previewFrame ? previewFrame->width : std::max(16, layoutSourceW);
+        previewSurface ? static_cast<int>(previewSurface->width)
+                       : std::max(16, layoutSourceW);
     const int previewSourceHeight =
-        previewFrame ? previewFrame->height : std::max(9, layoutSourceH);
+        previewSurface ? static_cast<int>(previewSurface->height)
+                       : std::max(9, layoutSourceH);
     const int footerTop = overlayLayout.topY >= 0 ? overlayLayout.topY : height;
     const auto previewLayout =
         playback_video_timeline_preview::layoutCells(

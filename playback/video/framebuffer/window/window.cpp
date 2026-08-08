@@ -4,7 +4,7 @@
 #include "core/windows_console_window.h"
 #include "core/windows_message_pump.h"
 #include "playback/video/gpu/gpu_shared.h"
-#include "playback/video/frame_cache/update.h"
+#include "playback/video/image.h"
 #include "internal.h"
 #include "present.h"
 #include <d3d11_1.h>
@@ -2449,11 +2449,13 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
     D3D11_VIEWPORT timelinePreviewViewport{};
 
     if (showTimelinePreview) {
-        const VideoFrame* previewFrame = ui.timelinePreview.image
-                                             ? &ui.timelinePreview.image->frame
-                                             : nullptr;
-        const int sourceWidth = previewFrame ? previewFrame->width : 16;
-        const int sourceHeight = previewFrame ? previewFrame->height : 9;
+        const playback_video_image::RgbaImage* previewSurface =
+            ui.timelinePreview.image ? &ui.timelinePreview.image->surface
+                                     : nullptr;
+        const int sourceWidth =
+            previewSurface ? static_cast<int>(previewSurface->width) : 16;
+        const int sourceHeight =
+            previewSurface ? static_cast<int>(previewSurface->height) : 9;
         const int footerTop = windowOverlayLayout.topY >= 0
                                   ? windowOverlayLayout.topY
                                   : rows;
@@ -2465,11 +2467,14 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                 cellWidth, cellHeight,
                 playback_video_timeline_preview::formatTimestamp(
                     ui.timelinePreview.targetUs));
-        if (previewFrame && previewLayout.drawable()) {
+        if (previewSurface && previewLayout.drawable()) {
             if (m_timelinePreviewImageId != ui.timelinePreview.image->id &&
-                playback_video_frame_cache::update(
-                    m_timelinePreviewFrameCache, device, context,
-                    *previewFrame)) {
+                playback_video_image::validate(*previewSurface) &&
+                m_timelinePreviewFrameCache.Update(
+                    device, context, previewSurface->pixels.data(),
+                    static_cast<int>(previewSurface->strideBytes),
+                    static_cast<int>(previewSurface->width),
+                    static_cast<int>(previewSurface->height))) {
                 m_timelinePreviewImageId = ui.timelinePreview.image->id;
             }
             if (m_timelinePreviewImageId == ui.timelinePreview.image->id &&

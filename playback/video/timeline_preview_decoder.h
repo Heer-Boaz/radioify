@@ -16,8 +16,8 @@ enum class DecodeStatus : uint8_t {
 
 struct DecodeResult {
   DecodeStatus status = DecodeStatus::Failed;
-  int64_t frameUs = 0;
-  VideoFrame frame;
+  int64_t decodedFrameUs = 0;
+  playback_video_image::RgbaImage surface;
 };
 
 // Worker-owned precise-seek decoder.  It has no cache, hover, scheduling, or

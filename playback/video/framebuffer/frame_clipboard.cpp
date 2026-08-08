@@ -1,20 +1,15 @@
 #include "frame_clipboard.h"
 
-#include <objidl.h>
-#include <wincodec.h>
-#include <wrl/client.h>
-
-#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <limits>
 #include <thread>
 #include <utility>
 
+#include "playback/video/image_wic.h"
+
 namespace playback_video_frame_clipboard {
 namespace {
-
-using Microsoft::WRL::ComPtr;
 
 constexpr int kClipboardOpenAttempts = 6;
 constexpr auto kClipboardOpenRetryDelay = std::chrono::milliseconds(5);
@@ -146,112 +141,6 @@ GlobalMemory allocateClipboardPayload(const uint8_t* bytes, size_t size,
   return owned;
 }
 
-class ComScope {
- public:
-  ComScope() : result_(CoInitializeEx(nullptr, COINIT_MULTITHREADED)) {}
-
-  ~ComScope() {
-    if (SUCCEEDED(result_)) {
-      CoUninitialize();
-    }
-  }
-
-  bool available() const {
-    return SUCCEEDED(result_) || result_ == RPC_E_CHANGED_MODE;
-  }
-
- private:
-  HRESULT result_ = E_FAIL;
-};
-
-bool encodePng(const uint8_t* bgra, uint32_t width, uint32_t height,
-               uint32_t strideBytes, size_t pixelBytes,
-               std::vector<uint8_t>* png) {
-  if (!bgra || !png || pixelBytes > std::numeric_limits<UINT>::max()) {
-    return false;
-  }
-
-  ComScope com;
-  if (!com.available()) {
-    return false;
-  }
-
-  ComPtr<IWICImagingFactory> factory;
-  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
-                              CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&factory)))) {
-    return false;
-  }
-
-  ComPtr<IStream> stream;
-  if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream))) {
-    return false;
-  }
-
-  ComPtr<IWICBitmapEncoder> encoder;
-  HRESULT hr =
-      factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
-  if (SUCCEEDED(hr)) {
-    hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
-  }
-
-  ComPtr<IWICBitmapFrameEncode> frame;
-  ComPtr<IPropertyBag2> properties;
-  if (SUCCEEDED(hr)) {
-    hr = encoder->CreateNewFrame(&frame, &properties);
-  }
-  if (SUCCEEDED(hr)) {
-    hr = frame->Initialize(properties.Get());
-  }
-  if (SUCCEEDED(hr)) {
-    hr = frame->SetSize(width, height);
-  }
-  WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
-  if (SUCCEEDED(hr)) {
-    hr = frame->SetPixelFormat(&format);
-  }
-  if (SUCCEEDED(hr) &&
-      !IsEqualGUID(format, GUID_WICPixelFormat32bppBGRA)) {
-    hr = E_FAIL;
-  }
-  if (SUCCEEDED(hr)) {
-    hr = frame->WritePixels(height, strideBytes,
-                            static_cast<UINT>(pixelBytes),
-                            const_cast<BYTE*>(bgra));
-  }
-  if (SUCCEEDED(hr)) {
-    hr = frame->Commit();
-  }
-  if (SUCCEEDED(hr)) {
-    hr = encoder->Commit();
-  }
-  if (FAILED(hr)) {
-    return false;
-  }
-
-  STATSTG stats{};
-  if (FAILED(stream->Stat(&stats, STATFLAG_NONAME)) ||
-      stats.cbSize.QuadPart <= 0 ||
-      static_cast<ULONGLONG>(stats.cbSize.QuadPart) >
-          std::numeric_limits<size_t>::max()) {
-    return false;
-  }
-  HGLOBAL encodedMemory = nullptr;
-  if (FAILED(GetHGlobalFromStream(stream.Get(), &encodedMemory)) ||
-      !encodedMemory) {
-    return false;
-  }
-  const void* encodedBytes = GlobalLock(encodedMemory);
-  if (!encodedBytes) {
-    return false;
-  }
-  const size_t encodedSize = static_cast<size_t>(stats.cbSize.QuadPart);
-  png->assign(static_cast<const uint8_t*>(encodedBytes),
-              static_cast<const uint8_t*>(encodedBytes) + encodedSize);
-  GlobalUnlock(encodedMemory);
-  return true;
-}
-
 class ClipboardScope {
  public:
   explicit ClipboardScope(HWND owner) {
@@ -353,12 +242,13 @@ bool copyToClipboard(HWND owner, const VideoFrameSnapshot& snapshot,
     return false;
   }
 
-  const uint8_t* bgra = dib.data() + sizeof(BITMAPV5HEADER);
-  const size_t pixelBytes = dib.size() - sizeof(BITMAPV5HEADER);
   std::vector<uint8_t> png;
   GlobalMemory pngMemory;
-  if (encodePng(bgra, snapshot.width, snapshot.height,
-                snapshot.width * 4u, pixelBytes, &png)) {
+  playback_video_image::WicCodec codec;
+  const playback_video_image::RgbaImageView image{
+      snapshot.width, snapshot.height, snapshot.strideBytes,
+      snapshot.rgba.data(), snapshot.rgba.size()};
+  if (codec.open() && codec.encodePng(image, &png)) {
     pngMemory = allocateClipboardPayload(png.data(), png.size(), nullptr);
   }
 

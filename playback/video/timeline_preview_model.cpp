@@ -23,7 +23,6 @@ int64_t targetForRatio(double ratio, int64_t durationUs) {
 }  // namespace
 
 void HoverModel::start(int64_t durationUs) {
-  std::lock_guard<std::mutex> lock(mutex_);
   snapshot_ = Snapshot{};
   snapshot_.durationUs = std::max<int64_t>(0, durationUs);
   requestId_ = 0;
@@ -33,7 +32,6 @@ void HoverModel::start(int64_t durationUs) {
 }
 
 void HoverModel::stop() {
-  std::lock_guard<std::mutex> lock(mutex_);
   snapshot_ = Snapshot{};
   requestId_ = 0;
   activeDecodeTargetUs_ = -1;
@@ -41,7 +39,7 @@ void HoverModel::stop() {
   lastRequestedDecodeTargetUs_ = -1;
 }
 
-uint64_t HoverModel::nextRequestIdLocked() {
+uint64_t HoverModel::nextRequestId() {
   ++requestId_;
   if (requestId_ == 0) ++requestId_;
   return requestId_;
@@ -51,7 +49,6 @@ HoverModel::Update HoverModel::hover(double ratio, int progressUnits) {
   Update update;
   if (!std::isfinite(ratio)) return update;
 
-  std::lock_guard<std::mutex> lock(mutex_);
   if (snapshot_.durationUs <= 0) return update;
 
   ratio = std::clamp(ratio, 0.0, 1.0);
@@ -86,7 +83,7 @@ HoverModel::Update HoverModel::hover(double ratio, int progressUnits) {
   snapshot_.image.reset();
 
   Request request;
-  request.id = nextRequestIdLocked();
+  request.id = nextRequestId();
   request.targetUs = decodeTargetUs;
   request.prefetchTargetsUs =
       prefetchTargets(decodeTargetUs, bucketUs, snapshot_.durationUs,
@@ -96,7 +93,6 @@ HoverModel::Update HoverModel::hover(double ratio, int progressUnits) {
 }
 
 bool HoverModel::hide() {
-  std::lock_guard<std::mutex> lock(mutex_);
   if (!snapshot_.visible) return false;
   snapshot_.visible = false;
   snapshot_.loading = false;
@@ -105,13 +101,25 @@ bool HoverModel::hide() {
   activeDecodeTargetUs_ = -1;
   activeBucketUs_ = 0;
   lastRequestedDecodeTargetUs_ = -1;
-  nextRequestIdLocked();
+  nextRequestId();
+  ++snapshot_.revision;
+  return true;
+}
+
+bool HoverModel::reject(const Request& request) {
+  if (!snapshot_.visible || request.id != requestId_ ||
+      request.targetUs != activeDecodeTargetUs_) {
+    return false;
+  }
+  snapshot_.image.reset();
+  snapshot_.loading = false;
+  snapshot_.failed = true;
+  nextRequestId();
   ++snapshot_.revision;
   return true;
 }
 
 bool HoverModel::apply(const Result& result) {
-  std::lock_guard<std::mutex> lock(mutex_);
   if (!snapshot_.visible || result.requestId != requestId_ ||
       result.targetUs != activeDecodeTargetUs_) {
     return false;
@@ -121,19 +129,15 @@ bool HoverModel::apply(const Result& result) {
   }
   snapshot_.image = result.image;
   snapshot_.loading = false;
-  snapshot_.failed = result.failed || !result.image;
+  snapshot_.failed = !result.image;
   ++snapshot_.revision;
   return true;
 }
 
 uint64_t HoverModel::requestId() const {
-  std::lock_guard<std::mutex> lock(mutex_);
   return requestId_;
 }
 
-Snapshot HoverModel::snapshot() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return snapshot_;
-}
+Snapshot HoverModel::snapshot() const { return snapshot_; }
 
 }  // namespace playback_video_timeline_preview

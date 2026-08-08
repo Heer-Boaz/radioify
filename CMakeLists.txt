@@ -331,6 +331,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_tui>
   $<TARGET_OBJECTS:radioify_video_playback>
   $<TARGET_OBJECTS:radioify_timeline_preview>
+  $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>
   $<TARGET_OBJECTS:radioify_audio>
   $<TARGET_OBJECTS:radioify_analysis>
@@ -438,6 +439,7 @@ target_sources(ascii_shader_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_ascii_shader_tests>
   $<TARGET_OBJECTS:radioify_ascii_cpu>
   $<TARGET_OBJECTS:radioify_ascii_gpu>
+  $<TARGET_OBJECTS:radioify_image_codec>
 )
 radioify_link_repo_target(ascii_shader_tests)
 if (WIN32)
@@ -468,6 +470,7 @@ add_test(NAME shortcut_match_tests
 add_executable(frame_clipboard_tests)
 target_sources(frame_clipboard_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_frame_clipboard_tests>
+  $<TARGET_OBJECTS:radioify_image_codec>
   ${CMAKE_SOURCE_DIR}/playback/video/framebuffer/frame_clipboard.cpp
 )
 radioify_link_repo_target(frame_clipboard_tests)
@@ -521,6 +524,7 @@ add_executable(timeline_preview_tests)
 target_sources(timeline_preview_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_timeline_preview_tests>
   $<TARGET_OBJECTS:radioify_timeline_preview>
+  $<TARGET_OBJECTS:radioify_image_codec>
   ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
@@ -1624,7 +1628,7 @@ endforeach()
 if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
-  target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32)
+  target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
 endif()
 
 if (WIN32 AND RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION)

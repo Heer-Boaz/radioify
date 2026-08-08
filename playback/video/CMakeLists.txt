@@ -1,6 +1,9 @@
+radioify_add_module_object_library(radioify_image_codec
+  ${CMAKE_CURRENT_SOURCE_DIR}/image_wic.cpp
+)
+
 radioify_add_module_object_library(radioify_ascii_cpu
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_image_decode_wic.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_layout.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/luminance_stats.cpp
 )
@@ -39,7 +42,6 @@ radioify_add_module_object_library(radioify_timeline_preview
 
 radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_image_decode_wic.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_layout.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_gpu.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/gpu_shared.cpp

@@ -218,11 +218,7 @@ struct PlaybackLoopRunner::Impl {
           auto update = timelinePreviewModel.hover(ratio, progressUnits);
           if (update.request &&
               !timelinePreviewProvider.submit(*update.request)) {
-            playback_video_timeline_preview::Result failure;
-            failure.requestId = update.request->id;
-            failure.targetUs = update.request->targetUs;
-            failure.failed = true;
-            timelinePreviewModel.apply(failure);
+            timelinePreviewModel.reject(*update.request);
           }
           if (update.changed) {
             redraw = true;
@@ -576,6 +572,11 @@ struct PlaybackLoopRunner::Impl {
         if (loopStopRequested) {
           break;
         }
+        applyPresenterSync(syncPresentation());
+        continue;
+      }
+      if (ev.type == InputEvent::Type::PointerLeave) {
+        playback_session_input::handlePlaybackPointerLeave(inputSignals);
         applyPresenterSync(syncPresentation());
       }
     }

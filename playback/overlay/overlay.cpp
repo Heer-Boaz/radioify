@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "playback/video/image.h"
 #include "subtitle_effects.h"
 #include "ui_helpers.h"
 
@@ -1125,10 +1126,13 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
       overlayLayout = layoutWindowOverlayCells(ui, width, height);
       haveOverlayLayout = true;
     }
-    const VideoFrame* previewFrame =
-        ui.timelinePreview.image ? &ui.timelinePreview.image->frame : nullptr;
-    const int sourceWidth = previewFrame ? previewFrame->width : 16;
-    const int sourceHeight = previewFrame ? previewFrame->height : 9;
+    const playback_video_image::RgbaImage* previewSurface =
+        ui.timelinePreview.image ? &ui.timelinePreview.image->surface
+                                 : nullptr;
+    const int sourceWidth =
+        previewSurface ? static_cast<int>(previewSurface->width) : 16;
+    const int sourceHeight =
+        previewSurface ? static_cast<int>(previewSurface->height) : 9;
     const int footerTop = overlayLayout.topY >= 0 ? overlayLayout.topY : height;
     const auto previewLayout = playback_video_timeline_preview::layoutCells(
         width, height, footerTop, overlayLayout.progressBarX,

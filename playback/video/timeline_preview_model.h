@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <mutex>
 #include <optional>
 
 #include "playback/video/timeline_preview_types.h"
@@ -23,15 +22,15 @@ class HoverModel {
 
   Update hover(double ratio, int progressUnits);
   bool hide();
+  bool reject(const Request& request);
   bool apply(const Result& result);
 
   uint64_t requestId() const;
   Snapshot snapshot() const;
 
  private:
-  uint64_t nextRequestIdLocked();
+  uint64_t nextRequestId();
 
-  mutable std::mutex mutex_;
   Snapshot snapshot_;
   uint64_t requestId_ = 0;
   int64_t activeDecodeTargetUs_ = -1;

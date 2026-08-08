@@ -37,6 +37,12 @@ InputEvent mouseMoveEvent(SHORT x, DWORD buttonState) {
   return event;
 }
 
+InputEvent pointerLeaveEvent() {
+  InputEvent event{};
+  event.type = InputEvent::Type::PointerLeave;
+  return event;
+}
+
 }  // namespace
 
 int main() {
@@ -82,6 +88,14 @@ int main() {
                "mouse button transitions must preserve the final drag move");
   ok &= expect(queue.poll(event) && event.mouse.buttonState == 0,
                "mouse button transitions must remain distinct events");
+
+  queue.push(mouseMoveEvent(50, 0));
+  queue.push(pointerLeaveEvent());
+  ok &= expect(queue.poll(event) && event.type == InputEvent::Type::Mouse,
+               "the final pointer position must precede pointer leave");
+  ok &= expect(queue.poll(event) &&
+                   event.type == InputEvent::Type::PointerLeave,
+               "pointer leave must be an explicit non-sentinel event");
 
   return ok ? 0 : 1;
 }

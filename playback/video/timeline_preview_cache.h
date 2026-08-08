@@ -23,8 +23,9 @@ struct CacheLookup {
   ResultOrigin origin = ResultOrigin::MemoryCache;
 };
 
-// Worker-owned two-tier thumbnail cache.  Entries are exact timestamp/profile
-// matches: quantization belongs to HoverModel, never to cache lookup.
+// Worker-owned two-tier RGBA thumbnail cache. Entries are exact
+// timestamp/profile matches; persistent entries are ordinary PNG images.
+// Quantization belongs to HoverModel, never to cache lookup.
 class Cache {
  public:
   explicit Cache(CacheConfig config = {});

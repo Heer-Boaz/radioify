@@ -191,8 +191,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             if (eventFlags == MOUSE_MOVED &&
                 pThis->m_windowMouseInputActive) {
                 pThis->m_windowMouseInputActive = false;
-                pThis->m_input.push(window_input_events::mouseEvent(
-                    x, y, buttonState, eventFlags));
+                pThis->m_input.push(window_input_events::pointerLeaveEvent());
             }
             return;
         }
@@ -234,8 +233,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         pThis->m_trackingMouseLeave = false;
         if (pThis->m_windowMouseInputActive) {
             pThis->m_windowMouseInputActive = false;
-            pThis->m_input.push(
-                window_input_events::mouseEvent(-1, -1, 0, MOUSE_MOVED));
+            pThis->m_input.push(window_input_events::pointerLeaveEvent());
         }
         return 0;
     }

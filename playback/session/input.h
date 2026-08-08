@@ -91,5 +91,6 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
                               PlaybackSeekGestureState& seekState,
                               const MouseEvent& mouse);
+void handlePlaybackPointerLeave(PlaybackInputSignals& signals);
 
 }  // namespace playback_session_input

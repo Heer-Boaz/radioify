@@ -19,7 +19,6 @@
 #include <map>
 #include <sstream>
 #include <system_error>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -29,29 +28,13 @@ extern "C" {
 }
 
 #include "core/runtime_helpers.h"
+#include "playback/video/image_wic.h"
 
 namespace playback_video_timeline_preview {
 namespace {
 
-constexpr std::array<uint8_t, 8> kCacheMagic = {'R', 'F', 'T', 'H', 'U', 'M',
-                                                 'B', '1'};
-constexpr uint32_t kCacheVersion = 1;
-constexpr const wchar_t* kCacheExtension = L".rfthumb";
-
-template <typename T>
-bool writeValue(std::ofstream& stream, const T& value) {
-  static_assert(std::is_trivially_copyable_v<T>);
-  stream.write(reinterpret_cast<const char*>(&value), sizeof(value));
-  return stream.good();
-}
-
-template <typename T>
-bool readValue(std::ifstream& stream, T* value) {
-  static_assert(std::is_trivially_copyable_v<T>);
-  if (!value) return false;
-  stream.read(reinterpret_cast<char*>(value), sizeof(*value));
-  return stream.good();
-}
+constexpr const wchar_t* kCacheExtension = L".png";
+constexpr const wchar_t* kTemporaryMarker = L".png.tmp-";
 
 std::string sha256Hex(const std::string& value) {
   AVSHA* context = av_sha_alloc();
@@ -93,120 +76,45 @@ std::string sourceIdentity(const Source& source) {
       ec ? int64_t{0} : static_cast<int64_t>(modified.time_since_epoch().count());
 
   std::ostringstream identity;
-  identity << "radioify-timeline-preview-v1\n"
+  identity << "radioify-timeline-preview-v2\n"
            << toUtf8String(normalized) << '\n' << stableSize << '\n'
            << modifiedTicks << '\n' << source.videoStreamIndex << '\n'
            << source.durationUs << '\n' << source.sourceWidth << 'x'
            << source.sourceHeight << '\n' << kDecodeMaxWidth << 'x'
-           << kDecodeMaxHeight;
+           << kDecodeMaxHeight << "\nrgba8-png";
   return identity.str();
 }
 
-size_t framePayloadBytes(const VideoFrame& frame) {
-  if (frame.rgba.size() > (std::numeric_limits<size_t>::max)() -
-                              frame.yuv.size()) {
+size_t imageBytes(const Image& image) {
+  if (!playback_video_image::validate(image.surface) ||
+      image.surface.width > static_cast<uint32_t>(kDecodeMaxWidth) ||
+      image.surface.height > static_cast<uint32_t>(kDecodeMaxHeight) ||
+      image.surface.pixels.size() > kMaxCacheBytes) {
     return 0;
   }
-  return frame.rgba.size() + frame.yuv.size();
+  return image.surface.pixels.size();
 }
 
-bool supportedPersistentFrame(const VideoFrame& frame) {
-  if (frame.width <= 0 || frame.height <= 0 ||
-      frame.width > kDecodeMaxWidth || frame.height > kDecodeMaxHeight) {
+bool saveImage(playback_video_image::WicCodec& codec,
+               const std::filesystem::path& path, const Image& image) {
+  if (imageBytes(image) == 0) return false;
+  std::vector<uint8_t> png;
+  if (!codec.encodePng(playback_video_image::view(image.surface), &png) ||
+      png.empty()) {
     return false;
   }
-  const size_t payloadBytes = framePayloadBytes(frame);
-  if (payloadBytes == 0 || payloadBytes > kMaxCacheBytes) return false;
-  switch (frame.format) {
-    case VideoPixelFormat::NV12:
-    case VideoPixelFormat::P010: {
-      if (!frame.rgba.empty() || frame.yuv.empty() || frame.stride <= 0 ||
-          frame.planeHeight < frame.height || (frame.width & 1) != 0 ||
-          (frame.height & 1) != 0) {
-        return false;
-      }
-      const uint64_t bytesPerSample =
-          frame.format == VideoPixelFormat::P010 ? 2u : 1u;
-      if (static_cast<uint64_t>(frame.stride) <
-          static_cast<uint64_t>(frame.width) * bytesPerSample) {
-        return false;
-      }
-      const uint64_t yBytes = static_cast<uint64_t>(frame.stride) *
-                              static_cast<uint64_t>(frame.planeHeight);
-      const uint64_t expectedBytes =
-          yBytes + static_cast<uint64_t>(frame.stride) *
-                       static_cast<uint64_t>(frame.height / 2);
-      return expectedBytes == frame.yuv.size();
-    }
-    case VideoPixelFormat::RGB32:
-    case VideoPixelFormat::ARGB32: {
-      if (!frame.yuv.empty() || frame.rgba.empty()) return false;
-      const uint64_t minimumStride =
-          static_cast<uint64_t>(frame.width) * 4u;
-      const uint64_t stride =
-          frame.stride > 0 ? static_cast<uint64_t>(frame.stride)
-                           : minimumStride;
-      if (stride < minimumStride) return false;
-      const uint64_t expected =
-          stride * static_cast<uint64_t>(frame.height);
-      return expected == frame.rgba.size();
-    }
-    default:
-      return false;
-  }
-}
 
-bool validFormat(uint32_t value) {
-  return value == static_cast<uint32_t>(VideoPixelFormat::NV12) ||
-         value == static_cast<uint32_t>(VideoPixelFormat::P010) ||
-         value == static_cast<uint32_t>(VideoPixelFormat::RGB32) ||
-         value == static_cast<uint32_t>(VideoPixelFormat::ARGB32);
-}
-
-bool saveImage(const std::filesystem::path& path, const Image& image) {
-  if (!supportedPersistentFrame(image.frame)) return false;
   static std::atomic<uint64_t> temporaryId{1};
   std::filesystem::path temporary = path;
   temporary += L".tmp-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
                std::to_wstring(
                    temporaryId.fetch_add(1, std::memory_order_relaxed));
-
   std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
   if (!stream) return false;
-  stream.write(reinterpret_cast<const char*>(kCacheMagic.data()),
-               kCacheMagic.size());
-  const VideoFrame& frame = image.frame;
-  const uint32_t format = static_cast<uint32_t>(frame.format);
-  const uint32_t matrix = static_cast<uint32_t>(frame.yuvMatrix);
-  const uint32_t transfer = static_cast<uint32_t>(frame.yuvTransfer);
-  const uint8_t fullRange = frame.fullRange ? 1 : 0;
-  const uint64_t rgbaSize = frame.rgba.size();
-  const uint64_t yuvSize = frame.yuv.size();
-  bool ok = stream.good() && writeValue(stream, kCacheVersion) &&
-            writeValue(stream, image.requestedUs) &&
-            writeValue(stream, image.frameUs) && writeValue(stream, frame.width) &&
-            writeValue(stream, frame.height) &&
-            writeValue(stream, frame.timestamp100ns) &&
-            writeValue(stream, frame.duration100ns) &&
-            writeValue(stream, format) &&
-            writeValue(stream, frame.rotationQuarterTurns) &&
-            writeValue(stream, frame.stride) &&
-            writeValue(stream, frame.planeHeight) &&
-            writeValue(stream, fullRange) && writeValue(stream, matrix) &&
-            writeValue(stream, transfer) && writeValue(stream, rgbaSize) &&
-            writeValue(stream, yuvSize);
-  if (ok && rgbaSize > 0) {
-    stream.write(reinterpret_cast<const char*>(frame.rgba.data()),
-                 static_cast<std::streamsize>(rgbaSize));
-    ok = stream.good();
-  }
-  if (ok && yuvSize > 0) {
-    stream.write(reinterpret_cast<const char*>(frame.yuv.data()),
-                 static_cast<std::streamsize>(yuvSize));
-    ok = stream.good();
-  }
+  stream.write(reinterpret_cast<const char*>(png.data()),
+               static_cast<std::streamsize>(png.size()));
   stream.flush();
-  ok = ok && stream.good();
+  bool ok = stream.good();
   stream.close();
   if (ok) {
     ok = MoveFileExW(temporary.c_str(), path.c_str(),
@@ -220,63 +128,24 @@ bool saveImage(const std::filesystem::path& path, const Image& image) {
   return ok;
 }
 
-std::shared_ptr<const Image> loadImage(const std::filesystem::path& path,
-                                       int64_t expectedTargetUs,
-                                       uint64_t imageId) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) return {};
-  std::array<uint8_t, kCacheMagic.size()> magic{};
-  stream.read(reinterpret_cast<char*>(magic.data()), magic.size());
-  if (!stream.good() || magic != kCacheMagic) return {};
-
-  uint32_t version = 0;
+std::shared_ptr<const Image> loadImage(
+    playback_video_image::WicCodec& codec,
+    const std::filesystem::path& path, int64_t targetUs, uint64_t imageId) {
+  playback_video_image::DecodeLimits limits;
+  limits.maxWidth = kDecodeMaxWidth;
+  limits.maxHeight = kDecodeMaxHeight;
+  limits.maxDecodedBytes = kMaxCacheBytes;
+  playback_video_image::RgbaImage surface;
+  if (!codec.decodeFile(path, &surface, limits) ||
+      !playback_video_image::validate(surface)) {
+    return {};
+  }
   auto image = std::make_shared<Image>();
   image->id = imageId;
-  VideoFrame& frame = image->frame;
-  uint32_t format = 0;
-  uint32_t matrix = 0;
-  uint32_t transfer = 0;
-  uint8_t fullRange = 0;
-  uint64_t rgbaSize = 0;
-  uint64_t yuvSize = 0;
-  const bool headerOk =
-      readValue(stream, &version) && readValue(stream, &image->requestedUs) &&
-      readValue(stream, &image->frameUs) && readValue(stream, &frame.width) &&
-      readValue(stream, &frame.height) &&
-      readValue(stream, &frame.timestamp100ns) &&
-      readValue(stream, &frame.duration100ns) && readValue(stream, &format) &&
-      readValue(stream, &frame.rotationQuarterTurns) &&
-      readValue(stream, &frame.stride) &&
-      readValue(stream, &frame.planeHeight) && readValue(stream, &fullRange) &&
-      readValue(stream, &matrix) && readValue(stream, &transfer) &&
-      readValue(stream, &rgbaSize) && readValue(stream, &yuvSize);
-  if (!headerOk || version != kCacheVersion ||
-      image->requestedUs != expectedTargetUs || !validFormat(format) ||
-      matrix > static_cast<uint32_t>(YuvMatrix::Bt2020) ||
-      transfer > static_cast<uint32_t>(YuvTransfer::Hlg) || fullRange > 1 ||
-      rgbaSize > kMaxCacheBytes || yuvSize > kMaxCacheBytes ||
-      rgbaSize > kMaxCacheBytes - std::min<uint64_t>(kMaxCacheBytes, yuvSize)) {
-    return {};
-  }
-  frame.format = static_cast<VideoPixelFormat>(format);
-  frame.yuvMatrix = static_cast<YuvMatrix>(matrix);
-  frame.yuvTransfer = static_cast<YuvTransfer>(transfer);
-  frame.fullRange = fullRange != 0;
-  frame.rgba.resize(static_cast<size_t>(rgbaSize));
-  frame.yuv.resize(static_cast<size_t>(yuvSize));
-  if (rgbaSize > 0) {
-    stream.read(reinterpret_cast<char*>(frame.rgba.data()),
-                static_cast<std::streamsize>(rgbaSize));
-  }
-  if (stream.good() && yuvSize > 0) {
-    stream.read(reinterpret_cast<char*>(frame.yuv.data()),
-                static_cast<std::streamsize>(yuvSize));
-  }
-  if (!stream.good() || stream.peek() != std::char_traits<char>::eof()) {
-    return {};
-  }
-  frame.storageBytes = framePayloadBytes(frame);
-  if (!supportedPersistentFrame(frame)) return {};
+  image->requestedUs = targetUs;
+  // Presentation is keyed by the exact request. The decoded source-frame PTS
+  // is diagnostic only and is deliberately absent when a PNG is reloaded.
+  image->surface = std::move(surface);
   return image;
 }
 
@@ -297,6 +166,7 @@ struct Cache::Impl {
   std::map<int64_t, Entry> entries;
   std::list<int64_t> lru;
   size_t bytes = 0;
+  playback_video_image::WicCodec codec;
 
   std::filesystem::path fileFor(int64_t targetUs) const {
     return directory / (std::to_wstring(targetUs) + kCacheExtension);
@@ -304,7 +174,7 @@ struct Cache::Impl {
 
   void insertMemory(const std::shared_ptr<const Image>& image) {
     if (!image) return;
-    const size_t cost = framePayloadBytes(image->frame);
+    const size_t cost = imageBytes(*image);
     if (cost == 0 || cost > config.memoryByteLimit ||
         config.memoryFrameLimit == 0) {
       return;
@@ -316,8 +186,7 @@ struct Cache::Impl {
       entries.erase(existing);
     }
     lru.push_front(image->requestedUs);
-    entries.emplace(image->requestedUs,
-                    Entry{image, cost, lru.begin()});
+    entries.emplace(image->requestedUs, Entry{image, cost, lru.begin()});
     bytes += cost;
     while (!lru.empty() &&
            (bytes > config.memoryByteLimit ||
@@ -348,7 +217,7 @@ bool Cache::open(const Source& source, std::string* error) {
   }
   impl_->root = impl_->config.persistentRoot.empty()
                     ? radioifyWritableDataDir() / "cache" /
-                          "timeline-preview-v1"
+                          "timeline-preview-v2"
                     : impl_->config.persistentRoot;
   if (impl_->config.persistentByteLimit == 0 || impl_->root.empty()) {
     impl_->root.clear();
@@ -362,7 +231,9 @@ bool Cache::open(const Source& source, std::string* error) {
   impl_->directory = impl_->root / identityHash;
   std::error_code ec;
   std::filesystem::create_directories(impl_->directory, ec);
-  if (ec || !std::filesystem::is_directory(impl_->directory, ec) || ec) {
+  if (ec || !std::filesystem::is_directory(impl_->directory, ec) || ec ||
+      !impl_->codec.open()) {
+    impl_->codec.close();
     impl_->root.clear();
     impl_->directory.clear();
   }
@@ -375,6 +246,7 @@ void Cache::close() {
   impl_->bytes = 0;
   impl_->root.clear();
   impl_->directory.clear();
+  impl_->codec.close();
 }
 
 CacheLookup Cache::find(int64_t targetUs, uint64_t imageId) {
@@ -393,7 +265,7 @@ CacheLookup Cache::find(int64_t targetUs, uint64_t imageId) {
   const std::filesystem::path path = impl_->fileFor(targetUs);
   std::error_code ec;
   if (!std::filesystem::is_regular_file(path, ec) || ec) return lookup;
-  lookup.image = loadImage(path, targetUs, imageId);
+  lookup.image = loadImage(impl_->codec, path, targetUs, imageId);
   if (!lookup.image) {
     ec.clear();
     std::filesystem::remove(path, ec);
@@ -408,14 +280,13 @@ CacheLookup Cache::find(int64_t targetUs, uint64_t imageId) {
 }
 
 void Cache::storeMemory(const std::shared_ptr<const Image>& image) {
-  if (!image || !supportedPersistentFrame(image->frame)) return;
+  if (!image || imageBytes(*image) == 0) return;
   impl_->insertMemory(image);
 }
 
 void Cache::storePersistent(const std::shared_ptr<const Image>& image) {
-  if (!image || !supportedPersistentFrame(image->frame)) return;
-  if (impl_->directory.empty()) return;
-  saveImage(impl_->fileFor(image->requestedUs), *image);
+  if (!image || imageBytes(*image) == 0 || impl_->directory.empty()) return;
+  saveImage(impl_->codec, impl_->fileFor(image->requestedUs), *image);
 }
 
 void Cache::prunePersistent() {
@@ -437,9 +308,8 @@ void Cache::prunePersistent() {
     if (entry.is_regular_file(ec) && !ec) {
       const std::filesystem::path entryPath = entry.path();
       const auto modified = entry.last_write_time(ec);
-      if (!ec &&
-          entryPath.filename().wstring().find(L".rfthumb.tmp-") !=
-              std::wstring::npos) {
+      if (!ec && entryPath.filename().wstring().find(kTemporaryMarker) !=
+                     std::wstring::npos) {
         if (std::filesystem::file_time_type::clock::now() - modified >
             std::chrono::hours(24)) {
           std::error_code removeError;

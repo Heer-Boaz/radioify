@@ -137,4 +137,10 @@ InputEvent mouseEvent(int x, int y, DWORD buttonState, DWORD eventFlags) {
   return event;
 }
 
+InputEvent pointerLeaveEvent() {
+  InputEvent event{};
+  event.type = InputEvent::Type::PointerLeave;
+  return event;
+}
+
 }  // namespace window_input_events

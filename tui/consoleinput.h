@@ -56,6 +56,7 @@ struct InputEvent {
     Key,
     Action,
     Mouse,
+    PointerLeave,
     Resize,
     FileDrop,
   };

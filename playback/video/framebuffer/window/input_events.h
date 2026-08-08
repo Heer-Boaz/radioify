@@ -25,5 +25,6 @@ std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam);
 DWORD mouseButtonsFromWParam(WPARAM wParam);
 DWORD wheelButtonState(SHORT delta);
 InputEvent mouseEvent(int x, int y, DWORD buttonState, DWORD eventFlags);
+InputEvent pointerLeaveEvent();
 
 }  // namespace window_input_events

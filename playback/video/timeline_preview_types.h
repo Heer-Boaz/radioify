@@ -4,11 +4,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "playback/video/decoder.h"
+#include "playback/video/image.h"
 
 namespace playback_video_timeline_preview {
 
@@ -23,8 +24,8 @@ inline constexpr int kDecodeMaxHeight = 180;
 struct Image {
   uint64_t id = 0;
   int64_t requestedUs = 0;
-  int64_t frameUs = 0;
-  VideoFrame frame;
+  std::optional<int64_t> decodedFrameUs;
+  playback_video_image::RgbaImage surface;
 };
 
 struct Source {
@@ -50,7 +51,6 @@ enum class ResultOrigin : uint8_t {
 struct Result {
   uint64_t requestId = 0;
   int64_t targetUs = 0;
-  bool failed = false;
   ResultOrigin origin = ResultOrigin::Decoded;
   std::shared_ptr<const Image> image;
 };

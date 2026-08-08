@@ -1,3 +1,4 @@
+#include "playback/video/decoder.h"
 #include "playback/video/timeline_preview.h"
 #include "playback/video/timeline_preview_model.h"
 
@@ -9,6 +10,7 @@
 #endif
 #include <windows.h>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -16,6 +18,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace {
@@ -45,13 +48,22 @@ size_t thumbnailFileCount(const std::filesystem::path& root) {
   const std::filesystem::recursive_directory_iterator end;
   while (!ec && iterator != end) {
     if (iterator->is_regular_file(ec) && !ec &&
-        iterator->path().extension() == L".rfthumb") {
+        iterator->path().extension() == L".png") {
       ++count;
     }
     ec.clear();
     iterator.increment(ec);
   }
   return count;
+}
+
+bool hasPngSignature(const std::filesystem::path& path) {
+  constexpr std::array<uint8_t, 8> signature = {
+      0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+  std::array<uint8_t, signature.size()> bytes{};
+  std::ifstream stream(path, std::ios::binary);
+  stream.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
+  return stream.good() && bytes == signature;
 }
 
 bool runPolicyTests() {
@@ -140,13 +152,16 @@ bool runModelTests() {
   const uint64_t resizedId = resized.request->id;
   const int64_t resizedTargetUs = resized.request->targetUs;
 
+  ok &= expect(!model.reject(*first.request),
+               "the model must ignore stale provider rejections");
+
   auto image = std::make_shared<Image>();
   image->id = 1;
   image->requestedUs = resizedTargetUs;
-  ok &= expect(!model.apply(Result{firstId, decodeTargetUs, false,
+  ok &= expect(!model.apply(Result{firstId, decodeTargetUs,
                                   ResultOrigin::Decoded, image}),
                "the model must reject stale provider results");
-  ok &= expect(model.apply(Result{resizedId, resizedTargetUs, false,
+  ok &= expect(model.apply(Result{resizedId, resizedTargetUs,
                                  ResultOrigin::Decoded, image}),
                "the model must accept its authoritative result");
   const Snapshot ready = model.snapshot();
@@ -154,8 +169,23 @@ bool runModelTests() {
                    ready.image == image,
                "an accepted result must become the visible snapshot");
 
+  HoverModel::Update rejectedUpdate = model.hover(0.7, 120);
+  ok &= expect(rejectedUpdate.request.has_value(),
+               "a new bucket must create a provider request");
+  if (!rejectedUpdate.request) return false;
+  ok &= expect(model.reject(*rejectedUpdate.request),
+               "the model must own current submission rejection state");
+  const Snapshot rejected = model.snapshot();
+  ok &= expect(rejected.visible && !rejected.loading && rejected.failed &&
+                   !rejected.image,
+               "a rejected current request must become a failed snapshot");
+  ok &= expect(!model.apply(Result{rejectedUpdate.request->id,
+                                  rejectedUpdate.request->targetUs,
+                                  ResultOrigin::Decoded, image}),
+               "submission rejection must invalidate any late completion");
+
   ok &= expect(model.hide(), "hiding an active preview must change the model");
-  ok &= expect(!model.apply(Result{resizedId, resizedTargetUs, false,
+  ok &= expect(!model.apply(Result{resizedId, resizedTargetUs,
                                   ResultOrigin::Decoded, image}),
                "a hidden model must reject late decoder completion");
   ok &= expect(!model.snapshot().visible,
@@ -169,16 +199,26 @@ std::shared_ptr<const playback_video_timeline_preview::Image> testImage(
   auto image = std::make_shared<Image>();
   image->id = id;
   image->requestedUs = targetUs;
-  image->frameUs = targetUs;
-  image->frame.width = 4;
-  image->frame.height = 4;
-  image->frame.timestamp100ns = targetUs * 10;
-  image->frame.duration100ns = 333'330;
-  image->frame.format = VideoPixelFormat::NV12;
-  image->frame.stride = 4;
-  image->frame.planeHeight = 4;
-  image->frame.yuv.assign(24, static_cast<uint8_t>(targetUs & 0xff));
-  image->frame.storageBytes = image->frame.yuv.size();
+  image->decodedFrameUs = targetUs;
+  image->surface.width = 4;
+  image->surface.height = 4;
+  image->surface.strideBytes = 16;
+  image->surface.pixels.resize(64);
+  const uint8_t base = static_cast<uint8_t>(targetUs & 0xff);
+  for (uint32_t y = 0; y < image->surface.height; ++y) {
+    for (uint32_t x = 0; x < image->surface.width; ++x) {
+      const size_t index = static_cast<size_t>(y) * image->surface.strideBytes +
+                           static_cast<size_t>(x) * 4u;
+      image->surface.pixels[index + 0u] =
+          static_cast<uint8_t>(base + x * 17u + y);
+      image->surface.pixels[index + 1u] =
+          static_cast<uint8_t>(base + x + y * 23u);
+      image->surface.pixels[index + 2u] =
+          static_cast<uint8_t>(base + x * 7u + y * 11u);
+      image->surface.pixels[index + 3u] =
+          static_cast<uint8_t>(64u + x * 16u + y * 8u);
+    }
+  }
   return image;
 }
 
@@ -191,7 +231,7 @@ bool runCacheTests(const std::filesystem::path& identityFile) {
   if (ec) return expect(false, "temporary cache root could not be created");
 
   CacheConfig config;
-  config.memoryByteLimit = 24;
+  config.memoryByteLimit = 64;
   config.memoryFrameLimit = 1;
   config.persistentByteLimit = 4 * 1024 * 1024;
   config.persistentRoot = root;
@@ -203,31 +243,54 @@ bool runCacheTests(const std::filesystem::path& identityFile) {
     const auto firstImage = testImage(1, 1'000'000);
     cache.storeMemory(firstImage);
     cache.storePersistent(firstImage);
+    ok &= expect(hasPngSignature(cache.persistentDirectory() / "1000000.png"),
+                 "persistent thumbnails must use the standard PNG format");
     CacheLookup memory = cache.find(1'000'000, 99);
     ok &= expect(memory.image && memory.origin == ResultOrigin::MemoryCache,
                  "fresh exact entries must hit the volatile LRU");
     const auto secondImage = testImage(2, 2'000'000);
     cache.storeMemory(secondImage);
     cache.storePersistent(secondImage);
-    ok &= expect(cache.memoryFrames() == 1 && cache.memoryBytes() == 24,
+    ok &= expect(cache.memoryFrames() == 1 && cache.memoryBytes() == 64,
                  "volatile cache must enforce byte and frame budgets");
     ok &= expect(!cache.find(1'000'001, 100).image,
                  "cache lookup must never substitute a nearby timestamp");
     CacheLookup disk = cache.find(1'000'000, 101);
     ok &= expect(disk.image &&
                      disk.origin == ResultOrigin::PersistentCache &&
-                     disk.image->id == 101,
-                 "an evicted exact entry must reload from persistent cache");
+                     disk.image->id == 101 &&
+                     !disk.image->decodedFrameUs.has_value() &&
+                     disk.image->surface.pixels ==
+                         firstImage->surface.pixels,
+                 "an evicted exact RGBA entry must reload losslessly");
+
+    auto overBudget = std::make_shared<Image>(*secondImage);
+    overBudget->requestedUs = 2'500'000;
+    overBudget->surface.pixels.push_back(0);
+    cache.storeMemory(overBudget);
+    ok &= expect(!cache.find(2'500'000, 104).image &&
+                     cache.memoryBytes() == 64,
+                 "the volatile budget must count the actual allocation");
 
     auto invalid = std::make_shared<Image>(*testImage(3, 3'000'000));
-    invalid->frame.yuv.pop_back();
+    invalid->surface.pixels.pop_back();
     cache.storeMemory(invalid);
     cache.storePersistent(invalid);
     ok &= expect(!cache.find(3'000'000, 103).image,
-                 "invalid planar payloads must never enter either cache tier");
+                 "incomplete RGBA surfaces must never enter either cache tier");
+
+    const std::filesystem::path corruptPng =
+        cache.persistentDirectory() / "3500000.png";
+    {
+      std::ofstream stream(corruptPng, std::ios::binary);
+      stream << "not a PNG";
+    }
+    ok &= expect(!cache.find(3'500'000, 105).image &&
+                     !std::filesystem::exists(corruptPng),
+                 "a corrupt persistent image must be rejected and removed");
 
     const std::filesystem::path staleTemporary =
-        cache.persistentDirectory() / "orphan.rfthumb.tmp-1-1";
+        cache.persistentDirectory() / "orphan.png.tmp-1-1";
     {
       std::ofstream stream(staleTemporary, std::ios::binary);
       stream << "orphan";
@@ -269,7 +332,7 @@ bool runCacheTests(const std::filesystem::path& identityFile) {
 struct MediaSample {
   bool ready = false;
   int64_t elapsedMs = 0;
-  int64_t frameOffsetUs = 0;
+  std::optional<int64_t> frameOffsetUs;
   playback_video_timeline_preview::ResultOrigin origin =
       playback_video_timeline_preview::ResultOrigin::Decoded;
 };
@@ -290,13 +353,21 @@ MediaSample waitForMediaResult(
     if (snapshot.visible && !snapshot.loading && snapshot.image &&
         snapshot.image->requestedUs == expectedDecodeUs &&
         requestId == model.requestId()) {
-      sample.frameOffsetUs = snapshot.image->frameUs - expectedDecodeUs;
-      sample.ready = snapshot.image->frame.width > 0 &&
-                     snapshot.image->frame.width <= kDecodeMaxWidth &&
-                     snapshot.image->frame.height > 0 &&
-                     snapshot.image->frame.height <= kDecodeMaxHeight &&
-                     snapshot.image->frame.storageBytes > 0 &&
-                     std::llabs(sample.frameOffsetUs) <= 250'000;
+      if (snapshot.image->decodedFrameUs) {
+        sample.frameOffsetUs =
+            *snapshot.image->decodedFrameUs - expectedDecodeUs;
+      }
+      const bool timestampValid =
+          sample.origin == ResultOrigin::PersistentCache
+              ? !snapshot.image->decodedFrameUs.has_value()
+              : sample.frameOffsetUs.has_value() &&
+                    std::llabs(*sample.frameOffsetUs) <= 250'000;
+      sample.ready = snapshot.image->surface.width > 0 &&
+                     snapshot.image->surface.width <= kDecodeMaxWidth &&
+                     snapshot.image->surface.height > 0 &&
+                     snapshot.image->surface.height <= kDecodeMaxHeight &&
+                     playback_video_image::validate(snapshot.image->surface) &&
+                     timestampValid;
       break;
     }
     WaitForSingleObject(provider.changedWaitHandle().get(), 250);
@@ -387,8 +458,10 @@ bool runMediaSmoke(const std::filesystem::path& path) {
 
   std::error_code ec;
   std::filesystem::remove_all(root, ec);
+  const std::string decodedOffset =
+      decoded.frameOffsetUs ? std::to_string(*decoded.frameOffsetUs) : "n/a";
   std::cout << "timeline_preview_media decode_ms=" << decoded.elapsedMs
-            << " frame_offset_us=" << decoded.frameOffsetUs
+            << " frame_offset_us=" << decodedOffset
             << " endpoint_ms=" << endpoint.elapsedMs
             << " persistent_ms=" << persisted.elapsedMs
             << " persistent_hit="
