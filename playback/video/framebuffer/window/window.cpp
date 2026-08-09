@@ -2454,15 +2454,17 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                 ? &ui.timelinePreview.image->surface
                 : nullptr;
         const int sourceWidth =
-            previewSurface ? static_cast<int>(previewSurface->width) : 16;
+            previewSurface
+                ? static_cast<int>(previewSurface->width)
+                : std::max(16, ui.timelinePreview.sourceWidth);
         const int sourceHeight =
-            previewSurface ? static_cast<int>(previewSurface->height) : 9;
-        const int footerTop = windowOverlayLayout.topY >= 0
-                                  ? windowOverlayLayout.topY
-                                  : rows;
+            previewSurface
+                ? static_cast<int>(previewSurface->height)
+                : std::max(9, ui.timelinePreview.sourceHeight);
         const auto previewLayout =
             playback_video_timeline_preview::layoutCells(
-                cols, rows, footerTop, windowOverlayLayout.progressBarX,
+                cols, rows, windowOverlayLayout.progressBarY,
+                windowOverlayLayout.progressBarX,
                 windowOverlayLayout.progressBarWidth,
                 ui.timelinePreview.anchorRatio, sourceWidth, sourceHeight,
                 cellWidth, cellHeight,

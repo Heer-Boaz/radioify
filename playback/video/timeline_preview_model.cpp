@@ -22,9 +22,11 @@ int64_t targetForRatio(double ratio, int64_t durationUs) {
 
 }  // namespace
 
-void HoverModel::start(int64_t durationUs) {
+void HoverModel::start(int64_t durationUs, int sourceWidth, int sourceHeight) {
   snapshot_ = Snapshot{};
   snapshot_.durationUs = std::max<int64_t>(0, durationUs);
+  snapshot_.sourceWidth = std::max(0, sourceWidth);
+  snapshot_.sourceHeight = std::max(0, sourceHeight);
   requestId_ = 0;
   activeDecodeTargetUs_ = -1;
   activeBucketUs_ = 0;
@@ -45,7 +47,8 @@ uint64_t HoverModel::nextRequestId() {
   return requestId_;
 }
 
-HoverModel::Update HoverModel::hover(double ratio, int progressUnits) {
+HoverModel::Update HoverModel::hover(PresentationSurface surface, double ratio,
+                                     int progressUnits) {
   Update update;
   if (!std::isfinite(ratio)) return update;
 
@@ -62,6 +65,7 @@ HoverModel::Update HoverModel::hover(double ratio, int progressUnits) {
       activeBucketUs_ == bucketUs;
 
   snapshot_.hoverActive = true;
+  snapshot_.presentationSurface = surface;
   snapshot_.anchorRatio = ratio;
   snapshot_.targetUs = targetUs;
   ++snapshot_.revision;
@@ -89,8 +93,10 @@ HoverModel::Update HoverModel::hover(double ratio, int progressUnits) {
   return update;
 }
 
-bool HoverModel::hide() {
-  if (!snapshot_.hoverActive) return false;
+bool HoverModel::hide(PresentationSurface surface) {
+  if (!snapshot_.hoverActive || snapshot_.presentationSurface != surface) {
+    return false;
+  }
   snapshot_.hoverActive = false;
   snapshot_.image.reset();
   activeDecodeTargetUs_ = -1;
@@ -133,5 +139,14 @@ uint64_t HoverModel::requestId() const {
 }
 
 Snapshot HoverModel::snapshot() const { return snapshot_; }
+
+Snapshot HoverModel::snapshotFor(PresentationSurface surface) const {
+  Snapshot snapshot = snapshot_;
+  if (snapshot.hoverActive && snapshot.presentationSurface != surface) {
+    snapshot.hoverActive = false;
+    snapshot.image.reset();
+  }
+  return snapshot;
+}
 
 }  // namespace playback_video_timeline_preview

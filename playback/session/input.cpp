@@ -537,6 +537,10 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   MouseEvent hitMouse = mouse;
   bool overlayVisibleForHitTest = isOverlayVisible(signals);
   const bool windowOriginEvent = isWindowMouseEvent(mouse);
+  const auto previewSurface =
+      windowOriginEvent
+          ? playback_video_timeline_preview::PresentationSurface::VideoWindow
+          : playback_video_timeline_preview::PresentationSurface::Terminal;
   const bool terminalAsciiProgress =
       !windowOriginEvent && isAsciiPlaybackMode(view.currentMode);
   const playback_frame_output::FrameOutputState* progressOutputState =
@@ -661,7 +665,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                    view.videoWindow->GetWidth(), windowTextCellW) -
                    2);
       }
-      signals.requestTimelinePreview(progressRatio, progressUnits);
+      signals.requestTimelinePreview(previewSurface, progressRatio,
+                                     progressUnits);
     }
     if (seekGesture) {
       queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
@@ -669,7 +674,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     return;
   }
   if (signals.clearTimelinePreview) {
-    signals.clearTimelinePreview();
+    signals.clearTimelinePreview(previewSurface);
   }
   if (!overlayVisibleForHitTest) {
     updateOverlayControlHover(signals, -1);
@@ -723,7 +728,10 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
 }
 
 void handlePlaybackPointerLeave(PlaybackInputSignals& signals) {
-  if (signals.clearTimelinePreview) signals.clearTimelinePreview();
+  if (signals.clearTimelinePreview) {
+    signals.clearTimelinePreview(
+        playback_video_timeline_preview::PresentationSurface::VideoWindow);
+  }
   updateOverlayControlHover(signals, -1);
 }
 

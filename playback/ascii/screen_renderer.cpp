@@ -458,33 +458,6 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         videoWindow.GetWidth(), videoWindow.GetHeight(), dimStyle);
   }
 
-  if (inputs.timelinePreview.hoverActive) {
-    const playback_video_image::RgbaImage* previewSurface =
-        inputs.timelinePreview.hasImage()
-            ? &inputs.timelinePreview.image->surface
-            : nullptr;
-    const int previewSourceWidth =
-        previewSurface ? static_cast<int>(previewSurface->width)
-                       : std::max(16, layoutSourceW);
-    const int previewSourceHeight =
-        previewSurface ? static_cast<int>(previewSurface->height)
-                       : std::max(9, layoutSourceH);
-    const int footerTop = overlayLayout.topY >= 0 ? overlayLayout.topY : height;
-    const auto previewLayout =
-        playback_video_timeline_preview::layoutCells(
-            width, height, footerTop, overlayLayout.progressBarX,
-            overlayLayout.progressBarWidth,
-            inputs.timelinePreview.anchorRatio, previewSourceWidth,
-            previewSourceHeight, cellPixelWidth, cellPixelHeight,
-            playback_video_timeline_preview::formatTimestamp(
-                inputs.timelinePreview.targetUs));
-    playback_overlay::OverlayRenderStyles previewStyles;
-    previewStyles.baseStyle = baseStyle;
-    previewStyles.accentStyle = accentStyle;
-    renderTimelinePreview(screen, inputs.timelinePreview, previewLayout,
-                          inputs.timelinePreviewCache, previewStyles);
-  }
-
   if (showOverlay) {
     double ratio = 0.0;
     if (totalSec > 0.0 && std::isfinite(totalSec)) {
@@ -498,6 +471,38 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         progressStart, progressEnd};
     playback_overlay::renderOverlayToScreen(
         screen, overlayLayout, overlayStyles, ratio, artTop, height);
+  }
+
+  if (inputs.timelinePreview.hoverActive) {
+    const playback_video_image::RgbaImage* previewSurface =
+        inputs.timelinePreview.hasImage()
+            ? &inputs.timelinePreview.image->surface
+            : nullptr;
+    const int previewSourceWidth =
+        previewSurface
+            ? static_cast<int>(previewSurface->width)
+            : std::max(16, inputs.timelinePreview.sourceWidth > 0
+                               ? inputs.timelinePreview.sourceWidth
+                               : layoutSourceW);
+    const int previewSourceHeight =
+        previewSurface
+            ? static_cast<int>(previewSurface->height)
+            : std::max(9, inputs.timelinePreview.sourceHeight > 0
+                              ? inputs.timelinePreview.sourceHeight
+                              : layoutSourceH);
+    const auto previewLayout =
+        playback_video_timeline_preview::layoutCells(
+            width, height, overlayLayout.progressBarY,
+            overlayLayout.progressBarX, overlayLayout.progressBarWidth,
+            inputs.timelinePreview.anchorRatio, previewSourceWidth,
+            previewSourceHeight, cellPixelWidth, cellPixelHeight,
+            playback_video_timeline_preview::formatTimestamp(
+                inputs.timelinePreview.targetUs));
+    playback_overlay::OverlayRenderStyles previewStyles;
+    previewStyles.baseStyle = baseStyle;
+    previewStyles.accentStyle = accentStyle;
+    renderTimelinePreview(screen, inputs.timelinePreview, previewLayout,
+                          inputs.timelinePreviewCache, previewStyles);
   }
 
   if (overlayState.transientMessage) {

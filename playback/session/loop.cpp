@@ -171,7 +171,9 @@ struct PlaybackLoopRunner::Impl {
     const playback_video_timeline_preview::Source previewSource{
         file, core.player().videoStreamIndex(), core.player().durationUs(),
         core.player().sourceWidth(), core.player().sourceHeight()};
-    timelinePreviewModel.start(previewSource.durationUs);
+    timelinePreviewModel.start(previewSource.durationUs,
+                               previewSource.sourceWidth,
+                               previewSource.sourceHeight);
     timelinePreviewStarted = timelinePreviewProvider.start(previewSource);
     if (!timelinePreviewStarted) timelinePreviewModel.stop();
     bindInputState();
@@ -214,8 +216,10 @@ struct PlaybackLoopRunner::Impl {
       output.requestWindowPresent();
     };
     inputSignals.requestTimelinePreview =
-        [this](double ratio, int progressUnits) {
-          auto update = timelinePreviewModel.hover(ratio, progressUnits);
+        [this](playback_video_timeline_preview::PresentationSurface surface,
+               double ratio, int progressUnits) {
+          auto update =
+              timelinePreviewModel.hover(surface, ratio, progressUnits);
           if (update.request &&
               !timelinePreviewProvider.submit(*update.request)) {
             timelinePreviewModel.reject(*update.request);
@@ -225,13 +229,15 @@ struct PlaybackLoopRunner::Impl {
             output.requestWindowPresent();
           }
         };
-    inputSignals.clearTimelinePreview = [this]() {
-      if (timelinePreviewModel.hide()) {
-        timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
-        redraw = true;
-        output.requestWindowPresent();
-      }
-    };
+    inputSignals.clearTimelinePreview =
+        [this](playback_video_timeline_preview::PresentationSurface surface) {
+          if (timelinePreviewModel.hide(surface)) {
+            timelinePreviewProvider.cancelBefore(
+                timelinePreviewModel.requestId());
+            redraw = true;
+            output.requestWindowPresent();
+          }
+        };
     inputSignals.toggleWindowPresentation = [this]() {
       return presentationController.toggleWindow(output, redraw,
                                                  forceRefreshArt);
@@ -309,7 +315,8 @@ struct PlaybackLoopRunner::Impl {
             requestTransportCommand != nullptr, hasSubtitles,
             enableSubtitlesShared, overlayControlHover, osdSnapshot(),
             config.debugOverlay);
-    ui.timelinePreview = timelinePreviewModel.snapshot();
+    ui.timelinePreview = timelinePreviewModel.snapshotFor(
+        playback_video_timeline_preview::PresentationSurface::VideoWindow);
     return ui;
   }
 
@@ -347,7 +354,8 @@ struct PlaybackLoopRunner::Impl {
     const bool audioOnlyPlayback =
         core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
     inputs.osd = osdSnapshot();
-    inputs.timelinePreview = timelinePreviewModel.snapshot();
+    inputs.timelinePreview = timelinePreviewModel.snapshotFor(
+        playback_video_timeline_preview::PresentationSurface::VideoWindow);
     inputs.osd.controlsVisible =
         inputs.osd.controlsVisible || audioOnlyPlayback;
     inputs.clearHistory = false;
@@ -453,7 +461,8 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.allowAsciiCpuFallback = false;
     renderInputs.useWindowPresenter = output.windowActive();
     renderInputs.osd = osdSnapshot();
-    renderInputs.timelinePreview = timelinePreviewModel.snapshot();
+    renderInputs.timelinePreview = timelinePreviewModel.snapshotFor(
+        playback_video_timeline_preview::PresentationSurface::Terminal);
     renderInputs.cellPixelWidth = screen.cellPixelWidth();
     renderInputs.cellPixelHeight = screen.cellPixelHeight();
     renderInputs.cellPixelSourceLabel = screen.cellPixelSourceLabel();

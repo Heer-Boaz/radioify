@@ -55,14 +55,22 @@ struct Result {
   std::shared_ptr<const Image> image;
 };
 
+enum class PresentationSurface : uint8_t {
+  Terminal,
+  VideoWindow,
+};
+
 struct Snapshot {
   // Hover intent and image readiness are deliberately independent. Renderers
   // may present the timestamp while the provider is working, but must never
   // infer a drawable thumbnail from hover activity alone.
   bool hoverActive = false;
+  PresentationSurface presentationSurface = PresentationSurface::Terminal;
   double anchorRatio = 0.0;
   int64_t targetUs = 0;
   int64_t durationUs = 0;
+  int sourceWidth = 0;
+  int sourceHeight = 0;
   uint64_t revision = 0;
   std::shared_ptr<const Image> image;
 
@@ -100,7 +108,7 @@ std::string formatTimestamp(int64_t timestampUs);
 std::vector<int64_t> prefetchTargets(int64_t targetUs, int64_t bucketUs,
                                      int64_t durationUs, int direction);
 
-CellLayout layoutCells(int columns, int rows, int footerTopRow,
+CellLayout layoutCells(int columns, int rows, int progressBarY,
                        int progressBarX, int progressBarWidth,
                        double anchorRatio, int sourceWidth, int sourceHeight,
                        double cellPixelWidth, double cellPixelHeight,

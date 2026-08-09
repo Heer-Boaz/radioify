@@ -17,16 +17,17 @@ class HoverModel {
     std::optional<Request> request;
   };
 
-  void start(int64_t durationUs);
+  void start(int64_t durationUs, int sourceWidth = 0, int sourceHeight = 0);
   void stop();
 
-  Update hover(double ratio, int progressUnits);
-  bool hide();
+  Update hover(PresentationSurface surface, double ratio, int progressUnits);
+  bool hide(PresentationSurface surface);
   bool reject(const Request& request);
   bool apply(const Result& result);
 
   uint64_t requestId() const;
   Snapshot snapshot() const;
+  Snapshot snapshotFor(PresentationSurface surface) const;
 
  private:
   uint64_t nextRequestId();

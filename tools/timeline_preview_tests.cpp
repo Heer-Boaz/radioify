@@ -111,17 +111,17 @@ bool runPolicyTests() {
   ok &= expect(formatTimestamp(3'723'000'000) == "1:02:03",
                "long labels must include hours");
 
-  const CellLayout left = layoutCells(120, 40, 34, 1, 118, 0.0, 1920,
+  const CellLayout left = layoutCells(120, 40, 39, 1, 118, 0.0, 1920,
                                       1080, 9.0, 21.0, "0:00");
-  const CellLayout right = layoutCells(120, 40, 34, 1, 118, 1.0, 1920,
+  const CellLayout right = layoutCells(120, 40, 39, 1, 118, 1.0, 1920,
                                        1080, 9.0, 21.0, "1:00");
   ok &= expect(left.drawable() && right.drawable(),
                "normal terminal geometry must produce a preview popup");
   ok &= expect(left.outerX == 0 &&
                    right.outerX + right.outerWidth <= 120,
                "preview popups must clamp at both progress-bar edges");
-  ok &= expect(left.outerY + left.outerHeight < 34,
-               "preview popup must not overlap the controls footer");
+  ok &= expect(left.outerY + left.outerHeight == 39 && left.labelY == 38,
+               "preview time footer must sit directly above the progress bar");
   ok &= expect(!layoutCells(8, 5, 4, 0, 8, 0.5, 16, 9, 9.0, 21.0,
                             "0:00")
                     .drawable(),
@@ -133,9 +133,10 @@ bool runModelTests() {
   using namespace playback_video_timeline_preview;
   bool ok = true;
   HoverModel model;
-  model.start(60'000'000);
+  model.start(60'000'000, 1920, 1080);
 
-  HoverModel::Update first = model.hover(0.5, 120);
+  HoverModel::Update first =
+      model.hover(PresentationSurface::Terminal, 0.5, 120);
   ok &= expect(first.changed && first.request.has_value(),
                "first hover must create an exact provider request");
   if (!first.request) return false;
@@ -144,11 +145,13 @@ bool runModelTests() {
                "pending hover must expose timestamp intent without an image");
   const uint64_t firstId = first.request->id;
   const int64_t decodeTargetUs = first.request->targetUs;
-  HoverModel::Update sameBucket = model.hover(0.5001, 120);
+  HoverModel::Update sameBucket =
+      model.hover(PresentationSurface::Terminal, 0.5001, 120);
   ok &= expect(sameBucket.changed && !sameBucket.request,
                "cursor motion inside one bucket must only update the view");
 
-  HoverModel::Update resized = model.hover(0.5001, 60);
+  HoverModel::Update resized =
+      model.hover(PresentationSurface::Terminal, 0.5001, 60);
   ok &= expect(resized.changed && resized.request.has_value(),
                "changed progress geometry must refresh the prefetch spacing");
   if (!resized.request) return false;
@@ -175,7 +178,8 @@ bool runModelTests() {
   ok &= expect(ready.hoverActive && ready.hasImage() && ready.image == image,
                "an accepted result must become the visible snapshot");
 
-  HoverModel::Update rejectedUpdate = model.hover(0.7, 120);
+  HoverModel::Update rejectedUpdate =
+      model.hover(PresentationSurface::Terminal, 0.7, 120);
   ok &= expect(rejectedUpdate.request.has_value(),
                "a new bucket must create a provider request");
   if (!rejectedUpdate.request) return false;
@@ -189,12 +193,35 @@ bool runModelTests() {
                                   ResultOrigin::Decoded, image}),
                "submission rejection must invalidate any late completion");
 
-  ok &= expect(model.hide(), "hiding an active preview must change the model");
+  ok &= expect(model.hide(PresentationSurface::Terminal),
+               "hiding an active preview must change the model");
   ok &= expect(!model.apply(Result{resizedId, resizedTargetUs,
                                   ResultOrigin::Decoded, image}),
                "a hidden model must reject late decoder completion");
   ok &= expect(!model.snapshot().hoverActive,
                "hide must withdraw the presentation snapshot");
+
+  HoverModel surfaceModel;
+  surfaceModel.start(60'000'000, 1920, 1080);
+  HoverModel::Update terminalHover =
+      surfaceModel.hover(PresentationSurface::Terminal, 0.25, 120);
+  ok &= expect(terminalHover.request.has_value() &&
+                   surfaceModel.snapshotFor(PresentationSurface::Terminal)
+                       .hoverActive &&
+                   !surfaceModel.snapshotFor(PresentationSurface::VideoWindow)
+                        .hoverActive,
+               "a terminal hover must only be published to the terminal");
+  HoverModel::Update windowHover =
+      surfaceModel.hover(PresentationSurface::VideoWindow, 0.2501, 120);
+  ok &= expect(!windowHover.request.has_value() &&
+                   !surfaceModel.snapshotFor(PresentationSurface::Terminal)
+                        .hoverActive &&
+                   surfaceModel.snapshotFor(PresentationSurface::VideoWindow)
+                       .hoverActive,
+               "same-bucket ownership transfer must not trigger another decode");
+  ok &= expect(!surfaceModel.hide(PresentationSurface::Terminal) &&
+                   surfaceModel.hide(PresentationSurface::VideoWindow),
+               "pointer leave may only hide the preview owned by that surface");
   return ok;
 }
 
@@ -414,14 +441,15 @@ bool runMediaSmoke(const std::filesystem::path& path) {
   {
     HoverModel model;
     Provider provider(cacheConfig);
-    model.start(source.durationUs);
+    model.start(source.durationUs, source.sourceWidth, source.sourceHeight);
     if (!provider.start(source)) {
       std::cerr << "timeline_preview_tests: preview provider failed to start\n";
       return false;
     }
     const auto startedAt = std::chrono::steady_clock::now();
     for (const double ratio : {0.10, 0.90, 0.50}) {
-      HoverModel::Update update = model.hover(ratio, 160);
+      HoverModel::Update update =
+          model.hover(PresentationSurface::Terminal, ratio, 160);
       if (!update.request || !provider.submit(*update.request)) {
         provider.stop();
         return expect(false, "provider must accept authoritative hover work");
@@ -431,7 +459,8 @@ bool runMediaSmoke(const std::filesystem::path& path) {
     }
     decoded = waitForMediaResult(provider, model, model.requestId(),
                                  expectedDecodeUs, startedAt);
-    HoverModel::Update endpointUpdate = model.hover(1.0, 160);
+    HoverModel::Update endpointUpdate =
+        model.hover(PresentationSurface::Terminal, 1.0, 160);
     if (!endpointUpdate.request || !provider.submit(*endpointUpdate.request)) {
       provider.stop();
       return expect(false, "provider must accept an end-of-media request");
@@ -440,7 +469,7 @@ bool runMediaSmoke(const std::filesystem::path& path) {
     endpoint = waitForMediaResult(provider, model, endpointUpdate.request->id,
                                   endpointUpdate.request->targetUs,
                                   endpointStartedAt);
-    const bool hidden = model.hide();
+    const bool hidden = model.hide(PresentationSurface::Terminal);
     provider.cancelBefore(model.requestId());
     provider.stop();
     ok &= expect(hidden && !model.snapshot().hoverActive,
@@ -451,9 +480,10 @@ bool runMediaSmoke(const std::filesystem::path& path) {
   {
     HoverModel model;
     Provider provider(cacheConfig);
-    model.start(source.durationUs);
+    model.start(source.durationUs, source.sourceWidth, source.sourceHeight);
     if (!provider.start(source)) return false;
-    HoverModel::Update update = model.hover(0.50, 160);
+    HoverModel::Update update =
+        model.hover(PresentationSurface::Terminal, 0.50, 160);
     if (!update.request || !provider.submit(*update.request)) return false;
     const auto startedAt = std::chrono::steady_clock::now();
     persisted = waitForMediaResult(provider, model, update.request->id,

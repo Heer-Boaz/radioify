@@ -122,7 +122,7 @@ std::vector<int64_t> prefetchTargets(int64_t targetUs, int64_t bucketUs,
   return targets;
 }
 
-CellLayout layoutCells(int columns, int rows, int footerTopRow,
+CellLayout layoutCells(int columns, int rows, int progressBarY,
                        int progressBarX, int progressBarWidth,
                        double anchorRatio, int sourceWidth, int sourceHeight,
                        double cellPixelWidth, double cellPixelHeight,
@@ -130,8 +130,8 @@ CellLayout layoutCells(int columns, int rows, int footerTopRow,
   CellLayout out;
   if (columns < 10 || rows < 6) return out;
 
-  const int footerTop = std::clamp(footerTopRow, 1, rows);
-  const int availableRows = footerTop - 1;
+  if (progressBarY <= 0 || progressBarY >= rows) return out;
+  const int availableRows = progressBarY;
   if (availableRows < 4) return out;
 
   const double safeCellWidth = cellPixelWidth > 0.0 ? cellPixelWidth : 9.0;
@@ -170,7 +170,10 @@ CellLayout layoutCells(int columns, int rows, int footerTopRow,
                                 std::lround(ratio * std::max(0, barWidth - 1)));
   out.outerX =
       std::clamp(anchorX - out.outerWidth / 2, 0, columns - out.outerWidth);
-  out.outerY = footerTop - 1 - out.outerHeight;
+  // The preview is one seek-bar-owned popover: image first, then its time
+  // footer, immediately followed by the progress bar.  Keeping the footer at
+  // a fixed Y also prevents it from jumping when the async image arrives.
+  out.outerY = progressBarY - out.outerHeight;
   out.imageX = out.outerX + 1;
   out.imageY = out.outerY + 1;
   out.imageWidth = imageColumns;
@@ -178,7 +181,7 @@ CellLayout layoutCells(int columns, int rows, int footerTopRow,
   out.label = label;
   const int labelWidth = static_cast<int>(out.label.size());
   out.labelX = out.outerX + std::max(1, (out.outerWidth - labelWidth) / 2);
-  out.labelY = out.outerY;
+  out.labelY = progressBarY - 1;
   return out;
 }
 

@@ -905,14 +905,14 @@ class GpuTextGridOverlayTarget {
  public:
   GpuTextGridOverlayTarget(GpuTextGridFrame& frame, int cols, int rows,
                            const Style& baseStyle)
-      : frame_(frame) {
+      : frame_(frame),
+        transparentSpace_(overlayGpuCell(
+            L' ', baseStyle, kGpuTextGridCellFlagTransparentBg)) {
     frame_.cols = std::max(1, cols);
     frame_.rows = std::max(1, rows);
-    const GpuTextGridCell transparentSpace = overlayGpuCell(
-        L' ', baseStyle, kGpuTextGridCellFlagTransparentBg);
     const size_t cellCount =
         static_cast<size_t>(frame_.cols) * static_cast<size_t>(frame_.rows);
-    frame_.cells.assign(cellCount, transparentSpace);
+    frame_.cells.assign(cellCount, transparentSpace_);
   }
 
   bool isDrawable() const { return frame_.cols > 0 && frame_.rows > 0; }
@@ -965,8 +965,22 @@ class GpuTextGridOverlayTarget {
         overlayGpuCell(ch, style);
   }
 
+  void clearRect(int x, int y, int width, int height) {
+    const int left = std::clamp(x, 0, frame_.cols);
+    const int top = std::clamp(y, 0, frame_.rows);
+    const int right = std::clamp(x + std::max(0, width), 0, frame_.cols);
+    const int bottom = std::clamp(y + std::max(0, height), 0, frame_.rows);
+    for (int row = top; row < bottom; ++row) {
+      for (int column = left; column < right; ++column) {
+        frame_.cells[static_cast<size_t>(row * frame_.cols + column)] =
+            transparentSpace_;
+      }
+    }
+  }
+
  private:
   GpuTextGridFrame& frame_;
+  GpuTextGridCell transparentSpace_;
 };
 
 OverlayCellTextLine layoutTransientMessageLine(const std::string& message,
@@ -1143,17 +1157,20 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
     const playback_video_image::RgbaImage* previewSurface =
         imageReady ? &ui.timelinePreview.image->surface : nullptr;
     const int sourceWidth =
-        previewSurface ? static_cast<int>(previewSurface->width) : 16;
+        previewSurface ? static_cast<int>(previewSurface->width)
+                       : std::max(16, ui.timelinePreview.sourceWidth);
     const int sourceHeight =
-        previewSurface ? static_cast<int>(previewSurface->height) : 9;
-    const int footerTop = overlayLayout.topY >= 0 ? overlayLayout.topY : height;
+        previewSurface ? static_cast<int>(previewSurface->height)
+                       : std::max(9, ui.timelinePreview.sourceHeight);
     const auto previewLayout = playback_video_timeline_preview::layoutCells(
-        width, height, footerTop, overlayLayout.progressBarX,
+        width, height, overlayLayout.progressBarY, overlayLayout.progressBarX,
         overlayLayout.progressBarWidth, ui.timelinePreview.anchorRatio,
         sourceWidth, sourceHeight, cellPixelWidth, cellPixelHeight,
         playback_video_timeline_preview::formatTimestamp(
             ui.timelinePreview.targetUs));
     if (imageReady) {
+      target.clearRect(previewLayout.outerX, previewLayout.outerY,
+                       previewLayout.outerWidth, previewLayout.outerHeight);
       renderTimelinePreviewChromeToTarget(target, previewLayout, styles);
     } else {
       renderTimelinePreviewTimestampToTarget(target, previewLayout, styles);
