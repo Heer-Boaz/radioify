@@ -54,6 +54,10 @@ radioify_add_module_object_library(radioify_tool_video_frame_step_smoke
   ${CMAKE_CURRENT_SOURCE_DIR}/video_frame_step_smoke.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_frame_step_snapshot_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_snapshot_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_timeline_preview_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_tests.cpp
 )

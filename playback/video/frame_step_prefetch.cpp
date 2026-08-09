@@ -1,5 +1,6 @@
 #include "playback/video/frame_step_prefetch.h"
 
+#include "playback/video/frame_step_snapshot.h"
 #include "playback/video/frame_step_source_cache.h"
 
 #include <algorithm>
@@ -101,82 +102,11 @@ enum class SnapshotResult {
   Failed,
 };
 
-class SnapshotCommandBatch {
- public:
-  SnapshotCommandBatch(ID3D11DeviceContext* deferredContext,
-                       ID3D11DeviceContext* immediateContext,
-                       std::recursive_mutex* immediateContextMutex)
-      : deferredContext_(deferredContext),
-        immediateContext_(immediateContext),
-        immediateContextMutex_(immediateContextMutex) {}
-
-  ~SnapshotCommandBatch() { discard(); }
-
-  bool copy(ID3D11Texture2D* destination, ID3D11Texture2D* source,
-            UINT sourceSubresource) {
-    if (!destination || !source || !immediateContext_ ||
-        !immediateContextMutex_) {
-      return false;
-    }
-    if (!deferredContext_) {
-      std::lock_guard<std::recursive_mutex> lock(*immediateContextMutex_);
-      immediateContext_->CopySubresourceRegion(
-          destination, 0, 0, 0, 0, source, sourceSubresource, nullptr);
-      return true;
-    }
-
-    deferredContext_->CopySubresourceRegion(
-        destination, 0, 0, 0, 0, source, sourceSubresource, nullptr);
-    sourceTextures_.emplace_back(source);
-    hasCommands_ = true;
-    return true;
-  }
-
-  bool submit() {
-    if (!hasCommands_) {
-      return true;
-    }
-    Microsoft::WRL::ComPtr<ID3D11CommandList> commandList;
-    if (!deferredContext_ ||
-        FAILED(deferredContext_->FinishCommandList(FALSE, &commandList)) ||
-        !commandList) {
-      reset();
-      return false;
-    }
-    {
-      std::lock_guard<std::recursive_mutex> lock(*immediateContextMutex_);
-      immediateContext_->ExecuteCommandList(commandList.Get(), FALSE);
-    }
-    hasCommands_ = false;
-    sourceTextures_.clear();
-    return true;
-  }
-
- private:
-  void discard() {
-    if (hasCommands_ && deferredContext_) {
-      Microsoft::WRL::ComPtr<ID3D11CommandList> discarded;
-      deferredContext_->FinishCommandList(FALSE, &discarded);
-    }
-    reset();
-  }
-
-  void reset() {
-    hasCommands_ = false;
-    sourceTextures_.clear();
-  }
-
-  ID3D11DeviceContext* deferredContext_ = nullptr;
-  ID3D11DeviceContext* immediateContext_ = nullptr;
-  std::recursive_mutex* immediateContextMutex_ = nullptr;
-  bool hasCommands_ = false;
-  std::vector<Microsoft::WRL::ComPtr<ID3D11Texture2D>> sourceTextures_;
-};
-
 SnapshotResult snapshotFrame(
     const VideoFrame& decoded, const std::shared_ptr<CacheBudget>& budget,
-    ID3D11Device* device, SnapshotCommandBatch* commands, VideoFrame* out) {
-  if (!out || !budget || !commands) {
+    ID3D11Device* device, ID3D11DeviceContext* context,
+    std::recursive_mutex* contextMutex, VideoFrame* out) {
+  if (!out || !budget) {
     return SnapshotResult::Failed;
   }
 
@@ -191,54 +121,22 @@ SnapshotResult snapshotFrame(
     return SnapshotResult::Ok;
   }
 
-  if (!decoded.hwTexture || !device) {
+  if (!decoded.hwTexture || !device || !context || !contextMutex) {
     return SnapshotResult::Failed;
   }
 
-  D3D11_TEXTURE2D_DESC sourceDesc{};
-  decoded.hwTexture->GetDesc(&sourceDesc);
-  if (sourceDesc.MipLevels != 1 || decoded.hwTextureArrayIndex < 0 ||
-      static_cast<UINT>(decoded.hwTextureArrayIndex) >= sourceDesc.ArraySize) {
-    return SnapshotResult::Failed;
-  }
   std::shared_ptr<void> lease = budget->acquire(decoded.storageBytes);
   if (!lease) {
     return SnapshotResult::BudgetFull;
   }
 
-  D3D11_TEXTURE2D_DESC snapshotDesc = sourceDesc;
-  snapshotDesc.MipLevels = 1;
-  snapshotDesc.ArraySize = 1;
-  snapshotDesc.SampleDesc.Count = 1;
-  snapshotDesc.SampleDesc.Quality = 0;
-  snapshotDesc.Usage = D3D11_USAGE_DEFAULT;
-  // The snapshot is a copy source, not a directly bound shader resource.
-  // BindFlags=0 also keeps it valid as a D3D11 video-processor input.
-  snapshotDesc.BindFlags = 0;
-  snapshotDesc.CPUAccessFlags = 0;
-  snapshotDesc.MiscFlags = 0;
-
-  Microsoft::WRL::ComPtr<ID3D11Texture2D> snapshot;
-  // ID3D11Device resource creation is free-threaded on the shared device. Keep
-  // the explicit cross-pipeline lock scoped to the immediate-context command;
-  // otherwise allocation latency unnecessarily blocks presentation.
-  if (FAILED(device->CreateTexture2D(&snapshotDesc, nullptr, &snapshot))) {
+  VideoFrame materialized;
+  if (!playback_video_frame_step_snapshot::materializeHardwareFrame(
+          decoded, device, context, contextMutex, &materialized)) {
     return SnapshotResult::Failed;
   }
-  // FFmpeg represents a D3D11VA frame as one array subresource. Record all
-  // snapshots on the worker-owned deferred context and submit them as one
-  // command list so presentation only takes the shared immediate-context lock
-  // once per completed cache transaction.
-  if (!commands->copy(snapshot.Get(), decoded.hwTexture.Get(),
-                      static_cast<UINT>(decoded.hwTextureArrayIndex))) {
-    return SnapshotResult::Failed;
-  }
-
-  *out = decoded;
-  out->hwTexture = std::move(snapshot);
-  out->hwTextureArrayIndex = 0;
-  out->hwFrameRef.reset();
-  out->cacheLease = std::move(lease);
+  materialized.cacheLease = std::move(lease);
+  *out = std::move(materialized);
   return SnapshotResult::Ok;
 }
 
@@ -254,7 +152,6 @@ struct Prefetcher::Impl {
   int videoStreamIndex = -1;
   Microsoft::WRL::ComPtr<ID3D11Device> device;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-  Microsoft::WRL::ComPtr<ID3D11DeviceContext> deferredContext;
   std::recursive_mutex* contextMutex = nullptr;
   std::shared_ptr<CacheBudget> budget;
   VideoDecoder decoder;
@@ -301,14 +198,15 @@ struct Prefetcher::Impl {
 
   SnapshotResult retain(const VideoFrame& decoded, const VideoReadInfo& info,
                         int64_t sourcePtsUs, int64_t durationUs,
-                        double decodeMs, SnapshotCommandBatch* commands,
+                        double decodeMs,
                         std::shared_ptr<const SourceFrame>* out) {
     if (!out) {
       return SnapshotResult::Failed;
     }
     auto retained = std::make_shared<SourceFrame>();
-    SnapshotResult result = snapshotFrame(decoded, budget, device.Get(),
-                                          commands, &retained->frame);
+    SnapshotResult result =
+        snapshotFrame(decoded, budget, device.Get(), context.Get(),
+                      contextMutex, &retained->frame);
     if (result != SnapshotResult::Ok) {
       return result;
     }
@@ -352,8 +250,6 @@ struct Prefetcher::Impl {
       decoderTailIdentity.reset();
     }
 
-    SnapshotCommandBatch snapshotCommands(deferredContext.Get(), context.Get(),
-                                          contextMutex);
     std::vector<std::shared_ptr<const SourceFrame>> stagedFrames;
     std::shared_ptr<const SourceFrame> stagedJoinFrame;
     size_t decodedFrameCount = 0;
@@ -387,7 +283,7 @@ struct Prefetcher::Impl {
           if (!request.joinCached) {
             const SnapshotResult retainResult =
                 retain(decoded, info, ptsUs, durationUs, decodeMs,
-                       &snapshotCommands, &stagedJoinFrame);
+                       &stagedJoinFrame);
             if (retainResult != SnapshotResult::Ok) {
               return false;
             }
@@ -427,8 +323,7 @@ struct Prefetcher::Impl {
         }
         std::shared_ptr<const SourceFrame> retained;
         const SnapshotResult retainResult =
-            retain(decoded, info, ptsUs, durationUs, decodeMs,
-                   &snapshotCommands, &retained);
+            retain(decoded, info, ptsUs, durationUs, decodeMs, &retained);
         if (retainResult != SnapshotResult::Ok) {
           return false;
         }
@@ -452,10 +347,6 @@ struct Prefetcher::Impl {
     if (!decodeComplete || !joined || !current(work.generation)) {
       return false;
     }
-    if (!snapshotCommands.submit()) {
-      return false;
-    }
-
     Result result;
     result.request = request;
     result.generation = work.generation;
@@ -531,13 +422,6 @@ bool Prefetcher::start(const std::filesystem::path& path, int videoStreamIndex,
     impl_->device.Reset();
     return false;
   }
-  // Deferred contexts are the D3D11 mechanism for recording GPU work on a
-  // worker thread. Failure is non-fatal: the snapshot batch retains a correct
-  // immediate-context fallback for devices that do not expose one.
-  if (FAILED(
-          impl_->device->CreateDeferredContext(0, &impl_->deferredContext))) {
-    impl_->deferredContext.Reset();
-  }
   impl_->contextMutex = contextMutex;
   impl_->budget = CacheBudget::create();
   {
@@ -558,7 +442,6 @@ bool Prefetcher::start(const std::filesystem::path& path, int videoStreamIndex,
     impl_->started = false;
     impl_->stopping = true;
     impl_->budget.reset();
-    impl_->deferredContext.Reset();
     impl_->context.Reset();
     impl_->device.Reset();
     return false;
@@ -592,7 +475,6 @@ void Prefetcher::stop() {
   impl_->working = false;
   impl_->contextMutex = nullptr;
   impl_->budget.reset();
-  impl_->deferredContext.Reset();
   impl_->context.Reset();
   impl_->device.Reset();
 }

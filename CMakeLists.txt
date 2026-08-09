@@ -520,6 +520,18 @@ target_sources(video_frame_step_smoke PRIVATE
 )
 radioify_configure_repo_target(video_frame_step_smoke)
 
+add_executable(frame_step_snapshot_tests)
+target_sources(frame_step_snapshot_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_frame_step_snapshot_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_step_snapshot.cpp
+)
+radioify_link_repo_target(frame_step_snapshot_tests)
+if (WIN32)
+  target_link_libraries(frame_step_snapshot_tests PRIVATE d3d11)
+endif()
+add_test(NAME frame_step_snapshot_tests
+         COMMAND $<TARGET_FILE:frame_step_snapshot_tests>)
+
 add_executable(timeline_preview_tests)
 target_sources(timeline_preview_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_timeline_preview_tests>

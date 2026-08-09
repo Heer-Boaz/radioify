@@ -26,6 +26,7 @@ radioify_add_module_object_library(radioify_video_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/timing/timeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_cursor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_prefetch.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_snapshot.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_source_cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_seek.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/decoder.cpp
