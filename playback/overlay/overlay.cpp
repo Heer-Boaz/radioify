@@ -1039,10 +1039,26 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
 }
 
 template <typename Target>
+void renderTimelinePreviewTimestampToTarget(
+    Target& target,
+    const playback_video_timeline_preview::CellLayout& layout,
+    const OverlayRenderStyles& styles) {
+  if (!target.isDrawable() || !layout.drawable()) return;
+
+  const int availableLabelWidth = std::max(0, layout.outerWidth - 4);
+  const std::string label =
+      utf8TakeDisplayWidth(layout.label, availableLabelWidth);
+  const int labelWidth = utf8DisplayWidth(label);
+  const int labelX =
+      layout.outerX + std::max(2, (layout.outerWidth - labelWidth) / 2);
+  target.writeText(labelX, layout.labelY, label, styles.accentStyle);
+}
+
+template <typename Target>
 void renderTimelinePreviewChromeToTarget(
     Target& target,
     const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles, bool loading, bool failed) {
+    const OverlayRenderStyles& styles) {
   if (!target.isDrawable() || !layout.drawable()) return;
 
   const int left = layout.outerX;
@@ -1062,22 +1078,7 @@ void renderTimelinePreviewChromeToTarget(
   target.writeChar(left, bottom, L'└', styles.accentStyle);
   target.writeChar(right, bottom, L'┘', styles.accentStyle);
 
-  const int availableLabelWidth = std::max(0, layout.outerWidth - 4);
-  const std::string label =
-      utf8TakeDisplayWidth(layout.label, availableLabelWidth);
-  const int labelWidth = utf8DisplayWidth(label);
-  const int labelX =
-      left + std::max(2, (layout.outerWidth - labelWidth) / 2);
-  target.writeText(labelX, top, label, styles.accentStyle);
-
-  if (loading || failed) {
-    const std::string status = failed ? "Unavailable" : "Loading...";
-    const int statusWidth = utf8DisplayWidth(status);
-    const int statusX = layout.imageX +
-                        std::max(0, (layout.imageWidth - statusWidth) / 2);
-    const int statusY = layout.imageY + layout.imageHeight / 2;
-    target.writeText(statusX, statusY, status, styles.baseStyle);
-  }
+  renderTimelinePreviewTimestampToTarget(target, layout, styles);
 }
 
 }  // namespace
@@ -1102,13 +1103,22 @@ void renderTransientMessageToScreen(ConsoleScreen& screen,
 void renderTimelinePreviewChromeToScreen(
     ConsoleScreen& screen,
     const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles, bool loading, bool failed) {
+    const OverlayRenderStyles& styles) {
   ScreenOverlayTarget target(screen, 0, screen.height());
-  renderTimelinePreviewChromeToTarget(target, layout, styles, loading, failed);
+  renderTimelinePreviewChromeToTarget(target, layout, styles);
+}
+
+void renderTimelinePreviewTimestampToScreen(
+    ConsoleScreen& screen,
+    const playback_video_timeline_preview::CellLayout& layout,
+    const OverlayRenderStyles& styles) {
+  ScreenOverlayTarget target(screen, 0, screen.height());
+  renderTimelinePreviewTimestampToTarget(target, layout, styles);
 }
 
 bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
                                  int cellPixelWidth, int cellPixelHeight,
+                                 TimelinePreviewPresentation previewPresentation,
                                  const OverlayRenderStyles& styles,
                                  GpuTextGridFrame& outFrame) {
   GpuTextGridOverlayTarget target(outFrame, width, height, styles.baseStyle);
@@ -1121,14 +1131,17 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
     renderOverlayToTarget(target, overlayLayout, styles, ui.progress);
     rendered = true;
   }
-  if (ui.timelinePreview.visible) {
+  if (ui.timelinePreview.hoverActive) {
     if (!haveOverlayLayout) {
       overlayLayout = layoutWindowOverlayCells(ui, width, height);
       haveOverlayLayout = true;
     }
+    const bool imageReady =
+        previewPresentation ==
+            TimelinePreviewPresentation::ImageAndTimestamp &&
+        ui.timelinePreview.hasImage();
     const playback_video_image::RgbaImage* previewSurface =
-        ui.timelinePreview.image ? &ui.timelinePreview.image->surface
-                                 : nullptr;
+        imageReady ? &ui.timelinePreview.image->surface : nullptr;
     const int sourceWidth =
         previewSurface ? static_cast<int>(previewSurface->width) : 16;
     const int sourceHeight =
@@ -1140,9 +1153,11 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
         sourceWidth, sourceHeight, cellPixelWidth, cellPixelHeight,
         playback_video_timeline_preview::formatTimestamp(
             ui.timelinePreview.targetUs));
-    renderTimelinePreviewChromeToTarget(
-        target, previewLayout, styles, ui.timelinePreview.loading,
-        ui.timelinePreview.failed);
+    if (imageReady) {
+      renderTimelinePreviewChromeToTarget(target, previewLayout, styles);
+    } else {
+      renderTimelinePreviewTimestampToTarget(target, previewLayout, styles);
+    }
     rendered = rendered || previewLayout.drawable();
   }
   if (ui.transientMessage) {

@@ -56,14 +56,19 @@ struct Result {
 };
 
 struct Snapshot {
-  bool visible = false;
-  bool loading = false;
-  bool failed = false;
+  // Hover intent and image readiness are deliberately independent. Renderers
+  // may present the timestamp while the provider is working, but must never
+  // infer a drawable thumbnail from hover activity alone.
+  bool hoverActive = false;
   double anchorRatio = 0.0;
   int64_t targetUs = 0;
   int64_t durationUs = 0;
   uint64_t revision = 0;
   std::shared_ptr<const Image> image;
+
+  bool hasImage() const {
+    return image && playback_video_image::validate(image->surface);
+  }
 };
 
 struct CellLayout {

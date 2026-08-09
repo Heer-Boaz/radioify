@@ -17,6 +17,7 @@
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "playback/video/framebuffer/gpu_text_grid.h"
+#include "playback/video/framebuffer/window/gpu_text_grid_composition.h"
 #include "playback/video/framebuffer/frame_snapshot.h"
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/video/framebuffer/video_output_color.h"
@@ -265,7 +266,8 @@ private:
     bool DrawGpuTextGridFrame(ID3D11Device* device,
                               ID3D11DeviceContext* context,
                               const GpuTextGridFrame& frame,
-                              const D3D11_VIEWPORT& viewport);
+                              const D3D11_VIEWPORT& viewport,
+                              GpuTextGridComposition composition);
     UINT TextGridDpi() const;
     SIZE TextGridCellSize() const;
     bool EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,

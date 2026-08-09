@@ -281,8 +281,11 @@ bool VideoWindow::EnsureGpuTextGlyphAtlas(ID3D11Device* device, int cellWidth,
 bool VideoWindow::DrawGpuTextGridFrame(ID3D11Device* device,
                                        ID3D11DeviceContext* context,
                                        const GpuTextGridFrame& frame,
-                                       const D3D11_VIEWPORT& viewport) {
-    if (!device || !context || frame.cols <= 0 || frame.rows <= 0) {
+                                       const D3D11_VIEWPORT& viewport,
+                                       GpuTextGridComposition composition) {
+    if (!device || !context || frame.cols <= 0 || frame.rows <= 0 ||
+        (composition == GpuTextGridComposition::AlphaOverlay &&
+         !m_uiBlendState)) {
         return false;
     }
     const size_t cellCount =
@@ -370,6 +373,10 @@ bool VideoWindow::DrawGpuTextGridFrame(ID3D11Device* device,
     ID3D11ShaderResourceView* srvs[2] = {m_gpuTextGridSrv.Get(),
                                          m_gpuTextGlyphAtlasSrv.Get()};
     context->PSSetShaderResources(0, 2, srvs);
+    if (!bindGpuTextGridComposition(context, m_uiBlendState.Get(),
+                                    composition)) {
+        return false;
+    }
     context->Draw(4, 0);
 
     ID3D11ShaderResourceView* nullSrvs[2] = {nullptr, nullptr};
@@ -420,7 +427,10 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame) {
         static_cast<float>(gridViewport.y),
         static_cast<float>(gridViewport.width),
         static_cast<float>(gridViewport.height), 0.0f, 1.0f};
-    if (!DrawGpuTextGridFrame(device, context.Get(), frame, viewport)) return;
+    if (!DrawGpuTextGridFrame(device, context.Get(), frame, viewport,
+                              GpuTextGridComposition::Opaque)) {
+        return;
+    }
     DrawPictureInPictureBorder(context.Get());
 
     lock.unlock();

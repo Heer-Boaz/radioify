@@ -2415,7 +2415,7 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                               const VideoOutputColorState& outputColor,
                               bool includePlaybackOverlay) {
     const bool showTimelinePreview =
-        includePlaybackOverlay && ui.timelinePreview.visible;
+        includePlaybackOverlay && ui.timelinePreview.hoverActive;
     bool showOverlay =
         includePlaybackOverlay &&
         (ui.overlayAlpha > 0.01f || !ui.debugLines.empty() ||
@@ -2450,8 +2450,9 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
 
     if (showTimelinePreview) {
         const playback_video_image::RgbaImage* previewSurface =
-            ui.timelinePreview.image ? &ui.timelinePreview.image->surface
-                                     : nullptr;
+            ui.timelinePreview.hasImage()
+                ? &ui.timelinePreview.image->surface
+                : nullptr;
         const int sourceWidth =
             previewSurface ? static_cast<int>(previewSurface->width) : 16;
         const int sourceHeight =
@@ -2549,6 +2550,11 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
     if (showOverlay) {
         if (playback_overlay::renderWindowUiToGpuTextGrid(
                 ui, cols, rows, cellWidth, cellHeight,
+                drawTimelinePreview
+                    ? playback_overlay::TimelinePreviewPresentation::
+                          ImageAndTimestamp
+                    : playback_overlay::TimelinePreviewPresentation::
+                          TimestampOnly,
                 playback_overlay::OverlayRenderStyles{},
                 m_windowOverlayTextGrid)) {
             const int textPxW =
@@ -2879,7 +2885,8 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
     }
     if (drawOverlayTextGrid) {
         DrawGpuTextGridFrame(device, context, m_windowOverlayTextGrid,
-                             overlayTextGridViewport);
+                             overlayTextGridViewport,
+                             GpuTextGridComposition::AlphaOverlay);
     }
     context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
 

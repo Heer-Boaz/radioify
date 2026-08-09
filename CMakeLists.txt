@@ -544,6 +544,17 @@ radioify_link_repo_target(window_display_lifecycle_tests)
 add_test(NAME window_display_lifecycle_tests
          COMMAND $<TARGET_FILE:window_display_lifecycle_tests>)
 
+add_executable(gpu_text_grid_composition_tests)
+target_sources(gpu_text_grid_composition_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_gpu_text_grid_composition_tests>
+)
+radioify_link_repo_target(gpu_text_grid_composition_tests)
+if (WIN32)
+  target_link_libraries(gpu_text_grid_composition_tests PRIVATE d3d11)
+endif()
+add_test(NAME gpu_text_grid_composition_tests
+         COMMAND $<TARGET_FILE:gpu_text_grid_composition_tests>)
+
 add_executable(waitable_signal_tests)
 target_sources(waitable_signal_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_waitable_signal_tests>

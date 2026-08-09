@@ -62,6 +62,10 @@ radioify_add_module_object_library(radioify_tool_window_display_lifecycle_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/window_display_lifecycle_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_gpu_text_grid_composition_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu_text_grid_composition_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_waitable_signal_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/waitable_signal_tests.cpp
 )

@@ -139,6 +139,9 @@ bool runModelTests() {
   ok &= expect(first.changed && first.request.has_value(),
                "first hover must create an exact provider request");
   if (!first.request) return false;
+  ok &= expect(model.snapshot().hoverActive &&
+                   !model.snapshot().hasImage(),
+               "pending hover must expose timestamp intent without an image");
   const uint64_t firstId = first.request->id;
   const int64_t decodeTargetUs = first.request->targetUs;
   HoverModel::Update sameBucket = model.hover(0.5001, 120);
@@ -158,6 +161,10 @@ bool runModelTests() {
   auto image = std::make_shared<Image>();
   image->id = 1;
   image->requestedUs = resizedTargetUs;
+  image->surface.width = 1;
+  image->surface.height = 1;
+  image->surface.strideBytes = 4;
+  image->surface.pixels = {20, 40, 60, 255};
   ok &= expect(!model.apply(Result{firstId, decodeTargetUs,
                                   ResultOrigin::Decoded, image}),
                "the model must reject stale provider results");
@@ -165,8 +172,7 @@ bool runModelTests() {
                                  ResultOrigin::Decoded, image}),
                "the model must accept its authoritative result");
   const Snapshot ready = model.snapshot();
-  ok &= expect(ready.visible && !ready.loading && !ready.failed &&
-                   ready.image == image,
+  ok &= expect(ready.hoverActive && ready.hasImage() && ready.image == image,
                "an accepted result must become the visible snapshot");
 
   HoverModel::Update rejectedUpdate = model.hover(0.7, 120);
@@ -176,9 +182,8 @@ bool runModelTests() {
   ok &= expect(model.reject(*rejectedUpdate.request),
                "the model must own current submission rejection state");
   const Snapshot rejected = model.snapshot();
-  ok &= expect(rejected.visible && !rejected.loading && rejected.failed &&
-                   !rejected.image,
-               "a rejected current request must become a failed snapshot");
+  ok &= expect(rejected.hoverActive && !rejected.hasImage(),
+               "a rejected request must leave only timestamp presentation");
   ok &= expect(!model.apply(Result{rejectedUpdate.request->id,
                                   rejectedUpdate.request->targetUs,
                                   ResultOrigin::Decoded, image}),
@@ -188,7 +193,7 @@ bool runModelTests() {
   ok &= expect(!model.apply(Result{resizedId, resizedTargetUs,
                                   ResultOrigin::Decoded, image}),
                "a hidden model must reject late decoder completion");
-  ok &= expect(!model.snapshot().visible,
+  ok &= expect(!model.snapshot().hoverActive,
                "hide must withdraw the presentation snapshot");
   return ok;
 }
@@ -350,7 +355,7 @@ MediaSample waitForMediaResult(
       model.apply(*result);
     }
     const Snapshot snapshot = model.snapshot();
-    if (snapshot.visible && !snapshot.loading && snapshot.image &&
+    if (snapshot.hoverActive && snapshot.hasImage() &&
         snapshot.image->requestedUs == expectedDecodeUs &&
         requestId == model.requestId()) {
       if (snapshot.image->decodedFrameUs) {
@@ -438,7 +443,7 @@ bool runMediaSmoke(const std::filesystem::path& path) {
     const bool hidden = model.hide();
     provider.cancelBefore(model.requestId());
     provider.stop();
-    ok &= expect(hidden && !model.snapshot().visible,
+    ok &= expect(hidden && !model.snapshot().hoverActive,
                  "hiding a preview must withdraw its snapshot");
   }
 

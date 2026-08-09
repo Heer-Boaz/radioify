@@ -273,6 +273,11 @@ struct OverlayRenderStyles {
   Color progressEnd{255, 214, 110};
 };
 
+enum class TimelinePreviewPresentation {
+  TimestampOnly,
+  ImageAndTimestamp,
+};
+
 void renderOverlayToScreen(ConsoleScreen& screen,
                            const OverlayCellLayout& layout,
                            const OverlayRenderStyles& styles,
@@ -287,10 +292,16 @@ void renderTransientMessageToScreen(ConsoleScreen& screen,
 void renderTimelinePreviewChromeToScreen(
     ConsoleScreen& screen,
     const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles, bool loading, bool failed);
+    const OverlayRenderStyles& styles);
+
+void renderTimelinePreviewTimestampToScreen(
+    ConsoleScreen& screen,
+    const playback_video_timeline_preview::CellLayout& layout,
+    const OverlayRenderStyles& styles);
 
 bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
                                  int cellPixelWidth, int cellPixelHeight,
+                                 TimelinePreviewPresentation previewPresentation,
                                  const OverlayRenderStyles& styles,
                                  GpuTextGridFrame& outFrame);
 

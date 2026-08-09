@@ -58,13 +58,12 @@ HoverModel::Update HoverModel::hover(double ratio, int progressUnits) {
   const int64_t decodeTargetUs =
       bucketTargetUs(targetUs, snapshot_.durationUs, bucketUs);
   const bool sameTarget =
-      snapshot_.visible && activeDecodeTargetUs_ == decodeTargetUs &&
+      snapshot_.hoverActive && activeDecodeTargetUs_ == decodeTargetUs &&
       activeBucketUs_ == bucketUs;
 
-  snapshot_.visible = true;
+  snapshot_.hoverActive = true;
   snapshot_.anchorRatio = ratio;
   snapshot_.targetUs = targetUs;
-  snapshot_.failed = sameTarget ? snapshot_.failed : false;
   ++snapshot_.revision;
   update.changed = true;
   if (sameTarget) return update;
@@ -78,8 +77,6 @@ HoverModel::Update HoverModel::hover(double ratio, int progressUnits) {
   lastRequestedDecodeTargetUs_ = decodeTargetUs;
   activeDecodeTargetUs_ = decodeTargetUs;
   activeBucketUs_ = bucketUs;
-  snapshot_.loading = true;
-  snapshot_.failed = false;
   snapshot_.image.reset();
 
   Request request;
@@ -93,10 +90,8 @@ HoverModel::Update HoverModel::hover(double ratio, int progressUnits) {
 }
 
 bool HoverModel::hide() {
-  if (!snapshot_.visible) return false;
-  snapshot_.visible = false;
-  snapshot_.loading = false;
-  snapshot_.failed = false;
+  if (!snapshot_.hoverActive) return false;
+  snapshot_.hoverActive = false;
   snapshot_.image.reset();
   activeDecodeTargetUs_ = -1;
   activeBucketUs_ = 0;
@@ -107,29 +102,28 @@ bool HoverModel::hide() {
 }
 
 bool HoverModel::reject(const Request& request) {
-  if (!snapshot_.visible || request.id != requestId_ ||
+  if (!snapshot_.hoverActive || request.id != requestId_ ||
       request.targetUs != activeDecodeTargetUs_) {
     return false;
   }
   snapshot_.image.reset();
-  snapshot_.loading = false;
-  snapshot_.failed = true;
   nextRequestId();
   ++snapshot_.revision;
   return true;
 }
 
 bool HoverModel::apply(const Result& result) {
-  if (!snapshot_.visible || result.requestId != requestId_ ||
+  if (!snapshot_.hoverActive || result.requestId != requestId_ ||
       result.targetUs != activeDecodeTargetUs_) {
     return false;
   }
   if (result.image && result.image->requestedUs != activeDecodeTargetUs_) {
     return false;
   }
-  snapshot_.image = result.image;
-  snapshot_.loading = false;
-  snapshot_.failed = !result.image;
+  snapshot_.image =
+      result.image && playback_video_image::validate(result.image->surface)
+          ? result.image
+          : nullptr;
   ++snapshot_.revision;
   return true;
 }

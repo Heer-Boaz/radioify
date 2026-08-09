@@ -99,26 +99,27 @@ void renderTimelinePreview(
     const playback_video_timeline_preview::CellLayout& layout,
     TimelinePreviewAsciiCache* cache,
     const playback_overlay::OverlayRenderStyles& styles) {
-  if (!snapshot.visible || !layout.drawable()) return;
+  if (!snapshot.hoverActive || !layout.drawable()) return;
 
-  bool imageRendered = false;
-  if (snapshot.image &&
-      updateTimelinePreviewArt(*snapshot.image, layout.imageWidth,
-                               layout.imageHeight, cache)) {
-    imageRendered = true;
-    const AsciiArt& art = cache->art;
-    for (int y = 0; y < layout.imageHeight; ++y) {
-      for (int x = 0; x < layout.imageWidth; ++x) {
-        const auto& cell = art.cells[static_cast<size_t>(y * art.width + x)];
-        screen.writeChar(layout.imageX + x, layout.imageY + y, cell.ch,
-                         Style{cell.fg,
-                               cell.hasBg ? cell.bg : styles.baseStyle.bg});
-      }
+  if (!snapshot.hasImage() ||
+      !updateTimelinePreviewArt(*snapshot.image, layout.imageWidth,
+                                layout.imageHeight, cache)) {
+    playback_overlay::renderTimelinePreviewTimestampToScreen(screen, layout,
+                                                              styles);
+    return;
+  }
+
+  const AsciiArt& art = cache->art;
+  for (int y = 0; y < layout.imageHeight; ++y) {
+    for (int x = 0; x < layout.imageWidth; ++x) {
+      const auto& cell = art.cells[static_cast<size_t>(y * art.width + x)];
+      screen.writeChar(layout.imageX + x, layout.imageY + y, cell.ch,
+                       Style{cell.fg,
+                             cell.hasBg ? cell.bg : styles.baseStyle.bg});
     }
   }
   playback_overlay::renderTimelinePreviewChromeToScreen(
-      screen, layout, styles, snapshot.loading || !imageRendered,
-      snapshot.failed);
+      screen, layout, styles);
 }
 
 }  // namespace
@@ -410,7 +411,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   playback_overlay::OverlayCellLayout overlayLayout;
   const bool showOverlay = overlayState.overlayVisible ||
                            !overlayState.debugLines.empty() ||
-                           inputs.timelinePreview.visible;
+                           inputs.timelinePreview.hoverActive;
   int overlayReservedLines = showOverlay ? 5 : 0;
   if (showOverlay) {
     overlayLayout = playback_overlay::layoutPlaybackOverlayCells(
@@ -457,9 +458,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         videoWindow.GetWidth(), videoWindow.GetHeight(), dimStyle);
   }
 
-  if (inputs.timelinePreview.visible) {
+  if (inputs.timelinePreview.hoverActive) {
     const playback_video_image::RgbaImage* previewSurface =
-        inputs.timelinePreview.image
+        inputs.timelinePreview.hasImage()
             ? &inputs.timelinePreview.image->surface
             : nullptr;
     const int previewSourceWidth =
