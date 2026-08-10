@@ -1,5 +1,4 @@
 #include "playback/video/edit/timeline.h"
-#include "playback/video/edit/preview.h"
 #include "playback/video/edit/overlay_model.h"
 
 #include <iostream>
@@ -20,8 +19,6 @@ bool expect(bool condition, const char* message) {
 
 int main() {
   using playback_video_edit::EditSession;
-  using playback_video_edit::PreviewController;
-  using playback_video_edit::PreviewDecisionKind;
   using playback_video_edit::SourceRange;
   using playback_video_edit::Timeline;
 
@@ -37,20 +34,6 @@ int main() {
                "middle removal must produce two source clips");
   ok &= expect(timeline.outputDurationUs() == 8'000'000,
                "ripple deletion must close the sequence gap");
-  ok &= expect(timeline.sourceToOutputTime(5'500'000) ==
-                   std::optional<int64_t>(3'500'000),
-               "source-to-output projection must subtract deleted time");
-  ok &= expect(!timeline.sourceToOutputTime(4'000'000),
-               "deleted source time must not project into the sequence");
-  ok &= expect(timeline.outputToSourceTime(3'500'000) ==
-                   std::optional<int64_t>(5'500'000),
-               "output-to-source projection must cross edit boundaries");
-  ok &= expect(timeline.sourceToOutputTime(10'000'000) ==
-                   std::optional<int64_t>(8'000'000),
-               "the exclusive final source boundary must map to output end");
-  ok &= expect(timeline.outputToSourceTime(8'000'000) ==
-                   std::optional<int64_t>(10'000'000),
-               "the exclusive output boundary must map to the final source end");
   ok &= expect(timeline.nextKeptSourceTime(4'000'000) ==
                    std::optional<int64_t>(5'000'000),
                "forward navigation must cross a removed source range");
@@ -81,21 +64,16 @@ int main() {
 
   EditSession session;
   session.activate(10'000'000);
-  const uint64_t activeRevision = session.snapshot().revision;
   session.deactivate();
-  ok &= expect(!session.snapshot().active &&
-                   session.snapshot().revision == activeRevision + 1,
-               "closing the editor must publish one observable revision");
+  ok &= expect(!session.snapshot().active,
+               "closing the editor must leave the edit list intact but inactive");
   session.activate(10'000'000);
-  ok &= expect(session.snapshot().active &&
-                   session.snapshot().revision == activeRevision + 2,
-               "reopening retained edits must publish one observable revision");
+  ok &= expect(session.snapshot().active,
+               "reopening must reactivate the retained edit list");
   session.markIn(3'000'000);
   session.markOut(5'000'000);
   ok &= expect(session.rippleDeleteSelection(),
                "a valid marked range must commit as one decision");
-  ok &= expect(session.snapshot().canUndo && !session.snapshot().canRedo,
-               "committing must create an undo revision");
   ok &= expect(session.undo() && session.timeline().isUnmodified(),
                "undo must restore the exact prior timeline snapshot");
   ok &= expect(session.redo() && session.timeline().outputDurationUs() ==
@@ -111,7 +89,7 @@ int main() {
   session.markOut(2'000'000);
   ok &= expect(session.rippleDeleteSelection(),
                "a new decision after undo must commit normally");
-  ok &= expect(!session.snapshot().canRedo,
+  ok &= expect(!session.redo(),
                "a new decision must invalidate the abandoned redo branch");
   ok &= expect(session.undo(),
                "the branch-invalidation setup must remain undoable");
@@ -125,34 +103,12 @@ int main() {
                                             {5'000'000, 8'000'000}},
                "trim must retain earlier middle deletions");
 
-  const uint64_t markedRevision = session.snapshot().revision;
   session.markIn(2'000'000);
-  ok &= expect(session.snapshot().revision == markedRevision + 1,
-               "setting a changed mark must publish one revision");
+  ok &= expect(session.snapshot().inUs == std::optional<int64_t>(2'000'000),
+               "setting an In mark must publish its source position");
   session.markIn(2'000'000);
-  ok &= expect(session.snapshot().revision == markedRevision + 1,
-               "setting an identical mark must not publish a false revision");
-
-  PreviewController preview;
-  int64_t previewStartUs = -1;
-  ok &= expect(preview.start({{1'000'000, 2'000'000},
-                              {4'000'000, 5'000'000}},
-                             &previewStartUs) &&
-                   previewStartUs == 1'000'000,
-               "sequence preview must begin at the first retained clip");
-  ok &= expect(preview.observePresentedFrame(1'500'000, 33'333, false).kind ==
-                   PreviewDecisionKind::None,
-               "preview must continue inside the current clip");
-  ok &= expect(preview.observePresentedFrame(1'980'000, 33'333, false).kind ==
-                       PreviewDecisionKind::Seek &&
-                   preview.observePresentedFrame(1'980'000, 33'333, true).kind ==
-                       PreviewDecisionKind::None,
-               "preview must schedule one transition at the presented frame boundary");
-  const auto finalPreviewDecision =
-      preview.observePresentedFrame(4'980'000, 33'333, false);
-  ok &= expect(finalPreviewDecision.kind == PreviewDecisionKind::Complete &&
-                   !preview.active(),
-               "preview must stop after the final retained frame interval");
+  ok &= expect(session.snapshot().inUs == std::optional<int64_t>(2'000'000),
+               "setting an identical mark must preserve the selection");
 
   playback_video_edit::EditSnapshot overlayEdit;
   overlayEdit.active = true;
@@ -161,9 +117,9 @@ int main() {
   overlayEdit.keptRanges = {{0, 2'000'000}, {4'000'000, 10'000'000}};
   overlayEdit.inUs = 2'000'000;
   overlayEdit.outUs = 4'000'000;
-  playback_video_edit::ExportSnapshot overlayExport;
-  overlayExport.state = playback_video_edit::ExportState::Running;
-  overlayExport.progress = 0.42;
+  playback_video_edit::ExportProgress overlayExport;
+  overlayExport.active = true;
+  overlayExport.fraction = 0.42;
   const playback_video_edit::OverlayModel overlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport, 10,
                                               0.5);

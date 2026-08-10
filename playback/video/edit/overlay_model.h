@@ -5,8 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "playback/video/edit/export.h"
-#include "playback/video/edit/timeline.h"
+#include "playback/video/edit/view.h"
 
 namespace playback_video_edit {
 
@@ -27,7 +26,7 @@ struct OverlayModel {
 // Converts immutable edit/export snapshots into renderer-independent cells.
 // ASCII and framebuffer targets consume exactly this same projection.
 OverlayModel buildOverlayModel(const EditSnapshot& edit,
-                               const ExportSnapshot* editExport, int width,
+                               const ExportProgress* editExport, int width,
                                double sourceProgress);
 
 }  // namespace playback_video_edit

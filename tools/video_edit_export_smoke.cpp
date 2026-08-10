@@ -1,20 +1,17 @@
 #include "playback/video/edit/export.h"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-
 extern "C" {
 #include <libavformat/avformat.h>
 }
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/runtime_helpers.h"
@@ -35,7 +32,8 @@ bool parseRange(const std::wstring& text,
   return range->startUs >= 0 && range->endUs > range->startUs;
 }
 
-bool probeOutput(const std::filesystem::path& path, std::string* error) {
+bool probeOutput(const std::filesystem::path& path, int64_t expectedDurationUs,
+                 std::string* error) {
   AVFormatContext* format = nullptr;
   const std::string pathUtf8 = toUtf8String(path);
   int result = avformat_open_input(&format, pathUtf8.c_str(), nullptr, nullptr);
@@ -53,6 +51,16 @@ bool probeOutput(const std::filesystem::path& path, std::string* error) {
   avformat_close_input(&format);
   if (result < 0 || !video || durationUs <= 0) {
     if (error) *error = "exported MP4 did not probe as playable video";
+    return false;
+  }
+  const int64_t durationDifference =
+      durationUs >= expectedDurationUs ? durationUs - expectedDurationUs
+                                       : expectedDurationUs - durationUs;
+  if (durationDifference > 150'000) {
+    if (error) {
+      *error = "export duration differs from the edit list by " +
+               std::to_string(durationDifference) + " us";
+    }
     return false;
   }
   std::cout << "probe duration_us=" << durationUs << " video=1 audio="
@@ -134,6 +142,10 @@ int wmain(int argc, wchar_t** argv) {
     std::cerr << "ranges must be source ordered\n";
     return 2;
   }
+  int64_t expectedDurationUs = 0;
+  for (const playback_video_edit::SourceRange& range : request.keptRanges) {
+    expectedDurationUs += range.durationUs();
+  }
 
   const std::set<std::filesystem::path> temporaryFilesBefore =
       temporarySiblings(request.destinationPath);
@@ -144,7 +156,7 @@ int wmain(int argc, wchar_t** argv) {
   }
   if (cancelTest) exporter.cancel();
   for (;;) {
-    WaitForSingleObject(exporter.changedWaitHandle().get(), 1000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
     exporter.consumeChanged();
     const playback_video_edit::ExportSnapshot snapshot = exporter.snapshot();
     if (!snapshot.finished()) continue;
@@ -166,7 +178,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::cout << "encoder=" << snapshot.videoEncoder << '\n';
     std::string probeError;
-    if (!probeOutput(snapshot.destinationPath, &probeError)) {
+    if (!probeOutput(snapshot.destinationPath, expectedDurationUs,
+                     &probeError)) {
       std::cerr << probeError << '\n';
       return 1;
     }

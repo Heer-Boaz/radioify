@@ -36,7 +36,6 @@ extern "C" {
 #include <utility>
 
 #include "core/runtime_helpers.h"
-#include "core/waitable_signal.h"
 
 namespace playback_video_edit {
 namespace {
@@ -567,15 +566,15 @@ struct ExportPipeline {
                      std::to_string(range.endUs) +
                      ",setpts=PTS-STARTPTS[vt" + index + "];";
       if (audioEncoder) {
-        const int64_t startSample = av_rescale_q(
+        const int64_t startPts = av_rescale_q(
             range.startUs, kMicrosecondTimeBase,
             AVRational{1, audioDecoder->sample_rate});
-        const int64_t endSample = av_rescale_q(
+        const int64_t endPts = av_rescale_q(
             range.endUs, kMicrosecondTimeBase,
             AVRational{1, audioDecoder->sample_rate});
-        description += "[a" + index + "]atrim=start_sample=" +
-                       std::to_string(startSample) + ":end_sample=" +
-                       std::to_string(endSample) +
+        description += "[a" + index + "]atrim=start_pts=" +
+                       std::to_string(startPts) + ":end_pts=" +
+                       std::to_string(endPts) +
                        ",asetpts=PTS-STARTPTS[at" + index + "];";
       }
     }
@@ -1143,7 +1142,7 @@ std::filesystem::path uniqueEditedOutputPath(
 
 struct Exporter::Impl {
   mutable std::mutex mutex;
-  WaitableSignal changed;
+  std::atomic<bool> changed{false};
   std::thread worker;
   std::atomic<bool> cancelled{false};
   ExportSnapshot state;
@@ -1166,7 +1165,7 @@ struct Exporter::Impl {
         notify = true;
       }
     }
-    if (notify) changed.signal();
+    if (notify) changed.store(true, std::memory_order_release);
   }
 
   void run(ExportRequest request) {
@@ -1186,7 +1185,7 @@ struct Exporter::Impl {
       state.videoEncoder = std::move(completed.videoEncoder);
       state.error = std::move(completed.error);
     }
-    changed.signal();
+    changed.store(true, std::memory_order_release);
   }
 };
 
@@ -1222,11 +1221,11 @@ bool Exporter::start(ExportRequest request) {
     } catch (...) {
       impl_->state.state = ExportState::Failed;
       impl_->state.error = "Could not start the export worker.";
-      impl_->changed.signal();
+      impl_->changed.store(true, std::memory_order_release);
       return false;
     }
   }
-  impl_->changed.signal();
+  impl_->changed.store(true, std::memory_order_release);
   return true;
 }
 
@@ -1244,7 +1243,7 @@ void Exporter::stop() {
       impl_->state.state = ExportState::Cancelled;
     }
   }
-  impl_->changed.clear();
+  impl_->changed.store(false, std::memory_order_release);
 }
 
 ExportSnapshot Exporter::snapshot() const {
@@ -1254,11 +1253,7 @@ ExportSnapshot Exporter::snapshot() const {
 }
 
 bool Exporter::consumeChanged() {
-  return impl_ && impl_->changed.consume();
-}
-
-NativeWaitHandle Exporter::changedWaitHandle() const {
-  return impl_ ? impl_->changed.nativeWaitHandle() : NativeWaitHandle();
+  return impl_ && impl_->changed.exchange(false, std::memory_order_acq_rel);
 }
 
 }  // namespace playback_video_edit

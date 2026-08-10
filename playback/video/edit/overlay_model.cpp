@@ -46,7 +46,7 @@ int timelineCell(int64_t sourceUs, int64_t sourceDurationUs, int width) {
 }  // namespace
 
 OverlayModel buildOverlayModel(const EditSnapshot& edit,
-                               const ExportSnapshot* editExport, int width,
+                               const ExportProgress* editExport, int width,
                                double sourceProgress) {
   OverlayModel model;
   const bool exportRunning = editExport && editExport->running();
@@ -81,7 +81,7 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
   model.status = edit.active ? " EDIT" : "";
   if (exportRunning) {
     const int percentage = static_cast<int>(
-        std::lround(std::clamp(editExport->progress, 0.0, 1.0) * 100.0));
+        std::lround(std::clamp(editExport->fraction, 0.0, 1.0) * 100.0));
     model.status += "  EXPORT " + std::to_string(percentage) +
                     "% (Ctrl+E cancel)";
   }
@@ -93,7 +93,7 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
   }
   if (edit.active) {
     model.status += "  kept " + formatTimestamp(edit.outputDurationUs);
-    model.status += "  | I/O mark  Del remove  T trim  P preview  Ctrl+E ";
+    model.status += "  | I/O mark  Del remove  T trim  Ctrl+E ";
   } else {
     model.status += "  | Ctrl+E ";
   }

@@ -13,8 +13,7 @@
 #include "playback/overlay/osd_state.h"
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/framebuffer/window/window.h"
-#include "playback/video/edit/timeline.h"
-#include "playback/video/edit/export.h"
+#include "playback/video/edit/view.h"
 
 namespace playback_overlay {
 
@@ -156,7 +155,7 @@ struct PlaybackOverlayInputs {
   int progressBarWidth = 0;
   std::vector<std::string> debugLines;
   playback_video_edit::EditSnapshot videoEdit;
-  playback_video_edit::ExportSnapshot videoEditExport;
+  playback_video_edit::ExportProgress videoEditExport;
 };
 
 struct PlaybackOverlayState {
@@ -200,7 +199,7 @@ struct PlaybackOverlayState {
   int progressBarWidth = 0;
   std::vector<std::string> debugLines;
   playback_video_edit::EditSnapshot videoEdit;
-  playback_video_edit::ExportSnapshot videoEditExport;
+  playback_video_edit::ExportProgress videoEditExport;
 };
 
 PlaybackOverlayState buildPlaybackOverlayState(
@@ -289,7 +288,7 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            const OverlayRenderStyles& styles,
                            double progress,
                            const playback_video_edit::EditSnapshot* videoEdit,
-                           const playback_video_edit::ExportSnapshot*
+                           const playback_video_edit::ExportProgress*
                                videoEditExport,
                            int minY,
                            int maxY);

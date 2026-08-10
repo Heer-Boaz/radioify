@@ -23,8 +23,7 @@
 #include "playback/video/framebuffer/video_output_color.h"
 #include "playback/video/subtitle/font_attachments.h"
 #include "playback/video/timeline_preview_types.h"
-#include "playback/video/edit/timeline.h"
-#include "playback/video/edit/export.h"
+#include "playback/video/edit/view.h"
 #include "display_lifecycle.h"
 #include "input_controller.h"
 #include "present.h"
@@ -106,7 +105,7 @@ struct WindowUiState {
     std::vector<std::string> debugLines;
     playback_video_timeline_preview::Snapshot timelinePreview;
     playback_video_edit::EditSnapshot videoEdit;
-    playback_video_edit::ExportSnapshot videoEditExport;
+    playback_video_edit::ExportProgress videoEditExport;
 };
 
 struct IDXGISwapChain2;

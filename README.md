@@ -179,7 +179,7 @@ The concrete implementation plan lives in
 - Shift+S: copy the current rendered video frame (including subtitles) to the clipboard
 - E: enter/leave the non-destructive video editor
 - In the video editor: I/O set the inclusive frame selection; Delete ripple-removes it; T trims the sequence to it
-- In the video editor: P previews kept clips; Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
+- In the video editor: Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
 - Ctrl+E: export edits to a new sibling `- edited.mp4` file (press again to cancel); the source is never overwritten
 - Ctrl+W: toggle video Window mode (framebuffer-mode)
 - Ctrl+P: toggle picture-in-picture in Window mode

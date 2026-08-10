@@ -4,24 +4,9 @@
 #include <optional>
 #include <vector>
 
+#include "playback/video/edit/view.h"
+
 namespace playback_video_edit {
-
-// Source-space, half-open media interval. Edit decisions always reference the
-// immutable source; output time is derived by concatenating these intervals.
-struct SourceRange {
-  int64_t startUs = 0;
-  int64_t endUs = 0;
-
-  int64_t durationUs() const { return endUs - startUs; }
-};
-
-inline bool operator==(const SourceRange& lhs, const SourceRange& rhs) {
-  return lhs.startUs == rhs.startUs && lhs.endUs == rhs.endUs;
-}
-
-inline bool operator!=(const SourceRange& lhs, const SourceRange& rhs) {
-  return !(lhs == rhs);
-}
 
 class Timeline {
  public:
@@ -33,7 +18,6 @@ class Timeline {
   int64_t sourceDurationUs() const { return sourceDurationUs_; }
   int64_t outputDurationUs() const;
   const std::vector<SourceRange>& keptRanges() const { return keptRanges_; }
-  bool empty() const { return keptRanges_.empty(); }
   bool isUnmodified() const;
 
   // Intersect the current sequence with keep. Returns false when the request
@@ -46,11 +30,8 @@ class Timeline {
   bool rippleDelete(SourceRange remove);
 
   bool containsSourceTime(int64_t sourceUs) const;
-  std::optional<SourceRange> rangeContaining(int64_t sourceUs) const;
   std::optional<int64_t> nextKeptSourceTime(int64_t sourceUs) const;
   std::optional<int64_t> previousKeptSourceTime(int64_t sourceUs) const;
-  std::optional<int64_t> sourceToOutputTime(int64_t sourceUs) const;
-  std::optional<int64_t> outputToSourceTime(int64_t outputUs) const;
 
  private:
   bool replaceRanges(std::vector<SourceRange> ranges);
@@ -59,21 +40,8 @@ class Timeline {
   std::vector<SourceRange> keptRanges_;
 };
 
-struct EditSnapshot {
-  bool active = false;
-  int64_t sourceDurationUs = 0;
-  int64_t outputDurationUs = 0;
-  std::vector<SourceRange> keptRanges;
-  std::optional<int64_t> inUs;
-  std::optional<int64_t> outUs;
-  bool canApplySelection = false;
-  bool canUndo = false;
-  bool canRedo = false;
-  uint64_t revision = 0;
-};
-
-// Session-level editing state. Timeline revisions are value snapshots so
-// undo/redo never reconstructs cuts heuristically.
+// Session-level editing state. Undo/redo stores exact timeline values instead
+// of reconstructing cuts heuristically.
 class EditSession {
  public:
   void activate(int64_t sourceDurationUs);
@@ -82,8 +50,6 @@ class EditSession {
 
   void markIn(int64_t sourceUs);
   void markOut(int64_t sourceUsExclusive);
-  void clearSelection();
-  std::optional<SourceRange> selection() const;
 
   bool trimToSelection();
   bool rippleDeleteSelection();
@@ -95,6 +61,7 @@ class EditSession {
   EditSnapshot snapshot() const;
 
  private:
+  std::optional<SourceRange> selection() const;
   bool commit(Timeline next);
   int64_t clampSourceTime(int64_t sourceUs) const;
 
@@ -104,7 +71,6 @@ class EditSession {
   std::optional<int64_t> outUs_;
   std::vector<Timeline> undo_;
   std::vector<Timeline> redo_;
-  uint64_t revision_ = 0;
 };
 
 }  // namespace playback_video_edit

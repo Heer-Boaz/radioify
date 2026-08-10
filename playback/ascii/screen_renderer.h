@@ -61,7 +61,7 @@ struct PlaybackScreenRenderInputs {
   playback_overlay::PlaybackOsdSnapshot osd;
   playback_video_timeline_preview::Snapshot timelinePreview;
   playback_video_edit::EditSnapshot videoEdit;
-  playback_video_edit::ExportSnapshot videoEditExport;
+  playback_video_edit::ExportProgress videoEditExport;
   bool clearHistory = false;
   bool frameChanged = false;
   bool frameAvailable = false;

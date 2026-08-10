@@ -43,7 +43,7 @@ struct PlaybackInputView {
   playback_frame_output::FrameOutputState* textGridPresentationOutputState =
       nullptr;
   const playback_video_edit::EditSnapshot* videoEdit = nullptr;
-  const playback_video_edit::ExportSnapshot* videoEditExport = nullptr;
+  const playback_video_edit::ExportProgress* videoEditExport = nullptr;
 
   playback_frame_output::LogLineWriter timingSink;
 };
@@ -59,7 +59,6 @@ struct PlaybackInputSignals {
   std::function<void()> copyCurrentVideoFrameToClipboard;
   std::function<bool()> videoEditorActive;
   std::function<bool(PlaybackShortcutAction)> handleVideoEditorAction;
-  std::function<void()> cancelVideoEditPreview;
   std::function<void(playback_video_timeline_preview::PresentationSurface,
                      double ratio, int progressUnits)>
       requestTimelinePreview;

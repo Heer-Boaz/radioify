@@ -1018,7 +1018,7 @@ void renderVideoEditTimelineToTarget(
     Target& target, const OverlayCellLayout& layout,
     const OverlayRenderStyles& styles, double progress,
     const playback_video_edit::EditSnapshot& edit,
-    const playback_video_edit::ExportSnapshot* editExport) {
+    const playback_video_edit::ExportProgress* editExport) {
   if ((!edit.active && !(editExport && editExport->running())) ||
       layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
       !target.rowVisible(layout.progressBarY)) {
@@ -1083,7 +1083,7 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                            const OverlayRenderStyles& styles,
                            double progress,
                            const playback_video_edit::EditSnapshot* videoEdit,
-                           const playback_video_edit::ExportSnapshot*
+                           const playback_video_edit::ExportProgress*
                                videoEditExport) {
   if (!target.isDrawable()) return;
 
@@ -1177,7 +1177,7 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            const OverlayRenderStyles& styles,
                            double progress,
                            const playback_video_edit::EditSnapshot* videoEdit,
-                           const playback_video_edit::ExportSnapshot*
+                           const playback_video_edit::ExportProgress*
                                videoEditExport,
                            int minY,
                            int maxY) {

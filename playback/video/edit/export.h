@@ -6,8 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "core/native_wait_handle.h"
-#include "playback/video/edit/timeline.h"
+#include "playback/video/edit/view.h"
 
 namespace playback_video_edit {
 
@@ -63,7 +62,6 @@ class Exporter {
 
   ExportSnapshot snapshot() const;
   bool consumeChanged();
-  NativeWaitHandle changedWaitHandle() const;
 
  private:
   struct Impl;

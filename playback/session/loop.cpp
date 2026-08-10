@@ -19,9 +19,7 @@
 #include "playback/video/state/machine.h"
 #include "playback/video/timeline_preview.h"
 #include "playback/video/timeline_preview_model.h"
-#include "playback/video/edit/timeline.h"
-#include "playback/video/edit/preview.h"
-#include "playback/video/edit/export.h"
+#include "playback/video/edit/controller.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
@@ -63,6 +61,35 @@ PlaybackLayout initialPlaybackLayout(
   }
   return config.enableWindow ? PlaybackLayout::Window
                              : PlaybackLayout::Terminal;
+}
+
+std::optional<playback_video_edit::Command> videoEditCommandFor(
+    PlaybackShortcutAction action) {
+  using Command = playback_video_edit::Command;
+  switch (action) {
+    case PlaybackShortcutAction::ToggleVideoEditor:
+      return Command::Toggle;
+    case PlaybackShortcutAction::ExitVideoEditor:
+      return Command::Close;
+    case PlaybackShortcutAction::SetVideoEditIn:
+      return Command::MarkIn;
+    case PlaybackShortcutAction::SetVideoEditOut:
+      return Command::MarkOut;
+    case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
+      return Command::RippleDelete;
+    case PlaybackShortcutAction::TrimVideoEditSelection:
+      return Command::Trim;
+    case PlaybackShortcutAction::UndoVideoEdit:
+      return Command::Undo;
+    case PlaybackShortcutAction::RedoVideoEdit:
+      return Command::Redo;
+    case PlaybackShortcutAction::ResetVideoEdits:
+      return Command::Reset;
+    case PlaybackShortcutAction::ExportVideoEdits:
+      return Command::Export;
+    default:
+      return std::nullopt;
+  }
 }
 
 }  // namespace
@@ -124,11 +151,9 @@ struct PlaybackLoopRunner::Impl {
   playback_video_timeline_preview::HoverModel timelinePreviewModel;
   playback_video_timeline_preview::Provider timelinePreviewProvider;
   bool timelinePreviewStarted = false;
-  playback_video_edit::EditSession videoEditor;
+  playback_video_edit::Controller videoEditor;
   playback_video_edit::EditSnapshot videoEditSnapshot;
-  playback_video_edit::Exporter videoEditExporter;
-  playback_video_edit::ExportSnapshot videoEditExportSnapshot;
-  playback_video_edit::PreviewController videoEditPreview;
+  playback_video_edit::ExportProgress videoEditExportProgress;
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
   std::chrono::steady_clock::time_point lastDebugRefresh =
@@ -176,7 +201,8 @@ struct PlaybackLoopRunner::Impl {
                    : std::nullopt),
         presentationController(args.continuityState),
         core({args.player, args.perfLog, args.enableAudio, args.enableAscii}),
-        gpuRenderer(sharedGpuRenderer()) {
+        gpuRenderer(sharedGpuRenderer()),
+        videoEditor(args.file) {
     core.initialize(screen);
     const playback_video_timeline_preview::Source previewSource{
         file, core.player().videoStreamIndex(), core.player().durationUs(),
@@ -186,6 +212,7 @@ struct PlaybackLoopRunner::Impl {
                                previewSource.sourceHeight);
     timelinePreviewStarted = timelinePreviewProvider.start(previewSource);
     if (!timelinePreviewStarted) timelinePreviewModel.stop();
+    syncVideoEditView(false);
     bindInputState();
     bindRenderInputs();
     applyPresenterSync(syncPresentation());
@@ -199,227 +226,42 @@ struct PlaybackLoopRunner::Impl {
     output.requestWindowPresent();
   }
 
-  void publishVideoEditSnapshot() {
-    videoEditSnapshot = videoEditor.snapshot();
+  void syncVideoEditView(bool requestPresent = true) {
+    videoEditSnapshot = videoEditor.edit();
+    videoEditExportProgress = videoEditor.exportProgress();
+    if (!requestPresent) return;
     redraw = true;
     output.requestWindowPresent();
-  }
-
-  bool startVideoEditExport() {
-    if (videoEditExporter.snapshot().running()) {
-      videoEditExporter.cancel();
-      showEditMessage("Cancelling edit export...");
-      return true;
-    }
-    if (videoEditor.timeline().sourceDurationUs() <= 0) {
-      showEditMessage("Open the video editor and make an edit first");
-      return false;
-    }
-    if (videoEditor.timeline().isUnmodified()) {
-      showEditMessage("Make at least one trim or cut before exporting");
-      return false;
-    }
-    const std::filesystem::path destination =
-        playback_video_edit::uniqueEditedOutputPath(file);
-    if (destination.empty()) {
-      showEditMessage("Could not select a safe output filename");
-      return false;
-    }
-    playback_video_edit::ExportRequest request;
-    request.sourcePath = file;
-    request.destinationPath = destination;
-    request.keptRanges = videoEditor.timeline().keptRanges();
-    request.videoStreamIndex = core.player().videoStreamIndex();
-    request.audioStreamIndex = core.player().activeAudioStreamIndex();
-    if (!videoEditExporter.start(std::move(request))) {
-      showEditMessage("Could not start edit export");
-      return false;
-    }
-    videoEditExportSnapshot = videoEditExporter.snapshot();
-    showEditMessage("Export started: " +
-                    toUtf8String(destination.filename()));
-    return true;
   }
 
   void pollVideoEditExport() {
-    if (!videoEditExporter.consumeChanged()) return;
-    const playback_video_edit::ExportState previousState =
-        videoEditExportSnapshot.state;
-    videoEditExportSnapshot = videoEditExporter.snapshot();
-    redraw = true;
-    output.requestWindowPresent();
-    if (previousState == playback_video_edit::ExportState::Running &&
-        videoEditExportSnapshot.finished()) {
-      switch (videoEditExportSnapshot.state) {
-        case playback_video_edit::ExportState::Succeeded:
-          showEditMessage(
-              "Exported " +
-              toUtf8String(
-                  videoEditExportSnapshot.destinationPath.filename()));
-          break;
-        case playback_video_edit::ExportState::Failed:
-          showEditMessage("Export failed: " + videoEditExportSnapshot.error);
-          break;
-        case playback_video_edit::ExportState::Cancelled:
-          showEditMessage("Export cancelled");
-          break;
-        default:
-          break;
-      }
-    }
-  }
-
-  void pauseVideoEditPreview() {
-    if (!videoEditPreview.active()) return;
-    videoEditPreview.stop();
-    playback_session_input::setPlaybackPaused(inputView, inputSignals,
-                                              seekState, true);
-  }
-
-  bool beginVideoEditPreview() {
-    const auto& ranges = videoEditor.timeline().keptRanges();
-    if (!videoEditor.active() || ranges.empty()) return false;
-    int64_t firstTargetUs = 0;
-    if (!videoEditPreview.start(ranges, &firstTargetUs) ||
-        !core.player().requestSeek(firstTargetUs)) {
-      videoEditPreview.stop();
-      showEditMessage("Edit preview could not start");
-      return false;
-    }
-    playback_session_input::setPlaybackPaused(inputView, inputSignals,
-                                              seekState, false);
-    showEditMessage("Previewing edited sequence");
-    return true;
-  }
-
-  void keepPlayheadOnEditedMedia() {
-    const int64_t positionUs = core.player().timelineSnapshot().positionUs;
-    const auto& timeline = videoEditor.timeline();
-    if (timeline.containsSourceTime(positionUs)) return;
-    std::optional<int64_t> target = timeline.nextKeptSourceTime(positionUs);
-    if (!target) target = timeline.previousKeptSourceTime(positionUs + 1);
-    if (target) core.player().requestSeek(*target);
+    std::string message;
+    if (!videoEditor.poll(&message)) return;
+    syncVideoEditView();
+    if (!message.empty()) showEditMessage(message);
   }
 
   bool handleVideoEditorAction(PlaybackShortcutAction action) {
-    const int64_t durationUs = core.player().durationUs();
-    const PlayerTimelineSnapshot playhead = core.player().timelineSnapshot();
-    const int64_t positionUs =
-        std::clamp(playhead.positionUs, int64_t{0}, std::max<int64_t>(0, durationUs));
-    bool changed = false;
-    switch (action) {
-      case PlaybackShortcutAction::ToggleVideoEditor:
-        if (videoEditor.active()) {
-          pauseVideoEditPreview();
-          videoEditor.deactivate();
-          showEditMessage("Video editor closed (edits retained)");
-        } else if (durationUs > 0) {
-          videoEditor.activate(durationUs);
-          showEditMessage(
-              "Video editor: I/O mark, Delete remove, T trim, Ctrl+E export");
-        } else {
-          showEditMessage("Video editor requires a known duration");
-          return false;
-        }
-        changed = true;
-        break;
-      case PlaybackShortcutAction::ExitVideoEditor:
-        if (!videoEditor.active()) return false;
-        pauseVideoEditPreview();
-        videoEditor.deactivate();
-        showEditMessage("Video editor closed (edits retained)");
-        changed = true;
-        break;
-      case PlaybackShortcutAction::SetVideoEditIn:
-        pauseVideoEditPreview();
-        videoEditor.markIn(positionUs);
-        showEditMessage("In point set");
-        changed = true;
-        break;
-      case PlaybackShortcutAction::SetVideoEditOut: {
-        pauseVideoEditPreview();
-        const int64_t frameDurationUs =
-            std::max<int64_t>(1, core.player().debugInfo().lastPresentedDurationUs);
-        videoEditor.markOut(
-            std::min(durationUs, positionUs + frameDurationUs));
-        showEditMessage("Out point set");
-        changed = true;
-        break;
-      }
-      case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
-        pauseVideoEditPreview();
-        changed = videoEditor.rippleDeleteSelection();
-        showEditMessage(changed ? "Selection removed (ripple)"
-                                : "Set a non-empty In/Out range first");
-        if (changed) keepPlayheadOnEditedMedia();
-        break;
-      case PlaybackShortcutAction::TrimVideoEditSelection:
-        pauseVideoEditPreview();
-        changed = videoEditor.trimToSelection();
-        showEditMessage(changed ? "Sequence trimmed to selection"
-                                : "Set a non-empty In/Out range first");
-        if (changed) keepPlayheadOnEditedMedia();
-        break;
-      case PlaybackShortcutAction::UndoVideoEdit:
-        pauseVideoEditPreview();
-        changed = videoEditor.undo();
-        showEditMessage(changed ? "Edit undone" : "Nothing to undo");
-        if (changed) keepPlayheadOnEditedMedia();
-        break;
-      case PlaybackShortcutAction::RedoVideoEdit:
-        pauseVideoEditPreview();
-        changed = videoEditor.redo();
-        showEditMessage(changed ? "Edit redone" : "Nothing to redo");
-        if (changed) keepPlayheadOnEditedMedia();
-        break;
-      case PlaybackShortcutAction::ResetVideoEdits:
-        pauseVideoEditPreview();
-        changed = videoEditor.resetEdits();
-        showEditMessage(changed ? "All cuts reset" : "Sequence is unchanged");
-        break;
-      case PlaybackShortcutAction::PreviewVideoEdits:
-        if (videoEditPreview.active()) {
-          pauseVideoEditPreview();
-          showEditMessage("Edit preview paused");
-          changed = true;
-        } else {
-          changed = beginVideoEditPreview();
-        }
-        break;
-      case PlaybackShortcutAction::ExportVideoEdits:
-        // Bound to the asynchronous exporter below; keep the command routed
-        // through the session owner rather than the renderer or player.
-        changed = startVideoEditExport();
-        break;
-      default:
-        return false;
-    }
-    publishVideoEditSnapshot();
-    return changed;
-  }
+    const auto command = videoEditCommandFor(action);
+    if (!command) return false;
 
-  void updateVideoEditPreview() {
-    if (!videoEditPreview.active() || !videoEditor.active()) return;
-    const PlayerTimelineSnapshot playhead = core.player().timelineSnapshot();
-    const playback_video_edit::PreviewDecision decision =
-        videoEditPreview.observePresentedFrame(
-            playhead.positionUs,
-            core.player().debugInfo().lastPresentedDurationUs,
-            playhead.seekPending());
-    if (decision.kind ==
-        playback_video_edit::PreviewDecisionKind::Complete) {
-      playback_session_input::setPlaybackPaused(inputView, inputSignals,
-                                                seekState, true);
-      showEditMessage("Edit preview finished");
-      return;
-    }
-    if (decision.kind == playback_video_edit::PreviewDecisionKind::Seek &&
-        !core.player().requestSeek(decision.targetUs)) {
-      videoEditPreview.stop();
-      playback_session_input::setPlaybackPaused(inputView, inputSignals,
-                                                seekState, true);
-      showEditMessage("Edit preview could not continue");
-    }
+    const int64_t durationUs = core.player().durationUs();
+    const PlayerTimelineSnapshot timeline = core.player().timelineSnapshot();
+    playback_video_edit::CommandContext context;
+    context.sourceDurationUs = durationUs;
+    context.playheadUs = std::clamp(
+        timeline.positionUs, int64_t{0}, std::max<int64_t>(0, durationUs));
+    context.frameDurationUs =
+        std::max<int64_t>(1, core.player().debugInfo().lastPresentedDurationUs);
+    context.videoStreamIndex = core.player().videoStreamIndex();
+    context.audioStreamIndex = core.player().activeAudioStreamIndex();
+
+    const playback_video_edit::CommandResult result =
+        videoEditor.execute(*command, context);
+    if (result.seekTargetUs) core.player().requestSeek(*result.seekTargetUs);
+    syncVideoEditView();
+    if (!result.message.empty()) showEditMessage(result.message);
+    return result.handled;
   }
 
   void bindInputState() {
@@ -434,7 +276,7 @@ struct PlaybackLoopRunner::Impl {
     inputView.textGridPresentationOutputState =
         &textGridPresentationOutputState;
     inputView.videoEdit = &videoEditSnapshot;
-    inputView.videoEditExport = &videoEditExportSnapshot;
+    inputView.videoEditExport = &videoEditExportProgress;
     inputView.timingSink = timingSink;
     core.bindInputView(inputView);
 
@@ -463,9 +305,6 @@ struct PlaybackLoopRunner::Impl {
         [this](PlaybackShortcutAction action) {
           return handleVideoEditorAction(action);
         };
-    inputSignals.cancelVideoEditPreview = [this]() {
-      videoEditPreview.stop();
-    };
     inputSignals.requestTimelinePreview =
         [this](playback_video_timeline_preview::PresentationSurface surface,
                double ratio, int progressUnits) {
@@ -545,13 +384,13 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.warningSink = warningSink;
     renderInputs.timingSink = timingSink;
     renderInputs.videoEdit = videoEditSnapshot;
-    renderInputs.videoEditExport = videoEditExportSnapshot;
+    renderInputs.videoEditExport = videoEditExportProgress;
     core.bindRenderInputs(renderInputs);
   }
 
   bool overlayVisible() const {
     return config.debugOverlay || osd.controlsVisible() ||
-           videoEditor.active() || videoEditExportSnapshot.running();
+           videoEditor.active() || videoEditExportProgress.running();
   }
 
   playback_overlay::PlaybackOsdSnapshot osdSnapshot() const {
@@ -572,7 +411,7 @@ struct PlaybackLoopRunner::Impl {
     ui.timelinePreview = timelinePreviewModel.snapshotFor(
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
     ui.videoEdit = videoEditSnapshot;
-    ui.videoEditExport = videoEditExportSnapshot;
+    ui.videoEditExport = videoEditExportProgress;
     if (ui.videoEdit.active || ui.videoEditExport.running()) {
       ui.overlayAlpha = 1.0f;
     }
@@ -616,7 +455,7 @@ struct PlaybackLoopRunner::Impl {
     inputs.timelinePreview = timelinePreviewModel.snapshotFor(
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
     inputs.videoEdit = videoEditSnapshot;
-    inputs.videoEditExport = videoEditExportSnapshot;
+    inputs.videoEditExport = videoEditExportProgress;
     inputs.osd.controlsVisible =
         inputs.osd.controlsVisible || audioOnlyPlayback;
     inputs.clearHistory = false;
@@ -678,7 +517,7 @@ struct PlaybackLoopRunner::Impl {
     timelinePreviewProvider.stop();
     timelinePreviewModel.stop();
     timelinePreviewStarted = false;
-    videoEditExporter.stop();
+    videoEditor.stop();
     perfLogAppendf(&perfLog, "video_shutdown output_stop_begin");
     perfLogFlush(&perfLog);
     output.stop();
@@ -726,7 +565,7 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.timelinePreview = timelinePreviewModel.snapshotFor(
         playback_video_timeline_preview::PresentationSurface::Terminal);
     renderInputs.videoEdit = videoEditSnapshot;
-    renderInputs.videoEditExport = videoEditExportSnapshot;
+    renderInputs.videoEditExport = videoEditExportProgress;
     renderInputs.cellPixelWidth = screen.cellPixelWidth();
     renderInputs.cellPixelHeight = screen.cellPixelHeight();
     renderInputs.cellPixelSourceLabel = screen.cellPixelSourceLabel();
@@ -1121,8 +960,6 @@ struct PlaybackLoopRunner::Impl {
       if (loopState == PlaybackLoopState::Stopped) {
         break;
       }
-      updateVideoEditPreview();
-
       applyPresenterSync(syncPresentation());
       finalizeAudioStart();
       updateWindowCursor();

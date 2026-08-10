@@ -432,19 +432,13 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
                               const InputEvent& ev) {
   InputCallbacks cb;
   cb.onQuit = [&]() { requestPlaybackExit(view, signals, true); };
-  const auto cancelEditPreview = [&]() {
-    if (signals.cancelVideoEditPreview) signals.cancelVideoEditPreview();
-  };
   cb.onPlay = [&]() {
-    cancelEditPreview();
     setPlaybackPaused(view, signals, seekState, false);
   };
   cb.onPause = [&]() {
-    cancelEditPreview();
     setPlaybackPaused(view, signals, seekState, true);
   };
   cb.onTogglePause = [&]() {
-    cancelEditPreview();
     setPlaybackPaused(view, signals, seekState, pauseRequestedByToggle(view));
   };
   cb.onStopPlayback = [&]() { requestPlaybackExit(view, signals, false); };
@@ -486,7 +480,6 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       case PlaybackShortcutAction::UndoVideoEdit:
       case PlaybackShortcutAction::RedoVideoEdit:
       case PlaybackShortcutAction::ResetVideoEdits:
-      case PlaybackShortcutAction::PreviewVideoEdits:
       case PlaybackShortcutAction::ExportVideoEdits:
         if (signals.handleVideoEditorAction) {
           signals.handleVideoEditorAction(action);
@@ -497,17 +490,14 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     }
   };
   cb.onSeekBy = [&](int dir) {
-    cancelEditPreview();
     sendRelativeSeekRequest(view, signals, seekState,
                             static_cast<int64_t>(dir) * 5000000);
   };
   cb.onPreviousFrame = [&]() {
-    cancelEditPreview();
     requestFrameStep(view, signals, seekState,
                      playback_video_frame_step::Direction::Previous);
   };
   cb.onNextFrame = [&]() {
-    cancelEditPreview();
     requestFrameStep(view, signals, seekState,
                      playback_video_frame_step::Direction::Next);
   };
@@ -540,7 +530,6 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
                                   PlaybackInputSignals& signals,
                                   PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command) {
-  if (signals.cancelVideoEditPreview) signals.cancelVideoEditPreview();
   switch (command) {
     case PlaybackControlCommand::Play:
       setPlaybackPaused(view, signals, seekState, false);
@@ -710,7 +699,6 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                                      progressUnits);
     }
     if (seekGesture) {
-      if (signals.cancelVideoEditPreview) signals.cancelVideoEditPreview();
       queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
     }
     return;

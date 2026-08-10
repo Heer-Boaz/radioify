@@ -104,14 +104,10 @@ bool Timeline::rippleDelete(SourceRange remove) {
 }
 
 bool Timeline::containsSourceTime(int64_t sourceUs) const {
-  return rangeContaining(sourceUs).has_value();
-}
-
-std::optional<SourceRange> Timeline::rangeContaining(int64_t sourceUs) const {
   for (const SourceRange& range : keptRanges_) {
-    if (sourceUs >= range.startUs && sourceUs < range.endUs) return range;
+    if (sourceUs >= range.startUs && sourceUs < range.endUs) return true;
   }
-  return std::nullopt;
+  return false;
 }
 
 std::optional<int64_t> Timeline::nextKeptSourceTime(int64_t sourceUs) const {
@@ -130,48 +126,16 @@ std::optional<int64_t> Timeline::previousKeptSourceTime(int64_t sourceUs) const 
   return std::nullopt;
 }
 
-std::optional<int64_t> Timeline::sourceToOutputTime(int64_t sourceUs) const {
-  int64_t outputUs = 0;
-  for (const SourceRange& range : keptRanges_) {
-    if (sourceUs >= range.startUs && sourceUs < range.endUs) {
-      return saturatingAdd(outputUs, sourceUs - range.startUs);
-    }
-    outputUs = saturatingAdd(outputUs, range.durationUs());
-  }
-  if (!keptRanges_.empty() && sourceUs == keptRanges_.back().endUs) {
-    return outputUs;
-  }
-  return std::nullopt;
-}
-
-std::optional<int64_t> Timeline::outputToSourceTime(int64_t outputUs) const {
-  if (outputUs < 0) return std::nullopt;
-  int64_t remaining = outputUs;
-  for (const SourceRange& range : keptRanges_) {
-    if (remaining < range.durationUs()) return range.startUs + remaining;
-    remaining -= range.durationUs();
-  }
-  if (!keptRanges_.empty() && remaining == 0) {
-    return keptRanges_.back().endUs;
-  }
-  return std::nullopt;
-}
-
 void EditSession::activate(int64_t sourceDurationUs) {
   const int64_t duration = std::max<int64_t>(0, sourceDurationUs);
-  bool changed = false;
   if (timeline_.sourceDurationUs() != duration) {
     timeline_.reset(duration);
     undo_.clear();
     redo_.clear();
     inUs_.reset();
     outUs_.reset();
-    changed = true;
   }
-  const bool nextActive = duration > 0;
-  changed = changed || active_ != nextActive;
-  active_ = nextActive;
-  if (changed) ++revision_;
+  active_ = duration > 0;
 }
 
 void EditSession::deactivate() {
@@ -179,7 +143,6 @@ void EditSession::deactivate() {
   active_ = false;
   inUs_.reset();
   outUs_.reset();
-  ++revision_;
 }
 
 int64_t EditSession::clampSourceTime(int64_t sourceUs) const {
@@ -193,7 +156,6 @@ void EditSession::markIn(int64_t sourceUs) {
   if (inUs_ == nextIn && !clearsOut) return;
   inUs_ = nextIn;
   if (clearsOut) outUs_.reset();
-  ++revision_;
 }
 
 void EditSession::markOut(int64_t sourceUsExclusive) {
@@ -203,14 +165,6 @@ void EditSession::markOut(int64_t sourceUsExclusive) {
   if (outUs_ == nextOut && !clearsIn) return;
   outUs_ = nextOut;
   if (clearsIn) inUs_.reset();
-  ++revision_;
-}
-
-void EditSession::clearSelection() {
-  if (!inUs_ && !outUs_) return;
-  inUs_.reset();
-  outUs_.reset();
-  ++revision_;
 }
 
 std::optional<SourceRange> EditSession::selection() const {
@@ -225,7 +179,6 @@ bool EditSession::commit(Timeline next) {
   redo_.clear();
   inUs_.reset();
   outUs_.reset();
-  ++revision_;
   return true;
 }
 
@@ -250,7 +203,6 @@ bool EditSession::undo() {
   undo_.pop_back();
   inUs_.reset();
   outUs_.reset();
-  ++revision_;
   return true;
 }
 
@@ -261,7 +213,6 @@ bool EditSession::redo() {
   redo_.pop_back();
   inUs_.reset();
   outUs_.reset();
-  ++revision_;
   return true;
 }
 
@@ -279,10 +230,6 @@ EditSnapshot EditSession::snapshot() const {
   out.keptRanges = timeline_.keptRanges();
   out.inUs = inUs_;
   out.outUs = outUs_;
-  out.canApplySelection = selection().has_value();
-  out.canUndo = !undo_.empty();
-  out.canRedo = !redo_.empty();
-  out.revision = revision_;
   return out;
 }
 

@@ -228,10 +228,9 @@ int main() {
                                               videoEditingContexts)
                    .value() == PlaybackShortcutAction::TrimVideoEditSelection,
                "Bare T must trim the sequence to the selected range");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey('P'),
-                                              videoEditingContexts)
-                   .value() == PlaybackShortcutAction::PreviewVideoEdits,
-               "Bare P must preview the edited sequence while editing");
+  ok &= expect(!resolvePlaybackShortcutAction(makeKey('P'),
+                                               videoEditingContexts),
+               "Bare P must remain unbound without a real timeline player");
   ok &= expect(resolvePlaybackShortcutAction(
                    makeKey('P', 0, kPlaybackShortcutCtrlMask),
                    videoEditingContexts)
