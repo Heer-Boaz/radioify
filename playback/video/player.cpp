@@ -2361,6 +2361,9 @@ struct Player::Impl {
     snapshot.sourcePositionUs =
         sourcePositionForPresentation(position.positionUs);
     const PresentedFrameState presented = presentedFrameSnapshot();
+    if (presented.serial == position.currentSerial && presented.valid) {
+      snapshot.frameDurationUs = presented.durationUs;
+    }
     if (!position.requestPending && !position.transitionPending &&
         position.presentedPositionValid &&
         presented.serial == position.currentSerial && presented.valid) {

@@ -35,8 +35,6 @@ struct WindowUiState {
         std::string text;
         bool active = false;
         bool hovered = false;
-        int controlIndex = -1;
-        int priority = 0;
     };
 
     struct SubtitleCue {

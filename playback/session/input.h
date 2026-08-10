@@ -78,12 +78,18 @@ struct PlaybackInputSignals {
 };
 
 struct PlaybackSeekGestureState {
+  struct VideoEditBoundaryDrag {
+    playback_video_edit::EditBoundary boundary =
+        playback_video_edit::EditBoundary::In;
+    playback_video_timeline_preview::PresentationSurface surface =
+        playback_video_timeline_preview::PresentationSurface::Terminal;
+  };
+
   std::chrono::steady_clock::time_point lastSeekSentTime =
       std::chrono::steady_clock::time_point::min();
   double queuedSeekTargetSec = -1.0;
   bool seekQueued = false;
-  std::optional<playback_video_edit::EditBoundary> videoEditBoundaryDrag;
-  bool videoEditBoundaryDragFromWindow = false;
+  std::optional<VideoEditBoundaryDrag> videoEditBoundaryDrag;
 };
 
 bool isOverlayVisible(const PlaybackInputSignals& signals);

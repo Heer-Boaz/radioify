@@ -489,10 +489,9 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
   progressHit.barWidth = progressWidth_;
   progressHit.unitWidth = windowMouse ? cellWidth_ : 1;
   progressHit.unitHeight = windowMouse ? cellHeight_ : 1;
-  double ratio = 0.0;
-  if (progressBarRatioAt(progressHit, &ratio)) {
+  if (const auto ratio = progressBarRatioAt(progressHit)) {
     if (callbacks.onSeekToRatio) {
-      callbacks.onSeekToRatio(ratio);
+      callbacks.onSeekToRatio(*ratio);
     }
   }
 }

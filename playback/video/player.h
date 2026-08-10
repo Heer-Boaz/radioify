@@ -55,6 +55,7 @@ struct PlayerDebugInfo {
 struct PlayerTimelineSnapshot {
   int64_t positionUs = 0;
   int64_t sourcePositionUs = 0;
+  int64_t frameDurationUs = 0;
   int serial = 0;
   uint64_t latestSeekRequestGeneration = 0;
   uint64_t handledSeekRequestGeneration = 0;

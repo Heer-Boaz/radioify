@@ -1,5 +1,6 @@
 #include "playback/video/edit/timeline.h"
 #include "playback/video/edit/overlay_model.h"
+#include "tui/ui/ui_helpers.h"
 
 #include <iostream>
 #include <optional>
@@ -221,12 +222,12 @@ int main() {
                 "marks, cuts, and playhead must share the program-time axis");
   ok &= expect(overlayModel.status == "EXPORT 42%" &&
                     overlayModel.status.size() <= 10,
-               "narrow editor status must contain one complete priority state");
+               "narrow editor status must contain one complete state");
   const playback_video_edit::OverlayModel tinyExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport, 6,
                                               0.5);
   ok &= expect(tinyExportModel.status == "EXPORT",
-               "tiny editor status must retain the highest-priority state");
+               "tiny editor status must retain a complete compact state");
   const playback_video_edit::OverlayModel tinyDirtyModel =
       playback_video_edit::buildOverlayModel(overlayEdit, nullptr, 1, 0.5);
   ok &= expect(tinyDirtyModel.status == "*",
@@ -280,6 +281,28 @@ int main() {
                    !playback_video_edit::timelineBoundaryAt(overlayEdit, 0.5,
                                                              80),
                "boundary hit-testing must select only the nearest visible handle");
+
+  ProgressBarHitTestInput progressHit;
+  progressHit.barX = 10;
+  progressHit.barY = 20;
+  progressHit.barWidth = 10;
+  progressHit.unitWidth = 10.0;
+  progressHit.unitHeight = 10.0;
+  progressHit.x = 149.5;
+  progressHit.y = 205.0;
+  ok &= expect(progressBarRatioAt(progressHit) == 0.5,
+               "progress hit-testing must preserve exact in-bar geometry");
+  progressHit.x = 200.0;
+  ok &= expect(!progressBarRatioAt(progressHit),
+               "ordinary progress hit-testing must reject outside input");
+  progressHit.x = 0.0;
+  progressHit.y = 0.0;
+  ok &= expect(progressBarRatioAt(progressHit, true) == 0.0,
+               "captured progress drags must clamp before the bar");
+  progressHit.x = 500.0;
+  progressHit.y = 500.0;
+  ok &= expect(progressBarRatioAt(progressHit, true) == 1.0,
+               "captured progress drags must clamp beyond the bar");
 
   return ok ? 0 : 1;
 }

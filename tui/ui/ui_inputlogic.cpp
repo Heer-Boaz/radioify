@@ -856,9 +856,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       progressHit.barWidth = progressBarWidth;
       progressHit.unitWidth = mouse.hasPixelPosition ? mouse.unitWidth : 1.0;
       progressHit.unitHeight = mouse.hasPixelPosition ? mouse.unitHeight : 1.0;
-      double ratio = 0.0;
-      if (progressBarRatioAt(progressHit, &ratio)) {
-        if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
+      if (const auto ratio = progressBarRatioAt(progressHit)) {
+        if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(*ratio);
         dirty = true;
         return;
       }

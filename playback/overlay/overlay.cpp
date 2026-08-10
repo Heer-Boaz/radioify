@@ -54,48 +54,15 @@ struct PendingOverlayCellControl {
 
 std::vector<PendingOverlayCellControl> wrapOverlayControls(
     const std::vector<OverlayCellControlInput>& controls, int width,
-    bool singleLine, int* outLineCount) {
+    int* outLineCount) {
   const int contentInset = width > 2 ? 1 : 0;
   const int maxLineWidth = std::max(1, width - contentInset * 2);
-  std::vector<size_t> selectedIndices;
-  selectedIndices.reserve(controls.size());
-  if (singleLine) {
-    std::vector<size_t> prioritizedIndices(controls.size());
-    for (size_t index = 0; index < controls.size(); ++index) {
-      prioritizedIndices[index] = index;
-    }
-    std::stable_sort(
-        prioritizedIndices.begin(), prioritizedIndices.end(),
-        [&](size_t lhs, size_t rhs) {
-          return controls[lhs].priority > controls[rhs].priority;
-        });
-    int usedWidth = 0;
-    for (const size_t index : prioritizedIndices) {
-      const OverlayCellControlInput& control = controls[index];
-      const int controlWidth =
-          std::min(maxLineWidth,
-                   std::max(1, control.width > 0
-                                   ? control.width
-                                   : utf8DisplayWidth(control.text)));
-      const int requiredWidth = controlWidth + (usedWidth > 0 ? 2 : 0);
-      if (usedWidth + requiredWidth > maxLineWidth) continue;
-      selectedIndices.push_back(index);
-      usedWidth += requiredWidth;
-    }
-    std::sort(selectedIndices.begin(), selectedIndices.end());
-  } else {
-    for (size_t index = 0; index < controls.size(); ++index) {
-      selectedIndices.push_back(index);
-    }
-  }
-
   std::vector<PendingOverlayCellControl> out;
-  out.reserve(selectedIndices.size());
+  out.reserve(controls.size());
 
   int cursor = 0;
   int line = 0;
-  for (const size_t index : selectedIndices) {
-    const OverlayCellControlInput& control = controls[index];
+  for (const OverlayCellControlInput& control : controls) {
     const int controlWidth =
         std::min(maxLineWidth,
                  std::max(1, control.width > 0
@@ -396,7 +363,7 @@ std::string buildSubtitleText(const SubtitleManager& subtitleManager,
 
 OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
                                               const std::string& label,
-                                              bool active, int priority) {
+                                              bool active) {
   BracketButtonLabels labels = makeBracketButtonLabels(label);
   OverlayControlSpec spec;
   spec.id = id;
@@ -404,7 +371,6 @@ OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
   spec.hoverText = std::move(labels.hover);
   spec.width = labels.width;
   spec.active = active;
-  spec.priority = priority;
   return spec;
 }
 
@@ -420,7 +386,6 @@ std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
     control.active = specs[i].active;
     control.hovered = hovered;
     control.controlIndex = static_cast<int>(i);
-    control.priority = specs[i].priority;
     controls.push_back(std::move(control));
   }
   return controls;
@@ -499,11 +464,11 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     addSpec(makeOverlayTextControlSpec(
         OverlayControlId::EditExport,
         state.videoEditExport.running() ? "Wait" : "Export",
-        state.videoEditExport.running(), 300));
+        state.videoEditExport.running()));
     addSpec(makeOverlayTextControlSpec(OverlayControlId::EditDiscardAndExit,
-                                       "Discard", false, 200));
+                                       "Discard", false));
     addSpec(makeOverlayTextControlSpec(OverlayControlId::EditCancelExit,
-                                       "Stay", true, 400));
+                                       "Stay", true));
     finishSpecs();
     return out;
   }
@@ -515,44 +480,43 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     if (state.playPauseAvailable) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::PlayPause,
                                          state.paused ? "Play" : "Pause",
-                                         state.paused, 120));
+                                         state.paused));
     }
     addSpec(makeOverlayTextControlSpec(OverlayControlId::EditMarkIn, "In",
-                                       state.videoEdit.inTimelineUs.has_value(),
-                                       300));
+                                       state.videoEdit.inTimelineUs.has_value()));
     addSpec(makeOverlayTextControlSpec(
         OverlayControlId::EditMarkOut, "Out",
-        state.videoEdit.outTimelineUs.has_value(), 300));
+        state.videoEdit.outTimelineUs.has_value()));
     if (hasSelection) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::EditRippleDelete,
-                                         "Cut", false, 280));
+                                         "Cut", false));
       addSpec(makeOverlayTextControlSpec(OverlayControlId::EditTrim, "Trim",
-                                         false, 270));
+                                         false));
     }
     if (state.videoEdit.canUndo) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::EditUndo, "Undo",
-                                         true, 180));
+                                         true));
     }
     if (state.videoEdit.canRedo) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::EditRedo, "Redo",
-                                         true, 170));
+                                         true));
     }
     if (state.videoEdit.dirty) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::EditReset, "Reset",
-                                         true, 60));
+                                         true));
     }
     if (state.videoEdit.dirty || state.videoEditExport.running()) {
       addSpec(makeOverlayTextControlSpec(
           OverlayControlId::EditExport,
           state.videoEditExport.running() ? "Cancel" : "Export",
-          state.videoEditExport.running(), 400));
+          state.videoEditExport.running()));
     }
     addSpec(makeOverlayTextControlSpec(OverlayControlId::EditDone, "Done",
-                                       false, 220));
+                                       false));
     if (options.includePictureInPicture && state.pictureInPictureAvailable) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::PictureInPicture,
                                          "PiP",
-                                         state.pictureInPictureActive, 40));
+                                         state.pictureInPictureActive));
     }
     finishSpecs();
     return out;
@@ -634,9 +598,7 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
 
   int controlLineCount = 0;
   std::vector<PendingOverlayCellControl> pending =
-      wrapOverlayControls(input.controls, layout.width,
-                          input.singleLineControls,
-                          &controlLineCount);
+      wrapOverlayControls(input.controls, layout.width, &controlLineCount);
   const bool hasSuffix = !input.suffix.empty();
   const int contentInset = layout.width > 2 ? 1 : 0;
   const int progressWidth = std::max(1, layout.width - contentInset * 2);
@@ -759,7 +721,7 @@ OverlayCellLayout layoutOverlayControlCells(
 
   int controlLineCount = 0;
   std::vector<PendingOverlayCellControl> pending =
-      wrapOverlayControls(controls, layout.width, false, &controlLineCount);
+      wrapOverlayControls(controls, layout.width, &controlLineCount);
   layout.height = controlLineCount;
   layout.progressBarX = -1;
   layout.progressBarY = -1;
@@ -824,8 +786,6 @@ OverlayCellLayout layoutPlaybackOverlayCells(
        state.videoEditExport.running())
           ? 1
           : 0;
-  input.singleLineControls =
-      state.videoEdit.active || state.videoEdit.exitConfirmation;
   input.controls = buildOverlayCellControlInputs(specs, hoverIndex);
   return layoutOverlayCells(input);
 }
@@ -842,16 +802,13 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
        ui.videoEditExport.running())
           ? 1
           : 0;
-  input.singleLineControls =
-      ui.videoEdit.active || ui.videoEdit.exitConfirmation;
   input.controls.reserve(ui.controlButtons.size());
   for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
     OverlayCellControlInput control;
     control.text = ui.controlButtons[i].text;
     control.active = ui.controlButtons[i].active;
     control.hovered = ui.controlButtons[i].hovered;
-    control.controlIndex = ui.controlButtons[i].controlIndex;
-    control.priority = ui.controlButtons[i].priority;
+    control.controlIndex = static_cast<int>(i);
     input.controls.push_back(std::move(control));
   }
   return layoutOverlayCells(input);
@@ -895,11 +852,13 @@ std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state) {
   return state.windowTitle;
 }
 
-bool windowOverlayProgressRatioAt(bool overlayVisible, int windowWidth,
-                                  int windowHeight, const MouseEvent& mouse,
-                                  int cellPixelWidth, int cellPixelHeight,
-                                  double* outRatio, int* outProgressUnits) {
-  if (!overlayVisible || windowWidth <= 0 || windowHeight <= 0) return false;
+std::optional<ProgressBarHit> windowOverlayProgressHitAt(
+    bool overlayVisible, int windowWidth, int windowHeight,
+    const MouseEvent& mouse, int cellPixelWidth, int cellPixelHeight,
+    bool clampToBar) {
+  if (!overlayVisible || windowWidth <= 0 || windowHeight <= 0) {
+    return std::nullopt;
+  }
   const int cellWidth = std::max(1, cellPixelWidth);
   const int cellHeight = std::max(1, cellPixelHeight);
   const int cols = overlayCellCountForPixels(windowWidth, cellWidth);
@@ -920,8 +879,9 @@ bool windowOverlayProgressRatioAt(bool overlayVisible, int windowWidth,
   hit.barWidth = std::max(1, cols - contentInset * 2);
   hit.unitWidth = unitWidth;
   hit.unitHeight = unitHeight;
-  if (outProgressUnits) *outProgressUnits = hit.barWidth;
-  return progressBarRatioAt(hit, outRatio);
+  const auto ratio = progressBarRatioAt(hit, clampToBar);
+  if (!ratio) return std::nullopt;
+  return ProgressBarHit{*ratio, hit.barWidth};
 }
 
 int terminalOverlayControlAt(const PlaybackOverlayState& state,
@@ -985,8 +945,6 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
     btn.text = controlSpecs[i].renderText;
     btn.active = controlSpecs[i].active;
     btn.hovered = static_cast<int>(i) == hoverIndex;
-    btn.controlIndex = static_cast<int>(i);
-    btn.priority = controlSpecs[i].priority;
     ui.controlButtons.push_back(std::move(btn));
   }
   ui.subtitleClockUs = state.subtitleClockUs;

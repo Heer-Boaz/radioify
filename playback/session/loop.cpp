@@ -370,11 +370,10 @@ struct PlaybackLoopRunner::Impl {
     videoEditSnapshot = videoEditor.edit();
     videoEditSnapshot.exitConfirmation = pendingExit.has_value();
     if (videoEditSnapshot.active) {
-      videoEditSnapshot.playheadTimelineUs =
-          core.player().timelineSnapshot().positionUs;
+      const PlayerTimelineSnapshot timeline = core.player().timelineSnapshot();
+      videoEditSnapshot.playheadTimelineUs = timeline.positionUs;
       videoEditSnapshot.frameDurationUs =
-          std::max<int64_t>(0,
-                            core.player().debugInfo().lastPresentedDurationUs);
+          std::max<int64_t>(0, timeline.frameDurationUs);
     }
     videoEditExportProgress = videoEditor.exportProgress();
     if (!requestPresent) return;
@@ -425,7 +424,7 @@ struct PlaybackLoopRunner::Impl {
         timeline.sourcePositionUs, int64_t{0},
         std::max<int64_t>(0, durationUs));
     context.frameDurationUs =
-        std::max<int64_t>(1, core.player().debugInfo().lastPresentedDurationUs);
+        std::max<int64_t>(1, timeline.frameDurationUs);
     context.videoStreamIndex = core.player().videoStreamIndex();
     context.audioStreamIndex = core.player().activeAudioStreamIndex();
 
@@ -517,7 +516,7 @@ struct PlaybackLoopRunner::Impl {
                int64_t timelineUs) {
           if (pendingExit || !videoEditor.active()) return false;
           const int64_t minimumDurationUs = std::max<int64_t>(
-              1, core.player().debugInfo().lastPresentedDurationUs);
+              1, core.player().timelineSnapshot().frameDurationUs);
           if (!videoEditor.moveBoundary(boundary, timelineUs,
                                         minimumDurationUs)) {
             return false;
@@ -1136,11 +1135,10 @@ struct PlaybackLoopRunner::Impl {
   RefreshState refreshState() {
     RefreshState state;
     if (videoEditSnapshot.active) {
-      videoEditSnapshot.playheadTimelineUs =
-          core.player().timelineSnapshot().positionUs;
+      const PlayerTimelineSnapshot timeline = core.player().timelineSnapshot();
+      videoEditSnapshot.playheadTimelineUs = timeline.positionUs;
       videoEditSnapshot.frameDurationUs =
-          std::max<int64_t>(0,
-                            core.player().debugInfo().lastPresentedDurationUs);
+          std::max<int64_t>(0, timeline.frameDurationUs);
     }
     state.useWindowPresenter = output.windowActive();
     state.presented =
