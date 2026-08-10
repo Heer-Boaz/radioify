@@ -11,7 +11,6 @@ namespace playback_video_edit {
 
 enum class TimelineCellKind : uint8_t {
   Kept,
-  Removed,
   Selected,
 };
 
@@ -20,6 +19,7 @@ struct OverlayModel {
   int playheadCell = 0;
   std::optional<int> inCell;
   std::optional<int> outCell;
+  std::vector<int> cutCells;
   std::string status;
 };
 
@@ -27,6 +27,6 @@ struct OverlayModel {
 // ASCII and framebuffer targets consume exactly this same projection.
 OverlayModel buildOverlayModel(const EditSnapshot& edit,
                                const ExportProgress* editExport, int width,
-                               double sourceProgress);
+                               double timelineProgress);
 
 }  // namespace playback_video_edit

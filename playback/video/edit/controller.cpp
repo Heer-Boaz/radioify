@@ -18,9 +18,16 @@ struct Controller::Impl {
   ExportSnapshot exportState;
   EditSnapshot editView;
   ExportProgress exportView;
+  std::vector<SourceRange> pendingExportRanges;
+  std::vector<SourceRange> lastExportedRanges;
 
   void refreshView() {
     editView = session.snapshot();
+    const Timeline& timeline = session.timeline();
+    editView.dirty =
+        !timeline.isUnmodified() &&
+        (lastExportedRanges.empty() ||
+         timeline.keptRanges() != lastExportedRanges);
     exportView.active = exportState.running();
     exportView.fraction = exportState.progress;
   }
@@ -56,7 +63,9 @@ struct Controller::Impl {
     request.keptRanges = timeline.keptRanges();
     request.videoStreamIndex = context.videoStreamIndex;
     request.audioStreamIndex = context.audioStreamIndex;
+    pendingExportRanges = request.keptRanges;
     if (!exporter.start(std::move(request))) {
+      pendingExportRanges.clear();
       result.message = "Could not start edit export";
       return result;
     }
@@ -74,6 +83,10 @@ Controller::~Controller() = default;
 
 bool Controller::active() const { return impl_ && impl_->session.active(); }
 
+bool Controller::hasUnexportedChanges() const {
+  return impl_ && impl_->editView.dirty;
+}
+
 CommandResult Controller::execute(Command command,
                                   const CommandContext& context) {
   CommandResult result;
@@ -90,8 +103,7 @@ CommandResult Controller::execute(Command command,
       } else if (context.sourceDurationUs > 0) {
         impl_->session.activate(context.sourceDurationUs);
         result.sequenceEffect = CommandResult::SequenceEffect::Apply;
-        result.message =
-            "Video editor: I/O mark, Delete remove, T trim, Ctrl+E export";
+        result.message = "Video editor opened";
       } else {
         result.message = "Video editor requires a known duration";
       }
@@ -182,21 +194,27 @@ bool Controller::poll(std::string* message) {
   if (previous != ExportState::Running || !impl_->exportState.finished()) {
     return true;
   }
-  if (!message) return true;
   switch (impl_->exportState.state) {
     case ExportState::Succeeded:
-      *message = "Exported " +
-                 toUtf8String(impl_->exportState.destinationPath.filename());
+      impl_->lastExportedRanges = impl_->pendingExportRanges;
+      impl_->pendingExportRanges.clear();
+      if (message) {
+        *message = "Exported " +
+                   toUtf8String(impl_->exportState.destinationPath.filename());
+      }
       break;
     case ExportState::Failed:
-      *message = "Export failed: " + impl_->exportState.error;
+      impl_->pendingExportRanges.clear();
+      if (message) *message = "Export failed: " + impl_->exportState.error;
       break;
     case ExportState::Cancelled:
-      *message = "Export cancelled";
+      impl_->pendingExportRanges.clear();
+      if (message) *message = "Export cancelled";
       break;
     default:
       break;
   }
+  impl_->refreshView();
   return true;
 }
 

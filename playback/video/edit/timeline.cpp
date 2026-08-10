@@ -225,11 +225,32 @@ bool EditSession::resetEdits() {
 EditSnapshot EditSession::snapshot() const {
   EditSnapshot out;
   out.active = active_;
+  out.canUndo = canUndo();
+  out.canRedo = canRedo();
   out.sourceDurationUs = timeline_.sourceDurationUs();
-  out.outputDurationUs = timeline_.outputDurationUs();
+  out.timelineDurationUs = timeline_.outputDurationUs();
   out.keptRanges = timeline_.keptRanges();
-  out.inUs = inUs_;
-  out.outUs = outUs_;
+  out.inSourceUs = inUs_;
+  out.outSourceUs = outUs_;
+
+  const auto sequence = playback_video_sequence::Timeline::create(
+      timeline_.sourceDurationUs(), timeline_.keptRanges());
+  if (!sequence) return out;
+  out.clips.reserve(sequence->clips().size());
+  for (const playback_video_sequence::Clip& clip : sequence->clips()) {
+    out.clips.push_back(EditClipSnapshot{clip.source,
+                                         clip.presentationStartUs});
+  }
+  if (inUs_) {
+    const auto point = sequence->pointForSource(
+        *inUs_, playback_video_sequence::SourceBias::Forward);
+    if (point) out.inTimelineUs = point->presentationUs;
+  }
+  if (outUs_) {
+    const auto point = sequence->pointForSource(
+        *outUs_, playback_video_sequence::SourceBias::Backward);
+    if (point) out.outTimelineUs = point->presentationUs;
+  }
   return out;
 }
 

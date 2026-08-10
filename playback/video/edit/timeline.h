@@ -56,6 +56,8 @@ class EditSession {
   bool undo();
   bool redo();
   bool resetEdits();
+  bool canUndo() const { return !undo_.empty(); }
+  bool canRedo() const { return !redo_.empty(); }
 
   const Timeline& timeline() const { return timeline_; }
   EditSnapshot snapshot() const;

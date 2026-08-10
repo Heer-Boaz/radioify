@@ -100,6 +100,24 @@ struct PlaybackLoopRunner::Impl {
       std::chrono::milliseconds(1500);
   static constexpr auto kEditMessageDuration = std::chrono::milliseconds(2200);
 
+  struct PendingExit {
+    enum class Kind : uint8_t {
+      Session,
+      QuitApplication,
+      Transport,
+      OpenFiles,
+      DeferredOpenRequest,
+      NotificationQuit,
+    };
+
+    Kind kind = Kind::Session;
+    PlaybackTransportCommand transport = PlaybackTransportCommand::Next;
+    std::vector<std::filesystem::path> files;
+    std::optional<OpenFilesRequest> deferredOpenRequest;
+    bool exitAfterExport = false;
+    bool resumePlaybackOnCancel = false;
+  };
+
   ConsoleInput& input;
   ConsoleScreen& screen;
   const VideoPlaybackConfig& config;
@@ -154,6 +172,7 @@ struct PlaybackLoopRunner::Impl {
   playback_video_edit::Controller videoEditor;
   playback_video_edit::EditSnapshot videoEditSnapshot;
   playback_video_edit::ExportProgress videoEditExportProgress;
+  std::optional<PendingExit> pendingExit;
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
   std::chrono::steady_clock::time_point lastDebugRefresh =
@@ -226,11 +245,133 @@ struct PlaybackLoopRunner::Impl {
     output.requestWindowPresent();
   }
 
+  void finishLoopExit(bool quitApplication) {
+    if (inputView.playbackState) {
+      *inputView.playbackState = PlaybackSessionState::Exiting;
+    }
+    loopStopRequested = true;
+    osd.clear();
+    redraw = true;
+    forceRefreshArt = true;
+    if (quitApplication && quitApplicationRequested) {
+      *quitApplicationRequested = true;
+    }
+  }
+
+  bool exitNeedsConfirmation() const {
+    return videoEditor.hasUnexportedChanges() ||
+           videoEditExportProgress.running();
+  }
+
+  bool beginPendingExit(PendingExit request) {
+    if (!exitNeedsConfirmation()) return true;
+    if (!pendingExit) {
+      request.resumePlaybackOnCancel =
+          inputView.playbackState &&
+          *inputView.playbackState == PlaybackSessionState::Active;
+      pendingExit = std::move(request);
+      playback_session_input::setPlaybackPaused(inputView, inputSignals,
+                                                seekState, true);
+      timelinePreviewModel.hide(
+          playback_video_timeline_preview::PresentationSurface::Terminal);
+      timelinePreviewModel.hide(
+          playback_video_timeline_preview::PresentationSurface::VideoWindow);
+      timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
+      syncVideoEditView();
+    }
+    return false;
+  }
+
+  bool requestPlaybackExit(bool quitApplication) {
+    PendingExit request;
+    request.kind = quitApplication ? PendingExit::Kind::QuitApplication
+                                   : PendingExit::Kind::Session;
+    return beginPendingExit(std::move(request));
+  }
+
+  bool requestTransportExit(PlaybackTransportCommand command) {
+    if (!requestTransportCommand) return false;
+    PendingExit request;
+    request.kind = PendingExit::Kind::Transport;
+    request.transport = command;
+    if (!beginPendingExit(std::move(request))) return false;
+    return requestTransportCommand(command);
+  }
+
+  bool requestOpenFilesExit(
+      const std::vector<std::filesystem::path>& files) {
+    if (!requestOpenFiles) return false;
+    PendingExit request;
+    request.kind = PendingExit::Kind::OpenFiles;
+    request.files = files;
+    if (!beginPendingExit(std::move(request))) return false;
+    return requestOpenFiles(files);
+  }
+
+  bool completePendingExit() {
+    if (!pendingExit) return false;
+    PendingExit request = std::move(*pendingExit);
+    pendingExit.reset();
+    bool accepted = true;
+    switch (request.kind) {
+      case PendingExit::Kind::Session:
+        finishLoopExit(false);
+        break;
+      case PendingExit::Kind::QuitApplication:
+      case PendingExit::Kind::NotificationQuit:
+        finishLoopExit(true);
+        break;
+      case PendingExit::Kind::Transport:
+        accepted = requestTransportCommand &&
+                   requestTransportCommand(request.transport);
+        if (accepted) finishLoopExit(false);
+        break;
+      case PendingExit::Kind::OpenFiles:
+        accepted = requestOpenFiles && requestOpenFiles(request.files);
+        if (accepted) finishLoopExit(false);
+        break;
+      case PendingExit::Kind::DeferredOpenRequest:
+        if (request.deferredOpenRequest) {
+          openFileRequests.post(std::move(*request.deferredOpenRequest));
+          finishLoopExit(false);
+        } else {
+          accepted = false;
+        }
+        break;
+    }
+    if (!accepted) {
+      if (request.resumePlaybackOnCancel) {
+        playback_session_input::setPlaybackPaused(inputView, inputSignals,
+                                                  seekState, false);
+      }
+      syncVideoEditView();
+      showEditMessage("Could not complete the requested playback change");
+    }
+    return accepted;
+  }
+
+  bool cancelPendingExit() {
+    if (!pendingExit) return false;
+    const bool resumePlayback = pendingExit->resumePlaybackOnCancel;
+    pendingExit.reset();
+    if (resumePlayback) {
+      playback_session_input::setPlaybackPaused(inputView, inputSignals,
+                                                seekState, false);
+    }
+    syncVideoEditView();
+    showEditMessage("Exit cancelled; edits retained");
+    return true;
+  }
+
   void syncVideoEditView(bool requestPresent = true) {
     videoEditSnapshot = videoEditor.edit();
+    videoEditSnapshot.exitConfirmation = pendingExit.has_value();
     if (videoEditSnapshot.active) {
-      videoEditSnapshot.playheadSourceUs =
-          core.player().timelineSnapshot().sourcePositionUs;
+      videoEditSnapshot.playheadTimelineUs =
+          core.player().timelineSnapshot().positionUs;
+      videoEditSnapshot.frameDurationUs =
+          std::max<int64_t>(0,
+                            core.player().debugInfo().lastPresentedDurationUs);
     }
     videoEditExportProgress = videoEditor.exportProgress();
     if (!requestPresent) return;
@@ -243,9 +384,32 @@ struct PlaybackLoopRunner::Impl {
     if (!videoEditor.poll(&message)) return;
     syncVideoEditView();
     if (!message.empty()) showEditMessage(message);
+    if (pendingExit && pendingExit->exitAfterExport &&
+        !videoEditExportProgress.running()) {
+      if (!videoEditor.hasUnexportedChanges()) {
+        completePendingExit();
+      } else {
+        pendingExit->exitAfterExport = false;
+        syncVideoEditView();
+      }
+    }
   }
 
   bool handleVideoEditorAction(PlaybackShortcutAction action) {
+    if (action == PlaybackShortcutAction::DiscardVideoEditsAndExit) {
+      return completePendingExit();
+    }
+    if (action == PlaybackShortcutAction::CancelVideoEditExit) {
+      return cancelPendingExit();
+    }
+    const bool exportForPendingExit =
+        pendingExit && action == PlaybackShortcutAction::ExportVideoEdits;
+    if (exportForPendingExit && videoEditExportProgress.running()) {
+      pendingExit->exitAfterExport = true;
+      syncVideoEditView();
+      showEditMessage("Will exit when export completes");
+      return true;
+    }
     const auto command = videoEditCommandFor(action);
     if (!command) return false;
 
@@ -267,20 +431,35 @@ struct PlaybackLoopRunner::Impl {
     bool sequenceAccepted = true;
     if (result.sequenceEffect ==
         playback_video_edit::CommandResult::SequenceEffect::Apply) {
-      if (!core.player().setPlaybackSequence(
-              videoEditor.edit().keptRanges)) {
+      const std::vector<playback_video_sequence::SourceRange>& ranges =
+          videoEditor.edit().keptRanges;
+      if (!core.player().setPlaybackSequence(ranges)) {
         sequenceAccepted = false;
         message = "Edits retained; sequence preview is unavailable";
+      } else {
+        timelinePreviewModel.setSequence(ranges);
+        timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
       }
     } else if (result.sequenceEffect ==
                playback_video_edit::CommandResult::SequenceEffect::Clear) {
       if (!core.player().clearPlaybackSequence()) {
         sequenceAccepted = false;
         message = "Editor remains open; source preview is unavailable";
+      } else {
+        const int64_t sourceDurationUs = core.player().sourceDurationUs();
+        if (sourceDurationUs > 0) {
+          timelinePreviewModel.setSequence({{0, sourceDurationUs}});
+          timelinePreviewProvider.cancelBefore(
+              timelinePreviewModel.requestId());
+        }
       }
     }
     videoEditor.completeSequenceEffect(result, sequenceAccepted);
     syncVideoEditView();
+    if (exportForPendingExit && videoEditExportProgress.running()) {
+      pendingExit->exitAfterExport = true;
+      message = "Exporting; will exit when complete";
+    }
     if (!message.empty()) showEditMessage(message);
     return result.handled;
   }
@@ -322,6 +501,8 @@ struct PlaybackLoopRunner::Impl {
       output.requestWindowPresent();
     };
     inputSignals.videoEditorActive = [this]() { return videoEditor.active(); };
+    inputSignals.videoEditExitConfirmationActive =
+        [this]() { return pendingExit.has_value(); };
     inputSignals.handleVideoEditorAction =
         [this](PlaybackShortcutAction action) {
           return handleVideoEditorAction(action);
@@ -363,18 +544,17 @@ struct PlaybackLoopRunner::Impl {
       return presentationController.toggleFullscreen(output, enableAscii, redraw,
                                                      forceRefreshArt);
     };
-    inputSignals.requestTransportCommand = [this](PlaybackTransportCommand cmd) {
-      if (!requestTransportCommand) {
-        return false;
-      }
-      return requestTransportCommand(cmd);
-    };
+    inputSignals.requestPlaybackExit =
+        [this](bool quitApplication) {
+          return requestPlaybackExit(quitApplication);
+        };
+    inputSignals.requestTransportCommand =
+        [this](PlaybackTransportCommand cmd) {
+          return requestTransportExit(cmd);
+        };
     inputSignals.requestOpenFiles =
         [this](const std::vector<std::filesystem::path>& files) {
-      if (!requestOpenFiles) {
-        return false;
-      }
-      return requestOpenFiles(files);
+      return requestOpenFilesExit(files);
     };
     inputSignals.osd = &osd;
     inputSignals.loopStopRequested = &loopStopRequested;
@@ -411,7 +591,8 @@ struct PlaybackLoopRunner::Impl {
 
   bool overlayVisible() const {
     return config.debugOverlay || osd.controlsVisible() ||
-           videoEditor.active() || videoEditExportProgress.running();
+           videoEditor.active() || pendingExit.has_value() ||
+           videoEditExportProgress.running();
   }
 
   playback_overlay::PlaybackOsdSnapshot osdSnapshot() const {
@@ -433,7 +614,8 @@ struct PlaybackLoopRunner::Impl {
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
     ui.videoEdit = videoEditSnapshot;
     ui.videoEditExport = videoEditExportProgress;
-    if (ui.videoEdit.active || ui.videoEditExport.running()) {
+    if (ui.videoEdit.active || ui.videoEdit.exitConfirmation ||
+        ui.videoEditExport.running()) {
       ui.overlayAlpha = 1.0f;
     }
     return ui;
@@ -659,10 +841,18 @@ struct PlaybackLoopRunner::Impl {
   bool pollNextEvent(InputEvent& ev) { return output.pollInput(input, ev); }
 
   void processOpenFileRequests(PlaybackLoopState& loopState) {
-    if (openFileRequests.hasPending()) {
-      loopStopRequested = true;
-      loopState = PlaybackLoopState::Stopped;
+    if (!openFileRequests.hasPending() || pendingExit) return;
+    if (exitNeedsConfirmation()) {
+      OpenFilesRequest deferred;
+      if (!openFileRequests.poll(deferred)) return;
+      PendingExit request;
+      request.kind = PendingExit::Kind::DeferredOpenRequest;
+      request.deferredOpenRequest = std::move(deferred);
+      beginPendingExit(std::move(request));
+      return;
     }
+    loopStopRequested = true;
+    loopState = PlaybackLoopState::Stopped;
   }
 
   void processInputEvents(PlaybackLoopState& loopState) {
@@ -760,10 +950,13 @@ struct PlaybackLoopRunner::Impl {
           applyPresenterSync(syncPresentation());
           break;
         case PlaybackNotificationAreaCommand::Kind::Quit:
-          if (quitApplicationRequested) {
-            *quitApplicationRequested = true;
+          {
+            PendingExit request;
+            request.kind = PendingExit::Kind::NotificationQuit;
+            if (beginPendingExit(std::move(request))) {
+              finishLoopExit(true);
+            }
           }
-          loopStopRequested = true;
           break;
       }
       if (loopStopRequested) {
@@ -924,8 +1117,11 @@ struct PlaybackLoopRunner::Impl {
   RefreshState refreshState() {
     RefreshState state;
     if (videoEditSnapshot.active) {
-      videoEditSnapshot.playheadSourceUs =
-          core.player().timelineSnapshot().sourcePositionUs;
+      videoEditSnapshot.playheadTimelineUs =
+          core.player().timelineSnapshot().positionUs;
+      videoEditSnapshot.frameDurationUs =
+          std::max<int64_t>(0,
+                            core.player().debugInfo().lastPresentedDurationUs);
     }
     state.useWindowPresenter = output.windowActive();
     state.presented =

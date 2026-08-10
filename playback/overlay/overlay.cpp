@@ -413,6 +413,28 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invoke(actions.subtitles);
     case OverlayControlId::PictureInPicture:
       return invoke(actions.pictureInPicture);
+    case OverlayControlId::EditMarkIn:
+      return invoke(actions.editMarkIn);
+    case OverlayControlId::EditMarkOut:
+      return invoke(actions.editMarkOut);
+    case OverlayControlId::EditRippleDelete:
+      return invoke(actions.editRippleDelete);
+    case OverlayControlId::EditTrim:
+      return invoke(actions.editTrim);
+    case OverlayControlId::EditUndo:
+      return invoke(actions.editUndo);
+    case OverlayControlId::EditRedo:
+      return invoke(actions.editRedo);
+    case OverlayControlId::EditReset:
+      return invoke(actions.editReset);
+    case OverlayControlId::EditExport:
+      return invoke(actions.editExport);
+    case OverlayControlId::EditDone:
+      return invoke(actions.editDone);
+    case OverlayControlId::EditDiscardAndExit:
+      return invoke(actions.editDiscardAndExit);
+    case OverlayControlId::EditCancelExit:
+      return invoke(actions.editCancelExit);
   }
   return false;
 }
@@ -424,6 +446,71 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   auto addSpec = [&](OverlayControlSpec spec) {
     out.push_back(std::move(spec));
   };
+  const auto finishSpecs = [&]() {
+    for (size_t i = 0; i < out.size(); ++i) {
+      auto& spec = out[i];
+      const bool hovered = static_cast<int>(i) == hoverIndex;
+      spec.renderText = hovered ? spec.hoverText : spec.normalText;
+      const int textWidth = countVisibleChars(spec.renderText);
+      if (textWidth < spec.width) {
+        spec.renderText.append(static_cast<size_t>(spec.width - textWidth), ' ');
+      } else if (textWidth > spec.width) {
+        spec.renderText = utf8TakeDisplayWidth(spec.renderText, spec.width);
+      }
+    }
+  };
+
+  if (state.videoEdit.exitConfirmation) {
+    addSpec(makeOverlayTextControlSpec(
+        OverlayControlId::EditExport,
+        state.videoEditExport.running() ? "Ctrl+E Wait" : "Ctrl+E Export",
+        state.videoEditExport.running()));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditDiscardAndExit,
+                                       "D Discard", false));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditCancelExit,
+                                       "Esc Stay", true));
+    finishSpecs();
+    return out;
+  }
+
+  if (state.videoEdit.active) {
+    if (state.playPauseAvailable) {
+      addSpec(makeOverlayTextControlSpec(OverlayControlId::PlayPause, "pause",
+                                         state.paused));
+    }
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditMarkIn, "I In",
+                                       state.videoEdit.inTimelineUs.has_value()));
+    addSpec(makeOverlayTextControlSpec(
+        OverlayControlId::EditMarkOut, "O Out",
+        state.videoEdit.outTimelineUs.has_value()));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditRippleDelete,
+                                       "Del Remove", false));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditTrim, "T Keep",
+                                       false));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditUndo,
+                                       "Ctrl+Z Undo",
+                                       state.videoEdit.canUndo));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditRedo,
+                                       "Ctrl+Y Redo",
+                                       state.videoEdit.canRedo));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditReset,
+                                       "Ctrl+R Reset",
+                                       state.videoEdit.dirty));
+    addSpec(makeOverlayTextControlSpec(
+        OverlayControlId::EditExport,
+        state.videoEditExport.running() ? "Ctrl+E Cancel"
+                                        : "Ctrl+E Export",
+        state.videoEditExport.running()));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditDone, "Esc Done",
+                                       false));
+    if (options.includePictureInPicture && state.pictureInPictureAvailable) {
+      addSpec(makeOverlayTextControlSpec(OverlayControlId::PictureInPicture,
+                                         "PiP",
+                                         state.pictureInPictureActive));
+    }
+    finishSpecs();
+    return out;
+  }
 
   if (state.canPlayPrevious) {
     addSpec(makeOverlayTextControlSpec(OverlayControlId::Previous, "<<",
@@ -485,17 +572,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
                                        state.pictureInPictureActive));
   }
 
-  for (size_t i = 0; i < out.size(); ++i) {
-    auto& spec = out[i];
-    bool hovered = static_cast<int>(i) == hoverIndex;
-    spec.renderText = hovered ? spec.hoverText : spec.normalText;
-    int textWidth = countVisibleChars(spec.renderText);
-    if (textWidth < spec.width) {
-      spec.renderText.append(static_cast<size_t>(spec.width - textWidth), ' ');
-    } else if (textWidth > spec.width) {
-      spec.renderText = utf8TakeDisplayWidth(spec.renderText, spec.width);
-    }
-  }
+  finishSpecs();
   return out;
 }
 
@@ -695,7 +772,10 @@ OverlayCellLayout layoutPlaybackOverlayCells(
                                  buildWindowOverlayTopLine(state));
   input.suffix = buildWindowOverlayProgressSuffix(state);
   input.reservedRowsAboveProgress =
-      (state.videoEdit.active || state.videoEditExport.running()) ? 1 : 0;
+      (state.videoEdit.active || state.videoEdit.exitConfirmation ||
+       state.videoEditExport.running())
+          ? 1
+          : 0;
   input.controls = buildOverlayCellControlInputs(specs, hoverIndex);
   return layoutOverlayCells(input);
 }
@@ -708,7 +788,10 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   input.title = overlayTitleWithDebugLines(ui.debugLines, ui.title);
   input.suffix = ui.progressSuffix;
   input.reservedRowsAboveProgress =
-      (ui.videoEdit.active || ui.videoEditExport.running()) ? 1 : 0;
+      (ui.videoEdit.active || ui.videoEdit.exitConfirmation ||
+       ui.videoEditExport.running())
+          ? 1
+          : 0;
   input.controls.reserve(ui.controlButtons.size());
   for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
     OverlayCellControlInput control;
@@ -831,7 +914,8 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
           ? static_cast<float>(std::clamp(state.displaySec / state.totalSec, 0.0, 1.0))
           : 0.0f;
   ui.overlayAlpha = state.overlayVisible ? 1.0f : 0.0f;
-  if (state.videoEdit.active || state.videoEditExport.running()) {
+  if (state.videoEdit.active || state.videoEdit.exitConfirmation ||
+      state.videoEditExport.running()) {
     ui.overlayAlpha = 1.0f;
   }
   ui.isPaused = state.paused;
@@ -1019,7 +1103,8 @@ void renderVideoEditTimelineToTarget(
     const OverlayRenderStyles& styles, double progress,
     const playback_video_edit::EditSnapshot& edit,
     const playback_video_edit::ExportProgress* editExport) {
-  if ((!edit.active && !(editExport && editExport->running())) ||
+  if ((!edit.active && !edit.exitConfirmation &&
+       !(editExport && editExport->running())) ||
       layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
       !target.rowVisible(layout.progressBarY)) {
     return;
@@ -1029,8 +1114,8 @@ void renderVideoEditTimelineToTarget(
   const playback_video_edit::OverlayModel model =
       playback_video_edit::buildOverlayModel(edit, editExport, width, progress);
   const Style keptStyle{styles.progressStart, styles.progressEmptyStyle.bg};
-  const Style removedStyle{{118, 82, 88}, {35, 20, 24}};
   const Style selectedStyle{styles.accentStyle.bg, styles.accentStyle.fg};
+  const Style cutStyle{{255, 145, 96}, styles.progressEmptyStyle.bg};
   const Style playheadStyle{styles.baseStyle.bg, styles.baseStyle.fg};
 
   for (int cell = 0; cell < static_cast<int>(model.cells.size()); ++cell) {
@@ -1038,12 +1123,15 @@ void renderVideoEditTimelineToTarget(
         model.cells[static_cast<size_t>(cell)];
     const bool selected =
         kind == playback_video_edit::TimelineCellKind::Selected;
-    const bool kept = kind == playback_video_edit::TimelineCellKind::Kept;
-    const wchar_t glyph = selected ? L'=' : (kept ? L'─' : L'·');
-    const Style& style = selected ? selectedStyle
-                                  : (kept ? keptStyle : removedStyle);
+    const wchar_t glyph = selected ? L'=' : L'─';
+    const Style& style = selected ? selectedStyle : keptStyle;
     target.writeChar(layout.progressBarX + cell, layout.progressBarY, glyph,
                      style);
+  }
+
+  for (const int cutCell : model.cutCells) {
+    target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'┆',
+                     cutStyle);
   }
 
   if (!model.cells.empty()) {

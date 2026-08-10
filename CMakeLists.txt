@@ -538,6 +538,7 @@ target_sources(timeline_preview_tests PRIVATE
   $<TARGET_OBJECTS:radioify_timeline_preview>
   $<TARGET_OBJECTS:radioify_image_codec>
   ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp

@@ -58,7 +58,9 @@ struct PlaybackInputSignals {
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   std::function<void()> copyCurrentVideoFrameToClipboard;
   std::function<bool()> videoEditorActive;
+  std::function<bool()> videoEditExitConfirmationActive;
   std::function<bool(PlaybackShortcutAction)> handleVideoEditorAction;
+  std::function<bool(bool quitApplication)> requestPlaybackExit;
   std::function<void(playback_video_timeline_preview::PresentationSurface,
                      double ratio, int progressUnits)>
       requestTimelinePreview;

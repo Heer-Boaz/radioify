@@ -195,6 +195,8 @@ int main() {
       kPlaybackShortcutContextVideoPlayback;
   const uint32_t videoEditingContexts =
       videoPlaybackContexts | kPlaybackShortcutContextVideoEditing;
+  const uint32_t videoEditExitContexts =
+      kPlaybackShortcutContextVideoEditExitConfirmation;
   ok &= expect(resolvePlaybackShortcutAction(makeKey('E'),
                                               videoPlaybackContexts)
                    .value() == PlaybackShortcutAction::ToggleVideoEditor,
@@ -245,7 +247,21 @@ int main() {
                    makeKey('E', 0, kPlaybackShortcutCtrlMask),
                    videoPlaybackContexts)
                    .value() == PlaybackShortcutAction::ExportVideoEdits,
-               "Ctrl+E must keep a background edit export cancellable after closing the editor");
+                "Ctrl+E must keep a background edit export cancellable after closing the editor");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey('D'),
+                                              videoEditExitContexts)
+                   .value() ==
+                   PlaybackShortcutAction::DiscardVideoEditsAndExit,
+               "D must explicitly confirm discarding edits in the exit prompt");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_ESCAPE),
+                                              videoEditExitContexts)
+                   .value() == PlaybackShortcutAction::CancelVideoEditExit,
+               "Escape must cancel the modal edit-exit prompt");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('E', 0, kPlaybackShortcutCtrlMask),
+                   videoEditExitContexts)
+                   .value() == PlaybackShortcutAction::ExportVideoEdits,
+               "Ctrl+E must export from the modal edit-exit prompt");
   ok &= expect(resolvePlaybackShortcutAction(
                    makeKey('Z', 0, kPlaybackShortcutCtrlMask),
                    videoEditingContexts)

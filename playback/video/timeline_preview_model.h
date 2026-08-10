@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "playback/video/timeline_preview_types.h"
+#include "playback/video/sequence.h"
 
 namespace playback_video_timeline_preview {
 
@@ -19,6 +21,8 @@ class HoverModel {
 
   void start(int64_t durationUs, int sourceWidth = 0, int sourceHeight = 0);
   void stop();
+  bool setSequence(
+      const std::vector<playback_video_sequence::SourceRange>& ranges);
 
   Update hover(PresentationSurface surface, double ratio, int progressUnits);
   bool hide(PresentationSurface surface);
@@ -33,10 +37,13 @@ class HoverModel {
   uint64_t nextRequestId();
 
   Snapshot snapshot_;
+  std::optional<playback_video_sequence::Timeline> timeline_;
+  int64_t sourceDurationUs_ = 0;
   uint64_t requestId_ = 0;
+  int64_t activeTimelineTargetUs_ = -1;
   int64_t activeDecodeTargetUs_ = -1;
   int64_t activeBucketUs_ = 0;
-  int64_t lastRequestedDecodeTargetUs_ = -1;
+  int64_t lastRequestedTimelineTargetUs_ = -1;
 };
 
 }  // namespace playback_video_timeline_preview

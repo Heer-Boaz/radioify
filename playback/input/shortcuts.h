@@ -34,7 +34,7 @@ inline constexpr DWORD kPlaybackShortcutFrameStepForbiddenMask =
 
 // One shared shortcut table. Context masks let modes layer additional keys on
 // top of the shared map without owning separate per-mode tables.
-inline constexpr std::array<PlaybackShortcutBinding, 45>
+inline constexpr std::array<PlaybackShortcutBinding, 48>
     kPlaybackShortcutBindings = {{
         {PlaybackShortcutAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal},
@@ -42,7 +42,16 @@ inline constexpr std::array<PlaybackShortcutBinding, 45>
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextShared |
              kPlaybackShortcutContextPlaybackSession |
-             kPlaybackShortcutContextPictureInPicture},
+              kPlaybackShortcutContextPictureInPicture},
+        {PlaybackShortcutAction::CancelVideoEditExit, VK_ESCAPE, 0, 0, 0,
+         kPlaybackShortcutTextForbiddenMask,
+         kPlaybackShortcutContextVideoEditExitConfirmation},
+        {PlaybackShortcutAction::CancelVideoEditExit, VK_BACK, 0, 0, 0,
+         kPlaybackShortcutTextForbiddenMask,
+         kPlaybackShortcutContextVideoEditExitConfirmation},
+        {PlaybackShortcutAction::DiscardVideoEditsAndExit, 'D', 'd', 'D', 0,
+         kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextVideoEditExitConfirmation},
         // Editing is an explicit modal layer. Conflicting bindings precede
         // shared playback so O and Back regain their normal meanings as soon
         // as the editor is closed.
@@ -55,7 +64,8 @@ inline constexpr std::array<PlaybackShortcutBinding, 45>
         {PlaybackShortcutAction::ExportVideoEdits, 'E', 'e', 'E',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextVideoEditing |
-             kPlaybackShortcutContextVideoPlayback},
+              kPlaybackShortcutContextVideoPlayback |
+              kPlaybackShortcutContextVideoEditExitConfirmation},
         {PlaybackShortcutAction::UndoVideoEdit, 'Z', 'z', 'Z',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextVideoEditing},

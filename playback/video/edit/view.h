@@ -10,15 +10,34 @@ namespace playback_video_edit {
 
 using playback_video_sequence::SourceRange;
 
+struct EditClipSnapshot {
+  SourceRange source;
+  int64_t timelineStartUs = 0;
+
+  int64_t timelineEndUs() const {
+    return timelineStartUs + source.durationUs();
+  }
+};
+
 // Immutable value state consumed by both ASCII and framebuffer renderers.
+// All fields carrying "timeline" time use the edited program timeline. Source
+// time is kept explicit and is never used as the seek-bar coordinate system.
 struct EditSnapshot {
   bool active = false;
+  bool dirty = false;
+  bool canUndo = false;
+  bool canRedo = false;
   int64_t sourceDurationUs = 0;
-  int64_t outputDurationUs = 0;
+  int64_t timelineDurationUs = 0;
+  int64_t frameDurationUs = 0;
   std::vector<SourceRange> keptRanges;
-  std::optional<int64_t> inUs;
-  std::optional<int64_t> outUs;
-  std::optional<int64_t> playheadSourceUs;
+  std::vector<EditClipSnapshot> clips;
+  std::optional<int64_t> inSourceUs;
+  std::optional<int64_t> outSourceUs;
+  std::optional<int64_t> inTimelineUs;
+  std::optional<int64_t> outTimelineUs;
+  std::optional<int64_t> playheadTimelineUs;
+  bool exitConfirmation = false;
 };
 
 // Presentation-only export state. Renderers must not depend on worker,

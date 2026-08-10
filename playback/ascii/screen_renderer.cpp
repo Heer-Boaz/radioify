@@ -413,9 +413,10 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   playback_overlay::OverlayCellLayout overlayLayout;
   const bool showOverlay = overlayState.overlayVisible ||
                            !overlayState.debugLines.empty() ||
-                           inputs.timelinePreview.hoverActive ||
-                           overlayState.videoEdit.active ||
-                           overlayState.videoEditExport.running();
+                            inputs.timelinePreview.hoverActive ||
+                            overlayState.videoEdit.active ||
+                            overlayState.videoEdit.exitConfirmation ||
+                            overlayState.videoEditExport.running();
   int overlayReservedLines = showOverlay ? 5 : 0;
   if (showOverlay) {
     overlayLayout = playback_overlay::layoutPlaybackOverlayCells(

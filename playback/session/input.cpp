@@ -118,6 +118,10 @@ void triggerOverlay(const PlaybackInputView& view,
 
 void requestPlaybackExit(const PlaybackInputView& view,
                          PlaybackInputSignals& signals, bool quitApp) {
+  if (signals.requestPlaybackExit &&
+      !signals.requestPlaybackExit(quitApp)) {
+    return;
+  }
   *view.playbackState = PlaybackSessionState::Exiting;
   *signals.loopStopRequested = true;
   signals.osd->clear();
@@ -284,6 +288,44 @@ bool executeOverlayControl(const PlaybackInputView& view,
   actions.subtitles = [&]() { return toggleSubtitles(view); };
   actions.pictureInPicture = [&]() {
     return togglePictureInPicture(view, signals);
+  };
+  const auto editAction = [&](PlaybackShortcutAction action) {
+    return signals.handleVideoEditorAction &&
+           signals.handleVideoEditorAction(action);
+  };
+  actions.editMarkIn = [&]() {
+    return editAction(PlaybackShortcutAction::SetVideoEditIn);
+  };
+  actions.editMarkOut = [&]() {
+    return editAction(PlaybackShortcutAction::SetVideoEditOut);
+  };
+  actions.editRippleDelete = [&]() {
+    return editAction(
+        PlaybackShortcutAction::RippleDeleteVideoEditSelection);
+  };
+  actions.editTrim = [&]() {
+    return editAction(PlaybackShortcutAction::TrimVideoEditSelection);
+  };
+  actions.editUndo = [&]() {
+    return editAction(PlaybackShortcutAction::UndoVideoEdit);
+  };
+  actions.editRedo = [&]() {
+    return editAction(PlaybackShortcutAction::RedoVideoEdit);
+  };
+  actions.editReset = [&]() {
+    return editAction(PlaybackShortcutAction::ResetVideoEdits);
+  };
+  actions.editExport = [&]() {
+    return editAction(PlaybackShortcutAction::ExportVideoEdits);
+  };
+  actions.editDone = [&]() {
+    return editAction(PlaybackShortcutAction::ExitVideoEditor);
+  };
+  actions.editDiscardAndExit = [&]() {
+    return editAction(PlaybackShortcutAction::DiscardVideoEditsAndExit);
+  };
+  actions.editCancelExit = [&]() {
+    return editAction(PlaybackShortcutAction::CancelVideoEditExit);
   };
   return playback_overlay::dispatchOverlayControl(spec.id, actions);
 }
@@ -481,6 +523,8 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       case PlaybackShortcutAction::RedoVideoEdit:
       case PlaybackShortcutAction::ResetVideoEdits:
       case PlaybackShortcutAction::ExportVideoEdits:
+      case PlaybackShortcutAction::DiscardVideoEditsAndExit:
+      case PlaybackShortcutAction::CancelVideoEditExit:
         if (signals.handleVideoEditorAction) {
           signals.handleVideoEditorAction(action);
         }
@@ -504,12 +548,18 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
   cb.onCopyVideoFrame = signals.copyCurrentVideoFrameToClipboard;
   cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
-  uint32_t shortcutContexts = kPlaybackShortcutContextShared |
-                              kPlaybackShortcutContextGlobal |
-                              kPlaybackShortcutContextPlaybackSession |
-                              kPlaybackShortcutContextVideoPlayback;
-  if (signals.videoEditorActive && signals.videoEditorActive()) {
-    shortcutContexts |= kPlaybackShortcutContextVideoEditing;
+  uint32_t shortcutContexts = 0;
+  if (signals.videoEditExitConfirmationActive &&
+      signals.videoEditExitConfirmationActive()) {
+    shortcutContexts = kPlaybackShortcutContextVideoEditExitConfirmation;
+  } else {
+    shortcutContexts = kPlaybackShortcutContextShared |
+                       kPlaybackShortcutContextGlobal |
+                       kPlaybackShortcutContextPlaybackSession |
+                       kPlaybackShortcutContextVideoPlayback;
+    if (signals.videoEditorActive && signals.videoEditorActive()) {
+      shortcutContexts |= kPlaybackShortcutContextVideoEditing;
+    }
   }
   const PlaybackInputResult playbackResult =
       handlePlaybackInput(ev, cb, shortcutContexts);
@@ -530,6 +580,10 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
                                   PlaybackInputSignals& signals,
                                   PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command) {
+  if (signals.videoEditExitConfirmationActive &&
+      signals.videoEditExitConfirmationActive()) {
+    return;
+  }
   switch (command) {
     case PlaybackControlCommand::Play:
       setPlaybackPaused(view, signals, seekState, false);
@@ -573,8 +627,11 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
           : playback_video_timeline_preview::PresentationSurface::Terminal;
   const bool terminalAsciiProgress =
       !windowOriginEvent && isAsciiPlaybackMode(view.currentMode);
+  const bool editExitConfirmation =
+      view.videoEdit && view.videoEdit->exitConfirmation;
   const playback_frame_output::FrameOutputState* progressOutputState =
-      terminalAsciiProgress ? view.frameOutputState : nullptr;
+      terminalAsciiProgress && !editExitConfirmation ? view.frameOutputState
+                                                     : nullptr;
   int textGridHitTestCols = 0;
   int textGridHitTestRows = 0;
   bool windowEvent = windowOriginEvent;
@@ -616,7 +673,9 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
         hitMouse.unitHeight =
             static_cast<double>(gridViewport.height) /
             static_cast<double>(gridRows);
-        progressOutputState = view.textGridPresentationOutputState;
+        progressOutputState = editExitConfirmation
+                                  ? nullptr
+                                  : view.textGridPresentationOutputState;
         overlayVisibleForHitTest = true;
         textGridHitTestCols = gridCols;
         textGridHitTestRows = gridRows;
@@ -629,7 +688,12 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   }
 
   if (playback_overlay::isBackMousePressed(mouse)) {
-    requestPlaybackExit(view, signals, false);
+    if (editExitConfirmation && signals.handleVideoEditorAction) {
+      signals.handleVideoEditorAction(
+          PlaybackShortcutAction::CancelVideoEditExit);
+    } else {
+      requestPlaybackExit(view, signals, false);
+    }
     return;
   }
   if (mouse.eventFlags == MOUSE_MOVED) {
@@ -666,7 +730,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     hit.unitWidth = unitWidth;
     hit.unitHeight = unitHeight;
     progressHit = progressBarRatioAt(hit, &progressRatio);
-  } else if (windowEvent) {
+  } else if (windowEvent && !editExitConfirmation) {
     progressHit = playback_overlay::windowOverlayProgressRatioAt(
         overlayVisibleForHitTest, view.videoWindow->GetWidth(),
         view.videoWindow->GetHeight(), hitMouse, windowTextCellW,

@@ -55,6 +55,7 @@ class Controller {
   Controller& operator=(const Controller&) = delete;
 
   bool active() const;
+  bool hasUnexportedChanges() const;
   CommandResult execute(Command command, const CommandContext& context);
   void completeSequenceEffect(const CommandResult& result, bool accepted);
   bool poll(std::string* message);

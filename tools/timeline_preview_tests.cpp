@@ -220,8 +220,22 @@ bool runModelTests() {
                        .hoverActive,
                "same-bucket ownership transfer must not trigger another decode");
   ok &= expect(!surfaceModel.hide(PresentationSurface::Terminal) &&
-                   surfaceModel.hide(PresentationSurface::VideoWindow),
-               "pointer leave may only hide the preview owned by that surface");
+                    surfaceModel.hide(PresentationSurface::VideoWindow),
+                "pointer leave may only hide the preview owned by that surface");
+
+  HoverModel editedModel;
+  editedModel.start(10'000'000, 1920, 1080);
+  ok &= expect(editedModel.setSequence(
+                   {{0, 2'000'000}, {4'000'000, 10'000'000}}),
+               "hover model must accept the edited program timeline");
+  HoverModel::Update afterCut =
+      editedModel.hover(PresentationSurface::Terminal, 0.25, 32);
+  ok &= expect(afterCut.request.has_value() &&
+                   afterCut.request->targetUs == 4'125'000 &&
+                   editedModel.snapshot().targetUs == 2'000'000 &&
+                   editedModel.snapshot().durationUs == 8'000'000,
+               "one hover coordinate must show exact program time while its "
+               "quantized preview request maps onto source time");
   return ok;
 }
 

@@ -26,6 +26,17 @@ enum class OverlayControlId {
   AudioTrack,
   Subtitles,
   PictureInPicture,
+  EditMarkIn,
+  EditMarkOut,
+  EditRippleDelete,
+  EditTrim,
+  EditUndo,
+  EditRedo,
+  EditReset,
+  EditExport,
+  EditDone,
+  EditDiscardAndExit,
+  EditCancelExit,
 };
 
 struct OverlayControlSpec {
@@ -53,6 +64,17 @@ struct OverlayControlActions {
   std::function<bool()> audioTrack;
   std::function<bool()> subtitles;
   std::function<bool()> pictureInPicture;
+  std::function<bool()> editMarkIn;
+  std::function<bool()> editMarkOut;
+  std::function<bool()> editRippleDelete;
+  std::function<bool()> editTrim;
+  std::function<bool()> editUndo;
+  std::function<bool()> editRedo;
+  std::function<bool()> editReset;
+  std::function<bool()> editExport;
+  std::function<bool()> editDone;
+  std::function<bool()> editDiscardAndExit;
+  std::function<bool()> editCancelExit;
 };
 
 struct OverlayCellControlInput {
