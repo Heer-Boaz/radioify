@@ -61,6 +61,10 @@ void printDebug(const char* label, const Player& player,
             << " display_index=" << info.lastPresentedDisplayIndex
             << " queue=" << info.videoQueueDepth
             << " has_frame=" << (info.hasVideoFrame ? 1 : 0)
+            << " audio_buffered=" << info.audioBufferedFrames
+            << " audio_rate=" << info.audioSampleRate
+            << " audio_finished=" << (player.audioFinished() ? 1 : 0)
+            << " audio_clock_ready=" << (info.audioClockReady ? 1 : 0)
             << " presentation_us=" << timeline.positionUs
             << " source_us=" << timeline.sourcePositionUs
             << " presentation_duration_us=" << player.durationUs()
@@ -708,9 +712,8 @@ int main(int argc, char** argv) {
     }
 
     constexpr size_t kStepsBackAcrossCut = 20;
-    ObservedFrameStep reverse{
-        afterCut.lastPresentedPtsUs, afterCut.currentSerial,
-        player.videoFrameCounter()};
+    ObservedFrameStep reverse{timeline.positionUs, afterCut.currentSerial,
+                              player.videoFrameCounter()};
     for (size_t step = 0; step < kStepsBackAcrossCut; ++step) {
       const std::string label =
           "sequence_reverse_" + std::to_string(step + 1);
@@ -757,7 +760,11 @@ int main(int argc, char** argv) {
             [&](const PlayerDebugInfo& info) {
               const PlayerTimelineSnapshot current =
                   player.timelineSnapshot();
-              return info.state == PlayerState::Playing &&
+              const bool resumedOrCompleted =
+                  info.state == PlayerState::Playing ||
+                  info.state == PlayerState::Draining ||
+                  info.state == PlayerState::Ended;
+              return resumedOrCompleted &&
                      player.videoFrameCounter() > beforeResumeCounter &&
                      !current.seekPending() &&
                      current.positionUs >= 1'000'000 &&
@@ -765,14 +772,32 @@ int main(int argc, char** argv) {
                      info.hasVideoFrame;
             },
             &resumed,
-            "resumed playback crossing into source [4s,5s) without a pending "
-            "seek")) {
+            "resumed or completed playback crossing into source [4s,5s) "
+            "without a pending seek")) {
       return 1;
     }
     if (!expectSerialTransition(
             audioEnabled, resumeTargetUs, resumeSerial,
             resumed.currentSerial, beforeResumeAudioReset,
             "sequence_resume_across_cut")) {
+      return 1;
+    }
+    PlayerDebugInfo completed{};
+    if (!waitFor(
+            player, kDefaultTimeoutMs, "sequence_completed",
+            [&](const PlayerDebugInfo& info) {
+              const PlayerTimelineSnapshot current =
+                  player.timelineSnapshot();
+              const int64_t endToleranceUs =
+                  (std::max)(info.lastPresentedDurationUs, int64_t{50'000});
+              return info.state == PlayerState::Ended &&
+                     !current.seekPending() &&
+                     current.positionUs >=
+                         player.durationUs() - endToleranceUs;
+            },
+            &completed,
+            "the edited timeline to drain video and muted audio and reach "
+            "Ended")) {
       return 1;
     }
     timeline = player.timelineSnapshot();

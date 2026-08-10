@@ -38,6 +38,17 @@ struct Point {
   int64_t presentationUs = 0;
 };
 
+struct FrameMapping {
+  int64_t presentationPtsUs = 0;
+  int64_t presentationDurationUs = 0;
+};
+
+struct AudioSlice {
+  uint64_t sourceOffsetFrames = 0;
+  uint64_t frameCount = 0;
+  int64_t presentationPtsUs = 0;
+};
+
 enum class SourceBias {
   Forward,
   Backward,
@@ -57,8 +68,14 @@ class Timeline {
   const std::vector<Clip>& clips() const { return clips_; }
 
   Point pointAt(int64_t presentationUs) const;
+  std::optional<size_t> clipIndexAtSource(int64_t sourceUs) const;
   std::optional<Point> pointForSource(int64_t sourceUs,
                                       SourceBias bias) const;
+  std::optional<FrameMapping> mapFrame(int64_t sourcePtsUs,
+                                       int64_t sourceDurationUs) const;
+  std::optional<AudioSlice> sliceAudio(int64_t sourcePtsUs,
+                                       uint64_t frameCount,
+                                       uint32_t sampleRate) const;
 
  private:
   int64_t sourceDurationUs_ = 0;

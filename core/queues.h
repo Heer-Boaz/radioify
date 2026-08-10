@@ -3,10 +3,10 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <mutex>
-#include <limits>
 #include <vector>
 
 extern "C" {
@@ -16,15 +16,17 @@ extern "C" {
 #include "playback/video/decoder.h"
 
 struct QueuedPacket {
-  static constexpr size_t kNoSequenceClip =
-      (std::numeric_limits<size_t>::max)();
+  enum class Kind : uint8_t {
+    Data,
+    Flush,
+    EndOfStream,
+    ClipBoundary,
+  };
 
   AVPacket pkt{};
   uint64_t serial = 0;
-  bool flush = false;
-  bool eof = false;
-  bool clipBoundary = false;
-  size_t sequenceClipIndex = kNoSequenceClip;
+  Kind kind = Kind::Data;
+  size_t nextSequenceClipIndex = 0;
 };
 
 class PacketQueue {
@@ -32,13 +34,9 @@ class PacketQueue {
   void init(size_t maxBytesIn);
   void abortQueue();
   void flush();
-  void flush(uint64_t serial,
-             size_t sequenceClipIndex = QueuedPacket::kNoSequenceClip);
+  void flush(uint64_t serial);
   bool pushPacket(const AVPacket* pkt, uint64_t serial, bool allowBlock,
-                  const std::atomic<bool>* cancel, bool* queued,
-                  size_t sequenceClipIndex = QueuedPacket::kNoSequenceClip);
-  bool pushFlush(uint64_t serial,
-                 size_t sequenceClipIndex = QueuedPacket::kNoSequenceClip);
+                  const std::atomic<bool>* cancel, bool* queued);
   bool pushClipBoundary(uint64_t serial, size_t nextSequenceClipIndex);
   bool pushEof(uint64_t serial);
   bool pop(QueuedPacket* out);

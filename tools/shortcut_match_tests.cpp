@@ -327,7 +327,7 @@ int main() {
   ok &= expect(activeStep.changed &&
                    activeStep.previous == PlayerState::Playing &&
                    activeStep.current == PlayerState::Paused &&
-                    activeStepControl.peekFrameStep(&claimedStep, 7, false) &&
+                    activeStepControl.claimFrameStep(&claimedStep, 7, false) &&
                    claimedStep.direction ==
                        playback_video_frame_step::Direction::Previous,
                "Frame-step requests from active playback must pause and claim "
@@ -342,7 +342,7 @@ int main() {
   ok &= expect(endedStep.changed &&
                    endedStep.previous == PlayerState::Ended &&
                    endedStep.current == PlayerState::Paused &&
-                    endedStepControl.peekFrameStep(&claimedStep, 7, false) &&
+                    endedStepControl.claimFrameStep(&claimedStep, 7, false) &&
                    claimedStep.direction ==
                        playback_video_frame_step::Direction::Previous,
                "Frame-step requests from Ended must re-enter paused transport");
@@ -354,44 +354,50 @@ int main() {
       playback_video_frame_step::Direction::Previous, 7);
   stepControl.requestFrameStep(playback_video_frame_step::Direction::Next,
                                7);
-  ok &= expect(stepControl.peekFrameStep(&claimedStep, 7, false) &&
+  ok &= expect(stepControl.claimFrameStep(&claimedStep, 7, false) &&
                    claimedStep.direction ==
                        playback_video_frame_step::Direction::Previous,
                "Frame-step control must preserve explicit request order");
   playback_video_frame_step::Request oldSerialStep = claimedStep;
   stepControl.discardFrameStep(claimedStep);
-  ok &= expect(stepControl.peekFrameStep(&claimedStep, 7, false) &&
+  ok &= expect(stepControl.claimFrameStep(&claimedStep, 7, false) &&
                    claimedStep.direction ==
                        playback_video_frame_step::Direction::Next,
                "Frame-step control must expose the next pending request");
   stepControl.discardFrameStep(claimedStep);
-  ok &= expect(!stepControl.peekFrameStep(&claimedStep, 7, false),
+  ok &= expect(!stepControl.claimFrameStep(&claimedStep, 7, false),
                "Frame-step control must clear wake state when drained");
   stepControl.requestFrameStep(
       playback_video_frame_step::Direction::Previous, 7);
   stepControl.resetForSerial(8);
-  ok &= expect(!stepControl.peekFrameStep(&claimedStep, 8, false),
+  ok &= expect(!stepControl.claimFrameStep(&claimedStep, 8, false),
                "Frame-step requests must not survive serial transitions");
   stepControl.requestFrameStep(playback_video_frame_step::Direction::Next,
                                8);
   stepControl.discardFrameStep(oldSerialStep);
-  ok &= expect(stepControl.peekFrameStep(&claimedStep, 8, false) &&
+  ok &= expect(stepControl.claimFrameStep(&claimedStep, 8, false) &&
                    claimedStep.direction ==
                        playback_video_frame_step::Direction::Next,
                "Finishing an old serial frame-step must not pop a new serial "
                "request");
+  ok &= expect(stepControl.resumePlaybackFrameSteps()
+                   .requiresTimelineReanchor,
+               "A frame-step claimed by the output pipeline must request a "
+               "resume transition");
+  ok &= expect(!stepControl.claimFrameStep(&claimedStep, 8, false),
+               "Frame-step requests must not survive playback resume");
+  stepControl.requestFrameStep(playback_video_frame_step::Direction::Next,
+                               8);
   ok &= expect(
       !stepControl.resumePlaybackFrameSteps().requiresTimelineReanchor,
-               "Queued frame-step without a presented position must not "
-               "request a resume transition");
-  ok &= expect(!stepControl.peekFrameStep(&claimedStep, 8, false),
-               "Frame-step requests must not survive playback resume");
+      "A frame-step not yet claimed by the output pipeline must not request "
+      "a resume transition");
   stepControl.requestFrameStep(playback_video_frame_step::Direction::Previous,
                                8);
-  ok &= expect(!stepControl.peekFrameStep(&claimedStep, 8, true),
+  ok &= expect(!stepControl.claimFrameStep(&claimedStep, 8, true),
                "Frame-step control must wait while a frame-step seek target is "
                "still being decoded");
-  ok &= expect(stepControl.peekFrameStep(&claimedStep, 8, false) &&
+  ok &= expect(stepControl.claimFrameStep(&claimedStep, 8, false) &&
                    claimedStep.direction ==
                        playback_video_frame_step::Direction::Previous,
                "Blocked frame-step requests must remain queued until the "
@@ -403,7 +409,7 @@ int main() {
   stepAckControl.resetForSerial(9);
   stepAckControl.requestFrameStep(playback_video_frame_step::Direction::Next,
                                   9);
-  ok &= expect(stepAckControl.peekFrameStep(&claimedStep, 9, false),
+  ok &= expect(stepAckControl.claimFrameStep(&claimedStep, 9, false),
                "Frame-step presentation test must claim a request");
   stepAckControl.publishFrameStepPresentation(claimedStep);
   playback_video_state_machine::FrameStepPresentationResult
@@ -417,7 +423,7 @@ int main() {
                "still paused and must enter explicit frame-step state");
   stepAckControl.requestFrameStep(playback_video_frame_step::Direction::Next,
                                   9);
-  ok &= expect(stepAckControl.peekFrameStep(&claimedStep, 9, false),
+  ok &= expect(stepAckControl.claimFrameStep(&claimedStep, 9, false),
                "Frame-step resume invalidation test must claim a request");
   stepAckControl.publishFrameStepPresentation(claimedStep);
   playback_video_state_machine::FrameStepExitResult stepAckResume =
@@ -438,13 +444,13 @@ int main() {
   newestStepAckControl.resetForSerial(10);
   newestStepAckControl.requestFrameStep(
       playback_video_frame_step::Direction::Next, 10);
-  ok &= expect(newestStepAckControl.peekFrameStep(&claimedStep, 10, false),
+  ok &= expect(newestStepAckControl.claimFrameStep(&claimedStep, 10, false),
                "Latest presentation test must claim the first request");
   playback_video_frame_step::Request firstPresentedStep = claimedStep;
   newestStepAckControl.publishFrameStepPresentation(firstPresentedStep);
   newestStepAckControl.requestFrameStep(
       playback_video_frame_step::Direction::Next, 10);
-  ok &= expect(newestStepAckControl.peekFrameStep(&claimedStep, 10, false),
+  ok &= expect(newestStepAckControl.claimFrameStep(&claimedStep, 10, false),
                "Latest presentation test must claim the second request");
   playback_video_frame_step::Request secondPresentedStep = claimedStep;
   newestStepAckControl.publishFrameStepPresentation(secondPresentedStep);
@@ -469,7 +475,7 @@ int main() {
   frameStepModeControl.resetForSerial(31);
   frameStepModeControl.requestFrameStep(
       playback_video_frame_step::Direction::Next, 31);
-  ok &= expect(frameStepModeControl.peekFrameStep(&claimedStep, 31, false),
+  ok &= expect(frameStepModeControl.claimFrameStep(&claimedStep, 31, false),
                "Frame-step mode test must claim a request");
   frameStepModeControl.publishFrameStepPresentation(claimedStep);
   playback_video_state_machine::FrameStepPresentationResult
@@ -491,11 +497,11 @@ int main() {
   stepSeekTokenControl.resetForSerial(11);
   stepSeekTokenControl.requestFrameStep(
       playback_video_frame_step::Direction::Previous, 11);
-  ok &= expect(stepSeekTokenControl.peekFrameStep(&claimedStep, 11, false),
+  ok &= expect(stepSeekTokenControl.claimFrameStep(&claimedStep, 11, false),
                "Frame-step seek token test must claim a request");
   ok &= expect(stepSeekTokenControl.publishFrameStepSeek(claimedStep),
                "Frame-step seek publication must claim the active request");
-  ok &= expect(!stepSeekTokenControl.peekFrameStep(&claimedStep, 11, false),
+  ok &= expect(!stepSeekTokenControl.claimFrameStep(&claimedStep, 11, false),
                "A pending frame-step seek must block later frame-step claims "
                "until control consumes it");
   ok &= expect(stepSeekTokenControl.consumeFrameStepSeek(
@@ -516,7 +522,7 @@ int main() {
                "redecode serial");
   stepSeekTokenControl.requestFrameStep(
       playback_video_frame_step::Direction::Previous, 12);
-  ok &= expect(stepSeekTokenControl.peekFrameStep(&claimedStep, 12, false),
+  ok &= expect(stepSeekTokenControl.claimFrameStep(&claimedStep, 12, false),
                "Frame-step seek resume invalidation test must claim a request");
   ok &= expect(stepSeekTokenControl.publishFrameStepSeek(claimedStep),
                "Frame-step seek resume invalidation test must publish token");
@@ -533,7 +539,7 @@ int main() {
   abortedStepSeekControl.resetForSerial(20);
   abortedStepSeekControl.requestFrameStep(
       playback_video_frame_step::Direction::Previous, 20);
-  ok &= expect(abortedStepSeekControl.peekFrameStep(&claimedStep, 20, false) &&
+  ok &= expect(abortedStepSeekControl.claimFrameStep(&claimedStep, 20, false) &&
                    abortedStepSeekControl.publishFrameStepSeek(claimedStep) &&
                    abortedStepSeekControl.consumeFrameStepSeek(
                        claimedStep.serial, claimedStep.generation),
@@ -1940,6 +1946,41 @@ int main() {
                    primingFinish.projection.buffering ==
                        playback_video_state_machine::BufferingState::Ready,
                "State controller must own the priming-to-playing transition");
+
+  playback_video_state_machine::Controller shortSequenceController;
+  playback_video_state_machine::PipelineSnapshot shortSequenceReady =
+      openingReady;
+  shortSequenceReady.audioStartedOk = true;
+  shortSequenceReady.audioBufferedFrames =
+      playback_video_state_machine::requiredAudioPrefillFrames(48000);
+  shortSequenceReady.audioSampleRate = 48000;
+  shortSequenceReady.audioSyncPointReady = true;
+  shortSequenceController.beginOpening();
+  playback_video_state_machine::Evaluation shortSequencePriming =
+      shortSequenceController.observe(shortSequenceReady, 1);
+  ok &= expect(shortSequencePriming.change.changed &&
+                   shortSequencePriming.change.current ==
+                       PlayerState::Priming,
+               "A short sequence with full prefill must enter Priming");
+  playback_video_state_machine::PipelineSnapshot shortSequenceDrained =
+      shortSequenceReady;
+  shortSequenceDrained.demuxEnded = true;
+  shortSequenceDrained.decodeEnded = true;
+  shortSequenceDrained.audioDecodeEnded = true;
+  shortSequenceDrained.videoQueueDepth = 0;
+  shortSequenceDrained.videoQueueEmpty = true;
+  playback_video_state_machine::Evaluation shortSequenceDrain =
+      shortSequenceController.observe(shortSequenceDrained, 1);
+  ok &= expect(shortSequenceDrain.change.changed &&
+                   shortSequenceDrain.change.current == PlayerState::Draining,
+               "A fully decoded short sequence must release held audio and "
+               "enter Draining from Priming");
+  shortSequenceDrained.audioFinished = true;
+  playback_video_state_machine::Evaluation shortSequenceEnded =
+      shortSequenceController.observe(shortSequenceDrained, 1);
+  ok &= expect(shortSequenceEnded.change.changed &&
+                   shortSequenceEnded.change.current == PlayerState::Ended,
+               "A drained short sequence must reach Ended");
 
   playback_video_sync::LoopState loopState{};
   loopState.frameTimerUs = 1000;

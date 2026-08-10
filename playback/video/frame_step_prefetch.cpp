@@ -2,6 +2,7 @@
 
 #include "playback/video/frame_step_snapshot.h"
 #include "playback/video/frame_step_source_cache.h"
+#include "playback/video/sequence.h"
 
 #include <algorithm>
 #include <cassert>
@@ -142,6 +143,71 @@ SnapshotResult snapshotFrame(
 
 }  // namespace
 
+std::optional<Request> mapRequestToTimeline(
+    const playback_video_sequence::Timeline& timeline, Request request) {
+  request.joinContinuity = JoinContinuity::Source;
+  request.reachesTimelineBoundary = false;
+  const auto& clips = timeline.clips();
+  const auto joinClipIndex =
+      timeline.clipIndexAtSource(request.join.sourcePtsUs);
+  if (!joinClipIndex) return std::nullopt;
+
+  const bool previous =
+      request.direction == playback_video_frame_step::Direction::Previous;
+  const playback_video_sequence::Clip& joinClip = clips[*joinClipIndex];
+  const int64_t joinDurationUs =
+      (std::max)(int64_t{1}, request.join.durationUs);
+  const int64_t joinEndUs =
+      request.join.sourcePtsUs <=
+              (std::numeric_limits<int64_t>::max)() - joinDurationUs
+          ? request.join.sourcePtsUs + joinDurationUs
+          : request.join.sourcePtsUs;
+
+  size_t targetClipIndex = *joinClipIndex;
+  if (previous && targetClipIndex > 0 &&
+      request.join.sourcePtsUs - joinClip.source.startUs < joinDurationUs) {
+    --targetClipIndex;
+    request.joinContinuity = JoinContinuity::Presentation;
+  } else if (!previous && targetClipIndex + 1 < clips.size() &&
+             joinClip.source.endUs -
+                     (std::min)(joinEndUs, joinClip.source.endUs) <
+                 joinDurationUs) {
+    ++targetClipIndex;
+    request.joinContinuity = JoinContinuity::Presentation;
+  }
+
+  const playback_video_sequence::Clip& sourceClip = clips[targetClipIndex];
+  const int64_t presentationStartUs =
+      (std::max)(request.rangeStartUs, sourceClip.presentationStartUs);
+  const int64_t presentationEndUs =
+      (std::min)(request.rangeEndUs, sourceClip.presentationEndUs());
+  if (presentationEndUs <= presentationStartUs) return std::nullopt;
+
+  request.sourceRangeStartUs =
+      sourceClip.source.startUs +
+      (presentationStartUs - sourceClip.presentationStartUs);
+  request.sourceRangeEndUs =
+      sourceClip.source.startUs +
+      (presentationEndUs - sourceClip.presentationStartUs);
+  request.presentationOffsetUs =
+      sourceClip.presentationStartUs - sourceClip.source.startUs;
+  request.reachesTimelineBoundary =
+      previous ? targetClipIndex == 0 &&
+                     presentationStartUs == sourceClip.presentationStartUs
+               : targetClipIndex + 1 == clips.size() &&
+                     presentationEndUs == sourceClip.presentationEndUs();
+
+  const bool presentationJoin =
+      request.joinContinuity == JoinContinuity::Presentation;
+  if (!presentationJoin &&
+      (previous
+           ? request.sourceRangeStartUs >= request.join.sourcePtsUs
+           : joinEndUs >= request.sourceRangeEndUs)) {
+    return std::nullopt;
+  }
+  return request;
+}
+
 struct Prefetcher::Impl {
   struct Work {
     Request request;
@@ -248,7 +314,8 @@ struct Prefetcher::Impl {
 
     const bool previous =
         request.direction == playback_video_frame_step::Direction::Previous;
-    const bool discontinuous = request.discontinuousJoin;
+    const bool discontinuous =
+        request.joinContinuity == JoinContinuity::Presentation;
     bool joined = discontinuous ||
                   (!previous && request.joinCached && decoderTailIdentity &&
                    sameIdentity(*decoderTailIdentity, request.join.identity));
@@ -392,7 +459,7 @@ struct Prefetcher::Impl {
     if (previous && joined && request.sourceRangeStartUs == 0) {
       reachedMediaBoundary = true;
     }
-    if (decodeComplete && request.reachesSourceBoundary) {
+    if (decodeComplete && request.reachesTimelineBoundary) {
       reachedMediaBoundary = true;
     }
 

@@ -57,6 +57,26 @@ int main() {
     ok &= expect(removedBackward && removedBackward->sourceUs == 3'000'000 &&
                      removedBackward->presentationUs == 3'000'000,
                  "backward source resolution must select the previous cut edge");
+    ok &= expect(sequence->clipIndexAtSource(2'000'000) ==
+                         std::optional<size_t>(0) &&
+                     !sequence->clipIndexAtSource(4'000'000) &&
+                     sequence->clipIndexAtSource(5'000'000) ==
+                         std::optional<size_t>(1),
+                 "source lookup must distinguish kept clips from removed gaps");
+    const auto mappedFrame = sequence->mapFrame(2'900'000, 200'000);
+    ok &= expect(mappedFrame &&
+                     mappedFrame->presentationPtsUs == 2'900'000 &&
+                     mappedFrame->presentationDurationUs == 100'000 &&
+                     !sequence->mapFrame(4'000'000, 100'000),
+                 "video projection must trim at clip out-points and reject "
+                 "removed source frames");
+    const auto audioSlice =
+        sequence->sliceAudio(4'500'000, 1000, 1000);
+    ok &= expect(audioSlice && audioSlice->sourceOffsetFrames == 500 &&
+                     audioSlice->frameCount == 500 &&
+                     audioSlice->presentationPtsUs == 3'000'000,
+                 "audio projection must slice at clip in-points and map onto "
+                 "the ripple timeline");
   }
   ok &= expect(timeline.nextKeptSourceTime(4'000'000) ==
                    std::optional<int64_t>(5'000'000),

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -14,6 +15,10 @@
 #include "playback/video/decoder.h"
 #include "playback/video/frame_step.h"
 #include "playback/video/frame_step_source_cache.h"
+
+namespace playback_video_sequence {
+class Timeline;
+}
 
 namespace playback_video_frame_step_prefetch {
 
@@ -44,6 +49,11 @@ struct Boundary {
   bool valid() const { return ptsUs >= 0 && durationUs > 0; }
 };
 
+enum class JoinContinuity : uint8_t {
+  Source,
+  Presentation,
+};
+
 struct Request {
   int serial = 0;
   playback_video_frame_step::Direction direction =
@@ -57,8 +67,8 @@ struct Request {
   int64_t sourceRangeStartUs = 0;
   int64_t sourceRangeEndUs = 0;
   int64_t presentationOffsetUs = 0;
-  bool discontinuousJoin = false;
-  bool reachesSourceBoundary = false;
+  JoinContinuity joinContinuity = JoinContinuity::Source;
+  bool reachesTimelineBoundary = false;
   bool joinCached = false;
 
   bool valid() const {
@@ -68,6 +78,9 @@ struct Request {
            sourceRangeEndUs > sourceRangeStartUs;
   }
 };
+
+std::optional<Request> mapRequestToTimeline(
+    const playback_video_sequence::Timeline& timeline, Request request);
 
 struct Result {
   Request request;

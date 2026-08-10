@@ -246,9 +246,10 @@ PlayerState resolveSteadyState(PlayerState currentState,
                    (!audioActive || snapshot.audioFinished);
       if (ended) {
         nextState = PlayerState::Ended;
-      } else if (snapshot.demuxEnded &&
-                 currentState == PlayerState::Playing &&
-                 snapshot.videoQueueEmpty && !snapshot.videoReplayPending) {
+      } else if (snapshot.demuxEnded && snapshot.videoQueueEmpty &&
+                 !snapshot.videoReplayPending &&
+                 (currentState == PlayerState::Playing ||
+                  snapshot.decodeEnded)) {
         nextState = PlayerState::Draining;
       }
     }
@@ -332,7 +333,7 @@ StateChange Controller::requestFrameStep(
   return change;
 }
 
-bool Controller::peekFrameStep(
+bool Controller::claimFrameStep(
     playback_video_frame_step::Request* request, int serial,
     bool frameStepSeekPending) {
   std::lock_guard<std::mutex> lock(frameStepMutex_);
@@ -345,6 +346,7 @@ bool Controller::peekFrameStep(
       frameStepRequests_.empty()) {
     return false;
   }
+  frameStepResumeReanchorRequired_ = true;
   *request = frameStepRequests_.front();
   return true;
 }

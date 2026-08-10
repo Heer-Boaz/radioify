@@ -670,22 +670,6 @@ bool Controller::cancelPendingFrameStepSeekForSerial(int serial) {
   return true;
 }
 
-bool Controller::exitFrameStepModeForPlaybackResume(int serial) {
-  if (serial_ != serial ||
-      (!frameStepMode_ && !pendingFrameStepSeek_.active())) {
-    return false;
-  }
-  pendingFrameStepSeek_.clear();
-  entries_.clear();
-  records_.clear();
-  cursorIndex_ = 0;
-  frameStepMode_ = false;
-  currentLogicalIndex_ = 0;
-  failedPrefetchRequest_.reset();
-  publishReplayPending(false);
-  return true;
-}
-
 std::optional<playback_video_frame_step::Request>
 Controller::pendingFrameStepRequestForSerial(int serial) const {
   if (!pendingFrameStepSeek_.targetReady || !pendingFrameStepSeek_.active() ||

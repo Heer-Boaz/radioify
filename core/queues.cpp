@@ -27,7 +27,7 @@ void PacketQueue::flush() {
   cv_.notify_all();
 }
 
-void PacketQueue::flush(uint64_t serial, size_t sequenceClipIndex) {
+void PacketQueue::flush(uint64_t serial) {
   std::lock_guard<std::mutex> lock(mutex_);
   for (auto& item : packets_) {
     av_packet_unref(&item.pkt);
@@ -36,16 +36,14 @@ void PacketQueue::flush(uint64_t serial, size_t sequenceClipIndex) {
   bytes_ = 0;
   QueuedPacket item{};
   item.serial = serial;
-  item.flush = true;
-  item.eof = false;
-  item.sequenceClipIndex = sequenceClipIndex;
+  item.kind = QueuedPacket::Kind::Flush;
   packets_.push_back(std::move(item));
   cv_.notify_all();
 }
 
 bool PacketQueue::pushPacket(const AVPacket* pkt, uint64_t serial,
                              bool allowBlock, const std::atomic<bool>* cancel,
-                             bool* queued, size_t sequenceClipIndex) {
+                             bool* queued) {
   if (queued) {
     *queued = false;
   }
@@ -75,27 +73,11 @@ bool PacketQueue::pushPacket(const AVPacket* pkt, uint64_t serial,
     return false;
   }
   item.serial = serial;
-  item.flush = false;
-  item.eof = false;
-  item.sequenceClipIndex = sequenceClipIndex;
   packets_.push_back(std::move(item));
   bytes_ += packetBytes;
   if (queued) {
     *queued = true;
   }
-  cv_.notify_all();
-  return true;
-}
-
-bool PacketQueue::pushFlush(uint64_t serial, size_t sequenceClipIndex) {
-  std::unique_lock<std::mutex> lock(mutex_);
-  if (aborted_) return false;
-  QueuedPacket item{};
-  item.serial = serial;
-  item.flush = true;
-  item.eof = false;
-  item.sequenceClipIndex = sequenceClipIndex;
-  packets_.push_back(std::move(item));
   cv_.notify_all();
   return true;
 }
@@ -106,8 +88,8 @@ bool PacketQueue::pushClipBoundary(uint64_t serial,
   if (aborted_) return false;
   QueuedPacket item{};
   item.serial = serial;
-  item.clipBoundary = true;
-  item.sequenceClipIndex = nextSequenceClipIndex;
+  item.kind = QueuedPacket::Kind::ClipBoundary;
+  item.nextSequenceClipIndex = nextSequenceClipIndex;
   packets_.push_back(std::move(item));
   cv_.notify_all();
   return true;
@@ -118,8 +100,7 @@ bool PacketQueue::pushEof(uint64_t serial) {
   if (aborted_) return false;
   QueuedPacket item{};
   item.serial = serial;
-  item.flush = false;
-  item.eof = true;
+  item.kind = QueuedPacket::Kind::EndOfStream;
   packets_.push_back(std::move(item));
   cv_.notify_all();
   return true;
@@ -132,7 +113,7 @@ bool PacketQueue::pop(QueuedPacket* out) {
   if (aborted_) return false;
   *out = std::move(packets_.front());
   packets_.pop_front();
-  if (!out->flush && !out->eof) {
+  if (out->kind == QueuedPacket::Kind::Data) {
     bytes_ -= static_cast<size_t>(std::max(0, out->pkt.size));
   }
   cv_.notify_all();

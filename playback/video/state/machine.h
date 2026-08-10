@@ -111,8 +111,8 @@ class Controller {
   void resetForFrameStepSeekSerial(int serial);
   StateChange requestFrameStep(
       playback_video_frame_step::Direction direction, int serial);
-  bool peekFrameStep(playback_video_frame_step::Request* request,
-                     int serial, bool frameStepSeekPending);
+  bool claimFrameStep(playback_video_frame_step::Request* request,
+                      int serial, bool frameStepSeekPending);
   bool discardFrameStep(const playback_video_frame_step::Request& request);
   bool publishFrameStepPresentation(
       const playback_video_frame_step::Request& request);
