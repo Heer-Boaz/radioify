@@ -43,8 +43,8 @@ std::string fitCellText(const std::string& text, int width) {
 }
 
 struct PendingOverlayCellControl {
+  OverlayControlId id = OverlayControlId::Radio;
   std::string text;
-  int controlIndex = -1;
   int x = 0;
   int line = 0;
   int width = 0;
@@ -77,8 +77,8 @@ std::vector<PendingOverlayCellControl> wrapOverlayControls(
     }
 
     PendingOverlayCellControl item;
+    item.id = control.id;
     item.text = fitCellText(control.text, controlWidth);
-    item.controlIndex = control.controlIndex;
     item.x = contentInset + cursor;
     item.line = line;
     item.width = controlWidth;
@@ -185,18 +185,9 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.overlayVisible = inputs.osd.controlsVisible;
   state.transientMessage = inputs.osd.message;
   state.paused = inputs.paused;
-  state.audioFinished = inputs.audioFinished;
   state.pictureInPictureAvailable = inputs.pictureInPictureAvailable;
   state.pictureInPictureActive = inputs.pictureInPictureActive;
   state.subtitleRenderError = inputs.subtitleRenderError;
-  state.screenWidth = inputs.screenWidth;
-  state.screenHeight = inputs.screenHeight;
-  state.windowWidth = inputs.windowWidth;
-  state.windowHeight = inputs.windowHeight;
-  state.artTop = inputs.artTop;
-  state.progressBarX = inputs.progressBarX;
-  state.progressBarY = inputs.progressBarY;
-  state.progressBarWidth = inputs.progressBarWidth;
   state.debugLines = inputs.debugLines;
   state.videoEdit = inputs.videoEdit;
   state.videoEditExport = inputs.videoEditExport;
@@ -375,17 +366,18 @@ OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
 }
 
 std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
-    const std::vector<OverlayControlSpec>& specs, int hoverIndex) {
+    const std::vector<OverlayControlSpec>& specs, int hoverControlToken) {
   std::vector<OverlayCellControlInput> controls;
   controls.reserve(specs.size());
   for (size_t i = 0; i < specs.size(); ++i) {
-    const bool hovered = static_cast<int>(i) == hoverIndex;
+    const bool hovered =
+        overlayControlToken(specs[i].id) == hoverControlToken;
     OverlayCellControlInput control;
+    control.id = specs[i].id;
     control.text = hovered ? specs[i].hoverText : specs[i].normalText;
     control.width = specs[i].width;
     control.active = specs[i].active;
     control.hovered = hovered;
-    control.controlIndex = static_cast<int>(i);
     controls.push_back(std::move(control));
   }
   return controls;
@@ -440,7 +432,7 @@ bool dispatchOverlayControl(OverlayControlId id,
 }
 
 std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverIndex,
+    const PlaybackOverlayState& state, int hoverControlToken,
     const OverlayControlSpecOptions& options) {
   std::vector<OverlayControlSpec> out;
   auto addSpec = [&](OverlayControlSpec spec) {
@@ -449,7 +441,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   const auto finishSpecs = [&]() {
     for (size_t i = 0; i < out.size(); ++i) {
       auto& spec = out[i];
-      const bool hovered = static_cast<int>(i) == hoverIndex;
+      const bool hovered =
+          overlayControlToken(spec.id) == hoverControlToken;
       spec.renderText = hovered ? spec.hoverText : spec.normalText;
       const int textWidth = countVisibleChars(spec.renderText);
       if (textWidth < spec.width) {
@@ -587,8 +580,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
 }
 
 std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverIndex) {
-  return buildOverlayControlSpecs(state, hoverIndex,
+    const PlaybackOverlayState& state, int hoverControlToken) {
+  return buildOverlayControlSpecs(state, hoverControlToken,
                                   OverlayControlSpecOptions{});
 }
 
@@ -647,8 +640,8 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
                         : controlsBottom - (controlLineCount - 1);
     for (const PendingOverlayCellControl& item : pending) {
       OverlayCellControlLayoutItem placed;
+      placed.id = item.id;
       placed.text = item.text;
-      placed.controlIndex = item.controlIndex;
       placed.x = item.x;
       placed.y = controlsTop + item.line;
       placed.width = item.width;
@@ -679,8 +672,8 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
     const int controlsTop = titleLineCount;
     for (const PendingOverlayCellControl& item : pending) {
       OverlayCellControlLayoutItem placed;
+      placed.id = item.id;
       placed.text = item.text;
-      placed.controlIndex = item.controlIndex;
       placed.x = item.x;
       placed.y = controlsTop + item.line;
       placed.width = item.width;
@@ -731,8 +724,8 @@ OverlayCellLayout layoutOverlayControlCells(
   layout.controls.reserve(pending.size());
   for (const PendingOverlayCellControl& item : pending) {
     OverlayCellControlLayoutItem placed;
+    placed.id = item.id;
     placed.text = item.text;
-    placed.controlIndex = item.controlIndex;
     placed.x = item.x;
     placed.y = item.line;
     placed.width = item.width;
@@ -743,36 +736,11 @@ OverlayCellLayout layoutOverlayControlCells(
   return layout;
 }
 
-OverlayCellViewportLayout layoutOverlayCellViewport(
-    const OverlayCellLayoutInput& input, int windowWidth, int windowHeight,
-    int cellPixelWidth, int cellPixelHeight) {
-  OverlayCellViewportLayout geometry;
-  geometry.cellWidth = std::max(1, cellPixelWidth);
-  geometry.cellHeight = std::max(1, cellPixelHeight);
-  geometry.layout = layoutOverlayCells(input);
-
-  if (windowWidth <= 0 || windowHeight <= 0) {
-    return geometry;
-  }
-
-  const int textPxW = std::min(windowWidth, geometry.layout.width *
-                                              geometry.cellWidth);
-  const int textPxH = std::min(windowHeight, geometry.layout.height *
-                                               geometry.cellHeight);
-  geometry.leftPx = std::clamp(
-      static_cast<int>(std::lround(windowWidth * 0.02)), 0,
-      std::max(0, windowWidth - textPxW));
-  geometry.topPx = std::clamp(
-      static_cast<int>(std::lround(windowHeight * 0.95)) - textPxH, 0,
-      std::max(0, windowHeight - textPxH));
-  return geometry;
-}
-
 OverlayCellLayout layoutPlaybackOverlayCells(
     const PlaybackOverlayState& state, int width, int height,
-    int hoverIndex) {
+    int hoverControlToken) {
   std::vector<OverlayControlSpec> specs =
-      buildOverlayControlSpecs(state, hoverIndex);
+      buildOverlayControlSpecs(state, hoverControlToken);
 
   OverlayCellLayoutInput input;
   input.width = width;
@@ -786,7 +754,7 @@ OverlayCellLayout layoutPlaybackOverlayCells(
        state.videoEditExport.running())
           ? 1
           : 0;
-  input.controls = buildOverlayCellControlInputs(specs, hoverIndex);
+  input.controls = buildOverlayCellControlInputs(specs, hoverControlToken);
   return layoutOverlayCells(input);
 }
 
@@ -805,24 +773,62 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   input.controls.reserve(ui.controlButtons.size());
   for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
     OverlayCellControlInput control;
+    control.id = ui.controlButtons[i].id;
     control.text = ui.controlButtons[i].text;
     control.active = ui.controlButtons[i].active;
     control.hovered = ui.controlButtons[i].hovered;
-    control.controlIndex = static_cast<int>(i);
     input.controls.push_back(std::move(control));
   }
   return layoutOverlayCells(input);
 }
 
-int overlayCellControlAt(const OverlayCellLayout& layout, int cellX,
-                         int cellY) {
+InteractionMap buildOverlayInteractionMap(
+    const OverlayCellLayout& layout,
+    const playback_video_edit::EditSnapshot* videoEdit) {
+  InteractionMap map;
   for (const OverlayCellControlLayoutItem& item : layout.controls) {
-    if (cellY != item.y) continue;
-    if (cellX >= item.x && cellX < item.x + item.width) {
-      return item.controlIndex;
-    }
+    if (item.width <= 0 || item.y < 0) continue;
+    map.controls.push_back(
+        {{static_cast<double>(item.x), static_cast<double>(item.y),
+          static_cast<double>(item.x + item.width),
+          static_cast<double>(item.y + 1)},
+         item.id});
   }
-  return -1;
+
+  if (layout.progressBarX < 0 || layout.progressBarY < 0 ||
+      layout.progressBarWidth <= 0 ||
+      (videoEdit && videoEdit->exitConfirmation)) {
+    return map;
+  }
+
+  map.progressBar = ProgressBarRegion{
+      {static_cast<double>(layout.progressBarX),
+       static_cast<double>(layout.progressBarY),
+       static_cast<double>(layout.progressBarX + layout.progressBarWidth),
+       static_cast<double>(layout.progressBarY + 1)},
+      layout.progressBarWidth};
+
+  if (!videoEdit || !videoEdit->active) return map;
+  const playback_video_edit::OverlayModel model =
+      playback_video_edit::buildOverlayModel(
+          *videoEdit, nullptr, layout.progressBarWidth, 0.0);
+  const auto addBoundary = [&](std::optional<int> cell,
+                               playback_video_edit::EditBoundary boundary) {
+    if (!cell) return;
+    const int center = layout.progressBarX + *cell;
+    const int left = std::max(layout.progressBarX, center - 1);
+    const int right = std::min(layout.progressBarX + layout.progressBarWidth,
+                               center + 2);
+    map.editBoundaries.push_back(
+        {{static_cast<double>(left),
+          static_cast<double>(layout.progressBarY),
+          static_cast<double>(right),
+          static_cast<double>(layout.progressBarY + 1)},
+         boundary});
+  };
+  addBoundary(model.inCell, playback_video_edit::EditBoundary::In);
+  addBoundary(model.outCell, playback_video_edit::EditBoundary::Out);
+  return map;
 }
 
 std::string buildWindowOverlayProgressSuffix(
@@ -852,76 +858,8 @@ std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state) {
   return state.windowTitle;
 }
 
-std::optional<ProgressBarHit> windowOverlayProgressHitAt(
-    bool overlayVisible, int windowWidth, int windowHeight,
-    const MouseEvent& mouse, int cellPixelWidth, int cellPixelHeight,
-    bool clampToBar) {
-  if (!overlayVisible || windowWidth <= 0 || windowHeight <= 0) {
-    return std::nullopt;
-  }
-  const int cellWidth = std::max(1, cellPixelWidth);
-  const int cellHeight = std::max(1, cellPixelHeight);
-  const int cols = overlayCellCountForPixels(windowWidth, cellWidth);
-  const int rows = overlayCellCountForPixels(windowHeight, cellHeight);
-  const int contentInset = cols > 2 ? 1 : 0;
-  const double unitWidth =
-      static_cast<double>(std::min(windowWidth, cols * cellWidth)) /
-      static_cast<double>(std::max(1, cols));
-  const double unitHeight =
-      static_cast<double>(std::min(windowHeight, rows * cellHeight)) /
-      static_cast<double>(std::max(1, rows));
-
-  ProgressBarHitTestInput hit;
-  hit.x = mouse.pos.X;
-  hit.y = mouse.pos.Y;
-  hit.barX = contentInset;
-  hit.barY = rows - 1;
-  hit.barWidth = std::max(1, cols - contentInset * 2);
-  hit.unitWidth = unitWidth;
-  hit.unitHeight = unitHeight;
-  const auto ratio = progressBarRatioAt(hit, clampToBar);
-  if (!ratio) return std::nullopt;
-  return ProgressBarHit{*ratio, hit.barWidth};
-}
-
-int terminalOverlayControlAt(const PlaybackOverlayState& state,
-                            const MouseEvent& mouse) {
-  if (!state.overlayVisible) return -1;
-  OverlayCellLayout layout = layoutPlaybackOverlayCells(
-      state, state.screenWidth, state.screenHeight, -1);
-  return overlayCellControlAt(layout, mouse.pos.X, mouse.pos.Y);
-}
-
-int windowOverlayControlAt(const PlaybackOverlayState& state,
-                          const MouseEvent& mouse, int cellPixelWidth,
-                          int cellPixelHeight) {
-  if (!state.overlayVisible) return -1;
-  if (state.windowWidth <= 0 || state.windowHeight <= 0) return -1;
-  const int cellWidth = std::max(1, cellPixelWidth);
-  const int cellHeight = std::max(1, cellPixelHeight);
-  const int cols = overlayCellCountForPixels(state.windowWidth, cellWidth);
-  const int rows = overlayCellCountForPixels(state.windowHeight, cellHeight);
-  OverlayCellLayout layout =
-      layoutPlaybackOverlayCells(state, cols, rows, -1);
-  const int gridPixelWidth = std::min(state.windowWidth, cols * cellWidth);
-  const int gridPixelHeight = std::min(state.windowHeight, rows * cellHeight);
-  if (mouse.pos.X < 0 || mouse.pos.Y < 0 || mouse.pos.X >= gridPixelWidth ||
-      mouse.pos.Y >= gridPixelHeight) {
-    return -1;
-  }
-  const int cellX = std::clamp(
-      static_cast<int>((static_cast<int64_t>(mouse.pos.X) * cols) /
-                       std::max(1, gridPixelWidth)),
-      0, cols - 1);
-  const int cellY = std::clamp(
-      static_cast<int>((static_cast<int64_t>(mouse.pos.Y) * rows) /
-                       std::max(1, gridPixelHeight)),
-      0, rows - 1);
-  return overlayCellControlAt(layout, cellX, cellY);
-}
-
 WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
-                                int hoverIndex) {
+                                int hoverControlToken) {
   WindowUiState ui;
   ui.progress =
       (state.totalSec > 0.0 && std::isfinite(state.totalSec))
@@ -936,15 +874,17 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.title = state.windowTitle;
   ui.transientMessage = state.transientMessage;
   std::vector<OverlayControlSpec> controlSpecs =
-      buildOverlayControlSpecs(state, hoverIndex);
+      buildOverlayControlSpecs(state, hoverControlToken);
   ui.progressSuffix = buildWindowOverlayProgressSuffix(state);
   ui.controlButtons.clear();
   ui.controlButtons.reserve(controlSpecs.size());
   for (size_t i = 0; i < controlSpecs.size(); ++i) {
     WindowUiState::ControlButton btn;
+    btn.id = controlSpecs[i].id;
     btn.text = controlSpecs[i].renderText;
     btn.active = controlSpecs[i].active;
-    btn.hovered = static_cast<int>(i) == hoverIndex;
+    btn.hovered =
+        overlayControlToken(controlSpecs[i].id) == hoverControlToken;
     ui.controlButtons.push_back(std::move(btn));
   }
   ui.subtitleClockUs = state.subtitleClockUs;
@@ -953,7 +893,6 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.subtitleRenderError = state.subtitleRenderError;
   ui.subtitleCues = state.subtitleCues;
   ui.displaySec = state.displaySec;
-  ui.totalSec = state.totalSec;
   ui.volPct = state.volPct;
   ui.subtitle = state.subtitleText;
   ui.subtitleAlpha =
@@ -1311,27 +1250,21 @@ void renderTimelinePreviewTimestampToScreen(
   renderTimelinePreviewTimestampToTarget(target, layout, styles);
 }
 
-bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
+bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
+                                 const OverlayCellLayout& overlayLayout,
                                  int cellPixelWidth, int cellPixelHeight,
                                  TimelinePreviewPresentation previewPresentation,
                                  const OverlayRenderStyles& styles,
                                  GpuTextGridFrame& outFrame) {
-  GpuTextGridOverlayTarget target(outFrame, width, height, styles.baseStyle);
+  GpuTextGridOverlayTarget target(outFrame, overlayLayout.width,
+                                  overlayLayout.height, styles.baseStyle);
   bool rendered = false;
-  OverlayCellLayout overlayLayout;
-  bool haveOverlayLayout = false;
   if (ui.overlayAlpha > 0.01f || !ui.debugLines.empty()) {
-    overlayLayout = layoutWindowOverlayCells(ui, width, height);
-    haveOverlayLayout = true;
     renderOverlayToTarget(target, overlayLayout, styles, ui.progress,
                           &ui.videoEdit, &ui.videoEditExport);
     rendered = true;
   }
   if (ui.timelinePreview.hoverActive) {
-    if (!haveOverlayLayout) {
-      overlayLayout = layoutWindowOverlayCells(ui, width, height);
-      haveOverlayLayout = true;
-    }
     const bool imageReady =
         previewPresentation ==
             TimelinePreviewPresentation::ImageAndTimestamp &&
@@ -1345,7 +1278,8 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
         previewSurface ? static_cast<int>(previewSurface->height)
                        : std::max(9, ui.timelinePreview.sourceHeight);
     const auto previewLayout = playback_video_timeline_preview::layoutCells(
-        width, height, overlayLayout.progressBarY, overlayLayout.progressBarX,
+        overlayLayout.width, overlayLayout.height,
+        overlayLayout.progressBarY, overlayLayout.progressBarX,
         overlayLayout.progressBarWidth, ui.timelinePreview.anchorRatio,
         sourceWidth, sourceHeight, cellPixelWidth, cellPixelHeight,
         playback_video_timeline_preview::formatTimestamp(

@@ -1,5 +1,7 @@
 #include "frame_output.h"
 
+#include "ui_helpers.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>

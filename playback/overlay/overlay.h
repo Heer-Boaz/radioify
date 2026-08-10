@@ -9,36 +9,14 @@
 #include <vector>
 
 #include "consolescreen.h"
-#include "consoleinput.h"
 #include "gpu_text_grid.h"
+#include "playback/overlay/interaction.h"
 #include "playback/overlay/osd_state.h"
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/framebuffer/window/window.h"
 #include "playback/video/edit/view.h"
 
 namespace playback_overlay {
-
-enum class OverlayControlId {
-  Previous,
-  PlayPause,
-  Next,
-  Radio,
-  Hz50,
-  AudioTrack,
-  Subtitles,
-  PictureInPicture,
-  EditMarkIn,
-  EditMarkOut,
-  EditRippleDelete,
-  EditTrim,
-  EditUndo,
-  EditRedo,
-  EditReset,
-  EditExport,
-  EditDone,
-  EditDiscardAndExit,
-  EditCancelExit,
-};
 
 struct OverlayControlSpec {
   OverlayControlId id = OverlayControlId::Radio;
@@ -79,11 +57,11 @@ struct OverlayControlActions {
 };
 
 struct OverlayCellControlInput {
+  OverlayControlId id = OverlayControlId::Radio;
   std::string text;
   int width = 0;
   bool active = false;
   bool hovered = false;
-  int controlIndex = -1;
 };
 
 struct OverlayCellLayoutInput {
@@ -96,8 +74,8 @@ struct OverlayCellLayoutInput {
 };
 
 struct OverlayCellControlLayoutItem {
+  OverlayControlId id = OverlayControlId::Radio;
   std::string text;
-  int controlIndex = -1;
   int x = 0;
   int y = 0;
   int width = 0;
@@ -128,14 +106,6 @@ struct OverlayCellLayout {
   std::vector<OverlayCellControlLayoutItem> controls;
 };
 
-struct OverlayCellViewportLayout {
-  OverlayCellLayout layout;
-  int leftPx = 0;
-  int topPx = 0;
-  int cellWidth = 1;
-  int cellHeight = 1;
-};
-
 inline int overlayCellCountForPixels(int pixelExtent, int cellExtent) {
   const int safeCellExtent = std::max(1, cellExtent);
   const int safePixelExtent = std::max(0, pixelExtent);
@@ -164,18 +134,9 @@ struct PlaybackOverlayInputs {
   int volPct = 0;
   PlaybackOsdSnapshot osd;
   bool paused = false;
-  bool audioFinished = false;
   bool pictureInPictureAvailable = false;
   bool pictureInPictureActive = false;
   std::string subtitleRenderError;
-  int screenWidth = 0;
-  int screenHeight = 0;
-  int windowWidth = 0;
-  int windowHeight = 0;
-  int artTop = 0;
-  int progressBarX = -1;
-  int progressBarY = -1;
-  int progressBarWidth = 0;
   std::vector<std::string> debugLines;
   playback_video_edit::EditSnapshot videoEdit;
   playback_video_edit::ExportProgress videoEditExport;
@@ -204,7 +165,6 @@ struct PlaybackOverlayState {
   bool overlayVisible = false;
   std::shared_ptr<const std::string> transientMessage;
   bool paused = false;
-  bool audioFinished = false;
   bool pictureInPictureAvailable = false;
   bool pictureInPictureActive = false;
   std::string subtitleText;
@@ -212,14 +172,6 @@ struct PlaybackOverlayState {
   std::shared_ptr<const std::string> subtitleAssScript;
   std::shared_ptr<const SubtitleFontAttachmentList> subtitleAssFonts;
   std::vector<WindowUiState::SubtitleCue> subtitleCues;
-  int screenWidth = 0;
-  int screenHeight = 0;
-  int windowWidth = 0;
-  int windowHeight = 0;
-  int artTop = 0;
-  int progressBarX = -1;
-  int progressBarY = -1;
-  int progressBarWidth = 0;
   std::vector<std::string> debugLines;
   playback_video_edit::EditSnapshot videoEdit;
   playback_video_edit::ExportProgress videoEditExport;
@@ -237,65 +189,39 @@ std::string buildSubtitleText(const SubtitleManager& subtitleManager,
                              int64_t clockUs, bool hasSubtitles);
 
 std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverIndex);
+    const PlaybackOverlayState& state, int hoverControlToken);
 std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverIndex,
+    const PlaybackOverlayState& state, int hoverControlToken,
     const OverlayControlSpecOptions& options);
 
 OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
                                               const std::string& label,
                                               bool active);
 std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
-    const std::vector<OverlayControlSpec>& specs, int hoverIndex);
+    const std::vector<OverlayControlSpec>& specs, int hoverControlToken);
 bool dispatchOverlayControl(OverlayControlId id,
                             const OverlayControlActions& actions);
 
 OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input);
 OverlayCellLayout layoutOverlayControlCells(
     const std::vector<OverlayCellControlInput>& controls, int width);
-OverlayCellViewportLayout layoutOverlayCellViewport(
-    const OverlayCellLayoutInput& input, int windowWidth, int windowHeight,
-    int cellPixelWidth, int cellPixelHeight);
-
 OverlayCellLayout layoutPlaybackOverlayCells(
-    const PlaybackOverlayState& state, int width, int height, int hoverIndex);
+    const PlaybackOverlayState& state, int width, int height,
+    int hoverControlToken);
 OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
                                            int height);
 
-int overlayCellControlAt(const OverlayCellLayout& layout, int cellX,
-                         int cellY);
+InteractionMap buildOverlayInteractionMap(
+    const OverlayCellLayout& layout,
+    const playback_video_edit::EditSnapshot* videoEdit = nullptr);
 
 std::string buildWindowOverlayProgressSuffix(
     const PlaybackOverlayState& state);
 
 std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state);
 
-int terminalOverlayControlAt(const PlaybackOverlayState& state,
-                            const MouseEvent& mouse);
-
-int windowOverlayControlAt(const PlaybackOverlayState& state,
-                          const MouseEvent& mouse, int cellPixelWidth,
-                          int cellPixelHeight);
-
-inline bool isBackMousePressed(const MouseEvent& mouse) {
-  const DWORD backMask = FROM_LEFT_2ND_BUTTON_PRESSED |
-                         FROM_LEFT_3RD_BUTTON_PRESSED |
-                         FROM_LEFT_4TH_BUTTON_PRESSED;
-  return (mouse.buttonState & backMask) != 0;
-}
-
-struct ProgressBarHit {
-  double ratio = 0.0;
-  int units = 0;
-};
-
-std::optional<ProgressBarHit> windowOverlayProgressHitAt(
-    bool overlayVisible, int windowWidth, int windowHeight,
-    const MouseEvent& mouse, int cellPixelWidth, int cellPixelHeight,
-    bool clampToBar = false);
-
 WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
-                                int hoverIndex);
+                                int hoverControlToken);
 
 struct OverlayRenderStyles {
   Style baseStyle{{219, 224, 230}, {5, 6, 7}};
@@ -335,7 +261,8 @@ void renderTimelinePreviewTimestampToScreen(
     const playback_video_timeline_preview::CellLayout& layout,
     const OverlayRenderStyles& styles);
 
-bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
+bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
+                                 const OverlayCellLayout& overlayLayout,
                                  int cellPixelWidth, int cellPixelHeight,
                                  TimelinePreviewPresentation previewPresentation,
                                  const OverlayRenderStyles& styles,

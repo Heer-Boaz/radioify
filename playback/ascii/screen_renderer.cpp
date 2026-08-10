@@ -359,10 +359,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         artTop, maxHeight, visibleArtHeight);
   }
 
-  frameOutput.progressBarX = -1;
-  frameOutput.progressBarY = -1;
-  frameOutput.progressBarWidth = 0;
-  const bool audioFinishedNow = audioOk && audioIsFinished();
+  frameOutput.overlayInteractions = {};
   const bool pausedNow =
       playbackState == PlaybackSessionState::Paused || playerTransportPaused;
   playback_overlay::PlaybackOverlayInputs overlayInputs;
@@ -390,19 +387,10 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
   overlayInputs.osd = inputs.osd;
   overlayInputs.paused = pausedNow;
-  overlayInputs.audioFinished = audioFinishedNow;
   overlayInputs.pictureInPictureAvailable = true;
   overlayInputs.pictureInPictureActive =
       videoWindow.IsOpen() && videoWindow.IsPictureInPicture();
   overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
-  overlayInputs.screenWidth = width;
-  overlayInputs.screenHeight = height;
-  overlayInputs.windowWidth = videoWindow.IsOpen() ? videoWindow.GetWidth() : 0;
-  overlayInputs.windowHeight = videoWindow.IsOpen() ? videoWindow.GetHeight() : 0;
-  overlayInputs.artTop = asciiArtTop;
-  overlayInputs.progressBarX = frameOutput.progressBarX;
-  overlayInputs.progressBarY = frameOutput.progressBarY;
-  overlayInputs.progressBarWidth = frameOutput.progressBarWidth;
   overlayInputs.debugLines = debugLines;
   overlayInputs.videoEdit = inputs.videoEdit;
   overlayInputs.videoEditExport = inputs.videoEditExport;
@@ -468,9 +456,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     if (totalSec > 0.0 && std::isfinite(totalSec)) {
       ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
     }
-    frameOutput.progressBarX = overlayLayout.progressBarX;
-    frameOutput.progressBarY = overlayLayout.progressBarY;
-    frameOutput.progressBarWidth = overlayLayout.progressBarWidth;
+    frameOutput.overlayInteractions =
+        playback_overlay::buildOverlayInteractionMap(
+            overlayLayout, &overlayState.videoEdit);
     playback_overlay::OverlayRenderStyles overlayStyles{
         baseStyle, accentStyle, progressEmptyStyle, progressFrameStyle,
         progressStart, progressEnd};

@@ -23,7 +23,8 @@ using TextGridPresentationProvider =
                        const VideoFrame* frame, bool frameChanged,
                        const std::string& enhancementDebugLine,
                        std::vector<ScreenCell>& outCells,
-                       int& outCols, int& outRows)>;
+                       int& outCols, int& outRows,
+                       playback_overlay::InteractionMap& outInteractions)>;
 
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,

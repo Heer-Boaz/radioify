@@ -1,0 +1,151 @@
+#include "interaction.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+namespace playback_overlay {
+namespace {
+
+InteractionRect transformRect(const InteractionRect& rect, double offsetX,
+                              double offsetY, double scaleX, double scaleY) {
+  return {offsetX + rect.left * scaleX, offsetY + rect.top * scaleY,
+          offsetX + rect.right * scaleX,
+          offsetY + rect.bottom * scaleY};
+}
+
+}  // namespace
+
+bool InteractionRect::valid() const {
+  return std::isfinite(left) && std::isfinite(top) && std::isfinite(right) &&
+         std::isfinite(bottom) && right > left && bottom > top;
+}
+
+bool InteractionRect::contains(double x, double y) const {
+  return valid() && std::isfinite(x) && std::isfinite(y) && x >= left &&
+         x < right && y >= top && y < bottom;
+}
+
+bool InteractionMap::contains(double x, double y) const {
+  if (progressBar && progressBar->bounds.contains(x, y)) return true;
+  if (overlayControlAt(*this, x, y)) return true;
+  return editBoundaryHandleAt(*this, x, y);
+}
+
+std::optional<ProgressBarHit> progressBarHitAt(const ProgressBarRegion& region,
+                                               double x, double y,
+                                               bool captured) {
+  if (!region.bounds.valid() || region.units <= 0 || !std::isfinite(x) ||
+      !std::isfinite(y)) {
+    return std::nullopt;
+  }
+
+  const InteractionRect& bounds = region.bounds;
+  if (!captured && !bounds.contains(x, y)) return std::nullopt;
+
+  const double lastSample = std::max(bounds.left, bounds.right - 1.0);
+  const double sampledX = captured ? std::clamp(x, bounds.left, lastSample) : x;
+  const double denominator = std::max(1.0, lastSample - bounds.left);
+  return ProgressBarHit{
+      std::clamp((sampledX - bounds.left) / denominator, 0.0, 1.0),
+      region.units};
+}
+
+std::optional<ProgressBarHit> progressBarHitAt(const InteractionMap& map,
+                                               double x, double y,
+                                               bool captured) {
+  return map.progressBar
+             ? progressBarHitAt(*map.progressBar, x, y, captured)
+             : std::nullopt;
+}
+
+std::optional<OverlayControlId> overlayControlAt(const InteractionMap& map,
+                                                 double x, double y) {
+  for (const OverlayControlRegion& control : map.controls) {
+    if (control.bounds.contains(x, y)) return control.id;
+  }
+  return std::nullopt;
+}
+
+std::optional<playback_video_edit::EditBoundary> editBoundaryAt(
+    const InteractionMap& map, double x, double y) {
+  const EditBoundaryRegion* nearest = nullptr;
+  double nearestDistance = std::numeric_limits<double>::max();
+  for (const EditBoundaryRegion& handle : map.editBoundaries) {
+    if (!handle.bounds.contains(x, y)) continue;
+    const double center = (handle.bounds.left + handle.bounds.right) * 0.5;
+    const double distance = std::abs(x - center);
+    if (distance < nearestDistance) {
+      nearest = &handle;
+      nearestDistance = distance;
+    }
+  }
+  return nearest ? std::optional(nearest->boundary) : std::nullopt;
+}
+
+bool editBoundaryHandleAt(const InteractionMap& map, double x, double y) {
+  return editBoundaryAt(map, x, y).has_value();
+}
+
+InteractionHit interactionHitAt(const InteractionMap& map, double x, double y,
+                                bool capturedProgress) {
+  InteractionHit hit;
+  hit.progressBar = progressBarHitAt(map, x, y, capturedProgress);
+  hit.control = overlayControlAt(map, x, y);
+  hit.editBoundary = editBoundaryAt(map, x, y);
+  return hit;
+}
+
+InteractionHit interactionHitAtTransformed(
+    const InteractionMap& map, double offsetX, double offsetY, double scaleX,
+    double scaleY, double x, double y, bool capturedProgress) {
+  InteractionHit hit;
+  if (!std::isfinite(offsetX) || !std::isfinite(offsetY) ||
+      !(scaleX > 0.0) || !(scaleY > 0.0) || !std::isfinite(scaleX) ||
+      !std::isfinite(scaleY) || !std::isfinite(x) || !std::isfinite(y)) {
+    return hit;
+  }
+
+  const double localX = (x - offsetX) / scaleX;
+  const double localY = (y - offsetY) / scaleY;
+  hit.control = overlayControlAt(map, localX, localY);
+  hit.editBoundary = editBoundaryAt(map, localX, localY);
+  if (map.progressBar) {
+    ProgressBarRegion transformed = *map.progressBar;
+    transformed.bounds = transformRect(map.progressBar->bounds, offsetX,
+                                       offsetY, scaleX, scaleY);
+    hit.progressBar = progressBarHitAt(transformed, x, y, capturedProgress);
+  }
+  return hit;
+}
+
+InteractionMap transformInteractionMap(const InteractionMap& map,
+                                       double offsetX, double offsetY,
+                                       double scaleX, double scaleY) {
+  InteractionMap out;
+  if (!std::isfinite(offsetX) || !std::isfinite(offsetY) ||
+      !(scaleX > 0.0) || !(scaleY > 0.0) || !std::isfinite(scaleX) ||
+      !std::isfinite(scaleY)) {
+    return out;
+  }
+  if (map.progressBar) {
+    out.progressBar = *map.progressBar;
+    out.progressBar->bounds = transformRect(
+        map.progressBar->bounds, offsetX, offsetY, scaleX, scaleY);
+  }
+  out.controls.reserve(map.controls.size());
+  for (const OverlayControlRegion& control : map.controls) {
+    out.controls.push_back({transformRect(control.bounds, offsetX, offsetY,
+                                          scaleX, scaleY),
+                            control.id});
+  }
+  out.editBoundaries.reserve(map.editBoundaries.size());
+  for (const EditBoundaryRegion& handle : map.editBoundaries) {
+    out.editBoundaries.push_back({transformRect(handle.bounds, offsetX, offsetY,
+                                                scaleX, scaleY),
+                                  handle.boundary});
+  }
+  return out;
+}
+
+}  // namespace playback_overlay

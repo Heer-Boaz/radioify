@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -46,16 +45,6 @@ struct ProgressFooterRenderResult {
   int progressBarWidth = 0;
 };
 
-struct ProgressBarHitTestInput {
-  double x = 0.0;
-  double y = 0.0;
-  int barX = -1;
-  int barY = -1;
-  int barWidth = 0;
-  double unitWidth = 1.0;
-  double unitHeight = 1.0;
-};
-
 struct BracketButtonLabels {
   std::string normal;
   std::string hover;
@@ -86,23 +75,3 @@ std::vector<BufferCell> renderProgressBarCells(double ratio,
 ProgressFooterRenderResult renderProgressFooter(
     ConsoleScreen& screen, const ProgressFooterInput& input,
     const ProgressFooterStyles& styles);
-inline std::optional<double> progressBarRatioAt(
-    const ProgressBarHitTestInput& input, bool clampToBar = false) {
-  if (input.barWidth <= 0 || input.barX < 0 || input.barY < 0) {
-    return std::nullopt;
-  }
-  const double unitWidth = std::max(1.0, input.unitWidth);
-  const double unitHeight = std::max(1.0, input.unitHeight);
-  const double left = static_cast<double>(input.barX) * unitWidth;
-  const double top = static_cast<double>(input.barY) * unitHeight;
-  const double width = static_cast<double>(input.barWidth) * unitWidth;
-  double x = input.x;
-  if (clampToBar) {
-    x = std::clamp(x, left, left + std::max(0.0, width - 1.0));
-  } else if (x < left || x >= left + width || input.y < top ||
-             input.y >= top + unitHeight) {
-    return std::nullopt;
-  }
-  const double denominator = std::max(1.0, width - 1.0);
-  return std::clamp((x - left) / denominator, 0.0, 1.0);
-}

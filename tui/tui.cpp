@@ -554,10 +554,11 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
   std::filesystem::path currentFile = file;
   int currentIndex =
       findImageViewerEntryIndex(browser, currentFile).value_or(-1);
-  int hoverIndex = -1;
+  int hoverControlToken = -1;
   bool ok = false;
   std::vector<playback_overlay::OverlayControlSpec> controls;
   playback_overlay::OverlayCellLayout controlLayout;
+  playback_overlay::InteractionMap controlInteractions;
 
   auto syncBrowserSelection = [&]() {
     if (currentIndex >= 0 &&
@@ -601,13 +602,15 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
     controlOptions.includeAudioTrack = false;
     controlOptions.includeSubtitles = false;
     controlOptions.includePictureInPicture = false;
-    const int localHoverIndex = hoverIndex >= 0 ? hoverIndex : -1;
+    const int localHoverToken = hoverControlToken;
     controls = playback_overlay::buildOverlayControlSpecs(
-        overlayState, localHoverIndex, controlOptions);
+        overlayState, localHoverToken, controlOptions);
     controlLayout = playback_overlay::layoutOverlayControlCells(
         playback_overlay::buildOverlayCellControlInputs(controls,
-                                                        localHoverIndex),
+                                                        localHoverToken),
         width);
+    controlInteractions =
+        playback_overlay::buildOverlayInteractionMap(controlLayout);
   };
 
   auto renderFrame = [&]() {
@@ -666,15 +669,11 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
     screen.draw();
   };
 
-  auto clickOverlayControl = [&](int controlIndex) -> bool {
-    if (controlIndex < 0 || controlIndex >= static_cast<int>(controls.size())) {
-      return false;
-    }
+  auto clickOverlayControl = [&](playback_overlay::OverlayControlId control) {
     playback_overlay::OverlayControlActions actions;
     actions.previous = [&]() { return navigateImage(-1); };
     actions.next = [&]() { return navigateImage(1); };
-    return playback_overlay::dispatchOverlayControl(
-        controls[static_cast<size_t>(controlIndex)].id, actions);
+    return playback_overlay::dispatchOverlayControl(control, actions);
   };
 
   screen.updateSize();
@@ -714,14 +713,18 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
             std::min(height, static_cast<int>(wrapLine(title, width).size()));
         const int controlTop = std::max(titleBottom, height - controlLayout.height);
         const int localControlY = mouse.pos.Y - controlTop;
-        const int hitControl =
+        const std::optional<playback_overlay::OverlayControlId> hitControl =
             (localControlY >= 0 && localControlY < controlLayout.height)
-                ? playback_overlay::overlayCellControlAt(
-                      controlLayout, mouse.pos.X, localControlY)
+                ? playback_overlay::overlayControlAt(
+                      controlInteractions, mouse.pos.X, localControlY)
+                : std::nullopt;
+        const int hitControlToken =
+            hitControl
+                ? playback_overlay::overlayControlToken(*hitControl)
                 : -1;
         if (mouse.eventFlags == MOUSE_MOVED) {
-          if (hoverIndex != hitControl) {
-            hoverIndex = hitControl;
+          if (hoverControlToken != hitControlToken) {
+            hoverControlToken = hitControlToken;
             renderFrame();
           }
           continue;
@@ -729,7 +732,7 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
 
         if ((mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 &&
             mouse.eventFlags == 0) {
-          if (clickOverlayControl(hitControl)) {
+          if (hitControl && clickOverlayControl(*hitControl)) {
             renderFrame();
             continue;
           }
@@ -1469,7 +1472,6 @@ int runTui(Options o) {
     actionOverlayState.radioLabel = std::string(audioGetRadioFilterLabel());
     actionOverlayState.hz50Enabled = audioIs50HzEnabled();
     actionOverlayState.paused = audioIsPaused() || audioFinished;
-    actionOverlayState.audioFinished = audioFinished;
     actionOverlayState.pictureInPictureAvailable =
       audioPictureInPicture.isOpen() || actionOverlayState.audioOk ||
       !nowPlaying.empty();

@@ -7,6 +7,7 @@
 #include "consolescreen.h"
 #include "optionsbrowser.h"
 #include "playback/input/shortcuts.h"
+#include "playback/overlay/interaction.h"
 #include "runtime_helpers.h"
 #include "ui_helpers.h"
 
@@ -848,18 +849,26 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         scrollFromBar(browser, layout, mouse.pos.Y, listTop, listHeight, dirty);
         return;
       }
-      ProgressBarHitTestInput progressHit;
-      progressHit.x = mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
-      progressHit.y = mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
-      progressHit.barX = progressBarX;
-      progressHit.barY = progressBarY;
-      progressHit.barWidth = progressBarWidth;
-      progressHit.unitWidth = mouse.hasPixelPosition ? mouse.unitWidth : 1.0;
-      progressHit.unitHeight = mouse.hasPixelPosition ? mouse.unitHeight : 1.0;
-      if (const auto ratio = progressBarRatioAt(progressHit)) {
-        if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(*ratio);
-        dirty = true;
-        return;
+      const double unitWidth =
+          mouse.hasPixelPosition ? std::max(1.0, mouse.unitWidth) : 1.0;
+      const double unitHeight =
+          mouse.hasPixelPosition ? std::max(1.0, mouse.unitHeight) : 1.0;
+      if (progressBarX >= 0 && progressBarY >= 0 && progressBarWidth > 0) {
+        const playback_overlay::ProgressBarRegion progressRegion{
+            {progressBarX * unitWidth, progressBarY * unitHeight,
+             (progressBarX + progressBarWidth) * unitWidth,
+             (progressBarY + 1) * unitHeight},
+            progressBarWidth};
+        const double pointerX =
+            mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
+        const double pointerY =
+            mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
+        if (const auto hit = playback_overlay::progressBarHitAt(
+                progressRegion, pointerX, pointerY)) {
+          if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(hit->ratio);
+          dirty = true;
+          return;
+        }
       }
     }
     if (!browserInteractionEnabled) {

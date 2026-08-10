@@ -1,6 +1,6 @@
 #include "playback/video/edit/timeline.h"
 #include "playback/video/edit/overlay_model.h"
-#include "tui/ui/ui_helpers.h"
+#include "playback/overlay/interaction.h"
 
 #include <iostream>
 #include <optional>
@@ -268,41 +268,49 @@ int main() {
                    exitModel.status.size() <= 10,
                "exit confirmation must use a complete width-bounded state");
 
-  overlayEdit.active = true;
-  overlayEdit.exitConfirmation = false;
-  overlayEdit.timelineDurationUs = 10'000'000;
-  overlayEdit.inTimelineUs = 2'000'000;
-  overlayEdit.outTimelineUs = 8'000'000;
-  ok &= expect(playback_video_edit::timelineBoundaryAt(overlayEdit, 0.2, 80) ==
-                       playback_video_edit::EditBoundary::In &&
-                   playback_video_edit::timelineBoundaryAt(overlayEdit, 0.8,
-                                                            80) ==
-                       playback_video_edit::EditBoundary::Out &&
-                   !playback_video_edit::timelineBoundaryAt(overlayEdit, 0.5,
-                                                             80),
-               "boundary hit-testing must select only the nearest visible handle");
-
-  ProgressBarHitTestInput progressHit;
-  progressHit.barX = 10;
-  progressHit.barY = 20;
-  progressHit.barWidth = 10;
-  progressHit.unitWidth = 10.0;
-  progressHit.unitHeight = 10.0;
-  progressHit.x = 149.5;
-  progressHit.y = 205.0;
-  ok &= expect(progressBarRatioAt(progressHit) == 0.5,
+  playback_overlay::InteractionMap interactions;
+  interactions.progressBar =
+      playback_overlay::ProgressBarRegion{{100.0, 200.0, 200.0, 210.0}, 10};
+  interactions.controls.push_back(
+      {{20.0, 30.0, 40.0, 40.0},
+       playback_overlay::OverlayControlId::EditExport});
+  interactions.editBoundaries.push_back(
+      {{95.0, 200.0, 115.0, 210.0},
+       playback_video_edit::EditBoundary::In});
+  auto progressHit =
+      playback_overlay::progressBarHitAt(interactions, 149.5, 205.0);
+  ok &= expect(progressHit && progressHit->ratio == 0.5 &&
+                   progressHit->units == 10,
                "progress hit-testing must preserve exact in-bar geometry");
-  progressHit.x = 200.0;
-  ok &= expect(!progressBarRatioAt(progressHit),
+  ok &= expect(!playback_overlay::progressBarHitAt(interactions, 200.0,
+                                                    205.0),
                "ordinary progress hit-testing must reject outside input");
-  progressHit.x = 0.0;
-  progressHit.y = 0.0;
-  ok &= expect(progressBarRatioAt(progressHit, true) == 0.0,
+  progressHit =
+      playback_overlay::progressBarHitAt(interactions, 0.0, 0.0, true);
+  ok &= expect(progressHit && progressHit->ratio == 0.0,
                "captured progress drags must clamp before the bar");
-  progressHit.x = 500.0;
-  progressHit.y = 500.0;
-  ok &= expect(progressBarRatioAt(progressHit, true) == 1.0,
+  progressHit =
+      playback_overlay::progressBarHitAt(interactions, 500.0, 500.0, true);
+  ok &= expect(progressHit && progressHit->ratio == 1.0,
                "captured progress drags must clamp beyond the bar");
+  ok &= expect(playback_overlay::overlayControlAt(interactions, 25.0, 35.0) ==
+                   playback_overlay::OverlayControlId::EditExport,
+               "rendered controls must retain their semantic identity");
+  ok &= expect(playback_overlay::editBoundaryAt(interactions, 100.0, 205.0) ==
+                   playback_video_edit::EditBoundary::In,
+               "rendered edit handles must retain their boundary identity");
+  const playback_overlay::InteractionMap transformed =
+      playback_overlay::transformInteractionMap(interactions, 5.0, 7.0,
+                                                2.0, 3.0);
+  ok &= expect(playback_overlay::overlayControlAt(transformed, 50.0, 100.0) ==
+                   playback_overlay::OverlayControlId::EditExport,
+               "presentation transforms must preserve exact control hits");
+  const playback_overlay::InteractionHit transformedHit =
+      playback_overlay::interactionHitAtTransformed(
+          interactions, 5.0, 7.0, 2.0, 3.0, 304.5, 610.0);
+  ok &= expect(transformedHit.progressBar &&
+                   transformedHit.progressBar->ratio == 0.5,
+               "pixel mouse input must preserve sub-cell progress precision");
 
   return ok ? 0 : 1;
 }

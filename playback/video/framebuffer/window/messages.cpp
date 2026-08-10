@@ -6,7 +6,6 @@
 
 #include <atomic>
 #include <cassert>
-#include <cmath>
 #include <utility>
 
 LPARAM VideoWindow::EncodeFocusMessageParam(VideoWindowFocus focus) {
@@ -31,17 +30,11 @@ VideoWindowFocus VideoWindow::DecodeFocusMessageParam(LPARAM param) {
     return VideoWindowFocus::KeepCurrentFocus;
 }
 
-bool VideoWindow::ShouldQueueWindowMouseEvent(int y) const {
+bool VideoWindow::ShouldQueueWindowMouseEvent(int x, int y) const {
     if (m_captureAllMouseInput) {
         return true;
     }
-    if (m_height <= 0) {
-        return false;
-    }
-    if (m_pictureInPicture.load(std::memory_order_relaxed)) {
-        return y >= PictureInPictureInteractiveTop();
-    }
-    return y > static_cast<int>(std::round(m_height * 0.84));
+    return OverlayInteractionAt(x, y);
 }
 
 LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
@@ -119,7 +112,15 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 
     if (uMsg == WM_SETCURSOR && LOWORD(lParam) == HTCLIENT) {
         if (pThis->m_cursorVisible.load(std::memory_order_relaxed)) {
-            ::SetCursor(::LoadCursor(NULL, IDC_ARROW));
+            POINT point{};
+            bool resizeHandle = pThis->m_editBoundaryCaptureActive;
+            if (!resizeHandle && ::GetCursorPos(&point) &&
+                ::ScreenToClient(hWnd, &point)) {
+                resizeHandle = pThis->OverlayEditBoundaryHandleAt(
+                    point.x, point.y);
+            }
+            ::SetCursor(::LoadCursor(
+                NULL, resizeHandle ? IDC_SIZEWE : IDC_ARROW));
         } else {
             ::SetCursor(nullptr);
         }
@@ -188,27 +189,53 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     auto queueWindowMouseEvent = [&](int x, int y, DWORD buttonState,
                                      DWORD eventFlags) {
         const bool mouseCaptured = GetCapture() == hWnd;
-        if (!pThis->ShouldQueueWindowMouseEvent(y) && !mouseCaptured) {
-            if (eventFlags == MOUSE_MOVED &&
-                pThis->m_windowMouseInputActive) {
-                pThis->m_windowMouseInputActive = false;
-                pThis->m_input.push(window_input_events::pointerLeaveEvent());
-            }
+        const bool pointerMove = eventFlags == MOUSE_MOVED;
+        if (!pointerMove &&
+            !pThis->ShouldQueueWindowMouseEvent(x, y) && !mouseCaptured) {
             return;
         }
-        if (eventFlags == MOUSE_MOVED) {
+        if (pointerMove) {
             pThis->m_windowMouseInputActive = true;
         }
         pThis->m_input.push(window_input_events::mouseEvent(
             x, y, buttonState, eventFlags));
     };
 
+    if (uMsg == WM_NCMOUSEMOVE &&
+        pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
+        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        ScreenToClient(hWnd, &point);
+        if (!pThis->m_trackingNonClientMouseLeave) {
+            TRACKMOUSEEVENT tracking{};
+            tracking.cbSize = sizeof(tracking);
+            tracking.dwFlags = TME_LEAVE | TME_NONCLIENT;
+            tracking.hwndTrack = hWnd;
+            pThis->m_trackingNonClientMouseLeave =
+                TrackMouseEvent(&tracking) != FALSE;
+        }
+        queueWindowMouseEvent(point.x, point.y, 0, MOUSE_MOVED);
+        return 0;
+    }
+
+    if (uMsg == WM_NCMOUSELEAVE) {
+        pThis->m_trackingNonClientMouseLeave = false;
+        if (pThis->m_windowMouseInputActive && GetCapture() != hWnd) {
+            pThis->m_windowMouseInputActive = false;
+            pThis->m_input.push(window_input_events::pointerLeaveEvent());
+        }
+        return 0;
+    }
+
     if (uMsg == WM_LBUTTONDOWN) {
         const int x = GET_X_LPARAM(lParam);
         const int y = GET_Y_LPARAM(lParam);
-        if (pThis->ShouldQueueWindowMouseEvent(y)) {
+        if (pThis->ShouldQueueWindowMouseEvent(x, y)) {
+            const bool editBoundary =
+                pThis->OverlayEditBoundaryHandleAt(x, y);
             SetCapture(hWnd);
             pThis->m_leftMouseCaptureActive = GetCapture() == hWnd;
+            pThis->m_editBoundaryCaptureActive =
+                pThis->m_leftMouseCaptureActive && editBoundary;
         }
         queueWindowMouseEvent(x, y,
                               FROM_LEFT_1ST_BUTTON_PRESSED, 0);
@@ -220,6 +247,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                               0);
         if (GetCapture() == hWnd) {
             pThis->m_leftMouseCaptureActive = false;
+            pThis->m_editBoundaryCaptureActive = false;
             ReleaseCapture();
         }
         return 0;
@@ -229,6 +257,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         if (pThis->m_leftMouseCaptureActive &&
             reinterpret_cast<HWND>(lParam) != hWnd) {
             pThis->m_leftMouseCaptureActive = false;
+            pThis->m_editBoundaryCaptureActive = false;
             pThis->m_input.push(window_input_events::pointerLeaveEvent());
         }
         return 0;

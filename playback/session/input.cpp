@@ -4,17 +4,14 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
-#include <vector>
 
 #include "audioplayback.h"
+#include "playback/overlay/overlay.h"
 #include "playback/video/player.h"
-#include "playback/video/state/machine.h"
-#include "playback/video/edit/overlay_model.h"
 #include "playback/input/shortcuts.h"
 #include "playback/session/osd_timeline.h"
 #include "handoff.h"
 #include "playback/video/subtitle/manager.h"
-#include "ui_helpers.h"
 #include "ui_inputlogic.h"
 #include "playback/video/framebuffer/window/window.h"
 
@@ -42,6 +39,13 @@ void updateOverlayControlHover(PlaybackInputSignals& signals, int nextHover) {
   }
   *signals.redraw = true;
   requestWindowRefresh(signals);
+}
+
+bool isBackMousePressed(const MouseEvent& mouse) {
+  constexpr DWORD kBackButtons = FROM_LEFT_2ND_BUTTON_PRESSED |
+                                 FROM_LEFT_3RD_BUTTON_PRESSED |
+                                 FROM_LEFT_4TH_BUTTON_PRESSED;
+  return (mouse.buttonState & kBackButtons) != 0;
 }
 
 double playbackDurationSec(const PlaybackInputView& view) {
@@ -270,14 +274,7 @@ bool requestFrameStep(const PlaybackInputView& view,
 bool executeOverlayControl(const PlaybackInputView& view,
                            PlaybackInputSignals& signals,
                            PlaybackSeekGestureState& seekState,
-                           const playback_overlay::PlaybackOverlayState& state,
-                           int controlIndex) {
-  std::vector<playback_overlay::OverlayControlSpec> specs =
-      playback_overlay::buildOverlayControlSpecs(state, -1);
-  if (controlIndex < 0 || controlIndex >= static_cast<int>(specs.size())) {
-    return false;
-  }
-  const auto& spec = specs[static_cast<size_t>(controlIndex)];
+                           playback_overlay::OverlayControlId control) {
   playback_overlay::OverlayControlActions actions;
   actions.previous = [&]() {
     return playback_session_handoff::requestTransportHandoff(
@@ -336,83 +333,7 @@ bool executeOverlayControl(const PlaybackInputView& view,
   actions.editCancelExit = [&]() {
     return editAction(PlaybackShortcutAction::CancelVideoEditExit);
   };
-  return playback_overlay::dispatchOverlayControl(spec.id, actions);
-}
-
-playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
-    const PlaybackInputView& view,
-    const PlaybackSeekGestureState& seekState,
-    const PlaybackInputSignals& signals) {
-  playback_overlay::PlaybackOverlayInputs inputs;
-  inputs.windowTitle = *view.windowTitle;
-  inputs.audioOk = *view.audioOk;
-  inputs.playPauseAvailable =
-      *view.playbackState == PlaybackSessionState::Active ||
-      *view.playbackState == PlaybackSessionState::Paused ||
-      *view.playbackState == PlaybackSessionState::Ended;
-  inputs.audioSupports50HzToggle =
-      inputs.audioOk && audioSupports50HzToggle();
-  inputs.canPlayPrevious = signals.requestTransportCommand != nullptr;
-  inputs.canPlayNext = signals.requestTransportCommand != nullptr;
-  inputs.radioEnabled = audioIsRadioEnabled();
-  inputs.radioLabel = std::string(audioGetRadioFilterLabel());
-  inputs.hz50Enabled = audioIs50HzEnabled();
-  inputs.canCycleAudioTracks =
-      inputs.audioOk && view.player->canCycleAudioTracks();
-  inputs.activeAudioTrackLabel =
-      inputs.audioOk ? view.player->activeAudioTrackLabel() : "N/A";
-  inputs.subtitleManager = view.subtitleManager;
-  inputs.hasSubtitles = view.hasSubtitles;
-  inputs.subtitlesEnabled =
-      view.enableSubtitlesShared->load(std::memory_order_relaxed);
-  const PlayerTimelineSnapshot timeline = view.player->timelineSnapshot();
-  const int64_t currentUs = timeline.positionUs;
-  inputs.subtitleClockUs = currentUs;
-  inputs.seekingOverlay =
-      readQueuedSeekTargetSec(seekState, nullptr) || timeline.seekPending();
-  inputs.displaySec = std::max(
-      0.0, static_cast<double>(currentUs) / 1000000.0);
-  const int64_t durationUs = view.player->durationUs();
-  inputs.totalSec = durationUs > 0
-                        ? static_cast<double>(durationUs) / 1000000.0
-                        : (inputs.audioOk ? audioGetTotalSec() : -1.0);
-  if (inputs.totalSec > 0.0) {
-    inputs.displaySec = std::clamp(inputs.displaySec, 0.0, inputs.totalSec);
-  }
-  double queuedSeekTargetSec = 0.0;
-  if (inputs.totalSec > 0.0 && std::isfinite(inputs.totalSec) &&
-      readQueuedSeekTargetSec(seekState, &queuedSeekTargetSec)) {
-    inputs.displaySec =
-        std::clamp(queuedSeekTargetSec, 0.0, inputs.totalSec);
-  }
-  inputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-  inputs.osd.controlsVisible = isOverlayVisible(signals);
-  inputs.paused =
-      *view.playbackState == PlaybackSessionState::Paused ||
-      *view.playbackState == PlaybackSessionState::Ended ||
-      view.player->isEnded() ||
-      playback_video_state_machine::project(view.player->state()).transport ==
-          playback_video_state_machine::TransportState::Paused;
-  inputs.audioFinished = inputs.audioOk && audioIsFinished();
-  inputs.pictureInPictureAvailable =
-      signals.togglePictureInPicture != nullptr || view.videoWindow->IsOpen();
-  inputs.pictureInPictureActive =
-      view.videoWindow->IsOpen() &&
-      view.videoWindow->IsPictureInPicture();
-  inputs.subtitleRenderError = view.videoWindow->GetSubtitleRenderError();
-  inputs.screenWidth = view.screen->width();
-  inputs.screenHeight = view.screen->height();
-  inputs.windowWidth =
-      view.videoWindow->IsOpen() ? view.videoWindow->GetWidth() : 0;
-  inputs.windowHeight =
-      view.videoWindow->IsOpen() ? view.videoWindow->GetHeight() : 0;
-  inputs.artTop = 0;
-  inputs.progressBarX = view.frameOutputState->progressBarX;
-  inputs.progressBarY = view.frameOutputState->progressBarY;
-  inputs.progressBarWidth = view.frameOutputState->progressBarWidth;
-  if (view.videoEdit) inputs.videoEdit = *view.videoEdit;
-  if (view.videoEditExport) inputs.videoEditExport = *view.videoEditExport;
-  return inputs;
+  return playback_overlay::dispatchOverlayControl(control, actions);
 }
 
 }  // namespace
@@ -627,11 +548,9 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
                               PlaybackSeekGestureState& seekState,
                               const MouseEvent& mouse) {
-  MouseEvent hitMouse = mouse;
-  bool overlayVisibleForHitTest = isOverlayVisible(signals);
-  const bool windowOriginEvent = isWindowMouseEvent(mouse);
+  const bool windowEvent = isWindowMouseEvent(mouse);
   const auto previewSurface =
-      windowOriginEvent
+      windowEvent
           ? playback_video_timeline_preview::PresentationSurface::VideoWindow
           : playback_video_timeline_preview::PresentationSurface::Terminal;
   const bool leftPressed =
@@ -639,80 +558,19 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   const bool dragFromThisSurface =
       seekState.videoEditBoundaryDrag &&
       seekState.videoEditBoundaryDrag->surface == previewSurface;
-  if (dragFromThisSurface && !leftPressed) {
+  const bool progressDragFromThisSurface =
+      seekState.progressDragSurface == previewSurface;
+  if ((dragFromThisSurface || progressDragFromThisSurface) && !leftPressed) {
     seekState.videoEditBoundaryDrag.reset();
+    seekState.progressDragSurface.reset();
     commitQueuedSeek(view, signals, seekState);
     *signals.redraw = true;
   }
-  const bool terminalAsciiProgress =
-      !windowOriginEvent && isAsciiPlaybackMode(view.currentMode);
   const bool editExitConfirmation =
-      view.videoEdit && view.videoEdit->exitConfirmation;
-  const playback_frame_output::FrameOutputState* progressOutputState =
-      terminalAsciiProgress && !editExitConfirmation ? view.frameOutputState
-                                                     : nullptr;
-  int textGridHitTestCols = 0;
-  int textGridHitTestRows = 0;
-  bool windowEvent = windowOriginEvent;
-  if (windowEvent && view.videoWindow->IsPictureInPicture() &&
-      view.videoWindow->IsTextGridPresentationEnabled()) {
-    int gridCols = 0;
-    int gridRows = 0;
-    view.videoWindow->GetTextGridSize(gridCols, gridRows);
-    const int winW = view.videoWindow->GetWidth();
-    const int winH = view.videoWindow->GetHeight();
-    int cellW = 1;
-    int cellH = 1;
-    view.videoWindow->GetTextGridCellSize(cellW, cellH);
-    if (gridCols > 0 && gridRows > 0 && winW > 0 && winH > 0) {
-      const GpuTextGridViewport gridViewport = fitGpuTextGridViewport(
-          winW, winH, gridCols, gridRows, cellW, cellH);
-      const int pixelX = mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
-      const int pixelY = mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
-      const int rawLocalPixelX = pixelX - gridViewport.x;
-      const int rawLocalPixelY = pixelY - gridViewport.y;
-      const bool insideGrid =
-          rawLocalPixelX >= 0 && rawLocalPixelY >= 0 &&
-          rawLocalPixelX < gridViewport.width &&
-          rawLocalPixelY < gridViewport.height;
-      if (insideGrid || (dragFromThisSurface && leftPressed)) {
-        const int localPixelX =
-            std::clamp(rawLocalPixelX, 0, gridViewport.width - 1);
-        const int localPixelY =
-            std::clamp(rawLocalPixelY, 0, gridViewport.height - 1);
-        hitMouse.pos.X = static_cast<SHORT>(std::clamp(
-            static_cast<int>((static_cast<int64_t>(localPixelX) * gridCols) /
-                             gridViewport.width),
-            0, gridCols - 1));
-        hitMouse.pos.Y = static_cast<SHORT>(std::clamp(
-            static_cast<int>((static_cast<int64_t>(localPixelY) * gridRows) /
-                             gridViewport.height),
-            0, gridRows - 1));
-        clearWindowMouseEvent(hitMouse);
-        hitMouse.hasPixelPosition = true;
-        hitMouse.pixelX = localPixelX;
-        hitMouse.pixelY = localPixelY;
-        hitMouse.unitWidth =
-            static_cast<double>(gridViewport.width) /
-            static_cast<double>(gridCols);
-        hitMouse.unitHeight =
-            static_cast<double>(gridViewport.height) /
-            static_cast<double>(gridRows);
-        progressOutputState = editExitConfirmation
-                                  ? nullptr
-                                  : view.textGridPresentationOutputState;
-        overlayVisibleForHitTest = true;
-        textGridHitTestCols = gridCols;
-        textGridHitTestRows = gridRows;
-      } else {
-        clearWindowMouseEvent(hitMouse);
-        progressOutputState = nullptr;
-        overlayVisibleForHitTest = false;
-      }
-    }
-  }
+      signals.videoEditExitConfirmationActive &&
+      signals.videoEditExitConfirmationActive();
 
-  if (playback_overlay::isBackMousePressed(mouse)) {
+  if (isBackMousePressed(mouse)) {
     if (editExitConfirmation && signals.handleVideoEditorAction) {
       signals.handleVideoEditorAction(
           PlaybackShortcutAction::CancelVideoEditExit);
@@ -726,47 +584,32 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     *signals.redraw = true;
   }
 
-  windowEvent = isWindowMouseEvent(hitMouse);
-  int windowTextCellW = 1;
-  int windowTextCellH = 1;
+  const double pointerX =
+      windowEvent && mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
+  const double pointerY =
+      windowEvent && mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
+  const bool capturedProgressDrag =
+      (dragFromThisSurface || progressDragFromThisSurface) && leftPressed;
+  playback_overlay::InteractionHit interactionHit;
   if (windowEvent) {
-    view.videoWindow->GetTextGridCellSize(windowTextCellW, windowTextCellH);
-  }
-
-  std::optional<playback_overlay::ProgressBarHit> progressHit;
-  const bool capturedBoundaryDrag = dragFromThisSurface && leftPressed;
-  if (progressOutputState) {
-    double unitWidth = 1.0;
-    double unitHeight = 1.0;
-    if (hitMouse.hasPixelPosition) {
-      unitWidth = hitMouse.unitWidth;
-      unitHeight = hitMouse.unitHeight;
-      if (terminalAsciiProgress) {
-        unitWidth = view.screen->cellPixelWidth();
-        unitHeight = view.screen->cellPixelHeight();
-      }
+    interactionHit = view.videoWindow->OverlayHitAt(
+        pointerX, pointerY, capturedProgressDrag);
+  } else if (view.frameOutputState) {
+    const playback_overlay::InteractionMap& interactions =
+        view.frameOutputState->overlayInteractions;
+    if (mouse.hasPixelPosition) {
+      interactionHit = playback_overlay::interactionHitAtTransformed(
+          interactions, 0.0, 0.0, std::max(1.0, mouse.unitWidth),
+          std::max(1.0, mouse.unitHeight), mouse.pixelX, mouse.pixelY,
+          capturedProgressDrag);
+    } else {
+      interactionHit = playback_overlay::interactionHitAt(
+          interactions, pointerX, pointerY, capturedProgressDrag);
     }
-    ProgressBarHitTestInput geometry;
-    geometry.x =
-        hitMouse.hasPixelPosition ? hitMouse.pixelX : hitMouse.pos.X;
-    geometry.y =
-        hitMouse.hasPixelPosition ? hitMouse.pixelY : hitMouse.pos.Y;
-    geometry.barX = progressOutputState->progressBarX;
-    geometry.barY = progressOutputState->progressBarY;
-    geometry.barWidth = progressOutputState->progressBarWidth;
-    geometry.unitWidth = unitWidth;
-    geometry.unitHeight = unitHeight;
-    if (const auto ratio =
-            progressBarRatioAt(geometry, capturedBoundaryDrag)) {
-      progressHit = playback_overlay::ProgressBarHit{
-          *ratio, progressOutputState->progressBarWidth};
-    }
-  } else if (windowEvent && !editExitConfirmation) {
-    progressHit = playback_overlay::windowOverlayProgressHitAt(
-        overlayVisibleForHitTest, view.videoWindow->GetWidth(),
-        view.videoWindow->GetHeight(), hitMouse, windowTextCellW,
-        windowTextCellH, capturedBoundaryDrag);
   }
+  const auto& progressHit = interactionHit.progressBar;
+  const auto& boundaryHit = interactionHit.editBoundary;
+  const auto& controlHit = interactionHit.control;
   if (progressHit) {
     triggerOverlay(view, signals);
     *signals.redraw = true;
@@ -776,15 +619,14 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   const int progressUnits = progressHit ? progressHit->units : 0;
 
   if (progressHit && leftPressed && !dragFromThisSurface &&
-      hitMouse.eventFlags == 0 && view.videoEdit && view.videoEdit->active &&
+      mouse.eventFlags == 0 && boundaryHit &&
+      signals.videoEditorActive && signals.videoEditorActive() &&
       signals.moveVideoEditBoundary) {
-    const auto boundary = playback_video_edit::timelineBoundaryAt(
-        *view.videoEdit, progressRatio, progressUnits);
-    if (boundary) {
-      seekState.videoEditBoundaryDrag =
-          PlaybackSeekGestureState::VideoEditBoundaryDrag{*boundary,
-                                                          previewSurface};
-    }
+    seekState.videoEditBoundaryDrag =
+        PlaybackSeekGestureState::VideoEditBoundaryDrag{*boundaryHit,
+                                                        previewSurface};
+  } else if (progressHit && leftPressed && mouse.eventFlags == 0) {
+    seekState.progressDragSurface = previewSurface;
   }
   const bool boundaryDrag =
       seekState.videoEditBoundaryDrag &&
@@ -805,8 +647,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   }
   const bool seekGesture =
       leftPressed && progressHit &&
-      (windowEvent || hitMouse.eventFlags == 0 ||
-       hitMouse.eventFlags == MOUSE_MOVED);
+      (windowEvent || mouse.eventFlags == 0 ||
+       mouse.eventFlags == MOUSE_MOVED);
   if (progressHit) {
     updateOverlayControlHover(signals, -1);
     if (signals.requestTimelinePreview) {
@@ -821,43 +663,15 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   if (signals.clearTimelinePreview) {
     signals.clearTimelinePreview(previewSurface);
   }
-  if (!overlayVisibleForHitTest) {
-    updateOverlayControlHover(signals, -1);
-    return;
-  }
-
-  playback_overlay::PlaybackOverlayInputs mouseOverlayInputs =
-      buildPlaybackMouseOverlayInputs(view, seekState, signals);
-  mouseOverlayInputs.osd.controlsVisible = overlayVisibleForHitTest;
-  if (textGridHitTestCols > 0 && textGridHitTestRows > 0) {
-    mouseOverlayInputs.screenWidth = textGridHitTestCols;
-    mouseOverlayInputs.screenHeight = textGridHitTestRows;
-    mouseOverlayInputs.progressBarX =
-        view.textGridPresentationOutputState->progressBarX;
-    mouseOverlayInputs.progressBarY =
-        view.textGridPresentationOutputState->progressBarY;
-    mouseOverlayInputs.progressBarWidth =
-        view.textGridPresentationOutputState->progressBarWidth;
-  }
-  playback_overlay::PlaybackOverlayState mouseOverlayState =
-      playback_overlay::buildPlaybackOverlayState(mouseOverlayInputs);
-  const int controlHit =
-      windowEvent
-          ? playback_overlay::windowOverlayControlAt(mouseOverlayState,
-                                                     hitMouse,
-                                                     windowTextCellW,
-                                                     windowTextCellH)
-          : playback_overlay::terminalOverlayControlAt(mouseOverlayState,
-                                                       hitMouse);
   updateOverlayControlHover(
-      signals, mouseOverlayState.overlayVisible ? controlHit : -1);
-  if (controlHit >= 0) {
+      signals, controlHit ? playback_overlay::overlayControlToken(*controlHit)
+                          : -1);
+  if (controlHit) {
     triggerOverlay(view, signals);
   }
 
-  if (leftPressed && hitMouse.eventFlags == 0 && controlHit >= 0) {
-    if (executeOverlayControl(view, signals, seekState, mouseOverlayState,
-                              controlHit)) {
+  if (leftPressed && mouse.eventFlags == 0 && controlHit) {
+    if (executeOverlayControl(view, signals, seekState, *controlHit)) {
       updateOverlayControlHover(signals, -1);
       if (*signals.loopStopRequested) {
         return;
@@ -874,8 +688,11 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
 }
 
 void handlePlaybackPointerLeave(PlaybackInputSignals& signals,
-                                PlaybackSeekGestureState& seekState) {
+                                PlaybackSeekGestureState& seekState,
+                                const PlaybackInputView& view) {
   seekState.videoEditBoundaryDrag.reset();
+  seekState.progressDragSurface.reset();
+  commitQueuedSeek(view, signals, seekState);
   if (signals.clearTimelinePreview) {
     signals.clearTimelinePreview(
         playback_video_timeline_preview::PresentationSurface::VideoWindow);

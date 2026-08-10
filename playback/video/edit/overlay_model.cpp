@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
-#include <limits>
 
 namespace playback_video_edit {
 namespace {
@@ -181,33 +180,6 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
                      "CUTS " + std::to_string(edit.clips.size() - 1), width);
   }
   return model;
-}
-
-std::optional<EditBoundary> timelineBoundaryAt(const EditSnapshot& edit,
-                                               double timelineRatio,
-                                               int timelineWidth,
-                                               double grabRadiusCells) {
-  if (!edit.active || edit.timelineDurationUs <= 0 || timelineWidth <= 0 ||
-      !std::isfinite(timelineRatio) || !std::isfinite(grabRadiusCells) ||
-      grabRadiusCells < 0.0) {
-    return std::nullopt;
-  }
-  timelineRatio = std::clamp(timelineRatio, 0.0, 1.0);
-  const double span = static_cast<double>(std::max(1, timelineWidth - 1));
-  const auto distance = [&](const std::optional<int64_t>& boundaryUs) {
-    if (!boundaryUs) return (std::numeric_limits<double>::infinity)();
-    const double boundaryRatio = std::clamp(
-        static_cast<double>(*boundaryUs) /
-            static_cast<double>(edit.timelineDurationUs),
-        0.0, 1.0);
-    return std::abs(boundaryRatio - timelineRatio) * span;
-  };
-
-  const double inDistance = distance(edit.inTimelineUs);
-  const double outDistance = distance(edit.outTimelineUs);
-  const double nearest = std::min(inDistance, outDistance);
-  if (nearest > grabRadiusCells) return std::nullopt;
-  return inDistance <= outDistance ? EditBoundary::In : EditBoundary::Out;
 }
 
 }  // namespace playback_video_edit

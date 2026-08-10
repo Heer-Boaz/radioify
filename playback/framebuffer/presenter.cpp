@@ -98,7 +98,6 @@ WindowUiState buildPlaybackFramebufferUiState(
       playbackState == PlaybackSessionState::Paused ||
       playbackState == PlaybackSessionState::Ended || player.isEnded() ||
       playerTransportPaused;
-  bool audioFinishedNow = audioOk && audioIsFinished();
 
   playback_overlay::PlaybackOverlayInputs overlayInputs;
   overlayInputs.windowTitle = windowTitle;
@@ -126,21 +125,11 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
   overlayInputs.osd = osd;
   overlayInputs.paused = pausedNow;
-  overlayInputs.audioFinished = audioFinishedNow;
   overlayInputs.pictureInPictureAvailable = videoWindow.IsOpen();
   overlayInputs.pictureInPictureActive =
       overlayInputs.pictureInPictureAvailable &&
       videoWindow.IsPictureInPicture();
   overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
-  overlayInputs.screenWidth = 0;
-  overlayInputs.screenHeight = 0;
-  overlayInputs.windowWidth = videoWindow.IsOpen() ? videoWindow.GetWidth() : 0;
-  overlayInputs.windowHeight =
-      videoWindow.IsOpen() ? videoWindow.GetHeight() : 0;
-  overlayInputs.artTop = 0;
-  overlayInputs.progressBarX = 0;
-  overlayInputs.progressBarY = 0;
-  overlayInputs.progressBarWidth = 0;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
   WindowUiState ui = playback_overlay::buildWindowUiState(
@@ -315,6 +304,7 @@ void runFramebufferPresenterLoop(
       if (textFrameChanged || forcePresentNow || refreshDue || sizeChanged) {
         int textCols = 0;
         int textRows = 0;
+        playback_overlay::InteractionMap textInteractions;
         const VideoFrame* textFrame =
             videoFrameResult.frameAvailable ? presentationFrame : nullptr;
         if (buildTextGridPresentation &&
@@ -323,11 +313,12 @@ void runFramebufferPresenterLoop(
                                           textFrameChanged,
                                           videoFrameResult.debugLine,
                                           textGridPresentationCells, textCols,
-                                          textRows)) {
+                                          textRows, textInteractions)) {
           buildGpuTextGridFrameFromScreenCells(
               textGridPresentationCells, textCols, textRows,
               textGridPresentationFrame);
-          videoWindow.PresentGpuTextGrid(textGridPresentationFrame);
+          videoWindow.PresentGpuTextGrid(textGridPresentationFrame,
+                                         textInteractions);
         }
         lastTextGridPresentationPresent = std::chrono::steady_clock::now();
         lastTextGridPresentationWidth = windowWidth;

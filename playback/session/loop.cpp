@@ -469,18 +469,11 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void bindInputState() {
-    inputView.screen = &screen;
     inputView.videoWindow = &output.window();
     inputView.subtitleManager = &subtitleManager;
-    inputView.windowTitle = &windowTitle;
     inputView.enableSubtitlesShared = &enableSubtitlesShared;
     inputView.hasSubtitles = hasSubtitles;
-    inputView.currentMode = output.renderMode(enableAscii);
     inputView.frameOutputState = &frameOutputState;
-    inputView.textGridPresentationOutputState =
-        &textGridPresentationOutputState;
-    inputView.videoEdit = &videoEditSnapshot;
-    inputView.videoEditExport = &videoEditExportProgress;
     inputView.timingSink = timingSink;
     core.bindInputView(inputView);
 
@@ -643,7 +636,9 @@ struct PlaybackLoopRunner::Impl {
                                  const VideoFrame* frame, bool frameChanged,
                                  const std::string& enhancementDebugLine,
                                  std::vector<ScreenCell>& outCells,
-                                 int& outCols, int& outRows) {
+                                 int& outCols, int& outRows,
+                                 playback_overlay::InteractionMap&
+                                     outInteractions) {
     const int cols = playback_overlay::overlayCellCountForPixels(
         pixelWidth, cellPixelWidth);
     const int rows = playback_overlay::overlayCellCountForPixels(
@@ -698,6 +693,7 @@ struct PlaybackLoopRunner::Impl {
     if (textGridPresentationOutputState.renderFailed) {
       return false;
     }
+    outInteractions = textGridPresentationOutputState.overlayInteractions;
     return textGridPresentationScreen.snapshot(outCells, outCols, outRows);
   }
 
@@ -707,10 +703,12 @@ struct PlaybackLoopRunner::Impl {
         [&](int pixelWidth, int pixelHeight, int cellPixelWidth,
             int cellPixelHeight, const VideoFrame* frame, bool frameChanged,
             const std::string& enhancementDebugLine,
-            std::vector<ScreenCell>& outCells, int& outCols, int& outRows) {
+            std::vector<ScreenCell>& outCells, int& outCols, int& outRows,
+            playback_overlay::InteractionMap& outInteractions) {
           return this->buildTextGridPresentation(
               pixelWidth, pixelHeight, cellPixelWidth, cellPixelHeight, frame,
-              frameChanged, enhancementDebugLine, outCells, outCols, outRows);
+              frameChanged, enhancementDebugLine, outCells, outCols, outRows,
+              outInteractions);
         };
     PlaybackPresenterSyncResult result =
         output.sync(core.player(), buildUiState, buildTextGridPresentation,
@@ -773,7 +771,6 @@ struct PlaybackLoopRunner::Impl {
   void updateRenderInputs(bool clearHistory, bool frameChanged) {
     renderInputs.debugOverlay = config.debugOverlay;
     renderInputs.currentMode = output.renderMode(enableAscii);
-    inputView.currentMode = renderInputs.currentMode;
     renderInputs.enableAudio = enableAudio;
     renderInputs.canPlayPrevious = requestTransportCommand != nullptr;
     renderInputs.canPlayNext = requestTransportCommand != nullptr;
@@ -874,7 +871,6 @@ struct PlaybackLoopRunner::Impl {
 
   void processInputEvents(PlaybackLoopState& loopState) {
     input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
-    inputView.currentMode = output.renderMode(enableAscii);
     InputEvent ev{};
     while (pollNextEvent(ev)) {
       if (loopState == PlaybackLoopState::Stopped) {
@@ -916,8 +912,8 @@ struct PlaybackLoopRunner::Impl {
         continue;
       }
       if (ev.type == InputEvent::Type::PointerLeave) {
-        playback_session_input::handlePlaybackPointerLeave(inputSignals,
-                                                            seekState);
+        playback_session_input::handlePlaybackPointerLeave(
+            inputSignals, seekState, inputView);
         applyPresenterSync(syncPresentation());
       }
     }

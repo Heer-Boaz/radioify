@@ -14,8 +14,8 @@
 #include "playback/input/shortcut_types.h"
 #include "consoleinput.h"
 #include "playback/ascii/frame_output.h"
-#include "playback/overlay/overlay.h"
-#include "playback_mode.h"
+#include "playback/video/edit/view.h"
+#include "playback/video/timeline_preview_types.h"
 #include "state.h"
 
 class Player;
@@ -29,22 +29,15 @@ namespace playback_session_input {
 
 struct PlaybackInputView {
   Player* player = nullptr;
-  ConsoleScreen* screen = nullptr;
   VideoWindow* videoWindow = nullptr;
   SubtitleManager* subtitleManager = nullptr;
-  const std::string* windowTitle = nullptr;
 
   std::atomic<bool>* enableSubtitlesShared = nullptr;
   PlaybackSessionState* playbackState = nullptr;
   bool* audioOk = nullptr;
   bool hasSubtitles = false;
-  PlaybackRenderMode currentMode = PlaybackRenderMode::Other;
 
   playback_frame_output::FrameOutputState* frameOutputState = nullptr;
-  playback_frame_output::FrameOutputState* textGridPresentationOutputState =
-      nullptr;
-  const playback_video_edit::EditSnapshot* videoEdit = nullptr;
-  const playback_video_edit::ExportProgress* videoEditExport = nullptr;
 
   playback_frame_output::LogLineWriter timingSink;
 };
@@ -89,6 +82,8 @@ struct PlaybackSeekGestureState {
       std::chrono::steady_clock::time_point::min();
   double queuedSeekTargetSec = -1.0;
   bool seekQueued = false;
+  std::optional<playback_video_timeline_preview::PresentationSurface>
+      progressDragSurface;
   std::optional<VideoEditBoundaryDrag> videoEditBoundaryDrag;
 };
 
@@ -115,6 +110,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               PlaybackSeekGestureState& seekState,
                               const MouseEvent& mouse);
 void handlePlaybackPointerLeave(PlaybackInputSignals& signals,
-                                PlaybackSeekGestureState& seekState);
+                                PlaybackSeekGestureState& seekState,
+                                const PlaybackInputView& view);
 
 }  // namespace playback_session_input

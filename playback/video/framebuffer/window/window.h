@@ -19,6 +19,7 @@
 #include "playback/video/framebuffer/gpu_text_grid.h"
 #include "playback/video/framebuffer/window/gpu_text_grid_composition.h"
 #include "playback/video/framebuffer/frame_snapshot.h"
+#include "playback/overlay/interaction.h"
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/video/framebuffer/video_output_color.h"
 #include "playback/video/subtitle/font_attachments.h"
@@ -32,6 +33,8 @@
 
 struct WindowUiState {
     struct ControlButton {
+        playback_overlay::OverlayControlId id =
+            playback_overlay::OverlayControlId::Radio;
         std::string text;
         bool active = false;
         bool hovered = false;
@@ -98,7 +101,6 @@ struct WindowUiState {
     std::shared_ptr<const SubtitleFontAttachmentList> subtitleAssFonts;
     std::string subtitleRenderError;
     double displaySec = 0.0; // current time shown in overlay
-    double totalSec = -1.0; // total duration (or -1 if unknown)
     int volPct = 0; // volume percent for display
     std::string subtitle; // current subtitle cue text
     float subtitleAlpha = 0.0f; // subtitle opacity
@@ -136,13 +138,17 @@ public:
         GpuVideoFrameCache& frameCache, const WindowUiState& ui);
     // Render a full-screen text grid (TUI) into the window backbuffer.
     void PresentTextGrid(const std::vector<ScreenCell>& cells, int cols, int rows);
-    void PresentGpuTextGrid(const GpuTextGridFrame& frame);
+    void PresentGpuTextGrid(
+        const GpuTextGridFrame& frame,
+        const playback_overlay::InteractionMap& interactions = {});
     void PresentBackbuffer();
     void WaitForFramePacing(std::chrono::milliseconds timeout) const;
     void SetVsync(bool enabled);
     std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
-    void SetPictureInPictureInteractiveRects(const std::vector<RECT>& rects);
+    playback_overlay::InteractionHit OverlayHitAt(
+        double x, double y, bool capturedProgress = false) const;
+    bool OverlayEditBoundaryHandleAt(double x, double y) const;
     void SetTextGridMinimumSize(int cols, int rows);
     void SetCursorVisible(bool visible);
     bool TogglePictureInPicture(VideoWindowFocus focus);
@@ -223,7 +229,8 @@ private:
                         const VideoOutputColorState& outputColor,
                         const WindowUiState& ui,
                         bool includePlaybackOverlay,
-                        const char* timingStage);
+                        const char* timingStage,
+                        playback_overlay::InteractionMap* outInteractions);
     bool BindVideoFrame(GpuVideoFrameCache& frameCache,
                         ID3D11DeviceContext* context,
                         const D3D11_VIEWPORT& viewport,
@@ -234,7 +241,8 @@ private:
                      const WindowUiState& ui,
                      const FrameRenderGeometry& geometry,
                      const VideoOutputColorState& outputColor,
-                     bool includePlaybackOverlay);
+                     bool includePlaybackOverlay,
+                     playback_overlay::InteractionMap* outInteractions);
     void UpdateViewport(int width, int height);
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     static LPARAM EncodeFocusMessageParam(VideoWindowFocus focus);
@@ -251,7 +259,6 @@ private:
     RECT CalculatePictureInPictureRect() const;
     double PictureInPictureAspectRatio() const;
     SIZE PictureInPictureMinimumSize() const;
-    int PictureInPictureInteractiveTop() const;
     void AdjustPictureInPictureSizingRect(WPARAM edge, RECT* rect) const;
     bool EnterPictureInPicture(VideoWindowFocus focus);
     enum class PictureInPictureExitTarget {
@@ -260,8 +267,6 @@ private:
     };
     bool ExitPictureInPicture(PictureInPictureExitTarget target,
                               VideoWindowFocus focus);
-    bool PictureInPictureHasInteractiveRects() const;
-    bool PictureInPicturePointInInteractiveRect(int x, int y) const;
     LRESULT HitTestPictureInPicture(int x, int y) const;
     int PictureInPictureResizeBorderPx() const;
     int PictureInPictureVisualBorderPx() const;
@@ -285,7 +290,10 @@ private:
     float OutputFullFrameNits() const;
     float AsciiGlyphPeakNits() const;
     void SetOutputColorAttemptStatus(const std::string& status);
-    bool ShouldQueueWindowMouseEvent(int y) const;
+    void SetOverlayInteractionMap(
+        playback_overlay::InteractionMap interactions);
+    bool OverlayInteractionAt(double x, double y) const;
+    bool ShouldQueueWindowMouseEvent(int x, int y) const;
     void OnClientResizedByWindow(int width, int height);
     void OnDisplayChangedByWindow(int width, int height);
     void RequestCloseFromWindow();
@@ -349,6 +357,7 @@ private:
     WindowInputController m_input;
     bool m_windowMouseInputActive = false;
     bool m_trackingMouseLeave = false;
+    bool m_trackingNonClientMouseLeave = false;
     // Cache last window title to avoid repeated SetWindowText calls
     std::string m_lastWindowTitle;
     std::string m_baseWindowTitle;
@@ -364,8 +373,8 @@ private:
     std::atomic<int> m_textGridRows{0};
     std::atomic<int> m_textGridMinCols{0};
     std::atomic<int> m_textGridMinRows{0};
-    mutable std::mutex m_pictureInPictureInteractiveRectsMutex;
-    std::vector<RECT> m_pictureInPictureInteractiveRects;
+    mutable std::mutex m_overlayInteractionMutex;
+    playback_overlay::InteractionMap m_overlayInteractions;
     bool m_pipRestoreFullscreen = false;
     LONG m_pipRestoreStyle = 0;
     LONG m_pipRestoreExStyle = 0;
@@ -373,6 +382,7 @@ private:
     WindowDisplayLifecycle m_displayLifecycle;
     bool m_captureAllMouseInput = false;
     bool m_leftMouseCaptureActive = false;
+    bool m_editBoundaryCaptureActive = false;
     std::atomic<bool> m_cursorVisible{true};
     WaitableSignal m_closeRequest;
     DWORD m_windowThreadId = 0;

@@ -940,10 +940,27 @@ void VideoWindow::SetCursorVisible(bool visible) {
                   MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
 }
 
-void VideoWindow::SetPictureInPictureInteractiveRects(
-    const std::vector<RECT>& rects) {
-    std::lock_guard<std::mutex> lock(m_pictureInPictureInteractiveRectsMutex);
-    m_pictureInPictureInteractiveRects = rects;
+void VideoWindow::SetOverlayInteractionMap(
+    playback_overlay::InteractionMap interactions) {
+    std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
+    m_overlayInteractions = std::move(interactions);
+}
+
+playback_overlay::InteractionHit VideoWindow::OverlayHitAt(
+    double x, double y, bool capturedProgress) const {
+    std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
+    return playback_overlay::interactionHitAt(
+        m_overlayInteractions, x, y, capturedProgress);
+}
+
+bool VideoWindow::OverlayEditBoundaryHandleAt(double x, double y) const {
+    std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
+    return playback_overlay::editBoundaryHandleAt(m_overlayInteractions, x, y);
+}
+
+bool VideoWindow::OverlayInteractionAt(double x, double y) const {
+    std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
+    return m_overlayInteractions.contains(x, y);
 }
 
 void VideoWindow::SetTextGridMinimumSize(int cols, int rows) {
@@ -1004,27 +1021,6 @@ SIZE VideoWindow::PictureInPictureMinimumSize() const {
         size.cy = static_cast<LONG>(std::ceil(size.cx / aspect));
     }
     return size;
-}
-
-int VideoWindow::PictureInPictureInteractiveTop() const {
-    if (m_width <= 0 || m_height <= 0) return 0;
-    const int edge = PictureInPictureResizeBorderPx();
-    int top = m_height -
-              std::max(48, static_cast<int>(std::lround(m_height * 0.22)));
-    if (m_textGridPresentationEnabled.load(std::memory_order_relaxed)) {
-        const int rows =
-            m_textGridRows.load(std::memory_order_relaxed);
-        const int interactiveRows = rows > 0 ? std::min(rows, 8) : 8;
-        top = rows > 0
-                  ? std::min(m_height,
-                             std::max(0, rows - interactiveRows) *
-                                 static_cast<int>(TextGridCellSize().cy))
-                  : m_height -
-                        std::max(edge,
-                                 static_cast<int>(
-                                     std::lround(m_height * 0.42)));
-    }
-    return std::clamp(top, 0, m_height);
 }
 
 int VideoWindow::PictureInPictureResizeBorderPx() const {
@@ -1200,22 +1196,6 @@ RECT VideoWindow::CalculatePictureInPictureRect() const {
     return RECT{left, top, left + targetW, top + targetH};
 }
 
-bool VideoWindow::PictureInPictureHasInteractiveRects() const {
-    std::lock_guard<std::mutex> lock(m_pictureInPictureInteractiveRectsMutex);
-    return !m_pictureInPictureInteractiveRects.empty();
-}
-
-bool VideoWindow::PictureInPicturePointInInteractiveRect(int x, int y) const {
-    std::lock_guard<std::mutex> lock(m_pictureInPictureInteractiveRectsMutex);
-    for (const RECT& rect : m_pictureInPictureInteractiveRects) {
-        if (x >= rect.left && x < rect.right && y >= rect.top &&
-            y < rect.bottom) {
-            return true;
-        }
-    }
-    return false;
-}
-
 LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
     if (!m_pictureInPicture.load(std::memory_order_relaxed)) return HTCLIENT;
     if (m_width <= 0 || m_height <= 0) return HTCAPTION;
@@ -1235,23 +1215,8 @@ LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
     if (top) return HTTOP;
     if (bottom) return HTBOTTOM;
 
-    if (PictureInPictureHasInteractiveRects()) {
-        if (x >= 0 && x < m_width && y >= 0 && y < m_height) {
-            return PictureInPicturePointInInteractiveRect(x, y) ? HTCLIENT
-                                                               : HTCAPTION;
-        }
-        return HTCLIENT;
-    }
-
-    if (x >= 0 && x < m_width && y >= 0 && y < m_height &&
-        y >= PictureInPictureInteractiveTop()) {
-        return HTCLIENT;
-    }
-
-    const int reservedBottom =
-        std::max(48, static_cast<int>(std::lround(m_height * 0.22)));
-    if (x >= 0 && x < m_width && y >= 0 && y < m_height - reservedBottom) {
-        return HTCAPTION;
+    if (x >= 0 && x < m_width && y >= 0 && y < m_height) {
+        return OverlayInteractionAt(x, y) ? HTCLIENT : HTCAPTION;
     }
     return HTCLIENT;
 }
@@ -1368,7 +1333,6 @@ bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target,
         Resize(client.right - client.left, client.bottom - client.top);
     }
     m_pictureInPicture.store(false, std::memory_order_relaxed);
-    SetPictureInPictureInteractiveRects({});
     m_pipRestoreFullscreen = false;
 
     if (targetFullscreen) {
@@ -1786,10 +1750,12 @@ bool VideoWindow::RecreateSwapChainForCurrentDisplay(const char* reason) {
 }
 
 void VideoWindow::OnClientResizedByWindow(int width, int height) {
+    SetOverlayInteractionMap({});
     m_displayLifecycle.clientResized(width, height);
 }
 
 void VideoWindow::OnDisplayChangedByWindow(int width, int height) {
+    SetOverlayInteractionMap({});
     m_displayLifecycle.displayChanged(width, height);
 }
 
@@ -1982,6 +1948,7 @@ void VideoWindow::Close() {
     m_textGridPresentationEnabled.store(false, std::memory_order_relaxed);
     m_textGridCols.store(0, std::memory_order_relaxed);
     m_textGridRows.store(0, std::memory_order_relaxed);
+    SetOverlayInteractionMap({});
     m_pipRestoreFullscreen = false;
     m_displayLifecycle.clear();
 
@@ -2132,7 +2099,8 @@ bool VideoWindow::DrawVideoFrame(
     ID3D11DeviceContext* context, ID3D11RenderTargetView* renderTarget,
     const FrameRenderGeometry& geometry,
     const VideoOutputColorState& outputColor, const WindowUiState& ui,
-    bool includePlaybackOverlay, const char* timingStage) {
+    bool includePlaybackOverlay, const char* timingStage,
+    playback_overlay::InteractionMap* outInteractions) {
     if (!device || !context || !renderTarget || !m_constantBuffer ||
         !frameCache.HasFrame() || geometry.width <= 0 || geometry.height <= 0 ||
         geometry.viewport.w <= 0.0f || geometry.viewport.h <= 0.0f) {
@@ -2175,7 +2143,7 @@ bool VideoWindow::DrawVideoFrame(
 
     context->Draw(4, 0);
     DrawOverlay(device, context, ui, geometry, outputColor,
-                includePlaybackOverlay);
+                includePlaybackOverlay, outInteractions);
 
 #if defined(RADIOIFY_ENABLE_GPU_TIMING)
     if (timingAvailable) {
@@ -2252,9 +2220,11 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache,
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present frame w=%d h=%d ui.displaySec=%.3f\n", now_ms().c_str(), thread_id_str().c_str(), m_videoWidth, m_videoHeight, ui.displaySec);
 #endif
 
+    playback_overlay::InteractionMap presentedInteractions;
     if (!DrawVideoFrame(frameCache, device, context.Get(),
                         m_renderTargetView.Get(), geometry,
-                        m_outputColorState, ui, true, "Present")) {
+                        m_outputColorState, ui, true, "Present",
+                        &presentedInteractions)) {
         return;
     }
     DrawPictureInPictureBorder(context.Get());
@@ -2272,6 +2242,9 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache,
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
 #endif
         return;
+    }
+    if (SUCCEEDED(presHr)) {
+        SetOverlayInteractionMap(std::move(presentedInteractions));
     }
 #if RADIOIFY_ENABLE_TIMING_LOG
     if (FAILED(presHr)) {
@@ -2374,7 +2347,7 @@ VideoFrameSnapshotResult VideoWindow::CaptureCurrentFrame(
     };
     if (!DrawVideoFrame(frameCache, device, context.Get(), targetView.Get(),
                         geometry, snapshotColor, ui, false,
-                        "CaptureCurrentFrame")) {
+                        "CaptureCurrentFrame", nullptr)) {
         restoreSwapChainTarget();
         result.error = "Failed to render the current frame for capture.";
         return result;
@@ -2413,7 +2386,12 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                               const WindowUiState& ui,
                               const FrameRenderGeometry& geometry,
                               const VideoOutputColorState& outputColor,
-                              bool includePlaybackOverlay) {
+                              bool includePlaybackOverlay,
+                              playback_overlay::InteractionMap*
+                                  outInteractions) {
+    if (outInteractions) {
+        *outInteractions = {};
+    }
     const bool showTimelinePreview =
         includePlaybackOverlay && ui.timelinePreview.hoverActive;
     bool showOverlay =
@@ -2551,7 +2529,7 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
 
     if (showOverlay) {
         if (playback_overlay::renderWindowUiToGpuTextGrid(
-                ui, cols, rows, cellWidth, cellHeight,
+                ui, windowOverlayLayout, cellWidth, cellHeight,
                 drawTimelinePreview
                     ? playback_overlay::TimelinePreviewPresentation::
                           ImageAndTimestamp
@@ -2569,6 +2547,22 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                 0.0f, 0.0f, static_cast<float>(textPxW),
                 static_cast<float>(textPxH), 0.0f, 1.0f};
             drawOverlayTextGrid = textPxW > 0 && textPxH > 0;
+            const bool controlsRendered =
+                ui.overlayAlpha > 0.01f || !ui.debugLines.empty();
+            if (drawOverlayTextGrid && controlsRendered) {
+                const playback_overlay::InteractionMap cellInteractions =
+                    playback_overlay::buildOverlayInteractionMap(
+                        windowOverlayLayout, &ui.videoEdit);
+                if (outInteractions) {
+                    *outInteractions =
+                        playback_overlay::transformInteractionMap(
+                            cellInteractions, 0.0, 0.0,
+                            static_cast<double>(textPxW) /
+                                static_cast<double>(std::max(1, cols)),
+                            static_cast<double>(textPxH) /
+                                static_cast<double>(std::max(1, rows)));
+                }
+            }
         }
     }
 
@@ -2886,9 +2880,12 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
         m_timelinePreviewFrameCache.MarkFrameInFlight(context);
     }
     if (drawOverlayTextGrid) {
-        DrawGpuTextGridFrame(device, context, m_windowOverlayTextGrid,
-                             overlayTextGridViewport,
-                             GpuTextGridComposition::AlphaOverlay);
+        const bool overlayDrawn = DrawGpuTextGridFrame(
+            device, context, m_windowOverlayTextGrid,
+            overlayTextGridViewport, GpuTextGridComposition::AlphaOverlay);
+        if (!overlayDrawn && outInteractions) {
+            *outInteractions = {};
+        }
     }
     context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
 
@@ -2937,9 +2934,11 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
     const FrameRenderGeometry geometry{
         m_width, m_height,
         VideoViewport{m_viewportX, m_viewportY, m_viewportW, m_viewportH}};
+    playback_overlay::InteractionMap presentedInteractions;
     if (!DrawVideoFrame(frameCache, device, context.Get(),
                         m_renderTargetView.Get(), geometry,
-                        m_outputColorState, ui, true, "PresentOverlay")) {
+                        m_outputColorState, ui, true, "PresentOverlay",
+                        &presentedInteractions)) {
         return;
     }
     DrawPictureInPictureBorder(context.Get());
@@ -2957,6 +2956,9 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
         fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
 #endif
         return;
+    }
+    if (SUCCEEDED(presHr)) {
+        SetOverlayInteractionMap(std::move(presentedInteractions));
     }
 #if RADIOIFY_ENABLE_TIMING_LOG
     if (FAILED(presHr)) {

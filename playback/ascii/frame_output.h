@@ -8,8 +8,8 @@
 #include "asciiart.h"
 #include "asciiart_gpu.h"
 #include "consolescreen.h"
+#include "playback/overlay/interaction.h"
 #include "playback/video/gpu/gpu_shared.h"
-#include "ui_helpers.h"
 #include "playback/video/decoder.h"
 
 namespace playback_frame_output {
@@ -35,9 +35,7 @@ struct FrameOutputState {
   int cachedLayoutSourceHeight = -1;
   double cachedCellPixelWidth = -1.0;
   double cachedCellPixelHeight = -1.0;
-  int progressBarX = -1;
-  int progressBarY = -1;
-  int progressBarWidth = 0;
+  playback_overlay::InteractionMap overlayInteractions;
 };
 
 struct AsciiModePrepareInput {

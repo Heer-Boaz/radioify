@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "playback/video/gpu/gpu_shared.h"
@@ -386,7 +387,9 @@ bool VideoWindow::DrawGpuTextGridFrame(ID3D11Device* device,
     return true;
 }
 
-void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame) {
+void VideoWindow::PresentGpuTextGrid(
+    const GpuTextGridFrame& frame,
+    const playback_overlay::InteractionMap& interactions) {
     std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     if (frame.cols <= 0 || frame.rows <= 0) return;
@@ -431,10 +434,23 @@ void VideoWindow::PresentGpuTextGrid(const GpuTextGridFrame& frame) {
                               GpuTextGridComposition::Opaque)) {
         return;
     }
+    playback_overlay::InteractionMap presentedInteractions =
+        playback_overlay::transformInteractionMap(
+        interactions, static_cast<double>(gridViewport.x),
+        static_cast<double>(gridViewport.y),
+        static_cast<double>(gridViewport.width) /
+            static_cast<double>(std::max(1, frame.cols)),
+        static_cast<double>(gridViewport.height) /
+            static_cast<double>(std::max(1, frame.rows)));
     DrawPictureInPictureBorder(context.Get());
 
     lock.unlock();
     if (!swapChain) return;
     const VideoWindowPresentArgs presentArgs = liveVideoWindowPresentArgs();
-    (void)PresentSwapChain(swapChain.Get(), presentArgs, "gpu_text_grid");
+    const HRESULT presentResult =
+        PresentSwapChain(swapChain.Get(), presentArgs, "gpu_text_grid");
+    if (SUCCEEDED(presentResult) &&
+        !videoWindowPresentSkipped(presentResult)) {
+        SetOverlayInteractionMap(std::move(presentedInteractions));
+    }
 }

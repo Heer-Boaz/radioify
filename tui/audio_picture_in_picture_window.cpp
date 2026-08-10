@@ -67,16 +67,6 @@ int wheelDelta(const MouseEvent& mouse) {
   return static_cast<SHORT>(HIWORD(mouse.buttonState));
 }
 
-RECT cellRectToPixels(int x, int y, int width, int height, int cellWidth,
-                      int cellHeight, int maxWidth, int maxHeight) {
-  RECT rect{};
-  rect.left = std::clamp(x * cellWidth, 0, maxWidth);
-  rect.top = std::clamp(y * cellHeight, 0, maxHeight);
-  rect.right = std::clamp((x + width) * cellWidth, 0, maxWidth);
-  rect.bottom = std::clamp((y + height) * cellHeight, 0, maxHeight);
-  return rect;
-}
-
 }  // namespace
 
 bool AudioPictureInPictureWindow::isOpen() const { return window_.IsOpen(); }
@@ -103,7 +93,6 @@ bool AudioPictureInPictureWindow::open() {
     close();
     return false;
   }
-  window_.SetCaptureAllMouseInput(true);
   window_.SetVsync(true);
   window_.SetTextGridMinimumSize(kMinCols, kMinRows);
   WindowPlacementState placement;
@@ -120,9 +109,10 @@ bool AudioPictureInPictureWindow::open() {
 
 void AudioPictureInPictureWindow::close() {
   window_.Close();
-  hoverIndex_ = -1;
+  hoverControlToken_ = -1;
   controls_.clear();
   layout_ = playback_overlay::OverlayCellLayout{};
+  interactions_ = {};
 }
 
 void AudioPictureInPictureWindow::activate() {
@@ -248,9 +238,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   drawArtworkBackground(styles, cols_, rows_);
   controls_.clear();
   layout_ = playback_overlay::OverlayCellLayout{};
-  progressX_ = -1;
-  progressY_ = -1;
-  progressWidth_ = 0;
+  interactions_ = {};
 
   const int width = cols_;
   const int height = rows_;
@@ -291,7 +279,6 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   overlayInputs.volPct =
       static_cast<int>(std::round(audioGetVolume() * 100.0f));
   overlayInputs.paused = audioIsPaused() || audioFinished;
-  overlayInputs.audioFinished = audioFinished;
   overlayInputs.osd.controlsVisible = true;
   overlayInputs.pictureInPictureAvailable = true;
   overlayInputs.pictureInPictureActive = true;
@@ -308,10 +295,11 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   controlOptions.includeAudioTrack = false;
   controlOptions.includeSubtitles = false;
   controls_ = playback_overlay::buildOverlayControlSpecs(
-      overlayState, hoverIndex_, controlOptions);
+      overlayState, hoverControlToken_, controlOptions);
 
   layoutInput.controls =
-      playback_overlay::buildOverlayCellControlInputs(controls_, hoverIndex_);
+      playback_overlay::buildOverlayCellControlInputs(controls_,
+                                                      hoverControlToken_);
   layout_ = playback_overlay::layoutOverlayCells(layoutInput);
   for (const auto& titleLine : layout_.titleLines) {
     if (titleLine.y < 0 || titleLine.y >= height || titleLine.x >= width) {
@@ -347,41 +335,27 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   footerInput.unclippedOutputPeak = audioGetUnclippedOutputPeak();
   ProgressFooterRenderResult footerResult =
       renderProgressFooter(screen_, footerInput, footerStyles);
-  progressX_ = footerResult.progressBarX;
-  progressY_ = footerResult.progressBarY;
-  progressWidth_ = footerResult.progressBarWidth;
-  updateInteractiveRects();
+  interactions_ = playback_overlay::buildOverlayInteractionMap(layout_);
+  if (footerResult.progressBarX >= 0 && footerResult.progressBarY >= 0 &&
+      footerResult.progressBarWidth > 0) {
+    interactions_.progressBar = playback_overlay::ProgressBarRegion{
+        {static_cast<double>(footerResult.progressBarX),
+         static_cast<double>(footerResult.progressBarY),
+         static_cast<double>(footerResult.progressBarX +
+                             footerResult.progressBarWidth),
+         static_cast<double>(footerResult.progressBarY + 1)},
+        footerResult.progressBarWidth};
+  } else {
+    interactions_.progressBar.reset();
+  }
 
   int outW = 0;
   int outH = 0;
   if (!screen_.snapshot(cells_, outW, outH)) return false;
   playback_framebuffer_presenter::buildGpuTextGridFrameFromScreenCells(
       cells_, outW, outH, frame_);
-  window_.PresentGpuTextGrid(frame_);
+  window_.PresentGpuTextGrid(frame_, interactions_);
   return true;
-}
-
-void AudioPictureInPictureWindow::updateInteractiveRects() {
-  std::vector<RECT> rects;
-  rects.reserve(layout_.controls.size() + 1);
-
-  const int maxWidth = window_.GetWidth();
-  const int maxHeight = window_.GetHeight();
-  auto addCellRect = [&](int x, int y, int width, int height) {
-    if (width <= 0 || height <= 0 || y < 0 || y >= rows_) return;
-    RECT rect = cellRectToPixels(x, y, width, height, cellWidth_, cellHeight_,
-                                 maxWidth, maxHeight);
-    if (rect.left < rect.right && rect.top < rect.bottom) {
-      rects.push_back(rect);
-    }
-  };
-
-  for (const auto& item : layout_.controls) {
-    addCellRect(item.x, item.y, item.width, 1);
-  }
-  addCellRect(progressX_, progressY_, progressWidth_, 1);
-
-  window_.SetPictureInPictureInteractiveRects(rects);
 }
 
 void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
@@ -438,20 +412,24 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
 
   if (ev.type != InputEvent::Type::Mouse) return;
   const MouseEvent rawMouse = ev.mouse;
-  MouseEvent mouse = rawMouse;
+  const MouseEvent& mouse = rawMouse;
   const bool windowMouse = isWindowMouseEvent(mouse);
-  if (windowMouse) {
-    const int gx = std::clamp(rawMouse.pos.X / std::max(1, cellWidth_), 0,
-                              std::max(0, cols_ - 1));
-    const int gy = std::clamp(rawMouse.pos.Y / std::max(1, cellHeight_), 0,
-                              std::max(0, rows_ - 1));
-    mouse.pos.X = static_cast<SHORT>(gx);
-    mouse.pos.Y = static_cast<SHORT>(gy);
-  }
-
-  const int hitControl = controlAt(mouse.pos.X, mouse.pos.Y);
-  if (mouse.eventFlags == MOUSE_MOVED && hitControl != hoverIndex_) {
-    hoverIndex_ = hitControl;
+  const double pointerX =
+      windowMouse && rawMouse.hasPixelPosition ? rawMouse.pixelX
+                                               : rawMouse.pos.X;
+  const double pointerY =
+      windowMouse && rawMouse.hasPixelPosition ? rawMouse.pixelY
+                                               : rawMouse.pos.Y;
+  const playback_overlay::InteractionHit interactionHit =
+      windowMouse ? window_.OverlayHitAt(pointerX, pointerY)
+                  : playback_overlay::interactionHitAt(
+                        interactions_, pointerX, pointerY);
+  const auto& hitControl = interactionHit.control;
+  const int hitControlToken =
+      hitControl ? playback_overlay::overlayControlToken(*hitControl) : -1;
+  if (mouse.eventFlags == MOUSE_MOVED &&
+      hitControlToken != hoverControlToken_) {
+    hoverControlToken_ = hitControlToken;
   }
 
   if (mouse.eventFlags == MOUSE_WHEELED) {
@@ -468,30 +446,16 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
   }
 
   if (mouse.eventFlags == 0) {
-    if (hitControl >= 0 &&
-        hitControl < static_cast<int>(controls_.size())) {
-      clickControl(controls_[static_cast<size_t>(hitControl)].id, callbacks);
+    if (hitControl) {
+      clickControl(*hitControl, callbacks);
       return;
     }
   }
 
-  ProgressBarHitTestInput progressHit;
-  progressHit.x =
-      windowMouse
-          ? (rawMouse.hasPixelPosition ? rawMouse.pixelX : rawMouse.pos.X)
-          : mouse.pos.X;
-  progressHit.y =
-      windowMouse
-          ? (rawMouse.hasPixelPosition ? rawMouse.pixelY : rawMouse.pos.Y)
-          : mouse.pos.Y;
-  progressHit.barX = progressX_;
-  progressHit.barY = progressY_;
-  progressHit.barWidth = progressWidth_;
-  progressHit.unitWidth = windowMouse ? cellWidth_ : 1;
-  progressHit.unitHeight = windowMouse ? cellHeight_ : 1;
-  if (const auto ratio = progressBarRatioAt(progressHit)) {
+  const auto& progressHit = interactionHit.progressBar;
+  if (progressHit) {
     if (callbacks.onSeekToRatio) {
-      callbacks.onSeekToRatio(*ratio);
+      callbacks.onSeekToRatio(progressHit->ratio);
     }
   }
 }
@@ -516,8 +480,4 @@ bool AudioPictureInPictureWindow::clickControl(
     return true;
   };
   return playback_overlay::dispatchOverlayControl(control, actions);
-}
-
-int AudioPictureInPictureWindow::controlAt(int x, int y) const {
-  return playback_overlay::overlayCellControlAt(layout_, x, y);
 }

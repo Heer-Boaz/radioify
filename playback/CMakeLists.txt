@@ -25,6 +25,7 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/controller.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/overlay_model.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/export.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/overlay/interaction.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/overlay/overlay.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/overlay/subtitle_effects.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/subtitles.cpp

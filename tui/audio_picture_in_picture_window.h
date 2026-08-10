@@ -65,11 +65,9 @@ class AudioPictureInPictureWindow {
   void refreshGridSize();
   void refreshArtwork(const Context& context, int width, int height);
   void drawArtworkBackground(const Styles& styles, int width, int height);
-  void updateInteractiveRects();
   void handleInput(const InputEvent& ev, const Callbacks& callbacks);
   bool clickControl(playback_overlay::OverlayControlId control,
                     const Callbacks& callbacks);
-  int controlAt(int x, int y) const;
 
   VideoWindow window_;
   ConsoleScreen screen_;
@@ -83,13 +81,11 @@ class AudioPictureInPictureWindow {
   int artworkWidth_ = 0;
   int artworkHeight_ = 0;
   bool artworkValid_ = false;
-  int hoverIndex_ = -1;
+  int hoverControlToken_ = -1;
   int cols_ = 0;
   int rows_ = 0;
   int cellWidth_ = 1;
   int cellHeight_ = 1;
-  int progressX_ = -1;
-  int progressY_ = -1;
-  int progressWidth_ = 0;
+  playback_overlay::InteractionMap interactions_;
   std::string lastError_;
 };
