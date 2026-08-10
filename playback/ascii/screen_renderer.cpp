@@ -404,6 +404,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.progressBarY = frameOutput.progressBarY;
   overlayInputs.progressBarWidth = frameOutput.progressBarWidth;
   overlayInputs.debugLines = debugLines;
+  overlayInputs.videoEdit = inputs.videoEdit;
+  overlayInputs.videoEditExport = inputs.videoEditExport;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
   const int hoverIndex =
@@ -411,7 +413,9 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   playback_overlay::OverlayCellLayout overlayLayout;
   const bool showOverlay = overlayState.overlayVisible ||
                            !overlayState.debugLines.empty() ||
-                           inputs.timelinePreview.hoverActive;
+                           inputs.timelinePreview.hoverActive ||
+                           overlayState.videoEdit.active ||
+                           overlayState.videoEditExport.running();
   int overlayReservedLines = showOverlay ? 5 : 0;
   if (showOverlay) {
     overlayLayout = playback_overlay::layoutPlaybackOverlayCells(
@@ -470,7 +474,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         baseStyle, accentStyle, progressEmptyStyle, progressFrameStyle,
         progressStart, progressEnd};
     playback_overlay::renderOverlayToScreen(
-        screen, overlayLayout, overlayStyles, ratio, artTop, height);
+        screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
+        &overlayState.videoEditExport, artTop, height);
   }
 
   if (inputs.timelinePreview.hoverActive) {

@@ -9,6 +9,7 @@ enum class PlaybackShortcutContext : uint32_t {
   PictureInPicture = 1u << 3,
   ImageViewer = 1u << 4,
   VideoPlayback = 1u << 5,
+  VideoEditing = 1u << 6,
 };
 
 inline constexpr uint32_t kPlaybackShortcutContextGlobal =
@@ -23,12 +24,15 @@ inline constexpr uint32_t kPlaybackShortcutContextImageViewer =
     static_cast<uint32_t>(PlaybackShortcutContext::ImageViewer);
 inline constexpr uint32_t kPlaybackShortcutContextVideoPlayback =
     static_cast<uint32_t>(PlaybackShortcutContext::VideoPlayback);
+inline constexpr uint32_t kPlaybackShortcutContextVideoEditing =
+    static_cast<uint32_t>(PlaybackShortcutContext::VideoEditing);
 inline constexpr uint32_t kPlaybackShortcutContextAll =
     kPlaybackShortcutContextGlobal | kPlaybackShortcutContextShared |
     kPlaybackShortcutContextPlaybackSession |
     kPlaybackShortcutContextPictureInPicture |
     kPlaybackShortcutContextImageViewer |
-    kPlaybackShortcutContextVideoPlayback;
+    kPlaybackShortcutContextVideoPlayback |
+    kPlaybackShortcutContextVideoEditing;
 
 enum class PlaybackShortcutAction : uint8_t {
   Quit,
@@ -50,6 +54,17 @@ enum class PlaybackShortcutAction : uint8_t {
   PreviousFrame,
   NextFrame,
   CopyVideoFrame,
+  ToggleVideoEditor,
+  ExitVideoEditor,
+  SetVideoEditIn,
+  SetVideoEditOut,
+  RippleDeleteVideoEditSelection,
+  TrimVideoEditSelection,
+  UndoVideoEdit,
+  RedoVideoEdit,
+  ResetVideoEdits,
+  PreviewVideoEdits,
+  ExportVideoEdits,
   VolumeUp,
   VolumeDown,
   TogglePictureInPicture,

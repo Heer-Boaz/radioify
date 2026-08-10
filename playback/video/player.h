@@ -111,6 +111,7 @@ class Player {
   int sourceWidth() const;
   int sourceHeight() const;
   int videoStreamIndex() const;
+  int activeAudioStreamIndex() const;
 
  private:
   struct Impl;

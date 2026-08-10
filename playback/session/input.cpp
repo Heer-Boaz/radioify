@@ -359,6 +359,8 @@ playback_overlay::PlaybackOverlayInputs buildPlaybackMouseOverlayInputs(
   inputs.progressBarX = view.frameOutputState->progressBarX;
   inputs.progressBarY = view.frameOutputState->progressBarY;
   inputs.progressBarWidth = view.frameOutputState->progressBarWidth;
+  if (view.videoEdit) inputs.videoEdit = *view.videoEdit;
+  if (view.videoEditExport) inputs.videoEditExport = *view.videoEditExport;
   return inputs;
 }
 
@@ -430,9 +432,19 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
                               const InputEvent& ev) {
   InputCallbacks cb;
   cb.onQuit = [&]() { requestPlaybackExit(view, signals, true); };
-  cb.onPlay = [&]() { setPlaybackPaused(view, signals, seekState, false); };
-  cb.onPause = [&]() { setPlaybackPaused(view, signals, seekState, true); };
+  const auto cancelEditPreview = [&]() {
+    if (signals.cancelVideoEditPreview) signals.cancelVideoEditPreview();
+  };
+  cb.onPlay = [&]() {
+    cancelEditPreview();
+    setPlaybackPaused(view, signals, seekState, false);
+  };
+  cb.onPause = [&]() {
+    cancelEditPreview();
+    setPlaybackPaused(view, signals, seekState, true);
+  };
   cb.onTogglePause = [&]() {
+    cancelEditPreview();
     setPlaybackPaused(view, signals, seekState, pauseRequestedByToggle(view));
   };
   cb.onStopPlayback = [&]() { requestPlaybackExit(view, signals, false); };
@@ -458,29 +470,57 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       case PlaybackShortcutAction::ExitPlaybackSession:
         requestPlaybackExit(view, signals, false);
         break;
+      case PlaybackShortcutAction::ToggleVideoEditor:
+        if (!signals.videoEditorActive || !signals.videoEditorActive()) {
+          setPlaybackPaused(view, signals, seekState, true);
+        }
+        if (signals.handleVideoEditorAction) {
+          signals.handleVideoEditorAction(action);
+        }
+        break;
+      case PlaybackShortcutAction::ExitVideoEditor:
+      case PlaybackShortcutAction::SetVideoEditIn:
+      case PlaybackShortcutAction::SetVideoEditOut:
+      case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
+      case PlaybackShortcutAction::TrimVideoEditSelection:
+      case PlaybackShortcutAction::UndoVideoEdit:
+      case PlaybackShortcutAction::RedoVideoEdit:
+      case PlaybackShortcutAction::ResetVideoEdits:
+      case PlaybackShortcutAction::PreviewVideoEdits:
+      case PlaybackShortcutAction::ExportVideoEdits:
+        if (signals.handleVideoEditorAction) {
+          signals.handleVideoEditorAction(action);
+        }
+        break;
       default:
         break;
     }
   };
   cb.onSeekBy = [&](int dir) {
+    cancelEditPreview();
     sendRelativeSeekRequest(view, signals, seekState,
                             static_cast<int64_t>(dir) * 5000000);
   };
   cb.onPreviousFrame = [&]() {
+    cancelEditPreview();
     requestFrameStep(view, signals, seekState,
                      playback_video_frame_step::Direction::Previous);
   };
   cb.onNextFrame = [&]() {
+    cancelEditPreview();
     requestFrameStep(view, signals, seekState,
                      playback_video_frame_step::Direction::Next);
   };
   cb.onCopyVideoFrame = signals.copyCurrentVideoFrameToClipboard;
   cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
-  const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
-                                    kPlaybackShortcutContextGlobal |
-                                    kPlaybackShortcutContextPlaybackSession |
-                                    kPlaybackShortcutContextVideoPlayback;
+  uint32_t shortcutContexts = kPlaybackShortcutContextShared |
+                              kPlaybackShortcutContextGlobal |
+                              kPlaybackShortcutContextPlaybackSession |
+                              kPlaybackShortcutContextVideoPlayback;
+  if (signals.videoEditorActive && signals.videoEditorActive()) {
+    shortcutContexts |= kPlaybackShortcutContextVideoEditing;
+  }
   const PlaybackInputResult playbackResult =
       handlePlaybackInput(ev, cb, shortcutContexts);
   if (playbackResult == PlaybackInputResult::Handled) {
@@ -500,6 +540,7 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
                                   PlaybackInputSignals& signals,
                                   PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command) {
+  if (signals.cancelVideoEditPreview) signals.cancelVideoEditPreview();
   switch (command) {
     case PlaybackControlCommand::Play:
       setPlaybackPaused(view, signals, seekState, false);
@@ -669,6 +710,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                                      progressUnits);
     }
     if (seekGesture) {
+      if (signals.cancelVideoEditPreview) signals.cancelVideoEditPreview();
       queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
     }
     return;

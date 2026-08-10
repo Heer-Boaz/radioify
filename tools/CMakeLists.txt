@@ -62,6 +62,14 @@ radioify_add_module_object_library(radioify_tool_timeline_preview_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_video_edit_timeline_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_edit_timeline_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_video_edit_export_smoke
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_edit_export_smoke.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_window_display_lifecycle_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/window_display_lifecycle_tests.cpp
 )

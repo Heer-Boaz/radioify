@@ -4241,3 +4241,7 @@ int Player::sourceHeight() const {
 int Player::videoStreamIndex() const {
   return impl_->videoStreamIndex.load(std::memory_order_relaxed);
 }
+
+int Player::activeAudioStreamIndex() const {
+  return impl_->activeAudioStream.load(std::memory_order_relaxed);
+}

@@ -10,6 +10,7 @@
 
 #include "playback/control/command.h"
 #include "playback/control/transport.h"
+#include "playback/input/shortcut_types.h"
 #include "consoleinput.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/overlay/overlay.h"
@@ -41,6 +42,8 @@ struct PlaybackInputView {
   playback_frame_output::FrameOutputState* frameOutputState = nullptr;
   playback_frame_output::FrameOutputState* textGridPresentationOutputState =
       nullptr;
+  const playback_video_edit::EditSnapshot* videoEdit = nullptr;
+  const playback_video_edit::ExportSnapshot* videoEditExport = nullptr;
 
   playback_frame_output::LogLineWriter timingSink;
 };
@@ -54,6 +57,9 @@ struct PlaybackInputSignals {
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   std::function<void()> copyCurrentVideoFrameToClipboard;
+  std::function<bool()> videoEditorActive;
+  std::function<bool(PlaybackShortcutAction)> handleVideoEditorAction;
+  std::function<void()> cancelVideoEditPreview;
   std::function<void(playback_video_timeline_preview::PresentationSurface,
                      double ratio, int progressUnits)>
       requestTimelinePreview;
@@ -75,6 +81,9 @@ struct PlaybackSeekGestureState {
 };
 
 bool isOverlayVisible(const PlaybackInputSignals& signals);
+void setPlaybackPaused(const PlaybackInputView& view,
+                       PlaybackInputSignals& signals,
+                       PlaybackSeekGestureState& seekState, bool paused);
 void queueSeekRequest(PlaybackInputSignals& signals,
                       PlaybackSeekGestureState& seekState, double targetSec);
 void sendSeekRequest(const PlaybackInputView& view,

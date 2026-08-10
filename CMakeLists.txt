@@ -547,6 +547,27 @@ radioify_link_repo_target(timeline_preview_tests)
 add_test(NAME timeline_preview_tests
          COMMAND $<TARGET_FILE:timeline_preview_tests>)
 
+add_executable(video_edit_timeline_tests)
+target_sources(video_edit_timeline_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_video_edit_timeline_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/timeline.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/preview.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/overlay_model.cpp
+)
+radioify_link_repo_target(video_edit_timeline_tests)
+add_test(NAME video_edit_timeline_tests
+         COMMAND $<TARGET_FILE:video_edit_timeline_tests>)
+
+add_executable(video_edit_export_smoke)
+target_sources(video_edit_export_smoke PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_video_edit_export_smoke>
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/export.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+)
+radioify_link_repo_target(video_edit_export_smoke)
+
 add_executable(window_display_lifecycle_tests)
 target_sources(window_display_lifecycle_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_window_display_lifecycle_tests>
@@ -1198,12 +1219,14 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(ffmpeg_audio_decoder_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 
 set(RADIOIFY_HAS_LIBASS OFF)
 set(_radioify_libass_include_dirs "")
@@ -1652,6 +1675,7 @@ if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
   target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
+  target_link_libraries(video_edit_export_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 bcrypt ws2_32)
 endif()
 
 if (WIN32 AND RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION)

@@ -1008,6 +1008,17 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
         if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-0.10f);
         return PlaybackInputResult::Handled;
       case PlaybackShortcutAction::TogglePictureInPicture:
+      case PlaybackShortcutAction::ToggleVideoEditor:
+      case PlaybackShortcutAction::ExitVideoEditor:
+      case PlaybackShortcutAction::SetVideoEditIn:
+      case PlaybackShortcutAction::SetVideoEditOut:
+      case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
+      case PlaybackShortcutAction::TrimVideoEditSelection:
+      case PlaybackShortcutAction::UndoVideoEdit:
+      case PlaybackShortcutAction::RedoVideoEdit:
+      case PlaybackShortcutAction::ResetVideoEdits:
+      case PlaybackShortcutAction::PreviewVideoEdits:
+      case PlaybackShortcutAction::ExportVideoEdits:
         if (callbacks.onPlaybackContextShortcut) {
           callbacks.onPlaybackContextShortcut(*action);
         }

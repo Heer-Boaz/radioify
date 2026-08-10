@@ -186,8 +186,86 @@ int main() {
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPlaybackSession |
-                       kPlaybackShortcutContextVideoPlayback),
+                   kPlaybackShortcutContextVideoPlayback),
                "Ctrl+Shift+S must remain available for future shortcut layers");
+
+  const uint32_t videoPlaybackContexts =
+      kPlaybackShortcutContextGlobal | kPlaybackShortcutContextShared |
+      kPlaybackShortcutContextPlaybackSession |
+      kPlaybackShortcutContextVideoPlayback;
+  const uint32_t videoEditingContexts =
+      videoPlaybackContexts | kPlaybackShortcutContextVideoEditing;
+  ok &= expect(resolvePlaybackShortcutAction(makeKey('E'),
+                                              videoPlaybackContexts)
+                   .value() == PlaybackShortcutAction::ToggleVideoEditor,
+               "Bare E must enter the video editor only during video playback");
+  ok &= expect(!resolvePlaybackShortcutAction(
+                   makeKey('E'), kPlaybackShortcutContextGlobal |
+                                     kPlaybackShortcutContextShared),
+               "The editor shortcut must not leak into non-video playback");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_ESCAPE),
+                                              videoEditingContexts)
+                   .value() == PlaybackShortcutAction::ExitVideoEditor,
+               "Escape must close the modal editor before playback itself");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey('O'),
+                                              videoEditingContexts)
+                   .value() == PlaybackShortcutAction::SetVideoEditOut,
+               "Bare O must set the edit Out point while editing");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey('O'),
+                                              videoPlaybackContexts)
+                   .value() == PlaybackShortcutAction::ToggleOptions,
+               "Bare O must regain its playback-options meaning outside editing");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey('I'),
+                                              videoEditingContexts)
+                   .value() == PlaybackShortcutAction::SetVideoEditIn,
+               "Bare I must set the edit In point");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_DELETE),
+                                              videoEditingContexts)
+                   .value() ==
+                   PlaybackShortcutAction::RippleDeleteVideoEditSelection,
+               "Delete must perform the editor's ripple removal");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey('T'),
+                                              videoEditingContexts)
+                   .value() == PlaybackShortcutAction::TrimVideoEditSelection,
+               "Bare T must trim the sequence to the selected range");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey('P'),
+                                              videoEditingContexts)
+                   .value() == PlaybackShortcutAction::PreviewVideoEdits,
+               "Bare P must preview the edited sequence while editing");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('P', 0, kPlaybackShortcutCtrlMask),
+                   videoEditingContexts)
+                   .value() == PlaybackShortcutAction::TogglePictureInPicture,
+               "Ctrl+P must retain its PiP meaning while editing");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('E', 0, kPlaybackShortcutCtrlMask),
+                   videoEditingContexts)
+                   .value() == PlaybackShortcutAction::ExportVideoEdits,
+               "Ctrl+E must route to the editor-owned export task");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('E', 0, kPlaybackShortcutCtrlMask),
+                   videoPlaybackContexts)
+                   .value() == PlaybackShortcutAction::ExportVideoEdits,
+               "Ctrl+E must keep a background edit export cancellable after closing the editor");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('Z', 0, kPlaybackShortcutCtrlMask),
+                   videoEditingContexts)
+                   .value() == PlaybackShortcutAction::UndoVideoEdit,
+               "Ctrl+Z must undo an edit decision");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('Y', 0, kPlaybackShortcutCtrlMask),
+                   videoEditingContexts)
+                   .value() == PlaybackShortcutAction::RedoVideoEdit,
+               "Ctrl+Y must redo an edit decision");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('R', 0, kPlaybackShortcutCtrlMask),
+                   videoEditingContexts)
+                   .value() == PlaybackShortcutAction::ResetVideoEdits,
+               "Ctrl+R must reset edit decisions instead of toggling radio");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_OEM_COMMA, ','),
+                                              videoEditingContexts)
+                   .value() == PlaybackShortcutAction::PreviousFrame,
+               "Frame stepping must remain available for precise In/Out marks");
   ok &= expect(playback_video_control::shouldCoalesceQueuedEvent(
                    playback_video_control::EventType::SeekRequest,
                    playback_video_control::EventType::SeekRequest),
@@ -1574,6 +1652,7 @@ int main() {
                "overlayCellCountForPixels must round rows up");
   ok &= expect(playback_overlay::overlayCellCountForPixels(960, 9) == 107,
                "overlayCellCountForPixels must round columns up");
+
   ok &= expect(!playback_overlay::isBackMousePressed(
                    makeMouse(RIGHTMOST_BUTTON_PRESSED)),
                "Right mouse button must not act as playback back/exit");

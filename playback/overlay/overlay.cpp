@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "playback/video/edit/overlay_model.h"
 #include "playback/video/image.h"
 #include "subtitle_effects.h"
 #include "ui_helpers.h"
@@ -197,6 +198,8 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.progressBarY = inputs.progressBarY;
   state.progressBarWidth = inputs.progressBarWidth;
   state.debugLines = inputs.debugLines;
+  state.videoEdit = inputs.videoEdit;
+  state.videoEditExport = inputs.videoEditExport;
 
   if (inputs.subtitleManager) {
     state.subtitleText = buildSubtitleText(*inputs.subtitleManager,
@@ -691,6 +694,8 @@ OverlayCellLayout layoutPlaybackOverlayCells(
       overlayTitleWithDebugLines(state.debugLines,
                                  buildWindowOverlayTopLine(state));
   input.suffix = buildWindowOverlayProgressSuffix(state);
+  input.reservedRowsAboveProgress =
+      (state.videoEdit.active || state.videoEditExport.running()) ? 1 : 0;
   input.controls = buildOverlayCellControlInputs(specs, hoverIndex);
   return layoutOverlayCells(input);
 }
@@ -702,6 +707,8 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   input.height = height;
   input.title = overlayTitleWithDebugLines(ui.debugLines, ui.title);
   input.suffix = ui.progressSuffix;
+  input.reservedRowsAboveProgress =
+      (ui.videoEdit.active || ui.videoEditExport.running()) ? 1 : 0;
   input.controls.reserve(ui.controlButtons.size());
   for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
     OverlayCellControlInput control;
@@ -824,6 +831,9 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
           ? static_cast<float>(std::clamp(state.displaySec / state.totalSec, 0.0, 1.0))
           : 0.0f;
   ui.overlayAlpha = state.overlayVisible ? 1.0f : 0.0f;
+  if (state.videoEdit.active || state.videoEditExport.running()) {
+    ui.overlayAlpha = 1.0f;
+  }
   ui.isPaused = state.paused;
   ui.title = state.windowTitle;
   ui.transientMessage = state.transientMessage;
@@ -850,6 +860,8 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.subtitle = state.subtitleText;
   ui.subtitleAlpha =
       (state.subtitleCues.empty() && !state.subtitleAssScript) ? 0.0f : 1.0f;
+  ui.videoEdit = state.videoEdit;
+  ui.videoEditExport = state.videoEditExport;
   return ui;
 }
 
@@ -1002,6 +1014,61 @@ OverlayCellTextLine layoutTransientMessageLine(const std::string& message,
 }
 
 template <typename Target>
+void renderVideoEditTimelineToTarget(
+    Target& target, const OverlayCellLayout& layout,
+    const OverlayRenderStyles& styles, double progress,
+    const playback_video_edit::EditSnapshot& edit,
+    const playback_video_edit::ExportSnapshot* editExport) {
+  if ((!edit.active && !(editExport && editExport->running())) ||
+      layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
+      !target.rowVisible(layout.progressBarY)) {
+    return;
+  }
+
+  const int width = layout.progressBarWidth;
+  const playback_video_edit::OverlayModel model =
+      playback_video_edit::buildOverlayModel(edit, editExport, width, progress);
+  const Style keptStyle{styles.progressStart, styles.progressEmptyStyle.bg};
+  const Style removedStyle{{118, 82, 88}, {35, 20, 24}};
+  const Style selectedStyle{styles.accentStyle.bg, styles.accentStyle.fg};
+  const Style playheadStyle{styles.baseStyle.bg, styles.baseStyle.fg};
+
+  for (int cell = 0; cell < static_cast<int>(model.cells.size()); ++cell) {
+    const playback_video_edit::TimelineCellKind kind =
+        model.cells[static_cast<size_t>(cell)];
+    const bool selected =
+        kind == playback_video_edit::TimelineCellKind::Selected;
+    const bool kept = kind == playback_video_edit::TimelineCellKind::Kept;
+    const wchar_t glyph = selected ? L'=' : (kept ? L'─' : L'·');
+    const Style& style = selected ? selectedStyle
+                                  : (kept ? keptStyle : removedStyle);
+    target.writeChar(layout.progressBarX + cell, layout.progressBarY, glyph,
+                     style);
+  }
+
+  if (!model.cells.empty()) {
+    target.writeChar(layout.progressBarX + model.playheadCell,
+                     layout.progressBarY, L'│', playheadStyle);
+  }
+  if (edit.active && model.inCell) {
+    target.writeChar(layout.progressBarX + *model.inCell,
+                     layout.progressBarY, L'I',
+                     styles.accentStyle);
+  }
+  if (edit.active && model.outCell) {
+    target.writeChar(layout.progressBarX + *model.outCell,
+                     layout.progressBarY, L'O',
+                     styles.accentStyle);
+  }
+
+  const int statusY = layout.progressBarY - 1;
+  if (!target.rowVisible(statusY)) return;
+  const std::string status =
+      utf8TakeDisplayWidth(model.status, target.width());
+  target.writeText(0, statusY, status, styles.accentStyle);
+}
+
+template <typename Target>
 void renderTransientMessageToTarget(Target& target,
                                     const std::string& message,
                                     const Style& style) {
@@ -1014,7 +1081,10 @@ void renderTransientMessageToTarget(Target& target,
 template <typename Target>
 void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                            const OverlayRenderStyles& styles,
-                           double progress) {
+                           double progress,
+                           const playback_video_edit::EditSnapshot* videoEdit,
+                           const playback_video_edit::ExportSnapshot*
+                               videoEditExport) {
   if (!target.isDrawable()) return;
 
   for (const auto& item : layout.controls) {
@@ -1046,6 +1116,11 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
     }
     target.writeChar(rightFrameX, layout.progressBarY, L'|',
                      styles.progressFrameStyle);
+  }
+
+  if (videoEdit) {
+    renderVideoEditTimelineToTarget(target, layout, styles, progress,
+                                    *videoEdit, videoEditExport);
   }
 
   target.writeText(layout.suffixX, layout.suffixY, layout.suffixText,
@@ -1101,10 +1176,14 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            const OverlayCellLayout& layout,
                            const OverlayRenderStyles& styles,
                            double progress,
+                           const playback_video_edit::EditSnapshot* videoEdit,
+                           const playback_video_edit::ExportSnapshot*
+                               videoEditExport,
                            int minY,
                            int maxY) {
   ScreenOverlayTarget target(screen, minY, maxY);
-  renderOverlayToTarget(target, layout, styles, progress);
+  renderOverlayToTarget(target, layout, styles, progress, videoEdit,
+                        videoEditExport);
 }
 
 void renderTransientMessageToScreen(ConsoleScreen& screen,
@@ -1142,7 +1221,8 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui, int width, int height,
   if (ui.overlayAlpha > 0.01f || !ui.debugLines.empty()) {
     overlayLayout = layoutWindowOverlayCells(ui, width, height);
     haveOverlayLayout = true;
-    renderOverlayToTarget(target, overlayLayout, styles, ui.progress);
+    renderOverlayToTarget(target, overlayLayout, styles, ui.progress,
+                          &ui.videoEdit, &ui.videoEditExport);
     rendered = true;
   }
   if (ui.timelinePreview.hoverActive) {
