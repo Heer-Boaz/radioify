@@ -167,6 +167,53 @@ void EditSession::markOut(int64_t sourceUsExclusive) {
   if (clearsIn) inUs_.reset();
 }
 
+bool EditSession::moveBoundary(EditBoundary boundary, int64_t timelineUs,
+                               int64_t minimumSelectionDurationUs) {
+  if (!active_) return false;
+  const auto sequence = playback_video_sequence::Timeline::create(
+      timeline_.sourceDurationUs(), timeline_.keptRanges());
+  if (!sequence) return false;
+
+  const int64_t durationUs = sequence->durationUs();
+  int64_t targetUs = std::clamp(timelineUs, int64_t{0}, durationUs);
+  const int64_t minimumDurationUs =
+      std::max<int64_t>(1, minimumSelectionDurationUs);
+  if (boundary == EditBoundary::In && outUs_) {
+    const auto outPoint = sequence->pointForSource(
+        *outUs_, playback_video_sequence::SourceBias::Backward);
+    if (outPoint) {
+      targetUs = std::min(
+          targetUs,
+          outPoint->presentationUs -
+              std::min(minimumDurationUs, outPoint->presentationUs));
+    }
+  } else if (boundary == EditBoundary::Out && inUs_) {
+    const auto inPoint = sequence->pointForSource(
+        *inUs_, playback_video_sequence::SourceBias::Forward);
+    if (inPoint) {
+      targetUs = std::max(
+          targetUs,
+          inPoint->presentationUs +
+              std::min(minimumDurationUs,
+                       durationUs - inPoint->presentationUs));
+    }
+  }
+
+  const std::optional<int64_t> previousIn = inUs_;
+  const std::optional<int64_t> previousOut = outUs_;
+  if (boundary == EditBoundary::In) {
+    markIn(sequence->pointAt(targetUs).sourceUs);
+  } else if (targetUs <= 0) {
+    markOut(sequence->pointAt(0).sourceUs);
+  } else {
+    const playback_video_sequence::Point beforeBoundary =
+        sequence->pointAt(targetUs - 1);
+    markOut(std::min(timeline_.sourceDurationUs(),
+                     beforeBoundary.sourceUs + 1));
+  }
+  return inUs_ != previousIn || outUs_ != previousOut;
+}
+
 std::optional<SourceRange> EditSession::selection() const {
   if (!inUs_ || !outUs_ || *outUs_ <= *inUs_) return std::nullopt;
   return SourceRange{*inUs_, *outUs_};

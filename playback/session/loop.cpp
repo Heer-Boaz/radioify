@@ -270,6 +270,7 @@ struct PlaybackLoopRunner::Impl {
           inputView.playbackState &&
           *inputView.playbackState == PlaybackSessionState::Active;
       pendingExit = std::move(request);
+      overlayControlHover.store(-1, std::memory_order_relaxed);
       playback_session_input::setPlaybackPaused(inputView, inputSignals,
                                                 seekState, true);
       timelinePreviewModel.hide(
@@ -312,6 +313,7 @@ struct PlaybackLoopRunner::Impl {
     if (!pendingExit) return false;
     PendingExit request = std::move(*pendingExit);
     pendingExit.reset();
+    overlayControlHover.store(-1, std::memory_order_relaxed);
     bool accepted = true;
     switch (request.kind) {
       case PendingExit::Kind::Session:
@@ -354,6 +356,7 @@ struct PlaybackLoopRunner::Impl {
     if (!pendingExit) return false;
     const bool resumePlayback = pendingExit->resumePlaybackOnCancel;
     pendingExit.reset();
+    overlayControlHover.store(-1, std::memory_order_relaxed);
     if (resumePlayback) {
       playback_session_input::setPlaybackPaused(inputView, inputSignals,
                                                 seekState, false);
@@ -382,6 +385,7 @@ struct PlaybackLoopRunner::Impl {
   void pollVideoEditExport() {
     std::string message;
     if (!videoEditor.poll(&message)) return;
+    overlayControlHover.store(-1, std::memory_order_relaxed);
     syncVideoEditView();
     if (!message.empty()) showEditMessage(message);
     if (pendingExit && pendingExit->exitAfterExport &&
@@ -427,6 +431,7 @@ struct PlaybackLoopRunner::Impl {
 
     const playback_video_edit::CommandResult result =
         videoEditor.execute(*command, context);
+    overlayControlHover.store(-1, std::memory_order_relaxed);
     std::string message = result.message;
     bool sequenceAccepted = true;
     if (result.sequenceEffect ==
@@ -506,6 +511,19 @@ struct PlaybackLoopRunner::Impl {
     inputSignals.handleVideoEditorAction =
         [this](PlaybackShortcutAction action) {
           return handleVideoEditorAction(action);
+        };
+    inputSignals.moveVideoEditBoundary =
+        [this](playback_video_edit::EditBoundary boundary,
+               int64_t timelineUs) {
+          if (pendingExit || !videoEditor.active()) return false;
+          const int64_t minimumDurationUs = std::max<int64_t>(
+              1, core.player().debugInfo().lastPresentedDurationUs);
+          if (!videoEditor.moveBoundary(boundary, timelineUs,
+                                        minimumDurationUs)) {
+            return false;
+          }
+          syncVideoEditView();
+          return true;
         };
     inputSignals.requestTimelinePreview =
         [this](playback_video_timeline_preview::PresentationSurface surface,
@@ -899,7 +917,8 @@ struct PlaybackLoopRunner::Impl {
         continue;
       }
       if (ev.type == InputEvent::Type::PointerLeave) {
-        playback_session_input::handlePlaybackPointerLeave(inputSignals);
+        playback_session_input::handlePlaybackPointerLeave(inputSignals,
+                                                            seekState);
         applyPresenterSync(syncPresentation());
       }
     }

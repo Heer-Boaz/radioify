@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,8 @@ struct PlaybackInputSignals {
   std::function<bool()> videoEditorActive;
   std::function<bool()> videoEditExitConfirmationActive;
   std::function<bool(PlaybackShortcutAction)> handleVideoEditorAction;
+  std::function<bool(playback_video_edit::EditBoundary, int64_t timelineUs)>
+      moveVideoEditBoundary;
   std::function<bool(bool quitApplication)> requestPlaybackExit;
   std::function<void(playback_video_timeline_preview::PresentationSurface,
                      double ratio, int progressUnits)>
@@ -79,6 +82,8 @@ struct PlaybackSeekGestureState {
       std::chrono::steady_clock::time_point::min();
   double queuedSeekTargetSec = -1.0;
   bool seekQueued = false;
+  std::optional<playback_video_edit::EditBoundary> videoEditBoundaryDrag;
+  bool videoEditBoundaryDragFromWindow = false;
 };
 
 bool isOverlayVisible(const PlaybackInputSignals& signals);
@@ -103,6 +108,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
                               PlaybackSeekGestureState& seekState,
                               const MouseEvent& mouse);
-void handlePlaybackPointerLeave(PlaybackInputSignals& signals);
+void handlePlaybackPointerLeave(PlaybackInputSignals& signals,
+                                PlaybackSeekGestureState& seekState);
 
 }  // namespace playback_session_input

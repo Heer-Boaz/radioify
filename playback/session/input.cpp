@@ -9,6 +9,7 @@
 #include "audioplayback.h"
 #include "playback/video/player.h"
 #include "playback/video/state/machine.h"
+#include "playback/video/edit/overlay_model.h"
 #include "playback/input/shortcuts.h"
 #include "playback/session/osd_timeline.h"
 #include "handoff.h"
@@ -92,6 +93,14 @@ bool queuePlaybackSeekToRatio(const PlaybackInputView& view,
   }
   queueSeekRequest(signals, seekState, std::clamp(ratio, 0.0, 1.0) * totalSec);
   return true;
+}
+
+std::optional<int64_t> playbackTimelineTargetForRatio(
+    const PlaybackInputView& view, double ratio) {
+  const int64_t durationUs = view.player->durationUs();
+  if (durationUs <= 0 || !std::isfinite(ratio)) return std::nullopt;
+  return static_cast<int64_t>(std::llround(
+      std::clamp(ratio, 0.0, 1.0) * static_cast<double>(durationUs)));
 }
 
 void triggerOverlay(const PlaybackInputView& view,
@@ -625,6 +634,17 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       windowOriginEvent
           ? playback_video_timeline_preview::PresentationSurface::VideoWindow
           : playback_video_timeline_preview::PresentationSurface::Terminal;
+  const bool leftPressed =
+      (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+  const bool dragFromThisSurface =
+      seekState.videoEditBoundaryDrag &&
+      seekState.videoEditBoundaryDragFromWindow == windowOriginEvent;
+  if (dragFromThisSurface && !leftPressed) {
+    seekState.videoEditBoundaryDrag.reset();
+    seekState.videoEditBoundaryDragFromWindow = false;
+    commitQueuedSeek(view, signals, seekState);
+    *signals.redraw = true;
+  }
   const bool terminalAsciiProgress =
       !windowOriginEvent && isAsciiPlaybackMode(view.currentMode);
   const bool editExitConfirmation =
@@ -650,11 +670,17 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
           winW, winH, gridCols, gridRows, cellW, cellH);
       const int pixelX = mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
       const int pixelY = mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
-      const int localPixelX = pixelX - gridViewport.x;
-      const int localPixelY = pixelY - gridViewport.y;
-      if (localPixelX >= 0 && localPixelY >= 0 &&
-          localPixelX < gridViewport.width &&
-          localPixelY < gridViewport.height) {
+      const int rawLocalPixelX = pixelX - gridViewport.x;
+      const int rawLocalPixelY = pixelY - gridViewport.y;
+      const bool insideGrid =
+          rawLocalPixelX >= 0 && rawLocalPixelY >= 0 &&
+          rawLocalPixelX < gridViewport.width &&
+          rawLocalPixelY < gridViewport.height;
+      if (insideGrid || (dragFromThisSurface && leftPressed)) {
+        const int localPixelX =
+            std::clamp(rawLocalPixelX, 0, gridViewport.width - 1);
+        const int localPixelY =
+            std::clamp(rawLocalPixelY, 0, gridViewport.height - 1);
         hitMouse.pos.X = static_cast<SHORT>(std::clamp(
             static_cast<int>((static_cast<int64_t>(localPixelX) * gridCols) /
                              gridViewport.width),
@@ -710,6 +736,9 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
 
   double progressRatio = 0.0;
   bool progressHit = false;
+  int progressUnits = 0;
+  ProgressBarHitTestInput progressGeometry;
+  bool hasProgressGeometry = false;
   if (progressOutputState) {
     double unitWidth = 1.0;
     double unitHeight = 1.0;
@@ -721,28 +750,81 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
         unitHeight = view.screen->cellPixelHeight();
       }
     }
-    ProgressBarHitTestInput hit;
-    hit.x = hitMouse.hasPixelPosition ? hitMouse.pixelX : hitMouse.pos.X;
-    hit.y = hitMouse.hasPixelPosition ? hitMouse.pixelY : hitMouse.pos.Y;
-    hit.barX = progressOutputState->progressBarX;
-    hit.barY = progressOutputState->progressBarY;
-    hit.barWidth = progressOutputState->progressBarWidth;
-    hit.unitWidth = unitWidth;
-    hit.unitHeight = unitHeight;
-    progressHit = progressBarRatioAt(hit, &progressRatio);
+    progressGeometry.x =
+        hitMouse.hasPixelPosition ? hitMouse.pixelX : hitMouse.pos.X;
+    progressGeometry.y =
+        hitMouse.hasPixelPosition ? hitMouse.pixelY : hitMouse.pos.Y;
+    progressGeometry.barX = progressOutputState->progressBarX;
+    progressGeometry.barY = progressOutputState->progressBarY;
+    progressGeometry.barWidth = progressOutputState->progressBarWidth;
+    progressGeometry.unitWidth = unitWidth;
+    progressGeometry.unitHeight = unitHeight;
+    hasProgressGeometry = true;
+    progressUnits = progressOutputState->progressBarWidth;
+    progressHit = progressBarRatioAt(progressGeometry, &progressRatio);
   } else if (windowEvent && !editExitConfirmation) {
     progressHit = playback_overlay::windowOverlayProgressRatioAt(
         overlayVisibleForHitTest, view.videoWindow->GetWidth(),
         view.videoWindow->GetHeight(), hitMouse, windowTextCellW,
-        windowTextCellH, &progressRatio);
+        windowTextCellH, &progressRatio, &progressUnits);
+  }
+  if (dragFromThisSurface && leftPressed && !progressHit &&
+      !editExitConfirmation) {
+    if (hasProgressGeometry) {
+      const double unitWidth = std::max(1.0, progressGeometry.unitWidth);
+      const double unitHeight = std::max(1.0, progressGeometry.unitHeight);
+      const double left = progressGeometry.barX * unitWidth;
+      const double width = progressGeometry.barWidth * unitWidth;
+      progressGeometry.x =
+          std::clamp(progressGeometry.x, left,
+                     left + std::max(0.0, width - 1.0));
+      progressGeometry.y = progressGeometry.barY * unitHeight;
+      progressHit = progressBarRatioAt(progressGeometry, &progressRatio);
+    } else if (windowEvent) {
+      MouseEvent clampedMouse = hitMouse;
+      const int windowWidth = std::max(1, view.videoWindow->GetWidth());
+      const int windowHeight = std::max(1, view.videoWindow->GetHeight());
+      clampedMouse.pos.X = static_cast<SHORT>(
+          std::clamp(static_cast<int>(clampedMouse.pos.X), 0,
+                     windowWidth - 1));
+      clampedMouse.pos.Y = static_cast<SHORT>(windowHeight - 1);
+      progressHit = playback_overlay::windowOverlayProgressRatioAt(
+          overlayVisibleForHitTest, windowWidth, windowHeight, clampedMouse,
+          windowTextCellW, windowTextCellH, &progressRatio, &progressUnits);
+    }
   }
   if (progressHit) {
     triggerOverlay(view, signals);
     *signals.redraw = true;
   }
 
-  const bool leftPressed =
-      (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+  if (progressHit && leftPressed && !dragFromThisSurface &&
+      hitMouse.eventFlags == 0 && view.videoEdit && view.videoEdit->active &&
+      signals.moveVideoEditBoundary) {
+    const auto boundary = playback_video_edit::timelineBoundaryAt(
+        *view.videoEdit, progressRatio, progressUnits);
+    if (boundary) {
+      seekState.videoEditBoundaryDrag = boundary;
+      seekState.videoEditBoundaryDragFromWindow = windowOriginEvent;
+    }
+  }
+  const bool boundaryDrag =
+      seekState.videoEditBoundaryDrag &&
+      seekState.videoEditBoundaryDragFromWindow == windowOriginEvent;
+  if (progressHit && leftPressed && boundaryDrag) {
+    if (const auto targetUs =
+            playbackTimelineTargetForRatio(view, progressRatio)) {
+      signals.moveVideoEditBoundary(*seekState.videoEditBoundaryDrag,
+                                    *targetUs);
+    }
+    updateOverlayControlHover(signals, -1);
+    if (signals.requestTimelinePreview) {
+      signals.requestTimelinePreview(previewSurface, progressRatio,
+                                     progressUnits);
+    }
+    queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
+    return;
+  }
   const bool seekGesture =
       leftPressed && progressHit &&
       (windowEvent || hitMouse.eventFlags == 0 ||
@@ -750,15 +832,6 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   if (progressHit) {
     updateOverlayControlHover(signals, -1);
     if (signals.requestTimelinePreview) {
-      int progressUnits = 0;
-      if (progressOutputState) {
-        progressUnits = progressOutputState->progressBarWidth;
-      } else if (windowEvent) {
-        progressUnits = std::max(
-            1, playback_overlay::overlayCellCountForPixels(
-                   view.videoWindow->GetWidth(), windowTextCellW) -
-                   2);
-      }
       signals.requestTimelinePreview(previewSurface, progressRatio,
                                      progressUnits);
     }
@@ -807,6 +880,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   if (leftPressed && hitMouse.eventFlags == 0 && controlHit >= 0) {
     if (executeOverlayControl(view, signals, seekState, mouseOverlayState,
                               controlHit)) {
+      updateOverlayControlHover(signals, -1);
       if (*signals.loopStopRequested) {
         return;
       }
@@ -821,7 +895,10 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   }
 }
 
-void handlePlaybackPointerLeave(PlaybackInputSignals& signals) {
+void handlePlaybackPointerLeave(PlaybackInputSignals& signals,
+                                PlaybackSeekGestureState& seekState) {
+  seekState.videoEditBoundaryDrag.reset();
+  seekState.videoEditBoundaryDragFromWindow = false;
   if (signals.clearTimelinePreview) {
     signals.clearTimelinePreview(
         playback_video_timeline_preview::PresentationSurface::VideoWindow);

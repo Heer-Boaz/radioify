@@ -56,6 +56,8 @@ class Controller {
 
   bool active() const;
   bool hasUnexportedChanges() const;
+  bool moveBoundary(EditBoundary boundary, int64_t timelineUs,
+                    int64_t minimumSelectionDurationUs);
   CommandResult execute(Command command, const CommandContext& context);
   void completeSequenceEffect(const CommandResult& result, bool accepted);
   bool poll(std::string* message);

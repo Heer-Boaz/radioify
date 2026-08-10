@@ -29,4 +29,9 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
                                const ExportProgress* editExport, int width,
                                double timelineProgress);
 
+std::optional<EditBoundary> timelineBoundaryAt(const EditSnapshot& edit,
+                                               double timelineRatio,
+                                               int timelineWidth,
+                                               double grabRadiusCells = 1.0);
+
 }  // namespace playback_video_edit

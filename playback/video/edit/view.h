@@ -10,6 +10,11 @@ namespace playback_video_edit {
 
 using playback_video_sequence::SourceRange;
 
+enum class EditBoundary : uint8_t {
+  In,
+  Out,
+};
+
 struct EditClipSnapshot {
   SourceRange source;
   int64_t timelineStartUs = 0;

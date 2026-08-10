@@ -35,6 +35,8 @@ struct WindowUiState {
         std::string text;
         bool active = false;
         bool hovered = false;
+        int controlIndex = -1;
+        int priority = 0;
     };
 
     struct SubtitleCue {
@@ -372,6 +374,7 @@ private:
     RECT m_pipRestoreRect{};
     WindowDisplayLifecycle m_displayLifecycle;
     bool m_captureAllMouseInput = false;
+    bool m_leftMouseCaptureActive = false;
     std::atomic<bool> m_cursorVisible{true};
     WaitableSignal m_closeRequest;
     DWORD m_windowThreadId = 0;

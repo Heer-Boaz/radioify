@@ -50,6 +50,8 @@ class EditSession {
 
   void markIn(int64_t sourceUs);
   void markOut(int64_t sourceUsExclusive);
+  bool moveBoundary(EditBoundary boundary, int64_t timelineUs,
+                    int64_t minimumSelectionDurationUs);
 
   bool trimToSelection();
   bool rippleDeleteSelection();

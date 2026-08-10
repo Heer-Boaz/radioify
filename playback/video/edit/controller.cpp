@@ -87,6 +87,15 @@ bool Controller::hasUnexportedChanges() const {
   return impl_ && impl_->editView.dirty;
 }
 
+bool Controller::moveBoundary(EditBoundary boundary, int64_t timelineUs,
+                              int64_t minimumSelectionDurationUs) {
+  if (!impl_) return false;
+  const bool changed = impl_->session.moveBoundary(
+      boundary, timelineUs, minimumSelectionDurationUs);
+  if (changed) impl_->refreshView();
+  return changed;
+}
+
 CommandResult Controller::execute(Command command,
                                   const CommandContext& context) {
   CommandResult result;

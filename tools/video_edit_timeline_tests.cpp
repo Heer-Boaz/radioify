@@ -156,6 +156,38 @@ int main() {
                    std::optional<int64_t>(2'000'000),
                 "setting an identical mark must preserve the selection");
 
+  EditSession draggedIn;
+  draggedIn.activate(10'000'000);
+  draggedIn.markIn(2'000'000);
+  draggedIn.markOut(4'000'000);
+  ok &= expect(draggedIn.rippleDeleteSelection(),
+               "drag mapping setup must create a source gap");
+  ok &= expect(draggedIn.moveBoundary(playback_video_edit::EditBoundary::In,
+                                      2'000'000, 100'000) &&
+                   draggedIn.snapshot().inSourceUs ==
+                       std::optional<int64_t>(4'000'000),
+               "an In handle at a cut must bind to the following clip");
+
+  EditSession draggedOut;
+  draggedOut.activate(10'000'000);
+  draggedOut.markIn(2'000'000);
+  draggedOut.markOut(4'000'000);
+  ok &= expect(draggedOut.rippleDeleteSelection(),
+               "Out drag mapping setup must create a source gap");
+  ok &= expect(draggedOut.moveBoundary(playback_video_edit::EditBoundary::Out,
+                                       2'000'000, 100'000) &&
+                   draggedOut.snapshot().outSourceUs ==
+                       std::optional<int64_t>(2'000'000),
+               "an Out handle at a cut must bind to the preceding clip edge");
+  draggedOut.markIn(1'000'000);
+  ok &= expect(draggedOut.moveBoundary(playback_video_edit::EditBoundary::In,
+                                       3'000'000, 100'000) &&
+                   draggedOut.snapshot().inTimelineUs ==
+                       std::optional<int64_t>(1'900'000) &&
+                   draggedOut.snapshot().outTimelineUs ==
+                       std::optional<int64_t>(2'000'000),
+               "dragged boundaries must clamp instead of crossing");
+
   playback_video_edit::EditSnapshot overlayEdit;
   overlayEdit.active = true;
   overlayEdit.dirty = true;
@@ -234,6 +266,20 @@ int main() {
   ok &= expect(exitModel.status == "UNEXPORTED" &&
                    exitModel.status.size() <= 10,
                "exit confirmation must use a complete width-bounded state");
+
+  overlayEdit.active = true;
+  overlayEdit.exitConfirmation = false;
+  overlayEdit.timelineDurationUs = 10'000'000;
+  overlayEdit.inTimelineUs = 2'000'000;
+  overlayEdit.outTimelineUs = 8'000'000;
+  ok &= expect(playback_video_edit::timelineBoundaryAt(overlayEdit, 0.2, 80) ==
+                       playback_video_edit::EditBoundary::In &&
+                   playback_video_edit::timelineBoundaryAt(overlayEdit, 0.8,
+                                                            80) ==
+                       playback_video_edit::EditBoundary::Out &&
+                   !playback_video_edit::timelineBoundaryAt(overlayEdit, 0.5,
+                                                             80),
+               "boundary hit-testing must select only the nearest visible handle");
 
   return ok ? 0 : 1;
 }

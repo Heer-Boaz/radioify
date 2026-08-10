@@ -46,6 +46,7 @@ struct OverlayControlSpec {
   std::string renderText;
   bool active = false;
   int width = 0;
+  int priority = 0;
 };
 
 struct OverlayControlSpecOptions {
@@ -83,6 +84,7 @@ struct OverlayCellControlInput {
   bool active = false;
   bool hovered = false;
   int controlIndex = -1;
+  int priority = 0;
 };
 
 struct OverlayCellLayoutInput {
@@ -91,6 +93,7 @@ struct OverlayCellLayoutInput {
   std::string title;
   std::string suffix;
   int reservedRowsAboveProgress = 0;
+  bool singleLineControls = false;
   std::vector<OverlayCellControlInput> controls;
 };
 
@@ -243,7 +246,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
 
 OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
                                               const std::string& label,
-                                              bool active);
+                                              bool active,
+                                              int priority = 0);
 std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
     const std::vector<OverlayControlSpec>& specs, int hoverIndex);
 bool dispatchOverlayControl(OverlayControlId id,
@@ -286,7 +290,8 @@ inline bool isBackMousePressed(const MouseEvent& mouse) {
 bool windowOverlayProgressRatioAt(bool overlayVisible, int windowWidth,
                                   int windowHeight, const MouseEvent& mouse,
                                   int cellPixelWidth, int cellPixelHeight,
-                                  double* outRatio);
+                                  double* outRatio,
+                                  int* outProgressUnits = nullptr);
 
 WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
                                 int hoverIndex);
