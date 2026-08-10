@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <limits>
 #include <vector>
 
 extern "C" {
@@ -15,10 +16,15 @@ extern "C" {
 #include "playback/video/decoder.h"
 
 struct QueuedPacket {
+  static constexpr size_t kNoSequenceClip =
+      (std::numeric_limits<size_t>::max)();
+
   AVPacket pkt{};
   uint64_t serial = 0;
   bool flush = false;
   bool eof = false;
+  bool clipBoundary = false;
+  size_t sequenceClipIndex = kNoSequenceClip;
 };
 
 class PacketQueue {
@@ -26,10 +32,14 @@ class PacketQueue {
   void init(size_t maxBytesIn);
   void abortQueue();
   void flush();
-  void flush(uint64_t serial);
+  void flush(uint64_t serial,
+             size_t sequenceClipIndex = QueuedPacket::kNoSequenceClip);
   bool pushPacket(const AVPacket* pkt, uint64_t serial, bool allowBlock,
-                  const std::atomic<bool>* cancel, bool* queued);
-  bool pushFlush(uint64_t serial);
+                  const std::atomic<bool>* cancel, bool* queued,
+                  size_t sequenceClipIndex = QueuedPacket::kNoSequenceClip);
+  bool pushFlush(uint64_t serial,
+                 size_t sequenceClipIndex = QueuedPacket::kNoSequenceClip);
+  bool pushClipBoundary(uint64_t serial, size_t nextSequenceClipIndex);
   bool pushEof(uint64_t serial);
   bool pop(QueuedPacket* out);
   size_t size() const;
@@ -51,6 +61,8 @@ struct QueuedFrame {
   VideoReadInfo info{};
   double decodeMs = 0.0;
   uint64_t displayIndex = 0;
+  int64_t sourcePtsUs = 0;
+  int64_t sourceDurationUs = 0;
 };
 
 class FrameQueue {

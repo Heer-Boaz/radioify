@@ -66,10 +66,14 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
                                             ? TimelineCellKind::Kept
                                             : TimelineCellKind::Removed));
     }
-    model.playheadCell = std::clamp(
-        static_cast<int>(std::llround(std::clamp(sourceProgress, 0.0, 1.0) *
-                                     static_cast<double>(width - 1))),
-        0, width - 1);
+    model.playheadCell = edit.playheadSourceUs
+                             ? timelineCell(*edit.playheadSourceUs,
+                                            edit.sourceDurationUs, width)
+                             : std::clamp(static_cast<int>(std::llround(
+                                              std::clamp(sourceProgress, 0.0,
+                                                         1.0) *
+                                              static_cast<double>(width - 1))),
+                                          0, width - 1);
     if (edit.inUs) {
       model.inCell = timelineCell(*edit.inUs, edit.sourceDurationUs, width);
     }

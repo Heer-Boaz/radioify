@@ -51,8 +51,10 @@ struct SourceFrame {
   VideoFrame frame;
   VideoReadInfo info{};
   FrameIdentity identity;
+  int64_t ptsUs = 0;
   int64_t sourcePtsUs = 0;
   int64_t durationUs = 0;
+  int64_t sourceDurationUs = 0;
   double decodeMs = 0.0;
 };
 

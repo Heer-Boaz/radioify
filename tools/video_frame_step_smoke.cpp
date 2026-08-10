@@ -50,6 +50,7 @@ const char* stateName(PlayerState state) {
 
 void printDebug(const char* label, const Player& player,
                 const PlayerDebugInfo& info) {
+  const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
   std::cout << label << " state=" << stateName(info.state)
             << " serial=" << info.currentSerial
             << " pending_seek=" << info.pendingSeekSerial
@@ -59,7 +60,12 @@ void printDebug(const char* label, const Player& player,
             << " dur_us=" << info.lastPresentedDurationUs
             << " display_index=" << info.lastPresentedDisplayIndex
             << " queue=" << info.videoQueueDepth
-            << " has_frame=" << (info.hasVideoFrame ? 1 : 0) << '\n';
+            << " has_frame=" << (info.hasVideoFrame ? 1 : 0)
+            << " presentation_us=" << timeline.positionUs
+            << " source_us=" << timeline.sourcePositionUs
+            << " presentation_duration_us=" << player.durationUs()
+            << " source_duration_us=" << player.sourceDurationUs()
+            << " seek_pending=" << (timeline.seekPending() ? 1 : 0) << '\n';
 }
 
 bool parseInt64(const char* value, int64_t* out) {
@@ -90,7 +96,8 @@ bool parsePositiveSize(const char* value, size_t* out) {
 
 template <typename Predicate>
 bool waitFor(Player& player, int timeoutMs, const char* label,
-             Predicate predicate, PlayerDebugInfo* out = nullptr) {
+             Predicate predicate, PlayerDebugInfo* out = nullptr,
+             const char* expected = nullptr) {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
   PlayerDebugInfo last{};
@@ -105,7 +112,11 @@ bool waitFor(Player& player, int timeoutMs, const char* label,
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
-  std::cerr << "video_frame_step_smoke: timeout waiting for " << label << '\n';
+  std::cerr << "video_frame_step_smoke: timeout waiting for " << label;
+  if (expected) {
+    std::cerr << "; expected " << expected;
+  }
+  std::cerr << '\n';
   printDebug("last", player, last);
   return false;
 }
@@ -346,7 +357,8 @@ class AudioRuntime {
 bool requestAndObserveFrameStep(
     Player& player, bool audioEnabled,
     playback_video_frame_step::Direction direction, const std::string& label,
-    const int64_t* expectedPtsUs, ObservedFrameStep* current) {
+    const int64_t* expectedPtsUs, ObservedFrameStep* current,
+    bool previousDiscoveryUsesBoundaryAnchor = false) {
   if (!current) {
     return false;
   }
@@ -396,7 +408,14 @@ bool requestAndObserveFrameStep(
               << " actual_pts_us=" << observed.lastPresentedPtsUs << '\n';
     return false;
   }
-  if (!expectFrameStepTransition(audioEnabled, observed.lastPresentedPtsUs,
+  const bool seekBackedPreviousDiscovery =
+      previousDiscoveryUsesBoundaryAnchor &&
+      direction == playback_video_frame_step::Direction::Previous &&
+      observed.currentSerial != beforeSerial;
+  const int64_t audioTargetUs = seekBackedPreviousDiscovery
+                                    ? beforePtsUs
+                                    : observed.lastPresentedPtsUs;
+  if (!expectFrameStepTransition(audioEnabled, audioTargetUs,
                                  beforeSerial, observed.currentSerial,
                                  beforeAudioReset, label.c_str())) {
     return false;
@@ -427,7 +446,7 @@ int main(int argc, char** argv) {
                  "rapid-resume, resume-during-step, burst-previous, "
                  "burst-forward, alternating, seek-alternating, "
                  "seek-step-overlap, "
-                 "ended-replay\n";
+                 "ended-replay, sequence\n";
     return 2;
   }
 
@@ -459,9 +478,11 @@ int main(int argc, char** argv) {
       playback_video_frame_step::Direction::Previous;
   bool replayAfterEnd = false;
   bool verifyStartup = false;
+  bool verifySequence = false;
   if (argc >= 5) {
     const std::string mode = argv[4];
     verifyStartup = mode == "startup";
+    verifySequence = mode == "sequence";
     resumeAfterPrevious = mode == "resume";
     resumeAfterForward = mode == "forward-resume";
     resumeAfterMixed = mode == "mixed-resume";
@@ -475,7 +496,8 @@ int main(int argc, char** argv) {
       burstDirection = playback_video_frame_step::Direction::Next;
     }
     replayAfterEnd = mode == "ended-replay";
-    if (!verifyStartup && !resumeAfterPrevious && !resumeAfterForward &&
+    if (!verifyStartup && !verifySequence && !resumeAfterPrevious &&
+        !resumeAfterForward &&
         !resumeAfterMixed && !rapidResume && !resumeDuringStep && !burstSteps &&
         !alternatingSteps && !seekAlternatingSteps && !seekStepOverlap &&
         !replayAfterEnd) {
@@ -484,7 +506,7 @@ int main(int argc, char** argv) {
                 << "'mixed-resume', 'rapid-resume', or "
                 << "'resume-during-step', 'burst-previous', "
                 << "'burst-forward', 'alternating', 'seek-alternating', "
-                << "'seek-step-overlap', or 'ended-replay')\n";
+                << "'seek-step-overlap', 'ended-replay', or 'sequence')\n";
       return 2;
     }
   }
@@ -559,6 +581,206 @@ int main(int argc, char** argv) {
     }
     std::cout << "video_frame_step_smoke: PASS startup_pts_us=0\n";
     player.close();
+    return 0;
+  }
+
+  if (verifySequence) {
+    const int64_t sourceDurationUs = player.sourceDurationUs();
+    if (sourceDurationUs < 5'000'000) {
+      std::cerr << "video_frame_step_smoke: sequence mode requires at least "
+                   "five seconds of media; source_duration_us="
+                << sourceDurationUs << '\n';
+      return 1;
+    }
+    const std::vector<playback_video_sequence::SourceRange> ranges{
+        {1'000'000, 2'000'000}, {4'000'000, 5'000'000}};
+    if (!waitFor(player, kDefaultTimeoutMs, "sequence_startup",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > 0 &&
+                          info.state == PlayerState::Playing;
+                 }, nullptr,
+                 "playing state with at least one presented source frame")) {
+      return 1;
+    }
+    player.setVideoPaused(true);
+    if (!waitFor(player, kDefaultTimeoutMs, "sequence_paused",
+                 [](const PlayerDebugInfo& info) {
+                   return info.state == PlayerState::Paused;
+                 }, nullptr, "paused state before changing the sequence")) {
+      return 1;
+    }
+    const uint64_t beforeSequenceCounter = player.videoFrameCounter();
+    const int beforeSequenceSerial = player.debugInfo().currentSerial;
+    const AudioStreamReset beforeSequenceAudioReset =
+        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+    if (!player.setPlaybackSequence(ranges)) {
+      std::cerr << "video_frame_step_smoke: player rejected the immutable "
+                   "sequence; source_duration_us="
+                << sourceDurationUs << " range_count=" << ranges.size()
+                << '\n';
+      return 1;
+    }
+    PlayerDebugInfo firstClip{};
+    if (!waitFor(
+            player, kDefaultTimeoutMs, "sequence_first_clip",
+            [&](const PlayerDebugInfo& info) {
+              const PlayerTimelineSnapshot timeline =
+                  player.timelineSnapshot();
+              return player.durationUs() == 2'000'000 &&
+                     player.videoFrameCounter() > beforeSequenceCounter &&
+                     !timeline.seekPending() &&
+                     timeline.sourcePositionUs >= 1'000'000 &&
+                     timeline.sourcePositionUs < 2'000'000 &&
+                     info.hasVideoFrame;
+            },
+            &firstClip,
+            "a two-second edited timeline presenting source [1s,2s) with no "
+            "seek pending")) {
+      return 1;
+    }
+    if (!expectSerialTransition(
+            audioEnabled, 0, beforeSequenceSerial,
+            firstClip.currentSerial, beforeSequenceAudioReset,
+            "sequence_apply")) {
+      return 1;
+    }
+    const AudioStreamReset sequenceAudioReset =
+        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+    constexpr size_t kStepsAcrossCut = 40;
+    for (size_t step = 0; step < kStepsAcrossCut; ++step) {
+      if (!player.requestFrameStep(
+              playback_video_frame_step::Direction::Next)) {
+        const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+        std::cerr << "video_frame_step_smoke: forward sequence frame-step "
+                     "rejected at request="
+                  << (step + 1) << " presentation_us=" << timeline.positionUs
+                  << " source_us=" << timeline.sourcePositionUs << '\n';
+        return 1;
+      }
+    }
+
+    PlayerDebugInfo afterCut{};
+    if (!waitFor(
+            player, kDefaultTimeoutMs, "sequence_second_clip",
+            [&](const PlayerDebugInfo& info) {
+              const PlayerTimelineSnapshot timeline =
+                  player.timelineSnapshot();
+              return player.durationUs() == 2'000'000 &&
+                     player.videoFrameCounter() >=
+                         beforeSequenceCounter + 1 + kStepsAcrossCut &&
+                     !timeline.seekPending() &&
+                     timeline.positionUs >= 1'000'000 &&
+                     timeline.sourcePositionUs >= 4'000'000 &&
+                     info.hasVideoFrame;
+            },
+            &afterCut,
+            "40 accepted next-frame steps presenting source [4s,5s) on the "
+            "same edited timeline")) {
+      return 1;
+    }
+    PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+    const int64_t mappedSourceUs =
+        4'000'000 + timeline.positionUs - 1'000'000;
+    const int64_t mappingErrorUs =
+        std::llabs(timeline.sourcePositionUs - mappedSourceUs);
+    if (mappingErrorUs >
+        std::max<int64_t>(afterCut.lastPresentedDurationUs, 50'000)) {
+      std::cerr << "video_frame_step_smoke: sequence source/presentation "
+                   "mapping diverged presentation_us="
+                << timeline.positionUs
+                << " source_us=" << timeline.sourcePositionUs
+                << " error_us=" << mappingErrorUs << '\n';
+      return 1;
+    }
+    if (audioEnabled) {
+      const AudioStreamReset afterCutReset = audioStreamLastAppliedReset();
+      if (afterCutReset.generation != sequenceAudioReset.generation ||
+          afterCutReset.serial != sequenceAudioReset.serial) {
+        std::cerr << "video_frame_step_smoke: clip boundary incorrectly "
+                     "reset the audio timeline; before_generation="
+                  << sequenceAudioReset.generation
+                  << " after_generation=" << afterCutReset.generation
+                  << " before_serial=" << sequenceAudioReset.serial
+                  << " after_serial=" << afterCutReset.serial << '\n';
+        return 1;
+      }
+    }
+
+    constexpr size_t kStepsBackAcrossCut = 20;
+    ObservedFrameStep reverse{
+        afterCut.lastPresentedPtsUs, afterCut.currentSerial,
+        player.videoFrameCounter()};
+    for (size_t step = 0; step < kStepsBackAcrossCut; ++step) {
+      const std::string label =
+          "sequence_reverse_" + std::to_string(step + 1);
+      if (!requestAndObserveFrameStep(
+              player, audioEnabled,
+              playback_video_frame_step::Direction::Previous, label,
+              nullptr, &reverse, true)) {
+        return 1;
+      }
+    }
+    const PlayerDebugInfo beforeCut = player.debugInfo();
+    timeline = player.timelineSnapshot();
+    if (timeline.positionUs >= 1'000'000 ||
+        timeline.sourcePositionUs >= 2'000'000) {
+      std::cerr << "video_frame_step_smoke: reverse sequence steps did not "
+                   "cross the edit; presentation_us="
+                << timeline.positionUs
+                << " source_us=" << timeline.sourcePositionUs
+                << " step_count=" << kStepsBackAcrossCut << '\n';
+      return 1;
+    }
+    const int64_t reverseMappingErrorUs =
+        std::llabs(timeline.sourcePositionUs -
+                   (1'000'000 + timeline.positionUs));
+    if (reverseMappingErrorUs >
+        std::max<int64_t>(beforeCut.lastPresentedDurationUs, 50'000)) {
+      std::cerr << "video_frame_step_smoke: reverse sequence mapping "
+                   "diverged presentation_us="
+                << timeline.positionUs
+                << " source_us=" << timeline.sourcePositionUs
+                << " error_us=" << reverseMappingErrorUs << '\n';
+      return 1;
+    }
+
+    const AudioStreamReset beforeResumeAudioReset =
+        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+    const int resumeSerial = reverse.serial;
+    const int64_t resumeTargetUs = reverse.ptsUs;
+    const uint64_t beforeResumeCounter = reverse.frameCounter;
+    player.setVideoPaused(false);
+    PlayerDebugInfo resumed{};
+    if (!waitFor(
+            player, kDefaultTimeoutMs, "sequence_resume_across_cut",
+            [&](const PlayerDebugInfo& info) {
+              const PlayerTimelineSnapshot current =
+                  player.timelineSnapshot();
+              return info.state == PlayerState::Playing &&
+                     player.videoFrameCounter() > beforeResumeCounter &&
+                     !current.seekPending() &&
+                     current.positionUs >= 1'000'000 &&
+                     current.sourcePositionUs >= 4'000'000 &&
+                     info.hasVideoFrame;
+            },
+            &resumed,
+            "resumed playback crossing into source [4s,5s) without a pending "
+            "seek")) {
+      return 1;
+    }
+    if (!expectSerialTransition(
+            audioEnabled, resumeTargetUs, resumeSerial,
+            resumed.currentSerial, beforeResumeAudioReset,
+            "sequence_resume_across_cut")) {
+      return 1;
+    }
+    timeline = player.timelineSnapshot();
+    std::cout << "video_frame_step_smoke: PASS sequence presentation_us="
+              << timeline.positionUs
+              << " source_us=" << timeline.sourcePositionUs
+              << " forward_steps=" << kStepsAcrossCut
+              << " reverse_steps=" << kStepsBackAcrossCut << '\n';
     return 0;
   }
 

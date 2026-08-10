@@ -21,6 +21,7 @@ int main() {
   using playback_video_edit::EditSession;
   using playback_video_edit::SourceRange;
   using playback_video_edit::Timeline;
+  using SequenceTimeline = playback_video_sequence::Timeline;
 
   bool ok = true;
   Timeline timeline(10'000'000);
@@ -34,6 +35,29 @@ int main() {
                "middle removal must produce two source clips");
   ok &= expect(timeline.outputDurationUs() == 8'000'000,
                "ripple deletion must close the sequence gap");
+  const auto sequence =
+      SequenceTimeline::create(timeline.sourceDurationUs(),
+                               timeline.keptRanges());
+  ok &= expect(sequence && sequence->durationUs() == 8'000'000,
+               "the playback sequence must derive the ripple duration");
+  if (sequence) {
+    const playback_video_sequence::Point afterCut =
+        sequence->pointAt(3'000'000);
+    ok &= expect(afterCut.clipIndex == 1 &&
+                     afterCut.sourceUs == 5'000'000 &&
+                     afterCut.presentationUs == 3'000'000,
+                 "presentation time must cross a cut without a time gap");
+    const auto removedForward = sequence->pointForSource(
+        4'000'000, playback_video_sequence::SourceBias::Forward);
+    const auto removedBackward = sequence->pointForSource(
+        4'000'000, playback_video_sequence::SourceBias::Backward);
+    ok &= expect(removedForward && removedForward->sourceUs == 5'000'000 &&
+                     removedForward->presentationUs == 3'000'000,
+                 "a removed source point must resolve to the next clip");
+    ok &= expect(removedBackward && removedBackward->sourceUs == 3'000'000 &&
+                     removedBackward->presentationUs == 3'000'000,
+                 "backward source resolution must select the previous cut edge");
+  }
   ok &= expect(timeline.nextKeptSourceTime(4'000'000) ==
                    std::optional<int64_t>(5'000'000),
                "forward navigation must cross a removed source range");

@@ -25,7 +25,9 @@ struct PresentedFrame {
       sourceFrame;
   VideoReadInfo info{};
   int64_t ptsUs = 0;
+  int64_t sourcePtsUs = 0;
   int64_t durationUs = 0;
+  int64_t sourceDurationUs = 0;
   uint64_t serial = 0;
   uint64_t displayIndex = 0;
   uint64_t logicalIndex = 0;

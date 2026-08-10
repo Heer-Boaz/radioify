@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <optional>
 #include <string>
 
 #include "playback/video/edit/timeline.h"
@@ -33,8 +32,15 @@ struct CommandContext {
 };
 
 struct CommandResult {
+  enum class SequenceEffect : uint8_t {
+    None,
+    Apply,
+    Clear,
+  };
+
   bool handled = false;
-  std::optional<int64_t> seekTargetUs;
+  SequenceEffect sequenceEffect = SequenceEffect::None;
+  bool deactivateAfterSequenceClear = false;
   std::string message;
 };
 
@@ -50,6 +56,7 @@ class Controller {
 
   bool active() const;
   CommandResult execute(Command command, const CommandContext& context);
+  void completeSequenceEffect(const CommandResult& result, bool accepted);
   bool poll(std::string* message);
   void stop();
 

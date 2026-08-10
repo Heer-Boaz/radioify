@@ -9,17 +9,17 @@ namespace {
 
 int64_t frameEndUs(const SourceFrame& frame) {
   if (frame.durationUs <= 0 ||
-      frame.sourcePtsUs >
-          (std::numeric_limits<int64_t>::max)() - frame.durationUs) {
-    return frame.sourcePtsUs;
+      frame.ptsUs > (std::numeric_limits<int64_t>::max)() - frame.durationUs) {
+    return frame.ptsUs;
   }
-  return frame.sourcePtsUs + frame.durationUs;
+  return frame.ptsUs + frame.durationUs;
 }
 
 bool validFrame(const std::shared_ptr<const SourceFrame>& frame) {
-  return frame && frame->sourcePtsUs >= 0 && frame->durationUs > 0 &&
+  return frame && frame->ptsUs >= 0 && frame->sourcePtsUs >= 0 &&
+         frame->durationUs > 0 && frame->sourceDurationUs > 0 &&
          frame->identity.ptsUs == frame->sourcePtsUs &&
-         frame->identity.durationUs == frame->durationUs;
+         frame->identity.durationUs == frame->sourceDurationUs;
 }
 
 template <typename Nodes>
@@ -86,7 +86,8 @@ bool SourceFrameCache::commitDecodedRun(
     }
     if (!runIdentities.empty()) {
       const auto& previous = run[runIdentities.size() - 1];
-      if (frame->sourcePtsUs < previous->sourcePtsUs) {
+      if (frame->ptsUs < previous->ptsUs ||
+          frame->sourcePtsUs < previous->sourcePtsUs) {
         return false;
       }
     }
@@ -116,7 +117,8 @@ bool SourceFrameCache::commitDecodedRun(
     if (left == committed.end() || right == committed.end()) {
       return false;
     }
-    if (right->frame->sourcePtsUs < left->frame->sourcePtsUs) {
+    if (right->frame->ptsUs < left->frame->ptsUs ||
+        right->frame->sourcePtsUs < left->frame->sourcePtsUs) {
       return false;
     }
     if ((left->next && !sameIdentity(*left->next, right->frame->identity)) ||
@@ -162,8 +164,7 @@ FrameWindow SourceFrameCache::windowAround(const FrameIdentity& anchorIdentity,
     }
     before.push_back(previous->frame);
     cursor = &*previous;
-    if (anchor->frame->sourcePtsUs - cursor->frame->sourcePtsUs >=
-        beforeDurationUs) {
+    if (anchor->frame->ptsUs - cursor->frame->ptsUs >= beforeDurationUs) {
       break;
     }
   }

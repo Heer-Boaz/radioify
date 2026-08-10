@@ -228,6 +228,10 @@ struct PlaybackLoopRunner::Impl {
 
   void syncVideoEditView(bool requestPresent = true) {
     videoEditSnapshot = videoEditor.edit();
+    if (videoEditSnapshot.active) {
+      videoEditSnapshot.playheadSourceUs =
+          core.player().timelineSnapshot().sourcePositionUs;
+    }
     videoEditExportProgress = videoEditor.exportProgress();
     if (!requestPresent) return;
     redraw = true;
@@ -245,12 +249,13 @@ struct PlaybackLoopRunner::Impl {
     const auto command = videoEditCommandFor(action);
     if (!command) return false;
 
-    const int64_t durationUs = core.player().durationUs();
+    const int64_t durationUs = core.player().sourceDurationUs();
     const PlayerTimelineSnapshot timeline = core.player().timelineSnapshot();
     playback_video_edit::CommandContext context;
     context.sourceDurationUs = durationUs;
     context.playheadUs = std::clamp(
-        timeline.positionUs, int64_t{0}, std::max<int64_t>(0, durationUs));
+        timeline.sourcePositionUs, int64_t{0},
+        std::max<int64_t>(0, durationUs));
     context.frameDurationUs =
         std::max<int64_t>(1, core.player().debugInfo().lastPresentedDurationUs);
     context.videoStreamIndex = core.player().videoStreamIndex();
@@ -258,9 +263,25 @@ struct PlaybackLoopRunner::Impl {
 
     const playback_video_edit::CommandResult result =
         videoEditor.execute(*command, context);
-    if (result.seekTargetUs) core.player().requestSeek(*result.seekTargetUs);
+    std::string message = result.message;
+    bool sequenceAccepted = true;
+    if (result.sequenceEffect ==
+        playback_video_edit::CommandResult::SequenceEffect::Apply) {
+      if (!core.player().setPlaybackSequence(
+              videoEditor.edit().keptRanges)) {
+        sequenceAccepted = false;
+        message = "Edits retained; sequence preview is unavailable";
+      }
+    } else if (result.sequenceEffect ==
+               playback_video_edit::CommandResult::SequenceEffect::Clear) {
+      if (!core.player().clearPlaybackSequence()) {
+        sequenceAccepted = false;
+        message = "Editor remains open; source preview is unavailable";
+      }
+    }
+    videoEditor.completeSequenceEffect(result, sequenceAccepted);
     syncVideoEditView();
-    if (!result.message.empty()) showEditMessage(result.message);
+    if (!message.empty()) showEditMessage(message);
     return result.handled;
   }
 
@@ -902,6 +923,10 @@ struct PlaybackLoopRunner::Impl {
 
   RefreshState refreshState() {
     RefreshState state;
+    if (videoEditSnapshot.active) {
+      videoEditSnapshot.playheadSourceUs =
+          core.player().timelineSnapshot().sourcePositionUs;
+    }
     state.useWindowPresenter = output.windowActive();
     state.presented =
         core.refresh(state.useWindowPresenter, output.windowActive(), redraw);

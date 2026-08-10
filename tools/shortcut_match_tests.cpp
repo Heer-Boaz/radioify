@@ -1094,8 +1094,10 @@ int main() {
                             int width = 0) {
     auto frame =
         std::make_shared<playback_video_frame_step_prefetch::SourceFrame>();
+    frame->ptsUs = ptsUs;
     frame->sourcePtsUs = ptsUs;
     frame->durationUs = durationUs;
+    frame->sourceDurationUs = durationUs;
     frame->info.sourcePtsTicks = sourcePtsTicks;
     frame->info.sourceDtsTicks = sourceDtsTicks;
     frame->info.timestamp100ns = ptsUs * 10;
@@ -1110,6 +1112,17 @@ int main() {
   auto makeTickFrame = [&](int64_t tick, int64_t dts = -1, int width = 0) {
     return makeSourceFrame(tick * 10000, 10000, tick, dts >= 0 ? dts : tick,
                            width);
+  };
+  auto makeSequenceFrame = [&](int64_t presentationPtsUs,
+                               int64_t sourcePtsUs, int64_t sourceTick) {
+    auto frame = makeSourceFrame(presentationPtsUs, 10000, sourceTick,
+                                 sourceTick);
+    frame->sourcePtsUs = sourcePtsUs;
+    frame->info.timestamp100ns = sourcePtsUs * 10;
+    frame->identity = playback_video_frame_step_prefetch::identityFrom(
+        frame->info, sourcePtsUs, frame->sourceDurationUs);
+    frame->frame.timestamp100ns = sourcePtsUs * 10;
+    return frame;
   };
 
   playback_video_frame_step_prefetch::SourceFrameCache sourceCache;
@@ -1163,6 +1176,38 @@ int main() {
                  reversedCache.empty(),
              "A cache transaction must not manufacture forward adjacency to an "
              "earlier timestamp");
+  playback_video_frame_step_prefetch::SourceFrameCache sequenceCache;
+  auto secondClipJoin = makeSequenceFrame(1000000, 4000000, 400);
+  std::vector<
+      std::shared_ptr<const playback_video_frame_step_prefetch::SourceFrame>>
+      firstClipTail{makeSequenceFrame(980000, 1980000, 198),
+                    makeSequenceFrame(990000, 1990000, 199)};
+  ok &= expect(
+      sequenceCache.commitDecodedRun(
+          playback_video_frame_step::Direction::Previous,
+          secondClipJoin->identity, secondClipJoin, firstClipTail),
+      "A previous-frame cache run must join adjacent presentation clips "
+      "across a removed source interval");
+  playback_video_frame_step_prefetch::FrameWindow sequenceWindow =
+      sequenceCache.windowAround(secondClipJoin->identity, 1000000, 0, 20);
+  ok &= expect(sequenceWindow.valid() && sequenceWindow.anchorIndex == 2 &&
+                   sequenceWindow.frames.front()->ptsUs == 980000 &&
+                   sequenceWindow.frames.front()->sourcePtsUs == 1980000,
+               "Sequence cache traversal must use presentation adjacency "
+               "without inventing continuous source timestamps");
+
+  playback_video_frame_step_prefetch::SourceFrameCache forwardSequenceCache;
+  auto firstClipJoin = makeSequenceFrame(990000, 1990000, 199);
+  std::vector<
+      std::shared_ptr<const playback_video_frame_step_prefetch::SourceFrame>>
+      secondClipHead{makeSequenceFrame(1000000, 4000000, 400),
+                     makeSequenceFrame(1010000, 4010000, 401)};
+  ok &= expect(
+      forwardSequenceCache.commitDecodedRun(
+          playback_video_frame_step::Direction::Next, firstClipJoin->identity,
+          firstClipJoin, secondClipHead),
+      "A next-frame cache run must join adjacent presentation clips across a "
+      "removed source interval");
   playback_video_frame_step_prefetch::FrameWindow duplicatePtsWindow =
       sourceCache.windowAround(join10->identity, 0, 100000, 20);
   ok &= expect(duplicatePtsWindow.valid() &&
@@ -1175,7 +1220,9 @@ int main() {
   prefetchedCursor.resetForSerial(1);
   QueuedFrame prefetchedCurrent{};
   prefetchedCurrent.ptsUs = 100000;
+  prefetchedCurrent.sourcePtsUs = 100000;
   prefetchedCurrent.durationUs = 10000;
+  prefetchedCurrent.sourceDurationUs = 10000;
   prefetchedCurrent.serial = 1;
   prefetchedCurrent.displayIndex = 1;
   prefetchedCurrent.info.sourcePtsTicks = 10;

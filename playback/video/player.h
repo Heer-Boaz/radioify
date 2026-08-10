@@ -11,6 +11,7 @@
 #include "playback/video/frame_step.h"
 #include "playback/video/state/types.h"
 #include "playback/video/timing/clock_source.h"
+#include "playback/video/sequence.h"
 
 struct PlayerConfig {
   std::filesystem::path file;
@@ -53,6 +54,7 @@ struct PlayerDebugInfo {
 
 struct PlayerTimelineSnapshot {
   int64_t positionUs = 0;
+  int64_t sourcePositionUs = 0;
   int serial = 0;
   uint64_t latestSeekRequestGeneration = 0;
   uint64_t handledSeekRequestGeneration = 0;
@@ -75,6 +77,9 @@ class Player {
   bool requestSeek(int64_t targetUs);
   bool requestRelativeSeek(int64_t deltaUs);
   bool requestFrameStep(playback_video_frame_step::Direction direction);
+  bool setPlaybackSequence(
+      const std::vector<playback_video_sequence::SourceRange>& ranges);
+  bool clearPlaybackSequence();
   void requestResize(int targetW, int targetH);
   void setVideoPaused(bool paused);
   size_t audioTrackCount() const;
@@ -98,6 +103,7 @@ class Player {
   PlayerDebugInfo debugInfo() const;
 
   int64_t durationUs() const;
+  int64_t sourceDurationUs() const;
   int64_t currentUs() const;
   PlayerTimelineSnapshot timelineSnapshot() const;
 

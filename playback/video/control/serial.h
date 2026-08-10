@@ -16,6 +16,7 @@ struct TransitionPlan {
   bool valid = false;
   int serial = 0;
   int64_t displayTargetUs = 0;
+  int64_t sourceTargetUs = 0;
   int64_t demuxTargetUs = 0;
   int64_t demuxWindowEndUs = 0;
   int64_t decoderPrerollTargetUs = 0;
@@ -29,6 +30,7 @@ struct PendingSeek {
   int64_t demuxTargetUs = 0;
   int64_t demuxWindowEndUs = 0;
   int64_t displayTargetUs = 0;
+  int64_t sourceTargetUs = 0;
   int64_t decoderPrerollTargetUs = 0;
   DemuxSeekMode demuxSeekMode = DemuxSeekMode::Timeline;
 };
@@ -86,6 +88,13 @@ class Controller {
                                  int64_t decoderPrerollTargetUs,
                                  DemuxSeekMode demuxSeekMode,
                                  bool initDone, bool running);
+  TransitionPlan beginTransition(int64_t displayTargetUs,
+                                 int64_t sourceTargetUs,
+                                 int64_t demuxTargetUs,
+                                 int64_t demuxWindowEndUs,
+                                 int64_t decoderPrerollTargetUs,
+                                 DemuxSeekMode demuxSeekMode,
+                                 bool initDone, bool running);
   PendingSeek claimPendingSeek();
   bool applySeekResult(int serial, int resultCode);
   void clearSeekFailure();
@@ -109,6 +118,7 @@ class Controller {
   std::atomic<bool> seekFailed_{false};
   std::atomic<bool> seekPending_{false};
   std::atomic<int64_t> seekTargetUs_{0};
+  std::atomic<int64_t> sourceTargetUs_{0};
   std::atomic<int64_t> demuxWindowEndUs_{0};
   std::atomic<int64_t> presentationTargetUs_{0};
   std::atomic<int64_t> decoderPrerollTargetUs_{0};

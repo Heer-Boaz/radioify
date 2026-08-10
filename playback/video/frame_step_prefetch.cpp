@@ -197,8 +197,8 @@ struct Prefetcher::Impl {
   }
 
   SnapshotResult retain(const VideoFrame& decoded, const VideoReadInfo& info,
-                        int64_t sourcePtsUs, int64_t durationUs,
-                        double decodeMs,
+                        int64_t sourcePtsUs, int64_t sourceDurationUs,
+                        const Request& request, double decodeMs,
                         std::shared_ptr<const SourceFrame>* out) {
     if (!out) {
       return SnapshotResult::Failed;
@@ -210,11 +210,26 @@ struct Prefetcher::Impl {
     if (result != SnapshotResult::Ok) {
       return result;
     }
+    const int64_t presentationDurationUs =
+        (std::min)(sourceDurationUs,
+                   request.sourceRangeEndUs - sourcePtsUs);
+    if (presentationDurationUs <= 0 ||
+        (request.presentationOffsetUs > 0 &&
+         sourcePtsUs > (std::numeric_limits<int64_t>::max)() -
+                           request.presentationOffsetUs) ||
+        (request.presentationOffsetUs < 0 &&
+         (request.presentationOffsetUs ==
+              (std::numeric_limits<int64_t>::min)() ||
+          sourcePtsUs < -request.presentationOffsetUs))) {
+      return SnapshotResult::Failed;
+    }
     retained->info = info;
+    retained->ptsUs = sourcePtsUs + request.presentationOffsetUs;
     retained->sourcePtsUs = sourcePtsUs;
-    retained->durationUs = durationUs;
+    retained->durationUs = presentationDurationUs;
+    retained->sourceDurationUs = sourceDurationUs;
     retained->decodeMs = decodeMs;
-    retained->identity = identityFrom(info, sourcePtsUs, durationUs);
+    retained->identity = identityFrom(info, sourcePtsUs, sourceDurationUs);
     *out = std::move(retained);
     return SnapshotResult::Ok;
   }
@@ -233,12 +248,15 @@ struct Prefetcher::Impl {
 
     const bool previous =
         request.direction == playback_video_frame_step::Direction::Previous;
-    bool joined = !previous && request.joinCached && decoderTailIdentity &&
-                  sameIdentity(*decoderTailIdentity, request.join.identity);
-    const bool decoderSeeked = !joined;
+    const bool discontinuous = request.discontinuousJoin;
+    bool joined = discontinuous ||
+                  (!previous && request.joinCached && decoderTailIdentity &&
+                   sameIdentity(*decoderTailIdentity, request.join.identity));
+    const bool decoderSeeked = discontinuous || !joined;
     if (decoderSeeked) {
       const int64_t seekUs =
-          previous ? request.rangeStartUs : request.join.sourcePtsUs;
+          discontinuous || previous ? request.sourceRangeStartUs
+                                    : request.join.sourcePtsUs;
       int64_t seek100ns = 0;
       if (!microsecondsTo100ns(seekUs, &seek100ns) ||
           !decoder.seekToTimestamp100ns(seek100ns)) {
@@ -277,12 +295,43 @@ struct Prefetcher::Impl {
       const FrameIdentity identity = identityFrom(info, ptsUs, durationUs);
       decoderTailIdentity = identity;
 
+      if (discontinuous) {
+        if (ptsUs < request.sourceRangeStartUs) {
+          continue;
+        }
+        if (ptsUs >= request.sourceRangeEndUs) {
+          decodeComplete = true;
+          continue;
+        }
+
+        const bool alreadyStaged = std::any_of(
+            stagedFrames.begin(), stagedFrames.end(),
+            [&](const std::shared_ptr<const SourceFrame>& candidate) {
+              return sameIdentity(candidate->identity, identity);
+            });
+        if (alreadyStaged) {
+          return false;
+        }
+        std::shared_ptr<const SourceFrame> retained;
+        const SnapshotResult retainResult =
+            retain(decoded, info, ptsUs, durationUs, request, decodeMs,
+                   &retained);
+        if (retainResult != SnapshotResult::Ok) {
+          return false;
+        }
+        stagedFrames.push_back(std::move(retained));
+        if (frameEndUs(ptsUs, durationUs) >= request.sourceRangeEndUs) {
+          decodeComplete = true;
+        }
+        continue;
+      }
+
       if (!joined) {
         if (sameIdentity(identity, request.join.identity)) {
           joined = true;
           if (!request.joinCached) {
             const SnapshotResult retainResult =
-                retain(decoded, info, ptsUs, durationUs, decodeMs,
+                retain(decoded, info, ptsUs, durationUs, request, decodeMs,
                        &stagedJoinFrame);
             if (retainResult != SnapshotResult::Ok) {
               return false;
@@ -301,8 +350,7 @@ struct Prefetcher::Impl {
           return false;
         }
 
-        if (!previous ||
-            frameEndUs(ptsUs, durationUs) <= request.rangeStartUs) {
+        if (!previous || ptsUs < request.sourceRangeStartUs) {
           continue;
         }
       }
@@ -323,7 +371,8 @@ struct Prefetcher::Impl {
         }
         std::shared_ptr<const SourceFrame> retained;
         const SnapshotResult retainResult =
-            retain(decoded, info, ptsUs, durationUs, decodeMs, &retained);
+            retain(decoded, info, ptsUs, durationUs, request, decodeMs,
+                   &retained);
         if (retainResult != SnapshotResult::Ok) {
           return false;
         }
@@ -331,7 +380,7 @@ struct Prefetcher::Impl {
       }
 
       if (!previous && joined &&
-          frameEndUs(ptsUs, durationUs) >= request.rangeEndUs) {
+          frameEndUs(ptsUs, durationUs) >= request.sourceRangeEndUs) {
         decodeComplete = true;
       }
     }
@@ -340,11 +389,16 @@ struct Prefetcher::Impl {
       reachedMediaBoundary = true;
       decodeComplete = true;
     }
-    if (previous && joined && request.rangeStartUs == 0) {
+    if (previous && joined && request.sourceRangeStartUs == 0) {
+      reachedMediaBoundary = true;
+    }
+    if (decodeComplete && request.reachesSourceBoundary) {
       reachedMediaBoundary = true;
     }
 
-    if (!decodeComplete || !joined || !current(work.generation)) {
+    if (!decodeComplete || !joined ||
+        (discontinuous && stagedFrames.empty()) ||
+        !current(work.generation)) {
       return false;
     }
     Result result;

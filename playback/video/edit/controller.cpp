@@ -1,28 +1,12 @@
 #include "playback/video/edit/controller.h"
 
 #include <algorithm>
-#include <limits>
 #include <utility>
 
 #include "core/runtime_helpers.h"
 #include "playback/video/edit/export.h"
 
 namespace playback_video_edit {
-namespace {
-
-std::optional<int64_t> seekTargetForRemovedPlayhead(
-    const Timeline& timeline, int64_t playheadUs) {
-  if (timeline.containsSourceTime(playheadUs)) return std::nullopt;
-  if (const auto next = timeline.nextKeptSourceTime(playheadUs)) return next;
-  const int64_t afterPlayhead =
-      playheadUs == (std::numeric_limits<int64_t>::max)()
-          ? playheadUs
-          : playheadUs + 1;
-  return timeline.previousKeptSourceTime(afterPlayhead);
-}
-
-}  // namespace
-
 struct Controller::Impl {
   explicit Impl(std::filesystem::path path) : sourcePath(std::move(path)) {
     refreshView();
@@ -100,10 +84,12 @@ CommandResult Controller::execute(Command command,
   switch (command) {
     case Command::Toggle:
       if (impl_->session.active()) {
-        impl_->session.deactivate();
+        result.sequenceEffect = CommandResult::SequenceEffect::Clear;
+        result.deactivateAfterSequenceClear = true;
         result.message = "Video editor closed (edits retained)";
       } else if (context.sourceDurationUs > 0) {
         impl_->session.activate(context.sourceDurationUs);
+        result.sequenceEffect = CommandResult::SequenceEffect::Apply;
         result.message =
             "Video editor: I/O mark, Delete remove, T trim, Ctrl+E export";
       } else {
@@ -115,7 +101,8 @@ CommandResult Controller::execute(Command command,
         result.handled = false;
         break;
       }
-      impl_->session.deactivate();
+      result.sequenceEffect = CommandResult::SequenceEffect::Clear;
+      result.deactivateAfterSequenceClear = true;
       result.message = "Video editor closed (edits retained)";
       break;
     case Command::MarkIn:
@@ -173,11 +160,17 @@ CommandResult Controller::execute(Command command,
   }
 
   if (timelineChanged) {
-    result.seekTargetUs = seekTargetForRemovedPlayhead(
-        impl_->session.timeline(), context.playheadUs);
+    result.sequenceEffect = CommandResult::SequenceEffect::Apply;
   }
   impl_->refreshView();
   return result;
+}
+
+void Controller::completeSequenceEffect(const CommandResult& result,
+                                        bool accepted) {
+  if (!impl_ || !accepted || !result.deactivateAfterSequenceClear) return;
+  impl_->session.deactivate();
+  impl_->refreshView();
 }
 
 bool Controller::poll(std::string* message) {

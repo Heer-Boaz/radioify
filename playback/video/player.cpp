@@ -119,6 +119,18 @@ int64_t ptsToUs(int64_t pts, AVRational tb) {
   return av_rescale_q(pts, tb, AVRational{1, 1000000});
 }
 
+int64_t packetDecodeTimestampUs(const AVPacket& packet,
+                                const AVStream* stream,
+                                int64_t formatStartUs) {
+  if (!stream) return AV_NOPTS_VALUE;
+  const int64_t timestamp =
+      packet.dts != AV_NOPTS_VALUE ? packet.dts : packet.pts;
+  const int64_t absoluteUs = ptsToUs(timestamp, stream->time_base);
+  return absoluteUs == AV_NOPTS_VALUE
+             ? AV_NOPTS_VALUE
+             : (std::max)(int64_t{0}, absoluteUs - formatStartUs);
+}
+
 YuvMatrix mapColorMatrix(AVColorSpace space) {
   switch (space) {
     case AVCOL_SPC_BT709:
@@ -442,6 +454,7 @@ playback_video_sync::PreparedFrame preparedFrameFromPresentedFrame(
   assert(entry.displayIndex > 0);
   playback_video_sync::PreparedFrame prepared{};
   prepared.frame.ptsUs = entry.ptsUs;
+  prepared.frame.sourcePtsUs = entry.sourcePtsUs;
   prepared.frame.durationUs = entry.durationUs;
   prepared.frame.serial = entry.serial;
   prepared.frame.displayIndex = entry.displayIndex;
@@ -1536,6 +1549,7 @@ struct Player::Impl {
     bool valid = false;
     int serial = 0;
     int64_t ptsUs = 0;
+    int64_t sourcePtsUs = 0;
     int64_t durationUs = 0;
     uint64_t displayIndex = 0;
   };
@@ -1575,6 +1589,13 @@ struct Player::Impl {
   std::atomic<size_t> maxQueue{3};
   std::atomic<int64_t> estimatedFrameDurationUs{33333};
   std::atomic<int64_t> durationUs{0};
+  std::atomic<int64_t> sourceDurationUs{0};
+  struct SequenceBinding {
+    int serial = 0;
+    std::shared_ptr<const playback_video_sequence::Timeline> timeline;
+  };
+  mutable std::mutex sequenceMutex;
+  std::deque<SequenceBinding> sequenceBindings;
   std::atomic<int> sourceWidth{0};
   std::atomic<int> sourceHeight{0};
   std::atomic<int> videoStreamIndex{-1};
@@ -1682,6 +1703,173 @@ struct Player::Impl {
     return (std::max)(int64_t{0}, targetUs);
   }
 
+  std::shared_ptr<const playback_video_sequence::Timeline>
+  sequenceForSerial(int serial) const {
+    std::lock_guard<std::mutex> lock(sequenceMutex);
+    for (auto binding = sequenceBindings.rbegin();
+         binding != sequenceBindings.rend(); ++binding) {
+      if (binding->serial == serial) return binding->timeline;
+    }
+    return {};
+  }
+
+  std::shared_ptr<const playback_video_sequence::Timeline>
+  sequenceSnapshot() const {
+    return sequenceForSerial(serialControl.currentSerial());
+  }
+
+  void bindSequence(
+      int serial,
+      std::shared_ptr<const playback_video_sequence::Timeline> timeline) {
+    std::lock_guard<std::mutex> lock(sequenceMutex);
+    sequenceBindings.push_back(SequenceBinding{serial, std::move(timeline)});
+    while (sequenceBindings.size() > 4) sequenceBindings.pop_front();
+  }
+
+  struct VideoSequenceTime {
+    int64_t ptsUs = 0;
+    int64_t durationUs = 0;
+  };
+
+  static std::optional<VideoSequenceTime> mapVideoSequenceTime(
+      const playback_video_sequence::Timeline& timeline, int64_t sourcePtsUs,
+      int64_t durationUs) {
+    for (const playback_video_sequence::Clip& clip : timeline.clips()) {
+      if (sourcePtsUs < clip.source.startUs) return std::nullopt;
+      if (sourcePtsUs >= clip.source.endUs) continue;
+      return VideoSequenceTime{
+          clip.presentationStartUs + sourcePtsUs - clip.source.startUs,
+          (std::min)(durationUs, clip.source.endUs - sourcePtsUs)};
+    }
+    return std::nullopt;
+  }
+
+  static bool mapSequencePrefetchRequest(
+      const playback_video_sequence::Timeline& timeline,
+      playback_video_frame_step_prefetch::Request* request) {
+    if (!request) return false;
+
+    const auto& clips = timeline.clips();
+    size_t sourceClipIndex = clips.size();
+    for (size_t index = 0; index < clips.size(); ++index) {
+      const playback_video_sequence::Clip& clip = clips[index];
+      if (request->join.sourcePtsUs >= clip.source.startUs &&
+          request->join.sourcePtsUs < clip.source.endUs) {
+        sourceClipIndex = index;
+        break;
+      }
+    }
+    if (sourceClipIndex == clips.size()) return false;
+
+    const bool previous =
+        request->direction ==
+        playback_video_frame_step::Direction::Previous;
+    const playback_video_sequence::Clip& joinClip = clips[sourceClipIndex];
+    const int64_t joinDurationUs =
+        (std::max)(int64_t{1}, request->join.durationUs);
+    const int64_t joinEndUs =
+        request->join.sourcePtsUs <=
+                (std::numeric_limits<int64_t>::max)() - joinDurationUs
+            ? request->join.sourcePtsUs + joinDurationUs
+            : request->join.sourcePtsUs;
+
+    size_t targetClipIndex = sourceClipIndex;
+    if (previous && sourceClipIndex > 0 &&
+        request->join.sourcePtsUs - joinClip.source.startUs <
+            joinDurationUs) {
+      targetClipIndex = sourceClipIndex - 1;
+      request->discontinuousJoin = true;
+    } else if (!previous && sourceClipIndex + 1 < clips.size() &&
+               joinClip.source.endUs -
+                       (std::min)(joinEndUs, joinClip.source.endUs) <
+                   joinDurationUs) {
+      targetClipIndex = sourceClipIndex + 1;
+      request->discontinuousJoin = true;
+    }
+
+    const playback_video_sequence::Clip& sourceClip = clips[targetClipIndex];
+    const int64_t clipPresentationStartUs = sourceClip.presentationStartUs;
+    const int64_t clipPresentationEndUs =
+        sourceClip.presentationEndUs();
+    const int64_t presentationStartUs =
+        (std::max)(request->rangeStartUs, clipPresentationStartUs);
+    const int64_t presentationEndUs =
+        (std::min)(request->rangeEndUs, clipPresentationEndUs);
+    if (presentationEndUs <= presentationStartUs) return false;
+
+    request->sourceRangeStartUs =
+        sourceClip.source.startUs +
+        (presentationStartUs - clipPresentationStartUs);
+    request->sourceRangeEndUs =
+        sourceClip.source.startUs +
+        (presentationEndUs - clipPresentationStartUs);
+    request->presentationOffsetUs =
+        clipPresentationStartUs - sourceClip.source.startUs;
+
+    if (previous) {
+      request->reachesSourceBoundary =
+          targetClipIndex == 0 &&
+          presentationStartUs == clipPresentationStartUs;
+      return request->discontinuousJoin ||
+             request->sourceRangeStartUs < request->join.sourcePtsUs;
+    }
+    request->reachesSourceBoundary =
+        targetClipIndex + 1 == clips.size() &&
+        presentationEndUs == clipPresentationEndUs;
+    return request->discontinuousJoin ||
+           joinEndUs < request->sourceRangeEndUs;
+  }
+
+  struct AudioSequenceSlice {
+    uint64_t offsetFrames = 0;
+    uint64_t frameCount = 0;
+    int64_t ptsUs = 0;
+  };
+
+  static std::optional<AudioSequenceSlice> mapAudioSequenceSlice(
+      const playback_video_sequence::Timeline& timeline, int64_t sourcePtsUs,
+      uint64_t frameCount, uint32_t sampleRate) {
+    if (sourcePtsUs < 0 || frameCount == 0 || sampleRate == 0) {
+      return std::nullopt;
+    }
+    const int64_t durationUs = static_cast<int64_t>(
+        (frameCount * 1000000ULL) / static_cast<uint64_t>(sampleRate));
+    const int64_t sourceEndUs = sourcePtsUs + durationUs;
+    for (const playback_video_sequence::Clip& clip : timeline.clips()) {
+      if (sourceEndUs <= clip.source.startUs) return std::nullopt;
+      if (sourcePtsUs >= clip.source.endUs) continue;
+
+      const int64_t startUs =
+          (std::max)(sourcePtsUs, clip.source.startUs);
+      const int64_t endUs = (std::min)(sourceEndUs, clip.source.endUs);
+      const auto frameAtOrAfter = [sampleRate](int64_t deltaUs) {
+        if (deltaUs <= 0) return uint64_t{0};
+        return static_cast<uint64_t>(std::ceil(
+            static_cast<long double>(deltaUs) * sampleRate / 1000000.0L));
+      };
+      const uint64_t first =
+          (std::min)(frameCount, frameAtOrAfter(startUs - sourcePtsUs));
+      const uint64_t end =
+          (std::min)(frameCount, frameAtOrAfter(endUs - sourcePtsUs));
+      if (end <= first) return std::nullopt;
+      const int64_t firstSourceUs =
+          sourcePtsUs + static_cast<int64_t>(
+                            first * 1000000ULL /
+                            static_cast<uint64_t>(sampleRate));
+      return AudioSequenceSlice{
+          first, end - first,
+          clip.presentationStartUs +
+              (std::max)(int64_t{0}, firstSourceUs - clip.source.startUs)};
+    }
+    return std::nullopt;
+  }
+
+  int64_t sourcePositionForPresentation(int64_t presentationUs) const {
+    const auto currentSequence = sequenceSnapshot();
+    return currentSequence ? currentSequence->pointAt(presentationUs).sourceUs
+                           : presentationUs;
+  }
+
   void resetAudioOutputForSerial(uint64_t serial, bool reacquireClock,
                                  const char* reason) {
     if (serial == 0 ||
@@ -1763,6 +1951,21 @@ struct Player::Impl {
     ev.type = playback_video_control::EventType::SeekRequest;
     ev.arg1 = request.targetUs;
     ev.seekRequestGeneration = request.generation;
+    enqueueEventLocked(std::move(ev));
+    SetEvent(statusChangedEvent.get());
+    return true;
+  }
+
+  bool postSequence(
+      std::shared_ptr<const playback_video_sequence::Timeline> next) {
+    std::lock_guard<std::mutex> lock(eventMutex);
+    if (!ctrlRunning.load(std::memory_order_relaxed) ||
+        !initDone.load(std::memory_order_relaxed)) {
+      return false;
+    }
+    playback_video_control::Event ev{};
+    ev.type = playback_video_control::EventType::SetSequence;
+    ev.sequence = std::move(next);
     enqueueEventLocked(std::move(ev));
     SetEvent(statusChangedEvent.get());
     return true;
@@ -1860,6 +2063,7 @@ struct Player::Impl {
       presentedFrame.valid = true;
       presentedFrame.serial = serialForFrame;
       presentedFrame.ptsUs = item.ptsUs;
+      presentedFrame.sourcePtsUs = item.sourcePtsUs;
       presentedFrame.durationUs = prepared.frameDurationUs;
       presentedFrame.displayIndex = item.displayIndex;
       hasFrame.store(true, std::memory_order_relaxed);
@@ -1973,18 +2177,27 @@ struct Player::Impl {
     if (!frameStepPrefetchStarted) {
       return;
     }
+    const auto currentSequence = sequenceForSerial(serial);
     drainFrameStepPrefetch(serial);
     if (std::optional<playback_video_frame_step_prefetch::Request> failed =
             frameStepPrefetch.takeFailure(serial)) {
       frameCursor.notePrefetchFailure(*failed);
       appendTimingFmt(
-          "frame_step_prefetch_failed serial=%d start_us=%lld end_us=%lld",
+          "frame_step_prefetch_failed serial=%d presentation_start_us=%lld "
+          "presentation_end_us=%lld source_start_us=%lld source_end_us=%lld",
           serial, static_cast<long long>(failed->rangeStartUs),
-          static_cast<long long>(failed->rangeEndUs));
+          static_cast<long long>(failed->rangeEndUs),
+          static_cast<long long>(failed->sourceRangeStartUs),
+          static_cast<long long>(failed->sourceRangeEndUs));
     }
     std::optional<playback_video_frame_step_prefetch::Request> request =
         frameCursor.prefetchRequest(direction,
                                     durationUs.load(std::memory_order_relaxed));
+    if (request && currentSequence && !currentSequence->isIdentity() &&
+        !mapSequencePrefetchRequest(*currentSequence, &*request)) {
+      frameCursor.notePrefetchFailure(*request);
+      request.reset();
+    }
     if (!request) {
       const playback_video_frame_step::Direction inverse =
           direction == playback_video_frame_step::Direction::Previous
@@ -1992,13 +2205,20 @@ struct Player::Impl {
               : playback_video_frame_step::Direction::Previous;
       request = frameCursor.prefetchRequest(
           inverse, durationUs.load(std::memory_order_relaxed), 0);
+      if (request && currentSequence && !currentSequence->isIdentity() &&
+          !mapSequencePrefetchRequest(*currentSequence, &*request)) {
+        frameCursor.notePrefetchFailure(*request);
+        request.reset();
+      }
     }
     if (!request || !frameStepPrefetch.request(*request)) {
       return;
     }
     appendTimingFmt(
         "frame_step_prefetch_request serial=%d direction=%d "
-        "join_us=%lld start_us=%lld end_us=%lld join_cached=%d",
+        "join_source_us=%lld presentation_start_us=%lld "
+        "presentation_end_us=%lld source_start_us=%lld source_end_us=%lld "
+        "join_cached=%d discontinuous=%d",
         serial,
         request->direction == playback_video_frame_step::Direction::Previous
             ? -1
@@ -2006,7 +2226,9 @@ struct Player::Impl {
         static_cast<long long>(request->join.sourcePtsUs),
         static_cast<long long>(request->rangeStartUs),
         static_cast<long long>(request->rangeEndUs),
-        request->joinCached ? 1 : 0);
+        static_cast<long long>(request->sourceRangeStartUs),
+        static_cast<long long>(request->sourceRangeEndUs),
+        request->joinCached ? 1 : 0, request->discontinuousJoin ? 1 : 0);
   }
 
   FrameStepDispatchResult dispatchCursorFrameStep(
@@ -2109,7 +2331,9 @@ struct Player::Impl {
 
     QueuedFrame item{};
     item.ptsUs = decision.frame->ptsUs;
+    item.sourcePtsUs = decision.frame->sourcePtsUs;
     item.durationUs = decision.frame->durationUs;
+    item.sourceDurationUs = decision.frame->sourceDurationUs;
     item.serial = decision.frame->serial;
     item.displayIndex = decision.frame->displayIndex;
     item.info = decision.frame->info;
@@ -2267,6 +2491,14 @@ struct Player::Impl {
         serialControl.positionSnapshot();
     PlayerTimelineSnapshot snapshot;
     snapshot.positionUs = position.positionUs;
+    snapshot.sourcePositionUs =
+        sourcePositionForPresentation(position.positionUs);
+    const PresentedFrameState presented = presentedFrameSnapshot();
+    if (!position.requestPending && !position.transitionPending &&
+        position.presentedPositionValid &&
+        presented.serial == position.currentSerial && presented.valid) {
+      snapshot.sourcePositionUs = presented.sourcePtsUs;
+    }
     snapshot.serial = position.currentSerial;
     snapshot.latestSeekRequestGeneration =
         position.latestSeekRequestGeneration;
@@ -2342,6 +2574,13 @@ struct Player::Impl {
     playbackState.reset();
     pauseRequested.store(false, std::memory_order_relaxed);
     serialControl.reset();
+    {
+      std::lock_guard<std::mutex> lock(sequenceMutex);
+      sequenceBindings.clear();
+      sequenceBindings.push_back(SequenceBinding{1, {}});
+    }
+    durationUs.store(0, std::memory_order_relaxed);
+    sourceDurationUs.store(0, std::memory_order_relaxed);
     clearFrameRequested.store(false, std::memory_order_relaxed);
     audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
     audioBufferedStartSerial.store(0, std::memory_order_relaxed);
@@ -2430,6 +2669,22 @@ struct Player::Impl {
         };
     auto beginSerialTransition = [&](int64_t targetUs,
                                      const char* tag) -> int {
+      const auto currentSequence = sequenceSnapshot();
+      bindSequence(serialControl.currentSerial() + 1, currentSequence);
+      if (currentSequence) {
+        const playback_video_sequence::Point point =
+            currentSequence->pointAt(targetUs);
+        const int64_t demuxTargetUs =
+            (std::max)(int64_t{0}, point.sourceUs - 1000000);
+        return applySerialTransition(
+            serialControl.beginTransition(
+                point.presentationUs, point.sourceUs, demuxTargetUs,
+                point.sourceUs, point.sourceUs,
+                playback_video_serial_control::DemuxSeekMode::Timeline,
+                initDone.load(std::memory_order_relaxed),
+                running.load(std::memory_order_relaxed)),
+            tag, SerialTransitionPurpose::Timeline);
+      }
       return applySerialTransition(
           serialControl.beginTransition(
               targetUs, initDone.load(std::memory_order_relaxed),
@@ -2441,6 +2696,8 @@ struct Player::Impl {
             uint64_t generation, const char* tag) {
           assert(plan.valid());
           int expectedSeekSerial = serialControl.currentSerial() + 1;
+          const auto currentSequence = sequenceSnapshot();
+          bindSequence(expectedSeekSerial, currentSequence);
           frameStepSeek.publishForSerial(expectedSeekSerial, plan);
           playback_video_serial_control::DemuxSeekMode demuxSeekMode =
               plan.mode ==
@@ -2451,11 +2708,29 @@ struct Player::Impl {
                   : playback_video_serial_control::DemuxSeekMode::
                         VideoAtOrBefore;
           int seekSerial = applySerialTransition(
-              serialControl.beginTransition(
-                  plan.seekTargetUs(), plan.demuxTargetUs(),
-                  plan.demuxWindowEndUs(), plan.decoderPrerollTargetUs(),
-                  demuxSeekMode, initDone.load(std::memory_order_relaxed),
-                  running.load(std::memory_order_relaxed)),
+              [&]() {
+                if (!currentSequence) {
+                  return serialControl.beginTransition(
+                      plan.seekTargetUs(), plan.demuxTargetUs(),
+                      plan.demuxWindowEndUs(), plan.decoderPrerollTargetUs(),
+                      demuxSeekMode,
+                      initDone.load(std::memory_order_relaxed),
+                      running.load(std::memory_order_relaxed));
+                }
+                const auto target =
+                    currentSequence->pointAt(plan.seekTargetUs());
+                const auto demux =
+                    currentSequence->pointAt(plan.demuxTargetUs());
+                const auto windowEnd =
+                    currentSequence->pointAt(plan.demuxWindowEndUs());
+                const auto preroll = currentSequence->pointAt(
+                    plan.decoderPrerollTargetUs());
+                return serialControl.beginTransition(
+                    target.presentationUs, target.sourceUs, demux.sourceUs,
+                    windowEnd.sourceUs, preroll.sourceUs, demuxSeekMode,
+                    initDone.load(std::memory_order_relaxed),
+                    running.load(std::memory_order_relaxed));
+              }(),
               tag, SerialTransitionPurpose::FrameStepSeek);
           if (seekSerial != expectedSeekSerial) {
             frameStepSeek.reset();
@@ -2550,6 +2825,49 @@ struct Player::Impl {
                         static_cast<int>(ev.arg2));
         break;
       }
+      case playback_video_control::EventType::SetSequence: {
+        int64_t sourceUs = 0;
+        const PresentedFrameState presented = presentedFrameSnapshot();
+        if (presented.valid &&
+            presented.serial == serialControl.currentSerial()) {
+          sourceUs = presented.sourcePtsUs;
+        } else {
+          sourceUs = sourcePositionForPresentation(videoTimelineUs());
+        }
+
+        const auto next = ev.sequence;
+        const int nextSerial = serialControl.currentSerial() + 1;
+        bindSequence(nextSerial, next);
+        if (next) {
+          durationUs.store(next->durationUs(), std::memory_order_relaxed);
+          const auto point = next->pointForSource(
+              sourceUs, playback_video_sequence::SourceBias::Forward);
+          if (point) {
+            const int64_t demuxTargetUs =
+                (std::max)(int64_t{0}, point->sourceUs - 1000000);
+            applySerialTransition(
+                serialControl.beginTransition(
+                    point->presentationUs, point->sourceUs, demuxTargetUs,
+                    point->sourceUs, point->sourceUs,
+                    playback_video_serial_control::DemuxSeekMode::Timeline,
+                    initDone.load(std::memory_order_relaxed),
+                    running.load(std::memory_order_relaxed)),
+                "ctrl_sequence_change", SerialTransitionPurpose::Timeline);
+          }
+        } else {
+          const int64_t sourceDuration =
+              sourceDurationUs.load(std::memory_order_relaxed);
+          durationUs.store(sourceDuration, std::memory_order_relaxed);
+          const int64_t targetUs =
+              std::clamp(sourceUs, int64_t{0}, sourceDuration);
+          applySerialTransition(
+              serialControl.beginTransition(
+                  targetUs, initDone.load(std::memory_order_relaxed),
+                  running.load(std::memory_order_relaxed)),
+              "ctrl_sequence_clear", SerialTransitionPurpose::Timeline);
+        }
+        break;
+      }
       case playback_video_control::EventType::CycleAudioTrack: {
         int nextTrack = -1;
         int nextStream = -1;
@@ -2573,11 +2891,12 @@ struct Player::Impl {
             nextLabel = audioTrackLabels[static_cast<size_t>(nextTrack)];
           }
         }
-        int64_t targetUs = videoTimelineUs();
-        targetUs = (std::max)(int64_t{0}, targetUs);
+        int64_t targetUs = (std::max)(int64_t{0}, videoTimelineUs());
+        const int64_t sourceTargetUs =
+            sourcePositionForPresentation(targetUs);
         const int currentSerial = serialControl.currentSerial();
         commandPending.store(true, std::memory_order_relaxed);
-        audioTrackSwitch.request(currentSerial, targetUs);
+        audioTrackSwitch.request(currentSerial, targetUs, sourceTargetUs);
         audioDecodeEnded.store(false, std::memory_order_relaxed);
         audioPackets.flush(static_cast<uint64_t>(currentSerial));
         resetAudioOutputForSerial(static_cast<uint64_t>(currentSerial), true,
@@ -2726,7 +3045,10 @@ struct Player::Impl {
       sourceHeight.store(videoDec.height);
       videoStreamIndex.store(demux.videoStreamIndex,
                              std::memory_order_relaxed);
-      durationUs.store(demux.durationUs > 0 ? demux.durationUs : 0);
+      const int64_t mediaDurationUs =
+          demux.durationUs > 0 ? demux.durationUs : 0;
+      sourceDurationUs.store(mediaDurationUs, std::memory_order_relaxed);
+      durationUs.store(mediaDurationUs, std::memory_order_relaxed);
       {
         std::lock_guard<std::mutex> lock(audioTrackMutex);
         audioTrackStreams = demux.audioStreamIndices;
@@ -2778,6 +3100,9 @@ struct Player::Impl {
     }
 
     uint64_t serial = static_cast<uint64_t>(serialControl.currentSerial());
+    size_t sequenceClipIndex = QueuedPacket::kNoSequenceClip;
+    bool videoReachedClipEnd = false;
+    bool audioReachedClipEnd = false;
     AVPacket pkt{};
     bool demuxAtEof = false;
     
@@ -2816,13 +3141,90 @@ struct Player::Impl {
         videoPackets.flush();
         demuxAtEof = false;
         demuxEnded.store(false, std::memory_order_relaxed);
+        sequenceClipIndex = QueuedPacket::kNoSequenceClip;
+        const auto currentSequence = sequenceForSerial(currentSerial);
+        if (currentSequence) {
+          sequenceClipIndex = currentSequence
+                                  ->pointAt(
+                                      switchResult.presentationTargetUs)
+                                  .clipIndex;
+        }
+        videoReachedClipEnd = false;
+        audioReachedClipEnd =
+            !config.enableAudio || selectedAudioStream < 0;
       }
       appendTimingFmt(
-          "audio_track_switch_demux serial=%d stream=%d target_us=%lld seeked=%d drop_video_before_us=%lld",
+          "audio_track_switch_demux serial=%d stream=%d presentation_us=%lld source_us=%lld seeked=%d drop_video_before_us=%lld",
           currentSerial, selectedAudioStream,
-          static_cast<long long>(switchResult.targetUs),
+          static_cast<long long>(switchResult.presentationTargetUs),
+          static_cast<long long>(switchResult.sourceTargetUs),
           switchResult.seek.seeked ? 1 : 0,
           static_cast<long long>(switchResult.dropVideoBeforeUs));
+      return true;
+    };
+
+    const auto resetSequenceClip = [&](int seekSerial,
+                                       int64_t presentationUs) {
+      sequenceClipIndex = QueuedPacket::kNoSequenceClip;
+      const auto currentSequence = sequenceForSerial(seekSerial);
+      if (currentSequence) {
+        sequenceClipIndex =
+            currentSequence->pointAt(presentationUs).clipIndex;
+      }
+      videoReachedClipEnd = false;
+      audioReachedClipEnd =
+          !config.enableAudio ||
+          activeAudioStream.load(std::memory_order_relaxed) < 0;
+    };
+
+    const auto advanceSequenceClip = [&]() -> bool {
+      const auto currentSequence =
+          sequenceForSerial(static_cast<int>(serial));
+      if (!currentSequence ||
+          sequenceClipIndex == QueuedPacket::kNoSequenceClip ||
+          sequenceClipIndex >= currentSequence->clips().size()) {
+        return false;
+      }
+      const size_t nextClipIndex = sequenceClipIndex + 1;
+      if (nextClipIndex >= currentSequence->clips().size()) {
+        demuxEnded.store(true, std::memory_order_relaxed);
+        videoPackets.pushEof(serial);
+        audioPackets.pushEof(serial);
+        demuxAtEof = true;
+        appendTimingFmt("sequence_demux_end serial=%u clip=%zu",
+                        static_cast<unsigned>(serial), sequenceClipIndex);
+        return true;
+      }
+
+      const playback_video_sequence::Clip& nextClip =
+          currentSequence->clips()[nextClipIndex];
+      playback_video_timeline::DemuxSeekRequest request;
+      request.format = demux.fmt;
+      request.videoStreamIndex = demux.videoStreamIndex;
+      request.videoTimeBase = demux.videoTimeBase;
+      request.formatStartUs = demux.formatStartUs;
+      request.targetUs = nextClip.source.startUs;
+      request.seekUs =
+          playback_video_timeline::prerollSeekUs(nextClip.source.startUs);
+      request.preferVideoStream = true;
+      request.logTag = "sequence_clip_seek";
+      request.logPath = logPath;
+      const playback_video_timeline::DemuxSeekResult result =
+          playback_video_timeline::seekPrimaryDemux(request);
+      if (result.seeked) {
+        videoPackets.pushClipBoundary(serial, nextClipIndex);
+        audioPackets.pushClipBoundary(serial, nextClipIndex);
+      }
+      appendTimingFmt(
+          "sequence_clip_advance serial=%u from=%zu to=%zu source_us=%lld seeked=%d",
+          static_cast<unsigned>(serial), sequenceClipIndex, nextClipIndex,
+          static_cast<long long>(nextClip.source.startUs),
+          result.seeked ? 1 : 0);
+      sequenceClipIndex = nextClipIndex;
+      videoReachedClipEnd = false;
+      audioReachedClipEnd =
+          !config.enableAudio ||
+          activeAudioStream.load(std::memory_order_relaxed) < 0;
       return true;
     };
     
@@ -2838,6 +3240,7 @@ struct Player::Impl {
         audioPackets.flush(serial);
         videoFrames.flush(serial);
         audioTrackSwitch.reset();
+        resetSequenceClip(nextSerialValue, 0);
         appendTimingFmt("demux_external_serial_sync serial=%d", nextSerialValue);
       }
 
@@ -2877,6 +3280,7 @@ struct Player::Impl {
           appendTiming("demux_seek_failed");
         }
         serial = static_cast<uint64_t>(nextSerial);
+        resetSequenceClip(nextSerial, pendingSeek.displayTargetUs);
         demuxEnded.store(false);
         demuxAtEof = false;
         decodeEnded.store(false);
@@ -2946,6 +3350,42 @@ struct Player::Impl {
 
       int selectedAudioStream =
           activeAudioStream.load(std::memory_order_relaxed);
+      const auto currentSequence =
+          sequenceForSerial(static_cast<int>(serial));
+      if (currentSequence &&
+          sequenceClipIndex != QueuedPacket::kNoSequenceClip &&
+          sequenceClipIndex < currentSequence->clips().size()) {
+        const playback_video_sequence::Clip& clip =
+            currentSequence->clips()[sequenceClipIndex];
+        if (pkt.stream_index == demux.videoStreamIndex) {
+          const int64_t packetUs = packetDecodeTimestampUs(
+              pkt, demux.fmt->streams[demux.videoStreamIndex],
+              demux.formatStartUs);
+          if (packetUs != AV_NOPTS_VALUE &&
+              packetUs >= clip.source.endUs) {
+            videoReachedClipEnd = true;
+          }
+        } else if (selectedAudioStream >= 0 &&
+                   pkt.stream_index == selectedAudioStream) {
+          const int64_t packetUs = packetDecodeTimestampUs(
+              pkt, demux.fmt->streams[selectedAudioStream],
+              demux.formatStartUs);
+          if (packetUs != AV_NOPTS_VALUE &&
+              packetUs >= clip.source.endUs) {
+            audioReachedClipEnd = true;
+          }
+        }
+        if ((pkt.stream_index == demux.videoStreamIndex &&
+             videoReachedClipEnd) ||
+            (pkt.stream_index == selectedAudioStream &&
+             audioReachedClipEnd)) {
+          av_packet_unref(&pkt);
+          if (videoReachedClipEnd && audioReachedClipEnd) {
+            advanceSequenceClip();
+          }
+          continue;
+        }
+      }
       if (pkt.stream_index == demux.videoStreamIndex) {
         if (audioTrackSwitch.shouldDropVideoPrerollPacket(
                 pkt,
@@ -2959,7 +3399,7 @@ struct Player::Impl {
         bool allowBlock = true;
         bool queued = false;
         if (!videoPackets.pushPacket(&pkt, serial, allowBlock, &commandPending,
-                                     &queued)) {
+                                     &queued, sequenceClipIndex)) {
           av_packet_unref(&pkt);
           break;
         }
@@ -2973,7 +3413,7 @@ struct Player::Impl {
         bool allowBlock = true;
         bool queued = false;
         if (!audioPackets.pushPacket(&pkt, serial, allowBlock, &commandPending,
-                                     &queued)) {
+                                     &queued, sequenceClipIndex)) {
           av_packet_unref(&pkt);
           break;
         }
@@ -3029,6 +3469,8 @@ struct Player::Impl {
     uint64_t nextFrameIndex = 1;
     QueuedPacket pendingPacket{};
     bool hasPendingPacket = false;
+    bool drainingClip = false;
+    size_t drainNextClipIndex = QueuedPacket::kNoSequenceClip;
 
     while (running.load()) {
       uint64_t newResizeEpoch = resizeEpoch.load();
@@ -3048,48 +3490,55 @@ struct Player::Impl {
         videoFrames.flush(static_cast<uint64_t>(serialControl.currentSerial()));
       }
 
-      if (!hasPendingPacket) {
-        if (!videoPackets.pop(&pendingPacket)) {
-          break;
+      if (!drainingClip) {
+        if (!hasPendingPacket) {
+          if (!videoPackets.pop(&pendingPacket)) {
+            break;
+          }
+          hasPendingPacket = true;
         }
-        hasPendingPacket = true;
-      }
 
-      if (pendingPacket.flush) {
-        avcodec_flush_buffers(videoDec.codec);
-        decoderSerial = pendingPacket.serial;
-        inputEof = false;
-        hasPendingPacket = false;
-        videoFrames.flush(decoderSerial);
-        lastPtsUs = 0;
-        lastDurationUs =
-            (estimatedFrameDurationUs.load() > 0)
-                ? estimatedFrameDurationUs.load()
-                : 33333;
-        nextFrameIndex = 1;
-        continue;
-      }
+        if (pendingPacket.flush) {
+          avcodec_flush_buffers(videoDec.codec);
+          decoderSerial = pendingPacket.serial;
+          inputEof = false;
+          hasPendingPacket = false;
+          videoFrames.flush(decoderSerial);
+          lastPtsUs = 0;
+          lastDurationUs =
+              (estimatedFrameDurationUs.load() > 0)
+                  ? estimatedFrameDurationUs.load()
+                  : 33333;
+          nextFrameIndex = 1;
+          continue;
+        }
 
-      if (decoderSerial == 0) {
-        decoderSerial = pendingPacket.serial;
-      }
-      if (pendingPacket.serial != decoderSerial) {
-        av_packet_unref(&pendingPacket.pkt);
-        hasPendingPacket = false;
-        continue;
-      }
-
-      if (pendingPacket.eof) {
-        avcodec_send_packet(videoDec.codec, nullptr);
-        hasPendingPacket = false;
-        inputEof = true;
-      } else {
-        int send = avcodec_send_packet(videoDec.codec, &pendingPacket.pkt);
-        if (send != AVERROR(EAGAIN)) {
+        if (decoderSerial == 0) {
+          decoderSerial = pendingPacket.serial;
+        }
+        if (pendingPacket.serial != decoderSerial) {
           av_packet_unref(&pendingPacket.pkt);
           hasPendingPacket = false;
-          if (send < 0 && send != AVERROR_EOF) {
-            continue;
+          continue;
+        }
+
+        if (pendingPacket.eof || pendingPacket.clipBoundary) {
+          const int send = avcodec_send_packet(videoDec.codec, nullptr);
+          if (send != AVERROR(EAGAIN)) {
+            inputEof = pendingPacket.eof;
+            drainingClip = pendingPacket.clipBoundary;
+            drainNextClipIndex = pendingPacket.sequenceClipIndex;
+            hasPendingPacket = false;
+            if (send < 0 && send != AVERROR_EOF) continue;
+          }
+        } else {
+          int send = avcodec_send_packet(videoDec.codec, &pendingPacket.pkt);
+          if (send != AVERROR(EAGAIN)) {
+            av_packet_unref(&pendingPacket.pkt);
+            hasPendingPacket = false;
+            if (send < 0 && send != AVERROR_EOF) {
+              continue;
+            }
           }
         }
       }
@@ -3105,6 +3554,8 @@ struct Player::Impl {
           }
           hasPendingPacket = false;
           decoderSerial = static_cast<uint64_t>(currentMasterSerial);
+          drainingClip = false;
+          drainNextClipIndex = QueuedPacket::kNoSequenceClip;
           videoFrames.flush(decoderSerial);
           inputEof = false;
           lastPtsUs = 0;
@@ -3128,9 +3579,35 @@ struct Player::Impl {
         int recv = avcodec_receive_frame(videoDec.codec, videoDec.frame);
 
         if (recv == AVERROR(EAGAIN)) {
+          if (drainingClip) {
+            std::this_thread::yield();
+            continue;
+          }
           break;
         }
         if (recv == AVERROR_EOF) {
+          if (drainingClip) {
+            avcodec_flush_buffers(videoDec.codec);
+            drainingClip = false;
+            lastDurationUs =
+                (estimatedFrameDurationUs.load() > 0)
+                    ? estimatedFrameDurationUs.load()
+                    : 33333;
+            const auto currentSequence =
+                sequenceForSerial(static_cast<int>(decoderSerial));
+            lastPtsUs =
+                currentSequence &&
+                        drainNextClipIndex < currentSequence->clips().size()
+                    ? (std::max)(
+                          int64_t{0},
+                          currentSequence->clips()[drainNextClipIndex]
+                                  .source.startUs -
+                              lastDurationUs)
+                    : 0;
+            drainNextClipIndex = QueuedPacket::kNoSequenceClip;
+            inputEof = false;
+            break;
+          }
           if (inputEof) {
             decodeEnded.store(true);
           }
@@ -3176,11 +3653,11 @@ struct Player::Impl {
             std::chrono::duration<double, std::milli>(decodeEnd - decodeStart)
                 .count();
 
-        int64_t ptsUs = 0;
+        int64_t sourcePtsUs = 0;
         if (decodedFrame.timestamp100ns > 0) {
-          ptsUs = decodedFrame.timestamp100ns / 10;
+          sourcePtsUs = decodedFrame.timestamp100ns / 10;
         } else if (lastPtsUs > 0) {
-          ptsUs = lastPtsUs + lastDurationUs;
+          sourcePtsUs = lastPtsUs + lastDurationUs;
         }
         int64_t frameDurationUs = 0;
         if (info.duration100ns > 0) {
@@ -3193,25 +3670,45 @@ struct Player::Impl {
                                 ? estimatedFrameDurationUs.load()
                                 : 33333;
         }
-        lastPtsUs = ptsUs;
+        lastPtsUs = sourcePtsUs;
         lastDurationUs = frameDurationUs;
         int64_t seekTargetUs = 0;
-        if (shouldDropSeekPrerollFrame(decoderSerial, ptsUs, frameDurationUs,
-                                       &seekTargetUs)) {
+        if (shouldDropSeekPrerollFrame(decoderSerial, sourcePtsUs,
+                                       frameDurationUs, &seekTargetUs)) {
           appendTimingFmt(
               "video_drop_seek_preroll serial=%u pts_us=%lld dur_us=%lld target_us=%lld",
               static_cast<unsigned>(decoderSerial),
-              static_cast<long long>(ptsUs),
+              static_cast<long long>(sourcePtsUs),
               static_cast<long long>(frameDurationUs),
               static_cast<long long>(seekTargetUs));
           videoFrames.release(poolIndex);
           continue;
         }
 
-        QueuedFrame queued{poolIndex, ptsUs, frameDurationUs,
+        const int64_t sourceFrameDurationUs = frameDurationUs;
+        int64_t presentationPtsUs = sourcePtsUs;
+        const auto currentSequence =
+            sequenceForSerial(static_cast<int>(decoderSerial));
+        if (currentSequence) {
+          const auto mapped = mapVideoSequenceTime(
+              *currentSequence, sourcePtsUs, frameDurationUs);
+          if (!mapped) {
+            videoFrames.release(poolIndex);
+            continue;
+          }
+          presentationPtsUs = mapped->ptsUs;
+          frameDurationUs = mapped->durationUs;
+          decodedFrame.timestamp100ns = presentationPtsUs * 10;
+          info.timestamp100ns = presentationPtsUs * 10;
+          info.duration100ns = frameDurationUs * 10;
+        }
+
+        QueuedFrame queued{poolIndex, presentationPtsUs, frameDurationUs,
                            static_cast<uint64_t>(decoderSerial), info,
                            decodeMs};
         queued.displayIndex = nextFrameIndex;
+        queued.sourcePtsUs = sourcePtsUs;
+        queued.sourceDurationUs = sourceFrameDurationUs;
         ++nextFrameIndex;
         videoFrames.push(queued);
       }
@@ -3307,6 +3804,8 @@ struct Player::Impl {
     QueuedPacket pendingPacket{};
     bool hasPendingPacket = false;
     bool inputEof = false;
+    bool drainingClip = false;
+    size_t drainNextClipIndex = QueuedPacket::kNoSequenceClip;
     uint64_t decoderSerial = 0;
     while (running.load()) {
       if (activeAudioStream.load(std::memory_order_relaxed) !=
@@ -3323,6 +3822,8 @@ struct Player::Impl {
         audioDec.writePosFrames = 0;
         audioDec.nextPtsUs = 0;
         audioDec.nextPtsValid = false;
+        drainingClip = false;
+        drainNextClipIndex = QueuedPacket::kNoSequenceClip;
         decoderSerial =
             static_cast<uint64_t>(serialControl.currentSerial());
         resetAudioOutputForSerialIfNeeded(decoderSerial, true,
@@ -3331,50 +3832,57 @@ struct Player::Impl {
         continue;
       }
 
-      if (!hasPendingPacket) {
-        if (!audioPackets.pop(&pendingPacket)) {
-          break;
+      if (!drainingClip) {
+        if (!hasPendingPacket) {
+          if (!audioPackets.pop(&pendingPacket)) {
+            break;
+          }
+          hasPendingPacket = true;
         }
-        hasPendingPacket = true;
-      }
 
-      if (pendingPacket.flush) {
-        if (!reinitializeDecoderForActiveTrack()) {
-          audioStartOk.store(false, std::memory_order_relaxed);
-          break;
+        if (pendingPacket.flush) {
+          if (!reinitializeDecoderForActiveTrack()) {
+            audioStartOk.store(false, std::memory_order_relaxed);
+            break;
+          }
+          avcodec_flush_buffers(audioDec.codec);
+          audioDec.writePosFrames = 0;
+          audioDec.nextPtsUs = 0;
+          audioDec.nextPtsValid = false;
+          decoderSerial = pendingPacket.serial;
+          resetAudioOutputForSerialIfNeeded(decoderSerial, true,
+                                            "audio_packet_flush");
+          hasPendingPacket = false;
+          inputEof = false;
+          continue;
         }
-        avcodec_flush_buffers(audioDec.codec);
-        audioDec.writePosFrames = 0;
-        audioDec.nextPtsUs = 0;
-        audioDec.nextPtsValid = false;
-        decoderSerial = pendingPacket.serial;
-        resetAudioOutputForSerialIfNeeded(decoderSerial, true,
-                                          "audio_packet_flush");
-        hasPendingPacket = false;
-        inputEof = false;
-        continue;
-      }
 
-      if (decoderSerial == 0) {
-        decoderSerial = pendingPacket.serial;
-      }
-      if (pendingPacket.serial != decoderSerial) {
-        av_packet_unref(&pendingPacket.pkt);
-        hasPendingPacket = false;
-        continue;
-      }
-
-      if (pendingPacket.eof) {
-        avcodec_send_packet(audioDec.codec, nullptr);
-        hasPendingPacket = false;
-        inputEof = true;
-      } else {
-        int send = avcodec_send_packet(audioDec.codec, &pendingPacket.pkt);
-        if (send != AVERROR(EAGAIN)) {
+        if (decoderSerial == 0) {
+          decoderSerial = pendingPacket.serial;
+        }
+        if (pendingPacket.serial != decoderSerial) {
           av_packet_unref(&pendingPacket.pkt);
           hasPendingPacket = false;
-          if (send < 0 && send != AVERROR_EOF) {
-            continue;
+          continue;
+        }
+
+        if (pendingPacket.eof || pendingPacket.clipBoundary) {
+          const int send = avcodec_send_packet(audioDec.codec, nullptr);
+          if (send != AVERROR(EAGAIN)) {
+            inputEof = pendingPacket.eof;
+            drainingClip = pendingPacket.clipBoundary;
+            drainNextClipIndex = pendingPacket.sequenceClipIndex;
+            hasPendingPacket = false;
+            if (send < 0 && send != AVERROR_EOF) continue;
+          }
+        } else {
+          int send = avcodec_send_packet(audioDec.codec, &pendingPacket.pkt);
+          if (send != AVERROR(EAGAIN)) {
+            av_packet_unref(&pendingPacket.pkt);
+            hasPendingPacket = false;
+            if (send < 0 && send != AVERROR_EOF) {
+              continue;
+            }
           }
         }
       }
@@ -3386,6 +3894,8 @@ struct Player::Impl {
           avcodec_flush_buffers(audioDec.codec);
           hasPendingPacket = false;
           decoderSerial = static_cast<uint64_t>(currentMasterSerial);
+          drainingClip = false;
+          drainNextClipIndex = QueuedPacket::kNoSequenceClip;
           resetAudioOutputForSerialIfNeeded(decoderSerial, true,
                                             "audio_serial_sync");
           break;
@@ -3393,9 +3903,30 @@ struct Player::Impl {
 
         int recv = avcodec_receive_frame(audioDec.codec, audioDec.frame);
         if (recv == AVERROR(EAGAIN)) {
+          if (drainingClip) {
+            std::this_thread::yield();
+            continue;
+          }
           break;
         }
         if (recv == AVERROR_EOF) {
+          if (drainingClip) {
+            avcodec_flush_buffers(audioDec.codec);
+            drainingClip = false;
+            inputEof = false;
+            const auto currentSequence =
+                sequenceForSerial(static_cast<int>(decoderSerial));
+            audioDec.nextPtsValid =
+                currentSequence &&
+                drainNextClipIndex < currentSequence->clips().size();
+            audioDec.nextPtsUs = audioDec.nextPtsValid
+                                     ? currentSequence
+                                           ->clips()[drainNextClipIndex]
+                                           .source.startUs
+                                     : 0;
+            drainNextClipIndex = QueuedPacket::kNoSequenceClip;
+            break;
+          }
           if (inputEof) {
             audioStreamSetEnd(true);
             audioDecodeEnded.store(true);
@@ -3493,8 +4024,21 @@ struct Player::Impl {
         audioDec.nextPtsUs = ptsUs + audioDurationUs;
         audioDec.nextPtsValid = true;
         audioDec.writePosFrames += static_cast<int64_t>(converted);
+        uint64_t sourceOffsetFrames = 0;
+        uint64_t outputFrames = static_cast<uint64_t>(converted);
+        int64_t presentationPtsUs = ptsUs;
+        const auto currentSequence =
+            sequenceForSerial(static_cast<int>(decoderSerial));
+        if (currentSequence) {
+          const auto slice = mapAudioSequenceSlice(
+              *currentSequence, ptsUs, outputFrames, audioDec.outRate);
+          if (!slice) continue;
+          sourceOffsetFrames = slice->offsetFrames;
+          outputFrames = slice->frameCount;
+          presentationPtsUs = slice->ptsUs;
+        }
         uint64_t totalWritten = 0;
-        while (running.load() && totalWritten < static_cast<uint64_t>(converted)) {
+        while (running.load() && totalWritten < outputFrames) {
           if (static_cast<int>(decoderSerial) != serialControl.currentSerial()) {
             break;
           }
@@ -3502,16 +4046,18 @@ struct Player::Impl {
           // Always allow blocking to ensure we don't discard audio during prefill.
           // The demuxer deadlock is now prevented by prefillReady returning true if video is full.
           bool allowBlock = true;
-          int64_t chunkPtsUs = ptsUs;
+          int64_t chunkPtsUs = presentationPtsUs;
           if (chunkPtsUs != AV_NOPTS_VALUE && totalWritten > 0) {
             chunkPtsUs += static_cast<int64_t>(
                 (totalWritten * 1000000ULL) /
                 static_cast<uint64_t>(audioDec.outRate));
           }
           
-          if (!audioStreamWriteSamples(audioDec.convertBuffer.data() + 
-                                       totalWritten * audioDec.outChannels,
-                                     static_cast<uint64_t>(converted) - totalWritten, 
+          if (!audioStreamWriteSamples(
+                  audioDec.convertBuffer.data() +
+                      (sourceOffsetFrames + totalWritten) *
+                          audioDec.outChannels,
+                                     outputFrames - totalWritten,
                                      chunkPtsUs,
                                      static_cast<int>(decoderSerial),
                                      allowBlock, &written)) {
@@ -3530,10 +4076,11 @@ struct Player::Impl {
           bool firstForSerial =
               (bufferedSerial != static_cast<int>(decoderSerial) ||
                !audioBufferedStartValid.load(std::memory_order_relaxed));
-          if (firstForSerial && ptsUs != AV_NOPTS_VALUE) {
+          if (firstForSerial && presentationPtsUs != AV_NOPTS_VALUE) {
             audioBufferedStartSerial.store(static_cast<int>(decoderSerial),
                                            std::memory_order_relaxed);
-            audioBufferedStartPtsUs.store(ptsUs, std::memory_order_relaxed);
+            audioBufferedStartPtsUs.store(presentationPtsUs,
+                                          std::memory_order_relaxed);
             audioBufferedStartValid.store(true, std::memory_order_relaxed);
           }
         }
@@ -4042,6 +4589,21 @@ bool Player::requestFrameStep(playback_video_frame_step::Direction direction) {
   return true;
 }
 
+bool Player::setPlaybackSequence(
+    const std::vector<playback_video_sequence::SourceRange>& ranges) {
+  const int64_t sourceDuration =
+      impl_->sourceDurationUs.load(std::memory_order_relaxed);
+  const auto timeline =
+      playback_video_sequence::Timeline::create(sourceDuration, ranges);
+  if (!timeline) return false;
+  return impl_->postSequence(
+      std::make_shared<const playback_video_sequence::Timeline>(*timeline));
+}
+
+bool Player::clearPlaybackSequence() {
+  return impl_->postSequence({});
+}
+
 void Player::requestResize(int targetW, int targetH) {
   if (!impl_->ctrlRunning.load()) return;
   playback_video_control::Event ev{};
@@ -4236,6 +4798,12 @@ int Player::sourceWidth() const {
 
 int Player::sourceHeight() const {
   return impl_->sourceHeight.load(std::memory_order_relaxed);
+}
+
+int64_t Player::sourceDurationUs() const {
+  const int64_t duration =
+      impl_->sourceDurationUs.load(std::memory_order_relaxed);
+  return duration > 0 ? duration : 0;
 }
 
 int Player::videoStreamIndex() const {

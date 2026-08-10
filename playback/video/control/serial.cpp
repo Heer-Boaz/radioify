@@ -46,6 +46,7 @@ void Controller::reset() {
   seekFailed_.store(false, std::memory_order_relaxed);
   seekPending_.store(false, std::memory_order_relaxed);
   seekTargetUs_.store(0, std::memory_order_relaxed);
+  sourceTargetUs_.store(0, std::memory_order_relaxed);
   demuxWindowEndUs_.store(0, std::memory_order_relaxed);
   presentationTargetUs_.store(0, std::memory_order_relaxed);
   decoderPrerollTargetUs_.store(0, std::memory_order_relaxed);
@@ -70,6 +71,7 @@ void Controller::startSession(int initialSerial) {
   seekFailed_.store(false, std::memory_order_relaxed);
   seekPending_.store(false, std::memory_order_relaxed);
   seekTargetUs_.store(0, std::memory_order_relaxed);
+  sourceTargetUs_.store(0, std::memory_order_relaxed);
   demuxWindowEndUs_.store(0, std::memory_order_relaxed);
   presentationTargetUs_.store(0, std::memory_order_relaxed);
   decoderPrerollTargetUs_.store(0, std::memory_order_relaxed);
@@ -187,6 +189,18 @@ TransitionPlan Controller::beginTransition(int64_t displayTargetUs,
                                            int64_t decoderPrerollTargetUs,
                                            DemuxSeekMode demuxSeekMode,
                                            bool initDone, bool running) {
+  return beginTransition(displayTargetUs, displayTargetUs, demuxTargetUs,
+                         demuxWindowEndUs, decoderPrerollTargetUs,
+                         demuxSeekMode, initDone, running);
+}
+
+TransitionPlan Controller::beginTransition(int64_t displayTargetUs,
+                                           int64_t sourceTargetUs,
+                                           int64_t demuxTargetUs,
+                                           int64_t demuxWindowEndUs,
+                                           int64_t decoderPrerollTargetUs,
+                                           DemuxSeekMode demuxSeekMode,
+                                           bool initDone, bool running) {
   TransitionPlan plan;
   if (!running) {
     return plan;
@@ -196,15 +210,16 @@ TransitionPlan Controller::beginTransition(int64_t displayTargetUs,
 
   int nextSerial = currentSerial_.load(std::memory_order_relaxed) + 1;
   int64_t clampedDisplayTargetUs = (std::max)(int64_t{0}, displayTargetUs);
+  int64_t clampedSourceTargetUs = (std::max)(int64_t{0}, sourceTargetUs);
   int64_t clampedDemuxTargetUs = (std::max)(int64_t{0}, demuxTargetUs);
   int64_t clampedDemuxWindowEndUs =
       (std::max)(int64_t{0}, demuxWindowEndUs);
   int64_t clampedDecoderPrerollTargetUs =
       (std::max)(int64_t{0}, decoderPrerollTargetUs);
-  assert(clampedDemuxTargetUs <= clampedDisplayTargetUs);
+  assert(clampedDemuxTargetUs <= clampedSourceTargetUs);
   assert(clampedDemuxTargetUs <= clampedDemuxWindowEndUs);
-  assert(clampedDemuxWindowEndUs <= clampedDisplayTargetUs);
-  assert(clampedDecoderPrerollTargetUs <= clampedDisplayTargetUs);
+  assert(clampedDemuxWindowEndUs <= clampedSourceTargetUs);
+  assert(clampedDecoderPrerollTargetUs <= clampedSourceTargetUs);
 
   seekInFlightSerial_.store(nextSerial, std::memory_order_relaxed);
   seekFailed_.store(false, std::memory_order_relaxed);
@@ -213,6 +228,7 @@ TransitionPlan Controller::beginTransition(int64_t displayTargetUs,
   decoderPrerollTargetSerial_.store(nextSerial, std::memory_order_relaxed);
   seekDisplayUs_.store(clampedDisplayTargetUs, std::memory_order_relaxed);
   seekTargetUs_.store(clampedDemuxTargetUs, std::memory_order_relaxed);
+  sourceTargetUs_.store(clampedSourceTargetUs, std::memory_order_relaxed);
   demuxWindowEndUs_.store(clampedDemuxWindowEndUs,
                           std::memory_order_relaxed);
   presentationTargetUs_.store(clampedDisplayTargetUs, std::memory_order_relaxed);
@@ -226,6 +242,7 @@ TransitionPlan Controller::beginTransition(int64_t displayTargetUs,
   plan.valid = true;
   plan.serial = nextSerial;
   plan.displayTargetUs = clampedDisplayTargetUs;
+  plan.sourceTargetUs = clampedSourceTargetUs;
   plan.demuxTargetUs = clampedDemuxTargetUs;
   plan.demuxWindowEndUs = clampedDemuxWindowEndUs;
   plan.decoderPrerollTargetUs = clampedDecoderPrerollTargetUs;
@@ -243,6 +260,7 @@ PendingSeek Controller::claimPendingSeek() {
   pending.valid = true;
   pending.serial = currentSerial_.load(std::memory_order_relaxed);
   pending.demuxTargetUs = seekTargetUs_.load(std::memory_order_relaxed);
+  pending.sourceTargetUs = sourceTargetUs_.load(std::memory_order_relaxed);
   pending.demuxWindowEndUs =
       demuxWindowEndUs_.load(std::memory_order_relaxed);
   pending.displayTargetUs = seekDisplayUs_.load(std::memory_order_relaxed);
@@ -262,6 +280,7 @@ bool Controller::applySeekResult(int serial, int resultCode) {
   seekInFlightSerial_.store(0, std::memory_order_relaxed);
   if (resultCode != 0) {
     seekDisplayUs_.store(0, std::memory_order_relaxed);
+    sourceTargetUs_.store(0, std::memory_order_relaxed);
     pendingSeekSerial_.store(0, std::memory_order_relaxed);
     demuxWindowEndUs_.store(0, std::memory_order_relaxed);
     presentationTargetUs_.store(0, std::memory_order_relaxed);

@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 
 #include "playback/video/frame_step.h"
 #include "playback/video/frame_step_seek_plan.h"
+#include "playback/video/sequence.h"
 
 namespace playback_video_control {
 
@@ -13,6 +15,7 @@ enum class EventType {
   FrameStepSeekRequest,
   PauseRequest,
   ResizeRequest,
+  SetSequence,
   CycleAudioTrack,
   CloseRequest,
   SeekApplied,
@@ -27,14 +30,17 @@ struct Event {
   uint64_t seekRequestGeneration = 0;
   uint64_t frameStepGeneration = 0;
   playback_video_frame_step_seek::Plan frameStepSeek;
+  std::shared_ptr<const playback_video_sequence::Timeline> sequence;
   playback_video_frame_step::Direction frameStepDirection =
       playback_video_frame_step::Direction::Next;
 };
 
 inline bool shouldCoalesceQueuedEvent(EventType queuedTail,
                                       EventType incoming) {
-  return queuedTail == EventType::SeekRequest &&
-         incoming == EventType::SeekRequest;
+  return (queuedTail == EventType::SeekRequest &&
+          incoming == EventType::SeekRequest) ||
+         (queuedTail == EventType::SetSequence &&
+          incoming == EventType::SetSequence);
 }
 
 }  // namespace playback_video_control

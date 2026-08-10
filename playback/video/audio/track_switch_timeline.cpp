@@ -7,18 +7,23 @@ namespace playback_audio_track_switch_timeline {
 void Controller::reset() {
   pending_.store(false, std::memory_order_relaxed);
   serial_.store(0, std::memory_order_relaxed);
-  targetUs_.store(0, std::memory_order_relaxed);
+  presentationTargetUs_.store(0, std::memory_order_relaxed);
+  sourceTargetUs_.store(0, std::memory_order_relaxed);
   videoPreroll_ = {};
 }
 
-void Controller::request(int serial, int64_t targetUs) {
+void Controller::request(int serial, int64_t presentationTargetUs,
+                         int64_t sourceTargetUs) {
   if (serial <= 0) {
     reset();
     return;
   }
 
-  targetUs_.store((std::max)(int64_t{0}, targetUs),
-                  std::memory_order_relaxed);
+  presentationTargetUs_.store(
+      (std::max)(int64_t{0}, presentationTargetUs),
+      std::memory_order_relaxed);
+  sourceTargetUs_.store((std::max)(int64_t{0}, sourceTargetUs),
+                        std::memory_order_relaxed);
   serial_.store(serial, std::memory_order_relaxed);
   pending_.store(true, std::memory_order_release);
 }
@@ -30,7 +35,9 @@ PendingRequest Controller::claimPending() {
   }
   request.valid = true;
   request.serial = serial_.load(std::memory_order_relaxed);
-  request.targetUs = targetUs_.load(std::memory_order_relaxed);
+  request.presentationTargetUs =
+      presentationTargetUs_.load(std::memory_order_relaxed);
+  request.sourceTargetUs = sourceTargetUs_.load(std::memory_order_relaxed);
   return request;
 }
 
@@ -39,7 +46,7 @@ int64_t Controller::targetForSerial(int serial) const {
       serial_.load(std::memory_order_relaxed) != serial) {
     return 0;
   }
-  return targetUs_.load(std::memory_order_relaxed);
+  return presentationTargetUs_.load(std::memory_order_relaxed);
 }
 
 DemuxResult Controller::seekForPendingRequest(
@@ -51,21 +58,26 @@ DemuxResult Controller::seekForPendingRequest(
 
   result.handled = true;
   result.serial = request.serial;
-  result.targetUs = (std::max)(int64_t{0}, request.targetUs);
+  result.presentationTargetUs =
+      (std::max)(int64_t{0}, request.presentationTargetUs);
+  result.sourceTargetUs =
+      (std::max)(int64_t{0}, request.sourceTargetUs);
 
   playback_video_timeline::DemuxSeekRequest seekRequest;
   seekRequest.format = context.format;
   seekRequest.videoStreamIndex = context.videoStreamIndex;
   seekRequest.videoTimeBase = context.videoTimeBase;
   seekRequest.formatStartUs = context.formatStartUs;
-  seekRequest.targetUs = result.targetUs;
-  seekRequest.seekUs = playback_video_timeline::prerollSeekUs(result.targetUs);
+  seekRequest.targetUs = result.sourceTargetUs;
+  seekRequest.seekUs =
+      playback_video_timeline::prerollSeekUs(result.sourceTargetUs);
   seekRequest.logTag = "audio_track_switch_seek";
   seekRequest.logPath = context.logPath;
   result.seek = playback_video_timeline::seekPrimaryDemux(seekRequest);
 
   videoPreroll_ = result.seek.seeked
-                      ? playback_video_timeline::beginPrerollDiscard(result.targetUs)
+                      ? playback_video_timeline::beginPrerollDiscard(
+                            result.sourceTargetUs)
                       : playback_video_timeline::PrerollDiscard{};
   result.dropVideoBeforeUs = videoPreroll_.targetUs;
   return result;

@@ -22,14 +22,14 @@ int64_t frameEndUs(const PresentedFrame& frame) {
   return frame.ptsUs + frame.durationUs;
 }
 
-int64_t sourceFrameEndUs(
+int64_t presentationFrameEndUs(
     const playback_video_frame_step_prefetch::SourceFrame& frame) {
   if (frame.durationUs <= 0 ||
-      frame.sourcePtsUs >
+      frame.ptsUs >
           (std::numeric_limits<int64_t>::max)() - frame.durationUs) {
-    return frame.sourcePtsUs;
+    return frame.ptsUs;
   }
-  return frame.sourcePtsUs + frame.durationUs;
+  return frame.ptsUs + frame.durationUs;
 }
 
 bool samePrefetchRequest(
@@ -127,15 +127,16 @@ bool Controller::adoptPrefetchedResult(
   }
 
   for (const auto& source : result.frames) {
-    if (!source || source->sourcePtsUs < 0 || source->durationUs <= 0) {
+    if (!source || source->ptsUs < 0 || source->sourcePtsUs < 0 ||
+        source->durationUs <= 0 || source->sourceDurationUs <= 0) {
       return false;
     }
     if (request.direction == playback_video_frame_step::Direction::Previous &&
-        source->sourcePtsUs > request.join.sourcePtsUs) {
+        source->ptsUs > request.join.ptsUs) {
       return false;
     }
     if (request.direction == playback_video_frame_step::Direction::Next &&
-        source->sourcePtsUs < request.join.sourcePtsUs) {
+        source->ptsUs < request.join.ptsUs) {
       return false;
     }
   }
@@ -299,7 +300,7 @@ Controller::prefetchRequest(playback_video_frame_step::Direction direction,
             ? cached.frames.front()
             : cached.frames.back();
     join.identity = edge->identity;
-    join.ptsUs = edge->sourcePtsUs;
+    join.ptsUs = edge->ptsUs;
     join.sourcePtsUs = edge->sourcePtsUs;
     join.durationUs = edge->durationUs;
     joinCached = true;
@@ -310,9 +311,10 @@ Controller::prefetchRequest(playback_video_frame_step::Direction direction,
     activeDurationUs =
         direction == playback_video_frame_step::Direction::Previous
             ? (std::max)(int64_t{0},
-                         current.ptsUs - cached.frames.front()->sourcePtsUs)
-            : (std::max)(int64_t{0}, sourceFrameEndUs(*cached.frames.back()) -
-                                         currentEndUs);
+                         current.ptsUs - cached.frames.front()->ptsUs)
+            : (std::max)(int64_t{0},
+                         presentationFrameEndUs(*cached.frames.back()) -
+                             currentEndUs);
   }
 
   if ((direction == playback_video_frame_step::Direction::Previous &&
@@ -331,22 +333,22 @@ Controller::prefetchRequest(playback_video_frame_step::Direction direction,
     return std::nullopt;
   }
 
-  int64_t rangeStartUs = join.sourcePtsUs;
+  int64_t rangeStartUs = join.ptsUs;
   int64_t rangeEndUs = frameEndUs(current);
   if (direction == playback_video_frame_step::Direction::Previous) {
     rangeStartUs =
         current.ptsUs > horizonUs ? current.ptsUs - horizonUs : int64_t{0};
-    rangeEndUs = boundedAdd(join.sourcePtsUs, join.durationUs);
-    if (join.sourcePtsUs <= rangeStartUs) {
+    rangeEndUs = boundedAdd(join.ptsUs, join.durationUs);
+    if (join.ptsUs <= rangeStartUs) {
       return std::nullopt;
     }
   } else {
-    rangeStartUs = join.sourcePtsUs;
+    rangeStartUs = join.ptsUs;
     rangeEndUs = boundedAdd(currentEndUs, horizonUs);
     if (mediaDurationUs > 0) {
       rangeEndUs = (std::min)(rangeEndUs, mediaDurationUs);
     }
-    const int64_t joinEndUs = boundedAdd(join.sourcePtsUs, join.durationUs);
+    const int64_t joinEndUs = boundedAdd(join.ptsUs, join.durationUs);
     if (joinEndUs >= rangeEndUs) {
       return std::nullopt;
     }
@@ -363,6 +365,8 @@ Controller::prefetchRequest(playback_video_frame_step::Direction direction,
   request.join = join;
   request.rangeStartUs = rangeStartUs;
   request.rangeEndUs = rangeEndUs;
+  request.sourceRangeStartUs = rangeStartUs;
+  request.sourceRangeEndUs = rangeEndUs;
   request.joinCached = joinCached;
   if (failedPrefetchRequest_ &&
       samePrefetchRequest(*failedPrefetchRequest_, request)) {
@@ -457,7 +461,9 @@ void Controller::appendPresented(const QueuedFrame& item,
   entry.sourceFrame.reset();
   entry.info = item.info;
   entry.ptsUs = item.ptsUs;
+  entry.sourcePtsUs = item.sourcePtsUs;
   entry.durationUs = item.durationUs;
+  entry.sourceDurationUs = item.sourceDurationUs;
   entry.serial = item.serial;
   entry.displayIndex = item.displayIndex;
   entry.logicalIndex = record.logicalIndex;
@@ -837,7 +843,9 @@ PendingSeekFrameDecision Controller::inspectPreviousDiscoveryFrame(
     candidate.frame = *frame;
     candidate.info = item.info;
     candidate.ptsUs = item.ptsUs;
+    candidate.sourcePtsUs = item.sourcePtsUs;
     candidate.durationUs = item.durationUs;
+    candidate.sourceDurationUs = item.sourceDurationUs;
     candidate.serial = item.serial;
     candidate.displayIndex = item.displayIndex;
     candidate.logicalIndex = boundary.logicalIndex > 1
@@ -903,15 +911,11 @@ void Controller::shiftKnownRecordsForward() {
 
 playback_video_frame_step_prefetch::Boundary Controller::boundaryFor(
     const PresentedFrame& frame) {
-  constexpr int64_t kUnknown = (std::numeric_limits<int64_t>::min)();
   playback_video_frame_step_prefetch::Boundary boundary;
   boundary.identity = identityFor(frame);
   boundary.ptsUs = frame.ptsUs;
   boundary.durationUs = frame.durationUs;
-  boundary.sourcePtsUs = frame.sourceFrame ? frame.sourceFrame->sourcePtsUs
-                         : frame.info.sourcePtsTicks != kUnknown
-                             ? frame.info.timestamp100ns / 10
-                             : frame.ptsUs;
+  boundary.sourcePtsUs = frame.sourcePtsUs;
   return boundary;
 }
 
@@ -921,7 +925,7 @@ playback_video_frame_step_prefetch::FrameIdentity Controller::identityFor(
     return frame.sourceFrame->identity;
   }
   return playback_video_frame_step_prefetch::identityFrom(
-      frame.info, frame.ptsUs, frame.durationUs);
+      frame.info, frame.sourcePtsUs, frame.sourceDurationUs);
 }
 
 std::optional<size_t> Controller::entryIndexForIdentity(
@@ -951,14 +955,17 @@ bool Controller::refreshFrameStepView(
 
   std::deque<PresentedFrame> refreshed;
   for (const auto& source : cached.frames) {
-    if (!source || source->sourcePtsUs < 0 || source->durationUs <= 0) {
+    if (!source || source->ptsUs < 0 || source->sourcePtsUs < 0 ||
+        source->durationUs <= 0 || source->sourceDurationUs <= 0) {
       return false;
     }
     PresentedFrame entry;
     entry.sourceFrame = source;
     entry.info = source->info;
-    entry.ptsUs = source->sourcePtsUs;
+    entry.ptsUs = source->ptsUs;
+    entry.sourcePtsUs = source->sourcePtsUs;
     entry.durationUs = source->durationUs;
+    entry.sourceDurationUs = source->sourceDurationUs;
     entry.serial = static_cast<uint64_t>(serial_);
     entry.decodeMs = source->decodeMs;
     refreshed.push_back(std::move(entry));
@@ -972,15 +979,17 @@ bool Controller::refreshFrameStepView(
 void Controller::appendPresentedInFrameStepMode(const QueuedFrame& item,
                                                 const VideoFrame& frame) {
   const playback_video_frame_step_prefetch::FrameIdentity identity =
-      playback_video_frame_step_prefetch::identityFrom(item.info, item.ptsUs,
-                                                       item.durationUs);
+      playback_video_frame_step_prefetch::identityFrom(
+          item.info, item.sourcePtsUs, item.sourceDurationUs);
   if (std::optional<size_t> existing = entryIndexForIdentity(identity)) {
     PresentedFrame& entry = entries_[*existing];
     entry.frame = frame;
     entry.sourceFrame.reset();
     entry.info = item.info;
     entry.ptsUs = item.ptsUs;
+    entry.sourcePtsUs = item.sourcePtsUs;
     entry.durationUs = item.durationUs;
+    entry.sourceDurationUs = item.sourceDurationUs;
     entry.serial = item.serial;
     entry.decodeMs = item.decodeMs;
   } else {
@@ -994,7 +1003,9 @@ void Controller::appendPresentedInFrameStepMode(const QueuedFrame& item,
     entry.sourceFrame.reset();
     entry.info = item.info;
     entry.ptsUs = item.ptsUs;
+    entry.sourcePtsUs = item.sourcePtsUs;
     entry.durationUs = item.durationUs;
+    entry.sourceDurationUs = item.sourceDurationUs;
     entry.serial = item.serial;
     entry.decodeMs = item.decodeMs;
     entries_.push_back(std::move(entry));

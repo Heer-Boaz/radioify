@@ -4,24 +4,11 @@
 #include <optional>
 #include <vector>
 
+#include "playback/video/sequence.h"
+
 namespace playback_video_edit {
 
-// Source-space, half-open media interval. Edit decisions always reference the
-// immutable source; output time is derived by concatenating these intervals.
-struct SourceRange {
-  int64_t startUs = 0;
-  int64_t endUs = 0;
-
-  int64_t durationUs() const { return endUs - startUs; }
-};
-
-inline bool operator==(const SourceRange& lhs, const SourceRange& rhs) {
-  return lhs.startUs == rhs.startUs && lhs.endUs == rhs.endUs;
-}
-
-inline bool operator!=(const SourceRange& lhs, const SourceRange& rhs) {
-  return !(lhs == rhs);
-}
+using playback_video_sequence::SourceRange;
 
 // Immutable value state consumed by both ASCII and framebuffer renderers.
 struct EditSnapshot {
@@ -31,6 +18,7 @@ struct EditSnapshot {
   std::vector<SourceRange> keptRanges;
   std::optional<int64_t> inUs;
   std::optional<int64_t> outUs;
+  std::optional<int64_t> playheadSourceUs;
 };
 
 // Presentation-only export state. Renderers must not depend on worker,

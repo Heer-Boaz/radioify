@@ -119,7 +119,7 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.subtitleManager = &subtitleManager;
   overlayInputs.hasSubtitles = hasSubtitles;
   overlayInputs.subtitlesEnabled = subtitlesEnabledNow;
-  overlayInputs.subtitleClockUs = clockUs;
+  overlayInputs.subtitleClockUs = timeline.sourcePositionUs;
   overlayInputs.seekingOverlay = seekingOverlay;
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;

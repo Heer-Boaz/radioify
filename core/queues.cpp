@@ -27,7 +27,7 @@ void PacketQueue::flush() {
   cv_.notify_all();
 }
 
-void PacketQueue::flush(uint64_t serial) {
+void PacketQueue::flush(uint64_t serial, size_t sequenceClipIndex) {
   std::lock_guard<std::mutex> lock(mutex_);
   for (auto& item : packets_) {
     av_packet_unref(&item.pkt);
@@ -38,13 +38,14 @@ void PacketQueue::flush(uint64_t serial) {
   item.serial = serial;
   item.flush = true;
   item.eof = false;
+  item.sequenceClipIndex = sequenceClipIndex;
   packets_.push_back(std::move(item));
   cv_.notify_all();
 }
 
 bool PacketQueue::pushPacket(const AVPacket* pkt, uint64_t serial,
                              bool allowBlock, const std::atomic<bool>* cancel,
-                             bool* queued) {
+                             bool* queued, size_t sequenceClipIndex) {
   if (queued) {
     *queued = false;
   }
@@ -76,6 +77,7 @@ bool PacketQueue::pushPacket(const AVPacket* pkt, uint64_t serial,
   item.serial = serial;
   item.flush = false;
   item.eof = false;
+  item.sequenceClipIndex = sequenceClipIndex;
   packets_.push_back(std::move(item));
   bytes_ += packetBytes;
   if (queued) {
@@ -85,13 +87,27 @@ bool PacketQueue::pushPacket(const AVPacket* pkt, uint64_t serial,
   return true;
 }
 
-bool PacketQueue::pushFlush(uint64_t serial) {
+bool PacketQueue::pushFlush(uint64_t serial, size_t sequenceClipIndex) {
   std::unique_lock<std::mutex> lock(mutex_);
   if (aborted_) return false;
   QueuedPacket item{};
   item.serial = serial;
   item.flush = true;
   item.eof = false;
+  item.sequenceClipIndex = sequenceClipIndex;
+  packets_.push_back(std::move(item));
+  cv_.notify_all();
+  return true;
+}
+
+bool PacketQueue::pushClipBoundary(uint64_t serial,
+                                   size_t nextSequenceClipIndex) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (aborted_) return false;
+  QueuedPacket item{};
+  item.serial = serial;
+  item.clipBoundary = true;
+  item.sequenceClipIndex = nextSequenceClipIndex;
   packets_.push_back(std::move(item));
   cv_.notify_all();
   return true;

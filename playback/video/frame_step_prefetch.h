@@ -50,13 +50,22 @@ struct Request {
       playback_video_frame_step::Direction::Next;
   Boundary boundary;
   Boundary join;
+  // Frame-cache coverage is expressed on the edited presentation timeline;
+  // decoder I/O always uses the corresponding immutable source interval.
   int64_t rangeStartUs = 0;
   int64_t rangeEndUs = 0;
+  int64_t sourceRangeStartUs = 0;
+  int64_t sourceRangeEndUs = 0;
+  int64_t presentationOffsetUs = 0;
+  bool discontinuousJoin = false;
+  bool reachesSourceBoundary = false;
   bool joinCached = false;
 
   bool valid() const {
     return serial > 0 && boundary.valid() && join.valid() &&
-           rangeStartUs >= 0 && rangeEndUs > rangeStartUs;
+           rangeStartUs >= 0 && rangeEndUs > rangeStartUs &&
+           sourceRangeStartUs >= 0 &&
+           sourceRangeEndUs > sourceRangeStartUs;
   }
 };
 
