@@ -460,13 +460,15 @@ int main() {
                         std::string::npos &&
                     wideOverlayModel.status.find("O 00:03:29") !=
                         std::string::npos &&
+                    wideOverlayModel.status.find("D 00:02:00") !=
+                        std::string::npos &&
                     wideOverlayModel.status.find("EDIT MODE*") !=
                         std::string::npos &&
                     wideOverlayModel.status.find("Ctrl+") ==
                         std::string::npos &&
                     wideOverlayModel.status.size() <= 96,
                "wide editor status must prioritize inclusive range marks "
-               "without duplicating controls");
+               "and its frame-accurate duration without duplicating controls");
   const playback_video_edit::OverlayModel rangeOverlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, nullptr,
                                               Prompt::None, 34, 0.5);
@@ -474,6 +476,19 @@ int main() {
                    "EDIT MODE*  I 00:02:00  O 00:03:29",
                "compact editor status must retain both frame-accurate range "
                "marks before general playhead time");
+  const playback_video_edit::OverlayModel inOnlyDurationModel =
+      playback_video_edit::buildOverlayModel(
+          inOnlyOverlay, nullptr, Prompt::None, 64, 0.5);
+  ok &= expect(inOnlyDurationModel.status.find("D 00:06:00") !=
+                   std::string::npos,
+               "an In-only range duration must use the implicit program end");
+  const playback_video_edit::OverlayModel outOnlyDurationModel =
+      playback_video_edit::buildOverlayModel(
+          outOnlyOverlay, nullptr, Prompt::None, 64, 0.5);
+  ok &= expect(outOnlyDurationModel.status.find("D 00:04:00") !=
+                   std::string::npos,
+               "an Out-only range duration must use the implicit program "
+               "start");
 
   playback_video_edit::EditSnapshot retainedProgram;
   retainedProgram.hasEdits = true;
@@ -686,6 +701,13 @@ int main() {
                    playback_video_edit::TimelineCellKind::Kept &&
                    unselectedOverlayModel.cutCells == std::vector<int>{2},
                 "removed source gaps must collapse to explicit cut points");
+  const playback_video_edit::OverlayModel unselectedWideOverlayModel =
+      playback_video_edit::buildOverlayModel(
+          overlayEdit, nullptr, Prompt::None, 64, 0.0);
+  ok &= expect(unselectedWideOverlayModel.status.find("D ") ==
+                   std::string::npos,
+               "the normal program duration must not be duplicated when no "
+               "range is marked");
   overlayEdit.active = false;
   const playback_video_edit::OverlayModel backgroundExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,

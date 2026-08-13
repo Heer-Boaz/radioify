@@ -75,6 +75,20 @@ int64_t inclusiveOutDisplayUs(const EditSnapshot& edit) {
       *edit.outTimelineUs - std::max<int64_t>(1, edit.frameDurationUs));
 }
 
+std::optional<int64_t> selectedDurationUs(const EditSnapshot& edit) {
+  if ((!edit.inTimelineUs && !edit.outTimelineUs) ||
+      edit.timelineDurationUs <= 0) {
+    return std::nullopt;
+  }
+  const int64_t startUs = std::clamp(
+      edit.inTimelineUs.value_or(0), int64_t{0}, edit.timelineDurationUs);
+  const int64_t endUs = std::clamp(
+      edit.outTimelineUs.value_or(edit.timelineDurationUs), int64_t{0},
+      edit.timelineDurationUs);
+  if (endUs <= startUs) return std::nullopt;
+  return endUs - startUs;
+}
+
 int timelineCell(int64_t timelineUs, int64_t timelineDurationUs, int width) {
   if (timelineDurationUs <= 0 || width <= 1) return 0;
   const long double ratio =
@@ -196,6 +210,10 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
       rangeParts.push_back(
           "O " + formatTimecode(inclusiveOutDisplayUs(edit),
                                   edit.frameDurationUs, true));
+    }
+    if (const auto durationUs = selectedDurationUs(edit)) {
+      rangeParts.push_back(
+          "D " + formatTimecode(*durationUs, edit.frameDurationUs, true));
     }
     int rangeWidth = 0;
     for (const std::string& part : rangeParts) {
