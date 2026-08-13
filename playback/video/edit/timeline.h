@@ -58,6 +58,7 @@ class EditSession {
   bool undo();
   bool redo();
   bool resetEdits();
+  bool discardAllChanges();
   bool canUndo() const { return !undo_.empty(); }
   bool canRedo() const { return !redo_.empty(); }
 

@@ -19,6 +19,7 @@
 #include "playback/video/framebuffer/gpu_text_grid.h"
 #include "playback/video/framebuffer/window/gpu_text_grid_composition.h"
 #include "playback/video/framebuffer/frame_snapshot.h"
+#include "playback/overlay/context_menu.h"
 #include "playback/overlay/interaction.h"
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/video/framebuffer/video_output_color.h"
@@ -89,6 +90,7 @@ struct WindowUiState {
 
     float progress = 0.0f;
     float overlayAlpha = 0.0f;
+    bool chromeVisible = false;
     bool isPaused = false;
     // UI text/metadata to display when overlay is visible
     std::string title; // filename or label
@@ -105,9 +107,11 @@ struct WindowUiState {
     std::string subtitle; // current subtitle cue text
     float subtitleAlpha = 0.0f; // subtitle opacity
     std::vector<std::string> debugLines;
+    playback_overlay::ContextMenuSnapshot contextMenu;
     playback_video_timeline_preview::Snapshot timelinePreview;
     playback_video_edit::EditSnapshot videoEdit;
     playback_video_edit::ExportProgress videoEditExport;
+    bool videoEditExitConfirmation = false;
 };
 
 struct IDXGISwapChain2;

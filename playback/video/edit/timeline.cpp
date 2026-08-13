@@ -39,7 +39,8 @@ int64_t Timeline::outputDurationUs() const {
 }
 
 bool Timeline::isUnmodified() const {
-  return sourceDurationUs_ > 0 && keptRanges_.size() == 1 &&
+  if (sourceDurationUs_ <= 0) return keptRanges_.empty();
+  return keptRanges_.size() == 1 &&
          keptRanges_.front() == SourceRange{0, sourceDurationUs_};
 }
 
@@ -143,6 +144,17 @@ void EditSession::deactivate() {
   active_ = false;
   inUs_.reset();
   outUs_.reset();
+}
+
+bool EditSession::discardAllChanges() {
+  if (timeline_.isUnmodified()) return false;
+  const int64_t duration = timeline_.sourceDurationUs();
+  timeline_.reset(duration);
+  undo_.clear();
+  redo_.clear();
+  inUs_.reset();
+  outUs_.reset();
+  return true;
 }
 
 int64_t EditSession::clampSourceTime(int64_t sourceUs) const {
@@ -272,6 +284,7 @@ bool EditSession::resetEdits() {
 EditSnapshot EditSession::snapshot() const {
   EditSnapshot out;
   out.active = active_;
+  out.hasEdits = !timeline_.isUnmodified();
   out.canUndo = canUndo();
   out.canRedo = canRedo();
   out.sourceDurationUs = timeline_.sourceDurationUs();

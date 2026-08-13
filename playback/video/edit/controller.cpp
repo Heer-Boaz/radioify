@@ -104,11 +104,9 @@ CommandResult Controller::execute(Command command,
 
   bool timelineChanged = false;
   switch (command) {
-    case Command::Toggle:
+    case Command::Open:
       if (impl_->session.active()) {
-        result.sequenceEffect = CommandResult::SequenceEffect::Clear;
-        result.deactivateAfterSequenceClear = true;
-        result.message = "Video editor closed (edits retained)";
+        result.handled = false;
       } else if (context.sourceDurationUs > 0) {
         impl_->session.activate(context.sourceDurationUs);
         result.sequenceEffect = CommandResult::SequenceEffect::Apply;
@@ -178,9 +176,23 @@ CommandResult Controller::execute(Command command,
     case Command::Export:
       result = impl_->startOrCancelExport(context);
       break;
+    case Command::Discard:
+      impl_->exportState = impl_->exporter.snapshot();
+      if (impl_->exportState.running()) {
+        result.message = "Cancel the active save before discarding changes";
+        break;
+      }
+      timelineChanged = impl_->session.discardAllChanges();
+      result.message = timelineChanged ? "Edits discarded"
+                                       : "There are no edits to discard";
+      if (timelineChanged && !impl_->session.active()) {
+        result.sequenceEffect = CommandResult::SequenceEffect::Clear;
+      }
+      break;
   }
 
-  if (timelineChanged) {
+  if (timelineChanged &&
+      result.sequenceEffect == CommandResult::SequenceEffect::None) {
     result.sequenceEffect = CommandResult::SequenceEffect::Apply;
   }
   impl_->refreshView();

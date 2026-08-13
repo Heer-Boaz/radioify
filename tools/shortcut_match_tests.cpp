@@ -12,6 +12,7 @@
 #include "playback/video/state/machine.h"
 #include "playback/video/enhancement/pipeline.h"
 #include "playback/session/presentation_policy.h"
+#include "playback/session/input.h"
 #include "playback/session/state.h"
 #include "clock.h"
 #include "queues.h"
@@ -199,7 +200,7 @@ int main() {
       kPlaybackShortcutContextVideoEditExitConfirmation;
   ok &= expect(resolvePlaybackShortcutAction(makeKey('E'),
                                               videoPlaybackContexts)
-                   .value() == PlaybackShortcutAction::ToggleVideoEditor,
+                   .value() == PlaybackShortcutAction::OpenVideoEditor,
                "Bare E must enter the video editor only during video playback");
   ok &= expect(!resolvePlaybackShortcutAction(
                    makeKey('E'), kPlaybackShortcutContextGlobal |
@@ -1721,10 +1722,10 @@ int main() {
   ok &= expect(playback_overlay::overlayCellCountForPixels(960, 9) == 107,
                "overlayCellCountForPixels must round columns up");
 
-  ok &= expect(!playback_overlay::isBackMousePressed(
+  ok &= expect(!playback_session_input::isBackMousePressed(
                    makeMouse(RIGHTMOST_BUTTON_PRESSED)),
                "Right mouse button must not act as playback back/exit");
-  ok &= expect(playback_overlay::isBackMousePressed(
+  ok &= expect(playback_session_input::isBackMousePressed(
                    makeMouse(FROM_LEFT_2ND_BUTTON_PRESSED)),
                "Side/back mouse button must still act as playback back/exit");
   ok &= expect(playback_frame_output::centerContentTop(0, 30, 20) == 5,

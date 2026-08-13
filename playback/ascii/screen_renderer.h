@@ -59,9 +59,11 @@ struct PlaybackScreenRenderInputs {
   bool allowAsciiCpuFallback = false;
   bool useWindowPresenter = false;
   playback_overlay::PlaybackOsdSnapshot osd;
+  playback_overlay::ContextMenuSnapshot contextMenu;
   playback_video_timeline_preview::Snapshot timelinePreview;
   playback_video_edit::EditSnapshot videoEdit;
   playback_video_edit::ExportProgress videoEditExport;
+  bool videoEditExitConfirmation = false;
   bool clearHistory = false;
   bool frameChanged = false;
   bool frameAvailable = false;

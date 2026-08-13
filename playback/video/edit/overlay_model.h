@@ -26,7 +26,8 @@ struct OverlayModel {
 // Converts immutable edit/export snapshots into renderer-independent cells.
 // ASCII and framebuffer targets consume exactly this same projection.
 OverlayModel buildOverlayModel(const EditSnapshot& edit,
-                               const ExportProgress* editExport, int width,
+                               const ExportProgress* editExport,
+                               bool exitConfirmation, int width,
                                double timelineProgress);
 
 }  // namespace playback_video_edit

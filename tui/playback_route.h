@@ -17,6 +17,7 @@ enum class AudioPictureInPicturePlan {
 
 struct Route {
   PlaybackTarget target;
+  PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
   AudioPictureInPicturePlan audioPictureInPicture =
       AudioPictureInPicturePlan::Keep;
   std::optional<PlaybackSessionContinuationState> videoContinuation;

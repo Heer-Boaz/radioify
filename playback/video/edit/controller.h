@@ -11,7 +11,7 @@
 namespace playback_video_edit {
 
 enum class Command : uint8_t {
-  Toggle,
+  Open,
   Close,
   MarkIn,
   MarkOut,
@@ -21,6 +21,7 @@ enum class Command : uint8_t {
   Redo,
   Reset,
   Export,
+  Discard,
 };
 
 struct CommandContext {

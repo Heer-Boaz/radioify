@@ -10,6 +10,7 @@
 
 #include "consolescreen.h"
 #include "gpu_text_grid.h"
+#include "playback/overlay/context_menu.h"
 #include "playback/overlay/interaction.h"
 #include "playback/overlay/osd_state.h"
 #include "playback/video/subtitle/manager.h"
@@ -43,6 +44,7 @@ struct OverlayControlActions {
   std::function<bool()> audioTrack;
   std::function<bool()> subtitles;
   std::function<bool()> pictureInPicture;
+  std::function<bool()> editOpen;
   std::function<bool()> editMarkIn;
   std::function<bool()> editMarkOut;
   std::function<bool()> editRippleDelete;
@@ -51,6 +53,7 @@ struct OverlayControlActions {
   std::function<bool()> editRedo;
   std::function<bool()> editReset;
   std::function<bool()> editExport;
+  std::function<bool()> editDiscard;
   std::function<bool()> editDone;
   std::function<bool()> editDiscardAndExit;
   std::function<bool()> editCancelExit;
@@ -138,8 +141,10 @@ struct PlaybackOverlayInputs {
   bool pictureInPictureActive = false;
   std::string subtitleRenderError;
   std::vector<std::string> debugLines;
+  ContextMenuSnapshot contextMenu;
   playback_video_edit::EditSnapshot videoEdit;
   playback_video_edit::ExportProgress videoEditExport;
+  bool videoEditExitConfirmation = false;
 };
 
 struct PlaybackOverlayState {
@@ -163,6 +168,9 @@ struct PlaybackOverlayState {
   double totalSec = -1.0;
   int volPct = 0;
   bool overlayVisible = false;
+  // Resolved presentation policy. Render backends consume this value instead
+  // of inferring chrome visibility from edit/export document state.
+  bool chromeVisible = false;
   std::shared_ptr<const std::string> transientMessage;
   bool paused = false;
   bool pictureInPictureAvailable = false;
@@ -173,8 +181,10 @@ struct PlaybackOverlayState {
   std::shared_ptr<const SubtitleFontAttachmentList> subtitleAssFonts;
   std::vector<WindowUiState::SubtitleCue> subtitleCues;
   std::vector<std::string> debugLines;
+  ContextMenuSnapshot contextMenu;
   playback_video_edit::EditSnapshot videoEdit;
   playback_video_edit::ExportProgress videoEditExport;
+  bool videoEditExitConfirmation = false;
 };
 
 PlaybackOverlayState buildPlaybackOverlayState(
@@ -213,7 +223,8 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
 
 InteractionMap buildOverlayInteractionMap(
     const OverlayCellLayout& layout,
-    const playback_video_edit::EditSnapshot* videoEdit = nullptr);
+    const playback_video_edit::EditSnapshot* videoEdit = nullptr,
+    bool videoEditExitConfirmation = false);
 
 std::string buildWindowOverlayProgressSuffix(
     const PlaybackOverlayState& state);
@@ -244,12 +255,17 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            const playback_video_edit::EditSnapshot* videoEdit,
                            const playback_video_edit::ExportProgress*
                                videoEditExport,
+                           bool videoEditExitConfirmation,
                            int minY,
                            int maxY);
 
 void renderTransientMessageToScreen(ConsoleScreen& screen,
                                     const std::string& message,
                                     const Style& style);
+
+void renderContextMenuToScreen(ConsoleScreen& screen,
+                               const ContextMenuCellLayout& layout,
+                               const OverlayRenderStyles& styles);
 
 void renderTimelinePreviewChromeToScreen(
     ConsoleScreen& screen,

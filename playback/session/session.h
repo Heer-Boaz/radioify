@@ -30,6 +30,7 @@ class PlaybackSession {
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
     PlaybackSessionContinuationState* continuityState = nullptr;
+    PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
   };
 
   explicit PlaybackSession(Args args);

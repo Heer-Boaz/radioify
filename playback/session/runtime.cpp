@@ -19,7 +19,8 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                         requestTransportCommand,
                     std::function<bool(const std::vector<std::filesystem::path>&)>
                         requestOpenFiles,
-                    PlaybackSessionContinuationState* continuityState) {
+                    PlaybackSessionContinuationState* continuityState,
+                    PlaybackSessionIntent sessionIntent) {
   PlaybackSession session({file,
                            input,
                            screen,
@@ -37,6 +38,7 @@ bool showAsciiVideo(const std::filesystem::path& file, ConsoleInput& input,
                            notificationAreaControls,
                            std::move(requestTransportCommand),
                            std::move(requestOpenFiles),
-                           continuityState});
+                           continuityState,
+                           sessionIntent});
   return session.run();
 }

@@ -43,4 +43,6 @@ bool showAsciiVideo(const std::filesystem::path& file,
                         requestTransportCommand = {},
                     std::function<bool(const std::vector<std::filesystem::path>&)>
                         requestOpenFiles = {},
-                    PlaybackSessionContinuationState* continuityState = nullptr);
+                    PlaybackSessionContinuationState* continuityState = nullptr,
+                    PlaybackSessionIntent sessionIntent =
+                        PlaybackSessionIntent::View);

@@ -1,6 +1,8 @@
 #include "playback/video/edit/timeline.h"
 #include "playback/video/edit/overlay_model.h"
+#include "playback/overlay/context_menu.h"
 #include "playback/overlay/interaction.h"
+#include "playback/session/context_menu_controller.h"
 
 #include <iostream>
 #include <optional>
@@ -25,6 +27,9 @@ int main() {
   using SequenceTimeline = playback_video_sequence::Timeline;
 
   bool ok = true;
+  const Timeline unopenedTimeline;
+  ok &= expect(unopenedTimeline.isUnmodified(),
+               "an unopened edit document must not be dirty");
   Timeline timeline(10'000'000);
   ok &= expect(timeline.isUnmodified(),
                "a new sequence must reference the complete source");
@@ -130,6 +135,19 @@ int main() {
                                     8'000'000,
                "reset must not discard edit history");
 
+  EditSession discarded;
+  discarded.activate(10'000'000);
+  discarded.markIn(3'000'000);
+  discarded.markOut(5'000'000);
+  ok &= expect(discarded.rippleDeleteSelection() &&
+                   discarded.snapshot().hasEdits,
+               "committed edit decisions must be exposed independently of dirty state");
+  ok &= expect(discarded.discardAllChanges() &&
+                   discarded.timeline().isUnmodified() &&
+                   !discarded.snapshot().hasEdits && !discarded.canUndo() &&
+                   !discarded.canRedo(),
+               "discard must restore the source sequence and clear its history");
+
   session.markIn(1'000'000);
   session.markOut(2'000'000);
   ok &= expect(session.rippleDeleteSelection(),
@@ -205,8 +223,8 @@ int main() {
   overlayExport.active = true;
   overlayExport.fraction = 0.42;
   const playback_video_edit::OverlayModel overlayModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport, 10,
-                                              0.5);
+      playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
+                                              false, 10, 0.5);
   ok &= expect(overlayModel.cells.size() == 10 &&
                     overlayModel.cells[0] ==
                         playback_video_edit::TimelineCellKind::Kept &&
@@ -220,26 +238,28 @@ int main() {
                     overlayModel.playheadCell == 5 &&
                     overlayModel.cutCells == std::vector<int>{2},
                 "marks, cuts, and playhead must share the program-time axis");
-  ok &= expect(overlayModel.status == "EXPORT 42%" &&
+  ok &= expect(overlayModel.status == "EDIT MODE*" &&
                     overlayModel.status.size() <= 10,
-               "narrow editor status must contain one complete state");
+               "narrow editor status must keep the active mode visible");
   const playback_video_edit::OverlayModel tinyExportModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport, 6,
-                                              0.5);
-  ok &= expect(tinyExportModel.status == "EXPORT",
-               "tiny editor status must retain a complete compact state");
+      playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
+                                              false, 6, 0.5);
+  ok &= expect(tinyExportModel.status == "EDIT*",
+               "tiny editor status must retain a compact mode indicator");
   const playback_video_edit::OverlayModel tinyDirtyModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, 1, 0.5);
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, false, 1,
+                                              0.5);
   ok &= expect(tinyDirtyModel.status == "*",
                "one-column editor status must retain the dirty indicator");
   const playback_video_edit::OverlayModel wideOverlayModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport, 96,
-                                              0.5);
+      playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
+                                              false, 96, 0.5);
   ok &= expect(wideOverlayModel.status.find("EXPORT 42%") !=
                         std::string::npos &&
                     wideOverlayModel.status.find("TC 00:00:04:00") !=
                         std::string::npos &&
-                    wideOverlayModel.status.find("EDIT*") != std::string::npos &&
+                    wideOverlayModel.status.find("EDIT MODE*") !=
+                        std::string::npos &&
                     wideOverlayModel.status.find("Ctrl+") ==
                         std::string::npos &&
                     wideOverlayModel.status.size() <= 96,
@@ -247,23 +267,24 @@ int main() {
   overlayEdit.inTimelineUs.reset();
   overlayEdit.outTimelineUs.reset();
   const playback_video_edit::OverlayModel unselectedOverlayModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, 10, 0.0);
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, false, 10,
+                                              0.0);
   ok &= expect(unselectedOverlayModel.cells[2] ==
                    playback_video_edit::TimelineCellKind::Kept &&
                    unselectedOverlayModel.cutCells == std::vector<int>{2},
                 "removed source gaps must collapse to explicit cut points");
   overlayEdit.active = false;
   const playback_video_edit::OverlayModel backgroundExportModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport, 10,
-                                              0.0);
+      playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
+                                              false, 10, 0.0);
   ok &= expect(backgroundExportModel.cells.empty() &&
                     backgroundExportModel.status.find("EXPORT 42%") !=
                         std::string::npos,
                 "background export progress must remain visible after the editor closes");
 
-  overlayEdit.exitConfirmation = true;
   const playback_video_edit::OverlayModel exitModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, 10, 0.0);
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, true, 10,
+                                              0.0);
   ok &= expect(exitModel.status == "UNEXPORTED" &&
                    exitModel.status.size() <= 10,
                "exit confirmation must use a complete width-bounded state");
@@ -311,6 +332,65 @@ int main() {
   ok &= expect(transformedHit.progressBar &&
                    transformedHit.progressBar->ratio == 0.5,
                "pixel mouse input must preserve sub-cell progress precision");
+
+  playback_overlay::ContextMenuSnapshot contextMenu;
+  contextMenu.visible = true;
+  contextMenu.anchorXRatio = 1.0;
+  contextMenu.anchorYRatio = 1.0;
+  contextMenu.selectedControlToken = playback_overlay::overlayControlToken(
+      playback_overlay::OverlayControlId::EditDiscard);
+  contextMenu.items = {
+      {playback_overlay::OverlayControlId::EditOpen, "Edit video"},
+      {playback_overlay::OverlayControlId::EditDiscard, "Discard changes"},
+  };
+  const playback_overlay::ContextMenuCellLayout contextLayout =
+      playback_overlay::layoutContextMenuCells(contextMenu, 30, 10);
+  ok &= expect(contextLayout.drawable() && contextLayout.x >= 0 &&
+                   contextLayout.y >= 0 &&
+                   contextLayout.x + contextLayout.width <= 30 &&
+                   contextLayout.y + contextLayout.height <= 10,
+               "a context menu must flip and clamp inside its presentation surface");
+  ok &= expect(contextLayout.items.size() == 2 &&
+                   !contextLayout.items[0].selected &&
+                   contextLayout.items[1].selected,
+               "context menu selection must retain semantic command identity");
+  const playback_overlay::InteractionMap contextInteractions =
+      playback_overlay::buildContextMenuInteractionMap(contextLayout);
+  ok &= expect(contextInteractions.modal &&
+                   contextInteractions.contains(0.0, 0.0),
+               "a visible context menu must own input outside its popup");
+  ok &= expect(playback_overlay::overlayControlAt(
+                   contextInteractions,
+                   static_cast<double>(contextLayout.items[1].x),
+                   static_cast<double>(contextLayout.items[1].y)) ==
+                   playback_overlay::OverlayControlId::EditDiscard,
+               "context menu hit-testing must dispatch its rendered command");
+
+  playback_session::ContextMenuController playbackMenu;
+  playback_video_edit::EditSnapshot cleanEdit;
+  playback_video_edit::ExportProgress idleExport;
+  playbackMenu.refresh(cleanEdit, idleExport);
+  ok &= expect(playbackMenu.open(
+                   playback_session::ContextMenuSurface::Terminal, 0.25, 0.75),
+               "ordinary playback must expose an explicit edit command");
+  const auto terminalMenu = playbackMenu.snapshotFor(
+      playback_session::ContextMenuSurface::Terminal);
+  const auto windowMenu = playbackMenu.snapshotFor(
+      playback_session::ContextMenuSurface::VideoWindow);
+  ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 1 &&
+                   terminalMenu.items[0].control ==
+                       playback_overlay::OverlayControlId::EditOpen &&
+                   !windowMenu.visible,
+               "a playback context menu must belong to exactly one presentation surface");
+  cleanEdit.active = true;
+  cleanEdit.dirty = true;
+  playbackMenu.refresh(cleanEdit, idleExport);
+  ok &= expect(playbackMenu.select(
+                   playback_overlay::OverlayControlId::EditDiscard) &&
+                   playbackMenu.activateSelection() ==
+                       playback_overlay::OverlayControlId::EditDiscard &&
+                   !playbackMenu.visible(),
+               "context commands must update from edit state and dismiss on activation");
 
   return ok ? 0 : 1;
 }

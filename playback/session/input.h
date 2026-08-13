@@ -14,6 +14,7 @@
 #include "playback/input/shortcut_types.h"
 #include "consoleinput.h"
 #include "playback/ascii/frame_output.h"
+#include "playback/session/context_menu_controller.h"
 #include "playback/video/edit/view.h"
 #include "playback/video/timeline_preview_types.h"
 #include "state.h"
@@ -26,6 +27,13 @@ class PlaybackOsdTimeline;
 }
 
 namespace playback_session_input {
+
+inline bool isBackMousePressed(const MouseEvent& mouse) {
+  constexpr DWORD kBackButtons = FROM_LEFT_2ND_BUTTON_PRESSED |
+                                 FROM_LEFT_3RD_BUTTON_PRESSED |
+                                 FROM_LEFT_4TH_BUTTON_PRESSED;
+  return (mouse.buttonState & kBackButtons) != 0;
+}
 
 struct PlaybackInputView {
   Player* player = nullptr;
@@ -54,6 +62,10 @@ struct PlaybackInputSignals {
   std::function<bool()> videoEditorActive;
   std::function<bool()> videoEditExitConfirmationActive;
   std::function<bool(PlaybackShortcutAction)> handleVideoEditorAction;
+  std::function<bool()> contextMenuVisible;
+  std::function<playback_session::ContextMenuInputResult(
+      const playback_session::ContextMenuInput&)>
+      handleContextMenuInput;
   std::function<bool(playback_video_edit::EditBoundary, int64_t timelineUs)>
       moveVideoEditBoundary;
   std::function<bool(bool quitApplication)> requestPlaybackExit;

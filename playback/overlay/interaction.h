@@ -16,6 +16,7 @@ enum class OverlayControlId {
   AudioTrack,
   Subtitles,
   PictureInPicture,
+  EditOpen,
   EditMarkIn,
   EditMarkOut,
   EditRippleDelete,
@@ -24,6 +25,7 @@ enum class OverlayControlId {
   EditRedo,
   EditReset,
   EditExport,
+  EditDiscard,
   EditDone,
   EditDiscardAndExit,
   EditCancelExit,
@@ -62,6 +64,7 @@ struct EditBoundaryRegion {
 
 struct InteractionMap {
   // Immutable-by-convention snapshot of one rendered overlay.
+  bool modal = false;
   std::optional<ProgressBarRegion> progressBar;
   std::vector<OverlayControlRegion> controls;
   std::vector<EditBoundaryRegion> editBoundaries;

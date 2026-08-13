@@ -29,6 +29,7 @@ struct EditClipSnapshot {
 // time is kept explicit and is never used as the seek-bar coordinate system.
 struct EditSnapshot {
   bool active = false;
+  bool hasEdits = false;
   bool dirty = false;
   bool canUndo = false;
   bool canRedo = false;
@@ -42,7 +43,6 @@ struct EditSnapshot {
   std::optional<int64_t> inTimelineUs;
   std::optional<int64_t> outTimelineUs;
   std::optional<int64_t> playheadTimelineUs;
-  bool exitConfirmation = false;
 };
 
 // Presentation-only export state. Renderers must not depend on worker,

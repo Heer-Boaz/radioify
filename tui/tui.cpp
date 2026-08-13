@@ -975,7 +975,6 @@ int runTui(Options o) {
   const Style kStyleAlert{{255, 92, 92}, kBgBase};
   const Style kStyleDir{{110, 231, 183}, kBgBase};
   const Style kStyleHighlight{{15, 20, 28}, {230, 238, 248}};
-  const Style kStyleMutedHighlight{{138, 144, 153}, {36, 42, 52}};
   const Style kStyleBreadcrumbHover{{15, 20, 28}, {255, 214, 120}};
   const Style kStyleActionActive{{15, 20, 28}, {255, 214, 120}};
   const Color kProgressStart{110, 231, 183};
@@ -1288,7 +1287,7 @@ int runTui(Options o) {
             &systemControls,
             &notificationAreaControls,
             requestTransportCommand, requestOpenFiles,
-            &videoContinuationState);
+            &videoContinuationState, route.sessionIntent);
         if (quitAppRequested) {
           running = false;
           return true;
@@ -1355,13 +1354,25 @@ int runTui(Options o) {
     std::function<void()> run;
   };
 
+  enum class FileContextAction : uint8_t {
+    Play,
+    EditVideo,
+    Analyze,
+    SplitLoop,
+  };
+
+  struct FileContextMenuItem {
+    FileContextAction action = FileContextAction::Play;
+    std::string label;
+  };
+
   struct FileContextMenuState {
     bool active = false;
     FileEntry entry{};
+    std::vector<FileContextMenuItem> items;
     int selected = 0;
     int anchorX = -1;
     int anchorY = -1;
-    bool analyzeSupported = false;
   };
 
   struct FileContextMenuLayout {
@@ -1373,10 +1384,6 @@ int runTui(Options o) {
     int rows = 0;
     bool valid = false;
   };
-
-  constexpr int kFileContextActionPlay = 0;
-  constexpr int kFileContextActionAnalyze = 1;
-  constexpr int kFileContextActionSplitLoop = 2;
 
   struct MelodyExportTaskState {
     std::mutex mutex;
@@ -1441,6 +1448,7 @@ int runTui(Options o) {
               return ActionStripItem::PictureInPicture;
             case playback_overlay::OverlayControlId::AudioTrack:
             case playback_overlay::OverlayControlId::Subtitles:
+            case playback_overlay::OverlayControlId::EditOpen:
             case playback_overlay::OverlayControlId::EditMarkIn:
             case playback_overlay::OverlayControlId::EditMarkOut:
             case playback_overlay::OverlayControlId::EditRippleDelete:
@@ -1449,6 +1457,7 @@ int runTui(Options o) {
             case playback_overlay::OverlayControlId::EditRedo:
             case playback_overlay::OverlayControlId::EditReset:
             case playback_overlay::OverlayControlId::EditExport:
+            case playback_overlay::OverlayControlId::EditDiscard:
             case playback_overlay::OverlayControlId::EditDone:
             case playback_overlay::OverlayControlId::EditDiscardAndExit:
             case playback_overlay::OverlayControlId::EditCancelExit:
@@ -1672,16 +1681,29 @@ int runTui(Options o) {
         return playOpenFilesRequest({files});
       };
   callbacks.onOpenFileContextMenu = [&](const FileEntry& entry, int x, int y) {
-    if (!o.play || entry.isDir || !isSupportedAudioExt(entry.path)) {
+    if (!o.play || entry.isDir) {
       return;
     }
+    std::vector<FileContextMenuItem> items;
+    if (isVideoExt(entry.path)) {
+      items.push_back({FileContextAction::Play, "Play"});
+      items.push_back({FileContextAction::EditVideo, "Edit video"});
+    } else if (isSupportedAudioExt(entry.path)) {
+      items.push_back({FileContextAction::Play, "Play"});
+      if (!isBackgroundTaskRunning()) {
+        if (audioCanAnalyzeFileToMelodyFile(entry.path)) {
+          items.push_back({FileContextAction::Analyze, "Analyze"});
+        }
+        items.push_back({FileContextAction::SplitLoop, "Split loop"});
+      }
+    }
+    if (items.empty()) return;
     fileContextMenu.active = true;
     fileContextMenu.entry = entry;
+    fileContextMenu.items = std::move(items);
     fileContextMenu.selected = 0;
     fileContextMenu.anchorX = x;
     fileContextMenu.anchorY = y;
-    fileContextMenu.analyzeSupported =
-        audioCanAnalyzeFileToMelodyFile(entry.path);
     markDirty();
   };
   callbacks.onRenderFile = [&](const std::filesystem::path& file) {
@@ -2169,13 +2191,13 @@ int runTui(Options o) {
 
   auto computeFileContextLayout = [&](int w, int h, int topInset) {
     FileContextMenuLayout layout{};
-    std::vector<std::string> items = {" Play", " Analyze", " Split Loop"};
+    if (fileContextMenu.items.empty()) return layout;
     int itemWidth = 0;
-    for (const auto& item : items) {
-      itemWidth = std::max(itemWidth, utf8DisplayWidth(item));
+    for (const auto& item : fileContextMenu.items) {
+      itemWidth = std::max(itemWidth, utf8DisplayWidth(item.label));
     }
-    layout.width = std::max(24, itemWidth + 4);
-    layout.height = static_cast<int>(items.size()) + 2;
+    layout.width = std::max(18, itemWidth + 4);
+    layout.height = static_cast<int>(fileContextMenu.items.size()) + 2;
     const int minTop = std::clamp(topInset, 1, std::max(1, h - 1));
     const int maxY = std::max(minTop, h - layout.height);
     int x = fileContextMenu.anchorX;
@@ -2189,15 +2211,23 @@ int runTui(Options o) {
     layout.x = x;
     layout.y = y;
     layout.listY = y + 1;
-    layout.rows = static_cast<int>(items.size());
+    layout.rows = static_cast<int>(fileContextMenu.items.size());
     layout.valid = true;
     return layout;
   };
 
   auto runFileContextAction = [&](int actionIndex) {
-    if (!fileContextMenu.active) return;
+    if (!fileContextMenu.active || actionIndex < 0 ||
+        actionIndex >= static_cast<int>(fileContextMenu.items.size())) {
+      return;
+    }
     const FileEntry entry = fileContextMenu.entry;
-    if (actionIndex == kFileContextActionPlay) {
+    const FileContextAction action =
+        fileContextMenu.items[static_cast<size_t>(actionIndex)].action;
+    fileContextMenu.active = false;
+    fileContextMenu.items.clear();
+    dirty = true;
+    if (action == FileContextAction::Play) {
       bool played = false;
       if (entry.trackIndex >= 0) {
         played = tryStartAudioFile(entry.path, entry.trackIndex);
@@ -2205,9 +2235,14 @@ int runTui(Options o) {
         played = callbacks.onPlayFile(entry.path);
       }
       (void)played;
-    } else if (actionIndex == kFileContextActionAnalyze) {
+    } else if (action == FileContextAction::EditVideo) {
+      playback_route::Route route =
+          playback_route::resolveTarget({entry.path, -1});
+      route.sessionIntent = PlaybackSessionIntent::EditVideo;
+      playPlaybackRoute(route);
+    } else if (action == FileContextAction::Analyze) {
       startMelodyExport(entry);
-    } else if (actionIndex == kFileContextActionSplitLoop) {
+    } else if (action == FileContextAction::SplitLoop) {
       if (!entry.isDir && isSupportedAudioExt(entry.path) &&
           !isBackgroundTaskRunning()) {
         LoopSplitConfig splitConfig;
@@ -2220,8 +2255,6 @@ int runTui(Options o) {
         startLoopSplitExport(entry.path, o.output, splitConfig, loopSplitTask);
       }
     }
-    fileContextMenu.active = false;
-    dirty = true;
   };
 
   auto drawMelodyPanel = [&](int top, int panelHeight, int panelWidth,
@@ -3229,13 +3262,14 @@ int runTui(Options o) {
             screen.writeChar(x0 + w - 1, y0 + y, L'|', kStyleDim);
           }
 
-          std::vector<std::string> items = {" Play", " Analyze", " Split Loop"};
           int inner = std::max(1, w - 2);
           for (int i = 0; i < fileContextLayout.rows; ++i) {
-            if (i < 0 || i >= static_cast<int>(items.size())) {
+            if (i < 0 ||
+                i >= static_cast<int>(fileContextMenu.items.size())) {
               continue;
             }
-            std::string text = items[static_cast<size_t>(i)];
+            std::string text =
+                " " + fileContextMenu.items[static_cast<size_t>(i)].label;
             if (utf8DisplayWidth(text) > inner) {
               text = utf8TakeDisplayWidth(text, inner);
             }
@@ -3243,12 +3277,9 @@ int runTui(Options o) {
             if (textWidth < inner) {
               text.append(static_cast<size_t>(inner - textWidth), ' ');
             }
-            const bool muted =
-                i == kFileContextActionAnalyze &&
-                !fileContextMenu.analyzeSupported;
-            Style rowStyle = muted ? kStyleDim : kStyleNormal;
+            Style rowStyle = kStyleNormal;
             if (i == fileContextMenu.selected) {
-              rowStyle = muted ? kStyleMutedHighlight : kStyleHighlight;
+              rowStyle = kStyleHighlight;
             }
             screen.writeText(x0 + 1, fileContextLayout.listY + i, text, rowStyle);
           }

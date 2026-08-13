@@ -27,6 +27,7 @@ bool InteractionRect::contains(double x, double y) const {
 }
 
 bool InteractionMap::contains(double x, double y) const {
+  if (modal) return true;
   if (progressBar && progressBar->bounds.contains(x, y)) return true;
   if (overlayControlAt(*this, x, y)) return true;
   return editBoundaryHandleAt(*this, x, y);
@@ -128,6 +129,7 @@ InteractionMap transformInteractionMap(const InteractionMap& map,
       !std::isfinite(scaleY)) {
     return out;
   }
+  out.modal = map.modal;
   if (map.progressBar) {
     out.progressBar = *map.progressBar;
     out.progressBar->bounds = transformRect(

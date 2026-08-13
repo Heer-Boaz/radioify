@@ -189,8 +189,14 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.pictureInPictureActive = inputs.pictureInPictureActive;
   state.subtitleRenderError = inputs.subtitleRenderError;
   state.debugLines = inputs.debugLines;
+  state.contextMenu = inputs.contextMenu;
   state.videoEdit = inputs.videoEdit;
   state.videoEditExport = inputs.videoEditExport;
+  state.videoEditExitConfirmation = inputs.videoEditExitConfirmation;
+  state.chromeVisible = state.overlayVisible || !state.debugLines.empty() ||
+                        state.videoEdit.active ||
+                        state.videoEditExitConfirmation ||
+                        state.videoEditExport.running();
 
   if (inputs.subtitleManager) {
     state.subtitleText = buildSubtitleText(*inputs.subtitleManager,
@@ -405,6 +411,8 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invoke(actions.subtitles);
     case OverlayControlId::PictureInPicture:
       return invoke(actions.pictureInPicture);
+    case OverlayControlId::EditOpen:
+      return invoke(actions.editOpen);
     case OverlayControlId::EditMarkIn:
       return invoke(actions.editMarkIn);
     case OverlayControlId::EditMarkOut:
@@ -421,6 +429,8 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invoke(actions.editReset);
     case OverlayControlId::EditExport:
       return invoke(actions.editExport);
+    case OverlayControlId::EditDiscard:
+      return invoke(actions.editDiscard);
     case OverlayControlId::EditDone:
       return invoke(actions.editDone);
     case OverlayControlId::EditDiscardAndExit:
@@ -453,7 +463,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     }
   };
 
-  if (state.videoEdit.exitConfirmation) {
+  if (state.videoEditExitConfirmation) {
     addSpec(makeOverlayTextControlSpec(
         OverlayControlId::EditExport,
         state.videoEditExport.running() ? "Wait" : "Export",
@@ -750,7 +760,7 @@ OverlayCellLayout layoutPlaybackOverlayCells(
                                  buildWindowOverlayTopLine(state));
   input.suffix = buildWindowOverlayProgressSuffix(state);
   input.reservedRowsAboveProgress =
-      (state.videoEdit.active || state.videoEdit.exitConfirmation ||
+      (state.videoEdit.active || state.videoEditExitConfirmation ||
        state.videoEditExport.running())
           ? 1
           : 0;
@@ -766,7 +776,7 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   input.title = overlayTitleWithDebugLines(ui.debugLines, ui.title);
   input.suffix = ui.progressSuffix;
   input.reservedRowsAboveProgress =
-      (ui.videoEdit.active || ui.videoEdit.exitConfirmation ||
+      (ui.videoEdit.active || ui.videoEditExitConfirmation ||
        ui.videoEditExport.running())
           ? 1
           : 0;
@@ -784,7 +794,8 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
 
 InteractionMap buildOverlayInteractionMap(
     const OverlayCellLayout& layout,
-    const playback_video_edit::EditSnapshot* videoEdit) {
+    const playback_video_edit::EditSnapshot* videoEdit,
+    bool videoEditExitConfirmation) {
   InteractionMap map;
   for (const OverlayCellControlLayoutItem& item : layout.controls) {
     if (item.width <= 0 || item.y < 0) continue;
@@ -797,7 +808,7 @@ InteractionMap buildOverlayInteractionMap(
 
   if (layout.progressBarX < 0 || layout.progressBarY < 0 ||
       layout.progressBarWidth <= 0 ||
-      (videoEdit && videoEdit->exitConfirmation)) {
+      videoEditExitConfirmation) {
     return map;
   }
 
@@ -811,7 +822,7 @@ InteractionMap buildOverlayInteractionMap(
   if (!videoEdit || !videoEdit->active) return map;
   const playback_video_edit::OverlayModel model =
       playback_video_edit::buildOverlayModel(
-          *videoEdit, nullptr, layout.progressBarWidth, 0.0);
+          *videoEdit, nullptr, false, layout.progressBarWidth, 0.0);
   const auto addBoundary = [&](std::optional<int> cell,
                                playback_video_edit::EditBoundary boundary) {
     if (!cell) return;
@@ -866,10 +877,7 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
           ? static_cast<float>(std::clamp(state.displaySec / state.totalSec, 0.0, 1.0))
           : 0.0f;
   ui.overlayAlpha = state.overlayVisible ? 1.0f : 0.0f;
-  if (state.videoEdit.active || state.videoEdit.exitConfirmation ||
-      state.videoEditExport.running()) {
-    ui.overlayAlpha = 1.0f;
-  }
+  ui.chromeVisible = state.chromeVisible;
   ui.isPaused = state.paused;
   ui.title = state.windowTitle;
   ui.transientMessage = state.transientMessage;
@@ -897,8 +905,10 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.subtitle = state.subtitleText;
   ui.subtitleAlpha =
       (state.subtitleCues.empty() && !state.subtitleAssScript) ? 0.0f : 1.0f;
+  ui.contextMenu = state.contextMenu;
   ui.videoEdit = state.videoEdit;
   ui.videoEditExport = state.videoEditExport;
+  ui.videoEditExitConfirmation = state.videoEditExitConfirmation;
   return ui;
 }
 
@@ -1055,8 +1065,9 @@ void renderVideoEditTimelineToTarget(
     Target& target, const OverlayCellLayout& layout,
     const OverlayRenderStyles& styles, double progress,
     const playback_video_edit::EditSnapshot& edit,
-    const playback_video_edit::ExportProgress* editExport) {
-  if ((!edit.active && !edit.exitConfirmation &&
+    const playback_video_edit::ExportProgress* editExport,
+    bool editExitConfirmation) {
+  if ((!edit.active && !editExitConfirmation &&
        !(editExport && editExport->running())) ||
       layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
       !target.rowVisible(layout.progressBarY)) {
@@ -1065,7 +1076,9 @@ void renderVideoEditTimelineToTarget(
 
   const int width = layout.progressBarWidth;
   const playback_video_edit::OverlayModel model =
-      playback_video_edit::buildOverlayModel(edit, editExport, width, progress);
+      playback_video_edit::buildOverlayModel(edit, editExport,
+                                             editExitConfirmation, width,
+                                             progress);
   const Style keptStyle{styles.progressStart, styles.progressEmptyStyle.bg};
   const Style selectedStyle{styles.accentStyle.bg, styles.accentStyle.fg};
   const Style cutStyle{{255, 145, 96}, styles.progressEmptyStyle.bg};
@@ -1120,12 +1133,42 @@ void renderTransientMessageToTarget(Target& target,
 }
 
 template <typename Target>
+void renderContextMenuToTarget(Target& target,
+                               const ContextMenuCellLayout& layout,
+                               const OverlayRenderStyles& styles) {
+  if (!target.isDrawable() || !layout.drawable()) return;
+
+  const int left = layout.x;
+  const int right = layout.x + layout.width - 1;
+  const int top = layout.y;
+  const int bottom = layout.y + layout.height - 1;
+  for (int x = left + 1; x < right; ++x) {
+    target.writeChar(x, top, L'─', styles.accentStyle);
+    target.writeChar(x, bottom, L'─', styles.accentStyle);
+  }
+  target.writeChar(left, top, L'┌', styles.accentStyle);
+  target.writeChar(right, top, L'┐', styles.accentStyle);
+  target.writeChar(left, bottom, L'└', styles.accentStyle);
+  target.writeChar(right, bottom, L'┘', styles.accentStyle);
+
+  const Style selectedStyle{styles.accentStyle.bg, styles.accentStyle.fg};
+  for (const ContextMenuCellItem& item : layout.items) {
+    const Style& rowStyle = item.selected ? selectedStyle : styles.baseStyle;
+    const std::string row = fitCellText(" " + item.text, item.width);
+    target.writeControlText(row, item.y, item.x, item.width, rowStyle);
+    target.writeChar(left, item.y, L'│', styles.accentStyle);
+    target.writeChar(right, item.y, L'│', styles.accentStyle);
+  }
+}
+
+template <typename Target>
 void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                            const OverlayRenderStyles& styles,
                            double progress,
                            const playback_video_edit::EditSnapshot* videoEdit,
                            const playback_video_edit::ExportProgress*
-                               videoEditExport) {
+                               videoEditExport,
+                           bool videoEditExitConfirmation) {
   if (!target.isDrawable()) return;
 
   for (const auto& item : layout.controls) {
@@ -1161,7 +1204,8 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
 
   if (videoEdit) {
     renderVideoEditTimelineToTarget(target, layout, styles, progress,
-                                    *videoEdit, videoEditExport);
+                                    *videoEdit, videoEditExport,
+                                    videoEditExitConfirmation);
   }
 
   target.writeText(layout.suffixX, layout.suffixY, layout.suffixText,
@@ -1220,11 +1264,12 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            const playback_video_edit::EditSnapshot* videoEdit,
                            const playback_video_edit::ExportProgress*
                                videoEditExport,
+                           bool videoEditExitConfirmation,
                            int minY,
                            int maxY) {
   ScreenOverlayTarget target(screen, minY, maxY);
   renderOverlayToTarget(target, layout, styles, progress, videoEdit,
-                        videoEditExport);
+                        videoEditExport, videoEditExitConfirmation);
 }
 
 void renderTransientMessageToScreen(ConsoleScreen& screen,
@@ -1232,6 +1277,13 @@ void renderTransientMessageToScreen(ConsoleScreen& screen,
                                     const Style& style) {
   ScreenOverlayTarget target(screen, 0, screen.height());
   renderTransientMessageToTarget(target, message, style);
+}
+
+void renderContextMenuToScreen(ConsoleScreen& screen,
+                               const ContextMenuCellLayout& layout,
+                               const OverlayRenderStyles& styles) {
+  ScreenOverlayTarget target(screen, 0, screen.height());
+  renderContextMenuToTarget(target, layout, styles);
 }
 
 void renderTimelinePreviewChromeToScreen(
@@ -1259,9 +1311,10 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
   GpuTextGridOverlayTarget target(outFrame, overlayLayout.width,
                                   overlayLayout.height, styles.baseStyle);
   bool rendered = false;
-  if (ui.overlayAlpha > 0.01f || !ui.debugLines.empty()) {
+  if (ui.chromeVisible) {
     renderOverlayToTarget(target, overlayLayout, styles, ui.progress,
-                          &ui.videoEdit, &ui.videoEditExport);
+                          &ui.videoEdit, &ui.videoEditExport,
+                          ui.videoEditExitConfirmation);
     rendered = true;
   }
   if (ui.timelinePreview.hoverActive) {
@@ -1297,6 +1350,12 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
     renderTransientMessageToTarget(target, *ui.transientMessage,
                                    styles.accentStyle);
     rendered = true;
+  }
+  if (ui.contextMenu.visible) {
+    const ContextMenuCellLayout menuLayout = layoutContextMenuCells(
+        ui.contextMenu, overlayLayout.width, overlayLayout.height);
+    renderContextMenuToTarget(target, menuLayout, styles);
+    rendered = rendered || menuLayout.drawable();
   }
   return rendered;
 }

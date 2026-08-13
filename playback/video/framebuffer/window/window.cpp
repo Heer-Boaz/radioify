@@ -2394,10 +2394,13 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
     }
     const bool showTimelinePreview =
         includePlaybackOverlay && ui.timelinePreview.hoverActive;
-    bool showOverlay =
+    const bool showPlaybackChrome =
         includePlaybackOverlay &&
-        (ui.overlayAlpha > 0.01f || !ui.debugLines.empty() ||
-         ui.transientMessage || showTimelinePreview);
+        (ui.chromeVisible || showTimelinePreview);
+    const bool showContextMenu =
+        includePlaybackOverlay && ui.contextMenu.visible;
+    const bool showOverlay = showPlaybackChrome || showContextMenu ||
+                             (includePlaybackOverlay && ui.transientMessage);
     const bool hasAssScript =
         static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
     const bool hasPlaintextSubtitleCues = std::any_of(
@@ -2423,6 +2426,8 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
         std::max(1, geometry.height), cellHeight);
     const playback_overlay::OverlayCellLayout windowOverlayLayout =
         playback_overlay::layoutWindowOverlayCells(ui, cols, rows);
+    const playback_overlay::ContextMenuCellLayout contextMenuLayout =
+        playback_overlay::layoutContextMenuCells(ui.contextMenu, cols, rows);
     bool drawTimelinePreview = false;
     D3D11_VIEWPORT timelinePreviewViewport{};
 
@@ -2547,12 +2552,16 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                 0.0f, 0.0f, static_cast<float>(textPxW),
                 static_cast<float>(textPxH), 0.0f, 1.0f};
             drawOverlayTextGrid = textPxW > 0 && textPxH > 0;
-            const bool controlsRendered =
-                ui.overlayAlpha > 0.01f || !ui.debugLines.empty();
-            if (drawOverlayTextGrid && controlsRendered) {
-                const playback_overlay::InteractionMap cellInteractions =
-                    playback_overlay::buildOverlayInteractionMap(
-                        windowOverlayLayout, &ui.videoEdit);
+            const bool controlsRendered = showPlaybackChrome;
+            if (drawOverlayTextGrid &&
+                (controlsRendered || contextMenuLayout.drawable())) {
+                playback_overlay::InteractionMap cellInteractions =
+                    contextMenuLayout.drawable()
+                        ? playback_overlay::buildContextMenuInteractionMap(
+                              contextMenuLayout)
+                        : playback_overlay::buildOverlayInteractionMap(
+                              windowOverlayLayout, &ui.videoEdit,
+                              ui.videoEditExitConfirmation);
                 if (outInteractions) {
                     *outInteractions =
                         playback_overlay::transformInteractionMap(

@@ -31,6 +31,7 @@ struct PlaybackSession::Impl {
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
         continuityState(args.continuityState),
+        sessionIntent(args.sessionIntent),
         enableAscii(config.enableAscii),
         enableAudio(config.enableAudio && audioIsEnabled()),
         host({file, input, screen, baseStyle, accentStyle, dimStyle,
@@ -86,7 +87,8 @@ struct PlaybackSession::Impl {
         notificationAreaControls,
         requestTransportCommand,
         requestOpenFiles,
-        continuityState});
+        continuityState,
+        sessionIntent});
   }
 
   void shutdownLoop() {
@@ -151,6 +153,7 @@ struct PlaybackSession::Impl {
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   PlaybackSessionContinuationState* continuityState = nullptr;
+  PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
   const bool enableAscii;
   const bool enableAudio;
   PlaybackSessionHost host;

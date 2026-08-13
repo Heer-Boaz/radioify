@@ -24,6 +24,7 @@
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
 #include "playback/session/osd_timeline.h"
+#include "playback/session/context_menu_controller.h"
 #include "playback_mode.h"
 #include "playback/notification_area/controls.h"
 #include "playback/system_media_transport/controls.h"
@@ -67,8 +68,8 @@ std::optional<playback_video_edit::Command> videoEditCommandFor(
     PlaybackShortcutAction action) {
   using Command = playback_video_edit::Command;
   switch (action) {
-    case PlaybackShortcutAction::ToggleVideoEditor:
-      return Command::Toggle;
+    case PlaybackShortcutAction::OpenVideoEditor:
+      return Command::Open;
     case PlaybackShortcutAction::ExitVideoEditor:
       return Command::Close;
     case PlaybackShortcutAction::SetVideoEditIn:
@@ -87,6 +88,8 @@ std::optional<playback_video_edit::Command> videoEditCommandFor(
       return Command::Reset;
     case PlaybackShortcutAction::ExportVideoEdits:
       return Command::Export;
+    case PlaybackShortcutAction::DiscardVideoEdits:
+      return Command::Discard;
     default:
       return std::nullopt;
   }
@@ -142,6 +145,7 @@ struct PlaybackLoopRunner::Impl {
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   PlaybackSessionContinuationState* continuityState = nullptr;
+  const PlaybackSessionIntent sessionIntent;
   PlaybackSessionContinuationState capturedContinuationState;
   const bool enableAscii;
   const bool enableAudio;
@@ -172,6 +176,7 @@ struct PlaybackLoopRunner::Impl {
   playback_video_edit::Controller videoEditor;
   playback_video_edit::EditSnapshot videoEditSnapshot;
   playback_video_edit::ExportProgress videoEditExportProgress;
+  playback_session::ContextMenuController contextMenuController;
   std::optional<PendingExit> pendingExit;
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
@@ -210,6 +215,7 @@ struct PlaybackLoopRunner::Impl {
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
         continuityState(args.continuityState),
+        sessionIntent(args.sessionIntent),
         enableAscii(args.enableAscii),
         enableAudio(args.enableAudio),
         hasSubtitles(args.hasSubtitles),
@@ -234,6 +240,9 @@ struct PlaybackLoopRunner::Impl {
     syncVideoEditView(false);
     bindInputState();
     bindRenderInputs();
+    if (sessionIntent == PlaybackSessionIntent::EditVideo) {
+      handleVideoEditorAction(PlaybackShortcutAction::OpenVideoEditor, false);
+    }
     applyPresenterSync(syncPresentation());
   }
 
@@ -368,7 +377,6 @@ struct PlaybackLoopRunner::Impl {
 
   void syncVideoEditView(bool requestPresent = true) {
     videoEditSnapshot = videoEditor.edit();
-    videoEditSnapshot.exitConfirmation = pendingExit.has_value();
     if (videoEditSnapshot.active) {
       const PlayerTimelineSnapshot timeline = core.player().timelineSnapshot();
       videoEditSnapshot.playheadTimelineUs = timeline.positionUs;
@@ -376,6 +384,9 @@ struct PlaybackLoopRunner::Impl {
           std::max<int64_t>(0, timeline.frameDurationUs);
     }
     videoEditExportProgress = videoEditor.exportProgress();
+    contextMenuController.refresh(videoEditSnapshot,
+                                  videoEditExportProgress);
+    if (pendingExit) contextMenuController.dismiss();
     if (!requestPresent) return;
     redraw = true;
     output.requestWindowPresent();
@@ -398,7 +409,8 @@ struct PlaybackLoopRunner::Impl {
     }
   }
 
-  bool handleVideoEditorAction(PlaybackShortcutAction action) {
+  bool handleVideoEditorAction(PlaybackShortcutAction action,
+                               bool announce = true) {
     if (action == PlaybackShortcutAction::DiscardVideoEditsAndExit) {
       return completePendingExit();
     }
@@ -430,6 +442,11 @@ struct PlaybackLoopRunner::Impl {
 
     const playback_video_edit::CommandResult result =
         videoEditor.execute(*command, context);
+    if (action == PlaybackShortcutAction::OpenVideoEditor &&
+        videoEditor.active()) {
+      playback_session_input::setPlaybackPaused(inputView, inputSignals,
+                                                seekState, true);
+    }
     overlayControlHover.store(-1, std::memory_order_relaxed);
     std::string message = result.message;
     bool sequenceAccepted = true;
@@ -464,8 +481,79 @@ struct PlaybackLoopRunner::Impl {
       pendingExit->exitAfterExport = true;
       message = "Exporting; will exit when complete";
     }
-    if (!message.empty()) showEditMessage(message);
+    if (!message.empty() && (announce || !videoEditor.active())) {
+      showEditMessage(message);
+    }
     return result.handled;
+  }
+
+  playback_session::ContextMenuInputResult handleContextMenuInput(
+      const playback_session::ContextMenuInput& request) {
+    playback_session::ContextMenuInputResult result;
+    using InputKind = playback_session::ContextMenuInputKind;
+    switch (request.kind) {
+      case InputKind::Open: {
+        if (pendingExit) return result;
+        const int width =
+            request.surface == playback_session::ContextMenuSurface::Terminal
+                ? screen.width()
+                : output.window().GetWidth();
+        const int height =
+            request.surface == playback_session::ContextMenuSurface::Terminal
+                ? screen.height()
+                : output.window().GetHeight();
+        const double xRatio =
+            request.x / static_cast<double>(std::max(1, width - 1));
+        const double yRatio =
+            request.y / static_cast<double>(std::max(1, height - 1));
+        result.handled = contextMenuController.open(
+            request.surface, xRatio, yRatio);
+        if (result.handled) {
+          const auto previewSurface =
+              request.surface ==
+                      playback_session::ContextMenuSurface::Terminal
+                  ? playback_video_timeline_preview::PresentationSurface::Terminal
+                  : playback_video_timeline_preview::PresentationSurface::VideoWindow;
+          timelinePreviewModel.hide(previewSurface);
+          timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
+        }
+        break;
+      }
+      case InputKind::Dismiss:
+        result.handled = contextMenuController.dismiss();
+        break;
+      case InputKind::MoveSelection:
+        if (contextMenuController.visible()) {
+          contextMenuController.moveSelection(request.selectionDelta);
+          result.handled = true;
+        }
+        break;
+      case InputKind::SelectControl:
+        if (contextMenuController.visible() && request.control) {
+          contextMenuController.select(*request.control);
+          result.handled = true;
+        }
+        break;
+      case InputKind::ActivateSelection:
+        if (contextMenuController.visible()) {
+          result.activatedControl =
+              contextMenuController.activateSelection();
+          result.handled = true;
+        }
+        break;
+      case InputKind::ActivateControl:
+        if (contextMenuController.visible() && request.control) {
+          result.activatedControl =
+              contextMenuController.activate(*request.control);
+          result.handled = true;
+        }
+        break;
+    }
+    if (result.handled) {
+      redraw = true;
+      output.requestWindowPresent();
+    }
+    return result;
   }
 
   void bindInputState() {
@@ -503,6 +591,12 @@ struct PlaybackLoopRunner::Impl {
     inputSignals.handleVideoEditorAction =
         [this](PlaybackShortcutAction action) {
           return handleVideoEditorAction(action);
+        };
+    inputSignals.contextMenuVisible =
+        [this]() { return contextMenuController.visible(); };
+    inputSignals.handleContextMenuInput =
+        [this](const playback_session::ContextMenuInput& request) {
+          return handleContextMenuInput(request);
         };
     inputSignals.moveVideoEditBoundary =
         [this](playback_video_edit::EditBoundary boundary,
@@ -596,13 +690,16 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.timingSink = timingSink;
     renderInputs.videoEdit = videoEditSnapshot;
     renderInputs.videoEditExport = videoEditExportProgress;
+    renderInputs.videoEditExitConfirmation = pendingExit.has_value();
+    renderInputs.contextMenu = contextMenuController.snapshotFor(
+        playback_session::ContextMenuSurface::Terminal);
     core.bindRenderInputs(renderInputs);
   }
 
   bool overlayVisible() const {
     return config.debugOverlay || osd.controlsVisible() ||
            videoEditor.active() || pendingExit.has_value() ||
-           videoEditExportProgress.running();
+           videoEditExportProgress.running() || contextMenuController.visible();
   }
 
   playback_overlay::PlaybackOsdSnapshot osdSnapshot() const {
@@ -624,10 +721,9 @@ struct PlaybackLoopRunner::Impl {
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
     ui.videoEdit = videoEditSnapshot;
     ui.videoEditExport = videoEditExportProgress;
-    if (ui.videoEdit.active || ui.videoEdit.exitConfirmation ||
-        ui.videoEditExport.running()) {
-      ui.overlayAlpha = 1.0f;
-    }
+    ui.videoEditExitConfirmation = pendingExit.has_value();
+    ui.contextMenu = contextMenuController.snapshotFor(
+        playback_session::ContextMenuSurface::VideoWindow);
     return ui;
   }
 
@@ -671,6 +767,9 @@ struct PlaybackLoopRunner::Impl {
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
     inputs.videoEdit = videoEditSnapshot;
     inputs.videoEditExport = videoEditExportProgress;
+    inputs.videoEditExitConfirmation = pendingExit.has_value();
+    inputs.contextMenu = contextMenuController.snapshotFor(
+        playback_session::ContextMenuSurface::VideoWindow);
     inputs.osd.controlsVisible =
         inputs.osd.controlsVisible || audioOnlyPlayback;
     inputs.clearHistory = false;
@@ -783,6 +882,9 @@ struct PlaybackLoopRunner::Impl {
         playback_video_timeline_preview::PresentationSurface::Terminal);
     renderInputs.videoEdit = videoEditSnapshot;
     renderInputs.videoEditExport = videoEditExportProgress;
+    renderInputs.videoEditExitConfirmation = pendingExit.has_value();
+    renderInputs.contextMenu = contextMenuController.snapshotFor(
+        playback_session::ContextMenuSurface::Terminal);
     renderInputs.cellPixelWidth = screen.cellPixelWidth();
     renderInputs.cellPixelHeight = screen.cellPixelHeight();
     renderInputs.cellPixelSourceLabel = screen.cellPixelSourceLabel();

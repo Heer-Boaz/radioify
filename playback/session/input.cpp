@@ -41,13 +41,6 @@ void updateOverlayControlHover(PlaybackInputSignals& signals, int nextHover) {
   requestWindowRefresh(signals);
 }
 
-bool isBackMousePressed(const MouseEvent& mouse) {
-  constexpr DWORD kBackButtons = FROM_LEFT_2ND_BUTTON_PRESSED |
-                                 FROM_LEFT_3RD_BUTTON_PRESSED |
-                                 FROM_LEFT_4TH_BUTTON_PRESSED;
-  return (mouse.buttonState & kBackButtons) != 0;
-}
-
 double playbackDurationSec(const PlaybackInputView& view) {
   const int64_t durationUs = view.player->durationUs();
   if (durationUs > 0) {
@@ -299,6 +292,9 @@ bool executeOverlayControl(const PlaybackInputView& view,
     return signals.handleVideoEditorAction &&
            signals.handleVideoEditorAction(action);
   };
+  actions.editOpen = [&]() {
+    return editAction(PlaybackShortcutAction::OpenVideoEditor);
+  };
   actions.editMarkIn = [&]() {
     return editAction(PlaybackShortcutAction::SetVideoEditIn);
   };
@@ -324,6 +320,9 @@ bool executeOverlayControl(const PlaybackInputView& view,
   actions.editExport = [&]() {
     return editAction(PlaybackShortcutAction::ExportVideoEdits);
   };
+  actions.editDiscard = [&]() {
+    return editAction(PlaybackShortcutAction::DiscardVideoEdits);
+  };
   actions.editDone = [&]() {
     return editAction(PlaybackShortcutAction::ExitVideoEditor);
   };
@@ -334,6 +333,24 @@ bool executeOverlayControl(const PlaybackInputView& view,
     return editAction(PlaybackShortcutAction::CancelVideoEditExit);
   };
   return playback_overlay::dispatchOverlayControl(control, actions);
+}
+
+bool dispatchContextMenuInput(
+    const PlaybackInputView& view, PlaybackInputSignals& signals,
+    PlaybackSeekGestureState& seekState,
+    const playback_session::ContextMenuInput& request) {
+  if (!signals.handleContextMenuInput) return false;
+  const playback_session::ContextMenuInputResult result =
+      signals.handleContextMenuInput(request);
+  if (!result.handled) return false;
+  if (result.activatedControl) {
+    executeOverlayControl(view, signals, seekState,
+                          *result.activatedControl);
+  }
+  updateOverlayControlHover(signals, -1);
+  *signals.redraw = true;
+  requestWindowRefresh(signals);
+  return true;
 }
 
 }  // namespace
@@ -402,6 +419,32 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
                               PlaybackSeekGestureState& seekState,
                               const InputEvent& ev) {
+  if (signals.contextMenuVisible && signals.contextMenuVisible()) {
+    playback_session::ContextMenuInput request;
+    if (ev.type == InputEvent::Type::Action &&
+        ev.action == InputAction::Back) {
+      request.kind = playback_session::ContextMenuInputKind::Dismiss;
+      dispatchContextMenuInput(view, signals, seekState, request);
+      return;
+    }
+    if (ev.type == InputEvent::Type::Key) {
+      if (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BACK) {
+        request.kind = playback_session::ContextMenuInputKind::Dismiss;
+      } else if (ev.key.vk == VK_UP) {
+        request.kind = playback_session::ContextMenuInputKind::MoveSelection;
+        request.selectionDelta = -1;
+      } else if (ev.key.vk == VK_DOWN) {
+        request.kind = playback_session::ContextMenuInputKind::MoveSelection;
+        request.selectionDelta = 1;
+      } else if (ev.key.vk == VK_RETURN) {
+        request.kind = playback_session::ContextMenuInputKind::ActivateSelection;
+      } else {
+        return;
+      }
+      dispatchContextMenuInput(view, signals, seekState, request);
+      return;
+    }
+  }
   InputCallbacks cb;
   cb.onQuit = [&]() { requestPlaybackExit(view, signals, true); };
   cb.onPlay = [&]() {
@@ -436,14 +479,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       case PlaybackShortcutAction::ExitPlaybackSession:
         requestPlaybackExit(view, signals, false);
         break;
-      case PlaybackShortcutAction::ToggleVideoEditor:
-        if (!signals.videoEditorActive || !signals.videoEditorActive()) {
-          setPlaybackPaused(view, signals, seekState, true);
-        }
-        if (signals.handleVideoEditorAction) {
-          signals.handleVideoEditorAction(action);
-        }
-        break;
+      case PlaybackShortcutAction::OpenVideoEditor:
       case PlaybackShortcutAction::ExitVideoEditor:
       case PlaybackShortcutAction::SetVideoEditIn:
       case PlaybackShortcutAction::SetVideoEditOut:
@@ -453,6 +489,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       case PlaybackShortcutAction::RedoVideoEdit:
       case PlaybackShortcutAction::ResetVideoEdits:
       case PlaybackShortcutAction::ExportVideoEdits:
+      case PlaybackShortcutAction::DiscardVideoEdits:
       case PlaybackShortcutAction::DiscardVideoEditsAndExit:
       case PlaybackShortcutAction::CancelVideoEditExit:
         if (signals.handleVideoEditorAction) {
@@ -555,6 +592,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
           : playback_video_timeline_preview::PresentationSurface::Terminal;
   const bool leftPressed =
       (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+  const bool rightPressed =
+      (mouse.buttonState & RIGHTMOST_BUTTON_PRESSED) != 0;
   const bool dragFromThisSurface =
       seekState.videoEditBoundaryDrag &&
       seekState.videoEditBoundaryDrag->surface == previewSurface;
@@ -570,8 +609,27 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       signals.videoEditExitConfirmationActive &&
       signals.videoEditExitConfirmationActive();
 
+  const double pointerX =
+      windowEvent && mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
+  const double pointerY =
+      windowEvent && mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
+  if (rightPressed && mouse.eventFlags == 0) {
+    playback_session::ContextMenuInput request;
+    request.kind = playback_session::ContextMenuInputKind::Open;
+    request.surface =
+        windowEvent ? playback_session::ContextMenuSurface::VideoWindow
+                    : playback_session::ContextMenuSurface::Terminal;
+    request.x = pointerX;
+    request.y = pointerY;
+    if (dispatchContextMenuInput(view, signals, seekState, request)) return;
+  }
+
   if (isBackMousePressed(mouse)) {
-    if (editExitConfirmation && signals.handleVideoEditorAction) {
+    if (signals.contextMenuVisible && signals.contextMenuVisible()) {
+      playback_session::ContextMenuInput request;
+      request.kind = playback_session::ContextMenuInputKind::Dismiss;
+      dispatchContextMenuInput(view, signals, seekState, request);
+    } else if (editExitConfirmation && signals.handleVideoEditorAction) {
       signals.handleVideoEditorAction(
           PlaybackShortcutAction::CancelVideoEditExit);
     } else {
@@ -584,10 +642,6 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     *signals.redraw = true;
   }
 
-  const double pointerX =
-      windowEvent && mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
-  const double pointerY =
-      windowEvent && mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
   const bool capturedProgressDrag =
       (dragFromThisSurface || progressDragFromThisSurface) && leftPressed;
   playback_overlay::InteractionHit interactionHit;
@@ -610,6 +664,40 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   const auto& progressHit = interactionHit.progressBar;
   const auto& boundaryHit = interactionHit.editBoundary;
   const auto& controlHit = interactionHit.control;
+  if (signals.contextMenuVisible && signals.contextMenuVisible()) {
+    playback_session::ContextMenuInput request;
+    request.surface =
+        windowEvent ? playback_session::ContextMenuSurface::VideoWindow
+                    : playback_session::ContextMenuSurface::Terminal;
+    if (mouse.eventFlags == MOUSE_WHEELED) {
+      const int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
+      if (delta != 0) {
+        request.kind = playback_session::ContextMenuInputKind::MoveSelection;
+        request.selectionDelta = delta > 0 ? -1 : 1;
+        dispatchContextMenuInput(view, signals, seekState, request);
+      }
+      return;
+    }
+    if (mouse.eventFlags == MOUSE_MOVED) {
+      if (controlHit) {
+        request.kind = playback_session::ContextMenuInputKind::SelectControl;
+        request.control = *controlHit;
+        dispatchContextMenuInput(view, signals, seekState, request);
+      }
+      return;
+    }
+    if (leftPressed && mouse.eventFlags == 0) {
+      if (controlHit) {
+        request.kind = playback_session::ContextMenuInputKind::ActivateControl;
+        request.control = *controlHit;
+      } else {
+        request.kind = playback_session::ContextMenuInputKind::Dismiss;
+      }
+      dispatchContextMenuInput(view, signals, seekState, request);
+      return;
+    }
+    return;
+  }
   if (progressHit) {
     triggerOverlay(view, signals);
     *signals.redraw = true;

@@ -76,15 +76,16 @@ int availableStatusPartWidth(const std::string& status, int width) {
 }  // namespace
 
 OverlayModel buildOverlayModel(const EditSnapshot& edit,
-                               const ExportProgress* editExport, int width,
+                               const ExportProgress* editExport,
+                               bool exitConfirmation, int width,
                                double timelineProgress) {
   OverlayModel model;
   const bool exportRunning = editExport && editExport->running();
   if (width <= 0 ||
-      (!edit.active && !edit.exitConfirmation && !exportRunning)) {
+      (!edit.active && !exitConfirmation && !exportRunning)) {
     return model;
   }
-  if (edit.exitConfirmation) {
+  if (exitConfirmation) {
     model.status =
         exportRunning
             ? shortestFittingStatus({"EXPORT RUNNING", "EXPORTING", "EXPORT"},
@@ -134,6 +135,15 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     }
   }
 
+  if (edit.active) {
+    const int available = availableStatusPartWidth(model.status, width);
+    appendStatusPart(
+        &model.status,
+        edit.dirty
+            ? shortestFittingStatus({"EDIT MODE*", "EDIT*", "*"}, available)
+            : shortestFittingStatus({"EDIT MODE", "EDIT"}, available),
+        width);
+  }
   if (exportRunning) {
     const int percentage = static_cast<int>(
         std::lround(std::clamp(editExport->fraction, 0.0, 1.0) * 100.0));
@@ -145,14 +155,6 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
           shortestFittingStatus({"EXPORTING", "EXPORT", "EXP"}, width),
           width);
     }
-  }
-  if (edit.active) {
-    const int available = availableStatusPartWidth(model.status, width);
-    appendStatusPart(
-        &model.status,
-        edit.dirty ? shortestFittingStatus({"EDIT*", "*"}, available)
-                   : shortestFittingStatus({"EDIT"}, available),
-        width);
   }
   if (edit.active && edit.playheadTimelineUs) {
     appendStatusPart(

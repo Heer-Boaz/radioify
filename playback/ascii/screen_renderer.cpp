@@ -169,9 +169,6 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   screen.updateSize();
   int width = screen.width();
   int height = screen.height();
-  if (!overlayVisibleNow) {
-    overlayControlHover.store(-1, std::memory_order_relaxed);
-  }
   std::string statusLine;
   if (!audioOk && !audioStarting) {
     if (!enableAudio) {
@@ -392,27 +389,33 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
       videoWindow.IsOpen() && videoWindow.IsPictureInPicture();
   overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
   overlayInputs.debugLines = debugLines;
+  overlayInputs.contextMenu = inputs.contextMenu;
   overlayInputs.videoEdit = inputs.videoEdit;
   overlayInputs.videoEditExport = inputs.videoEditExport;
+  overlayInputs.videoEditExitConfirmation =
+      inputs.videoEditExitConfirmation;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
   const int hoverIndex =
       overlayControlHover.load(std::memory_order_relaxed);
   playback_overlay::OverlayCellLayout overlayLayout;
-  const bool showOverlay = overlayState.overlayVisible ||
-                           !overlayState.debugLines.empty() ||
-                            inputs.timelinePreview.hoverActive ||
-                            overlayState.videoEdit.active ||
-                            overlayState.videoEdit.exitConfirmation ||
-                            overlayState.videoEditExport.running();
-  int overlayReservedLines = showOverlay ? 5 : 0;
-  if (showOverlay) {
+  playback_overlay::ContextMenuCellLayout contextMenuLayout;
+  const bool showPlaybackChrome =
+      overlayState.chromeVisible || inputs.timelinePreview.hoverActive;
+  const bool showContextMenu = overlayState.contextMenu.visible;
+  if (!showPlaybackChrome && !showContextMenu) {
+    overlayControlHover.store(-1, std::memory_order_relaxed);
+  }
+  int overlayReservedLines = showPlaybackChrome ? 5 : 0;
+  if (showPlaybackChrome || showContextMenu) {
     overlayLayout = playback_overlay::layoutPlaybackOverlayCells(
         overlayState, width, height, hoverIndex);
-    if (overlayLayout.topY != -1) {
+    if (showPlaybackChrome && overlayLayout.topY != -1) {
       const int overlayTop = std::max(0, overlayLayout.topY);
       overlayReservedLines = std::max(5, height - overlayTop);
     }
+    contextMenuLayout = playback_overlay::layoutContextMenuCells(
+        overlayState.contextMenu, width, height);
   }
 
   screen.clear(baseStyle);
@@ -451,20 +454,30 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         videoWindow.GetWidth(), videoWindow.GetHeight(), dimStyle);
   }
 
-  if (showOverlay) {
+  if (showPlaybackChrome || showContextMenu) {
     double ratio = 0.0;
     if (totalSec > 0.0 && std::isfinite(totalSec)) {
       ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
     }
-    frameOutput.overlayInteractions =
-        playback_overlay::buildOverlayInteractionMap(
-            overlayLayout, &overlayState.videoEdit);
+    if (showPlaybackChrome) {
+      frameOutput.overlayInteractions =
+          playback_overlay::buildOverlayInteractionMap(
+              overlayLayout, &overlayState.videoEdit,
+              overlayState.videoEditExitConfirmation);
+    }
+    if (showContextMenu && contextMenuLayout.drawable()) {
+      frameOutput.overlayInteractions =
+          playback_overlay::buildContextMenuInteractionMap(contextMenuLayout);
+    }
     playback_overlay::OverlayRenderStyles overlayStyles{
         baseStyle, accentStyle, progressEmptyStyle, progressFrameStyle,
         progressStart, progressEnd};
-    playback_overlay::renderOverlayToScreen(
-        screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
-        &overlayState.videoEditExport, artTop, height);
+    if (showPlaybackChrome) {
+      playback_overlay::renderOverlayToScreen(
+          screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
+          &overlayState.videoEditExport,
+          overlayState.videoEditExitConfirmation, artTop, height);
+    }
   }
 
   if (inputs.timelinePreview.hoverActive) {
@@ -502,6 +515,14 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   if (overlayState.transientMessage) {
     playback_overlay::renderTransientMessageToScreen(
         screen, *overlayState.transientMessage, accentStyle);
+  }
+
+  if (contextMenuLayout.drawable()) {
+    playback_overlay::OverlayRenderStyles menuStyles{
+        baseStyle, accentStyle, progressEmptyStyle, progressFrameStyle,
+        progressStart, progressEnd};
+    playback_overlay::renderContextMenuToScreen(screen, contextMenuLayout,
+                                                menuStyles);
   }
 
   screen.draw();

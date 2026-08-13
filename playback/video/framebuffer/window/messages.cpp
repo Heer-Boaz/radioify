@@ -263,9 +263,20 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return 0;
     }
 
-    if (uMsg == WM_RBUTTONDOWN) {
-        queueWindowMouseEvent(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
-                              RIGHTMOST_BUTTON_PRESSED, 0);
+    if (uMsg == WM_CONTEXTMENU) {
+        POINT point{};
+        if (GET_X_LPARAM(lParam) == -1 && GET_Y_LPARAM(lParam) == -1) {
+            RECT client{};
+            if (GetClientRect(hWnd, &client)) {
+                point.x = (client.right - client.left) / 2;
+                point.y = (client.bottom - client.top) / 2;
+            }
+        } else {
+            point = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(hWnd, &point);
+        }
+        pThis->m_input.push(window_input_events::mouseEvent(
+            point.x, point.y, RIGHTMOST_BUTTON_PRESSED, 0));
         return 0;
     }
 

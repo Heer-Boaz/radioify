@@ -174,7 +174,7 @@ inline constexpr std::array<PlaybackShortcutBinding, 48>
         {PlaybackShortcutAction::CopyVideoFrame, 'S', 's', 'S',
          kPlaybackShortcutShiftMask, kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoPlayback},
-        {PlaybackShortcutAction::ToggleVideoEditor, 'E', 'e', 'E', 0,
+        {PlaybackShortcutAction::OpenVideoEditor, 'E', 'e', 'E', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoPlayback},
         {PlaybackShortcutAction::VolumeUp, VK_UP, 0, 0, kPlaybackShortcutShiftMask,
