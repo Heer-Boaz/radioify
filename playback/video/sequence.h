@@ -68,6 +68,9 @@ class Timeline {
   const std::vector<Clip>& clips() const { return clips_; }
 
   Point pointAt(int64_t presentationUs) const;
+  // Resolve a decode start inside actual content. The timeline end remains a
+  // useful boundary for editing, but it is not itself a presentable frame.
+  Point pointAtPlaybackPosition(int64_t presentationUs) const;
   std::optional<size_t> clipIndexAtSource(int64_t sourceUs) const;
   std::optional<Point> pointForSource(int64_t sourceUs,
                                       SourceBias bias) const;

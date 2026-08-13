@@ -370,6 +370,18 @@ int main() {
                    playback_video_control::EventType::SeekRequest,
                    playback_video_control::EventType::FrameStepRequest),
                "Frame steps must remain explicit events after seeks");
+  ok &= expect(playback_video_control::shouldCoalesceQueuedEvent(
+                   playback_video_control::EventType::SetSequence,
+                   playback_video_control::EventType::SetSequence),
+               "Adjacent program projections must coalesce as complete "
+               "transactions");
+  ok &= expect(!playback_video_control::shouldCoalesceQueuedEvent(
+                   playback_video_control::EventType::SetSequence,
+                   playback_video_control::EventType::FrameStepRequest) &&
+                   !playback_video_control::shouldCoalesceQueuedEvent(
+                       playback_video_control::EventType::FrameStepRequest,
+                       playback_video_control::EventType::SetSequence),
+               "Program projections must not jump over queued frame steps");
   ok &= expect(!playback_video_control::shouldCoalesceQueuedEvent(
                    playback_video_control::EventType::FirstFramePresented,
                    playback_video_control::EventType::PauseRequest),

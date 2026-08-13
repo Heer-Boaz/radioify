@@ -78,9 +78,11 @@ class Player {
   bool requestSeek(int64_t targetUs);
   bool requestRelativeSeek(int64_t deltaUs);
   bool requestFrameStep(playback_video_frame_step::Direction direction);
+  // positionUs is expressed on the supplied program timeline.
   bool setPlaybackSequence(
-      const std::vector<playback_video_sequence::SourceRange>& ranges);
-  bool clearPlaybackSequence();
+      const std::vector<playback_video_sequence::SourceRange>& ranges,
+      int64_t positionUs);
+  bool clearPlaybackSequence(int64_t positionUs);
   void requestResize(int targetW, int targetH);
   void setVideoPaused(bool paused);
   size_t audioTrackCount() const;

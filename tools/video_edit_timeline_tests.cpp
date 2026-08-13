@@ -86,6 +86,13 @@ int main() {
                      afterCut.sourceUs == 5'000'000 &&
                      afterCut.presentationUs == 3'000'000,
                  "presentation time must cross a cut without a time gap");
+    const playback_video_sequence::Point playableEnd =
+        sequence->pointAtPlaybackPosition(sequence->durationUs());
+    ok &= expect(playableEnd.clipIndex == 1 &&
+                     playableEnd.sourceUs == 9'999'999 &&
+                     playableEnd.presentationUs == 7'999'999,
+                 "a sequence-end edit point must resolve inside the final "
+                 "frame interval for playback");
     const auto removedForward = sequence->pointForSource(
         4'000'000, playback_video_sequence::SourceBias::Forward);
     const auto removedBackward = sequence->pointForSource(

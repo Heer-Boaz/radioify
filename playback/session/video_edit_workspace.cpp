@@ -17,7 +17,8 @@ namespace {
 
 struct CommandContext {
   int64_t sourceDurationUs = 0;
-  int64_t playheadUs = 0;
+  int64_t positionUs = 0;
+  int64_t sourcePositionUs = 0;
   int64_t frameDurationUs = 1;
   int videoStreamIndex = -1;
   int audioStreamIndex = -1;
@@ -50,7 +51,8 @@ struct VideoEditWorkspace::Impl {
     CommandContext context;
     context.sourceDurationUs = player.sourceDurationUs();
     const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
-    context.playheadUs = std::clamp(
+    context.positionUs = std::max<int64_t>(0, timeline.positionUs);
+    context.sourcePositionUs = std::clamp(
         timeline.sourcePositionUs, int64_t{0},
         std::max<int64_t>(0, context.sourceDurationUs));
     context.frameDurationUs =
@@ -89,11 +91,24 @@ struct VideoEditWorkspace::Impl {
     timelinePreviewProvider.cancelBefore(timelinePreview.requestId());
   }
 
-  bool syncDocumentPreview() {
+  std::optional<int64_t> positionForSource(
+      int64_t sourceUs, playback_video_sequence::SourceBias bias) const {
+    const playback_video_edit::Timeline& timeline = document.timeline();
+    const auto sequence = playback_video_sequence::Timeline::create(
+        timeline.sourceDurationUs(), timeline.keptRanges());
+    if (!sequence) return std::nullopt;
+    const auto point = sequence->pointForSource(sourceUs, bias);
+    return point ? std::optional<int64_t>(point->presentationUs)
+                 : std::nullopt;
+  }
+
+  bool syncDocumentPreview(int64_t positionUs) {
+    // Publish the EDL and its program playhead as one control transaction.
     const playback_video_edit::Timeline& timeline = document.timeline();
     if (timeline.isUnmodified()) {
-      if (!player.clearPlaybackSequence()) return false;
-    } else if (!player.setPlaybackSequence(timeline.keptRanges())) {
+      if (!player.clearPlaybackSequence(positionUs)) return false;
+    } else if (!player.setPlaybackSequence(timeline.keptRanges(),
+                                           positionUs)) {
       return false;
     }
     updateTimelinePreview(timeline.keptRanges());
@@ -240,7 +255,9 @@ VideoEditActionResult VideoEditWorkspace::execute(
 
   const CommandContext context = impl_->commandContext();
   bool timelineChanged = false;
-  bool syncProgramPreview = false;
+  // History and reset retain the current program coordinate. Edit operations
+  // below override this only when they define a new review point.
+  int64_t nextPositionUs = context.positionUs;
 
   switch (command) {
     case playback_video_edit::Command::Open:
@@ -291,7 +308,8 @@ VideoEditActionResult VideoEditWorkspace::execute(
       result.message.clear();
       break;
     case playback_video_edit::Command::MarkIn:
-      impl_->selection.markIn(impl_->document.timeline(), context.playheadUs);
+      impl_->selection.markIn(impl_->document.timeline(),
+                              context.sourcePositionUs);
       result.message = "In point set";
       break;
     case playback_video_edit::Command::ClearIn:
@@ -305,7 +323,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
         const int64_t duration =
             std::max<int64_t>(0, context.sourceDurationUs);
         const int64_t playhead =
-            std::clamp(context.playheadUs, int64_t{0}, duration);
+            std::clamp(context.sourcePositionUs, int64_t{0}, duration);
         const int64_t frameDuration =
             std::max<int64_t>(1, context.frameDurationUs);
         const int64_t out = frameDuration >= duration - playhead
@@ -328,7 +346,15 @@ VideoEditActionResult VideoEditWorkspace::execute(
       break;
     case playback_video_edit::Command::RippleDelete:
       if (const auto remove = impl_->selection.range()) {
+        // A ripple delete leaves one edit point at the range's former start.
+        const std::optional<int64_t> editPositionUs =
+            impl_->positionForSource(
+                remove->startUs,
+                playback_video_sequence::SourceBias::Forward);
         timelineChanged = impl_->document.rippleDelete(*remove);
+        if (timelineChanged) {
+          nextPositionUs = editPositionUs.value_or(nextPositionUs);
+        }
         result.message = timelineChanged ? "Range deleted (ripple)"
                                          : "That range cannot be deleted";
       } else {
@@ -339,6 +365,8 @@ VideoEditActionResult VideoEditWorkspace::execute(
       if (const auto keep =
               impl_->selection.trimRange(impl_->document.timeline())) {
         timelineChanged = impl_->document.trimTo(*keep);
+        // A trimmed program is reviewed from its new sequence origin.
+        if (timelineChanged) nextPositionUs = 0;
         result.message = timelineChanged ? "Sequence trimmed"
                                          : "Trim point does not change sequence";
       } else {
@@ -363,14 +391,10 @@ VideoEditActionResult VideoEditWorkspace::execute(
       break;
   }
 
+  bool projectionAccepted = true;
   if (timelineChanged) {
     impl_->selection.clear();
-    syncProgramPreview = true;
-  }
-
-  bool projectionAccepted = true;
-  if (syncProgramPreview) {
-    projectionAccepted = impl_->syncDocumentPreview();
+    projectionAccepted = impl_->syncDocumentPreview(nextPositionUs);
   }
 
   if (!projectionAccepted) {

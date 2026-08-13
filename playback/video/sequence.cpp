@@ -85,6 +85,11 @@ Point Timeline::pointAt(int64_t presentationUs) const {
                presentationUs};
 }
 
+Point Timeline::pointAtPlaybackPosition(int64_t presentationUs) const {
+  const int64_t lastContentUs = std::max<int64_t>(0, durationUs_ - 1);
+  return pointAt(std::clamp(presentationUs, int64_t{0}, lastContentUs));
+}
+
 std::optional<size_t> Timeline::clipIndexAtSource(int64_t sourceUs) const {
   const auto found = firstClipEndingAfter(clips_, sourceUs);
   if (found == clips_.end() || sourceUs < found->source.startUs) {

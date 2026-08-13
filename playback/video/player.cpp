@@ -1815,7 +1815,8 @@ struct Player::Impl {
   }
 
   bool postSequence(
-      std::shared_ptr<const playback_video_sequence::Timeline> next) {
+      std::shared_ptr<const playback_video_sequence::Timeline> next,
+      int64_t positionUs) {
     std::lock_guard<std::mutex> lock(eventMutex);
     if (!ctrlRunning.load(std::memory_order_relaxed) ||
         !initDone.load(std::memory_order_relaxed)) {
@@ -1824,6 +1825,7 @@ struct Player::Impl {
     playback_video_control::Event ev{};
     ev.type = playback_video_control::EventType::SetSequence;
     ev.sequence = std::move(next);
+    ev.sequencePositionUs = std::max<int64_t>(0, positionUs);
     enqueueEventLocked(std::move(ev));
     SetEvent(statusChangedEvent.get());
     return true;
@@ -2695,40 +2697,33 @@ struct Player::Impl {
         break;
       }
       case playback_video_control::EventType::SetSequence: {
-        int64_t sourceUs = 0;
-        const PresentedFrameState presented = presentedFrameSnapshot();
-        if (presented.valid &&
-            presented.serial == serialControl.currentSerial()) {
-          sourceUs = presented.sourcePtsUs;
-        } else {
-          sourceUs = sourcePositionForPresentation(videoTimelineUs());
-        }
-
         const auto next = ev.sequence;
         const int nextSerial = serialControl.currentSerial() + 1;
         bindSequence(nextSerial, next);
         if (next) {
           durationUs.store(next->durationUs(), std::memory_order_relaxed);
-          const auto point = next->pointForSource(
-              sourceUs, playback_video_sequence::SourceBias::Forward);
-          if (point) {
-            const int64_t demuxTargetUs =
-                (std::max)(int64_t{0}, point->sourceUs - 1000000);
-            applySerialTransition(
-                serialControl.beginTransition(
-                    point->presentationUs, point->sourceUs, demuxTargetUs,
-                    point->sourceUs, point->sourceUs,
-                    playback_video_serial_control::DemuxSeekMode::Timeline,
-                    initDone.load(std::memory_order_relaxed),
-                    running.load(std::memory_order_relaxed)),
-                "ctrl_sequence_change", SerialTransitionPurpose::Timeline);
-          }
+          const playback_video_sequence::Point point =
+              next->pointAtPlaybackPosition(ev.sequencePositionUs);
+          const int64_t demuxTargetUs =
+              (std::max)(int64_t{0}, point.sourceUs - 1000000);
+          applySerialTransition(
+              serialControl.beginTransition(
+                  point.presentationUs, point.sourceUs, demuxTargetUs,
+                  point.sourceUs, point.sourceUs,
+                  playback_video_serial_control::DemuxSeekMode::Timeline,
+                  initDone.load(std::memory_order_relaxed),
+                  running.load(std::memory_order_relaxed)),
+              "ctrl_sequence_change", SerialTransitionPurpose::Timeline);
         } else {
           const int64_t sourceDuration =
               sourceDurationUs.load(std::memory_order_relaxed);
           durationUs.store(sourceDuration, std::memory_order_relaxed);
+          const int64_t requestedPositionUs =
+              std::clamp(ev.sequencePositionUs, int64_t{0}, sourceDuration);
           const int64_t targetUs =
-              std::clamp(sourceUs, int64_t{0}, sourceDuration);
+              requestedPositionUs == sourceDuration && sourceDuration > 0
+                  ? sourceDuration - 1
+                  : requestedPositionUs;
           applySerialTransition(
               serialControl.beginTransition(
                   targetUs, initDone.load(std::memory_order_relaxed),
@@ -4485,18 +4480,20 @@ bool Player::requestFrameStep(playback_video_frame_step::Direction direction) {
 }
 
 bool Player::setPlaybackSequence(
-    const std::vector<playback_video_sequence::SourceRange>& ranges) {
+    const std::vector<playback_video_sequence::SourceRange>& ranges,
+    int64_t positionUs) {
   const int64_t sourceDuration =
       impl_->sourceDurationUs.load(std::memory_order_relaxed);
   const auto timeline =
       playback_video_sequence::Timeline::create(sourceDuration, ranges);
   if (!timeline) return false;
   return impl_->postSequence(
-      std::make_shared<const playback_video_sequence::Timeline>(*timeline));
+      std::make_shared<const playback_video_sequence::Timeline>(*timeline),
+      positionUs);
 }
 
-bool Player::clearPlaybackSequence() {
-  return impl_->postSequence({});
+bool Player::clearPlaybackSequence(int64_t positionUs) {
+  return impl_->postSequence({}, positionUs);
 }
 
 void Player::requestResize(int targetW, int targetH) {

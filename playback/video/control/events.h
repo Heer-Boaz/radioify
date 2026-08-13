@@ -29,6 +29,9 @@ struct Event {
   int serial = 0;
   uint64_t seekRequestGeneration = 0;
   uint64_t frameStepGeneration = 0;
+  // Program-timeline target committed with the immutable sequence projection.
+  // The control thread must not infer it later from a possibly newer frame.
+  int64_t sequencePositionUs = 0;
   playback_video_frame_step_seek::Plan frameStepSeek;
   std::shared_ptr<const playback_video_sequence::Timeline> sequence;
   playback_video_frame_step::Direction frameStepDirection =

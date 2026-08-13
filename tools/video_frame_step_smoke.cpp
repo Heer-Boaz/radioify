@@ -598,6 +598,7 @@ int main(int argc, char** argv) {
     }
     const std::vector<playback_video_sequence::SourceRange> ranges{
         {1'000'000, 2'000'000}, {4'000'000, 5'000'000}};
+    constexpr int64_t kSequenceStartUs = 250'000;
     if (!waitFor(player, kDefaultTimeoutMs, "sequence_startup",
                  [&](const PlayerDebugInfo& info) {
                    return info.hasVideoFrame &&
@@ -618,7 +619,7 @@ int main(int argc, char** argv) {
     const int beforeSequenceSerial = player.debugInfo().currentSerial;
     const AudioStreamReset beforeSequenceAudioReset =
         audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
-    if (!player.setPlaybackSequence(ranges)) {
+    if (!player.setPlaybackSequence(ranges, kSequenceStartUs)) {
       std::cerr << "video_frame_step_smoke: player rejected the immutable "
                    "sequence; source_duration_us="
                 << sourceDurationUs << " range_count=" << ranges.size()
@@ -644,9 +645,25 @@ int main(int argc, char** argv) {
       return 1;
     }
     if (!expectSerialTransition(
-            audioEnabled, 0, beforeSequenceSerial,
+            audioEnabled, kSequenceStartUs, beforeSequenceSerial,
             firstClip.currentSerial, beforeSequenceAudioReset,
             "sequence_apply")) {
+      return 1;
+    }
+    PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+    const int64_t initialMappingErrorUs =
+        std::llabs(timeline.sourcePositionUs -
+                   (1'000'000 + timeline.positionUs));
+    if (std::llabs(timeline.positionUs - kSequenceStartUs) >
+            std::max<int64_t>(firstClip.lastPresentedDurationUs, 50'000) ||
+        initialMappingErrorUs >
+            std::max<int64_t>(firstClip.lastPresentedDurationUs, 50'000)) {
+      std::cerr << "video_frame_step_smoke: explicit sequence start "
+                   "diverged requested_us="
+                << kSequenceStartUs
+                << " presentation_us=" << timeline.positionUs
+                << " source_us=" << timeline.sourcePositionUs
+                << " mapping_error_us=" << initialMappingErrorUs << '\n';
       return 1;
     }
     const AudioStreamReset sequenceAudioReset =
@@ -683,7 +700,7 @@ int main(int argc, char** argv) {
             "same edited timeline")) {
       return 1;
     }
-    PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+    timeline = player.timelineSnapshot();
     const int64_t mappedSourceUs =
         4'000'000 + timeline.positionUs - 1'000'000;
     const int64_t mappingErrorUs =
