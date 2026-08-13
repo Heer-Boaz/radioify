@@ -181,16 +181,18 @@ int main() {
                "becoming a ripple-delete range");
 
   Selection outOnlySelection;
-  outOnlySelection.markOut(document.timeline(), 8'000'000);
+  outOnlySelection.markOut(document.timeline(), 7'966'667, 8'000'000);
   const auto outOnlyRange = outOnlySelection.trimRange(document.timeline());
   const auto outOnlySnapshot = playback_video_edit::buildSnapshot(
       document, outOnlySelection, true);
   ok &= expect(outOnlyRange == std::optional<SourceRange>{
                                        SourceRange{0, 8'000'000}} &&
                    !outOnlySelection.range() && outOnlySnapshot.canTrim &&
-                   !outOnlySnapshot.canRippleDelete,
+                   !outOnlySnapshot.canRippleDelete &&
+                   outOnlySnapshot.outFrameTimelineUs ==
+                       std::optional<int64_t>(7'966'667),
                "an Out point must trim from the existing sequence start "
-               "without becoming a ripple-delete range");
+               "without losing the exact inclusive frame position");
 
   Document oneSidedDocument;
   oneSidedDocument.load(10'000'000);
@@ -206,7 +208,7 @@ int main() {
 
   Selection completeSelection;
   completeSelection.markIn(document.timeline(), 0);
-  completeSelection.markOut(document.timeline(), 10'000'000);
+  completeSelection.markOut(document.timeline(), 9'966'667, 10'000'000);
   const auto completeSnapshot = playback_video_edit::buildSnapshot(
       document, completeSelection, true);
   ok &= expect(!completeSnapshot.canTrim &&
@@ -216,22 +218,25 @@ int main() {
 
   Selection clearableSelection;
   clearableSelection.markIn(document.timeline(), 1'000'000);
-  clearableSelection.markOut(document.timeline(), 2'000'000);
+  clearableSelection.markOut(document.timeline(), 1'966'667, 2'000'000);
   ok &= expect(
       clearableSelection.hasMarks() &&
           clearableSelection.clear(playback_video_edit::EditBoundary::In) &&
           !clearableSelection.inSourceUs() &&
           clearableSelection.outSourceUs() ==
-              std::optional<int64_t>(2'000'000),
+              std::optional<int64_t>(2'000'000) &&
+          clearableSelection.outFrameSourceUs() ==
+              std::optional<int64_t>(1'966'667),
       "an active In control must clear only its own mark");
   ok &= expect(clearableSelection.clear() &&
                    !clearableSelection.inSourceUs() &&
                    !clearableSelection.outSourceUs() &&
+                   !clearableSelection.outFrameSourceUs() &&
                    !clearableSelection.hasMarks() &&
                    !clearableSelection.clear(),
                "Escape-style selection cancellation must clear all marks once");
   selection.markIn(document.timeline(), 3'000'000);
-  selection.markOut(document.timeline(), 5'000'000);
+  selection.markOut(document.timeline(), 4'966'667, 5'000'000);
   const auto initialRemoval = selection.range();
   ok &= expect(initialRemoval && document.rippleDelete(*initialRemoval),
                "a valid marked range must commit as one decision");
@@ -358,7 +363,11 @@ int main() {
                    playback_video_edit::EditBoundary::Out, 2'000'000,
                    100'000) &&
                    draggedOut.outSourceUs() ==
-                       std::optional<int64_t>(2'000'000),
+                       std::optional<int64_t>(2'000'000) &&
+                   playback_video_edit::buildSnapshot(
+                       draggedDocument, draggedOut, true)
+                           .outFrameTimelineUs ==
+                       std::optional<int64_t>(1'999'999),
                "an Out handle at a cut must bind to the preceding clip edge");
   draggedOut.markIn(draggedDocument.timeline(), 1'000'000);
   ok &= expect(draggedOut.moveBoundary(
@@ -380,12 +389,13 @@ int main() {
   overlayEdit.hasUnexportedChanges = true;
   overlayEdit.sourceDurationUs = 10'000'000;
   overlayEdit.timelineDurationUs = 8'000'000;
-  overlayEdit.frameDurationUs = 33'333;
+  overlayEdit.timecodeFrameDurationUs = 33'333;
   overlayEdit.keptRanges = {{0, 2'000'000}, {4'000'000, 10'000'000}};
   overlayEdit.clips = {{{0, 2'000'000}, 0},
                        {{4'000'000, 10'000'000}, 2'000'000}};
   overlayEdit.inTimelineUs = 2'000'000;
   overlayEdit.outTimelineUs = 4'000'000;
+  overlayEdit.outFrameTimelineUs = 3'966'667;
   overlayEdit.playheadTimelineUs = 4'000'000;
   playback_video_edit::ExportProgress overlayExport;
   overlayExport.active = true;
@@ -476,6 +486,15 @@ int main() {
                    "EDIT MODE*  I 00:02:00  O 00:03:29",
                "compact editor status must retain both frame-accurate range "
                "marks before general playhead time");
+  playback_video_edit::EditSnapshot vfrOutOverlay = overlayEdit;
+  vfrOutOverlay.outFrameTimelineUs = 3'950'000;
+  const playback_video_edit::OverlayModel vfrOutOverlayModel =
+      playback_video_edit::buildOverlayModel(
+          vfrOutOverlay, nullptr, Prompt::None, 64, 0.5);
+  ok &= expect(vfrOutOverlayModel.status.find("O 00:03:28") !=
+                   std::string::npos,
+               "the inclusive Out label must use its retained frame PTS "
+               "instead of subtracting the current playhead frame duration");
   const playback_video_edit::OverlayModel inOnlyDurationModel =
       playback_video_edit::buildOverlayModel(
           inOnlyOverlay, nullptr, Prompt::None, 64, 0.5);

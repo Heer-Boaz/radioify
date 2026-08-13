@@ -187,14 +187,19 @@ bool Selection::clear() {
   if (!inUs_ && !outUs_) return false;
   inUs_.reset();
   outUs_.reset();
+  outFrameUs_.reset();
   return true;
 }
 
 bool Selection::clear(EditBoundary boundary) {
-  std::optional<int64_t>& mark =
-      boundary == EditBoundary::In ? inUs_ : outUs_;
-  if (!mark) return false;
-  mark.reset();
+  if (boundary == EditBoundary::In) {
+    if (!inUs_) return false;
+    inUs_.reset();
+    return true;
+  }
+  if (!outUs_) return false;
+  outUs_.reset();
+  outFrameUs_.reset();
   return true;
 }
 
@@ -204,16 +209,29 @@ void Selection::markIn(const Timeline& timeline, int64_t sourceUs) {
   const bool clearsOut = outUs_ && *outUs_ <= nextIn;
   if (inUs_ == nextIn && !clearsOut) return;
   inUs_ = nextIn;
-  if (clearsOut) outUs_.reset();
+  if (clearsOut) {
+    outUs_.reset();
+    outFrameUs_.reset();
+  }
 }
 
 void Selection::markOut(const Timeline& timeline,
-                        int64_t sourceUsExclusive) {
+                        int64_t sourceFrameStartUs,
+                        int64_t sourceFrameEndUs) {
+  setOutBoundary(timeline, sourceFrameEndUs, sourceFrameStartUs);
+}
+
+void Selection::setOutBoundary(const Timeline& timeline,
+                               int64_t sourceUsExclusive,
+                               int64_t sourceFrameStartUs) {
   const int64_t nextOut = std::clamp(
       sourceUsExclusive, int64_t{0}, timeline.sourceDurationUs());
+  const int64_t nextOutFrame =
+      std::clamp(sourceFrameStartUs, int64_t{0}, nextOut);
   const bool clearsIn = inUs_ && *inUs_ >= nextOut;
-  if (outUs_ == nextOut && !clearsIn) return;
+  if (outUs_ == nextOut && outFrameUs_ == nextOutFrame && !clearsIn) return;
   outUs_ = nextOut;
+  outFrameUs_ = nextOutFrame;
   if (clearsIn) inUs_.reset();
 }
 
@@ -251,17 +269,22 @@ bool Selection::moveBoundary(const Timeline& timeline, EditBoundary boundary,
 
   const std::optional<int64_t> previousIn = inUs_;
   const std::optional<int64_t> previousOut = outUs_;
+  const std::optional<int64_t> previousOutFrame = outFrameUs_;
   if (boundary == EditBoundary::In) {
     markIn(timeline, sequence->pointAt(targetUs).sourceUs);
   } else if (targetUs <= 0) {
-    markOut(timeline, sequence->pointAt(0).sourceUs);
+    const int64_t sourceUs = sequence->pointAt(0).sourceUs;
+    setOutBoundary(timeline, sourceUs, sourceUs);
   } else {
     const playback_video_sequence::Point beforeBoundary =
         sequence->pointAt(targetUs - 1);
-    markOut(timeline, std::min(timeline.sourceDurationUs(),
-                               beforeBoundary.sourceUs + 1));
+    setOutBoundary(timeline,
+                   std::min(timeline.sourceDurationUs(),
+                            beforeBoundary.sourceUs + 1),
+                   beforeBoundary.sourceUs);
   }
-  return inUs_ != previousIn || outUs_ != previousOut;
+  return inUs_ != previousIn || outUs_ != previousOut ||
+         outFrameUs_ != previousOutFrame;
 }
 
 std::optional<SourceRange> Selection::range() const {
@@ -333,7 +356,7 @@ void Document::markExported(const std::vector<SourceRange>& ranges) {
 EditSnapshot buildSnapshot(const Document& document,
                            const Selection& selection, bool active,
                            std::optional<int64_t> playheadTimelineUs,
-                           int64_t frameDurationUs) {
+                           int64_t timecodeFrameDurationUs) {
   const Timeline& timeline = document.timeline();
   EditSnapshot out;
   out.active = active;
@@ -349,7 +372,8 @@ EditSnapshot buildSnapshot(const Document& document,
   out.canRedo = document.canRedo();
   out.sourceDurationUs = timeline.sourceDurationUs();
   out.timelineDurationUs = timeline.outputDurationUs();
-  out.frameDurationUs = std::max<int64_t>(0, frameDurationUs);
+  out.timecodeFrameDurationUs =
+      std::max<int64_t>(0, timecodeFrameDurationUs);
   out.keptRanges = timeline.keptRanges();
   out.inSourceUs = selection.inSourceUs();
   out.outSourceUs = selection.outSourceUs();
@@ -372,6 +396,11 @@ EditSnapshot buildSnapshot(const Document& document,
     const auto point = sequence->pointForSource(
         *out.outSourceUs, playback_video_sequence::SourceBias::Backward);
     if (point) out.outTimelineUs = point->presentationUs;
+  }
+  if (const auto outFrameSourceUs = selection.outFrameSourceUs()) {
+    const auto point = sequence->pointForSource(
+        *outFrameSourceUs, playback_video_sequence::SourceBias::Forward);
+    if (point) out.outFrameTimelineUs = point->presentationUs;
   }
   return out;
 }

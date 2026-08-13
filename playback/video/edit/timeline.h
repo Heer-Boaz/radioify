@@ -80,7 +80,8 @@ class Selection {
   bool clear();
   bool clear(EditBoundary boundary);
   void markIn(const Timeline& timeline, int64_t sourceUs);
-  void markOut(const Timeline& timeline, int64_t sourceUsExclusive);
+  void markOut(const Timeline& timeline, int64_t sourceFrameStartUs,
+               int64_t sourceFrameEndUs);
   bool moveBoundary(const Timeline& timeline, EditBoundary boundary,
                     int64_t timelineUs,
                     int64_t minimumSelectionDurationUs);
@@ -92,16 +93,21 @@ class Selection {
   std::optional<SourceRange> trimRange(const Timeline& timeline) const;
   std::optional<int64_t> inSourceUs() const { return inUs_; }
   std::optional<int64_t> outSourceUs() const { return outUs_; }
+  std::optional<int64_t> outFrameSourceUs() const { return outFrameUs_; }
 
  private:
+  void setOutBoundary(const Timeline& timeline, int64_t sourceUsExclusive,
+                      int64_t sourceFrameStartUs);
+
   std::optional<int64_t> inUs_;
   std::optional<int64_t> outUs_;
+  std::optional<int64_t> outFrameUs_;
 };
 
 // Pure projection for renderers and menus. No caller maintains a shadow copy.
 EditSnapshot buildSnapshot(const Document& document,
                            const Selection& selection, bool active,
                            std::optional<int64_t> playheadTimelineUs = {},
-                           int64_t frameDurationUs = 0);
+                           int64_t timecodeFrameDurationUs = 0);
 
 }  // namespace playback_video_edit

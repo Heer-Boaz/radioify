@@ -70,9 +70,8 @@ int64_t inclusiveOutDisplayUs(const EditSnapshot& edit) {
   // The editor-facing Out mark is inclusive, so label the last selected frame
   // instead of the exclusive boundary immediately after it.
   const int64_t lowerBound = edit.inTimelineUs.value_or(0);
-  return std::max(
-      lowerBound,
-      *edit.outTimelineUs - std::max<int64_t>(1, edit.frameDurationUs));
+  return std::clamp(edit.outFrameTimelineUs.value_or(*edit.outTimelineUs - 1),
+                    lowerBound, *edit.outTimelineUs);
 }
 
 std::optional<int64_t> selectedDurationUs(const EditSnapshot& edit) {
@@ -203,17 +202,18 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     std::vector<std::string> rangeParts;
     if (edit.inTimelineUs) {
       rangeParts.push_back(
-          "I " + formatTimecode(*edit.inTimelineUs, edit.frameDurationUs,
-                                  true));
+          "I " + formatTimecode(*edit.inTimelineUs,
+                                  edit.timecodeFrameDurationUs, true));
     }
     if (edit.outTimelineUs) {
       rangeParts.push_back(
           "O " + formatTimecode(inclusiveOutDisplayUs(edit),
-                                  edit.frameDurationUs, true));
+                                  edit.timecodeFrameDurationUs, true));
     }
     if (const auto durationUs = selectedDurationUs(edit)) {
       rangeParts.push_back(
-          "D " + formatTimecode(*durationUs, edit.frameDurationUs, true));
+          "D " + formatTimecode(*durationUs,
+                                  edit.timecodeFrameDurationUs, true));
     }
     int rangeWidth = 0;
     for (const std::string& part : rangeParts) {
@@ -251,9 +251,10 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     appendStatusPart(
         &model.status,
         "TC " + formatTimecode(*edit.playheadTimelineUs,
-                                edit.frameDurationUs) +
+                                edit.timecodeFrameDurationUs) +
             " / " +
-            formatTimecode(edit.timelineDurationUs, edit.frameDurationUs),
+            formatTimecode(edit.timelineDurationUs,
+                           edit.timecodeFrameDurationUs),
         width);
   }
   if (edit.active && edit.clips.size() > 1) {

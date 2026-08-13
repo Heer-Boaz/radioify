@@ -389,8 +389,42 @@ struct PlaybackLoopRunner::Impl {
     }
   }
 
+  void pollVideoEditBoundaryCommit() {
+    if (!seekState.pendingVideoEditBoundaryCommit) return;
+    if (!videoEditWorkspace.active() || pendingExit ||
+        videoEditWorkspace.prompt() != playback_video_edit::Prompt::None) {
+      seekState.pendingVideoEditBoundaryCommit.reset();
+      return;
+    }
+
+    const auto pending = *seekState.pendingVideoEditBoundaryCommit;
+    const PlayerTimelineSnapshot timeline = core.player().timelineSnapshot();
+    switch (playback_session_input::videoEditBoundaryCommitState(
+        pending.seekGeneration, timeline.latestSeekRequestGeneration,
+        timeline.handledSeekRequestGeneration, timeline.seekPending(),
+        timeline.frameDurationUs > 0)) {
+      case playback_session_input::VideoEditBoundaryCommitState::Waiting:
+        return;
+      case playback_session_input::VideoEditBoundaryCommitState::Superseded:
+        // Never attach an edit mark to a frame from the wrong seek
+        // generation.
+        seekState.pendingVideoEditBoundaryCommit.reset();
+        return;
+      case playback_session_input::VideoEditBoundaryCommitState::Ready:
+        break;
+    }
+
+    seekState.pendingVideoEditBoundaryCommit.reset();
+    const playback_video_edit::Command command =
+        pending.boundary == playback_video_edit::EditBoundary::In
+            ? playback_video_edit::Command::MarkIn
+            : playback_video_edit::Command::MarkOut;
+    executeVideoEditCommand(command, false);
+  }
+
   bool executeVideoEditCommand(playback_video_edit::Command command,
                                bool announce = true) {
+    seekState.pendingVideoEditBoundaryCommit.reset();
     const bool exportForPendingExit =
         pendingExit && command == playback_video_edit::Command::Export;
     if (exportForPendingExit &&
@@ -1197,6 +1231,7 @@ struct PlaybackLoopRunner::Impl {
     PlaybackLoopState loopState = PlaybackLoopState::Running;
     while (loopState == PlaybackLoopState::Running) {
       pollVideoEditExport();
+      pollVideoEditBoundaryCommit();
       if (std::optional<playback_video_timeline_preview::Result> result =
               timelinePreviewProvider.takeResult()) {
         if (timelinePreviewModel.apply(*result)) {

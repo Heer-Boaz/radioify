@@ -64,14 +64,15 @@ struct VideoEditWorkspace::Impl {
 
   playback_video_edit::EditSnapshot editSnapshot() const {
     std::optional<int64_t> playheadTimelineUs;
-    int64_t frameDurationUs = 0;
+    int64_t timecodeFrameDurationUs = 0;
     if (active) {
       const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
       playheadTimelineUs = timeline.positionUs;
-      frameDurationUs = timeline.frameDurationUs;
+      timecodeFrameDurationUs = timeline.nominalFrameDurationUs;
     }
     return playback_video_edit::buildSnapshot(
-        document, selection, active, playheadTimelineUs, frameDurationUs);
+        document, selection, active, playheadTimelineUs,
+        timecodeFrameDurationUs);
   }
 
   playback_video_edit::ExportProgress exportProgressSnapshot() const {
@@ -329,7 +330,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
         const int64_t out = frameDuration >= duration - playhead
                                 ? duration
                                 : playhead + frameDuration;
-        impl_->selection.markOut(impl_->document.timeline(), out);
+        impl_->selection.markOut(impl_->document.timeline(), playhead, out);
       }
       result.message = "Out point set";
       break;

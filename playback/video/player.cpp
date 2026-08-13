@@ -2366,6 +2366,8 @@ struct Player::Impl {
     if (presented.serial == position.currentSerial && presented.valid) {
       snapshot.frameDurationUs = presented.durationUs;
     }
+    snapshot.nominalFrameDurationUs =
+        estimatedFrameDurationUs.load(std::memory_order_relaxed);
     if (!position.requestPending && !position.transitionPending &&
         position.presentedPositionValid &&
         presented.serial == position.currentSerial && presented.valid) {

@@ -169,6 +169,28 @@ void commitQueuedSeek(const PlaybackInputView& view,
   }
 }
 
+void finishVideoEditBoundaryDrag(
+    const PlaybackInputView& view, PlaybackInputSignals& signals,
+    PlaybackSeekGestureState& seekState,
+    playback_video_timeline_preview::PresentationSurface surface) {
+  if (!seekState.videoEditBoundaryDrag ||
+      seekState.videoEditBoundaryDrag->surface != surface) {
+    return;
+  }
+  const PlaybackSeekGestureState::VideoEditBoundaryDrag completed =
+      *seekState.videoEditBoundaryDrag;
+  commitQueuedSeek(view, signals, seekState);
+  const PlayerTimelineSnapshot timeline = view.player->timelineSnapshot();
+  if (completed.targetTimelineUs >= 0 &&
+      timeline.latestSeekRequestGeneration >
+          completed.seekGenerationAtStart) {
+    seekState.pendingVideoEditBoundaryCommit =
+        PlaybackSeekGestureState::PendingVideoEditBoundaryCommit{
+            completed.boundary, timeline.latestSeekRequestGeneration};
+  }
+  seekState.videoEditBoundaryDrag.reset();
+}
+
 void sendRelativeSeekRequest(const PlaybackInputView& view,
                              PlaybackInputSignals& signals,
                              PlaybackSeekGestureState& seekState,
@@ -563,7 +585,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   const bool progressDragFromThisSurface =
       seekState.progressDragSurface == previewSurface;
   if ((dragFromThisSurface || progressDragFromThisSurface) && !leftPressed) {
-    seekState.videoEditBoundaryDrag.reset();
+    finishVideoEditBoundaryDrag(view, signals, seekState, previewSurface);
     seekState.progressDragSurface.reset();
     commitQueuedSeek(view, signals, seekState);
     *signals.redraw = true;
@@ -672,9 +694,12 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       mouse.eventFlags == 0 && boundaryHit &&
       signals.videoEditorActive && signals.videoEditorActive() &&
       signals.moveVideoEditBoundary) {
+    setPlaybackPaused(view, signals, seekState, true);
+    seekState.pendingVideoEditBoundaryCommit.reset();
     seekState.videoEditBoundaryDrag =
-        PlaybackSeekGestureState::VideoEditBoundaryDrag{*boundaryHit,
-                                                        previewSurface};
+        PlaybackSeekGestureState::VideoEditBoundaryDrag{
+            *boundaryHit, previewSurface, -1,
+            view.player->timelineSnapshot().latestSeekRequestGeneration};
   } else if (progressHit && leftPressed && mouse.eventFlags == 0) {
     seekState.progressDragSurface = previewSurface;
   }
@@ -682,17 +707,27 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       seekState.videoEditBoundaryDrag &&
       seekState.videoEditBoundaryDrag->surface == previewSurface;
   if (progressHit && leftPressed && boundaryDrag) {
+    double previewRatio = progressRatio;
     if (const auto targetUs =
             playbackTimelineTargetForRatio(view, progressRatio)) {
+      seekState.videoEditBoundaryDrag->targetTimelineUs = *targetUs;
       signals.moveVideoEditBoundary(seekState.videoEditBoundaryDrag->boundary,
                                     *targetUs);
+      const int64_t seekTargetUs = videoEditBoundarySeekTargetUs(
+          seekState.videoEditBoundaryDrag->boundary, *targetUs);
+      queueSeekRequest(signals, seekState,
+                       static_cast<double>(seekTargetUs) / 1000000.0);
+      const int64_t durationUs = view.player->durationUs();
+      if (durationUs > 0) {
+        previewRatio = static_cast<double>(seekTargetUs) /
+                       static_cast<double>(durationUs);
+      }
     }
     updateOverlayControlHover(signals, -1);
     if (signals.requestTimelinePreview) {
-      signals.requestTimelinePreview(previewSurface, progressRatio,
+      signals.requestTimelinePreview(previewSurface, previewRatio,
                                      progressUnits);
     }
-    queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
     return;
   }
   const bool seekGesture =
@@ -740,7 +775,9 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
 void handlePlaybackPointerLeave(PlaybackInputSignals& signals,
                                 PlaybackSeekGestureState& seekState,
                                 const PlaybackInputView& view) {
-  seekState.videoEditBoundaryDrag.reset();
+  finishVideoEditBoundaryDrag(
+      view, signals, seekState,
+      playback_video_timeline_preview::PresentationSurface::VideoWindow);
   seekState.progressDragSurface.reset();
   commitQueuedSeek(view, signals, seekState);
   if (signals.clearTimelinePreview) {

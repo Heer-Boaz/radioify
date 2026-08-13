@@ -51,6 +51,29 @@ bool expect(bool condition, const char* message) {
 int main() {
   bool ok = true;
 
+  using BoundaryCommitState =
+      playback_session_input::VideoEditBoundaryCommitState;
+  ok &= expect(playback_session_input::videoEditBoundaryCommitState(
+                   7, 7, 6, true, true) == BoundaryCommitState::Waiting,
+               "an edit-boundary drag must wait for its exact seek frame");
+  ok &= expect(playback_session_input::videoEditBoundaryCommitState(
+                   7, 7, 7, false, true) == BoundaryCommitState::Ready,
+               "an edit-boundary drag must commit only after its seek frame "
+               "is presented");
+  ok &= expect(playback_session_input::videoEditBoundaryCommitState(
+                   7, 8, 7, false, true) == BoundaryCommitState::Superseded,
+               "a newer seek must invalidate an older boundary commit");
+  ok &= expect(playback_session_input::videoEditBoundarySeekTargetUs(
+                   playback_video_edit::EditBoundary::In, 2'000'000) ==
+                   2'000'000 &&
+                   playback_session_input::videoEditBoundarySeekTargetUs(
+                       playback_video_edit::EditBoundary::Out, 2'000'000) ==
+                       1'999'999 &&
+                   playback_session_input::videoEditBoundarySeekTargetUs(
+                       playback_video_edit::EditBoundary::Out, 0) == 0,
+               "In and inclusive Out drags must resolve opposite sides of an "
+               "edit boundary");
+
   ok &= expect(playback_session_state::toggleRequestsPause(
                    PlaybackSessionState::Active, false),
                "Active playback must toggle to pause");

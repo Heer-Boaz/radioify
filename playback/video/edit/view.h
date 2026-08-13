@@ -48,13 +48,19 @@ struct EditSnapshot {
   bool canRedo = false;
   int64_t sourceDurationUs = 0;
   int64_t timelineDurationUs = 0;
-  int64_t frameDurationUs = 0;
+  // Stable sequence timebase for display. This is deliberately not the
+  // duration of whichever VFR frame happens to be under the playhead.
+  int64_t timecodeFrameDurationUs = 0;
   std::vector<SourceRange> keptRanges;
   std::vector<EditClipSnapshot> clips;
   std::optional<int64_t> inSourceUs;
   std::optional<int64_t> outSourceUs;
   std::optional<int64_t> inTimelineUs;
   std::optional<int64_t> outTimelineUs;
+  // Exact start of the frame selected as Out. The selection boundary above
+  // remains exclusive; keeping both prevents later playhead movement (or VFR
+  // cadence) from changing the displayed inclusive Out timecode.
+  std::optional<int64_t> outFrameTimelineUs;
   std::optional<int64_t> playheadTimelineUs;
 };
 
