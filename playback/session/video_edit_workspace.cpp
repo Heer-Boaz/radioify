@@ -100,15 +100,9 @@ struct VideoEditWorkspace::Impl {
     return true;
   }
 
-  VideoEditActionResult startOrCancelExport(const CommandContext& context) {
+  VideoEditActionResult startExport(const CommandContext& context) {
     VideoEditActionResult result;
     result.handled = true;
-    const playback_video_edit::ExportSnapshot state = exporter.snapshot();
-    if (state.running()) {
-      exporter.cancel();
-      result.message = "Cancelling edit export...";
-      return result;
-    }
     const playback_video_edit::Timeline& timeline = document.timeline();
     if (timeline.sourceDurationUs() <= 0) {
       result.message = "Open the video editor and make an edit first";
@@ -139,6 +133,58 @@ struct VideoEditWorkspace::Impl {
     result.message =
         "Export started: " +
         toUtf8String(destination.filename());
+    return result;
+  }
+
+  VideoEditActionResult toggleExport(const CommandContext& context) {
+    if (exporter.snapshot().running()) {
+      exporter.cancel();
+      return {true, false, "Cancelling edit export..."};
+    }
+    return startExport(context);
+  }
+
+  VideoEditActionResult finish(const CommandContext& context) {
+    VideoEditActionResult result;
+    result.handled = true;
+    const playback_video_edit::ExportSnapshot exportState =
+        exporter.snapshot();
+    const bool exportCoversCurrentRevision =
+        (exportState.running() ||
+         exportState.state == playback_video_edit::ExportState::Succeeded) &&
+        exportState.keptRanges == document.timeline().keptRanges();
+    switch (playback_video_edit::finishAction({
+        selection.hasMarks(),
+        document.hasUnexportedChanges(),
+        exportState.running(),
+        exportCoversCurrentRevision,
+    })) {
+      case playback_video_edit::FinishAction::ResolveSelection:
+        result.message =
+            "Apply Trim/Delete or press Esc to clear In/Out first";
+        return result;
+      case playback_video_edit::FinishAction::WaitForExport:
+        result.message =
+            "An older edit is exporting; wait or cancel it before Done";
+        return result;
+      case playback_video_edit::FinishAction::StartExport:
+        result = startExport(context);
+        if (const playback_video_edit::ExportSnapshot started =
+                exporter.snapshot();
+            started.running()) {
+          finishEditing();
+          result.message =
+              "Editing done; exporting " +
+              toUtf8String(started.destinationPath.filename());
+        }
+        return result;
+      case playback_video_edit::FinishAction::Close:
+        finishEditing();
+        result.message = exportState.running()
+                             ? "Editing done; export continues"
+                             : "Editing done";
+        return result;
+    }
     return result;
   }
 };
@@ -211,8 +257,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
       }
       break;
     case playback_video_edit::Command::Finish:
-      impl_->finishEditing();
-      result.message = "Editing done; edited preview retained";
+      result = impl_->finish(context);
       break;
     case playback_video_edit::Command::RequestClose:
       impl_->prompt = playback_video_edit::Prompt::LeaveEditMode;
@@ -314,7 +359,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
                                        : "Sequence is unchanged";
       break;
     case playback_video_edit::Command::Export:
-      result = impl_->startOrCancelExport(context);
+      result = impl_->toggleExport(context);
       break;
   }
 

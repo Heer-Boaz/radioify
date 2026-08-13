@@ -1,5 +1,6 @@
-#include "playback/video/edit/timeline.h"
+#include "playback/video/edit/command.h"
 #include "playback/video/edit/overlay_model.h"
+#include "playback/video/edit/timeline.h"
 #include "playback/overlay/context_menu.h"
 #include "playback/overlay/overlay.h"
 #include "playback/session/context_menu_controller.h"
@@ -23,6 +24,8 @@ bool expect(bool condition, const char* message) {
 
 int main() {
   using playback_video_edit::Document;
+  using playback_video_edit::FinishAction;
+  using playback_video_edit::FinishContext;
   using playback_video_edit::Prompt;
   using playback_video_edit::Selection;
   using playback_video_edit::SourceRange;
@@ -30,6 +33,33 @@ int main() {
   using SequenceTimeline = playback_video_sequence::Timeline;
 
   bool ok = true;
+  ok &= expect(playback_video_edit::finishAction(FinishContext{}) ==
+                   FinishAction::Close,
+               "Done on a clean revision must only close the edit tools");
+  ok &= expect(playback_video_edit::finishAction(
+                   FinishContext{true, true, false, false}) ==
+                   FinishAction::ResolveSelection,
+               "Done must never guess whether an unapplied range means trim "
+               "or delete");
+  ok &= expect(playback_video_edit::finishAction(
+                   FinishContext{false, true, false, false}) ==
+                   FinishAction::StartExport,
+               "Done must make an unexported revision durable before closing");
+  ok &= expect(playback_video_edit::finishAction(
+                   FinishContext{false, true, true, true}) ==
+                   FinishAction::Close,
+               "Done may close while the current revision is already being "
+               "exported");
+  ok &= expect(playback_video_edit::finishAction(
+                   FinishContext{false, true, false, true}) ==
+                   FinishAction::Close,
+               "Done must not duplicate a completed export before its "
+               "completion notification is consumed");
+  ok &= expect(playback_video_edit::finishAction(
+                   FinishContext{false, true, true, false}) ==
+                   FinishAction::WaitForExport,
+               "Done must not pretend an older in-flight export contains the "
+               "current revision");
   const Timeline unopenedTimeline;
   ok &= expect(unopenedTimeline.isUnmodified(),
                "an unopened edit document must not be dirty");
@@ -553,7 +583,7 @@ int main() {
                    dispatchedEditCommand ==
                        playback_video_edit::Command::Finish,
                "Done must finish editing directly instead of entering the "
-               "Escape confirmation path");
+               "Escape confirmation path; the workspace owns durability");
 
   playback_overlay::PlaybackOverlayState pendingExitControlState;
   pendingExitControlState.videoEditPrompt = Prompt::LeavePlayback;
@@ -845,7 +875,7 @@ int main() {
       });
   const auto doneItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Done editing";
+        return item.label == "Done and save";
       });
   const auto discardItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
@@ -863,21 +893,24 @@ int main() {
                    discardItem != dirtyMenu.items.end() &&
                    exportItem != dirtyMenu.items.end(),
                "the context menu must own secondary edit commands");
-  ok &= expect(doneItem != dirtyMenu.items.end() &&
-                   playbackMenu.select(doneItem->token) &&
-                   playbackMenu.activateSelection() ==
-                       playback_video_edit::Command::Finish &&
-                   !playbackMenu.visible(),
-               "the context Done action must finish without entering the "
-               "Escape confirmation path");
+  if (doneItem != dirtyMenu.items.end()) {
+    ok &= expect(playbackMenu.select(doneItem->token) &&
+                     playbackMenu.activateSelection() ==
+                         playback_video_edit::Command::Finish &&
+                     !playbackMenu.visible(),
+                 "the context Done action must finish without entering the "
+                 "Escape confirmation path; the workspace owns durability");
+  }
   ok &= expect(playbackMenu.open(
                    playback_session::ContextMenuSurface::Terminal, 0.25,
-                   0.75) &&
-                   discardItem != dirtyMenu.items.end() &&
-                   playbackMenu.select(discardItem->token) &&
-                   playbackMenu.activateSelection() ==
-                       playback_video_edit::Command::RequestDiscard,
-               "context discard must still request confirmation");
+                   0.75),
+               "the context menu must reopen after executing a command");
+  if (discardItem != dirtyMenu.items.end()) {
+    ok &= expect(playbackMenu.select(discardItem->token) &&
+                     playbackMenu.activateSelection() ==
+                         playback_video_edit::Command::RequestDiscard,
+                 "context discard must still request confirmation");
+  }
 
   playback_video_edit::ExportProgress runningExport;
   runningExport.active = true;

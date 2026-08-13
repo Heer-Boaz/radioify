@@ -186,6 +186,9 @@ The concrete implementation plan lives in
 - In the video editor: Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
 - The editor bar contains only playback, In/Out, Delete, Trim, and Done;
   right-click exposes history, export, discard, and the same Done action
+- When committed edits are still unexported, Done writes that revision to a
+  new sibling file and leaves edit mode; an unapplied In/Out selection must
+  first be trimmed, deleted, or cleared. Otherwise Done only leaves edit mode
 - Committed edits become the program playback immediately and remain active
   after leaving edit mode; reset or discard restores the unedited source
 - Ctrl+E: export edits to a new sibling `- edited.mp4` file (press again to cancel); the source is never overwritten

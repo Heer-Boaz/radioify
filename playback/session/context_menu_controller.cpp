@@ -72,7 +72,11 @@ void ContextMenuController::refresh(
                     "Discard changes"});
   }
   if (edit.active) {
-    next.push_back({playback_video_edit::Command::Finish, "Done editing"});
+    next.push_back(
+        {playback_video_edit::Command::Finish,
+         edit.hasUnexportedChanges && !editExport.running()
+             ? "Done and save"
+             : "Done editing"});
   }
   items_ = std::move(next);
   if (items_.empty()) {
