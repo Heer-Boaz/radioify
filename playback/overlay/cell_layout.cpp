@@ -85,6 +85,7 @@ struct PendingControl {
   int width = 0;
   bool active = false;
   bool hovered = false;
+  bool enabled = true;
 };
 
 std::vector<PendingControl> wrapControls(
@@ -113,7 +114,8 @@ std::vector<PendingControl> wrapControls(
     out.push_back(PendingControl{control.id,
                                  fitControlText(control.text, controlWidth),
                                  contentInset + cursor, line, controlWidth,
-                                 control.active, control.hovered});
+                                 control.active, control.hovered,
+                                 control.enabled});
     cursor += controlWidth;
   }
 
@@ -123,7 +125,8 @@ std::vector<PendingControl> wrapControls(
 
 OverlayCellControlLayoutItem placeControl(const PendingControl& item, int y) {
   return OverlayCellControlLayoutItem{item.id,    item.text,   item.x,      y,
-                                      item.width, item.active, item.hovered};
+                                      item.width, item.active, item.hovered,
+                                      item.enabled};
 }
 
 }  // namespace

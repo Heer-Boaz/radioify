@@ -659,8 +659,10 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
     for (const auto& item : controlLayout.controls) {
       const int y = controlTop + item.y;
       if (y < 0 || y >= height || item.x >= width) continue;
-      Style style = item.active ? accentStyle : dimStyle;
-      if (item.hovered) {
+      Style style = item.enabled
+                        ? (item.active ? accentStyle : dimStyle)
+                        : dimStyle;
+      if (item.enabled && item.hovered) {
         style = Style{style.bg, style.fg};
       }
       screen.writeText(item.x, y, fitLine(item.text, width - item.x),

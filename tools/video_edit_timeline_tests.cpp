@@ -189,6 +189,16 @@ int main() {
   ok &= expect(exportedSnapshot.hasEdits &&
                    !exportedSnapshot.hasUnexportedChanges,
                "a successful export must mark its exact document revision clean");
+  Document exportedDiscard;
+  exportedDiscard.load(10'000'000);
+  ok &= expect(exportedDiscard.rippleDelete({2'000'000, 3'000'000}),
+               "exported discard setup must create an edit decision");
+  exportedDiscard.markExported(exportedDiscard.timeline().keptRanges());
+  ok &= expect(!exportedDiscard.hasUnexportedChanges() &&
+                   exportedDiscard.discardAllChanges() &&
+                   exportedDiscard.timeline().isUnmodified(),
+               "discard must remain available after the current edit revision "
+               "has been exported");
   ok &= expect(exported.rippleDelete({6'000'000, 7'000'000}) &&
                    exported.hasUnexportedChanges(),
                "editing after export must create a new dirty revision");
@@ -344,6 +354,138 @@ int main() {
                    "EDIT MODE*  I 00:02:00  O 00:03:29",
                "compact editor status must retain both frame-accurate range "
                "marks before general playhead time");
+
+  playback_overlay::PlaybackOverlayState editorControlState;
+  editorControlState.videoEdit.active = true;
+  editorControlState.playPauseAvailable = true;
+  editorControlState.paused = true;
+  const auto unavailableEditControls =
+      playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
+  const std::vector<playback_overlay::OverlayControlId> expectedEditControls{
+      playback_overlay::OverlayControlId::PlayPause,
+      playback_overlay::OverlayControlId::EditMarkIn,
+      playback_overlay::OverlayControlId::EditMarkOut,
+      playback_overlay::OverlayControlId::EditRippleDelete,
+      playback_overlay::OverlayControlId::EditTrim,
+      playback_overlay::OverlayControlId::EditUndo,
+      playback_overlay::OverlayControlId::EditRedo,
+      playback_overlay::OverlayControlId::EditReset,
+      playback_overlay::OverlayControlId::EditExport,
+      playback_overlay::OverlayControlId::EditLeave,
+  };
+  const auto controlIds = [](const auto& specs) {
+    std::vector<playback_overlay::OverlayControlId> ids;
+    ids.reserve(specs.size());
+    for (const auto& spec : specs) ids.push_back(spec.id);
+    return ids;
+  };
+  const auto controlFor = [](const auto& specs,
+                             playback_overlay::OverlayControlId id) {
+    return std::find_if(specs.begin(), specs.end(),
+                        [&](const auto& spec) { return spec.id == id; });
+  };
+  ok &= expect(controlIds(unavailableEditControls) == expectedEditControls,
+               "the edit toolbar must keep one stable command order before "
+               "a range or history exists");
+  for (const auto id : {
+           playback_overlay::OverlayControlId::EditRippleDelete,
+           playback_overlay::OverlayControlId::EditTrim,
+           playback_overlay::OverlayControlId::EditUndo,
+           playback_overlay::OverlayControlId::EditRedo,
+           playback_overlay::OverlayControlId::EditReset,
+           playback_overlay::OverlayControlId::EditExport,
+       }) {
+    const auto control = controlFor(unavailableEditControls, id);
+    ok &= expect(control != unavailableEditControls.end() &&
+                     !control->enabled,
+                 "unavailable edit commands must stay visible but disabled");
+  }
+
+  editorControlState.videoEdit.inTimelineUs = 1'000'000;
+  editorControlState.videoEdit.outTimelineUs = 2'000'000;
+  editorControlState.videoEdit.canUndo = true;
+  editorControlState.videoEdit.canRedo = true;
+  editorControlState.videoEdit.hasEdits = true;
+  editorControlState.videoEdit.hasUnexportedChanges = false;
+  const auto availableEditControls =
+      playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
+  ok &= expect(controlIds(availableEditControls) == expectedEditControls,
+               "enabling editor commands must not move or replace controls");
+  for (const auto id : {
+           playback_overlay::OverlayControlId::EditRippleDelete,
+           playback_overlay::OverlayControlId::EditTrim,
+           playback_overlay::OverlayControlId::EditUndo,
+           playback_overlay::OverlayControlId::EditRedo,
+           playback_overlay::OverlayControlId::EditReset,
+           playback_overlay::OverlayControlId::EditExport,
+       }) {
+    const auto control = controlFor(availableEditControls, id);
+    ok &= expect(control != availableEditControls.end() && control->enabled,
+                 "available edit commands must enable in their existing slots");
+  }
+  const int pausedControlWidth = availableEditControls.front().width;
+  editorControlState.paused = false;
+  const auto playingEditControls =
+      playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
+  ok &= expect(!playingEditControls.empty() &&
+                   playingEditControls.front().width == pausedControlWidth,
+               "Play and Pause labels must reserve one stable toolbar slot");
+  editorControlState.videoEditExport.active = true;
+  const auto exportingEditControls =
+      playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
+  const auto cancelExportControl = controlFor(
+      exportingEditControls,
+      playback_overlay::OverlayControlId::EditExport);
+  ok &= expect(cancelExportControl != exportingEditControls.end() &&
+                   cancelExportControl->normalText == " [Cancel] ",
+               "the editor export action must name its running-state cancel behavior");
+
+  playback_overlay::PlaybackOverlayState pendingExitControlState;
+  pendingExitControlState.videoEditPrompt = Prompt::LeavePlayback;
+  pendingExitControlState.videoEditExport.active = true;
+  const auto pendingExitControls = playback_overlay::buildOverlayControlSpecs(
+      pendingExitControlState, -1);
+  ok &= expect(!pendingExitControls.empty() &&
+                   pendingExitControls.front().id ==
+                       playback_overlay::OverlayControlId::EditExport &&
+                   pendingExitControls.front().normalText == " [Wait] ",
+               "the pending-exit action must preserve wait-then-exit semantics");
+
+  const int disabledUndoToken = playback_overlay::overlayControlToken(
+      playback_overlay::OverlayControlId::EditUndo);
+  playback_overlay::PlaybackOverlayState disabledControlState;
+  disabledControlState.playPauseAvailable = true;
+  disabledControlState.videoEdit.active = true;
+  const auto disabledHoverSpecs = playback_overlay::buildOverlayControlSpecs(
+      disabledControlState, disabledUndoToken);
+  const auto disabledInputs = playback_overlay::buildOverlayCellControlInputs(
+      disabledHoverSpecs, disabledUndoToken);
+  const auto disabledLayout =
+      playback_overlay::layoutOverlayControlCells(disabledInputs, 160);
+  const auto disabledMap =
+      playback_overlay::buildOverlayInteractionMap(disabledLayout);
+  const auto disabledUndo = std::find_if(
+      disabledLayout.controls.begin(), disabledLayout.controls.end(),
+      [](const auto& item) {
+        return item.id == playback_overlay::OverlayControlId::EditUndo;
+      });
+  const auto enabledIn = std::find_if(
+      disabledLayout.controls.begin(), disabledLayout.controls.end(),
+      [](const auto& item) {
+        return item.id == playback_overlay::OverlayControlId::EditMarkIn;
+      });
+  ok &= expect(disabledUndo != disabledLayout.controls.end() &&
+                   !disabledUndo->enabled && !disabledUndo->hovered &&
+                   !playback_overlay::overlayControlAt(
+                       disabledMap, disabledUndo->x + 0.5,
+                       disabledUndo->y + 0.5),
+               "disabled controls must render without accepting hover or clicks");
+  ok &= expect(enabledIn != disabledLayout.controls.end() &&
+                   playback_overlay::overlayControlAt(
+                       disabledMap, enabledIn->x + 0.5,
+                       enabledIn->y + 0.5) ==
+                       playback_overlay::OverlayControlId::EditMarkIn,
+               "enabled controls must retain normal semantic hit-testing");
 
   playback_overlay::OverlayCellLayoutInput shortSurface;
   shortSurface.width = 24;
@@ -538,9 +680,12 @@ int main() {
   playbackMenu.refresh(cleanEdit, idleExport);
   const auto retainedMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(retainedMenu.items.size() == 1 &&
-                   retainedMenu.items[0].label == "Resume editing",
-               "rendered edits without newer changes must remain resumable without save actions");
+  ok &= expect(retainedMenu.items.size() == 3 &&
+                   retainedMenu.items[0].label == "Resume editing" &&
+                   retainedMenu.items[1].label == "Export edited copy" &&
+                   retainedMenu.items[2].label == "Discard changes",
+               "an exported edit revision must remain resumable, exportable, "
+               "and discardable");
   cleanEdit.active = true;
   cleanEdit.hasUnexportedChanges = true;
   cleanEdit.inTimelineUs = 1'000'000;

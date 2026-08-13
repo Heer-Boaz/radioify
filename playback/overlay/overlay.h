@@ -26,6 +26,7 @@ struct OverlayControlSpec {
   std::string hoverText;
   std::string renderText;
   bool active = false;
+  bool enabled = true;
   int width = 0;
 };
 
@@ -56,6 +57,7 @@ struct OverlayCellControlInput {
   int width = 0;
   bool active = false;
   bool hovered = false;
+  bool enabled = true;
 };
 
 struct OverlayCellLayoutInput {
@@ -75,6 +77,7 @@ struct OverlayCellControlLayoutItem {
   int width = 0;
   bool active = false;
   bool hovered = false;
+  bool enabled = true;
 };
 
 struct OverlayCellTextLine {
@@ -199,7 +202,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
 
 OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
                                               const std::string& label,
-                                              bool active);
+                                              bool active,
+                                              bool enabled = true);
 std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
     const std::vector<OverlayControlSpec>& specs, int hoverControlToken);
 bool dispatchOverlayControl(OverlayControlId id,

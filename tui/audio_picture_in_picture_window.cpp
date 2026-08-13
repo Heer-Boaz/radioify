@@ -310,8 +310,10 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   }
   for (const auto& item : layout_.controls) {
     if (item.y < 0 || item.y >= height || item.x >= width) continue;
-    Style style = item.active ? styles.actionActive : styles.normal;
-    if (item.hovered) {
+    Style style = item.enabled
+                      ? (item.active ? styles.actionActive : styles.normal)
+                      : styles.dim;
+    if (item.enabled && item.hovered) {
       style = {style.bg, style.fg};
     }
     writeFitted(screen_, item.x, item.y, width - item.x, item.text, style);

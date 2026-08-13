@@ -224,11 +224,11 @@ VideoEditActionResult VideoEditWorkspace::execute(
     case playback_video_edit::Command::RequestDiscard:
       if (impl_->exporter.snapshot().running()) {
         result.message = "Cancel the active export before discarding edits";
-      } else if (impl_->document.hasUnexportedChanges()) {
+      } else if (!impl_->document.timeline().isUnmodified()) {
         impl_->prompt = playback_video_edit::Prompt::DiscardEdits;
         result.message.clear();
       } else {
-        result.message = "There are no unexported edits to discard";
+        result.message = "There are no edits to discard";
       }
       break;
     case playback_video_edit::Command::ConfirmPrompt:

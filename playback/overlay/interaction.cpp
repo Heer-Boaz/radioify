@@ -25,7 +25,7 @@ InteractionMap buildOverlayInteractionMap(
   InteractionMap map;
   map.modal = videoEditPrompt != playback_video_edit::Prompt::None;
   for (const OverlayCellControlLayoutItem& item : layout.controls) {
-    if (item.width <= 0 || item.y < 0) continue;
+    if (!item.enabled || item.width <= 0 || item.y < 0) continue;
     map.controls.push_back(
         {{static_cast<double>(item.x), static_cast<double>(item.y),
           static_cast<double>(item.x + item.width),

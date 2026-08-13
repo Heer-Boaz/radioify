@@ -13,16 +13,6 @@
 namespace playback_overlay {
 namespace {
 
-int countVisibleChars(const std::string& text) {
-  std::string filtered;
-  filtered.reserve(text.size());
-  for (char c : text) {
-    if (c == '\r' || c == '\n') continue;
-    filtered.push_back(c);
-  }
-  return utf8DisplayWidth(filtered);
-}
-
 std::string fitCellText(const std::string& text, int width) {
   if (width <= 0) return {};
   std::string filtered;
@@ -307,264 +297,6 @@ std::string buildSubtitleText(const SubtitleManager& subtitleManager,
   return merged;
 }
 
-OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
-                                              const std::string& label,
-                                              bool active) {
-  BracketButtonLabels labels = makeBracketButtonLabels(label);
-  OverlayControlSpec spec;
-  spec.id = id;
-  spec.normalText = std::move(labels.normal);
-  spec.hoverText = std::move(labels.hover);
-  spec.width = labels.width;
-  spec.active = active;
-  return spec;
-}
-
-std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
-    const std::vector<OverlayControlSpec>& specs, int hoverControlToken) {
-  std::vector<OverlayCellControlInput> controls;
-  controls.reserve(specs.size());
-  for (size_t i = 0; i < specs.size(); ++i) {
-    const bool hovered =
-        overlayControlToken(specs[i].id) == hoverControlToken;
-    OverlayCellControlInput control;
-    control.id = specs[i].id;
-    control.text = hovered ? specs[i].hoverText : specs[i].normalText;
-    control.width = specs[i].width;
-    control.active = specs[i].active;
-    control.hovered = hovered;
-    controls.push_back(std::move(control));
-  }
-  return controls;
-}
-
-bool dispatchOverlayControl(OverlayControlId id,
-                            const OverlayControlActions& actions) {
-  auto invoke = [](const std::function<bool()>& action) {
-    return action ? action() : false;
-  };
-  const auto invokeEdit = [&](playback_video_edit::Command command) {
-    return actions.videoEdit ? actions.videoEdit(command) : false;
-  };
-  switch (id) {
-    case OverlayControlId::Previous:
-      return invoke(actions.previous);
-    case OverlayControlId::PlayPause:
-      return invoke(actions.playPause);
-    case OverlayControlId::Next:
-      return invoke(actions.next);
-    case OverlayControlId::Radio:
-      return invoke(actions.radio);
-    case OverlayControlId::Hz50:
-      return invoke(actions.hz50);
-    case OverlayControlId::AudioTrack:
-      return invoke(actions.audioTrack);
-    case OverlayControlId::Subtitles:
-      return invoke(actions.subtitles);
-    case OverlayControlId::PictureInPicture:
-      return invoke(actions.pictureInPicture);
-    case OverlayControlId::EditMarkIn:
-      return invokeEdit(playback_video_edit::Command::MarkIn);
-    case OverlayControlId::EditMarkOut:
-      return invokeEdit(playback_video_edit::Command::MarkOut);
-    case OverlayControlId::EditRippleDelete:
-      return invokeEdit(playback_video_edit::Command::RippleDelete);
-    case OverlayControlId::EditTrim:
-      return invokeEdit(playback_video_edit::Command::Trim);
-    case OverlayControlId::EditUndo:
-      return invokeEdit(playback_video_edit::Command::Undo);
-    case OverlayControlId::EditRedo:
-      return invokeEdit(playback_video_edit::Command::Redo);
-    case OverlayControlId::EditReset:
-      return invokeEdit(playback_video_edit::Command::Reset);
-    case OverlayControlId::EditExport:
-      return invokeEdit(playback_video_edit::Command::Export);
-    case OverlayControlId::EditLeave:
-      return invokeEdit(playback_video_edit::Command::RequestClose);
-    case OverlayControlId::EditConfirmPrompt:
-      return invokeEdit(playback_video_edit::Command::ConfirmPrompt);
-    case OverlayControlId::EditCancelPrompt:
-      return invokeEdit(playback_video_edit::Command::CancelPrompt);
-    case OverlayControlId::EditDiscardAndExit:
-      return invoke(actions.confirmPendingExit);
-    case OverlayControlId::EditCancelExit:
-      return invoke(actions.cancelPendingExit);
-  }
-  return false;
-}
-
-std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverControlToken,
-    const OverlayControlSpecOptions& options) {
-  std::vector<OverlayControlSpec> out;
-  auto addSpec = [&](OverlayControlSpec spec) {
-    out.push_back(std::move(spec));
-  };
-  const auto finishSpecs = [&]() {
-    for (size_t i = 0; i < out.size(); ++i) {
-      auto& spec = out[i];
-      const bool hovered =
-          overlayControlToken(spec.id) == hoverControlToken;
-      spec.renderText = hovered ? spec.hoverText : spec.normalText;
-      const int textWidth = countVisibleChars(spec.renderText);
-      if (textWidth < spec.width) {
-        spec.renderText.append(static_cast<size_t>(spec.width - textWidth), ' ');
-      } else if (textWidth > spec.width) {
-        spec.renderText = utf8TakeDisplayWidth(spec.renderText, spec.width);
-      }
-    }
-  };
-
-  if (state.videoEditPrompt == playback_video_edit::Prompt::LeaveEditMode) {
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditConfirmPrompt,
-                                       "Leave", true));
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditCancelPrompt,
-                                       "Cancel", false));
-    finishSpecs();
-    return out;
-  }
-
-  if (state.videoEditPrompt == playback_video_edit::Prompt::DiscardEdits) {
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditConfirmPrompt,
-                                       "Discard", false));
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditCancelPrompt,
-                                       "Cancel", true));
-    finishSpecs();
-    return out;
-  }
-
-  if (state.videoEditPrompt == playback_video_edit::Prompt::LeavePlayback) {
-    addSpec(makeOverlayTextControlSpec(
-        OverlayControlId::EditExport,
-        state.videoEditExport.running() ? "Wait" : "Export",
-        state.videoEditExport.running()));
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditDiscardAndExit,
-                                       "Discard", false));
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditCancelExit,
-                                       "Stay", true));
-    finishSpecs();
-    return out;
-  }
-
-  if (state.videoEdit.active) {
-    const bool hasSelection =
-        state.videoEdit.inTimelineUs && state.videoEdit.outTimelineUs &&
-        *state.videoEdit.outTimelineUs > *state.videoEdit.inTimelineUs;
-    if (state.playPauseAvailable) {
-      addSpec(makeOverlayTextControlSpec(OverlayControlId::PlayPause,
-                                         state.paused ? "Play" : "Pause",
-                                         state.paused));
-    }
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditMarkIn, "In",
-                                       false));
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditMarkOut, "Out",
-                                       false));
-    if (hasSelection) {
-      addSpec(makeOverlayTextControlSpec(OverlayControlId::EditRippleDelete,
-                                         "Delete", false));
-      addSpec(makeOverlayTextControlSpec(OverlayControlId::EditTrim, "Trim",
-                                         false));
-    }
-    if (state.videoEdit.canUndo) {
-      addSpec(makeOverlayTextControlSpec(OverlayControlId::EditUndo, "Undo",
-                                         false));
-    }
-    if (state.videoEdit.canRedo) {
-      addSpec(makeOverlayTextControlSpec(OverlayControlId::EditRedo, "Redo",
-                                         false));
-    }
-    if (state.videoEdit.hasEdits) {
-      addSpec(makeOverlayTextControlSpec(OverlayControlId::EditReset, "Reset",
-                                         false));
-    }
-    if (state.videoEdit.hasUnexportedChanges ||
-        state.videoEditExport.running()) {
-      addSpec(makeOverlayTextControlSpec(
-          OverlayControlId::EditExport,
-          state.videoEditExport.running() ? "Cancel" : "Export",
-          state.videoEditExport.running()));
-    }
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditLeave, "Leave",
-                                       false));
-    if (options.includePictureInPicture && state.pictureInPictureAvailable) {
-      addSpec(makeOverlayTextControlSpec(OverlayControlId::PictureInPicture,
-                                         "PiP",
-                                         state.pictureInPictureActive));
-    }
-    finishSpecs();
-    return out;
-  }
-
-  if (state.canPlayPrevious) {
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::Previous, "<<",
-                                       false));
-  }
-  if (state.playPauseAvailable) {
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::PlayPause, "pause",
-                                       state.paused));
-  }
-  if (state.canPlayNext) {
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::Next, ">>", false));
-  }
-
-  if (options.includeRadio) {
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::Radio,
-                                       state.radioLabel,
-                                       state.radioEnabled));
-  }
-
-  if (state.audioOk && state.audioSupports50HzToggle) {
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::Hz50, "50Hz",
-                                       state.hz50Enabled));
-  }
-
-  if (options.includeAudioTrack) {
-    std::string audioLabel = "Audio: N/A";
-    if (state.canCycleAudioTracks && state.audioOk) {
-      std::string activeAudio = state.activeAudioTrackLabel;
-      if (activeAudio.empty()) activeAudio = "N/A";
-      if (utf8DisplayWidth(activeAudio) > 14) {
-        activeAudio = utf8TakeDisplayWidth(activeAudio, 14);
-      }
-      audioLabel = "Audio: " + activeAudio;
-    }
-    addSpec(makeOverlayTextControlSpec(
-        OverlayControlId::AudioTrack, audioLabel,
-        state.audioOk && state.canCycleAudioTracks));
-  }
-
-  if (options.includeSubtitles) {
-    const bool subtitlesActive = state.hasSubtitles && state.subtitlesEnabled;
-    std::string subtitleLabel = "Subs";
-    if (subtitlesActive) {
-      std::string activeSubtitle = state.activeSubtitleLabel;
-      if (!activeSubtitle.empty() && activeSubtitle != "N/A") {
-        if (utf8DisplayWidth(activeSubtitle) > 14) {
-          activeSubtitle = utf8TakeDisplayWidth(activeSubtitle, 14);
-        }
-        subtitleLabel += ": " + activeSubtitle;
-      }
-    }
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::Subtitles,
-                                       subtitleLabel, subtitlesActive));
-  }
-
-  if (options.includePictureInPicture && state.pictureInPictureAvailable) {
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::PictureInPicture,
-                                       "PiP",
-                                       state.pictureInPictureActive));
-  }
-
-  finishSpecs();
-  return out;
-}
-
-std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverControlToken) {
-  return buildOverlayControlSpecs(state, hoverControlToken,
-                                  OverlayControlSpecOptions{});
-}
-
 OverlayCellLayout layoutPlaybackOverlayCells(
     const PlaybackOverlayState& state, int width, int height,
     int hoverControlToken) {
@@ -608,6 +340,7 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
     control.text = ui.controlButtons[i].text;
     control.active = ui.controlButtons[i].active;
     control.hovered = ui.controlButtons[i].hovered;
+    control.enabled = ui.controlButtons[i].enabled;
     input.controls.push_back(std::move(control));
   }
   return layoutOverlayCells(input);
@@ -662,7 +395,8 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
     btn.id = controlSpecs[i].id;
     btn.text = controlSpecs[i].renderText;
     btn.active = controlSpecs[i].active;
-    btn.hovered =
+    btn.enabled = controlSpecs[i].enabled;
+    btn.hovered = controlSpecs[i].enabled &&
         overlayControlToken(controlSpecs[i].id) == hoverControlToken;
     ui.controlButtons.push_back(std::move(btn));
   }
@@ -943,8 +677,12 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
   if (!target.isDrawable()) return;
 
   for (const auto& item : layout.controls) {
-    Style style = item.active ? styles.accentStyle : styles.baseStyle;
-    if (item.hovered) {
+    Style style = item.enabled
+                      ? (item.active ? styles.accentStyle : styles.baseStyle)
+                      : Style{lerpColor(styles.baseStyle.fg,
+                                        styles.baseStyle.bg, 0.55f),
+                              styles.baseStyle.bg};
+    if (item.enabled && item.hovered) {
       style = {style.bg, style.fg};
     }
     target.writeControlText(item.text, item.y, item.x, item.width, style);
