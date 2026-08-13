@@ -177,8 +177,10 @@ The concrete implementation plan lives in
 - , / .: previous/next video frame
 - F1: open command menu / command palette
 - Shift+S: copy the current rendered video frame (including subtitles) to the clipboard
-- E: enter/leave the non-destructive video editor
-- In the video editor: I/O set the inclusive frame selection; Delete ripple-removes it; T trims the sequence to it
+- E: enter the non-destructive video editor; while editing, E requests leaving it
+- In the video editor: I/O set the inclusive frame selection; Alt+I/Alt+O clear a boundary; Alt+X clears both
+- Esc follows the edit back-stack: clear the current range, request leaving edit mode, or cancel that confirmation
+- Delete ripple-removes the selected range; T trims the sequence to it
 - Drag the visible I/O handles on the program timeline to adjust either boundary; handles clamp instead of crossing
 - In the video editor: Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
 - While the editor is open, playback, seeking, timecode, and hover previews follow the compact edited sequence; cut markers identify removed ranges

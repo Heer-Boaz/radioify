@@ -224,7 +224,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
     case playback_video_edit::Command::ConfirmClose:
       projection = PreviewProjection::ClearEdit;
       deactivateAfterClear = true;
-      result.message = "Video editor closed (edits retained)";
+      result.message = "Edit mode closed; edits retained";
       break;
     case playback_video_edit::Command::CancelClose:
       impl_->closeConfirmation = false;
@@ -235,8 +235,10 @@ VideoEditActionResult VideoEditWorkspace::execute(
       result.message = "In point set";
       break;
     case playback_video_edit::Command::ClearIn:
-      impl_->selection.clear(playback_video_edit::EditBoundary::In);
-      result.message = "In point cleared";
+      result.message =
+          impl_->selection.clear(playback_video_edit::EditBoundary::In)
+              ? "In point cleared"
+              : "No In point to clear";
       break;
     case playback_video_edit::Command::MarkOut:
       {
@@ -254,8 +256,15 @@ VideoEditActionResult VideoEditWorkspace::execute(
       result.message = "Out point set";
       break;
     case playback_video_edit::Command::ClearOut:
-      impl_->selection.clear(playback_video_edit::EditBoundary::Out);
-      result.message = "Out point cleared";
+      result.message =
+          impl_->selection.clear(playback_video_edit::EditBoundary::Out)
+              ? "Out point cleared"
+              : "No Out point to clear";
+      break;
+    case playback_video_edit::Command::ClearInAndOut:
+      result.message = impl_->selection.clear()
+                           ? "In/Out points cleared"
+                           : "No In/Out points to clear";
       break;
     case playback_video_edit::Command::RippleDelete:
       if (const auto selected = impl_->selection.range()) {
@@ -339,10 +348,8 @@ VideoEditActionResult VideoEditWorkspace::navigateBack() {
   if (impl_->closeConfirmation) {
     return execute(playback_video_edit::Command::CancelClose);
   }
-  if (impl_->selection.clear()) {
-    result.handled = true;
-    result.message = "Selection cleared";
-    return result;
+  if (impl_->selection.hasMarks()) {
+    return execute(playback_video_edit::Command::ClearInAndOut);
   }
   return execute(playback_video_edit::Command::RequestClose);
 }

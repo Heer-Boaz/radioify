@@ -206,7 +206,13 @@ int main() {
                "Bare E must enter the video editor only during video playback");
   ok &= expect(videoEditCommandForShortcut(
                    PlaybackShortcutAction::OpenVideoEditor) ==
-                   playback_video_edit::Command::Open &&
+                       playback_video_edit::Command::Open &&
+                   videoEditCommandForShortcut(
+                       PlaybackShortcutAction::RequestCloseVideoEditor) ==
+                       playback_video_edit::Command::RequestClose &&
+                   videoEditCommandForShortcut(
+                       PlaybackShortcutAction::ClearVideoEditInAndOut) ==
+                       playback_video_edit::Command::ClearInAndOut &&
                    videoEditCommandForShortcut(
                        PlaybackShortcutAction::ExportVideoEdits) ==
                        playback_video_edit::Command::Export &&
@@ -222,6 +228,11 @@ int main() {
                     .value() ==
                    PlaybackShortcutAction::NavigateBackInVideoEditor,
                "Escape must enter the editor's back hierarchy before playback");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey('E'),
+                                              videoEditingContexts)
+                   .value() ==
+                   PlaybackShortcutAction::RequestCloseVideoEditor,
+               "Bare E must request leaving an active editor");
   ok &= expect(resolvePlaybackShortcutAction(makeKey('O'),
                                               videoEditingContexts)
                    .value() == PlaybackShortcutAction::SetVideoEditOut,
@@ -234,6 +245,21 @@ int main() {
                                               videoEditingContexts)
                    .value() == PlaybackShortcutAction::SetVideoEditIn,
                "Bare I must set the edit In point");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('I', 0, kPlaybackShortcutAltMask),
+                   videoEditingContexts)
+                   .value() == PlaybackShortcutAction::ClearVideoEditIn &&
+                   resolvePlaybackShortcutAction(
+                       makeKey('O', 0, kPlaybackShortcutAltMask),
+                       videoEditingContexts)
+                           .value() ==
+                       PlaybackShortcutAction::ClearVideoEditOut &&
+                   resolvePlaybackShortcutAction(
+                       makeKey('X', 0, kPlaybackShortcutAltMask),
+                       videoEditingContexts)
+                           .value() ==
+                       PlaybackShortcutAction::ClearVideoEditInAndOut,
+               "Alt+I/O/X must expose the standard explicit clear commands");
   ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_DELETE),
                                               videoEditingContexts)
                    .value() ==

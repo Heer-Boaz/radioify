@@ -39,6 +39,17 @@ void ContextMenuController::refresh(
   if (!edit.active) {
     next.push_back({playback_video_edit::Command::Open,
                     edit.hasEdits ? "Resume editing" : "Edit video"});
+  } else {
+    if (edit.inTimelineUs) {
+      next.push_back({playback_video_edit::Command::ClearIn, "Clear In"});
+    }
+    if (edit.outTimelineUs) {
+      next.push_back({playback_video_edit::Command::ClearOut, "Clear Out"});
+    }
+    if (edit.inTimelineUs && edit.outTimelineUs) {
+      next.push_back({playback_video_edit::Command::ClearInAndOut,
+                      "Clear In and Out"});
+    }
   }
   if (editExport.running()) {
     next.push_back({playback_video_edit::Command::Export, "Cancel save"});
@@ -50,7 +61,7 @@ void ContextMenuController::refresh(
   }
   if (edit.active) {
     next.push_back(
-        {playback_video_edit::Command::RequestClose, "Finish editing"});
+        {playback_video_edit::Command::RequestClose, "Leave edit mode"});
   }
   items_ = std::move(next);
   if (items_.empty()) {

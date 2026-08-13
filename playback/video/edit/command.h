@@ -15,6 +15,7 @@ enum class Command : uint8_t {
   ClearIn,
   MarkOut,
   ClearOut,
+  ClearInAndOut,
   RippleDelete,
   Trim,
   Undo,

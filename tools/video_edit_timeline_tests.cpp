@@ -128,7 +128,8 @@ int main() {
   clearableSelection.markIn(document.timeline(), 1'000'000);
   clearableSelection.markOut(document.timeline(), 2'000'000);
   ok &= expect(
-      clearableSelection.clear(playback_video_edit::EditBoundary::In) &&
+      clearableSelection.hasMarks() &&
+          clearableSelection.clear(playback_video_edit::EditBoundary::In) &&
           !clearableSelection.inSourceUs() &&
           clearableSelection.outSourceUs() ==
               std::optional<int64_t>(2'000'000),
@@ -136,6 +137,7 @@ int main() {
   ok &= expect(clearableSelection.clear() &&
                    !clearableSelection.inSourceUs() &&
                    !clearableSelection.outSourceUs() &&
+                   !clearableSelection.hasMarks() &&
                    !clearableSelection.clear(),
                "Escape-style selection cancellation must clear all marks once");
   selection.markIn(document.timeline(), 3'000'000);
@@ -358,8 +360,8 @@ int main() {
   const playback_video_edit::OverlayModel closeEditorModel =
       playback_video_edit::buildOverlayModel(
           overlayEdit, nullptr, ExitPrompt::CloseEditor, 16, 0.0);
-  ok &= expect(closeEditorModel.status == "FINISH EDITING?",
-               "closing only the editor must have its own explicit prompt");
+  ok &= expect(closeEditorModel.status == "LEAVE EDIT MODE?",
+               "leaving only edit mode must have its own explicit prompt");
 
   playback_overlay::InteractionMap interactions;
   interactions.progressBar =
@@ -467,19 +469,31 @@ int main() {
                "rendered edits without newer changes must remain resumable without save actions");
   cleanEdit.active = true;
   cleanEdit.hasUnexportedChanges = true;
+  cleanEdit.inTimelineUs = 1'000'000;
+  cleanEdit.outTimelineUs = 2'000'000;
   playbackMenu.refresh(cleanEdit, idleExport);
   const auto dirtyMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);
+  const auto clearAllItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Clear In and Out";
+      });
+  const auto leaveItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Leave edit mode";
+      });
   const auto discardItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
         return item.label == "Discard changes";
       });
-  ok &= expect(discardItem != dirtyMenu.items.end() &&
+  ok &= expect(clearAllItem != dirtyMenu.items.end() &&
+                   leaveItem != dirtyMenu.items.end() &&
+                   discardItem != dirtyMenu.items.end() &&
                    playbackMenu.select(discardItem->token) &&
                    playbackMenu.activateSelection() ==
                        playback_video_edit::Command::Discard &&
                    !playbackMenu.visible(),
-               "context commands must update from edit state and dismiss on activation");
+               "context commands must expose clear, leave, and document actions");
 
   return ok ? 0 : 1;
 }

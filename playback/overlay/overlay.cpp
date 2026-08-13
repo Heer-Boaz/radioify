@@ -417,12 +417,8 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invoke(actions.pictureInPicture);
     case OverlayControlId::EditMarkIn:
       return invokeEdit(playback_video_edit::Command::MarkIn);
-    case OverlayControlId::EditClearIn:
-      return invokeEdit(playback_video_edit::Command::ClearIn);
     case OverlayControlId::EditMarkOut:
       return invokeEdit(playback_video_edit::Command::MarkOut);
-    case OverlayControlId::EditClearOut:
-      return invokeEdit(playback_video_edit::Command::ClearOut);
     case OverlayControlId::EditRippleDelete:
       return invokeEdit(playback_video_edit::Command::RippleDelete);
     case OverlayControlId::EditTrim:
@@ -435,7 +431,7 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invokeEdit(playback_video_edit::Command::Reset);
     case OverlayControlId::EditExport:
       return invokeEdit(playback_video_edit::Command::Export);
-    case OverlayControlId::EditDone:
+    case OverlayControlId::EditLeave:
       return invokeEdit(playback_video_edit::Command::RequestClose);
     case OverlayControlId::EditConfirmClose:
       return invokeEdit(playback_video_edit::Command::ConfirmClose);
@@ -474,9 +470,9 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   if (state.videoEditExitPrompt ==
       playback_video_edit::ExitPrompt::CloseEditor) {
     addSpec(makeOverlayTextControlSpec(OverlayControlId::EditConfirmClose,
-                                       "Finish", false));
+                                       "Leave", false));
     addSpec(makeOverlayTextControlSpec(OverlayControlId::EditCancelClose,
-                                       "Stay", true));
+                                       "Cancel", false));
     finishSpecs();
     return out;
   }
@@ -504,16 +500,10 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
                                          state.paused ? "Play" : "Pause",
                                          state.paused));
     }
-    const bool hasIn = state.videoEdit.inTimelineUs.has_value();
-    const bool hasOut = state.videoEdit.outTimelineUs.has_value();
-    addSpec(makeOverlayTextControlSpec(
-        hasIn ? OverlayControlId::EditClearIn
-              : OverlayControlId::EditMarkIn,
-        "In", hasIn));
-    addSpec(makeOverlayTextControlSpec(
-        hasOut ? OverlayControlId::EditClearOut
-               : OverlayControlId::EditMarkOut,
-        "Out", hasOut));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditMarkIn, "In",
+                                       false));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditMarkOut, "Out",
+                                       false));
     if (hasSelection) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::EditRippleDelete,
                                          "Cut", false));
@@ -539,7 +529,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
           state.videoEditExport.running() ? "Cancel" : "Export",
           state.videoEditExport.running()));
     }
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditDone, "Done",
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditLeave, "Leave",
                                        false));
     if (options.includePictureInPicture && state.pictureInPictureAvailable) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::PictureInPicture,

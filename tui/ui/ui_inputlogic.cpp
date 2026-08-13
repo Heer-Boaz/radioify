@@ -1017,10 +1017,14 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
         return PlaybackInputResult::Handled;
       case PlaybackShortcutAction::TogglePictureInPicture:
       case PlaybackShortcutAction::OpenVideoEditor:
+      case PlaybackShortcutAction::RequestCloseVideoEditor:
       case PlaybackShortcutAction::NavigateBackInVideoEditor:
       case PlaybackShortcutAction::ConfirmVideoEditorClose:
       case PlaybackShortcutAction::SetVideoEditIn:
       case PlaybackShortcutAction::SetVideoEditOut:
+      case PlaybackShortcutAction::ClearVideoEditIn:
+      case PlaybackShortcutAction::ClearVideoEditOut:
+      case PlaybackShortcutAction::ClearVideoEditInAndOut:
       case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
       case PlaybackShortcutAction::TrimVideoEditSelection:
       case PlaybackShortcutAction::UndoVideoEdit:

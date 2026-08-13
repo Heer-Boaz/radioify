@@ -74,6 +74,7 @@ class Document {
 // state and are cleared when a document operation consumes them.
 class Selection {
  public:
+  bool hasMarks() const { return inUs_.has_value() || outUs_.has_value(); }
   bool clear();
   bool clear(EditBoundary boundary);
   void markIn(const Timeline& timeline, int64_t sourceUs);

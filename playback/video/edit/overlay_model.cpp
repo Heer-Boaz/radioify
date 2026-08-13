@@ -87,7 +87,7 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
   }
   if (exitPrompt == ExitPrompt::CloseEditor) {
     model.status = shortestFittingStatus(
-        {"FINISH EDITING?", "FINISH?", "DONE?"}, width);
+        {"LEAVE EDIT MODE?", "LEAVE EDIT?", "LEAVE?"}, width);
     return model;
   }
   if (exitPrompt == ExitPrompt::LeavePlayback) {

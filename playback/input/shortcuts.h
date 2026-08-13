@@ -31,12 +31,20 @@ videoEditCommandForShortcut(PlaybackShortcutAction action) {
   switch (action) {
     case PlaybackShortcutAction::OpenVideoEditor:
       return Command::Open;
+    case PlaybackShortcutAction::RequestCloseVideoEditor:
+      return Command::RequestClose;
     case PlaybackShortcutAction::ConfirmVideoEditorClose:
       return Command::ConfirmClose;
     case PlaybackShortcutAction::SetVideoEditIn:
       return Command::MarkIn;
     case PlaybackShortcutAction::SetVideoEditOut:
       return Command::MarkOut;
+    case PlaybackShortcutAction::ClearVideoEditIn:
+      return Command::ClearIn;
+    case PlaybackShortcutAction::ClearVideoEditOut:
+      return Command::ClearOut;
+    case PlaybackShortcutAction::ClearVideoEditInAndOut:
+      return Command::ClearInAndOut;
     case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
       return Command::RippleDelete;
     case PlaybackShortcutAction::TrimVideoEditSelection:
@@ -64,7 +72,7 @@ inline constexpr DWORD kPlaybackShortcutFrameStepForbiddenMask =
 
 // One shared shortcut table. Context masks let modes layer additional keys on
 // top of the shared map without owning separate per-mode tables.
-inline constexpr std::array<PlaybackShortcutBinding, 49>
+inline constexpr std::array<PlaybackShortcutBinding, 53>
     kPlaybackShortcutBindings = {{
         {PlaybackShortcutAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal},
@@ -96,6 +104,9 @@ inline constexpr std::array<PlaybackShortcutBinding, 49>
         {PlaybackShortcutAction::NavigateBackInVideoEditor, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditing},
+        {PlaybackShortcutAction::RequestCloseVideoEditor, 'E', 'e', 'E', 0,
+         kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextVideoEditing},
         {PlaybackShortcutAction::ExportVideoEdits, 'E', 'e', 'E',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextVideoEditing |
@@ -115,6 +126,18 @@ inline constexpr std::array<PlaybackShortcutBinding, 49>
          kPlaybackShortcutContextVideoEditing},
         {PlaybackShortcutAction::SetVideoEditOut, 'O', 'o', 'O', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextVideoEditing},
+        {PlaybackShortcutAction::ClearVideoEditIn, 'I', 'i', 'I',
+         kPlaybackShortcutAltMask,
+         kPlaybackShortcutCtrlMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextVideoEditing},
+        {PlaybackShortcutAction::ClearVideoEditOut, 'O', 'o', 'O',
+         kPlaybackShortcutAltMask,
+         kPlaybackShortcutCtrlMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextVideoEditing},
+        {PlaybackShortcutAction::ClearVideoEditInAndOut, 'X', 'x', 'X',
+         kPlaybackShortcutAltMask,
+         kPlaybackShortcutCtrlMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditing},
         {PlaybackShortcutAction::RippleDeleteVideoEditSelection, VK_DELETE, 0,
          0, 0, kPlaybackShortcutTextForbiddenMask,
