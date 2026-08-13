@@ -438,6 +438,24 @@ int main() {
                "compact editor status must retain both frame-accurate range "
                "marks before general playhead time");
 
+  playback_video_edit::EditSnapshot retainedProgram;
+  retainedProgram.hasEdits = true;
+  retainedProgram.hasUnexportedChanges = true;
+  ok &= expect(playback_video_edit::retainedProgramBadge(retainedProgram) ==
+                   "[EDITED*]",
+               "shared chrome must identify an unexported program timeline "
+               "after edit mode closes");
+  retainedProgram.hasUnexportedChanges = false;
+  ok &= expect(playback_video_edit::retainedProgramBadge(retainedProgram) ==
+                   "[EDITED]",
+               "an exported edited program must remain identifiable without "
+               "claiming that it is dirty");
+  retainedProgram.active = true;
+  ok &= expect(playback_video_edit::retainedProgramBadge(retainedProgram)
+                   .empty(),
+               "the edit-mode timeline status must not duplicate the edited "
+               "program marker in the title");
+
   playback_overlay::PlaybackOverlayState editorControlState;
   editorControlState.videoEdit.active = true;
   editorControlState.playPauseAvailable = true;

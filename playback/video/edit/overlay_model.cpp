@@ -108,6 +108,11 @@ bool appendStatusPart(std::string* status, const std::string& part, int width) {
 
 }  // namespace
 
+std::string retainedProgramBadge(const EditSnapshot& edit) {
+  if (edit.active || !edit.hasEdits) return {};
+  return edit.hasUnexportedChanges ? "[EDITED*]" : "[EDITED]";
+}
+
 OverlayModel buildOverlayModel(const EditSnapshot& edit,
                                const ExportProgress* editExport,
                                Prompt prompt, int width,

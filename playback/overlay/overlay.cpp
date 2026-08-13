@@ -370,7 +370,10 @@ std::string buildWindowOverlayProgressSuffix(
 }
 
 std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state) {
-  return state.windowTitle;
+  const std::string badge =
+      playback_video_edit::retainedProgramBadge(state.videoEdit);
+  return badge.empty() ? state.windowTitle
+                       : badge + " " + state.windowTitle;
 }
 
 WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
@@ -383,7 +386,7 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.overlayAlpha = state.overlayVisible ? 1.0f : 0.0f;
   ui.chromeVisible = state.chromeVisible;
   ui.isPaused = state.paused;
-  ui.title = state.windowTitle;
+  ui.title = buildWindowOverlayTopLine(state);
   ui.transientMessage = state.transientMessage;
   std::vector<OverlayControlSpec> controlSpecs =
       buildOverlayControlSpecs(state, hoverControlToken);

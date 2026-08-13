@@ -15,12 +15,6 @@
 namespace playback_session {
 namespace {
 
-enum class PreviewProjection : uint8_t {
-  None,
-  ApplyEdit,
-  ClearEdit,
-};
-
 struct CommandContext {
   int64_t sourceDurationUs = 0;
   int64_t playheadUs = 0;
@@ -89,17 +83,14 @@ struct VideoEditWorkspace::Impl {
     timelinePreviewProvider.cancelBefore(timelinePreview.requestId());
   }
 
-  bool applyEditPreview() {
-    const auto& ranges = document.timeline().keptRanges();
-    if (!player.setPlaybackSequence(ranges)) return false;
-    updateTimelinePreview(ranges);
-    return true;
-  }
-
-  bool clearEditPreview() {
-    if (!player.clearPlaybackSequence()) return false;
-    const int64_t durationUs = player.sourceDurationUs();
-    if (durationUs > 0) updateTimelinePreview({{0, durationUs}});
+  bool syncDocumentPreview() {
+    const playback_video_edit::Timeline& timeline = document.timeline();
+    if (timeline.isUnmodified()) {
+      if (!player.clearPlaybackSequence()) return false;
+    } else if (!player.setPlaybackSequence(timeline.keptRanges())) {
+      return false;
+    }
+    updateTimelinePreview(timeline.keptRanges());
     return true;
   }
 
@@ -197,8 +188,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
 
   const CommandContext context = impl_->commandContext();
   bool timelineChanged = false;
-  PreviewProjection projection = PreviewProjection::None;
-  bool deactivateAfterClear = false;
+  bool syncProgramPreview = false;
   bool deactivateIfOpenFails = false;
 
   switch (command) {
@@ -210,7 +200,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
         impl_->selection.clear();
         impl_->active = true;
         impl_->prompt = playback_video_edit::Prompt::None;
-        projection = PreviewProjection::ApplyEdit;
+        syncProgramPreview = true;
         deactivateIfOpenFails = true;
         result.message = "Video editor opened";
       } else {
@@ -234,9 +224,9 @@ VideoEditActionResult VideoEditWorkspace::execute(
     case playback_video_edit::Command::ConfirmPrompt:
       if (impl_->prompt == playback_video_edit::Prompt::LeaveEditMode) {
         impl_->prompt = playback_video_edit::Prompt::None;
-        projection = PreviewProjection::ClearEdit;
-        deactivateAfterClear = true;
-        result.message = "Edit mode closed; edits retained";
+        impl_->active = false;
+        impl_->selection.clear();
+        result.message = "Edit mode closed; edited preview retained";
       } else if (impl_->prompt == playback_video_edit::Prompt::DiscardEdits) {
         impl_->prompt = playback_video_edit::Prompt::None;
         timelineChanged = impl_->document.discardAllChanges();
@@ -325,14 +315,12 @@ VideoEditActionResult VideoEditWorkspace::execute(
 
   if (timelineChanged) {
     impl_->selection.clear();
-    if (impl_->active) projection = PreviewProjection::ApplyEdit;
+    syncProgramPreview = true;
   }
 
   bool projectionAccepted = true;
-  if (projection == PreviewProjection::ApplyEdit) {
-    projectionAccepted = impl_->applyEditPreview();
-  } else if (projection == PreviewProjection::ClearEdit) {
-    projectionAccepted = impl_->clearEditPreview();
+  if (syncProgramPreview) {
+    projectionAccepted = impl_->syncDocumentPreview();
   }
 
   if (!projectionAccepted) {
@@ -341,15 +329,9 @@ VideoEditActionResult VideoEditWorkspace::execute(
       impl_->prompt = playback_video_edit::Prompt::None;
       impl_->selection.clear();
       result.message = "Video editor unavailable: preview could not start";
-    } else if (deactivateAfterClear) {
-      result.message = "Editor remains open: source preview unavailable";
     } else {
       result.message = "Timeline changed; preview unavailable";
     }
-  } else if (deactivateAfterClear) {
-    impl_->active = false;
-    impl_->prompt = playback_video_edit::Prompt::None;
-    impl_->selection.clear();
   }
 
   result.pausePlayback =

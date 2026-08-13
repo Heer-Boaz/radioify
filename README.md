@@ -184,7 +184,8 @@ The concrete implementation plan lives in
   keeps the unmarked side at the current sequence edge
 - Drag the visible I/O handles on the program timeline to adjust either boundary; handles clamp instead of crossing
 - In the video editor: Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
-- While the editor is open, playback, seeking, timecode, and hover previews follow the compact edited sequence; cut markers identify removed ranges
+- Committed edits become the program playback immediately and remain active
+  after leaving edit mode; reset or discard restores the unedited source
 - Ctrl+E: export edits to a new sibling `- edited.mp4` file (press again to cancel); the source is never overwritten
 - The playback context menu can resume, export, or discard an edit session; discarding always requires explicit confirmation
 - Leaving playback with unexported edits offers the explicit Export, Discard, and Stay actions; no edit is silently lost

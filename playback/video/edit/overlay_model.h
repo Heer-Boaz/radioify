@@ -23,6 +23,10 @@ struct OverlayModel {
   std::string status;
 };
 
+// A retained program edit is still the active playback even when its editing
+// tools are closed. Keep that state visible without duplicating edit-mode UI.
+std::string retainedProgramBadge(const EditSnapshot& edit);
+
 // Converts immutable edit/export snapshots into renderer-independent cells.
 // ASCII and framebuffer targets consume exactly this same projection.
 OverlayModel buildOverlayModel(const EditSnapshot& edit,
