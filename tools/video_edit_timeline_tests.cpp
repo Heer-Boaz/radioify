@@ -468,11 +468,7 @@ int main() {
       playback_overlay::OverlayControlId::EditMarkOut,
       playback_overlay::OverlayControlId::EditRippleDelete,
       playback_overlay::OverlayControlId::EditTrim,
-      playback_overlay::OverlayControlId::EditUndo,
-      playback_overlay::OverlayControlId::EditRedo,
-      playback_overlay::OverlayControlId::EditReset,
-      playback_overlay::OverlayControlId::EditExport,
-      playback_overlay::OverlayControlId::EditLeave,
+      playback_overlay::OverlayControlId::EditDone,
   };
   const auto controlIds = [](const auto& specs) {
     std::vector<playback_overlay::OverlayControlId> ids;
@@ -491,10 +487,6 @@ int main() {
   for (const auto id : {
            playback_overlay::OverlayControlId::EditRippleDelete,
            playback_overlay::OverlayControlId::EditTrim,
-           playback_overlay::OverlayControlId::EditUndo,
-           playback_overlay::OverlayControlId::EditRedo,
-           playback_overlay::OverlayControlId::EditReset,
-           playback_overlay::OverlayControlId::EditExport,
        }) {
     const auto control = controlFor(unavailableEditControls, id);
     ok &= expect(control != unavailableEditControls.end() &&
@@ -532,10 +524,6 @@ int main() {
   for (const auto id : {
            playback_overlay::OverlayControlId::EditRippleDelete,
            playback_overlay::OverlayControlId::EditTrim,
-           playback_overlay::OverlayControlId::EditUndo,
-           playback_overlay::OverlayControlId::EditRedo,
-           playback_overlay::OverlayControlId::EditReset,
-           playback_overlay::OverlayControlId::EditExport,
        }) {
     const auto control = controlFor(availableEditControls, id);
     ok &= expect(control != availableEditControls.end() && control->enabled,
@@ -551,12 +539,21 @@ int main() {
   editorControlState.videoEditExport.active = true;
   const auto exportingEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
-  const auto cancelExportControl = controlFor(
-      exportingEditControls,
-      playback_overlay::OverlayControlId::EditExport);
-  ok &= expect(cancelExportControl != exportingEditControls.end() &&
-                   cancelExportControl->normalText == " [Cancel] ",
-               "the editor export action must name its running-state cancel behavior");
+  ok &= expect(controlIds(exportingEditControls) == expectedEditControls,
+               "background export state must not repurpose the monitor bar");
+  std::optional<playback_video_edit::Command> dispatchedEditCommand;
+  playback_overlay::OverlayControlActions editControlActions;
+  editControlActions.videoEdit = [&](playback_video_edit::Command command) {
+    dispatchedEditCommand = command;
+    return true;
+  };
+  ok &= expect(playback_overlay::dispatchOverlayControl(
+                   playback_overlay::OverlayControlId::EditDone,
+                   editControlActions) &&
+                   dispatchedEditCommand ==
+                       playback_video_edit::Command::Finish,
+               "Done must finish editing directly instead of entering the "
+               "Escape confirmation path");
 
   playback_overlay::PlaybackOverlayState pendingExitControlState;
   pendingExitControlState.videoEditPrompt = Prompt::LeavePlayback;
@@ -569,34 +566,35 @@ int main() {
                    pendingExitControls.front().normalText == " [Wait] ",
                "the pending-exit action must preserve wait-then-exit semantics");
 
-  const int disabledUndoToken = playback_overlay::overlayControlToken(
-      playback_overlay::OverlayControlId::EditUndo);
+  const int disabledDeleteToken = playback_overlay::overlayControlToken(
+      playback_overlay::OverlayControlId::EditRippleDelete);
   playback_overlay::PlaybackOverlayState disabledControlState;
   disabledControlState.playPauseAvailable = true;
   disabledControlState.videoEdit.active = true;
   const auto disabledHoverSpecs = playback_overlay::buildOverlayControlSpecs(
-      disabledControlState, disabledUndoToken);
+      disabledControlState, disabledDeleteToken);
   const auto disabledInputs = playback_overlay::buildOverlayCellControlInputs(
-      disabledHoverSpecs, disabledUndoToken);
+      disabledHoverSpecs, disabledDeleteToken);
   const auto disabledLayout =
       playback_overlay::layoutOverlayControlCells(disabledInputs, 160);
   const auto disabledMap =
       playback_overlay::buildOverlayInteractionMap(disabledLayout);
-  const auto disabledUndo = std::find_if(
+  const auto disabledDelete = std::find_if(
       disabledLayout.controls.begin(), disabledLayout.controls.end(),
       [](const auto& item) {
-        return item.id == playback_overlay::OverlayControlId::EditUndo;
+        return item.id ==
+               playback_overlay::OverlayControlId::EditRippleDelete;
       });
   const auto enabledIn = std::find_if(
       disabledLayout.controls.begin(), disabledLayout.controls.end(),
       [](const auto& item) {
         return item.id == playback_overlay::OverlayControlId::EditMarkIn;
       });
-  ok &= expect(disabledUndo != disabledLayout.controls.end() &&
-                   !disabledUndo->enabled && !disabledUndo->hovered &&
+  ok &= expect(disabledDelete != disabledLayout.controls.end() &&
+                   !disabledDelete->enabled && !disabledDelete->hovered &&
                    !playback_overlay::overlayControlAt(
-                       disabledMap, disabledUndo->x + 0.5,
-                       disabledUndo->y + 0.5),
+                       disabledMap, disabledDelete->x + 0.5,
+                       disabledDelete->y + 0.5),
                "disabled controls must render without accepting hover or clicks");
   ok &= expect(enabledIn != disabledLayout.controls.end() &&
                    playback_overlay::overlayControlAt(
@@ -617,7 +615,7 @@ int main() {
       {playback_overlay::OverlayControlId::EditMarkOut, "[Out]", 5},
       {playback_overlay::OverlayControlId::EditRippleDelete, "[Delete]", 8},
       {playback_overlay::OverlayControlId::EditTrim, "[Trim]", 6},
-      {playback_overlay::OverlayControlId::EditExport, "[Export]", 8},
+      {playback_overlay::OverlayControlId::EditDone, "[Done]", 6},
   };
   const playback_overlay::OverlayCellLayout shortLayout =
       playback_overlay::layoutOverlayCells(shortSurface);
@@ -779,6 +777,22 @@ int main() {
   ok &= expect(transformedMenuHit.contextMenuItem == 20,
                "framebuffer scaling must preserve context-menu item identity");
 
+  contextMenu.selectedItem = 40;
+  contextMenu.items = {
+      {10, "First"},
+      {20, "Second"},
+      {30, "Third"},
+      {40, "Last selected command"},
+  };
+  const playback_overlay::ContextMenuCellLayout scrolledContextLayout =
+      playback_overlay::layoutContextMenuCells(contextMenu, 30, 4);
+  ok &= expect(scrolledContextLayout.items.size() == 2 &&
+                   scrolledContextLayout.items[0].token == 30 &&
+                   scrolledContextLayout.items[1].token == 40 &&
+                   scrolledContextLayout.items[1].selected,
+               "a height-limited context menu must keep keyboard selection "
+               "inside its visible viewport");
+
   playback_session::ContextMenuController playbackMenu;
   playback_video_edit::EditSnapshot cleanEdit;
   playback_video_edit::ExportProgress idleExport;
@@ -808,6 +822,8 @@ int main() {
   cleanEdit.hasUnexportedChanges = true;
   cleanEdit.inTimelineUs = 1'000'000;
   cleanEdit.outTimelineUs = 2'000'000;
+  cleanEdit.canUndo = true;
+  cleanEdit.canRedo = true;
   playbackMenu.refresh(cleanEdit, idleExport);
   const auto dirtyMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);
@@ -815,9 +831,21 @@ int main() {
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
         return item.label == "Clear In and Out";
       });
-  const auto leaveItem = std::find_if(
+  const auto undoItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Leave edit mode";
+        return item.label == "Undo";
+      });
+  const auto redoItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Redo";
+      });
+  const auto resetItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Reset all edits";
+      });
+  const auto doneItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Done editing";
       });
   const auto discardItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
@@ -828,14 +856,45 @@ int main() {
         return item.label == "Export edited copy";
       });
   ok &= expect(clearAllItem != dirtyMenu.items.end() &&
-                   leaveItem != dirtyMenu.items.end() &&
+                   undoItem != dirtyMenu.items.end() &&
+                   redoItem != dirtyMenu.items.end() &&
+                   resetItem != dirtyMenu.items.end() &&
+                   doneItem != dirtyMenu.items.end() &&
                    discardItem != dirtyMenu.items.end() &&
-                   exportItem != dirtyMenu.items.end() &&
+                   exportItem != dirtyMenu.items.end(),
+               "the context menu must own secondary edit commands");
+  ok &= expect(doneItem != dirtyMenu.items.end() &&
+                   playbackMenu.select(doneItem->token) &&
+                   playbackMenu.activateSelection() ==
+                       playback_video_edit::Command::Finish &&
+                   !playbackMenu.visible(),
+               "the context Done action must finish without entering the "
+               "Escape confirmation path");
+  ok &= expect(playbackMenu.open(
+                   playback_session::ContextMenuSurface::Terminal, 0.25,
+                   0.75) &&
+                   discardItem != dirtyMenu.items.end() &&
                    playbackMenu.select(discardItem->token) &&
                    playbackMenu.activateSelection() ==
-                       playback_video_edit::Command::RequestDiscard &&
-                   !playbackMenu.visible(),
-               "context discard must request confirmation rather than mutate the document");
+                       playback_video_edit::Command::RequestDiscard,
+               "context discard must still request confirmation");
+
+  playback_video_edit::ExportProgress runningExport;
+  runningExport.active = true;
+  playbackMenu.refresh(cleanEdit, runningExport);
+  ok &= expect(playbackMenu.open(
+                   playback_session::ContextMenuSurface::Terminal, 0.25,
+                   0.75),
+               "a running export must retain a secondary command surface");
+  const auto runningExportMenu = playbackMenu.snapshotFor(
+      playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(std::any_of(
+                   runningExportMenu.items.begin(),
+                   runningExportMenu.items.end(), [](const auto& item) {
+                     return item.label == "Cancel export";
+                   }),
+               "moving export off the monitor bar must keep cancellation "
+               "available in the context menu");
 
   return ok ? 0 : 1;
 }

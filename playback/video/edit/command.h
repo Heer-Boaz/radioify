@@ -8,6 +8,7 @@ namespace playback_video_edit {
 // Presentation identifiers never cross this boundary.
 enum class Command : uint8_t {
   Open,
+  Finish,
   RequestClose,
   RequestDiscard,
   ConfirmPrompt,

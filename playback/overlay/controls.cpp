@@ -113,16 +113,10 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invokeEdit(playback_video_edit::Command::RippleDelete);
     case OverlayControlId::EditTrim:
       return invokeEdit(playback_video_edit::Command::Trim);
-    case OverlayControlId::EditUndo:
-      return invokeEdit(playback_video_edit::Command::Undo);
-    case OverlayControlId::EditRedo:
-      return invokeEdit(playback_video_edit::Command::Redo);
-    case OverlayControlId::EditReset:
-      return invokeEdit(playback_video_edit::Command::Reset);
+    case OverlayControlId::EditDone:
+      return invokeEdit(playback_video_edit::Command::Finish);
     case OverlayControlId::EditExport:
       return invokeEdit(playback_video_edit::Command::Export);
-    case OverlayControlId::EditLeave:
-      return invokeEdit(playback_video_edit::Command::RequestClose);
     case OverlayControlId::EditConfirmPrompt:
       return invokeEdit(playback_video_edit::Command::ConfirmPrompt);
     case OverlayControlId::EditCancelPrompt:
@@ -172,8 +166,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   }
 
   if (state.videoEdit.active) {
-    // Keep command identity and placement stable. Availability is UI state;
-    // it must not add or remove toolbar slots as the selection/history changes.
+    // The monitor bar contains only transport and direct timeline operations.
+    // Document history and output live in the context menu and shortcuts.
     out.push_back(makePlayPauseSpec(state));
     add(OverlayControlId::EditMarkIn, "In", false);
     add(OverlayControlId::EditMarkOut, "Out", false);
@@ -181,15 +175,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
         state.videoEdit.canRippleDelete);
     add(OverlayControlId::EditTrim, "Trim", false,
         state.videoEdit.canTrim);
-    add(OverlayControlId::EditUndo, "Undo", false, state.videoEdit.canUndo);
-    add(OverlayControlId::EditRedo, "Redo", false, state.videoEdit.canRedo);
-    add(OverlayControlId::EditReset, "Reset", false,
-        state.videoEdit.hasEdits);
-    add(OverlayControlId::EditExport,
-        state.videoEditExport.running() ? "Cancel" : "Export",
-        state.videoEditExport.running(),
-        state.videoEdit.hasEdits || state.videoEditExport.running());
-    add(OverlayControlId::EditLeave, "Leave", false);
+    add(OverlayControlId::EditDone, "Done", false);
     if (options.includePictureInPicture && state.pictureInPictureAvailable) {
       add(OverlayControlId::PictureInPicture, "PiP",
           state.pictureInPictureActive);

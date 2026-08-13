@@ -50,6 +50,16 @@ void ContextMenuController::refresh(
       next.push_back({playback_video_edit::Command::ClearInAndOut,
                       "Clear In and Out"});
     }
+    if (edit.canUndo) {
+      next.push_back({playback_video_edit::Command::Undo, "Undo"});
+    }
+    if (edit.canRedo) {
+      next.push_back({playback_video_edit::Command::Redo, "Redo"});
+    }
+    if (edit.hasEdits) {
+      next.push_back(
+          {playback_video_edit::Command::Reset, "Reset all edits"});
+    }
   }
   if (editExport.running()) {
     next.push_back({playback_video_edit::Command::Export, "Cancel export"});
@@ -62,8 +72,7 @@ void ContextMenuController::refresh(
                     "Discard changes"});
   }
   if (edit.active) {
-    next.push_back(
-        {playback_video_edit::Command::RequestClose, "Leave edit mode"});
+    next.push_back({playback_video_edit::Command::Finish, "Done editing"});
   }
   items_ = std::move(next);
   if (items_.empty()) {

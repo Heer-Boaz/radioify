@@ -15,13 +15,24 @@ ContextMenuCellLayout layoutContextMenuCells(
     return layout;
   }
 
-  const int visibleRows =
-      std::min(static_cast<int>(menu.items.size()), surfaceHeight - 2);
+  const int itemCount = static_cast<int>(menu.items.size());
+  const int visibleRows = std::min(itemCount, surfaceHeight - 2);
+  int selectedIndex = 0;
+  if (menu.selectedItem) {
+    const auto selected = std::find_if(
+        menu.items.begin(), menu.items.end(), [&](const ContextMenuItem& item) {
+          return item.token == *menu.selectedItem;
+        });
+    if (selected != menu.items.end()) {
+      selectedIndex = static_cast<int>(selected - menu.items.begin());
+    }
+  }
+  const int firstVisible = std::clamp(
+      selectedIndex - visibleRows + 1, 0, itemCount - visibleRows);
   int labelWidth = 1;
-  for (int i = 0; i < visibleRows; ++i) {
+  for (const ContextMenuItem& item : menu.items) {
     labelWidth = std::max(
-        labelWidth,
-        utf8DisplayWidth(menu.items[static_cast<size_t>(i)].label));
+        labelWidth, utf8DisplayWidth(item.label));
   }
   const int innerWidth = std::min(surfaceWidth - 2, labelWidth + 2);
   layout.width = innerWidth + 2;
@@ -43,20 +54,18 @@ ContextMenuCellLayout layoutContextMenuCells(
                  : std::max(0, anchorY - layout.height + 1);
 
   layout.items.reserve(static_cast<size_t>(visibleRows));
-  bool hasSelectedItem = false;
   for (int i = 0; i < visibleRows; ++i) {
-    const ContextMenuItem& item = menu.items[static_cast<size_t>(i)];
+    const ContextMenuItem& item =
+        menu.items[static_cast<size_t>(firstVisible + i)];
     ContextMenuCellItem placed;
     placed.token = item.token;
     placed.text = item.label;
     placed.x = layout.x + 1;
     placed.y = layout.y + 1 + i;
     placed.width = innerWidth;
-    placed.selected = menu.selectedItem && item.token == *menu.selectedItem;
-    hasSelectedItem = hasSelectedItem || placed.selected;
+    placed.selected = firstVisible + i == selectedIndex;
     layout.items.push_back(std::move(placed));
   }
-  if (!hasSelectedItem) layout.items.front().selected = true;
   return layout;
 }
 

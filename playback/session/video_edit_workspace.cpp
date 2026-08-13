@@ -77,6 +77,12 @@ struct VideoEditWorkspace::Impl {
     return {state.running(), state.progress};
   }
 
+  void finishEditing() {
+    prompt = playback_video_edit::Prompt::None;
+    active = false;
+    selection.clear();
+  }
+
   void updateTimelinePreview(
       const std::vector<playback_video_edit::SourceRange>& ranges) {
     if (!timelinePreview.setSequence(ranges)) return;
@@ -189,7 +195,6 @@ VideoEditActionResult VideoEditWorkspace::execute(
   const CommandContext context = impl_->commandContext();
   bool timelineChanged = false;
   bool syncProgramPreview = false;
-  bool deactivateIfOpenFails = false;
 
   switch (command) {
     case playback_video_edit::Command::Open:
@@ -200,12 +205,14 @@ VideoEditActionResult VideoEditWorkspace::execute(
         impl_->selection.clear();
         impl_->active = true;
         impl_->prompt = playback_video_edit::Prompt::None;
-        syncProgramPreview = true;
-        deactivateIfOpenFails = true;
         result.message = "Video editor opened";
       } else {
         result.message = "Video editor requires a known duration";
       }
+      break;
+    case playback_video_edit::Command::Finish:
+      impl_->finishEditing();
+      result.message = "Editing done; edited preview retained";
       break;
     case playback_video_edit::Command::RequestClose:
       impl_->prompt = playback_video_edit::Prompt::LeaveEditMode;
@@ -223,9 +230,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
       break;
     case playback_video_edit::Command::ConfirmPrompt:
       if (impl_->prompt == playback_video_edit::Prompt::LeaveEditMode) {
-        impl_->prompt = playback_video_edit::Prompt::None;
-        impl_->active = false;
-        impl_->selection.clear();
+        impl_->finishEditing();
         result.message = "Edit mode closed; edited preview retained";
       } else if (impl_->prompt == playback_video_edit::Prompt::DiscardEdits) {
         impl_->prompt = playback_video_edit::Prompt::None;
@@ -324,19 +329,12 @@ VideoEditActionResult VideoEditWorkspace::execute(
   }
 
   if (!projectionAccepted) {
-    if (deactivateIfOpenFails) {
-      impl_->active = false;
-      impl_->prompt = playback_video_edit::Prompt::None;
-      impl_->selection.clear();
-      result.message = "Video editor unavailable: preview could not start";
-    } else {
-      result.message = "Timeline changed; preview unavailable";
-    }
+    result.message = "Timeline changed; preview unavailable";
   }
 
   result.pausePlayback =
-      command == playback_video_edit::Command::Open &&
-      projectionAccepted && impl_->active;
+      result.handled && command == playback_video_edit::Command::Open &&
+      impl_->active;
   return result;
 }
 
