@@ -1211,6 +1211,7 @@ bool Exporter::start(ExportRequest request) {
     impl_->state = ExportSnapshot{};
     impl_->state.state = ExportState::Running;
     impl_->state.destinationPath = request.destinationPath;
+    impl_->state.keptRanges = request.keptRanges;
     impl_->lastProgressNotification =
         std::chrono::steady_clock::time_point::min();
     try {

@@ -33,6 +33,8 @@ struct ExportSnapshot {
   ExportState state = ExportState::Idle;
   double progress = 0.0;
   std::filesystem::path destinationPath;
+  // Exact edit decision list owned by this asynchronous job.
+  std::vector<SourceRange> keptRanges;
   std::string videoEncoder;
   std::string error;
 

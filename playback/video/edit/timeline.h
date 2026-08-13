@@ -61,6 +61,11 @@ class EditSession {
   bool discardAllChanges();
   bool canUndo() const { return !undo_.empty(); }
   bool canRedo() const { return !redo_.empty(); }
+  bool hasUnexportedChanges() const;
+
+  // A completed export may represent an older revision when editing continued
+  // in parallel. Keep that exact decision list as the clean baseline.
+  void markExported(const std::vector<SourceRange>& ranges);
 
   const Timeline& timeline() const { return timeline_; }
   EditSnapshot snapshot() const;
@@ -76,6 +81,7 @@ class EditSession {
   std::optional<int64_t> outUs_;
   std::vector<Timeline> undo_;
   std::vector<Timeline> redo_;
+  std::optional<std::vector<SourceRange>> exportedRanges_;
 };
 
 }  // namespace playback_video_edit

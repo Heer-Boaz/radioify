@@ -141,13 +141,58 @@ int main() {
   discarded.markIn(3'000'000);
   discarded.markOut(5'000'000);
   ok &= expect(discarded.rippleDeleteSelection() &&
-                   discarded.snapshot().hasEdits,
-               "committed edit decisions must be exposed independently of dirty state");
+                   discarded.snapshot().hasEdits &&
+                   discarded.snapshot().hasUnexportedChanges,
+               "committed edit decisions must expose edit and dirty state");
   ok &= expect(discarded.discardAllChanges() &&
                    discarded.timeline().isUnmodified() &&
                    !discarded.snapshot().hasEdits && !discarded.canUndo() &&
                    !discarded.canRedo(),
                "discard must restore the source sequence and clear its history");
+
+  EditSession exported;
+  exported.activate(10'000'000);
+  exported.markIn(2'000'000);
+  exported.markOut(3'000'000);
+  ok &= expect(exported.rippleDeleteSelection() &&
+                   exported.hasUnexportedChanges(),
+               "a committed decision must make its document dirty");
+  const std::vector<SourceRange> exportedRevision =
+      exported.timeline().keptRanges();
+  exported.markExported(exportedRevision);
+  ok &= expect(exported.snapshot().hasEdits &&
+                   !exported.snapshot().hasUnexportedChanges,
+               "a successful export must mark its exact document revision clean");
+  exported.markIn(6'000'000);
+  exported.markOut(7'000'000);
+  ok &= expect(exported.rippleDeleteSelection() &&
+                   exported.hasUnexportedChanges(),
+               "editing after export must create a new dirty revision");
+  ok &= expect(exported.undo() &&
+                   exported.timeline().keptRanges() == exportedRevision &&
+                   !exported.hasUnexportedChanges(),
+               "undoing to the exported revision must restore clean state");
+  ok &= expect(exported.redo() && exported.hasUnexportedChanges(),
+               "redoing past the exported revision must restore dirty state");
+
+  EditSession asynchronousExport;
+  asynchronousExport.activate(10'000'000);
+  asynchronousExport.markIn(2'000'000);
+  asynchronousExport.markOut(3'000'000);
+  ok &= expect(asynchronousExport.rippleDeleteSelection(),
+               "asynchronous export setup must create its first revision");
+  const std::vector<SourceRange> queuedExportRevision =
+      asynchronousExport.timeline().keptRanges();
+  asynchronousExport.markIn(6'000'000);
+  asynchronousExport.markOut(7'000'000);
+  ok &= expect(asynchronousExport.rippleDeleteSelection(),
+               "editing may continue while an older revision exports");
+  asynchronousExport.markExported(queuedExportRevision);
+  ok &= expect(asynchronousExport.hasUnexportedChanges(),
+               "finishing an older export must not mark newer decisions clean");
+  ok &= expect(asynchronousExport.undo() &&
+                   !asynchronousExport.hasUnexportedChanges(),
+               "the exported asynchronous revision must remain the clean baseline");
 
   session.markIn(1'000'000);
   session.markOut(2'000'000);

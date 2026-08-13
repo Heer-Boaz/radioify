@@ -133,6 +133,7 @@ void EditSession::activate(int64_t sourceDurationUs) {
     timeline_.reset(duration);
     undo_.clear();
     redo_.clear();
+    exportedRanges_.reset();
     inUs_.reset();
     outUs_.reset();
   }
@@ -281,10 +282,20 @@ bool EditSession::resetEdits() {
   return commit(std::move(next));
 }
 
+bool EditSession::hasUnexportedChanges() const {
+  return !timeline_.isUnmodified() &&
+         (!exportedRanges_ || timeline_.keptRanges() != *exportedRanges_);
+}
+
+void EditSession::markExported(const std::vector<SourceRange>& ranges) {
+  exportedRanges_ = ranges;
+}
+
 EditSnapshot EditSession::snapshot() const {
   EditSnapshot out;
   out.active = active_;
   out.hasEdits = !timeline_.isUnmodified();
+  out.hasUnexportedChanges = hasUnexportedChanges();
   out.canUndo = canUndo();
   out.canRedo = canRedo();
   out.sourceDurationUs = timeline_.sourceDurationUs();

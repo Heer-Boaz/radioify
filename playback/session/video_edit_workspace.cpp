@@ -50,8 +50,6 @@ struct VideoEditWorkspace::Impl {
   playback_video_edit::ExportSnapshot exportState;
   playback_video_edit::EditSnapshot editView;
   playback_video_edit::ExportProgress exportView;
-  std::vector<playback_video_edit::SourceRange> pendingExportRanges;
-  std::vector<playback_video_edit::SourceRange> lastExportedRanges;
 
   CommandContext commandContext() const {
     CommandContext context;
@@ -78,11 +76,6 @@ struct VideoEditWorkspace::Impl {
 
   void refreshView() {
     editView = session.snapshot();
-    const playback_video_edit::Timeline& timeline = session.timeline();
-    editView.hasUnexportedChanges =
-        !timeline.isUnmodified() &&
-        (lastExportedRanges.empty() ||
-         timeline.keptRanges() != lastExportedRanges);
     exportView.active = exportState.running();
     exportView.fraction = exportState.progress;
     refreshPlayhead();
@@ -139,9 +132,7 @@ struct VideoEditWorkspace::Impl {
     request.keptRanges = timeline.keptRanges();
     request.videoStreamIndex = context.videoStreamIndex;
     request.audioStreamIndex = context.audioStreamIndex;
-    pendingExportRanges = request.keptRanges;
     if (!exporter.start(std::move(request))) {
-      pendingExportRanges.clear();
       result.message = "Could not start edit export";
       return result;
     }
@@ -168,12 +159,12 @@ bool VideoEditWorkspace::active() const {
 }
 
 bool VideoEditWorkspace::hasUnexportedChanges() const {
-  return impl_ && impl_->editView.hasUnexportedChanges;
+  return impl_ && impl_->session.hasUnexportedChanges();
 }
 
 bool VideoEditWorkspace::needsExitConfirmation() const {
   return impl_ &&
-         (impl_->editView.hasUnexportedChanges || impl_->exportView.running());
+         (impl_->session.hasUnexportedChanges() || impl_->exportState.running());
 }
 
 VideoEditActionResult VideoEditWorkspace::execute(
@@ -323,16 +314,15 @@ bool VideoEditWorkspace::poll(std::string* message) {
   if (!impl_ || !impl_->exporter.consumeChanged()) return false;
   const playback_video_edit::ExportState previous = impl_->exportState.state;
   impl_->exportState = impl_->exporter.snapshot();
-  impl_->refreshView();
   if (message) message->clear();
   if (previous != playback_video_edit::ExportState::Running ||
       !impl_->exportState.finished()) {
+    impl_->refreshView();
     return true;
   }
   switch (impl_->exportState.state) {
     case playback_video_edit::ExportState::Succeeded:
-      impl_->lastExportedRanges = impl_->pendingExportRanges;
-      impl_->pendingExportRanges.clear();
+      impl_->session.markExported(impl_->exportState.keptRanges);
       if (message) {
         *message =
             "Exported " +
@@ -340,11 +330,9 @@ bool VideoEditWorkspace::poll(std::string* message) {
       }
       break;
     case playback_video_edit::ExportState::Failed:
-      impl_->pendingExportRanges.clear();
       if (message) *message = "Export failed: " + impl_->exportState.error;
       break;
     case playback_video_edit::ExportState::Cancelled:
-      impl_->pendingExportRanges.clear();
       if (message) *message = "Export cancelled";
       break;
     default:
