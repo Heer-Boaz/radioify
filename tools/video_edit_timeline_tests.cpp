@@ -1,7 +1,7 @@
 #include "playback/video/edit/timeline.h"
 #include "playback/video/edit/overlay_model.h"
 #include "playback/overlay/context_menu.h"
-#include "playback/overlay/interaction.h"
+#include "playback/overlay/overlay.h"
 #include "playback/session/context_menu_controller.h"
 
 #include <algorithm>
@@ -23,7 +23,7 @@ bool expect(bool condition, const char* message) {
 
 int main() {
   using playback_video_edit::Document;
-  using playback_video_edit::ExitPrompt;
+  using playback_video_edit::Prompt;
   using playback_video_edit::Selection;
   using playback_video_edit::SourceRange;
   using playback_video_edit::Timeline;
@@ -292,7 +292,7 @@ int main() {
   overlayExport.fraction = 0.42;
   const playback_video_edit::OverlayModel overlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              ExitPrompt::None, 10, 0.5);
+                                              Prompt::None, 10, 0.5);
   ok &= expect(overlayModel.cells.size() == 10 &&
                     overlayModel.cells[0] ==
                         playback_video_edit::TimelineCellKind::Kept &&
@@ -311,17 +311,17 @@ int main() {
                "narrow editor status must keep the active mode visible");
   const playback_video_edit::OverlayModel tinyExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              ExitPrompt::None, 6, 0.5);
+                                              Prompt::None, 6, 0.5);
   ok &= expect(tinyExportModel.status == "EDIT*",
                "tiny editor status must retain a compact mode indicator");
   const playback_video_edit::OverlayModel tinyDirtyModel =
       playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, ExitPrompt::None, 1, 0.5);
+          overlayEdit, nullptr, Prompt::None, 1, 0.5);
   ok &= expect(tinyDirtyModel.status == "*",
                "one-column editor status must retain the dirty indicator");
   const playback_video_edit::OverlayModel wideOverlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              ExitPrompt::None, 96, 0.5);
+                                              Prompt::None, 96, 0.5);
   ok &= expect(wideOverlayModel.status.find("EXPORT 42%") !=
                         std::string::npos &&
                     wideOverlayModel.status.find("TC 00:00:04:00") !=
@@ -336,7 +336,7 @@ int main() {
   overlayEdit.outTimelineUs.reset();
   const playback_video_edit::OverlayModel unselectedOverlayModel =
       playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, ExitPrompt::None, 10, 0.0);
+          overlayEdit, nullptr, Prompt::None, 10, 0.0);
   ok &= expect(unselectedOverlayModel.cells[2] ==
                    playback_video_edit::TimelineCellKind::Kept &&
                    unselectedOverlayModel.cutCells == std::vector<int>{2},
@@ -344,7 +344,7 @@ int main() {
   overlayEdit.active = false;
   const playback_video_edit::OverlayModel backgroundExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              ExitPrompt::None, 10, 0.0);
+                                              Prompt::None, 10, 0.0);
   ok &= expect(backgroundExportModel.cells.empty() &&
                     backgroundExportModel.status.find("EXPORT 42%") !=
                         std::string::npos,
@@ -352,16 +352,40 @@ int main() {
 
   const playback_video_edit::OverlayModel exitModel =
       playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, ExitPrompt::LeavePlayback, 10, 0.0);
+          overlayEdit, nullptr, Prompt::LeavePlayback, 10, 0.0);
   ok &= expect(exitModel.status == "UNEXPORTED" &&
                    exitModel.status.size() <= 10,
                "exit confirmation must use a complete width-bounded state");
 
   const playback_video_edit::OverlayModel closeEditorModel =
       playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, ExitPrompt::CloseEditor, 16, 0.0);
+          overlayEdit, nullptr, Prompt::LeaveEditMode, 16, 0.0);
   ok &= expect(closeEditorModel.status == "LEAVE EDIT MODE?",
                "leaving only edit mode must have its own explicit prompt");
+
+  const playback_video_edit::OverlayModel discardModel =
+      playback_video_edit::buildOverlayModel(
+          overlayEdit, nullptr, Prompt::DiscardEdits, 18, 0.0);
+  ok &= expect(discardModel.status == "DISCARD ALL EDITS?",
+               "discarding edit history must have its own explicit prompt");
+
+  playback_overlay::OverlayCellLayout promptLayout;
+  promptLayout.progressBarX = 2;
+  promptLayout.progressBarY = 4;
+  promptLayout.progressBarWidth = 20;
+  const playback_overlay::InteractionMap discardInteractions =
+      playback_overlay::buildOverlayInteractionMap(
+          promptLayout, &overlayEdit, Prompt::DiscardEdits);
+  ok &= expect(discardInteractions.modal &&
+                   discardInteractions.contains(-100.0, -100.0) &&
+                   !discardInteractions.progressBar,
+               "a visible editor prompt must capture the entire input surface");
+  const playback_overlay::InteractionMap ordinaryInteractions =
+      playback_overlay::buildOverlayInteractionMap(
+          promptLayout, &overlayEdit, Prompt::None);
+  ok &= expect(!ordinaryInteractions.modal &&
+                   ordinaryInteractions.progressBar.has_value(),
+               "ordinary edit mode must restore precise timeline hit-testing");
 
   playback_overlay::InteractionMap interactions;
   interactions.progressBar =
@@ -486,14 +510,19 @@ int main() {
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
         return item.label == "Discard changes";
       });
+  const auto exportItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Export edited copy";
+      });
   ok &= expect(clearAllItem != dirtyMenu.items.end() &&
                    leaveItem != dirtyMenu.items.end() &&
                    discardItem != dirtyMenu.items.end() &&
+                   exportItem != dirtyMenu.items.end() &&
                    playbackMenu.select(discardItem->token) &&
                    playbackMenu.activateSelection() ==
-                       playback_video_edit::Command::Discard &&
+                       playback_video_edit::Command::RequestDiscard &&
                    !playbackMenu.visible(),
-               "context commands must expose clear, leave, and document actions");
+               "context discard must request confirmation rather than mutate the document");
 
   return ok ? 0 : 1;
 }

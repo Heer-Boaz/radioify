@@ -111,8 +111,8 @@ struct WindowUiState {
     playback_video_timeline_preview::Snapshot timelinePreview;
     playback_video_edit::EditSnapshot videoEdit;
     playback_video_edit::ExportProgress videoEditExport;
-    playback_video_edit::ExitPrompt videoEditExitPrompt =
-        playback_video_edit::ExitPrompt::None;
+    playback_video_edit::Prompt videoEditPrompt =
+        playback_video_edit::Prompt::None;
 };
 
 struct IDXGISwapChain2;

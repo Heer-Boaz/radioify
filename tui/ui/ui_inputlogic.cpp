@@ -1019,7 +1019,7 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
       case PlaybackShortcutAction::OpenVideoEditor:
       case PlaybackShortcutAction::RequestCloseVideoEditor:
       case PlaybackShortcutAction::NavigateBackInVideoEditor:
-      case PlaybackShortcutAction::ConfirmVideoEditorClose:
+      case PlaybackShortcutAction::ConfirmVideoEditPrompt:
       case PlaybackShortcutAction::SetVideoEditIn:
       case PlaybackShortcutAction::SetVideoEditOut:
       case PlaybackShortcutAction::ClearVideoEditIn:

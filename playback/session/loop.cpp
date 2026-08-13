@@ -239,19 +239,16 @@ struct PlaybackLoopRunner::Impl {
     return videoEditWorkspace.needsExitConfirmation();
   }
 
-  playback_video_edit::ExitPrompt videoEditExitPrompt() const {
-    if (pendingExit) return playback_video_edit::ExitPrompt::LeavePlayback;
-    if (videoEditWorkspace.closeConfirmationActive()) {
-      return playback_video_edit::ExitPrompt::CloseEditor;
-    }
-    return playback_video_edit::ExitPrompt::None;
+  playback_video_edit::Prompt videoEditPrompt() const {
+    if (pendingExit) return playback_video_edit::Prompt::LeavePlayback;
+    return videoEditWorkspace.prompt();
   }
 
   bool beginPendingExit(PendingExit request) {
     if (!exitNeedsConfirmation()) return true;
     if (!pendingExit) {
-      if (videoEditWorkspace.closeConfirmationActive()) {
-        videoEditWorkspace.execute(playback_video_edit::Command::CancelClose);
+      if (videoEditWorkspace.prompt() != playback_video_edit::Prompt::None) {
+        videoEditWorkspace.execute(playback_video_edit::Command::CancelPrompt);
       }
       request.resumePlaybackOnCancel =
           inputView.playbackState &&
@@ -362,7 +359,7 @@ struct PlaybackLoopRunner::Impl {
   void syncVideoEditPresentation(bool requestPresent = true) {
     contextMenuController.refresh(videoEditWorkspace.edit(),
                                   videoEditWorkspace.exportProgress());
-    if (videoEditExitPrompt() != playback_video_edit::ExitPrompt::None) {
+    if (videoEditPrompt() != playback_video_edit::Prompt::None) {
       contextMenuController.dismiss();
       timelinePreviewModel.hide(
           playback_video_timeline_preview::PresentationSurface::Terminal);
@@ -430,7 +427,7 @@ struct PlaybackLoopRunner::Impl {
     using InputKind = playback_session::ContextMenuInputKind;
     switch (request.kind) {
       case InputKind::Open: {
-        if (videoEditExitPrompt() != playback_video_edit::ExitPrompt::None) {
+        if (videoEditPrompt() != playback_video_edit::Prompt::None) {
           return false;
         }
         const int width =
@@ -527,8 +524,7 @@ struct PlaybackLoopRunner::Impl {
     };
     inputSignals.videoEditorActive =
         [this]() { return videoEditWorkspace.active(); };
-    inputSignals.videoEditExitPrompt =
-        [this]() { return videoEditExitPrompt(); };
+    inputSignals.videoEditPrompt = [this]() { return videoEditPrompt(); };
     inputSignals.executeVideoEditCommand =
         [this](playback_video_edit::Command command) {
           return executeVideoEditCommand(command);
@@ -633,7 +629,7 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.timingSink = timingSink;
     renderInputs.videoEdit = videoEditWorkspace.edit();
     renderInputs.videoEditExport = videoEditWorkspace.exportProgress();
-    renderInputs.videoEditExitPrompt = videoEditExitPrompt();
+    renderInputs.videoEditPrompt = videoEditPrompt();
     renderInputs.contextMenu = contextMenuController.snapshotFor(
         playback_session::ContextMenuSurface::Terminal);
     core.bindRenderInputs(renderInputs);
@@ -665,7 +661,7 @@ struct PlaybackLoopRunner::Impl {
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
     ui.videoEdit = videoEditWorkspace.edit();
     ui.videoEditExport = videoEditWorkspace.exportProgress();
-    ui.videoEditExitPrompt = videoEditExitPrompt();
+    ui.videoEditPrompt = videoEditPrompt();
     ui.contextMenu = contextMenuController.snapshotFor(
         playback_session::ContextMenuSurface::VideoWindow);
     return ui;
@@ -711,7 +707,7 @@ struct PlaybackLoopRunner::Impl {
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
     inputs.videoEdit = videoEditWorkspace.edit();
     inputs.videoEditExport = videoEditWorkspace.exportProgress();
-    inputs.videoEditExitPrompt = videoEditExitPrompt();
+    inputs.videoEditPrompt = videoEditPrompt();
     inputs.contextMenu = contextMenuController.snapshotFor(
         playback_session::ContextMenuSurface::VideoWindow);
     inputs.osd.controlsVisible =
@@ -826,7 +822,7 @@ struct PlaybackLoopRunner::Impl {
         playback_video_timeline_preview::PresentationSurface::Terminal);
     renderInputs.videoEdit = videoEditWorkspace.edit();
     renderInputs.videoEditExport = videoEditWorkspace.exportProgress();
-    renderInputs.videoEditExitPrompt = videoEditExitPrompt();
+    renderInputs.videoEditPrompt = videoEditPrompt();
     renderInputs.contextMenu = contextMenuController.snapshotFor(
         playback_session::ContextMenuSurface::Terminal);
     renderInputs.cellPixelWidth = screen.cellPixelWidth();

@@ -9,8 +9,9 @@ namespace playback_video_edit {
 enum class Command : uint8_t {
   Open,
   RequestClose,
-  ConfirmClose,
-  CancelClose,
+  RequestDiscard,
+  ConfirmPrompt,
+  CancelPrompt,
   MarkIn,
   ClearIn,
   MarkOut,
@@ -22,7 +23,6 @@ enum class Command : uint8_t {
   Redo,
   Reset,
   Export,
-  Discard,
 };
 
 }  // namespace playback_video_edit

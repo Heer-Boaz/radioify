@@ -2561,7 +2561,7 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                               contextMenuLayout)
                         : playback_overlay::buildOverlayInteractionMap(
                               windowOverlayLayout, &ui.videoEdit,
-                              ui.videoEditExitPrompt);
+                              ui.videoEditPrompt);
                 if (outInteractions) {
                     *outInteractions =
                         playback_overlay::transformInteractionMap(

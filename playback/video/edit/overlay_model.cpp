@@ -77,20 +77,25 @@ int availableStatusPartWidth(const std::string& status, int width) {
 
 OverlayModel buildOverlayModel(const EditSnapshot& edit,
                                const ExportProgress* editExport,
-                               ExitPrompt exitPrompt, int width,
+                               Prompt prompt, int width,
                                double timelineProgress) {
   OverlayModel model;
   const bool exportRunning = editExport && editExport->running();
   if (width <= 0 ||
-      (!edit.active && exitPrompt == ExitPrompt::None && !exportRunning)) {
+      (!edit.active && prompt == Prompt::None && !exportRunning)) {
     return model;
   }
-  if (exitPrompt == ExitPrompt::CloseEditor) {
+  if (prompt == Prompt::LeaveEditMode) {
     model.status = shortestFittingStatus(
         {"LEAVE EDIT MODE?", "LEAVE EDIT?", "LEAVE?"}, width);
     return model;
   }
-  if (exitPrompt == ExitPrompt::LeavePlayback) {
+  if (prompt == Prompt::DiscardEdits) {
+    model.status = shortestFittingStatus(
+        {"DISCARD ALL EDITS?", "DISCARD EDITS?", "DISCARD?"}, width);
+    return model;
+  }
+  if (prompt == Prompt::LeavePlayback) {
     model.status = exportRunning
                        ? shortestFittingStatus(
                              {"EXPORT RUNNING", "EXPORTING", "EXPORT"}, width)

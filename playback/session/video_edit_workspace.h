@@ -38,7 +38,7 @@ class VideoEditWorkspace {
   VideoEditWorkspace& operator=(const VideoEditWorkspace&) = delete;
 
   bool active() const;
-  bool closeConfirmationActive() const;
+  playback_video_edit::Prompt prompt() const;
   bool hasUnexportedChanges() const;
   bool needsExitConfirmation() const;
 

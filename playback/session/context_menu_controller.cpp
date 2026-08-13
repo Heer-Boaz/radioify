@@ -52,11 +52,11 @@ void ContextMenuController::refresh(
     }
   }
   if (editExport.running()) {
-    next.push_back({playback_video_edit::Command::Export, "Cancel save"});
+    next.push_back({playback_video_edit::Command::Export, "Cancel export"});
   } else if (edit.hasUnexportedChanges) {
     next.push_back({playback_video_edit::Command::Export,
-                    "Save edited copy"});
-    next.push_back({playback_video_edit::Command::Discard,
+                    "Export edited copy"});
+    next.push_back({playback_video_edit::Command::RequestDiscard,
                     "Discard changes"});
   }
   if (edit.active) {

@@ -185,6 +185,7 @@ The concrete implementation plan lives in
 - In the video editor: Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
 - While the editor is open, playback, seeking, timecode, and hover previews follow the compact edited sequence; cut markers identify removed ranges
 - Ctrl+E: export edits to a new sibling `- edited.mp4` file (press again to cancel); the source is never overwritten
+- The playback context menu can resume, export, or discard an edit session; discarding always requires explicit confirmation
 - Leaving playback with unexported edits offers the explicit Export, Discard, and Stay actions; no edit is silently lost
 - Ctrl+W: toggle video Window mode (framebuffer-mode)
 - Ctrl+P: toggle picture-in-picture in Window mode

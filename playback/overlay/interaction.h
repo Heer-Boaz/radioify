@@ -8,6 +8,8 @@
 
 namespace playback_overlay {
 
+struct OverlayCellLayout;
+
 enum class OverlayControlId {
   Previous,
   PlayPause,
@@ -26,8 +28,8 @@ enum class OverlayControlId {
   EditReset,
   EditExport,
   EditLeave,
-  EditConfirmClose,
-  EditCancelClose,
+  EditConfirmPrompt,
+  EditCancelPrompt,
   EditDiscardAndExit,
   EditCancelExit,
 };
@@ -114,5 +116,10 @@ InteractionHit interactionHitAtTransformed(
 InteractionMap transformInteractionMap(const InteractionMap& map,
                                        double offsetX, double offsetY,
                                        double scaleX, double scaleY);
+InteractionMap buildOverlayInteractionMap(
+    const OverlayCellLayout& layout,
+    const playback_video_edit::EditSnapshot* videoEdit = nullptr,
+    playback_video_edit::Prompt videoEditPrompt =
+        playback_video_edit::Prompt::None);
 
 }  // namespace playback_overlay

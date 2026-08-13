@@ -47,7 +47,7 @@ struct VideoEditWorkspace::Impl {
   playback_video_edit::Document document;
   playback_video_edit::Selection selection;
   bool active = false;
-  bool closeConfirmation = false;
+  playback_video_edit::Prompt prompt = playback_video_edit::Prompt::None;
   playback_video_edit::Exporter exporter;
   playback_video_edit::ExportState observedExportState =
       playback_video_edit::ExportState::Idle;
@@ -118,7 +118,7 @@ struct VideoEditWorkspace::Impl {
       return result;
     }
     if (timeline.isUnmodified()) {
-      result.message = "Make at least one trim or cut before exporting";
+      result.message = "Make at least one trim or deletion before exporting";
       return result;
     }
     const std::filesystem::path destination =
@@ -160,8 +160,8 @@ bool VideoEditWorkspace::active() const {
   return impl_ && impl_->active;
 }
 
-bool VideoEditWorkspace::closeConfirmationActive() const {
-  return impl_ && impl_->closeConfirmation;
+playback_video_edit::Prompt VideoEditWorkspace::prompt() const {
+  return impl_ ? impl_->prompt : playback_video_edit::Prompt::None;
 }
 
 bool VideoEditWorkspace::hasUnexportedChanges() const {
@@ -178,19 +178,19 @@ VideoEditActionResult VideoEditWorkspace::execute(
     playback_video_edit::Command command) {
   VideoEditActionResult result;
   if (!impl_) return result;
-  if (!impl_->closeConfirmation &&
-      (command == playback_video_edit::Command::ConfirmClose ||
-       command == playback_video_edit::Command::CancelClose)) {
+  const bool promptCommand =
+      command == playback_video_edit::Command::ConfirmPrompt ||
+      command == playback_video_edit::Command::CancelPrompt;
+  if (impl_->prompt == playback_video_edit::Prompt::None && promptCommand) {
     return result;
   }
-  if (impl_->closeConfirmation &&
-      command != playback_video_edit::Command::ConfirmClose &&
-      command != playback_video_edit::Command::CancelClose) {
+  if (impl_->prompt != playback_video_edit::Prompt::None && !promptCommand) {
     return result;
   }
   if (!impl_->active && command != playback_video_edit::Command::Open &&
       command != playback_video_edit::Command::Export &&
-      command != playback_video_edit::Command::Discard) {
+      command != playback_video_edit::Command::RequestDiscard &&
+      !promptCommand) {
     return result;
   }
   result.handled = true;
@@ -209,7 +209,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
         impl_->document.load(context.sourceDurationUs);
         impl_->selection.clear();
         impl_->active = true;
-        impl_->closeConfirmation = false;
+        impl_->prompt = playback_video_edit::Prompt::None;
         projection = PreviewProjection::ApplyEdit;
         deactivateIfOpenFails = true;
         result.message = "Video editor opened";
@@ -218,16 +218,36 @@ VideoEditActionResult VideoEditWorkspace::execute(
       }
       break;
     case playback_video_edit::Command::RequestClose:
-      impl_->closeConfirmation = true;
+      impl_->prompt = playback_video_edit::Prompt::LeaveEditMode;
       result.message.clear();
       break;
-    case playback_video_edit::Command::ConfirmClose:
-      projection = PreviewProjection::ClearEdit;
-      deactivateAfterClear = true;
-      result.message = "Edit mode closed; edits retained";
+    case playback_video_edit::Command::RequestDiscard:
+      if (impl_->exporter.snapshot().running()) {
+        result.message = "Cancel the active export before discarding edits";
+      } else if (impl_->document.hasUnexportedChanges()) {
+        impl_->prompt = playback_video_edit::Prompt::DiscardEdits;
+        result.message.clear();
+      } else {
+        result.message = "There are no unexported edits to discard";
+      }
       break;
-    case playback_video_edit::Command::CancelClose:
-      impl_->closeConfirmation = false;
+    case playback_video_edit::Command::ConfirmPrompt:
+      if (impl_->prompt == playback_video_edit::Prompt::LeaveEditMode) {
+        impl_->prompt = playback_video_edit::Prompt::None;
+        projection = PreviewProjection::ClearEdit;
+        deactivateAfterClear = true;
+        result.message = "Edit mode closed; edits retained";
+      } else if (impl_->prompt == playback_video_edit::Prompt::DiscardEdits) {
+        impl_->prompt = playback_video_edit::Prompt::None;
+        timelineChanged = impl_->document.discardAllChanges();
+        result.message = timelineChanged ? "Edits discarded"
+                                         : "There are no edits to discard";
+      } else {
+        result.handled = false;
+      }
+      break;
+    case playback_video_edit::Command::CancelPrompt:
+      impl_->prompt = playback_video_edit::Prompt::None;
       result.message.clear();
       break;
     case playback_video_edit::Command::MarkIn:
@@ -270,7 +290,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
       if (const auto selected = impl_->selection.range()) {
         timelineChanged = impl_->document.rippleDelete(*selected);
       }
-      result.message = timelineChanged ? "Selection removed (ripple)"
+      result.message = timelineChanged ? "Range deleted (ripple)"
                                        : "Set a non-empty In/Out range first";
       break;
     case playback_video_edit::Command::Trim:
@@ -290,20 +310,11 @@ VideoEditActionResult VideoEditWorkspace::execute(
       break;
     case playback_video_edit::Command::Reset:
       timelineChanged = impl_->document.resetEdits();
-      result.message = timelineChanged ? "All cuts reset"
+      result.message = timelineChanged ? "All edits reset"
                                        : "Sequence is unchanged";
       break;
     case playback_video_edit::Command::Export:
       result = impl_->startOrCancelExport(context);
-      break;
-    case playback_video_edit::Command::Discard:
-      if (impl_->exporter.snapshot().running()) {
-        result.message = "Cancel the active save before discarding changes";
-        break;
-      }
-      timelineChanged = impl_->document.discardAllChanges();
-      result.message = timelineChanged ? "Edits discarded"
-                                       : "There are no edits to discard";
       break;
   }
 
@@ -322,7 +333,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
   if (!projectionAccepted) {
     if (deactivateIfOpenFails) {
       impl_->active = false;
-      impl_->closeConfirmation = false;
+      impl_->prompt = playback_video_edit::Prompt::None;
       impl_->selection.clear();
       result.message = "Video editor unavailable: preview could not start";
     } else if (deactivateAfterClear) {
@@ -332,7 +343,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
     }
   } else if (deactivateAfterClear) {
     impl_->active = false;
-    impl_->closeConfirmation = false;
+    impl_->prompt = playback_video_edit::Prompt::None;
     impl_->selection.clear();
   }
 
@@ -344,10 +355,11 @@ VideoEditActionResult VideoEditWorkspace::execute(
 
 VideoEditActionResult VideoEditWorkspace::navigateBack() {
   VideoEditActionResult result;
-  if (!impl_ || !impl_->active) return result;
-  if (impl_->closeConfirmation) {
-    return execute(playback_video_edit::Command::CancelClose);
+  if (!impl_) return result;
+  if (impl_->prompt != playback_video_edit::Prompt::None) {
+    return execute(playback_video_edit::Command::CancelPrompt);
   }
+  if (!impl_->active) return result;
   if (impl_->selection.hasMarks()) {
     return execute(playback_video_edit::Command::ClearInAndOut);
   }

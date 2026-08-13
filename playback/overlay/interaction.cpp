@@ -1,4 +1,6 @@
-#include "interaction.h"
+#include "overlay.h"
+
+#include "playback/video/edit/overlay_model.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +17,58 @@ InteractionRect transformRect(const InteractionRect& rect, double offsetX,
 }
 
 }  // namespace
+
+InteractionMap buildOverlayInteractionMap(
+    const OverlayCellLayout& layout,
+    const playback_video_edit::EditSnapshot* videoEdit,
+    playback_video_edit::Prompt videoEditPrompt) {
+  InteractionMap map;
+  map.modal = videoEditPrompt != playback_video_edit::Prompt::None;
+  for (const OverlayCellControlLayoutItem& item : layout.controls) {
+    if (item.width <= 0 || item.y < 0) continue;
+    map.controls.push_back(
+        {{static_cast<double>(item.x), static_cast<double>(item.y),
+          static_cast<double>(item.x + item.width),
+          static_cast<double>(item.y + 1)},
+         item.id});
+  }
+
+  if (layout.progressBarX < 0 || layout.progressBarY < 0 ||
+      layout.progressBarWidth <= 0 ||
+      videoEditPrompt != playback_video_edit::Prompt::None) {
+    return map;
+  }
+
+  map.progressBar = ProgressBarRegion{
+      {static_cast<double>(layout.progressBarX),
+       static_cast<double>(layout.progressBarY),
+       static_cast<double>(layout.progressBarX + layout.progressBarWidth),
+       static_cast<double>(layout.progressBarY + 1)},
+      layout.progressBarWidth};
+
+  if (!videoEdit || !videoEdit->active) return map;
+  const playback_video_edit::OverlayModel model =
+      playback_video_edit::buildOverlayModel(
+          *videoEdit, nullptr, playback_video_edit::Prompt::None,
+          layout.progressBarWidth, 0.0);
+  const auto addBoundary = [&](std::optional<int> cell,
+                               playback_video_edit::EditBoundary boundary) {
+    if (!cell) return;
+    const int center = layout.progressBarX + *cell;
+    const int left = std::max(layout.progressBarX, center - 1);
+    const int right = std::min(layout.progressBarX + layout.progressBarWidth,
+                               center + 2);
+    map.editBoundaries.push_back(
+        {{static_cast<double>(left),
+          static_cast<double>(layout.progressBarY),
+          static_cast<double>(right),
+          static_cast<double>(layout.progressBarY + 1)},
+         boundary});
+  };
+  addBoundary(model.inCell, playback_video_edit::EditBoundary::In);
+  addBoundary(model.outCell, playback_video_edit::EditBoundary::Out);
+  return map;
+}
 
 bool InteractionRect::valid() const {
   return std::isfinite(left) && std::isfinite(top) && std::isfinite(right) &&

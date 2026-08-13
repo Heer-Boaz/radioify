@@ -198,8 +198,10 @@ int main() {
       videoPlaybackContexts | kPlaybackShortcutContextVideoEditing;
   const uint32_t videoEditExitContexts =
       kPlaybackShortcutContextVideoEditExitConfirmation;
-  const uint32_t videoEditCloseContexts =
-      kPlaybackShortcutContextVideoEditCloseConfirmation;
+  const uint32_t videoEditLeaveContexts =
+      kPlaybackShortcutContextVideoEditLeaveConfirmation;
+  const uint32_t videoEditDiscardContexts =
+      kPlaybackShortcutContextVideoEditDiscardConfirmation;
   ok &= expect(resolvePlaybackShortcutAction(makeKey('E'),
                                               videoPlaybackContexts)
                    .value() == PlaybackShortcutAction::OpenVideoEditor,
@@ -297,23 +299,41 @@ int main() {
                     .value() == PlaybackShortcutAction::CancelVideoEditPrompt,
                "Escape must cancel the modal edit-exit prompt");
   ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_ESCAPE),
-                       videoEditCloseContexts)
+                       videoEditLeaveContexts)
                        .value() ==
                    PlaybackShortcutAction::CancelVideoEditPrompt,
-               "Escape must stay in the editor when its close prompt is open");
+               "Escape must stay in the editor when its leave prompt is open");
   ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_RETURN),
-                                               videoEditCloseContexts)
+                                               videoEditLeaveContexts)
                        .value() ==
-                   PlaybackShortcutAction::ConfirmVideoEditorClose &&
+                   PlaybackShortcutAction::ConfirmVideoEditPrompt &&
                    videoEditCommandForShortcut(
-                       PlaybackShortcutAction::ConfirmVideoEditorClose) ==
-                       playback_video_edit::Command::ConfirmClose,
+                       PlaybackShortcutAction::ConfirmVideoEditPrompt) ==
+                       playback_video_edit::Command::ConfirmPrompt,
                "Enter must explicitly confirm leaving only the editor");
   ok &= expect(resolvePlaybackShortcutAction(InputAction::Back,
-                       videoEditCloseContexts)
+                       videoEditLeaveContexts)
                        .value() ==
                    PlaybackShortcutAction::CancelVideoEditPrompt,
                "controller Back must follow the same close-prompt hierarchy");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey('D'),
+                                              videoEditDiscardContexts)
+                       .value() ==
+                   PlaybackShortcutAction::ConfirmVideoEditPrompt &&
+                   resolvePlaybackShortcutAction(makeKey(VK_RETURN),
+                                                  videoEditDiscardContexts)
+                           .value() ==
+                       PlaybackShortcutAction::CancelVideoEditPrompt &&
+                   resolvePlaybackShortcutAction(makeKey(VK_ESCAPE),
+                                                  videoEditDiscardContexts)
+                       .value() ==
+                   PlaybackShortcutAction::CancelVideoEditPrompt,
+               "discard confirmation must require an explicit destructive key");
+  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_RETURN),
+                                              videoEditExitContexts)
+                       .value() ==
+                   PlaybackShortcutAction::CancelVideoEditPrompt,
+               "Enter must choose the safe default in the playback-exit prompt");
   ok &= expect(resolvePlaybackShortcutAction(
                    makeKey('E', 0, kPlaybackShortcutCtrlMask),
                    videoEditExitContexts)

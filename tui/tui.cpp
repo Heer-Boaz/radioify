@@ -1457,8 +1457,8 @@ int runTui(Options o) {
             case playback_overlay::OverlayControlId::EditReset:
             case playback_overlay::OverlayControlId::EditExport:
             case playback_overlay::OverlayControlId::EditLeave:
-            case playback_overlay::OverlayControlId::EditConfirmClose:
-            case playback_overlay::OverlayControlId::EditCancelClose:
+            case playback_overlay::OverlayControlId::EditConfirmPrompt:
+            case playback_overlay::OverlayControlId::EditCancelPrompt:
             case playback_overlay::OverlayControlId::EditDiscardAndExit:
             case playback_overlay::OverlayControlId::EditCancelExit:
               return std::nullopt;

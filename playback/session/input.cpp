@@ -472,15 +472,15 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
   cb.onCopyVideoFrame = signals.copyCurrentVideoFrameToClipboard;
   cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
-  const playback_video_edit::ExitPrompt editExitPrompt =
-      signals.videoEditExitPrompt
-          ? signals.videoEditExitPrompt()
-          : playback_video_edit::ExitPrompt::None;
+  const playback_video_edit::Prompt editPrompt =
+      signals.videoEditPrompt ? signals.videoEditPrompt()
+                              : playback_video_edit::Prompt::None;
   uint32_t shortcutContexts = 0;
-  if (editExitPrompt == playback_video_edit::ExitPrompt::CloseEditor) {
-    shortcutContexts = kPlaybackShortcutContextVideoEditCloseConfirmation;
-  } else if (editExitPrompt ==
-             playback_video_edit::ExitPrompt::LeavePlayback) {
+  if (editPrompt == playback_video_edit::Prompt::LeaveEditMode) {
+    shortcutContexts = kPlaybackShortcutContextVideoEditLeaveConfirmation;
+  } else if (editPrompt == playback_video_edit::Prompt::DiscardEdits) {
+    shortcutContexts = kPlaybackShortcutContextVideoEditDiscardConfirmation;
+  } else if (editPrompt == playback_video_edit::Prompt::LeavePlayback) {
     shortcutContexts = kPlaybackShortcutContextVideoEditExitConfirmation;
   } else {
     shortcutContexts = kPlaybackShortcutContextShared |
@@ -510,8 +510,8 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
                                   PlaybackInputSignals& signals,
                                   PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command) {
-  if (signals.videoEditExitPrompt &&
-      signals.videoEditExitPrompt() != playback_video_edit::ExitPrompt::None) {
+  if (signals.videoEditPrompt &&
+      signals.videoEditPrompt() != playback_video_edit::Prompt::None) {
     return;
   }
   switch (command) {
@@ -568,17 +568,16 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     commitQueuedSeek(view, signals, seekState);
     *signals.redraw = true;
   }
-  const playback_video_edit::ExitPrompt editExitPrompt =
-      signals.videoEditExitPrompt
-          ? signals.videoEditExitPrompt()
-          : playback_video_edit::ExitPrompt::None;
+  const playback_video_edit::Prompt editPrompt =
+      signals.videoEditPrompt ? signals.videoEditPrompt()
+                              : playback_video_edit::Prompt::None;
 
   const double pointerX =
       windowEvent && mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
   const double pointerY =
       windowEvent && mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
   if (rightPressed && mouse.eventFlags == 0 &&
-      editExitPrompt == playback_video_edit::ExitPrompt::None) {
+      editPrompt == playback_video_edit::Prompt::None) {
     playback_session::ContextMenuInput request;
     request.kind = playback_session::ContextMenuInputKind::Open;
     request.surface =

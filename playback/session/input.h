@@ -60,7 +60,7 @@ struct PlaybackInputSignals {
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   std::function<void()> copyCurrentVideoFrameToClipboard;
   std::function<bool()> videoEditorActive;
-  std::function<playback_video_edit::ExitPrompt()> videoEditExitPrompt;
+  std::function<playback_video_edit::Prompt()> videoEditPrompt;
   std::function<bool(playback_video_edit::Command)> executeVideoEditCommand;
   std::function<bool()> navigateBack;
   std::function<bool()> confirmPendingExit;

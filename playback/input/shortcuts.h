@@ -33,8 +33,8 @@ videoEditCommandForShortcut(PlaybackShortcutAction action) {
       return Command::Open;
     case PlaybackShortcutAction::RequestCloseVideoEditor:
       return Command::RequestClose;
-    case PlaybackShortcutAction::ConfirmVideoEditorClose:
-      return Command::ConfirmClose;
+    case PlaybackShortcutAction::ConfirmVideoEditPrompt:
+      return Command::ConfirmPrompt;
     case PlaybackShortcutAction::SetVideoEditIn:
       return Command::MarkIn;
     case PlaybackShortcutAction::SetVideoEditOut:
@@ -72,7 +72,7 @@ inline constexpr DWORD kPlaybackShortcutFrameStepForbiddenMask =
 
 // One shared shortcut table. Context masks let modes layer additional keys on
 // top of the shared map without owning separate per-mode tables.
-inline constexpr std::array<PlaybackShortcutBinding, 53>
+inline constexpr std::array<PlaybackShortcutBinding, 55>
     kPlaybackShortcutBindings = {{
         {PlaybackShortcutAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal},
@@ -84,14 +84,23 @@ inline constexpr std::array<PlaybackShortcutBinding, 53>
         {PlaybackShortcutAction::CancelVideoEditPrompt, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditExitConfirmation |
-             kPlaybackShortcutContextVideoEditCloseConfirmation},
+             kPlaybackShortcutContextVideoEditLeaveConfirmation |
+             kPlaybackShortcutContextVideoEditDiscardConfirmation},
         {PlaybackShortcutAction::CancelVideoEditPrompt, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditExitConfirmation |
-             kPlaybackShortcutContextVideoEditCloseConfirmation},
-        {PlaybackShortcutAction::ConfirmVideoEditorClose, VK_RETURN, 0, 0, 0,
+             kPlaybackShortcutContextVideoEditLeaveConfirmation |
+             kPlaybackShortcutContextVideoEditDiscardConfirmation},
+        {PlaybackShortcutAction::ConfirmVideoEditPrompt, VK_RETURN, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextVideoEditCloseConfirmation},
+         kPlaybackShortcutContextVideoEditLeaveConfirmation},
+        {PlaybackShortcutAction::CancelVideoEditPrompt, VK_RETURN, 0, 0, 0,
+         kPlaybackShortcutTextForbiddenMask,
+         kPlaybackShortcutContextVideoEditExitConfirmation |
+             kPlaybackShortcutContextVideoEditDiscardConfirmation},
+        {PlaybackShortcutAction::ConfirmVideoEditPrompt, 'D', 'd', 'D', 0,
+         kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextVideoEditDiscardConfirmation},
         {PlaybackShortcutAction::DiscardVideoEditsAndExit, 'D', 'd', 'D', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditExitConfirmation},
@@ -267,7 +276,9 @@ inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
   switch (action) {
     case InputAction::Back:
       if ((shortcutContexts &
-           kPlaybackShortcutContextVideoEditCloseConfirmation) != 0) {
+           kPlaybackShortcutContextVideoEditLeaveConfirmation) != 0 ||
+          (shortcutContexts &
+           kPlaybackShortcutContextVideoEditDiscardConfirmation) != 0) {
         return PlaybackShortcutAction::CancelVideoEditPrompt;
       }
       if ((shortcutContexts &

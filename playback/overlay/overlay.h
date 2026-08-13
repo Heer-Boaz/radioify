@@ -135,8 +135,8 @@ struct PlaybackOverlayInputs {
   ContextMenuSnapshot contextMenu;
   playback_video_edit::EditSnapshot videoEdit;
   playback_video_edit::ExportProgress videoEditExport;
-  playback_video_edit::ExitPrompt videoEditExitPrompt =
-      playback_video_edit::ExitPrompt::None;
+  playback_video_edit::Prompt videoEditPrompt =
+      playback_video_edit::Prompt::None;
 };
 
 struct PlaybackOverlayState {
@@ -176,8 +176,8 @@ struct PlaybackOverlayState {
   ContextMenuSnapshot contextMenu;
   playback_video_edit::EditSnapshot videoEdit;
   playback_video_edit::ExportProgress videoEditExport;
-  playback_video_edit::ExitPrompt videoEditExitPrompt =
-      playback_video_edit::ExitPrompt::None;
+  playback_video_edit::Prompt videoEditPrompt =
+      playback_video_edit::Prompt::None;
 };
 
 PlaybackOverlayState buildPlaybackOverlayState(
@@ -214,12 +214,6 @@ OverlayCellLayout layoutPlaybackOverlayCells(
 OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
                                            int height);
 
-InteractionMap buildOverlayInteractionMap(
-    const OverlayCellLayout& layout,
-    const playback_video_edit::EditSnapshot* videoEdit = nullptr,
-    playback_video_edit::ExitPrompt videoEditExitPrompt =
-        playback_video_edit::ExitPrompt::None);
-
 std::string buildWindowOverlayProgressSuffix(
     const PlaybackOverlayState& state);
 
@@ -249,7 +243,7 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            const playback_video_edit::EditSnapshot* videoEdit,
                            const playback_video_edit::ExportProgress*
                                videoEditExport,
-                           playback_video_edit::ExitPrompt videoEditExitPrompt,
+                           playback_video_edit::Prompt videoEditPrompt,
                            int minY,
                            int maxY);
 

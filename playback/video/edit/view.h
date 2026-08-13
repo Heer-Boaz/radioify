@@ -15,11 +15,12 @@ enum class EditBoundary : uint8_t {
   Out,
 };
 
-// The two exit prompts represent different pending actions and therefore have
-// different controls. Renderers must never infer one from dirty state.
-enum class ExitPrompt : uint8_t {
+// Explicit modal state shared by input and both renderers. A prompt is an
+// application decision, never something a renderer infers from dirty state.
+enum class Prompt : uint8_t {
   None,
-  CloseEditor,
+  LeaveEditMode,
+  DiscardEdits,
   LeavePlayback,
 };
 
