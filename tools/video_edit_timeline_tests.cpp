@@ -4,6 +4,7 @@
 #include "playback/overlay/interaction.h"
 #include "playback/session/context_menu_controller.h"
 
+#include <algorithm>
 #include <iostream>
 #include <optional>
 #include <vector>
@@ -209,7 +210,7 @@ int main() {
 
   playback_video_edit::EditSnapshot overlayEdit;
   overlayEdit.active = true;
-  overlayEdit.dirty = true;
+  overlayEdit.hasUnexportedChanges = true;
   overlayEdit.sourceDurationUs = 10'000'000;
   overlayEdit.timelineDurationUs = 8'000'000;
   overlayEdit.frameDurationUs = 33'333;
@@ -337,11 +338,10 @@ int main() {
   contextMenu.visible = true;
   contextMenu.anchorXRatio = 1.0;
   contextMenu.anchorYRatio = 1.0;
-  contextMenu.selectedControlToken = playback_overlay::overlayControlToken(
-      playback_overlay::OverlayControlId::EditDiscard);
+  contextMenu.selectedItem = 20;
   contextMenu.items = {
-      {playback_overlay::OverlayControlId::EditOpen, "Edit video"},
-      {playback_overlay::OverlayControlId::EditDiscard, "Discard changes"},
+      {10, "Edit video"},
+      {20, "Discard changes"},
   };
   const playback_overlay::ContextMenuCellLayout contextLayout =
       playback_overlay::layoutContextMenuCells(contextMenu, 30, 10);
@@ -359,12 +359,18 @@ int main() {
   ok &= expect(contextInteractions.modal &&
                    contextInteractions.contains(0.0, 0.0),
                "a visible context menu must own input outside its popup");
-  ok &= expect(playback_overlay::overlayControlAt(
+  ok &= expect(playback_overlay::contextMenuItemAt(
                    contextInteractions,
                    static_cast<double>(contextLayout.items[1].x),
-                   static_cast<double>(contextLayout.items[1].y)) ==
-                   playback_overlay::OverlayControlId::EditDiscard,
-               "context menu hit-testing must dispatch its rendered command");
+                   static_cast<double>(contextLayout.items[1].y)) == 20,
+               "context menu hit-testing must preserve its opaque item token");
+  const auto transformedMenuHit =
+      playback_overlay::interactionHitAtTransformed(
+          contextInteractions, 5.0, 7.0, 2.0, 3.0,
+          5.0 + (static_cast<double>(contextLayout.items[1].x) + 0.5) * 2.0,
+          7.0 + (static_cast<double>(contextLayout.items[1].y) + 0.5) * 3.0);
+  ok &= expect(transformedMenuHit.contextMenuItem == 20,
+               "framebuffer scaling must preserve context-menu item identity");
 
   playback_session::ContextMenuController playbackMenu;
   playback_video_edit::EditSnapshot cleanEdit;
@@ -378,17 +384,29 @@ int main() {
   const auto windowMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::VideoWindow);
   ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 1 &&
-                   terminalMenu.items[0].control ==
-                       playback_overlay::OverlayControlId::EditOpen &&
+                   terminalMenu.items[0].label == "Edit video" &&
                    !windowMenu.visible,
                "a playback context menu must belong to exactly one presentation surface");
-  cleanEdit.active = true;
-  cleanEdit.dirty = true;
+  cleanEdit.hasEdits = true;
   playbackMenu.refresh(cleanEdit, idleExport);
-  ok &= expect(playbackMenu.select(
-                   playback_overlay::OverlayControlId::EditDiscard) &&
+  const auto retainedMenu = playbackMenu.snapshotFor(
+      playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(retainedMenu.items.size() == 1 &&
+                   retainedMenu.items[0].label == "Resume editing",
+               "rendered edits without newer changes must remain resumable without save actions");
+  cleanEdit.active = true;
+  cleanEdit.hasUnexportedChanges = true;
+  playbackMenu.refresh(cleanEdit, idleExport);
+  const auto dirtyMenu = playbackMenu.snapshotFor(
+      playback_session::ContextMenuSurface::Terminal);
+  const auto discardItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Discard changes";
+      });
+  ok &= expect(discardItem != dirtyMenu.items.end() &&
+                   playbackMenu.select(discardItem->token) &&
                    playbackMenu.activateSelection() ==
-                       playback_overlay::OverlayControlId::EditDiscard &&
+                       playback_video_edit::Command::Discard &&
                    !playbackMenu.visible(),
                "context commands must update from edit state and dismiss on activation");
 

@@ -47,13 +47,12 @@ ContextMenuCellLayout layoutContextMenuCells(
   for (int i = 0; i < visibleRows; ++i) {
     const ContextMenuItem& item = menu.items[static_cast<size_t>(i)];
     ContextMenuCellItem placed;
-    placed.control = item.control;
+    placed.token = item.token;
     placed.text = item.label;
     placed.x = layout.x + 1;
     placed.y = layout.y + 1 + i;
     placed.width = innerWidth;
-    placed.selected =
-        overlayControlToken(item.control) == menu.selectedControlToken;
+    placed.selected = menu.selectedItem && item.token == *menu.selectedItem;
     hasSelectedItem = hasSelectedItem || placed.selected;
     layout.items.push_back(std::move(placed));
   }
@@ -66,13 +65,13 @@ InteractionMap buildContextMenuInteractionMap(
   InteractionMap map;
   if (!layout.drawable()) return map;
   map.modal = true;
-  map.controls.reserve(layout.items.size());
+  map.contextMenuItems.reserve(layout.items.size());
   for (const ContextMenuCellItem& item : layout.items) {
-    map.controls.push_back(
+    map.contextMenuItems.push_back(
         {{static_cast<double>(item.x), static_cast<double>(item.y),
           static_cast<double>(item.x + item.width),
           static_cast<double>(item.y + 1)},
-         item.control});
+         item.token});
   }
   return map;
 }

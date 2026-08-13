@@ -139,7 +139,7 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     const int available = availableStatusPartWidth(model.status, width);
     appendStatusPart(
         &model.status,
-        edit.dirty
+        edit.hasUnexportedChanges
             ? shortestFittingStatus({"EDIT MODE*", "EDIT*", "*"}, available)
             : shortestFittingStatus({"EDIT MODE", "EDIT"}, available),
         width);

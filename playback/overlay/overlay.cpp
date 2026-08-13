@@ -394,6 +394,9 @@ bool dispatchOverlayControl(OverlayControlId id,
   auto invoke = [](const std::function<bool()>& action) {
     return action ? action() : false;
   };
+  const auto invokeEdit = [&](playback_video_edit::Command command) {
+    return actions.videoEdit ? actions.videoEdit(command) : false;
+  };
   switch (id) {
     case OverlayControlId::Previous:
       return invoke(actions.previous);
@@ -411,32 +414,28 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invoke(actions.subtitles);
     case OverlayControlId::PictureInPicture:
       return invoke(actions.pictureInPicture);
-    case OverlayControlId::EditOpen:
-      return invoke(actions.editOpen);
     case OverlayControlId::EditMarkIn:
-      return invoke(actions.editMarkIn);
+      return invokeEdit(playback_video_edit::Command::MarkIn);
     case OverlayControlId::EditMarkOut:
-      return invoke(actions.editMarkOut);
+      return invokeEdit(playback_video_edit::Command::MarkOut);
     case OverlayControlId::EditRippleDelete:
-      return invoke(actions.editRippleDelete);
+      return invokeEdit(playback_video_edit::Command::RippleDelete);
     case OverlayControlId::EditTrim:
-      return invoke(actions.editTrim);
+      return invokeEdit(playback_video_edit::Command::Trim);
     case OverlayControlId::EditUndo:
-      return invoke(actions.editUndo);
+      return invokeEdit(playback_video_edit::Command::Undo);
     case OverlayControlId::EditRedo:
-      return invoke(actions.editRedo);
+      return invokeEdit(playback_video_edit::Command::Redo);
     case OverlayControlId::EditReset:
-      return invoke(actions.editReset);
+      return invokeEdit(playback_video_edit::Command::Reset);
     case OverlayControlId::EditExport:
-      return invoke(actions.editExport);
-    case OverlayControlId::EditDiscard:
-      return invoke(actions.editDiscard);
+      return invokeEdit(playback_video_edit::Command::Export);
     case OverlayControlId::EditDone:
-      return invoke(actions.editDone);
+      return invokeEdit(playback_video_edit::Command::Close);
     case OverlayControlId::EditDiscardAndExit:
-      return invoke(actions.editDiscardAndExit);
+      return invoke(actions.confirmPendingExit);
     case OverlayControlId::EditCancelExit:
-      return invoke(actions.editCancelExit);
+      return invoke(actions.cancelPendingExit);
   }
   return false;
 }
@@ -504,11 +503,12 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
       addSpec(makeOverlayTextControlSpec(OverlayControlId::EditRedo, "Redo",
                                          true));
     }
-    if (state.videoEdit.dirty) {
+    if (state.videoEdit.hasUnexportedChanges) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::EditReset, "Reset",
                                          true));
     }
-    if (state.videoEdit.dirty || state.videoEditExport.running()) {
+    if (state.videoEdit.hasUnexportedChanges ||
+        state.videoEditExport.running()) {
       addSpec(makeOverlayTextControlSpec(
           OverlayControlId::EditExport,
           state.videoEditExport.running() ? "Cancel" : "Export",

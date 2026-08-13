@@ -30,6 +30,7 @@ bool InteractionMap::contains(double x, double y) const {
   if (modal) return true;
   if (progressBar && progressBar->bounds.contains(x, y)) return true;
   if (overlayControlAt(*this, x, y)) return true;
+  if (contextMenuItemAt(*this, x, y)) return true;
   return editBoundaryHandleAt(*this, x, y);
 }
 
@@ -68,6 +69,14 @@ std::optional<OverlayControlId> overlayControlAt(const InteractionMap& map,
   return std::nullopt;
 }
 
+std::optional<ContextMenuItemToken> contextMenuItemAt(
+    const InteractionMap& map, double x, double y) {
+  for (const ContextMenuItemRegion& item : map.contextMenuItems) {
+    if (item.bounds.contains(x, y)) return item.token;
+  }
+  return std::nullopt;
+}
+
 std::optional<playback_video_edit::EditBoundary> editBoundaryAt(
     const InteractionMap& map, double x, double y) {
   const EditBoundaryRegion* nearest = nullptr;
@@ -93,6 +102,7 @@ InteractionHit interactionHitAt(const InteractionMap& map, double x, double y,
   InteractionHit hit;
   hit.progressBar = progressBarHitAt(map, x, y, capturedProgress);
   hit.control = overlayControlAt(map, x, y);
+  hit.contextMenuItem = contextMenuItemAt(map, x, y);
   hit.editBoundary = editBoundaryAt(map, x, y);
   return hit;
 }
@@ -110,6 +120,7 @@ InteractionHit interactionHitAtTransformed(
   const double localX = (x - offsetX) / scaleX;
   const double localY = (y - offsetY) / scaleY;
   hit.control = overlayControlAt(map, localX, localY);
+  hit.contextMenuItem = contextMenuItemAt(map, localX, localY);
   hit.editBoundary = editBoundaryAt(map, localX, localY);
   if (map.progressBar) {
     ProgressBarRegion transformed = *map.progressBar;
@@ -140,6 +151,12 @@ InteractionMap transformInteractionMap(const InteractionMap& map,
     out.controls.push_back({transformRect(control.bounds, offsetX, offsetY,
                                           scaleX, scaleY),
                             control.id});
+  }
+  out.contextMenuItems.reserve(map.contextMenuItems.size());
+  for (const ContextMenuItemRegion& item : map.contextMenuItems) {
+    out.contextMenuItems.push_back(
+        {transformRect(item.bounds, offsetX, offsetY, scaleX, scaleY),
+         item.token});
   }
   out.editBoundaries.reserve(map.editBoundaries.size());
   for (const EditBoundaryRegion& handle : map.editBoundaries) {

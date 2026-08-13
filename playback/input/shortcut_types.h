@@ -69,7 +69,6 @@ enum class PlaybackShortcutAction : uint8_t {
   RedoVideoEdit,
   ResetVideoEdits,
   ExportVideoEdits,
-  DiscardVideoEdits,
   DiscardVideoEditsAndExit,
   CancelVideoEditExit,
   VolumeUp,

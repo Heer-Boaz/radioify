@@ -1448,7 +1448,6 @@ int runTui(Options o) {
               return ActionStripItem::PictureInPicture;
             case playback_overlay::OverlayControlId::AudioTrack:
             case playback_overlay::OverlayControlId::Subtitles:
-            case playback_overlay::OverlayControlId::EditOpen:
             case playback_overlay::OverlayControlId::EditMarkIn:
             case playback_overlay::OverlayControlId::EditMarkOut:
             case playback_overlay::OverlayControlId::EditRippleDelete:
@@ -1457,7 +1456,6 @@ int runTui(Options o) {
             case playback_overlay::OverlayControlId::EditRedo:
             case playback_overlay::OverlayControlId::EditReset:
             case playback_overlay::OverlayControlId::EditExport:
-            case playback_overlay::OverlayControlId::EditDiscard:
             case playback_overlay::OverlayControlId::EditDone:
             case playback_overlay::OverlayControlId::EditDiscardAndExit:
             case playback_overlay::OverlayControlId::EditCancelExit:

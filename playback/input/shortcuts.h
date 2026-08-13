@@ -8,6 +8,7 @@
 #include "consoleinput.h"
 #include "playback/input/media_keys.h"
 #include "playback/input/shortcut_types.h"
+#include "playback/video/edit/command.h"
 #include "shortcut_match.h"
 
 struct PlaybackShortcutBinding {
@@ -23,6 +24,35 @@ struct PlaybackShortcutBinding {
 inline constexpr DWORD kPlaybackShortcutCtrlMask = kShortcutCtrlMask;
 inline constexpr DWORD kPlaybackShortcutAltMask = kShortcutAltMask;
 inline constexpr DWORD kPlaybackShortcutShiftMask = kShortcutShiftMask;
+
+inline constexpr std::optional<playback_video_edit::Command>
+videoEditCommandForShortcut(PlaybackShortcutAction action) {
+  using Command = playback_video_edit::Command;
+  switch (action) {
+    case PlaybackShortcutAction::OpenVideoEditor:
+      return Command::Open;
+    case PlaybackShortcutAction::ExitVideoEditor:
+      return Command::Close;
+    case PlaybackShortcutAction::SetVideoEditIn:
+      return Command::MarkIn;
+    case PlaybackShortcutAction::SetVideoEditOut:
+      return Command::MarkOut;
+    case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
+      return Command::RippleDelete;
+    case PlaybackShortcutAction::TrimVideoEditSelection:
+      return Command::Trim;
+    case PlaybackShortcutAction::UndoVideoEdit:
+      return Command::Undo;
+    case PlaybackShortcutAction::RedoVideoEdit:
+      return Command::Redo;
+    case PlaybackShortcutAction::ResetVideoEdits:
+      return Command::Reset;
+    case PlaybackShortcutAction::ExportVideoEdits:
+      return Command::Export;
+    default:
+      return std::nullopt;
+  }
+}
 inline constexpr DWORD kPlaybackShortcutTextForbiddenMask =
     kShortcutTextForbiddenMask;
 inline constexpr DWORD kPlaybackShortcutChordForbiddenMask =

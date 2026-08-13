@@ -288,65 +288,24 @@ bool executeOverlayControl(const PlaybackInputView& view,
   actions.pictureInPicture = [&]() {
     return togglePictureInPicture(view, signals);
   };
-  const auto editAction = [&](PlaybackShortcutAction action) {
-    return signals.handleVideoEditorAction &&
-           signals.handleVideoEditorAction(action);
+  actions.videoEdit = [&](playback_video_edit::Command command) {
+    return signals.executeVideoEditCommand &&
+           signals.executeVideoEditCommand(command);
   };
-  actions.editOpen = [&]() {
-    return editAction(PlaybackShortcutAction::OpenVideoEditor);
+  actions.confirmPendingExit = [&]() {
+    return signals.confirmPendingExit && signals.confirmPendingExit();
   };
-  actions.editMarkIn = [&]() {
-    return editAction(PlaybackShortcutAction::SetVideoEditIn);
-  };
-  actions.editMarkOut = [&]() {
-    return editAction(PlaybackShortcutAction::SetVideoEditOut);
-  };
-  actions.editRippleDelete = [&]() {
-    return editAction(
-        PlaybackShortcutAction::RippleDeleteVideoEditSelection);
-  };
-  actions.editTrim = [&]() {
-    return editAction(PlaybackShortcutAction::TrimVideoEditSelection);
-  };
-  actions.editUndo = [&]() {
-    return editAction(PlaybackShortcutAction::UndoVideoEdit);
-  };
-  actions.editRedo = [&]() {
-    return editAction(PlaybackShortcutAction::RedoVideoEdit);
-  };
-  actions.editReset = [&]() {
-    return editAction(PlaybackShortcutAction::ResetVideoEdits);
-  };
-  actions.editExport = [&]() {
-    return editAction(PlaybackShortcutAction::ExportVideoEdits);
-  };
-  actions.editDiscard = [&]() {
-    return editAction(PlaybackShortcutAction::DiscardVideoEdits);
-  };
-  actions.editDone = [&]() {
-    return editAction(PlaybackShortcutAction::ExitVideoEditor);
-  };
-  actions.editDiscardAndExit = [&]() {
-    return editAction(PlaybackShortcutAction::DiscardVideoEditsAndExit);
-  };
-  actions.editCancelExit = [&]() {
-    return editAction(PlaybackShortcutAction::CancelVideoEditExit);
+  actions.cancelPendingExit = [&]() {
+    return signals.cancelPendingExit && signals.cancelPendingExit();
   };
   return playback_overlay::dispatchOverlayControl(control, actions);
 }
 
 bool dispatchContextMenuInput(
-    const PlaybackInputView& view, PlaybackInputSignals& signals,
-    PlaybackSeekGestureState& seekState,
+    PlaybackInputSignals& signals,
     const playback_session::ContextMenuInput& request) {
   if (!signals.handleContextMenuInput) return false;
-  const playback_session::ContextMenuInputResult result =
-      signals.handleContextMenuInput(request);
-  if (!result.handled) return false;
-  if (result.activatedControl) {
-    executeOverlayControl(view, signals, seekState,
-                          *result.activatedControl);
-  }
+  if (!signals.handleContextMenuInput(request)) return false;
   updateOverlayControlHover(signals, -1);
   *signals.redraw = true;
   requestWindowRefresh(signals);
@@ -424,7 +383,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     if (ev.type == InputEvent::Type::Action &&
         ev.action == InputAction::Back) {
       request.kind = playback_session::ContextMenuInputKind::Dismiss;
-      dispatchContextMenuInput(view, signals, seekState, request);
+      dispatchContextMenuInput(signals, request);
       return;
     }
     if (ev.type == InputEvent::Type::Key) {
@@ -441,7 +400,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       } else {
         return;
       }
-      dispatchContextMenuInput(view, signals, seekState, request);
+      dispatchContextMenuInput(signals, request);
       return;
     }
   }
@@ -472,6 +431,12 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
   cb.onToggleSubtitles = [&]() { toggleSubtitles(view); };
   cb.onToggleAudioTrack = [&]() { toggleAudioTrack(view); };
   cb.onPlaybackContextShortcut = [&](PlaybackShortcutAction action) {
+    if (const auto command = videoEditCommandForShortcut(action)) {
+      if (signals.executeVideoEditCommand) {
+        signals.executeVideoEditCommand(*command);
+      }
+      return;
+    }
     switch (action) {
       case PlaybackShortcutAction::TogglePictureInPicture:
         togglePictureInPicture(view, signals);
@@ -479,21 +444,14 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       case PlaybackShortcutAction::ExitPlaybackSession:
         requestPlaybackExit(view, signals, false);
         break;
-      case PlaybackShortcutAction::OpenVideoEditor:
-      case PlaybackShortcutAction::ExitVideoEditor:
-      case PlaybackShortcutAction::SetVideoEditIn:
-      case PlaybackShortcutAction::SetVideoEditOut:
-      case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
-      case PlaybackShortcutAction::TrimVideoEditSelection:
-      case PlaybackShortcutAction::UndoVideoEdit:
-      case PlaybackShortcutAction::RedoVideoEdit:
-      case PlaybackShortcutAction::ResetVideoEdits:
-      case PlaybackShortcutAction::ExportVideoEdits:
-      case PlaybackShortcutAction::DiscardVideoEdits:
       case PlaybackShortcutAction::DiscardVideoEditsAndExit:
+        if (signals.confirmPendingExit) {
+          signals.confirmPendingExit();
+        }
+        break;
       case PlaybackShortcutAction::CancelVideoEditExit:
-        if (signals.handleVideoEditorAction) {
-          signals.handleVideoEditorAction(action);
+        if (signals.cancelPendingExit) {
+          signals.cancelPendingExit();
         }
         break;
       default:
@@ -621,17 +579,16 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                     : playback_session::ContextMenuSurface::Terminal;
     request.x = pointerX;
     request.y = pointerY;
-    if (dispatchContextMenuInput(view, signals, seekState, request)) return;
+    if (dispatchContextMenuInput(signals, request)) return;
   }
 
   if (isBackMousePressed(mouse)) {
     if (signals.contextMenuVisible && signals.contextMenuVisible()) {
       playback_session::ContextMenuInput request;
       request.kind = playback_session::ContextMenuInputKind::Dismiss;
-      dispatchContextMenuInput(view, signals, seekState, request);
-    } else if (editExitConfirmation && signals.handleVideoEditorAction) {
-      signals.handleVideoEditorAction(
-          PlaybackShortcutAction::CancelVideoEditExit);
+      dispatchContextMenuInput(signals, request);
+    } else if (editExitConfirmation && signals.cancelPendingExit) {
+      signals.cancelPendingExit();
     } else {
       requestPlaybackExit(view, signals, false);
     }
@@ -664,6 +621,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   const auto& progressHit = interactionHit.progressBar;
   const auto& boundaryHit = interactionHit.editBoundary;
   const auto& controlHit = interactionHit.control;
+  const auto& contextMenuItemHit = interactionHit.contextMenuItem;
   if (signals.contextMenuVisible && signals.contextMenuVisible()) {
     playback_session::ContextMenuInput request;
     request.surface =
@@ -674,26 +632,26 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       if (delta != 0) {
         request.kind = playback_session::ContextMenuInputKind::MoveSelection;
         request.selectionDelta = delta > 0 ? -1 : 1;
-        dispatchContextMenuInput(view, signals, seekState, request);
+        dispatchContextMenuInput(signals, request);
       }
       return;
     }
     if (mouse.eventFlags == MOUSE_MOVED) {
-      if (controlHit) {
-        request.kind = playback_session::ContextMenuInputKind::SelectControl;
-        request.control = *controlHit;
-        dispatchContextMenuInput(view, signals, seekState, request);
+      if (contextMenuItemHit) {
+        request.kind = playback_session::ContextMenuInputKind::SelectItem;
+        request.item = *contextMenuItemHit;
+        dispatchContextMenuInput(signals, request);
       }
       return;
     }
     if (leftPressed && mouse.eventFlags == 0) {
-      if (controlHit) {
-        request.kind = playback_session::ContextMenuInputKind::ActivateControl;
-        request.control = *controlHit;
+      if (contextMenuItemHit) {
+        request.kind = playback_session::ContextMenuInputKind::ActivateItem;
+        request.item = *contextMenuItemHit;
       } else {
         request.kind = playback_session::ContextMenuInputKind::Dismiss;
       }
-      dispatchContextMenuInput(view, signals, seekState, request);
+      dispatchContextMenuInput(signals, request);
       return;
     }
     return;

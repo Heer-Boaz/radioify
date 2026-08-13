@@ -4,11 +4,27 @@
 #include <cmath>
 
 namespace playback_session {
+namespace {
+
+constexpr playback_overlay::ContextMenuItemToken itemToken(
+    playback_video_edit::Command command) {
+  return static_cast<playback_overlay::ContextMenuItemToken>(command);
+}
+
+}  // namespace
 
 std::optional<size_t> ContextMenuController::itemIndex(
-    playback_overlay::OverlayControlId control) const {
+    playback_video_edit::Command command) const {
   for (size_t index = 0; index < items_.size(); ++index) {
-    if (items_[index].control == control) return index;
+    if (items_[index].command == command) return index;
+  }
+  return std::nullopt;
+}
+
+std::optional<size_t> ContextMenuController::itemIndex(
+    playback_overlay::ContextMenuItemToken token) const {
+  for (size_t index = 0; index < items_.size(); ++index) {
+    if (itemToken(items_[index].command) == token) return index;
   }
   return std::nullopt;
 }
@@ -16,26 +32,24 @@ std::optional<size_t> ContextMenuController::itemIndex(
 void ContextMenuController::refresh(
     const playback_video_edit::EditSnapshot& edit,
     const playback_video_edit::ExportProgress& editExport) {
-  std::optional<playback_overlay::OverlayControlId> selectedControl;
-  if (selected_ < items_.size()) selectedControl = items_[selected_].control;
+  std::optional<playback_video_edit::Command> selectedCommand;
+  if (selected_ < items_.size()) selectedCommand = items_[selected_].command;
 
-  std::vector<playback_overlay::ContextMenuItem> next;
+  std::vector<Item> next;
   if (!edit.active) {
-    next.push_back({playback_overlay::OverlayControlId::EditOpen,
+    next.push_back({playback_video_edit::Command::Open,
                     edit.hasEdits ? "Resume editing" : "Edit video"});
   }
   if (editExport.running()) {
-    next.push_back(
-        {playback_overlay::OverlayControlId::EditExport, "Cancel save"});
-  } else if (edit.dirty) {
-    next.push_back({playback_overlay::OverlayControlId::EditExport,
+    next.push_back({playback_video_edit::Command::Export, "Cancel save"});
+  } else if (edit.hasUnexportedChanges) {
+    next.push_back({playback_video_edit::Command::Export,
                     "Save edited copy"});
-    next.push_back({playback_overlay::OverlayControlId::EditDiscard,
+    next.push_back({playback_video_edit::Command::Discard,
                     "Discard changes"});
   }
   if (edit.active) {
-    next.push_back(
-        {playback_overlay::OverlayControlId::EditDone, "Finish editing"});
+    next.push_back({playback_video_edit::Command::Close, "Finish editing"});
   }
   items_ = std::move(next);
   if (items_.empty()) {
@@ -43,8 +57,8 @@ void ContextMenuController::refresh(
     visible_ = false;
     return;
   }
-  if (selectedControl) {
-    if (const auto retained = itemIndex(*selectedControl)) {
+  if (selectedCommand) {
+    if (const auto retained = itemIndex(*selectedCommand)) {
       selected_ = *retained;
       return;
     }
@@ -78,27 +92,29 @@ bool ContextMenuController::moveSelection(int delta) {
 }
 
 bool ContextMenuController::select(
-    playback_overlay::OverlayControlId control) {
+    playback_overlay::ContextMenuItemToken token) {
   if (!visible_) return false;
-  const auto index = itemIndex(control);
+  const auto index = itemIndex(token);
   if (!index || *index == selected_) return false;
   selected_ = *index;
   return true;
 }
 
-std::optional<playback_overlay::OverlayControlId>
+std::optional<playback_video_edit::Command>
 ContextMenuController::activateSelection() {
   if (!visible_ || selected_ >= items_.size()) return std::nullopt;
-  const auto control = items_[selected_].control;
+  const auto command = items_[selected_].command;
   visible_ = false;
-  return control;
+  return command;
 }
 
-std::optional<playback_overlay::OverlayControlId>
-ContextMenuController::activate(playback_overlay::OverlayControlId control) {
-  if (!visible_ || !itemIndex(control)) return std::nullopt;
+std::optional<playback_video_edit::Command> ContextMenuController::activate(
+    playback_overlay::ContextMenuItemToken token) {
+  const auto index = itemIndex(token);
+  if (!visible_ || !index) return std::nullopt;
+  const auto command = items_[*index].command;
   visible_ = false;
-  return control;
+  return command;
 }
 
 playback_overlay::ContextMenuSnapshot ContextMenuController::snapshotFor(
@@ -108,9 +124,12 @@ playback_overlay::ContextMenuSnapshot ContextMenuController::snapshotFor(
   snapshot.visible = true;
   snapshot.anchorXRatio = anchorXRatio_;
   snapshot.anchorYRatio = anchorYRatio_;
-  snapshot.selectedControlToken = playback_overlay::overlayControlToken(
-      items_[std::min(selected_, items_.size() - 1)].control);
-  snapshot.items = items_;
+  snapshot.selectedItem = itemToken(
+      items_[std::min(selected_, items_.size() - 1)].command);
+  snapshot.items.reserve(items_.size());
+  for (const Item& item : items_) {
+    snapshot.items.push_back({itemToken(item.command), item.label});
+  }
   return snapshot;
 }
 

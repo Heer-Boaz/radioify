@@ -202,6 +202,15 @@ int main() {
                                               videoPlaybackContexts)
                    .value() == PlaybackShortcutAction::OpenVideoEditor,
                "Bare E must enter the video editor only during video playback");
+  ok &= expect(videoEditCommandForShortcut(
+                   PlaybackShortcutAction::OpenVideoEditor) ==
+                   playback_video_edit::Command::Open &&
+                   videoEditCommandForShortcut(
+                       PlaybackShortcutAction::ExportVideoEdits) ==
+                       playback_video_edit::Command::Export &&
+                   !videoEditCommandForShortcut(
+                       PlaybackShortcutAction::TogglePause),
+               "shortcut translation must terminate at semantic edit commands");
   ok &= expect(!resolvePlaybackShortcutAction(
                    makeKey('E'), kPlaybackShortcutContextGlobal |
                                      kPlaybackShortcutContextShared),

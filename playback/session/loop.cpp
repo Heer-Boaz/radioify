@@ -64,37 +64,6 @@ PlaybackLayout initialPlaybackLayout(
                              : PlaybackLayout::Terminal;
 }
 
-std::optional<playback_video_edit::Command> videoEditCommandFor(
-    PlaybackShortcutAction action) {
-  using Command = playback_video_edit::Command;
-  switch (action) {
-    case PlaybackShortcutAction::OpenVideoEditor:
-      return Command::Open;
-    case PlaybackShortcutAction::ExitVideoEditor:
-      return Command::Close;
-    case PlaybackShortcutAction::SetVideoEditIn:
-      return Command::MarkIn;
-    case PlaybackShortcutAction::SetVideoEditOut:
-      return Command::MarkOut;
-    case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
-      return Command::RippleDelete;
-    case PlaybackShortcutAction::TrimVideoEditSelection:
-      return Command::Trim;
-    case PlaybackShortcutAction::UndoVideoEdit:
-      return Command::Undo;
-    case PlaybackShortcutAction::RedoVideoEdit:
-      return Command::Redo;
-    case PlaybackShortcutAction::ResetVideoEdits:
-      return Command::Reset;
-    case PlaybackShortcutAction::ExportVideoEdits:
-      return Command::Export;
-    case PlaybackShortcutAction::DiscardVideoEdits:
-      return Command::Discard;
-    default:
-      return std::nullopt;
-  }
-}
-
 }  // namespace
 
 struct PlaybackLoopRunner::Impl {
@@ -241,7 +210,7 @@ struct PlaybackLoopRunner::Impl {
     bindInputState();
     bindRenderInputs();
     if (sessionIntent == PlaybackSessionIntent::EditVideo) {
-      handleVideoEditorAction(PlaybackShortcutAction::OpenVideoEditor, false);
+      executeVideoEditCommand(playback_video_edit::Command::Open, false);
     }
     applyPresenterSync(syncPresentation());
   }
@@ -409,25 +378,16 @@ struct PlaybackLoopRunner::Impl {
     }
   }
 
-  bool handleVideoEditorAction(PlaybackShortcutAction action,
+  bool executeVideoEditCommand(playback_video_edit::Command command,
                                bool announce = true) {
-    if (action == PlaybackShortcutAction::DiscardVideoEditsAndExit) {
-      return completePendingExit();
-    }
-    if (action == PlaybackShortcutAction::CancelVideoEditExit) {
-      return cancelPendingExit();
-    }
     const bool exportForPendingExit =
-        pendingExit && action == PlaybackShortcutAction::ExportVideoEdits;
+        pendingExit && command == playback_video_edit::Command::Export;
     if (exportForPendingExit && videoEditExportProgress.running()) {
       pendingExit->exitAfterExport = true;
       syncVideoEditView();
       showEditMessage("Will exit when export completes");
       return true;
     }
-    const auto command = videoEditCommandFor(action);
-    if (!command) return false;
-
     const int64_t durationUs = core.player().sourceDurationUs();
     const PlayerTimelineSnapshot timeline = core.player().timelineSnapshot();
     playback_video_edit::CommandContext context;
@@ -441,8 +401,8 @@ struct PlaybackLoopRunner::Impl {
     context.audioStreamIndex = core.player().activeAudioStreamIndex();
 
     const playback_video_edit::CommandResult result =
-        videoEditor.execute(*command, context);
-    if (action == PlaybackShortcutAction::OpenVideoEditor &&
+        videoEditor.execute(command, context);
+    if (command == playback_video_edit::Command::Open &&
         videoEditor.active()) {
       playback_session_input::setPlaybackPaused(inputView, inputSignals,
                                                 seekState, true);
@@ -487,13 +447,14 @@ struct PlaybackLoopRunner::Impl {
     return result.handled;
   }
 
-  playback_session::ContextMenuInputResult handleContextMenuInput(
+  bool handleContextMenuInput(
       const playback_session::ContextMenuInput& request) {
-    playback_session::ContextMenuInputResult result;
+    bool handled = false;
+    std::optional<playback_video_edit::Command> activatedCommand;
     using InputKind = playback_session::ContextMenuInputKind;
     switch (request.kind) {
       case InputKind::Open: {
-        if (pendingExit) return result;
+        if (pendingExit) return false;
         const int width =
             request.surface == playback_session::ContextMenuSurface::Terminal
                 ? screen.width()
@@ -506,9 +467,9 @@ struct PlaybackLoopRunner::Impl {
             request.x / static_cast<double>(std::max(1, width - 1));
         const double yRatio =
             request.y / static_cast<double>(std::max(1, height - 1));
-        result.handled = contextMenuController.open(
+        handled = contextMenuController.open(
             request.surface, xRatio, yRatio);
-        if (result.handled) {
+        if (handled) {
           const auto previewSurface =
               request.surface ==
                       playback_session::ContextMenuSurface::Terminal
@@ -520,40 +481,41 @@ struct PlaybackLoopRunner::Impl {
         break;
       }
       case InputKind::Dismiss:
-        result.handled = contextMenuController.dismiss();
+        handled = contextMenuController.dismiss();
         break;
       case InputKind::MoveSelection:
         if (contextMenuController.visible()) {
           contextMenuController.moveSelection(request.selectionDelta);
-          result.handled = true;
+          handled = true;
         }
         break;
-      case InputKind::SelectControl:
-        if (contextMenuController.visible() && request.control) {
-          contextMenuController.select(*request.control);
-          result.handled = true;
+      case InputKind::SelectItem:
+        if (contextMenuController.visible() && request.item) {
+          contextMenuController.select(*request.item);
+          handled = true;
         }
         break;
       case InputKind::ActivateSelection:
         if (contextMenuController.visible()) {
-          result.activatedControl =
-              contextMenuController.activateSelection();
-          result.handled = true;
+          activatedCommand = contextMenuController.activateSelection();
+          handled = true;
         }
         break;
-      case InputKind::ActivateControl:
-        if (contextMenuController.visible() && request.control) {
-          result.activatedControl =
-              contextMenuController.activate(*request.control);
-          result.handled = true;
+      case InputKind::ActivateItem:
+        if (contextMenuController.visible() && request.item) {
+          activatedCommand = contextMenuController.activate(*request.item);
+          handled = true;
         }
         break;
     }
-    if (result.handled) {
+    if (activatedCommand) {
+      executeVideoEditCommand(*activatedCommand);
+    }
+    if (handled) {
       redraw = true;
       output.requestWindowPresent();
     }
-    return result;
+    return handled;
   }
 
   void bindInputState() {
@@ -588,10 +550,14 @@ struct PlaybackLoopRunner::Impl {
     inputSignals.videoEditorActive = [this]() { return videoEditor.active(); };
     inputSignals.videoEditExitConfirmationActive =
         [this]() { return pendingExit.has_value(); };
-    inputSignals.handleVideoEditorAction =
-        [this](PlaybackShortcutAction action) {
-          return handleVideoEditorAction(action);
+    inputSignals.executeVideoEditCommand =
+        [this](playback_video_edit::Command command) {
+          return executeVideoEditCommand(command);
         };
+    inputSignals.confirmPendingExit =
+        [this]() { return completePendingExit(); };
+    inputSignals.cancelPendingExit =
+        [this]() { return cancelPendingExit(); };
     inputSignals.contextMenuVisible =
         [this]() { return contextMenuController.visible(); };
     inputSignals.handleContextMenuInput =

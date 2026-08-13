@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -8,7 +9,7 @@
 namespace playback_overlay {
 
 struct ContextMenuItem {
-  OverlayControlId control = OverlayControlId::EditOpen;
+  ContextMenuItemToken token = 0;
   std::string label;
 };
 
@@ -16,12 +17,12 @@ struct ContextMenuSnapshot {
   bool visible = false;
   double anchorXRatio = 0.5;
   double anchorYRatio = 0.5;
-  int selectedControlToken = -1;
+  std::optional<ContextMenuItemToken> selectedItem;
   std::vector<ContextMenuItem> items;
 };
 
 struct ContextMenuCellItem {
-  OverlayControlId control = OverlayControlId::EditOpen;
+  ContextMenuItemToken token = 0;
   std::string text;
   int x = 0;
   int y = 0;

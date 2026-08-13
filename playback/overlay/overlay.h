@@ -13,6 +13,7 @@
 #include "playback/overlay/context_menu.h"
 #include "playback/overlay/interaction.h"
 #include "playback/overlay/osd_state.h"
+#include "playback/video/edit/command.h"
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/framebuffer/window/window.h"
 #include "playback/video/edit/view.h"
@@ -44,19 +45,9 @@ struct OverlayControlActions {
   std::function<bool()> audioTrack;
   std::function<bool()> subtitles;
   std::function<bool()> pictureInPicture;
-  std::function<bool()> editOpen;
-  std::function<bool()> editMarkIn;
-  std::function<bool()> editMarkOut;
-  std::function<bool()> editRippleDelete;
-  std::function<bool()> editTrim;
-  std::function<bool()> editUndo;
-  std::function<bool()> editRedo;
-  std::function<bool()> editReset;
-  std::function<bool()> editExport;
-  std::function<bool()> editDiscard;
-  std::function<bool()> editDone;
-  std::function<bool()> editDiscardAndExit;
-  std::function<bool()> editCancelExit;
+  std::function<bool(playback_video_edit::Command)> videoEdit;
+  std::function<bool()> confirmPendingExit;
+  std::function<bool()> cancelPendingExit;
 };
 
 struct OverlayCellControlInput {

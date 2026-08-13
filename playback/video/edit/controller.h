@@ -5,24 +5,11 @@
 #include <memory>
 #include <string>
 
+#include "playback/video/edit/command.h"
 #include "playback/video/edit/timeline.h"
 #include "playback/video/edit/view.h"
 
 namespace playback_video_edit {
-
-enum class Command : uint8_t {
-  Open,
-  Close,
-  MarkIn,
-  MarkOut,
-  RippleDelete,
-  Trim,
-  Undo,
-  Redo,
-  Reset,
-  Export,
-  Discard,
-};
 
 struct CommandContext {
   int64_t sourceDurationUs = 0;

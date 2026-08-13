@@ -61,10 +61,11 @@ struct PlaybackInputSignals {
   std::function<void()> copyCurrentVideoFrameToClipboard;
   std::function<bool()> videoEditorActive;
   std::function<bool()> videoEditExitConfirmationActive;
-  std::function<bool(PlaybackShortcutAction)> handleVideoEditorAction;
+  std::function<bool(playback_video_edit::Command)> executeVideoEditCommand;
+  std::function<bool()> confirmPendingExit;
+  std::function<bool()> cancelPendingExit;
   std::function<bool()> contextMenuVisible;
-  std::function<playback_session::ContextMenuInputResult(
-      const playback_session::ContextMenuInput&)>
+  std::function<bool(const playback_session::ContextMenuInput&)>
       handleContextMenuInput;
   std::function<bool(playback_video_edit::EditBoundary, int64_t timelineUs)>
       moveVideoEditBoundary;

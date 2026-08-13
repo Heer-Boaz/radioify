@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -16,7 +17,6 @@ enum class OverlayControlId {
   AudioTrack,
   Subtitles,
   PictureInPicture,
-  EditOpen,
   EditMarkIn,
   EditMarkOut,
   EditRippleDelete,
@@ -25,7 +25,6 @@ enum class OverlayControlId {
   EditRedo,
   EditReset,
   EditExport,
-  EditDiscard,
   EditDone,
   EditDiscardAndExit,
   EditCancelExit,
@@ -56,6 +55,13 @@ struct OverlayControlRegion {
   OverlayControlId id = OverlayControlId::Radio;
 };
 
+using ContextMenuItemToken = uint32_t;
+
+struct ContextMenuItemRegion {
+  InteractionRect bounds;
+  ContextMenuItemToken token = 0;
+};
+
 struct EditBoundaryRegion {
   InteractionRect bounds;
   playback_video_edit::EditBoundary boundary =
@@ -67,6 +73,7 @@ struct InteractionMap {
   bool modal = false;
   std::optional<ProgressBarRegion> progressBar;
   std::vector<OverlayControlRegion> controls;
+  std::vector<ContextMenuItemRegion> contextMenuItems;
   std::vector<EditBoundaryRegion> editBoundaries;
 
   bool contains(double x, double y) const;
@@ -80,6 +87,7 @@ struct ProgressBarHit {
 struct InteractionHit {
   std::optional<ProgressBarHit> progressBar;
   std::optional<OverlayControlId> control;
+  std::optional<ContextMenuItemToken> contextMenuItem;
   std::optional<playback_video_edit::EditBoundary> editBoundary;
 };
 
@@ -89,6 +97,8 @@ std::optional<ProgressBarHit> progressBarHitAt(
 std::optional<ProgressBarHit> progressBarHitAt(
     const InteractionMap& map, double x, double y, bool captured = false);
 std::optional<OverlayControlId> overlayControlAt(
+    const InteractionMap& map, double x, double y);
+std::optional<ContextMenuItemToken> contextMenuItemAt(
     const InteractionMap& map, double x, double y);
 std::optional<playback_video_edit::EditBoundary> editBoundaryAt(
     const InteractionMap& map, double x, double y);

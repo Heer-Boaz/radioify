@@ -1026,7 +1026,6 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
       case PlaybackShortcutAction::RedoVideoEdit:
       case PlaybackShortcutAction::ResetVideoEdits:
       case PlaybackShortcutAction::ExportVideoEdits:
-      case PlaybackShortcutAction::DiscardVideoEdits:
       case PlaybackShortcutAction::DiscardVideoEditsAndExit:
       case PlaybackShortcutAction::CancelVideoEditExit:
         if (callbacks.onPlaybackContextShortcut) {

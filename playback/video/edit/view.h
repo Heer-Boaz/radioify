@@ -29,8 +29,10 @@ struct EditClipSnapshot {
 // time is kept explicit and is never used as the seek-bar coordinate system.
 struct EditSnapshot {
   bool active = false;
+  // Independent axes: edit decisions can remain after their latest output was
+  // rendered, while only newer decisions count as unexported.
   bool hasEdits = false;
-  bool dirty = false;
+  bool hasUnexportedChanges = false;
   bool canUndo = false;
   bool canRedo = false;
   int64_t sourceDurationUs = 0;

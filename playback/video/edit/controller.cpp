@@ -24,7 +24,7 @@ struct Controller::Impl {
   void refreshView() {
     editView = session.snapshot();
     const Timeline& timeline = session.timeline();
-    editView.dirty =
+    editView.hasUnexportedChanges =
         !timeline.isUnmodified() &&
         (lastExportedRanges.empty() ||
          timeline.keptRanges() != lastExportedRanges);
@@ -84,7 +84,7 @@ Controller::~Controller() = default;
 bool Controller::active() const { return impl_ && impl_->session.active(); }
 
 bool Controller::hasUnexportedChanges() const {
-  return impl_ && impl_->editView.dirty;
+  return impl_ && impl_->editView.hasUnexportedChanges;
 }
 
 bool Controller::moveBoundary(EditBoundary boundary, int64_t timelineUs,
